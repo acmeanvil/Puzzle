@@ -1,0 +1,58 @@
+# Puzzle
+
+Open-source (GPL-3.0-or-later) FEM/CFD pre- and post-processor: one solver-neutral model run on CalculiX, Elmer, Code_Aster, FEniCSx and Code_Saturne, aiming for Ansys/COMSOL usability. Decisions live in `docs/adr/` (read the index before changing architecture); the shareable design doc is a Claude Doc: https://claude.ai/code/artifact/7e7a31c7-a7a6-49b3-97ed-05307493943f. Keep both in sync when a decision changes.
+
+## Workflow
+
+- Work on the `development` branch. Push to `main` only when the maintainer says so.
+- Contributors are the maintainer and Claude; no CLA/DCO.
+- Commit and push only when asked.
+- New architectural decision → new ADR from `docs/adr/template.md`, plus a row in `docs/adr/README.md`.
+
+## Commands
+
+Environments come from pixi (`pixi.toml`, ADR 0013). Each native solver has its own environment.
+
+```sh
+pixi run -e dev check          # ruff lint + format check + all tests incl. native CalculiX runs
+pixi run -e dev pytest -k name # one test
+pixi install -e fenicsx        # other native solvers: fenicsx, code-aster (linux-64/win-64)
+pixi run -e dev import-materials "<path>/Materials_Hunt_List.xlsx"
+```
+
+A plain `.venv` also works (`pip install -e ".[dev]"`); set `PUZZLE_SOLVER_PATH=$PWD/.pixi/envs/calculix/bin` so solver tests find `ccx`.
+
+Solver tests in `tests/integration/` skip when the solver isn't available. Container runs: `PUZZLE_RUNTIME=docker pytest tests/integration` after building images in `containers/`.
+
+## Layout
+
+| Path | What |
+| --- | --- |
+| `src/puzzle/model` | Pydantic schema: resources, components (parts, contacts, physics), studies (sweep/solve steps, shoot-out), transfers |
+| `src/puzzle/project` | One-TOML-file-per-object store; content hashes, staleness, run keys |
+| `src/puzzle/materials` | Default library: `library.json` (generated, don't hand-edit) + `supplement.toml` (fluids) |
+| `src/puzzle/geometry` | STEP import via Gmsh's OCC kernel, named entities with signatures |
+| `src/puzzle/mesh` | Recipe → Gmsh mesh with physical groups `Part/Selection`; solver-neutral `Mesh` |
+| `src/puzzle/adapters` | One adapter per solver: capability matrix, `write_input`, `command`, `read_results` |
+| `src/puzzle/jobs` | Runs solvers natively or in Docker/Podman; runtime chosen per solver |
+| `src/puzzle/results` | Solver-neutral `Results` (fields per step/mode) |
+| `src/puzzle/solve.py` | `run_study`: validate → mesh → write → run → read |
+| `containers/`, `packaging/conda-forge/` | Solver images; conda-forge recipes (elmerfem) |
+
+## Conventions
+
+- Everything is SI internally (m, kg, s, N, Pa, K). Imported geometry is converted to metres; `Quantity.to_si()` converts user values. Never pass units implicitly to a solver.
+- Adapters only claim a capability once a benchmark for it passes. Elmer's mechanical contact is bonding only (mortar tie); its slide/friction/stick are `experimental`.
+- Tests compare against closed-form or published answers with stated tolerances, not snapshots.
+- Match the surrounding code: dataclasses/Pydantic, type hints, short docstrings that say why.
+
+## Gotchas
+
+- **Gmsh is global state.** Always use `puzzle.geometry.gmsh_session()`; it holds a lock and sets OCC import units to metres. Don't nest sessions.
+- **OCC pads bounding boxes** by ~1e-7 m. Plane tests need a tolerance of at least 1 µm.
+- **Entity names** (`face-3`) follow STEP file order; signatures (kind, measure, centre) re-find them after placement or fragmenting.
+- **Element node order:** Gmsh and CalculiX differ for tet10 (last two edge nodes swap). Adapters own the reordering.
+- **CalculiX `.frd`** is fixed width (values can touch); match record tags on the first token. Modal block values are frequencies in Hz.
+- **Native solver runs** must look activated: `NativeRuntime.environment()` puts the conda/pixi env on PATH and sets `CONDA_PREFIX` (Windows otherwise fails with 0xC0000135). Elmer from conda also needs `ELMER_HOME` = env prefix.
+- **Elmer image** is built without MUMPS (Debian trixie lacks ParMETIS).
+- **Material data** comes from the maintainer's `Materials_Hunt_List.xlsx` (shared with the Tension_Meter app). Regenerate with the import script; never edit `library.json` by hand.
