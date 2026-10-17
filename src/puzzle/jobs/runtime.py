@@ -92,6 +92,9 @@ class NativeRuntime(Runtime):
         env = dict(os.environ)
         env["PATH"] = os.pathsep.join([*map(str, env_bin_dirs(prefix)), env.get("PATH", "")])
         env["CONDA_PREFIX"] = str(prefix)
+        if (prefix / "share" / "elmersolver").is_dir():
+            # Relocated conda Elmer can't find its files from the compiled-in prefix.
+            env["ELMER_HOME"] = str(prefix)
         return env
 
     def _path(self) -> str:

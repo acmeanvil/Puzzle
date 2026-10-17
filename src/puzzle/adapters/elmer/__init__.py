@@ -32,6 +32,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
+
 from puzzle.adapters.base import (
     ELECTROMAGNETIC_FEATURES,
     STRUCTURAL_FEATURES,
@@ -39,9 +41,14 @@ from puzzle.adapters.base import (
     Capabilities,
     SolverAdapter,
 )
+from puzzle.adapters.elmer.output import read_results as read_output
+from puzzle.adapters.elmer.sif import MESH_DIR, OUTPUT, write_case
+from puzzle.jobs.runner import LOG_NAME
 from puzzle.mesh.mesh import Mesh
 from puzzle.model.schema import Project, Study
 from puzzle.results.model import Results
+
+NODE_MAP = "puzzle-node-ids.txt"
 
 
 class ElmerAdapter(SolverAdapter):
@@ -63,10 +70,18 @@ class ElmerAdapter(SolverAdapter):
     )
 
     def write_input(self, project: Project, study: Study, mesh: Mesh, workdir: Path) -> Path:
-        raise NotImplementedError("Phase 1: convert mesh with ElmerGrid and write case.sif")
+        sif, emesh = write_case(project, study, mesh, workdir)
+        np.savetxt(workdir / MESH_DIR / NODE_MAP, emesh.node_ids, fmt="%d")
+        return sif
 
     def command(self, input_file: Path) -> list[str]:
         return ["ElmerSolver", input_file.name]
 
     def read_results(self, input_file: Path) -> Results:
-        raise NotImplementedError("Phase 1: read .vtu output into the results store")
+        mesh_dir = input_file.parent / MESH_DIR
+        vtus = sorted(mesh_dir.glob(f"{OUTPUT}*.vtu"))
+        if not vtus:
+            raise FileNotFoundError(f"Elmer wrote no results ({OUTPUT}*.vtu); see the solver log")
+        log = input_file.parent / LOG_NAME
+        node_ids = np.loadtxt(mesh_dir / NODE_MAP, dtype=np.int64, ndmin=1)
+        return read_output(vtus[-1], node_ids, log.read_text() if log.exists() else "")

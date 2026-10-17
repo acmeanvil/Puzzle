@@ -43,6 +43,16 @@ Solver tests in `tests/integration/` skip when the solver isn't available. Rende
 | `benchmarks/` | Published benchmarks as projects (NAFEMS LE1); each has build.py, a README with measured results, and an integration test |
 | `containers/`, `packaging/conda-forge/` | Solver images; conda-forge recipes (elmerfem) |
 
+## Adapter status
+
+| Solver | Implemented | Verified by (`tests/integration/test_benchmarks.py`, `test_nafems_le1.py`) | Runs |
+| --- | --- | --- | --- |
+| CalculiX | static, modal, steady heat; fixed, displacement, force, pressure, temperature, heat flux, convection | cantilever, modal, conduction, LE1 | native (pixi `calculix`) or Docker |
+| Elmer | one solve step: static, modal (solid) or steady heat; own mesh files, ASCII .vtu output | same set; agrees with CalculiX to 4 digits, LE1 within 0.13% | Docker image (not on conda-forge yet) |
+| Code_Aster, FEniCSx, Code_Saturne | capability matrix and stubs only | — | — |
+
+Capability matrices also list planned capabilities; `write_input` refuses what isn't implemented yet. Run Elmer tests locally with Docker on PATH (`/Applications/Docker.app/Contents/Resources/bin`) after building `containers/elmer`.
+
 ## Conventions
 
 - Everything is SI internally (m, kg, s, N, Pa, K). Imported geometry is converted to metres; `Quantity.to_si()` converts user values. Never pass units implicitly to a solver.
@@ -55,7 +65,8 @@ Solver tests in `tests/integration/` skip when the solver isn't available. Rende
 - **Gmsh is global state.** Always use `puzzle.geometry.gmsh_session()`; it holds a lock and sets OCC import units to metres. Don't nest sessions.
 - **OCC pads bounding boxes** by ~1e-7 m. Plane tests need a tolerance of at least 1 µm.
 - **Entity names** (`face-3`) follow STEP file order; signatures (kind, measure, centre) re-find them after placement or fragmenting.
-- **Element node order:** Gmsh and CalculiX differ for tet10 (last two edge nodes swap). Adapters own the reordering.
+- **Element node order:** Gmsh differs from CalculiX, Elmer and VTK for tet10 (last two edge nodes swap). Adapters own the reordering; shared face lookups live in `adapters/common.py`.
+- **Elmer output** lands in the mesh directory (`mesh/case_t0001.vtu`). Points come in Elmer node order (no point ids); `GeometryIds` there is cell data. Eigenvalues (omega^2) are parsed from the solver log.
 - **CalculiX `.frd`** is fixed width (values can touch); match record tags on the first token. Modal block values are frequencies in Hz.
 - **Native solver runs** must look activated: `NativeRuntime.environment()` puts the conda/pixi env on PATH and sets `CONDA_PREFIX` (Windows otherwise fails with 0xC0000135). Elmer from conda also needs `ELMER_HOME` = env prefix.
 - **Elmer image** is built without MUMPS (Debian trixie lacks ParMETIS).

@@ -1,6 +1,6 @@
-"""CalculiX through the whole pipeline (geometry, mesh, deck, solve, results).
+"""Every adapter through the whole pipeline (geometry, mesh, input, solve, results).
 
-Results are checked against closed-form answers.
+The same closed-form checks run for each solver; a solver that isn't available is skipped.
 
 Steel bar 200 x 10 x 10 mm, fixed at x = 0. Skipped when CalculiX isn't available.
 """
@@ -16,9 +16,18 @@ from puzzle.materials import library_material
 from puzzle.model import Feature, Physics, Quantity, SolveStep, Study
 from puzzle.solve import run_study
 
-pytestmark = pytest.mark.skipif(
-    not runtime_for("calculix").available("ccx"),
-    reason="CalculiX not available (install ccx, or build its image and set PUZZLE_RUNTIME)",
+SOLVERS = {"calculix": "ccx", "elmer": "ElmerSolver"}
+solver = pytest.mark.parametrize(
+    "solver",
+    [
+        pytest.param(
+            name,
+            marks=pytest.mark.skipif(
+                not runtime_for(name).available(exe), reason=f"{name} not available"
+            ),
+        )
+        for name, exe in SOLVERS.items()
+    ],
 )
 
 STEEL = library_material("general_carbon_steel").properties
@@ -29,10 +38,10 @@ A = B * H
 FORCE = 100.0  # N, downwards at the tip
 
 
-def _run(tmp_path, physics, steps):
+def _run(tmp_path, physics, steps, solver):
     step = write_bar_step(tmp_path / "bar.step")
     project, comp = bar_project(step, physics)
-    study = project.add(Study(name="s", component=comp.id, solver="calculix", steps=steps))
+    study = project.add(Study(name="s", component=comp.id, solver=solver, steps=steps))
     return run_study(project, study.id, tmp_path, tmp_path / "run", timeout_s=300)
 
 
@@ -46,7 +55,8 @@ def _expected_deflection():
     return -(FORCE * L**3 / (3 * E * I) + shear)
 
 
-def test_cantilever_tip_force(tmp_path):
+@solver
+def test_cantilever_tip_force(tmp_path, solver):
     load = Feature(
         type="force", selection="Bar/Tip", values={"y": Quantity(value=-FORCE, unit="N")}
     )
@@ -55,13 +65,14 @@ def test_cantilever_tip_force(tmp_path):
             type="solid_mechanics", features=[Feature(type="fixed", selection="Bar/Root"), load]
         )
     ]
-    run = _run(tmp_path, physics, [SolveStep(type="stationary")])
+    run = _run(tmp_path, physics, [SolveStep(type="stationary")], solver)
     assert _tip_deflection(run) == pytest.approx(_expected_deflection(), rel=0.02)
     root_stress = run.results.last("stress")
     assert root_stress.values.shape[1] == 6
 
 
-def test_cantilever_tip_traction_as_pressure_on_a_side_face(tmp_path):
+@solver
+def test_cantilever_tip_traction_as_pressure_on_a_side_face(tmp_path, solver):
     # The same resultant applied as pressure on the top face near the tip would differ;
     # instead push the tip face along x and check the axial stretch F L / (E A).
     push = Feature(
@@ -72,17 +83,18 @@ def test_cantilever_tip_traction_as_pressure_on_a_side_face(tmp_path):
             type="solid_mechanics", features=[Feature(type="fixed", selection="Bar/Root"), push]
         )
     ]
-    run = _run(tmp_path, physics, [SolveStep(type="stationary")])
+    run = _run(tmp_path, physics, [SolveStep(type="stationary")], solver)
     tip = run.mesh.groups["Bar/Tip"].node_ids
     ux = run.results.last("displacement").at(tip)[:, 0].mean()
     assert ux == pytest.approx(FORCE * L / (E * A), rel=0.02)  # negative pressure pulls outward
 
 
-def test_cantilever_first_bending_frequency(tmp_path):
+@solver
+def test_cantilever_first_bending_frequency(tmp_path, solver):
     physics = [
         Physics(type="solid_mechanics", features=[Feature(type="fixed", selection="Bar/Root")])
     ]
-    run = _run(tmp_path, physics, [SolveStep(type="modal", settings={"modes": 4})])
+    run = _run(tmp_path, physics, [SolveStep(type="modal", settings={"modes": 4})], solver)
     f1 = 1.875104**2 / (2 * math.pi * L**2) * math.sqrt(E * I / (RHO * A))
     modes = run.results.modes()
     assert len(modes) == 4
@@ -92,7 +104,8 @@ def test_cantilever_first_bending_frequency(tmp_path):
     assert modes[1].value == pytest.approx(f1, rel=0.03)
 
 
-def test_steady_conduction_is_linear(tmp_path):
+@solver
+def test_steady_conduction_is_linear(tmp_path, solver):
     hot = Feature(
         type="temperature", selection="Bar/Root", values={"T": Quantity(value=100, unit="degC")}
     )
@@ -103,6 +116,7 @@ def test_steady_conduction_is_linear(tmp_path):
         tmp_path,
         [Physics(type="heat_transfer", features=[hot, cold])],
         [SolveStep(type="stationary")],
+        solver,
     )
 
     temperature = run.results.last("temperature")
@@ -111,6 +125,7 @@ def test_steady_conduction_is_linear(tmp_path):
     assert np.allclose(temperature.values[:, 0], expected, atol=1e-6)
 
 
+@pytest.mark.skipif(not runtime_for("calculix").available("ccx"), reason="calculix not available")
 def test_unchanged_study_reuses_the_stored_run(tmp_path):
     from puzzle.results import ResultStore
 

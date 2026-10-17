@@ -19,12 +19,17 @@ Solve step settings: `modes` (int, modal, default 10); `time_step` and `end_time
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
-from dataclasses import dataclass
 
 import numpy as np
 
-from puzzle.mesh.mesh import CellBlock, Mesh
+from puzzle.adapters.common import (
+    STRUCTURAL,
+    THERMAL,
+    FaceLookup,
+    InputError,
+    surface_blocks,
+)
+from puzzle.mesh.mesh import Mesh
 from puzzle.model.schema import Component, Feature, Material, Project, SolveStep, Study
 
 ROOM_K = 293.15
@@ -36,56 +41,16 @@ ELEMENTS = {
     "tet10": ("C3D10", [0, 1, 2, 3, 4, 5, 6, 7, 9, 8]),
     "hex8": ("C3D8", None),
 }
-# Element faces as corner positions, in CalculiX face order (S1, S2, ...).
-FACES = {
-    "tet4": [(0, 1, 2), (0, 3, 1), (1, 3, 2), (2, 3, 0)],
-    "tet10": [(0, 1, 2), (0, 3, 1), (1, 3, 2), (2, 3, 0)],
-    "hex8": [(0, 1, 2, 3), (4, 7, 6, 5), (0, 4, 5, 1), (1, 5, 6, 2), (2, 6, 7, 3), (3, 7, 4, 0)],
-}
 # Share of a uniform traction carried by each node of a surface element.
 NODE_SHARES = {
     "tri3": [1 / 3] * 3,
     "tri6": [0, 0, 0, 1 / 3, 1 / 3, 1 / 3],
 }
 
-STRUCTURAL = {"fixed", "displacement", "force", "pressure"}
-THERMAL = {"temperature", "heat_flux", "convection"}
-
-
-class InputError(ValueError):
-    pass
-
 
 def set_name(prefix: str, name: str) -> str:
     """A CalculiX set name: letters, digits and underscores, upper case."""
     return f"{prefix}_{re.sub(r'[^A-Za-z0-9]+', '_', name).strip('_').upper()}"
-
-
-@dataclass
-class _Faces:
-    """Which volume element face each surface element sits on."""
-
-    lookup: dict[frozenset[int], tuple[int, int]]
-
-    @classmethod
-    def build(cls, blocks: Iterable[CellBlock]) -> _Faces:
-        lookup = {}
-        for b in blocks:
-            for face_no, corners in enumerate(FACES[b.element], start=1):
-                keys = b.connectivity[:, corners]
-                for eid, key in zip(b.ids, keys, strict=True):
-                    lookup[frozenset(key.tolist())] = (int(eid), face_no)
-        return cls(lookup)
-
-    def of(self, surface: CellBlock) -> list[tuple[int, int]]:
-        corners = 3 if surface.element.startswith("tri") else 4
-        out = []
-        for row in surface.connectivity[:, :corners]:
-            hit = self.lookup.get(frozenset(row.tolist()))
-            if hit is None:
-                raise InputError("a surface element does not lie on any volume element face")
-            out.append(hit)
-        return out
 
 
 def write_inp(project: Project, study: Study, mesh: Mesh) -> str:
@@ -94,7 +59,7 @@ def write_inp(project: Project, study: Study, mesh: Mesh) -> str:
     for b in volume_blocks:
         if b.element not in ELEMENTS:
             raise InputError(f"CalculiX adapter does not support {b.element} elements yet")
-    faces = _Faces.build(volume_blocks)
+    faces = FaceLookup.build(volume_blocks)
     out: list[str] = ["*HEADING", f"Puzzle study: {study.name}"]
 
     out.append("*NODE, NSET=N_ALL")
@@ -182,7 +147,7 @@ def _material_cards(m: Material, comp: Component) -> list[str]:
 
 
 def _step(
-    number: int, step: SolveStep, comp: Component, mesh: Mesh, faces: _Faces, physics_types
+    number: int, step: SolveStep, comp: Component, mesh: Mesh, faces: FaceLookup, physics_types
 ) -> list[str]:
     solved = set(step.physics) or physics_types
     op = ", OP=NEW" if number > 1 else ""
@@ -242,7 +207,7 @@ def _step(
     return out + outputs + ["*END STEP"]
 
 
-def _features(features: list[Feature], mesh: Mesh, faces: _Faces, op: str) -> list[str]:
+def _features(features: list[Feature], mesh: Mesh, faces: FaceLookup, op: str) -> list[str]:
     boundary, cload, dload, dflux, film = [], [], [], [], []
     for f in features:
         group = mesh.groups.get(f.selection)
@@ -284,15 +249,8 @@ def _features(features: list[Feature], mesh: Mesh, faces: _Faces, op: str) -> li
     return out
 
 
-def _surface_blocks(group, mesh: Mesh) -> list[CellBlock]:
-    blocks = [b for b in group.blocks(mesh) if b.dim == 2]
-    if not blocks:
-        raise InputError(f"'{group.name}' must be a face selection for surface loads")
-    return blocks
-
-
-def _element_faces(group, mesh: Mesh, faces: _Faces) -> list[tuple[int, int]]:
-    return [hit for b in _surface_blocks(group, mesh) for hit in faces.of(b)]
+def _element_faces(group, mesh: Mesh, faces: FaceLookup) -> list[tuple[int, int]]:
+    return [hit for b in surface_blocks(group, mesh) for hit in faces.of(b)]
 
 
 def _nodal_forces(group, mesh: Mesh, total: list[float]) -> list[str]:
@@ -306,7 +264,7 @@ def _nodal_forces(group, mesh: Mesh, total: list[float]) -> list[str]:
             if share[d - 1]
         ]
     weights: dict[int, float] = {}
-    for b in _surface_blocks(group, mesh):
+    for b in surface_blocks(group, mesh):
         if b.element not in NODE_SHARES:
             raise InputError(f"force on {b.element} faces is not supported yet")
         xyz = mesh.node_coords(b.connectivity[:, :3].ravel()).reshape(-1, 3, 3)

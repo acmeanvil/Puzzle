@@ -13,11 +13,6 @@ from puzzle.solve import run_study
 
 BENCHMARK = Path(__file__).parents[2] / "benchmarks" / "nafems_le1"
 
-pytestmark = pytest.mark.skipif(
-    not runtime_for("calculix").available("ccx"),
-    reason="CalculiX not available (install ccx, or build its image and set PUZZLE_RUNTIME)",
-)
-
 
 def _build_module():
     spec = importlib.util.spec_from_file_location("le1_build", BENCHMARK / "build.py")
@@ -26,7 +21,7 @@ def _build_module():
     return module
 
 
-def test_committed_project_matches_the_builder(tmp_path):
+def test_committed_project_matches_the_builder(tmp_path):  # needs no solver
     le1 = _build_module()
     fresh = le1.build(tmp_path)
     committed = load_project(BENCHMARK)
@@ -35,10 +30,21 @@ def test_committed_project_matches_the_builder(tmp_path):
     }
 
 
-def test_le1_sigma_yy_at_d(tmp_path):
+@pytest.mark.parametrize(
+    "solver",
+    [
+        pytest.param(
+            n,
+            marks=pytest.mark.skipif(not runtime_for(n).available(e), reason=f"{n} not available"),
+        )
+        for n, e in (("calculix", "ccx"), ("elmer", "ElmerSolver"))
+    ],
+)
+def test_le1_sigma_yy_at_d(tmp_path, solver):
     le1 = _build_module()
     project = load_project(BENCHMARK)
     study = next(s for s in project.of_type(Study) if s.name == "LE1")
+    study.solver = solver
     run = run_study(project, study.id, BENCHMARK, tmp_path / "run", timeout_s=900)
 
     stress = run.results.last("stress")

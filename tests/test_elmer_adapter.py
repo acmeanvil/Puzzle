@@ -1,0 +1,119 @@
+import math
+
+import numpy as np
+import pytest
+from conftest_geometry import bar_project, write_bar_step
+
+from puzzle.adapters.common import InputError
+from puzzle.adapters.elmer import ElmerAdapter
+from puzzle.adapters.elmer.output import eigenvalues, read_results, read_vtu
+from puzzle.mesh import generate_mesh
+from puzzle.model import Feature, Physics, Quantity, SolveStep, Study
+
+
+def _case(tmp_path, features, step, physics="solid_mechanics"):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    stepfile = write_bar_step(tmp_path / "bar.step")
+    project, comp = bar_project(
+        stepfile, [Physics(type=physics, features=features)], mesh_size_mm=5
+    )
+    study = project.add(Study(name="s", component=comp.id, solver="elmer", steps=[step]))
+    mesh = generate_mesh(project, comp.id, tmp_path, tmp_path / "m").mesh
+    sif = ElmerAdapter().write_input(project, study, mesh, tmp_path / "case")
+    return sif, mesh
+
+
+def test_mesh_files_describe_the_mesh(tmp_path):
+    fixed = Feature(type="fixed", selection="Bar/Root")
+    sif, mesh = _case(tmp_path, [fixed], SolveStep(type="stationary"))
+    d = sif.parent / "mesh"
+    header = (d / "mesh.header").read_text().split()
+    n_nodes, n_elements, n_boundary = map(int, header[:3])
+    assert n_nodes == len(mesh.node_ids)
+    assert n_elements == sum(len(b.ids) for b in mesh.blocks if b.dim == 3)
+    assert n_boundary == sum(len(b.ids) for b in mesh.groups["Bar/Root"].blocks(mesh) if b.dim == 2)
+    first = (d / "mesh.elements").read_text().splitlines()[0].split()
+    assert first[1:3] == ["1", "510"] and len(first) == 3 + 10  # body 1, quadratic tetra
+    boundary = (d / "mesh.boundary").read_text().splitlines()[0].split()
+    assert (
+        boundary[1] == "1" and int(boundary[2]) > 0 and boundary[4] == "306"
+    )  # with a parent element
+
+
+def test_sif_translates_loads(tmp_path):
+    fixed = Feature(type="fixed", selection="Bar/Root")
+    force = Feature(type="force", selection="Bar/Tip", values={"y": Quantity(value=-100, unit="N")})
+    sif, _ = _case(tmp_path, [fixed, force], SolveStep(type="stationary"))
+    text = sif.read_text()
+    assert '"StressSolve" "StressSolver"' in text and "Calculate Stresses = True" in text
+    assert "Displacement 1 = 0" in text
+    traction = float(next(line for line in text.splitlines() if "Force 2 =" in line).split("=")[1])
+    assert traction == pytest.approx(-100 / (0.01 * 0.01), rel=1e-9)  # force over the tip area
+    assert "Youngs Modulus = " in text and "Poisson Ratio = 0.3" in text
+
+
+def test_pressure_becomes_normal_force(tmp_path):
+    p = Feature(type="pressure", selection="Bar/Tip", values={"p": Quantity(value=2, unit="MPa")})
+    sif, _ = _case(
+        tmp_path, [Feature(type="fixed", selection="Bar/Root"), p], SolveStep(type="stationary")
+    )
+    assert "Normal Force = -2000000" in sif.read_text()
+
+
+def test_modal_and_heat_solvers(tmp_path):
+    sif, _ = _case(
+        tmp_path / "a",
+        [Feature(type="fixed", selection="Bar/Root")],
+        SolveStep(type="modal", settings={"modes": 5}),
+    )
+    assert "Eigen System Values = 5" in sif.read_text()
+    hot = Feature(
+        type="temperature", selection="Bar/Root", values={"T": Quantity(value=100, unit="degC")}
+    )
+    sif, _ = _case(tmp_path / "b", [hot], SolveStep(type="stationary"), physics="heat_transfer")
+    text = sif.read_text()
+    assert '"HeatSolve" "HeatSolver"' in text and "Temperature = 373.15" in text
+    assert "Heat Conductivity = " in text
+
+
+def test_unsupported_steps_are_refused(tmp_path):
+    with pytest.raises(InputError, match="transient"):
+        _case(tmp_path, [Feature(type="fixed", selection="Bar/Root")], SolveStep(type="transient"))
+
+
+VTU = """<?xml version="1.0"?>
+<VTKFile type="UnstructuredGrid" version="0.1">
+  <UnstructuredGrid><Piece NumberOfPoints="3" NumberOfCells="1">
+    <PointData>
+      <DataArray type="Float64" Name="displacement" NumberOfComponents="3" format="ascii">
+        1 2 3  4 5 6  7 8 9
+      </DataArray>
+      <DataArray type="Float64" Name="displacement EigenMode1"
+                 NumberOfComponents="3" format="ascii">
+        0 0 1  0 0 2  0 0 3
+      </DataArray>
+    </PointData>
+    <CellData>
+      <DataArray type="Int32" Name="GeometryIds" format="ascii">42</DataArray>
+    </CellData>
+  </Piece></UnstructuredGrid>
+</VTKFile>
+"""
+LOG = """EigenSolve: Computed 1 Eigen Values
+EigenSolve: 1:    1.642173E+06   0.000000E+00
+"""
+
+
+def test_reader_maps_points_to_puzzle_nodes_and_modes_to_hz(tmp_path):
+    vtu = tmp_path / "case_t0001.vtu"
+    vtu.write_text(VTU)
+    assert set(read_vtu(vtu)) == {"displacement", "displacement EigenMode1"}  # cell data skipped
+    results = read_results(vtu, np.array([30, 10, 20]), LOG)
+    (mode,) = results.modes()
+    assert mode.value == pytest.approx(math.sqrt(1.642173e6) / (2 * math.pi))
+    disp = mode.fields["displacement"]
+    assert list(disp.ids) == [10, 20, 30] and list(disp.values[:, 2]) == [2, 3, 1]
+
+
+def test_eigenvalue_parsing():
+    assert eigenvalues(LOG + "EigenSolve: 2:    6.3E+07   0.0E+00\n") == [1.642173e6, 6.3e7]
