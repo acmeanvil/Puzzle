@@ -1,0 +1,72 @@
+# 0009. One model tree, references for sharing, transfers as the only schematic edges
+
+- Status: Proposed
+- Date: 2026-10-17
+
+## Context
+
+Puzzle wants COMSOL's model tree for editing and an Ansys Workbench–style schematic for seeing how studies feed each other, without the Workbench "octopus". The octopus has five causes:
+
+1. Links at cell level (engineering data, geometry, model, setup, solution), so links multiply with systems × cells.
+2. One kind of wire for two meanings: "shares this geometry" and "takes this result".
+3. Sharing versus duplicating is hidden.
+4. The schematic is the source of truth, so layout carries meaning.
+5. Changes mark everything downstream as out of date, with no reason given.
+
+## Decision
+
+The project holds four kinds of object:
+
+| Object | Holds | Shared how |
+| --- | --- | --- |
+| Resource | Parameters, geometry (with its named selections), materials, mesh recipes | Global resources by reference; local geometry belongs to one component |
+| Component | A single part or an assembly: part instances, cross-part selections, contacts, material assignments, mesh recipe, physics | Referenced by studies; copied explicitly |
+| Study | Sweep steps, then solve steps; solver choice | Produces one result per sweep point |
+| Transfer | Source study field, step and sweep point → target study input, with a mapping method | The only schematic edge |
+
+### Geometry scope and copying
+
+Where geometry sits in the tree decides how it is shared:
+
+- **Global geometry** lives under Global Definitions. Every component that uses it references the same object, so its named selections are the same everywhere, and an edit to them is seen by every user.
+- **Local geometry** sits inside one component and belongs to it.
+- **Copying a component** for another study copies its local geometry, selections included, with no link back to the original. Global geometry, materials and mesh recipes in the copy stay shared by reference.
+
+### Single parts and assemblies
+
+- A component has one or more part instances, each a geometry placed by a translation and rotation. A single part is a component with one instance.
+- A part's selections are addressed as `<part instance>/<selection>` (for example `Plate/Top`). Selections spanning parts are defined on the component and use a bare name.
+- Contacts pair two selections with a type: bonded, no separation, frictionless, or frictional (which needs a friction coefficient). Each adapter declares which contact types it supports.
+
+### Parametric sweeps are study steps
+
+- A sweep step lists parameters (defined in a parameter set) and their values, combined as a grid (every combination) or paired (the i-th values together).
+- Sweep steps come before the solve steps; they repeat every solve step after them once per point. Several sweep steps nest, outermost first.
+- Each point is its own run with its own results key: the study's content hash plus the point's values. Adding a point leaves the existing points' results valid.
+- A transfer from a swept study either feeds a target swept over the same parameters (point to point) or names a `source_point` for each parameter the target doesn't sweep.
+- Adapters never see sweep steps; Puzzle expands them into runs.
+
+### Rules
+
+1. The model tree is where you edit. The schematic is generated from it: studies grouped by component, edges are transfers only, layout is automatic. Selecting a resource highlights its users on demand.
+2. Transfers form a directed acyclic graph. Two-way coupling is a single coupled study or a single co-simulation study (preCICE), never a loop of transfers.
+3. Every object has a content hash over its own settings plus its inputs' hashes. Results record the hash they were computed from. A study is stale when its hash differs, and the UI names the changed input. Rebuild runs only the stale subgraph; a known hash is a cache hit. Renaming changes nothing.
+4. Transfers and loads target named selections, never raw face ids (ADR 0004).
+5. Materials come from a versioned library and are pinned per project; updating a pin is explicit.
+6. A project is a directory with one TOML file per object, keyed by UUID, so it diffs and merges in git.
+
+## Consequences
+
+- The schematic stays sparse: wires appear only where results actually flow.
+- Staleness is precise and explained, down to individual sweep points.
+- Users choose sharing by where they put geometry, which the tree shows directly; copies never change behind their back.
+- Each adapter must translate contacts and part placement, and its capability matrix must say which contact types it supports.
+- Open: single-file export for sharing projects.
+
+## Alternatives considered
+
+- Workbench-style cell links: proven, but produces the octopus.
+- COMSOL-style tree only: clean, but no overview of study-to-study data flow.
+- Free-form node editor as the source of truth: flexible, but layout and meaning get tangled again.
+- Geometry variants that keep a link to their parent: rejected in favour of explicit scope, where copies are fully independent.
+- Sweeps as a project-level object driving many studies: rejected in favour of sweep steps, which keep each study self-contained.
