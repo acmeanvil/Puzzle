@@ -25,6 +25,8 @@ pint = ">=0.24"
 tomli-w = ">=1.0"
 python-gmsh = ">=4.13"
 numpy = ">=1.26"
+deltalake = ">=1.0"
+pyarrow = ">=16"
 
 [pypi-dependencies]
 puzzle-fem = { path = ".", editable = true }

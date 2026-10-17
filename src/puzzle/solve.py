@@ -1,16 +1,20 @@
-"""Run one study end to end: mesh, write solver input, solve, read results."""
+"""Run one study end to end: mesh, write solver input, solve, read and store results."""
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from puzzle.adapters import available_adapters
 from puzzle.jobs import JobResult, run_job, runtime_for
 from puzzle.mesh import MeshResult, generate_mesh
+from puzzle.mesh.mesh import Mesh
 from puzzle.model.schema import Project, Study
+from puzzle.project.graph import run_hashes
 from puzzle.results.model import Results
+from puzzle.results.store import ResultStore
 
 
 class StudyError(RuntimeError):
@@ -19,10 +23,14 @@ class StudyError(RuntimeError):
 
 @dataclass
 class StudyRun:
-    mesh: MeshResult
-    job: JobResult
+    mesh: Mesh
     results: Results
-    input_file: Path
+    run_key: str
+    run_id: str | None = None  # set when the run is in a result store
+    cached: bool = False  # True when an identical earlier run was reused
+    mesh_result: MeshResult | None = None  # meshing details, for fresh runs
+    job: JobResult | None = None  # solver process details, for fresh runs
+    input_file: Path | None = None
 
 
 def run_study(
@@ -31,10 +39,16 @@ def run_study(
     root: Path,
     workdir: Path,
     *,
+    store: ResultStore | None = None,
+    reuse: bool = True,
     on_output: Callable[[str], None] | None = None,
     timeout_s: float | None = None,
 ) -> StudyRun:
-    """Run `study_id` with its primary solver. Geometry paths resolve against `root`."""
+    """Run `study_id` with its primary solver. Geometry paths resolve against `root`.
+
+    With a `store`, the run is saved there, and when `reuse` is set an earlier run
+    with the same inputs (same run key, ADR 0009) is returned instead of solving again.
+    """
     study = project.get(study_id, Study)
     if study.sweeps():
         raise StudyError("parametric sweeps are not run yet")
@@ -46,15 +60,25 @@ def run_study(
     if problems:
         raise StudyError("; ".join(problems))
 
+    run_key = run_hashes(project)[study.id][study.solver][0]
+    if store is not None and reuse:
+        hit = store.find_run(run_key)
+        if hit is not None:
+            return StudyRun(
+                mesh=store.read_mesh(hit.mesh_id),
+                results=store.read_results(hit.run_id),
+                run_key=run_key,
+                run_id=hit.run_id,
+                cached=True,
+            )
+
     workdir.mkdir(parents=True, exist_ok=True)
-    mesh = generate_mesh(project, study.component, root, workdir / "mesh")
-    input_file = adapter.write_input(project, study, mesh.mesh, workdir)
+    started = datetime.now(UTC)
+    meshed = generate_mesh(project, study.component, root, workdir / "mesh")
+    input_file = adapter.write_input(project, study, meshed.mesh, workdir)
+    runtime = runtime_for(study.solver)
     job = run_job(
-        adapter.command(input_file),
-        workdir,
-        runtime_for(study.solver),
-        on_output=on_output,
-        timeout_s=timeout_s,
+        adapter.command(input_file), workdir, runtime, on_output=on_output, timeout_s=timeout_s
     )
     if not job.ok:
         tail = "\n".join(job.log.read_text().splitlines()[-20:])
@@ -65,4 +89,26 @@ def run_study(
     for step in results.steps:
         if 1 <= step.index <= len(kinds):
             step.kind = kinds[step.index - 1]
-    return StudyRun(mesh=mesh, job=job, results=results, input_file=input_file)
+
+    run_id = None
+    if store is not None:
+        run_id = store.write_run(
+            run_key=run_key,
+            study_id=str(study.id),
+            study_name=study.name,
+            solver=study.solver,
+            runtime=job.runtime,
+            mesh=meshed.mesh,
+            results=results,
+            started_at=started,
+            duration_s=(datetime.now(UTC) - started).total_seconds(),
+        )
+    return StudyRun(
+        mesh=meshed.mesh,
+        results=results,
+        run_key=run_key,
+        run_id=run_id,
+        mesh_result=meshed,
+        job=job,
+        input_file=input_file,
+    )

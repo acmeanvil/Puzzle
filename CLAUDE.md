@@ -35,7 +35,7 @@ Solver tests in `tests/integration/` skip when the solver isn't available. Conta
 | `src/puzzle/mesh` | Recipe → Gmsh mesh with physical groups `Part/Selection`; solver-neutral `Mesh` |
 | `src/puzzle/adapters` | One adapter per solver: capability matrix, `write_input`, `command`, `read_results` |
 | `src/puzzle/jobs` | Runs solvers natively or in Docker/Podman; runtime chosen per solver |
-| `src/puzzle/results` | Solver-neutral `Results` (fields per step/mode) |
+| `src/puzzle/results` | Solver-neutral `Results`; `ResultStore` = Delta Lake tables (runs, meshes, nodes, cells, groups, fields) |
 | `src/puzzle/solve.py` | `run_study`: validate → mesh → write → run → read |
 | `containers/`, `packaging/conda-forge/` | Solver images; conda-forge recipes (elmerfem) |
 

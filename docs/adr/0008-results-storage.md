@@ -25,6 +25,20 @@ Delta Lake (Parquet plus a transaction log) gives ACID commits, time travel, sch
 - Long transients create many small commits; schedule compaction (`OPTIMIZE`) and checkpointing.
 - A Phase 1 benchmark compares Parquet+zstd, VTKHDF+zstd and native files on size, write time and time to first frame. If Delta loses badly on viewing, VTKHDF becomes the primary field store and Delta keeps only the catalog.
 
+## First implementation and measurement (2026-10-17)
+
+`puzzle.results.ResultStore` implements the tables above (plus `meshes` and `groups`), zstd-compressed, with field components in wide columns `c0`…`c8`. A run's `runs` row is committed last, so a crash never lists a half-written run; `run_study` reuses a stored run whose run key matches.
+
+One CalculiX static run, 146,292 nodes (second-order tets), on an Intel Mac:
+
+| Format | Size | Notes |
+| --- | --- | --- |
+| CalculiX `.frd` (ASCII) | 56.3 MB | displacement, stress, strain + mesh |
+| Delta store, Snappy | 32.2 MB | same content |
+| Delta store, zstd level 3 | 26.2 MB | fields 18.5 MB, nodes 3.8, cells 3.2, groups 0.7 |
+
+Reading every field back takes about 0.36 s. The VTKHDF comparison and time-to-first-frame still decide the viewing path.
+
 ## Alternatives considered
 
 - VTKHDF only: excellent for viewing, weak for cross-run analytics and transactional safety.

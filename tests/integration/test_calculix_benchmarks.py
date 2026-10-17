@@ -37,7 +37,7 @@ def _run(tmp_path, physics, steps):
 
 
 def _tip_deflection(run):
-    tip = run.mesh.mesh.groups["Bar/Tip"].node_ids
+    tip = run.mesh.groups["Bar/Tip"].node_ids
     return run.results.last("displacement").at(tip)[:, 1].mean()
 
 
@@ -73,7 +73,7 @@ def test_cantilever_tip_traction_as_pressure_on_a_side_face(tmp_path):
         )
     ]
     run = _run(tmp_path, physics, [SolveStep(type="stationary")])
-    tip = run.mesh.mesh.groups["Bar/Tip"].node_ids
+    tip = run.mesh.groups["Bar/Tip"].node_ids
     ux = run.results.last("displacement").at(tip)[:, 0].mean()
     assert ux == pytest.approx(FORCE * L / (E * A), rel=0.02)  # negative pressure pulls outward
 
@@ -106,6 +106,37 @@ def test_steady_conduction_is_linear(tmp_path):
     )
 
     temperature = run.results.last("temperature")
-    x = run.mesh.mesh.node_coords(temperature.ids)[:, 0]
+    x = run.mesh.node_coords(temperature.ids)[:, 0]
     expected = 373.15 - 80.0 * x / L
     assert np.allclose(temperature.values[:, 0], expected, atol=1e-6)
+
+
+def test_unchanged_study_reuses_the_stored_run(tmp_path):
+    from puzzle.results import ResultStore
+
+    step = write_bar_step(tmp_path / "bar.step")
+    load = Feature(
+        type="force", selection="Bar/Tip", values={"y": Quantity(value=-FORCE, unit="N")}
+    )
+    physics = [
+        Physics(
+            type="solid_mechanics", features=[Feature(type="fixed", selection="Bar/Root"), load]
+        )
+    ]
+    project, comp = bar_project(step, physics)
+    study = project.add(
+        Study(name="s", component=comp.id, solver="calculix", steps=[SolveStep(type="stationary")])
+    )
+    store = ResultStore(tmp_path / "results")
+
+    fresh = run_study(project, study.id, tmp_path, tmp_path / "run1", store=store)
+    again = run_study(project, study.id, tmp_path, tmp_path / "run2", store=store)
+    assert not fresh.cached and again.cached
+    assert again.run_id == fresh.run_id
+    assert _tip_deflection(again) == pytest.approx(_tip_deflection(fresh), rel=1e-12)
+
+    load.values["y"] = Quantity(value=-2 * FORCE, unit="N")  # a changed input is a new run
+    changed = run_study(project, study.id, tmp_path, tmp_path / "run3", store=store)
+    assert not changed.cached
+    assert _tip_deflection(changed) == pytest.approx(2 * _tip_deflection(fresh), rel=1e-6)
+    assert len(store.runs()) == 2
