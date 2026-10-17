@@ -86,17 +86,62 @@ class Geometry(ProjectObject):
         return self
 
 
+class TablePoint(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    temperature: float = Field(description="Kelvin")
+    value: float
+    source: int | None = Field(default=None, description="Index into Material.sources")
+
+
+class PropertyTable(BaseModel):
+    """A temperature-dependent material property, in SI units.
+
+    Several sources may give a value at the same temperature; `curve()` merges them
+    into the single monotonic table solvers need. `reference_temperature` is set
+    for secant (mean) thermal expansion, which is measured from that temperature.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    unit: str
+    points: list[TablePoint] = Field(min_length=1)
+    reference_temperature: float | None = Field(default=None, description="Kelvin")
+
+    def curve(self) -> list[tuple[float, float]]:
+        """(temperature, value) pairs sorted by temperature, duplicates averaged."""
+        by_t: dict[float, list[float]] = {}
+        for p in self.points:
+            by_t.setdefault(p.temperature, []).append(p.value)
+        return [(t, sum(v) / len(v)) for t, v in sorted(by_t.items())]
+
+    def at(self, temperature: float) -> float:
+        """Linear interpolation, held constant beyond the table's ends."""
+        curve = self.curve()
+        if temperature <= curve[0][0]:
+            return curve[0][1]
+        for (t0, v0), (t1, v1) in itertools.pairwise(curve):
+            if temperature <= t1:
+                return v0 + (v1 - v0) * (temperature - t0) / (t1 - t0)
+        return curve[-1][1]
+
+
 class Material(ProjectObject):
     """A material owned by the project.
 
     Adding a material from the built-in library copies it in; from then on it is
     static and has no connection to the library (see `puzzle.materials`).
+    `properties` hold room-temperature values; `tables` hold temperature-dependent
+    data where it exists. `info` carries type, group, specification and notes.
     """
 
     kind: ClassVar[str] = "material"
 
     description: str = ""
+    info: dict[str, str] = Field(default_factory=dict)
     properties: dict[str, Quantity] = Field(default_factory=dict)
+    tables: dict[str, PropertyTable] = Field(default_factory=dict)
+    sources: list[str] = Field(default_factory=list)
 
 
 class MeshRecipe(ProjectObject):

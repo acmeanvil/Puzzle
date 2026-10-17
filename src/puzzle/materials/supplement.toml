@@ -1,0 +1,26 @@
+# Supplement to the default materials library (library.json, generated from
+# Materials_Hunt_List.xlsx): fluids the workbook doesn't cover.
+#
+# Typical values at 20 °C. Property names and units follow library.json; units
+# must parse with pint.
+
+[air]
+name = "Air"
+description = "Dry air at 20 °C and 1 atm"
+density = { value = 1.204, unit = "kg/m^3" }
+dynamic_viscosity = { value = 1.81e-5, unit = "Pa*s" }
+thermal_conductivity = { value = 0.0257, unit = "W/(m*K)" }
+specific_heat = { value = 1006, unit = "J/(kg*K)" }
+electrical_conductivity = { value = 0, unit = "S/m" }
+relative_permittivity = { value = 1.0006 }
+relative_permeability = { value = 1.0 }
+
+[water]
+name = "Water"
+description = "Liquid water at 20 °C"
+density = { value = 998.2, unit = "kg/m^3" }
+dynamic_viscosity = { value = 1.002e-3, unit = "Pa*s" }
+thermal_conductivity = { value = 0.598, unit = "W/(m*K)" }
+specific_heat = { value = 4182, unit = "J/(kg*K)" }
+relative_permittivity = { value = 80.1 }
+relative_permeability = { value = 1.0 }
