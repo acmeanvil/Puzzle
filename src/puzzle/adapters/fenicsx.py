@@ -25,7 +25,9 @@ from puzzle.adapters.base import (
     Capabilities,
     SolverAdapter,
 )
+from puzzle.mesh.mesh import Mesh
 from puzzle.model.schema import Project, Study
+from puzzle.results.model import Results
 
 
 class FenicsxAdapter(SolverAdapter):
@@ -46,13 +48,13 @@ class FenicsxAdapter(SolverAdapter):
         dimensions=frozenset({"3d", "2d_planar", "2d_axisymmetric"}),
     )
 
-    def write_input(self, project: Project, study: Study, mesh: Path, workdir: Path) -> Path:
+    def write_input(self, project: Project, study: Study, mesh: Mesh, workdir: Path) -> Path:
         raise NotImplementedError("Phase 3: render study.py from the physics templates or UFL form")
 
     def command(self, input_file: Path) -> list[str]:
         return ["python3", input_file.name]
 
-    def import_results(self, workdir: Path, store: Path) -> None:
+    def read_results(self, input_file: Path) -> Results:
         raise NotImplementedError(
             "Phase 3: read the script's VTX/XDMF output into the results store"
         )

@@ -1,3 +1,6 @@
+import sys
+from pathlib import Path
+
 import pytest
 
 from puzzle.model import (
@@ -200,3 +203,7 @@ def induction(bracket: Project) -> Project:
         )
     )
     return p
+
+
+# Shared geometry helpers live in tests/conftest_geometry.py; make them importable.
+sys.path.insert(0, str(Path(__file__).parent))

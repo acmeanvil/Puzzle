@@ -7,7 +7,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar
 
+from puzzle.mesh.mesh import Mesh
 from puzzle.model.schema import Component, Project, Study
+from puzzle.results.model import Results
 
 # Feature types, grouped by physics, for adapters to combine.
 STRUCTURAL_FEATURES = frozenset({"fixed", "displacement", "force", "pressure"})
@@ -92,13 +94,13 @@ class SolverAdapter(ABC):
         return problems
 
     @abstractmethod
-    def write_input(self, project: Project, study: Study, mesh: Path, workdir: Path) -> Path:
-        """Translate the study into the solver's native input in `workdir`; return the main file."""
+    def write_input(self, project: Project, study: Study, mesh: Mesh, workdir: Path) -> Path:
+        """Translate the study and its mesh into native input in `workdir`; return the main file."""
 
     @abstractmethod
     def command(self, input_file: Path) -> list[str]:
         """The command line that runs the solver on `input_file` (inside its container)."""
 
     @abstractmethod
-    def import_results(self, workdir: Path, store: Path) -> None:
-        """Convert native output in `workdir` into the results store (ADR 0008)."""
+    def read_results(self, input_file: Path) -> Results:
+        """Read the solver's output next to `input_file` into solver-neutral results."""

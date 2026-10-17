@@ -20,7 +20,9 @@ from puzzle.adapters.base import (
     Capabilities,
     SolverAdapter,
 )
+from puzzle.mesh.mesh import Mesh
 from puzzle.model.schema import Project, Study
+from puzzle.results.model import Results
 
 
 class CodeAsterAdapter(SolverAdapter):
@@ -38,11 +40,11 @@ class CodeAsterAdapter(SolverAdapter):
         dimensions=frozenset({"3d", "2d_planar", "2d_axisymmetric"}),
     )
 
-    def write_input(self, project: Project, study: Study, mesh: Path, workdir: Path) -> Path:
+    def write_input(self, project: Project, study: Study, mesh: Mesh, workdir: Path) -> Path:
         raise NotImplementedError("Phase 3: write study.comm and study.export around the MED mesh")
 
     def command(self, input_file: Path) -> list[str]:
         return ["run_aster", input_file.with_suffix(".export").name]
 
-    def import_results(self, workdir: Path, store: Path) -> None:
+    def read_results(self, input_file: Path) -> Results:
         raise NotImplementedError("Phase 3: read the .rmed result file into the results store")

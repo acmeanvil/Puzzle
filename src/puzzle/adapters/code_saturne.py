@@ -14,7 +14,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from puzzle.adapters.base import FLUID_FEATURES, THERMAL_FEATURES, Capabilities, SolverAdapter
+from puzzle.mesh.mesh import Mesh
 from puzzle.model.schema import Project, Study
+from puzzle.results.model import Results
 
 
 class CodeSaturneAdapter(SolverAdapter):
@@ -28,11 +30,11 @@ class CodeSaturneAdapter(SolverAdapter):
         couplings=frozenset({"non_isothermal_flow"}),
     )
 
-    def write_input(self, project: Project, study: Study, mesh: Path, workdir: Path) -> Path:
+    def write_input(self, project: Project, study: Study, mesh: Mesh, workdir: Path) -> Path:
         raise NotImplementedError("Phase 4: create the case directory and DATA/setup.xml")
 
     def command(self, input_file: Path) -> list[str]:
         return ["code_saturne", "run", "--param", input_file.name]
 
-    def import_results(self, workdir: Path, store: Path) -> None:
+    def read_results(self, input_file: Path) -> Results:
         raise NotImplementedError("Phase 4: read the postprocessing MED or EnSight output")

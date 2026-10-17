@@ -10,7 +10,13 @@ from puzzle.adapters.base import (
     Capabilities,
     SolverAdapter,
 )
+from puzzle.adapters.calculix.frd import read_frd
+from puzzle.adapters.calculix.inp import InputError, write_inp
+from puzzle.mesh.mesh import Mesh
 from puzzle.model.schema import Project, Study
+from puzzle.results.model import Results
+
+JOB = "job"
 
 
 class CalculixAdapter(SolverAdapter):
@@ -28,11 +34,19 @@ class CalculixAdapter(SolverAdapter):
         couplings=frozenset({"thermal_expansion"}),
     )
 
-    def write_input(self, project: Project, study: Study, mesh: Path, workdir: Path) -> Path:
-        raise NotImplementedError("Phase 1: write *NODE, *ELEMENT, *MATERIAL and *STEP blocks")
+    def write_input(self, project: Project, study: Study, mesh: Mesh, workdir: Path) -> Path:
+        path = workdir / f"{JOB}.inp"
+        path.write_text(write_inp(project, study, mesh))
+        return path
 
     def command(self, input_file: Path) -> list[str]:
         return ["ccx", "-i", input_file.with_suffix("").name]
 
-    def import_results(self, workdir: Path, store: Path) -> None:
-        raise NotImplementedError("Phase 1: parse .frd into the results store")
+    def read_results(self, input_file: Path) -> Results:
+        frd = input_file.with_suffix(".frd")
+        if not frd.exists():
+            raise FileNotFoundError(f"CalculiX wrote no results ({frd.name}); see the solver log")
+        return read_frd(frd)
+
+
+__all__ = ["CalculixAdapter", "InputError"]
