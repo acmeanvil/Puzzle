@@ -17,6 +17,10 @@ FreeCAD offers a full feature tree, sketcher and importers on the same kernel (O
   1. Tag faces with attributes when Puzzle creates them (OCAF labels and history from boolean and feature operations).
   2. For imported geometry, match faces after a change by a geometric signature (surface type, area, centroid, normal, neighbours), and flag ambiguous matches to the user.
 
+### First implementation (Phase 1)
+
+STEP import uses Gmsh's built-in OpenCASCADE kernel, the same kernel without a second binding. Entities are named `body-N`, `face-N`, `edge-N`, `vertex-N` in the order the file yields them, and each carries a signature (kind, measure, centre, bounding box). Signatures find entities again after placement and fragmenting; matching them across edits of the source file is the next step for persistent naming. OCP and build123d join when Puzzle creates and edits geometry itself.
+
 ## Consequences
 
 - Clean embedding and headless use; geometry operations are scriptable.

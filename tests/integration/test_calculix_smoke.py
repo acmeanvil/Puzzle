@@ -5,9 +5,6 @@ unit cube of one C3D8 element in uniaxial tension, so the answer is exact:
 u_x = F L / (E A).
 """
 
-import os
-import shutil
-
 import pytest
 
 from puzzle.jobs import run_job, runtime_for
@@ -52,14 +49,8 @@ U
 """
 
 pytestmark = pytest.mark.skipif(
-    shutil.which(
-        "ccx",
-        path=os.pathsep.join(
-            filter(None, [os.environ.get("PUZZLE_SOLVER_PATH"), os.environ.get("PATH")])
-        ),
-    )
-    is None,
-    reason="CalculiX (ccx) not installed",
+    not runtime_for("calculix").available("ccx"),
+    reason="CalculiX not available (install ccx, or build its image and set PUZZLE_RUNTIME)",
 )
 
 

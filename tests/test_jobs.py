@@ -81,3 +81,9 @@ def test_runtime_selection(monkeypatch):
     monkeypatch.setenv("PUZZLE_RUNTIME", "vm")
     with pytest.raises(ValueError):
         runtime_for("calculix")
+
+
+def test_availability_checks(tmp_path):
+    assert NativeRuntime(search_path=str(PY.parent)).available(PY.name)
+    assert not NativeRuntime(search_path="").available("definitely-not-a-solver")
+    assert not ContainerRuntime(image="x", engine="definitely-not-an-engine").available("ccx")

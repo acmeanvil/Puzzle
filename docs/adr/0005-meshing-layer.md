@@ -12,7 +12,8 @@ Meshing sits between geometry and solver and drives much of commercial tools' us
 - Meshing is its own layer (`puzzle.mesh`) with a mesher-neutral recipe: global size, per-selection size, element order, element type preference, boundary layers.
 - Gmsh is the primary mesher (in process through its Python API; licence covered by ADR 0002). Netgen is the secondary. MMG handles remeshing and adaptation.
 - CFD meshing for Code_Saturne uses Gmsh with boundary layers, exported as MED.
-- Meshes keep named selections as physical groups. MED is the internal exchange format; meshio converts where groups survive.
+- Meshes keep named selections as physical groups: one per part (its bodies) and one per selection, named `Part/Selection`. MED is the target exchange format; the first implementation writes Gmsh `.msh` and hands adapters an in-memory, solver-neutral mesh (nodes, element blocks per entity, groups) with Gmsh node ordering, which each adapter reorders for its solver.
+- All meshing happens in SI units: imported geometry is converted to metres.
 - Assemblies: each bonded contact chooses conformal (the default) or nonconformal meshing.
   - Conformal: the touching parts are fragmented (OCCT boolean fragments) before meshing so they share faces and nodes. The solver sees one continuous mesh and needs no contact condition.
   - Nonconformal: the parts are meshed independently and the solver ties them (CalculiX `*TIE`, Elmer mortar tie contact). This is the fallback when fragmenting fails or produces poor elements, for example with sliver gaps or very different mesh sizes.

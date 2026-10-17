@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,6 +37,10 @@ class Runtime(ABC):
     def describe(self) -> str:
         """A short label recorded with each run, e.g. the image name."""
 
+    @abstractmethod
+    def available(self, executable: str) -> bool:
+        """Whether `executable` can run here (on PATH, or the image is present locally)."""
+
 
 @dataclass(frozen=True)
 class NativeRuntime(Runtime):
@@ -52,6 +57,9 @@ class NativeRuntime(Runtime):
 
     def describe(self) -> str:
         return "native"
+
+    def available(self, executable: str) -> bool:
+        return shutil.which(executable, path=self._path()) is not None
 
     def _path(self) -> str:
         parts = [self.search_path, os.environ.get("PATH")]
@@ -72,6 +80,12 @@ class ContainerRuntime(Runtime):
 
     def describe(self) -> str:
         return f"{self.engine}:{self.image}"
+
+    def available(self, executable: str) -> bool:
+        if shutil.which(self.engine) is None:
+            return False
+        probe = [self.engine, "image", "inspect", self.image]
+        return subprocess.run(probe, capture_output=True).returncode == 0
 
 
 def runtime_for(solver: str) -> Runtime:
