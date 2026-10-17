@@ -54,6 +54,7 @@ def run_job(
         proc = subprocess.Popen(
             argv,
             cwd=workdir,
+            env=runtime.environment(argv),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,

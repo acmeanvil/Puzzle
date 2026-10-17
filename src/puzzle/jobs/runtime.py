@@ -54,6 +54,10 @@ class Runtime(ABC):
     def available(self, executable: str) -> bool:
         """Whether `executable` can run here (on PATH, or the image is present locally)."""
 
+    def environment(self, argv: list[str]) -> dict[str, str] | None:
+        """Environment variables for the process; None inherits Puzzle's own."""
+        return None
+
 
 @dataclass(frozen=True)
 class NativeRuntime(Runtime):
@@ -74,9 +78,42 @@ class NativeRuntime(Runtime):
     def available(self, executable: str) -> bool:
         return shutil.which(executable, path=self._path()) is not None
 
+    def environment(self, argv: list[str]) -> dict[str, str] | None:
+        """Activate the solver's conda/pixi environment, if it lives in one.
+
+        Puzzle runs solver binaries directly. Without activation, Windows can't find
+        the environment's DLLs (exit 0xC0000135), and some solvers can't find their
+        data files, so put the environment's directories first on PATH and set
+        CONDA_PREFIX, as `conda activate` would.
+        """
+        prefix = conda_prefix(Path(argv[0]))
+        if prefix is None:
+            return None
+        env = dict(os.environ)
+        env["PATH"] = os.pathsep.join([*map(str, env_bin_dirs(prefix)), env.get("PATH", "")])
+        env["CONDA_PREFIX"] = str(prefix)
+        return env
+
     def _path(self) -> str:
         parts = [self.search_path, os.environ.get("PATH")]
         return os.pathsep.join(p for p in parts if p)
+
+
+def conda_prefix(executable: Path) -> Path | None:
+    """The conda/pixi environment containing `executable` (the folder with conda-meta)."""
+    for parent in list(executable.resolve().parents)[:3]:
+        if (parent / "conda-meta").is_dir():
+            return parent
+    return None
+
+
+def env_bin_dirs(prefix: Path) -> list[Path]:
+    """The directories `conda activate` puts on PATH for an environment."""
+    if os.name == "nt":
+        subdirs = ["", "Library/mingw-w64/bin", "Library/usr/bin", "Library/bin", "Scripts", "bin"]
+    else:
+        subdirs = ["bin"]
+    return [prefix / d for d in subdirs]
 
 
 @dataclass(frozen=True)

@@ -1,3 +1,4 @@
+import os
 import sys
 import threading
 from pathlib import Path
@@ -106,3 +107,16 @@ def test_auto_prefers_native_then_falls_back(monkeypatch, tmp_path):
     monkeypatch.setenv("PUZZLE_SOLVER_PATH", str(tmp_path / "empty"))
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))  # no solver and no container engine
     assert isinstance(runtime_for("calculix"), NativeRuntime)  # reports the solver as missing
+
+
+def test_native_runs_activate_the_solver_environment(tmp_path):
+    prefix = tmp_path / "env"
+    (prefix / "conda-meta").mkdir(parents=True)
+    bindir = prefix / ("Library/bin" if sys.platform == "win32" else "bin")
+    bindir.mkdir(parents=True)
+    exe = bindir / ("solver.exe" if sys.platform == "win32" else "solver")
+    exe.write_text("")
+    env = NativeRuntime().environment([str(exe)])
+    assert env["CONDA_PREFIX"] == str(prefix.resolve())
+    assert env["PATH"].split(os.pathsep)[0].startswith(str(prefix.resolve()))
+    assert NativeRuntime().environment([str(tmp_path / "loose-binary")]) is None
