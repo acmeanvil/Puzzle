@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, development]
   pull_request:
 
 jobs:
@@ -20,3 +20,18 @@ jobs:
       - run: ruff check .
       - run: ruff format --check .
       - run: pytest
+
+  solvers:
+    # Integration tests against real solver binaries from conda-forge (same pins as the images).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: solvers
+          create-args: python=3.12 calculix=2.23 gmsh=4.15
+          channels: conda-forge
+      - shell: bash -el {0}
+        run: |
+          pip install -e ".[dev]"
+          pytest tests/integration -rs

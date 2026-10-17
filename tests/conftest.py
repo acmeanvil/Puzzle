@@ -42,8 +42,6 @@ def bracket() -> Project:
     al = p.add(
         Material(
             name="Al 6061-T6",
-            library_ref="aluminium/6061-t6",
-            library_version=3,
             properties={"youngs_modulus": Quantity(value=68.9, unit="GPa")},
         )
     )

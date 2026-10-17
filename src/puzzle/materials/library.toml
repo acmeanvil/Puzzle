@@ -1,0 +1,88 @@
+# Puzzle's built-in default materials library.
+#
+# Typical room-temperature (about 20 °C) values for common engineering materials,
+# meant as starting points. Check them against your supplier's data before relying
+# on a result. Adding one to a project copies it; the copy never changes when this
+# file does.
+#
+# Property names are the ones adapters read. Units must parse with pint.
+
+[structural_steel]
+name = "Structural steel"
+description = "Generic carbon structural steel"
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 200, unit = "GPa" }
+poissons_ratio = { value = 0.30 }
+thermal_conductivity = { value = 60.5, unit = "W/(m*K)" }
+specific_heat = { value = 434, unit = "J/(kg*K)" }
+thermal_expansion = { value = 12e-6, unit = "1/K" }
+electrical_conductivity = { value = 5.9e6, unit = "S/m" }
+
+[stainless_steel_304]
+name = "Stainless steel 304"
+description = "Austenitic stainless steel, annealed"
+density = { value = 8000, unit = "kg/m^3" }
+youngs_modulus = { value = 193, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+thermal_conductivity = { value = 16.2, unit = "W/(m*K)" }
+specific_heat = { value = 500, unit = "J/(kg*K)" }
+thermal_expansion = { value = 17.3e-6, unit = "1/K" }
+electrical_conductivity = { value = 1.39e6, unit = "S/m" }
+relative_permeability = { value = 1.0 }
+
+[aluminium_6061_t6]
+name = "Aluminium 6061-T6"
+description = "Precipitation-hardened aluminium alloy"
+density = { value = 2700, unit = "kg/m^3" }
+youngs_modulus = { value = 68.9, unit = "GPa" }
+poissons_ratio = { value = 0.33 }
+thermal_conductivity = { value = 167, unit = "W/(m*K)" }
+specific_heat = { value = 896, unit = "J/(kg*K)" }
+thermal_expansion = { value = 23.6e-6, unit = "1/K" }
+electrical_conductivity = { value = 2.5e7, unit = "S/m" }
+relative_permeability = { value = 1.0 }
+
+[titanium_ti6al4v]
+name = "Titanium Ti-6Al-4V"
+description = "Alpha-beta titanium alloy, annealed"
+density = { value = 4430, unit = "kg/m^3" }
+youngs_modulus = { value = 113.8, unit = "GPa" }
+poissons_ratio = { value = 0.342 }
+thermal_conductivity = { value = 6.7, unit = "W/(m*K)" }
+specific_heat = { value = 526, unit = "J/(kg*K)" }
+thermal_expansion = { value = 8.6e-6, unit = "1/K" }
+electrical_conductivity = { value = 5.8e5, unit = "S/m" }
+relative_permeability = { value = 1.0 }
+
+[copper]
+name = "Copper"
+description = "Electrolytic tough-pitch copper (C11000)"
+density = { value = 8960, unit = "kg/m^3" }
+youngs_modulus = { value = 117, unit = "GPa" }
+poissons_ratio = { value = 0.34 }
+thermal_conductivity = { value = 391, unit = "W/(m*K)" }
+specific_heat = { value = 385, unit = "J/(kg*K)" }
+thermal_expansion = { value = 17e-6, unit = "1/K" }
+electrical_conductivity = { value = 5.8e7, unit = "S/m" }
+relative_permeability = { value = 1.0 }
+
+[air]
+name = "Air"
+description = "Dry air at 20 °C and 1 atm"
+density = { value = 1.204, unit = "kg/m^3" }
+dynamic_viscosity = { value = 1.81e-5, unit = "Pa*s" }
+thermal_conductivity = { value = 0.0257, unit = "W/(m*K)" }
+specific_heat = { value = 1006, unit = "J/(kg*K)" }
+electrical_conductivity = { value = 0, unit = "S/m" }
+relative_permittivity = { value = 1.0006 }
+relative_permeability = { value = 1.0 }
+
+[water]
+name = "Water"
+description = "Liquid water at 20 °C"
+density = { value = 998.2, unit = "kg/m^3" }
+dynamic_viscosity = { value = 1.002e-3, unit = "Pa*s" }
+thermal_conductivity = { value = 0.598, unit = "W/(m*K)" }
+specific_heat = { value = 4182, unit = "J/(kg*K)" }
+relative_permittivity = { value = 80.1 }
+relative_permeability = { value = 1.0 }

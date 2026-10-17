@@ -30,7 +30,7 @@ License Puzzle under GPL-3.0-or-later. Solvers are always invoked as separate pr
 - Gmsh can be linked through its Python API.
 - Apache-2.0 libraries remain compatible (they are incompatible with GPL-2.0-only, which is why version 3 is required).
 - Anyone distributing Puzzle or a derivative must provide source under the same licence.
-- A contribution policy (DCO or CLA) is still to be decided.
+- Contributors are the maintainer and Claude for the foreseeable future, so there is no CLA or DCO process; revisit before accepting outside contributions.
 
 ## Alternatives considered
 

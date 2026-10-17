@@ -52,7 +52,7 @@ Where geometry sits in the tree decides how it is shared:
 2. Transfers form a directed acyclic graph. Two-way coupling is a single coupled study or a single co-simulation study (preCICE), never a loop of transfers.
 3. Every object has a content hash over its own settings plus its inputs' hashes. Results record the hash they were computed from. A study is stale when its hash differs, and the UI names the changed input. Rebuild runs only the stale subgraph; a known hash is a cache hit. Renaming changes nothing.
 4. Transfers and loads target named selections, never raw face ids (ADR 0004).
-5. Materials come from a versioned library and are pinned per project; updating a pin is explicit.
+5. Materials come from a built-in default library. Adding one to a project copies it in; the copy is static and has no connection to the library, so library changes never reach existing projects.
 6. A project is a directory with one TOML file per object, keyed by UUID, so it diffs and merges in git.
 
 ## Consequences

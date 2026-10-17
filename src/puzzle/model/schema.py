@@ -87,12 +87,15 @@ class Geometry(ProjectObject):
 
 
 class Material(ProjectObject):
-    """A material, optionally pinned to a library entry at a version."""
+    """A material owned by the project.
+
+    Adding a material from the built-in library copies it in; from then on it is
+    static and has no connection to the library (see `puzzle.materials`).
+    """
 
     kind: ClassVar[str] = "material"
 
-    library_ref: str | None = None
-    library_version: int | None = None
+    description: str = ""
     properties: dict[str, Quantity] = Field(default_factory=dict)
 
 
