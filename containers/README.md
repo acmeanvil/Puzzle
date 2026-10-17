@@ -18,7 +18,8 @@ docker build -t ghcr.io/acmeanvil/puzzle-elmer:26.2 containers/elmer
 
 | Variable | Effect |
 | --- | --- |
-| `PUZZLE_RUNTIME` | `native` (default), `docker` or `podman` |
+| `PUZZLE_RUNTIME` | `auto` (default: native if installed, else a local container image), `native`, `docker` or `podman` |
+| `PUZZLE_<SOLVER>_RUNTIME` | The same, for one solver |
 | `PUZZLE_<SOLVER>_IMAGE` | Use another image, e.g. `PUZZLE_CALCULIX_IMAGE=local/ccx:dev` |
 | `PUZZLE_SOLVER_PATH` | Extra directories searched for native solver executables |
 

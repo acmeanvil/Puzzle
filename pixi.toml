@@ -1,0 +1,77 @@
+# Puzzle's cross-platform environments (ADR 0013), from one lock file, on Linux,
+# macOS (Intel and Apple silicon) and Windows.
+#
+# Puzzle itself runs in `default` / `dev` / `full`. Each native solver gets its own
+# environment, because solvers run as separate processes (ADR 0007) and their
+# dependencies clash if solved together (e.g. FEniCSx and Code_Aster need different
+# MPI builds on Windows). Solvers conda-forge doesn't package (Elmer for now,
+# Code_Saturne) run in containers; see containers/.
+#
+#   pixi run test                 unit tests
+#   pixi run -e dev check         lint, format check, all tests incl. native solver runs
+#   pixi install -e calculix      install one native solver
+#   pixi shell -e dev             a shell with Puzzle; dev puts the solver envs on PUZZLE_SOLVER_PATH
+
+[workspace]
+name = "puzzle"
+channels = ["conda-forge"]
+# osx-64 (Intel Macs) is supported for now; reassess as Apple ends Intel support.
+platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64", "win-64"]
+
+[dependencies]
+python = "3.12.*"
+pydantic = ">=2.7"
+pint = ">=0.24"
+tomli-w = ">=1.0"
+python-gmsh = ">=4.13"
+numpy = ">=1.26"
+
+[pypi-dependencies]
+puzzle-fem = { path = ".", editable = true }
+
+[tasks]
+test = "pytest"
+
+[feature.dev.dependencies]
+pytest = ">=8"
+ruff = ">=0.6"
+openpyxl = ">=3.1"
+
+[feature.dev.tasks]
+lint = "ruff check . && ruff format --check ."
+install-solvers = "pixi install -e calculix"
+check = { cmd = "pytest", depends-on = ["lint", "install-solvers"] }
+import-materials = "python scripts/import_materials.py"
+
+[feature.dev.target.unix.activation.env]
+PUZZLE_SOLVER_PATH = "$PIXI_PROJECT_ROOT/.pixi/envs/calculix/bin:$PIXI_PROJECT_ROOT/.pixi/envs/fenicsx/bin:$PIXI_PROJECT_ROOT/.pixi/envs/code-aster/bin"
+
+[feature.dev.target.win.activation.env]
+PUZZLE_SOLVER_PATH = "%PIXI_PROJECT_ROOT%\\.pixi\\envs\\calculix\\Library\\bin;%PIXI_PROJECT_ROOT%\\.pixi\\envs\\fenicsx;%PIXI_PROJECT_ROOT%\\.pixi\\envs\\code-aster\\Library\\bin"
+
+[feature.gui.dependencies]
+pyside6 = ">=6.7"
+pyvista = ">=0.44"
+pyvistaqt = ">=0.11"
+
+# One feature per native solver.
+[feature.calculix.dependencies]
+calculix = "2.23.*"
+
+[feature.fenicsx.dependencies]
+python = "3.12.*"
+fenics-dolfinx = "0.11.*"
+
+[feature.code-aster]
+platforms = ["linux-64", "win-64"]
+
+[feature.code-aster.dependencies]
+code-aster = "18.1.*"
+
+[environments]
+default = { solve-group = "main" }
+dev = { features = ["dev"], solve-group = "main" }
+full = { features = ["dev", "gui"], solve-group = "main" }
+calculix = { features = ["calculix"], no-default-feature = true }
+fenicsx = { features = ["fenicsx"], no-default-feature = true }
+code-aster = { features = ["code-aster"], no-default-feature = true }

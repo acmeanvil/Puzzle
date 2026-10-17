@@ -18,3 +18,4 @@ New record: copy [template.md](template.md) to `NNNN-short-title.md`, set status
 | [0010](0010-mvp-solvers.md) | MVP solvers are CalculiX and Elmer; Elmer is the core multiphysics and EM solver | Proposed |
 | [0011](0011-solver-shootout.md) | Solver shoot-out: one study, several solvers, compared | Proposed |
 | [0012](0012-solver-lineup.md) | Solver line-up: CalculiX, Elmer, Code_Aster, FEniCSx, Code_Saturne | Proposed |
+| [0013](0013-packaging-and-platforms.md) | Platforms and packaging: pixi, native solvers first, containers for the gaps | Accepted |

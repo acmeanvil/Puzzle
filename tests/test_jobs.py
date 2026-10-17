@@ -11,6 +11,7 @@ from puzzle.jobs import (
     run_job,
     runtime_for,
 )
+from puzzle.jobs.runtime import DEFAULT_IMAGES
 
 PY = Path(sys.executable)
 
@@ -78,6 +79,8 @@ def test_runtime_selection(monkeypatch):
     assert runtime_for("calculix") == ContainerRuntime(image="local/ccx:dev", engine="docker")
     monkeypatch.setenv("PUZZLE_RUNTIME", "native")
     assert isinstance(runtime_for("calculix"), NativeRuntime)
+    monkeypatch.setenv("PUZZLE_ELMER_RUNTIME", "podman")
+    assert runtime_for("elmer") == ContainerRuntime(image=DEFAULT_IMAGES["elmer"], engine="podman")
     monkeypatch.setenv("PUZZLE_RUNTIME", "vm")
     with pytest.raises(ValueError):
         runtime_for("calculix")
@@ -87,3 +90,19 @@ def test_availability_checks(tmp_path):
     assert NativeRuntime(search_path=str(PY.parent)).available(PY.name)
     assert not NativeRuntime(search_path="").available("definitely-not-a-solver")
     assert not ContainerRuntime(image="x", engine="definitely-not-an-engine").available("ccx")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="uses a shell-script stand-in")
+def test_auto_prefers_native_then_falls_back(monkeypatch, tmp_path):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    ccx = fake_bin / "ccx"
+    ccx.write_text("#!/bin/sh\n")
+    ccx.chmod(0o755)
+    monkeypatch.delenv("PUZZLE_RUNTIME", raising=False)
+    monkeypatch.setenv("PUZZLE_SOLVER_PATH", str(fake_bin))
+    assert runtime_for("calculix") == NativeRuntime(search_path=str(fake_bin))
+
+    monkeypatch.setenv("PUZZLE_SOLVER_PATH", str(tmp_path / "empty"))
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))  # no solver and no container engine
+    assert isinstance(runtime_for("calculix"), NativeRuntime)  # reports the solver as missing

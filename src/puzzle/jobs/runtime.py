@@ -1,9 +1,13 @@
 """Where a solver command runs: on the host, or inside a container image.
 
-Selection, in order:
-1. `PUZZLE_RUNTIME` = "native", "docker" or "podman" (default: "native").
-2. For containers, `PUZZLE_<SOLVER>_IMAGE` overrides the default image.
-3. For native runs, `PUZZLE_SOLVER_PATH` (os.pathsep-separated) is searched before PATH.
+Selection (ADR 0013), per solver:
+1. `PUZZLE_<SOLVER>_RUNTIME`, else `PUZZLE_RUNTIME`: "auto" (default), "native",
+   "docker" or "podman".
+2. "auto" runs natively when the solver's executable is found, otherwise in its
+   container image when an engine (podman, then docker) has that image locally,
+   otherwise natively (which reports the solver as missing).
+3. For containers, `PUZZLE_<SOLVER>_IMAGE` overrides the default image.
+4. For native runs, `PUZZLE_SOLVER_PATH` (os.pathsep-separated) is searched before PATH.
 """
 
 from __future__ import annotations
@@ -21,7 +25,16 @@ DEFAULT_IMAGES = {
     "elmer": "ghcr.io/acmeanvil/puzzle-elmer:26.2",
 }
 
+# The executable that proves a solver is installed natively.
+EXECUTABLES = {
+    "calculix": "ccx",
+    "elmer": "ElmerSolver",
+    "code_aster": "run_aster",
+    "code_saturne": "code_saturne",
+}
+
 CONTAINER_WORKDIR = "/work"
+ENGINES = ("podman", "docker")
 
 
 class SolverNotFound(RuntimeError):
@@ -89,13 +102,23 @@ class ContainerRuntime(Runtime):
 
 
 def runtime_for(solver: str) -> Runtime:
-    kind = os.environ.get("PUZZLE_RUNTIME", "native")
+    key = solver.upper()
+    kind = os.environ.get(f"PUZZLE_{key}_RUNTIME") or os.environ.get("PUZZLE_RUNTIME", "auto")
+    native = NativeRuntime(search_path=os.environ.get("PUZZLE_SOLVER_PATH"))
     if kind == "native":
-        return NativeRuntime(search_path=os.environ.get("PUZZLE_SOLVER_PATH"))
-    if kind in ("docker", "podman"):
-        override = os.environ.get(f"PUZZLE_{solver.upper()}_IMAGE")
-        image = override or DEFAULT_IMAGES.get(solver)
+        return native
+    image = os.environ.get(f"PUZZLE_{key}_IMAGE") or DEFAULT_IMAGES.get(solver)
+    if kind in ENGINES:
         if image is None:
             raise SolverNotFound(f"no container image known for {solver}")
         return ContainerRuntime(image=image, engine=kind)
-    raise ValueError(f"PUZZLE_RUNTIME must be native, docker or podman, not '{kind}'")
+    if kind == "auto":
+        executable = EXECUTABLES.get(solver)
+        if executable is None or native.available(executable):
+            return native
+        for engine in ENGINES:
+            container = ContainerRuntime(image=image, engine=engine) if image else None
+            if container and container.available(executable):
+                return container
+        return native
+    raise ValueError(f"PUZZLE_RUNTIME must be auto, native, docker or podman, not '{kind}'")

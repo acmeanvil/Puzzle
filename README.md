@@ -20,14 +20,15 @@ Status: early design. See the [architecture decision records](docs/adr/README.md
 
 ## Development
 
+Puzzle uses [pixi](https://pixi.sh) for its environments on Linux, macOS and Windows (ADR 0013):
+
 ```sh
-python3 -m venv .venv
-.venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest
-.venv/bin/ruff check . && .venv/bin/ruff format --check .
+pixi run -e dev check      # lint, format check, tests incl. a native CalculiX run
+pixi shell -e dev          # a shell with Puzzle installed and the solver envs on PUZZLE_SOLVER_PATH
+pixi install -e fenicsx    # add another native solver (also: code-aster on Linux/Windows)
 ```
 
-Optional extras: `geometry`, `mesh`, `results`, `gui`.
+Solvers without conda-forge packages run in containers; see [containers/](containers/README.md).
 
 ## License
 
