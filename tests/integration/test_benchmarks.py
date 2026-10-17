@@ -16,7 +16,7 @@ from puzzle.materials import library_material
 from puzzle.model import Feature, Physics, Quantity, SolveStep, Study
 from puzzle.solve import run_study
 
-SOLVERS = {"calculix": "ccx", "elmer": "ElmerSolver"}
+SOLVERS = {"calculix": "ccx", "elmer": "ElmerSolver", "code_aster": "run_aster"}
 solver = pytest.mark.parametrize(
     "solver",
     [

@@ -1,4 +1,4 @@
-"""Code_Aster adapter: .comm command files plus an .export run file, MED meshes and results.
+"""Code_Aster adapter: .comm command file, .export run file and a MED mesh; results as tables.
 
 Code_Aster is Puzzle's nonlinear structural solver: contact with friction, plasticity
 and large deformation (STAT_NON_LINE, DYNA_NON_LINE), alongside linear statics,
@@ -20,6 +20,8 @@ from puzzle.adapters.base import (
     Capabilities,
     SolverAdapter,
 )
+from puzzle.adapters.code_aster.comm import JOB, write_case
+from puzzle.adapters.code_aster.tables import read_results as read_tables
 from puzzle.mesh.mesh import Mesh
 from puzzle.model.schema import Project, Study
 from puzzle.results.model import Results
@@ -41,10 +43,15 @@ class CodeAsterAdapter(SolverAdapter):
     )
 
     def write_input(self, project: Project, study: Study, mesh: Mesh, workdir: Path) -> Path:
-        raise NotImplementedError("Phase 3: write study.comm and study.export around the MED mesh")
+        return write_case(project, study, mesh, workdir)
 
     def command(self, input_file: Path) -> list[str]:
-        return ["run_aster", input_file.with_suffix(".export").name]
+        return ["run_aster", input_file.name]
 
     def read_results(self, input_file: Path) -> Results:
-        raise NotImplementedError("Phase 3: read the .rmed result file into the results store")
+        workdir = input_file.parent
+        if not list(workdir.glob("*.csv")):
+            raise FileNotFoundError(
+                f"Code_Aster wrote no result tables; see {JOB}.mess and the solver log"
+            )
+        return read_tables(workdir)

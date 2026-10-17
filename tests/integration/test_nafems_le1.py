@@ -37,7 +37,7 @@ def test_committed_project_matches_the_builder(tmp_path):  # needs no solver
             n,
             marks=pytest.mark.skipif(not runtime_for(n).available(e), reason=f"{n} not available"),
         )
-        for n, e in (("calculix", "ccx"), ("elmer", "ElmerSolver"))
+        for n, e in (("calculix", "ccx"), ("elmer", "ElmerSolver"), ("code_aster", "run_aster"))
     ],
 )
 def test_le1_sigma_yy_at_d(tmp_path, solver):

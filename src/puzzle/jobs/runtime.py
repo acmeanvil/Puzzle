@@ -23,6 +23,7 @@ from pathlib import Path
 DEFAULT_IMAGES = {
     "calculix": "ghcr.io/acmeanvil/puzzle-calculix:2.23",
     "elmer": "ghcr.io/acmeanvil/puzzle-elmer:26.2",
+    "code_aster": "ghcr.io/acmeanvil/puzzle-code-aster:18.1",
 }
 
 # The executable that proves a solver is installed natively.
@@ -128,7 +129,8 @@ class ContainerRuntime(Runtime):
         argv = [self.engine, "run", "--rm", "-v", f"{workdir.resolve()}:{CONTAINER_WORKDIR}"]
         argv += ["-w", CONTAINER_WORKDIR]
         if hasattr(os, "getuid"):  # keep output files owned by the user
-            argv += ["--user", f"{os.getuid()}:{os.getgid()}"]
+            # That user has no home directory in the image; some solvers need one.
+            argv += ["--user", f"{os.getuid()}:{os.getgid()}", "-e", "HOME=/tmp"]
         return [*argv, self.image, *command]
 
     def describe(self) -> str:
