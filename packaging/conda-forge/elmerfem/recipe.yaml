@@ -1,0 +1,65 @@
+context:
+  name: elmerfem
+  version: "26.2"
+
+package:
+  name: ${{ name }}
+  version: ${{ version }}
+
+source:
+  url: https://github.com/ElmerCSC/elmerfem/archive/refs/tags/release-${{ version }}.tar.gz
+  sha256: def442937d69234f7e1b36e902a7fcd2a428d671e62f0275bf05aeef7ebbcade
+
+build:
+  number: 0
+  # Windows needs a Fortran toolchain decision (flang vs. MinGW gfortran); follow-up.
+  skip: win
+
+requirements:
+  build:
+    - ${{ compiler('c') }}
+    - ${{ stdlib('c') }}
+    - ${{ compiler('cxx') }}
+    - ${{ compiler('fortran') }}
+    - cmake
+    - ninja
+  host:
+    - libblas
+    - liblapack
+
+tests:
+  - script:
+      - ElmerSolver -v
+      - ElmerGrid
+  # A real solve: Elmer's own anisotropic heat-conduction regression case. ElmerSolver
+  # compares its result with the case's reference norm and writes TEST.PASSED = 1.
+  - files:
+      source:
+        - fem/tests/HeatAniso/
+    script:
+      interpreter: bash
+      content: |
+        cd fem/tests/HeatAniso
+        ElmerGrid 1 2 cross
+        ElmerSolver case.sif
+        test "$(tr -d '[:space:]' < TEST.PASSED)" = "1"
+
+about:
+  homepage: https://www.elmerfem.org
+  repository: https://github.com/ElmerCSC/elmerfem
+  documentation: https://www.elmerfem.org/blog/documentation/
+  summary: Elmer, an open-source multiphysics finite element package
+  description: |
+    Elmer is a finite element package for multiphysical problems: fluid dynamics,
+    structural mechanics, electromagnetics, heat transfer, acoustics and more.
+    This package provides ElmerSolver, ElmerGrid and the solver modules, built
+    without MPI.
+  license: GPL-2.0-or-later AND LGPL-2.1-or-later
+  license_file:
+    - LICENSE.md
+    - license_texts/GPL-2.txt
+    - license_texts/LGPL-2.1.txt
+
+extra:
+  recipe-maintainers:
+    - acmeanvil

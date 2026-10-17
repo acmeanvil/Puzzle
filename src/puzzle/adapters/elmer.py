@@ -11,6 +11,11 @@ Module choices the adapter makes:
 - electromagnetic_waves: VectorHelmholtz (frequency domain)
 - solid_mechanics: StressSolve; ElasticSolve with "Apply Contact BCs" for experimental contact
 
+Native runs: Puzzle calls ElmerSolver directly, without activating its conda
+environment, so the adapter must set ELMER_HOME to that environment's prefix (the
+parent of the directory holding ElmerSolver). The conda package's binaries can't
+find their keyword files from the compiled-in path once relocated.
+
 Bonded contact is Elmer's production-ready contact: conformal meshes share nodes, and
 nonconformal interfaces are tied with mortar boundary conditions ("Mortar BC" pointing at
 the target boundary, "Contact Type" = tie). Mortar ties also carry heat transfer and
