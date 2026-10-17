@@ -1,0 +1,16 @@
+id = "e3545428-8308-438f-a165-68b315067b0d"
+name = "LE1 material"
+description = "NAFEMS LE1: E = 210 GPa, nu = 0.3"
+sources = []
+
+[info]
+
+[properties.youngs_modulus]
+value = 210.0
+unit = "GPa"
+
+[properties.poissons_ratio]
+value = 0.3
+unit = "dimensionless"
+
+[tables]

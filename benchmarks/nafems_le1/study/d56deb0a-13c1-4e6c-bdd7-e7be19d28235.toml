@@ -1,0 +1,7 @@
+id = "d56deb0a-13c1-4e6c-bdd7-e7be19d28235"
+name = "LE1"
+component = "83997f61-122d-437e-b46b-30673e21069a"
+solver = "calculix"
+steps = [
+    { type = "stationary", physics = [], settings = {} },
+]

@@ -1,0 +1,46 @@
+id = "f9b72bb7-aa25-44a4-bf3b-d543bd52f195"
+name = "Plate"
+source = "le1.step"
+scope = "global"
+
+[[selections]]
+name = "Body"
+entity = "body"
+members = [
+    "body-1",
+]
+
+[[selections]]
+name = "X symmetry"
+entity = "face"
+members = [
+    "face-3",
+]
+
+[[selections]]
+name = "Y symmetry"
+entity = "face"
+members = [
+    "face-1",
+]
+
+[[selections]]
+name = "Mid plane"
+entity = "face"
+members = [
+    "face-5",
+]
+
+[[selections]]
+name = "Outer edge"
+entity = "face"
+members = [
+    "face-4",
+]
+
+[[selections]]
+name = "Inner edge"
+entity = "face"
+members = [
+    "face-2",
+]

@@ -1,0 +1,12 @@
+id = "6dfc4ef1-8d5f-48d4-be2e-9e4004eea6ab"
+name = "Tets"
+mesher = "gmsh"
+element_order = 2
+
+[global_size]
+value = 100.0
+unit = "mm"
+
+[local_sizes."Plate/Inner edge"]
+value = 20.0
+unit = "mm"

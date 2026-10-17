@@ -37,9 +37,10 @@ Solver tests in `tests/integration/` skip when the solver isn't available. Rende
 | `src/puzzle/jobs` | Runs solvers natively or in Docker/Podman; runtime chosen per solver |
 | `src/puzzle/results` | Solver-neutral `Results`; `ResultStore` = Delta Lake tables (runs, meshes, nodes, cells, groups, fields) |
 | `src/puzzle/solve.py` | `run_study`: validate → mesh → write → run → read |
-| `src/puzzle/post` | VTK grids (tet10 reordered for VTK), `render` (window or PNG), `.vtu`/`.pvd` export |
+| `src/puzzle/post` | VTK grids (tet10 reordered for VTK), `render` (window or PNG), `.vtu`/`.pvd` export, `sample` (results at a point) |
 | `src/puzzle/cli.py` | `puzzle studies/run/runs/show/export PROJECT` |
 | `examples/cantilever` | Example project; regenerate with `python examples/cantilever/build.py` |
+| `benchmarks/` | Published benchmarks as projects (NAFEMS LE1); each has build.py, a README with measured results, and an integration test |
 | `containers/`, `packaging/conda-forge/` | Solver images; conda-forge recipes (elmerfem) |
 
 ## Conventions

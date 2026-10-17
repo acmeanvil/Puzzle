@@ -1,0 +1,69 @@
+id = "83997f61-122d-437e-b46b-30673e21069a"
+name = "Membrane"
+dimension = "3d"
+mesh = "6dfc4ef1-8d5f-48d4-be2e-9e4004eea6ab"
+selections = []
+materials = [
+    { material = "e3545428-8308-438f-a165-68b315067b0d", selection = "Plate/Body" },
+]
+contacts = []
+couplings = []
+
+[[parts]]
+name = "Plate"
+geometry = "f9b72bb7-aa25-44a4-bf3b-d543bd52f195"
+translation = [
+    0.0,
+    0.0,
+    0.0,
+]
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[[physics]]
+type = "solid_mechanics"
+
+[[physics.features]]
+type = "displacement"
+selection = "Plate/X symmetry"
+
+[physics.features.values.x]
+value = 0.0
+unit = "m"
+
+[physics.features.extensions]
+
+[[physics.features]]
+type = "displacement"
+selection = "Plate/Y symmetry"
+
+[physics.features.values.y]
+value = 0.0
+unit = "m"
+
+[physics.features.extensions]
+
+[[physics.features]]
+type = "displacement"
+selection = "Plate/Mid plane"
+
+[physics.features.values.z]
+value = 0.0
+unit = "m"
+
+[physics.features.extensions]
+
+[[physics.features]]
+type = "pressure"
+selection = "Plate/Outer edge"
+
+[physics.features.values.p]
+value = -10.0
+unit = "MPa"
+
+[physics.features.extensions]
+
+[physics.settings]
