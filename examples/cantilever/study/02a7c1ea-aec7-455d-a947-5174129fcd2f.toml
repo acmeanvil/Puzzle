@@ -1,0 +1,12 @@
+id = "02a7c1ea-aec7-455d-a947-5174129fcd2f"
+name = "Tip load"
+component = "c119cb9f-3a46-47d8-93dd-7d57bb93b0ed"
+solver = "calculix"
+
+[[steps]]
+type = "stationary"
+physics = [
+    "solid_mechanics",
+]
+
+[steps.settings]

@@ -1,0 +1,10 @@
+id = "33cd8d5b-60f2-469d-a148-74c3637c419e"
+name = "Tets 2.5 mm"
+mesher = "gmsh"
+element_order = 2
+
+[global_size]
+value = 2.5
+unit = "mm"
+
+[local_sizes]

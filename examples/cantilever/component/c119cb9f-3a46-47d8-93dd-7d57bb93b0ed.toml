@@ -1,0 +1,72 @@
+id = "c119cb9f-3a46-47d8-93dd-7d57bb93b0ed"
+name = "Cantilever"
+dimension = "3d"
+mesh = "33cd8d5b-60f2-469d-a148-74c3637c419e"
+selections = []
+materials = [
+    { material = "cf3174b3-e4f6-4444-af01-3816d7abc2a2", selection = "Bar/Body" },
+]
+contacts = []
+couplings = []
+
+[[parts]]
+name = "Bar"
+geometry = "d393e27a-4ff0-4a43-8e50-e8d2ad66211c"
+translation = [
+    0.0,
+    0.0,
+    0.0,
+]
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[[physics]]
+type = "solid_mechanics"
+
+[[physics.features]]
+type = "fixed"
+selection = "Bar/Root"
+
+[physics.features.values]
+
+[physics.features.extensions]
+
+[[physics.features]]
+type = "force"
+selection = "Bar/Tip"
+
+[physics.features.values.y]
+value = -100.0
+unit = "N"
+
+[physics.features.extensions]
+
+[physics.settings]
+
+[[physics]]
+type = "heat_transfer"
+
+[[physics.features]]
+type = "temperature"
+selection = "Bar/Root"
+
+[physics.features.values.T]
+value = 100.0
+unit = "degC"
+
+[physics.features.extensions]
+
+[[physics.features]]
+type = "temperature"
+selection = "Bar/Tip"
+
+[physics.features.values.T]
+value = 20.0
+unit = "degC"
+
+[physics.features.extensions]
+
+[physics.settings]

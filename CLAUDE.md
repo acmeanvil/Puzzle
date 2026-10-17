@@ -22,7 +22,7 @@ pixi run -e dev import-materials "<path>/Materials_Hunt_List.xlsx"
 
 A plain `.venv` also works (`pip install -e ".[dev]"`); set `PUZZLE_SOLVER_PATH=$PWD/.pixi/envs/calculix/bin` so solver tests find `ccx`.
 
-Solver tests in `tests/integration/` skip when the solver isn't available. Container runs: `PUZZLE_RUNTIME=docker pytest tests/integration` after building images in `containers/`.
+Solver tests in `tests/integration/` skip when the solver isn't available. Rendering tests run only with `PUZZLE_RENDER_TESTS=1`; check renders by looking at the PNG (`puzzle show ... --screenshot`). Container runs: `PUZZLE_RUNTIME=docker pytest tests/integration` after building images in `containers/`.
 
 ## Layout
 
@@ -37,6 +37,9 @@ Solver tests in `tests/integration/` skip when the solver isn't available. Conta
 | `src/puzzle/jobs` | Runs solvers natively or in Docker/Podman; runtime chosen per solver |
 | `src/puzzle/results` | Solver-neutral `Results`; `ResultStore` = Delta Lake tables (runs, meshes, nodes, cells, groups, fields) |
 | `src/puzzle/solve.py` | `run_study`: validate → mesh → write → run → read |
+| `src/puzzle/post` | VTK grids (tet10 reordered for VTK), `render` (window or PNG), `.vtu`/`.pvd` export |
+| `src/puzzle/cli.py` | `puzzle studies/run/runs/show/export PROJECT` |
+| `examples/cantilever` | Example project; regenerate with `python examples/cantilever/build.py` |
 | `containers/`, `packaging/conda-forge/` | Solver images; conda-forge recipes (elmerfem) |
 
 ## Conventions

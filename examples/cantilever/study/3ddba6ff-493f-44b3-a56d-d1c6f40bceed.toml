@@ -1,0 +1,12 @@
+id = "3ddba6ff-493f-44b3-a56d-d1c6f40bceed"
+name = "Conduction"
+component = "c119cb9f-3a46-47d8-93dd-7d57bb93b0ed"
+solver = "calculix"
+
+[[steps]]
+type = "stationary"
+physics = [
+    "heat_transfer",
+]
+
+[steps.settings]

@@ -4,6 +4,23 @@ An open-source FEM/CFD pre- and post-processor that runs one model on many open-
 
 Status: early design. See the [architecture decision records](docs/adr/README.md).
 
+## Try it
+
+The cantilever example is a 200 x 10 x 10 mm steel bar fixed at one end, with three studies:
+
+```sh
+pixi shell -e dev
+puzzle studies examples/cantilever
+puzzle run examples/cantilever --study "Tip load"      # about 1.60 mm tip deflection
+puzzle run examples/cantilever --study Modes           # first bending about 204 Hz
+puzzle show examples/cantilever --study "Tip load" --field stress
+puzzle show examples/cantilever --study Modes --mode 3 --screenshot mode3.png
+puzzle export examples/cantilever --study Modes modes.pvd   # open in ParaView
+puzzle runs examples/cantilever
+```
+
+Running an unchanged study again reuses the stored result. Results go to `examples/cantilever/results` (Delta Lake), solver files to `examples/cantilever/.puzzle/runs`.
+
 ## Layout
 
 | Path | Purpose |
@@ -11,10 +28,10 @@ Status: early design. See the [architecture decision records](docs/adr/README.md
 | `src/puzzle/model` | Solver-neutral model IR: resources, components, studies, transfers |
 | `src/puzzle/project` | Project files (one TOML per object), content hashing, staleness, study graph |
 | `src/puzzle/adapters` | Solver adapters and their capability matrices |
-| `src/puzzle/geometry` | OCCT geometry kernel wrapper (planned) |
-| `src/puzzle/mesh` | Meshing layer (planned) |
-| `src/puzzle/results` | Delta Lake / Parquet results store (planned) |
-| `src/puzzle/post` | Post-processing adapters (planned) |
+| `src/puzzle/geometry` | STEP import and named entities (Gmsh's OpenCASCADE kernel) |
+| `src/puzzle/mesh` | Meshing recipes run by Gmsh |
+| `src/puzzle/results` | Results model and the Delta Lake / Parquet store |
+| `src/puzzle/post` | VTK grids, viewer (`puzzle show`), ParaView export |
 | `src/puzzle/gui` | PySide6 desktop GUI (planned) |
 | `docs/adr` | Architecture decision records |
 

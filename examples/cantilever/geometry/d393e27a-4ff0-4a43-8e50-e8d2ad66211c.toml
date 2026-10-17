@@ -1,0 +1,25 @@
+id = "d393e27a-4ff0-4a43-8e50-e8d2ad66211c"
+name = "Bar"
+source = "bar.step"
+scope = "global"
+
+[[selections]]
+name = "Body"
+entity = "body"
+members = [
+    "body-1",
+]
+
+[[selections]]
+name = "Root"
+entity = "face"
+members = [
+    "face-1",
+]
+
+[[selections]]
+name = "Tip"
+entity = "face"
+members = [
+    "face-2",
+]

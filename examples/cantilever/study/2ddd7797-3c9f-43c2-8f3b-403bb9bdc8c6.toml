@@ -1,0 +1,13 @@
+id = "2ddd7797-3c9f-43c2-8f3b-403bb9bdc8c6"
+name = "Modes"
+component = "c119cb9f-3a46-47d8-93dd-7d57bb93b0ed"
+solver = "calculix"
+
+[[steps]]
+type = "modal"
+physics = [
+    "solid_mechanics",
+]
+
+[steps.settings]
+modes = 6

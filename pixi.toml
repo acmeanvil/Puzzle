@@ -27,6 +27,7 @@ python-gmsh = ">=4.13"
 numpy = ">=1.26"
 deltalake = ">=1.0"
 pyarrow = ">=16"
+pyvista = ">=0.44"
 
 [pypi-dependencies]
 puzzle-fem = { path = ".", editable = true }

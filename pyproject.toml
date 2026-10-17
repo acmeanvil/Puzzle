@@ -27,11 +27,15 @@ dependencies = [
     "pyarrow>=16",
 ]
 
+[project.scripts]
+puzzle = "puzzle.cli:main"
+
 [project.optional-dependencies]
 geometry = ["cadquery-ocp>=7.7", "build123d>=0.8"]
 mesh = ["meshio>=5.3"]
+post = ["pyvista>=0.44"]
 gui = ["PySide6>=6.7", "pyvista>=0.44", "pyvistaqt>=0.11"]
-dev = ["pytest>=8", "ruff>=0.6"]
+dev = ["pytest>=8", "ruff>=0.6", "pyvista>=0.44"]
 tools = ["openpyxl>=3.1"]
 
 # Solver adapters register here; third-party packages can add their own.

@@ -1,0 +1,220 @@
+id = "cf3174b3-e4f6-4444-af01-3816d7abc2a2"
+name = "General Carbon Steel"
+description = "E corrected from 10 msi; density from 0.289 (7850 kg/m³)."
+sources = [
+    "ASM Handbook Vol. 1, Properties and Selection: Irons, Steels, and High-Performance Alloys (1990) (Engineering Info library: Materials/ASM/ASM_Handbook_Vol_1_Properties_and_Selection_Irons_Steels_and_High_Performance_Alloys.pdf)",
+    "ASME BPVC II-D (C) 2023 (Engineering Info library: ASME/BPVC_II_D_C-2023.pdf; https://www.asme.org/codes-standards/find-codes-standards/bpvc-ii-d-bpvc-section-ii-materials-part-d-properties-(customary))",
+    "Derived: specific heat = thermal conductivity / (density x thermal diffusivity), from this material's conductivity and diffusivity sources, at room-temperature density",
+]
+
+[info]
+type = "Metal"
+group = "Carbon Steel"
+specification = "Typical low-carbon steel, e.g. AISI 1018/1020 (ASTM A108, SAE J403)"
+basis = "Typical"
+
+[properties.density]
+value = 7850.021
+unit = "kg/m^3"
+
+[properties.electrical_conductivity]
+value = 6289308.0
+unit = "S/m"
+
+[properties.poissons_ratio]
+value = 0.3
+unit = "dimensionless"
+
+[properties.specific_heat]
+value = 425.9511
+unit = "J/(kg*K)"
+
+[properties.thermal_conductivity]
+value = 60.40265
+unit = "W/(m*K)"
+
+[properties.thermal_expansion]
+value = 1.152e-05
+unit = "1/K"
+
+[properties.ultimate_strength]
+value = 448159200.0
+unit = "Pa"
+
+[properties.yield_strength]
+value = 220632200.0
+unit = "Pa"
+
+[properties.youngs_modulus]
+value = 199948000000.0
+unit = "Pa"
+
+[tables.electrical_resistivity]
+unit = "ohm*m"
+points = [
+    { temperature = 293.15, value = 1.59e-07, source = 0 },
+    { temperature = 373.15, value = 2.19e-07, source = 0 },
+    { temperature = 473.15, value = 2.92e-07, source = 0 },
+]
+
+[tables.poissons_ratio]
+unit = "dimensionless"
+points = [
+    { temperature = 294.2611, value = 0.3, source = 1 },
+]
+
+[tables.specific_heat]
+unit = "J/(kg*K)"
+points = [
+    { temperature = 294.2611, value = 425.9511, source = 2 },
+    { temperature = 310.9278, value = 438.5459, source = 2 },
+    { temperature = 338.7056, value = 455.8274, source = 2 },
+    { temperature = 366.4833, value = 471.2171, source = 2 },
+    { temperature = 394.2611, value = 481.9371, source = 2 },
+    { temperature = 422.0389, value = 492.7729, source = 2 },
+    { temperature = 449.8167, value = 502.7419, source = 2 },
+    { temperature = 477.5944, value = 511.6124, source = 2 },
+    { temperature = 505.3722, value = 519.5096, source = 2 },
+    { temperature = 533.15, value = 529.909, source = 2 },
+    { temperature = 560.9278, value = 540.0803, source = 2 },
+    { temperature = 588.7056, value = 552.462, source = 2 },
+    { temperature = 616.4833, value = 563.3712, source = 2 },
+    { temperature = 644.2611, value = 576.79, source = 2 },
+    { temperature = 672.0389, value = 592.3445, source = 2 },
+    { temperature = 699.8167, value = 607.1596, source = 2 },
+    { temperature = 727.5944, value = 623.6451, source = 2 },
+    { temperature = 755.3722, value = 639.414, source = 2 },
+    { temperature = 783.15, value = 655.6587, source = 2 },
+    { temperature = 810.9278, value = 676.2292, source = 2 },
+    { temperature = 838.7056, value = 693.7523, source = 2 },
+    { temperature = 866.4833, value = 717.0992, source = 2 },
+    { temperature = 894.2611, value = 740.1852, source = 2 },
+    { temperature = 922.0389, value = 770.8956, source = 2 },
+    { temperature = 949.8167, value = 798.5317, source = 2 },
+    { temperature = 977.5944, value = 854.3431, source = 2 },
+    { temperature = 1005.372, value = 1064.833, source = 2 },
+    { temperature = 1033.15, value = 1708.686, source = 2 },
+    { temperature = 1060.928, value = 881.9025, source = 2 },
+    { temperature = 1088.706, value = 797.73, source = 2 },
+]
+
+[tables.thermal_conductivity]
+unit = "W/(m*K)"
+points = [
+    { temperature = 294.2611, value = 60.40265, source = 1 },
+    { temperature = 310.9278, value = 60.0565, source = 1 },
+    { temperature = 338.7056, value = 59.19113, source = 1 },
+    { temperature = 366.4833, value = 58.32577, source = 1 },
+    { temperature = 394.2611, value = 57.11425, source = 1 },
+    { temperature = 422.0389, value = 55.90274, source = 1 },
+    { temperature = 449.8167, value = 54.69122, source = 1 },
+    { temperature = 477.5944, value = 53.47971, source = 1 },
+    { temperature = 505.3722, value = 52.09512, source = 1 },
+    { temperature = 533.15, value = 50.88361, source = 1 },
+    { temperature = 560.9278, value = 49.67209, source = 1 },
+    { temperature = 588.7056, value = 48.46058, source = 1 },
+    { temperature = 616.4833, value = 47.24906, source = 1 },
+    { temperature = 644.2611, value = 46.03755, source = 1 },
+    { temperature = 672.0389, value = 44.99911, source = 1 },
+    { temperature = 699.8167, value = 43.78759, source = 1 },
+    { temperature = 727.5944, value = 42.57608, source = 1 },
+    { temperature = 755.3722, value = 41.19149, source = 1 },
+    { temperature = 783.15, value = 39.97998, source = 1 },
+    { temperature = 810.9278, value = 38.76846, source = 1 },
+    { temperature = 838.7056, value = 37.38387, source = 1 },
+    { temperature = 866.4833, value = 36.17236, source = 1 },
+    { temperature = 894.2611, value = 34.78777, source = 1 },
+    { temperature = 922.0389, value = 33.57626, source = 1 },
+    { temperature = 949.8167, value = 32.19167, source = 1 },
+    { temperature = 977.5944, value = 30.98015, source = 1 },
+    { temperature = 1005.372, value = 29.76864, source = 1 },
+    { temperature = 1033.15, value = 28.7302, source = 1 },
+    { temperature = 1060.928, value = 27.69176, source = 1 },
+    { temperature = 1088.706, value = 26.82639, source = 1 },
+]
+
+[tables.thermal_diffusivity]
+unit = "m^2/s"
+points = [
+    { temperature = 294.2611, value = 1.806448e-05, source = 1 },
+    { temperature = 310.9278, value = 1.744513e-05, source = 1 },
+    { temperature = 338.7056, value = 1.65419e-05, source = 1 },
+    { temperature = 366.4833, value = 1.576771e-05, source = 1 },
+    { temperature = 394.2611, value = 1.509674e-05, source = 1 },
+    { temperature = 422.0389, value = 1.445158e-05, source = 1 },
+    { temperature = 449.8167, value = 1.385804e-05, source = 1 },
+    { temperature = 477.5944, value = 1.33161e-05, source = 1 },
+    { temperature = 505.3722, value = 1.277417e-05, source = 1 },
+    { temperature = 533.15, value = 1.223223e-05, source = 1 },
+    { temperature = 560.9278, value = 1.171611e-05, source = 1 },
+    { temperature = 588.7056, value = 1.117417e-05, source = 1 },
+    { temperature = 616.4833, value = 1.068385e-05, source = 1 },
+    { temperature = 644.2611, value = 1.016772e-05, source = 1 },
+    { temperature = 672.0389, value = 9.6774e-06, source = 1 },
+    { temperature = 699.8167, value = 9.187078e-06, source = 1 },
+    { temperature = 727.5944, value = 8.696757e-06, source = 1 },
+    { temperature = 755.3722, value = 8.206435e-06, source = 1 },
+    { temperature = 783.15, value = 7.767726e-06, source = 1 },
+    { temperature = 810.9278, value = 7.303211e-06, source = 1 },
+    { temperature = 838.7056, value = 6.864502e-06, source = 1 },
+    { temperature = 866.4833, value = 6.425794e-06, source = 1 },
+    { temperature = 894.2611, value = 5.987085e-06, source = 1 },
+    { temperature = 922.0389, value = 5.548376e-06, source = 1 },
+    { temperature = 949.8167, value = 5.135474e-06, source = 1 },
+    { temperature = 977.5944, value = 4.619346e-06, source = 1 },
+    { temperature = 1005.372, value = 3.561283e-06, source = 1 },
+    { temperature = 1033.15, value = 2.141931e-06, source = 1 },
+    { temperature = 1060.928, value = 3.999992e-06, source = 1 },
+    { temperature = 1088.706, value = 4.283862e-06, source = 1 },
+]
+
+[tables.thermal_expansion]
+unit = "1/K"
+points = [
+    { temperature = 294.2611, value = 1.152e-05, source = 1 },
+    { temperature = 310.9278, value = 1.17e-05, source = 1 },
+    { temperature = 338.7056, value = 1.188e-05, source = 1 },
+    { temperature = 366.4833, value = 1.206e-05, source = 1 },
+    { temperature = 394.2611, value = 1.224e-05, source = 1 },
+    { temperature = 422.0389, value = 1.242e-05, source = 1 },
+    { temperature = 449.8167, value = 1.26e-05, source = 1 },
+    { temperature = 477.5944, value = 1.278e-05, source = 1 },
+    { temperature = 505.3722, value = 1.296e-05, source = 1 },
+    { temperature = 533.15, value = 1.314e-05, source = 1 },
+    { temperature = 560.9278, value = 1.314e-05, source = 1 },
+    { temperature = 588.7056, value = 1.332e-05, source = 1 },
+    { temperature = 616.4833, value = 1.35e-05, source = 1 },
+    { temperature = 644.2611, value = 1.368e-05, source = 1 },
+    { temperature = 672.0389, value = 1.386e-05, source = 1 },
+    { temperature = 699.8167, value = 1.404e-05, source = 1 },
+    { temperature = 727.5944, value = 1.422e-05, source = 1 },
+    { temperature = 755.3722, value = 1.422e-05, source = 1 },
+    { temperature = 783.15, value = 1.44e-05, source = 1 },
+    { temperature = 810.9278, value = 1.458e-05, source = 1 },
+    { temperature = 838.7056, value = 1.458e-05, source = 1 },
+    { temperature = 866.4833, value = 1.476e-05, source = 1 },
+    { temperature = 894.2611, value = 1.494e-05, source = 1 },
+    { temperature = 922.0389, value = 1.494e-05, source = 1 },
+    { temperature = 949.8167, value = 1.512e-05, source = 1 },
+    { temperature = 977.5944, value = 1.512e-05, source = 1 },
+]
+reference_temperature = 294.261
+
+[tables.youngs_modulus]
+unit = "Pa"
+points = [
+    { temperature = 74.81667, value = 216495400000.0, source = 1 },
+    { temperature = 144.2611, value = 212358500000.0, source = 1 },
+    { temperature = 199.8167, value = 208911100000.0, source = 1 },
+    { temperature = 294.2611, value = 202705900000.0, source = 1 },
+    { temperature = 366.4833, value = 198569000000.0, source = 1 },
+    { temperature = 422.0389, value = 195121600000.0, source = 1 },
+    { temperature = 477.5944, value = 192363700000.0, source = 1 },
+    { temperature = 533.15, value = 188226900000.0, source = 1 },
+    { temperature = 588.7056, value = 182711100000.0, source = 1 },
+    { temperature = 644.2611, value = 175816300000.0, source = 1 },
+    { temperature = 699.8167, value = 166853100000.0, source = 1 },
+    { temperature = 755.3722, value = 155132000000.0, source = 1 },
+    { temperature = 810.9278, value = 140653000000.0, source = 1 },
+    { temperature = 866.4833, value = 124105600000.0, source = 1 },
+]
