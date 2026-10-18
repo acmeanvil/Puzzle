@@ -1,0 +1,33 @@
+id = "008ea010-e7f3-4f0e-b063-ed472d9a6ddb"
+name = "Water"
+description = "Liquid water at 20 °C"
+sources = []
+
+[info]
+type = "Fluid"
+
+[properties.density]
+value = 998.2
+unit = "kg/m^3"
+
+[properties.dynamic_viscosity]
+value = 0.001002
+unit = "Pa*s"
+
+[properties.thermal_conductivity]
+value = 0.598
+unit = "W/(m*K)"
+
+[properties.specific_heat]
+value = 4182.0
+unit = "J/(kg*K)"
+
+[properties.relative_permittivity]
+value = 80.1
+unit = "dimensionless"
+
+[properties.relative_permeability]
+value = 1.0
+unit = "dimensionless"
+
+[tables]

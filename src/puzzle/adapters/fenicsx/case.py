@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-from puzzle.adapters.common import STRUCTURAL, THERMAL, InputError, surface_area
+from puzzle.adapters.common import STRUCTURAL, THERMAL, InputError, match_points, surface_area
 from puzzle.mesh.med import write_med
 from puzzle.mesh.mesh import Mesh
 from puzzle.model.schema import Component, Material, Project, Study
@@ -117,7 +117,7 @@ def read_results(workdir: Path) -> Results:
         raise FileNotFoundError(f"FEniCSx wrote no {RESULTS}; see the solver log")
     data = np.load(path)
     node_ids = np.loadtxt(workdir / "node-ids.txt", dtype=np.int64, ndmin=1)
-    ids = _match(data["coords"], np.load(workdir / "node-coords.npy"), node_ids)
+    ids = match_points(data["coords"], np.load(workdir / "node-coords.npy"), node_ids)
     order = np.argsort(ids)
 
     def field(name: str, comps: list[str], values: np.ndarray) -> Field:
@@ -140,17 +140,3 @@ def read_results(workdir: Path) -> Results:
         step.fields["temperature"] = field("temperature", [""], data["temperature"])
     results.steps.append(step)
     return results
-
-
-def _match(points: np.ndarray, coords: np.ndarray, node_ids: np.ndarray) -> np.ndarray:
-    """Puzzle node ids of FEniCSx output points, by coordinates (they are the mesh nodes)."""
-    scale = float(np.abs(coords).max()) or 1.0
-    key = lambda xyz: tuple(np.round(xyz / scale, 9))  # noqa: E731
-    lookup = {key(c): int(n) for c, n in zip(coords, node_ids, strict=True)}
-    ids = np.empty(len(points), dtype=np.int64)
-    for i, p in enumerate(points):
-        found = lookup.get(key(p))
-        if found is None:
-            raise ValueError(f"FEniCSx output point {p} is not a mesh node")
-        ids[i] = found
-    return ids

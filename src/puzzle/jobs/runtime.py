@@ -24,6 +24,7 @@ DEFAULT_IMAGES = {
     "calculix": "ghcr.io/acmeanvil/puzzle-calculix:2.23",
     "elmer": "ghcr.io/acmeanvil/puzzle-elmer:26.2",
     "code_aster": "ghcr.io/acmeanvil/puzzle-code-aster:18.1",
+    "code_saturne": "ghcr.io/acmeanvil/puzzle-code-saturne:9.2",
 }
 
 # The executable that proves a solver is installed natively.

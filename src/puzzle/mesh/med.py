@@ -19,9 +19,10 @@ GMSH_TYPES = {name: code for code, name in ELEMENT_NAMES.items()}
 
 def write_med(
     mesh: Mesh, path: Path, names: dict[str, str] | None = None, *, msh_version: float | None = None
-) -> None:
+) -> dict[str, int]:
     """Write `mesh` to `path` (format from the suffix: .med, .msh, ...); `names` maps
-    Puzzle group names to the names to write.
+    Puzzle group names to the names to write. Returns each written group's physical tag
+    (some readers, like Code_Saturne's, identify groups by tag, not name).
 
     Only the groups in `names` are written (all groups when it is None). Elements
     outside every written group are dropped, as with Gmsh's own MED export.
@@ -41,15 +42,17 @@ def write_med(
             gmsh.model.mesh.addElementsByType(
                 b.entity[1], GMSH_TYPES[b.element], b.ids.tolist(), b.connectivity.ravel().tolist()
             )
+        physical: dict[str, int] = {}
         for name, out_name in names.items():
             group = mesh.groups[name]
             tags = sorted({t for d, t in group.entities if d == group.dim})
-            gmsh.model.addPhysicalGroup(group.dim, tags, name=out_name)
+            physical[name] = gmsh.model.addPhysicalGroup(group.dim, tags, name=out_name)
         gmsh.option.setNumber("Mesh.SaveAll", 0)
         if msh_version is not None:  # e.g. 2.2 for readers that predate MSH 4
             gmsh.option.setNumber("Mesh.MshFileVersion", msh_version)
         path.parent.mkdir(parents=True, exist_ok=True)
         gmsh.write(str(path))
+    return physical
 
 
 def safe_names(group_names: list[str], prefix: str = "G") -> dict[str, str]:

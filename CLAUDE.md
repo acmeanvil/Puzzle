@@ -40,7 +40,7 @@ Solver tests in `tests/integration/` skip when the solver isn't available. Rende
 | `src/puzzle/post` | VTK grids (tet10 reordered for VTK), `render` (window or PNG), `.vtu`/`.pvd` export, `sample` (results at a point) |
 | `src/puzzle/cli.py` | `puzzle studies/run/runs/show/export PROJECT` |
 | `examples/cantilever` | Example project; regenerate with `python examples/cantilever/build.py` |
-| `benchmarks/` | Published benchmarks as projects (NAFEMS LE1); each has build.py, a README with measured results, and an integration test |
+| `benchmarks/` | Benchmarks as projects (NAFEMS LE1, laminar channel flow); each has build.py, a README with measured results, and an integration test |
 | `containers/`, `packaging/conda-forge/` | Solver images; conda-forge recipes (elmerfem) |
 
 ## Adapter status
@@ -51,7 +51,7 @@ Solver tests in `tests/integration/` skip when the solver isn't available. Rende
 | Elmer | one solve step: static, modal (solid) or steady heat; own mesh files, ASCII .vtu output | same set; agrees with CalculiX to 4 digits, LE1 within 0.13% | Docker image (not on conda-forge yet) |
 | Code_Aster | one solve step: static, modal (solid) or steady heat; MED mesh via Gmsh with safe group names (G1, G2, ...); results as IMPR_TABLE CSVs | same set; LE1 +0.01% | native on linux-64/win-64 (pixi `code-aster`), Docker on macOS |
 | FEniCSx | one solve step: static, modal (P2 elasticity, SLEPc shift-invert) or steady heat; fixed `study.py` + `case.json` + `mesh.msh`, results.npz mapped back by coordinates | same set; LE1 −0.11% | native (pixi `fenicsx`, found via PUZZLE_SOLVER_PATH or PUZZLE_FENICSX_PYTHON) |
-| Code_Saturne | capability matrix and stub only | — | — |
+| Code_Saturne | steady laminar incompressible flow: velocity inlet, pressure outlet, wall, symmetry; `setup.xml` written in-container by Code_Saturne's own case model (`cs_setup.py`); EnSight Gold results read per cell | channel flow (`benchmarks/channel_flow`): peak velocity −0.23%, profile 0.21%, dp/dx −0.95% | Docker image built from source (v9.2.0) |
 
 Capability matrices also list planned capabilities; `write_input` refuses what isn't implemented yet. Run Elmer tests locally with Docker on PATH (`/Applications/Docker.app/Contents/Resources/bin`) after building `containers/elmer`.
 
@@ -69,6 +69,7 @@ Capability matrices also list planned capabilities; `write_input` refuses what i
 - **Entity names** (`face-3`) follow STEP file order; signatures (kind, measure, centre) re-find them after placement or fragmenting.
 - **Element node order:** Gmsh differs from CalculiX, Elmer and VTK for tet10 (last two edge nodes swap). Adapters own the reordering; shared face lookups live in `adapters/common.py`.
 - **FEniCSx `study.py`** runs inside the FEniCSx env and must not import puzzle. dolfinx 0.11 `LinearProblem` needs `petsc_options_prefix`; MUMPS is used only if PETSc has it. Windows dolfinx has no PETSc, so `study.py` falls back to SciPy (SuperLU, ARPACK; CG for the stress projection); `PUZZLE_FENICSX_BACKEND=scipy` forces that path for testing (LE1 ~54 s vs ~10 s with PETSc).
+- **Code_Saturne's Gmsh reader** names groups by physical tag number, not name: zones select `"2"`, not `"Inlet"` (`write_med` returns the tags). Results are per cell (`location="element"`), matched to Puzzle elements by node-average centres (`match_points`, float32-tolerant).
 - **Code_Aster 18** needs `INCREMENT` even for steady `THER_LINEAIRE`; table numbers need `FORMAT_R` (default keeps 5 digits). Containers run as your uid with `HOME=/tmp` (run_aster needs a home).
 - **Elmer output** lands in the mesh directory (`mesh/case_t0001.vtu`). Points come in Elmer node order (no point ids); `GeometryIds` there is cell data. Eigenvalues (omega^2) are parsed from the solver log.
 - **CalculiX `.frd`** is fixed width (values can touch); match record tags on the first token. Modal block values are frequencies in Hz.

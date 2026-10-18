@@ -18,6 +18,8 @@ DEFAULT_SCALAR = {
     "temperature": "temperature",
     "heat_flux": "heat_flux_magnitude",
     "strain": "strain",
+    "velocity": "velocity_magnitude",
+    "pressure": "pressure",
 }
 
 
@@ -45,8 +47,9 @@ def render(
     step = pick_step(results, view.field, step=view.step, mode=view.mode)
     grid = to_grid(mesh, step)
     scalar = view.scalar or DEFAULT_SCALAR.get(view.field, view.field)
-    if scalar not in grid.point_data:
-        raise KeyError(f"no '{scalar}' to show; available: {sorted(grid.point_data)}")
+    available = set(grid.point_data) | set(grid.cell_data)
+    if scalar not in available:
+        raise KeyError(f"no '{scalar}' to show; available: {sorted(available)}")
 
     scale = 0.0
     if view.deform is not None and "displacement" in grid.point_data:
@@ -77,7 +80,7 @@ def render(
         plotter.close()
     else:
         plotter.show()
-    values = grid.point_data[scalar]
+    values = grid.point_data[scalar] if scalar in grid.point_data else grid.cell_data[scalar]
     return {
         "scalar": scalar,
         "min": float(np.nanmin(values)),

@@ -1,0 +1,11 @@
+id = "5d812e45-a210-4fb4-8251-aa5f0cec7725"
+name = "Hexahedra"
+mesher = "gmsh"
+element_order = 1
+element_shape = "hexahedra"
+
+[global_size]
+value = 0.5
+unit = "mm"
+
+[local_sizes]

@@ -14,6 +14,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from puzzle.adapters.base import FLUID_FEATURES, THERMAL_FEATURES, Capabilities, SolverAdapter
+from puzzle.adapters.code_saturne.case import command as case_command
+from puzzle.adapters.code_saturne.case import read_results as read_case_results
+from puzzle.adapters.code_saturne.case import write_case
 from puzzle.mesh.mesh import Mesh
 from puzzle.model.schema import Project, Study
 from puzzle.results.model import Results
@@ -31,10 +34,10 @@ class CodeSaturneAdapter(SolverAdapter):
     )
 
     def write_input(self, project: Project, study: Study, mesh: Mesh, workdir: Path) -> Path:
-        raise NotImplementedError("Phase 4: create the case directory and DATA/setup.xml")
+        return write_case(project, study, mesh, workdir)
 
     def command(self, input_file: Path) -> list[str]:
-        return ["code_saturne", "run", "--param", input_file.name]
+        return case_command()
 
     def read_results(self, input_file: Path) -> Results:
-        raise NotImplementedError("Phase 4: read the postprocessing MED or EnSight output")
+        return read_case_results(input_file.parent)

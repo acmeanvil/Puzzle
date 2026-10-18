@@ -1,0 +1,65 @@
+id = "ec70d44f-3a2e-4d29-a170-0282be2e13f9"
+name = "Channel"
+dimension = "3d"
+mesh = "5d812e45-a210-4fb4-8251-aa5f0cec7725"
+selections = []
+materials = [
+    { material = "008ea010-e7f3-4f0e-b063-ed472d9a6ddb", selection = "Channel/Fluid" },
+]
+contacts = []
+couplings = []
+
+[[parts]]
+name = "Channel"
+geometry = "ce904178-faea-4874-a48b-692b885752e2"
+translation = [
+    0.0,
+    0.0,
+    0.0,
+]
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[[physics]]
+type = "fluid_flow"
+
+[[physics.features]]
+type = "velocity_inlet"
+selection = "Channel/Inlet"
+
+[physics.features.values.U]
+value = 0.001
+unit = "m/s"
+
+[physics.features.extensions]
+
+[[physics.features]]
+type = "pressure_outlet"
+selection = "Channel/Outlet"
+
+[physics.features.values.p]
+value = 0.0
+unit = "Pa"
+
+[physics.features.extensions]
+
+[[physics.features]]
+type = "wall"
+selection = "Channel/Walls"
+
+[physics.features.values]
+
+[physics.features.extensions]
+
+[[physics.features]]
+type = "symmetry"
+selection = "Channel/Sides"
+
+[physics.features.values]
+
+[physics.features.extensions]
+
+[physics.settings]

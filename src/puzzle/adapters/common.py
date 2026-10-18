@@ -19,6 +19,7 @@ FACES = {
 
 STRUCTURAL = {"fixed", "displacement", "force", "pressure"}
 THERMAL = {"temperature", "heat_flux", "convection"}
+FLUID = {"velocity_inlet", "mass_flow_inlet", "pressure_outlet", "wall", "symmetry"}
 
 
 class InputError(ValueError):
@@ -85,3 +86,34 @@ def surface_area(group: Group, mesh: Mesh) -> float:
             * np.linalg.norm(np.cross(xyz[:, 1] - xyz[:, 0], xyz[:, 2] - xyz[:, 0]), axis=1).sum()
         )
     return area
+
+
+def match_points(
+    points: np.ndarray, reference: np.ndarray, ids: np.ndarray, rel_tol: float = 1e-5
+) -> np.ndarray:
+    """For each point, the id of the reference point at the same place.
+
+    Solvers write coordinates with less precision than Puzzle keeps (EnSight uses
+    float32), so points match within `rel_tol` of the model size. A grid hash checks
+    the neighbouring cells too, so values near a cell edge still match.
+    """
+    size = float(np.linalg.norm(reference.max(axis=0) - reference.min(axis=0))) or 1.0
+    tol = rel_tol * size
+    grid: dict[tuple[int, int, int], list[int]] = {}
+    keys = np.floor(reference / tol).astype(np.int64)
+    for i, k in enumerate(map(tuple, keys)):
+        grid.setdefault(k, []).append(i)
+    out = np.empty(len(points), dtype=np.int64)
+    offsets = [(a, b, c) for a in (-1, 0, 1) for b in (-1, 0, 1) for c in (-1, 0, 1)]
+    for j, p in enumerate(points):
+        k = np.floor(p / tol).astype(np.int64)
+        best, best_d = -1, tol
+        for o in offsets:
+            for i in grid.get((k[0] + o[0], k[1] + o[1], k[2] + o[2]), ()):
+                d = float(np.linalg.norm(reference[i] - p))
+                if d <= best_d:
+                    best, best_d = i, d
+        if best < 0:
+            raise InputError(f"result point {p} matches no mesh entity")
+        out[j] = ids[best]
+    return out

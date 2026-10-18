@@ -54,11 +54,30 @@ def to_grid(mesh: Mesh, step: StepResult | None = None):
         raise ValueError("the mesh has no volume elements to show")
     grid = pv.UnstructuredGrid(np.concatenate(cells), np.concatenate(types), mesh.coords)
     grid.point_data["node_id"] = mesh.node_ids
+    grid.cell_data["element_id"] = np.concatenate([b.ids for b in mesh.blocks if b.dim == 3])
     if step is not None:
         for f in step.fields.values():
             if f.location == "node":
                 _add(grid, mesh, f)
+            elif f.location == "element":
+                _add_cells(grid, f)
     return grid
+
+
+def _add_cells(grid, f: Field) -> None:
+    """A per-element field as cell data, in the grid's cell order."""
+    cell_ids = grid.cell_data["element_id"]
+    order = np.argsort(f.ids)
+    pos = np.clip(np.searchsorted(f.ids, cell_ids, sorter=order), 0, len(f.ids) - 1)
+    found = f.ids[order[pos]] == cell_ids
+    values = np.full((len(cell_ids), f.values.shape[1]), np.nan)
+    values[found] = f.values[order[pos[found]]]
+    if values.shape[1] == 1:
+        grid.cell_data[f.name] = values[:, 0]
+        return
+    grid.cell_data[f.name] = values
+    if values.shape[1] == 3:
+        grid.cell_data[f"{f.name}_magnitude"] = np.linalg.norm(values, axis=1)
 
 
 def _add(grid, mesh: Mesh, f: Field) -> None:

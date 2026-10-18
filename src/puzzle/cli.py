@@ -236,6 +236,12 @@ def _summarise(results) -> None:
             parts.append(f"max |displacement| {u:.4g} m")
         if "stress" in step.fields:
             parts.append(f"max von Mises {von_mises(step.fields['stress'].values).max():.4g} Pa")
+        if "velocity" in step.fields:
+            speed = np.linalg.norm(step.fields["velocity"].values, axis=1).max()
+            parts.append(f"max |velocity| {speed:.4g} m/s")
+        if "pressure" in step.fields:
+            p = step.fields["pressure"].values
+            parts.append(f"pressure {p.min():.4g} to {p.max():.4g} Pa")
         if "temperature" in step.fields:
             t = step.fields["temperature"].values
             parts.append(f"temperature {t.min():.5g} to {t.max():.5g} K")

@@ -1,0 +1,41 @@
+id = "ce904178-faea-4874-a48b-692b885752e2"
+name = "Channel"
+source = "channel.step"
+scope = "global"
+
+[[selections]]
+name = "Fluid"
+entity = "body"
+members = [
+    "body-1",
+]
+
+[[selections]]
+name = "Inlet"
+entity = "face"
+members = [
+    "face-1",
+]
+
+[[selections]]
+name = "Outlet"
+entity = "face"
+members = [
+    "face-2",
+]
+
+[[selections]]
+name = "Walls"
+entity = "face"
+members = [
+    "face-3",
+    "face-4",
+]
+
+[[selections]]
+name = "Sides"
+entity = "face"
+members = [
+    "face-5",
+    "face-6",
+]
