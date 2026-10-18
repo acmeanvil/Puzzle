@@ -45,6 +45,7 @@ ELEMENTS = {
 NODE_SHARES = {
     "tri3": [1 / 3] * 3,
     "tri6": [0, 0, 0, 1 / 3, 1 / 3, 1 / 3],
+    "quad4": [1 / 4] * 4,
 }
 
 
@@ -269,6 +270,11 @@ def _nodal_forces(group, mesh: Mesh, total: list[float]) -> list[str]:
             raise InputError(f"force on {b.element} faces is not supported yet")
         xyz = mesh.node_coords(b.connectivity[:, :3].ravel()).reshape(-1, 3, 3)
         areas = 0.5 * np.linalg.norm(np.cross(xyz[:, 1] - xyz[:, 0], xyz[:, 2] - xyz[:, 0]), axis=1)
+        if b.element == "quad4":
+            q = mesh.node_coords(b.connectivity[:, [0, 2, 3]].ravel()).reshape(-1, 3, 3)
+            areas = areas + 0.5 * np.linalg.norm(
+                np.cross(q[:, 1] - q[:, 0], q[:, 2] - q[:, 0]), axis=1
+            )
         for nodes, area in zip(b.connectivity, areas, strict=True):
             for node, share in zip(nodes, NODE_SHARES[b.element], strict=True):
                 if share:

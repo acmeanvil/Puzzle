@@ -32,7 +32,10 @@ def write_bar_step(path: Path, size=BAR) -> Path:
 
 
 def bar_project(
-    step: Path, physics: list[Physics], mesh_size_mm: float = 2.5
+    step: Path,
+    physics: list[Physics],
+    mesh_size_mm: float = 2.5,
+    **recipe,
 ) -> tuple[Project, Component]:
     """A steel bar along x with selections Root (x = 0), Tip (x = L) and Body."""
     model = import_step(step)
@@ -51,7 +54,9 @@ def bar_project(
         )
     )
     steel = add_library_material(project, "general_carbon_steel")
-    mesh = project.add(MeshRecipe(name="Tets", global_size=Quantity(value=mesh_size_mm, unit="mm")))
+    mesh = project.add(
+        MeshRecipe(name="Mesh", global_size=Quantity(value=mesh_size_mm, unit="mm"), **recipe)
+    )
     comp = project.add(
         Component(
             name="Bar",

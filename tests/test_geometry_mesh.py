@@ -178,3 +178,27 @@ def test_2d_is_not_implemented_yet(plate_step, tmp_path):
     comp.dimension = "2d_planar"
     with pytest.raises(MeshError, match="2d_planar"):
         generate_mesh(project, comp.id, plate_step.parent, tmp_path / "x")
+
+
+def test_hexahedral_mesh_of_a_block(tmp_path):
+    from conftest_geometry import bar_project, write_bar_step
+
+    step = write_bar_step(tmp_path / "bar.step")
+    project, comp = bar_project(
+        step, [], mesh_size_mm=2.5, element_shape="hexahedra", element_order=1
+    )
+    mesh = generate_mesh(project, comp.id, tmp_path, tmp_path / "m").mesh
+    counts = mesh.element_counts()
+    assert set(e for e in counts if e in ("tet4", "tet10", "hex8")) == {"hex8"}
+    tip = mesh.groups["Bar/Tip"]
+    assert {b.element for b in tip.blocks(mesh)} == {"quad4"}
+    assert np.allclose(mesh.node_coords(tip.node_ids)[:, 0], 0.2)
+
+
+def test_second_order_hexahedra_are_refused(tmp_path):
+    from conftest_geometry import bar_project, write_bar_step
+
+    step = write_bar_step(tmp_path / "bar.step")
+    project, comp = bar_project(step, [], element_shape="hexahedra", element_order=2)
+    with pytest.raises(MeshError, match="second-order hexahedra"):
+        generate_mesh(project, comp.id, tmp_path, tmp_path / "m")

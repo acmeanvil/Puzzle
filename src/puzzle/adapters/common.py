@@ -66,6 +66,17 @@ def surface_area(group: Group, mesh: Mesh) -> float:
     """Total area of a face selection, from its (flat-sided) triangles."""
     area = 0.0
     for b in surface_blocks(group, mesh):
+        if b.element.startswith("quad"):
+            # Two triangles per (planar) quad: corners 0-1-2 and 0-2-3.
+            q = mesh.node_coords(b.connectivity[:, :4].ravel()).reshape(-1, 4, 3)
+            for tri in (q[:, [0, 1, 2]], q[:, [0, 2, 3]]):
+                area += float(
+                    0.5
+                    * np.linalg.norm(
+                        np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0]), axis=1
+                    ).sum()
+                )
+            continue
         if not b.element.startswith("tri"):
             raise InputError(f"area of {b.element} faces is not supported yet")
         xyz = mesh.node_coords(b.connectivity[:, :3].ravel()).reshape(-1, 3, 3)

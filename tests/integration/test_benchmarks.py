@@ -162,3 +162,47 @@ def test_unchanged_study_reuses_the_stored_run(tmp_path):
     assert not changed.cached
     assert _tip_deflection(changed) == pytest.approx(2 * _tip_deflection(fresh), rel=1e-6)
     assert len(store.runs()) == 2
+
+
+@solver
+def test_hexahedra_axial_stretch_and_conduction(tmp_path, solver):
+    """Linear hexes reproduce uniform stretch and linear conduction exactly."""
+    step = write_bar_step(tmp_path / "bar.step")
+    hexes = {"element_shape": "hexahedra", "element_order": 1}
+    push = Feature(
+        type="pressure", selection="Bar/Tip", values={"p": Quantity(value=-FORCE / A, unit="Pa")}
+    )
+    project, comp = bar_project(
+        step,
+        [
+            Physics(
+                type="solid_mechanics", features=[Feature(type="fixed", selection="Bar/Root"), push]
+            )
+        ],
+        **hexes,
+    )
+    study = project.add(
+        Study(name="s", component=comp.id, solver=solver, steps=[SolveStep(type="stationary")])
+    )
+    run = run_study(project, study.id, tmp_path, tmp_path / "solid", timeout_s=600)
+    assert {b.element for b in run.mesh.blocks if b.dim == 3} == {"hex8"}
+    tip = run.mesh.groups["Bar/Tip"].node_ids
+    ux = run.results.last("displacement").at(tip)[:, 0].mean()
+    assert ux == pytest.approx(FORCE * L / (E * A), rel=0.02)
+
+    hot = Feature(
+        type="temperature", selection="Bar/Root", values={"T": Quantity(value=100, unit="degC")}
+    )
+    cold = Feature(
+        type="temperature", selection="Bar/Tip", values={"T": Quantity(value=20, unit="degC")}
+    )
+    project, comp = bar_project(
+        step, [Physics(type="heat_transfer", features=[hot, cold])], **hexes
+    )
+    study = project.add(
+        Study(name="t", component=comp.id, solver=solver, steps=[SolveStep(type="stationary")])
+    )
+    run = run_study(project, study.id, tmp_path, tmp_path / "heat", timeout_s=600)
+    temperature = run.results.last("temperature")
+    x = run.mesh.node_coords(temperature.ids)[:, 0]
+    assert np.allclose(temperature.values[:, 0], 373.15 - 80.0 * x / L, atol=1e-6)

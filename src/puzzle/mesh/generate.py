@@ -50,6 +50,8 @@ def generate_mesh(
         raise MeshError(f"{comp.dimension} meshing is not implemented yet")
     if recipe.mesher != "gmsh":
         raise MeshError(f"the {recipe.mesher} mesher is not implemented yet")
+    if recipe.element_shape == "hexahedra" and recipe.element_order != 1:
+        raise MeshError("second-order hexahedra are not supported yet; use element_order 1")
 
     geometries = {p.name: project.get(p.geometry, Geometry) for p in comp.parts}
     references = {name: import_step(root / g.source) for name, g in geometries.items()}
@@ -85,7 +87,16 @@ def generate_mesh(
         _physical_groups(comp, geometries, references, found, warnings)
         _sizes(recipe, comp, found, warnings)
 
+        if recipe.element_shape == "hexahedra":
+            # Structured hexes: every block-like volume gets a transfinite mesh, recombined.
+            gmsh.model.mesh.setTransfiniteAutomatic()
+            gmsh.option.setNumber("Mesh.RecombineAll", 1)
+            gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 0)
         gmsh.model.mesh.generate(3)
+        if recipe.element_shape == "hexahedra":
+            types, _, _ = gmsh.model.mesh.getElements(3)
+            if any(t != 5 for t in types):
+                raise MeshError("some volumes could not be meshed with hexahedra (not block-like)")
         gmsh.model.mesh.setOrder(recipe.element_order)
         min_quality = _min_quality()
         if min_quality <= 0:

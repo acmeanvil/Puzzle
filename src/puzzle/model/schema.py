@@ -149,6 +149,10 @@ class MeshRecipe(ProjectObject):
 
     mesher: Literal["gmsh", "netgen"] = "gmsh"
     element_order: Literal[1, 2] = 2
+    element_shape: Literal["tetrahedra", "hexahedra"] = Field(
+        default="tetrahedra",
+        description="hexahedra: structured (transfinite) hex mesh of block-like volumes",
+    )
     global_size: Quantity | None = None
     local_sizes: dict[str, Quantity] = Field(
         default_factory=dict, description="Named selection -> element size"
