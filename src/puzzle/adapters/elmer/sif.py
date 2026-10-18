@@ -20,6 +20,7 @@ from puzzle.adapters.common import (
     InputError,
     initial_temperature,
     surface_area,
+    thermal_tables,
     time_settings,
 )
 from puzzle.adapters.elmer.meshfiles import ElmerMesh, write_mesh
@@ -123,7 +124,9 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> tup
         if "heat_transfer" in solved:
             out.append("  Initial Condition = 1")
         out += ["End", ""]
-        out += _material(i, project.get(assignment.material, Material), solved)
+        material = project.get(assignment.material, Material)
+        tables = thermal_tables(material, comp) if "heat_transfer" in solved else {}
+        out += _material(i, material, solved, tables)
     if "heat_transfer" in solved:
         heat = next(ph for ph in comp.physics if ph.type == "heat_transfer")
         out += [
@@ -171,7 +174,9 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> tup
     return sif, emesh
 
 
-def _material(index: int, m: Material, solved: set[str]) -> list[str]:
+def _material(
+    index: int, m: Material, solved: set[str], tables: dict[str, list[tuple[float, float]]]
+) -> list[str]:
     p = {k: q.to_si() for k, q in m.properties.items()}
 
     def need(*keys: str) -> list[float]:
@@ -181,16 +186,25 @@ def _material(index: int, m: Material, solved: set[str]) -> list[str]:
         return [p[k] for k in keys]
 
     out = [f"Material {index}", f'  Name = "{m.name}"']
-    if "density" in p:
-        out.append(f"  Density = {p['density']:.10g}")
+
+    def value(keyword: str, prop: str) -> list[str]:
+        # A table becomes a piecewise-linear function of temperature.
+        if prop in tables:
+            rows = [f"    {t:.10g} {v:.10g}" for t, v in tables[prop]]
+            return [f"  {keyword} = Variable Temperature", "    Real", *rows, "    End"]
+        return [f"  {keyword} = {p[prop]:.10g}"]
+
+    if "density" in p or "density" in tables:
+        out += value("Density", "density")
     if "solid_mechanics" in solved:
         e, nu = need("youngs_modulus", "poissons_ratio")
         out += [f"  Youngs Modulus = {e:.10g}", f"  Poisson Ratio = {nu:.10g}"]
     if "heat_transfer" in solved:
-        (k,) = need("thermal_conductivity")
-        out.append(f"  Heat Conductivity = {k:.10g}")
-        if "specific_heat" in p:
-            out.append(f"  Heat Capacity = {p['specific_heat']:.10g}")
+        if "thermal_conductivity" not in tables:
+            need("thermal_conductivity")
+        out += value("Heat Conductivity", "thermal_conductivity")
+        if "specific_heat" in p or "specific_heat" in tables:
+            out += value("Heat Capacity", "specific_heat")
     if "electrostatics" in solved:
         (eps_r,) = need("relative_permittivity")
         out.append(f"  Relative Permittivity = {eps_r:.10g}")
@@ -263,6 +277,9 @@ def _solvers(step, solved: set[str], coils: list[Feature]) -> list[list[str]]:
             '  Equation = "Heat Equation"',
             '  Procedure = "HeatSolve" "HeatSolver"',
             "  Variable = Temperature",
+            # Temperature tables make the system nonlinear; a linear one stops after one.
+            "  Nonlinear System Max Iterations = 50",
+            "  Nonlinear System Convergence Tolerance = 1e-10",
             *DIRECT,
         ]
     ]

@@ -150,3 +150,29 @@ def test_transient_heat_step(tmp_path):
     deck = write_inp(project, study, mesh)
     assert "N_ALL, 323.15" in deck
     assert "*STEP, INC=1000000\n*HEAT TRANSFER, DIRECT\n2, 60" in deck
+
+
+def test_heat_uses_temperature_tables_unless_told_not_to(tmp_path):
+    step = write_bar_step(tmp_path / "bar.step")
+    hot = Feature(
+        type="temperature", selection="Bar/Root", values={"T": Quantity(value=100, unit="degC")}
+    )
+    texts = []
+    for settings in ({}, {"temperature_dependent_materials": False}):
+        project, comp = bar_project(
+            step,
+            [Physics(type="heat_transfer", features=[hot], settings=settings)],
+            mesh_size_mm=5,
+        )
+        study = project.add(
+            Study(
+                name="h", component=comp.id, solver="calculix", steps=[SolveStep(type="stationary")]
+            )
+        )
+        mesh = generate_mesh(project, comp.id, tmp_path, tmp_path / f"m{len(texts)}").mesh
+        texts.append(write_inp(project, study, mesh))
+    tabled, constant = texts
+    assert "*CONDUCTIVITY\n53.33, 293.15\n50.67, 373.15" in tabled
+    assert "*SPECIFIC HEAT\n439.8, 293.15" in tabled
+    assert "*CONDUCTIVITY\n53.33\n" in constant
+    assert "*CONTROLS, PARAMETERS=FIELD" in tabled

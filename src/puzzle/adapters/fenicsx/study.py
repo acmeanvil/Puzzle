@@ -7,7 +7,8 @@ case.json says what to solve:
      "step": {"type": "stationary" | "modal" | "transient", "modes": 10,
               "time_step": 10.0, "steps": 60},          (transient heat only)
      "initial_temperature": 293.15,
-     "materials": [{"group": "Bar/Body", "properties": {"youngs_modulus": ..., ...}}],
+     "materials": [{"group": "Bar/Body", "properties": {"youngs_modulus": ..., ...},
+                    "tables": {"thermal_conductivity": [[T, k], ...]}}],   (heat only)
      "features": [{"type": "fixed", "group": "Bar/Root", "values": {...}, "area": ...}]}
 Values are SI. Group names are Gmsh physical group names in mesh.msh.
 
@@ -73,6 +74,29 @@ def main() -> None:
             f.x.array[cells.find(tag(m["group"]))] = m["properties"][prop]
         return f
 
+    def of_temperature(prop: str, T):
+        """A property as a UFL expression of temperature T: each material's table
+        interpolated linearly (constant past its ends), or its single value."""
+        if not any(prop in m.get("tables", {}) for m in case["materials"]):
+            return piecewise(prop)
+        expr = 0
+        for m in case["materials"]:
+            indicator = fem.Function(fem.functionspace(msh, ("DG", 0)))
+            indicator.x.array[cells.find(tag(m["group"]))] = 1.0
+            points = m.get("tables", {}).get(prop)
+            if points is None:
+                if prop not in m["properties"]:
+                    raise SystemExit(f"material for '{m['group']}' is missing {prop}")
+                expr += indicator * m["properties"][prop]
+                continue
+            # v0 + sum of slope_i * (clamp(T, t_i, t_i+1) - t_i): piecewise linear in T.
+            value = points[0][1]
+            for (t0, v0), (t1, v1) in zip(points[:-1], points[1:], strict=True):
+                clamped = ufl.min_value(ufl.max_value(T, t0), t1)
+                value += (v1 - v0) / (t1 - t0) * (clamped - t0)
+            expr += indicator * value
+        return expr
+
     out: dict[str, np.ndarray] = {"backend": np.array(BACKEND)}
     solve = {
         "solid_mechanics": solve_solid,
@@ -80,7 +104,10 @@ def main() -> None:
         "electrostatics": solve_electrostatics,
         "magnetic_fields": solve_magnetostatics,
     }[case["physics"]]
-    solve(case, msh, degree, dx, ds, facets, tag, piecewise, out)
+    if case["physics"] == "heat_transfer":
+        solve_heat(case, msh, degree, dx, ds, facets, tag, of_temperature, out)
+    else:
+        solve(case, msh, degree, dx, ds, facets, tag, piecewise, out)
     np.savez("results.npz", **out)
 
 
@@ -247,10 +274,15 @@ def solve_solid(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
     out["stress"] = solve_linear(mass, rhs, [], S, "s", mass_matrix=True).x.array.reshape(-1, 6)
 
 
-def solve_heat(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
+def solve_heat(case, msh, degree, dx, ds, facets, tag, of_temperature, out) -> None:
+    """Heat conduction; temperature tables make it nonlinear, solved by Picard iteration
+    (properties at the previous iterate), which needs only linear solves on any backend."""
     V = fem.functionspace(msh, ("Lagrange", degree))
-    k = piecewise("thermal_conductivity")
     T, v = ufl.TrialFunction(V), ufl.TestFunction(V)
+    previous = fem.Function(V)  # the last iterate
+    previous.x.array[:] = case["initial_temperature"]
+    nonlinear = any(m.get("tables") for m in case["materials"])
+    k = of_temperature("thermal_conductivity", previous)
     a = k * ufl.inner(ufl.grad(T), ufl.grad(v)) * dx
     L = fem.Constant(msh, 0.0) * v * dx
     bcs = []
@@ -264,21 +296,36 @@ def solve_heat(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
             a += vals["h"] * T * v * ds(tag(f["group"]))
             L += vals["h"] * vals["T_inf"] * v * ds(tag(f["group"]))
     out["coords"] = V.tabulate_dof_coordinates()
+
+    def picard(a_form, L_form, iterate: fem.Function) -> fem.Function:
+        if not nonlinear:
+            return solve_linear(a_form, L_form, bcs, V, "t")
+        for _ in range(100):
+            current = solve_linear(a_form, L_form, bcs, V, "t")
+            change = np.abs(current.x.array - iterate.x.array).max()
+            scale = max(np.abs(current.x.array).max(), 1.0)
+            iterate.x.array[:] = current.x.array
+            if change <= 1e-10 * scale:
+                break
+        else:
+            raise SystemExit("temperature iteration did not converge in 100 steps")
+        return current
+
     if case["step"]["type"] != "transient":
-        out["temperature"] = solve_linear(a, L, bcs, V, "t").x.array.reshape(-1, 1)
+        out["temperature"] = picard(a, L, previous).x.array.reshape(-1, 1)
         return
 
-    # Implicit (backward) Euler: rho cp (T - T_prev) / dt = div(k grad T).
-    rho, cp = piecewise("density"), piecewise("specific_heat")
+    # Implicit (backward) Euler: rho cp (T - T_old) / dt = div(k grad T).
+    rho, cp = of_temperature("density", previous), of_temperature("specific_heat", previous)
     dt, steps = case["step"]["time_step"], case["step"]["steps"]
-    previous = fem.Function(V)
-    previous.x.array[:] = case["initial_temperature"]
+    old = fem.Function(V)
+    old.x.array[:] = case["initial_temperature"]
     a_t = rho * cp / dt * T * v * dx + a
-    L_t = rho * cp / dt * previous * v * dx + L
+    L_t = rho * cp / dt * old * v * dx + L
     series = []
     for _ in range(steps):
-        current = solve_linear(a_t, L_t, bcs, V, "t")
-        previous.x.array[:] = current.x.array
+        current = picard(a_t, L_t, previous)
+        old.x.array[:] = current.x.array
         series.append(current.x.array.copy())
     out["times"] = dt * np.arange(1, steps + 1)
     out["temperature_series"] = np.asarray(series)

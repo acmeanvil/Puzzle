@@ -36,6 +36,31 @@ def initial_temperature(physics) -> float:
     return value.to_si() if hasattr(value, "to_si") else float(value)
 
 
+THERMAL_TABLES = ("thermal_conductivity", "specific_heat", "density")
+
+
+def thermal_tables(material, component) -> dict[str, list[tuple[float, float]]]:
+    """Temperature tables to write for a heat-transfer solve: property -> [(T in K, SI value)].
+
+    A material's tables are used when the component solves heat transfer, unless its
+    physics sets `temperature_dependent_materials = false`; properties without a table
+    keep their single value. Tables are held constant beyond their ends.
+    """
+    heat = next((ph for ph in component.physics if ph.type == "heat_transfer"), None)
+    if heat is None or not heat.settings.get("temperature_dependent_materials", True):
+        return {}
+    from puzzle.model.schema import Quantity
+
+    out = {}
+    for prop in THERMAL_TABLES:
+        table = material.tables.get(prop)
+        if table is None or len(table.curve()) < 2:
+            continue
+        scale = Quantity(value=1.0, unit=table.unit).to_si()  # table values are in its unit
+        out[prop] = [(t, v * scale) for t, v in table.curve()]
+    return out
+
+
 def time_settings(step) -> tuple[float, float, int]:
     """(time_step, end_time, number of steps) of a transient solve step, in s."""
     try:

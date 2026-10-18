@@ -11,12 +11,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
+
 from puzzle.adapters.common import (
     STRUCTURAL,
     THERMAL,
     InputError,
     initial_temperature,
     surface_area,
+    thermal_tables,
     time_settings,
 )
 from puzzle.mesh.med import safe_names, write_med
@@ -73,17 +76,21 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
         f"AFFE=_F(TOUT='OUI', PHENOMENE='{phenomenon}', MODELISATION='{model}'))",
     ]
     assignments = []
-    for i, a in enumerate(comp.materials, start=1):
-        out.append(
-            f"mat{i} = DEFI_MATERIAU({_material(project.get(a.material, Material), thermal)})"
-        )
+    materials = [project.get(a.material, Material) for a in comp.materials]
+    tables = [thermal_tables(m, comp) if thermal else {} for m in materials]
+    nonlinear = any(tables)  # temperature tables: THER_NL and THER_NON_LINE
+    for i, (a, m, t) in enumerate(zip(comp.materials, materials, tables, strict=True), start=1):
+        if nonlinear:
+            out += _ther_nl(i, m, t)
+        else:
+            out.append(f"mat{i} = DEFI_MATERIAU({_material(m, thermal)})")
         assignments.append(f"_F(GROUP_MA='{names[a.selection]}', MATER=mat{i})")
     out.append(f"mater = AFFE_MATERIAU(MAILLAGE=mesh, AFFE=({', '.join(assignments)},))")
     out.append(_loads(features, names, mesh, thermal))
 
     if thermal:
         out += [
-            _ther_lineaire(step, comp),
+            _ther_non_line(step, comp) if nonlinear else _ther_lineaire(step, comp),
             _table("res", "TEMP", "temperature"),
         ]
     elif step.type == "modal":
@@ -159,6 +166,65 @@ def _material(m: Material, thermal: bool) -> str:
     e, nu = need("youngs_modulus", "poissons_ratio")
     rho = f", RHO={p['density']:.12g}" if "density" in p else ""
     return f"ELAS=_F(E={e:.12g}, NU={nu:.12g}{rho})"
+
+
+def _ther_nl(index: int, m: Material, tables: dict) -> list[str]:
+    """THER_NL: conductivity and volumetric enthalpy (integral of rho cp dT) of temperature."""
+    p = {k: q.to_si() for k, q in m.properties.items()}
+
+    def curve(prop: str) -> list[tuple[float, float]]:
+        if prop in tables:
+            return tables[prop]
+        if prop not in p:
+            raise InputError(f"material '{m.name}' is missing {prop}")
+        return [(ROOM_K, p[prop])]
+
+    def at(points: list[tuple[float, float]], t: float) -> float:
+        temps, values = zip(*points, strict=True)
+        return float(np.interp(t, temps, values))
+
+    k = curve("thermal_conductivity")
+    has_cp = "specific_heat" in p or "specific_heat" in tables
+    rho = curve("density") if "density" in p or "density" in tables else [(ROOM_K, 1.0)]
+    cp = curve("specific_heat") if has_cp else [(ROOM_K, 1.0)]
+    # Enthalpy on every table temperature, by the trapezoid rule on rho cp.
+    temps = sorted({t for c in (k, rho, cp) for t, _ in c} | {0.0, 5000.0})
+    rho_cp = [at(rho, t) * at(cp, t) for t in temps]
+    beta = [0.0]
+    for j in range(1, len(temps)):
+        beta.append(beta[-1] + 0.5 * (rho_cp[j] + rho_cp[j - 1]) * (temps[j] - temps[j - 1]))
+
+    def function(name: str, points: list[tuple[float, float]], extend: str) -> str:
+        vale = ", ".join(f"{t:.12g}, {v:.12g}" for t, v in points)
+        return (
+            f"{name} = DEFI_FONCTION(NOM_PARA='TEMP', VALE=({vale},), "
+            f"PROL_GAUCHE='{extend}', PROL_DROITE='{extend}')"
+        )
+
+    lam = k if len(k) > 1 else [(0.0, k[0][1]), (5000.0, k[0][1])]
+    return [
+        function(f"lam{index}", lam, "CONSTANT"),
+        function(f"beta{index}", list(zip(temps, beta, strict=True)), "LINEAIRE"),
+        f"mat{index} = DEFI_MATERIAU(THER_NL=_F(LAMBDA=lam{index}, BETA=beta{index}))",
+    ]
+
+
+def _ther_non_line(step, comp: Component) -> str:
+    call = (
+        "res = THER_NON_LINE(MODELE=model, CHAM_MATER=mater, EXCIT=_F(CHARGE=load), "
+        "CONVERGENCE=_F(RESI_GLOB_RELA=1e-10, ITER_GLOB_MAXI=50), "
+    )
+    if step.type != "transient":
+        return (
+            call + "ETAT_INIT=_F(STAT='OUI'), INCREMENT=_F(LIST_INST=DEFI_LIST_REEL(VALE=(0.0,))))"
+        )
+    dt, end, _ = time_settings(step)
+    heat = next(ph for ph in comp.physics if ph.type == "heat_transfer")
+    times = f"DEFI_LIST_REEL(DEBUT=0.0, INTERVALLE=_F(JUSQU_A={end:.12g}, PAS={dt:.12g}))"
+    return (
+        call
+        + f"ETAT_INIT=_F(VALE={initial_temperature(heat):.12g}), INCREMENT=_F(LIST_INST={times}))"
+    )
 
 
 def _loads(features: list[Feature], names: dict[str, str], mesh: Mesh, thermal: bool) -> str:

@@ -277,7 +277,7 @@ class Physics(BaseModel):
         "custom_pde",
     ]
     features: list[Feature] = Field(default_factory=list)
-    settings: dict[str, Quantity | int | str] = Field(
+    settings: dict[str, Quantity | bool | int | str] = Field(
         default_factory=dict, description="Physics-wide options, e.g. turbulence_model"
     )
     equation: CustomEquation | None = None

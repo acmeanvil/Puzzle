@@ -46,6 +46,8 @@ def test_heat_case(tmp_path):
     case = json.loads((script.parent / "case.json").read_text())
     assert case["physics"] == "heat_transfer"
     assert case["features"][0]["values"]["T"] == pytest.approx(373.15)
+    tables = case["materials"][0]["tables"]
+    assert [573.15, 44.01] in tables["thermal_conductivity"] and "specific_heat" in tables
 
 
 def test_unsupported_steps_are_refused(tmp_path):

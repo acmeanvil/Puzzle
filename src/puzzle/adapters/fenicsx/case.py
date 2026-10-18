@@ -18,6 +18,7 @@ from puzzle.adapters.common import (
     initial_temperature,
     match_points,
     surface_area,
+    thermal_tables,
     time_settings,
 )
 from puzzle.mesh.med import write_med
@@ -109,6 +110,11 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
                 "properties": {
                     k: q.to_si() for k, q in project.get(a.material, Material).properties.items()
                 },
+                "tables": (
+                    thermal_tables(project.get(a.material, Material), comp)
+                    if physics == "heat_transfer"
+                    else {}
+                ),
             }
             for a in comp.materials
         ],

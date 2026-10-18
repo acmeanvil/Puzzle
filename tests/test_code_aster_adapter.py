@@ -8,11 +8,13 @@ from puzzle.mesh import generate_mesh
 from puzzle.model import Feature, Physics, Quantity, SolveStep, Study
 
 
-def _case(tmp_path, features, step, physics="solid_mechanics"):
+def _case(tmp_path, features, step, physics="solid_mechanics", settings=None):
     tmp_path.mkdir(parents=True, exist_ok=True)
     stepfile = write_bar_step(tmp_path / "bar.step")
     project, comp = bar_project(
-        stepfile, [Physics(type=physics, features=features)], mesh_size_mm=5
+        stepfile,
+        [Physics(type=physics, features=features, settings=settings or {})],
+        mesh_size_mm=5,
     )
     study = project.add(Study(name="s", component=comp.id, solver="code_aster", steps=[step]))
     mesh = generate_mesh(project, comp.id, tmp_path, tmp_path / "m").mesh
@@ -47,9 +49,16 @@ def test_modal_and_heat_cases(tmp_path):
     hot = Feature(
         type="temperature", selection="Bar/Root", values={"T": Quantity(value=100, unit="degC")}
     )
-    export = _case(tmp_path / "b", [hot], SolveStep(type="stationary"), physics="heat_transfer")
+    constant = {"temperature_dependent_materials": False}
+    export = _case(tmp_path / "b", [hot], SolveStep(type="stationary"), "heat_transfer", constant)
     comm = (export.parent / "job.comm").read_text()
     assert "THER_LINEAIRE" in comm and "TEMP=373.15" in comm and "LAMBDA=" in comm
+
+    # Structural steel carries EN 1993-1-2 tables: by default they make it nonlinear.
+    export = _case(tmp_path / "c", [hot], SolveStep(type="stationary"), "heat_transfer")
+    comm = (export.parent / "job.comm").read_text()
+    assert "THER_NON_LINE" in comm and "THER_NL=_F(LAMBDA=lam1, BETA=beta1)" in comm
+    assert "ETAT_INIT=_F(STAT='OUI')" in comm and "573.15, 44.01" in comm
 
 
 def test_unsupported_steps_are_refused(tmp_path):
@@ -94,7 +103,11 @@ def test_transient_heat_case(tmp_path):
     )
     settings = {"time_step": Quantity(value=5, unit="s"), "end_time": Quantity(value=30, unit="s")}
     export = _case(
-        tmp_path, [hot], SolveStep(type="transient", settings=settings), physics="heat_transfer"
+        tmp_path,
+        [hot],
+        SolveStep(type="transient", settings=settings),
+        "heat_transfer",
+        {"temperature_dependent_materials": False},
     )
     comm = (export.parent / "job.comm").read_text()
     assert "TYPE_CALCUL='TRAN'" in comm and "ETAT_INIT=_F(VALE=293.15)" in comm

@@ -73,7 +73,10 @@ def test_modal_and_heat_solvers(tmp_path):
     sif, _ = _case(tmp_path / "b", [hot], SolveStep(type="stationary"), physics="heat_transfer")
     text = sif.read_text()
     assert '"HeatSolve" "HeatSolver"' in text and "Temperature = 373.15" in text
-    assert "Heat Conductivity = " in text
+    # Structural steel's EN 1993-1-2 tables become functions of temperature.
+    assert "Heat Conductivity = Variable Temperature" in text and "573.15 44.01" in text
+    assert "Heat Capacity = Variable Temperature" in text
+    assert "Nonlinear System Max Iterations = 50" in text
 
 
 def test_unsupported_steps_are_refused(tmp_path):

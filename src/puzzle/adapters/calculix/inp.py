@@ -29,6 +29,7 @@ from puzzle.adapters.common import (
     InputError,
     initial_temperature,
     surface_blocks,
+    thermal_tables,
 )
 from puzzle.mesh.mesh import Mesh
 from puzzle.model.schema import Component, Feature, Material, Project, SolveStep, Study
@@ -136,12 +137,22 @@ def _material_cards(m: Material, comp: Component) -> list[str]:
         if "density" in p:
             cards += ["*DENSITY", f"{p['density']:.10g}"]
     if "heat_transfer" in types:
-        (k,) = need("thermal_conductivity")
-        cards += ["*CONDUCTIVITY", f"{k:.10g}"]
-        if "specific_heat" in p:
-            cards += ["*SPECIFIC HEAT", f"{p['specific_heat']:.10g}"]
-        if "density" in p and "*DENSITY" not in cards:
-            cards += ["*DENSITY", f"{p['density']:.10g}"]
+        tables = thermal_tables(m, comp)
+
+        def card(name: str, prop: str, required: bool = False) -> list[str]:
+            # A table is one "value, temperature" line per point; CalculiX interpolates.
+            if prop in tables:
+                return [name, *(f"{v:.10g}, {t:.10g}" for t, v in tables[prop])]
+            if prop in p:
+                return [name, f"{p[prop]:.10g}"]
+            if required:
+                need(prop)
+            return []
+
+        cards += card("*CONDUCTIVITY", "thermal_conductivity", required=True)
+        cards += card("*SPECIFIC HEAT", "specific_heat")
+        if "*DENSITY" not in cards:
+            cards += card("*DENSITY", "density")
     if "thermal_expansion" in comp.couplings and "thermal_expansion" in p:
         table = m.tables.get("thermal_expansion")
         ref = table.reference_temperature if table and table.reference_temperature else ROOM_K
@@ -200,6 +211,10 @@ def _step(
 
     # CalculiX stops after 100 increments per step unless told otherwise.
     out = ["*STEP, INC=1000000" if step.type == "transient" else "*STEP"] + procedure
+    if "heat_transfer" in solved:
+        # Temperature tables make heat transfer nonlinear; CalculiX's default field
+        # tolerances (0.5% residual, 1% correction) stop short. Linear cases converge at once.
+        out += ["*CONTROLS, PARAMETERS=FIELD", "1e-7, 1e-7, 0., 0., 0.02, 1e-5, 1e-3, 1e-8"]
     wanted = (STRUCTURAL if "solid_mechanics" in solved else set()) | (
         THERMAL if "heat_transfer" in solved else set()
     )

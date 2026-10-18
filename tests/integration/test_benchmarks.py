@@ -19,6 +19,8 @@ from puzzle.solve import run_study
 
 solver = over("calculix", "elmer", "code_aster", "fenicsx")
 
+# The closed-form references assume constant properties; steel's EN tables are ignored.
+CONSTANT_K = {"temperature_dependent_materials": False}
 STEEL = library_material("structural_steel").properties
 E, NU, RHO = (STEEL[k].to_si() for k in ("youngs_modulus", "poissons_ratio", "density"))
 L, B, H = BAR
@@ -103,7 +105,7 @@ def test_steady_conduction_is_linear(tmp_path, solver):
     )
     run = _run(
         tmp_path,
-        [Physics(type="heat_transfer", features=[hot, cold])],
+        [Physics(type="heat_transfer", features=[hot, cold], settings=CONSTANT_K)],
         [SolveStep(type="stationary")],
         solver,
     )
@@ -179,7 +181,7 @@ def test_hexahedra_axial_stretch_and_conduction(tmp_path, solver):
         type="temperature", selection="Bar/Tip", values={"T": Quantity(value=20, unit="degC")}
     )
     project, comp = bar_project(
-        step, [Physics(type="heat_transfer", features=[hot, cold])], **hexes
+        step, [Physics(type="heat_transfer", features=[hot, cold], settings=CONSTANT_K)], **hexes
     )
     study = project.add(
         Study(name="t", component=comp.id, solver=solver, steps=[SolveStep(type="stationary")])
@@ -210,7 +212,7 @@ def test_transient_conduction_matches_the_series_solution(tmp_path, solver):
     heat = Physics(
         type="heat_transfer",
         features=[hot],
-        settings={"initial_temperature": Quantity(value=20, unit="degC")},
+        settings={"initial_temperature": Quantity(value=20, unit="degC"), **CONSTANT_K},
     )
     project, comp = bar_project(step, [heat], mesh_size_mm=5)
     transient = SolveStep(
