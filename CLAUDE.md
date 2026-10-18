@@ -68,7 +68,7 @@ Capability matrices also list planned capabilities; `write_input` refuses what i
 - **OCC pads bounding boxes** by ~1e-7 m. Plane tests need a tolerance of at least 1 µm.
 - **Entity names** (`face-3`) follow STEP file order; signatures (kind, measure, centre) re-find them after placement or fragmenting.
 - **Element node order:** Gmsh differs from CalculiX, Elmer and VTK for tet10 (last two edge nodes swap). Adapters own the reordering; shared face lookups live in `adapters/common.py`.
-- **FEniCSx `study.py`** runs inside the FEniCSx env and must not import puzzle. dolfinx 0.11 `LinearProblem` needs `petsc_options_prefix`; MUMPS is used only if PETSc has it.
+- **FEniCSx `study.py`** runs inside the FEniCSx env and must not import puzzle. dolfinx 0.11 `LinearProblem` needs `petsc_options_prefix`; MUMPS is used only if PETSc has it. Windows dolfinx has no PETSc, so `study.py` falls back to SciPy (SuperLU, ARPACK; CG for the stress projection); `PUZZLE_FENICSX_BACKEND=scipy` forces that path for testing (LE1 ~54 s vs ~10 s with PETSc).
 - **Code_Aster 18** needs `INCREMENT` even for steady `THER_LINEAIRE`; table numbers need `FORMAT_R` (default keeps 5 digits). Containers run as your uid with `HOME=/tmp` (run_aster needs a home).
 - **Elmer output** lands in the mesh directory (`mesh/case_t0001.vtu`). Points come in Elmer node order (no point ids); `GeometryIds` there is cell data. Eigenvalues (omega^2) are parsed from the solver log.
 - **CalculiX `.frd`** is fixed width (values can touch); match record tags on the first token. Modal block values are frequencies in Hz.

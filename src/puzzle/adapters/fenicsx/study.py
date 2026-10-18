@@ -11,24 +11,37 @@ Values are SI. Group names are Gmsh physical group names in mesh.msh.
 
 results.npz holds `coords` (one row per output node) and, as computed, `displacement`,
 `stress` (xx, yy, zz, xy, yz, zx), `temperature`, `frequencies` (Hz) and `modes`
-(mode x node x 3).
+(mode x node x 3), plus `backend` (which linear algebra solved it).
+
+Linear algebra: PETSc (MUMPS, SLEPc) where dolfinx was built with it; otherwise SciPy
+(SuperLU, ARPACK), e.g. conda-forge's Windows dolfinx, which has no PETSc.
+PUZZLE_FENICSX_BACKEND=scipy forces the SciPy path.
 """
 
 from __future__ import annotations
 
 import json
+import os
 
 import numpy as np
 import ufl
-from dolfinx import fem
-from dolfinx.fem.petsc import LinearProblem, assemble_matrix
+from dolfinx import fem, la
 from dolfinx.io.gmsh import read_from_msh
 from mpi4py import MPI
-from petsc4py import PETSc
 
-# MUMPS when PETSc has it (not every platform's build does), else PETSc's own LU.
-LU_PACKAGE = "mumps" if PETSc.Sys.hasExternalPackage("mumps") else "petsc"
-DIRECT = {"ksp_type": "preonly", "pc_type": "lu", "pc_factor_mat_solver_type": LU_PACKAGE}
+try:
+    if os.environ.get("PUZZLE_FENICSX_BACKEND") == "scipy":
+        raise ImportError("SciPy backend requested")
+    from dolfinx.fem.petsc import LinearProblem
+    from dolfinx.fem.petsc import assemble_matrix as petsc_matrix
+    from petsc4py import PETSc
+
+    BACKEND = "petsc"
+    # MUMPS when PETSc has it (not every platform's build does), else PETSc's own LU.
+    LU_PACKAGE = "mumps" if PETSc.Sys.hasExternalPackage("mumps") else "petsc"
+except ImportError:
+    BACKEND = "scipy"
+    LU_PACKAGE = "superlu"
 
 
 def main() -> None:
@@ -55,12 +68,105 @@ def main() -> None:
             f.x.array[cells.find(tag(m["group"]))] = m["properties"][prop]
         return f
 
-    out: dict[str, np.ndarray] = {}
+    out: dict[str, np.ndarray] = {"backend": np.array(BACKEND)}
     if case["physics"] == "solid_mechanics":
         solve_solid(case, msh, degree, dx, ds, facets, tag, piecewise, out)
     else:
         solve_heat(case, msh, degree, dx, ds, facets, tag, piecewise, out)
     np.savez("results.npz", **out)
+
+
+# --- linear algebra, PETSc or SciPy ----------------------------------------------
+
+
+def solve_linear(a, L, bcs, V, name: str, *, mass_matrix: bool = False) -> fem.Function:
+    """Solve a(u, v) = L(v) with Dirichlet conditions `bcs` for a Function on V."""
+    if BACKEND == "petsc":
+        options = (
+            {"ksp_type": "cg", "pc_type": "jacobi", "ksp_rtol": 1e-12}
+            if mass_matrix
+            else {"ksp_type": "preonly", "pc_type": "lu", "pc_factor_mat_solver_type": LU_PACKAGE}
+        )
+        problem = LinearProblem(
+            a, L, bcs=bcs, petsc_options_prefix=f"puzzle_{name}_", petsc_options=options
+        )
+        return problem.solve()
+
+    from scipy.sparse.linalg import spsolve
+
+    a_form, L_form = fem.form(a), fem.form(L)
+    A = fem.assemble_matrix(a_form, bcs=bcs)
+    A.scatter_reverse()
+    b = fem.assemble_vector(L_form)
+    fem.apply_lifting(b.array, [a_form], bcs=[bcs])
+    b.scatter_reverse(la.InsertMode.add)
+    for bc in bcs:
+        bc.set(b.array)
+    uh = fem.Function(V)
+    matrix = A.to_scipy()
+    n = matrix.shape[0]
+    if mass_matrix:
+        # Well conditioned: conjugate gradients with a diagonal preconditioner beats LU.
+        from scipy.sparse import diags
+        from scipy.sparse.linalg import cg
+
+        matrix = matrix.tocsr()
+        solution, info = cg(matrix, b.array[:n], rtol=1e-12, M=diags(1.0 / matrix.diagonal()))
+        if info:
+            raise SystemExit(f"projection did not converge (cg info {info})")
+        uh.x.array[:n] = solution
+    else:
+        uh.x.array[:n] = spsolve(matrix.tocsc(), b.array[:n])
+    uh.x.scatter_forward()
+    return uh
+
+
+def eigenpairs(a, m, bcs, count: int) -> tuple[list[float], list[np.ndarray]]:
+    """The `count` smallest eigenvalues (omega^2) and vectors of K x = lambda M x."""
+    if BACKEND == "scipy":
+        from scipy.sparse.linalg import eigsh
+
+        K = fem.assemble_matrix(fem.form(a), bcs=bcs, diag=1.0)
+        K.scatter_reverse()
+        M = fem.assemble_matrix(fem.form(m), bcs=bcs, diag=0.0)
+        M.scatter_reverse()
+        values, vectors = eigsh(
+            K.to_scipy().tocsc(), k=count, M=M.to_scipy().tocsc(), sigma=0.0, which="LM"
+        )
+        return list(values), [vectors[:, i] for i in range(vectors.shape[1])]
+
+    from slepc4py import SLEPc
+
+    K = petsc_matrix(fem.form(a), bcs=bcs, diag=1.0)
+    K.assemble()
+    M = petsc_matrix(fem.form(m), bcs=bcs, diag=0.0)
+    M.assemble()
+    eps = SLEPc.EPS().create(MPI.COMM_WORLD)
+    eps.setOperators(K, M)
+    eps.setProblemType(SLEPc.EPS.ProblemType.GHEP)
+    eps.setDimensions(count)
+    eps.setWhichEigenpairs(SLEPc.EPS.Which.TARGET_MAGNITUDE)
+    eps.setTarget(0.0)
+    st = eps.getST()
+    st.setType(SLEPc.ST.Type.SINVERT)
+    ksp = st.getKSP()
+    ksp.setType("preonly")
+    ksp.getPC().setType("lu")
+    ksp.getPC().setFactorSolverType(LU_PACKAGE)
+    eps.solve()
+    vec = K.createVecRight()
+    values, vectors = [], []
+    for i in range(min(eps.getConverged(), count)):
+        values.append(eps.getEigenpair(i, vec).real)
+        vectors.append(vec.array.copy())
+    return values, vectors
+
+
+def dirichlet(value, dofs, V) -> fem.DirichletBC:
+    return fem.dirichletbc(np.asarray(value, dtype=np.float64), dofs, V)
+
+
+# --- physics -----------------------------------------------------------------------
 
 
 def solve_solid(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
@@ -78,31 +184,35 @@ def solve_solid(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
     u, v = ufl.TrialFunction(V), ufl.TestFunction(V)
     a = ufl.inner(sigma(u), eps(v)) * dx
     n = ufl.FacetNormal(msh)
+    modal = case["step"]["type"] == "modal"
     bcs, L = [], ufl.inner(fem.Constant(msh, np.zeros(3)), v) * dx
     for f in case["features"]:
         where, vals = facets.find(tag(f["group"])), f.get("values", {})
         if f["type"] == "fixed":
-            bcs.append(fem.dirichletbc(np.zeros(3), fem.locate_dofs_topological(V, 2, where), V))
+            bcs.append(dirichlet(np.zeros(3), fem.locate_dofs_topological(V, 2, where), V))
         elif f["type"] == "displacement":
             for i, axis in enumerate("xyz"):
                 if axis in vals:
                     dofs = fem.locate_dofs_topological(V.sub(i), 2, where)
-                    bcs.append(fem.dirichletbc(PETSc.ScalarType(vals[axis]), dofs, V.sub(i)))
-        elif f["type"] == "force" and case["step"]["type"] != "modal":
-            traction = np.array([vals.get(a_, 0.0) for a_ in "xyz"]) / f["area"]
+                    bcs.append(dirichlet(vals[axis], dofs, V.sub(i)))
+        elif f["type"] == "force" and not modal:
+            traction = np.array([vals.get(c, 0.0) for c in "xyz"]) / f["area"]
             L += ufl.inner(fem.Constant(msh, traction), v) * ds(tag(f["group"]))
-        elif f["type"] == "pressure" and case["step"]["type"] != "modal":
+        elif f["type"] == "pressure" and not modal:
             L += -vals["p"] * ufl.inner(n, v) * ds(tag(f["group"]))
 
-    if case["step"]["type"] == "modal":
+    out["coords"] = V.tabulate_dof_coordinates()
+    if modal:
         rho = piecewise("density")
-        modal(V, a, ufl.inner(rho * u, v) * dx, bcs, int(case["step"].get("modes", 10)), out)
+        count = int(case["step"].get("modes", 10))
+        values, vectors = eigenpairs(a, ufl.inner(rho * u, v) * dx, bcs, count)
+        hz = np.sqrt(np.maximum(values, 0.0)) / (2 * np.pi)
+        order = np.argsort(hz)
+        out["frequencies"] = hz[order]
+        out["modes"] = np.asarray([vectors[i].reshape(-1, 3) for i in order])
         return
 
-    uh = LinearProblem(
-        a, L, bcs=bcs, petsc_options_prefix="puzzle_u_", petsc_options=DIRECT
-    ).solve()
-    out["coords"] = V.tabulate_dof_coordinates()
+    uh = solve_linear(a, L, bcs, V, "u")
     out["displacement"] = uh.x.array.reshape(-1, 3)
 
     # Nodal stress: L2 projection of the stress components onto the displacement's nodes.
@@ -110,45 +220,8 @@ def solve_solid(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
     s = sigma(uh)
     voigt = ufl.as_vector([s[0, 0], s[1, 1], s[2, 2], s[0, 1], s[1, 2], s[2, 0]])
     p, q = ufl.TrialFunction(S), ufl.TestFunction(S)
-    projected = LinearProblem(
-        ufl.inner(p, q) * dx,
-        ufl.inner(voigt, q) * dx,
-        petsc_options_prefix="puzzle_s_",
-        petsc_options={"ksp_type": "cg", "pc_type": "jacobi", "ksp_rtol": 1e-12},
-    ).solve()
-    out["stress"] = projected.x.array.reshape(-1, 6)
-
-
-def modal(V, a, m, bcs, count: int, out) -> None:
-    from slepc4py import SLEPc
-
-    K = assemble_matrix(fem.form(a), bcs=bcs, diag=1.0)
-    K.assemble()
-    M = assemble_matrix(fem.form(m), bcs=bcs, diag=0.0)
-    M.assemble()
-    eps = SLEPc.EPS().create(MPI.COMM_WORLD)
-    eps.setOperators(K, M)
-    eps.setProblemType(SLEPc.EPS.ProblemType.GHEP)
-    eps.setDimensions(count)
-    eps.setWhichEigenpairs(SLEPc.EPS.Which.TARGET_MAGNITUDE)
-    eps.setTarget(0.0)
-    st = eps.getST()
-    st.setType(SLEPc.ST.Type.SINVERT)
-    ksp = st.getKSP()
-    ksp.setType("preonly")
-    ksp.getPC().setType("lu")
-    ksp.getPC().setFactorSolverType(LU_PACKAGE)
-    eps.solve()
-    vec = K.createVecRight()
-    frequencies, shapes = [], []
-    for i in range(min(eps.getConverged(), count)):
-        lam = eps.getEigenpair(i, vec).real
-        frequencies.append(np.sqrt(max(lam, 0.0)) / (2 * np.pi))
-        shapes.append(vec.array.copy().reshape(-1, 3))
-    order = np.argsort(frequencies)
-    out["coords"] = V.tabulate_dof_coordinates()
-    out["frequencies"] = np.asarray(frequencies)[order]
-    out["modes"] = np.asarray(shapes)[order]
+    mass, rhs = ufl.inner(p, q) * dx, ufl.inner(voigt, q) * dx
+    out["stress"] = solve_linear(mass, rhs, [], S, "s", mass_matrix=True).x.array.reshape(-1, 6)
 
 
 def solve_heat(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
@@ -161,19 +234,13 @@ def solve_heat(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
     for f in case["features"]:
         where, vals = facets.find(tag(f["group"])), f.get("values", {})
         if f["type"] == "temperature":
-            bcs.append(
-                fem.dirichletbc(
-                    PETSc.ScalarType(vals["T"]), fem.locate_dofs_topological(V, 2, where), V
-                )
-            )
+            bcs.append(dirichlet(vals["T"], fem.locate_dofs_topological(V, 2, where), V))
         elif f["type"] == "heat_flux":
             L += vals["q"] * v * ds(tag(f["group"]))
         elif f["type"] == "convection":
             a += vals["h"] * T * v * ds(tag(f["group"]))
             L += vals["h"] * vals["T_inf"] * v * ds(tag(f["group"]))
-    Th = LinearProblem(
-        a, L, bcs=bcs, petsc_options_prefix="puzzle_t_", petsc_options=DIRECT
-    ).solve()
+    Th = solve_linear(a, L, bcs, V, "t")
     out["coords"] = V.tabulate_dof_coordinates()
     out["temperature"] = Th.x.array.reshape(-1, 1)
 
