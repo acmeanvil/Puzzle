@@ -165,3 +165,46 @@ def test_reader_picks_up_energy():
     from puzzle.adapters.elmer.output import ENERGY_LINE
 
     assert float(ENERGY_LINE.findall(vtu_log)[-1]) == pytest.approx(1.2345e-7)
+
+
+def test_magnetostatics_sif(tmp_path):
+    from puzzle.model import Material
+
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    stepfile = write_bar_step(tmp_path / "bar.step")
+    features = [
+        Feature(
+            type="coil_current", selection="Bar/Body", values={"I": Quantity(value=2, unit="kA")}
+        ),
+        Feature(type="coil_start", selection="Bar/Root"),
+        Feature(type="coil_end", selection="Bar/Tip"),
+    ]
+    project, comp = bar_project(
+        stepfile, [Physics(type="magnetic_fields", features=features)], mesh_size_mm=5
+    )
+    steel = project.of_type(Material)[0]
+    steel.properties["relative_permeability"] = Quantity(value=1)
+    steel.properties["electrical_conductivity"] = Quantity(value=5.8e7, unit="S/m")
+    study = project.add(
+        Study(name="m", component=comp.id, solver="elmer", steps=[SolveStep(type="stationary")])
+    )
+    mesh = generate_mesh(project, comp.id, tmp_path, tmp_path / "m").mesh
+    text = ElmerAdapter().write_input(project, study, mesh, tmp_path / "case").read_text()
+    assert "Desired Coil Current = Real 2000" in text
+    assert '"MagnetoDynamics" "WhitneyAVSolver"' in text and "Solver 4" in text  # + output
+    assert "Equation = 1" in text and "Body Force = 1" in text
+    assert "Coil Start = Logical True" in text and "Coil End = Logical True" in text
+    assert "Relative Permeability = 1" in text and "Electric Conductivity = 58000000" in text
+
+
+def test_magnetostatics_needs_a_coil(tmp_path):
+    insulated = Feature(type="magnetic_insulation", selection="Bar/Root")
+    with pytest.raises(InputError, match="one coil"):
+        _case(tmp_path, [insulated], SolveStep(type="stationary"), physics="magnetic_fields")
+
+
+def test_reader_picks_up_magnetic_energy():
+    from puzzle.adapters.elmer.output import MAGNETIC_ENERGY_LINE
+
+    line = "MagnetoDynamicsCalcFields: ElectroMagnetic Field Energy:    1.840431E-05\n"
+    assert float(MAGNETIC_ENERGY_LINE.findall(line)[-1]) == pytest.approx(1.840431e-5)

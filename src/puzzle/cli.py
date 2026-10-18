@@ -247,6 +247,11 @@ def _summarise(results) -> None:
             parts.append(f"potential {v.min():.4g} to {v.max():.4g} V")
         if "electric_energy" in step.fields:
             parts.append(f"stored energy {step.fields['electric_energy'].values[0, 0]:.4g} J")
+        if "magnetic_flux_density" in step.fields:
+            b = np.linalg.norm(step.fields["magnetic_flux_density"].values, axis=1)
+            parts.append(f"max |B| {b.max():.4g} T")
+        if "magnetic_energy" in step.fields:
+            parts.append(f"magnetic energy {step.fields['magnetic_energy'].values[0, 0]:.4g} J")
         if "temperature" in step.fields:
             t = step.fields["temperature"].values
             parts.append(f"temperature {t.min():.5g} to {t.max():.5g} K")

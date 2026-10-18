@@ -3,7 +3,9 @@
 Feature values follow the same names as the CalculiX adapter: displacement x/y/z,
 force x/y/z (total, applied as a uniform traction), pressure p (positive pushes into
 the surface), temperature T, heat_flux q (positive into the body), convection h and
-T_inf, electric_potential V, ground, surface_charge rho_s (C/m^2). Everything is SI.
+T_inf, electric_potential V, ground, surface_charge rho_s (C/m^2). Magnetostatics: a
+coil_current I (total, A) on a conductor body, entering through its coil_start face and
+leaving through coil_end; magnetic_insulation keeps the flux tangential. Everything is SI.
 """
 
 from __future__ import annotations
@@ -25,9 +27,23 @@ from puzzle.model.schema import Component, Feature, Material, Project, Study
 MESH_DIR = "mesh"
 EPSILON_0 = 8.8541878128e-12  # F/m, CODATA 2018
 ELECTROSTATIC = {"electric_potential", "ground", "surface_charge"}
+MAGNETIC = {"coil_current", "coil_start", "coil_end", "magnetic_insulation"}
 OUTPUT = "case"
 TIMES = "puzzle-times.txt"  # output time of each case_t*.vtu, in order
 ROOM_K = 293.15
+
+
+def _iterative(method: str, preconditioner: str, tolerance: float) -> list[str]:
+    return [
+        '  Linear System Solver = "Iterative"',
+        f"  Linear System Iterative Method = {method}",
+        f"  Linear System Preconditioning = {preconditioner}",
+        "  Linear System Max Iterations = 5000",
+        f"  Linear System Convergence Tolerance = {tolerance:g}",
+        "  Linear System Residual Output = 50",
+    ]
+
+
 DIRECT = ["  Linear System Solver = Direct", "  Linear System Direct Method = Umfpack"]
 
 
@@ -42,6 +58,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> tup
         "solid_mechanics": ("stationary", "modal"),
         "heat_transfer": ("stationary", "transient"),
         "electrostatics": ("stationary",),
+        "magnetic_fields": ("stationary",),
     }
     if len(solved) != 1 or next(iter(solved)) not in allowed:
         raise InputError(
@@ -56,16 +73,27 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> tup
         "solid_mechanics": STRUCTURAL,
         "heat_transfer": THERMAL,
         "electrostatics": ELECTROSTATIC,
+        "magnetic_fields": MAGNETIC,
     }[next(iter(solved))]
     features = [
         f for ph in comp.physics if ph.type in solved for f in ph.features if f.type in wanted
     ]
     if step.type == "modal":
         features = [f for f in features if f.type in ("fixed", "displacement")]
+    # Coil currents act on bodies; every other feature is a boundary condition.
+    coils = [f for f in features if f.type == "coil_current"]
+    if len(coils) > 1 or (solved == {"magnetic_fields"} and not coils):
+        raise InputError("the Elmer adapter solves magnetic fields driven by one coil for now")
+    features = [f for f in features if f.type != "coil_current"]
     boundary_names = list(dict.fromkeys(f.selection for f in features))
     body_names = [a.selection for a in comp.materials]
     if not body_names:
         raise InputError(f"component '{comp.name}' has no material assignments")
+    coil_bodies = {f.selection for f in coils}
+    if coil_bodies - set(body_names):
+        raise InputError(
+            f"a coil current must be on a body with a material, not {sorted(coil_bodies)}"
+        )
     emesh = write_mesh(mesh, workdir / MESH_DIR, body_names, boundary_names)
 
     out = [
@@ -87,7 +115,11 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> tup
         "",
     ]
     for i, assignment in enumerate(comp.materials, start=1):
-        out += [f"Body {i}", f"  Target Bodies(1) = {i}", "  Equation = 1", f"  Material = {i}"]
+        conductor = assignment.selection in coil_bodies
+        out += [f"Body {i}", f"  Target Bodies(1) = {i}", f"  Equation = {2 - conductor}"]
+        out.append(f"  Material = {i}")
+        if conductor:
+            out.append("  Body Force = 1")
         if "heat_transfer" in solved:
             out.append("  Initial Condition = 1")
         out += ["End", ""]
@@ -101,10 +133,19 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> tup
             "",
         ]
 
-    out += ["Equation 1", "  Active Solvers(1) = 1", "End", ""]
-    out += _solver(step, solved)
+    solvers = _solvers(step, solved, coils)
+    if solved == {"magnetic_fields"}:
+        # Conductors also run the coil solver; everything else only the field solvers.
+        out += ["Equation 1", "  Active Solvers(3) = 1 2 3", "End", ""]
+        out += ["Equation 2", "  Active Solvers(2) = 2 3", "End", ""]
+        out += ["Body Force 1", '  Electric Potential = Equals "CoilPot"', "End", ""]
+    else:
+        out += ["Equation 1", "  Active Solvers(1) = 1", "End", ""]
+        out += ["Equation 2", "  Active Solvers(1) = 1", "End", ""]
+    for number, block in enumerate(solvers, start=1):
+        out += [f"Solver {number}", *block, "End", ""]
     out += [
-        "Solver 2",
+        f"Solver {len(solvers) + 1}",
         f"  Exec Solver = {'After Timestep' if transient else 'After Simulation'}",
         '  Equation = "Result Output"',
         '  Procedure = "ResultOutputSolve" "ResultOutputSolver"',
@@ -153,44 +194,78 @@ def _material(index: int, m: Material, solved: set[str]) -> list[str]:
     if "electrostatics" in solved:
         (eps_r,) = need("relative_permittivity")
         out.append(f"  Relative Permittivity = {eps_r:.10g}")
+    if "magnetic_fields" in solved:
+        mu_r, sigma = need("relative_permeability", "electrical_conductivity")
+        out.append(f"  Relative Permeability = {mu_r:.10g}")
+        out.append(f"  Electric Conductivity = {sigma:.10g}")
     return out + ["End", ""]
 
 
-def _solver(step, solved: set[str]) -> list[str]:
+def _solvers(step, solved: set[str], coils: list[Feature]) -> list[list[str]]:
+    """The solver blocks, without their Solver/End lines, in solver order."""
     if solved == {"solid_mechanics"}:
-        out = [
-            "Solver 1",
+        block = [
             '  Equation = "Linear elasticity"',
             '  Procedure = "StressSolve" "StressSolver"',
             "  Variable = -dofs 3 Displacement",
             *DIRECT,
         ]
         if step.type == "modal":
-            out += [
+            block += [
                 "  Eigen Analysis = True",
                 f"  Eigen System Values = {int(step.settings.get('modes', 10))}",
             ]
         else:
-            out.append("  Calculate Stresses = True")
-    elif solved == {"electrostatics"}:
-        out = [
-            "Solver 1",
-            '  Equation = "Stat Elec Solver"',
-            '  Procedure = "StatElecSolve" "StatElecSolver"',
-            "  Variable = Potential",
-            "  Calculate Electric Field = True",
-            "  Calculate Electric Energy = True",
-            *DIRECT,
+            block.append("  Calculate Stresses = True")
+        return [block]
+    if solved == {"electrostatics"}:
+        return [
+            [
+                '  Equation = "Stat Elec Solver"',
+                '  Procedure = "StatElecSolve" "StatElecSolver"',
+                "  Variable = Potential",
+                "  Calculate Electric Field = True",
+                "  Calculate Electric Energy = True",
+                *DIRECT,
+            ]
         ]
-    else:
-        out = [
-            "Solver 1",
+    if solved == {"magnetic_fields"}:
+        current = coils[0].values["I"].to_si()
+        coil = [
+            '  Equation = "CoilSolver"',
+            '  Procedure = "CoilSolver" "CoilSolver"',
+            f"  Desired Coil Current = Real {current:.10g}",
+            *_iterative("BiCGStabL", "ILU1", 1e-12),
+        ]
+        av = [
+            '  Equation = "MGDynamics"',
+            '  Variable = "AV"',
+            '  Procedure = "MagnetoDynamics" "WhitneyAVSolver"',
+            "  Linear System Symmetric = True",
+            "  Use Magnetic Norm = Logical True",
+            *DIRECT,  # Elmer gauges a direct A-V solve with a spanning tree; GCR stalls here
+        ]
+        fields = [
+            '  Equation = "MGDynamicsCalc"',
+            '  Procedure = "MagnetoDynamics" "MagnetoDynamicsCalcFields"',
+            '  Potential Variable = String "AV"',
+            "  Calculate Current Density = Logical True",
+            "  Calculate Nodal Fields = Logical True",
+            "  Calculate Elemental Fields = Logical False",
+            "  Impose Body Force Potential = Logical True",
+            "  Impose Body Force Current = Logical True",
+            "  Linear System Symmetric = True",
+            *_iterative("CG", "None", 1e-8),
+        ]
+        return [coil, av, fields]
+    return [
+        [
             '  Equation = "Heat Equation"',
             '  Procedure = "HeatSolve" "HeatSolver"',
             "  Variable = Temperature",
             *DIRECT,
         ]
-    return out + ["End", ""]
+    ]
 
 
 def _boundary(index: int, name: str, features: list[Feature], mesh: Mesh) -> list[str]:
@@ -230,6 +305,11 @@ def _boundary(index: int, name: str, features: list[Feature], mesh: Mesh) -> lis
             out.append("  Potential = 0")
         elif f.type == "surface_charge":
             out.append(f"  Surface Charge Density = {v['rho_s']:.10g}")
+        elif f.type in ("coil_start", "coil_end"):
+            flag = "Coil Start" if f.type == "coil_start" else "Coil End"
+            out += [f"  {flag} = Logical True", "  AV {e} = Real 0", "  AV = Real 0"]
+        elif f.type == "magnetic_insulation":
+            out.append("  AV {e} = Real 0")  # flux stays tangential to the boundary
     return out + ["End", ""]
 
 

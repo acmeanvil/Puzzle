@@ -21,6 +21,8 @@ ELECTROMAGNETIC_FEATURES = frozenset(
         "surface_charge",
         "current_density",
         "coil_current",
+        "coil_start",
+        "coil_end",
         "magnetic_insulation",
     }
 )

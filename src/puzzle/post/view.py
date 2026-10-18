@@ -20,6 +20,8 @@ DEFAULT_SCALAR = {
     "strain": "strain",
     "velocity": "velocity_magnitude",
     "pressure": "pressure",
+    "electric_potential": "electric_potential",
+    "magnetic_flux_density": "magnetic_flux_density_magnitude",
 }
 
 

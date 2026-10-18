@@ -13,6 +13,7 @@ from puzzle.results.model import Field, Results, StepResult
 
 STRESS = ["xx", "yy", "zz", "xy", "yz", "xz"]  # Elmer's names; Puzzle calls the last "zx"
 ENERGY_LINE = re.compile(r"Tot\. Electric Energy\s*:\s*([-+0-9.Ee]+)")
+MAGNETIC_ENERGY_LINE = re.compile(r"ElectroMagnetic Field Energy:\s*([-+0-9.Ee]+)")
 EIGEN_LINE = re.compile(r"EigenSolve:\s+(\d+):\s+([-+0-9.Ee]+)\s+([-+0-9.Ee]+)")
 
 
@@ -93,15 +94,24 @@ def read_results(vtu: Path, node_ids: np.ndarray, log_text: str) -> Results:
         step.fields["temperature"] = field("temperature", [""], data["temperature"])
     if "potential" in data:
         step.fields["electric_potential"] = field("electric_potential", [""], data["potential"])
+    if "magnetic flux density" in data:
+        b = data["magnetic flux density"]
+        step.fields["magnetic_flux_density"] = field("magnetic_flux_density", ["x", "y", "z"], b)
+    if "current density" in data:
+        j = data["current density"]
+        step.fields["current_density"] = field("current_density", ["x", "y", "z"], j)
     if "electric field" in data:
         step.fields["electric_field"] = field(
             "electric_field", ["x", "y", "z"], data["electric field"]
         )
-    energy = ENERGY_LINE.findall(log_text)
-    if energy:
-        # A whole-model value: stored as a one-entry "global" field.
-        step.fields["electric_energy"] = Field(
-            "electric_energy", "global", [""], np.array([0]), np.array([[float(energy[-1])]])
-        )
+    # Whole-model values: each stored as a one-entry "global" field.
+    for name, pattern in (
+        ("electric_energy", ENERGY_LINE),
+        ("magnetic_energy", MAGNETIC_ENERGY_LINE),
+    ):
+        energy = pattern.findall(log_text)
+        if energy:
+            value = np.array([[float(energy[-1])]])
+            step.fields[name] = Field(name, "global", [""], np.array([0]), value)
     results.steps.append(step)
     return results

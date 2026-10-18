@@ -153,6 +153,9 @@ def _physical_groups(comp, geometries, references, found, warnings) -> None:
             gmsh.model.addPhysicalGroup(dim, [t for d, t in dimtags if d == dim], name=group_name)
 
 
+LISTS = {1: "CurvesList", 2: "SurfacesList", 3: "VolumesList"}  # Constant field lists
+
+
 def _sizes(recipe: MeshRecipe, comp: Component, found, warnings) -> None:
     gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 12)
     if recipe.global_size:
@@ -162,6 +165,7 @@ def _sizes(recipe: MeshRecipe, comp: Component, found, warnings) -> None:
         for dim, tag in gmsh.model.getPhysicalGroups()
         for name in [gmsh.model.getPhysicalName(dim, tag)]
     }
+    fields = []
     for name, size in recipe.local_sizes.items():
         if name not in groups:
             warnings.append(f"local size on unknown selection '{name}' ignored")
@@ -172,13 +176,19 @@ def _sizes(recipe: MeshRecipe, comp: Component, found, warnings) -> None:
             for d, t in gmsh.model.getPhysicalGroups(dim)
             if gmsh.model.getPhysicalName(d, t) == name
         )
-        entities = [(dim, e) for e in gmsh.model.getEntitiesForPhysicalGroup(dim, tag)]
-        points = (
-            entities
-            if dim == 0
-            else gmsh.model.getBoundary(entities, combined=False, recursive=True)
-        )
-        gmsh.model.mesh.setSize(sorted(set(points)), size.to_si())
+        entities = [int(e) for e in gmsh.model.getEntitiesForPhysicalGroup(dim, tag)]
+        if dim == 0:
+            gmsh.model.mesh.setSize([(0, e) for e in entities], size.to_si())
+            continue
+        # A size field covers the whole selection (and its boundary), not just its corners.
+        field = gmsh.model.mesh.field.add("Constant")
+        gmsh.model.mesh.field.setNumbers(field, LISTS[dim], entities)
+        gmsh.model.mesh.field.setNumber(field, "VIn", size.to_si())
+        fields.append(field)
+    if fields:
+        smallest = gmsh.model.mesh.field.add("Min")
+        gmsh.model.mesh.field.setNumbers(smallest, "FieldsList", fields)
+        gmsh.model.mesh.field.setAsBackgroundMesh(smallest)
 
 
 def _min_quality() -> float:

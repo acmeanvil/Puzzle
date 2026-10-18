@@ -116,6 +116,13 @@ def test_first_order_and_local_refinement(plate_step, tmp_path):
     hole = lambda r: len(r.mesh.groups["Plate/Hole"].node_ids)  # noqa: E731
     assert hole(refined) > 3 * hole(base)
 
+    # A body size fills the volume, not just the body's corners.
+    filled, comp = _plate_project(
+        plate_step, element_order=1, local_sizes={"Plate": Quantity(value=1, unit="mm")}
+    )
+    body = generate_mesh(filled, comp.id, plate_step.parent, tmp_path / "c")
+    assert body.mesh.element_counts()["tet4"] > 5 * base.mesh.element_counts()["tet4"]
+
 
 def test_placement_moves_the_part_and_keeps_selections(plate_step, tmp_path):
     project, comp = _plate_project(plate_step)
