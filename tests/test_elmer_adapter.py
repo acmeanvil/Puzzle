@@ -132,3 +132,36 @@ def test_transient_heat_sif(tmp_path):
     assert "Timestep Intervals(1) = 6" in text and "Exec Solver = After Timestep" in text
     times = (sif.parent / "mesh" / "puzzle-times.txt").read_text().split()
     assert [float(t) for t in times] == [5, 10, 15, 20, 25, 30]
+
+
+def test_electrostatics_sif(tmp_path):
+    from puzzle.model import Material
+
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    stepfile = write_bar_step(tmp_path / "bar.step")
+    ground = Feature(type="ground", selection="Bar/Root")
+    live = Feature(
+        type="electric_potential", selection="Bar/Tip", values={"V": Quantity(value=5, unit="kV")}
+    )
+    project, comp = bar_project(
+        stepfile, [Physics(type="electrostatics", features=[ground, live])], mesh_size_mm=5
+    )
+    project.of_type(Material)[0].properties["relative_permittivity"] = Quantity(value=4.5)
+    study = project.add(
+        Study(name="e", component=comp.id, solver="elmer", steps=[SolveStep(type="stationary")])
+    )
+    mesh = generate_mesh(project, comp.id, tmp_path, tmp_path / "m").mesh
+    text = ElmerAdapter().write_input(project, study, mesh, tmp_path / "case").read_text()
+    assert '"StatElecSolve" "StatElecSolver"' in text and "Calculate Electric Energy = True" in text
+    assert (
+        "Relative Permittivity = 4.5" in text
+        and "Permittivity Of Vacuum = 8.8541878128e-12" in text
+    )
+    assert "Potential = 0" in text and "Potential = 5000" in text
+
+
+def test_reader_picks_up_energy():
+    vtu_log = "StatElecSolve: Tot. Electric Energy  :   1.2345E-07\n"
+    from puzzle.adapters.elmer.output import ENERGY_LINE
+
+    assert float(ENERGY_LINE.findall(vtu_log)[-1]) == pytest.approx(1.2345e-7)

@@ -242,6 +242,11 @@ def _summarise(results) -> None:
         if "pressure" in step.fields:
             p = step.fields["pressure"].values
             parts.append(f"pressure {p.min():.4g} to {p.max():.4g} Pa")
+        if "electric_potential" in step.fields:
+            v = step.fields["electric_potential"].values
+            parts.append(f"potential {v.min():.4g} to {v.max():.4g} V")
+        if "electric_energy" in step.fields:
+            parts.append(f"stored energy {step.fields['electric_energy'].values[0, 0]:.4g} J")
         if "temperature" in step.fields:
             t = step.fields["temperature"].values
             parts.append(f"temperature {t.min():.5g} to {t.max():.5g} K")

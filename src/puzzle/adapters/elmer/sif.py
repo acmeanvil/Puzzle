@@ -3,7 +3,7 @@
 Feature values follow the same names as the CalculiX adapter: displacement x/y/z,
 force x/y/z (total, applied as a uniform traction), pressure p (positive pushes into
 the surface), temperature T, heat_flux q (positive into the body), convection h and
-T_inf. Everything is SI.
+T_inf, electric_potential V, ground, surface_charge rho_s (C/m^2). Everything is SI.
 """
 
 from __future__ import annotations
@@ -23,6 +23,8 @@ from puzzle.mesh.mesh import Mesh
 from puzzle.model.schema import Component, Feature, Material, Project, Study
 
 MESH_DIR = "mesh"
+EPSILON_0 = 8.8541878128e-12  # F/m, CODATA 2018
+ELECTROSTATIC = {"electric_potential", "ground", "surface_charge"}
 OUTPUT = "case"
 TIMES = "puzzle-times.txt"  # output time of each case_t*.vtu, in order
 ROOM_K = 293.15
@@ -36,20 +38,25 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> tup
         raise InputError("the Elmer adapter runs studies with exactly one solve step for now")
     step = steps[0]
     solved = set(step.physics) or {p.type for p in comp.physics}
-    if solved not in ({"solid_mechanics"}, {"heat_transfer"}):
-        raise InputError(
-            "the Elmer adapter solves solid_mechanics or heat_transfer alone for now, "
-            f"not {sorted(solved)}"
-        )
     allowed = {
         "solid_mechanics": ("stationary", "modal"),
         "heat_transfer": ("stationary", "transient"),
+        "electrostatics": ("stationary",),
     }
+    if len(solved) != 1 or next(iter(solved)) not in allowed:
+        raise InputError(
+            f"the Elmer adapter solves one of {sorted(allowed)} at a time for now, "
+            f"not {sorted(solved)}"
+        )
     if step.type not in allowed[next(iter(solved))]:
         raise InputError(f"the Elmer adapter does not run {step.type} {sorted(solved)} steps yet")
     transient = step.type == "transient"
 
-    wanted = STRUCTURAL if "solid_mechanics" in solved else THERMAL
+    wanted = {
+        "solid_mechanics": STRUCTURAL,
+        "heat_transfer": THERMAL,
+        "electrostatics": ELECTROSTATIC,
+    }[next(iter(solved))]
     features = [
         f for ph in comp.physics if ph.type in solved for f in ph.features if f.type in wanted
     ]
@@ -75,6 +82,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> tup
         "",
         "Constants",
         "  Stefan Boltzmann = 5.670374419e-08",
+        f"  Permittivity Of Vacuum = {EPSILON_0}",
         "End",
         "",
     ]
@@ -142,6 +150,9 @@ def _material(index: int, m: Material, solved: set[str]) -> list[str]:
         out.append(f"  Heat Conductivity = {k:.10g}")
         if "specific_heat" in p:
             out.append(f"  Heat Capacity = {p['specific_heat']:.10g}")
+    if "electrostatics" in solved:
+        (eps_r,) = need("relative_permittivity")
+        out.append(f"  Relative Permittivity = {eps_r:.10g}")
     return out + ["End", ""]
 
 
@@ -161,6 +172,16 @@ def _solver(step, solved: set[str]) -> list[str]:
             ]
         else:
             out.append("  Calculate Stresses = True")
+    elif solved == {"electrostatics"}:
+        out = [
+            "Solver 1",
+            '  Equation = "Stat Elec Solver"',
+            '  Procedure = "StatElecSolve" "StatElecSolver"',
+            "  Variable = Potential",
+            "  Calculate Electric Field = True",
+            "  Calculate Electric Energy = True",
+            *DIRECT,
+        ]
     else:
         out = [
             "Solver 1",
@@ -203,6 +224,12 @@ def _boundary(index: int, name: str, features: list[Feature], mesh: Mesh) -> lis
                 f"  Heat Transfer Coefficient = {v['h']:.10g}",
                 f"  External Temperature = {v['T_inf']:.10g}",
             ]
+        elif f.type == "electric_potential":
+            out.append(f"  Potential = {v['V']:.10g}")
+        elif f.type == "ground":
+            out.append("  Potential = 0")
+        elif f.type == "surface_charge":
+            out.append(f"  Surface Charge Density = {v['rho_s']:.10g}")
     return out + ["End", ""]
 
 
