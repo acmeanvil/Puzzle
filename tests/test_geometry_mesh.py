@@ -242,3 +242,50 @@ def test_meshing_from_short_lived_threads(tmp_path):
     # In a subprocess: the failure mode is a segfault.
     done = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
     assert done.returncode == 0 and done.stdout.strip().endswith("ok"), done.stderr[-2000:]
+
+
+def test_identical_touching_parts_keep_their_own_faces(tmp_path):
+    """Two copies of one box, end to end: each part's end face is its own, though the
+    two faces have the same kind, area and centre."""
+    with gmsh_session("half"):
+        gmsh.model.occ.addBox(0, 0, 0, 0.1, 0.01, 0.01)
+        gmsh.model.occ.synchronize()
+        gmsh.write(str(tmp_path / "half.step"))
+    model = import_step(tmp_path / "half.step")
+    project = Project(name="halves")
+    geo = project.add(
+        Geometry(
+            name="Half",
+            source="half.step",
+            selections=[
+                NamedSelection(name="Body", entity="body", members=["body-1"]),
+                NamedSelection(name="Start", entity="face", members=model.faces_on_plane("x", 0)),
+                NamedSelection(name="End", entity="face", members=model.faces_on_plane("x", 0.1)),
+            ],
+        )
+    )
+    recipe = project.add(MeshRecipe(name="m", global_size=Quantity(value=3, unit="mm")))
+    comp = project.add(
+        Component(
+            name="c",
+            parts=[
+                PartInstance(name="Left", geometry=geo.id),
+                PartInstance(name="Right", geometry=geo.id, translation=(0.1, 0.0, 0.0)),
+            ],
+            mesh=recipe.id,
+            contacts=[
+                Contact(
+                    name="j",
+                    type="bonded",
+                    source="Right/Start",
+                    target="Left/End",
+                    meshing="nonconformal",
+                )
+            ],
+        )
+    )
+    mesh = generate_mesh(project, comp.id, tmp_path, tmp_path / "m").mesh
+    left, right = (mesh.groups[g].node_ids for g in ("Left/End", "Right/Start"))
+    assert len(np.intersect1d(left, right)) == 0
+    assert np.allclose(mesh.node_coords(right)[:, 0], 0.1)
+    assert np.allclose(mesh.node_coords(left)[:, 0], 0.1)

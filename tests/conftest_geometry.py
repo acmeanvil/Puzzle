@@ -18,6 +18,8 @@ from puzzle.model import (
     Physics,
     Project,
     Quantity,
+    SolveStep,
+    Study,
 )
 
 BAR = (0.2, 0.01, 0.01)  # L, b, h in metres
@@ -67,3 +69,59 @@ def bar_project(
         )
     )
     return project, comp
+
+
+HALF = 0.1  # the split bar's half length; its section is BAR's
+
+
+def _half(path):
+    with gmsh_session("half"):
+        gmsh.model.occ.addBox(0, 0, 0, HALF, BAR[1], BAR[2])
+        gmsh.model.occ.synchronize()
+        gmsh.write(str(path))
+    model = import_step(path)
+    return [
+        NamedSelection(name="Body", entity="body", members=["body-1"]),
+        NamedSelection(name="Start", entity="face", members=model.faces_on_plane("x", 0.0)),
+        NamedSelection(name="End", entity="face", members=model.faces_on_plane("x", HALF)),
+        NamedSelection(name="Side", entity="face", members=model.faces_on_plane("y", 0.0)),
+        NamedSelection(name="Bottom", entity="face", members=model.faces_on_plane("z", 0.0)),
+    ]
+
+
+def split_bar_project(
+    tmp_path, solver, features, contact, physics="solid_mechanics", settings=None
+):
+    """Two 100 mm halves of the steel bar end to end, meshed 2.5 and 1.6 mm, joined by
+    `contact` (source Right/Start, target Left/End)."""
+    selections = _half(tmp_path / "half.step")
+    p = Project(name="split bar")
+    geo = p.add(Geometry(name="Half", source="half.step", selections=selections))
+    steel = add_library_material(p, "structural_steel")
+    mesh = p.add(
+        MeshRecipe(
+            name="Unmatched",
+            global_size=Quantity(value=2.5, unit="mm"),
+            local_sizes={"Right/Body": Quantity(value=1.6, unit="mm")},
+        )
+    )
+    comp = p.add(
+        Component(
+            name="Split bar",
+            parts=[
+                PartInstance(name="Left", geometry=geo.id),
+                PartInstance(name="Right", geometry=geo.id, translation=(HALF, 0.0, 0.0)),
+            ],
+            mesh=mesh.id,
+            materials=[
+                MaterialAssignment(material=steel.id, selection="Left/Body"),
+                MaterialAssignment(material=steel.id, selection="Right/Body"),
+            ],
+            contacts=[contact],
+            physics=[Physics(type=physics, features=features, settings=settings or {})],
+        )
+    )
+    study = p.add(
+        Study(name="Load", component=comp.id, solver=solver, steps=[SolveStep(type="stationary")])
+    )
+    return p, study

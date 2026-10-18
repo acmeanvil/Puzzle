@@ -74,6 +74,21 @@ def time_settings(step) -> tuple[float, float, int]:
     return dt, end, max(1, round(end / dt))
 
 
+def check_contacts(component, implemented: set[str], solver: str) -> None:
+    """Refuse contacts this adapter doesn't write yet.
+
+    Conformal bonded contacts need nothing from a solver (the parts share nodes), so
+    they are always accepted. Anything else unwritten would leave the parts unconnected.
+    """
+    for c in component.contacts:
+        if c.capability != "bonded_conformal" and c.capability not in implemented:
+            raise InputError(
+                f"the {solver} adapter does not write {c.capability} contact ('{c.name}') yet",
+                code="unsupported",
+                path=c.name,
+            )
+
+
 TIME_SCHEMES = ("backward_euler", "crank_nicolson", "bdf2", "theta")
 
 

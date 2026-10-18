@@ -17,6 +17,7 @@ from puzzle.adapters.common import (
     STRUCTURAL,
     THERMAL,
     InputError,
+    check_contacts,
     initial_temperature,
     surface_area,
     thermal_tables,
@@ -33,8 +34,12 @@ TABLES = {"displacement": 81, "stress": 82, "temperature": 83, "frequency": 84}
 FORMAT_R = "1PE18.10"
 
 
+CONTACTS = {"bonded_nonconformal"}
+
+
 def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Path:
     comp = project.get(study.component, Component)
+    check_contacts(comp, CONTACTS, "Code_Aster")
     steps = study.solve_steps()
     if len(steps) != 1:
         raise InputError("the Code_Aster adapter runs studies with exactly one solve step for now")
@@ -60,8 +65,18 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
         features = [f for f in features if f.type in ("fixed", "displacement")]
     if not comp.materials:
         raise InputError(f"component '{comp.name}' has no material assignments")
+    ties = [c for c in comp.contacts if c.capability == "bonded_nonconformal"]
+    if ties and thermal:
+        raise InputError(
+            "Code_Aster ties nonconformal parts in structural studies only so far",
+            code="unsupported",
+        )
+    # A tie projects the source (slave) face's nodes into the target part's volume.
+    tie_groups = [g for c in ties for g in (c.source, c.target.split("/", 1)[0])]
     groups = list(
-        dict.fromkeys([a.selection for a in comp.materials] + [f.selection for f in features])
+        dict.fromkeys(
+            [a.selection for a in comp.materials] + [f.selection for f in features] + tie_groups
+        )
     )
     for g in groups:
         if g not in mesh.groups:
@@ -87,7 +102,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
             out.append(f"mat{i} = DEFI_MATERIAU({_material(m, thermal)})")
         assignments.append(f"_F(GROUP_MA='{names[a.selection]}', MATER=mat{i})")
     out.append(f"mater = AFFE_MATERIAU(MAILLAGE=mesh, AFFE=({', '.join(assignments)},))")
-    out.append(_loads(features, names, mesh, thermal))
+    out.append(_loads(features, names, mesh, thermal, ties))
 
     if thermal:
         out += [
@@ -229,8 +244,15 @@ def _ther_non_line(step, comp: Component) -> str:
     )
 
 
-def _loads(features: list[Feature], names: dict[str, str], mesh: Mesh, thermal: bool) -> str:
+def _loads(
+    features: list[Feature], names: dict[str, str], mesh: Mesh, thermal: bool, ties=()
+) -> str:
     imposed, face_force, pressure, temperature, flux, exchange = [], [], [], [], [], []
+    tied = [
+        f"_F(GROUP_MA_MAIT='{names[c.target.split('/', 1)[0]]}', "
+        f"GROUP_MA_ESCL='{names[c.source]}', TYPE_RACCORD='MASSIF')"
+        for c in ties
+    ]
     for f in features:
         g = names[f.selection]
         v = {k: q.to_si() for k, q in f.values.items()}
@@ -268,6 +290,7 @@ def _loads(features: list[Feature], names: dict[str, str], mesh: Mesh, thermal: 
         + kw("DDL_IMPO", imposed)
         + kw("FORCE_FACE", face_force)
         + kw("PRES_REP", pressure)
+        + kw("LIAISON_MAIL", tied)
         + ")"
     )
 

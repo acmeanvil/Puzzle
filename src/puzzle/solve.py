@@ -10,6 +10,7 @@ from pathlib import Path
 from puzzle.adapters import available_adapters
 from puzzle.errors import PuzzleError
 from puzzle.jobs import JobResult, run_job, runtime_for
+from puzzle.jobs.runner import log_tail
 from puzzle.mesh import MeshResult, generate_mesh
 from puzzle.mesh.mesh import Mesh
 from puzzle.model.schema import Project, Study
@@ -84,7 +85,7 @@ def run_study(
         adapter.command(input_file), workdir, runtime, on_output=on_output, timeout_s=timeout_s
     )
     if not job.ok:
-        tail = job.log.read_text().splitlines()[-20:]
+        tail = log_tail(job.log)
         raise StudyError(
             f"{study.solver} failed (exit {job.returncode}):\n" + "\n".join(tail),
             code="solver_failed",

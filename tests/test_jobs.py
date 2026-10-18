@@ -120,3 +120,15 @@ def test_native_runs_activate_the_solver_environment(tmp_path):
     assert env["CONDA_PREFIX"] == str(prefix.resolve())
     assert env["PATH"].split(os.pathsep)[0].startswith(str(prefix.resolve()))
     assert NativeRuntime().environment([str(tmp_path / "loose-binary")]) is None
+
+
+def test_a_flood_of_output_is_capped(tmp_path, native, monkeypatch):
+    """A solver printing a warning per node must not fill the disk or memory."""
+    from puzzle.jobs import runner
+
+    monkeypatch.setattr(runner, "MAX_LOG_BYTES", 10_000)
+    argv = _script(tmp_path, "for i in range(200000):\n    print('WARNING zero coefficient', i)\n")
+    result = run_job(argv, tmp_path, native)
+    assert result.ok
+    assert result.log.stat().st_size < 20_000
+    assert runner.log_tail(result.log)[-1].startswith("[puzzle: log truncated")

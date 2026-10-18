@@ -27,6 +27,7 @@ from puzzle.adapters.common import (
     THERMAL,
     FaceLookup,
     InputError,
+    check_contacts,
     initial_temperature,
     surface_blocks,
     thermal_tables,
@@ -59,6 +60,7 @@ def set_name(prefix: str, name: str) -> str:
 
 def write_inp(project: Project, study: Study, mesh: Mesh) -> str:
     comp = project.get(study.component, Component)
+    check_contacts(comp, CONTACTS, "CalculiX")
     volume_blocks = [b for b in mesh.blocks if b.dim == 3]
     for b in volume_blocks:
         if b.element not in ELEMENTS:
@@ -90,6 +92,7 @@ def write_inp(project: Project, study: Study, mesh: Mesh) -> str:
             out += _chunks(ids)
 
     out += _materials(project, comp, mesh)
+    out += _contacts(comp, mesh, faces)
 
     solve_steps = study.solve_steps()
     if not solve_steps:
@@ -272,6 +275,29 @@ def _features(features: list[Feature], mesh: Mesh, faces: FaceLookup, op: str) -
     ):
         if rows:
             out += [card + op] + rows
+    return out
+
+
+CONTACTS = {"bonded_nonconformal"}
+
+
+def _contacts(comp: Component, mesh: Mesh, faces: FaceLookup) -> list[str]:
+    """Model-level contact definitions. A nonconformal bond is a *TIE: the source
+    (slave) surface's nodes follow the target (master) surface's element faces."""
+    out: list[str] = []
+    for i, c in enumerate(comp.contacts, start=1):
+        if c.capability != "bonded_nonconformal":
+            continue
+        names = []
+        for role, selection in (("SLAVE", c.source), ("MASTER", c.target)):
+            group = mesh.groups.get(selection)
+            if group is None:
+                raise InputError(f"contact '{c.name}': no selection '{selection}' in the mesh")
+            name = set_name(f"S{i}{role[0]}", selection)
+            out.append(f"*SURFACE, NAME={name}, TYPE=ELEMENT")
+            out += [f"{e}, S{n}" for e, n in _element_faces(group, mesh, faces)]
+            names.append(name)
+        out += [f"*TIE, NAME={set_name('T', c.name)}", ", ".join(names)]
     return out
 
 

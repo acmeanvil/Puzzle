@@ -18,6 +18,7 @@ from puzzle.adapters.common import (
     STRUCTURAL,
     THERMAL,
     InputError,
+    check_contacts,
     initial_temperature,
     surface_area,
     thermal_tables,
@@ -51,6 +52,7 @@ DIRECT = ["  Linear System Solver = Direct", "  Linear System Direct Method = Um
 
 def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> tuple[Path, ElmerMesh]:
     comp = project.get(study.component, Component)
+    check_contacts(comp, set(), "Elmer")
     steps = study.solve_steps()
     if len(steps) != 1:
         raise InputError("the Elmer adapter runs studies with exactly one solve step for now")

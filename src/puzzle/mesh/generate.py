@@ -70,20 +70,22 @@ def generate_mesh(
 
         _fragment_conformal(comp, volumes)
 
-        everything = gmsh.model.getEntities()
+        all_volumes = gmsh.model.getEntities(3)
         found: dict[str, dict[str, tuple[int, int]]] = {}
         for part in comp.parts:
             ref = references[part.name]
-            found[part.name] = match(
-                ref.entities,
-                everything,
-                translation=part.translation,
-                rotation=part.rotation,
-                tol=1e-5 * ref.size,
-            )
-            missing = [e.name for e in ref.of_dim(3) if e.name not in found[part.name]]
+            placement = {
+                "translation": part.translation,
+                "rotation": part.rotation,
+                "tol": 1e-5 * ref.size,
+            }
+            bodies = match(ref.of_dim(3), all_volumes, **placement)
+            missing = [e.name for e in ref.of_dim(3) if e.name not in bodies]
             if missing:
                 raise MeshError(f"part '{part.name}': bodies {missing} were lost while placing it")
+            # Faces, edges and vertices only among the part's own bodies' boundaries: two
+            # parts can have identical faces in the same place (two halves touching).
+            found[part.name] = match(ref.entities, _closure(list(bodies.values())), **placement)
 
         _physical_groups(comp, geometries, references, found, warnings)
         _sizes(recipe, comp, found, warnings)
@@ -109,6 +111,15 @@ def generate_mesh(
         mesh = _extract()
 
     return MeshResult(mesh=mesh, path=path, min_quality=min_quality, warnings=warnings)
+
+
+def _closure(volumes: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """The volumes with every face, edge and vertex on their boundaries."""
+    out, level = list(volumes), list(volumes)
+    while level and level[0][0] > 0:
+        level = sorted(set(gmsh.model.getBoundary(level, combined=False, oriented=False)))
+        out += level
+    return sorted(set(out))
 
 
 def _fragment_conformal(comp: Component, volumes: dict[str, list[tuple[int, int]]]) -> None:

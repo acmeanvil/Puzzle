@@ -15,7 +15,7 @@ from pathlib import Path
 import numpy as np
 
 from puzzle.adapters.code_saturne.ensight import read_case, read_variable
-from puzzle.adapters.common import FLUID, InputError, match_points
+from puzzle.adapters.common import FLUID, InputError, check_contacts, match_points
 from puzzle.mesh.med import write_med
 from puzzle.mesh.mesh import Mesh
 from puzzle.model.schema import Component, Material, Project, Study
@@ -34,6 +34,7 @@ FIELDS = {"Velocity": ("velocity", ["x", "y", "z"]), "Pressure": ("pressure", ["
 
 def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Path:
     comp = project.get(study.component, Component)
+    check_contacts(comp, set(), "Code_Saturne")
     steps = study.solve_steps()
     if len(steps) != 1 or steps[0].type != "stationary":
         raise InputError("the Code_Saturne adapter runs one stationary solve step for now")

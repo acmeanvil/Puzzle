@@ -15,6 +15,7 @@ from puzzle.adapters.common import (
     STRUCTURAL,
     THERMAL,
     InputError,
+    check_contacts,
     initial_temperature,
     match_points,
     surface_area,
@@ -58,6 +59,7 @@ def _has_dolfinx(python: Path) -> bool:
 
 def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Path:
     comp = project.get(study.component, Component)
+    check_contacts(comp, set(), "FEniCSx")
     steps = study.solve_steps()
     if len(steps) != 1:
         raise InputError("the FEniCSx adapter runs studies with exactly one solve step for now")
