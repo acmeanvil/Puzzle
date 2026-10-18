@@ -50,7 +50,8 @@ Solver tests in `tests/integration/` skip when the solver isn't available. Rende
 | CalculiX | static, modal, steady heat; fixed, displacement, force, pressure, temperature, heat flux, convection | cantilever, modal, conduction, LE1 | native (pixi `calculix`) or Docker |
 | Elmer | one solve step: static, modal (solid) or steady heat; own mesh files, ASCII .vtu output | same set; agrees with CalculiX to 4 digits, LE1 within 0.13% | Docker image (not on conda-forge yet) |
 | Code_Aster | one solve step: static, modal (solid) or steady heat; MED mesh via Gmsh with safe group names (G1, G2, ...); results as IMPR_TABLE CSVs | same set; LE1 +0.01% | native on linux-64/win-64 (pixi `code-aster`), Docker on macOS |
-| FEniCSx, Code_Saturne | capability matrix and stubs only | — | — |
+| FEniCSx | one solve step: static, modal (P2 elasticity, SLEPc shift-invert) or steady heat; fixed `study.py` + `case.json` + `mesh.msh`, results.npz mapped back by coordinates | same set; LE1 −0.11% | native (pixi `fenicsx`, found via PUZZLE_SOLVER_PATH or PUZZLE_FENICSX_PYTHON) |
+| Code_Saturne | capability matrix and stub only | — | — |
 
 Capability matrices also list planned capabilities; `write_input` refuses what isn't implemented yet. Run Elmer tests locally with Docker on PATH (`/Applications/Docker.app/Contents/Resources/bin`) after building `containers/elmer`.
 
@@ -67,6 +68,7 @@ Capability matrices also list planned capabilities; `write_input` refuses what i
 - **OCC pads bounding boxes** by ~1e-7 m. Plane tests need a tolerance of at least 1 µm.
 - **Entity names** (`face-3`) follow STEP file order; signatures (kind, measure, centre) re-find them after placement or fragmenting.
 - **Element node order:** Gmsh differs from CalculiX, Elmer and VTK for tet10 (last two edge nodes swap). Adapters own the reordering; shared face lookups live in `adapters/common.py`.
+- **FEniCSx `study.py`** runs inside the FEniCSx env and must not import puzzle. dolfinx 0.11 `LinearProblem` needs `petsc_options_prefix`; MUMPS is used only if PETSc has it.
 - **Code_Aster 18** needs `INCREMENT` even for steady `THER_LINEAIRE`; table numbers need `FORMAT_R` (default keeps 5 digits). Containers run as your uid with `HOME=/tmp` (run_aster needs a home).
 - **Elmer output** lands in the mesh directory (`mesh/case_t0001.vtu`). Points come in Elmer node order (no point ids); `GeometryIds` there is cell data. Eigenvalues (omega^2) are parsed from the solver log.
 - **CalculiX `.frd`** is fixed width (values can touch); match record tags on the first token. Modal block values are frequencies in Hz.

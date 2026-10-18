@@ -1,4 +1,4 @@
-"""FEniCSx adapter: generates a dolfinx Python script per study.
+"""FEniCSx adapter: a fixed dolfinx script (study.py) driven by a JSON case description.
 
 FEniCSx has two roles in Puzzle:
 
@@ -8,9 +8,11 @@ FEniCSx has two roles in Puzzle:
   shoot-out (ADR 0011). Magnetic fields use Nedelec (N1curl) edge elements;
   frequency-domain and wave problems need a complex-valued PETSc build.
 
-Built-in physics come from templates the adapter ships; each one claimed here
-needs a passing benchmark before release. Nonconformal (mortar) interfaces are not
-part of dolfinx, so only conformally meshed bonded interfaces are supported.
+Built-in physics live in study.py, which runs inside the FEniCSx environment;
+the adapter writes mesh.msh, case.json and a copy of the script, and reads back
+results.npz. Implemented so far: linear elasticity (static, modal) and steady heat.
+Nonconformal (mortar) interfaces are not part of dolfinx, so only conformally meshed
+bonded interfaces are supported.
 """
 
 from __future__ import annotations
@@ -25,6 +27,8 @@ from puzzle.adapters.base import (
     Capabilities,
     SolverAdapter,
 )
+from puzzle.adapters.common import InputError
+from puzzle.adapters.fenicsx.case import fenicsx_python, read_results, write_case
 from puzzle.mesh.mesh import Mesh
 from puzzle.model.schema import Project, Study
 from puzzle.results.model import Results
@@ -49,12 +53,16 @@ class FenicsxAdapter(SolverAdapter):
     )
 
     def write_input(self, project: Project, study: Study, mesh: Mesh, workdir: Path) -> Path:
-        raise NotImplementedError("Phase 3: render study.py from the physics templates or UFL form")
+        return write_case(project, study, mesh, workdir)
 
     def command(self, input_file: Path) -> list[str]:
-        return ["python3", input_file.name]
+        python = fenicsx_python()
+        if python is None:
+            raise InputError(
+                "no Python with dolfinx found; run `pixi install -e fenicsx` and put its bin "
+                "directory on PUZZLE_SOLVER_PATH, or set PUZZLE_FENICSX_PYTHON"
+            )
+        return [str(python), input_file.name]
 
     def read_results(self, input_file: Path) -> Results:
-        raise NotImplementedError(
-            "Phase 3: read the script's VTX/XDMF output into the results store"
-        )
+        return read_results(input_file.parent)

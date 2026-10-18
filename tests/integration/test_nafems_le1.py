@@ -11,6 +11,15 @@ from puzzle.post import component, sample
 from puzzle.project import load_project
 from puzzle.solve import run_study
 
+
+def _available(solver: str, executable: str | None) -> bool:
+    if solver == "fenicsx":
+        from puzzle.adapters.fenicsx.case import fenicsx_python
+
+        return fenicsx_python() is not None
+    return runtime_for(solver).available(executable)
+
+
 BENCHMARK = Path(__file__).parents[2] / "benchmarks" / "nafems_le1"
 
 
@@ -35,9 +44,14 @@ def test_committed_project_matches_the_builder(tmp_path):  # needs no solver
     [
         pytest.param(
             n,
-            marks=pytest.mark.skipif(not runtime_for(n).available(e), reason=f"{n} not available"),
+            marks=pytest.mark.skipif(not _available(n, e), reason=f"{n} not available"),
         )
-        for n, e in (("calculix", "ccx"), ("elmer", "ElmerSolver"), ("code_aster", "run_aster"))
+        for n, e in (
+            ("calculix", "ccx"),
+            ("elmer", "ElmerSolver"),
+            ("code_aster", "run_aster"),
+            ("fenicsx", None),
+        )
     ],
 )
 def test_le1_sigma_yy_at_d(tmp_path, solver):

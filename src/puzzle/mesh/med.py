@@ -1,4 +1,4 @@
-"""Write a solver-neutral mesh as MED (ADR 0005), through Gmsh's MED writer.
+"""Write a solver-neutral mesh as MED (ADR 0005) or another Gmsh format, through Gmsh.
 
 The mesh is rebuilt in Gmsh from its nodes, element blocks and groups, so no Gmsh
 file is needed. Group names can be renamed on the way out, because solvers such as
@@ -18,7 +18,8 @@ GMSH_TYPES = {name: code for code, name in ELEMENT_NAMES.items()}
 
 
 def write_med(mesh: Mesh, path: Path, names: dict[str, str] | None = None) -> None:
-    """Write `mesh` to `path`; `names` maps Puzzle group names to the names to write.
+    """Write `mesh` to `path` (format from the suffix: .med, .msh, ...); `names` maps
+    Puzzle group names to the names to write.
 
     Only the groups in `names` are written (all groups when it is None). Elements
     outside every written group are dropped, as with Gmsh's own MED export.
