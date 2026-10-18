@@ -3,7 +3,7 @@
     python study.py            (reads case.json and mesh.msh; writes results.npz)
 
 case.json says what to solve:
-    {"physics": "solid_mechanics" | "heat_transfer",
+    {"physics": "solid_mechanics" | "heat_transfer" | "electrostatics" | "magnetic_fields",
      "step": {"type": "stationary" | "modal" | "transient", "modes": 10,
               "time_step": 10.0, "steps": 60},          (transient heat only)
      "initial_temperature": 293.15,
@@ -14,7 +14,9 @@ Values are SI. Group names are Gmsh physical group names in mesh.msh.
 results.npz holds `coords` (one row per output node) and, as computed, `displacement`,
 `stress` (xx, yy, zz, xy, yz, zx), `temperature`, `frequencies` (Hz) and `modes`
 (mode x node x 3), `times` and `temperature_series` (step x node) for transients,
-plus `backend` (which linear algebra solved it).
+`potential`, `electric_field` and `electric_energy` (J); `magnetic_flux_density`,
+`current_density` and `magnetic_energy` (J); plus `backend` (which linear algebra
+solved it).
 
 Linear algebra: PETSc (MUMPS, SLEPc) where dolfinx was built with it; otherwise SciPy
 (SuperLU, ARPACK), e.g. conda-forge's Windows dolfinx, which has no PETSc.
@@ -52,7 +54,7 @@ def main() -> None:
         case = json.load(f)
     data = read_from_msh("mesh.msh", MPI.COMM_WORLD, 0, gdim=3)
     msh, cells, facets, groups = data.mesh, data.cell_tags, data.facet_tags, data.physical_groups
-    degree = msh.geometry.cmap.degree
+    degree = (msh.geometry.cmaps[0] if hasattr(msh.geometry, "cmaps") else msh.geometry.cmap).degree
     dx = ufl.Measure("dx", domain=msh, subdomain_data=cells)
     ds = ufl.Measure("ds", domain=msh, subdomain_data=facets)
 
@@ -72,10 +74,13 @@ def main() -> None:
         return f
 
     out: dict[str, np.ndarray] = {"backend": np.array(BACKEND)}
-    if case["physics"] == "solid_mechanics":
-        solve_solid(case, msh, degree, dx, ds, facets, tag, piecewise, out)
-    else:
-        solve_heat(case, msh, degree, dx, ds, facets, tag, piecewise, out)
+    solve = {
+        "solid_mechanics": solve_solid,
+        "heat_transfer": solve_heat,
+        "electrostatics": solve_electrostatics,
+        "magnetic_fields": solve_magnetostatics,
+    }[case["physics"]]
+    solve(case, msh, degree, dx, ds, facets, tag, piecewise, out)
     np.savez("results.npz", **out)
 
 
@@ -167,6 +172,21 @@ def eigenpairs(a, m, bcs, count: int) -> tuple[list[float], list[np.ndarray]]:
 
 def dirichlet(value, dofs, V) -> fem.DirichletBC:
     return fem.dirichletbc(np.asarray(value, dtype=np.float64), dofs, V)
+
+
+def project(expr, msh, degree, dx, name: str, size: int = 3, region=None) -> np.ndarray:
+    """L2 projection of a vector expression onto nodal Lagrange values (node x size).
+
+    `region` (a subdomain measure) limits where the expression is nonzero.
+    """
+    W = fem.functionspace(msh, ("Lagrange", degree, (size,)))
+    p, q = ufl.TrialFunction(W), ufl.TestFunction(W)
+    mass, rhs = ufl.inner(p, q) * dx, ufl.inner(expr, q) * (region or dx)
+    return solve_linear(mass, rhs, [], W, name, mass_matrix=True).x.array.reshape(-1, size)
+
+
+def integral(expr) -> float:
+    return MPI.COMM_WORLD.allreduce(fem.assemble_scalar(fem.form(expr)), op=MPI.SUM)
 
 
 # --- physics -----------------------------------------------------------------------
@@ -262,6 +282,89 @@ def solve_heat(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
         series.append(current.x.array.copy())
     out["times"] = dt * np.arange(1, steps + 1)
     out["temperature_series"] = np.asarray(series)
+
+
+EPSILON_0 = 8.8541878128e-12  # F/m, as the Elmer adapter
+MU_0 = 1.25663706212e-6  # H/m
+
+
+def solve_electrostatics(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
+    V = fem.functionspace(msh, ("Lagrange", degree))
+    eps = EPSILON_0 * piecewise("relative_permittivity")
+    phi, v = ufl.TrialFunction(V), ufl.TestFunction(V)
+    a = eps * ufl.inner(ufl.grad(phi), ufl.grad(v)) * dx
+    L = fem.Constant(msh, 0.0) * v * dx
+    bcs = []
+    for f in case["features"]:
+        where, vals = facets.find(tag(f["group"])), f.get("values", {})
+        dofs = fem.locate_dofs_topological(V, 2, where)
+        if f["type"] == "electric_potential":
+            bcs.append(dirichlet(vals["V"], dofs, V))
+        elif f["type"] == "ground":
+            bcs.append(dirichlet(0.0, dofs, V))
+        elif f["type"] == "surface_charge":
+            L += vals["rho_s"] * v * ds(tag(f["group"]))
+    uh = solve_linear(a, L, bcs, V, "phi")
+    out["coords"] = V.tabulate_dof_coordinates()
+    out["potential"] = uh.x.array.reshape(-1, 1)
+    out["electric_field"] = project(-ufl.grad(uh), msh, degree, dx, "e")
+    out["electric_energy"] = np.array(
+        integral(0.5 * eps * ufl.inner(ufl.grad(uh), ufl.grad(uh)) * dx)
+    )
+
+
+def solve_magnetostatics(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
+    """Steady magnetic field of one coil, in the vector potential A (Nedelec edges).
+
+    As Elmer's CoilSolver: a conduction solve in the coil body between its terminals
+    gives the current's path; it is scaled to the requested total current. Then
+    curl(1/mu curl A) = J with n x A = 0 on the terminals and insulated faces.
+    """
+    coil = next(f for f in case["features"] if f["type"] == "coil_current")
+    current = coil["values"]["I"]
+    sigma, mu = piecewise("electrical_conductivity"), MU_0 * piecewise("relative_permeability")
+
+    dc = dx(tag(coil["group"]))  # the coil body
+    S = fem.functionspace(msh, ("Lagrange", 1))
+    w, z = ufl.TrialFunction(S), ufl.TestFunction(S)
+    reference = float(np.max(sigma.x.array)) or 1.0
+    # A tiny conductance outside the coil keeps the system regular (~1e-12 of the current).
+    a_v = sigma * ufl.inner(ufl.grad(w), ufl.grad(z)) * dc
+    a_v += 1e-12 * reference * ufl.inner(ufl.grad(w), ufl.grad(z)) * dx
+    terminals = {"coil_start": 1.0, "coil_end": 0.0}
+    bcs_v = [
+        dirichlet(
+            terminals[f["type"]], fem.locate_dofs_topological(S, 2, facets.find(tag(f["group"]))), S
+        )
+        for f in case["features"]
+        if f["type"] in terminals
+    ]
+    if len(bcs_v) != 2:
+        raise SystemExit("the coil needs one coil_start and one coil_end face group")
+    potential = solve_linear(a_v, fem.Constant(msh, 0.0) * z * dx, bcs_v, S, "coil")
+    # With a unit potential drop, the current equals the power drawn.
+    unit_current = integral(sigma * ufl.inner(ufl.grad(potential), ufl.grad(potential)) * dc)
+    J = -(current / unit_current) * sigma * ufl.grad(potential)  # in the coil; zero elsewhere
+
+    N = fem.functionspace(msh, ("N1curl", degree))
+    A, q = ufl.TrialFunction(N), ufl.TestFunction(N)
+    # The curl-curl operator is singular on gradients; a small mass term picks one gauge.
+    size = np.ptp(msh.geometry.x, axis=0).max()
+    gauge = 1e-6 / (MU_0 * size**2)
+    a = (1 / mu) * ufl.inner(ufl.curl(A), ufl.curl(q)) * dx + gauge * ufl.inner(A, q) * dx
+    L = ufl.inner(J, q) * dc
+    zero = fem.Function(N)
+    bcs = [
+        fem.dirichletbc(zero, fem.locate_dofs_topological(N, 2, facets.find(tag(f["group"]))))
+        for f in case["features"]
+        if f["type"] in ("coil_start", "coil_end", "magnetic_insulation")
+    ]
+    Ah = solve_linear(a, L, bcs, N, "a")
+    B = ufl.curl(Ah)
+    out["coords"] = fem.functionspace(msh, ("Lagrange", degree)).tabulate_dof_coordinates()
+    out["magnetic_flux_density"] = project(B, msh, degree, dx, "b")
+    out["current_density"] = project(J, msh, degree, dx, "j", region=dc)
+    out["magnetic_energy"] = np.array(integral(0.5 / mu * ufl.inner(B, B) * dx))
 
 
 if __name__ == "__main__":

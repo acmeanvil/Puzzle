@@ -10,32 +10,14 @@ import math
 import numpy as np
 import pytest
 from conftest_geometry import BAR, bar_project, write_bar_step
+from solvers import over
 
 from puzzle.jobs import runtime_for
 from puzzle.materials import library_material
 from puzzle.model import Feature, Physics, Quantity, SolveStep, Study
 from puzzle.solve import run_study
 
-
-def _available(solver: str, executable: str | None) -> bool:
-    if solver == "fenicsx":
-        from puzzle.adapters.fenicsx.case import fenicsx_python
-
-        return fenicsx_python() is not None
-    return runtime_for(solver).available(executable)
-
-
-SOLVERS = {"calculix": "ccx", "elmer": "ElmerSolver", "code_aster": "run_aster", "fenicsx": None}
-solver = pytest.mark.parametrize(
-    "solver",
-    [
-        pytest.param(
-            name,
-            marks=pytest.mark.skipif(not _available(name, exe), reason=f"{name} not available"),
-        )
-        for name, exe in SOLVERS.items()
-    ],
-)
+solver = over("calculix", "elmer", "code_aster", "fenicsx")
 
 STEEL = library_material("structural_steel").properties
 E, NU, RHO = (STEEL[k].to_si() for k in ("youngs_modulus", "poissons_ratio", "density"))

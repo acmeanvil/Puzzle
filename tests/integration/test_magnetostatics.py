@@ -9,9 +9,9 @@ Wire and air are separate parts joined by a conformal bonded interface.
 import gmsh
 import numpy as np
 import pytest
+from solvers import over
 
 from puzzle.geometry import gmsh_session, import_step
-from puzzle.jobs import runtime_for
 from puzzle.materials import add_library_material
 from puzzle.model import (
     Component,
@@ -34,17 +34,7 @@ MU0 = 1.25663706212e-6
 A, R, L = 0.001, 0.005, 0.01  # m: wire radius, air tube radius, length
 CURRENT = 100.0  # A
 
-SOLVERS = {"elmer": "ElmerSolver"}
-solver = pytest.mark.parametrize(
-    "solver",
-    [
-        pytest.param(
-            n,
-            marks=pytest.mark.skipif(not runtime_for(n).available(e), reason=f"{n} not available"),
-        )
-        for n, e in SOLVERS.items()
-    ],
-)
+solver = over("elmer", "fenicsx")
 
 
 def _cylinder(path, radius, bore=None):

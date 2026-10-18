@@ -10,6 +10,8 @@ from pathlib import Path
 import numpy as np
 
 from puzzle.adapters.common import (
+    ELECTROSTATIC,
+    MAGNETIC,
     STRUCTURAL,
     THERMAL,
     InputError,
@@ -59,20 +61,33 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
         raise InputError("the FEniCSx adapter runs studies with exactly one solve step for now")
     step = steps[0]
     solved = set(step.physics) or {p.type for p in comp.physics}
-    if solved not in ({"solid_mechanics"}, {"heat_transfer"}):
+    allowed = {
+        "solid_mechanics": ("stationary", "modal"),
+        "heat_transfer": ("stationary", "transient"),
+        "electrostatics": ("stationary",),
+        "magnetic_fields": ("stationary",),
+    }
+    if len(solved) != 1 or next(iter(solved)) not in allowed:
         raise InputError(
-            "the FEniCSx adapter solves solid_mechanics or heat_transfer alone for now, "
+            f"the FEniCSx adapter solves one of {sorted(allowed)} at a time for now, "
             f"not {sorted(solved)}"
         )
     physics = solved.pop()
-    allowed = ("stationary", "transient") if physics == "heat_transfer" else ("stationary", "modal")
-    if step.type not in allowed:
+    if step.type not in allowed[physics]:
         raise InputError(f"the FEniCSx adapter does not run {step.type} {physics} steps yet")
 
-    wanted = STRUCTURAL if physics == "solid_mechanics" else THERMAL
+    wanted = {
+        "solid_mechanics": STRUCTURAL,
+        "heat_transfer": THERMAL,
+        "electrostatics": ELECTROSTATIC,
+        "magnetic_fields": MAGNETIC,
+    }[physics]
     features = [
         f for ph in comp.physics if ph.type == physics for f in ph.features if f.type in wanted
     ]
+    coils = [f for f in features if f.type == "coil_current"]
+    if physics == "magnetic_fields" and len(coils) != 1:
+        raise InputError("the FEniCSx adapter solves magnetic fields driven by one coil for now")
     if not comp.materials:
         raise InputError(f"component '{comp.name}' has no material assignments")
     groups = list(
@@ -155,6 +170,20 @@ def read_results(workdir: Path) -> Results:
         )
     if "temperature" in data:
         step.fields["temperature"] = field("temperature", [""], data["temperature"])
+    for name, key in (
+        ("electric_potential", "potential"),
+        ("electric_field", "electric_field"),
+        ("magnetic_flux_density", "magnetic_flux_density"),
+        ("current_density", "current_density"),
+    ):
+        if key in data:
+            values = data[key].reshape(len(ids), -1)
+            comps = ["x", "y", "z"] if values.shape[1] == 3 else [""]
+            step.fields[name] = field(name, comps, values)
+    for name in ("electric_energy", "magnetic_energy"):
+        if name in data:
+            value = np.array([[float(data[name])]])
+            step.fields[name] = Field(name, "global", [""], np.array([0]), value)
     results.steps.append(step)
     return results
 

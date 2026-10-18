@@ -101,3 +101,54 @@ def test_python_discovery(tmp_path, monkeypatch):
         assert fenicsx_python() == python
     monkeypatch.setenv("PUZZLE_FENICSX_PYTHON", "/opt/x/python")
     assert fenicsx_python() == Path("/opt/x/python")
+
+
+def test_electromagnetic_cases(tmp_path):
+    live = Feature(
+        type="electric_potential", selection="Bar/Tip", values={"V": Quantity(value=5, unit="kV")}
+    )
+    ground = Feature(type="ground", selection="Bar/Root")
+    script, _ = _case(
+        tmp_path / "e", [live, ground], SolveStep(type="stationary"), physics="electrostatics"
+    )
+    case = json.loads((script.parent / "case.json").read_text())
+    assert case["physics"] == "electrostatics"
+    assert {f["type"] for f in case["features"]} == {"electric_potential", "ground"}
+
+    coil = [
+        Feature(
+            type="coil_current", selection="Bar/Body", values={"I": Quantity(value=1, unit="kA")}
+        ),
+        Feature(type="coil_start", selection="Bar/Root"),
+        Feature(type="coil_end", selection="Bar/Tip"),
+    ]
+    script, _ = _case(tmp_path / "m", coil, SolveStep(type="stationary"), physics="magnetic_fields")
+    case = json.loads((script.parent / "case.json").read_text())
+    current = next(f for f in case["features"] if f["type"] == "coil_current")
+    assert current["group"] == "Bar/Body" and current["values"]["I"] == pytest.approx(1000)
+
+    with pytest.raises(InputError, match="one coil"):
+        _case(tmp_path / "n", coil[1:], SolveStep(type="stationary"), physics="magnetic_fields")
+
+
+def test_electromagnetic_results(tmp_path):
+    script, mesh = _case(
+        tmp_path,
+        [Feature(type="ground", selection="Bar/Root")],
+        SolveStep(type="stationary"),
+        physics="electrostatics",
+    )
+    work = script.parent
+    n = len(mesh.node_ids)
+    np.savez(
+        work / "results.npz",
+        coords=mesh.coords,
+        potential=np.zeros((n, 1)),
+        magnetic_flux_density=np.ones((n, 3)),
+        magnetic_energy=np.array(2.5e-5),
+    )
+    (step,) = read_results(work).steps
+    assert step.fields["magnetic_flux_density"].components == ["x", "y", "z"]
+    assert step.fields["electric_potential"].values.shape == (n, 1)
+    energy = step.fields["magnetic_energy"]
+    assert energy.location == "global" and energy.values[0, 0] == pytest.approx(2.5e-5)

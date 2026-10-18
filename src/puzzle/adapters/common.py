@@ -20,6 +20,8 @@ FACES = {
 STRUCTURAL = {"fixed", "displacement", "force", "pressure"}
 THERMAL = {"temperature", "heat_flux", "convection"}
 FLUID = {"velocity_inlet", "mass_flow_inlet", "pressure_outlet", "wall", "symmetry"}
+ELECTROSTATIC = {"electric_potential", "ground", "surface_charge"}
+MAGNETIC = {"coil_current", "coil_start", "coil_end", "magnetic_insulation"}
 
 
 ROOM_K = 293.15

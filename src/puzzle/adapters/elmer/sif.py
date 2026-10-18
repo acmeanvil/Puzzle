@@ -13,6 +13,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from puzzle.adapters.common import (
+    ELECTROSTATIC,
+    MAGNETIC,
     STRUCTURAL,
     THERMAL,
     InputError,
@@ -26,8 +28,6 @@ from puzzle.model.schema import Component, Feature, Material, Project, Study
 
 MESH_DIR = "mesh"
 EPSILON_0 = 8.8541878128e-12  # F/m, CODATA 2018
-ELECTROSTATIC = {"electric_potential", "ground", "surface_charge"}
-MAGNETIC = {"coil_current", "coil_start", "coil_end", "magnetic_insulation"}
 OUTPUT = "case"
 TIMES = "puzzle-times.txt"  # output time of each case_t*.vtu, in order
 ROOM_K = 293.15

@@ -10,9 +10,9 @@ its own material.
 import gmsh
 import numpy as np
 import pytest
+from solvers import over
 
 from puzzle.geometry import gmsh_session, import_step
-from puzzle.jobs import runtime_for
 from puzzle.materials import add_library_material, library_material
 from puzzle.model import (
     Component,
@@ -35,17 +35,7 @@ EPS0 = 8.8541878128e-12
 SIDE, D1, D2 = 0.05, 0.002, 0.003  # m: plate side, PTFE thickness, air gap
 VOLTS = 100.0
 
-SOLVERS = {"elmer": "ElmerSolver"}
-solver = pytest.mark.parametrize(
-    "solver",
-    [
-        pytest.param(
-            n,
-            marks=pytest.mark.skipif(not runtime_for(n).available(e), reason=f"{n} not available"),
-        )
-        for n, e in SOLVERS.items()
-    ],
-)
+solver = over("elmer", "fenicsx")
 
 
 def _slab(path, thickness):
