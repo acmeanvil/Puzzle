@@ -1,6 +1,6 @@
-id = "3ddba6ff-493f-44b3-a56d-d1c6f40bceed"
+id = "46d413e2-78ab-4ed8-8d21-63879bbeb483"
 name = "Conduction"
-component = "c119cb9f-3a46-47d8-93dd-7d57bb93b0ed"
+component = "925d11ce-6a5a-466a-a7e7-06088b990d55"
 solver = "calculix"
 
 [[steps]]

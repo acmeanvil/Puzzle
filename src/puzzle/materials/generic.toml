@@ -1,0 +1,142 @@
+# Puzzle's built-in generic materials.
+#
+# Typical room-temperature (about 20 °C) values for common engineering materials,
+# from general engineering references, meant as starting points. Check them against
+# your supplier's data before relying on a result. Adding one to a project copies it;
+# the copy never changes when this file does.
+#
+# A fuller library (temperature tables, sources) can be generated from your own data
+# with scripts/import_materials.py into your user library; see puzzle.materials.
+#
+# Property names are the ones adapters read. Units must parse with pint.
+
+[structural_steel]
+name = "Structural steel"
+description = "Generic carbon structural steel (e.g. S235 to S355). Room values and tables from the EN 1993-1-2 carbon steel formulas"
+sources = ["EN 1993-1-2:2005 (Eurocode 3 Part 1-2), clause 3.4 and Table 3.1: carbon steel thermal and mechanical properties at elevated temperature"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 210, unit = "GPa" }
+poissons_ratio = { value = 0.30 }
+thermal_conductivity = { value = 53.33, unit = "W/(m*K)" }
+specific_heat = { value = 439.8, unit = "J/(kg*K)" }
+thermal_expansion = { value = 12.16e-6, unit = "1/K" }
+electrical_conductivity = { value = 5.9e6, unit = "S/m" }
+relative_permeability = { value = 1.0 }  # treated as non-magnetic; use electrical_steel for magnetic cores
+
+# EN 1993-1-2: E(T) = 210 GPa x k_E (Table 3.1); conductivity 54 - 0.0333 T(°C);
+# specific heat by clause 3.4.1.2 (its peak near 735 °C is the phase change);
+# mean expansion from 20 °C from the elongation formula of clause 3.4.1.1.
+[structural_steel.tables.youngs_modulus]
+unit = "Pa"
+points = [[293.15, 210e9], [373.15, 210e9], [473.15, 189e9], [573.15, 168e9], [673.15, 147e9],
+          [773.15, 126e9], [873.15, 65.1e9], [973.15, 27.3e9], [1073.15, 18.9e9]]
+
+[structural_steel.tables.thermal_conductivity]
+unit = "W/(m*K)"
+points = [[293.15, 53.33], [373.15, 50.67], [473.15, 47.34], [573.15, 44.01], [673.15, 40.68],
+          [773.15, 37.35], [873.15, 34.02], [973.15, 30.69], [1073.15, 27.36]]
+
+[structural_steel.tables.specific_heat]
+unit = "J/(kg*K)"
+points = [[293.15, 439.8], [373.15, 487.6], [473.15, 529.8], [573.15, 564.7], [673.15, 605.9],
+          [773.15, 666.5], [873.15, 760.2], [973.15, 1008.2], [1073.15, 803.3]]
+
+[structural_steel.tables.thermal_expansion]
+unit = "1/K"
+reference_temperature = 293.15
+points = [[293.15, 12.16e-6], [373.15, 12.48e-6], [473.15, 12.88e-6], [573.15, 13.28e-6],
+          [673.15, 13.68e-6], [773.15, 14.08e-6], [873.15, 14.48e-6], [973.15, 14.88e-6]]
+
+[stainless_steel_304]
+name = "Stainless steel 304"
+description = "Austenitic stainless steel, annealed"
+density = { value = 8000, unit = "kg/m^3" }
+youngs_modulus = { value = 193, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+thermal_conductivity = { value = 16.2, unit = "W/(m*K)" }
+specific_heat = { value = 500, unit = "J/(kg*K)" }
+thermal_expansion = { value = 17.3e-6, unit = "1/K" }
+electrical_conductivity = { value = 1.39e6, unit = "S/m" }
+relative_permeability = { value = 1.0 }
+
+[aluminium_6061_t6]
+name = "Aluminium 6061-T6"
+description = "Precipitation-hardened aluminium alloy"
+density = { value = 2700, unit = "kg/m^3" }
+youngs_modulus = { value = 68.9, unit = "GPa" }
+poissons_ratio = { value = 0.33 }
+thermal_conductivity = { value = 167, unit = "W/(m*K)" }
+specific_heat = { value = 896, unit = "J/(kg*K)" }
+thermal_expansion = { value = 23.6e-6, unit = "1/K" }
+electrical_conductivity = { value = 2.5e7, unit = "S/m" }
+relative_permeability = { value = 1.0 }
+
+[titanium_ti6al4v]
+name = "Titanium Ti-6Al-4V"
+description = "Alpha-beta titanium alloy, annealed"
+density = { value = 4430, unit = "kg/m^3" }
+youngs_modulus = { value = 113.8, unit = "GPa" }
+poissons_ratio = { value = 0.342 }
+thermal_conductivity = { value = 6.7, unit = "W/(m*K)" }
+specific_heat = { value = 526, unit = "J/(kg*K)" }
+thermal_expansion = { value = 8.6e-6, unit = "1/K" }
+electrical_conductivity = { value = 5.8e5, unit = "S/m" }
+relative_permeability = { value = 1.0 }
+
+[copper]
+name = "Copper"
+description = "Electrolytic tough-pitch copper (C11000)"
+density = { value = 8960, unit = "kg/m^3" }
+youngs_modulus = { value = 117, unit = "GPa" }
+poissons_ratio = { value = 0.34 }
+thermal_conductivity = { value = 391, unit = "W/(m*K)" }
+specific_heat = { value = 385, unit = "J/(kg*K)" }
+thermal_expansion = { value = 17e-6, unit = "1/K" }
+electrical_conductivity = { value = 5.8e7, unit = "S/m" }
+relative_permeability = { value = 1.0 }
+
+[air]
+name = "Air"
+description = "Dry air at 20 °C and 1 atm"
+density = { value = 1.204, unit = "kg/m^3" }
+dynamic_viscosity = { value = 1.81e-5, unit = "Pa*s" }
+thermal_conductivity = { value = 0.0257, unit = "W/(m*K)" }
+specific_heat = { value = 1006, unit = "J/(kg*K)" }
+electrical_conductivity = { value = 0, unit = "S/m" }
+relative_permittivity = { value = 1.0006 }
+relative_permeability = { value = 1.0 }
+
+[water]
+name = "Water"
+description = "Liquid water at 20 °C"
+density = { value = 998.2, unit = "kg/m^3" }
+dynamic_viscosity = { value = 1.002e-3, unit = "Pa*s" }
+thermal_conductivity = { value = 0.598, unit = "W/(m*K)" }
+specific_heat = { value = 4182, unit = "J/(kg*K)" }
+relative_permittivity = { value = 80.1 }
+relative_permeability = { value = 1.0 }
+
+[electrical_steel]
+name = "Electrical steel (linear)"
+description = "Non-oriented silicon steel for magnetic cores, with a constant relative permeability: a linear stand-in for its real B-H curve"
+density = { value = 7650, unit = "kg/m^3" }
+youngs_modulus = { value = 200, unit = "GPa" }
+poissons_ratio = { value = 0.30 }
+thermal_conductivity = { value = 28, unit = "W/(m*K)" }
+specific_heat = { value = 490, unit = "J/(kg*K)" }
+thermal_expansion = { value = 12e-6, unit = "1/K" }
+electrical_conductivity = { value = 1.9e6, unit = "S/m" }
+relative_permeability = { value = 4000 }
+
+[ptfe]
+name = "PTFE"
+description = "Polytetrafluoroethylene, unfilled: a dielectric and thermal insulator"
+density = { value = 2200, unit = "kg/m^3" }
+youngs_modulus = { value = 0.5, unit = "GPa" }
+poissons_ratio = { value = 0.46 }
+thermal_conductivity = { value = 0.25, unit = "W/(m*K)" }
+specific_heat = { value = 1000, unit = "J/(kg*K)" }
+thermal_expansion = { value = 120e-6, unit = "1/K" }
+electrical_conductivity = { value = 1e-16, unit = "S/m" }
+relative_permittivity = { value = 2.1 }
+relative_permeability = { value = 1.0 }

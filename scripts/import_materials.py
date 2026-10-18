@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""Builds Puzzle's default materials library from Materials_Hunt_List.xlsx.
+"""Builds your local materials library from Materials_Hunt_List.xlsx.
 
-    python scripts/import_materials.py path/to/Materials_Hunt_List.xlsx
+    python scripts/import_materials.py path/to/Materials_Hunt_List.xlsx [--output FILE]
 
-Writes src/puzzle/materials/library.json. The workbook is shared with the
-Tension_Meter app; edit the workbook and re-run, don't edit the JSON by hand.
+Writes your user library (puzzle.materials.user_library_path(), e.g.
+~/Library/Application Support/Puzzle/materials/library.json on macOS) unless
+--output names another file; Puzzle loads it on top of its generic materials. The
+library stays on your machine; it is not part of the Puzzle repository. The
+workbook is shared with the Tension_Meter app; edit the workbook and re-run, don't
+edit the JSON by hand.
 It must have been recalculated (opened and saved), because derived SI columns
 are formulas and this reads their cached values. Needs openpyxl.
 
@@ -25,13 +29,11 @@ from __future__ import annotations
 
 import json
 import re
-import sys
 from collections import defaultdict
 from pathlib import Path
 
 from openpyxl import load_workbook
 
-OUT = Path(__file__).resolve().parent.parent / "src" / "puzzle" / "materials" / "library.json"
 ROOM_K = 293.15
 
 PA_PER_MSI = 6894757.293168e3
@@ -91,7 +93,7 @@ def number(value):
     return float(value)
 
 
-def main(xlsx: Path) -> None:
+def main(xlsx: Path, out: Path) -> None:
     wb = load_workbook(xlsx, data_only=True, read_only=True)
     links = {
         r[1].strip(): (r[2] or "").strip()
@@ -239,9 +241,9 @@ def main(xlsx: Path) -> None:
 
     if len(library) != len(materials):
         raise SystemExit("two materials share a key; rename one in the workbook")
-    write(library, xlsx)
+    write(library, xlsx, out)
     n_points = sum(len(t["points"]) for m in library.values() for t in m["tables"].values())
-    print(f"wrote {OUT.name}: {len(library)} materials, {n_points} table points")
+    print(f"wrote {out}: {len(library)} materials, {n_points} table points")
     for name, n in sorted(skipped.items()):
         print(f"  skipped {n} temperature rows for '{name}' (not on the Materials tab)")
 
@@ -284,17 +286,26 @@ def round_sig(x, sig=7):
     return float(f"{x:.{sig}g}") if isinstance(x, float) else x
 
 
-def write(library, xlsx):
+def write(library, xlsx, out: Path):
     lines = ["{", f' "generated_from": {json.dumps(xlsx.name)},', ' "materials": {']
     items = list(library.items())
     for i, (key, m) in enumerate(items):
         comma = "," if i < len(items) - 1 else ""
         lines.append(f"  {json.dumps(key)}: {json.dumps(m, ensure_ascii=False)}{comma}")
     lines += [" }", "}", ""]
-    OUT.write_text("\n".join(lines))
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text("\n".join(lines))
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        raise SystemExit(__doc__)
-    main(Path(sys.argv[1]))
+    import argparse
+
+    from puzzle.materials import user_library_path
+
+    parser = argparse.ArgumentParser(description="Build your local Puzzle materials library.")
+    parser.add_argument("workbook", type=Path, help="Materials_Hunt_List.xlsx")
+    parser.add_argument(
+        "--output", type=Path, default=user_library_path(), help="the JSON file to write"
+    )
+    args = parser.parse_args()
+    main(args.workbook, args.output)

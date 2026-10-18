@@ -32,7 +32,7 @@ Solver tests in `tests/integration/` skip when the solver isn't available. Rende
 | --- | --- |
 | `src/puzzle/model` | Pydantic schema: resources, components (parts, contacts, physics), studies (sweep/solve steps, shoot-out), transfers |
 | `src/puzzle/project` | One-TOML-file-per-object store; content hashes, staleness, run keys |
-| `src/puzzle/materials` | Default library: `library.json` (generated, don't hand-edit) + `supplement.toml` (fluids) |
+| `src/puzzle/materials` | `generic.toml`: the shipped generic materials (structural steel with EN 1993-1-2 tables, stainless, aluminium, titanium, copper, electrical steel, PTFE, air, water); user libraries load on top |
 | `src/puzzle/geometry` | STEP import via Gmsh's OCC kernel, named entities with signatures |
 | `src/puzzle/mesh` | Recipe → Gmsh mesh with physical groups `Part/Selection`; solver-neutral `Mesh` |
 | `src/puzzle/adapters` | One adapter per solver: capability matrix, `write_input`, `command`, `read_results` |
@@ -77,4 +77,4 @@ Capability matrices also list planned capabilities; `write_input` refuses what i
 - **CalculiX `.frd`** is fixed width (values can touch); match record tags on the first token. Modal block values are frequencies in Hz.
 - **Native solver runs** must look activated: `NativeRuntime.environment()` puts the conda/pixi env on PATH and sets `CONDA_PREFIX` (Windows otherwise fails with 0xC0000135). Elmer from conda also needs `ELMER_HOME` = env prefix.
 - **Elmer image** is built without MUMPS (Debian trixie lacks ParMETIS).
-- **Material data** comes from the maintainer's `Materials_Hunt_List.xlsx` (shared with the Tension_Meter app). Regenerate with the import script; never edit `library.json` by hand.
+- **Material data:** only `generic.toml` ships. The maintainer's full library is generated from `Materials_Hunt_List.xlsx` by `scripts/import_materials.py` into the user library (`puzzle.materials.user_library_path()`, outside the repo) and must never be committed. Tests set `PUZZLE_MATERIALS=""` (generics only) in `tests/conftest.py`; anything tests or examples use must be generic.

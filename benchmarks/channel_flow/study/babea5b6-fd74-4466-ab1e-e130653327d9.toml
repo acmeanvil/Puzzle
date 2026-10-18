@@ -1,6 +1,6 @@
-id = "dd058ada-0ed7-4ef4-81ee-1ab12e103d5e"
+id = "babea5b6-fd74-4466-ab1e-e130653327d9"
 name = "Channel flow"
-component = "ec70d44f-3a2e-4d29-a170-0282be2e13f9"
+component = "4f4ecd6c-3d0d-459c-9416-37fc8f15ec9d"
 solver = "code_saturne"
 steps = [
     { type = "stationary", physics = [], settings = { iterations = 500 } },

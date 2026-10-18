@@ -1,10 +1,10 @@
-id = "008ea010-e7f3-4f0e-b063-ed472d9a6ddb"
+id = "997b5afc-6c49-4462-8bfd-af6d524d02d3"
 name = "Water"
 description = "Liquid water at 20 °C"
 sources = []
 
 [info]
-type = "Fluid"
+source = "Puzzle generic library (typical values)"
 
 [properties.density]
 value = 998.2

@@ -1,24 +1,32 @@
+import json
+
 import pytest
 
 from puzzle.materials import (
     add_library_material,
     library_keys,
     library_material,
+    library_paths,
     search_library,
+    user_library_path,
 )
 from puzzle.model import Project, Quantity
 
+GENERIC = {
+    "structural_steel",
+    "stainless_steel_304",
+    "aluminium_6061_t6",
+    "titanium_ti6al4v",
+    "copper",
+    "electrical_steel",
+    "ptfe",
+    "air",
+    "water",
+}
 
-def test_library_holds_the_workbook_and_the_fluids():
-    keys = set(library_keys())
-    assert len(keys) >= 160
-    assert {
-        "general_carbon_steel",
-        "6061_t6_al",
-        "304_304l_ss",
-        "inconel_718_precipitation_hardened",
-    } <= keys
-    assert {"air", "water"} <= keys
+
+def test_generic_set_is_shipped():
+    assert set(library_keys()) == GENERIC  # the test setup excludes any user library
 
 
 def test_every_value_converts_to_si():
@@ -31,65 +39,120 @@ def test_every_value_converts_to_si():
             assert all(p.temperature > 0 for p in table.points), (key, prop)
 
 
-def test_every_table_point_cites_a_source():
-    for key in library_keys():
-        material = library_material(key)
-        for prop, table in material.tables.items():
-            for point in table.points:
-                assert point.source is not None, (key, prop)
-                assert 0 <= point.source < len(material.sources)
+@pytest.mark.parametrize(
+    ("key", "props"),
+    [
+        (
+            "structural_steel",
+            {
+                "youngs_modulus",
+                "poissons_ratio",
+                "density",
+                "thermal_conductivity",
+                "specific_heat",
+                "thermal_expansion",
+            },
+        ),
+        ("copper", {"electrical_conductivity", "relative_permeability", "thermal_conductivity"}),
+        ("electrical_steel", {"relative_permeability", "electrical_conductivity"}),
+        ("ptfe", {"relative_permittivity", "thermal_conductivity"}),
+        ("air", {"density", "dynamic_viscosity", "relative_permittivity", "relative_permeability"}),
+        ("water", {"density", "dynamic_viscosity", "thermal_conductivity", "specific_heat"}),
+    ],
+)
+def test_generics_cover_what_the_benchmarks_need(key, props):
+    assert props <= set(library_material(key).properties)
 
 
-def test_room_temperature_values_are_plausible():
-    steel = library_material("general_carbon_steel")
-    assert steel.properties["youngs_modulus"].to_si() == pytest.approx(200e9, rel=0.01)
-    assert steel.properties["density"].to_si() == pytest.approx(7850, rel=0.001)
-    al = library_material("6061_t6_al")
-    assert al.properties["thermal_expansion"].to_si() == pytest.approx(23.6e-6, rel=0.02)
-
-
-def test_temperature_tables_interpolate():
-    inconel = library_material("inconel_718_precipitation_hardened")
-    e = inconel.tables["youngs_modulus"]
-    cold, hot = e.at(20.0), e.at(900.0)
-    assert cold > e.at(293.15) > hot  # stiffness falls with temperature
+def test_structural_steel_tables_follow_eurocode():
+    steel = library_material("structural_steel")
+    e = steel.tables["youngs_modulus"]
+    assert e.at(293.15) == pytest.approx(210e9)
+    assert e.at(873.15) == pytest.approx(0.31 * 210e9)  # k_E at 600 °C
     assert e.at(1.0) == e.curve()[0][1]  # held constant past the ends
+    k = steel.tables["thermal_conductivity"]
+    assert k.at(573.15) == pytest.approx(54 - 0.0333 * 300, rel=1e-4)
+    cte = steel.tables["thermal_expansion"]
+    assert cte.reference_temperature == pytest.approx(293.15)
+    # Room-temperature values agree with the tables at 20 °C.
+    for prop in ("youngs_modulus", "thermal_conductivity", "specific_heat", "thermal_expansion"):
+        assert steel.properties[prop].to_si() == pytest.approx(
+            steel.tables[prop].at(293.15), rel=1e-3
+        )
+    assert all(p.source == 0 for t in steel.tables.values() for p in t.points) and steel.sources
 
 
-def test_mean_cte_keeps_its_reference_temperature():
-    table = library_material("6061_t6_al").tables["thermal_expansion"]
-    assert table.unit == "1/K"
-    assert table.reference_temperature == pytest.approx(293.15)
+def test_user_library_adds_and_overrides(tmp_path, monkeypatch):
+    user = {
+        "materials": {
+            "special_alloy": {
+                "name": "Special alloy",
+                "description": "",
+                "info": {"group": "Test"},
+                "properties": {"density": {"value": 8000, "unit": "kg/m^3"}},
+                "tables": {
+                    "youngs_modulus": {
+                        "unit": "Pa",
+                        "points": [[293.15, 2e11, 0], [773.15, 1.5e11, 0]],
+                    }
+                },
+                "sources": ["A test source"],
+            },
+            "copper": {
+                "name": "Copper (my data)",
+                "description": "",
+                "info": {},
+                "properties": {"density": {"value": 8940, "unit": "kg/m^3"}},
+                "tables": {},
+                "sources": [],
+            },
+        }
+    }
+    path = tmp_path / "library.json"
+    path.write_text(json.dumps(user))
+    monkeypatch.setenv("PUZZLE_MATERIALS", str(path))
+    assert library_paths() == [path]
+    assert set(library_keys()) == GENERIC | {"special_alloy"}
+    assert library_material("copper").name == "Copper (my data)"
+    alloy = library_material("special_alloy")
+    assert alloy.tables["youngs_modulus"].at(533.15) == pytest.approx(1.75e11)
+    assert "special_alloy" in search_library("test")
+
+
+def test_default_user_library_location(monkeypatch):
+    monkeypatch.delenv("PUZZLE_MATERIALS")
+    assert user_library_path().name == "library.json"
+    assert user_library_path().parent.name == "materials"
 
 
 def test_search():
-    assert "6061_t6_al" in search_library("6061")
-    assert all("inconel" in k for k in search_library("inconel"))
+    assert search_library("steel") == [
+        "electrical_steel",
+        "stainless_steel_304",
+        "structural_steel",
+    ]
 
 
 def test_adding_copies_into_the_project():
     project = Project(name="p")
-    steel = add_library_material(project, "astm_a36_cs", name="Frame steel")
+    steel = add_library_material(project, "structural_steel", name="Frame steel")
     assert project.objects[steel.id].name == "Frame steel"
-    assert steel.info["group"] == "Carbon Steel"
-    assert steel.sources
+    assert steel.tables and steel.sources
 
 
 def test_project_copy_is_independent_of_the_library():
     project = Project(name="p")
-    steel = add_library_material(project, "astm_a36_cs")
-    steel.properties["youngs_modulus"] = Quantity(value=210, unit="GPa")
+    steel = add_library_material(project, "structural_steel")
+    steel.properties["youngs_modulus"] = Quantity(value=190, unit="GPa")
     steel.tables.clear()
-    fresh = library_material("astm_a36_cs")
-    assert fresh.properties["youngs_modulus"].to_si() == pytest.approx(199.948e9, rel=1e-4)
+    fresh = library_material("structural_steel")
+    assert fresh.properties["youngs_modulus"].to_si() == pytest.approx(210e9)
     assert fresh.tables
 
 
 def test_two_copies_are_separate_materials():
     project = Project(name="p")
-    a = add_library_material(project, "air")
-    b = add_library_material(project, "air")
-    assert a.id != b.id
+    assert add_library_material(project, "air").id != add_library_material(project, "air").id
 
 
 def test_unknown_material():

@@ -1,5 +1,9 @@
+import os
 import sys
 from pathlib import Path
+
+# Tests use Puzzle's generic materials only, never a user's local library.
+os.environ["PUZZLE_MATERIALS"] = ""
 
 import pytest
 

@@ -53,7 +53,7 @@ def bar_project(
             ],
         )
     )
-    steel = add_library_material(project, "general_carbon_steel")
+    steel = add_library_material(project, "structural_steel")
     mesh = project.add(
         MeshRecipe(name="Mesh", global_size=Quantity(value=mesh_size_mm, unit="mm"), **recipe)
     )

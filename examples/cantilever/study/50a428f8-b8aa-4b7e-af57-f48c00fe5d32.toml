@@ -1,6 +1,6 @@
-id = "02a7c1ea-aec7-455d-a947-5174129fcd2f"
+id = "50a428f8-b8aa-4b7e-af57-f48c00fe5d32"
 name = "Tip load"
-component = "c119cb9f-3a46-47d8-93dd-7d57bb93b0ed"
+component = "925d11ce-6a5a-466a-a7e7-06088b990d55"
 solver = "calculix"
 
 [[steps]]

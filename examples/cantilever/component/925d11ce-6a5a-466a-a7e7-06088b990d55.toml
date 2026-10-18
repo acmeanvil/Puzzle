@@ -1,17 +1,17 @@
-id = "c119cb9f-3a46-47d8-93dd-7d57bb93b0ed"
+id = "925d11ce-6a5a-466a-a7e7-06088b990d55"
 name = "Cantilever"
 dimension = "3d"
-mesh = "33cd8d5b-60f2-469d-a148-74c3637c419e"
+mesh = "42427ced-7cae-4cc8-b56c-084f83fc1ca1"
 selections = []
 materials = [
-    { material = "cf3174b3-e4f6-4444-af01-3816d7abc2a2", selection = "Bar/Body" },
+    { material = "34d8d775-387f-4dbb-8c92-7867b125927d", selection = "Bar/Body" },
 ]
 contacts = []
 couplings = []
 
 [[parts]]
 name = "Bar"
-geometry = "d393e27a-4ff0-4a43-8e50-e8d2ad66211c"
+geometry = "942406ac-a7cc-4694-99fb-3cd52ecde52a"
 translation = [
     0.0,
     0.0,

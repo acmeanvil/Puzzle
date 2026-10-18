@@ -1,17 +1,17 @@
-id = "ec70d44f-3a2e-4d29-a170-0282be2e13f9"
+id = "4f4ecd6c-3d0d-459c-9416-37fc8f15ec9d"
 name = "Channel"
 dimension = "3d"
-mesh = "5d812e45-a210-4fb4-8251-aa5f0cec7725"
+mesh = "b8c97586-6cc6-49ed-b522-f89c93b4220b"
 selections = []
 materials = [
-    { material = "008ea010-e7f3-4f0e-b063-ed472d9a6ddb", selection = "Channel/Fluid" },
+    { material = "997b5afc-6c49-4462-8bfd-af6d524d02d3", selection = "Channel/Fluid" },
 ]
 contacts = []
 couplings = []
 
 [[parts]]
 name = "Channel"
-geometry = "ce904178-faea-4874-a48b-692b885752e2"
+geometry = "08673d91-d867-45d2-8d28-1090dfcf24b0"
 translation = [
     0.0,
     0.0,

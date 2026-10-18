@@ -1,7 +1,8 @@
-id = "33cd8d5b-60f2-469d-a148-74c3637c419e"
+id = "42427ced-7cae-4cc8-b56c-084f83fc1ca1"
 name = "Tets 2.5 mm"
 mesher = "gmsh"
 element_order = 2
+element_shape = "tetrahedra"
 
 [global_size]
 value = 2.5

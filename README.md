@@ -11,8 +11,8 @@ The cantilever example is a 200 x 10 x 10 mm steel bar fixed at one end, with th
 ```sh
 pixi shell -e dev
 puzzle studies examples/cantilever
-puzzle run examples/cantilever --study "Tip load"      # about 1.60 mm tip deflection
-puzzle run examples/cantilever --study Modes           # first bending about 204 Hz
+puzzle run examples/cantilever --study "Tip load"      # about 1.53 mm tip deflection
+puzzle run examples/cantilever --study Modes           # first bending about 209 Hz
 puzzle show examples/cantilever --study "Tip load" --field stress
 puzzle show examples/cantilever --study Modes --mode 3 --screenshot mode3.png
 puzzle export examples/cantilever --study Modes modes.pvd   # open in ParaView

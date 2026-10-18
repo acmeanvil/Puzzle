@@ -6,8 +6,8 @@
     puzzle show examples/cantilever --study "Tip load" --field stress
 
 Studies:
-- Tip load: 100 N down at the free end (tip deflection about 1.60 mm by beam theory)
-- Modes: the first six natural frequencies (first bending about 204 Hz)
+- Tip load: 100 N down at the free end (tip deflection about 1.53 mm by beam theory)
+- Modes: the first six natural frequencies (first bending about 209 Hz)
 - Conduction: 100 °C at the fixed end, 20 °C at the free end
 """
 
@@ -57,7 +57,7 @@ def main() -> None:
             ],
         )
     )
-    steel = add_library_material(p, "general_carbon_steel")
+    steel = add_library_material(p, "structural_steel")
     mesh = p.add(MeshRecipe(name="Tets 2.5 mm", global_size=Quantity(value=2.5, unit="mm")))
     comp = p.add(
         Component(

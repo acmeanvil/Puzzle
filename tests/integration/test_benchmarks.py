@@ -37,7 +37,7 @@ solver = pytest.mark.parametrize(
     ],
 )
 
-STEEL = library_material("general_carbon_steel").properties
+STEEL = library_material("structural_steel").properties
 E, NU, RHO = (STEEL[k].to_si() for k in ("youngs_modulus", "poissons_ratio", "density"))
 L, B, H = BAR
 I = B * H**3 / 12  # noqa: E741
@@ -241,7 +241,7 @@ def test_transient_conduction_matches_the_series_solution(tmp_path, solver):
     study = project.add(Study(name="t", component=comp.id, solver=solver, steps=[transient]))
     run = run_study(project, study.id, tmp_path, tmp_path / "run", timeout_s=1200)
 
-    steel = library_material("general_carbon_steel").properties
+    steel = library_material("structural_steel").properties
     k, rho, cp = (steel[p].to_si() for p in ("thermal_conductivity", "density", "specific_heat"))
     alpha = k / (rho * cp)
     times = sorted({s.value for s in run.results.steps if "temperature" in s.fields})
