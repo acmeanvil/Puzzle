@@ -17,7 +17,9 @@ from puzzle.mesh.mesh import ELEMENT_NAMES, Mesh
 GMSH_TYPES = {name: code for code, name in ELEMENT_NAMES.items()}
 
 
-def write_med(mesh: Mesh, path: Path, names: dict[str, str] | None = None) -> None:
+def write_med(
+    mesh: Mesh, path: Path, names: dict[str, str] | None = None, *, msh_version: float | None = None
+) -> None:
     """Write `mesh` to `path` (format from the suffix: .med, .msh, ...); `names` maps
     Puzzle group names to the names to write.
 
@@ -44,6 +46,8 @@ def write_med(mesh: Mesh, path: Path, names: dict[str, str] | None = None) -> No
             tags = sorted({t for d, t in group.entities if d == group.dim})
             gmsh.model.addPhysicalGroup(group.dim, tags, name=out_name)
         gmsh.option.setNumber("Mesh.SaveAll", 0)
+        if msh_version is not None:  # e.g. 2.2 for readers that predate MSH 4
+            gmsh.option.setNumber("Mesh.MshFileVersion", msh_version)
         path.parent.mkdir(parents=True, exist_ok=True)
         gmsh.write(str(path))
 

@@ -1,5 +1,6 @@
 import json
 import os
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -99,4 +100,4 @@ def test_python_discovery(tmp_path, monkeypatch):
     if os.name != "nt":
         assert fenicsx_python() == python
     monkeypatch.setenv("PUZZLE_FENICSX_PYTHON", "/opt/x/python")
-    assert str(fenicsx_python()) == "/opt/x/python"
+    assert fenicsx_python() == Path("/opt/x/python")
