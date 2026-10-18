@@ -10,7 +10,7 @@ import math
 import numpy as np
 import pytest
 from conftest_geometry import BAR, bar_project, write_bar_step
-from solvers import over
+from solvers import available, over
 
 from puzzle.jobs import runtime_for
 from puzzle.materials import library_material
@@ -205,6 +205,40 @@ def _bar_temperature(x, t, alpha, t0=293.15, t1=373.15, terms=200):
 
 @solver
 def test_transient_conduction_matches_the_series_solution(tmp_path, solver):
+    errors = _transient_errors(tmp_path, solver, {})
+    # Temperature rise matched within 2% of the 80 K step everywhere.
+    assert max(errors) < 0.02 * 80
+
+
+def _scheme_cases():
+    from puzzle.adapters import available_adapters
+
+    adapters = available_adapters()
+    for solver in ("calculix", "elmer", "code_aster", "fenicsx"):
+        for scheme in sorted(adapters[solver].capabilities.time_schemes):
+            yield pytest.param(
+                solver,
+                scheme,
+                id=f"{solver}-{scheme}",
+                marks=pytest.mark.skipif(not available(solver), reason=f"{solver} not available"),
+            )
+
+
+@pytest.mark.parametrize(("solver", "scheme"), list(_scheme_cases()))
+def test_time_schemes(tmp_path, solver, scheme):
+    settings = {"time_scheme": scheme} | ({"theta": 0.6} if scheme == "theta" else {})
+    errors = _transient_errors(tmp_path, solver, settings)
+    print(
+        f"{solver} {scheme}: max error {errors[0]:.3f} K at {END / 2:g} s, "
+        f"{errors[1]:.3f} K at {END:g} s"
+    )
+    assert max(errors) < 0.02 * 80
+    if scheme == "bdf2":
+        assert max(errors) < 0.02  # second order: ~50x below backward Euler's 0.35 K here
+
+
+def _transient_errors(tmp_path, solver, scheme_settings) -> list[float]:
+    """Max error against the series solution at END/2 and END."""
     step = write_bar_step(tmp_path / "bar.step")
     hot = Feature(
         type="temperature", selection="Bar/Root", values={"T": Quantity(value=100, unit="degC")}
@@ -220,6 +254,7 @@ def test_transient_conduction_matches_the_series_solution(tmp_path, solver):
         settings={
             "time_step": Quantity(value=DT, unit="s"),
             "end_time": Quantity(value=END, unit="s"),
+            **scheme_settings,
         },
     )
     study = project.add(Study(name="t", component=comp.id, solver=solver, steps=[transient]))
@@ -231,10 +266,11 @@ def test_transient_conduction_matches_the_series_solution(tmp_path, solver):
     times = sorted({s.value for s in run.results.steps if "temperature" in s.fields})
     assert times[-1] == pytest.approx(END, rel=1e-6)
     assert len(times) >= 10  # a time series, not just the end state
+    errors = []
     for t in (END / 2, END):
         state = next(s for s in run.results.steps if s.value == pytest.approx(t, rel=1e-6))
         temperature = state.fields["temperature"]
         x = run.mesh.node_coords(temperature.ids)[:, 0]
         exact = _bar_temperature(x, t, alpha)
-        # Temperature rise matched within 2% of the 80 K step everywhere.
-        assert np.abs(temperature.values[:, 0] - exact).max() < 0.02 * 80
+        errors.append(float(np.abs(temperature.values[:, 0] - exact).max()))
+    return errors

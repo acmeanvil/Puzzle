@@ -19,6 +19,7 @@ from puzzle.adapters.common import (
     match_points,
     surface_area,
     thermal_tables,
+    time_scheme,
     time_settings,
 )
 from puzzle.mesh.med import write_med
@@ -198,4 +199,5 @@ def _time(step) -> dict:
     if step.type != "transient":
         return {}
     dt, _, n = time_settings(step)
-    return {"time_step": dt, "steps": n}
+    scheme, theta = time_scheme(step)
+    return {"time_step": dt, "steps": n, "scheme": scheme, "theta": theta}

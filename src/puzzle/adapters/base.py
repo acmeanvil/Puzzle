@@ -46,6 +46,8 @@ class Capabilities:
     contacts: frozenset[str] = frozenset()
     couplings: frozenset[str] = frozenset()
     dimensions: frozenset[str] = field(default_factory=lambda: frozenset({"3d"}))
+    time_schemes: frozenset[str] = frozenset({"backward_euler"})
+    """Time schemes for transient heat transfer (see adapters.common.time_scheme)."""
     experimental: frozenset[str] = frozenset()
     """Contact or coupling keys that exist in the solver but aren't verified for production."""
 
@@ -83,6 +85,10 @@ class SolverAdapter(ABC):
                 for f in physics.features
                 if f.type not in caps.features
             ]
+        for s in study.solve_steps():
+            scheme = s.settings.get("time_scheme", "backward_euler")
+            if s.type == "transient" and scheme not in caps.time_schemes:
+                problems.append(f"{self.name} does not support the {scheme} time scheme")
         problems += [
             f"{self.name} does not support {c.capability} contact ('{c.name}')"
             for c in component.contacts

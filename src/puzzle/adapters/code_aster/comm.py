@@ -20,6 +20,7 @@ from puzzle.adapters.common import (
     initial_temperature,
     surface_area,
     thermal_tables,
+    time_scheme,
     time_settings,
 )
 from puzzle.mesh.med import safe_names, write_med
@@ -223,7 +224,8 @@ def _ther_non_line(step, comp: Component) -> str:
     times = f"DEFI_LIST_REEL(DEBUT=0.0, INTERVALLE=_F(JUSQU_A={end:.12g}, PAS={dt:.12g}))"
     return (
         call
-        + f"ETAT_INIT=_F(VALE={initial_temperature(heat):.12g}), INCREMENT=_F(LIST_INST={times}))"
+        + f"ETAT_INIT=_F(VALE={initial_temperature(heat):.12g}), PARM_THETA={_theta(step)}, "
+        + f"INCREMENT=_F(LIST_INST={times}))"
     )
 
 
@@ -281,5 +283,13 @@ def _ther_lineaire(step, comp: Component) -> str:
     return (
         call
         + f"TYPE_CALCUL='TRAN', ETAT_INIT=_F(VALE={initial_temperature(heat):.12g}), "
-        + f"INCREMENT=_F(LIST_INST={times}))"
+        + f"PARM_THETA={_theta(step)}, INCREMENT=_F(LIST_INST={times}))"
     )
+
+
+def _theta(step) -> float:
+    """Code_Aster's theta method; Puzzle defaults to backward Euler (theta = 1), not 0.57."""
+    scheme, theta = time_scheme(step)
+    if theta is None:
+        raise InputError(f"Code_Aster does not offer the {scheme} time scheme", code="unsupported")
+    return theta

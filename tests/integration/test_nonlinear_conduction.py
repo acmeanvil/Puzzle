@@ -119,7 +119,13 @@ def test_transient_tables_agree_across_solvers(tmp_path):
         x = run.mesh.node_coords(last.ids)[:, 0]
         traces[solver] = np.array([last.values[np.abs(x - p) < 1e-9, 0].mean() for p in probes])
         print(solver, np.round(traces[solver] - 273.15, 2), "°C")
-    reference = np.mean(list(traces.values()), axis=0)
+    # CalculiX, Elmer and FEniCSx discretise rho cp(T) dT/dt; Code_Aster steps the
+    # enthalpy, (H(T) - H(T_old))/dt. The two differ by O(dt) where cp varies steeply
+    # (606 -> 1008 J/(kg K) here): at dt = 5 s Code_Aster is 0.7 K warmer, and closer to
+    # the dt -> 0 answer; at dt = 1 s they agree within 0.15 K.
+    capacity_form = [traces[s] for s in traces if s != "code_aster"]
+    reference = np.mean(capacity_form or list(traces.values()), axis=0)
     assert reference[0] > 400  # well into the nonlinear range near the root
     for solver, trace in traces.items():
-        assert np.abs(trace - reference).max() < 2.0, solver  # K
+        limit = 1.0 if solver == "code_aster" else 0.1  # K
+        assert np.abs(trace - reference).max() < limit, solver

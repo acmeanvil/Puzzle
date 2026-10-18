@@ -40,6 +40,7 @@ class CodeAsterAdapter(SolverAdapter):
         ),
         couplings=frozenset({"thermal_expansion"}),
         dimensions=frozenset({"3d", "2d_planar", "2d_axisymmetric"}),
+        time_schemes=frozenset({"backward_euler", "crank_nicolson", "theta"}),
     )
 
     def write_input(self, project: Project, study: Study, mesh: Mesh, workdir: Path) -> Path:

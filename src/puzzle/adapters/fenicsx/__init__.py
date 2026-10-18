@@ -50,6 +50,7 @@ class FenicsxAdapter(SolverAdapter):
         contacts=frozenset({"bonded_conformal"}),
         couplings=frozenset({"joule_heating", "thermal_expansion"}),
         dimensions=frozenset({"3d", "2d_planar", "2d_axisymmetric"}),
+        time_schemes=frozenset({"backward_euler", "crank_nicolson", "bdf2", "theta"}),
     )
 
     def write_input(self, project: Project, study: Study, mesh: Mesh, workdir: Path) -> Path:

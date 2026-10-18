@@ -67,6 +67,7 @@ class ElmerAdapter(SolverAdapter):
         experimental=frozenset({"frictionless", "frictional", "rough"}),
         couplings=frozenset({"thermal_expansion", "joule_heating"}),
         dimensions=frozenset({"3d", "2d_planar", "2d_axisymmetric"}),
+        time_schemes=frozenset({"backward_euler", "crank_nicolson", "bdf2", "theta"}),
     )
 
     def write_input(self, project: Project, study: Study, mesh: Mesh, workdir: Path) -> Path:

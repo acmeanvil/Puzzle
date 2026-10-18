@@ -277,7 +277,7 @@ class Physics(BaseModel):
         "custom_pde",
     ]
     features: list[Feature] = Field(default_factory=list)
-    settings: dict[str, Quantity | bool | int | str] = Field(
+    settings: dict[str, Quantity | bool | int | float | str] = Field(
         default_factory=dict, description="Physics-wide options, e.g. turbulence_model"
     )
     equation: CustomEquation | None = None
@@ -333,7 +333,11 @@ class SolveStep(BaseModel):
     physics: list[str] = Field(
         default_factory=list, description="Physics solved in this step; empty means all"
     )
-    settings: dict[str, Quantity | int | str] = Field(default_factory=dict)
+    settings: dict[str, Quantity | bool | int | float | str] = Field(
+        default_factory=dict,
+        description="e.g. time_step, end_time, time_scheme (backward_euler, crank_nicolson, "
+        "bdf2, theta) and theta; modes",
+    )
 
     def solves(self, physics: str) -> bool:
         return not self.physics or physics in self.physics

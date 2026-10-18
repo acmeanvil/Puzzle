@@ -74,6 +74,33 @@ def time_settings(step) -> tuple[float, float, int]:
     return dt, end, max(1, round(end / dt))
 
 
+TIME_SCHEMES = ("backward_euler", "crank_nicolson", "bdf2", "theta")
+
+
+def time_scheme(step) -> tuple[str, float | None]:
+    """A transient step's time scheme and, for theta schemes, its theta.
+
+    The default is backward Euler on every solver, so shoot-outs compare like with
+    like (theta = 1; crank_nicolson is theta = 0.5; "theta" takes a `theta` setting).
+    """
+    name = str(step.settings.get("time_scheme", "backward_euler"))
+    if name not in TIME_SCHEMES:
+        raise InputError(
+            f"unknown time_scheme '{name}'",
+            code="invalid",
+            details={"time_schemes": list(TIME_SCHEMES)},
+        )
+    if name == "theta":
+        theta = step.settings.get("theta")
+        if theta is None:
+            raise InputError("time_scheme 'theta' needs a theta setting (0.5 to 1)")
+        theta = float(theta)
+        if not 0.5 <= theta <= 1.0:
+            raise InputError("theta must be between 0.5 and 1 (unconditionally stable)")
+        return name, theta
+    return name, {"backward_euler": 1.0, "crank_nicolson": 0.5}.get(name)
+
+
 class InputError(PuzzleError, ValueError):
     """The study can't be written for this solver; the message says why."""
 

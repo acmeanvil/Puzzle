@@ -5,7 +5,8 @@
 case.json says what to solve:
     {"physics": "solid_mechanics" | "heat_transfer" | "electrostatics" | "magnetic_fields",
      "step": {"type": "stationary" | "modal" | "transient", "modes": 10,
-              "time_step": 10.0, "steps": 60},          (transient heat only)
+              "time_step": 10.0, "steps": 60,           (transient heat only)
+              "scheme": "backward_euler" | "crank_nicolson" | "bdf2" | "theta", "theta": 1.0},
      "initial_temperature": 293.15,
      "materials": [{"group": "Bar/Body", "properties": {"youngs_modulus": ..., ...},
                     "tables": {"thermal_conductivity": [[T, k], ...]}}],   (heat only)
@@ -285,7 +286,7 @@ def solve_heat(case, msh, degree, dx, ds, facets, tag, of_temperature, out) -> N
     k = of_temperature("thermal_conductivity", previous)
     a = k * ufl.inner(ufl.grad(T), ufl.grad(v)) * dx
     L = fem.Constant(msh, 0.0) * v * dx
-    bcs = []
+    bcs, films = [], []
     for f in case["features"]:
         where, vals = facets.find(tag(f["group"])), f.get("values", {})
         if f["type"] == "temperature":
@@ -293,6 +294,7 @@ def solve_heat(case, msh, degree, dx, ds, facets, tag, of_temperature, out) -> N
         elif f["type"] == "heat_flux":
             L += vals["q"] * v * ds(tag(f["group"]))
         elif f["type"] == "convection":
+            films.append((vals["h"], tag(f["group"])))
             a += vals["h"] * T * v * ds(tag(f["group"]))
             L += vals["h"] * vals["T_inf"] * v * ds(tag(f["group"]))
     out["coords"] = V.tabulate_dof_coordinates()
@@ -315,16 +317,40 @@ def solve_heat(case, msh, degree, dx, ds, facets, tag, of_temperature, out) -> N
         out["temperature"] = picard(a, L, previous).x.array.reshape(-1, 1)
         return
 
-    # Implicit (backward) Euler: rho cp (T - T_old) / dt = div(k grad T).
+    # rho cp dT/dt + A(T) = F, with A the conduction (+ film) operator and F the loads.
+    # theta method: rho cp (T - T_old)/dt + theta A(T) + (1 - theta) A(T_old) = F;
+    # bdf2: rho cp (3T - 4T_old + T_older)/(2 dt) + A(T) = F, its first step by Euler.
     rho, cp = of_temperature("density", previous), of_temperature("specific_heat", previous)
     dt, steps = case["step"]["time_step"], case["step"]["steps"]
-    old = fem.Function(V)
-    old.x.array[:] = case["initial_temperature"]
-    a_t = rho * cp / dt * T * v * dx + a
-    L_t = rho * cp / dt * old * v * dx + L
+    scheme = case["step"].get("scheme", "backward_euler")
+    old, older = fem.Function(V), fem.Function(V)
+    old.x.array[:] = older.x.array[:] = case["initial_temperature"]
+    capacity = rho * cp / dt
+
+    def operator_on(u):
+        k_u = of_temperature("thermal_conductivity", u)
+        form = k_u * ufl.inner(ufl.grad(u), ufl.grad(v)) * dx
+        for h, where in films:
+            form += h * u * v * ds(where)
+        return form
+
+    euler = (capacity * T * v * dx + a, capacity * old * v * dx + L)
+    if scheme == "bdf2":
+        later = (1.5 * capacity * T * v * dx + a, capacity * (2.0 * old - 0.5 * older) * v * dx + L)
+    else:
+        theta = case["step"].get("theta") or 1.0
+        later = (
+            capacity * T * v * dx + theta * a,
+            capacity * old * v * dx + L - (1.0 - theta) * operator_on(old),
+        )
+        if theta == 1.0:
+            later = euler
+        euler = later  # theta schemes need no starting step
     series = []
-    for _ in range(steps):
+    for n in range(steps):
+        a_t, L_t = euler if n == 0 else later
         current = picard(a_t, L_t, previous)
+        older.x.array[:] = old.x.array
         old.x.array[:] = current.x.array
         series.append(current.x.array.copy())
     out["times"] = dt * np.arange(1, steps + 1)

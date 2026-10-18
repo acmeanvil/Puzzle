@@ -1,3 +1,5 @@
+import pytest
+
 from puzzle.adapters import check_study
 from puzzle.adapters.calculix import CalculixAdapter
 from puzzle.adapters.elmer import ElmerAdapter
@@ -74,3 +76,27 @@ def test_shootout_checks_every_solver(bracket):
 
     static.shootout = Shootout(solvers=["openfoam"])
     assert check_study(bracket, static)["openfoam"] == ["no adapter installed for openfoam"]
+
+
+def test_time_schemes_are_checked(bracket):
+    from puzzle.adapters import available_adapters
+    from puzzle.adapters.common import InputError, time_scheme
+    from puzzle.model import SolveStep, Study
+
+    comp = next(iter(bracket.of_type(Component)))
+    step = SolveStep(
+        type="transient",
+        physics=["heat_transfer"],
+        settings={"time_step": 1.0, "end_time": 10.0, "time_scheme": "crank_nicolson"},
+    )
+    study = bracket.add(Study(name="cn", component=comp.id, solver="calculix", steps=[step]))
+    adapters = available_adapters()
+    assert any("crank_nicolson" in p for p in adapters["calculix"]().check(bracket, study))
+    assert not any("crank_nicolson" in p for p in adapters["elmer"]().check(bracket, study))
+    assert time_scheme(SolveStep(type="transient")) == ("backward_euler", 1.0)
+    assert time_scheme(
+        SolveStep(type="transient", settings={"time_scheme": "theta", "theta": 0.57})
+    ) == ("theta", 0.57)
+    with pytest.raises(InputError) as err:
+        time_scheme(SolveStep(type="transient", settings={"time_scheme": "leapfrog"}))
+    assert err.value.code == "invalid"

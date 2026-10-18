@@ -21,6 +21,7 @@ from puzzle.adapters.common import (
     initial_temperature,
     surface_area,
     thermal_tables,
+    time_scheme,
     time_settings,
 )
 from puzzle.adapters.elmer.meshfiles import ElmerMesh, write_mesh
@@ -338,10 +339,17 @@ def _time_block(step) -> list[str]:
             "  Output Intervals(1) = 1",
         ]
     dt, _, n = time_settings(step)
+    scheme, theta = time_scheme(step)
+    method = {
+        "backward_euler": ["  Timestepping Method = BDF", "  BDF Order = 1"],
+        "bdf2": ["  Timestepping Method = BDF", "  BDF Order = 2"],
+        "crank_nicolson": ["  Timestepping Method = Crank-Nicolson"],
+        # Elmer's Newmark method on a first-order system is the theta method.
+        "theta": ["  Timestepping Method = Newmark", f"  Newmark Beta = {theta}"],
+    }[scheme]
     return [
         "  Simulation Type = Transient",
-        "  Timestepping Method = BDF",
-        "  BDF Order = 1",
+        *method,
         f"  Timestep Sizes(1) = {dt:.12g}",
         f"  Timestep Intervals(1) = {n}",
         "  Output Intervals(1) = 1",

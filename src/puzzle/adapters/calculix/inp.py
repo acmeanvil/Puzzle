@@ -30,6 +30,7 @@ from puzzle.adapters.common import (
     initial_temperature,
     surface_blocks,
     thermal_tables,
+    time_scheme,
 )
 from puzzle.mesh.mesh import Mesh
 from puzzle.model.schema import Component, Feature, Material, Project, SolveStep, Study
@@ -183,6 +184,11 @@ def _step(
         }.get(step.type)
         outputs = ["*NODE FILE", "U"] + ([] if step.type == "modal" else ["*EL FILE", "S, E"])
     elif solved == {"heat_transfer"}:
+        if step.type == "transient" and time_scheme(step)[0] != "backward_euler":
+            raise InputError(
+                f"CalculiX steps heat transfer by backward Euler only, not {time_scheme(step)[0]}",
+                code="unsupported",
+            )
         procedure = {
             "stationary": ["*HEAT TRANSFER, STEADY STATE"],
             # DIRECT keeps the given increment instead of CalculiX's automatic stepping.

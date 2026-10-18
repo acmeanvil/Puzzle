@@ -211,3 +211,30 @@ def test_reader_picks_up_magnetic_energy():
 
     line = "MagnetoDynamicsCalcFields: ElectroMagnetic Field Energy:    1.840431E-05\n"
     assert float(MAGNETIC_ENERGY_LINE.findall(line)[-1]) == pytest.approx(1.840431e-5)
+
+
+@pytest.mark.parametrize(
+    ("scheme", "lines"),
+    [
+        ({}, ["Timestepping Method = BDF", "BDF Order = 1"]),
+        ({"time_scheme": "bdf2"}, ["BDF Order = 2"]),
+        ({"time_scheme": "crank_nicolson"}, ["Timestepping Method = Crank-Nicolson"]),
+        (
+            {"time_scheme": "theta", "theta": 0.6},
+            ["Timestepping Method = Newmark", "Newmark Beta = 0.6"],
+        ),
+    ],
+)
+def test_time_schemes(tmp_path, scheme, lines):
+    hot = Feature(
+        type="temperature", selection="Bar/Root", values={"T": Quantity(value=100, unit="degC")}
+    )
+    settings = {"time_step": Quantity(value=5, unit="s"), "end_time": Quantity(value=30, unit="s")}
+    sif, _ = _case(
+        tmp_path,
+        [hot],
+        SolveStep(type="transient", settings=settings | scheme),
+        physics="heat_transfer",
+    )
+    text = sif.read_text()
+    assert all(line in text for line in lines)

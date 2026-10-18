@@ -112,6 +112,24 @@ def test_transient_heat_case(tmp_path):
     comm = (export.parent / "job.comm").read_text()
     assert "TYPE_CALCUL='TRAN'" in comm and "ETAT_INIT=_F(VALE=293.15)" in comm
     assert "JUSQU_A=30, PAS=5" in comm
+    assert "PARM_THETA=1.0" in comm  # backward Euler, like every other solver
+
+    export = _case(
+        tmp_path / "cn",
+        [hot],
+        SolveStep(type="transient", settings=settings | {"time_scheme": "crank_nicolson"}),
+        "heat_transfer",
+        {"temperature_dependent_materials": False},
+    )
+    assert "PARM_THETA=0.5" in (export.parent / "job.comm").read_text()
+    with pytest.raises(InputError) as err:
+        _case(
+            tmp_path / "bdf",
+            [hot],
+            SolveStep(type="transient", settings=settings | {"time_scheme": "bdf2"}),
+            "heat_transfer",
+        )
+    assert err.value.code == "unsupported"
 
 
 TRANSIENT = """#
