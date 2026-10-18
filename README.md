@@ -21,6 +21,21 @@ puzzle runs examples/cantilever
 
 Running an unchanged study again reuses the stored result. Results go to `examples/cantilever/results` (Delta Lake), solver files to `examples/cantilever/.puzzle/runs`.
 
+## Working with an AI agent
+
+Every change to a project, whether from the CLI, a script or an AI agent, goes through one command layer and is recorded in the project's `history.jsonl`, with undo (ADR 0015). Agents connect over MCP:
+
+```sh
+claude mcp add puzzle -- puzzle mcp /path/to/project --name claude-code   # Claude Code
+puzzle autonomy examples/cantilever --level propose    # advise | propose | act_in_budget | act
+puzzle proposals examples/cantilever                   # review what the agent proposed
+puzzle accept examples/cantilever <id>                 # or: puzzle reject ...
+puzzle history examples/cantilever
+puzzle undo examples/cantilever
+```
+
+At the default level, `propose`, an agent's changes wait for you to accept them. `act_in_budget` lets it apply changes and run solvers within a run and time budget (`--runs`, `--solver-seconds`). Unbudgeted `act` needs two confirmations. `--mcp off` closes the project to agents.
+
 ## Layout
 
 | Path | Purpose |
@@ -30,7 +45,9 @@ Running an unchanged study again reuses the stored result. Results go to `exampl
 | `src/puzzle/adapters` | Solver adapters and their capability matrices |
 | `src/puzzle/geometry` | STEP import and named entities (Gmsh's OpenCASCADE kernel) |
 | `src/puzzle/mesh` | Meshing recipes run by Gmsh |
-| `src/puzzle/results` | Results model and the Delta Lake / Parquet store |
+| `src/puzzle/commands` | The command layer: every change, its history and undo; autonomy levels |
+| `src/puzzle/agent` | The MCP server that offers a project to AI agents |
+| `src/puzzle/results` | Results model, the Delta Lake / Parquet store, and summary queries |
 | `src/puzzle/post` | VTK grids, viewer (`puzzle show`), ParaView export |
 | `src/puzzle/gui` | PySide6 desktop GUI (planned) |
 | `docs/adr` | Architecture decision records |

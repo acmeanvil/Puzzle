@@ -13,10 +13,13 @@ from __future__ import annotations
 
 import itertools
 from dataclasses import dataclass, field
-from typing import Annotated, Any, ClassVar, Literal, TypeVar
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, TypeVar
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+if TYPE_CHECKING:
+    from puzzle.errors import Problem
 
 SCHEMA_VERSION = 1
 
@@ -468,6 +471,30 @@ OBJECT_TYPES: tuple[type[ProjectObject], ...] = (
 T = TypeVar("T", bound=ProjectObject)
 
 
+class Budget(BaseModel):
+    """What an agent at "act_in_budget" may spend before it must ask (ADR 0015)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    runs: int = Field(default=5, ge=0, description="fresh solver runs")
+    solver_seconds: float = Field(default=600.0, ge=0, description="total solver wall time")
+
+
+class AgentSettings(BaseModel):
+    """How much an AI agent may do in this project, and who may connect (ADR 0015).
+
+    Changed only through the set_autonomy command; agents can never change it.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    level: Literal["advise", "propose", "act_in_budget", "act"] = "propose"
+    budget: Budget = Field(default_factory=Budget)
+    mcp: Literal["off", "local", "network"] = Field(
+        default="local", description="who may drive the project over MCP"
+    )
+
+
 @dataclass
 class Project:
     """All objects in a project, keyed by ID. The model tree and schematic are views of this."""
@@ -475,6 +502,7 @@ class Project:
     name: str
     schema_version: int = SCHEMA_VERSION
     objects: dict[UUID, ProjectObject] = field(default_factory=dict)
+    agent: AgentSettings = field(default_factory=AgentSettings)
 
     def add(self, obj: T) -> T:
         if obj.id in self.objects:
@@ -522,27 +550,47 @@ class Project:
 
     def validate(self) -> list[str]:
         """Return human-readable problems; an empty list means the project is consistent."""
-        problems: list[str] = []
+        return [p.message for p in self.problems()]
+
+    def problems(self) -> list[Problem]:
+        """Consistency problems, each with a code (see puzzle.errors.Problem)."""
+        from puzzle.errors import Problem
+
+        out: list[Problem] = []
         for obj in self.objects.values():
-            problems += [
-                f"{obj.kind} '{obj.name}' refers to missing object {dep}"
+            out += [
+                Problem(
+                    "missing_reference",
+                    obj.name,
+                    f"{obj.kind} '{obj.name}' refers to missing object {dep}",
+                    {"id": str(dep)},
+                )
                 for dep in obj.dependencies()
                 if dep not in self.objects
             ]
 
         for comp in self.of_type(Component):
             names = self.selection_names(comp)
-            problems += [
-                f"component '{comp.name}' uses unknown selection '{s}'"
+            out += [
+                Problem(
+                    "unknown_selection",
+                    comp.name,
+                    f"component '{comp.name}' uses unknown selection '{s}'",
+                    {"selection": s},
+                )
                 for s in comp.used_selections()
                 if s not in names
             ]
             for part in comp.parts:
                 geo = self.objects.get(part.geometry)
                 if isinstance(geo, Geometry) and geo.scope == "local" and geo.owner != comp.id:
-                    problems.append(
-                        f"component '{comp.name}' uses geometry '{geo.name}', "
-                        "which is local to another component"
+                    out.append(
+                        Problem(
+                            "foreign_local_geometry",
+                            comp.name,
+                            f"component '{comp.name}' uses geometry '{geo.name}', "
+                            "which is local to another component",
+                        )
                     )
 
         known = self.parameter_names()
@@ -552,36 +600,70 @@ class Project:
                 if isinstance(step, SolveStep):
                     seen_solve = True
                 elif seen_solve:
-                    problems.append(f"study '{study.name}': sweep steps must come first")
-            problems += [
-                f"study '{study.name}' sweeps unknown parameter '{p}'"
+                    out.append(
+                        Problem(
+                            "sweep_order",
+                            study.name,
+                            f"study '{study.name}': sweep steps must come first",
+                        )
+                    )
+            out += [
+                Problem(
+                    "unknown_parameter",
+                    study.name,
+                    f"study '{study.name}' sweeps unknown parameter '{p}'",
+                    {"parameter": p},
+                )
                 for p in sorted(study.swept_parameters() - known)
             ]
             comp = self.objects.get(study.component)
             if isinstance(comp, Component):
                 present = {ph.type for ph in comp.physics}
-                problems += [
-                    f"study '{study.name}' solves {ph}, which component '{comp.name}' lacks"
+                out += [
+                    Problem(
+                        "missing_physics",
+                        study.name,
+                        f"study '{study.name}' solves {ph}, which component '{comp.name}' lacks",
+                        {"physics": ph},
+                    )
                     for step in study.solve_steps()
                     for ph in step.physics
                     if ph not in present
                 ]
             solvers = study.all_solvers()
             if len(set(solvers)) != len(solvers):
-                problems.append(f"study '{study.name}': shoot-out solvers must differ")
+                out.append(
+                    Problem(
+                        "duplicate_solver",
+                        study.name,
+                        f"study '{study.name}': shoot-out solvers must differ",
+                    )
+                )
 
         for t in self.of_type(Transfer):
             source = self.objects.get(t.source)
             target = self.objects.get(t.target)
             if not isinstance(target, Study):
-                problems.append(f"transfer '{t.name}' targets missing study {t.target}")
+                out.append(
+                    Problem(
+                        "missing_reference",
+                        t.name,
+                        f"transfer '{t.name}' targets missing study {t.target}",
+                        {"id": str(t.target)},
+                    )
+                )
                 continue
             if isinstance(source, Study):
                 unpinned = (
                     source.swept_parameters() - target.swept_parameters() - set(t.source_point)
                 )
-                problems += [
-                    f"transfer '{t.name}' needs source_point for swept parameter '{p}'"
+                out += [
+                    Problem(
+                        "unpinned_transfer",
+                        t.name,
+                        f"transfer '{t.name}' needs source_point for swept parameter '{p}'",
+                        {"parameter": p},
+                    )
                     for p in sorted(unpinned)
                 ]
-        return problems
+        return out

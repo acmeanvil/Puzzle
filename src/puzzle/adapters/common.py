@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from puzzle.errors import PuzzleError
 from puzzle.mesh.mesh import CellBlock, Group, Mesh
 
 # Volume element faces as corner positions (Gmsh corner order), numbered the way
@@ -48,8 +49,10 @@ def time_settings(step) -> tuple[float, float, int]:
     return dt, end, max(1, round(end / dt))
 
 
-class InputError(ValueError):
+class InputError(PuzzleError, ValueError):
     """The study can't be written for this solver; the message says why."""
+
+    code = "invalid_input"
 
 
 @dataclass

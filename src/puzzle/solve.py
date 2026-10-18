@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from puzzle.adapters import available_adapters
+from puzzle.errors import PuzzleError
 from puzzle.jobs import JobResult, run_job, runtime_for
 from puzzle.mesh import MeshResult, generate_mesh
 from puzzle.mesh.mesh import Mesh
@@ -17,8 +18,8 @@ from puzzle.results.model import Results
 from puzzle.results.store import ResultStore
 
 
-class StudyError(RuntimeError):
-    pass
+class StudyError(PuzzleError, RuntimeError):
+    code = "inconsistent"
 
 
 @dataclass
@@ -51,14 +52,16 @@ def run_study(
     """
     study = project.get(study_id, Study)
     if study.sweeps():
-        raise StudyError("parametric sweeps are not run yet")
+        raise StudyError("parametric sweeps are not run yet", code="unsupported", path=study.name)
     adapters = available_adapters()
     if study.solver not in adapters:
-        raise StudyError(f"no adapter installed for {study.solver}")
+        raise StudyError(
+            f"no adapter installed for {study.solver}", code="unsupported", path=study.name
+        )
     adapter = adapters[study.solver]()
     problems = project.validate() + adapter.check(project, study)
     if problems:
-        raise StudyError("; ".join(problems))
+        raise StudyError("; ".join(problems), path=study.name, details={"problems": problems})
 
     run_key = run_hashes(project)[study.id][study.solver][0]
     if store is not None and reuse:
@@ -81,8 +84,13 @@ def run_study(
         adapter.command(input_file), workdir, runtime, on_output=on_output, timeout_s=timeout_s
     )
     if not job.ok:
-        tail = "\n".join(job.log.read_text().splitlines()[-20:])
-        raise StudyError(f"{study.solver} failed (exit {job.returncode}):\n{tail}")
+        tail = job.log.read_text().splitlines()[-20:]
+        raise StudyError(
+            f"{study.solver} failed (exit {job.returncode}):\n" + "\n".join(tail),
+            code="solver_failed",
+            path=study.name,
+            details={"exit_code": job.returncode, "log": str(job.log), "log_tail": tail},
+        )
 
     results = adapter.read_results(input_file)
     kinds = [s.type for s in study.solve_steps()]

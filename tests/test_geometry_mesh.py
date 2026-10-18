@@ -209,3 +209,36 @@ def test_second_order_hexahedra_are_refused(tmp_path):
     project, comp = bar_project(step, [], element_shape="hexahedra", element_order=2)
     with pytest.raises(MeshError, match="second-order hexahedra"):
         generate_mesh(project, comp.id, tmp_path, tmp_path / "m")
+
+
+def test_meshing_from_short_lived_threads(tmp_path):
+    """Worker threads (MCP tools, GUI jobs) mesh, exit, and meshing still works."""
+    import subprocess
+    import sys
+    import textwrap
+
+    script = textwrap.dedent(f"""
+        import sys, threading
+        sys.path.insert(0, {str(Path(__file__).parent)!r})
+        from pathlib import Path
+        from conftest_geometry import bar_project, write_bar_step
+        from puzzle.mesh import generate_mesh
+        from puzzle.model import Physics
+
+        def mesh(i):
+            d = Path({str(tmp_path)!r}) / str(i)
+            d.mkdir()
+            project, comp = bar_project(write_bar_step(d / "bar.step"),
+                                        [Physics(type="heat_transfer")])
+            generate_mesh(project, comp.id, d, d / "m")
+
+        for i in range(2):
+            t = threading.Thread(target=mesh, args=(i,))
+            t.start()
+            t.join()
+        mesh("main")
+        print("ok")
+    """)
+    # In a subprocess: the failure mode is a segfault.
+    done = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    assert done.returncode == 0 and done.stdout.strip().endswith("ok"), done.stderr[-2000:]

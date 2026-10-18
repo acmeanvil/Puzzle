@@ -5,26 +5,34 @@
     puzzle runs PROJECT                          list stored runs
     puzzle show PROJECT --study NAME [options]   view a result, or save it with --screenshot
     puzzle export PROJECT --study NAME OUT.pvd   write .vtu/.pvd files for ParaView
+    puzzle outline PROJECT                       the model tree as text
+    puzzle history PROJECT                       what changed, by whom
+    puzzle undo PROJECT [--seq N]                undo the latest change (or entry N)
+    puzzle proposals PROJECT                     agents' open proposals
+    puzzle accept|reject PROJECT ID              decide on a proposal
+    puzzle autonomy PROJECT [--level ...]        what agents may do here
+    puzzle schema {objects,commands}             JSON schemas for clients and agents
+    puzzle mcp PROJECT                           serve the project to agents over MCP (stdio)
 
 PROJECT is a project directory (one TOML file per object). Results go to
-PROJECT/results, solver working files to PROJECT/.puzzle/runs.
+PROJECT/results, solver working files to PROJECT/.puzzle/runs. Every change goes
+through the command layer (puzzle.commands) and is logged in PROJECT/history.jsonl.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
-from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
 
+from puzzle.errors import PuzzleError
 from puzzle.model.schema import Project, Study
+from puzzle.project.layout import RESULTS_DIR
 from puzzle.project.store import load_project
 from puzzle.results.store import ResultStore, RunRecord
-
-RESULTS_DIR = "results"
-WORK_DIR = ".puzzle/runs"
 
 
 class CliError(Exception):
@@ -37,6 +45,12 @@ def main(argv: list[str] | None = None) -> int:
         return args.handler(args)
     except CliError as exc:
         print(f"puzzle: {exc}", file=sys.stderr)
+        return 1
+    except PuzzleError as exc:
+        print(f"puzzle: {exc.message} [{exc.code}]", file=sys.stderr)
+        for key, value in exc.details.items():
+            if key != "log_tail":
+                print(f"  {key}: {value}", file=sys.stderr)
         return 1
 
 
@@ -84,6 +98,55 @@ def _parser() -> argparse.ArgumentParser:
         else:
             p.add_argument("output", type=Path, help="the .pvd file to write")
         p.set_defaults(handler=handler)
+
+    p = sub.add_parser("outline", help="the model tree as text")
+    p.add_argument("project", type=Path)
+    p.add_argument("--ids", action="store_true", help="show object ids")
+    p.set_defaults(handler=_outline)
+
+    p = sub.add_parser("history", help="what changed, by whom")
+    p.add_argument("project", type=Path)
+    p.add_argument("-n", type=int, default=20, help="entries to show")
+    p.set_defaults(handler=_history)
+
+    p = sub.add_parser("undo", help="undo the latest change, or history entry --seq")
+    p.add_argument("project", type=Path)
+    p.add_argument("--seq", type=int)
+    p.set_defaults(handler=_undo)
+
+    p = sub.add_parser("proposals", help="agents' open proposals")
+    p.add_argument("project", type=Path)
+    p.set_defaults(handler=_proposals)
+
+    p = sub.add_parser("accept", help="apply a proposal")
+    p.add_argument("project", type=Path)
+    p.add_argument("proposal")
+    p.add_argument("--only", help="comma-separated command numbers, e.g. 0,2")
+    p.set_defaults(handler=_accept)
+
+    p = sub.add_parser("reject", help="decline a proposal")
+    p.add_argument("project", type=Path)
+    p.add_argument("proposal")
+    p.add_argument("--reason", default="")
+    p.set_defaults(handler=_reject)
+
+    p = sub.add_parser("autonomy", help="show or set what agents may do in the project")
+    p.add_argument("project", type=Path)
+    p.add_argument("--level", choices=["advise", "propose", "act_in_budget", "act"])
+    p.add_argument("--runs", type=int, help="budget: fresh solver runs")
+    p.add_argument("--solver-seconds", type=float, help="budget: solver wall time")
+    p.add_argument("--mcp", choices=["off", "local", "network"])
+    p.add_argument("--confirm", help="the token from the first request (level act)")
+    p.set_defaults(handler=_autonomy)
+
+    p = sub.add_parser("schema", help="print JSON schemas")
+    p.add_argument("which", choices=["objects", "commands"])
+    p.set_defaults(handler=_schema)
+
+    p = sub.add_parser("mcp", help="serve the project to AI agents over MCP (stdio)")
+    p.add_argument("project", type=Path)
+    p.add_argument("--name", default="mcp-client", help="how the agent appears in the history")
+    p.set_defaults(handler=_mcp)
     return parser
 
 
@@ -99,27 +162,19 @@ def _studies(args) -> int:
 
 
 def _run(args) -> int:
-    from puzzle.solve import StudyError, run_study
+    from puzzle.commands import Session
+    from puzzle.commands.model import RunStudy
 
-    project = _load(args.project)
-    study = _study(project, args.study)
-    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    workdir = args.project / WORK_DIR / f"{_slug(study.name)}-{stamp}"
+    study = _study(_load(args.project), args.study)
     print(f"Running '{study.name}' with {study.solver} ...")
     try:
-        run = run_study(
-            project,
-            study.id,
-            args.project,
-            workdir,
-            store=_store(args.project),
-            reuse=not args.no_reuse,
+        outcome = Session(args.project).submit(
+            RunStudy(study=str(study.id), reuse=not args.no_reuse, timeout_s=args.timeout),
             on_output=print if args.verbose else None,
-            timeout_s=args.timeout,
         )
-    except (StudyError, FileNotFoundError, ValueError) as exc:
+    except (FileNotFoundError, ValueError) as exc:
         raise CliError(str(exc)) from exc
-
+    run = outcome.run
     if run.cached:
         print(f"Unchanged since run {run.run_id[:8]}: reused its results.")
     else:
@@ -182,6 +237,149 @@ def _export(args) -> int:
     store, record = _target(args)
     files = export(store.read_mesh(record.mesh_id), store.read_results(record.run_id), args.output)
     print(f"Wrote {files[0]} ({len(files) - 1} step files); open it in ParaView.")
+    return 0
+
+
+def _outline(args) -> int:
+    from puzzle.commands import outline
+
+    print(outline(_load(args.project), ids=args.ids))
+    return 0
+
+
+def _history(args) -> int:
+    from puzzle.commands import Session
+
+    _load(args.project)
+    for e in Session(args.project).history(limit=args.n):
+        who = e["actor"]["kind"] + (f" {e['actor']['name']}" if e["actor"]["name"] else "")
+        what = e["type"]
+        if e["type"] == "command":
+            what = e["command"]["command"]
+            if "approved_by" in e:
+                what += f" (proposal {e['proposal']}, approved)"
+        elif e["type"] == "proposal":
+            what = f"proposal {e['id']}: " + ", ".join(c["command"] for c in e["commands"])
+        elif e["type"] == "decision":
+            what = f"{'accepted' if e['accepted'] else 'rejected'} proposal {e['proposal']}"
+        undone = "  (undone)" if e.get("undone") else ""
+        when = e["time"][:19].replace("T", " ")
+        print(f"{e['seq']:>4}  {when}  {who:<16} {what}{undone}")
+    return 0
+
+
+def _undo(args) -> int:
+    from puzzle.commands import Session
+
+    _load(args.project)
+    out = Session(args.project).undo(seq=args.seq)
+    names = [o["name"] for o in out.created + out.changed + out.deleted]
+    print(f"Undone; restored {', '.join(names) or 'nothing'} (history entry {out.seq}).")
+    return 0
+
+
+def _proposals(args) -> int:
+    from puzzle.commands import Session
+
+    _load(args.project)
+    proposals = Session(args.project).proposals()
+    if not proposals:
+        print("No open proposals.")
+    for p in proposals:
+        print(f"{p['id']}  from {p['actor']['kind']} {p['actor']['name']}: {p['rationale']}")
+        for i, c in enumerate(p["commands"]):
+            print(f"    {i}: {json.dumps(c)}")
+        changed = [o["name"] for o in p["preview"]["created"] + p["preview"]["changed"]]
+        if changed:
+            print(f"    changes: {', '.join(changed)}")
+        for problem in p["preview"]["problems"]:
+            print(f"    would leave: [{problem['code']}] {problem['message']}")
+    return 0
+
+
+def _accept(args) -> int:
+    from puzzle.commands import Session
+
+    _load(args.project)
+    only = [int(i) for i in args.only.split(",")] if args.only else None
+    outcomes = Session(args.project).accept(args.proposal, only=only)
+    print(f"Accepted proposal {args.proposal}: {len(outcomes)} command(s) applied.")
+    return 0
+
+
+def _reject(args) -> int:
+    from puzzle.commands import Session
+
+    _load(args.project)
+    Session(args.project).reject(args.proposal, reason=args.reason)
+    print(f"Rejected proposal {args.proposal}.")
+    return 0
+
+
+def _autonomy(args) -> int:
+    from puzzle.commands import Session
+
+    project = _load(args.project)
+    budget = None
+    if args.runs is not None or args.solver_seconds is not None:
+        current = project.agent.budget
+        budget = {
+            "runs": current.runs if args.runs is None else args.runs,
+            "solver_seconds": (
+                current.solver_seconds if args.solver_seconds is None else args.solver_seconds
+            ),
+        }
+    command = {
+        "command": "set_autonomy",
+        **{
+            k: v
+            for k, v in (
+                ("level", args.level),
+                ("mcp", args.mcp),
+                ("budget", budget),
+                ("confirm", args.confirm),
+            )
+            if v is not None
+        },
+    }
+    if len(command) > 1:
+        try:
+            Session(args.project).submit(command)
+        except PuzzleError as exc:
+            if exc.code != "confirmation_required" or "token" not in exc.details:
+                raise
+            token = exc.details["token"]
+            print("Unbudgeted 'act' lets agents change the model and run solvers unasked.")
+            print(f"To confirm, run again with --level act --confirm {token} (within 15 minutes).")
+            return 0
+    agent = load_project(args.project).agent
+    print(
+        f"Agents: {agent.level}; budget {agent.budget.runs} runs, "
+        f"{agent.budget.solver_seconds:g} s; MCP {agent.mcp}"
+    )
+    return 0
+
+
+def _schema(args) -> int:
+    if args.which == "commands":
+        from puzzle.commands import command_schema
+
+        schema = command_schema()
+    else:
+        from pydantic import TypeAdapter
+
+        from puzzle.model.schema import OBJECT_TYPES
+
+        schema = {cls.kind: TypeAdapter(cls).json_schema() for cls in OBJECT_TYPES}
+    print(json.dumps(schema, indent=2))
+    return 0
+
+
+def _mcp(args) -> int:
+    from puzzle.agent.mcp import serve
+
+    _load(args.project)
+    serve(args.project, client=args.name)
     return 0
 
 
@@ -265,10 +463,6 @@ def _counts(mesh) -> str:
         for e, n in mesh.element_counts().items()
         if e.startswith(("tet", "hex", "wedge"))
     )
-
-
-def _slug(name: str) -> str:
-    return "".join(c if c.isalnum() else "-" for c in name.lower()).strip("-") or "study"
 
 
 if __name__ == "__main__":

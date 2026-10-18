@@ -16,7 +16,13 @@ from pathlib import Path
 
 import tomli_w
 
-from puzzle.model.schema import OBJECT_TYPES, SCHEMA_VERSION, Project, ProjectObject
+from puzzle.model.schema import (
+    OBJECT_TYPES,
+    SCHEMA_VERSION,
+    AgentSettings,
+    Project,
+    ProjectObject,
+)
 
 _BY_KIND: dict[str, type[ProjectObject]] = {cls.kind: cls for cls in OBJECT_TYPES}
 
@@ -24,7 +30,11 @@ _BY_KIND: dict[str, type[ProjectObject]] = {cls.kind: cls for cls in OBJECT_TYPE
 def save_project(project: Project, root: Path) -> None:
     """Write the project to `root`, removing files for objects that no longer exist."""
     root.mkdir(parents=True, exist_ok=True)
-    header = {"name": project.name, "schema_version": project.schema_version}
+    header = {
+        "name": project.name,
+        "schema_version": project.schema_version,
+        "agent": project.agent.model_dump(mode="json"),
+    }
     (root / "project.toml").write_text(tomli_w.dumps(header))
 
     keep: set[Path] = set()
@@ -47,7 +57,11 @@ def load_project(root: Path) -> Project:
             f"project schema {header['schema_version']} is newer than this Puzzle "
             f"({SCHEMA_VERSION})"
         )
-    project = Project(name=header["name"], schema_version=header["schema_version"])
+    project = Project(
+        name=header["name"],
+        schema_version=header["schema_version"],
+        agent=AgentSettings.model_validate(header.get("agent", {})),
+    )
     for kind, cls in _BY_KIND.items():
         for path in sorted((root / kind).glob("*.toml")):
             project.add(cls.model_validate(tomllib.loads(path.read_text())))

@@ -18,6 +18,7 @@ from pathlib import Path
 import gmsh
 import numpy as np
 
+from puzzle.errors import PuzzleError
 from puzzle.geometry.model import ENTITY_DIM, import_step, load_shapes, match, place
 from puzzle.geometry.session import gmsh_session
 from puzzle.mesh.mesh import ELEMENT_NAMES, CellBlock, Group, Mesh
@@ -26,8 +27,8 @@ from puzzle.model.schema import Component, Geometry, MeshRecipe, NamedSelection,
 MESH_FILE = "mesh.msh"
 
 
-class MeshError(RuntimeError):
-    pass
+class MeshError(PuzzleError, RuntimeError):
+    code = "mesh_failed"
 
 
 @dataclass

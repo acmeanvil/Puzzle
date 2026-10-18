@@ -70,6 +70,13 @@ At every level the agent's changes are attributed in the log and can be undone.
 - **Data leaves the machine only as configured.** By default only outlines and summaries go to a remote provider; sending geometry or full results needs the user's permission.
 - **Puzzle ships no model weights.**
 
+### First implementation
+
+- `puzzle.commands`: `Session` with `submit`, `propose`, `preview`, `accept`, `reject` and `undo`, plus a project lock. Commands are create, edit (dotted field paths), delete, add_library_material, copy_component, run_study and set_autonomy. `history.jsonl` stores the before-snapshots that undo uses. Autonomy settings live in `project.toml` under `[agent]`.
+- `puzzle.errors`: `PuzzleError` codes; `Project.problems()` returns coded findings.
+- `puzzle.results.query`: summary, stats (with locations), value_at, and integrals with shape-function weights.
+- `puzzle.agent.mcp`: an MCP 2.x server over stdio (`puzzle mcp PROJECT --name ...`). Its tools are outline, get_object, schema, problems, materials_library, capabilities, check_study, submit, propose, preview, undo, history, proposals, autonomy, runs, result_summary, result_stats, result_value_at, result_integral and render.
+
 ## Consequences
 
 - One mechanism gives undo, provenance, scripting and agent control. The GUI is built on it rather than retrofitted.

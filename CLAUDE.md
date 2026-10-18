@@ -37,10 +37,13 @@ Solver tests in `tests/integration/` skip when the solver isn't available; `test
 | `src/puzzle/mesh` | Recipe → Gmsh mesh with physical groups `Part/Selection`; solver-neutral `Mesh` |
 | `src/puzzle/adapters` | One adapter per solver: capability matrix, `write_input`, `command`, `read_results` |
 | `src/puzzle/jobs` | Runs solvers natively or in Docker/Podman; runtime chosen per solver |
-| `src/puzzle/results` | Solver-neutral `Results`; `ResultStore` = Delta Lake tables (runs, meshes, nodes, cells, groups, fields) |
+| `src/puzzle/commands` | Command layer (ADR 0015): `Session.submit/propose/accept/undo`, `history.jsonl`, autonomy checks, `outline` |
+| `src/puzzle/agent` | `mcp.py`: MCP server over the command layer (`puzzle mcp PROJECT`); tools return summaries and coded errors |
+| `src/puzzle/errors.py` | `PuzzleError(code, message, path, details)` and `Problem`; codes in `CODES` |
+| `src/puzzle/results` | Solver-neutral `Results`; `ResultStore` = Delta Lake tables (runs, meshes, nodes, cells, groups, fields); `query` = summary, stats, value_at, integrate |
 | `src/puzzle/solve.py` | `run_study`: validate → mesh → write → run → read |
 | `src/puzzle/post` | VTK grids (tet10 reordered for VTK), `render` (window or PNG), `.vtu`/`.pvd` export, `sample` (results at a point) |
-| `src/puzzle/cli.py` | `puzzle studies/run/runs/show/export PROJECT` |
+| `src/puzzle/cli.py` | `puzzle studies/run/runs/show/export/outline/history/undo/proposals/accept/reject/autonomy/schema/mcp` |
 | `examples/cantilever` | Example project; regenerate with `python examples/cantilever/build.py` |
 | `benchmarks/` | Benchmarks as projects (NAFEMS LE1, laminar channel flow); each has build.py, a README with measured results, and an integration test |
 | `containers/`, `packaging/conda-forge/` | Solver images; conda-forge recipes (elmerfem) |
@@ -63,6 +66,7 @@ Capability matrices also list planned capabilities; `write_input` refuses what i
 - Adapters only claim a capability once a benchmark for it passes. Elmer's mechanical contact is bonding only (mortar tie); its slide/friction/stick are `experimental`.
 - Tests compare against closed-form or published answers with stated tolerances, not snapshots.
 - Match the surrounding code: dataclasses/Pydantic, type hints, short docstrings that say why.
+- **Every project change goes through `puzzle.commands.Session`** (CLI, GUI, scripts, agents); no client writes project files itself. New user actions become commands in `commands/model.py`. Errors a client can act on are `PuzzleError` with a code from `puzzle.errors.CODES`.
 
 ## Gotchas
 
@@ -79,4 +83,7 @@ Capability matrices also list planned capabilities; `write_input` refuses what i
 - **Elmer image** is built without MUMPS (Debian trixie lacks ParMETIS).
 - **Elmer magnetics:** the A-V edge system stalls under GCR/BiCGStab here, so it is solved directly (Elmer then tree-gauges it). Unlisted SIF keywords such as `Use Magnetic Norm` need an explicit type (`Logical True`), or parsing fails. Lowest-order edge elements give B constant per element; nodal B is an average, so check it away from material interfaces and use the stored energy for the whole field.
 - **Local mesh sizes** are Gmsh `Constant` fields over the selection's entities (min-combined background field); point sizes alone barely refine curved bodies.
+- **Gmsh from threads:** OpenCASCADE keeps per-thread state from its first user; if that thread exits and another thread uses Gmsh, the process segfaults. `gmsh_session` first initialises Gmsh on a resident daemon thread. MCP runs sync tools on worker threads, so this matters.
+- **MCP SDK 2.x:** `from mcp.server.mcpserver import MCPServer` (FastMCP was renamed); results are `structured_content`/`is_error`. Annotate tool returns as `dict[str, Any]`, not bare `dict`, or the output is unstructured text.
+- **history.jsonl** is append-only and part of the project record: entries `command`, `undo`, `proposal`, `decision`, `confirmation_request`. Undo restores the logged before-snapshots and refuses if the objects changed since.
 - **Material data:** only `generic.toml` ships. The maintainer's full library is generated from `Materials_Hunt_List.xlsx` by `scripts/import_materials.py` into the user library (`puzzle.materials.user_library_path()`, outside the repo) and must never be committed. Tests set `PUZZLE_MATERIALS=""` (generics only) in `tests/conftest.py`; anything tests or examples use must be generic.

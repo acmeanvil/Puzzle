@@ -28,6 +28,7 @@ numpy = ">=1.26"
 deltalake = ">=1.0"
 pyarrow = ">=16"
 pyvista = ">=0.44"
+mcp = ">=2.0,<3"
 
 [pypi-dependencies]
 puzzle-fem = { path = ".", editable = true }
