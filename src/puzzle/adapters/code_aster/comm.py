@@ -11,7 +11,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from puzzle.adapters.common import STRUCTURAL, THERMAL, InputError, surface_area
+from puzzle.adapters.common import (
+    STRUCTURAL,
+    THERMAL,
+    InputError,
+    initial_temperature,
+    surface_area,
+    time_settings,
+)
 from puzzle.mesh.med import safe_names, write_med
 from puzzle.mesh.mesh import Mesh
 from puzzle.model.schema import Component, Feature, Material, Project, Study
@@ -35,7 +42,8 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
             f"not {sorted(solved)}"
         )
     thermal = solved == {"heat_transfer"}
-    if step.type not in ("stationary", "modal") or (thermal and step.type != "stationary"):
+    allowed = ("stationary", "transient") if thermal else ("stationary", "modal")
+    if step.type not in allowed:
         raise InputError(
             f"the Code_Aster adapter does not run {step.type} {sorted(solved)} steps yet"
         )
@@ -75,8 +83,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
 
     if thermal:
         out += [
-            "res = THER_LINEAIRE(MODELE=model, CHAM_MATER=mater, EXCIT=_F(CHARGE=load), "
-            "TYPE_CALCUL='STAT', INCREMENT=_F(LIST_INST=DEFI_LIST_REEL(VALE=(0.0,))))",
+            _ther_lineaire(step, comp),
             _table("res", "TEMP", "temperature"),
         ]
     elif step.type == "modal":
@@ -194,4 +201,19 @@ def _loads(features: list[Feature], names: dict[str, str], mesh: Mesh, thermal: 
         + kw("FORCE_FACE", face_force)
         + kw("PRES_REP", pressure)
         + ")"
+    )
+
+
+def _ther_lineaire(step, comp: Component) -> str:
+    call = "res = THER_LINEAIRE(MODELE=model, CHAM_MATER=mater, EXCIT=_F(CHARGE=load), "
+    if step.type != "transient":
+        # Code_Aster 18 wants an INCREMENT even for a steady solve.
+        return call + "TYPE_CALCUL='STAT', INCREMENT=_F(LIST_INST=DEFI_LIST_REEL(VALE=(0.0,))))"
+    dt, end, _ = time_settings(step)
+    heat = next(ph for ph in comp.physics if ph.type == "heat_transfer")
+    times = f"DEFI_LIST_REEL(DEBUT=0.0, INTERVALLE=_F(JUSQU_A={end:.12g}, PAS={dt:.12g}))"
+    return (
+        call
+        + f"TYPE_CALCUL='TRAN', ETAT_INIT=_F(VALE={initial_temperature(heat):.12g}), "
+        + f"INCREMENT=_F(LIST_INST={times}))"
     )

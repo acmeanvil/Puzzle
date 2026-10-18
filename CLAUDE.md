@@ -22,6 +22,8 @@ pixi run -e dev import-materials "<path>/Materials_Hunt_List.xlsx"
 
 A plain `.venv` also works (`pip install -e ".[dev]"`); set `PUZZLE_SOLVER_PATH=$PWD/.pixi/envs/calculix/bin` so solver tests find `ccx`.
 
+Transient steps take `time_step` and `end_time` settings; heat physics takes `initial_temperature`. Results come back as one step per output time (`StepResult.value` = time).
+
 Solver tests in `tests/integration/` skip when the solver isn't available. Rendering tests run only with `PUZZLE_RENDER_TESTS=1`; check renders by looking at the PNG (`puzzle show ... --screenshot`). Container runs: `PUZZLE_RUNTIME=docker pytest tests/integration` after building images in `containers/`.
 
 ## Layout
@@ -45,12 +47,12 @@ Solver tests in `tests/integration/` skip when the solver isn't available. Rende
 
 ## Adapter status
 
-| Solver | Implemented | Verified by (`tests/integration/test_benchmarks.py`, `test_nafems_le1.py`) | Runs |
+| Solver | Implemented | Verified by (`tests/integration/test_benchmarks.py`, `test_nafems_le1.py`; transient heat vs the series solution, all four FE solvers within 0.34%) | Runs |
 | --- | --- | --- | --- |
-| CalculiX | static, modal, steady heat; fixed, displacement, force, pressure, temperature, heat flux, convection | cantilever, modal, conduction, LE1 | native (pixi `calculix`) or Docker |
-| Elmer | one solve step: static, modal (solid) or steady heat; own mesh files, ASCII .vtu output | same set; agrees with CalculiX to 4 digits, LE1 within 0.13% | Docker image (not on conda-forge yet) |
-| Code_Aster | one solve step: static, modal (solid) or steady heat; MED mesh via Gmsh with safe group names (G1, G2, ...); results as IMPR_TABLE CSVs | same set; LE1 +0.01% | native on linux-64/win-64 (pixi `code-aster`), Docker on macOS |
-| FEniCSx | one solve step: static, modal (P2 elasticity, SLEPc shift-invert) or steady heat; fixed `study.py` + `case.json` + `mesh.msh`, results.npz mapped back by coordinates | same set; LE1 −0.11% | native (pixi `fenicsx`, found via PUZZLE_SOLVER_PATH or PUZZLE_FENICSX_PYTHON) |
+| CalculiX | static, modal, steady and transient heat; fixed, displacement, force, pressure, temperature, heat flux, convection | cantilever, modal, conduction, LE1 | native (pixi `calculix`) or Docker |
+| Elmer | one solve step: static, modal (solid), steady or transient heat (BDF1); own mesh files, ASCII .vtu output | same set; agrees with CalculiX to 4 digits, LE1 within 0.13% | Docker image (not on conda-forge yet) |
+| Code_Aster | one solve step: static, modal (solid), steady or transient heat (theta scheme); MED mesh via Gmsh with safe group names (G1, G2, ...); results as IMPR_TABLE CSVs | same set; LE1 +0.01% | native on linux-64/win-64 (pixi `code-aster`), Docker on macOS |
+| FEniCSx | one solve step: static, modal (P2 elasticity, SLEPc shift-invert), steady or transient heat (implicit Euler); fixed `study.py` + `case.json` + `mesh.msh`, results.npz mapped back by coordinates | same set; LE1 −0.11% | native (pixi `fenicsx`, found via PUZZLE_SOLVER_PATH or PUZZLE_FENICSX_PYTHON) |
 | Code_Saturne | steady laminar incompressible flow: velocity inlet, pressure outlet, wall, symmetry; `setup.xml` written in-container by Code_Saturne's own case model (`cs_setup.py`); EnSight Gold results read per cell | channel flow (`benchmarks/channel_flow`): peak velocity −0.23%, profile 0.21%, dp/dx −0.95% | Docker image built from source (v9.2.0) |
 
 Capability matrices also list planned capabilities; `write_input` refuses what isn't implemented yet. Run Elmer tests locally with Docker on PATH (`/Applications/Docker.app/Contents/Resources/bin`) after building `containers/elmer`.

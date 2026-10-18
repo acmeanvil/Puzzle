@@ -124,3 +124,29 @@ def test_frd_reader_static_and_modal():
 def test_adapter_reports_missing_results(tmp_path):
     with pytest.raises(FileNotFoundError, match="job.frd"):
         CalculixAdapter().read_results(tmp_path / "job.inp")
+
+
+def test_transient_heat_step(tmp_path):
+    step = write_bar_step(tmp_path / "bar.step")
+    hot = Feature(
+        type="temperature", selection="Bar/Root", values={"T": Quantity(value=100, unit="degC")}
+    )
+    heat = Physics(
+        type="heat_transfer",
+        features=[hot],
+        settings={"initial_temperature": Quantity(value=50, unit="degC")},
+    )
+    project, comp = bar_project(step, [heat], mesh_size_mm=5)
+    settings = {"time_step": Quantity(value=2, unit="s"), "end_time": Quantity(value=1, unit="min")}
+    study = project.add(
+        Study(
+            name="t",
+            component=comp.id,
+            solver="calculix",
+            steps=[SolveStep(type="transient", settings=settings)],
+        )
+    )
+    mesh = generate_mesh(project, comp.id, tmp_path, tmp_path / "mesh").mesh
+    deck = write_inp(project, study, mesh)
+    assert "N_ALL, 323.15" in deck
+    assert "*STEP, INC=1000000\n*HEAT TRANSFER, DIRECT\n2, 60" in deck

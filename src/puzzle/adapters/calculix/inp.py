@@ -27,6 +27,7 @@ from puzzle.adapters.common import (
     THERMAL,
     FaceLookup,
     InputError,
+    initial_temperature,
     surface_blocks,
 )
 from puzzle.mesh.mesh import Mesh
@@ -93,7 +94,8 @@ def write_inp(project: Project, study: Study, mesh: Mesh) -> str:
         raise InputError(f"study '{study.name}' has no solve steps")
     physics_types = {p.type for p in comp.physics}
     if "heat_transfer" in physics_types:
-        out += ["*INITIAL CONDITIONS, TYPE=TEMPERATURE", f"N_ALL, {ROOM_K}"]
+        heat = next(ph for ph in comp.physics if ph.type == "heat_transfer")
+        out += ["*INITIAL CONDITIONS, TYPE=TEMPERATURE", f"N_ALL, {initial_temperature(heat)}"]
     for number, step in enumerate(solve_steps, start=1):
         out += _step(number, step, comp, mesh, faces, physics_types)
     return "\n".join(out) + "\n"
@@ -172,7 +174,8 @@ def _step(
     elif solved == {"heat_transfer"}:
         procedure = {
             "stationary": ["*HEAT TRANSFER, STEADY STATE"],
-            "transient": ["*HEAT TRANSFER"]
+            # DIRECT keeps the given increment instead of CalculiX's automatic stepping.
+            "transient": ["*HEAT TRANSFER, DIRECT"]
             + [f"{setting('time_step'):.10g}, {setting('end_time'):.10g}"]
             if step.type == "transient"
             else [],
@@ -195,7 +198,8 @@ def _step(
             f"CalculiX adapter does not support {step.type} steps for {sorted(solved)} yet"
         )
 
-    out = ["*STEP"] + procedure
+    # CalculiX stops after 100 increments per step unless told otherwise.
+    out = ["*STEP, INC=1000000" if step.type == "transient" else "*STEP"] + procedure
     wanted = (STRUCTURAL if "solid_mechanics" in solved else set()) | (
         THERMAL if "heat_transfer" in solved else set()
     )

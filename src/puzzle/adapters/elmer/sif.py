@@ -10,13 +10,21 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from puzzle.adapters.common import STRUCTURAL, THERMAL, InputError, surface_area
+from puzzle.adapters.common import (
+    STRUCTURAL,
+    THERMAL,
+    InputError,
+    initial_temperature,
+    surface_area,
+    time_settings,
+)
 from puzzle.adapters.elmer.meshfiles import ElmerMesh, write_mesh
 from puzzle.mesh.mesh import Mesh
 from puzzle.model.schema import Component, Feature, Material, Project, Study
 
 MESH_DIR = "mesh"
 OUTPUT = "case"
+TIMES = "puzzle-times.txt"  # output time of each case_t*.vtu, in order
 ROOM_K = 293.15
 DIRECT = ["  Linear System Solver = Direct", "  Linear System Direct Method = Umfpack"]
 
@@ -33,10 +41,13 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> tup
             "the Elmer adapter solves solid_mechanics or heat_transfer alone for now, "
             f"not {sorted(solved)}"
         )
-    if step.type not in ("stationary", "modal") or (
-        step.type == "modal" and solved != {"solid_mechanics"}
-    ):
+    allowed = {
+        "solid_mechanics": ("stationary", "modal"),
+        "heat_transfer": ("stationary", "transient"),
+    }
+    if step.type not in allowed[next(iter(solved))]:
         raise InputError(f"the Elmer adapter does not run {step.type} {sorted(solved)} steps yet")
+    transient = step.type == "transient"
 
     wanted = STRUCTURAL if "solid_mechanics" in solved else THERMAL
     features = [
@@ -59,9 +70,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> tup
         "Simulation",
         "  Max Output Level = 5",
         "  Coordinate System = Cartesian 3D",
-        "  Simulation Type = Steady state",
-        "  Steady State Max Iterations = 1",
-        "  Output Intervals(1) = 1",
+        *_time_block(step),
         "End",
         "",
         "Constants",
@@ -76,13 +85,19 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> tup
         out += ["End", ""]
         out += _material(i, project.get(assignment.material, Material), solved)
     if "heat_transfer" in solved:
-        out += ["Initial Condition 1", f"  Temperature = {ROOM_K}", "End", ""]
+        heat = next(ph for ph in comp.physics if ph.type == "heat_transfer")
+        out += [
+            "Initial Condition 1",
+            f"  Temperature = {initial_temperature(heat):.10g}",
+            "End",
+            "",
+        ]
 
     out += ["Equation 1", "  Active Solvers(1) = 1", "End", ""]
     out += _solver(step, solved)
     out += [
         "Solver 2",
-        "  Exec Solver = After Simulation",
+        f"  Exec Solver = {'After Timestep' if transient else 'After Simulation'}",
         '  Equation = "Result Output"',
         '  Procedure = "ResultOutputSolve" "ResultOutputSolver"',
         f'  Output File Name = "{OUTPUT}"',
@@ -96,6 +111,12 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> tup
             emesh.boundaries[name], name, [f for f in features if f.selection == name], mesh
         )
 
+    if transient:
+        dt, _, n = time_settings(step)
+        times = [k * dt for k in range(1, n + 1)]
+    else:
+        times = [1.0]
+    (workdir / MESH_DIR / TIMES).write_text("\n".join(f"{t:.12g}" for t in times) + "\n")
     sif = workdir / f"{OUTPUT}.sif"
     sif.write_text("\n".join(out) + "\n")
     return sif, emesh
@@ -183,3 +204,21 @@ def _boundary(index: int, name: str, features: list[Feature], mesh: Mesh) -> lis
                 f"  External Temperature = {v['T_inf']:.10g}",
             ]
     return out + ["End", ""]
+
+
+def _time_block(step) -> list[str]:
+    if step.type != "transient":
+        return [
+            "  Simulation Type = Steady state",
+            "  Steady State Max Iterations = 1",
+            "  Output Intervals(1) = 1",
+        ]
+    dt, _, n = time_settings(step)
+    return [
+        "  Simulation Type = Transient",
+        "  Timestepping Method = BDF",
+        "  BDF Order = 1",
+        f"  Timestep Sizes(1) = {dt:.12g}",
+        f"  Timestep Intervals(1) = {n}",
+        "  Output Intervals(1) = 1",
+    ]

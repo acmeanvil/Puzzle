@@ -22,6 +22,30 @@ THERMAL = {"temperature", "heat_flux", "convection"}
 FLUID = {"velocity_inlet", "mass_flow_inlet", "pressure_outlet", "wall", "symmetry"}
 
 
+ROOM_K = 293.15
+
+
+def initial_temperature(physics) -> float:
+    """The `initial_temperature` setting of a heat-transfer physics, in K (default 20 °C)."""
+    value = physics.settings.get("initial_temperature") if physics is not None else None
+    if value is None:
+        return ROOM_K
+    return value.to_si() if hasattr(value, "to_si") else float(value)
+
+
+def time_settings(step) -> tuple[float, float, int]:
+    """(time_step, end_time, number of steps) of a transient solve step, in s."""
+    try:
+        dt, end = (step.settings[k] for k in ("time_step", "end_time"))
+    except KeyError as missing:
+        raise InputError(f"a transient step needs a {missing} setting") from None
+    dt = dt.to_si() if hasattr(dt, "to_si") else float(dt)
+    end = end.to_si() if hasattr(end, "to_si") else float(end)
+    if dt <= 0 or end <= 0:
+        raise InputError("time_step and end_time must be positive")
+    return dt, end, max(1, round(end / dt))
+
+
 class InputError(ValueError):
     """The study can't be written for this solver; the message says why."""
 

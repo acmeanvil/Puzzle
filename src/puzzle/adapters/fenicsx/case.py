@@ -9,7 +9,15 @@ from pathlib import Path
 
 import numpy as np
 
-from puzzle.adapters.common import STRUCTURAL, THERMAL, InputError, match_points, surface_area
+from puzzle.adapters.common import (
+    STRUCTURAL,
+    THERMAL,
+    InputError,
+    initial_temperature,
+    match_points,
+    surface_area,
+    time_settings,
+)
 from puzzle.mesh.med import write_med
 from puzzle.mesh.mesh import Mesh
 from puzzle.model.schema import Component, Material, Project, Study
@@ -57,9 +65,8 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
             f"not {sorted(solved)}"
         )
     physics = solved.pop()
-    if step.type not in ("stationary", "modal") or (
-        physics == "heat_transfer" and step.type != "stationary"
-    ):
+    allowed = ("stationary", "transient") if physics == "heat_transfer" else ("stationary", "modal")
+    if step.type not in allowed:
         raise InputError(f"the FEniCSx adapter does not run {step.type} {physics} steps yet")
 
     wanted = STRUCTURAL if physics == "solid_mechanics" else THERMAL
@@ -77,7 +84,10 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
 
     case = {
         "physics": physics,
-        "step": {"type": step.type, "modes": int(step.settings.get("modes", 10))},
+        "step": {"type": step.type, "modes": int(step.settings.get("modes", 10)), **_time(step)},
+        "initial_temperature": initial_temperature(
+            next((p for p in comp.physics if p.type == "heat_transfer"), None)
+        ),
         "materials": [
             {
                 "group": a.selection,
@@ -124,6 +134,13 @@ def read_results(workdir: Path) -> Results:
         return Field(name, "node", comps, ids[order], values[order])
 
     results = Results(solver="fenicsx")
+    if "times" in data:
+        for t, values in zip(data["times"], data["temperature_series"], strict=True):
+            temperature = field("temperature", [""], values.reshape(-1, 1))
+            results.steps.append(
+                StepResult(1, "transient", float(t), None, {"temperature": temperature})
+            )
+        return results
     if "frequencies" in data:
         for i, hz in enumerate(data["frequencies"], start=1):
             shape = field("displacement", ["x", "y", "z"], data["modes"][i - 1])
@@ -140,3 +157,10 @@ def read_results(workdir: Path) -> Results:
         step.fields["temperature"] = field("temperature", [""], data["temperature"])
     results.steps.append(step)
     return results
+
+
+def _time(step) -> dict:
+    if step.type != "transient":
+        return {}
+    dt, _, n = time_settings(step)
+    return {"time_step": dt, "steps": n}

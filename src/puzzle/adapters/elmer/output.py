@@ -38,6 +38,20 @@ def eigenvalues(log_text: str) -> list[float]:
     return [found[k] for k in sorted(found)]
 
 
+def read_series(
+    vtus: list[Path], times: list[float], node_ids: np.ndarray, log_text: str
+) -> Results:
+    """One result step per output file (transient), or the single steady/modal result."""
+    if len(vtus) == 1:
+        return read_results(vtus[0], node_ids, log_text)
+    results = Results(solver="elmer")
+    for vtu, t in zip(vtus, times, strict=False):
+        (step,) = read_results(vtu, node_ids, log_text).steps
+        step.value = t
+        results.steps.append(step)
+    return results
+
+
 def read_results(vtu: Path, node_ids: np.ndarray, log_text: str) -> Results:
     """`node_ids` maps Elmer node n (1-based) to Puzzle's node id node_ids[n - 1]."""
     data = read_vtu(vtu)

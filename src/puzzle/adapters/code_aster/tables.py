@@ -50,10 +50,14 @@ def read_results(workdir: Path) -> Results:
             fields = {"displacement": shapes[order]} if order in shapes else {}
             results.steps.append(StepResult(1, "modal", frequencies[order], order, fields))
         return results
-    step = StepResult(1, "", 1.0)
+    # One result step per stored instant (NUME_ORDRE); a static solve has one.
+    steps: dict[int, StepResult] = {}
     for name in ("displacement", "stress", "temperature"):
-        if name in tables:
-            fields = nodal_fields(tables[name], name)
-            step.fields[name] = fields[max(fields)]
-    results.steps.append(step)
+        if name not in tables:
+            continue
+        times = {int(r["NUME_ORDRE"]): float(r.get("INST") or 1.0) for r in tables[name]}
+        for order, field in nodal_fields(tables[name], name).items():
+            step = steps.setdefault(order, StepResult(1, "", times[order]))
+            step.fields[name] = field
+    results.steps = [steps[o] for o in sorted(steps)]
     return results

@@ -41,8 +41,8 @@ from puzzle.adapters.base import (
     Capabilities,
     SolverAdapter,
 )
-from puzzle.adapters.elmer.output import read_results as read_output
-from puzzle.adapters.elmer.sif import MESH_DIR, OUTPUT, write_case
+from puzzle.adapters.elmer.output import read_series
+from puzzle.adapters.elmer.sif import MESH_DIR, OUTPUT, TIMES, write_case
 from puzzle.jobs.runner import LOG_NAME
 from puzzle.mesh.mesh import Mesh
 from puzzle.model.schema import Project, Study
@@ -84,4 +84,6 @@ class ElmerAdapter(SolverAdapter):
             raise FileNotFoundError(f"Elmer wrote no results ({OUTPUT}*.vtu); see the solver log")
         log = input_file.parent / LOG_NAME
         node_ids = np.loadtxt(mesh_dir / NODE_MAP, dtype=np.int64, ndmin=1)
-        return read_output(vtus[-1], node_ids, log.read_text() if log.exists() else "")
+        times_file = mesh_dir / TIMES
+        times = np.loadtxt(times_file, ndmin=1).tolist() if times_file.exists() else [1.0]
+        return read_series(vtus, times, node_ids, log.read_text() if log.exists() else "")

@@ -117,3 +117,18 @@ def test_reader_maps_points_to_puzzle_nodes_and_modes_to_hz(tmp_path):
 
 def test_eigenvalue_parsing():
     assert eigenvalues(LOG + "EigenSolve: 2:    6.3E+07   0.0E+00\n") == [1.642173e6, 6.3e7]
+
+
+def test_transient_heat_sif(tmp_path):
+    hot = Feature(
+        type="temperature", selection="Bar/Root", values={"T": Quantity(value=100, unit="degC")}
+    )
+    settings = {"time_step": Quantity(value=5, unit="s"), "end_time": Quantity(value=30, unit="s")}
+    sif, _ = _case(
+        tmp_path, [hot], SolveStep(type="transient", settings=settings), physics="heat_transfer"
+    )
+    text = sif.read_text()
+    assert "Simulation Type = Transient" in text and "Timestep Sizes(1) = 5" in text
+    assert "Timestep Intervals(1) = 6" in text and "Exec Solver = After Timestep" in text
+    times = (sif.parent / "mesh" / "puzzle-times.txt").read_text().split()
+    assert [float(t) for t in times] == [5, 10, 15, 20, 25, 30]

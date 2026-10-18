@@ -86,3 +86,31 @@ def test_table_reader_modes(tmp_path):
     modes = read_results(tmp_path).modes()
     assert [(m.mode, m.value) for m in modes] == [(1, 203.9528), (2, 203.957)]
     assert modes[1].fields["displacement"].at([2])[0, 2] == 2.0
+
+
+def test_transient_heat_case(tmp_path):
+    hot = Feature(
+        type="temperature", selection="Bar/Root", values={"T": Quantity(value=100, unit="degC")}
+    )
+    settings = {"time_step": Quantity(value=5, unit="s"), "end_time": Quantity(value=30, unit="s")}
+    export = _case(
+        tmp_path, [hot], SolveStep(type="transient", settings=settings), physics="heat_transfer"
+    )
+    comm = (export.parent / "job.comm").read_text()
+    assert "TYPE_CALCUL='TRAN'" in comm and "ETAT_INIT=_F(VALE=293.15)" in comm
+    assert "JUSQU_A=30, PAS=5" in comm
+
+
+TRANSIENT = """#
+RESULTAT,NOM_CHAM,INST,NUME_ORDRE,NOEUD,COOR_X,COOR_Y,COOR_Z,TEMP
+res ,TEMP , 0.0, 0,1 , 0.0, 0.0, 0.0, 293.15
+res ,TEMP , 5.0, 1,1 , 0.0, 0.0, 0.0, 300.0
+res ,TEMP , 10.0, 2,1 , 0.0, 0.0, 0.0, 310.0
+"""
+
+
+def test_table_reader_time_series(tmp_path):
+    (tmp_path / "temperature.csv").write_text(TRANSIENT)
+    steps = read_results(tmp_path).steps
+    assert [s.value for s in steps] == [0.0, 5.0, 10.0]
+    assert steps[-1].fields["temperature"].values[0, 0] == 310.0

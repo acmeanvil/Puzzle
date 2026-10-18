@@ -4,14 +4,17 @@
 
 case.json says what to solve:
     {"physics": "solid_mechanics" | "heat_transfer",
-     "step": {"type": "stationary" | "modal", "modes": 10},
+     "step": {"type": "stationary" | "modal" | "transient", "modes": 10,
+              "time_step": 10.0, "steps": 60},          (transient heat only)
+     "initial_temperature": 293.15,
      "materials": [{"group": "Bar/Body", "properties": {"youngs_modulus": ..., ...}}],
      "features": [{"type": "fixed", "group": "Bar/Root", "values": {...}, "area": ...}]}
 Values are SI. Group names are Gmsh physical group names in mesh.msh.
 
 results.npz holds `coords` (one row per output node) and, as computed, `displacement`,
 `stress` (xx, yy, zz, xy, yz, zx), `temperature`, `frequencies` (Hz) and `modes`
-(mode x node x 3), plus `backend` (which linear algebra solved it).
+(mode x node x 3), `times` and `temperature_series` (step x node) for transients,
+plus `backend` (which linear algebra solved it).
 
 Linear algebra: PETSc (MUMPS, SLEPc) where dolfinx was built with it; otherwise SciPy
 (SuperLU, ARPACK), e.g. conda-forge's Windows dolfinx, which has no PETSc.
@@ -240,9 +243,25 @@ def solve_heat(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
         elif f["type"] == "convection":
             a += vals["h"] * T * v * ds(tag(f["group"]))
             L += vals["h"] * vals["T_inf"] * v * ds(tag(f["group"]))
-    Th = solve_linear(a, L, bcs, V, "t")
     out["coords"] = V.tabulate_dof_coordinates()
-    out["temperature"] = Th.x.array.reshape(-1, 1)
+    if case["step"]["type"] != "transient":
+        out["temperature"] = solve_linear(a, L, bcs, V, "t").x.array.reshape(-1, 1)
+        return
+
+    # Implicit (backward) Euler: rho cp (T - T_prev) / dt = div(k grad T).
+    rho, cp = piecewise("density"), piecewise("specific_heat")
+    dt, steps = case["step"]["time_step"], case["step"]["steps"]
+    previous = fem.Function(V)
+    previous.x.array[:] = case["initial_temperature"]
+    a_t = rho * cp / dt * T * v * dx + a
+    L_t = rho * cp / dt * previous * v * dx + L
+    series = []
+    for _ in range(steps):
+        current = solve_linear(a_t, L_t, bcs, V, "t")
+        previous.x.array[:] = current.x.array
+        series.append(current.x.array.copy())
+    out["times"] = dt * np.arange(1, steps + 1)
+    out["temperature_series"] = np.asarray(series)
 
 
 if __name__ == "__main__":

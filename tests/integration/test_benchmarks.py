@@ -206,3 +206,51 @@ def test_hexahedra_axial_stretch_and_conduction(tmp_path, solver):
     temperature = run.results.last("temperature")
     x = run.mesh.node_coords(temperature.ids)[:, 0]
     assert np.allclose(temperature.values[:, 0], 373.15 - 80.0 * x / L, atol=1e-6)
+
+
+DT, END = 10.0, 600.0  # s
+
+
+def _bar_temperature(x, t, alpha, t0=293.15, t1=373.15, terms=200):
+    """Bar at t0, end x = 0 held at t1 from t = 0, everything else insulated."""
+    n = np.arange(terms)[:, None]
+    lam = (2 * n + 1) * np.pi / (2 * L)
+    series = 4 / ((2 * n + 1) * np.pi) * np.sin(lam * x) * np.exp(-(lam**2) * alpha * t)
+    return t1 + (t0 - t1) * series.sum(axis=0)
+
+
+@solver
+def test_transient_conduction_matches_the_series_solution(tmp_path, solver):
+    step = write_bar_step(tmp_path / "bar.step")
+    hot = Feature(
+        type="temperature", selection="Bar/Root", values={"T": Quantity(value=100, unit="degC")}
+    )
+    heat = Physics(
+        type="heat_transfer",
+        features=[hot],
+        settings={"initial_temperature": Quantity(value=20, unit="degC")},
+    )
+    project, comp = bar_project(step, [heat], mesh_size_mm=5)
+    transient = SolveStep(
+        type="transient",
+        settings={
+            "time_step": Quantity(value=DT, unit="s"),
+            "end_time": Quantity(value=END, unit="s"),
+        },
+    )
+    study = project.add(Study(name="t", component=comp.id, solver=solver, steps=[transient]))
+    run = run_study(project, study.id, tmp_path, tmp_path / "run", timeout_s=1200)
+
+    steel = library_material("general_carbon_steel").properties
+    k, rho, cp = (steel[p].to_si() for p in ("thermal_conductivity", "density", "specific_heat"))
+    alpha = k / (rho * cp)
+    times = sorted({s.value for s in run.results.steps if "temperature" in s.fields})
+    assert times[-1] == pytest.approx(END, rel=1e-6)
+    assert len(times) >= 10  # a time series, not just the end state
+    for t in (END / 2, END):
+        state = next(s for s in run.results.steps if s.value == pytest.approx(t, rel=1e-6))
+        temperature = state.fields["temperature"]
+        x = run.mesh.node_coords(temperature.ids)[:, 0]
+        exact = _bar_temperature(x, t, alpha)
+        # Temperature rise matched within 2% of the 80 K step everywhere.
+        assert np.abs(temperature.values[:, 0] - exact).max() < 0.02 * 80
