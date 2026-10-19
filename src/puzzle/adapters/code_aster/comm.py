@@ -40,10 +40,7 @@ TABLES = {
 FORMAT_R = "1PE18.10"
 
 
-# Frictional contact (DEFI_CONTACT, FROTTEMENT='COULOMB') is not written yet: on quadratic
-# tetrahedra its friction multipliers make singular matrices, and on linear ones a slide
-# from the first increment does not converge. CalculiX runs frictional contact meanwhile.
-CONTACTS = {"bonded_nonconformal", "frictionless"}
+CONTACTS = {"bonded_nonconformal", "frictionless", "frictional"}
 
 
 def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Path:
@@ -86,6 +83,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
             "Code_Aster contact is written for static structural steps only so far",
             code="unsupported",
         )
+    _check_friction(touching, features, mesh)
     # A tie projects the source (slave) face's nodes into the target part's volume.
     tie_groups = [g for c in ties for g in (c.source, c.target.split("/", 1)[0])]
     tie_groups += [g for c in touching for g in (c.source, c.target)]
@@ -156,6 +154,8 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
             "res = STAT_NON_LINE(MODELE=model, CHAM_MATER=mater, "
             "EXCIT=_F(CHARGE=load, FONC_MULT=ramp), CONTACT=contact, "
             "COMPORTEMENT=_F(RELATION='ELAS'), "
+            # As Code_Aster's 3D contact validation (ssnv128): tangent every iteration.
+            "NEWTON=_F(REAC_ITER=1), CONVERGENCE=_F(ITER_GLOB_MAXI=200, RESI_GLOB_RELA=1e-6), "
             "INCREMENT=_F(LIST_INST=DEFI_LIST_REEL(DEBUT=0.0, "
             "INTERVALLE=_F(JUSQU_A=1.0, NOMBRE=10))))",
             "res = CALC_CHAMP(reuse=res, RESULTAT=res, CONTRAINTE=('SIGM_NOEU',), "
@@ -234,15 +234,52 @@ def _material(m: Material, thermal: bool) -> str:
     return f"ELAS=_F(E={e:.12g}, NU={nu:.12g}{rho})"
 
 
+def _check_friction(contacts, features, mesh: Mesh) -> None:
+    """Code_Aster's continuous Coulomb friction, where it works (see CLAUDE.md):
+
+    - first-order elements: on 10-node tetrahedra (6-node triangle faces) its friction and
+      contact multipliers become singular; Code_Aster validates quadratic 3D friction on
+      27-node hexahedra only;
+    - no displacement condition on slave (source) nodes: it duplicates a multiplier.
+    """
+    frictional = [c for c in contacts if c.type == "frictional"]
+    if not frictional:
+        return
+    if any(b.element in ("tet10", "hex20", "wedge15", "pyramid13") for b in mesh.blocks):
+        raise InputError(
+            "Code_Aster frictional contact needs a first-order mesh (element_order 1); "
+            "CalculiX runs frictional contact on quadratic meshes",
+            code="unsupported",
+        )
+    held = [f for f in features if f.type in ("fixed", "displacement")]
+    for c in frictional:
+        slave = mesh.groups[c.source].node_ids
+        clash = [
+            f.selection
+            for f in held
+            if np.intersect1d(slave, mesh.groups[f.selection].node_ids).size
+        ]
+        if clash:
+            raise InputError(
+                f"contact '{c.name}': slave face {c.source} shares nodes with displacement "
+                f"conditions on {', '.join(clash)}; with friction Code_Aster cannot hold a "
+                "node by both. Constrain those parts away from the interface, or swap "
+                "source and target",
+                details={"conflicts": clash},
+            )
+
+
 def _defi_contact(contacts, names: dict[str, str]) -> str:
-    """Continuous (augmented Lagrangian) frictionless contact; source faces are the slave."""
-    zones = [
-        f"_F(GROUP_MA_MAIT='{names[c.target]}', GROUP_MA_ESCL='{names[c.source]}')"
-        for c in contacts
-    ]
+    """Continuous (augmented Lagrangian) contact, with Coulomb friction when any zone has
+    it; source faces are the slave side."""
+    friction = any(c.type == "frictional" for c in contacts)
+    zones = []
+    for c in contacts:
+        zone = f"_F(GROUP_MA_MAIT='{names[c.target]}', GROUP_MA_ESCL='{names[c.source]}'"
+        zones.append(zone + (f", COULOMB={c.friction or 0.0:.10g})" if friction else ")"))
     return (
-        "contact = DEFI_CONTACT(MODELE=model, FORMULATION='CONTINUE', FROTTEMENT='SANS', "
-        f"ZONE=({', '.join(zones)},))"
+        "contact = DEFI_CONTACT(MODELE=model, FORMULATION='CONTINUE', "
+        f"FROTTEMENT='{'COULOMB' if friction else 'SANS'}', ZONE=({', '.join(zones)},))"
     )
 
 

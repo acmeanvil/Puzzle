@@ -7,7 +7,7 @@ from puzzle.adapters.common import InputError
 from puzzle.adapters.elmer import ElmerAdapter
 from puzzle.adapters.fenicsx import FenicsxAdapter
 from puzzle.mesh import generate_mesh
-from puzzle.model import Component, Contact, Feature
+from puzzle.model import Component, Contact, Feature, Quantity
 
 FIXED = [Feature(type="fixed", selection="Left/Start")]
 
@@ -71,7 +71,7 @@ def test_calculix_writes_contact_pairs(tmp_path):
     assert "*FRICTION\n0.2, " in inp and "*STATIC\n0.1, 1.0" in inp
 
 
-def test_code_aster_frictionless_but_not_frictional(tmp_path):
+def test_code_aster_contact(tmp_path):
     smooth = Contact(name="Slide", type="frictionless", source="Right/Start", target="Left/End")
     project, study, mesh = _setup(tmp_path, "code_aster", smooth)
     export = CodeAsterAdapter().write_input(project, study, mesh, tmp_path / "case")
@@ -79,11 +79,40 @@ def test_code_aster_frictionless_but_not_frictional(tmp_path):
     assert "DEFI_CONTACT(MODELE=model, FORMULATION='CONTINUE', FROTTEMENT='SANS'" in comm
     assert "STAT_NON_LINE(" in comm and "ORIE_PEAU" in comm and "REAC_NODA" in comm
 
+
+def _rough(tmp_path, features=FIXED, order=2):
+    from puzzle.model import MeshRecipe
+
     rough = Contact(
         name="Slide", type="frictional", friction=0.3, source="Right/Start", target="Left/End"
     )
-    (tmp_path / "f").mkdir()
-    project, study, mesh = _setup(tmp_path / "f", "code_aster", rough)
-    with pytest.raises(InputError) as err:
-        CodeAsterAdapter().write_input(project, study, mesh, tmp_path / "f" / "case")
+    project, study = split_bar_project(tmp_path, "code_aster", features, rough)
+    for recipe in project.of_type(MeshRecipe):
+        recipe.element_order = order
+    comp = next(iter(project.of_type(Component)))
+    mesh = generate_mesh(project, comp.id, tmp_path, tmp_path / "m").mesh
+    return project, study, mesh
+
+
+def test_code_aster_friction_on_first_order_meshes(tmp_path):
+    for sub in ("q", "l", "c"):
+        (tmp_path / sub).mkdir()
+    adapter = CodeAsterAdapter()
+    with pytest.raises(InputError, match="first-order") as err:
+        adapter.write_input(*_rough(tmp_path / "q"), tmp_path / "q" / "case")
     assert err.value.code == "unsupported"
+
+    export = adapter.write_input(*_rough(tmp_path / "l", order=1), tmp_path / "l" / "case")
+    comm = (export.parent / "job.comm").read_text()
+    assert "FROTTEMENT='COULOMB'" in comm and "COULOMB=0.3" in comm
+
+    # A displacement condition on the slave face's nodes is refused up front.
+    held = [
+        *FIXED,
+        Feature(
+            type="displacement", selection="Right/Start", values={"y": Quantity(value=0, unit="m")}
+        ),
+    ]
+    with pytest.raises(InputError, match="shares nodes") as err:
+        adapter.write_input(*_rough(tmp_path / "c", held, order=1), tmp_path / "c" / "case")
+    assert err.value.details["conflicts"] == ["Right/Start"]

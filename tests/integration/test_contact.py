@@ -156,9 +156,9 @@ SIDE = 0.01  # m, both blocks are 10 mm cubes
 PRESSURE = 20e6  # Pa on the top
 
 
-def _cube(path):
+def _cube(path, overhang=0.0):
     with gmsh_session("cube"):
-        gmsh.model.occ.addBox(0, 0, 0, SIDE, SIDE, SIDE)
+        gmsh.model.occ.addBox(-overhang, 0, 0, SIDE + 2 * overhang, SIDE + overhang, SIDE)
         gmsh.model.occ.synchronize()
         gmsh.write(str(path))
     model = import_step(path)
@@ -171,14 +171,26 @@ def _cube(path):
     ]
 
 
-def _stack(tmp_path, solver, contact, features=None):
+def _stack(tmp_path, solver, contact, features=None, *, overhang=0.0, order=2):
+    """Base cube (steel) under a cap cube (aluminium), meshed separately. With
+    `overhang`, the base is wider than the cap by that much on +x, -x and +y."""
     p = Project(name="stack")
     geo = p.add(Geometry(name="Cube", source="cube.step", selections=_cube(tmp_path / "cube.step")))
+    base = geo
+    if overhang:
+        base = p.add(
+            Geometry(
+                name="Wide base",
+                source="base.step",
+                selections=_cube(tmp_path / "base.step", overhang=overhang),
+            )
+        )
     steel = add_library_material(p, "structural_steel")
     aluminium = add_library_material(p, "aluminium_6061_t6")
     mesh = p.add(
         MeshRecipe(
             name="Unmatched",
+            element_order=order,
             global_size=Quantity(value=2.5, unit="mm"),
             local_sizes={"Cap/Body": Quantity(value=1.7, unit="mm")},
         )
@@ -211,7 +223,7 @@ def _stack(tmp_path, solver, contact, features=None):
         Component(
             name="Stack",
             parts=[
-                PartInstance(name="Base", geometry=geo.id),
+                PartInstance(name="Base", geometry=base.id),
                 PartInstance(name="Cap", geometry=geo.id, translation=(0.0, 0.0, SIDE)),
             ],
             mesh=mesh.id,
@@ -271,28 +283,37 @@ def test_frictionless_stack_is_uniaxial(tmp_path, solver):
     assert szz[near].mean() < 0.02 and szz[near].max() < 0.1 and sxx[near].max() < 0.05
 
 
-@over("calculix")  # Code_Aster refuses frictional contact for now (see its adapter)
+@over("calculix", "code_aster")
 def test_sliding_friction_obeys_coulomb(tmp_path, solver):
     """Press the cap down 1 um and drag its top 10 um sideways: the whole interface
-    slides, so the tangential reaction is mu times the normal one."""
+    slides, so the tangential reaction is mu times the normal one.
+
+    The cap is held only at its top (no condition on its interface nodes). For Code_Aster
+    the base overhangs the cap, so the slave face lies inside the master one, and the
+    mesh is first-order (see its adapter)."""
     mu = 0.3
     zero = Quantity(value=0, unit="m")
     features = [
         Feature(type="fixed", selection="Base/Bottom"),
-        *(
-            Feature(type="displacement", selection=f"{part}/SymY", values={"y": zero})
-            for part in ("Base", "Cap")
-        ),
+        Feature(type="displacement", selection="Base/SymY", values={"y": zero}),
         Feature(
             type="displacement",
             selection="Cap/Top",
-            values={"x": Quantity(value=10, unit="um"), "z": Quantity(value=-1, unit="um")},
+            values={
+                "x": Quantity(value=10, unit="um"),
+                "y": zero,
+                "z": Quantity(value=-1, unit="um"),
+            },
         ),
     ]
     contact = Contact(
         name="Interface", type="frictional", friction=mu, source="Cap/Bottom", target="Base/Top"
     )
-    project, study = _stack(tmp_path, solver, contact, features)
+    order = 1 if solver == "code_aster" else 2
+    # Code_Aster's friction needs the slave face inside the master one; CalculiX's
+    # surface-to-surface penalty inverted an element with that overhang, and needs none.
+    overhang = 0.002 if solver == "code_aster" else 0.0
+    project, study = _stack(tmp_path, solver, contact, features, overhang=overhang, order=order)
     run = run_study(project, study.id, tmp_path, tmp_path / "run", timeout_s=900)
 
     from puzzle.results.query import total
