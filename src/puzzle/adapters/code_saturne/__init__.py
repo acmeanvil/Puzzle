@@ -13,7 +13,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from puzzle.adapters.base import FLUID_FEATURES, THERMAL_FEATURES, Capabilities, SolverAdapter
+from puzzle.adapters.base import (
+    FLUID_FEATURES,
+    THERMAL_FEATURES,
+    Capabilities,
+    SolverAdapter,
+    refuse_inputs,
+)
 from puzzle.adapters.code_saturne.case import command as case_command
 from puzzle.adapters.code_saturne.case import read_results as read_case_results
 from puzzle.adapters.code_saturne.case import write_case
@@ -33,7 +39,10 @@ class CodeSaturneAdapter(SolverAdapter):
         couplings=frozenset({"non_isothermal_flow"}),
     )
 
-    def write_input(self, project: Project, study: Study, mesh: Mesh, workdir: Path) -> Path:
+    def write_input(
+        self, project: Project, study: Study, mesh: Mesh, workdir: Path, inputs=()
+    ) -> Path:
+        refuse_inputs(inputs, "Code_Saturne")
         return write_case(project, study, mesh, workdir)
 
     def command(self, input_file: Path) -> list[str]:

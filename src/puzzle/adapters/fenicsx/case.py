@@ -57,8 +57,12 @@ def _has_dolfinx(python: Path) -> bool:
     return any(any(prefix.glob(p)) for p in patterns)
 
 
-def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Path:
+def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs=()) -> Path:
+    from puzzle.adapters.base import refuse_inputs
+
     comp = project.get(study.component, Component)
+    refuse_inputs(inputs, "FEniCSx", {("load", "temperature")})
+    thermal_load = next((i.field for i in inputs if i.field.name == "temperature"), None)
     check_contacts(comp, set(), "FEniCSx")
     steps = study.solve_steps()
     if len(steps) != 1:
@@ -136,6 +140,21 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
         ],
     }
     workdir.mkdir(parents=True, exist_ok=True)
+    if thermal_load is not None:
+        if physics != "solid_mechanics" or step.type == "modal":
+            raise InputError(
+                "a temperature load applies to static structural steps", code="unsupported"
+            )
+        # Nodal temperatures by coordinates; study.py interpolates them onto its dofs.
+        np.savez(
+            workdir / "temperature.npz",
+            coords=mesh.node_coords(thermal_load.ids),
+            values=thermal_load.values[:, 0],
+        )
+        case["temperature_load"] = {
+            "file": "temperature.npz",
+            "reference": _reference_temperature(comp),
+        }
     write_med(mesh, workdir / "mesh.msh", {g: g for g in groups})
     (workdir / "case.json").write_text(json.dumps(case, indent=2))
     target = workdir / SCRIPT.name
@@ -195,6 +214,12 @@ def read_results(workdir: Path) -> Results:
             step.fields[name] = Field(name, "global", [""], np.array([0]), value)
     results.steps.append(step)
     return results
+
+
+def _reference_temperature(comp) -> float:
+    from puzzle.adapters.calculix.inp import reference_temperature
+
+    return reference_temperature(comp)
 
 
 def _time(step) -> dict:

@@ -41,7 +41,8 @@ Solver tests in `tests/integration/` skip when the solver isn't available; `test
 | `src/puzzle/agent` | `mcp.py`: MCP server over the command layer (`puzzle mcp PROJECT`); tools return summaries and coded errors |
 | `src/puzzle/errors.py` | `PuzzleError(code, message, path, details)` and `Problem`; codes in `CODES` |
 | `src/puzzle/results` | Solver-neutral `Results`; `ResultStore` = Delta Lake tables (runs, meshes, nodes, cells, groups, fields); `query` = summary, stats, value_at, integrate |
-| `src/puzzle/solve.py` | `run_study`: validate → mesh → write → run → read |
+| `src/puzzle/solve.py` | `run_study`: validate → run/reuse upstream studies → mesh → map transfers → write → run → read |
+| `src/puzzle/transfer.py` | Transfers: `pick` a source field, `map_field` onto the target mesh (copy if identical, linear in source tets, or nearest), `Input` handed to adapters |
 | `src/puzzle/post` | VTK grids (tet10 reordered for VTK), `render` (window or PNG), `.vtu`/`.pvd` export, `sample` (results at a point) |
 | `src/puzzle/cli.py` | `puzzle studies/run/runs/show/export/outline/history/undo/proposals/accept/reject/autonomy/schema/mcp` |
 | `examples/cantilever` | Example project; regenerate with `python examples/cantilever/build.py` |
@@ -66,6 +67,7 @@ Capability matrices also list planned capabilities; `write_input` refuses what i
 - Adapters only claim a capability once a benchmark for it passes. Elmer's mechanical contact is bonding only (mortar tie); its slide/friction/stick are `experimental`.
 - Tests compare against closed-form or published answers with stated tolerances, not snapshots.
 - Match the surrounding code: dataclasses/Pydantic, type hints, short docstrings that say why.
+- **Adapters take transferred fields as `inputs`** (`write_input(..., inputs)`); one that can't apply an input must refuse it (`base.refuse_inputs`), never ignore it. Temperature loads (role `load`) work on CalculiX (`*TEMPERATURE` per step, initial temperature = reference) and FEniCSx (thermal strain in the weak form); the reference is the structural physics' `reference_temperature` (default 20 °C). `tests/integration/test_transfers.py` checks thermal bending across solver pairs and an interpolated mesh.
 - **Every project change goes through `puzzle.commands.Session`** (CLI, GUI, scripts, agents); no client writes project files itself. New user actions become commands in `commands/model.py`. Errors a client can act on are `PuzzleError` with a code from `puzzle.errors.CODES`.
 
 ## Gotchas

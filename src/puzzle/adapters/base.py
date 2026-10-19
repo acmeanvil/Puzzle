@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar
@@ -50,6 +51,19 @@ class Capabilities:
     """Time schemes for transient heat transfer (see adapters.common.time_scheme)."""
     experimental: frozenset[str] = frozenset()
     """Contact or coupling keys that exist in the solver but aren't verified for production."""
+
+
+def refuse_inputs(inputs: Sequence, solver: str, accepted: set[tuple[str, str]] = frozenset()):
+    """Raise for transferred fields this adapter doesn't apply: (role, field) pairs."""
+    from puzzle.adapters.common import InputError
+
+    for i in inputs:
+        if (i.role, i.field.name) not in accepted:
+            raise InputError(
+                f"the {solver} adapter does not take a transferred {i.field.name} "
+                f"({i.role}, from '{i.source}') yet",
+                code="unsupported",
+            )
 
 
 class SolverAdapter(ABC):
@@ -102,8 +116,14 @@ class SolverAdapter(ABC):
         return problems
 
     @abstractmethod
-    def write_input(self, project: Project, study: Study, mesh: Mesh, workdir: Path) -> Path:
-        """Translate the study and its mesh into native input in `workdir`; return the main file."""
+    def write_input(
+        self, project: Project, study: Study, mesh: Mesh, workdir: Path, inputs: Sequence = ()
+    ) -> Path:
+        """Translate the study and its mesh into native input in `workdir`; return the main file.
+
+        `inputs` are fields transferred from other studies (puzzle.transfer.Input), already
+        on `mesh`'s nodes. An adapter that can't use one must refuse it (`refuse_inputs`).
+        """
 
     @abstractmethod
     def command(self, input_file: Path) -> list[str]:

@@ -70,3 +70,8 @@ Where geometry sits in the tree decides how it is shared:
 - Free-form node editor as the source of truth: flexible, but layout and meaning get tangled again.
 - Geometry variants that keep a link to their parent: rejected in favour of explicit scope, where copies are fully independent.
 - Sweeps as a project-level object driving many studies: rejected in favour of sweep steps, which keep each study self-contained.
+
+## First implementation (transfers)
+
+`run_study` runs or reuses each source study, maps the transferred field onto the target's mesh (`puzzle.transfer.map_field`: a node-by-node copy when the meshes are identical, otherwise linear interpolation in the source tetrahedra, or the nearest node) and passes it to the target adapter as an `Input`. Temperature loads from a thermal study into a structural one work on CalculiX and FEniCSx. Adapters refuse inputs they can't apply, such as a prestress role or Code_Aster/Elmer targets for now. The thermal bending benchmark matches beam theory within 1.6%, is stress-free away from the clamp, and gives the same answer on every solver pair.
+

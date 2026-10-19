@@ -40,6 +40,7 @@ from puzzle.adapters.base import (
     THERMAL_FEATURES,
     Capabilities,
     SolverAdapter,
+    refuse_inputs,
 )
 from puzzle.adapters.elmer.output import read_series
 from puzzle.adapters.elmer.sif import MESH_DIR, OUTPUT, TIMES, write_case
@@ -70,7 +71,10 @@ class ElmerAdapter(SolverAdapter):
         time_schemes=frozenset({"backward_euler", "crank_nicolson", "bdf2", "theta"}),
     )
 
-    def write_input(self, project: Project, study: Study, mesh: Mesh, workdir: Path) -> Path:
+    def write_input(
+        self, project: Project, study: Study, mesh: Mesh, workdir: Path, inputs=()
+    ) -> Path:
+        refuse_inputs(inputs, "Elmer")
         sif, emesh = write_case(project, study, mesh, workdir)
         np.savetxt(workdir / MESH_DIR / NODE_MAP, emesh.node_ids, fmt="%d")
         return sif

@@ -198,6 +198,20 @@ def eigenpairs(a, m, bcs, count: int) -> tuple[list[float], list[np.ndarray]]:
     return values, vectors
 
 
+def interpolate_nodal(points: np.ndarray, values: np.ndarray, at: np.ndarray) -> np.ndarray:
+    """Nodal values given at `points`, at coordinates `at`: exact at mesh nodes, linear
+    (inverse-distance over the 4 nearest) between them, for higher-order dofs."""
+    from scipy.spatial import cKDTree
+
+    distance, index = cKDTree(points).query(at, k=min(4, len(points)))
+    distance, index = np.atleast_2d(distance), np.atleast_2d(index)
+    exact = distance[:, 0] < 1e-12 * max(np.ptp(points), 1.0)
+    weights = 1.0 / np.maximum(distance, 1e-300)
+    out = (weights * values[index]).sum(axis=1) / weights.sum(axis=1)
+    out[exact] = values[index[exact, 0]]
+    return out
+
+
 def dirichlet(value, dofs, V) -> fem.DirichletBC:
     return fem.dirichletbc(np.asarray(value, dtype=np.float64), dofs, V)
 
@@ -234,9 +248,23 @@ def solve_solid(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
 
     u, v = ufl.TrialFunction(V), ufl.TestFunction(V)
     a = ufl.inner(sigma(u), eps(v)) * dx
+    # A transferred temperature field: thermal strain alpha (T - T_ref), isotropic.
+    thermal = None
+    if "temperature_load" in case and case["step"]["type"] != "modal":
+        load = case["temperature_load"]
+        data = np.load(load["file"])
+        S = fem.functionspace(msh, ("Lagrange", degree))
+        T = fem.Function(S)
+        T.x.array[:] = interpolate_nodal(
+            data["coords"], data["values"], S.tabulate_dof_coordinates()
+        )
+        alpha = piecewise("thermal_expansion")
+        thermal = alpha * (T - load["reference"]) * ufl.Identity(3)
     n = ufl.FacetNormal(msh)
     modal = case["step"]["type"] == "modal"
     bcs, L = [], ufl.inner(fem.Constant(msh, np.zeros(3)), v) * dx
+    if thermal is not None:
+        L += ufl.inner(lmbda * ufl.tr(thermal) * ufl.Identity(3) + 2 * mu * thermal, eps(v)) * dx
     for f in case["features"]:
         where, vals = facets.find(tag(f["group"])), f.get("values", {})
         if f["type"] == "fixed":
@@ -269,6 +297,8 @@ def solve_solid(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
     # Nodal stress: L2 projection of the stress components onto the displacement's nodes.
     S = fem.functionspace(msh, ("Lagrange", degree, (6,)))
     s = sigma(uh)
+    if thermal is not None:  # stress is C : (strain - thermal strain)
+        s = s - (lmbda * ufl.tr(thermal) * ufl.Identity(3) + 2 * mu * thermal)
     voigt = ufl.as_vector([s[0, 0], s[1, 1], s[2, 2], s[0, 1], s[1, 2], s[2, 0]])
     p, q = ufl.TrialFunction(S), ufl.TestFunction(S)
     mass, rhs = ufl.inner(p, q) * dx, ufl.inner(voigt, q) * dx

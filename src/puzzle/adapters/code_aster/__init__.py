@@ -19,6 +19,7 @@ from puzzle.adapters.base import (
     THERMAL_FEATURES,
     Capabilities,
     SolverAdapter,
+    refuse_inputs,
 )
 from puzzle.adapters.code_aster.comm import JOB, write_case
 from puzzle.adapters.code_aster.tables import read_results as read_tables
@@ -43,7 +44,10 @@ class CodeAsterAdapter(SolverAdapter):
         time_schemes=frozenset({"backward_euler", "crank_nicolson", "theta"}),
     )
 
-    def write_input(self, project: Project, study: Study, mesh: Mesh, workdir: Path) -> Path:
+    def write_input(
+        self, project: Project, study: Study, mesh: Mesh, workdir: Path, inputs=()
+    ) -> Path:
+        refuse_inputs(inputs, "Code_Aster")
         return write_case(project, study, mesh, workdir)
 
     def command(self, input_file: Path) -> list[str]:

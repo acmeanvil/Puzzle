@@ -1,4 +1,8 @@
-"""Run one study end to end: mesh, write solver input, solve, read and store results."""
+"""Run one study end to end: mesh, write solver input, solve, read and store results.
+
+A study that takes transfers (ADR 0009) first runs, or reuses, each source study; the
+transferred fields are mapped onto its mesh (puzzle.transfer) and handed to its adapter.
+"""
 
 from __future__ import annotations
 
@@ -17,6 +21,7 @@ from puzzle.model.schema import Project, Study
 from puzzle.project.graph import run_hashes
 from puzzle.results.model import Results
 from puzzle.results.store import ResultStore
+from puzzle.transfer import Input, map_field, pick
 
 
 class StudyError(PuzzleError, RuntimeError):
@@ -45,6 +50,7 @@ def run_study(
     reuse: bool = True,
     on_output: Callable[[str], None] | None = None,
     timeout_s: float | None = None,
+    upstream: dict | None = None,
 ) -> StudyRun:
     """Run `study_id` with its primary solver. Geometry paths resolve against `root`.
 
@@ -77,9 +83,39 @@ def run_study(
             )
 
     workdir.mkdir(parents=True, exist_ok=True)
+    # Source studies first (each run once per chain, or reused from the store).
+    upstream = {} if upstream is None else upstream
+    for t in project.transfers_into(study.id):
+        if t.source not in upstream:
+            source = project.get(t.source, Study)
+            upstream[t.source] = run_study(
+                project,
+                t.source,
+                root,
+                workdir / "upstream" / _slug(source.name),
+                store=store,
+                reuse=reuse,
+                on_output=on_output,
+                timeout_s=timeout_s,
+                upstream=upstream,
+            )
     started = datetime.now(UTC)
     meshed = generate_mesh(project, study.component, root, workdir / "mesh")
-    input_file = adapter.write_input(project, study, meshed.mesh, workdir)
+    inputs = [
+        Input(
+            map_field(
+                pick(upstream[t.source].results, t.field, t.source_step),
+                upstream[t.source].mesh,
+                meshed.mesh,
+                t.mapping,
+            ),
+            t.role,
+            t.target_selection,
+            t.name,
+        )
+        for t in project.transfers_into(study.id)
+    ]
+    input_file = adapter.write_input(project, study, meshed.mesh, workdir, inputs)
     runtime = runtime_for(study.solver)
     job = run_job(
         adapter.command(input_file), workdir, runtime, on_output=on_output, timeout_s=timeout_s
@@ -121,3 +157,7 @@ def run_study(
         job=job,
         input_file=input_file,
     )
+
+
+def _slug(name: str) -> str:
+    return "".join(c if c.isalnum() else "-" for c in name.lower()).strip("-") or "study"

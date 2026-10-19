@@ -22,6 +22,7 @@ import re
 
 import numpy as np
 
+from puzzle.adapters.base import refuse_inputs
 from puzzle.adapters.common import (
     STRUCTURAL,
     THERMAL,
@@ -54,13 +55,25 @@ NODE_SHARES = {
 }
 
 
+def reference_temperature(comp: Component) -> float:
+    """Where thermal strain is zero: the structural physics' reference_temperature, in K."""
+    solid = next((ph for ph in comp.physics if ph.type == "solid_mechanics"), None)
+    value = solid.settings.get("reference_temperature") if solid is not None else None
+    if value is None:
+        return ROOM_K
+    return value.to_si() if hasattr(value, "to_si") else float(value)
+
+
 def set_name(prefix: str, name: str) -> str:
     """A CalculiX set name: letters, digits and underscores, upper case."""
     return f"{prefix}_{re.sub(r'[^A-Za-z0-9]+', '_', name).strip('_').upper()}"
 
 
-def write_inp(project: Project, study: Study, mesh: Mesh) -> str:
+def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
     comp = project.get(study.component, Component)
+    refuse_inputs(inputs, "CalculiX", {("load", "temperature")})
+    # A temperature field from a thermal study, as a thermal load on structural steps.
+    thermal_load = next((i.field for i in inputs if i.field.name == "temperature"), None)
     check_contacts(comp, CONTACTS, "CalculiX")
     touching = [c for c in comp.contacts if c.type in ("frictionless", "frictional")]
     if touching and any(
@@ -101,22 +114,25 @@ def write_inp(project: Project, study: Study, mesh: Mesh) -> str:
             out.append(f"*ELSET, ELSET={set_name('E', group.name)}")
             out += _chunks(ids)
 
-    out += _materials(project, comp, mesh)
+    out += _materials(project, comp, mesh, expansion=thermal_load is not None)
     out += _contacts(project, comp, mesh, faces)
 
     solve_steps = study.solve_steps()
     if not solve_steps:
         raise InputError(f"study '{study.name}' has no solve steps")
     physics_types = {p.type for p in comp.physics}
-    if "heat_transfer" in physics_types:
+    if thermal_load is not None:
+        # Thermal strain is alpha (T - T_initial): start at the reference temperature.
+        out += ["*INITIAL CONDITIONS, TYPE=TEMPERATURE", f"N_ALL, {reference_temperature(comp)}"]
+    elif "heat_transfer" in physics_types:
         heat = next(ph for ph in comp.physics if ph.type == "heat_transfer")
         out += ["*INITIAL CONDITIONS, TYPE=TEMPERATURE", f"N_ALL, {initial_temperature(heat)}"]
     for number, step in enumerate(solve_steps, start=1):
-        out += _step(number, step, comp, mesh, faces, physics_types)
+        out += _step(number, step, comp, mesh, faces, physics_types, thermal_load)
     return "\n".join(out) + "\n"
 
 
-def _materials(project: Project, comp: Component, mesh: Mesh) -> list[str]:
+def _materials(project: Project, comp: Component, mesh: Mesh, expansion: bool = False) -> list[str]:
     out: list[str] = []
     for i, assignment in enumerate(comp.materials, start=1):
         material = project.get(assignment.material, Material)
@@ -127,14 +143,14 @@ def _materials(project: Project, comp: Component, mesh: Mesh) -> list[str]:
                 f"not '{assignment.selection}'"
             )
         name = f"M{i}"
-        out += [f"*MATERIAL, NAME={name}"] + _material_cards(material, comp)
+        out += [f"*MATERIAL, NAME={name}"] + _material_cards(material, comp, expansion)
         out.append(f"*SOLID SECTION, ELSET={set_name('E', assignment.selection)}, MATERIAL={name}")
     if not comp.materials:
         raise InputError(f"component '{comp.name}' has no material assignments")
     return out
 
 
-def _material_cards(m: Material, comp: Component) -> list[str]:
+def _material_cards(m: Material, comp: Component, expansion: bool = False) -> list[str]:
     p = {k: q.to_si() for k, q in m.properties.items()}
     types = {ph.type for ph in comp.physics}
     cards: list[str] = []
@@ -167,7 +183,9 @@ def _material_cards(m: Material, comp: Component) -> list[str]:
         cards += card("*SPECIFIC HEAT", "specific_heat")
         if "*DENSITY" not in cards:
             cards += card("*DENSITY", "density")
-    if "thermal_expansion" in comp.couplings and "thermal_expansion" in p:
+    if expansion and "thermal_expansion" not in p:
+        raise InputError(f"a temperature load needs thermal_expansion on material '{m.name}'")
+    if ("thermal_expansion" in comp.couplings or expansion) and "thermal_expansion" in p:
         table = m.tables.get("thermal_expansion")
         ref = table.reference_temperature if table and table.reference_temperature else ROOM_K
         cards += [f"*EXPANSION, ZERO={ref:.10g}", f"{p['thermal_expansion']:.10g}"]
@@ -175,7 +193,13 @@ def _material_cards(m: Material, comp: Component) -> list[str]:
 
 
 def _step(
-    number: int, step: SolveStep, comp: Component, mesh: Mesh, faces: FaceLookup, physics_types
+    number: int,
+    step: SolveStep,
+    comp: Component,
+    mesh: Mesh,
+    faces: FaceLookup,
+    physics_types,
+    thermal_load=None,
 ) -> list[str]:
     solved = set(step.physics) or physics_types
     contact = any(c.type in ("frictionless", "frictional") for c in comp.contacts)
@@ -250,6 +274,12 @@ def _step(
     if step.type == "modal":
         features = [f for f in features if f.type in ("fixed", "displacement")]
     out += _features(features, mesh, faces, op)
+    if thermal_load is not None and solved == {"solid_mechanics"} and step.type != "modal":
+        out.append("*TEMPERATURE")
+        out += [
+            f"{n}, {t:.10g}"
+            for n, t in zip(thermal_load.ids, thermal_load.values[:, 0], strict=True)
+        ]
     return out + outputs + ["*END STEP"]
 
 

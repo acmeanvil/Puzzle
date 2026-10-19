@@ -34,9 +34,11 @@ class CalculixAdapter(SolverAdapter):
         couplings=frozenset({"thermal_expansion"}),
     )
 
-    def write_input(self, project: Project, study: Study, mesh: Mesh, workdir: Path) -> Path:
+    def write_input(
+        self, project: Project, study: Study, mesh: Mesh, workdir: Path, inputs=()
+    ) -> Path:
         path = workdir / f"{JOB}.inp"
-        path.write_text(write_inp(project, study, mesh))
+        path.write_text(write_inp(project, study, mesh, inputs))
         return path
 
     def command(self, input_file: Path) -> list[str]:

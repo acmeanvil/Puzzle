@@ -53,8 +53,10 @@ class FenicsxAdapter(SolverAdapter):
         time_schemes=frozenset({"backward_euler", "crank_nicolson", "bdf2", "theta"}),
     )
 
-    def write_input(self, project: Project, study: Study, mesh: Mesh, workdir: Path) -> Path:
-        return write_case(project, study, mesh, workdir)
+    def write_input(
+        self, project: Project, study: Study, mesh: Mesh, workdir: Path, inputs=()
+    ) -> Path:
+        return write_case(project, study, mesh, workdir, inputs)
 
     def command(self, input_file: Path) -> list[str]:
         python = fenicsx_python()
