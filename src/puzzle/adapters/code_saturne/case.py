@@ -1,9 +1,15 @@
 """Prepare a Code_Saturne run (mesh.msh, case.json, cs_setup.py) and read its results.
 
-Feature values: velocity_inlet U (inflow speed normal to the face, m/s);
-pressure_outlet p (reference pressure, Pa, default 0); wall (no slip); symmetry.
-Fluid properties come from the material: density and dynamic_viscosity.
-Step settings: iterations (steady SIMPLE iterations, default 500).
+Feature values: velocity_inlet U (inflow speed normal to the face, m/s), and for
+turbulent flow intensity (fraction, default 0.05) and hydraulic_diameter (default 4A/P
+of the inlet face); pressure_outlet p (reference pressure, Pa, default 0); wall (no
+slip); symmetry. Heat transfer (with fluid_flow): temperature T on an inlet or wall,
+heat_flux q (W/m^2, positive into the fluid) or convection h, T_inf on a wall; other
+walls are adiabatic. Fluid properties come from the material: density,
+dynamic_viscosity, and thermal_conductivity and specific_heat for heat transfer.
+fluid_flow settings: turbulence_model = laminar (default), k-epsilon or k-omega-SST.
+Step settings: iterations (steady SIMPLE iterations, default 500) and pseudo_time_step
+(s; Code_Saturne's default 0.1 s is slow for conduction-dominated scalars).
 """
 
 from __future__ import annotations
@@ -15,7 +21,15 @@ from pathlib import Path
 import numpy as np
 
 from puzzle.adapters.code_saturne.ensight import read_case, read_variable
-from puzzle.adapters.common import FLUID, InputError, check_contacts, match_points
+from puzzle.adapters.common import (
+    FLUID,
+    THERMAL,
+    InputError,
+    check_contacts,
+    match_points,
+    surface_area,
+    surface_blocks,
+)
 from puzzle.mesh.med import write_med
 from puzzle.mesh.mesh import Mesh
 from puzzle.model.schema import Component, Material, Project, Study
@@ -29,7 +43,17 @@ NATURES = {
     "wall": "wall",
     "symmetry": "symmetry",
 }
-FIELDS = {"Velocity": ("velocity", ["x", "y", "z"]), "Pressure": ("pressure", [""])}
+FIELDS = {
+    "Velocity": ("velocity", ["x", "y", "z"]),
+    "Pressure": ("pressure", [""]),
+    "TempK": ("temperature", [""]),
+    "temperature": ("temperature", [""]),
+    "k": ("turbulent_kinetic_energy", [""]),
+    "epsilon": ("turbulent_dissipation", [""]),
+    "omega": ("specific_dissipation", [""]),
+    "turbulent_viscosity": ("turbulent_viscosity", [""]),
+}
+TURBULENCE = {"laminar": "off", "k-epsilon": "k-epsilon-PL", "k-omega-SST": "k-omega-SST"}
 
 
 def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Path:
@@ -39,17 +63,22 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
     if len(steps) != 1 or steps[0].type != "stationary":
         raise InputError("the Code_Saturne adapter runs one stationary solve step for now")
     solved = set(steps[0].physics) or {p.type for p in comp.physics}
-    if solved != {"fluid_flow"}:
+    if solved not in ({"fluid_flow"}, {"fluid_flow", "heat_transfer"}):
         raise InputError(
-            f"the Code_Saturne adapter solves fluid_flow alone for now, not {sorted(solved)}"
+            "the Code_Saturne adapter solves fluid_flow, with or without heat_transfer, "
+            f"not {sorted(solved)}"
         )
+    heat = "heat_transfer" in solved
     if len(comp.materials) != 1:
         raise InputError("the Code_Saturne adapter needs exactly one fluid material for now")
     props = {
         k: q.to_si()
         for k, q in project.get(comp.materials[0].material, Material).properties.items()
     }
-    missing = [k for k in ("density", "dynamic_viscosity") if k not in props]
+    needed = ["density", "dynamic_viscosity"] + (
+        ["thermal_conductivity", "specific_heat"] if heat else []
+    )
+    missing = [k for k in needed if k not in props]
     if missing:
         raise InputError(f"the fluid material is missing {', '.join(missing)}")
 
@@ -61,6 +90,21 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
         raise InputError(
             f"the Code_Saturne adapter does not support {sorted(set(unsupported))} yet"
         )
+    flow = next(p for p in comp.physics if p.type == "fluid_flow")
+    model = str(flow.settings.get("turbulence_model", "laminar"))
+    if model not in TURBULENCE:
+        raise InputError(
+            f"unknown turbulence_model '{model}'",
+            code="invalid",
+            details={"models": sorted(TURBULENCE)},
+        )
+    thermal = [
+        f
+        for p in comp.physics
+        if p.type == "heat_transfer" and heat
+        for f in p.features
+        if f.type in THERMAL
+    ]
     body = comp.materials[0].selection
     groups = list(dict.fromkeys([body] + [f.selection for f in features]))
     for g in groups:
@@ -69,7 +113,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
 
     workdir.mkdir(parents=True, exist_ok=True)
     tags = write_med(mesh, workdir / "mesh.msh", {g: g for g in groups}, msh_version=2.2)
-    zones = []
+    zones, by_selection = [], {}
     for f in features:
         v = {k: q.to_si() for k, q in f.values.items()}
         zone = {
@@ -79,14 +123,46 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
         }
         if f.type == "velocity_inlet":
             zone["velocity"] = v["U"]
+            if model != "laminar":
+                group = mesh.groups[f.selection]
+                zone["intensity"] = 100.0 * v.get("intensity", 0.05)  # Code_Saturne: percent
+                zone["hydraulic_diameter"] = v.get("hydraulic_diameter") or hydraulic_diameter(
+                    group, mesh
+                )
         elif f.type == "pressure_outlet":
             zone["pressure"] = v.get("p", 0.0)
         zones.append(zone)
+        by_selection[f.selection] = zone
+    for f in thermal:
+        zone = by_selection.get(f.selection)
+        if zone is None or zone["nature"] not in ("inlet", "wall"):
+            raise InputError(
+                f"{f.type} on '{f.selection}' needs an inlet or wall there in fluid_flow"
+            )
+        v = {k: q.to_si() for k, q in f.values.items()}
+        if f.type == "temperature":
+            zone["temperature"] = v["T"]
+        elif zone["nature"] != "wall":
+            raise InputError(f"{f.type} applies to walls, not the inlet '{f.selection}'")
+        elif f.type == "heat_flux":
+            zone["heat_flux"] = v["q"]
+        else:
+            zone["exchange"] = [v["h"], v["T_inf"]]
     spec = {
         "mesh": "mesh.msh",
         "density": props["density"],
         "viscosity": props["dynamic_viscosity"],
         "iterations": int(steps[0].settings.get("iterations", 500)),
+        "pseudo_time_step": _seconds(steps[0].settings.get("pseudo_time_step")),
+        "turbulence": TURBULENCE[model],
+        "thermal": (
+            {
+                "conductivity": props["thermal_conductivity"],
+                "specific_heat": props["specific_heat"],
+            }
+            if heat
+            else None
+        ),
         "zones": zones,
     }
     (workdir / "case.json").write_text(json.dumps(spec, indent=2))
@@ -135,6 +211,28 @@ def read_results(workdir: Path) -> Results:
             values = read_variable(path, parts, components)
             step.fields[field_name] = Field(field_name, "element", comps, ids[order], values[order])
     return Results(solver="code_saturne", steps=[step])
+
+
+def hydraulic_diameter(group, mesh: Mesh) -> float:
+    """4 A / P of a face selection: its area over its outline (edges used once)."""
+    from collections import Counter
+
+    edges: Counter = Counter()
+    for b in surface_blocks(group, mesh):
+        corners = b.connectivity[:, : (3 if b.element.startswith("tri") else 4)]
+        for row in corners:
+            for a, c in zip(row, np.roll(row, -1), strict=True):
+                edges[(min(a, c), max(a, c))] += 1
+    outline = [e for e, n in edges.items() if n == 1]
+    ends = mesh.node_coords(np.array(outline).ravel()).reshape(-1, 2, 3)
+    perimeter = float(np.linalg.norm(ends[:, 1] - ends[:, 0], axis=1).sum())
+    return 4 * surface_area(group, mesh) / perimeter
+
+
+def _seconds(value) -> float | None:
+    if value is None:
+        return None
+    return value.to_si() if hasattr(value, "to_si") else float(value)
 
 
 def _label(selection: str) -> str:

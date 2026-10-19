@@ -165,3 +165,115 @@ def test_unsupported_inputs_are_refused(tmp_path):
     )
     with pytest.raises(InputError, match="mass_flow_inlet"):
         _channel(tmp_path, [flow])
+
+
+def _duct(tmp_path, flow_settings=None, heat=None, inlet_values=None):
+    """A 40 x 10 x 10 mm duct of air (bar geometry scaled) with an inlet, outlet and walls."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    step = write_bar_step(tmp_path / "duct.step", size=(0.04, 0.01, 0.01))
+    m = import_step(step)
+    p = Project(name="duct")
+    geo = p.add(
+        Geometry(
+            name="Duct",
+            source=step.name,
+            selections=[
+                NamedSelection(name="Fluid", entity="body", members=["body-1"]),
+                NamedSelection(name="Inlet", entity="face", members=m.faces_on_plane("x", 0.0)),
+                NamedSelection(name="Outlet", entity="face", members=m.faces_on_plane("x", 0.04)),
+                NamedSelection(
+                    name="Walls",
+                    entity="face",
+                    members=[
+                        *m.faces_on_plane("y", 0.0),
+                        *m.faces_on_plane("y", 0.01),
+                        *m.faces_on_plane("z", 0.0),
+                        *m.faces_on_plane("z", 0.01),
+                    ],
+                ),
+            ],
+        )
+    )
+    air = add_library_material(p, "air")
+    mesh = p.add(MeshRecipe(name="m", global_size=Quantity(value=2.5, unit="mm"), element_order=1))
+    physics = [
+        Physics(
+            type="fluid_flow",
+            settings=flow_settings or {},
+            features=[
+                Feature(
+                    type="velocity_inlet",
+                    selection="Duct/Inlet",
+                    values={"U": Quantity(value=1, unit="m/s"), **(inlet_values or {})},
+                ),
+                Feature(type="pressure_outlet", selection="Duct/Outlet"),
+                Feature(type="wall", selection="Duct/Walls"),
+            ],
+        )
+    ]
+    if heat is not None:
+        physics.append(Physics(type="heat_transfer", features=heat))
+    comp = p.add(
+        Component(
+            name="Duct",
+            parts=[PartInstance(name="Duct", geometry=geo.id)],
+            mesh=mesh.id,
+            physics=physics,
+            materials=[MaterialAssignment(material=air.id, selection="Duct/Fluid")],
+        )
+    )
+    study = p.add(
+        Study(
+            name="s", component=comp.id, solver="code_saturne", steps=[SolveStep(type="stationary")]
+        )
+    )
+    mesh_ = generate_mesh(p, comp.id, tmp_path, tmp_path / "m").mesh
+    case = CodeSaturneAdapter().write_input(p, study, mesh_, tmp_path / "case")
+    return json.loads(case.read_text())
+
+
+def test_heat_transfer_case(tmp_path):
+    heat = [
+        Feature(
+            type="temperature",
+            selection="Duct/Inlet",
+            values={"T": Quantity(value=20, unit="degC")},
+        ),
+        Feature(
+            type="heat_flux", selection="Duct/Walls", values={"q": Quantity(value=1, unit="kW/m^2")}
+        ),
+    ]
+    spec = _duct(tmp_path, heat=heat)
+    zones = {z["label"]: z for z in spec["zones"]}
+    assert spec["thermal"]["specific_heat"] == pytest.approx(1006)
+    assert zones["Duct_Inlet"]["temperature"] == pytest.approx(293.15)
+    assert zones["Duct_Walls"]["heat_flux"] == pytest.approx(1000)
+    assert spec["turbulence"] == "off"
+
+
+def test_turbulence_case(tmp_path):
+    spec = _duct(
+        tmp_path,
+        flow_settings={"turbulence_model": "k-omega-SST"},
+        inlet_values={"intensity": Quantity(value=0.04)},
+    )
+    inlet = next(z for z in spec["zones"] if z["nature"] == "inlet")
+    assert spec["turbulence"] == "k-omega-SST"
+    assert inlet["intensity"] == pytest.approx(4.0)  # Code_Saturne takes percent
+    assert inlet["hydraulic_diameter"] == pytest.approx(0.01, rel=1e-9)  # 4A/P of a square
+
+
+def test_thermal_conditions_need_a_fluid_boundary(tmp_path):
+    with pytest.raises(InputError, match="inlet or wall"):
+        _duct(
+            tmp_path,
+            heat=[
+                Feature(
+                    type="heat_flux",
+                    selection="Duct/Outlet",
+                    values={"q": Quantity(value=1, unit="W/m^2")},
+                )
+            ],
+        )
+    with pytest.raises(InputError, match="turbulence_model"):
+        _duct(tmp_path / "t", flow_settings={"turbulence_model": "spalart"})
