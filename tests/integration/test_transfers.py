@@ -145,6 +145,8 @@ CHAINS = [
     ("calculix", "calculix", None),
     ("elmer", "calculix", None),  # the bracket example's pairing (ADR 0009)
     ("calculix", "fenicsx", None),
+    ("calculix", "code_aster", None),
+    ("calculix", "elmer", None),
     ("calculix", "calculix", 5.0),  # coarser thermal mesh: interpolated
 ]
 

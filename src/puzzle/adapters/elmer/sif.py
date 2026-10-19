@@ -50,7 +50,12 @@ def _iterative(method: str, preconditioner: str, tolerance: float) -> list[str]:
 DIRECT = ["  Linear System Solver = Direct", "  Linear System Direct Method = Umfpack"]
 
 
-def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> tuple[Path, ElmerMesh]:
+RESTART = "puzzle-temperature.result"  # a transferred temperature field, as a restart
+
+
+def write_case(
+    project: Project, study: Study, mesh: Mesh, workdir: Path, inputs=()
+) -> tuple[Path, ElmerMesh]:
     comp = project.get(study.component, Component)
     check_contacts(comp, set(), "Elmer")
     steps = study.solve_steps()
@@ -99,6 +104,15 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> tup
             f"a coil current must be on a body with a material, not {sorted(coil_bodies)}"
         )
     emesh = write_mesh(mesh, workdir / MESH_DIR, body_names, boundary_names)
+    thermal_load = next((i.field for i in inputs if i.field.name == "temperature"), None)
+    restart = []
+    if thermal_load is not None:
+        if solved != {"solid_mechanics"} or step.type != "stationary":
+            raise InputError(
+                "a temperature load applies to static structural steps", code="unsupported"
+            )
+        _write_restart(workdir / MESH_DIR / RESTART, thermal_load, emesh)
+        restart = [f'  Restart File = "{RESTART}"', "  Restart Position = 1"]
 
     out = [
         "Header",
@@ -110,6 +124,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> tup
         "  Max Output Level = 5",
         "  Coordinate System = Cartesian 3D",
         *_time_block(step),
+        *restart,
         "End",
         "",
         "Constants",
@@ -130,6 +145,14 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> tup
         material = project.get(assignment.material, Material)
         tables = thermal_tables(material, comp) if "heat_transfer" in solved else {}
         out += _material(i, material, solved, tables)
+        if thermal_load is not None:  # thermal strain alpha (T - T_ref) in StressSolve
+            alpha = material.properties.get("thermal_expansion")
+            if alpha is None:
+                raise InputError(f"a temperature load needs thermal_expansion on '{material.name}'")
+            out[-2:-2] = [  # inside the Material block, before its End
+                f"  Heat Expansion Coefficient = {alpha.to_si():.10g}",
+                f"  Reference Temperature = {_reference(comp):.10g}",
+            ]
     if "heat_transfer" in solved:
         heat = next(ph for ph in comp.physics if ph.type == "heat_transfer")
         out += [
@@ -331,6 +354,32 @@ def _boundary(index: int, name: str, features: list[Feature], mesh: Mesh) -> lis
         elif f.type == "magnetic_insulation":
             out.append("  AV {e} = Real 0")  # flux stays tangential to the boundary
     return out + ["End", ""]
+
+
+def _write_restart(path: Path, field, emesh: ElmerMesh) -> None:
+    """An ASCII Elmer result holding one variable, Temperature, in Elmer node order."""
+    values = field.at(emesh.node_ids)[:, 0]
+    n = len(values)
+    lines = [
+        " ASCII 3",
+        "!File started by Puzzle",
+        " Degrees of freedom: ",
+        f"temperature              :  {n}  {n}   1 : puzzle transfer",
+        " Total DOFs:            1",
+        f" Number Of Nodes:  {n}",
+        "Time:       1      1  1.00000000E+000",
+        "temperature",
+        f"Perm:  {n}  {n}",
+        *(f"{i} {i}" for i in range(1, n + 1)),
+        *(f"{v:.17g}" for v in values),
+    ]
+    path.write_text("\n".join(lines) + "\n")
+
+
+def _reference(comp) -> float:
+    from puzzle.adapters.calculix.inp import reference_temperature
+
+    return reference_temperature(comp)
 
 
 def _time_block(step) -> list[str]:

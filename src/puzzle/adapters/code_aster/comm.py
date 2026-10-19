@@ -43,8 +43,12 @@ FORMAT_R = "1PE18.10"
 CONTACTS = {"bonded_nonconformal", "frictionless", "frictional"}
 
 
-def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Path:
+TEMPERATURE_UNIT = 90  # the transferred temperature table
+
+
+def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs=()) -> Path:
     comp = project.get(study.component, Component)
+    thermal_load = next((i.field for i in inputs if i.field.name == "temperature"), None)
     check_contacts(comp, CONTACTS, "Code_Aster")
     steps = study.solve_steps()
     if len(steps) != 1:
@@ -124,9 +128,21 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
         if nonlinear:
             out += _ther_nl(i, m, t)
         else:
-            out.append(f"mat{i} = DEFI_MATERIAU({_material(m, thermal)})")
+            expansion = thermal_load is not None
+            out.append(f"mat{i} = DEFI_MATERIAU({_material(m, thermal, expansion)})")
         assignments.append(f"_F(GROUP_MA='{names[a.selection]}', MATER=mat{i})")
-    out.append(f"mater = AFFE_MATERIAU(MAILLAGE=mesh, AFFE=({', '.join(assignments)},))")
+    varc = ""
+    if thermal_load is not None:
+        if thermal or step.type == "modal":
+            raise InputError(
+                "a temperature load applies to static structural steps", code="unsupported"
+            )
+        out += _temperature_field(thermal_load, mesh, workdir)
+        varc = (
+            ", AFFE_VARC=_F(TOUT='OUI', NOM_VARC='TEMP', CHAM_GD=temperature, "
+            f"VALE_REF={_reference(comp):.12g})"
+        )
+    out.append(f"mater = AFFE_MATERIAU(MAILLAGE=mesh, AFFE=({', '.join(assignments)},){varc})")
     out.append(_loads(features, names, mesh, thermal, ties))
 
     if thermal:
@@ -198,6 +214,11 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
                 f"F mmed {JOB}.med D 20",
                 f"F mess {JOB}.mess R 6",
                 *[f"F libr {name}.csv R {unit}" for name, unit in TABLES.items() if name in used],
+                *(
+                    [f"F libr transferred-temperature.txt D {TEMPERATURE_UNIT}"]
+                    if thermal_load is not None
+                    else []
+                ),
             ]
         )
         + "\n"
@@ -214,7 +235,7 @@ def _table(result: str, field: str, name: str, which: str = "") -> str:
     )
 
 
-def _material(m: Material, thermal: bool) -> str:
+def _material(m: Material, thermal: bool, expansion: bool = False) -> str:
     p = {k: q.to_si() for k, q in m.properties.items()}
 
     def need(*keys: str) -> list[float]:
@@ -231,7 +252,8 @@ def _material(m: Material, thermal: bool) -> str:
         return f"THER=_F(LAMBDA={k:.12g}, RHO_CP={rho_cp:.12g})"
     e, nu = need("youngs_modulus", "poissons_ratio")
     rho = f", RHO={p['density']:.12g}" if "density" in p else ""
-    return f"ELAS=_F(E={e:.12g}, NU={nu:.12g}{rho})"
+    alpha = f", ALPHA={need('thermal_expansion')[0]:.12g}" if expansion else ""
+    return f"ELAS=_F(E={e:.12g}, NU={nu:.12g}{rho}{alpha})"
 
 
 def _check_friction(contacts, features, mesh: Mesh) -> None:
@@ -281,6 +303,33 @@ def _defi_contact(contacts, names: dict[str, str]) -> str:
         "contact = DEFI_CONTACT(MODELE=model, FORMULATION='CONTINUE', "
         f"FROTTEMENT='{'COULOMB' if friction else 'SANS'}', ZONE=({', '.join(zones)},))"
     )
+
+
+def _temperature_field(field, mesh: Mesh, workdir: Path) -> list[str]:
+    """A nodal temperature field built in the .comm from a table of x, y, z, T.
+
+    Code_Aster numbers nodes its own way, so values are matched to its mesh by
+    coordinates (rounded to a nanometre).
+    """
+    workdir.mkdir(parents=True, exist_ok=True)
+    table = np.column_stack([mesh.node_coords(field.ids), field.values[:, 0]])
+    np.savetxt(workdir / "transferred-temperature.txt", table, fmt="%.15g")
+    return [
+        "import numpy as np",
+        "temperature = CREA_CHAMP(TYPE_CHAM='NOEU_TEMP_R', OPERATION='AFFE', MAILLAGE=mesh, "
+        "AFFE=_F(TOUT='OUI', NOM_CMP='TEMP', VALE=0.0))",
+        f"_rows = np.loadtxt('fort.{TEMPERATURE_UNIT}', ndmin=2)",
+        "_key = lambda xyz: tuple(np.round(np.asarray(xyz) * 1e9).astype(np.int64))",
+        "_given = {_key(r[:3]): r[3] for r in _rows}",
+        "_xyz = mesh.getCoordinates().toNumpy().reshape(-1, 3)",
+        "temperature.setValues([float(_given[_key(c)]) for c in _xyz])",
+    ]
+
+
+def _reference(comp) -> float:
+    from puzzle.adapters.calculix.inp import reference_temperature
+
+    return reference_temperature(comp)
 
 
 def _ther_nl(index: int, m: Material, tables: dict) -> list[str]:

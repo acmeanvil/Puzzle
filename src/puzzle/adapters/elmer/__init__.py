@@ -54,6 +54,7 @@ NODE_MAP = "puzzle-node-ids.txt"
 
 class ElmerAdapter(SolverAdapter):
     name = "elmer"
+    max_solve_steps = 1
     capabilities = Capabilities(
         physics={
             "solid_mechanics": frozenset({"stationary", "transient", "modal"}),
@@ -74,8 +75,8 @@ class ElmerAdapter(SolverAdapter):
     def write_input(
         self, project: Project, study: Study, mesh: Mesh, workdir: Path, inputs=()
     ) -> Path:
-        refuse_inputs(inputs, "Elmer")
-        sif, emesh = write_case(project, study, mesh, workdir)
+        refuse_inputs(inputs, "Elmer", {("load", "temperature")})
+        sif, emesh = write_case(project, study, mesh, workdir, inputs)
         np.savetxt(workdir / MESH_DIR / NODE_MAP, emesh.node_ids, fmt="%d")
         return sif
 

@@ -69,6 +69,8 @@ def refuse_inputs(inputs: Sequence, solver: str, accepted: set[tuple[str, str]] 
 class SolverAdapter(ABC):
     name: ClassVar[str]
     capabilities: ClassVar[Capabilities]
+    # Solve steps one input file can hold; run_study splits longer studies (None: any).
+    max_solve_steps: ClassVar[int | None] = None
 
     def check(
         self, project: Project, study: Study, *, allow_experimental: bool = False

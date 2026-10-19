@@ -30,6 +30,7 @@ from puzzle.results.model import Results
 
 class CodeAsterAdapter(SolverAdapter):
     name = "code_aster"
+    max_solve_steps = 1
     capabilities = Capabilities(
         physics={
             "solid_mechanics": frozenset({"stationary", "transient", "modal", "frequency_domain"}),
@@ -47,8 +48,8 @@ class CodeAsterAdapter(SolverAdapter):
     def write_input(
         self, project: Project, study: Study, mesh: Mesh, workdir: Path, inputs=()
     ) -> Path:
-        refuse_inputs(inputs, "Code_Aster")
-        return write_case(project, study, mesh, workdir)
+        refuse_inputs(inputs, "Code_Aster", {("load", "temperature")})
+        return write_case(project, study, mesh, workdir, inputs)
 
     def command(self, input_file: Path) -> list[str]:
         return ["run_aster", input_file.name]

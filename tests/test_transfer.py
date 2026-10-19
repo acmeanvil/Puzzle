@@ -65,7 +65,8 @@ def test_adapters_refuse_inputs_they_cannot_apply(tmp_path):
         Study(name="s", component=comp.id, solver="elmer", steps=[SolveStep(type="stationary")])
     )
     mesh = generate_mesh(project, comp.id, tmp_path, tmp_path / "m").mesh
-    load = Input(_linear(mesh), "load", source="Temperature")
+    stress = Field("stress", "node", ["xx"], mesh.node_ids, np.zeros((len(mesh.node_ids), 1)))
+    load = Input(stress, "prestress", source="Temperature")  # Elmer replays no prestress
     with pytest.raises(InputError) as err:
         ElmerAdapter().write_input(project, study, mesh, tmp_path / "case", [load])
     assert err.value.code == "unsupported" and "Temperature" in err.value.message

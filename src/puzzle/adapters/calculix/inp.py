@@ -71,7 +71,7 @@ def set_name(prefix: str, name: str) -> str:
 
 def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
     comp = project.get(study.component, Component)
-    refuse_inputs(inputs, "CalculiX", {("load", "temperature")})
+    refuse_inputs(inputs, "CalculiX", {("load", "temperature"), ("prestress", "stress")})
     # A temperature field from a thermal study, as a thermal load on structural steps.
     thermal_load = next((i.field for i in inputs if i.field.name == "temperature"), None)
     check_contacts(comp, CONTACTS, "CalculiX")
@@ -127,9 +127,44 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
     elif "heat_transfer" in physics_types:
         heat = next(ph for ph in comp.physics if ph.type == "heat_transfer")
         out += ["*INITIAL CONDITIONS, TYPE=TEMPERATURE", f"N_ALL, {initial_temperature(heat)}"]
-    for number, step in enumerate(solve_steps, start=1):
-        out += _step(number, step, comp, mesh, faces, physics_types, thermal_load)
+    prestress = _prestress_steps(project, study, inputs)
+    for number, step in enumerate(prestress, start=1):
+        # Large-deformation static step: its stress stiffens the steps after it.
+        lines = _step(number, step, comp, mesh, faces, physics_types, thermal_load)
+        out += [lines[0] + ", NLGEOM", *lines[1:]]
+    for number, step in enumerate(solve_steps, start=len(prestress) + 1):
+        lines = _step(number, step, comp, mesh, faces, physics_types, thermal_load)
+        if prestress:  # a perturbation of the stressed state, not of the unloaded one
+            lines = [lines[0] + ", PERTURBATION", *lines[1:]]
+        out += lines
     return "\n".join(out) + "\n"
+
+
+def prestress_step_count(project: Project, study: Study, inputs=()) -> int:
+    return len(_prestress_steps(project, study, inputs))
+
+
+def _prestress_steps(project: Project, study: Study, inputs) -> list[SolveStep]:
+    """The source study's static steps, replayed before a prestressed study's own.
+
+    CalculiX takes prestress as the stress state of a preceding NLGEOM step, not as a
+    field, so the source study is rebuilt from its definition: it must be a static
+    structural study on the same component (same mesh, same supports and loads).
+    """
+    steps: list[SolveStep] = []
+    for i in inputs:
+        if i.role != "prestress":
+            continue
+        source = project.get(i.study, Study)
+        solves = source.solve_steps()
+        if source.component != study.component or [s.type for s in solves] != ["stationary"]:
+            raise InputError(
+                f"prestress from '{source.name}': CalculiX replays a single static step on "
+                "the same component as the prestressed study",
+                code="unsupported",
+            )
+        steps.append(solves[0].model_copy(update={"physics": ["solid_mechanics"]}))
+    return steps
 
 
 def _materials(project: Project, comp: Component, mesh: Mesh, expansion: bool = False) -> list[str]:

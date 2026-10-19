@@ -112,24 +112,47 @@ def run_study(
             t.role,
             t.target_selection,
             t.name,
+            t.source,
         )
         for t in project.transfers_into(study.id)
     ]
-    input_file = adapter.write_input(project, study, meshed.mesh, workdir, inputs)
+    # An adapter that writes one solve step per input runs a multi-step study one step
+    # at a time on the same mesh; the steps are independent analyses.
+    steps = study.solve_steps()
+    limit = getattr(adapter, "max_solve_steps", None)
+    if limit is None or len(steps) <= limit:
+        parts = [(study, workdir)]
+    else:
+        sweeps = study.sweeps()
+        parts = [
+            (study.model_copy(update={"steps": [*sweeps, step]}), workdir / f"step-{n}")
+            for n, step in enumerate(steps, start=1)
+        ]
     runtime = runtime_for(study.solver)
-    job = run_job(
-        adapter.command(input_file), workdir, runtime, on_output=on_output, timeout_s=timeout_s
-    )
-    if not job.ok:
-        tail = log_tail(job.log)
-        raise StudyError(
-            f"{study.solver} failed (exit {job.returncode}):\n" + "\n".join(tail),
-            code="solver_failed",
-            path=study.name,
-            details={"exit_code": job.returncode, "log": str(job.log), "log_tail": tail},
+    results, job, input_file = None, None, None
+    for n, (part, where) in enumerate(parts, start=1):
+        where.mkdir(parents=True, exist_ok=True)
+        input_file = adapter.write_input(project, part, meshed.mesh, where, inputs)
+        job = run_job(
+            adapter.command(input_file), where, runtime, on_output=on_output, timeout_s=timeout_s
         )
+        if not job.ok:
+            tail = log_tail(job.log)
+            raise StudyError(
+                f"{study.solver} failed (exit {job.returncode}):\n" + "\n".join(tail),
+                code="solver_failed",
+                path=study.name,
+                details={"exit_code": job.returncode, "log": str(job.log), "log_tail": tail},
+            )
+        part_results = adapter.read_results(input_file)
+        if len(parts) > 1:
+            for step in part_results.steps:
+                step.index = n
+        if results is None:
+            results = part_results
+        else:
+            results.steps += part_results.steps
 
-    results = adapter.read_results(input_file)
     kinds = [s.type for s in study.solve_steps()]
     for step in results.steps:
         if 1 <= step.index <= len(kinds):

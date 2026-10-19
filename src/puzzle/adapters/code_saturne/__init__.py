@@ -30,6 +30,7 @@ from puzzle.results.model import Results
 
 class CodeSaturneAdapter(SolverAdapter):
     name = "code_saturne"
+    max_solve_steps = 1
     capabilities = Capabilities(
         physics={
             "fluid_flow": frozenset({"stationary", "transient"}),

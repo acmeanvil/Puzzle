@@ -31,6 +31,7 @@ class Input:
     role: str  # "load", "initial_condition", "prestress"
     selection: str | None = None  # where it applies; None: everywhere
     source: str = ""  # the transfer's name, for messages
+    study: object = None  # the source study's id, for adapters that replay it (prestress)
 
 
 def pick(results: Results, field: str, step: int = -1) -> Field:

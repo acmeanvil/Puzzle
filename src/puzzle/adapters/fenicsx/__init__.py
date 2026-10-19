@@ -36,6 +36,7 @@ from puzzle.results.model import Results
 
 class FenicsxAdapter(SolverAdapter):
     name = "fenicsx"
+    max_solve_steps = 1
     capabilities = Capabilities(
         physics={
             "custom_pde": frozenset({"stationary", "transient", "frequency_domain", "modal"}),
