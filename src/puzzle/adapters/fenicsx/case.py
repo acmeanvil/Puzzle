@@ -74,6 +74,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         "heat_transfer": ("stationary", "transient"),
         "electrostatics": ("stationary",),
         "magnetic_fields": ("stationary",),
+        "custom_pde": ("stationary", "transient"),
     }
     if len(solved) != 1 or next(iter(solved)) not in allowed:
         raise InputError(
@@ -89,6 +90,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         "heat_transfer": THERMAL,
         "electrostatics": ELECTROSTATIC,
         "magnetic_fields": MAGNETIC,
+        "custom_pde": {"dirichlet", "neumann"},
     }[physics]
     features = [
         f for ph in comp.physics if ph.type == physics for f in ph.features if f.type in wanted
@@ -96,7 +98,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     coils = [f for f in features if f.type == "coil_current"]
     if physics == "magnetic_fields" and len(coils) != 1:
         raise InputError("the FEniCSx adapter solves magnetic fields driven by one coil for now")
-    if not comp.materials:
+    if not comp.materials and physics != "custom_pde":  # a PDE may need no material
         raise InputError(f"component '{comp.name}' has no material assignments")
     groups = list(
         dict.fromkeys([a.selection for a in comp.materials] + [f.selection for f in features])
@@ -139,6 +141,27 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             for f in features
         ],
     }
+    if physics == "custom_pde":
+        pde = next(ph for ph in comp.physics if ph.type == "custom_pde")
+        eq = pde.equation
+        if len(eq.unknowns) != 1:
+            raise InputError(
+                "the FEniCSx adapter solves custom PDEs with one unknown so far", code="unsupported"
+            )
+        if eq.unknowns[0].family != "Lagrange":
+            raise InputError("custom PDE unknowns are Lagrange fields so far", code="unsupported")
+        case["equation"] = {
+            "unknowns": [u.model_dump() for u in eq.unknowns],
+            "weak_form": eq.weak_form,
+            "coefficients": {k: q.to_si() for k, q in eq.coefficients.items()},
+            "initial_value": float(pde.settings.get("initial_value", 0.0)),
+        }
+        # The weak form names its integration regions, so every face selection goes in
+        # the mesh. dolfinx needs each cell tagged once: volumes are the material
+        # selections, or the parts when the PDE has no materials.
+        volumes = [a.selection for a in comp.materials] or [p.name for p in comp.parts]
+        faces = sorted(g for g, grp in mesh.groups.items() if grp.dim < 3)
+        groups = list(dict.fromkeys(volumes + groups + faces))
     workdir.mkdir(parents=True, exist_ok=True)
     if thermal_load is not None:
         if physics != "solid_mechanics" or step.type == "modal":
@@ -177,6 +200,15 @@ def read_results(workdir: Path) -> Results:
         return Field(name, "node", comps, ids[order], values[order])
 
     results = Results(solver="fenicsx")
+    if "times" in data and "custom_fields" in data:
+        name = str(data["custom_fields"][0])
+        for t, values in zip(data["times"], data[f"series_{name}"], strict=True):
+            values = values.reshape(len(ids), -1)
+            comps = ["x", "y", "z"] if values.shape[1] == 3 else [""]
+            results.steps.append(
+                StepResult(1, "transient", float(t), None, {name: field(name, comps, values)})
+            )
+        return results
     if "times" in data:
         for t, values in zip(data["times"], data["temperature_series"], strict=True):
             temperature = field("temperature", [""], values.reshape(-1, 1))
@@ -208,6 +240,10 @@ def read_results(workdir: Path) -> Results:
             values = data[key].reshape(len(ids), -1)
             comps = ["x", "y", "z"] if values.shape[1] == 3 else [""]
             step.fields[name] = field(name, comps, values)
+    for name in [str(n) for n in data["custom_fields"]] if "custom_fields" in data else []:
+        values = data[f"field_{name}"].reshape(len(ids), -1)
+        comps = ["x", "y", "z"] if values.shape[1] == 3 else [""]
+        step.fields[name] = field(name, comps, values)
     for name in ("electric_energy", "magnetic_energy"):
         if name in data:
             value = np.array([[float(data[name])]])

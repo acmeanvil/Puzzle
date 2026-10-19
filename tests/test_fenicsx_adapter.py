@@ -154,3 +154,46 @@ def test_electromagnetic_results(tmp_path):
     assert step.fields["electric_potential"].values.shape == (n, 1)
     energy = step.fields["magnetic_energy"]
     assert energy.location == "global" and energy.values[0, 0] == pytest.approx(2.5e-5)
+
+
+def test_custom_pde_cases(tmp_path):
+    from puzzle.model import CustomEquation, Unknown
+
+    def case(equation, tmp):
+        tmp.mkdir(parents=True, exist_ok=True)
+        stepfile = write_bar_step(tmp / "bar.step")
+        physics = Physics(
+            type="custom_pde",
+            equation=equation,
+            features=[
+                Feature(type="dirichlet", selection="Bar/Root", values={"u": Quantity(value=1.0)})
+            ],
+        )
+        project, comp = bar_project(stepfile, [physics], mesh_size_mm=5)
+        study = project.add(
+            Study(
+                name="s", component=comp.id, solver="fenicsx", steps=[SolveStep(type="stationary")]
+            )
+        )
+        mesh = generate_mesh(project, comp.id, tmp, tmp / "m").mesh
+        return FenicsxAdapter().write_input(project, study, mesh, tmp / "case")
+
+    script = case(
+        CustomEquation(
+            unknowns=[Unknown(name="u")],
+            weak_form="u * v_u * dx",
+            coefficients={"k": Quantity(value=2, unit="kW/(m*K)")},
+        ),
+        tmp_path / "a",
+    )
+    written = json.loads((script.parent / "case.json").read_text())
+    assert written["equation"]["weak_form"] == "u * v_u * dx"
+    assert written["equation"]["coefficients"] == {"k": 2000.0}
+    assert written["features"][0]["type"] == "dirichlet"
+
+    two = CustomEquation(unknowns=[Unknown(name="u"), Unknown(name="p")], weak_form="0")
+    with pytest.raises(InputError, match="one unknown"):
+        case(two, tmp_path / "b")
+    edge = CustomEquation(unknowns=[Unknown(name="E", family="N1curl")], weak_form="0")
+    with pytest.raises(InputError, match="Lagrange"):
+        case(edge, tmp_path / "c")

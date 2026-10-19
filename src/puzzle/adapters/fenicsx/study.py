@@ -104,8 +104,10 @@ def main() -> None:
         "heat_transfer": solve_heat,
         "electrostatics": solve_electrostatics,
         "magnetic_fields": solve_magnetostatics,
-    }[case["physics"]]
-    if case["physics"] == "heat_transfer":
+    }.get(case["physics"])
+    if case["physics"] == "custom_pde":
+        solve_custom(case, msh, degree, cells, facets, tag, piecewise, out)
+    elif case["physics"] == "heat_transfer":
         solve_heat(case, msh, degree, dx, ds, facets, tag, of_temperature, out)
     else:
         solve(case, msh, degree, dx, ds, facets, tag, piecewise, out)
@@ -385,6 +387,164 @@ def solve_heat(case, msh, degree, dx, ds, facets, tag, of_temperature, out) -> N
         series.append(current.x.array.copy())
     out["times"] = dt * np.arange(1, steps + 1)
     out["temperature_series"] = np.asarray(series)
+
+
+# --- custom PDEs ---------------------------------------------------------------------
+
+
+class _Named(ufl.Measure):
+    """A measure that also takes a selection name: dx("Bar/Body"), ds("Bar/Tip")."""
+
+    tag = None  # set per run: selection name -> physical tag
+
+    def __call__(self, subdomain_id=None, *args, **kwargs):
+        if isinstance(subdomain_id, str) and subdomain_id not in ("everywhere", "otherwise"):
+            subdomain_id = _Named.tag(subdomain_id)
+        return super().__call__(subdomain_id, *args, **kwargs)
+
+
+# What a weak form may use besides its unknown, test function and coefficients.
+UFL_NAMES = {
+    name: getattr(ufl, name)
+    for name in (
+        "grad",
+        "div",
+        "curl",
+        "inner",
+        "dot",
+        "outer",
+        "nabla_grad",
+        "nabla_div",
+        "sym",
+        "tr",
+        "det",
+        "inv",
+        "transpose",
+        "Identity",
+        "as_vector",
+        "as_matrix",
+        "sqrt",
+        "exp",
+        "ln",
+        "sin",
+        "cos",
+        "tan",
+        "atan2",
+        "sinh",
+        "cosh",
+        "tanh",
+        "erf",
+        "conditional",
+        "lt",
+        "gt",
+        "le",
+        "ge",
+        "eq",
+        "ne",
+        "max_value",
+        "min_value",
+        "sign",
+        "pi",
+        "e",
+    )
+    if hasattr(ufl, name)
+}
+
+
+def solve_custom(case, msh, degree, cells, facets, tag, piecewise, out) -> None:
+    """F(u; v) == 0 from the user's UFL residual, by Newton with the exact Jacobian.
+
+    The weak form is evaluated with no builtins, only UFL operators and these names:
+    the unknown `<u>`, its test function `v_<u>`, its previous value `<u>_n` and `dt`
+    (transient), the coefficients, `x` (coordinates), `dx` and `ds` (with optional
+    selection names) and `prop("<material property>")` (cellwise). Each Newton step is
+    a linear solve, so any backend works.
+    """
+    eq = case["equation"]
+    (unknown,) = eq["unknowns"]
+    name = unknown["name"]
+    shape = (3,) if unknown["shape"] == "vector" else ()
+    V = fem.functionspace(msh, ("Lagrange", unknown["degree"], shape))
+    u, v, du = fem.Function(V), ufl.TestFunction(V), ufl.TrialFunction(V)
+    u_n = fem.Function(V)
+    u.x.array[:] = u_n.x.array[:] = eq["initial_value"]
+    _Named.tag = staticmethod(tag)
+    dx = _Named("dx", domain=msh, subdomain_data=cells)
+    ds = _Named("ds", domain=msh, subdomain_data=facets)
+    transient = case["step"]["type"] == "transient"
+    dt = fem.Constant(msh, float(case["step"].get("time_step", 1.0)))
+    names = dict(UFL_NAMES)
+    names.update(
+        {
+            name: u,
+            f"v_{name}": v,
+            f"{name}_n": u_n,
+            "dt": dt,
+            "x": ufl.SpatialCoordinate(msh),
+            "dx": dx,
+            "ds": ds,
+            "prop": piecewise,
+            **{k: fem.Constant(msh, float(c)) for k, c in eq["coefficients"].items()},
+        }
+    )
+    try:
+        F = eval(eq["weak_form"], {"__builtins__": {}}, names)  # noqa: S307 - the user's PDE
+    except Exception as exc:  # noqa: BLE001 - report any mistake in the expression
+        raise SystemExit(f"weak form: {type(exc).__name__}: {exc}") from None
+    bcs, held = [], []  # held: (dofs, space) of each condition, for zero corrections
+    for f in case["features"]:
+        where, vals = facets.find(tag(f["group"])), f.get("values", {})
+        if f["type"] == "dirichlet":
+            if shape:
+                for i, axis in enumerate("xyz"):
+                    if axis in vals:
+                        dofs = fem.locate_dofs_topological(V.sub(i), 2, where)
+                        bcs.append(dirichlet(vals[axis], dofs, V.sub(i)))
+                        held.append((dofs, V.sub(i)))
+            else:
+                value = vals.get(name, vals.get("value"))
+                if value is None:
+                    raise SystemExit(f"dirichlet on {f['group']} needs a '{name}' value")
+                dofs = fem.locate_dofs_topological(V, 2, where)
+                bcs.append(dirichlet(value, dofs, V))
+                held.append((dofs, V))
+        elif f["type"] == "neumann":  # a flux g into the body: -g v ds
+            g = vals.get(name, vals.get("value", 0.0))
+            F = F - g * v * ds(tag(f["group"]))
+    J = ufl.derivative(F, u, du)
+
+    def newton() -> None:
+        for bc in bcs:
+            bc.set(u.x.array)  # start from the boundary values; corrections keep them
+        zero = [dirichlet(0.0, dofs, space) for dofs, space in held]
+        for _ in range(50):
+            delta = solve_linear(J, -F, zero, V, "newton")
+            u.x.array[:] += delta.x.array
+            if np.abs(delta.x.array).max() <= 1e-10 * max(np.abs(u.x.array).max(), 1.0):
+                return
+        raise SystemExit("custom PDE: Newton did not converge in 50 iterations")
+
+    out_space = fem.functionspace(msh, ("Lagrange", degree, shape))
+    out["coords"] = out_space.tabulate_dof_coordinates()
+    out["custom_fields"] = np.array([name])
+
+    def nodal() -> np.ndarray:
+        shown = fem.Function(out_space)
+        shown.interpolate(u)
+        return shown.x.array.reshape(len(out["coords"]), -1).copy()
+
+    if not transient:
+        newton()
+        out[f"field_{name}"] = nodal()
+        return
+    steps = case["step"]["steps"]
+    series = []
+    for _ in range(steps):
+        newton()
+        u_n.x.array[:] = u.x.array
+        series.append(nodal())
+    out["times"] = float(dt.value) * np.arange(1, steps + 1)
+    out[f"series_{name}"] = np.asarray(series)
 
 
 EPSILON_0 = 8.8541878128e-12  # F/m, as the Elmer adapter
