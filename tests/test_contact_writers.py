@@ -58,3 +58,32 @@ def test_unwritten_contacts_are_refused_not_ignored(tmp_path, adapter):
 def test_conformal_bonds_need_nothing_from_the_solver(tmp_path):
     project, study, mesh = _setup(tmp_path, "elmer", _tie("conformal"))
     ElmerAdapter().write_input(project, study, mesh, tmp_path / "case")
+
+
+def test_calculix_writes_contact_pairs(tmp_path):
+    contact = Contact(
+        name="Slide", type="frictional", friction=0.2, source="Right/Start", target="Left/End"
+    )
+    project, study, mesh = _setup(tmp_path, "calculix", contact)
+    inp = write_inp(project, study, mesh)
+    assert "*CONTACT PAIR, INTERACTION=I_SLIDE, TYPE=SURFACE TO SURFACE" in inp
+    assert "*SURFACE BEHAVIOR, PRESSURE-OVERCLOSURE=LINEAR" in inp
+    assert "*FRICTION\n0.2, " in inp and "*STATIC\n0.1, 1.0" in inp
+
+
+def test_code_aster_frictionless_but_not_frictional(tmp_path):
+    smooth = Contact(name="Slide", type="frictionless", source="Right/Start", target="Left/End")
+    project, study, mesh = _setup(tmp_path, "code_aster", smooth)
+    export = CodeAsterAdapter().write_input(project, study, mesh, tmp_path / "case")
+    comm = (export.parent / "job.comm").read_text()
+    assert "DEFI_CONTACT(MODELE=model, FORMULATION='CONTINUE', FROTTEMENT='SANS'" in comm
+    assert "STAT_NON_LINE(" in comm and "ORIE_PEAU" in comm and "REAC_NODA" in comm
+
+    rough = Contact(
+        name="Slide", type="frictional", friction=0.3, source="Right/Start", target="Left/End"
+    )
+    (tmp_path / "f").mkdir()
+    project, study, mesh = _setup(tmp_path / "f", "code_aster", rough)
+    with pytest.raises(InputError) as err:
+        CodeAsterAdapter().write_input(project, study, mesh, tmp_path / "f" / "case")
+    assert err.value.code == "unsupported"

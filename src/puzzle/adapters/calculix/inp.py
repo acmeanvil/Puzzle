@@ -29,6 +29,7 @@ from puzzle.adapters.common import (
     InputError,
     check_contacts,
     initial_temperature,
+    surface_area,
     surface_blocks,
     thermal_tables,
     time_scheme,
@@ -61,6 +62,15 @@ def set_name(prefix: str, name: str) -> str:
 def write_inp(project: Project, study: Study, mesh: Mesh) -> str:
     comp = project.get(study.component, Component)
     check_contacts(comp, CONTACTS, "CalculiX")
+    touching = [c for c in comp.contacts if c.type in ("frictionless", "frictional")]
+    if touching and any(
+        s.type != "stationary" or not s.solves("solid_mechanics") or len(set(s.physics)) > 1
+        for s in study.solve_steps()
+    ):
+        raise InputError(
+            "CalculiX contact pairs are written for static structural steps only so far",
+            code="unsupported",
+        )
     volume_blocks = [b for b in mesh.blocks if b.dim == 3]
     for b in volume_blocks:
         if b.element not in ELEMENTS:
@@ -92,7 +102,7 @@ def write_inp(project: Project, study: Study, mesh: Mesh) -> str:
             out += _chunks(ids)
 
     out += _materials(project, comp, mesh)
-    out += _contacts(comp, mesh, faces)
+    out += _contacts(project, comp, mesh, faces)
 
     solve_steps = study.solve_steps()
     if not solve_steps:
@@ -168,6 +178,7 @@ def _step(
     number: int, step: SolveStep, comp: Component, mesh: Mesh, faces: FaceLookup, physics_types
 ) -> list[str]:
     solved = set(step.physics) or physics_types
+    contact = any(c.type in ("frictionless", "frictional") for c in comp.contacts)
     op = ", OP=NEW" if number > 1 else ""
     settings = step.settings
 
@@ -179,13 +190,19 @@ def _step(
 
     if solved == {"solid_mechanics"}:
         procedure = {
-            "stationary": ["*STATIC"],
+            # Contact is nonlinear: start with a tenth of the load, then let CalculiX step.
+            "stationary": ["*STATIC", "0.1, 1.0"] if contact else ["*STATIC"],
             "modal": ["*FREQUENCY", str(int(settings.get("modes", 10)))],
             "transient": ["*DYNAMIC"] + [f"{setting('time_step'):.10g}, {setting('end_time'):.10g}"]
             if step.type == "transient"
             else [],
         }.get(step.type)
-        outputs = ["*NODE FILE", "U"] + ([] if step.type == "modal" else ["*EL FILE", "S, E"])
+        # Reaction forces (RF) let a study sum the support or contact loads.
+        outputs = (
+            ["*NODE FILE", "U"]
+            if step.type == "modal"
+            else ["*NODE FILE", "U, RF", "*EL FILE", "S, E"]
+        )
     elif solved == {"heat_transfer"}:
         if step.type == "transient" and time_scheme(step)[0] != "backward_euler":
             raise InputError(
@@ -278,27 +295,62 @@ def _features(features: list[Feature], mesh: Mesh, faces: FaceLookup, op: str) -
     return out
 
 
-CONTACTS = {"bonded_nonconformal"}
+CONTACTS = {"bonded_nonconformal", "frictionless", "frictional"}
 
 
-def _contacts(comp: Component, mesh: Mesh, faces: FaceLookup) -> list[str]:
-    """Model-level contact definitions. A nonconformal bond is a *TIE: the source
-    (slave) surface's nodes follow the target (master) surface's element faces."""
+def _contacts(project: Project, comp: Component, mesh: Mesh, faces: FaceLookup) -> list[str]:
+    """Model-level contact definitions; the source is the slave side, the target the master.
+
+    - A nonconformal bond is a *TIE: slave nodes follow the master faces.
+    - Frictionless and frictional contact are surface-to-surface *CONTACT PAIRs with a
+      linear penalty: K = 50 E / h (stiffest material, slave face size), so the
+      overclosure stays near 2% of an element-sized strain. Friction adds *FRICTION with
+      a stick slope of the same order.
+    """
     out: list[str] = []
     for i, c in enumerate(comp.contacts, start=1):
-        if c.capability != "bonded_nonconformal":
+        if c.capability == "bonded_conformal":
             continue
-        names = []
+        names, slave_faces = [], []
         for role, selection in (("SLAVE", c.source), ("MASTER", c.target)):
             group = mesh.groups.get(selection)
             if group is None:
                 raise InputError(f"contact '{c.name}': no selection '{selection}' in the mesh")
             name = set_name(f"S{i}{role[0]}", selection)
+            hits = _element_faces(group, mesh, faces)
             out.append(f"*SURFACE, NAME={name}, TYPE=ELEMENT")
-            out += [f"{e}, S{n}" for e, n in _element_faces(group, mesh, faces)]
+            out += [f"{e}, S{n}" for e, n in hits]
             names.append(name)
-        out += [f"*TIE, NAME={set_name('T', c.name)}", ", ".join(names)]
+            if role == "SLAVE":
+                slave_faces = hits
+                slave_area = surface_area(group, mesh)
+        if c.capability == "bonded_nonconformal":
+            out += [f"*TIE, NAME={set_name('T', c.name)}", ", ".join(names)]
+            continue
+        h = (slave_area / max(len(slave_faces), 1)) ** 0.5
+        stiffness = 50.0 * _stiffest(project, comp) / h
+        interaction = set_name("I", c.name)
+        out += [
+            f"*CONTACT PAIR, INTERACTION={interaction}, TYPE=SURFACE TO SURFACE",
+            ", ".join(names),
+            f"*SURFACE INTERACTION, NAME={interaction}",
+            "*SURFACE BEHAVIOR, PRESSURE-OVERCLOSURE=LINEAR",
+            f"{stiffness:.6g}",
+        ]
+        if c.type == "frictional":
+            out += ["*FRICTION", f"{c.friction:.10g}, {stiffness:.6g}"]
     return out
+
+
+def _stiffest(project: Project, comp: Component) -> float:
+    moduli = [
+        project.get(a.material, Material).properties["youngs_modulus"].to_si()
+        for a in comp.materials
+        if "youngs_modulus" in project.get(a.material, Material).properties
+    ]
+    if not moduli:
+        raise InputError("contact needs a youngs_modulus on the materials")
+    return max(moduli)
 
 
 def _element_faces(group, mesh: Mesh, faces: FaceLookup) -> list[tuple[int, int]]:

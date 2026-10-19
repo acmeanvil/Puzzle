@@ -14,6 +14,7 @@ COMPONENTS = {
     "displacement": {"DX": "x", "DY": "y", "DZ": "z"},
     "stress": {"SIXX": "xx", "SIYY": "yy", "SIZZ": "zz", "SIXY": "xy", "SIYZ": "yz", "SIXZ": "zx"},
     "temperature": {"TEMP": ""},
+    "reaction_force": {"DX": "x", "DY": "y", "DZ": "z"},
 }
 
 
@@ -52,7 +53,7 @@ def read_results(workdir: Path) -> Results:
         return results
     # One result step per stored instant (NUME_ORDRE); a static solve has one.
     steps: dict[int, StepResult] = {}
-    for name in ("displacement", "stress", "temperature"):
+    for name in ("displacement", "stress", "temperature", "reaction_force"):
         if name not in tables:
             continue
         times = {int(r["NUME_ORDRE"]): float(r.get("INST") or 1.0) for r in tables[name]}

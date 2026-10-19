@@ -30,11 +30,20 @@ from puzzle.model.schema import Component, Feature, Material, Project, Study
 
 JOB = "job"
 ROOM_K = 293.15
-TABLES = {"displacement": 81, "stress": 82, "temperature": 83, "frequency": 84}
+TABLES = {
+    "displacement": 81,
+    "stress": 82,
+    "temperature": 83,
+    "frequency": 84,
+    "reaction_force": 85,
+}
 FORMAT_R = "1PE18.10"
 
 
-CONTACTS = {"bonded_nonconformal"}
+# Frictional contact (DEFI_CONTACT, FROTTEMENT='COULOMB') is not written yet: on quadratic
+# tetrahedra its friction multipliers make singular matrices, and on linear ones a slide
+# from the first increment does not converge. CalculiX runs frictional contact meanwhile.
+CONTACTS = {"bonded_nonconformal", "frictionless"}
 
 
 def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Path:
@@ -71,8 +80,15 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
             "Code_Aster ties nonconformal parts in structural studies only so far",
             code="unsupported",
         )
+    touching = [c for c in comp.contacts if c.type in ("frictionless", "frictional")]
+    if touching and (thermal or step.type != "stationary"):
+        raise InputError(
+            "Code_Aster contact is written for static structural steps only so far",
+            code="unsupported",
+        )
     # A tie projects the source (slave) face's nodes into the target part's volume.
     tie_groups = [g for c in ties for g in (c.source, c.target.split("/", 1)[0])]
+    tie_groups += [g for c in touching for g in (c.source, c.target)]
     groups = list(
         dict.fromkeys(
             [a.selection for a in comp.materials] + [f.selection for f in features] + tie_groups
@@ -85,9 +101,20 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
     write_med(mesh, workdir / f"{JOB}.med", names)
 
     phenomenon, model = ("THERMIQUE", "3D") if thermal else ("MECANIQUE", "3D")
+    faces = sorted({names[g] for c in touching for g in (c.source, c.target)})
     out = [
         "DEBUT(LANG='EN')",
         "mesh = LIRE_MAILLAGE(FORMAT='MED', UNITE=20)",
+        # Contact faces must have outward normals.
+        *(
+            [
+                "mesh = MODI_MAILLAGE(reuse=mesh, MAILLAGE=mesh, ORIE_PEAU=_F(GROUP_MA_PEAU=("
+                + ", ".join(f"'{g}'" for g in faces)
+                + ",)))"
+            ]
+            if faces
+            else []
+        ),
         "model = AFFE_MODELE(MAILLAGE=mesh, "
         f"AFFE=_F(TOUT='OUI', PHENOMENE='{phenomenon}', MODELISATION='{model}'))",
     ]
@@ -121,12 +148,30 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
             f"IMPR_TABLE(TABLE=RECU_TABLE(CO=res, NOM_PARA='FREQ'), UNITE={TABLES['frequency']}, "
             f"FORMAT='TABLEAU', SEPARATEUR=',', FORMAT_R='{FORMAT_R}')",
         ]
+    elif touching:
+        out += [
+            _defi_contact(touching, names),
+            # Ramp the loads over ten increments: friction depends on the loading path.
+            "ramp = DEFI_FONCTION(NOM_PARA='INST', VALE=(0.0, 0.0, 1.0, 1.0))",
+            "res = STAT_NON_LINE(MODELE=model, CHAM_MATER=mater, "
+            "EXCIT=_F(CHARGE=load, FONC_MULT=ramp), CONTACT=contact, "
+            "COMPORTEMENT=_F(RELATION='ELAS'), "
+            "INCREMENT=_F(LIST_INST=DEFI_LIST_REEL(DEBUT=0.0, "
+            "INTERVALLE=_F(JUSQU_A=1.0, NOMBRE=10))))",
+            "res = CALC_CHAMP(reuse=res, RESULTAT=res, CONTRAINTE=('SIGM_NOEU',), "
+            "FORCE=('REAC_NODA',))",
+            _table("res", "DEPL", "displacement", "INST=1.0"),
+            _table("res", "SIGM_NOEU", "stress", "INST=1.0"),
+            _table("res", "REAC_NODA", "reaction_force", "INST=1.0"),
+        ]
     else:
         out += [
             "res = MECA_STATIQUE(MODELE=model, CHAM_MATER=mater, EXCIT=_F(CHARGE=load))",
-            "res = CALC_CHAMP(reuse=res, RESULTAT=res, CONTRAINTE=('SIGM_NOEU',))",
+            "res = CALC_CHAMP(reuse=res, RESULTAT=res, CONTRAINTE=('SIGM_NOEU',), "
+            "FORCE=('REAC_NODA',))",
             _table("res", "DEPL", "displacement"),
             _table("res", "SIGM_NOEU", "stress"),
+            _table("res", "REAC_NODA", "reaction_force"),
         ]
     out.append("FIN()")
     comm = workdir / f"{JOB}.comm"
@@ -135,7 +180,11 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
     used = (
         {"temperature"}
         if thermal
-        else ({"displacement", "frequency"} if step.type == "modal" else {"displacement", "stress"})
+        else (
+            {"displacement", "frequency"}
+            if step.type == "modal"
+            else {"displacement", "stress", "reaction_force"}
+        )
     )
     export = workdir / f"{JOB}.export"
     export.write_text(
@@ -156,9 +205,10 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
     return export
 
 
-def _table(result: str, field: str, name: str) -> str:
+def _table(result: str, field: str, name: str, which: str = "") -> str:
+    which = f"{which}, " if which else ""
     return (
-        f"IMPR_TABLE(TABLE=CREA_TABLE(RESU=_F(RESULTAT={result}, NOM_CHAM='{field}', "
+        f"IMPR_TABLE(TABLE=CREA_TABLE(RESU=_F(RESULTAT={result}, NOM_CHAM='{field}', {which}"
         "TOUT_CMP='OUI', TOUT='OUI')), "
         f"UNITE={TABLES[name]}, FORMAT='TABLEAU', SEPARATEUR=',', FORMAT_R='{FORMAT_R}')"
     )
@@ -182,6 +232,18 @@ def _material(m: Material, thermal: bool) -> str:
     e, nu = need("youngs_modulus", "poissons_ratio")
     rho = f", RHO={p['density']:.12g}" if "density" in p else ""
     return f"ELAS=_F(E={e:.12g}, NU={nu:.12g}{rho})"
+
+
+def _defi_contact(contacts, names: dict[str, str]) -> str:
+    """Continuous (augmented Lagrangian) frictionless contact; source faces are the slave."""
+    zones = [
+        f"_F(GROUP_MA_MAIT='{names[c.target]}', GROUP_MA_ESCL='{names[c.source]}')"
+        for c in contacts
+    ]
+    return (
+        "contact = DEFI_CONTACT(MODELE=model, FORMULATION='CONTINUE', FROTTEMENT='SANS', "
+        f"ZONE=({', '.join(zones)},))"
+    )
 
 
 def _ther_nl(index: int, m: Material, tables: dict) -> list[str]:

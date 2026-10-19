@@ -4,6 +4,7 @@
     stats(results, mesh, "stress", ...)       extremes, mean and where they occur
     value_at(results, mesh, "temperature", p) the field at a point
     integrate(results, mesh, "temperature", "Bar/Body")   integral and mean over a selection
+    total(results, mesh, "reaction_force", "Bar/Root")    sum of nodal values (forces)
 
 Vector fields reduce to their magnitude and stress to von Mises unless a component
 is named. Values are SI.
@@ -146,6 +147,35 @@ def integrate(
         "integral": total,
         kind: measure,
         "mean": total / measure,
+    }
+
+
+def total(
+    results: Results, mesh: Mesh, field: str, selection: str, *, step: int | None = None
+) -> dict[str, Any]:
+    """The sum of a nodal field over a selection's nodes: for nodal quantities such as
+    reaction forces (support loads, contact forces), not for densities."""
+    f, chosen = _field(results, field, step)
+    if f.location != "node":
+        raise PuzzleError(
+            f"{field} is per {f.location}; a total needs nodal values", code="unsupported"
+        )
+    group = mesh.groups.get(selection)
+    if group is None:
+        raise PuzzleError(
+            f"no selection '{selection}' in the mesh",
+            code="not_found",
+            details={"selections": sorted(mesh.groups)},
+        )
+    keep = np.isin(f.ids, group.node_ids)
+    sums = f.values[keep].sum(axis=0)
+    return {
+        "field": field,
+        "step": chosen.index,
+        "selection": selection,
+        "nodes": int(keep.sum()),
+        "components": f.components,
+        "total": [float(v) for v in sums],
     }
 
 

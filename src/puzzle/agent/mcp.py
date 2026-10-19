@@ -36,9 +36,10 @@ what commands would change without changing anything. The project's autonomy lev
 decides what happens: "advise" refuses changes, "propose" records them for the user
 to accept, "act_in_budget" and "act" apply them. Check `problems` in every answer.
 
-Read results with `result_summary` first, then `result_stats`, `result_value_at`
-or `result_integral`, and `render` to look. Numbers come only from solver runs:
-label your own estimates as estimates. Errors carry a `code` and `details`.
+Read results with `result_summary` first, then `result_stats`, `result_value_at`,
+`result_integral` or `result_total` (reaction forces), and `render` to look.
+Numbers come only from solver runs: label your own estimates as estimates.
+Errors carry a `code` and `details`.
 """
 
 
@@ -274,6 +275,19 @@ def build_server(root: Path, client: str = "mcp-client") -> MCPServer:
 
         _, mesh, results = latest(study)
         return integrate(results, mesh, field, selection, step=step, component=component)
+
+    @tool(
+        description="Sum of a nodal field over a selection, e.g. the reaction force on a "
+        "support or contact face (field reaction_force)."
+    )
+    @guarded
+    def result_total(
+        study: str, field: str, selection: str, step: int | None = None
+    ) -> dict[str, Any]:
+        from puzzle.results.query import total
+
+        _, mesh, results = latest(study)
+        return total(results, mesh, field, selection, step=step)
 
     @tool(description="A picture of a study's latest result (PNG).")
     @guarded
