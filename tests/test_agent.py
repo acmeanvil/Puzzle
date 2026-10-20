@@ -245,3 +245,37 @@ def test_claude_answers_from_the_outline(project):
     agent = Agent(project, AgentSettings(provider="anthropic").build())
     answer = agent.ask("Which studies does this project have? Reply with their names only.")
     assert all(name in answer for name in ("Conduction", "Tip load", "Modes"))
+
+
+def test_api_keys_come_from_the_environment_then_the_keychain(monkeypatch):
+    import keyring
+    from keyring.backend import KeyringBackend
+
+    from puzzle.agent import settings
+
+    class Memory(KeyringBackend):
+        priority = 1
+        store: dict = {}
+
+        def get_password(self, service, user):
+            return self.store.get((service, user))
+
+        def set_password(self, service, user, password):
+            self.store[service, user] = password
+
+        def delete_password(self, service, user):
+            del self.store[service, user]
+
+    previous = keyring.get_keyring()
+    keyring.set_keyring(Memory())
+    try:
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        s = AgentSettings(provider="anthropic")
+        assert s.api_key() is None and s.key_source() == "none"
+        settings.store_key("anthropic", "sk-from-keychain")
+        assert s.api_key() == "sk-from-keychain" and s.key_source() == "keychain"
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-from-env")
+        assert s.api_key() == "sk-from-env" and s.key_source() == "environment (ANTHROPIC_API_KEY)"
+        assert settings.delete_key("anthropic") and not settings.delete_key("anthropic")
+    finally:
+        keyring.set_keyring(previous)

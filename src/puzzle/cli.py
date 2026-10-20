@@ -154,6 +154,11 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--quiet", action="store_true", help="print only the answer")
     p.set_defaults(handler=_ask)
 
+    p = sub.add_parser("agent-key", help="store, check or remove the agent's API key")
+    p.add_argument("action", choices=["set", "status", "clear"])
+    p.add_argument("--provider", default="anthropic", choices=["anthropic", "openai"])
+    p.set_defaults(handler=_agent_key)
+
     p = sub.add_parser("gui", help="open the desktop GUI")
     p.add_argument("project", type=Path, nargs="?")
     p.set_defaults(handler=_gui)
@@ -421,6 +426,31 @@ def _ask(args) -> int:
         f"({provider.name} {provider.model}: {agent.tokens['input']} in / "
         f"{agent.tokens['output']} out tokens)"
     )
+    return 0
+
+
+def _agent_key(args) -> int:
+    """Keys go to the OS keychain from a hidden prompt: never a file, never argv."""
+    import getpass
+
+    from puzzle.agent.providers import ProviderError
+    from puzzle.agent.settings import AgentSettings, delete_key, store_key
+
+    if args.action == "set":
+        key = getpass.getpass(f"{args.provider} API key (input hidden): ").strip()
+        if not key:
+            print("nothing entered; no key stored")
+            return 1
+        try:
+            store_key(args.provider, key)
+        except ProviderError as exc:
+            print(exc)
+            return 1
+        print(f"stored in the keychain (service 'puzzle', account '{args.provider}')")
+    elif args.action == "clear":
+        removed = delete_key(args.provider)
+        print("removed from the keychain" if removed else "no key in the keychain")
+    print(f"{args.provider} key: {AgentSettings(provider=args.provider).key_source()}")
     return 0
 
 

@@ -59,6 +59,7 @@ pyside6 = ">=6.7"
 pyvista = ">=0.44"
 pyvistaqt = ">=0.11"
 anthropic = ">=0.40"  # the built-in agent's Claude provider
+keyring = ">=25"  # API keys in the OS keychain
 
 # One feature per native solver.
 [feature.calculix.dependencies]

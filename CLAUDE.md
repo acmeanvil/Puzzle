@@ -19,6 +19,7 @@ pixi run -e dev pytest -k name # one test
 pixi install -e fenicsx        # other native solvers: fenicsx, code-aster (linux-64/win-64)
 pixi run -e dev import-materials "<path>/Materials_Hunt_List.xlsx"
 pixi run -e dev puzzle gui examples/cantilever   # the desktop GUI
+pixi run -e dev puzzle agent-key set            # store the Claude key in the keychain (hidden prompt)
 pixi run -e dev puzzle ask PROJECT "question"    # the built-in agent in a terminal
 ```
 
@@ -40,7 +41,7 @@ Solver tests in `tests/integration/` skip when the solver isn't available; `test
 | `src/puzzle/adapters` | One adapter per solver: capability matrix, `write_input`, `command`, `read_results` |
 | `src/puzzle/jobs` | Runs solvers natively or in Docker/Podman; runtime chosen per solver |
 | `src/puzzle/commands` | Command layer (ADR 0015): `Session.submit/propose/accept/undo`, `history.jsonl`, autonomy checks, `outline` |
-| `src/puzzle/agent` | `mcp.py`: MCP server over the command layer (`puzzle mcp PROJECT`); tools return summaries and coded errors. `agent.py`: the built-in agent, the same tools in-process as `Actor("agent", "built-in")`; `providers.py`: Claude (`anthropic`), any OpenAI-compatible endpoint (Ollama, llama.cpp, LM Studio) via urllib, and a scripted provider for tests; `settings.py`: `<user data dir>/agent.toml` (never in a project) |
+| `src/puzzle/agent` | `mcp.py`: MCP server over the command layer (`puzzle mcp PROJECT`); tools return summaries and coded errors. `agent.py`: the built-in agent, the same tools in-process as `Actor("agent", "built-in")`; `providers.py`: Claude (`anthropic`), any OpenAI-compatible endpoint (Ollama, llama.cpp, LM Studio) via urllib, and a scripted provider for tests; `settings.py`: `<user data dir>/agent.toml` (never in a project); API keys from the environment, else the OS keychain via `keyring` (`puzzle agent-key set`, hidden prompt; tests force the null backend in `conftest.py`) |
 | `src/puzzle/gui` | PySide6 desktop GUI (`puzzle gui [PROJECT]`): model tree, properties panel (every field editable, each edit one `Edit` command), pyvistaqt viewport (mesh, highlighted selections, results with field/step/deformation), output/history/problems, agent panel (chat, proposals to accept or reject, autonomy level with double sign-off for "act"); watches `history.jsonl` so other clients' changes show up |
 | `src/puzzle/errors.py` | `PuzzleError(code, message, path, details)` and `Problem`; codes in `CODES` |
 | `src/puzzle/results` | Solver-neutral `Results`; `ResultStore` = Delta Lake tables (runs, meshes, nodes, cells, groups, fields), format 2: one row per field per step with ids/values as list columns (ADR 0008); `query` = summary, stats, value_at, integrate |

@@ -52,10 +52,14 @@ class AgentPanel(QWidget):
         self.model_label.setStyleSheet("color: gray")
         new_chat = QPushButton("New chat")
         new_chat.clicked.connect(self.new_chat)
+        key = QPushButton("API key…")
+        key.setToolTip("Store the provider's API key in the system keychain")
+        key.clicked.connect(self._set_key)
         top = QHBoxLayout()
         top.addWidget(QLabel("Agents may"))
         top.addWidget(self.level)
         top.addStretch()
+        top.addWidget(key)
         top.addWidget(new_chat)
 
         self.transcript = QTextBrowser()
@@ -181,6 +185,28 @@ class AgentPanel(QWidget):
             return False
         self.model_label.setText(self._model_text())
         return True
+
+    def _set_key(self) -> None:
+        from PySide6.QtWidgets import QLineEdit
+
+        from puzzle.agent.settings import store_key
+
+        provider = load_settings().provider
+        key, ok = QInputDialog.getText(
+            self,
+            "API key",
+            f"{provider} API key (kept in the system keychain):",
+            QLineEdit.EchoMode.Password,
+        )
+        if not ok or not key.strip():
+            return
+        try:
+            store_key(provider, key.strip())
+        except ProviderError as exc:
+            self._say("error", str(exc))
+            return
+        self.agent = None  # rebuilt with the new key on the next message
+        self._say("note", f"{provider} key stored in the keychain")
 
     def _model_text(self) -> str:
         p = self.agent.provider

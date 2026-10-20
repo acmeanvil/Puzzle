@@ -4,6 +4,8 @@ from pathlib import Path
 
 # Tests use Puzzle's generic materials only, never a user's local library.
 os.environ["PUZZLE_MATERIALS"] = ""
+# Tests never touch the real keychain (or pop its prompts); key tests install their own.
+os.environ["PYTHON_KEYRING_BACKEND"] = "keyring.backends.null.Keyring"
 
 import pytest
 

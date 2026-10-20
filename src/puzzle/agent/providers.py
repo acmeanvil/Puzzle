@@ -72,7 +72,9 @@ class AnthropicProvider:
             ) from exc
         key = api_key or os.environ.get("ANTHROPIC_API_KEY")
         if not key:
-            raise ProviderError("no Claude API key: set ANTHROPIC_API_KEY")
+            raise ProviderError(
+                "no Claude API key: run `puzzle agent-key set` or set ANTHROPIC_API_KEY"
+            )
         self.model = model
         self.client = anthropic.Anthropic(api_key=key)
 
