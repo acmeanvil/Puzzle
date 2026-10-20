@@ -421,7 +421,11 @@ def _ask(args) -> int:
             mark = "x" if e.kind == "error" else "<-"
             print(f"  {mark} {(e.text.splitlines() or [''])[0][:120]}")
 
-    print(agent.ask(args.question, show))
+    try:
+        print(agent.ask(args.question, show))
+    except ProviderError as exc:
+        print(exc)
+        return 1
     print(
         f"({provider.name} {provider.model}: {agent.tokens['input']} in / "
         f"{agent.tokens['output']} out tokens)"
@@ -441,6 +445,8 @@ def _agent_key(args) -> int:
         if not key:
             print("nothing entered; no key stored")
             return 1
+        if args.provider == "anthropic" and not key.startswith("sk-ant-"):
+            print("warning: Anthropic API keys start with 'sk-ant-'; this one does not")
         try:
             store_key(args.provider, key)
         except ProviderError as exc:
