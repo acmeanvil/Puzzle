@@ -89,6 +89,16 @@ def check_contacts(component, implemented: set[str], solver: str) -> None:
             )
 
 
+def refuse_large_deflection(steps, solver: str) -> None:
+    """Refuse geometric_nonlinearity where the adapter only writes small-deflection statics."""
+    if any(s.settings.get("geometric_nonlinearity") for s in steps):
+        raise InputError(
+            f"the {solver} adapter does not run geometrically nonlinear steps yet; "
+            "CalculiX and Code_Aster do",
+            code="unsupported",
+        )
+
+
 TIME_SCHEMES = ("backward_euler", "crank_nicolson", "bdf2", "theta")
 
 
@@ -213,3 +223,19 @@ def match_points(
             raise InputError(f"result point {p} matches no mesh entity")
         out[j] = ids[best]
     return out
+
+
+def hydraulic_diameter(group, mesh: Mesh) -> float:
+    """4 A / P of a face selection: its area over its outline (edges used once)."""
+    from collections import Counter
+
+    edges: Counter = Counter()
+    for b in surface_blocks(group, mesh):
+        corners = b.connectivity[:, : (3 if b.element.startswith("tri") else 4)]
+        for row in corners:
+            for a, c in zip(row, np.roll(row, -1), strict=True):
+                edges[(min(a, c), max(a, c))] += 1
+    outline = [e for e, n in edges.items() if n == 1]
+    ends = mesh.node_coords(np.array(outline).ravel()).reshape(-1, 2, 3)
+    perimeter = float(np.linalg.norm(ends[:, 1] - ends[:, 0], axis=1).sum())
+    return 4 * surface_area(group, mesh) / perimeter

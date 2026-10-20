@@ -18,6 +18,7 @@ import gmsh
 from puzzle.geometry import gmsh_session, import_step
 from puzzle.materials import add_library_material
 from puzzle.model import (
+    ComparisonMetric,
     Component,
     Feature,
     Geometry,
@@ -28,6 +29,7 @@ from puzzle.model import (
     Physics,
     Project,
     Quantity,
+    Shootout,
     SolveStep,
     Study,
 )
@@ -115,6 +117,15 @@ def build(
             component=comp.id,
             solver="code_saturne",
             steps=[SolveStep(type="stationary", settings={"iterations": iterations})],
+            # OpenFOAM on the same mesh, compared cell by cell (ADR 0011).
+            shootout=Shootout(
+                solvers=["openfoam"],
+                metrics=[
+                    ComparisonMetric(quantity="velocity", norm="relative_l2", tolerance=0.01),
+                    ComparisonMetric(quantity="velocity", norm="relative_value", tolerance=0.005),
+                    ComparisonMetric(quantity="pressure", norm="relative_l2", tolerance=0.02),
+                ],
+            ),
         )
     )
     save_project(p, directory)

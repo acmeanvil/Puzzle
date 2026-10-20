@@ -176,3 +176,22 @@ def test_heat_uses_temperature_tables_unless_told_not_to(tmp_path):
     assert "*SPECIFIC HEAT\n439.8, 293.15" in tabled
     assert "*CONDUCTIVITY\n53.33\n" in constant
     assert "*CONTROLS, PARAMETERS=FIELD" in tabled
+
+
+def test_node_coordinates_fit_calculix_fields(tmp_path):
+    """CalculiX reads at most 20 characters per field; longer numbers are silently cut
+    (-8.67361737988404e-19 became -0.867 and turned elements inside out)."""
+    step = write_bar_step(tmp_path / "bar.step")
+    project, comp = bar_project(
+        step,
+        [Physics(type="solid_mechanics", features=[Feature(type="fixed", selection="Bar/Root")])],
+        mesh_size_mm=5,
+    )
+    study = project.add(
+        Study(name="s", component=comp.id, solver="calculix", steps=[SolveStep(type="stationary")])
+    )
+    mesh = generate_mesh(project, comp.id, tmp_path, tmp_path / "m").mesh
+    mesh.coords[0] = (-8.67361737988404e-19, 0.00037499999998301, -1.23456789012345e-100)
+    inp = write_inp(project, study, mesh)
+    nodes = inp.split("*NODE")[1].split("*ELEMENT")[0].splitlines()[1:]
+    assert all(len(field.strip()) <= 20 for line in nodes for field in line.split(","))

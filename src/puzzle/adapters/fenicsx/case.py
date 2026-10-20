@@ -18,6 +18,7 @@ from puzzle.adapters.common import (
     check_contacts,
     initial_temperature,
     match_points,
+    refuse_large_deflection,
     surface_area,
     thermal_tables,
     time_scheme,
@@ -64,6 +65,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     refuse_inputs(inputs, "FEniCSx", {("load", "temperature")})
     thermal_load = next((i.field for i in inputs if i.field.name == "temperature"), None)
     check_contacts(comp, set(), "FEniCSx")
+    refuse_large_deflection(study.solve_steps(), "FEniCSx")
     steps = study.solve_steps()
     if len(steps) != 1:
         raise InputError("the FEniCSx adapter runs studies with exactly one solve step for now")

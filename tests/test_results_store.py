@@ -137,3 +137,41 @@ def test_compaction_keeps_the_data(tmp_path):
 def test_unknown_run(tmp_path):
     with pytest.raises(KeyError):
         ResultStore(tmp_path).read_results("nope")
+
+
+def test_read_one_field_at_one_step(tmp_path):
+    from puzzle.mesh.mesh import CellBlock, Mesh
+    from puzzle.results.model import Field, Results, StepResult
+    from puzzle.results.store import ResultStore
+
+    mesh = Mesh(node_ids=np.arange(1, 5), coords=np.eye(4, 3))
+    mesh.blocks.append(CellBlock("tet4", 3, (3, 1), np.array([1]), np.array([[1, 2, 3, 4]])))
+    steps = [
+        StepResult(
+            1,
+            "transient",
+            t,
+            fields={
+                "temperature": Field(
+                    "temperature", "node", [""], mesh.node_ids, np.full((4, 1), t)
+                ),
+                "flux": Field("flux", "node", ["x", "y", "z"], mesh.node_ids, np.ones((4, 3))),
+            },
+        )
+        for t in (1.0, 2.0, 3.0)
+    ]
+    store = ResultStore(tmp_path / "r")
+    run = store.write_run(
+        run_key="k",
+        study_id="s",
+        study_name="s",
+        solver="x",
+        runtime="r",
+        mesh=mesh,
+        results=Results("x", steps),
+        started_at=datetime.now(UTC),
+        duration_s=1.0,
+    )
+    assert store.read_field(run, "temperature").values[:, 0].tolist() == [3.0] * 4
+    assert store.read_field(run, "temperature", 0).values[0, 0] == 1.0
+    assert store.read_field(run, "flux").components == ["x", "y", "z"]

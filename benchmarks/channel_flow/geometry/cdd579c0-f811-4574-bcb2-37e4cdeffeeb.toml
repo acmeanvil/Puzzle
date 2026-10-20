@@ -1,6 +1,7 @@
-id = "08673d91-d867-45d2-8d28-1090dfcf24b0"
+id = "cdd579c0-f811-4574-bcb2-37e4cdeffeeb"
 name = "Channel"
 source = "channel.step"
+history = []
 scope = "global"
 
 [[selections]]

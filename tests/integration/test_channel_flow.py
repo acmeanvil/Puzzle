@@ -1,21 +1,17 @@
-"""Laminar channel flow through Code_Saturne: Poiseuille profile and pressure gradient."""
+"""Laminar channel flow (Code_Saturne, OpenFOAM): Poiseuille profile and pressure gradient."""
 
 import importlib.util
 from pathlib import Path
 
 import numpy as np
 import pytest
+from solvers import over
 
-from puzzle.jobs import runtime_for
 from puzzle.model import Material, Study
 from puzzle.project import load_project
 from puzzle.solve import run_study
 
 BENCHMARK = Path(__file__).parents[2] / "benchmarks" / "channel_flow"
-
-pytestmark = pytest.mark.skipif(
-    not runtime_for("code_saturne").available("code_saturne"), reason="code_saturne not available"
-)
 
 
 def _constants():
@@ -25,10 +21,12 @@ def _constants():
     return module
 
 
-def test_poiseuille_profile_and_pressure_gradient(tmp_path):
+@over("code_saturne", "openfoam")
+def test_poiseuille_profile_and_pressure_gradient(tmp_path, solver):
     ch = _constants()
     project = load_project(BENCHMARK)
     study = next(s for s in project.of_type(Study) if s.name == "Channel flow")
+    study.solver = solver
     mu = project.of_type(Material)[0].properties["dynamic_viscosity"].to_si()
     run = run_study(project, study.id, BENCHMARK, tmp_path / "run", timeout_s=1800)
 

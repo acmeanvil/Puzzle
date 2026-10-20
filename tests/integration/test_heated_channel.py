@@ -1,4 +1,4 @@
-"""Laminar flow of air between uniformly heated plates (Code_Saturne).
+"""Laminar flow of air between uniformly heated plates (Code_Saturne, OpenFOAM).
 
 Air enters the 10 mm channel at 15 mm/s and 20 C (Re = 10 on the gap); both plates
 add q = 10 W/m^2, the side faces are symmetry planes. Two exact results:
@@ -17,7 +17,7 @@ Air's low Prandtl number develops the profile within a few millimetres.
 import gmsh
 import numpy as np
 import pytest
-from solvers import available
+from solvers import over
 
 from puzzle.geometry import gmsh_session, import_step
 from puzzle.materials import add_library_material, library_material
@@ -37,15 +37,13 @@ from puzzle.model import (
 )
 from puzzle.solve import run_study
 
-pytestmark = pytest.mark.skipif(not available("code_saturne"), reason="code_saturne not available")
-
 H, LENGTH, WIDTH = 0.01, 0.1, 0.004
 U, Q, T_IN = 0.015, 10.0, 293.15
 AIR = library_material("air").properties
 RHO, CP, K = (AIR[p].to_si() for p in ("density", "specific_heat", "thermal_conductivity"))
 
 
-def _channel(tmp_path):
+def _channel(tmp_path, solver):
     step = tmp_path / "channel.step"
     with gmsh_session("channel"):
         gmsh.model.occ.addBox(0, 0, 0, LENGTH, H, WIDTH)
@@ -128,7 +126,7 @@ def _channel(tmp_path):
         Study(
             name="Heated",
             component=comp.id,
-            solver="code_saturne",
+            solver=solver,
             steps=[
                 SolveStep(
                     type="stationary",
@@ -145,8 +143,9 @@ def _channel(tmp_path):
     return p, study
 
 
-def test_heated_channel(tmp_path):
-    project, study = _channel(tmp_path)
+@over("code_saturne", "openfoam")
+def test_heated_channel(tmp_path, solver):
+    project, study = _channel(tmp_path, solver)
     run = run_study(project, study.id, tmp_path, tmp_path / "run", timeout_s=3600)
     T, u = run.results.last("temperature"), run.results.last("velocity")
     blocks = [b for b in run.mesh.blocks if b.dim == 3]
@@ -171,7 +170,7 @@ def test_heated_channel(tmp_path):
         return (temp * speed).sum() / speed.sum()
 
     slope = (bulk(0.08) - bulk(0.04)) / 0.04
-    print(f"bulk dT/dx between 40 and 80 mm: {slope:.4f} K/m (energy balance {gradient:.4f})")
+    print(f"{solver}: bulk dT/dx, 40 to 80 mm: {slope:.4f} K/m (balance {gradient:.4f})")
     assert slope == pytest.approx(gradient, rel=0.01)
 
     at = np.abs(x - 0.06) < 0.3e-3
@@ -181,5 +180,5 @@ def test_heated_channel(tmp_path):
     measured = temp - (temp.mean() if centre is None else centre)
     expected = shape - (shape.mean() if centre is None else 0.0)
     error = np.abs(measured - expected).max() / np.ptp(expected)
-    print(f"profile at x = 60 mm: wall-to-centre {np.ptp(expected):.4f} K, max error {error:.2%}")
+    print(f"{solver}: profile at 60 mm: wall-centre {np.ptp(expected):.4f} K, error {error:.2%}")
     assert error < 0.02

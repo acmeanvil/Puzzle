@@ -19,9 +19,9 @@ Puzzle supports five solvers. All five adapters exist with their capability matr
 | FEniCSx | Custom PDEs (equation-based modelling) and the second electromagnetics solver | Generated dolfinx script | 3 |
 | Code_Saturne | CFD: incompressible flow, turbulence, non-isothermal flow | Case directory + `setup.xml`, MED | 4 |
 
-Shoot-out pairs this line-up allows: CalculiX, Code_Aster and Elmer for structural and thermal studies; Elmer and FEniCSx for electromagnetics. CFD has one solver.
+Shoot-out pairs this line-up allows: CalculiX, Code_Aster and Elmer for structural and thermal studies; Elmer and FEniCSx for electromagnetics. CFD has one solver (ADR 0016 adds OpenFOAM as its partner).
 
-Not supported for now: MYSTRAN, FreeFEM, GetDP, Palace and OpenFOAM. The adapter plug-in API (ADR 0006) lets any of them be added later without changing Puzzle.
+Not supported for now: MYSTRAN, FreeFEM, GetDP and Palace. OpenFOAM was on this list until ADR 0016. The adapter plug-in API (ADR 0006) lets any of them be added later without changing Puzzle.
 
 ## Consequences
 

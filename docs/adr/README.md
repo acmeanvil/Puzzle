@@ -21,3 +21,4 @@ New record: copy [template.md](template.md) to `NNNN-short-title.md`, set status
 | [0013](0013-packaging-and-platforms.md) | Platforms and packaging: pixi, native solvers first, containers for the gaps | Accepted |
 | [0014](0014-geometry-preparation-workflow.md) | Geometry is imported CAD prepared through a parametric history; bulk reattachment | Accepted |
 | [0015](0015-ai-agent-infrastructure.md) | AI-aware: one command layer for people and agents, MCP from the start, pluggable providers, autonomy levels | Accepted |
+| [0016](0016-openfoam-second-cfd-solver.md) | Add OpenFOAM as the second CFD solver, paired with Code_Saturne in shoot-outs | Proposed |

@@ -93,7 +93,10 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
 
     out.append("*NODE, NSET=N_ALL")
     out += [
-        f"{n}, {x:.15g}, {y:.15g}, {z:.15g}"
+        # CalculiX reads at most 20 characters per field: "%.15g" can give 21 (e.g.
+        # -8.67361737988404e-19 from OCC round-off) and the value is silently cut.
+        # 13 significant digits fit in 19.
+        f"{n}, {x:.13g}, {y:.13g}, {z:.13g}"
         for n, (x, y, z) in zip(mesh.node_ids, mesh.coords, strict=True)
     ]
 
@@ -131,7 +134,8 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
     for number, step in enumerate(prestress, start=1):
         # Large-deformation static step: its stress stiffens the steps after it.
         lines = _step(number, step, comp, mesh, faces, physics_types, thermal_load)
-        out += [lines[0] + ", NLGEOM", *lines[1:]]
+        first = lines[0] if "NLGEOM" in lines[0] else lines[0] + ", NLGEOM"
+        out += [first, *lines[1:]]
     for number, step in enumerate(solve_steps, start=len(prestress) + 1):
         lines = _step(number, step, comp, mesh, faces, physics_types, thermal_load)
         if prestress:  # a perturbation of the stressed state, not of the unloaded one
@@ -238,6 +242,15 @@ def _step(
 ) -> list[str]:
     solved = set(step.physics) or physics_types
     contact = any(c.type in ("frictionless", "frictional") for c in comp.contacts)
+    nlgeom = bool(step.settings.get("geometric_nonlinearity", False))
+    if nlgeom and (solved != {"solid_mechanics"} or step.type != "stationary"):
+        raise InputError(
+            "geometric_nonlinearity applies to static structural steps", code="unsupported"
+        )
+    # Nonlinear steps (contact, large deflection) go in at most 1/n of the load at a time;
+    # each increment's results are kept, so a load-deflection curve can be drawn.
+    increments = int(step.settings.get("increments", 10 if (contact or nlgeom) else 1))
+    first = float(step.settings.get("initial_increment", 1 / increments))  # fraction of load
     op = ", OP=NEW" if number > 1 else ""
     settings = step.settings
 
@@ -250,7 +263,14 @@ def _step(
     if solved == {"solid_mechanics"}:
         procedure = {
             # Contact is nonlinear: start with a tenth of the load, then let CalculiX step.
-            "stationary": ["*STATIC", "0.1, 1.0"] if contact else ["*STATIC"],
+            "stationary": (
+                [
+                    "*STATIC",
+                    f"{first:.6g}, 1.0, {1e-4 / increments:.3g}, {1 / increments:.6g}",
+                ]
+                if contact or nlgeom
+                else ["*STATIC"]
+            ),
             "modal": ["*FREQUENCY", str(int(settings.get("modes", 10)))],
             "transient": ["*DYNAMIC"] + [f"{setting('time_step'):.10g}, {setting('end_time'):.10g}"]
             if step.type == "transient"
@@ -295,7 +315,8 @@ def _step(
         )
 
     # CalculiX stops after 100 increments per step unless told otherwise.
-    out = ["*STEP, INC=1000000" if step.type == "transient" else "*STEP"] + procedure
+    head = "*STEP, NLGEOM, INC=10000" if nlgeom else "*STEP"
+    out = ["*STEP, INC=1000000" if step.type == "transient" else head] + procedure
     if "heat_transfer" in solved:
         # Temperature tables make heat transfer nonlinear; CalculiX's default field
         # tolerances (0.5% residual, 1% correction) stop short. Linear cases converge at once.
@@ -393,7 +414,14 @@ def _contacts(project: Project, comp: Component, mesh: Mesh, faces: FaceLookup) 
             out += [f"*TIE, NAME={set_name('T', c.name)}", ", ".join(names)]
             continue
         h = (slave_area / max(len(slave_faces), 1)) ** 0.5
-        stiffness = 50.0 * _stiffest(project, comp) / h
+        # The softer body governs the local compliance; a rigid-ish platen must not
+        # stiffen the penalty (it made rim contact chatter in the Belleville check).
+        # Factor 50 keeps overclosure ~2% of an element strain; bending-dominated line
+        # contact (disc springs, rims) converges only with less, as Ansys advises 0.01-0.1
+        # of its default there: contact.extensions["calculix"]["penalty_factor"].
+        factor = float(c.extensions.get("calculix", {}).get("penalty_factor", 50.0))
+        soft = min(_modulus(project, comp, c.source), _modulus(project, comp, c.target))
+        stiffness = factor * soft / h
         interaction = set_name("I", c.name)
         out += [
             f"*CONTACT PAIR, INTERACTION={interaction}, TYPE=SURFACE TO SURFACE",
@@ -407,15 +435,15 @@ def _contacts(project: Project, comp: Component, mesh: Mesh, faces: FaceLookup) 
     return out
 
 
-def _stiffest(project: Project, comp: Component) -> float:
-    moduli = [
-        project.get(a.material, Material).properties["youngs_modulus"].to_si()
-        for a in comp.materials
-        if "youngs_modulus" in project.get(a.material, Material).properties
-    ]
-    if not moduli:
-        raise InputError("contact needs a youngs_modulus on the materials")
-    return max(moduli)
+def _modulus(project: Project, comp: Component, selection: str) -> float:
+    """Young's modulus of the material on the part that `selection` belongs to."""
+    part = selection.split("/", 1)[0]
+    for a in comp.materials:
+        if a.selection == part or a.selection.startswith(part + "/"):
+            props = project.get(a.material, Material).properties
+            if "youngs_modulus" in props:
+                return props["youngs_modulus"].to_si()
+    raise InputError(f"contact on '{selection}' needs a youngs_modulus on its part's material")
 
 
 def _element_faces(group, mesh: Mesh, faces: FaceLookup) -> list[tuple[int, int]]:

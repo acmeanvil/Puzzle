@@ -1,7 +1,0 @@
-id = "babea5b6-fd74-4466-ab1e-e130653327d9"
-name = "Channel flow"
-component = "4f4ecd6c-3d0d-459c-9416-37fc8f15ec9d"
-solver = "code_saturne"
-steps = [
-    { type = "stationary", physics = [], settings = { iterations = 500 } },
-]

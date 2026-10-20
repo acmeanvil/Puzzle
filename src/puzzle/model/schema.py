@@ -72,12 +72,32 @@ class ParameterSet(ProjectObject):
     values: dict[str, Quantity] = Field(default_factory=dict)
 
 
+class HistoryStep(BaseModel):
+    """One operation of a geometry history (ADR 0014): box, hole, fillet or split.
+
+    Lengths are metres; a string value names a parameter. Faces are named by the step
+    that made them ("Plate/+z", "Hole1/wall", "Round/edge-2"); see
+    puzzle.geometry.history.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["box", "hole", "fillet", "split"]
+    name: str
+    args: dict[str, float | str | dict[str, Any]] = Field(default_factory=dict)
+
+
 class Geometry(ProjectObject):
-    """One part's geometry and the named selections defined on it."""
+    """One part's geometry and the named selections defined on it.
+
+    Either a `source` file (STEP, IGES, BREP; selections name its faces "face-N") or a
+    `history` that Puzzle regenerates (selections use the history's persistent names).
+    """
 
     kind: ClassVar[str] = "geometry"
 
-    source: str
+    source: str | None = None
+    history: list[HistoryStep] = Field(default_factory=list)
     scope: Literal["global", "local"] = "global"
     owner: UUID | None = Field(default=None, description="Owning component, for local geometry")
     selections: list[NamedSelection] = Field(default_factory=list)
@@ -86,6 +106,8 @@ class Geometry(ProjectObject):
     def _owner_matches_scope(self) -> Geometry:
         if (self.scope == "local") != (self.owner is not None):
             raise ValueError("local geometry needs an owner; global geometry has none")
+        if (self.source is None) == (not self.history):
+            raise ValueError("a geometry has either a source file or a history")
         return self
 
 

@@ -26,9 +26,8 @@ from puzzle.adapters.common import (
     THERMAL,
     InputError,
     check_contacts,
+    hydraulic_diameter,
     match_points,
-    surface_area,
-    surface_blocks,
 )
 from puzzle.mesh.med import write_med
 from puzzle.mesh.mesh import Mesh
@@ -211,22 +210,6 @@ def read_results(workdir: Path) -> Results:
             values = read_variable(path, parts, components)
             step.fields[field_name] = Field(field_name, "element", comps, ids[order], values[order])
     return Results(solver="code_saturne", steps=[step])
-
-
-def hydraulic_diameter(group, mesh: Mesh) -> float:
-    """4 A / P of a face selection: its area over its outline (edges used once)."""
-    from collections import Counter
-
-    edges: Counter = Counter()
-    for b in surface_blocks(group, mesh):
-        corners = b.connectivity[:, : (3 if b.element.startswith("tri") else 4)]
-        for row in corners:
-            for a, c in zip(row, np.roll(row, -1), strict=True):
-                edges[(min(a, c), max(a, c))] += 1
-    outline = [e for e, n in edges.items() if n == 1]
-    ends = mesh.node_coords(np.array(outline).ravel()).reshape(-1, 2, 3)
-    perimeter = float(np.linalg.norm(ends[:, 1] - ends[:, 0], axis=1).sum())
-    return 4 * surface_area(group, mesh) / perimeter
 
 
 def _seconds(value) -> float | None:

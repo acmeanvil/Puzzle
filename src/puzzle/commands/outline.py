@@ -30,7 +30,8 @@ def outline(project: Project, *, ids: bool = False) -> str:
         lines.append(head("Parameters", ps) + ": " + _values(ps.values))
     for geo in project.of_type(Geometry):
         scope = "global" if geo.scope == "global" else "local"
-        lines.append(head("Geometry", geo) + f"  ({scope}, {geo.source})")
+        origin = geo.source or f"history of {len(geo.history)} steps"
+        lines.append(head("Geometry", geo) + f"  ({scope}, {origin})")
         for s in geo.selections:
             lines.append(f"    {s.name}: {s.entity} x{len(s.members)}")
     for m in project.of_type(Material):

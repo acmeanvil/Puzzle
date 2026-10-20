@@ -51,13 +51,25 @@ def run_study(
     on_output: Callable[[str], None] | None = None,
     timeout_s: float | None = None,
     upstream: dict | None = None,
+    solver: str | None = None,
+    meshed: MeshResult | None = None,
 ) -> StudyRun:
     """Run `study_id` with its primary solver. Geometry paths resolve against `root`.
 
     With a `store`, the run is saved there, and when `reuse` is set an earlier run
     with the same inputs (same run key, ADR 0009) is returned instead of solving again.
+    `solver` runs one of the study's shoot-out solvers instead, and `meshed` reuses a
+    mesh already generated for this study (a shoot-out runs every solver on one mesh).
     """
     study = project.get(study_id, Study)
+    if solver is not None and solver != study.solver:
+        if solver not in study.all_solvers():
+            raise StudyError(
+                f"{solver} is neither the primary nor a shoot-out solver of this study",
+                code="invalid",
+                path=study.name,
+            )
+        study = study.model_copy(update={"solver": solver})
     if study.sweeps():
         raise StudyError("parametric sweeps are not run yet", code="unsupported", path=study.name)
     adapters = available_adapters()
@@ -100,7 +112,8 @@ def run_study(
                 upstream=upstream,
             )
     started = datetime.now(UTC)
-    meshed = generate_mesh(project, study.component, root, workdir / "mesh")
+    if meshed is None:
+        meshed = generate_mesh(project, study.component, root, workdir / "mesh")
     inputs = [
         Input(
             map_field(

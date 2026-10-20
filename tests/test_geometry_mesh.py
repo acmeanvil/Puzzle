@@ -241,7 +241,8 @@ def test_meshing_from_short_lived_threads(tmp_path):
     """)
     # In a subprocess: the failure mode is a segfault.
     done = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
-    assert done.returncode == 0 and done.stdout.strip().endswith("ok"), done.stderr[-2000:]
+    # OCCT 8 prints its STEP writer statistics at exit, after "ok".
+    assert done.returncode == 0 and "ok" in done.stdout.splitlines(), done.stderr[-2000:]
 
 
 def test_identical_touching_parts_keep_their_own_faces(tmp_path):

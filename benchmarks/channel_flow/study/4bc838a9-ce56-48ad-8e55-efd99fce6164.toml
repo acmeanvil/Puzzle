@@ -1,0 +1,17 @@
+id = "4bc838a9-ce56-48ad-8e55-efd99fce6164"
+name = "Channel flow"
+component = "a538e028-fb27-47ba-abfc-7450ed7d0ba2"
+solver = "code_saturne"
+steps = [
+    { type = "stationary", physics = [], settings = { iterations = 500 } },
+]
+
+[shootout]
+solvers = [
+    "openfoam",
+]
+metrics = [
+    { quantity = "velocity", norm = "relative_l2", tolerance = 0.01 },
+    { quantity = "velocity", norm = "relative_value", tolerance = 0.005 },
+    { quantity = "pressure", norm = "relative_l2", tolerance = 0.02 },
+]

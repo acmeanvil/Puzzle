@@ -9,6 +9,7 @@ EXECUTABLES = {
     "elmer": "ElmerSolver",
     "code_aster": "run_aster",
     "code_saturne": "code_saturne",
+    "openfoam": "simpleFoam",
     "fenicsx": None,
 }
 

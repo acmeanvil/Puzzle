@@ -1,6 +1,6 @@
 # 0011. Solver shoot-out: run one study on several solvers and compare
 
-- Status: Proposed (future feature; the schema hook exists now)
+- Status: Proposed (implemented: `puzzle.shootout.run_shootout`, 2026-10-20)
 - Date: 2026-10-17
 
 ## Context
@@ -21,7 +21,7 @@ Open-source solvers differ in formulation, element technology and defaults. User
 - Accuracy tracking becomes routine instead of a separate verification project.
 - Disagreements surface translation bugs in adapters as well as solver differences.
 - Compute cost multiplies by the number of solvers; shoot-outs are opt-in per study.
-- A shoot-out needs at least two solvers with the capability: CalculiX, Code_Aster and Elmer for structural and thermal studies, Elmer and FEniCSx for electromagnetics (ADR 0012).
+- A shoot-out needs at least two solvers with the capability: CalculiX, Code_Aster and Elmer for structural and thermal studies, Elmer and FEniCSx for electromagnetics (ADR 0012), Code_Saturne and OpenFOAM for CFD (ADR 0016).
 
 ## Alternatives considered
 

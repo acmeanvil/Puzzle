@@ -75,7 +75,11 @@ def test_shootout_checks_every_solver(bracket):
     assert check_study(bracket, static) == {"calculix": [], "elmer": []}
 
     static.shootout = Shootout(solvers=["openfoam"])
-    assert check_study(bracket, static)["openfoam"] == ["no adapter installed for openfoam"]
+    assert check_study(bracket, static)["openfoam"] == [
+        "openfoam does not support solid_mechanics physics"
+    ]
+    static.shootout = Shootout(solvers=["su2"])
+    assert check_study(bracket, static)["su2"] == ["no adapter installed for su2"]
 
 
 def test_time_schemes_are_checked(bracket):

@@ -22,7 +22,14 @@ from puzzle.errors import PuzzleError
 from puzzle.geometry.model import ENTITY_DIM, import_step, load_shapes, match, place
 from puzzle.geometry.session import gmsh_session
 from puzzle.mesh.mesh import ELEMENT_NAMES, CellBlock, Group, Mesh
-from puzzle.model.schema import Component, Geometry, MeshRecipe, NamedSelection, Project
+from puzzle.model.schema import (
+    Component,
+    Geometry,
+    MeshRecipe,
+    NamedSelection,
+    ParameterSet,
+    Project,
+)
 
 MESH_FILE = "mesh.msh"
 
@@ -55,15 +62,19 @@ def generate_mesh(
         raise MeshError("second-order hexahedra are not supported yet; use element_order 1")
 
     geometries = {p.name: project.get(p.geometry, Geometry) for p in comp.parts}
-    references = {name: import_step(root / g.source) for name, g in geometries.items()}
     warnings: list[str] = []
     out_dir.mkdir(parents=True, exist_ok=True)
+    sources = {name: _source(project, g, root, out_dir, warnings) for name, g in geometries.items()}
+    # History selections name faces persistently; the mesher works with face-N names.
+    geometries = {name: g for name, (g, _) in sources.items()}
+    paths = {name: path for name, (_, path) in sources.items()}
+    references = {name: import_step(path) for name, path in paths.items()}
 
     with gmsh_session("mesh", verbose=verbose):
         volumes: dict[str, list[tuple[int, int]]] = {}
         for part in comp.parts:
             before = set(gmsh.model.getEntities(3))
-            load_shapes(root / geometries[part.name].source)
+            load_shapes(paths[part.name])
             volumes[part.name] = sorted(set(gmsh.model.getEntities(3)) - before)
             place(volumes[part.name], part.translation, part.rotation)
         gmsh.model.occ.synchronize()
@@ -100,6 +111,10 @@ def generate_mesh(
             types, _, _ = gmsh.model.mesh.getElements(3)
             if any(t != 5 for t in types):
                 raise MeshError("some volumes could not be meshed with hexahedra (not block-like)")
+        if recipe.element_order > 1:
+            # Curved second-order elements can fold where midside nodes snap onto tight
+            # curves (fillets, small holes); Gmsh's optimiser untangles them.
+            gmsh.option.setNumber("Mesh.HighOrderOptimize", 2)
         gmsh.model.mesh.setOrder(recipe.element_order)
         min_quality = _min_quality()
         if min_quality <= 0:
@@ -111,6 +126,53 @@ def generate_mesh(
         mesh = _extract()
 
     return MeshResult(mesh=mesh, path=path, min_quality=min_quality, warnings=warnings)
+
+
+def _source(project: Project, geo: Geometry, root: Path, out_dir: Path, warnings: list[str]):
+    """The geometry's file, and the geometry with selections in face-N names.
+
+    A history is regenerated (with the project's parameters, in SI) to a BREP file; its
+    persistent face names are matched to the file's faces by signature, which is exact
+    here since both describe the same shape.
+    """
+    if not geo.history:
+        return geo, root / geo.source
+    from puzzle.geometry.history import Op, regenerate, signature, write_brep
+
+    params = {k: q.to_si() for ps in project.of_type(ParameterSet) for k, q in ps.values.items()}
+    shape = regenerate([Op(s.kind, s.name, dict(s.args)) for s in geo.history], params)
+    path = out_dir / f"{''.join(c if c.isalnum() else '-' for c in geo.name)}.brep"
+    write_brep(shape.shape, path)
+    model = import_step(path)
+    faces = model.of_dim(2)
+    tol = 1e-6 * model.size
+    aliases: dict[str, list[str]] = {}
+    for name, ocp_faces in shape.names.items():
+        for f in ocp_faces:
+            _, area, centre = signature(f)
+            hit = next(
+                (
+                    e.name
+                    for e in faces
+                    if abs(e.measure - area) <= 1e-6 * max(area, 1e-30)
+                    and all(abs(a - b) <= tol for a, b in zip(e.center, centre, strict=True))
+                ),
+                None,
+            )
+            if hit:
+                aliases.setdefault(name, []).append(hit)
+    selections = []
+    for sel in geo.selections:
+        members = []
+        for m in sel.members:
+            if m in aliases:
+                members += aliases[m]
+            elif sel.entity == "body" and m.startswith("body-"):
+                members.append(m)
+            else:
+                warnings.append(f"selection '{sel.name}': '{m}' no longer exists in the history")
+        selections.append(sel.model_copy(update={"members": members}))
+    return geo.model_copy(update={"selections": selections}), path
 
 
 def _closure(volumes: list[tuple[int, int]]) -> list[tuple[int, int]]:

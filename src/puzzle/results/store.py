@@ -241,18 +241,26 @@ class ResultStore:
         table = self._rows("fields", pc.field("run_id") == run_id)
         results = Results(solver=record.solver)
         steps: dict[tuple, StepResult] = {}
-        keys = ["step", "mode", "value", "kind", "field", "location", "components"]
-        for key in table.select(keys).group_by(keys).aggregate([]).to_pylist():
-            sel = table.filter(
-                (pc.field("step") == key["step"])
-                & (pc.field("field") == key["field"])
-                & (pc.field("value") == key["value"])
-                & (
-                    pc.field("mode").is_null()
-                    if key["mode"] is None
-                    else pc.field("mode") == key["mode"]
-                )
-            ).sort_by("entity_id")
+        # One sort, then contiguous slices per (step, mode, value, field): filtering the
+        # table once per slice made long transients quadratic in the step count.
+        order = ["step", "mode", "value", "field", "entity_id"]
+        table = table.sort_by([(k, "ascending") for k in order])
+        keys = np.column_stack(
+            [
+                table.column("step").to_numpy(),
+                pc.fill_null(table.column("mode"), -1).to_numpy(),
+                table.column("value").to_numpy(),
+                pc.dictionary_encode(table.column("field")).combine_chunks().indices.to_numpy(),
+            ]
+        )
+        starts = np.flatnonzero(np.r_[True, np.any(keys[1:] != keys[:-1], axis=1)])
+        for a, b in zip(starts, np.r_[starts[1:], len(keys)], strict=True):
+            sel = table.slice(a, b - a)
+            key = (
+                sel.slice(0, 1)
+                .select(["step", "mode", "value", "kind", "field", "location", "components"])
+                .to_pylist()[0]
+            )
             components = key["components"].split(",")
             values = np.column_stack(
                 [
@@ -274,6 +282,46 @@ class ResultStore:
             )
         results.steps = sorted(steps.values(), key=lambda s: (s.index, s.mode or 0, s.value))
         return results
+
+    def read_field(self, run_id: str, field: str, step: int | None = None) -> Field:
+        """One field at one result step (default: the last), read without the others.
+
+        `step` counts stored result steps (increments, times, modes) from 0; -1 is the
+        last. The run_id and field partitions prune the files read; what a viewer needs
+        for its first frame.
+        """
+        table = self._rows("fields", (pc.field("run_id") == run_id) & (pc.field("field") == field))
+        if not table.num_rows:
+            raise KeyError(f"run {run_id} has no '{field}' field")
+        keys = sorted(
+            {
+                (r["step"], r["mode"] or 0, r["value"])
+                for r in table.select(["step", "mode", "value"])
+                .group_by(["step", "mode", "value"])
+                .aggregate([])
+                .to_pylist()
+            }
+        )
+        index, mode, value = keys[-1 if step is None else step]
+        sel = table.filter(
+            (pc.field("step") == index)
+            & (pc.field("value") == value)
+            & ((pc.field("mode") == mode) if mode else pc.field("mode").is_null())
+        ).sort_by("entity_id")
+        components = sel.column("components")[0].as_py().split(",")
+        values = np.column_stack(
+            [
+                sel.column(c).to_numpy(zero_copy_only=False)
+                for c in COMPONENT_COLUMNS[: len(components)]
+            ]
+        )
+        return Field(
+            field,
+            sel.column("location")[0].as_py(),
+            components,
+            sel.column("entity_id").to_numpy(),
+            values,
+        )
 
     def read_mesh(self, mid: str) -> Mesh:
         nodes = self._rows("nodes", pc.field("mesh_id") == mid).sort_by("node_id")

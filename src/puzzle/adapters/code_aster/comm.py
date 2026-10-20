@@ -88,6 +88,12 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             code="unsupported",
         )
     _check_friction(touching, features, mesh)
+    nlgeom = bool(step.settings.get("geometric_nonlinearity", False))
+    if nlgeom and (thermal or step.type != "stationary"):
+        raise InputError(
+            "geometric_nonlinearity applies to static structural steps", code="unsupported"
+        )
+    increments = int(step.settings.get("increments", 10))
     # A tie projects the source (slave) face's nodes into the target part's volume.
     tie_groups = [g for c in ties for g in (c.source, c.target.split("/", 1)[0])]
     tie_groups += [g for c in touching for g in (c.source, c.target)]
@@ -162,23 +168,28 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             f"IMPR_TABLE(TABLE=RECU_TABLE(CO=res, NOM_PARA='FREQ'), UNITE={TABLES['frequency']}, "
             f"FORMAT='TABLEAU', SEPARATEUR=',', FORMAT_R='{FORMAT_R}')",
         ]
-    elif touching:
+    elif touching or nlgeom:
+        # Green-Lagrange strain: large rotations, as CalculiX's NLGEOM (GROT_GDEP refuses tet10).
+        strains = ", DEFORMATION='GREEN_LAGRANGE'" if nlgeom else ""
+        # Every increment is kept when the deflection is large (a load-deflection curve).
+        which = "" if nlgeom else "INST=1.0"
         out += [
-            _defi_contact(touching, names),
-            # Ramp the loads over ten increments: friction depends on the loading path.
+            *([_defi_contact(touching, names)] if touching else []),
+            # Ramp the loads: friction and large deflection depend on the loading path.
             "ramp = DEFI_FONCTION(NOM_PARA='INST', VALE=(0.0, 0.0, 1.0, 1.0))",
             "res = STAT_NON_LINE(MODELE=model, CHAM_MATER=mater, "
-            "EXCIT=_F(CHARGE=load, FONC_MULT=ramp), CONTACT=contact, "
-            "COMPORTEMENT=_F(RELATION='ELAS'), "
+            "EXCIT=_F(CHARGE=load, FONC_MULT=ramp), "
+            + ("CONTACT=contact, " if touching else "")
+            + f"COMPORTEMENT=_F(RELATION='ELAS'{strains}), "
             # As Code_Aster's 3D contact validation (ssnv128): tangent every iteration.
             "NEWTON=_F(REAC_ITER=1), CONVERGENCE=_F(ITER_GLOB_MAXI=200, RESI_GLOB_RELA=1e-6), "
             "INCREMENT=_F(LIST_INST=DEFI_LIST_REEL(DEBUT=0.0, "
-            "INTERVALLE=_F(JUSQU_A=1.0, NOMBRE=10))))",
+            f"INTERVALLE=_F(JUSQU_A=1.0, NOMBRE={increments}))))",
             "res = CALC_CHAMP(reuse=res, RESULTAT=res, CONTRAINTE=('SIGM_NOEU',), "
             "FORCE=('REAC_NODA',))",
-            _table("res", "DEPL", "displacement", "INST=1.0"),
-            _table("res", "SIGM_NOEU", "stress", "INST=1.0"),
-            _table("res", "REAC_NODA", "reaction_force", "INST=1.0"),
+            _table("res", "DEPL", "displacement", which),
+            _table("res", "SIGM_NOEU", "stress", which),
+            _table("res", "REAC_NODA", "reaction_force", which),
         ]
     else:
         out += [
@@ -293,11 +304,19 @@ def _check_friction(contacts, features, mesh: Mesh) -> None:
 
 def _defi_contact(contacts, names: dict[str, str]) -> str:
     """Continuous (augmented Lagrangian) contact, with Coulomb friction when any zone has
-    it; source faces are the slave side."""
+    it; source faces are the slave side.
+
+    `extensions["code_aster"]["contact_init"] = "OUI"` starts every slave point closed:
+    needed when a body is held only by contacts that touch along an edge, where no
+    point starts interpenetrated and the first matrix is singular.
+    """
     friction = any(c.type == "frictional" for c in contacts)
     zones = []
     for c in contacts:
         zone = f"_F(GROUP_MA_MAIT='{names[c.target]}', GROUP_MA_ESCL='{names[c.source]}'"
+        init = c.extensions.get("code_aster", {}).get("contact_init")
+        if init:
+            zone += f", CONTACT_INIT='{init}'"
         zones.append(zone + (f", COULOMB={c.friction or 0.0:.10g})" if friction else ")"))
     return (
         "contact = DEFI_CONTACT(MODELE=model, FORMULATION='CONTINUE', "

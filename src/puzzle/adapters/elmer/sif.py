@@ -20,6 +20,7 @@ from puzzle.adapters.common import (
     InputError,
     check_contacts,
     initial_temperature,
+    refuse_large_deflection,
     surface_area,
     thermal_tables,
     time_scheme,
@@ -58,6 +59,7 @@ def write_case(
 ) -> tuple[Path, ElmerMesh]:
     comp = project.get(study.component, Component)
     check_contacts(comp, set(), "Elmer")
+    refuse_large_deflection(study.solve_steps(), "Elmer")
     steps = study.solve_steps()
     if len(steps) != 1:
         raise InputError("the Elmer adapter runs studies with exactly one solve step for now")

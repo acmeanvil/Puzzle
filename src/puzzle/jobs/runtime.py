@@ -25,6 +25,7 @@ DEFAULT_IMAGES = {
     "elmer": "ghcr.io/acmeanvil/puzzle-elmer:26.2",
     "code_aster": "ghcr.io/acmeanvil/puzzle-code-aster:18.1",
     "code_saturne": "ghcr.io/acmeanvil/puzzle-code-saturne:9.2",
+    "openfoam": "ghcr.io/acmeanvil/puzzle-openfoam:2412",
 }
 
 # The executable that proves a solver is installed natively.
@@ -33,6 +34,7 @@ EXECUTABLES = {
     "elmer": "ElmerSolver",
     "code_aster": "run_aster",
     "code_saturne": "code_saturne",
+    "openfoam": "simpleFoam",
 }
 
 CONTAINER_WORKDIR = "/work"

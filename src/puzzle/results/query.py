@@ -5,6 +5,7 @@
     value_at(results, mesh, "temperature", p) the field at a point
     integrate(results, mesh, "temperature", "Bar/Body")   integral and mean over a selection
     total(results, mesh, "reaction_force", "Bar/Root")    sum of nodal values (forces)
+    history(results, mesh, "reaction_force", "Top", "total")  one value per increment/time
 
 Vector fields reduce to their magnitude and stress to von Mises unless a component
 is named. Values are SI.
@@ -177,6 +178,34 @@ def total(
         "components": f.components,
         "total": [float(v) for v in sums],
     }
+
+
+def history(
+    results: Results, mesh: Mesh, field: str, selection: str, reduce: str = "total"
+) -> list[dict[str, Any]]:
+    """`field` summed ("total") or averaged ("mean") over a selection's nodes, at every
+    stored step, increment or time: e.g. a load-deflection curve from the reaction force
+    and the displacement of a loaded face."""
+    group = mesh.groups.get(selection)
+    if group is None:
+        raise PuzzleError(
+            f"no selection '{selection}' in the mesh",
+            code="not_found",
+            details={"selections": sorted(mesh.groups)},
+        )
+    if reduce not in ("total", "mean"):
+        raise PuzzleError(f"reduce must be 'total' or 'mean', not '{reduce}'", code="invalid")
+    out = []
+    for step in results.steps:
+        f = step.fields.get(field)
+        if f is None or f.location != "node":
+            continue
+        values = f.values[np.isin(f.ids, group.node_ids)]
+        reduced = values.sum(axis=0) if reduce == "total" else values.mean(axis=0)
+        out.append({"step": step.index, "value": step.value, reduce: [float(v) for v in reduced]})
+    if not out:
+        raise PuzzleError(f"no nodal '{field}' in the results", code="not_found")
+    return out
 
 
 # --- helpers ---------------------------------------------------------------------------

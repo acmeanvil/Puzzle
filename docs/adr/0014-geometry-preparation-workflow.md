@@ -41,6 +41,25 @@ ADR 0004 chose the kernel: OpenCASCADE through OCP, with build123d for construct
 5. **Sketching** uses python-solvespace (GPL-3.0) for 2D constraints, feeding build123d sketches. It is used for profiles and for 2D/axisymmetric models.
 6. **FreeCAD** stays an optional importer for `.FCStd` files, not the engine (ADR 0004).
 
+## Prototype results (2026-10-19)
+
+`puzzle.geometry.history` regenerates a history (box, hole, fillet, split) with OCP and names faces by construction. Names are carried by OCCT's Modified/Generated/IsDeleted history; fillet edges are picked by rules. `Geometry.history` is meshed by writing a BREP and matching names to its faces by signature (`tests/test_naming.py`, `tests/integration/test_history_geometry.py`).
+
+| Edit to a bracket (4 selections) | Tier 1, history | Detached |
+| --- | --- | --- |
+| Hole radius 5 → 6 mm | all four, with the new geometry | none |
+| Hole moved 5 mm | all four | none |
+| Corner rounds 4 → 2 mm | all four | none |
+| Rounds removed | three | "Rounds", correctly |
+| Split at mid-length | all four; "Top" follows onto both halves | none |
+
+| Re-import without history | Tier 2, signatures |
+| --- | --- |
+| Hole moved 0.5 mm | every face re-found |
+| Rounds 4 → 2 mm | holes and top re-found; rounds and fixed end (area changed 10–75%) flagged |
+
+End to end, a parameter edit re-meshes and re-solves with every selection on the right faces and no warnings. The edit also changes the study's content hash, so the stored result is not reused. Gmsh and OCP share conda-forge's OCCT (7.9.3), so shapes pass between them through BREP without loss.
+
 ## Consequences
 
 - One history covers both CAD preparation and light modelling, and geometry parameters can sit in a sweep like any other parameter.

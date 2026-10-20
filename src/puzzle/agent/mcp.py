@@ -289,6 +289,19 @@ def build_server(root: Path, client: str = "mcp-client") -> MCPServer:
         _, mesh, results = latest(study)
         return total(results, mesh, field, selection, step=step)
 
+    @tool(
+        description="A field summed (reduce='total') or averaged ('mean') over a selection "
+        "at every increment or time: load-deflection curves, transients."
+    )
+    @guarded
+    def result_history(
+        study: str, field: str, selection: str, reduce: str = "total"
+    ) -> list[dict[str, Any]]:
+        from puzzle.results.query import history
+
+        _, mesh, results = latest(study)
+        return history(results, mesh, field, selection, reduce)
+
     @tool(description="A picture of a study's latest result (PNG).")
     @guarded
     def render(
