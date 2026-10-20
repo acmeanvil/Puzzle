@@ -147,6 +147,16 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("project", type=Path)
     p.add_argument("--name", default="mcp-client", help="how the agent appears in the history")
     p.set_defaults(handler=_mcp)
+
+    p = sub.add_parser("ask", help="ask the built-in agent (provider from agent.toml)")
+    p.add_argument("project", type=Path)
+    p.add_argument("question")
+    p.add_argument("--quiet", action="store_true", help="print only the answer")
+    p.set_defaults(handler=_ask)
+
+    p = sub.add_parser("gui", help="open the desktop GUI")
+    p.add_argument("project", type=Path, nargs="?")
+    p.set_defaults(handler=_gui)
     return parser
 
 
@@ -381,6 +391,46 @@ def _mcp(args) -> int:
     _load(args.project)
     serve(args.project, client=args.name)
     return 0
+
+
+def _ask(args) -> int:
+    from puzzle.agent.agent import Agent
+    from puzzle.agent.providers import ProviderError
+    from puzzle.agent.settings import load_settings, settings_path
+
+    _load(args.project)
+    settings = load_settings()
+    try:
+        provider = settings.build()
+    except ProviderError as exc:
+        print(f"{exc} (configure {settings_path()})")
+        return 1
+    agent = Agent(args.project, provider, images=settings.images_allowed(provider))
+
+    def show(e) -> None:
+        if args.quiet or e.kind == "text":
+            return
+        if e.kind == "tool_call":
+            print(f"  -> {e.text} {e.data.get('arguments', {})}")
+        elif e.kind in ("tool_result", "error"):
+            mark = "x" if e.kind == "error" else "<-"
+            print(f"  {mark} {(e.text.splitlines() or [''])[0][:120]}")
+
+    print(agent.ask(args.question, show))
+    print(
+        f"({provider.name} {provider.model}: {agent.tokens['input']} in / "
+        f"{agent.tokens['output']} out tokens)"
+    )
+    return 0
+
+
+def _gui(args) -> int:
+    try:
+        from puzzle.gui.app import main as gui
+    except ImportError as exc:
+        print(f"the GUI needs PySide6 and pyvistaqt (pip install puzzle-fem[gui]): {exc}")
+        return 1
+    return gui(args.project)
 
 
 # --- helpers --------------------------------------------------------------------

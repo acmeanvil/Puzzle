@@ -43,12 +43,15 @@ Errors carry a `code` and `details`.
 """
 
 
-def build_server(root: Path, client: str = "mcp-client") -> MCPServer:
+def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True) -> MCPServer:
+    """The tools, for an outside agent (`outside`, refused when the project's MCP access
+    is off) or for the built-in agent in-process (agent.agent), which the setting does
+    not cover."""
     actor = Actor("agent", client)
 
     def session() -> Session:
         s = Session(root)
-        if s.project.agent.mcp == "off":
+        if outside and s.project.agent.mcp == "off":
             raise ToolError(
                 json.dumps({"code": "not_allowed", "message": "MCP access is off for this project"})
             )

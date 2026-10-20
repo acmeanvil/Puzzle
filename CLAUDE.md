@@ -18,6 +18,8 @@ pixi run -e dev check          # ruff lint + format check + all tests incl. nati
 pixi run -e dev pytest -k name # one test
 pixi install -e fenicsx        # other native solvers: fenicsx, code-aster (linux-64/win-64)
 pixi run -e dev import-materials "<path>/Materials_Hunt_List.xlsx"
+pixi run -e dev puzzle gui examples/cantilever   # the desktop GUI
+pixi run -e dev puzzle ask PROJECT "question"    # the built-in agent in a terminal
 ```
 
 A plain `.venv` also works (`pip install -e ".[dev]"`); set `PUZZLE_SOLVER_PATH=$PWD/.pixi/envs/calculix/bin` so solver tests find `ccx`.
@@ -38,14 +40,15 @@ Solver tests in `tests/integration/` skip when the solver isn't available; `test
 | `src/puzzle/adapters` | One adapter per solver: capability matrix, `write_input`, `command`, `read_results` |
 | `src/puzzle/jobs` | Runs solvers natively or in Docker/Podman; runtime chosen per solver |
 | `src/puzzle/commands` | Command layer (ADR 0015): `Session.submit/propose/accept/undo`, `history.jsonl`, autonomy checks, `outline` |
-| `src/puzzle/agent` | `mcp.py`: MCP server over the command layer (`puzzle mcp PROJECT`); tools return summaries and coded errors |
+| `src/puzzle/agent` | `mcp.py`: MCP server over the command layer (`puzzle mcp PROJECT`); tools return summaries and coded errors. `agent.py`: the built-in agent, the same tools in-process as `Actor("agent", "built-in")`; `providers.py`: Claude (`anthropic`), any OpenAI-compatible endpoint (Ollama, llama.cpp, LM Studio) via urllib, and a scripted provider for tests; `settings.py`: `<user data dir>/agent.toml` (never in a project) |
+| `src/puzzle/gui` | PySide6 desktop GUI (`puzzle gui [PROJECT]`): model tree, properties panel (every field editable, each edit one `Edit` command), pyvistaqt viewport (mesh, highlighted selections, results with field/step/deformation), output/history/problems, agent panel (chat, proposals to accept or reject, autonomy level with double sign-off for "act"); watches `history.jsonl` so other clients' changes show up |
 | `src/puzzle/errors.py` | `PuzzleError(code, message, path, details)` and `Problem`; codes in `CODES` |
 | `src/puzzle/results` | Solver-neutral `Results`; `ResultStore` = Delta Lake tables (runs, meshes, nodes, cells, groups, fields), format 2: one row per field per step with ids/values as list columns (ADR 0008); `query` = summary, stats, value_at, integrate |
 | `src/puzzle/solve.py` | `run_study`: validate → run/reuse upstream studies → mesh → map transfers → write → run → read |
 | `src/puzzle/shootout.py` | `run_shootout`: every solver of a study on one mesh (`run_study(..., solver=, meshed=)`), compared by the study's metrics (ADR 0011) |
 | `src/puzzle/transfer.py` | Transfers: `pick` a source field, `map_field` onto the target mesh (copy if identical, linear in source tets, or nearest), `Input` handed to adapters |
 | `src/puzzle/post` | VTK grids (tet10 reordered for VTK), `render` (window or PNG), `.vtu`/`.pvd` export, `sample` (results at a point) |
-| `src/puzzle/cli.py` | `puzzle studies/run/runs/show/export/outline/history/undo/proposals/accept/reject/autonomy/schema/mcp` |
+| `src/puzzle/cli.py` | `puzzle studies/run/runs/show/export/outline/history/undo/proposals/accept/reject/autonomy/schema/mcp/ask/gui` |
 | `examples/cantilever` | Example project; regenerate with `python examples/cantilever/build.py` |
 | `benchmarks/` | Benchmarks as projects (NAFEMS LE1, laminar channel flow); each has build.py, a README with measured results, and an integration test |
 | `containers/`, `packaging/conda-forge/` | Solver images; conda-forge recipes (elmerfem) |
@@ -98,6 +101,8 @@ Capability matrices also list planned capabilities; `write_input` refuses what i
 - **CalculiX reads at most 20 characters per field:** longer numbers are silently truncated (-8.67361737988404e-19 became -0.867 and inverted elements). Coordinates are written with 13 significant digits.
 - **Part selections are matched within the part:** `generate_mesh` finds each part's faces only among its own bodies' boundaries, since identical parts can have coincident faces (two halves end to end).
 - **Results store format 2** (`store.json`): an older store raises `stale_store`; delete the project's `results/` folder and rerun (results are a cache by run key). Arrays read back are read-only views of Arrow buffers. Never `sort_by` the fields table itself: it copies every array; sort the metadata and slice by offsets (`_Lists`).
+- **GUI tests** run on Qt's offscreen platform (`tests/test_gui.py` sets `QT_QPA_PLATFORM=offscreen`), which has no OpenGL: the viewport then shows a placeholder and records what it would draw in `Viewport.shown`, which tests check. Look at real renders by running the window on the native platform and saving `window.grab()`. Long work runs through `MainWindow.background` (thread pool); never block the GUI thread on a solve.
+- **The built-in agent on macOS** gets no `render` tool in the GUI: off-screen VTK must render on the main thread there, and the agent runs on a worker. Remote providers get no images by default either (ADR 0015: outlines and summaries only unless `send_images = true`).
 - **Solver logs** are capped at 256 MB (`jobs.runner.MAX_LOG_BYTES`) and read from the end on failure (`log_tail`).
 - **Gmsh from threads:** OpenCASCADE keeps per-thread state from its first user; if that thread exits and another thread uses Gmsh, the process segfaults. `gmsh_session` first initialises Gmsh on a resident daemon thread. MCP runs sync tools on worker threads, so this matters.
 - **MCP SDK 2.x:** `from mcp.server.mcpserver import MCPServer` (FastMCP was renamed); results are `structured_content`/`is_error`. Annotate tool returns as `dict[str, Any]`, not bare `dict`, or the output is unstructured text.

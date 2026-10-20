@@ -77,6 +77,15 @@ At every level the agent's changes are attributed in the log and can be undone.
 - `puzzle.results.query`: summary, stats (with locations), value_at, and integrals with shape-function weights.
 - `puzzle.agent.mcp`: an MCP 2.x server over stdio (`puzzle mcp PROJECT --name ...`). Its tools are outline, get_object, schema, problems, materials_library, capabilities, check_study, submit, propose, preview, undo, history, proposals, autonomy, runs, result_summary, result_stats, result_value_at, result_integral and render.
 
+### Built-in agent (2026-10-20)
+
+- `puzzle.agent.agent.Agent` calls the MCP server's tools in-process (one tool set for inside and outside agents) as `Actor("agent", "built-in")`; the outside-MCP setting does not switch it off. Tool output is cut at 8,000 characters and a question gets at most 16 tool rounds, for small models.
+- Providers (`puzzle.agent.providers`): Claude through `anthropic` (default `claude-sonnet-5-5`, prompt caching on the system prompt and tools), any OpenAI-compatible endpoint through the standard library (Ollama, llama.cpp, LM Studio, vLLM; local when the host is localhost), and a scripted provider for tests and evaluations. The choice is a user setting, `<user data dir>/agent.toml` or `PUZZLE_AGENT_*` variables, never a project file.
+- Rendered images go only to local providers unless `send_images = true`.
+- The GUI's agent panel shows the conversation and its tool calls, lists open proposals to accept or reject, and sets the autonomy level ("act" asks twice). `puzzle ask PROJECT "question"` is the same agent in a terminal.
+- Evaluation suite (`puzzle.agent.evals`, `scripts/agent_eval.py`): seven tasks on fresh copies of the cantilever example, each checked in the project or against solver output: describe the studies, change a load, refine the mesh, add a library material, find and fix a misspelt selection, respect the advise level, run a study and report its peak displacement (2%). Its own tests show a scripted correct agent passes and a do-nothing agent fails.
+- Still to do: the lightest-model measurements (needs local models or a key), per-change acceptance in the GUI, streaming replies.
+
 ## Consequences
 
 - One mechanism gives undo, provenance, scripting and agent control. The GUI is built on it rather than retrofitted.

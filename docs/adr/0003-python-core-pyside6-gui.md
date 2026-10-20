@@ -14,6 +14,10 @@ Most libraries Puzzle needs have first-class Python bindings: OCP and build123d 
 - Performance-critical paths (result mapping between meshes, large array transforms) may move to Rust (PyO3) or C++ once profiled.
 - A web front end, if needed later, uses trame and reuses the same core.
 
+## First implementation (2026-10-20)
+
+`puzzle.gui` (`puzzle gui [PROJECT]`) is the baseline to build on: a model tree, a properties panel generated from each object's data (every edit is one `Edit` command through `Session`, so it is undoable and logged), a pyvistaqt viewport (mesh with the selected face selection highlighted, results with field, step and deformation controls), output, history and problems, and the agent panel (ADR 0015). Meshing and solving run on Qt's thread pool. The window watches `history.jsonl`, so changes made by the CLI or an outside agent appear without a reload. Not there yet: picking in the viewport, creating physics and features from menus, the schematic (ADR 0009), sweeps and shoot-out reports.
+
 ## Consequences
 
 - Fast iteration and direct use of the ecosystem above.
