@@ -80,6 +80,34 @@ class AnthropicProvider:
         self.model = model
         self.client = anthropic_client(key, auth or key_auth(key))
 
+    def complete(self, system: str, messages: list[dict], tools: list[ToolSpec]) -> Reply:
+        import anthropic
+
+        specs = [
+            {"name": t.name, "description": t.description, "input_schema": t.schema} for t in tools
+        ]
+        if specs:  # the system prompt and tools repeat every turn: cache them
+            specs[-1]["cache_control"] = {"type": "ephemeral"}
+        try:
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=4096,
+                system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+                tools=specs,
+                messages=to_anthropic(messages),
+            )
+        except anthropic.APIError as exc:
+            raise ProviderError(f"Claude: {exc}") from exc
+        reply = Reply(
+            input_tokens=response.usage.input_tokens, output_tokens=response.usage.output_tokens
+        )
+        for block in response.content:
+            if block.type == "text":
+                reply.text += block.text
+            elif block.type == "tool_use":
+                reply.tool_calls.append(ToolCall(block.id, block.name, dict(block.input)))
+        return reply
+
 
 def key_auth(key: str) -> str:
     """How a key is sent: "api_key" (x-api-key header) for classic sk-ant-api keys,
@@ -109,34 +137,6 @@ def check_anthropic_key(key: str) -> str:
         except anthropic.APIError as exc:
             raise ProviderError(f"could not check the key: {exc}") from exc
     raise ProviderError("Anthropic rejected this key (" + "; ".join(errors) + ")")
-
-    def complete(self, system: str, messages: list[dict], tools: list[ToolSpec]) -> Reply:
-        import anthropic
-
-        specs = [
-            {"name": t.name, "description": t.description, "input_schema": t.schema} for t in tools
-        ]
-        if specs:  # the system prompt and tools repeat every turn: cache them
-            specs[-1]["cache_control"] = {"type": "ephemeral"}
-        try:
-            response = self.client.messages.create(
-                model=self.model,
-                max_tokens=4096,
-                system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
-                tools=specs,
-                messages=to_anthropic(messages),
-            )
-        except anthropic.APIError as exc:
-            raise ProviderError(f"Claude: {exc}") from exc
-        reply = Reply(
-            input_tokens=response.usage.input_tokens, output_tokens=response.usage.output_tokens
-        )
-        for block in response.content:
-            if block.type == "text":
-                reply.text += block.text
-            elif block.type == "tool_use":
-                reply.tool_calls.append(ToolCall(block.id, block.name, dict(block.input)))
-        return reply
 
 
 def to_anthropic(messages: list[dict]) -> list[dict]:
