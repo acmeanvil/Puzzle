@@ -141,7 +141,7 @@ def test_turbulent_channel(tmp_path, model):
         ]
     )
     order = np.argsort(ids)
-    ids, x, y = ids[order], centres[order, 0], centres[order, 1]
+    ids, x = ids[order], centres[order, 0]
 
     def mean_pressure(x0):
         return pressure.at(ids[np.abs(x - x0) < 1.1e-3])[:, 0].mean()
