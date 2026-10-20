@@ -13,7 +13,7 @@ New record: copy [template.md](template.md) to `NNNN-short-title.md`, set status
 | [0005](0005-meshing-layer.md) | A separate meshing layer, Gmsh first | Proposed |
 | [0006](0006-solver-neutral-model-ir.md) | Solver-neutral model IR with a capability matrix | Proposed |
 | [0007](0007-solvers-out-of-process.md) | Solvers run out of process, in containers | Proposed |
-| [0008](0008-results-storage.md) | Delta Lake catalog, Parquet fields, VTKHDF view cache | Proposed |
+| [0008](0008-results-storage.md) | Results in Delta Lake, one array per field and step (format 2); VTKHDF for export | Accepted |
 | [0009](0009-project-model.md) | One model tree, references for sharing, transfers as the only schematic edges | Proposed |
 | [0010](0010-mvp-solvers.md) | MVP solvers are CalculiX and Elmer; Elmer is the core multiphysics and EM solver | Proposed |
 | [0011](0011-solver-shootout.md) | Solver shoot-out: one study, several solvers, compared | Proposed |

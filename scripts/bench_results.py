@@ -10,7 +10,8 @@ stress (6) nodal fields at each step, then for each storage measures:
 - full read (s): every field at every step.
 
 Prints a Markdown table. Smooth fields stand in for real results (random numbers would
-not compress like them). Needs VTK >= 9.4 for the HDF writer.
+not compress like them). Needs VTK >= 9.4 for the HDF writer (the .venv; pixi has 9.3).
+Results are in ADR 0008.
 """
 
 from __future__ import annotations

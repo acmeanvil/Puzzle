@@ -6,20 +6,27 @@ Layout under the store root (normally `<project>/results`):
 | --- | --- | --- |
 | runs | solver run | - |
 | meshes | distinct mesh (content hash) | - |
-| nodes | mesh node | mesh_id |
-| cells | mesh element | mesh_id |
+| nodes | mesh: node ids and coordinates as arrays | mesh_id |
+| cells | element block: element ids and connectivity as arrays | mesh_id |
 | groups | named group of a mesh | - |
-| fields | result value at one node or element, one step or mode | run_id, field |
+| fields | field at one result step: entity ids and values as arrays | run_id, field |
 
-Field values are wide: components go in columns c0..c8 (unused ones null), and the
-component names are stored once per row group in `components`. A mesh is stored
-once however many runs use it. A run becomes visible only when its `runs` row is
-committed, which happens last, so a crash mid-write never leaves a half run listed.
+Arrays are Parquet lists (format 2, ADR 0008): one row per field and step, values
+flattened row-major (entities x components). A field's ids are stored only when they
+differ from its previous step's; `ids_from` names the step that holds them. Each fields
+row is its own row group, so reading one step touches only that step's pages. Against
+one row per entity (format 1) this made a 100-step, 100k-node transient 40x faster to
+read whole and 4x faster to open, and a quarter smaller.
+
+A mesh is stored once however many runs use it. A run becomes visible only when its
+`runs` row is committed, which happens last, so a crash mid-write never leaves a half
+run listed. `store.json` records the format; an older store is refused (`stale_store`).
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -30,11 +37,13 @@ import pyarrow as pa
 import pyarrow.compute as pc
 from deltalake import DeltaTable, WriterProperties, write_deltalake
 
+from puzzle.errors import PuzzleError
 from puzzle.mesh.mesh import CellBlock, Group, Mesh
 from puzzle.results.model import Field, Results, StepResult
 
-MAX_COMPONENTS = 9  # a full 3 x 3 tensor
-COMPONENT_COLUMNS = [f"c{i}" for i in range(MAX_COMPONENTS)]
+FORMAT = 2
+INTS = pa.large_list(pa.int64())
+FLOATS = pa.large_list(pa.float64())
 
 SCHEMAS = {
     "runs": pa.schema(
@@ -61,9 +70,7 @@ SCHEMAS = {
             ("created_at", pa.timestamp("us", tz="UTC")),
         ]
     ),
-    "nodes": pa.schema(
-        [("mesh_id", pa.string()), ("node_id", pa.int64())] + [(a, pa.float64()) for a in "xyz"]
-    ),
+    "nodes": pa.schema([("mesh_id", pa.string()), ("node_ids", INTS), ("coords", FLOATS)]),
     "cells": pa.schema(
         [
             ("mesh_id", pa.string()),
@@ -72,8 +79,9 @@ SCHEMAS = {
             ("dim", pa.int8()),
             ("entity_dim", pa.int8()),
             ("entity_tag", pa.int32()),
-            ("element_id", pa.int64()),
-            ("connectivity", pa.list_(pa.int64())),
+            ("nodes_per_element", pa.int32()),
+            ("element_ids", INTS),
+            ("connectivity", INTS),
         ]
     ),
     "groups": pa.schema(
@@ -82,27 +90,37 @@ SCHEMAS = {
             ("name", pa.string()),
             ("dim", pa.int8()),
             ("entity_tags", pa.list_(pa.int32())),
-            ("node_ids", pa.list_(pa.int64())),
+            ("node_ids", INTS),
         ]
     ),
     "fields": pa.schema(
         [
             ("run_id", pa.string()),
             ("field", pa.string()),
+            ("ordinal", pa.int32()),  # position among the run's result steps, from 0
             ("step", pa.int32()),
             ("mode", pa.int32()),
             ("kind", pa.string()),
             ("value", pa.float64()),
             ("location", pa.string()),
             ("components", pa.string()),
-            ("entity_id", pa.int64()),
+            ("count", pa.int64()),
+            ("ids_from", pa.int32()),  # the ordinal whose row holds this field's ids
+            ("ids", INTS),  # null when the same as at `ids_from`
+            ("values", FLOATS),
         ]
-        + [(c, pa.float64()) for c in COMPONENT_COLUMNS]
     ),
 }
 PARTITIONS = {"nodes": ["mesh_id"], "cells": ["mesh_id"], "fields": ["run_id", "field"]}
 # zstd (ADR 0008): about a fifth smaller than Delta's default Snappy for result stores.
 WRITER = WriterProperties(compression="ZSTD", compression_level=3)
+# A row group per fields row (one field at one step): a step's read prunes the others.
+FIELD_WRITER = WriterProperties(compression="ZSTD", compression_level=3, max_row_group_size=1)
+WRITERS = {"fields": FIELD_WRITER}
+
+
+class StaleStore(PuzzleError):
+    code = "stale_store"
 
 
 @dataclass(frozen=True)
@@ -158,6 +176,7 @@ class ResultStore:
     ) -> str:
         """Store a completed run and its mesh; return the new run id."""
         run_id = uuid.uuid4().hex
+        self._check_format(create=True)
         mid = self.write_mesh(mesh)
         fields = _fields_table(run_id, results)
         if fields.num_rows:
@@ -180,23 +199,13 @@ class ResultStore:
         return run_id
 
     def write_mesh(self, mesh: Mesh) -> str:
+        self._check_format(create=True)
         mid = mesh_id(mesh)
         if self._exists("meshes") and self._rows("meshes", pc.field("mesh_id") == mid).num_rows:
             return mid
         n = len(mesh.node_ids)
-        self._append(
-            "nodes",
-            pa.table(
-                {
-                    "mesh_id": pa.array([mid] * n, pa.string()),
-                    "node_id": mesh.node_ids,
-                    "x": mesh.coords[:, 0],
-                    "y": mesh.coords[:, 1],
-                    "z": mesh.coords[:, 2],
-                },
-                schema=SCHEMAS["nodes"],
-            ),
-        )
+        nodes = {"mesh_id": [mid], "node_ids": _list(mesh.node_ids), "coords": _list(mesh.coords)}
+        self._append("nodes", pa.table(nodes, schema=SCHEMAS["nodes"]))
         cells = [_cells_table(mid, i, b) for i, b in enumerate(mesh.blocks)]
         if cells:
             self._append("cells", pa.concat_tables(cells))
@@ -220,6 +229,7 @@ class ResultStore:
     # --- reading ---------------------------------------------------------------
 
     def runs(self) -> list[RunRecord]:
+        self._check_format()
         if not self._exists("runs"):
             return []
         rows = self._rows("runs").sort_by([("recorded_at", "ascending")]).to_pylist()
@@ -240,107 +250,67 @@ class ResultStore:
         record = self.get_run(run_id)
         table = self._rows("fields", pc.field("run_id") == run_id)
         results = Results(solver=record.solver)
-        steps: dict[tuple, StepResult] = {}
-        # One sort, then contiguous slices per (step, mode, value, field): filtering the
-        # table once per slice made long transients quadratic in the step count.
-        order = ["step", "mode", "value", "field", "entity_id"]
-        table = table.sort_by([(k, "ascending") for k in order])
-        keys = np.column_stack(
-            [
-                table.column("step").to_numpy(),
-                pc.fill_null(table.column("mode"), -1).to_numpy(),
-                table.column("value").to_numpy(),
-                pc.dictionary_encode(table.column("field")).combine_chunks().indices.to_numpy(),
-            ]
-        )
-        starts = np.flatnonzero(np.r_[True, np.any(keys[1:] != keys[:-1], axis=1)])
-        for a, b in zip(starts, np.r_[starts[1:], len(keys)], strict=True):
-            sel = table.slice(a, b - a)
-            key = (
-                sel.slice(0, 1)
-                .select(["step", "mode", "value", "kind", "field", "location", "components"])
-                .to_pylist()[0]
-            )
-            components = key["components"].split(",")
-            values = np.column_stack(
-                [
-                    sel.column(c).to_numpy(zero_copy_only=False)
-                    for c in COMPONENT_COLUMNS[: len(components)]
-                ]
-            )
-            step_key = (key["step"], key["mode"], key["value"])
-            if step_key not in steps:
-                steps[step_key] = StepResult(
-                    index=key["step"], kind=key["kind"], value=key["value"], mode=key["mode"]
+        steps: dict[int, StepResult] = {}
+        ids: dict[tuple[str, int], np.ndarray] = {}  # (field, ordinal) -> ids stored there
+        # Sort the small metadata only; sorting the table would copy every array.
+        meta = table.drop_columns(["ids", "values"]).to_pylist()
+        id_arrays, value_arrays = _Lists(table, "ids"), _Lists(table, "values")
+        for i in sorted(range(len(meta)), key=lambda i: (meta[i]["ordinal"], meta[i]["field"])):
+            row = meta[i]
+            if row["ordinal"] not in steps:
+                steps[row["ordinal"]] = StepResult(
+                    index=row["step"], kind=row["kind"], value=row["value"], mode=row["mode"]
                 )
-            steps[step_key].fields[key["field"]] = Field(
-                name=key["field"],
-                location=key["location"],
-                components=components,
-                ids=sel.column("entity_id").to_numpy(),
-                values=values,
+            if row["ids_from"] == row["ordinal"]:
+                ids[row["field"], row["ordinal"]] = id_arrays[i]
+            steps[row["ordinal"]].fields[row["field"]] = _field(
+                row, ids[row["field"], row["ids_from"]], value_arrays[i]
             )
-        results.steps = sorted(steps.values(), key=lambda s: (s.index, s.mode or 0, s.value))
+        results.steps = [steps[k] for k in sorted(steps)]
         return results
 
     def read_field(self, run_id: str, field: str, step: int | None = None) -> Field:
         """One field at one result step (default: the last), read without the others.
 
-        `step` counts stored result steps (increments, times, modes) from 0; -1 is the
-        last. The run_id and field partitions prune the files read; what a viewer needs
-        for its first frame.
+        `step` counts the field's stored result steps (increments, times, modes) from
+        0; -1 is the last. Partitions prune the files to this run and field, and row
+        group statistics on `ordinal` to the one step: what a viewer needs for a frame.
         """
-        table = self._rows("fields", (pc.field("run_id") == run_id) & (pc.field("field") == field))
-        if not table.num_rows:
+        where = (pc.field("run_id") == run_id) & (pc.field("field") == field)
+        index = self._rows("fields", where, columns=["ordinal", "ids_from"]).sort_by("ordinal")
+        if not index.num_rows:
             raise KeyError(f"run {run_id} has no '{field}' field")
-        keys = sorted(
-            {
-                (r["step"], r["mode"] or 0, r["value"])
-                for r in table.select(["step", "mode", "value"])
-                .group_by(["step", "mode", "value"])
-                .aggregate([])
-                .to_pylist()
-            }
-        )
-        index, mode, value = keys[-1 if step is None else step]
-        sel = table.filter(
-            (pc.field("step") == index)
-            & (pc.field("value") == value)
-            & ((pc.field("mode") == mode) if mode else pc.field("mode").is_null())
-        ).sort_by("entity_id")
-        components = sel.column("components")[0].as_py().split(",")
-        values = np.column_stack(
-            [
-                sel.column(c).to_numpy(zero_copy_only=False)
-                for c in COMPONENT_COLUMNS[: len(components)]
-            ]
-        )
-        return Field(
-            field,
-            sel.column("location")[0].as_py(),
-            components,
-            sel.column("entity_id").to_numpy(),
-            values,
-        )
+        at = index.to_pylist()[-1 if step is None else step]
+        table = self._rows("fields", where & (pc.field("ordinal") == at["ordinal"]))
+        meta = table.drop_columns(["ids", "values"]).to_pylist()[0]
+        if at["ids_from"] == at["ordinal"]:
+            ids = _array(table, "ids", 0)
+        else:
+            held = self._rows(
+                "fields", where & (pc.field("ordinal") == at["ids_from"]), columns=["ids"]
+            )
+            ids = _array(held, "ids", 0)
+        return _field(meta, ids, _array(table, "values", 0))
 
     def read_mesh(self, mid: str) -> Mesh:
-        nodes = self._rows("nodes", pc.field("mesh_id") == mid).sort_by("node_id")
+        self._check_format()
+        nodes = self._rows("nodes", pc.field("mesh_id") == mid)
+        if not nodes.num_rows:
+            raise KeyError(f"no mesh {mid}")
         mesh = Mesh(
-            node_ids=nodes.column("node_id").to_numpy(),
-            coords=np.column_stack([nodes.column(a).to_numpy() for a in "xyz"]),
+            node_ids=_array(nodes, "node_ids", 0), coords=_array(nodes, "coords", 0).reshape(-1, 3)
         )
-        cells = self._rows("cells", pc.field("mesh_id") == mid)
-        for block in sorted(set(cells.column("block").to_pylist())):
-            rows = cells.filter(pc.field("block") == block).sort_by("element_id")
-            first = rows.slice(0, 1).to_pylist()[0]
-            flat = pc.list_flatten(rows.column("connectivity")).to_numpy()
+        cells = self._rows("cells", pc.field("mesh_id") == mid).sort_by("block")
+        for i, row in enumerate(cells.drop_columns(["element_ids", "connectivity"]).to_pylist()):
             mesh.blocks.append(
                 CellBlock(
-                    element=first["element"],
-                    dim=first["dim"],
-                    entity=(first["entity_dim"], first["entity_tag"]),
-                    ids=rows.column("element_id").to_numpy(),
-                    connectivity=flat.reshape(rows.num_rows, -1),
+                    element=row["element"],
+                    dim=row["dim"],
+                    entity=(row["entity_dim"], row["entity_tag"]),
+                    ids=_array(cells, "element_ids", i),
+                    connectivity=_array(cells, "connectivity", i).reshape(
+                        -1, row["nodes_per_element"]
+                    ),
                 )
             )
         for g in self._rows("groups", pc.field("mesh_id") == mid).to_pylist():
@@ -358,12 +328,35 @@ class ResultStore:
         """Merge small Parquet files (each run appends a few) into larger ones."""
         for name in SCHEMAS:
             if self._exists(name):
-                DeltaTable(str(self.root / name)).optimize.compact()
+                DeltaTable(str(self.root / name)).optimize.compact(
+                    writer_properties=WRITERS.get(name, WRITER)
+                )
 
     # --- internals ---------------------------------------------------------------
 
     def _exists(self, name: str) -> bool:
         return (self.root / name / "_delta_log").is_dir()
+
+    def _check_format(self, create: bool = False) -> None:
+        """Refuse a store in another format; on a write, mark a new one with this format."""
+        marker = self.root / "store.json"
+        if marker.exists():
+            found = json.loads(marker.read_text()).get("format")
+        elif any(self._exists(name) for name in SCHEMAS):
+            found = 1  # format 1 stores predate the marker
+        else:
+            if not create:
+                return
+            self.root.mkdir(parents=True, exist_ok=True)
+            marker.write_text(json.dumps({"format": FORMAT}) + "\n")
+            return
+        if found != FORMAT:
+            raise StaleStore(
+                f"the results store at {self.root} has format {found}; this Puzzle reads "
+                f"format {FORMAT}. Delete the folder and rerun the studies to rebuild it",
+                path=str(self.root),
+                details={"found": found, "expected": FORMAT},
+            )
 
     def _append(self, name: str, table: pa.Table) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
@@ -372,57 +365,117 @@ class ResultStore:
             table.cast(SCHEMAS[name]),
             mode="append",
             partition_by=PARTITIONS.get(name),
-            writer_properties=WRITER,
+            writer_properties=WRITERS.get(name, WRITER),
         )
 
-    def _rows(self, name: str, filter=None) -> pa.Table:
+    def _rows(self, name: str, filter=None, columns: list[str] | None = None) -> pa.Table:
         if not self._exists(name):
-            return SCHEMAS[name].empty_table()
+            return SCHEMAS[name].empty_table().select(columns or SCHEMAS[name].names)
+        self._check_format()
         dataset = DeltaTable(str(self.root / name)).to_pyarrow_dataset()
-        return dataset.to_table(filter=filter)
+        return dataset.to_table(filter=filter, columns=columns)
+
+
+def _list(values: np.ndarray) -> pa.Array:
+    """One list cell holding a whole array, flattened row-major, without copying it twice."""
+    integer = np.issubdtype(np.asarray(values).dtype, np.integer)
+    flat = np.ascontiguousarray(values, np.int64 if integer else np.float64).ravel()
+    offsets = pa.array([0, len(flat)], pa.int64())
+    return pa.LargeListArray.from_arrays(offsets, pa.array(flat))
+
+
+def _array(table: pa.Table, column: str, row: int) -> np.ndarray:
+    """The array in one list cell, as numpy."""
+    return table.column(column)[row].values.to_numpy(zero_copy_only=False)
+
+
+class _Lists:
+    """The arrays of a list column as numpy views: one flatten, then offsets, no copies."""
+
+    def __init__(self, table: pa.Table, column: str) -> None:
+        lists = table.column(column).combine_chunks()
+        self.flat = lists.values.to_numpy(zero_copy_only=False)
+        self.offsets = lists.offsets.to_numpy()
+
+    def __getitem__(self, row: int) -> np.ndarray:
+        return self.flat[self.offsets[row] : self.offsets[row + 1]]
+
+
+def _field(row: dict, ids: np.ndarray, flat: np.ndarray) -> Field:
+    components = row["components"].split(",")
+    return Field(
+        name=row["field"],
+        location=row["location"],
+        components=components,
+        ids=ids,
+        values=flat.reshape(row["count"], len(components)),
+    )
 
 
 def _cells_table(mid: str, index: int, b: CellBlock) -> pa.Table:
-    n = len(b.ids)
     return pa.table(
         {
-            "mesh_id": pa.array([mid] * n, pa.string()),
-            "block": pa.array([index] * n, pa.int32()),
-            "element": pa.array([b.element] * n, pa.string()),
-            "dim": pa.array([b.dim] * n, pa.int8()),
-            "entity_dim": pa.array([b.entity[0]] * n, pa.int8()),
-            "entity_tag": pa.array([b.entity[1]] * n, pa.int32()),
-            "element_id": b.ids,
-            "connectivity": pa.array(b.connectivity.tolist(), pa.list_(pa.int64())),
+            "mesh_id": [mid],
+            "block": pa.array([index], pa.int32()),
+            "element": [b.element],
+            "dim": pa.array([b.dim], pa.int8()),
+            "entity_dim": pa.array([b.entity[0]], pa.int8()),
+            "entity_tag": pa.array([b.entity[1]], pa.int32()),
+            "nodes_per_element": pa.array([b.connectivity.shape[1]], pa.int32()),
+            "element_ids": _list(b.ids),
+            "connectivity": _list(b.connectivity),
         },
         schema=SCHEMAS["cells"],
     )
 
 
 def _fields_table(run_id: str, results: Results) -> pa.Table:
-    parts = []
-    for step in results.steps:
+    """One row per field per result step, in the order Results keeps its steps."""
+    rows: dict[str, list] = {name: [] for name in SCHEMAS["fields"].names}
+    ids_list, values_list = [], []
+    held: dict[str, tuple[int, np.ndarray]] = {}  # field -> (ordinal, ids) last stored
+    ordered = sorted(results.steps, key=lambda s: (s.index, s.mode or 0, s.value))
+    for ordinal, step in enumerate(ordered):
         for f in step.fields.values():
-            n, k = f.values.shape
-            if k > MAX_COMPONENTS:
-                raise ValueError(
-                    f"field {f.name} has {k} components; the store holds {MAX_COMPONENTS}"
-                )
-            columns = {
-                "run_id": pa.array([run_id] * n, pa.string()),
-                "field": pa.array([f.name] * n, pa.string()),
-                "step": pa.array([step.index] * n, pa.int32()),
-                "mode": pa.array([step.mode] * n, pa.int32()),
-                "kind": pa.array([step.kind] * n, pa.string()),
-                "value": pa.array([step.value] * n, pa.float64()),
-                "location": pa.array([f.location] * n, pa.string()),
-                "components": pa.array([",".join(f.components)] * n, pa.string()),
-                "entity_id": f.ids,
-            }
-            for i, c in enumerate(COMPONENT_COLUMNS):
-                columns[c] = f.values[:, i] if i < k else pa.nulls(n, pa.float64())
-            parts.append(pa.table(columns, schema=SCHEMAS["fields"]))
-    return pa.concat_tables(parts) if parts else SCHEMAS["fields"].empty_table()
+            same = f.name in held and np.array_equal(held[f.name][1], f.ids)
+            if not same:
+                held[f.name] = (ordinal, f.ids)
+            for key, value in (
+                ("run_id", run_id),
+                ("field", f.name),
+                ("ordinal", ordinal),
+                ("step", step.index),
+                ("mode", step.mode),
+                ("kind", step.kind),
+                ("value", step.value),
+                ("location", f.location),
+                ("components", ",".join(f.components)),
+                ("count", len(f.ids)),
+                ("ids_from", held[f.name][0]),
+            ):
+                rows[key].append(value)
+            ids_list.append(None if same else np.asarray(f.ids, np.int64))
+            values_list.append(np.ascontiguousarray(f.values, np.float64).ravel())
+    if not values_list:
+        return SCHEMAS["fields"].empty_table()
+    columns = {
+        k: pa.array(v, SCHEMAS["fields"].field(k).type)
+        for k, v in rows.items()
+        if k not in ("ids", "values")
+    }
+    columns["ids"] = _lists(ids_list, pa.int64())
+    columns["values"] = _lists(values_list, pa.float64())
+    return pa.table(columns, schema=SCHEMAS["fields"])
+
+
+def _lists(arrays: list, typ: pa.DataType) -> pa.Array:
+    """A list column from numpy arrays (None = a null cell), built without Python loops."""
+    lengths = [0 if a is None else len(a) for a in arrays]
+    offsets = pa.array(np.concatenate([[0], np.cumsum(lengths)]).astype(np.int64))
+    present = [a for a in arrays if a is not None]
+    flat = pa.array(np.concatenate(present) if present else np.empty(0), typ)
+    mask = pa.array([a is None for a in arrays])
+    return pa.LargeListArray.from_arrays(offsets, flat, mask=mask)
 
 
 def _now() -> datetime:

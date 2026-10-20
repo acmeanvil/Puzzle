@@ -40,7 +40,7 @@ Solver tests in `tests/integration/` skip when the solver isn't available; `test
 | `src/puzzle/commands` | Command layer (ADR 0015): `Session.submit/propose/accept/undo`, `history.jsonl`, autonomy checks, `outline` |
 | `src/puzzle/agent` | `mcp.py`: MCP server over the command layer (`puzzle mcp PROJECT`); tools return summaries and coded errors |
 | `src/puzzle/errors.py` | `PuzzleError(code, message, path, details)` and `Problem`; codes in `CODES` |
-| `src/puzzle/results` | Solver-neutral `Results`; `ResultStore` = Delta Lake tables (runs, meshes, nodes, cells, groups, fields); `query` = summary, stats, value_at, integrate |
+| `src/puzzle/results` | Solver-neutral `Results`; `ResultStore` = Delta Lake tables (runs, meshes, nodes, cells, groups, fields), format 2: one row per field per step with ids/values as list columns (ADR 0008); `query` = summary, stats, value_at, integrate |
 | `src/puzzle/solve.py` | `run_study`: validate → run/reuse upstream studies → mesh → map transfers → write → run → read |
 | `src/puzzle/shootout.py` | `run_shootout`: every solver of a study on one mesh (`run_study(..., solver=, meshed=)`), compared by the study's metrics (ADR 0011) |
 | `src/puzzle/transfer.py` | Transfers: `pick` a source field, `map_field` onto the target mesh (copy if identical, linear in source tets, or nearest), `Input` handed to adapters |
@@ -97,6 +97,7 @@ Capability matrices also list planned capabilities; `write_input` refuses what i
 - **History geometry** (`Geometry.history`, ADR 0014) needs OCP (pixi env only; the `.venv` Python 3.14 has no OCP wheels): run `tests/test_naming.py` and `tests/integration/test_history_geometry.py` with `.pixi/envs/dev/bin/python -m pytest`. Lengths are SI; name box sides from geometry (OCCT's Left/Front/... faces don't follow the axes); use tight bounding boxes (`AddOptimal`); keep tool margins relative to the model size.
 - **CalculiX reads at most 20 characters per field:** longer numbers are silently truncated (-8.67361737988404e-19 became -0.867 and inverted elements). Coordinates are written with 13 significant digits.
 - **Part selections are matched within the part:** `generate_mesh` finds each part's faces only among its own bodies' boundaries, since identical parts can have coincident faces (two halves end to end).
+- **Results store format 2** (`store.json`): an older store raises `stale_store`; delete the project's `results/` folder and rerun (results are a cache by run key). Arrays read back are read-only views of Arrow buffers. Never `sort_by` the fields table itself: it copies every array; sort the metadata and slice by offsets (`_Lists`).
 - **Solver logs** are capped at 256 MB (`jobs.runner.MAX_LOG_BYTES`) and read from the end on failure (`log_tail`).
 - **Gmsh from threads:** OpenCASCADE keeps per-thread state from its first user; if that thread exits and another thread uses Gmsh, the process segfaults. `gmsh_session` first initialises Gmsh on a resident daemon thread. MCP runs sync tools on worker threads, so this matters.
 - **MCP SDK 2.x:** `from mcp.server.mcpserver import MCPServer` (FastMCP was renamed); results are `structured_content`/`is_error`. Annotate tool returns as `dict[str, Any]`, not bare `dict`, or the output is unstructured text.

@@ -26,6 +26,8 @@ CODES = {
     "mesh_failed": "meshing failed",
     "solver_failed": "the solver ran but failed",
     "unsupported": "not implemented yet",
+    # Results
+    "stale_store": "the results store has an older format; delete it to rebuild",
 }
 
 

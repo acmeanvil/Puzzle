@@ -175,3 +175,63 @@ def test_read_one_field_at_one_step(tmp_path):
     assert store.read_field(run, "temperature").values[:, 0].tolist() == [3.0] * 4
     assert store.read_field(run, "temperature", 0).values[0, 0] == 1.0
     assert store.read_field(run, "flux").components == ["x", "y", "z"]
+
+
+def _transient(store, ids_by_step):
+    """A run whose 'u' field has the given ids at each step (values = step time)."""
+    mesh = Mesh(node_ids=np.arange(1, 5), coords=np.eye(4, 3))
+    mesh.blocks.append(CellBlock("tet4", 3, (3, 1), np.array([1]), np.array([[1, 2, 3, 4]])))
+    steps = [
+        StepResult(
+            1,
+            "transient",
+            float(t),
+            fields={"u": Field("u", "node", ["x", "y"], np.array(ids), np.full((len(ids), 2), t))},
+        )
+        for t, ids in enumerate(ids_by_step, start=1)
+    ]
+    return store.write_run(
+        run_key="k",
+        study_id="s",
+        study_name="s",
+        solver="x",
+        runtime="r",
+        mesh=mesh,
+        results=Results("x", steps),
+        started_at=datetime.now(UTC),
+        duration_s=1.0,
+    )
+
+
+def test_ids_are_stored_once_per_field(tmp_path):
+    store = ResultStore(tmp_path)
+    run = _transient(store, [[1, 2, 3, 4]] * 3 + [[2, 4]] + [[2, 4]])
+    table = DeltaTable(str(tmp_path / "fields")).to_pyarrow_table().sort_by("ordinal")
+    assert table.column("ids_from").to_pylist() == [0, 0, 0, 3, 3]
+    assert [v is not None for v in table.column("ids").to_pylist()] == [1, 0, 0, 1, 0]
+
+    steps = store.read_results(run).steps
+    assert [s.value for s in steps] == [1.0, 2.0, 3.0, 4.0, 5.0]
+    assert steps[2].fields["u"].ids.tolist() == [1, 2, 3, 4]
+    assert steps[4].fields["u"].ids.tolist() == [2, 4]
+    assert steps[4].fields["u"].values.tolist() == [[5.0, 5.0], [5.0, 5.0]]
+    # One step, its ids held by an earlier row:
+    u = store.read_field(run, "u", step=2)
+    assert u.ids.tolist() == [1, 2, 3, 4] and u.values[0].tolist() == [3.0, 3.0]
+    assert store.read_field(run, "u").ids.tolist() == [2, 4]
+
+
+def test_an_older_store_is_refused(tmp_path):
+    from puzzle.results.store import StaleStore
+
+    (tmp_path / "fields" / "_delta_log").mkdir(parents=True)  # a format 1 store
+    with pytest.raises(StaleStore, match="format 1") as err:
+        ResultStore(tmp_path).runs()
+    assert err.value.code == "stale_store"
+
+
+def test_a_new_store_records_its_format(tmp_path):
+    import json
+
+    _transient(ResultStore(tmp_path / "r"), [[1, 2]])
+    assert json.loads((tmp_path / "r" / "store.json").read_text()) == {"format": 2}
