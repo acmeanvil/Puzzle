@@ -279,3 +279,13 @@ def test_api_keys_come_from_the_environment_then_the_keychain(monkeypatch):
         assert settings.delete_key("anthropic") and not settings.delete_key("anthropic")
     finally:
         keyring.set_keyring(previous)
+
+
+def test_wrong_pastes_are_caught_before_storing():
+    from puzzle.agent.settings import anthropic_key_problem
+
+    good = "sk-ant-api03-" + "x" * 90
+    assert anthropic_key_problem(good) is None
+    assert "more than one key" in anthropic_key_problem(good + good)
+    assert "'sk-ant-usr01' credential" in anthropic_key_problem("sk-ant-usr01-" + "y" * 90)
+    assert "something else" in anthropic_key_problem("abc123")

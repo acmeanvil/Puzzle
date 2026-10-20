@@ -438,15 +438,18 @@ def _agent_key(args) -> int:
     import getpass
 
     from puzzle.agent.providers import ProviderError
-    from puzzle.agent.settings import AgentSettings, delete_key, store_key
+    from puzzle.agent.settings import AgentSettings, anthropic_key_problem, delete_key, store_key
 
     if args.action == "set":
         key = getpass.getpass(f"{args.provider} API key (input hidden): ").strip()
         if not key:
             print("nothing entered; no key stored")
             return 1
-        if args.provider == "anthropic" and not key.startswith("sk-ant-"):
-            print("warning: Anthropic API keys start with 'sk-ant-'; this one does not")
+        if args.provider == "anthropic":
+            problem = anthropic_key_problem(key)
+            if problem:
+                print(f"not stored: {problem}")
+                return 1
         try:
             store_key(args.provider, key)
         except ProviderError as exc:

@@ -50,6 +50,23 @@ def stored_key(provider: str) -> str | None:
         return None
 
 
+def anthropic_key_problem(key: str) -> str | None:
+    """Why `key` cannot be a Claude API key (None if it looks right): catches pastes of
+    the wrong credential, a key pasted twice, or stray text."""
+    if key.count("sk-ant-") > 1:
+        return "it contains more than one key; paste a single key"
+    if not key.startswith("sk-ant-api"):
+        kind = key.split("-")[2] if key.startswith("sk-ant-") and key.count("-") > 2 else None
+        found = f"an 'sk-ant-{kind}' credential" if kind else "something else"
+        return (
+            f"Claude API keys start with 'sk-ant-api' (create one at console.anthropic.com, "
+            f"Settings > API keys); this is {found}"
+        )
+    if any(c.isspace() for c in key):
+        return "it contains spaces or line breaks"
+    return None
+
+
 def store_key(provider: str, key: str) -> None:
     kr = _keyring()
     if kr is None:
