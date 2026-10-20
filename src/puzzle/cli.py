@@ -446,18 +446,30 @@ def _agent_key(args) -> int:
             print("nothing entered; no key stored")
             return 1
         if args.provider == "anthropic":
+            from puzzle.agent.providers import check_anthropic_key
+
             problem = anthropic_key_problem(key)
             if problem:
                 print(f"not stored: {problem}")
                 return 1
+            try:
+                auth = check_anthropic_key(key)
+            except ProviderError as exc:
+                print(f"not stored: {exc}")
+                return 1
+            how = "x-api-key" if auth == "api_key" else "bearer token"
+            print(f"Anthropic accepts the key ({how})")
         try:
             store_key(args.provider, key)
+            if args.provider == "anthropic":
+                store_key("anthropic-auth", auth)
         except ProviderError as exc:
             print(exc)
             return 1
         print(f"stored in the keychain (service 'puzzle', account '{args.provider}')")
     elif args.action == "clear":
         removed = delete_key(args.provider)
+        delete_key(f"{args.provider}-auth")
         print("removed from the keychain" if removed else "no key in the keychain")
     print(f"{args.provider} key: {AgentSettings(provider=args.provider).key_source()}")
     return 0

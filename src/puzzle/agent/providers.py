@@ -63,9 +63,11 @@ class AnthropicProvider:
     name = "anthropic"
     remote = True
 
-    def __init__(self, model: str = "claude-sonnet-5-5", api_key: str | None = None) -> None:
+    def __init__(
+        self, model: str = "claude-sonnet-5-5", api_key: str | None = None, auth: str | None = None
+    ) -> None:
         try:
-            import anthropic
+            import anthropic  # noqa: F401 - only checking that it is installed
         except ImportError as exc:
             raise ProviderError(
                 "the Claude provider needs the anthropic package: pip install anthropic"
@@ -76,7 +78,37 @@ class AnthropicProvider:
                 "no Claude API key: run `puzzle agent-key set` or set ANTHROPIC_API_KEY"
             )
         self.model = model
-        self.client = anthropic.Anthropic(api_key=key)
+        self.client = anthropic_client(key, auth or key_auth(key))
+
+
+def key_auth(key: str) -> str:
+    """How a key is sent: "api_key" (x-api-key header) for classic sk-ant-api keys,
+    "auth_token" (Authorization: Bearer) otherwise; `check_anthropic_key` decides
+    for real when a key is stored."""
+    return "api_key" if key.startswith("sk-ant-api") else "auth_token"
+
+
+def anthropic_client(key: str, auth: str):
+    import anthropic
+
+    return anthropic.Anthropic(**{auth: key})
+
+
+def check_anthropic_key(key: str) -> str:
+    """Ask Anthropic which way the key works (listing models costs nothing); returns
+    "api_key" or "auth_token", or raises ProviderError with the reason."""
+    import anthropic
+
+    errors = []
+    for auth in dict.fromkeys([key_auth(key), "api_key", "auth_token"]):
+        try:
+            anthropic_client(key, auth).models.list(limit=1)
+            return auth
+        except anthropic.AuthenticationError as exc:
+            errors.append(f"{auth}: {exc.message if hasattr(exc, 'message') else exc}")
+        except anthropic.APIError as exc:
+            raise ProviderError(f"could not check the key: {exc}") from exc
+    raise ProviderError("Anthropic rejected this key (" + "; ".join(errors) + ")")
 
     def complete(self, system: str, messages: list[dict], tools: list[ToolSpec]) -> Reply:
         import anthropic

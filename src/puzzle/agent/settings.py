@@ -51,17 +51,12 @@ def stored_key(provider: str) -> str | None:
 
 
 def anthropic_key_problem(key: str) -> str | None:
-    """Why `key` cannot be a Claude API key (None if it looks right): catches pastes of
-    the wrong credential, a key pasted twice, or stray text."""
+    """A paste that cannot be one key (None if it might be): pasted twice, stray text.
+    Whether Anthropic accepts it is checked by a call, not guessed from its prefix."""
     if key.count("sk-ant-") > 1:
         return "it contains more than one key; paste a single key"
-    if not key.startswith("sk-ant-api"):
-        kind = key.split("-")[2] if key.startswith("sk-ant-") and key.count("-") > 2 else None
-        found = f"an 'sk-ant-{kind}' credential" if kind else "something else"
-        return (
-            f"Claude API keys start with 'sk-ant-api' (create one at console.anthropic.com, "
-            f"Settings > API keys); this is {found}"
-        )
+    if not key.startswith("sk-ant-"):
+        return "Anthropic keys start with 'sk-ant-'; this does not"
     if any(c.isspace() for c in key):
         return "it contains spaces or line breaks"
     return None
@@ -94,7 +89,7 @@ class AgentSettings:
         model = self.model or DEFAULT_MODELS.get(self.provider, "")
         key = self.api_key()
         if self.provider == "anthropic":
-            return AnthropicProvider(model=model, api_key=key)
+            return AnthropicProvider(model=model, api_key=key, auth=stored_key("anthropic-auth"))
         if self.provider == "openai":
             return OpenAIProvider(model=model, base_url=self.base_url, api_key=key)
         raise ProviderError(f"unknown agent provider '{self.provider}' (anthropic or openai)")

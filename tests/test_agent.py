@@ -286,6 +286,13 @@ def test_wrong_pastes_are_caught_before_storing():
 
     good = "sk-ant-api03-" + "x" * 90
     assert anthropic_key_problem(good) is None
+    assert anthropic_key_problem("sk-ant-usr-" + "y" * 90) is None  # Anthropic decides
     assert "more than one key" in anthropic_key_problem(good + good)
-    assert "'sk-ant-usr01' credential" in anthropic_key_problem("sk-ant-usr01-" + "y" * 90)
-    assert "something else" in anthropic_key_problem("abc123")
+    assert "start with 'sk-ant-'" in anthropic_key_problem("abc123")
+
+
+def test_key_header_choice():
+    from puzzle.agent.providers import key_auth
+
+    assert key_auth("sk-ant-api03-x") == "api_key"
+    assert key_auth("sk-ant-usr-x") == "auth_token"
