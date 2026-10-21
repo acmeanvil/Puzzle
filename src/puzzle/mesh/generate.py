@@ -46,6 +46,9 @@ class MeshResult:
         float  # smallest scaled Jacobian over the volume elements (1 = ideal, <= 0 = inverted)
     )
     warnings: list[str] = field(default_factory=list)
+    # Gmsh entity (dim, tag) -> (part, geometry entity name): what a pick in the view
+    # names. History geometry gives its persistent names (Plate/+x), others face-N.
+    names: dict[tuple[int, int], tuple[str, str]] = field(default_factory=dict)
 
 
 def generate_mesh(
@@ -66,8 +69,9 @@ def generate_mesh(
     out_dir.mkdir(parents=True, exist_ok=True)
     sources = {name: _source(project, g, root, out_dir, warnings) for name, g in geometries.items()}
     # History selections name faces persistently; the mesher works with face-N names.
-    geometries = {name: g for name, (g, _) in sources.items()}
-    paths = {name: path for name, (_, path) in sources.items()}
+    geometries = {name: g for name, (g, _, _) in sources.items()}
+    paths = {name: path for name, (_, path, _) in sources.items()}
+    persistent = {name: back for name, (_, _, back) in sources.items()}
     references = {name: import_step(path) for name, path in paths.items()}
 
     with gmsh_session("mesh", verbose=verbose):
@@ -99,6 +103,12 @@ def generate_mesh(
             found[part.name] = match(ref.entities, _closure(list(bodies.values())), **placement)
 
         _physical_groups(comp, geometries, references, found, warnings)
+        names = {
+            entity: (part, persistent[part].get(name, name))
+            for part, entities in found.items()
+            for name, entity in entities.items()
+            if entity[0] >= 2
+        }
         _sizes(recipe, comp, found, warnings)
 
         if recipe.element_shape == "hexahedra":
@@ -125,7 +135,7 @@ def generate_mesh(
         gmsh.write(str(path))
         mesh = _extract()
 
-    return MeshResult(mesh=mesh, path=path, min_quality=min_quality, warnings=warnings)
+    return MeshResult(mesh=mesh, path=path, min_quality=min_quality, warnings=warnings, names=names)
 
 
 def _source(project: Project, geo: Geometry, root: Path, out_dir: Path, warnings: list[str]):
@@ -136,7 +146,7 @@ def _source(project: Project, geo: Geometry, root: Path, out_dir: Path, warnings
     here since both describe the same shape.
     """
     if not geo.history:
-        return geo, root / geo.source
+        return geo, root / geo.source, {}
     from puzzle.geometry.history import Op, regenerate, signature, write_brep
 
     params = {k: q.to_si() for ps in project.of_type(ParameterSet) for k, q in ps.values.items()}
@@ -172,7 +182,8 @@ def _source(project: Project, geo: Geometry, root: Path, out_dir: Path, warnings
             else:
                 warnings.append(f"selection '{sel.name}': '{m}' no longer exists in the history")
         selections.append(sel.model_copy(update={"members": members}))
-    return geo.model_copy(update={"selections": selections}), path
+    back = {face: name for name, faces in aliases.items() for face in faces}
+    return geo.model_copy(update={"selections": selections}), path, back
 
 
 def _closure(volumes: list[tuple[int, int]]) -> list[tuple[int, int]]:

@@ -7,7 +7,7 @@ the viewport still records what it would show, so tests can check it.
 from __future__ import annotations
 
 import numpy as np
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from puzzle.gui.tasks import rendering_available
@@ -19,6 +19,30 @@ from puzzle.results.model import Results
 # Surface element -> how many of its nodes are corners.
 CORNERS = {"tri3": 3, "tri6": 3, "quad4": 4, "quad8": 4, "quad9": 4}
 HIGHLIGHT = "#ff8c00"
+PICKED = "#e53e3e"
+
+
+def entity_surface(mesh: Mesh):
+    """Every surface element as one pickable surface; cell data `entity` indexes the
+    returned list of Gmsh entities (dim, tag) the faces belong to."""
+    import pyvista as pv
+
+    order = np.argsort(mesh.node_ids)
+    faces, owners, entities = [], [], []
+    for b in mesh.blocks:
+        if b.dim != 2 or b.element not in CORNERS:
+            continue
+        if b.entity not in entities:
+            entities.append(b.entity)
+        corners = b.connectivity[:, : CORNERS[b.element]]
+        index = order[np.searchsorted(mesh.node_ids, corners, sorter=order)]
+        faces.append(np.hstack([np.full((len(index), 1), index.shape[1]), index]).ravel())
+        owners.append(np.full(len(index), entities.index(b.entity)))
+    if not faces:
+        return None, []
+    surface = pv.PolyData(mesh.coords, np.concatenate(faces))
+    surface.cell_data["entity"] = np.concatenate(owners)
+    return surface, entities
 
 
 def selection_surface(mesh: Mesh, group: str):
@@ -41,8 +65,16 @@ def selection_surface(mesh: Mesh, group: str):
 
 
 class Viewport(QWidget):
+    picked_changed = Signal(list)  # the picked entities, [(dim, tag), ...]
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        self.mesh: Mesh | None = None
+        self.highlight: str | None = None
+        self.highlight_entities: list[tuple[int, int]] = []
+        self.surface, self.entities = None, []
+        self.picked: list[tuple[int, int]] = []
+        self.picking = False
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self.shown: dict = {}  # what is on screen: kind, scalar, range, highlight
@@ -58,10 +90,24 @@ class Viewport(QWidget):
             self.placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
             layout.addWidget(self.placeholder)
 
-    def show_mesh(self, mesh: Mesh, highlight: str | None = None) -> None:
-        """The mesh's volume, with a face selection (`Part/Selection`) highlighted."""
+    def show_mesh(
+        self, mesh: Mesh, highlight: str | None = None, entities: list | None = None
+    ) -> None:
+        """The mesh's volume, with a selection highlighted (a mesh group `Part/Name`, or
+        its face `entities` when it was made after meshing) and picked faces marked."""
+        if mesh is not self.mesh:
+            self.mesh = mesh
+            self.surface, self.entities = entity_surface(mesh)
+            self.picked = [e for e in self.picked if e in self.entities]
+        self.highlight, self.highlight_entities = highlight, list(entities or [])
         grid = to_grid(mesh)
-        self.shown = {"kind": "mesh", "cells": grid.n_cells, "highlight": highlight}
+        self.shown = {
+            "kind": "mesh",
+            "cells": grid.n_cells,
+            "highlight": highlight,
+            "highlighted": list(self.highlight_entities),
+            "picked": list(self.picked),
+        }
         if self.plotter is None:
             return
         self.plotter.clear()
@@ -72,8 +118,62 @@ class Viewport(QWidget):
         if highlight is not None:
             surface = selection_surface(mesh, highlight)
             if surface is not None:
-                self.plotter.add_mesh(surface, color=HIGHLIGHT, show_edges=False)
+                self._overlay(surface, HIGHLIGHT)
+        for group, colour in ((self.highlight_entities, HIGHLIGHT), (self.picked, PICKED)):
+            index = [self.entities.index(e) for e in group if e in self.entities]
+            if index and self.surface is not None:
+                mask = np.isin(self.surface.cell_data["entity"], index)
+                self._overlay(self.surface.extract_cells(mask), colour)
         self._frame()
+
+    def _overlay(self, surface, colour: str) -> None:
+        """Faces drawn over the mesh's own: pulled towards the camera in depth, or the
+        two coplanar surfaces fight and the colour comes out speckled."""
+        actor = self.plotter.add_mesh(surface, color=colour, show_edges=False)
+        mapper = actor.GetMapper()
+        mapper.SetResolveCoincidentTopologyToPolygonOffset()
+        mapper.SetRelativeCoincidentTopologyPolygonOffsetParameters(-2, -2)
+
+    # --- picking -----------------------------------------------------------------------
+
+    def set_picking(self, on: bool) -> None:
+        """Double-click picks or un-picks the face under the cursor (a drag still rotates)."""
+        self.picking = on
+        if self.plotter is None:
+            return
+        if on:
+            self.plotter.track_click_position(self._clicked, side="left", double=True)
+        else:
+            self.plotter.untrack_click_position(side="left")
+
+    def toggle_pick(self, entity: tuple[int, int]) -> None:
+        if entity in self.picked:
+            self.picked.remove(entity)
+        else:
+            self.picked.append(entity)
+        if self.mesh is not None:
+            self.show_mesh(self.mesh, self.highlight, self.highlight_entities)
+        self.picked_changed.emit(list(self.picked))
+
+    def clear_picks(self) -> None:
+        self.picked.clear()
+        if self.mesh is not None:
+            self.show_mesh(self.mesh, self.highlight, self.highlight_entities)
+        self.picked_changed.emit([])
+
+    def entity_at(self, point) -> tuple[int, int] | None:
+        """The face entity nearest a point in space (where a click landed)."""
+        if self.surface is None:
+            return None
+        cell = self.surface.find_closest_cell(np.asarray(point, float))
+        return self.entities[int(self.surface.cell_data["entity"][cell])] if cell >= 0 else None
+
+    def _clicked(self, point) -> None:
+        if self.shown.get("kind") != "mesh":
+            return  # picking works on the mesh view, not on results
+        entity = self.entity_at(point)
+        if entity is not None:
+            self.toggle_pick(entity)
 
     def show_result(
         self,
@@ -136,6 +236,7 @@ class Viewport(QWidget):
 
     def clear(self) -> None:
         self.shown = {}
+        self.mesh, self.surface, self.entities, self.picked = None, None, [], []
         if self.plotter is not None:
             self.plotter.clear()
 

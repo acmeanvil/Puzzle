@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
+    QPushButton,
     QSpinBox,
     QTabWidget,
     QVBoxLayout,
@@ -82,6 +83,42 @@ class ResultsBar(QWidget):
             w.blockSignals(False)
 
 
+class PickBar(QWidget):
+    """What is picked in the view, and what to do with it."""
+
+    def __init__(self, window) -> None:
+        super().__init__()
+        self.window = window
+        row = QHBoxLayout(self)
+        row.setContentsMargins(6, 2, 6, 2)
+        self.label = QLabel("")
+        new, add, clear = (
+            QPushButton("New selection…"),
+            QPushButton("Add to selection"),
+            QPushButton("Clear"),
+        )
+        new.clicked.connect(self._new)
+        add.clicked.connect(lambda: window.add_picks_to_selection())
+        clear.clicked.connect(lambda: window.viewport.clear_picks())
+        row.addWidget(self.label, 1)
+        for b in (new, add, clear):
+            row.addWidget(b)
+        window.viewport.picked_changed.connect(self.update_picks)
+
+    def update_picks(self, picked) -> None:
+        names = self.window.picked_names()
+        shown = ", ".join(f"{p}/{n}" for p, n in names[:6]) + (" …" if len(names) > 6 else "")
+        self.label.setText(
+            f"{len(names)} face(s) picked: {shown}" if names else "Double-click faces to pick them"
+        )
+        self.setVisible(self.window.viewport.picking or bool(names))
+
+    def _new(self) -> None:
+        name = self.window.ask_text("New selection", "Name for the picked faces:", "Selection")
+        if name:
+            self.window.selection_from_picks(name)
+
+
 class MainWindow(QMainWindow):
     def __init__(self, root: Path | None = None, *, provider_factory=None) -> None:
         super().__init__()
@@ -89,6 +126,8 @@ class MainWindow(QMainWindow):
         self.resize(1400, 900)
         self.session: Session | None = None
         self.meshes: dict[str, Mesh] = {}  # component id -> its last generated mesh
+        self.mesh_names: dict[str, dict] = {}  # component id -> (dim, tag) -> (part, name)
+        self.mesh_component: str | None = None  # whose mesh the view shows
         self.result: tuple[Mesh, Results] | None = None
         self.tasks: list[Task] = []  # keep running tasks alive
 
@@ -97,6 +136,8 @@ class MainWindow(QMainWindow):
         self.viewport = Viewport()
         self.results_bar = ResultsBar(self._redraw_result)
         self.results_bar.hide()
+        self.pick_bar = PickBar(self)
+        self.pick_bar.hide()
         self.log = QPlainTextEdit(readOnly=True)
         self.log.setMaximumBlockCount(20000)
         self.history = QListWidget()
@@ -106,6 +147,7 @@ class MainWindow(QMainWindow):
         column = QVBoxLayout(centre)
         column.setContentsMargins(0, 0, 0, 0)
         column.addWidget(self.results_bar)
+        column.addWidget(self.pick_bar)
         column.addWidget(self.viewport, 1)
         self.setCentralWidget(centre)
         self._dock("Model", self.tree, Qt.DockWidgetArea.LeftDockWidgetArea)
@@ -128,6 +170,8 @@ class MainWindow(QMainWindow):
 
         self._actions()
         self.tree.currentItemChanged.connect(lambda *_: self._selected())
+        self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self._context_menu)
         self.properties.edited.connect(self._edit)
         self.watcher = QFileSystemWatcher(self)
         self.watcher.fileChanged.connect(lambda _: self._reload_soon())
@@ -198,6 +242,7 @@ class MainWindow(QMainWindow):
         menu = self.menuBar().addMenu("&Project")
         self.actions_by_name: dict[str, QAction] = {}
         for name, text, key, slot in (
+            ("new", "New…", QKeySequence.StandardKey.New, self._new_dialog),
             ("open", "Open…", QKeySequence.StandardKey.Open, self._open_dialog),
             ("undo", "Undo", QKeySequence.StandardKey.Undo, self.undo),
             ("mesh", "Mesh", "Ctrl+M", self.mesh_selected),
@@ -205,6 +250,7 @@ class MainWindow(QMainWindow):
             ("material", "Add material…", None, self._add_material_dialog),
             ("delete", "Delete", QKeySequence.StandardKey.Delete, self.delete_selected),
             ("reload", "Reload", QKeySequence.StandardKey.Refresh, self.reload),
+            ("pick", "Pick faces", "P", self.toggle_picking),
         ):
             action = QAction(text, self)
             if key is not None:
@@ -213,6 +259,26 @@ class MainWindow(QMainWindow):
             bar.addAction(action)
             menu.addAction(action)
             self.actions_by_name[name] = action
+        pick = self.actions_by_name["pick"]
+        pick.setCheckable(True)
+        pick.setToolTip("Double-click faces in the view to pick them; drag still rotates")
+
+    def new_project(self, root: Path, name: str) -> None:
+        """Create an empty project in `root` and open it."""
+        from puzzle.model.schema import Project
+        from puzzle.project import save_project
+
+        root.mkdir(parents=True, exist_ok=True)
+        save_project(Project(name=name), root)
+        self.open(root)
+
+    def _new_dialog(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "Folder for the new project")
+        if not path:
+            return
+        name = self.ask_text("New project", "Project name:", Path(path).name)
+        if name:
+            self.new_project(Path(path), name)
 
     def _open_dialog(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Open a Puzzle project")
@@ -262,6 +328,7 @@ class MainWindow(QMainWindow):
 
         def done(meshed) -> None:
             self.meshes[str(comp.id)] = meshed.mesh
+            self.mesh_names[str(comp.id)] = meshed.names
             for w in meshed.warnings:
                 self.log.appendPlainText(f"mesh: {w}")
             cells = sum(len(b.ids) for b in meshed.mesh.blocks if b.dim == 3)
@@ -318,13 +385,14 @@ class MainWindow(QMainWindow):
         highlight = None
         if node.kind == "selection" and isinstance(obj, Geometry):
             for part in comp.parts:
-                if str(part.geometry) == str(obj.id) and f"{part.name}/{node.label}" in mesh.groups:
+                if str(part.geometry) == str(obj.id):
                     highlight = f"{part.name}/{node.label}"
                     break
         elif node.kind in ("feature", "assignment"):
-            target = self._feature_selection(obj, node.path)
-            highlight = target if target in mesh.groups else None
-        self.viewport.show_mesh(mesh, highlight)
+            highlight = self._feature_selection(obj, node.path)
+        entities = self._entities_of(comp, highlight) if highlight else []
+        self.mesh_component = str(comp.id)
+        self.viewport.show_mesh(mesh, highlight if highlight in mesh.groups else None, entities)
 
     def _select_run(self, run_id: str) -> None:
         store = self._store()
@@ -364,6 +432,105 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             f"{shown['scalar']} ({shown['step']}): {shown['min']:.4g} … {shown['max']:.4g}"
         )
+
+    # --- picking -------------------------------------------------------------------
+
+    def toggle_picking(self, on: bool | None = None) -> None:
+        on = self.actions_by_name["pick"].isChecked() if on is None else on
+        self.actions_by_name["pick"].setChecked(on)
+        if on and self.viewport.mesh is None:
+            self.statusBar().showMessage("Mesh a component and select it to pick faces", 8000)
+        self.viewport.set_picking(on)
+        self.pick_bar.update_picks(self.viewport.picked)
+
+    def picked_names(self) -> list[tuple[str, str]]:
+        """The picked faces as (part, geometry face name)."""
+        names = self.mesh_names.get(self.mesh_component or "", {})
+        return [names[e] for e in self.viewport.picked if e in names]
+
+    def selection_from_picks(self, name: str):
+        """A new face selection on the picked faces' geometry (one geometry at a time)."""
+        geo, members = self._picked_geometry()
+        if geo is None:
+            return None
+        if any(s.name == name for s in geo.selections):
+            self.statusBar().showMessage(f"{geo.name} already has a selection '{name}'", 8000)
+            return None
+        value = {"name": name, "entity": "face", "members": members}
+        out = self.submit(
+            Edit(object=str(geo.id), ops=[EditOp(op="append", path="selections", value=value)])
+        )
+        if out is not None:
+            self.viewport.clear_picks()
+        return out
+
+    def add_picks_to_selection(self, node: Node | None = None):
+        """Add the picked faces to the face selection chosen in the tree."""
+        node = node or self.tree.current()
+        geo, members = self._picked_geometry()
+        if geo is None or node is None or node.kind != "selection" or node.object != str(geo.id):
+            self.statusBar().showMessage(
+                "Select a face selection of the picked faces' geometry", 8000
+            )
+            return None
+        index = int(node.path.split(".")[1])
+        current = geo.selections[index].members
+        merged = current + [m for m in members if m not in current]
+        op = EditOp(op="set", path=f"selections.{index}.members", value=merged)
+        out = self.submit(Edit(object=str(geo.id), ops=[op]))
+        if out is not None:
+            self.viewport.clear_picks()
+        return out
+
+    def _picked_geometry(self):
+        comp = self.session.project.objects.get(_uuid(self.mesh_component or ""))
+        picks = self.picked_names()
+        if comp is None or not picks:
+            self.statusBar().showMessage("Pick faces first (Pick faces, then double-click)", 8000)
+            return None, []
+        parts = {p.name: p for p in comp.parts}
+        geometries = {str(parts[part].geometry) for part, _ in picks}
+        if len(geometries) > 1:
+            self.statusBar().showMessage(
+                "Picked faces span several geometries; pick on one part", 8000
+            )
+            return None, []
+        geo = self.session.project.objects.get(_uuid(geometries.pop()))
+        return geo, list(dict.fromkeys(name for _, name in picks))
+
+    def _entities_of(self, comp, selection: str) -> list[tuple[int, int]]:
+        """A selection's face entities in the shown mesh, through the names it was made with."""
+        part_name, _, sel_name = selection.partition("/")
+        part = next((p for p in comp.parts if p.name == part_name), None)
+        geo = self.session.project.objects.get(part.geometry) if part else None
+        sel = next((s for s in geo.selections if s.name == sel_name), None) if geo else None
+        if sel is None:
+            return []
+        names = self.mesh_names.get(str(comp.id), {})
+        return [e for e, (p, n) in names.items() if p == part_name and n in sel.members]
+
+    # --- questions (tests replace these) -----------------------------------------
+
+    def choose(self, title: str, label: str, items: list[str]) -> str | None:
+        if not items:
+            return None
+        item, ok = QInputDialog.getItem(self, title, label, items, 0, False)
+        return item if ok else None
+
+    def ask_text(self, title: str, label: str, default: str = "") -> str | None:
+        text, ok = QInputDialog.getText(self, title, label, text=default)
+        return text.strip() if ok and text.strip() else None
+
+    def _context_menu(self, pos) -> None:
+        from puzzle.gui.menus import build_menu
+
+        item = self.tree.itemAt(pos)
+        if item is None or self.session is None:
+            return
+        self.tree.setCurrentItem(item)
+        menu = build_menu(self, self.tree.current())
+        if menu is not None:
+            menu.exec(self.tree.viewport().mapToGlobal(pos))
 
     # --- helpers -----------------------------------------------------------------
 

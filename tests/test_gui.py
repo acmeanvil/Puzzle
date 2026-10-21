@@ -134,11 +134,9 @@ def test_mesh_highlight_and_run(app, window):
     wait(app, lambda: not window.tasks)
     assert window.meshes, window.log.toPlainText()
     select(window, "selection", "Tip")
-    assert window.viewport.shown == {
-        "kind": "mesh",
-        "cells": window.viewport.shown["cells"],
-        "highlight": "Bar/Tip",
-    }
+    shown = window.viewport.shown
+    assert shown["kind"] == "mesh" and shown["highlight"] == "Bar/Tip"
+    assert len(shown["highlighted"]) == 1  # the tip face, found by name in the mesh
     select(window, "feature", "Bar/Root")
     assert window.viewport.shown["highlight"] == "Bar/Root"
 
@@ -244,3 +242,46 @@ def test_agent_without_a_provider_says_how_to_set_one(app, window, monkeypatch):
     window.agent.send("hello")
     assert "unknown agent provider" in window.agent.transcript.toPlainText()
     assert not window.tasks
+
+
+def test_picking_faces_makes_and_extends_selections(app, window):
+    import numpy as np
+
+    select(window, "object", "Cantilever")
+    window.mesh_selected()
+    wait(app, lambda: not window.tasks)
+    select(window, "object", "Cantilever")
+    window.toggle_picking(True)
+    assert window.pick_bar.isVisibleTo(window)
+    coords = window.viewport.mesh.coords
+    lo, hi = coords.min(axis=0), coords.max(axis=0)
+    mid = (lo + hi) / 2
+
+    root_face = window.viewport.entity_at([lo[0], mid[1], mid[2]])  # a click on the x-min end
+    window.viewport.toggle_pick(root_face)
+    ((part, face),) = window.picked_names()
+    assert part == "Bar" and face.startswith("face-")
+    assert "1 face(s) picked" in window.pick_bar.label.text()
+
+    window.selection_from_picks("Clamped")
+    bar = next(o for o in window.session.project.objects.values() if o.name == "Bar")
+    sels = {s.name: s.members for s in bar.selections}
+    assert sels["Clamped"] == sels["Root"]  # the pick found the same face as the script
+    assert window.viewport.picked == []  # picks are used up
+    assert window.session.history(limit=1)[0]["command"]["object"] == str(bar.id)
+
+    # Shown straight away, without remeshing: the selection's faces are highlighted.
+    select(window, "selection", "Clamped")
+    assert window.viewport.shown["highlighted"] == [root_face]
+
+    # Add the tip face to it.
+    window.viewport.toggle_pick(window.viewport.entity_at([hi[0], mid[1], mid[2]]))
+    window.add_picks_to_selection()
+    bar = next(o for o in window.session.project.objects.values() if o.name == "Bar")
+    clamped = next(s for s in bar.selections if s.name == "Clamped")
+    assert clamped.members == sels["Root"] + sels["Tip"]
+    np.testing.assert_equal(len(window.viewport.picked), 0)
+
+    window.viewport.toggle_pick(root_face)
+    window.selection_from_picks("Clamped")  # a name already used
+    assert "already has a selection" in window.statusBar().currentMessage()

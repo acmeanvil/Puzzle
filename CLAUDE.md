@@ -33,7 +33,7 @@ Solver tests in `tests/integration/` skip when the solver isn't available; `test
 
 | Path | What |
 | --- | --- |
-| `src/puzzle/model` | Pydantic schema: resources, components (parts, contacts, physics), studies (sweep/solve steps, shoot-out), transfers |
+| `src/puzzle/model` | `catalog.py`: each physics' feature types with their value names, units and defaults (the GUI's add menus). Pydantic schema: resources, components (parts, contacts, physics), studies (sweep/solve steps, shoot-out), transfers |
 | `src/puzzle/project` | One-TOML-file-per-object store; content hashes, staleness, run keys |
 | `src/puzzle/materials` | `generic.toml`: the shipped generic materials (structural steel with EN 1993-1-2 tables, stainless, aluminium, titanium, copper, electrical steel, PTFE, air, water); user libraries load on top |
 | `src/puzzle/geometry` | STEP import via Gmsh's OCC kernel, named entities with signatures |
@@ -42,7 +42,7 @@ Solver tests in `tests/integration/` skip when the solver isn't available; `test
 | `src/puzzle/jobs` | Runs solvers natively or in Docker/Podman; runtime chosen per solver |
 | `src/puzzle/commands` | Command layer (ADR 0015): `Session.submit/propose/accept/undo`, `history.jsonl`, autonomy checks, `outline` |
 | `src/puzzle/agent` | `mcp.py`: MCP server over the command layer (`puzzle mcp PROJECT`); tools return summaries and coded errors. `agent.py`: the built-in agent, the same tools in-process as `Actor("agent", "built-in")`; `providers.py`: Claude (`anthropic`), any OpenAI-compatible endpoint (Ollama, llama.cpp, LM Studio) via urllib, and a scripted provider for tests; `settings.py`: `<user data dir>/agent.toml` (never in a project); API keys from the environment, else the OS keychain via `keyring` (`puzzle agent-key set`, hidden prompt; tests force the null backend in `conftest.py`) |
-| `src/puzzle/gui` | PySide6 desktop GUI (`puzzle gui [PROJECT]`): model tree, properties panel (every field editable, each edit one `Edit` command), pyvistaqt viewport (mesh, highlighted selections, results with field/step/deformation), output/history/problems, agent panel (chat, proposals to accept or reject, autonomy level with double sign-off for "act"); watches `history.jsonl` so other clients' changes show up |
+| `src/puzzle/gui` | PySide6 desktop GUI (`puzzle gui [PROJECT]`): model tree, properties panel (every field editable, each edit one `Edit` command), pyvistaqt viewport (mesh, highlighted selections, results with field/step/deformation), output/history/problems, agent panel (chat, proposals to accept or reject, autonomy level with double sign-off for "act"); right-click menus build a model (`gui/menus.py`: import STEP, mesh recipe, component, physics, features from `model/catalog.py`, materials, studies, steps, export to ParaView); face picking (Pick faces, double-click; `MeshResult.names` maps Gmsh entities to part + face name) makes or extends selections; watches `history.jsonl` so other clients' changes show up |
 | `src/puzzle/errors.py` | `PuzzleError(code, message, path, details)` and `Problem`; codes in `CODES` |
 | `src/puzzle/results` | Solver-neutral `Results`; `ResultStore` = Delta Lake tables (runs, meshes, nodes, cells, groups, fields), format 2: one row per field per step with ids/values as list columns (ADR 0008); `query` = summary, stats, value_at, integrate |
 | `src/puzzle/solve.py` | `run_study`: validate → run/reuse upstream studies → mesh → map transfers → write → run → read |
