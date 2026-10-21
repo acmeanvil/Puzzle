@@ -38,11 +38,14 @@ view = w.viewport.view; cam = view.plotter.camera
 LEFT, NONE = Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier
 out = {"kind": w.viewport.shown.get("kind")}
 start = np.array(cam.position); c = view.rect().center()
+before = view.grab().toImage()
 QTest.mousePress(view, LEFT, NONE, c)
 for i in range(1, 11):
     QTest.mouseMove(view, c + QPoint(10 * i, 0)); pump(0.02)
 QTest.mouseRelease(view, LEFT, NONE, c + QPoint(100, 0))
+pump(0.3)
 out["rotated"] = bool(not np.allclose(start, cam.position))
+out["redrawn"] = bool(view.grab().toImage() != before)  # the picture, not just the camera
 d0 = np.linalg.norm(np.subtract(cam.position, cam.focal_point))
 wheel = QWheelEvent(QPointF(c), QPointF(view.mapToGlobal(c)), QPoint(0, 0), QPoint(0, 240),
     Qt.MouseButton.NoButton, NONE, Qt.ScrollPhase.NoScrollPhase, False)
@@ -84,6 +87,6 @@ def test_view_rotates_zooms_and_picks(tmp_path):
     assert line, done.stderr[-2000:]
     out = json.loads(line[len("RESULT ") :])
     assert out["kind"] == "preview"
-    assert out["rotated"] and out["zoomed"]
+    assert out["rotated"] and out["redrawn"] and out["zoomed"]
     assert len(out["picked"]) == 1 and out["picked"][0][0] == "Bar"
     assert out["dark_bottom_pixels"] == 0  # no stray marks along the bottom edge

@@ -66,8 +66,9 @@ def selection_surface(mesh: Mesh, group: str):
 
 class SceneView(QWidget):
     """A VTK scene rendered off screen and painted as an image, with its own mouse
-    handling: left-drag rotates, shift- or middle-drag pans, right-drag or the wheel
-    zooms, and a double-click reports the picked point to `on_double_click`.
+    handling: left-drag rotates, shift- or middle-drag pans, right-drag, the wheel
+    (two-finger scroll) or a trackpad pinch zooms, and a double-click reports the
+    picked point to `on_double_click`.
 
     On-screen OpenGL inside Qt windows leaves unrefreshed rows along the bottom of the
     view on some Macs (Intel Iris here, with every embedding tried: native window,
@@ -103,6 +104,7 @@ class SceneView(QWidget):
         size = [max(1, round(self.width() * dpr)), max(1, round(self.height() * dpr))]
         if list(self.plotter.window_size) != size:
             self.plotter.window_size = size
+        self.plotter.render()  # screenshot() alone returns the previous frame once rendered
         pixels = np.ascontiguousarray(self.plotter.screenshot(return_img=True))
         h, w, _ = pixels.shape
         image = QImage(pixels.data, w, h, 3 * w, QImage.Format.Format_RGB888).copy()
@@ -154,6 +156,18 @@ class SceneView(QWidget):
         self.plotter.camera.Dolly(1.1 ** (event.angleDelta().y() / 120))
         self.plotter.renderer.ResetCameraClippingRange()
         self.refresh()
+
+    def event(self, event) -> bool:
+        """Trackpad pinch zooms (macOS sends it as a native gesture, not a wheel)."""
+        from PySide6.QtCore import QEvent
+
+        if event.type() == QEvent.Type.NativeGesture:
+            if event.gestureType() == Qt.NativeGestureType.ZoomNativeGesture:
+                self.plotter.camera.Dolly(1.0 + event.value())
+                self.plotter.renderer.ResetCameraClippingRange()
+                self.refresh()
+                return True
+        return super().event(event)
 
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
         if self.on_double_click is None:
