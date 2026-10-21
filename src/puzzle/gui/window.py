@@ -57,11 +57,14 @@ class ResultsBar(QWidget):
         self.step = QSpinBox()
         self.deform = QCheckBox("Deformed")
         self.deform.setChecked(True)
+        self.title = QLabel("")
+        self.title.setStyleSheet("color: gray")
         for label, widget in (("Field", self.field), ("Step", self.step)):
             row.addWidget(QLabel(label))
             row.addWidget(widget)
         row.addWidget(self.deform)
         row.addStretch()
+        row.addWidget(self.title)
         self.field.currentTextChanged.connect(lambda _: on_change())
         self.step.valueChanged.connect(lambda _: on_change())
         self.deform.toggled.connect(lambda _: on_change())
@@ -147,7 +150,9 @@ class MainWindow(QMainWindow):
 
         centre = QWidget()
         column = QVBoxLayout(centre)
-        column.setContentsMargins(0, 0, 0, 0)
+        # A few pixels clear of the dock separators: on macOS the separator handles
+        # overlap the view's native OpenGL surface and smear marks along its edge.
+        column.setContentsMargins(0, 0, 0, 6)
         column.addWidget(self.results_bar)
         column.addWidget(self.pick_bar)
         column.addWidget(self.viewport, 1)
@@ -439,6 +444,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(str(exc), 8000)
             return
         shown = self.viewport.shown
+        self.results_bar.title.setText(shown.get("title", ""))
         self.statusBar().showMessage(
             f"{shown['scalar']} ({shown['step']}): {shown['min']:.4g} … {shown['max']:.4g}"
         )

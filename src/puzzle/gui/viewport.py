@@ -84,6 +84,10 @@ class Viewport(QWidget):
 
             self.plotter = QtInteractor(self)
             self.plotter.set_background("white", top="#dfe6ee")
+            # Once only (every add_axes makes another widget), and lifted off the bottom
+            # edge: on macOS Retina displays a widget viewport touching the edge leaves
+            # stray marks along the bottom rows of the view.
+            self.plotter.add_axes(viewport=(0.0, 0.04, 0.16, 0.24))
             layout.addWidget(self.plotter.interactor)
         else:
             self.placeholder = QLabel("3D view unavailable here (no OpenGL)")
@@ -224,6 +228,9 @@ class Viewport(QWidget):
             "min": float(np.nanmin(values)),
             "max": float(np.nanmax(values)),
             "scale": scale,
+            # Shown by the window's results bar: VTK's 2D text leaves a clipped copy along
+            # the view's bottom edge on Retina displays.
+            "title": f"{name}, {label}" + (f", deformation ×{scale:.3g}" if scale else ""),
         }
         if self.plotter is not None:
             self.plotter.clear()
@@ -244,8 +251,6 @@ class Viewport(QWidget):
                     "label_font_size": 12,
                 },
             )
-            title = f"{name}, {label}" + (f", deformation ×{scale:.3g}" if scale else "")
-            self.plotter.add_text(title, font_size=9, color="black")
             self._frame()
         return self.shown
 
@@ -278,7 +283,6 @@ class Viewport(QWidget):
             self.plotter.close()
 
     def _frame(self) -> None:
-        self.plotter.add_axes()
         if not getattr(self, "_framed", False):
             self.plotter.view_isometric()
             self._framed = True
