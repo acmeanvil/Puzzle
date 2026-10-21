@@ -161,12 +161,15 @@ class SceneView(QWidget):
         """Trackpad pinch zooms (macOS sends it as a native gesture, not a wheel)."""
         from PySide6.QtCore import QEvent
 
-        if event.type() == QEvent.Type.NativeGesture:
-            if event.gestureType() == Qt.NativeGestureType.ZoomNativeGesture:
-                self.plotter.camera.Dolly(1.0 + event.value())
-                self.plotter.renderer.ResetCameraClippingRange()
-                self.refresh()
-                return True
+        pinch = (
+            event.type() == QEvent.Type.NativeGesture
+            and event.gestureType() == Qt.NativeGestureType.ZoomNativeGesture
+        )
+        if pinch:
+            self.plotter.camera.Dolly(1.0 + event.value())
+            self.plotter.renderer.ResetCameraClippingRange()
+            self.refresh()
+            return True
         return super().event(event)
 
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
