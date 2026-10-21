@@ -157,23 +157,21 @@ class MainWindow(QMainWindow):
         column.addWidget(self.pick_bar)
         column.addWidget(self.viewport, 1)
         self.setCentralWidget(centre)
-        self._dock("Model", self.tree, Qt.DockWidgetArea.LeftDockWidgetArea)
-        self._dock("Properties", self.properties, Qt.DockWidgetArea.RightDockWidgetArea)
+        left, right = Qt.DockWidgetArea.LeftDockWidgetArea, Qt.DockWidgetArea.RightDockWidgetArea
+        # Left: the model tree with the properties of what is selected beneath it.
+        # Right: the agent, full height. Bottom: messages.
+        self.model_dock = self._dock("Model", self.tree, left)
+        self.properties_dock = self._dock("Properties", self.properties, left)
+        self.splitDockWidget(self.model_dock, self.properties_dock, Qt.Orientation.Vertical)
         tabs = QTabWidget()
         tabs.addTab(self.log, "Output")
         tabs.addTab(self.history, "History")
         tabs.addTab(self.problems, "Problems")
         self.output_tabs = tabs
-        self._dock("Messages", tabs, Qt.DockWidgetArea.BottomDockWidgetArea)
+        self.messages_dock = self._dock("Messages", tabs, Qt.DockWidgetArea.BottomDockWidgetArea)
         self.agent = AgentPanel(self, provider_factory)
-        self.agent_dock = self._dock("Agent", self.agent, Qt.DockWidgetArea.RightDockWidgetArea)
-        self.messages_dock = self.findChild(QDockWidget, "Messages")
-        self.properties_dock = self.findChild(QDockWidget, "Properties")
-        # The view and the chat get the room; messages and properties stay compact.
-        vertical, horizontal = Qt.Orientation.Vertical, Qt.Orientation.Horizontal
-        self.resizeDocks([self.messages_dock], [170], vertical)
-        self.resizeDocks([self.properties_dock, self.agent_dock], [260, 560], vertical)
-        self.resizeDocks([self.agent_dock], [440], horizontal)
+        self.agent_dock = self._dock("Agent", self.agent, right)
+        self._sized = False  # dock sizes are applied once the window is on screen
 
         self._actions()
         self.tree.currentItemChanged.connect(lambda *_: self._selected())
@@ -694,6 +692,19 @@ class MainWindow(QMainWindow):
         # Some editors replace the file; keep watching the new one.
         if self.session is not None and not self.watcher.files():
             self.watcher.addPath(str(self.session.root / HISTORY))
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        super().showEvent(event)
+        if not self._sized:  # Qt ignores dock sizes set before the first show
+            self._sized = True
+            QTimer.singleShot(0, self._size_docks)
+
+    def _size_docks(self) -> None:
+        vertical, horizontal = Qt.Orientation.Vertical, Qt.Orientation.Horizontal
+        self.resizeDocks([self.messages_dock], [170], vertical)
+        self.resizeDocks([self.model_dock, self.properties_dock], [380, 320], vertical)
+        self.resizeDocks([self.model_dock], [360], horizontal)  # one area per call
+        self.resizeDocks([self.agent_dock], [420], horizontal)
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt's name
         self.viewport.close_plotter()

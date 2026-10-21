@@ -13,7 +13,7 @@ import json
 from typing import Any
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QTreeWidget, QTreeWidgetItem
+from PySide6.QtWidgets import QHeaderView, QTreeWidget, QTreeWidgetItem
 
 PATH = Qt.ItemDataRole.UserRole
 READ_ONLY = {"id", "kind"}
@@ -58,7 +58,9 @@ class PropertiesPanel(QTreeWidget):
         super().__init__(parent)
         self.setColumnCount(2)
         self.setHeaderLabels(["Property", "Value"])
-        self.setColumnWidth(0, 180)
+        # Names as wide as they need, values the rest: the panel shares a narrow column.
+        self.header().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.header().setStretchLastSection(True)
         self.object_id = ""
         self._filling = False
         self.itemChanged.connect(self._changed)
