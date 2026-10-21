@@ -64,6 +64,123 @@ def selection_surface(mesh: Mesh, group: str):
     return pv.PolyData(mesh.coords, np.concatenate(faces))
 
 
+class SceneView(QWidget):
+    """A VTK scene rendered off screen and painted as an image, with its own mouse
+    handling: left-drag rotates, shift- or middle-drag pans, right-drag or the wheel
+    zooms, and a double-click reports the picked point to `on_double_click`.
+
+    On-screen OpenGL inside Qt windows leaves unrefreshed rows along the bottom of the
+    view on some Macs (Intel Iris here, with every embedding tried: native window,
+    QOpenGLWidget); VTK's off-screen renders are always clean, and ~10 ms a frame.
+    """
+
+    def __init__(self, parent=None) -> None:
+        import pyvista as pv
+
+        super().__init__(parent)
+        self.setMinimumSize(200, 150)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.plotter = pv.Plotter(off_screen=True, window_size=[400, 300])
+        self.plotter.show(auto_close=False)  # sets up the render window once
+        self.on_double_click = None
+        self._image = None
+        self._last = None
+        self._pending = False
+
+    # rendering ---------------------------------------------------------------------------
+
+    def refresh(self) -> None:
+        """Render soon (once per event-loop pass, however many changes)."""
+        if not self._pending:
+            self._pending = True
+            QTimer.singleShot(0, self._draw)
+
+    def _draw(self) -> None:
+        from PySide6.QtGui import QImage
+
+        self._pending = False
+        dpr = self.devicePixelRatioF()
+        size = [max(1, round(self.width() * dpr)), max(1, round(self.height() * dpr))]
+        if list(self.plotter.window_size) != size:
+            self.plotter.window_size = size
+        pixels = np.ascontiguousarray(self.plotter.screenshot(return_img=True))
+        h, w, _ = pixels.shape
+        image = QImage(pixels.data, w, h, 3 * w, QImage.Format.Format_RGB888).copy()
+        image.setDevicePixelRatio(dpr)
+        self._image = image
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        from PySide6.QtGui import QPainter
+
+        if self._image is not None:
+            QPainter(self).drawImage(0, 0, self._image)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        super().resizeEvent(event)
+        self.refresh()
+
+    # mouse -------------------------------------------------------------------------------
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        self._last = event.position()
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        self._last = None
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if self._last is None:
+            return
+        pos = event.position()
+        dx, dy = pos.x() - self._last.x(), pos.y() - self._last.y()
+        self._last = pos
+        buttons, mods = event.buttons(), event.modifiers()
+        camera = self.plotter.camera
+        pan = buttons & Qt.MouseButton.MiddleButton or (
+            buttons & Qt.MouseButton.LeftButton and mods & Qt.KeyboardModifier.ShiftModifier
+        )
+        if pan:
+            self._pan(dx, dy)
+        elif buttons & Qt.MouseButton.LeftButton:
+            camera.Azimuth(-dx * 0.5)
+            camera.Elevation(dy * 0.5)
+            camera.OrthogonalizeViewUp()
+        elif buttons & Qt.MouseButton.RightButton:
+            camera.Dolly(1.01 ** (-dy))
+        self.plotter.renderer.ResetCameraClippingRange()
+        self.refresh()
+
+    def wheelEvent(self, event) -> None:  # noqa: N802
+        self.plotter.camera.Dolly(1.1 ** (event.angleDelta().y() / 120))
+        self.plotter.renderer.ResetCameraClippingRange()
+        self.refresh()
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
+        if self.on_double_click is None:
+            return
+        import vtk
+
+        dpr = self.devicePixelRatioF()
+        x = event.position().x() * dpr
+        y = (self.height() - event.position().y()) * dpr  # VTK counts from the bottom
+        picker = vtk.vtkCellPicker()
+        picker.SetTolerance(0.0005)
+        if picker.Pick(x, y, 0, self.plotter.renderer) and picker.GetCellId() >= 0:
+            self.on_double_click(picker.GetPickPosition())
+
+    def _pan(self, dx: float, dy: float) -> None:
+        """Move the camera and its focal point in the view plane, by pixels."""
+        camera = self.plotter.camera
+        position, focal = np.array(camera.position), np.array(camera.focal_point)
+        distance = np.linalg.norm(position - focal)
+        scale = 2 * distance * np.tan(np.radians(camera.view_angle) / 2) / max(self.height(), 1)
+        forward = (focal - position) / distance
+        up = np.array(camera.up)
+        right = np.cross(forward, up)
+        shift = (-dx * right + dy * up) * scale
+        camera.position, camera.focal_point = tuple(position + shift), tuple(focal + shift)
+
+
 class Viewport(QWidget):
     picked_changed = Signal(list)  # the picked entities, [(dim, tag), ...]
 
@@ -80,15 +197,11 @@ class Viewport(QWidget):
         self.shown: dict = {}  # what is on screen: kind, scalar, range, highlight
         self.plotter = None
         if rendering_available():
-            from pyvistaqt import QtInteractor
-
-            self.plotter = QtInteractor(self)
+            self.view = SceneView(self)
+            self.plotter = self.view.plotter
             self.plotter.set_background("white", top="#dfe6ee")
-            # Once only (every add_axes makes another widget), and lifted off the bottom
-            # edge: on macOS Retina displays a widget viewport touching the edge leaves
-            # stray marks along the bottom rows of the view.
-            self.plotter.add_axes(viewport=(0.0, 0.04, 0.16, 0.24))
-            layout.addWidget(self.plotter.interactor)
+            self.plotter.add_axes()  # once: every add_axes makes another marker
+            layout.addWidget(self.view)
         else:
             self.placeholder = QLabel("3D view unavailable here (no OpenGL)")
             self.placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -143,7 +256,7 @@ class Viewport(QWidget):
             if index and self.surface is not None:
                 mask = np.isin(self.surface.cell_data["entity"], index)
                 self._overlay(self.surface.extract_cells(mask), colour)
-        self._frame()
+        self._frame(mesh)
 
     def _overlay(self, surface, colour: str) -> None:
         """Faces drawn over the mesh's own: pulled towards the camera in depth, or the
@@ -160,10 +273,7 @@ class Viewport(QWidget):
         self.picking = on
         if self.plotter is None:
             return
-        if on:
-            self.plotter.track_click_position(self._clicked, side="left", double=True)
-        else:
-            self.plotter.untrack_click_position(side="left")
+        self.view.on_double_click = self._clicked if on else None
 
     def toggle_pick(self, entity: tuple[int, int]) -> None:
         if entity in self.picked:
@@ -251,28 +361,19 @@ class Viewport(QWidget):
                     "label_font_size": 12,
                 },
             )
-            self._frame()
+            self._frame(mesh)
         return self.shown
-
-    # The OpenGL view is not redrawn when Qt resizes it (docks settling after the window
-    # opens, the user dragging a splitter), which leaves stale pixels on macOS: redraw.
-    def showEvent(self, event) -> None:  # noqa: N802 - Qt's name
-        super().showEvent(event)
-        QTimer.singleShot(0, self._render)
-
-    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt's name
-        super().resizeEvent(event)
-        QTimer.singleShot(0, self._render)
 
     def _render(self) -> None:
         if self.plotter is not None:
-            self.plotter.render()
+            self.view.refresh()
 
     def clear(self) -> None:
         self.shown = {}
         self.mesh, self.surface, self.entities, self.picked = None, None, [], []
         if self.plotter is not None:
             self.plotter.clear()
+            self._render()
 
     def screenshot(self, path) -> None:
         if self.plotter is not None:
@@ -282,8 +383,12 @@ class Viewport(QWidget):
         if self.plotter is not None:
             self.plotter.close()
 
-    def _frame(self) -> None:
-        if not getattr(self, "_framed", False):
-            self.plotter.view_isometric()
-            self._framed = True
-        self.plotter.reset_camera()
+    def _frame(self, mesh) -> None:
+        """Fit the camera to a newly shown mesh; keep the user's view on redraws of the
+        same one (picks, highlights, another field)."""
+        if getattr(self, "_framed", None) is not mesh:
+            if getattr(self, "_framed", None) is None:
+                self.plotter.view_isometric()
+            self.plotter.reset_camera()
+            self._framed = mesh
+        self._render()

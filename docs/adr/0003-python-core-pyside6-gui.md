@@ -10,7 +10,7 @@ Most libraries Puzzle needs have first-class Python bindings: OCP and build123d 
 ## Decision
 
 - Core in Python (3.11+), typed, with Pydantic models for the project schema.
-- Desktop GUI in PySide6 (Qt for Python, LGPL) with a VTK viewport through pyvistaqt.
+- Desktop GUI in PySide6 (Qt for Python, LGPL) with a VTK viewport. (First through pyvistaqt; since 2026-10-21 VTK renders off screen and the image is painted in a Qt widget with Puzzle's own mouse handling, because on-screen OpenGL in Qt left unrefreshed rows on an Intel-graphics Mac.)
 - Performance-critical paths (result mapping between meshes, large array transforms) may move to Rust (PyO3) or C++ once profiled.
 - A web front end, if needed later, uses trame and reuses the same core.
 

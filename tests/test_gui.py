@@ -13,7 +13,6 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
-pytest.importorskip("pyvistaqt")
 
 from PySide6.QtWidgets import QApplication  # noqa: E402
 from solvers import available  # noqa: E402
