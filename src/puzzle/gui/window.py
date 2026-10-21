@@ -172,6 +172,12 @@ class MainWindow(QMainWindow):
         self.agent = AgentPanel(self, provider_factory)
         self.agent_dock = self._dock("Agent", self.agent, right)
         self._sized = False  # dock sizes are applied once the window is on screen
+        # Wide, visible separators: Qt's default ones on macOS are a hairline that is
+        # hard to find and grab.
+        self.setStyleSheet(
+            "QMainWindow::separator { background: #3c3f44; width: 6px; height: 6px; }"
+            "QMainWindow::separator:hover { background: #4f8fe6; }"
+        )
 
         self._actions()
         self.tree.currentItemChanged.connect(lambda *_: self._selected())
