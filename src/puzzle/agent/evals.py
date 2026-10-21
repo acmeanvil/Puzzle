@@ -160,6 +160,146 @@ TASKS = [
 ]
 
 
+# --- harder tasks ---------------------------------------------------------------------
+
+
+def _runs(root: Path, study: str):
+    store = ResultStore(root / RESULTS_DIR)
+    return store, [r for r in store.runs() if r.study_name == study]
+
+
+def _peak(store: ResultStore, run) -> float:
+    import numpy as np
+
+    u = store.read_results(run.run_id).last("displacement").values
+    return float(np.linalg.norm(u, axis=1).max())
+
+
+def _mentions(answer: str, value: float, rel: float, scales=(1, 1e-3, 1e-6)) -> bool:
+    return any(abs(x * k - value) <= rel * abs(value) for x in _numbers(answer) for k in scales)
+
+
+def _solid(comp: Component):
+    return next(p for p in comp.physics if p.type == "solid_mechanics")
+
+
+def check_new_load_case(root: Path, answer: str) -> tuple[bool, str]:
+    project = _project(root)
+    studies = {s.name: s for s in project.of_type(Study)}
+    if "Heavy tip" not in studies:
+        return False, f"no 'Heavy tip' study (studies: {sorted(studies)})"
+    heavy = project.objects[studies["Heavy tip"].component]
+    original = project.objects[studies["Tip load"].component]
+
+    def tip_y(comp):
+        forces = [
+            f for f in _solid(comp).features if f.type == "force" and f.selection == "Bar/Tip"
+        ]
+        return forces[0].values["y"].to_si() if forces and "y" in forces[0].values else None
+
+    held = any(f.type == "fixed" and f.selection == "Bar/Root" for f in _solid(heavy).features)
+    ok = (
+        tip_y(heavy) == -1000
+        and tip_y(original) == -100
+        and held
+        and studies["Heavy tip"].solver == "calculix"
+        and not project.problems()
+    )
+    return ok, f"Heavy tip y {tip_y(heavy)} N, Tip load y {tip_y(original)} N, fixed root {held}"
+
+
+def remove_support(s: Session) -> None:
+    """Run refuses the study now (problem `unconstrained`); the agent must see why."""
+    s.submit(Edit(object="Cantilever", ops=[EditOp(op="remove", path="physics.0.features.0")]))
+
+
+def check_diagnosed(root: Path, answer: str) -> tuple[bool, str]:
+    comp = _component(root)
+    held = [f.selection for f in _solid(comp).features if f.type in ("fixed", "displacement")]
+    store, runs = _runs(root, "Tip load")
+    peak = _peak(store, runs[-1]) if runs else None
+    ok = held == ["Bar/Root"] and peak is not None and peak < 0.01
+    return ok, f"supports on {held}, {len(runs)} runs, latest peak {peak} m"
+
+
+def check_pressure(root: Path, answer: str) -> tuple[bool, str]:
+    tip = [f for f in _solid(_component(root)).features if f.selection == "Bar/Tip"]
+    kinds = [f.type for f in tip]
+    values = [abs(q.to_si()) for f in tip if f.type == "pressure" for q in f.values.values()]
+    ok = kinds == ["pressure"] and any(abs(v - 2e6) < 1 for v in values)
+    return ok, f"on Bar/Tip: {kinds}, pressure values {values} Pa"
+
+
+def check_swapped(root: Path, answer: str) -> tuple[bool, str]:
+    heat = next(p for p in _component(root).physics if p.type == "heat_transfer")
+    t = {f.selection: f.values["T"].to_si() for f in heat.features if f.type == "temperature"}
+    ok = abs(t.get("Bar/Root", 0) - 293.15) < 1e-6 and abs(t.get("Bar/Tip", 0) - 373.15) < 1e-6
+    return ok, f"temperatures {t} K"
+
+
+def check_first_mode(root: Path, answer: str) -> tuple[bool, str]:
+    store, runs = _runs(root, "Modes")
+    if not runs:
+        return False, "Modes was not run"
+    modes = store.read_results(runs[-1].run_id).modes()
+    first = min(m.value for m in modes)
+    ok = _mentions(answer, first, 0.01, scales=(1, 1e3))  # Hz or kHz
+    return ok, f"solver first mode {first:.4g} Hz; answer numbers {_numbers(answer)[:6]}"
+
+
+def check_convergence(root: Path, answer: str) -> tuple[bool, str]:
+    store, runs = _runs(root, "Tip load")
+    meshes = {}
+    for r in runs:
+        meshes.setdefault(r.mesh_id, r)
+    if len(meshes) < 2:
+        return False, f"{len(runs)} Tip load runs on {len(meshes)} mesh(es); two meshes needed"
+    peaks = [_peak(store, r) for r in meshes.values()]
+    ok = all(_mentions(answer, p, 0.02) for p in peaks)
+    return ok, f"peaks {[f'{p:.5g}' for p in peaks]} m; answer numbers {_numbers(answer)[:8]}"
+
+
+HARD_TASKS = [
+    Task(
+        "new load case",
+        "Add a second load case named 'Heavy tip': the same bar with a 1 kN downward "
+        "(negative y) force on the tip, solved statically with CalculiX. Keep the existing "
+        "Tip load study and its load exactly as they are.",
+        check_new_load_case,
+    ),
+    Task(
+        "diagnose",
+        "Tip load will not run. Find out why, fix the model, and run it.",
+        check_diagnosed,
+        setup=remove_support,
+        needs="calculix",
+    ),
+    Task(
+        "pressure",
+        "Replace the tip force with a pressure of 2 MPa on the tip face.",
+        check_pressure,
+    ),
+    Task(
+        "swap temperatures",
+        "Swap the boundary temperatures: the root should be at 20 °C and the tip at 100 °C.",
+        check_swapped,
+    ),
+    Task(
+        "first mode",
+        "Run the Modes study and tell me the first natural frequency.",
+        check_first_mode,
+        needs="calculix",
+    ),
+    Task(
+        "convergence",
+        "Check mesh convergence for Tip load: run it with the current mesh and with a mesh "
+        "half the size, then tell me both peak displacements and whether they agree within 1%.",
+        check_convergence,
+        needs="calculix",
+    ),
+]
+
+
 def run_task(task: Task, provider: Provider, workdir: Path) -> Outcome:
     root = workdir / task.name.replace(" ", "-")
     shutil.rmtree(root, ignore_errors=True)

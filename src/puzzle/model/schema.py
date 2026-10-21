@@ -578,6 +578,35 @@ class Project:
         """Return human-readable problems; an empty list means the project is consistent."""
         return [p.message for p in self.problems()]
 
+    def _unconstrained(self, study: Study) -> list:
+        """A static or transient structural solve with nothing holding the body: the
+        stiffness is singular, and CalculiX still returns a "result" (kilometres of
+        rigid-body drift). Free modal analysis is fine, so modal steps are not flagged."""
+        from puzzle.errors import Problem
+
+        comp = self.objects.get(study.component)
+        if not isinstance(comp, Component):
+            return []
+        solid = [p for p in comp.physics if p.type == "solid_mechanics"]
+        held = any(f.type in ("fixed", "displacement") for p in solid for f in p.features)
+        steps = [
+            s
+            for s in study.solve_steps()
+            if s.type in ("stationary", "transient")
+            and (not s.physics or "solid_mechanics" in s.physics)
+        ]
+        if not solid or held or not steps:
+            return []
+        return [
+            Problem(
+                "unconstrained",
+                study.name,
+                f"study '{study.name}' solves solid mechanics on '{comp.name}', which has no "
+                "fixed or displacement condition: the body is free to move as a rigid body",
+                {"component": comp.name},
+            )
+        ]
+
     def problems(self) -> list[Problem]:
         """Consistency problems, each with a code (see puzzle.errors.Problem)."""
         from puzzle.errors import Problem
@@ -621,6 +650,7 @@ class Project:
 
         known = self.parameter_names()
         for study in self.of_type(Study):
+            out += self._unconstrained(study)
             seen_solve = False
             for step in study.steps:
                 if isinstance(step, SolveStep):

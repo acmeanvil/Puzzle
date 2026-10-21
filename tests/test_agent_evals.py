@@ -144,3 +144,51 @@ def test_the_run_task_checks_the_number_against_the_solver(tmp_path):
     assert outcome.passed, outcome.detail
     wrong = [*script[:2], Reply(text="About 3 mm.")]
     assert not run_task(task, ScriptedProvider(wrong), tmp_path / "w").passed
+
+
+def test_hard_checks_tell_right_from_wrong(tmp_path):
+    from puzzle.agent.evals import HARD_TASKS
+
+    tasks = {t.name: t for t in HARD_TASKS}
+    pressure = {
+        "command": "edit",
+        "object": "Cantilever",
+        "ops": [
+            {
+                "op": "set",
+                "path": "physics.0.features.1",
+                "value": {
+                    "type": "pressure",
+                    "selection": "Bar/Tip",
+                    "values": {"p": {"value": 2, "unit": "MPa"}},
+                },
+            }
+        ],
+    }
+    swap = {
+        "command": "edit",
+        "object": "Cantilever",
+        "ops": [
+            {
+                "op": "set",
+                "path": "physics.1.features.0.values.T",
+                "value": {"value": 20, "unit": "degC"},
+            },
+            {
+                "op": "set",
+                "path": "physics.1.features.1.values.T",
+                "value": {"value": 100, "unit": "degC"},
+            },
+        ],
+    }
+    for name, command in (("pressure", pressure), ("swap temperatures", swap)):
+        right = [
+            Reply(tool_calls=[ToolCall("1", "submit", {"command": command})]),
+            Reply(text="Done."),
+        ]
+        outcome = run_task(tasks[name], ScriptedProvider(right), tmp_path / name)
+        assert outcome.passed, outcome.detail
+        idle = run_task(
+            tasks[name], ScriptedProvider([Reply(text="Done.")]), tmp_path / f"{name}-0"
+        )
+        assert not idle.passed, idle.detail

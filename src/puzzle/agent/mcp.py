@@ -30,11 +30,13 @@ You are working in a Puzzle FEM/CFD project with its user. Start with `outline`:
 it lists every object by name, with its selections, loads and studies. Refer to
 objects by name. Values are quantities: {"value": 5, "unit": "kN"}.
 
-Change the model with `submit` (one command) or `propose` (several, for review);
-`schema("commands")` describes them, `schema(<kind>)` an object, and `preview` shows
-what commands would change without changing anything. The project's autonomy level
-decides what happens: "advise" refuses changes, "propose" records them for the user
-to accept, "act_in_budget" and "act" apply them. Check `problems` in every answer.
+Make the changes the user asks for with `submit`: one command, or a list of model
+edits that belong together (applied all or none). The project's autonomy level then
+decides what happens: "advise" refuses changes, "propose" records them for the user to
+accept, "act_in_budget" and "act" apply them. Use `propose` only when you want the
+user to review something they did not ask for. `schema("commands")` describes the
+commands, `schema(<kind>)` an object, and `preview` shows what commands would change
+without changing anything. Check `problems` in every answer.
 
 Read results with `result_summary` first, then `result_stats`, `result_value_at`,
 `result_integral` or `result_total` (reaction forces), and `render` to look.
@@ -153,14 +155,23 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
     # --- changes ----------------------------------------------------------------------
 
     @tool(
-        description="Submit one command (see schema('commands')). Depending on the "
-        "autonomy level it is refused, proposed or applied."
+        description="Make a change: one command, or a list of model edits applied together "
+        "(all or none, undone as one). See schema('commands'). The autonomy level decides "
+        "whether it is refused, proposed or applied."
     )
     @guarded
-    def submit(command: dict[str, Any], rationale: str = "") -> dict[str, Any]:
-        return session().submit(command, actor, rationale=rationale).to_dict()
+    def submit(
+        command: dict[str, Any] | list[dict[str, Any]], rationale: str = ""
+    ) -> dict[str, Any]:
+        s = session()
+        if isinstance(command, list):
+            return s.submit_batch(command, actor, rationale=rationale).to_dict()
+        return s.submit(command, actor, rationale=rationale).to_dict()
 
-    @tool(description="Propose several commands as one change set for the user to review.")
+    @tool(
+        description="Ask the user to review commands before they apply, whatever the level. "
+        "Use only when you want their review; changes they asked for go through submit."
+    )
     @guarded
     def propose(commands: list[dict[str, Any]], rationale: str) -> dict[str, Any]:
         return session().propose(commands, actor, rationale=rationale).to_dict()

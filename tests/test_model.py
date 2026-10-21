@@ -7,6 +7,7 @@ from puzzle.model import (
     ComparisonMetric,
     Component,
     Contact,
+    Feature,
     Geometry,
     NamedSelection,
     Quantity,
@@ -181,3 +182,13 @@ def test_shootout_solvers_must_differ_from_the_primary(bracket):
         metrics=[ComparisonMetric(quantity="displacement", norm="relative_l2", tolerance=0.02)],
     )
     assert bracket.validate() == ["study 'Static': shoot-out solvers must differ"]
+
+
+def test_an_unsupported_body_is_reported_for_static_but_not_modal_studies(bracket):
+    solid = _component(bracket, "Bracket").physics[1]
+    solid.features.clear()  # nothing holds the bracket now
+    flagged = {p.object for p in bracket.problems() if p.code == "unconstrained"}
+    assert "Static" in flagged  # static: the stiffness is singular
+    assert "Modal" not in flagged  # free vibration is a legitimate analysis
+    solid.features.append(Feature(type="displacement", selection="Bracket/Bolt holes"))
+    assert not [p for p in bracket.problems() if p.code == "unconstrained"]

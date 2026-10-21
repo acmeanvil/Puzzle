@@ -100,3 +100,21 @@ def test_stdio_round_trip(root):
     assert not proposed.is_error
     (entry,) = Session(root).history(limit=1)
     assert entry["type"] == "proposal" and entry["actor"]["name"] == "stdio-test"
+
+
+def test_submit_takes_a_list_of_edits(root):
+    Session(root).submit({"command": "set_autonomy", "level": "act_in_budget"})
+    server = build_server(root, "test")
+    batch = [
+        {"command": "copy_component", "component": "Cantilever", "name": "Heavy"},
+        {
+            "command": "edit",
+            "object": "Heavy",
+            "ops": [{"op": "set", "path": "physics.0.features.1.values.y.value", "value": -1000}],
+        },
+    ]
+    out = _call(server, "submit", command=batch, rationale="heavy load case")
+    assert out["status"] == "applied"
+    (entry,) = Session(root).history(limit=1)
+    assert entry["command"]["command"] == "batch"
+    assert entry["actor"] == {"kind": "agent", "name": "test"}

@@ -117,14 +117,16 @@ class Viewport(QWidget):
                 scalars=name,
                 cmap="turbo",
                 scalar_bar_args={
-                    "title": name,
+                    "title": name.replace("_", " "),
                     "vertical": True,
-                    "position_x": 0.86,
+                    "position_x": 0.8,
                     "position_y": 0.1,
                     "width": 0.06,
                     "height": 0.8,
                     "fmt": "%.3g",
                     "color": "black",
+                    "title_font_size": 14,
+                    "label_font_size": 12,
                 },
             )
             title = f"{name}, {label}" + (f", deformation ×{scale:.3g}" if scale else "")

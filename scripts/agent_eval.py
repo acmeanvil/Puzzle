@@ -15,7 +15,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from puzzle.agent.evals import run_suite, table
+from puzzle.agent.evals import HARD_TASKS, TASKS, run_suite, table
 from puzzle.agent.settings import AgentSettings
 
 
@@ -25,6 +25,9 @@ def main() -> int:
     parser.add_argument("--model", action="append", required=True)
     parser.add_argument("--base-url", default="http://localhost:11434/v1")
     parser.add_argument("--workdir", type=Path)
+    parser.add_argument(
+        "--tasks", default="all", choices=["basic", "hard", "all"], help="which task set"
+    )
     args = parser.parse_args()
 
     sys.path.insert(0, str(Path(__file__).parents[1] / "tests"))
@@ -37,8 +40,9 @@ def main() -> int:
         provider = AgentSettings(
             provider=args.provider, model=model, base_url=args.base_url
         ).build()
+        tasks = {"basic": TASKS, "hard": HARD_TASKS, "all": TASKS + HARD_TASKS}[args.tasks]
         rows[model] = outcomes = run_suite(
-            provider, workdir / model.replace(":", "-"), solvers=solvers
+            provider, workdir / model.replace(":", "-"), tasks, solvers=solvers
         )
         for o in outcomes:
             print(f"{model} / {o.task}: {'pass' if o.passed else 'FAIL'} ({o.detail})", flush=True)

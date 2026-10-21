@@ -84,15 +84,17 @@ At every level the agent's changes are attributed in the log and can be undone.
 - Rendered images go only to local providers unless `send_images = true`.
 - The GUI's agent panel shows the conversation and its tool calls, lists open proposals to accept or reject, and sets the autonomy level ("act" asks twice). `puzzle ask PROJECT "question"` is the same agent in a terminal.
 - Evaluation suite (`puzzle.agent.evals`, `scripts/agent_eval.py`): seven tasks on fresh copies of the cantilever example, each checked in the project or against solver output: describe the studies, change a load, refine the mesh, add a library material, find and fix a misspelt selection, respect the advise level, run a study and report its peak displacement (2%). Its own tests show a scripted correct agent passes and a do-nothing agent fails.
-- First measurements (2026-10-20, `scripts/agent_eval.py`, CalculiX native):
+- Measurements (2026-10-20, `scripts/agent_eval.py --tasks all`, CalculiX native). Thirteen tasks: the seven above plus a new load case (copy a component, change its load, add a study, keep the original), diagnosing a study that will not run (the new `unconstrained` problem: no support), replacing a force with a 2 MPa pressure, swapping boundary temperatures, reporting the first natural frequency (solver: 209.0 Hz), and a two-mesh convergence check.
 
   | Model | Passed | Tool calls | Tokens in/out | Time (s) |
   | --- | --- | --- | --- | --- |
-  | claude-sonnet-5-5 | 7/7 | 38 | 70,672/3,330 | 51 |
-  | claude-haiku-5-5 | 7/7 | 33 | 64,202/4,424 | 43 |
+  | claude-sonnet-5-5 | 13/13 | 84 | 232,616/8,990 | 256 |
+  | claude-haiku-5-5 | 13/13 | 87 | 224,551/13,266 | 261 |
 
-  The lightest Claude model already does every task, so the suite needs harder tasks to separate models (setup from a description, diagnosing a failed run, bulk selection repair, a convergence study), and local models are the next to measure.
-- Still to do: harder tasks, local models, per-change acceptance in the GUI, streaming replies.
+  Before `submit` took a list, Haiku failed the new load case: it put the three related commands in `propose` (the only multi-command tool then), so they waited for review at "act_in_budget". A tool-design gap, not a modelling one; `submit` now applies a list of edits all or none (one history entry, one undo), and the instructions say to propose only what the user did not ask for.
+
+  Also found by the suite: a static solve with no support ran in CalculiX and returned ~9,000 km of displacement. Such studies now report the problem `unconstrained` and are refused before running (free modal analysis is still allowed).
+- Still to do: local models, tasks that separate Haiku from smaller models, per-change acceptance in the GUI, streaming replies.
 
 ## Consequences
 

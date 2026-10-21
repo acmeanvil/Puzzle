@@ -134,6 +134,42 @@ class Session:
             )
         return Outcome("applied", seq=seq, data=data, problems=self.project.problems(), run=run)
 
+    def submit_batch(
+        self, commands: list[dict[str, Any] | _Command], actor: Actor = USER, *, rationale: str = ""
+    ) -> Outcome:
+        """Apply model edits together: all or none, one history entry, one undo.
+
+        Each command runs on a copy of the project first, so a failure part-way leaves
+        the project as it was. Runs and autonomy changes are not model edits; submit
+        them on their own. At "propose" the batch becomes one proposal.
+        """
+        cmds = [parse_command(c) for c in commands]
+        if not cmds:
+            raise PuzzleError("an empty batch", code="invalid")
+        odd = [c.command for c in cmds if not c.edits_model]
+        if odd:
+            raise PuzzleError(
+                f"{', '.join(sorted(set(odd)))} cannot go in a batch; submit it on its own",
+                code="invalid",
+            )
+        with self._locked():
+            decisions = {self._authorize(c, actor) for c in cmds}
+            if "propose" in decisions:
+                return self._propose(cmds, actor, rationale)
+            before = _snapshot(self.project)
+            trial = copy.deepcopy(self.project)
+            results = []
+            for i, cmd in enumerate(cmds):
+                try:
+                    results.append(_execute(trial, cmd))
+                except PuzzleError as exc:
+                    exc.details = {**exc.details, "failed_command": i, "applied": "none"}
+                    raise
+            self.project = trial
+            dumped = {"command": "batch", "commands": [_dump(c) for c in cmds]}
+            extra = {"rationale": rationale} if rationale else {}
+            return self._record(dumped, actor, before, extra=extra, data={"steps": results})
+
     def propose(
         self, commands: list[dict[str, Any] | _Command], actor: Actor, *, rationale: str = ""
     ) -> Outcome:

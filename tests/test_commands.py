@@ -191,3 +191,48 @@ def test_outline_and_schema(root):
     schema = command_schema()
     tags = {k for k in schema["discriminator"]["mapping"]}
     assert {"create", "edit", "delete", "run_study", "set_autonomy"} <= tags
+
+
+def test_a_batch_applies_together_and_undoes_as_one(root):
+    s = Session(root)
+    copy_and_load = [
+        {"command": "copy_component", "component": "Cantilever", "name": "Heavy"},
+        {
+            "command": "edit",
+            "object": "Heavy",
+            "ops": [{"op": "set", "path": FORCE, "value": -1000}],
+        },
+    ]
+    out = s.submit_batch(copy_and_load, rationale="a heavier load case")
+    assert out.status == "applied"
+    (entry,) = s.history(limit=1)
+    assert entry["command"]["command"] == "batch" and entry["rationale"] == "a heavier load case"
+    comps = {c.name: c for c in Session(root).project.of_type(Component)}
+    assert comps["Heavy"].physics[0].features[1].values["y"].value == -1000
+    assert _load(s) == -100  # the original is untouched
+
+    s.undo()  # one undo takes back the whole batch
+    assert {c.name for c in Session(root).project.of_type(Component)} == {"Cantilever"}
+
+
+def test_a_failing_batch_changes_nothing(root):
+    s = Session(root)
+    batch = [
+        _edit(-300),
+        {"command": "edit", "object": "Nope", "ops": [{"op": "set", "path": "x", "value": 1}]},
+    ]
+    with pytest.raises(PuzzleError) as err:
+        s.submit_batch(batch)
+    assert err.value.details["failed_command"] == 1
+    assert _load(Session(root)) == -100 and _load(s) == -100
+    assert not s.history_entries()
+
+
+def test_batches_follow_the_autonomy_level_and_hold_edits_only(root):
+    s = Session(root)
+    out = s.submit_batch([_edit(-300), _edit(-400)], AGENT)  # default level: propose
+    assert out.status == "proposed" and _load(s) == -100
+    (proposal,) = s.proposals()
+    assert len(proposal["commands"]) == 2
+    with pytest.raises(PuzzleError, match="on its own"):
+        s.submit_batch([_edit(-300), {"command": "run_study", "study": "Tip load"}])

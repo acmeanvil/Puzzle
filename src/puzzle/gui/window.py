@@ -67,13 +67,13 @@ class ResultsBar(QWidget):
 
     def load(self, results: Results) -> None:
         names = list(dict.fromkeys(n for s in results.steps for n in s.fields))
+        chosen = self.field.currentText()  # kept across refreshes when the run has it
         for w in (self.field, self.step):
             w.blockSignals(True)
         self.field.clear()
         self.field.addItems(names)
-        preferred = next(
-            (n for n in ("displacement", "temperature", "velocity") if n in names), None
-        )
+        defaults = ("displacement", "temperature", "velocity")
+        preferred = chosen if chosen in names else next((n for n in defaults if n in names), None)
         if preferred:
             self.field.setCurrentText(preferred)
         self.step.setRange(1, max(1, len(results.steps)))
@@ -479,5 +479,7 @@ def _history_line(entry: dict) -> str:
     kind = entry.get("type", "?")
     cmd = entry.get("command", {})
     what = cmd.get("command", "") if isinstance(cmd, dict) else ""
+    if what == "batch":
+        what = "batch of " + ", ".join(c.get("command", "?") for c in cmd.get("commands", []))
     target = cmd.get("object") or cmd.get("study") or cmd.get("kind") or cmd.get("key") or ""
     return f"#{entry.get('seq', '?')}  {actor}  {kind} {what} {target}".rstrip()
