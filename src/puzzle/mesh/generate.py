@@ -164,10 +164,10 @@ def _source(project: Project, geo: Geometry, root: Path, out_dir: Path, warnings
     """
     if not geo.history:
         return geo, root / geo.source, {}
-    from puzzle.geometry.history import Op, regenerate, signature, write_brep
+    from puzzle.geometry.history import Op, body_signature, regenerate, signature, write_brep
 
     params = {k: q.to_si() for ps in project.of_type(ParameterSet) for k, q in ps.values.items()}
-    shape = regenerate([Op(s.kind, s.name, dict(s.args)) for s in geo.history], params)
+    shape = regenerate([Op(s.kind, s.name, dict(s.args)) for s in geo.history], params, root)
     path = out_dir / f"{''.join(c if c.isalnum() else '-' for c in geo.name)}.brep"
     write_brep(shape.shape, path)
     model = import_step(path)
@@ -183,6 +183,22 @@ def _source(project: Project, geo: Geometry, root: Path, out_dir: Path, warnings
                     for e in faces
                     if abs(e.measure - area) <= 1e-6 * max(area, 1e-30)
                     and all(abs(a - b) <= tol for a, b in zip(e.center, centre, strict=True))
+                ),
+                None,
+            )
+            if hit:
+                aliases.setdefault(name, []).append(hit)
+    # Bodies the same way, by volume and centre of mass ("Body", an enclosure's "Air").
+    bodies = model.of_dim(3)
+    for name, solids in shape.bodies.items():
+        for b in solids:
+            volume, centre = body_signature(b)
+            hit = next(
+                (
+                    e.name
+                    for e in bodies
+                    if abs(e.measure - volume) <= 1e-6 * max(volume, 1e-30)
+                    and all(abs(a - c) <= tol for a, c in zip(e.center, centre, strict=True))
                 ),
                 None,
             )

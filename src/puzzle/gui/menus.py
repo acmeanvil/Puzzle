@@ -46,7 +46,7 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
 
     if node.kind == "section":
         if node.label == "Geometry":
-            add("Import STEP…", lambda: import_step_file(window))
+            add("Import geometry…", lambda: import_step_file(window))
         elif node.label == "Materials":
             add("Add from library…", window._add_material_dialog)
         elif node.label == "Meshes":
@@ -56,7 +56,7 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         elif node.label == "Studies":
             add("New study…", lambda: new_study(window))
     elif node.kind == "project":
-        add("Import STEP…", lambda: import_step_file(window))
+        add("Import geometry…", lambda: import_step_file(window))
         add("New mesh recipe", lambda: new_mesh(window))
         add("New component…", lambda: new_component(window))
         add("New study…", lambda: new_study(window))
@@ -243,7 +243,9 @@ def import_step_file(window, path: Path | None = None):
     if path is None:
         from PySide6.QtWidgets import QFileDialog
 
-        chosen, _ = QFileDialog.getOpenFileName(window, "Import STEP", "", "STEP (*.step *.stp)")
+        chosen, _ = QFileDialog.getOpenFileName(
+            window, "Import geometry", "", "CAD (*.step *.stp *.iges *.igs *.brep)"
+        )
         if not chosen:
             return None
         path = Path(chosen)
@@ -253,11 +255,12 @@ def import_step_file(window, path: Path | None = None):
         shutil.copyfile(path, target)
     model = import_step(target)
     bodies = [e.name for e in model.of_dim(3)]
-    data = {
-        "name": path.stem,
-        "source": target.name,
-        "selections": [{"name": "Body", "entity": "body", "members": bodies}],
-    }
+    selections = [{"name": "Body", "entity": "body", "members": bodies}]
+    # An assembly's parts keep their names: one body selection per STEP part.
+    for label, members in model.labelled_bodies().items():
+        if label != "Body" and len(model.labelled_bodies()) > 1:
+            selections.append({"name": label, "entity": "body", "members": members})
+    data = {"name": path.stem, "source": target.name, "selections": selections}
     return window.submit(Create(kind="geometry", data=data))
 
 

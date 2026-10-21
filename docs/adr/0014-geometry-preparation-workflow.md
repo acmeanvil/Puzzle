@@ -60,6 +60,12 @@ ADR 0004 chose the kernel: OpenCASCADE through OCP, with build123d for construct
 
 End to end, a parameter edit re-meshes and re-solves with every selection on the right faces and no warnings. The edit also changes the study's content hash, so the stored result is not reused. Gmsh and OCP share conda-forge's OCCT (7.9.3), so shapes pass between them through BREP without loss.
 
+## G1: parametric creation (2026-10-21)
+
+`puzzle.geometry.history` now builds parts from primitives (box, cylinder, cone, sphere), profiles extruded or revolved (points, circles or a DXF drawing via ezdxf, with holes), booleans by `mode` (new, add, cut, intersect; a fuse merges the faces it leaves split along the seam), holes along any axis, fillets and chamfers by edge rules (axis, outer corners, the edges of a named face, the edges between two named faces, curved, all), move, rotate, linear and circular patterns of an earlier feature, splits by any plane, and an enclosure (an air box sharing its interface with the part, as its own named body). Every value may name a parameter. Faces are named by construction (`L/side-3`, `Bolt/wall`, `Pin/end`, `Air/+x`) and bodies too (`Body`, `Air`); the mesher maps both onto the meshed file by signature. Measured in `tests/test_geometry_ops.py` (areas and volumes against closed forms) and end to end in `tests/integration/test_history_geometry.py`: an angle bracket from an L profile, a bolt hole and a corner fillet, thickened from 8 to 12 mm through its parameter, keeps every selection with no warnings (toe deflection 40.7 to 11.2 um).
+
+Files: STEP parts keep their assembly names (one body selection per part on import), IGES and BREP import through the same path, DXF drawings are profiles. IFC is dropped; STL, OBJ and 3MF come with G2 as mesh-only geometry.
+
 ## Consequences
 
 - One history covers both CAD preparation and light modelling, and geometry parameters can sit in a sweep like any other parameter.

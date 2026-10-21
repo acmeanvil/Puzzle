@@ -34,6 +34,7 @@ class Entity:
     measure: float  # volume, area or length; 0 for vertices
     center: tuple[float, float, float]
     bbox: tuple[float, float, float, float, float, float]
+    label: str = ""  # the part's name in a STEP assembly, when the file gives one
 
 
 @dataclass
@@ -56,6 +57,14 @@ class GeometryModel:
         boxes = np.array([e.bbox for e in self.of_dim(3)] or [e.bbox for e in self.entities])
         lo, hi = boxes[:, :3].min(axis=0), boxes[:, 3:].max(axis=0)
         return float(np.linalg.norm(hi - lo))
+
+    def labelled_bodies(self) -> dict[str, list[str]]:
+        """Bodies grouped by their STEP part name ({"Bracket": ["body-1"], ...})."""
+        out: dict[str, list[str]] = {}
+        for e in self.of_dim(3):
+            if e.label:
+                out.setdefault(e.label, []).append(e.name)
+        return out
 
     # Selection helpers: the rules a GUI pick or a script uses to build named selections.
 
@@ -108,7 +117,9 @@ def _entity(name: str, dim: int, tag: int) -> Entity:
             tuple(gmsh.model.occ.getCenterOfMass(dim, tag)),
             gmsh.model.occ.getMass(dim, tag),
         )
-    return Entity(name, dim, gmsh.model.getType(dim, tag), measure, center, bbox)
+    # STEP part names come through OCCT's XDE reader as "Shapes/.../Name"; keep the last.
+    label = (gmsh.model.getEntityName(dim, tag) or "").rstrip("/").split("/")[-1]
+    return Entity(name, dim, gmsh.model.getType(dim, tag), measure, center, bbox, label)
 
 
 # --- Placement and matching -------------------------------------------------

@@ -73,18 +73,34 @@ class ParameterSet(ProjectObject):
 
 
 class HistoryStep(BaseModel):
-    """One operation of a geometry history (ADR 0014): box, hole, fillet or split.
+    """One operation of a geometry history (ADR 0014).
 
     Lengths are metres; a string value names a parameter. Faces are named by the step
-    that made them ("Plate/+z", "Hole1/wall", "Round/edge-2"); see
-    puzzle.geometry.history.
+    that made them ("Plate/+z", "Hole1/wall", "Round/edge-2", "Body/side-3"); bodies by
+    the `body` argument ("Body" by default) or an enclosure's name. The operations and
+    their arguments are listed in puzzle.geometry.history.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["box", "hole", "fillet", "split"]
+    kind: Literal[
+        "box",
+        "cylinder",
+        "cone",
+        "sphere",
+        "extrude",
+        "revolve",
+        "hole",
+        "fillet",
+        "chamfer",
+        "move",
+        "rotate",
+        "pattern",
+        "split",
+        "enclosure",
+    ]
     name: str
-    args: dict[str, float | str | dict[str, Any]] = Field(default_factory=dict)
+    args: dict[str, float | str | bool | list[Any] | dict[str, Any]] = Field(default_factory=dict)
 
 
 class Geometry(ProjectObject):
