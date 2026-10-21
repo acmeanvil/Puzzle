@@ -7,7 +7,7 @@ the viewport still records what it would show, so tests can check it.
 from __future__ import annotations
 
 import numpy as np
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from puzzle.gui.tasks import rendering_available
@@ -100,10 +100,14 @@ class Viewport(QWidget):
             self.surface, self.entities = entity_surface(mesh)
             self.picked = [e for e in self.picked if e in self.entities]
         self.highlight, self.highlight_entities = highlight, list(entities or [])
-        grid = to_grid(mesh)
+        try:
+            grid = to_grid(mesh)
+        except ValueError:  # a surface-only preview of the geometry: nothing meshed yet
+            grid = None
+        cells = grid.n_cells if grid is not None else (self.surface.n_cells if self.surface else 0)
         self.shown = {
-            "kind": "mesh",
-            "cells": grid.n_cells,
+            "kind": "mesh" if grid is not None else "preview",
+            "cells": cells,
             "highlight": highlight,
             "highlighted": list(self.highlight_entities),
             "picked": list(self.picked),
@@ -112,9 +116,20 @@ class Viewport(QWidget):
             return
         self.plotter.clear()
         dim = highlight is not None and mesh.groups[highlight].dim == 3
-        self.plotter.add_mesh(
-            grid, color="#c9d3dd", show_edges=True, edge_color="#7a8794", opacity=0.35 if dim else 1
-        )
+        if grid is not None:
+            self.plotter.add_mesh(
+                grid,
+                color="#c9d3dd",
+                show_edges=True,
+                edge_color="#7a8794",
+                opacity=0.35 if dim else 1,
+            )
+        elif self.surface is not None:
+            self.plotter.add_mesh(self.surface, color="#c9d3dd", smooth_shading=False)
+            edges = self.surface.extract_feature_edges(
+                30, boundary_edges=True, manifold_edges=False
+            )
+            self.plotter.add_mesh(edges, color="#4a5560", line_width=1.5)
         if highlight is not None:
             surface = selection_surface(mesh, highlight)
             if surface is not None:
@@ -169,7 +184,7 @@ class Viewport(QWidget):
         return self.entities[int(self.surface.cell_data["entity"][cell])] if cell >= 0 else None
 
     def _clicked(self, point) -> None:
-        if self.shown.get("kind") != "mesh":
+        if self.shown.get("kind") not in ("mesh", "preview"):
             return  # picking works on the mesh view, not on results
         entity = self.entity_at(point)
         if entity is not None:
@@ -233,6 +248,20 @@ class Viewport(QWidget):
             self.plotter.add_text(title, font_size=9, color="black")
             self._frame()
         return self.shown
+
+    # The OpenGL view is not redrawn when Qt resizes it (docks settling after the window
+    # opens, the user dragging a splitter), which leaves stale pixels on macOS: redraw.
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        super().showEvent(event)
+        QTimer.singleShot(0, self._render)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        super().resizeEvent(event)
+        QTimer.singleShot(0, self._render)
+
+    def _render(self) -> None:
+        if self.plotter is not None:
+            self.plotter.render()
 
     def clear(self) -> None:
         self.shown = {}

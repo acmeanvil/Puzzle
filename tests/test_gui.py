@@ -238,6 +238,7 @@ def test_agent_rejects_and_levels(app, tmp_path, monkeypatch):
 
 
 def test_agent_without_a_provider_says_how_to_set_one(app, window, monkeypatch):
+    wait(app, lambda: not window.tasks, timeout=60)  # the preview shown on opening
     monkeypatch.setenv("PUZZLE_AGENT_PROVIDER", "nonsense")
     window.agent.send("hello")
     assert "unknown agent provider" in window.agent.transcript.toPlainText()
@@ -285,3 +286,23 @@ def test_picking_faces_makes_and_extends_selections(app, window):
     window.viewport.toggle_pick(root_face)
     window.selection_from_picks("Clamped")  # a name already used
     assert "already has a selection" in window.statusBar().currentMessage()
+
+
+def test_geometry_shows_before_meshing_and_can_be_picked(app, window):
+    select(window, "object", "Cantilever")
+    wait(app, lambda: not window.tasks, timeout=60)  # the quick surface preview
+    shown = window.viewport.shown
+    assert shown["kind"] == "preview" and shown["cells"] > 0
+    assert not window.meshes  # nothing was meshed for real
+
+    # Picking works on the preview: the root end gives the Root selection's face.
+    window.toggle_picking(True)
+    lo, hi = window.viewport.mesh.coords.min(axis=0), window.viewport.mesh.coords.max(axis=0)
+    window.viewport.toggle_pick(window.viewport.entity_at([lo[0], *((lo + hi) / 2)[1:]]))
+    bar = next(o for o in window.session.project.objects.values() if o.name == "Bar")
+    root = next(s for s in bar.selections if s.name == "Root")
+    assert [name for _, name in window.picked_names()] == root.members
+
+    # The same shape is not previewed twice; selecting the geometry reuses it.
+    select(window, "object", "Bar")
+    assert not window.tasks and window.viewport.shown["kind"] == "preview"

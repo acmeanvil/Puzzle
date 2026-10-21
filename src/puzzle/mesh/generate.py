@@ -52,16 +52,26 @@ class MeshResult:
 
 
 def generate_mesh(
-    project: Project, component_id, root: Path, out_dir: Path, *, verbose: bool = False
+    project: Project,
+    component_id,
+    root: Path,
+    out_dir: Path,
+    *,
+    verbose: bool = False,
+    preview: bool = False,
 ) -> MeshResult:
-    """Mesh a component. Geometry sources resolve relative to the project `root`."""
+    """Mesh a component. Geometry sources resolve relative to the project `root`.
+
+    `preview`: a quick, coarse first-order surface mesh only (no volume), for showing
+    and picking the geometry before it is meshed for real.
+    """
     comp = project.get(component_id, Component)
     recipe = project.get(comp.mesh, MeshRecipe)
     if comp.dimension != "3d":
         raise MeshError(f"{comp.dimension} meshing is not implemented yet")
     if recipe.mesher != "gmsh":
         raise MeshError(f"the {recipe.mesher} mesher is not implemented yet")
-    if recipe.element_shape == "hexahedra" and recipe.element_order != 1:
+    if not preview and recipe.element_shape == "hexahedra" and recipe.element_order != 1:
         raise MeshError("second-order hexahedra are not supported yet; use element_order 1")
 
     geometries = {p.name: project.get(p.geometry, Geometry) for p in comp.parts}
@@ -109,6 +119,13 @@ def generate_mesh(
             for name, entity in entities.items()
             if entity[0] >= 2
         }
+        if preview:
+            size = max(r.size for r in references.values()) / 40
+            gmsh.option.setNumber("Mesh.MeshSizeMax", size)
+            gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 8)
+            gmsh.model.mesh.generate(2)
+            mesh = _extract()
+            return MeshResult(mesh=mesh, path=out_dir, min_quality=1.0, names=names)
         _sizes(recipe, comp, found, warnings)
 
         if recipe.element_shape == "hexahedra":

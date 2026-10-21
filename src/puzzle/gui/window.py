@@ -128,6 +128,8 @@ class MainWindow(QMainWindow):
         self.meshes: dict[str, Mesh] = {}  # component id -> its last generated mesh
         self.mesh_names: dict[str, dict] = {}  # component id -> (dim, tag) -> (part, name)
         self.mesh_component: str | None = None  # whose mesh the view shows
+        self.previews: dict[str, tuple[str, object]] = {}  # component id -> (key, MeshResult)
+        self._previewing: tuple[str, str] | None = None
         self.result: tuple[Mesh, Results] | None = None
         self.tasks: list[Task] = []  # keep running tasks alive
 
@@ -201,6 +203,10 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"Puzzle — {self.session.project.name}")
         self.agent.project_opened()
         self.refresh()
+        # Open on the model, not an empty view: select the first component.
+        first = next(iter(self.session.project.of_type(Component)), None)
+        if first is not None:
+            self.tree.select(Node("object", str(first.id)))
 
     def reload(self) -> None:
         """Re-read the project from disk: another client may have changed it."""
@@ -379,7 +385,11 @@ class MainWindow(QMainWindow):
         self.properties.show_object(str(obj.id), obj.model_dump(mode="json"), node.path, names)
         self.results_bar.hide()
         comp = self._component_of(node)
-        mesh = self.meshes.get(str(comp.id)) if comp is not None else None
+        if comp is None:
+            return
+        mesh = self.meshes.get(str(comp.id))
+        if mesh is None:
+            mesh = self._preview(comp)
         if mesh is None:
             return
         highlight = None
@@ -596,13 +606,68 @@ class MainWindow(QMainWindow):
         if isinstance(obj, Study):
             return project.objects.get(obj.component)
         if isinstance(obj, Geometry):
-            for c in project.of_type(Component):
-                if (
-                    any(str(p.geometry) == str(obj.id) for p in c.parts)
-                    and str(c.id) in self.meshes
-                ):
-                    return c
+            users = [
+                c for c in project.of_type(Component) if any(p.geometry == obj.id for p in c.parts)
+            ]
+            meshed = [c for c in users if str(c.id) in self.meshes]
+            return (meshed or users or [None])[0]
         return None
+
+    def _preview(self, comp: Component):
+        """The component's geometry as a quick surface mesh, made once per shape.
+
+        Returns it when ready; otherwise starts making it and shows it when done.
+        """
+        cid = str(comp.id)
+        key = self._preview_key(comp)
+        cached = self.previews.get(cid)
+        if cached is not None and cached[0] == key:
+            self.mesh_names[cid] = cached[1].names
+            return cached[1].mesh
+        if self._previewing == (cid, key):
+            return None  # already being made
+        from puzzle.mesh import generate_mesh
+
+        s = self.session
+        project = copy.deepcopy(s.project)
+        out = s.root / WORK_DIR / "gui-preview" / cid
+        self._previewing = (cid, key)
+
+        def done(result) -> None:
+            self._previewing = None
+            self.previews[cid] = (key, result)
+            self._selected()
+
+        def failed(_exc) -> None:
+            self._previewing = None
+
+        self.background(
+            f"Showing {comp.name}…",
+            lambda _emit: generate_mesh(project, comp.id, s.root, out, preview=True),
+            done,
+            failed=failed,
+            lock=False,
+        )
+        return None
+
+    def _preview_key(self, comp: Component) -> str:
+        """What the preview depends on: the parts and their geometries' shape (not their
+        selections), and the parameters a history geometry may use."""
+        import hashlib
+        import json
+
+        from puzzle.model.schema import ParameterSet
+
+        project = self.session.project
+        parts = [p.model_dump(mode="json") for p in comp.parts]
+        shapes = []
+        for p in comp.parts:
+            geo = project.objects.get(p.geometry)
+            if isinstance(geo, Geometry):
+                shapes.append(geo.model_dump(mode="json", exclude={"selections", "name"}))
+        params = [ps.model_dump(mode="json") for ps in project.of_type(ParameterSet)]
+        text = json.dumps([parts, shapes, params], sort_keys=True, default=str)
+        return hashlib.sha256(text.encode()).hexdigest()
 
     @staticmethod
     def _feature_selection(obj, path: str) -> str | None:
