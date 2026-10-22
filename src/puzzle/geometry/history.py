@@ -31,6 +31,11 @@ the part, the first one starts it):
 | split | axis or normal, at or x, y, z | (a split face keeps its name on both pieces) |
 | enclosure | margin, or factor of the part size | +x ... of the box; body `<name>` |
 | import, heal, remove, fragment | see puzzle.geometry.prep | preparing imported CAD (G2) |
+| sketch | sketch, plane and offset, or face (a planar face, axis-aligned) | (no faces: a profile) |
+
+A sketch step (ADR 0017) adds no solid: extrude and revolve take it by name as their
+profile, `{"sketch": "Outline"}`, on its plane. A profile may still hold a sketch
+inline (`{"sketch": {...}}`, G5).
 
 Bodies are named too: the part is "Body" unless an operation's `body` says otherwise,
 and an enclosure adds its own; selections of entity "body" use these names.
@@ -136,6 +141,7 @@ WORDS = {
     "file",
     "unit",
     "sketch",  # resolved by the sketch solver itself (its dimensions may name parameters)
+    "face",  # a sketch step's face to sketch on
 }
 
 
@@ -145,6 +151,13 @@ class GeometryError(ValueError):
 
 def regenerate(ops: list[Op], params: dict[str, float] | None = None, root=None) -> NamedShape:
     """Build the shape of a history. `root` resolves relative paths (DXF profiles)."""
+    from puzzle.geometry.session import occ_lock
+
+    with occ_lock:
+        return _regenerate(ops, params, root)
+
+
+def _regenerate(ops: list[Op], params: dict[str, float] | None, root) -> NamedShape:
     params = params or {}
 
     def value(v, key=""):
@@ -166,7 +179,11 @@ def regenerate(ops: list[Op], params: dict[str, float] | None = None, root=None)
     for op in ops:
         a = {k: value(v, k) for k, v in op.args.items()}
         try:
+            if op.kind == "sketch":
+                state.sketches[op.name] = _sketch_plane(state, op, a)
+                continue
             if op.kind in TOOLS:
+                a = _with_sketch(state, op, a)
                 built = TOOLS[op.kind](state, a)
                 tool, names = built[0], built[1]
                 bodies = built[2] if len(built) > 2 else None  # an import's part names
@@ -183,6 +200,8 @@ def regenerate(ops: list[Op], params: dict[str, float] | None = None, root=None)
             raise GeometryError(f"step '{op.name}' ({op.kind}) failed: {exc}") from exc
         if state.shape is None or state.shape.IsNull():
             raise GeometryError(f"step '{op.name}' ({op.kind}) left no shape")
+    if state.shape is None:
+        raise GeometryError("no solid yet: extrude or revolve a sketch, or add a primitive")
     # Keep only what is in the final shape (OCCT may report intermediates).
     final, solids = _faces(state.shape), _subshapes(state.shape, TopAbs_SOLID)
     names = {n: [f for f in fs if any(f.IsSame(g) for g in final)] for n, fs in state.names.items()}
@@ -204,6 +223,49 @@ class _State:
     tools: dict[str, tuple[str, dict]] = field(default_factory=dict)  # op name -> (kind, args)
     root: Any = None
     params: dict[str, float] = field(default_factory=dict)  # for sketches' dimensions
+    sketches: dict[str, dict] = field(default_factory=dict)  # sketch step -> its profile args
+
+
+# --- sketches -------------------------------------------------------------------------------
+
+# A face's normal axis -> the sketch plane that has it, and the offset's coordinate.
+FACE_PLANES = {2: "xy", 0: "yz", 1: "xz"}
+
+
+def _sketch_plane(state, op, a) -> dict:
+    """A sketch step's profile arguments: its sketch, on its plane at its offset, or on
+    a named planar face (whose normal must lie along an axis, for now)."""
+    if "sketch" not in a or not isinstance(a["sketch"], dict):
+        raise GeometryError(f"sketch '{op.name}' has no sketch")
+    plane, offset = a.get("plane", "xy"), a.get("offset", 0.0)
+    if a.get("face"):
+        faces = state.names.get(a["face"])
+        if not faces:
+            raise GeometryError(f"sketch '{op.name}': no face '{a['face']}' to sketch on")
+        surface = BRepAdaptor_Surface(faces[0])
+        if surface.GetType() != GeomAbs_Plane:
+            raise GeometryError(f"sketch '{op.name}': face '{a['face']}' is not flat")
+        d = surface.Plane().Axis().Direction()
+        normal = [d.X(), d.Y(), d.Z()]
+        axis = max(range(3), key=lambda i: abs(normal[i]))
+        if abs(abs(normal[axis]) - 1.0) > 1e-9:
+            raise GeometryError(
+                f"sketch '{op.name}': face '{a['face']}' is not square to an axis (not yet)"
+            )
+        plane = FACE_PLANES[axis]
+        offset = signature(faces[0])[2][axis] + offset
+    return {"profile": {"sketch": a["sketch"]}, "plane": plane, "offset": offset}
+
+
+def _with_sketch(state, op, a) -> dict:
+    """A tool whose profile names a sketch step gets that sketch, its plane and offset."""
+    profile = a.get("profile")
+    if isinstance(profile, dict) and isinstance(profile.get("sketch"), str):
+        name = profile["sketch"]
+        if name not in state.sketches:
+            raise GeometryError(f"{op.kind} '{op.name}': no earlier sketch '{name}'")
+        return {**a, **state.sketches[name]}
+    return a
 
 
 # --- tools: bodies with their own face names ---------------------------------------------
@@ -274,8 +336,7 @@ def _extrude(state, a):
     n = NORMALS[plane]
     mk = BRepPrimAPI_MakePrism(face, gp_Vec(*(c * a["distance"] for c in n)))
     shape = mk.Shape()
-    names = {"start": [_static(TopoDS, "Face")(mk.FirstShape())]}
-    names["end"] = [_static(TopoDS, "Face")(mk.LastShape())]
+    names = {"start": _faces(mk.FirstShape()), "end": _faces(mk.LastShape())}
     for label, e in zip(labels, edges, strict=True):
         names[label] = names.get(label, []) + _list(mk.Generated(e))
     return shape, {k: v for k, v in names.items() if v}
@@ -298,8 +359,7 @@ def _revolve(state, a):
     for label, e in zip(labels, edges, strict=True):
         names[label] = names.get(label, []) + _list(mk.Generated(e))
     if angle < 360.0:
-        names["start"] = [_static(TopoDS, "Face")(mk.FirstShape())]
-        names["end"] = [_static(TopoDS, "Face")(mk.LastShape())]
+        names["start"], names["end"] = _faces(mk.FirstShape()), _faces(mk.LastShape())
     return shape, {k: v for k, v in names.items() if v}
 
 
@@ -674,8 +734,17 @@ def _edges_by_rule(state, rule: dict) -> list:
     {"between": ["A", "B"]}      edges shared by faces of both names
     {"curved": True}             circles and other curves only
     {"all": True}                every edge
+    {"edges": ["A|B", ...]}      edges picked by name (the faces that meet there, G3)
     """
     shape = state.shape
+    if "edges" in rule:
+        from puzzle.geometry.naming import name_all
+
+        named = name_all(NamedShape(shape, state.names, state.bodies)).of["edge"]
+        missing = [n for n in rule["edges"] if n not in named]
+        if missing:
+            raise GeometryError(f"no edge {', '.join(missing)} on the part at this step")
+        return [e for n in rule["edges"] for e in named[n]]
     x0, y0, z0, x1, y1, z1 = _bounds(shape)
     tol = max(1e-6 * _size(shape), 1e-9)
     candidates = _subshapes(shape, TopAbs_EDGE)
@@ -761,4 +830,7 @@ def match_signatures(old: list, new_faces: list, *, tol: float, area_tol: float 
 def write_brep(shape, path) -> None:
     from OCP.BRepTools import BRepTools
 
-    _static(BRepTools, "Write")(shape, str(path))
+    from puzzle.geometry.session import occ_lock
+
+    with occ_lock:
+        _static(BRepTools, "Write")(shape, str(path))

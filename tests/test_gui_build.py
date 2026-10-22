@@ -135,7 +135,7 @@ def test_menus_match_the_item(app, tmp_path):
     shutil.copytree(
         Path(__file__).parents[1] / "examples" / "cantilever",
         root,
-        ignore=shutil.ignore_patterns("results", ".puzzle"),
+        ignore=shutil.ignore_patterns("results", ".puzzle", "history.jsonl"),
     )
     window = MainWindow(root)
     try:
@@ -173,7 +173,9 @@ def test_a_study_on_a_multiphysics_component_asks_which_physics(app, tmp_path):
     from puzzle.gui.window import MainWindow
 
     root = tmp_path / "cantilever"
-    shutil.copytree(EXAMPLE, root, ignore=shutil.ignore_patterns("results", ".puzzle"))
+    shutil.copytree(
+        EXAMPLE, root, ignore=shutil.ignore_patterns("results", ".puzzle", "history.jsonl")
+    )
     window = MainWindow(root)
     try:
         before = {s.id for s in window.session.project.of_type(Study)}

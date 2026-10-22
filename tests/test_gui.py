@@ -34,7 +34,9 @@ def app():
 @pytest.fixture
 def window(app, tmp_path):
     root = tmp_path / "cantilever"
-    shutil.copytree(EXAMPLE, root, ignore=shutil.ignore_patterns("results", ".puzzle"))
+    shutil.copytree(
+        EXAMPLE, root, ignore=shutil.ignore_patterns("results", ".puzzle", "history.jsonl")
+    )
     w = MainWindow(root)
     yield w
     w.close()
@@ -176,7 +178,9 @@ def _scripted_window(app, tmp_path, replies):
     from puzzle.agent.providers import ScriptedProvider
 
     root = tmp_path / "cantilever"
-    shutil.copytree(EXAMPLE, root, ignore=shutil.ignore_patterns("results", ".puzzle"))
+    shutil.copytree(
+        EXAMPLE, root, ignore=shutil.ignore_patterns("results", ".puzzle", "history.jsonl")
+    )
     provider = ScriptedProvider(replies)
     return MainWindow(root, provider_factory=lambda: provider), provider
 
@@ -331,7 +335,9 @@ def test_an_old_results_store_does_not_stop_the_project_opening(app, tmp_path):
     import json
 
     root = tmp_path / "cantilever"
-    shutil.copytree(EXAMPLE, root, ignore=shutil.ignore_patterns("results", ".puzzle"))
+    shutil.copytree(
+        EXAMPLE, root, ignore=shutil.ignore_patterns("results", ".puzzle", "history.jsonl")
+    )
     (root / "results").mkdir()
     (root / "results" / "store.json").write_text(json.dumps({"format": 1}))
     w = MainWindow(root)

@@ -43,7 +43,9 @@ SET_TIP_LOAD = {
 @pytest.fixture
 def project(tmp_path):
     root = tmp_path / "cantilever"
-    shutil.copytree(EXAMPLE, root, ignore=shutil.ignore_patterns("results", ".puzzle"))
+    shutil.copytree(
+        EXAMPLE, root, ignore=shutil.ignore_patterns("results", ".puzzle", "history.jsonl")
+    )
     return root
 
 

@@ -18,7 +18,9 @@ pytestmark = pytest.mark.skipif(
 
 def test_run_reuse_list_and_export(tmp_path, capsys):
     project = tmp_path / "cantilever"
-    shutil.copytree(EXAMPLE, project, ignore=shutil.ignore_patterns("results", ".puzzle"))
+    shutil.copytree(
+        EXAMPLE, project, ignore=shutil.ignore_patterns("results", ".puzzle", "history.jsonl")
+    )
 
     assert main(["run", str(project), "--study", "Tip load"]) == 0
     out = capsys.readouterr().out

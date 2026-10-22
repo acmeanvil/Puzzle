@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSpinBox,
+    QStackedWidget,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -203,6 +204,8 @@ class MainWindow(QMainWindow):
         self._standalones: dict[str, tuple] = {}  # geometry id -> (component, recipe)
         self.result: tuple[Mesh, Results] | None = None
         self.tasks: list[Task] = []  # keep running tasks alive
+        # A tool's pending history (geometry id, steps as dicts): previewed, not saved.
+        self.pending: tuple | None = None
 
         self.tree = ModelTree()
         self.properties = PropertiesPanel()
@@ -224,12 +227,27 @@ class MainWindow(QMainWindow):
         column.addWidget(self.results_bar)
         column.addWidget(self.pick_bar)
         column.addWidget(self.viewport, 1)
-        self.setCentralWidget(centre)
+        # The centre is the 3D view, or the sketch canvas while sketching (ADR 0017).
+        self.centre = QStackedWidget()
+        self.centre.addWidget(centre)
+        self.setCentralWidget(self.centre)
         left, right = Qt.DockWidgetArea.LeftDockWidgetArea, Qt.DockWidgetArea.RightDockWidgetArea
-        # Left: the model tree with the properties of what is selected beneath it.
-        # Right: the agent, full height. Bottom: messages.
-        self.model_dock = self._dock("Model", self.tree, left)
-        self.properties_dock = self._dock("Properties", self.properties, left)
+        # Left: the model tree, and the Geometry tab beside it, with the properties of
+        # what is selected (or the open tool's options) beneath. Right: the agent, full
+        # height. Bottom: messages.
+        from puzzle.gui.workbench import Workbench
+
+        self.workbench = Workbench(self)
+        self.left_tabs = QTabWidget()
+        self.left_tabs.addTab(self.tree, "Model")
+        self.left_tabs.addTab(self.workbench, "Geometry")
+        self.left_tabs.currentChanged.connect(lambda _: self._tab_changed())
+        column.insertWidget(0, self.workbench.ribbon)  # the geometry tools, above the view
+        self.workbench.ribbon.hide()
+        self.model_dock = self._dock("Model", self.left_tabs, left)
+        self.side = QStackedWidget()  # the properties, or a tool's options
+        self.side.addWidget(self.properties)
+        self.properties_dock = self._dock("Properties", self.side, left)
         self.splitDockWidget(self.model_dock, self.properties_dock, Qt.Orientation.Vertical)
         tabs = QTabWidget()
         tabs.addTab(self.log, "Output")
@@ -310,6 +328,7 @@ class MainWindow(QMainWindow):
             self.history.addItem(_history_line(entry, names))
         self.refresh_problems()
         self.agent.refresh()
+        self.workbench.refresh()
         self._selected()
 
     def refresh_problems(self) -> None:
@@ -499,6 +518,9 @@ class MainWindow(QMainWindow):
     # --- selection ---------------------------------------------------------------
 
     def _selected(self) -> None:
+        if self.left_tabs.currentWidget() is self.workbench:
+            self.show_workbench_part()
+            return
         node = self.tree.current()
         s = self.session
         if s is None or node is None:
@@ -547,6 +569,83 @@ class MainWindow(QMainWindow):
         self.viewport.boundaries = self.mesh_boundaries.get(str(comp.id), {})
         self.viewport.vertices = self.mesh_vertices.get(str(comp.id), {})
         self.viewport.show_mesh(mesh, highlight if highlight in mesh.groups else None, entities)
+
+    # --- the Geometry tab (ADR 0017) --------------------------------------------------
+
+    def _tab_changed(self) -> None:
+        on = self.left_tabs.currentWidget() is self.workbench
+        self.workbench.ribbon.setVisible(on)
+        if on:
+            self.workbench.refresh()
+        self._selected()
+
+    def show_workbench_part(self) -> None:
+        """The Geometry tab's part on its own (with a tool's pending step, if any)."""
+        geo = self.workbench.geometry()
+        if geo is None:
+            self.viewport.clear()
+            return
+        if self.workbench.sketching is not None:
+            return
+        steps = self.pending[1] if self.pending and self.pending[0] == geo.id else None
+        kinds = [s["kind"] for s in steps if not s.get("suppressed")] if steps else None
+        if kinds is None:
+            kinds = [s.kind for s in geo.history if not s.suppressed]
+        if geo.history and all(k == "sketch" for k in kinds):  # nothing solid to show yet
+            self.viewport.clear()
+            self.statusBar().showMessage(
+                f"{geo.name} has only sketches so far: extrude or revolve one", 8000
+            )
+            return
+        if self.workbench.tool is None:
+            from puzzle.gui.choices import choices
+
+            project = self.session.project
+            names = {str(o.id): o.name for o in project.objects.values()}
+            self.properties.show_object(
+                str(geo.id),
+                geo.model_dump(mode="json"),
+                "",
+                names,
+                lambda path: choices(project, geo, path),
+            )
+        comp = self._standalone(geo)
+        mesh = self._preview(comp)
+        if mesh is None:
+            return
+        cid = str(comp.id)
+        self.mesh_component = cid
+        self.viewport.boundaries = self.mesh_boundaries.get(cid, {})
+        self.viewport.vertices = self.mesh_vertices.get(cid, {})
+        self.viewport.show_mesh(mesh, None, [])
+
+    def preview_history(self, geo_id, history) -> None:
+        """Preview the part with `history` instead of its own (None: its own again)."""
+        self.pending = (geo_id, history) if geo_id is not None else None
+        self._selected()
+
+    def show_tool(self, panel) -> None:
+        """A tool's options in the Properties dock (None: the properties again)."""
+        if panel is None:
+            self.side.setCurrentWidget(self.properties)
+            self.properties_dock.setWindowTitle("Properties")
+            return
+        self.side.addWidget(panel)
+        self.side.setCurrentWidget(panel)
+        self.properties_dock.setWindowTitle("Tool")
+
+    def show_sketch(self, workspace) -> None:
+        """The sketch canvas in the centre (None: the 3D view again)."""
+        if workspace is None:
+            old = self.centre.currentWidget()
+            self.centre.setCurrentIndex(0)
+            if old is not self.centre.widget(0):
+                self.centre.removeWidget(old)
+                old.deleteLater()
+            return
+        self.left_tabs.setCurrentWidget(self.workbench)
+        self.centre.addWidget(workspace)
+        self.centre.setCurrentWidget(workspace)
 
     def _select_run(self, run_id: str) -> None:
         store = self._store()
@@ -861,6 +960,14 @@ class MainWindow(QMainWindow):
 
         s = self.session
         project = copy.deepcopy(s.project)
+        if self.pending is not None:  # a tool's step, previewed before it is applied
+            from puzzle.model.schema import HistoryStep
+
+            geo_id, steps = self.pending
+            geo = project.objects.get(geo_id)
+            if geo is not None:
+                history = [HistoryStep(**step) for step in steps]
+                project.objects[geo_id] = geo.model_copy(update={"history": history})
         if comp.id not in project.objects:  # a geometry shown on its own
             _, recipe = self._standalones[str(comp.parts[0].geometry)]
             project.add(recipe)
@@ -874,8 +981,9 @@ class MainWindow(QMainWindow):
             self._selected()
 
         def failed(_exc) -> None:  # reported by background(): the step that failed
-            self._previewing = None
-            self.viewport.clear()
+            if self._previewing == (cid, key):  # not a preview already superseded
+                self._previewing = None
+                self.viewport.clear()
 
         self.background(
             f"Showing {comp.name}…",
@@ -903,7 +1011,10 @@ class MainWindow(QMainWindow):
                 shapes.append(geo.model_dump(mode="json", exclude={"selections", "name"}))
                 shapes.append(self._files_stamp(geo))  # a file replaced outside Puzzle
         params = [ps.model_dump(mode="json") for ps in project.of_type(ParameterSet)]
-        text = json.dumps([parts, shapes, params], sort_keys=True, default=str)
+        pending = None
+        if self.pending is not None and any(p.geometry == self.pending[0] for p in comp.parts):
+            pending = [str(self.pending[0]), self.pending[1]]
+        text = json.dumps([parts, shapes, params, pending], sort_keys=True, default=str)
         return hashlib.sha256(text.encode()).hexdigest()
 
     def _files_stamp(self, geo: Geometry) -> list:

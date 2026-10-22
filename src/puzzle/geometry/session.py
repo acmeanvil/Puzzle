@@ -10,6 +10,11 @@ import gmsh
 
 _lock = threading.Lock()
 _resident: threading.Thread | None = None
+# All OpenCASCADE work runs one thread at a time: Gmsh and OCP share one OCCT, whose
+# readers, writers and kernel keep process-wide state, and concurrent GUI jobs (a
+# preview, a selection check) failed inside it. Re-entrant; a Gmsh session takes it
+# before its own lock, so the two are always taken in the same order.
+occ_lock = threading.RLock()
 
 
 def _keep_resident() -> None:
@@ -37,8 +42,11 @@ def _keep_resident() -> None:
 
 @contextmanager
 def gmsh_session(name: str = "puzzle", *, verbose: bool = False) -> Iterator[None]:
-    """Initialise Gmsh with SI units (OpenCASCADE imports converted to metres)."""
-    with _lock:
+    """Initialise Gmsh with SI units (OpenCASCADE imports converted to metres).
+
+    Gmsh's OpenCASCADE is the one OCP uses, so a session also holds `occ_lock` (taken
+    first, always in that order)."""
+    with occ_lock, _lock:
         _keep_resident()
         gmsh.initialize(interruptible=False)
         try:

@@ -22,3 +22,9 @@ New record: copy [template.md](template.md) to `NNNN-short-title.md`, set status
 | [0014](0014-geometry-preparation-workflow.md) | Geometry is imported CAD prepared through a parametric history; bulk reattachment | Accepted |
 | [0015](0015-ai-agent-infrastructure.md) | AI-aware: one command layer for people and agents, MCP from the start, pluggable providers, autonomy levels | Accepted |
 | [0016](0016-openfoam-second-cfd-solver.md) | Add OpenFOAM as the second CFD solver, paired with Code_Saturne in shoot-outs | Proposed |
+| [0017](0017-geometry-workbench.md) | Edit geometry in a workbench: sketches as steps, tools inline with live preview, picks in the view | Accepted |
+| [0019](0019-mesh-workbench.md) | Mesh in a workbench with the full breadth of Gmsh and Netgen | Proposed |
+| [0020](0020-material-builder.md) | A material builder for the global library, complete for every solver | Proposed |
+| [0021](0021-remote-solvers.md) | Run solvers remotely: SSH hosts, HPC schedulers, later cloud batch | Proposed |
+| [0022](0022-local-expert-ai.md) | Choose the "local expert" model by measurement on the user's machine | Proposed |
+| [0023](0023-solver-settings.md) | Full access to each solver's settings: typed, with an expert pass-through | Proposed |

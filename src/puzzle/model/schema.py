@@ -118,6 +118,7 @@ class HistoryStep(BaseModel):
         "pattern",
         "split",
         "enclosure",
+        "sketch",  # a 2D sketch on a plane or a planar face, for extrude and revolve (ADR 0017)
     ]
     name: str
     args: dict[str, float | str | bool | list[Any] | dict[str, Any]] = Field(default_factory=dict)

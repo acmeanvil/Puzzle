@@ -16,7 +16,9 @@ FORCE = "physics.0.features.1.values.y.value"  # the tip load's y value, in N
 @pytest.fixture
 def root(tmp_path) -> Path:
     dest = tmp_path / "cantilever"
-    shutil.copytree(EXAMPLE, dest, ignore=shutil.ignore_patterns("results", ".puzzle"))
+    shutil.copytree(
+        EXAMPLE, dest, ignore=shutil.ignore_patterns("results", ".puzzle", "history.jsonl")
+    )
     return dest
 
 

@@ -318,7 +318,7 @@ class SketchCanvas(QGraphicsView):
 
     def parent_editor(self):
         w = self.parent()
-        while w is not None and not isinstance(w, SketchEditor):
+        while w is not None and not isinstance(w, SketchWorkspace):
             w = w.parent()
         return w
 
@@ -476,13 +476,13 @@ RELATIONS = [
 ]
 
 
-class SketchEditor(QDialog):
-    """A sketch to draw and constrain; `sketch()` is the result (m, solved)."""
+class SketchWorkspace(QWidget):
+    """A sketch to draw and constrain: tools above, canvas, constraints beside it. It
+    sits in the main window's centre (ADR 0017) or in a dialog (`SketchEditor`);
+    `sketch()` is the result (m, solved), `problem()` what stops it being used."""
 
     def __init__(self, spec: dict | None = None, params: dict | None = None, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Sketch")
-        self.resize(1000, 640)
         self.model = SketchModel(spec, params)
         self.params = dict(params or {})
         self.tool = "select"
@@ -548,20 +548,15 @@ class SketchEditor(QDialog):
         side.addWidget(remove)
 
         self.status = QLabel("")
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
-        buttons.accepted.connect(self._accept)
-        buttons.rejected.connect(self.reject)
 
         body = QHBoxLayout()
         body.addWidget(self.canvas, 3)
         body.addLayout(side, 1)
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 4)
         layout.addLayout(tools)
         layout.addLayout(body, 1)
         layout.addWidget(self.status)
-        layout.addWidget(buttons)
         self.changed()
 
     # --- questions (tests replace this) ---------------------------------------------
@@ -839,20 +834,40 @@ class SketchEditor(QDialog):
             self.canvas.selected = [new]
             self.changed()
 
-    def _accept(self) -> None:
+    def problem(self) -> str | None:
+        """Why the sketch can't be used yet (shown in red), or None when it can."""
         from puzzle.geometry.sketch import loops
 
         m = self.model
         if m.solved is None or m.solved.status != "ok":
-            self.status.setText("The sketch must solve before it can be used: " + m.status()[0])
-            return
-        try:
-            loops(m.spec, m.solved)
-        except SketchError as exc:
-            self.status.setText(str(exc))
-            self.status.setStyleSheet(f"color: {BAD}; font-weight: bold")
-            return
-        self.accept()
+            text = "The sketch must solve before it can be used: " + m.status()[0]
+        else:
+            try:
+                loops(m.spec, m.solved)
+                return None
+            except SketchError as exc:
+                text = str(exc)
+        self.status.setText(text)
+        self.status.setStyleSheet(f"color: {BAD}; font-weight: bold")
+        return text
+
+
+class SketchEditor(SketchWorkspace):
+    """The workspace in a dialog of its own (a profile's inline sketch)."""
+
+    def exec(self) -> bool:
+        dialog = QDialog(self.parentWidget())
+        dialog.setWindowTitle("Sketch")
+        dialog.resize(1000, 640)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(lambda: None if self.problem() else dialog.accept())
+        buttons.rejected.connect(dialog.reject)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(self)
+        layout.addWidget(buttons)
+        return bool(dialog.exec())
 
 
 def _to_segment(p, a, b) -> float:

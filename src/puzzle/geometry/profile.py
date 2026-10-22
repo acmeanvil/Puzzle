@@ -57,28 +57,75 @@ def profile_face(
     if plane not in PLANES:
         raise ProfileError(f"plane must be one of {sorted(PLANES)}, not '{plane}'")
     to3d = lambda u, v: gp_Pnt(*PLANES[plane](u, v, offset))  # noqa: E731
-    names = None
     if "sketch" in spec:
-        loops, names = _sketch_loops(spec["sketch"], to3d, plane, params or {})
-        outer, holes = loops[0], loops[1:]
+        loops, labels = _sketch_loops(spec["sketch"], to3d, plane, params or {})
     elif "dxf" in spec:
         loops = _dxf_loops(spec, to3d, plane, offset, root)
-        outer, holes = loops[0], loops[1:]
+        labels = None
     else:
-        outer = _loop(spec, to3d, plane, offset)
-        holes = [_loop(h, to3d, plane, offset) for h in spec.get("holes", [])]
-    maker = BRepBuilderAPI_MakeFace(_wire(outer), True)
-    for h in holes:
-        maker.Add(_wire(h))
-    if not maker.IsDone():
-        raise ProfileError("the profile does not make a planar face (is it closed and flat?)")
-    fix = ShapeFix_Face(maker.Face())
-    fix.FixOrientation()  # holes wound either way
-    fix.Perform()
-    face = fix.Face()
-    # The fix may copy edges: return the face's own, in the profile's order.
-    edges = [_same_edge(e, face) for loop in [outer, *holes] for e in loop]
-    return face, edges, names or [f"side-{i}" for i in range(1, len(edges) + 1)]
+        loops = [_loop(spec, to3d, plane, offset)]
+        loops += [_loop(h, to3d, plane, offset) for h in spec.get("holes", [])]
+        regions = [(0, list(range(1, len(loops))))]  # typed holes are holes
+        labels = None
+    if "sketch" in spec or "dxf" in spec:
+        regions = _regions(loops)
+    faces, order = [], []
+    for outer, holes in regions:
+        maker = BRepBuilderAPI_MakeFace(_wire(loops[outer]), True)
+        for h in holes:
+            maker.Add(_wire(loops[h]))
+        if not maker.IsDone():
+            raise ProfileError("the profile does not make a planar face (is it closed and flat?)")
+        fix = ShapeFix_Face(maker.Face())
+        fix.FixOrientation()  # holes wound either way
+        fix.Perform()
+        faces.append(fix.Face())
+        order += [(len(faces) - 1, i) for i in (outer, *holes)]
+    # The fix may copy edges: return the faces' own, in the profile's order.
+    edges = [_same_edge(e, faces[f]) for f, i in order for e in loops[i]]
+    names = [n for _, i in order for n in labels[i]] if labels else None
+    return _one(faces), edges, names or [f"side-{i}" for i in range(1, len(edges) + 1)]
+
+
+def _regions(loops: list[list]) -> list[tuple[int, list[int]]]:
+    """Loops as regions: each outline with the holes directly inside it. A loop inside
+    an odd number of others is a hole of the smallest one around it; loops side by
+    side (two bolt holes sketched as circles) are regions of their own."""
+    from OCP.BRepClass import BRepClass_FaceClassifier
+    from OCP.TopAbs import TopAbs_IN
+
+    alone = [BRepBuilderAPI_MakeFace(_wire(lp), True).Face() for lp in loops]
+    inside: dict[int, list[int]] = {}
+    for i, lp in enumerate(loops):
+        p = _midpoint(lp[0])
+        inside[i] = [
+            j
+            for j, face in enumerate(alone)
+            if j != i and BRepClass_FaceClassifier(face, p, 1e-9).State() == TopAbs_IN
+        ]
+    regions = {i: [] for i in inside if len(inside[i]) % 2 == 0}
+    for i, around in inside.items():
+        if len(around) % 2 == 1:
+            parent = min(
+                (j for j in around if len(inside[j]) == len(around) - 1),
+                key=lambda j: _extent(loops[j]),
+            )
+            regions[parent].append(i)
+    return sorted(regions.items(), key=lambda r: -_extent(loops[r[0]]))
+
+
+def _one(faces: list):
+    """A face, or several side by side as one compound (extrusions take either)."""
+    if len(faces) == 1:
+        return faces[0]
+    from OCP.BRep import BRep_Builder
+    from OCP.TopoDS import TopoDS_Compound
+
+    compound, builder = TopoDS_Compound(), BRep_Builder()
+    builder.MakeCompound(compound)
+    for f in faces:
+        builder.Add(compound, f)
+    return compound
 
 
 def _sketch_loops(sketch: dict, to3d, plane: str, params: dict[str, float]):
@@ -92,7 +139,7 @@ def _sketch_loops(sketch: dict, to3d, plane: str, params: dict[str, float]):
     normal = gp_Dir(*NORMALS[plane])
     edges, names = [], []
     for loop in loops(sketch, solved):
-        built = []
+        built, labels = [], []
         for kind, name, geo in loop:
             if kind == "line":
                 (u0, v0), (u1, v1) = geo
@@ -108,8 +155,9 @@ def _sketch_loops(sketch: dict, to3d, plane: str, params: dict[str, float]):
                 built.append(
                     BRepBuilderAPI_MakeEdge(gp_Circ(gp_Ax2(to3d(cu, cv), normal), r)).Edge()
                 )
-            names.append(name)
+            labels.append(name)
         edges.append(built)
+        names.append(labels)
     return edges, names
 
 

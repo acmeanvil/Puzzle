@@ -169,7 +169,9 @@ def test_measure_two_faces(app, window):
 
 def test_an_imported_part_becomes_a_history(app, tmp_path):
     root = tmp_path / "cantilever"
-    shutil.copytree(EXAMPLE, root, ignore=shutil.ignore_patterns("results", ".puzzle"))
+    shutil.copytree(
+        EXAMPLE, root, ignore=shutil.ignore_patterns("results", ".puzzle", "history.jsonl")
+    )
     w = MainWindow(root)
     try:
         bar = geometry(w, "Bar")

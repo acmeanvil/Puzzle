@@ -383,6 +383,32 @@ def add_step_to(window, geo: Geometry, kind: str, at: int | None = None):
     if reply is None:
         return None
     name, args = reply
+    return apply_step(window, geo, kind, name, args, at=at)
+
+
+def edit_step(window, geo: Geometry, index: int):
+    step = geo.history[index]
+    if step.kind == "sketch":  # sketches are edited in the main view (ADR 0017)
+        return window.workbench.edit_sketch(geo, index)
+    reply = window.edit_step(step.kind, dict(step.args), step.name, _tool_steps(geo, index))
+    if reply is None:
+        return None
+    name, args = reply
+    return apply_step(window, geo, step.kind, name, args, index=index)
+
+
+def apply_step(window, geo: Geometry, kind: str, name: str, args: dict, *, index=None, at=None):
+    """One command: step `index` given new arguments (and name), or a new step added at
+    the end or inserted at `at`."""
+    if index is not None:
+        step = geo.history[index]
+        if name != step.name and any(s.name == name for s in geo.history):
+            window.statusBar().showMessage(f"{geo.name} already has a step '{name}'", 8000)
+            return None
+        ops = [EditOp(op="set", path=f"history.{index}.args", value=args)]
+        if name != step.name:
+            ops.append(EditOp(op="set", path=f"history.{index}.name", value=name))
+        return window.submit(Edit(object=str(geo.id), ops=ops))
     if any(s.name == name for s in geo.history):
         window.statusBar().showMessage(f"{geo.name} already has a step '{name}'", 8000)
         return None
@@ -397,16 +423,10 @@ def add_step_to(window, geo: Geometry, kind: str, at: int | None = None):
     )
 
 
-def edit_step(window, geo: Geometry, index: int):
-    step = geo.history[index]
-    reply = window.edit_step(step.kind, dict(step.args), step.name, _tool_steps(geo, index))
-    if reply is None:
-        return None
-    name, args = reply
-    ops = [EditOp(op="set", path=f"history.{index}.args", value=args)]
-    if name != step.name:
-        ops.append(EditOp(op="set", path=f"history.{index}.name", value=name))
-    return window.submit(Edit(object=str(geo.id), ops=ops))
+def sketch_steps(geo: Geometry, before: int | None = None) -> list[str]:
+    """The part's sketch steps before step `before` (newest first): profiles to use."""
+    steps = geo.history if before is None else geo.history[:before]
+    return [s.name for s in reversed(steps) if s.kind == "sketch" and not s.suppressed]
 
 
 def toggle_step(window, geo: Geometry, index: int):

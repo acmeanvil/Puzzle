@@ -34,6 +34,14 @@ class PrepError(ValueError):
 
 
 def read_cad(path: Path, unit: str | None = None, scale: float = 1.0):
+    """See `_read_cad`; one thread at a time (OCCT's readers share state)."""
+    from puzzle.geometry.session import occ_lock
+
+    with occ_lock:
+        return _read_cad(path, unit, scale)
+
+
+def _read_cad(path: Path, unit: str | None = None, scale: float = 1.0):
     """A STEP, IGES or BREP file as one shape in metres, and its solids by part name.
 
     OCCT's STEP and IGES readers convert the file's own unit to millimetres; `scale`
@@ -537,4 +545,7 @@ def shape_of(project, geometry, root: Path):
 
 def check_geometry(project, geometry, root: Path) -> list[dict]:
     """The check report of a project geometry (see `check`)."""
-    return check(shape_of(project, geometry, root))
+    from puzzle.geometry.session import occ_lock
+
+    with occ_lock:
+        return check(shape_of(project, geometry, root))

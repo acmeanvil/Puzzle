@@ -407,6 +407,14 @@ def resolve_geometry(project, geometry, root, work_dir) -> Resolved:
     match its persistent names to the file's entities by measure and centre (exact:
     both describe the same shape), and resolve every selection. Members stored by
     file name before G3 (edge-9) resolve through those names still."""
+
+    from puzzle.geometry.session import occ_lock
+
+    with occ_lock:
+        return _resolve_geometry(project, geometry, root, work_dir)
+
+
+def _resolve_geometry(project, geometry, root, work_dir) -> Resolved:
     from pathlib import Path
 
     from puzzle.geometry.history import write_brep

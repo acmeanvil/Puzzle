@@ -237,3 +237,41 @@ def test_a_sketched_part_meshes_with_sketch_named_selections(tmp_path):
         assert np.allclose(xs, width / 1000)
         bore = meshed.mesh.node_coords(meshed.mesh.groups["P/Bore"].node_ids)
         assert np.allclose(np.hypot(bore[:, 0] - 0.02, bore[:, 1] - 0.015), 0.004, atol=1e-6)
+
+
+def _holes(r=0.003):
+    """Two bolt holes, 15 mm apart, as a sketch of two circles."""
+    return {
+        "points": {"O1": [0.035, 0.015], "O2": [0.05, 0.015]},  # clear of the bore at x = 20 mm
+        "circles": {"left": ["O1", r], "right": ["O2", r]},
+        "constraints": [
+            ["fix", "O1"],
+            ["fix", "O2"],
+            ["radius", "left", r],
+            ["equal", "left", "right"],
+        ],
+    }
+
+
+def test_sketches_are_steps_that_features_use_by_name():
+    """ADR 0017: an outline sketch extruded, then holes sketched on its top face and cut."""
+    ops = [
+        Op("sketch", "Outline", {"sketch": plate(), "plane": "xy"}),
+        Op("extrude", "Plate", {"profile": {"sketch": "Outline"}, "distance": 0.01}),
+        Op("sketch", "Bolt holes", {"sketch": _holes(), "face": "Plate/end"}),
+        Op(
+            "extrude",
+            "Bolts",
+            {"profile": {"sketch": "Bolt holes"}, "distance": -0.01, "mode": "cut"},
+        ),
+    ]
+    shape = regenerate(ops, {"W": 0.06})
+    volume = body_signature(shape.bodies["Body"][0])[0]
+    assert volume == pytest.approx(
+        (0.06 * 0.03 - math.pi * 0.004**2 - 2 * math.pi * 0.003**2) * 0.01, rel=1e-9
+    )
+    assert "Bolts/left" in shape.names and "Plate/right" in shape.names
+    with pytest.raises(GeometryError, match="no earlier sketch 'Later'"):
+        regenerate([Op("extrude", "P", {"profile": {"sketch": "Later"}, "distance": 0.01})])
+    with pytest.raises(GeometryError, match="no solid yet"):
+        regenerate(ops[:1], {"W": 0.06})
