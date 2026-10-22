@@ -307,6 +307,23 @@ class Viewport(QWidget):
             self.show_mesh(self.mesh, self.highlight, self.highlight_entities)
         self.picked_changed.emit([])
 
+    def measure(self, entities) -> dict:
+        """Area of the given faces and, for two, the distance between their centres."""
+        if self.surface is None:
+            return {}
+        out, centres = {"area": 0.0}, []
+        for e in entities:
+            if e not in self.entities:
+                continue
+            mask = self.surface.cell_data["entity"] == self.entities.index(e)
+            part = self.surface.extract_cells(np.flatnonzero(mask)).compute_cell_sizes()
+            areas = np.asarray(part.cell_data["Area"])
+            out["area"] += float(areas.sum())
+            centres.append((areas[:, None] * part.cell_centers().points).sum(axis=0) / areas.sum())
+        if len(centres) == 2:
+            out["distance"] = float(np.linalg.norm(centres[1] - centres[0]))
+        return out
+
     def entity_at(self, point) -> tuple[int, int] | None:
         """The face entity nearest a point in space (where a click landed)."""
         if self.surface is None:

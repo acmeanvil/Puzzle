@@ -524,15 +524,14 @@ def _share_face(a, b) -> bool:
 def shape_of(project, geometry, root: Path):
     """A project geometry as an OCCT shape: its history regenerated (with the project's
     parameters, SI), or its source file read."""
-    from puzzle.geometry.history import Op, regenerate
+    from puzzle.geometry.history import ops_of, regenerate
     from puzzle.model.schema import ParameterSet
 
     if geometry.history:
         params = {
             k: q.to_si() for ps in project.of_type(ParameterSet) for k, q in ps.values.items()
         }
-        ops = [Op(s.kind, s.name, dict(s.args)) for s in geometry.history]
-        return regenerate(ops, params, root).shape
+        return regenerate(ops_of(geometry), params, root).shape
     return read_cad(Path(root) / geometry.source)[0]
 
 

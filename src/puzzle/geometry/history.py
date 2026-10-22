@@ -118,6 +118,11 @@ class NamedShape:
         return found, missing
 
 
+def ops_of(geometry) -> list[Op]:
+    """A project geometry's history as operations, suppressed steps left out."""
+    return [Op(s.kind, s.name, dict(s.args)) for s in geometry.history if not s.suppressed]
+
+
 # Arguments that are never parameter names.
 WORDS = {"rule", "axis", "mode", "plane", "feature", "profile", "body", "normal", "file", "unit"}
 

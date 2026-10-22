@@ -15,9 +15,18 @@ from typing import TYPE_CHECKING
 from PySide6.QtWidgets import QMenu
 
 from puzzle.commands.model import CopyComponent, Create, Edit, EditOp
+from puzzle.geometry.steps import STEPS
 from puzzle.gui.tree import Node
 from puzzle.model.catalog import CATALOG, STEP_TYPES, specs
-from puzzle.model.schema import Component, Geometry, Material, MeshRecipe, Project, Study
+from puzzle.model.schema import (
+    Component,
+    Geometry,
+    Material,
+    MeshRecipe,
+    ParameterSet,
+    Project,
+    Study,
+)
 
 if TYPE_CHECKING:
     from puzzle.gui.window import MainWindow
@@ -46,7 +55,10 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
 
     if node.kind == "section":
         if node.label == "Geometry":
+            add("New part…", lambda: new_part(window))
             add("Import geometry…", lambda: import_step_file(window))
+        elif node.label == "Parameters":
+            add("New parameter set", lambda: new_parameter_set(window))
         elif node.label == "Materials":
             add("Add from library…", window._add_material_dialog)
         elif node.label == "Meshes":
@@ -56,7 +68,9 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         elif node.label == "Studies":
             add("New study…", lambda: new_study(window))
     elif node.kind == "project":
+        add("New part…", lambda: new_part(window))
         add("Import geometry…", lambda: import_step_file(window))
+        add("New parameter set", lambda: new_parameter_set(window))
         add("New mesh recipe", lambda: new_mesh(window))
         add("New component…", lambda: new_component(window))
         add("New study…", lambda: new_study(window))
@@ -86,6 +100,41 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         add("Remove", lambda: remove(window, obj, node.path))
     elif isinstance(obj, Geometry) and node.kind == "selection":
         add("Remove selection", lambda: remove(window, obj, node.path))
+    elif isinstance(obj, Geometry) and node.kind == "object":
+        steps = menu.addMenu("Add step")
+        for kind in STEPS:
+            action = steps.addAction(kind)
+            action.triggered.connect(lambda _=False, k=kind: add_step_to(window, obj, k))
+        if not obj.history:
+            add(
+                "Edit as history (keep the file as its first step)", lambda: to_history(window, obj)
+            )
+        add("Check geometry", lambda: check_geometry_of(window, obj))
+        menu.addSeparator()
+        add("Delete", window.delete_selected)
+    elif isinstance(obj, Geometry) and node.kind == "operation":
+        index = int(node.path.split(".")[1])
+        step = obj.history[index]
+        add("Edit…", lambda: edit_step(window, obj, index))
+        after = menu.addMenu("Insert step after")
+        for kind in STEPS:
+            action = after.addAction(kind)
+            action.triggered.connect(
+                lambda _=False, k=kind: add_step_to(window, obj, k, at=index + 1)
+            )
+        add(
+            "Turn on" if step.suppressed else "Turn off (suppress)",
+            lambda: toggle_step(window, obj, index),
+        )
+        if index > 0:
+            add("Move up", lambda: move_step(window, obj, index, -1))
+        if index < len(obj.history) - 1:
+            add("Move down", lambda: move_step(window, obj, index, +1))
+        menu.addSeparator()
+        add("Delete step", lambda: remove(window, obj, node.path))
+    elif isinstance(obj, ParameterSet) and node.kind == "object":
+        add("Add parameter…", lambda: add_parameter(window, obj))
+        add("Delete", window.delete_selected)
     elif isinstance(obj, Study) and node.kind == "object":
         add("Run", window.run_selected)
         steps = menu.addMenu("Add step")
@@ -284,6 +333,143 @@ def export_run(window, run_id: str, path: Path | None = None):
     files = export(store.read_mesh(record.mesh_id), store.read_results(run_id), path)
     window.statusBar().showMessage(f"Wrote {files[0]} ({len(files) - 1} steps)", 8000)
     return files
+
+
+# --- geometry history (G4) ------------------------------------------------------------
+
+
+def new_part(window):
+    """A parametric part, started from a box, with a body selection."""
+    n = len(window.session.project.of_type(Geometry)) + 1
+    name = window.ask_text("New part", "Name:", f"Part {n}")
+    if not name:
+        return None
+    data = {
+        "name": name,
+        "history": [{"kind": "box", "name": "Base", "args": {"dx": 0.05, "dy": 0.03, "dz": 0.01}}],
+        "selections": [{"name": "Body", "entity": "body", "members": ["Body"]}],
+    }
+    return window.submit(Create(kind="geometry", data=data))
+
+
+def _tool_steps(geo: Geometry, before: int | None = None) -> list[str]:
+    from puzzle.geometry.history import TOOLS
+
+    steps = geo.history if before is None else geo.history[:before]
+    return [s.name for s in steps if s.kind in TOOLS]
+
+
+def add_step_to(window, geo: Geometry, kind: str, at: int | None = None):
+    """Add (or insert at `at`) a step, its arguments asked for in the step dialog."""
+    reply = window.edit_step(kind, {}, kind.capitalize(), _tool_steps(geo, at))
+    if reply is None:
+        return None
+    name, args = reply
+    if any(s.name == name for s in geo.history):
+        window.statusBar().showMessage(f"{geo.name} already has a step '{name}'", 8000)
+        return None
+    step = {"kind": kind, "name": name, "args": args}
+    if at is None or at >= len(geo.history):
+        op = EditOp(op="append", path="history", value=step)
+        return window.submit(Edit(object=str(geo.id), ops=[op]))
+    history = [s.model_dump(mode="json") for s in geo.history]
+    history.insert(at, step)
+    return window.submit(
+        Edit(object=str(geo.id), ops=[EditOp(op="set", path="history", value=history)])
+    )
+
+
+def edit_step(window, geo: Geometry, index: int):
+    step = geo.history[index]
+    reply = window.edit_step(step.kind, dict(step.args), step.name, _tool_steps(geo, index))
+    if reply is None:
+        return None
+    name, args = reply
+    ops = [EditOp(op="set", path=f"history.{index}.args", value=args)]
+    if name != step.name:
+        ops.append(EditOp(op="set", path=f"history.{index}.name", value=name))
+    return window.submit(Edit(object=str(geo.id), ops=ops))
+
+
+def toggle_step(window, geo: Geometry, index: int):
+    value = not geo.history[index].suppressed
+    op = EditOp(op="set", path=f"history.{index}.suppressed", value=value)
+    return window.submit(Edit(object=str(geo.id), ops=[op]))
+
+
+def move_step(window, geo: Geometry, index: int, by: int):
+    history = [s.model_dump(mode="json") for s in geo.history]
+    history.insert(index + by, history.pop(index))
+    return window.submit(
+        Edit(object=str(geo.id), ops=[EditOp(op="set", path="history", value=history)])
+    )
+
+
+def to_history(window, geo: Geometry):
+    """A file geometry becomes a history whose first step imports the file, so
+    preparation and modelling steps can follow it. Its face-N selections become
+    `<file>/face-N` (an import names the file's faces in the same order)."""
+    step = {"kind": "import", "name": "CAD", "args": {"file": geo.source}}
+    selections = []
+    for s in geo.selections:
+        members = s.members if s.entity == "body" else [f"CAD/{m}" for m in s.members]
+        if s.entity == "body":
+            members = ["Body"]
+        selections.append({**s.model_dump(mode="json"), "members": members})
+    ops = [
+        EditOp(op="set", path="history", value=[step]),
+        EditOp(op="set", path="source", value=None),
+        EditOp(op="set", path="selections", value=selections),
+    ]
+    return window.submit(Edit(object=str(geo.id), ops=ops))
+
+
+def check_geometry_of(window, geo: Geometry):
+    """The geometry check, in the background; its findings join the Problems tab."""
+    import copy
+
+    from puzzle.geometry.prep import check_geometry
+
+    project, root = copy.deepcopy(window.session.project), window.session.root
+
+    def done(findings) -> None:
+        window.geometry_findings[geo.name] = findings
+        window.refresh()
+        worst = findings[0]["severity"] if findings else "none"
+        window.statusBar().showMessage(
+            f"{geo.name}: {len(findings)} finding(s)"
+            + (f", worst {worst}" if findings else ", no problems"),
+            10000,
+        )
+        window.output_tabs.setCurrentWidget(window.problems)
+
+    return window.background(
+        f"Checking {geo.name}…", lambda _emit: check_geometry(project, geo, root), done, lock=False
+    )
+
+
+def new_parameter_set(window):
+    n = len(window.session.project.of_type(ParameterSet)) + 1
+    return window.submit(Create(kind="parameters", data={"name": f"Parameters {n}", "values": {}}))
+
+
+def add_parameter(window, params: ParameterSet):
+    name = window.ask_text("Add parameter", "Name (letters, digits, _):", "")
+    if not name or not name.isidentifier():
+        if name:
+            window.statusBar().showMessage(f"'{name}' is not a valid parameter name", 8000)
+        return None
+    text = window.ask_text("Add parameter", f"{name} = (a number and unit, e.g. 8 mm):", "1 mm")
+    if not text:
+        return None
+    number, _, unit = text.strip().partition(" ")
+    try:
+        value = {"value": float(number), "unit": unit.strip() or "dimensionless"}
+    except ValueError:
+        window.statusBar().showMessage(f"'{text}' is not a number and unit", 8000)
+        return None
+    op = EditOp(op="set", path=f"values.{name}", value=value)
+    return window.submit(Edit(object=str(params.id), ops=[op]))
 
 
 def _adder(menu: QMenu):

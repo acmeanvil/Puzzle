@@ -72,6 +72,10 @@ Files: STEP parts keep their assembly names (one body selection per part on impo
 
 Faceted files (STL, OBJ, 3MF; `geometry/meshfile.py`) are read as triangles in metres (3MF states its unit; STL and OBJ default to mm) and handed to Gmsh, which groups them into faces by feature angle (`facet_angle`, default 40 degrees) and closes a volume. The faces users select come from that grouping alone; meshing re-classifies with reparametrization, which may cut a face into patches Gmsh can re-mesh, and maps each patch back to its face. A faceted part must be its component's only part, unplaced, for now; preparation (heal, remove) does not apply to it.
 
+## G4: the history in the GUI (2026-10-21)
+
+A geometry's steps are listed under it in the model tree ("2. hole Bore", "(off)" when suppressed). Right-click a geometry to add a step of any kind, convert a file geometry into a history whose first step imports the file (its face selections become `<step>/face-N`), check it (findings join the Problems tab), or start a new parametric part; right-click a step to edit, insert after, turn off or on, move up or down, or delete it. Each is one command (undoable, logged). The step dialog comes from `puzzle.geometry.steps`: lengths typed in millimetres, stored in metres, and any number may be a parameter's name; parameters are added from the tree. The preview rebuilds whenever the shape changes (its cache key covers the history and the parameters, not the selections); a failing step is reported by name. Selecting a step highlights the faces it made, a geometry no component uses is shown on its own, and the pick bar measures the picked faces' area and, for two, the distance between their centres.
+
 ## Consequences
 
 - One history covers both CAD preparation and light modelling, and geometry parameters can sit in a sweep like any other parameter.

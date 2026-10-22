@@ -111,9 +111,15 @@ class PickBar(QWidget):
     def update_picks(self, picked) -> None:
         names = self.window.picked_names()
         shown = ", ".join(f"{p}/{n}" for p, n in names[:6]) + (" …" if len(names) > 6 else "")
-        self.label.setText(
+        text = (
             f"{len(names)} face(s) picked: {shown}" if names else "Double-click faces to pick them"
         )
+        size = self.window.viewport.measure(self.window.viewport.picked) if names else {}
+        if size.get("area"):
+            text += f"  ·  area {size['area'] * 1e6:.4g} mm²"
+        if "distance" in size:
+            text += f"  ·  centres {size['distance'] * 1e3:.4g} mm apart"
+        self.label.setText(text)
         self.setVisible(self.window.viewport.picking or bool(names))
 
     def _new(self) -> None:
@@ -134,6 +140,8 @@ class MainWindow(QMainWindow):
         self.mesh_component: str | None = None  # whose mesh the view shows
         self.previews: dict[str, tuple[str, object]] = {}  # component id -> (key, MeshResult)
         self._previewing: tuple[str, str] | None = None
+        self.geometry_findings: dict[str, list[dict]] = {}  # geometry name -> its check
+        self._standalones: dict[str, tuple] = {}  # geometry id -> (component, recipe)
         self.result: tuple[Mesh, Results] | None = None
         self.tasks: list[Task] = []  # keep running tasks alive
 
@@ -182,6 +190,7 @@ class MainWindow(QMainWindow):
 
         self._actions()
         self.tree.currentItemChanged.connect(lambda *_: self._selected())
+        self.tree.itemDoubleClicked.connect(lambda *_: self._open_item())
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._context_menu)
         self.properties.edited.connect(self._edit)
@@ -235,6 +244,9 @@ class MainWindow(QMainWindow):
         self.problems.clear()
         for p in s.project.problems():
             self.problems.addItem(f"[{p.code}] {p.object}: {p.message}")
+        for geo, findings in self.geometry_findings.items():  # from "Check geometry"
+            for f in findings:
+                self.problems.addItem(f"[geometry {f['severity']}] {geo}: {f['message']}")
         self.output_tabs.setTabText(2, f"Problems ({self.problems.count()})")
         self.agent.refresh()
         self._selected()
@@ -412,6 +424,10 @@ class MainWindow(QMainWindow):
         elif node.kind in ("feature", "assignment"):
             highlight = self._feature_selection(obj, node.path)
         entities = self._entities_of(comp, highlight) if highlight else []
+        if node.kind == "operation":  # the faces this step made (its pattern copies too)
+            names = self.mesh_names.get(str(comp.id), {})
+            mine = (f"{node.label}/", f"{node.label}#")
+            entities = [e for e, (_, n) in names.items() if e[0] == 2 and n.startswith(mine)]
         self.mesh_component = str(comp.id)
         self.viewport.show_mesh(mesh, highlight if highlight in mesh.groups else None, entities)
 
@@ -543,9 +559,27 @@ class MainWindow(QMainWindow):
         item, ok = QInputDialog.getItem(self, title, label, items, 0, False)
         return item if ok else None
 
+    def edit_step(self, kind: str, args: dict, name: str, features: list[str]):
+        """The step dialog: (name, args) when accepted, else None."""
+        from puzzle.gui.step_dialog import StepDialog
+
+        dialog = StepDialog(kind, args, name, features, self)
+        if dialog.exec() and dialog.result_args is not None:
+            return dialog.name.text().strip() or name, dialog.result_args
+        return None
+
     def ask_text(self, title: str, label: str, default: str = "") -> str | None:
         text, ok = QInputDialog.getText(self, title, label, text=default)
         return text.strip() if ok and text.strip() else None
+
+    def _open_item(self) -> None:
+        """A double-click on a history step edits it in its dialog."""
+        from puzzle.gui import menus
+
+        node = self.tree.current()
+        obj = self._object(node)
+        if node is not None and node.kind == "operation" and isinstance(obj, Geometry):
+            menus.edit_step(self, obj, int(node.path.split(".")[1]))
 
     def _context_menu(self, pos) -> None:
         from puzzle.gui.menus import build_menu
@@ -626,8 +660,22 @@ class MainWindow(QMainWindow):
                 c for c in project.of_type(Component) if any(p.geometry == obj.id for p in c.parts)
             ]
             meshed = [c for c in users if str(c.id) in self.meshes]
-            return (meshed or users or [None])[0]
+            return (meshed or users or [self._standalone(obj)])[0]
         return None
+
+    def _standalone(self, geo: Geometry) -> Component:
+        """A stand-in component for a geometry no component uses yet, so it can be
+        shown and picked; it lives only in the preview's copy of the project."""
+        from puzzle.model.schema import MeshRecipe, PartInstance
+
+        held = self._standalones.get(str(geo.id))
+        if held is None:
+            recipe = MeshRecipe(name=f"{geo.name} preview")
+            comp = Component(
+                name=geo.name, parts=[PartInstance(name=geo.name, geometry=geo.id)], mesh=recipe.id
+            )
+            held = self._standalones[str(geo.id)] = (comp, recipe)
+        return held[0]
 
     def _preview(self, comp: Component):
         """The component's geometry as a quick surface mesh, made once per shape.
@@ -648,6 +696,10 @@ class MainWindow(QMainWindow):
 
         s = self.session
         project = copy.deepcopy(s.project)
+        if comp.id not in project.objects:  # a geometry shown on its own
+            _, recipe = self._standalones[str(comp.parts[0].geometry)]
+            project.add(recipe)
+            project.add(comp)
         out = s.root / WORK_DIR / "gui-preview" / cid
         self._previewing = (cid, key)
 
@@ -656,8 +708,9 @@ class MainWindow(QMainWindow):
             self.previews[cid] = (key, result)
             self._selected()
 
-        def failed(_exc) -> None:
+        def failed(_exc) -> None:  # reported by background(): the step that failed
             self._previewing = None
+            self.viewport.clear()
 
         self.background(
             f"Showing {comp.name}…",

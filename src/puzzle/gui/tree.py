@@ -105,6 +105,9 @@ class ModelTree(QTreeWidget):
         oid = str(obj.id)
         names = {str(o.id): o.name for o in project.objects.values()}
         if isinstance(obj, Geometry):
+            for i, step in enumerate(obj.history):
+                text = f"{i + 1}. {step.kind} {step.name}" + ("  (off)" if step.suppressed else "")
+                self._add(item, text, Node("operation", oid, f"history.{i}", step.name))
             for i, s in enumerate(obj.selections):
                 text = f"{s.name}  ({s.entity} ×{len(s.members)})"
                 self._add(item, text, Node("selection", oid, f"selections.{i}", s.name))

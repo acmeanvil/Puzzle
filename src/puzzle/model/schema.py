@@ -105,6 +105,7 @@ class HistoryStep(BaseModel):
     ]
     name: str
     args: dict[str, float | str | bool | list[Any] | dict[str, Any]] = Field(default_factory=dict)
+    suppressed: bool = Field(default=False, description="skipped when the shape is rebuilt")
 
 
 class Geometry(ProjectObject):

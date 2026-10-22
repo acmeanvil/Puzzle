@@ -206,10 +206,10 @@ def _source(project: Project, geo: Geometry, root: Path, out_dir: Path, warnings
     """
     if not geo.history:
         return geo, root / geo.source, {}
-    from puzzle.geometry.history import Op, body_signature, regenerate, signature, write_brep
+    from puzzle.geometry.history import body_signature, ops_of, regenerate, signature, write_brep
 
     params = {k: q.to_si() for ps in project.of_type(ParameterSet) for k, q in ps.values.items()}
-    shape = regenerate([Op(s.kind, s.name, dict(s.args)) for s in geo.history], params, root)
+    shape = regenerate(ops_of(geo), params, root)
     path = out_dir / f"{''.join(c if c.isalnum() else '-' for c in geo.name)}.brep"
     write_brep(shape.shape, path)
     model = import_step(path)
