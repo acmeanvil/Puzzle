@@ -67,7 +67,7 @@ from OCP.GeomAbs import GeomAbs_Cylinder, GeomAbs_Line, GeomAbs_Plane
 from OCP.gp import gp_Ax1, gp_Ax2, gp_Dir, gp_Pln, gp_Pnt, gp_Trsf, gp_Vec
 from OCP.GProp import GProp_GProps
 from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
-from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_SOLID
+from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_SOLID, TopAbs_VERTEX
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopoDS import TopoDS, TopoDS_Shape
 
@@ -599,7 +599,12 @@ def _carry_history(history, names: Names) -> Names:
 
 
 def _list(shapes: TopTools_ListOfShape) -> list:
-    down = {TopAbs_FACE: "Face", TopAbs_SOLID: "Solid", TopAbs_EDGE: "Edge"}
+    down = {
+        TopAbs_FACE: "Face",
+        TopAbs_SOLID: "Solid",
+        TopAbs_EDGE: "Edge",
+        TopAbs_VERTEX: "Vertex",
+    }
     return [_static(TopoDS, down[s.ShapeType()])(s) if s.ShapeType() in down else s for s in shapes]
 
 

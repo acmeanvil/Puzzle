@@ -74,7 +74,7 @@ def show(app, window, name="Part 1"):
 def test_build_a_part_from_steps(app, window):
     answer(window, "Part 1")
     menus.new_part(window)
-    assert "1. box Base" in labels(window)
+    assert "1. Box Base" in labels(window)
     # A part with no component is shown on its own.
     assert show(app, window)["kind"] == "preview"
     six = window.viewport.surface.n_cells and len(window.viewport.entities)
@@ -82,7 +82,7 @@ def test_build_a_part_from_steps(app, window):
 
     answer(window, ("Bore", {"r": 0.004, "x": 0.025, "y": 0.015, "z": 0.0, "axis": "z"}))
     menus.add_step_to(window, geometry(window), "hole")
-    assert "2. hole Bore" in labels(window)
+    assert "2. Hole Bore" in labels(window)
     assert show(app, window)["kind"] == "preview" and len(window.viewport.entities) == 7
 
     answer(window, ("Round", {"r": 0.002, "rule": {"parallel": "z", "outer": True}}))
@@ -99,7 +99,7 @@ def test_build_a_part_from_steps(app, window):
 
     # Off, on, moved, deleted.
     menus.toggle_step(window, geometry(window), 2)
-    assert "3. fillet Round  (off)" in labels(window)
+    assert "3. Fillet Round  (off)" in labels(window)
     show(app, window)
     assert len(window.viewport.entities) == 7  # the rounds are gone while off
     menus.toggle_step(window, geometry(window), 2)
@@ -310,3 +310,52 @@ def test_a_long_pick_list_does_not_widen_the_view(app, window):
     assert window.centralWidget().minimumSizeHint().width() < 700
     assert window.centralWidget().width() == before
     assert "face-39" in window.pick_bar.label.toolTip()
+
+
+def test_a_replaced_file_is_reattached_in_one_review(app, window, tmp_path):
+    """Pick the end face and the bore of an imported plate, replace the file with an
+    export that renumbers its faces and moves the bore: the end is re-found, the bore
+    is flagged in Problems, and Accept stores both (one command, undoable)."""
+    from test_selection_naming import _export_v1, _export_v2
+
+    from puzzle.commands.model import Create
+    from puzzle.gui.reattach import accept_all_choices
+
+    root = window.session.root
+    _export_v1(root / "plate.step")
+    window.submit(Create(kind="geometry", data={"name": "Plate", "source": "plate.step"}))
+    show(app, window, "Plate")
+    window.toggle_picking(True)
+    v = window.viewport
+    lo, hi = v.mesh.coords.min(axis=0), v.mesh.coords.max(axis=0)
+    v.toggle_pick(v.entity_at([lo[0], (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2]))
+    window.selection_from_picks("End")
+    v.toggle_pick(v.entity_at([0.02 + 0.005, 0.02, 0.005]))  # on the bore's wall
+    window.selection_from_picks("Bolt")
+    sels = {s.name: s for s in geometry(window, "Plate").selections}
+    assert sels["End"].anchors and sels["Bolt"].anchors  # where the picks were
+    end_before = sels["End"].members
+
+    _export_v2(root / "plate.step", bore_x=0.03)  # the user replaces the file
+    window._selected()  # the preview notices the new file by its size and time
+    wait(app, window)
+    problems = [window.problems.item(i).text() for i in range(window.problems.count())]
+    assert any("Plate, selection Bolt: 'face-7' was not found" in p for p in problems)
+    assert not any("selection End" in p for p in problems)  # re-found, not detached
+
+    seen = {}
+
+    def review(geo, reports, rules):
+        seen["rows"] = [(r["selection"], m["status"]) for r in reports for m in r["members"]]
+        return accept_all_choices(reports, rules)
+
+    window.choose_reattachment = review
+    menus.reattach_selections(window, geometry(window, "Plate"))
+    wait(app, window)
+    assert sorted(seen["rows"]) == [("Bolt", "detached"), ("End", "refound")]
+    sels = {s.name: s for s in geometry(window, "Plate").selections}
+    assert sels["End"].rule == {"plane": {"axis": "x", "at": 0.0}}  # kept as a rule
+    assert sels["End"].members != end_before  # renumbered in the new file
+    assert sels["Bolt"].rule == {"radius": 0.005}  # the one bore of radius 5 mm
+    window.undo()  # one command
+    assert {s.name: s for s in geometry(window, "Plate").selections}["End"].rule is None

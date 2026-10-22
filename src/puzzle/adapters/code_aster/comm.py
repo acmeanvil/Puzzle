@@ -58,7 +58,9 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     if solved not in ({"solid_mechanics"}, {"heat_transfer"}):
         raise InputError(
             "the Code_Aster adapter solves solid_mechanics or heat_transfer alone for now, "
-            f"not {sorted(solved)}"
+            f"not {sorted(solved)}: set the step's physics to one of them (study > steps > "
+            "physics). For thermal stress, solve heat in its own study and pass its "
+            "temperature to a structural study as a transfer (role load)."
         )
     thermal = solved == {"heat_transfer"}
     allowed = ("stationary", "transient") if thermal else ("stationary", "modal")

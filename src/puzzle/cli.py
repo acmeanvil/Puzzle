@@ -159,6 +159,18 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("geometry", nargs="?", help="a geometry's name (default: all)")
     p.set_defaults(handler=_check_geometry)
 
+    p = sub.add_parser(
+        "selections", help="how each selection resolves after edits; reattach detached ones"
+    )
+    p.add_argument("project", type=Path)
+    p.add_argument("geometry", nargs="?", help="a geometry's name (default: all)")
+    p.add_argument(
+        "--accept-all",
+        action="store_true",
+        help="take every re-found name and nearest candidate, keeping rules where one fits",
+    )
+    p.set_defaults(handler=_selections)
+
     p = sub.add_parser("agent-key", help="store, check or remove the agent's API key")
     p.add_argument("action", choices=["set", "status", "clear"])
     p.add_argument("--provider", default="anthropic", choices=["anthropic", "openai"])
@@ -455,6 +467,43 @@ def _check_geometry(args) -> int:
             print(f"  [{f['severity']}] {f['kind']}: {f['message']}")
             worst = max(worst, {"error": 2, "warning": 1}.get(f["severity"], 0))
     return 1 if worst == 2 else 0
+
+
+def _selections(args) -> int:
+    from puzzle.commands import Session
+    from puzzle.commands.model import Edit
+    from puzzle.geometry.naming import accept_all, check_selections, reattach_ops, rules_for
+    from puzzle.model.schema import Geometry
+
+    project = _load(args.project)
+    geometries = [g for g in project.of_type(Geometry) if args.geometry in (None, g.name)]
+    if not geometries:
+        print(f"no geometry '{args.geometry}'")
+        return 1
+    detached = 0
+    for geo in geometries:
+        if not geo.selections:
+            continue
+        done = check_selections(project, geo, args.project)
+        print(f"{geo.name}:")
+        for r in done.reports:
+            states = [m.status for m in r.members]
+            print(f"  {r.selection} ({r.entity}): " + (", ".join(states) or "empty"))
+            for m in r.members:
+                if m.status in ("refound", "detached"):
+                    near = ", ".join(f"{n} ({d:.3g})" for n, d in m.candidates[:3])
+                    now = f" -> {m.now}" if m.now else ""
+                    print(f"    {m.name}: {m.status}{now}" + (f"; nearest {near}" if near else ""))
+                    detached += m.status == "detached"
+        if args.accept_all:
+            choices = accept_all(done.reports)
+            for sel, rule in rules_for(geo, choices, done.named).items():
+                choices.setdefault(sel, {})["rule"] = rule
+            ops = reattach_ops(geo, choices, done.named, done.reports)
+            if ops:
+                Session(args.project).submit(Edit(object=str(geo.id), ops=ops))
+                print(f"  reattached ({len(choices)} selection(s); undo with puzzle undo)")
+    return 1 if detached and not args.accept_all else 0
 
 
 def _agent_key(args) -> int:

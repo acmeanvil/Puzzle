@@ -35,7 +35,6 @@ from puzzle.model.schema import (
     Geometry,
     MeshRecipe,
     NamedSelection,
-    ParameterSet,
     Project,
 )
 
@@ -62,6 +61,11 @@ class MeshResult:
     boundaries: dict[tuple[int, int], list[tuple[int, int]]] = field(default_factory=dict)
     # Each geometric vertex's position, (0, tag) -> (x, y, z): for picking points.
     vertices: dict[tuple[int, int], tuple[float, float, float]] = field(default_factory=dict)
+    # (part, entity, name) -> [kind, measure, x, y, z]: anchors for new selections (G3).
+    anchors: dict[tuple[str, str, str], list] = field(default_factory=dict)
+    # Part -> its geometry's selections as resolved (`naming.SelectionReport.to_dict`):
+    # kept, re-found, by rule, or detached with ranked candidates.
+    selections: dict[str, list[dict]] = field(default_factory=dict)
 
 
 def generate_mesh(
@@ -92,9 +96,10 @@ def generate_mesh(
     out_dir.mkdir(parents=True, exist_ok=True)
     sources = {name: _source(project, g, root, out_dir, warnings) for name, g in geometries.items()}
     # History selections name faces persistently; the mesher works with face-N names.
-    geometries = {name: g for name, (g, _, _) in sources.items()}
-    paths = {name: path for name, (_, path, _) in sources.items()}
-    persistent = {name: back for name, (_, _, back) in sources.items()}
+    geometries = {name: g for name, (g, _, _, _) in sources.items()}
+    paths = {name: path for name, (_, path, _, _) in sources.items()}
+    persistent = {name: back for name, (_, _, back, _) in sources.items()}
+    reports = {name: [r.to_dict() for r in rs] for name, (_, _, _, rs) in sources.items()}
     faceted = [p for p in comp.parts if is_mesh_file(paths[p.name])]
     if faceted and (len(comp.parts) > 1 or any(faceted[0].translation) or any(faceted[0].rotation)):
         raise MeshError(
@@ -156,6 +161,7 @@ def generate_mesh(
         vertices = {
             (0, t): tuple(gmsh.model.getValue(0, t, [])) for _, t in gmsh.model.getEntities(0)
         }
+        anchors = _anchors(references, persistent)
         if preview:
             size = max(r.size for r in references.values()) / 40
             gmsh.option.setNumber("Mesh.MeshSizeMax", size)
@@ -166,9 +172,12 @@ def generate_mesh(
                 mesh=mesh,
                 path=out_dir,
                 min_quality=1.0,
+                warnings=warnings,
                 names=names,
                 boundaries=boundaries,
                 vertices=vertices,
+                anchors=anchors,
+                selections=reports,
             )
         _sizes(recipe, comp, found, warnings)
 
@@ -204,71 +213,56 @@ def generate_mesh(
         names=names,
         boundaries=boundaries,
         vertices=vertices,
+        anchors=anchors,
+        selections=reports,
     )
 
 
-def _source(project: Project, geo: Geometry, root: Path, out_dir: Path, warnings: list[str]):
-    """The geometry's file, and the geometry with selections in face-N names.
+def _anchors(references, persistent) -> dict[tuple[str, str, str], list]:
+    """(part, entity, name) -> where that entity is in its geometry's own frame ([kind, measure,
+    x, y, z], as `naming.anchor` gives it): what a new selection stores for its picks.
+    A name on several file entities (a split face) gets their sum and weighted centre."""
+    from puzzle.geometry.model import DIM_PREFIX
+    from puzzle.geometry.naming import coarse_kind
 
-    A history is regenerated (with the project's parameters, in SI) to a BREP file; its
-    persistent face names are matched to the file's faces by signature, which is exact
-    here since both describe the same shape.
-    """
-    if not geo.history:
-        return geo, root / geo.source, {}
-    from puzzle.geometry.history import body_signature, ops_of, regenerate, signature, write_brep
-
-    params = {k: q.to_si() for ps in project.of_type(ParameterSet) for k, q in ps.values.items()}
-    shape = regenerate(ops_of(geo), params, root)
-    path = out_dir / f"{''.join(c if c.isalnum() else '-' for c in geo.name)}.brep"
-    write_brep(shape.shape, path)
-    model = import_step(path)
-    faces = model.of_dim(2)
-    tol = 1e-6 * model.size
-    aliases: dict[str, list[str]] = {}
-    for name, ocp_faces in shape.names.items():
-        for f in ocp_faces:
-            _, area, centre = signature(f)
-            hit = next(
-                (
-                    e.name
-                    for e in faces
-                    if abs(e.measure - area) <= 1e-6 * max(area, 1e-30)
-                    and all(abs(a - b) <= tol for a, b in zip(e.center, centre, strict=True))
-                ),
-                None,
-            )
-            if hit:
-                aliases.setdefault(name, []).append(hit)
-    # Bodies the same way, by volume and centre of mass ("Body", an enclosure's "Air").
-    bodies = model.of_dim(3)
-    for name, solids in shape.bodies.items():
-        for b in solids:
-            volume, centre = body_signature(b)
-            hit = next(
-                (
-                    e.name
-                    for e in bodies
-                    if abs(e.measure - volume) <= 1e-6 * max(volume, 1e-30)
-                    and all(abs(a - c) <= tol for a, c in zip(e.center, centre, strict=True))
-                ),
-                None,
-            )
-            if hit:
-                aliases.setdefault(name, []).append(hit)
-    selections = []
-    for sel in geo.selections:
-        members = []
-        for m in sel.members:
-            if m in aliases:
-                members += aliases[m]
-            elif m.startswith(f"{sel.entity}-"):  # an edge or point by its file name (G3)
-                members.append(m)
+    # Names are unique per entity type only: a seam edge is named by its one face.
+    out: dict[tuple[str, str, str], list] = {}
+    for part, ref in references.items():
+        back = persistent.get(part, {})
+        for e in ref.entities:
+            key = (part, DIM_PREFIX[e.dim], back.get(e.name, e.name))
+            kind = coarse_kind(e.dim, e.kind)
+            weight = e.measure if e.measure > 0 else 1.0
+            have = out.get(key)
+            if have is None:
+                out[key] = [kind, e.measure, *(weight * c for c in e.center), weight]
             else:
-                warnings.append(f"selection '{sel.name}': '{m}' no longer exists in the history")
+                have[0] = have[0] if have[0] == kind else "Mixed"
+                have[1] += e.measure
+                for i in range(3):
+                    have[2 + i] += weight * e.center[i]
+                have[5] += weight
+    return {k: [v[0], v[1], *(c / v[5] for c in v[2:5])] for k, v in out.items()}
+
+
+def _source(project: Project, geo: Geometry, root: Path, out_dir: Path, warnings: list[str]):
+    """The geometry's file, the geometry with selections in the file's names (face-N),
+    the file names' persistent names, and how each selection resolved (G3, see
+    `naming.resolve_geometry`). Faceted files have no exact shape and keep their names."""
+    if not geo.history and is_mesh_file(geo.source):
+        return geo, root / geo.source, {}, []
+    from puzzle.geometry.naming import resolve_geometry
+
+    done = resolve_geometry(project, geo, root, out_dir)
+    selections = []
+    for sel, report in zip(geo.selections, done.reports, strict=True):
+        for m in report.detached:
+            near = f"; nearest: {m.candidates[0][0]}" if m.candidates else ""
+            warnings.append(f"selection '{sel.name}': '{m.name}' is detached{near}")
+        members = [f for n in report.resolved for f in done.files[sel.entity].get(n, [])]
         selections.append(sel.model_copy(update={"members": members}))
-    back = {face: name for name, faces in aliases.items() for face in faces}
-    return geo.model_copy(update={"selections": selections}), path, back
+    geo = geo.model_copy(update={"selections": selections})
+    return geo, done.path, done.back, done.reports
 
 
 def _closure(volumes: list[tuple[int, int]]) -> list[tuple[int, int]]:

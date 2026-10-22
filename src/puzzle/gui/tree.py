@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QTreeWidget, QTreeWidgetItem
 
+from puzzle.gui.choices import label, solver_label
 from puzzle.model.schema import (
     Component,
     Geometry,
@@ -78,8 +79,8 @@ class ModelTree(QTreeWidget):
         if runs:
             section = self._add(root, "Results", Node("section", label="Results"))
             for r in reversed(runs):
-                label = f"{r.study_name} · {r.solver} · {r.started_at:%Y-%m-%d %H:%M}"
-                self._add(section, label, Node("run", r.run_id, "", label))
+                text = f"{r.study_name} · {solver_label(r.solver)} · {r.started_at:%Y-%m-%d %H:%M}"
+                self._add(section, text, Node("run", r.run_id, "", text))
         for item in self._items():
             node = item.data(0, ROLE)
             if self._key(item) in opened or node.kind in ("project", "section"):
@@ -106,33 +107,37 @@ class ModelTree(QTreeWidget):
         names = {str(o.id): o.name for o in project.objects.values()}
         if isinstance(obj, Geometry):
             for i, step in enumerate(obj.history):
-                text = f"{i + 1}. {step.kind} {step.name}" + ("  (off)" if step.suppressed else "")
+                off = "  (off)" if step.suppressed else ""
+                text = f"{i + 1}. {label(step.kind)} {step.name}{off}"
                 self._add(item, text, Node("operation", oid, f"history.{i}", step.name))
             for i, s in enumerate(obj.selections):
-                text = f"{s.name}  ({s.entity} ×{len(s.members)})"
+                text = f"{s.name}  ({_count(len(s.members), s.entity)})"
                 self._add(item, text, Node("selection", oid, f"selections.{i}", s.name))
         elif isinstance(obj, Component):
             for i, p in enumerate(obj.parts):
-                text = f"part {p.name}: {names.get(str(p.geometry), '?')}"
+                text = f"Part {p.name}: {names.get(str(p.geometry), '?')}"
                 self._add(item, text, Node("part", oid, f"parts.{i}", p.name))
             for i, a in enumerate(obj.materials):
-                text = f"material {names.get(str(a.material), '?')} → {a.selection}"
+                text = f"{names.get(str(a.material), '?')} → {a.selection}"
                 self._add(item, text, Node("assignment", oid, f"materials.{i}", a.selection))
             for i, k in enumerate(obj.contacts):
-                self._add(item, f"contact {k.name}", Node("contact", oid, f"contacts.{i}", k.name))
+                text = f"Contact {k.name} ({label(k.type).lower()})"
+                self._add(item, text, Node("contact", oid, f"contacts.{i}", k.name))
             for i, ph in enumerate(obj.physics):
-                p_item = self._add(item, ph.type, Node("physics", oid, f"physics.{i}", ph.type))
+                p_item = self._add(
+                    item, label(ph.type), Node("physics", oid, f"physics.{i}", ph.type)
+                )
                 for j, f in enumerate(ph.features):
-                    text = f"{f.type} on {f.selection}"
+                    text = f"{_feature_label(ph.type, f.type)} on {f.selection}"
                     path = f"physics.{i}.features.{j}"
                     self._add(p_item, text, Node("feature", oid, path, f.selection))
         elif isinstance(obj, Study):
             for i, step in enumerate(obj.steps):
-                text = (
-                    f"sweep ({len(step.points())} points)"
-                    if isinstance(step, SweepStep)
-                    else step.type
-                )
+                if isinstance(step, SweepStep):
+                    text = f"Sweep ({len(step.points())} points)"
+                else:
+                    what = ", ".join(label(p).lower() for p in step.physics)
+                    text = label(step.type) + (f" · {what}" if what else "")
                 self._add(item, text, Node("step", oid, f"steps.{i}", text))
 
     def _add(self, parent, text: str, node: Node) -> QTreeWidgetItem:
@@ -154,3 +159,24 @@ class ModelTree(QTreeWidget):
     def _key(item: QTreeWidgetItem) -> tuple:
         node = item.data(0, ROLE)
         return (node.kind, node.object, node.path, node.label)
+
+
+NOUNS = {
+    "face": ("face", "faces"),
+    "edge": ("edge", "edges"),
+    "body": ("body", "bodies"),
+    "vertex": ("point", "points"),
+}
+
+
+def _count(n: int, entity: str) -> str:
+    one, many = NOUNS.get(entity, (entity, entity + "s"))
+    return f"{n} {one if n == 1 else many}"
+
+
+def _feature_label(physics: str, kind: str) -> str:
+    """A feature as the add menu names it ("Fixed support"), else its type in words."""
+    from puzzle.model.catalog import CATALOG
+
+    spec = next((s for s in CATALOG.get(physics, []) if s.type == kind), None)
+    return spec.label if spec else label(kind)

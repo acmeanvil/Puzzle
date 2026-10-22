@@ -16,6 +16,7 @@ from PySide6.QtWidgets import QMenu
 
 from puzzle.commands.model import CopyComponent, Create, Edit, EditOp
 from puzzle.geometry.steps import STEPS
+from puzzle.gui.choices import label, solver_label
 from puzzle.gui.tree import Node
 from puzzle.model.catalog import CATALOG, STEP_TYPES, specs
 from puzzle.model.schema import (
@@ -78,7 +79,7 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         physics = menu.addMenu("Add physics")
         present = {p.type for p in obj.physics}
         for kind in CATALOG:
-            action = physics.addAction(kind.replace("_", " "))
+            action = physics.addAction(label(kind))
             action.setEnabled(kind not in present)
             action.triggered.connect(lambda _=False, k=kind: add_physics(window, obj, k))
         add("Assign material…", lambda: assign_material(window, obj))
@@ -103,13 +104,15 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
     elif isinstance(obj, Geometry) and node.kind == "object":
         steps = menu.addMenu("Add step")
         for kind in STEPS:
-            action = steps.addAction(kind)
+            action = steps.addAction(label(kind))
             action.triggered.connect(lambda _=False, k=kind: add_step_to(window, obj, k))
         if not obj.history:
             add(
                 "Edit as history (keep the file as its first step)", lambda: to_history(window, obj)
             )
         add("Check geometry", lambda: check_geometry_of(window, obj))
+        if obj.selections:
+            add("Reattach selections…", lambda: reattach_selections(window, obj))
         menu.addSeparator()
         add("Delete", window.delete_selected)
     elif isinstance(obj, Geometry) and node.kind == "operation":
@@ -118,7 +121,7 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         add("Edit…", lambda: edit_step(window, obj, index))
         after = menu.addMenu("Insert step after")
         for kind in STEPS:
-            action = after.addAction(kind)
+            action = after.addAction(label(kind))
             action.triggered.connect(
                 lambda _=False, k=kind: add_step_to(window, obj, k, at=index + 1)
             )
@@ -139,7 +142,7 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         add("Run", window.run_selected)
         steps = menu.addMenu("Add step")
         for t in STEP_TYPES:
-            action = steps.addAction(t)
+            action = steps.addAction(label(t))
             action.triggered.connect(lambda _=False, k=t: add_step(window, obj, k))
         menu.addSeparator()
         add("Delete", window.delete_selected)
@@ -270,9 +273,24 @@ def new_study(window):
         window.statusBar().showMessage("Create a component first", 8000)
         return None
     comp = window.choose("New study", "Component:", sorted(comps))
-    solver = window.choose("New study", "Solver:", sorted(available_adapters())) if comp else None
-    step = window.choose("New study", "Analysis:", STEP_TYPES) if solver else None
-    name = window.ask_text("New study", "Name:", f"{comp} {step}") if step else None
+    solvers = [(solver_label(k), k) for k in sorted(available_adapters())]
+    solver = window.choose("New study", "Solver:", solvers) if comp else None
+    steps = [(label(t), t) for t in STEP_TYPES]
+    step = window.choose("New study", "Analysis:", steps) if solver else None
+    # A component with several physics: which one this step solves. Most adapters solve
+    # one physics per step (thermal stress chains a heat study into a structural one
+    # through a temperature transfer), so "all together" is offered last, not first.
+    kinds = list(dict.fromkeys(p.type for p in comps[comp].physics)) if step else []
+    physics: list[str] = []
+    if len(kinds) > 1:
+        together = "all"
+        options = [(label(k), k) for k in kinds] + [("All together (coupled)", together)]
+        chosen = window.choose("New study", "Physics this step solves:", options)
+        if chosen is None:
+            return None
+        physics = [] if chosen == together else [chosen]
+    what = label(physics[0] if physics else step).lower() if step else ""
+    name = window.ask_text("New study", "Name:", f"{comp} {what}") if step else None
     if not name:
         return None
     settings = {"modes": 6} if step == "modal" else {}
@@ -280,7 +298,7 @@ def new_study(window):
         "name": name,
         "component": str(comps[comp].id),
         "solver": solver,
-        "steps": [{"type": step, "settings": settings}],
+        "steps": [{"type": step, "physics": physics, "settings": settings}],
     }
     return window.submit(Create(kind="study", data=data))
 
@@ -309,9 +327,9 @@ def import_step_file(window, path: Path | None = None):
     bodies = [e.name for e in model.of_dim(3)]
     selections = [{"name": "Body", "entity": "body", "members": bodies}]
     # An assembly's parts keep their names: one body selection per STEP part.
-    for label, members in model.labelled_bodies().items():
-        if label != "Body" and len(model.labelled_bodies()) > 1:
-            selections.append({"name": label, "entity": "body", "members": members})
+    for part, members in model.labelled_bodies().items():
+        if part != "Body" and len(model.labelled_bodies()) > 1:
+            selections.append({"name": part, "entity": "body", "members": members})
     data = {"name": path.stem, "source": target.name, "selections": selections}
     return window.submit(Create(kind="geometry", data=data))
 
@@ -446,6 +464,38 @@ def check_geometry_of(window, geo: Geometry):
     return window.background(
         f"Checking {geo.name}…", lambda _emit: check_geometry(project, geo, root), done, lock=False
     )
+
+
+def reattach_selections(window, geo: Geometry):
+    """Resolve the geometry's selections in the background, then let the user review
+    every re-found or detached member at once (G3); the choices are one command."""
+    import copy
+
+    from puzzle.geometry.naming import accept_all, check_selections, reattach_ops, rules_for
+    from puzzle.gui.reattach import needs_decision
+
+    project, root = copy.deepcopy(window.session.project), window.session.root
+
+    def work(_emit):
+        done = check_selections(project, geo, root)
+        rules = rules_for(geo, accept_all(done.reports), done.named)
+        return done, [r.to_dict() for r in done.reports], rules
+
+    def finish(result) -> None:
+        done, reports, rules = result
+        if not needs_decision(reports):
+            window.statusBar().showMessage(f"Every selection of {geo.name} resolves", 8000)
+            return
+        choices = window.choose_reattachment(geo.name, reports, rules)
+        if not choices:
+            return
+        current = window.session.project.objects.get(geo.id, geo)
+        ops = reattach_ops(current, choices, done.named, done.reports)
+        if ops:
+            window.submit(Edit(object=str(geo.id), ops=ops))
+            window.statusBar().showMessage(f"Reattached the selections of {geo.name}", 8000)
+
+    return window.background(f"Resolving the selections of {geo.name}…", work, finish, lock=False)
 
 
 def new_parameter_set(window):

@@ -7,6 +7,7 @@ view adds them (an Edit on the geometry), since picking needs a real OpenGL view
 
 import os
 import time
+from pathlib import Path
 
 import pytest
 
@@ -24,6 +25,8 @@ from puzzle.gui.tree import Node  # noqa: E402
 from puzzle.gui.window import MainWindow  # noqa: E402
 from puzzle.model.catalog import spec  # noqa: E402
 from puzzle.model.schema import Component, Geometry, Study  # noqa: E402
+
+EXAMPLE = Path(__file__).parents[1] / "examples" / "cantilever"
 
 
 @pytest.fixture(scope="module")
@@ -158,4 +161,27 @@ def test_menus_match_the_item(app, tmp_path):
         assert [f.type for f in _only(window, Component).physics[0].features] == ["fixed", "force"]
         assert menus.selections_of(window.session.project, comp, "face") == ["Bar/Root", "Bar/Tip"]
     finally:
+        window.close()
+
+
+def test_a_study_on_a_multiphysics_component_asks_which_physics(app, tmp_path):
+    """The cantilever has heat transfer and solid mechanics; a new Code_Aster study
+    solves one of them (an empty list would mean both, which Code_Aster refuses)."""
+    import shutil
+
+    from puzzle.gui import menus
+    from puzzle.gui.window import MainWindow
+
+    root = tmp_path / "cantilever"
+    shutil.copytree(EXAMPLE, root, ignore=shutil.ignore_patterns("results", ".puzzle"))
+    window = MainWindow(root)
+    try:
+        before = {s.id for s in window.session.project.of_type(Study)}
+        Answers(window, "Cantilever", "code_aster", "stationary", "solid_mechanics", "Static")
+        menus.new_study(window)
+        (study,) = [s for s in window.session.project.of_type(Study) if s.id not in before]
+        assert study.steps[0].physics == ["solid_mechanics"]
+    finally:
+        while window.tasks:
+            app.processEvents()
         window.close()

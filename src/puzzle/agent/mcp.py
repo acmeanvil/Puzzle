@@ -120,6 +120,32 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         s = session()
         return check_geometry(s.project, resolve(s.project, geometry, Geometry), root)
 
+    @tool(
+        description="How a geometry's selections resolve after edits or a replaced file: "
+        "each member kept, re-found (by where it was), by rule, or detached with ranked "
+        "candidates. `accept_all` is an edit command taking every proposal (and a rule "
+        "where one fits); review it, then pass it to submit."
+    )
+    @guarded
+    def selections_check(geometry: str) -> dict[str, Any]:
+        from puzzle.commands import resolve
+        from puzzle.geometry.naming import accept_all, check_selections, reattach_ops, rules_for
+        from puzzle.model.schema import Geometry
+
+        s = session()
+        geo = resolve(s.project, geometry, Geometry)
+        done = check_selections(s.project, geo, root)
+        choices = accept_all(done.reports)
+        for sel, rule in rules_for(geo, choices, done.named).items():
+            choices.setdefault(sel, {})["rule"] = rule
+        ops = reattach_ops(geo, choices, done.named, done.reports)
+        command = (
+            {"command": "edit", "object": geo.name, "ops": [o.model_dump() for o in ops]}
+            if ops
+            else None
+        )
+        return {"selections": [r.to_dict() for r in done.reports], "accept_all": command}
+
     @tool(description="Consistency problems of the project, each with a code.")
     @guarded
     def problems() -> list[dict[str, Any]]:

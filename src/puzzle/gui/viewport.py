@@ -86,6 +86,14 @@ def selection_surface(mesh: Mesh, group: str):
     return pv.PolyData(mesh.coords, np.concatenate(faces))
 
 
+def words(name: str) -> str:
+    """A field name as a title: "von_mises" -> "Von Mises", "displacement_magnitude" ->
+    "Displacement magnitude"."""
+    from puzzle.gui.choices import label
+
+    return {"von_mises": "Von Mises stress"}.get(name, label(name))
+
+
 class SceneView(QWidget):
     """A VTK scene rendered off screen and painted as an image, with its own mouse
     handling: left-drag rotates, shift- or middle-drag pans, right-drag, the wheel
@@ -457,7 +465,7 @@ class Viewport(QWidget):
             "scale": scale,
             # Shown by the window's results bar: VTK's 2D text leaves a clipped copy along
             # the view's bottom edge on Retina displays.
-            "title": f"{name}, {label}" + (f", deformation ×{scale:.3g}" if scale else ""),
+            "title": f"{words(name)}, {label}" + (f", deformation ×{scale:.3g}" if scale else ""),
         }
         if self.plotter is not None:
             self.plotter.clear()
@@ -466,7 +474,7 @@ class Viewport(QWidget):
                 scalars=name,
                 cmap="turbo",
                 scalar_bar_args={
-                    "title": name.replace("_", " "),
+                    "title": words(name),
                     "vertical": True,
                     "position_x": 0.8,
                     "position_y": 0.1,

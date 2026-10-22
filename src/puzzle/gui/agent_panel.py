@@ -35,7 +35,13 @@ from puzzle.agent.settings import load_settings, settings_path
 from puzzle.commands.model import SetAutonomy
 from puzzle.errors import PuzzleError
 
-LEVELS = ["advise", "propose", "act_in_budget", "act"]
+# Autonomy levels as people read them (ADR 0015).
+LEVELS = {
+    "advise": "only advise",
+    "propose": "propose changes",
+    "act_in_budget": "act within the budget",
+    "act": "act freely",
+}
 
 
 class AgentPanel(QWidget):
@@ -46,8 +52,9 @@ class AgentPanel(QWidget):
         self.agent: Agent | None = None
 
         self.level = QComboBox()
-        self.level.addItems(LEVELS)
-        self.level.activated.connect(lambda _: self._set_level(self.level.currentText()))
+        for key, text in LEVELS.items():
+            self.level.addItem(text, key)
+        self.level.activated.connect(lambda _: self._set_level(self.level.currentData()))
         self.model_label = QLabel("")
         self.model_label.setStyleSheet("color: gray")
         new_chat = QPushButton("New chat")
@@ -111,10 +118,11 @@ class AgentPanel(QWidget):
         s = self.window.session
         if s is None:
             return
-        self.level.setCurrentText(s.project.agent.level)
+        self.level.setCurrentIndex(self.level.findData(s.project.agent.level))
         self.proposals.clear()
         for p in s.proposals():
-            item = QListWidgetItem(_proposal_text(p))
+            names = {str(o.id): o.name for o in s.project.objects.values()}
+            item = QListWidgetItem(_proposal_text(p, names))
             item.setData(Qt.ItemDataRole.UserRole, p["id"])
             self.proposals.addItem(item)
 
@@ -304,10 +312,10 @@ def _brief(text: str, limit: int = 160) -> str:
     return squeezed if len(squeezed) <= limit else squeezed[:limit] + "…"
 
 
-def _proposal_text(p: dict) -> str:
-    commands = []
-    for c in p["commands"]:
-        target = c.get("object") or c.get("study") or c.get("kind") or c.get("key") or ""
-        commands.append(f"{c['command']} {target}".strip())
+def _proposal_text(p: dict, names: dict | None = None) -> str:
+    """A proposal in words: what would change, by name, and the agent's reason."""
+    from puzzle.gui.window import _describe
+
+    what = "; ".join(_describe(c, names or {}) for c in p["commands"])
     why = f" — {p['rationale']}" if p.get("rationale") else ""
-    return f"[{p['id']}] {p['actor'].get('name', 'agent')}: {'; '.join(commands)}{why}"
+    return f"{p['actor'].get('name', 'Agent')}: {what[:1].upper()}{what[1:]}{why}"

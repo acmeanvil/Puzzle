@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, TypeVar
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 if TYPE_CHECKING:
     from puzzle.errors import Problem
@@ -31,6 +31,16 @@ class Quantity(BaseModel):
 
     value: float
     unit: str = "dimensionless"
+
+    @field_validator("unit")
+    @classmethod
+    def _known_unit(cls, unit: str) -> str:
+        """Refused where it is typed, not later in a solver run."""
+        from puzzle.model.units import known
+
+        if not known(unit):
+            raise ValueError(f"unknown unit '{unit}' (e.g. mm, MPa, W/(m^2*K), degC)")
+        return unit
 
     def to_si(self) -> float:
         from puzzle.model.units import to_si
@@ -61,6 +71,12 @@ class NamedSelection(BaseModel):
     name: str
     entity: Literal["body", "face", "edge", "vertex"]
     members: list[str] = Field(default_factory=list)
+    # Where each member was when selected: [kind, measure, x, y, z] in SI. Re-finds a
+    # member whose name is gone, and checks file-order names after a re-import (G3).
+    anchors: dict[str, list[str | float]] = Field(default_factory=dict)
+    # Members described instead of listed, evaluated at every regeneration:
+    # {"plane": {"axis": "x", "at": 0.0}}, {"radius": 0.004}, {"kind": "Cylinder"}.
+    rule: dict[str, Any] | None = None
 
 
 # --- Resources ---------------------------------------------------------------

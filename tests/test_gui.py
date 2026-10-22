@@ -80,7 +80,7 @@ def test_tree_lists_the_model(window):
     names = labels(window)
     for expected in ("Geometry", "Bar", "Materials", "Structural steel", "Components"):
         assert expected in names
-    assert "Tip load" in names and "fixed on Bar/Root" in names
+    assert "Tip load" in names and "Fixed support on Bar/Root" in names
     assert any(n.startswith("Root") for n in names)  # selections under the geometry
 
 
@@ -94,7 +94,9 @@ def test_an_edit_is_a_command_and_undoes(window):
     entry = window.session.history(limit=1)[0]
     assert entry["type"] == "command" and entry["actor"]["kind"] == "user"
     assert entry["command"]["ops"][0]["path"] == "global_size"
-    assert window.history.item(0).text().startswith(f"#{entry['seq']}  user  command edit")
+    assert (
+        window.history.item(0).text() == f"#{entry['seq']}  You: changed Tets 2.5 mm (global size)"
+    )
 
     window.undo()
     recipe = next(o for o in window.session.project.objects.values() if o.name == "Tets 2.5 mm")
@@ -104,10 +106,10 @@ def test_an_edit_is_a_command_and_undoes(window):
 def test_a_bad_edit_is_refused_and_reported(window):
     select(window, "object", "Tets 2.5 mm")
     before = len(window.session.history_entries())
-    property_item(window, "element_order").setText(1, "7")
+    property_item(window, "global_size").setText(1, "3 apples")
     assert len(window.session.history_entries()) == before
     assert "error:" in window.log.toPlainText()
-    assert property_item(window, "element_order").text(1) == "2"  # the panel shows the truth
+    assert property_item(window, "global_size").text(1) == "2.5 mm"  # the panel shows the truth
 
 
 def test_materials_add_and_delete(window):
@@ -142,7 +144,7 @@ def test_mesh_highlight_and_run(app, window):
     select(window, "object", "Tip load")
     window.run_selected()
     wait(app, lambda: not window.tasks)
-    assert any(n.startswith("Tip load · calculix") for n in labels(window)), (
+    assert any(n.startswith("Tip load · CalculiX") for n in labels(window)), (
         window.log.toPlainText()
     )
     assert window.results_bar.isVisible() or window.results_bar.field.count()
@@ -150,7 +152,8 @@ def test_mesh_highlight_and_run(app, window):
     assert shown["kind"] == "result" and shown["scalar"] == "displacement_magnitude"
     assert shown["max"] > 0 and shown["scale"] > 0
 
-    window.results_bar.field.setCurrentText("stress")
+    assert window.results_bar.field.currentText() == "Displacement"  # a name, not a key
+    window.results_bar.field.setCurrentIndex(window.results_bar.field.findData("stress"))
     assert window.viewport.shown["scalar"] == "von_mises"
     study = next(s for s in window.session.project.of_type(Study) if s.name == "Tip load")
     assert window.session.history(limit=1)[0]["command"]["study"] == str(study.id)
@@ -196,16 +199,18 @@ def test_agent_proposes_and_the_user_accepts(app, tmp_path):
         wait(app, lambda: not window.tasks, timeout=60)
         assert "Proposed a 250 N tip load." in window.agent.transcript.toPlainText()
         assert window.agent.proposals.count() == 1
-        assert "edit Cantilever — asked" in window.agent.proposals.item(0).text()
+        assert "Changed Cantilever (physics) — asked" in window.agent.proposals.item(0).text()
         assert _tip(window) == -100
 
         window.agent.accept_selected()
         wait(app, lambda: not window.tasks, timeout=60)
         assert _tip(window) == -250
         assert window.agent.proposals.count() == 0
-        assert "decision" in window.history.item(0).text()
+        assert "You: accepted a proposal" in window.history.item(0).text()
         # The change itself is the agent's, accepted by the user:
-        assert "agent built-in (accepted by user)  command edit" in window.history.item(1).text()
+        assert (
+            "Agent built-in, accepted by you: changed Cantilever" in window.history.item(1).text()
+        )
     finally:
         window.close()
 
@@ -223,7 +228,7 @@ def test_agent_rejects_and_levels(app, tmp_path, monkeypatch):
 
         window.agent._set_level("act_in_budget")
         assert window.session.project.agent.level == "act_in_budget"
-        assert window.agent.level.currentText() == "act_in_budget"
+        assert window.agent.level.currentText() == "act within the budget"
         monkeypatch.setattr(window.agent, "_confirm_act", lambda: False)
         window.agent._set_level("act")  # declined at the second confirmation
         assert window.session.project.agent.level == "act_in_budget"
@@ -337,3 +342,35 @@ def test_an_old_results_store_does_not_stop_the_project_opening(app, tmp_path):
         while w.tasks:  # let the preview finish before the window goes
             app.processEvents()
         w.close()
+
+
+def test_choices_are_dropdowns_of_names_not_ids(window):
+    """Fields with a fixed set of values show readable names; the value is stored."""
+    import re
+
+    uuid = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-")
+    select(window, "object", "Tip load")
+    panel = window.properties
+    component = panel.dropdown("component")
+    assert component.currentText() == "Cantilever"
+    assert panel.dropdown("solver").currentText() == "CalculiX"
+    assert panel.dropdown("steps.0.physics.0").currentText() == "Solid mechanics"
+    assert panel.dropdown("steps.0.type").currentText() == "Stationary"
+    shown = [i.text(c) for i in _walk(panel.invisibleRootItem()) for c in (0, 1)]
+    assert not any(uuid.search(s) for s in shown)  # no ids anywhere
+    assert "Steps" in shown and "steps" not in shown  # property names as words
+
+    select(window, "object", "Cantilever")
+    feature = panel.dropdown("physics.0.features.1.selection")
+    assert "Bar/Tip" in [feature.itemText(i) for i in range(feature.count())]
+    kinds = panel.dropdown("physics.0.features.1.type")
+    assert kinds.currentText() == "Force (total over the face)"
+    mesh = panel.dropdown("mesh")
+    assert mesh.currentText() == "Tets 2.5 mm"
+
+    # Picking a value stores it through one command.
+    select(window, "object", "Tets 2.5 mm")
+    order = window.properties.dropdown("element_order")
+    order.setCurrentIndex(order.findData(1))
+    mesh = next(o for o in window.session.project.objects.values() if o.name == "Tets 2.5 mm")
+    assert mesh.element_order == 1

@@ -99,15 +99,18 @@ class ResultsBar(QWidget):
 
     def load(self, results: Results) -> None:
         names = list(dict.fromkeys(n for s in results.steps for n in s.fields))
-        chosen = self.field.currentText()  # kept across refreshes when the run has it
+        chosen = self.field.currentData()  # kept across refreshes when the run has it
         for w in (self.field, self.step):
             w.blockSignals(True)
         self.field.clear()
-        self.field.addItems(names)
+        from puzzle.gui.choices import label
+
+        for n in names:
+            self.field.addItem(label(n), n)
         defaults = ("displacement", "temperature", "velocity")
         preferred = chosen if chosen in names else next((n for n in defaults if n in names), None)
         if preferred:
-            self.field.setCurrentText(preferred)
+            self.field.setCurrentIndex(self.field.findData(preferred))
         self.step.setRange(1, max(1, len(results.steps)))
         self.step.setValue(self.step.maximum())
         for w in (self.field, self.step):
@@ -189,6 +192,10 @@ class MainWindow(QMainWindow):
         self.mesh_names: dict[str, dict] = {}  # component id -> (dim, tag) -> (part, name)
         self.mesh_boundaries: dict[str, dict] = {}  # component id -> body -> its faces
         self.mesh_vertices: dict[str, dict] = {}  # component id -> vertex -> position
+        self.mesh_anchors: dict[str, dict] = {}  # id -> (part, entity, name) -> anchor
+        self.mesh_selections: dict[str, dict] = {}  # component id -> part -> reports
+        self._selections_checked: dict[str, str] = {}  # component id -> what was checked
+        self._selections_checking: dict[str, str] = {}
         self.mesh_component: str | None = None  # whose mesh the view shows
         self.previews: dict[str, tuple[str, object]] = {}  # component id -> (key, MeshResult)
         self._previewing: tuple[str, str] | None = None
@@ -298,17 +305,50 @@ class MainWindow(QMainWindow):
                 self.report(exc)
         self.tree.populate(s.project, runs)
         self.history.clear()
+        names = {str(o.id): o.name for o in s.project.objects.values()}
         for entry in s.history(limit=200):  # newest first
-            self.history.addItem(_history_line(entry))
-        self.problems.clear()
-        for p in s.project.problems():
-            self.problems.addItem(f"[{p.code}] {p.object}: {p.message}")
-        for geo, findings in self.geometry_findings.items():  # from "Check geometry"
-            for f in findings:
-                self.problems.addItem(f"[geometry {f['severity']}] {geo}: {f['message']}")
-        self.output_tabs.setTabText(2, f"Problems ({self.problems.count()})")
+            self.history.addItem(_history_line(entry, names))
+        self.refresh_problems()
         self.agent.refresh()
         self._selected()
+
+    def refresh_problems(self) -> None:
+        s = self.session
+        self.problems.clear()
+        for p in s.project.problems():
+            self.problems.addItem(f"{p.object}: {p.message}")
+        for geo, findings in self.geometry_findings.items():  # from "Check geometry"
+            for f in findings:
+                self.problems.addItem(f"{geo} (geometry {f['severity']}): {f['message']}")
+        for line in self.detached_lines():
+            self.problems.addItem(line)
+        self.output_tabs.setTabText(2, f"Problems ({self.problems.count()})")
+
+    def detached_lines(self) -> list[str]:
+        """Detached selection members of the components meshed or previewed so far."""
+        lines = []
+        seen = set()
+        for cid, parts in self.mesh_selections.items():
+            comp = self.session.project.objects.get(_uuid(cid)) or next(
+                (c for c, _ in self._standalones.values() if str(c.id) == cid), None
+            )
+            if comp is None:
+                continue
+            for part in comp.parts:
+                geo = self.session.project.objects.get(part.geometry)
+                for report in parts.get(part.name, []):
+                    for m in report["members"]:
+                        key = (geo.name if geo else part.name, report["selection"], m["name"])
+                        if m["status"] != "detached" or key in seen:
+                            continue
+                        seen.add(key)
+                        near = m["candidates"][0]["name"] if m["candidates"] else None
+                        lines.append(
+                            f"{key[0]}, selection {key[1]}: '{m['name']}' was not found"
+                            + (f" (nearest: {near})" if near else "")
+                            + ". Right-click the geometry: Reattach selections…"
+                        )
+        return lines
 
     def submit(self, command, **kwargs):
         """Submit a command; errors go to the status bar and the log. Returns the Outcome."""
@@ -392,12 +432,15 @@ class MainWindow(QMainWindow):
         from puzzle.materials import library_material, search_library
 
         keys = search_library("")
-        labels = [f"{library_material(k).name}  ({k})" for k in keys]
-        label, ok = QInputDialog.getItem(
-            self, "Add material", "Library material:", labels, 0, False
-        )
-        if ok:
-            self.add_material(keys[labels.index(label)])
+        named = [library_material(k).name for k in keys]
+        # The library key only where two materials share a name.
+        options = [
+            (n if named.count(n) == 1 else f"{n} ({k})", k)
+            for n, k in zip(named, keys, strict=True)
+        ]
+        key = self.choose("Add material", "Library material:", options)
+        if key:
+            self.add_material(key)
 
     def mesh_selected(self) -> Task | None:
         comp = self._component_of(self.tree.current())
@@ -418,6 +461,9 @@ class MainWindow(QMainWindow):
             self.mesh_names[str(comp.id)] = meshed.names
             self.mesh_boundaries[str(comp.id)] = meshed.boundaries
             self.mesh_vertices[str(comp.id)] = meshed.vertices
+            self.mesh_anchors[str(comp.id)] = meshed.anchors
+            self.mesh_selections[str(comp.id)] = meshed.selections
+            self.refresh_problems()
             for w in meshed.warnings:
                 self.log.appendPlainText(f"mesh: {w}")
             cells = sum(len(b.ids) for b in meshed.mesh.blocks if b.dim == 3)
@@ -465,7 +511,16 @@ class MainWindow(QMainWindow):
         if obj is None:
             self.properties.show_text({"project": s.project.name} if node.kind == "project" else {})
             return
-        self.properties.show_object(str(obj.id), obj.model_dump(mode="json"), node.path, names)
+        from puzzle.gui.choices import choices
+
+        project = s.project
+        self.properties.show_object(
+            str(obj.id),
+            obj.model_dump(mode="json"),
+            node.path,
+            names,
+            lambda path: choices(project, obj, path),
+        )
         self.results_bar.hide()
         comp = self._component_of(node)
         if comp is None:
@@ -515,7 +570,7 @@ class MainWindow(QMainWindow):
         if self.result is None:
             return
         mesh, results = self.result
-        field = self.results_bar.field.currentText()
+        field = self.results_bar.field.currentData()
         steps = [s for s in results.steps if field in s.fields]
         if not field or not steps:
             return
@@ -557,7 +612,12 @@ class MainWindow(QMainWindow):
         if any(s.name == name for s in geo.selections):
             self.statusBar().showMessage(f"{geo.name} already has a selection '{name}'", 8000)
             return None
-        value = {"name": name, "entity": self.viewport.pick_kind, "members": members}
+        value = {
+            "name": name,
+            "entity": self.viewport.pick_kind,
+            "members": members,
+            "anchors": self._anchors_of(members),
+        }
         out = self.submit(
             Edit(object=str(geo.id), ops=[EditOp(op="append", path="selections", value=value)])
         )
@@ -584,11 +644,24 @@ class MainWindow(QMainWindow):
             return None
         current = geo.selections[index].members
         merged = current + [m for m in members if m not in current]
-        op = EditOp(op="set", path=f"selections.{index}.members", value=merged)
-        out = self.submit(Edit(object=str(geo.id), ops=[op]))
+        anchors = {**self._anchors_of(members), **geo.selections[index].anchors}
+        ops = [
+            EditOp(op="set", path=f"selections.{index}.members", value=merged),
+            EditOp(op="set", path=f"selections.{index}.anchors", value=anchors),
+        ]
+        out = self.submit(Edit(object=str(geo.id), ops=ops))
         if out is not None:
             self.viewport.clear_picks()
         return out
+
+    def _anchors_of(self, members: list[str]) -> dict[str, list]:
+        """Where the picked members are (from the shown mesh's geometry): stored with
+        the selection so it can be re-found if its names stop fitting (G3)."""
+        anchors = self.mesh_anchors.get(self.mesh_component or "", {})
+        parts, kind = {n: p for p, n in self.picked_names()}, self.viewport.pick_kind
+        return {
+            m: anchors[(parts[m], kind, m)] for m in members if (parts.get(m), kind, m) in anchors
+        }
 
     def _picked_geometry(self):
         comp = self.session.project.objects.get(_uuid(self.mesh_component or "")) or next(
@@ -625,11 +698,15 @@ class MainWindow(QMainWindow):
 
     # --- questions (tests replace these) -----------------------------------------
 
-    def choose(self, title: str, label: str, items: list[str]) -> str | None:
+    def choose(self, title: str, label: str, items: list):
+        """One of `items`: plain strings, or (shown name, value) pairs so that people
+        read names while the value (a key, an id) is what comes back."""
         if not items:
             return None
-        item, ok = QInputDialog.getItem(self, title, label, items, 0, False)
-        return item if ok else None
+        pairs = [i if isinstance(i, tuple) else (str(i), i) for i in items]
+        shown = [p[0] for p in pairs]
+        item, ok = QInputDialog.getItem(self, title, label, shown, 0, False)
+        return pairs[shown.index(item)][1] if ok else None
 
     def edit_step(self, kind: str, args: dict, name: str, features: list[str]):
         """The step dialog: (name, args) when accepted, else None."""
@@ -639,6 +716,13 @@ class MainWindow(QMainWindow):
         if dialog.exec() and dialog.result_args is not None:
             return dialog.name.text().strip() or name, dialog.result_args
         return None
+
+    def choose_reattachment(self, geometry: str, reports: list[dict], rules: dict):
+        """The reattach dialog: choices for `naming.reattach_ops`, or None."""
+        from puzzle.gui.reattach import ReattachDialog
+
+        dialog = ReattachDialog(geometry, reports, rules, self)
+        return dialog.choices() if dialog.exec() else None
 
     def ask_text(self, title: str, label: str, default: str = "") -> str | None:
         text, ok = QInputDialog.getText(self, title, label, text=default)
@@ -762,6 +846,8 @@ class MainWindow(QMainWindow):
                 self.mesh_names[cid] = cached[1].names
                 self.mesh_boundaries[cid] = cached[1].boundaries
                 self.mesh_vertices[cid] = cached[1].vertices
+                self.mesh_anchors[cid] = cached[1].anchors
+            self._check_selections(comp)
             return cached[1].mesh
         if self._previewing == (cid, key):
             return None  # already being made
@@ -809,9 +895,69 @@ class MainWindow(QMainWindow):
             geo = project.objects.get(p.geometry)
             if isinstance(geo, Geometry):
                 shapes.append(geo.model_dump(mode="json", exclude={"selections", "name"}))
+                shapes.append(self._files_stamp(geo))  # a file replaced outside Puzzle
         params = [ps.model_dump(mode="json") for ps in project.of_type(ParameterSet)]
         text = json.dumps([parts, shapes, params], sort_keys=True, default=str)
         return hashlib.sha256(text.encode()).hexdigest()
+
+    def _files_stamp(self, geo: Geometry) -> list:
+        """Size and time of the files a geometry reads (its source, its import steps)."""
+        files = [geo.source] if geo.source else []
+        files += [s.args.get("file") for s in geo.history if s.kind == "import"]
+        out = []
+        for f in files:
+            path = self.session.root / str(f)
+            try:
+                st = path.stat()
+                out.append([str(f), st.st_size, st.st_mtime_ns])
+            except OSError:
+                out.append([str(f), None])
+        return out
+
+    def _check_selections(self, comp: Component) -> None:
+        """Resolve the shown parts' selections in the background whenever they (or the
+        shape) change, so detached members reach Problems without a remesh (G3)."""
+        import copy
+        import json
+
+        from puzzle.geometry.meshfile import is_mesh_file
+        from puzzle.geometry.naming import check_selections
+
+        cid, project, root = str(comp.id), self.session.project, self.session.root
+        geos = {p.name: project.objects.get(p.geometry) for p in comp.parts}
+        key = self._preview_key(comp) + json.dumps(
+            {n: [s.model_dump(mode="json") for s in g.selections] for n, g in geos.items() if g},
+            sort_keys=True,
+        )
+        if key in (self._selections_checked.get(cid), self._selections_checking.get(cid)):
+            return
+        self._selections_checking[cid] = key
+        snapshot = copy.deepcopy(project)
+
+        def work(_emit):
+            out = {}
+            for name, geo in geos.items():
+                geo = snapshot.objects.get(geo.id) if geo is not None else None
+                if (
+                    geo is None
+                    or not geo.selections
+                    or (not geo.history and is_mesh_file(geo.source))
+                ):
+                    out[name] = []
+                    continue
+                out[name] = [r.to_dict() for r in check_selections(snapshot, geo, root).reports]
+            return out
+
+        def done(result) -> None:
+            self._selections_checking.pop(cid, None)
+            self._selections_checked[cid] = key
+            self.mesh_selections[cid] = result
+            self.refresh_problems()
+
+        def failed(_exc) -> None:
+            self._selections_checking.pop(cid, None)
+
+        self.background("Checking selections…", work, done, lock=False, failed=failed)
 
     @staticmethod
     def _feature_selection(obj, path: str) -> str | None:
@@ -860,15 +1006,61 @@ def _uuid(text: str):
         return text
 
 
-def _history_line(entry: dict) -> str:
+def _history_line(entry: dict, names: dict | None = None) -> str:
+    """A history entry in words: who did what to which object, by name."""
+    names = names or {}
     who = entry.get("actor", {})
-    actor = who.get("kind", "?") + (f" {who['name']}" if who.get("name") else "")
+    actor = (
+        "You"
+        if who.get("kind") == "user"
+        else (f"Agent {who['name']}" if who.get("name") else "Agent")
+    )
     if entry.get("approved_by"):
-        actor += f" (accepted by {entry['approved_by'].get('kind', 'user')})"
-    kind = entry.get("type", "?")
+        actor += ", accepted by you"
+    kind = entry.get("type", "")
+    seq = entry.get("seq", "?")
+    if kind == "decision":
+        verb = "accepted" if entry.get("accepted") else "rejected"
+        return f"#{seq}  {actor}: {verb} a proposal"
+    if kind == "proposal":
+        what = "; ".join(_describe(c, names) for c in entry.get("commands", []))
+        return f"#{seq}  {actor}: proposed {what}"
+    if kind == "confirmation_request":
+        return f"#{seq}  {actor}: asked for a confirmation"
     cmd = entry.get("command", {})
-    what = cmd.get("command", "") if isinstance(cmd, dict) else ""
-    if what == "batch":
-        what = "batch of " + ", ".join(c.get("command", "?") for c in cmd.get("commands", []))
-    target = cmd.get("object") or cmd.get("study") or cmd.get("kind") or cmd.get("key") or ""
-    return f"#{entry.get('seq', '?')}  {actor}  {kind} {what} {target}".rstrip()
+    what = _describe(cmd, names) if isinstance(cmd, dict) else ""
+    return f"#{seq}  {actor}: {what}"
+
+
+def _describe(cmd: dict, names: dict) -> str:
+    from puzzle.gui.choices import label
+
+    command = cmd.get("command", "")
+
+    def name(ref) -> str:
+        return names.get(str(ref), str(ref)) if ref else "?"
+
+    if command == "batch":
+        return "; ".join(_describe(c, names) for c in cmd.get("commands", []))
+    if command == "create":
+        data = cmd.get("data", {})
+        return f"added {label(cmd.get('kind', 'object')).lower()} {data.get('name', '')}".rstrip()
+    if command == "edit":
+        fields = dict.fromkeys(
+            label(op.get("path", "").split(".")[0]).lower() for op in cmd.get("ops", [])
+        )
+        return f"changed {name(cmd.get('object'))} ({', '.join(fields)})"
+    if command == "delete":
+        return f"deleted {name(cmd.get('object'))}"
+    if command == "add_library_material":
+        return f"added material {cmd.get('name') or label(cmd.get('key', ''))}"
+    if command == "copy_component":
+        return f"copied {name(cmd.get('component'))} as {cmd.get('name', '')}"
+    if command == "undo":
+        return f"undid #{cmd.get('seq', '?')}"
+    if command == "run_study":
+        return f"ran {name(cmd.get('study'))}"
+    if command == "set_autonomy":
+        level = cmd.get("level")
+        return f"set agents to {label(level).lower()}" if level else "changed agent settings"
+    return label(command).lower()
