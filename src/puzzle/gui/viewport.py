@@ -45,6 +45,28 @@ def entity_surface(mesh: Mesh):
     return surface, entities
 
 
+def entity_lines(mesh: Mesh):
+    """Every edge element as pickable lines; cell data `entity` indexes the returned list
+    of Gmsh edge entities (1, tag)."""
+    import pyvista as pv
+
+    order = np.argsort(mesh.node_ids)
+    segments, owners, entities = [], [], []
+    for b in mesh.blocks:
+        if b.dim != 1 or not b.element.startswith("line"):
+            continue
+        if b.entity not in entities:
+            entities.append(b.entity)
+        ends = order[np.searchsorted(mesh.node_ids, b.connectivity[:, :2], sorter=order)]
+        segments.append(np.hstack([np.full((len(ends), 1), 2), ends]).ravel())
+        owners.append(np.full(len(ends), entities.index(b.entity)))
+    if not segments:
+        return None, []
+    lines = pv.PolyData(mesh.coords, lines=np.concatenate(segments))
+    lines.cell_data["entity"] = np.concatenate(owners)
+    return lines, entities
+
+
 def selection_surface(mesh: Mesh, group: str):
     """A pyvista surface of a face selection, from the mesh's surface elements."""
     import pyvista as pv
@@ -209,6 +231,10 @@ class Viewport(QWidget):
         self.surface, self.entities = None, []
         self.picked: list[tuple[int, int]] = []
         self.picking = False
+        self.pick_kind = "face"  # the selection filter: face, edge, vertex or body
+        self.lines, self.line_entities = None, []
+        self.vertices: dict = {}  # (0, tag) -> position, set by the window per mesh
+        self.boundaries: dict = {}  # (3, tag) -> its faces, set by the window per mesh
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self.shown: dict = {}  # what is on screen: kind, scalar, range, highlight
@@ -232,7 +258,9 @@ class Viewport(QWidget):
         if mesh is not self.mesh:
             self.mesh = mesh
             self.surface, self.entities = entity_surface(mesh)
-            self.picked = [e for e in self.picked if e in self.entities]
+            self.lines, self.line_entities = entity_lines(mesh)
+            known = set(self.entities) | set(self.line_entities) | set(self.vertices)
+            self.picked = [e for e in self.picked if e in known or e in self.boundaries]
         self.highlight, self.highlight_entities = highlight, list(entities or [])
         try:
             grid = to_grid(mesh)
@@ -269,11 +297,28 @@ class Viewport(QWidget):
             if surface is not None:
                 self._overlay(surface, HIGHLIGHT)
         for group, colour in ((self.highlight_entities, HIGHLIGHT), (self.picked, PICKED)):
-            index = [self.entities.index(e) for e in group if e in self.entities]
-            if index and self.surface is not None:
-                mask = np.isin(self.surface.cell_data["entity"], index)
-                self._overlay(self.surface.extract_cells(mask), colour)
+            self._draw_entities(group, colour)
         self._frame(mesh)
+
+    def _draw_entities(self, group, colour: str) -> None:
+        """Faces as an overlay, edges as thick lines, vertices as dots, bodies by their faces."""
+        import pyvista as pv
+
+        faces = [e for e in group if e[0] == 2]
+        faces += [f for e in group if e[0] == 3 for f in self.boundaries.get(e, [])]
+        index = [self.entities.index(e) for e in faces if e in self.entities]
+        if index and self.surface is not None:
+            mask = np.isin(self.surface.cell_data["entity"], index)
+            self._overlay(self.surface.extract_cells(mask), colour)
+        index = [self.line_entities.index(e) for e in group if e in self.line_entities]
+        if index and self.lines is not None:
+            mask = np.isin(self.lines.cell_data["entity"], index)
+            edges = self.lines.extract_cells(np.flatnonzero(mask))
+            self.plotter.add_mesh(edges, color=colour, line_width=5, render_lines_as_tubes=True)
+        points = [self.vertices[e] for e in group if e in self.vertices]
+        if points:
+            cloud = pv.PolyData(np.asarray(points, float))
+            self.plotter.add_mesh(cloud, color=colour, point_size=14, render_points_as_spheres=True)
 
     def _overlay(self, surface, colour: str) -> None:
         """Faces drawn over the mesh's own: pulled towards the camera in depth, or the
@@ -307,29 +352,67 @@ class Viewport(QWidget):
             self.show_mesh(self.mesh, self.highlight, self.highlight_entities)
         self.picked_changed.emit([])
 
+    def set_pick_kind(self, kind: str) -> None:
+        """The selection filter; picks of another kind are cleared."""
+        if kind not in ("face", "edge", "vertex", "body"):
+            raise ValueError(f"pick faces, edges, vertices or bodies, not '{kind}'")
+        if kind != self.pick_kind:
+            self.pick_kind = kind
+            self.clear_picks()
+
     def measure(self, entities) -> dict:
-        """Area of the given faces and, for two, the distance between their centres."""
-        if self.surface is None:
-            return {}
-        out, centres = {"area": 0.0}, []
+        """Faces: area, and for two the distance between their centres. Edges: length.
+        Vertices: for two, the distance between them."""
+        out, centres = {}, []
         for e in entities:
-            if e not in self.entities:
-                continue
-            mask = self.surface.cell_data["entity"] == self.entities.index(e)
-            part = self.surface.extract_cells(np.flatnonzero(mask)).compute_cell_sizes()
-            areas = np.asarray(part.cell_data["Area"])
-            out["area"] += float(areas.sum())
-            centres.append((areas[:, None] * part.cell_centers().points).sum(axis=0) / areas.sum())
+            if e[0] == 2 and self.surface is not None and e in self.entities:
+                mask = self.surface.cell_data["entity"] == self.entities.index(e)
+                part = self.surface.extract_cells(np.flatnonzero(mask)).compute_cell_sizes()
+                areas = np.asarray(part.cell_data["Area"])
+                out["area"] = out.get("area", 0.0) + float(areas.sum())
+                centres.append(
+                    (areas[:, None] * part.cell_centers().points).sum(axis=0) / areas.sum()
+                )
+            elif e[0] == 1 and self.lines is not None and e in self.line_entities:
+                mask = self.lines.cell_data["entity"] == self.line_entities.index(e)
+                part = self.lines.extract_cells(np.flatnonzero(mask)).compute_cell_sizes()
+                out["length"] = out.get("length", 0.0) + float(np.sum(part.cell_data["Length"]))
+            elif e[0] == 0 and e in self.vertices:
+                centres.append(np.asarray(self.vertices[e], float))
         if len(centres) == 2:
             out["distance"] = float(np.linalg.norm(centres[1] - centres[0]))
         return out
 
-    def entity_at(self, point) -> tuple[int, int] | None:
-        """The face entity nearest a point in space (where a click landed)."""
+    def entity_at(self, point, kind: str | None = None) -> tuple[int, int] | None:
+        """The entity of the filter's kind nearest a point in space (where a click landed).
+        Edges and vertices must be within 2% of the model's size of it."""
+        kind = kind or self.pick_kind
+        point = np.asarray(point, float)
         if self.surface is None:
             return None
-        cell = self.surface.find_closest_cell(np.asarray(point, float))
-        return self.entities[int(self.surface.cell_data["entity"][cell])] if cell >= 0 else None
+        size = float(np.linalg.norm(np.ptp(self.surface.points, axis=0))) or 1.0
+        if kind in ("face", "body"):
+            cell = self.surface.find_closest_cell(point)
+            if cell < 0:
+                return None
+            face = self.entities[int(self.surface.cell_data["entity"][cell])]
+            if kind == "face":
+                return face
+            return next((b for b, faces in self.boundaries.items() if face in faces), None)
+        if kind == "edge":
+            if self.lines is None:
+                return None
+            cell, closest = self.lines.find_closest_cell(point, return_closest_point=True)
+            if cell < 0 or np.linalg.norm(np.asarray(closest) - point) > 0.02 * size:
+                return None
+            return self.line_entities[int(self.lines.cell_data["entity"][cell])]
+        if kind == "vertex" and self.vertices:
+            near = min(
+                self.vertices, key=lambda e: np.linalg.norm(np.asarray(self.vertices[e]) - point)
+            )
+            if np.linalg.norm(np.asarray(self.vertices[near]) - point) <= 0.02 * size:
+                return near
+        return None
 
     def _clicked(self, point) -> None:
         if self.shown.get("kind") not in ("mesh", "preview"):
@@ -405,6 +488,7 @@ class Viewport(QWidget):
     def clear(self) -> None:
         self.shown = {}
         self.mesh, self.surface, self.entities, self.picked = None, None, [], []
+        self.lines, self.line_entities = None, []
         if self.plotter is not None:
             self.plotter.clear()
             self._render()

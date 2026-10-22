@@ -261,7 +261,7 @@ def test_picking_faces_makes_and_extends_selections(app, window):
     window.viewport.toggle_pick(root_face)
     ((part, face),) = window.picked_names()
     assert part == "Bar" and face.startswith("face-")
-    assert "1 face(s) picked" in window.pick_bar.label.text()
+    assert "1 face picked" in window.pick_bar.label.text()
 
     window.selection_from_picks("Clamped")
     bar = next(o for o in window.session.project.objects.values() if o.name == "Bar")
@@ -320,3 +320,20 @@ def test_a_body_selection_highlights_its_surface(app, window):
     select(window, "selection", "Body")
     assert window.viewport.shown["kind"] == "mesh"
     assert len(window.viewport.shown["highlighted"]) == 6
+
+
+def test_an_old_results_store_does_not_stop_the_project_opening(app, tmp_path):
+    import json
+
+    root = tmp_path / "cantilever"
+    shutil.copytree(EXAMPLE, root, ignore=shutil.ignore_patterns("results", ".puzzle"))
+    (root / "results").mkdir()
+    (root / "results" / "store.json").write_text(json.dumps({"format": 1}))
+    w = MainWindow(root)
+    try:
+        assert "Bar" in [i.text(0) for i in w.tree._items()]
+        assert "stale_store" in w.log.toPlainText()
+    finally:
+        while w.tasks:  # let the preview finish before the window goes
+            app.processEvents()
+        w.close()

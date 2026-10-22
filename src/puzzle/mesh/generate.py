@@ -60,6 +60,8 @@ class MeshResult:
     # Each body's bounding faces, (3, tag) -> [(2, tag), ...]: a body is shown, and
     # picked, through its surface.
     boundaries: dict[tuple[int, int], list[tuple[int, int]]] = field(default_factory=dict)
+    # Each geometric vertex's position, (0, tag) -> (x, y, z): for picking points.
+    vertices: dict[tuple[int, int], tuple[float, float, float]] = field(default_factory=dict)
 
 
 def generate_mesh(
@@ -146,11 +148,13 @@ def generate_mesh(
             for part, entities in found.items()
             for name, hit in entities.items()
             for entity in (hit if isinstance(hit, list) else [hit])
-            if entity[0] >= 2
         }
         boundaries = {
             v: sorted(set(gmsh.model.getBoundary([v], combined=False, oriented=False)))
             for v in gmsh.model.getEntities(3)
+        }
+        vertices = {
+            (0, t): tuple(gmsh.model.getValue(0, t, [])) for _, t in gmsh.model.getEntities(0)
         }
         if preview:
             size = max(r.size for r in references.values()) / 40
@@ -159,7 +163,12 @@ def generate_mesh(
             gmsh.model.mesh.generate(2)
             mesh = _extract()
             return MeshResult(
-                mesh=mesh, path=out_dir, min_quality=1.0, names=names, boundaries=boundaries
+                mesh=mesh,
+                path=out_dir,
+                min_quality=1.0,
+                names=names,
+                boundaries=boundaries,
+                vertices=vertices,
             )
         _sizes(recipe, comp, found, warnings)
 
@@ -194,6 +203,7 @@ def generate_mesh(
         warnings=warnings,
         names=names,
         boundaries=boundaries,
+        vertices=vertices,
     )
 
 
@@ -252,7 +262,7 @@ def _source(project: Project, geo: Geometry, root: Path, out_dir: Path, warnings
         for m in sel.members:
             if m in aliases:
                 members += aliases[m]
-            elif sel.entity == "body" and m.startswith("body-"):
+            elif m.startswith(f"{sel.entity}-"):  # an edge or point by its file name (G3)
                 members.append(m)
             else:
                 warnings.append(f"selection '{sel.name}': '{m}' no longer exists in the history")

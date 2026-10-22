@@ -230,3 +230,83 @@ def test_selecting_a_step_highlights_its_faces(app, window):
     show(app, window)
     window.tree.select(Node("operation", str(geometry(window).id), "history.1", "Bore"))
     assert len(window.viewport.shown["highlighted"]) == 2  # the bore and its copy
+
+
+def _box_corners(window):
+    v = window.viewport
+    return v.mesh.coords.min(axis=0), v.mesh.coords.max(axis=0)
+
+
+def test_the_filter_picks_edges_points_and_bodies(app, window):
+    answer(window, "Part 1")
+    menus.new_part(window)  # a 50 x 30 x 10 mm box
+    show(app, window)
+    window.toggle_picking(True)
+    v, bar = window.viewport, window.pick_bar
+    lo, hi = _box_corners(window)
+    mid = (lo + hi) / 2
+
+    # Edges: the one along x at y = z = 0, from a click just beside it.
+    bar.filter.setCurrentIndex(bar.filter.findData("edge"))
+    assert v.pick_kind == "edge"
+    edge = v.entity_at([mid[0], lo[1] + 1e-4, lo[2]])
+    assert edge is not None and edge[0] == 1
+    assert v.entity_at([mid[0], mid[1], hi[2]]) is None  # mid-face: no edge near
+    v.toggle_pick(edge)
+    assert v.measure(v.picked)["length"] == pytest.approx(0.05, rel=1e-6)
+    assert "length 50 mm" in bar.label.text() and "1 edge picked" in bar.label.text()
+    window.selection_from_picks("Bottom edge")
+    sel = next(s for s in geometry(window).selections if s.name == "Bottom edge")
+    assert sel.entity == "edge" and len(sel.members) == 1
+    # Shown highlighted when chosen in the tree, and no warning that it was lost.
+    show(app, window)
+    for item in window.tree._items():
+        n = item.data(0, ROLE)
+        if n.kind == "selection" and n.label == "Bottom edge":
+            window.tree.setCurrentItem(item)
+    assert [e[0] for e in window.viewport.shown["highlighted"]] == [1]
+    assert "no longer exists" not in window.log.toPlainText()
+
+    # Points: two opposite corners.
+    bar.filter.setCurrentIndex(bar.filter.findData("vertex"))
+    assert v.picked == []  # changing the filter clears the picks
+    v.toggle_pick(v.entity_at(lo))
+    v.toggle_pick(v.entity_at(hi))
+    assert v.measure(v.picked)["distance"] == pytest.approx(
+        (0.05**2 + 0.03**2 + 0.01**2) ** 0.5, rel=1e-6
+    )
+    assert "points" in bar.label.text()
+    # Adding points to an edge selection is refused.
+    for item in window.tree._items():
+        n = item.data(0, ROLE)
+        if n.kind == "selection" and n.label == "Bottom edge":
+            node = n
+    assert window.add_picks_to_selection(node) is None
+    assert "set the filter to Edges" in window.statusBar().currentMessage()
+
+    # Bodies: a click on any face picks the body.
+    bar.filter.setCurrentIndex(bar.filter.findData("body"))
+    body = v.entity_at([mid[0], mid[1], hi[2]])
+    assert body is not None and body[0] == 3
+    v.toggle_pick(body)
+    window.selection_from_picks("Solid")
+    sel = next(s for s in geometry(window).selections if s.name == "Solid")
+    assert sel.entity == "body" and sel.members == ["Body"]
+
+
+def test_a_long_pick_list_does_not_widen_the_view(app, window):
+    """Many picked names must not push the docks aside: the label elides instead."""
+    window.resize(1400, 900)
+    window.show()
+    for _ in range(20):  # the docks are sized once the window is up
+        app.processEvents()
+        time.sleep(0.01)
+    before = window.centralWidget().width()
+    window.pick_bar.label.setText(
+        "40 faces picked: " + ", ".join(f"Bar/face-{i}" for i in range(40))
+    )
+    window.pick_bar.show()
+    app.processEvents()
+    assert window.centralWidget().minimumSizeHint().width() < 700
+    assert window.centralWidget().width() == before
+    assert "face-39" in window.pick_bar.label.toolTip()

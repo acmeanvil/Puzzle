@@ -10,8 +10,8 @@ from __future__ import annotations
 import copy
 from pathlib import Path
 
-from PySide6.QtCore import QFileSystemWatcher, Qt, QTimer
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtCore import QFileSystemWatcher, QSize, Qt, QTimer
+from PySide6.QtGui import QAction, QKeySequence, QPainter
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
     QTabWidget,
     QVBoxLayout,
@@ -46,6 +47,34 @@ from puzzle.results.model import Results
 from puzzle.results.store import ResultStore
 
 
+class ElidedLabel(QLabel):
+    """A one-line label that never asks for width: long text (many picked names) is
+    cut with an ellipsis, in full in its tooltip. A plain QLabel's minimum width is its
+    text's, which made the view push the docks aside."""
+
+    def __init__(self, text: str = "") -> None:
+        super().__init__(text)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+
+    def setText(self, text: str) -> None:  # noqa: N802 (Qt's name)
+        super().setText(text)
+        self.setToolTip(text)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return QSize(0, super().minimumSizeHint().height())
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return QSize(0, super().sizeHint().height())
+
+    def paintEvent(self, _event) -> None:  # noqa: N802
+        rect = self.contentsRect()
+        shown = self.fontMetrics().elidedText(
+            self.text(), Qt.TextElideMode.ElideRight, rect.width()
+        )
+        painter = QPainter(self)
+        painter.drawText(rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, shown)
+
+
 class ResultsBar(QWidget):
     """Field, step and deformation controls for the result on screen."""
 
@@ -57,14 +86,13 @@ class ResultsBar(QWidget):
         self.step = QSpinBox()
         self.deform = QCheckBox("Deformed")
         self.deform.setChecked(True)
-        self.title = QLabel("")
+        self.title = ElidedLabel("")
         self.title.setStyleSheet("color: gray")
         for label, widget in (("Field", self.field), ("Step", self.step)):
             row.addWidget(QLabel(label))
             row.addWidget(widget)
         row.addWidget(self.deform)
-        row.addStretch()
-        row.addWidget(self.title)
+        row.addWidget(self.title, 1)
         self.field.currentTextChanged.connect(lambda _: on_change())
         self.step.valueChanged.connect(lambda _: on_change())
         self.deform.toggled.connect(lambda _: on_change())
@@ -86,6 +114,15 @@ class ResultsBar(QWidget):
             w.blockSignals(False)
 
 
+# The selection filter: entity kind -> what the pick bar calls it.
+FILTERS = {"face": "Faces", "edge": "Edges", "body": "Bodies", "vertex": "Points"}
+ONE = {"face": "face", "edge": "edge", "body": "body", "vertex": "point"}
+
+
+def _count(n: int, kind: str) -> str:
+    return f"{n} {ONE[kind] if n == 1 else FILTERS[kind].lower()}"
+
+
 class PickBar(QWidget):
     """What is picked in the view, and what to do with it."""
 
@@ -94,7 +131,14 @@ class PickBar(QWidget):
         self.window = window
         row = QHBoxLayout(self)
         row.setContentsMargins(6, 2, 6, 2)
-        self.label = QLabel("")
+        self.label = ElidedLabel("")
+        self.filter = QComboBox()  # what a double-click picks
+        for kind, label in FILTERS.items():
+            self.filter.addItem(label, kind)
+        self.filter.currentIndexChanged.connect(
+            lambda: window.viewport.set_pick_kind(self.filter.currentData())
+        )
+        row.addWidget(self.filter)
         new, add, clear = (
             QPushButton("New selection…"),
             QPushButton("Add to selection"),
@@ -111,19 +155,26 @@ class PickBar(QWidget):
     def update_picks(self, picked) -> None:
         names = self.window.picked_names()
         shown = ", ".join(f"{p}/{n}" for p, n in names[:6]) + (" …" if len(names) > 6 else "")
+        kind = self.window.viewport.pick_kind
         text = (
-            f"{len(names)} face(s) picked: {shown}" if names else "Double-click faces to pick them"
+            f"{_count(len(names), kind)} picked: {shown}"
+            if names
+            else f"Double-click {FILTERS[kind].lower()} to pick"
         )
         size = self.window.viewport.measure(self.window.viewport.picked) if names else {}
         if size.get("area"):
             text += f"  ·  area {size['area'] * 1e6:.4g} mm²"
+        if size.get("length"):
+            text += f"  ·  length {size['length'] * 1e3:.4g} mm"
         if "distance" in size:
-            text += f"  ·  centres {size['distance'] * 1e3:.4g} mm apart"
+            apart = "centres" if self.window.viewport.pick_kind == "face" else "points"
+            text += f"  ·  {apart} {size['distance'] * 1e3:.4g} mm apart"
         self.label.setText(text)
         self.setVisible(self.window.viewport.picking or bool(names))
 
     def _new(self) -> None:
-        name = self.window.ask_text("New selection", "Name for the picked faces:", "Selection")
+        kinds = FILTERS[self.window.viewport.pick_kind].lower()
+        name = self.window.ask_text("New selection", f"Name for the picked {kinds}:", "Selection")
         if name:
             self.window.selection_from_picks(name)
 
@@ -137,6 +188,7 @@ class MainWindow(QMainWindow):
         self.meshes: dict[str, Mesh] = {}  # component id -> its last generated mesh
         self.mesh_names: dict[str, dict] = {}  # component id -> (dim, tag) -> (part, name)
         self.mesh_boundaries: dict[str, dict] = {}  # component id -> body -> its faces
+        self.mesh_vertices: dict[str, dict] = {}  # component id -> vertex -> position
         self.mesh_component: str | None = None  # whose mesh the view shows
         self.previews: dict[str, tuple[str, object]] = {}  # component id -> (key, MeshResult)
         self._previewing: tuple[str, str] | None = None
@@ -237,7 +289,14 @@ class MainWindow(QMainWindow):
         s = self.session
         if s is None:
             return
-        self.tree.populate(s.project, self._store().runs())
+        try:
+            runs = self._store().runs()
+        except PuzzleError as exc:  # an old results store: the model still opens
+            runs = []
+            if getattr(self, "_reported_store", None) != str(s.root):
+                self._reported_store = str(s.root)
+                self.report(exc)
+        self.tree.populate(s.project, runs)
         self.history.clear()
         for entry in s.history(limit=200):  # newest first
             self.history.addItem(_history_line(entry))
@@ -278,7 +337,7 @@ class MainWindow(QMainWindow):
             ("material", "Add material…", None, self._add_material_dialog),
             ("delete", "Delete", QKeySequence.StandardKey.Delete, self.delete_selected),
             ("reload", "Reload", QKeySequence.StandardKey.Refresh, self.reload),
-            ("pick", "Pick faces", "P", self.toggle_picking),
+            ("pick", "Pick", "P", self.toggle_picking),
         ):
             action = QAction(text, self)
             if key is not None:
@@ -358,6 +417,7 @@ class MainWindow(QMainWindow):
             self.meshes[str(comp.id)] = meshed.mesh
             self.mesh_names[str(comp.id)] = meshed.names
             self.mesh_boundaries[str(comp.id)] = meshed.boundaries
+            self.mesh_vertices[str(comp.id)] = meshed.vertices
             for w in meshed.warnings:
                 self.log.appendPlainText(f"mesh: {w}")
             cells = sum(len(b.ids) for b in meshed.mesh.blocks if b.dim == 3)
@@ -429,6 +489,8 @@ class MainWindow(QMainWindow):
             mine = (f"{node.label}/", f"{node.label}#")
             entities = [e for e, (_, n) in names.items() if e[0] == 2 and n.startswith(mine)]
         self.mesh_component = str(comp.id)
+        self.viewport.boundaries = self.mesh_boundaries.get(str(comp.id), {})
+        self.viewport.vertices = self.mesh_vertices.get(str(comp.id), {})
         self.viewport.show_mesh(mesh, highlight if highlight in mesh.groups else None, entities)
 
     def _select_run(self, run_id: str) -> None:
@@ -482,19 +544,20 @@ class MainWindow(QMainWindow):
         self.pick_bar.update_picks(self.viewport.picked)
 
     def picked_names(self) -> list[tuple[str, str]]:
-        """The picked faces as (part, geometry face name)."""
+        """The picked entities as (part, geometry name)."""
         names = self.mesh_names.get(self.mesh_component or "", {})
         return [names[e] for e in self.viewport.picked if e in names]
 
     def selection_from_picks(self, name: str):
-        """A new face selection on the picked faces' geometry (one geometry at a time)."""
+        """A new selection of the filter's kind on the picked entities' geometry (one
+        geometry at a time)."""
         geo, members = self._picked_geometry()
         if geo is None:
             return None
         if any(s.name == name for s in geo.selections):
             self.statusBar().showMessage(f"{geo.name} already has a selection '{name}'", 8000)
             return None
-        value = {"name": name, "entity": "face", "members": members}
+        value = {"name": name, "entity": self.viewport.pick_kind, "members": members}
         out = self.submit(
             Edit(object=str(geo.id), ops=[EditOp(op="append", path="selections", value=value)])
         )
@@ -503,15 +566,22 @@ class MainWindow(QMainWindow):
         return out
 
     def add_picks_to_selection(self, node: Node | None = None):
-        """Add the picked faces to the face selection chosen in the tree."""
+        """Add the picked entities to the selection chosen in the tree (of the same kind)."""
         node = node or self.tree.current()
         geo, members = self._picked_geometry()
         if geo is None or node is None or node.kind != "selection" or node.object != str(geo.id):
             self.statusBar().showMessage(
-                "Select a face selection of the picked faces' geometry", 8000
+                "Select a selection of the picked entities' geometry", 8000
             )
             return None
         index = int(node.path.split(".")[1])
+        kind = geo.selections[index].entity
+        if kind != self.viewport.pick_kind:
+            self.statusBar().showMessage(
+                f"'{node.label}' holds {kind}s; set the filter to {FILTERS[kind]} to add to it",
+                8000,
+            )
+            return None
         current = geo.selections[index].members
         merged = current + [m for m in members if m not in current]
         op = EditOp(op="set", path=f"selections.{index}.members", value=merged)
@@ -521,16 +591,18 @@ class MainWindow(QMainWindow):
         return out
 
     def _picked_geometry(self):
-        comp = self.session.project.objects.get(_uuid(self.mesh_component or ""))
+        comp = self.session.project.objects.get(_uuid(self.mesh_component or "")) or next(
+            (c for c, _ in self._standalones.values() if str(c.id) == self.mesh_component), None
+        )  # a part shown on its own is picked on too
         picks = self.picked_names()
         if comp is None or not picks:
-            self.statusBar().showMessage("Pick faces first (Pick faces, then double-click)", 8000)
+            self.statusBar().showMessage("Pick first (Pick, then double-click)", 8000)
             return None, []
         parts = {p.name: p for p in comp.parts}
         geometries = {str(parts[part].geometry) for part, _ in picks}
         if len(geometries) > 1:
             self.statusBar().showMessage(
-                "Picked faces span several geometries; pick on one part", 8000
+                "The picks span several geometries; pick on one part", 8000
             )
             return None, []
         geo = self.session.project.objects.get(_uuid(geometries.pop()))
@@ -549,7 +621,7 @@ class MainWindow(QMainWindow):
         # A body shows through the faces that bound it.
         boundaries = self.mesh_boundaries.get(str(comp.id), {})
         faces = [f for e in hits if e[0] == 3 for f in boundaries.get(e, [])]
-        return [e for e in hits if e[0] == 2] + faces
+        return [e for e in hits if e[0] < 3] + faces
 
     # --- questions (tests replace these) -----------------------------------------
 
@@ -689,6 +761,7 @@ class MainWindow(QMainWindow):
             if cid not in self.meshes:  # the real mesh's maps win once it exists
                 self.mesh_names[cid] = cached[1].names
                 self.mesh_boundaries[cid] = cached[1].boundaries
+                self.mesh_vertices[cid] = cached[1].vertices
             return cached[1].mesh
         if self._previewing == (cid, key):
             return None  # already being made
