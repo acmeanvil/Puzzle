@@ -16,6 +16,14 @@ from puzzle.geometry import import_step  # noqa: E402
 from puzzle.geometry.history import _static, write_brep  # noqa: E402
 
 
+def _millimetre_files() -> None:
+    """OCCT's unit setting is process-wide and Gmsh sets it to metres for its imports;
+    set it back (after the writer exists: creating one resets the settings)."""
+    from puzzle.geometry.prep import _set_unit
+
+    _set_unit("MM")
+
+
 def _assembly(path):
     from OCP.IFSelect import IFSelect_RetDone
     from OCP.STEPCAFControl import STEPCAFControl_Writer
@@ -32,6 +40,7 @@ def _assembly(path):
         label = shapes.AddShape(solid, False)
         _static(TDataStd_Name, "Set")(label, TCollection_ExtendedString(name))
     writer = STEPCAFControl_Writer()
+    _millimetre_files()  # as CAD tools write them, whatever an earlier Gmsh import set
     writer.SetNameMode(True)
     writer.Transfer(doc, STEPControl_AsIs)
     assert writer.Write(str(path)) == IFSelect_RetDone
@@ -52,6 +61,7 @@ def test_iges_and_brep_import(tmp_path):
     write_brep(BRepPrimAPI_MakeBox(0.03, 0.02, 0.01).Shape(), tmp_path / "box.brep")  # m
     box = BRepPrimAPI_MakeBox(30, 20, 10).Shape()  # mm, for the IGES file
     writer = IGESControl_Writer("MM", 1)
+    _millimetre_files()
     writer.AddShape(box)
     writer.ComputeModel()
     assert writer.Write(str(tmp_path / "box.iges"))

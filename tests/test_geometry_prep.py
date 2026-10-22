@@ -29,7 +29,10 @@ from puzzle.geometry.history import (  # noqa: E402
 def _write_step(shape, path):
     from OCP.STEPControl import STEPControl_AsIs, STEPControl_Writer
 
+    from puzzle.geometry.prep import _set_unit
+
     writer = STEPControl_Writer()
+    _set_unit("MM")  # files in mm, as CAD tools write them (see test_geometry_formats)
     writer.Transfer(shape, STEPControl_AsIs)
     writer.Write(str(path))
 
@@ -222,3 +225,21 @@ def test_check_reports_what_would_trouble_meshing(tmp_path):
     )
     kinds = {f["kind"] for f in check(fine.shape)}
     assert {"short_edges", "slivers"} & kinds
+
+
+def test_reading_after_a_gmsh_import_still_gives_metres(tmp_path):
+    """Gmsh and OCP share OCCT's process-wide unit setting; a Gmsh import (which sets it
+    to metres) must not make the next read come back scaled twice."""
+    from puzzle.geometry import import_step
+    from puzzle.geometry.prep import read_cad
+
+    _write_step(BRepPrimAPI_MakeBox(30, 20, 10).Shape(), tmp_path / "block.step")  # mm
+    assert import_step(tmp_path / "block.step").of_dim(3)[0].measure == pytest.approx(6e-6)
+    shape, _ = read_cad(tmp_path / "block.step")
+    from OCP.TopAbs import TopAbs_SOLID
+
+    from puzzle.geometry.history import _subshapes
+
+    (solid,) = _subshapes(shape, TopAbs_SOLID)
+    assert body_signature(solid)[0] == pytest.approx(6e-6)  # 30 x 20 x 10 mm in m^3
+    assert import_step(tmp_path / "block.step").of_dim(3)[0].measure == pytest.approx(6e-6)

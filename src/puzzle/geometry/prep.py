@@ -48,16 +48,20 @@ def read_cad(path: Path, unit: str | None = None, scale: float = 1.0):
     suffix = path.suffix.lower()
     labels: dict[str, list] = {}
     if suffix in (".step", ".stp"):
-        shape, labels = _read_step(path)
+        with _millimetres():
+            shape, labels = _read_step(path)
         factor = 1e-3 * scale
     elif suffix in (".iges", ".igs"):
         from OCP.IGESControl import IGESControl_Reader
 
-        reader = IGESControl_Reader()
-        if reader.ReadFile(str(path)) != 1:  # IFSelect_RetDone
-            raise PrepError(f"cannot read {path.name}")
-        reader.TransferRoots()
-        shape, factor = reader.OneShape(), 1e-3 * scale
+        with _millimetres():
+            reader = IGESControl_Reader()
+            _set_unit("MM")  # after the reader exists: creating one resets the settings
+            if reader.ReadFile(str(path)) != 1:  # IFSelect_RetDone
+                raise PrepError(f"cannot read {path.name}")
+            reader.TransferRoots()
+            shape = reader.OneShape()
+        factor = 1e-3 * scale
     elif suffix == ".brep":
         from OCP.BRep import BRep_Builder
         from OCP.BRepTools import BRepTools
@@ -94,6 +98,7 @@ def _read_step(path: Path):
 
     doc = TDocStd_Document(TCollection_ExtendedString("XmlOcaf"))
     reader = STEPCAFControl_Reader()
+    _set_unit("MM")  # after the reader exists: creating one resets the settings
     reader.SetNameMode(True)
     if reader.ReadFile(str(path)) != 1 or not reader.Transfer(doc):
         raise PrepError(f"cannot read {path.name}")
@@ -151,6 +156,37 @@ def _read_step(path: Path):
     solids = _subshapes(shape, TopAbs_SOLID)
     labels = {n: [s for s in solids if any(s.IsSame(x) for x in xs)] for n, xs in labels.items()}
     return shape, {n: xs for n, xs in labels.items() if xs}
+
+
+def _set_unit(unit: str) -> None:
+    from OCP.Interface import Interface_Static
+
+    from puzzle.geometry.history import _static
+
+    _static(Interface_Static, "SetCVal")("xstep.cascade.unit", unit)
+
+
+class _millimetres:
+    """OCCT's readers in millimetres, then the previous unit back.
+
+    The unit is one process-wide setting that Gmsh (in this process, on the same OCCT)
+    sets to metres for its imports; without this, a read after a Gmsh session would
+    come back in metres and be scaled twice.
+    """
+
+    def __enter__(self):
+        from OCP.Interface import Interface_Static
+
+        from puzzle.geometry.history import _static
+
+        self.before = _static(Interface_Static, "CVal")("xstep.cascade.unit")
+        _set_unit("MM")
+        return self
+
+    def __exit__(self, *exc):
+        if self.before:
+            _set_unit(self.before)
+        return False
 
 
 def _scaled(shape, labels, factor: float):
