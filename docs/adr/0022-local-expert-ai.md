@@ -1,6 +1,6 @@
 # 0022. Choose the "local expert" model by measurement on the user's machine
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-10-22
 
 ## Context
@@ -33,7 +33,7 @@ That work is reading the model outline and making correct, small, validated edit
 
    Every family has graded tasks (easy, hard). A local expert must pass the core families; others are reported. Suite results are kept so a model update or a new model can be compared like for like.
 3. **Knowledge by retrieval, not fine-tuning, at first.** A domain pack is searched locally and cited in answers. It holds Puzzle's docs and ADRs, the capability matrices, and curated solver notes (the CLAUDE.md gotchas, keyword references). French manual excerpts carry English summaries, in line with the GUI translation layer. A small embedding model (run by Ollama) indexes it, and the agent gets a `knowledge` tool. Fine-tuning is considered only if retrieval plateaus on the suite.
-4. **Routing by difficulty.** A task the local model fails can be offered to the remote provider. This is never automatic, because remote providers get outlines only (ADR 0015). The routing records which families stay local, so `pick` can recommend per family later.
+4. **No automatic routing.** One provider at a time, chosen by the user. When the local model can't do a task, the agent says so and suggests switching provider. It never sends work to a remote provider on its own, because remote providers get outlines only (ADR 0015).
 5. **Provenance in the record.** Every agent entry in `history.jsonl` already names the actor. It adds the model and the suite version, so a project shows which model made which change.
 
 ## Consequences
@@ -42,11 +42,11 @@ That work is reading the model outline and making correct, small, validated edit
 - The suite becomes a maintained asset: tasks need clear pass checks (validated commands, measured outcomes), like the solver benchmarks.
 - Running candidates costs time and disk (models of several GB). `pick` downloads nothing without asking, and can test only models already present.
 
-## Open questions
+## Decided (2026-10-22, maintainer)
 
-- Which model families to suggest downloading when none fit? A curated list per hardware class, revisited at each release, is one option.
-- Should the domain pack ship with Puzzle (licences of excerpts), or be built locally from manuals the user has?
-- Is per-task-family routing worth its complexity before the suite shows local models failing some families consistently?
+- **When no local model fits.** `pick` recommends a remote model through the agent setup (Claude first, ADR 0015) rather than a download list. It says what the machine lacks (memory, a fitting model) in words.
+- **The domain pack ships with Puzzle.** It holds Puzzle's own docs and ADRs, the capability matrices, curated solver notes written for Puzzle, and English summaries of French manual sections. Each source carries a link to the manual it summarises. Verbatim excerpts are included only where their licence allows.
+- **No routing by task family.** One provider at a time, chosen by the user; routing may be revisited if the suite shows a consistent split.
 
 ## Alternatives considered
 

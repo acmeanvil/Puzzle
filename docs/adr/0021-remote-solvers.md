@@ -1,6 +1,6 @@
 # 0021. Run solvers remotely: SSH hosts, HPC schedulers, later cloud batch
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-10-22
 
 ## Context
@@ -36,15 +36,18 @@ Users have three kinds of remote machines: a lab workstation reached by SSH; a c
 ## Consequences
 
 - Remote runs reuse adapters unchanged: the runtime boundary (ADR 0007) was drawn for this.
-- Moving data dominates for large meshes and results: results are fetched lazily (only fields shown or queried), and the remote case can be kept for re-reads.
+- Moving data dominates for large meshes and results: the transfer back happens once, after the solve, and is reported with its size and time.
 - Failure modes multiply (network, quotas, queue limits): each becomes a `PuzzleError` with a code the GUI and agents can act on (`host_unreachable`, `queue_rejected`, `walltime_exceeded`).
 - Agents may run on remote hosts only within the autonomy budget (ADR 0015). Remote time can cost money, so the budget gains core-hours.
 
+## Decided (2026-10-22, maintainer)
+
+- **Environments.** Solver environments on remote hosts come from pixi first (portable, user space); site modules may follow as needed.
+- **Results.** Results are returned whole to the local result store after solving, so a remote run reads back like a local one. The remote case may be cleaned up afterwards.
+
 ## Open questions
 
-- Which clusters and schedulers are in reach for the first test (a Slurm test container in CI is possible)?
-- Should solver environments on HPC come from pixi (portable, user space) or from site modules?
-- Should results be stored back into the local Delta store whole, or referenced remotely until needed?
+- Which clusters and schedulers are in reach for the first test? Not settled yet; a Slurm test container in CI is the fallback.
 
 ## Alternatives considered
 

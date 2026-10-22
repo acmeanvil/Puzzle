@@ -1,6 +1,6 @@
 # 0019. Mesh in a workbench with the full breadth of Gmsh and Netgen
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-10-22
 
 ## Context
@@ -49,11 +49,11 @@ Netgen 6.2 is on conda-forge for every platform Puzzle supports (`netgen`, LGPL-
 - Netgen adds a dependency of about 50 MB; it could be an optional pixi feature for installs that don't need it.
 - Agents get the same controls through commands. An MCP `mesh_quality` tool reports the histogram and the worst elements.
 
-## Open questions
+## Decided (2026-10-22, maintainer)
 
-- Should each solver's preferred element types (CalculiX C3D10, Code_Aster TETRA10, Elmer 504/510) drive defaults per study?
-- Should a mesh preview run on every control change (debounced, as for geometry), or only on demand for large models?
-- Should Netgen also be offered as Gmsh's optimiser (`Mesh.Optimize` with Netgen) in the first version?
+- **Element types.** By default each solver's preferred element types drive the defaults (CalculiX C3D10, Code_Aster TETRA10, Elmer 504/510). An application setting (ADR 0024) can turn this off. Either way, mesh setup offers each study's solvers' appropriate element options, those available for the study at hand.
+- **Preview.** An application setting chooses between previewing on every control change (debounced) and previewing on demand.
+- **Netgen as Gmsh's optimiser.** In the first version, Netgen is offered as Gmsh's optimiser, with an application setting to turn it on or off.
 
 ## Alternatives considered
 

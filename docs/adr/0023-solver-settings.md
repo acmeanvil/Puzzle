@@ -1,6 +1,6 @@
 # 0023. Full access to each solver's settings: typed, with an expert pass-through
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-10-22
 
 ## Context
@@ -28,7 +28,7 @@ Shoot-outs (ADR 0011) need settings to be comparable, and run keys need to chang
 
    The adapter writes exactly these settings. The defaults are today's hard-coded choices, so existing results don't move.
 2. **Settings live on the study, per solver**: `Study.solver_settings: {solver: {key: value}}`. A shoot-out study holds one block per solver. The run key covers the block of the solver that runs. The GUI shows a Solver settings panel for the study's solver, generated from the schema (readable names, dropdowns, units), with "restore defaults" and links to the solver's manual.
-3. **The expert pass-through is explicit and validated.** For what the schema doesn't cover, each adapter defines one structured way in:
+3. **The expert pass-through is explicit and validated** (the power-user level, see Decided below). For what the schema doesn't cover, each adapter defines one structured way in:
 
    | Solver | Pass-through |
    | --- | --- |
@@ -50,11 +50,22 @@ Shoot-outs (ADR 0011) need settings to be comparable, and run keys need to chang
 - The GUI panel and the agent read the same schema; agents may change settings only within their autonomy.
 - English labels for French keywords are curated once, in the schemas, and serve the GUI and the agent alike.
 
-## Open questions
+## Decided (2026-10-22, maintainer)
 
-- Should settings shared by several solvers (linear solver family, tolerances) be lifted into neutral study settings, or stay per solver?
-- How much of OpenFOAM's and Code_Saturne's large option space should be typed in the first schema, versus left to the pass-through?
-- Should a project be able to save settings presets ("robust contact", "fast transient") to reuse across studies?
+- **A common language.** Settings that solvers truly share become neutral study settings, which each adapter translates into its own terms, the way `time_scheme` works today. This is how the preprocessor "speaks" to every solver:
+  - linear solver family (direct or iterative);
+  - preconditioner family;
+  - relative tolerance;
+  - nonlinear iteration limit;
+  - output frequency.
+
+  Only what is solver-specific stays per solver.
+- **Two levels, for every solver.**
+  - *Standard*: the typed settings most users need, with readable names and defaults.
+  - *Power user*: the solver's whole option set, typed where the solver documents it, plus the validated pass-through for the rest.
+
+  An application setting (ADR 0024) shows the power-user level; standard is the default.
+- **Presets.** A project can save settings presets ("robust contact", "fast transient") and apply them to any study. A preset is a project object: a set of neutral settings and per-solver blocks.
 
 ## Alternatives considered
 

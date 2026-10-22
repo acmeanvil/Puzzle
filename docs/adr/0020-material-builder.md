@@ -1,6 +1,6 @@
 # 0020. A material builder for the global library, complete for every solver
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-10-22
 
 ## Context
@@ -50,11 +50,17 @@ ADR 0018 (planned) makes materials sweepable choices in a study; this ADR is abo
 - The registry is one more place to update when an adapter learns a property. The registry test makes forgetting fail loudly.
 - Advanced models widen what each adapter must write or refuse; the capability matrices gain material-model entries (benchmarked before they are claimed, as with every capability).
 
-## Open questions
+## Decided (2026-10-22, maintainer)
 
-- Should units be shown in SI or in the user's preferred units (MPa, g/cm³)? A display preference would apply app-wide.
-- Should the library allow variants (one material, several tempers or suppliers) or keep them as separate materials?
-- Should solver-specific material keywords (a Code_Aster `DEFI_MATERIAU` block, a CalculiX `*MATERIAL` card) have an expert pass-through, as in ADR 0023?
+- **Units.** SI by default. An application setting (ADR 0024) offers:
+  - SI;
+  - SI variants (mm-N-MPa-tonne, mm-N-MPa-s-kg/mm³ and similar);
+  - the user's own choice per quantity;
+  - Imperial.
+
+  Values are stored in SI whatever is shown.
+- **Variants.** The library organises materials into families with variants, such as tempers or suppliers. Aluminium 6061 has the variants O, T4 and T6, each a complete material inheriting what it doesn't override from the family. A project still copies one variant (ADR 0009).
+- **Solver keywords.** Solver-specific material keywords get an expert pass-through per solver, as in ADR 0023: a Code_Aster `DEFI_MATERIAU` block, or CalculiX `*MATERIAL` cards. They are stored with the material, refused by adapters that can't place them, and recorded in each run.
 
 ## Alternatives considered
 
