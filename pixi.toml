@@ -34,6 +34,7 @@ ezdxf = ">=1.1"  # DXF profiles for extrude and revolve (ADR 0014)
 
 [pypi-dependencies]
 puzzle-fem = { path = ".", editable = true }
+py-slvs = ">=1.0.6"  # SolveSpace's constraint solver for sketches (ADR 0014, G5); not on conda-forge
 
 [tasks]
 test = "pytest"

@@ -5,6 +5,7 @@ A profile spec (lengths in metres, values already resolved from parameters):
     {"points": [[0, 0], [0.08, 0], [0.08, 0.04], [0, 0.04]]}    a closed polygon
     {"circle": [cx, cy, r]}
     {"dxf": "bracket.dxf", "layer": "PROFILE", "scale": 0.001}  loops from a drawing
+    {"sketch": {...}}                                            a constrained sketch (G5)
     plus optional "holes": [{"points": ...} | {"circle": ...}, ...]
 
 The plane is "xy" (default), "yz" or "xz", at `offset` along its normal; profile
@@ -12,7 +13,8 @@ coordinates (u, v) map to (x, y), (y, z) or (x, z). The normal is u x v, so an
 extrusion of positive distance goes along +z, +x or -y.
 
 Edges come back in a stable order (the outer loop from its first segment, then each
-hole), so an extrusion can name its sides `side-1`, `side-2`, ...
+hole) with a name each: `side-1`, `side-2`, ..., or a sketch's own edge names
+("bottom", "bore"), which an extrusion gives its sides.
 """
 
 from __future__ import annotations
@@ -43,12 +45,23 @@ class ProfileError(ValueError):
     pass
 
 
-def profile_face(spec: dict, plane: str = "xy", offset: float = 0.0, root: Path | None = None):
-    """The planar face of a profile, and its edges in order (outer loop, then holes)."""
+def profile_face(
+    spec: dict,
+    plane: str = "xy",
+    offset: float = 0.0,
+    root: Path | None = None,
+    params: dict[str, float] | None = None,
+):
+    """The planar face of a profile, its edges in order (outer loop, then holes), and
+    each edge's name."""
     if plane not in PLANES:
         raise ProfileError(f"plane must be one of {sorted(PLANES)}, not '{plane}'")
     to3d = lambda u, v: gp_Pnt(*PLANES[plane](u, v, offset))  # noqa: E731
-    if "dxf" in spec:
+    names = None
+    if "sketch" in spec:
+        loops, names = _sketch_loops(spec["sketch"], to3d, plane, params or {})
+        outer, holes = loops[0], loops[1:]
+    elif "dxf" in spec:
         loops = _dxf_loops(spec, to3d, plane, offset, root)
         outer, holes = loops[0], loops[1:]
     else:
@@ -64,7 +77,40 @@ def profile_face(spec: dict, plane: str = "xy", offset: float = 0.0, root: Path 
     fix.Perform()
     face = fix.Face()
     # The fix may copy edges: return the face's own, in the profile's order.
-    return face, [_same_edge(e, face) for loop in [outer, *holes] for e in loop]
+    edges = [_same_edge(e, face) for loop in [outer, *holes] for e in loop]
+    return face, edges, names or [f"side-{i}" for i in range(1, len(edges) + 1)]
+
+
+def _sketch_loops(sketch: dict, to3d, plane: str, params: dict[str, float]):
+    """A solved sketch's loops as edges, with their entity names. A sketch that does
+    not solve is refused, naming the constraints at fault."""
+    from puzzle.geometry.sketch import describe, loops, solve
+
+    solved = solve(sketch, params)
+    if solved.status != "ok":
+        raise ProfileError(f"the sketch does not solve: {describe(solved, sketch)}")
+    normal = gp_Dir(*NORMALS[plane])
+    edges, names = [], []
+    for loop in loops(sketch, solved):
+        built = []
+        for kind, name, geo in loop:
+            if kind == "line":
+                (u0, v0), (u1, v1) = geo
+                built.append(BRepBuilderAPI_MakeEdge(to3d(u0, v0), to3d(u1, v1)).Edge())
+            elif kind == "arc":
+                (cu, cv), (su, sv), (eu, ev) = geo
+                r = math.hypot(su - cu, sv - cv)
+                circle = gp_Circ(gp_Ax2(to3d(cu, cv), normal), r)
+                arc = GC_MakeArcOfCircle(circle, to3d(su, sv), to3d(eu, ev), True).Value()
+                built.append(BRepBuilderAPI_MakeEdge(arc).Edge())
+            else:
+                (cu, cv), r = geo
+                built.append(
+                    BRepBuilderAPI_MakeEdge(gp_Circ(gp_Ax2(to3d(cu, cv), normal), r)).Edge()
+                )
+            names.append(name)
+        edges.append(built)
+    return edges, names
 
 
 def _same_edge(edge, face):

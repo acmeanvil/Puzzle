@@ -32,7 +32,7 @@ dependencies = [
 puzzle = "puzzle.cli:main"
 
 [project.optional-dependencies]
-geometry = ["cadquery-ocp>=7.7", "build123d>=0.8"]
+geometry = ["cadquery-ocp>=7.7", "ezdxf>=1.1", "py-slvs>=1.0.6"]  # sketches: SolveSpace's solver
 mesh = ["meshio>=5.3"]
 post = ["pyvista>=0.44"]
 gui = ["PySide6>=6.7", "pyvista>=0.44"]
@@ -54,6 +54,8 @@ packages = ["src/puzzle"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# SWIG bindings (py-slvs, the sketch solver) predate Python 3.12's module checks.
+filterwarnings = ["ignore:builtin type .* has no __module__ attribute:DeprecationWarning"]
 
 [tool.ruff]
 line-length = 100

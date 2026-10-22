@@ -711,8 +711,14 @@ class MainWindow(QMainWindow):
     def edit_step(self, kind: str, args: dict, name: str, features: list[str]):
         """The step dialog: (name, args) when accepted, else None."""
         from puzzle.gui.step_dialog import StepDialog
+        from puzzle.model.schema import ParameterSet
 
-        dialog = StepDialog(kind, args, name, features, self)
+        params = {
+            k: q.to_si()
+            for ps in self.session.project.of_type(ParameterSet)
+            for k, q in ps.values.items()
+        }
+        dialog = StepDialog(kind, args, name, features, self, params=params)
         if dialog.exec() and dialog.result_args is not None:
             return dialog.name.text().strip() or name, dialog.result_args
         return None

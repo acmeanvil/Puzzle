@@ -21,7 +21,7 @@ the part, the first one starts it):
 | cylinder | r, h, x, y, z, axis | wall, start, end |
 | cone | r1, r2, h, x, y, z, axis | wall, start, end |
 | sphere | r, x, y, z | surface |
-| extrude | profile, distance, plane, offset | start, end, side-1 ... |
+| extrude | profile, distance, plane, offset | start, end, side-1 ... (a sketch's edge names) |
 | revolve | profile, angle (deg), axis (u or v), plane, offset | side-1 ..., start, end |
 | hole | r, x, y (through, along `axis`, default z) | wall |
 | fillet, chamfer | r or d, rule (edges) | edge-1 ... |
@@ -124,7 +124,19 @@ def ops_of(geometry) -> list[Op]:
 
 
 # Arguments that are never parameter names.
-WORDS = {"rule", "axis", "mode", "plane", "feature", "profile", "body", "normal", "file", "unit"}
+WORDS = {
+    "rule",
+    "axis",
+    "mode",
+    "plane",
+    "feature",
+    "profile",
+    "body",
+    "normal",
+    "file",
+    "unit",
+    "sketch",  # resolved by the sketch solver itself (its dimensions may name parameters)
+}
 
 
 class GeometryError(ValueError):
@@ -150,7 +162,7 @@ def regenerate(ops: list[Op], params: dict[str, float] | None = None, root=None)
             raise GeometryError(f"unknown parameter '{v}'")
         return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v
 
-    state = _State(root=root)
+    state = _State(root=root, params=params)
     for op in ops:
         a = {k: value(v, k) for k, v in op.args.items()}
         try:
@@ -191,6 +203,7 @@ class _State:
     bodies: Names = field(default_factory=dict)
     tools: dict[str, tuple[str, dict]] = field(default_factory=dict)  # op name -> (kind, args)
     root: Any = None
+    params: dict[str, float] = field(default_factory=dict)  # for sketches' dimensions
 
 
 # --- tools: bodies with their own face names ---------------------------------------------
@@ -255,14 +268,16 @@ def _extrude(state, a):
     from puzzle.geometry.profile import NORMALS, profile_face
 
     plane = a.get("plane", "xy")
-    face, edges = profile_face(a["profile"], plane, a.get("offset", 0.0), state.root)
+    face, edges, labels = profile_face(
+        a["profile"], plane, a.get("offset", 0.0), state.root, state.params
+    )
     n = NORMALS[plane]
     mk = BRepPrimAPI_MakePrism(face, gp_Vec(*(c * a["distance"] for c in n)))
     shape = mk.Shape()
     names = {"start": [_static(TopoDS, "Face")(mk.FirstShape())]}
     names["end"] = [_static(TopoDS, "Face")(mk.LastShape())]
-    for i, e in enumerate(edges, start=1):
-        names[f"side-{i}"] = _list(mk.Generated(e))
+    for label, e in zip(labels, edges, strict=True):
+        names[label] = names.get(label, []) + _list(mk.Generated(e))
     return shape, {k: v for k, v in names.items() if v}
 
 
@@ -270,7 +285,7 @@ def _revolve(state, a):
     from puzzle.geometry.profile import PLANES, profile_face
 
     plane, offset = a.get("plane", "xy"), a.get("offset", 0.0)
-    face, edges = profile_face(a["profile"], plane, offset, state.root)
+    face, edges, labels = profile_face(a["profile"], plane, offset, state.root, state.params)
     local = {"u": (1, 0), "v": (0, 1)}[a.get("axis", "v")]
     origin = PLANES[plane](0.0, 0.0, offset)
     direction = PLANES[plane](*local, 0.0)
@@ -279,7 +294,9 @@ def _revolve(state, a):
         face, gp_Ax1(gp_Pnt(*origin), gp_Dir(*direction)), math.radians(angle)
     )
     shape = mk.Shape()
-    names = {f"side-{i}": _list(mk.Generated(e)) for i, e in enumerate(edges, start=1)}
+    names = {}
+    for label, e in zip(labels, edges, strict=True):
+        names[label] = names.get(label, []) + _list(mk.Generated(e))
     if angle < 360.0:
         names["start"] = [_static(TopoDS, "Face")(mk.FirstShape())]
         names["end"] = [_static(TopoDS, "Face")(mk.LastShape())]

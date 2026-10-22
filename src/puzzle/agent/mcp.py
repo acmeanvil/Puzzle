@@ -146,6 +146,35 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         )
         return {"selections": [r.to_dict() for r in done.reports], "accept_all": command}
 
+    @tool(
+        description='Solve a sketch (an extrude or revolve profile {"sketch": {...}}; '
+        "format in puzzle.geometry.sketch) with the project's parameters: whether it solves, "
+        "the degrees of freedom left, the conflicting constraints (1-based) and the solved "
+        "point positions in m. Check a sketch here before submitting it."
+    )
+    @guarded
+    def sketch_check(sketch: dict[str, Any]) -> dict[str, Any]:
+        from puzzle.geometry.sketch import SketchError, describe, loops, solve
+        from puzzle.model.schema import ParameterSet
+
+        s = session()
+        params = {
+            k: q.to_si() for ps in s.project.of_type(ParameterSet) for k, q in ps.values.items()
+        }
+        try:
+            solved = solve(sketch, params)
+            if solved.status == "ok":
+                loops(sketch, solved)  # an open outline is an error too
+        except SketchError as exc:
+            raise PuzzleError(str(exc), code="invalid") from None
+        return {
+            "status": solved.status,
+            "dof": solved.dof,
+            "message": describe(solved, sketch),
+            "conflicting": [i + 1 for i in solved.failed],
+            "points": {n: list(p) for n, p in solved.points.items()},
+        }
+
     @tool(description="Consistency problems of the project, each with a code.")
     @guarded
     def problems() -> list[dict[str, Any]]:

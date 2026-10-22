@@ -202,7 +202,7 @@ def test_step_dialog_units_and_parameters(app):
     from puzzle.gui.step_dialog import StepDialog
 
     d = StepDialog("extrude", {}, "L")
-    d.widgets["profile"].setText("0, 0; 60, 0; 60, t; t, t; t, 40; 0, 40")
+    d.widgets["profile"].line.setText("0, 0; 60, 0; 60, t; t, t; t, 40; 0, 40")
     d.widgets["distance"].setText("30")
     args = d.values()
     assert args["distance"] == pytest.approx(0.03)  # typed in mm, stored in m

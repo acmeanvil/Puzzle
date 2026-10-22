@@ -38,7 +38,7 @@ ADR 0004 chose the kernel: OpenCASCADE through OCP, with build123d for construct
    2. Our existing geometric signatures re-find faces the history cannot account for, such as those from a re-imported source file.
    3. Faces neither tier resolves are flagged as detached, never silently guessed.
 4. **Reattachment works in bulk.** Detached selections are listed together, each with ranked candidates (signature distance) and the members it kept. The user accepts all, accepts per selection, or picks. A reattachment is stored as a rule (for example "faces on plane x = 0" or "the cylindrical faces of radius 4 mm") where possible, so the next regeneration resolves it unaided. Rules are the same selection helpers scripts use today.
-5. **Sketching** uses python-solvespace (GPL-3.0) for 2D constraints, feeding build123d sketches. It is used for profiles and for 2D/axisymmetric models.
+5. **Sketching** uses SolveSpace's constraint solver (GPL-3.0) for 2D constraints, through the py-slvs binding (amended 2026-10-22: python-solvespace has had no release since 2022 and no Python 3.12 build; py-slvs binds the same solver with wheels for every platform Puzzle supports). Sketches are profiles for extrude and revolve, and later for 2D/axisymmetric models.
 6. **FreeCAD** stays an optional importer for `.FCStd` files, not the engine (ADR 0004).
 
 ## Prototype results (2026-10-19)
@@ -93,6 +93,17 @@ Measured in `tests/test_selection_naming.py` and `tests/test_gui_geometry.py`:
 | Vertical corners filleted | the rounded-away corner edge is detached; the top edges are kept, now 8 mm shorter |
 | File replaced by an export from another tool (faces renumbered) | the end face and the rim edge are re-found under their new numbers; the bore, still `face-7`, is confirmed by its anchor |
 | The same, with the bore moved 10 mm | the bore and its rim are detached, never guessed; the nearest candidate is the moved bore; Accept keeps the end as "on the plane x = 0" and the bore as "radius 5 mm" |
+
+## G5: sketches (2026-10-22)
+
+`puzzle.geometry.sketch` holds a sketch as data inside an extrude or revolve profile (`{"sketch": {...}}`). It contains named points, lines, arcs and circles, construction edges, and constraints (fix, coincident, horizontal, vertical, length, distance and its horizontal and vertical parts, parallel, perpendicular, equal, angle, radius, diameter, point on, midpoint, tangent, symmetric). Any dimension may name a parameter.
+
+- **Solving.** SolveSpace solves the sketch on every regeneration, starting from the stored positions, so a parameter change moves it along the same branch. It reports the degrees of freedom left and the conflicting constraints. A sketch that does not solve, or whose outline is open, refuses to regenerate and names the cause ("Constraints 11 conflict", "not closed at points A, D").
+- **Naming.** The extruded or revolved faces take the sketch edges' names, so selections read "Plate/right" and "Plate/bore" rather than "side-2".
+- **The editor.** The GUI's editor (`gui/sketcher.py`, from "Sketch…" on a profile field) draws lines, rectangles, circles and arcs by clicks, reusing points within reach. Constraint buttons turn on for what is selected, and Dimension measures it, in mm or degrees or as a parameter's name. Constraints are listed in words, and the status line shows the degrees of freedom left (green once fully constrained, red with the conflicting constraints). Free points can be dragged, while fixed and dimensioned ones hold. Edges can be renamed, since their names become face names. A typed polygon opens in the editor as lines ready to constrain.
+- **Agents.** The MCP tool `sketch_check` solves a sketch with the project's parameters before an agent submits it.
+
+Measured in `tests/test_sketch.py`: a dimensioned plate solves to its dimensions; an obround of two lines and two tangent arcs extrudes to (40 x 10 + pi 5^2) x 2 mm^3 to 1e-9; a revolved rectangle gives 2 pi R A; a sketched plate meshes with "Plate/right" on x = W for W = 60 and 80 mm, with no warnings. `tests/test_gui_sketch.py` drives the editor by clicks and dimensions.
 
 ## Consequences
 
