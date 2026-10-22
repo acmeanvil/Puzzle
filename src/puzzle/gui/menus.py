@@ -244,7 +244,10 @@ def import_step_file(window, path: Path | None = None):
         from PySide6.QtWidgets import QFileDialog
 
         chosen, _ = QFileDialog.getOpenFileName(
-            window, "Import geometry", "", "CAD (*.step *.stp *.iges *.igs *.brep)"
+            window,
+            "Import geometry",
+            "",
+            "CAD (*.step *.stp *.iges *.igs *.brep);;Facets (*.stl *.obj *.3mf)",
         )
         if not chosen:
             return None

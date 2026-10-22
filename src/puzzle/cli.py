@@ -154,6 +154,11 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--quiet", action="store_true", help="print only the answer")
     p.set_defaults(handler=_ask)
 
+    p = sub.add_parser("check-geometry", help="what would trouble meshing: gaps, slivers, ...")
+    p.add_argument("project", type=Path)
+    p.add_argument("geometry", nargs="?", help="a geometry's name (default: all)")
+    p.set_defaults(handler=_check_geometry)
+
     p = sub.add_parser("agent-key", help="store, check or remove the agent's API key")
     p.add_argument("action", choices=["set", "status", "clear"])
     p.add_argument("--provider", default="anthropic", choices=["anthropic", "openai"])
@@ -431,6 +436,25 @@ def _ask(args) -> int:
         f"{agent.tokens['output']} out tokens)"
     )
     return 0
+
+
+def _check_geometry(args) -> int:
+    from puzzle.geometry.prep import check_geometry
+    from puzzle.model.schema import Geometry
+
+    project = _load(args.project)
+    geometries = [g for g in project.of_type(Geometry) if args.geometry in (None, g.name)]
+    if not geometries:
+        print(f"no geometry '{args.geometry}'")
+        return 1
+    worst = 0
+    for geo in geometries:
+        findings = check_geometry(project, geo, args.project)
+        print(f"{geo.name}: {'no problems' if not findings else ''}")
+        for f in findings:
+            print(f"  [{f['severity']}] {f['kind']}: {f['message']}")
+            worst = max(worst, {"error": 2, "warning": 1}.get(f["severity"], 0))
+    return 1 if worst == 2 else 0
 
 
 def _agent_key(args) -> int:

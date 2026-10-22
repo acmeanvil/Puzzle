@@ -107,6 +107,19 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
             )
         return TypeAdapter(kinds[which]).json_schema()
 
+    @tool(
+        description="Check a geometry for what would trouble meshing or solving: gaps, "
+        "surfaces that are not solids, short edges, slivers, overlapping or unshared bodies."
+    )
+    @guarded
+    def geometry_check(geometry: str) -> list[dict[str, Any]]:
+        from puzzle.commands import resolve
+        from puzzle.geometry.prep import check_geometry
+        from puzzle.model.schema import Geometry
+
+        s = session()
+        return check_geometry(s.project, resolve(s.project, geometry, Geometry), root)
+
     @tool(description="Consistency problems of the project, each with a code.")
     @guarded
     def problems() -> list[dict[str, Any]]:

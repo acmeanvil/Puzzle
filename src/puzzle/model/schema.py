@@ -84,6 +84,10 @@ class HistoryStep(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     kind: Literal[
+        "import",
+        "heal",
+        "remove",
+        "fragment",
         "box",
         "cylinder",
         "cone",
@@ -106,7 +110,8 @@ class HistoryStep(BaseModel):
 class Geometry(ProjectObject):
     """One part's geometry and the named selections defined on it.
 
-    Either a `source` file (STEP, IGES, BREP; selections name its faces "face-N") or a
+    Either a `source` file (STEP, IGES, BREP, or faceted STL/OBJ/3MF; selections name its
+    faces "face-N") or a
     `history` that Puzzle regenerates (selections use the history's persistent names).
     """
 
@@ -114,6 +119,12 @@ class Geometry(ProjectObject):
 
     source: str | None = None
     history: list[HistoryStep] = Field(default_factory=list)
+    source_unit: str | None = Field(
+        default=None, description="STL/OBJ length unit (default mm); 3MF states its own"
+    )
+    facet_angle: float = Field(
+        default=40.0, description="STL/OBJ/3MF: degrees of turn that start a new face"
+    )
     scope: Literal["global", "local"] = "global"
     owner: UUID | None = Field(default=None, description="Owning component, for local geometry")
     selections: list[NamedSelection] = Field(default_factory=list)

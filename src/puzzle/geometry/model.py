@@ -83,11 +83,79 @@ class GeometryModel:
         return [e.name for e in self.of_dim(2) if e.kind == kind]
 
 
-def import_step(path: Path) -> GeometryModel:
-    """Read a STEP (or IGES/BREP) file and describe its entities."""
+def import_step(path: Path, unit: str | None = None, angle: float = 40.0) -> GeometryModel:
+    """Read a STEP, IGES or BREP file, or a faceted STL/OBJ/3MF one, and describe its
+    entities. `unit` and `angle` (patch feature angle, degrees) apply to faceted files."""
+    from puzzle.geometry.meshfile import is_mesh_file
+
     with gmsh_session("import"):
-        load_shapes(path)
+        if is_mesh_file(path):
+            import tempfile
+
+            load_facets(path, Path(tempfile.mkdtemp(prefix="puzzle-facets-")), unit, angle)
+        else:
+            load_shapes(path)
         return GeometryModel(source=path, entities=describe(gmsh.model.getEntities()))
+
+
+def load_facets(
+    path: Path,
+    work: Path,
+    unit: str | None = None,
+    angle: float = 40.0,
+    reparametrize: bool = False,
+):
+    """A faceted file as Gmsh geometry: faces where the surface turns by more than
+    `angle` degrees, closed into one volume.
+
+    Without `reparametrize` the faces are the ones users see and select (face-N in tag
+    order). Meshing needs `reparametrize`, which may cut a face into several patches
+    Gmsh can re-mesh; then the return value also maps each user face's number to its
+    patches' tags. Returns ([(3, volume)], {face number: [surface tags]}).
+    """
+    from puzzle.geometry.meshfile import triangles, write_stl
+
+    stl = write_stl(triangles(path, unit), Path(work) / f"{Path(path).stem}-m.stl")
+    groups: dict[int, list[int]] = {}
+    if reparametrize:
+        # The user's faces first, in a model of their own, as triangle centroids.
+        current = gmsh.model.getCurrent()
+        gmsh.model.add("puzzle-facet-names")
+        _classify(stl, angle, False)
+        named = {
+            i: _triangles(t).mean(axis=1)
+            for i, (_, t) in enumerate(sorted(gmsh.model.getEntities(2)), start=1)
+        }
+        gmsh.model.remove()
+        gmsh.model.setCurrent(current)
+    _classify(stl, angle, reparametrize)
+    surfaces = [t for _, t in gmsh.model.getEntities(2)]
+    if reparametrize:
+        for t in surfaces:
+            probe = _triangles(t).mean(axis=1)[0]
+            owner = min(named, key=lambda i: np.min(np.linalg.norm(named[i] - probe, axis=1)))
+            groups.setdefault(owner, []).append(t)
+    loop = gmsh.model.geo.addSurfaceLoop(surfaces)
+    volume = gmsh.model.geo.addVolume([loop])
+    gmsh.model.geo.synchronize()
+    return [(3, volume)], groups
+
+
+def _classify(stl: Path, angle: float, reparametrize: bool) -> None:
+    gmsh.merge(str(stl))
+    gmsh.model.mesh.removeDuplicateNodes()
+    gmsh.model.mesh.classifySurfaces(math.radians(angle), True, reparametrize, math.pi)
+    gmsh.model.mesh.createGeometry()
+
+
+def named_entities(dimtags) -> dict[str, tuple[int, int]]:
+    """The names `describe` gives these entities (face-1, ...), with their dim/tags."""
+    counters = dict.fromkeys(DIM_PREFIX, 0)
+    out = {}
+    for dim, tag in sorted(dimtags, key=lambda dt: (-dt[0], dt[1])):
+        counters[dim] += 1
+        out[f"{DIM_PREFIX[dim]}-{counters[dim]}"] = (dim, tag)
+    return out
 
 
 def load_shapes(path: Path) -> list[tuple[int, int]]:
@@ -113,13 +181,64 @@ def _entity(name: str, dim: int, tag: int) -> Entity:
     if dim == 0:
         center, measure = tuple(gmsh.model.getValue(0, tag, [])), 0.0
     else:
-        center, measure = (
-            tuple(gmsh.model.occ.getCenterOfMass(dim, tag)),
-            gmsh.model.occ.getMass(dim, tag),
-        )
+        try:
+            center, measure = (
+                tuple(gmsh.model.occ.getCenterOfMass(dim, tag)),
+                gmsh.model.occ.getMass(dim, tag),
+            )
+        except Exception:  # noqa: BLE001 - a faceted (discrete) entity, not OCC
+            center, measure = _discrete_props(dim, tag)
     # STEP part names come through OCCT's XDE reader as "Shapes/.../Name"; keep the last.
     label = (gmsh.model.getEntityName(dim, tag) or "").rstrip("/").split("/")[-1]
     return Entity(name, dim, gmsh.model.getType(dim, tag), measure, center, bbox, label)
+
+
+def _discrete_props(dim: int, tag: int):
+    """Centre and measure of a faceted entity, from its triangles (or line segments)."""
+    if dim == 3:  # the divergence theorem over the boundary's triangles
+        total, moment = 0.0, np.zeros(3)
+        for _, st in gmsh.model.getBoundary([(3, tag)], oriented=True):
+            for tri in _triangles(abs(st)):
+                a, b, c = tri if st > 0 else tri[::-1]
+                v = np.dot(a, np.cross(b, c)) / 6
+                total += v
+                moment += v * (a + b + c) / 4
+        total = abs(total)
+        return tuple(moment / total if total else np.zeros(3)), total
+    if dim == 2:
+        tris = _triangles(tag)
+        areas = 0.5 * np.linalg.norm(
+            np.cross(tris[:, 1] - tris[:, 0], tris[:, 2] - tris[:, 0]), axis=1
+        )
+        centre = (areas[:, None] * tris.mean(axis=1)).sum(axis=0) / max(areas.sum(), 1e-300)
+        return tuple(centre), float(areas.sum())
+    types, _, nodes = gmsh.model.mesh.getElements(1, tag)
+    tags, coords, _ = gmsh.model.mesh.getNodes(1, tag, includeBoundary=True)
+    where = {int(t): i for i, t in enumerate(tags)}
+    xyz = np.asarray(coords).reshape(-1, 3)
+    length, moment = 0.0, np.zeros(3)
+    for conn in nodes:
+        for a, b in np.asarray(conn, int).reshape(-1, 2):
+            pa, pb = xyz[where[a]], xyz[where[b]]
+            seg = np.linalg.norm(pb - pa)
+            length += seg
+            moment += seg * (pa + pb) / 2
+    return tuple(moment / length if length else xyz.mean(axis=0)), length
+
+
+def _triangles(tag: int) -> np.ndarray:
+    """A surface's mesh triangles as an (n, 3, 3) array of coordinates."""
+    types, _, nodes = gmsh.model.mesh.getElements(2, tag)
+    tags, coords, _ = gmsh.model.mesh.getNodes(2, tag, includeBoundary=True)
+    where = {int(t): i for i, t in enumerate(tags)}
+    xyz = np.asarray(coords).reshape(-1, 3)
+    out = []
+    for etype, conn in zip(types, nodes, strict=True):
+        if etype != 2:  # first-order triangles only (what classification leaves)
+            continue
+        for a, b, c in np.asarray(conn, int).reshape(-1, 3):
+            out.append([xyz[where[a]], xyz[where[b]], xyz[where[c]]])
+    return np.asarray(out, float).reshape(-1, 3, 3)
 
 
 # --- Placement and matching -------------------------------------------------

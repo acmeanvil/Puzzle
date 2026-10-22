@@ -19,7 +19,15 @@ import gmsh
 import numpy as np
 
 from puzzle.errors import PuzzleError
-from puzzle.geometry.model import ENTITY_DIM, import_step, load_shapes, match, place
+from puzzle.geometry.meshfile import is_mesh_file
+from puzzle.geometry.model import (
+    ENTITY_DIM,
+    import_step,
+    load_facets,
+    load_shapes,
+    match,
+    place,
+)
 from puzzle.geometry.session import gmsh_session
 from puzzle.mesh.mesh import ELEMENT_NAMES, CellBlock, Group, Mesh
 from puzzle.model.schema import (
@@ -82,22 +90,39 @@ def generate_mesh(
     geometries = {name: g for name, (g, _, _) in sources.items()}
     paths = {name: path for name, (_, path, _) in sources.items()}
     persistent = {name: back for name, (_, _, back) in sources.items()}
-    references = {name: import_step(path) for name, path in paths.items()}
+    faceted = [p for p in comp.parts if is_mesh_file(paths[p.name])]
+    if faceted and (len(comp.parts) > 1 or any(faceted[0].translation) or any(faceted[0].rotation)):
+        raise MeshError(
+            "a faceted (STL/OBJ/3MF) part must be its component's only part, unplaced, for now"
+        )
+    references = {
+        name: import_step(path, geometries[name].source_unit, geometries[name].facet_angle)
+        for name, path in paths.items()
+    }
 
     with gmsh_session("mesh", verbose=verbose):
+        found: dict[str, dict[str, tuple[int, int]]] = {}
+        if faceted:  # triangles grouped into faces by Gmsh; named as import_step named them
+            part, geo = faceted[0], geometries[faceted[0].name]
+            volume, groups = load_facets(
+                paths[part.name], out_dir, geo.source_unit, geo.facet_angle, reparametrize=True
+            )
+            # A user's face may be several patches Gmsh can re-mesh: names map to lists.
+            found[part.name] = {"body-1": volume} | {
+                f"face-{i}": [(2, t) for t in tags] for i, tags in groups.items()
+            }
         volumes: dict[str, list[tuple[int, int]]] = {}
-        for part in comp.parts:
+        for part in comp.parts if not faceted else []:
             before = set(gmsh.model.getEntities(3))
             load_shapes(paths[part.name])
             volumes[part.name] = sorted(set(gmsh.model.getEntities(3)) - before)
             place(volumes[part.name], part.translation, part.rotation)
-        gmsh.model.occ.synchronize()
-
-        _fragment_conformal(comp, volumes)
+        if not faceted:
+            gmsh.model.occ.synchronize()
+            _fragment_conformal(comp, volumes)
 
         all_volumes = gmsh.model.getEntities(3)
-        found: dict[str, dict[str, tuple[int, int]]] = {}
-        for part in comp.parts:
+        for part in comp.parts if not faceted else []:
             ref = references[part.name]
             placement = {
                 "translation": part.translation,
@@ -116,7 +141,8 @@ def generate_mesh(
         names = {
             entity: (part, persistent[part].get(name, name))
             for part, entities in found.items()
-            for name, entity in entities.items()
+            for name, hit in entities.items()
+            for entity in (hit if isinstance(hit, list) else [hit])
             if entity[0] >= 2
         }
         if preview:
@@ -248,14 +274,20 @@ def _resolve(
     tags, lost = [], []
     for member in members:
         owner, name = (part, member) if part else member.split("/", 1)
-        dimtag = found.get(owner, {}).get(name)
-        (tags if dimtag else lost).append(dimtag or f"{owner}/{name}")
+        hit = found.get(owner, {}).get(name)
+        if not hit:
+            lost.append(f"{owner}/{name}")
+        else:  # one entity, or several (a faceted face cut into patches)
+            tags += hit if isinstance(hit, list) else [hit]
     return sorted(set(tags)), lost
 
 
 def _physical_groups(comp, geometries, references, found, warnings) -> None:
     for part in comp.parts:
-        bodies = [found[part.name][e.name] for e in references[part.name].of_dim(3)]
+        bodies = []
+        for e in references[part.name].of_dim(3):
+            hit = found[part.name][e.name]
+            bodies += hit if isinstance(hit, list) else [hit]
         gmsh.model.addPhysicalGroup(3, [t for _, t in bodies], name=part.name)
     selections: list[tuple[str, str | None, NamedSelection]] = [
         (f"{p.name}/{s.name}", p.name, s) for p in comp.parts for s in geometries[p.name].selections

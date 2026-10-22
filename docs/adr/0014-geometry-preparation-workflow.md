@@ -66,6 +66,12 @@ End to end, a parameter edit re-meshes and re-solves with every selection on the
 
 Files: STEP parts keep their assembly names (one body selection per part on import), IGES and BREP import through the same path, DXF drawings are profiles. IFC is dropped; STL, OBJ and 3MF come with G2 as mesh-only geometry.
 
+## G2: preparing imported CAD (2026-10-21)
+
+`puzzle.geometry.prep` adds history operations for CAD from elsewhere: `import` (STEP through OCCT's document reader, so assembly part names become named bodies; IGES; BREP; millimetres converted, a `scale` for files that declare the wrong unit), `heal` (sew faces within a tolerance, fix wires and faces, close shells into solids; face names carried through the sewing and fixing history), `remove` (OCCT defeaturing of fillets or holes below a radius, faces below an area, or named faces; the neighbours extend to close the gap and keep their names), and `fragment` (touching bodies split along their contact so they share faces, for a conformal mesh). A geometry check (`puzzle check-geometry`, MCP `geometry_check`) reports invalid shapes, surfaces that are not solids, gaps (free edges), short edges, tiny and sliver faces, overlapping bodies, and bodies that touch without sharing faces.
+
+Faceted files (STL, OBJ, 3MF; `geometry/meshfile.py`) are read as triangles in metres (3MF states its unit; STL and OBJ default to mm) and handed to Gmsh, which groups them into faces by feature angle (`facet_angle`, default 40 degrees) and closes a volume. The faces users select come from that grouping alone; meshing re-classifies with reparametrization, which may cut a face into patches Gmsh can re-mesh, and maps each patch back to its face. A faceted part must be its component's only part, unplaced, for now; preparation (heal, remove) does not apply to it.
+
 ## Consequences
 
 - One history covers both CAD preparation and light modelling, and geometry parameters can sit in a sweep like any other parameter.

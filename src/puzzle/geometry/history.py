@@ -30,6 +30,7 @@ the part, the first one starts it):
 | pattern | feature, count, dx, dy, dz, or angle + axis for a circular one | <feature>#2/..., ... |
 | split | axis or normal, at or x, y, z | (a split face keeps its name on both pieces) |
 | enclosure | margin, or factor of the part size | +x ... of the box; body `<name>` |
+| import, heal, remove, fragment | see puzzle.geometry.prep | preparing imported CAD (G2) |
 
 Bodies are named too: the part is "Body" unless an operation's `body` says otherwise,
 and an enclosure adds its own; selections of entity "body" use these names.
@@ -118,7 +119,7 @@ class NamedShape:
 
 
 # Arguments that are never parameter names.
-WORDS = {"rule", "axis", "mode", "plane", "feature", "profile", "body", "normal"}
+WORDS = {"rule", "axis", "mode", "plane", "feature", "profile", "body", "normal", "file", "unit"}
 
 
 class GeometryError(ValueError):
@@ -149,9 +150,12 @@ def regenerate(ops: list[Op], params: dict[str, float] | None = None, root=None)
         a = {k: value(v, k) for k, v in op.args.items()}
         try:
             if op.kind in TOOLS:
-                tool, names = TOOLS[op.kind](state, a)
+                built = TOOLS[op.kind](state, a)
+                tool, names = built[0], built[1]
+                bodies = built[2] if len(built) > 2 else None  # an import's part names
                 state.tools[op.name] = (op.kind, a)
-                _join(state, op, tool, names, a.get("mode", "add" if state.shape else "new"))
+                mode = a.get("mode", "add" if state.shape else "new")
+                _join(state, op, tool, names, mode, bodies)
             elif op.kind in MODIFIERS:
                 MODIFIERS[op.kind](state, op, a)
             else:
@@ -300,7 +304,22 @@ def _hole(state, a):
     return tool, {"wall": _lateral(tool)}
 
 
+def _import(state, a):
+    """A CAD file as the part: faces `face-N` in file order, bodies by STEP part name."""
+    from pathlib import Path
+
+    from puzzle.geometry.prep import read_cad
+
+    file = Path(a["file"])
+    if not file.is_absolute() and state.root is not None:
+        file = Path(state.root) / file
+    shape, parts = read_cad(file, a.get("unit"), a.get("scale", 1.0))
+    names = {f"face-{i}": [f] for i, f in enumerate(_faces(shape), start=1)}
+    return shape, names, parts
+
+
 TOOLS = {
+    "import": _import,
     "box": _box,
     "cylinder": _cylinder,
     "cone": _cone,
@@ -311,13 +330,13 @@ TOOLS = {
 }
 
 
-def _join(state, op, tool, tool_names: Names, mode: str) -> None:
+def _join(state, op, tool, tool_names: Names, mode: str, tool_bodies=None) -> None:
     """Combine a tool body with the part; its faces are named `<op>/<name>`."""
     mine = {f"{op.name}/{k}": v for k, v in tool_names.items()}
     body = op.args.get("body", "Body")
     if mode == "new" or state.shape is None:
         state.shape, state.names = tool, {**state.names, **mine} if state.shape is None else mine
-        state.bodies = {body: _subshapes(tool, TopAbs_SOLID)}
+        state.bodies = {body: _subshapes(tool, TopAbs_SOLID), **(tool_bodies or {})}
         return
     algo = {"add": BRepAlgoAPI_Fuse, "cut": BRepAlgoAPI_Cut, "intersect": BRepAlgoAPI_Common}.get(
         mode
@@ -489,7 +508,44 @@ def _enclosure(state, op, a):
     state.shape, state.names, state.bodies = result, names, bodies
 
 
+def _heal(state, op, a):
+    from puzzle.geometry.prep import heal
+
+    tolerance = a.get("tolerance", 1e-6 * max(_size(state.shape), 1e-9))
+    healed, mapped = heal(state.shape, tolerance)
+    state.names = {n: [p for f in fs for p in mapped(f)] for n, fs in state.names.items()}
+    solids = _subshapes(healed, TopAbs_SOLID)
+    if len(state.bodies) == 1:  # one body: it is whatever solids the healing made
+        state.bodies = {next(iter(state.bodies)): solids}
+    else:
+        state.bodies = {n: [p for b in bs for p in mapped(b)] for n, bs in state.bodies.items()}
+    state.names = {n: fs for n, fs in state.names.items() if fs}
+    state.shape = healed
+
+
+def _remove(state, op, a):
+    from puzzle.geometry.prep import faces_by_rule, remove_faces
+
+    faces = faces_by_rule(state, a.get("rule", {}))
+    if not faces:
+        raise GeometryError(f"remove '{op.name}': its rule matches no faces")
+    algo = remove_faces(state.shape, faces)
+    state.names, state.bodies = _carry(algo, state.names), _carry(algo, state.bodies)
+    state.shape = algo.Shape()
+
+
+def _fragment(state, op, a):
+    from puzzle.geometry.prep import fragment
+
+    algo = fragment(state.shape)
+    state.names, state.bodies = _carry(algo, state.names), _carry(algo, state.bodies)
+    state.shape = algo.Shape()
+
+
 MODIFIERS = {
+    "heal": _heal,
+    "remove": _remove,
+    "fragment": _fragment,
     "fillet": _fillet,
     "chamfer": _chamfer,
     "move": _move,

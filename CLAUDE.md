@@ -36,7 +36,7 @@ Solver tests in `tests/integration/` skip when the solver isn't available; `test
 | `src/puzzle/model` | `catalog.py`: each physics' feature types with their value names, units and defaults (the GUI's add menus). Pydantic schema: resources, components (parts, contacts, physics), studies (sweep/solve steps, shoot-out), transfers |
 | `src/puzzle/project` | One-TOML-file-per-object store; content hashes, staleness, run keys |
 | `src/puzzle/materials` | `generic.toml`: the shipped generic materials (structural steel with EN 1993-1-2 tables, stainless, aluminium, titanium, copper, electrical steel, PTFE, air, water); user libraries load on top |
-| `src/puzzle/geometry` | STEP import via Gmsh's OCC kernel, named entities with signatures |
+| `src/puzzle/geometry` | STEP/IGES/BREP import via Gmsh's OCC kernel (STEP part names as labels), named entities with signatures; `history.py` + `profile.py`: parametric operations (G1); `prep.py`: import/heal/remove/fragment and the geometry check (G2); `meshfile.py`: STL/OBJ/3MF as faceted geometry |
 | `src/puzzle/mesh` | Recipe → Gmsh mesh with physical groups `Part/Selection`; solver-neutral `Mesh` |
 | `src/puzzle/adapters` | One adapter per solver: capability matrix, `write_input`, `command`, `read_results` |
 | `src/puzzle/jobs` | Runs solvers natively or in Docker/Podman; runtime chosen per solver |
@@ -107,6 +107,8 @@ Capability matrices also list planned capabilities; `write_input` refuses what i
 - **The built-in agent on macOS** gets no `render` tool in the GUI: off-screen VTK must render on the main thread there, and the agent runs on a worker. Remote providers get no images by default either (ADR 0015: outlines and summaries only unless `send_images = true`).
 - **Unsupported structures are refused:** a stationary or transient solid-mechanics study whose component has no `fixed` or `displacement` feature reports the problem `unconstrained`, and `run_study` refuses it (CalculiX would return kilometres of rigid-body drift as a "result"). Free modal studies are allowed.
 - **Agent edits in batches:** `Session.submit_batch` (MCP `submit` with a list) applies model edits all or none, as one history entry and one undo; runs and autonomy changes go on their own.
+- **Faceted geometry** (STL/OBJ/3MF): Gmsh's `classifySurfaces` with reparametrization cuts faces into re-meshable patches (a box's top into two); `load_facets(reparametrize=True)` maps patches back to the unreparametrized faces users select, and the mesher's name map holds lists. Discrete entities have no OCC mass/centre; `model._discrete_props` computes them from the triangles.
+- **OCP 8 collections** live in `OCP.collections` (`Sequence_TDF_Label`, `IndexedDataMap_TopoDS_Shape_List_...`); sewing tracks sub-shapes with `ModifiedSubShape`, not `Modified`.
 - **Solver logs** are capped at 256 MB (`jobs.runner.MAX_LOG_BYTES`) and read from the end on failure (`log_tail`).
 - **Gmsh from threads:** OpenCASCADE keeps per-thread state from its first user; if that thread exits and another thread uses Gmsh, the process segfaults. `gmsh_session` first initialises Gmsh on a resident daemon thread. MCP runs sync tools on worker threads, so this matters.
 - **MCP SDK 2.x:** `from mcp.server.mcpserver import MCPServer` (FastMCP was renamed); results are `structured_content`/`is_error`. Annotate tool returns as `dict[str, Any]`, not bare `dict`, or the output is unstructured text.
