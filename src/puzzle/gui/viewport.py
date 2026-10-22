@@ -249,7 +249,7 @@ class Viewport(QWidget):
         if self.plotter is None:
             return
         self.plotter.clear()
-        dim = highlight is not None and mesh.groups[highlight].dim == 3
+        dim = highlight is not None and highlight in mesh.groups and mesh.groups[highlight].dim == 3
         if grid is not None:
             self.plotter.add_mesh(
                 grid,

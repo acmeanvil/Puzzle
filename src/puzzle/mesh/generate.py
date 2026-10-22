@@ -57,6 +57,9 @@ class MeshResult:
     # Gmsh entity (dim, tag) -> (part, geometry entity name): what a pick in the view
     # names. History geometry gives its persistent names (Plate/+x), others face-N.
     names: dict[tuple[int, int], tuple[str, str]] = field(default_factory=dict)
+    # Each body's bounding faces, (3, tag) -> [(2, tag), ...]: a body is shown, and
+    # picked, through its surface.
+    boundaries: dict[tuple[int, int], list[tuple[int, int]]] = field(default_factory=dict)
 
 
 def generate_mesh(
@@ -145,13 +148,19 @@ def generate_mesh(
             for entity in (hit if isinstance(hit, list) else [hit])
             if entity[0] >= 2
         }
+        boundaries = {
+            v: sorted(set(gmsh.model.getBoundary([v], combined=False, oriented=False)))
+            for v in gmsh.model.getEntities(3)
+        }
         if preview:
             size = max(r.size for r in references.values()) / 40
             gmsh.option.setNumber("Mesh.MeshSizeMax", size)
             gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 8)
             gmsh.model.mesh.generate(2)
             mesh = _extract()
-            return MeshResult(mesh=mesh, path=out_dir, min_quality=1.0, names=names)
+            return MeshResult(
+                mesh=mesh, path=out_dir, min_quality=1.0, names=names, boundaries=boundaries
+            )
         _sizes(recipe, comp, found, warnings)
 
         if recipe.element_shape == "hexahedra":
@@ -178,7 +187,14 @@ def generate_mesh(
         gmsh.write(str(path))
         mesh = _extract()
 
-    return MeshResult(mesh=mesh, path=path, min_quality=min_quality, warnings=warnings, names=names)
+    return MeshResult(
+        mesh=mesh,
+        path=path,
+        min_quality=min_quality,
+        warnings=warnings,
+        names=names,
+        boundaries=boundaries,
+    )
 
 
 def _source(project: Project, geo: Geometry, root: Path, out_dir: Path, warnings: list[str]):

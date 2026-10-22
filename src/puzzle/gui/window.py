@@ -130,6 +130,7 @@ class MainWindow(QMainWindow):
         self.session: Session | None = None
         self.meshes: dict[str, Mesh] = {}  # component id -> its last generated mesh
         self.mesh_names: dict[str, dict] = {}  # component id -> (dim, tag) -> (part, name)
+        self.mesh_boundaries: dict[str, dict] = {}  # component id -> body -> its faces
         self.mesh_component: str | None = None  # whose mesh the view shows
         self.previews: dict[str, tuple[str, object]] = {}  # component id -> (key, MeshResult)
         self._previewing: tuple[str, str] | None = None
@@ -344,6 +345,7 @@ class MainWindow(QMainWindow):
         def done(meshed) -> None:
             self.meshes[str(comp.id)] = meshed.mesh
             self.mesh_names[str(comp.id)] = meshed.names
+            self.mesh_boundaries[str(comp.id)] = meshed.boundaries
             for w in meshed.warnings:
                 self.log.appendPlainText(f"mesh: {w}")
             cells = sum(len(b.ids) for b in meshed.mesh.blocks if b.dim == 3)
@@ -527,7 +529,11 @@ class MainWindow(QMainWindow):
         if sel is None:
             return []
         names = self.mesh_names.get(str(comp.id), {})
-        return [e for e, (p, n) in names.items() if p == part_name and n in sel.members]
+        hits = [e for e, (p, n) in names.items() if p == part_name and n in sel.members]
+        # A body shows through the faces that bound it.
+        boundaries = self.mesh_boundaries.get(str(comp.id), {})
+        faces = [f for e in hits if e[0] == 3 for f in boundaries.get(e, [])]
+        return [e for e in hits if e[0] == 2] + faces
 
     # --- questions (tests replace these) -----------------------------------------
 
@@ -632,7 +638,9 @@ class MainWindow(QMainWindow):
         key = self._preview_key(comp)
         cached = self.previews.get(cid)
         if cached is not None and cached[0] == key:
-            self.mesh_names[cid] = cached[1].names
+            if cid not in self.meshes:  # the real mesh's maps win once it exists
+                self.mesh_names[cid] = cached[1].names
+                self.mesh_boundaries[cid] = cached[1].boundaries
             return cached[1].mesh
         if self._previewing == (cid, key):
             return None  # already being made

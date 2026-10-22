@@ -305,3 +305,18 @@ def test_geometry_shows_before_meshing_and_can_be_picked(app, window):
     # The same shape is not previewed twice; selecting the geometry reuses it.
     select(window, "object", "Bar")
     assert not window.tasks and window.viewport.shown["kind"] == "preview"
+
+
+def test_a_body_selection_highlights_its_surface(app, window):
+    select(window, "object", "Cantilever")
+    wait(app, lambda: not window.tasks, timeout=60)  # the preview
+    select(window, "selection", "Body")
+    shown = window.viewport.shown
+    assert shown["kind"] == "preview" and len(shown["highlighted"]) == 6  # the bar's faces
+
+    select(window, "object", "Cantilever")
+    window.mesh_selected()
+    wait(app, lambda: not window.tasks)
+    select(window, "selection", "Body")
+    assert window.viewport.shown["kind"] == "mesh"
+    assert len(window.viewport.shown["highlighted"]) == 6
