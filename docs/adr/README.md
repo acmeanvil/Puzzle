@@ -23,9 +23,12 @@ New record: copy [template.md](template.md) to `NNNN-short-title.md`, set status
 | [0015](0015-ai-agent-infrastructure.md) | AI-aware: one command layer for people and agents, MCP from the start, pluggable providers, autonomy levels | Accepted |
 | [0016](0016-openfoam-second-cfd-solver.md) | Add OpenFOAM as the second CFD solver, paired with Code_Saturne in shoot-outs | Proposed |
 | [0017](0017-geometry-workbench.md) | Edit geometry in a workbench: sketches as steps, tools inline with live preview, picks in the view | Accepted |
+| [0018](0018-materials-as-sweep-choices.md) | A study's materials are a table: one material, or several run side by side and compared | Accepted |
 | [0019](0019-mesh-workbench.md) | Mesh in a workbench with the full breadth of Gmsh and Netgen | Accepted |
 | [0020](0020-material-builder.md) | A material builder for the global library, complete for every solver | Accepted |
 | [0021](0021-remote-solvers.md) | Run solvers remotely: SSH hosts, HPC schedulers, later cloud batch | Accepted |
 | [0022](0022-local-expert-ai.md) | Choose the "local expert" model by measurement on the user's machine | Accepted |
 | [0023](0023-solver-settings.md) | Full access to each solver's settings: typed, with an expert pass-through | Accepted |
 | [0024](0024-application-settings.md) | One application Settings dialog for per-user preferences, outside projects | Accepted |
+| [0025](0025-derived-results.md) | Derived results: solution combinations (linear, envelope, SRSS, range) and custom equations | Accepted |
+| [0026](0026-fatigue.md) | Fatigue: data in the material builder, a life tool in results | Accepted |

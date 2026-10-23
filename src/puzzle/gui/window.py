@@ -547,18 +547,17 @@ class MainWindow(QMainWindow):
         self.submit(AddLibraryMaterial(key=key))
 
     def _add_material_dialog(self) -> None:
-        from puzzle.materials import library_material, search_library
-
-        keys = search_library("")
-        named = [library_material(k).name for k in keys]
-        # The library key only where two materials share a name.
-        options = [
-            (n if named.count(n) == 1 else f"{n} ({k})", k)
-            for n, k in zip(named, keys, strict=True)
-        ]
-        key = self.choose("Add material", "Library material:", options)
+        """The library grouped by type, group and alloy, with a search (MaterialPicker)."""
+        key = self.pick_material()
         if key:
             self.add_material(key)
+
+    def pick_material(self) -> str | None:
+        """A library key from the picker, or None (tests replace this)."""
+        from puzzle.gui.material_builder import MaterialPicker
+
+        picker = MaterialPicker(self)
+        return picker.key if picker.exec() else None
 
     def mesh_selected(self) -> Task | None:
         comp = self._component_of(self.tree.current())

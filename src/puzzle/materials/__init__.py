@@ -66,6 +66,7 @@ def _load(paths: tuple[Path, ...]) -> dict[str, dict]:
     for key, entry in generic.items():
         entry = dict(entry)
         name, description = entry.pop("name"), entry.pop("description", "")
+        kind = {k: entry.pop(k) for k in ("type", "group") if k in entry}  # how it is grouped
         sources = entry.pop("sources", [])
         tables = {
             prop: {
@@ -78,7 +79,7 @@ def _load(paths: tuple[Path, ...]) -> dict[str, dict]:
         entries[key] = {
             "name": name,
             "description": description,
-            "info": {"source": "Puzzle generic library (typical values)"},
+            "info": {"source": "Puzzle generic library (typical values)", **kind},
             "properties": entry,
             "tables": tables,
             "sources": sources,
@@ -134,6 +135,56 @@ def resolve(lib: dict[str, dict], key: str) -> dict:
             if field in e:
                 out[field] = e[field]
     out["parent"] = lib[key].get("parent")
+    return out
+
+
+def classes() -> dict[str, dict[str, list[str]]]:
+    """Type -> group -> family keys (variants stay under their family, `families`):
+    how the builder and the material picker lay the library out ("Metal" > "Aluminum")."""
+    lib = _library()
+    out: dict[str, dict[str, list[str]]] = {}
+    for family in families():
+        info = lib[family].get("info", {})
+        typ = info.get("type") or "Other"
+        group = info.get("group") or "Other"
+        out.setdefault(typ, {}).setdefault(group, []).append(family)
+    order = ["Metal", "Polymer", "Ceramic", "Composite", "Fluid", "Other"]
+    return {
+        t: dict(sorted(out[t].items(), key=lambda g: (g[0] == "Other", g[0])))
+        for t in sorted(out, key=lambda t: (order.index(t) if t in order else len(order), t))
+    }
+
+
+def tree() -> list[tuple[tuple[str, ...], str]]:
+    """Every family as (path, key), path = how it is filed: type, group, and in a large
+    group the series and alloy from the name ("Metal", "Aluminum", "6xxx", "6061") — so a
+    library of hundreds lists as a few headings to open, not one long column."""
+    import re
+
+    lib = _library()
+    out = []
+    for typ, groups in classes().items():
+        for group, keys in groups.items():
+            names = {k: lib[k]["name"] for k in keys}
+
+            def alloy(name: str) -> str:
+                """A 4-digit designation anywhere in the name ("6005A", "Aluminium 6061-T6"),
+                else the name's first word."""
+                hit = re.search(r"(?<![\d.])(\d{4}[A-Z]?)(?![\d.])", name)
+                return hit.group(1) if hit else re.split(r"[-, ]", name.strip(), maxsplit=1)[0]
+
+            alloys = {k: alloy(n) for k, n in names.items()}
+            numbered = sum(bool(re.fullmatch(r"\d{4}[A-Z]?", a)) for a in alloys.values())
+            for k in sorted(keys, key=lambda k: names[k]):
+                path: tuple[str, ...] = (typ, group)
+                if len(keys) > 15:
+                    a = alloys[k]
+                    several = sum(v == a for v in alloys.values()) > 1
+                    if numbered > len(keys) / 2 and re.fullmatch(r"\d{4}[A-Z]?", a):
+                        path += (f"{a[0]}xxx series",) + ((a,) if several else ())
+                    elif several:
+                        path += (a,)
+                out.append((path, k))
     return out
 
 
@@ -201,6 +252,8 @@ def add_library_material(project: Project, key: str, name: str | None = None) ->
 
 __all__ = [
     "add_library_material",
+    "classes",
+    "tree",
     "custom_library_path",
     "families",
     "library_entry",

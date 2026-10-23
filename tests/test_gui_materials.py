@@ -23,12 +23,14 @@ def app():
 
 
 def choose(builder, key):
-    for i in range(builder.tree.topLevelItemCount()):
-        top = builder.tree.topLevelItem(i)
-        for item in [top, *(top.child(j) for j in range(top.childCount()))]:
-            if item.data(0, 256) == key:
-                builder.tree.setCurrentItem(item)
-                return
+    """Select a library material by key, wherever the grouped tree files it."""
+    stack = [builder.tree.invisibleRootItem()]
+    while stack:
+        item = stack.pop()
+        if item.data(0, 256) == key:
+            builder.tree.setCurrentItem(item)
+            return
+        stack += [item.child(i) for i in range(item.childCount())]
     raise LookupError(key)
 
 
@@ -99,9 +101,7 @@ def test_editing_a_shipped_material_saves_your_copy(app):
     b.editor.values["youngs_modulus"].setText("205000")
     assert b.save() == "structural_steel"
     assert library_material("structural_steel").properties["youngs_modulus"].to_si() == 205e9
-    assert any(
-        "(mine)" in b.tree.topLevelItem(i).text(0) for i in range(b.tree.topLevelItemCount())
-    )
+    assert "(mine)" in b.tree.currentItem().text(0)
     b.remove()
     assert library_material("structural_steel").properties["youngs_modulus"].to_si() == 210e9
     b.undo()
@@ -134,3 +134,28 @@ def test_add_a_built_material_to_the_project(app, tmp_path):
         assert w.session.history(limit=1)[0]["command"]["command"] == "create"  # one command
     finally:
         w.close()
+
+
+def test_the_library_is_grouped_by_type_group_and_alloy(app):
+    """Headings to open (type, group, ...), with counts; a search opens what matches."""
+    from puzzle.gui.material_builder import MaterialPicker
+
+    p = MaterialPicker()
+    tops = [p.tree.topLevelItem(i).text(0) for i in range(p.tree.topLevelItemCount())]
+    assert tops[0].startswith("Metal  (") and any(t.startswith("Fluid") for t in tops)
+    metal = p.tree.topLevelItem(0)
+    assert metal.isExpanded() and not metal.child(0).isExpanded()
+    groups = [metal.child(i).text(0) for i in range(metal.childCount())]
+    assert any(g.startswith("Aluminum  (") for g in groups)
+    p.search.setText("PTFE")
+    hits = []
+    stack = [p.tree.invisibleRootItem()]
+    while stack:
+        item = stack.pop()
+        if item.data(0, 256):
+            hits.append(item)
+        stack += [item.child(i) for i in range(item.childCount())]
+    assert [h.data(0, 256) for h in hits] == ["ptfe"] and hits[0].parent().isExpanded()
+    p.tree.setCurrentItem(hits[0])
+    p._accept()
+    assert p.key == "ptfe"

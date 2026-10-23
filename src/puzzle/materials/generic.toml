@@ -12,6 +12,8 @@
 
 [structural_steel]
 name = "Structural steel"
+type = "Metal"
+group = "Carbon Steel"
 description = "Generic carbon structural steel (e.g. S235 to S355). Room values and tables from the EN 1993-1-2 carbon steel formulas"
 sources = ["EN 1993-1-2:2005 (Eurocode 3 Part 1-2), clause 3.4 and Table 3.1: carbon steel thermal and mechanical properties at elevated temperature"]
 density = { value = 7850, unit = "kg/m^3" }
@@ -49,6 +51,8 @@ points = [[293.15, 12.16e-6], [373.15, 12.48e-6], [473.15, 12.88e-6], [573.15, 1
 
 [stainless_steel_304]
 name = "Stainless steel 304"
+type = "Metal"
+group = "Stainless Steel"
 description = "Austenitic stainless steel, annealed"
 density = { value = 8000, unit = "kg/m^3" }
 youngs_modulus = { value = 193, unit = "GPa" }
@@ -61,6 +65,8 @@ relative_permeability = { value = 1.0 }
 
 [aluminium_6061_t6]
 name = "Aluminium 6061-T6"
+type = "Metal"
+group = "Aluminum"
 description = "Precipitation-hardened aluminium alloy"
 density = { value = 2700, unit = "kg/m^3" }
 youngs_modulus = { value = 68.9, unit = "GPa" }
@@ -73,6 +79,8 @@ relative_permeability = { value = 1.0 }
 
 [titanium_ti6al4v]
 name = "Titanium Ti-6Al-4V"
+type = "Metal"
+group = "Titanium"
 description = "Alpha-beta titanium alloy, annealed"
 density = { value = 4430, unit = "kg/m^3" }
 youngs_modulus = { value = 113.8, unit = "GPa" }
@@ -85,6 +93,8 @@ relative_permeability = { value = 1.0 }
 
 [copper]
 name = "Copper"
+type = "Metal"
+group = "Copper"
 description = "Electrolytic tough-pitch copper (C11000)"
 density = { value = 8960, unit = "kg/m^3" }
 youngs_modulus = { value = 117, unit = "GPa" }
@@ -97,6 +107,8 @@ relative_permeability = { value = 1.0 }
 
 [air]
 name = "Air"
+type = "Fluid"
+group = "Gas"
 description = "Dry air at 20 °C and 1 atm"
 density = { value = 1.204, unit = "kg/m^3" }
 dynamic_viscosity = { value = 1.81e-5, unit = "Pa*s" }
@@ -108,6 +120,8 @@ relative_permeability = { value = 1.0 }
 
 [water]
 name = "Water"
+type = "Fluid"
+group = "Liquid"
 description = "Liquid water at 20 °C"
 density = { value = 998.2, unit = "kg/m^3" }
 dynamic_viscosity = { value = 1.002e-3, unit = "Pa*s" }
@@ -118,6 +132,8 @@ relative_permeability = { value = 1.0 }
 
 [electrical_steel]
 name = "Electrical steel (linear)"
+type = "Metal"
+group = "Electrical Steel"
 description = "Non-oriented silicon steel for magnetic cores, with a constant relative permeability: a linear stand-in for its real B-H curve"
 density = { value = 7650, unit = "kg/m^3" }
 youngs_modulus = { value = 200, unit = "GPa" }
@@ -130,6 +146,8 @@ relative_permeability = { value = 4000 }
 
 [ptfe]
 name = "PTFE"
+type = "Polymer"
+group = "Plastic, Unfilled"
 description = "Polytetrafluoroethylene, unfilled: a dielectric and thermal insulator"
 density = { value = 2200, unit = "kg/m^3" }
 youngs_modulus = { value = 0.5, unit = "GPa" }

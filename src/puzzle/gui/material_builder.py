@@ -626,42 +626,13 @@ class MaterialBuilder(QDialog):
     # --- the library ---------------------------------------------------------------------
 
     def list(self, select: str | None = None) -> None:
-        from puzzle.materials import _library, families, search_library
-
-        lib, mine = _library(), set(self.store.entries())
-        wanted = set(search_library(self.search.text())) if self.search.text() else set(lib)
-        self.tree.blockSignals(True)
-        self.tree.clear()
-        chosen = None
-        for family, variants in families().items():
-            keys = [k for k in [family, *variants] if k in wanted]
-            if not keys:
-                continue
-            top = QTreeWidgetItem(self.tree, [self._title(family, lib, mine)])
-            top.setData(0, KEY, family)
-            for v in variants:
-                if v in wanted or family in wanted:
-                    item = QTreeWidgetItem(top, [self._title(v, lib, mine)])
-                    item.setData(0, KEY, v)
-                    if v == select:
-                        chosen = item
-            if family == select:
-                chosen = top
-            top.setExpanded(bool(variants) and bool(self.search.text()) or family == select)
-        self.tree.blockSignals(False)
-        if chosen is not None:
-            self.tree.setCurrentItem(chosen)
-
-    @staticmethod
-    def _title(key, lib, mine) -> str:
-        name = lib[key]["name"]
-        return f"{name}  (mine)" if key in mine else name
+        fill_library(self.tree, self.search.text(), set(self.store.entries()), select)
 
     def _chosen(self) -> None:
         from puzzle.materials import _library, library_material
 
         item = self.tree.currentItem()
-        if item is None:
+        if item is None or item.data(0, KEY) is None:  # a heading (type, group, alloy)
             return
         self.key = item.data(0, KEY)
         self.parent_key = _library()[self.key].get("parent")
@@ -754,6 +725,106 @@ class MaterialBuilder(QDialog):
         data = material.model_dump(mode="json", exclude={"id"})
         if self.window.submit(Create(kind="material", data=data)) is not None:
             self.status.setText(f"Added '{material.name}' to the project")
+
+
+def fill_library(
+    tree: QTreeWidget, text: str = "", mine: set[str] = frozenset(), select: str | None = None
+) -> None:
+    """The library as headings to open: type, group, series and alloy (materials.tree),
+    each family with its variants under it. A search shows only what matches, opened."""
+    from puzzle.materials import _library, families, search_library
+    from puzzle.materials import tree as filed
+
+    lib = _library()
+    wanted = set(search_library(text)) if text else None
+    variants = families()
+    tree.blockSignals(True)
+    tree.clear()
+    headings: dict[tuple[str, ...], QTreeWidgetItem] = {}
+    chosen = None
+
+    def heading(path: tuple[str, ...]) -> QTreeWidgetItem:
+        if path not in headings:
+            parent = heading(path[:-1]) if len(path) > 1 else tree.invisibleRootItem()
+            item = QTreeWidgetItem(parent, [path[-1]])
+            item.setData(0, KEY, None)
+            font = item.font(0)
+            font.setBold(len(path) <= 2)
+            item.setFont(0, font)
+            headings[path] = item
+        return headings[path]
+
+    def title(key: str) -> str:
+        return f"{lib[key]['name']}  (mine)" if key in mine else lib[key]["name"]
+
+    for path, family in filed():
+        keys = [family, *variants.get(family, [])]
+        if wanted is not None and not wanted & set(keys):
+            continue
+        top = QTreeWidgetItem(heading(path), [title(family)])
+        top.setData(0, KEY, family)
+        chosen = top if family == select else chosen
+        for v in variants.get(family, []):
+            item = QTreeWidgetItem(top, [title(v)])
+            item.setData(0, KEY, v)
+            chosen = item if v == select else chosen
+    if wanted is not None:
+        tree.expandAll()
+    else:  # the types open, the rest closed: a few headings, not a long column
+        for path, item in headings.items():
+            item.setExpanded(len(path) == 1)
+    for path, item in headings.items():  # how many materials each heading holds
+        n = _count(item)
+        item.setText(0, f"{path[-1]}  ({n})")
+    tree.blockSignals(False)
+    if chosen is not None:
+        parent = chosen.parent()
+        while parent is not None:
+            parent.setExpanded(True)
+            parent = parent.parent()
+        tree.setCurrentItem(chosen)
+
+
+def _count(item: QTreeWidgetItem) -> int:
+    n = 0
+    for i in range(item.childCount()):
+        child = item.child(i)
+        n += _count(child) if child.data(0, KEY) is None else 1 + child.childCount()
+    return n
+
+
+class MaterialPicker(QDialog):
+    """Add material: the library grouped as in the builder, with a search."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Add material from the library")
+        self.resize(520, 600)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Search: a name, a group (Aluminum), a specification")
+        self.tree = QTreeWidget()
+        self.tree.setHeaderHidden(True)
+        self.search.textChanged.connect(lambda t: fill_library(self.tree, t))
+        self.tree.itemDoubleClicked.connect(lambda *_: self._accept())
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Add")
+        buttons.accepted.connect(self._accept)
+        buttons.rejected.connect(self.reject)
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.search)
+        layout.addWidget(self.tree, 1)
+        layout.addWidget(buttons)
+        self.key: str | None = None
+        fill_library(self.tree)
+
+    def _accept(self) -> None:
+        item = self.tree.currentItem()
+        if item is None or item.data(0, KEY) is None:
+            return  # a heading: open it instead
+        self.key = item.data(0, KEY)
+        self.accept()
 
 
 def _differences(entry: dict, parent: str) -> dict:
