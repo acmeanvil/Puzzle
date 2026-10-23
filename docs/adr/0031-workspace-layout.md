@@ -1,6 +1,6 @@
 # 0031. Give the model the room: collapsible docks, a view toolbar, an icon toolbar
 
-- Status: Proposed
+- Status: Accepted (2026-10-23, with the maintainer's answers)
 - Date: 2026-10-23
 
 ## Context
@@ -31,7 +31,8 @@ PrePoMax and Ansys keep the model centred, with a slim output pane and a view to
    Shortcuts: F fit, 1–6 for the standard views, I isometric. Each control calls a `Viewport` method, so agents and tests reach the same actions.
 3. **The main toolbar gets icons with short labels, grouped:** Project (New, Open, Undo), Model (Mesh, Run), Materials (Add, Builder), Selection (Pick).
    - "Delete" and "Reload" leave the toolbar for context menus and the Project menu, where they act on what is selected.
-   - **Icons are bundled SVGs from a permissively licensed set** (Lucide, ISC; or Tabler, MIT; both compatible with GPL-3.0), recoloured to the palette.
+   - **Icons are bundled SVGs from a permissively licensed set,** compatible with GPL-3.0 and recoloured to the palette. Which set (Lucide, ISC; Tabler, MIT; or another) is chosen later, with the Qt polish ADR (plan Phase F). Until then a small interim set is used, kept behind one icon lookup so the set can be swapped.
+   - **Labels or not is a setting** (Settings → Interface, ADR 0024): icons with labels under them, or icons only with tooltips. Tooltips are always there.
 4. **The status bar carries the essentials:** the unit system (ADR 0030), the current context, background tasks with a cancel button, and the last message.
 
 ## Consequences

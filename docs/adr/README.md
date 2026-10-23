@@ -35,8 +35,8 @@ New record: copy [template.md](template.md) to `NNNN-short-title.md`, set status
 | [0027](0027-beams-shells-and-fasteners.md) | Beams and shells beside solids, starting with beam fasteners (Ansys/Nastran/Algor style) | Proposed |
 | [0028](0028-buckling.md) | Buckling: a linear eigenvalue step, with or without a preload | Proposed |
 | [0029](0029-context-and-names.md) | Show only what applies, by name: panels follow their context, and no raw value reaches the screen | Proposed |
-| [0030](0030-project-unit-system.md) | A unit system per project, chosen when it is made | Proposed |
-| [0031](0031-workspace-layout.md) | Give the model the room: collapsible docks, a view toolbar, an icon toolbar | Proposed |
+| [0030](0030-project-unit-system.md) | A unit system per project, chosen when it is made | Accepted |
+| [0031](0031-workspace-layout.md) | Give the model the room: collapsible docks, a view toolbar, an icon toolbar | Accepted |
 | [0032](0032-result-probes.md) | Read results in the view: extreme markers, probes, and the range in Properties | Proposed |
 | [0033](0033-tree-status.md) | The tree says what is missing, stale or done | Proposed |
 | [0034](0034-selection-tools.md) | Selection tools: by tangency and angle, by box, by likeness, with modifier keys | Proposed |

@@ -1,6 +1,6 @@
 # 0030. A unit system per project, chosen when it is made
 
-- Status: Proposed
+- Status: Accepted (2026-10-23, with the maintainer's answer)
 - Date: 2026-10-23
 
 ## Context
@@ -16,10 +16,10 @@ ADR 0024's rule stays: **display units never change results.** Values are stored
 
 ## Decision
 
-1. **A project may name its display unit system** in `project.toml` (`units = "engineering"`). It is one of ADR 0024's systems: SI, mm-N-MPa-tonne ("engineering"), consistent mm, imperial, or custom per quantity.
-   - When set, it wins over the user's preference while that project is open.
-   - When unset (older projects), the user's preference applies, as now.
-   - Changing it is a command (`set_units`), so it is undoable and logged, like every project change.
+1. **A project has a local switch, "Use the project's units", that overrides the global setting** (the maintainer's choice, 2026-10-23).
+   - **When on,** the project names its display unit system in `project.toml` (`units = "engineering"`), one of ADR 0024's systems: SI, mm-N-MPa-tonne ("engineering"), consistent mm, imperial, or custom per quantity. It wins over the user's global preference for everyone who opens that project.
+   - **When off,** or unset (older projects), the user's global preference applies, as now.
+   - Turning it on or off, or changing the system, is a command (`set_units`), so it is undoable and logged, like every project change.
 2. **New Project asks.** The dialog offers the systems by name ("Millimetre, newton, megapascal (mm, N, MPa, t, °C)"), defaulting to the user's preference. The user's preference becomes "units for new projects".
 3. **The status bar shows the system** ("mm · N · MPa · °C"). Clicking it opens the project's unit choice.
 4. **Numbers read as people write them.**
@@ -30,7 +30,7 @@ ADR 0024's rule stays: **display units never change results.** Values are stored
 
 ## Consequences
 
-- A project opened by two people shows the same numbers to both. A user who prefers otherwise can still override it per session from the status bar (not saved to the project).
+- A project opened by two people shows the same numbers to both when its switch is on. A user who prefers otherwise turns the switch off, which is a change to the project, so it is visible and undoable.
 - `settings.display_units()` gains a project argument. Every GUI caller goes through one helper (`units.shown`), so the change is contained.
 - Tests that type millimetres can set the project's system instead of the `engineering_units` fixture.
 
