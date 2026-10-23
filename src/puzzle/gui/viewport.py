@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from puzzle.gui.tasks import rendering_available
 from puzzle.mesh.mesh import Mesh
+from puzzle.post.quantities import compute
 from puzzle.post.view import DEFAULT_SCALAR
 from puzzle.post.vtk import pick_step, to_grid
 from puzzle.results.model import Results
@@ -84,6 +85,20 @@ def selection_surface(mesh: Mesh, group: str):
     if not faces:
         return None
     return pv.PolyData(mesh.coords, np.concatenate(faces))
+
+
+def _display(values, kind: str | None):
+    """SI values in the display unit of their kind (ADR 0024), and that unit's name."""
+    from puzzle.model.units import DIMENSIONS, pretty, registry
+    from puzzle.settings import current
+
+    if kind is None:
+        return values, None
+    si, target = DIMENSIONS[kind][1], current().display_units()[kind]
+    if target == si:
+        return values, pretty(si)
+    converted = registry().Quantity(np.asarray(values, float), si).to(target).magnitude
+    return np.asarray(converted), pretty(target)
 
 
 def words(name: str) -> str:
@@ -437,16 +452,35 @@ class Viewport(QWidget):
         scalar: str | None = None,
         step_index: int = -1,
         deform: bool = True,
+        item=None,
     ) -> dict:
-        """A result field on the (deformed) mesh; returns what was shown."""
+        """A result field on the (deformed) mesh; returns what was shown. `item` (from
+        `post.quantities.catalog`) chooses one of the results the field gives."""
         steps = [s for s in results.steps if field in s.fields]
         step = steps[step_index] if steps else pick_step(results, field)
         grid = to_grid(mesh, step)
-        name = scalar or DEFAULT_SCALAR.get(field, field)
-        arrays = set(grid.point_data) | set(grid.cell_data)
-        if name not in arrays:
-            name = field if field in arrays else f"{field}_magnitude"
-        values = grid.point_data[name] if name in grid.point_data else grid.cell_data[name]
+        unit = None
+        if item is not None:  # a listed result (post.quantities), in the display units
+            f = step.fields[field]
+            data = grid.point_data if f.location == "node" else grid.cell_data
+            if field not in data:
+                raise KeyError(f"no '{field}' on the mesh")
+            raw = data[field]
+            name = item.label
+            values = compute(item, raw, f.components)
+            values, unit = _display(values, item.unit)
+            data[name] = values
+        else:
+            name = scalar or DEFAULT_SCALAR.get(field, field)
+            arrays = set(grid.point_data) | set(grid.cell_data)
+            if name not in arrays:
+                name = field if field in arrays else f"{field}_magnitude"
+            values = grid.point_data[name] if name in grid.point_data else grid.cell_data[name]
+        title = (
+            f"{item.label} ({unit})"
+            if item is not None and unit
+            else (item.label if item is not None else words(name))
+        )
         scale = 0.0
         if deform and "displacement" in grid.point_data:
             u = np.nan_to_num(grid.point_data["displacement"])
@@ -465,7 +499,8 @@ class Viewport(QWidget):
             "scale": scale,
             # Shown by the window's results bar: VTK's 2D text leaves a clipped copy along
             # the view's bottom edge on Retina displays.
-            "title": f"{words(name)}, {label}" + (f", deformation ×{scale:.3g}" if scale else ""),
+            "title": f"{title}, {label}" + (f", deformation ×{scale:.3g}" if scale else ""),
+            "unit": unit,
         }
         if self.plotter is not None:
             self.plotter.clear()
@@ -474,12 +509,16 @@ class Viewport(QWidget):
                 scalars=name,
                 cmap="turbo",
                 scalar_bar_args={
-                    "title": words(name),
+                    # The unit only: the result's name is in the results bar, and VTK
+                    # centres a long title over the bar, past the view's edge.
+                    "title": unit or (item.label if item is not None else words(name)),
+                    # Top left, as Ansys has its legend: clear of the part (centred) and
+                    # of the axes marker (bottom left).
                     "vertical": True,
-                    "position_x": 0.8,
-                    "position_y": 0.1,
-                    "width": 0.06,
-                    "height": 0.8,
+                    "position_x": 0.03,
+                    "position_y": 0.35,
+                    "width": 0.035,
+                    "height": 0.55,
                     "fmt": "%.3g",
                     "color": "black",
                     "title_font_size": 14,

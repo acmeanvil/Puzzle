@@ -23,6 +23,9 @@ from puzzle.gui.tree import ROLE, Node  # noqa: E402
 from puzzle.gui.window import MainWindow  # noqa: E402
 from puzzle.model.schema import Geometry, ParameterSet  # noqa: E402
 
+# These tests type lengths in mm (Settings > Units: engineering).
+pytestmark = pytest.mark.usefixtures("engineering_units")
+
 EXAMPLE = Path(__file__).parents[1] / "examples" / "cantilever"
 
 
@@ -170,7 +173,7 @@ def test_measure_two_faces(app, window):
 def test_an_imported_part_becomes_a_history(app, tmp_path):
     root = tmp_path / "cantilever"
     shutil.copytree(
-        EXAMPLE, root, ignore=shutil.ignore_patterns("results", ".puzzle", "history.jsonl")
+        EXAMPLE, root, ignore=shutil.ignore_patterns("results*", ".puzzle", "history.jsonl")
     )
     w = MainWindow(root)
     try:

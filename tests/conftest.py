@@ -6,6 +6,10 @@ from pathlib import Path
 os.environ["PUZZLE_MATERIALS"] = ""
 # Tests never touch the real keychain (or pop its prompts); key tests install their own.
 os.environ["PYTHON_KEYRING_BACKEND"] = "keyring.backends.null.Keyring"
+# Nor the user's own settings (settings.toml, agent.toml): a scratch user folder.
+import tempfile  # noqa: E402
+
+os.environ["PUZZLE_USER_DIR"] = tempfile.mkdtemp(prefix="puzzle-user-")
 
 import pytest
 
@@ -51,7 +55,16 @@ def bracket() -> Project:
     al = p.add(
         Material(
             name="Al 6061-T6",
-            properties={"youngs_modulus": Quantity(value=68.9, unit="GPa")},
+            properties={
+                "youngs_modulus": Quantity(value=68.9, unit="GPa"),
+                "poissons_ratio": Quantity(value=0.33),
+                "density": Quantity(value=2700, unit="kg/m^3"),
+                "thermal_expansion": Quantity(value=23.6e-6, unit="1/K"),
+                "thermal_conductivity": Quantity(value=167, unit="W/(m*K)"),
+                "specific_heat": Quantity(value=896, unit="J/(kg*K)"),
+                "relative_permeability": Quantity(value=1.0),
+                "electrical_conductivity": Quantity(value=2.5e7, unit="S/m"),
+            },
         )
     )
     mesh = p.add(MeshRecipe(name="Tets", global_size=Quantity(value=3, unit="mm")))
@@ -213,3 +226,35 @@ def induction(bracket: Project) -> Project:
 
 # Shared geometry helpers live in tests/conftest_geometry.py; make them importable.
 sys.path.insert(0, str(Path(__file__).parent))
+
+
+@pytest.fixture(autouse=True)
+def _fresh_settings():
+    """Every test starts from the default preferences (ADR 0024) and no materials of the
+    user's own (ADR 0020), and leaves none behind."""
+    import puzzle.settings as settings
+    from puzzle.materials import custom_library_path, reload_library
+
+    def clean():
+        settings.settings_path().unlink(missing_ok=True)
+        custom = custom_library_path()
+        custom.unlink(missing_ok=True)
+        custom.with_name(custom.stem + "-history.jsonl").unlink(missing_ok=True)
+        settings._current = None
+        reload_library()
+
+    clean()
+    yield
+    clean()
+
+
+@pytest.fixture
+def engineering_units():
+    """Lengths in mm, stresses in MPa: what tests that type "30" for 30 mm assume."""
+    import puzzle.settings as settings
+
+    s = settings.Settings()
+    s.set("units.system", "engineering")
+    s.save()
+    settings.reload()
+    return s

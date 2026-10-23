@@ -23,6 +23,9 @@ from puzzle.gui.tree import ROLE  # noqa: E402
 from puzzle.gui.window import MainWindow  # noqa: E402
 from puzzle.model.schema import Material, Study  # noqa: E402
 
+# These tests type lengths in mm (Settings > Units: engineering).
+pytestmark = pytest.mark.usefixtures("engineering_units")
+
 EXAMPLE = Path(__file__).parents[1] / "examples" / "cantilever"
 
 
@@ -35,7 +38,7 @@ def app():
 def window(app, tmp_path):
     root = tmp_path / "cantilever"
     shutil.copytree(
-        EXAMPLE, root, ignore=shutil.ignore_patterns("results", ".puzzle", "history.jsonl")
+        EXAMPLE, root, ignore=shutil.ignore_patterns("results*", ".puzzle", "history.jsonl")
     )
     w = MainWindow(root)
     yield w
@@ -151,12 +154,35 @@ def test_mesh_highlight_and_run(app, window):
     )
     assert window.results_bar.isVisible() or window.results_bar.field.count()
     shown = window.viewport.shown
-    assert shown["kind"] == "result" and shown["scalar"] == "displacement_magnitude"
+    assert shown["kind"] == "result" and shown["scalar"] == "Total deformation"
     assert shown["max"] > 0 and shown["scale"] > 0
+    assert shown["unit"] == "mm"  # Settings > Units (engineering in these tests)
 
-    assert window.results_bar.field.currentText() == "Displacement"  # a name, not a key
-    window.results_bar.field.setCurrentIndex(window.results_bar.field.findData("stress"))
-    assert window.viewport.shown["scalar"] == "von_mises"
+    # Every result the run can show is listed, not just one per field.
+    bar = window.results_bar
+    listed = [bar.field.itemText(i) for i in range(bar.field.count())]
+    for name in (
+        "Total deformation",
+        "Deformation Y",
+        "Equivalent (von Mises) stress",
+        "Maximum principal stress",
+        "Normal stress X",
+        "Shear stress XY",
+    ):
+        assert name in listed, listed
+    bar.field.setCurrentIndex(bar.field.findData("stress:von_mises"))
+    assert window.viewport.shown["scalar"] == "Equivalent (von Mises) stress"
+    assert window.viewport.shown["unit"] == "MPa"
+    bar.field.setCurrentIndex(bar.field.findData("displacement:y"))
+    assert window.viewport.shown["min"] < 0  # the tip goes down
+
+    # The tree lists them under the run too; choosing one shows it.
+    for item in window.tree._items():
+        node = item.data(0, ROLE)
+        if node.kind == "result" and node.path == "stress:p1":
+            window.tree.setCurrentItem(item)
+    assert window.viewport.shown["scalar"] == "Maximum principal stress"
+    assert bar.field.currentData() == "stress:p1"
     study = next(s for s in window.session.project.of_type(Study) if s.name == "Tip load")
     assert window.session.history(limit=1)[0]["command"]["study"] == str(study.id)
 
@@ -179,7 +205,7 @@ def _scripted_window(app, tmp_path, replies):
 
     root = tmp_path / "cantilever"
     shutil.copytree(
-        EXAMPLE, root, ignore=shutil.ignore_patterns("results", ".puzzle", "history.jsonl")
+        EXAMPLE, root, ignore=shutil.ignore_patterns("results*", ".puzzle", "history.jsonl")
     )
     provider = ScriptedProvider(replies)
     return MainWindow(root, provider_factory=lambda: provider), provider
@@ -331,12 +357,13 @@ def test_a_body_selection_highlights_its_surface(app, window):
     assert len(window.viewport.shown["highlighted"]) == 6
 
 
-def test_an_old_results_store_does_not_stop_the_project_opening(app, tmp_path):
+def test_an_old_results_store_does_not_stop_the_project_opening(app, tmp_path, monkeypatch):
     import json
 
+    monkeypatch.setattr(MainWindow, "ask_yes", lambda self, *a: False)  # declined
     root = tmp_path / "cantilever"
     shutil.copytree(
-        EXAMPLE, root, ignore=shutil.ignore_patterns("results", ".puzzle", "history.jsonl")
+        EXAMPLE, root, ignore=shutil.ignore_patterns("results*", ".puzzle", "history.jsonl")
     )
     (root / "results").mkdir()
     (root / "results" / "store.json").write_text(json.dumps({"format": 1}))
@@ -380,3 +407,29 @@ def test_choices_are_dropdowns_of_names_not_ids(window):
     order.setCurrentIndex(order.findData(1))
     mesh = next(o for o in window.session.project.objects.values() if o.name == "Tets 2.5 mm")
     assert mesh.element_order == 1
+
+
+def test_an_old_results_store_can_be_moved_aside(app, tmp_path, monkeypatch):
+    """Accepting the offer keeps the old results in a folder beside it, starts a new
+    store, and the project opens with no error."""
+    import json
+
+    asked = []
+    monkeypatch.setattr(MainWindow, "ask_yes", lambda self, *a: asked.append(a) or True)
+    root = tmp_path / "cantilever"
+    shutil.copytree(
+        EXAMPLE, root, ignore=shutil.ignore_patterns("results*", ".puzzle", "history.jsonl")
+    )
+    (root / "results").mkdir()
+    (root / "results" / "store.json").write_text(json.dumps({"format": 1}))
+    w = MainWindow(root)
+    try:
+        assert len(asked) == 1 and "older version of Puzzle" in asked[0][1]
+        assert (root / "results-older-puzzle-1" / "store.json").exists()  # kept, not deleted
+        assert not (root / "results").exists()
+        assert "error" not in w.log.toPlainText()
+        assert w._store().runs() == []
+    finally:
+        while w.tasks:
+            app.processEvents()
+        w.close()

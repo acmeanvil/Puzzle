@@ -23,6 +23,17 @@ The maintainer's answers to ADRs 0019 to 0023 put several choices in "the applic
 | Solvers | Settings shown | standard; power user (the whole option set) |
 | Agent | Provider, model, autonomy defaults, images | as `agent.toml` today |
 
+## Built (2026-10-22)
+
+`puzzle.settings` defines the preferences and reads and writes `settings.toml`. `PUZZLE_USER_DIR` overrides the user folder, which tests use. The Settings dialog has a page per group (Units, Geometry, Meshing, Solvers, Agent), each with readable choices and a Restore defaults button. The Agent page writes `agent.toml` and stores API keys in the keychain. `puzzle settings` lists and sets preferences from the command line.
+
+Applied now:
+
+- **Display units** in the properties panel (a bare number is in the unit shown), the pick bar's measurements, step and tool forms, and the sketcher's dimensions.
+- **Geometry tool preview**, live or on demand (a Preview button).
+
+The meshing and solver preferences are stored and shown greyed, saying which ADR brings them into use (0019, 0023). Results' colour bars still show SI and will follow the display units when result fields carry their units.
+
 ## Consequences
 
 - Display units touch every place a value is shown or typed: the properties panel, step and tool forms, the sketcher, results. They convert through `puzzle.model.units` at the edge, and values stay SI inside (CLAUDE.md conventions).

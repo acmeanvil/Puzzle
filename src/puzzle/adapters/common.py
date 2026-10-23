@@ -239,3 +239,33 @@ def hydraulic_diameter(group, mesh: Mesh) -> float:
     ends = mesh.node_coords(np.array(outline).ravel()).reshape(-1, 2, 3)
     perimeter = float(np.linalg.norm(ends[:, 1] - ends[:, 0], axis=1).sum())
     return 4 * surface_area(group, mesh) / perimeter
+
+
+def plastic_strain_tensor(strain, stress, elastic: list[tuple[float, float, list[int]]]):
+    """The plastic strain tensor from the total strain and the stress, for solvers that
+    write only the equivalent plastic strain (CalculiX): ep = e - [(1 + nu) s - nu tr(s) I]/E,
+    exact for small strains. `elastic`: (E, nu, node ids) per material; a node shared by
+    two materials takes the last. Tensor components xx, yy, zz, xy, yz, zx (tensor shear)."""
+    import numpy as np
+
+    from puzzle.results.model import Field
+
+    ids = strain.ids
+    s = stress.at(ids)
+    e = strain.values
+    young = np.full(len(ids), np.nan)
+    poisson = np.full(len(ids), np.nan)
+    where = {int(n): i for i, n in enumerate(ids)}
+    for E, nu, nodes in elastic:
+        index = [where[n] for n in nodes if n in where]
+        young[index], poisson[index] = E, nu
+    trace = s[:, 0] + s[:, 1] + s[:, 2]
+    elastic_strain = (1 + poisson)[:, None] * s / young[:, None]
+    elastic_strain[:, :3] -= (poisson * trace / young)[:, None]
+    return Field(
+        name="plastic_strain",
+        location=strain.location,
+        components=list(strain.components),
+        ids=ids,
+        values=e - elastic_strain,
+    )

@@ -1,7 +1,8 @@
 """The form of one geometry history step, inline (the Geometry tab, ADR 0017) or as a
 dialog (G4).
 
-Its fields come from puzzle.geometry.steps; lengths are typed in mm and stored in m,
+Its fields come from puzzle.geometry.steps; lengths are typed in the display length
+unit (Settings, ADR 0024; mm in the engineering system) and stored in m,
 and any length, angle or number field may hold a parameter's name instead. A profile
 is a sketch step of the part (by name), typed points or a DXF file, or a sketch of
 its own. Edges (fillet, chamfer) and faces (remove) are a readable preset, the
@@ -52,9 +53,9 @@ EDGE_PRESETS = [
     ("All edges", {"all": True}),
 ]
 FACE_PRESETS = [  # thresholds: (label, rule key, unit)
-    ("Holes smaller than a radius", "holes_below", "mm"),
-    ("Fillets smaller than a radius", "fillets_below", "mm"),
-    ("Faces smaller than an area", "area_below", "mm²"),
+    ("Holes smaller than a radius", "holes_below", "length"),
+    ("Fillets smaller than a radius", "fillets_below", "length"),
+    ("Faces smaller than an area", "area_below", "area"),
 ]
 
 
@@ -187,10 +188,10 @@ class RuleField(QWidget):
                 return
             if isinstance(data, str) and data in rule and len(rule) == 1:
                 self.choice.setCurrentIndex(i)
-                unit = next(u for _, k, u in FACE_PRESETS if k == data)
+                kind = next(u for _, k, u in FACE_PRESETS if k == data)
                 v = rule[data]
-                scale = 1e6 if unit == "mm²" else 1e3
-                self.amount.setText(f"{v * scale:g}" if isinstance(v, (int, float)) else str(v))
+                scale = _unit(kind)[1]
+                self.amount.setText(f"{v * scale:.6g}" if isinstance(v, (int, float)) else str(v))
                 return
         self.choice.setCurrentIndex(self.choice.findData(TYPED))
         self.typed.setText(json.dumps(rule))
@@ -200,8 +201,8 @@ class RuleField(QWidget):
         threshold = isinstance(data, str) and data not in (PICKED, TYPED)
         self.amount.setVisible(threshold)
         if threshold:
-            unit = next(u for _, k, u in FACE_PRESETS if k == data)
-            self.amount.setPlaceholderText(unit)
+            kind = next(u for _, k, u in FACE_PRESETS if k == data)
+            self.amount.setPlaceholderText(_unit(kind)[0])
         self.typed.setVisible(data == TYPED)
         self.pick_button.setVisible(data == PICKED)
         self.count.setVisible(data == PICKED)
@@ -228,7 +229,7 @@ class RuleField(QWidget):
                 raise ValueError('a typed rule is JSON, such as {"parallel": "z"}') from None
         if isinstance(data, dict):
             return dict(data)
-        unit = next(u for _, k, u in FACE_PRESETS if k == data)
+        unit, scale = _unit(next(u for _, k, u in FACE_PRESETS if k == data))
         text = self.amount.text().strip()
         try:
             number = float(text)
@@ -236,7 +237,7 @@ class RuleField(QWidget):
             if text.isidentifier():
                 return {data: text}
             raise ValueError(f"give the {unit} value for '{self.choice.currentText()}'") from None
-        return {data: number / (1e6 if unit == "mm²" else 1e3)}
+        return {data: number / scale}
 
 
 class StepForm(QWidget):
@@ -271,7 +272,7 @@ class StepForm(QWidget):
             value = args.get(f.name, f.default)
             widget = self._widget(f, value, features, sketches)
             self.widgets[f.name] = widget
-            unit = {"length": " (mm)", "angle": " (deg)"}.get(f.kind, "")
+            unit = {"length": f" ({_unit('length')[0]})", "angle": " (deg)"}.get(f.kind, "")
             form.addRow((f.label or label(f.name)) + unit, widget)
 
     def _widget(self, f, value, features, sketches):
@@ -299,7 +300,8 @@ class StepForm(QWidget):
             spin.valueChanged.connect(lambda _: self.changed.emit())
             return spin
         if f.kind == "length":
-            text = f"{value * 1000:g}" if isinstance(value, (int, float)) else str(value)
+            scale = _unit("length")[1]
+            text = f"{value * scale:.6g}" if isinstance(value, (int, float)) else str(value)
         elif isinstance(value, float):
             text = f"{value:g}"
         else:
@@ -415,7 +417,14 @@ def _parse(kind: str, text: str):
         if text.isidentifier():
             return text  # a parameter's name
         raise ValueError(f"'{text}' is neither a number nor a parameter name") from None
-    return number / 1000 if kind == "length" else number
+    return number / _unit("length")[1] if kind == "length" else number
+
+
+def _unit(kind: str) -> tuple[str, float]:
+    """The display unit of lengths or areas, and how many of it make one SI unit."""
+    from puzzle.settings import area_unit, length_unit
+
+    return area_unit() if kind == "area" else length_unit()
 
 
 def _polygon_sketch(profile: dict, params: dict) -> dict | None:

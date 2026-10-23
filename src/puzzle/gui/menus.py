@@ -62,6 +62,7 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
             add("New parameter set", lambda: new_parameter_set(window))
         elif node.label == "Materials":
             add("Add from library…", window._add_material_dialog)
+            add("Material builder…", lambda: window.open_material_builder())
         elif node.label == "Meshes":
             add("New mesh recipe", lambda: new_mesh(window))
         elif node.label == "Components":
@@ -135,6 +136,10 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
             add("Move down", lambda: move_step(window, obj, index, +1))
         menu.addSeparator()
         add("Delete step", lambda: remove(window, obj, node.path))
+    elif isinstance(obj, Material) and node.kind == "object":
+        add("Save to my materials…", lambda: window.open_material_builder(obj))
+        menu.addSeparator()
+        add("Delete", window.delete_selected)
     elif isinstance(obj, ParameterSet) and node.kind == "object":
         add("Add parameter…", lambda: add_parameter(window, obj))
         add("Delete", window.delete_selected)

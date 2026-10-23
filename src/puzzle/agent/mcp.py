@@ -175,6 +175,31 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
             "points": {n: list(p) for n, p in solved.points.items()},
         }
 
+    @tool(
+        description="What a material can be used for (ADR 0020): for each solver and analysis, "
+        "the properties it lacks and the material models that solver would refuse. "
+        "`material` is a project material's name, or a library key."
+    )
+    @guarded
+    def material_check(material: str) -> dict[str, Any]:
+        from puzzle.materials import library_keys, library_material
+        from puzzle.materials.registry import completeness
+        from puzzle.model.schema import Material
+
+        s = session()
+        found = next((m for m in s.project.of_type(Material) if m.name == material), None)
+        if found is None and material in library_keys():
+            found = library_material(material)
+        if found is None:
+            raise PuzzleError(
+                f"no material '{material}' in the project or library", code="not_found"
+            )
+        return {
+            "material": found.name,
+            "models": found.models.used(),
+            "analyses": completeness(found),
+        }
+
     @tool(description="Consistency problems of the project, each with a code.")
     @guarded
     def problems() -> list[dict[str, Any]]:

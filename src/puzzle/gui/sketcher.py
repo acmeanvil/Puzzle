@@ -11,7 +11,8 @@ Parallel, Perpendicular, Equal (two lines, or two arcs and circles), Coincident 
 points), Fix (a point), Tangent (an arc and a line that meet), On (a point and a
 line or circle), Midpoint (a point and a line). Dimension measures what is selected:
 a line's length, two points' distance (or its horizontal or vertical part), a radius,
-the angle between two lines; values are typed in mm or degrees, or as a parameter's
+the angle between two lines; values are typed in the display length unit (Settings)
+or degrees, or as a parameter's
 name. Every change re-solves at once, and the status line says how many degrees of
 freedom are left, or which constraints conflict.
 
@@ -45,7 +46,15 @@ from PySide6.QtWidgets import (
 
 from puzzle.geometry.sketch import DIMENSIONS, SketchError, describe, solve
 
-MM = 1000.0  # the editor shows mm; sketches store m
+MM = 1000.0  # the canvas is drawn in mm; values are shown in the display length unit
+
+
+def length_unit() -> tuple[str, float]:
+    from puzzle.settings import length_unit as unit
+
+    return unit()
+
+
 INK, FREE, PICKED, CONSTRUCTION, BAD = "#1f2933", "#2b6cb0", "#dd6b20", "#8a94a3", "#c53030"
 
 
@@ -225,7 +234,10 @@ def constraint_text(c: list, labels=None) -> str:
 
     def val(x, unit="mm"):
         if isinstance(x, (int, float)):
-            return f"{x:g}°" if unit == "deg" else f"{x * MM:.4g} mm"
+            if unit == "deg":
+                return f"{x:g}°"
+            name, scale = length_unit()
+            return f"{x * scale:.4g} {name}"
         return str(x)  # a parameter
 
     text = {
@@ -432,7 +444,7 @@ class SketchCanvas(QGraphicsView):
                 text = (
                     value
                     if isinstance(value, str)
-                    else (f"{value:g}°" if c[0] == "angle" else f"{value * MM:.4g}")
+                    else (f"{value:g}°" if c[0] == "angle" else f"{value * length_unit()[1]:.4g}")
                 )
                 put(
                     ("R" if c[0] == "radius" else "⌀" if c[0] == "diameter" else "") + text,
@@ -739,7 +751,8 @@ class SketchWorkspace(QWidget):
         self.changed()
 
     def dimension(self) -> None:
-        """A dimension on the selection, typed in mm (or degrees), or a parameter."""
+        """A dimension on the selection, typed in the display length unit (or degrees),
+        or a parameter."""
         m, sel = self.model, self.canvas.selected
         kinds = sorted(m.entities()[n] for n in sel)
         if kinds == ["line"]:
@@ -762,9 +775,11 @@ class SketchWorkspace(QWidget):
             kind, refs, now, unit = "angle", sel, m.angle(*sel), "deg"
         else:
             return
-        shown = f"{now * MM:.4g}" if unit == "mm" else f"{now:.4g}"
+        name, scale = length_unit()
+        shown = f"{now * scale:.4g}" if unit == "mm" else f"{now:.4g}"
+        label = name if unit == "mm" else "degrees"
         text = self.ask_value(
-            "Dimension", f"{kind.capitalize()} ({unit}, or a parameter's name):", shown
+            "Dimension", f"{kind.capitalize()} ({label}, or a parameter's name):", shown
         )
         value = self._value(text, unit)
         if value is None:
@@ -783,7 +798,7 @@ class SketchWorkspace(QWidget):
             self.status.setText(f"'{text}' is neither a number nor a parameter")
             self.status.setStyleSheet(f"color: {BAD}; font-weight: bold")
             return None
-        return number / MM if unit == "mm" else number
+        return number / length_unit()[1] if unit == "mm" else number
 
     def _edit_constraint(self, item) -> None:
         i = self.constraints.row(item)
@@ -792,10 +807,12 @@ class SketchWorkspace(QWidget):
             return
         unit = "deg" if c[0] == "angle" else "mm"
         now = c[-1]
+        name, scale = length_unit()
         shown = (
-            now if isinstance(now, str) else (f"{now:g}" if unit == "deg" else f"{now * MM:.4g}")
+            now if isinstance(now, str) else (f"{now:g}" if unit == "deg" else f"{now * scale:.4g}")
         )
-        value = self._value(self.ask_value("Dimension", f"New value ({unit}):", shown), unit)
+        label = "degrees" if unit == "deg" else name
+        value = self._value(self.ask_value("Dimension", f"New value ({label}):", shown), unit)
         if value is not None:
             c[-1] = value
             self.model.resolve()

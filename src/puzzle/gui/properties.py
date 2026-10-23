@@ -31,8 +31,14 @@ def is_quantity(value: Any) -> bool:
 
 def format_value(value: Any) -> str:
     if is_quantity(value):
+        from puzzle.model.units import pretty, shown
+        from puzzle.settings import current
+
         unit = value["unit"]
-        return f"{value['value']:g}" if unit == "dimensionless" else f"{value['value']:g} {unit}"
+        if unit == "dimensionless":
+            return f"{value['value']:g}"
+        v, u = shown(value["value"], unit, current().display_units())  # ADR 0024
+        return f"{v:.6g} {pretty(u)}"
     if isinstance(value, str):
         return value
     return json.dumps(value)
@@ -42,8 +48,13 @@ def parse_value(text: str, old: Any) -> Any:
     """The typed text, as the type the field held: "5 mm" for a quantity, JSON otherwise."""
     text = text.strip()
     if is_quantity(old):
+        from puzzle.model.units import plain, shown
+        from puzzle.settings import current
+
         number, _, unit = text.partition(" ")
-        return {"value": float(number), "unit": unit.strip() or old["unit"]}
+        if not unit.strip():  # a bare number is in the unit shown
+            unit = shown(old["value"], old["unit"], current().display_units())[1]
+        return {"value": float(number), "unit": plain(unit)}
     if isinstance(old, str) or old is None:
         try:
             parsed = json.loads(text)

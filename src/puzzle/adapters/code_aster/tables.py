@@ -15,6 +15,16 @@ COMPONENTS = {
     "stress": {"SIXX": "xx", "SIYY": "yy", "SIZZ": "zz", "SIXY": "xy", "SIYZ": "yz", "SIXZ": "zx"},
     "temperature": {"TEMP": ""},
     "reaction_force": {"DX": "x", "DY": "y", "DZ": "z"},
+    # EPSP: tensor (not engineering) shear components.
+    "plastic_strain": {
+        "EPXX": "xx",
+        "EPYY": "yy",
+        "EPZZ": "zz",
+        "EPXY": "xy",
+        "EPYZ": "yz",
+        "EPXZ": "zx",
+    },
+    "plastic_strain_equivalent": {"V1": ""},  # VMIS_ISOT_TRAC: V1 = p
 }
 
 
@@ -53,7 +63,7 @@ def read_results(workdir: Path) -> Results:
         return results
     # One result step per stored instant (NUME_ORDRE); a static solve has one.
     steps: dict[int, StepResult] = {}
-    for name in ("displacement", "stress", "temperature", "reaction_force"):
+    for name in COMPONENTS:
         if name not in tables:
             continue
         times = {int(r["NUME_ORDRE"]): float(r.get("INST") or 1.0) for r in tables[name]}
@@ -61,4 +71,9 @@ def read_results(workdir: Path) -> Results:
             step = steps.setdefault(order, StepResult(1, "", times[order]))
             step.fields[name] = field
     results.steps = [steps[o] for o in sorted(steps)]
+    # A stepped structural solve also stores its unloaded start (t = 0): nothing to show,
+    # and CalculiX doesn't report it, so it goes. A transient heat start is the initial
+    # temperature and stays.
+    if len(results.steps) > 1 and "temperature" not in results.steps[0].fields:
+        results.steps = [s for s in results.steps if s.value != 0.0] or results.steps
     return results

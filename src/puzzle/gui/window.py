@@ -77,45 +77,70 @@ class ElidedLabel(QLabel):
 
 
 class ResultsBar(QWidget):
-    """Field, step and deformation controls for the result on screen."""
+    """Which result to show (every one the run's fields give: total deformation, its
+    components, equivalent and principal stresses, ...), the step, and deformation."""
 
     def __init__(self, on_change) -> None:
         super().__init__()
         row = QHBoxLayout(self)
         row.setContentsMargins(6, 2, 6, 2)
-        self.field = QComboBox()
+        self.field = QComboBox()  # the result: data is a post.quantities key
+        self.field.setMinimumWidth(240)
+        self.items: dict = {}
         self.step = QSpinBox()
         self.deform = QCheckBox("Deformed")
         self.deform.setChecked(True)
         self.title = ElidedLabel("")
         self.title.setStyleSheet("color: gray")
-        for label, widget in (("Field", self.field), ("Step", self.step)):
+        for label, widget in (("Result", self.field), ("Step", self.step)):
             row.addWidget(QLabel(label))
             row.addWidget(widget)
         row.addWidget(self.deform)
         row.addWidget(self.title, 1)
-        self.field.currentTextChanged.connect(lambda _: on_change())
+        self.field.currentIndexChanged.connect(lambda _: on_change())
         self.step.valueChanged.connect(lambda _: on_change())
         self.deform.toggled.connect(lambda _: on_change())
 
-    def load(self, results: Results) -> None:
-        names = list(dict.fromkeys(n for s in results.steps for n in s.fields))
-        chosen = self.field.currentData()  # kept across refreshes when the run has it
+    def load(self, results: Results, chosen: str | None = None) -> None:
+        """The run's results, grouped by field; `chosen` (a key) or the last choice stays
+        selected when the run has it, else the default (deformation, temperature, ...)."""
+        from puzzle.post.quantities import catalog, default
+
+        fields: dict = {}
+        for s in results.steps:
+            for f in s.fields.values():
+                fields.setdefault(f.name, (f.name, f.location, f.components))
+        items = catalog(list(fields.values()))
+        chosen = chosen or self.field.currentData()
         for w in (self.field, self.step):
             w.blockSignals(True)
         self.field.clear()
-        from puzzle.gui.choices import label
-
-        for n in names:
-            self.field.addItem(label(n), n)
-        defaults = ("displacement", "temperature", "velocity")
-        preferred = chosen if chosen in names else next((n for n in defaults if n in names), None)
-        if preferred:
-            self.field.setCurrentIndex(self.field.findData(preferred))
+        self.items = {i.key: i for i in items}
+        group = None
+        for item in items:
+            if group is not None and item.group != group:
+                self.field.insertSeparator(self.field.count())
+            group = item.group
+            self.field.addItem(item.label, item.key)
+        pick = chosen if chosen in self.items else (default(items).key if items else None)
+        if pick:
+            self.field.setCurrentIndex(self.field.findData(pick))
         self.step.setRange(1, max(1, len(results.steps)))
         self.step.setValue(self.step.maximum())
         for w in (self.field, self.step):
             w.blockSignals(False)
+
+    def item(self):
+        return self.items.get(self.field.currentData())
+
+
+def _measure(value: float, unit: str) -> str:
+    """A measurement (SI) in the display units (ADR 0024): "10 mm", "0.3937 in"."""
+    from puzzle.model.units import pretty, shown
+    from puzzle.settings import current
+
+    v, u = shown(value, unit, current().display_units())
+    return f"{v:.4g} {pretty(u)}"
 
 
 # The selection filter: entity kind -> what the pick bar calls it.
@@ -167,12 +192,12 @@ class PickBar(QWidget):
         )
         size = self.window.viewport.measure(self.window.viewport.picked) if names else {}
         if size.get("area"):
-            text += f"  ·  area {size['area'] * 1e6:.4g} mm²"
+            text += f"  ·  area {_measure(size['area'], 'm^2')}"
         if size.get("length"):
-            text += f"  ·  length {size['length'] * 1e3:.4g} mm"
+            text += f"  ·  length {_measure(size['length'], 'm')}"
         if "distance" in size:
             apart = "centres" if self.window.viewport.pick_kind == "face" else "points"
-            text += f"  ·  {apart} {size['distance'] * 1e3:.4g} mm apart"
+            text += f"  ·  {apart} {_measure(size['distance'], 'm')} apart"
         self.label.setText(text)
         self.setVisible(self.window.viewport.picking or bool(names))
 
@@ -320,8 +345,10 @@ class MainWindow(QMainWindow):
             runs = []
             if getattr(self, "_reported_store", None) != str(s.root):
                 self._reported_store = str(s.root)
+                if exc.code == "stale_store" and self._offer_new_store():
+                    return self.refresh()
                 self.report(exc)
-        self.tree.populate(s.project, runs)
+        self.tree.populate(s.project, runs, self._field_catalogs(runs))
         self.history.clear()
         names = {str(o.id): o.name for o in s.project.objects.values()}
         for entry in s.history(limit=200):  # newest first
@@ -330,6 +357,40 @@ class MainWindow(QMainWindow):
         self.agent.refresh()
         self.workbench.refresh()
         self._selected()
+
+    def _offer_new_store(self) -> bool:
+        """An older Puzzle's results can't be read: offer to move them aside (kept, not
+        deleted) and start a new store. Results are a cache of the studies, which can
+        be run again."""
+        old = self.session.root / RESULTS_DIR
+        if not self.ask_yes(
+            "Results from an older Puzzle",
+            "This project's results were saved by an older version of Puzzle and can't be "
+            "read.\n\nMove them aside (into a folder next to it, nothing is deleted) and "
+            "start with no results? You can run the studies again to get them back.",
+        ):
+            return False
+        n = 1
+        while (aside := old.with_name(f"{old.name}-older-puzzle-{n}")).exists():
+            n += 1
+        old.rename(aside)
+        self.log.appendPlainText(f"Old results moved to {aside.name}; run the studies again.")
+        self.statusBar().showMessage("Started a new results store", 8000)
+        self._reported_store = None
+        return True
+
+    def _field_catalogs(self, runs) -> dict:
+        """Each run's stored fields (metadata only), for the tree's result listing; runs
+        never change, so each is read once."""
+        cache = self.__dict__.setdefault("_catalogs", {})
+        try:
+            store = self._store()
+            for r in runs:
+                if r.run_id not in cache:
+                    cache[r.run_id] = store.field_catalog(r.run_id)
+        except PuzzleError:
+            return {}
+        return cache
 
     def refresh_problems(self) -> None:
         s = self.session
@@ -394,9 +455,11 @@ class MainWindow(QMainWindow):
             ("mesh", "Mesh", "Ctrl+M", self.mesh_selected),
             ("run", "Run", "Ctrl+R", self.run_selected),
             ("material", "Add material…", None, self._add_material_dialog),
+            ("builder", "Material builder…", None, lambda: self.open_material_builder()),
             ("delete", "Delete", QKeySequence.StandardKey.Delete, self.delete_selected),
             ("reload", "Reload", QKeySequence.StandardKey.Refresh, self.reload),
             ("pick", "Pick", "P", self.toggle_picking),
+            ("settings", "Settings…", QKeySequence.StandardKey.Preferences, self.open_settings),
         ):
             action = QAction(text, self)
             if key is not None:
@@ -405,9 +468,45 @@ class MainWindow(QMainWindow):
             bar.addAction(action)
             menu.addAction(action)
             self.actions_by_name[name] = action
+        # On macOS, Settings… moves to the application menu, where Mac users look for it.
+        self.actions_by_name["settings"].setMenuRole(QAction.MenuRole.PreferencesRole)
         pick = self.actions_by_name["pick"]
         pick.setCheckable(True)
         pick.setToolTip("Double-click faces in the view to pick them; drag still rotates")
+
+    def open_material_builder(self, material=None) -> None:
+        """The material builder (ADR 0020); with a project material, to save it as yours."""
+        dialog = self.material_builder()
+        if material is not None:
+            dialog.key = dialog.parent_key = None
+            dialog.editor.load(material)
+        dialog.exec()
+
+    def material_builder(self):
+        """The builder to show (tests replace this)."""
+        from puzzle.gui.material_builder import MaterialBuilder
+
+        return MaterialBuilder(self, self)
+
+    def open_settings(self) -> None:
+        """The Settings dialog (ADR 0024); what it changes shows at once."""
+        if self.settings_dialog().exec():
+            self.settings_changed()
+
+    def settings_dialog(self):
+        """The dialog to show (tests replace this)."""
+        from puzzle.gui.settings_dialog import SettingsDialog
+
+        return SettingsDialog(parent=self)
+
+    def settings_changed(self) -> None:
+        from puzzle.settings import reload
+
+        reload()
+        self.agent.agent = None  # the next message builds the agent with the new settings
+        if self.session is not None:
+            self.refresh()
+        self.statusBar().showMessage("Settings saved", 5000)
 
     def new_project(self, root: Path, name: str) -> None:
         """Create an empty project in `root` and open it."""
@@ -526,8 +625,8 @@ class MainWindow(QMainWindow):
         if s is None or node is None:
             return
         names = {str(o.id): o.name for o in s.project.objects.values()}
-        if node.kind == "run":
-            self._select_run(node.object)
+        if node.kind in ("run", "result", "result_group"):
+            self._select_run(node.object, node.path if node.kind == "result" else None)
             return
         obj = s.project.objects.get(_uuid(node.object)) if node.object else None
         if obj is None:
@@ -647,21 +746,28 @@ class MainWindow(QMainWindow):
         self.centre.addWidget(workspace)
         self.centre.setCurrentWidget(workspace)
 
-    def _select_run(self, run_id: str) -> None:
+    def _select_run(self, run_id: str, key: str | None = None) -> None:
+        """A run's results in the view; `key` picks one of them (from the model tree)."""
+        from puzzle.gui.choices import solver_label
+
         store = self._store()
         record = store.get_run(run_id)
         self.properties.show_text(
             {
-                "study": record.study_name,
-                "solver": record.solver,
-                "runtime": record.runtime,
-                "started": f"{record.started_at:%Y-%m-%d %H:%M:%S}",
-                "duration (s)": round(record.duration_s, 2),
-                "result steps": record.steps,
+                "Study": record.study_name,
+                "Solver": solver_label(record.solver),
+                "Ran": "natively" if record.runtime == "native" else f"in {record.runtime}",
+                "Started": f"{record.started_at:%Y-%m-%d %H:%M:%S}",
+                "Duration (s)": round(record.duration_s, 2),
+                "Result steps": record.steps,
             }
         )
-        self.result = (store.read_mesh(record.mesh_id), store.read_results(run_id))
-        self.results_bar.load(self.result[1])
+        if getattr(self, "_result_run", None) != run_id or self.result is None:
+            self.result = (store.read_mesh(record.mesh_id), store.read_results(run_id))
+            self._result_run = run_id
+        self.results_bar.blockSignals(True)
+        self.results_bar.load(self.result[1], key)
+        self.results_bar.blockSignals(False)
         self.results_bar.show()
         self._redraw_result()
 
@@ -669,22 +775,29 @@ class MainWindow(QMainWindow):
         if self.result is None:
             return
         mesh, results = self.result
-        field = self.results_bar.field.currentData()
+        item = self.results_bar.item()
+        field = item.field if item is not None else None
         steps = [s for s in results.steps if field in s.fields]
         if not field or not steps:
             return
         index = min(self.results_bar.step.value(), len(steps)) - 1
         try:
             self.viewport.show_result(
-                mesh, results, field, step_index=index, deform=self.results_bar.deform.isChecked()
+                mesh,
+                results,
+                field,
+                step_index=index,
+                deform=self.results_bar.deform.isChecked(),
+                item=item,
             )
         except (KeyError, ValueError) as exc:
             self.statusBar().showMessage(str(exc), 8000)
             return
         shown = self.viewport.shown
         self.results_bar.title.setText(shown.get("title", ""))
+        unit = f" {shown['unit']}" if shown.get("unit") else ""
         self.statusBar().showMessage(
-            f"{shown['scalar']} ({shown['step']}): {shown['min']:.4g} … {shown['max']:.4g}"
+            f"{shown['scalar']} ({shown['step']}): {shown['min']:.4g} … {shown['max']:.4g}{unit}"
         )
 
     # --- picking -------------------------------------------------------------------
@@ -829,6 +942,11 @@ class MainWindow(QMainWindow):
         dialog = ReattachDialog(geometry, reports, rules, self)
         return dialog.choices() if dialog.exec() else None
 
+    def ask_yes(self, title: str, text: str) -> bool:
+        """A yes or no question (tests replace this)."""
+        reply = QMessageBox.question(self, title, text)
+        return reply == QMessageBox.StandardButton.Yes
+
     def ask_text(self, title: str, label: str, default: str = "") -> str | None:
         text, ok = QInputDialog.getText(self, title, label, text=default)
         return text.strip() if ok and text.strip() else None
@@ -904,7 +1022,7 @@ class MainWindow(QMainWindow):
         return ResultStore(self.session.root / RESULTS_DIR)
 
     def _object(self, node: Node | None):
-        if node is None or not node.object or node.kind == "run":
+        if node is None or not node.object or node.kind in ("run", "result", "result_group"):
             return None
         return self.session.project.objects.get(_uuid(node.object))
 

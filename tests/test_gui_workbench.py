@@ -23,6 +23,9 @@ from puzzle.gui.window import MainWindow  # noqa: E402
 from puzzle.gui.workbench import ToolPanel  # noqa: E402
 from puzzle.model.schema import Geometry  # noqa: E402
 
+# These tests type lengths in mm (Settings > Units: engineering).
+pytestmark = pytest.mark.usefixtures("engineering_units")
+
 
 @pytest.fixture(scope="module")
 def app():

@@ -130,14 +130,15 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
     elif "heat_transfer" in physics_types:
         heat = next(ph for ph in comp.physics if ph.type == "heat_transfer")
         out += ["*INITIAL CONDITIONS, TYPE=TEMPERATURE", f"N_ALL, {initial_temperature(heat)}"]
+    yields = plastic(project, comp)
     prestress = _prestress_steps(project, study, inputs)
     for number, step in enumerate(prestress, start=1):
         # Large-deformation static step: its stress stiffens the steps after it.
-        lines = _step(number, step, comp, mesh, faces, physics_types, thermal_load)
+        lines = _step(number, step, comp, mesh, faces, physics_types, thermal_load, yields)
         first = lines[0] if "NLGEOM" in lines[0] else lines[0] + ", NLGEOM"
         out += [first, *lines[1:]]
     for number, step in enumerate(solve_steps, start=len(prestress) + 1):
-        lines = _step(number, step, comp, mesh, faces, physics_types, thermal_load)
+        lines = _step(number, step, comp, mesh, faces, physics_types, thermal_load, yields)
         if prestress:  # a perturbation of the stressed state, not of the unloaded one
             lines = [lines[0] + ", PERTURBATION", *lines[1:]]
         out += lines
@@ -203,6 +204,8 @@ def _material_cards(m: Material, comp: Component, expansion: bool = False) -> li
     if "solid_mechanics" in types:
         e, nu = need("youngs_modulus", "poissons_ratio")
         cards += ["*ELASTIC", f"{e:.10g}, {nu:.10g}"]
+        if m.models.plasticity is not None:  # von Mises, isotropic hardening (ADR 0020)
+            cards += _plastic_card(m)
         if "density" in p:
             cards += ["*DENSITY", f"{p['density']:.10g}"]
     if "heat_transfer" in types:
@@ -231,6 +234,27 @@ def _material_cards(m: Material, comp: Component, expansion: bool = False) -> li
     return cards
 
 
+def _plastic_card(m: Material) -> list[str]:
+    """*PLASTIC: "true stress, equivalent plastic strain[, temperature]" lines, the
+    curves in rising temperature (CalculiX interpolates between them)."""
+    curves = sorted(m.models.plasticity.curves, key=lambda c: c.temperature or 0.0)
+    if len(curves) > 1 and any(c.temperature is None for c in curves):
+        raise InputError(f"material '{m.name}': give every hardening curve its temperature")
+    lines = ["*PLASTIC"]
+    for c in curves:
+        temperature = "" if c.temperature is None else f", {c.temperature:.10g}"
+        lines += [f"{s:.10g}, {e:.10g}{temperature}" for e, s in c.points]
+    return lines
+
+
+def plastic(project: Project, comp: Component) -> bool:
+    """Whether any of the component's materials yields: its static steps are stepped."""
+    return any(
+        isinstance(m := project.objects.get(a.material), Material) and m.models.plasticity
+        for a in comp.materials
+    )
+
+
 def _step(
     number: int,
     step: SolveStep,
@@ -239,9 +263,13 @@ def _step(
     faces: FaceLookup,
     physics_types,
     thermal_load=None,
+    yields: bool = False,
 ) -> list[str]:
     solved = set(step.physics) or physics_types
-    contact = any(c.type in ("frictionless", "frictional") for c in comp.contacts)
+    # Plasticity is nonlinear like contact: the load goes in by increments, each kept.
+    contact = any(c.type in ("frictionless", "frictional") for c in comp.contacts) or (
+        yields and step.type == "stationary" and "solid_mechanics" in solved
+    )
     nlgeom = bool(step.settings.get("geometric_nonlinearity", False))
     if nlgeom and (solved != {"solid_mechanics"} or step.type != "stationary"):
         raise InputError(
@@ -280,7 +308,7 @@ def _step(
         outputs = (
             ["*NODE FILE", "U"]
             if step.type == "modal"
-            else ["*NODE FILE", "U, RF", "*EL FILE", "S, E"]
+            else ["*NODE FILE", "U, RF", "*EL FILE", "S, E" + (", PEEQ" if yields else "")]
         )
     elif solved == {"heat_transfer"}:
         if step.type == "transient" and time_scheme(step)[0] != "backward_euler":

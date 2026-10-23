@@ -26,7 +26,10 @@ from puzzle.model.schema import Material, Project, PropertyTable, Quantity, Tabl
 
 
 def user_data_dir() -> Path:
-    """Puzzle's per-user data directory on this platform."""
+    """Puzzle's per-user data directory on this platform (PUZZLE_USER_DIR overrides it:
+    tests point it at a scratch folder, so they never read or write a user's files)."""
+    if os.environ.get("PUZZLE_USER_DIR"):
+        return Path(os.environ["PUZZLE_USER_DIR"])
     if sys.platform == "darwin":
         return Path.home() / "Library" / "Application Support" / "Puzzle"
     if os.name == "nt":
@@ -39,6 +42,12 @@ def user_library_path() -> Path:
     return user_data_dir() / "materials" / "library.json"
 
 
+def custom_library_path() -> Path:
+    """Materials you made or edited in the builder (ADR 0020): kept apart from the
+    imported library, so re-importing the spreadsheet never overwrites them."""
+    return user_data_dir() / "materials" / "custom.json"
+
+
 def library_paths() -> list[Path]:
     """Your library files that exist, in the order they are applied."""
     configured = os.environ.get("PUZZLE_MATERIALS")
@@ -46,7 +55,8 @@ def library_paths() -> list[Path]:
         paths = [user_library_path()]
     else:  # set but empty: generic materials only (what the tests use)
         paths = [Path(p) for p in configured.split(os.pathsep) if p]
-    return [p for p in paths if p.is_file()]
+    # Your own materials always load last (in the user folder; tests use a scratch one).
+    return [p for p in [*paths, custom_library_path()] if p.is_file()]
 
 
 @cache
@@ -82,6 +92,64 @@ def _library() -> dict[str, dict]:
     return _load(tuple(library_paths()))
 
 
+def reload_library() -> None:
+    """Forget the cached library (after the builder writes your materials)."""
+    _load.cache_clear()
+
+
+def library_entry(key: str) -> dict:
+    """A library entry with its family's values filled in: a variant ("parent": key)
+    inherits everything it does not set itself (ADR 0020)."""
+    return resolve(_library(), key)
+
+
+def resolve(lib: dict[str, dict], key: str) -> dict:
+    """`library_entry` over a given library (the builder checks an entry this way)."""
+    if key not in lib:
+        raise KeyError(f"no material '{key}' in the materials library")
+    chain, k = [], key
+    while k:
+        if k in chain:
+            raise ValueError(f"material '{key}': its families loop ({' -> '.join(chain)})")
+        chain.append(k)
+        k = lib.get(k, {}).get("parent")
+        if k and k not in lib:
+            raise KeyError(f"material '{chain[-1]}': no family '{k}' in the library")
+    out: dict = {
+        "name": key,
+        "description": "",
+        "properties": {},
+        "tables": {},
+        "info": {},
+        "sources": [],
+        "models": {},
+        "solver_keywords": {},
+    }
+    for k in reversed(chain):  # the family first, then each variant over it
+        e = lib[k]
+        for part in ("properties", "tables", "info", "models", "solver_keywords"):
+            out[part] = {**out[part], **e.get(part, {})}
+        out["sources"] = list(dict.fromkeys([*out["sources"], *e.get("sources", [])]))
+        for field in ("name", "description", "parent"):
+            if field in e:
+                out[field] = e[field]
+    out["parent"] = lib[key].get("parent")
+    return out
+
+
+def families() -> dict[str, list[str]]:
+    """Family key -> its variants' keys; a material with no variants is its own family."""
+    lib = _library()
+    out: dict[str, list[str]] = {}
+    for key in sorted(lib):
+        parent = lib[key].get("parent")
+        if parent:
+            out.setdefault(parent, []).append(key)
+        else:
+            out.setdefault(key, [])
+    return out
+
+
 def library_keys() -> list[str]:
     return sorted(_library())
 
@@ -98,10 +166,11 @@ def search_library(text: str) -> list[str]:
 
 def library_material(key: str) -> Material:
     """A fresh Material built from the library entry `key`."""
-    try:
-        e = _library()[key]
-    except KeyError:
-        raise KeyError(f"no material '{key}' in the materials library") from None
+    return material_from_entry(library_entry(key))
+
+
+def material_from_entry(e: dict) -> Material:
+    """A Material from a resolved library entry."""
     tables = {
         prop: PropertyTable(
             unit=t["unit"],
@@ -117,6 +186,8 @@ def library_material(key: str) -> Material:
         properties={prop: Quantity(**q) for prop, q in e["properties"].items()},
         tables=tables,
         sources=list(e["sources"]),
+        models=e.get("models", {}),
+        solver_keywords=dict(e.get("solver_keywords", {})),
     )
 
 
@@ -130,6 +201,12 @@ def add_library_material(project: Project, key: str, name: str | None = None) ->
 
 __all__ = [
     "add_library_material",
+    "custom_library_path",
+    "families",
+    "library_entry",
+    "material_from_entry",
+    "resolve",
+    "reload_library",
     "library_keys",
     "library_material",
     "library_paths",

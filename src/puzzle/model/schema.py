@@ -196,6 +196,98 @@ class PropertyTable(BaseModel):
         return curve[-1][1]
 
 
+class HardeningCurve(BaseModel):
+    """True stress against equivalent plastic strain; the first point is the yield
+    stress at zero plastic strain."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    temperature: float | None = Field(default=None, description="Kelvin; None: any")
+    points: list[tuple[float, float]] = Field(
+        min_length=1, description="(equivalent plastic strain, true stress in Pa)"
+    )
+
+    @model_validator(mode="after")
+    def _a_hardening_curve(self) -> HardeningCurve:
+        strains = [e for e, _ in self.points]
+        if strains[0] != 0:
+            raise ValueError("a hardening curve starts at zero plastic strain (the yield stress)")
+        if any(b <= a for a, b in zip(strains, strains[1:], strict=False)):
+            raise ValueError("plastic strains in a hardening curve must increase")
+        if any(s <= 0 for _, s in self.points):
+            raise ValueError("stresses in a hardening curve must be positive")
+        return self
+
+
+class Plasticity(BaseModel):
+    """Rate-independent plasticity with a von Mises yield surface."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    hardening: Literal["isotropic"] = "isotropic"
+    curves: list[HardeningCurve] = Field(min_length=1)
+
+
+Axis = tuple[float, float, float]
+
+
+class OrthotropicElasticity(BaseModel):
+    """Nine elastic constants in the material axes (axis 1, axis 2, and 3 = 1 x 2)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    e1: float
+    e2: float
+    e3: float
+    nu12: float
+    nu13: float
+    nu23: float
+    g12: float
+    g13: float
+    g23: float
+    axis1: Axis = (1.0, 0.0, 0.0)
+    axis2: Axis = (0.0, 1.0, 0.0)
+
+
+class Hyperelasticity(BaseModel):
+    """Rubber-like materials: Neo-Hookean (C10) or Mooney-Rivlin (C10, C01); D1 sets
+    compressibility (0: incompressible). Pa, and 1/Pa for D1."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    model: Literal["neo_hookean", "mooney_rivlin"] = "neo_hookean"
+    c10: float
+    c01: float = 0.0
+    d1: float = 0.0
+
+
+class AnisotropicConductivity(BaseModel):
+    """Thermal conductivity along the material axes, W/(m K)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    k1: float
+    k2: float
+    k3: float
+    axis1: Axis = (1.0, 0.0, 0.0)
+    axis2: Axis = (0.0, 1.0, 0.0)
+
+
+class MaterialModels(BaseModel):
+    """Behaviour beyond single values (ADR 0020). An adapter writes the models its
+    capabilities list and refuses the others, never silently dropping one."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    plasticity: Plasticity | None = None
+    orthotropic_elasticity: OrthotropicElasticity | None = None
+    hyperelasticity: Hyperelasticity | None = None
+    anisotropic_conductivity: AnisotropicConductivity | None = None
+
+    def used(self) -> list[str]:
+        return [k for k in type(self).model_fields if getattr(self, k) is not None]
+
+
 class Material(ProjectObject):
     """A material owned by the project.
 
@@ -212,6 +304,10 @@ class Material(ProjectObject):
     properties: dict[str, Quantity] = Field(default_factory=dict)
     tables: dict[str, PropertyTable] = Field(default_factory=dict)
     sources: list[str] = Field(default_factory=list)
+    models: MaterialModels = Field(default_factory=MaterialModels)
+    # Expert pass-through (ADR 0020/0023): solver -> its own material keywords, e.g.
+    # {"calculix": "*CREEP, LAW=NORTON ..."}. The adapter places them or refuses.
+    solver_keywords: dict[str, str] = Field(default_factory=dict)
 
 
 class MeshRecipe(ProjectObject):
@@ -652,6 +748,32 @@ class Project:
             )
         ]
 
+    def _incomplete_materials(self, study, comp) -> list[Problem]:
+        """Materials lacking a property the study needs (ADR 0020), said before a run."""
+        from puzzle.errors import Problem
+        from puzzle.materials.registry import label, missing, needs
+
+        wanted = needs(comp, study, self.transfers_into(study.id))
+        out = []
+        for assignment in comp.materials:
+            material = self.objects.get(assignment.material)
+            if not isinstance(material, Material):
+                continue
+            for physics, keys in wanted.items():
+                lacking = missing(material, keys)
+                if lacking:
+                    words = ", ".join(label(k).lower() for k in lacking)
+                    out.append(
+                        Problem(
+                            "incomplete_material",
+                            study.name,
+                            f"study '{study.name}': material '{material.name}' has no {words}, "
+                            f"needed for {physics.replace('_', ' ')}",
+                            {"material": material.name, "missing": lacking, "physics": physics},
+                        )
+                    )
+        return out
+
     def problems(self) -> list[Problem]:
         """Consistency problems, each with a code (see puzzle.errors.Problem)."""
         from puzzle.errors import Problem
@@ -731,6 +853,7 @@ class Project:
                     for ph in step.physics
                     if ph not in present
                 ]
+                out += self._incomplete_materials(study, comp)
             solvers = study.all_solvers()
             if len(set(solvers)) != len(solvers):
                 out.append(

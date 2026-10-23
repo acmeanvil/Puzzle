@@ -36,6 +36,8 @@ TABLES = {
     "temperature": 83,
     "frequency": 84,
     "reaction_force": 85,
+    "plastic_strain": 86,
+    "plastic_strain_equivalent": 87,
 }
 FORMAT_R = "1PE18.10"
 
@@ -96,6 +98,11 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             "geometric_nonlinearity applies to static structural steps", code="unsupported"
         )
     increments = int(step.settings.get("increments", 10))
+    plastic = (
+        [a for a in comp.materials if project.get(a.material, Material).models.plasticity]
+        if not thermal and step.type == "stationary"
+        else []
+    )
     # A tie projects the source (slave) face's nodes into the target part's volume.
     tie_groups = [g for c in ties for g in (c.source, c.target.split("/", 1)[0])]
     tie_groups += [g for c in touching for g in (c.source, c.target)]
@@ -137,7 +144,11 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             out += _ther_nl(i, m, t)
         else:
             expansion = thermal_load is not None
-            out.append(f"mat{i} = DEFI_MATERIAU({_material(m, thermal, expansion)})")
+            traction = ""
+            if not thermal and step.type == "stationary" and m.models.plasticity:
+                out.append(_traction(i, m))
+                traction = f", TRACTION=_F(SIGM=trac{i})"
+            out.append(f"mat{i} = DEFI_MATERIAU({_material(m, thermal, expansion)}{traction})")
         assignments.append(f"_F(GROUP_MA='{names[a.selection]}', MATER=mat{i})")
     varc = ""
     if thermal_load is not None:
@@ -170,11 +181,23 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             f"IMPR_TABLE(TABLE=RECU_TABLE(CO=res, NOM_PARA='FREQ'), UNITE={TABLES['frequency']}, "
             f"FORMAT='TABLEAU', SEPARATEUR=',', FORMAT_R='{FORMAT_R}')",
         ]
-    elif touching or nlgeom:
-        # Green-Lagrange strain: large rotations, as CalculiX's NLGEOM (GROT_GDEP refuses tet10).
+    elif touching or nlgeom or plastic:
+        # Green-Lagrange strain: large rotations, as CalculiX's NLGEOM (GROT_GDEP refuses tet10);
+        # with plasticity, logarithmic strains (true stress against true strain).
         strains = ", DEFORMATION='GREEN_LAGRANGE'" if nlgeom else ""
-        # Every increment is kept when the deflection is large (a load-deflection curve).
-        which = "" if nlgeom else "INST=1.0"
+        # Every increment is kept when the deflection is large or the material yields
+        # (load-deflection and stress-strain histories).
+        which = "" if nlgeom or plastic else "INST=1.0"
+        behaviour = f"COMPORTEMENT=_F(RELATION='ELAS'{strains}), "
+        if plastic:
+            yielding = ", ".join(f"'{names[a.selection]}'" for a in plastic)
+            large = ", DEFORMATION='GDEF_LOG'" if nlgeom else ""
+            rest = [a for a in comp.materials if a not in plastic]
+            parts = [f"_F(GROUP_MA=({yielding},), RELATION='VMIS_ISOT_TRAC'{large})"]
+            if rest:
+                elastic = ", ".join(f"'{names[a.selection]}'" for a in rest)
+                parts.append(f"_F(GROUP_MA=({elastic},), RELATION='ELAS'{strains})")
+            behaviour = f"COMPORTEMENT=({', '.join(parts)},), "
         out += [
             *([_defi_contact(touching, names)] if touching else []),
             # Ramp the loads: friction and large deflection depend on the loading path.
@@ -182,16 +205,27 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             "res = STAT_NON_LINE(MODELE=model, CHAM_MATER=mater, "
             "EXCIT=_F(CHARGE=load, FONC_MULT=ramp), "
             + ("CONTACT=contact, " if touching else "")
-            + f"COMPORTEMENT=_F(RELATION='ELAS'{strains}), "
+            + behaviour
             # As Code_Aster's 3D contact validation (ssnv128): tangent every iteration.
-            "NEWTON=_F(REAC_ITER=1), CONVERGENCE=_F(ITER_GLOB_MAXI=200, RESI_GLOB_RELA=1e-6), "
+            + "NEWTON=_F(REAC_ITER=1), CONVERGENCE=_F(ITER_GLOB_MAXI=200, RESI_GLOB_RELA=1e-6), "
             "INCREMENT=_F(LIST_INST=DEFI_LIST_REEL(DEBUT=0.0, "
             f"INTERVALLE=_F(JUSQU_A=1.0, NOMBRE={increments}))))",
             "res = CALC_CHAMP(reuse=res, RESULTAT=res, CONTRAINTE=('SIGM_NOEU',), "
-            "FORCE=('REAC_NODA',))",
+            "FORCE=('REAC_NODA',)"
+            # V1 of VMIS_ISOT_TRAC is the cumulated (equivalent) plastic strain p.
+            + (", VARI_INTERNE=('VARI_NOEU',), DEFORMATION=('EPSP_NOEU',)" if plastic else "")
+            + ")",
             _table("res", "DEPL", "displacement", which),
             _table("res", "SIGM_NOEU", "stress", which),
             _table("res", "REAC_NODA", "reaction_force", which),
+            *(
+                [
+                    _table("res", "EPSP_NOEU", "plastic_strain", which),
+                    _table("res", "VARI_NOEU", "plastic_strain_equivalent", which),
+                ]
+                if plastic
+                else []
+            ),
         ]
     else:
         out += [
@@ -213,6 +247,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             {"displacement", "frequency"}
             if step.type == "modal"
             else {"displacement", "stress", "reaction_force"}
+            | ({"plastic_strain", "plastic_strain_equivalent"} if plastic else set())
         )
     )
     export = workdir / f"{JOB}.export"
@@ -245,6 +280,24 @@ def _table(result: str, field: str, name: str, which: str = "") -> str:
         f"IMPR_TABLE(TABLE=CREA_TABLE(RESU=_F(RESULTAT={result}, NOM_CHAM='{field}', {which}"
         "TOUT_CMP='OUI', TOUT='OUI')), "
         f"UNITE={TABLES[name]}, FORMAT='TABLEAU', SEPARATEUR=',', FORMAT_R='{FORMAT_R}')"
+    )
+
+
+def _traction(index: int, m: Material) -> str:
+    """The tensile curve VMIS_ISOT_TRAC reads: stress against TOTAL strain (eps_p + s/E),
+    from the elastic limit on; constant beyond the last point (perfectly plastic)."""
+    curves = m.models.plasticity.curves
+    if len(curves) > 1:
+        raise InputError(
+            f"material '{m.name}': the Code_Aster adapter takes one hardening curve so far, "
+            "not one per temperature",
+            code="unsupported",
+        )
+    e = m.properties["youngs_modulus"].to_si()
+    pairs = ", ".join(f"{ep + s / e:.12g}, {s:.12g}" for ep, s in curves[0].points)
+    return (
+        f"trac{index} = DEFI_FONCTION(NOM_PARA='EPSI', VALE=({pairs}), "
+        "PROL_DROITE='CONSTANT', PROL_GAUCHE='EXCLU')"
     )
 
 

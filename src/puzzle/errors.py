@@ -26,6 +26,7 @@ CODES = {
     "mesh_failed": "meshing failed",
     "solver_failed": "the solver ran but failed",
     "unsupported": "not implemented yet",
+    "incomplete_material": "a material lacks a property the study needs",
     # Results
     "stale_store": "the results store has an older format; delete it to rebuild",
 }

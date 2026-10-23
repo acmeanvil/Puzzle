@@ -124,3 +124,20 @@ def load_settings(path: Path | None = None) -> AgentSettings:
     s.model = os.environ.get("PUZZLE_AGENT_MODEL", s.model)
     s.base_url = os.environ.get("PUZZLE_AGENT_BASE_URL", s.base_url)
     return s
+
+
+def save_settings(s: AgentSettings, path: Path | None = None) -> Path:
+    """Write the agent settings (the Settings dialog's Agent page): what differs from
+    the defaults, so a later Puzzle's defaults still apply to the rest."""
+    import tomli_w
+
+    path = path or settings_path()
+    defaults = AgentSettings()
+    data = {
+        k: getattr(s, k)
+        for k in AgentSettings.__dataclass_fields__
+        if getattr(s, k) != getattr(defaults, k) and getattr(s, k) is not None
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(tomli_w.dumps(data))
+    return path

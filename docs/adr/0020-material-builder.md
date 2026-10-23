@@ -44,6 +44,17 @@ ADR 0018 (planned) makes materials sweepable choices in a study; this ADR is abo
 4. **Library writes are their own store.** The user library is not a project, so builder edits don't go through a project `Session`. A small `LibraryStore` writes the TOML atomically and keeps a history file beside it for undo, and agents may only propose library changes. Shipped generics are read-only; editing one saves a copy to the user library.
 5. **Import and export.** CSV or XLSX in the importer's column format (the existing script becomes a library function), and export of a material to a project or to a file to share. Nothing from the maintainer's own data ever ships.
 
+## Built (2026-10-22)
+
+- **Registry.** `puzzle.materials.registry` holds the property registry, `needs_for(physics, steps)`, and `completeness(material)` (per solver and analysis: missing properties, refused models). A test checks that the properties the adapters read are registered.
+- **Completeness before a run.** Studies whose materials lack a needed property report `incomplete_material` and are refused before input is written.
+- **Material models.** The schema now has typed models (`Material.models`: plasticity hardening curves, optionally per temperature; orthotropic elasticity; Neo-Hookean or Mooney-Rivlin hyperelasticity; anisotropic conductivity) and `solver_keywords`. Adapters refuse what they don't write, only for studies that solve the model's physics. None writes a model yet; plasticity on CalculiX and Code_Aster comes next, with its benchmark.
+- **Your materials.** They live in `custom.json` beside the imported library, so re-importing never overwrites them. The `LibraryStore` writes atomically and keeps an undo history. Families have variants that inherit what they don't set; a variant stores only what differs. A library material you edit is saved as your copy, and removing your copy restores the library's.
+- **The builder.** It shows the library by family with a search, and the material in tabs: properties in the display units with temperature tables (two columns and a plot), models, solver keywords, sources, and a live completeness table. It can save to your materials, start a variant, or add a material to the project as one command.
+- **Agents.** MCP `material_check` reports completeness; agents don't write the library.
+
+Not yet: importing CSV/XLSX through the builder (the spreadsheet importer stays a script), hardening curves per temperature in the GUI (the schema has them), and showing material axes for orthotropic models.
+
 ## Consequences
 
 - "Will this material work for this study?" is answered before a run, in words.

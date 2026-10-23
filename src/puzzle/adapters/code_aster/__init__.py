@@ -41,6 +41,8 @@ class CodeAsterAdapter(SolverAdapter):
             {"bonded_conformal", "bonded_nonconformal", "frictionless", "frictional"}
         ),
         couplings=frozenset({"thermal_expansion"}),
+        # VMIS_ISOT_TRAC in STAT_NON_LINE, p and EPSP out (tests/integration/test_plasticity.py).
+        material_models=frozenset({"plasticity"}),
         dimensions=frozenset({"3d", "2d_planar", "2d_axisymmetric"}),
         time_schemes=frozenset({"backward_euler", "crank_nicolson", "theta"}),
     )

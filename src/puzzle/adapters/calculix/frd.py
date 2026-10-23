@@ -22,6 +22,7 @@ FIELDS = {
     "NDTEMP": ("temperature", [""]),
     "FLUX": ("heat_flux", ["x", "y", "z"]),
     "FORC": ("reaction_force", ["x", "y", "z"]),
+    "PE": ("plastic_strain_equivalent", [""]),  # PEEQ, from *EL FILE ... PEEQ
 }
 
 

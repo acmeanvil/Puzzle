@@ -51,6 +51,10 @@ class Capabilities:
     """Time schemes for transient heat transfer (see adapters.common.time_scheme)."""
     experimental: frozenset[str] = frozenset()
     """Contact or coupling keys that exist in the solver but aren't verified for production."""
+    material_models: frozenset[str] = frozenset()
+    """Material.models this adapter writes (plasticity, ...); others are refused."""
+    material_keywords: bool = False
+    """Whether the adapter places a material's own keywords for it (solver_keywords)."""
 
 
 def refuse_inputs(inputs: Sequence, solver: str, accepted: set[tuple[str, str]] = frozenset()):
@@ -115,7 +119,34 @@ class SolverAdapter(ABC):
             for c in component.couplings
             if c not in caps.couplings | allowed
         ]
+        problems += self._material_problems(project, component, study)
         return problems
+
+    def _material_problems(
+        self, project: Project, component: Component, study: Study | None = None
+    ) -> list[str]:
+        """Material models and keywords this adapter can't write: refused, not dropped.
+        A model counts only when the study solves its physics."""
+        from puzzle.materials.registry import MODEL_PHYSICS, MODELS
+        from puzzle.model.schema import Material
+
+        solved = {p.type for p in component.physics}
+        if study is not None:
+            solved = {p for p in solved if any(s.solves(p) for s in study.solve_steps())}
+        caps, out = self.capabilities, []
+        for assignment in component.materials:
+            m = project.objects.get(assignment.material)
+            if not isinstance(m, Material):
+                continue
+            for model in m.models.used():
+                if MODEL_PHYSICS.get(model) in solved and model not in caps.material_models:
+                    out.append(
+                        f"{self.name} does not use {MODELS.get(model, model).lower()} yet "
+                        f"(material '{m.name}')"
+                    )
+            if m.solver_keywords.get(self.name) and not caps.material_keywords:
+                out.append(f"{self.name} cannot place material keywords yet (material '{m.name}')")
+        return out
 
     @abstractmethod
     def write_input(

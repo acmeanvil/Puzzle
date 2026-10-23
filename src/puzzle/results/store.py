@@ -246,6 +246,20 @@ class ResultStore:
                 return r
         raise KeyError(f"no run {run_id}")
 
+    def field_catalog(self, run_id: str) -> list[tuple[str, str, list[str]]]:
+        """(field, location, components) of a run's stored fields, in step order, read
+        from the metadata columns only (no values): what the model tree lists."""
+        table = self._rows(
+            "fields", pc.field("run_id") == run_id, ["field", "location", "components", "ordinal"]
+        )
+        rows = sorted(table.to_pylist(), key=lambda r: r["ordinal"])
+        seen: dict[str, tuple[str, str, list[str]]] = {}
+        for r in rows:
+            if r["field"] not in seen:
+                comps = r["components"].split(",") if r["components"] else [""]
+                seen[r["field"]] = (r["field"], r["location"], comps)
+        return list(seen.values())
+
     def read_results(self, run_id: str) -> Results:
         record = self.get_run(run_id)
         table = self._rows("fields", pc.field("run_id") == run_id)

@@ -171,6 +171,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     p.set_defaults(handler=_selections)
 
+    p = sub.add_parser("settings", help="your preferences (ADR 0024): list them, or set one")
+    p.add_argument("key", nargs="?", help="e.g. units.system")
+    p.add_argument("value", nargs="?", help="e.g. engineering; omit to show the choices")
+    p.set_defaults(handler=_settings)
+
     p = sub.add_parser("agent-key", help="store, check or remove the agent's API key")
     p.add_argument("action", choices=["set", "status", "clear"])
     p.add_argument("--provider", default="anthropic", choices=["anthropic", "openai"])
@@ -504,6 +509,41 @@ def _selections(args) -> int:
                 Session(args.project).submit(Edit(object=str(geo.id), ops=ops))
                 print(f"  reattached ({len(choices)} selection(s); undo with puzzle undo)")
     return 1 if detached and not args.accept_all else 0
+
+
+def _settings(args) -> int:
+    import json
+
+    from puzzle.settings import BY_KEY, PREFERENCES, Settings
+
+    s = Settings()
+    if args.key is None:
+        for p in PREFERENCES:
+            value = s.get(p.key)
+            shown = next((t for t, v in p.choices if v == value), value)
+            note = "" if p.ready else "  (not used yet)"
+            print(f"{p.key} = {json.dumps(value)}    {p.group}: {p.label}: {shown}{note}")
+        return 0
+    pref = BY_KEY.get(args.key)
+    if pref is None:
+        print(f"no setting '{args.key}'")
+        return 1
+    if args.value is None:
+        print(f"{pref.label} ({pref.key}), now {json.dumps(s.get(pref.key))}:")
+        for text, value in pref.choices:
+            print(f"  {json.dumps(value)}: {text}")
+        return 0
+    value = args.value
+    if pref.choices and isinstance(pref.choices[0][1], bool):
+        value = value.lower() in ("true", "yes", "1", "on")
+    try:
+        s.set(pref.key, value)
+    except ValueError as exc:
+        print(exc)
+        return 1
+    s.save()
+    print(f"{pref.label}: {next(t for t, v in pref.choices if v == value)}")
+    return 0
 
 
 def _agent_key(args) -> int:

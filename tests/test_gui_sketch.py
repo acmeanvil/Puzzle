@@ -15,6 +15,9 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from puzzle.gui.sketcher import SketchEditor, constraint_text  # noqa: E402
 
+# These tests type lengths in mm (Settings > Units: engineering).
+pytestmark = pytest.mark.usefixtures("engineering_units")
+
 
 @pytest.fixture(scope="module")
 def app():

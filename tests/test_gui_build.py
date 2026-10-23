@@ -26,6 +26,9 @@ from puzzle.gui.window import MainWindow  # noqa: E402
 from puzzle.model.catalog import spec  # noqa: E402
 from puzzle.model.schema import Component, Geometry, Study  # noqa: E402
 
+# These tests type lengths in mm (Settings > Units: engineering).
+pytestmark = pytest.mark.usefixtures("engineering_units")
+
 EXAMPLE = Path(__file__).parents[1] / "examples" / "cantilever"
 
 
@@ -114,7 +117,8 @@ def test_build_and_solve_a_cantilever_from_menus(app, tmp_path):
         assert shown.get("kind") == "result", window.log.toPlainText()[-2000:]
         # Euler-Bernoulli tip deflection of the 200 x 10 x 10 mm steel bar: F L^3 / 3 E I.
         E, L, I = 210e9, 0.2, 0.01**4 / 12  # noqa: E741
-        assert shown["max"] == pytest.approx(100 * L**3 / (3 * E * I), rel=0.05)
+        assert shown["unit"] == "mm"  # Settings > Units: engineering in these tests
+        assert shown["max"] == pytest.approx(1e3 * 100 * L**3 / (3 * E * I), rel=0.05)
 
         # Everything above went through the command log, attributed to the user.
         kinds = [
@@ -135,7 +139,7 @@ def test_menus_match_the_item(app, tmp_path):
     shutil.copytree(
         Path(__file__).parents[1] / "examples" / "cantilever",
         root,
-        ignore=shutil.ignore_patterns("results", ".puzzle", "history.jsonl"),
+        ignore=shutil.ignore_patterns("results*", ".puzzle", "history.jsonl"),
     )
     window = MainWindow(root)
     try:
@@ -174,7 +178,7 @@ def test_a_study_on_a_multiphysics_component_asks_which_physics(app, tmp_path):
 
     root = tmp_path / "cantilever"
     shutil.copytree(
-        EXAMPLE, root, ignore=shutil.ignore_patterns("results", ".puzzle", "history.jsonl")
+        EXAMPLE, root, ignore=shutil.ignore_patterns("results*", ".puzzle", "history.jsonl")
     )
     window = MainWindow(root)
     try:

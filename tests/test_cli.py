@@ -12,7 +12,7 @@ EXAMPLE = Path(__file__).parent.parent / "examples" / "cantilever"
 def project(tmp_path) -> Path:
     dest = tmp_path / "cantilever"
     shutil.copytree(
-        EXAMPLE, dest, ignore=shutil.ignore_patterns("results", ".puzzle", "history.jsonl")
+        EXAMPLE, dest, ignore=shutil.ignore_patterns("results*", ".puzzle", "history.jsonl")
     )
     return dest
 

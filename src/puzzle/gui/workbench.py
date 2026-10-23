@@ -73,11 +73,20 @@ class ToolPanel(QWidget):
         self.error = QLabel("")
         self.error.setWordWrap(True)
         self.error.setStyleSheet("color: #c53030")
+        from puzzle.settings import current
+
         apply, cancel = QPushButton("Apply"), QPushButton("Cancel")
         apply.setDefault(True)
         apply.clicked.connect(self.apply)
         cancel.clicked.connect(self.cancel)
         row = QHBoxLayout()
+        # Settings > Geometry > Tool preview: as values change, or on a button.
+        self.live = current().get("geometry.preview") == "live"
+        if not self.live:
+            show = QPushButton("Preview")
+            show.setToolTip("Show the part with this step, before Apply")
+            show.clicked.connect(self.preview)
+            row.addWidget(show)
         row.addStretch()
         row.addWidget(cancel)
         row.addWidget(apply)
@@ -90,8 +99,9 @@ class ToolPanel(QWidget):
         self.picking = None  # the RuleField being picked for
         self.timer = QTimer(self, singleShot=True, interval=350)
         self.timer.timeout.connect(self.preview)
-        self.form.changed.connect(self.timer.start)
-        self.preview()
+        if self.live:
+            self.form.changed.connect(self.timer.start)
+            self.preview()
 
     @property
     def window(self):

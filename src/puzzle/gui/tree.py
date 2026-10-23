@@ -56,8 +56,11 @@ class ModelTree(QTreeWidget):
         self.setHeaderHidden(True)
         self.setUniformRowHeights(True)
 
-    def populate(self, project: Project, runs: list[RunRecord]) -> None:
-        """Rebuild from the project, keeping what was selected and expanded."""
+    def populate(
+        self, project: Project, runs: list[RunRecord], catalogs: dict | None = None
+    ) -> None:
+        """Rebuild from the project, keeping what was selected and expanded; `catalogs`
+        (run id -> its stored fields) lists each run's results under it."""
         keep = self.current()
         opened = {self._key(i) for i in self._items() if i.isExpanded()}
         self.clear()
@@ -77,10 +80,20 @@ class ModelTree(QTreeWidget):
                 )
                 self._children(item, obj, project)
         if runs:
+            from puzzle.post.quantities import catalog as results_of
+
             section = self._add(root, "Results", Node("section", label="Results"))
             for r in reversed(runs):
                 text = f"{r.study_name} · {solver_label(r.solver)} · {r.started_at:%Y-%m-%d %H:%M}"
-                self._add(section, text, Node("run", r.run_id, "", text))
+                run = self._add(section, text, Node("run", r.run_id, "", text))
+                # Every result the run can show, by field (double-click or select one).
+                groups: dict = {}
+                for item in results_of((catalogs or {}).get(r.run_id, [])):
+                    if item.group not in groups:
+                        node = Node("result_group", r.run_id, item.group, item.group)
+                        groups[item.group] = self._add(run, item.group, node)
+                    leaf = Node("result", r.run_id, item.key, item.label)
+                    self._add(groups[item.group], item.label, leaf)
         for item in self._items():
             node = item.data(0, ROLE)
             if self._key(item) in opened or node.kind in ("project", "section"):

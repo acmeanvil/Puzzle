@@ -44,7 +44,7 @@ SET_TIP_LOAD = {
 def project(tmp_path):
     root = tmp_path / "cantilever"
     shutil.copytree(
-        EXAMPLE, root, ignore=shutil.ignore_patterns("results", ".puzzle", "history.jsonl")
+        EXAMPLE, root, ignore=shutil.ignore_patterns("results*", ".puzzle", "history.jsonl")
     )
     return root
 
