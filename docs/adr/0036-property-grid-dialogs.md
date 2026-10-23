@@ -1,6 +1,6 @@
 # 0036. Long editors as property grids with sections, a description box and errors on top
 
-- Status: Proposed
+- Status: Accepted (2026-10-23)
 - Date: 2026-10-23
 
 ## Context

@@ -1,6 +1,6 @@
 # 0033. The tree says what is missing, stale or done
 
-- Status: Proposed
+- Status: Accepted (2026-10-23)
 - Date: 2026-10-23
 
 ## Context

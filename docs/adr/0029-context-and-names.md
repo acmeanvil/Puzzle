@@ -1,6 +1,6 @@
 # 0029. Show only what applies, by name: panels follow their context, and no raw value reaches the screen
 
-- Status: Proposed
+- Status: Accepted (2026-10-23)
 - Date: 2026-10-23
 
 ## Context
