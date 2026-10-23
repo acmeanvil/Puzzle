@@ -39,7 +39,7 @@ New record: copy [template.md](template.md) to `NNNN-short-title.md`, set status
 | [0031](0031-workspace-layout.md) | Give the model the room: collapsible docks, a view toolbar, an icon toolbar | Accepted |
 | [0032](0032-result-probes.md) | Read results in the view: extreme markers, probes, and the range in Properties | Accepted |
 | [0033](0033-tree-status.md) | The tree says what is missing, stale or done | Accepted |
-| [0034](0034-selection-tools.md) | Selection tools: by tangency and angle, by box, by likeness, with modifier keys | Proposed |
+| [0034](0034-selection-tools.md) | Selection tools: by tangency and angle, by box, by likeness, with modifier keys | Accepted |
 | [0035](0035-load-symbols.md) | Draw supports and loads in the view | Proposed |
 | [0036](0036-property-grid-dialogs.md) | Long editors as property grids with sections, a description box and errors on top | Accepted |
 | [0037](0037-structural-loads-and-constraints.md) | Structural loads and constraints: body loads, remote loads, springs, couplings, local axes, amplitudes | Proposed |

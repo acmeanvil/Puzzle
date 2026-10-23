@@ -1,6 +1,6 @@
 # 0034. Selection tools: by tangency and angle, by box, by likeness, with modifier keys
 
-- Status: Proposed
+- Status: Accepted (2026-10-23)
 - Date: 2026-10-23
 
 ## Context
@@ -34,6 +34,28 @@ Ansys adds "extend to tangent", "extend to limits" and "select all faces of the 
 3. **Box select.** Drag with the box modifier (B, or the pick bar's Box button). It picks entities whose visible part lies inside the box, from the off-screen render's ids: an id pass with VTK's hardware selector, falling back to projecting entity centres.
 4. **Select alike.** "Same as this" picks every face of the same kind and size as the picked one: same surface type, and radius or area within a tolerance. An example is all M10 holes. "By size" filters faces by area or radius. A "Part" filter picks whole bodies.
 5. **Rules, not lists, when it makes sense.** "Same as" and "by size" can be saved as a selection rule (G3's `rule`), so the selection is recomputed on every regeneration. A new hole of that size then joins it.
+
+## Built (2026-10-23)
+
+- **Picking:**
+  - a click picks, Shift-click adds, Ctrl- or ⌘-click removes, and a drag still rotates;
+  - double-click keeps toggling one entity;
+  - `Viewport.pick(entities, mode)` is the one entry point.
+- **Undo:** undo takes back the latest action. That is a pick while picking, but only since the last project change, so making a selection and pressing undo removes the selection, not a pick.
+- **Box:** the Box button or B turns on box mode; drag a box. Entities count when one of the points spread over them (`mesh/adjacency.samples`: element centres) shows inside the box and a ray there reaches that entity, so hidden faces aren't picked. That replaces the hardware selector the ADR named, which wasn't needed.
+- **The "Select ▾" menu** in the pick bar:
+  - Extend across smooth joins: faces across dihedral angles under 20°, or a chain of edges continuing each other;
+  - Same as these: the same kind and size, from the G3 anchors, to 0.1 %;
+  - Whole part;
+  - Undo pick.
+- **Adjacency** comes from the mesh's own surface triangles and lines (`mesh/adjacency.py`), not from names, so it needs no geometry kernel. Normals' orientation is ignored.
+- **Tests:** a filleted plate with three holes (`tests/test_selection_tools.py`).
+  - Extend from a side picks the 4 sides and 4 corner fillets.
+  - "Same as" picks the other 3 mm hole and not the 4 mm one.
+  - The top outline chains to 8 edges.
+- **Not yet:**
+  - saving "same as" as a selection rule (G3's `radius` and `kind` rules exist; a "same as" pick doesn't yet suggest one);
+  - the "by size" filter.
 
 ## Consequences
 

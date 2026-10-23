@@ -186,6 +186,37 @@ class PickBar(QWidget):
             lambda: window.viewport.set_pick_kind(self.filter.currentData())
         )
         row.addWidget(self.filter)
+        # The selection tools (ADR 0034): extend across smooth joins, pick alike, a
+        # whole part, a box; undo while picking.
+        self.box = QPushButton("Box")
+        self.box.setCheckable(True)
+        self.box.setToolTip("Drag a box to pick what is inside (B)")
+        self.box.toggled.connect(window.viewport.set_box_mode)
+        from PySide6.QtWidgets import QMenu, QToolButton
+
+        tools = QToolButton()
+        tools.setText("Select")
+        tools.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        menu = QMenu(tools)
+        self.tool_actions = {}
+        for key, text, tip, slot in (
+            ("extend", "Extend across smooth joins",
+             "Faces: add those across joins under 20° (tangent). Edges: follow the chain.",
+             lambda: window.viewport.extend_picks()),
+            ("alike", "Same as these",
+             "Every face or edge of the same kind and size (all M10 holes)", window.pick_alike),
+            ("part", "Whole part", "Every face of the picked faces' parts",
+             window.pick_whole_part),
+            ("undo", "Undo pick", "Step back one pick", lambda: window.viewport.undo_pick()),
+        ):  # fmt: skip
+            action = menu.addAction(text)
+            action.setToolTip(tip)
+            action.triggered.connect(slot)
+            self.tool_actions[key] = action
+        menu.setToolTipsVisible(True)
+        tools.setMenu(menu)
+        for w in (self.box, tools):
+            row.addWidget(w)
         new, add, clear = (
             QPushButton("New selection…"),
             QPushButton("Add to selection"),
@@ -206,7 +237,7 @@ class PickBar(QWidget):
         text = (
             f"{_count(len(names), kind)} picked: {shown}"
             if names
-            else f"Double-click {FILTERS[kind].lower()} to pick"
+            else f"Click {FILTERS[kind].lower()} to pick (Shift adds, Ctrl or ⌘ removes)"
         )
         size = self.window.viewport.measure(self.window.viewport.picked) if names else {}
         if size.get("area"):
@@ -263,6 +294,11 @@ class MainWindow(QMainWindow):
         self.failed_studies: set[str] = set()  # study ids whose last run here failed
         self.pick_bar = PickBar(self)
         self.pick_bar.hide()
+        box = QAction("Box select", self)
+        box.setShortcut(QKeySequence("B"))
+        box.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        box.triggered.connect(lambda: self.pick_bar.box.toggle() if self.viewport.picking else None)
+        (self.viewport.view if self.viewport.plotter is not None else self.viewport).addAction(box)
         self.log = QPlainTextEdit(readOnly=True)
         self.log.setMaximumBlockCount(20000)
         self.history = QListWidget()
@@ -555,7 +591,9 @@ class MainWindow(QMainWindow):
         return lines
 
     def submit(self, command, **kwargs):
-        """Submit a command; errors go to the status bar and the log. Returns the Outcome."""
+        """Submit a command; errors go to the status bar and the log. Returns the Outcome.
+        Undo then means this command, not the picks before it (ADR 0034)."""
+        self.viewport.pick_history.clear()
         try:
             outcome = self.session.submit(command, **kwargs)
         except PuzzleError as exc:
@@ -718,6 +756,10 @@ class MainWindow(QMainWindow):
             self.open(Path(path))
 
     def undo(self) -> None:
+        """Undo the latest action: a pick, while picking and since the last project
+        change (ADR 0034), else the project's last command."""
+        if self.viewport.picking and self.viewport.undo_pick():
+            return
         try:
             self.session.undo()
         except PuzzleError as exc:
@@ -1231,6 +1273,7 @@ class MainWindow(QMainWindow):
         )
         if out is not None:
             self.viewport.clear_picks()
+            self.viewport.pick_history.clear()  # the selection is what undo takes back
         return out
 
     def add_picks_to_selection(self, node: Node | None = None):
@@ -1260,7 +1303,41 @@ class MainWindow(QMainWindow):
         out = self.submit(Edit(object=str(geo.id), ops=ops))
         if out is not None:
             self.viewport.clear_picks()
+            self.viewport.pick_history.clear()  # the selection is what undo takes back
         return out
+
+    def pick_alike(self, tolerance: float = 1e-3) -> None:
+        """Every entity of the picked ones' kind and size (G3 anchors: kind and measure,
+        the same within `tolerance`), on the same parts: all holes of one size."""
+        names = self.mesh_names.get(self.mesh_component or "", {})
+        anchors = self.mesh_anchors.get(self.mesh_component or "", {})
+        kind = self.viewport.pick_kind
+
+        def anchor(entity):
+            part, name = names.get(entity, (None, None))
+            return anchors.get((part, kind, name)) if part else None
+
+        wanted = [a for a in (anchor(e) for e in self.viewport.picked) if a]
+        if not wanted:
+            self.statusBar().showMessage("Pick a face or edge first, then Same as", 8000)
+            return
+        alike = []
+        for entity in names:
+            a = anchor(entity)
+            if a and any(
+                a[0] == w[0] and abs(a[1] - w[1]) <= tolerance * max(abs(w[1]), 1e-30)
+                for w in wanted
+            ):
+                alike.append(entity)
+        self.viewport.pick(alike, "add")
+
+    def pick_whole_part(self) -> None:
+        """Every face of the parts the picked faces belong to."""
+        names = self.mesh_names.get(self.mesh_component or "", {})
+        parts = {names[e][0] for e in self.viewport.picked if e in names}
+        dim = self.viewport.picked[0][0] if self.viewport.picked else 2
+        same = [e for e, (p, _) in names.items() if p in parts and e[0] == dim]
+        self.viewport.pick(same, "add")
 
     def _anchors_of(self, members: list[str]) -> dict[str, list]:
         """Where the picked members are (from the shown mesh's geometry): stored with

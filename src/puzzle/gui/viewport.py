@@ -101,6 +101,20 @@ def _display(values, kind: str | None):
     return np.asarray(converted), pretty(target)
 
 
+KIND_DIM = {"vertex": 0, "edge": 1, "face": 2, "body": 3}
+
+
+def _mode(modifiers, plain: str) -> str:
+    """A click's pick mode (ADR 0034): Shift adds, Ctrl or ⌘ removes, plain `plain`."""
+    if modifiers is None:
+        return plain
+    if modifiers & Qt.KeyboardModifier.ShiftModifier:
+        return "add"
+    if modifiers & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier):
+        return "remove"
+    return plain
+
+
 def _number(v: float) -> str:
     """A value as a label: three to four figures, plain between 1e-3 and 1e5."""
     a = abs(v)
@@ -153,6 +167,11 @@ class SceneView(QWidget):
         self.plotter = pv.Plotter(off_screen=True, window_size=[400, 300])
         self.plotter.show(auto_close=False)  # sets up the render window once
         self.on_double_click = None
+        self.on_click = None  # (point, modifiers) for a click that didn't drag
+        self.on_box = None  # (QRect, modifiers) for a box dragged in box mode
+        self.box_mode = False
+        self._band = None
+        self._press = None
         self.modifiers = Qt.KeyboardModifier.NoModifier  # of the last double-click
         self._image = None
         self._last = None
@@ -197,11 +216,51 @@ class SceneView(QWidget):
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
         self._last = event.position()
+        self._press = event.position()
+        if self.box_mode and event.button() == Qt.MouseButton.LeftButton:
+            from PySide6.QtCore import QRect, QSize
+            from PySide6.QtWidgets import QRubberBand
+
+            self._band = QRubberBand(QRubberBand.Shape.Rectangle, self)
+            self._band.setGeometry(QRect(event.position().toPoint(), QSize()))
+            self._band.show()
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
         self._last = None
+        start, self._press = self._press, None
+        if self._band is not None:
+            rect = self._band.geometry()
+            self._band.hide()
+            self._band = None
+            if self.on_box is not None and rect.width() > 3 and rect.height() > 3:
+                self.on_box(rect, event.modifiers())
+            return
+        moved = start is None or (event.position() - start).manhattanLength() > 4
+        if not moved and self.on_click is not None and event.button() == Qt.MouseButton.LeftButton:
+            point = self.pick_point(event.position())
+            if point is not None:
+                self.on_click(point, event.modifiers())
+
+    def pick_point(self, position):
+        """The 3D point of the model under a widget position, or None."""
+        import vtk
+
+        dpr = self.devicePixelRatioF()
+        picker = vtk.vtkCellPicker()
+        picker.SetTolerance(0.0005)
+        x, y = position.x() * dpr, (self.height() - position.y()) * dpr
+        if picker.Pick(x, y, 0, self.plotter.renderer) and picker.GetCellId() >= 0:
+            return picker.GetPickPosition()
+        return None
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if self._band is not None:  # box mode: the box, not a rotation
+            from PySide6.QtCore import QRect
+
+            self._band.setGeometry(
+                QRect(self._press.toPoint(), event.position().toPoint()).normalized()
+            )
+            return
         if self._last is None:
             return
         pos = event.position()
@@ -395,6 +454,7 @@ class Viewport(QWidget):
         self.highlight_entities: list[tuple[int, int]] = []
         self.surface, self.entities = None, []
         self.picked: list[tuple[int, int]] = []
+        self.pick_history: list[list[tuple[int, int]]] = []  # undo while picking
         self.picking = False
         self.pick_kind = "face"  # the selection filter: face, edge, vertex or body
         self.lines, self.line_entities = None, []
@@ -516,8 +576,12 @@ class Viewport(QWidget):
     # --- picking -----------------------------------------------------------------------
 
     def set_picking(self, on: bool) -> None:
-        """Double-click picks or un-picks the face under the cursor (a drag still rotates)."""
+        """Picking (ADR 0034): a click picks (Shift adds, Ctrl or ⌘ removes), a
+        double-click toggles one, a drag still rotates (or boxes, in box mode)."""
         self.picking = on
+        if not on:
+            self.pick_history.clear()
+            self.set_box_mode(False)
         self._update_click()
 
     def _update_click(self) -> None:
@@ -526,25 +590,121 @@ class Viewport(QWidget):
             return
         if self.picking:
             self.view.on_double_click = self._clicked
+            self.view.on_click = self._click
+            self.view.on_box = self.box_pick
         elif self.result_state is not None:
             self.view.on_double_click = self._probe_click
+            self.view.on_click = self.view.on_box = None
         else:
-            self.view.on_double_click = None
+            self.view.on_double_click = self.view.on_click = self.view.on_box = None
 
     def toggle_pick(self, entity: tuple[int, int]) -> None:
-        if entity in self.picked:
-            self.picked.remove(entity)
+        mode = "remove" if entity in self.picked else "add"
+        self.pick([entity], mode)
+
+    def pick(self, entities, mode: str = "replace") -> None:
+        """Change the picks (ADR 0034): "replace" them, "add" to them or "remove" from
+        them; each change can be undone while picking (`undo_pick`)."""
+        entities = [e for e in entities if e[0] == KIND_DIM[self.pick_kind] or (
+            self.pick_kind == "body" and e[0] == 3)]  # fmt: skip
+        before = list(self.picked)
+        if mode == "replace":
+            self.picked = list(dict.fromkeys(entities))
+        elif mode == "add":
+            self.picked = list(dict.fromkeys([*self.picked, *entities]))
+        elif mode == "remove":
+            self.picked = [e for e in self.picked if e not in entities]
         else:
-            self.picked.append(entity)
+            raise ValueError(f"pick modes are replace, add and remove, not '{mode}'")
+        if self.picked == before:
+            return
+        self.pick_history.append(before)
+        self._picks_changed()
+
+    def undo_pick(self) -> bool:
+        """Step back one pick change; False when there is none."""
+        if not self.pick_history:
+            return False
+        self.picked = self.pick_history.pop()
+        self._picks_changed()
+        return True
+
+    def _picks_changed(self) -> None:
         if self.mesh is not None:
             self.show_mesh(self.mesh, self.highlight, self.highlight_entities)
         self.picked_changed.emit(list(self.picked))
 
+    def extend_picks(self, max_angle: float = 20.0) -> None:
+        """Faces: add every face reached across smooth joins (tangent); edges: follow the
+        chain of edges that continue each other."""
+        from puzzle.mesh.adjacency import edge_chain, tangent_faces
+
+        if self.mesh is None or not self.picked:
+            return
+        dim = self.picked[0][0]
+        seeds = {t for d, t in self.picked if d == dim}
+        if dim == 2:
+            found = tangent_faces(self.mesh, seeds, max_angle)
+        elif dim == 1:
+            found = edge_chain(self.mesh, seeds, max_angle)
+        else:
+            return
+        self.pick([(dim, t) for t in sorted(found)], "add")
+
+    def box_pick(self, rect, modifiers=None) -> None:
+        """Entities of the filter's kind seen inside `rect` (widget pixels): one of the
+        points spread over each (its element centres) shows inside the box, and a ray
+        there reaches that entity, so hidden ones aren't picked."""
+        from PySide6.QtCore import QPointF
+
+        from puzzle.mesh.adjacency import samples
+
+        if self.mesh is None or self.plotter is None:
+            return
+        dim = KIND_DIM[self.pick_kind]
+        if dim == 0:
+            spots = {t: np.asarray([xyz]) for (d, t), xyz in self.vertices.items() if d == 0}
+        elif dim == 3:
+            faces = samples(self.mesh, 2)
+            spots = {
+                tag: np.concatenate([faces[t] for _, t in fs if t in faces])
+                for (d, tag), fs in self.boundaries.items()
+                if d == 3 and any(t in faces for _, t in fs)
+            }
+        else:
+            spots = samples(self.mesh, dim)
+        size = float(np.linalg.norm(np.ptp(self.mesh.coords, axis=0)))
+        inside = []
+        for tag, pts in spots.items():
+            for xyz in pts:
+                at = self.view.screen_point(xyz)
+                if at is None or not rect.contains(int(at[0]), int(at[1])):
+                    continue
+                hit = self.view.pick_point(QPointF(*at))
+                if hit is None:
+                    continue
+                if dim == 3:
+                    seen = any(self.entity_at(hit) == f for f in self.boundaries[(3, tag)])
+                else:
+                    seen = self.entity_at(hit) == (dim, tag)
+                if seen or np.linalg.norm(np.asarray(hit) - xyz) <= 1e-3 * size:
+                    inside.append((dim, tag))
+                    break
+        self.pick(inside, _mode(modifiers, "add"))
+
+    def set_box_mode(self, on: bool) -> None:
+        if self.plotter is not None:
+            self.view.box_mode = on
+
+    def _click(self, point, modifiers) -> None:
+        if self.shown.get("kind") not in ("mesh", "preview"):
+            return
+        entity = self.entity_at(point)
+        if entity is not None:
+            self.pick([entity], _mode(modifiers, "replace"))
+
     def clear_picks(self) -> None:
-        self.picked.clear()
-        if self.mesh is not None:
-            self.show_mesh(self.mesh, self.highlight, self.highlight_entities)
-        self.picked_changed.emit([])
+        self.pick([], "replace")
 
     def set_pick_kind(self, kind: str) -> None:
         """The selection filter; picks of another kind are cleared."""
