@@ -196,3 +196,36 @@ def test_the_curve_builder_makes_a_hardening_table(app):
     assert "Ramberg-Osgood, n = 8" in b.editor.sources.toPlainText()
     m = b.editor.material()
     assert m.models.plasticity.curves[0].points[0][0] == 0.0
+
+
+def test_fatigue_tab_holds_sn_curves_and_strain_life(app):
+    """An S-N curve typed in MPa and a Langer model; saved and read back; Completeness
+    says which life models the fatigue tool can use."""
+    b = MaterialBuilder()
+    choose(b, "structural_steel")
+    e = b.editor
+    e.ask_table = lambda *a: [(1e6, 200.0), (1e3, 400.0)]  # any order; sorted by cycles
+    e.new_sn_curve()
+    e.sn_fields["name"].setText("R=-1 polished")
+    e._keep_sn()
+    assert e.sn_pick.currentText() == "R=-1 polished  (2 points)"
+    assert e.sn_plot.log and len(e.sn_plot.points) == 2
+    assert report(b)[("Fatigue tool", "Strain life")] == "Needs a strain-life model (Fatigue tab)"
+    e.sl_model.setCurrentIndex(e.sl_model.findData("langer"))
+    for key, value in (("langer_a", "6.891"), ("langer_b", "1.920"), ("langer_c", "0.112")):
+        e.sl_fields[key].setText(value)
+    assert e.sl_fields["fatigue_strength"].isHidden() and not e.sl_fields["langer_a"].isHidden()
+    assert len(e.sl_plot.points) > 10
+    rows = report(b)
+    assert rows[("Fatigue tool", "Strain life")] == "Complete"
+    assert rows[("Fatigue tool", "Measured S-N curve")] == "Complete"
+    key = b.save()
+    m = library_material(key)
+    (curve,) = m.fatigue.sn_curves
+    assert curve.name == "R=-1 polished" and curve.points == [(1e3, 400e6), (1e6, 200e6)]
+    assert m.fatigue.strain_life.langer_b == pytest.approx(1.92)
+    choose(b, key)
+    assert b.editor.sn_pick.count() == 1 and b.editor.sl_fields["langer_a"].text() == "6.891"
+    e.ask_table = lambda *a: [(1e3, 400.0)]
+    e.edit_sn_points()
+    assert b.save() is None and "two points or more" in b.status.text()

@@ -76,7 +76,19 @@ def outline(project: Project, *, ids: bool = False) -> str:
             + f": {t.field} ({t.role}) {names.get(t.source, '?')} -> {names.get(t.target, '?')}"
         )
     for d in project.of_type(ResultDefinition):
-        if d.method == "equation":
+        if d.method == "fatigue":
+            f = d.fatigue
+            duty = " + ".join(
+                f"{b.cycles:g} x {b.loading} "
+                + (names.get(b.combination, "?") if b.combination else names.get(b.case.study, "?"))
+                + (f" (x{b.scale:g})" if b.scale != 1 else "")
+                for b in f.blocks
+            )
+            what = (
+                f"fatigue {f.life_model}, {f.stress}, {f.mean_stress}, design life "
+                f"{f.design_life:g}: {duty}"
+            )
+        elif d.method == "equation":
             what = f"{d.expression} over {names.get(d.source, '?')}"
         else:
             cases = " + ".join(

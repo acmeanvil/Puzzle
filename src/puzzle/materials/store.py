@@ -39,6 +39,7 @@ def entry_of(material: Material, parent: str | None = None) -> dict:
         "sources": data["sources"],
         "models": {k: v for k, v in data["models"].items() if v is not None},
         "solver_keywords": data["solver_keywords"],
+        "fatigue": {k: v for k, v in data["fatigue"].items() if v},
     }
     if parent:
         entry["parent"] = parent

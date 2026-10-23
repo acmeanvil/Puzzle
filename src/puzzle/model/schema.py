@@ -288,6 +288,76 @@ class MaterialModels(BaseModel):
         return [k for k in type(self).model_fields if getattr(self, k) is not None]
 
 
+class SnCurve(BaseModel):
+    """A measured stress-life curve (ADR 0026): stress amplitude against cycles."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    basis: str = Field(default="", description="R ratio or mean stress, test conditions")
+    points: list[tuple[float, float]] = Field(
+        min_length=2, description="(cycles to failure, stress amplitude in Pa)"
+    )
+    source: str = ""
+    reference: str = ""
+
+    @model_validator(mode="after")
+    def _an_sn_curve(self) -> SnCurve:
+        cycles = [n for n, _ in self.points]
+        if any(b <= a for a, b in zip(cycles, cycles[1:], strict=False)):
+            raise ValueError("cycles in an S-N curve must increase")
+        if any(n <= 0 or s <= 0 for n, s in self.points):
+            raise ValueError("cycles and stresses in an S-N curve must be positive")
+        return self
+
+
+class StrainLifeModel(BaseModel):
+    """Coffin-Manson-Basquin (εa = σf'/E (2N)^b + εf' (2N)^c, E the material's) or
+    Langer (NUREG/CR-6909: ln N = A − B ln(εa% − C))."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    model: Literal["coffin_manson_basquin", "langer"]
+    fatigue_strength: float | None = Field(default=None, description="σf' in Pa")
+    strength_exponent: float | None = Field(default=None, description="b")
+    fatigue_ductility: float | None = Field(default=None, description="εf'")
+    ductility_exponent: float | None = Field(default=None, description="c")
+    langer_a: float | None = None
+    langer_b: float | None = None
+    langer_c: float | None = Field(default=None, description="in percent strain")
+    source: str = ""
+    reference: str = ""
+
+    @model_validator(mode="after")
+    def _complete(self) -> StrainLifeModel:
+        need = (
+            ("langer_a", "langer_b", "langer_c")
+            if self.model == "langer"
+            else (
+                "fatigue_strength",
+                "strength_exponent",
+                "fatigue_ductility",
+                "ductility_exponent",
+            )
+        )
+        missing = [n for n in need if getattr(self, n) is None]
+        if missing:
+            raise ValueError(f"the {self.model.replace('_', '-')} model needs {', '.join(missing)}")
+        return self
+
+
+class FatigueData(BaseModel):
+    """A material's fatigue data (ADR 0026): measured S-N curves and a strain-life model."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    sn_curves: list[SnCurve] = Field(default_factory=list)
+    strain_life: StrainLifeModel | None = None
+
+    def empty(self) -> bool:
+        return not self.sn_curves and self.strain_life is None
+
+
 class Material(ProjectObject):
     """A material owned by the project.
 
@@ -308,6 +378,7 @@ class Material(ProjectObject):
     # Expert pass-through (ADR 0020/0023): solver -> its own material keywords, e.g.
     # {"calculix": "*CREEP, LAW=NORTON ..."}. The adapter places them or refuses.
     solver_keywords: dict[str, str] = Field(default_factory=dict)
+    fatigue: FatigueData = Field(default_factory=FatigueData)
 
 
 class MeshRecipe(ProjectObject):
@@ -667,6 +738,59 @@ class ResultCase(BaseModel):
     coefficient: float = 1.0
 
 
+class FatigueBlock(BaseModel):
+    """One kind of cycle in a fatigue duty (ADR 0026), and how many of it per duty.
+
+    `range`: between the two cases of a range combination (`combination`); amplitude =
+    half the range, mean = the combination's mean. `fully_reversed`: `case` and its
+    reverse (mean zero). `zero_based`: `case` and nothing (amplitude = mean = half)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    loading: Literal["range", "fully_reversed", "zero_based"] = "fully_reversed"
+    combination: UUID | None = None
+    case: ResultCase | None = None
+    scale: float = 1.0
+    cycles: float = Field(default=1.0, gt=0, description="cycles of this kind per duty")
+
+    @model_validator(mode="after")
+    def _source(self) -> FatigueBlock:
+        if self.loading == "range" and self.combination is None:
+            raise ValueError("a range loading names its range combination")
+        if self.loading != "range" and self.case is None:
+            raise ValueError(f"a {self.loading.replace('_', '-')} loading names its load case")
+        return self
+
+
+class FatigueSettings(BaseModel):
+    """The fatigue tool's settings: Shigley's stress life (ch. 6) or strain life."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    blocks: list[FatigueBlock] = Field(min_length=1)
+    stress: Literal["signed_von_mises", "max_principal", "xx", "yy", "zz", "xy", "yz", "zx"] = (
+        "signed_von_mises"
+    )
+    mean_stress: Literal[
+        "goodman", "gerber", "asme_elliptic", "soderberg", "smith_dolan", "none"
+    ] = "goodman"
+    life_model: Literal["shigley", "sn_curve", "strain_life"] = "shigley"
+    sn_curve: str | None = Field(default=None, description="the material's curve; None: its first")
+    design_life: float = Field(default=1e6, gt=0, description="repetitions of the duty")
+    # Shigley's Marin factors for the part (Eq. 6-18).
+    surface: Literal["polished", "ground", "machined", "hot_rolled", "forged"] = "machined"
+    size: Literal["rotating_round", "non_rotating_round", "rectangle", "axial", "none"] = "none"
+    diameter: float | None = Field(default=None, description="m, for a round's size factor")
+    height: float | None = Field(default=None, description="m, for a rectangle's")
+    width: float | None = Field(default=None, description="m, for a rectangle's")
+    temperature: float = Field(default=20.0, description="°C, for the temperature factor")
+    reliability: float = Field(default=50.0, gt=0, lt=100, description="%")
+    misc_factor: float = Field(default=1.0, gt=0, description="kf: plating, corrosion, ...")
+    endurance_limit: float | None = Field(
+        default=None, description="measured S'e in Pa; None: 0.5 Sut (steels)"
+    )
+
+
 class ResultDefinition(ProjectObject):
     """A derived result (ADR 0025), evaluated from stored runs when shown, never stored.
 
@@ -679,7 +803,7 @@ class ResultDefinition(ProjectObject):
 
     kind: ClassVar[str] = "result"
 
-    method: Literal["linear", "srss", "envelope", "range", "equation"]
+    method: Literal["linear", "srss", "envelope", "range", "equation", "fatigue"]
     cases: list[ResultCase] = Field(default_factory=list)
     quantity: str | None = None
     extreme: Literal["max", "min"] = "max"
@@ -688,10 +812,14 @@ class ResultDefinition(ProjectObject):
     source_step: int = -1
     expression: str | None = None
     unit: str | None = None
+    fatigue: FatigueSettings | None = None
 
     @model_validator(mode="after")
     def _complete(self) -> ResultDefinition:
-        if self.method == "equation":
+        if self.method == "fatigue":
+            if self.fatigue is None:
+                raise ValueError("a fatigue result needs its settings")
+        elif self.method == "equation":
             if self.source is None or not (self.expression or "").strip():
                 raise ValueError("an equation needs a source and an expression")
         elif not self.cases:
@@ -702,6 +830,9 @@ class ResultDefinition(ProjectObject):
 
     def dependencies(self) -> list[UUID]:
         own = [self.source] if self.source is not None else []
+        if self.fatigue is not None:
+            for b in self.fatigue.blocks:
+                own += [b.combination] if b.combination else [b.case.study]
         return own + [c.study for c in self.cases]
 
 

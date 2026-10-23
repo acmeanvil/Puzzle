@@ -40,7 +40,7 @@ COMBINATIONS = {
     "envelope": "Envelope (maximum or minimum)",
     "range": "Range and mean",
 }
-METHODS = {**COMBINATIONS, "equation": "Equation"}
+METHODS = {**COMBINATIONS, "equation": "Equation", "fatigue": "Fatigue tool"}
 
 
 def _reduce_or_pairwise(fn_reduce, fn_pair):
@@ -389,6 +389,16 @@ def evaluate(project, store, definition, _seen: tuple = ()) -> Derived:
             f"derived result '{definition.name}' depends on itself", code="inconsistent"
         )
     seen = (*_seen, definition.id)
+    if definition.method == "fatigue":
+        from puzzle.post.fatigue_tool import evaluate_fatigue
+
+        def inner(project, store, d):
+            return evaluate(project, store, d, seen)
+
+        mesh, results, items, run_ids, warnings = evaluate_fatigue(
+            project, store, definition, inner, run_for
+        )
+        return Derived(mesh, results, items, run_ids, warnings)
     if definition.method == "equation":
         return _equation(project, store, definition, seen)
     records = [run_for(project, store, c.study, c.point) for c in definition.cases]

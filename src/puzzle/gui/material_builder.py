@@ -80,10 +80,11 @@ class Curve(QWidget):
 
     COLOURS = ["#2b6cb0", "#dd6b20", "#2f855a"]
 
-    def __init__(self, x_label: str = "", y_label: str = "") -> None:
+    def __init__(self, x_label: str = "", y_label: str = "", log: bool = False) -> None:
         super().__init__()
         self.series: list[tuple[str, list[tuple[float, float]]]] = []
         self.x_label, self.y_label = x_label, y_label
+        self.log = log  # both axes logarithmic (S-N and strain-life curves)
         self.setMinimumSize(220, 160)
 
     @property
@@ -94,10 +95,10 @@ class Curve(QWidget):
         self.set_series([(label, points)] if points else [])
 
     def set_series(self, series) -> None:
-        self.series = [
-            (name, [(x, y) for x, y in pts if math.isfinite(x) and math.isfinite(y)])
-            for name, pts in series
-        ]
+        def keep(x, y):
+            return math.isfinite(x) and math.isfinite(y) and (not self.log or (x > 0 and y > 0))
+
+        self.series = [(name, [(x, y) for x, y in pts if keep(x, y)]) for name, pts in series]
         self.update()
 
     def paintEvent(self, _event) -> None:  # noqa: N802 - Qt's name
@@ -109,22 +110,35 @@ class Curve(QWidget):
             p.setPen(QColor("#8a94a3"))
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Two points or more to plot")
             return
-        xs, ys = [x for x, _ in every], [y for _, y in every]
-        x0, x1, y0, y1 = min(xs + [0.0]), max(xs), min(ys + [0.0]), max(ys)
+        tx = math.log10 if self.log else (lambda v: v)
+        xs, ys = [tx(x) for x, _ in every], [tx(y) for _, y in every]
+        if self.log:
+            x0, x1 = math.floor(min(xs)), math.ceil(max(xs))
+            y0, y1 = math.floor(min(ys) * 4) / 4, math.ceil(max(ys) * 4) / 4
+        else:
+            x0, x1, y0, y1 = min(xs + [0.0]), max(xs), min(ys + [0.0]), max(ys)
         x1, y1 = (x1 if x1 > x0 else x0 + 1), (y1 if y1 > y0 else y0 + 1)
         left, top, right, bottom = 56, 14, 12, 30
         w, h = self.width() - left - right, self.height() - top - bottom
 
         def at(x, y):
+            x, y = tx(x), tx(y)
             return QPointF(left + (x - x0) / (x1 - x0) * w, top + h - (y - y0) / (y1 - y0) * h)
+
+        def shown(v):
+            return f"{10**v:.3g}" if self.log else f"{v:.4g}"
 
         p.setPen(QPen(QColor("#b8c2cc"), 1))
         p.drawRect(left, top, w, h)
+        if self.log:  # a line per decade of cycles
+            for d in range(int(x0) + 1, int(x1)):
+                gx = left + (d - x0) / (x1 - x0) * w
+                p.drawLine(QPointF(gx, top), QPointF(gx, top + h))
         p.setPen(QColor("#4a5560"))
-        p.drawText(4, top + 10, f"{y1:.4g}")
-        p.drawText(4, top + h, f"{y0:.4g}")
-        p.drawText(left, top + h + 16, f"{x0:.3g}")
-        p.drawText(left + w - 50, top + h + 16, f"{x1:.3g}")
+        p.drawText(4, top + 10, shown(y1))
+        p.drawText(4, top + h, shown(y0))
+        p.drawText(left, top + h + 16, shown(x0))
+        p.drawText(left + w - 50, top + h + 16, shown(x1))
         if self.x_label:
             p.drawText(left + w // 2 - 40, top + h + 26, self.x_label)
         if self.y_label:
@@ -445,6 +459,7 @@ class MaterialEditor(QWidget):
         self.tabs = QTabWidget()
         self.tabs.addTab(self._properties_tab(), "Properties")
         self.tabs.addTab(self._models_tab(), "Models")
+        self.tabs.addTab(self._fatigue_tab(), "Fatigue")
         self.keywords = QPlainTextEdit()
         self.tabs.addTab(self._keywords_tab(), "Solver keywords")
         self.sources = QPlainTextEdit()
@@ -566,6 +581,210 @@ class MaterialEditor(QWidget):
         scroll.setWidget(page)
         return scroll
 
+    def _fatigue_tab(self) -> QWidget:
+        """S-N curves (stress amplitude against cycles) and a strain-life model, drawn
+        log-log; the fatigue tool (ADR 0026) reads them, with the material's strengths."""
+        page = QWidget()
+        column = QVBoxLayout(page)
+        self.sn: list[dict] = []
+        sn_box = QGroupBox("S-N curves (measured)")
+        sn = QFormLayout(sn_box)
+        self.sn_pick = QComboBox()
+        self.sn_pick.currentIndexChanged.connect(self._show_sn)
+        buttons = QHBoxLayout()
+        for text, slot in (
+            ("New curve", self.new_sn_curve),
+            ("Points…", self.edit_sn_points),
+            ("Remove", self.remove_sn_curve),
+        ):
+            b = QPushButton(text)
+            b.clicked.connect(slot)
+            buttons.addWidget(b)
+        row = QHBoxLayout()
+        row.addWidget(self.sn_pick, 1)
+        row.addLayout(buttons)
+        sn.addRow("Curve", row)
+        self.sn_fields = {k: QLineEdit() for k in ("name", "basis", "source", "reference")}
+        self.sn_fields["basis"].setPlaceholderText("R = −1, room temperature, polished")
+        for key, label in (
+            ("name", "Name"),
+            ("basis", "Basis"),
+            ("source", "Source"),
+            ("reference", "Reference"),
+        ):
+            self.sn_fields[key].textEdited.connect(self._keep_sn)
+            sn.addRow(label, self.sn_fields[key])
+        self.sn_plot = Curve("Cycles to failure", "", log=True)
+        sn.addRow(self.sn_plot)
+        column.addWidget(sn_box)
+
+        sl_box = QGroupBox("Strain life")
+        sl = QFormLayout(sl_box)
+        self.sl_model = QComboBox()
+        self.sl_model.addItem("(none)", None)
+        self.sl_model.addItem("Coffin-Manson-Basquin", "coffin_manson_basquin")
+        self.sl_model.addItem("Langer (NUREG/CR-6909)", "langer")
+        self.sl_model.currentIndexChanged.connect(self._strain_changed)
+        sl.addRow("Model", self.sl_model)
+        self.sl_fields = {}
+        for key, label in (
+            ("fatigue_strength", "σf′ fatigue strength coefficient"),
+            ("strength_exponent", "b fatigue strength exponent"),
+            ("fatigue_ductility", "εf′ fatigue ductility coefficient"),
+            ("ductility_exponent", "c fatigue ductility exponent"),
+            ("langer_a", "A"),
+            ("langer_b", "B"),
+            ("langer_c", "C (strain, %)"),
+            ("source", "Source"),
+        ):
+            line = QLineEdit()
+            line.textChanged.connect(self._strain_changed)
+            sl.addRow(label, line)
+            self.sl_fields[key] = line
+        self.sl_form = sl
+        self.sl_plot = Curve("Cycles to failure", "Strain amplitude", log=True)
+        sl.addRow(self.sl_plot)
+        column.addWidget(sl_box)
+        note = QLabel(
+            "Shigley's S-N line needs only the tensile strength (Properties); Coffin-Manson-"
+            "Basquin takes E from Young's modulus; Langer's ln N = A − B ln(εa% − C)."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet("color: gray")
+        column.addWidget(note)
+        column.addStretch()
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(page)
+        return scroll
+
+    # S-N curves --------------------------------------------------------------------------
+
+    def _sn_names(self, select: int | None = None) -> None:
+        self.sn_pick.blockSignals(True)
+        self.sn_pick.clear()
+        for c in self.sn:
+            self.sn_pick.addItem(f"{c['name']}  ({len(c['points'])} points)")
+        if self.sn:
+            self.sn_pick.setCurrentIndex(len(self.sn) - 1 if select is None else select)
+        self.sn_pick.blockSignals(False)
+        self._show_sn()
+
+    def _show_sn(self, *_) -> None:
+        from puzzle.model.units import convert
+
+        i = self.sn_pick.currentIndex()
+        c = self.sn[i] if 0 <= i < len(self.sn) else None
+        for key, line in self.sn_fields.items():
+            line.setEnabled(c is not None)
+            line.setText(c.get(key, "") if c else "")
+        unit = _display_unit("pressure", "Pa")
+        self.sn_plot.y_label = f"Stress amplitude ({_pretty(unit)})"
+        self.sn_plot.set_series(
+            [(c["name"], [(n, convert(v, "Pa", unit)) for n, v in c["points"]]) for c in self.sn]
+        )
+
+    def _keep_sn(self, *_) -> None:
+        i = self.sn_pick.currentIndex()
+        if 0 <= i < len(self.sn):
+            for key, line in self.sn_fields.items():
+                self.sn[i][key] = line.text().strip()
+            self.sn_pick.setItemText(
+                i, f"{self.sn[i]['name']}  ({len(self.sn[i]['points'])} points)"
+            )
+            self.on_change()
+
+    def new_sn_curve(self) -> None:
+        self.sn.append({"name": f"S-N curve {len(self.sn) + 1}", "basis": "", "points": [],
+                        "source": "", "reference": ""})  # fmt: skip
+        self._sn_names()
+        self.edit_sn_points()
+
+    def edit_sn_points(self) -> None:
+        from puzzle.model.units import convert
+
+        i = self.sn_pick.currentIndex()
+        if not 0 <= i < len(self.sn):
+            return self.new_sn_curve()
+        unit = _display_unit("pressure", "Pa")
+        rows = [(n, convert(v, "Pa", unit)) for n, v in self.sn[i]["points"]]
+        rows = self.ask_table(
+            f"{self.sn[i]['name']}: stress amplitude against cycles",
+            ("Cycles to failure", f"Stress amplitude ({_pretty(unit)})"),
+            rows,
+        )
+        if rows is None:
+            return None
+        self.sn[i]["points"] = [(n, convert(v, unit, "Pa")) for n, v in sorted(rows)]
+        self._sn_names(i)
+        self.on_change()
+        return None
+
+    def remove_sn_curve(self) -> None:
+        i = self.sn_pick.currentIndex()
+        if 0 <= i < len(self.sn):
+            del self.sn[i]
+            self._sn_names()
+            self.on_change()
+
+    # strain life ------------------------------------------------------------------------
+
+    def _strain_changed(self, *_) -> None:
+        model = self.sl_model.currentData()
+        for key, line in self.sl_fields.items():
+            langer = key.startswith("langer")
+            show = model is not None and (key == "source" or langer == (model == "langer"))
+            line.setVisible(show)
+            self.sl_form.labelForField(line).setVisible(show)
+        try:
+            sl = self._strain_life()
+        except ValueError:
+            sl = None
+        pts = []
+        if sl is not None:
+            from puzzle.materials.fatigue import StrainLife
+
+            e = None
+            try:
+                e = _number(self.values["youngs_modulus"].text())
+                e = _to_si_kind("pressure", e)
+            except ValueError:
+                e = self.base.properties["youngs_modulus"].to_si() if self.base and (
+                    "youngs_modulus" in self.base.properties) else None  # fmt: skip
+            if sl.model == "langer" or e:
+                model_ = StrainLife(sl.model, sl.fatigue_strength, sl.strength_exponent,
+                                    sl.fatigue_ductility, sl.ductility_exponent, e,
+                                    sl.langer_a, sl.langer_b, sl.langer_c)  # fmt: skip
+                import numpy as np
+
+                n = np.logspace(1, 12, 23)
+                with np.errstate(all="ignore"):
+                    pts = list(zip(n.tolist(), model_.strain_amplitude(n).tolist(), strict=True))
+        self.sl_plot.set_points(pts, self.sl_model.currentText() if pts else "")
+        self.on_change()
+
+    def _strain_life(self):
+        """The strain-life model from the fields, or None; ValueError in words."""
+        from puzzle.model.schema import StrainLifeModel
+
+        model = self.sl_model.currentData()
+        if model is None:
+            return None
+        data = {"model": model, "source": self.sl_fields["source"].text().strip()}
+        for key, line in self.sl_fields.items():
+            text = line.text().strip()
+            if key == "source" or not text or key.startswith("langer") != (model == "langer"):
+                continue
+            try:
+                v = _number(text)
+            except ValueError:
+                raise ValueError(f"Strain life: '{text}' is not a number") from None
+            data[key] = _to_si_kind("pressure", v) if key == "fatigue_strength" else v
+        try:
+            return StrainLifeModel(**data)
+        except Exception as exc:  # noqa: BLE001 - schema checks, in their own words
+            raise ValueError("Strain life: " + _first_error(exc)) from None
+
     def _keywords_tab(self) -> QWidget:
         from puzzle.gui.choices import SOLVERS
 
@@ -644,6 +863,22 @@ class MaterialEditor(QWidget):
         self._curve_label()
         self.keyword_texts = dict(material.solver_keywords)
         self._show_keywords()
+        self.sn = [c.model_dump(mode="json") for c in material.fatigue.sn_curves]
+        for c in self.sn:
+            c["points"] = [tuple(p) for p in c["points"]]
+        self._sn_names(0 if self.sn else None)
+        sl = material.fatigue.strain_life
+        self.sl_model.blockSignals(True)
+        self.sl_model.setCurrentIndex(self.sl_model.findData(sl.model if sl else None))
+        self.sl_model.blockSignals(False)
+        for key, line in self.sl_fields.items():
+            line.blockSignals(True)
+            value = getattr(sl, key, None) if sl else None
+            if key == "fatigue_strength" and value is not None:
+                value = _shown(value, "Pa")[0]
+            line.setText("" if value is None else (value if key == "source" else f"{value:.6g}"))
+            line.blockSignals(False)
+        self._strain_changed()
         self.sources.setPlainText("\n".join(material.sources))
         for w in widgets:
             w.blockSignals(False)
@@ -714,9 +949,27 @@ class MaterialEditor(QWidget):
                 sources=[s for s in self.sources.toPlainText().splitlines() if s.strip()],
                 models=MaterialModels(**models),
                 solver_keywords={k: v for k, v in self.keyword_texts.items() if v.strip()},
+                fatigue=self._fatigue(),
             )
+        except ValueError as exc:
+            raise ValueError(
+                str(exc) if str(exc).startswith(("S-N", "Strain")) else _first_error(exc)
+            ) from None
         except Exception as exc:  # noqa: BLE001 - schema checks, in their own words
             raise ValueError(_first_error(exc)) from None
+
+    def _fatigue(self):
+        from puzzle.model.schema import FatigueData, SnCurve
+
+        curves = []
+        for c in self.sn:
+            if len(c["points"]) < 2:
+                raise ValueError(f"S-N curve '{c['name']}': give two points or more (Points…)")
+            try:
+                curves.append(SnCurve(**c))
+            except Exception as exc:  # noqa: BLE001
+                raise ValueError(f"S-N curve '{c['name']}': {_first_error(exc)}") from None
+        return FatigueData(sn_curves=curves, strain_life=self._strain_life())
 
     # --- tables and curves ---------------------------------------------------------------
 
@@ -816,7 +1069,7 @@ class MaterialEditor(QWidget):
         except ValueError as exc:
             self.report.setRowCount(0)
             return str(exc)
-        rows = completeness(material)
+        rows = completeness(material) + fatigue_completeness(material)
         self.report.setRowCount(len(rows))
         for i, r in enumerate(rows):
             if r["refused"]:
@@ -825,7 +1078,10 @@ class MaterialEditor(QWidget):
                 status = "Needs " + ", ".join(BY_KEY[k].label.lower() for k in r["missing"])
             else:
                 status = "Complete"
-            for c, text in enumerate((solver_label(r["solver"]), r["analysis"], status)):
+            if "status" in r:
+                status = r["status"]
+            solver = r["solver"] if r["solver"] == "Fatigue tool" else solver_label(r["solver"])
+            for c, text in enumerate((solver, r["analysis"], status)):
                 item = QTableWidgetItem(text)
                 if c == 2:
                     item.setForeground(QColor("#2f855a" if status == "Complete" else "#b7791f"))
@@ -1101,13 +1357,41 @@ class MaterialPicker(QDialog):
         self.accept()
 
 
+def fatigue_completeness(material) -> list[dict]:
+    """The Completeness tab's fatigue rows: which life models the material supports."""
+    p, f = material.properties, material.fatigue
+    rows = []
+
+    def row(analysis, missing):
+        status = "Complete" if not missing else "Needs " + missing
+        rows.append({"solver": "Fatigue tool", "analysis": analysis, "status": status,
+                     "refused": [], "missing": []})  # fmt: skip
+
+    row("Shigley's S-N line", "" if "tensile_strength" in p else "tensile strength")
+    row("Measured S-N curve", "" if f.sn_curves else "an S-N curve (Fatigue tab)")
+    if f.strain_life is None:
+        row("Strain life", "a strain-life model (Fatigue tab)")
+    else:
+        e = f.strain_life.model == "langer" or "youngs_modulus" in p
+        row("Strain life", "" if e else "Young's modulus")
+    return rows
+
+
+def _to_si_kind(kind: str, value: float) -> float:
+    """A number typed in the display unit of `kind`, in SI."""
+    from puzzle.model.units import DIMENSIONS, convert
+
+    si = DIMENSIONS[kind][1]
+    return convert(value, _display_unit(kind, si), si)
+
+
 def _differences(entry: dict, parent: str) -> dict:
     """A variant's entry: only what differs from its family (it inherits the rest)."""
     from puzzle.materials import library_entry
 
     family = library_entry(parent)
     out = {"name": entry["name"], "parent": parent}
-    for part in ("properties", "tables", "info", "models", "solver_keywords"):
+    for part in ("properties", "tables", "info", "models", "solver_keywords", "fatigue"):
         changed = {k: v for k, v in entry.get(part, {}).items() if family.get(part, {}).get(k) != v}
         if changed:
             out[part] = changed

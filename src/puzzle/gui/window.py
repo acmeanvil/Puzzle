@@ -808,14 +808,15 @@ class MainWindow(QMainWindow):
         """The combination or equation dialog; OK makes (or changes) the derived result
         in one command."""
         from puzzle.commands.model import Create, Edit, EditOp
-        from puzzle.gui.derived_dialog import CombinationDialog, EquationDialog
+        from puzzle.gui.derived_dialog import CombinationDialog, EquationDialog, FatigueDialog
 
         project, store = self.session.project, self._store()
-        cls = EquationDialog if method == "equation" else CombinationDialog
-        if method == "equation":
-            dialog = cls(project, store, self, definition=definition, source=study)
+        if method == "fatigue":
+            dialog = FatigueDialog(project, store, self, definition=definition, study=study)
+        elif method == "equation":
+            dialog = EquationDialog(project, store, self, definition=definition, source=study)
         else:
-            dialog = cls(project, store, self, definition=definition, study=study)
+            dialog = CombinationDialog(project, store, self, definition=definition, study=study)
         if not self.run_dialog(dialog):
             return None
         data = dialog.data()
@@ -828,7 +829,14 @@ class MainWindow(QMainWindow):
                 for k, v in {
                     **{
                         k: None
-                        for k in ("quantity", "source", "expression", "unit", "source_point")
+                        for k in (
+                            "quantity",
+                            "source",
+                            "expression",
+                            "unit",
+                            "source_point",
+                            "fatigue",
+                        )
                     },
                     **data,
                 }.items()
@@ -1035,7 +1043,16 @@ class MainWindow(QMainWindow):
                     r.run_id,
                 )
             )
-        return cases[::-1]  # in the order they ran
+        # In the study's own order (its sweep's points), not by run time: points run
+        # in the same second may come back in either order.
+        from puzzle.sweep import labels
+
+        study = self.session.project.objects.get(_uuid(study_id))
+        order = []
+        if isinstance(study, Study):
+            order = [title(labels(self.session.project, p)) for p in study.sweep_points()]
+        rank = {t: i for i, t in enumerate(order)}
+        return sorted(cases[::-1], key=lambda c: rank.get(c.label, len(rank)))
 
     def open_compare(self, study_id: str):
         """The Compare window for a swept study (side by side, difference, summary)."""

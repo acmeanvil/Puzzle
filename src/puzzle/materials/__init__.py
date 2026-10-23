@@ -125,10 +125,11 @@ def resolve(lib: dict[str, dict], key: str) -> dict:
         "sources": [],
         "models": {},
         "solver_keywords": {},
+        "fatigue": {},
     }
     for k in reversed(chain):  # the family first, then each variant over it
         e = lib[k]
-        for part in ("properties", "tables", "info", "models", "solver_keywords"):
+        for part in ("properties", "tables", "info", "models", "solver_keywords", "fatigue"):
             out[part] = {**out[part], **e.get(part, {})}
         out["sources"] = list(dict.fromkeys([*out["sources"], *e.get("sources", [])]))
         for field in ("name", "description", "parent"):
@@ -239,6 +240,7 @@ def material_from_entry(e: dict) -> Material:
         sources=list(e["sources"]),
         models=e.get("models", {}),
         solver_keywords=dict(e.get("solver_keywords", {})),
+        fatigue=e.get("fatigue", {}),
     )
 
 

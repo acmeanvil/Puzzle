@@ -72,6 +72,7 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         elif node.label == "Results":
             add("New combination…", lambda: window.new_derived("linear"))
             add("New equation…", lambda: window.new_derived("equation"))
+            add("New fatigue tool…", lambda: window.new_derived("fatigue"))
     elif node.kind == "project":
         add("New part…", lambda: new_part(window))
         add("Import geometry…", lambda: import_step_file(window))
@@ -151,6 +152,7 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         add("Materials…", lambda: study_materials(window, obj))
         add("New combination…", lambda: window.new_derived("linear", str(obj.id)))
         add("New equation…", lambda: window.new_derived("equation", str(obj.id)))
+        add("New fatigue tool…", lambda: window.new_derived("fatigue", str(obj.id)))
         steps = menu.addMenu("Add step")
         for t in STEP_TYPES:
             action = steps.addAction(label(t))
@@ -167,6 +169,7 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         menu.addSeparator()
         add("New combination…", lambda: window.new_derived("linear", study))
         add("New equation…", lambda: window.new_derived("equation", study))
+        add("New fatigue tool…", lambda: window.new_derived("fatigue", study))
     elif node.kind == "derived" and obj is not None:
         add("Edit…", lambda: window.new_derived(obj.method, definition=obj))
         add("New equation from this…", lambda: window.new_derived("equation", str(obj.id)))

@@ -26,6 +26,8 @@ from pydantic import BaseModel
 
 from puzzle.model.schema import (
     Component,
+    FatigueBlock,
+    FatigueSettings,
     Geometry,
     Material,
     MeshRecipe,
@@ -126,6 +128,12 @@ def _derived_field(project, obj, owner, field):
         return studies + others
     if field == "method":
         return [(text, key) for key, text in METHODS.items()]
+    if field == "combination":
+        return [
+            (o.name, str(o.id)) for o in project.of_type(ResultDefinition) if o.method == "range"
+        ]
+    if isinstance(owner, FatigueSettings) or field == "loading":
+        return _fatigue_choice(field)
     if field == "extreme":
         return [("Maximum", "max"), ("Minimum", "min")]
     if field == "unit":
@@ -138,13 +146,35 @@ def _derived_field(project, obj, owner, field):
     return None
 
 
+def _fatigue_choice(field):
+    from puzzle.materials.fatigue import CORRECTIONS, SIZE_BASES, SURFACE_FINISHES
+    from puzzle.post.fatigue_tool import MODEL_LABELS, STRESS_LABELS
+
+    table = {
+        "loading": {
+            "fully_reversed": "Fully reversed",
+            "zero_based": "Zero-based",
+            "range": "Range of a combination",
+        },
+        "stress": STRESS_LABELS,
+        "mean_stress": {k: v[0] for k, v in CORRECTIONS.items()},
+        "life_model": MODEL_LABELS,
+        "surface": {k: v[0] for k, v in SURFACE_FINISHES.items()},
+        "size": SIZE_BASES,
+    }.get(field)
+    return [(text, key) for key, text in table.items()] if table else None
+
+
 def _field(project, obj, owner, field, in_list):
     component = _component(project, obj)
     # References by id, labelled by name.
     kind = REFERENCES.get(field)
     if isinstance(owner, Transfer) and field in ("source", "target"):
         kind = Study
-    if isinstance(owner, (ResultDefinition, ResultCase)) and not in_list:
+    if (
+        isinstance(owner, (ResultDefinition, ResultCase, FatigueBlock, FatigueSettings))
+        and not in_list
+    ):
         derived = _derived_field(project, obj, owner, field)
         if derived is not None:
             return derived

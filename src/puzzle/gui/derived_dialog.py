@@ -460,3 +460,353 @@ def _first_error(exc: ValueError) -> str:
         first = errors()[0]
         return str(first.get("msg", exc)).removeprefix("Value error, ")
     return str(exc)
+
+
+LOADINGS = [
+    ("Fully reversed (the case and its reverse)", "fully_reversed"),
+    ("Zero-based (the case, then nothing)", "zero_based"),
+    ("Range of a combination (case 1 to case 2)", "range"),
+]
+
+
+class FatigueDialog(QDialog):
+    """The fatigue tool (ADR 0026): a duty of cycle blocks, the stress measure, the
+    mean-stress correction and the life model; Shigley's Marin factors for his line.
+    Lengths and stresses are typed in the display units."""
+
+    def __init__(self, project: Project, store, parent=None, definition=None, study=None):
+        from puzzle.materials.fatigue import CORRECTIONS, SIZE_BASES, SURFACE_FINISHES
+        from puzzle.post.fatigue_tool import MODEL_LABELS, STRESS_LABELS
+        from puzzle.settings import current, length_unit
+
+        super().__init__(parent)
+        self.setWindowTitle("Fatigue tool")
+        self.resize(760, 640)
+        self.project, self.store = project, store
+        self.runs = _Runs(project, store)
+        self.length, self.per_metre = length_unit()
+        self.stress_unit = current().display_units()["pressure"]
+        s = definition.fatigue if definition is not None else None
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        n = len(project.of_type(ResultDefinition)) + 1
+        self.name = QLineEdit(definition.name if definition else f"Fatigue {n}")
+        form.addRow("Name", self.name)
+        layout.addLayout(form)
+
+        layout.addWidget(QLabel("Duty: the kinds of cycle, and how many of each per duty"))
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(
+            ["Loading", "Load case or combination", "Result step", "Scale", "Cycles per duty"]
+        )
+        self.table.horizontalHeader().setStretchLastSection(True)
+        layout.addWidget(self.table, 1)
+        row = QHBoxLayout()
+        add, remove = QPushButton("Add cycle"), QPushButton("Remove cycle")
+        add.clicked.connect(lambda: self.add_block())
+        remove.clicked.connect(self.remove_block)
+        row.addWidget(add)
+        row.addWidget(remove)
+        row.addStretch(1)
+        layout.addLayout(row)
+
+        how = QFormLayout()
+        self.stress, self.correction, self.model, self.curve = (QComboBox() for _ in range(4))
+        for key, text in STRESS_LABELS.items():
+            self.stress.addItem(text, key)
+        for key, (text, expr) in CORRECTIONS.items():
+            self.correction.addItem(f"{text}: {expr}", key)
+        for key, text in MODEL_LABELS.items():
+            self.model.addItem(text, key)
+        self.curve.setEditable(False)
+        self.design_life = QLineEdit(f"{s.design_life:g}" if s else "1e6")
+        how.addRow("Stress measure", self.stress)
+        how.addRow("Mean-stress correction", self.correction)
+        how.addRow("Life from", self.model)
+        how.addRow("S-N curve", self.curve)
+        how.addRow("Design life (duties)", self.design_life)
+        self.how = how
+        layout.addLayout(how)
+
+        self.marin = QWidget()
+        mf = QFormLayout(self.marin)
+        mf.setContentsMargins(0, 0, 0, 0)
+        self.surface, self.size = QComboBox(), QComboBox()
+        for key, (text, *_rest) in SURFACE_FINISHES.items():
+            self.surface.addItem(text, key)
+        for key, text in SIZE_BASES.items():
+            self.size.addItem(text, key)
+        self.diameter, self.height, self.width = QLineEdit(), QLineEdit(), QLineEdit()
+        self.reliability = QLineEdit("50")
+        self.temperature = QLineEdit("20")
+        self.misc = QLineEdit("1")
+        self.endurance = QLineEdit()
+        self.endurance.setPlaceholderText("blank: 0.5 Sut (steels, Eq. 6-8)")
+        from puzzle.model.units import pretty
+
+        mf.addRow("Surface finish", self.surface)
+        mf.addRow("Size", self.size)
+        mf.addRow(f"Diameter ({self.length})", self.diameter)
+        mf.addRow(f"Height h ({self.length})", self.height)
+        mf.addRow(f"Width b ({self.length})", self.width)
+        mf.addRow("Reliability (%)", self.reliability)
+        mf.addRow("Temperature (°C)", self.temperature)
+        mf.addRow("Other effects factor kf", self.misc)
+        mf.addRow(f"Measured endurance limit S'e ({pretty(self.stress_unit)})", self.endurance)
+        self.marin_form = mf
+        layout.addWidget(self.marin)
+
+        self.status = QLabel()
+        self.status.setWordWrap(True)
+        layout.addWidget(self.status)
+        scope = QLabel(
+            "High-cycle, proportional loading. Life is in duties (cycles, for one cycle per "
+            "duty); damage is at the design life; the safety factor scales every stress."
+        )
+        scope.setWordWrap(True)
+        scope.setStyleSheet("color: gray")
+        layout.addWidget(scope)
+        self.buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+        layout.addWidget(self.buttons)
+
+        if s is None:  # a new tool starts from the schema's defaults
+            from puzzle.model.schema import FatigueSettings
+
+            for box, value in (
+                (self.stress, FatigueSettings.model_fields["stress"].default),
+                (self.correction, FatigueSettings.model_fields["mean_stress"].default),
+                (self.model, FatigueSettings.model_fields["life_model"].default),
+                (self.surface, FatigueSettings.model_fields["surface"].default),
+                (self.size, FatigueSettings.model_fields["size"].default),
+            ):
+                box.setCurrentIndex(box.findData(value))
+        if s is not None:
+            for box, value in (
+                (self.stress, s.stress),
+                (self.correction, s.mean_stress),
+                (self.model, s.life_model),
+                (self.surface, s.surface),
+                (self.size, s.size),
+            ):
+                box.setCurrentIndex(box.findData(value))
+            for line, value in (
+                (self.diameter, s.diameter),
+                (self.height, s.height),
+                (self.width, s.width),
+            ):
+                line.setText(f"{value * self.per_metre:g}" if value is not None else "")
+            self.reliability.setText(f"{s.reliability:g}")
+            self.temperature.setText(f"{s.temperature:g}")
+            self.misc.setText(f"{s.misc_factor:g}")
+            if s.endurance_limit is not None:
+                from puzzle.model.units import convert
+
+                self.endurance.setText(f"{convert(s.endurance_limit, 'Pa', self.stress_unit):g}")
+            for b in s.blocks:
+                self.add_block(b.model_dump(mode="json"))
+        else:
+            self.add_block(
+                {"loading": "fully_reversed", "case": {"study": study}} if study else None
+            )
+        self._fill_curves(s.sn_curve if s else None)
+        for w in (self.stress, self.correction, self.model, self.surface, self.size, self.curve):
+            w.currentIndexChanged.connect(self._update)
+        for w in (self.design_life, self.diameter, self.height, self.width, self.reliability,
+                  self.temperature, self.misc, self.endurance, self.name):  # fmt: skip
+            w.textChanged.connect(self._update)
+        self._update()
+
+    # the duty ----------------------------------------------------------------------------
+
+    def add_block(self, block: dict | None = None) -> None:
+        block = block or {}
+        r = self.table.rowCount()
+        self.table.insertRow(r)
+        loading, source, step = QComboBox(), QComboBox(), QComboBox()
+        for text, key in LOADINGS:
+            loading.addItem(text, key)
+        loading.setCurrentIndex(max(0, loading.findData(block.get("loading", "fully_reversed"))))
+        scale = QLineEdit(f"{block.get('scale', 1.0):g}")
+        cycles = QLineEdit(f"{block.get('cycles', 1.0):g}")
+        for c, w in enumerate((loading, source, step, scale, cycles)):
+            self.table.setCellWidget(r, c, w)
+        case = block.get("case") or {}
+
+        def fill_sources(chosen=None):
+            source.blockSignals(True)
+            source.clear()
+            if loading.currentData() == "range":
+                for d in self.project.of_type(ResultDefinition):
+                    if d.method == "range":
+                        source.addItem(d.name, str(d.id))
+                if source.count() == 0:
+                    source.addItem("(make a range combination first)", None)
+            else:
+                for s in self.runs.studies:
+                    source.addItem(s.name, str(s.id))
+            found = source.findData(chosen)
+            source.setCurrentIndex(found if found >= 0 else 0)
+            source.blockSignals(False)
+            fill_steps()
+
+        def fill_steps(chosen=-1):
+            if loading.currentData() == "range" or source.currentData() is None:
+                step.clear()
+                step.addItem("(the combination)", -1)
+                step.setEnabled(False)
+            else:
+                step.setEnabled(True)
+                self.runs.fill_steps(step, source.currentData(), None, chosen)
+
+        fill_sources(block.get("combination") or case.get("study"))
+        if case.get("step") is not None:
+            fill_steps(case["step"])
+        loading.currentIndexChanged.connect(lambda _: (fill_sources(), self._update()))
+        source.currentIndexChanged.connect(
+            lambda _: (fill_steps(), self._fill_curves(), self._update())
+        )
+        step.currentIndexChanged.connect(self._update)
+        scale.textChanged.connect(self._update)
+        cycles.textChanged.connect(self._update)
+        self._update()
+
+    def remove_block(self) -> None:
+        r = self.table.currentRow()
+        self.table.removeRow(r if r >= 0 else self.table.rowCount() - 1)
+        self._update()
+
+    def blocks(self) -> list[dict]:
+        out = []
+        for r in range(self.table.rowCount()):
+            loading, source, step, scale, cycles = (self.table.cellWidget(r, c) for c in range(5))
+            try:
+                sc, cy = float(scale.text()), float(cycles.text())
+            except ValueError:
+                raise PuzzleError(
+                    f"cycle {r + 1}: scale and cycles are numbers", code="invalid"
+                ) from None
+            b = {"loading": loading.currentData(), "scale": sc, "cycles": cy}
+            if loading.currentData() == "range":
+                b["combination"] = source.currentData()
+            else:
+                b["case"] = {"study": source.currentData(), "step": step.currentData()}
+            out.append(b)
+        return out
+
+    # the definition ------------------------------------------------------------------
+
+    def _number(self, line: QLineEdit, what: str, optional: bool = False):
+        text = line.text().strip()
+        if not text and optional:
+            return None
+        try:
+            return float(text)
+        except ValueError:
+            raise PuzzleError(f"{what}: '{text}' is not a number", code="invalid") from None
+
+    def data(self) -> dict:
+        from puzzle.model.units import convert
+
+        def length(line, what):
+            v = self._number(line, what, optional=True)
+            return v / self.per_metre if v is not None else None
+
+        se = self._number(self.endurance, "Endurance limit", optional=True)
+        settings = {
+            "blocks": self.blocks(),
+            "stress": self.stress.currentData(),
+            "mean_stress": self.correction.currentData(),
+            "life_model": self.model.currentData(),
+            "sn_curve": self.curve.currentData(),
+            "design_life": self._number(self.design_life, "Design life"),
+            "surface": self.surface.currentData(),
+            "size": self.size.currentData(),
+            "diameter": length(self.diameter, "Diameter"),
+            "height": length(self.height, "Height"),
+            "width": length(self.width, "Width"),
+            "reliability": self._number(self.reliability, "Reliability"),
+            "temperature": self._number(self.temperature, "Temperature"),
+            "misc_factor": self._number(self.misc, "Other effects factor"),
+            "endurance_limit": convert(se, self.stress_unit, "Pa") if se is not None else None,
+        }
+        return {"name": self.name.text().strip(), "method": "fatigue", "fatigue": settings}
+
+    def _materials(self):
+        """The materials of the first cycle's component (for their S-N curves)."""
+        from uuid import UUID
+
+        from puzzle.model.schema import Component, Material
+
+        if self.table.rowCount() == 0:
+            return []
+        source = self.table.cellWidget(0, 1)
+        sid = source.currentData()
+        if sid is None:
+            return []
+        obj = self.project.objects.get(UUID(sid))
+        if isinstance(obj, ResultDefinition) and obj.cases:
+            obj = self.project.objects.get(obj.cases[0].study)
+        if not isinstance(obj, Study):
+            return []
+        comp = self.project.objects.get(obj.component)
+        if not isinstance(comp, Component):
+            return []
+        mats = [self.project.objects.get(a.material) for a in comp.materials]
+        return [m for m in mats if isinstance(m, Material)]
+
+    def _fill_curves(self, chosen=None) -> None:
+        chosen = chosen or self.curve.currentData()
+        self.curve.blockSignals(True)
+        self.curve.clear()
+        self.curve.addItem("(each material's first)", None)
+        names = []
+        for m in self._materials():
+            names += [c.name for c in m.fatigue.sn_curves if c.name not in names]
+        for name in names:
+            self.curve.addItem(name, name)
+        found = self.curve.findData(chosen)
+        self.curve.setCurrentIndex(found if found >= 0 else 0)
+        self.curve.blockSignals(False)
+
+    def _update(self, *_) -> None:
+        model = self.model.currentData()
+        self.marin.setVisible(model == "shigley")
+        self.curve.setEnabled(model == "sn_curve")
+        size = self.size.currentData()
+        for line, show in (
+            (self.diameter, size in ("rotating_round", "non_rotating_round")),
+            (self.height, size == "rectangle"),
+            (self.width, size == "rectangle"),
+        ):
+            line.setVisible(show)
+            self.marin_form.labelForField(line).setVisible(show)
+        ok = self.buttons.button(QDialogButtonBox.StandardButton.Ok)
+        ok.setEnabled(False)
+        if not self.runs.studies:
+            self.status.setText("No study has been run yet: run one first.")
+            return
+        try:
+            d = ResultDefinition.model_validate(self.data())
+            result = derived.evaluate(self.project, self.store, d)
+        except PuzzleError as exc:
+            self.status.setStyleSheet("color: #b00020")
+            self.status.setText(str(exc))
+            return
+        except ValueError as exc:
+            self.status.setStyleSheet("color: #b00020")
+            self.status.setText(_first_error(exc))
+            return
+        f = result.results.steps[0].fields
+        life = f["fatigue_life"].values[:, 0]
+        sf = f["fatigue_safety_factor"].values[:, 0]
+        shortest = "infinite" if life.min() >= 1e12 else f"{life.min():.3g}"
+        text = f"Shortest life {shortest}; smallest safety factor {sf.min():.3g}."
+        if result.warnings:
+            text += " " + " ".join(result.warnings)
+        self.status.setStyleSheet("")
+        self.status.setText(text)
+        ok.setEnabled(True)
