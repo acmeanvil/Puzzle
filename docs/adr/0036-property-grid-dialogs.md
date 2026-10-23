@@ -27,6 +27,24 @@ PrePoMax's editors are property grids: name and value rows grouped in sections, 
 3. **Units in labels follow the display units** (ADR 0030): "Endurance limit S'e (MPa)".
 4. **The same component serves dialogs and the docked panel.** Tool options in the Properties dock (ADR 0017's ToolPanel) and the fatigue, combination, equation, step and material dialogs move to it. That's one place to get spacing, focus order and keyboard use (Enter applies, Esc cancels) right.
 
+## Built (2026-10-23)
+
+- **`gui/form.py` `FormPanel`:**
+  - sections that fold;
+  - label | field | unit rows;
+  - full-width widgets, with tables sized to their contents and headers that never clip;
+  - dropdowns as wide as their longest name;
+  - a description box filled from `DESCRIPTIONS` on focus or hover, also used as tooltips;
+  - `set_visible` for a row's label, field and unit together;
+  - `set_message` for the banner on top: red for what blocks OK, plain for a result.
+- **Sizing:** `fit_to_screen` keeps a dialog within 85 % of the screen's height, and the form scrolls inside.
+- **Moved onto it:**
+  - the fatigue tool, whose notch section is folded unless Kf is in use, and whose loading names are shortened ("Fully reversed", "Zero-based", "Range") with their meaning in the description box;
+  - the combination dialog;
+  - the equation dialog.
+- **Still to move:** the step dialog, the Geometry tab's tool panel, and the material builder. They move as they are next changed.
+- **A bug found on the way:** the fatigue dialog's `height` and `width` fields shadowed Qt's own `height()` and `width()` (now `rect_height`, `rect_width`).
+
 ## Consequences
 
 - Dialogs get shorter (sections fold) and explain themselves (the description box) without long notes in the form.

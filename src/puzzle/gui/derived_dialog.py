@@ -13,7 +13,6 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
-    QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -110,55 +109,54 @@ class _Runs:
 class CombinationDialog(QDialog):
     def __init__(self, project: Project, store, parent=None, definition=None, study=None):
         super().__init__(parent)
+        from puzzle.gui.form import FormPanel, fit_to_screen
+
         self.setWindowTitle("Solution combination")
-        self.resize(720, 420)
+        fit_to_screen(self, 760, 520)
         self.project = project
         self.runs = _Runs(project, store)
         self.definition = definition
         layout = QVBoxLayout(self)
-        form = QFormLayout()
+        self.form = FormPanel()
+        self.error = self.form.message  # what blocks OK
+        layout.addWidget(self.form, 1)
         n = len(project.of_type(ResultDefinition)) + 1
-        self.name = QLineEdit(definition.name if definition else f"Combination {n}")
+        top = self.form.section("Combination")
+        self.name = top.row(
+            "name", "Name", QLineEdit(definition.name if definition else f"Combination {n}")
+        )
         self.method = QComboBox()
         for key, text in derived.COMBINATIONS.items():
             self.method.addItem(text, key)
         if definition is not None:
             self.method.setCurrentIndex(self.method.findData(definition.method))
-        form.addRow("Name", self.name)
-        form.addRow("Method", self.method)
-        layout.addLayout(form)
+        top.row("method", "Method", self.method)
         self.note = QLabel()
         self.note.setWordWrap(True)
         self.note.setStyleSheet("color: gray")
-        layout.addWidget(self.note)
+        top.add_widget(self.note)
 
+        cases = self.form.section("Cases")
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["Study", "Sweep point", "Result step", "Coefficient"])
-        self.table.horizontalHeader().setStretchLastSection(True)
-        layout.addWidget(self.table, 1)
-        row = QHBoxLayout()
+        cases.add_widget(self.table)
+        buttons = QWidget()
+        row = QHBoxLayout(buttons)
+        row.setContentsMargins(0, 0, 0, 0)
         add, remove = QPushButton("Add case"), QPushButton("Remove case")
         add.clicked.connect(lambda: self.add_case())
         remove.clicked.connect(self.remove_case)
         row.addWidget(add)
         row.addWidget(remove)
         row.addStretch(1)
-        layout.addLayout(row)
+        cases.add_widget(buttons)
 
-        self.envelope = QWidget()
-        env = QFormLayout(self.envelope)
-        env.setContentsMargins(0, 0, 0, 0)
+        self.envelope = self.form.section("Envelope")
         self.quantity, self.extreme = QComboBox(), QComboBox()
         self.extreme.addItem("Maximum", "max")
         self.extreme.addItem("Minimum", "min")
-        env.addRow("Result to compare", self.quantity)
-        env.addRow("Keep the", self.extreme)
-        layout.addWidget(self.envelope)
-
-        self.error = QLabel()
-        self.error.setStyleSheet("color: #b00020")
-        self.error.setWordWrap(True)
-        layout.addWidget(self.error)
+        self.envelope.row("quantity", "Result to compare", self.quantity)
+        self.envelope.row("extreme", "Keep the", self.extreme)
         self.buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
@@ -259,20 +257,20 @@ class CombinationDialog(QDialog):
             self._fill_quantities()
         ok = self.buttons.button(QDialogButtonBox.StandardButton.Ok)
         if not self.runs.studies:
-            self.error.setText("No study has been run yet: run one first.")
+            self.form.set_message("No study has been run yet: run one first.", error=True)
             ok.setEnabled(False)
             return
         try:
             ResultDefinition.model_validate(self.data())
         except PuzzleError as exc:
-            self.error.setText(str(exc))
+            self.form.set_message(str(exc), error=True)
             ok.setEnabled(False)
             return
         except ValueError as exc:
-            self.error.setText(_first_error(exc))
+            self.form.set_message(_first_error(exc), error=True)
             ok.setEnabled(False)
             return
-        self.error.setText("")
+        self.form.set_message(None)
         ok.setEnabled(True)
 
     def _fill_quantities(self) -> None:
@@ -304,12 +302,21 @@ class CombinationDialog(QDialog):
 class EquationDialog(QDialog):
     def __init__(self, project: Project, store, parent=None, definition=None, source=None):
         super().__init__(parent)
+        from puzzle.gui.form import FormPanel, fit_to_screen
+
         self.setWindowTitle("Equation result")
-        self.resize(640, 520)
+        fit_to_screen(self, 680, 620)
         self.project, self.store = project, store
         self.runs = _Runs(project, store)
         layout = QVBoxLayout(self)
-        form = QFormLayout()
+        self.form = FormPanel(
+            "Operators + − * / ** %, comparisons, and, or, not. Functions: "
+            + ", ".join(derived.FUNCTIONS)
+            + "; max(x) alone is the largest over the model. Constants pi and e. "
+            "Values are in SI units (Pa, m, K)."
+        )
+        self.status = self.form.message
+        layout.addWidget(self.form, 1)
         n = len(project.of_type(ResultDefinition)) + 1
         self.name = QLineEdit(definition.name if definition else f"Equation {n}")
         self.source, self.point, self.step = QComboBox(), QComboBox(), QComboBox()
@@ -331,29 +338,18 @@ class EquationDialog(QDialog):
             self.unit.addItem(text, key)
         if definition is not None and definition.unit:
             self.unit.setCurrentIndex(self.unit.findData(definition.unit))
-        form.addRow("Name", self.name)
-        form.addRow("Results of", self.source)
-        form.addRow("Sweep point", self.point)
-        form.addRow("Result step", self.step)
-        form.addRow("Equation", self.expression)
-        form.addRow("Unit of the value (SI)", self.unit)
-        layout.addLayout(form)
-        layout.addWidget(QLabel("Names you can use (double-click to insert):"))
+        top = self.form.section("Equation")
+        top.row("name", "Name", self.name)
+        top.row("source", "Results of", self.source)
+        top.row("source_point", "Sweep point", self.point)
+        top.row("source_step", "Result step", self.step)
+        top.row("expression", "Equation", self.expression)
+        top.row("unit", "Unit of the value", self.unit, "SI")
+        names = self.form.section("Names you can use (double-click to insert)")
         self.names = QListWidget()
+        self.names.setMinimumHeight(160)
         self.names.itemDoubleClicked.connect(self._insert)
-        layout.addWidget(self.names, 1)
-        help_text = QLabel(
-            "Operators + − * / ** %, comparisons, and, or, not. Functions: "
-            + ", ".join(derived.FUNCTIONS)
-            + "; max(x) alone is the largest over the model. Constants pi and e. "
-            "Values are in SI units (Pa, m, K)."
-        )
-        help_text.setWordWrap(True)
-        help_text.setStyleSheet("color: gray")
-        layout.addWidget(help_text)
-        self.status = QLabel()
-        self.status.setWordWrap(True)
-        layout.addWidget(self.status)
+        names.add_widget(self.names)
         self.buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
@@ -432,25 +428,22 @@ class EquationDialog(QDialog):
         ok = self.buttons.button(QDialogButtonBox.StandardButton.Ok)
         ok.setEnabled(False)
         if self.source.currentData() is None:
-            self.status.setText("No study has been run yet: run one first.")
+            self.form.set_message("No study has been run yet: run one first.", error=True)
             return
         if not self.expression.text().strip():
-            self.status.setText("Type an equation.")
+            self.form.set_message("Type an equation.")
             return
         try:
             d = ResultDefinition.model_validate(self.data())
             result = derived.evaluate(self.project, self.store, d)
         except PuzzleError as exc:
-            self.status.setStyleSheet("color: #b00020")
-            self.status.setText(str(exc))
+            self.form.set_message(str(exc), error=True)
             return
         except ValueError as exc:
-            self.status.setStyleSheet("color: #b00020")
-            self.status.setText(_first_error(exc))
+            self.form.set_message(_first_error(exc), error=True)
             return
         v = result.results.steps[0].fields["equation"].values[:, 0]
-        self.status.setStyleSheet("")
-        self.status.setText(f"From {np.nanmin(v):.4g} to {np.nanmax(v):.4g} (SI).")
+        self.form.set_message(f"From {np.nanmin(v):.4g} to {np.nanmax(v):.4g} (SI).")
         ok.setEnabled(True)
 
 
@@ -462,10 +455,11 @@ def _first_error(exc: ValueError) -> str:
     return str(exc)
 
 
+# Short names for the duty table; what each means is in the description box.
 LOADINGS = [
-    ("Fully reversed (the case and its reverse)", "fully_reversed"),
-    ("Zero-based (the case, then nothing)", "zero_based"),
-    ("Range of a combination (case 1 to case 2)", "range"),
+    ("Fully reversed", "fully_reversed"),
+    ("Zero-based", "zero_based"),
+    ("Range", "range"),
 ]
 
 
@@ -481,36 +475,49 @@ class FatigueDialog(QDialog):
 
         super().__init__(parent)
         self.setWindowTitle("Fatigue tool")
-        self.resize(760, 640)
         self.project, self.store = project, store
         self.runs = _Runs(project, store)
         self.length, self.per_metre = length_unit()
         self.stress_unit = current().display_units()["pressure"]
         s = definition.fatigue if definition is not None else None
-        layout = QVBoxLayout(self)
-        form = QFormLayout()
-        n = len(project.of_type(ResultDefinition)) + 1
-        self.name = QLineEdit(definition.name if definition else f"Fatigue {n}")
-        form.addRow("Name", self.name)
-        layout.addLayout(form)
+        from PySide6.QtWidgets import QCheckBox
 
-        layout.addWidget(QLabel("Duty: the kinds of cycle, and how many of each per duty"))
+        from puzzle.gui.form import FormPanel, fit_to_screen
+        from puzzle.model.units import pretty
+
+        fit_to_screen(self, 820, 760)
+        layout = QVBoxLayout(self)
+        self.form = form = FormPanel(
+            "High-cycle, proportional loading. Life is in duties (cycles, for one cycle per "
+            "duty); damage is at the design life; the safety factor scales every stress."
+        )
+        self.status = form.message  # what blocks OK, or the result's summary
+        layout.addWidget(form, 1)
+        n = len(project.of_type(ResultDefinition)) + 1
+
+        top = form.section("Fatigue tool")
+        self.name = top.row(
+            "name", "Name", QLineEdit(definition.name if definition else f"Fatigue {n}")
+        )
+
+        duty = form.section("Duty: the kinds of cycle, and how many of each per duty")
         self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(
             ["Loading", "Load case or combination", "Result step", "Scale", "Cycles per duty"]
         )
-        self.table.horizontalHeader().setStretchLastSection(True)
-        layout.addWidget(self.table, 1)
-        row = QHBoxLayout()
+        duty.add_widget(self.table, "loading")
+        buttons = QWidget()
+        row = QHBoxLayout(buttons)
+        row.setContentsMargins(0, 0, 0, 0)
         add, remove = QPushButton("Add cycle"), QPushButton("Remove cycle")
         add.clicked.connect(lambda: self.add_block())
         remove.clicked.connect(self.remove_block)
         row.addWidget(add)
         row.addWidget(remove)
         row.addStretch(1)
-        layout.addLayout(row)
+        duty.add_widget(buttons)
 
-        how = QFormLayout()
+        how = form.section("Stress and life")
         self.stress, self.correction, self.model, self.curve = (QComboBox() for _ in range(4))
         for key, text in STRESS_LABELS.items():
             self.stress.addItem(text, key)
@@ -518,48 +525,39 @@ class FatigueDialog(QDialog):
             self.correction.addItem(f"{text}: {expr}", key)
         for key, text in MODEL_LABELS.items():
             self.model.addItem(text, key)
-        self.curve.setEditable(False)
         self.design_life = QLineEdit(f"{s.design_life:g}" if s else "1e6")
-        how.addRow("Stress measure", self.stress)
-        how.addRow("Mean-stress correction", self.correction)
-        how.addRow("Life from", self.model)
-        how.addRow("S-N curve", self.curve)
-        how.addRow("Design life (duties)", self.design_life)
-        self.how = how
-        layout.addLayout(how)
+        how.row("stress", "Stress measure", self.stress)
+        how.row("mean_stress", "Mean-stress correction", self.correction)
+        how.row("life_model", "Life from", self.model)
+        how.row("sn_curve", "S-N curve", self.curve)
+        how.row("design_life", "Design life", self.design_life, "duties")
 
-        self.marin = QWidget()
-        mf = QFormLayout(self.marin)
-        mf.setContentsMargins(0, 0, 0, 0)
+        self.marin = form.section("Shigley's Marin factors")
+        mf = self.marin
         self.surface, self.size = QComboBox(), QComboBox()
         for key, (text, *_rest) in SURFACE_FINISHES.items():
             self.surface.addItem(text, key)
         for key, text in SIZE_BASES.items():
             self.size.addItem(text, key)
-        self.diameter, self.height, self.width = QLineEdit(), QLineEdit(), QLineEdit()
+        self.diameter, self.rect_height, self.rect_width = QLineEdit(), QLineEdit(), QLineEdit()
         self.reliability = QLineEdit("50")
         self.temperature = QLineEdit("20")
         self.misc = QLineEdit("1")
         self.endurance = QLineEdit()
-        self.endurance.setPlaceholderText("blank: 0.5 Sut (steels, Eq. 6-8)")
-        from puzzle.model.units import pretty
+        self.endurance.setPlaceholderText("blank: 0.5 Sut (steels)")
+        mf.row("surface", "Surface finish", self.surface)
+        mf.row("size", "Size", self.size)
+        mf.row("diameter", "Diameter", self.diameter, self.length)
+        mf.row("height", "Height h", self.rect_height, self.length)
+        mf.row("width", "Width b", self.rect_width, self.length)
+        mf.row("reliability", "Reliability", self.reliability, "%")
+        mf.row("temperature", "Temperature", self.temperature, "°C")
+        mf.row("misc_factor", "Other effects factor kf", self.misc)
+        mf.row("endurance_limit", "Measured endurance limit S'e", self.endurance,
+               pretty(self.stress_unit))  # fmt: skip
 
-        mf.addRow("Surface finish", self.surface)
-        mf.addRow("Size", self.size)
-        mf.addRow(f"Diameter ({self.length})", self.diameter)
-        mf.addRow(f"Height h ({self.length})", self.height)
-        mf.addRow(f"Width b ({self.length})", self.width)
-        mf.addRow("Reliability (%)", self.reliability)
-        mf.addRow("Temperature (°C)", self.temperature)
-        mf.addRow("Other effects factor kf", self.misc)
-        mf.addRow(f"Measured endurance limit S'e ({pretty(self.stress_unit)})", self.endurance)
-        self.marin_form = mf
-        layout.addWidget(self.marin)
-
-        from PySide6.QtWidgets import QCheckBox, QGroupBox
-
-        notch = QGroupBox("Notch: fatigue stress-concentration factor Kf")
-        nf = QFormLayout(notch)
+        notched = s is not None and (s.notch_from == "neuber" or s.notch_factor != 1)
+        notch = form.section("Notch: fatigue stress-concentration factor Kf", open=notched)
         self.notch_from = QComboBox()
         self.notch_from.addItem("Given directly", "direct")
         self.notch_from.addItem("From Kt and the notch radius (Neuber)", "neuber")
@@ -568,38 +566,17 @@ class FatigueDialog(QDialog):
         self.radius = QLineEdit()
         self.shear = QCheckBox("Shear (torsion) notch sensitivity")
         self.on_mean = QCheckBox("Apply Kf to the mean stress too")
-        self.on_mean.setToolTip(
-            "Shigley applies Kf to the alternating stress only for ductile materials"
-        )
         self.notch_info = QLabel()
         self.notch_info.setStyleSheet("color: gray")
-        nf.addRow("Kf from", self.notch_from)
-        nf.addRow("Kf", self.kf)
-        nf.addRow("Kt (theoretical)", self.kt)
-        nf.addRow(f"Notch radius ({self.length})", self.radius)
-        nf.addRow(self.shear)
-        nf.addRow(self.on_mean)
-        nf.addRow(self.notch_info)
-        warn = QLabel(
-            "Leave Kf at 1 where the mesh resolves the notch: its stresses already include Kt. "
-            "Use it for raisers the model doesn't show (threads, welds, a coarse fillet)."
-        )
-        warn.setWordWrap(True)
-        warn.setStyleSheet("color: gray")
-        nf.addRow(warn)
-        self.notch_form = nf
-        layout.addWidget(notch)
+        self.notch_info.setWordWrap(True)
+        notch.row("notch_from", "Kf from", self.notch_from)
+        notch.row("notch_factor", "Kf", self.kf)
+        notch.row("notch_kt", "Kt (theoretical)", self.kt)
+        notch.row("notch_radius", "Notch radius", self.radius, self.length)
+        notch.add_widget(self.shear, "notch_shear")
+        notch.add_widget(self.on_mean, "notch_on_mean")
+        notch.add_widget(self.notch_info)
 
-        self.status = QLabel()
-        self.status.setWordWrap(True)
-        layout.addWidget(self.status)
-        scope = QLabel(
-            "High-cycle, proportional loading. Life is in duties (cycles, for one cycle per "
-            "duty); damage is at the design life; the safety factor scales every stress."
-        )
-        scope.setWordWrap(True)
-        scope.setStyleSheet("color: gray")
-        layout.addWidget(scope)
         self.buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
@@ -629,8 +606,8 @@ class FatigueDialog(QDialog):
                 box.setCurrentIndex(box.findData(value))
             for line, value in (
                 (self.diameter, s.diameter),
-                (self.height, s.height),
-                (self.width, s.width),
+                (self.rect_height, s.height),
+                (self.rect_width, s.width),
             ):
                 line.setText(f"{value * self.per_metre:g}" if value is not None else "")
             self.reliability.setText(f"{s.reliability:g}")
@@ -662,8 +639,10 @@ class FatigueDialog(QDialog):
             w.textChanged.connect(self._update)
         for w in (self.shear, self.on_mean):
             w.toggled.connect(self._update)
-        for w in (self.design_life, self.diameter, self.height, self.width, self.reliability,
-                  self.temperature, self.misc, self.endurance, self.name):  # fmt: skip
+        for w in (
+            *(self.design_life, self.diameter, self.rect_height, self.rect_width),
+            *(self.reliability, self.temperature, self.misc, self.endurance, self.name),
+        ):
             w.textChanged.connect(self._update)
         self._update()
 
@@ -773,8 +752,8 @@ class FatigueDialog(QDialog):
             "surface": self.surface.currentData(),
             "size": self.size.currentData(),
             "diameter": length(self.diameter, "Diameter"),
-            "height": length(self.height, "Height"),
-            "width": length(self.width, "Width"),
+            "height": length(self.rect_height, "Height"),
+            "width": length(self.rect_width, "Width"),
             "reliability": self._number(self.reliability, "Reliability"),
             "temperature": self._number(self.temperature, "Temperature"),
             "misc_factor": self._number(self.misc, "Other effects factor"),
@@ -851,40 +830,28 @@ class FatigueDialog(QDialog):
         self.marin.setVisible(model == "shigley")
         self.curve.setEnabled(model == "sn_curve")
         size = self.size.currentData()
-        for line, show in (
-            (self.diameter, size in ("rotating_round", "non_rotating_round")),
-            (self.height, size == "rectangle"),
-            (self.width, size == "rectangle"),
-        ):
-            line.setVisible(show)
-            self.marin_form.labelForField(line).setVisible(show)
+        self.form.set_visible("diameter", size in ("rotating_round", "non_rotating_round"))
+        self.form.set_visible("height", size == "rectangle")
+        self.form.set_visible("width", size == "rectangle")
         neuber = self.notch_from.currentData() == "neuber"
-        for line, show in (
-            (self.kf, not neuber),
-            (self.kt, neuber),
-            (self.radius, neuber),
-            (self.shear, neuber),
-        ):
-            line.setVisible(show)
-            label = self.notch_form.labelForField(line)
-            if label is not None:
-                label.setVisible(show)
+        self.form.set_visible("notch_factor", not neuber)
+        for key in ("notch_kt", "notch_radius", "notch_shear"):
+            self.form.set_visible(key, neuber)
         self.notch_info.setText(self._notch_text() if neuber else "")
+        self.notch_info.setVisible(neuber)
         ok = self.buttons.button(QDialogButtonBox.StandardButton.Ok)
         ok.setEnabled(False)
         if not self.runs.studies:
-            self.status.setText("No study has been run yet: run one first.")
+            self.form.set_message("No study has been run yet: run one first.", error=True)
             return
         try:
             d = ResultDefinition.model_validate(self.data())
             result = derived.evaluate(self.project, self.store, d)
         except PuzzleError as exc:
-            self.status.setStyleSheet("color: #b00020")
-            self.status.setText(str(exc))
+            self.form.set_message(str(exc), error=True)
             return
         except ValueError as exc:
-            self.status.setStyleSheet("color: #b00020")
-            self.status.setText(_first_error(exc))
+            self.form.set_message(_first_error(exc), error=True)
             return
         f = result.results.steps[0].fields
         life = f["fatigue_life"].values[:, 0]
@@ -893,6 +860,5 @@ class FatigueDialog(QDialog):
         text = f"Shortest life {shortest}; smallest safety factor {sf.min():.3g}."
         if result.warnings:
             text += " " + " ".join(result.warnings)
-        self.status.setStyleSheet("")
-        self.status.setText(text)
+        self.form.set_message(text)
         ok.setEnabled(True)
