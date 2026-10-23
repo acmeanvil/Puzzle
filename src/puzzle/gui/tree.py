@@ -23,6 +23,7 @@ from puzzle.model.schema import (
 from puzzle.results.store import RunRecord
 
 ROLE = Qt.ItemDataRole.UserRole
+STATE = Qt.ItemDataRole.UserRole + 1  # the item's state key (ADR 0033)
 
 
 @dataclass(frozen=True)
@@ -58,27 +59,32 @@ class ModelTree(QTreeWidget):
         self.setUniformRowHeights(True)
 
     def populate(
-        self, project: Project, runs: list[RunRecord], catalogs: dict | None = None
+        self,
+        project: Project,
+        runs: list[RunRecord],
+        catalogs: dict | None = None,
+        states: dict | None = None,
     ) -> None:
         """Rebuild from the project, keeping what was selected and expanded; `catalogs`
-        (run id -> its stored fields) lists each run's results under it."""
+        (run id -> its stored fields) lists each run's results under it; `states`
+        (object id -> `project.status.State`) gives each item its state icon (ADR 0033)."""
+        from puzzle.project.status import run_state
+
+        states = states if states is not None else {}
         keep = self.current()
         opened = {self._key(i) for i in self._items() if i.isExpanded()}
         self.clear()
         root = self._add(
             self.invisibleRootItem(), project.name, Node("project", label=project.name)
         )
-        flagged = {p.object for p in project.problems()}
         for title, cls in SECTIONS:
             objects = project.of_type(cls)
             if not objects:
                 continue
             section = self._add(root, title, Node("section", label=title))
             for obj in objects:
-                mark = "  ⚠" if obj.name in flagged else ""
-                item = self._add(
-                    section, obj.name + mark, Node("object", str(obj.id), "", obj.name)
-                )
+                item = self._add(section, obj.name, Node("object", str(obj.id), "", obj.name))
+                self._state(item, states.get(str(obj.id)))
                 self._children(item, obj, project)
         defined = project.of_type(ResultDefinition)
         if runs or defined:
@@ -88,9 +94,9 @@ class ModelTree(QTreeWidget):
 
             section = self._add(root, "Results", Node("section", label="Results"))
             for d in defined:  # derived results (ADR 0025), evaluated when shown
-                mark = "  ⚠" if d.name in flagged else ""
-                text = f"{d.name} · {METHODS[d.method].split(' (')[0].lower()}{mark}"
-                self._add(section, text, Node("derived", str(d.id), "", d.name))
+                text = f"{d.name} · {METHODS[d.method].split(' (')[0].lower()}"
+                item = self._add(section, text, Node("derived", str(d.id), "", d.name))
+                self._state(item, states.get(str(d.id)))
             sweeps: dict[str, tuple[QTreeWidgetItem, set]] = {}  # study id -> heading, points
             for r in reversed(runs):  # newest first
                 when = f"{solver_label(r.solver)} · {r.started_at:%Y-%m-%d %H:%M}"
@@ -112,6 +118,7 @@ class ModelTree(QTreeWidget):
                 else:
                     text = f"{r.study_name} · {when}"
                     run = self._add(section, text, Node("run", r.run_id, "", text))
+                self._state(run, run_state(r, project))
                 # Every result the run can show, by field (double-click or select one).
                 groups: dict = {}
                 for item in results_of((catalogs or {}).get(r.run_id, [])):
@@ -120,12 +127,41 @@ class ModelTree(QTreeWidget):
                         groups[item.group] = self._add(run, item.group, node)
                     leaf = Node("result", r.run_id, item.key, item.label)
                     self._add(groups[item.group], item.label, leaf)
+        self._roll_up(self.invisibleRootItem())
         for item in self._items():
             node = item.data(0, ROLE)
             if self._key(item) in opened or node.kind in ("project", "section"):
                 item.setExpanded(True)
             if keep is not None and node == keep:
                 self.setCurrentItem(item)
+
+    def _state(self, item: QTreeWidgetItem, state) -> None:
+        """An item's state icon and, in its tooltip, what it means."""
+        from puzzle.gui.icons import state_icon
+
+        if state is None:
+            return
+        item.setIcon(0, state_icon(state.state))
+        item.setToolTip(0, state.words)
+        item.setData(0, STATE, state.state)
+
+    def _roll_up(self, item: QTreeWidgetItem) -> str | None:
+        """Headings (sections, the project, a swept study's runs) show their worst child."""
+        from puzzle.project.status import State, worst
+
+        found = [self._roll_up(item.child(i)) for i in range(item.childCount())]
+        own = item.data(0, STATE) if item is not self.invisibleRootItem() else None
+        node = item.data(0, ROLE) if item is not self.invisibleRootItem() else None
+        if node is not None and node.kind in ("project", "section", "sweep"):
+            below = [s for s in found if s]
+            if below:
+                state = worst(below)
+                urgent = state not in ("complete", "up_to_date", "unused", "not_run")
+                n = sum(1 for s in below if s == state)
+                reason = f"{n} item{'s' if n != 1 else ''} below" if urgent else ""
+                self._state(item, State(state, reason))
+                return state
+        return own
 
     def current(self) -> Node | None:
         item = self.currentItem()

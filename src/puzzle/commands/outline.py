@@ -21,7 +21,9 @@ from puzzle.model.schema import (
 )
 
 
-def outline(project: Project, *, ids: bool = False) -> str:
+def outline(project: Project, *, ids: bool = False, runs=None) -> str:
+    """The model as text; with the store's `runs`, each study and derived result says
+    its state ("up to date", "out of date", "not run yet": ADR 0033)."""
     lines = [f'Project "{project.name}"  (agents: {project.agent.level}, mcp: {project.agent.mcp})']
     units = project.units()
     if units is not None:
@@ -65,8 +67,18 @@ def outline(project: Project, *, ids: bool = False) -> str:
             for f in ph.features:
                 vals = f" {_values(f.values)}" if f.values else ""
                 lines.append(f"        {f.type} on {f.selection}{vals}")
+    states = {}
+    if runs is not None:
+        from puzzle.project.status import status
+
+        states = status(project, runs)
+
+    def state(obj) -> str:
+        st = states.get(str(obj.id))
+        return f"  [{st.words.lower()}]" if st is not None else ""
+
     for s in project.of_type(Study):
-        lines.append(head("Study", s) + f": {s.solver} on {names.get(s.component, '?')}")
+        lines.append(head("Study", s) + f": {s.solver} on {names.get(s.component, '?')}" + state(s))
         for step in s.steps:
             if isinstance(step, SweepStep):
                 params = ", ".join(p.name for p in step.parameters)
@@ -109,7 +121,7 @@ def outline(project: Project, *, ids: bool = False) -> str:
             )
             extra = f" of {d.quantity} ({d.extreme})" if d.method == "envelope" else ""
             what = f"{d.method}{extra}: {cases}"
-        lines.append(head("Result", d) + f": {what}")
+        lines.append(head("Result", d) + f": {what}" + state(d))
     problems = project.problems()
     if problems:
         lines.append("Problems:")

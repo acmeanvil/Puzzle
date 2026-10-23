@@ -279,8 +279,15 @@ def _export(args) -> int:
 
 def _outline(args) -> int:
     from puzzle.commands import outline
+    from puzzle.errors import PuzzleError
+    from puzzle.project.layout import RESULTS_DIR
+    from puzzle.results.store import ResultStore
 
-    print(outline(_load(args.project), ids=args.ids))
+    try:
+        runs = ResultStore(Path(args.project) / RESULTS_DIR).runs()
+    except PuzzleError:
+        runs = None
+    print(outline(_load(args.project), ids=args.ids, runs=runs))
     return 0
 
 

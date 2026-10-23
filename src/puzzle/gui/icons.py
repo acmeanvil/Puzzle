@@ -77,3 +77,36 @@ def icon(name: str) -> QIcon:
         painter.end()
         out.addPixmap(pixmap)
     return out
+
+
+# Tree states (ADR 0033): a shape and a colour each, so they read without colour too.
+STATE_DRAWINGS = {
+    "complete": ("#4caf50", '<circle cx="12" cy="12" r="4" fill="{c}" stroke="none"/>'),
+    "up_to_date": ("#4caf50", '<path d="M5 12l5 5 9-10"/>'),
+    "missing": ("#e5534b", '<circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16.5v.5"/>'),
+    "failed": ("#e5534b", '<circle cx="12" cy="12" r="9"/><path d="M8.5 8.5l7 7M15.5 8.5l-7 7"/>'),
+    "out_of_date": ("#d4a72c", '<path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18v.5"/>'),
+    "running": ("#4f8fe6", '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
+    "not_run": ("#8a94a3", '<circle cx="12" cy="12" r="7"/>'),
+    "unused": ("#8a94a3", '<path d="M6 12h12"/>'),
+}
+
+
+@cache
+def state_icon(state: str) -> QIcon:
+    """The small icon a tree item shows for its state."""
+    from PySide6.QtSvg import QSvgRenderer
+
+    colour, body = STATE_DRAWINGS.get(state, STATE_DRAWINGS["complete"])
+    head = _HEAD.format(c=colour).replace('stroke-width="1.8"', 'stroke-width="2.4"')
+    svg = (head + body.format(c=colour) + "</svg>").encode()
+    renderer = QSvgRenderer(QByteArray(svg))
+    out = QIcon()
+    for size in (12, 16, 24, 32):
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        renderer.render(painter, QRectF(0, 0, size, size))
+        painter.end()
+        out.addPixmap(pixmap)
+    return out

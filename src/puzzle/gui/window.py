@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QLabel,
     QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
@@ -39,7 +40,7 @@ from puzzle.errors import PuzzleError
 from puzzle.gui.agent_panel import AgentPanel
 from puzzle.gui.properties import PropertiesPanel
 from puzzle.gui.tasks import Task, start
-from puzzle.gui.tree import ModelTree, Node
+from puzzle.gui.tree import ROLE, ModelTree, Node
 from puzzle.gui.viewport import Viewport
 from puzzle.mesh.mesh import Mesh
 from puzzle.model.schema import Component, Geometry, ResultDefinition, Study
@@ -99,6 +100,13 @@ class ResultsBar(QWidget):
             row.addWidget(widget)
         row.addWidget(self.deform)
         row.addWidget(self.title, 1)
+        # ADR 0033: a result made before the model changed says so, with a way back.
+        self.stale = QLabel("")
+        self.stale.setStyleSheet("color: #d4a72c")
+        self.rerun = QPushButton("Run again")
+        for w in (self.stale, self.rerun):
+            row.addWidget(w)
+            w.hide()
         self.field.currentIndexChanged.connect(lambda _: on_change())
         self.step.valueChanged.connect(lambda _: on_change())
         self.deform.toggled.connect(lambda _: on_change())
@@ -136,6 +144,12 @@ class ResultsBar(QWidget):
 
     def item(self):
         return self.items.get(self.field.currentData())
+
+    def set_stale(self, reason: str | None) -> None:
+        """Out of date (with why), or current: the banner and Run again show or hide."""
+        self.stale.setText(f"Out of date: {reason}" if reason else "")
+        self.stale.setVisible(bool(reason))
+        self.rerun.setVisible(bool(reason))
 
 
 def _measure(value: float, unit: str) -> str:
@@ -244,6 +258,9 @@ class MainWindow(QMainWindow):
         # Which part of the work is on screen (ADR 0029): model, geometry, sketch or
         # results. Panels that belong to one context show only in it.
         self.context = "model"
+        self.states: dict = {}  # object id -> its state (ADR 0033)
+        self.running: set[str] = set()  # study ids being run here
+        self.failed_studies: set[str] = set()  # study ids whose last run here failed
         self.pick_bar = PickBar(self)
         self.pick_bar.hide()
         self.log = QPlainTextEdit(readOnly=True)
@@ -313,6 +330,8 @@ class MainWindow(QMainWindow):
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._context_menu)
         self.properties.edited.connect(self._edit)
+        self.problems.itemDoubleClicked.connect(self._problem_chosen)
+        self.results_bar.rerun.clicked.connect(self._rerun_shown)
         self.watcher = QFileSystemWatcher(self)
         self.watcher.fileChanged.connect(lambda _: self._reload_soon())
         self._reload_timer = QTimer(self, singleShot=True, interval=300)
@@ -369,7 +388,10 @@ class MainWindow(QMainWindow):
                 if exc.code == "stale_store" and self._offer_new_store():
                     return self.refresh()
                 self.report(exc)
-        self.tree.populate(s.project, runs, self._field_catalogs(runs))
+        from puzzle.project.status import status
+
+        self.states = status(s.project, runs, self.running, self.failed_studies)
+        self.tree.populate(s.project, runs, self._field_catalogs(runs), self.states)
         self.history.clear()
         names = {str(o.id): o.name for o in s.project.objects.values()}
         for entry in s.history(limit=200):  # newest first
@@ -464,13 +486,44 @@ class MainWindow(QMainWindow):
         s = self.session
         self.problems.clear()
         for p in s.project.problems():
-            self.problems.addItem(f"{p.object}: {p.message}")
+            item = QListWidgetItem(f"{p.object}: {p.message}")
+            item.setData(Qt.ItemDataRole.UserRole, p.object)  # double-click selects it
+            self.problems.addItem(item)
         for geo, findings in self.geometry_findings.items():  # from "Check geometry"
             for f in findings:
                 self.problems.addItem(f"{geo} (geometry {f['severity']}): {f['message']}")
         for line in self.detached_lines():
             self.problems.addItem(line)
         self.output_tabs.setTabText(2, f"Problems ({self.problems.count()})")
+
+    def _problem_chosen(self, item) -> None:
+        """A problem's object, selected in the tree (ADR 0033)."""
+        name = item.data(Qt.ItemDataRole.UserRole)
+        for tree_item in self.tree._items():
+            node = tree_item.data(0, ROLE)
+            if node.kind in ("object", "derived") and node.label == name:
+                self.left_tabs.setCurrentIndex(0)
+                self.tree.setCurrentItem(tree_item)
+                return
+
+    def _mark_problems(self, name: str | None) -> None:
+        """The selected object's problems, highlighted in the Problems list."""
+        for i in range(self.problems.count()):
+            item = self.problems.item(i)
+            item.setSelected(name is not None and item.data(Qt.ItemDataRole.UserRole) == name)
+
+    def _rerun_shown(self) -> None:
+        """Run again the study whose (out-of-date) result is shown."""
+        run_id = getattr(self, "_result_run", "") or ""
+        if run_id.startswith("derived:") or not run_id:
+            return
+        record = self._store().get_run(run_id)
+        for item in self.tree._items():
+            node = item.data(0, ROLE)
+            if node.kind == "object" and node.object == record.study_id:
+                self.tree.setCurrentItem(item)
+                self.run_selected()
+                return
 
     def detached_lines(self) -> list[str]:
         """Detached selection members of the components meshed or previewed so far."""
@@ -731,10 +784,14 @@ class MainWindow(QMainWindow):
         self.output_tabs.setCurrentWidget(self.log)
         self.log.appendPlainText(f"--- {study.name}: {study.solver}")
 
+        sid = str(study.id)
+
         def work(emit):
-            return s.submit(RunStudy(study=str(study.id)), on_output=emit)
+            return s.submit(RunStudy(study=sid), on_output=emit)
 
         def done(outcome) -> None:
+            self.running.discard(sid)
+            self.failed_studies.discard(sid)
             self.refresh()
             run = outcome.run
             cached = " (reused an identical run)" if run is not None and run.cached else ""
@@ -744,7 +801,14 @@ class MainWindow(QMainWindow):
                 self.tree.select(Node("run", run.run_id, "", ""))
                 self._select_run(run.run_id)
 
-        return self.background(f"Running {study.name}…", work, done)
+        def failed(_exc) -> None:
+            self.running.discard(sid)
+            self.failed_studies.add(sid)
+            self.refresh()
+
+        self.running.add(sid)
+        self.refresh()  # the tree shows it running
+        return self.background(f"Running {study.name}…", work, done, failed=failed)
 
     # --- selection ---------------------------------------------------------------
 
@@ -773,6 +837,7 @@ class MainWindow(QMainWindow):
         from puzzle.gui.choices import choices
 
         project = s.project
+        self._mark_problems(obj.name)
         self.properties.show_object(
             str(obj.id),
             obj.model_dump(mode="json"),
@@ -923,6 +988,10 @@ class MainWindow(QMainWindow):
         self.results_bar.blockSignals(True)
         self.results_bar.load(self.result[1], key)
         self.results_bar.blockSignals(False)
+        from puzzle.project.status import run_state
+
+        state = run_state(record, self.session.project)
+        self.results_bar.set_stale(state.reason if state.state == "out_of_date" else None)
         self.set_context("results")
         self._redraw_result()
 
@@ -947,6 +1016,10 @@ class MainWindow(QMainWindow):
         self.results_bar.blockSignals(True)
         self.results_bar.load(d.results, key, items=d.items)
         self.results_bar.blockSignals(False)
+        state = self.states.get(str(definition.id))
+        stale = state is not None and state.state == "out_of_date"
+        self.results_bar.set_stale(state.reason if stale else None)
+        self.results_bar.rerun.setVisible(False)  # several studies may feed it
         self.set_context("results")
         self._redraw_result()
 

@@ -79,7 +79,14 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
     @tool(name="outline", description="The model tree as compact text, with any problems.")
     @guarded
     def outline_tool(ids: bool = False) -> str:
-        return outline(session().project, ids=ids)
+        from puzzle.project.layout import RESULTS_DIR
+        from puzzle.results.store import ResultStore
+
+        try:
+            runs = ResultStore(root / RESULTS_DIR).runs()
+        except PuzzleError:  # an old store: the model still outlines
+            runs = None
+        return outline(session().project, ids=ids, runs=runs)
 
     @tool(description="One object's full data (JSON), by name or id.")
     @guarded

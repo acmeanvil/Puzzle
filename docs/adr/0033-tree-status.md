@@ -22,6 +22,21 @@ Problems are listed today in the Problems tab, and objects with a problem get a 
 4. **Out-of-date results stay viewable, marked.** The results bar shows "Out of date: the model changed since this run" with a Run button.
 5. **The state comes from one function,** `project.status(project, store)` → {object or path: state, reason}. The tree, the outline (for agents) and the CLI (`puzzle outline`) all use it.
 
+## Built (2026-10-23)
+
+- **One function:** `project/status.py` `status(project, runs, running, failed)` gives each object's `State` (state and reason).
+  - A study is up to date when its stored runs cover every current run key, out of date when it has runs but not those, and not run otherwise.
+  - Failed and running come from the window, since failed runs aren't stored.
+  - Derived results take the worst state of the studies they read.
+  - `run_state` checks one stored run.
+- **The tree:**
+  - every object, derived result and run gets a state icon and a tooltip saying why (`gui/icons.py` `state_icon`: a shape and a colour each);
+  - sections, the project and a swept study's heading show their worst child, counted ("2 items below");
+  - the "⚠" suffix is gone.
+- **Problems:** double-clicking a problem selects its object. Selecting an object highlights its problems rather than filtering the list, which keeps the other problems in view.
+- **Results bar:** an out-of-date result shows "Out of date: the model changed since this run", with Run again.
+- **The outline** (MCP `outline`, `puzzle outline`) tags each study and derived result with its state when the store is readable.
+
 ## Consequences
 
 - Users see at a glance why a study won't run, without opening Problems.
