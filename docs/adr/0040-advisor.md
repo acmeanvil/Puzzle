@@ -1,0 +1,40 @@
+# 0040. An Advisor: the next step, from the project's state
+
+- Status: Proposed
+- Date: 2026-10-23
+
+## Context
+
+Newcomers to FEA tools ask "what do I do next?". Salome-Meca's reviews list the missing overview as a top complaint. PrePoMax's optional Advisor panel (Help → Advisor) walks through a nine-step workflow, and users recommend it as "like having a tutor" (review item 15). Puzzle already knows much of what is missing:
+
+- `Project.problems()` (unknown selections, unconstrained studies, incomplete materials);
+- material completeness;
+- tree states (ADR 0033).
+
+## Decision
+
+1. **An Advisor dock,** collapsed by default (ADR 0031), lists the workflow for the selected component and study:
+   1. geometry;
+   2. selections;
+   3. materials assigned;
+   4. mesh;
+   5. physics and its supports and loads;
+   6. study and steps;
+   7. run;
+   8. results.
+
+   Each line has a state (done, needed, optional) and one action button that goes there ("Assign a material…", "Add a fixed support…").
+2. **It is computed, not scripted.** The steps come from the project's state and the physics in use: a flow study asks for an inlet and an outlet, a structural one for a support. Each comes with its reason from the same problem codes the Problems tab shows. It never blocks: experts can ignore it.
+3. **The text is short and comes from one table** shared with ADR 0036's descriptions and with the agent's outline, so the Advisor, the tooltips and the agent say the same thing.
+4. **A first-run choice:** on a new project, the Advisor opens, and the cantilever example is offered as a guided tour (open it, mesh it, run it, look at the result, each step pointing at its button).
+
+## Consequences
+
+- New users get a path without a wizard, and the same states help agents and the tree.
+- Each physics needs its "what's required" list, which is mostly the same knowledge as the `unconstrained` and `incomplete_material` checks, written once.
+- The Advisor must stay quiet for experts: it is collapsed after the first project, and remembers being closed.
+
+## Alternatives considered
+
+- A wizard per analysis type: it fixes the order and hides the tree, and Puzzle's model is a tree on purpose (ADR 0009).
+- Leave guidance to the AI agent: it is useful, but not everyone runs an agent, and the Advisor works offline and instantly.

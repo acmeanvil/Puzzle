@@ -60,3 +60,13 @@ Netgen 6.2 is on conda-forge for every platform Puzzle supports (`netgen`, LGPL-
 - Expose only the typed common options: simpler, but leaves expert users stuck at the GUI's edge.
 - Raw Gmsh `.geo` script editing: complete, but bypasses named selections and the command layer.
 - Salome's SMESH: broad (hexa sweeps, NETGEN, MG-plugins), but a large dependency that is hard to package across platforms.
+
+## Review notes (2026-10-23)
+
+The interface review against Salome-Meca and PrePoMax (item 13) confirms this ADR's scope and adds three things taken from PrePoMax:
+
+- **Edge-seed preview:** show the seeds on edges before meshing, as PrePoMax's "Preview Edge Mesh" does.
+- **Automatic method detection:** a part that can be swept, revolved or meshed transfinitely is meshed that way, and the view colours parts by method and says why a part can't be swept (PrePoMax 3.0).
+- **Conflicting local sizes stop the mesh with a reason,** rather than being changed silently.
+
+SMESH's quality controls (about 27 measures) are the reference for item 5.

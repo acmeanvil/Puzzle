@@ -62,3 +62,7 @@ The details of CalculiX's knots and couplings, and how beam rotations meet a cou
 - Solid bolts with contact: the most faithful, and already possible, but slow to build and to solve. It stays available for the bolts that matter.
 - Springs only (CBUSH-like): simpler, but they need stiffnesses the user must work out. A spring connector with given stiffnesses may come later beside the beam.
 - Beams as geometry first: a larger change to geometry, naming and meshing before any fastener could be made.
+
+## Review notes (2026-10-23)
+
+The interface review (item 11) found that PrePoMax has no beam elements in its GUI. Forum users add them with keywords and find it problematic. That gap is a reason to keep beam fasteners early in Puzzle's plan. ADR 0034's "same as" selection (all holes of one radius) is what fastener creation from holes builds on.

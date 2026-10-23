@@ -50,3 +50,7 @@ The maintainer asked whether CalculiX and Code_Aster include linear buckling and
 
 - Buckling as a setting of the modal step: the solvers treat it as a separate analysis, and its results mean something different (load factors, not frequencies).
 - Nonlinear buckling only: more general, but slower, harder to set up, and not what a first check needs.
+
+## Review notes (2026-10-23)
+
+The interface review (item 10) found buckling in both reference tools: a buckling step in PrePoMax, and CALC_MODES in Code_Aster. A PrePoMax user found its workflow for an imperfection taken from a buckling mode shape easier than Abaqus/CAE's. The follow-up in point 5 should match that: one action, "Use mode N as an imperfection", that writes a geometry-modifying transfer.
