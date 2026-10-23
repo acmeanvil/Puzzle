@@ -627,6 +627,12 @@ class MainWindow(QMainWindow):
         if node.kind in ("run", "result", "result_group"):
             self._select_run(node.object, node.path if node.kind == "result" else None)
             return
+        if node.kind in ("sweep", "compare"):
+            runs = [r for r in self._store().runs() if r.study_id == node.object and r.point]
+            self.properties.show_text(
+                {"Points run": len({r.point for r in runs}), "Compare": "double-click Compare…"}
+            )
+            return
         obj = s.project.objects.get(_uuid(node.object)) if node.object else None
         if obj is None:
             self.properties.show_text({"project": s.project.name} if node.kind == "project" else {})
@@ -941,6 +947,46 @@ class MainWindow(QMainWindow):
         dialog = ReattachDialog(geometry, reports, rules, self)
         return dialog.choices() if dialog.exec() else None
 
+    def compare_cases(self, study_id: str) -> list:
+        """A swept study's points as Compare cases: the newest run of each point."""
+        from puzzle.post.compare import Case
+        from puzzle.sweep import title
+
+        store = self._store()
+        seen, cases = set(), []
+        for r in reversed(store.runs()):  # newest first
+            labels = r.point_labels()
+            if r.study_id != study_id or not labels or title(labels) in seen:
+                continue
+            seen.add(title(labels))
+            cases.append(
+                Case(
+                    title(labels),
+                    store.read_mesh(r.mesh_id),
+                    store.read_results(r.run_id),
+                    r.run_id,
+                )
+            )
+        return cases[::-1]  # in the order they ran
+
+    def open_compare(self, study_id: str):
+        """The Compare window for a swept study (side by side, difference, summary)."""
+        from puzzle.gui.compare import CompareWindow
+
+        cases = self.compare_cases(study_id)
+        if len(cases) < 2:
+            self.statusBar().showMessage("Compare needs at least two runs of the study", 8000)
+            return None
+        study = self.session.project.objects.get(_uuid(study_id))
+        window = CompareWindow(study.name if study else cases[0].label, cases, self)
+        window.show()
+        self._compare = window  # kept open beside the main window
+        return window
+
+    def run_dialog(self, dialog) -> bool:
+        """Show a dialog and say whether it was accepted (tests replace this to fill it)."""
+        return bool(dialog.exec())
+
     def ask_yes(self, title: str, text: str) -> bool:
         """A yes or no question (tests replace this)."""
         reply = QMessageBox.question(self, title, text)
@@ -958,6 +1004,8 @@ class MainWindow(QMainWindow):
         obj = self._object(node)
         if node is not None and node.kind == "operation" and isinstance(obj, Geometry):
             menus.edit_step(self, obj, int(node.path.split(".")[1]))
+        elif node is not None and node.kind == "compare":
+            self.open_compare(node.object)
 
     def _context_menu(self, pos) -> None:
         from puzzle.gui.menus import build_menu
@@ -1021,7 +1069,18 @@ class MainWindow(QMainWindow):
         return ResultStore(self.session.root / RESULTS_DIR)
 
     def _object(self, node: Node | None):
-        if node is None or not node.object or node.kind in ("run", "result", "result_group"):
+        if (
+            node is None
+            or not node.object
+            or node.kind
+            in (
+                "run",
+                "result",
+                "result_group",
+                "sweep",
+                "compare",
+            )
+        ):
             return None
         return self.session.project.objects.get(_uuid(node.object))
 

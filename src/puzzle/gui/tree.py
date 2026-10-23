@@ -81,11 +81,30 @@ class ModelTree(QTreeWidget):
                 self._children(item, obj, project)
         if runs:
             from puzzle.post.quantities import catalog as results_of
+            from puzzle.sweep import title
 
             section = self._add(root, "Results", Node("section", label="Results"))
-            for r in reversed(runs):
-                text = f"{r.study_name} · {solver_label(r.solver)} · {r.started_at:%Y-%m-%d %H:%M}"
-                run = self._add(section, text, Node("run", r.run_id, "", text))
+            sweeps: dict[str, tuple[QTreeWidgetItem, set]] = {}  # study id -> heading, points
+            for r in reversed(runs):  # newest first
+                when = f"{solver_label(r.solver)} · {r.started_at:%Y-%m-%d %H:%M}"
+                labels = r.point_labels()
+                if labels:  # one point of a swept study: under the study's heading
+                    if r.study_id not in sweeps:
+                        head = self._add(
+                            section, f"{r.study_name}: compare", Node("sweep", r.study_id)
+                        )
+                        sweeps[r.study_id] = (head, set())
+                        self._add(head, "Compare…", Node("compare", r.study_id, "", "Compare"))
+                    head, seen = sweeps[r.study_id]
+                    point = title(labels)
+                    if point in seen:  # an older run of the same point
+                        continue
+                    seen.add(point)
+                    text = f"{point} · {when}"
+                    run = self._add(head, text, Node("run", r.run_id, "", text))
+                else:
+                    text = f"{r.study_name} · {when}"
+                    run = self._add(section, text, Node("run", r.run_id, "", text))
                 # Every result the run can show, by field (double-click or select one).
                 groups: dict = {}
                 for item in results_of((catalogs or {}).get(r.run_id, [])):
@@ -147,7 +166,9 @@ class ModelTree(QTreeWidget):
         elif isinstance(obj, Study):
             for i, step in enumerate(obj.steps):
                 if isinstance(step, SweepStep):
-                    text = f"Sweep ({len(step.points())} points)"
+                    from puzzle.sweep import describe
+
+                    text = describe(step)
                 else:
                     what = ", ".join(label(p).lower() for p in step.physics)
                     text = label(step.type) + (f" · {what}" if what else "")

@@ -145,6 +145,7 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         add("Delete", window.delete_selected)
     elif isinstance(obj, Study) and node.kind == "object":
         add("Run", window.run_selected)
+        add("Materials…", lambda: study_materials(window, obj))
         steps = menu.addMenu("Add step")
         for t in STEP_TYPES:
             action = steps.addAction(label(t))
@@ -157,6 +158,8 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         add("Delete", window.delete_selected)
     elif node.kind == "run":
         add("Export to ParaView…", lambda: export_run(window, node.object))
+    elif node.kind in ("sweep", "compare"):
+        add("Compare…", lambda: window.open_compare(node.object))
     return menu if menu.actions() else None
 
 
@@ -229,6 +232,30 @@ def copy_component(window, comp: Component):
 
 def remove(window, obj, path: str):
     return window.submit(Edit(object=str(obj.id), ops=[EditOp(op="remove", path=path)]))
+
+
+def study_materials(window, study: Study):
+    """The study's material table: one material per location, or several to compare."""
+    from puzzle.gui.study_materials import StudyMaterials
+
+    def add():
+        key = window.pick_material()
+        if not key:
+            return None
+        before = {m.id for m in window.session.project.of_type(Material)}
+        window.add_material(key)
+        new = [m for m in window.session.project.of_type(Material) if m.id not in before]
+        return (window.session.project, new[0].id) if new else None
+
+    dialog = StudyMaterials(window.session.project, study, window, add_material=add)
+    if not window.run_dialog(dialog):
+        return None
+    steps = dialog.steps()
+    if steps == [s.model_dump(mode="json") for s in study.steps]:
+        return None
+    return window.submit(
+        Edit(object=str(study.id), ops=[EditOp(op="set", path="steps", value=steps)])
+    )
 
 
 def add_step(window, study: Study, kind: str):

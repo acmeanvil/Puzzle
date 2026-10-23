@@ -110,10 +110,13 @@ def words(name: str) -> str:
 
 
 class SceneView(QWidget):
+    camera_moved = Signal()
+
     """A VTK scene rendered off screen and painted as an image, with its own mouse
     handling: left-drag rotates, shift- or middle-drag pans, right-drag, the wheel
     (two-finger scroll) or a trackpad pinch zooms, and a double-click reports the
-    picked point to `on_double_click`.
+    picked point to `on_double_click`. `camera_moved` says the user turned, panned or
+    zoomed it (linked views follow).
 
     On-screen OpenGL inside Qt windows leaves unrefreshed rows along the bottom of the
     view on some Macs (Intel Iris here, with every embedding tried: native window,
@@ -196,11 +199,13 @@ class SceneView(QWidget):
             camera.Dolly(1.01 ** (-dy))
         self.plotter.renderer.ResetCameraClippingRange()
         self.refresh()
+        self.camera_moved.emit()
 
     def wheelEvent(self, event) -> None:  # noqa: N802
         self.plotter.camera.Dolly(1.1 ** (event.angleDelta().y() / 120))
         self.plotter.renderer.ResetCameraClippingRange()
         self.refresh()
+        self.camera_moved.emit()
 
     def event(self, event) -> bool:
         """Trackpad pinch zooms (macOS sends it as a native gesture, not a wheel)."""
@@ -214,6 +219,7 @@ class SceneView(QWidget):
             self.plotter.camera.Dolly(1.0 + event.value())
             self.plotter.renderer.ResetCameraClippingRange()
             self.refresh()
+            self.camera_moved.emit()
             return True
         return super().event(event)
 
@@ -453,9 +459,11 @@ class Viewport(QWidget):
         step_index: int = -1,
         deform: bool = True,
         item=None,
+        clim: tuple[float, float] | None = None,
     ) -> dict:
         """A result field on the (deformed) mesh; returns what was shown. `item` (from
-        `post.quantities.catalog`) chooses one of the results the field gives."""
+        `post.quantities.catalog`) chooses one of the results the field gives; `clim`
+        fixes the colour scale (SI), so several views can share one."""
         steps = [s for s in results.steps if field in s.fields]
         step = steps[step_index] if steps else pick_step(results, field)
         grid = to_grid(mesh, step)
@@ -470,6 +478,8 @@ class Viewport(QWidget):
             values = compute(item, raw, f.components)
             values, unit = _display(values, item.unit)
             data[name] = values
+            if clim is not None:
+                clim = tuple(float(c) for c in _display(np.asarray(clim, float), item.unit)[0])
         else:
             name = scalar or DEFAULT_SCALAR.get(field, field)
             arrays = set(grid.point_data) | set(grid.cell_data)
@@ -501,6 +511,7 @@ class Viewport(QWidget):
             # the view's bottom edge on Retina displays.
             "title": f"{title}, {label}" + (f", deformation ×{scale:.3g}" if scale else ""),
             "unit": unit,
+            "clim": clim,
         }
         if self.plotter is not None:
             self.plotter.clear()
@@ -508,6 +519,7 @@ class Viewport(QWidget):
                 grid,
                 scalars=name,
                 cmap="turbo",
+                clim=clim,
                 scalar_bar_args={
                     # The unit only: the result's name is in the results bar, and VTK
                     # centres a long title over the bar, past the view's edge.
