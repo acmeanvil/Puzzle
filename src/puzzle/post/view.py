@@ -33,6 +33,7 @@ class View:
     mode: int | None = None
     deform: float | str | None = "auto"  # scale factor, "auto", or None for undeformed
     show_edges: bool = False
+    cut: object = None  # a post.cuts.Cut (ADR 0038)
 
 
 def render(
@@ -42,8 +43,10 @@ def render(
     *,
     screenshot: Path | None = None,
     window_size: tuple[int, int] = (1200, 800),
+    animate: Path | None = None,
 ) -> dict:
-    """Render the view; with `screenshot`, off screen to that PNG. Returns what was shown."""
+    """Render the view; with `screenshot`, off screen to that PNG; with `animate`, one
+    loop of the deformation to that GIF (ADR 0038). Returns what was shown."""
     import pyvista as pv
 
     step = pick_step(results, view.field, step=view.step, mode=view.mode)
@@ -53,6 +56,7 @@ def render(
     if scalar not in available:
         raise KeyError(f"no '{scalar}' to show; available: {sorted(available)}")
 
+    base = grid
     scale = 0.0
     if view.deform is not None and "displacement" in grid.point_data:
         u = np.nan_to_num(grid.point_data["displacement"])
@@ -66,8 +70,22 @@ def render(
 
     label = f"mode {step.mode}: {step.value:.4g} Hz" if step.mode else f"step {step.index}"
     title = f"{scalar} ({label})" + (f", deformation x{scale:.3g}" if scale else "")
-    plotter = pv.Plotter(off_screen=screenshot is not None, window_size=list(window_size))
-    plotter.add_mesh(grid, scalars=scalar, cmap="turbo", scalar_bar_args={"title": scalar})
+    values = grid.point_data[scalar] if scalar in grid.point_data else grid.cell_data[scalar]
+    clim = (float(np.nanmin(values)), float(np.nanmax(values)))
+    off = screenshot is not None or animate is not None
+    plotter = pv.Plotter(off_screen=off, window_size=list(window_size))
+
+    def shown_grid(factor: float):
+        g = base.warp_by_vector("displacement", factor=scale * factor) if scale else base
+        if view.cut is not None:
+            from puzzle.post.cuts import clip
+
+            g, _ = clip(g, view.cut, base.bounds)
+        return g
+
+    plotter.add_mesh(
+        shown_grid(1.0), scalars=scalar, cmap="turbo", clim=clim, scalar_bar_args={"title": scalar}
+    )
     if view.show_edges:
         # Outline the real element edges; show_edges on quadratic cells draws every
         # sub-triangle VTK tessellates them into and darkens the whole model.
@@ -76,13 +94,24 @@ def render(
     plotter.add_text(title, font_size=10)
     plotter.add_axes()
     plotter.view_isometric()
-    if screenshot is not None:
+    if animate is not None:
+        from puzzle.post.cuts import deformation_frames, save_gif
+
+        frames = []
+        for factor in deformation_frames():
+            plotter.clear_actors()
+            plotter.add_mesh(
+                shown_grid(factor), scalars=scalar, cmap="turbo", clim=clim, show_scalar_bar=False
+            )
+            frames.append(plotter.screenshot(return_img=True))
+        save_gif(frames, animate)
+        plotter.close()
+    elif screenshot is not None:
         screenshot.parent.mkdir(parents=True, exist_ok=True)
         plotter.screenshot(str(screenshot))
         plotter.close()
     else:
         plotter.show()
-    values = grid.point_data[scalar] if scalar in grid.point_data else grid.cell_data[scalar]
     return {
         "scalar": scalar,
         "min": float(np.nanmin(values)),

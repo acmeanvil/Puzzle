@@ -407,6 +407,7 @@ class ViewBar(QWidget):
             lambda on: viewport.set_style(parallel=on),
             checkable=True,
         )
+        add("section", "Section cut", self.toggle_cut_bar, checkable=True)
         add("extremes", "Max and min markers", viewport.show_extremes, checkable=True)
         self.actions_by_name["extremes"].setChecked(True)
         add("symbols", "Supports and loads", viewport.set_symbols_shown, checkable=True)
@@ -415,6 +416,19 @@ class ViewBar(QWidget):
         add("copy", "Copy image", self.copy_image)
         add("camera", "Save image…", self.save_image)
         self.adjustSize()
+
+    def toggle_cut_bar(self, on: bool) -> None:
+        """The section cut's controls under this bar; off removes the cut."""
+        if on:
+            if getattr(self, "cut_bar", None) is None:
+                self.cut_bar = CutBar(self.viewport)
+            self.cut_bar.show()
+            self.cut_bar.apply()
+            self.place()
+        else:
+            if getattr(self, "cut_bar", None) is not None:
+                self.cut_bar.hide()
+            self.viewport.set_cut(None)
 
     def copy_image(self) -> None:
         from PySide6.QtWidgets import QApplication
@@ -443,11 +457,64 @@ class ViewBar(QWidget):
         parent = self.parentWidget()
         self.move(max(0, parent.width() - self.width() - 8), 8)
         self.raise_()
+        bar = getattr(self, "cut_bar", None)
+        if bar is not None and bar.isVisible():
+            bar.adjustSize()
+            bar.move(max(0, parent.width() - bar.width() - 8), self.y() + self.height() + 4)
+            bar.raise_()
+
+
+class CutBar(QWidget):
+    """A section cut's controls (ADR 0038): the plane's axis, where across the model,
+    which side is kept, and a ghost of the rest."""
+
+    def __init__(self, viewport) -> None:
+        from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QSlider
+
+        super().__init__(viewport)
+        self.viewport = viewport
+        self.setObjectName("cut_bar")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(
+            "QWidget#cut_bar { background: rgba(40, 44, 52, 170); border-radius: 6px; }"
+            "QLabel, QCheckBox { color: white; }"
+        )
+        row = QHBoxLayout(self)
+        row.setContentsMargins(6, 2, 6, 2)
+        self.axis = QComboBox()
+        for text, key in (("Across X", "x"), ("Across Y", "y"), ("Across Z", "z")):
+            self.axis.addItem(text, key)
+        self.position = QSlider(Qt.Orientation.Horizontal)
+        self.position.setRange(0, 100)
+        self.position.setValue(50)
+        self.position.setFixedWidth(160)
+        self.flip = QCheckBox("Flip")
+        self.ghost = QCheckBox("Ghost")
+        self.ghost.setChecked(True)
+        for w in (self.axis, self.position, self.flip, self.ghost):
+            row.addWidget(w)
+        self.axis.currentIndexChanged.connect(self.apply)
+        self.position.valueChanged.connect(self.apply)
+        self.flip.toggled.connect(self.apply)
+        self.ghost.toggled.connect(self.apply)
+
+    def apply(self, *_) -> None:
+        from puzzle.post.cuts import Cut
+
+        self.viewport.set_cut(
+            Cut(
+                self.axis.currentData(),
+                self.position.value() / 100,
+                self.flip.isChecked(),
+                self.ghost.isChecked(),
+            )
+        )
 
 
 class Viewport(QWidget):
     picked_changed = Signal(list)  # the picked entities, [(dim, tag), ...]
     probes_changed = Signal(list)  # the view's probes (ADR 0032)
+    redraw_needed = Signal()  # a setting changed that the window's result must be redrawn for
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -489,6 +556,7 @@ class Viewport(QWidget):
         self._glyph_actors: list[str] = []
         # The shown result, for markers and probes (ADR 0032).
         self.result_state: dict | None = None
+        self.cut = None  # a section cut on results (post.cuts.Cut, ADR 0038)
         self._extremes: list[tuple] = []
         self._mark_actors: list[str] = []
         self.probes: list[dict] = []
@@ -791,6 +859,7 @@ class Viewport(QWidget):
         deform: bool = True,
         item=None,
         clim: tuple[float, float] | None = None,
+        deform_factor: float = 1.0,
     ) -> dict:
         """A result field on the (deformed) mesh; returns what was shown. `item` (from
         `post.quantities.catalog`) chooses one of the results the field gives; `clim`
@@ -828,6 +897,8 @@ class Viewport(QWidget):
             u = np.nan_to_num(grid.point_data["displacement"])
             umax = float(np.linalg.norm(u, axis=1).max())
             scale = 0.1 * grid.length / umax if umax > 0 else 0.0
+            if scale and deform_factor != 1.0:  # an animation frame (ADR 0038)
+                scale *= deform_factor
             if scale:
                 grid = grid.warp_by_vector("displacement", factor=scale)
         label = f"mode {step.mode}: {step.value:.4g} Hz" if step.mode else f"t = {step.value:g}"
@@ -860,6 +931,7 @@ class Viewport(QWidget):
             "clim": clim,
             "max_at": where[hi].tolist(),
             "min_at": where[lo].tolist(),
+            "cut": None,
         }
         tail = f" {unit}" if unit else ""
         self._extremes = [
@@ -869,9 +941,17 @@ class Viewport(QWidget):
         self.probes = []
         self.probes_changed.emit([])
         self.glyphs, self._glyph_actors = [], []  # results show no symbols
+        away = None
+        if self.cut is not None:  # a section cut (ADR 0038), placed on the undeformed model
+            from puzzle.post.cuts import clip
+
+            grid, away = clip(grid, self.cut, base.bounds)
+            self.shown["cut"] = {"axis": self.cut.axis, "fraction": self.cut.fraction}
         if self.plotter is not None:
             self.plotter.clear()
             self._mark_actors = []
+            if away is not None and self.cut.ghost and away.n_cells:
+                self.plotter.add_mesh(away, color="#b8c2cc", opacity=0.15, reset_camera=False)
             self.plotter.add_mesh(
                 grid,
                 scalars=name,
@@ -978,6 +1058,11 @@ class Viewport(QWidget):
             arrows = cloud.glyph(orient="vectors", scale=False, factor=factor, geom=geom)
             self.plotter.add_mesh(arrows, color=g.colour, name=name, reset_camera=False)
             self._glyph_actors.append(name)
+
+    def set_cut(self, cut) -> None:
+        """A section cut on results (`post.cuts.Cut`), or None; the result is redrawn."""
+        self.cut = cut
+        self.redraw_needed.emit()
 
     def set_symbols_shown(self, on: bool) -> None:
         self.style["symbols"] = on
@@ -1155,6 +1240,13 @@ class Viewport(QWidget):
                 self.plotter.enable_parallel_projection()
             else:
                 self.plotter.disable_parallel_projection()
+
+    def pixels(self):
+        """The view as an RGB array (an animation frame), or None without a 3D view."""
+        if self.plotter is None:
+            return None
+        self.plotter.render()
+        return np.ascontiguousarray(self.plotter.screenshot(return_img=True))
 
     def image(self):
         """The view as a QImage (None without a 3D view)."""

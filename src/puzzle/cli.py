@@ -95,9 +95,16 @@ def _parser() -> argparse.ArgumentParser:
             p.add_argument("--deform", default="auto", help="scale factor, 'auto' or 'none'")
             p.add_argument("--edges", action="store_true", help="show element edges")
             p.add_argument("--screenshot", type=Path, help="save a PNG instead of opening a window")
+            p.add_argument("--cut", help="a section cut: axis=fraction, e.g. x=0.5 (ADR 0038)")
+            p.add_argument("--animate", type=Path, help="save one loop of the deformation as a GIF")
         else:
             p.add_argument("output", type=Path, help="the .pvd file to write")
         p.set_defaults(handler=handler)
+
+    p = sub.add_parser("plot", help="a kept probe over the steps, as CSV")
+    p.add_argument("project", type=Path)
+    p.add_argument("probe", help="the kept probe's name")
+    p.set_defaults(handler=_plot)
 
     p = sub.add_parser("outline", help="the model tree as text")
     p.add_argument("project", type=Path)
@@ -245,6 +252,14 @@ def _show(args) -> int:
         if args.deform == "none"
         else (args.deform if args.deform == "auto" else float(args.deform))
     )
+    cut = None
+    if args.cut:
+        from puzzle.post.cuts import Cut
+
+        axis, _, at = args.cut.partition("=")
+        if axis not in ("x", "y", "z") or not at:
+            raise CliError("--cut takes axis=fraction, e.g. x=0.5")
+        cut = Cut(axis, float(at))
     view = View(
         field=args.field,
         scalar=args.scalar,
@@ -252,6 +267,7 @@ def _show(args) -> int:
         mode=args.mode,
         deform=deform,
         show_edges=args.edges,
+        cut=cut,
     )
     try:
         shown = render(
@@ -259,12 +275,32 @@ def _show(args) -> int:
             store.read_results(record.run_id),
             view,
             screenshot=args.screenshot,
+            animate=args.animate,
         )
     except KeyError as exc:
         raise CliError(exc.args[0]) from exc
     print(f"{shown['title']}: {shown['min']:.4g} to {shown['max']:.4g}")
     if args.screenshot:
         print(f"Saved {args.screenshot}")
+    if args.animate:
+        print(f"Saved {args.animate}")
+    return 0
+
+
+def _plot(args) -> int:
+    """A kept probe over the steps, as CSV (ADR 0038)."""
+    from puzzle.commands import resolve
+    from puzzle.model.schema import ResultProbe
+    from puzzle.post.probes import history
+    from puzzle.project.layout import RESULTS_DIR
+    from puzzle.results.store import ResultStore
+
+    project = _load(args.project)
+    probe = resolve(project, args.probe, ResultProbe)
+    rows = history(project, ResultStore(Path(args.project) / RESULTS_DIR), probe)
+    print("step,value")
+    for r in rows:
+        print(f"{r['step']:.6g},{r['value']:.6g}")
     return 0
 
 

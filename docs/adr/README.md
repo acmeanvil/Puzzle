@@ -43,7 +43,7 @@ New record: copy [template.md](template.md) to `NNNN-short-title.md`, set status
 | [0035](0035-load-symbols.md) | Draw supports and loads in the view | Accepted |
 | [0036](0036-property-grid-dialogs.md) | Long editors as property grids with sections, a description box and errors on top | Accepted |
 | [0037](0037-structural-loads-and-constraints.md) | Structural loads and constraints: body loads, remote loads, springs, couplings, local axes, amplitudes | Proposed |
-| [0038](0038-results-cuts-animation-plots.md) | Results tools: section cuts, animation, and plots over steps | Proposed |
+| [0038](0038-results-cuts-animation-plots.md) | Results tools: section cuts, animation, and plots over steps | Accepted |
 | [0039](0039-contact-search.md) | Find contacts between parts automatically | Proposed |
 | [0040](0040-advisor.md) | An Advisor: the next step, from the project's state | Proposed |
 | [0041](0041-structural-dynamics.md) | Structural dynamics: transient and harmonic response | Proposed |

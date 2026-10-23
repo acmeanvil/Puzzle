@@ -99,6 +99,13 @@ class ResultsBar(QWidget):
             row.addWidget(QLabel(label))
             row.addWidget(widget)
         row.addWidget(self.deform)
+        # Animation (ADR 0038): over the deformation, or over the steps when there are
+        # several; saved as a GIF.
+        self.play = QPushButton("▶ Animate")
+        self.play.setCheckable(True)
+        self.save_gif = QPushButton("Save GIF…")
+        row.addWidget(self.play)
+        row.addWidget(self.save_gif)
         row.addWidget(self.title, 1)
         # ADR 0033: a result made before the model changed says so, with a way back.
         self.stale = QLabel("")
@@ -341,6 +348,8 @@ class MainWindow(QMainWindow):
         tabs.addTab(self.log, "Output")
         tabs.addTab(self.history, "History")
         tabs.addTab(self.problems, "Problems")
+        self.plots = PlotsPanel(self)
+        tabs.addTab(self.plots, "Plots")
         self.output_tabs = tabs
         self.messages_dock = self._dock("Messages", tabs, Qt.DockWidgetArea.BottomDockWidgetArea)
         self.agent = AgentPanel(self, provider_factory)
@@ -370,6 +379,14 @@ class MainWindow(QMainWindow):
         self.tree.customContextMenuRequested.connect(self._context_menu)
         self.properties.edited.connect(self._edit)
         self.problems.itemDoubleClicked.connect(self._problem_chosen)
+        self.viewport.redraw_needed.connect(
+            lambda: self._redraw_result() if self.context == "results" else None
+        )
+        self._anim_factor = 1.0
+        self._anim_timer = QTimer(self, interval=70)
+        self._anim_timer.timeout.connect(self._next_frame)
+        self.results_bar.play.toggled.connect(self.animate)
+        self.results_bar.save_gif.clicked.connect(lambda: self.save_animation())
         self.results_bar.rerun.clicked.connect(self._rerun_shown)
         self.watcher = QFileSystemWatcher(self)
         self.watcher.fileChanged.connect(lambda _: self._reload_soon())
@@ -436,6 +453,7 @@ class MainWindow(QMainWindow):
         for entry in s.history(limit=200):  # newest first
             self.history.addItem(_history_line(entry, names))
         self.refresh_problems()
+        self.plots.refresh()
         self.agent.refresh()
         waiting = self.agent.proposals.count()
         if waiting > self._proposals_seen:  # a new proposal: open the agent, no focus
@@ -1138,6 +1156,7 @@ class MainWindow(QMainWindow):
                 step_index=index,
                 deform=self.results_bar.deform.isChecked(),
                 item=item,
+                deform_factor=self._anim_factor,
             )
         except (KeyError, ValueError) as exc:
             self.statusBar().showMessage(str(exc), 8000)
@@ -1149,6 +1168,77 @@ class MainWindow(QMainWindow):
             f"{shown['scalar']} ({shown['step']}): {shown['min']:.4g} … {shown['max']:.4g}{unit}"
         )
         self._result_properties()
+
+    # --- animation (ADR 0038) ------------------------------------------------------
+
+    def animation_frames(self) -> list[tuple[str, float | int]]:
+        """("steps", index) for each step when the result has several, else
+        ("deform", factor) over one loop of the deformation."""
+        from puzzle.post.cuts import deformation_frames
+
+        if self.result is None:
+            return []
+        item = self.results_bar.item()
+        steps = [s for s in self.result[1].steps if item and item.field in s.fields]
+        if len(steps) > 1:
+            return [("steps", i + 1) for i in range(len(steps))]
+        return [("deform", f) for f in deformation_frames()]
+
+    def show_frame(self, frame) -> None:
+        kind, value = frame
+        if kind == "steps":
+            self._anim_factor = 1.0
+            self.results_bar.step.setValue(int(value))  # redraws
+        else:
+            self._anim_factor = float(value)
+            self._redraw_result()
+
+    def animate(self, on: bool) -> None:
+        self._frames = self.animation_frames() if on else []
+        self._frame_index = 0
+        if on and self._frames:
+            self._anim_timer.start()
+        else:
+            self._anim_timer.stop()
+            self._anim_factor = 1.0
+            self._redraw_result()
+
+    def _next_frame(self) -> None:
+        if not self._frames:
+            return
+        self.show_frame(self._frames[self._frame_index % len(self._frames)])
+        self._frame_index += 1
+
+    def save_animation(self, path=None):
+        """One loop of the animation as a GIF (frames rendered off screen)."""
+        from puzzle.post.cuts import save_gif
+
+        if path is None:
+            from PySide6.QtWidgets import QFileDialog
+
+            path, _ = QFileDialog.getSaveFileName(
+                self, "Save animation", "result.gif", "GIF (*.gif)"
+            )
+            if not path:
+                return None
+        playing = self.results_bar.play.isChecked()
+        self.results_bar.play.setChecked(False)
+        frames = []
+        for frame in self.animation_frames():
+            self.show_frame(frame)
+            pixels = self.viewport.pixels()
+            if pixels is not None:
+                frames.append(pixels)
+        self._anim_factor = 1.0
+        self._redraw_result()
+        if playing:
+            self.results_bar.play.setChecked(True)
+        if not frames:
+            self.statusBar().showMessage("No 3D view here to record", 8000)
+            return None
+        out = save_gif(frames, Path(path))
+        self.statusBar().showMessage(f"Saved {out.name} ({len(frames)} frames)", 8000)
+        return out
 
     def _result_properties(self) -> None:
         """The shown result in Properties: its run, its range and where each extreme is
@@ -1867,6 +1957,113 @@ def _position_delta(d: float) -> str:
 
     unit, per_metre = length_unit()
     return f"{d * per_metre:.3g} {unit}"
+
+
+class PlotsPanel(QWidget):
+    """Kept probes over the steps (ADR 0038): against time, increment or frequency, or
+    against another probe (load against deflection). Copied as CSV, saved as PNG."""
+
+    def __init__(self, window) -> None:
+        from puzzle.gui.material_builder import Curve
+
+        super().__init__()
+        self.window = window
+        row = QHBoxLayout(self)
+        side = QVBoxLayout()
+        side.addWidget(QLabel("Kept probes to plot:"))
+        self.probes = QListWidget()
+        self.probes.itemChanged.connect(lambda _: self.redraw())
+        side.addWidget(self.probes, 1)
+        self.x = QComboBox()
+        self.x.currentIndexChanged.connect(lambda _: self.redraw())
+        side.addWidget(QLabel("Against:"))
+        side.addWidget(self.x)
+        for text, slot in (("Copy as CSV", self.copy_csv), ("Save PNG…", self.save_png)):
+            b = QPushButton(text)
+            b.clicked.connect(slot)
+            side.addWidget(b)
+        row.addLayout(side)
+        self.curve = Curve("Step", "")
+        row.addWidget(self.curve, 1)
+        self.series: list[tuple[str, list]] = []
+
+    def refresh(self) -> None:
+        """The project's kept probes, keeping which are ticked."""
+        from puzzle.model.schema import ResultProbe
+
+        project = self.window.session.project
+        ticked = {
+            self.probes.item(i).data(ROLE)
+            for i in range(self.probes.count())
+            if self.probes.item(i).checkState() == Qt.CheckState.Checked
+        }
+        x = self.x.currentData()
+        self.probes.blockSignals(True)
+        self.x.blockSignals(True)
+        self.probes.clear()
+        self.x.clear()
+        self.x.addItem("Step (time, increment or frequency)", None)
+        for p in project.of_type(ResultProbe):
+            item = QListWidgetItem(p.name)
+            item.setData(ROLE, str(p.id))
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(
+                Qt.CheckState.Checked if str(p.id) in ticked else Qt.CheckState.Unchecked
+            )
+            self.probes.addItem(item)
+            self.x.addItem(p.name, str(p.id))
+        found = self.x.findData(x)
+        self.x.setCurrentIndex(found if found >= 0 else 0)
+        self.probes.blockSignals(False)
+        self.x.blockSignals(False)
+        self.redraw()
+
+    def redraw(self) -> None:
+        from puzzle.post.probes import history
+
+        project = self.window.session.project
+        store = self.window._store()
+        self.series = []
+        against = None
+        x_id = self.x.currentData()
+        try:
+            if x_id is not None:
+                against = history(project, store, project.objects.get(_uuid(x_id)))
+            for i in range(self.probes.count()):
+                item = self.probes.item(i)
+                if item.checkState() != Qt.CheckState.Checked:
+                    continue
+                probe = project.objects.get(_uuid(item.data(ROLE)))
+                values = history(project, store, probe)
+                if against is not None:
+                    xs = [a["value"] for a in against]
+                    pts = list(zip(xs, [v["value"] for v in values], strict=False))
+                else:
+                    pts = [(v["step"], v["value"]) for v in values]
+                self.series.append((probe.name, pts))
+        except PuzzleError as exc:
+            self.window.report(exc)
+        self.curve.x_label = self.x.currentText().split(" (")[0]
+        self.curve.set_series(self.series)
+
+    def csv(self) -> str:
+        lines = ["probe,x,value"]
+        for name, pts in self.series:
+            lines += [f"{name},{x:.6g},{y:.6g}" for x, y in pts]
+        return "\n".join(lines)
+
+    def copy_csv(self) -> None:
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.clipboard().setText(self.csv())
+
+    def save_png(self, path=None) -> None:
+        if path is None:
+            from PySide6.QtWidgets import QFileDialog
+
+            path, _ = QFileDialog.getSaveFileName(self, "Save plot", "plot.png", "PNG (*.png)")
+        if path:
+            self.curve.grab().save(str(path))
 
 
 class ProbesPanel(QWidget):

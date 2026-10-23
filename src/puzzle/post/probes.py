@@ -77,3 +77,30 @@ def evaluate(project, store, probe) -> dict:
     step = steps[min(probe.step, len(steps) - 1)] if probe.step >= 0 else steps[probe.step]
     out = at_point(mesh, step, item, probe.point)
     return out | {"label": item.label, "unit": item.unit, "step": step.value}
+
+
+def history(project, store, probe) -> list[dict]:
+    """A kept probe at every step of its source's current run that has its quantity:
+    [{"step": time, increment or frequency, "value": SI}] (ADR 0038's plots)."""
+    from puzzle.model.schema import ResultDefinition, Study
+    from puzzle.post import derived
+
+    src = project.objects.get(probe.source)
+    if isinstance(src, ResultDefinition):
+        d = derived.evaluate(project, store, src)
+        mesh, results, items = d.mesh, d.results, d.items
+    elif isinstance(src, Study):
+        record = derived.run_for(project, store, src.id)
+        results, mesh = store.read_results(record.run_id), store.read_mesh(record.mesh_id)
+        items = derived._items_of(results)
+    else:
+        raise PuzzleError(f"probe '{probe.name}': its source is gone", code="not_found")
+    item = next((i for i in items if i.key == probe.quantity), None)
+    if item is None:
+        raise PuzzleError(f"probe '{probe.name}': no '{probe.quantity}'", code="not_found")
+    out = []
+    for step in results.steps:
+        if item.field in step.fields:
+            found = at_point(mesh, step, item, probe.point)
+            out.append({"step": step.value, "mode": step.mode, "value": found["value"]})
+    return out

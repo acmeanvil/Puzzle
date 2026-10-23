@@ -1,6 +1,6 @@
 # 0038. Results tools: section cuts, animation, and plots over steps
 
-- Status: Proposed
+- Status: Accepted (2026-10-23)
 - Date: 2026-10-23
 
 ## Context
@@ -28,6 +28,29 @@ Puzzle's queries already compute a quantity over a selection at every step (`res
    - **Several series**, each with its own axis label and unit. Copied as CSV, saved as PNG.
    - **Drawn with QtCharts** (PySide6 Addons, LGPL). It will be checked in the pixi environment first; if it is missing, the material builder's `Curve` widget is extended instead.
 4. **Everything has a command-line and MCP twin.** `puzzle show --cut`, `--animate out.gif`, `puzzle plot PROBE` and the matching MCP tools, so agents and scripts make the same pictures.
+
+## Built (2026-10-23)
+
+- **Section cuts** (`post/cuts.py` `Cut`, `clip`):
+  - a plane across X, Y or Z at a fraction of the model's extent, placed on the undeformed model;
+  - the kept side is coloured through by the result;
+  - Flip keeps the other side, and Ghost shows the cut-away side faintly;
+  - controlled from the view toolbar's "Section cut" with a slider.
+  - **Not yet:** one cut at a time; several cuts, and a plane from a picked face.
+- **Animation:**
+  - Animate plays over the deformation (0 → full → 0 along a sine, 24 frames) for a single step, or over the steps when there are several;
+  - Save GIF records one loop with Pillow;
+  - MP4 waits for ffmpeg (imageio isn't in the environment).
+- **Plots:**
+  - a Plots tab beside Messages draws ticked kept probes (ADR 0032) against time, increment or frequency, or against another probe (load against deflection);
+  - copied as CSV, saved as PNG;
+  - drawn with the material builder's `Curve`, since QtCharts isn't in the pixi environment (its Qt library is missing);
+  - `post/probes.history` gives the series.
+- **Twins:**
+  - `puzzle show --cut x=0.5 --animate out.gif`;
+  - `puzzle plot PROJECT PROBE` (CSV);
+  - MCP `probe_history`.
+- **Not yet:** selection reductions over steps (a total reaction against time), which wait for probe reductions.
 
 ## Consequences
 

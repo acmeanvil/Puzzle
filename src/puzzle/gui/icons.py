@@ -50,6 +50,7 @@ DRAWINGS = {
     "extremes": '<path d="M12 4v16M8 8l4-4 4 4M8 16l4 4 4-4"/>',
     "symbols": '<path d="M12 3v12M8 11l4 4 4-4"/><path d="M5 20h14"/>'
     '<path d="M7 20l2-3M11 20l2-3M15 20l2-3"/>',
+    "section": '<path d="M4 7l8-4 8 4v10l-8 4-8-4z"/><path d="M3 12h18" stroke-dasharray="2 2"/>',
     "clear": '<path d="M6 6l12 12M18 6L6 18"/>',
     "copy": '<rect x="8" y="8" width="12" height="12" rx="1"/><path d="M4 16V4h12"/>',
 }

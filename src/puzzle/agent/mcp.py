@@ -394,6 +394,23 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
                 out.append({"probe": p.name, "error": exc.message, "code": exc.code})
         return out
 
+    @tool(
+        description="A kept probe at every step of its source's current run (ADR 0038): "
+        "[{step: time, increment or frequency, value (SI)}], for load-deflection curves "
+        "and transients."
+    )
+    @guarded
+    def probe_history(name: str) -> list[dict[str, Any]]:
+        from puzzle.commands import resolve
+        from puzzle.model.schema import ResultProbe
+        from puzzle.post.probes import history
+        from puzzle.project.layout import RESULTS_DIR
+        from puzzle.results.store import ResultStore
+
+        s = session()
+        probe = resolve(s.project, name, ResultProbe)
+        return history(s.project, ResultStore(root / RESULTS_DIR), probe)
+
     @tool(description="Stored runs: study, solver, when, how long.")
     @guarded
     def runs() -> list[dict[str, Any]]:
