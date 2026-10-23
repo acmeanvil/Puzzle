@@ -118,3 +118,48 @@ def test_fatigue_tool_on_the_cantilever(window):
     bar.field.setCurrentIndex(bar.field.findData("fatigue_alternating:value"))
     assert window.viewport.shown["unit"] == "MPa"
     assert window.viewport.shown["max"] == pytest.approx(1.2 * se / 1e6, rel=1e-9)
+
+
+def test_notch_factor_by_neuber_in_the_dialog(window):
+    """Kt 1.65 at a 3 mm radius in a 690 MPa steel: the dialog shows Kf = 1.55 and the
+    alternating stress is the case's × Kf."""
+    steel = window.session.project.of_type(Material)[0]
+    window.submit(
+        Edit(
+            object=str(steel.id),
+            ops=[
+                EditOp(
+                    op="set",
+                    path="properties.tensile_strength",
+                    value={"value": 690, "unit": "MPa"},
+                )
+            ],
+        )
+    )
+    study = next(s for s in window.session.project.of_type(Study) if s.name == "Tip load")
+    seen = {}
+
+    def fill(dialog):
+        dialog.notch_from.setCurrentIndex(dialog.notch_from.findData("neuber"))
+        assert dialog.kf.isHidden() and not dialog.kt.isHidden()
+        dialog.kt.setText("1.65")
+        dialog.radius.setText("3")  # mm
+        seen["info"] = dialog.notch_info.text()
+        return True
+
+    window.run_dialog = fill
+    window.new_derived("fatigue", str(study.id))
+    assert "Kf = 1.55" in seen["info"]
+    (tool,) = window.session.project.of_type(ResultDefinition)
+    assert tool.fatigue.notch_radius == pytest.approx(0.003)
+    bar = window.results_bar
+    bar.field.setCurrentIndex(bar.field.findData("fatigue_alternating:value"))
+    assert bar.field.currentText() == "Alternating stress × Kf"
+    store = window._store()
+    from puzzle.post.fatigue_tool import measure
+
+    (record,) = store.runs()
+    stress = np.asarray(store.read_results(record.run_id).last("stress").values, float)
+    vm = measure(stress, "signed_von_mises", signed=False).max() / 1e6
+    kf = fm.notch_factor(1.65, fm.notch_sensitivity(690e6, 0.003))
+    assert window.viewport.shown["max"] == pytest.approx(vm * kf, rel=1e-9)

@@ -104,6 +104,7 @@ class _Material:
                 "(Material builder, Structural)",
                 code="incomplete_material",
             )
+        self.kf, self.q = self._notch(material, settings)
         self.line = self.curve = self.strain = None
         if settings.life_model == "shigley":
             try:
@@ -162,6 +163,18 @@ class _Material:
                 sl.langer_b,
                 sl.langer_c,
             )
+
+    def _notch(self, material, settings) -> tuple[float, float | None]:
+        """Kf, and Neuber's q when Kf comes from Kt and the notch radius."""
+        if settings.notch_from == "direct":
+            return settings.notch_factor, None
+        if not self.sut:
+            raise PuzzleError(
+                f"{material.name}: Neuber's notch sensitivity needs its tensile strength",
+                code="incomplete_material",
+            )
+        q = fm.notch_sensitivity(self.sut, settings.notch_radius, torsion=settings.notch_shear)
+        return fm.notch_factor(settings.notch_kt, q), q
 
     def life(self, settings, sa, sm, ea):
         """Cycles to failure of each node's cycle (inf: infinite)."""
@@ -277,14 +290,24 @@ def evaluate_fatigue(project, store, definition, evaluate, run_for):
         run_ids += ids
     mats, which, notes = _materials(project, base_mesh, study, s)
     warnings += notes
+    kf = np.array([m.kf for m in mats])[which]  # per node
+    kf_mean = kf if s.notch_on_mean else np.ones_like(kf)
+    if s.notch_from == "neuber":
+        for m in mats:
+            warnings.append(f"{m.name}: Neuber q = {m.q:.3g}, Kf = {m.kf:.3g}")
+            if not 50 * fm.KSI <= m.sut <= 250 * fm.KSI:
+                warnings.append(
+                    f"{m.name}: Neuber's constant is fitted for steels of Sut 50 to 250 kpsi "
+                    "(345 to 1720 MPa); this Sut is outside it"
+                )
 
     def damage(scale: np.ndarray) -> tuple[np.ndarray, list[np.ndarray]]:
         total = np.zeros(len(which))
         lives = []
         for b, (amp, mean), strain in blocks:
-            sa = measure(amp, s.stress, signed=False) * scale
-            sm = measure(mean, s.stress, signed=True) * scale
-            ea = _equivalent_strain(strain[0]) * scale if strain is not None else None
+            sa = measure(amp, s.stress, signed=False) * scale * kf
+            sm = measure(mean, s.stress, signed=True) * scale * kf_mean
+            ea = _equivalent_strain(strain[0]) * scale * kf if strain is not None else None
             life = np.empty(len(which))
             for i, m in enumerate(mats):
                 at = which == i
@@ -302,8 +325,8 @@ def evaluate_fatigue(project, store, definition, evaluate, run_for):
     safety = _safety(damage, s.design_life, len(which))
 
     amp0, mean0 = blocks[0][1]
-    sa0 = measure(amp0, s.stress, signed=False)
-    sm0 = measure(mean0, s.stress, signed=True)
+    sa0 = measure(amp0, s.stress, signed=False) * kf  # as the life model sees them
+    sm0 = measure(mean0, s.stress, signed=True) * kf_mean
     ids = base_mesh.node_ids.copy()
 
     def f(name, v):
@@ -318,6 +341,7 @@ def evaluate_fatigue(project, store, definition, evaluate, run_for):
     }
     one = len(s.blocks) == 1 and first.cycles == 1
     unit = "cycles" if one else "repetitions of the duty"
+    notched = bool(np.any(kf != 1))
     items = [
         Item("fatigue_life:value", f"Life ({unit})", "fatigue_life", "value", "Fatigue", None),
         Item(
@@ -338,13 +362,20 @@ def evaluate_fatigue(project, store, definition, evaluate, run_for):
         ),
         Item(
             "fatigue_alternating:value",
-            "Alternating stress",
+            "Alternating stress" + (" × Kf" if notched else ""),
             "fatigue_alternating",
             "value",
             "Fatigue",
             "pressure",
         ),
-        Item("fatigue_mean:value", "Mean stress", "fatigue_mean", "value", "Fatigue", "pressure"),
+        Item(
+            "fatigue_mean:value",
+            "Mean stress" + (" × Kf" if notched and s.notch_on_mean else ""),
+            "fatigue_mean",
+            "value",
+            "Fatigue",
+            "pressure",
+        ),
     ]
     worst = int(np.argmin(safety))
     warnings += _proportionality(blocks, worst)

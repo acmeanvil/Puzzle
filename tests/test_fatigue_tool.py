@@ -235,3 +235,39 @@ def test_non_proportional_loading_is_said():
     )
     d = derived.evaluate(p, store, tool(p, [FatigueBlock(loading="range", combination=rng.id)]))
     assert any("non-proportional" in w for w in d.warnings)
+
+
+def test_a_notch_factor_raises_the_alternating_stress():
+    """Kf = 1.5 on 300 MPa reversed is 450 MPa on the line (finite, where 300 was not)."""
+    p, _, (a, _) = project()
+    store = Store([a.id], [results(SXX)])
+    d = derived.evaluate(
+        p, store, tool(p, [FatigueBlock(case=ResultCase(study=a.id))], notch_factor=1.5)
+    )
+    line = fm.SnLine(345e6, 690e6)
+    assert field(d, "fatigue_life")[1] == pytest.approx(float(line.cycles(450e6)), rel=1e-9)
+    assert field(d, "fatigue_alternating")[1] == pytest.approx(450e6)
+    assert field(d, "fatigue_safety_factor")[2] == pytest.approx(345 / 150, rel=1e-6)
+    assert d.items[3].label == "Alternating stress × Kf"
+
+
+def test_neuber_gives_kf_from_kt_and_the_radius():
+    """Shigley Ex. 6-6: Sut 690 MPa, r = 3 mm, Kt = 1.65 → Kf = 1.55; zero-based, Kf on
+    the alternating stress only unless asked for the mean too."""
+    p, _, (a, _) = project()
+    store = Store([a.id], [results(np.array([600e6, 300e6, 100e6]))])
+    block = [FatigueBlock(loading="zero_based", case=ResultCase(study=a.id))]
+    neuber = {"notch_from": "neuber", "notch_kt": 1.65, "notch_radius": 0.003}
+    d = derived.evaluate(p, store, tool(p, block, **neuber))
+    kf = fm.notch_factor(1.65, fm.notch_sensitivity(690e6, 0.003))
+    assert kf == pytest.approx(1.55, abs=5e-3)
+    assert field(d, "fatigue_alternating")[0] == pytest.approx(300e6 * kf)
+    assert field(d, "fatigue_mean")[0] == pytest.approx(300e6)  # not on the mean
+    assert any("Kf = 1.55" in w for w in d.warnings)
+    rev = 300e6 * kf / (1 - 300e6 / 690e6)
+    expect = float(fm.SnLine(345e6, 690e6).cycles(rev))
+    assert field(d, "fatigue_life")[0] == pytest.approx(expect, rel=1e-9)
+    d = derived.evaluate(p, store, tool(p, block, notch_on_mean=True, **neuber))
+    assert field(d, "fatigue_mean")[0] == pytest.approx(300e6 * kf)
+    with pytest.raises(ValueError, match="needs Kt and the notch radius"):
+        FatigueSettings(blocks=block, notch_from="neuber", notch_kt=2.0)

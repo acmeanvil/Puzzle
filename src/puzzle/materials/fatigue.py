@@ -157,6 +157,11 @@ def notch_sensitivity(sut: float, radius: float, torsion: bool = False) -> float
     return 1 / (1 + root_a / math.sqrt(radius / 0.0254))
 
 
+def notch_factor(kt: float, q: float) -> float:
+    """The fatigue stress-concentration factor Kf = 1 + q(Kt − 1) (Eq. 6-32)."""
+    return 1 + q * (kt - 1)
+
+
 def fatigue_fraction(sut: float) -> float:
     """f, the fraction of Sut that is the fatigue strength at 10³ cycles (Eqs. 6-10 to
     6-12, σ'F = Sut + 345 MPa, the curve of Fig. 6-18); 0.9 below 70 kpsi."""

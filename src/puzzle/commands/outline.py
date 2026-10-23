@@ -84,8 +84,13 @@ def outline(project: Project, *, ids: bool = False) -> str:
                 + (f" (x{b.scale:g})" if b.scale != 1 else "")
                 for b in f.blocks
             )
+            notch = (
+                f", Kf by Neuber (Kt {f.notch_kt:g}, r {f.notch_radius:g} m)"
+                if f.notch_from == "neuber"
+                else (f", Kf {f.notch_factor:g}" if f.notch_factor != 1 else "")
+            )
             what = (
-                f"fatigue {f.life_model}, {f.stress}, {f.mean_stress}, design life "
+                f"fatigue {f.life_model}, {f.stress}, {f.mean_stress}{notch}, design life "
                 f"{f.design_life:g}: {duty}"
             )
         elif d.method == "equation":

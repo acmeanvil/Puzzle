@@ -161,6 +161,10 @@ def _fatigue_choice(field):
         "life_model": MODEL_LABELS,
         "surface": {k: v[0] for k, v in SURFACE_FINISHES.items()},
         "size": SIZE_BASES,
+        "notch_from": {
+            "direct": "Given directly",
+            "neuber": "From Kt and the notch radius (Neuber)",
+        },
     }.get(field)
     return [(text, key) for key, text in table.items()] if table else None
 

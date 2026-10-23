@@ -789,6 +789,22 @@ class FatigueSettings(BaseModel):
     endurance_limit: float | None = Field(
         default=None, description="measured S'e in Pa; None: 0.5 Sut (steels)"
     )
+    # The fatigue stress-concentration factor Kf (Shigley Sec. 6-10), for a stress raiser
+    # the mesh doesn't resolve: 1 where it does (its stresses already carry Kt).
+    notch_from: Literal["direct", "neuber"] = "direct"
+    notch_factor: float = Field(default=1.0, ge=1.0, description="Kf, given directly")
+    notch_kt: float | None = Field(default=None, ge=1.0, description="Kt, for Neuber")
+    notch_radius: float | None = Field(default=None, gt=0, description="m, for Neuber")
+    notch_shear: bool = Field(default=False, description="Neuber's shear (torsion) constant")
+    notch_on_mean: bool = Field(
+        default=False, description="Kf on the mean stress too (Shigley: alternating only)"
+    )
+
+    @model_validator(mode="after")
+    def _notch(self) -> FatigueSettings:
+        if self.notch_from == "neuber" and (self.notch_kt is None or self.notch_radius is None):
+            raise ValueError("Neuber's notch sensitivity needs Kt and the notch radius")
+        return self
 
 
 class ResultDefinition(ProjectObject):

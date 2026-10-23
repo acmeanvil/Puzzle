@@ -556,6 +556,40 @@ class FatigueDialog(QDialog):
         self.marin_form = mf
         layout.addWidget(self.marin)
 
+        from PySide6.QtWidgets import QCheckBox, QGroupBox
+
+        notch = QGroupBox("Notch: fatigue stress-concentration factor Kf")
+        nf = QFormLayout(notch)
+        self.notch_from = QComboBox()
+        self.notch_from.addItem("Given directly", "direct")
+        self.notch_from.addItem("From Kt and the notch radius (Neuber)", "neuber")
+        self.kf = QLineEdit("1")
+        self.kt = QLineEdit()
+        self.radius = QLineEdit()
+        self.shear = QCheckBox("Shear (torsion) notch sensitivity")
+        self.on_mean = QCheckBox("Apply Kf to the mean stress too")
+        self.on_mean.setToolTip(
+            "Shigley applies Kf to the alternating stress only for ductile materials"
+        )
+        self.notch_info = QLabel()
+        self.notch_info.setStyleSheet("color: gray")
+        nf.addRow("Kf from", self.notch_from)
+        nf.addRow("Kf", self.kf)
+        nf.addRow("Kt (theoretical)", self.kt)
+        nf.addRow(f"Notch radius ({self.length})", self.radius)
+        nf.addRow(self.shear)
+        nf.addRow(self.on_mean)
+        nf.addRow(self.notch_info)
+        warn = QLabel(
+            "Leave Kf at 1 where the mesh resolves the notch: its stresses already include Kt. "
+            "Use it for raisers the model doesn't show (threads, welds, a coarse fillet)."
+        )
+        warn.setWordWrap(True)
+        warn.setStyleSheet("color: gray")
+        nf.addRow(warn)
+        self.notch_form = nf
+        layout.addWidget(notch)
+
         self.status = QLabel()
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
@@ -606,6 +640,14 @@ class FatigueDialog(QDialog):
                 from puzzle.model.units import convert
 
                 self.endurance.setText(f"{convert(s.endurance_limit, 'Pa', self.stress_unit):g}")
+            self.notch_from.setCurrentIndex(self.notch_from.findData(s.notch_from))
+            self.kf.setText(f"{s.notch_factor:g}")
+            self.kt.setText(f"{s.notch_kt:g}" if s.notch_kt is not None else "")
+            self.radius.setText(
+                f"{s.notch_radius * self.per_metre:g}" if s.notch_radius is not None else ""
+            )
+            self.shear.setChecked(s.notch_shear)
+            self.on_mean.setChecked(s.notch_on_mean)
             for b in s.blocks:
                 self.add_block(b.model_dump(mode="json"))
         else:
@@ -613,8 +655,13 @@ class FatigueDialog(QDialog):
                 {"loading": "fully_reversed", "case": {"study": study}} if study else None
             )
         self._fill_curves(s.sn_curve if s else None)
-        for w in (self.stress, self.correction, self.model, self.surface, self.size, self.curve):
+        for w in (self.stress, self.correction, self.model, self.surface, self.size, self.curve,
+                  self.notch_from):  # fmt: skip
             w.currentIndexChanged.connect(self._update)
+        for w in (self.kf, self.kt, self.radius):
+            w.textChanged.connect(self._update)
+        for w in (self.shear, self.on_mean):
+            w.toggled.connect(self._update)
         for w in (self.design_life, self.diameter, self.height, self.width, self.reliability,
                   self.temperature, self.misc, self.endurance, self.name):  # fmt: skip
             w.textChanged.connect(self._update)
@@ -732,7 +779,15 @@ class FatigueDialog(QDialog):
             "temperature": self._number(self.temperature, "Temperature"),
             "misc_factor": self._number(self.misc, "Other effects factor"),
             "endurance_limit": convert(se, self.stress_unit, "Pa") if se is not None else None,
+            "notch_from": self.notch_from.currentData(),
+            "notch_shear": self.shear.isChecked(),
+            "notch_on_mean": self.on_mean.isChecked(),
         }
+        if settings["notch_from"] == "direct":
+            settings["notch_factor"] = self._number(self.kf, "Kf")
+        else:
+            settings["notch_kt"] = self._number(self.kt, "Kt", optional=True)
+            settings["notch_radius"] = length(self.radius, "Notch radius")
         return {"name": self.name.text().strip(), "method": "fatigue", "fatigue": settings}
 
     def _materials(self):
@@ -757,6 +812,25 @@ class FatigueDialog(QDialog):
             return []
         mats = [self.project.objects.get(a.material) for a in comp.materials]
         return [m for m in mats if isinstance(m, Material)]
+
+    def _notch_text(self) -> str:
+        """Neuber's q and Kf for each material, as the tool will take them."""
+        from puzzle.materials.fatigue import notch_factor, notch_sensitivity
+
+        try:
+            kt = float(self.kt.text())
+            r = float(self.radius.text()) / self.per_metre
+        except ValueError:
+            return "Give Kt and the notch radius."
+        parts = []
+        for m in self._materials():
+            q = m.properties.get("tensile_strength")
+            if q is None:
+                parts.append(f"{m.name}: needs its tensile strength")
+                continue
+            qn = notch_sensitivity(q.to_si(), r, torsion=self.shear.isChecked())
+            parts.append(f"{m.name}: q = {qn:.3g}, Kf = {notch_factor(kt, qn):.3g}")
+        return "; ".join(parts) + " (Neuber, Shigley Eqs. 6-32 to 6-35; steels)"
 
     def _fill_curves(self, chosen=None) -> None:
         chosen = chosen or self.curve.currentData()
@@ -784,6 +858,18 @@ class FatigueDialog(QDialog):
         ):
             line.setVisible(show)
             self.marin_form.labelForField(line).setVisible(show)
+        neuber = self.notch_from.currentData() == "neuber"
+        for line, show in (
+            (self.kf, not neuber),
+            (self.kt, neuber),
+            (self.radius, neuber),
+            (self.shear, neuber),
+        ):
+            line.setVisible(show)
+            label = self.notch_form.labelForField(line)
+            if label is not None:
+                label.setVisible(show)
+        self.notch_info.setText(self._notch_text() if neuber else "")
         ok = self.buttons.button(QDialogButtonBox.StandardButton.Ok)
         ok.setEnabled(False)
         if not self.runs.studies:

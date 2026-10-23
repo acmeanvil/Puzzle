@@ -30,6 +30,7 @@ The maintainer chose "data and a life tool" for this round. The life tool is the
    - **Loading:** the cycle comes from a combination's range and mean (two cases, or a load and its reverse, or zero-based: one case and zero). A scale factor applies, and a duty cycle of several cycle types with counts uses Miner's rule.
    - **Stress measure:** von Mises (signed by the largest principal stress, so compression doesn't count as tension), maximum principal, or a component.
    - **Mean-stress correction:** one of Tension-meter's.
+   - **Notch factor Kf** (Shigley Sec. 6-10, added 2026-10-23 at the maintainer's request): typed directly, or Kf = 1 + q(Kt − 1) from Kt and the notch radius with Neuber's notch sensitivity q (normal or shear constant; fitted for steels of Sut 345 to 1720 MPa, and the tool says when a material is outside that range). It multiplies the alternating stress, and the mean stress only when asked, as Shigley does for ductile materials. It applies to every life model. It stays 1 where the mesh resolves the notch, since those stresses already carry Kt; it is for stress raisers the model doesn't show (threads, welds, a coarse fillet).
    - **Life model:**
      - the material's S-N curve (log-log interpolation);
      - Shigley's S-N line from Sut, with the Marin factors as tool settings (the part's surface finish and size, the reliability);
