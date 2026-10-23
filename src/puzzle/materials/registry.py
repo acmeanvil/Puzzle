@@ -33,6 +33,22 @@ PROPERTIES: list[PropertyDef] = [
     PropertyDef("youngs_modulus", "Young's modulus", "Pa", "pressure", "Structural"),
     PropertyDef("poissons_ratio", "Poisson's ratio", "dimensionless", None, "Structural"),
     PropertyDef(
+        "yield_strength",
+        "Yield strength",
+        "Pa",
+        "pressure",
+        "Structural",
+        help="0.2 % offset; the curve builder and fatigue corrections use it",
+    ),
+    PropertyDef(
+        "tensile_strength",
+        "Tensile (ultimate) strength",
+        "Pa",
+        "pressure",
+        "Structural",
+        help="Engineering ultimate; the curve builder and fatigue use it",
+    ),
+    PropertyDef(
         "thermal_expansion",
         "Thermal expansion coefficient",
         "1/K",

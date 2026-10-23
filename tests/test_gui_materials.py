@@ -159,3 +159,40 @@ def test_the_library_is_grouped_by_type_group_and_alloy(app):
     p.tree.setCurrentItem(hits[0])
     p._accept()
     assert p.key == "ptfe"
+
+
+def test_the_curve_builder_makes_a_hardening_table(app):
+    """Ramberg-Osgood from E, yield and n (MPa in the dialog), used as the material's
+    hardening curve; the ASME model refuses a class it doesn't fit."""
+    from puzzle.gui.material_builder import CurveBuilder
+
+    d = CurveBuilder(200e9, 250e6, 400e6)
+    assert d.fields["modulus"].text() == "200000" and d.fields["yield"].text() == "250"
+    d.fields["n"].setText("8")
+    assert d.error.text() == "" and "n = 8" in d.info.text()
+    table = d.result.table
+    assert table[0][0] == 0 and table[0][1] > 250e6  # engineering yield read as true
+    d.model.setCurrentIndex(d.model.findData("asme_3d"))
+    d.asme_class.setCurrentIndex(d.asme_class.findData("ALUMINUM"))
+    d.fields["yield"].setText("399")
+    assert "below" in d.error.text() and d.result is None
+
+    b = MaterialBuilder()
+    choose(b, "structural_steel")
+    b.editor.values["yield_strength"].setText("250")
+    b.editor.values["tensile_strength"].setText("400")
+    seen = {}
+
+    def ask(modulus, yield_strength, ultimate):
+        seen["args"] = (modulus, yield_strength, ultimate)
+        c = CurveBuilder(modulus, yield_strength, ultimate)
+        c.fields["n"].setText("8")
+        return c.result
+
+    b.editor.ask_curve = ask
+    b.editor.build_curve()
+    assert seen["args"] == (pytest.approx(210e9), pytest.approx(250e6), pytest.approx(400e6))
+    assert b.editor.model_on["plasticity"].isChecked()
+    assert "Ramberg-Osgood, n = 8" in b.editor.sources.toPlainText()
+    m = b.editor.material()
+    assert m.models.plasticity.curves[0].points[0][0] == 0.0

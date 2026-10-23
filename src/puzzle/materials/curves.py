@@ -244,3 +244,89 @@ def csv(curve: list[Point], strain_label: str = "Strain") -> str:
     for (e, s), et in zip(curve, tangent_moduli(curve), strict=True):
         lines.append(f"{e:.8g},{s / 1e6:.8g},{'' if math.isnan(et) else f'{et / 1e6:.8g}'}")
     return "\n".join(lines) + "\n"
+
+
+@dataclass(frozen=True)
+class Hardening:
+    """A hardening table built from a model, with the curves it came from."""
+
+    table: list[Point]  # (true plastic strain, true stress), from (0, yield): what solvers take
+    true_curve: list[Point]  # total true strain, true stress
+    engineering_curve: list[Point]  # the same points in engineering terms
+    note: str  # how it was made, for the material's sources
+
+
+def hardening(
+    model: str,
+    modulus: float,
+    yield_strength: float,
+    *,
+    n: float | None = None,
+    fit_stress: float | None = None,
+    fit_strain: float | None = None,
+    ultimate_strength: float | None = None,
+    material_class: Asme3DClass | None = None,
+    tangent_modulus: float | None = None,
+    basis: str = "engineering",
+    max_stress: float | None = None,
+    points: int = 25,
+) -> Hardening:
+    """A hardening table from a model (what the builder's curve builder does).
+
+    model: "ramberg_osgood" (n, or a fit point beyond yield), "asme_3d" (ultimate strength
+    and the class), "bilinear" (the tangent modulus after yield). `basis` says whether the
+    model's parameters describe the engineering or the true curve; the table is always
+    true stress against true plastic strain. ValueError says what is missing or wrong.
+    """
+    if modulus <= 0 or yield_strength <= 0:
+        raise ValueError("give Young's modulus and the yield strength")
+    if model == "ramberg_osgood":
+        if n is None:
+            if fit_stress is None or fit_strain is None:
+                raise ValueError("give the exponent n, or a second point to fit it through")
+            ro = RambergOsgood.fit_through(modulus, yield_strength, fit_stress, fit_strain)
+            if ro is None:
+                raise ValueError("the fit point must lie beyond yield, with plastic strain")
+        else:
+            ro = RambergOsgood(modulus, yield_strength, n)
+        top = max_stress or ultimate_strength or fit_stress or 1.5 * yield_strength
+        curve = ro.curve(top, 200)
+        true = engineering_to_true(curve) if basis == "engineering" else curve
+        note = f"Ramberg-Osgood, n = {ro.n:.4g}, offset 0.2 %, {basis} parameters"
+    elif model == "asme_3d":
+        if ultimate_strength is None or material_class is None:
+            raise ValueError("the Annex 3-D model needs the ultimate strength and the class")
+        c = Asme3DCurve(modulus, yield_strength, ultimate_strength, material_class)
+        if not c.is_valid:
+            raise ValueError(
+                f"the Annex 3-D model needs yield / ultimate below {c.material_class.r0} "
+                "for this class"
+            )
+        true = c.true_curve(200)  # the model is a true curve already
+        note = f"ASME VIII-2 Annex 3-D, {material_class.label}"
+    elif model == "bilinear":
+        if tangent_modulus is None or not 0 <= tangent_modulus < modulus:
+            raise ValueError("give a tangent modulus between 0 and Young's modulus")
+        plastic_modulus = modulus * tangent_modulus / (modulus - tangent_modulus)
+        end = 0.2
+        sy = (
+            yield_strength * (1 + yield_strength / modulus)
+            if basis == "engineering"
+            else yield_strength
+        )
+        table = [(0.0, sy), (end, sy + plastic_modulus * end)]
+        true = [(0.0, 0.0), (sy / modulus, sy), (end + table[1][1] / modulus, table[1][1])]
+        return Hardening(
+            table,
+            true,
+            true_to_engineering(true),
+            f"Bilinear, tangent modulus {tangent_modulus / 1e6:.4g} MPa",
+        )
+    else:
+        raise ValueError(f"no curve model '{model}'")
+    start = next((s for e, s in true if e - s / modulus >= 0.002 - 1e-12), yield_strength)
+    start = min(start, true[-1][1])
+    table = post_yield(true, modulus, start_stress=start)
+    if len(table) < 2:
+        raise ValueError("the curve ends before it yields: raise its end stress")
+    return Hardening(thin(table, points), true, true_to_engineering(true), note)

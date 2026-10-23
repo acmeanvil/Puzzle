@@ -75,44 +75,71 @@ def _number(text: str) -> float:
 
 
 class Curve(QWidget):
-    """A small plot of a table's points (x, y), for checking a curve at a glance."""
+    """A small plot of one or more curves (x, y), with the axes' ranges and a legend,
+    for checking a curve at a glance."""
 
-    def __init__(self) -> None:
+    COLOURS = ["#2b6cb0", "#dd6b20", "#2f855a"]
+
+    def __init__(self, x_label: str = "", y_label: str = "") -> None:
         super().__init__()
-        self.points: list[tuple[float, float]] = []
+        self.series: list[tuple[str, list[tuple[float, float]]]] = []
+        self.x_label, self.y_label = x_label, y_label
         self.setMinimumSize(220, 160)
 
-    def set_points(self, points) -> None:
-        self.points = [(x, y) for x, y in points if math.isfinite(x) and math.isfinite(y)]
+    @property
+    def points(self) -> list[tuple[float, float]]:
+        return self.series[0][1] if self.series else []
+
+    def set_points(self, points, label: str = "") -> None:
+        self.set_series([(label, points)] if points else [])
+
+    def set_series(self, series) -> None:
+        self.series = [
+            (name, [(x, y) for x, y in pts if math.isfinite(x) and math.isfinite(y)])
+            for name, pts in series
+        ]
         self.update()
 
     def paintEvent(self, _event) -> None:  # noqa: N802 - Qt's name
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.fillRect(self.rect(), QColor("#fbfcfd"))
-        if len(self.points) < 2:
+        every = [pt for _, pts in self.series for pt in pts]
+        if len(every) < 2:
             p.setPen(QColor("#8a94a3"))
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Two points or more to plot")
             return
-        xs, ys = [x for x, _ in self.points], [y for _, y in self.points]
-        x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
-        if x1 == x0:
-            x1 = x0 + 1
-        if y1 == y0:
-            y1 = y0 + 1
-        m, w, h = 12, self.width() - 24, self.height() - 24
+        xs, ys = [x for x, _ in every], [y for _, y in every]
+        x0, x1, y0, y1 = min(xs + [0.0]), max(xs), min(ys + [0.0]), max(ys)
+        x1, y1 = (x1 if x1 > x0 else x0 + 1), (y1 if y1 > y0 else y0 + 1)
+        left, top, right, bottom = 56, 14, 12, 30
+        w, h = self.width() - left - right, self.height() - top - bottom
 
         def at(x, y):
-            return QPointF(m + (x - x0) / (x1 - x0) * w, m + h - (y - y0) / (y1 - y0) * h)
+            return QPointF(left + (x - x0) / (x1 - x0) * w, top + h - (y - y0) / (y1 - y0) * h)
 
         p.setPen(QPen(QColor("#b8c2cc"), 1))
-        p.drawRect(m, m, w, h)
-        p.setPen(QPen(QColor("#2b6cb0"), 2))
-        pts = [at(x, y) for x, y in sorted(self.points)]
-        for a, b in zip(pts, pts[1:], strict=False):
-            p.drawLine(a, b)
-        for q in pts:
-            p.drawEllipse(q, 2.5, 2.5)
+        p.drawRect(left, top, w, h)
+        p.setPen(QColor("#4a5560"))
+        p.drawText(4, top + 10, f"{y1:.4g}")
+        p.drawText(4, top + h, f"{y0:.4g}")
+        p.drawText(left, top + h + 16, f"{x0:.3g}")
+        p.drawText(left + w - 50, top + h + 16, f"{x1:.3g}")
+        if self.x_label:
+            p.drawText(left + w // 2 - 40, top + h + 26, self.x_label)
+        if self.y_label:
+            p.drawText(4, top + h // 2, self.y_label)
+        for k, (name, pts) in enumerate(self.series):
+            colour = QColor(self.COLOURS[k % len(self.COLOURS)])
+            p.setPen(QPen(colour, 2))
+            q = [at(x, y) for x, y in sorted(pts)]
+            for a, b in zip(q, q[1:], strict=False):
+                p.drawLine(a, b)
+            if len(q) <= 40:
+                for c in q:
+                    p.drawEllipse(c, 2.5, 2.5)
+            if name:
+                p.drawText(left + 10, top + 16 + 16 * k, name)
 
 
 class TableEditor(QDialog):
@@ -187,6 +214,216 @@ class TableEditor(QDialog):
             self.error.setText("Every cell is a number")
             return
         self.accept()
+
+
+class CurveBuilder(QDialog):
+    """A hardening curve from a model (materials.curves.hardening): Ramberg-Osgood, the
+    ASME Annex 3-D curve, or bilinear; engineering or true parameters; drawn as the
+    engineering and true curves; used as the material's table (true stress against
+    true plastic strain), and exportable as CSV."""
+
+    MODELS = [
+        ("Ramberg-Osgood", "ramberg_osgood"),
+        ("ASME VIII-2 Annex 3-D", "asme_3d"),
+        ("Bilinear", "bilinear"),
+    ]
+
+    def __init__(self, modulus=None, yield_strength=None, ultimate=None, parent=None):
+        super().__init__(parent)
+        from puzzle.materials.curves import Asme3DClass
+
+        self.setWindowTitle("Curve builder")
+        self.resize(900, 560)
+        unit = _display_unit("pressure", "Pa")
+        self.unit = unit
+        self.model = QComboBox()
+        for text, key in self.MODELS:
+            self.model.addItem(text, key)
+        self.basis = QComboBox()
+        self.basis.addItem("the engineering curve", "engineering")
+        self.basis.addItem("the true curve", "true")
+        self.fields: dict[str, QLineEdit] = {}
+        form = QFormLayout()
+        form.addRow("Model", self.model)
+        form.addRow("Parameters describe", self.basis)
+        rows = [
+            ("modulus", f"Young's modulus ({_pretty(unit)})", modulus),
+            ("yield", f"Yield strength, 0.2 % ({_pretty(unit)})", yield_strength),
+            ("n", "Exponent n", None),
+            ("fit_stress", f"or fit through: stress ({_pretty(unit)})", None),
+            ("fit_strain", "... at total strain", None),
+            ("ultimate", f"Ultimate strength ({_pretty(unit)})", ultimate),
+            ("tangent", f"Tangent modulus after yield ({_pretty(unit)})", None),
+            ("max_stress", f"Curve to stress ({_pretty(unit)}, optional)", None),
+        ]
+        self.rows = {}
+        from puzzle.model.units import convert
+
+        for key, text, value in rows:
+            line = QLineEdit(
+                ""
+                if value is None
+                else f"{convert(value, 'Pa', unit):.6g}"
+                if key not in ("n", "fit_strain")
+                else f"{value:.6g}"
+            )
+            line.textChanged.connect(lambda _: self.update_curve())
+            self.fields[key] = line
+            form.addRow(text, line)
+            self.rows[key] = line
+        self.asme_class = QComboBox()
+        for c in Asme3DClass:
+            self.asme_class.addItem(c.label, c.name)
+        form.addRow("Material class (Table 3-D.1)", self.asme_class)
+        self.points = QLineEdit("25")
+        form.addRow("Table points", self.points)
+        self.info = QLabel("")
+        self.info.setWordWrap(True)
+        self.error = QLabel("")
+        self.error.setStyleSheet("color: #c53030")
+        self.error.setWordWrap(True)
+        self.plot = Curve("total strain", "stress")
+        self.plot.setMinimumSize(420, 320)
+        self.table_plot = Curve("true plastic strain", "true stress")
+        export = QPushButton("Copy table as CSV")
+        export.clicked.connect(self.copy_csv)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Use as hardening curve")
+        buttons.accepted.connect(self._accept)
+        buttons.rejected.connect(self.reject)
+        left = QVBoxLayout()
+        left.addLayout(form)
+        left.addWidget(self.info)
+        left.addWidget(self.error)
+        left.addStretch()
+        right = QVBoxLayout()
+        right.addWidget(QLabel("Stress against total strain"))
+        right.addWidget(self.plot, 2)
+        right.addWidget(QLabel("Hardening table: true stress against true plastic strain"))
+        right.addWidget(self.table_plot, 1)
+        right.addWidget(export)
+        body = QHBoxLayout()
+        body.addLayout(left, 1)
+        body.addLayout(right, 1)
+        layout = QVBoxLayout(self)
+        layout.addLayout(body, 1)
+        layout.addWidget(buttons)
+        for w in (self.model, self.basis, self.asme_class):
+            w.currentIndexChanged.connect(lambda _: self.update_curve())
+        self.points.textChanged.connect(lambda _: self.update_curve())
+        self.result = None
+        self.update_curve()
+
+    def _value(self, key: str, stress: bool = True):
+        from puzzle.model.units import convert
+
+        text = self.fields[key].text().strip()
+        if not text:
+            return None
+        number = _number(text)
+        return convert(number, self.unit, "Pa") if stress else number
+
+    def update_curve(self) -> None:
+        from puzzle.materials.curves import Asme3DClass, RambergOsgood, hardening
+
+        model = self.model.currentData()
+        shown = {
+            "ramberg_osgood": {
+                "modulus",
+                "yield",
+                "n",
+                "fit_stress",
+                "fit_strain",
+                "ultimate",
+                "max_stress",
+            },
+            "asme_3d": {"modulus", "yield", "ultimate"},
+            "bilinear": {"modulus", "yield", "tangent"},
+        }[model]
+        for key, line in self.rows.items():
+            line.setEnabled(key in shown)
+        self.asme_class.setEnabled(model == "asme_3d")
+        self.basis.setEnabled(model != "asme_3d")
+        try:
+            h = hardening(
+                model,
+                self._value("modulus") or 0.0,
+                self._value("yield") or 0.0,
+                n=self._value("n", stress=False),
+                fit_stress=self._value("fit_stress"),
+                fit_strain=self._value("fit_strain", stress=False),
+                ultimate_strength=self._value("ultimate"),
+                material_class=Asme3DClass[self.asme_class.currentData()],
+                tangent_modulus=self._value("tangent"),
+                basis=self.basis.currentData(),
+                max_stress=self._value("max_stress"),
+                points=max(int(self.points.text() or 25), 2),
+            )
+        except ValueError as exc:
+            self.result = None
+            self.error.setText(
+                str(exc).replace("could not convert string to float", "not a number")
+            )
+            self.plot.set_points([])
+            self.table_plot.set_points([])
+            return
+        self.error.setText("")
+        self.result = h
+        from puzzle.model.units import convert
+
+        scale = convert(1.0, "Pa", self.unit)
+        self.plot.set_series(
+            [
+                ("Engineering", [(e, s * scale) for e, s in h.engineering_curve]),
+                ("True", [(e, s * scale) for e, s in h.true_curve]),
+            ]
+        )
+        self.table_plot.set_points([(e, s * scale) for e, s in h.table])
+        info = h.note
+        if model == "ramberg_osgood":
+            n = self._value("n", stress=False)
+            ro = (
+                RambergOsgood(self._value("modulus"), self._value("yield"), n)
+                if n
+                else RambergOsgood.fit_through(
+                    self._value("modulus"),
+                    self._value("yield"),
+                    self._value("fit_stress"),
+                    self._value("fit_strain", stress=False),
+                )
+            )
+            if ro is not None:
+                info += (
+                    f"; α = {ro.alpha:.4g}, K' = {ro.strength_coefficient * scale:.4g} "
+                    f"{_pretty(self.unit)}"
+                )
+        top = h.table[-1]
+        warning = ""
+        if max(e for e, _ in h.engineering_curve) > 0.2 and model != "bilinear":
+            warning = (
+                " Beyond about 20 % engineering strain a specimen necks, and the true curve "
+                "(which assumes uniform deformation) overstates the stress: end the curve at "
+                "the uniform elongation (Curve to stress)."
+            )
+        self.info.setText(
+            f"{info}. Table: {len(h.table)} points, to {top[1] * scale:.4g} {_pretty(self.unit)} "
+            f"at plastic strain {top[0]:.4g}.{warning}"
+        )
+
+    def copy_csv(self) -> None:
+        from PySide6.QtWidgets import QApplication
+
+        from puzzle.materials.curves import csv
+
+        if self.result is not None:
+            QApplication.clipboard().setText(csv(self.result.table, "Plastic strain"))
+            self.info.setText(self.info.text() + " Copied.")
+
+    def _accept(self) -> None:
+        if self.result is not None:
+            self.accept()
 
 
 class MaterialEditor(QWidget):
@@ -274,6 +511,9 @@ class MaterialEditor(QWidget):
         self.model_on["plasticity"] = QCheckBox(MODELS["plasticity"])
         pl.addWidget(self.model_on["plasticity"])
         self.curve_list = QLabel("No hardening curve yet")
+        builder = QPushButton("Curve builder…")
+        builder.setToolTip("From Ramberg-Osgood, the ASME Annex 3-D curve, or bilinear")
+        builder.clicked.connect(self.build_curve)
         edit_curve = QPushButton("Hardening curve…")
         edit_curve.setToolTip(
             "True stress against equivalent plastic strain; the first row is the yield stress at 0"
@@ -281,6 +521,7 @@ class MaterialEditor(QWidget):
         edit_curve.clicked.connect(self.edit_curve)
         row = QHBoxLayout()
         row.addWidget(self.curve_list, 1)
+        row.addWidget(builder)
         row.addWidget(edit_curve)
         pl.addLayout(row)
         column.addWidget(plastic)
@@ -510,6 +751,39 @@ class MaterialEditor(QWidget):
         self.model_on["plasticity"].setChecked(bool(points))
         self._curve_label()
         self.on_change()
+
+    def build_curve(self) -> None:
+        """The curve builder, started from the material's modulus and strengths."""
+
+        def si(key):
+            q = self.base.properties.get(key) if self.base else None
+            text = self.values[key].text().strip()
+            if text:
+                from puzzle.model.units import convert
+
+                p = BY_KEY[key]
+                return convert(_number(text), _display_unit(p.kind, p.unit), p.unit)
+            return q.to_si() if q else None
+
+        try:
+            args = (si("youngs_modulus"), si("yield_strength"), si("tensile_strength"))
+        except ValueError:
+            args = (None, None, None)
+        built = self.ask_curve(*args)
+        if built is None:
+            return
+        self.curves = [{"temperature": None, "points": built.table}]
+        self.model_on["plasticity"].setChecked(True)
+        if built.note not in self.sources.toPlainText():
+            self.sources.appendPlainText(f"Hardening curve: {built.note}")
+        self._curve_label()
+        self.on_change()
+
+    def ask_curve(self, modulus, yield_strength, ultimate):
+        """The curve builder's result (materials.curves.Hardening), or None (tests
+        replace this)."""
+        dialog = CurveBuilder(modulus, yield_strength, ultimate, self)
+        return dialog.result if dialog.exec() else None
 
     def ask_table(self, title, headers, rows):
         """The table editor's rows, or None if cancelled (tests replace this)."""

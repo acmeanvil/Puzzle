@@ -66,3 +66,23 @@ def test_bilinear_and_invalid_classes():
     sy, et = bilinear([(0.0, 0.0), (0.2, 405e6)], 195e9, 205e6)
     assert sy == 205e6 and et == pytest.approx(200e6 / (0.2 - 205e6 / 195e9 - 0.002))
     assert not Asme3DCurve(115e9, 99e6, 100e6, Asme3DClass.ALUMINUM).is_valid
+
+
+def test_hardening_tables_start_at_yield_and_rise():
+    from puzzle.materials.curves import hardening
+
+    ro = hardening("ramberg_osgood", 200e9, 250e6, n=8, ultimate_strength=400e6, basis="true")
+    assert ro.table[0][0] == 0.0 and ro.table[0][1] == pytest.approx(250e6, rel=2e-3)
+    assert all(b[0] > a[0] and b[1] > a[1] for a, b in zip(ro.table, ro.table[1:], strict=False))
+    assert len(ro.table) == 25 and ro.table[-1][1] == pytest.approx(400e6, rel=1e-6)
+    # The same parameters read as an engineering curve give higher true stresses.
+    eng = hardening("ramberg_osgood", 200e9, 250e6, n=8, ultimate_strength=400e6)
+    assert eng.table[-1][1] > ro.table[-1][1]
+    asme = hardening(
+        "asme_3d", 195e9, 205e6, ultimate_strength=515e6, material_class=Asme3DClass.STAINLESS
+    )
+    assert asme.table[-1][1] == pytest.approx(CURVE.true_ultimate_stress, rel=1e-9)
+    bi = hardening("bilinear", 200e9, 250e6, tangent_modulus=2e9, basis="true")
+    assert bi.table == [(0.0, 250e6), (0.2, pytest.approx(250e6 + 200e9 * 2e9 / 198e9 * 0.2))]
+    with pytest.raises(ValueError, match="second point"):
+        hardening("ramberg_osgood", 200e9, 250e6)
