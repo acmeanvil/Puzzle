@@ -239,6 +239,9 @@ class MainWindow(QMainWindow):
         self.viewport = Viewport()
         self.results_bar = ResultsBar(self._redraw_result)
         self.results_bar.hide()
+        # Which part of the work is on screen (ADR 0029): model, geometry, sketch or
+        # results. Panels that belong to one context show only in it.
+        self.context = "model"
         self.pick_bar = PickBar(self)
         self.pick_bar.hide()
         self.log = QPlainTextEdit(readOnly=True)
@@ -316,7 +319,7 @@ class MainWindow(QMainWindow):
         self.meshes.clear()
         self.result = None
         self.viewport.clear()
-        self.results_bar.hide()
+        self.set_context("model")
         history = self.session.root / HISTORY
         history.parent.mkdir(parents=True, exist_ok=True)
         history.touch()
@@ -652,7 +655,7 @@ class MainWindow(QMainWindow):
         if isinstance(obj, ResultDefinition):
             self.show_derived(obj)
             return
-        self.results_bar.hide()
+        self.set_context("model")
         comp = self._component_of(node)
         if comp is None:
             return
@@ -681,11 +684,20 @@ class MainWindow(QMainWindow):
 
     # --- the Geometry tab (ADR 0017) --------------------------------------------------
 
+    def set_context(self, context: str) -> None:
+        """What is on screen: "model", "geometry", "sketch" or "results" (ADR 0029).
+        The results bar belongs to results, the ribbon to geometry and sketches."""
+        self.context = context
+        self.results_bar.setVisible(context == "results" and self.result is not None)
+        self.workbench.ribbon.setVisible(context in ("geometry", "sketch"))
+
     def _tab_changed(self) -> None:
         on = self.left_tabs.currentWidget() is self.workbench
-        self.workbench.ribbon.setVisible(on)
         if on:
+            self.set_context("geometry")
             self.workbench.refresh()
+        else:
+            self.set_context("model")
         self._selected()
 
     def show_workbench_part(self) -> None:
@@ -751,8 +763,11 @@ class MainWindow(QMainWindow):
             if old is not self.centre.widget(0):
                 self.centre.removeWidget(old)
                 old.deleteLater()
+            if self.context == "sketch":
+                self.set_context("geometry")
             return
         self.left_tabs.setCurrentWidget(self.workbench)
+        self.set_context("sketch")
         self.centre.addWidget(workspace)
         self.centre.setCurrentWidget(workspace)
 
@@ -778,7 +793,7 @@ class MainWindow(QMainWindow):
         self.results_bar.blockSignals(True)
         self.results_bar.load(self.result[1], key)
         self.results_bar.blockSignals(False)
-        self.results_bar.show()
+        self.set_context("results")
         self._redraw_result()
 
     def show_derived(self, definition, key: str | None = None) -> None:
@@ -788,7 +803,8 @@ class MainWindow(QMainWindow):
         try:
             d = evaluate(self.session.project, self._store(), definition)
         except PuzzleError as exc:
-            self.results_bar.hide()
+            self.result = None
+            self.set_context("model")
             self.viewport.clear()
             self.report(exc)
             return
@@ -801,7 +817,7 @@ class MainWindow(QMainWindow):
         self.results_bar.blockSignals(True)
         self.results_bar.load(d.results, key, items=d.items)
         self.results_bar.blockSignals(False)
-        self.results_bar.show()
+        self.set_context("results")
         self._redraw_result()
 
     def new_derived(self, method: str = "linear", study=None, definition=None):

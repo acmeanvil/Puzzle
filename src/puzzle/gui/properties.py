@@ -23,6 +23,32 @@ READ_ONLY = {"kind"}
 HIDDEN = {"id"}  # internal: never shown
 # Plain numbers stored in a fixed unit: the unit goes with the name.
 UNITS = {"translation": " (m)", "rotation": " (degrees)", "facet_angle": " (degrees)"}
+# What an unset optional value says (ADR 0029: never "null").
+UNSET = {"source_unit": "From the file", "temperature": "Any temperature"}
+NONE_TEXT = "(none)"
+
+
+def _is_geometry(d: dict) -> bool:
+    return "facet_angle" in d and "history" in d
+
+
+def _faceted(d: dict) -> bool:
+    return str(d.get("source") or "").lower().endswith((".stl", ".obj", ".3mf"))
+
+
+# Fields that only mean something in one mode of their object: (is this the object,
+# does the field apply). A field that doesn't apply isn't shown (ADR 0029).
+APPLIES = {
+    "source": (_is_geometry, lambda d: d.get("source") is not None),
+    "source_unit": (_is_geometry, lambda d: d.get("source") is not None),
+    "facet_angle": (_is_geometry, _faceted),
+    "history": (_is_geometry, lambda d: d.get("source") is None),
+}
+
+
+def applies(owner: Any, key: Any) -> bool:
+    rule = APPLIES.get(key) if isinstance(owner, dict) else None
+    return rule is None or not rule[0](owner) or rule[1](owner)
 
 
 def is_quantity(value: Any) -> bool:
@@ -39,8 +65,14 @@ def format_value(value: Any) -> str:
             return f"{value['value']:g}"
         v, u = shown(value["value"], unit, current().display_units())  # ADR 0024
         return f"{v:.6g} {pretty(u)}"
+    if value is None:
+        return NONE_TEXT
+    if isinstance(value, bool):
+        return "Yes" if value else "No"
     if isinstance(value, str):
         return value
+    if isinstance(value, float):
+        return f"{value:.6g}"
     return json.dumps(value)
 
 
@@ -55,6 +87,8 @@ def parse_value(text: str, old: Any) -> Any:
         if not unit.strip():  # a bare number is in the unit shown
             unit = shown(old["value"], old["unit"], current().display_units())[1]
         return {"value": float(number), "unit": plain(unit)}
+    if old is None and text in (NONE_TEXT, ""):
+        return None
     if isinstance(old, str) or old is None:
         try:
             parsed = json.loads(text)
@@ -110,7 +144,7 @@ class PropertiesPanel(QTreeWidget):
     def _fill(self, parent, node: Any, path: str, names: dict) -> None:
         items = node.items() if isinstance(node, dict) else enumerate(node)
         for key, value in items:
-            if key in HIDDEN:
+            if key in HIDDEN or not applies(node, key):
                 continue
             sub = f"{path}.{key}" if path else str(key)
             if isinstance(node, list):
@@ -119,8 +153,9 @@ class PropertiesPanel(QTreeWidget):
             else:
                 title = label(str(key)) + UNITS.get(str(key), "")
             if isinstance(value, (dict, list)) and not is_quantity(value):
-                count = f"{len(value)} item{'s' if len(value) != 1 else ''}"
-                item = QTreeWidgetItem(parent, [title, count if isinstance(value, list) else ""])
+                if not value:  # nothing to show: adding is in the item's context menu
+                    continue
+                item = QTreeWidgetItem(parent, [title, ""])
                 self._fill(item, value, sub, names)
                 continue
             options = None if key in READ_ONLY else self.choices(sub)
@@ -129,6 +164,8 @@ class PropertiesPanel(QTreeWidget):
             if options is None and isinstance(value, str) and value in names:
                 options = [(names[value], value)]  # a reference with nothing to pick from
             shown = names.get(value, format_value(value)) if isinstance(value, str) else None
+            if value is None and str(key) in UNSET:
+                shown = UNSET[str(key)]
             item = QTreeWidgetItem(parent, [title, shown or format_value(value)])
             if key in READ_ONLY:
                 item.setText(1, label(value) if isinstance(value, str) else format_value(value))
