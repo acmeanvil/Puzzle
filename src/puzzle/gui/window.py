@@ -43,7 +43,7 @@ from puzzle.gui.tasks import Task, start
 from puzzle.gui.tree import ROLE, ModelTree, Node
 from puzzle.gui.viewport import Viewport
 from puzzle.mesh.mesh import Mesh
-from puzzle.model.schema import Component, Geometry, ResultDefinition, Study
+from puzzle.model.schema import Component, Geometry, ResultDefinition, ResultProbe, Study
 from puzzle.project.layout import HISTORY, RESULTS_DIR, WORK_DIR
 from puzzle.results.model import Results
 from puzzle.results.store import ResultStore
@@ -276,6 +276,9 @@ class MainWindow(QMainWindow):
         column.addWidget(self.results_bar)
         column.addWidget(self.pick_bar)
         column.addWidget(self.viewport, 1)
+        self.probes_panel = ProbesPanel(self)
+        column.addWidget(self.probes_panel)
+        self.viewport.probes_changed.connect(self.probes_panel.show_probes)
         # The centre is the 3D view, or the sketch canvas while sketching (ADR 0017).
         self.centre = QStackedWidget()
         self.centre.addWidget(centre)
@@ -723,7 +726,7 @@ class MainWindow(QMainWindow):
 
     def delete_selected(self) -> None:
         node = self.tree.current()
-        if node is None or node.kind not in ("object", "derived"):
+        if node is None or node.kind not in ("object", "derived", "probe"):
             return
         self.submit(Delete(object=node.object))
 
@@ -847,6 +850,9 @@ class MainWindow(QMainWindow):
         )
         if isinstance(obj, ResultDefinition):
             self.show_derived(obj)
+            return
+        if isinstance(obj, ResultProbe):
+            self._show_kept_probe(obj)
             return
         self.set_context("model")
         comp = self._component_of(node)
@@ -972,16 +978,15 @@ class MainWindow(QMainWindow):
 
         store = self._store()
         record = store.get_run(run_id)
-        self.properties.show_text(
-            {
-                "Study": record.study_name,
-                "Solver": solver_label(record.solver),
-                "Ran": "natively" if record.runtime == "native" else f"in {record.runtime}",
-                "Started": f"{record.started_at:%Y-%m-%d %H:%M:%S}",
-                "Duration (s)": round(record.duration_s, 2),
-                "Result steps": record.steps,
-            }
-        )
+        self._run_rows = {
+            "Study": record.study_name,
+            "Solver": solver_label(record.solver),
+            "Ran": "natively" if record.runtime == "native" else f"in {record.runtime}",
+            "Started": f"{record.started_at:%Y-%m-%d %H:%M:%S}",
+            "Duration (s)": round(record.duration_s, 2),
+            "Result steps": record.steps,
+        }
+        self.properties.show_text(self._run_rows)
         if getattr(self, "_result_run", None) != run_id or self.result is None:
             self.result = (store.read_mesh(record.mesh_id), store.read_results(run_id))
             self._result_run = run_id
@@ -1013,6 +1018,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"{definition.name}: {d.warnings[0]}", 10000)
         self.result = (d.mesh, d.results)
         self._result_run = f"derived:{definition.id}"
+        self._run_rows = {"Derived result": definition.name}
         self.results_bar.blockSignals(True)
         self.results_bar.load(d.results, key, items=d.items)
         self.results_bar.blockSignals(False)
@@ -1099,6 +1105,96 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             f"{shown['scalar']} ({shown['step']}): {shown['min']:.4g} … {shown['max']:.4g}{unit}"
         )
+        self._result_properties()
+
+    def _result_properties(self) -> None:
+        """The shown result in Properties: its run, its range and where each extreme is
+        (ADR 0032)."""
+        shown = self.viewport.shown
+        if shown.get("kind") != "result":
+            return
+        unit = f" {shown['unit']}" if shown.get("unit") else ""
+        rows = dict(getattr(self, "_run_rows", {}))
+        rows.update(
+            {
+                "Result": shown.get("scalar", ""),
+                "Step": shown.get("step", ""),
+                "Maximum": f"{shown['max']:.4g}{unit}",
+                "Maximum at": _position(shown["max_at"]),
+                "Minimum": f"{shown['min']:.4g}{unit}",
+                "Minimum at": _position(shown["min_at"]),
+            }
+        )
+        if shown.get("scale"):
+            rows["Deformation scale"] = f"×{shown['scale']:.3g}"
+        self.properties.show_text(rows)
+
+    def keep_probe(self, probe: dict):
+        """A view probe kept as a project object, read again for each run (ADR 0032)."""
+        from puzzle.commands.model import Create
+        from puzzle.model.schema import ResultProbe
+
+        run_id = getattr(self, "_result_run", "") or ""
+        if run_id.startswith("derived:"):
+            source = run_id.removeprefix("derived:")
+        elif run_id:
+            source = self._store().get_run(run_id).study_id
+        else:
+            return None
+        n = len(self.session.project.of_type(ResultProbe)) + 1
+        steps = self.result[1].steps if self.result else []
+        index = self.results_bar.step.value() - 1
+        data = {
+            "name": f"Probe {n}",
+            "source": source,
+            "quantity": probe["quantity"],
+            "point": probe["point"],
+            "step": -1 if index >= len(steps) - 1 else index,
+        }
+        return self.submit(Create(kind="probe", data=data))
+
+    def show_probe(self, probe) -> None:
+        """A kept probe: its value now, and its source's result with the probe marked."""
+        from puzzle.post.probes import evaluate
+
+        try:
+            found = evaluate(self.session.project, self._store(), probe)
+        except PuzzleError as exc:
+            self.report(exc)
+            self.properties.show_text({"Probe": probe.name, "Value": "not available"})
+            return
+        import numpy as np
+
+        from puzzle.gui.viewport import _display
+
+        value, unit = _display(np.array([found["value"]]), found["unit"])
+        source = self.session.project.objects.get(probe.source)
+        rows = {
+            "Probe": probe.name,
+            "Reads": found["label"],
+            "Of": source.name if source is not None else "?",
+            "At": _position(probe.point),
+            "Value": f"{value[0]:.4g}" + (f" {unit}" if unit else ""),
+        }
+        if found["distance"] > 0:
+            rows["Note"] = f"outside the mesh: read {_position_delta(found['distance'])} away"
+        self.properties.show_text(rows)
+
+    def _show_kept_probe(self, probe) -> None:
+        """Its source's result, with the probe marked, and its value in Properties."""
+        src = self.session.project.objects.get(probe.source)
+        if isinstance(src, ResultDefinition):
+            self.show_derived(src, probe.quantity)
+        elif isinstance(src, Study):
+            runs = [r for r in self._store().runs() if r.study_id == str(src.id)]
+            if runs:
+                self._select_run(runs[-1].run_id, probe.quantity)
+        if self.viewport.result_state is not None:
+            try:
+                self.viewport.probe_undeformed(probe.point)
+            except PuzzleError as exc:
+                self.report(exc)
+        self.show_probe(probe)
 
     # --- picking -------------------------------------------------------------------
 
@@ -1661,6 +1757,85 @@ class MainWindow(QMainWindow):
             self.save_layout()
         self.viewport.close_plotter()
         super().closeEvent(event)
+
+
+def _position(xyz) -> str:
+    """A point in the display length unit: "(12.5, 0, 3) mm"."""
+    from puzzle.settings import length_unit
+
+    unit, per_metre = length_unit()
+    return "(" + ", ".join(f"{c * per_metre:.4g}" for c in xyz) + f") {unit}"
+
+
+def _position_delta(d: float) -> str:
+    from puzzle.settings import length_unit
+
+    unit, per_metre = length_unit()
+    return f"{d * per_metre:.3g} {unit}"
+
+
+class ProbesPanel(QWidget):
+    """The view's probes under it (ADR 0032): point, value; copy as CSV, keep, clear."""
+
+    def __init__(self, window) -> None:
+        from PySide6.QtWidgets import QTableWidget
+
+        super().__init__()
+        self.window = window
+        self.probes: list[dict] = []
+        row = QHBoxLayout(self)
+        row.setContentsMargins(6, 2, 6, 2)
+        self.table = QTableWidget(0, 3)
+        self.table.setHorizontalHeaderLabels(["Probe", "At", "Value"])
+        self.table.verticalHeader().hide()
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setMaximumHeight(110)
+        row.addWidget(self.table, 1)
+        buttons = QVBoxLayout()
+        for text, slot in (
+            ("Keep", self.keep),
+            ("Copy as CSV", self.copy_csv),
+            ("Clear", lambda: window.viewport.clear_probes()),
+        ):
+            b = QPushButton(text)
+            b.clicked.connect(slot)
+            buttons.addWidget(b)
+        row.addLayout(buttons)
+        self.hide()
+
+    def show_probes(self, probes: list) -> None:
+        self.probes = probes
+        self.table.setRowCount(len(probes))
+        for r, p in enumerate(probes):
+            unit = f" {p['unit']}" if p["unit"] else ""
+            note = " (nearest point)" if p.get("distance") else ""
+            for c, text in enumerate(
+                (p["label"], _position(p["point"]) + note, f"{p['shown']:.4g}{unit}")
+            ):
+                from PySide6.QtWidgets import QTableWidgetItem
+
+                self.table.setItem(r, c, QTableWidgetItem(text))
+        self.table.resizeColumnsToContents()
+        self.setVisible(bool(probes))
+
+    def keep(self) -> None:
+        for p in self.probes:
+            self.window.keep_probe(p)
+
+    def csv(self) -> str:
+        from puzzle.settings import length_unit
+
+        unit, per_metre = length_unit()
+        lines = [f"quantity,x ({unit}),y ({unit}),z ({unit}),value,unit"]
+        for p in self.probes:
+            xyz = ",".join(f"{c * per_metre:.6g}" for c in p["point"])
+            lines.append(f"{p['label']},{xyz},{p['shown']:.6g},{p['unit'] or ''}")
+        return "\n".join(lines)
+
+    def copy_csv(self) -> None:
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.clipboard().setText(self.csv())
 
 
 def _uuid(text: str):

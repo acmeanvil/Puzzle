@@ -116,6 +116,21 @@ def catalog(fields: list[tuple[str, str, list[str]]]) -> list[Item]:
     return items
 
 
+def label_of(key: str) -> str:
+    """A listed result's name from its key alone ("stress:von_mises" -> "Equivalent (von
+    Mises) stress"), for places that have no run at hand (the tree's probes)."""
+    field = key.split(":")[0]
+    base = field.removesuffix("_range").removesuffix("_mean")
+    if base in VECTORS:
+        comps = ["x", "y", "z"]
+    elif base in TENSORS:
+        comps = ["xx", "yy", "zz", "xy", "yz", "zx"]
+    else:
+        comps = [""]
+    found = next((i for i in catalog([(field, "node", comps)]) if i.key == key), None)
+    return found.label if found is not None else words(field)
+
+
 def words(name: str) -> str:
     """A field name in words: "electric_potential" -> "Electric potential"."""
     text = name.replace("_", " ")

@@ -175,6 +175,8 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         add("New equation from this…", lambda: window.new_derived("equation", str(obj.id)))
         menu.addSeparator()
         add("Delete", window.delete_selected)
+    elif node.kind == "probe" and obj is not None:
+        add("Delete", window.delete_selected)
     elif node.kind in ("sweep", "compare"):
         add("Compare…", lambda: window.open_compare(node.object))
     return menu if menu.actions() else None

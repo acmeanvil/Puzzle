@@ -16,6 +16,7 @@ from puzzle.model.schema import (
     ParameterSet,
     Project,
     ResultDefinition,
+    ResultProbe,
     Study,
     SweepStep,
     Transfer,
@@ -87,7 +88,8 @@ class ModelTree(QTreeWidget):
                 self._state(item, states.get(str(obj.id)))
                 self._children(item, obj, project)
         defined = project.of_type(ResultDefinition)
-        if runs or defined:
+        probes = project.of_type(ResultProbe)
+        if runs or defined or probes:
             from puzzle.post.derived import METHODS
             from puzzle.post.quantities import catalog as results_of
             from puzzle.sweep import title
@@ -97,6 +99,12 @@ class ModelTree(QTreeWidget):
                 text = f"{d.name} · {METHODS[d.method].split(' (')[0].lower()}"
                 item = self._add(section, text, Node("derived", str(d.id), "", d.name))
                 self._state(item, states.get(str(d.id)))
+            for p in probes:  # kept probes (ADR 0032), read again for each run
+                from puzzle.post.quantities import label_of
+
+                text = f"{p.name} · {label_of(p.quantity)}"
+                item = self._add(section, text, Node("probe", str(p.id), "", p.name))
+                self._state(item, states.get(str(p.source)))
             sweeps: dict[str, tuple[QTreeWidgetItem, set]] = {}  # study id -> heading, points
             for r in reversed(runs):  # newest first
                 when = f"{solver_label(r.solver)} · {r.started_at:%Y-%m-%d %H:%M}"

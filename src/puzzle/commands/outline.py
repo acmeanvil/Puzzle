@@ -15,6 +15,7 @@ from puzzle.model.schema import (
     Project,
     Quantity,
     ResultDefinition,
+    ResultProbe,
     Study,
     SweepStep,
     Transfer,
@@ -122,6 +123,14 @@ def outline(project: Project, *, ids: bool = False, runs=None) -> str:
             extra = f" of {d.quantity} ({d.extreme})" if d.method == "envelope" else ""
             what = f"{d.method}{extra}: {cases}"
         lines.append(head("Result", d) + f": {what}" + state(d))
+    for pr in project.of_type(ResultProbe):
+        from puzzle.post.quantities import label_of
+
+        at = ", ".join(f"{c:g}" for c in pr.point)
+        lines.append(
+            head("Probe", pr)
+            + f": {label_of(pr.quantity)} of {names.get(pr.source, '?')} at ({at}) m"
+        )
     problems = project.problems()
     if problems:
         lines.append("Problems:")

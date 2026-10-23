@@ -852,6 +852,22 @@ class ResultDefinition(ProjectObject):
         return own + [c.study for c in self.cases]
 
 
+class ResultProbe(ProjectObject):
+    """A kept probe (ADR 0032): a result read at a point, evaluated for the current run of
+    its source (a study, or a derived result) whenever it is shown; values are never
+    stored. `point` is in the undeformed geometry, metres."""
+
+    kind: ClassVar[str] = "probe"
+
+    source: UUID = Field(description="a study, or a derived result")
+    quantity: str = Field(description='a listed result\'s key, e.g. "stress:von_mises"')
+    point: tuple[float, float, float]
+    step: int = Field(default=-1, description="index into the result steps; -1 = last")
+
+    def dependencies(self) -> list[UUID]:
+        return [self.source]
+
+
 class ProjectUnits(ProjectObject):
     """The project's own display units (ADR 0030). With `use` on, everyone who opens the
     project sees them, over their own preference; off, each user's preference applies.
@@ -883,6 +899,7 @@ OBJECT_TYPES: tuple[type[ProjectObject], ...] = (
     Transfer,
     ResultDefinition,
     ProjectUnits,
+    ResultProbe,
 )
 
 

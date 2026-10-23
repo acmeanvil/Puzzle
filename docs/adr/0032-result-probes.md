@@ -1,6 +1,6 @@
 # 0032. Read results in the view: extreme markers, probes, and the range in Properties
 
-- Status: Proposed
+- Status: Accepted (2026-10-23)
 - Date: 2026-10-23
 
 ## Context
@@ -19,6 +19,25 @@ Today a result shows as a colour map with a colour bar; the status bar gives its
    - history plots over steps (ADR 0038);
    - shoot-out metrics (ADR 0011), which are already this shape.
 4. **Properties of a shown result** list its range, where each extreme is, the step, and the deformation scale. Today they show only the run's timing.
+
+## Built (2026-10-23)
+
+- **Extremes:**
+  - every shown result marks its maximum and minimum with a dot and a label in display units ("Max 120.7 MPa");
+  - the view toolbar switches them off;
+  - Properties lists the run, the range, where each extreme is (undeformed, display length) and the deformation scale.
+- **Probing:**
+  - in results, a double-click reads the value there; Shift adds a probe, and Esc or Clear removes them;
+  - `post/probes.py` `at_point` interpolates in the element with VTK's shape functions on the undeformed grid (a quadratic tet is read quadratically), then computes the listed result from the interpolated components;
+  - on a deformed view, the picked point is taken back to the undeformed geometry first;
+  - the Probes list under the view gives each probe's point and value and copies as CSV.
+- **Labels:** drawn as Qt overlays placed by projecting each 3D point (`SceneView.screen_point`) after every frame, not as VTK 2D text, which left clipped copies on Retina before.
+- **Kept probes:**
+  - "Keep" makes a `ResultProbe` (kind `probe`: source study or derived result, quantity, undeformed point, step);
+  - it sits under Results in the tree, takes its source's state, and selecting it shows its source's result with the probe marked and its current value;
+  - the outline lists them, and MCP `probes` reads them all;
+  - the test doubles the tip load and the kept probe doubles.
+- **Selection reductions** (a probe over a selection: max, min, mean, sum) are not built yet. They come with the plots over steps (ADR 0038).
 
 ## Consequences
 

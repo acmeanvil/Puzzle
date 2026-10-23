@@ -104,6 +104,7 @@ def test_view_toolbar_reaches_the_viewport(window):
         "wireframe": False,
         "parallel": True,
         "view": "-z",
+        "extremes": True,
     }
     assert window.viewport.shown["style"]["parallel"]
     assert vb.actions_by_name["fit"].shortcut().toString() == "F"

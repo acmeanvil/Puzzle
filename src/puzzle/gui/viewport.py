@@ -101,6 +101,14 @@ def _display(values, kind: str | None):
     return np.asarray(converted), pretty(target)
 
 
+def _number(v: float) -> str:
+    """A value as a label: three to four figures, plain between 1e-3 and 1e5."""
+    a = abs(v)
+    if a == 0 or 1e-3 <= a < 1e5:
+        return f"{v:.4g}" if a < 1e4 else f"{v:.0f}"
+    return f"{v:.3e}"
+
+
 def bar_format(lo: float, hi: float) -> str:
     """Colour-bar labels as people write numbers (ADR 0030): plain, to three significant
     figures of the largest, between 1e-3 and 1e5; else with an exponent."""
@@ -123,6 +131,7 @@ def words(name: str) -> str:
 
 class SceneView(QWidget):
     camera_moved = Signal()
+    drawn = Signal()  # a frame was painted: overlays placed on 3D points follow
 
     """A VTK scene rendered off screen and painted as an image, with its own mouse
     handling: left-drag rotates, shift- or middle-drag pans, right-drag, the wheel
@@ -144,6 +153,7 @@ class SceneView(QWidget):
         self.plotter = pv.Plotter(off_screen=True, window_size=[400, 300])
         self.plotter.show(auto_close=False)  # sets up the render window once
         self.on_double_click = None
+        self.modifiers = Qt.KeyboardModifier.NoModifier  # of the last double-click
         self._image = None
         self._last = None
         self._pending = False
@@ -171,6 +181,7 @@ class SceneView(QWidget):
         image.setDevicePixelRatio(dpr)
         self._image = image
         self.update()
+        self.drawn.emit()
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt's name
         from PySide6.QtGui import QPainter
@@ -243,10 +254,22 @@ class SceneView(QWidget):
         dpr = self.devicePixelRatioF()
         x = event.position().x() * dpr
         y = (self.height() - event.position().y()) * dpr  # VTK counts from the bottom
+        self.modifiers = event.modifiers()
         picker = vtk.vtkCellPicker()
         picker.SetTolerance(0.0005)
         if picker.Pick(x, y, 0, self.plotter.renderer) and picker.GetCellId() >= 0:
             self.on_double_click(picker.GetPickPosition())
+
+    def screen_point(self, xyz) -> tuple[float, float] | None:
+        """Where a 3D point shows in this widget (logical pixels), or None behind the eye."""
+        renderer = self.plotter.renderer
+        renderer.SetWorldPoint(*xyz, 1.0)
+        renderer.WorldToDisplay()
+        x, y, z = renderer.GetDisplayPoint()
+        if not 0 <= z <= 1:
+            return None
+        dpr = self.devicePixelRatioF()
+        return x / dpr, self.height() - y / dpr
 
     def _pan(self, dx: float, dy: float) -> None:
         """Move the camera and its focal point in the view plane, by pixels."""
@@ -325,6 +348,9 @@ class ViewBar(QWidget):
             lambda on: viewport.set_style(parallel=on),
             checkable=True,
         )
+        add("extremes", "Max and min markers", viewport.show_extremes, checkable=True)
+        self.actions_by_name["extremes"].setChecked(True)
+        add("clear", "Clear probes", viewport.clear_probes, "Esc")
         add("copy", "Copy image", self.copy_image)
         add("camera", "Save image…", self.save_image)
         self.adjustSize()
@@ -360,6 +386,7 @@ class ViewBar(QWidget):
 
 class Viewport(QWidget):
     picked_changed = Signal(list)  # the picked entities, [(dim, tag), ...]
+    probes_changed = Signal(list)  # the view's probes (ADR 0032)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -388,7 +415,21 @@ class Viewport(QWidget):
             self.placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
             layout.addWidget(self.placeholder)
         # How the scene is drawn, whatever is shown (ADR 0031's view toolbar).
-        self.style = {"edges": False, "wireframe": False, "parallel": False, "view": "iso"}
+        self.style = {
+            "edges": False,
+            "wireframe": False,
+            "parallel": False,
+            "view": "iso",
+            "extremes": True,
+        }
+        # The shown result, for markers and probes (ADR 0032).
+        self.result_state: dict | None = None
+        self._extremes: list[tuple] = []
+        self._mark_actors: list[str] = []
+        self.probes: list[dict] = []
+        self.labels: list[tuple] = []  # (xyz shown, text, colour, QLabel)
+        if self.plotter is not None:
+            self.view.drawn.connect(self._place_labels)
         self.view_bar = ViewBar(self)
 
     def show_mesh(
@@ -396,6 +437,9 @@ class Viewport(QWidget):
     ) -> None:
         """The mesh's volume, with a selection highlighted (a mesh group `Part/Name`, or
         its face `entities` when it was made after meshing) and picked faces marked."""
+        self.result_state, self.probes, self._mark_actors = None, [], []
+        self._clear_labels()
+        self._update_click()
         if mesh is not self.mesh:
             self.mesh = mesh
             self.surface, self.entities = entity_surface(mesh)
@@ -474,9 +518,18 @@ class Viewport(QWidget):
     def set_picking(self, on: bool) -> None:
         """Double-click picks or un-picks the face under the cursor (a drag still rotates)."""
         self.picking = on
+        self._update_click()
+
+    def _update_click(self) -> None:
+        """Double-click picks while picking, probes a shown result, else does nothing."""
         if self.plotter is None:
             return
-        self.view.on_double_click = self._clicked if on else None
+        if self.picking:
+            self.view.on_double_click = self._clicked
+        elif self.result_state is not None:
+            self.view.on_double_click = self._probe_click
+        else:
+            self.view.on_double_click = None
 
     def toggle_pick(self, entity: tuple[int, int]) -> None:
         if entity in self.picked:
@@ -603,6 +656,7 @@ class Viewport(QWidget):
             if item is not None and unit
             else (item.label if item is not None else words(name))
         )
+        base = grid  # undeformed: positions where values are read and reported
         scale = 0.0
         if deform and "displacement" in grid.point_data:
             u = np.nan_to_num(grid.point_data["displacement"])
@@ -611,6 +665,20 @@ class Viewport(QWidget):
             if scale:
                 grid = grid.warp_by_vector("displacement", factor=scale)
         label = f"mode {step.mode}: {step.value:.4g} Hz" if step.mode else f"t = {step.value:g}"
+        on_points = name in grid.point_data
+        where = np.asarray(base.points if on_points else base.cell_centers().points)
+        shown_at = np.asarray(grid.points if on_points else grid.cell_centers().points)
+        hi, lo = int(np.nanargmax(values)), int(np.nanargmin(values))
+        self.result_state = {
+            "mesh": mesh,
+            "step": step,
+            "item": item,
+            "grid": grid,
+            "base": base,
+            "scale": scale,
+            "unit": unit,
+            "name": name,
+        }
         self.shown = {
             "kind": "result",
             "field": field,
@@ -624,9 +692,19 @@ class Viewport(QWidget):
             "title": f"{title}, {label}" + (f", deformation ×{scale:.3g}" if scale else ""),
             "unit": unit,
             "clim": clim,
+            "max_at": where[hi].tolist(),
+            "min_at": where[lo].tolist(),
         }
+        tail = f" {unit}" if unit else ""
+        self._extremes = [
+            (shown_at[hi], f"Max {_number(values[hi])}{tail}", "#e5534b"),
+            (shown_at[lo], f"Min {_number(values[lo])}{tail}", "#4f8fe6"),
+        ]
+        self.probes = []
+        self.probes_changed.emit([])
         if self.plotter is not None:
             self.plotter.clear()
+            self._mark_actors = []
             self.plotter.add_mesh(
                 grid,
                 scalars=name,
@@ -650,6 +728,9 @@ class Viewport(QWidget):
                 },
             )
             self._frame(mesh)
+        self._draw_marks()  # recorded in `shown` without OpenGL too
+        self._update_click()
+        self._render()
         return self.shown
 
     def _render(self) -> None:
@@ -657,6 +738,9 @@ class Viewport(QWidget):
             self.view.refresh()
 
     def clear(self) -> None:
+        self.result_state = None
+        self.probes = []
+        self._clear_labels()
         self.shown = {}
         self.mesh, self.surface, self.entities, self.picked = None, None, [], []
         self.lines, self.line_entities = None, []
@@ -675,6 +759,127 @@ class Viewport(QWidget):
     def close_plotter(self) -> None:
         if self.plotter is not None:
             self.plotter.close()
+
+    # --- extremes and probes (ADR 0032) --------------------------------------------------
+
+    def probe(self, xyz_shown, add: bool = False) -> dict | None:
+        """Read the shown result where the (deformed) view shows `xyz_shown`: the value
+        in display units, the point in the undeformed geometry. `add` keeps the others."""
+        import pyvista as pv
+
+        state = self.result_state
+        if state is None or state["item"] is None:
+            return None
+        point = np.asarray(xyz_shown, float)
+        if state["scale"]:  # back to the undeformed geometry: the same spot in the cell
+            u = pv.PolyData(point.reshape(1, 3)).sample(state["grid"]).point_data
+            if "displacement" in u:
+                point = point - state["scale"] * np.asarray(u["displacement"][0])
+        return self._probe_at(point, xyz_shown, add)
+
+    def probe_undeformed(self, point, add: bool = False) -> dict | None:
+        """A probe at a point of the undeformed geometry (a kept probe), read there and
+        drawn where the deformed view shows it."""
+        import pyvista as pv
+
+        state = self.result_state
+        if state is None or state["item"] is None:
+            return None
+        shown = np.asarray(point, float)
+        if state["scale"]:
+            u = pv.PolyData(shown.reshape(1, 3)).sample(state["base"]).point_data
+            if "displacement" in u:
+                shown = shown + state["scale"] * np.asarray(u["displacement"][0])
+        return self._probe_at(np.asarray(point, float), shown, add)
+
+    def _probe_at(self, point, shown, add: bool) -> dict:
+        from puzzle.post.probes import at_point
+
+        state = self.result_state
+        found = at_point(state["mesh"], state["step"], state["item"], point)
+        shown_value, unit = _display(np.array([found["value"]]), state["item"].unit)
+        probe = found | {
+            "shown": float(shown_value[0]),
+            "unit": unit,
+            "at": np.asarray(shown, float).tolist(),
+            "label": state["item"].label,
+            "quantity": state["item"].key,
+        }
+        self.probes = [*self.probes, probe] if add else [probe]
+        self._draw_marks()
+        self._render()
+        self.probes_changed.emit(list(self.probes))
+        return probe
+
+    def clear_probes(self) -> None:
+        self.probes = []
+        self._draw_marks()
+        self._render()
+        self.probes_changed.emit([])
+
+    def _probe_click(self, xyz) -> None:
+        add = bool(self.view.modifiers & Qt.KeyboardModifier.ShiftModifier)
+        self.probe(xyz, add=add)
+
+    def _marks(self) -> list[tuple]:
+        marks = list(self._extremes) if self.style["extremes"] and self.result_state else []
+        unit = lambda p: f" {p['unit']}" if p["unit"] else ""  # noqa: E731
+        marks += [
+            (np.asarray(p["at"]), f"{_number(p['shown'])}{unit(p)}", "#f5f5f5") for p in self.probes
+        ]
+        return marks
+
+    def _draw_marks(self) -> None:
+        """Markers at the extremes and the probes, and their labels (Qt overlays)."""
+        marks = self._marks()
+        self.shown["marks"] = [text for _, text, _ in marks]
+        self._clear_labels()
+        if self.plotter is None:
+            return
+        for name in self._mark_actors:
+            self.plotter.remove_actor(name)
+        self._mark_actors = []
+        for i, (xyz, text, colour) in enumerate(marks):
+            name = f"puzzle-mark-{i}"
+            self.plotter.add_points(
+                np.asarray(xyz, float).reshape(1, 3),
+                color=colour,
+                point_size=11,
+                render_points_as_spheres=True,
+                name=name,
+                reset_camera=False,
+            )
+            self._mark_actors.append(name)
+            label = QLabel(text, self.view)
+            label.setStyleSheet(
+                f"QLabel {{ background: rgba(30,30,30,190); color: {colour}; padding: 1px 4px;"
+                " border-radius: 3px; }"
+            )
+            label.adjustSize()
+            self.labels.append((np.asarray(xyz, float), text, colour, label))
+        self._place_labels()
+
+    def _clear_labels(self) -> None:
+        for *_rest, label in self.labels:
+            label.hide()  # at once: deleteLater waits for the event loop's next turn
+            label.deleteLater()
+        self.labels = []
+
+    def _place_labels(self) -> None:
+        if self.plotter is None:
+            return
+        for xyz, _text, _colour, label in self.labels:
+            at = self.view.screen_point(xyz)
+            label.setVisible(at is not None)
+            if at is not None:
+                label.move(int(at[0]) + 8, int(at[1]) - label.height() - 4)
+                label.raise_()
+
+    def show_extremes(self, on: bool) -> None:
+        self.style["extremes"] = on
+        if self.result_state is not None:
+            self._draw_marks()
+            self._render()
 
     # --- the view toolbar's actions (ADR 0031) ------------------------------------------
 

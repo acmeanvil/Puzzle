@@ -47,6 +47,8 @@ DRAWINGS = {
     'M12 3v18"/>',
     "projection": '<path d="M3 8l9-4 9 4-9 4z"/><path d="M3 8v8l9 4 9-4V8"/>',
     "camera": '<path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/>',
+    "extremes": '<path d="M12 4v16M8 8l4-4 4 4M8 16l4 4 4-4"/>',
+    "clear": '<path d="M6 6l12 12M18 6L6 18"/>',
     "copy": '<rect x="8" y="8" width="12" height="12" rx="1"/><path d="M4 16V4h12"/>',
 }
 

@@ -372,6 +372,28 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
             "functions": list(derived.FUNCTIONS),
         }
 
+    @tool(
+        description="Every kept probe (ADR 0032) read for its source's current run: "
+        "value (SI), the quantity, the point (m), and how far outside the mesh it was."
+    )
+    @guarded
+    def probes() -> list[dict[str, Any]]:
+        from puzzle.model.schema import ResultProbe
+        from puzzle.post.probes import evaluate
+        from puzzle.project.layout import RESULTS_DIR
+        from puzzle.results.store import ResultStore
+
+        s = session()
+        store = ResultStore(root / RESULTS_DIR)
+        out = []
+        for p in s.project.of_type(ResultProbe):
+            try:
+                found = evaluate(s.project, store, p)
+                out.append({"probe": p.name, **found})
+            except PuzzleError as exc:
+                out.append({"probe": p.name, "error": exc.message, "code": exc.code})
+        return out
+
     @tool(description="Stored runs: study, solver, when, how long.")
     @guarded
     def runs() -> list[dict[str, Any]]:
