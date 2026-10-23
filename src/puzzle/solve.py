@@ -38,6 +38,8 @@ class StudyRun:
     mesh_result: MeshResult | None = None  # meshing details, for fresh runs
     job: JobResult | None = None  # solver process details, for fresh runs
     input_file: Path | None = None
+    # A swept study (ADR 0018): one run per point, with the point in words.
+    points: list[tuple[dict[str, str], StudyRun]] | None = None
 
 
 def run_study(
@@ -53,6 +55,7 @@ def run_study(
     upstream: dict | None = None,
     solver: str | None = None,
     meshed: MeshResult | None = None,
+    _point: tuple[str, dict[str, str]] | None = None,
 ) -> StudyRun:
     """Run `study_id` with its primary solver. Geometry paths resolve against `root`.
 
@@ -71,7 +74,17 @@ def run_study(
             )
         study = study.model_copy(update={"solver": solver})
     if study.sweeps():
-        raise StudyError("parametric sweeps are not run yet", code="unsupported", path=study.name)
+        return _run_sweep(
+            project,
+            study,
+            root,
+            workdir,
+            store=store,
+            reuse=reuse,
+            on_output=on_output,
+            timeout_s=timeout_s,
+            solver=study.solver,
+        )
     adapters = available_adapters()
     if study.solver not in adapters:
         raise StudyError(
@@ -82,7 +95,7 @@ def run_study(
     if problems:
         raise StudyError("; ".join(problems), path=study.name, details={"problems": problems})
 
-    run_key = run_hashes(project)[study.id][study.solver][0]
+    run_key = _point[0] if _point else run_hashes(project)[study.id][study.solver][0]
     if store is not None and reuse:
         hit = store.find_run(run_key)
         if hit is not None:
@@ -183,6 +196,7 @@ def run_study(
             results=results,
             started_at=started,
             duration_s=(datetime.now(UTC) - started).total_seconds(),
+            point=_point[1] if _point else None,
         )
     return StudyRun(
         mesh=meshed.mesh,
@@ -192,6 +206,49 @@ def run_study(
         mesh_result=meshed,
         job=job,
         input_file=input_file,
+    )
+
+
+def _run_sweep(project, study, root, workdir, *, store, reuse, on_output, timeout_s, solver):
+    """Each point of the sweep as its own run (cached by the point's run key). A sweep
+    of materials only meshes once: the geometry is the same at every point."""
+    from puzzle import sweep
+
+    keys = run_hashes(project)[study.id][solver]
+    runs: list[tuple[dict[str, str], StudyRun]] = []
+    shared_mesh = None
+    for i, (point, key) in enumerate(zip(study.sweep_points(), keys, strict=True), start=1):
+        p = sweep.apply(project, study, point)
+        words = sweep.labels(project, point)
+        if on_output:
+            on_output(f"--- {study.name}: point {i} of {len(keys)}: {sweep.title(words)}")
+        run = run_study(
+            p,
+            study.id,
+            root,
+            workdir / f"point-{i}",
+            store=store,
+            reuse=reuse,
+            on_output=on_output,
+            timeout_s=timeout_s,
+            solver=solver,
+            meshed=shared_mesh,
+            _point=(key, words),
+        )
+        if sweep.materials_only(study) and run.mesh_result is not None:
+            shared_mesh = run.mesh_result
+        runs.append((words, run))
+    last = runs[-1][1]
+    return StudyRun(
+        mesh=last.mesh,
+        results=last.results,
+        run_key=last.run_key,
+        run_id=last.run_id,
+        cached=all(r.cached for _, r in runs),
+        mesh_result=last.mesh_result,
+        job=last.job,
+        input_file=last.input_file,
+        points=runs,
     )
 
 

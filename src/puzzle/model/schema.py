@@ -507,10 +507,34 @@ class SolveStep(BaseModel):
 
 
 class SweepParameter(BaseModel):
+    """A parameter's values, or a material choice (ADR 0018): at `location` (a material
+    assignment's selection in the study's component), each of `materials` in turn."""
+
     model_config = ConfigDict(extra="forbid")
 
-    name: str = Field(description="A parameter defined in a parameter set")
-    values: list[Quantity] = Field(min_length=1)
+    name: str = Field(description="A parameter defined in a parameter set, or a choice's label")
+    values: list[Quantity] = Field(default_factory=list)
+    location: str | None = Field(
+        default=None, description="A material assignment's selection: this is a material choice"
+    )
+    materials: list[UUID] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _values_or_materials(self) -> SweepParameter:
+        if self.location is not None:
+            if not self.materials or self.values:
+                raise ValueError("a material choice lists materials (and no values)")
+        elif not self.values or self.materials:
+            raise ValueError("a swept parameter lists values (and no materials)")
+        return self
+
+    @property
+    def key(self) -> str:
+        """How a point names it: the parameter, or "material:<location>"."""
+        return f"material:{self.location}" if self.location is not None else self.name
+
+    def choices(self) -> list:
+        return [str(m) for m in self.materials] if self.location is not None else self.values
 
 
 class SweepStep(BaseModel):
@@ -528,14 +552,15 @@ class SweepStep(BaseModel):
     combination: Literal["grid", "paired"] = "grid"
 
     @model_validator(mode="after")
-    def _paired_lengths_match(self) -> SweepStep:
-        if self.combination == "paired" and len({len(p.values) for p in self.parameters}) > 1:
+    def _paired_choice_lengths_match(self) -> SweepStep:
+        if self.combination == "paired" and len({len(p.choices()) for p in self.parameters}) > 1:
             raise ValueError("paired sweep parameters need the same number of values")
         return self
 
-    def points(self) -> list[dict[str, Quantity]]:
-        names = [p.name for p in self.parameters]
-        columns = [p.values for p in self.parameters]
+    def points(self) -> list[dict[str, Quantity | str]]:
+        """Each run's values: parameter name -> Quantity, "material:<location>" -> id."""
+        names = [p.key for p in self.parameters]
+        columns = [p.choices() for p in self.parameters]
         rows = (
             itertools.product(*columns)
             if self.combination == "grid"
@@ -591,11 +616,15 @@ class Study(ProjectObject):
         return [s for s in self.steps if isinstance(s, SolveStep)]
 
     def swept_parameters(self) -> set[str]:
-        return {p.name for sweep in self.sweeps() for p in sweep.parameters}
+        """The project parameters the study's sweeps vary (material choices aside)."""
+        return {p.name for sweep in self.sweeps() for p in sweep.parameters if p.location is None}
 
-    def sweep_points(self) -> list[dict[str, Quantity]]:
+    def material_choices(self) -> list[SweepParameter]:
+        return [p for sweep in self.sweeps() for p in sweep.parameters if p.location is not None]
+
+    def sweep_points(self) -> list[dict[str, Quantity | str]]:
         """Every run this study makes: one empty point if it has no sweep."""
-        points: list[dict[str, Quantity]] = [{}]
+        points: list[dict[str, Quantity | str]] = [{}]
         for sweep in self.sweeps():
             points = [outer | inner for outer in points for inner in sweep.points()]
         return points

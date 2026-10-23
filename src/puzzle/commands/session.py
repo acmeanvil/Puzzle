@@ -540,7 +540,11 @@ class Session:
             "run_id": run.run_id,
             "cached": run.cached,
         }
-        if not run.cached:
+        if run.points:  # a sweep (ADR 0018): each point's run
+            data["points"] = [
+                {"point": words, "run_id": r.run_id, "cached": r.cached} for words, r in run.points
+            ]
+        if not run.cached and run.job is not None and run.mesh_result is not None:
             data["duration_s"] = run.job.duration_s
             data["mesh"] = {
                 "nodes": int(len(run.mesh.node_ids)),

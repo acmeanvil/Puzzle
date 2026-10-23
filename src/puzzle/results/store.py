@@ -60,6 +60,9 @@ SCHEMAS = {
             ("duration_s", pa.float64()),
             ("steps", pa.int32()),
             ("recorded_at", pa.timestamp("us", tz="UTC")),
+            # The sweep point as JSON (ADR 0018), e.g. {"Bar/Body": "Copper"}; added to
+            # older stores by schema merge, where earlier runs read it as null.
+            ("point", pa.string()),
         ]
     ),
     "meshes": pa.schema(
@@ -137,6 +140,12 @@ class RunRecord:
     duration_s: float
     steps: int
     recorded_at: datetime
+    point: str | None = None  # the sweep point as JSON (ADR 0018), labels as people read them
+
+    def point_labels(self) -> dict[str, str]:
+        import json
+
+        return json.loads(self.point) if self.point else {}
 
 
 def mesh_id(mesh: Mesh) -> str:
@@ -173,8 +182,10 @@ class ResultStore:
         results: Results,
         started_at: datetime,
         duration_s: float,
+        point: dict[str, str] | None = None,
     ) -> str:
-        """Store a completed run and its mesh; return the new run id."""
+        """Store a completed run and its mesh; return the new run id. `point`: the sweep
+        point it ran (readable labels), if any."""
         run_id = uuid.uuid4().hex
         self._check_format(create=True)
         mid = self.write_mesh(mesh)
@@ -194,6 +205,7 @@ class ResultStore:
             "duration_s": duration_s,
             "steps": len(results.steps),
             "recorded_at": _now(),
+            "point": json.dumps(point) if point else None,
         }
         self._append("runs", pa.Table.from_pylist([record], schema=SCHEMAS["runs"]))
         return run_id
@@ -380,6 +392,7 @@ class ResultStore:
             mode="append",
             partition_by=PARTITIONS.get(name),
             writer_properties=WRITERS.get(name, WRITER),
+            schema_mode="merge",  # a column added since (runs.point) joins older tables
         )
 
     def _rows(self, name: str, filter=None, columns: list[str] | None = None) -> pa.Table:

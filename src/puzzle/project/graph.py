@@ -74,7 +74,10 @@ def run_hashes(project: Project) -> dict[UUID, dict[str, list[str]]]:
                     {
                         "setup": setup,
                         "solver": solver,
-                        "point": {k: v.model_dump(mode="json") for k, v in point.items()},
+                        "point": {
+                            k: v if isinstance(v, str) else v.model_dump(mode="json")
+                            for k, v in point.items()
+                        },
                     }
                 )
                 for point in study.sweep_points()
