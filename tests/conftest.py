@@ -237,6 +237,7 @@ def _fresh_settings():
 
     def clean():
         settings.settings_path().unlink(missing_ok=True)
+        settings.window_state_path().unlink(missing_ok=True)
         custom = custom_library_path()
         custom.unlink(missing_ok=True)
         custom.with_name(custom.stem + "-history.jsonl").unlink(missing_ok=True)

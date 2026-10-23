@@ -261,6 +261,103 @@ class SceneView(QWidget):
         camera.position, camera.focal_point = tuple(position + shift), tuple(focal + shift)
 
 
+class ViewBar(QWidget):
+    """The view toolbar over the 3D view's top-right corner (ADR 0031): fit, standard
+    views, edges, wireframe, orthographic, image. Shortcuts work while the view has
+    focus: F fit, I isometric, 1–6 the axis views."""
+
+    VIEWS = [("+x", "1"), ("-x", "2"), ("+y", "3"), ("-y", "4"), ("+z", "5"), ("-z", "6")]
+
+    def __init__(self, viewport: Viewport) -> None:
+        from PySide6.QtGui import QAction, QKeySequence
+        from PySide6.QtWidgets import QHBoxLayout, QToolButton
+
+        from puzzle.gui.icons import icon
+
+        super().__init__(viewport)
+        self.viewport = viewport
+        self.setObjectName("view_bar")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(
+            "QWidget#view_bar { background: rgba(40, 44, 52, 150); border-radius: 6px; }"
+            "QToolButton { color: white; padding: 2px; border: none; }"
+            "QToolButton:checked { background: rgba(79, 143, 230, 180); border-radius: 4px; }"
+        )
+        row = QHBoxLayout(self)
+        row.setContentsMargins(4, 2, 4, 2)
+        row.setSpacing(1)
+        self.actions_by_name: dict[str, QAction] = {}
+        # Shortcuts fire while the view (or this bar) has focus, never while typing.
+        target = viewport.view if viewport.plotter is not None else viewport
+
+        def add(key, text, slot, shortcut=None, checkable=False, label=None):
+            action = QAction(icon(key), label or text, self)
+            action.setCheckable(checkable)
+            action.setToolTip(f"{text}  ({shortcut})" if shortcut else text)
+            if shortcut:
+                action.setShortcut(QKeySequence(shortcut))
+                action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+                target.addAction(action)
+            action.triggered.connect(slot)
+            button = QToolButton()
+            button.setDefaultAction(action)
+            button.setAutoRaise(True)
+            if label:  # the axis views read as text: +X, -Y, ...
+                button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+            row.addWidget(button)
+            self.actions_by_name[key] = action
+
+        add("fit", "Fit all", viewport.fit, "F")
+        add("iso", "Isometric", lambda: viewport.look("iso"), "I")
+        for direction, shortcut in self.VIEWS:
+            add(
+                direction,
+                f"View from {direction.upper()}",
+                lambda _=False, d=direction: viewport.look(d),
+                shortcut,
+                label=direction.upper(),
+            )
+        add("edges", "Element edges", lambda on: viewport.set_style(edges=on), checkable=True)
+        add("wireframe", "Wireframe", lambda on: viewport.set_style(wireframe=on), checkable=True)
+        add(
+            "projection",
+            "Orthographic",
+            lambda on: viewport.set_style(parallel=on),
+            checkable=True,
+        )
+        add("copy", "Copy image", self.copy_image)
+        add("camera", "Save image…", self.save_image)
+        self.adjustSize()
+
+    def copy_image(self) -> None:
+        from PySide6.QtWidgets import QApplication
+
+        image = self.viewport.image()
+        if image is not None:
+            QApplication.clipboard().setImage(image)
+
+    def save_image(self) -> None:
+        image = self.viewport.image()
+        if image is None:
+            return
+        path = self.ask_path()
+        if path:
+            image.save(path)
+
+    def ask_path(self) -> str | None:
+        """Where to save the image (tests replace this)."""
+        from PySide6.QtWidgets import QFileDialog
+
+        path, _ = QFileDialog.getSaveFileName(self, "Save image", "view.png", "PNG (*.png)")
+        return path or None
+
+    def place(self) -> None:
+        self.adjustSize()
+        parent = self.parentWidget()
+        self.move(max(0, parent.width() - self.width() - 8), 8)
+        self.raise_()
+
+
 class Viewport(QWidget):
     picked_changed = Signal(list)  # the picked entities, [(dim, tag), ...]
 
@@ -290,6 +387,9 @@ class Viewport(QWidget):
             self.placeholder = QLabel("3D view unavailable here (no OpenGL)")
             self.placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
             layout.addWidget(self.placeholder)
+        # How the scene is drawn, whatever is shown (ADR 0031's view toolbar).
+        self.style = {"edges": False, "wireframe": False, "parallel": False, "view": "iso"}
+        self.view_bar = ViewBar(self)
 
     def show_mesh(
         self, mesh: Mesh, highlight: str | None = None, entities: list | None = None
@@ -564,6 +664,10 @@ class Viewport(QWidget):
             self.plotter.clear()
             self._render()
 
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        super().resizeEvent(event)
+        self.view_bar.place()
+
     def screenshot(self, path) -> None:
         if self.plotter is not None:
             self.plotter.screenshot(str(path))
@@ -571,6 +675,68 @@ class Viewport(QWidget):
     def close_plotter(self) -> None:
         if self.plotter is not None:
             self.plotter.close()
+
+    # --- the view toolbar's actions (ADR 0031) ------------------------------------------
+
+    def fit(self) -> None:
+        if self.plotter is not None:
+            self.plotter.reset_camera()
+            self._render()
+
+    def look(self, direction: str) -> None:
+        """A standard view: "iso", or from "+x", "-x", "+y", "-y", "+z", "-z"."""
+        self.style["view"] = direction
+        if self.plotter is None:
+            return
+        if direction == "iso":
+            self.plotter.view_isometric()
+        else:
+            axis, negative = direction[1], direction[0] == "-"
+            {"x": self.plotter.view_yz, "y": self.plotter.view_xz, "z": self.plotter.view_xy}[axis](
+                negative=negative
+            )
+        self.plotter.reset_camera()
+        self._render()
+
+    def set_style(self, **changes) -> None:
+        """Edges on results and previews, wireframe, orthographic: kept across redraws."""
+        self.style.update(changes)
+        self._apply_style()
+        self._render()
+
+    def _apply_style(self) -> None:
+        self.shown["style"] = dict(self.style)
+        if self.plotter is None:
+            return
+        import vtk
+
+        for actor in self.plotter.renderer.actors.values():
+            if not isinstance(actor, vtk.vtkActor):
+                continue
+            prop = actor.GetProperty()
+            if self.style["wireframe"]:
+                prop.SetRepresentationToWireframe()
+            else:
+                prop.SetRepresentationToSurface()
+            if self.style["edges"]:
+                prop.SetEdgeVisibility(True)
+        # Only on a change: pyvista moves the camera each time perspective is set.
+        if self.style["parallel"] != bool(self.plotter.camera.parallel_projection):
+            if self.style["parallel"]:
+                self.plotter.enable_parallel_projection()
+            else:
+                self.plotter.disable_parallel_projection()
+
+    def image(self):
+        """The view as a QImage (None without a 3D view)."""
+        if self.plotter is None:
+            return None
+        from PySide6.QtGui import QImage
+
+        self.plotter.render()
+        pixels = np.ascontiguousarray(self.plotter.screenshot(return_img=True))
+        h, w, _ = pixels.shape
+        return QImage(pixels.data, w, h, 3 * w, QImage.Format.Format_RGB888).copy()
 
     def _frame(self, mesh) -> None:
         """Fit the camera to a newly shown mesh; keep the user's view on redraws of the
@@ -580,4 +746,5 @@ class Viewport(QWidget):
                 self.plotter.view_isometric()
             self.plotter.reset_camera()
             self._framed = mesh
+        self._apply_style()
         self._render()

@@ -47,6 +47,8 @@ from puzzle.project.layout import HISTORY, RESULTS_DIR, WORK_DIR
 from puzzle.results.model import Results
 from puzzle.results.store import ResultStore
 
+CONTEXT_NAMES = {"model": "Model", "geometry": "Geometry", "sketch": "Sketch", "results": "Results"}
+
 
 class ElidedLabel(QLabel):
     """A one-line label that never asks for width: long text (many picked names) is
@@ -287,6 +289,12 @@ class MainWindow(QMainWindow):
         self.messages_dock = self._dock("Messages", tabs, Qt.DockWidgetArea.BottomDockWidgetArea)
         self.agent = AgentPanel(self, provider_factory)
         self.agent_dock = self._dock("Agent", self.agent, right)
+        # The model gets the room (ADR 0031): the agent opens when wanted or when a
+        # proposal arrives; messages fold to their tab bar until there is news.
+        self.agent_dock.hide()
+        self._proposals_seen = 0
+        tabs.tabBarClicked.connect(lambda _i: self.fold_messages(False))
+        self.messages_folded = False
         self._sized = False  # dock sizes are applied once the window is on screen
         # Wide, visible separators: Qt's default ones on macOS are a hairline that is
         # hard to find and grab.
@@ -296,6 +304,10 @@ class MainWindow(QMainWindow):
         )
 
         self._actions()
+        self.context_label = QLabel("")
+        self.context_label.setStyleSheet("color: gray; padding: 0 8px")
+        self.statusBar().addPermanentWidget(self.context_label)
+        self.fold_messages(True)
         self.tree.currentItemChanged.connect(lambda *_: self._selected())
         self.tree.itemDoubleClicked.connect(lambda *_: self._open_item())
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -364,6 +376,10 @@ class MainWindow(QMainWindow):
             self.history.addItem(_history_line(entry, names))
         self.refresh_problems()
         self.agent.refresh()
+        waiting = self.agent.proposals.count()
+        if waiting > self._proposals_seen:  # a new proposal: open the agent, no focus
+            self.agent_dock.show()
+        self._proposals_seen = waiting
         self.workbench.refresh()
         self._selected()
 
@@ -495,9 +511,29 @@ class MainWindow(QMainWindow):
 
     # --- actions -----------------------------------------------------------------
 
+    # The toolbar's groups (ADR 0031); None separates them. Delete and Reload act on
+    # what is selected, so they live in the Project menu and the context menus.
+    TOOLBAR = [
+        "new",
+        "open",
+        "undo",
+        None,
+        "mesh",
+        "run",
+        None,
+        "material",
+        "builder",
+        None,
+        "pick",
+    ]
+
     def _actions(self) -> None:
+        from puzzle.gui.icons import icon
+
         bar = self.addToolBar("Main")
+        bar.setObjectName("Main toolbar")
         bar.setMovable(False)
+        self.toolbar = bar
         menu = self.menuBar().addMenu("&Project")
         self.actions_by_name: dict[str, QAction] = {}
         for name, text, key, slot in (
@@ -509,17 +545,46 @@ class MainWindow(QMainWindow):
             ("material", "Add material…", None, self._add_material_dialog),
             ("builder", "Material builder…", None, lambda: self.open_material_builder()),
             ("delete", "Delete", QKeySequence.StandardKey.Delete, self.delete_selected),
-            ("reload", "Reload", QKeySequence.StandardKey.Refresh, self.reload),
+            ("reload", "Reload from disk", QKeySequence.StandardKey.Refresh, self.reload),
             ("pick", "Pick", "P", self.toggle_picking),
             ("settings", "Settings…", QKeySequence.StandardKey.Preferences, self.open_settings),
         ):
-            action = QAction(text, self)
+            action = QAction(icon(name), text, self)
             if key is not None:
                 action.setShortcut(key)
+            shortcut = action.shortcut().toString(QKeySequence.SequenceFormat.NativeText)
+            action.setToolTip(f"{text.rstrip('…')}  ({shortcut})" if shortcut else text.rstrip("…"))
             action.triggered.connect(slot)
-            bar.addAction(action)
             menu.addAction(action)
             self.actions_by_name[name] = action
+        for name in self.TOOLBAR:
+            if name is None:
+                bar.addSeparator()
+            else:
+                bar.addAction(self.actions_by_name[name])
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        bar.addWidget(spacer)
+        # The docks that open when needed (ADR 0031), and Settings, at the right.
+        agent = self.agent_dock.toggleViewAction()
+        agent.setIcon(icon("agent"))
+        agent.setText("Agent")
+        agent.setToolTip("The AI agent: chat and proposals")
+        messages = QAction(icon("messages"), "Messages", self)
+        messages.setCheckable(True)
+        messages.setToolTip("Solver output, history and problems")
+        messages.toggled.connect(lambda on: self.fold_messages(not on))
+        self.actions_by_name["agent"] = agent
+        self.actions_by_name["messages"] = messages
+        for action in (agent, messages, self.actions_by_name["settings"]):
+            bar.addAction(action)
+        window = self.menuBar().addMenu("&Window")
+        window.addAction(agent)
+        window.addAction(messages)
+        window.addSeparator()
+        reset = window.addAction("Reset layout")
+        reset.triggered.connect(self.reset_layout)
+        self.apply_toolbar_style()
         # On macOS, Settings… moves to the application menu, where Mac users look for it.
         self.actions_by_name["settings"].setMenuRole(QAction.MenuRole.PreferencesRole)
         pick = self.actions_by_name["pick"]
@@ -555,6 +620,7 @@ class MainWindow(QMainWindow):
         from puzzle.settings import reload
 
         reload()
+        self.apply_toolbar_style()
         self.agent.agent = None  # the next message builds the agent with the new settings
         if self.session is not None:
             self.refresh()
@@ -661,6 +727,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Select a study to run", 5000)
             return None
         s = self.session
+        self.fold_messages(False)
         self.output_tabs.setCurrentWidget(self.log)
         self.log.appendPlainText(f"--- {study.name}: {study.solver}")
 
@@ -672,6 +739,7 @@ class MainWindow(QMainWindow):
             run = outcome.run
             cached = " (reused an identical run)" if run is not None and run.cached else ""
             self.statusBar().showMessage(f"{study.name} finished{cached}", 8000)
+            self.fold_messages(True)  # good news needs no log; it stays one click away
             if run is not None and run.run_id:
                 self.tree.select(Node("run", run.run_id, "", ""))
                 self._select_run(run.run_id)
@@ -748,6 +816,8 @@ class MainWindow(QMainWindow):
         """What is on screen: "model", "geometry", "sketch" or "results" (ADR 0029).
         The results bar belongs to results, the ribbon to geometry and sketches."""
         self.context = context
+        if hasattr(self, "context_label"):
+            self.context_label.setText(CONTEXT_NAMES.get(context, context))
         self.results_bar.setVisible(context == "results" and self.result is not None)
         self.workbench.ribbon.setVisible(context in ("geometry", "sketch"))
 
@@ -1221,6 +1291,8 @@ class MainWindow(QMainWindow):
                 self.actions_by_name[name].setEnabled(True)
 
     def report(self, exc: Exception) -> None:
+        self.fold_messages(False)
+        self.output_tabs.setCurrentWidget(self.log)
         text = exc.message if isinstance(exc, PuzzleError) else f"{type(exc).__name__}: {exc}"
         code = f"[{exc.code}] " if isinstance(exc, PuzzleError) else ""
         self.log.appendPlainText(f"error: {code}{text}")
@@ -1437,7 +1509,72 @@ class MainWindow(QMainWindow):
         super().showEvent(event)
         if not self._sized:  # Qt ignores dock sizes set before the first show
             self._sized = True
-            QTimer.singleShot(0, self._size_docks)
+            QTimer.singleShot(0, self._restore_layout)
+
+    # --- layout (ADR 0031) ----------------------------------------------------------
+
+    def fold_messages(self, folded: bool) -> None:
+        """Messages as just their tab bar (folded), or open with the selected tab."""
+        from PySide6.QtWidgets import QStackedWidget as Stack
+
+        stack = self.output_tabs.findChild(Stack)
+        if stack is not None:
+            stack.setVisible(not folded)
+        bar = self.output_tabs.tabBar().sizeHint().height()
+        self.messages_dock.setMaximumHeight(bar + 34 if folded else 16777215)
+        self.messages_folded = folded
+        action = self.actions_by_name.get("messages") if hasattr(self, "actions_by_name") else None
+        if action is not None and action.isChecked() == folded:
+            action.blockSignals(True)
+            action.setChecked(not folded)
+            action.blockSignals(False)
+
+    def apply_toolbar_style(self) -> None:
+        """Labels under the icons, or icons only (Settings → Interface)."""
+        from puzzle.settings import current
+
+        under = current().get("interface.toolbar_labels") == "under"
+        style = Qt.ToolButtonStyle.ToolButtonTextUnderIcon
+        self.toolbar.setToolButtonStyle(style if under else Qt.ToolButtonStyle.ToolButtonIconOnly)
+
+    def _restore_layout(self) -> None:
+        """The layout this user left, else the default sizes."""
+        from PySide6.QtCore import QByteArray
+
+        from puzzle.settings import window_state_path
+
+        path = window_state_path()
+        try:
+            data = path.read_bytes() if path.exists() else b""
+            geometry, _, state = data.partition(b"\n--state--\n")
+            if state and self.restoreState(QByteArray(state)):
+                self.restoreGeometry(QByteArray(geometry))
+                return
+        except OSError:
+            pass
+        self._size_docks()
+
+    def save_layout(self) -> None:
+        from puzzle.settings import window_state_path
+
+        path = window_state_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            data = bytes(self.saveGeometry()) + b"\n--state--\n" + bytes(self.saveState())
+            path.write_bytes(data)
+        except OSError:
+            pass  # a layout is a convenience; never fail closing over it
+
+    def reset_layout(self) -> None:
+        """Window → Reset layout: the default docks and sizes, and forget the saved one."""
+        from puzzle.settings import window_state_path
+
+        window_state_path().unlink(missing_ok=True)
+        for dock in (self.model_dock, self.properties_dock, self.messages_dock):
+            dock.show()
+        self.agent_dock.hide()
+        self.fold_messages(True)
+        self._size_docks()
 
     def _size_docks(self) -> None:
         vertical, horizontal = Qt.Orientation.Vertical, Qt.Orientation.Horizontal
@@ -1447,6 +1584,8 @@ class MainWindow(QMainWindow):
         self.resizeDocks([self.agent_dock], [420], horizontal)
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        if self._sized:  # only a window that was on screen has a layout to keep
+            self.save_layout()
         self.viewport.close_plotter()
         super().closeEvent(event)
 

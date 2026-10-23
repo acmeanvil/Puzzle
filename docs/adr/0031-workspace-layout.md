@@ -35,6 +35,26 @@ PrePoMax and Ansys keep the model centred, with a slim output pane and a view to
    - **Labels or not is a setting** (Settings → Interface, ADR 0024): icons with labels under them, or icons only with tooltips. Tooltips are always there.
 4. **The status bar carries the essentials:** the unit system (ADR 0030), the current context, background tasks with a cancel button, and the last message.
 
+## Built (2026-10-23)
+
+- **Docks:**
+  - The Agent dock starts hidden. It opens from the toolbar or the Window menu, or by itself (without focus) when a new proposal arrives.
+  - Messages folds to its tab bar (`fold_messages`). It opens on a run, an error, or a click on a tab, and folds again after a good run.
+- **Layout:**
+  - Dock sizes and states are saved per user in `<user data dir>/window-layout.bin`, only for a window that was on screen.
+  - Window → Reset layout forgets them.
+- **View toolbar** (`viewport.ViewBar`, a translucent Qt overlay):
+  - fit (F), isometric (I), the six axis views (1–6), element edges, wireframe, orthographic, copy image and save image;
+  - the shortcuts work only while the view has focus;
+  - its settings are `Viewport.style`, re-applied after every redraw.
+- **Main toolbar:**
+  - grouped as Project, Model, Materials and Selection, with Agent, Messages and Settings at the right;
+  - Delete and Reload moved to the Project menu;
+  - interim line icons of Puzzle's own (`gui/icons.py`), behind one `icon(name)` lookup;
+  - Settings → Interface → "Toolbar buttons" sets labels under icons or icons only, with tooltips always on.
+- **Status bar:** the context (Model, Geometry, Sketch or Results) and the unit button (ADR 0030).
+- **Not built:** cancelling a background task from the status bar.
+
 ## Consequences
 
 - The view gains about 40 % of the window on a laptop screen.

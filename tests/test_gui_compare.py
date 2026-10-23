@@ -145,14 +145,19 @@ def test_run_each_material_then_compare(app, window):
     assert any(c.startswith(al.name) for c in children[1:]), children
 
     compare = window.open_compare(head.data(0, ROLE).object)
-    assert [c.label for c in compare.cases] == [steel.name, al.name]
+    # In the study's own order (its sweep's), whatever order the runs finished in.
+    (ids,) = sweep.material_table(tip_load(window)).values()
+    names = {str(m.id): m.name for m in window.session.project.of_type(Material)}
+    assert [c.label for c in compare.cases] == [names[i] for i in ids]
+    i_steel = [c.label for c in compare.cases].index(steel.name)
+    i_al = 1 - i_steel
     compare.result.setCurrentIndex(compare.result.findData("displacement:total"))
     a, b = (v.shown for v in compare.views)
     assert a["clim"] == b["clim"] and a["clim"][1] == pytest.approx(max(a["max"], b["max"]))
 
     # Aluminium's deflection as a ratio to steel's: E_steel / E_al where it moves.
-    compare.baseline.setCurrentIndex(0)
-    compare.other.setCurrentIndex(1)
+    compare.baseline.setCurrentIndex(i_steel)
+    compare.other.setCurrentIndex(i_al)
     compare.mode.setCurrentIndex(1)
     ratio = steel.properties["youngs_modulus"].to_si() / al.properties["youngs_modulus"].to_si()
     assert compare.diff_view.shown["max"] == pytest.approx(ratio, rel=1e-3)
@@ -160,6 +165,6 @@ def test_run_each_material_then_compare(app, window):
     table = compare.table
     assert table.rowCount() == 2 and table.horizontalHeaderItem(2).text() == "Maximum (mm)"
     top = [float(table.item(r, 2).text()) for r in range(2)]
-    assert top[1] / top[0] == pytest.approx(ratio, rel=1e-3)
+    assert top[i_al] / top[i_steel] == pytest.approx(ratio, rel=1e-3)
     assert table.item(0, 3).text().endswith(" mm")
     compare.close()

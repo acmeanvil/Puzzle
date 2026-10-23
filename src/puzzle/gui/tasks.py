@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import traceback
 from collections.abc import Callable
@@ -26,12 +27,22 @@ class Task(QRunnable):
 
     def run(self) -> None:
         try:
-            result = self.fn(self.signals.output.emit)
+            result = self.fn(self._emit)
         except Exception as exc:  # noqa: BLE001 - reported to the user, not swallowed
             exc.trace = traceback.format_exc()
-            self.signals.failed.emit(exc)
+            self._send(self.signals.failed, exc)
         else:
-            self.signals.done.emit(result)
+            self._send(self.signals.done, result)
+
+    def _emit(self, line: str) -> None:
+        self._send(self.signals.output, line)
+
+    @staticmethod
+    def _send(signal, value) -> None:
+        """Report back, unless the window that asked has closed meanwhile (its signals
+        are gone with it, and there is nobody left to tell)."""
+        with contextlib.suppress(RuntimeError):
+            signal.emit(value)
 
 
 def start(task: Task) -> Task:

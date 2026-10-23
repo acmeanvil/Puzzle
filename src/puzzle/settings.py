@@ -56,6 +56,14 @@ PREFERENCES: list[Preference] = [
         for kind, (label, si) in DIMENSIONS.items()
     ],
     Preference(
+        "interface.toolbar_labels",
+        "Interface",
+        "Toolbar buttons",
+        "under",
+        [("Icons with labels under them", "under"), ("Icons only (names in tooltips)", "icons")],
+        "Tooltips always give a button's name and shortcut.",
+    ),
+    Preference(
         "geometry.preview",
         "Geometry",
         "Tool preview",
@@ -103,6 +111,13 @@ WAITING = {
     "Meshing": "These apply once the Mesh tab arrives (ADR 0019).",
     "Solvers": "This applies once solver settings arrive (ADR 0023).",
 }
+
+
+def window_state_path() -> Path:
+    """Where the main window keeps its layout (dock sizes and which are open, ADR 0031)."""
+    from puzzle.materials import user_data_dir
+
+    return user_data_dir() / "window-layout.bin"
 
 
 def settings_path() -> Path:
