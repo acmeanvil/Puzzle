@@ -149,11 +149,30 @@ class Settings:
 
     # what the rest of Puzzle asks
     def display_units(self) -> dict[str, str]:
+        """The units shown: the open project's own when it has them on (ADR 0030),
+        else this user's preference."""
+        if _project_system is not None:
+            return system_units(_project_system)
+        return self.user_units()
+
+    def user_units(self) -> dict[str, str]:
         custom = {k.split(".")[-1]: self.get(k) for k in BY_KEY if k.startswith("units.custom.")}
         return system_units(self.get("units.system"), custom)
 
 
 _current: Settings | None = None
+_project_system: str | None = None  # the open project's unit system, when it has one on
+
+
+def use_project(project) -> None:
+    """Show `project`'s own units, if it has them switched on (None: the user's)."""
+    global _project_system
+    units = project.units() if project is not None else None
+    _project_system = units.system if units is not None else None
+
+
+def project_system() -> str | None:
+    return _project_system
 
 
 def current() -> Settings:

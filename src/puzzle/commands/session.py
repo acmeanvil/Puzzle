@@ -607,6 +607,10 @@ def _execute(project: Project, cmd: _Command) -> dict[str, Any]:
         obj = _validate(cls, cmd.data, cmd.data.get("name", cmd.kind))
         if obj.id in project.objects:
             raise PuzzleError(f"an object with id {obj.id} exists", code="invalid")
+        if cmd.kind == "units" and project.of_type(cls):
+            raise PuzzleError(
+                "the project has its units already: edit them instead", code="invalid"
+            )
         project.add(obj)
         return {"id": str(obj.id), "name": obj.name}
     if isinstance(cmd, Edit):

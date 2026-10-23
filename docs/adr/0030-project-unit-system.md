@@ -28,6 +28,18 @@ ADR 0024's rule stays: **display units never change results.** Values are stored
    - Temperatures show in the system's temperature unit (°C for engineering and SI-with-°C).
 5. **Agents read units from the outline** (one line: "units: engineering (mm, N, MPa, °C)"), and MCP tools keep returning SI with units named, as now.
 
+## Built (2026-10-23)
+
+- **Stored as a project object, not in `project.toml`.** The project's units are a small object, `ProjectUnits` (kind `units`: `use`, `system`), rather than a `units =` line and a `set_units` command. Project objects already have undo, history, an agent-visible outline and one file each. `project.toml` settings have none of these: `set_autonomy`, for one, isn't undoable. A project holds at most one (a second Create is refused).
+- **Lookup:** `settings.use_project(project)` is applied on every refresh, so `current().display_units()` returns the project's system while its switch is on, and the user's otherwise (`user_units()`).
+- **GUI:**
+  - New Project asks for the units, the user's own system first.
+  - The status bar's unit button ("mm · N · MPa · °C (project)" or "(yours)") opens the switch.
+  - Each change is one Create or Edit command.
+- **Display:** colour-bar labels are plain numbers to three significant figures between 1e-3 and 1e5 (`viewport.bar_format`).
+- **Agents:** the outline says "Units shown: … (the project's own; values are SI)".
+- **Not yet:** a per-quantity custom system for a project (users keep theirs in Settings).
+
 ## Consequences
 
 - A project opened by two people shows the same numbers to both when its switch is on. A user who prefers otherwise turns the switch off, which is a change to the project, so it is visible and undoable.

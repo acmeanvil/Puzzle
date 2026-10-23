@@ -852,6 +852,27 @@ class ResultDefinition(ProjectObject):
         return own + [c.study for c in self.cases]
 
 
+class ProjectUnits(ProjectObject):
+    """The project's own display units (ADR 0030). With `use` on, everyone who opens the
+    project sees them, over their own preference; off, each user's preference applies.
+    Display only: values stay as typed, and solvers get SI (ADR 0024)."""
+
+    kind: ClassVar[str] = "units"
+
+    name: str = "Units"
+    use: bool = Field(default=True, description="the project's units override the user's")
+    system: str = Field(default="engineering", description="a model.units.SYSTEMS key")
+
+    @field_validator("system")
+    @classmethod
+    def _known_system(cls, v: str) -> str:
+        from puzzle.model.units import SYSTEMS
+
+        if v not in SYSTEMS:
+            raise ValueError(f"no unit system '{v}'; one of {', '.join(SYSTEMS)}")
+        return v
+
+
 OBJECT_TYPES: tuple[type[ProjectObject], ...] = (
     ParameterSet,
     Geometry,
@@ -861,6 +882,7 @@ OBJECT_TYPES: tuple[type[ProjectObject], ...] = (
     Study,
     Transfer,
     ResultDefinition,
+    ProjectUnits,
 )
 
 
@@ -914,6 +936,11 @@ class Project:
         if not isinstance(obj, cls):
             raise KeyError(f"no {cls.kind} with id {obj_id}")
         return obj
+
+    def units(self) -> ProjectUnits | None:
+        """The project's own unit system, when it has one switched on (ADR 0030)."""
+        found = [u for u in self.of_type(ProjectUnits) if u.use]
+        return found[0] if found else None
 
     def transfers_into(self, study_id: UUID) -> list[Transfer]:
         return [t for t in self.of_type(Transfer) if t.target == study_id]

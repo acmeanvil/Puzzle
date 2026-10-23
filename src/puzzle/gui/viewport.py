@@ -101,6 +101,18 @@ def _display(values, kind: str | None):
     return np.asarray(converted), pretty(target)
 
 
+def bar_format(lo: float, hi: float) -> str:
+    """Colour-bar labels as people write numbers (ADR 0030): plain, to three significant
+    figures of the largest, between 1e-3 and 1e5; else with an exponent."""
+    top = max(abs(lo), abs(hi))
+    if not np.isfinite(top) or top == 0:
+        return "%.3g"
+    if 1e-3 <= top < 1e5:
+        decimals = max(0, 2 - int(np.floor(np.log10(top))))
+        return f"%.{decimals}f"
+    return "%.3e"
+
+
 def words(name: str) -> str:
     """A field name as a title: "von_mises" -> "Von Mises", "displacement_magnitude" ->
     "Displacement magnitude"."""
@@ -531,7 +543,7 @@ class Viewport(QWidget):
                     "position_y": 0.35,
                     "width": 0.035,
                     "height": 0.55,
-                    "fmt": "%.3g",
+                    "fmt": bar_format(*(clim or (self.shown["min"], self.shown["max"]))),
                     "color": "black",
                     "title_font_size": 14,
                     "label_font_size": 12,

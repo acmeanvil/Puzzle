@@ -344,6 +344,10 @@ class MainWindow(QMainWindow):
         s = self.session
         if s is None:
             return
+        from puzzle import settings
+
+        settings.use_project(s.project)  # its own units, if switched on (ADR 0030)
+        self._show_units()
         try:
             runs = self._store().runs()
         except PuzzleError as exc:  # an old results store: the model still opens
@@ -362,6 +366,49 @@ class MainWindow(QMainWindow):
         self.agent.refresh()
         self.workbench.refresh()
         self._selected()
+
+    def _show_units(self) -> None:
+        """The status bar's unit button: the system in effect, and whose it is."""
+        from puzzle.model.units import pretty
+        from puzzle.settings import current, project_system
+
+        if not hasattr(self, "units_button"):
+            from PySide6.QtWidgets import QPushButton
+
+            self.units_button = QPushButton()
+            self.units_button.setFlat(True)
+            self.units_button.setToolTip("Units shown in this project: click to change")
+            self.units_button.clicked.connect(self.edit_units)
+            self.statusBar().addPermanentWidget(self.units_button)
+        u = current().display_units()
+        kinds = ("length", "force", "pressure", "temperature")
+        text = " · ".join(pretty(u[k]) for k in kinds)
+        whose = "project" if project_system() is not None else "yours"
+        self.units_button.setText(f"{text}  ({whose})")
+
+    def edit_units(self):
+        """The project's unit switch: its own system for everyone, or each user's."""
+        from puzzle.commands.model import Create, Edit, EditOp
+        from puzzle.gui.settings_dialog import ProjectUnitsDialog
+        from puzzle.model.schema import ProjectUnits
+
+        if self.session is None:
+            return None
+        current = next(iter(self.session.project.of_type(ProjectUnits)), None)
+        dialog = ProjectUnitsDialog(current, self)
+        if not self.run_dialog(dialog):
+            return None
+        use, system = dialog.choice()
+        if current is None:
+            if not use:
+                return None
+            return self.submit(Create(kind="units", data={"use": True, "system": system}))
+        ops = [
+            EditOp(op="set", path=k, value=v)
+            for k, v in (("use", use), ("system", system))
+            if getattr(current, k) != v
+        ]
+        return self.submit(Edit(object=str(current.id), ops=ops)) if ops else None
 
     def _offer_new_store(self) -> bool:
         """An older Puzzle's results can't be read: offer to move them aside (kept, not
@@ -513,13 +560,17 @@ class MainWindow(QMainWindow):
             self.refresh()
         self.statusBar().showMessage("Settings saved", 5000)
 
-    def new_project(self, root: Path, name: str) -> None:
-        """Create an empty project in `root` and open it."""
-        from puzzle.model.schema import Project
+    def new_project(self, root: Path, name: str, units: str | None = None) -> None:
+        """Create an empty project in `root` and open it; `units` (a unit system) makes
+        the project show those units to everyone who opens it (ADR 0030)."""
+        from puzzle.model.schema import Project, ProjectUnits
         from puzzle.project import save_project
 
         root.mkdir(parents=True, exist_ok=True)
-        save_project(Project(name=name), root)
+        project = Project(name=name)
+        if units is not None:
+            project.add(ProjectUnits(system=units))
+        save_project(project, root)
         self.open(root)
 
     def _new_dialog(self) -> None:
@@ -527,8 +578,17 @@ class MainWindow(QMainWindow):
         if not path:
             return
         name = self.ask_text("New project", "Project name:", Path(path).name)
-        if name:
-            self.new_project(Path(path), name)
+        if not name:
+            return
+        from puzzle.model.units import SYSTEMS
+        from puzzle.settings import current
+
+        mine = current().get("units.system")
+        systems = [(label, key) for key, (label, _) in SYSTEMS.items()]
+        systems.sort(key=lambda p: p[1] != mine)  # the user's own first
+        units = self.choose("New project", "Units for this project:", systems)
+        if units is not None:
+            self.new_project(Path(path), name, units)
 
     def _open_dialog(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Open a Puzzle project")

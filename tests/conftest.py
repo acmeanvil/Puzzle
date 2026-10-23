@@ -241,6 +241,7 @@ def _fresh_settings():
         custom.unlink(missing_ok=True)
         custom.with_name(custom.stem + "-history.jsonl").unlink(missing_ok=True)
         settings._current = None
+        settings._project_system = None
         reload_library()
 
     clean()

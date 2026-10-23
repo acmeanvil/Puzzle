@@ -23,6 +23,11 @@ from puzzle.model.schema import (
 
 def outline(project: Project, *, ids: bool = False) -> str:
     lines = [f'Project "{project.name}"  (agents: {project.agent.level}, mcp: {project.agent.mcp})']
+    units = project.units()
+    if units is not None:
+        from puzzle.model.units import SYSTEMS
+
+        lines.append(f"Units shown: {SYSTEMS[units.system][0]} (the project's own; values are SI)")
 
     def head(kind: str, obj) -> str:
         return f"{kind} {obj.name}" + (f"  [{obj.id}]" if ids else "")

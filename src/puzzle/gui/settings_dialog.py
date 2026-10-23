@@ -200,3 +200,43 @@ class SettingsDialog(QDialog):
         self.agent.send_images = self.images.currentData()
         save_settings(self.agent, self.agent_path)
         self.accept()
+
+
+class ProjectUnitsDialog(QDialog):
+    """A project's unit switch (ADR 0030): on, the project's system for everyone who
+    opens it; off, each user's own preference (Settings → Units)."""
+
+    def __init__(self, units=None, parent=None) -> None:
+        from PySide6.QtWidgets import QCheckBox, QComboBox, QDialogButtonBox, QLabel, QVBoxLayout
+
+        from puzzle.model.units import SYSTEMS
+        from puzzle.settings import current
+
+        super().__init__(parent)
+        self.setWindowTitle("Project units")
+        layout = QVBoxLayout(self)
+        self.use = QCheckBox("Use the project's units (everyone who opens it sees them)")
+        self.use.setChecked(units.use if units is not None else True)
+        self.system = QComboBox()
+        for key, (label, _) in SYSTEMS.items():
+            self.system.addItem(label, key)
+        chosen = units.system if units is not None else current().get("units.system")
+        self.system.setCurrentIndex(max(0, self.system.findData(chosen)))
+        note = QLabel(
+            "Off: each person sees their own units (Settings → Units). Units only change "
+            "what is shown; values are kept as typed and solvers get SI."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet("color: gray")
+        self.use.toggled.connect(self.system.setEnabled)
+        self.system.setEnabled(self.use.isChecked())
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        for w in (self.use, self.system, note, buttons):
+            layout.addWidget(w)
+
+    def choice(self) -> tuple[bool, str]:
+        return self.use.isChecked(), self.system.currentData()
