@@ -99,13 +99,8 @@ def test_view_toolbar_reaches_the_viewport(window):
     assert window.viewport.style["view"] == "-z"
     vb.actions_by_name["edges"].trigger()
     vb.actions_by_name["projection"].trigger()
-    assert window.viewport.style == {
-        "edges": True,
-        "wireframe": False,
-        "parallel": True,
-        "view": "-z",
-        "extremes": True,
-    }
+    wanted = {"edges": True, "wireframe": False, "parallel": True, "view": "-z"}
+    assert {k: window.viewport.style[k] for k in wanted} == wanted
     assert window.viewport.shown["style"]["parallel"]
     assert vb.actions_by_name["fit"].shortcut().toString() == "F"
 

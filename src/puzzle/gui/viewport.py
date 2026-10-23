@@ -409,6 +409,8 @@ class ViewBar(QWidget):
         )
         add("extremes", "Max and min markers", viewport.show_extremes, checkable=True)
         self.actions_by_name["extremes"].setChecked(True)
+        add("symbols", "Supports and loads", viewport.set_symbols_shown, checkable=True)
+        self.actions_by_name["symbols"].setChecked(True)
         add("clear", "Clear probes", viewport.clear_probes, "Esc")
         add("copy", "Copy image", self.copy_image)
         add("camera", "Save image…", self.save_image)
@@ -481,7 +483,10 @@ class Viewport(QWidget):
             "parallel": False,
             "view": "iso",
             "extremes": True,
+            "symbols": True,
         }
+        self.glyphs: list = []  # the supports' and loads' symbols (ADR 0035)
+        self._glyph_actors: list[str] = []
         # The shown result, for markers and probes (ADR 0032).
         self.result_state: dict | None = None
         self._extremes: list[tuple] = []
@@ -498,6 +503,7 @@ class Viewport(QWidget):
         """The mesh's volume, with a selection highlighted (a mesh group `Part/Name`, or
         its face `entities` when it was made after meshing) and picked faces marked."""
         self.result_state, self.probes, self._mark_actors = None, [], []
+        self.glyphs, self._glyph_actors = [], []
         self._clear_labels()
         self._update_click()
         if mesh is not self.mesh:
@@ -862,6 +868,7 @@ class Viewport(QWidget):
         ]
         self.probes = []
         self.probes_changed.emit([])
+        self.glyphs, self._glyph_actors = [], []  # results show no symbols
         if self.plotter is not None:
             self.plotter.clear()
             self._mark_actors = []
@@ -919,6 +926,63 @@ class Viewport(QWidget):
     def close_plotter(self) -> None:
         if self.plotter is not None:
             self.plotter.close()
+
+    # --- supports and loads (ADR 0035) ---------------------------------------------------
+
+    def show_symbols(self, glyphs) -> None:
+        """Draw `post.symbols` glyph sets over the mesh shown (sized to the model)."""
+        self.glyphs = list(glyphs)
+        self._draw_symbols()
+        self._render()
+
+    def _draw_symbols(self) -> None:
+        on = self.style["symbols"] and self.shown.get("kind") in ("mesh", "preview")
+        self.shown["symbols"] = (
+            [(g.feature, g.kind, len(g.points) or len(g.faces)) for g in self.glyphs] if on else []
+        )
+        if self.plotter is None:
+            return
+        import pyvista as pv
+
+        for name in self._glyph_actors:
+            self.plotter.remove_actor(name)
+        self._glyph_actors = []
+        if not on or self.mesh is None:
+            return
+        size = 0.06 * float(np.linalg.norm(np.ptp(self.mesh.coords, axis=0)))
+        for i, g in enumerate(self.glyphs):
+            name = f"puzzle-symbol-{i}"
+            if g.kind == "tint":
+                index = [self.entities.index(e) for e in g.faces if e in self.entities]
+                if index and self.surface is not None:
+                    mask = np.isin(self.surface.cell_data["entity"], index)
+                    actor = self.plotter.add_mesh(
+                        self.surface.extract_cells(mask), color=g.colour, opacity=0.55,
+                        name=name, reset_camera=False,
+                    )  # fmt: skip
+                    actor.GetMapper().SetResolveCoincidentTopologyToPolygonOffset()
+                    self._glyph_actors.append(name)
+                continue
+            if not len(g.points):
+                continue
+            if g.kind == "arrow":  # arrows end on the face: their tails stand off it
+                starts = g.points - g.directions * size
+                geom = pv.Arrow(tip_length=0.3, tip_radius=0.12, shaft_radius=0.04)
+                factor = size
+            else:  # cones press on the face from outside
+                starts = g.points - g.directions * size * 0.25
+                geom = pv.Cone(direction=(1, 0, 0), height=1.0, radius=0.45, resolution=12)
+                factor = size * 0.35
+            cloud = pv.PolyData(np.asarray(starts, float))
+            cloud["vectors"] = np.asarray(g.directions, float)
+            arrows = cloud.glyph(orient="vectors", scale=False, factor=factor, geom=geom)
+            self.plotter.add_mesh(arrows, color=g.colour, name=name, reset_camera=False)
+            self._glyph_actors.append(name)
+
+    def set_symbols_shown(self, on: bool) -> None:
+        self.style["symbols"] = on
+        self._draw_symbols()
+        self._render()
 
     # --- extremes and probes (ADR 0032) --------------------------------------------------
 

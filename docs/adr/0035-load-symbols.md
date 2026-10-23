@@ -1,6 +1,6 @@
 # 0035. Draw supports and loads in the view
 
-- Status: Proposed
+- Status: Accepted (2026-10-23)
 - Date: 2026-10-23
 
 ## Context
@@ -29,6 +29,25 @@ A feature (a support, a load, a temperature) is shown today by highlighting its 
    - A view-toolbar toggle (ADR 0031) turns them off.
    - In results they are off by default.
 3. **They come from the model, not the solver input,** through one function (`post.symbols(project, component, mesh)`) that returns glyph sets. The view draws them and tests check them in `Viewport.shown`, as for other scene content.
+
+## Built (2026-10-23)
+
+- **`post/symbols.py` `symbols(component, mesh, entities_of, only)`** gives one glyph set per feature, sized to 6 % of the model's diagonal:
+  - cones for fixed supports;
+  - arrows per prescribed direction for displacements;
+  - one arrow at the faces' centre for a force;
+  - arrows into the face for pressure, heat flux and an inlet, and out of it for an outlet;
+  - a tint for the rest (temperature, convection, walls, symmetry, electromagnetics, custom equations).
+- **Normals** are taken outward from the mesh's centre, which is right for convex-ish parts.
+- **When they show:**
+  - all of a component's symbols show when the component, its physics or a study's component is selected;
+  - one feature's show when that feature is selected;
+  - results show none;
+  - the view toolbar's "Supports and loads" turns them off.
+- **Not yet:**
+  - value labels on tinted faces;
+  - body-load symbols (gravity, centrifugal), which come with ADR 0037;
+  - larger cones on slender models, left for the Phase F polish.
 
 ## Consequences
 

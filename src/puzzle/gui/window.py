@@ -922,6 +922,7 @@ class MainWindow(QMainWindow):
         self.viewport.boundaries = self.mesh_boundaries.get(str(comp.id), {})
         self.viewport.vertices = self.mesh_vertices.get(str(comp.id), {})
         self.viewport.show_mesh(mesh, highlight if highlight in mesh.groups else None, entities)
+        self._show_symbols(comp, mesh, node)
 
     # --- the Geometry tab (ADR 0017) --------------------------------------------------
 
@@ -1365,6 +1366,23 @@ class MainWindow(QMainWindow):
             return None, []
         geo = self.session.project.objects.get(_uuid(geometries.pop()))
         return geo, list(dict.fromkeys(name for _, name in picks))
+
+    def _show_symbols(self, comp, mesh, node) -> None:
+        """The component's supports and loads as symbols (ADR 0035): all of them for the
+        component, its physics or a study; one, emphasised, for a selected feature."""
+        from puzzle.post.symbols import symbols
+
+        only = None
+        if node.kind == "feature":
+            i, j = int(node.path.split(".")[1]), int(node.path.split(".")[3])
+            only = sum(len(p.features) for p in comp.physics[:i]) + j
+        elif node.kind not in ("object", "physics"):
+            return
+        try:
+            glyphs = symbols(comp, mesh, lambda sel: self._entities_of(comp, sel), only)
+        except (KeyError, ValueError):  # a selection not on this mesh yet: no symbol
+            return
+        self.viewport.show_symbols(glyphs)
 
     def _entities_of(self, comp, selection: str) -> list[tuple[int, int]]:
         """A selection's face entities in the shown mesh, through the names it was made with."""
