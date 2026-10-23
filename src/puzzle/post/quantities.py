@@ -43,6 +43,7 @@ SCALARS = {
     "electric_potential": ("Electric potential", None),
 }
 AXES = {"x": "X", "y": "Y", "z": "Z"}
+SUFFIXES = {"range": "range", "mean": "mean"}  # fields a range combination makes
 PAIRS = {"xx": "X", "yy": "Y", "zz": "Z", "xy": "XY", "yz": "YZ", "zx": "ZX"}
 
 
@@ -68,6 +69,13 @@ def catalog(fields: list[tuple[str, str, list[str]]]) -> list[Item]:
     items: list[Item] = []
     for name, location, comps in fields:
         if location == "global":
+            continue
+        base, _, word = name.rpartition("_")
+        if word in SUFFIXES and base:  # a combination's range or mean (ADR 0025)
+            for i in catalog([(base, location, comps)]):
+                text = f"{i.label} ({SUFFIXES[word]})"
+                group = f"{i.group} {SUFFIXES[word]}"
+                items.append(Item(f"{name}:{i.what}", text, name, i.what, group, i.unit))
             continue
         if name in VECTORS or (len(comps) == 3 and comps == ["x", "y", "z"]):
             group, (total, prefix), unit = VECTORS.get(

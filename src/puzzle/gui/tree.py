@@ -15,6 +15,7 @@ from puzzle.model.schema import (
     MeshRecipe,
     ParameterSet,
     Project,
+    ResultDefinition,
     Study,
     SweepStep,
     Transfer,
@@ -79,11 +80,17 @@ class ModelTree(QTreeWidget):
                     section, obj.name + mark, Node("object", str(obj.id), "", obj.name)
                 )
                 self._children(item, obj, project)
-        if runs:
+        defined = project.of_type(ResultDefinition)
+        if runs or defined:
+            from puzzle.post.derived import METHODS
             from puzzle.post.quantities import catalog as results_of
             from puzzle.sweep import title
 
             section = self._add(root, "Results", Node("section", label="Results"))
+            for d in defined:  # derived results (ADR 0025), evaluated when shown
+                mark = "  ⚠" if d.name in flagged else ""
+                text = f"{d.name} · {METHODS[d.method].split(' (')[0].lower()}{mark}"
+                self._add(section, text, Node("derived", str(d.id), "", d.name))
             sweeps: dict[str, tuple[QTreeWidgetItem, set]] = {}  # study id -> heading, points
             for r in reversed(runs):  # newest first
                 when = f"{solver_label(r.solver)} · {r.started_at:%Y-%m-%d %H:%M}"

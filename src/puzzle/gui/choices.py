@@ -30,6 +30,8 @@ from puzzle.model.schema import (
     Material,
     MeshRecipe,
     Project,
+    ResultCase,
+    ResultDefinition,
     Study,
     Transfer,
 )
@@ -44,7 +46,15 @@ REFERENCES = {
 }
 NONE = "(none)"
 # Words kept as written when a value is turned into a label.
-WORDS = {"bdf2": "BDF2", "sst": "SST", "mcp": "MCP", "3d": "3D", "2d": "2D", "dg": "DG"}
+WORDS = {
+    "srss": "SRSS",
+    "bdf2": "BDF2",
+    "sst": "SST",
+    "mcp": "MCP",
+    "3d": "3D",
+    "2d": "2D",
+    "dg": "DG",
+}
 SETTINGS = {
     "time_scheme": ("backward_euler", "crank_nicolson", "bdf2", "theta"),
     "turbulence_model": ("laminar", "k-epsilon", "k-omega-SST"),
@@ -97,12 +107,47 @@ def choices(project: Project, obj, path: str) -> list[tuple[str, Any]] | None:
     return _field(project, obj, owner, field, in_list)
 
 
+def _derived_field(project, obj, owner, field):
+    """A derived result's choices (ADR 0025): studies and results by name, methods,
+    unit kinds and the listed results in words."""
+    from puzzle.model.units import DIMENSIONS
+    from puzzle.post.derived import METHODS
+    from puzzle.post.quantities import SCALARS, TENSORS, VECTORS, catalog
+
+    studies = [(o.name, str(o.id)) for o in sorted(project.of_type(Study), key=lambda o: o.name)]
+    if field == "study":
+        return studies
+    if field == "source":
+        others = [
+            (f"{o.name} (derived)", str(o.id))
+            for o in project.of_type(ResultDefinition)
+            if o.id != obj.id
+        ]
+        return studies + others
+    if field == "method":
+        return [(text, key) for key, text in METHODS.items()]
+    if field == "extreme":
+        return [("Maximum", "max"), ("Minimum", "min")]
+    if field == "unit":
+        return [("(no unit)", None)] + [(name, key) for key, (name, _) in DIMENSIONS.items()]
+    if field == "quantity":
+        tensor = ["xx", "yy", "zz", "xy", "yz", "zx"]
+        fields = [(n, "node", ["x", "y", "z"]) for n in VECTORS]
+        fields += [(n, "node", tensor) for n in TENSORS] + [(n, "node", [""]) for n in SCALARS]
+        return [(i.label, i.key) for i in catalog(fields)]
+    return None
+
+
 def _field(project, obj, owner, field, in_list):
     component = _component(project, obj)
     # References by id, labelled by name.
     kind = REFERENCES.get(field)
     if isinstance(owner, Transfer) and field in ("source", "target"):
         kind = Study
+    if isinstance(owner, (ResultDefinition, ResultCase)) and not in_list:
+        derived = _derived_field(project, obj, owner, field)
+        if derived is not None:
+            return derived
     if kind is not None and not in_list:
         found = sorted(project.of_type(kind), key=lambda o: o.name)
         out = [(o.name, str(o.id)) for o in found]

@@ -69,6 +69,9 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
             add("New component…", lambda: new_component(window))
         elif node.label == "Studies":
             add("New study…", lambda: new_study(window))
+        elif node.label == "Results":
+            add("New combination…", lambda: window.new_derived("linear"))
+            add("New equation…", lambda: window.new_derived("equation"))
     elif node.kind == "project":
         add("New part…", lambda: new_part(window))
         add("Import geometry…", lambda: import_step_file(window))
@@ -146,6 +149,8 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
     elif isinstance(obj, Study) and node.kind == "object":
         add("Run", window.run_selected)
         add("Materials…", lambda: study_materials(window, obj))
+        add("New combination…", lambda: window.new_derived("linear", str(obj.id)))
+        add("New equation…", lambda: window.new_derived("equation", str(obj.id)))
         steps = menu.addMenu("Add step")
         for t in STEP_TYPES:
             action = steps.addAction(label(t))
@@ -158,6 +163,15 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         add("Delete", window.delete_selected)
     elif node.kind == "run":
         add("Export to ParaView…", lambda: export_run(window, node.object))
+        study = window._store().get_run(node.object).study_id
+        menu.addSeparator()
+        add("New combination…", lambda: window.new_derived("linear", study))
+        add("New equation…", lambda: window.new_derived("equation", study))
+    elif node.kind == "derived" and obj is not None:
+        add("Edit…", lambda: window.new_derived(obj.method, definition=obj))
+        add("New equation from this…", lambda: window.new_derived("equation", str(obj.id)))
+        menu.addSeparator()
+        add("Delete", window.delete_selected)
     elif node.kind in ("sweep", "compare"):
         add("Compare…", lambda: window.open_compare(node.object))
     return menu if menu.actions() else None

@@ -14,6 +14,7 @@ from puzzle.model.schema import (
     ParameterSet,
     Project,
     Quantity,
+    ResultDefinition,
     Study,
     SweepStep,
     Transfer,
@@ -74,6 +75,19 @@ def outline(project: Project, *, ids: bool = False) -> str:
             head("Transfer", t)
             + f": {t.field} ({t.role}) {names.get(t.source, '?')} -> {names.get(t.target, '?')}"
         )
+    for d in project.of_type(ResultDefinition):
+        if d.method == "equation":
+            what = f"{d.expression} over {names.get(d.source, '?')}"
+        else:
+            cases = " + ".join(
+                f"{c.coefficient:g} x {names.get(c.study, '?')}"
+                + (f" [{c.point}]" if c.point else "")
+                + (f" step {c.step + 1}" if c.step >= 0 else "")
+                for c in d.cases
+            )
+            extra = f" of {d.quantity} ({d.extreme})" if d.method == "envelope" else ""
+            what = f"{d.method}{extra}: {cases}"
+        lines.append(head("Result", d) + f": {what}")
     problems = project.problems()
     if problems:
         lines.append("Problems:")

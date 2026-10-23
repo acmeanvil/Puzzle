@@ -298,19 +298,72 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
     # --- results ---------------------------------------------------------------------
 
     def latest(study: str):
+        """A study's latest run, or a derived result (ADR 0025) by name, evaluated."""
         from puzzle.commands import resolve
-        from puzzle.model.schema import Study
+        from puzzle.model.schema import ResultDefinition, Study
         from puzzle.project.layout import RESULTS_DIR
         from puzzle.results.store import ResultStore
 
         s = session()
-        found = resolve(s.project, study, Study)
         store = ResultStore(root / RESULTS_DIR)
+        defined = [d for d in s.project.of_type(ResultDefinition) if study in (d.name, str(d.id))]
+        if defined:
+            from types import SimpleNamespace
+
+            from puzzle.post.derived import evaluate
+
+            d = evaluate(s.project, store, defined[0])
+            record = SimpleNamespace(run_id=f"derived:{defined[0].id}", solver="derived")
+            return record, d.mesh, d.results
+        found = resolve(s.project, study, Study)
         runs = [r for r in store.runs() if r.study_id == str(found.id)]
         if not runs:
             raise PuzzleError(f"study '{found.name}' has no runs yet", code="not_found")
         record = runs[-1]
         return record, store.read_mesh(record.mesh_id), store.read_results(record.run_id)
+
+    @tool(
+        description="A derived result (combination or equation, ADR 0025): what it reads, "
+        "the results it gives (field names for result_stats etc., which take its name in "
+        "place of a study), warnings, and for equations the names an expression may use."
+    )
+    @guarded
+    def derived_result(name: str) -> dict[str, Any]:
+        from puzzle.commands import resolve
+        from puzzle.model.schema import ResultDefinition
+        from puzzle.post import derived
+        from puzzle.project.layout import RESULTS_DIR
+        from puzzle.results.store import ResultStore
+
+        s = session()
+        d = resolve(s.project, name, ResultDefinition)
+        store = ResultStore(root / RESULTS_DIR)
+        out = derived.evaluate(s.project, store, d)
+        info: dict[str, Any] = {
+            "definition": d.model_dump(mode="json"),
+            "runs": out.run_ids,
+            "results": [{"field": i.field, "key": i.key, "label": i.label} for i in out.items],
+            "warnings": out.warnings,
+        }
+        if d.method != "equation":
+            info["equation_names"] = sorted(derived.names(out.items))
+        return info
+
+    @tool(
+        description="The names an equation over a study's latest run may use "
+        "(von_mises, deformation_y, stress_xx, ...), and the project parameters."
+    )
+    @guarded
+    def equation_names(study: str) -> dict[str, Any]:
+        from puzzle.post import derived
+
+        _, _, results = latest(study)
+        items = derived._items_of(results)
+        return {
+            "results": {derived.name_of(i): i.label for i in items},
+            "parameters": derived.parameters(session().project),
+            "functions": list(derived.FUNCTIONS),
+        }
 
     @tool(description="Stored runs: study, solver, when, how long.")
     @guarded

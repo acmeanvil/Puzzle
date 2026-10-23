@@ -42,7 +42,7 @@ from puzzle.gui.tasks import Task, start
 from puzzle.gui.tree import ModelTree, Node
 from puzzle.gui.viewport import Viewport
 from puzzle.mesh.mesh import Mesh
-from puzzle.model.schema import Component, Geometry, Study
+from puzzle.model.schema import Component, Geometry, ResultDefinition, Study
 from puzzle.project.layout import HISTORY, RESULTS_DIR, WORK_DIR
 from puzzle.results.model import Results
 from puzzle.results.store import ResultStore
@@ -101,16 +101,18 @@ class ResultsBar(QWidget):
         self.step.valueChanged.connect(lambda _: on_change())
         self.deform.toggled.connect(lambda _: on_change())
 
-    def load(self, results: Results, chosen: str | None = None) -> None:
+    def load(self, results: Results, chosen: str | None = None, items=None) -> None:
         """The run's results, grouped by field; `chosen` (a key) or the last choice stays
-        selected when the run has it, else the default (deformation, temperature, ...)."""
+        selected when the run has it, else the default (deformation, temperature, ...).
+        `items` lists them when the fields alone don't say (a derived result's)."""
         from puzzle.post.quantities import catalog, default
 
-        fields: dict = {}
-        for s in results.steps:
-            for f in s.fields.values():
-                fields.setdefault(f.name, (f.name, f.location, f.components))
-        items = catalog(list(fields.values()))
+        if items is None:
+            fields: dict = {}
+            for s in results.steps:
+                for f in s.fields.values():
+                    fields.setdefault(f.name, (f.name, f.location, f.components))
+            items = catalog(list(fields.values()))
         chosen = chosen or self.field.currentData()
         for w in (self.field, self.step):
             w.blockSignals(True)
@@ -539,7 +541,7 @@ class MainWindow(QMainWindow):
 
     def delete_selected(self) -> None:
         node = self.tree.current()
-        if node is None or node.kind != "object":
+        if node is None or node.kind not in ("object", "derived"):
             return
         self.submit(Delete(object=node.object))
 
@@ -647,6 +649,9 @@ class MainWindow(QMainWindow):
             names,
             lambda path: choices(project, obj, path),
         )
+        if isinstance(obj, ResultDefinition):
+            self.show_derived(obj)
+            return
         self.results_bar.hide()
         comp = self._component_of(node)
         if comp is None:
@@ -775,6 +780,69 @@ class MainWindow(QMainWindow):
         self.results_bar.blockSignals(False)
         self.results_bar.show()
         self._redraw_result()
+
+    def show_derived(self, definition, key: str | None = None) -> None:
+        """A derived result (ADR 0025), evaluated from its runs, in the view."""
+        from puzzle.post.derived import evaluate
+
+        try:
+            d = evaluate(self.session.project, self._store(), definition)
+        except PuzzleError as exc:
+            self.results_bar.hide()
+            self.viewport.clear()
+            self.report(exc)
+            return
+        for w in d.warnings:
+            self.log.appendPlainText(f"{definition.name}: {w}")
+        if d.warnings:
+            self.statusBar().showMessage(f"{definition.name}: {d.warnings[0]}", 10000)
+        self.result = (d.mesh, d.results)
+        self._result_run = f"derived:{definition.id}"
+        self.results_bar.blockSignals(True)
+        self.results_bar.load(d.results, key, items=d.items)
+        self.results_bar.blockSignals(False)
+        self.results_bar.show()
+        self._redraw_result()
+
+    def new_derived(self, method: str = "linear", study=None, definition=None):
+        """The combination or equation dialog; OK makes (or changes) the derived result
+        in one command."""
+        from puzzle.commands.model import Create, Edit, EditOp
+        from puzzle.gui.derived_dialog import CombinationDialog, EquationDialog
+
+        project, store = self.session.project, self._store()
+        cls = EquationDialog if method == "equation" else CombinationDialog
+        if method == "equation":
+            dialog = cls(project, store, self, definition=definition, source=study)
+        else:
+            dialog = cls(project, store, self, definition=definition, study=study)
+        if not self.run_dialog(dialog):
+            return None
+        data = dialog.data()
+        if definition is None:
+            outcome = self.submit(Create(kind="result", data=data))
+        else:
+            current = definition.model_dump(mode="json")
+            ops = [
+                EditOp(op="set", path=k, value=v)
+                for k, v in {
+                    **{
+                        k: None
+                        for k in ("quantity", "source", "expression", "unit", "source_point")
+                    },
+                    **data,
+                }.items()
+                if current.get(k) != v
+            ]
+            outcome = self.submit(Edit(object=str(definition.id), ops=ops)) if ops else None
+        if outcome is not None:
+            name = data["name"]
+            made = next(
+                (o for o in self.session.project.of_type(ResultDefinition) if o.name == name), None
+            )
+            if made is not None:
+                self.tree.select(Node("derived", str(made.id)))
+        return outcome
 
     def _redraw_result(self) -> None:
         if self.result is None:

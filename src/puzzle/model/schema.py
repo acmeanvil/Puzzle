@@ -653,6 +653,58 @@ class Transfer(ProjectObject):
         return [self.source]
 
 
+class ResultCase(BaseModel):
+    """One input of a derived result: a study's latest run (or one sweep point's), one of
+    its result steps, scaled by a coefficient."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    study: UUID
+    point: str | None = Field(
+        default=None, description='a swept study\'s point, as the results list it ("Copper")'
+    )
+    step: int = Field(default=-1, description="index into the run's result steps; -1 = last")
+    coefficient: float = 1.0
+
+
+class ResultDefinition(ProjectObject):
+    """A derived result (ADR 0025), evaluated from stored runs when shown, never stored.
+
+    Combinations (`linear`, `srss`, `envelope`, `range`) take `cases`. `envelope` keeps
+    the largest (or smallest) of `quantity` (a listed result's key, "stress:von_mises")
+    over them; `range` gives each field's range and mean. An `equation` evaluates
+    `expression` over the results of `source` (a study, or another derived result),
+    with `unit` the kind of unit its value has (model.units.DIMENSIONS), if any.
+    """
+
+    kind: ClassVar[str] = "result"
+
+    method: Literal["linear", "srss", "envelope", "range", "equation"]
+    cases: list[ResultCase] = Field(default_factory=list)
+    quantity: str | None = None
+    extreme: Literal["max", "min"] = "max"
+    source: UUID | None = None
+    source_point: str | None = None
+    source_step: int = -1
+    expression: str | None = None
+    unit: str | None = None
+
+    @model_validator(mode="after")
+    def _complete(self) -> ResultDefinition:
+        if self.method == "equation":
+            if self.source is None or not (self.expression or "").strip():
+                raise ValueError("an equation needs a source and an expression")
+        elif not self.cases:
+            raise ValueError(f"a {self.method} combination needs at least one case")
+        elif self.method == "envelope" and not self.quantity:
+            raise ValueError("an envelope needs the quantity to compare")
+        return self
+
+    def dependencies(self) -> list[UUID]:
+        own = [self.source] if self.source is not None else []
+        return own + [c.study for c in self.cases]
+
+
 OBJECT_TYPES: tuple[type[ProjectObject], ...] = (
     ParameterSet,
     Geometry,
@@ -661,6 +713,7 @@ OBJECT_TYPES: tuple[type[ProjectObject], ...] = (
     Component,
     Study,
     Transfer,
+    ResultDefinition,
 )
 
 
