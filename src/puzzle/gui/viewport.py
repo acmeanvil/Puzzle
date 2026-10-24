@@ -189,6 +189,8 @@ class SceneView(QWidget):
         from PySide6.QtGui import QImage
 
         self._pending = False
+        if getattr(self.plotter, "render_window", None) is None:
+            return  # closed with its window: a late paint has nothing to draw with
         dpr = self.devicePixelRatioF()
         size = [max(1, round(self.width() * dpr)), max(1, round(self.height() * dpr))]
         if list(self.plotter.window_size) != size:

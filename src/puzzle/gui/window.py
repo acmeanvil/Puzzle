@@ -351,6 +351,8 @@ class MainWindow(QMainWindow):
         self.plots = PlotsPanel(self)
         tabs.addTab(self.plots, "Plots")
         self.output_tabs = tabs
+        # Its pages' minimum (the plots') would hold the dock open even when folded.
+        tabs.setMinimumHeight(tabs.tabBar().sizeHint().height())
         self.messages_dock = self._dock("Messages", tabs, Qt.DockWidgetArea.BottomDockWidgetArea)
         self.agent = AgentPanel(self, provider_factory)
         self.agent_dock = self._dock("Agent", self.agent, right)
@@ -359,7 +361,10 @@ class MainWindow(QMainWindow):
         self.agent_dock.hide()
         self._proposals_seen = 0
         tabs.tabBarClicked.connect(lambda _i: self.fold_messages(False))
-        self.messages_folded = False
+        self._messages_open_height = 170
+        # Resizes before the layout is applied (the first show) are Qt's, not drags.
+        self._resizing_messages = True
+        self.messages_dock.installEventFilter(self)
         self._sized = False  # dock sizes are applied once the window is on screen
         # Wide, visible separators: Qt's default ones on macOS are a hairline that is
         # hard to find and grab.
@@ -1874,20 +1879,46 @@ class MainWindow(QMainWindow):
     # --- layout (ADR 0031) ----------------------------------------------------------
 
     def fold_messages(self, folded: bool) -> None:
-        """Messages as just their tab bar (folded), or open with the selected tab."""
+        """Messages as just their tab bar (folded), or open with the selected tab.
+
+        Folding resizes the dock; it never caps its height, so the separator above it
+        can always be dragged, and dragging it open (or shut) unfolds (or folds) it
+        (`_messages_resized`). A height cap squeezed a restored layout at startup and
+        left the separator stuck."""
         from PySide6.QtWidgets import QStackedWidget as Stack
 
         stack = self.output_tabs.findChild(Stack)
         if stack is not None:
             stack.setVisible(not folded)
-        bar = self.output_tabs.tabBar().sizeHint().height()
-        self.messages_dock.setMaximumHeight(bar + 34 if folded else 16777215)
+        was = getattr(self, "messages_folded", None)
         self.messages_folded = folded
+        if was is not None and was != folded and self.messages_dock.isVisible():
+            height = self._folded_height() if folded else self._messages_open_height
+            held, self._resizing_messages = self._resizing_messages, True
+            self.resizeDocks([self.messages_dock], [height], Qt.Orientation.Vertical)
+            self._resizing_messages = held
         action = self.actions_by_name.get("messages") if hasattr(self, "actions_by_name") else None
         if action is not None and action.isChecked() == folded:
             action.blockSignals(True)
             action.setChecked(not folded)
             action.blockSignals(False)
+
+    def _folded_height(self) -> int:
+        """The dock's height showing just its title and tab bar."""
+        return self.output_tabs.tabBar().sizeHint().height() + 34
+
+    def _messages_resized(self, height: int) -> None:
+        """A drag of the separator: open past the tab bar unfolds, back down to it folds;
+        an open height is remembered for the next unfold."""
+        if getattr(self, "_resizing_messages", False):
+            return
+        folded = self._folded_height()
+        if self.messages_folded and height > folded + 24:
+            self.fold_messages(False)
+        elif not self.messages_folded and height <= folded + 8:
+            self.fold_messages(True)
+        if not self.messages_folded and height > folded + 24:
+            self._messages_open_height = height
 
     def apply_toolbar_style(self) -> None:
         """Labels under the icons, or icons only (Settings → Interface)."""
@@ -1907,12 +1938,34 @@ class MainWindow(QMainWindow):
         try:
             data = path.read_bytes() if path.exists() else b""
             geometry, _, state = data.partition(b"\n--state--\n")
+            self._resizing_messages = True  # the restore's own resizes aren't drags
             if state and self.restoreState(QByteArray(state)):
                 self.restoreGeometry(QByteArray(geometry))
+                QTimer.singleShot(0, lambda: self._sync_messages_fold(restored=True))
                 return
         except OSError:
             pass
         self._size_docks()
+        QTimer.singleShot(0, self._sync_messages_fold)
+
+    def _sync_messages_fold(self, restored: bool = False, tries: int = 10) -> None:
+        """Once the layout is applied: Messages folded or open as a restored layout left
+        them (by its height), else folded, sized to match. Qt lays the dock area out
+        after the first show, so the size is set again until it holds."""
+        folded_height = self._folded_height()
+        height = self.messages_dock.height()
+        folded = not restored or height <= folded_height + 24
+        if restored and not folded:
+            self._messages_open_height = height
+        self.messages_folded = folded
+        self.fold_messages(folded)
+        target = folded_height if folded else self._messages_open_height
+        self._resizing_messages = True
+        self.resizeDocks([self.messages_dock], [target], Qt.Orientation.Vertical)
+        if abs(self.messages_dock.height() - target) > 4 and tries > 0:
+            QTimer.singleShot(20, lambda: self._sync_messages_fold(not folded, tries - 1))
+            return
+        self._resizing_messages = False
 
     def save_layout(self) -> None:
         from puzzle.settings import window_state_path
@@ -1936,9 +1989,19 @@ class MainWindow(QMainWindow):
         self.fold_messages(True)
         self._size_docks()
 
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802 - Qt's name
+        from PySide6.QtCore import QEvent
+
+        if watched is getattr(self, "messages_dock", None) and event.type() == QEvent.Type.Resize:
+            self._messages_resized(event.size().height())
+        return super().eventFilter(watched, event)
+
     def _size_docks(self) -> None:
         vertical, horizontal = Qt.Orientation.Vertical, Qt.Orientation.Horizontal
-        self.resizeDocks([self.messages_dock], [170], vertical)
+        height = self._folded_height() if self.messages_folded else self._messages_open_height
+        held, self._resizing_messages = self._resizing_messages, True
+        self.resizeDocks([self.messages_dock], [height], vertical)
+        self._resizing_messages = held
         self.resizeDocks([self.model_dock, self.properties_dock], [380, 320], vertical)
         self.resizeDocks([self.model_dock], [360], horizontal)  # one area per call
         self.resizeDocks([self.agent_dock], [420], horizontal)

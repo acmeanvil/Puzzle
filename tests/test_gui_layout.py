@@ -119,3 +119,27 @@ def test_status_bar_says_the_context(window):
     assert window.context_label.text() == "Geometry"
     window.left_tabs.setCurrentIndex(0)
     assert window.context_label.text() == "Model"
+
+
+def test_messages_drag_open_and_shut(window):
+    """Folding resizes the Messages dock and never caps it, so its separator always
+    drags: open past the tab bar unfolds it, back down folds it, and the open height
+    is kept for the next unfold."""
+    window.resize(1200, 800)
+    window.show()
+    QApplication.processEvents()
+    window._restore_layout()  # as the first show's timer does
+    QApplication.processEvents()
+    assert window.messages_folded
+    assert window.messages_dock.maximumHeight() > 10_000  # no cap while folded
+    vertical = Qt.Orientation.Vertical
+    window.resizeDocks([window.messages_dock], [260], vertical)  # a drag of the separator
+    QApplication.processEvents()
+    assert not window.messages_folded
+    opened = window.messages_dock.height()
+    window.resizeDocks([window.messages_dock], [window._folded_height()], vertical)
+    QApplication.processEvents()
+    assert window.messages_folded
+    window.fold_messages(False)
+    QApplication.processEvents()
+    assert abs(window.messages_dock.height() - opened) <= 8
