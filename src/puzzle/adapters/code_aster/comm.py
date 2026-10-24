@@ -14,9 +14,11 @@ from pathlib import Path
 import numpy as np
 
 from puzzle.adapters.common import (
+    BODY_LOADS,
     STRUCTURAL,
     THERMAL,
     InputError,
+    body_load,
     check_contacts,
     initial_temperature,
     surface_area,
@@ -162,7 +164,10 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             f"VALE_REF={_reference(comp):.12g})"
         )
     out.append(f"mater = AFFE_MATERIAU(MAILLAGE=mesh, AFFE=({', '.join(assignments)},){varc})")
-    out.append(_loads(features, names, mesh, thermal, ties))
+    if thermal:  # loads following an amplitude get their own charge (ADR 0037)
+        out += _thermal_loads(project, features, names, mesh)
+    else:
+        out.append(_loads(features, names, mesh, thermal, ties))
 
     if thermal:
         out += [
@@ -447,9 +452,40 @@ def _ther_nl(index: int, m: Material, tables: dict) -> list[str]:
     ]
 
 
+def _thermal_loads(project, features, names, mesh) -> list[str]:
+    """`excit`: the thermal charges, those following an amplitude multiplied by it
+    (DEFI_FONCTION of time, held constant outside its points)."""
+    from puzzle.model.schema import Amplitude
+
+    out, excit = [], []
+    plain = [f for f in features if not f.amplitude]
+    base = _loads(plain, names, mesh, True)
+    if base != "load = AFFE_CHAR_THER(MODELE=model)":  # Code_Aster refuses an empty charge
+        out.append(base)
+        excit.append("_F(CHARGE=load)")
+    grouped: dict = {}
+    for f in features:
+        if f.amplitude:
+            grouped.setdefault(f.amplitude, []).append(f)
+    for k, (amplitude_id, members) in enumerate(grouped.items(), start=1):
+        points = project.get(amplitude_id, Amplitude).points
+        values = ", ".join(f"{t:.12g}, {v:.12g}" for t, v in points)
+        out.append(
+            f"amp{k} = DEFI_FONCTION(NOM_PARA='INST', VALE=({values}), "
+            "PROL_GAUCHE='CONSTANT', PROL_DROITE='CONSTANT')"
+        )
+        out.append(_loads(members, names, mesh, True).replace("load = ", f"load{k} = ", 1))
+        excit.append(f"_F(CHARGE=load{k}, FONC_MULT=amp{k})")
+    if not excit:  # nothing imposed at all: the charge as it always was
+        out.append(base)
+        excit.append("_F(CHARGE=load)")
+    out.append(f"excit = ({', '.join(excit)},)")
+    return out
+
+
 def _ther_non_line(step, comp: Component) -> str:
     call = (
-        "res = THER_NON_LINE(MODELE=model, CHAM_MATER=mater, EXCIT=_F(CHARGE=load), "
+        "res = THER_NON_LINE(MODELE=model, CHAM_MATER=mater, EXCIT=excit, "
         "CONVERGENCE=_F(RESI_GLOB_RELA=1e-10, ITER_GLOB_MAXI=50), "
     )
     if step.type != "transient":
@@ -470,6 +506,7 @@ def _loads(
     features: list[Feature], names: dict[str, str], mesh: Mesh, thermal: bool, ties=()
 ) -> str:
     imposed, face_force, pressure, temperature, flux, exchange = [], [], [], [], [], []
+    gravity, rotation = [], []
     tied = [
         f"_F(GROUP_MA_MAIT='{names[c.target.split('/', 1)[0]]}', "
         f"GROUP_MA_ESCL='{names[c.source]}', TYPE_RACCORD='MASSIF')"
@@ -489,6 +526,21 @@ def _loads(
             face_force.append(f"_F(GROUP_MA='{g}', {comps})")
         elif f.type == "pressure":
             pressure.append(f"_F(GROUP_MA='{g}', PRES={v['p']:.12g})")
+        elif f.type in BODY_LOADS:  # ADR 0037: per volume, through the density
+            load = body_load(f)
+            if load.uniform is not None:
+                b = np.asarray(load.uniform)
+                size = float(np.linalg.norm(b))
+                if size:
+                    d = ", ".join(f"{c:.12g}" for c in b / size)
+                    gravity.append(f"_F(GROUP_MA='{g}', GRAVITE={size:.12g}, DIRECTION=({d}))")
+            elif load.omega:
+                axis = ", ".join(f"{c:.12g}" for c in load.axis)
+                centre = ", ".join(f"{c:.12g}" for c in load.centre)
+                rotation.append(
+                    f"_F(GROUP_MA='{g}', VITESSE={load.omega:.12g}, AXE=({axis}), "
+                    f"CENTRE=({centre}))"
+                )
         elif f.type == "temperature":
             temperature.append(f"_F(GROUP_MA='{g}', TEMP={v['T']:.12g})")
         elif f.type == "heat_flux":
@@ -512,13 +564,15 @@ def _loads(
         + kw("DDL_IMPO", imposed)
         + kw("FORCE_FACE", face_force)
         + kw("PRES_REP", pressure)
+        + kw("PESANTEUR", gravity)
+        + kw("ROTATION", rotation)
         + kw("LIAISON_MAIL", tied)
         + ")"
     )
 
 
 def _ther_lineaire(step, comp: Component) -> str:
-    call = "res = THER_LINEAIRE(MODELE=model, CHAM_MATER=mater, EXCIT=_F(CHARGE=load), "
+    call = "res = THER_LINEAIRE(MODELE=model, CHAM_MATER=mater, EXCIT=excit, "
     if step.type != "transient":
         # Code_Aster 18 wants an INCREMENT even for a steady solve.
         return call + "TYPE_CALCUL='STAT', INCREMENT=_F(LIST_INST=DEFI_LIST_REEL(VALE=(0.0,))))"

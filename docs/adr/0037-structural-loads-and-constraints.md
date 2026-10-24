@@ -1,6 +1,6 @@
 # 0037. Structural loads and constraints: body loads, remote loads, springs, couplings, local axes, amplitudes
 
-- Status: Proposed
+- Status: Accepted (2026-10-23); body loads and amplitudes built
 - Date: 2026-10-23
 
 ## Context
@@ -73,6 +73,38 @@ New features in `model/catalog.py` (structural physics), each typed with readabl
 - a bolt section reaching its pretension;
 - a radial displacement in cylindrical axes;
 - a ramped load matching its table.
+
+## Built: body loads and amplitudes (2026-10-23)
+
+- **Body loads:** gravity, linear acceleration (written as gravity −a) and rotation (centrifugal), on a body selection, through the material's density.
+  - Written per solver as:
+    - CalculiX: `*DLOAD` GRAV and CENTRIF on the body's element set;
+    - Code_Aster: `PESANTEUR` and `ROTATION`;
+    - Elmer: a Body Force per material body (ρb, the centrifugal field as a MATC expression in the coordinates);
+    - FEniCSx: ρ b·v over the body's cells.
+  - Elmer and FEniCSx need the load on a material's body selection, and refuse it otherwise.
+  - A body load makes density a required property, so a material without one is `incomplete_material` before any run.
+  - **Benchmarks** (`tests/integration/test_body_loads.py`), with all four solvers agreeing to six digits:
+    - the cantilever under self weight against a tip force: the deflection ratio is −0.128 % from Timoshenko beam theory;
+    - an acceleration equals gravity reversed;
+    - a spinning steel quarter disc: rim displacement −0.007 % from plane-stress theory.
+- **Amplitudes:** an `Amplitude` object (kind `amplitude`) holds a table of time (s) against factor, linear between points and held beyond them. A feature names one (`Feature.amplitude`), and the component depends on it, so the table is in the run key.
+  - Written per solver as:
+    - CalculiX: `*AMPLITUDE`, with cards split per amplitude;
+    - Code_Aster: a charge per amplitude with `FONC_MULT` (DEFI_FONCTION held constant outside);
+    - Elmer: `Variable Time` tables, held with far end points;
+    - FEniCSx: a factor constant updated every step.
+  - **This round:** heat flux in transient heat steps (`Capabilities.amplitude_features`).
+  - **Refused, not ignored:** other features and non-transient steps.
+  - **On temperatures:** an amplitude would scale the absolute value in kelvin, so it needs an offset form first.
+  - **Benchmark:** a trapezoid heat flux into the insulated cantilever. Backward Euler at 1 s sums the amplitude to the trapezoid's area, so the mean temperature rise is exactly q·A·20 s/(ρcV). All four solvers give 298.943 K.
+- **GUI and agents:**
+  - the catalogue's add menus offer the three body loads;
+  - an Amplitudes section with a table editor (New amplitude…, Edit points…);
+  - a feature's Amplitude dropdown;
+  - body-load arrows (ADR 0035);
+  - the outline lists amplitudes and which features follow them.
+- **Not yet** (the second half of this ADR): remote loads, elastic supports, bolt pretension, local coordinate systems, and amplitudes on structural loads (with ADR 0041).
 
 ## Consequences
 

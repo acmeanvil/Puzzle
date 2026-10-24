@@ -18,7 +18,8 @@ FACES = {
     "hex8": [(0, 1, 2, 3), (4, 7, 6, 5), (0, 4, 5, 1), (1, 5, 6, 2), (2, 6, 7, 3), (3, 7, 4, 0)],
 }
 
-STRUCTURAL = {"fixed", "displacement", "force", "pressure"}
+BODY_LOADS = {"gravity", "acceleration", "rotation"}  # ADR 0037: on bodies, per volume
+STRUCTURAL = {"fixed", "displacement", "force", "pressure"} | BODY_LOADS
 THERMAL = {"temperature", "heat_flux", "convection"}
 FLUID = {"velocity_inlet", "mass_flow_inlet", "pressure_outlet", "wall", "symmetry"}
 ELECTROSTATIC = {"electric_potential", "ground", "surface_charge"}
@@ -33,6 +34,10 @@ def initial_temperature(physics) -> float:
     value = physics.settings.get("initial_temperature") if physics is not None else None
     if value is None:
         return ROOM_K
+    if isinstance(value, dict):  # a quantity as stored in settings: {"value", "unit"}
+        from puzzle.model.schema import Quantity
+
+        value = Quantity(**value)
     return value.to_si() if hasattr(value, "to_si") else float(value)
 
 
@@ -269,3 +274,55 @@ def plastic_strain_tensor(strain, stress, elastic: list[tuple[float, float, list
         ids=ids,
         values=e - elastic_strain,
     )
+
+
+@dataclass(frozen=True)
+class BodyLoad:
+    """A body load (ADR 0037) as a force per volume rho * b: uniform (gravity, or the
+    inertia −a of a linear acceleration) or centrifugal about an axis."""
+
+    uniform: tuple[float, float, float] | None  # b, m/s^2 (force density = rho * b)
+    omega: float = 0.0  # rad/s
+    centre: tuple[float, float, float] = (0.0, 0.0, 0.0)  # a point on the axis, m
+    axis: tuple[float, float, float] = (0.0, 0.0, 1.0)  # unit vector
+
+    def at(self, xyz: np.ndarray) -> np.ndarray:
+        """b at points (n, 3): the uniform field, or omega^2 times the distance from the
+        axis, outward."""
+        if self.uniform is not None:
+            return np.tile(np.asarray(self.uniform), (len(xyz), 1))
+        d = np.asarray(xyz) - np.asarray(self.centre)
+        n = np.asarray(self.axis)
+        return self.omega**2 * (d - np.outer(d @ n, n))
+
+
+def body_load(f) -> BodyLoad:
+    """The feature's body load, in SI."""
+    v = {k: q.to_si() for k, q in f.values.items()}
+    if f.type == "gravity":
+        return BodyLoad(tuple(v.get(f"g{a}", 0.0) for a in "xyz"))
+    if f.type == "acceleration":  # the body's inertia resists it: b = −a
+        return BodyLoad(tuple(0.0 - v.get(f"a{a}", 0.0) for a in "xyz"))  # no −0
+    if f.type == "rotation":
+        given = any(f"n{a}" in v for a in "xyz")  # no axis given: about z, as the catalog
+        axis = np.array([v.get(f"n{a}", 0.0) for a in "xyz"]) if given else np.array([0, 0, 1.0])
+        if not np.linalg.norm(axis):
+            raise InputError(f"rotation on '{f.selection}': its axis has no direction")
+        return BodyLoad(
+            None,
+            v.get("omega", 0.0),
+            tuple(v.get(f"{a}0", 0.0) for a in "xyz"),
+            tuple(axis / np.linalg.norm(axis)),
+        )
+    raise InputError(f"'{f.type}' is not a body load")
+
+
+def body_load_on_material(comp, f, solver: str) -> None:
+    """Solvers that assign loads per material body (Elmer, FEniCSx) need a body load on
+    a selection a material is assigned to."""
+    if f.selection not in {a.selection for a in comp.materials}:
+        raise InputError(
+            f"{solver} applies a {f.type} load to a body with a material: '{f.selection}' "
+            "has none (use the material's body selection)",
+            code="unsupported",
+        )

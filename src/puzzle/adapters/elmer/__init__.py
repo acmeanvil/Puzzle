@@ -65,6 +65,7 @@ class ElmerAdapter(SolverAdapter):
             "electromagnetic_waves": frozenset({"frequency_domain"}),
         },
         features=STRUCTURAL_FEATURES | THERMAL_FEATURES | ELECTROMAGNETIC_FEATURES,
+        amplitude_features=frozenset({"heat_flux"}),  # ADR 0037, benchmarked
         contacts=frozenset({"bonded_conformal", "bonded_nonconformal"}),
         experimental=frozenset({"frictionless", "frictional", "rough"}),
         couplings=frozenset({"thermal_expansion", "joule_heating"}),

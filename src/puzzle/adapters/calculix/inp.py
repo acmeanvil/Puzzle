@@ -24,10 +24,12 @@ import numpy as np
 
 from puzzle.adapters.base import refuse_inputs
 from puzzle.adapters.common import (
+    BODY_LOADS,
     STRUCTURAL,
     THERMAL,
     FaceLookup,
     InputError,
+    body_load,
     check_contacts,
     initial_temperature,
     surface_area,
@@ -118,6 +120,7 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
             out += _chunks(ids)
 
     out += _materials(project, comp, mesh, expansion=thermal_load is not None)
+    out += _amplitudes(project, comp)
     out += _contacts(project, comp, mesh, faces)
 
     solve_steps = study.solve_steps()
@@ -357,7 +360,7 @@ def _step(
     ]
     if step.type == "modal":
         features = [f for f in features if f.type in ("fixed", "displacement")]
-    out += _features(features, mesh, faces, op)
+    out += _features(features, mesh, faces, op, _amplitude_names(comp))
     if thermal_load is not None and solved == {"solid_mechanics"} and step.type != "modal":
         out.append("*TEMPERATURE")
         out += [
@@ -367,46 +370,95 @@ def _step(
     return out + outputs + ["*END STEP"]
 
 
-def _features(features: list[Feature], mesh: Mesh, faces: FaceLookup, op: str) -> list[str]:
-    boundary, cload, dload, dflux, film = [], [], [], [], []
-    for f in features:
-        group = mesh.groups.get(f.selection)
-        if group is None:
-            raise InputError(f"{f.type} on '{f.selection}': no such selection in the mesh")
-        nset = set_name("N", f.selection)
-        v = {k: q.to_si() for k, q in f.values.items()}
-        if f.type == "fixed":
-            boundary.append(f"{nset}, 1, 3, 0.")
-        elif f.type == "displacement":
-            boundary += [
-                f"{nset}, {d}, {d}, {v[axis]:.10g}"
-                for d, axis in ((1, "x"), (2, "y"), (3, "z"))
-                if axis in v
-            ]
-        elif f.type == "temperature":
-            boundary.append(f"{nset}, 11, 11, {v['T']:.10g}")
-        elif f.type == "force":
-            cload += _nodal_forces(group, mesh, [v.get(a, 0.0) for a in "xyz"])
-        elif f.type == "pressure":
-            dload += [f"{e}, P{n}, {v['p']:.10g}" for e, n in _element_faces(group, mesh, faces)]
-        elif f.type == "heat_flux":
-            dflux += [f"{e}, S{n}, {v['q']:.10g}" for e, n in _element_faces(group, mesh, faces)]
-        elif f.type == "convection":
-            film += [
-                f"{e}, F{n}, {v['T_inf']:.10g}, {v['h']:.10g}"
-                for e, n in _element_faces(group, mesh, faces)
-            ]
-    out: list[str] = []
-    for card, rows in (
-        ("*BOUNDARY", boundary),
-        ("*CLOAD", cload),
-        ("*DLOAD", dload),
-        ("*DFLUX", dflux),
-        ("*FILM", film),
-    ):
-        if rows:
-            out += [card + op] + rows
+def _amplitude_names(comp: Component) -> dict:
+    """Amplitude id -> its card name, in the order the component first uses them."""
+    ids = dict.fromkeys(f.amplitude for p in comp.physics for f in p.features if f.amplitude)
+    return {a: f"A{i}" for i, a in enumerate(ids, start=1)}
+
+
+def _amplitudes(project: Project, comp: Component) -> list[str]:
+    """*AMPLITUDE cards (ADR 0037): factor against step time, linear between points."""
+    from puzzle.model.schema import Amplitude
+
+    out = []
+    for amplitude_id, name in _amplitude_names(comp).items():
+        a = project.get(amplitude_id, Amplitude)
+        out.append(f"*AMPLITUDE, NAME={name}")
+        out += [f"{t:.10g}, {v:.10g}" for t, v in a.points]
     return out
+
+
+def _features(
+    features: list[Feature], mesh: Mesh, faces: FaceLookup, op: str, amplitudes=None
+) -> list[str]:
+    """The step's load and boundary cards; a feature following an amplitude goes in a
+    card of its own with AMPLITUDE=."""
+    amplitudes = amplitudes or {}
+    cards: dict[tuple[str, str | None], list[str]] = {}
+    for f in features:
+        amp = amplitudes.get(f.amplitude) if f.amplitude else None
+        rows = _feature_rows(f, mesh, faces)
+        for card, lines in rows.items():
+            cards.setdefault((card, amp), []).extend(lines)
+    out: list[str] = []
+    order = ("*BOUNDARY", "*CLOAD", "*DLOAD", "*DFLUX", "*FILM")
+    for (card, amp), lines in sorted(
+        cards.items(), key=lambda k: (order.index(k[0][0]), k[0][1] or "")
+    ):
+        if lines:
+            out += [card + op + (f", AMPLITUDE={amp}" if amp else "")] + lines
+    return out
+
+
+def _feature_rows(f: Feature, mesh: Mesh, faces: FaceLookup) -> dict[str, list[str]]:
+    boundary, cload, dload, dflux, film = [], [], [], [], []
+    group = mesh.groups.get(f.selection)
+    if group is None:
+        raise InputError(f"{f.type} on '{f.selection}': no such selection in the mesh")
+    nset = set_name("N", f.selection)
+    v = {k: q.to_si() for k, q in f.values.items()}
+    if f.type == "fixed":
+        boundary.append(f"{nset}, 1, 3, 0.")
+    elif f.type == "displacement":
+        boundary += [
+            f"{nset}, {d}, {d}, {v[axis]:.10g}"
+            for d, axis in ((1, "x"), (2, "y"), (3, "z"))
+            if axis in v
+        ]
+    elif f.type == "temperature":
+        boundary.append(f"{nset}, 11, 11, {v['T']:.10g}")
+    elif f.type == "force":
+        cload += _nodal_forces(group, mesh, [v.get(a, 0.0) for a in "xyz"])
+    elif f.type == "pressure":
+        dload += [f"{e}, P{n}, {v['p']:.10g}" for e, n in _element_faces(group, mesh, faces)]
+    elif f.type in BODY_LOADS:  # per volume, on the body's elements (ADR 0037)
+        load, elset = body_load(f), set_name("E", f.selection)
+        if load.uniform is not None:
+            b = np.asarray(load.uniform)
+            size = float(np.linalg.norm(b))
+            if size:
+                d = b / size
+                dload.append(f"{elset}, GRAV, {size:.10g}, {d[0]:.10g}, {d[1]:.10g}, {d[2]:.10g}")
+        elif load.omega:
+            c, n = load.centre, load.axis
+            dload.append(
+                f"{elset}, CENTRIF, {load.omega**2:.10g}, {c[0]:.10g}, {c[1]:.10g}, "
+                f"{c[2]:.10g}, {n[0]:.10g}, {n[1]:.10g}, {n[2]:.10g}"
+            )
+    elif f.type == "heat_flux":
+        dflux += [f"{e}, S{n}, {v['q']:.10g}" for e, n in _element_faces(group, mesh, faces)]
+    elif f.type == "convection":
+        film += [
+            f"{e}, F{n}, {v['T_inf']:.10g}, {v['h']:.10g}"
+            for e, n in _element_faces(group, mesh, faces)
+        ]
+    return {
+        "*BOUNDARY": boundary,
+        "*CLOAD": cload,
+        "*DLOAD": dload,
+        "*DFLUX": dflux,
+        "*FILM": film,
+    }
 
 
 CONTACTS = {"bonded_nonconformal", "frictionless", "frictional"}

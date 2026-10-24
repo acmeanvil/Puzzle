@@ -20,6 +20,7 @@ from puzzle.gui.choices import label, solver_label
 from puzzle.gui.tree import Node
 from puzzle.model.catalog import CATALOG, STEP_TYPES, specs
 from puzzle.model.schema import (
+    Amplitude,
     Component,
     Geometry,
     Material,
@@ -69,12 +70,15 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
             add("New component…", lambda: new_component(window))
         elif node.label == "Studies":
             add("New study…", lambda: new_study(window))
+        elif node.label == "Amplitudes":
+            add("New amplitude…", lambda: edit_amplitude(window))
         elif node.label == "Results":
             add("New combination…", lambda: window.new_derived("linear"))
             add("New equation…", lambda: window.new_derived("equation"))
             add("New fatigue tool…", lambda: window.new_derived("fatigue"))
     elif node.kind == "project":
         add("New part…", lambda: new_part(window))
+        add("New amplitude…", lambda: edit_amplitude(window))
         add("Import geometry…", lambda: import_step_file(window))
         add("New parameter set", lambda: new_parameter_set(window))
         add("New mesh recipe", lambda: new_mesh(window))
@@ -140,6 +144,10 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
             add("Move down", lambda: move_step(window, obj, index, +1))
         menu.addSeparator()
         add("Delete step", lambda: remove(window, obj, node.path))
+    elif isinstance(obj, Amplitude) and node.kind == "object":
+        add("Edit points…", lambda: edit_amplitude(window, obj))
+        menu.addSeparator()
+        add("Delete", window.delete_selected)
     elif isinstance(obj, Material) and node.kind == "object":
         add("Save to my materials…", lambda: window.open_material_builder(obj))
         menu.addSeparator()
@@ -286,6 +294,26 @@ def add_step(window, study: Study, kind: str):
         }
     return window.submit(
         Edit(object=str(study.id), ops=[EditOp(op="append", path="steps", value=value)])
+    )
+
+
+def edit_amplitude(window, amplitude=None):
+    """A load's factor against time (ADR 0037), typed as a table: a new amplitude, or
+    new points for one. Features then pick it in Properties (Amplitude)."""
+    from puzzle.gui.material_builder import TableEditor
+
+    rows = list(amplitude.points) if amplitude else [(0.0, 0.0), (1.0, 1.0)]
+    title = amplitude.name if amplitude else "New amplitude"
+    dialog = TableEditor(f"{title}: factor against time", ("Time (s)", "Factor"), rows, window)
+    if not window.run_dialog(dialog) or dialog.result_rows is None:
+        return None
+    points = [list(r) for r in dialog.result_rows]
+    if amplitude is not None:
+        op = EditOp(op="set", path="points", value=points)
+        return window.submit(Edit(object=str(amplitude.id), ops=[op]))
+    n = len(window.session.project.of_type(Amplitude)) + 1
+    return window.submit(
+        Create(kind="amplitude", data={"name": f"Amplitude {n}", "points": points})
     )
 
 

@@ -29,6 +29,7 @@ class CalculixAdapter(SolverAdapter):
             "heat_transfer": frozenset({"stationary", "transient"}),
         },
         features=STRUCTURAL_FEATURES | THERMAL_FEATURES,
+        amplitude_features=frozenset({"heat_flux"}),  # ADR 0037, benchmarked
         # Nonconformal bonded maps to *TIE; the others to *CONTACT PAIR (+ *FRICTION).
         contacts=frozenset(
             {"bonded_conformal", "bonded_nonconformal", "frictionless", "frictional"}

@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QTreeWidget, QTreeWidgetItem
 
 from puzzle.gui.choices import label, solver_label
 from puzzle.model.schema import (
+    Amplitude,
     Component,
     Geometry,
     Material,
@@ -50,6 +51,7 @@ SECTIONS = [
     ("Components", Component),
     ("Studies", Study),
     ("Transfers", Transfer),
+    ("Amplitudes", Amplitude),
 ]
 
 

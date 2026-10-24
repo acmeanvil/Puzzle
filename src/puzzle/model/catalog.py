@@ -34,6 +34,33 @@ CATALOG: dict[str, list[FeatureSpec]] = {
         FeatureSpec("displacement", "Prescribed displacement", values=XYZ_DISP),
         FeatureSpec("force", "Force (total over the face)", values=XYZ_FORCE),
         FeatureSpec("pressure", "Pressure", values={"p": (0.0, "MPa")}),
+        # Body loads (ADR 0037): on a body, per volume, through the material's density.
+        FeatureSpec(
+            "gravity",
+            "Gravity",
+            entity="body",
+            values={"gx": (0.0, "m/s^2"), "gy": (0.0, "m/s^2"), "gz": (-9.81, "m/s^2")},
+        ),
+        FeatureSpec(
+            "acceleration",
+            "Linear acceleration (inertia)",
+            entity="body",
+            values={"ax": (0.0, "m/s^2"), "ay": (0.0, "m/s^2"), "az": (0.0, "m/s^2")},
+        ),
+        FeatureSpec(
+            "rotation",
+            "Rotation (centrifugal)",
+            entity="body",
+            values={
+                "omega": (1000.0, "rpm"),
+                "x0": (0.0, "mm"),
+                "y0": (0.0, "mm"),
+                "z0": (0.0, "mm"),
+                "nx": (0.0, "dimensionless"),
+                "ny": (0.0, "dimensionless"),
+                "nz": (1.0, "dimensionless"),
+            },
+        ),
     ],
     "heat_transfer": [
         FeatureSpec("temperature", "Temperature", values={"T": (20.0, "degC")}),

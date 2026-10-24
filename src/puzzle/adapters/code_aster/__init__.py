@@ -37,6 +37,7 @@ class CodeAsterAdapter(SolverAdapter):
             "heat_transfer": frozenset({"stationary", "transient"}),
         },
         features=STRUCTURAL_FEATURES | THERMAL_FEATURES,
+        amplitude_features=frozenset({"heat_flux"}),  # ADR 0037, benchmarked
         contacts=frozenset(
             {"bonded_conformal", "bonded_nonconformal", "frictionless", "frictional"}
         ),

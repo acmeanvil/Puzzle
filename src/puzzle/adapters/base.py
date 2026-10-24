@@ -13,7 +13,9 @@ from puzzle.model.schema import Component, Project, Study
 from puzzle.results.model import Results
 
 # Feature types, grouped by physics, for adapters to combine.
-STRUCTURAL_FEATURES = frozenset({"fixed", "displacement", "force", "pressure"})
+STRUCTURAL_FEATURES = frozenset(
+    {"fixed", "displacement", "force", "pressure", "gravity", "acceleration", "rotation"}
+)  # body loads (ADR 0037): benchmarked on CalculiX, Code_Aster, Elmer and FEniCSx
 THERMAL_FEATURES = frozenset({"temperature", "heat_flux", "convection"})
 ELECTROMAGNETIC_FEATURES = frozenset(
     {
@@ -55,6 +57,8 @@ class Capabilities:
     """Material.models this adapter writes (plasticity, ...); others are refused."""
     material_keywords: bool = False
     """Whether the adapter places a material's own keywords for it (solver_keywords)."""
+    amplitude_features: frozenset[str] = frozenset()
+    """Feature types whose values may follow an Amplitude in transient steps (ADR 0037)."""
 
 
 def refuse_inputs(inputs: Sequence, solver: str, accepted: set[tuple[str, str]] = frozenset()):
@@ -105,6 +109,24 @@ class SolverAdapter(ABC):
                 for f in physics.features
                 if f.type not in caps.features
             ]
+            for f in physics.features:  # amplitudes (ADR 0037): refused, never ignored
+                if f.amplitude is None:
+                    continue
+                if f.type not in caps.amplitude_features:
+                    problems.append(
+                        f"{self.name} does not vary {f.type} with an amplitude yet "
+                        f"(on {f.selection})"
+                    )
+                steady = [
+                    s.type
+                    for s in study.solve_steps()
+                    if s.solves(physics.type) and s.type != "transient"
+                ]
+                if steady:
+                    problems.append(
+                        f"an amplitude on {f.type} ({f.selection}) applies in transient steps; "
+                        f"this study also has {', '.join(sorted(set(steady)))} steps"
+                    )
         for s in study.solve_steps():
             scheme = s.settings.get("time_scheme", "backward_euler")
             if s.type == "transient" and scheme not in caps.time_schemes:

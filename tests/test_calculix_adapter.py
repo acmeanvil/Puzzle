@@ -195,3 +195,35 @@ def test_node_coordinates_fit_calculix_fields(tmp_path):
     inp = write_inp(project, study, mesh)
     nodes = inp.split("*NODE")[1].split("*ELEMENT")[0].splitlines()[1:]
     assert all(len(field.strip()) <= 20 for line in nodes for field in line.split(","))
+
+
+def test_body_loads_in_the_deck(tmp_path):
+    """Gravity and rotation as *DLOAD GRAV and CENTRIF on the body's elements (ADR 0037);
+    an acceleration is gravity reversed; a body load needs the material's density."""
+    fixed = Feature(type="fixed", selection="Bar/Root")
+    gravity = Feature(
+        type="gravity", selection="Bar/Body", values={"gz": Quantity(value=-9.81, unit="m/s^2")}
+    )
+    spin = Feature(
+        type="rotation",
+        selection="Bar/Body",
+        values={"omega": Quantity(value=60, unit="rpm"), "x0": Quantity(value=5, unit="mm")},
+    )
+    up = Feature(
+        type="acceleration", selection="Bar/Body", values={"ay": Quantity(value=2, unit="m/s^2")}
+    )
+    project, study, mesh = _cantilever(
+        tmp_path, [fixed, gravity, spin, up], [SolveStep(type="stationary")]
+    )
+    rows = _load(write_inp(project, study, mesh), "*DLOAD")
+    grav = [r for r in rows if r[1] == "GRAV"]
+    assert grav[0] == ["E_BAR_BODY", "GRAV", "9.81", "0", "0", "-1"]
+    assert grav[1] == ["E_BAR_BODY", "GRAV", "2", "0", "-1", "0"]  # inertia: opposite to a
+    (centrif,) = [r for r in rows if r[1] == "CENTRIF"]
+    assert float(centrif[2]) == pytest.approx((2 * np.pi) ** 2)  # omega² for 60 rpm
+    assert [float(c) for c in centrif[3:]] == pytest.approx([0.005, 0, 0, 0, 0, 1])
+
+    steel = next(m for m in project.objects.values() if m.kind == "material")
+    steel.properties.pop("density")
+    problems = [p for p in project.problems() if p.code == "incomplete_material"]
+    assert problems and "density" in problems[0].message

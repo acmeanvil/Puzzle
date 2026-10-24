@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, TypeVar
 from uuid import UUID, uuid4
 
+import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 if TYPE_CHECKING:
@@ -470,6 +471,32 @@ class Feature(BaseModel):
     extensions: dict[str, dict[str, Any]] = Field(
         default_factory=dict, description="Per-solver settings with no neutral equivalent"
     )
+    amplitude: UUID | None = Field(
+        default=None, description="an Amplitude its values follow over time (ADR 0037)"
+    )
+
+
+class Amplitude(ProjectObject):
+    """A load's factor against time (ADR 0037), shared by the features that name it:
+    linear between its points, the end values held outside them. Transient steps read it
+    at each time."""
+
+    kind: ClassVar[str] = "amplitude"
+
+    points: list[tuple[float, float]] = Field(
+        min_length=2, description="(time in s, factor on the feature's values)"
+    )
+
+    @model_validator(mode="after")
+    def _increasing(self) -> Amplitude:
+        times = [t for t, _ in self.points]
+        if any(b <= a for a, b in zip(times, times[1:], strict=False)):
+            raise ValueError("an amplitude's times must increase")
+        return self
+
+    def at(self, t: float) -> float:
+        times, factors = zip(*self.points, strict=True)
+        return float(np.interp(t, times, factors))
 
 
 class Unknown(BaseModel):
@@ -548,7 +575,13 @@ class Component(ProjectObject):
     couplings: list[Coupling] = Field(default_factory=list)
 
     def dependencies(self) -> list[UUID]:
-        return [*(p.geometry for p in self.parts), self.mesh, *(m.material for m in self.materials)]
+        amplitudes = [f.amplitude for p in self.physics for f in p.features if f.amplitude]
+        return [
+            *(p.geometry for p in self.parts),
+            self.mesh,
+            *(m.material for m in self.materials),
+            *amplitudes,
+        ]
 
     def used_selections(self) -> list[str]:
         used = [a.selection for a in self.materials]
@@ -900,6 +933,7 @@ OBJECT_TYPES: tuple[type[ProjectObject], ...] = (
     ResultDefinition,
     ProjectUnits,
     ResultProbe,
+    Amplitude,
 )
 
 

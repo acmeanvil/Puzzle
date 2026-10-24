@@ -48,6 +48,7 @@ class FenicsxAdapter(SolverAdapter):
             "solid_mechanics": frozenset({"stationary", "modal"}),
         },
         features=ELECTROMAGNETIC_FEATURES | THERMAL_FEATURES | STRUCTURAL_FEATURES | PDE_FEATURES,
+        amplitude_features=frozenset({"heat_flux"}),  # ADR 0037, benchmarked
         contacts=frozenset({"bonded_conformal"}),
         couplings=frozenset({"joule_heating", "thermal_expansion"}),
         dimensions=frozenset({"3d", "2d_planar", "2d_axisymmetric"}),

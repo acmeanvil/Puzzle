@@ -12,12 +12,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
+
 from puzzle.adapters.common import (
+    BODY_LOADS,
     ELECTROSTATIC,
     MAGNETIC,
     STRUCTURAL,
     THERMAL,
     InputError,
+    body_load,
+    body_load_on_material,
     check_contacts,
     initial_temperature,
     refuse_large_deflection,
@@ -96,6 +101,11 @@ def write_case(
     if len(coils) > 1 or (solved == {"magnetic_fields"} and not coils):
         raise InputError("the Elmer adapter solves magnetic fields driven by one coil for now")
     features = [f for f in features if f.type != "coil_current"]
+    # Body loads (ADR 0037) act on bodies, as body forces; the rest are boundaries.
+    loads = [f for f in features if f.type in BODY_LOADS]
+    for f in loads:
+        body_load_on_material(comp, f, "Elmer")
+    features = [f for f in features if f.type not in BODY_LOADS]
     boundary_names = list(dict.fromkeys(f.selection for f in features))
     body_names = [a.selection for a in comp.materials]
     if not body_names:
@@ -135,12 +145,18 @@ def write_case(
         "End",
         "",
     ]
+    forces: list[list[str]] = []  # body force blocks for body loads, in body order
     for i, assignment in enumerate(comp.materials, start=1):
         conductor = assignment.selection in coil_bodies
         out += [f"Body {i}", f"  Target Bodies(1) = {i}", f"  Equation = {2 - conductor}"]
         out.append(f"  Material = {i}")
         if conductor:
             out.append("  Body Force = 1")
+        mine = [f for f in loads if f.selection == assignment.selection]
+        if mine:
+            material = project.get(assignment.material, Material)
+            forces.append(_body_force(mine, material))
+            out.append(f"  Body Force = {len(forces)}")
         if "heat_transfer" in solved:
             out.append("  Initial Condition = 1")
         out += ["End", ""]
@@ -173,6 +189,8 @@ def write_case(
     else:
         out += ["Equation 1", "  Active Solvers(1) = 1", "End", ""]
         out += ["Equation 2", "  Active Solvers(1) = 1", "End", ""]
+        for k, block in enumerate(forces, start=1):
+            out += [f"Body Force {k}", *block, "End", ""]
     for number, block in enumerate(solvers, start=1):
         out += [f"Solver {number}", *block, "End", ""]
     out += [
@@ -186,9 +204,18 @@ def write_case(
         "End",
         "",
     ]
+    from puzzle.model.schema import Amplitude
+
+    amplitudes = {
+        f.amplitude: project.get(f.amplitude, Amplitude).points for f in features if f.amplitude
+    }
     for name in boundary_names:
         out += _boundary(
-            emesh.boundaries[name], name, [f for f in features if f.selection == name], mesh
+            emesh.boundaries[name],
+            name,
+            [f for f in features if f.selection == name],
+            mesh,
+            amplitudes,
         )
 
     if transient:
@@ -200,6 +227,37 @@ def write_case(
     sif = workdir / f"{OUTPUT}.sif"
     sif.write_text("\n".join(out) + "\n")
     return sif, emesh
+
+
+def _body_force(loads: list[Feature], material: Material) -> list[str]:
+    """Stress Bodyforce per component: rho times the summed load fields; a rotation's
+    centrifugal field is a MATC expression in the coordinates (ADR 0037)."""
+    rho = material.properties["density"].to_si()
+    uniform = np.zeros(3)
+    spin = []
+    for f in loads:
+        load = body_load(f)
+        if load.uniform is not None:
+            uniform += np.asarray(load.uniform)
+        elif load.omega:
+            spin.append(load)
+    out = []
+    for i in range(3):
+        if not spin:
+            out.append(f"  Stress Bodyforce {i + 1} = {rho * uniform[i]:.10g}")
+            continue
+        terms = [f"{rho * uniform[i]:.10g}"]
+        for load in spin:
+            (cx, cy, cz), (nx, ny, nz) = load.centre, load.axis
+            d = [f"(tx({j})-({c:.10g}))" for j, c in enumerate((cx, cy, cz))]
+            dot = f"({d[0]}*({nx:.10g})+{d[1]}*({ny:.10g})+{d[2]}*({nz:.10g}))"
+            n_i = (nx, ny, nz)[i]
+            terms.append(f"{rho * load.omega**2:.10g}*({d[i]}-{dot}*({n_i:.10g}))")
+        out += [
+            f"  Stress Bodyforce {i + 1} = Variable Coordinate 1, Coordinate 2, Coordinate 3",
+            f'    Real MATC "{" + ".join(terms)}"',
+        ]
+    return out
 
 
 def _material(
@@ -313,7 +371,10 @@ def _solvers(step, solved: set[str], coils: list[Feature]) -> list[list[str]]:
     ]
 
 
-def _boundary(index: int, name: str, features: list[Feature], mesh: Mesh) -> list[str]:
+def _boundary(
+    index: int, name: str, features: list[Feature], mesh: Mesh, amplitudes=None
+) -> list[str]:
+    """A boundary's conditions; `amplitudes` (id -> points) make a value follow time."""
     out = [f"Boundary Condition {index}", f"  Target Boundaries(1) = {index}", f'  Name = "{name}"']
     for f in features:
         v = {k: q.to_si() for k, q in f.values.items()}
@@ -338,7 +399,7 @@ def _boundary(index: int, name: str, features: list[Feature], mesh: Mesh) -> lis
         elif f.type == "temperature":
             out.append(f"  Temperature = {v['T']:.10g}")
         elif f.type == "heat_flux":
-            out.append(f"  Heat Flux = {v['q']:.10g}")
+            out += _in_time("Heat Flux", v["q"], (amplitudes or {}).get(f.amplitude))
         elif f.type == "convection":
             out += [
                 f"  Heat Transfer Coefficient = {v['h']:.10g}",
@@ -356,6 +417,18 @@ def _boundary(index: int, name: str, features: list[Feature], mesh: Mesh) -> lis
         elif f.type == "magnetic_insulation":
             out.append("  AV {e} = Real 0")  # flux stays tangential to the boundary
     return out + ["End", ""]
+
+
+def _in_time(keyword: str, value: float, points) -> list[str]:
+    """A constant, or (ADR 0037) a table in time: the value times the amplitude, linear
+    between its points; Elmer holds the end values beyond them, as Puzzle does."""
+    if points is None:
+        return [f"  {keyword} = {value:.10g}"]
+    # Far points at both ends hold the end values (Elmer extrapolates otherwise).
+    span = 1e6 * max(1.0, points[-1][0] - points[0][0])
+    held = [(points[0][0] - span, points[0][1]), *points, (points[-1][0] + span, points[-1][1])]
+    rows = [f"    {t:.10g} {value * factor:.10g}" for t, factor in held]
+    return [f"  {keyword} = Variable Time", "    Real", *rows, "    End"]
 
 
 def _write_restart(path: Path, field, emesh: ElmerMesh) -> None:

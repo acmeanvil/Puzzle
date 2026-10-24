@@ -25,6 +25,7 @@ from typing import Any, Literal, Union
 from pydantic import BaseModel
 
 from puzzle.model.schema import (
+    Amplitude,
     Component,
     FatigueBlock,
     FatigueSettings,
@@ -45,6 +46,7 @@ REFERENCES = {
     "mesh": MeshRecipe,
     "component": Component,
     "owner": Component,
+    "amplitude": Amplitude,
 }
 NONE = "(none)"
 # Words kept as written when a value is turned into a label.

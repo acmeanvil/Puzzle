@@ -130,6 +130,14 @@ def needs(component, study, transfers=()) -> dict[str, set[str]]:
     for physics in present:
         steps = {s.type for s in study.solve_steps() if s.solves(physics)}
         need = needs_for(physics, steps, present, thermal_strain) if steps else set()
+        body_loads = {"gravity", "acceleration", "rotation"}  # ADR 0037: rho times a field
+        statics = steps - {"modal"}
+        if (
+            physics == "solid_mechanics"
+            and statics
+            and any(f.type in body_loads for ph in component.physics for f in ph.features)
+        ):
+            need = need | {"density"}
         if need:
             out[physics] = need
     return out

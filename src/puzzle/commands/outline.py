@@ -7,6 +7,7 @@ their units. `outline(project)` is meant to stay short enough for a small model.
 from __future__ import annotations
 
 from puzzle.model.schema import (
+    Amplitude,
     Component,
     Geometry,
     Material,
@@ -67,7 +68,8 @@ def outline(project: Project, *, ids: bool = False, runs=None) -> str:
             lines.append(f"    physics {ph.type}{settings}")
             for f in ph.features:
                 vals = f" {_values(f.values)}" if f.values else ""
-                lines.append(f"        {f.type} on {f.selection}{vals}")
+                amp = f" x amplitude {names.get(f.amplitude, '?')}" if f.amplitude else ""
+                lines.append(f"        {f.type} on {f.selection}{vals}{amp}")
     states = {}
     if runs is not None:
         from puzzle.project.status import status
@@ -88,6 +90,9 @@ def outline(project: Project, *, ids: bool = False, runs=None) -> str:
                 physics = f" {', '.join(step.physics)}" if step.physics else ""
                 settings = f" {step.settings}" if step.settings else ""
                 lines.append(f"    {step.type}{physics}{settings}")
+    for a in project.of_type(Amplitude):
+        pts = ", ".join(f"({t:g} s, {v:g})" for t, v in a.points)
+        lines.append(head("Amplitude", a) + f": {pts}")
     for t in project.of_type(Transfer):
         lines.append(
             head("Transfer", t)

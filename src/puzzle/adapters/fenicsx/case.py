@@ -10,11 +10,14 @@ from pathlib import Path
 import numpy as np
 
 from puzzle.adapters.common import (
+    BODY_LOADS,
     ELECTROSTATIC,
     MAGNETIC,
     STRUCTURAL,
     THERMAL,
     InputError,
+    body_load,
+    body_load_on_material,
     check_contacts,
     initial_temperature,
     match_points,
@@ -26,7 +29,7 @@ from puzzle.adapters.common import (
 )
 from puzzle.mesh.med import write_med
 from puzzle.mesh.mesh import Mesh
-from puzzle.model.schema import Component, Material, Project, Study
+from puzzle.model.schema import Amplitude, Component, Material, Project, Study
 from puzzle.results.model import Field, Results, StepResult
 
 SCRIPT = Path(__file__).with_name("study.py")
@@ -97,6 +100,9 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     features = [
         f for ph in comp.physics if ph.type == physics for f in ph.features if f.type in wanted
     ]
+    for f in features:
+        if f.type in BODY_LOADS:  # cells carry one tag: the material's body (ADR 0037)
+            body_load_on_material(comp, f, "FEniCSx")
     coils = [f for f in features if f.type == "coil_current"]
     if physics == "magnetic_fields" and len(coils) != 1:
         raise InputError("the FEniCSx adapter solves magnetic fields driven by one coil for now")
@@ -137,6 +143,12 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
                 **(
                     {"area": surface_area(mesh.groups[f.selection], mesh)}
                     if f.type == "force"
+                    else {}
+                ),
+                **({"load": _body_load(f)} if f.type in BODY_LOADS else {}),
+                **(
+                    {"amplitude": [list(p) for p in project.get(f.amplitude, Amplitude).points]}
+                    if f.amplitude
                     else {}
                 ),
             }
@@ -266,3 +278,15 @@ def _time(step) -> dict:
     dt, _, n = time_settings(step)
     scheme, theta = time_scheme(step)
     return {"time_step": dt, "steps": n, "scheme": scheme, "theta": theta}
+
+
+def _body_load(f) -> dict:
+    """A body load for study.py (which can't import Puzzle): b in SI, uniform or about an
+    axis."""
+    load = body_load(f)
+    return {
+        "uniform": list(load.uniform) if load.uniform is not None else None,
+        "omega": load.omega,
+        "centre": list(load.centre),
+        "axis": list(load.axis),
+    }

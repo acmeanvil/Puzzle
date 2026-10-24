@@ -281,6 +281,18 @@ def solve_solid(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
             L += ufl.inner(fem.Constant(msh, traction), v) * ds(tag(f["group"]))
         elif f["type"] == "pressure" and not modal:
             L += -vals["p"] * ufl.inner(n, v) * ds(tag(f["group"]))
+        elif f["type"] in ("gravity", "acceleration", "rotation") and not modal:
+            # A body load (ADR 0037): rho * b per volume over the body's cells.
+            load, rho = f["load"], piecewise("density")
+            if load["uniform"] is not None:
+                b = fem.Constant(msh, np.asarray(load["uniform"], dtype=float))
+            else:
+                x = ufl.SpatialCoordinate(msh)
+                c = ufl.as_vector(load["centre"])
+                axis = ufl.as_vector(load["axis"])
+                d = x - c
+                b = load["omega"] ** 2 * (d - ufl.dot(d, axis) * axis)
+            L += rho * ufl.inner(b, v) * dx(tag(f["group"]))
 
     out["coords"] = V.tabulate_dof_coordinates()
     if modal:
@@ -318,13 +330,17 @@ def solve_heat(case, msh, degree, dx, ds, facets, tag, of_temperature, out) -> N
     k = of_temperature("thermal_conductivity", previous)
     a = k * ufl.inner(ufl.grad(T), ufl.grad(v)) * dx
     L = fem.Constant(msh, 0.0) * v * dx
-    bcs, films = [], []
+    bcs, films, amplitudes = [], [], []
     for f in case["features"]:
         where, vals = facets.find(tag(f["group"])), f.get("values", {})
         if f["type"] == "temperature":
             bcs.append(dirichlet(vals["T"], fem.locate_dofs_topological(V, 2, where), V))
         elif f["type"] == "heat_flux":
-            L += vals["q"] * v * ds(tag(f["group"]))
+            factor = 1.0
+            if "amplitude" in f:  # ADR 0037: q times the amplitude at each step's time
+                factor = fem.Constant(msh, 0.0)
+                amplitudes.append((factor, np.asarray(f["amplitude"], dtype=float)))
+            L += vals["q"] * factor * v * ds(tag(f["group"]))
         elif f["type"] == "convection":
             films.append((vals["h"], tag(f["group"])))
             a += vals["h"] * T * v * ds(tag(f["group"]))
@@ -380,6 +396,8 @@ def solve_heat(case, msh, degree, dx, ds, facets, tag, of_temperature, out) -> N
         euler = later  # theta schemes need no starting step
     series = []
     for n in range(steps):
+        for factor, table in amplitudes:  # the loads' factors at this step's end time
+            factor.value = np.interp((n + 1) * dt, table[:, 0], table[:, 1])
         a_t, L_t = euler if n == 0 else later
         current = picard(a_t, L_t, previous)
         older.x.array[:] = old.x.array
