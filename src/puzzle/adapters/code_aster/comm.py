@@ -21,7 +21,10 @@ from puzzle.adapters.common import (
     InputError,
     body_load,
     check_contacts,
+    cylindrical_expressions,
+    globalize,
     initial_temperature,
+    local_axes,
     remote_load,
     remote_values,
     rigid_motion,
@@ -83,6 +86,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     ]
     if step.type == "modal":
         features = [f for f in features if f.type in HOLDING]
+    features = globalize(project, features)  # Cartesian local axes as global (ADR 0037)
     if not comp.materials:
         raise InputError(f"component '{comp.name}' has no material assignments")
     ties = [c for c in comp.contacts if c.capability == "bonded_nonconformal"]
@@ -172,8 +176,12 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     if thermal:  # loads following an amplitude get their own charge (ADR 0037)
         out += _thermal_loads(project, features, names, mesh)
     else:
-        out.append(_loads(features, names, mesh, thermal, ties))
-        remote = _remote_loads(features, names, mesh)  # ADR 0037: fields of x, y, z
+        plain = _loads(features, names, mesh, thermal, ties)
+        if plain.endswith("(MODELE=model)"):  # everything is in loadf: no empty charge
+            charges = []
+        else:
+            out.append(plain)
+        remote = _remote_loads(features, names, mesh, project)  # ADR 0037: fields of x, y, z
         if remote:
             out += remote
             charges.append("loadf")
@@ -186,7 +194,8 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     elif step.type == "modal":
         n = int(step.settings.get("modes", 10))
         out += [
-            "ASSEMBLAGE(MODELE=model, CHAM_MATER=mater, CHARGE=load, NUME_DDL=CO('numddl'),",
+            f"ASSEMBLAGE(MODELE=model, CHAM_MATER=mater, CHARGE=({', '.join(charges)},), "
+            "NUME_DDL=CO('numddl'),",
             "           MATR_ASSE=(_F(MATRICE=CO('stiff'), OPTION='RIGI_MECA'),",
             "                      _F(MATRICE=CO('mass'), OPTION='MASS_MECA')))",
             "res = CALC_MODES(MATR_RIGI=stiff, MATR_MASS=mass, OPTION='PLUS_PETITE', "
@@ -481,7 +490,7 @@ def _cross_formulas(name: str, base, axis, origin) -> tuple[list[str], list[str]
     return lines, [f"{name}{i}" for i in range(3)]
 
 
-def _remote_loads(features, names, mesh) -> list[str]:
+def _remote_loads(features, names, mesh, project=None) -> list[str]:
     """`loadf`: remote forces as their RBE3-equivalent traction (FORCE_FACE of x, y, z)
     and remote displacements as a rigid motion (DDL_IMPO of x, y, z), ADR 0037."""
     lines, faces, imposed = [], [], []
@@ -492,6 +501,15 @@ def _remote_loads(features, names, mesh) -> list[str]:
             more, (fx, fy, fz) = _cross_formulas(f"rt{k}_", load.uniform, load.twist, load.centroid)
             lines += more
             faces.append(f"_F(GROUP_MA='{g}', FX={fx}, FY={fy}, FZ={fz})")
+        elif f.type == "displacement" and f.axes is not None:  # cylindrical, all three
+            axes = local_axes(project, f)
+            local = [f.values[a].to_si() for a in "xyz"]
+            exprs = cylindrical_expressions(axes, local, ("X", "Y", "Z"))
+            lines += [
+                f"cy{k}_{i} = FORMULE(VALE='{e}', NOM_PARA=('X', 'Y', 'Z'))"
+                for i, e in enumerate(exprs)
+            ]
+            imposed.append(f"_F(GROUP_MA='{g}', DX=cy{k}_0, DY=cy{k}_1, DZ=cy{k}_2)")
         elif f.type == "remote_displacement":
             motion = rigid_motion(f, mesh.groups[f.selection], mesh)
             more, (ux, uy, uz) = _cross_formulas(f"ru{k}_", motion.u0, motion.theta, motion.point)
@@ -572,7 +590,7 @@ def _loads(
         v = {k: q.to_si() for k, q in f.values.items()}
         if f.type == "fixed":
             imposed.append(f"_F(GROUP_MA='{g}', DX=0.0, DY=0.0, DZ=0.0)")
-        elif f.type == "displacement":
+        elif f.type == "displacement" and f.axes is None:  # in local axes: loadf
             dofs = ", ".join(f"D{a.upper()}={v[a]:.12g}" for a in "xyz" if a in v)
             imposed.append(f"_F(GROUP_MA='{g}', {dofs})")
         elif f.type == "force":

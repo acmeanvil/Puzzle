@@ -474,6 +474,63 @@ class Feature(BaseModel):
     amplitude: UUID | None = Field(
         default=None, description="an Amplitude its values follow over time (ADR 0037)"
     )
+    axes: UUID | None = Field(
+        default=None,
+        description="a CoordinateSystem its x, y, z values are in (cylindrical: r, θ, z)",
+    )
+    steps: list[int] = Field(
+        default_factory=list,
+        description="the solve steps (1, 2, ...) it applies in; empty: every step (ADR 0037)",
+    )
+
+    def active(self, index: int | None) -> bool:
+        """Whether it applies in solve step `index` (1-based; None: any step)."""
+        return index is None or not self.steps or index in self.steps
+
+
+class CoordinateSystem(ProjectObject):
+    """Local axes (ADR 0037) that displacements and forces can be given in.
+
+    Cartesian: x along `x_axis`, y in the plane of `x_axis` and `xy_direction`, z their
+    cross product. Cylindrical about the line through `origin` along `axis`: a feature's
+    x, y, z values are radial, tangential (θ, anticlockwise about `axis`) and axial."""
+
+    kind: ClassVar[str] = "axes"
+
+    type: Literal["cartesian", "cylindrical"] = "cartesian"
+    origin: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    x_axis: tuple[float, float, float] = (1.0, 0.0, 0.0)
+    xy_direction: tuple[float, float, float] = (0.0, 1.0, 0.0)
+    axis: tuple[float, float, float] = Field(
+        default=(0.0, 0.0, 1.0), description="cylindrical: the axis direction"
+    )
+
+    def rotation(self) -> np.ndarray:
+        """Cartesian: the 3x3 matrix whose columns are the local x, y, z in global."""
+        x = np.asarray(self.x_axis, float)
+        x /= np.linalg.norm(x)
+        z = np.cross(x, np.asarray(self.xy_direction, float))
+        if not np.linalg.norm(z):
+            raise ValueError(f"axes '{self.name}': x and the xy direction are parallel")
+        z /= np.linalg.norm(z)
+        return np.column_stack([x, np.cross(z, x), z])
+
+    def frames(self, xyz) -> np.ndarray:
+        """Local axes at points (n, 3, 3): columns radial, tangential, axial for a
+        cylindrical system; the same rotation everywhere for a Cartesian one."""
+        xyz = np.atleast_2d(np.asarray(xyz, float))
+        if self.type == "cartesian":
+            return np.repeat(self.rotation()[None], len(xyz), axis=0)
+        a = np.asarray(self.axis, float) / np.linalg.norm(self.axis)
+        d = xyz - np.asarray(self.origin, float)
+        r = d - np.outer(d @ a, a)
+        r /= np.maximum(np.linalg.norm(r, axis=1, keepdims=True), 1e-300)
+        t = np.cross(a, r)
+        return np.stack([r, t, np.repeat(a[None], len(xyz), axis=0)], axis=2)
+
+    def to_global(self, local, xyz) -> np.ndarray:
+        """Vectors given in these axes, at points, in global components (n, 3)."""
+        return np.einsum("nij,j->ni", self.frames(xyz), np.asarray(local, float))
 
 
 class Amplitude(ProjectObject):
@@ -575,7 +632,13 @@ class Component(ProjectObject):
     couplings: list[Coupling] = Field(default_factory=list)
 
     def dependencies(self) -> list[UUID]:
-        amplitudes = [f.amplitude for p in self.physics for f in p.features if f.amplitude]
+        amplitudes = [
+            ref
+            for p in self.physics
+            for f in p.features
+            for ref in (f.amplitude, f.axes)
+            if ref is not None
+        ]
         return [
             *(p.geometry for p in self.parts),
             self.mesh,
@@ -934,6 +997,7 @@ OBJECT_TYPES: tuple[type[ProjectObject], ...] = (
     ProjectUnits,
     ResultProbe,
     Amplitude,
+    CoordinateSystem,
 )
 
 

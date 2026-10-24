@@ -76,8 +76,30 @@ def format_value(value: Any) -> str:
     return json.dumps(value)
 
 
+STEPS = "steps"  # marks a feature's steps row, edited as text
+SHOWN = Qt.ItemDataRole.UserRole + 7
+ALL_STEPS = "All steps"
+
+
+def steps_text(steps: list[int]) -> str:
+    return ", ".join(str(s) for s in steps) if steps else ALL_STEPS
+
+
+def parse_steps(text: str) -> list[int]:
+    """ "2, 3" or "2 3" -> [2, 3]; empty or "All steps" -> [] (every step)."""
+    text = text.strip()
+    if not text or text.lower() in (ALL_STEPS.lower(), "all"):
+        return []
+    steps = sorted({int(t) for t in text.replace(",", " ").split()})
+    if steps[0] < 1:
+        raise ValueError("steps are numbered from 1")
+    return steps
+
+
 def parse_value(text: str, old: Any) -> Any:
     """The typed text, as the type the field held: "5 mm" for a quantity, JSON otherwise."""
+    if old == STEPS:
+        return parse_steps(text)
     text = text.strip()
     if is_quantity(old):
         from puzzle.model.units import plain, shown
@@ -152,6 +174,13 @@ class PropertiesPanel(QTreeWidget):
                 title = "XYZ"[int(key)] if xyz else item_title(key, value, names)
             else:
                 title = label(str(key)) + UNITS.get(str(key), "")
+            if key == "steps" and isinstance(node, dict) and "selection" in node:
+                # A feature's solve steps (ADR 0037): typed as "2, 3"; empty is every step.
+                item = QTreeWidgetItem(parent, ["Applies in steps", steps_text(value)])
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
+                item.setData(1, PATH, (sub, STEPS))
+                item.setData(1, SHOWN, steps_text(value))  # put back if the text won't parse
+                continue
             if isinstance(value, (dict, list)) and not is_quantity(value):
                 if not value:  # nothing to show: adding is in the item's context menu
                     continue
@@ -220,7 +249,7 @@ class PropertiesPanel(QTreeWidget):
             value = parse_value(item.text(1), old)
         except ValueError:
             self._filling = True
-            item.setText(1, format_value(old))
+            item.setText(1, item.data(1, SHOWN) if old == STEPS else format_value(old))
             self._filling = False
             return
         self.edited.emit(self.object_id, path, value)

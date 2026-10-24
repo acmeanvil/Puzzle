@@ -25,7 +25,10 @@ from puzzle.adapters.common import (
     body_load,
     body_load_on_material,
     check_contacts,
+    cylindrical_expressions,
+    globalize,
     initial_temperature,
+    local_axes,
     refuse_large_deflection,
     remote_load,
     remote_values,
@@ -109,7 +112,7 @@ def write_case(
     loads = [f for f in features if f.type in BODY_LOADS]
     for f in loads:
         body_load_on_material(comp, f, "Elmer")
-    features = [f for f in features if f.type not in BODY_LOADS]
+    features = globalize(project, [f for f in features if f.type not in BODY_LOADS])
     boundary_names = list(dict.fromkeys(f.selection for f in features))
     body_names = [a.selection for a in comp.materials]
     if not body_names:
@@ -220,6 +223,7 @@ def write_case(
             [f for f in features if f.selection == name],
             mesh,
             amplitudes,
+            {f.selection: local_axes(project, f) for f in features if f.axes is not None},
         )
 
     if transient:
@@ -376,7 +380,7 @@ def _solvers(step, solved: set[str], coils: list[Feature]) -> list[list[str]]:
 
 
 def _boundary(
-    index: int, name: str, features: list[Feature], mesh: Mesh, amplitudes=None
+    index: int, name: str, features: list[Feature], mesh: Mesh, amplitudes=None, axes_of=None
 ) -> list[str]:
     """A boundary's conditions; `amplitudes` (id -> points) make a value follow time."""
     out = [f"Boundary Condition {index}", f"  Target Boundaries(1) = {index}", f'  Name = "{name}"']
@@ -384,6 +388,15 @@ def _boundary(
         v = {k: q.to_si() for k, q in f.values.items()}
         if f.type == "fixed":
             out += [f"  Displacement {d} = 0" for d in (1, 2, 3)]
+        elif f.type == "displacement" and f.axes is not None:  # cylindrical, all three
+            exprs = cylindrical_expressions(
+                axes_of[f.selection], [v[a] for a in "xyz"], ("tx(0)", "tx(1)", "tx(2)")
+            )
+            for i, e in enumerate(exprs, start=1):
+                out += [
+                    f"  Displacement {i} = Variable Coordinate 1, Coordinate 2, Coordinate 3",
+                    f'    Real MATC "{e}"',
+                ]
         elif f.type == "displacement":
             out += [
                 f"  Displacement {d} = {v[a]:.10g}"

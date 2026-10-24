@@ -40,6 +40,9 @@ class CodeAsterAdapter(SolverAdapter):
         },
         features=STRUCTURAL_FEATURES | THERMAL_FEATURES | REMOTE_FEATURES | RIGID_REMOTE_FEATURES,
         amplitude_features=frozenset({"heat_flux"}),  # ADR 0037, benchmarked
+        axes_features=frozenset(
+            {"displacement:cartesian", "displacement:cylindrical", "force:cartesian"}
+        ),  # ADR 0037: local axes
         contacts=frozenset(
             {"bonded_conformal", "bonded_nonconformal", "frictionless", "frictional"}
         ),

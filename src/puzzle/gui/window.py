@@ -1469,7 +1469,13 @@ class MainWindow(QMainWindow):
         elif node.kind not in ("object", "physics"):
             return
         try:
-            glyphs = symbols(comp, mesh, lambda sel: self._entities_of(comp, sel), only)
+            glyphs = symbols(
+                comp,
+                mesh,
+                lambda sel: self._entities_of(comp, sel),
+                only,
+                project=self.session.project,
+            )
         except (KeyError, ValueError):  # a selection not on this mesh yet: no symbol
             return
         self.viewport.show_symbols(glyphs)

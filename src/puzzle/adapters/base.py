@@ -38,6 +38,7 @@ PDE_FEATURES = frozenset({"dirichlet", "neumann"})
 REMOTE_FEATURES = frozenset({"remote_force", "remote_displacement"})
 RIGID_REMOTE_FEATURES = frozenset({"remote_force_rigid"})
 SUPPORT_FEATURES = frozenset({"elastic_support"})  # ADR 0037: stiffness per area
+PRETENSION_FEATURES = frozenset({"bolt_pretension", "bolt_adjustment"})  # ADR 0037
 
 
 @dataclass(frozen=True)
@@ -64,6 +65,11 @@ class Capabilities:
     """Whether the adapter places a material's own keywords for it (solver_keywords)."""
     amplitude_features: frozenset[str] = frozenset()
     """Feature types whose values may follow an Amplitude in transient steps (ADR 0037)."""
+    feature_steps: bool = False
+    """Whether features may apply in some solve steps only (Feature.steps, ADR 0037)."""
+    axes_features: frozenset[str] = frozenset()
+    """Features given in local axes (ADR 0037), as "type:axes type", with ":partial" when
+    only some components are prescribed (e.g. "displacement:cylindrical:partial")."""
 
 
 def refuse_inputs(inputs: Sequence, solver: str, accepted: set[tuple[str, str]] = frozenset()):
@@ -114,6 +120,26 @@ class SolverAdapter(ABC):
                 for f in physics.features
                 if f.type not in caps.features
             ]
+            for f in physics.features:  # local axes (ADR 0037): refused, never ignored
+                if f.axes is None:
+                    continue
+                axes = project.objects.get(f.axes)
+                if axes is None:
+                    continue  # a missing reference: Project.problems says so
+                key = f"{f.type}:{axes.type}"
+                if f.type == "displacement" and not all(a in f.values for a in "xyz"):
+                    key += ":partial"
+                if key not in caps.axes_features:
+                    words = key.replace(":partial", " (some components)").replace(":", " in ")
+                    problems.append(
+                        f"{self.name} does not take {words} axes yet (on {f.selection})"
+                    )
+            for f in physics.features:  # some steps only (ADR 0037): refused, never ignored
+                if f.steps and not caps.feature_steps:
+                    problems.append(
+                        f"{self.name} applies every feature in every step; it can't take "
+                        f"{f.type} on {f.selection} in steps {f.steps} only yet"
+                    )
             for f in physics.features:  # amplitudes (ADR 0037): refused, never ignored
                 if f.amplitude is None:
                     continue

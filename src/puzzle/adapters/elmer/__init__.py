@@ -72,6 +72,9 @@ class ElmerAdapter(SolverAdapter):
         | REMOTE_FEATURES
         | SUPPORT_FEATURES,
         amplitude_features=frozenset({"heat_flux"}),  # ADR 0037, benchmarked
+        axes_features=frozenset(
+            {"displacement:cartesian", "displacement:cylindrical", "force:cartesian"}
+        ),  # ADR 0037: local axes
         contacts=frozenset({"bonded_conformal", "bonded_nonconformal"}),
         experimental=frozenset({"frictionless", "frictional", "rough"}),
         couplings=frozenset({"thermal_expansion", "joule_heating"}),

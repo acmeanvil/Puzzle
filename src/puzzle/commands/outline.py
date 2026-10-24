@@ -9,6 +9,7 @@ from __future__ import annotations
 from puzzle.model.schema import (
     Amplitude,
     Component,
+    CoordinateSystem,
     Geometry,
     Material,
     MeshRecipe,
@@ -69,6 +70,8 @@ def outline(project: Project, *, ids: bool = False, runs=None) -> str:
             for f in ph.features:
                 vals = f" {_values(f.values)}" if f.values else ""
                 amp = f" x amplitude {names.get(f.amplitude, '?')}" if f.amplitude else ""
+                amp += f" in axes {names.get(f.axes, '?')}" if f.axes else ""
+                amp += f" in steps {', '.join(map(str, f.steps))}" if f.steps else ""
                 lines.append(f"        {f.type} on {f.selection}{vals}{amp}")
     states = {}
     if runs is not None:
@@ -93,6 +96,13 @@ def outline(project: Project, *, ids: bool = False, runs=None) -> str:
     for a in project.of_type(Amplitude):
         pts = ", ".join(f"({t:g} s, {v:g})" for t, v in a.points)
         lines.append(head("Amplitude", a) + f": {pts}")
+    for a in project.of_type(CoordinateSystem):
+        where = (
+            f"about {a.axis} through {a.origin}"
+            if a.type == "cylindrical"
+            else f"x {a.x_axis}, xy {a.xy_direction} at {a.origin}"
+        )
+        lines.append(head("Axes", a) + f": {a.type} {where}")
     for t in project.of_type(Transfer):
         lines.append(
             head("Transfer", t)

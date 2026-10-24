@@ -19,6 +19,7 @@ Solve step settings: `modes` (int, modal, default 10); `time_step` and `end_time
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -26,12 +27,14 @@ from puzzle.adapters.base import refuse_inputs
 from puzzle.adapters.common import (
     BODY_LOADS,
     HOLDING,
+    PRETENSION,
     STRUCTURAL,
     THERMAL,
     FaceLookup,
     InputError,
     body_load,
     check_contacts,
+    globalize,
     initial_temperature,
     nodal_traction,
     remote_load,
@@ -107,12 +110,18 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
         for n, (x, y, z) in zip(mesh.node_ids, mesh.coords, strict=True)
     ]
 
+    cuts = _pretension_cuts(comp, mesh)  # bolt sections: elements moved onto twins
     for part in comp.parts:
         for b in mesh.groups[part.name].blocks(mesh):
             if b.dim != 3:
                 continue
             ccx_type, order = ELEMENTS[b.element]
             conn = b.connectivity[:, order] if order else b.connectivity
+            for cut in cuts.values():
+                rows = np.flatnonzero(np.isin(b.ids, list(cut.moved)))
+                if len(rows):
+                    conn = conn.copy()
+                    conn[rows] = np.vectorize(lambda n, c=cut: c.doubles.get(int(n), n))(conn[rows])
             out.append(f"*ELEMENT, TYPE={ccx_type}, ELSET={set_name('E', part.name)}")
             out += [_row([eid, *nodes]) for eid, nodes in zip(b.ids, conn, strict=True)]
 
@@ -126,9 +135,13 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
 
     out += _materials(project, comp, mesh, expansion=thermal_load is not None)
     out += _amplitudes(project, comp)
+    out += _transforms(project, comp, mesh)
     rigid = _rigid_nodes(comp, mesh)
     out += _rigid_bodies(rigid)
-    out += _springs(comp, mesh, int(mesh.node_ids.max()) + 1 + 2 * len(rigid))
+    pretension = _pretension_nodes(comp, mesh)
+    out += _pretension_sections(mesh, cuts)
+    used = len(pretension) + sum(len(c.doubles) for c in cuts.values())
+    out += _springs(comp, mesh, int(mesh.node_ids.max()) + 1 + 2 * len(rigid) + used)
     out += _contacts(project, comp, mesh, faces)
 
     solve_steps = study.solve_steps()
@@ -143,13 +156,27 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
         out += ["*INITIAL CONDITIONS, TYPE=TEMPERATURE", f"N_ALL, {initial_temperature(heat)}"]
     yields = plastic(project, comp)
     prestress = _prestress_steps(project, study, inputs)
+    applied = _pretension_steps(comp, solve_steps)
     for number, step in enumerate(prestress, start=1):
         # Large-deformation static step: its stress stiffens the steps after it.
-        lines = _step(number, step, comp, mesh, faces, physics_types, thermal_load, yields)
+        lines = _step(number, step, comp, mesh, faces, physics_types, thermal_load, yields, project)
         first = lines[0] if "NLGEOM" in lines[0] else lines[0] + ", NLGEOM"
         out += [first, *lines[1:]]
     for number, step in enumerate(solve_steps, start=len(prestress) + 1):
-        lines = _step(number, step, comp, mesh, faces, physics_types, thermal_load, yields)
+        index = number - len(prestress)  # the study's own step number (Feature.steps)
+        lines = _step(
+            number,
+            step,
+            comp,
+            mesh,
+            faces,
+            physics_types,
+            thermal_load,
+            yields,
+            project,
+            index=index,
+            pretension=(pretension, applied),
+        )
         if prestress:  # a perturbation of the stressed state, not of the unloaded one
             lines = [lines[0] + ", PERTURBATION", *lines[1:]]
         out += lines
@@ -275,7 +302,12 @@ def _step(
     physics_types,
     thermal_load=None,
     yields: bool = False,
+    project: Project | None = None,
+    index: int | None = None,
+    pretension=({}, {}),
 ) -> list[str]:
+    """One *STEP; `index` is the study's solve step number, for features applying in some
+    steps only, and `pretension` (nodes, step applied) locks a bolt after its step."""
     solved = set(step.physics) or physics_types
     # Plasticity is nonlinear like contact: the load goes in by increments, each kept.
     contact = any(c.type in ("frictionless", "frictional") for c in comp.contacts) or (
@@ -364,12 +396,42 @@ def _step(
         THERMAL if "heat_transfer" in solved else set()
     )
     features = [
-        f for ph in comp.physics if ph.type in solved for f in ph.features if f.type in wanted
+        f
+        for ph in comp.physics
+        if ph.type in solved
+        for f in ph.features
+        if f.type in wanted and f.active(index)
     ]
     if step.type == "modal":
         features = [f for f in features if f.type in HOLDING]
+    if project is not None:  # Cartesian forces and full displacements in global axes
+        features = globalize(project, features)
     rigid = _rigid_nodes(comp, mesh)  # the same ids the model section gave them
-    out += _features(features, mesh, faces, op, _amplitude_names(comp), rigid)
+    nodes, applied = pretension
+    extra: dict[str, list[str]] = {}
+    if "solid_mechanics" in solved and any(
+        f.type == "elastic_support" for ph in comp.physics for f in ph.features
+    ):
+        extra["*BOUNDARY"] = ["N_SPRING_GROUND, 1, 3, 0."]  # the springs' grounds
+    locked: list[str] = []
+    if "solid_mechanics" in solved and step.type != "modal":
+        for f in [f for ph in comp.physics for f in ph.features if f.type in PRETENSION]:
+            node, first = nodes[id(f)], applied.get(id(f))
+            if index is None or index == first:  # applied: a force, or a length change
+                if f.type == "bolt_pretension":
+                    force = -f.values["F"].to_si()  # tension pulls the sides together
+                    extra.setdefault("*CLOAD", []).append(f"{node}, 1, {force:.10g}")
+                else:
+                    d = -f.values["d"].to_si()  # an adjustment shortens the bolt
+                    extra.setdefault("*BOUNDARY", []).append(f"{node}, 1, 1, {d:.10g}")
+            elif first is not None and index > first:  # held at the length it reached
+                locked.append(f"{node}, 1, 1")
+    features = [f for f in features if f.type not in PRETENSION]
+    out += _features(features, mesh, faces, op, _amplitude_names(comp), rigid, extra)
+    if locked:
+        if not any(line.startswith("*CLOAD") for line in out):
+            out.append("*CLOAD, OP=NEW")  # the pretension force goes; the lock holds
+        out += ["*BOUNDARY, FIXED", *locked]
     if thermal_load is not None and solved == {"solid_mechanics"} and step.type != "modal":
         out.append("*TEMPERATURE")
         out += [
@@ -418,6 +480,110 @@ def _rigid_nodes(comp: Component, mesh: Mesh) -> dict:
     return out
 
 
+def _pretension_nodes(comp: Component, mesh: Mesh) -> dict:
+    """Each bolt pretension's reference node (ADR 0037), numbered after the rigid-body
+    nodes: id(feature) -> node id."""
+    first = int(mesh.node_ids.max()) + 1 + 2 * len(_rigid_nodes(comp, mesh))
+    features = [f for ph in comp.physics for f in ph.features if f.type in PRETENSION]
+    return {id(f): first + i for i, f in enumerate(features)}
+
+
+def _pretension_steps(comp: Component, steps) -> dict:
+    """The solve step (1, 2, ...) each pretension is applied in: the first static or
+    transient structural step it is active in. It is locked in the steps after."""
+    out = {}
+    for f in [f for ph in comp.physics for f in ph.features if f.type in PRETENSION]:
+        for i, s in enumerate(steps, start=1):
+            if s.solves("solid_mechanics") and s.type != "modal" and f.active(i):
+                out[id(f)] = i
+                break
+    return out
+
+
+@dataclass
+class _Cut:
+    """A bolt's pretension section cut through the mesh: `doubles` maps each section node
+    to its twin, which the elements on the normal's side (`moved`) use instead."""
+
+    ref: int
+    normal: np.ndarray
+    centre: np.ndarray
+    doubles: dict[int, int]
+    moved: set[int]
+
+
+def _pretension_cuts(comp: Component, mesh: Mesh) -> dict:
+    """id(feature) -> its _Cut. Twins are numbered after the reference nodes."""
+    refs = _pretension_nodes(comp, mesh)
+    next_id = max(refs.values(), default=0) + 1
+    cuts = {}
+    for f in [f for ph in comp.physics for f in ph.features if f.type in PRETENSION]:
+        group = mesh.groups.get(f.selection)
+        if group is None:
+            raise InputError(f"bolt pretension on '{f.selection}': no such selection")
+        if group.dim != 2:
+            raise InputError(f"bolt pretension on '{f.selection}': pick the section face")
+        section = set(int(n) for n in group.node_ids)
+        normal = _section_normal(group, mesh)
+        centre = mesh.node_coords(group.node_ids).mean(axis=0)
+        moved = set()
+        for b in mesh.blocks:
+            if b.dim != 3:
+                continue
+            touching = np.isin(b.connectivity, list(section)).any(axis=1)
+            for eid, row in zip(b.ids[touching], b.connectivity[touching], strict=True):
+                if (mesh.node_coords(row).mean(axis=0) - centre) @ normal > 0:
+                    moved.add(int(eid))
+        if not moved:
+            raise InputError(f"bolt pretension on '{f.selection}': no elements beside it")
+        doubles = {n: next_id + i for i, n in enumerate(sorted(section))}
+        next_id += len(doubles)
+        cuts[id(f)] = _Cut(refs[id(f)], normal, centre, doubles, moved)
+    return cuts
+
+
+def _pretension_sections(mesh: Mesh, cuts: dict) -> list[str]:
+    """Each section's reference node and twins, tied by u_twin - u = n u_ref: the
+    reference node's first dof is the section's opening along n, and the force on it
+    is the force across the section (ADR 0037). CalculiX's *PRE-TENSION SECTION was
+    tried first: it moves only the elements with a face on the section, so on tets the
+    elements touching it at an edge kept the sides joined (316 N of 10 kN)."""
+    out = []
+    for cut in cuts.values():
+        out += ["*NODE", f"{cut.ref}, " + ", ".join(f"{c:.13g}" for c in cut.centre)]
+        xyz = mesh.node_coords(np.array(list(cut.doubles)))
+        out += [
+            f"{twin}, " + ", ".join(f"{c:.13g}" for c in p)
+            for twin, p in zip(cut.doubles.values(), xyz, strict=True)
+        ]
+        out.append("*EQUATION")
+        for node, twin in cut.doubles.items():
+            for d in (1, 2, 3):
+                n = float(cut.normal[d - 1])
+                terms = [f"{twin}, {d}, 1.", f"{node}, {d}, -1."]
+                if abs(n) > 1e-12:
+                    terms.append(f"{cut.ref}, 1, {-n:.13g}")
+                out += [str(len(terms)), ", ".join(terms)]
+    return out
+
+
+def _section_normal(group, mesh: Mesh) -> np.ndarray:
+    """A flat section's unit normal (either way round)."""
+    tri = [
+        mesh.node_coords(b.connectivity[:, :3].ravel()).reshape(-1, 3, 3)
+        for b in surface_blocks(group, mesh)
+    ]
+    xyz = np.concatenate(tri)
+    each = np.cross(xyz[:, 1] - xyz[:, 0], xyz[:, 2] - xyz[:, 0])
+    each /= np.linalg.norm(each, axis=1, keepdims=True)
+    each[each @ each[0] < 0] *= -1  # one orientation
+    n = each.mean(axis=0)
+    n /= np.linalg.norm(n)
+    if (each @ n).min() < 1 - 1e-8:
+        raise InputError("a pretension section must be flat (a plane cut through the bolt)")
+    return n
+
+
 def _springs(comp: Component, mesh: Mesh, first_node: int) -> list[str]:
     """Elastic supports (ADR 0037) as SPRINGA elements to grounded nodes: one along each
     face node's normal (kn × its area) and, with kt, two along its tangents. Springs of
@@ -457,7 +623,44 @@ def _springs(comp: Component, mesh: Mesh, first_node: int) -> list[str]:
         out += [f"*ELEMENT, TYPE=SPRINGA, ELSET=E_SPRING{i}", *rows]
         # Always a real with an exponent: a bare integer reads as a DOF number.
         out += [f"*SPRING, ELSET=E_SPRING{i}", "", f"{stiffness:.10e}"]
-    out += ["*BOUNDARY", "N_SPRING_GROUND, 1, 3, 0."]
+    return out  # the grounds are held in every step (_step), where OP=NEW can't drop them
+
+
+def _transforms(project: Project, comp: Component, mesh: Mesh) -> list[str]:
+    """*TRANSFORM for displacements still in local axes (cylindrical, or some components
+    only), so their *BOUNDARY dofs are local (ADR 0037). A node in such a set takes no
+    other load: CalculiX would read that load in the local axes too."""
+    from puzzle.adapters.common import local_axes
+
+    features = [f for ph in comp.physics for f in ph.features]
+    local = [f for f in globalize(project, features) if f.axes is not None]
+    out, transformed = [], set()
+    for f in local:
+        if f.type != "displacement":
+            raise InputError(f"{f.type} in local axes isn't written yet (on {f.selection})")
+        axes = local_axes(project, f)
+        if axes.type == "cartesian":
+            r = axes.rotation()
+            a, b, kind = r[:, 0], r[:, 1], "R"
+        else:
+            o = np.asarray(axes.origin, float)
+            a, b, kind = o, o + np.asarray(axes.axis, float), "C"
+        nums = ", ".join(f"{c:.13g}" for c in (*a, *b))
+        out += [f"*TRANSFORM, NSET={set_name('N', f.selection)}, TYPE={kind}", nums]
+        transformed |= set(mesh.groups[f.selection].node_ids.tolist())
+    for f in features:
+        shared = (
+            f.axes is None
+            and f.type in ("displacement", "force", "remote_force", "remote_displacement")
+            and f.selection in mesh.groups
+            and transformed & set(mesh.groups[f.selection].node_ids.tolist())
+        )
+        if shared:
+            raise InputError(
+                f"{f.type} on '{f.selection}' shares nodes with a displacement in local "
+                "axes; CalculiX would read it in those axes",
+                code="unsupported",
+            )
     return out
 
 
@@ -479,11 +682,14 @@ def _features(
     op: str,
     amplitudes=None,
     rigid=None,
+    extra=None,
 ) -> list[str]:
     """The step's load and boundary cards; a feature following an amplitude goes in a
-    card of its own with AMPLITUDE=."""
+    card of its own with AMPLITUDE=. `extra`: rows for helper nodes (card -> rows)."""
     amplitudes = amplitudes or {}
-    cards: dict[tuple[str, str | None], list[str]] = {}
+    cards: dict[tuple[str, str | None], list[str]] = {
+        (card, None): list(rows) for card, rows in (extra or {}).items()
+    }
     for f in features:
         amp = amplitudes.get(f.amplitude) if f.amplitude else None
         rows = _feature_rows(f, mesh, faces, (rigid or {}).get(id(f)))

@@ -19,7 +19,9 @@ from puzzle.adapters.common import (
     body_load,
     body_load_on_material,
     check_contacts,
+    globalize,
     initial_temperature,
+    local_axes,
     match_points,
     refuse_large_deflection,
     remote_load,
@@ -100,9 +102,10 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         "magnetic_fields": MAGNETIC,
         "custom_pde": {"dirichlet", "neumann"},
     }[physics]
-    features = [
-        f for ph in comp.physics if ph.type == physics for f in ph.features if f.type in wanted
-    ]
+    features = globalize(
+        project,
+        [f for ph in comp.physics if ph.type == physics for f in ph.features if f.type in wanted],
+    )
     for f in features:
         if f.type in BODY_LOADS:  # cells carry one tag: the material's body (ADR 0037)
             body_load_on_material(comp, f, "FEniCSx")
@@ -150,6 +153,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
                 ),
                 **({"load": _body_load(f)} if f.type in BODY_LOADS else {}),
                 **(_remote(f, mesh) if f.type in ("remote_force", "remote_displacement") else {}),
+                **(_cylindrical(project, f) if f.axes is not None else {}),
                 **(
                     {"amplitude": [list(p) for p in project.get(f.amplitude, Amplitude).points]}
                     if f.amplitude
@@ -305,3 +309,15 @@ def _remote(f, mesh) -> dict:
         return {"traction": [load.uniform.tolist(), load.twist.tolist(), load.centroid.tolist()]}
     motion = rigid_motion(f, group, mesh)
     return {"motion": [motion.u0.tolist(), motion.theta.tolist(), motion.point.tolist()]}
+
+
+def _cylindrical(project, f) -> dict:
+    """A displacement in cylindrical axes for study.py: origin, axis, (r, θ, z) values."""
+    axes = local_axes(project, f)
+    return {
+        "cylindrical": {
+            "origin": list(axes.origin),
+            "axis": list(np.asarray(axes.axis, float) / np.linalg.norm(axes.axis)),
+            "local": [f.values[a].to_si() for a in "xyz"],
+        }
+    }

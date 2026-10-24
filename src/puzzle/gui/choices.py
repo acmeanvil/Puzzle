@@ -27,6 +27,7 @@ from pydantic import BaseModel
 from puzzle.model.schema import (
     Amplitude,
     Component,
+    CoordinateSystem,
     FatigueBlock,
     FatigueSettings,
     Geometry,
@@ -47,6 +48,7 @@ REFERENCES = {
     "component": Component,
     "owner": Component,
     "amplitude": Amplitude,
+    "axes": CoordinateSystem,
 }
 NONE = "(none)"
 # Words kept as written when a value is turned into a label.

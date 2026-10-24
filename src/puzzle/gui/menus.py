@@ -22,6 +22,7 @@ from puzzle.model.catalog import CATALOG, STEP_TYPES, specs
 from puzzle.model.schema import (
     Amplitude,
     Component,
+    CoordinateSystem,
     Geometry,
     Material,
     MeshRecipe,
@@ -72,6 +73,9 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
             add("New study…", lambda: new_study(window))
         elif node.label == "Amplitudes":
             add("New amplitude…", lambda: edit_amplitude(window))
+        elif node.label == "Coordinate systems":
+            add("New Cartesian axes", lambda: new_axes(window, "cartesian"))
+            add("New cylindrical axes", lambda: new_axes(window, "cylindrical"))
         elif node.label == "Results":
             add("New combination…", lambda: window.new_derived("linear"))
             add("New equation…", lambda: window.new_derived("equation"))
@@ -79,6 +83,7 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
     elif node.kind == "project":
         add("New part…", lambda: new_part(window))
         add("New amplitude…", lambda: edit_amplitude(window))
+        add("New coordinate system", lambda: new_axes(window, "cartesian"))
         add("Import geometry…", lambda: import_step_file(window))
         add("New parameter set", lambda: new_parameter_set(window))
         add("New mesh recipe", lambda: new_mesh(window))
@@ -144,6 +149,8 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
             add("Move down", lambda: move_step(window, obj, index, +1))
         menu.addSeparator()
         add("Delete step", lambda: remove(window, obj, node.path))
+    elif isinstance(obj, CoordinateSystem) and node.kind == "object":
+        add("Delete", window.delete_selected)
     elif isinstance(obj, Amplitude) and node.kind == "object":
         add("Edit points…", lambda: edit_amplitude(window, obj))
         menu.addSeparator()
@@ -295,6 +302,14 @@ def add_step(window, study: Study, kind: str):
     return window.submit(
         Edit(object=str(study.id), ops=[EditOp(op="append", path="steps", value=value)])
     )
+
+
+def new_axes(window, type_: str):
+    """Local axes (ADR 0037) for displacements and forces; origin and directions are
+    edited in Properties, and features pick them there (Axes)."""
+    n = len(window.session.project.of_type(CoordinateSystem)) + 1
+    word = "Cylindrical" if type_ == "cylindrical" else "Axes"
+    return window.submit(Create(kind="axes", data={"name": f"{word} {n}", "type": type_}))
 
 
 def edit_amplitude(window, amplitude=None):

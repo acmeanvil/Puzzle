@@ -271,6 +271,21 @@ def solve_solid(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
         where, vals = facets.find(tag(f["group"])), f.get("values", {})
         if f["type"] == "fixed":
             bcs.append(dirichlet(np.zeros(3), fem.locate_dofs_topological(V, 2, where), V))
+        elif f["type"] == "displacement" and "cylindrical" in f:  # (r, θ, z) at each point
+            cyl = f["cylindrical"]
+            o, ax, (ur, ut, uz) = (np.asarray(w, dtype=float) for w in
+                                   (cyl["origin"], cyl["axis"], cyl["local"]))  # fmt: skip
+
+            def field(X, o=o, ax=ax, ur=ur, ut=ut, uz=uz):
+                d = X.T - o
+                p = d - np.outer(d @ ax, ax)
+                er = p / np.maximum(np.linalg.norm(p, axis=1, keepdims=True), 1e-300)
+                et = np.cross(ax, er)
+                return (ur * er + ut * et + uz * ax).T
+
+            target = fem.Function(V)
+            target.interpolate(field)
+            bcs.append(fem.dirichletbc(target, fem.locate_dofs_topological(V, 2, where)))
         elif f["type"] == "displacement":
             for i, axis in enumerate("xyz"):
                 if axis in vals:

@@ -45,6 +45,8 @@ TINTS = {
     "magnetic_insulation": PURPLE,
     "dirichlet": GREY,
     "elastic_support": BLUE,
+    "bolt_pretension": RED,
+    "bolt_adjustment": RED,
     "neumann": GREY,
     "coil_current": PURPLE,
 }
@@ -93,9 +95,12 @@ def _vector(values: dict, keys=("x", "y", "z")) -> np.ndarray | None:
     return v if np.any(v) else None
 
 
-def symbols(component, mesh: Mesh, entities_of, only: int | None = None, per_face: int = 10):
+def symbols(
+    component, mesh: Mesh, entities_of, only: int | None = None, per_face: int = 10, project=None
+):
     """Glyph sets for the component's features (`only`: the n-th feature over all its
-    physics). `entities_of(selection)` gives a selection's (dim, tag) faces."""
+    physics). `entities_of(selection)` gives a selection's (dim, tag) faces; `project`
+    resolves features given in local axes (ADR 0037), drawn along those axes."""
     from puzzle.gui.choices import label
 
     out: list[Glyphs] = []
@@ -111,14 +116,15 @@ def symbols(component, mesh: Mesh, entities_of, only: int | None = None, per_fac
             if f.type == "fixed":
                 out.append(Glyphs(name, "cone", BLUE, pts, -normals))
             elif f.type == "displacement":
-                for axis, d in zip("xyz", np.eye(3), strict=True):
+                frames = _frames(project, f, pts)
+                for i, axis in enumerate("xyz"):
                     if axis in f.values:  # a prescribed component, whatever its value
                         sign = np.sign(f.values[axis].to_si()) or 1.0
-                        out.append(
-                            Glyphs(name, "arrow", BLUE, pts, np.tile(sign * d, (len(pts), 1)))
-                        )
+                        out.append(Glyphs(name, "arrow", BLUE, pts, sign * frames[:, :, i]))
             elif f.type == "force":
                 v = _vector(f.values)
+                if v is not None and f.axes is not None and len(pts):
+                    v = _frames(project, f, pts.mean(axis=0)[None])[0] @ v
                 if v is not None and len(pts):
                     d = v / np.linalg.norm(v)
                     out.append(Glyphs(name, "arrow", RED, pts.mean(axis=0)[None], d[None]))
@@ -145,6 +151,14 @@ def symbols(component, mesh: Mesh, entities_of, only: int | None = None, per_fac
             else:
                 out.append(Glyphs(name, "tint", TINTS.get(f.type, GREY), faces=faces))
     return out
+
+
+def _frames(project, f, pts) -> np.ndarray:
+    """(n, 3, 3) axes at the points: the feature's local axes, else global."""
+    axes = project.objects.get(f.axes) if project is not None and f.axes else None
+    if axes is None:
+        return np.tile(np.eye(3), (len(pts), 1, 1))
+    return axes.frames(pts) if len(pts) else np.zeros((0, 3, 3))
 
 
 def _body_symbol(f, name: str, mesh: Mesh) -> Glyphs:

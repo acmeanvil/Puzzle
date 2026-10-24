@@ -57,6 +57,10 @@ CATALOG: dict[str, list[FeatureSpec]] = {
             "Elastic support",
             values={"kn": (1000.0, "N/mm^3"), "kt": (0.0, "N/mm^3")},
         ),
+        # Bolt pretension (ADR 0037) on a section face inside a solid bolt: applied in the
+        # first solve step, locked at that length in the steps after.
+        FeatureSpec("bolt_pretension", "Bolt pretension (force)", values={"F": (10.0, "kN")}),
+        FeatureSpec("bolt_adjustment", "Bolt pretension (adjustment)", values={"d": (0.1, "mm")}),
         # Body loads (ADR 0037): on a body, per volume, through the material's density.
         FeatureSpec(
             "gravity",

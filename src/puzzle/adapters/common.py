@@ -20,7 +20,13 @@ FACES = {
 
 BODY_LOADS = {"gravity", "acceleration", "rotation"}  # ADR 0037: on bodies, per volume
 REMOTE = {"remote_force", "remote_force_rigid", "remote_displacement"}  # ADR 0037: on faces
-STRUCTURAL = {"fixed", "displacement", "force", "pressure", "elastic_support"} | BODY_LOADS | REMOTE
+PRETENSION = {"bolt_pretension", "bolt_adjustment"}  # ADR 0037: on a section face
+STRUCTURAL = (
+    {"fixed", "displacement", "force", "pressure", "elastic_support"}
+    | BODY_LOADS
+    | REMOTE
+    | PRETENSION
+)
 HOLDING = ("fixed", "displacement", "remote_displacement")  # kept as constraints in modal
 THERMAL = {"temperature", "heat_flux", "convection"}
 FLUID = {"velocity_inlet", "mass_flow_inlet", "pressure_outlet", "wall", "symmetry"}
@@ -498,3 +504,77 @@ def support_nodes(group, mesh: Mesh):
     normals = np.array([normal[i] for i in ids])
     normals /= np.maximum(np.linalg.norm(normals, axis=1, keepdims=True), 1e-300)
     return ids, areas, normals
+
+
+# --- local axes (ADR 0037) -----------------------------------------------------------------
+
+
+def local_axes(project, f):
+    """The feature's CoordinateSystem, or None for global axes."""
+    if f.axes is None:
+        return None
+    from puzzle.model.schema import CoordinateSystem
+
+    return project.get(f.axes, CoordinateSystem)
+
+
+def global_force(project, f) -> list[float]:
+    """A force feature's total in global components (its axes must be Cartesian)."""
+    v = [f.values[a].to_si() if a in f.values else 0.0 for a in "xyz"]
+    axes = local_axes(project, f)
+    if axes is None:
+        return v
+    if axes.type != "cartesian":
+        raise InputError(f"a force in cylindrical axes isn't defined (on {f.selection})")
+    return (axes.rotation() @ np.asarray(v)).tolist()
+
+
+def global_displacement(project, f, xyz) -> np.ndarray:
+    """A fully prescribed displacement in local axes, in global components at points."""
+    axes = local_axes(project, f)
+    local = [f.values[a].to_si() for a in "xyz"]
+    return axes.to_global(local, xyz)
+
+
+def globalize(project, features):
+    """Features with Cartesian local axes in global components where that is a constant
+    vector: forces, and displacements prescribing x, y and z. The rest keep their axes
+    (cylindrical, or some components only) for the adapter to write."""
+    from puzzle.model.schema import Quantity
+
+    out = []
+    for f in features:
+        axes = local_axes(project, f)
+        full = all(a in f.values for a in "xyz")
+        if (
+            axes is not None
+            and axes.type == "cartesian"
+            and (f.type == "force" or (f.type == "displacement" and full))
+        ):
+            local = [f.values[a].to_si() if a in f.values else 0.0 for a in "xyz"]
+            unit = "N" if f.type == "force" else "m"
+            g = axes.rotation() @ np.asarray(local)
+            values = {a: Quantity(value=float(v), unit=unit) for a, v in zip("xyz", g, strict=True)}
+            f = f.model_copy(update={"values": values, "axes": None})
+        out.append(f)
+    return out
+
+
+def cylindrical_expressions(axes, local, coords: tuple[str, str, str]) -> list[str]:
+    """The global components of a vector given radially, tangentially and axially in
+    cylindrical axes, as expressions in the coordinate names `coords` (for solvers that
+    take formulas: Code_Aster's X, Y, Z; Elmer's tx(0), tx(1), tx(2))."""
+    a = np.asarray(axes.axis, float) / np.linalg.norm(axes.axis)
+    o = np.asarray(axes.origin, float)
+    ur, ut, uz = (float(v) for v in local)
+    d = [f"({c}-({o[i]:.12g}))" for i, c in enumerate(coords)]
+    dot = "+".join(f"{d[i]}*({a[i]:.12g})" for i in range(3))
+    p = [f"({d[i]}-({dot})*({a[i]:.12g}))" for i in range(3)]
+    norm = "sqrt(" + "+".join(f"{q}*{q}" for q in p) + ")"
+    er = [f"({q}/{norm})" for q in p]
+    et = [
+        f"(({a[1]:.12g})*{er[2]}-({a[2]:.12g})*{er[1]})",
+        f"(({a[2]:.12g})*{er[0]}-({a[0]:.12g})*{er[2]})",
+        f"(({a[0]:.12g})*{er[1]}-({a[1]:.12g})*{er[0]})",
+    ]
+    return [f"{ur:.12g}*{er[i]}+{ut:.12g}*{et[i]}+{uz:.12g}*({a[i]:.12g})" for i in range(3)]

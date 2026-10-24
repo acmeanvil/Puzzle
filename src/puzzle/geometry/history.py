@@ -28,7 +28,7 @@ the part, the first one starts it):
 | move | dx, dy, dz | (names kept) |
 | rotate | angle (deg), axis, x, y, z (a point on the axis) | (names kept) |
 | pattern | feature, count, dx, dy, dz, or angle + axis for a circular one | <feature>#2/..., ... |
-| split | axis or normal, at or x, y, z | (a split face keeps its name on both pieces) |
+| split | axis or normal, at or x, y, z | section (the cut face inside); split faces keep names |
 | enclosure | margin, or factor of the part size | +x ... of the box; body `<name>` |
 | import, heal, remove, fragment | see puzzle.geometry.prep | preparing imported CAD (G2) |
 | sketch | sketch, plane and offset, or face (a planar face, axis-aligned) | (no faces: a profile) |
@@ -532,7 +532,8 @@ def _pattern(state, op, a):
 
 
 def _split(state, op, a):
-    """A plane splits the faces it crosses; a split face keeps its name on both pieces."""
+    """A plane splits the faces it crosses; a split face keeps its name on both pieces,
+    and the face the cut leaves inside the part is "<op>/section"."""
     if "normal" in op.args:
         normal = gp_Dir(*a["normal"])
         origin = gp_Pnt(a.get("x", 0.0), a.get("y", 0.0), a.get("z", 0.0))
@@ -551,6 +552,11 @@ def _split(state, op, a):
     sp.Build()
     state.names, state.bodies = _carry(sp, state.names), _carry(sp, state.bodies)
     state.shape = sp.Shape()
+    # The cut face inside the part (a bolt's pretension section): "<op>/section".
+    cut = _list(sp.Modified(plane.Face()))
+    inside = [f for f in _faces(state.shape) if any(f.IsSame(c) for c in cut)]
+    if inside:
+        state.names[f"{op.name}/section"] = inside
 
 
 def _enclosure(state, op, a):
