@@ -19,7 +19,6 @@ Solve step settings: `modes` (int, modal, default 10); `time_step` and `end_time
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
 
 import numpy as np
 
@@ -40,6 +39,7 @@ from puzzle.adapters.common import (
     remote_load,
     remote_values,
     rigid_motion,
+    section_cuts,
     surface_area,
     surface_blocks,
     thermal_tables,
@@ -310,8 +310,9 @@ def _step(
     steps only, and `pretension` (nodes, step applied) locks a bolt after its step."""
     solved = set(step.physics) or physics_types
     # Plasticity is nonlinear like contact: the load goes in by increments, each kept.
+    lifting = any(f.type == "compression_only_support" for ph in comp.physics for f in ph.features)
     contact = any(c.type in ("frictionless", "frictional") for c in comp.contacts) or (
-        yields and step.type == "stationary" and "solid_mechanics" in solved
+        (yields or lifting) and step.type == "stationary" and "solid_mechanics" in solved
     )
     nlgeom = bool(step.settings.get("geometric_nonlinearity", False))
     if nlgeom and (solved != {"solid_mechanics"} or step.type != "stationary"):
@@ -386,7 +387,10 @@ def _step(
         )
 
     # CalculiX stops after 100 increments per step unless told otherwise.
-    head = "*STEP, NLGEOM, INC=10000" if nlgeom else "*STEP"
+    # Gap elements (compression-only supports) are switched only in a nonlinear step:
+    # without NLGEOM CalculiX solved them once, closed both ways.
+    gapped = lifting and step.type == "stationary" and "solid_mechanics" in solved
+    head = "*STEP, NLGEOM, INC=10000" if nlgeom or gapped else "*STEP"
     out = ["*STEP, INC=1000000" if step.type == "transient" else head] + procedure
     if "heat_transfer" in solved:
         # Temperature tables make heat transfer nonlinear; CalculiX's default field
@@ -410,7 +414,9 @@ def _step(
     nodes, applied = pretension
     extra: dict[str, list[str]] = {}
     if "solid_mechanics" in solved and any(
-        f.type == "elastic_support" for ph in comp.physics for f in ph.features
+        f.type in ("elastic_support", "compression_only_support")
+        for ph in comp.physics
+        for f in ph.features
     ):
         extra["*BOUNDARY"] = ["N_SPRING_GROUND, 1, 3, 0."]  # the springs' grounds
     locked: list[str] = []
@@ -428,9 +434,14 @@ def _step(
                 locked.append(f"{node}, 1, 1")
     features = [f for f in features if f.type not in PRETENSION]
     out += _features(features, mesh, faces, op, _amplitude_names(comp), rigid, extra)
-    if locked:
-        if not any(line.startswith("*CLOAD") for line in out):
-            out.append("*CLOAD, OP=NEW")  # the pretension force goes; the lock holds
+    if op:  # a card not written again would keep the step before's loads: clear it
+        resets = (["*BOUNDARY", "*CLOAD", "*DLOAD"] if "solid_mechanics" in solved else []) + (
+            ["*BOUNDARY", "*DFLUX", "*FILM"] if "heat_transfer" in solved else []
+        )
+        for card in dict.fromkeys(resets):
+            if not any(line.startswith(card) for line in out):
+                out.append(card + op)
+    if locked:  # the pretension force went with the reset; the lock holds the length
         out += ["*BOUNDARY, FIXED", *locked]
     if thermal_load is not None and solved == {"solid_mechanics"} and step.type != "modal":
         out.append("*TEMPERATURE")
@@ -500,46 +511,10 @@ def _pretension_steps(comp: Component, steps) -> dict:
     return out
 
 
-@dataclass
-class _Cut:
-    """A bolt's pretension section cut through the mesh: `doubles` maps each section node
-    to its twin, which the elements on the normal's side (`moved`) use instead."""
-
-    ref: int
-    normal: np.ndarray
-    centre: np.ndarray
-    doubles: dict[int, int]
-    moved: set[int]
-
-
 def _pretension_cuts(comp: Component, mesh: Mesh) -> dict:
-    """id(feature) -> its _Cut. Twins are numbered after the reference nodes."""
+    """id(feature) -> its SectionCut; twins are numbered after the reference nodes."""
     refs = _pretension_nodes(comp, mesh)
-    next_id = max(refs.values(), default=0) + 1
-    cuts = {}
-    for f in [f for ph in comp.physics for f in ph.features if f.type in PRETENSION]:
-        group = mesh.groups.get(f.selection)
-        if group is None:
-            raise InputError(f"bolt pretension on '{f.selection}': no such selection")
-        if group.dim != 2:
-            raise InputError(f"bolt pretension on '{f.selection}': pick the section face")
-        section = set(int(n) for n in group.node_ids)
-        normal = _section_normal(group, mesh)
-        centre = mesh.node_coords(group.node_ids).mean(axis=0)
-        moved = set()
-        for b in mesh.blocks:
-            if b.dim != 3:
-                continue
-            touching = np.isin(b.connectivity, list(section)).any(axis=1)
-            for eid, row in zip(b.ids[touching], b.connectivity[touching], strict=True):
-                if (mesh.node_coords(row).mean(axis=0) - centre) @ normal > 0:
-                    moved.add(int(eid))
-        if not moved:
-            raise InputError(f"bolt pretension on '{f.selection}': no elements beside it")
-        doubles = {n: next_id + i for i, n in enumerate(sorted(section))}
-        next_id += len(doubles)
-        cuts[id(f)] = _Cut(refs[id(f)], normal, centre, doubles, moved)
-    return cuts
+    return section_cuts(comp, mesh, refs)
 
 
 def _pretension_sections(mesh: Mesh, cuts: dict) -> list[str]:
@@ -567,23 +542,6 @@ def _pretension_sections(mesh: Mesh, cuts: dict) -> list[str]:
     return out
 
 
-def _section_normal(group, mesh: Mesh) -> np.ndarray:
-    """A flat section's unit normal (either way round)."""
-    tri = [
-        mesh.node_coords(b.connectivity[:, :3].ravel()).reshape(-1, 3, 3)
-        for b in surface_blocks(group, mesh)
-    ]
-    xyz = np.concatenate(tri)
-    each = np.cross(xyz[:, 1] - xyz[:, 0], xyz[:, 2] - xyz[:, 0])
-    each /= np.linalg.norm(each, axis=1, keepdims=True)
-    each[each @ each[0] < 0] *= -1  # one orientation
-    n = each.mean(axis=0)
-    n /= np.linalg.norm(n)
-    if (each @ n).min() < 1 - 1e-8:
-        raise InputError("a pretension section must be flat (a plane cut through the bolt)")
-    return n
-
-
 def _springs(comp: Component, mesh: Mesh, first_node: int) -> list[str]:
     """Elastic supports (ADR 0037) as SPRINGA elements to grounded nodes: one along each
     face node's normal (kn × its area) and, with kt, two along its tangents. Springs of
@@ -592,10 +550,10 @@ def _springs(comp: Component, mesh: Mesh, first_node: int) -> list[str]:
 
     node, elem = first_node, int(max(b.ids.max() for b in mesh.blocks)) + 1
     size = float(np.linalg.norm(np.ptp(mesh.coords, axis=0)))
-    nodes, bins = [], {}
+    nodes, bins, gaps = [], {}, {}
     for ph in comp.physics:
         for f in ph.features:
-            if f.type != "elastic_support":
+            if f.type not in ("elastic_support", "compression_only_support"):
                 continue
             group = mesh.groups.get(f.selection)
             if group is None:
@@ -603,6 +561,14 @@ def _springs(comp: Component, mesh: Mesh, first_node: int) -> list[str]:
             kn, kt = support_stiffness(f)
             ids, areas, normals = support_nodes(group, mesh)
             xyz = mesh.node_coords(ids)
+            if f.type == "compression_only_support":  # a gap per node, closed when pressed
+                for nid, a, n, p in zip(ids, areas, normals, xyz, strict=True):
+                    ground = p + 1e-3 * size * n
+                    nodes.append(f"{node}, " + ", ".join(f"{c:.13g}" for c in ground))
+                    key = (float(f"{kn * a:.9g}"), *(round(float(c), 9) for c in n))
+                    gaps.setdefault(key, []).append(f"{elem}, {nid}, {node}")
+                    node, elem = node + 1, elem + 1
+                continue
             for nid, a, n, p in zip(ids, areas, normals, xyz, strict=True):
                 t1 = np.cross(n, [1.0, 0, 0] if abs(n[0]) < 0.9 else [0, 1.0, 0])
                 t1 /= np.linalg.norm(t1)
@@ -623,6 +589,14 @@ def _springs(comp: Component, mesh: Mesh, first_node: int) -> list[str]:
         out += [f"*ELEMENT, TYPE=SPRINGA, ELSET=E_SPRING{i}", *rows]
         # Always a real with an exponent: a bare integer reads as a DOF number.
         out += [f"*SPRING, ELSET=E_SPRING{i}", "", f"{stiffness:.10e}"]
+    for i, ((stiffness, *n), rows) in enumerate(sorted(gaps.items()), start=1):
+        # GAPUNI: closed (stiffness k) once the face node has moved its clearance (0)
+        # along the gap direction, the face's outward normal, into the foundation.
+        out += [f"*ELEMENT, TYPE=GAPUNI, ELSET=E_GAP{i}", *rows]
+        out += [
+            f"*GAP, ELSET=E_GAP{i}",
+            f"0., {n[0]:.9g}, {n[1]:.9g}, {n[2]:.9g}, , {stiffness:.10e}",
+        ]
     return out  # the grounds are held in every step (_step), where OP=NEW can't drop them
 
 

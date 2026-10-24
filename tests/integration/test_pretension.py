@@ -142,3 +142,31 @@ def test_pretension_adjustment(tmp_path, solver):
     first = _tension(run, 1)
     print(f"{solver} adjustment: {first:.6g} N, expected {expected:.6g} N")
     assert first == pytest.approx(expected, rel=5e-3)
+
+
+@over("calculix", "code_aster")
+@pytest.mark.parametrize("kind", ["force", "adjustment"])
+def test_pretension_one_step(tmp_path, solver, kind):
+    """One step: the bolt reaches F, or d k_b/2 for an adjustment (the support as stiff
+    as the bolt). Code_Aster cuts the mesh as the CalculiX deck does (LIAISON_DDL)."""
+    pytest.importorskip("OCP")
+    d = 1e-5
+    value = (
+        {"F": Quantity(value=F, unit="N")}
+        if kind == "force"
+        else {"d": Quantity(value=d, unit="m")}
+    )
+    kind_type = "bolt_pretension" if kind == "force" else "bolt_adjustment"
+    section = Feature(type=kind_type, selection="B/Section", values=value)
+    p, study, E = _bolt(solver, section)
+    comp = next(o for o in p.objects.values() if o.kind == "component")
+    comp.physics[0].features = comp.physics[0].features[:3]  # no later load
+    study.steps = [SolveStep(type="stationary")]
+    root = tmp_path / "bolt"
+    save_project(p, root)
+    run = run_study(p, study.id, root, tmp_path / "w")
+    expected = F if kind == "force" else d * E * np.pi * R**2 / L / 2
+    got = _tension(run, 1)
+    print(f"{solver} one-step {kind}: {got:.6g} N, expected {expected:.6g} N, "
+          f"{100 * (got / expected - 1):+.2f} %")  # fmt: skip
+    assert got == pytest.approx(expected, rel=5e-3)

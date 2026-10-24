@@ -82,7 +82,7 @@ def _block(solver: str) -> tuple[Project, Study]:
     return p, study
 
 
-@over("calculix", "elmer", "fenicsx")
+@over("calculix", "code_aster", "elmer", "fenicsx")
 def test_block_on_a_foundation(tmp_path, solver):
     pytest.importorskip("OCP")
     p, study = _block(solver)
@@ -99,3 +99,40 @@ def test_block_on_a_foundation(tmp_path, solver):
     print(f"{solver} elastic support: {got:.6g} m, theory {expected:.6g}, "
           f"{100 * (got / expected - 1):+.3f} %")  # fmt: skip
     assert got == pytest.approx(expected, rel=2e-3)
+
+
+def test_tilted_support_agrees(tmp_path):
+    """Normal and tangential springs on a face along no axis: the block turned 30° about
+    x, on kn and kt, held at x = 0, pressed on top. No closed form, so CalculiX and
+    Code_Aster (each lumping by ∫N dA, springs along each node's normal and tangents)
+    must give the same displacements on the same mesh, to 1e-5 of the largest (CalculiX
+    prints six digits; they agree to 4e-6)."""
+    pytest.importorskip("OCP")
+    from solvers import available
+
+    if not all(available(s) for s in ("calculix", "code_aster")):
+        pytest.skip("needs CalculiX and Code_Aster")
+    runs = {}
+    for solver in ("calculix", "code_aster"):
+        p, study = _block(solver)
+        geo = next(o for o in p.objects.values() if o.kind == "geometry")
+        geo.history.append(HistoryStep(kind="rotate", name="Tilt", args={"angle": 30, "axis": "x"}))
+        geo.selections = [
+            NamedSelection(name="Body", entity="body", members=["body-1"]),
+            NamedSelection(name="Bottom", entity="face", members=["B/-z"]),
+            NamedSelection(name="Top", entity="face", members=["B/+z"]),
+            NamedSelection(name="Xsym", entity="face", members=["B/-x"]),
+        ]
+        comp = next(o for o in p.objects.values() if o.kind == "component")
+        support, xsym, _ysym, pressure = comp.physics[0].features
+        support.values["kt"] = Quantity(value=KN / 3, unit="N/m^3")
+        comp.physics[0].features = [support, xsym, pressure]
+        root = tmp_path / solver
+        save_project(p, root)
+        runs[solver] = run_study(p, study.id, root, tmp_path / f"w-{solver}")
+    a, b = (runs[s].results.last("displacement") for s in ("calculix", "code_aster"))
+    assert np.array_equal(a.ids, b.ids)
+    scale = np.abs(a.values).max()
+    print(f"tilted support: largest {scale:.6g} m, "
+          f"largest difference {np.abs(a.values - b.values).max() / scale:.2e} of it")  # fmt: skip
+    assert np.abs(a.values - b.values).max() < 1e-5 * scale

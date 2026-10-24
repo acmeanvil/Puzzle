@@ -45,6 +45,7 @@ TINTS = {
     "magnetic_insulation": PURPLE,
     "dirichlet": GREY,
     "elastic_support": BLUE,
+    "compression_only_support": BLUE,
     "bolt_pretension": RED,
     "bolt_adjustment": RED,
     "neumann": GREY,

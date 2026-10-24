@@ -38,6 +38,7 @@ PDE_FEATURES = frozenset({"dirichlet", "neumann"})
 REMOTE_FEATURES = frozenset({"remote_force", "remote_displacement"})
 RIGID_REMOTE_FEATURES = frozenset({"remote_force_rigid"})
 SUPPORT_FEATURES = frozenset({"elastic_support"})  # ADR 0037: stiffness per area
+LIFTING_FEATURES = frozenset({"compression_only_support"})  # ADR 0037: nonlinear
 PRETENSION_FEATURES = frozenset({"bolt_pretension", "bolt_adjustment"})  # ADR 0037
 
 
@@ -66,7 +67,8 @@ class Capabilities:
     amplitude_features: frozenset[str] = frozenset()
     """Feature types whose values may follow an Amplitude in transient steps (ADR 0037)."""
     feature_steps: bool = False
-    """Whether features may apply in some solve steps only (Feature.steps, ADR 0037)."""
+    """Whether a one-deck adapter writes features in some solve steps only (Feature.steps,
+    ADR 0037); adapters with max_solve_steps get them per step from run_study."""
     axes_features: frozenset[str] = frozenset()
     """Features given in local axes (ADR 0037), as "type:axes type", with ":partial" when
     only some components are prescribed (e.g. "displacement:cylindrical:partial")."""
@@ -135,11 +137,24 @@ class SolverAdapter(ABC):
                         f"{self.name} does not take {words} axes yet (on {f.selection})"
                     )
             for f in physics.features:  # some steps only (ADR 0037): refused, never ignored
-                if f.steps and not caps.feature_steps:
+                # Split studies (one job per step) see only each step's features.
+                if f.steps and not (caps.feature_steps or self.max_solve_steps is not None):
                     problems.append(
                         f"{self.name} applies every feature in every step; it can't take "
                         f"{f.type} on {f.selection} in steps {f.steps} only yet"
                     )
+            # A pretension is locked after its step: one job per step can't carry that.
+            loaded = [
+                s for s in study.solve_steps() if s.solves(physics.type) and s.type != "modal"
+            ]
+            if self.max_solve_steps is not None and len(loaded) > 1:
+                problems += [
+                    f"{self.name} runs each step as its own analysis, so the pretension on "
+                    f"{f.selection} can't be locked into a later step; use one step, or "
+                    "CalculiX"
+                    for f in physics.features
+                    if f.type in PRETENSION_FEATURES
+                ]
             for f in physics.features:  # amplitudes (ADR 0037): refused, never ignored
                 if f.amplitude is None:
                     continue

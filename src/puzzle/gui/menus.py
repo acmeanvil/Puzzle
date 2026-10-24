@@ -114,6 +114,9 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
             add("Change selection…", lambda: change_selection(window, obj, node))
         add("Remove", lambda: remove(window, obj, node.path))
     elif isinstance(obj, Geometry) and node.kind == "selection":
+        sel = obj.selections[int(node.path.split(".")[1])]
+        if sel.entity == "face":
+            add("New cylindrical axes from this face", lambda: axes_from_face(window, obj, sel))
         add("Remove selection", lambda: remove(window, obj, node.path))
     elif isinstance(obj, Geometry) and node.kind == "object":
         steps = menu.addMenu("Add step")
@@ -301,6 +304,38 @@ def add_step(window, study: Study, kind: str):
         }
     return window.submit(
         Edit(object=str(study.id), ops=[EditOp(op="append", path="steps", value=value)])
+    )
+
+
+def axes_from_face(window, geometry, selection):
+    """Cylindrical axes along a bore's or a shaft's axis (ADR 0037), fitted to the face's
+    mesh in a component that uses the geometry (the mesh, else the preview)."""
+    from puzzle.mesh.adjacency import cylinder_axis
+
+    project = window.session.project
+    for comp in project.of_type(Component):
+        for part in comp.parts:
+            if part.geometry != geometry.id:
+                continue
+            meshes = [window.meshes.get(str(comp.id))]
+            preview = window.previews.get(str(comp.id))
+            meshes.append(preview[1].mesh if preview else None)
+            for mesh in [m for m in meshes if m is not None]:
+                found = cylinder_axis(mesh, f"{part.name}/{selection.name}")
+                if found is None:
+                    continue
+                origin, axis, _radius = found
+                data = {
+                    "name": f"Axis of {selection.name}",
+                    "type": "cylindrical",
+                    "origin": [float(c) for c in origin],
+                    "axis": [float(c) for c in axis],
+                }
+                return window.submit(Create(kind="axes", data=data))
+    window.statusBar().showMessage(
+        f"'{selection.name}' isn't a cylindrical face in any mesh or preview yet: show the "
+        "component (or mesh it) first, and pick a cylinder's face",
+        8000,
     )
 
 

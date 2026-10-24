@@ -41,6 +41,9 @@ def nodal_fields(rows: list[dict[str, str]], name: str) -> dict[int, Field]:
     comps = COMPONENTS[name]
     by_order: dict[int, list[dict[str, str]]] = {}
     for row in rows:
+        # A node no element gives this field to (a discrete's own node) prints "-".
+        if any(row.get(c, "-") in ("-", "") for c in comps):
+            continue
         by_order.setdefault(int(row["NUME_ORDRE"]), []).append(row)
     out = {}
     for order, group in by_order.items():

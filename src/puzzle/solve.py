@@ -7,7 +7,7 @@ transferred fields are mapped onto its mesh (puzzle.transfer) and handed to its 
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -158,7 +158,11 @@ def run_study(
     results, job, input_file = None, None, None
     for n, (part, where) in enumerate(parts, start=1):
         where.mkdir(parents=True, exist_ok=True)
-        input_file = adapter.write_input(project, part, meshed.mesh, where, inputs)
+        # One job per step (or a one-step study): the job sees only the features that
+        # apply in its step (Feature.steps, ADR 0037). One deck for all steps (CalculiX)
+        # sorts them out itself.
+        seen = _in_step(project, study.component, n) if limit is not None else project
+        input_file = adapter.write_input(seen, part, meshed.mesh, where, inputs)
         job = run_job(
             adapter.command(input_file), where, runtime, on_output=on_output, timeout_s=timeout_s
         )
@@ -254,3 +258,18 @@ def _run_sweep(project, study, root, workdir, *, store, reuse, on_output, timeou
 
 def _slug(name: str) -> str:
     return "".join(c if c.isalnum() else "-" for c in name.lower()).strip("-") or "study"
+
+
+def _in_step(project: Project, component_id, index: int) -> Project:
+    """A shallow copy of the project whose component keeps only the features active in
+    solve step `index`; the same project when every feature applies in every step."""
+    comp = project.objects.get(component_id)
+    if comp is None or not any(f.steps for ph in comp.physics for f in ph.features):
+        return project
+    physics = [
+        ph.model_copy(update={"features": [f for f in ph.features if f.active(index)]})
+        for ph in comp.physics
+    ]
+    copy = replace(project, objects=dict(project.objects))
+    copy.objects[component_id] = comp.model_copy(update={"physics": physics})
+    return copy

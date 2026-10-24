@@ -22,7 +22,7 @@ BODY_LOADS = {"gravity", "acceleration", "rotation"}  # ADR 0037: on bodies, per
 REMOTE = {"remote_force", "remote_force_rigid", "remote_displacement"}  # ADR 0037: on faces
 PRETENSION = {"bolt_pretension", "bolt_adjustment"}  # ADR 0037: on a section face
 STRUCTURAL = (
-    {"fixed", "displacement", "force", "pressure", "elastic_support"}
+    {"fixed", "displacement", "force", "pressure", "elastic_support", "compression_only_support"}
     | BODY_LOADS
     | REMOTE
     | PRETENSION
@@ -578,3 +578,85 @@ def cylindrical_expressions(axes, local, coords: tuple[str, str, str]) -> list[s
         f"(({a[0]:.12g})*{er[1]}-({a[1]:.12g})*{er[0]})",
     ]
     return [f"{ur:.12g}*{er[i]}+{ut:.12g}*{et[i]}+{uz:.12g}*({a[i]:.12g})" for i in range(3)]
+
+
+@dataclass
+class SectionCut:
+    """A bolt's pretension section cut through the mesh (ADR 0037): `doubles` maps each
+    section node to its twin, which the elements on the normal's side (`moved`) use
+    instead; `ref` is the reference node whose first dof is the section's opening."""
+
+    ref: int
+    normal: np.ndarray
+    centre: np.ndarray
+    doubles: dict[int, int]
+    moved: set[int]
+
+
+def section_cuts(comp, mesh: Mesh, refs: dict) -> dict:
+    """id(feature) -> SectionCut for each pretension feature; `refs` gives each its
+    reference node id, and twins are numbered after the largest of them."""
+    next_id = max(refs.values(), default=0) + 1
+    cuts = {}
+    for f in [f for ph in comp.physics for f in ph.features if f.type in PRETENSION]:
+        group = mesh.groups.get(f.selection)
+        if group is None:
+            raise InputError(f"bolt pretension on '{f.selection}': no such selection")
+        if group.dim != 2:
+            raise InputError(f"bolt pretension on '{f.selection}': pick the section face")
+        section = {int(n) for n in group.node_ids}
+        normal = section_normal(group, mesh)
+        centre = mesh.node_coords(group.node_ids).mean(axis=0)
+        moved = set()
+        for b in mesh.blocks:
+            if b.dim != 3:
+                continue
+            touching = np.isin(b.connectivity, list(section)).any(axis=1)
+            for eid, row in zip(b.ids[touching], b.connectivity[touching], strict=True):
+                if (mesh.node_coords(row).mean(axis=0) - centre) @ normal > 0:
+                    moved.add(int(eid))
+        if not moved:
+            raise InputError(f"bolt pretension on '{f.selection}': no elements beside it")
+        doubles = {n: next_id + i for i, n in enumerate(sorted(section))}
+        next_id += len(doubles)
+        cuts[id(f)] = SectionCut(refs[id(f)], normal, centre, doubles, moved)
+    return cuts
+
+
+def section_normal(group, mesh: Mesh) -> np.ndarray:
+    """A flat section's unit normal (either way round)."""
+    tri = [
+        mesh.node_coords(b.connectivity[:, :3].ravel()).reshape(-1, 3, 3)
+        for b in surface_blocks(group, mesh)
+    ]
+    xyz = np.concatenate(tri)
+    each = np.cross(xyz[:, 1] - xyz[:, 0], xyz[:, 2] - xyz[:, 0])
+    each /= np.linalg.norm(each, axis=1, keepdims=True)
+    each[each @ each[0] < 0] *= -1  # one orientation
+    n = each.mean(axis=0)
+    n /= np.linalg.norm(n)
+    if (each @ n).min() < 1 - 1e-8:
+        raise InputError("a pretension section must be flat (a plane cut through the bolt)")
+    return n
+
+
+def mark_mesh_nodes(input_file, mesh: Mesh) -> None:
+    """Leave the mesh's largest node id beside the input, so results at helper nodes
+    added past it (rigid bodies, springs' grounds, pretension twins) can be dropped."""
+    input_file.with_suffix(".meshnodes").write_text(str(int(mesh.node_ids.max())))
+
+
+def drop_helper_nodes(results, input_file):
+    """Results without the helper nodes `mark_mesh_nodes` recorded (ADR 0037)."""
+    last = input_file.with_suffix(".meshnodes")
+    if not last.exists():
+        return results
+    top = int(last.read_text())
+    for step in results.steps:
+        for name, f in list(step.fields.items()):
+            if f.location == "node" and f.ids.size and f.ids.max() > top:
+                keep = f.ids <= top
+                step.fields[name] = type(f)(
+                    f.name, f.location, f.components, f.ids[keep], f.values[keep]
+                )
+    return results

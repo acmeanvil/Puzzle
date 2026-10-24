@@ -15,9 +15,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from puzzle.adapters.base import (
+    LIFTING_FEATURES,
+    PRETENSION_FEATURES,
     REMOTE_FEATURES,
     RIGID_REMOTE_FEATURES,
     STRUCTURAL_FEATURES,
+    SUPPORT_FEATURES,
     THERMAL_FEATURES,
     Capabilities,
     SolverAdapter,
@@ -25,6 +28,7 @@ from puzzle.adapters.base import (
 )
 from puzzle.adapters.code_aster.comm import JOB, write_case
 from puzzle.adapters.code_aster.tables import read_results as read_tables
+from puzzle.adapters.common import drop_helper_nodes, mark_mesh_nodes
 from puzzle.mesh.mesh import Mesh
 from puzzle.model.schema import Project, Study
 from puzzle.results.model import Results
@@ -38,7 +42,13 @@ class CodeAsterAdapter(SolverAdapter):
             "solid_mechanics": frozenset({"stationary", "transient", "modal", "frequency_domain"}),
             "heat_transfer": frozenset({"stationary", "transient"}),
         },
-        features=STRUCTURAL_FEATURES | THERMAL_FEATURES | REMOTE_FEATURES | RIGID_REMOTE_FEATURES,
+        features=STRUCTURAL_FEATURES
+        | THERMAL_FEATURES
+        | REMOTE_FEATURES
+        | RIGID_REMOTE_FEATURES
+        | SUPPORT_FEATURES
+        | PRETENSION_FEATURES
+        | LIFTING_FEATURES,
         amplitude_features=frozenset({"heat_flux"}),  # ADR 0037, benchmarked
         axes_features=frozenset(
             {"displacement:cartesian", "displacement:cylindrical", "force:cartesian"}
@@ -57,7 +67,9 @@ class CodeAsterAdapter(SolverAdapter):
         self, project: Project, study: Study, mesh: Mesh, workdir: Path, inputs=()
     ) -> Path:
         refuse_inputs(inputs, "Code_Aster", {("load", "temperature")})
-        return write_case(project, study, mesh, workdir, inputs)
+        path = write_case(project, study, mesh, workdir, inputs)
+        mark_mesh_nodes(path, mesh)  # pretension twins and reference nodes come after
+        return path
 
     def command(self, input_file: Path) -> list[str]:
         return ["run_aster", input_file.name]
@@ -68,4 +80,4 @@ class CodeAsterAdapter(SolverAdapter):
             raise FileNotFoundError(
                 f"Code_Aster wrote no result tables; see {JOB}.mess and the solver log"
             )
-        return read_tables(workdir)
+        return drop_helper_nodes(read_tables(workdir), input_file)

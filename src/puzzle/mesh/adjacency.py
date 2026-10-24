@@ -137,3 +137,62 @@ def samples(mesh: Mesh, dim: int, n: int = 24) -> dict[int, np.ndarray]:
         step = max(1, len(pts) // n)
         picked[tag] = pts[::step][:n]
     return picked
+
+
+def cylinder_axis(mesh: Mesh, group_name: str):
+    """A cylindrical face's axis from its mesh (ADR 0037: axes picked from a face):
+    (a point on the axis, unit direction, radius), or None when the face isn't one.
+    Every normal of a cylinder is square to its axis, so the axis is the direction
+    the normals leave out; the centre is a least-squares circle in the plane across it."""
+    group = mesh.groups.get(group_name)
+    if group is None or group.dim != 2:
+        return None
+    coords = _index(mesh)
+    tri = [
+        coords(b.connectivity[:, :3].ravel()).reshape(-1, 3, 3)
+        for b in group.blocks(mesh)
+        if b.element in CORNERS
+    ]
+    if not tri:
+        return None
+    xyz = np.concatenate(tri)
+    n = np.cross(xyz[:, 1] - xyz[:, 0], xyz[:, 2] - xyz[:, 0])
+    n /= np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-300)
+    values, vectors = np.linalg.eigh(n.T @ n)
+    if values[0] > 1e-2 * values[2] or values[1] < 0.05 * values[2]:
+        return None  # normals not square to one direction (not a cylinder), or a plane
+    points = coords(group.node_ids)
+    # Flat triangles tilt their normals a little; the nodes lie on the surface itself.
+    # A quadric through them, x·Qx + b·x + c = 0, has Q ∝ I - a aᵀ: the axis a is Q's
+    # null direction.
+    centre, scale = points.mean(axis=0), float(np.ptp(points, axis=0).max()) or 1.0
+    q = (points - centre) / scale
+    x, y, z = q.T
+    rows = np.column_stack([x * x, y * y, z * z, x * y, x * z, y * z, x, y, z, np.ones(len(q))])
+    coef = np.linalg.svd(rows, full_matrices=False)[2][-1]
+    Q = np.array(
+        [
+            [coef[0], coef[3] / 2, coef[4] / 2],
+            [coef[3] / 2, coef[1], coef[5] / 2],
+            [coef[4] / 2, coef[5] / 2, coef[2]],
+        ]
+    )
+    w, v = np.linalg.eigh(Q)
+    pick = int(np.argmin(np.abs(w)))
+    axis = v[:, pick] if abs(v[:, pick] @ vectors[:, 0]) > 0.99 else vectors[:, 0]
+    u = np.cross(axis, [1.0, 0, 0] if abs(axis[0]) < 0.9 else [0, 1.0, 0])
+    u /= np.linalg.norm(u)
+    v = np.cross(axis, u)
+    p2 = np.column_stack([points @ u, points @ v])
+    # x² + y² = 2 a x + 2 b y + c, linear in (a, b, c)
+    A = np.column_stack([2 * p2, np.ones(len(p2))])
+    (a, b, c), *_ = np.linalg.lstsq(A, (p2**2).sum(axis=1), rcond=None)
+    radius = float(np.sqrt(c + a * a + b * b))
+    spread = np.abs(np.hypot(p2[:, 0] - a, p2[:, 1] - b) - radius).max()
+    if spread > 1e-3 * radius:
+        return None
+    along = float((points @ axis).min())
+    origin = a * u + b * v + along * axis
+    if axis @ np.array([1.0, 1e-3, 1e-6]) < 0:  # a stable sign: +x, +y, +z first
+        axis = -axis
+    return origin, axis, radius

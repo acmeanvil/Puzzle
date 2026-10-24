@@ -16,6 +16,7 @@ import numpy as np
 from puzzle.adapters.common import (
     BODY_LOADS,
     HOLDING,
+    PRETENSION,
     STRUCTURAL,
     THERMAL,
     InputError,
@@ -28,13 +29,16 @@ from puzzle.adapters.common import (
     remote_load,
     remote_values,
     rigid_motion,
+    section_cuts,
+    support_nodes,
+    support_stiffness,
     surface_area,
     thermal_tables,
     time_scheme,
     time_settings,
 )
 from puzzle.mesh.med import safe_names, write_med
-from puzzle.mesh.mesh import Mesh
+from puzzle.mesh.mesh import CellBlock, Group, Mesh
 from puzzle.model.schema import Component, Feature, Material, Project, Study
 
 JOB = "job"
@@ -84,6 +88,20 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     features = [
         f for ph in comp.physics if ph.type in solved for f in ph.features if f.type in wanted
     ]
+    # Elastic supports are part of the structure, modal steps too (ADR 0037).
+    springs = [f for f in features if f.type == "elastic_support"]
+    lifting = [f for f in features if f.type == "compression_only_support"]
+    if lifting and (thermal or step.type != "stationary"):
+        raise InputError(
+            "Code_Aster writes compression-only supports in static steps only", code="unsupported"
+        )
+    bolts = [f for f in features if f.type in PRETENSION and step.type != "modal"]
+    features = [
+        f
+        for f in features
+        if f.type not in ("elastic_support", "compression_only_support")
+        and f.type not in PRETENSION
+    ]
     if step.type == "modal":
         features = [f for f in features if f.type in HOLDING]
     features = globalize(project, features)  # Cartesian local axes as global (ADR 0037)
@@ -118,14 +136,32 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     tie_groups += [g for c in touching for g in (c.source, c.target)]
     groups = list(
         dict.fromkeys(
-            [a.selection for a in comp.materials] + [f.selection for f in features] + tie_groups
+            [a.selection for a in comp.materials]
+            + [f.selection for f in features + springs + lifting + bolts]
+            + tie_groups
         )
     )
     for g in groups:
         if g not in mesh.groups:
             raise InputError(f"no selection '{g}' in the mesh")
     names = safe_names(groups)
-    write_med(mesh, workdir / f"{JOB}.med", names)
+    supports = _spring_nodes(springs, mesh)
+    gaps = _spring_nodes(lifting, mesh)
+    top = int(mesh.node_ids.max())
+    cuts = list(
+        section_cuts(comp, mesh, {id(f): top + 1 + k for k, f in enumerate(bolts)}).values()
+    ) if bolts else []  # fmt: skip
+    points = _Points(_cut(mesh, cuts) if cuts else mesh, names)
+    for i, (node, *_rest) in enumerate(supports, start=1):
+        points.add(f"S{i}", node, "SPRINGS")
+    for i, (node, *_rest) in enumerate(gaps, start=1):
+        points.add(f"C{i}", node, "GAPS")
+    for k, cut in enumerate(cuts, start=1):
+        points.add(f"PR{k}", cut.ref, "PRETENSION")
+        for i, (node, twin) in enumerate(cut.doubles.items(), start=1):
+            points.add(f"P{k}A{i}", node)
+            points.add(f"P{k}B{i}", twin)
+    write_med(points.mesh, workdir / f"{JOB}.med", names)
 
     phenomenon, model = ("THERMIQUE", "3D") if thermal else ("MECANIQUE", "3D")
     faces = sorted({names[g] for c in touching for g in (c.source, c.target)})
@@ -142,9 +178,26 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             if faces
             else []
         ),
+        # Pretension relations name single nodes: their point groups as node groups.
+        *(
+            [
+                "mesh = DEFI_GROUP(reuse=mesh, MAILLAGE=mesh, CREA_GROUP_NO=_F(GROUP_MA=("
+                + ", ".join(f"'{g}'" for g in points.names if g[0] == "P")
+                + ",)))"
+            ]
+            if cuts
+            else []
+        ),
         "model = AFFE_MODELE(MAILLAGE=mesh, "
-        f"AFFE=_F(TOUT='OUI', PHENOMENE='{phenomenon}', MODELISATION='{model}'))",
+        f"AFFE=(_F(TOUT='OUI', PHENOMENE='{phenomenon}', MODELISATION='{model}'),"
+        + "".join(
+            f" _F(GROUP_MA='{g}', PHENOMENE='MECANIQUE', MODELISATION='DIS_T'),"
+            for g in points.sets
+        )
+        + "))",
+        *_discrete_cara(supports, len(cuts), _negligible(project, comp, mesh), gaps),
     ]
+    cara = "CARA_ELEM=cara, " if points.sets else ""
     assignments = []
     materials = [project.get(a.material, Material) for a in comp.materials]
     tables = [thermal_tables(m, comp) if thermal else {} for m in materials]
@@ -160,6 +213,10 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
                 traction = f", TRACTION=_F(SIGM=trac{i})"
             out.append(f"mat{i} = DEFI_MATERIAU({_material(m, thermal, expansion)}{traction})")
         assignments.append(f"_F(GROUP_MA='{names[a.selection]}', MATER=mat{i})")
+    # A compression-only support: DIS_CHOC on each node's discrete, its stiffness kn × area.
+    for i, (_node, kn, _kt, _n) in enumerate(gaps, start=1):
+        out.append(f"gap{i} = DEFI_MATERIAU(DIS_CONTACT=_F(RIGI_NOR={kn:.10e}))")
+        assignments.append(f"_F(GROUP_MA='C{i}', MATER=gap{i})")
     varc = ""
     if thermal_load is not None:
         if thermal or step.type == "modal":
@@ -176,7 +233,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     if thermal:  # loads following an amplitude get their own charge (ADR 0037)
         out += _thermal_loads(project, features, names, mesh)
     else:
-        plain = _loads(features, names, mesh, thermal, ties)
+        plain = _loads(features, names, mesh, thermal, ties, _pretension_loads(bolts, cuts))
         if plain.endswith("(MODELE=model)"):  # everything is in loadf: no empty charge
             charges = []
         else:
@@ -194,7 +251,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     elif step.type == "modal":
         n = int(step.settings.get("modes", 10))
         out += [
-            f"ASSEMBLAGE(MODELE=model, CHAM_MATER=mater, CHARGE=({', '.join(charges)},), "
+            f"ASSEMBLAGE(MODELE=model, CHAM_MATER=mater, {cara}CHARGE=({', '.join(charges)},), "
             "NUME_DDL=CO('numddl'),",
             "           MATR_ASSE=(_F(MATRICE=CO('stiff'), OPTION='RIGI_MECA'),",
             "                      _F(MATRICE=CO('mass'), OPTION='MASS_MECA')))",
@@ -204,14 +261,14 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             f"IMPR_TABLE(TABLE=RECU_TABLE(CO=res, NOM_PARA='FREQ'), UNITE={TABLES['frequency']}, "
             f"FORMAT='TABLEAU', SEPARATEUR=',', FORMAT_R='{FORMAT_R}')",
         ]
-    elif touching or nlgeom or plastic:
+    elif touching or nlgeom or plastic or gaps:
         # Green-Lagrange strain: large rotations, as CalculiX's NLGEOM (GROT_GDEP refuses tet10);
         # with plasticity, logarithmic strains (true stress against true strain).
         strains = ", DEFORMATION='GREEN_LAGRANGE'" if nlgeom else ""
         # Every increment is kept when the deflection is large or the material yields
         # (load-deflection and stress-strain histories).
         which = "" if nlgeom or plastic else "INST=1.0"
-        behaviour = f"COMPORTEMENT=_F(RELATION='ELAS'{strains}), "
+        parts = [f"_F(TOUT='OUI', RELATION='ELAS'{strains})"]
         if plastic:
             yielding = ", ".join(f"'{names[a.selection]}'" for a in plastic)
             large = ", DEFORMATION='GDEF_LOG'" if nlgeom else ""
@@ -220,12 +277,14 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             if rest:
                 elastic = ", ".join(f"'{names[a.selection]}'" for a in rest)
                 parts.append(f"_F(GROUP_MA=({elastic},), RELATION='ELAS'{strains})")
-            behaviour = f"COMPORTEMENT=({', '.join(parts)},), "
+        if gaps:  # the compression-only discretes
+            parts.append("_F(GROUP_MA='GAPS', RELATION='DIS_CHOC')")
+        behaviour = f"COMPORTEMENT=({', '.join(parts)},), "
         out += [
             *([_defi_contact(touching, names)] if touching else []),
             # Ramp the loads: friction and large deflection depend on the loading path.
             "ramp = DEFI_FONCTION(NOM_PARA='INST', VALE=(0.0, 0.0, 1.0, 1.0))",
-            "res = STAT_NON_LINE(MODELE=model, CHAM_MATER=mater, "
+            f"res = STAT_NON_LINE(MODELE=model, CHAM_MATER=mater, {cara}"
             "EXCIT=("
             + ", ".join(f"_F(CHARGE={c}, FONC_MULT=ramp)" for c in charges)
             + ",), "
@@ -254,7 +313,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         ]
     else:
         out += [
-            "res = MECA_STATIQUE(MODELE=model, CHAM_MATER=mater, EXCIT=("
+            f"res = MECA_STATIQUE(MODELE=model, CHAM_MATER=mater, {cara}EXCIT=("
             + ", ".join(f"_F(CHARGE={c})" for c in charges)
             + ",))",
             "res = CALC_CHAMP(reuse=res, RESULTAT=res, CONTRAINTE=('SIGM_NOEU',), "
@@ -299,6 +358,161 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         + "\n"
     )
     return export
+
+
+def _spring_nodes(springs, mesh: Mesh) -> list[tuple[int, float, float, np.ndarray]]:
+    """(node, kn × area, kt × area, outward normal) for each elastic support's face
+    nodes, lumped by ∫N dA as CalculiX's (ADR 0037)."""
+    out = []
+    for f in springs:
+        group = mesh.groups.get(f.selection)
+        if group is None:
+            raise InputError(f"elastic support on '{f.selection}': no such selection")
+        kn, kt = support_stiffness(f)
+        ids, areas, normals = support_nodes(group, mesh)
+        out += [
+            (int(n), kn * a, kt * a, normal)
+            for n, a, normal in zip(ids, areas, normals, strict=True)
+        ]
+    return out
+
+
+POINT_TAG = 900_000  # Gmsh point entities for discrete elements, clear of the mesh's own
+
+
+class _Points:
+    """The mesh to write plus point elements on single nodes, each in its own group
+    (springs to ground, pretension reference nodes, nodes a relation names), optionally
+    also in a set (SPRINGS, PRETENSION) that gets the DIS_T model."""
+
+    def __init__(self, mesh: Mesh, names: dict) -> None:
+        self.mesh = Mesh(mesh.node_ids, mesh.coords, list(mesh.blocks), dict(mesh.groups))
+        self.out = names  # Puzzle group -> written name; points are added to it
+        self.names: list[str] = []
+        self.sets: dict[str, list[tuple[int, int]]] = {}
+        self.next = int(max(b.ids.max() for b in mesh.blocks)) + 1
+
+    def add(self, name: str, node: int, into: str | None = None) -> None:
+        entity = (0, POINT_TAG + len(self.names) + 1)
+        self.mesh.blocks.append(
+            CellBlock("vertex", 0, entity, np.array([self.next]), np.array([[node]]))
+        )
+        self.next += 1
+        self.mesh.groups[f"__{name}"] = Group(f"__{name}", 0, [entity], np.array([node]))
+        self.out[f"__{name}"] = name
+        self.names.append(name)
+        if into:
+            self.sets.setdefault(into, []).append(entity)
+            held = self.mesh.groups.get(f"__{into}")
+            nodes = np.unique([*(held.node_ids if held else []), node]).astype(np.int64)
+            self.mesh.groups[f"__{into}"] = Group(f"__{into}", 0, self.sets[into], nodes)
+            self.out[f"__{into}"] = into
+
+
+def _cut(mesh: Mesh, cuts) -> Mesh:
+    """The mesh cut at each pretension section: reference nodes and twins added, and the
+    elements on the normal's side (faces too) moved onto the twins (ADR 0037)."""
+    ids, xyz = [mesh.node_ids], [mesh.coords]
+    blocks = list(mesh.blocks)
+    for cut in cuts:
+        twins = np.array(list(cut.doubles.values()), dtype=np.int64)
+        ids += [np.array([cut.ref], dtype=np.int64), twins]
+        xyz += [cut.centre[None], mesh.node_coords(np.array(list(cut.doubles)))]
+        moved = []
+        for b in blocks:
+            touching = np.isin(b.connectivity, list(cut.doubles)).any(axis=1)
+            if b.dim == 3:
+                side = np.isin(b.ids, list(cut.moved)) & touching
+            else:  # a face or edge of a moved element: on the normal's side
+                centres = (
+                    mesh.node_coords(b.connectivity.ravel())
+                    .reshape(*b.connectivity.shape, 3)
+                    .mean(axis=1)
+                )
+                side = touching & ((centres - cut.centre) @ cut.normal > 0)
+            if side.any():
+                conn = b.connectivity.copy()
+                conn[side] = np.vectorize(lambda n, c=cut: c.doubles.get(int(n), n))(conn[side])
+                b = CellBlock(b.element, b.dim, b.entity, b.ids, conn)
+            moved.append(b)
+        blocks = moved
+    return Mesh(np.concatenate(ids), np.vstack(xyz), blocks, dict(mesh.groups))
+
+
+def _pretension_loads(bolts, cuts) -> dict[str, list[str]]:
+    """The reference node held but along its first dof, which takes the pretension
+    (a force, or the shortening imposed), and each twin tied to its node by
+    u_twin - u = n u_ref (ADR 0037, as the CalculiX deck)."""
+    out: dict[str, list[str]] = {"DDL_IMPO": [], "FORCE_NODALE": [], "LIAISON_DDL": []}
+    for k, (f, cut) in enumerate(zip(bolts, cuts, strict=True), start=1):
+        ref = f"PR{k}"
+        if f.type == "bolt_pretension":  # tension pulls the sides together
+            out["DDL_IMPO"].append(f"_F(GROUP_NO='{ref}', DY=0.0, DZ=0.0)")
+            out["FORCE_NODALE"].append(f"_F(GROUP_NO='{ref}', FX={-f.values['F'].to_si():.12g})")
+        else:  # an adjustment shortens the bolt
+            d = -f.values["d"].to_si()
+            out["DDL_IMPO"].append(f"_F(GROUP_NO='{ref}', DX={d:.12g}, DY=0.0, DZ=0.0)")
+        for i in range(1, len(cut.doubles) + 1):
+            for c, dof in enumerate(("DX", "DY", "DZ")):
+                n = float(cut.normal[c])
+                nodes, dofs, coefs = [f"P{k}B{i}", f"P{k}A{i}"], [dof, dof], [1.0, -1.0]
+                if abs(n) > 1e-12:  # the reference node's DX is the opening
+                    nodes.append(ref)
+                    dofs.append("DX")
+                    coefs.append(-n)
+                out["LIAISON_DDL"].append(
+                    f"_F(GROUP_NO=({', '.join(repr(g) for g in nodes)},), "
+                    f"DDL=({', '.join(repr(d) for d in dofs)},), "
+                    f"COEF_MULT=({', '.join(f'{x:.12g}' for x in coefs)},), COEF_IMPO=0.0)"
+                )
+    return out
+
+
+def _negligible(project, comp, mesh: Mesh) -> float:
+    """A stiffness 1e-9 of the part's (E × size), for dofs held only by relations: a
+    zero pivot stops Code_Aster's solver."""
+    moduli = [
+        project.get(a.material, Material).properties.get("youngs_modulus") for a in comp.materials
+    ]
+    E = max((m.to_si() for m in moduli if m is not None), default=1.0)
+    return 1e-9 * E * float(np.linalg.norm(np.ptp(mesh.coords, axis=0)))
+
+
+def _discrete_cara(supports, references: int, tiny: float = 0.0, gaps=()) -> list[str]:
+    """Each spring's stiffness in its own axes (REPERE='LOCAL'; global is the default):
+    x along the face normal (kn), y and z along the face (kt). A pretension reference
+    node carries a negligible stiffness (`tiny`) along its first dof, only to have
+    dofs; its other two are held."""
+    if not supports and not references and not gaps:
+        return []
+    stiff, axes = [], []
+    nodes = [("S", i, s) for i, s in enumerate(supports, start=1)]
+    nodes += [("C", i, g) for i, g in enumerate(gaps, start=1)]
+    for prefix, i, (_node, kn, kt, n) in nodes:
+        if prefix == "C":  # DIS_CHOC closes moving against its local x: x into the face
+            n = -np.asarray(n)
+        t = np.cross(n, [1.0, 0, 0] if abs(n[0]) < 0.9 else [0, 1.0, 0])
+        t /= np.linalg.norm(t)
+        stiff.append(
+            f"_F(GROUP_MA='{prefix}{i}', CARA='K_T_D_N', REPERE='LOCAL', "
+            f"VALE=({kn:.10e}, {kt:.10e}, {kt:.10e}))"
+        )
+        axes.append(
+            f"_F(GROUP_MA='{prefix}{i}', CARA='VECT_X_Y', VALE=("
+            + ", ".join(f"{c:.12g}" for c in (*n, *t))
+            + "))"
+        )
+    stiff += [
+        f"_F(GROUP_MA='PR{k}', CARA='K_T_D_N', VALE=({tiny:.6e}, 0.0, 0.0))"
+        for k in range(1, references + 1)
+    ]
+    return [
+        "cara = AFFE_CARA_ELEM(MODELE=model, DISCRET=(",
+        *(f"    {s}," for s in stiff),
+        ")" + (", ORIENTATION=(" if axes else ")"),
+        *(f"    {a}," for a in axes),
+        *(["))"] if axes else []),
+    ]
 
 
 def _table(result: str, field: str, name: str, which: str = "") -> str:
@@ -576,8 +790,10 @@ def _ther_non_line(step, comp: Component) -> str:
 
 
 def _loads(
-    features: list[Feature], names: dict[str, str], mesh: Mesh, thermal: bool, ties=()
+    features: list[Feature], names: dict[str, str], mesh: Mesh, thermal: bool, ties=(), extra=None
 ) -> str:
+    """The plain load charge; `extra` adds items by keyword (pretension's)."""
+    extra = extra or {}
     imposed, face_force, pressure, temperature, flux, exchange = [], [], [], [], [], []
     gravity, rotation, rigid = [], [], []
     tied = [
@@ -636,7 +852,9 @@ def _loads(
         )
     return (
         "load = AFFE_CHAR_MECA(MODELE=model"
-        + kw("DDL_IMPO", imposed)
+        + kw("DDL_IMPO", imposed + extra.get("DDL_IMPO", []))
+        + kw("FORCE_NODALE", extra.get("FORCE_NODALE", []))
+        + kw("LIAISON_DDL", extra.get("LIAISON_DDL", []))
         + kw("FORCE_FACE", face_force)
         + kw("PRES_REP", pressure)
         + kw("PESANTEUR", gravity)

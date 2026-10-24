@@ -107,7 +107,7 @@ def test_symbols_follow_axes():
 
 def test_feature_steps_typed_shown_and_refused(window):
     """A feature in some solve steps only (ADR 0037): typed in Properties as "2", shown
-    in the outline, written by CalculiX, refused by a solver that can't."""
+    in the outline, taken by CalculiX (one deck) and Elmer (one job per step)."""
     from puzzle.gui.properties import parse_steps, steps_text
 
     assert parse_steps("All steps") == [] and parse_steps("3, 2") == [2, 3]
@@ -120,5 +120,26 @@ def test_feature_steps_typed_shown_and_refused(window):
     tip = next(s for s in project.of_type(Study) if s.name == "Tip load")
     comp.physics[0].features[1].steps = [2]
     assert "in steps 2" in outline(project)
+    assert not CalculixAdapter().check(project, tip)  # one deck, written per step
+    assert not ElmerAdapter().check(project, tip)  # one job per step: run_study filters
+
+
+def test_pretension_lock_needs_one_deck(window):
+    """A pretension in a two-step structural study: CalculiX locks it in step 2; Code_Aster
+    runs each step as its own analysis, so it refuses rather than drop the lock."""
+    from puzzle.adapters.code_aster import CodeAsterAdapter
+    from puzzle.model.schema import SolveStep
+
+    project = window.session.project
+    comp = project.of_type(Component)[0]
+    tip = next(s for s in project.of_type(Study) if s.name == "Tip load")
+    comp.physics[0].features.append(
+        Feature(
+            type="bolt_pretension", selection="Bar/Tip", values={"F": Quantity(value=1, unit="kN")}
+        )
+    )
+    tip.steps = [SolveStep(type="stationary"), SolveStep(type="stationary")]
     assert not CalculixAdapter().check(project, tip)
-    assert any("in steps [2] only" in p for p in ElmerAdapter().check(project, tip))
+    assert any("can't be locked" in p for p in CodeAsterAdapter().check(project, tip))
+    tip.steps = tip.steps[:1]
+    assert not any("can't be locked" in p for p in CodeAsterAdapter().check(project, tip))

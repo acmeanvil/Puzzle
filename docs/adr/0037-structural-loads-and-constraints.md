@@ -1,6 +1,6 @@
 # 0037. Structural loads and constraints: body loads, remote loads, springs, couplings, local axes, amplitudes
 
-- Status: Accepted (2026-10-23); body loads and amplitudes built
+- Status: Accepted (2026-10-23); built; structural amplitudes come with ADR 0041
 - Date: 2026-10-23
 
 ## Context
@@ -176,7 +176,34 @@ New features in `model/catalog.py` (structural physics), each typed with readabl
 
 - **Caveat:** elements of another part that touch the section's rim (a nut meshed conformally with the bolt) would be cut too. Keep the section clear of other parts.
 
-- **Not yet** (the rest of this ADR): pretension on Code_Aster (`DDL_IMPO` plus `LIAISON_DDL` on a cut, or its `PRE_EPSI`) and the other solvers, `Feature.steps` on solvers that split studies, elastic support on Code_Aster, and amplitudes on structural loads (with ADR 0041).
+## Built: Code_Aster elastic support and pretension; per-step features on every solver (2026-10-24)
+
+- **`Feature.steps` on solvers that run one job per step** (Elmer, Code_Aster, FEniCSx, the CFD solvers): `run_study` hands each step's job a project copy holding only the features active in that step. A test on all four FE solvers (`test_multistep.py`: a pressure in step 1, a force in step 2) matches one-step studies exactly.
+- **CalculiX fix:** a later step that wrote no card of a kind kept the step before's loads of that kind (`OP=NEW` applies per card). Each later step now resets `*BOUNDARY`, `*CLOAD`, `*DLOAD` (and `*DFLUX`, `*FILM` for heat) when it writes none.
+- **Elastic support on Code_Aster:** a point element on each face node (a `DIS_T` discrete to ground), with `K_T_D_N` kn·a along the node's normal and kt·a along the face (`REPERE='LOCAL'`; the default is global axes), lumped by ∫N dA as on CalculiX. The block benchmark is exact, and on a block turned 30° with kn and kt (`test_tilted_support_agrees`) Code_Aster and CalculiX agree to 4e-6 of the largest displacement (CalculiX's six printed digits).
+- **Pretension on Code_Aster:** the same cut as the CalculiX deck, written into the MED mesh: twins and a reference node, the elements on one side (faces too) moved onto the twins, `LIAISON_DDL` u_twin − u = n u_ref between single-node groups, the force as `FORCE_NODALE` on the reference node's DX (its DY and DZ held). That DX lies only in the relations, so it carries a stiffness of 1e-9 E × size, or the solver stops on a zero pivot.
+
+  | One step | CalculiX | Code_Aster | Theory |
+  | --- | --- | --- | --- |
+  | Pretension F = 10 kN | −0.01 % | −0.01 % | F |
+  | Adjustment d | +0.38 % | +0.38 % | d k_b/2 |
+
+- **Locking across steps** needs one deck: a solver that runs each step as its own analysis refuses a pretension in a study with more than one structural step.
+- **Refused:** pretension on Elmer and FEniCSx (no benchmark yet; neither has a linear relation to a reference dof written here).
+- **Axes from a face:** a face selection's menu has "New cylindrical axes from this face". `mesh.adjacency.cylinder_axis` fits the axis to the face's mesh (the component's mesh, else its preview): the normals reject planes and other shapes, a quadric through the nodes gives the axis exactly (flat triangles tilt their normals by ~2e-5), and a circle fit gives the centre and radius (`tests/test_cylinder_axis.py`).
+- **Compression-only support** (`compression_only_support`, kn per area): a foundation that pushes back but never pulls, so a face may lift off.
+  - CalculiX: a `GAPUNI` element per face node to a grounded node, its stiffness kn × the node's ∫N dA, its direction the face's outward normal. CalculiX switches gaps only in a nonlinear step, so the step gets `NLGEOM` (without it the gaps were solved once, closed both ways: the linear Winkler answer).
+  - Code_Aster: the same point elements as the elastic support, with `DIS_CHOC` (`DIS_CONTACT` `RIGI_NOR` per node) in `STAT_NON_LINE`; its local x points into the face (along it, every gap opened and Newton diverged).
+  - Elmer and FEniCSx: refused.
+  - **Benchmark** (`tests/integration/test_compression_only.py`): a stiff block on such a foundation loaded down at e = B/4 from its middle. Rigid-footing theory: contact length 3 (B/2 − e), toe settlement 2P / (3 D (B/2 − e) kn).
+
+    | | CalculiX | Code_Aster |
+    | --- | --- | --- |
+    | Contact length | −0.6 % | +0.1 % |
+    | Toe settlement | +0.7 % | −0.05 % |
+
+    CalculiX's small difference is NLGEOM's large-rotation terms (the block turns 0.4 % of a radian).
+- **Not yet:** amplitudes on structural loads, which come with ADR 0041 (dynamics).
 
 ## Consequences
 

@@ -1100,7 +1100,13 @@ class Project:
         if not isinstance(comp, Component):
             return []
         solid = [p for p in comp.physics if p.type == "solid_mechanics"]
-        holding = ("fixed", "displacement", "remote_displacement", "elastic_support")
+        holding = (
+            "fixed",
+            "displacement",
+            "remote_displacement",
+            "elastic_support",
+            "compression_only_support",
+        )
         held = any(f.type in holding for p in solid for f in p.features)
         steps = [
             s

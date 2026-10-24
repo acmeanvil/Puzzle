@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from puzzle.adapters.base import (
+    LIFTING_FEATURES,
     PRETENSION_FEATURES,
     REMOTE_FEATURES,
     RIGID_REMOTE_FEATURES,
@@ -17,7 +18,7 @@ from puzzle.adapters.base import (
 )
 from puzzle.adapters.calculix.frd import read_frd
 from puzzle.adapters.calculix.inp import InputError, prestress_step_count, write_inp
-from puzzle.adapters.common import plastic_strain_tensor
+from puzzle.adapters.common import drop_helper_nodes, mark_mesh_nodes, plastic_strain_tensor
 from puzzle.mesh.mesh import Mesh
 from puzzle.model.schema import Project, Study
 from puzzle.results.model import Results
@@ -37,7 +38,8 @@ class CalculixAdapter(SolverAdapter):
         | REMOTE_FEATURES
         | RIGID_REMOTE_FEATURES
         | SUPPORT_FEATURES
-        | PRETENSION_FEATURES,
+        | PRETENSION_FEATURES
+        | LIFTING_FEATURES,
         feature_steps=True,
         amplitude_features=frozenset({"heat_flux"}),  # ADR 0037, benchmarked
         axes_features=frozenset(
@@ -71,7 +73,7 @@ class CalculixAdapter(SolverAdapter):
             path.with_suffix(".elastic.json").write_text(json.dumps(elastic))
         # Helper nodes (rigid bodies, spring grounds) come after the mesh's; the reader
         # leaves them out of the results.
-        path.with_suffix(".meshnodes").write_text(str(int(mesh.node_ids.max())))
+        mark_mesh_nodes(path, mesh)
         return path
 
     def command(self, input_file: Path) -> list[str]:
@@ -82,16 +84,7 @@ class CalculixAdapter(SolverAdapter):
         if not frd.exists():
             raise FileNotFoundError(f"CalculiX wrote no results ({frd.name}); see the solver log")
         results = read_frd(frd)
-        last = input_file.with_suffix(".meshnodes")
-        if last.exists():  # drop the helper nodes Puzzle added past the mesh's (ADR 0037)
-            top = int(last.read_text())
-            for step in results.steps:
-                for name, f in list(step.fields.items()):
-                    if f.location == "node" and f.ids.size and f.ids.max() > top:
-                        keep = f.ids <= top
-                        step.fields[name] = type(f)(
-                            f.name, f.location, f.components, f.ids[keep], f.values[keep]
-                        )
+        drop_helper_nodes(results, input_file)  # rigid-body nodes, grounds, twins
         elastic = input_file.with_suffix(".elastic.json")
         if elastic.exists():  # CalculiX writes PEEQ only: the tensor comes from S and E
             sets = json.loads(elastic.read_text())
