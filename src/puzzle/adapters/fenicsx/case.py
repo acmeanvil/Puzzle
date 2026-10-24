@@ -22,6 +22,9 @@ from puzzle.adapters.common import (
     initial_temperature,
     match_points,
     refuse_large_deflection,
+    remote_load,
+    remote_values,
+    rigid_motion,
     surface_area,
     thermal_tables,
     time_scheme,
@@ -146,6 +149,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
                     else {}
                 ),
                 **({"load": _body_load(f)} if f.type in BODY_LOADS else {}),
+                **(_remote(f, mesh) if f.type in ("remote_force", "remote_displacement") else {}),
                 **(
                     {"amplitude": [list(p) for p in project.get(f.amplitude, Amplitude).points]}
                     if f.amplitude
@@ -290,3 +294,14 @@ def _body_load(f) -> dict:
         "centre": list(load.centre),
         "axis": list(load.axis),
     }
+
+
+def _remote(f, mesh) -> dict:
+    """A remote load's field for study.py (ADR 0037): the traction's uniform part, twist
+    and centroid, or the rigid motion's translation, rotation and point."""
+    group = mesh.groups[f.selection]
+    if f.type == "remote_force":
+        load = remote_load(group, mesh, *remote_values(f))
+        return {"traction": [load.uniform.tolist(), load.twist.tolist(), load.centroid.tolist()]}
+    motion = rigid_motion(f, group, mesh)
+    return {"motion": [motion.u0.tolist(), motion.theta.tolist(), motion.point.tolist()]}

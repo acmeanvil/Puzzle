@@ -22,6 +22,7 @@ from pathlib import Path
 from puzzle.adapters.base import (
     ELECTROMAGNETIC_FEATURES,
     PDE_FEATURES,
+    REMOTE_FEATURES,
     STRUCTURAL_FEATURES,
     THERMAL_FEATURES,
     Capabilities,
@@ -47,7 +48,11 @@ class FenicsxAdapter(SolverAdapter):
             "heat_transfer": frozenset({"stationary", "transient"}),
             "solid_mechanics": frozenset({"stationary", "modal"}),
         },
-        features=ELECTROMAGNETIC_FEATURES | THERMAL_FEATURES | STRUCTURAL_FEATURES | PDE_FEATURES,
+        features=ELECTROMAGNETIC_FEATURES
+        | THERMAL_FEATURES
+        | STRUCTURAL_FEATURES
+        | PDE_FEATURES
+        | REMOTE_FEATURES,
         amplitude_features=frozenset({"heat_flux"}),  # ADR 0037, benchmarked
         contacts=frozenset({"bonded_conformal"}),
         couplings=frozenset({"joule_heating", "thermal_expansion"}),

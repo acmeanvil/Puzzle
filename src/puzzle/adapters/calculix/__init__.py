@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 
 from puzzle.adapters.base import (
+    REMOTE_FEATURES,
+    RIGID_REMOTE_FEATURES,
     STRUCTURAL_FEATURES,
     THERMAL_FEATURES,
     Capabilities,
@@ -28,7 +30,7 @@ class CalculixAdapter(SolverAdapter):
             "solid_mechanics": frozenset({"stationary", "transient", "modal"}),
             "heat_transfer": frozenset({"stationary", "transient"}),
         },
-        features=STRUCTURAL_FEATURES | THERMAL_FEATURES,
+        features=STRUCTURAL_FEATURES | THERMAL_FEATURES | REMOTE_FEATURES | RIGID_REMOTE_FEATURES,
         amplitude_features=frozenset({"heat_flux"}),  # ADR 0037, benchmarked
         # Nonconformal bonded maps to *TIE; the others to *CONTACT PAIR (+ *FRICTION).
         contacts=frozenset(

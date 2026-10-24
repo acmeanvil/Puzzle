@@ -15,12 +15,16 @@ import numpy as np
 
 from puzzle.adapters.common import (
     BODY_LOADS,
+    HOLDING,
     STRUCTURAL,
     THERMAL,
     InputError,
     body_load,
     check_contacts,
     initial_temperature,
+    remote_load,
+    remote_values,
+    rigid_motion,
     surface_area,
     thermal_tables,
     time_scheme,
@@ -78,7 +82,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         f for ph in comp.physics if ph.type in solved for f in ph.features if f.type in wanted
     ]
     if step.type == "modal":
-        features = [f for f in features if f.type in ("fixed", "displacement")]
+        features = [f for f in features if f.type in HOLDING]
     if not comp.materials:
         raise InputError(f"component '{comp.name}' has no material assignments")
     ties = [c for c in comp.contacts if c.capability == "bonded_nonconformal"]
@@ -164,10 +168,15 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             f"VALE_REF={_reference(comp):.12g})"
         )
     out.append(f"mater = AFFE_MATERIAU(MAILLAGE=mesh, AFFE=({', '.join(assignments)},){varc})")
+    charges = ["load"]
     if thermal:  # loads following an amplitude get their own charge (ADR 0037)
         out += _thermal_loads(project, features, names, mesh)
     else:
         out.append(_loads(features, names, mesh, thermal, ties))
+        remote = _remote_loads(features, names, mesh)  # ADR 0037: fields of x, y, z
+        if remote:
+            out += remote
+            charges.append("loadf")
 
     if thermal:
         out += [
@@ -208,7 +217,9 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             # Ramp the loads: friction and large deflection depend on the loading path.
             "ramp = DEFI_FONCTION(NOM_PARA='INST', VALE=(0.0, 0.0, 1.0, 1.0))",
             "res = STAT_NON_LINE(MODELE=model, CHAM_MATER=mater, "
-            "EXCIT=_F(CHARGE=load, FONC_MULT=ramp), "
+            "EXCIT=("
+            + ", ".join(f"_F(CHARGE={c}, FONC_MULT=ramp)" for c in charges)
+            + ",), "
             + ("CONTACT=contact, " if touching else "")
             + behaviour
             # As Code_Aster's 3D contact validation (ssnv128): tangent every iteration.
@@ -234,7 +245,9 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         ]
     else:
         out += [
-            "res = MECA_STATIQUE(MODELE=model, CHAM_MATER=mater, EXCIT=_F(CHARGE=load))",
+            "res = MECA_STATIQUE(MODELE=model, CHAM_MATER=mater, EXCIT=("
+            + ", ".join(f"_F(CHARGE={c})" for c in charges)
+            + ",))",
             "res = CALC_CHAMP(reuse=res, RESULTAT=res, CONTRAINTE=('SIGM_NOEU',), "
             "FORCE=('REAC_NODA',))",
             _table("res", "DEPL", "displacement"),
@@ -344,7 +357,7 @@ def _check_friction(contacts, features, mesh: Mesh) -> None:
             "CalculiX runs frictional contact on quadratic meshes",
             code="unsupported",
         )
-    held = [f for f in features if f.type in ("fixed", "displacement")]
+    held = [f for f in features if f.type in HOLDING]
     for c in frictional:
         slave = mesh.groups[c.source].node_ids
         clash = [
@@ -452,6 +465,48 @@ def _ther_nl(index: int, m: Material, tables: dict) -> list[str]:
     ]
 
 
+def _cross_formulas(name: str, base, axis, origin) -> tuple[list[str], list[str]]:
+    """FORMULEs for the field base + axis x (x - origin), one per component, and their
+    names; Code_Aster evaluates them at each node (X, Y, Z)."""
+    a, b, c = (np.asarray(v, float) for v in (base, axis, origin))
+    d = [f"({w}-({c[i]:.12g}))" for i, w in enumerate("XYZ")]
+    exprs = [
+        f"{a[0]:.12g}+({b[1]:.12g})*{d[2]}-({b[2]:.12g})*{d[1]}",
+        f"{a[1]:.12g}+({b[2]:.12g})*{d[0]}-({b[0]:.12g})*{d[2]}",
+        f"{a[2]:.12g}+({b[0]:.12g})*{d[1]}-({b[1]:.12g})*{d[0]}",
+    ]
+    lines = [
+        f"{name}{i} = FORMULE(VALE='{e}', NOM_PARA=('X', 'Y', 'Z'))" for i, e in enumerate(exprs)
+    ]
+    return lines, [f"{name}{i}" for i in range(3)]
+
+
+def _remote_loads(features, names, mesh) -> list[str]:
+    """`loadf`: remote forces as their RBE3-equivalent traction (FORCE_FACE of x, y, z)
+    and remote displacements as a rigid motion (DDL_IMPO of x, y, z), ADR 0037."""
+    lines, faces, imposed = [], [], []
+    for k, f in enumerate(features):
+        g = names.get(f.selection)
+        if f.type in ("remote_force", "remote_force_rigid"):
+            load = remote_load(mesh.groups[f.selection], mesh, *remote_values(f))
+            more, (fx, fy, fz) = _cross_formulas(f"rt{k}_", load.uniform, load.twist, load.centroid)
+            lines += more
+            faces.append(f"_F(GROUP_MA='{g}', FX={fx}, FY={fy}, FZ={fz})")
+        elif f.type == "remote_displacement":
+            motion = rigid_motion(f, mesh.groups[f.selection], mesh)
+            more, (ux, uy, uz) = _cross_formulas(f"ru{k}_", motion.u0, motion.theta, motion.point)
+            lines += more
+            imposed.append(f"_F(GROUP_MA='{g}', DX={ux}, DY={uy}, DZ={uz})")
+    if not faces and not imposed:
+        return []
+    call = "loadf = AFFE_CHAR_MECA_F(MODELE=model"
+    if faces:
+        call += f", FORCE_FACE=({', '.join(faces)},)"
+    if imposed:
+        call += f", DDL_IMPO=({', '.join(imposed)},)"
+    return [*lines, call + ")"]
+
+
 def _thermal_loads(project, features, names, mesh) -> list[str]:
     """`excit`: the thermal charges, those following an amplitude multiplied by it
     (DEFI_FONCTION of time, held constant outside its points)."""
@@ -506,7 +561,7 @@ def _loads(
     features: list[Feature], names: dict[str, str], mesh: Mesh, thermal: bool, ties=()
 ) -> str:
     imposed, face_force, pressure, temperature, flux, exchange = [], [], [], [], [], []
-    gravity, rotation = [], []
+    gravity, rotation, rigid = [], [], []
     tied = [
         f"_F(GROUP_MA_MAIT='{names[c.target.split('/', 1)[0]]}', "
         f"GROUP_MA_ESCL='{names[c.source]}', TYPE_RACCORD='MASSIF')"
@@ -526,6 +581,8 @@ def _loads(
             face_force.append(f"_F(GROUP_MA='{g}', {comps})")
         elif f.type == "pressure":
             pressure.append(f"_F(GROUP_MA='{g}', PRES={v['p']:.12g})")
+        elif f.type == "remote_force_rigid":  # the face moves as one (its load: loadf)
+            rigid.append(f"_F(GROUP_MA='{g}')")
         elif f.type in BODY_LOADS:  # ADR 0037: per volume, through the density
             load = body_load(f)
             if load.uniform is not None:
@@ -565,6 +622,7 @@ def _loads(
         + kw("FORCE_FACE", face_force)
         + kw("PRES_REP", pressure)
         + kw("PESANTEUR", gravity)
+        + kw("LIAISON_SOLIDE", rigid)
         + kw("ROTATION", rotation)
         + kw("LIAISON_MAIL", tied)
         + ")"

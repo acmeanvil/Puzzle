@@ -1036,7 +1036,8 @@ class Project:
         if not isinstance(comp, Component):
             return []
         solid = [p for p in comp.physics if p.type == "solid_mechanics"]
-        held = any(f.type in ("fixed", "displacement") for p in solid for f in p.features)
+        holding = ("fixed", "displacement", "remote_displacement")
+        held = any(f.type in holding for p in solid for f in p.features)
         steps = [
             s
             for s in study.solve_steps()

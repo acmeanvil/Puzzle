@@ -36,6 +36,7 @@ import numpy as np
 
 from puzzle.adapters.base import (
     ELECTROMAGNETIC_FEATURES,
+    REMOTE_FEATURES,
     STRUCTURAL_FEATURES,
     THERMAL_FEATURES,
     Capabilities,
@@ -64,7 +65,10 @@ class ElmerAdapter(SolverAdapter):
             "magnetic_fields": frozenset({"stationary", "transient", "frequency_domain"}),
             "electromagnetic_waves": frozenset({"frequency_domain"}),
         },
-        features=STRUCTURAL_FEATURES | THERMAL_FEATURES | ELECTROMAGNETIC_FEATURES,
+        features=STRUCTURAL_FEATURES
+        | THERMAL_FEATURES
+        | ELECTROMAGNETIC_FEATURES
+        | REMOTE_FEATURES,
         amplitude_features=frozenset({"heat_flux"}),  # ADR 0037, benchmarked
         contacts=frozenset({"bonded_conformal", "bonded_nonconformal"}),
         experimental=frozenset({"frictionless", "frictional", "rough"}),

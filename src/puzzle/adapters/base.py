@@ -33,6 +33,10 @@ FLUID_FEATURES = frozenset(
     {"velocity_inlet", "mass_flow_inlet", "pressure_outlet", "wall", "symmetry"}
 )
 PDE_FEATURES = frozenset({"dirichlet", "neumann"})
+# Remote loads (ADR 0037): the deformable force and the rigid displacement are tractions
+# and prescribed fields every solver takes; a rigid force needs constraint equations.
+REMOTE_FEATURES = frozenset({"remote_force", "remote_displacement"})
+RIGID_REMOTE_FEATURES = frozenset({"remote_force_rigid"})
 
 
 @dataclass(frozen=True)

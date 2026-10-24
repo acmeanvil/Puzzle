@@ -123,6 +123,16 @@ def symbols(component, mesh: Mesh, entities_of, only: int | None = None, per_fac
                     out.append(Glyphs(name, "arrow", RED, pts.mean(axis=0)[None], d[None]))
             elif f.type in ("gravity", "acceleration", "rotation"):
                 out.append(_body_symbol(f, name, mesh))
+            elif f.type in ("remote_force", "remote_force_rigid") and len(pts):
+                from puzzle.adapters.common import remote_values
+
+                force, moment, point = remote_values(f)
+                at = (point if point is not None else pts.mean(axis=0))[None]
+                v, colour = (force, RED) if np.any(force) else (moment, PURPLE)
+                if np.any(v):
+                    out.append(Glyphs(name, "arrow", colour, at, (v / np.linalg.norm(v))[None]))
+            elif f.type == "remote_displacement":
+                out.append(Glyphs(name, "tint", BLUE, faces=faces))
             elif f.type in ("pressure", "heat_flux", "velocity_inlet", "pressure_outlet"):
                 key = {"pressure": "p", "heat_flux": "q", "velocity_inlet": "U"}.get(f.type)
                 value = f.values[key].to_si() if key and key in f.values else 1.0

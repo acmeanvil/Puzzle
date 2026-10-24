@@ -19,7 +19,9 @@ FACES = {
 }
 
 BODY_LOADS = {"gravity", "acceleration", "rotation"}  # ADR 0037: on bodies, per volume
-STRUCTURAL = {"fixed", "displacement", "force", "pressure"} | BODY_LOADS
+REMOTE = {"remote_force", "remote_force_rigid", "remote_displacement"}  # ADR 0037: on faces
+STRUCTURAL = {"fixed", "displacement", "force", "pressure"} | BODY_LOADS | REMOTE
+HOLDING = ("fixed", "displacement", "remote_displacement")  # kept as constraints in modal
 THERMAL = {"temperature", "heat_flux", "convection"}
 FLUID = {"velocity_inlet", "mass_flow_inlet", "pressure_outlet", "wall", "symmetry"}
 ELECTROSTATIC = {"electric_potential", "ground", "surface_charge"}
@@ -326,3 +328,137 @@ def body_load_on_material(comp, f, solver: str) -> None:
             "has none (use the material's body selection)",
             code="unsupported",
         )
+
+
+# --- remote loads (ADR 0037) -------------------------------------------------------------
+
+# A 6-point rule on the reference triangle, exact to degree 4: (xi, eta, weight).
+_TRI_RULE = [
+    (0.445948490915965, 0.445948490915965, 0.223381589678011),
+    (0.108103018168070, 0.445948490915965, 0.223381589678011),
+    (0.445948490915965, 0.108103018168070, 0.223381589678011),
+    (0.091576213509771, 0.091576213509771, 0.109951743655322),
+    (0.816847572980459, 0.091576213509771, 0.109951743655322),
+    (0.091576213509771, 0.816847572980459, 0.109951743655322),
+]
+
+
+def _shape(element: str, xi: float, eta: float):
+    """Gmsh-ordered shape functions of a triangle face and their derivatives in xi and
+    eta: (N, dN/dxi, dN/deta), tri3 or tri6 (corners, then mid-edges)."""
+    z = 1.0 - xi - eta
+    if element == "tri3":
+        return np.array([z, xi, eta]), np.array([-1.0, 1, 0]), np.array([-1.0, 0, 1])
+    n = np.array(
+        [z * (2 * z - 1), xi * (2 * xi - 1), eta * (2 * eta - 1), 4 * z * xi, 4 * xi * eta,
+         4 * eta * z]
+    )  # fmt: skip
+    dxi = np.array([1 - 4 * z, 4 * xi - 1, 0.0, 4 * (z - xi), 4 * eta, -4 * eta])
+    deta = np.array([1 - 4 * z, 0.0, 4 * eta - 1, -4 * xi, 4 * xi, 4 * (z - eta)])
+    return n, dxi, deta
+
+
+def _quadrature(group, mesh: Mesh):
+    """Quadrature over the selection's faces on their own (curved) geometry: for each
+    block and point, (connectivity, N, positions (ne, 3), areas dA (ne,))."""
+    blocks = surface_blocks(group, mesh)
+    if not blocks:
+        raise InputError("a remote load needs a face selection")
+    for b in blocks:
+        if b.element not in ("tri3", "tri6"):
+            raise InputError(f"a remote load on {b.element} faces is not supported yet")
+        nodes = mesh.node_coords(b.connectivity.ravel()).reshape(len(b.connectivity), -1, 3)
+        for xi, eta, w in _TRI_RULE:
+            n, dxi, deta = _shape(b.element, xi, eta)
+            x = np.einsum("k,eki->ei", n, nodes)
+            jac = np.cross(np.einsum("k,eki->ei", dxi, nodes), np.einsum("k,eki->ei", deta, nodes))
+            yield b.connectivity, n, x, 0.5 * w * np.linalg.norm(jac, axis=1)
+
+
+def _face_properties(group, mesh: Mesh):
+    """Area, centroid and the second-moment tensor ∫ r rᵀ dA about the centroid."""
+    pts = list(_quadrature(group, mesh))
+    area = sum(float(da.sum()) for *_, da in pts)
+    centroid = sum((x * da[:, None]).sum(axis=0) for _, _, x, da in pts) / area
+    rr = sum(np.einsum("ei,ej,e->ij", x - centroid, x - centroid, da) for _, _, x, da in pts)
+    return area, centroid, rr
+
+
+@dataclass(frozen=True)
+class RemoteLoad:
+    """A force and moment at a point, spread over a face as a distributing coupling
+    (RBE3, area-weighted) spreads them: the linear traction
+        t(x) = F/A + (K M_c) x (x - c),
+    with c the face's centroid, A its area, M_c the moment about c (M + (p - c) x F) and
+    K the inverse of the face's polar second-moment tensor  ∫ (|r|² I - r rᵀ) dA, all
+    on the faces' own curved geometry. Its resultant is F and its moment about c is M_c,
+    exactly."""
+
+    centroid: np.ndarray
+    area: float
+    uniform: np.ndarray  # F / A
+    twist: np.ndarray  # K M_c
+
+    def at(self, xyz) -> np.ndarray:
+        r = np.asarray(xyz, float) - self.centroid
+        return self.uniform + np.cross(self.twist, r)
+
+
+def remote_load(group, mesh: Mesh, force, moment, point=None) -> RemoteLoad:
+    """The traction that carries `force` and `moment` (at `point`; None: the centroid)."""
+    area, centroid, rr = _face_properties(group, mesh)
+    polar = np.trace(rr) * np.eye(3) - rr
+    force = np.asarray(force, float)
+    m_c = np.asarray(moment, float)
+    if point is not None:
+        m_c = m_c + np.cross(np.asarray(point, float) - centroid, force)
+    twist = np.linalg.pinv(polar) @ m_c  # pinv: a straight edge has no twist about itself
+    return RemoteLoad(centroid, area, force / area, twist)
+
+
+def nodal_traction(group, mesh: Mesh, traction) -> dict[int, np.ndarray]:
+    """Consistent nodal forces ∫ N_k t dA of a traction field `traction(xyz) -> (n, 3)`
+    over the selection's faces (tri3, tri6), node id -> force."""
+    out: dict[int, np.ndarray] = {}
+    for conn, n, x, da in _quadrature(group, mesh):
+        t = traction(x) * da[:, None]
+        for k, column in enumerate(conn.T):
+            for nid, f in zip(column, n[k] * t, strict=True):
+                out[int(nid)] = out.get(int(nid), 0.0) + f
+    return out
+
+
+def remote_values(f) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+    """A remote force feature's force, moment and point (None: the face centroid)."""
+    v = {k: q.to_si() for k, q in f.values.items()}
+    force = np.array([v.get(f"F{a}", 0.0) for a in "xyz"])
+    moment = np.array([v.get(f"M{a}", 0.0) for a in "xyz"])
+    point = np.array([v[f"p{a}"] for a in "xyz"]) if all(f"p{a}" in v for a in "xyz") else None
+    return force, moment, point
+
+
+@dataclass(frozen=True)
+class RigidMotion:
+    """A prescribed rigid motion of a face: u(x) = u0 + theta x (x - p), small rotations."""
+
+    u0: np.ndarray
+    theta: np.ndarray
+    point: np.ndarray
+
+    def at(self, xyz) -> np.ndarray:
+        return self.u0 + np.cross(self.theta, np.asarray(xyz, float) - self.point)
+
+
+def rigid_motion(f, group, mesh: Mesh) -> RigidMotion:
+    """A remote displacement: every component prescribed (missing ones are zero), about
+    its point (default: the face's centroid)."""
+    v = {k: q.to_si() for k, q in f.values.items()}
+    if all(f"p{a}" in v for a in "xyz"):
+        point = np.array([v[f"p{a}"] for a in "xyz"])
+    else:
+        point = _face_properties(group, mesh)[1]
+    return RigidMotion(
+        np.array([v.get(f"u{a}", 0.0) for a in "xyz"]),
+        np.array([v.get(f"r{a}", 0.0) for a in "xyz"]),
+        point,
+    )

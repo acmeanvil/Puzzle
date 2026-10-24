@@ -27,6 +27,10 @@ class FeatureSpec:
 
 XYZ_FORCE = {"x": (0.0, "N"), "y": (0.0, "N"), "z": (0.0, "N")}
 XYZ_DISP = {"x": (0.0, "mm"), "y": (0.0, "mm"), "z": (0.0, "mm")}
+REMOTE_FM = {
+    **{f"F{a}": (0.0, "N") for a in "xyz"},
+    **{f"M{a}": (0.0, "N*m") for a in "xyz"},
+}
 
 CATALOG: dict[str, list[FeatureSpec]] = {
     "solid_mechanics": [
@@ -34,6 +38,19 @@ CATALOG: dict[str, list[FeatureSpec]] = {
         FeatureSpec("displacement", "Prescribed displacement", values=XYZ_DISP),
         FeatureSpec("force", "Force (total over the face)", values=XYZ_FORCE),
         FeatureSpec("pressure", "Pressure", values={"p": (0.0, "MPa")}),
+        # Remote loads (ADR 0037): a force and moment at a point (default: the face's
+        # centroid; add px, py, pz to move it), carried to the face deformably (RBE3)
+        # or by a rigid face; a remote displacement moves the face rigidly.
+        FeatureSpec("remote_force", "Remote force and moment (deformable)", values=REMOTE_FM),
+        FeatureSpec("remote_force_rigid", "Remote force and moment (rigid face)", values=REMOTE_FM),
+        FeatureSpec(
+            "remote_displacement",
+            "Remote displacement (rigid face)",
+            values={
+                **{f"u{a}": (0.0, "mm") for a in "xyz"},
+                **{f"r{a}": (0.0, "deg") for a in "xyz"},
+            },
+        ),
         # Body loads (ADR 0037): on a body, per volume, through the material's density.
         FeatureSpec(
             "gravity",

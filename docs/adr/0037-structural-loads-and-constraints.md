@@ -104,7 +104,31 @@ New features in `model/catalog.py` (structural physics), each typed with readabl
   - a feature's Amplitude dropdown;
   - body-load arrows (ADR 0035);
   - the outline lists amplitudes and which features follow them.
-- **Not yet** (the second half of this ADR): remote loads, elastic supports, bolt pretension, local coordinate systems, and amplitudes on structural loads (with ADR 0041).
+## Built: remote loads (2026-10-23)
+
+- **Deformable remote force and moment** (`remote_force`): F and M at a point (default: the face's centroid) become the traction an area-weighted distributing coupling (RBE3) gives, t(x) = F/A + (K M_c) × (x − c). K inverts the face's polar second-moment tensor, all integrated on the faces' own curved geometry (`adapters.common.remote_load`).
+  - It is solver-neutral, needing no coupling elements:
+    - CalculiX: consistent nodal forces;
+    - Code_Aster: FORCE_FACE FORMULEs;
+    - Elmer: MATC tractions;
+    - FEniCSx: a UFL traction.
+  - Integrating on flat corner triangles first left the moment about 2 % short on a round face (the polygon's polar moment). Code_Aster, integrating its curved faces, then read +2 %; the curved integration fixed it.
+- **Remote displacement** (`remote_displacement`, rigid face): all six components, small rotations, u = u0 + θ × (x − p) as a prescribed field on every solver. Modal steps keep it as a constraint.
+- **Rigid remote force** (`remote_force_rigid`):
+  - CalculiX: `*RIGID BODY` with reference and rotation nodes added past the mesh's ids;
+  - Code_Aster: `LIAISON_SOLIDE` plus the same traction;
+  - Elmer and FEniCSx refuse it.
+- **Benchmarks** (`tests/integration/test_remote_loads.py`), a steel shaft in torsion against Saint-Venant:
+
+  | Check | CalculiX | Code_Aster | Elmer | FEniCSx |
+  | --- | --- | --- | --- | --- |
+  | Remote moment: mid-length shear | +0.04 % | +0.04 % | +0.07 % | +0.06 % |
+  | Prescribed rotation: shear | +0.04 % | +0.04 % | +0.07 % | +0.06 % |
+  | Rigid moment: twist | 0.00 % | 0.00 % | refused | refused |
+
+- **Symbols:** a remote force shows as an arrow at its point, and a remote displacement as a blue tint.
+
+- **Not yet** (the rest of this ADR): elastic supports, bolt pretension, local coordinate systems, and amplitudes on structural loads (with ADR 0041).
 
 ## Consequences
 

@@ -25,6 +25,7 @@ import numpy as np
 from puzzle.adapters.base import refuse_inputs
 from puzzle.adapters.common import (
     BODY_LOADS,
+    HOLDING,
     STRUCTURAL,
     THERMAL,
     FaceLookup,
@@ -32,6 +33,10 @@ from puzzle.adapters.common import (
     body_load,
     check_contacts,
     initial_temperature,
+    nodal_traction,
+    remote_load,
+    remote_values,
+    rigid_motion,
     surface_area,
     surface_blocks,
     thermal_tables,
@@ -121,6 +126,8 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
 
     out += _materials(project, comp, mesh, expansion=thermal_load is not None)
     out += _amplitudes(project, comp)
+    rigid = _rigid_nodes(comp, mesh)
+    out += _rigid_bodies(rigid)
     out += _contacts(project, comp, mesh, faces)
 
     solve_steps = study.solve_steps()
@@ -359,8 +366,9 @@ def _step(
         f for ph in comp.physics if ph.type in solved for f in ph.features if f.type in wanted
     ]
     if step.type == "modal":
-        features = [f for f in features if f.type in ("fixed", "displacement")]
-    out += _features(features, mesh, faces, op, _amplitude_names(comp))
+        features = [f for f in features if f.type in HOLDING]
+    rigid = _rigid_nodes(comp, mesh)  # the same ids the model section gave them
+    out += _features(features, mesh, faces, op, _amplitude_names(comp), rigid)
     if thermal_load is not None and solved == {"solid_mechanics"} and step.type != "modal":
         out.append("*TEMPERATURE")
         out += [
@@ -388,8 +396,45 @@ def _amplitudes(project: Project, comp: Component) -> list[str]:
     return out
 
 
+def _rigid_nodes(comp: Component, mesh: Mesh) -> dict:
+    """Each rigid remote force's reference and rotation nodes (new ids past the mesh's)
+    at its point: id(feature) -> (selection, ref, rot, point)."""
+    from puzzle.adapters.common import remote_load
+
+    out, next_id = {}, int(mesh.node_ids.max()) + 1
+    for ph in comp.physics:
+        for f in ph.features:
+            if f.type != "remote_force_rigid":
+                continue
+            group = mesh.groups.get(f.selection)
+            if group is None:
+                raise InputError(f"{f.type} on '{f.selection}': no such selection in the mesh")
+            force, moment, point = remote_values(f)
+            if point is None:
+                point = remote_load(group, mesh, force, moment).centroid
+            out[id(f)] = (f.selection, next_id, next_id + 1, point)
+            next_id += 2
+    return out
+
+
+def _rigid_bodies(rigid: dict) -> list[str]:
+    """*RIGID BODY: the face's nodes follow the reference node (translations) and the
+    rotation node (whose displacements are the rotations)."""
+    out = []
+    for selection, ref, rot, point in rigid.values():
+        xyz = ", ".join(f"{c:.13g}" for c in point)
+        out += ["*NODE", f"{ref}, {xyz}", f"{rot}, {xyz}"]
+        out.append(f"*RIGID BODY, NSET={set_name('N', selection)}, REF NODE={ref}, ROT NODE={rot}")
+    return out
+
+
 def _features(
-    features: list[Feature], mesh: Mesh, faces: FaceLookup, op: str, amplitudes=None
+    features: list[Feature],
+    mesh: Mesh,
+    faces: FaceLookup,
+    op: str,
+    amplitudes=None,
+    rigid=None,
 ) -> list[str]:
     """The step's load and boundary cards; a feature following an amplitude goes in a
     card of its own with AMPLITUDE=."""
@@ -397,7 +442,7 @@ def _features(
     cards: dict[tuple[str, str | None], list[str]] = {}
     for f in features:
         amp = amplitudes.get(f.amplitude) if f.amplitude else None
-        rows = _feature_rows(f, mesh, faces)
+        rows = _feature_rows(f, mesh, faces, (rigid or {}).get(id(f)))
         for card, lines in rows.items():
             cards.setdefault((card, amp), []).extend(lines)
     out: list[str] = []
@@ -410,7 +455,7 @@ def _features(
     return out
 
 
-def _feature_rows(f: Feature, mesh: Mesh, faces: FaceLookup) -> dict[str, list[str]]:
+def _feature_rows(f: Feature, mesh: Mesh, faces: FaceLookup, rigid=None) -> dict[str, list[str]]:
     boundary, cload, dload, dflux, film = [], [], [], [], []
     group = mesh.groups.get(f.selection)
     if group is None:
@@ -431,6 +476,23 @@ def _feature_rows(f: Feature, mesh: Mesh, faces: FaceLookup) -> dict[str, list[s
         cload += _nodal_forces(group, mesh, [v.get(a, 0.0) for a in "xyz"])
     elif f.type == "pressure":
         dload += [f"{e}, P{n}, {v['p']:.10g}" for e, n in _element_faces(group, mesh, faces)]
+    elif f.type == "remote_force":  # an RBE3-equivalent traction (ADR 0037)
+        load = remote_load(group, mesh, *remote_values(f))
+        for node, force in sorted(nodal_traction(group, mesh, load.at).items()):
+            cload += [f"{node}, {d + 1}, {force[d]:.10g}" for d in range(3) if force[d]]
+    elif f.type == "remote_force_rigid" and rigid is not None:  # on the rigid body's nodes
+        force, moment, _ = remote_values(f)
+        _, ref, rot, _ = rigid
+        cload += [f"{ref}, {d + 1}, {force[d]:.10g}" for d in range(3) if force[d]]
+        cload += [f"{rot}, {d + 1}, {moment[d]:.10g}" for d in range(3) if moment[d]]
+    elif f.type == "remote_displacement":  # the face moves rigidly, every component
+        motion = rigid_motion(f, group, mesh)
+        u = motion.at(mesh.node_coords(group.node_ids))
+        boundary += [
+            f"{n}, {d + 1}, {d + 1}, {u[i, d]:.10g}"
+            for i, n in enumerate(group.node_ids)
+            for d in range(3)
+        ]
     elif f.type in BODY_LOADS:  # per volume, on the body's elements (ADR 0037)
         load, elset = body_load(f), set_name("E", f.selection)
         if load.uniform is not None:

@@ -281,6 +281,19 @@ def solve_solid(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
             L += ufl.inner(fem.Constant(msh, traction), v) * ds(tag(f["group"]))
         elif f["type"] == "pressure" and not modal:
             L += -vals["p"] * ufl.inner(n, v) * ds(tag(f["group"]))
+        elif f["type"] == "remote_force" and not modal:  # RBE3-equivalent traction
+            t0, twist, centre = (ufl.as_vector(w) for w in f["traction"])
+            t = t0 + ufl.cross(twist, ufl.SpatialCoordinate(msh) - centre)
+            L += ufl.inner(t, v) * ds(tag(f["group"]))
+        elif f["type"] == "remote_displacement":  # the face moves rigidly
+            u0, theta, point = (np.asarray(w, dtype=float) for w in f["motion"])
+            motion = fem.Function(V)
+            motion.interpolate(
+                lambda X, u0=u0, theta=theta, point=point: (
+                    u0[:, None] + np.cross(theta, (X - point[:, None]).T).T
+                )
+            )
+            bcs.append(fem.dirichletbc(motion, fem.locate_dofs_topological(V, 2, where)))
         elif f["type"] in ("gravity", "acceleration", "rotation") and not modal:
             # A body load (ADR 0037): rho * b per volume over the body's cells.
             load, rho = f["load"], piecewise("density")

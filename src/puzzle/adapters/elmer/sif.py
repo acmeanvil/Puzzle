@@ -17,6 +17,7 @@ import numpy as np
 from puzzle.adapters.common import (
     BODY_LOADS,
     ELECTROSTATIC,
+    HOLDING,
     MAGNETIC,
     STRUCTURAL,
     THERMAL,
@@ -26,6 +27,9 @@ from puzzle.adapters.common import (
     check_contacts,
     initial_temperature,
     refuse_large_deflection,
+    remote_load,
+    remote_values,
+    rigid_motion,
     surface_area,
     thermal_tables,
     time_scheme,
@@ -95,7 +99,7 @@ def write_case(
         f for ph in comp.physics if ph.type in solved for f in ph.features if f.type in wanted
     ]
     if step.type == "modal":
-        features = [f for f in features if f.type in ("fixed", "displacement")]
+        features = [f for f in features if f.type in HOLDING]
     # Coil currents act on bodies; every other feature is a boundary condition.
     coils = [f for f in features if f.type == "coil_current"]
     if len(coils) > 1 or (solved == {"magnetic_fields"} and not coils):
@@ -393,6 +397,12 @@ def _boundary(
                 for d, a in ((1, "x"), (2, "y"), (3, "z"))
                 if v.get(a)
             ]
+        elif f.type == "remote_force":  # its RBE3-equivalent traction (ADR 0037)
+            load = remote_load(mesh.groups[f.selection], mesh, *remote_values(f))
+            out += _matc_cross("Force", load.uniform, load.twist, load.centroid)
+        elif f.type == "remote_displacement":  # a rigid motion of the face
+            motion = rigid_motion(f, mesh.groups[f.selection], mesh)
+            out += _matc_cross("Displacement", motion.u0, motion.theta, motion.point)
         elif f.type == "pressure":
             # Elmer's Normal Force pulls along the outward normal; pressure pushes inward.
             out.append(f"  Normal Force = {-v['p']:.10g}")
@@ -417,6 +427,25 @@ def _boundary(
         elif f.type == "magnetic_insulation":
             out.append("  AV {e} = Real 0")  # flux stays tangential to the boundary
     return out + ["End", ""]
+
+
+def _matc_cross(keyword: str, base, axis, origin) -> list[str]:
+    """`keyword i` = base + axis x (x - origin), component by component, as MATC in the
+    coordinates (a traction, or a rigid displacement)."""
+    a, b, c = (np.asarray(v, float) for v in (base, axis, origin))
+    d = [f"(tx({j})-({c[j]:.10g}))" for j in range(3)]
+    exprs = [
+        f"{a[0]:.10g}+({b[1]:.10g})*{d[2]}-({b[2]:.10g})*{d[1]}",
+        f"{a[1]:.10g}+({b[2]:.10g})*{d[0]}-({b[0]:.10g})*{d[2]}",
+        f"{a[2]:.10g}+({b[0]:.10g})*{d[1]}-({b[1]:.10g})*{d[0]}",
+    ]
+    out = []
+    for i, e in enumerate(exprs, start=1):
+        out += [
+            f"  {keyword} {i} = Variable Coordinate 1, Coordinate 2, Coordinate 3",
+            f'    Real MATC "{e}"',
+        ]
+    return out
 
 
 def _in_time(keyword: str, value: float, points) -> list[str]:
