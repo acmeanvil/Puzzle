@@ -38,6 +38,7 @@ from puzzle.adapters.base import (
     ELECTROMAGNETIC_FEATURES,
     REMOTE_FEATURES,
     STRUCTURAL_FEATURES,
+    SUPPORT_FEATURES,
     THERMAL_FEATURES,
     Capabilities,
     SolverAdapter,
@@ -68,7 +69,8 @@ class ElmerAdapter(SolverAdapter):
         features=STRUCTURAL_FEATURES
         | THERMAL_FEATURES
         | ELECTROMAGNETIC_FEATURES
-        | REMOTE_FEATURES,
+        | REMOTE_FEATURES
+        | SUPPORT_FEATURES,
         amplitude_features=frozenset({"heat_flux"}),  # ADR 0037, benchmarked
         contacts=frozenset({"bonded_conformal", "bonded_nonconformal"}),
         experimental=frozenset({"frictionless", "frictional", "rough"}),

@@ -44,6 +44,7 @@ TINTS = {
     "coil_end": PURPLE,
     "magnetic_insulation": PURPLE,
     "dirichlet": GREY,
+    "elastic_support": BLUE,
     "neumann": GREY,
     "coil_current": PURPLE,
 }

@@ -37,6 +37,7 @@ PDE_FEATURES = frozenset({"dirichlet", "neumann"})
 # and prescribed fields every solver takes; a rigid force needs constraint equations.
 REMOTE_FEATURES = frozenset({"remote_force", "remote_displacement"})
 RIGID_REMOTE_FEATURES = frozenset({"remote_force_rigid"})
+SUPPORT_FEATURES = frozenset({"elastic_support"})  # ADR 0037: stiffness per area
 
 
 @dataclass(frozen=True)

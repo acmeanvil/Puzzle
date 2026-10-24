@@ -128,7 +128,21 @@ New features in `model/catalog.py` (structural physics), each typed with readabl
 
 - **Symbols:** a remote force shows as an arrow at its point, and a remote displacement as a blue tint.
 
-- **Not yet** (the rest of this ADR): elastic supports, bolt pretension, local coordinate systems, and amplitudes on structural loads (with ADR 0041).
+## Built: elastic support (2026-10-23)
+
+- **`elastic_support`:** a stiffness per area, normal (kn) and tangential (kt), on a face.
+  - Written per solver as:
+    - CalculiX: SPRINGA elements to grounded helper nodes along each node's normal and tangents, binned into element sets by stiffness;
+    - Elmer: `Spring i`, on faces along an axis (others refused);
+    - FEniCSx: a Robin term;
+    - Code_Aster: refused for now.
+  - **Spring lumping:** springs are lumped as consistent loads are (∫N dA), so a uniform state is exact. Lumping by ∫N² first read +0.24 %, because it didn't match the pressure's consistent loads.
+- **Two CalculiX fixes on the way:**
+  - A stiffness printed as a bare integer was read as a DOF number. Stiffnesses are now written with an exponent.
+  - Helper nodes past the mesh's (spring grounds, rigid-body nodes) are dropped from the results, using a `.meshnodes` marker that `write_input` leaves.
+- **Benchmark** (`tests/integration/test_elastic_support.py`): a block on a foundation under pressure, top displacement p·h/E + p/kn. CalculiX, Elmer and FEniCSx are exact to 0.000 %.
+
+- **Not yet** (the rest of this ADR): bolt pretension, local coordinate systems, elastic support on Code_Aster, and amplitudes on structural loads (with ADR 0041).
 
 ## Consequences
 

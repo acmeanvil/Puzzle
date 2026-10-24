@@ -128,6 +128,7 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
     out += _amplitudes(project, comp)
     rigid = _rigid_nodes(comp, mesh)
     out += _rigid_bodies(rigid)
+    out += _springs(comp, mesh, int(mesh.node_ids.max()) + 1 + 2 * len(rigid))
     out += _contacts(project, comp, mesh, faces)
 
     solve_steps = study.solve_steps()
@@ -414,6 +415,49 @@ def _rigid_nodes(comp: Component, mesh: Mesh) -> dict:
                 point = remote_load(group, mesh, force, moment).centroid
             out[id(f)] = (f.selection, next_id, next_id + 1, point)
             next_id += 2
+    return out
+
+
+def _springs(comp: Component, mesh: Mesh, first_node: int) -> list[str]:
+    """Elastic supports (ADR 0037) as SPRINGA elements to grounded nodes: one along each
+    face node's normal (kn × its area) and, with kt, two along its tangents. Springs of
+    equal stiffness share an element set (CalculiX takes one stiffness per set)."""
+    from puzzle.adapters.common import support_nodes, support_stiffness
+
+    node, elem = first_node, int(max(b.ids.max() for b in mesh.blocks)) + 1
+    size = float(np.linalg.norm(np.ptp(mesh.coords, axis=0)))
+    nodes, bins = [], {}
+    for ph in comp.physics:
+        for f in ph.features:
+            if f.type != "elastic_support":
+                continue
+            group = mesh.groups.get(f.selection)
+            if group is None:
+                raise InputError(f"elastic support on '{f.selection}': no such selection")
+            kn, kt = support_stiffness(f)
+            ids, areas, normals = support_nodes(group, mesh)
+            xyz = mesh.node_coords(ids)
+            for nid, a, n, p in zip(ids, areas, normals, xyz, strict=True):
+                t1 = np.cross(n, [1.0, 0, 0] if abs(n[0]) < 0.9 else [0, 1.0, 0])
+                t1 /= np.linalg.norm(t1)
+                t2 = np.cross(n, t1)
+                for k, d in ((kn, n), (kt, t1), (kt, t2)):
+                    if k <= 0:
+                        continue
+                    ground = p + 1e-3 * size * d
+                    nodes.append(f"{node}, " + ", ".join(f"{c:.13g}" for c in ground))
+                    key = float(f"{k * a:.9g}")
+                    bins.setdefault(key, []).append(f"{elem}, {nid}, {node}")
+                    node, elem = node + 1, elem + 1
+    if not nodes:
+        return []
+    out = ["*NODE", *nodes, "*NSET, NSET=N_SPRING_GROUND"]
+    out += _chunks(np.arange(first_node, node))
+    for i, (stiffness, rows) in enumerate(sorted(bins.items()), start=1):
+        out += [f"*ELEMENT, TYPE=SPRINGA, ELSET=E_SPRING{i}", *rows]
+        # Always a real with an exponent: a bare integer reads as a DOF number.
+        out += [f"*SPRING, ELSET=E_SPRING{i}", "", f"{stiffness:.10e}"]
+    out += ["*BOUNDARY", "N_SPRING_GROUND, 1, 3, 0."]
     return out
 
 

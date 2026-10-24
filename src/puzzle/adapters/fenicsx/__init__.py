@@ -24,6 +24,7 @@ from puzzle.adapters.base import (
     PDE_FEATURES,
     REMOTE_FEATURES,
     STRUCTURAL_FEATURES,
+    SUPPORT_FEATURES,
     THERMAL_FEATURES,
     Capabilities,
     SolverAdapter,
@@ -52,7 +53,8 @@ class FenicsxAdapter(SolverAdapter):
         | THERMAL_FEATURES
         | STRUCTURAL_FEATURES
         | PDE_FEATURES
-        | REMOTE_FEATURES,
+        | REMOTE_FEATURES
+        | SUPPORT_FEATURES,
         amplitude_features=frozenset({"heat_flux"}),  # ADR 0037, benchmarked
         contacts=frozenset({"bonded_conformal"}),
         couplings=frozenset({"joule_heating", "thermal_expansion"}),

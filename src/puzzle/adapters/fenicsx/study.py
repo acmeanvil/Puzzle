@@ -281,6 +281,12 @@ def solve_solid(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
             L += ufl.inner(fem.Constant(msh, traction), v) * ds(tag(f["group"]))
         elif f["type"] == "pressure" and not modal:
             L += -vals["p"] * ufl.inner(n, v) * ds(tag(f["group"]))
+        elif f["type"] == "elastic_support":  # a foundation: kn normal, kt tangential
+            kn, kt = vals.get("kn", 0.0), vals.get("kt", 0.0)
+            un, vn = ufl.dot(u, n), ufl.dot(v, n)
+            a += kn * un * vn * ds(tag(f["group"]))
+            if kt:
+                a += kt * ufl.inner(u - un * n, v - vn * n) * ds(tag(f["group"]))
         elif f["type"] == "remote_force" and not modal:  # RBE3-equivalent traction
             t0, twist, centre = (ufl.as_vector(w) for w in f["traction"])
             t = t0 + ufl.cross(twist, ufl.SpatialCoordinate(msh) - centre)

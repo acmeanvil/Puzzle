@@ -20,7 +20,7 @@ FACES = {
 
 BODY_LOADS = {"gravity", "acceleration", "rotation"}  # ADR 0037: on bodies, per volume
 REMOTE = {"remote_force", "remote_force_rigid", "remote_displacement"}  # ADR 0037: on faces
-STRUCTURAL = {"fixed", "displacement", "force", "pressure"} | BODY_LOADS | REMOTE
+STRUCTURAL = {"fixed", "displacement", "force", "pressure", "elastic_support"} | BODY_LOADS | REMOTE
 HOLDING = ("fixed", "displacement", "remote_displacement")  # kept as constraints in modal
 THERMAL = {"temperature", "heat_flux", "convection"}
 FLUID = {"velocity_inlet", "mass_flow_inlet", "pressure_outlet", "wall", "symmetry"}
@@ -462,3 +462,39 @@ def rigid_motion(f, group, mesh: Mesh) -> RigidMotion:
         np.array([v.get(f"r{a}", 0.0) for a in "xyz"]),
         point,
     )
+
+
+# --- elastic supports (ADR 0037) -----------------------------------------------------------
+
+
+def support_stiffness(f) -> tuple[float, float]:
+    """An elastic support's normal and tangential stiffness per area (N/m³)."""
+    v = {k: q.to_si() for k, q in f.values.items()}
+    return v.get("kn", 0.0), v.get("kt", 0.0)
+
+
+def support_nodes(group, mesh: Mesh):
+    """Each face node's share of the area and its normal, for springs to ground. Shares
+    are ∫N dA, as consistent loads are, so a uniform state is exact (on tri6 faces that
+    puts them on the mid-edge nodes; corners have none). Normals are area-weighted and
+    point away from the model's centre. -> (node ids, areas, unit normals (n, 3))"""
+    centre = mesh.coords.mean(axis=0)
+    share: dict[int, float] = {}
+    normal: dict[int, np.ndarray] = {}
+    for conn, n, _x, da in _quadrature(group, mesh):
+        # Normal from the corner triangle (the same for every quadrature point).
+        corners = mesh.node_coords(conn[:, :3].ravel()).reshape(-1, 3, 3)
+        nrm = np.cross(corners[:, 1] - corners[:, 0], corners[:, 2] - corners[:, 0])
+        nrm /= np.maximum(np.linalg.norm(nrm, axis=1, keepdims=True), 1e-300)
+        flip = np.einsum("ij,ij->i", nrm, corners.mean(axis=1) - centre) < 0
+        nrm[flip] *= -1
+        weights = n
+        for k, column in enumerate(conn.T):
+            for nid, w, a, d in zip(column, np.full(len(da), weights[k]), da, nrm, strict=True):
+                share[int(nid)] = share.get(int(nid), 0.0) + w * a
+                normal[int(nid)] = normal.get(int(nid), 0.0) + w * a * d
+    ids = np.array([i for i in sorted(share) if share[i] > 1e-12 * max(share.values())])
+    areas = np.array([share[i] for i in ids])
+    normals = np.array([normal[i] for i in ids])
+    normals /= np.maximum(np.linalg.norm(normals, axis=1, keepdims=True), 1e-300)
+    return ids, areas, normals

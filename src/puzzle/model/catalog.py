@@ -51,6 +51,12 @@ CATALOG: dict[str, list[FeatureSpec]] = {
                 **{f"r{a}": (0.0, "deg") for a in "xyz"},
             },
         ),
+        # An elastic foundation (ADR 0037): stiffness per area, normal and tangential.
+        FeatureSpec(
+            "elastic_support",
+            "Elastic support",
+            values={"kn": (1000.0, "N/mm^3"), "kt": (0.0, "N/mm^3")},
+        ),
         # Body loads (ADR 0037): on a body, per volume, through the material's density.
         FeatureSpec(
             "gravity",

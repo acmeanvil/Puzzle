@@ -397,6 +397,8 @@ def _boundary(
                 for d, a in ((1, "x"), (2, "y"), (3, "z"))
                 if v.get(a)
             ]
+        elif f.type == "elastic_support":  # springs to ground per area (ADR 0037)
+            out += _springs(f, mesh)
         elif f.type == "remote_force":  # its RBE3-equivalent traction (ADR 0037)
             load = remote_load(mesh.groups[f.selection], mesh, *remote_values(f))
             out += _matc_cross("Force", load.uniform, load.twist, load.centroid)
@@ -427,6 +429,22 @@ def _boundary(
         elif f.type == "magnetic_insulation":
             out.append("  AV {e} = Real 0")  # flux stays tangential to the boundary
     return out + ["End", ""]
+
+
+def _springs(f: Feature, mesh: Mesh) -> list[str]:
+    """Elmer's Spring i: a stiffness per area along each global axis. A support's normal
+    must lie along an axis to be written that way; others are refused."""
+    from puzzle.adapters.common import support_nodes, support_stiffness
+
+    kn, kt = support_stiffness(f)
+    _, _, normals = support_nodes(mesh.groups[f.selection], mesh)
+    axis = int(np.argmax(np.abs(normals.mean(axis=0))))
+    if not np.allclose(np.abs(normals[:, axis]), 1.0, atol=1e-6):
+        raise InputError(
+            f"Elmer takes an elastic support on a face along an axis; '{f.selection}' isn't",
+            code="unsupported",
+        )
+    return [f"  Spring {d + 1} = {kn if d == axis else kt:.10g}" for d in range(3)]
 
 
 def _matc_cross(keyword: str, base, axis, origin) -> list[str]:

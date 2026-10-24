@@ -9,6 +9,7 @@ from puzzle.adapters.base import (
     REMOTE_FEATURES,
     RIGID_REMOTE_FEATURES,
     STRUCTURAL_FEATURES,
+    SUPPORT_FEATURES,
     THERMAL_FEATURES,
     Capabilities,
     SolverAdapter,
@@ -30,7 +31,11 @@ class CalculixAdapter(SolverAdapter):
             "solid_mechanics": frozenset({"stationary", "transient", "modal"}),
             "heat_transfer": frozenset({"stationary", "transient"}),
         },
-        features=STRUCTURAL_FEATURES | THERMAL_FEATURES | REMOTE_FEATURES | RIGID_REMOTE_FEATURES,
+        features=STRUCTURAL_FEATURES
+        | THERMAL_FEATURES
+        | REMOTE_FEATURES
+        | RIGID_REMOTE_FEATURES
+        | SUPPORT_FEATURES,
         amplitude_features=frozenset({"heat_flux"}),  # ADR 0037, benchmarked
         # Nonconformal bonded maps to *TIE; the others to *CONTACT PAIR (+ *FRICTION).
         contacts=frozenset(
@@ -52,6 +57,9 @@ class CalculixAdapter(SolverAdapter):
         elastic = _elastic_sets(project, study, mesh)
         if elastic:
             path.with_suffix(".elastic.json").write_text(json.dumps(elastic))
+        # Helper nodes (rigid bodies, spring grounds) come after the mesh's; the reader
+        # leaves them out of the results.
+        path.with_suffix(".meshnodes").write_text(str(int(mesh.node_ids.max())))
         return path
 
     def command(self, input_file: Path) -> list[str]:
@@ -62,6 +70,16 @@ class CalculixAdapter(SolverAdapter):
         if not frd.exists():
             raise FileNotFoundError(f"CalculiX wrote no results ({frd.name}); see the solver log")
         results = read_frd(frd)
+        last = input_file.with_suffix(".meshnodes")
+        if last.exists():  # drop the helper nodes Puzzle added past the mesh's (ADR 0037)
+            top = int(last.read_text())
+            for step in results.steps:
+                for name, f in list(step.fields.items()):
+                    if f.location == "node" and f.ids.size and f.ids.max() > top:
+                        keep = f.ids <= top
+                        step.fields[name] = type(f)(
+                            f.name, f.location, f.components, f.ids[keep], f.values[keep]
+                        )
         elastic = input_file.with_suffix(".elastic.json")
         if elastic.exists():  # CalculiX writes PEEQ only: the tensor comes from S and E
             sets = json.loads(elastic.read_text())
