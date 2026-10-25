@@ -399,6 +399,12 @@ def _results(window, menu: QMenu) -> None:
     _add(menu, "Result on a selection…", lambda: tools.add_selection_result(window),
          "Maximum, minimum, average or integral over a selection")  # fmt: skip
     _add(menu, "Path…", lambda: tools.add_path(window), "A result along a straight line")
+    _add(
+        menu,
+        "Linearized stress…",
+        lambda: tools.add_linearized(window),
+        "Membrane, bending and peak stress through a wall (ASME VIII-2)",
+    )
     menu.addSeparator()
     _add(menu, "Section cut", ribbon.cut, "Cut the model by a plane to see inside")
     _add(menu, "Animate", ribbon.animate, "Play the deformation, or the steps")

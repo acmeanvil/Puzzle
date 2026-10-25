@@ -522,9 +522,9 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         for p in s.project.of_type(ResultProbe):
             try:
                 found = evaluate(s.project, store, p)
-                if p.type == "path":  # a summary; probe_path gives the series
-                    found = {k: v for k, v in found.items() if k not in ("points", "values")}
-                    found.pop("distance", None)
+                if p.type in ("path", "linearized"):  # a summary; probe_path: the series
+                    drop = ("points", "values", "distance", "series")
+                    found = {k: v for k, v in found.items() if k not in drop}
                 out.append({"probe": p.name, "type": p.type, **found})
             except PuzzleError as exc:
                 out.append({"probe": p.name, "error": exc.message, "code": exc.code})
@@ -563,7 +563,7 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
 
         s = session()
         probe = resolve(s.project, name, ResultProbe)
-        if probe.type != "path":
+        if probe.type not in ("path", "linearized"):
             raise PuzzleError(f"'{probe.name}' is not a path", code="invalid")
         found = evaluate(s.project, ResultStore(root / RESULTS_DIR), probe)
         return {

@@ -330,6 +330,76 @@ def add_path(window):
     )
 
 
+EQUIVALENTS = [
+    ("von Mises (ASME VIII-2)", "von_mises"),
+    ("Stress intensity, Tresca (older rules)", "tresca"),
+]
+
+
+def default_wall(window, source_id: str) -> tuple[tuple, tuple]:
+    """Through the model's centre across its thinnest side, surface to surface."""
+    mesh, _ = _run_of(window, source_id)
+    lo, hi = mesh.coords.min(axis=0), mesh.coords.max(axis=0)
+    axis = int(np.argmin(hi - lo))
+    start, end = (lo + hi) / 2, (lo + hi) / 2
+    start[axis], end[axis] = lo[axis], hi[axis]
+    return tuple(start), tuple(end)
+
+
+def add_linearized(window):
+    """Stress linearization (ASME VIII-2 Annex 5-A): a line through a wall, its stress
+    split into membrane, bending and peak (Ansys's Linearized Stress)."""
+    from puzzle.settings import length_unit
+
+    if _no_runs(window):
+        return None
+    unit, per_metre = length_unit()
+    choices = sources(window)
+    start, end = default_wall(window, choices[0][1])
+
+    def check(v) -> str | None:
+        a, b = _point(v.get("start", ""), per_metre), _point(v.get("end", ""), per_metre)
+        if a is None or b is None:
+            return "Type each end as three numbers: x, y, z"
+        if np.allclose(a, b):
+            return "The two ends are the same point"
+        if not v.get("samples", "").isdigit() or not 3 <= int(v["samples"]) <= 10000:
+            return "Points through the wall: a whole number from 3 to 10000"
+        return None if v.get("name") else "Give it a name"
+
+    asks = [
+        Ask("source", "Results of", choices=choices),
+        Ask("start", f"From (x, y, z in {unit})", kind="text", default=_shown(start, per_metre)),
+        Ask("end", f"To (x, y, z in {unit})", kind="text", default=_shown(end, per_metre)),
+        Ask("equivalent", "Equivalent stress", choices=EQUIVALENTS),
+        Ask("samples", "Points through the wall", kind="text", default="47"),
+        Ask("name", "Name", kind="text", default="Linearized stress"),
+    ]
+    got = window.ask_form(
+        "Linearized stress",
+        asks,
+        intro="The stress along a straight line through a wall, from one surface to the "
+        "other, split into membrane (the mean), bending (the linear part) and peak (the "
+        "rest), as ASME VIII-2 Annex 5-A classifies it. Put the ends on the two surfaces; "
+        "the default crosses the model's thinnest side at its centre.",
+        check=check,
+    )
+    if got is None:
+        return None
+    return _create(
+        window,
+        {
+            "name": _unique(window, got["name"]),
+            "source": got["source"],
+            "type": "linearized",
+            "point": list(_point(got["start"], per_metre)),
+            "end": list(_point(got["end"], per_metre)),
+            "samples": int(got["samples"]),
+            "equivalent": got["equivalent"],
+        },
+    )
+
+
 def _label(key) -> str:
     from puzzle.post.quantities import label_of
 
@@ -349,6 +419,7 @@ def title(probe: ResultProbe) -> str:
         "selection": ("on a selection", " on "),
         "reaction": ("reaction", "reaction"),
         "path": ("path", "path"),
+        "linearized": ("linearized stress", "lineariz"),
     }[probe.type]
     return probe.name if hint in probe.name.lower() else f"{probe.name} · {word}"
 
@@ -391,6 +462,8 @@ def rows(window, probe: ResultProbe, found: dict) -> dict[str, str]:
             "value in the reaction plot is only its share."
         )
         return out
+    if probe.type == "linearized":
+        return out | linearized_rows(probe, found)
     out["Reads"] = found["label"]
     if probe.type == "selection":
         out["Over"] = probe.selection
@@ -424,3 +497,35 @@ def _is_body(window, probe) -> bool:
         return False
     group = mesh.groups.get(probe.selection)
     return group is not None and group.dim == 3
+
+
+def linearized_rows(probe: ResultProbe, found: dict) -> dict[str, str]:
+    """A linearization's Properties: each part's equivalent at both surfaces, and the
+    components of membrane and bending."""
+    from puzzle.gui.window import _position
+    from puzzle.post.linearize import EQUIVALENTS as NAMES
+    from puzzle.post.linearize import LABELS, ORDER
+
+    unit = found.get("unit") or "pressure"
+    out = {
+        "From": _position(probe.point),
+        "To": _position(probe.end),
+        "Thickness": _value(found["thickness"], "length"),
+        "Equivalent": NAMES[probe.equivalent],
+    }
+    start, end = found["parts"]["start"], found["parts"]["end"]
+    for part in ("membrane", "bending", "membrane_bending", "peak", "total"):
+        a, b = start[part]["equivalent"], end[part]["equivalent"]
+        if part == "membrane":
+            out[LABELS[part]] = _value(a, unit)
+        else:
+            out[LABELS[part]] = f"{_value(a, unit)} (start), {_value(b, unit)} (end)"
+    for part in ("membrane", "bending"):
+        for c in ORDER:
+            out[f"{LABELS[part]} {c.upper()}"] = _value(start[part]["components"][c], unit)
+    out["Note"] = (
+        "Bending components are at the start; at the end they change sign. Components "
+        "are in the global axes; the equivalents don't depend on the axes."
+    )
+    out["Plot"] = "In the Plots tab: total, membrane and membrane + bending along the line"
+    return out

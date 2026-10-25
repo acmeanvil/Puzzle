@@ -84,6 +84,7 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
                 ("Reaction…", tools.add_reaction),
                 ("Result on a selection…", tools.add_selection_result),
                 ("Path…", tools.add_path),
+                ("Linearized stress…", tools.add_linearized),
             ):
                 tool.addAction(text).triggered.connect(lambda _=False, s=slot: s(window))
             add("New combination…", lambda: window.new_derived("linear"))

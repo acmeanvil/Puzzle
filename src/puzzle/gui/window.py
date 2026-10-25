@@ -1542,10 +1542,10 @@ class MainWindow(QMainWindow):
                 self.viewport.probe_undeformed(probe.point)
             except PuzzleError as exc:
                 self.report(exc)
-        elif self.viewport.result_state is not None and probe.type == "path":
+        elif self.viewport.result_state is not None and probe.type in ("path", "linearized"):
             self.viewport.mark_point(probe.point, "Path start")
         self.show_probe(probe)
-        if probe.type == "path":  # its plot is against the distance (Plots tab)
+        if probe.type in ("path", "linearized"):  # plotted against the distance (Plots)
             self.plots.show_path(probe)
 
     # --- picking -------------------------------------------------------------------
@@ -2380,13 +2380,21 @@ class PlotsPanel(QWidget):
         unit, per_metre = length_unit()
         for probe in probes:
             found = evaluate(project, store, probe)
-            values, _ = _display(np.array(found["values"], float), found["unit"])
-            pts = [
-                (d * per_metre, float(v))
-                for d, v in zip(found["distance"], values, strict=True)
-                if np.isfinite(v)
-            ]
-            self.series.append((probe.name, pts))
+            lines = [(probe.name, found["values"])]
+            if probe.type == "linearized":  # total, membrane, membrane + bending
+                from puzzle.post.linearize import LABELS
+
+                lines = [
+                    (f"{probe.name}: {LABELS[k].lower()}", v) for k, v in found["series"].items()
+                ]
+            for name, series in lines:
+                values, _ = _display(np.array(series, float), found["unit"])
+                pts = [
+                    (d * per_metre, float(v))
+                    for d, v in zip(found["distance"], values, strict=True)
+                    if np.isfinite(v)
+                ]
+                self.series.append((name, pts))
         self.curve.x_label = f"Distance along the path ({unit})"
 
     def redraw(self) -> None:
@@ -2402,7 +2410,7 @@ class PlotsPanel(QWidget):
             for i in range(self.probes.count())
             if self.probes.item(i).checkState() == Qt.CheckState.Checked
         ]
-        paths = [p for p in ticked if p is not None and p.type == "path"]
+        paths = [p for p in ticked if p is not None and p.type in ("path", "linearized")]
         if paths:  # paths plot against the distance; steps don't mix with them
             try:
                 self._paths(project, store, paths)

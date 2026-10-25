@@ -178,6 +178,11 @@ def outline(project: Project, *, ids: bool = False, runs=None) -> str:
                 f"{label_of(pr.quantity)} of {of} along {xyz(pr.point)} to {xyz(pr.end)}, "
                 f"{pr.samples} points"
             )
+        elif pr.type == "linearized":
+            what = (
+                f"stress linearization ({pr.equivalent}) of {of} from {xyz(pr.point)} to "
+                f"{xyz(pr.end)}"
+            )
         else:
             what = f"{label_of(pr.quantity)} of {of} at {xyz(pr.point)}"
         lines.append(head("Probe", pr) + f": {what}")

@@ -164,6 +164,47 @@ def along_path(mesh: Mesh, step: StepResult, item: Item, start, end, samples: in
     }
 
 
+def linearized(mesh: Mesh, step: StepResult, start, end, samples: int, kind: str) -> dict:
+    """The stress from `start` to `end` (through a wall) as membrane, bending and peak
+    parts (`puzzle.post.linearize`), with the points it was read at."""
+    import pyvista as pv
+
+    from puzzle.post import linearize
+    from puzzle.post.vtk import to_grid
+
+    f = step.fields.get("stress")
+    if f is None or f.location == "global":
+        raise PuzzleError("no stress in this result step", code="not_found")
+    if any(c not in f.components for c in linearize.ORDER):
+        raise PuzzleError("the stress here isn't a full tensor", code="unsupported")
+    samples += 1 - samples % 2  # an odd count, for Simpson's rule
+    a, b = np.asarray(start, float), np.asarray(end, float)
+    length = float(np.linalg.norm(b - a))
+    if length == 0:
+        raise PuzzleError("the line's ends are the same point", code="invalid")
+    t = np.linspace(0.0, 1.0, samples)
+    points = a[None, :] + t[:, None] * (b - a)[None, :]
+    # Ends on the surface: read a hair inside, or VTK may call them outside.
+    nudged = points.copy()
+    nudged[0] += 1e-7 * (b - a)
+    nudged[-1] -= 1e-7 * (b - a)
+    probe = pv.PolyData(nudged).sample(to_grid(mesh, step))
+    inside = np.asarray(probe.point_data["vtkValidPointMask"], bool)
+    if not inside.all():
+        gap = points[int(np.argmin(inside))]
+        where = ", ".join(f"{v:.6g}" for v in gap)
+        raise PuzzleError(
+            f"the line leaves the model (at {where} m): linearize across one wall, from "
+            "surface to surface",
+            code="invalid",
+        )
+    data = np.asarray(probe.point_data["stress"], float).reshape(samples, -1)
+    tensors = data[:, [f.components.index(c) for c in linearize.ORDER]]
+    out = linearize.report(t * length, tensors, kind)
+    return out | {"distance": (t * length).tolist(), "points": points.tolist(),
+                  "values": out["series"]["total"]}  # fmt: skip
+
+
 def _centroid(mesh: Mesh, group, xyz) -> np.ndarray:
     """A face or body selection's centroid from its elements (the nodes' mean is
     pulled toward wherever the mesh is finer); for points and edges, the nodes' mean."""
@@ -225,6 +266,8 @@ def at_step(mesh: Mesh, step: StepResult, item: Item, probe) -> dict:
         return reaction(mesh, step, probe.selection, probe.about)
     if probe.type == "path":
         return along_path(mesh, step, item, probe.point, probe.end, probe.samples)
+    if probe.type == "linearized":
+        return linearized(mesh, step, probe.point, probe.end, probe.samples, probe.equivalent)
     return at_point(mesh, step, item, probe.point)
 
 

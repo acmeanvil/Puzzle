@@ -2,8 +2,8 @@
 
 With a result shown, the Results ribbon lists the tools. Reaction… on the support makes
 a tool that sums to the 100 N tip load; it sits in the tree under Results and its
-Properties list the force and moment. A result on a selection and a path are made the
-same way, the path plotting against the distance in the Plots tab. The support's own
+Properties list the force and moment. A result on a selection, a path and a linearized
+stress are made the same way, the paths plotting against the distance in the Plots tab. The support's own
 menu offers Reaction force….
 """
 
@@ -98,6 +98,23 @@ def test_result_tools_from_the_ribbon(app, tmp_path):
         ((name, pts),) = w.plots.series
         assert name == path.name and len(pts) == 50
         assert w.plots.curve.x_label.startswith("Distance along the path")
+
+        # Linearized stress: across the thinnest side at mid-span, the beam's bending.
+        fill(w, equivalent="tresca")
+        tools.add_linearized(w)
+        lin = next(p for p in w.session.project.of_type(ResultProbe) if p.type == "linearized")
+        assert lin.equivalent == "tresca" and lin.point[0] == pytest.approx(0.1)
+        assert lin.samples == 47
+        _select(w, "probe", lin.name)
+        app.processEvents()
+        rows = _texts(w)
+        assert rows["Equivalent"] == "Stress intensity (Tresca)"
+        assert "(start)" in rows["Membrane + bending"] and "Bending XX" in rows
+        assert [n.split(": ")[1] for n, _ in w.plots.series] == [
+            "total",
+            "membrane",
+            "membrane + bending",
+        ]
 
         comp = w.session.project.of_type(Component)[0]
         fixed = next(j for j, f in enumerate(comp.physics[0].features) if f.selection == "Bar/Root")

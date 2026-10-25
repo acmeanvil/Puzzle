@@ -1241,13 +1241,16 @@ class ResultProbe(ProjectObject):
     - `selection`: the result over a selection, reduced by `reduction`;
     - `reaction`: the force (and moment about `about`, else the nodes' centroid) a
       selection's nodes take: the sum of the solver's nodal reaction forces;
-    - `path`: the result at `samples` points from `point` to `end`.
+    - `path`: the result at `samples` points from `point` to `end`;
+    - `linearized`: the stress from `point` to `end` (through a wall, surface to
+      surface) split into membrane, bending and peak parts (ASME VIII-2 Annex 5-A),
+      with `equivalent` (von Mises or Tresca stress intensity) at both ends.
     """
 
     kind: ClassVar[str] = "probe"
 
     source: UUID = Field(description="a study, or a derived result")
-    type: Literal["point", "selection", "reaction", "path"] = "point"
+    type: Literal["point", "selection", "reaction", "path", "linearized"] = "point"
     quantity: str = Field(
         default="reaction_force:total",
         description='a listed result\'s key, e.g. "stress:von_mises"',
@@ -1262,6 +1265,9 @@ class ResultProbe(ProjectObject):
     )
     end: tuple[float, float, float] | None = Field(default=None, description="path: the end")
     samples: int = Field(default=50, ge=2, le=10000, description="path: points along it")
+    equivalent: Literal["von_mises", "tresca"] = Field(
+        default="von_mises", description="linearized: von Mises, or Tresca stress intensity"
+    )
     step: int = Field(default=-1, description="index into the result steps; -1 = last")
 
     @model_validator(mode="after")
@@ -1271,12 +1277,15 @@ class ResultProbe(ProjectObject):
             "selection": ("selection",),
             "reaction": ("selection",),
             "path": ("point", "end"),
+            "linearized": ("point", "end"),
         }[self.type]
         missing = [k for k in need if getattr(self, k) is None]
         if missing:
             raise ValueError(f"a {self.type} probe needs {', '.join(missing)}")
         if self.type == "reaction":
             self.quantity = "reaction_force:total"
+        if self.type == "linearized":
+            self.quantity = "stress:von_mises"  # the stress tensor is what's read
         return self
 
     def dependencies(self) -> list[UUID]:

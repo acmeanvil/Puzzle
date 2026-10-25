@@ -40,6 +40,8 @@ class ResultsRibbon(Ribbon):
                  lambda: tools.add_selection_result(window)),
                 ("path", "Path…", "A result along a straight line, plotted against the "
                  "distance", lambda: tools.add_path(window)),
+                ("linearized", "Linearized stress…", "Membrane, bending and peak stress "
+                 "through a wall (ASME VIII-2)", lambda: tools.add_linearized(window)),
             ],
         )  # fmt: skip
         group(
