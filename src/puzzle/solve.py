@@ -151,7 +151,15 @@ def run_study(
     else:
         sweeps = study.sweeps()
         parts = [
-            (study.model_copy(update={"steps": [*sweeps, step]}), workdir / f"step-{n}")
+            # A preloaded buckling step takes its static step with it (ADR 0028).
+            (
+                study.model_copy(
+                    update={
+                        "steps": [*sweeps, *([steps[n - 2]] if _preloaded(steps, n) else []), step]
+                    }
+                ),
+                workdir / f"step-{n}",
+            )
             for n, step in enumerate(steps, start=1)
         ]
     runtime = runtime_for(study.solver)
@@ -161,7 +169,8 @@ def run_study(
         # One job per step (or a one-step study): the job sees only the features that
         # apply in its step (Feature.steps, ADR 0037). One deck for all steps (CalculiX)
         # sorts them out itself.
-        seen = _in_step(project, study.component, n) if limit is not None else project
+        indices = [n - 1, n] if limit is not None and _preloaded(steps, n) else [n]
+        seen = _in_step(project, study.component, indices) if limit is not None else project
         input_file = adapter.write_input(seen, part, meshed.mesh, where, inputs)
         job = run_job(
             adapter.command(input_file), where, runtime, on_output=on_output, timeout_s=timeout_s
@@ -260,14 +269,35 @@ def _slug(name: str) -> str:
     return "".join(c if c.isalnum() else "-" for c in name.lower()).strip("-") or "study"
 
 
-def _in_step(project: Project, component_id, index: int) -> Project:
+def _preloaded(steps, n: int) -> bool:
+    """Whether solve step n is a buckling step held on the static step before it."""
+    step = steps[n - 1]
+    return (
+        step.type == "buckling"
+        and bool(step.settings.get("preload", False))
+        and n > 1
+        and steps[n - 2].type == "stationary"
+    )
+
+
+def _in_step(project: Project, component_id, indices: list[int]) -> Project:
     """A shallow copy of the project whose component keeps only the features active in
-    solve step `index`; the same project when every feature applies in every step."""
+    the given solve steps, renumbered 1, 2, ... as the job's own steps; the same project
+    when every feature applies in every step."""
     comp = project.objects.get(component_id)
     if comp is None or not any(f.steps for ph in comp.physics for f in ph.features):
         return project
+
+    def renumbered(f):
+        active = [k for k, i in enumerate(indices, start=1) if f.active(i)]
+        if not active:
+            return None
+        return f.model_copy(update={"steps": [] if len(active) == len(indices) else active})
+
     physics = [
-        ph.model_copy(update={"features": [f for f in ph.features if f.active(index)]})
+        ph.model_copy(
+            update={"features": [g for g in map(renumbered, ph.features) if g is not None]}
+        )
         for ph in comp.physics
     ]
     copy = replace(project, objects=dict(project.objects))

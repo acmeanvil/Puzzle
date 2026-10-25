@@ -626,6 +626,33 @@ class MainWindow(QMainWindow):
         self.refresh()
         return outcome
 
+    def submit_batch(self, commands, **kwargs):
+        """Submit model edits together (one history entry, one undo); as `submit`."""
+        self.viewport.pick_history.clear()
+        try:
+            outcome = self.session.submit_batch(commands, **kwargs)
+        except PuzzleError as exc:
+            self.report(exc)
+            self.refresh()
+            return None
+        self.refresh()
+        return outcome
+
+    def show_faces(self, comp, faces) -> None:
+        """Highlight faces by (part, face name) on the component's mesh or preview
+        (contact search, ADR 0039)."""
+        mesh = self.meshes.get(str(comp.id)) or self._preview(comp)
+        if mesh is None:
+            return
+        wanted = set(faces)
+        names = self.mesh_names.get(str(comp.id), {})
+        entities = [
+            e
+            for e, named in names.items()
+            if e[0] == 2 and any((named[0], n) in wanted for n in _as_list(named[1]))
+        ]
+        self.viewport.show_mesh(mesh, None, entities)
+
     # --- actions -----------------------------------------------------------------
 
     # The toolbar's groups (ADR 0031); None separates them. Delete and Reload act on
@@ -2266,3 +2293,8 @@ def _describe(cmd: dict, names: dict) -> str:
         level = cmd.get("level")
         return f"set agents to {label(level).lower()}" if level else "changed agent settings"
     return label(command).lower()
+
+
+def _as_list(name) -> list:
+    """A mesh name map value's face name(s): faceted geometry maps one entity to several."""
+    return list(name) if isinstance(name, (list, tuple)) else [name]

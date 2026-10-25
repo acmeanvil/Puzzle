@@ -33,7 +33,7 @@ New record: copy [template.md](template.md) to `NNNN-short-title.md`, set status
 | [0025](0025-derived-results.md) | Derived results: solution combinations (linear, envelope, SRSS, range) and custom equations | Accepted |
 | [0026](0026-fatigue.md) | Fatigue: data in the material builder, a life tool in results | Accepted |
 | [0027](0027-beams-shells-and-fasteners.md) | Beams and shells beside solids, starting with beam fasteners (Ansys/Nastran/Algor style) | Proposed |
-| [0028](0028-buckling.md) | Buckling: a linear eigenvalue step, with or without a preload | Proposed |
+| [0028](0028-buckling.md) | Buckling: a linear eigenvalue step, with or without a preload | Accepted |
 | [0029](0029-context-and-names.md) | Show only what applies, by name: panels follow their context, and no raw value reaches the screen | Accepted |
 | [0030](0030-project-unit-system.md) | A unit system per project, chosen when it is made | Accepted |
 | [0031](0031-workspace-layout.md) | Give the model the room: collapsible docks, a view toolbar, an icon toolbar | Accepted |
@@ -44,6 +44,6 @@ New record: copy [template.md](template.md) to `NNNN-short-title.md`, set status
 | [0036](0036-property-grid-dialogs.md) | Long editors as property grids with sections, a description box and errors on top | Accepted |
 | [0037](0037-structural-loads-and-constraints.md) | Structural loads and constraints: body loads, remote loads, springs, couplings, local axes, amplitudes | Accepted |
 | [0038](0038-results-cuts-animation-plots.md) | Results tools: section cuts, animation, and plots over steps | Accepted |
-| [0039](0039-contact-search.md) | Find contacts between parts automatically | Proposed |
+| [0039](0039-contact-search.md) | Find contacts between parts automatically | Accepted |
 | [0040](0040-advisor.md) | An Advisor: the next step, from the project's state | Proposed |
 | [0041](0041-structural-dynamics.md) | Structural dynamics: transient and harmonic response | Proposed |

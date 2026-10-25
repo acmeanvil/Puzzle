@@ -154,6 +154,42 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         return {"selections": [r.to_dict() for r in done.reports], "accept_all": command}
 
     @tool(
+        description="Find where the parts of a component touch (ADR 0039): one proposal per "
+        "pair of parts with the faces on each side, the gap (m) and the overlap (m^2). "
+        "`tolerance` is the largest gap in m (default 0.5 % of the model's size), `angle` how "
+        "far from face to face, in degrees. `make_bonded` is the batch that makes every "
+        "proposal as a bonded contact (face selections first); change a contact's type "
+        "or drop proposals, then pass the list to submit. Nothing is made here."
+    )
+    @guarded
+    def contacts_find(
+        component: str, tolerance: float | None = None, angle: float = 10.0
+    ) -> dict[str, Any]:
+        from puzzle.commands import resolve
+        from puzzle.geometry.contacts import contact_commands, find_contacts, proposals
+        from puzzle.model.schema import Component
+
+        s = session()
+        comp = resolve(s.project, component, Component)
+        found = proposals(find_contacts(s.project, comp, root, tolerance=tolerance, angle=angle))
+        batch = [c.model_dump(mode="json") for c in contact_commands(s.project, comp, found)]
+        return {
+            "proposals": [
+                {
+                    "name": p.name,
+                    "source_part": p.source_part,
+                    "source_faces": p.source_faces,
+                    "target_part": p.target_part,
+                    "target_faces": p.target_faces,
+                    "gap_m": p.distance,
+                    "overlap_m2": p.area,
+                }
+                for p in found
+            ],
+            "make_bonded": batch,
+        }
+
+    @tool(
         description='Solve a sketch (an extrude or revolve profile {"sketch": {...}}; '
         "format in puzzle.geometry.sketch) with the project's parameters: whether it solves, "
         "the degrees of freedom left, the conflicting constraints (1-based) and the solved "

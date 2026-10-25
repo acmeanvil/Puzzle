@@ -903,7 +903,7 @@ class Viewport(QWidget):
                 scale *= deform_factor
             if scale:
                 grid = grid.warp_by_vector("displacement", factor=scale)
-        label = f"mode {step.mode}: {step.value:.4g} Hz" if step.mode else f"t = {step.value:g}"
+        label = step.label()
         on_points = name in grid.point_data
         where = np.asarray(base.points if on_points else base.cell_centers().points)
         shown_at = np.asarray(grid.points if on_points else grid.cell_centers().points)

@@ -31,6 +31,16 @@ class StepResult:
     mode: int | None = None
     fields: dict[str, Field] = field(default_factory=dict)
 
+    def label(self) -> str:
+        """What the step is, for titles and lists: a buckling mode by its load factor
+        (ADR 0028), a vibration mode by its frequency, else the time."""
+        if self.kind == "buckling" and self.mode is not None:
+            reversed_ = " (load reversed)" if self.value < 0 else ""
+            return f"Buckling mode {self.mode}: load factor {self.value:.4g}{reversed_}"
+        if self.mode is not None:
+            return f"mode {self.mode}: {self.value:.4g} Hz"
+        return f"t = {self.value:g}"
+
 
 @dataclass
 class Results:

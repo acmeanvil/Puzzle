@@ -683,7 +683,7 @@ def _summarise(results) -> None:
 
     for step in results.steps:
         if step.mode:
-            print(f"  mode {step.mode}: {step.value:.6g} Hz")
+            print(f"  {step.label()}")
             continue
         parts = []
         if "displacement" in step.fields:

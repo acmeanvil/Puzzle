@@ -39,7 +39,9 @@ class CodeAsterAdapter(SolverAdapter):
     max_solve_steps = 1
     capabilities = Capabilities(
         physics={
-            "solid_mechanics": frozenset({"stationary", "transient", "modal", "frequency_domain"}),
+            "solid_mechanics": frozenset(
+                {"stationary", "transient", "modal", "frequency_domain", "buckling"}
+            ),
             "heat_transfer": frozenset({"stationary", "transient"}),
         },
         features=STRUCTURAL_FEATURES

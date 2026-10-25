@@ -1,6 +1,6 @@
 # 0028. Buckling: a linear eigenvalue step, with or without a preload
 
-- Status: Proposed
+- Status: Accepted (2026-10-24); built on CalculiX and Code_Aster
 - Date: 2026-10-22
 
 ## Context
@@ -38,6 +38,25 @@ The maintainer asked whether CalculiX and Code_Aster include linear buckling and
 5. **Later.**
    - **Nonlinear buckling:** CalculiX `*STATIC, RIKS` and Code_Aster `PILOTAGE`, with an imperfection seeded from a buckling mode shape scaled to a given amplitude.
    - **Shells and beams:** buckling of beam and shell models, once ADR 0027 brings those elements.
+
+## Built (2026-10-24)
+
+- **One change to the decision: the preload is a static step in the same study,** not another study. The buckling step's `preload` setting (default off) holds the state of the static step just before it; each step's loads are its own through `Feature.steps` (ADR 0037), so the preload load sits in step 1 and the load to scale in step 2. That keeps both loads, and their difference, in one study.
+- **`buckling` step type** (`SolveStep.type`), settings `modes` (default 4), `preload`, and `shift` (Code_Aster only: CalculiX's `*BUCKLE` takes none, so it refuses one). New steps start with `{"modes": 4, "preload": false}` (`catalog.STEP_DEFAULTS`), so Properties shows them.
+- **CalculiX:** `*BUCKLE`. A plain `*BUCKLE` after `*STATIC` ignored the static stress, so with a preload the static step is written with `NLGEOM` and the buckling step as `*STEP, PERTURBATION` (as the prestress replay does). The `.frd` gives each buckling step a static block (value 0) first, then one block per mode without a mode record; the reader drops the first and numbers the rest (a `.buckling` marker lists the deck's buckling steps).
+- **Code_Aster:** a static solve under the step's loads, `CALC_MATR_ELEM(OPTION='RIGI_GEOM')` from its `SIEF_ELGA`, and `CALC_MODES(TYPE_RESU='MODE_FLAMB')` with K (plus K_G of the preload, `COMB_MATR_ASSE`) against that K_G. `CHAR_CRIT` is the load factor itself. Code_Aster runs one job per step, so `run_study` hands a preloaded buckling step its static step too (`solve._preloaded`), with each feature's steps renumbered for that job. It takes plain supports and loads in a buckling step so far.
+- **Elmer and FEniCSx:** refused (no `buckling` in their capabilities).
+- **Results:** one result step per mode, value = load factor, kind `buckling`; `StepResult.label()` gives "Buckling mode 1: load factor 3.42", "(load reversed)" when negative, used by the view's title, plots, the derived-result dialog and `puzzle runs`.
+- **Benchmarks** (`tests/integration/test_buckling.py`, a 10 × 10 × 300 mm column fixed at its base, 2.5 mm quadratic tets):
+
+  | Check | CalculiX | Code_Aster | Theory |
+  | --- | --- | --- | --- |
+  | Euler, fixed-free | +0.085 % | +0.085 % | π²EI/(2L)² = 4797.7 N |
+  | Preload P0 = 2400 N, factor on 1 N | +0.15 % | +0.17 % | P_cr − P0 |
+  | Shoot-out, four modes | agree to 0.01 % | | |
+
+  CalculiX's preloaded factor is 0.02 % below Code_Aster's: its preload step is geometrically nonlinear.
+- **Not yet:** the critical load (factor × applied load) in the label for a single force; a pinned column (pins on solid ends need a remote-displacement hinge); nonlinear buckling with an imperfection (point 5).
 
 ## Consequences
 

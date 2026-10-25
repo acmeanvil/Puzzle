@@ -18,7 +18,7 @@ from puzzle.commands.model import CopyComponent, Create, Edit, EditOp
 from puzzle.geometry.steps import STEPS
 from puzzle.gui.choices import label, solver_label
 from puzzle.gui.tree import Node
-from puzzle.model.catalog import CATALOG, STEP_TYPES, specs
+from puzzle.model.catalog import CATALOG, STEP_DEFAULTS, STEP_TYPES, specs
 from puzzle.model.schema import (
     Amplitude,
     Component,
@@ -90,6 +90,10 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         add("New component…", lambda: new_component(window))
         add("New study…", lambda: new_study(window))
     elif isinstance(obj, Component) and node.kind == "object":
+        if len(obj.parts) > 1:
+            from puzzle.gui.contact_search import find_contacts_dialog
+
+            add("Find contacts…", lambda: find_contacts_dialog(window, obj))
         physics = menu.addMenu("Add physics")
         present = {p.type for p in obj.physics}
         for kind in CATALOG:
@@ -296,7 +300,7 @@ def study_materials(window, study: Study):
 
 
 def add_step(window, study: Study, kind: str):
-    value = {"type": kind, "settings": {"modes": 6} if kind == "modal" else {}}
+    value = {"type": kind, "settings": dict(STEP_DEFAULTS.get(kind, {}))}
     if kind == "transient":
         value["settings"] = {
             "time_step": {"value": 1, "unit": "s"},
@@ -422,7 +426,7 @@ def new_study(window):
     name = window.ask_text("New study", "Name:", f"{comp} {what}") if step else None
     if not name:
         return None
-    settings = {"modes": 6} if step == "modal" else {}
+    settings = dict(STEP_DEFAULTS.get(step, {}))
     data = {
         "name": name,
         "component": str(comps[comp].id),

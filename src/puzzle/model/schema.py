@@ -659,14 +659,15 @@ class Component(ProjectObject):
 class SolveStep(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    type: Literal["stationary", "transient", "frequency_domain", "modal"]
+    type: Literal["stationary", "transient", "frequency_domain", "modal", "buckling"]
     physics: list[str] = Field(
         default_factory=list, description="Physics solved in this step; empty means all"
     )
     settings: dict[str, Quantity | bool | int | float | str] = Field(
         default_factory=dict,
         description="e.g. time_step, end_time, time_scheme (backward_euler, crank_nicolson, "
-        "bdf2, theta) and theta; modes",
+        "bdf2, theta) and theta; modes; buckling (ADR 0028): modes, shift, and preload "
+        "(true: the static step before it is held fixed, its loads not scaled)",
     )
 
     def solves(self, physics: str) -> bool:

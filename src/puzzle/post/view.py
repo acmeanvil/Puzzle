@@ -68,7 +68,7 @@ def render(
         if scale:
             grid = grid.warp_by_vector("displacement", factor=scale)
 
-    label = f"mode {step.mode}: {step.value:.4g} Hz" if step.mode else f"step {step.index}"
+    label = step.label() if step.mode else f"step {step.index}"
     title = f"{scalar} ({label})" + (f", deformation x{scale:.3g}" if scale else "")
     values = grid.point_data[scalar] if scalar in grid.point_data else grid.cell_data[scalar]
     clim = (float(np.nanmin(values)), float(np.nanmax(values)))

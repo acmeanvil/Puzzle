@@ -57,6 +57,13 @@ def nodal_fields(rows: list[dict[str, str]], name: str) -> dict[int, Field]:
 def read_results(workdir: Path) -> Results:
     results = Results(solver="code_aster")
     tables = {p.stem: read_table(p) for p in workdir.glob("*.csv")}
+    if "buckling" in tables:  # ADR 0028: CHAR_CRIT is the load factor
+        factors = {int(r["NUME_ORDRE"]): float(r["CHAR_CRIT"]) for r in tables["buckling"]}
+        shapes = nodal_fields(tables.get("displacement", []), "displacement")
+        for mode, order in enumerate(sorted(factors), start=1):
+            fields = {"displacement": shapes[order]} if order in shapes else {}
+            results.steps.append(StepResult(1, "buckling", factors[order], mode, fields))
+        return results
     if "frequency" in tables:
         frequencies = {int(r["NUME_ORDRE"]): float(r["FREQ"]) for r in tables["frequency"]}
         shapes = nodal_fields(tables.get("displacement", []), "displacement")

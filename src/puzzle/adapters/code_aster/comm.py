@@ -51,6 +51,7 @@ TABLES = {
     "reaction_force": 85,
     "plastic_strain": 86,
     "plastic_strain_equivalent": 87,
+    "buckling": 88,
 }
 FORMAT_R = "1PE18.10"
 
@@ -66,9 +67,16 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     thermal_load = next((i.field for i in inputs if i.field.name == "temperature"), None)
     check_contacts(comp, CONTACTS, "Code_Aster")
     steps = study.solve_steps()
-    if len(steps) != 1:
+    # A preloaded buckling step comes with its static step (run_study joins them).
+    preloaded = (
+        len(steps) == 2
+        and steps[0].type == "stationary"
+        and steps[1].type == "buckling"
+        and bool(steps[1].settings.get("preload", False))
+    )
+    if len(steps) != 1 and not preloaded:
         raise InputError("the Code_Aster adapter runs studies with exactly one solve step for now")
-    step = steps[0]
+    step = steps[-1]
     solved = set(step.physics) or {p.type for p in comp.physics}
     if solved not in ({"solid_mechanics"}, {"heat_transfer"}):
         raise InputError(
@@ -78,7 +86,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             "temperature to a structural study as a transfer (role load)."
         )
     thermal = solved == {"heat_transfer"}
-    allowed = ("stationary", "transient") if thermal else ("stationary", "modal")
+    allowed = ("stationary", "transient") if thermal else ("stationary", "modal", "buckling")
     if step.type not in allowed:
         raise InputError(
             f"the Code_Aster adapter does not run {step.type} {sorted(solved)} steps yet"
@@ -105,6 +113,12 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     if step.type == "modal":
         features = [f for f in features if f.type in HOLDING]
     features = globalize(project, features)  # Cartesian local axes as global (ADR 0037)
+    preload = []
+    if step.type == "buckling":
+        _check_buckling(features + springs + lifting + bolts, step)
+        if preloaded:  # the static step's features, held; the buckling step's, scaled
+            preload = [f for f in features if f.active(1)]
+            features = [f for f in features if f.active(2)]
     if not comp.materials:
         raise InputError(f"component '{comp.name}' has no material assignments")
     ties = [c for c in comp.contacts if c.capability == "bonded_nonconformal"]
@@ -137,7 +151,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     groups = list(
         dict.fromkeys(
             [a.selection for a in comp.materials]
-            + [f.selection for f in features + springs + lifting + bolts]
+            + [f.selection for f in features + preload + springs + lifting + bolts]
             + tie_groups
         )
     )
@@ -248,6 +262,8 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             _ther_non_line(step, comp) if nonlinear else _ther_lineaire(step, comp),
             _table("res", "TEMP", "temperature"),
         ]
+    elif step.type == "buckling":
+        out += _buckling(step, cara, charges, preload, names, mesh, ties)
     elif step.type == "modal":
         n = int(step.settings.get("modes", 10))
         out += [
@@ -332,6 +348,8 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         else (
             {"displacement", "frequency"}
             if step.type == "modal"
+            else {"displacement", "buckling"}
+            if step.type == "buckling"
             else {"displacement", "stress", "reaction_force"}
             | ({"plastic_strain", "plastic_strain_equivalent"} if plastic else set())
         )
@@ -513,6 +531,64 @@ def _discrete_cara(supports, references: int, tiny: float = 0.0, gaps=()) -> lis
         *(f"    {a}," for a in axes),
         *(["))"] if axes else []),
     ]
+
+
+def _check_buckling(features, step) -> None:
+    """What a buckling step here takes: plain supports and loads (no remote loads,
+    local axes, pretension, springs or gaps yet)."""
+    plain = {"fixed", "displacement", "force", "pressure", "gravity", "acceleration", "rotation"}
+    odd = sorted({f.type for f in features if f.type not in plain or f.axes is not None})
+    if odd:
+        raise InputError(
+            f"Code_Aster buckling steps take plain supports and loads so far, not {odd}",
+            code="unsupported",
+        )
+
+
+def _buckling(step, cara: str, charges: list[str], preload, names, mesh, ties) -> list[str]:
+    """Linear buckling (ADR 0028): K + K_G(preload) against K_G of this step's loads,
+    from the stresses of a static solve under each. Code_Aster's CHAR_CRIT is the load
+    factor (positive for a load that buckles as applied)."""
+    n = int(step.settings.get("modes", 4))
+    excit = ", ".join(f"_F(CHARGE={c})" for c in charges)
+    load_list = ", ".join(charges)
+    out = [
+        f"buck = MECA_STATIQUE(MODELE=model, CHAM_MATER=mater, {cara}EXCIT=({excit},))",
+        "sig = CREA_CHAMP(TYPE_CHAM='ELGA_SIEF_R', OPERATION='EXTR', RESULTAT=buck, "
+        "NOM_CHAM='SIEF_ELGA', NUME_ORDRE=1)",
+        f"kge = CALC_MATR_ELEM(OPTION='RIGI_GEOM', MODELE=model, {cara}SIEF_ELGA=sig)",
+        f"ke = CALC_MATR_ELEM(OPTION='RIGI_MECA', MODELE=model, CHAM_MATER=mater, {cara}"
+        f"CHARGE=({load_list},))",
+        "nu = NUME_DDL(MATR_RIGI=ke)",
+        "kk = ASSE_MATRICE(MATR_ELEM=ke, NUME_DDL=nu)",
+        "kg = ASSE_MATRICE(MATR_ELEM=kge, NUME_DDL=nu)",
+    ]
+    if preload:
+        out += [
+            _loads(preload, names, mesh, False, ties).replace("load = ", "load0 = ", 1),
+            f"pre = MECA_STATIQUE(MODELE=model, CHAM_MATER=mater, {cara}EXCIT=(_F(CHARGE=load0),))",
+            "sig0 = CREA_CHAMP(TYPE_CHAM='ELGA_SIEF_R', OPERATION='EXTR', RESULTAT=pre, "
+            "NOM_CHAM='SIEF_ELGA', NUME_ORDRE=1)",
+            f"kge0 = CALC_MATR_ELEM(OPTION='RIGI_GEOM', MODELE=model, {cara}SIEF_ELGA=sig0)",
+            "kg0 = ASSE_MATRICE(MATR_ELEM=kge0, NUME_DDL=nu)",
+            "kk = COMB_MATR_ASSE(COMB_R=(_F(MATR_ASSE=kk, COEF_R=1.0), "
+            "_F(MATR_ASSE=kg0, COEF_R=1.0)))",
+        ]
+    shift = step.settings.get("shift")
+    if shift is not None:
+        search = (
+            f"OPTION='CENTRE', CALC_CHAR_CRIT=_F(CHAR_CRIT={float(shift):.12g}, NMAX_CHAR_CRIT={n})"
+        )
+    else:
+        search = f"OPTION='PLUS_PETITE', CALC_CHAR_CRIT=_F(NMAX_CHAR_CRIT={n})"
+    out += [
+        f"res = CALC_MODES(MATR_RIGI=kk, MATR_RIGI_GEOM=kg, TYPE_RESU='MODE_FLAMB', {search})",
+        "res = NORM_MODE(reuse=res, MODE=res, NORME='TRAN')",
+        _table("res", "DEPL", "displacement"),
+        f"IMPR_TABLE(TABLE=RECU_TABLE(CO=res, NOM_PARA='CHAR_CRIT'), UNITE={TABLES['buckling']}, "
+        f"FORMAT='TABLEAU', SEPARATEUR=',', FORMAT_R='{FORMAT_R}')",
+    ]
+    return out
 
 
 def _table(result: str, field: str, name: str, which: str = "") -> str:

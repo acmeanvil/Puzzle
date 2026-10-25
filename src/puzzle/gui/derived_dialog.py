@@ -41,9 +41,7 @@ NOTES = {
 
 
 def step_label(step, index: int) -> str:
-    if step.mode is not None:
-        return f"{index + 1}: mode {step.mode}, {step.value:.4g} Hz"
-    return f"{index + 1}: t = {step.value:g}"
+    return f"{index + 1}: {step.label()}"
 
 
 class _Runs:

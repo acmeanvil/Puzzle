@@ -162,6 +162,7 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
         lines = _step(number, step, comp, mesh, faces, physics_types, thermal_load, yields, project)
         first = lines[0] if "NLGEOM" in lines[0] else lines[0] + ", NLGEOM"
         out += [first, *lines[1:]]
+    preloads = _preload_steps(solve_steps)
     for number, step in enumerate(solve_steps, start=len(prestress) + 1):
         index = number - len(prestress)  # the study's own step number (Feature.steps)
         lines = _step(
@@ -177,8 +178,11 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
             index=index,
             pretension=(pretension, applied),
         )
-        if prestress:  # a perturbation of the stressed state, not of the unloaded one
+        perturbs = prestress or index in preloads.values()  # of the stressed state
+        if perturbs and "PERTURBATION" not in lines[0]:
             lines = [lines[0] + ", PERTURBATION", *lines[1:]]
+        if index in preloads and "NLGEOM" not in lines[0]:  # a buckling step's preload
+            lines = [lines[0].replace("*STEP", "*STEP, NLGEOM", 1), *lines[1:]]
         out += lines
     return "\n".join(out) + "\n"
 
@@ -344,6 +348,8 @@ def _step(
                 else ["*STATIC"]
             ),
             "modal": ["*FREQUENCY", str(int(settings.get("modes", 10)))],
+            # ADR 0028: load factors on this step's loads, and their mode shapes.
+            "buckling": ["*BUCKLE", str(int(settings.get("modes", 4)))],
             "transient": ["*DYNAMIC"] + [f"{setting('time_step'):.10g}, {setting('end_time'):.10g}"]
             if step.type == "transient"
             else [],
@@ -351,7 +357,7 @@ def _step(
         # Reaction forces (RF) let a study sum the support or contact loads.
         outputs = (
             ["*NODE FILE", "U"]
-            if step.type == "modal"
+            if step.type in ("modal", "buckling")
             else ["*NODE FILE", "U, RF", "*EL FILE", "S, E" + (", PEEQ" if yields else "")]
         )
     elif solved == {"heat_transfer"}:
@@ -380,6 +386,12 @@ def _step(
         raise InputError(
             f"CalculiX can't solve {sorted(solved)} together in one step; set the step's physics, "
             "or add the thermal_expansion coupling for a coupled thermal-structural step"
+        )
+    if step.type == "buckling" and "shift" in settings:
+        raise InputError(
+            "CalculiX's *BUCKLE finds the smallest load factors and takes no shift; "
+            "remove it, or use Code_Aster",
+            code="unsupported",
         )
     if procedure is None:
         raise InputError(
@@ -452,6 +464,25 @@ def _step(
     return out + outputs + ["*END STEP"]
 
 
+def _preload_steps(steps) -> dict[int, int]:
+    """Preload step -> its buckling step (ADR 0028), for buckling steps with `preload`:
+    the static step just before is solved with NLGEOM and the buckling step perturbs
+    it, so its stress is held and only the buckling step's loads are scaled. (A plain
+    *BUCKLE after *STATIC ignored the preload.)"""
+    out = {}
+    for i, step in enumerate(steps, start=1):
+        if step.type != "buckling" or not step.settings.get("preload", False):
+            continue
+        before = steps[i - 2] if i > 1 else None
+        if before is None or before.type != "stationary":
+            raise InputError(
+                "a buckling step with a preload needs a static step just before it",
+                code="unsupported",
+            )
+        out[i - 1] = i
+    return out
+
+
 def _amplitude_names(comp: Component) -> dict:
     """Amplitude id -> its card name, in the order the component first uses them."""
     ids = dict.fromkeys(f.amplitude for p in comp.physics for f in p.features if f.amplitude)
@@ -505,7 +536,7 @@ def _pretension_steps(comp: Component, steps) -> dict:
     out = {}
     for f in [f for ph in comp.physics for f in ph.features if f.type in PRETENSION]:
         for i, s in enumerate(steps, start=1):
-            if s.solves("solid_mechanics") and s.type != "modal" and f.active(i):
+            if s.solves("solid_mechanics") and s.type not in ("modal", "buckling") and f.active(i):
                 out[id(f)] = i
                 break
     return out

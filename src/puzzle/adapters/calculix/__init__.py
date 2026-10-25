@@ -30,7 +30,7 @@ class CalculixAdapter(SolverAdapter):
     name = "calculix"
     capabilities = Capabilities(
         physics={
-            "solid_mechanics": frozenset({"stationary", "transient", "modal"}),
+            "solid_mechanics": frozenset({"stationary", "transient", "modal", "buckling"}),
             "heat_transfer": frozenset({"stationary", "transient"}),
         },
         features=STRUCTURAL_FEATURES
@@ -74,6 +74,12 @@ class CalculixAdapter(SolverAdapter):
         # Helper nodes (rigid bodies, spring grounds) come after the mesh's; the reader
         # leaves them out of the results.
         mark_mesh_nodes(path, mesh)
+        # Buckling steps (ADR 0028): the reader drops their static block and numbers modes.
+        skip = prestress_step_count(project, study, inputs)
+        buckling = [
+            n + skip for n, s in enumerate(study.solve_steps(), start=1) if s.type == "buckling"
+        ]
+        path.with_suffix(".buckling").write_text(json.dumps(buckling))
         return path
 
     def command(self, input_file: Path) -> list[str]:
@@ -93,6 +99,9 @@ class CalculixAdapter(SolverAdapter):
                     step.fields["plastic_strain"] = plastic_strain_tensor(
                         step.fields["strain"], step.fields["stress"], sets
                     )
+        buckling = input_file.with_suffix(".buckling")
+        if buckling.exists():
+            results.steps = _buckling_modes(results.steps, set(json.loads(buckling.read_text())))
         marker = input_file.with_suffix(".prestress")
         skip = int(marker.read_text()) if marker.exists() else 0
         if skip:
@@ -100,6 +109,23 @@ class CalculixAdapter(SolverAdapter):
             for s in results.steps:
                 s.index -= skip
         return results
+
+
+def _buckling_modes(steps, buckling: set[int]) -> list:
+    """A *BUCKLE step's blocks are the static solve of its load (value 0), then one per
+    mode with its load factor as the value: drop the first, number the rest."""
+    out, counts = [], {}
+    for s in steps:
+        if s.index not in buckling:
+            out.append(s)
+            continue
+        if s.index not in counts:  # the static block comes first
+            counts[s.index] = 0
+            continue
+        counts[s.index] += 1
+        s.mode = counts[s.index]
+        out.append(s)
+    return out
 
 
 def _elastic_sets(project: Project, study: Study, mesh: Mesh) -> list:

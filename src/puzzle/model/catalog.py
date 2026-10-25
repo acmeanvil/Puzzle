@@ -128,7 +128,9 @@ CATALOG: dict[str, list[FeatureSpec]] = {
     ],
 }
 
-STEP_TYPES = ["stationary", "transient", "modal"]
+STEP_TYPES = ["stationary", "transient", "modal", "buckling"]
+# What a new step of a type starts with, so its settings show in Properties.
+STEP_DEFAULTS = {"modal": {"modes": 6}, "buckling": {"modes": 4, "preload": False}}
 
 
 def specs(physics: str) -> list[FeatureSpec]:
