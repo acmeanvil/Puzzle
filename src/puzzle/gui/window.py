@@ -786,6 +786,7 @@ class MainWindow(QMainWindow):
         reload()
         self.apply_toolbar_style()
         self.agent.agent = None  # the next message builds the agent with the new settings
+        self.agent.input.update_hint()  # the send keys may have changed
         if self.session is not None:
             self.refresh()
         self.statusBar().showMessage("Settings saved", 5000)
@@ -845,9 +846,39 @@ class MainWindow(QMainWindow):
 
     def delete_selected(self) -> None:
         node = self.tree.current()
+        if node is not None and node.kind == "run":
+            self.delete_run(node.object)
+            return
         if node is None or node.kind not in ("object", "derived", "probe"):
             return
         self.submit(Delete(object=node.object))
+
+    def delete_run(self, run_id: str, confirm: bool = True) -> bool:
+        """Delete a stored result set (asked first): results are a cache, so the study
+        runs again to make them, but that may take long."""
+        from puzzle.gui.choices import solver_label
+
+        store = self._store()
+        try:
+            record = store.get_run(run_id)
+        except KeyError:
+            return False
+        when = f"{record.started_at:%Y-%m-%d %H:%M}"
+        question = (
+            f"Delete the results of {record.study_name} ({solver_label(record.solver)}, "
+            f"{when})? The study keeps its setup; running it again makes them anew."
+        )
+        if confirm and not self.ask_yes("Delete results", question):
+            return False
+        if getattr(self, "_result_run", None) == run_id:  # not on screen any more
+            self.result = None
+            self._result_run = None
+            self.viewport.clear()
+            self.set_context("model")
+        store.delete_run(run_id)
+        self.refresh()
+        self.statusBar().showMessage(f"Deleted the results of {record.study_name} ({when})", 8000)
+        return True
 
     def add_material(self, key: str) -> None:
         self.submit(AddLibraryMaterial(key=key))

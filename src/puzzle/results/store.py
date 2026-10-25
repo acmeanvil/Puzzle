@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -349,6 +350,30 @@ class ResultStore:
         return mesh
 
     # --- maintenance -----------------------------------------------------------
+
+    def delete_run(self, run_id: str) -> dict[str, int]:
+        """Remove a run: its record, its fields, and its mesh when no other run uses
+        it; then vacuum, so the disk space comes back. Results are a cache (ADR 0008):
+        the study runs again to make them. Returns what went, for a message."""
+        record = self.get_run(run_id)  # KeyError for an unknown run
+        if not re.fullmatch(r"[0-9a-f]+", run_id):  # it goes into a predicate
+            raise KeyError(f"no run {run_id}")
+        gone = {"runs": 1, "meshes": 0}
+        for name in ("runs", "fields"):
+            if self._exists(name):
+                DeltaTable(str(self.root / name)).delete(f"run_id = '{run_id}'")
+        mid = record.mesh_id
+        if re.fullmatch(r"[0-9a-f]+", mid) and not any(r.mesh_id == mid for r in self.runs()):
+            for name in ("meshes", "nodes", "cells", "groups"):
+                if self._exists(name):
+                    DeltaTable(str(self.root / name)).delete(f"mesh_id = '{mid}'")
+            gone["meshes"] = 1
+        for name in SCHEMAS:  # free the files the deletes left behind
+            if self._exists(name):
+                DeltaTable(str(self.root / name)).vacuum(
+                    retention_hours=0, dry_run=False, enforce_retention_duration=False
+                )
+        return gone
 
     def compact(self) -> None:
         """Merge small Parquet files (each run appends a few) into larger ones."""

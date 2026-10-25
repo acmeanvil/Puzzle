@@ -12,7 +12,7 @@ import html
 import json
 import sys
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QSplitter,
     QTextBrowser,
@@ -42,6 +43,75 @@ LEVELS = {
     "act_in_budget": "act within the budget",
     "act": "act freely",
 }
+
+
+class PromptBox(QPlainTextEdit):
+    """The message box: wraps words and grows with what is typed (up to `MAX_LINES`,
+    then scrolls). Settings > Agent says which key sends: by default Enter starts a new
+    line and Ctrl+Enter (⌘+Enter on a Mac: Qt reports Command as Control) sends; or
+    Enter sends and Shift+Enter starts a new line. The placeholder names the keys."""
+
+    submitted = Signal()
+    MAX_LINES = 8
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self.setTabChangesFocus(True)
+        self.document().contentsChanged.connect(self._fit)
+        self.update_hint()
+        self._fit()
+
+    def text(self) -> str:
+        return self.toPlainText()
+
+    def setText(self, text: str) -> None:  # noqa: N802 - as QLineEdit, for callers
+        from PySide6.QtGui import QTextCursor
+
+        self.setPlainText(text)
+        self.moveCursor(QTextCursor.MoveOperation.End)  # typing carries on at the end
+
+    def update_hint(self) -> None:
+        from puzzle.settings import SEND_KEYS, current
+
+        if current().get("agent.send_key") == "enter":
+            keys = "Enter to send, Shift+Enter for a new line"
+        else:
+            keys = f"{SEND_KEYS} to send"
+        self.setPlaceholderText(f"Ask about the model, or ask for a change… ({keys})")
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        from puzzle.settings import current
+
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            mods = event.modifiers()
+            command = bool(mods & Qt.KeyboardModifier.ControlModifier)
+            shift = bool(mods & Qt.KeyboardModifier.ShiftModifier)
+            enter_sends = current().get("agent.send_key") == "enter"
+            if command or (enter_sends and not shift):
+                self.submitted.emit()
+                return
+            if enter_sends and shift:
+                self.insertPlainText("\n")
+                return
+        super().keyPressEvent(event)
+
+    def _fit(self) -> None:
+        """One line high when empty, a line more per wrapped line, up to MAX_LINES."""
+        doc = self.document()
+        lines = 0
+        block = doc.begin()
+        while block.isValid():
+            lines += max(1, block.layout().lineCount() if block.layout() else 1)
+            block = block.next()
+        line = self.fontMetrics().lineSpacing()
+        margins = self.contentsMargins().top() + self.contentsMargins().bottom()
+        frame = int(doc.documentMargin() * 2) + margins + 4
+        self.setFixedHeight(min(max(lines, 1), self.MAX_LINES) * line + frame)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt's name: re-wrap, refit
+        super().resizeEvent(event)
+        self._fit()
 
 
 class AgentPanel(QWidget):
@@ -71,13 +141,10 @@ class AgentPanel(QWidget):
 
         self.transcript = QTextBrowser()
         self.transcript.setOpenExternalLinks(False)
-        self.input = QLineEdit(placeholderText="Ask about the model, or ask for a change…")
-        self.input.returnPressed.connect(self.send)
-        self.send_button = QPushButton("Send")
-        self.send_button.clicked.connect(self.send)
+        self.input = PromptBox()
+        self.input.submitted.connect(self.send)
         ask = QHBoxLayout()
         ask.addWidget(self.input, 1)
-        ask.addWidget(self.send_button)
 
         self.proposals = QListWidget()
         self.proposals.setWordWrap(True)
@@ -141,14 +208,14 @@ class AgentPanel(QWidget):
             return None
         self.input.clear()
         self._say("you", text)
-        self.send_button.setEnabled(False)
+        self.input.setReadOnly(True)  # until the answer is in
         agent = self.agent
 
         def work(emit):
             return agent.ask(text, lambda e: emit(_event_html(e)))
 
         def done(_answer) -> None:
-            self.send_button.setEnabled(True)
+            self.input.setReadOnly(False)
             self.window.refresh()
             tokens = agent.tokens
             self.model_label.setText(
@@ -156,7 +223,7 @@ class AgentPanel(QWidget):
             )
 
         def failed(exc) -> None:
-            self.send_button.setEnabled(True)
+            self.input.setReadOnly(False)
             self._say("error", str(exc))
 
         return self.window.background(
@@ -195,7 +262,6 @@ class AgentPanel(QWidget):
         return True
 
     def _set_key(self) -> None:
-        from PySide6.QtWidgets import QLineEdit
 
         from puzzle.agent.settings import store_key
 

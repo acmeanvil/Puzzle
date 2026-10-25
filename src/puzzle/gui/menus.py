@@ -249,6 +249,8 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         add("New combination…", lambda: window.new_derived("linear", study))
         add("New equation…", lambda: window.new_derived("equation", study))
         add("New fatigue tool…", lambda: window.new_derived("fatigue", study))
+        menu.addSeparator()
+        add("Delete results…", lambda: window.delete_run(node.object))
     elif node.kind == "derived" and obj is not None:
         add("Edit…", lambda: window.new_derived(obj.method, definition=obj))
         add("New equation from this…", lambda: window.new_derived("equation", str(obj.id)))

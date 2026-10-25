@@ -124,3 +124,7 @@ At every level the agent's changes are attributed in the log and can be undone.
 - **A separate agent API beside the GUI's code paths:** two ways to change the model drift apart.
 - **One hosted provider only:** fails offline and confidential work, and the lightest-local-model goal.
 - **Act without sign-off:** too easy to enable by accident for unbudgeted compute and unreviewed changes.
+
+## Note (2026-10-25): the message box
+
+The agent panel's message box wraps words and grows with what is typed (up to eight lines, then scrolls); there is no Send button. Settings > Agent > "Send a message with" chooses the keys: by default Enter starts a new line and Ctrl+Enter (⌘+Enter on a Mac) sends; or Enter sends and Shift+Enter starts a new line. The placeholder names the keys in use.

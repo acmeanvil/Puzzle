@@ -13,6 +13,7 @@ Puzzle survive an older one.
 
 from __future__ import annotations
 
+import sys
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -32,6 +33,9 @@ class Preference:
     help: str = ""
     ready: bool = True  # False: defined, waiting for the feature that uses it
 
+
+# The send keys as the platform names them: Qt reports the Mac's Command key as Control.
+SEND_KEYS = "⌘+Enter" if sys.platform == "darwin" else "Ctrl+Enter"
 
 PREFERENCES: list[Preference] = [
     Preference(
@@ -95,6 +99,17 @@ PREFERENCES: list[Preference] = [
         True,
         [("Yes", True), ("No", False)],
         "A mesh recipe's optimiser can then be Netgen's (it improves Gmsh's tetrahedra).",
+    ),
+    Preference(
+        "agent.send_key",
+        "Agent",
+        "Send a message with",
+        "modifier",
+        [
+            (f"{SEND_KEYS} (Enter starts a new line)", "modifier"),
+            ("Enter (Shift+Enter starts a new line)", "enter"),
+        ],
+        "How the agent panel's message box sends what you typed.",
     ),
     Preference(
         "solvers.level",
