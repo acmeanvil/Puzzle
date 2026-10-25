@@ -59,7 +59,7 @@ Asked by the maintainer: a custom range, size and placement, other colours, and 
 - **`post/legend.py`:** `Legend` holds the look and is kept as preferences (Settings > Results), so it lasts between sessions:
   - the colour map (turbo, jet, viridis, plasma, cool to warm, greys, blues, reds) and whether it runs the other way;
   - smooth colours or bands (6, 9 as Ansys, 12, 16), labelled at each band edge on a vertical bar;
-  - one colour for values above the top and below the bottom of a custom range (grey, black, white, magenta), shown as "above" and "below" swatches on the bar;
+  - a colour for values above the top of a custom range and one for values below its bottom, chosen separately (the end colour, grey, black, white, magenta), shown as "above" and "below" swatches on the bar;
   - the bar's place (left or right vertical, top or bottom horizontal; a horizontal bar puts its numbers under it, five of them) and its size (bar and text together, small to largest).
 - **Custom ranges belong to a result**, not the look: `Viewport.ranges` keeps one per result key for the session, so deformation and stress each keep their own; the others stay automatic.
 - **GUI:** Legend… in the Results ribbon and menu opens a panel in the Properties dock; every change redraws at once; "From the result" fills the custom range with the result's extremes to start from; a top not above the bottom is refused in red.

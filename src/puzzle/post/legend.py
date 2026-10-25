@@ -2,9 +2,10 @@
 
 `Legend` holds the look, kept as preferences (Settings > Results) so it lasts between
 sessions: the colour map and whether it runs the other way, smooth colours or a few
-bands, one colour for values outside a custom range (as Ansys draws them: grey above
-the top, below the bottom), and the bar's place and size. A custom range belongs to a
-result, not the look: the viewport keeps one per result (`Viewport.ranges`).
+bands, a colour for values above a custom range and one for values below it (as Ansys
+draws them: grey above the top, below the bottom), and the bar's place and size. A
+custom range belongs to a result, not the look: the viewport keeps one per result
+(`Viewport.ranges`).
 """
 
 from __future__ import annotations
@@ -52,7 +53,8 @@ class Legend:
     colormap: str = "turbo"
     invert: bool = False
     bands: int = 0  # 0: smooth
-    outside: str = "none"  # one colour above and below a custom range, or "none"
+    above: str = "none"  # one colour above a custom range's top, or "none" (the end colour)
+    below: str = "none"  # one colour below its bottom
     position: str = "left"
     size: float = 1.0
 
@@ -65,7 +67,8 @@ class Legend:
             colormap=s.get("results.colormap"),
             invert=bool(s.get("results.invert_colors")),
             bands=int(s.get("results.bands")),
-            outside=s.get("results.outside_color"),
+            above=s.get("results.above_color"),
+            below=s.get("results.below_color"),
             position=s.get("results.legend_position"),
             size=float(s.get("results.legend_size")),
         )
@@ -78,7 +81,8 @@ class Legend:
             ("results.colormap", self.colormap),
             ("results.invert_colors", self.invert),
             ("results.bands", self.bands),
-            ("results.outside_color", self.outside),
+            ("results.above_color", self.above),
+            ("results.below_color", self.below),
             ("results.legend_position", self.position),
             ("results.legend_size", self.size),
         ):
@@ -92,8 +96,10 @@ class Legend:
         out: dict = {"cmap": self.cmap()}
         if self.bands:
             out["n_colors"] = self.bands
-        if custom_range and self.outside != "none":
-            out["above_color"] = out["below_color"] = COLOURS[self.outside]
+        if custom_range and self.above != "none":
+            out["above_color"] = COLOURS[self.above]
+        if custom_range and self.below != "none":
+            out["below_color"] = COLOURS[self.below]
         return out
 
     def finish(self, plotter) -> None:

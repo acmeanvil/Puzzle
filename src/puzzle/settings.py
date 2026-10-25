@@ -43,8 +43,10 @@ def _legend_preferences() -> list[Preference]:
         Preference("results.invert_colors", "Results", "Colours run", False,
                    [("Low blue, high red (as listed)", False), ("The other way", True)]),
         Preference("results.bands", "Results", "Colour bands", 0, BANDS),
-        Preference("results.outside_color", "Results", "Outside a custom range", "none",
-                   OUTSIDE, "Values above the top and below the bottom in one colour."),
+        Preference("results.above_color", "Results", "Above a custom range", "none",
+                   OUTSIDE, "Values above the top in one colour."),
+        Preference("results.below_color", "Results", "Below a custom range", "none",
+                   OUTSIDE, "Values below the bottom in one colour."),
         Preference("results.legend_position", "Results", "Legend position", "left", POSITIONS),
         Preference("results.legend_size", "Results", "Legend size", 1.0, SIZES),
     ]  # fmt: skip

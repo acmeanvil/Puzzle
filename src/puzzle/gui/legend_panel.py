@@ -7,7 +7,7 @@ the result at once:
   result shown (deformation keeps its own, stress its own); "From the result" fills in
   the result's own extremes to start from.
 - **Colours:** the map, the other way round, smooth or a few bands, and one colour for
-  values outside a custom range (Ansys draws them grey).
+  values above a custom range and one for values below it (Ansys draws both grey).
 - **Legend:** where the bar sits and how big it and its text are.
 
 The look is kept as preferences (Settings > Results); ranges last for the session.
@@ -82,12 +82,15 @@ class LegendPanel(QWidget):
         self.invert = QCheckBox("The other way round")
         self.invert.setChecked(legend.invert)
         self.bands = _combo(BANDS, legend.bands)
-        self.outside = _combo(OUTSIDE, legend.outside)
-        self.outside.setToolTip("With a custom range: above the top and below the bottom")
+        self.above = _combo(OUTSIDE, legend.above)
+        self.above.setToolTip("With a custom range: values above its top")
+        self.below = _combo(OUTSIDE, legend.below)
+        self.below.setToolTip("With a custom range: values below its bottom")
         form.addRow("Colours", self.colormap)
         form.addRow("", self.invert)
         form.addRow("Bands", self.bands)
-        form.addRow("Outside the range", self.outside)
+        form.addRow("Above the range", self.above)
+        form.addRow("Below the range", self.below)
         layout.addWidget(look)
 
         place = QGroupBox("Bar")
@@ -115,7 +118,7 @@ class LegendPanel(QWidget):
         layout.addWidget(close)
         layout.addStretch()
 
-        for box in (self.mode, self.colormap, self.bands, self.outside, self.position):
+        for box in (self.mode, self.colormap, self.bands, self.above, self.below, self.position):
             box.currentIndexChanged.connect(lambda _=0: self.apply())
         self.invert.toggled.connect(lambda _=False: self.apply())
         self.size.valueChanged.connect(lambda _=0: self.apply())
@@ -162,7 +165,8 @@ class LegendPanel(QWidget):
         legend.colormap = self.colormap.currentData()
         legend.invert = self.invert.isChecked()
         legend.bands = int(self.bands.currentData())
-        legend.outside = self.outside.currentData()
+        legend.above = self.above.currentData()
+        legend.below = self.below.currentData()
         legend.position = self.position.currentData()
         legend.size = SIZES[self.size.value()][1]
         self.size_label.setText(SIZES[self.size.value()][0])

@@ -1,5 +1,5 @@
 """Legend… (the result colour bar): a custom range per result, the look kept as
-preferences, and one colour outside the range; checked on a solved bar."""
+preferences, and a colour above the range and one below it; checked on a solved bar."""
 
 import os
 
@@ -36,10 +36,12 @@ def test_legend_bar_args_place_and_size():
     assert right["position_x"] > 0.7 and right["label_font_size"] == 18
     assert not bottom["vertical"] and bottom["position_y"] < 0.2 and bottom["n_labels"] == 5
     assert Legend(bands=9).bar_args("", "%g")["n_labels"] == 10  # a label per band edge
-    colours = Legend(colormap="viridis", invert=True, bands=9, outside="grey").mesh_args(True)
+    colours = Legend(colormap="viridis", invert=True, bands=9, above="grey",
+                     below="black").mesh_args(True)  # fmt: skip
     assert colours == {"cmap": "viridis_r", "n_colors": 9, "above_color": "#a6a6a6",
-                       "below_color": "#a6a6a6"}  # fmt: skip
-    assert "above_color" not in Legend(outside="grey").mesh_args(False)  # auto: no outside
+                       "below_color": "#000000"}  # fmt: skip
+    assert "below_color" not in Legend(above="grey").mesh_args(True)  # one side only
+    assert "above_color" not in Legend(above="grey").mesh_args(False)  # auto: no outside
 
 
 @pytest.mark.skipif(not available("calculix"), reason="calculix not available")
@@ -74,7 +76,8 @@ def test_the_panel_sets_a_range_per_result_and_keeps_the_look(app, tmp_path):
         assert window.viewport.shown["custom_range"] and high > low
         panel.bottom.setText(f"{low}")
         panel.top.setText(f"{(low + high) / 2}")
-        panel.outside.setCurrentIndex(panel.outside.findData("grey"))
+        panel.above.setCurrentIndex(panel.above.findData("grey"))
+        panel.below.setCurrentIndex(panel.below.findData("magenta"))
         panel.bands.setCurrentIndex(panel.bands.findData(9))
         panel.colormap.setCurrentIndex(panel.colormap.findData("viridis"))
         panel.invert.setChecked(True)
@@ -83,8 +86,8 @@ def test_the_panel_sets_a_range_per_result_and_keeps_the_look(app, tmp_path):
         assert window.viewport.ranges[key] == pytest.approx((low, (low + high) / 2))
         assert window.viewport.shown["clim"] == pytest.approx((low, (low + high) / 2))
         saved = Legend.from_settings()
-        assert (saved.colormap, saved.invert, saved.bands, saved.outside, saved.position) == (
-            "viridis", True, 9, "grey", "right")  # fmt: skip
+        assert (saved.colormap, saved.invert, saved.bands, saved.above, saved.below,
+                saved.position) == ("viridis", True, 9, "grey", "magenta", "right")  # fmt: skip
         panel.top.setText(f"{low - 1}")
         panel.apply()
         assert panel.message.text() == "The top must be above the bottom"
@@ -101,6 +104,7 @@ def test_the_panel_sets_a_range_per_result_and_keeps_the_look(app, tmp_path):
         assert panel.mode.currentData() == "custom"  # its own range came back with it
     finally:
         for key in ("results.colormap", "results.invert_colors", "results.bands",
-                    "results.outside_color", "results.legend_position"):  # fmt: skip
+                    "results.above_color", "results.below_color",
+                    "results.legend_position"):  # fmt: skip
             settings.current().set(key, settings.BY_KEY[key].default)
         window.close()
