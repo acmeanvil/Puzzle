@@ -77,8 +77,8 @@ PREFERENCES: list[Preference] = [
         "Element types for new meshes",
         "solver",
         [("Each solver's preferred types", "solver"), ("Puzzle's neutral defaults", "neutral")],
-        "Mesh setup still offers every element option the study's solvers support.",
-        ready=False,
+        "New mesh recipes take first-order elements when every study uses a finite-volume "
+        "CFD solver, second-order ones otherwise; neutral is always second order.",
     ),
     Preference(
         "meshing.preview",

@@ -106,6 +106,21 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("probe", help="the kept probe's name")
     p.set_defaults(handler=_plot)
 
+    p = sub.add_parser(
+        "mesh-shootout", help="run a study on Gmsh's and Netgen's meshes and compare (ADR 0019)"
+    )
+    p.add_argument("project", type=Path)
+    p.add_argument("study")
+    p.add_argument(
+        "--quantity",
+        action="append",
+        default=None,
+        help="a result field compared by its peak (or global value), or eigenfrequencies; "
+        "repeat for several (default: displacement)",
+    )
+    p.add_argument("--tolerance", type=float, default=0.02, help="relative (default 0.02)")
+    p.set_defaults(handler=_mesh_shootout)
+
     p = sub.add_parser("outline", help="the model tree as text")
     p.add_argument("project", type=Path)
     p.add_argument("--ids", action="store_true", help="show object ids")
@@ -285,6 +300,26 @@ def _show(args) -> int:
     if args.animate:
         print(f"Saved {args.animate}")
     return 0
+
+
+def _mesh_shootout(args) -> int:
+    """The study on both meshers' meshes, compared; a Markdown table (ADR 0019)."""
+    import tempfile
+
+    from puzzle.commands import resolve
+    from puzzle.model.schema import ComparisonMetric, Study
+    from puzzle.shootout import run_mesh_shootout
+
+    project = _load(args.project)
+    study = resolve(project, args.study, Study)
+    metrics = [
+        ComparisonMetric(quantity=q, norm="relative_value", tolerance=args.tolerance)
+        for q in (args.quantity or ["displacement"])
+    ]
+    with tempfile.TemporaryDirectory() as work:
+        out = run_mesh_shootout(project, study.id, Path(args.project), Path(work), metrics)
+    print(out.table().replace("netgen vs gmsh", "Netgen vs Gmsh"))
+    return 0 if out.passed else 1
 
 
 def _plot(args) -> int:

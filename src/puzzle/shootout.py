@@ -118,3 +118,44 @@ def compare(a: Results, b: Results, metric: ComparisonMetric) -> float:
     if metric.norm == "max_abs_difference":
         return float(np.abs(db - da).max())
     return float(np.linalg.norm(db - da) / np.linalg.norm(da))
+
+
+def run_mesh_shootout(
+    project: Project,
+    study_id,
+    root: Path,
+    workdir: Path,
+    metrics: list[ComparisonMetric],
+    *,
+    on_output: Callable[[str], None] | None = None,
+    timeout_s: float | None = None,
+) -> ShootoutRun:
+    """A mesh shoot-out (ADR 0019): the study run on its recipe meshed by Gmsh and by
+    Netgen (the recipe otherwise unchanged), compared by `metrics`. The meshes differ,
+    so only whole-result measures compare: relative_value (a global value or the peak)
+    and eigenfrequencies; node-by-node norms are refused."""
+    import copy
+
+    from puzzle.model.schema import Component, MeshRecipe
+
+    odd = [m for m in metrics if m.norm != "relative_value" and m.quantity != "eigenfrequencies"]
+    if odd:
+        raise StudyError(
+            "two meshes have different nodes: a mesh shoot-out compares relative_value "
+            "metrics or eigenfrequencies only",
+            code="invalid",
+        )
+    study = project.get(study_id, Study)
+    runs = {}
+    for mesher in ("gmsh", "netgen"):
+        copy_ = copy.deepcopy(project)
+        comp = copy_.get(study.component, Component)
+        copy_.get(comp.mesh, MeshRecipe).mesher = mesher
+        runs[mesher] = run_study(
+            copy_, study.id, root, workdir / mesher, on_output=on_output, timeout_s=timeout_s
+        )
+    out = ShootoutRun(primary="gmsh", runs=runs)
+    for metric in metrics:
+        value = compare(runs["gmsh"].results, runs["netgen"].results, metric)
+        out.comparisons.append(Comparison("netgen", metric, value))
+    return out

@@ -56,6 +56,7 @@ def _plates(tmp_path):
             selections=[
                 NamedSelection(name="Body", entity="body", members=["Body"]),
                 NamedSelection(name="Top", entity="face", members=["P/+z"]),
+                NamedSelection(name="Bottom", entity="face", members=["P/-z"]),
             ],
         )
     )
@@ -103,12 +104,15 @@ def test_fasteners_from_holes(app, tmp_path):
     def by_hand(dialog):
         dialog.name.setText("Pin")
         dialog.diameter.setText("0.006")
+        dialog.pretension.setText("2000")
         return True
 
     window.run_dialog = by_hand
     add_fastener(window, comp)
     names = [c.name for c in window.session.project.of_type(Component)[0].connectors]
     assert names == ["Bolt 1", "Pin"]
+    pin = window.session.project.of_type(Component)[0].connectors[1]
+    assert pin.pretension.to_si() == pytest.approx(2000.0)
     window.close()
 
 
@@ -135,3 +139,51 @@ def test_fasteners_drawn_as_tubes(tmp_path):
     (tube,) = [g for g in symbols(comp, mesh, lambda s: []) if g.kind == "tube"]
     assert tube.radius == pytest.approx(0.003)
     assert tube.points[1][2] - tube.points[0][2] == pytest.approx(0.015, abs=1e-6)
+
+
+def test_fastener_forces_over_results(app, tmp_path):
+    """A run's fasteners are labelled with their axial force over its results."""
+    from solvers import available
+
+    if not available("calculix"):
+        pytest.skip("needs CalculiX")
+    from puzzle.model.schema import BeamFastener, Feature, Physics
+
+    root = _plates(tmp_path)
+    from puzzle.project import load_project
+
+    project = load_project(root)
+    comp = project.of_type(Component)[0]
+    comp.connectors.append(
+        BeamFastener(
+            name="Bolt",
+            source="Lower/Top",
+            target="Upper/Top",
+            diameter=Quantity(value=6, unit="mm"),
+            material=comp.materials[0].material,
+        )
+    )
+    comp.physics = [
+        Physics(
+            type="solid_mechanics",
+            features=[
+                Feature(type="fixed", selection="Lower/Bottom"),
+                Feature(
+                    type="gravity",
+                    selection="Upper/Body",
+                    values={"gz": Quantity(value=-9.81e3, unit="m/s^2")},
+                ),
+            ],
+        )
+    ]
+    study = project.of_type(Study)[0]
+    study.solver = "calculix"
+    save_project(project, root)
+    window = MainWindow(root)
+    from puzzle.commands.model import RunStudy
+
+    run = window.session.submit(RunStudy(study=str(study.id))).run
+    window._select_run(run.run_id)
+    (label,) = window.viewport.shown["fasteners"]
+    assert label.startswith("Bolt: -") and label.endswith("compression")  # it holds up the plate
+    window.close()

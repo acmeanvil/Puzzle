@@ -71,6 +71,10 @@ class MeshResult:
     quality: dict = field(default_factory=dict)
     # Each volume element's shape quality (ids, values), for colouring the mesh by it.
     element_quality: tuple = field(default_factory=tuple)
+    # The edges' nodes before meshing (ADR 0019 edge seeds), (n, 3) in m.
+    seeds: np.ndarray | None = None
+    # Each body's possible method (ADR 0019): (3, tag) -> (method, why).
+    methods: dict = field(default_factory=dict)
 
 
 def generate_mesh(
@@ -81,6 +85,7 @@ def generate_mesh(
     *,
     verbose: bool = False,
     preview: bool = False,
+    seeds: bool = False,
 ) -> MeshResult:
     """Mesh a component. Geometry sources resolve relative to the project `root`.
 
@@ -169,6 +174,7 @@ def generate_mesh(
             (0, t): tuple(gmsh.model.getValue(0, t, [])) for _, t in gmsh.model.getEntities(0)
         }
         anchors = _anchors(references, persistent)
+        methods = {v: _method(faces) for v, faces in boundaries.items()}
         if preview:
             size = max(r.size for r in references.values()) / 40
             gmsh.option.setNumber("Mesh.MeshSizeMax", size)
@@ -185,6 +191,19 @@ def generate_mesh(
                 vertices=vertices,
                 anchors=anchors,
                 selections=reports,
+                methods=methods,
+            )
+        if seeds:  # the edges only, with the recipe's sizes: where their nodes will fall
+            _sizes(recipe, comp, found, warnings)
+            gmsh.model.mesh.generate(1)
+            _ids, coords, _ = gmsh.model.mesh.getNodes(1, -1, includeBoundary=True)
+            return MeshResult(
+                mesh=Mesh(node_ids=np.zeros(0, dtype=np.int64), coords=np.zeros((0, 3))),
+                path=out_dir,
+                min_quality=1.0,
+                warnings=warnings,
+                names=names,
+                seeds=np.unique(np.asarray(coords).reshape(-1, 3), axis=0),
             )
         if recipe.mesher == "netgen":  # Netgen meshes; Gmsh raises the order after
             from puzzle.mesh.netgen_mesher import mesh_with_netgen
@@ -364,6 +383,36 @@ ALGORITHM_2D = {
 }
 ALGORITHM_3D = {"delaunay": 1, "frontal": 4, "mmg": 7, "hxt": 10}
 HIGH_ORDER = {"off": 0, "optimise": 1, "elastic_and_optimise": 2, "elastic": 3}
+
+
+FINITE_VOLUME = {"code_saturne", "openfoam"}  # they take first-order cells
+
+
+def preferred_order(project) -> int:
+    """A new recipe's element order (ADR 0019, Settings → Meshing → Element types): with
+    "each solver's preferred types", first order when every study's solver is a
+    finite-volume CFD solver, else second (the FE solvers' quadratic tets); with
+    "neutral", second."""
+    from puzzle.model.schema import Study
+    from puzzle.settings import current
+
+    if current().get("meshing.element_types") != "solver":
+        return 2
+    solvers = {s.solver for s in project.of_type(Study)}
+    return 1 if solvers and solvers <= FINITE_VOLUME else 2
+
+
+def _method(faces) -> tuple[str, str]:
+    """How a body can be meshed: structured hexahedra when it is block-like (six faces,
+    each bounded by four edges, as Gmsh's automatic transfinite meshing needs), else
+    tetrahedra, saying why."""
+    sides = [len(gmsh.model.getBoundary([f], combined=False, oriented=False)) for f in faces]
+    if len(faces) == 6 and all(n == 4 for n in sides):
+        return "hexahedra", "block-like: six four-sided faces"
+    if len(faces) != 6:
+        return "tetrahedra", f"{len(faces)} faces; a block has six"
+    odd = sum(n != 4 for n in sides)
+    return "tetrahedra", f"{odd} of its faces {'is' if odd == 1 else 'are'} not four-sided"
 
 
 def _options(recipe: MeshRecipe) -> None:

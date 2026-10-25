@@ -1,6 +1,6 @@
 # 0019. Mesh in a workbench with the full breadth of Gmsh and Netgen
 
-- Status: Accepted; built (2026-10-24) but for the items under Not yet
+- Status: Accepted; built (2026-10-24, completed 2026-10-25) but for sweeping and mixed hex-tet meshes
 - Date: 2026-10-22
 
 ## Context
@@ -81,12 +81,13 @@ Netgen 6.2 is on conda-forge for every platform Puzzle supports (`netgen`, LGPL-
   - **The view** colours the elements by shape quality once meshed. The recipe's settings are editable in Properties beside it.
 - **Settings:** Meshing → Mesh preview ("on demand", the default, or mesh again after every change). Meshing → Offer Netgen as Gmsh's optimiser (whether the recipe's optimiser dropdown lists Netgen). The optimiser itself is a recipe setting, not a preference, because preferences never change results.
 - **Agents:** MCP `mesh_quality(component)` meshes with the recipe and returns counts, the measures, the five worst elements and the warnings.
-- **Not yet:**
-  - the edge-seed preview;
-  - automatic method detection (sweepable and transfinite parts coloured by method);
-  - a searchable list of Gmsh's options with its descriptions (`gmsh_options` is set through commands for now);
-  - the element-types setting;
-  - a mesh shoot-out command.
+- **Added 2026-10-25:**
+  - **Edge seeds:** Show seeds in the Mesh tab meshes the edges only, with the recipe's sizes and controls (`generate_mesh(..., seeds=True)`), and draws their nodes over the preview, as PrePoMax's Preview Edge Mesh does.
+  - **Method detection:** the preview finds each body's method. A body is block-like when it has six faces, each bounded by four edges, which Gmsh's automatic transfinite meshing needs; then hexahedra can be used. Otherwise it gets tetrahedra, with the reason. The Mesh tab lists them, and the view highlights block-like bodies. Sweeping isn't offered: Gmsh can't sweep OpenCASCADE bodies after the fact.
+  - **Gmsh options…:** Gmsh's own mesh options (`gmsh -help_options`: name, default, description; `mesh/gmsh_options.py`) in a searchable table. A value typed sets it for the recipe, an empty one clears it, and a non-number for a number option is refused.
+  - **Element types setting** (Settings → Meshing): with "each solver's preferred types", a new recipe gets first-order elements when every study uses a finite-volume CFD solver, and second order otherwise; "neutral" always gives second order.
+  - **Mesh shoot-out** (`shootout.run_mesh_shootout`, `puzzle mesh-shootout PROJECT STUDY`, MCP `mesh_shootout`): the study on its recipe meshed by Gmsh and by Netgen, compared by peak or global values, or by eigenfrequencies (node-by-node norms are refused: the meshes differ). The cantilever's tip load agrees to 0.005 %.
+- **Not yet:** sweeping, and a recipe mode that meshes block-like bodies with hexahedra and the rest with tetrahedra together.
 
 ## Alternatives considered
 

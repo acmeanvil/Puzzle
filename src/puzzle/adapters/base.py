@@ -158,6 +158,13 @@ class SolverAdapter(ABC):
                     for f in physics.features
                     if f.type in PRETENSION_FEATURES
                 ]
+                problems += [
+                    f"{self.name} runs each step as its own analysis, so fastener "
+                    f"{c.name}'s pretension can't be locked into a later step; use one "
+                    "step, or CalculiX"
+                    for c in component.connectors
+                    if c.pretension is not None and physics.type == "solid_mechanics"
+                ]
             for f in physics.features:  # amplitudes (ADR 0037): refused, never ignored
                 if f.amplitude is None:
                     continue

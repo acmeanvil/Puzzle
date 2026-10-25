@@ -180,7 +180,10 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         if f.type in ("fixed", "displacement") and f.selection in mesh.groups
         for n in mesh.groups[f.selection].node_ids
     }
-    base, fastener_ends = _with_bolts(base, fasteners, mesh, names, held)
+    base, fastener_ends, tight = _with_bolts(base, fasteners, mesh, names, held)
+    if step.type != "modal":  # a tightened fastener: a pretension on its bolt's mid-plane
+        bolts += [f for f, _cut in tight]
+        cuts += [c for _f, c in tight]
     if fastener_ends:  # the reader sums the bolt end faces' reactions (ADR 0027)
         (workdir / f"{JOB}.fasteners.json").write_text(json.dumps(fastener_ends))
     points = _Points(base, names)
@@ -515,7 +518,14 @@ def _cut(mesh: Mesh, cuts) -> Mesh:
                 b = CellBlock(b.element, b.dim, b.entity, b.ids, conn)
             moved.append(b)
         blocks = moved
-    return Mesh(np.concatenate(ids), np.vstack(xyz), blocks, dict(mesh.groups))
+    return _sorted_mesh(np.concatenate(ids), np.vstack(xyz), blocks, dict(mesh.groups))
+
+
+def _sorted_mesh(ids: np.ndarray, xyz: np.ndarray, blocks, groups) -> Mesh:
+    """A mesh with its nodes in id order: Code_Aster numbers nodes in the order they are
+    written, so the result tables' numbers are the ids only when they increase."""
+    order = np.argsort(ids, kind="stable")
+    return Mesh(ids[order], xyz[order], blocks, groups)
 
 
 BOLT_TAG = 800_000  # Gmsh entities for fastener bolts, clear of the mesh's own
@@ -526,31 +536,58 @@ def _with_bolts(mesh: Mesh, fasteners, original: Mesh, names: dict, held=None):
     tets in group F<i>, its end faces in F<i>A and F<i>B, and for distributing ends a
     master node at each end. -> (mesh, ends info for the reader)."""
     from puzzle.adapters.common import (
+        SectionCut,
         bolt_mesh,
         check_rigid_ends,
         fastener_end,
         fastener_frame,
+        split_bolt,
     )
 
     if not fasteners:
-        return mesh, []
+        return mesh, [], []
     check_rigid_ends(fasteners, original, held)
     node = int(mesh.node_ids.max()) + 1
     elem = int(max(b.ids.max() for b in mesh.blocks)) + 1
     ids, xyz, blocks, groups = [mesh.node_ids], [mesh.coords], list(mesh.blocks), dict(mesh.groups)
     edges = {(0, 1): 4, (1, 2): 5, (0, 2): 6, (0, 3): 7, (2, 3): 8, (1, 3): 9}  # Gmsh tet10
-    ends = []
+    ends, pretensioned = [], []
     for i, f in enumerate(fasteners, start=1):
         what = f"fastener '{f.name}'"
         a, b = (fastener_end(s, original, what) for s in (f.source, f.target))
         axis, _side = fastener_frame(a.centre, b.centre)
-        coords, tets, at_a, at_b = bolt_mesh(a.centre, b.centre, f.diameter.to_si(), f.elements)
+        tight = f.pretension is not None
+        coords, tets, at_a, at_b, middle = bolt_mesh(
+            a.centre, b.centre, f.diameter.to_si(), f.elements, tight
+        )
+        twins = {}
+        if tight:  # cut at its mid-plane (ADR 0037's bolt section)
+            tets, twins, twin_xyz = split_bolt(coords, tets, middle, a.centre, b.centre, 0)
+            coords = np.vstack([coords, twin_xyz])
         new = np.arange(node, node + len(coords))
         node += len(coords)
+        if tight:
+            ref = node + 2  # after the bolt's nodes and its two masters: ids stay in order
+            cut = SectionCut(
+                ref,
+                axis,
+                (a.centre + b.centre) / 2,
+                {int(new[k]): int(new[t]) for k, t in twins.items()},
+                set(),
+            )
+            section = Feature(
+                type="bolt_pretension", selection=f.source, values={"F": f.pretension}
+            )
+            pretensioned.append((section, cut))
         masters = [node, node + 1]
         node += 2
+        # Code_Aster numbers nodes in the order they are written: keep ids increasing.
         ids += [new, np.array(masters)]
         xyz += [coords, np.array([a.centre, b.centre])]
+        if tight:
+            ids.append(np.array([node]))
+            xyz.append(((a.centre + b.centre) / 2)[None])
+            node += 1
         body = (3, BOLT_TAG + i)
         blocks.append(CellBlock("tet10", 3, body, np.arange(elem, elem + len(tets)), new[tets]))
         elem += len(tets)
@@ -581,7 +618,7 @@ def _with_bolts(mesh: Mesh, fasteners, original: Mesh, names: dict, held=None):
                 "masters": masters,
             }
         )  # fmt: skip
-    return Mesh(np.concatenate(ids), np.vstack(xyz), blocks, groups), ends
+    return _sorted_mesh(np.concatenate(ids), np.vstack(xyz), blocks, groups), ends, pretensioned
 
 
 def _fastener_loads(ends: list[dict], fasteners, names: dict) -> dict[str, list[str]]:

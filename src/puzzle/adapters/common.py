@@ -724,33 +724,56 @@ def fastener_frame(a: np.ndarray, b: np.ndarray) -> tuple[np.ndarray, np.ndarray
     return axis, side / np.linalg.norm(side)
 
 
-def bolt_mesh(a: np.ndarray, b: np.ndarray, diameter: float, layers: int = 1):
-    """A fastener as a small solid (ADR 0027, CalculiX): a round bar of quadratic tets
-    from a to b. -> (coordinates (n, 3), tet10 connectivity in Gmsh order (0-based),
-    the indices of the nodes on the face at a, and at b)."""
+def bolt_mesh(a: np.ndarray, b: np.ndarray, diameter: float, layers: int = 1, split=False):
+    """A fastener as a small solid (ADR 0027): a round bar of quadratic tets from a to b,
+    in two halves sharing a mid-plane when `split` (a pretension section). -> (coordinates
+    (n, 3), tet10 connectivity in Gmsh order (0-based), the indices of the nodes on the
+    face at a, at b, and on the mid-plane (empty unless split))."""
     import gmsh
 
     from puzzle.geometry.session import gmsh_session
 
     length = float(np.linalg.norm(b - a))
     with gmsh_session("fastener"):
-        gmsh.model.occ.addCylinder(*a, *(b - a), diameter / 2)
+        if split:
+            mid = (a + b) / 2
+            one = gmsh.model.occ.addCylinder(*a, *(mid - a), diameter / 2)
+            two = gmsh.model.occ.addCylinder(*mid, *(b - mid), diameter / 2)
+            gmsh.model.occ.fragment([(3, one)], [(3, two)])
+        else:
+            gmsh.model.occ.addCylinder(*a, *(b - a), diameter / 2)
         gmsh.model.occ.synchronize()
-        size = min(diameter / 3, length / max(layers, 1) / 2)
+        size = min(diameter / 3, length / max(layers, 1) / (4 if split else 2))
         gmsh.option.setNumber("Mesh.MeshSizeMax", size)
         gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 12)
         gmsh.model.mesh.generate(3)
         gmsh.model.mesh.setOrder(2)
         ids, xyz, _ = gmsh.model.mesh.getNodes()
-        _types, _tags, nodes = gmsh.model.mesh.getElements(3)
+        types, _tags, nodes = gmsh.model.mesh.getElements(3)
     ids = np.asarray(ids, dtype=np.int64)
     xyz = np.asarray(xyz).reshape(-1, 3)
     index = {int(n): i for i, n in enumerate(ids)}
-    tets = np.array([index[int(n)] for n in nodes[0]], dtype=np.int64).reshape(-1, 10)
+    conn = np.concatenate([np.asarray(n) for t, n in zip(types, nodes, strict=True) if t == 11])
+    tets = np.array([index[int(n)] for n in conn], dtype=np.int64).reshape(-1, 10)
     axis = (b - a) / length
     along = (xyz - a) @ axis
     tol = 1e-9 * max(length, diameter)
-    return xyz, tets, np.flatnonzero(along < tol), np.flatnonzero(along > length - tol)
+    middle = np.flatnonzero(np.abs(along - length / 2) < tol) if split else np.array([], int)
+    return xyz, tets, np.flatnonzero(along < tol), np.flatnonzero(along > length - tol), middle
+
+
+def split_bolt(xyz: np.ndarray, tets: np.ndarray, middle: np.ndarray, a, b, first_id: int):
+    """Cut a split bolt at its mid-plane for a pretension: the mid-plane nodes get twins
+    (ids from `first_id`), which the tets of the half towards b use. -> (tets with twins
+    as indices past the bolt's own nodes, {node index: twin index}, twin coordinates)."""
+    axis = (b - a) / np.linalg.norm(b - a)
+    centre = (a + b) / 2
+    twin = {int(m): len(xyz) + k for k, m in enumerate(middle)}
+    out = tets.copy()
+    beyond = (xyz[tets[:, :4]].mean(axis=1) - centre) @ axis > 0
+    for row in np.flatnonzero(beyond):
+        out[row] = [twin.get(int(n), n) for n in tets[row]]
+    return out, twin, xyz[middle]
 
 
 FASTENER_COMPONENTS = [

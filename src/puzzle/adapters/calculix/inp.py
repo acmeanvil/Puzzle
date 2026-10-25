@@ -145,7 +145,8 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
     out += _pretension_sections(mesh, cuts)
     used = len(pretension) + sum(len(c.doubles) for c in cuts.values())
     first = int(mesh.node_ids.max()) + 1 + 2 * len(rigid) + used
-    fastener_lines, fastener_nodes, fastener_elems, _ends = _fasteners(project, comp, mesh, first)
+    fastener_lines, fastener_nodes, fastener_elems, ends = _fasteners(project, comp, mesh, first)
+    tight = [e["pretension"] for e in ends if e["pretension"]]  # (reference node, force)
     out += fastener_lines
     out += _springs(
         comp,
@@ -188,6 +189,7 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
             project,
             index=index,
             pretension=(pretension, applied),
+            fastener_pretension=(tight, _first_loaded(solve_steps)),
         )
         perturbs = prestress or index in preloads.values()  # of the stressed state
         if perturbs and "PERTURBATION" not in lines[0]:
@@ -320,6 +322,7 @@ def _step(
     project: Project | None = None,
     index: int | None = None,
     pretension=({}, {}),
+    fastener_pretension=((), None),
 ) -> list[str]:
     """One *STEP; `index` is the study's solve step number, for features applying in some
     steps only, and `pretension` (nodes, step applied) locks a bolt after its step."""
@@ -458,6 +461,12 @@ def _step(
                     extra.setdefault("*BOUNDARY", []).append(f"{node}, 1, 1, {d:.10g}")
             elif first is not None and index > first:  # held at the length it reached
                 locked.append(f"{node}, 1, 1")
+        tight, first = fastener_pretension  # fasteners' pretension (ADR 0027)
+        for node, force in tight:
+            if index is None or index == first:
+                extra.setdefault("*CLOAD", []).append(f"{node}, 1, {-force:.10g}")
+            elif first is not None and index > first:
+                locked.append(f"{node}, 1, 1")
     features = [f for f in features if f.type not in PRETENSION]
     out += _features(features, mesh, faces, op, _amplitude_names(comp), rigid, extra)
     if op:  # a card not written again would keep the step before's loads: clear it
@@ -544,6 +553,15 @@ def _pretension_nodes(comp: Component, mesh: Mesh) -> dict:
     return {id(f): first + i for i, f in enumerate(features)}
 
 
+def _first_loaded(steps) -> int | None:
+    """The first static or transient structural solve step (1, 2, ...): where a
+    fastener's pretension goes in, to be locked after."""
+    for i, s in enumerate(steps, start=1):
+        if s.solves("solid_mechanics") and s.type not in ("modal", "buckling"):
+            return i
+    return None
+
+
 def _pretension_steps(comp: Component, steps) -> dict:
     """The solve step (1, 2, ...) each pretension is applied in: the first static or
     transient structural step it is active in. It is locked in the steps after."""
@@ -599,7 +617,13 @@ def _fasteners(project: Project, comp: Component, mesh: Mesh, first_node: int):
     rigid body, and tying its rotations by *EQUATION left the joint near a hinge. The
     bolt end faces' reactions are the forces and moments it takes; they are printed
     for the reader. -> (lines, nodes used, elements used, ends info)"""
-    from puzzle.adapters.common import bolt_mesh, fastener_end, fastener_frame, rbe3_rows
+    from puzzle.adapters.common import (
+        bolt_mesh,
+        fastener_end,
+        fastener_frame,
+        rbe3_rows,
+        split_bolt,
+    )
 
     if not comp.connectors:
         return [], 0, 0, []
@@ -629,12 +653,23 @@ def _fasteners(project: Project, comp: Component, mesh: Mesh, first_node: int):
                         code="unsupported",
                     )
         d = f.diameter.to_si()
-        xyz, tets, at_a, at_b = bolt_mesh(a.centre, b.centre, d, f.elements)
+        tight = f.pretension is not None
+        xyz, tets, at_a, at_b, middle = bolt_mesh(a.centre, b.centre, d, f.elements, tight)
+        twins: dict[int, int] = {}
+        if tight:  # cut at its mid-plane, as a bolt section (ADR 0037)
+            tets, twins, twin_xyz = split_bolt(xyz, tets, middle, a.centre, b.centre, 0)
+            xyz = np.vstack([xyz, twin_xyz])
         ids = np.arange(node, node + len(xyz))
         node += len(xyz)
         helpers = {"a": (node, node + 1), "b": (node + 2, node + 3)}
         node += 4
+        ref = None
+        if tight:
+            ref = node
+            node += 1
         out += ["*NODE", *(_node_row(n, p) for n, p in zip(ids, xyz, strict=True))]
+        if ref is not None:
+            out.append(_node_row(ref, (a.centre + b.centre) / 2))
         for side_name, end in (("a", a), ("b", b)):
             out += [_node_row(n, end.centre) for n in helpers[side_name]]
         out.append(f"*ELEMENT, TYPE=C3D10, ELSET=E_FASTENER{i}")
@@ -644,6 +679,14 @@ def _fasteners(project: Project, comp: Component, mesh: Mesh, first_node: int):
         material = project.get(f.material, Material)
         out += [f"*MATERIAL, NAME=MF{i}", *_material_cards(material, comp)]
         out.append(f"*SOLID SECTION, ELSET=E_FASTENER{i}, MATERIAL=MF{i}")
+        if ref is not None:  # twin - node = axis × the opening (the reference's dof 1)
+            out.append("*EQUATION")
+            for k, t in twins.items():
+                for dof in (1, 2, 3):
+                    terms = [f"{ids[t]}, {dof}, 1.", f"{ids[k]}, {dof}, -1."]
+                    if abs(axis[dof - 1]) > 1e-12:
+                        terms.append(f"{ref}, 1, {-axis[dof - 1]:.13g}")
+                    out += [str(len(terms)), ", ".join(terms)]
         for side_name, end, face in (("a", a, at_a), ("b", b, at_b)):
             move, turn = helpers[side_name]
             bolt_face = f"N_FASTENER{i}{side_name.upper()}"
@@ -657,7 +700,7 @@ def _fasteners(project: Project, comp: Component, mesh: Mesh, first_node: int):
             else:  # the bolt end is rigid; the hole follows it on average (RBE3)
                 out.append(f"*RIGID BODY, NSET={bolt_face}, REF NODE={move}, ROT NODE={turn}")
                 out.append("*EQUATION")
-                for terms in _rbe3_equations(rbe3_rows(end, mesh), move, turn):
+                for terms in _rbe3_equations(rbe3_rows(end, mesh), move, turn, held):
                     out.append(str(len(terms)))
                     for t in range(0, len(terms), 4):
                         out.append(", ".join(f"{n}, {j}, {c:.12g}" for n, j, c in terms[t : t + 4]))
@@ -666,6 +709,7 @@ def _fasteners(project: Project, comp: Component, mesh: Mesh, first_node: int):
             {
                 "name": f.name,
                 "axis": [float(c) for c in axis],
+                "pretension": None if ref is None else [ref, f.pretension.to_si()],
                 "a": {
                     "centre": [float(c) for c in a.centre],
                     "nodes": [int(n) for n in ids[at_a]],
@@ -681,7 +725,9 @@ def _node_row(n: int, p) -> str:
     return f"{n}, " + ", ".join(f"{c:.13g}" for c in p)
 
 
-def _rbe3_equations(rows, move: int, turn: int) -> list[list[tuple[int, int, float]]]:
+def _rbe3_equations(
+    rows, move: int, turn: int, held: set[int] = frozenset()
+) -> list[list[tuple[int, int, float]]]:
     """RBE3 rows (helper dof k = Σ c u) as *EQUATION terms whose dependent dofs are six
     face-node dofs, one per equation and in no other: the rows are solved for those six
     (chosen by pivoting, so the solve is well conditioned). The helpers stay independent,
@@ -695,9 +741,16 @@ def _rbe3_equations(rows, move: int, turn: int) -> list[list[tuple[int, int, flo
             C[k, index[(n, j)]] += c
     chosen: list[int] = []
     residual = C.copy()
+    blocked = [i for i, (n, _j) in enumerate(columns) if n in held]  # a held dof can't depend
+    if len(columns) - len(blocked) < 6:
+        raise InputError(
+            "a distributing fastener end needs a face that isn't all held: its nodes are "
+            "fixed, so the fastener would carry nothing",
+            code="unsupported",
+        )
     for _ in range(6):  # greedy column pivoting
         norms = np.linalg.norm(residual, axis=0)
-        norms[chosen] = -1.0
+        norms[chosen + blocked] = -1.0
         pick = int(np.argmax(norms))
         chosen.append(pick)
         q = residual[:, pick] / np.linalg.norm(residual[:, pick])

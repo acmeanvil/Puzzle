@@ -1067,7 +1067,10 @@ class MainWindow(QMainWindow):
             return
         mesh = mesh or self._preview(comp)
         if mesh is not None:
-            self.viewport.show_mesh(mesh)
+            rows = self.mesh_bench.body_methods()
+            blocks = [f for _b, way, _w, faces in rows if way == "hexahedra" for f in faces]
+            self.viewport.show_mesh(mesh, None, blocks)
+            self.mesh_bench.show_methods()
 
     def show_workbench_part(self) -> None:
         """The Geometry tab's part on its own (with a tool's pending step, if any)."""
@@ -1158,6 +1161,8 @@ class MainWindow(QMainWindow):
         if getattr(self, "_result_run", None) != run_id or self.result is None:
             self.result = (store.read_mesh(record.mesh_id), store.read_results(run_id))
             self._result_run = run_id
+        study = self.session.project.objects.get(_uuid(record.study_id))
+        self._result_component = getattr(study, "component", None)
         self.results_bar.blockSignals(True)
         self.results_bar.load(self.result[1], key)
         self.results_bar.blockSignals(False)
@@ -1268,6 +1273,7 @@ class MainWindow(QMainWindow):
         except (KeyError, ValueError) as exc:
             self.statusBar().showMessage(str(exc), 8000)
             return
+        self._show_fastener_forces(mesh)
         shown = self.viewport.shown
         self.results_bar.title.setText(shown.get("title", ""))
         unit = f" {shown['unit']}" if shown.get("unit") else ""
@@ -1275,6 +1281,28 @@ class MainWindow(QMainWindow):
             f"{shown['scalar']} ({shown['step']}): {shown['min']:.4g} … {shown['max']:.4g}{unit}"
         )
         self._result_properties()
+
+    def _show_fastener_forces(self, mesh) -> None:
+        """Fasteners over a result (ADR 0027): tubes, red in tension and blue in
+        compression, each labelled with its axial force in the display unit."""
+        from puzzle.model.units import convert, pretty
+        from puzzle.post.symbols import _fastener_symbols
+        from puzzle.settings import current
+
+        comp = self.session.project.objects.get(getattr(self, "_result_component", None))
+        state = self.viewport.result_state or {}
+        step = state.get("step")
+        field = step.fields.get("fastener") if step is not None else None
+        if comp is None or field is None or not getattr(comp, "connectors", None):
+            return
+        unit = current().display_units()["force"]
+        axial = field.values[:, field.components.index("axial")]
+        tubes = []
+        for g, c, value in zip(_fastener_symbols(comp, mesh), comp.connectors, axial, strict=False):
+            shown = convert(float(value), "N", unit)
+            kind = "tension" if value >= 0 else "compression"
+            tubes.append((g, f"{c.name}: {shown:.4g} {pretty(unit)} {kind}", value >= 0))
+        self.viewport.show_fasteners(tubes)
 
     # --- animation (ADR 0038) ------------------------------------------------------
 

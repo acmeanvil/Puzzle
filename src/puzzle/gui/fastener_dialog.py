@@ -65,12 +65,19 @@ class AddFastener(QDialog):
         _materials(self.material, project)
         _ends(self.ends)
         self.name = QLineEdit(f"Bolt {len(comp.connectors) + 1}")
+        from puzzle.model.units import pretty
+        from puzzle.settings import current
+
+        self.force_unit = current().display_units()["force"]
+        self.pretension = QLineEdit("")
+        self.pretension.setPlaceholderText("none")
         form.addRow("Name", self.name)
         form.addRow("One end (a hole's face)", self.source)
         form.addRow("Other end", self.target)
         form.addRow(f"Diameter ({self.unit})", self.diameter)
         form.addRow("Material", self.material)
         form.addRow("Ends", self.ends)
+        form.addRow(f"Pretension ({pretty(self.force_unit)})", self.pretension)
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
@@ -94,6 +101,12 @@ class AddFastener(QDialog):
             },
             "material": self.material.currentData(),
             "ends": self.ends.currentData(),
+            # Applied in the first static step, then locked (ADR 0027).
+            "pretension": (
+                {"value": float(self.pretension.text()), "unit": plain(self.force_unit)}
+                if self.pretension.text().strip()
+                else None
+            ),
         }
 
 

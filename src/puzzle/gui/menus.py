@@ -383,8 +383,15 @@ def edit_amplitude(window, amplitude=None):
 
 
 def new_mesh(window):
-    n = len(window.session.project.of_type(MeshRecipe)) + 1
-    data = {"name": f"Mesh {n}", "global_size": {"value": 5, "unit": "mm"}}
+    from puzzle.mesh.generate import preferred_order
+
+    project = window.session.project
+    n = len(project.of_type(MeshRecipe)) + 1
+    data = {
+        "name": f"Mesh {n}",
+        "global_size": {"value": 5, "unit": "mm"},
+        "element_order": preferred_order(project),
+    }
     return window.submit(Create(kind="mesh", data=data))
 
 

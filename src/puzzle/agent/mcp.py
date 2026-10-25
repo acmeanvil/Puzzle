@@ -219,6 +219,37 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         }
 
     @tool(
+        description="Run a study on its mesh recipe meshed by Gmsh and by Netgen and compare "
+        "(ADR 0019): each quantity's peak (or a global value), or 'eigenfrequencies', "
+        "as a relative difference against `tolerance`. Slow: it solves the study twice."
+    )
+    @guarded
+    def mesh_shootout(
+        study: str, quantities: list[str] | None = None, tolerance: float = 0.02
+    ) -> dict[str, Any]:
+        import tempfile
+
+        from puzzle.commands import resolve
+        from puzzle.model.schema import ComparisonMetric, Study
+        from puzzle.shootout import run_mesh_shootout
+
+        s = session()
+        target = resolve(s.project, study, Study)
+        metrics = [
+            ComparisonMetric(quantity=q, norm="relative_value", tolerance=tolerance)
+            for q in (quantities or ["displacement"])
+        ]
+        with tempfile.TemporaryDirectory() as work:
+            out = run_mesh_shootout(s.project, target.id, root, Path(work), metrics)
+        return {
+            "passed": out.passed,
+            "comparisons": [
+                {"quantity": c.metric.quantity, "relative_difference": c.value, "passed": c.passed}
+                for c in out.comparisons
+            ],
+        }
+
+    @tool(
         description='Solve a sketch (an extrude or revolve profile {"sketch": {...}}; '
         "format in puzzle.geometry.sketch) with the project's parameters: whether it solves, "
         "the degrees of freedom left, the conflicting constraints (1-based) and the solved "

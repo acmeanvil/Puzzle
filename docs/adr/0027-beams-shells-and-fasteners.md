@@ -74,10 +74,14 @@ The details of CalculiX's knots and couplings, and how beam rotations meet a cou
   | Hanging block: stretch against F L / E A (rigid) | −0.7 % | −0.7 % |
   | Plates in shear: shear force = load | exact | exact |
 
+- **Pretension** (2026-10-25): a fastener's optional `pretension` (a force). Its bolt is meshed in two halves sharing a mid-plane, cut there as ADR 0037's bolt section: twins for the far half, u_twin − u = axis × u_ref. The force goes in at the first static structural step and is locked after (CalculiX). Code_Aster runs each step as its own job, so it takes it in one-step studies and refuses it in longer ones.
+  - Benchmark: a block hung on a tightened fastener over a support as stiff as the bolt. Step 1 carries exactly F on both solvers. Step 2, locked, with P pulling the block down: F + P/2 within −0.2 % (CalculiX).
+  - Add fastener… has a pretension field (empty: none).
+- **Fixed on the way:** Code_Aster numbers nodes in the order the MED file lists them, so helper nodes written out of id order (a reference node before the bolt's) shifted the result tables by one; the written mesh now sorts its nodes by id. A distributing end's RBE3 relations no longer pick a held node as a dependent dof, and refuse a face that is all held.
+- **Over results:** the view draws each fastener as a tube, red in tension and blue in compression, labelled with its axial force in the display unit.
+- **Note:** a distributing end on a large face (a plate's whole side) writes dense relations that CalculiX solves slowly (minutes); hole faces are small.
 - **Not yet:**
-  - fastener pretension (its section can reuse the bolt pretension cut of ADR 0037);
   - a pinball radius;
-  - colouring by axial force;
   - a bolt check against proof strength;
   - the MCP twin of Fasteners from holes…;
   - beams and shells (point 5).

@@ -159,3 +159,62 @@ def test_fastener_in_shear(tmp_path, solver, ends):
     print(f"{solver} {ends} shear: {shear:.6g} N (P {P:g}), axial {axial:.4g} N")
     assert shear == pytest.approx(P, rel=1e-4)
     assert abs(axial) < 0.05 * P
+
+
+@over("calculix")
+def test_fastener_pretension(tmp_path, solver):
+    """The block hangs from the fixed plate on a fastener tightened to F = 5 kN, its
+    bottom on a support as stiff as the bolt (k_s = k_b = E A / L). Step 1: the bolt
+    carries F (a set force across its mid-plane cut: exact). Step 2: locked, a force P
+    pulls the block down; bolt and support share it by stiffness, so the bolt carries
+    F + P k_b / (k_b + k_s) = F + P/2, within 3 % (the plates' own give)."""
+    pytest.importorskip("OCP")
+    F, P = 5000.0, 2000.0
+    parts = {
+        "Ceiling": ((0.04, 0.04, 0.01), (-0.01, -0.01, 0.07)),
+        "Block": ((0.02, 0.02, 0.02), (0.0, 0.0, 0.0)),
+    }
+    E = 210e9
+    kb = E * np.pi * 0.003**2 / 0.05
+    features = [
+        Feature(type="fixed", selection="Ceiling/+z"),
+        Feature(
+            type="elastic_support", selection="Block/-z", values={"kn": q(kb / 0.02**2, "N/m^3")}
+        ),
+        Feature(type="force", selection="Block/-z", values={"z": q(-P, "N")}, steps=[2]),
+    ]
+    fastener = _fastener("rigid").model_copy(update={"pretension": q(F, "N")})
+    p, study, _ = _project(solver, parts, features, fastener)
+    study.steps = [SolveStep(type="stationary"), SolveStep(type="stationary")]
+    run = _run(tmp_path, p, study)
+    axial = []
+    for index in (1, 2):
+        step = [s for s in run.results.steps if s.index == index and "fastener" in s.fields][-1]
+        f = step.fields["fastener"]
+        axial.append(float(f.values[0, f.components.index("axial")]))
+    print(f"{solver} fastener pretension: step 1 {axial[0]:.6g} N (F {F:g}), "
+          f"step 2 {axial[1]:.6g} N (F + P/2 {F + P / 2:g})")  # fmt: skip
+    assert axial[0] == pytest.approx(F, rel=1e-4)
+    assert axial[1] == pytest.approx(F + P / 2, rel=3e-2)
+
+
+@over("calculix", "code_aster")
+def test_fastener_pretension_one_step(tmp_path, solver):
+    """One step: the tightened fastener carries its pretension F, the block held off by
+    the support (exact: a set force across the bolt's mid-plane cut)."""
+    pytest.importorskip("OCP")
+    F = 5000.0
+    parts = {
+        "Ceiling": ((0.04, 0.04, 0.01), (-0.01, -0.01, 0.07)),
+        "Block": ((0.02, 0.02, 0.02), (0.0, 0.0, 0.0)),
+    }
+    features = [
+        Feature(type="fixed", selection="Ceiling/+z"),
+        Feature(type="elastic_support", selection="Block/-z", values={"kn": q(1e12, "N/m^3")}),
+    ]
+    fastener = _fastener("rigid").model_copy(update={"pretension": q(F, "N")})
+    p, study, _ = _project(solver, parts, features, fastener)
+    f = _run(tmp_path, p, study).results.last("fastener")
+    axial = float(f.values[0, f.components.index("axial")])
+    print(f"{solver} one-step fastener pretension: {axial:.6g} N (F {F:g})")
+    assert axial == pytest.approx(F, rel=1e-4)

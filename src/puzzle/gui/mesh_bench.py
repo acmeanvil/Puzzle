@@ -13,6 +13,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox,
+    QDialog,
     QDoubleSpinBox,
     QGridLayout,
     QGroupBox,
@@ -25,6 +26,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSpinBox,
+    QTableWidgetItem,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -253,14 +255,20 @@ class MeshBench(QWidget):
         mesh_now = button("Mesh", "Mesh the component with this recipe")
         mesh_now.clicked.connect(self.mesh)
         self.buttons["mesh"] = mesh_now
-        group("Quality", [mesh_now])
+        seeds = button("Show seeds", "Where the edges' nodes will fall, before meshing")
+        seeds.clicked.connect(self.show_seeds)
+        self.buttons["seeds"] = seeds
+        group("Quality", [mesh_now, seeds])
         self.mesher = {}
         for name, value in (("Gmsh", "gmsh"), ("Netgen", "netgen")):
             b = button(name, f"Mesh with {name}")
             b.setCheckable(True)
             b.clicked.connect(lambda _=False, v=value: self.set_mesher(v))
             self.mesher[value] = b
-        group("Mesher", list(self.mesher.values()))
+        options = button("Gmsh options…", "Any of Gmsh's own mesh options, searchable")
+        options.clicked.connect(self.edit_gmsh_options)
+        self.buttons["gmsh_options"] = options
+        group("Mesher", [*self.mesher.values(), options])
         bar.addStretch()
 
         layout = QVBoxLayout(self)
@@ -272,6 +280,11 @@ class MeshBench(QWidget):
         hint.setStyleSheet("color: gray")
         layout.addWidget(hint)
         layout.addWidget(self.controls, 1)
+        layout.addWidget(QLabel("Methods"))
+        self.methods = QLabel("")
+        self.methods.setWordWrap(True)
+        self.methods.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        layout.addWidget(self.methods)
         layout.addWidget(QLabel("Quality"))
         layout.addWidget(self.quality)
         layout.addWidget(self.worst, 1)
@@ -431,6 +444,26 @@ class MeshBench(QWidget):
             Edit(object=str(recipe.id), ops=[EditOp(op="set", path="mesher", value=value)])
         )
 
+    def edit_gmsh_options(self):
+        """Gmsh options…: search Gmsh's mesh options, set some; OK is one command."""
+        from puzzle.commands.model import Edit, EditOp
+
+        recipe = self.recipe()
+        if recipe is None:
+            return None
+        dialog = GmshOptionsDialog(recipe.gmsh_options, self)
+        if not self.window.run_dialog(dialog):
+            return None
+        try:
+            chosen = dialog.chosen()
+        except ValueError as exc:
+            self.window.statusBar().showMessage(str(exc), 8000)
+            return None
+        if chosen == recipe.gmsh_options:
+            return None
+        op = EditOp(op="set", path="gmsh_options", value=chosen)
+        return self._submit(Edit(object=str(recipe.id), ops=[op]))
+
     # --- meshing and quality ------------------------------------------------------------
 
     def mesh(self):
@@ -439,9 +472,63 @@ class MeshBench(QWidget):
             return None
         return self.window.start_meshing(comp, then=self._meshed)
 
+    def show_seeds(self):
+        """The edge seeds with the recipe's sizes and controls, over the preview."""
+        import copy
+
+        from puzzle.mesh import generate_mesh
+        from puzzle.project.layout import WORK_DIR
+
+        comp = self.component_obj()
+        if comp is None:
+            return None
+        s = self.window.session
+        project = copy.deepcopy(s.project)
+        out = s.root / WORK_DIR / "gui-seeds" / str(comp.id)
+
+        def work(_emit):
+            return generate_mesh(project, comp.id, s.root, out, seeds=True)
+
+        def done(result) -> None:
+            self.window.show_mesh_bench()
+            self.window.viewport.show_seeds(result.seeds)
+            self.window.statusBar().showMessage(
+                f"{len(result.seeds):,} nodes along the edges", 8000
+            )
+
+        return self.window.background("Placing edge seeds…", work, done)
+
     def _meshed(self, meshed) -> None:
         self._show_quality()
         self.window.show_mesh_bench()
+
+    def body_methods(self) -> list[tuple[str, str, str, list]]:
+        """(body, method, why, its faces) for the component's bodies, from its preview."""
+        comp = self.component_obj()
+        cached = self.window.previews.get(str(comp.id)) if comp is not None else None
+        if not cached:
+            return []
+        result = cached[1]
+        out = []
+        for v, (method, why) in sorted(result.methods.items()):
+            part, body = result.names.get(v, ("?", f"body {v[1]}"))
+            out.append((f"{part}/{body}", method, why, result.boundaries.get(v, [])))
+        return out
+
+    def show_methods(self) -> None:
+        rows = self.body_methods()
+        if not rows:
+            self.methods.setText("")
+            return
+        lines = [
+            f"{body}: {'hexahedra can be used' if method == 'hexahedra' else 'tetrahedra'} ({why})"
+            for body, method, why, _faces in rows
+        ]
+        self.methods.setText(
+            "\n".join(lines)
+            + "\nBlock-like bodies are highlighted; Element shape → Hexahedra meshes them so. "
+            "Sweeping isn't offered: Gmsh can't sweep imported (OpenCASCADE) bodies."
+        )
 
     def _show_quality(self) -> None:
         comp = self.component_obj()
@@ -467,3 +554,81 @@ class MeshBench(QWidget):
         centre = item.data(Qt.ItemDataRole.UserRole)
         if centre is not None:
             self.window.viewport.mark_point(tuple(centre), "worst element")
+
+
+class GmshOptionsDialog(QDialog):
+    """Gmsh's mesh options with their defaults and descriptions, a search box above; a
+    value typed in "Your value" sets the option for this recipe, an empty one clears it."""
+
+    def __init__(self, current: dict, parent=None) -> None:
+        from PySide6.QtWidgets import QAbstractItemView, QDialogButtonBox, QTableWidget
+
+        from puzzle.mesh.gmsh_options import mesh_options
+
+        super().__init__(parent)
+        self.setWindowTitle("Gmsh options")
+        self.options = list(mesh_options())
+        layout = QVBoxLayout(self)
+        note = QLabel(
+            "Gmsh's own mesh options, for what the Mesh tab's controls don't cover. Type a "
+            "value to set one for this recipe; clear it to go back to Gmsh's default."
+        )
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Search: a word of the name or the description")
+        self.search.textChanged.connect(self._filter)
+        layout.addWidget(self.search)
+        self.table = QTableWidget(len(self.options), 4)
+        self.table.setHorizontalHeaderLabels(["Option", "Default", "Your value", "What it does"])
+        self.table.verticalHeader().hide()
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        for r, o in enumerate(self.options):
+            for c, text in enumerate([o.name, f"{o.default:g}" if not o.text else o.default]):
+                item = QTableWidgetItem(str(text))
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self.table.setItem(r, c, item)
+            mine = current.get(o.name)
+            self.table.setItem(r, 2, QTableWidgetItem("" if mine is None else f"{mine}"))
+            what = QTableWidgetItem(o.description)
+            what.setFlags(what.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            what.setToolTip(o.description)
+            self.table.setItem(r, 3, what)
+        self.table.resizeColumnsToContents()
+        self.table.setColumnWidth(3, 420)
+        layout.addWidget(self.table)
+        if not self.options:
+            layout.addWidget(QLabel("Gmsh's option list could not be read (no gmsh program)."))
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self.resize(900, 520)
+
+    def _filter(self, words: str) -> None:
+        terms = words.lower().split()
+        for r, o in enumerate(self.options):
+            hit = all(t in o.name.lower() or t in o.description.lower() for t in terms)
+            self.table.setRowHidden(r, not hit)
+
+    def set_value(self, name: str, text: str) -> None:
+        row = next(r for r, o in enumerate(self.options) if o.name == name)
+        self.table.item(row, 2).setText(text)
+
+    def chosen(self) -> dict:
+        """The options given a value: numbers for number options, text for text ones."""
+        out = {}
+        for r, o in enumerate(self.options):
+            text = self.table.item(r, 2).text().strip()
+            if not text:
+                continue
+            if o.text:
+                out[o.name] = text
+            else:
+                try:
+                    out[o.name] = float(text)
+                except ValueError as exc:
+                    raise ValueError(f"{o.name} takes a number, not '{text}'") from exc
+        return out

@@ -866,6 +866,7 @@ class Viewport(QWidget):
         """A result field on the (deformed) mesh; returns what was shown. `item` (from
         `post.quantities.catalog`) chooses one of the results the field gives; `clim`
         fixes the colour scale (SI), so several views can share one."""
+        self.pins = []  # labels belong to the scene they were made for
         steps = [s for s in results.steps if field in s.fields]
         step = steps[step_index] if steps else pick_step(results, field)
         grid = to_grid(mesh, step)
@@ -1137,6 +1138,44 @@ class Viewport(QWidget):
     def _probe_click(self, xyz) -> None:
         add = bool(self.view.modifiers & Qt.KeyboardModifier.ShiftModifier)
         self.probe(xyz, add=add)
+
+    def show_seeds(self, points) -> None:
+        """The edges' future nodes as small dots over the scene (ADR 0019 edge seeds)."""
+        points = np.asarray(points, float).reshape(-1, 3)
+        self.shown["seeds"] = len(points)
+        if self.plotter is None or not len(points):
+            return
+        self.plotter.add_points(
+            points,
+            color="#ffcc33",
+            point_size=7,
+            render_points_as_spheres=True,
+            name="puzzle-seeds",
+            reset_camera=False,
+        )
+        self.view.refresh()
+
+    def show_fasteners(self, tubes) -> None:
+        """Fasteners over a result: (glyph, label, in tension) each; the label pinned at
+        the tube's middle (ADR 0027)."""
+        self.pins = [
+            (np.asarray(g.points, float).mean(axis=0), text, "#ff8a7a" if pull else "#7ab8ff")
+            for g, text, pull in tubes
+        ]
+        self.shown["fasteners"] = [text for _g, text, _p in tubes]
+        if self.plotter is None:
+            return
+        import pyvista as pv
+
+        for i, (g, _text, pull) in enumerate(tubes):
+            a, b = (np.asarray(p, float) for p in g.points[:2])
+            tube = pv.Tube(pointa=a, pointb=b, radius=g.radius, n_sides=16)
+            colour = "#e5534b" if pull else "#3d7bd9"
+            self.plotter.add_mesh(
+                tube, color=colour, name=f"puzzle-fastener-{i}", reset_camera=False
+            )
+        self._draw_marks()
+        self.view.refresh()
 
     def mark_point(self, xyz, text: str) -> None:
         """A labelled point pinned in the view until the next scene (the Mesh tab's
