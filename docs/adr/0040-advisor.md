@@ -1,6 +1,6 @@
 # 0040. An Advisor: the next step, from the project's state
 
-- Status: Proposed
+- Status: Accepted (2026-10-25, the maintainer); built (2026-10-25)
 - Date: 2026-10-23
 
 ## Context
@@ -33,6 +33,17 @@ Newcomers to FEA tools ask "what do I do next?". Salome-Meca's reviews list the 
 - New users get a path without a wizard, and the same states help agents and the tree.
 - Each physics needs its "what's required" list, which is mostly the same knowledge as the `unconstrained` and `incomplete_material` checks, written once.
 - The Advisor must stay quiet for experts: it is collapsed after the first project, and remembers being closed.
+
+## Built (2026-10-25)
+
+- **The advice** (`puzzle/advisor.py`): `advise(project, runs, component, study, meshed)` returns the steps (geometry, selections, materials, mesh, physics, supports and loads, study, run, results; a component step first when there is none) as `Advice` (state done, needed or optional; a short reason; an action key and a button label). `next_step` is the first needed one.
+  - The words are one table, `TEXT`; what each physics needs before a solve is `NEEDS` (structural: a support and a load, except for steps that don't need them, such as a free modal study; heat: a temperature or convection for steady; flow: an inlet and an outlet; electrostatics: a potential and a ground; magnetics: a coil current; custom PDEs: a Dirichlet condition).
+  - The study step reports `Project.problems()` and every solver's `check` for the study, so the Advisor, the Problems tab and a refused run say the same; the run step follows the tree states (ADR 0033).
+- **The panel** (`gui/advisor_panel.py`): a dock on the right, hidden by default, in Window → Advisor (⌘3) and Help → Advisor; it follows the tree's selection and every project change. Each step shows ✓, ● or ○, its reason and, unless done, one button that does what the menus do (Import geometry…, Pick faces…, Assign a material…, Add fixed support…, New study…, Run, Show results…).
+- **First run:** a new project opens the Advisor while Settings > Interface > "Open the Advisor for new projects" is on; closing the Advisor turns it off. An empty project offers "Try the cantilever example", a fresh copy in the user's data folder, opened, where the Advisor then points at Mesh, Run and the results.
+- **Twins:** MCP `next_steps(component?, study?)` and `puzzle advise PROJECT [--component --study]`.
+- **Checks:** `tests/test_advisor.py` (an empty project, a model built step by step, a free modal study needing no support, the panel and its buttons, closing it once, the agent and the CLI).
+- **Not yet:** the guided tour pointing at each button in turn (the Advisor's own next step does that for the example today); tooltips and the form descriptions (ADR 0036) drawing on the same table.
 
 ## Alternatives considered
 

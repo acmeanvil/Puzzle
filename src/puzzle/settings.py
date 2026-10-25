@@ -101,6 +101,15 @@ PREFERENCES: list[Preference] = [
         "A mesh recipe's optimiser can then be Netgen's (it improves Gmsh's tetrahedra).",
     ),
     Preference(
+        "advisor.open_new",
+        "Interface",
+        "Open the Advisor for new projects",
+        True,
+        [("Yes", True), ("No", False)],
+        "The Advisor lists what a project needs next (Window → Advisor). Closing it once "
+        "turns this off.",
+    ),
+    Preference(
         "agent.send_key",
         "Agent",
         "Send a message with",

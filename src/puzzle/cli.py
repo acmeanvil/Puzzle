@@ -197,6 +197,12 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("geometry", nargs="?", help="a geometry's name (default: all)")
     p.set_defaults(handler=_check_geometry)
 
+    p = sub.add_parser("advise", help="what the project needs next (the Advisor, ADR 0040)")
+    p.add_argument("project", type=Path)
+    p.add_argument("--component", help="a component's name (default: the first)")
+    p.add_argument("--study", help="a study's name (default: the component's first)")
+    p.set_defaults(handler=_advise)
+
     p = sub.add_parser(
         "measure", help="exact sizes, distances and angles of named geometry (ADR 0042)"
     )
@@ -573,6 +579,29 @@ def _ask(args) -> int:
         f"({provider.name} {provider.model}: {agent.tokens['input']} in / "
         f"{agent.tokens['output']} out tokens)"
     )
+    return 0
+
+
+def _advise(args) -> int:
+    from puzzle.advisor import advise, next_step
+    from puzzle.errors import PuzzleError
+    from puzzle.model.schema import Component, Study
+    from puzzle.project.layout import RESULTS_DIR
+    from puzzle.results.store import ResultStore
+
+    project = _load(args.project)
+    comp = next((c for c in project.of_type(Component) if c.name == args.component), None)
+    study = next((s for s in project.of_type(Study) if s.name == args.study), None)
+    try:
+        runs = ResultStore(Path(args.project) / RESULTS_DIR).runs()
+    except PuzzleError:
+        runs = []
+    advice = advise(project, runs, comp, study)
+    first = next_step(advice)
+    print(f"Next: {first.label or first.title}" if first else "All set")
+    marks = {"done": "✓", "needed": "●", "optional": "○"}
+    for a in advice:
+        print(f"  {marks[a.state]} {a.title}: {a.detail}")
     return 0
 
 

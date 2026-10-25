@@ -439,12 +439,13 @@ def _window(window, menu: QMenu, agent: QAction, messages: QAction) -> None:
     for dock, text, keys in (
         (window.model_dock, "Model", "Ctrl+1"),
         (window.properties_dock, "Properties", "Ctrl+2"),
+        (window.advisor_dock, "Advisor", "Ctrl+3"),
     ):
         # Not the dock's own toggle action: Qt renames that with the dock's title
         # (Properties reads "Tool" while a tool is open).
         action = QAction(text, window)
         action.setCheckable(True)
-        action.setChecked(True)
+        action.setChecked(not dock.isHidden())
         action.setShortcut(QKeySequence(keys))
         action.setToolTip(f"Show or hide the {text} panel")
         action.toggled.connect(dock.setVisible)
@@ -459,6 +460,9 @@ def _window(window, menu: QMenu, agent: QAction, messages: QAction) -> None:
 
 def _help(window, menu: QMenu) -> None:
     _add(menu, "Getting started", lambda: _getting_started(window), free=True)
+    advisor = window.actions_by_name.get("advisor")
+    if advisor is not None:
+        menu.addAction(advisor)  # also in Window: what to do next (ADR 0040)
     _add(menu, "Keyboard shortcuts", lambda: _shortcuts(window), free=True)
     _add(menu, "Design decisions (ADRs)", lambda: _open_docs(window), free=True)
     menu.addSeparator()
@@ -489,13 +493,14 @@ def _getting_started(window) -> None:
 
 def shortcut_rows(window) -> list[tuple[str, str]]:
     """(menu path, keys) for every menu action with a shortcut."""
-    out = []
+    out, seen = [], set()
 
     def walk(menu: QMenu, path: str) -> None:
         for action in menu.actions():
             if action.menu() is not None:
                 walk(action.menu(), f"{path} → {action.text()}")
-            elif not action.shortcut().isEmpty():
+            elif not action.shortcut().isEmpty() and id(action) not in seen:
+                seen.add(id(action))  # an action in two menus (Advisor) is listed once
                 keys = action.shortcut().toString(QKeySequence.SequenceFormat.NativeText)
                 out.append((f"{path} → {action.text()}".replace("&", ""), keys))
 

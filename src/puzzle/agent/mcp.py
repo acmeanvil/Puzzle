@@ -654,6 +654,34 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
             },
         }
 
+    @tool(
+        description="What the project needs next (ADR 0040, the Advisor): the workflow's "
+        "steps for a component and study (the first of each if not named) as done, needed "
+        "or optional, each with its reason, and `next`, the first needed one. The same "
+        "advice the GUI's Advisor shows."
+    )
+    @guarded
+    def next_steps(component: str | None = None, study: str | None = None) -> dict[str, Any]:
+        from puzzle.advisor import advise, next_step
+        from puzzle.commands import resolve
+        from puzzle.model.schema import Component, Study
+        from puzzle.project.layout import RESULTS_DIR
+        from puzzle.results.store import ResultStore
+
+        s = session()
+        comp = resolve(s.project, component, Component) if component else None
+        chosen = resolve(s.project, study, Study) if study else None
+        try:
+            runs = ResultStore(root / RESULTS_DIR).runs()
+        except PuzzleError:
+            runs = []
+        advice = advise(s.project, runs, comp, chosen)
+        first = next_step(advice)
+        return {
+            "next": first.as_dict() if first else None,
+            "steps": [a.as_dict() for a in advice],
+        }
+
     @tool(description="Stored runs: study, solver, when, how long.")
     @guarded
     def runs() -> list[dict[str, Any]]:

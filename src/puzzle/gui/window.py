@@ -383,6 +383,16 @@ class MainWindow(QMainWindow):
         # The model gets the room (ADR 0031): the agent opens when wanted or when a
         # proposal arrives; messages fold to their tab bar until there is news.
         self.agent_dock.hide()
+        # ADR 0040: what to do next; it opens for new projects until closed once.
+        from puzzle.gui.advisor_panel import AdvisorPanel
+
+        self.advisor = AdvisorPanel(self)
+        self.advisor_dock = self._dock("Advisor", self.advisor, right)
+        self.advisor_dock.hide()
+        self.advisor_dock.installEventFilter(self)
+        self.advisor_dock.visibilityChanged.connect(
+            lambda shown: self.advisor.refresh() if shown else None
+        )
         self._proposals_seen = 0
         tabs.tabBarClicked.connect(lambda _i: self.fold_messages(False))
         self._messages_open_height = 170
@@ -490,6 +500,8 @@ class MainWindow(QMainWindow):
         self._proposals_seen = waiting
         self.workbench.refresh()
         self._selected()
+        if self.advisor_dock.isVisible():
+            self.advisor.refresh()
 
     def _show_units(self) -> None:
         """The status bar's unit button: the system in effect, and whose it is."""
@@ -803,6 +815,10 @@ class MainWindow(QMainWindow):
             project.add(ProjectUnits(system=units))
         save_project(project, root)
         self.open(root)
+        from puzzle.settings import current
+
+        if current().get("advisor.open_new"):  # a new project: the Advisor shows the way
+            self.advisor_dock.show()
 
     def _new_dialog(self) -> None:
         from puzzle.gui.quick_form import Ask, folder_name
@@ -978,6 +994,8 @@ class MainWindow(QMainWindow):
     # --- selection ---------------------------------------------------------------
 
     def _selected(self) -> None:
+        if getattr(self, "advisor_dock", None) is not None and self.advisor_dock.isVisible():
+            self.advisor.refresh()  # it speaks about what is selected
         if self.left_tabs.currentWidget() is self.workbench:
             self.show_workbench_part()
             return
@@ -2218,6 +2236,10 @@ class MainWindow(QMainWindow):
     def eventFilter(self, watched, event) -> bool:  # noqa: N802 - Qt's name
         from PySide6.QtCore import QEvent
 
+        if watched is getattr(self, "advisor_dock", None) and event.type() == QEvent.Type.Close:
+            from puzzle.settings import current
+
+            current().set("advisor.open_new", False)  # closed once: it stays out of the way
         if watched is getattr(self, "messages_dock", None) and event.type() == QEvent.Type.Resize:
             self._messages_resized(event.size().height())
         return super().eventFilter(watched, event)
