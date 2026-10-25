@@ -226,7 +226,10 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
     elif node.kind == "object":
         add("Delete", window.delete_selected)
     elif node.kind == "run":
-        add("Export to ParaView…", lambda: export_run(window, node.object))
+        from puzzle.gui.export_dialog import export_results
+
+        study_id = window._store().get_run(node.object).study_id
+        add("Export…", lambda: export_results(window, study_id))
         study = window._store().get_run(node.object).study_id
         menu.addSeparator()
         add("New combination…", lambda: window.new_derived("linear", study))
@@ -572,25 +575,6 @@ def import_step_file(window, path: Path | None = None):
             selections.append({"name": part, "entity": "body", "members": members})
     data = {"name": path.stem, "source": target.name, "selections": selections}
     return window.submit(Create(kind="geometry", data=data))
-
-
-def export_run(window, run_id: str, path: Path | None = None):
-    from puzzle.post.vtk import export
-
-    if path is None:
-        from PySide6.QtWidgets import QFileDialog
-
-        chosen, _ = QFileDialog.getSaveFileName(
-            window, "Export to ParaView", "results.pvd", "ParaView (*.pvd)"
-        )
-        if not chosen:
-            return None
-        path = Path(chosen)
-    store = window._store()
-    record = store.get_run(run_id)
-    files = export(store.read_mesh(record.mesh_id), store.read_results(run_id), path)
-    window.statusBar().showMessage(f"Wrote {files[0]} ({len(files) - 1} steps)", 8000)
-    return files
 
 
 # --- geometry history (G4) ------------------------------------------------------------

@@ -29,6 +29,7 @@ CODES = {
     "incomplete_material": "a material lacks a property the study needs",
     # Results
     "stale_store": "the results store has an older format; delete it to rebuild",
+    "export_failed": "a file could not be written",
 }
 
 

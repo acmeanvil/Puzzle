@@ -1778,6 +1778,11 @@ class MainWindow(QMainWindow):
 
         return ask_form(self, title, asks, intro, check)
 
+    def ask_save_path(self, title: str, default: str, filters: str) -> str | None:
+        """Where to save a file (tests replace this)."""
+        chosen, _ = QFileDialog.getSaveFileName(self, title, default, filters)
+        return chosen or None
+
     def ask_text(self, title: str, label: str, default: str = "") -> str | None:
         text, ok = QInputDialog.getText(self, title, label, text=default)
         return text.strip() if ok and text.strip() else None

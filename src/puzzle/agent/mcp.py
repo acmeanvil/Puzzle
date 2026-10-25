@@ -572,6 +572,46 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
             "label": found["label"],
         }
 
+    @tool(
+        description="Write a study's latest results for other software (ADR 0043). format: "
+        "paraview (.pvd/.vtu, every field and step), point_cloud (CSV x, y, z and one "
+        "result per node; quantity as in result_stats, optionally one selection's nodes), "
+        "deformed_stl or deformed_step (the deformed outer surface, scale to exaggerate, "
+        "compensate for -u). path is inside the project folder (e.g. exports/shape). "
+        "Returns the files written."
+    )
+    @guarded
+    def export(
+        study: str,
+        format: str,
+        path: str,
+        step: int = -1,
+        quantity: str | None = None,
+        selection: str | None = None,
+        scale: float = 1.0,
+        compensate: bool = False,
+    ) -> dict[str, Any]:
+        from puzzle.commands import resolve
+        from puzzle.model.schema import Study
+        from puzzle.post import derived
+        from puzzle.post.exports import export as write
+        from puzzle.project.layout import RESULTS_DIR
+        from puzzle.results.store import ResultStore
+
+        s = session()
+        target = resolve(s.project, study, Study)
+        store = ResultStore(root / RESULTS_DIR)
+        record = derived.run_for(s.project, store, target.id)
+        out = (Path(path) if Path(path).is_absolute() else root / path).resolve()
+        if not out.is_relative_to(Path(root).resolve()):  # agents write inside the project
+            raise PuzzleError(
+                f"exports go inside the project folder, not {path}", code="not_allowed"
+            )
+        files = write(s.project, store, record.run_id, format, out, step=step,
+                      quantity=quantity, selection=selection, scale=scale,
+                      compensate=compensate)  # fmt: skip
+        return {"files": [str(f) for f in files]}
+
     @tool(description="Stored runs: study, solver, when, how long.")
     @guarded
     def runs() -> list[dict[str, Any]]:

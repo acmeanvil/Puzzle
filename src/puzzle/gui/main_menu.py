@@ -403,8 +403,8 @@ def _results(window, menu: QMenu) -> None:
     _add(menu, "Compare sweep points…", lambda: _compare(window),
          "A swept study's points side by side")  # fmt: skip
     menu.addSeparator()
-    _add(menu, "Export to ParaView…", lambda: _export(window),
-         "The study's latest results as .pvd and .vtu files")  # fmt: skip
+    _add(menu, "Export…", lambda: _export(window),
+         "Results for other software: ParaView, point clouds, the deformed shape")  # fmt: skip
 
 
 def _compare(window) -> None:
@@ -414,16 +414,12 @@ def _compare(window) -> None:
 
 
 def _export(window) -> None:
-    from puzzle.gui import menus
+    from puzzle.gui.export_dialog import export_results
+    from puzzle.gui.result_tools import current_source
 
-    study = current_study(window, "Export")
-    if study is None:
-        return
-    runs = [r for r in window._store().runs() if r.study_id == str(study.id)]
-    if not runs:
-        window.statusBar().showMessage(f"{study.name} has no results yet: run it first", 8000)
-        return
-    menus.export_run(window, runs[-1].run_id)
+    obj = window._object(window.tree.current())
+    source = str(obj.id) if isinstance(obj, Study) else current_source(window)
+    export_results(window, source)
 
 
 def _window(window, menu: QMenu, agent: QAction, messages: QAction) -> None:

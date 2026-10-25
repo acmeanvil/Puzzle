@@ -4,7 +4,7 @@
     puzzle run PROJECT --study NAME              solve (or reuse an identical earlier run)
     puzzle runs PROJECT                          list stored runs
     puzzle show PROJECT --study NAME [options]   view a result, or save it with --screenshot
-    puzzle export PROJECT --study NAME OUT.pvd   write .vtu/.pvd files for ParaView
+    puzzle export PROJECT --study NAME OUT       ParaView, point clouds, the deformed shape
     puzzle outline PROJECT                       the model tree as text
     puzzle history PROJECT                       what changed, by whom
     puzzle undo PROJECT [--seq N]                undo the latest change (or entry N)
@@ -78,7 +78,7 @@ def _parser() -> argparse.ArgumentParser:
 
     for name, handler, helptext in (
         ("show", _show, "view a result"),
-        ("export", _export, "write .vtu/.pvd files for ParaView"),
+        ("export", _export, "results for other software: ParaView, point clouds, CAD"),
     ):
         p = sub.add_parser(name, help=helptext)
         p.add_argument("project", type=Path)
@@ -97,8 +97,24 @@ def _parser() -> argparse.ArgumentParser:
             p.add_argument("--screenshot", type=Path, help="save a PNG instead of opening a window")
             p.add_argument("--cut", help="a section cut: axis=fraction, e.g. x=0.5 (ADR 0038)")
             p.add_argument("--animate", type=Path, help="save one loop of the deformation as a GIF")
-        else:
-            p.add_argument("output", type=Path, help="the .pvd file to write")
+        else:  # export (ADR 0043)
+            from puzzle.post.exports import EXPORTS
+
+            p.add_argument("output", type=Path, help="the file to write (its suffix is set)")
+            p.add_argument(
+                "--format",
+                default="paraview",
+                choices=sorted(EXPORTS),
+                help="; ".join(f"{k}: {e.label}" for k, e in EXPORTS.items()),
+            )
+            p.add_argument("--step", type=int, default=-1, help="which step (0 first, -1 last)")
+            p.add_argument("--quantity", help="point cloud: a result key, e.g. stress:von_mises")
+            p.add_argument("--selection", help="point cloud: only this selection's nodes")
+            p.add_argument("--scale", type=float, default=1.0, help="deformed shape: exaggeration")
+            p.add_argument(
+                "--compensate", action="store_true", help="deformed shape: moved by -u instead"
+            )
+            p.add_argument("--units", choices=["si", "display"], default="si")
         p.set_defaults(handler=handler)
 
     p = sub.add_parser("plot", help="a kept probe over the steps, as CSV")
@@ -350,11 +366,28 @@ def _plot(args) -> int:
 
 
 def _export(args) -> int:
-    from puzzle.post.vtk import export
+    from puzzle.errors import PuzzleError
+    from puzzle.post.exports import export
 
     store, record = _target(args)
-    files = export(store.read_mesh(record.mesh_id), store.read_results(record.run_id), args.output)
-    print(f"Wrote {files[0]} ({len(files) - 1} step files); open it in ParaView.")
+    try:
+        files = export(
+            _load(args.project),
+            store,
+            record.run_id,
+            args.format,
+            args.output,
+            step=args.step,
+            quantity=args.quantity,
+            selection=args.selection,
+            scale=args.scale,
+            compensate=args.compensate,
+            units=args.units,
+        )
+    except PuzzleError as exc:
+        print(exc.message)
+        return 1
+    print(f"Wrote {files[0]}" + (f" and {len(files) - 1} more files" if len(files) > 1 else ""))
     return 0
 
 

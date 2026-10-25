@@ -1,6 +1,6 @@
 # 0043. Export the deformed shape as CAD and results in neutral formats
 
-- Status: Accepted (2026-10-25, the maintainer)
+- Status: Accepted (2026-10-25, the maintainer); steps 1 and 2 built (2026-10-25)
 - Date: 2026-10-25
 
 ## Context
@@ -82,6 +82,20 @@ What the environment has (pixi `dev`, 2026-10-25):
    6. Nastran BDF/punch and Abaqus `.inp` with temperatures;
    7. glTF.
    CGNS and Exodus need HDF5 or netCDF in the pixi environment (`h5py`, `netCDF4`, or VTK's own Exodus writer). That is checked on all three platforms before those steps.
+
+## Built: the Export form, point clouds and the faceted deformed shape (2026-10-25)
+
+- **One module** (`post/exports.py`): `EXPORTS` lists the formats with what each carries; `export(project, store, run_id, format, path, …)` writes one and returns the files. Every export writes `<name>.txt` beside it: the study, run, solver, step, units, and for shapes the exaggeration and whether it is compensated.
+- **Formats so far:**
+  - `paraview`: every field of every step (`.pvd` + `.vtu`);
+  - `point_cloud`: CSV of x, y, z and one listed result per node (a component, a magnitude, von Mises...; a field's every component when no single value is asked), on the whole model or one selection, SI or display units, each column's unit in its header;
+  - `deformed_stl`: the deformed outer surface as binary STL in metres, quadratic faces split in four;
+  - `deformed_step`: the same as STEP AP242 with each part a tessellated face (`TRIANGULATED_SURFACE_SET`), in millimetres. OCCT writes it once its STEP controller is initialised; its working unit is set to metres so it converts (Gmsh leaves it so in this process: scaling the points ourselves wrote them a thousand times too large).
+  - `scale` exaggerates (said in the file name's .txt), `compensate` moves by −u.
+- **GUI:** Results → Export… and Export… on each run: one form (results, format by name, step, then only what the format needs), then where to save (`window.ask_save_path`).
+- **Twins:** `puzzle export PROJECT --study S OUT --format F [--step --quantity --selection --scale --compensate --units]`; MCP `export`, which writes inside the project folder only.
+- **Checks** (`tests/integration/test_exports.py`): ParaView read back by VTK; the point cloud's tip value equals the stored deflection, and a selection's cloud has its nodes only; the STL's lowest point is the tip deflection (×10 when exaggerated, mirrored when compensated); the STEP declares millimetres and its coordinates span the bar's 200 mm with the tip moved down. Puzzle's own importer doesn't convert a tessellated STEP's units on reading, so the test reads the file's units and coordinates directly.
+- **Next (order of ADR 0043):** Exodus II and UNV; EnSight Gold and CGNS for fluids; the morphed B-rep STEP; Nastran and Abaqus decks; glTF.
 
 ## Consequences
 
