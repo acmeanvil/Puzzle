@@ -18,8 +18,6 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QComboBox,
-    QGridLayout,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -222,31 +220,11 @@ class Workbench(QWidget):
 
         # The tools as a ribbon above the view (shown while this tab is open): groups
         # side by side, two rows of buttons each.
-        self.ribbon = QWidget()
-        bar = QHBoxLayout(self.ribbon)
-        bar.setContentsMargins(4, 2, 4, 2)
-        self.ribbon.setStyleSheet(
-            "QGroupBox { font-weight: bold; margin-top: 2px; padding-top: 14px; }"
-            "QToolButton { padding: 2px 8px; }"
-        )
+        from puzzle.gui.ribbon import Ribbon
+
+        self.ribbon = Ribbon()
         self.tool_buttons: dict[str, QToolButton] = {}
-
-        def button(text: str, tip: str = "") -> QToolButton:
-            b = QToolButton()
-            b.setText(text)
-            b.setAutoRaise(True)
-            b.setToolTip(tip)
-            return b
-
-        def group(title: str, buttons: list[QToolButton]) -> None:
-            box = QGroupBox(title)
-            g = QGridLayout(box)
-            g.setContentsMargins(4, 2, 4, 2)
-            g.setSpacing(2)
-            per_row = max(1, (len(buttons) + 1) // 2)
-            for n, b in enumerate(buttons):
-                g.addWidget(b, n // per_row, n % per_row)
-            bar.addWidget(box)
+        button, group = Ribbon.button, self.ribbon.group
 
         self.new_sketch_button = button(
             "New sketch…", "Draw a profile on a plane or on a picked flat face"
@@ -277,7 +255,6 @@ class Workbench(QWidget):
         )
         measure.clicked.connect(lambda: self.window.start_measuring())
         group("Inspect", [measure])
-        bar.addStretch()
 
         normal = QWidget()
         column = QVBoxLayout(normal)

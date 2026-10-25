@@ -6,35 +6,25 @@ what to pick."""
 
 from __future__ import annotations
 
-from PySide6.QtWidgets import QGridLayout, QGroupBox, QHBoxLayout, QToolButton, QWidget
+from PySide6.QtWidgets import QToolButton
+
+from puzzle.gui.ribbon import Ribbon
 
 
-class ResultsRibbon(QWidget):
+class ResultsRibbon(Ribbon):
     def __init__(self, window) -> None:
         super().__init__()
         self.window = window
-        bar = QHBoxLayout(self)
-        bar.setContentsMargins(4, 2, 4, 2)
-        self.setStyleSheet(
-            "QGroupBox { font-weight: bold; margin-top: 2px; padding-top: 14px; }"
-            "QToolButton { padding: 2px 8px; }"
-        )
         self.buttons: dict[str, QToolButton] = {}
 
         def group(title: str, entries) -> None:
-            box = QGroupBox(title)
-            g = QGridLayout(box)
-            g.setContentsMargins(4, 2, 4, 2)
-            g.setSpacing(2)
-            for n, (key, text, tip, slot) in enumerate(entries):
-                b = QToolButton()
-                b.setText(text)
-                b.setAutoRaise(True)
-                b.setToolTip(tip)
+            buttons = []
+            for key, text, tip, slot in entries:
+                b = self.button(text, tip)
                 b.clicked.connect(lambda _=False, s=slot: s())
                 self.buttons[key] = b
-                g.addWidget(b, 0, n)
-            bar.addWidget(box)
+                buttons.append(b)
+            self.group(title, buttons)
 
         from puzzle.gui import result_tools as tools
 
@@ -66,7 +56,6 @@ class ResultsRibbon(QWidget):
                 ("plots", "Plots", "Result tools against time, steps or distance", self.plots),
             ],
         )
-        bar.addStretch()
 
     def probe(self) -> None:
         w = self.window

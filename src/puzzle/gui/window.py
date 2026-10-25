@@ -13,6 +13,7 @@ from pathlib import Path
 from PySide6.QtCore import QFileSystemWatcher, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QKeySequence, QPainter
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDockWidget,
@@ -279,6 +280,9 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Puzzle")
         self.resize(1400, 900)
+        # Menus show words only: the few actions shared with the toolbar would otherwise
+        # bring their icons and push their text out of line with the rest.
+        QApplication.instance().setAttribute(Qt.ApplicationAttribute.AA_DontShowIconsInMenus)
         self.session: Session | None = None
         self.meshes: dict[str, Mesh] = {}  # component id -> its last generated mesh
         self.mesh_names: dict[str, dict] = {}  # component id -> (dim, tag) -> (part, name)

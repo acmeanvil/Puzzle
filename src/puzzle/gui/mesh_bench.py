@@ -15,8 +15,6 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDoubleSpinBox,
-    QGridLayout,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -217,32 +215,11 @@ class MeshBench(QWidget):
         self.worst = QListWidget()
         self.worst.itemDoubleClicked.connect(self._show_worst)
 
-        self.ribbon = QWidget()
-        bar = QHBoxLayout(self.ribbon)
-        bar.setContentsMargins(4, 2, 4, 2)
-        self.ribbon.setStyleSheet(
-            "QGroupBox { font-weight: bold; margin-top: 2px; padding-top: 14px; }"
-            "QToolButton { padding: 2px 8px; }"
-            "QToolButton:checked { background: #3d7bd9; color: white; border-radius: 3px; }"
-        )
+        from puzzle.gui.ribbon import Ribbon
+
+        self.ribbon = Ribbon()
         self.buttons: dict[str, QToolButton] = {}
-
-        def button(text: str, tip: str = "") -> QToolButton:
-            b = QToolButton()
-            b.setText(text)
-            b.setAutoRaise(True)
-            b.setToolTip(tip)
-            return b
-
-        def group(title: str, buttons: list[QToolButton]) -> None:
-            box = QGroupBox(title)
-            g = QGridLayout(box)
-            g.setContentsMargins(4, 2, 4, 2)
-            g.setSpacing(2)
-            per_row = max(1, (len(buttons) + 1) // 2)
-            for n, b in enumerate(buttons):
-                g.addWidget(b, n // per_row, n % per_row)
-            bar.addWidget(box)
+        button, group = Ribbon.button, self.ribbon.group
 
         for title, tools in TOOLS:
             buttons = []
@@ -269,7 +246,6 @@ class MeshBench(QWidget):
         options.clicked.connect(self.edit_gmsh_options)
         self.buttons["gmsh_options"] = options
         group("Mesher", [*self.mesher.values(), options])
-        bar.addStretch()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
