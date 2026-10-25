@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from puzzle.gui.tasks import rendering_available
 from puzzle.mesh.mesh import Mesh
+from puzzle.post.legend import bar_format
 from puzzle.post.quantities import compute
 from puzzle.post.view import DEFAULT_SCALAR
 from puzzle.post.vtk import pick_step, to_grid
@@ -121,18 +122,6 @@ def _number(v: float) -> str:
     if a == 0 or 1e-3 <= a < 1e5:
         return f"{v:.4g}" if a < 1e4 else f"{v:.0f}"
     return f"{v:.3e}"
-
-
-def bar_format(lo: float, hi: float) -> str:
-    """Colour-bar labels as people write numbers (ADR 0030): plain, to three significant
-    figures of the largest, between 1e-3 and 1e5; else with an exponent."""
-    top = max(abs(lo), abs(hi))
-    if not np.isfinite(top) or top == 0:
-        return "%.3g"
-    if 1e-3 <= top < 1e5:
-        decimals = max(0, 2 - int(np.floor(np.log10(top))))
-        return f"%.{decimals}f"
-    return "%.3e"
 
 
 def words(name: str) -> str:
@@ -559,6 +548,10 @@ class Viewport(QWidget):
         # The shown result, for markers and probes (ADR 0032).
         self.result_state: dict | None = None
         self.cut = None  # a section cut on results (post.cuts.Cut, ADR 0038)
+        from puzzle.post.legend import Legend
+
+        self.legend = Legend.from_settings()  # the colour bar's look (Settings > Results)
+        self.ranges: dict[str, tuple[float, float]] = {}  # result key -> custom range
         self._extremes: list[tuple] = []
         self._mark_actors: list[str] = []
         self.probes: list[dict] = []
@@ -893,6 +886,10 @@ class Viewport(QWidget):
             if name not in arrays:
                 name = field if field in arrays else f"{field}_magnitude"
             values = grid.point_data[name] if name in grid.point_data else grid.cell_data[name]
+        key = item.key if item is not None else (scalar or field)
+        custom = clim is None and key in self.ranges  # the legend's range for this result
+        if custom:
+            clim = self.ranges[key]
         title = (
             f"{item.label} ({unit})"
             if item is not None and unit
@@ -936,6 +933,8 @@ class Viewport(QWidget):
             "title": f"{title}, {label}" + (f", deformation ×{scale:.3g}" if scale else ""),
             "unit": unit,
             "clim": clim,
+            "key": key,
+            "custom_range": custom,
             "max_at": where[hi].tolist(),
             "min_at": where[lo].tolist(),
             "cut": None,
@@ -959,31 +958,20 @@ class Viewport(QWidget):
             self._mark_actors = []
             if away is not None and self.cut.ghost and away.n_cells:
                 self.plotter.add_mesh(away, color="#b8c2cc", opacity=0.15, reset_camera=False)
-            self.plotter.add_mesh(
-                grid,
-                scalars=name,
-                cmap="turbo",
-                clim=clim,
-                scalar_bar_args={
-                    # The unit only: the result's name is in the results bar, and VTK
-                    # centres a long title over the bar, past the view's edge.
-                    "title": unit or (item.label if item is not None else words(name)),
-                    # Top left, as Ansys has its legend: clear of the part (centred) and
-                    # of the axes marker (bottom left).
-                    "vertical": True,
-                    "position_x": 0.03,
-                    "position_y": 0.35,
-                    "width": 0.035,
-                    "height": 0.55,
-                    "fmt": bar_format(*(clim or (self.shown["min"], self.shown["max"]))),
-                    "color": "black",
-                    "title_font_size": 14,
-                    "label_font_size": 12,
-                },
+            # The legend (post/legend.py): colours, bands, one colour outside a custom
+            # range, and the bar's place and size. The title is the unit only: the
+            # result's name is in the results bar, and VTK centres a long title over
+            # the bar, past the view's edge.
+            colours = self.legend.mesh_args(custom)
+            bar = self.legend.bar_args(
+                unit or (item.label if item is not None else words(name)),
+                bar_format(*(clim or (self.shown["min"], self.shown["max"]))),
             )
+            self.plotter.add_mesh(grid, scalars=name, clim=clim, scalar_bar_args=bar, **colours)
+            self.legend.finish(self.plotter)
             from puzzle.post.view import draw_beams
 
-            draw_beams(self.plotter, grid, scalars=name, cmap="turbo", clim=clim)
+            draw_beams(self.plotter, grid, scalars=name, clim=clim, **colours)
             self._frame(mesh)
         self._draw_marks()  # recorded in `shown` without OpenGL too
         self._update_click()

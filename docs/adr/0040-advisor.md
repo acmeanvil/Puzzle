@@ -43,7 +43,8 @@ Newcomers to FEA tools ask "what do I do next?". Salome-Meca's reviews list the 
 - **First run:** a new project opens the Advisor while Settings > Interface > "Open the Advisor for new projects" is on; closing the Advisor turns it off. An empty project offers "Try the cantilever example", a fresh copy in the user's data folder, opened, where the Advisor then points at Mesh, Run and the results.
 - **Twins:** MCP `next_steps(component?, study?)` and `puzzle advise PROJECT [--component --study]`.
 - **Checks:** `tests/test_advisor.py` (an empty project, a model built step by step, a free modal study needing no support, the panel and its buttons, closing it once, the agent and the CLI).
-- **Not yet:** the guided tour pointing at each button in turn (the Advisor's own next step does that for the example today); tooltips and the form descriptions (ADR 0036) drawing on the same table.
+- **Not yet:** tooltips and the form descriptions (ADR 0036) drawing on the same table.
+- **Nice to have, later** (the maintainer, 2026-10-25): a guided tour pointing at each button in turn waits until the full application help system and documentation are set up; for the example, the Advisor's own next step does most of it today.
 
 ## Alternatives considered
 

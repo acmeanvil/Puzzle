@@ -34,6 +34,22 @@ class Preference:
     ready: bool = True  # False: defined, waiting for the feature that uses it
 
 
+def _legend_preferences() -> list[Preference]:
+    """The result legend's look (gui Legend…, post/legend.py), kept between sessions."""
+    from puzzle.post.legend import BANDS, COLORMAPS, OUTSIDE, POSITIONS, SIZES
+
+    return [
+        Preference("results.colormap", "Results", "Colours", "turbo", COLORMAPS),
+        Preference("results.invert_colors", "Results", "Colours run", False,
+                   [("Low blue, high red (as listed)", False), ("The other way", True)]),
+        Preference("results.bands", "Results", "Colour bands", 0, BANDS),
+        Preference("results.outside_color", "Results", "Outside a custom range", "none",
+                   OUTSIDE, "Values above the top and below the bottom in one colour."),
+        Preference("results.legend_position", "Results", "Legend position", "left", POSITIONS),
+        Preference("results.legend_size", "Results", "Legend size", 1.0, SIZES),
+    ]  # fmt: skip
+
+
 # The send keys as the platform names them: Qt reports the Mac's Command key as Control.
 SEND_KEYS = "⌘+Enter" if sys.platform == "darwin" else "Ctrl+Enter"
 
@@ -100,6 +116,7 @@ PREFERENCES: list[Preference] = [
         [("Yes", True), ("No", False)],
         "A mesh recipe's optimiser can then be Netgen's (it improves Gmsh's tetrahedra).",
     ),
+    *_legend_preferences(),
     Preference(
         "advisor.open_new",
         "Interface",

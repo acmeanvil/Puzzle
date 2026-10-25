@@ -58,6 +58,12 @@ class AdvisorPanel(QWidget):
         self.example.clicked.connect(self.open_example)
         layout.addWidget(self.example)
 
+    def sizeHint(self):  # noqa: N802 - Qt's name
+        """Narrow by default: the view keeps the room (its rows wrap)."""
+        from PySide6.QtCore import QSize
+
+        return QSize(320, 600)
+
     # --- what it shows -----------------------------------------------------------------
 
     def scope_objects(self):

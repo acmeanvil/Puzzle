@@ -34,6 +34,7 @@ class View:
     deform: float | str | None = "auto"  # scale factor, "auto", or None for undeformed
     show_edges: bool = False
     cut: object = None  # a post.cuts.Cut (ADR 0038)
+    clim: tuple[float, float] | None = None  # a custom range, in the array's units
 
 
 def render(
@@ -71,7 +72,11 @@ def render(
     label = step.label() if step.mode else f"step {step.index}"
     title = f"{scalar} ({label})" + (f", deformation x{scale:.3g}" if scale else "")
     values = grid.point_data[scalar] if scalar in grid.point_data else grid.cell_data[scalar]
-    clim = (float(np.nanmin(values)), float(np.nanmax(values)))
+    clim = view.clim or (float(np.nanmin(values)), float(np.nanmax(values)))
+    from puzzle.post.legend import Legend
+
+    legend = Legend.from_settings()  # Settings > Results, as the GUI draws it
+    colours = legend.mesh_args(custom_range=view.clim is not None)
     off = screenshot is not None or animate is not None
     plotter = pv.Plotter(off_screen=off, window_size=list(window_size))
 
@@ -83,10 +88,12 @@ def render(
             g, _ = clip(g, view.cut, base.bounds)
         return g
 
-    plotter.add_mesh(
-        shown_grid(1.0), scalars=scalar, cmap="turbo", clim=clim, scalar_bar_args={"title": scalar}
-    )
-    draw_beams(plotter, shown_grid(1.0), scalars=scalar, cmap="turbo", clim=clim)
+    from puzzle.post.legend import bar_format
+
+    bar = legend.bar_args(scalar, bar_format(*clim))
+    plotter.add_mesh(shown_grid(1.0), scalars=scalar, clim=clim, scalar_bar_args=bar, **colours)
+    legend.finish(plotter)
+    draw_beams(plotter, shown_grid(1.0), scalars=scalar, clim=clim, **colours)
     if view.show_edges:
         # Outline the real element edges; show_edges on quadratic cells draws every
         # sub-triangle VTK tessellates them into and darkens the whole model.
@@ -102,9 +109,9 @@ def render(
         for factor in deformation_frames():
             plotter.clear_actors()
             plotter.add_mesh(
-                shown_grid(factor), scalars=scalar, cmap="turbo", clim=clim, show_scalar_bar=False
+                shown_grid(factor), scalars=scalar, clim=clim, show_scalar_bar=False, **colours
             )
-            draw_beams(plotter, shown_grid(factor), scalars=scalar, cmap="turbo", clim=clim)
+            draw_beams(plotter, shown_grid(factor), scalars=scalar, clim=clim, **colours)
             frames.append(plotter.screenshot(return_img=True))
         save_gif(frames, animate)
         plotter.close()

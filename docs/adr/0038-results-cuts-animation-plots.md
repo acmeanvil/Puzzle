@@ -52,6 +52,20 @@ Puzzle's queries already compute a quantity over a selection at every step (`res
   - MCP `probe_history`.
 - **Not yet:** selection reductions over steps (a total reaction against time), which wait for probe reductions.
 
+## Built: the legend (2026-10-25)
+
+Asked by the maintainer: a custom range, size and placement, other colours, and Ansys's single colour outside the range.
+
+- **`post/legend.py`:** `Legend` holds the look and is kept as preferences (Settings > Results), so it lasts between sessions:
+  - the colour map (turbo, jet, viridis, plasma, cool to warm, greys, blues, reds) and whether it runs the other way;
+  - smooth colours or bands (6, 9 as Ansys, 12, 16), labelled at each band edge on a vertical bar;
+  - one colour for values above the top and below the bottom of a custom range (grey, black, white, magenta), shown as "above" and "below" swatches on the bar;
+  - the bar's place (left or right vertical, top or bottom horizontal; a horizontal bar puts its numbers under it, five of them) and its size (bar and text together, small to largest).
+- **Custom ranges belong to a result**, not the look: `Viewport.ranges` keeps one per result key for the session, so deformation and stress each keep their own; the others stay automatic.
+- **GUI:** Legend… in the Results ribbon and menu opens a panel in the Properties dock; every change redraws at once; "From the result" fills the custom range with the result's extremes to start from; a top not above the bottom is refused in red.
+- **CLI:** `puzzle show` draws the same legend from the preferences, and `--range bottom,top` sets a custom range; `puzzle settings` now takes numbers for numeric choices (bands 9, size 1.5).
+- **Checks:** `tests/test_gui_legend.py`.
+
 ## Consequences
 
 - Most result reading stays inside Puzzle; ParaView export remains for the rest.

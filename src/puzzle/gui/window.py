@@ -799,6 +799,10 @@ class MainWindow(QMainWindow):
         self.apply_toolbar_style()
         self.agent.agent = None  # the next message builds the agent with the new settings
         self.agent.input.update_hint()  # the send keys may have changed
+        from puzzle.post.legend import Legend
+
+        self.viewport.legend = Legend.from_settings()  # Settings > Results
+        self._redraw_result()
         if self.session is not None:
             self.refresh()
         self.statusBar().showMessage("Settings saved", 5000)
@@ -819,6 +823,8 @@ class MainWindow(QMainWindow):
 
         if current().get("advisor.open_new"):  # a new project: the Advisor shows the way
             self.advisor_dock.show()
+            if self.agent_dock.isHidden():  # alone on its side: narrow, the view keeps room
+                self.resizeDocks([self.advisor_dock], [320], Qt.Orientation.Horizontal)
 
     def _new_dialog(self) -> None:
         from puzzle.gui.quick_form import Ask, folder_name
@@ -1548,6 +1554,15 @@ class MainWindow(QMainWindow):
         self.viewport.set_picking(on)
         self.pick_bar.update_picks(self.viewport.picked)
 
+    def edit_legend(self) -> None:
+        """Legend… in the Properties dock: the colour bar's range, colours and place."""
+        from puzzle.gui.legend_panel import LegendPanel
+
+        if getattr(self, "legend_panel", None) is None:
+            self.legend_panel = LegendPanel(self)
+        self.legend_panel.load()
+        self.show_tool(self.legend_panel)
+
     def start_measuring(self) -> None:
         """The Measure panel in the Properties dock, with picking on (ADR 0042)."""
         from puzzle.gui.measure_panel import MeasurePanel
@@ -2253,6 +2268,8 @@ class MainWindow(QMainWindow):
         self.resizeDocks([self.model_dock, self.properties_dock], [380, 320], vertical)
         self.resizeDocks([self.model_dock], [360], horizontal)  # one area per call
         self.resizeDocks([self.agent_dock], [420], horizontal)
+        if not self.advisor_dock.isHidden() and self.agent_dock.isHidden():
+            self.resizeDocks([self.advisor_dock], [320], horizontal)  # alone: narrow
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt's name
         if self._sized:  # only a window that was on screen has a layout to keep

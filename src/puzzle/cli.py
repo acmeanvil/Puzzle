@@ -96,6 +96,7 @@ def _parser() -> argparse.ArgumentParser:
             p.add_argument("--edges", action="store_true", help="show element edges")
             p.add_argument("--screenshot", type=Path, help="save a PNG instead of opening a window")
             p.add_argument("--cut", help="a section cut: axis=fraction, e.g. x=0.5 (ADR 0038)")
+            p.add_argument("--range", help="a custom colour range: bottom,top (the array's units)")
             p.add_argument("--animate", type=Path, help="save one loop of the deformation as a GIF")
         else:  # export (ADR 0043)
             from puzzle.post.exports import EXPORTS
@@ -308,6 +309,7 @@ def _show(args) -> int:
             raise CliError("--cut takes axis=fraction, e.g. x=0.5")
         cut = Cut(axis, float(at))
     view = View(
+        clim=tuple(float(v) for v in args.range.split(",")) if args.range else None,
         field=args.field,
         scalar=args.scalar,
         step=args.step,
@@ -582,6 +584,13 @@ def _ask(args) -> int:
     return 0
 
 
+def _number(text: str) -> float | None:
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
 def _advise(args) -> int:
     from puzzle.advisor import advise, next_step
     from puzzle.errors import PuzzleError
@@ -714,6 +723,17 @@ def _settings(args) -> int:
     value = args.value
     if pref.choices and isinstance(pref.choices[0][1], bool):
         value = value.lower() in ("true", "yes", "1", "on")
+    elif pref.choices:  # a number typed for numeric choices (bands 9, size 1.5)
+        value = next(
+            (
+                v
+                for _, v in pref.choices
+                if str(v) == value
+                or json.dumps(v) == value
+                or (isinstance(v, int | float) and _number(value) == v)
+            ),
+            value,
+        )
     try:
         s.set(pref.key, value)
     except ValueError as exc:

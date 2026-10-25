@@ -403,6 +403,7 @@ def _results(window, menu: QMenu) -> None:
     _add(menu, "Section cut", ribbon.cut, "Cut the model by a plane to see inside")
     _add(menu, "Animate", ribbon.animate, "Play the deformation, or the steps")
     _add(menu, "Plots", ribbon.plots, "Result tools against time, steps or distance")
+    _add(menu, "Legend…", window.edit_legend, "The colour bar: its range, colours, size and place")
     menu.addSeparator()
     _add(menu, "New combination…", lambda: window.new_derived("linear"),
          "Load cases added, enveloped or ranged")  # fmt: skip

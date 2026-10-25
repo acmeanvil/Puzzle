@@ -57,6 +57,12 @@ class ResultsRibbon(QWidget):
             [
                 ("cut", "Section cut", "Cut the model by a plane to see inside", self.cut),
                 ("animate", "Animate", "Play the deformation, or the steps", self.animate),
+                (
+                    "legend",
+                    "Legend…",
+                    "The colour bar: its range, colours, size and place",
+                    window.edit_legend,
+                ),
                 ("plots", "Plots", "Result tools against time, steps or distance", self.plots),
             ],
         )
