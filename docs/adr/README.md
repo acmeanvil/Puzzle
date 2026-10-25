@@ -28,7 +28,7 @@ New record: copy [template.md](template.md) to `NNNN-short-title.md`, set status
 | [0020](0020-material-builder.md) | A material builder for the global library, complete for every solver | Accepted |
 | [0021](0021-remote-solvers.md) | Run solvers remotely: SSH hosts, HPC schedulers, later cloud batch | Accepted |
 | [0022](0022-local-expert-ai.md) | Choose the "local expert" model by measurement on the user's machine | Accepted |
-| [0023](0023-solver-settings.md) | Full access to each solver's settings: typed, with an expert pass-through | Accepted |
+| [0023](0023-solver-settings.md) | Full access to each solver's settings: typed, with an expert pass-through | Accepted; built for all six solvers, with presets |
 | [0024](0024-application-settings.md) | One application Settings dialog for per-user preferences, outside projects | Accepted |
 | [0025](0025-derived-results.md) | Derived results: solution combinations (linear, envelope, SRSS, range) and custom equations | Accepted |
 | [0026](0026-fatigue.md) | Fatigue: data in the material builder, a life tool in results | Accepted |

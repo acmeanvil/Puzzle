@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 from pathlib import Path
 
@@ -69,6 +70,36 @@ def _has_dolfinx(python: Path) -> bool:
         ["Lib/site-packages/dolfinx"] if os.name == "nt" else ["lib/python3*/site-packages/dolfinx"]
     )
     return any(any(prefix.glob(p)) for p in patterns)
+
+
+METHODS = (
+    ("LU, direct (MUMPS where PETSc has it)", "lu"),
+    ("Conjugate gradient + algebraic multigrid (large symmetric)", "cg_gamg"),
+    ("Conjugate gradient + Jacobi", "cg_jacobi"),
+    ("GMRES + algebraic multigrid", "gmres_gamg"),
+)
+PETSC_KEY = re.compile(r"^-?[a-z][a-z0-9_]*$")
+
+
+def _settings(study: Study, step) -> dict:
+    """What study.py reads (ADR 0023): only what the study set, so the defaults stay."""
+    from puzzle.adapters.fenicsx import FenicsxAdapter
+
+    own = study.solver_settings.get("fenicsx", {})
+    FenicsxAdapter().solver_settings(study)  # unknown keys and bad values refused
+    out: dict = {}
+    method = own.get("linear_method")
+    if method is None and "linear_solver" in step.settings:
+        method = "cg_gamg" if step.settings["linear_solver"] == "iterative" else "lu"
+    if method:
+        out["linear_method"] = method
+    for key, kind in (("tolerance", float), ("max_iterations", int), ("output_every", int)):
+        if key in step.settings:
+            out[key] = kind(step.settings[key])
+    expert = study.expert_settings.get("fenicsx", {})
+    if expert:
+        out["petsc_options"] = {k.lstrip("-"): v for k, v in expert.items()}
+    return out
 
 
 def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs=()) -> Path:
@@ -207,6 +238,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             "reference": _reference_temperature(comp),
         }
     write_med(mesh, workdir / "mesh.msh", {g: g for g in groups})
+    case["settings"] = _settings(study, step)  # ADR 0023
     (workdir / "case.json").write_text(json.dumps(case, indent=2))
     target = workdir / SCRIPT.name
     shutil.copyfile(SCRIPT, target)

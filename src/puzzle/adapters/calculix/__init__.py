@@ -49,6 +49,9 @@ class CalculixAdapter(SolverAdapter):
         feature_steps=True,
         connectors=frozenset({"beam_fastener:rigid", "beam_fastener:distributing"}),
         beams=True,  # ADR 0027, tests/integration/test_beams.py
+        shared_settings=frozenset(  # ADR 0023
+            {"linear_solver", "tolerance", "max_iterations", "output_every"}
+        ),
         shells=True,  # ADR 0027, tests/integration/test_shells.py
         # ADR 0037 (heat flux) and 0041 (structural loads in dynamics), benchmarked
         amplitude_features=frozenset({"heat_flux", "force", "pressure"}),
@@ -94,6 +97,44 @@ class CalculixAdapter(SolverAdapter):
 
     def command(self, input_file: Path) -> list[str]:
         return ["ccx", "-i", input_file.with_suffix("").name]
+
+    def settings_schema(self) -> list:
+        """CalculiX's own settings (ADR 0023); the shared ones are on each step."""
+        from puzzle.adapters.calculix.inp import SOLVERS
+        from puzzle.adapters.settings import SolverSetting
+
+        return [
+            SolverSetting(
+                "solver", "Linear solver", "SOLVER=", "choice", "default", SOLVERS,
+                description="The equation solver on each step's procedure card; iterative "
+                "ones suit large static models.",
+            ),
+        ]  # fmt: skip
+
+    def expert_help(self) -> str:
+        return (
+            "model = cards before the first step; after_procedure = cards after every "
+            "step's procedure card; after_procedure:2 = after step 2's only. One card or "
+            "data line per line, e.g. *CONTROLS, PARAMETERS=TIME INCREMENTATION"
+        )
+
+    def check_expert(self, entries: dict[str, str]) -> list[str]:
+        from puzzle.adapters.calculix.inp import EXPERT_KEYS, expert_cards
+        from puzzle.adapters.common import InputError
+
+        problems = []
+        for key, text in entries.items():
+            if not EXPERT_KEYS.match(key):
+                problems.append(
+                    f"{self.name}: '{key}' is not a place for cards (model, after_procedure, "
+                    "after_procedure:N)"
+                )
+                continue
+            try:
+                expert_cards(key, text)
+            except InputError as exc:
+                problems.append(f"{self.name}: {exc}")
+        return problems
 
     def read_results(self, input_file: Path) -> Results:
         frd = input_file.with_suffix(".frd")

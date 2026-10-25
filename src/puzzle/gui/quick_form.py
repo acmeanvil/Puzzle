@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QPlainTextEdit,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -46,7 +47,7 @@ from PySide6.QtWidgets import (
 class Ask:
     key: str
     label: str
-    kind: str = "choice"  # "choice", "text" or "folder"
+    kind: str = "choice"  # "choice", "text", "multiline" or "folder"
     choices: list | Callable[[dict], list] = field(default_factory=list)
     default: Any = None
     help: str = ""
@@ -110,6 +111,12 @@ class QuickForm(QDialog):
             w = QLineEdit("" if a.default is None else str(a.default))
             w.textEdited.connect(lambda _=None, k=a.key: self._typed(k))
             w.textChanged.connect(lambda _=None: self._changed())
+            self.widgets[a.key] = w
+            self.form.addRow(a.label, w)
+        elif a.kind == "multiline":
+            w = QPlainTextEdit("" if a.default is None else str(a.default))
+            w.setMinimumHeight(90)
+            w.textChanged.connect(lambda: self._changed())
             self.widgets[a.key] = w
             self.form.addRow(a.label, w)
         elif a.kind == "folder":
@@ -178,7 +185,12 @@ class QuickForm(QDialog):
         out: dict = {}
         for a in self.asks.values():
             w = self.widgets[a.key]
-            value = w.currentData() if a.kind == "choice" else w.text().strip()
+            if a.kind == "choice":
+                value = w.currentData()
+            elif a.kind == "multiline":
+                value = w.toPlainText().strip()
+            else:
+                value = w.text().strip()
             if all_fields or a.shown is None or a.shown(out | {a.key: value}):
                 out[a.key] = value
         return out
@@ -192,6 +204,8 @@ class QuickForm(QDialog):
                 shown = [w.itemData(i) for i in range(w.count())]
                 raise ValueError(f"'{key}' has no choice {value!r}; it offers {shown}")
             w.setCurrentIndex(index)
+        elif self.asks[key].kind == "multiline":
+            w.setPlainText(str(value))
         else:
             self.typed.add(key)
             w.setText(str(value))

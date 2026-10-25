@@ -231,13 +231,96 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
                     update={"settings": rest | {"start_frequency": f, "end_frequency": f}}
                 )
                 out.append(STEP_TAG.format(index))
-                out += _step(
+                out += with_settings(_step(
                     number, one, comp, mesh, faces, physics_types, thermal_load, yields,
                     project, index=index,
-                )  # fmt: skip
+                ), study, step, index)  # fmt: skip
             continue
-        out += [STEP_TAG.format(index), *lines]
+        out += [STEP_TAG.format(index), *with_settings(lines, study, step, index)]
+    expert = study.expert_settings.get("calculix", {})
+    if "model" in expert:  # pass-through cards for the model, before the first step
+        first = next(i for i, line in enumerate(out) if line.startswith(STEP_TAG[:12]))
+        out[first:first] = expert_cards("model", expert["model"])
     return "\n".join(out) + "\n"
+
+
+# ADR 0023: CalculiX's own settings, and the shared ones in its terms.
+SOLVERS = (
+    ("CalculiX's choice (PARDISO if built in, else SPOOLES)", "default"),
+    ("SPOOLES (direct)", "SPOOLES"),
+    ("PARDISO (direct, if built in)", "PARDISO"),
+    ("Iterative, Cholesky preconditioner", "ITERATIVE CHOLESKY"),
+    ("Iterative, diagonal scaling", "ITERATIVE SCALING"),
+)
+PROCEDURES = ("*STATIC", "*FREQUENCY", "*BUCKLE", "*DYNAMIC", "*HEAT TRANSFER")
+# *CONTROLS, PARAMETERS=TIME INCREMENTATION: I_0, I_R, I_P, I_C (iterations allowed), ...
+INCREMENTATION = [4, 8, 9, 16, 10, 4, 0, 5, 0, 0]
+
+
+def with_settings(lines: list[str], study: Study, step: SolveStep, index: int) -> list[str]:
+    """One written step with the study's CalculiX settings placed (ADR 0023): the linear
+    solver on its procedure card, *CONTROLS for a tolerance or iteration limit, output
+    every n-th increment, then any pass-through cards after the procedure. Only what
+    was set is written, so the defaults stay CalculiX's own."""
+    from puzzle.adapters.calculix import CalculixAdapter
+
+    own = CalculixAdapter().solver_settings(study)  # unknown keys and bad values refused
+    given = step.settings
+    out = list(lines)
+    solver = own["solver"]
+    if solver == "default" and given.get("linear_solver") == "iterative":
+        solver = "ITERATIVE CHOLESKY"
+    at = next((i for i, line in enumerate(out) if line.startswith(PROCEDURES)), None)
+    if at is not None and solver != "default":
+        out[at] += f", SOLVER={solver}"
+    cards: list[str] = []
+    if "tolerance" in given:  # residual and correction, relative (CalculiX: 0.005, 0.01)
+        tol = float(given["tolerance"])
+        out = _without_card(out, "*CONTROLS, PARAMETERS=FIELD")
+        cards += ["*CONTROLS, PARAMETERS=FIELD", f"{tol:.6g}, {tol:.6g}"]
+    if "max_iterations" in given:
+        values = list(INCREMENTATION)
+        values[3] = int(given["max_iterations"])
+        cards += ["*CONTROLS, PARAMETERS=TIME INCREMENTATION", ", ".join(map(str, values))]
+    expert = study.expert_settings.get("calculix", {})
+    for key in ("after_procedure", f"after_procedure:{index}"):
+        if key in expert:
+            cards += expert_cards(key, expert[key])
+    if "output_every" in given:
+        n = int(given["output_every"])
+        out = [
+            f"{line}, FREQUENCY={n}" if line.startswith(("*NODE FILE", "*EL FILE")) else line
+            for line in out
+        ]
+    if cards and at is not None:
+        end = next((i for i in range(at + 1, len(out)) if out[i].startswith("*")), len(out))
+        out[end:end] = cards
+    return out
+
+
+def _without_card(lines: list[str], card: str) -> list[str]:
+    """`lines` less one card and its data lines."""
+    if card not in lines:
+        return lines
+    i = lines.index(card)
+    j = next((k for k in range(i + 1, len(lines)) if lines[k].startswith("*")), len(lines))
+    return lines[:i] + lines[j:]
+
+
+def expert_cards(key: str, text: str) -> list[str]:
+    """Pass-through cards (ADR 0023): checked to be cards that can't break the deck's
+    step structure, so they are placed as given or refused."""
+    lines = [line.rstrip() for line in str(text).replace("\r", "").split("\n") if line.strip()]
+    if not lines or not lines[0].startswith("*"):
+        raise InputError(f"'{key}': pass-through starts with a card (a line beginning *)",
+                         code="invalid")  # fmt: skip
+    bad = [ln for ln in lines if ln.upper().startswith(("*STEP", "*END STEP"))]
+    if bad:
+        raise InputError(f"'{key}': *STEP and *END STEP are Puzzle's to write", code="invalid")
+    return lines
+
+
+EXPERT_KEYS = re.compile(r"^(model|after_procedure(:[1-9]\d*)?)$")
 
 
 # Before each *STEP: which of the study's solve steps it is (0: a helper, such as a

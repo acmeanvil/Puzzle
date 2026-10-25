@@ -15,6 +15,7 @@ Step settings: iterations (steady SIMPLE iterations, default 500) and pseudo_tim
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -163,6 +164,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
             else None
         ),
         "zones": zones,
+        **_settings(study),  # ADR 0023
     }
     (workdir / "case.json").write_text(json.dumps(spec, indent=2))
     shutil.copyfile(DRIVER, workdir / DRIVER.name)
@@ -181,6 +183,42 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
         ),
     )
     return workdir / "case.json"
+
+
+SOLVERS = (
+    ("Automatic (Code_Saturne's choice)", "automatic"),
+    ("Multigrid", "multigrid"),
+    ("Conjugate gradient", "conjugate_gradient"),
+    ("BiCGStab", "bi_cgstab"),
+    ("GMRES", "gmres"),
+    ("Gauss-Seidel", "gauss_seidel"),
+    ("Symmetric Gauss-Seidel", "symmetric_gauss_seidel"),
+)
+SCHEMES = (
+    ("Automatic", "automatic"),
+    ("Centred (second order)", "centered"),
+    ("Second-order linear upwind (SOLU)", "solu"),
+)
+XML_PATH = re.compile(r"^[A-Za-z_][\w\-/\[\]@='\" .]*$")
+
+
+def _settings(study: Study) -> dict:
+    """case.json's solvers, schemes and xml (ADR 0023): only what the study set."""
+    from puzzle.adapters.code_saturne import CodeSaturneAdapter
+
+    own = study.solver_settings.get("code_saturne", {})
+    CodeSaturneAdapter().solver_settings(study)  # unknown keys and bad values refused
+    solvers = {v: own[k] for k, v in (("pressure_solver", "pressure"),
+                                      ("velocity_solver", "velocity")) if k in own}  # fmt: skip
+    out: dict = {}
+    if solvers:
+        out["solvers"] = solvers
+    if "velocity_scheme" in own:
+        out["schemes"] = {"velocity": own["velocity_scheme"]}
+    expert = study.expert_settings.get("code_saturne", {})
+    if expert:
+        out["xml"] = expert
+    return out
 
 
 def command() -> list[str]:

@@ -332,6 +332,16 @@ def _model(window, menu: QMenu) -> None:
     run.triggered.connect(lambda _=False: _run(window))
     run.setText("Run study")
     menu.addAction(run)
+    _add(menu, "Solver settings…", lambda: _solver_settings(window),
+         "How each solver solves the study: linear solver, tolerances, output")  # fmt: skip
+
+
+def _solver_settings(window) -> None:
+    from puzzle.gui.solver_settings import edit_solver_settings
+
+    study = current_study(window, "Solver settings")
+    if study is not None:
+        edit_solver_settings(window, study)
 
 
 def _run(window) -> None:

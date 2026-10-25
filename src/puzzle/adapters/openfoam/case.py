@@ -21,6 +21,7 @@ and the turbulent viscosity as a dynamic viscosity (Pa s), as Code_Saturne repor
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import numpy as np
@@ -163,7 +164,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
         omega0,
         heat,
     )
-    _system(workdir, steps[0], turbulent, heat, nu, props_t, rho, flow.settings)
+    _system(workdir, steps[0], turbulent, heat, nu, props_t, rho, flow.settings, _own(study))
     write_dict(
         workdir / "constant" / "transportProperties", {"transportModel": "Newtonian", "nu": nu}
     )
@@ -190,6 +191,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
         "  foamDictionary constant/polyMesh/boundary -entry entry0/defaultFaces/type "
         "-set wall > /dev/null\nfi\n"
         f"{retype}"
+        f"{_expert_lines(study)}"
         "simpleFoam > log.simpleFoam 2>&1\n"
         "postProcess -func writeCellCentres -latestTime > log.postProcess 2>&1\n"
     )
@@ -330,7 +332,37 @@ def _condition(name: str, patch: dict, rho: float, conductivity: float) -> dict:
     return {"type": "inletOutlet", "inletValue": "$internalField", "value": "$internalField"}
 
 
-def _system(workdir, step, turbulent, heat, nu, props_t, rho, settings) -> None:
+# ADR 0023: OpenFOAM's own settings, and how the pass-through is run.
+P_SOLVERS = (("GAMG (multigrid)", "GAMG"), ("PCG (conjugate gradient, DIC)", "PCG"))
+U_SOLVERS = (
+    ("Smooth solver (symmetric Gauss-Seidel)", "smoothSolver"),
+    ("PBiCGStab (DILU)", "PBiCGStab"),
+)
+ENTRY = re.compile(r"^(system|constant)/[A-Za-z]+/\S+$")
+
+
+def _own(study) -> dict:
+    from puzzle.adapters.openfoam import OpenFoamAdapter
+
+    return OpenFoamAdapter().solver_settings(study)  # defaults filled; bad values refused
+
+
+def _expert_lines(study) -> str:
+    """foamDictionary calls for the pass-through, before the solver runs."""
+    import shlex
+
+    out = []
+    for key, value in study.expert_settings.get("openfoam", {}).items():
+        folder, name, entry = key.split("/", 2)
+        out.append(
+            f"foamDictionary {shlex.quote(f'{folder}/{name}')} -entry {shlex.quote(entry)} "
+            f"-set {shlex.quote(str(value))} > /dev/null\n"
+        )
+    return "".join(out)
+
+
+def _system(workdir, step, turbulent, heat, nu, props_t, rho, settings, own=None) -> None:
+    own = own or {"p_solver": "GAMG", "U_solver": "smoothSolver", "relaxation_U": 0.9}
     iterations = int(step.settings.get("iterations", 2000))
     functions = {}
     if heat:
@@ -387,13 +419,19 @@ def _system(workdir, step, turbulent, heat, nu, props_t, rho, settings) -> None:
             "wallDist": {"method": "meshWave"},
         },
     )
-    smooth = {
-        "solver": "smoothSolver",
-        "smoother": "symGaussSeidel",
-        "tolerance": 1e-9,
-        "relTol": 0.1,
-    }
+    smooth = (
+        {"solver": "smoothSolver", "smoother": "symGaussSeidel", "tolerance": 1e-9, "relTol": 0.1}
+        if own["U_solver"] == "smoothSolver"
+        else {"solver": "PBiCGStab", "preconditioner": "DILU", "tolerance": 1e-9, "relTol": 0.1}
+    )
+    pressure = (
+        {"solver": "GAMG", "smoother": "GaussSeidel", "tolerance": 1e-9, "relTol": 0.01}
+        if own["p_solver"] == "GAMG"
+        else {"solver": "PCG", "preconditioner": "DIC", "tolerance": 1e-9, "relTol": 0.01}
+    )
     residuals = {"p": 1e-6, "U": 1e-7}
+    if "tolerance" in step.settings:  # ADR 0023: when the flow counts as converged
+        residuals = {"p": float(step.settings["tolerance"]), "U": float(step.settings["tolerance"])}
     if turbulent:
         residuals['"(k|epsilon|omega)"'] = 1e-6
     if heat:
@@ -402,12 +440,7 @@ def _system(workdir, step, turbulent, heat, nu, props_t, rho, settings) -> None:
         workdir / "system" / "fvSolution",
         {
             "solvers": {
-                "p": {
-                    "solver": "GAMG",
-                    "smoother": "GaussSeidel",
-                    "tolerance": 1e-9,
-                    "relTol": 0.01,
-                },
+                "p": pressure,
                 '"(U|k|epsilon|omega)"': smooth,
                 # The scalar is solved once per SIMPLE iteration: multigrid reaches the
                 # slow axial conduction mode that Gauss-Seidel barely touches.
@@ -424,7 +457,9 @@ def _system(workdir, step, turbulent, heat, nu, props_t, rho, settings) -> None:
                 "residualControl": residuals,
             },
             # The scalar is linear in T for a given flow: no under-relaxation.
-            "relaxationFactors": {"equations": {"U": 0.9, '".*"': 0.9, "T": 1.0}},
+            "relaxationFactors": {
+                "equations": {"U": float(own["relaxation_U"]), '".*"': 0.9, "T": 1.0}
+            },
         },
     )
 

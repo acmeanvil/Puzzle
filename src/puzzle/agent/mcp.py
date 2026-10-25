@@ -612,6 +612,48 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
                       compensate=compensate)  # fmt: skip
         return {"files": [str(f) for f in files]}
 
+    @tool(
+        description="A study's solver settings (ADR 0023): the shared ones (on each solve "
+        "step's settings: linear_solver, tolerance, max_iterations, output_every) and each "
+        "of its solvers' own (Study.solver_settings[solver]), with labels, the solver's own "
+        "name, choices, defaults and current values, and how that solver's expert "
+        "pass-through (Study.expert_settings[solver]) is written. Change them with an edit."
+    )
+    @guarded
+    def solver_settings(study: str) -> dict[str, Any]:
+        from dataclasses import asdict
+
+        from puzzle.adapters import available_adapters
+        from puzzle.adapters.settings import SHARED
+        from puzzle.commands import resolve
+        from puzzle.model.schema import Study
+
+        s = session()
+        target = resolve(s.project, study, Study)
+        adapters = available_adapters()
+
+        def row(setting, current):
+            out = asdict(setting) | {"current": current}
+            out["steps"] = sorted(out["steps"])
+            return out
+
+        first = target.solve_steps()[0].settings if target.solve_steps() else {}
+        return {
+            "shared": [row(x, first.get(x.key)) for x in SHARED],
+            "solvers": {
+                name: {
+                    "settings": [
+                        row(x, target.solver_settings.get(name, {}).get(x.key))
+                        for x in adapters[name]().settings_schema()
+                    ],
+                    "expert": target.expert_settings.get(name, {}),
+                    "expert_help": adapters[name]().expert_help(),
+                }
+                for name in target.all_solvers()
+                if name in adapters
+            },
+        }
+
     @tool(description="Stored runs: study, solver, when, how long.")
     @guarded
     def runs() -> list[dict[str, Any]]:

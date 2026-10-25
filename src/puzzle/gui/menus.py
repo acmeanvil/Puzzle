@@ -211,6 +211,20 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         add("Delete", window.delete_selected)
     elif isinstance(obj, Study) and node.kind == "object":
         add("Run", window.run_selected)
+        from puzzle.gui.solver_settings import edit_solver_settings
+
+        add("Solver settings…", lambda: edit_solver_settings(window, obj))  # ADR 0023
+        from puzzle.gui.solver_settings import apply_preset, save_preset
+        from puzzle.model.schema import SettingsPreset
+
+        add("Save settings as preset…", lambda: save_preset(window, obj))
+        presets = project.of_type(SettingsPreset)
+        if presets:
+            apply = menu.addMenu("Apply settings preset")
+            for p in presets:
+                apply.addAction(p.name).triggered.connect(
+                    lambda _=False, p=p: apply_preset(window, obj, p)
+                )
         add("Materials…", lambda: study_materials(window, obj))
         add("New combination…", lambda: window.new_derived("linear", str(obj.id)))
         add("New equation…", lambda: window.new_derived("equation", str(obj.id)))

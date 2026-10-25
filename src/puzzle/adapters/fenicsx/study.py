@@ -54,6 +54,7 @@ except ImportError:
 def main() -> None:
     with open("case.json") as f:
         case = json.load(f)
+    SETTINGS.update(case.get("settings", {}))
     data = read_from_msh("mesh.msh", MPI.COMM_WORLD, 0, gdim=3)
     msh, cells, facets, groups = data.mesh, data.cell_tags, data.facet_tags, data.physical_groups
     degree = (msh.geometry.cmaps[0] if hasattr(msh.geometry, "cmaps") else msh.geometry.cmap).degree
@@ -116,15 +117,41 @@ def main() -> None:
 
 # --- linear algebra, PETSc or SciPy ----------------------------------------------
 
+# ADR 0023: case.json's "settings" (only what the study set): the linear method and
+# PETSc options of each field's own solve, the nonlinear tolerance and iteration
+# limit, and output every n-th time step.
+METHODS = {
+    "lu": None,  # the default: LU (MUMPS where PETSc has it)
+    "cg_gamg": {"ksp_type": "cg", "pc_type": "gamg", "ksp_rtol": 1e-10},
+    "cg_jacobi": {"ksp_type": "cg", "pc_type": "jacobi", "ksp_rtol": 1e-10},
+    "gmres_gamg": {"ksp_type": "gmres", "pc_type": "gamg", "ksp_rtol": 1e-10},
+}
+
+
+SETTINGS: dict = {}  # case.json's "settings", filled by main()
+
+
+def setting(key: str, default):
+    return SETTINGS.get(key, default)
+
 
 def solve_linear(a, L, bcs, V, name: str, *, mass_matrix: bool = False) -> fem.Function:
     """Solve a(u, v) = L(v) with Dirichlet conditions `bcs` for a Function on V."""
+    method, extra = setting("linear_method", "lu"), setting("petsc_options", {})
+    if BACKEND != "petsc" and not mass_matrix and (method != "lu" or extra):
+        raise SystemExit(
+            "this dolfinx has no PETSc (SciPy backend): the linear method and PETSc options "
+            "can't be applied; leave them at their defaults"
+        )
     if BACKEND == "petsc":
         options = (
             {"ksp_type": "cg", "pc_type": "jacobi", "ksp_rtol": 1e-12}
             if mass_matrix
-            else {"ksp_type": "preonly", "pc_type": "lu", "pc_factor_mat_solver_type": LU_PACKAGE}
+            else METHODS[method]
+            or {"ksp_type": "preonly", "pc_type": "lu", "pc_factor_mat_solver_type": LU_PACKAGE}
         )
+        if not mass_matrix:  # the user's options over everything (the pass-through)
+            options = {**options, **extra}
         problem = LinearProblem(
             a, L, bcs=bcs, petsc_options_prefix=f"puzzle_{name}_", petsc_options=options
         )
@@ -384,15 +411,16 @@ def solve_heat(case, msh, degree, dx, ds, facets, tag, of_temperature, out) -> N
     def picard(a_form, L_form, iterate: fem.Function) -> fem.Function:
         if not nonlinear:
             return solve_linear(a_form, L_form, bcs, V, "t")
-        for _ in range(100):
+        limit, tolerance = setting("max_iterations", 100), setting("tolerance", 1e-10)
+        for _ in range(limit):
             current = solve_linear(a_form, L_form, bcs, V, "t")
             change = np.abs(current.x.array - iterate.x.array).max()
             scale = max(np.abs(current.x.array).max(), 1.0)
             iterate.x.array[:] = current.x.array
-            if change <= 1e-10 * scale:
+            if change <= tolerance * scale:
                 break
         else:
-            raise SystemExit("temperature iteration did not converge in 100 steps")
+            raise SystemExit(f"temperature iteration did not converge in {limit} steps")
         return current
 
     if case["step"]["type"] != "transient":
@@ -437,8 +465,9 @@ def solve_heat(case, msh, degree, dx, ds, facets, tag, of_temperature, out) -> N
         older.x.array[:] = old.x.array
         old.x.array[:] = current.x.array
         series.append(current.x.array.copy())
-    out["times"] = dt * np.arange(1, steps + 1)
-    out["temperature_series"] = np.asarray(series)
+    every = setting("output_every", 1)
+    out["times"] = (dt * np.arange(1, steps + 1))[every - 1 :: every]
+    out["temperature_series"] = np.asarray(series)[every - 1 :: every]
 
 
 # --- custom PDEs ---------------------------------------------------------------------
@@ -569,12 +598,13 @@ def solve_custom(case, msh, degree, cells, facets, tag, piecewise, out) -> None:
         for bc in bcs:
             bc.set(u.x.array)  # start from the boundary values; corrections keep them
         zero = [dirichlet(0.0, dofs, space) for dofs, space in held]
-        for _ in range(50):
+        limit, tolerance = setting("max_iterations", 50), setting("tolerance", 1e-10)
+        for _ in range(limit):
             delta = solve_linear(J, -F, zero, V, "newton")
             u.x.array[:] += delta.x.array
-            if np.abs(delta.x.array).max() <= 1e-10 * max(np.abs(u.x.array).max(), 1.0):
+            if np.abs(delta.x.array).max() <= tolerance * max(np.abs(u.x.array).max(), 1.0):
                 return
-        raise SystemExit("custom PDE: Newton did not converge in 50 iterations")
+        raise SystemExit(f"custom PDE: Newton did not converge in {limit} iterations")
 
     out_space = fem.functionspace(msh, ("Lagrange", degree, shape))
     out["coords"] = out_space.tabulate_dof_coordinates()
@@ -595,8 +625,9 @@ def solve_custom(case, msh, degree, cells, facets, tag, piecewise, out) -> None:
         newton()
         u_n.x.array[:] = u.x.array
         series.append(nodal())
-    out["times"] = float(dt.value) * np.arange(1, steps + 1)
-    out[f"series_{name}"] = np.asarray(series)
+    every = setting("output_every", 1)
+    out["times"] = (float(dt.value) * np.arange(1, steps + 1))[every - 1 :: every]
+    out[f"series_{name}"] = np.asarray(series)[every - 1 :: every]
 
 
 EPSILON_0 = 8.8541878128e-12  # F/m, as the Elmer adapter

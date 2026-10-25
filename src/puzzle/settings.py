@@ -102,15 +102,12 @@ PREFERENCES: list[Preference] = [
         "Solver settings shown",
         "standard",
         [("Standard", "standard"), ("Power user: every option", "power")],
-        "Power user adds each solver's whole option set and the expert pass-through.",
-        ready=False,
+        "Power user adds each solver's whole option set and the expert pass-through "
+        "to a study's Solver settings… (ADR 0023).",
     ),
 ]
 BY_KEY = {p.key: p for p in PREFERENCES}
-WAITING = {
-    "Meshing": "These apply once the Mesh tab arrives (ADR 0019).",
-    "Solvers": "This applies once solver settings arrive (ADR 0023).",
-}
+WAITING: dict[str, str] = {}  # group -> why its preferences don't apply yet
 
 
 def window_state_path() -> Path:

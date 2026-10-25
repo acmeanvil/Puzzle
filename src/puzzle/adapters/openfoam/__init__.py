@@ -34,7 +34,41 @@ class OpenFoamAdapter(SolverAdapter):
         },
         features=(FLUID_FEATURES - {"mass_flow_inlet"}) | {"temperature", "heat_flux"},
         couplings=frozenset({"non_isothermal_flow"}),
+        # ADR 0023: iterative solvers only; the tolerance is when SIMPLE has converged.
+        shared_settings=frozenset({"linear_solver:iterative", "tolerance"}),
     )
+
+    def settings_schema(self) -> list:
+        """OpenFOAM's own settings (ADR 0023)."""
+        from puzzle.adapters.openfoam.case import P_SOLVERS, U_SOLVERS
+        from puzzle.adapters.settings import SolverSetting
+
+        return [
+            SolverSetting("p_solver", "Pressure solver", "fvSolution solvers/p", "choice",
+                          "GAMG", P_SOLVERS),
+            SolverSetting("U_solver", "Velocity solver", "fvSolution solvers/U", "choice",
+                          "smoothSolver", U_SOLVERS),
+            SolverSetting("relaxation_U", "Velocity relaxation", "relaxationFactors U",
+                          "number", 0.9, power=True,
+                          description="SIMPLE's under-relaxation of the velocity: lower is "
+                          "steadier, slower."),
+        ]  # fmt: skip
+
+    def expert_help(self) -> str:
+        return (
+            "Dictionary entries, one per line, set with foamDictionary before simpleFoam: "
+            "system/fvSolution/solvers/p/tolerance = 1e-8, "
+            "system/controlDict/writePrecision = 10"
+        )
+
+    def check_expert(self, entries: dict[str, str]) -> list[str]:
+        from puzzle.adapters.openfoam.case import ENTRY
+
+        return [
+            f"{self.name}: '{k}' is not a dictionary entry (system/<dict>/<entry path>)"
+            for k, v in entries.items()
+            if not ENTRY.match(k) or "\n" in str(v) or not str(v).strip()
+        ]
 
     def write_input(
         self, project: Project, study: Study, mesh: Mesh, workdir: Path, inputs=()

@@ -71,6 +71,10 @@ class Capabilities:
     rest are refused."""
     beams: bool = False
     """Line bodies with beam sections (ADR 0027); refused where False."""
+    shared_settings: frozenset[str] = frozenset()
+    """Shared solver settings (ADR 0023: linear_solver, tolerance, max_iterations,
+    output_every) this adapter translates; a study setting another is refused. A
+    `linear_solver:direct` or `:iterative` entry allows that one value only."""
     shells: bool = False
     """Sheet bodies with a thickness (ADR 0027); refused where False."""
     feature_steps: bool = False
@@ -99,6 +103,26 @@ class SolverAdapter(ABC):
     capabilities: ClassVar[Capabilities]
     # Solve steps one input file can hold; run_study splits longer studies (None: any).
     max_solve_steps: ClassVar[int | None] = None
+
+    def settings_schema(self) -> list:
+        """This solver's own settings (ADR 0023): `adapters.settings.SolverSetting`s.
+        Each default is what the adapter writes without it."""
+        return []
+
+    def expert_help(self) -> str:
+        """How this solver's expert pass-through is written ('' when it has none)."""
+        return ""
+
+    def check_expert(self, entries: dict[str, str]) -> list[str]:
+        """Problems with pass-through entries this adapter could not place."""
+        return [f"{self.name} takes no expert pass-through yet ({k})" for k in entries]
+
+    def solver_settings(self, study: Study) -> dict:
+        """The study's settings for this solver, every default filled in; InputError
+        for an unknown key or a bad value."""
+        from puzzle.adapters.settings import resolved
+
+        return resolved(self.settings_schema(), study.solver_settings.get(self.name, {}))
 
     def check(
         self, project: Project, study: Study, *, allow_experimental: bool = False
@@ -211,6 +235,23 @@ class SolverAdapter(ABC):
             problems.append(f"{self.name} does not write beams (line bodies) yet")
         if component.shell_sections and not caps.shells:
             problems.append(f"{self.name} does not write shells (sheet bodies) yet")
+        # ADR 0023: the study's settings for this solver, and its pass-through.
+        from puzzle.adapters.common import InputError
+        from puzzle.adapters.settings import shared
+
+        try:
+            self.solver_settings(study)
+            for s in study.solve_steps():
+                for key, value in shared(s).items():
+                    if key not in s.settings:
+                        continue
+                    taken = caps.shared_settings
+                    if key not in taken and f"{key}:{value}" not in taken:
+                        what = f"{key} = {value}" if key == "linear_solver" else key
+                        problems.append(f"{self.name} does not translate the setting {what}")
+        except InputError as exc:
+            problems.append(f"{self.name}: {exc}")
+        problems += self.check_expert(study.expert_settings.get(self.name, {}))
         return problems
 
     def _material_problems(

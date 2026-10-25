@@ -71,6 +71,9 @@ class ElmerAdapter(SolverAdapter):
         | ELECTROMAGNETIC_FEATURES
         | REMOTE_FEATURES
         | SUPPORT_FEATURES,
+        shared_settings=frozenset(  # ADR 0023
+            {"linear_solver", "tolerance", "max_iterations", "output_every"}
+        ),
         amplitude_features=frozenset({"heat_flux"}),  # ADR 0037, benchmarked
         axes_features=frozenset(
             {"displacement:cartesian", "displacement:cylindrical", "force:cartesian"}
@@ -81,6 +84,43 @@ class ElmerAdapter(SolverAdapter):
         dimensions=frozenset({"3d", "2d_planar", "2d_axisymmetric"}),
         time_schemes=frozenset({"backward_euler", "crank_nicolson", "bdf2", "theta"}),
     )
+
+    def settings_schema(self) -> list:
+        """Elmer's own settings (ADR 0023); the shared ones are on each step."""
+        from puzzle.adapters.elmer.sif import METHODS, PRECONDITIONERS
+        from puzzle.adapters.settings import SolverSetting
+
+        return [
+            SolverSetting(
+                "linear_method", "Linear solver", "Linear System Solver", "choice", "default",
+                METHODS, description="Every solver section's linear system (the magnetic A-V "
+                "solve keeps its direct method: iterative ones stall on it).",
+            ),
+            SolverSetting(
+                "preconditioner", "Preconditioner", "Linear System Preconditioning", "choice",
+                "default", PRECONDITIONERS, power=True,
+                description="For iterative methods: ILU levels trade memory for iterations.",
+            ),
+        ]  # fmt: skip
+
+    def expert_help(self) -> str:
+        return (
+            "Section/Keyword = value, one per line: Solver 1/Linear System Max Iterations = "
+            "10000; Solver */... for every solver; Simulation/Max Output Level = 5. A keyword "
+            "Elmer doesn't list needs its type: Logical True, Real 1e-8."
+        )
+
+    def check_expert(self, entries: dict[str, str]) -> list[str]:
+        from puzzle.adapters.common import InputError
+        from puzzle.adapters.elmer.sif_edit import check
+
+        problems = []
+        for path, value in entries.items():
+            try:
+                check(path, value)
+            except InputError as exc:
+                problems.append(f"{self.name}: {exc}")
+        return problems
 
     def write_input(
         self, project: Project, study: Study, mesh: Mesh, workdir: Path, inputs=()

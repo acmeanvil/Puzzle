@@ -1050,6 +1050,10 @@ class Study(ProjectObject):
     solver: str
     steps: list[Step] = Field(default_factory=list)
     shootout: Shootout | None = None
+    # ADR 0023: each solver's own settings ({solver: {key: value}}, from its adapter's
+    # settings_schema) and expert pass-through ({solver: {path: value}}).
+    solver_settings: dict[str, dict[str, float | int | str | bool]] = Field(default_factory=dict)
+    expert_settings: dict[str, dict[str, str]] = Field(default_factory=dict)
 
     def all_solvers(self) -> list[str]:
         return [self.solver, *(self.shootout.solvers if self.shootout else [])]
@@ -1300,6 +1304,18 @@ class ProjectUnits(ProjectObject):
         return v
 
 
+class SettingsPreset(ProjectObject):
+    """Solver settings saved to apply to any study (ADR 0023): "robust contact", "fast
+    transient". The shared settings go on each solve step; each solver's own block and
+    pass-through replace the study's for that solver."""
+
+    kind: ClassVar[str] = "preset"
+
+    shared: dict[str, float | int | str] = Field(default_factory=dict)
+    solver_settings: dict[str, dict[str, float | int | str | bool]] = Field(default_factory=dict)
+    expert_settings: dict[str, dict[str, str]] = Field(default_factory=dict)
+
+
 OBJECT_TYPES: tuple[type[ProjectObject], ...] = (
     ParameterSet,
     Geometry,
@@ -1313,6 +1329,7 @@ OBJECT_TYPES: tuple[type[ProjectObject], ...] = (
     ResultProbe,
     Amplitude,
     CoordinateSystem,
+    SettingsPreset,
 )
 
 

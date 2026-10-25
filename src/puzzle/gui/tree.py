@@ -19,6 +19,7 @@ from puzzle.model.schema import (
     Project,
     ResultDefinition,
     ResultProbe,
+    SettingsPreset,
     Study,
     SweepStep,
     Transfer,
@@ -54,6 +55,7 @@ SECTIONS = [
     ("Transfers", Transfer),
     ("Amplitudes", Amplitude),
     ("Coordinate systems", CoordinateSystem),
+    ("Solver presets", SettingsPreset),
 ]
 
 

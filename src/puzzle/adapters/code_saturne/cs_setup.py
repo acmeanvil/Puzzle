@@ -10,7 +10,10 @@ for the installed version. case.json:
      "zones": [{"label": "Inlet", "selection": "2", "nature": "inlet", "velocity": 0.001},
                {"label": "Outlet", "selection": "3", "nature": "outlet", "pressure": 0.0}, ...],
      "turbulence": "off" | "k-epsilon-PL" | "k-omega-SST",
-     "thermal": null | {"conductivity": k, "specific_heat": cp}}
+     "thermal": null | {"conductivity": k, "specific_heat": cp},
+     "solvers": {"pressure": "multigrid", ...}, "schemes": {"velocity": "solu"},
+     "xml": {"numerical_parameters/gradient_reconstruction@choice": "green_iter"}}
+(solvers, schemes and xml: the study's settings and pass-through, ADR 0023)
 Inlet zones may add temperature, intensity (percent) and hydraulic_diameter; walls
 temperature, heat_flux (W/m^2 into the fluid) or exchange [h, T_ext].
 Selections are Gmsh physical group numbers: Code_Saturne's Gmsh reader names groups
@@ -97,7 +100,38 @@ def main() -> None:
             boundary.setScalarChoice("temperature", "exchange_coefficient")
             boundary.setScalarValue("temperature", "dirichlet", t_ext)
             boundary.setScalarValue("temperature", "exchange_coefficient", h)
+    numerics = NumericalParamEquationModel(case)
+    for variable, choice in spec.get("solvers", {}).items():  # ADR 0023
+        numerics.setSolverChoice(variable, choice)
+    for variable, scheme in spec.get("schemes", {}).items():
+        numerics.setScheme(variable, scheme)
     case.xmlSaveDocument()
+    if spec.get("xml"):
+        _xml_overrides(spec["xml"])
+
+
+def _xml_overrides(entries: dict) -> None:
+    """The expert pass-through (ADR 0023): `path` sets an element's text, `path@attr`
+    an attribute; paths may use [@name='...'] predicates. A missing element is made
+    when its path has no predicate, else the run stops saying which: never dropped."""
+    import xml.etree.ElementTree as ET
+
+    tree = ET.parse("setup.xml")
+    root = tree.getroot()
+    for path, value in entries.items():
+        path, _, attr = path.partition("@") if "@" in path.split("/")[-1] else (path, "", "")
+        node = root.find(path)
+        if node is None:
+            if "[" in path:
+                raise SystemExit(f"setup.xml has no {path} (a pass-through entry)")
+            node = root
+            for part in path.split("/"):
+                node = node.find(part) if node.find(part) is not None else ET.SubElement(node, part)
+        if attr:
+            node.set(attr, str(value))
+        else:
+            node.text = str(value)
+    tree.write("setup.xml")
 
 
 if __name__ == "__main__":

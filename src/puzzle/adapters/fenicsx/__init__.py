@@ -55,6 +55,9 @@ class FenicsxAdapter(SolverAdapter):
         | PDE_FEATURES
         | REMOTE_FEATURES
         | SUPPORT_FEATURES,
+        shared_settings=frozenset(  # ADR 0023
+            {"linear_solver", "tolerance", "max_iterations", "output_every"}
+        ),
         amplitude_features=frozenset({"heat_flux"}),  # ADR 0037, benchmarked
         axes_features=frozenset(
             {"displacement:cartesian", "displacement:cylindrical", "force:cartesian"}
@@ -64,6 +67,34 @@ class FenicsxAdapter(SolverAdapter):
         dimensions=frozenset({"3d", "2d_planar", "2d_axisymmetric"}),
         time_schemes=frozenset({"backward_euler", "crank_nicolson", "bdf2", "theta"}),
     )
+
+    def settings_schema(self) -> list:
+        """FEniCSx's own settings (ADR 0023); the shared ones are on each step."""
+        from puzzle.adapters.fenicsx.case import METHODS
+        from puzzle.adapters.settings import SolverSetting
+
+        return [
+            SolverSetting(
+                "linear_method", "Linear solver", "PETSc ksp_type/pc_type", "choice", "lu",
+                METHODS, description="Each field's own solve; iterative ones need PETSc (not "
+                "in the Windows build).",
+            ),
+        ]  # fmt: skip
+
+    def expert_help(self) -> str:
+        return (
+            "PETSc options, one per line: ksp_type = gmres, pc_type = hypre, ksp_rtol = 1e-10; "
+            "they apply over the linear solver's to each field's own solve"
+        )
+
+    def check_expert(self, entries: dict[str, str]) -> list[str]:
+        from puzzle.adapters.fenicsx.case import PETSC_KEY
+
+        return [
+            f"{self.name}: '{k}' is not a PETSc option name (ksp_type, pc_type, ...)"
+            for k, v in entries.items()
+            if not PETSC_KEY.match(k) or not str(v).strip() or " " in str(v).strip()
+        ]
 
     def write_input(
         self, project: Project, study: Study, mesh: Mesh, workdir: Path, inputs=()

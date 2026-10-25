@@ -38,7 +38,42 @@ class CodeSaturneAdapter(SolverAdapter):
         },
         features=FLUID_FEATURES | THERMAL_FEATURES,
         couplings=frozenset({"non_isothermal_flow"}),
+        # ADR 0023: its linear solvers are iterative; the steady algorithm runs its own
+        # iteration count (the step's iterations), keeping only the converged state.
+        shared_settings=frozenset({"linear_solver:iterative"}),
     )
+
+    def settings_schema(self) -> list:
+        """Code_Saturne's own settings (ADR 0023)."""
+        from puzzle.adapters.code_saturne.case import SCHEMES, SOLVERS
+        from puzzle.adapters.settings import SolverSetting
+
+        return [
+            SolverSetting("pressure_solver", "Pressure solver", "solver_choice (pressure)",
+                          "choice", "automatic", SOLVERS),
+            SolverSetting("velocity_solver", "Velocity solver", "solver_choice (velocity)",
+                          "choice", "automatic", SOLVERS),
+            SolverSetting("velocity_scheme", "Velocity convection scheme",
+                          "order_scheme (velocity)", "choice", "automatic", SCHEMES, power=True,
+                          description="How momentum is carried: centred is accurate but can "
+                          "oscillate at high Péclet numbers; SOLU is the robust second order."),
+        ]  # fmt: skip
+
+    def expert_help(self) -> str:
+        return (
+            "setup.xml paths, one per line: path = value sets an element's text, "
+            "path@attribute = value an attribute; [@name='...'] predicates pick a variable, "
+            "e.g. numerical_parameters/gradient_reconstruction@choice = green_iter"
+        )
+
+    def check_expert(self, entries: dict[str, str]) -> list[str]:
+        from puzzle.adapters.code_saturne.case import XML_PATH
+
+        return [
+            f"{self.name}: '{k}' is not a setup.xml path (element/element@attribute)"
+            for k, v in entries.items()
+            if not XML_PATH.match(k) or k.startswith("/") or "\n" in str(v)
+        ]
 
     def write_input(
         self, project: Project, study: Study, mesh: Mesh, workdir: Path, inputs=()

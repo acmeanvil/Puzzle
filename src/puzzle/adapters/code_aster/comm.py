@@ -10,6 +10,7 @@ temperature T, heat_flux q (positive into the body), convection h and T_inf. SI.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import numpy as np
@@ -562,7 +563,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         ]
     out.append("FIN()")
     comm = workdir / f"{JOB}.comm"
-    comm.write_text("\n".join(out) + "\n")
+    comm.write_text(with_settings("\n".join(out) + "\n", study, step))
 
     used = (
         {"temperature"}
@@ -931,6 +932,53 @@ def _discrete_cara(
             out.append(")")
     out[-1] += ")"
     return out
+
+
+# ADR 0023: the commands that take each setting, and how the shared ones translate.
+SOLVING = ("MECA_STATIQUE", "STAT_NON_LINE", "DYNA_NON_LINE", "THER_LINEAIRE", "THER_NON_LINE")
+NONLINEAR = ("STAT_NON_LINE", "DYNA_NON_LINE", "THER_NON_LINE")
+STEPPING = ("STAT_NON_LINE", "DYNA_NON_LINE", "THER_LINEAIRE", "THER_NON_LINE")
+METHODS = (
+    ("MUMPS (direct, the default)", "MUMPS"),
+    ("Multifrontal (direct, Code_Aster's own)", "MULT_FRONT"),
+    ("Preconditioned conjugate gradient (iterative)", "GCPC"),
+    ("PETSc (iterative; parallel Code_Aster builds only)", "PETSC"),
+)
+
+
+def with_settings(comm: str, study, step) -> str:
+    """The command file with the study's settings for Code_Aster placed (ADR 0023):
+    its own, then the shared ones, then the expert pass-through over them all. A
+    setting goes in every command of the file that takes it; only what was set is
+    written, so the defaults stay Code_Aster's own."""
+    from puzzle.adapters.code_aster import CodeAsterAdapter
+    from puzzle.adapters.code_aster.expert import apply
+
+    own = study.solver_settings.get("code_aster", {})
+    CodeAsterAdapter().solver_settings(study)  # unknown keys and bad values refused
+    given = step.settings
+    used = set(re.findall(r"\b([A-Z][A-Z_]{3,})\(", comm))
+    overrides: dict[str, str] = {}
+
+    def place(commands, path: str, value: str) -> None:
+        for command in commands:
+            if command in used:
+                overrides[f"{command}.{path}"] = value
+
+    # Iterative: Code_Aster's own conjugate gradient, in every build (PETSc is not).
+    method = own.get("method") or ("GCPC" if given.get("linear_solver") == "iterative" else None)
+    if method:
+        place(SOLVING, "SOLVEUR.METHODE", f"'{method}'")
+    if "tolerance" in given:
+        place(NONLINEAR, "CONVERGENCE.RESI_GLOB_RELA", f"{float(given['tolerance']):.6g}")
+    if "max_iterations" in given:
+        place(NONLINEAR, "CONVERGENCE.ITER_GLOB_MAXI", str(int(given["max_iterations"])))
+    if "output_every" in given:
+        place(STEPPING, "ARCHIVAGE.PAS_ARCH", str(int(given["output_every"])))
+    if "reac_iter" in own:
+        place(NONLINEAR[:2], "NEWTON.REAC_ITER", str(int(own["reac_iter"])))
+    overrides.update(study.expert_settings.get("code_aster", {}))
+    return apply(comm, overrides) if overrides else comm
 
 
 def _on_shells(mesh: Mesh, group) -> bool:

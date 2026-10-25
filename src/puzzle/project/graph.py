@@ -64,7 +64,8 @@ def run_hashes(project: Project) -> dict[UUID, dict[str, list[str]]]:
     runs: dict[UUID, dict[str, list[str]]] = {}
     for study in project.of_type(Study):
         inputs = sorted(hashes.get(d, "missing") for d in _inputs(project, study))
-        own = _own(study, drop=frozenset({"solver"}))
+        # Each solver's settings count for its own runs only (ADR 0023).
+        own = _own(study, drop=frozenset({"solver", "solver_settings", "expert_settings"}))
         # The point's own values identify a run; the rest of the sweep definition doesn't.
         own["steps"] = [s for s in own["steps"] if s["type"] != "parametric_sweep"]
         setup = _digest({"own": own, "inputs": inputs})
@@ -74,6 +75,15 @@ def run_hashes(project: Project) -> dict[UUID, dict[str, list[str]]]:
                     {
                         "setup": setup,
                         "solver": solver,
+                        **(
+                            {
+                                "settings": study.solver_settings.get(solver, {}),
+                                "expert": study.expert_settings.get(solver, {}),
+                            }
+                            if study.solver_settings.get(solver)
+                            or study.expert_settings.get(solver)
+                            else {}
+                        ),
                         "point": {
                             k: v if isinstance(v, str) else v.model_dump(mode="json")
                             for k, v in point.items()

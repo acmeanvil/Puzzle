@@ -53,6 +53,9 @@ class CodeAsterAdapter(SolverAdapter):
         | LIFTING_FEATURES,
         connectors=frozenset({"beam_fastener:rigid", "beam_fastener:distributing"}),
         beams=True,  # ADR 0027, tests/integration/test_beams.py
+        shared_settings=frozenset(  # ADR 0023
+            {"linear_solver", "tolerance", "max_iterations", "output_every"}
+        ),
         shells=True,  # ADR 0027, tests/integration/test_shells.py
         # ADR 0037 (heat flux) and 0041 (structural loads in dynamics), benchmarked
         amplitude_features=frozenset({"heat_flux", "force", "pressure"}),
@@ -79,6 +82,44 @@ class CodeAsterAdapter(SolverAdapter):
 
     def command(self, input_file: Path) -> list[str]:
         return ["run_aster", input_file.name]
+
+    def settings_schema(self) -> list:
+        """Code_Aster's own settings (ADR 0023); the shared ones are on each step."""
+        from puzzle.adapters.code_aster.comm import METHODS
+        from puzzle.adapters.settings import SolverSetting
+
+        return [
+            SolverSetting(
+                "method", "Linear solver", "SOLVEUR/METHODE", "choice", "MUMPS", METHODS,
+                description="The method for every linear system; iterative ones suit large "
+                "models and take a preconditioner Code_Aster chooses.",
+            ),
+            SolverSetting(
+                "reac_iter", "Tangent matrix every", "NEWTON/REAC_ITER", "integer", 1,
+                unit="iterations", power=True,
+                description="How often a nonlinear solve rebuilds its tangent matrix: 1 every "
+                "iteration (robust), more to save time when it converges easily.",
+            ),
+        ]  # fmt: skip
+
+    def expert_help(self) -> str:
+        return (
+            "COMMAND.KEYWORD or COMMAND.FACTOR.KEYWORD = a Code_Aster value, set in every "
+            "call of that command: STAT_NON_LINE.NEWTON.REAC_ITER = 2, "
+            "MECA_STATIQUE.SOLVEUR.METHODE = 'MULT_FRONT'"
+        )
+
+    def check_expert(self, entries: dict[str, str]) -> list[str]:
+        from puzzle.adapters.code_aster.expert import check
+        from puzzle.adapters.common import InputError
+
+        problems = []
+        for path, value in entries.items():
+            try:
+                check(path, value)
+            except InputError as exc:
+                problems.append(f"{self.name}: {exc}")
+        return problems
 
     def read_results(self, input_file: Path) -> Results:
         workdir = input_file.parent

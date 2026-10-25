@@ -42,6 +42,9 @@ class ShootoutRun:
     primary: str
     runs: dict[str, StudyRun]  # by solver, the primary first
     comparisons: list[Comparison] = field(default_factory=list)
+    # Each solver's settings that differ from its defaults (ADR 0023): its own, the
+    # shared ones set on the steps, and any pass-through.
+    settings: dict[str, list[str]] = field(default_factory=dict)
 
     @property
     def passed(self) -> bool:
@@ -58,6 +61,12 @@ class ShootoutRun:
             f"{c.value:.4g} | {c.metric.tolerance:g} | {'pass' if c.passed else 'FAIL'} |"
             for c in self.comparisons
         ]
+        if any(self.settings.values()):
+            rows += ["", "| Solver | Settings (not the defaults) |", "| --- | --- |"]
+            rows += [
+                f"| {solver} | {'; '.join(items) or 'defaults'} |"
+                for solver, items in self.settings.items()
+            ]
         return "\n".join(rows)
 
 
@@ -89,7 +98,19 @@ def run_shootout(
         for metric in study.shootout.metrics:
             value = compare(first.results, out.runs[solver].results, metric)
             out.comparisons.append(Comparison(solver, metric, value))
+    out.settings = {solver: settings_in_use(study, solver) for solver in out.runs}
     return out
+
+
+def settings_in_use(study: Study, solver: str) -> list[str]:
+    """What a solver was told beyond its defaults (ADR 0023), as "key = value"."""
+    from puzzle.adapters.settings import SHARED_KEYS
+
+    shared = sorted({f"{k} = {v}" for s in study.solve_steps() for k, v in s.settings.items()
+                     if k in SHARED_KEYS})  # fmt: skip
+    own = [f"{k} = {v}" for k, v in sorted(study.solver_settings.get(solver, {}).items())]
+    expert = [f"expert {k}" for k in sorted(study.expert_settings.get(solver, {}))]
+    return shared + own + expert
 
 
 def compare(a: Results, b: Results, metric: ComparisonMetric) -> float:

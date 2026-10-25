@@ -230,12 +230,13 @@ def write_case(
 
     if transient:
         dt, _, n = time_settings(step)
-        times = [k * dt for k in range(1, n + 1)]
+        every = int(step.settings.get("output_every", 1))  # ADR 0023: Output Intervals
+        times = [k * dt for k in range(every, n + 1, every)]
     else:
         times = [1.0]
     (workdir / MESH_DIR / TIMES).write_text("\n".join(f"{t:.12g}" for t in times) + "\n")
     sif = workdir / f"{OUTPUT}.sif"
-    sif.write_text("\n".join(out) + "\n")
+    sif.write_text(with_settings("\n".join(out) + "\n", study, step))
     return sif, emesh
 
 
@@ -511,6 +512,67 @@ def _write_restart(path: Path, field, emesh: ElmerMesh) -> None:
         *(f"{v:.17g}" for v in values),
     ]
     path.write_text("\n".join(lines) + "\n")
+
+
+# ADR 0023: Elmer's own settings, and the shared ones in its terms.
+METHODS = (
+    ("Puzzle's choice for each solver", "default"),
+    ("Direct (UMFPACK)", "direct"),
+    ("BiCGStab(l), iterative", "BiCGStabL"),
+    ("Conjugate gradient, iterative (symmetric systems)", "CG"),
+    ("GCR, iterative", "GCR"),
+)
+PRECONDITIONERS = (
+    ("Puzzle's choice (ILU1)", "default"),
+    ("ILU0", "ILU0"),
+    ("ILU1", "ILU1"),
+    ("ILU2", "ILU2"),
+    ("Diagonal (Jacobi)", "Diagonal"),
+    ("None", "None"),
+)
+
+
+def _magnetic(lines: list[str]) -> bool:
+    """The A-V solve: Elmer gauges it as a direct solve; an iterative one stalls."""
+    return any("WhitneyAVSolver" in line for line in lines)
+
+
+def with_settings(sif: str, study: Study, step) -> str:
+    """The .sif with the study's Elmer settings placed (ADR 0023): its own, then the
+    shared ones, then the pass-through over them. Only what is set is written."""
+    from puzzle.adapters.elmer import ElmerAdapter
+    from puzzle.adapters.elmer.sif_edit import apply
+
+    own = ElmerAdapter().solver_settings(study)
+    given = step.settings
+    overrides: dict[str, str] = {}
+    method = own["linear_method"]
+    if method == "default" and "linear_solver" in given:
+        method = "BiCGStabL" if given["linear_solver"] == "iterative" else "direct"
+    if method == "direct":
+        overrides["Solver */Linear System Solver"] = "Direct"
+        overrides["Solver */Linear System Direct Method"] = "Umfpack"
+    elif method != "default":
+        overrides["Solver */Linear System Solver"] = '"Iterative"'
+        overrides["Solver */Linear System Iterative Method"] = method
+        overrides["Solver */Linear System Max Iterations"] = "5000"
+        overrides["Solver */Linear System Convergence Tolerance"] = "1e-10"
+        overrides["Solver */Linear System Preconditioning"] = (
+            "ILU1" if own["preconditioner"] == "default" else own["preconditioner"]
+        )
+    elif own["preconditioner"] != "default":
+        overrides["Solver */Linear System Preconditioning"] = own["preconditioner"]
+    if "tolerance" in given:
+        overrides["Solver */Nonlinear System Convergence Tolerance"] = (
+            f"{float(given['tolerance']):.6g}"
+        )
+    if "max_iterations" in given:
+        overrides["Solver */Nonlinear System Max Iterations"] = str(int(given["max_iterations"]))
+    if "output_every" in given:
+        overrides["Simulation/Output Intervals(1)"] = str(int(given["output_every"]))
+    expert = study.expert_settings.get("elmer", {})
+    sif = apply(sif, overrides, skip=_magnetic) if overrides else sif
+    return apply(sif, expert) if expert else sif
 
 
 def _reference(comp) -> float:

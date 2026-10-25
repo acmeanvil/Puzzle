@@ -18,6 +18,7 @@ from puzzle.model.schema import (
     Quantity,
     ResultDefinition,
     ResultProbe,
+    SettingsPreset,
     Study,
     SweepStep,
     Transfer,
@@ -103,6 +104,18 @@ def outline(project: Project, *, ids: bool = False, runs=None) -> str:
                 physics = f" {', '.join(step.physics)}" if step.physics else ""
                 settings = f" {step.settings}" if step.settings else ""
                 lines.append(f"    {step.type}{physics}{settings}")
+        for solver, block in s.solver_settings.items():  # ADR 0023
+            lines.append(
+                f"    {solver} settings: {', '.join(f'{k}={v}' for k, v in block.items())}"
+            )
+        for solver, block in s.expert_settings.items():
+            lines.append(f"    {solver} expert pass-through: {', '.join(block)}")
+    for preset in project.of_type(SettingsPreset):  # ADR 0023
+        parts = [f"{k}={v}" for k, v in preset.shared.items()]
+        parts += [f"{s}: {', '.join(f'{k}={v}' for k, v in b.items())}"
+                  for s, b in preset.solver_settings.items()]  # fmt: skip
+        parts += [f"{s} expert: {', '.join(b)}" for s, b in preset.expert_settings.items()]
+        lines.append(head("Preset", preset) + f": {'; '.join(parts) or 'defaults'}")
     for a in project.of_type(Amplitude):
         pts = ", ".join(f"({t:g} s, {v:g})" for t, v in a.points)
         lines.append(head("Amplitude", a) + f": {pts}")
