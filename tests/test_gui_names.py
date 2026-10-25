@@ -1,7 +1,8 @@
 """ADR 0029: the GUI shows names, never raw values, and panels follow their context.
 
 Every tree item of the example and benchmark projects (plus a history geometry and a
-derived result) is selected in turn. No text the tree or the properties panel shows
+derived result) is selected in turn; an equation's own text is the user's code and is
+not checked. No text the tree or the properties panel shows
 (labels, values, dropdown choices) may be `null`, `None`, a UUID, a snake_case key or an
 "N items" placeholder. A field that fails names itself, so the label table can be
 completed. The results bar belongs to results: it hides in the Geometry tab.
@@ -43,7 +44,10 @@ def texts(window):
         item = stack.pop()
         for i in range(item.childCount()):
             child = item.child(i)
-            out += [child.text(0), child.text(1)]
+            # An equation is the user's own code in the equation language (ADR 0025):
+            # its names (von_mises, stress_xx) are that language's, not raw keys.
+            shown = "" if child.text(0) in ("Equation", "Expression") else child.text(1)
+            out += [child.text(0), shown]
             box = panel.itemWidget(child, 1)
             if isinstance(box, QComboBox):
                 out += [box.itemText(j) for j in range(box.count())]
