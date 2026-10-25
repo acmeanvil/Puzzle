@@ -49,4 +49,4 @@ New record: copy [template.md](template.md) to `NNNN-short-title.md`, set status
 | [0041](0041-structural-dynamics.md) | Structural dynamics: transient and harmonic response | Accepted; built on CalculiX and Code_Aster |
 | [0042](0042-result-tools-and-measuring.md) | Result tools (reactions, results over selections, paths) and exact measuring in the geometry | Accepted |
 | [0043](0043-exports.md) | Export the deformed shape as CAD (faceted, morphed B-rep, compensated) and results in neutral formats by physics | Accepted; Export form, point clouds, faceted shape built |
-| [0044](0044-imported-fields.md) | Imported fields: a wizard to bring them in (file, alignment, verification), features that take them with scaling and placement | Accepted |
+| [0044](0044-imported-fields.md) | Imported fields: a wizard to bring them in (file, alignment, verification), features that take them with scaling and placement, a Connections schematic | Accepted |

@@ -27,7 +27,8 @@ The maintainer's answers (2026-10-25):
 - **how and where the field is applied, including scaling and a three-axis translation and rotation;**
 - **every quantity** in scope (temperature, pressure, heat transfer coefficient, body forces and the rest), in stages;
 - **features take a field** rather than a dedicated imported load per quantity;
-- **sources:** Ansys exports, OpenFOAM and Code_Saturne results, test and measurement data, Exodus and other FE tools, beside generic CSV and VTU.
+- **sources:** Ansys exports, OpenFOAM and Code_Saturne results, test and measurement data, Exodus and other FE tools, beside generic CSV and VTU;
+- **seeing the connections** concisely and informatively: a generated schematic (point 8).
 
 ## Decision
 
@@ -100,6 +101,16 @@ The maintainer's answers (2026-10-25):
    - `puzzle import-field PROJECT FILE` with the same options, and `puzzle field-check` for the verification report;
    - for agents, MCP `field_import` (made as a proposal) and `field_check`;
    - the outline lists each imported field and where it is used.
+
+8. **A Connections schematic** shows how data flows through the project, concisely (Window → Connections, a read-only map drawn from the model, never edited by hand):
+   - left to right: **sources** (imported fields, and studies whose results feed others) → **what they feed** (the features that take a field, the studies a transfer feeds) → **results**;
+   - only links that carry data: imported fields into features, and transfers between studies. Ordinary references (a component's geometry and mesh) stay in the tree, so the map stays small;
+   - each box is coloured by its state (ADR 0033: up to date, out of date, missing input, not run, failed);
+   - each link is labelled with what it carries and how ("T, +10 mm", "p ×1.2", "temperature, interpolate"), and an imported field's box with its coverage, flagged when low;
+   - a click on a box selects it in the tree; hovering a link shows its mapping, scaling, placement and coverage in full;
+   - laid out automatically in columns, as Ansys Workbench's project schematic is, but generated from the model, so it can't drift from it.
+
+   Field sources in the tree's labels and an in-view display of mapped values on each feature were offered too and not chosen for now. The wizard's verification page still shows the mapped field on the model.
 
 ## Consequences
 
