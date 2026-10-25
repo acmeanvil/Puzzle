@@ -177,6 +177,11 @@ class AgentPanel(QWidget):
         layout.addLayout(top)
         layout.addWidget(self.model_label)
         layout.addWidget(split, 1)
+        self.model_label.hide()  # shown once there is a model to name
+        # macOS draws push buttons with wide margins of their own; lay them out by their
+        # visible edges so the rows' spacing is what the layouts say.
+        for b in (key, new_chat, accept, reject):
+            b.setAttribute(Qt.WidgetAttribute.WA_LayoutUsesWidgetRect)
 
     # --- project changes -------------------------------------------------------------
 
@@ -218,6 +223,7 @@ class AgentPanel(QWidget):
             self.input.setReadOnly(False)
             self.window.refresh()
             tokens = agent.tokens
+            self.model_label.show()
             self.model_label.setText(
                 f"{self._model_text()} · {tokens['input']:,} in / {tokens['output']:,} out tokens"
             )
@@ -259,6 +265,7 @@ class AgentPanel(QWidget):
             )
             return False
         self.model_label.setText(self._model_text())
+        self.model_label.setVisible(bool(self.model_label.text()))
         return True
 
     def _set_key(self) -> None:
