@@ -1,6 +1,6 @@
 # 0041. Structural dynamics: transient and harmonic response
 
-- Status: Proposed
+- Status: Accepted (2026-10-25, the maintainer)
 - Date: 2026-10-23
 
 ## Context

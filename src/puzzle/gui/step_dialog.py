@@ -299,7 +299,9 @@ class StepForm(QWidget):
             spin.setValue(int(value) if isinstance(value, (int, float)) else 1)
             spin.valueChanged.connect(lambda _: self.changed.emit())
             return spin
-        if f.kind == "length":
+        if f.kind == "points":  # x, y, z in mm, ";" between points (a polyline's)
+            text = "; ".join(", ".join(f"{c * 1000:g}" for c in p) for p in value or [])
+        elif f.kind == "length":
             scale = _unit("length")[1]
             text = f"{value * scale:.6g}" if isinstance(value, (int, float)) else str(value)
         elif isinstance(value, float):
@@ -404,6 +406,11 @@ def _parse(kind: str, text: str):
     text = text.strip()
     if kind == "profile":
         return parse_profile(text)
+    if kind == "points":
+        points = parse_profile(text)["points"]
+        if any(len(p) != 3 for p in points):
+            raise ValueError("each point is x, y, z (mm), points separated by ;")
+        return points
     if kind == "rule":
         try:
             return json.loads(text)

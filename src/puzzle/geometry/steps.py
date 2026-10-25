@@ -34,6 +34,27 @@ STEPS: dict[str, list[StepField]] = {
         StepField("z0", "length", 0.0),
         MODE,
     ],
+    "polyline": [
+        StepField(
+            "points", "points", [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], "Points (mm): x, y, z; …"
+        ),
+    ],
+    "sheet": [
+        StepField(
+            "points",
+            "points",
+            [[0.0, 0.0, 0.0], [0.1, 0.0, 0.0], [0.1, 0.1, 0.0], [0.0, 0.1, 0.0]],
+            "Corners (mm, in one plane): x, y, z; …",
+        ),
+    ],
+    "curved_sheet": [
+        StepField("r", "length", 0.1, "Radius"),
+        StepField("length", "length", 0.2, "Length along x"),
+        StepField("angle", "angle", 80.0, "Angle spanned (centred on +z)"),
+        StepField("x0", "length", 0.0, "Axis start x"),
+        StepField("y0", "length", 0.0, "Axis start y"),
+        StepField("z0", "length", 0.0, "Axis start z"),
+    ],
     "cylinder": [
         StepField("r", "length", 0.005, "Radius"),
         StepField("h", "length", 0.02, "Height"),

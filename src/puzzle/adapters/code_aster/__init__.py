@@ -52,6 +52,8 @@ class CodeAsterAdapter(SolverAdapter):
         | PRETENSION_FEATURES
         | LIFTING_FEATURES,
         connectors=frozenset({"beam_fastener:rigid", "beam_fastener:distributing"}),
+        beams=True,  # ADR 0027, tests/integration/test_beams.py
+        shells=True,  # ADR 0027, tests/integration/test_shells.py
         amplitude_features=frozenset({"heat_flux"}),  # ADR 0037, benchmarked
         axes_features=frozenset(
             {"displacement:cartesian", "displacement:cylindrical", "force:cartesian"}

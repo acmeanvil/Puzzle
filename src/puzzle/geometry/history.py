@@ -19,6 +19,9 @@ the part, the first one starts it):
 | --- | --- | --- |
 | box | dx, dy, dz, x0, y0, z0 | -x, +x, -y, +y, -z, +z |
 | cylinder | r, h, x, y, z, axis | wall, start, end |
+| polyline | points (a line body, for beams) | none: edge-N, vertex-N by position |
+| sheet | points (a flat polygon: a sheet body, for shells) | face |
+| curved_sheet | r, length, angle, x0, y0, z0 (a cylinder panel on x, centred on +z) | surface |
 | cone | r1, r2, h, x, y, z, axis | wall, start, end |
 | sphere | r, x, y, z | surface |
 | extrude | profile, distance, plane, offset | start, end, side-1 ... (a sketch's edge names) |
@@ -400,7 +403,67 @@ def _import(state, a):
     return shape, names, parts
 
 
+def _polyline(state, a):
+    """A line body (ADR 0027 beams): straight segments through the points (m). It has
+    no faces; its edges and points are named by position (edge-1, point-1, ...)."""
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakePolygon
+
+    points = a.get("points") or []
+    if len(points) < 2:
+        raise GeometryError("a polyline needs two points or more")
+    poly = BRepBuilderAPI_MakePolygon()
+    for p in points:
+        x, y, z = (list(p) + [0.0, 0.0, 0.0])[:3]
+        poly.Add(gp_Pnt(float(x), float(y), float(z)))
+    if a.get("closed"):
+        poly.Close()
+    return poly.Wire(), {}
+
+
+def _sheet(state, a):
+    """A flat sheet body (ADR 0027 shells): the polygon through the points (m), closed.
+    It has one face, "face"; its edges are named by that face (face, face#2, ...)."""
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakePolygon
+
+    points = a.get("points") or []
+    if len(points) < 3:
+        raise GeometryError("a sheet needs three points or more")
+    poly = BRepBuilderAPI_MakePolygon()
+    for p in points:
+        x, y, z = (list(p) + [0.0, 0.0, 0.0])[:3]
+        poly.Add(gp_Pnt(float(x), float(y), float(z)))
+    poly.Close()
+    face = BRepBuilderAPI_MakeFace(poly.Wire(), True)
+    if not face.IsDone():
+        raise GeometryError("the sheet's points must lie in one plane")
+    shape = face.Face()
+    return shape, {"face": [shape]}
+
+
+def _curved_sheet(state, a):
+    """A cylindrical panel (ADR 0027 shells): radius r, `length` along x from (x0, y0,
+    z0) on its axis, spanning `angle` degrees centred on +z (a barrel roof)."""
+    import math
+
+    from OCP.gp import gp_Dir
+
+    half = math.radians(a["angle"]) / 2
+    base = gp_Pnt(a.get("x0", 0.0), a.get("y0", 0.0), a.get("z0", 0.0))
+    frame = gp_Ax2(base, gp_Dir(1, 0, 0), gp_Dir(0, math.sin(half), math.cos(half)))
+    solid = BRepPrimAPI_MakeCylinder(frame, a["r"], a["length"], 2 * half).Shape()
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+    from OCP.GeomAbs import GeomAbs_Cylinder
+
+    wall = [f for f in _faces(solid) if BRepAdaptor_Surface(f).GetType() == GeomAbs_Cylinder]
+    if len(wall) != 1:
+        raise GeometryError("the curved sheet could not be made")
+    return wall[0], {"surface": wall}
+
+
 TOOLS = {
+    "polyline": _polyline,
+    "sheet": _sheet,
+    "curved_sheet": _curved_sheet,
     "import": _import,
     "box": _box,
     "cylinder": _cylinder,
@@ -418,7 +481,8 @@ def _join(state, op, tool, tool_names: Names, mode: str, tool_bodies=None) -> No
     body = op.args.get("body", "Body")
     if mode == "new" or state.shape is None:
         state.shape, state.names = tool, {**state.names, **mine} if state.shape is None else mine
-        state.bodies = {body: _subshapes(tool, TopAbs_SOLID), **(tool_bodies or {})}
+        solids = _subshapes(tool, TopAbs_SOLID)
+        state.bodies = {**({body: solids} if solids else {}), **(tool_bodies or {})}
         return
     algo = {"add": BRepAlgoAPI_Fuse, "cut": BRepAlgoAPI_Cut, "intersect": BRepAlgoAPI_Common}.get(
         mode
@@ -603,8 +667,8 @@ def _heal(state, op, a):
     healed, mapped = heal(state.shape, tolerance)
     state.names = {n: [p for f in fs for p in mapped(f)] for n, fs in state.names.items()}
     solids = _subshapes(healed, TopAbs_SOLID)
-    if len(state.bodies) == 1:  # one body: it is whatever solids the healing made
-        state.bodies = {next(iter(state.bodies)): solids}
+    if len(state.bodies) <= 1:  # one body (or none yet): whatever solids the healing made
+        state.bodies = {next(iter(state.bodies), "Body"): solids} if solids else {}
     else:
         state.bodies = {n: [p for b in bs for p in mapped(b)] for n, bs in state.bodies.items()}
     state.names = {n: fs for n, fs in state.names.items() if fs}

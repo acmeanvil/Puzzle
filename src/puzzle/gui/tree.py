@@ -103,10 +103,10 @@ class ModelTree(QTreeWidget):
                 text = f"{d.name} · {METHODS[d.method].split(' (')[0].lower()}"
                 item = self._add(section, text, Node("derived", str(d.id), "", d.name))
                 self._state(item, states.get(str(d.id)))
-            for p in probes:  # kept probes (ADR 0032), read again for each run
-                from puzzle.post.quantities import label_of
+            for p in probes:  # result tools (ADR 0032, 0042), read again for each run
+                from puzzle.gui.result_tools import title
 
-                text = f"{p.name} · {label_of(p.quantity)}"
+                text = title(p)
                 item = self._add(section, text, Node("probe", str(p.id), "", p.name))
                 self._state(item, states.get(str(p.source)))
             sweeps: dict[str, tuple[QTreeWidgetItem, set]] = {}  # study id -> heading, points
@@ -214,6 +214,14 @@ class ModelTree(QTreeWidget):
                 d = c.diameter
                 text = f"Fastener {c.name} (Ø {d.value:g} {d.unit}): {c.source} → {c.target}"
                 self._add(item, text, Node("connector", oid, f"connectors.{i}", c.name))
+            for i, s in enumerate(obj.shell_sections):  # ADR 0027 shells
+                text = f"Shell on {s.selection}: {s.describe()}"
+                self._add(
+                    item, text, Node("shell_section", oid, f"shell_sections.{i}", s.selection)
+                )
+            for i, b in enumerate(obj.beam_sections):  # ADR 0027 beams
+                text = f"Beam section on {b.selection}: {b.describe()}"
+                self._add(item, text, Node("beam_section", oid, f"beam_sections.{i}", b.selection))
             for i, ph in enumerate(obj.physics):
                 p_item = self._add(
                     item, label(ph.type), Node("physics", oid, f"physics.{i}", ph.type)

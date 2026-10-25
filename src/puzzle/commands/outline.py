@@ -70,6 +70,10 @@ def outline(project: Project, *, ids: bool = False, runs=None) -> str:
                 f"    fastener {f.name}: {f.source} -> {f.target}, diameter {_q(f.diameter)}, "
                 f"{names.get(f.material, '?')}, {f.ends} ends"
             )
+        for s in c.shell_sections:  # ADR 0027 shells
+            lines.append(f"    shell on {s.selection}: {s.describe()}")
+        for b in c.beam_sections:  # ADR 0027
+            lines.append(f"    beam section on {b.selection}: {b.describe()}")
         for ph in c.physics:
             settings = f" {ph.settings}" if ph.settings else ""
             lines.append(f"    physics {ph.type}{settings}")
@@ -147,11 +151,23 @@ def outline(project: Project, *, ids: bool = False, runs=None) -> str:
     for pr in project.of_type(ResultProbe):
         from puzzle.post.quantities import label_of
 
-        at = ", ".join(f"{c:g}" for c in pr.point)
-        lines.append(
-            head("Probe", pr)
-            + f": {label_of(pr.quantity)} of {names.get(pr.source, '?')} at ({at}) m"
-        )
+        def xyz(point) -> str:
+            return "(" + ", ".join(f"{c:g}" for c in point) + ") m"
+
+        of = names.get(pr.source, "?")
+        if pr.type == "reaction":  # ADR 0042 result tools
+            about = f", moment about {xyz(pr.about)}" if pr.about else ""
+            what = f"reaction on {pr.selection} of {of}{about}"
+        elif pr.type == "selection":
+            what = f"{pr.reduction} of {label_of(pr.quantity)} on {pr.selection} of {of}"
+        elif pr.type == "path":
+            what = (
+                f"{label_of(pr.quantity)} of {of} along {xyz(pr.point)} to {xyz(pr.end)}, "
+                f"{pr.samples} points"
+            )
+        else:
+            what = f"{label_of(pr.quantity)} of {of} at {xyz(pr.point)}"
+        lines.append(head("Probe", pr) + f": {what}")
     problems = project.problems()
     if problems:
         lines.append("Problems:")

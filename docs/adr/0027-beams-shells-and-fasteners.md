@@ -1,6 +1,6 @@
 # 0027. Beams and shells beside solids, starting with beam fasteners
 
-- Status: Accepted (2026-10-24); beam fasteners built on CalculiX and Code_Aster; beams and shells to come
+- Status: Accepted (2026-10-24); beam fasteners (2026-10-24), beams and shells (2026-10-25) built on CalculiX and Code_Aster
 - Date: 2026-10-22
 
 ## Context
@@ -84,7 +84,45 @@ The details of CalculiX's knots and couplings, and how beam rotations meet a cou
   - a pinball radius;
   - a bolt check against proof strength;
   - the MCP twin of Fasteners from holes…;
-  - beams and shells (point 5).
+  - shells (point 5): built 2026-10-25, below.
+
+## Built: beams (2026-10-25)
+
+- **Geometry:** a `polyline` history step (points in metres; the GUI's step form takes mm as "x, y, z; x, y, z") makes a wire, one edge per segment. Shapes without faces get positional names (`edge-1`, `vertex-2`), and point selections by rule (a plane) find the frame's joints and ends. A part's own name is a selection (the whole part).
+- **Mesh:** a part's top dimension decides its elements: a wire meshes into line elements (`line2`, or `line3` at order 2), kept as beam blocks in `Mesh`. Joining beams to solids is not written yet.
+- **Model:** `Component.beam_sections`, a list of `BeamSection`: a selection (the part, or an edge selection), a shape (rectangle, circle, tube, box) with only the sizes it takes, and the section's first axis (`orientation`, made square to the beam; a rectangle's width lies along it). `properties()` gives area, second moments and torsion constant. A line part without a section is refused.
+- **CalculiX:** `B31` (order 1) or `B32` (order 2) with `*BEAM SECTION` (RECT, CIRC on B32 only, PIPE, BOX). CalculiX expands beams into solids internally; `OUTPUT=2D` maps the results back to the beam's own nodes. A fixed point holds rotations too.
+- **Code_Aster:** `POU_D_T` (Timoshenko) on SEG2 (it refuses order 2), `AFFE_CARA_ELEM` `POUTRE` (RECTANGLE, CERCLE, with EP for hollow) and `ORIENTATION VECT_Y`. Forces on points are `FORCE_NODALE`. Section forces (`EFGE_NOEU`) come back as the field `beam_forces` (N, Vy, Vz, T, My, Mz).
+- **Refused:** Elmer and FEniCSx (`Capabilities.beams`, and the writers refuse line elements).
+- **Benchmarks** (`tests/integration/test_beams.py`; a steel 20 × 40 mm rectangle):
+
+  | Check | CalculiX B31 | CalculiX B32 | Code_Aster POU_D_T |
+  | --- | --- | --- | --- |
+  | Cantilever tip, 1 m, 100 N, against Timoshenko | −0.09 % | −0.49 % | 0.00 % |
+  | Cantilever root shear and moment (P, P L) | | | exact |
+  | Portal frame sway, 1 × 1 m, against a matrix analysis | −0.33 % | −0.85 % | +0.48 % (shear flexibility) |
+
+- **GUI:** Polyline in the Geometry ribbon; a component's Add beam section… (the beams, a shape by name, sizes in the display unit showing only those the shape takes, the first axis as Global X/Y/Z); the tree lists "Beam section on F: tube 60 × 4 mm", the outline names it, and the properties panel hides sizes the shape doesn't take. The view draws beams as thick lines, coloured by the result.
+- **Not yet:** joining beams to solids or shells where nodes aren't shared; I, channel and angle sections; section stresses on beams; a section's orientation from a point or edge; beam display with its real section.
+
+## Built: shells (2026-10-25)
+
+- **Geometry:** `sheet` (a flat polygon through points; its face is `face`) and `curved_sheet` (a cylindrical panel along x, centred on +z: radius, length, angle; its face is `surface`) make sheet bodies. Both are in the Geometry ribbon and the menu. A part's own dimension (3, 2 or 1) decides its elements, so a sheet meshes into triangles (`tri3`, or `tri6` at order 2); `Mesh.shell_blocks()` tells them from the faces a solid's selections name.
+- **Model:** `Component.shell_sections`, a list of `ShellSection`: a selection (the part or a face selection), a thickness and an offset in thicknesses (0 centred, +0.5 the sheet on the shell's bottom). A sheet without a thickness is refused.
+- **Loads:** a positive pressure on a sheet pushes against the face's normal, as on a solid's face (Gmsh orients the elements with the face). Gravity takes the density and thickness. A `fixed` support on shell nodes clamps the rotations too; `displacement` leaves them free (a simple support).
+- **CalculiX:** S6 (and S8) with `*SHELL SECTION` and `OFFSET`; its pressure label `P` pushes along the element normal, so −p is written. S3 is refused: it expands into one layer of wedges, which lock in bending (a simply supported plate came out 70 % too stiff). `OUTPUT=2D` maps results back to the shell's nodes.
+- **Code_Aster:** DKT on three- and four-node faces (order 2 is refused), `AFFE_CARA_ELEM` `COQUE` with `EPAIS` and `EXCENTREMENT`, pressure by `FORCE_COQUE`. A model of shells alone asks no stress field (`CONTRAINTE` left out).
+- **Refused:** Elmer and FEniCSx (`Capabilities.shells`, and the writers refuse sheet elements).
+- **Benchmarks** (`tests/integration/test_shells.py`):
+
+  | Check | CalculiX S6 | Code_Aster DKT |
+  | --- | --- | --- |
+  | Simply supported square plate, 1 kPa, against 0.00406 q a⁴ / D | +0.74 % (25 mm) | −0.12 % (25 mm) |
+  | Clamped square plate against 0.00127 q a⁴ / D | −0.81 % (25 mm; −0.3 % at 12.5 mm) | −0.02 % |
+  | Scordelis-Lo roof, free edge against 0.3024 | −0.99 % (2.5 m) | −1.04 % (0.625 m; DKT converges from below: −7 % at 2.5 m) |
+
+- **GUI:** a component's Add shell thickness… (the sheets, the thickness in the display unit, where the sheet sits), in its menu and Model → Add shell thickness…; the tree lists "Shell on P: 4 mm thick"; the outline names it; the view draws the shells as surfaces coloured by the result.
+- **Not yet:** a solid's mid-surface as a sheet; joining shells to solids or beams where nodes aren't shared; section results (membrane and bending stresses, top and bottom); orienting normals across several faces; the pinched cylinder; curved panels about other axes.
 
 ## Consequences
 

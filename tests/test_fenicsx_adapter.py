@@ -97,6 +97,9 @@ def test_python_discovery(tmp_path, monkeypatch):
     python = bindir / "python"
     python.write_text("")
     monkeypatch.setenv("PUZZLE_SOLVER_PATH", str(bindir))
+    from puzzle.jobs import runtime
+
+    monkeypatch.setattr(runtime, "pixi_solver_dirs", lambda: [])  # not this checkout's
     assert fenicsx_python() is None  # no dolfinx in that environment
     (env / "lib" / "python3.12" / "site-packages" / "dolfinx").mkdir(parents=True)
     if os.name != "nt":

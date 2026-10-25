@@ -53,6 +53,7 @@ TABLES = {
     "plastic_strain": 86,
     "plastic_strain_equivalent": 87,
     "buckling": 88,
+    "beam_forces": 89,
 }
 FORMAT_R = "1PE18.10"
 
@@ -186,7 +187,51 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         cuts += [c for _f, c in tight]
     if fastener_ends:  # the reader sums the bolt end faces' reactions (ADR 0027)
         (workdir / f"{JOB}.fasteners.json").write_text(json.dumps(fastener_ends))
+    # Beams (ADR 0027): line bodies as POU_D_T, which takes two-node lines only.
+    beam_parts = [
+        p.name for p in comp.parts if mesh.groups.get(p.name) and mesh.groups[p.name].dim == 1
+    ]
+    if any(b.element == "line3" for b in mesh.beam_blocks()) and not thermal:
+        raise InputError(
+            "Code_Aster's beams (POU_D_T) are two-node lines: set the mesh recipe's element "
+            "order to 1 for line bodies",
+            code="unsupported",
+        )
+    beams = []
+    for b in comp.beam_sections:
+        if b.selection not in mesh.groups:
+            raise InputError(f"a beam section names '{b.selection}', which is not meshed")
+        names.setdefault(b.selection, f"G{len(names) + 1}")
+        beams.append((names[b.selection], b))
+    for part in beam_parts:
+        if not any(b.selection.split("/", 1)[0] == part for b in comp.beam_sections):
+            raise InputError(f"the line body '{part}' has no beam section", code="invalid")
+    # Shells (ADR 0027): sheet bodies as DKT (Kirchhoff plates and shells), which takes
+    # three- and four-node faces.
+    shell_parts = [
+        p.name for p in comp.parts if mesh.groups.get(p.name) and mesh.groups[p.name].dim == 2
+    ]
+    if any(b.element in ("tri6", "quad8", "quad9") for b in mesh.shell_blocks()) and not thermal:
+        raise InputError(
+            "Code_Aster's shells (DKT) are three- and four-node faces: set the mesh recipe's "
+            "element order to 1 for sheet bodies",
+            code="unsupported",
+        )
+    shells = []
+    for s in comp.shell_sections:
+        if s.selection not in mesh.groups:
+            raise InputError(f"a shell thickness names '{s.selection}', which is not meshed")
+        names.setdefault(s.selection, f"G{len(names) + 1}")
+        shells.append((names[s.selection], s))
+    for part in shell_parts:
+        if not any(s.selection.split("/", 1)[0] == part for s in comp.shell_sections):
+            raise InputError(f"the sheet body '{part}' has no thickness", code="invalid")
     points = _Points(base, names)
+    # Point selections (a beam's ends) as point elements: the mesh export writes no
+    # group of points alone.
+    point_groups = [g for g in groups if mesh.groups[g].dim == 0]
+    for g in point_groups:
+        points.gather(g, mesh.groups[g].node_ids)
     for i, (node, *_rest) in enumerate(supports, start=1):
         points.add(f"S{i}", node, "SPRINGS")
     for i, (node, *_rest) in enumerate(gaps, start=1):
@@ -207,6 +252,15 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     out = [
         "DEBUT(LANG='EN')",
         "mesh = LIRE_MAILLAGE(FORMAT='MED', UNITE=20)",
+        *(
+            [
+                "mesh = DEFI_GROUP(reuse=mesh, MAILLAGE=mesh, CREA_GROUP_NO=_F(GROUP_MA=("
+                + ", ".join(f"'{names[g]}'" for g in point_groups)
+                + ",)))"
+            ]
+            if point_groups
+            else []
+        ),
         # Contact faces must have outward normals.
         *(
             [
@@ -256,6 +310,14 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         "model = AFFE_MODELE(MAILLAGE=mesh, "
         f"AFFE=(_F(TOUT='OUI', PHENOMENE='{phenomenon}', MODELISATION='{model}'),"
         + "".join(
+            f" _F(GROUP_MA='{names[p]}', PHENOMENE='MECANIQUE', MODELISATION='POU_D_T'),"
+            for p in beam_parts
+        )
+        + "".join(
+            f" _F(GROUP_MA='{names[p]}', PHENOMENE='MECANIQUE', MODELISATION='DKT'),"
+            for p in shell_parts
+        )
+        + "".join(
             f" _F(GROUP_MA='{g}', PHENOMENE='MECANIQUE', "
             f"MODELISATION='{'DIS_TR' if g == 'MASTERS' else 'DIS_T'}'),"
             for g in points.sets
@@ -267,9 +329,11 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             _negligible(project, comp, mesh),
             gaps,
             [n for n in points.names if n.startswith("M")],
+            beams,
+            shells,
         ),
     ]
-    cara = "CARA_ELEM=cara, " if points.sets else ""
+    cara = "CARA_ELEM=cara, " if points.sets or beams or shells else ""
     assignments = []
     materials = [project.get(a.material, Material) for a in comp.materials]
     tables = [thermal_tables(m, comp) if thermal else {} for m in materials]
@@ -392,14 +456,18 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             ),
         ]
     else:
+        solids = any(b.dim == 3 for b in mesh.blocks)
+        options = (["'SIGM_NOEU'"] if solids else []) + (["'EFGE_NOEU'"] if beam_parts else [])
         out += [
             f"res = MECA_STATIQUE(MODELE=model, CHAM_MATER=mater, {cara}EXCIT=("
             + ", ".join(f"_F(CHARGE={c})" for c in charges)
             + ",))",
-            "res = CALC_CHAMP(reuse=res, RESULTAT=res, CONTRAINTE=('SIGM_NOEU',), "
-            "FORCE=('REAC_NODA',))",
+            "res = CALC_CHAMP(reuse=res, RESULTAT=res, "
+            + (f"CONTRAINTE=({', '.join(options)},), " if options else "")  # shells alone: none
+            + "FORCE=('REAC_NODA',))",
             _table("res", "DEPL", "displacement"),
-            _table("res", "SIGM_NOEU", "stress"),
+            *([_table("res", "SIGM_NOEU", "stress")] if solids else []),
+            *([_table("res", "EFGE_NOEU", "beam_forces")] if beam_parts else []),
             _table("res", "REAC_NODA", "reaction_force"),
         ]
     out.append("FIN()")
@@ -414,7 +482,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             if step.type == "modal"
             else {"displacement", "buckling"}
             if step.type == "buckling"
-            else {"displacement", "stress", "reaction_force"}
+            else {"displacement", "stress", "reaction_force", "beam_forces"}
             | ({"plastic_strain", "plastic_strain_equivalent"} if plastic else set())
         )
     )
@@ -489,6 +557,20 @@ class _Points:
             nodes = np.unique([*(held.node_ids if held else []), node]).astype(np.int64)
             self.mesh.groups[f"__{into}"] = Group(f"__{into}", 0, self.sets[into], nodes)
             self.out[f"__{into}"] = into
+
+    def gather(self, group: str, nodes) -> None:
+        """A point selection as point elements, one per node, under its own written
+        name (the mesh export writes no group of points alone)."""
+        entities = []
+        for node in nodes:
+            entity = (0, POINT_TAG + 50_000 + self.next)
+            self.mesh.blocks.append(
+                CellBlock("vertex", 0, entity, np.array([self.next]), np.array([[int(node)]]))
+            )
+            self.next += 1
+            entities.append(entity)
+        old = self.mesh.groups[group]
+        self.mesh.groups[group] = Group(group, 0, entities, old.node_ids)
 
 
 def _cut(mesh: Mesh, cuts) -> Mesh:
@@ -679,12 +761,14 @@ def _negligible(project, comp, mesh: Mesh) -> float:
     return 1e-9 * E * float(np.linalg.norm(np.ptp(mesh.coords, axis=0)))
 
 
-def _discrete_cara(supports, references: int, tiny: float = 0.0, gaps=(), masters=()) -> list[str]:
+def _discrete_cara(
+    supports, references: int, tiny: float = 0.0, gaps=(), masters=(), beams=(), shells=()
+) -> list[str]:
     """Each spring's stiffness in its own axes (REPERE='LOCAL'; global is the default):
     x along the face normal (kn), y and z along the face (kt). A pretension reference
     node carries a negligible stiffness (`tiny`) along its first dof, only to have
     dofs; its other two are held."""
-    if not supports and not references and not gaps and not masters:
+    if not supports and not references and not gaps and not masters and not beams and not shells:
         return []
     stiff, axes = [], []
     nodes = [("S", i, s) for i, s in enumerate(supports, start=1)]
@@ -711,13 +795,55 @@ def _discrete_cara(supports, references: int, tiny: float = 0.0, gaps=(), master
         f"_F(GROUP_MA='{m}', CARA='K_TR_D_N', VALE=({', '.join([f'{tiny:.6e}'] * 6)}))"
         for m in masters
     ]
-    return [
-        "cara = AFFE_CARA_ELEM(MODELE=model, DISCRET=(",
-        *(f"    {s}," for s in stiff),
-        ")" + (", ORIENTATION=(" if axes else ")"),
-        *(f"    {a}," for a in axes),
-        *(["))"] if axes else []),
+    sections = []
+    for group, b in beams:  # ADR 0027 beams: POU_D_T sections; local y is the first axis
+        if b.shape == "rectangle":
+            what = (
+                f"SECTION='RECTANGLE', CARA=('HY', 'HZ'), VALE=({b.width.to_si():.10g}, "
+                f"{b.height.to_si():.10g})"
+            )
+        elif b.shape == "box":
+            what = (
+                f"SECTION='RECTANGLE', CARA=('HY', 'HZ', 'EP'), VALE=({b.width.to_si():.10g}, "
+                f"{b.height.to_si():.10g}, {b.thickness.to_si():.10g})"
+            )
+        elif b.shape == "circle":
+            what = f"SECTION='CERCLE', CARA=('R',), VALE=({b.diameter.to_si() / 2:.10g},)"
+        else:
+            what = (
+                f"SECTION='CERCLE', CARA=('R', 'EP'), VALE=({b.diameter.to_si() / 2:.10g}, "
+                f"{b.thickness.to_si():.10g})"
+            )
+        sections.append(f"_F(GROUP_MA='{group}', {what})")
+        axes.append(
+            f"_F(GROUP_MA='{group}', CARA='VECT_Y', VALE=("
+            + ", ".join(f"{c:.12g}" for c in b.orientation)
+            + "))"
+        )
+    plates = []
+    for group, s in shells:  # ADR 0027 shells: thickness, and the offset in metres
+        t = s.thickness.to_si()
+        offset = f", EXCENTREMENT={s.offset * t:.10g}, INER_ROTA='OUI'" if s.offset else ""
+        plates.append(f"_F(GROUP_MA='{group}', EPAIS={t:.10g}{offset})")
+    blocks = [
+        ("DISCRET", stiff),
+        ("POUTRE", sections),
+        ("COQUE", plates),
+        ("ORIENTATION", axes),
     ]
+    out = ["cara = AFFE_CARA_ELEM(MODELE=model"]
+    for key, items in blocks:
+        if items:
+            out[-1] += f", {key}=("
+            out += [f"    {item}," for item in items]
+            out.append(")")
+    out[-1] += ")"
+    return out
+
+
+def _on_shells(mesh: Mesh, group) -> bool:
+    shells = {id(b) for b in mesh.shell_blocks()}
+    return group.dim == 2 and any(id(b) in shells for b in group.blocks(mesh))
 
 
 def _check_buckling(features, step) -> None:
@@ -1058,7 +1184,8 @@ def _loads(
     """The plain load charge; `extra` adds items by keyword (pretension's)."""
     extra = extra or {}
     imposed, face_force, pressure, temperature, flux, exchange = [], [], [], [], [], []
-    gravity, rotation, rigid = [], [], []
+    nodal: list[str] = []
+    gravity, rotation, rigid, shell_pressure = [], [], [], []
     tied = [
         f"_F(GROUP_MA_MAIT='{names[c.target.split('/', 1)[0]]}', "
         f"GROUP_MA_ESCL='{names[c.source]}', TYPE_RACCORD='MASSIF')"
@@ -1068,14 +1195,23 @@ def _loads(
         g = names[f.selection]
         v = {k: q.to_si() for k, q in f.values.items()}
         if f.type == "fixed":
-            imposed.append(f"_F(GROUP_MA='{g}', DX=0.0, DY=0.0, DZ=0.0)")
+            beam_nodes = mesh.beam_nodes() | mesh.shell_nodes()  # nodes with rotations
+            on_beams = beam_nodes & {int(n) for n in mesh.groups[f.selection].node_ids}
+            rotations = ", DRX=0.0, DRY=0.0, DRZ=0.0" if on_beams else ""  # a clamp
+            imposed.append(f"_F(GROUP_MA='{g}', DX=0.0, DY=0.0, DZ=0.0{rotations})")
         elif f.type == "displacement" and f.axes is None:  # in local axes: loadf
             dofs = ", ".join(f"D{a.upper()}={v[a]:.12g}" for a in "xyz" if a in v)
             imposed.append(f"_F(GROUP_MA='{g}', {dofs})")
+        elif f.type == "force" and mesh.groups[f.selection].dim == 0:  # on points (beams)
+            share = len(mesh.groups[f.selection].node_ids)
+            comps = ", ".join(f"F{a.upper()}={v[a] / share:.12g}" for a in "xyz" if v.get(a))
+            nodal.append(f"_F(GROUP_NO='{g}', {comps})")
         elif f.type == "force":
             area = surface_area(mesh.groups[f.selection], mesh)
             comps = ", ".join(f"F{a.upper()}={v[a] / area:.12g}" for a in "xyz" if v.get(a))
             face_force.append(f"_F(GROUP_MA='{g}', {comps})")
+        elif f.type == "pressure" and _on_shells(mesh, mesh.groups[f.selection]):
+            shell_pressure.append(f"_F(GROUP_MA='{g}', PRES={v['p']:.12g})")
         elif f.type == "pressure":
             pressure.append(f"_F(GROUP_MA='{g}', PRES={v['p']:.12g})")
         elif f.type == "remote_force_rigid":  # the face moves as one (its load: loadf)
@@ -1116,10 +1252,11 @@ def _loads(
     return (
         "load = AFFE_CHAR_MECA(MODELE=model"
         + kw("DDL_IMPO", imposed + extra.get("DDL_IMPO", []))
-        + kw("FORCE_NODALE", extra.get("FORCE_NODALE", []))
+        + kw("FORCE_NODALE", nodal + extra.get("FORCE_NODALE", []))
         + kw("LIAISON_DDL", extra.get("LIAISON_DDL", []))
         + kw("FORCE_FACE", face_force)
         + kw("PRES_REP", pressure)
+        + kw("FORCE_COQUE", shell_pressure)
         + kw("PESANTEUR", gravity)
         + kw("LIAISON_SOLIDE", rigid + extra.get("LIAISON_SOLIDE", []))
         + kw("LIAISON_RBE3", extra.get("LIAISON_RBE3", []))

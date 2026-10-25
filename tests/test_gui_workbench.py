@@ -16,6 +16,7 @@ pytest.importorskip("PySide6")
 pytest.importorskip("OCP")
 pytest.importorskip("py_slvs")
 
+from forms import fill  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from puzzle.geometry.history import body_signature, ops_of, regenerate  # noqa: E402
@@ -92,7 +93,7 @@ def draw_plate(ws, w_mm=60, h_mm=30):
 
 
 def test_a_new_part_is_sketched_then_extruded(app, window):
-    answer(window, "Plate", "xy")
+    fill(window, name="Plate", plane="xy")
     window.workbench.new_part()
     ws = window.workbench.workspace
     assert window.centre.currentWidget() is ws  # sketching in the main view
@@ -120,7 +121,7 @@ def test_a_new_part_is_sketched_then_extruded(app, window):
 
 
 def make_plate(app, window):
-    answer(window, "Plate", "xy")
+    fill(window, name="Plate", plane="xy")
     window.workbench.new_part()
     draw_plate(window.workbench.workspace)
     window.workbench.finish_sketch()

@@ -30,6 +30,7 @@ from puzzle.adapters.common import (
     initial_temperature,
     local_axes,
     refuse_large_deflection,
+    refuse_line_bodies,
     remote_load,
     remote_values,
     rigid_motion,
@@ -71,6 +72,7 @@ def write_case(
 ) -> tuple[Path, ElmerMesh]:
     comp = project.get(study.component, Component)
     check_contacts(comp, set(), "Elmer")
+    refuse_line_bodies(mesh, "Elmer")
     refuse_large_deflection(study.solve_steps(), "Elmer")
     steps = study.solve_steps()
     if len(steps) != 1:

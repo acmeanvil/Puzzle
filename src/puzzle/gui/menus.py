@@ -77,6 +77,15 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
             add("New Cartesian axes", lambda: new_axes(window, "cartesian"))
             add("New cylindrical axes", lambda: new_axes(window, "cylindrical"))
         elif node.label == "Results":
+            from puzzle.gui import result_tools as tools
+
+            tool = menu.addMenu("Add result tool")  # ADR 0042
+            for text, slot in (
+                ("Reaction…", tools.add_reaction),
+                ("Result on a selection…", tools.add_selection_result),
+                ("Path…", tools.add_path),
+            ):
+                tool.addAction(text).triggered.connect(lambda _=False, s=slot: s(window))
             add("New combination…", lambda: window.new_derived("linear"))
             add("New equation…", lambda: window.new_derived("equation"))
             add("New fatigue tool…", lambda: window.new_derived("fatigue"))
@@ -97,6 +106,12 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         from puzzle.gui.fastener_dialog import add_fastener, fasteners_from_holes
 
         add("Add fastener…", lambda: add_fastener(window, obj))
+        from puzzle.gui.beam_dialog import add_beam_section
+
+        add("Add beam section…", lambda: add_beam_section(window, obj))
+        from puzzle.gui.beam_dialog import add_shell_thickness
+
+        add("Add shell thickness…", lambda: add_shell_thickness(window, obj))
         if len(obj.parts) > 1:
             add("Fasteners from holes…", lambda: fasteners_from_holes(window, obj))
         physics = menu.addMenu("Add physics")
@@ -124,9 +139,23 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         "contact",
         "part",
         "connector",
+        "beam_section",
+        "shell_section",
     ):
         if node.kind in ("feature", "assignment"):
             add("Change selection…", lambda: change_selection(window, obj, node))
+        if node.kind == "feature":
+            from puzzle.gui import result_tools as tools
+
+            i, j = int(node.path.split(".")[1]), int(node.path.split(".")[3])
+            feature = obj.physics[i].features[j]
+            if feature.type in tools.SUPPORTS:  # ADR 0042: what this support takes
+                add(
+                    "Reaction force…",
+                    lambda: tools.add_reaction(
+                        window, selection=feature.selection, source=tools.study_of(window, obj)
+                    ),
+                )
         add("Remove", lambda: remove(window, obj, node.path))
     elif isinstance(obj, Geometry) and node.kind == "selection":
         sel = obj.selections[int(node.path.split(".")[1])]
@@ -248,16 +277,22 @@ def assign_material(window, comp: Component):
     if not materials:
         window.statusBar().showMessage("Add a material first (Materials → Add from library)", 8000)
         return None
-    name = window.choose("Assign material", "Material:", sorted(materials))
-    if name is None:
-        return None
     bodies = selections_of(project, comp, "body")
-    selection = (
-        window.choose("Assign material", "To which body selection?", bodies) if bodies else None
-    )
-    if selection is None:
+    if not bodies:
+        window.statusBar().showMessage(f"{comp.name} has no body selection to assign to", 8000)
         return None
-    value = {"material": str(materials[name].id), "selection": selection}
+    from puzzle.gui.quick_form import Ask
+
+    got = window.ask_form(
+        "Assign material",
+        [
+            Ask("material", "Material", choices=[(n, n) for n in sorted(materials)]),
+            Ask("selection", "To the bodies", choices=[(b, b) for b in bodies]),
+        ],
+    )
+    if got is None:
+        return None
+    value = {"material": str(materials[got["material"]].id), "selection": got["selection"]}
     return window.submit(
         Edit(object=str(comp.id), ops=[EditOp(op="append", path="materials", value=value)])
     )
@@ -402,13 +437,27 @@ def new_component(window):
     if not geometries or not meshes:
         window.statusBar().showMessage("A component needs a geometry and a mesh recipe first", 8000)
         return None
-    geo = window.choose("New component", "Geometry:", sorted(geometries))
-    mesh = window.choose("New component", "Mesh recipe:", sorted(meshes)) if geo else None
-    name = window.ask_text("New component", "Name:", geo) if mesh else None
-    if not name:
+    from puzzle.gui.quick_form import Ask
+
+    taken = {c.name for c in project.of_type(Component)}
+    got = window.ask_form(
+        "New component",
+        [
+            Ask("geometry", "Geometry", choices=[(g, g) for g in sorted(geometries)]),
+            Ask("mesh", "Mesh recipe", choices=[(m, m) for m in sorted(meshes)]),
+            Ask("name", "Name", kind="text", follow=lambda v: v.get("geometry") or ""),
+        ],
+        check=lambda v: (
+            "Give it a name"
+            if not v["name"]
+            else (f"There is already a component '{v['name']}'" if v["name"] in taken else None)
+        ),
+    )
+    if got is None:
         return None
+    geo, mesh = got["geometry"], got["mesh"]
     data = {
-        "name": name,
+        "name": got["name"],
         "parts": [{"name": geo, "geometry": str(geometries[geo].id)}],
         "mesh": str(meshes[mesh].id),
     }
@@ -423,27 +472,56 @@ def new_study(window):
     if not comps:
         window.statusBar().showMessage("Create a component first", 8000)
         return None
-    comp = window.choose("New study", "Component:", sorted(comps))
-    solvers = [(solver_label(k), k) for k in sorted(available_adapters())]
-    solver = window.choose("New study", "Solver:", solvers) if comp else None
-    steps = [(label(t), t) for t in STEP_TYPES]
-    step = window.choose("New study", "Analysis:", steps) if solver else None
+    from puzzle.gui.quick_form import Ask
+
+    together = "all"
+
+    def kinds(v) -> list[str]:
+        c = comps.get(v.get("component"))
+        return list(dict.fromkeys(p.type for p in c.physics)) if c else []
+
+    def what(v) -> str:
+        physics = v.get("physics")
+        if physics and physics != together and len(kinds(v)) > 1:
+            return label(physics).lower()
+        return label(v.get("analysis") or "").lower()
+
+    taken = {s.name for s in project.of_type(Study)}
     # A component with several physics: which one this step solves. Most adapters solve
     # one physics per step (thermal stress chains a heat study into a structural one
     # through a temperature transfer), so "all together" is offered last, not first.
-    kinds = list(dict.fromkeys(p.type for p in comps[comp].physics)) if step else []
-    physics: list[str] = []
-    if len(kinds) > 1:
-        together = "all"
-        options = [(label(k), k) for k in kinds] + [("All together (coupled)", together)]
-        chosen = window.choose("New study", "Physics this step solves:", options)
-        if chosen is None:
-            return None
-        physics = [] if chosen == together else [chosen]
-    what = label(physics[0] if physics else step).lower() if step else ""
-    name = window.ask_text("New study", "Name:", f"{comp} {what}") if step else None
-    if not name:
+    got = window.ask_form(
+        "New study",
+        [
+            Ask("component", "Component", choices=[(c, c) for c in sorted(comps)]),
+            Ask(
+                "solver",
+                "Solver",
+                choices=[(solver_label(k), k) for k in sorted(available_adapters())],
+            ),
+            Ask("analysis", "Analysis", choices=[(label(t), t) for t in STEP_TYPES]),
+            Ask(
+                "physics",
+                "Physics this step solves",
+                choices=lambda v: (
+                    [(label(k), k) for k in kinds(v)] + [("All together (coupled)", together)]
+                ),
+                shown=lambda v: len(kinds(v)) > 1,
+                help="Most solvers solve one physics per step; chain studies with transfers",
+            ),
+            Ask("name", "Name", kind="text", follow=lambda v: f"{v.get('component')} {what(v)}"),
+        ],
+        check=lambda v: (
+            "Give it a name"
+            if not v["name"]
+            else (f"There is already a study '{v['name']}'" if v["name"] in taken else None)
+        ),
+    )
+    if got is None:
         return None
+    comp, solver, step, name = got["component"], got["solver"], got["analysis"], got["name"]
+    chosen = got.get("physics")
+    physics = [] if chosen in (None, together) else [chosen]
     settings = dict(STEP_DEFAULTS.get(step, {}))
     data = {
         "name": name,
@@ -675,20 +753,35 @@ def new_parameter_set(window):
 
 
 def add_parameter(window, params: ParameterSet):
-    name = window.ask_text("Add parameter", "Name (letters, digits, _):", "")
-    if not name or not name.isidentifier():
-        if name:
-            window.statusBar().showMessage(f"'{name}' is not a valid parameter name", 8000)
+    from puzzle.gui.quick_form import Ask
+
+    def parse(text: str):
+        number, _, unit = text.strip().partition(" ")
+        try:
+            return {"value": float(number), "unit": unit.strip() or "dimensionless"}
+        except ValueError:
+            return None
+
+    def check(v) -> str | None:
+        if not v["name"].isidentifier():
+            return "A name is letters, digits and _, not starting with a digit"
+        if v["name"] in params.values:
+            return f"There is already a parameter '{v['name']}'"
+        if parse(v["value"]) is None:
+            return "The value is a number and a unit, e.g. 8 mm"
         return None
-    text = window.ask_text("Add parameter", f"{name} = (a number and unit, e.g. 8 mm):", "1 mm")
-    if not text:
+
+    got = window.ask_form(
+        "Add parameter",
+        [
+            Ask("name", "Name", kind="text", help="Letters, digits and _; used in step fields"),
+            Ask("value", "Value", kind="text", default="1 mm", help="A number and unit"),
+        ],
+        check=check,
+    )
+    if got is None:
         return None
-    number, _, unit = text.strip().partition(" ")
-    try:
-        value = {"value": float(number), "unit": unit.strip() or "dimensionless"}
-    except ValueError:
-        window.statusBar().showMessage(f"'{text}' is not a number and unit", 8000)
-        return None
+    name, value = got["name"], parse(got["value"])
     op = EditOp(op="set", path=f"values.{name}", value=value)
     return window.submit(Edit(object=str(params.id), ops=[op]))
 

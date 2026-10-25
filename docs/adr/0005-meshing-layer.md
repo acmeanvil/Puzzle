@@ -1,6 +1,6 @@
 # 0005. A separate meshing layer, Gmsh first
 
-- Status: Proposed
+- Status: Accepted (2026-10-25: built and in use)
 - Date: 2026-10-17
 
 ## Context

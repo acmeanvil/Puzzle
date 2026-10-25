@@ -17,7 +17,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import Qt  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QMenu, QWidget  # noqa: E402
 
 from puzzle import settings  # noqa: E402
 from puzzle.commands.session import Actor  # noqa: E402
@@ -143,3 +143,24 @@ def test_messages_drag_open_and_shut(window):
     window.fold_messages(False)
     QApplication.processEvents()
     assert abs(window.messages_dock.height() - opened) <= 8
+
+
+def test_closed_panels_come_back_from_the_window_menu(app, window):
+    """A panel closed with its × returns from Window → Model / Properties; a tool's
+    options reopen Properties by themselves."""
+    window.show()
+    app.processEvents()
+    menu = next(m for m in window.menuBar().findChildren(QMenu) if m.title() == "&Window")
+    texts = [a.text() for a in menu.actions()]
+    assert texts[:2] == ["Model", "Properties"]
+    window.properties_dock.close()
+    app.processEvents()
+    assert not window.actions_by_name["properties"].isChecked()
+    window.actions_by_name["properties"].trigger()
+    app.processEvents()
+    assert window.properties_dock.isVisible()
+    window.properties_dock.close()
+    window.show_tool(QWidget())
+    assert window.properties_dock.isVisible()
+    assert [a.text() for a in menu.actions()][1] == "Properties"  # not the dock's "Tool"
+    window.show_tool(None)

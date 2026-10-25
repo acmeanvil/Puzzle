@@ -1,6 +1,6 @@
 # 0006. Solver-neutral model IR with a capability matrix
 
-- Status: Proposed
+- Status: Accepted (2026-10-25: built and in use)
 - Date: 2026-10-17
 
 ## Context

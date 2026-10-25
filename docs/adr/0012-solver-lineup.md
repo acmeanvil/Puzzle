@@ -1,6 +1,6 @@
 # 0012. Solver line-up: CalculiX, Elmer, Code_Aster, FEniCSx, Code_Saturne
 
-- Status: Proposed
+- Status: Accepted (2026-10-25: built and in use)
 - Date: 2026-10-17
 
 ## Context

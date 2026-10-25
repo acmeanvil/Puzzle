@@ -36,7 +36,21 @@ from puzzle.gui.choices import label
 from puzzle.model.schema import Geometry, ParameterSet
 
 GROUPS = [
-    ("Create", ["box", "cylinder", "cone", "sphere", "extrude", "revolve", "hole"]),
+    (
+        "Create",
+        [
+            "box",
+            "cylinder",
+            "cone",
+            "sphere",
+            "extrude",
+            "revolve",
+            "hole",
+            "polyline",
+            "sheet",
+            "curved_sheet",
+        ],
+    ),
     ("Modify", ["fillet", "chamfer", "move", "rotate", "pattern", "split"]),
     ("Prepare", ["heal", "remove", "fragment", "enclosure"]),
 ]
@@ -258,6 +272,11 @@ class Workbench(QWidget):
         from_picks.clicked.connect(self._from_picks)
         reattach.clicked.connect(self._reattach)
         group("Selections", [from_picks, reattach])
+        measure = button(
+            "Measure", "Exact length, area, volume, distance and angle: pick in the view"
+        )
+        measure.clicked.connect(lambda: self.window.start_measuring())
+        group("Inspect", [measure])
         bar.addStretch()
 
         normal = QWidget()
@@ -469,13 +488,26 @@ class Workbench(QWidget):
         """A new part starts with a sketch; finishing it offers the extrusion."""
         w = self.window
         n = len(w.session.project.of_type(Geometry)) + 1
-        name = w.ask_text("New part", "Name:", f"Part {n}")
-        if not name:
+        from puzzle.gui.quick_form import Ask
+
+        taken = {g.name for g in w.session.project.of_type(Geometry)}
+        got = w.ask_form(
+            "New part",
+            [
+                Ask("name", "Name", kind="text", default=f"Part {n}"),
+                Ask("plane", "Sketch its first profile on", choices=PLANES),
+            ],
+            check=lambda v: (
+                "Give it a name"
+                if not v["name"]
+                else (f"There is already a part '{v['name']}'" if v["name"] in taken else None)
+            ),
+        )
+        if got is None:
             return
-        plane = w.choose("New part", "Sketch its first profile on:", PLANES)
-        if plane is None:
-            return
-        self._start_sketch({"new_part": name, "plane": plane, "face": None, "index": None})
+        self._start_sketch(
+            {"new_part": got["name"], "plane": got["plane"], "face": None, "index": None}
+        )
 
     def _import(self) -> None:
         from puzzle.gui import menus

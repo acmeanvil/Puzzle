@@ -1,6 +1,6 @@
 # 0003. Python core, PySide6 GUI with a VTK viewport
 
-- Status: Proposed
+- Status: Accepted (2026-10-25: built and in use)
 - Date: 2026-10-17
 
 ## Context

@@ -102,6 +102,19 @@ def check_contacts(component, implemented: set[str], solver: str) -> None:
             )
 
 
+def refuse_line_bodies(mesh, solver: str) -> None:
+    """Refuse beams and shells (line and sheet bodies, ADR 0027) where the adapter
+    writes solids only: their elements would otherwise be dropped from the model."""
+    what = [w for w, blocks in (("beams (line bodies)", mesh.beam_blocks()),
+            ("shells (sheet bodies)", mesh.shell_blocks())) if blocks]  # fmt: skip
+    if what:
+        raise InputError(
+            f"the {solver} adapter does not write {' or '.join(what)} yet; "
+            "CalculiX and Code_Aster do",
+            code="unsupported",
+        )
+
+
 def refuse_large_deflection(steps, solver: str) -> None:
     """Refuse geometric_nonlinearity where the adapter only writes small-deflection statics."""
     if any(s.settings.get("geometric_nonlinearity") for s in steps):

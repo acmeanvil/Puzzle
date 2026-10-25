@@ -72,6 +72,36 @@ class Mesh:
             counts[b.element] = counts.get(b.element, 0) + len(b.ids)
         return counts
 
+    def _part_blocks(self, dim: int) -> list[CellBlock]:
+        """Elements of parts whose own dimension is `dim`. A solid's mesh also has line
+        and surface blocks, on edges and faces named by selections; those are not
+        elements of the model."""
+        keys = {
+            e
+            for g in self.groups.values()
+            if "/" not in g.name and g.dim == dim
+            for e in g.entities
+        }
+        return [b for b in self.blocks if b.dim == dim and b.entity in keys]
+
+    def beam_blocks(self) -> list[CellBlock]:
+        """Line elements of line bodies (ADR 0027 beams)."""
+        return self._part_blocks(1)
+
+    def shell_blocks(self) -> list[CellBlock]:
+        """Surface elements of sheet bodies (ADR 0027 shells)."""
+        return self._part_blocks(2)
+
+    def beam_nodes(self) -> set[int]:
+        return {int(n) for b in self.beam_blocks() for n in b.connectivity.ravel()}
+
+    def shell_nodes(self) -> set[int]:
+        return {int(n) for b in self.shell_blocks() for n in b.connectivity.ravel()}
+
+    def structural_blocks(self) -> list[CellBlock]:
+        """Beams and shells: elements with rotations."""
+        return self.beam_blocks() + self.shell_blocks()
+
     def node_coords(self, ids: np.ndarray) -> np.ndarray:
         """Coordinates of the given node ids."""
         order = np.argsort(self.node_ids)

@@ -40,6 +40,14 @@ def _faceted(d: dict) -> bool:
     return str(d.get("source") or "").lower().endswith((".stl", ".obj", ".3mf"))
 
 
+def _is_section(d: dict) -> bool:
+    return "shape" in d and "orientation" in d
+
+
+def _shape(*shapes: str):
+    return lambda d: d.get("shape") in shapes
+
+
 # Fields that only mean something in one mode of their object: (is this the object,
 # does the field apply). A field that doesn't apply isn't shown (ADR 0029).
 APPLIES = {
@@ -47,6 +55,11 @@ APPLIES = {
     "source_unit": (_is_geometry, lambda d: d.get("source") is not None),
     "facet_angle": (_is_geometry, _faceted),
     "history": (_is_geometry, lambda d: d.get("source") is None),
+    # A beam section's sizes (ADR 0027): only those its shape takes.
+    "width": (_is_section, _shape("rectangle", "box")),
+    "height": (_is_section, _shape("rectangle", "box")),
+    "diameter": (_is_section, _shape("circle", "tube")),
+    "thickness": (_is_section, _shape("tube", "box")),
 }
 
 

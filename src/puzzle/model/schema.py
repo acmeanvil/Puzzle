@@ -119,6 +119,9 @@ class HistoryStep(BaseModel):
         "pattern",
         "split",
         "enclosure",
+        "polyline",
+        "sheet",
+        "curved_sheet",
         "sketch",  # a 2D sketch on a plane or a planar face, for extrude and revolve (ADR 0017)
     ]
     name: str
@@ -762,6 +765,97 @@ Coupling = Literal[
 ]
 
 
+class ShellSection(BaseModel):
+    """A sheet body's thickness (ADR 0027 shells): on the part, or a selection of its
+    faces. `offset` moves the shell's mid-surface off the sheet, in thicknesses: 0 is
+    centred, +0.5 puts the sheet on the shell's bottom face (the side against the
+    face's normal)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    selection: str = Field(description="the part, or Part/Selection of its faces")
+    thickness: Quantity
+    offset: float = Field(default=0.0, ge=-0.5, le=0.5, description="in thicknesses")
+
+    def describe(self) -> str:
+        """`10 mm thick`, as typed (the outline and the tree)."""
+        t = self.thickness
+        where = f", offset {self.offset:+g} t" if self.offset else ""
+        return f"{t.value:g} {t.unit} thick{where}"
+
+
+class BeamSection(BaseModel):
+    """A line body's cross-section (ADR 0027 beams): on a selection of its edges (or the
+    whole part), a shape and its sizes. The section's first axis is `orientation`
+    (made square to the beam): a rectangle's width lies along it and its height across.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    selection: str = Field(description="the part, or Part/Selection of its edges")
+    shape: Literal["rectangle", "circle", "tube", "box"] = "rectangle"
+    width: Quantity | None = Field(default=None, description="rectangle, box: along the first axis")
+    height: Quantity | None = Field(default=None, description="rectangle, box: across it")
+    diameter: Quantity | None = Field(default=None, description="circle, tube: outside")
+    thickness: Quantity | None = Field(default=None, description="tube, box: the wall")
+    orientation: tuple[float, float, float] = (0.0, 1.0, 0.0)
+
+    @model_validator(mode="after")
+    def _sizes(self) -> BeamSection:
+        need = {
+            "rectangle": ("width", "height"),
+            "circle": ("diameter",),
+            "tube": ("diameter", "thickness"),
+            "box": ("width", "height", "thickness"),
+        }[self.shape]
+        missing = [k for k in need if getattr(self, k) is None]
+        if missing:
+            raise ValueError(f"a {self.shape} section needs {', '.join(missing)}")
+        return self
+
+    def describe(self) -> str:
+        """`rectangle 20 × 40 mm`, as typed (the outline and the tree)."""
+        sizes = {
+            "rectangle": ("width", "height"),
+            "circle": ("diameter",),
+            "tube": ("diameter", "thickness"),
+            "box": ("width", "height", "thickness"),
+        }[self.shape]
+        values = [getattr(self, k) for k in sizes]
+        units = {v.unit for v in values}
+        if len(units) == 1:
+            text = " × ".join(f"{v.value:g}" for v in values) + f" {units.pop()}"
+        else:
+            text = " × ".join(f"{v.value:g} {v.unit}" for v in values)
+        return f"{self.shape} {text}"
+
+    def properties(self) -> dict[str, float]:
+        """Area, second moments about the first and second axes, torsion constant (SI)."""
+        import math
+
+        if self.shape in ("circle", "tube"):
+            d = self.diameter.to_si()
+            t = self.thickness.to_si() if self.shape == "tube" else d / 2
+            di = d - 2 * t
+            area = math.pi * (d**2 - di**2) / 4
+            second = math.pi * (d**4 - di**4) / 64
+            return {"area": area, "i1": second, "i2": second, "j": 2 * second}
+        b, h = self.width.to_si(), self.height.to_si()
+        if self.shape == "rectangle":
+            short, long_ = min(b, h), max(b, h)
+            j = short**3 * long_ * (1 / 3 - 0.21 * short / long_ * (1 - short**4 / (12 * long_**4)))
+            return {"area": b * h, "i1": b * h**3 / 12, "i2": h * b**3 / 12, "j": j}
+        t = self.thickness.to_si()
+        bi, hi = b - 2 * t, h - 2 * t
+        j = 2 * t * (b - t) ** 2 * (h - t) ** 2 / (b + h - 2 * t)  # thin-walled box (Bredt)
+        return {
+            "area": b * h - bi * hi,
+            "i1": (b * h**3 - bi * hi**3) / 12,
+            "i2": (h * b**3 - hi * bi**3) / 12,
+            "j": j,
+        }
+
+
 class BeamFastener(BaseModel):
     """A bolt, pin or rivet as a beam between two selections, with no geometry (ADR 0027).
 
@@ -803,6 +897,12 @@ class Component(ProjectObject):
     contacts: list[Contact] = Field(default_factory=list)
     physics: list[Physics] = Field(default_factory=list)
     couplings: list[Coupling] = Field(default_factory=list)
+    beam_sections: list[BeamSection] = Field(
+        default_factory=list, description="line bodies' cross-sections (ADR 0027 beams)"
+    )
+    shell_sections: list[ShellSection] = Field(
+        default_factory=list, description="sheet bodies' thicknesses (ADR 0027 shells)"
+    )
     connectors: list[BeamFastener] = Field(
         default_factory=list, description="fasteners between parts, without geometry (ADR 0027)"
     )
@@ -828,6 +928,8 @@ class Component(ProjectObject):
         used += [s for c in self.contacts for s in (c.source, c.target)]
         used += [f.selection for p in self.physics for f in p.features]
         used += [s for c in self.connectors for s in (c.source, c.target)]
+        used += [b.selection for b in self.beam_sections]
+        used += [s.selection for s in self.shell_sections]
         return used
 
 
@@ -1128,16 +1230,50 @@ class ResultDefinition(ProjectObject):
 
 
 class ResultProbe(ProjectObject):
-    """A kept probe (ADR 0032): a result read at a point, evaluated for the current run of
-    its source (a study, or a derived result) whenever it is shown; values are never
-    stored. `point` is in the undeformed geometry, metres."""
+    """A result tool (ADR 0032, 0042), evaluated for the current run of its source (a
+    study, or a derived result) whenever it is shown; values are never stored.
+
+    - `point`: the result at `point` (undeformed geometry, metres);
+    - `selection`: the result over a selection, reduced by `reduction`;
+    - `reaction`: the force (and moment about `about`, else the nodes' centroid) a
+      selection's nodes take: the sum of the solver's nodal reaction forces;
+    - `path`: the result at `samples` points from `point` to `end`.
+    """
 
     kind: ClassVar[str] = "probe"
 
     source: UUID = Field(description="a study, or a derived result")
-    quantity: str = Field(description='a listed result\'s key, e.g. "stress:von_mises"')
-    point: tuple[float, float, float]
+    type: Literal["point", "selection", "reaction", "path"] = "point"
+    quantity: str = Field(
+        default="reaction_force:total",
+        description='a listed result\'s key, e.g. "stress:von_mises"',
+    )
+    point: tuple[float, float, float] | None = Field(
+        default=None, description="point: where; path: the start"
+    )
+    selection: str | None = Field(default=None, description="Part/Selection, or a part")
+    reduction: Literal["max", "min", "mean", "integral"] = "max"
+    about: tuple[float, float, float] | None = Field(
+        default=None, description="reaction: the moment's point; none: the nodes' centroid"
+    )
+    end: tuple[float, float, float] | None = Field(default=None, description="path: the end")
+    samples: int = Field(default=50, ge=2, le=10000, description="path: points along it")
     step: int = Field(default=-1, description="index into the result steps; -1 = last")
+
+    @model_validator(mode="after")
+    def _needs(self) -> ResultProbe:
+        need = {
+            "point": ("point",),
+            "selection": ("selection",),
+            "reaction": ("selection",),
+            "path": ("point", "end"),
+        }[self.type]
+        missing = [k for k in need if getattr(self, k) is None]
+        if missing:
+            raise ValueError(f"a {self.type} probe needs {', '.join(missing)}")
+        if self.type == "reaction":
+            self.quantity = "reaction_force:total"
+        return self
 
     def dependencies(self) -> list[UUID]:
         return [self.source]
@@ -1244,6 +1380,7 @@ class Project:
 
     def selection_names(self, comp: Component) -> set[str]:
         names = {s.name for s in comp.selections}
+        names |= {part.name for part in comp.parts}  # a part's own group (a line body's)
         for part in comp.parts:
             geo = self.objects.get(part.geometry)
             if isinstance(geo, Geometry):

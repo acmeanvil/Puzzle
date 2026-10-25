@@ -182,6 +182,16 @@ def _parser() -> argparse.ArgumentParser:
     p.set_defaults(handler=_check_geometry)
 
     p = sub.add_parser(
+        "measure", help="exact sizes, distances and angles of named geometry (ADR 0042)"
+    )
+    p.add_argument("project", type=Path)
+    p.add_argument("geometry", help="a geometry's name")
+    p.add_argument(
+        "picks", nargs="+", help='entity:name, e.g. face:B/+z edge:"B/+x|B/+z" vertex:... body:Body'
+    )
+    p.set_defaults(handler=_measure)
+
+    p = sub.add_parser(
         "selections", help="how each selection resolves after edits; reattach detached ones"
     )
     p.add_argument("project", type=Path)
@@ -530,6 +540,34 @@ def _ask(args) -> int:
         f"({provider.name} {provider.model}: {agent.tokens['input']} in / "
         f"{agent.tokens['output']} out tokens)"
     )
+    return 0
+
+
+def _measure(args) -> int:
+    from puzzle.geometry.measure import MeasureError, measure, rows, text
+    from puzzle.geometry.naming import named_geometry
+    from puzzle.model.schema import Geometry
+
+    project = _load(args.project)
+    geo = next((g for g in project.of_type(Geometry) if g.name == args.geometry), None)
+    if geo is None:
+        print(f"no geometry '{args.geometry}'")
+        return 1
+    picks = []
+    for pick in args.picks:
+        entity, _, name = pick.partition(":")
+        entity = {"point": "vertex"}.get(entity, entity)
+        if entity not in ("body", "face", "edge", "vertex") or not name:
+            print(f"'{pick}': write entity:name, e.g. face:B/+z")
+            return 1
+        picks.append((entity, name))
+    try:
+        found = measure(named_geometry(project, geo, args.project), picks)
+    except MeasureError as exc:
+        print(exc)
+        return 1
+    for label, value, unit in rows(found):
+        print(f"{label}: {text(value, unit)}")
     return 0
 
 

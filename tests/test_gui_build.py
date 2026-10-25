@@ -15,6 +15,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
 
 from conftest_geometry import write_bar_step  # noqa: E402
+from forms import fill  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 from solvers import available  # noqa: E402
 
@@ -49,6 +50,22 @@ class Answers:
         return self.replies.pop(0)
 
 
+def _form(window, action):
+    """The dialog an action shows, filled as `fill` was told, without accepting it."""
+    shown = []
+    fill_run = window.run_dialog
+
+    def keep(dialog):
+        fill_run(dialog)
+        shown.append(dialog)
+        return False
+
+    window.run_dialog = keep
+    action(window)
+    window.run_dialog = fill_run
+    return shown[0]
+
+
 def _only(window, cls):
     (obj,) = window.session.project.of_type(cls)
     return obj
@@ -74,13 +91,13 @@ def test_build_and_solve_a_cantilever_from_menus(app, tmp_path):
             )
 
         menus.new_mesh(window)
-        Answers(window, "bar", "Mesh 1", "Beam")
+        fill(window, geometry="bar", mesh="Mesh 1", name="Beam")
         menus.new_component(window)
         comp = _only(window, Component)
         assert comp.parts[0].name == "bar"
 
         window.add_material("structural_steel")
-        Answers(window, "Structural steel", "bar/Body")
+        fill(window, material="Structural steel", selection="bar/Body")
         menus.assign_material(window, _only(window, Component))
         menus.add_physics(window, _only(window, Component), "solid_mechanics")
         Answers(window, "bar/Root")
@@ -102,7 +119,7 @@ def test_build_and_solve_a_cantilever_from_menus(app, tmp_path):
         )
         assert force.type == "force" and force.selection == "bar/Tip"
 
-        Answers(window, "Beam", "calculix", "stationary", "Bend")
+        fill(window, component="Beam", solver="calculix", analysis="stationary", name="Bend")
         menus.new_study(window)
         study = _only(window, Study)
         assert window.session.project.problems() == []
@@ -155,6 +172,11 @@ def test_menus_match_the_item(app, tmp_path):
         ]
         assert texts(Node("feature", str(comp.id), "physics.0.features.0")) == [
             "Change selection…",
+            "Reaction force…",  # a support (ADR 0042)
+            "Remove",
+        ]
+        assert texts(Node("feature", str(comp.id), "physics.0.features.1")) == [
+            "Change selection…",
             "Remove",
         ]
 
@@ -183,10 +205,29 @@ def test_a_study_on_a_multiphysics_component_asks_which_physics(app, tmp_path):
     window = MainWindow(root)
     try:
         before = {s.id for s in window.session.project.of_type(Study)}
-        Answers(window, "Cantilever", "code_aster", "stationary", "solid_mechanics", "Static")
+        # One dialog asks everything; the physics row shows because there are two.
+        from puzzle.gui.choices import label
+
+        fill(window, component="Cantilever", solver="code_aster", analysis="stationary")
+        form = _form(window, menus.new_study)
+        assert form.form.isRowVisible(form.widgets["physics"])
+        form.set("physics", "heat_transfer")  # the name follows the choices
+        assert form.values()["name"] == f"Cantilever {label('heat_transfer').lower()}"
+        fill(
+            window,
+            component="Cantilever",
+            solver="code_aster",
+            analysis="stationary",
+            physics="solid_mechanics",
+            name="Static",
+        )
         menus.new_study(window)
         (study,) = [s for s in window.session.project.of_type(Study) if s.id not in before]
-        assert study.steps[0].physics == ["solid_mechanics"]
+        assert study.steps[0].physics == ["solid_mechanics"] and study.name == "Static"
+        # Names already taken block OK, with the reason on top.
+        fill(window, name="Static")
+        assert menus.new_study(window) is None
+        assert window.last_form.problem() == "There is already a study 'Static'"
     finally:
         while window.tasks:
             app.processEvents()

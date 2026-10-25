@@ -607,6 +607,10 @@ class Viewport(QWidget):
                 edge_color="#7a8794",
                 opacity=0.35 if dim else 1,
             )
+            from puzzle.post.vtk import beam_lines
+
+            if (lines := beam_lines(grid)) is not None:
+                self.plotter.add_mesh(lines, color="#5b6875", line_width=5)
         elif self.surface is not None:
             self.plotter.add_mesh(self.surface, color="#c9d3dd", smooth_shading=False)
             edges = self.surface.extract_feature_edges(
@@ -977,6 +981,9 @@ class Viewport(QWidget):
                     "label_font_size": 12,
                 },
             )
+            from puzzle.post.view import draw_beams
+
+            draw_beams(self.plotter, grid, scalars=name, cmap="turbo", clim=clim)
             self._frame(mesh)
         self._draw_marks()  # recorded in `shown` without OpenGL too
         self._update_click()

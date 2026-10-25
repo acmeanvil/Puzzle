@@ -469,8 +469,45 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         }
 
     @tool(
-        description="Every kept probe (ADR 0032) read for its source's current run: "
-        "value (SI), the quantity, the point (m), and how far outside the mesh it was."
+        description="Exact measurements of named geometry (ADR 0042), from the CAD shape: "
+        "picks are [{entity: body|face|edge|vertex, name, part?}]. With `component`, picks "
+        "name a part each and are measured where the parts are placed. One pick: length, "
+        "area, volume, radius, centroid, normal or axis; two: minimum distance (and where), "
+        "centre distance with dx, dy, dz, angle (degrees); more: totals. SI units."
+    )
+    @guarded
+    def geometry_measure(
+        picks: list[dict[str, str]], geometry: str | None = None, component: str | None = None
+    ) -> dict[str, Any]:
+        from puzzle.commands import resolve
+        from puzzle.geometry.measure import MeasureError, measure, measure_placed, rows
+        from puzzle.geometry.naming import named_geometry
+        from puzzle.model.schema import Component, Geometry
+
+        s = session()
+        try:
+            if component is not None:
+                comp = resolve(s.project, component, Component)
+                found = measure_placed(
+                    s.project, comp, root, [(p["part"], p["entity"], p["name"]) for p in picks]
+                )
+            elif geometry is not None:
+                geo = resolve(s.project, geometry, Geometry)
+                named = named_geometry(s.project, geo, root)
+                found = measure(named, [(p["entity"], p["name"]) for p in picks])
+            else:
+                raise PuzzleError("name a geometry or a component", code="invalid")
+        except (MeasureError, KeyError) as exc:
+            raise PuzzleError(f"can't measure: {exc}", code="invalid") from exc
+        return found.as_dict() | {
+            "rows": [{"label": a, "value": v, "unit": u} for a, v, u in rows(found)]
+        }
+
+    @tool(
+        description="Every result tool (ADR 0032, 0042) read for its source's current run: "
+        "point probes (value, point), results over a selection (max, min, mean or "
+        "integral), reactions (force and moment components, about which point) and paths "
+        "(largest value and where; the full series with probe_path). SI units."
     )
     @guarded
     def probes() -> list[dict[str, Any]]:
@@ -485,7 +522,10 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         for p in s.project.of_type(ResultProbe):
             try:
                 found = evaluate(s.project, store, p)
-                out.append({"probe": p.name, **found})
+                if p.type == "path":  # a summary; probe_path gives the series
+                    found = {k: v for k, v in found.items() if k not in ("points", "values")}
+                    found.pop("distance", None)
+                out.append({"probe": p.name, "type": p.type, **found})
             except PuzzleError as exc:
                 out.append({"probe": p.name, "error": exc.message, "code": exc.code})
         return out
@@ -506,6 +546,31 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         s = session()
         probe = resolve(s.project, name, ResultProbe)
         return history(s.project, ResultStore(root / RESULTS_DIR), probe)
+
+    @tool(
+        description="A path result tool's series (ADR 0042): distance along the path (m) "
+        "and the value there (SI; null outside the model)."
+    )
+    @guarded
+    def probe_path(name: str) -> dict[str, Any]:
+        import math
+
+        from puzzle.commands import resolve
+        from puzzle.model.schema import ResultProbe
+        from puzzle.post.probes import evaluate
+        from puzzle.project.layout import RESULTS_DIR
+        from puzzle.results.store import ResultStore
+
+        s = session()
+        probe = resolve(s.project, name, ResultProbe)
+        if probe.type != "path":
+            raise PuzzleError(f"'{probe.name}' is not a path", code="invalid")
+        found = evaluate(s.project, ResultStore(root / RESULTS_DIR), probe)
+        return {
+            "distance": found["distance"],
+            "value": [None if math.isnan(v) else v for v in found["values"]],
+            "label": found["label"],
+        }
 
     @tool(description="Stored runs: study, solver, when, how long.")
     @guarded

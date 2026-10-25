@@ -16,6 +16,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
 pytest.importorskip("OCP")
 
+from forms import fill  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from puzzle.gui import menus  # noqa: E402
@@ -125,7 +126,7 @@ def test_a_failing_step_is_reported_by_name(app, window):
 def test_parameters_drive_a_step(app, window):
     menus.new_parameter_set(window)
     params = window.session.project.of_type(ParameterSet)[0]
-    answer(window, "t", "12 mm")
+    fill(window, name="t", value="12 mm")
     menus.add_parameter(window, params)
     params = window.session.project.of_type(ParameterSet)[0]
     assert params.values["t"].value == 12 and params.values["t"].unit == "mm"
@@ -364,3 +365,34 @@ def test_a_replaced_file_is_reattached_in_one_review(app, window, tmp_path):
     assert sels["Bolt"].rule == {"radius": 0.005}  # the one bore of radius 5 mm
     window.undo()  # one command
     assert {s.name: s for s in geometry(window, "Plate").selections}["End"].rule is None
+
+
+def test_measure_lists_exact_values_of_the_picks(app, window):
+    """ADR 0042: Measure (pick bar or the Geometry ribbon) lists the picks' exact sizes
+    in display units, and the distance between two picks."""
+    answer(window, "Part 1")
+    menus.new_part(window)  # a 50 x 30 x 10 mm box
+    show(app, window)
+    window.start_measuring()
+    panel = window.measuring
+    assert window.side.currentWidget() is panel and window.viewport.picking
+    assert panel.message.text() == "Nothing picked yet."
+    v, bar = window.viewport, window.pick_bar
+    lo, hi = _box_corners(window)
+    mid = (lo + hi) / 2
+    bar.filter.setCurrentIndex(bar.filter.findData("edge"))
+    v.toggle_pick(v.entity_at([mid[0], lo[1] + 1e-4, lo[2]]))
+    rows = dict(panel.rows())
+    assert rows["Length"] == "50 mm" and rows["Edge (line)"]
+    bar.filter.setCurrentIndex(bar.filter.findData("face"))
+    v.toggle_pick(v.entity_at([lo[0], mid[1], mid[2]]))  # -x side
+    v.toggle_pick(v.entity_at([hi[0], mid[1], mid[2]]))  # +x side
+    rows = dict(panel.rows())
+    assert rows["Minimum distance"] == "50 mm" and rows["Angle"] == "180°"
+    assert rows["Total area"] == "600 mm²"
+    panel.close_panel()
+    assert window.side.currentWidget() is window.properties and window.measuring is None
+    # The Geometry ribbon has it too.
+    from PySide6.QtWidgets import QToolButton
+
+    assert "Measure" in [b.text() for b in window.workbench.ribbon.findChildren(QToolButton)]

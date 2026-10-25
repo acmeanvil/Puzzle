@@ -24,6 +24,7 @@ from puzzle.adapters.common import (
     local_axes,
     match_points,
     refuse_large_deflection,
+    refuse_line_bodies,
     remote_load,
     remote_values,
     rigid_motion,
@@ -45,14 +46,18 @@ def fenicsx_python() -> Path | None:
     """A Python interpreter whose environment has dolfinx.
 
     PUZZLE_FENICSX_PYTHON wins; otherwise the first directory on PUZZLE_SOLVER_PATH
-    holding a python whose environment contains dolfinx (e.g. the pixi fenicsx env).
+    holding a python whose environment contains dolfinx, else the pixi fenicsx env
+    beside Puzzle's own.
     """
     explicit = os.environ.get("PUZZLE_FENICSX_PYTHON")
     if explicit:
         return Path(explicit)
-    for d in filter(None, os.environ.get("PUZZLE_SOLVER_PATH", "").split(os.pathsep)):
+    from puzzle.jobs.runtime import pixi_solver_dirs
+
+    dirs = [Path(d) for d in os.environ.get("PUZZLE_SOLVER_PATH", "").split(os.pathsep) if d]
+    for d in [*dirs, *pixi_solver_dirs()]:
         for name in ("python", "python3", "python.exe"):
-            exe = Path(d) / name
+            exe = d / name
             if exe.exists() and _has_dolfinx(exe):
                 return exe
     return None
@@ -73,6 +78,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     refuse_inputs(inputs, "FEniCSx", {("load", "temperature")})
     thermal_load = next((i.field for i in inputs if i.field.name == "temperature"), None)
     check_contacts(comp, set(), "FEniCSx")
+    refuse_line_bodies(mesh, "FEniCSx")
     refuse_large_deflection(study.solve_steps(), "FEniCSx")
     steps = study.solve_steps()
     if len(steps) != 1:

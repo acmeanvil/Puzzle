@@ -135,24 +135,27 @@ def generate_mesh(
             }
         volumes: dict[str, list[tuple[int, int]]] = {}
         for part in comp.parts if not faceted else []:
-            before = set(gmsh.model.getEntities(3))
+            before = set(gmsh.model.getEntities())
             load_shapes(paths[part.name])
-            volumes[part.name] = sorted(set(gmsh.model.getEntities(3)) - before)
+            new = sorted(set(gmsh.model.getEntities()) - before)
+            top = max((d for d, _ in new), default=3)  # a solid, a sheet, or lines (beams)
+            volumes[part.name] = [e for e in new if e[0] == top]
             place(volumes[part.name], part.translation, part.rotation)
         if not faceted:
             gmsh.model.occ.synchronize()
             _fragment_conformal(comp, volumes)
 
-        all_volumes = gmsh.model.getEntities(3)
         for part in comp.parts if not faceted else []:
             ref = references[part.name]
+            top = _top_dim(ref)
+            all_volumes = gmsh.model.getEntities(top)
             placement = {
                 "translation": part.translation,
                 "rotation": part.rotation,
                 "tol": 1e-5 * ref.size,
             }
-            bodies = match(ref.of_dim(3), all_volumes, **placement)
-            missing = [e.name for e in ref.of_dim(3) if e.name not in bodies]
+            bodies = match(ref.of_dim(top), all_volumes, **placement)
+            missing = [e.name for e in ref.of_dim(top) if e.name not in bodies]
             if missing:
                 raise MeshError(f"part '{part.name}': bodies {missing} were lost while placing it")
             # Faces, edges and vertices only among the part's own bodies' boundaries: two
@@ -350,13 +353,19 @@ def _resolve(
     return sorted(set(tags)), lost
 
 
+def _top_dim(reference) -> int:
+    """A part's own dimension: 3 for a solid, 2 for a sheet, 1 for lines (beams)."""
+    return max((e.dim for e in reference.entities), default=3)
+
+
 def _physical_groups(comp, geometries, references, found, warnings) -> None:
     for part in comp.parts:
+        top = _top_dim(references[part.name])
         bodies = []
-        for e in references[part.name].of_dim(3):
+        for e in references[part.name].of_dim(top):
             hit = found[part.name][e.name]
             bodies += hit if isinstance(hit, list) else [hit]
-        gmsh.model.addPhysicalGroup(3, [t for _, t in bodies], name=part.name)
+        gmsh.model.addPhysicalGroup(top, [t for _, t in bodies], name=part.name)
     selections: list[tuple[str, str | None, NamedSelection]] = [
         (f"{p.name}/{s.name}", p.name, s) for p in comp.parts for s in geometries[p.name].selections
     ] + [(s.name, None, s) for s in comp.selections]
@@ -667,6 +676,8 @@ def _min_quality() -> float:
     types, tags, _ = gmsh.model.mesh.getElements(3)
     ids = np.concatenate([np.asarray(t) for t in tags]) if tags else np.array([], dtype=np.int64)
     if not len(ids):
+        if len(gmsh.model.mesh.getElements(1)[1]):  # beams only: no volume to judge
+            return 1.0
         raise MeshError("meshing produced no volume elements")
     return float(np.min(gmsh.model.mesh.getElementQualities(ids, "minSJ")))
 

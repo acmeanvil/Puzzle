@@ -69,7 +69,7 @@ def test_missing_solver_is_reported(tmp_path):
 
 def test_container_runtime_mounts_the_workdir(tmp_path):
     argv = ContainerRuntime(image="img:1", engine="podman").wrap(["ccx", "-i", "job"], tmp_path)
-    assert argv[:3] == ["podman", "run", "--rm"]
+    assert Path(argv[0]).stem == "podman" and argv[1:3] == ["run", "--rm"]
     assert f"{tmp_path.resolve()}:/work" in argv
     assert argv[-4:] == ["img:1", "ccx", "-i", "job"]
 
@@ -106,6 +106,10 @@ def test_auto_prefers_native_then_falls_back(monkeypatch, tmp_path):
 
     monkeypatch.setenv("PUZZLE_SOLVER_PATH", str(tmp_path / "empty"))
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))  # no solver and no container engine
+    from puzzle.jobs import runtime
+
+    monkeypatch.setattr(runtime, "ENGINE_DIRS", [])
+    monkeypatch.setattr(runtime, "pixi_solver_dirs", lambda: [])
     assert isinstance(runtime_for("calculix"), NativeRuntime)  # reports the solver as missing
 
 
@@ -132,3 +136,41 @@ def test_a_flood_of_output_is_capped(tmp_path, native, monkeypatch):
     assert result.ok
     assert result.log.stat().st_size < 20_000
     assert runner.log_tail(result.log)[-1].startswith("[puzzle: log truncated")
+
+
+def test_pixi_solver_envs_are_found_without_activation(tmp_path, monkeypatch):
+    """Puzzle started from .pixi/envs/dev without `pixi run` still finds the CalculiX
+    environment beside it (no PUZZLE_SOLVER_PATH)."""
+    from puzzle.jobs import runtime
+
+    envs = tmp_path / ".pixi" / "envs"
+    (envs / "dev").mkdir(parents=True)
+    calculix = envs / "calculix" / ("Library/bin" if os.name == "nt" else "bin")
+    calculix.mkdir(parents=True)
+    monkeypatch.setattr(runtime.sys, "prefix", str(envs / "dev"))
+    assert runtime.pixi_solver_dirs() == [calculix]
+    monkeypatch.setattr(runtime.sys, "prefix", str(tmp_path / "venv"))
+    assert runtime.pixi_solver_dirs() == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="uses a shell-script stand-in")
+def test_an_engine_off_path_is_found_and_put_on_its_path(monkeypatch, tmp_path):
+    """Docker Desktop on macOS: `docker` lives in the app, not on an app's PATH."""
+    from puzzle.jobs import runtime
+
+    app = tmp_path / "Docker.app" / "bin"
+    app.mkdir(parents=True)
+    docker = app / "docker"
+    docker.write_text("#!/bin/sh\nexit 0\n")  # `image inspect` succeeds: the image is here
+    docker.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    monkeypatch.setattr(runtime, "ENGINE_DIRS", [str(app)])
+    container = ContainerRuntime(image="img:1", engine="docker")
+    assert container.available("run_aster")
+    assert container.wrap(["run_aster"], tmp_path)[0] == str(docker)
+    assert container.environment([])["PATH"].split(os.pathsep)[0] == str(app)
+    monkeypatch.delenv("PUZZLE_RUNTIME", raising=False)
+    monkeypatch.setattr(runtime, "pixi_solver_dirs", lambda: [])
+    assert runtime_for("code_aster") == ContainerRuntime(
+        image=DEFAULT_IMAGES["code_aster"], engine="docker"
+    )

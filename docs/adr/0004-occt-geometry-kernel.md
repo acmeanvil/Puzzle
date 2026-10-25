@@ -1,6 +1,6 @@
 # 0004. OCCT via OCP and build123d as the geometry kernel
 
-- Status: Proposed
+- Status: Accepted (2026-10-25: built and in use)
 - Date: 2026-10-17
 
 ## Context

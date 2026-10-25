@@ -235,6 +235,10 @@ class PickBar(QWidget):
             QPushButton("Add to selection"),
             QPushButton("Clear"),
         )
+        measure = QPushButton("Measure")
+        measure.setToolTip("Exact length, area, volume, distance and angle of the picks")
+        measure.clicked.connect(lambda: window.start_measuring())
+        row.addWidget(measure)
         new.clicked.connect(self._new)
         add.clicked.connect(lambda: window.add_picks_to_selection())
         clear.clicked.connect(lambda: window.viewport.clear_picks())
@@ -291,6 +295,7 @@ class MainWindow(QMainWindow):
         self._previewing: tuple[str, str] | None = None
         self.geometry_findings: dict[str, list[dict]] = {}  # geometry name -> its check
         self._standalones: dict[str, tuple] = {}  # geometry id -> (component, recipe)
+        self.measuring = None  # the Measure panel while it is open (ADR 0042)
         self.result: tuple[Mesh, Results] | None = None
         self.tasks: list[Task] = []  # keep running tasks alive
         # A tool's pending history (geometry id, steps as dicts): previewed, not saved.
@@ -325,6 +330,11 @@ class MainWindow(QMainWindow):
         # overlap the view's native OpenGL surface and smear marks along its edge.
         column.setContentsMargins(0, 0, 0, 6)
         column.addWidget(self.results_bar)
+        from puzzle.gui.results_ribbon import ResultsRibbon
+
+        self.results_ribbon = ResultsRibbon(self)  # the result tools (ADR 0042)
+        self.results_ribbon.hide()
+        column.addWidget(self.results_ribbon)
         column.addWidget(self.pick_bar)
         column.addWidget(self.viewport, 1)
         self.probes_panel = ProbesPanel(self)
@@ -692,7 +702,6 @@ class MainWindow(QMainWindow):
         bar.setObjectName("Main toolbar")
         bar.setMovable(False)
         self.toolbar = bar
-        menu = self.menuBar().addMenu("&Project")
         self.actions_by_name: dict[str, QAction] = {}
         for name, text, key, slot in (
             ("new", "New…", QKeySequence.StandardKey.New, self._new_dialog),
@@ -713,7 +722,6 @@ class MainWindow(QMainWindow):
             shortcut = action.shortcut().toString(QKeySequence.SequenceFormat.NativeText)
             action.setToolTip(f"{text.rstrip('…')}  ({shortcut})" if shortcut else text.rstrip("…"))
             action.triggered.connect(slot)
-            menu.addAction(action)
             self.actions_by_name[name] = action
         for name in self.TOOLBAR:
             if name is None:
@@ -736,12 +744,10 @@ class MainWindow(QMainWindow):
         self.actions_by_name["messages"] = messages
         for action in (agent, messages, self.actions_by_name["settings"]):
             bar.addAction(action)
-        window = self.menuBar().addMenu("&Window")
-        window.addAction(agent)
-        window.addAction(messages)
-        window.addSeparator()
-        reset = window.addAction("Reset layout")
-        reset.triggered.connect(self.reset_layout)
+        # The menu bar: every ribbon tool and right-click action (gui/main_menu.py).
+        from puzzle.gui import main_menu
+
+        self.menus = main_menu.build(self, agent, messages)
         self.apply_toolbar_style()
         # On macOS, Settings… moves to the application menu, where Mac users look for it.
         self.actions_by_name["settings"].setMenuRole(QAction.MenuRole.PreferencesRole)
@@ -798,21 +804,28 @@ class MainWindow(QMainWindow):
         self.open(root)
 
     def _new_dialog(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, "Folder for the new project")
-        if not path:
-            return
-        name = self.ask_text("New project", "Project name:", Path(path).name)
-        if not name:
-            return
+        from puzzle.gui.quick_form import Ask, folder_name
         from puzzle.model.units import SYSTEMS
         from puzzle.settings import current
 
         mine = current().get("units.system")
         systems = [(label, key) for key, (label, _) in SYSTEMS.items()]
         systems.sort(key=lambda p: p[1] != mine)  # the user's own first
-        units = self.choose("New project", "Units for this project:", systems)
-        if units is not None:
-            self.new_project(Path(path), name, units)
+        got = self.ask_form(
+            "New project",
+            [
+                Ask("folder", "Folder", kind="folder", help="Where the project's files go"),
+                Ask("name", "Name", kind="text", follow=lambda v: folder_name(v["folder"])),
+                Ask("units", "Units", choices=systems),
+            ],
+            check=lambda v: (
+                "Choose a folder"
+                if not v["folder"]
+                else ("Give it a name" if not v["name"] else None)
+            ),
+        )
+        if got is not None:
+            self.new_project(Path(got["folder"]), got["name"], got["units"])
 
     def _open_dialog(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Open a Puzzle project")
@@ -1012,6 +1025,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, "context_label"):
             self.context_label.setText(CONTEXT_NAMES.get(context, context))
         self.results_bar.setVisible(context == "results" and self.result is not None)
+        self.results_ribbon.setVisible(context == "results" and self.result is not None)
         self.workbench.ribbon.setVisible(context in ("geometry", "sketch"))
         self.mesh_bench.ribbon.setVisible(context == "mesh")
 
@@ -1126,6 +1140,8 @@ class MainWindow(QMainWindow):
         self.side.addWidget(panel)
         self.side.setCurrentWidget(panel)
         self.properties_dock.setWindowTitle("Tool")
+        self.properties_dock.show()  # a tool's options live here: never open it unseen
+        self.properties_dock.raise_()
 
     def show_sketch(self, workspace) -> None:
         """The sketch canvas in the centre (None: the 3D view again)."""
@@ -1429,7 +1445,12 @@ class MainWindow(QMainWindow):
             found = evaluate(self.session.project, self._store(), probe)
         except PuzzleError as exc:
             self.report(exc)
-            self.properties.show_text({"Probe": probe.name, "Value": "not available"})
+            self.properties.show_text({"Tool": probe.name, "Value": "not available"})
+            return
+        if probe.type != "point":  # result tools (ADR 0042)
+            from puzzle.gui.result_tools import rows
+
+            self.properties.show_text(rows(self, probe, found))
             return
         import numpy as np
 
@@ -1457,12 +1478,16 @@ class MainWindow(QMainWindow):
             runs = [r for r in self._store().runs() if r.study_id == str(src.id)]
             if runs:
                 self._select_run(runs[-1].run_id, probe.quantity)
-        if self.viewport.result_state is not None:
+        if self.viewport.result_state is not None and probe.type == "point":
             try:
                 self.viewport.probe_undeformed(probe.point)
             except PuzzleError as exc:
                 self.report(exc)
+        elif self.viewport.result_state is not None and probe.type == "path":
+            self.viewport.mark_point(probe.point, "Path start")
         self.show_probe(probe)
+        if probe.type == "path":  # its plot is against the distance (Plots tab)
+            self.plots.show_path(probe)
 
     # --- picking -------------------------------------------------------------------
 
@@ -1473,6 +1498,35 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Mesh a component and select it to pick faces", 8000)
         self.viewport.set_picking(on)
         self.pick_bar.update_picks(self.viewport.picked)
+
+    def start_measuring(self) -> None:
+        """The Measure panel in the Properties dock, with picking on (ADR 0042)."""
+        from puzzle.gui.measure_panel import MeasurePanel
+
+        if self.measuring is None:
+            self.measuring = MeasurePanel(self)
+        self.show_tool(self.measuring)
+        self.toggle_picking(True)
+        self.measuring.update()
+
+    def measure_picked(self, cache: dict | None = None):
+        """Exact measurements of the picks (`geometry.measure`), or None with no picks."""
+        from puzzle.geometry.measure import measure_placed
+
+        comp = self.session.project.objects.get(_uuid(self.mesh_component or "")) or next(
+            (c for c, _ in self._standalones.values() if str(c.id) == self.mesh_component), None
+        )
+        picks = self.picked_names()
+        if comp is None or not picks:
+            return None
+        kind = self.viewport.pick_kind
+        return measure_placed(
+            self.session.project,
+            comp,
+            self.session.root,
+            [(part, kind, name) for part, name in dict.fromkeys(picks)],
+            cache,
+        )
 
     def picked_names(self) -> list[tuple[str, str]]:
         """The picked entities as (part, geometry name)."""
@@ -1717,6 +1771,12 @@ class MainWindow(QMainWindow):
         """A yes or no question (tests replace this)."""
         reply = QMessageBox.question(self, title, text)
         return reply == QMessageBox.StandardButton.Yes
+
+    def ask_form(self, title: str, asks: list, intro: str = "", check=None) -> dict | None:
+        """Every question an action has, in one dialog (`gui.quick_form`)."""
+        from puzzle.gui.quick_form import ask_form
+
+        return ask_form(self, title, asks, intro, check)
 
     def ask_text(self, title: str, label: str, default: str = "") -> str | None:
         text, ok = QInputDialog.getText(self, title, label, text=default)
@@ -2217,6 +2277,39 @@ class PlotsPanel(QWidget):
         self.x.blockSignals(False)
         self.redraw()
 
+    def show_path(self, probe) -> None:
+        """A path's plot: ticked alone, the Plots tab opened (ADR 0042)."""
+        self.refresh()
+        self.probes.blockSignals(True)
+        for i in range(self.probes.count()):
+            item = self.probes.item(i)
+            mine = item.data(ROLE) == str(probe.id)
+            item.setCheckState(Qt.CheckState.Checked if mine else Qt.CheckState.Unchecked)
+        self.probes.blockSignals(False)
+        self.redraw()
+        self.window.output_tabs.setCurrentWidget(self)
+        self.window.fold_messages(False)
+
+    def _paths(self, project, store, probes) -> None:
+        """Ticked paths against the distance along each, in display units."""
+        import numpy as np
+
+        from puzzle.gui.viewport import _display
+        from puzzle.post.probes import evaluate
+        from puzzle.settings import length_unit
+
+        unit, per_metre = length_unit()
+        for probe in probes:
+            found = evaluate(project, store, probe)
+            values, _ = _display(np.array(found["values"], float), found["unit"])
+            pts = [
+                (d * per_metre, float(v))
+                for d, v in zip(found["distance"], values, strict=True)
+                if np.isfinite(v)
+            ]
+            self.series.append((probe.name, pts))
+        self.curve.x_label = f"Distance along the path ({unit})"
+
     def redraw(self) -> None:
         from puzzle.post.probes import history
 
@@ -2225,6 +2318,19 @@ class PlotsPanel(QWidget):
         self.series = []
         against = None
         x_id = self.x.currentData()
+        ticked = [
+            project.objects.get(_uuid(self.probes.item(i).data(ROLE)))
+            for i in range(self.probes.count())
+            if self.probes.item(i).checkState() == Qt.CheckState.Checked
+        ]
+        paths = [p for p in ticked if p is not None and p.type == "path"]
+        if paths:  # paths plot against the distance; steps don't mix with them
+            try:
+                self._paths(project, store, paths)
+            except PuzzleError as exc:
+                self.window.report(exc)
+            self.curve.set_series(self.series)
+            return
         try:
             if x_id is not None:
                 against = history(project, store, project.objects.get(_uuid(x_id)))

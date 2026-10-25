@@ -109,6 +109,12 @@ def name_all(named: NamedShape) -> Named:
         for f in faces:
             label.get(f).append(name)
     of = {"body": dict(named.bodies), "face": dict(named.names)}
+    if not _subshapes(named.shape, TopAbs_FACE):  # a line body (beams): named by position
+        for entity, kind in (("edge", TopAbs_EDGE), ("vertex", TopAbs_VERTEX)):
+            of[entity] = {
+                f"{entity}-{i}": [s] for i, s in enumerate(_subshapes(named.shape, kind), start=1)
+            }
+        return Named(named.shape, of, max(_size(named.shape), 1e-12))
     for entity, kind in (("edge", TopAbs_EDGE), ("vertex", TopAbs_VERTEX)):
         meets = _Index()
         order = []

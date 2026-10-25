@@ -57,6 +57,14 @@ ELEMENTS = {
     "tet4": ("C3D4", None),
     "tet10": ("C3D10", [0, 1, 2, 3, 4, 5, 6, 7, 9, 8]),
     "hex8": ("C3D8", None),
+    # Beams (ADR 0027): Gmsh's line3 lists its ends then its middle; B32 runs end-mid-end.
+    "line2": ("B31", None),
+    "line3": ("B32", [0, 2, 1]),
+    # Shells (ADR 0027): Gmsh's corner-then-edge order is CalculiX's.
+    "tri3": ("S3", None),
+    "tri6": ("S6", None),
+    "quad4": ("S4", None),
+    "quad8": ("S8", None),
 }
 # Share of a uniform traction carried by each node of a surface element.
 NODE_SHARES = {
@@ -115,8 +123,9 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
 
     cuts = _pretension_cuts(comp, mesh)  # bolt sections: elements moved onto twins
     for part in comp.parts:
-        for b in mesh.groups[part.name].blocks(mesh):
-            if b.dim != 3:
+        own = mesh.groups[part.name]
+        for b in own.blocks(mesh):
+            if b.dim != own.dim:  # the part's own elements: solids, beams or shells
                 continue
             ccx_type, order = ELEMENTS[b.element]
             conn = b.connectivity[:, order] if order else b.connectivity
@@ -131,8 +140,12 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
     for group in mesh.groups.values():
         out.append(f"*NSET, NSET={set_name('N', group.name)}")
         out += _chunks(group.node_ids)
-        if group.dim == 3 and group.name not in {p.name for p in comp.parts}:
-            ids = np.concatenate([b.ids for b in group.blocks(mesh) if b.dim == 3])
+        written = {id(b) for b in mesh.structural_blocks()}  # beams and shells
+        blocks = [
+            b for b in group.blocks(mesh) if b.dim == group.dim and (b.dim == 3 or id(b) in written)
+        ]
+        if blocks and group.name not in {p.name for p in comp.parts}:
+            ids = np.concatenate([b.ids for b in blocks])
             out.append(f"*ELSET, ELSET={set_name('E', group.name)}")
             out += _chunks(ids)
 
@@ -227,19 +240,110 @@ def _prestress_steps(project: Project, study: Study, inputs) -> list[SolveStep]:
     return steps
 
 
+def _beam_sections(comp: Component, mesh: Mesh, selection: str, material: str) -> list[str]:
+    """*BEAM SECTION for each section on a line body (ADR 0027). CalculiX expands beams
+    into solids: a round section's CIRC takes its diameter twice, and needs B32."""
+    part = selection.split("/", 1)[0]
+    mine = [b for b in comp.beam_sections if b.selection.split("/", 1)[0] == part]
+    if not mine:
+        raise InputError(
+            f"the line body '{selection}' has no beam section: add one "
+            "(the component's Add beam section…)",
+            code="invalid",
+        )
+    out = []
+    for b in mine:
+        group = mesh.groups.get(b.selection)
+        if group is None:
+            raise InputError(f"a beam section names '{b.selection}', which is not meshed")
+        quadratic = all(blk.element == "line3" for blk in group.blocks(mesh) if blk.dim == 1)
+        if b.shape == "rectangle":
+            kind, sizes = "RECT", [b.width.to_si(), b.height.to_si()]
+        elif b.shape == "circle":
+            if not quadratic:
+                raise InputError(
+                    "CalculiX takes round beam sections on second-order beams: set the "
+                    "mesh recipe's element order to 2",
+                    code="unsupported",
+                )
+            d = b.diameter.to_si()
+            kind, sizes = "CIRC", [d, d]
+        elif b.shape == "tube":
+            kind, sizes = "PIPE", [b.diameter.to_si() / 2, b.thickness.to_si()]
+        else:
+            t = b.thickness.to_si()
+            kind, sizes = "BOX", [b.width.to_si(), b.height.to_si(), t, t, t, t]
+        out += [
+            f"*BEAM SECTION, ELSET={set_name('E', b.selection)}, MATERIAL={material}, "
+            f"SECTION={kind}",
+            ", ".join(f"{v:.10g}" for v in sizes),
+            ", ".join(f"{v:.10g}" for v in b.orientation),
+        ]
+    return out
+
+
+def _shell_sections(comp: Component, mesh: Mesh, selection: str, material: str) -> list[str]:
+    """*SHELL SECTION for each thickness on a sheet body (ADR 0027 shells). CalculiX
+    expands shells into a layer of solids; OFFSET is in thicknesses, as ours."""
+    part = selection.split("/", 1)[0]
+    mine = [s for s in comp.shell_sections if s.selection.split("/", 1)[0] == part]
+    if not mine:
+        raise InputError(
+            f"the sheet body '{selection}' has no thickness: add one "
+            "(the component's Add shell thickness…)",
+            code="invalid",
+        )
+    if any(b.element == "tri3" for b in mesh.shell_blocks()):
+        # S3 expands into one layer of wedges, which lock in bending: a simply supported
+        # plate came out 70 % too stiff.
+        raise InputError(
+            "CalculiX's three-node shells are far too stiff in bending: set the mesh "
+            "recipe's element order to 2 for sheet bodies",
+            code="unsupported",
+        )
+    out = []
+    for s in mine:
+        if s.selection not in mesh.groups:
+            raise InputError(f"a shell thickness names '{s.selection}', which is not meshed")
+        offset = f", OFFSET={s.offset:.6g}" if s.offset else ""
+        out += [
+            f"*SHELL SECTION, ELSET={set_name('E', s.selection)}, MATERIAL={material}{offset}",
+            f"{s.thickness.to_si():.10g}",
+        ]
+    return out
+
+
+def _on_shells(mesh: Mesh, group) -> bool:
+    shells = {id(b) for b in mesh.shell_blocks()}
+    return any(id(b) in shells for b in group.blocks(mesh) if b.dim == 2)
+
+
+def _beam_nodes(mesh: Mesh) -> set[int]:
+    """Nodes with rotations: on beams and shells (ADR 0027)."""
+    return mesh.beam_nodes() | mesh.shell_nodes()
+
+
 def _materials(project: Project, comp: Component, mesh: Mesh, expansion: bool = False) -> list[str]:
     out: list[str] = []
     for i, assignment in enumerate(comp.materials, start=1):
         material = project.get(assignment.material, Material)
         group = mesh.groups.get(assignment.selection)
-        if group is None or group.dim != 3:
+        shell = group is not None and group.dim == 2 and _on_shells(mesh, group)
+        if group is None or (group.dim not in (1, 3) and not shell):
             raise InputError(
-                f"material '{material.name}' must be assigned to bodies, "
-                f"not '{assignment.selection}'"
+                f"material '{material.name}' must be assigned to bodies, line bodies or "
+                f"sheet bodies, not '{assignment.selection}'"
             )
         name = f"M{i}"
         out += [f"*MATERIAL, NAME={name}"] + _material_cards(material, comp, expansion)
-        out.append(f"*SOLID SECTION, ELSET={set_name('E', assignment.selection)}, MATERIAL={name}")
+        if group.dim == 3:
+            out.append(
+                f"*SOLID SECTION, ELSET={set_name('E', assignment.selection)}, MATERIAL={name}"
+            )
+        elif group.dim == 2:
+            out += _shell_sections(comp, mesh, assignment.selection, name)
+        else:
+            out += _beam_sections(comp, mesh, assignment.selection, name)
     if not comp.materials:
         raise InputError(f"component '{comp.name}' has no material assignments")
     return out
@@ -374,6 +478,11 @@ def _step(
             if step.type in ("modal", "buckling")
             else ["*NODE FILE", "U, RF", "*EL FILE", "S, E" + (", PEEQ" if yields else "")]
         )
+        if mesh.structural_blocks():  # beams and shells: results at their own nodes
+            outputs = [
+                f"{line}, OUTPUT=2D" if line in ("*NODE FILE", "*EL FILE") else line
+                for line in outputs
+            ]
         if comp.connectors and step.type not in ("modal", "buckling"):
             # Fastener forces and moments (ADR 0027): the helper nodes' reactions.
             outputs += [f"*NODE PRINT, NSET={FASTENER_ENDS}", "RF"]
@@ -963,8 +1072,9 @@ def _feature_rows(f: Feature, mesh: Mesh, faces: FaceLookup, rigid=None) -> dict
         raise InputError(f"{f.type} on '{f.selection}': no such selection in the mesh")
     nset = set_name("N", f.selection)
     v = {k: q.to_si() for k, q in f.values.items()}
-    if f.type == "fixed":
-        boundary.append(f"{nset}, 1, 3, 0.")
+    if f.type == "fixed":  # on beam nodes it clamps: rotations too (ADR 0027)
+        on_beams = bool(_beam_nodes(mesh) & {int(n) for n in group.node_ids})
+        boundary.append(f"{nset}, 1, {6 if on_beams else 3}, 0.")
     elif f.type == "displacement":
         boundary += [
             f"{nset}, {d}, {d}, {v[axis]:.10g}"
@@ -975,6 +1085,11 @@ def _feature_rows(f: Feature, mesh: Mesh, faces: FaceLookup, rigid=None) -> dict
         boundary.append(f"{nset}, 11, 11, {v['T']:.10g}")
     elif f.type == "force":
         cload += _nodal_forces(group, mesh, [v.get(a, 0.0) for a in "xyz"])
+    elif f.type == "pressure" and group.dim == 2 and _on_shells(mesh, group):
+        # On a shell's own face (ADR 0027): a positive pressure pushes against the face's
+        # normal, as on a solid's face; CalculiX's shell P pushes along it (Gmsh orients
+        # the elements with the face).
+        dload.append(f"{set_name('E', f.selection)}, P, {-v['p']:.10g}")
     elif f.type == "pressure":
         dload += [f"{e}, P{n}, {v['p']:.10g}" for e, n in _element_faces(group, mesh, faces)]
     elif f.type == "remote_force":  # an RBE3-equivalent traction (ADR 0037)

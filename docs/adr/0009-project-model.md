@@ -1,6 +1,6 @@
 # 0009. One model tree, references for sharing, transfers as the only schematic edges
 
-- Status: Proposed
+- Status: Accepted (2026-10-25: built and in use)
 - Date: 2026-10-17
 
 ## Context

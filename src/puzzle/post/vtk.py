@@ -18,7 +18,20 @@ VTK_CELLS = {
     "hex8": (12, None),
     "wedge6": (13, None),
     "pyramid5": (14, None),
+    "line2": (3, None),  # beams (ADR 0027); Gmsh and VTK both put the mid node last
+    "line3": (21, None),
+    "tri3": (5, None),  # shells (ADR 0027): corners, then edges, in both
+    "tri6": (22, None),
+    "quad4": (9, None),
+    "quad8": (23, None),
 }
+
+
+def beam_lines(grid):
+    """The grid's beam elements alone (None without any), drawn again as thick lines:
+    a line cell renders one pixel wide otherwise."""
+    lines = grid.extract_cells_by_type([3, 21])
+    return lines if lines.n_cells else None
 
 
 def von_mises(stress: np.ndarray) -> np.ndarray:
@@ -31,7 +44,7 @@ def von_mises(stress: np.ndarray) -> np.ndarray:
 
 
 def to_grid(mesh: Mesh, step: StepResult | None = None):
-    """A pyvista UnstructuredGrid of the volume elements, with the step's nodal fields.
+    """A pyvista UnstructuredGrid of the volume and beam elements, with the step's nodal fields.
 
     Vector fields also get a `<name>_magnitude` array, and stress gets `von_mises`.
     """
@@ -39,9 +52,8 @@ def to_grid(mesh: Mesh, step: StepResult | None = None):
 
     cells, types = [], []
     order = np.argsort(mesh.node_ids)
-    for b in mesh.blocks:
-        if b.dim != 3:
-            continue
+    shown = [b for b in mesh.blocks if b.dim == 3] + mesh.structural_blocks()
+    for b in shown:
         if b.element not in VTK_CELLS:
             raise ValueError(f"viewing {b.element} elements is not supported yet")
         vtk_type, reorder = VTK_CELLS[b.element]
@@ -51,10 +63,10 @@ def to_grid(mesh: Mesh, step: StepResult | None = None):
         cells.append(np.hstack([np.full((len(index), 1), n), index]).ravel())
         types.append(np.full(len(index), vtk_type, dtype=np.uint8))
     if not cells:
-        raise ValueError("the mesh has no volume elements to show")
+        raise ValueError("the mesh has no volume or beam elements to show")
     grid = pv.UnstructuredGrid(np.concatenate(cells), np.concatenate(types), mesh.coords)
     grid.point_data["node_id"] = mesh.node_ids
-    grid.cell_data["element_id"] = np.concatenate([b.ids for b in mesh.blocks if b.dim == 3])
+    grid.cell_data["element_id"] = np.concatenate([b.ids for b in shown])
     if step is not None:
         for f in step.fields.values():
             if f.location == "node":

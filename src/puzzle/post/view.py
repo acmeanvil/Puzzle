@@ -86,6 +86,7 @@ def render(
     plotter.add_mesh(
         shown_grid(1.0), scalars=scalar, cmap="turbo", clim=clim, scalar_bar_args={"title": scalar}
     )
+    draw_beams(plotter, shown_grid(1.0), scalars=scalar, cmap="turbo", clim=clim)
     if view.show_edges:
         # Outline the real element edges; show_edges on quadratic cells draws every
         # sub-triangle VTK tessellates them into and darkens the whole model.
@@ -103,6 +104,7 @@ def render(
             plotter.add_mesh(
                 shown_grid(factor), scalars=scalar, cmap="turbo", clim=clim, show_scalar_bar=False
             )
+            draw_beams(plotter, shown_grid(factor), scalars=scalar, cmap="turbo", clim=clim)
             frames.append(plotter.screenshot(return_img=True))
         save_gif(frames, animate)
         plotter.close()
@@ -119,3 +121,12 @@ def render(
         "scale": scale,
         "title": title,
     }
+
+
+def draw_beams(plotter, grid, **style) -> None:
+    """Beam elements again as thick lines over the grid (ADR 0027)."""
+    from puzzle.post.vtk import beam_lines
+
+    lines = beam_lines(grid)
+    if lines is not None:
+        plotter.add_mesh(lines, line_width=5, show_scalar_bar=False, **style)

@@ -1,6 +1,6 @@
 # 0011. Solver shoot-out: run one study on several solvers and compare
 
-- Status: Proposed (implemented: `puzzle.shootout.run_shootout`, 2026-10-20)
+- Status: Accepted (2026-10-25: built and in use); implemented: `puzzle.shootout.run_shootout`, 2026-10-20
 - Date: 2026-10-17
 
 ## Context

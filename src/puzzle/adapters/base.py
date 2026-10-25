@@ -69,6 +69,10 @@ class Capabilities:
     connectors: frozenset[str] = frozenset()
     """Connector kinds written (ADR 0027: "beam_fastener:rigid", ":distributing"); the
     rest are refused."""
+    beams: bool = False
+    """Line bodies with beam sections (ADR 0027); refused where False."""
+    shells: bool = False
+    """Sheet bodies with a thickness (ADR 0027); refused where False."""
     feature_steps: bool = False
     """Whether a one-deck adapter writes features in some solve steps only (Feature.steps,
     ADR 0037); adapters with max_solve_steps get them per step from run_study."""
@@ -203,6 +207,10 @@ class SolverAdapter(ABC):
                 problems.append(
                     f"{self.name} does not write {c.ends} beam fasteners yet ({c.name})"
                 )
+        if component.beam_sections and not caps.beams:
+            problems.append(f"{self.name} does not write beams (line bodies) yet")
+        if component.shell_sections and not caps.shells:
+            problems.append(f"{self.name} does not write shells (sheet bodies) yet")
         return problems
 
     def _material_problems(

@@ -25,6 +25,9 @@ COMPONENTS = {
         "EPXZ": "zx",
     },
     "plastic_strain_equivalent": {"V1": ""},  # VMIS_ISOT_TRAC: V1 = p
+    # Beams (ADR 0027): section forces in the beam's own axes (x along it, y the
+    # section's first axis): axial, two shears, torsion, two bending moments.
+    "beam_forces": {"N": "N", "VY": "Vy", "VZ": "Vz", "MT": "T", "MFY": "My", "MFZ": "Mz"},
 }
 
 

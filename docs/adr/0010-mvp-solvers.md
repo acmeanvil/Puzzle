@@ -1,6 +1,6 @@
 # 0010. MVP solvers are CalculiX and Elmer; Elmer is the core multiphysics and electromagnetics solver
 
-- Status: Proposed
+- Status: Accepted (2026-10-25: built and in use)
 - Date: 2026-10-17
 
 ## Context
