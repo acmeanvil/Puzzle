@@ -1,6 +1,6 @@
 # 0027. Beams and shells beside solids, starting with beam fasteners
 
-- Status: Proposed
+- Status: Accepted (2026-10-24); beam fasteners built on CalculiX and Code_Aster; beams and shells to come
 - Date: 2026-10-22
 
 ## Context
@@ -49,6 +49,38 @@ The details of CalculiX's knots and couplings, and how beam rotations meet a cou
    - **Fasteners:** two plates joined by one beam fastener under shear and tension, with the fastener force from statics exact; a pretensioned bolt holding its preload; a solid block hung from a beam fastener against beam theory.
    - **Beams:** a cantilever and a portal frame against closed form.
    - **Shells:** NAFEMS and MacNeal-Harder cases, such as the Scordelis-Lo roof and the pinched cylinder.
+
+## Built: beam fasteners (2026-10-24)
+
+- **Model:** `Component.connectors`, a list of `BeamFastener`: a name, two face selections (`source`, `target`, usually hole faces), a diameter, a project material, rigid or distributing ends, and `elements` (along the length). It is part of the component's run key (its material is a dependency) and of `used_selections`.
+- **Where it runs:** between its two ends' centres. Each end is its selection's nodes weighted by ∫N dA (`common.fastener_end`); a hole face's centre lies on its axis.
+- **A small solid bolt, not a beam element**, on both solvers: a round bar of quadratic tets meshed by Gmsh (`common.bolt_mesh`).
+  - **What failed on CalculiX:** B31 refuses round sections (B32 needs them, with CIRC taking the diameter twice), and CalculiX allows no beam node in a rigid MPC. Tying a beam end's rotations by `*EQUATION` left the joint near a hinge: a side load moved the end 15 mm, between the guided (4.8 mm) and pinned (19 mm) values, and two plates in shear were a mechanism. `*DISTRIBUTING` on the beam node left it free to rotate too.
+  - **What the solid gives:** the fastener's forces and moments are exact, by equilibrium. They are the sums of the reactions on the bolt's end-face nodes, and their moments about the end's centre (`common.fastener_values`). Its stiffness is the solid's. Beam elements stay the plan for frame members (point 5), where Code_Aster's `POU_D_T` is the better path.
+- **Ends:**
+  - **Rigid:** the hole's nodes and the bolt's end face form one rigid body (CalculiX `*RIGID BODY`, Code_Aster `LIAISON_SOLIDE`). A rigid end sharing nodes with a fixed or displaced selection is refused with the fix (the solver would see one dof held twice).
+  - **Distributing (RBE3):** the bolt's end face is a rigid body with a translation and a rotation node; the hole follows them on average. On CalculiX these are RBE3 relations written as `*EQUATION`, solved for six face-node dofs chosen by pivoting, so each equation has one dependent dof. With the helper nodes dependent CalculiX printed no reaction; with face dofs dependent in several equations its MPC decascading ran for ten minutes. On Code_Aster it is `LIAISON_RBE3` to a master point (a `DIS_TR` discrete of negligible stiffness) tied to the bolt end by `LIAISON_SOLIDE`.
+- **Results:** a whole-model field `fastener` per step, one row per fastener: axial force (tension positive), shear force, torsion, bending moment, and the force and moment components the bolt puts on the part at its first end. CalculiX prints the bolt end faces' reactions to the `.dat`; Code_Aster's come from `REAC_NODA`, read before the bolt's nodes are dropped from the results.
+- **GUI:**
+  - a component's menu has Add fastener… (two face selections, the diameter in the display unit, a material, the ends) and, with two or more parts, Fasteners from holes…;
+  - Fasteners from holes… pairs coaxial cylindrical faces of different parts (`geometry/holes.py`: axis lines within 0.1 % of the model's size, radii within 25 %), takes the smaller hole's diameter, and makes a "Hole n" selection per hole and the fasteners in one batch;
+  - the tree lists each fastener under its component ("Fastener Bolt 1 (Ø 8 mm): Lower/Hole 1 → Upper/Hole 1"), the outline names it, and the view draws it as a tube of its diameter.
+- **Refused:** Elmer and FEniCSx (`Capabilities.connectors`); fasteners in Code_Aster thermal studies.
+- **Benchmarks** (`tests/integration/test_fasteners.py`, CalculiX and Code_Aster, rigid and distributing ends):
+
+  | Check | CalculiX | Code_Aster |
+  | --- | --- | --- |
+  | Hanging block: axial force = weight | exact | exact |
+  | Hanging block: stretch against F L / E A (rigid) | −0.7 % | −0.7 % |
+  | Plates in shear: shear force = load | exact | exact |
+
+- **Not yet:**
+  - fastener pretension (its section can reuse the bolt pretension cut of ADR 0037);
+  - a pinball radius;
+  - colouring by axial force;
+  - a bolt check against proof strength;
+  - the MCP twin of Fasteners from holes…;
+  - beams and shells (point 5).
 
 ## Consequences
 

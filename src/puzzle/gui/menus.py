@@ -94,6 +94,11 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
             from puzzle.gui.contact_search import find_contacts_dialog
 
             add("Find contacts…", lambda: find_contacts_dialog(window, obj))
+        from puzzle.gui.fastener_dialog import add_fastener, fasteners_from_holes
+
+        add("Add fastener…", lambda: add_fastener(window, obj))
+        if len(obj.parts) > 1:
+            add("Fasteners from holes…", lambda: fasteners_from_holes(window, obj))
         physics = menu.addMenu("Add physics")
         present = {p.type for p in obj.physics}
         for kind in CATALOG:
@@ -113,7 +118,13 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
             action.triggered.connect(lambda _=False, sp=s: add_feature(window, obj, index, sp))
         menu.addSeparator()
         add("Remove physics", lambda: remove(window, obj, node.path))
-    elif isinstance(obj, Component) and node.kind in ("feature", "assignment", "contact", "part"):
+    elif isinstance(obj, Component) and node.kind in (
+        "feature",
+        "assignment",
+        "contact",
+        "part",
+        "connector",
+    ):
         if node.kind in ("feature", "assignment"):
             add("Change selection…", lambda: change_selection(window, obj, node))
         add("Remove", lambda: remove(window, obj, node.path))

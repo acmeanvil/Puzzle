@@ -172,12 +172,14 @@ def test_nonconformal_bond_keeps_parts_separate(plate_step, block_step, tmp_path
     assert "Block/Bottom" in mesh.groups
 
 
-def test_unknown_local_size_is_a_warning(plate_step, tmp_path):
+def test_unknown_local_size_is_refused(plate_step, tmp_path):
+    """A size on a selection the component doesn't have is refused, never skipped
+    (ADR 0019); older recipes' local sizes are size controls now."""
     project, comp = _plate_project(
         plate_step, local_sizes={"Plate/Nowhere": Quantity(value=1, unit="mm")}
     )
-    result = generate_mesh(project, comp.id, plate_step.parent, tmp_path / "w")
-    assert result.warnings == ["local size on unknown selection 'Plate/Nowhere' ignored"]
+    with pytest.raises(MeshError, match="'Plate/Nowhere', which is not a selection"):
+        generate_mesh(project, comp.id, plate_step.parent, tmp_path / "w")
 
 
 def test_2d_is_not_implemented_yet(plate_step, tmp_path):

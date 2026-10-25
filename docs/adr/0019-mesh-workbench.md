@@ -1,6 +1,6 @@
 # 0019. Mesh in a workbench with the full breadth of Gmsh and Netgen
 
-- Status: Accepted
+- Status: Accepted; built (2026-10-24) but for the items under Not yet
 - Date: 2026-10-22
 
 ## Context
@@ -54,6 +54,39 @@ Netgen 6.2 is on conda-forge for every platform Puzzle supports (`netgen`, LGPL-
 - **Element types.** By default each solver's preferred element types drive the defaults (CalculiX C3D10, Code_Aster TETRA10, Elmer 504/510). An application setting (ADR 0024) can turn this off. Either way, mesh setup offers each study's solvers' appropriate element options, those available for the study at hand.
 - **Preview.** An application setting chooses between previewing on every control change (debounced) and previewing on demand.
 - **Netgen as Gmsh's optimiser.** In the first version, Netgen is offered as Gmsh's optimiser, with an application setting to turn it on or off.
+
+## Built (2026-10-24)
+
+- **Controls** (`MeshRecipe.controls`, a discriminated union on `kind`), each on a named selection or a region, with `describe()` for lists and the outline:
+  - `size` (Gmsh `Constant` field over the selection, combined by `Min`);
+  - `refine_near` (`Distance` + `Threshold`: the size within `near`, back to the global size by `far`);
+  - `transfinite` (a count of elements along edges, optionally graded);
+  - `box` and `ball` regions;
+  - `boundary_layer` (first height, growth, layers): Netgen only, since Gmsh's 3D boundary layers don't work on OpenCASCADE geometry.
+  - Older recipes' `local_sizes` load as size controls (a before-validator), so old projects and tests still work; their mesh run keys change once.
+  - **Refused, never skipped:** a control naming a selection the component doesn't have, two size controls giving one entity different sizes (both named), a transfinite count on anything but edges.
+- **Gmsh's settings typed:** `curvature_points`, `algorithm_2d` (default Frontal-Delaunay, Gmsh's own, so existing meshes are unchanged), `algorithm_3d`, `optimiser` (Gmsh, Netgen, off), `high_order_optimise`, `smoothing`. `gmsh_options` passes any other option by its own name; a name Gmsh doesn't have is refused (`set_gmsh_option`).
+- **Quality** (`mesh.generate.mesh_quality`): for the volume elements, the shape quality (Gmsh's signed inverse condition number: 1 regular, 0 flat, negative inverted), the scaled Jacobian (1 for any straight-sided element; it catches folded curved ones), gamma and the edge aspect ratio, each with min, mean and a histogram; the ten worst-shaped elements with their centres. Written to `quality.json` beside the mesh. `quality_floor` makes meshing fail below a shape quality, saying where.
+- **Netgen** (`mesh/netgen_mesher.py`, `mesh/netgen_run.py`):
+  - In its own pixi environment (`pixi install -e netgen`): its OpenCASCADE bindings and OCP's can't share one process ("GeomAbs_Shape is already registered"), and adding it to the main environment downgraded OCCT.
+  - Gmsh prepares the geometry as for its own mesh (parts placed, fragmented, groups) and writes BREP. Netgen meshes it in a subprocess, with local `maxh` on the size controls' entities and boundary layers (`BoundaryLayerParameters`).
+  - Its first-order mesh comes back by edge, face and solid number. Those are matched to Gmsh's entities by centre and measure, and the nodes and elements are added to the Gmsh model on them, with parametric coordinates. Gmsh then raises the order (curving midside nodes onto the geometry) and the usual pipeline carries on: groups, quality, export.
+  - Netgen's tets and prisms come the other way round from Gmsh's and are turned.
+  - Refused on Netgen: refinement near, transfinite counts, regions and hexahedra (all name Gmsh).
+  - **Benchmark:** NAFEMS LE1 on a Netgen mesh gives 92.74 MPa on CalculiX (target 92.7, +0.04 %). A three-layer boundary layer puts its node planes at exactly 0.1, 0.25 and 0.475 mm.
+- **The Mesh tab** (`gui/mesh_bench.py`):
+  - **Side panel:** a component picker, the recipe's controls in order (double-click edits; the menu moves or deletes), and the quality box (the measures, then the worst elements; double-clicking one pins it in the view).
+  - **Ribbon above the view:** Sizing (Local size, Refine near, Box, Ball), Method (Edge count), Inflation (Boundary layer), Quality (Mesh), Mesher (Gmsh, Netgen).
+  - **Control editor:** opens in the Properties dock, with selections as a dropdown of the component's own (of the right entity kind) and lengths in the display unit; Apply is one command.
+  - **The view** colours the elements by shape quality once meshed. The recipe's settings are editable in Properties beside it.
+- **Settings:** Meshing → Mesh preview ("on demand", the default, or mesh again after every change). Meshing → Offer Netgen as Gmsh's optimiser (whether the recipe's optimiser dropdown lists Netgen). The optimiser itself is a recipe setting, not a preference, because preferences never change results.
+- **Agents:** MCP `mesh_quality(component)` meshes with the recipe and returns counts, the measures, the five worst elements and the warnings.
+- **Not yet:**
+  - the edge-seed preview;
+  - automatic method detection (sweepable and transfinite parts coloured by method);
+  - a searchable list of Gmsh's options with its descriptions (`gmsh_options` is set through commands for now);
+  - the element-types setting;
+  - a mesh shoot-out command.
 
 ## Alternatives considered
 

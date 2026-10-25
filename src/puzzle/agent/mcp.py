@@ -190,6 +190,35 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         }
 
     @tool(
+        description="Mesh a component with its recipe and report the mesh (ADR 0019): node "
+        "and element counts, each quality measure's min, mean and histogram (shape and "
+        "scaled Jacobian 0..1, 1 ideal; edge aspect ratio from 1), the worst-shaped elements "
+        "with their centres (m), and the mesher's warnings. A mesh that fails says why "
+        "(conflicting sizes, an unknown option, a quality floor missed)."
+    )
+    @guarded
+    def mesh_quality(component: str) -> dict[str, Any]:
+        from puzzle.commands import resolve
+        from puzzle.mesh import generate_mesh
+        from puzzle.model.schema import Component
+
+        s = session()
+        comp = resolve(s.project, component, Component)
+        from puzzle.project.layout import WORK_DIR
+
+        out = root / WORK_DIR / "mcp-mesh" / str(comp.id)
+        meshed = generate_mesh(s.project, comp.id, root, out)
+        q = meshed.quality
+        return {
+            "nodes": int(len(meshed.mesh.node_ids)),
+            "elements": q.get("elements", 0),
+            "element_types": meshed.mesh.element_counts(),
+            "measures": q.get("measures", {}),
+            "worst": q.get("worst", [])[:5],
+            "warnings": meshed.warnings,
+        }
+
+    @tool(
         description='Solve a sketch (an extrude or revolve profile {"sketch": {...}}; '
         "format in puzzle.geometry.sketch) with the project's parameters: whether it solves, "
         "the degrees of freedom left, the conflicting constraints (1-based) and the solved "

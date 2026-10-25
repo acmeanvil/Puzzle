@@ -66,6 +66,9 @@ class Capabilities:
     """Whether the adapter places a material's own keywords for it (solver_keywords)."""
     amplitude_features: frozenset[str] = frozenset()
     """Feature types whose values may follow an Amplitude in transient steps (ADR 0037)."""
+    connectors: frozenset[str] = frozenset()
+    """Connector kinds written (ADR 0027: "beam_fastener:rigid", ":distributing"); the
+    rest are refused."""
     feature_steps: bool = False
     """Whether a one-deck adapter writes features in some solve steps only (Feature.steps,
     ADR 0037); adapters with max_solve_steps get them per step from run_study."""
@@ -188,6 +191,11 @@ class SolverAdapter(ABC):
             if c not in caps.couplings | allowed
         ]
         problems += self._material_problems(project, component, study)
+        for c in component.connectors:  # ADR 0027: refused, never ignored
+            if f"{c.kind}:{c.ends}" not in caps.connectors:
+                problems.append(
+                    f"{self.name} does not write {c.ends} beam fasteners yet ({c.name})"
+                )
         return problems
 
     def _material_problems(

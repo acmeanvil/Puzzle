@@ -210,6 +210,10 @@ class ModelTree(QTreeWidget):
             for i, k in enumerate(obj.contacts):
                 text = f"Contact {k.name} ({label(k.type).lower()})"
                 self._add(item, text, Node("contact", oid, f"contacts.{i}", k.name))
+            for i, c in enumerate(obj.connectors):  # ADR 0027
+                d = c.diameter
+                text = f"Fastener {c.name} (Ø {d.value:g} {d.unit}): {c.source} → {c.target}"
+                self._add(item, text, Node("connector", oid, f"connectors.{i}", c.name))
             for i, ph in enumerate(obj.physics):
                 p_item = self._add(
                     item, label(ph.type), Node("physics", oid, f"physics.{i}", ph.type)

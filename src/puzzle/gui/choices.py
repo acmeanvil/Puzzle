@@ -110,7 +110,13 @@ def choices(project: Project, obj, path: str) -> list[tuple[str, Any]] | None:
         return _dict_entry(project, obj, owner, field, last, keys)
     else:
         return None
-    return _field(project, obj, owner, field, in_list)
+    out = _field(project, obj, owner, field, in_list)
+    if field == "optimiser" and isinstance(owner, MeshRecipe) and out is not None:
+        from puzzle.settings import current
+
+        if not current().get("meshing.netgen_optimiser"):  # Settings → Meshing
+            out = [c for c in out if c[1] != "netgen" or owner.optimiser == "netgen"]
+    return out
 
 
 def _derived_field(project, obj, owner, field):

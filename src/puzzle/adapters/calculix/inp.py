@@ -33,6 +33,7 @@ from puzzle.adapters.common import (
     InputError,
     body_load,
     check_contacts,
+    fastener_values,
     globalize,
     initial_temperature,
     nodal_traction,
@@ -75,8 +76,10 @@ def reference_temperature(comp: Component) -> float:
 
 
 def set_name(prefix: str, name: str) -> str:
-    """A CalculiX set name: letters, digits and underscores, upper case."""
-    return f"{prefix}_{re.sub(r'[^A-Za-z0-9]+', '_', name).strip('_').upper()}"
+    """A CalculiX set name: letters, digits and underscores, upper case. Signs are kept
+    as P and M: box sides "Plate/+z" and "Plate/-z" would otherwise share one set."""
+    signed = name.replace("+", "P").replace("-", "M")
+    return f"{prefix}_{re.sub(r'[^A-Za-z0-9]+', '_', signed).strip('_').upper()}"
 
 
 def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
@@ -141,7 +144,15 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
     pretension = _pretension_nodes(comp, mesh)
     out += _pretension_sections(mesh, cuts)
     used = len(pretension) + sum(len(c.doubles) for c in cuts.values())
-    out += _springs(comp, mesh, int(mesh.node_ids.max()) + 1 + 2 * len(rigid) + used)
+    first = int(mesh.node_ids.max()) + 1 + 2 * len(rigid) + used
+    fastener_lines, fastener_nodes, fastener_elems, _ends = _fasteners(project, comp, mesh, first)
+    out += fastener_lines
+    out += _springs(
+        comp,
+        mesh,
+        first + fastener_nodes,
+        int(max(b.ids.max() for b in mesh.blocks)) + 1 + fastener_elems,
+    )
     out += _contacts(project, comp, mesh, faces)
 
     solve_steps = study.solve_steps()
@@ -360,6 +371,9 @@ def _step(
             if step.type in ("modal", "buckling")
             else ["*NODE FILE", "U, RF", "*EL FILE", "S, E" + (", PEEQ" if yields else "")]
         )
+        if comp.connectors and step.type not in ("modal", "buckling"):
+            # Fastener forces and moments (ADR 0027): the helper nodes' reactions.
+            outputs += [f"*NODE PRINT, NSET={FASTENER_ENDS}", "RF"]
     elif solved == {"heat_transfer"}:
         if step.type == "transient" and time_scheme(step)[0] != "backward_euler":
             raise InputError(
@@ -573,13 +587,192 @@ def _pretension_sections(mesh: Mesh, cuts: dict) -> list[str]:
     return out
 
 
-def _springs(comp: Component, mesh: Mesh, first_node: int) -> list[str]:
+FASTENER_ENDS = "N_FASTENER_ENDS"
+
+
+def _fasteners(project: Project, comp: Component, mesh: Mesh, first_node: int):
+    """Beam fasteners (ADR 0027) as small solid bolts: a round bar of quadratic tets
+    between the ends' centres, of the fastener's material. Each bolt end face is a rigid
+    body with a translation and a rotation node; a rigid end puts the hole's nodes in
+    that rigid body too, a distributing end ties the hole's nodes to those two nodes by
+    RBE3 relations. A beam element was tried first: CalculiX ties no beam node into a
+    rigid body, and tying its rotations by *EQUATION left the joint near a hinge. The
+    bolt end faces' reactions are the forces and moments it takes; they are printed
+    for the reader. -> (lines, nodes used, elements used, ends info)"""
+    from puzzle.adapters.common import bolt_mesh, fastener_end, fastener_frame, rbe3_rows
+
+    if not comp.connectors:
+        return [], 0, 0, []
+    node = first_node
+    first_elem = int(max(b.ids.max() for b in mesh.blocks)) + 1
+    elem = first_elem
+    out, ends, printed = [], [], []
+    held = {
+        int(n)
+        for ph in comp.physics
+        for g in ph.features
+        if g.type in ("fixed", "displacement") and g.selection in mesh.groups
+        for n in mesh.groups[g.selection].node_ids
+    }
+    _type, order = ELEMENTS["tet10"]
+    for i, f in enumerate(comp.connectors, start=1):
+        what = f"fastener '{f.name}'"
+        a, b = (fastener_end(s, mesh, what) for s in (f.source, f.target))
+        axis, side = fastener_frame(a.centre, b.centre)
+        if f.ends == "rigid":
+            for sel in (f.source, f.target):
+                if held & {int(n) for n in mesh.groups[sel].node_ids}:
+                    raise InputError(
+                        f"{what}: '{sel}' shares nodes with a fixed or displaced selection; "
+                        "a rigid end can't also be held there (use distributing ends, or "
+                        "hold another face)",
+                        code="unsupported",
+                    )
+        d = f.diameter.to_si()
+        xyz, tets, at_a, at_b = bolt_mesh(a.centre, b.centre, d, f.elements)
+        ids = np.arange(node, node + len(xyz))
+        node += len(xyz)
+        helpers = {"a": (node, node + 1), "b": (node + 2, node + 3)}
+        node += 4
+        out += ["*NODE", *(_node_row(n, p) for n, p in zip(ids, xyz, strict=True))]
+        for side_name, end in (("a", a), ("b", b)):
+            out += [_node_row(n, end.centre) for n in helpers[side_name]]
+        out.append(f"*ELEMENT, TYPE=C3D10, ELSET=E_FASTENER{i}")
+        for row in tets:
+            out.append(_row([elem, *ids[row[order]]]))
+            elem += 1
+        material = project.get(f.material, Material)
+        out += [f"*MATERIAL, NAME=MF{i}", *_material_cards(material, comp)]
+        out.append(f"*SOLID SECTION, ELSET=E_FASTENER{i}, MATERIAL=MF{i}")
+        for side_name, end, face in (("a", a, at_a), ("b", b, at_b)):
+            move, turn = helpers[side_name]
+            bolt_face = f"N_FASTENER{i}{side_name.upper()}"
+            out += [f"*NSET, NSET={bolt_face}", *_chunks(ids[face])]
+            if f.ends == "rigid":  # the hole and the bolt end move as one
+                out += [
+                    f"*NSET, NSET={bolt_face}R",
+                    *_chunks(np.union1d(ids[face], end.nodes)),
+                    f"*RIGID BODY, NSET={bolt_face}R, REF NODE={move}, ROT NODE={turn}",
+                ]
+            else:  # the bolt end is rigid; the hole follows it on average (RBE3)
+                out.append(f"*RIGID BODY, NSET={bolt_face}, REF NODE={move}, ROT NODE={turn}")
+                out.append("*EQUATION")
+                for terms in _rbe3_equations(rbe3_rows(end, mesh), move, turn):
+                    out.append(str(len(terms)))
+                    for t in range(0, len(terms), 4):
+                        out.append(", ".join(f"{n}, {j}, {c:.12g}" for n, j, c in terms[t : t + 4]))
+            printed += [int(n) for n in ids[face]]
+        ends.append(
+            {
+                "name": f.name,
+                "axis": [float(c) for c in axis],
+                "a": {
+                    "centre": [float(c) for c in a.centre],
+                    "nodes": [int(n) for n in ids[at_a]],
+                    "xyz": xyz[at_a].tolist(),
+                },
+            }  # fmt: skip
+        )
+    out += [f"*NSET, NSET={FASTENER_ENDS}", *_chunks(np.array(printed))]
+    return out, node - first_node, elem - first_elem, ends
+
+
+def _node_row(n: int, p) -> str:
+    return f"{n}, " + ", ".join(f"{c:.13g}" for c in p)
+
+
+def _rbe3_equations(rows, move: int, turn: int) -> list[list[tuple[int, int, float]]]:
+    """RBE3 rows (helper dof k = Σ c u) as *EQUATION terms whose dependent dofs are six
+    face-node dofs, one per equation and in no other: the rows are solved for those six
+    (chosen by pivoting, so the solve is well conditioned). The helpers stay independent,
+    so CalculiX gives them the reaction printed; with a dependent dof in several
+    equations CalculiX's MPC decascading took minutes."""
+    columns = sorted({(n, j) for row in rows for n, j, _c in row})
+    index = {c: i for i, c in enumerate(columns)}
+    C = np.zeros((6, len(columns)))
+    for k, row in enumerate(rows):
+        for n, j, c in row:
+            C[k, index[(n, j)]] += c
+    chosen: list[int] = []
+    residual = C.copy()
+    for _ in range(6):  # greedy column pivoting
+        norms = np.linalg.norm(residual, axis=0)
+        norms[chosen] = -1.0
+        pick = int(np.argmax(norms))
+        chosen.append(pick)
+        q = residual[:, pick] / np.linalg.norm(residual[:, pick])
+        residual -= np.outer(q, q @ residual)
+    A = C[:, chosen]
+    inverse = np.linalg.inv(A)
+    reduced = inverse @ C  # rows: u_chosen[k] + Σ (others) = Σ inverse[k, m] helper[m]
+    helpers = [(move, 1), (move, 2), (move, 3), (turn, 1), (turn, 2), (turn, 3)]
+    out = []
+    for k in range(6):
+        dependent = columns[chosen[k]]
+        terms = [(dependent[0], dependent[1], 1.0)]
+        terms += [
+            (columns[i][0], columns[i][1], float(reduced[k, i]))
+            for i in range(len(columns))
+            if i not in chosen and abs(reduced[k, i]) > 1e-12
+        ]
+        terms += [
+            (n, j, -float(inverse[k, m]))
+            for m, (n, j) in enumerate(helpers)
+            if abs(inverse[k, m]) > 1e-14
+        ]
+        out.append(terms)
+    return out
+
+
+def fastener_info(project: Project, study: Study, mesh: Mesh) -> list[dict]:
+    """Each fastener's name, axis and helper nodes, as the deck numbers them."""
+    comp = project.get(study.component, Component)
+    if not comp.connectors:
+        return []
+    cuts = _pretension_cuts(comp, mesh)
+    used = len(_pretension_nodes(comp, mesh)) + sum(len(c.doubles) for c in cuts.values())
+    first = int(mesh.node_ids.max()) + 1 + 2 * len(_rigid_nodes(comp, mesh)) + used
+    return _fasteners(project, comp, mesh, first)[3]
+
+
+def read_fastener_forces(dat_text: str, ends: list[dict]) -> list[tuple[int, float, np.ndarray]]:
+    """(analysis step, time, values (n fasteners, 10)) for each printed block: at each
+    fastener's first end, the axial force (tension positive), the shear force, the
+    torsion and the bending moment, then the force and moment the bolt puts on the
+    part there (Fx, Fy, Fz, Mx, My, Mz), summed from its end face's reactions about the
+    end's centre (exact, by equilibrium)."""
+    out, step = [], 0
+    lines = dat_text.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if line.strip().startswith("S T E P"):
+            step = int(line.split()[-1])
+        elif f"for set {FASTENER_ENDS}" in line and line.strip().startswith("forces"):
+            time = float(line.split()[-1])
+            rf = {}
+            i += 2
+            while i < len(lines) and lines[i].strip():
+                parts = lines[i].split()
+                rf[int(parts[0])] = np.array([float(v) for v in parts[1:4]])
+                i += 1
+            values = fastener_values(rf, ends)
+            out.append((step, time, values))
+            continue
+        i += 1
+    return out
+
+
+def _springs(
+    comp: Component, mesh: Mesh, first_node: int, first_elem: int | None = None
+) -> list[str]:
     """Elastic supports (ADR 0037) as SPRINGA elements to grounded nodes: one along each
     face node's normal (kn × its area) and, with kt, two along its tangents. Springs of
     equal stiffness share an element set (CalculiX takes one stiffness per set)."""
     from puzzle.adapters.common import support_nodes, support_stiffness
 
-    node, elem = first_node, int(max(b.ids.max() for b in mesh.blocks)) + 1
+    node = first_node
+    elem = first_elem or int(max(b.ids.max() for b in mesh.blocks)) + 1
     size = float(np.linalg.norm(np.ptp(mesh.coords, axis=0)))
     nodes, bins, gaps = [], {}, {}
     for ph in comp.physics:

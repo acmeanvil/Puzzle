@@ -84,9 +84,9 @@ PREFERENCES: list[Preference] = [
         "meshing.preview",
         "Meshing",
         "Mesh preview",
-        "live",
-        [("On every change", "live"), ("On demand", "on_demand")],
-        ready=False,
+        "on_demand",
+        [("On every change (meshes again)", "live"), ("On demand (the Mesh button)", "on_demand")],
+        "The Mesh tab's controls show in the mesh when the component is meshed (ADR 0019).",
     ),
     Preference(
         "meshing.netgen_optimiser",
@@ -94,7 +94,7 @@ PREFERENCES: list[Preference] = [
         "Offer Netgen as Gmsh's optimiser",
         True,
         [("Yes", True), ("No", False)],
-        ready=False,
+        "A mesh recipe's optimiser can then be Netgen's (it improves Gmsh's tetrahedra).",
     ),
     Preference(
         "solvers.level",

@@ -65,3 +65,26 @@ def test_le1_sigma_yy_at_d(tmp_path, solver):
     at_d = sample(run.mesh, stress, (*le1.POINT_D, None))
     assert at_d.distance == 0.0 and len(at_d.node_ids) >= 2  # real nodes through the thickness
     assert at_d.values[component(stress, "yy")] == pytest.approx(le1.TARGET_SYY, rel=0.01)
+
+
+def test_le1_meshed_by_netgen(tmp_path):
+    """The second mesher (ADR 0019): LE1 meshed by Netgen (its first-order mesh, raised
+    to second order by Gmsh on the geometry) gives the same answer on CalculiX."""
+    from puzzle.mesh.netgen_mesher import netgen_python
+    from puzzle.model import MeshRecipe
+
+    if netgen_python() is None or not _available("calculix", "ccx"):
+        pytest.skip("needs Netgen and CalculiX")
+    le1 = _build_module()
+    project = load_project(BENCHMARK)
+    for recipe in project.of_type(MeshRecipe):
+        recipe.mesher = "netgen"
+    study = next(s for s in project.of_type(Study) if s.name == "LE1")
+    study.solver = "calculix"
+    run = run_study(project, study.id, BENCHMARK, tmp_path / "run", timeout_s=900)
+    stress = run.results.last("stress")
+    at_d = sample(run.mesh, stress, (*le1.POINT_D, None))
+    got = at_d.values[component(stress, "yy")]
+    print(f"LE1 on a Netgen mesh: {got / 1e6:.4g} MPa, target {le1.TARGET_SYY / 1e6:.4g} MPa")
+    assert at_d.distance == 0.0
+    assert got == pytest.approx(le1.TARGET_SYY, rel=0.01)

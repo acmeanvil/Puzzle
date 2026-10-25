@@ -573,7 +573,7 @@ class Viewport(QWidget):
         """The mesh's volume, with a selection highlighted (a mesh group `Part/Name`, or
         its face `entities` when it was made after meshing) and picked faces marked."""
         self.result_state, self.probes, self._mark_actors = None, [], []
-        self.glyphs, self._glyph_actors = [], []
+        self.glyphs, self._glyph_actors, self.pins = [], [], []
         self._clear_labels()
         self._update_click()
         if mesh is not self.mesh:
@@ -1047,6 +1047,12 @@ class Viewport(QWidget):
                 continue
             if not len(g.points):
                 continue
+            if g.kind == "tube":  # a fastener (ADR 0027): a bar between its two ends
+                a, b = (np.asarray(p, float) for p in g.points[:2])
+                tube = pv.Tube(pointa=a, pointb=b, radius=g.radius, n_sides=16)
+                self.plotter.add_mesh(tube, color=g.colour, name=name, reset_camera=False)
+                self._glyph_actors.append(name)
+                continue
             if g.kind == "arrow":  # arrows end on the face: their tails stand off it
                 starts = g.points - g.directions * size
                 geom = pv.Arrow(tip_length=0.3, tip_radius=0.12, shaft_radius=0.04)
@@ -1132,8 +1138,18 @@ class Viewport(QWidget):
         add = bool(self.view.modifiers & Qt.KeyboardModifier.ShiftModifier)
         self.probe(xyz, add=add)
 
+    def mark_point(self, xyz, text: str) -> None:
+        """A labelled point pinned in the view until the next scene (the Mesh tab's
+        worst elements)."""
+        self.pins = [(np.asarray(xyz, float), text, "#ffcc33")]
+        self.shown["pins"] = [text]
+        self._draw_marks()
+        if self.plotter is not None:
+            self.view.refresh()
+
     def _marks(self) -> list[tuple]:
         marks = list(self._extremes) if self.style["extremes"] and self.result_state else []
+        marks += getattr(self, "pins", [])
         unit = lambda p: f" {p['unit']}" if p["unit"] else ""  # noqa: E731
         marks += [
             (np.asarray(p["at"]), f"{_number(p['shown'])}{unit(p)}", "#f5f5f5") for p in self.probes

@@ -382,7 +382,114 @@ class Material(ProjectObject):
     fatigue: FatigueData = Field(default_factory=FatigueData)
 
 
+class SizeControl(BaseModel):
+    """An element size on a selection's faces, edges or bodies (and their boundary)."""
+
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["size"] = "size"
+    selection: str = Field(description="Part/Selection")
+    size: Quantity
+
+    def describe(self) -> str:
+        return f"size {self.size.value:g} {self.size.unit} on {self.selection}"
+
+
+class RefineNearControl(BaseModel):
+    """Finer elements near a selection, growing back to the global size: `size` within
+    `near` of it, then linearly up to the global size at `far` (Gmsh Distance +
+    Threshold fields)."""
+
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["refine_near"] = "refine_near"
+    selection: str
+    size: Quantity
+    near: Quantity
+    far: Quantity
+
+    def describe(self) -> str:
+        return (
+            f"refine near {self.selection}: {self.size.value:g} {self.size.unit} within "
+            f"{self.near.value:g} {self.near.unit}, back to the global size by "
+            f"{self.far.value:g} {self.far.unit}"
+        )
+
+
+class TransfiniteControl(BaseModel):
+    """A set number of elements along a selection's edges, evenly or graded."""
+
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["transfinite"] = "transfinite"
+    selection: str
+    count: int = Field(ge=1, description="elements along each edge")
+    progression: float = Field(default=1.0, gt=0, description="each element over the one before")
+
+    def describe(self) -> str:
+        graded = f", graded {self.progression:g}" if self.progression != 1 else ""
+        return f"{self.count} elements along {self.selection}{graded}"
+
+
+class BoxControl(BaseModel):
+    """An element size inside an axis-aligned box (corners in m)."""
+
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["box"] = "box"
+    name: str = "Box"
+    low: tuple[float, float, float]
+    high: tuple[float, float, float]
+    size: Quantity
+
+    def describe(self) -> str:
+        return f"size {self.size.value:g} {self.size.unit} in box {self.name}"
+
+
+class BallControl(BaseModel):
+    """An element size inside a ball (centre in m)."""
+
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["ball"] = "ball"
+    name: str = "Ball"
+    centre: tuple[float, float, float]
+    radius: Quantity
+    size: Quantity
+
+    def describe(self) -> str:
+        return f"size {self.size.value:g} {self.size.unit} in ball {self.name}"
+
+
+class BoundaryLayerControl(BaseModel):
+    """Thin layers of prisms grown off a selection's faces, for walls in flow and steep
+    gradients (first layer height, growth ratio, layers)."""
+
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["boundary_layer"] = "boundary_layer"
+    selection: str
+    first_height: Quantity
+    growth: float = Field(default=1.2, ge=1.0)
+    layers: int = Field(default=5, ge=1)
+
+    def describe(self) -> str:
+        return (
+            f"boundary layer on {self.selection}: {self.layers} layers from "
+            f"{self.first_height.value:g} {self.first_height.unit}, growth {self.growth:g}"
+        )
+
+
+MeshControl = Annotated[
+    SizeControl
+    | RefineNearControl
+    | TransfiniteControl
+    | BoxControl
+    | BallControl
+    | BoundaryLayerControl,
+    Field(discriminator="kind"),
+]
+
+
 class MeshRecipe(ProjectObject):
+    """How a component is meshed (ADR 0019): the mesher, element order and shape, a
+    global size, controls on named selections (in order, like a geometry history), and
+    the mesher's own settings, typed where common and passed through otherwise."""
+
     kind: ClassVar[str] = "mesh"
 
     mesher: Literal["gmsh", "netgen"] = "gmsh"
@@ -392,9 +499,52 @@ class MeshRecipe(ProjectObject):
         description="hexahedra: structured (transfinite) hex mesh of block-like volumes",
     )
     global_size: Quantity | None = None
-    local_sizes: dict[str, Quantity] = Field(
-        default_factory=dict, description="Named selection -> element size"
+    controls: list[MeshControl] = Field(default_factory=list)
+    curvature_points: int = Field(
+        default=12, ge=0, description="elements per 2π of curvature (0: sizes ignore curvature)"
     )
+    algorithm_2d: Literal[
+        "automatic", "meshadapt", "delaunay", "frontal_delaunay", "frontal_quads", "packing"
+    ] = Field(default="frontal_delaunay", description="Gmsh's default: Frontal-Delaunay")
+    algorithm_3d: Literal["delaunay", "frontal", "hxt", "mmg"] = "delaunay"
+    optimiser: Literal["gmsh", "netgen", "off"] = Field(
+        default="gmsh", description="tetrahedra are improved by Gmsh's optimiser, or Netgen's"
+    )
+    high_order_optimise: Literal["off", "optimise", "elastic_and_optimise", "elastic"] = Field(
+        default="elastic_and_optimise",
+        description="untangles curved second-order elements",
+    )
+    smoothing: int = Field(default=1, ge=0, description="smoothing passes of the surface mesh")
+    quality_floor: float | None = Field(
+        default=None,
+        description="smallest element shape quality allowed (1: regular, 0: flat); below it "
+        "meshing fails, saying where",
+    )
+    gmsh_options: dict[str, float | str] = Field(
+        default_factory=dict,
+        description="any other Gmsh option by its own name (Mesh.AnisoMax); unknown names "
+        "are refused",
+    )
+    netgen_options: dict[str, float | str] = Field(
+        default_factory=dict,
+        description="Netgen's own settings: grading, curvaturesafety, segmentsperedge, "
+        "quad_dominated",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _local_sizes(cls, data):
+        """Older recipes kept local sizes as a map; they are size controls now."""
+        if isinstance(data, dict) and "local_sizes" in data:
+            data = dict(data)
+            sizes = data.pop("local_sizes") or {}
+            data["controls"] = [
+                {"kind": "size", "selection": name, "size": q} for name, q in sizes.items()
+            ] + list(data.get("controls", []))
+        return data
+
+    def sizes(self) -> list[SizeControl]:
+        return [c for c in self.controls if isinstance(c, SizeControl)]
 
 
 # --- Components: single parts and assemblies ---------------------------------
@@ -612,6 +762,29 @@ Coupling = Literal[
 ]
 
 
+class BeamFastener(BaseModel):
+    """A bolt, pin or rivet as a beam between two selections, with no geometry (ADR 0027).
+
+    The beam runs between the centres of its two ends (a hole face's centre is on its
+    axis), with a round section, of a project material. Each end is joined to its
+    selection's nodes by a spider: rigid (RBE2, Ansys rigid: it stiffens the hole) or
+    distributing (RBE3, Ansys deformable: it spreads the load without stiffening)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["beam_fastener"] = "beam_fastener"
+    name: str
+    source: str = Field(description="Part/Selection at one end (a hole face, usually)")
+    target: str = Field(description="Part/Selection at the other end")
+    diameter: Quantity
+    material: UUID
+    ends: Literal["rigid", "distributing"] = "rigid"
+    elements: int = Field(default=1, ge=1, description="beam elements along it")
+    pretension: Quantity | None = Field(
+        default=None, description="a force applied in the first step, then locked"
+    )
+
+
 class Component(ProjectObject):
     """A single part or an assembly, with its mesh, materials, contacts and physics.
 
@@ -630,6 +803,9 @@ class Component(ProjectObject):
     contacts: list[Contact] = Field(default_factory=list)
     physics: list[Physics] = Field(default_factory=list)
     couplings: list[Coupling] = Field(default_factory=list)
+    connectors: list[BeamFastener] = Field(
+        default_factory=list, description="fasteners between parts, without geometry (ADR 0027)"
+    )
 
     def dependencies(self) -> list[UUID]:
         amplitudes = [
@@ -644,12 +820,14 @@ class Component(ProjectObject):
             self.mesh,
             *(m.material for m in self.materials),
             *amplitudes,
+            *(c.material for c in self.connectors),
         ]
 
     def used_selections(self) -> list[str]:
         used = [a.selection for a in self.materials]
         used += [s for c in self.contacts for s in (c.source, c.target)]
         used += [f.selection for p in self.physics for f in p.features]
+        used += [s for c in self.connectors for s in (c.source, c.target)]
         return used
 
 

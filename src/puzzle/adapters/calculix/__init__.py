@@ -17,7 +17,12 @@ from puzzle.adapters.base import (
     SolverAdapter,
 )
 from puzzle.adapters.calculix.frd import read_frd
-from puzzle.adapters.calculix.inp import InputError, prestress_step_count, write_inp
+from puzzle.adapters.calculix.inp import (
+    InputError,
+    fastener_info,
+    prestress_step_count,
+    write_inp,
+)
 from puzzle.adapters.common import drop_helper_nodes, mark_mesh_nodes, plastic_strain_tensor
 from puzzle.mesh.mesh import Mesh
 from puzzle.model.schema import Project, Study
@@ -41,6 +46,7 @@ class CalculixAdapter(SolverAdapter):
         | PRETENSION_FEATURES
         | LIFTING_FEATURES,
         feature_steps=True,
+        connectors=frozenset({"beam_fastener:rigid", "beam_fastener:distributing"}),
         amplitude_features=frozenset({"heat_flux"}),  # ADR 0037, benchmarked
         axes_features=frozenset(
             {
@@ -80,6 +86,9 @@ class CalculixAdapter(SolverAdapter):
             n + skip for n, s in enumerate(study.solve_steps(), start=1) if s.type == "buckling"
         ]
         path.with_suffix(".buckling").write_text(json.dumps(buckling))
+        ends = fastener_info(project, study, mesh)
+        if ends:  # ADR 0027: the reader turns their helper nodes' reactions into forces
+            path.with_suffix(".fasteners.json").write_text(json.dumps(ends))
         return path
 
     def command(self, input_file: Path) -> list[str]:
@@ -99,6 +108,7 @@ class CalculixAdapter(SolverAdapter):
                     step.fields["plastic_strain"] = plastic_strain_tensor(
                         step.fields["strain"], step.fields["stress"], sets
                     )
+        _fastener_fields(results, input_file)
         buckling = input_file.with_suffix(".buckling")
         if buckling.exists():
             results.steps = _buckling_modes(results.steps, set(json.loads(buckling.read_text())))
@@ -109,6 +119,28 @@ class CalculixAdapter(SolverAdapter):
             for s in results.steps:
                 s.index -= skip
         return results
+
+
+def _fastener_fields(results, input_file: Path) -> None:
+    """Each step's fastener forces (ADR 0027) as a whole-model field, one row per
+    fastener (ids 1, 2, ... in the component's order)."""
+    marker = input_file.with_suffix(".fasteners.json")
+    dat = input_file.with_suffix(".dat")
+    if not marker.exists() or not dat.exists():
+        return
+    import numpy as np
+
+    from puzzle.adapters.calculix.inp import read_fastener_forces
+    from puzzle.adapters.common import FASTENER_COMPONENTS
+    from puzzle.results.model import Field
+
+    ends = json.loads(marker.read_text())
+    blocks = read_fastener_forces(dat.read_text(), ends)
+    for step in results.steps:
+        hit = [v for n, t, v in blocks if n == step.index and abs(t - step.value) < 1e-9]
+        if hit:
+            ids = np.arange(1, len(ends) + 1)
+            step.fields["fastener"] = Field("fastener", "global", FASTENER_COMPONENTS, ids, hit[-1])
 
 
 def _buckling_modes(steps, buckling: set[int]) -> list:

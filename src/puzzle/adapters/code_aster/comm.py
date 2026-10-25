@@ -9,6 +9,7 @@ temperature T, heat_flux q (positive into the body), convection h and T_inf. SI.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -98,6 +99,12 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     ]
     # Elastic supports are part of the structure, modal steps too (ADR 0037).
     springs = [f for f in features if f.type == "elastic_support"]
+    fasteners = list(comp.connectors)
+    if fasteners and thermal:
+        raise InputError(
+            "Code_Aster writes beam fasteners in structural studies only so far",
+            code="unsupported",
+        )
     lifting = [f for f in features if f.type == "compression_only_support"]
     if lifting and (thermal or step.type != "stationary"):
         raise InputError(
@@ -152,6 +159,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         dict.fromkeys(
             [a.selection for a in comp.materials]
             + [f.selection for f in features + preload + springs + lifting + bolts]
+            + [sel for c in fasteners for sel in (c.source, c.target)]
             + tie_groups
         )
     )
@@ -165,11 +173,25 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     cuts = list(
         section_cuts(comp, mesh, {id(f): top + 1 + k for k, f in enumerate(bolts)}).values()
     ) if bolts else []  # fmt: skip
-    points = _Points(_cut(mesh, cuts) if cuts else mesh, names)
+    base = _cut(mesh, cuts) if cuts else mesh
+    held = {
+        int(n)
+        for f in features
+        if f.type in ("fixed", "displacement") and f.selection in mesh.groups
+        for n in mesh.groups[f.selection].node_ids
+    }
+    base, fastener_ends = _with_bolts(base, fasteners, mesh, names, held)
+    if fastener_ends:  # the reader sums the bolt end faces' reactions (ADR 0027)
+        (workdir / f"{JOB}.fasteners.json").write_text(json.dumps(fastener_ends))
+    points = _Points(base, names)
     for i, (node, *_rest) in enumerate(supports, start=1):
         points.add(f"S{i}", node, "SPRINGS")
     for i, (node, *_rest) in enumerate(gaps, start=1):
         points.add(f"C{i}", node, "GAPS")
+    for i, end in enumerate(fastener_ends, start=1):
+        if end["distributing"]:  # a 6-dof master point per end for LIAISON_RBE3
+            points.add(f"M{i}A", end["masters"][0], "MASTERS")
+            points.add(f"M{i}B", end["masters"][1], "MASTERS")
     for k, cut in enumerate(cuts, start=1):
         points.add(f"PR{k}", cut.ref, "PRETENSION")
         for i, (node, twin) in enumerate(cut.doubles.items(), start=1):
@@ -202,14 +224,47 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             if cuts
             else []
         ),
+        *(
+            [
+                "mesh = DEFI_GROUP(reuse=mesh, MAILLAGE=mesh, CREA_GROUP_NO=_F(GROUP_MA=("
+                + ", ".join(
+                    f"'{g}'"
+                    for g in [n for n in points.names if n.startswith("M")]
+                    + sorted(
+                        {
+                            names[sel]
+                            for c in fasteners
+                            if c.ends == "distributing"
+                            for sel in (c.source, c.target)
+                        }
+                    )
+                    + [
+                        f"F{i}{e}"
+                        for i, c in enumerate(fasteners, start=1)
+                        if c.ends == "distributing"
+                        for e in "AB"
+                    ]
+                )
+                + ",)))"
+            ]
+            if any(c.ends == "distributing" for c in fasteners)
+            else []
+        ),  # fmt: skip
         "model = AFFE_MODELE(MAILLAGE=mesh, "
         f"AFFE=(_F(TOUT='OUI', PHENOMENE='{phenomenon}', MODELISATION='{model}'),"
         + "".join(
-            f" _F(GROUP_MA='{g}', PHENOMENE='MECANIQUE', MODELISATION='DIS_T'),"
+            f" _F(GROUP_MA='{g}', PHENOMENE='MECANIQUE', "
+            f"MODELISATION='{'DIS_TR' if g == 'MASTERS' else 'DIS_T'}'),"
             for g in points.sets
         )
         + "))",
-        *_discrete_cara(supports, len(cuts), _negligible(project, comp, mesh), gaps),
+        *_discrete_cara(
+            supports,
+            len(cuts),
+            _negligible(project, comp, mesh),
+            gaps,
+            [n for n in points.names if n.startswith("M")],
+        ),
     ]
     cara = "CARA_ELEM=cara, " if points.sets else ""
     assignments = []
@@ -227,6 +282,10 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
                 traction = f", TRACTION=_F(SIGM=trac{i})"
             out.append(f"mat{i} = DEFI_MATERIAU({_material(m, thermal, expansion)}{traction})")
         assignments.append(f"_F(GROUP_MA='{names[a.selection]}', MATER=mat{i})")
+    for i, c in enumerate(fasteners, start=1):  # each bolt in its own material
+        m = project.get(c.material, Material)
+        out.append(f"matf{i} = DEFI_MATERIAU({_material(m, False)})")
+        assignments.append(f"_F(GROUP_MA='F{i}', MATER=matf{i})")
     # A compression-only support: DIS_CHOC on each node's discrete, its stiffness kn × area.
     for i, (_node, kn, _kt, _n) in enumerate(gaps, start=1):
         out.append(f"gap{i} = DEFI_MATERIAU(DIS_CONTACT=_F(RIGI_NOR={kn:.10e}))")
@@ -247,7 +306,9 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     if thermal:  # loads following an amplitude get their own charge (ADR 0037)
         out += _thermal_loads(project, features, names, mesh)
     else:
-        plain = _loads(features, names, mesh, thermal, ties, _pretension_loads(bolts, cuts))
+        extra = _pretension_loads(bolts, cuts)
+        extra.update(_fastener_loads(fastener_ends, fasteners, names))
+        plain = _loads(features, names, mesh, thermal, ties, extra)
         if plain.endswith("(MODELE=model)"):  # everything is in loadf: no empty charge
             charges = []
         else:
@@ -457,6 +518,91 @@ def _cut(mesh: Mesh, cuts) -> Mesh:
     return Mesh(np.concatenate(ids), np.vstack(xyz), blocks, dict(mesh.groups))
 
 
+BOLT_TAG = 800_000  # Gmsh entities for fastener bolts, clear of the mesh's own
+
+
+def _with_bolts(mesh: Mesh, fasteners, original: Mesh, names: dict, held=None):
+    """The mesh plus each fastener as a small solid bolt (ADR 0027, as on CalculiX): its
+    tets in group F<i>, its end faces in F<i>A and F<i>B, and for distributing ends a
+    master node at each end. -> (mesh, ends info for the reader)."""
+    from puzzle.adapters.common import (
+        bolt_mesh,
+        check_rigid_ends,
+        fastener_end,
+        fastener_frame,
+    )
+
+    if not fasteners:
+        return mesh, []
+    check_rigid_ends(fasteners, original, held)
+    node = int(mesh.node_ids.max()) + 1
+    elem = int(max(b.ids.max() for b in mesh.blocks)) + 1
+    ids, xyz, blocks, groups = [mesh.node_ids], [mesh.coords], list(mesh.blocks), dict(mesh.groups)
+    edges = {(0, 1): 4, (1, 2): 5, (0, 2): 6, (0, 3): 7, (2, 3): 8, (1, 3): 9}  # Gmsh tet10
+    ends = []
+    for i, f in enumerate(fasteners, start=1):
+        what = f"fastener '{f.name}'"
+        a, b = (fastener_end(s, original, what) for s in (f.source, f.target))
+        axis, _side = fastener_frame(a.centre, b.centre)
+        coords, tets, at_a, at_b = bolt_mesh(a.centre, b.centre, f.diameter.to_si(), f.elements)
+        new = np.arange(node, node + len(coords))
+        node += len(coords)
+        masters = [node, node + 1]
+        node += 2
+        ids += [new, np.array(masters)]
+        xyz += [coords, np.array([a.centre, b.centre])]
+        body = (3, BOLT_TAG + i)
+        blocks.append(CellBlock("tet10", 3, body, np.arange(elem, elem + len(tets)), new[tets]))
+        elem += len(tets)
+        groups[f"__bolt{i}"] = Group(f"__bolt{i}", 3, [body], np.unique(new))
+        names[f"__bolt{i}"] = f"F{i}"
+        for tag, face, label in ((1, at_a, "A"), (2, at_b, "B")):
+            on = set(face.tolist())
+            tris = []
+            for t in tets:
+                for p, q, r in ((0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3)):
+                    if {t[p], t[q], t[r]} <= on:
+                        mids = [t[edges[tuple(sorted(e))]] for e in ((p, q), (q, r), (p, r))]
+                        tris.append([t[p], t[q], t[r], *mids])
+            entity = (2, BOLT_TAG + 10 * i + tag)
+            tri = new[np.array(tris)]
+            blocks.append(CellBlock("tri6", 2, entity, np.arange(elem, elem + len(tri)), tri))
+            elem += len(tri)
+            key = f"__bolt{i}{label.lower()}"
+            groups[key] = Group(key, 2, [entity], np.unique(new[face]))
+            names[key] = f"F{i}{label}"
+        ends.append(
+            {
+                "name": f.name,
+                "axis": [float(c) for c in axis],
+                "a": {"centre": [float(c) for c in a.centre],
+                      "nodes": [int(n) for n in new[at_a]], "xyz": coords[at_a].tolist()},
+                "distributing": f.ends == "distributing",
+                "masters": masters,
+            }
+        )  # fmt: skip
+    return Mesh(np.concatenate(ids), np.vstack(xyz), blocks, groups), ends
+
+
+def _fastener_loads(ends: list[dict], fasteners, names: dict) -> dict[str, list[str]]:
+    """Rigid ends: the hole's face and the bolt end move as one (LIAISON_SOLIDE).
+    Distributing ends: the bolt end is rigid with its master point, and the master
+    follows the hole on average (LIAISON_RBE3)."""
+    out: dict[str, list[str]] = {"LIAISON_SOLIDE": [], "LIAISON_RBE3": []}
+    for i, (end, f) in enumerate(zip(ends, fasteners, strict=True), start=1):
+        for label, sel in (("A", f.source), ("B", f.target)):
+            if not end["distributing"]:
+                out["LIAISON_SOLIDE"].append(f"_F(GROUP_MA=('{names[sel]}', 'F{i}{label}'))")
+                continue
+            master = f"M{i}{label}"
+            out["LIAISON_SOLIDE"].append(f"_F(GROUP_NO=('F{i}{label}', '{master}'))")
+            out["LIAISON_RBE3"].append(
+                f"_F(GROUP_NO_MAIT='{master}', DDL_MAIT=('DX', 'DY', 'DZ', 'DRX', 'DRY', 'DRZ'), "
+                f"GROUP_NO_ESCL=('{names[sel]}',), DDL_ESCL=('DX-DY-DZ',), COEF_ESCL=(1.0,))"
+            )
+    return out
+
+
 def _pretension_loads(bolts, cuts) -> dict[str, list[str]]:
     """The reference node held but along its first dof, which takes the pretension
     (a force, or the shortening imposed), and each twin tied to its node by
@@ -496,12 +642,12 @@ def _negligible(project, comp, mesh: Mesh) -> float:
     return 1e-9 * E * float(np.linalg.norm(np.ptp(mesh.coords, axis=0)))
 
 
-def _discrete_cara(supports, references: int, tiny: float = 0.0, gaps=()) -> list[str]:
+def _discrete_cara(supports, references: int, tiny: float = 0.0, gaps=(), masters=()) -> list[str]:
     """Each spring's stiffness in its own axes (REPERE='LOCAL'; global is the default):
     x along the face normal (kn), y and z along the face (kt). A pretension reference
     node carries a negligible stiffness (`tiny`) along its first dof, only to have
     dofs; its other two are held."""
-    if not supports and not references and not gaps:
+    if not supports and not references and not gaps and not masters:
         return []
     stiff, axes = [], []
     nodes = [("S", i, s) for i, s in enumerate(supports, start=1)]
@@ -523,6 +669,10 @@ def _discrete_cara(supports, references: int, tiny: float = 0.0, gaps=()) -> lis
     stiff += [
         f"_F(GROUP_MA='PR{k}', CARA='K_T_D_N', VALE=({tiny:.6e}, 0.0, 0.0))"
         for k in range(1, references + 1)
+    ]
+    stiff += [  # a fastener's master point: dofs only, its stiffness negligible
+        f"_F(GROUP_MA='{m}', CARA='K_TR_D_N', VALE=({', '.join([f'{tiny:.6e}'] * 6)}))"
+        for m in masters
     ]
     return [
         "cara = AFFE_CARA_ELEM(MODELE=model, DISCRET=(",
@@ -934,7 +1084,8 @@ def _loads(
         + kw("FORCE_FACE", face_force)
         + kw("PRES_REP", pressure)
         + kw("PESANTEUR", gravity)
-        + kw("LIAISON_SOLIDE", rigid)
+        + kw("LIAISON_SOLIDE", rigid + extra.get("LIAISON_SOLIDE", []))
+        + kw("LIAISON_RBE3", extra.get("LIAISON_RBE3", []))
         + kw("ROTATION", rotation)
         + kw("LIAISON_MAIL", tied)
         + ")"

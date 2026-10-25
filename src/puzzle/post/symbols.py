@@ -56,7 +56,8 @@ TINTS = {
 @dataclass
 class Glyphs:
     """One feature's symbols: arrows or cones at `points` along `directions` (unit
-    vectors, pointing where the symbol points), or the `faces` tinted."""
+    vectors, pointing where the symbol points), the `faces` tinted, or a tube from the
+    first point to the second (a fastener)."""
 
     feature: str  # readable: "Force on Bar/Tip"
     kind: str  # "arrow", "cone" or "tint"
@@ -64,6 +65,7 @@ class Glyphs:
     points: np.ndarray = field(default_factory=lambda: np.zeros((0, 3)))
     directions: np.ndarray = field(default_factory=lambda: np.zeros((0, 3)))
     faces: list = field(default_factory=list)
+    radius: float = 0.0  # a tube's (a fastener's)
 
 
 def _face_samples(mesh: Mesh, faces, per_face: int):
@@ -151,6 +153,30 @@ def symbols(
                 out.append(Glyphs(name, "arrow", colour, pts, inward))
             else:
                 out.append(Glyphs(name, "tint", TINTS.get(f.type, GREY), faces=faces))
+    if only is None:
+        out += _fastener_symbols(component, mesh)
+    return out
+
+
+def _fastener_symbols(component, mesh: Mesh) -> list[Glyphs]:
+    """Each fastener (ADR 0027) as a tube of its diameter between its ends' centres."""
+    from puzzle.adapters.common import fastener_end
+
+    out = []
+    for c in getattr(component, "connectors", []):
+        try:
+            a, b = (fastener_end(s, mesh, c.name).centre for s in (c.source, c.target))
+        except Exception:  # an end not meshed yet, or not a face: nothing to draw
+            continue
+        out.append(
+            Glyphs(
+                f"Fastener {c.name}",
+                "tube",
+                GREY,
+                np.array([a, b]),
+                radius=c.diameter.to_si() / 2,
+            )
+        )
     return out
 
 

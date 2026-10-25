@@ -24,7 +24,11 @@ HIDDEN = {"id"}  # internal: never shown
 # Plain numbers stored in a fixed unit: the unit goes with the name.
 UNITS = {"translation": " (m)", "rotation": " (degrees)", "facet_angle": " (degrees)"}
 # What an unset optional value says (ADR 0029: never "null").
-UNSET = {"source_unit": "From the file", "temperature": "Any temperature"}
+UNSET = {
+    "source_unit": "From the file",
+    "temperature": "Any temperature",
+    "quality_floor": "No floor",
+}
 NONE_TEXT = "(none)"
 
 
@@ -260,6 +264,10 @@ def item_title(index, value, names: dict) -> str:
     ("Force on Bar/Tip"), or a history step's number, kind and name."""
     if isinstance(value, dict):
         if "kind" in value and "name" in value and "args" in value:  # a geometry step
+            return f"{int(index) + 1}. {label(value['kind'])} {value['name']}"
+        if "kind" in value and "selection" in value:  # a mesh control (ADR 0019)
+            return f"{int(index) + 1}. {label(value['kind'])} on {value['selection']}"
+        if "kind" in value and "name" in value:  # a mesh region (box, ball)
             return f"{int(index) + 1}. {label(value['kind'])} {value['name']}"
         if "name" in value:
             return str(value["name"])

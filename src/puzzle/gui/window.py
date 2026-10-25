@@ -48,7 +48,13 @@ from puzzle.project.layout import HISTORY, RESULTS_DIR, WORK_DIR
 from puzzle.results.model import Results
 from puzzle.results.store import ResultStore
 
-CONTEXT_NAMES = {"model": "Model", "geometry": "Geometry", "sketch": "Sketch", "results": "Results"}
+CONTEXT_NAMES = {
+    "model": "Model",
+    "geometry": "Geometry",
+    "sketch": "Sketch",
+    "mesh": "Mesh",
+    "results": "Results",
+}
 
 
 class ElidedLabel(QLabel):
@@ -276,6 +282,8 @@ class MainWindow(QMainWindow):
         self.mesh_vertices: dict[str, dict] = {}  # component id -> vertex -> position
         self.mesh_anchors: dict[str, dict] = {}  # id -> (part, entity, name) -> anchor
         self.mesh_selections: dict[str, dict] = {}  # component id -> part -> reports
+        self.mesh_quality: dict[str, dict] = {}  # component id -> quality report (ADR 0019)
+        self.mesh_element_quality: dict[str, tuple] = {}  # id -> (element ids, shape)
         self._selections_checked: dict[str, str] = {}  # component id -> what was checked
         self._selections_checking: dict[str, str] = {}
         self.mesh_component: str | None = None  # whose mesh the view shows
@@ -336,9 +344,15 @@ class MainWindow(QMainWindow):
         self.left_tabs = QTabWidget()
         self.left_tabs.addTab(self.tree, "Model")
         self.left_tabs.addTab(self.workbench, "Geometry")
+        from puzzle.gui.mesh_bench import MeshBench
+
+        self.mesh_bench = MeshBench(self)
+        self.left_tabs.addTab(self.mesh_bench, "Mesh")
         self.left_tabs.currentChanged.connect(lambda _: self._tab_changed())
         column.insertWidget(0, self.workbench.ribbon)  # the geometry tools, above the view
         self.workbench.ribbon.hide()
+        column.insertWidget(1, self.mesh_bench.ribbon)  # the mesh tools (ADR 0019)
+        self.mesh_bench.ribbon.hide()
         self.model_dock = self._dock("Model", self.left_tabs, left)
         self.side = QStackedWidget()  # the properties, or a tool's options
         self.side.addWidget(self.properties)
@@ -840,9 +854,16 @@ class MainWindow(QMainWindow):
 
     def mesh_selected(self) -> Task | None:
         comp = self._component_of(self.tree.current())
+        if self.left_tabs.currentWidget() is self.mesh_bench:
+            comp = self.mesh_bench.component_obj()
         if comp is None:
             self.statusBar().showMessage("Select a component (or a study) to mesh", 5000)
             return None
+        return self.start_meshing(comp)
+
+    def start_meshing(self, comp, then=None) -> Task | None:
+        """Mesh a component in the background; keep the mesh, its maps and its quality
+        report (ADR 0019); `then(meshed)` after."""
         from puzzle.mesh import generate_mesh
 
         s = self.session
@@ -859,12 +880,17 @@ class MainWindow(QMainWindow):
             self.mesh_vertices[str(comp.id)] = meshed.vertices
             self.mesh_anchors[str(comp.id)] = meshed.anchors
             self.mesh_selections[str(comp.id)] = meshed.selections
+            self.mesh_quality[str(comp.id)] = meshed.quality
+            self.mesh_element_quality[str(comp.id)] = meshed.element_quality
             self.refresh_problems()
             for w in meshed.warnings:
                 self.log.appendPlainText(f"mesh: {w}")
             cells = sum(len(b.ids) for b in meshed.mesh.blocks if b.dim == 3)
             self.statusBar().showMessage(f"Meshed {comp.name}: {cells:,} elements", 8000)
-            self._selected()
+            if then is not None:
+                then(meshed)
+            else:
+                self._selected()
 
         return self.background(f"Meshing {comp.name}…", work, done)
 
@@ -910,6 +936,9 @@ class MainWindow(QMainWindow):
     def _selected(self) -> None:
         if self.left_tabs.currentWidget() is self.workbench:
             self.show_workbench_part()
+            return
+        if self.left_tabs.currentWidget() is self.mesh_bench:
+            self.show_mesh_bench()
             return
         node = self.tree.current()
         s = self.session
@@ -984,15 +1013,61 @@ class MainWindow(QMainWindow):
             self.context_label.setText(CONTEXT_NAMES.get(context, context))
         self.results_bar.setVisible(context == "results" and self.result is not None)
         self.workbench.ribbon.setVisible(context in ("geometry", "sketch"))
+        self.mesh_bench.ribbon.setVisible(context == "mesh")
 
     def _tab_changed(self) -> None:
-        on = self.left_tabs.currentWidget() is self.workbench
-        if on:
+        current = self.left_tabs.currentWidget()
+        if current is self.workbench:
             self.set_context("geometry")
             self.workbench.refresh()
+        elif current is self.mesh_bench:
+            self.set_context("mesh")
+            self.mesh_bench.refresh()
         else:
             self.set_context("model")
         self._selected()
+
+    def show_tool_panel(self, panel) -> None:
+        self.show_tool(panel)
+
+    def close_tool_panel(self) -> None:
+        self.show_tool(None)
+
+    def show_mesh_bench(self) -> None:
+        """The Mesh tab's component: its mesh coloured by element shape quality once
+        meshed (ADR 0019), else its preview."""
+        comp = self.mesh_bench.component_obj()
+        if comp is None:
+            self.viewport.clear()
+            return
+        recipe = self.session.project.objects.get(comp.mesh)
+        if recipe is not None and self.mesh_bench.tool is None:  # its settings, editable
+            from puzzle.gui.choices import choices
+
+            project = self.session.project
+            names = {str(o.id): o.name for o in project.objects.values()}
+            self.properties.show_object(
+                str(recipe.id),
+                recipe.model_dump(mode="json"),
+                "",
+                names,
+                lambda path: choices(project, recipe, path),
+            )
+        mesh = self.meshes.get(str(comp.id))
+        shape = self.mesh_element_quality.get(str(comp.id))
+        if mesh is not None and shape:
+            from puzzle.results.model import Field, Results, StepResult
+
+            ids, values = shape
+            field = Field("shape_quality", "element", ["value"], ids, values.reshape(-1, 1))
+            results = Results(
+                "mesh", [StepResult(1, "quality", 0.0, None, {"shape_quality": field})]
+            )
+            self.viewport.show_result(mesh, results, "shape_quality", deform=False)
+            return
+        mesh = mesh or self._preview(comp)
+        if mesh is not None:
+            self.viewport.show_mesh(mesh)
 
     def show_workbench_part(self) -> None:
         """The Geometry tab's part on its own (with a tool's pending step, if any)."""

@@ -51,6 +51,7 @@ class CodeAsterAdapter(SolverAdapter):
         | SUPPORT_FEATURES
         | PRETENSION_FEATURES
         | LIFTING_FEATURES,
+        connectors=frozenset({"beam_fastener:rigid", "beam_fastener:distributing"}),
         amplitude_features=frozenset({"heat_flux"}),  # ADR 0037, benchmarked
         axes_features=frozenset(
             {"displacement:cartesian", "displacement:cylindrical", "force:cartesian"}
@@ -82,4 +83,30 @@ class CodeAsterAdapter(SolverAdapter):
             raise FileNotFoundError(
                 f"Code_Aster wrote no result tables; see {JOB}.mess and the solver log"
             )
-        return drop_helper_nodes(read_tables(workdir), input_file)
+        results = read_tables(workdir)
+        _fastener_fields(results, input_file)  # before the bolts' nodes are dropped
+        return drop_helper_nodes(results, input_file)
+
+
+def _fastener_fields(results, input_file: Path) -> None:
+    """Each step's fastener forces (ADR 0027): the bolt end faces' reactions summed, as
+    a whole-model field, one row per fastener."""
+    import json
+
+    import numpy as np
+
+    from puzzle.adapters.common import FASTENER_COMPONENTS, fastener_values
+    from puzzle.results.model import Field
+
+    marker = input_file.with_name(f"{JOB}.fasteners.json")
+    if not marker.exists():
+        return
+    ends = json.loads(marker.read_text())
+    for step in results.steps:
+        rf = step.fields.get("reaction_force")
+        if rf is None:
+            continue
+        reactions = {int(n): v for n, v in zip(rf.ids, rf.values, strict=True)}
+        values = fastener_values(reactions, ends)
+        ids = np.arange(1, len(ends) + 1)
+        step.fields["fastener"] = Field("fastener", "global", FASTENER_COMPONENTS, ids, values)

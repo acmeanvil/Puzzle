@@ -12,6 +12,7 @@ Steps:
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -66,6 +67,10 @@ class MeshResult:
     # Part -> its geometry's selections as resolved (`naming.SelectionReport.to_dict`):
     # kept, re-found, by rule, or detached with ranked candidates.
     selections: dict[str, list[dict]] = field(default_factory=dict)
+    # ADR 0019: histograms of the volume elements' quality and the worst elements.
+    quality: dict = field(default_factory=dict)
+    # Each volume element's shape quality (ids, values), for colouring the mesh by it.
+    element_quality: tuple = field(default_factory=tuple)
 
 
 def generate_mesh(
@@ -86,8 +91,10 @@ def generate_mesh(
     recipe = project.get(comp.mesh, MeshRecipe)
     if comp.dimension != "3d":
         raise MeshError(f"{comp.dimension} meshing is not implemented yet")
-    if recipe.mesher != "gmsh":
-        raise MeshError(f"the {recipe.mesher} mesher is not implemented yet")
+    if recipe.mesher == "netgen" and recipe.element_shape == "hexahedra":
+        raise MeshError(
+            "Netgen meshes tetrahedra (and boundary-layer prisms); use Gmsh for hexahedra"
+        )
     if not preview and recipe.element_shape == "hexahedra" and recipe.element_order != 1:
         raise MeshError("second-order hexahedra are not supported yet; use element_order 1")
 
@@ -179,28 +186,48 @@ def generate_mesh(
                 anchors=anchors,
                 selections=reports,
             )
-        _sizes(recipe, comp, found, warnings)
+        if recipe.mesher == "netgen":  # Netgen meshes; Gmsh raises the order after
+            from puzzle.mesh.netgen_mesher import mesh_with_netgen
 
-        if recipe.element_shape == "hexahedra":
-            # Structured hexes: every block-like volume gets a transfinite mesh, recombined.
-            gmsh.model.mesh.setTransfiniteAutomatic()
-            gmsh.option.setNumber("Mesh.RecombineAll", 1)
-            gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 0)
-        gmsh.model.mesh.generate(3)
-        if recipe.element_shape == "hexahedra":
-            types, _, _ = gmsh.model.mesh.getElements(3)
-            if any(t != 5 for t in types):
-                raise MeshError("some volumes could not be meshed with hexahedra (not block-like)")
+            _options(recipe)
+            mesh_with_netgen(recipe, out_dir, *_netgen_controls(recipe))
+        else:
+            _sizes(recipe, comp, found, warnings)
+            if recipe.element_shape == "hexahedra":
+                # Structured hexes: every block-like volume gets a transfinite mesh, recombined.
+                gmsh.model.mesh.setTransfiniteAutomatic()
+                gmsh.option.setNumber("Mesh.RecombineAll", 1)
+                gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 0)
+            gmsh.model.mesh.generate(3)
+            if recipe.element_shape == "hexahedra":
+                types, _, _ = gmsh.model.mesh.getElements(3)
+                if any(t != 5 for t in types):
+                    raise MeshError(
+                        "some volumes could not be meshed with hexahedra (not block-like)"
+                    )
         if recipe.element_order > 1:
             # Curved second-order elements can fold where midside nodes snap onto tight
             # curves (fillets, small holes); Gmsh's optimiser untangles them.
-            gmsh.option.setNumber("Mesh.HighOrderOptimize", 2)
+            gmsh.option.setNumber("Mesh.HighOrderOptimize", HIGH_ORDER[recipe.high_order_optimise])
         gmsh.model.mesh.setOrder(recipe.element_order)
         min_quality = _min_quality()
+        quality, element_quality = mesh_quality()
         if min_quality <= 0:
-            raise MeshError("the mesh has inverted elements; refine it or simplify the geometry")
+            raise MeshError(
+                "the mesh has inverted elements (the worst near "
+                f"{_where(quality)}); refine it or simplify the geometry"
+            )
+        floor = recipe.quality_floor
+        shape = quality.get("measures", {}).get("shape", {}).get("min", 1.0)
+        if floor is not None and shape < floor:
+            raise MeshError(
+                f"the worst element's shape quality is {shape:.3g}, below the "
+                f"recipe's floor {floor:g}, near {_where(quality)}; refine there",
+                code="invalid",
+            )
 
         path = out_dir / MESH_FILE
+        (out_dir / "quality.json").write_text(json.dumps(quality))
         gmsh.option.setNumber("Mesh.SaveAll", 0)
         gmsh.write(str(path))
         mesh = _extract()
@@ -215,6 +242,8 @@ def generate_mesh(
         vertices=vertices,
         anchors=anchors,
         selections=reports,
+        quality=quality,
+        element_quality=element_quality,
     )
 
 
@@ -324,41 +353,265 @@ def _physical_groups(comp, geometries, references, found, warnings) -> None:
 
 
 LISTS = {1: "CurvesList", 2: "SurfacesList", 3: "VolumesList"}  # Constant field lists
+DISTANCE_LISTS = {0: "PointsList", 1: "CurvesList", 2: "SurfacesList"}
+ALGORITHM_2D = {
+    "automatic": 2,
+    "meshadapt": 1,
+    "delaunay": 5,
+    "frontal_delaunay": 6,
+    "frontal_quads": 8,
+    "packing": 9,
+}
+ALGORITHM_3D = {"delaunay": 1, "frontal": 4, "mmg": 7, "hxt": 10}
+HIGH_ORDER = {"off": 0, "optimise": 1, "elastic_and_optimise": 2, "elastic": 3}
+
+
+def _options(recipe: MeshRecipe) -> None:
+    """The recipe's typed settings, then its pass-through Gmsh options by name; a name
+    Gmsh doesn't know is refused, never ignored (ADR 0019)."""
+    gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", recipe.curvature_points)
+    gmsh.option.setNumber("Mesh.Algorithm", ALGORITHM_2D[recipe.algorithm_2d])
+    gmsh.option.setNumber("Mesh.Algorithm3D", ALGORITHM_3D[recipe.algorithm_3d])
+    gmsh.option.setNumber("Mesh.Optimize", 0 if recipe.optimiser == "off" else 1)
+    gmsh.option.setNumber("Mesh.OptimizeNetgen", 1 if recipe.optimiser == "netgen" else 0)
+    gmsh.option.setNumber("Mesh.Smoothing", recipe.smoothing)
+    for name, value in recipe.gmsh_options.items():
+        set_gmsh_option(name, value)
+
+
+def set_gmsh_option(name: str, value) -> None:
+    """Set a Gmsh option by its own name, refusing a name Gmsh doesn't have."""
+    try:
+        if isinstance(value, str):
+            gmsh.option.getString(name)
+            gmsh.option.setString(name, value)
+        else:
+            gmsh.option.getNumber(name)
+            gmsh.option.setNumber(name, float(value))
+    except Exception as exc:  # Gmsh raises a bare Exception for an unknown option
+        raise MeshError(
+            f"Gmsh has no {'text' if isinstance(value, str) else 'number'} option '{name}'",
+            code="invalid",
+        ) from exc
+
+
+def _group_entities(name: str) -> tuple[int, list[int]] | None:
+    """A physical group's dimension and entity tags, by its name."""
+    for dim, tag in gmsh.model.getPhysicalGroups():
+        if gmsh.model.getPhysicalName(dim, tag) == name:
+            return dim, [int(e) for e in gmsh.model.getEntitiesForPhysicalGroup(dim, tag)]
+    return None
+
+
+def _model_size() -> float:
+    x0, y0, z0, x1, y1, z1 = gmsh.model.getBoundingBox(-1, -1)
+    return float(np.linalg.norm([x1 - x0, y1 - y0, z1 - z0])) or 1.0
 
 
 def _sizes(recipe: MeshRecipe, comp: Component, found, warnings) -> None:
-    gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 12)
+    """The global size, then each control: size fields (combined by their minimum) and
+    transfinite edges. Two size controls giving the same entity different sizes stop
+    the mesh with both named (ADR 0019 review: never changed silently)."""
+    _options(recipe)
     if recipe.global_size:
         gmsh.option.setNumber("Mesh.MeshSizeMax", recipe.global_size.to_si())
-    groups = {
-        name: dim
-        for dim, tag in gmsh.model.getPhysicalGroups()
-        for name in [gmsh.model.getPhysicalName(dim, tag)]
-    }
-    fields = []
-    for name, size in recipe.local_sizes.items():
-        if name not in groups:
-            warnings.append(f"local size on unknown selection '{name}' ignored")
-            continue
-        dim = groups[name]
-        tag = next(
-            t
-            for d, t in gmsh.model.getPhysicalGroups(dim)
-            if gmsh.model.getPhysicalName(d, t) == name
-        )
-        entities = [int(e) for e in gmsh.model.getEntitiesForPhysicalGroup(dim, tag)]
-        if dim == 0:
-            gmsh.model.mesh.setSize([(0, e) for e in entities], size.to_si())
-            continue
-        # A size field covers the whole selection (and its boundary), not just its corners.
-        field = gmsh.model.mesh.field.add("Constant")
-        gmsh.model.mesh.field.setNumbers(field, LISTS[dim], entities)
-        gmsh.model.mesh.field.setNumber(field, "VIn", size.to_si())
-        fields.append(field)
+    coarse = recipe.global_size.to_si() if recipe.global_size else _model_size() / 10
+    fields: list[int] = []
+    sized: dict[tuple[int, int], tuple[str, float]] = {}
+
+    def entities_of(control) -> tuple[int, list[int]]:
+        hit = _group_entities(control.selection)
+        if hit is None:
+            raise MeshError(
+                f"a {control.kind.replace('_', ' ')} control names '{control.selection}', "
+                "which is not a selection of this component",
+                code="invalid",
+            )
+        return hit
+
+    for control in recipe.controls:
+        if control.kind == "size":
+            dim, entities = entities_of(control)
+            size = control.size.to_si()
+            for e in entities:
+                before = sized.get((dim, e))
+                if before is not None and not np.isclose(before[1], size, rtol=1e-9):
+                    raise MeshError(
+                        f"'{before[0]}' and '{control.selection}' give the same "
+                        f"{['point', 'edge', 'face', 'body'][dim]} different sizes "
+                        f"({before[1]:g} m and {size:g} m); keep one",
+                        code="invalid",
+                    )
+                sized[(dim, e)] = (control.selection, size)
+            if dim == 0:
+                gmsh.model.mesh.setSize([(0, e) for e in entities], size)
+                continue
+            # A size field covers the whole selection (and its boundary), not its corners.
+            f = gmsh.model.mesh.field.add("Constant")
+            gmsh.model.mesh.field.setNumbers(f, LISTS[dim], entities)
+            gmsh.model.mesh.field.setNumber(f, "VIn", size)
+            fields.append(f)
+        elif control.kind == "refine_near":
+            dim, entities = entities_of(control)
+            if dim == 3:  # near a body: near its boundary
+                faces = gmsh.model.getBoundary([(3, e) for e in entities], oriented=False)
+                dim, entities = 2, sorted({abs(t) for _, t in faces})
+            distance = gmsh.model.mesh.field.add("Distance")
+            gmsh.model.mesh.field.setNumbers(distance, DISTANCE_LISTS[dim], entities)
+            threshold = gmsh.model.mesh.field.add("Threshold")
+            gmsh.model.mesh.field.setNumber(threshold, "InField", distance)
+            gmsh.model.mesh.field.setNumber(threshold, "SizeMin", control.size.to_si())
+            gmsh.model.mesh.field.setNumber(threshold, "SizeMax", coarse)
+            gmsh.model.mesh.field.setNumber(threshold, "DistMin", control.near.to_si())
+            gmsh.model.mesh.field.setNumber(threshold, "DistMax", control.far.to_si())
+            fields.append(threshold)
+        elif control.kind == "transfinite":
+            dim, entities = entities_of(control)
+            if dim != 1:
+                raise MeshError(
+                    f"a transfinite count goes on edges; '{control.selection}' is not an "
+                    "edge selection",
+                    code="invalid",
+                )
+            for e in entities:
+                gmsh.model.mesh.setTransfiniteCurve(
+                    e, control.count + 1, "Progression", control.progression
+                )
+        elif control.kind in ("box", "ball"):
+            f = gmsh.model.mesh.field.add("Box" if control.kind == "box" else "Ball")
+            gmsh.model.mesh.field.setNumber(f, "VIn", control.size.to_si())
+            gmsh.model.mesh.field.setNumber(f, "VOut", 1e22)
+            if control.kind == "box":
+                for axis, lo, hi in zip("XYZ", control.low, control.high, strict=True):
+                    gmsh.model.mesh.field.setNumber(f, f"{axis}Min", lo)
+                    gmsh.model.mesh.field.setNumber(f, f"{axis}Max", hi)
+            else:
+                gmsh.model.mesh.field.setNumber(f, "Radius", control.radius.to_si())
+                for axis, c in zip("XYZ", control.centre, strict=True):
+                    gmsh.model.mesh.field.setNumber(f, f"{axis}Center", c)
+            fields.append(f)
+        elif control.kind == "boundary_layer":
+            raise MeshError(
+                "boundary layers are meshed by Netgen: set the recipe's mesher to Netgen "
+                "(Gmsh's 3D boundary layers don't work on OpenCASCADE geometry)",
+                code="unsupported",
+            )
     if fields:
         smallest = gmsh.model.mesh.field.add("Min")
         gmsh.model.mesh.field.setNumbers(smallest, "FieldsList", fields)
         gmsh.model.mesh.field.setAsBackgroundMesh(smallest)
+
+
+QUALITY = {  # Gmsh's measure, and the bin edges of its histogram
+    # Shape: the signed inverse condition number, 1 for a regular tet, <= 0 inverted.
+    "shape": ("minSICN", np.linspace(0.0, 1.0, 11)),
+    # Scaled Jacobian: 1 for any straight-sided element; it sees curved ones fold.
+    "scaled_jacobian": ("minSJ", np.linspace(0.0, 1.0, 11)),
+    "gamma": ("gamma", np.linspace(0.0, 1.0, 11)),
+}
+WORST = 10
+
+
+def mesh_quality() -> tuple[dict, tuple]:
+    """The volume elements' quality (ADR 0019): for each measure its min, mean and
+    histogram, and the worst-shaped elements with their centres; and each element's
+    shape (ids, values). The edge aspect ratio is the longest edge over the shortest
+    (1 is ideal)."""
+    _types, tags, _ = gmsh.model.mesh.getElements(3)
+    ids = np.concatenate([np.asarray(t) for t in tags]) if tags else np.array([], dtype=np.int64)
+    if not len(ids):
+        return {}, ()
+    out: dict = {"elements": int(len(ids)), "measures": {}}
+    values = {}
+    for name, (gmsh_name, _bins) in QUALITY.items():
+        values[name] = np.asarray(gmsh.model.mesh.getElementQualities(ids, gmsh_name))
+    longest = np.asarray(gmsh.model.mesh.getElementQualities(ids, "maxEdge"))
+    shortest = np.asarray(gmsh.model.mesh.getElementQualities(ids, "minEdge"))
+    values["aspect_ratio"] = longest / np.maximum(shortest, 1e-300)
+    top = max(2.0, float(np.ceil(values["aspect_ratio"].max())))
+    edges = {name: e for name, (_, e) in QUALITY.items()}
+    edges["aspect_ratio"] = np.linspace(1.0, top, 11)
+    for name, v in values.items():
+        counts, bins = np.histogram(np.clip(v, edges[name][0], edges[name][-1]), edges[name])
+        out["measures"][name] = {
+            "min": float(v.min()),
+            "mean": float(v.mean()),
+            "max": float(v.max()),
+            "edges": [float(b) for b in bins],
+            "counts": [int(c) for c in counts],
+        }
+    order = np.argsort(values["shape"])[:WORST]
+    worst = []
+    for i in order:
+        _etype, nodes, _dim, _tag = gmsh.model.mesh.getElement(int(ids[i]))
+        xyz = np.array([gmsh.model.mesh.getNode(int(n))[0] for n in nodes[:4]])
+        worst.append(
+            {
+                "element": int(ids[i]),
+                "shape": float(values["shape"][i]),
+                "scaled_jacobian": float(values["scaled_jacobian"][i]),
+                "gamma": float(values["gamma"][i]),
+                "centre": [float(c) for c in xyz.mean(axis=0)],
+            }
+        )
+    out["worst"] = worst
+    return out, (ids.astype(np.int64), values["shape"])
+
+
+def _where(quality: dict) -> str:
+    worst = (quality or {}).get("worst") or []
+    if not worst:
+        return "an unknown place"
+    x, y, z = worst[0]["centre"]
+    return f"({x:.4g}, {y:.4g}, {z:.4g}) m"
+
+
+def _netgen_controls(recipe: MeshRecipe) -> tuple[list[dict], list[dict]]:
+    """Size controls as Netgen's local maxh per entity (by centre and measure), and
+    boundary layers by their faces; the controls Netgen has no counterpart for are
+    refused, naming Gmsh."""
+    sizes, layers = [], []
+    for control in recipe.controls:
+        if control.kind not in ("size", "boundary_layer"):
+            raise MeshError(
+                f"Netgen takes size controls and boundary layers; a "
+                f"{control.kind.replace('_', ' ')} control needs Gmsh",
+                code="unsupported",
+            )
+        hit = _group_entities(control.selection)
+        if hit is None:
+            raise MeshError(
+                f"a {control.kind.replace('_', ' ')} control names '{control.selection}', "
+                "which is not a selection of this component",
+                code="invalid",
+            )
+        dim, entities = hit
+        if control.kind == "size":
+            if dim == 0:
+                raise MeshError("Netgen takes sizes on edges, faces and bodies, not points")
+            sizes += [
+                {
+                    "dim": dim,
+                    "centre": list(gmsh.model.occ.getCenterOfMass(dim, e)),
+                    "measure": gmsh.model.occ.getMass(dim, e),
+                    "maxh": control.size.to_si(),
+                }
+                for e in entities
+            ]
+        else:
+            if dim != 2:
+                raise MeshError("a boundary layer grows off faces: pick a face selection")
+            first = control.first_height.to_si()
+            layers.append(
+                {
+                    "faces": [
+                        [*gmsh.model.occ.getCenterOfMass(2, e), gmsh.model.occ.getMass(2, e)]
+                        for e in entities
+                    ],
+                    "thickness": [first * control.growth**i for i in range(control.layers)],
+                }
+            )
+    return sizes, layers
 
 
 def _min_quality() -> float:

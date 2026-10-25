@@ -46,15 +46,15 @@ openpyxl = ">=3.1"
 
 [feature.dev.tasks]
 lint = "ruff check . && ruff format --check ."
-install-solvers = "pixi install -e calculix && pixi install -e fenicsx"
+install-solvers = "pixi install -e calculix && pixi install -e fenicsx && pixi install -e netgen"
 check = { cmd = "pytest", depends-on = ["lint", "install-solvers"] }
 import-materials = "python scripts/import_materials.py"
 
 [feature.dev.target.unix.activation.env]
-PUZZLE_SOLVER_PATH = "$PIXI_PROJECT_ROOT/.pixi/envs/calculix/bin:$PIXI_PROJECT_ROOT/.pixi/envs/fenicsx/bin:$PIXI_PROJECT_ROOT/.pixi/envs/code-aster/bin"
+PUZZLE_SOLVER_PATH = "$PIXI_PROJECT_ROOT/.pixi/envs/calculix/bin:$PIXI_PROJECT_ROOT/.pixi/envs/fenicsx/bin:$PIXI_PROJECT_ROOT/.pixi/envs/code-aster/bin:$PIXI_PROJECT_ROOT/.pixi/envs/netgen/bin"
 
 [feature.dev.target.win.activation.env]
-PUZZLE_SOLVER_PATH = "%PIXI_PROJECT_ROOT%\\.pixi\\envs\\calculix\\Library\\bin;%PIXI_PROJECT_ROOT%\\.pixi\\envs\\fenicsx;%PIXI_PROJECT_ROOT%\\.pixi\\envs\\code-aster\\Library\\bin"
+PUZZLE_SOLVER_PATH = "%PIXI_PROJECT_ROOT%\\.pixi\\envs\\calculix\\Library\\bin;%PIXI_PROJECT_ROOT%\\.pixi\\envs\\fenicsx;%PIXI_PROJECT_ROOT%\\.pixi\\envs\\code-aster\\Library\\bin;%PIXI_PROJECT_ROOT%\\.pixi\\envs\\netgen"
 
 [feature.gui.dependencies]
 pyside6 = ">=6.7"
@@ -72,6 +72,13 @@ fenics-dolfinx = "0.11.*"
 python-gmsh = ">=4.13"  # dolfinx reads Gmsh meshes through it
 scipy = ">=1.11"  # solver backend where PETSc is missing (Windows)
 
+# Netgen, the second mesher (ADR 0019): its own OpenCASCADE bindings clash with OCP's in
+# one process, so it runs in its own environment, as a solver does.
+[feature.netgen.dependencies]
+python = "3.12.*"
+netgen = ">=6.2.2601"
+numpy = ">=1.26"
+
 [feature.code-aster]
 platforms = ["linux-64", "win-64"]
 
@@ -85,3 +92,4 @@ full = { features = ["dev", "gui"], solve-group = "main" }
 calculix = { features = ["calculix"], no-default-feature = true }
 fenicsx = { features = ["fenicsx"], no-default-feature = true }
 code-aster = { features = ["code-aster"], no-default-feature = true }
+netgen = { features = ["netgen"], no-default-feature = true }

@@ -660,3 +660,143 @@ def drop_helper_nodes(results, input_file):
                     f.name, f.location, f.components, f.ids[keep], f.values[keep]
                 )
     return results
+
+
+# --- beam fasteners (ADR 0027) -------------------------------------------------------------
+
+
+@dataclass
+class FastenerEnd:
+    """Where a fastener meets a selection: its centre (a hole face's is on its axis), and
+    the selection's nodes with their weights (∫N dA over the faces, summing to 1)."""
+
+    centre: np.ndarray
+    nodes: np.ndarray
+    weights: np.ndarray
+
+
+def fastener_end(selection: str, mesh: Mesh, what: str) -> FastenerEnd:
+    group = mesh.groups.get(selection)
+    if group is None:
+        raise InputError(f"{what}: no selection '{selection}' in the mesh")
+    if group.dim != 2:
+        raise InputError(f"{what}: '{selection}' must be a face selection (a hole's face)")
+    ids, areas, _normals = support_nodes(group, mesh)
+    weights = areas / areas.sum()
+    centre = weights @ mesh.node_coords(ids)
+    return FastenerEnd(centre, ids, weights)
+
+
+def rbe3_rows(end: FastenerEnd, mesh: Mesh) -> list[list[tuple[int, int, float]]]:
+    """A distributing (RBE3) end's relations, one row per dof of the reference point:
+    its translation is the weighted mean of the nodes' (dofs 1-3), its rotation the
+    least-squares rotation of the nodes about the centre (dofs 4-6), so rigid motions
+    are exact and it adds no stiffness. Row k: [(node, dof, coefficient)] with
+    reference dof k = Σ coefficient × u(node, dof)."""
+    r = mesh.node_coords(end.nodes) - end.centre
+    w = end.weights
+    inertia = (w * (r * r).sum(axis=1)).sum() * np.eye(3) - (w[:, None] * r).T @ r
+    if np.linalg.cond(inertia) > 1e12:
+        raise InputError("a distributing end needs nodes spread over a face, not on a line")
+    inv = np.linalg.inv(inertia)
+    rows: list[list[tuple[int, int, float]]] = []
+    for k in range(3):
+        rows.append([(int(n), k + 1, float(wi)) for n, wi in zip(end.nodes, w, strict=True)])
+    for k in range(3):
+        row = []
+        for n, wi, ri in zip(end.nodes, w, r, strict=True):
+            # θ = I⁻¹ Σ w r × u; (r × u)_m = Σ_j skew(r)_mj u_j
+            skew = np.array([[0, -ri[2], ri[1]], [ri[2], 0, -ri[0]], [-ri[1], ri[0], 0]])
+            coef = wi * (inv[k] @ skew)
+            row += [(int(n), j + 1, float(c)) for j, c in enumerate(coef) if abs(c) > 1e-14]
+        rows.append(row)
+    return rows
+
+
+def fastener_frame(a: np.ndarray, b: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """The unit axis from a to b, and a unit direction square to it (the section's 1-axis)."""
+    axis = b - a
+    length = np.linalg.norm(axis)
+    if length < 1e-12:
+        raise InputError("a fastener's two ends are at the same point")
+    axis /= length
+    side = np.cross(axis, [0.0, 0.0, 1.0] if abs(axis[2]) < 0.9 else [1.0, 0.0, 0.0])
+    return axis, side / np.linalg.norm(side)
+
+
+def bolt_mesh(a: np.ndarray, b: np.ndarray, diameter: float, layers: int = 1):
+    """A fastener as a small solid (ADR 0027, CalculiX): a round bar of quadratic tets
+    from a to b. -> (coordinates (n, 3), tet10 connectivity in Gmsh order (0-based),
+    the indices of the nodes on the face at a, and at b)."""
+    import gmsh
+
+    from puzzle.geometry.session import gmsh_session
+
+    length = float(np.linalg.norm(b - a))
+    with gmsh_session("fastener"):
+        gmsh.model.occ.addCylinder(*a, *(b - a), diameter / 2)
+        gmsh.model.occ.synchronize()
+        size = min(diameter / 3, length / max(layers, 1) / 2)
+        gmsh.option.setNumber("Mesh.MeshSizeMax", size)
+        gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 12)
+        gmsh.model.mesh.generate(3)
+        gmsh.model.mesh.setOrder(2)
+        ids, xyz, _ = gmsh.model.mesh.getNodes()
+        _types, _tags, nodes = gmsh.model.mesh.getElements(3)
+    ids = np.asarray(ids, dtype=np.int64)
+    xyz = np.asarray(xyz).reshape(-1, 3)
+    index = {int(n): i for i, n in enumerate(ids)}
+    tets = np.array([index[int(n)] for n in nodes[0]], dtype=np.int64).reshape(-1, 10)
+    axis = (b - a) / length
+    along = (xyz - a) @ axis
+    tol = 1e-9 * max(length, diameter)
+    return xyz, tets, np.flatnonzero(along < tol), np.flatnonzero(along > length - tol)
+
+
+FASTENER_COMPONENTS = [
+    "axial", "shear", "torsion", "bending", "Fx", "Fy", "Fz", "Mx", "My", "Mz",
+]  # fmt: skip
+
+
+def fastener_values(reactions: dict, ends: list[dict]) -> np.ndarray:
+    """Each fastener's forces at its first end (n, 10; FASTENER_COMPONENTS) from the
+    reactions on its bolt's end-face nodes (node -> vector): a reaction is the bolt
+    elements' resisting force, so the bolt pulls on the part with the opposite. Summed
+    about the end's centre: exact, by equilibrium. Axial is positive in tension."""
+    values = []
+    for e in ends:
+        axis, end = np.asarray(e["axis"]), e["a"]
+        arm = np.asarray(end["xyz"]) - np.asarray(end["centre"])
+        forces = -np.array([reactions.get(n, np.zeros(3)) for n in end["nodes"]])
+        force, moment = forces.sum(axis=0), np.cross(arm, forces).sum(axis=0)
+        along, twist = float(force @ axis), float(moment @ axis)
+        values.append(
+            [
+                along,
+                float(np.linalg.norm(force - along * axis)),
+                twist,
+                float(np.linalg.norm(moment - twist * axis)),
+                *force,
+                *moment,
+            ]
+        )
+    return np.array(values)
+
+
+def check_rigid_ends(fasteners, mesh: Mesh, held: set[int] | None = None) -> None:
+    """A rigid end can't take nodes a fixed or displaced selection holds: the solver
+    would see one dof held twice. Refused with the fix."""
+    if held is None:
+        return
+    for f in fasteners:
+        if f.ends != "rigid":
+            continue
+        for sel in (f.source, f.target):
+            group = mesh.groups.get(sel)
+            if group is not None and held & {int(n) for n in group.node_ids}:
+                raise InputError(
+                    f"fastener '{f.name}': '{sel}' shares nodes with a fixed or displaced "
+                    "selection; a rigid end can't also be held there (use distributing "
+                    "ends, or hold another face)",
+                    code="unsupported",
+                )

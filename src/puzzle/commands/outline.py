@@ -51,8 +51,9 @@ def outline(project: Project, *, ids: bool = False, runs=None) -> str:
         lines.append(head("Material", m) + f": {props}{tables}")
     for r in project.of_type(MeshRecipe):
         size = f", global {_q(r.global_size)}" if r.global_size else ""
-        local = "".join(f", {k} {_q(v)}" for k, v in r.local_sizes.items())
-        lines.append(head("Mesh", r) + f": {r.element_shape} order {r.element_order}{size}{local}")
+        mesher = f" ({r.mesher})" if r.mesher != "gmsh" else ""
+        lines.append(head("Mesh", r) + f": {r.element_shape} order {r.element_order}{size}{mesher}")
+        lines += [f"    {c.describe()}" for c in r.controls]
     names = {o.id: o.name for o in project.objects.values()}
     for c in project.of_type(Component):
         lines.append(head("Component", c) + f"  ({c.dimension}, mesh {names.get(c.mesh, '-')})")
@@ -64,6 +65,11 @@ def outline(project: Project, *, ids: bool = False, runs=None) -> str:
             lines.append(f"    material {names.get(a.material, '?')} -> {a.selection}")
         for k in c.contacts:
             lines.append(f"    contact {k.name}: {k.type} {k.source} ~ {k.target} ({k.capability})")
+        for f in c.connectors:  # ADR 0027
+            lines.append(
+                f"    fastener {f.name}: {f.source} -> {f.target}, diameter {_q(f.diameter)}, "
+                f"{names.get(f.material, '?')}, {f.ends} ends"
+            )
         for ph in c.physics:
             settings = f" {ph.settings}" if ph.settings else ""
             lines.append(f"    physics {ph.type}{settings}")

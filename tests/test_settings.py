@@ -103,7 +103,8 @@ def test_the_dialog_saves_and_the_window_shows_the_new_units(window):
     units.setCurrentIndex(units.findData("imperial"))
     preview = dialog.boxes["geometry.preview"]
     preview.setCurrentIndex(preview.findData("on_demand"))
-    assert not dialog.boxes["meshing.preview"].isEnabled()  # waits for ADR 0019
+    assert dialog.boxes["meshing.preview"].isEnabled()  # ADR 0019 built
+    assert not dialog.boxes["meshing.element_types"].isEnabled()  # not yet
     dialog.model.setText("claude-haiku-5-5")
     dialog.save()
     window.settings_dialog = lambda: _Accepted()
