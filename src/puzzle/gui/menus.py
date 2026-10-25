@@ -523,6 +523,17 @@ def new_study(window):
     chosen = got.get("physics")
     physics = [] if chosen in (None, together) else [chosen]
     settings = dict(STEP_DEFAULTS.get(step, {}))
+    structural = "solid_mechanics" in (physics or [p.type for p in comps[comp].physics])
+    if step == "transient" and structural:
+        from puzzle.model.catalog import DYNAMICS_DEFAULTS
+
+        settings.update(DYNAMICS_DEFAULTS)
+    if step == "frequency_domain" and structural:
+        from puzzle.model.catalog import HARMONIC_DEFAULTS
+
+        settings.update(HARMONIC_DEFAULTS)
+        if solver == "calculix":  # it superposes modes (ADR 0041)
+            settings["method"] = "modal"
     data = {
         "name": name,
         "component": str(comps[comp].id),

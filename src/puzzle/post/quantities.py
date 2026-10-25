@@ -20,6 +20,13 @@ import numpy as np
 # Field -> (group name, quantity names: (total, component prefix), unit kind).
 VECTORS = {
     "displacement": ("Deformation", ("Total deformation", "Deformation"), "length"),
+    # A harmonic response (ADR 0041): each component's amplitude, and its phase in degrees.
+    "displacement_amplitude": (
+        "Deformation amplitude",
+        ("Deformation amplitude (all components)", "Deformation amplitude"),
+        "length",
+    ),
+    "displacement_phase": ("Deformation phase", ("Phase (vector of angles)", "Phase, °"), None),
     "velocity": ("Velocity", ("Velocity magnitude", "Velocity"), "velocity"),
     "heat_flux": ("Heat flux", ("Total heat flux", "Heat flux"), "heat_flux"),
     "reaction_force": ("Reaction force", ("Reaction force magnitude", "Reaction force"), "force"),

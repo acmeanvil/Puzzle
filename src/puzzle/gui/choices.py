@@ -60,10 +60,13 @@ WORDS = {
     "3d": "3D",
     "2d": "2D",
     "dg": "DG",
+    "hht": "HHT",
 }
 SETTINGS = {
     "time_scheme": ("backward_euler", "crank_nicolson", "bdf2", "theta"),
     "turbulence_model": ("laminar", "k-epsilon", "k-omega-SST"),
+    "spacing": ("linear", "log"),  # a harmonic sweep's frequencies (ADR 0041)
+    "method": ("direct", "modal"),  # dynamics: the whole system, or over modes
 }
 STEP_CHOICES = {
     "axis": ["x", "y", "z"],

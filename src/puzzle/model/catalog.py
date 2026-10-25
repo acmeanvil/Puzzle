@@ -128,9 +128,27 @@ CATALOG: dict[str, list[FeatureSpec]] = {
     ],
 }
 
-STEP_TYPES = ["stationary", "transient", "modal", "buckling"]
+STEP_TYPES = ["stationary", "transient", "modal", "buckling", "frequency_domain"]
 # What a new step of a type starts with, so its settings show in Properties.
 STEP_DEFAULTS = {"modal": {"modes": 6}, "buckling": {"modes": 4, "preload": False}}
+# A structural harmonic step (ADR 0041): a frequency sweep, its method and damping.
+HARMONIC_DEFAULTS = {
+    "start_frequency": 10.0,
+    "end_frequency": 1000.0,
+    "points": 50,
+    "spacing": "linear",
+    "method": "direct",
+    "rayleigh_alpha": 0.0,
+    "rayleigh_beta": 0.0,
+}
+# A structural transient step (ADR 0041) starts with its time and damping settings shown.
+DYNAMICS_DEFAULTS = {
+    "time_step": 1e-4,
+    "end_time": 0.01,
+    "method": "direct",
+    "rayleigh_alpha": 0.0,
+    "rayleigh_beta": 0.0,
+}
 
 
 def specs(physics: str) -> list[FeatureSpec]:

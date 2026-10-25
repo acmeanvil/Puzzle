@@ -39,6 +39,8 @@ class StepResult:
             return f"Buckling mode {self.mode}: load factor {self.value:.4g}{reversed_}"
         if self.mode is not None:
             return f"mode {self.mode}: {self.value:.4g} Hz"
+        if self.kind == "frequency_domain":  # a harmonic response (ADR 0041)
+            return f"f = {self.value:.4g} Hz"
         return f"t = {self.value:g}"
 
 

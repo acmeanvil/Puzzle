@@ -232,3 +232,36 @@ def test_a_study_on_a_multiphysics_component_asks_which_physics(app, tmp_path):
         while window.tasks:
             app.processEvents()
         window.close()
+
+
+def test_dynamics_studies_start_with_their_settings(app, tmp_path):
+    """ADR 0041: a structural transient or harmonic study shows its time, frequency and
+    damping settings from the start; CalculiX's harmonic one superposes modes."""
+    import shutil
+
+    from puzzle.model.catalog import DYNAMICS_DEFAULTS, HARMONIC_DEFAULTS
+
+    root = tmp_path / "cantilever"
+    shutil.copytree(
+        EXAMPLE, root, ignore=shutil.ignore_patterns("results*", ".puzzle", "history.jsonl")
+    )
+    window = MainWindow(root)
+    try:
+        project = window.session.project
+        comp = next(c.name for c in project.of_type(Component))
+        for solver, analysis, name in (
+            ("code_aster", "transient", "Shock"),
+            ("calculix", "frequency_domain", "Shaker"),
+        ):
+            fill(window, component=comp, solver=solver, analysis=analysis,
+                 physics="solid_mechanics", name=name)  # fmt: skip
+            menus.new_study(window)
+        studies = {s.name: s for s in window.session.project.of_type(Study)}
+        assert DYNAMICS_DEFAULTS.items() <= studies["Shock"].steps[0].settings.items()
+        harmonic = studies["Shaker"].steps[0].settings
+        assert harmonic["method"] == "modal" and harmonic["end_frequency"] == 1000.0
+        assert set(HARMONIC_DEFAULTS) <= set(harmonic)
+    finally:
+        while window.tasks:
+            app.processEvents()
+        window.close()

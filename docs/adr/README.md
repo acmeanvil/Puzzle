@@ -46,6 +46,6 @@ New record: copy [template.md](template.md) to `NNNN-short-title.md`, set status
 | [0038](0038-results-cuts-animation-plots.md) | Results tools: section cuts, animation, and plots over steps | Accepted |
 | [0039](0039-contact-search.md) | Find contacts between parts automatically | Accepted |
 | [0040](0040-advisor.md) | An Advisor: the next step, from the project's state | Proposed |
-| [0041](0041-structural-dynamics.md) | Structural dynamics: transient and harmonic response | Accepted |
+| [0041](0041-structural-dynamics.md) | Structural dynamics: transient and harmonic response | Accepted; built on CalculiX and Code_Aster |
 | [0042](0042-result-tools-and-measuring.md) | Result tools (reactions, results over selections, paths) and exact measuring in the geometry | Accepted |
 | [0043](0043-exports.md) | Export the deformed shape as CAD (faceted, morphed B-rep, compensated) and results in neutral formats by physics | Accepted |

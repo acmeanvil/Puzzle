@@ -12,6 +12,7 @@ from puzzle.results.model import Field, Results, StepResult
 # Code_Aster component -> Puzzle component, per field.
 COMPONENTS = {
     "displacement": {"DX": "x", "DY": "y", "DZ": "z"},
+    "displacement_imag": {"DX": "x", "DY": "y", "DZ": "z"},
     "stress": {"SIXX": "xx", "SIYY": "yy", "SIZZ": "zz", "SIXY": "xy", "SIYZ": "yz", "SIXZ": "zx"},
     "temperature": {"TEMP": ""},
     "reaction_force": {"DX": "x", "DY": "y", "DZ": "z"},

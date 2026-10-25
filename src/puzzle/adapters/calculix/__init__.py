@@ -20,7 +20,6 @@ from puzzle.adapters.calculix.frd import read_frd
 from puzzle.adapters.calculix.inp import (
     InputError,
     fastener_info,
-    prestress_step_count,
     write_inp,
 )
 from puzzle.adapters.common import drop_helper_nodes, mark_mesh_nodes, plastic_strain_tensor
@@ -35,7 +34,9 @@ class CalculixAdapter(SolverAdapter):
     name = "calculix"
     capabilities = Capabilities(
         physics={
-            "solid_mechanics": frozenset({"stationary", "transient", "modal", "buckling"}),
+            "solid_mechanics": frozenset(
+                {"stationary", "transient", "modal", "buckling", "frequency_domain"}
+            ),
             "heat_transfer": frozenset({"stationary", "transient"}),
         },
         features=STRUCTURAL_FEATURES
@@ -49,7 +50,8 @@ class CalculixAdapter(SolverAdapter):
         connectors=frozenset({"beam_fastener:rigid", "beam_fastener:distributing"}),
         beams=True,  # ADR 0027, tests/integration/test_beams.py
         shells=True,  # ADR 0027, tests/integration/test_shells.py
-        amplitude_features=frozenset({"heat_flux"}),  # ADR 0037, benchmarked
+        # ADR 0037 (heat flux) and 0041 (structural loads in dynamics), benchmarked
+        amplitude_features=frozenset({"heat_flux", "force", "pressure"}),
         axes_features=frozenset(
             {
                 "displacement:cartesian",
@@ -74,7 +76,6 @@ class CalculixAdapter(SolverAdapter):
         path = workdir / f"{JOB}.inp"
         path.write_text(write_inp(project, study, mesh, inputs))
         # Replayed prestress steps come first in the results; the reader skips them.
-        path.with_suffix(".prestress").write_text(str(prestress_step_count(project, study, inputs)))
         # Elastic constants per material, for the plastic strain tensor (read_results).
         elastic = _elastic_sets(project, study, mesh)
         if elastic:
@@ -82,11 +83,9 @@ class CalculixAdapter(SolverAdapter):
         # Helper nodes (rigid bodies, spring grounds) come after the mesh's; the reader
         # leaves them out of the results.
         mark_mesh_nodes(path, mesh)
-        # Buckling steps (ADR 0028): the reader drops their static block and numbers modes.
-        skip = prestress_step_count(project, study, inputs)
-        buckling = [
-            n + skip for n, s in enumerate(study.solve_steps(), start=1) if s.type == "buckling"
-        ]
+        # Buckling steps (ADR 0028), by the study's step number: the reader drops their
+        # static block and numbers modes.
+        buckling = [n for n, s in enumerate(study.solve_steps(), start=1) if s.type == "buckling"]
         path.with_suffix(".buckling").write_text(json.dumps(buckling))
         ends = fastener_info(project, study, mesh)
         if ends:  # ADR 0027: the reader turns their helper nodes' reactions into forces
@@ -111,16 +110,36 @@ class CalculixAdapter(SolverAdapter):
                         step.fields["strain"], step.fields["stress"], sets
                     )
         _fastener_fields(results, input_file)
+        from puzzle.adapters.calculix.inp import step_owners
+
+        owners = step_owners(input_file.read_text()) if input_file.exists() else {}
+        # Each result to its study step (the deck's tags); helpers' results go: a
+        # replayed prestress step, the modes a superposition reads (ADR 0041).
+        results.steps = [s for s in results.steps if owners.get(s.index, 0) > 0]
+        for s in results.steps:
+            s.index = owners[s.index]
         buckling = input_file.with_suffix(".buckling")
         if buckling.exists():
             results.steps = _buckling_modes(results.steps, set(json.loads(buckling.read_text())))
-        marker = input_file.with_suffix(".prestress")
-        skip = int(marker.read_text()) if marker.exists() else 0
-        if skip:
-            results.steps = [s for s in results.steps if s.index > skip]
-            for s in results.steps:
-                s.index -= skip
+        _harmonic(results)
         return results
+
+
+def _harmonic(results) -> None:
+    """Steady-state dynamics' real (DISP) and imaginary (DISPI) parts joined: the
+    displacement as shown, its amplitude and phase (ADR 0041)."""
+    from puzzle.adapters.common import harmonic_fields
+
+    for step in results.steps:
+        imag = step.fields.pop("displacement_imag", None)
+        real = step.fields.get("displacement")
+        if imag is None or real is None:
+            continue
+        step.kind = "frequency_domain"
+        parts = harmonic_fields(
+            "displacement", real.ids, real.values, imag.at(real.ids), real.components
+        )
+        step.fields.update({f.name: f for f in parts})
 
 
 def _fastener_fields(results, input_file: Path) -> None:

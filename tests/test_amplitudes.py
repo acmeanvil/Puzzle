@@ -76,9 +76,17 @@ def test_amplitude_made_picked_checked_and_keyed(window):
     amp.points = [(0.0, 0.0), (5.0, 2.0)]
     assert run_hashes(project)[tip.id]["calculix"] != before  # the table is in the key
 
-    comp.physics[0].features[1].amplitude = amp.id  # a force: not varied yet
+    # Forces follow amplitudes since ADR 0041; gravity doesn't yet.
+    comp.physics[0].features.append(
+        Feature(
+            type="gravity",
+            selection="Bar/Body",
+            values={"gz": Quantity(value=-9.81, unit="m/s^2")},
+            amplitude=amp.id,
+        )
+    )
     problems = CalculixAdapter().check(project, tip)
-    assert any("does not vary force with an amplitude" in p for p in problems)
+    assert any("does not vary gravity with an amplitude" in p for p in problems)
 
 
 def test_body_load_symbol(window):

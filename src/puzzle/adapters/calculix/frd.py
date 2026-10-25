@@ -17,6 +17,7 @@ from puzzle.results.model import Field, Results, StepResult
 # CalculiX block name -> (Puzzle field name, components).
 FIELDS = {
     "DISP": ("displacement", ["x", "y", "z"]),
+    "DISPI": ("displacement_imag", ["x", "y", "z"]),  # steady-state dynamics (ADR 0041)
     "STRESS": ("stress", ["xx", "yy", "zz", "xy", "yz", "zx"]),
     "TOSTRAIN": ("strain", ["xx", "yy", "zz", "xy", "yz", "zx"]),
     "NDTEMP": ("temperature", [""]),

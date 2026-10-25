@@ -54,7 +54,8 @@ class CodeAsterAdapter(SolverAdapter):
         connectors=frozenset({"beam_fastener:rigid", "beam_fastener:distributing"}),
         beams=True,  # ADR 0027, tests/integration/test_beams.py
         shells=True,  # ADR 0027, tests/integration/test_shells.py
-        amplitude_features=frozenset({"heat_flux"}),  # ADR 0037, benchmarked
+        # ADR 0037 (heat flux) and 0041 (structural loads in dynamics), benchmarked
+        amplitude_features=frozenset({"heat_flux", "force", "pressure"}),
         axes_features=frozenset(
             {"displacement:cartesian", "displacement:cylindrical", "force:cartesian"}
         ),  # ADR 0037: local axes
@@ -86,8 +87,26 @@ class CodeAsterAdapter(SolverAdapter):
                 f"Code_Aster wrote no result tables; see {JOB}.mess and the solver log"
             )
         results = read_tables(workdir)
+        _harmonic(results)
         _fastener_fields(results, input_file)  # before the bolts' nodes are dropped
         return drop_helper_nodes(results, input_file)
+
+
+def _harmonic(results) -> None:
+    """A harmonic response's real and imaginary tables joined (ADR 0041): each
+    frequency's displacement as shown, amplitude and phase fields."""
+    from puzzle.adapters.common import harmonic_fields
+
+    for step in results.steps:
+        imag = step.fields.pop("displacement_imag", None)
+        real = step.fields.get("displacement")
+        if imag is None or real is None:
+            continue
+        step.kind = "frequency_domain"
+        for f in harmonic_fields(
+            "displacement", real.ids, real.values, imag.at(real.ids), real.components
+        ):
+            step.fields[f.name] = f
 
 
 def _fastener_fields(results, input_file: Path) -> None:

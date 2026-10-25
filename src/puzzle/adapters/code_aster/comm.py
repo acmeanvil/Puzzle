@@ -23,10 +23,13 @@ from puzzle.adapters.common import (
     InputError,
     body_load,
     check_contacts,
+    check_dynamics,
     cylindrical_expressions,
+    frequency_list,
     globalize,
     initial_temperature,
     local_axes,
+    rayleigh,
     remote_load,
     remote_values,
     rigid_motion,
@@ -54,6 +57,7 @@ TABLES = {
     "plastic_strain_equivalent": 87,
     "buckling": 88,
     "beam_forces": 89,
+    "displacement_imag": 91,  # a harmonic response's imaginary part (ADR 0041)
 }
 FORMAT_R = "1PE18.10"
 
@@ -88,7 +92,11 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             "temperature to a structural study as a transfer (role load)."
         )
     thermal = solved == {"heat_transfer"}
-    allowed = ("stationary", "transient") if thermal else ("stationary", "modal", "buckling")
+    allowed = (
+        ("stationary", "transient")
+        if thermal
+        else ("stationary", "modal", "buckling", "transient", "frequency_domain")
+    )
     if step.type not in allowed:
         raise InputError(
             f"the Code_Aster adapter does not run {step.type} {sorted(solved)} steps yet"
@@ -347,7 +355,10 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             if not thermal and step.type == "stationary" and m.models.plasticity:
                 out.append(_traction(i, m))
                 traction = f", TRACTION=_F(SIGM=trac{i})"
-            out.append(f"mat{i} = DEFI_MATERIAU({_material(m, thermal, expansion)}{traction})")
+            damping = None if thermal else rayleigh(study)
+            out.append(
+                f"mat{i} = DEFI_MATERIAU({_material(m, thermal, expansion, damping)}{traction})"
+            )
         assignments.append(f"_F(GROUP_MA='{names[a.selection]}', MATER=mat{i})")
     for i, c in enumerate(fasteners, start=1):  # each bolt in its own material
         m = project.get(c.material, Material)
@@ -375,6 +386,12 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     else:
         extra = _pretension_loads(bolts, cuts)
         extra.update(_fastener_loads(fastener_ends, fasteners, names))
+        # In a transient step, loads following an amplitude get their own charge,
+        # multiplied by it (ADR 0041); the rest act from t = 0 at full value.
+        timed = [f for f in features if f.amplitude] if step.type == "transient" else []
+        if timed:
+            features = [f for f in features if not f.amplitude]
+            out += _timed_loads(project, timed, names, mesh)
         plain = _loads(features, names, mesh, thermal, ties, extra)
         if plain.endswith("(MODELE=model)"):  # everything is in loadf: no empty charge
             charges = []
@@ -392,6 +409,79 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         ]
     elif step.type == "buckling":
         out += _buckling(step, cara, charges, preload, names, mesh, ties)
+    elif step.type == "frequency_domain":  # harmonic response, direct (ADR 0041)
+        if step.settings.get("method", "direct") == "modal":
+            raise InputError(
+                "Code_Aster solves harmonic response directly here (method direct); "
+                "CalculiX superposes modes",
+                code="unsupported",
+            )
+        check_dynamics(step, "Code_Aster", modal=False)
+        freqs = ", ".join(f"{f:.12g}" for f in frequency_list(step))
+        damped = rayleigh(study) is not None
+        out += [
+            f"ASSEMBLAGE(MODELE=model, CHAM_MATER=mater, {cara}CHARGE=({', '.join(charges)},), "
+            "NUME_DDL=CO('numddl'),",
+            "           MATR_ASSE=(_F(MATRICE=CO('stiff'), OPTION='RIGI_MECA'),",
+            "                      _F(MATRICE=CO('mass'), OPTION='MASS_MECA'),"
+            + (
+                "\n                      _F(MATRICE=CO('damp'), OPTION='AMOR_MECA'),"
+                if damped
+                else ""
+            )
+            + "),",
+            "           VECT_ASSE=(_F(VECTEUR=CO('force'), OPTION='CHAR_MECA', "
+            f"CHARGE=({', '.join(charges)},)),))",
+            f"freqs = DEFI_LIST_REEL(VALE=({freqs},))",
+            "res = DYNA_VIBRA(TYPE_CALCUL='HARM', BASE_CALCUL='PHYS', MATR_MASS=mass, "
+            + ("MATR_AMOR=damp, " if damped else "")
+            + "MATR_RIGI=stiff, LIST_FREQ=freqs, EXCIT=_F(VECT_ASSE=force, COEF_MULT=1.0))",
+            # Tables take no complex values: each frequency's real and imaginary parts
+            # as two real results, the frequency in INST; the reader joins them.
+            "parts = {'REEL': [], 'IMAG': []}",
+            f"for f in ({freqs},):",
+            "    c = CREA_CHAMP(TYPE_CHAM='NOEU_DEPL_C', OPERATION='EXTR', RESULTAT=res, "
+            "NOM_CHAM='DEPL', FREQ=f)",
+            "    for part in parts:",
+            "        parts[part].append(_F(NOM_CHAM='DEPL', INST=f, CHAM_GD=CREA_CHAMP("
+            "TYPE_CHAM='NOEU_DEPL_R', OPERATION='C2R', CHAM_GD=c, PARTIE=part)))",
+            "real = CREA_RESU(OPERATION='AFFE', TYPE_RESU='EVOL_ELAS', AFFE=parts['REEL'])",
+            "imag = CREA_RESU(OPERATION='AFFE', TYPE_RESU='EVOL_ELAS', AFFE=parts['IMAG'])",
+            _table("real", "DEPL", "displacement"),
+            _table("imag", "DEPL", "displacement_imag"),
+        ]
+    elif step.type == "transient":  # structural dynamics (ADR 0041)
+        if step.settings.get("method", "direct") == "modal":
+            raise InputError(
+                "Code_Aster solves transients directly here (method direct); CalculiX "
+                "also superposes modes",
+                code="unsupported",
+            )
+        check_dynamics(step, "Code_Aster", modal=False)
+        dt, end, _ = time_settings(step)
+        scheme = (
+            f"SCHEMA='HHT', ALPHA={float(step.settings['hht_alpha']):.6g}"
+            if float(step.settings.get("hht_alpha", 0.0))
+            else "SCHEMA='NEWMARK'"  # average acceleration: no numerical damping
+        )
+        excit = [f"_F(CHARGE={c})" for c in charges] + [
+            f"_F(CHARGE=tload{k}, FONC_MULT=tamp{k})"
+            for k in range(1, 1 + len({f.amplitude for f in timed}))
+        ]
+        solids = any(b.dim == 3 for b in mesh.blocks)
+        out += [
+            f"times = DEFI_LIST_REEL(DEBUT=0.0, INTERVALLE=_F(JUSQU_A={end:.12g}, PAS={dt:.12g}))",
+            f"res = DYNA_NON_LINE(MODELE=model, CHAM_MATER=mater, {cara}"
+            f"EXCIT=({', '.join(excit)},), COMPORTEMENT=_F(RELATION='ELAS'), "
+            "INCREMENT=_F(LIST_INST=times), "
+            f"SCHEMA_TEMPS=_F({scheme}, FORMULATION='DEPLACEMENT'))",
+            "res = CALC_CHAMP(reuse=res, RESULTAT=res, "
+            + ("CONTRAINTE=('SIGM_NOEU',), " if solids else "")
+            + "FORCE=('REAC_NODA',))",
+            _table("res", "DEPL", "displacement"),
+            *([_table("res", "SIGM_NOEU", "stress")] if solids else []),
+            _table("res", "REAC_NODA", "reaction_force"),
+        ]
     elif step.type == "modal":
         n = int(step.settings.get("modes", 10))
         out += [
@@ -482,6 +572,8 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             if step.type == "modal"
             else {"displacement", "buckling"}
             if step.type == "buckling"
+            else {"displacement", "displacement_imag"}
+            if step.type == "frequency_domain"
             else {"displacement", "stress", "reaction_force", "beam_forces"}
             | ({"plastic_strain", "plastic_strain_equivalent"} if plastic else set())
         )
@@ -931,7 +1023,7 @@ def _traction(index: int, m: Material) -> str:
     )
 
 
-def _material(m: Material, thermal: bool, expansion: bool = False) -> str:
+def _material(m: Material, thermal: bool, expansion: bool = False, damping=None) -> str:
     p = {k: q.to_si() for k, q in m.properties.items()}
 
     def need(*keys: str) -> list[float]:
@@ -949,7 +1041,10 @@ def _material(m: Material, thermal: bool, expansion: bool = False) -> str:
     e, nu = need("youngs_modulus", "poissons_ratio")
     rho = f", RHO={p['density']:.12g}" if "density" in p else ""
     alpha = f", ALPHA={need('thermal_expansion')[0]:.12g}" if expansion else ""
-    return f"ELAS=_F(E={e:.12g}, NU={nu:.12g}{rho}{alpha})"
+    # Rayleigh damping C = a M + b K (ADR 0041): Code_Aster's AMOR_ALPHA multiplies the
+    # stiffness and AMOR_BETA the mass, the other way round from the usual names.
+    amor = f", AMOR_ALPHA={damping[1]:.12g}, AMOR_BETA={damping[0]:.12g}" if damping else ""
+    return f"ELAS=_F(E={e:.12g}, NU={nu:.12g}{rho}{alpha}{amor})"
 
 
 def _check_friction(contacts, features, mesh: Mesh) -> None:
@@ -1126,6 +1221,25 @@ def _remote_loads(features, names, mesh, project=None) -> list[str]:
     if imposed:
         call += f", DDL_IMPO=({', '.join(imposed)},)"
     return [*lines, call + ")"]
+
+
+def _timed_loads(project, features, names, mesh) -> list[str]:
+    """Structural loads following an amplitude (ADR 0041): one charge per amplitude,
+    `tload<k>` with its function `tamp<k>` (held constant outside its points)."""
+    from puzzle.model.schema import Amplitude
+
+    out, grouped = [], {}
+    for f in features:
+        grouped.setdefault(f.amplitude, []).append(f)
+    for k, (amplitude_id, members) in enumerate(grouped.items(), start=1):
+        points = project.get(amplitude_id, Amplitude).points
+        values = ", ".join(f"{t:.12g}, {v:.12g}" for t, v in points)
+        out.append(
+            f"tamp{k} = DEFI_FONCTION(NOM_PARA='INST', VALE=({values}), "
+            "PROL_GAUCHE='CONSTANT', PROL_DROITE='CONSTANT')"
+        )
+        out.append(_loads(members, names, mesh, False).replace("load = ", f"tload{k} = ", 1))
+    return out
 
 
 def _thermal_loads(project, features, names, mesh) -> list[str]:

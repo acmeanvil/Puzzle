@@ -125,6 +125,90 @@ def refuse_large_deflection(steps, solver: str) -> None:
         )
 
 
+def rayleigh(study) -> tuple[float, float] | None:
+    """Rayleigh damping (ADR 0041): C = α M + β K, from a structural transient or
+    harmonic step's `rayleigh_alpha` (1/s) and `rayleigh_beta` (s); None when no step
+    asks for it. One pair per study: solvers take it with the material."""
+    pairs = {
+        (float(s.settings.get("rayleigh_alpha", 0.0)), float(s.settings.get("rayleigh_beta", 0.0)))
+        for s in study.solve_steps()
+        if s.type in ("transient", "frequency_domain") and s.solves("solid_mechanics")
+    }
+    pairs.discard((0.0, 0.0))
+    if len(pairs) > 1:
+        raise InputError(
+            "the steps of one study must share their Rayleigh damping", code="unsupported"
+        )
+    return pairs.pop() if pairs else None
+
+
+def check_dynamics(step, solver: str, modal: bool) -> None:
+    """What a structural transient or harmonic step asks that this solver can't do here
+    (ADR 0041): refused with the reason, never ignored. `modal`: the step is solved by
+    modal superposition here."""
+    s = step.settings
+    if s.get("method", "direct") not in ("direct", "modal"):
+        raise InputError(f"method is direct or modal, not '{s['method']}'", code="invalid")
+    if "damping_ratio" in s and not modal:
+        raise InputError(
+            f"a modal damping ratio needs modal superposition: set method to modal, or give "
+            f"Rayleigh damping (rayleigh_alpha, rayleigh_beta) for {solver}'s direct solve",
+            code="unsupported",
+        )
+
+
+def frequency_list(step) -> list[float]:
+    """A harmonic step's frequencies in Hz (ADR 0041): `frequencies` as text ("50, 100,
+    200"), or `start_frequency` to `end_frequency` in `points` steps, `spacing` linear
+    or log."""
+    s = step.settings
+    if "frequencies" in s:
+        try:
+            values = [
+                float(f) for f in str(s["frequencies"]).replace(";", ",").split(",") if f.strip()
+            ]
+        except ValueError as exc:
+            raise InputError(
+                "frequencies: numbers in Hz, e.g. 50, 100, 200", code="invalid"
+            ) from exc
+    else:
+        missing = [k for k in ("start_frequency", "end_frequency") if k not in s]
+        if missing:
+            raise InputError(
+                f"a harmonic step needs {' and '.join(missing)} (Hz), or a frequencies list",
+                code="invalid",
+            )
+        lo, hi, n = float(s["start_frequency"]), float(s["end_frequency"]), int(s.get("points", 20))
+        if s.get("spacing", "linear") == "log":
+            if lo <= 0:
+                raise InputError("log spacing needs a start frequency above zero", code="invalid")
+            values = np.geomspace(lo, hi, n).tolist()
+        else:
+            values = np.linspace(lo, hi, n).tolist()
+    if not values or min(values) <= 0:
+        raise InputError("harmonic frequencies must be above zero", code="invalid")
+    return sorted(values)
+
+
+def harmonic_fields(name: str, ids, real, imag, components, location="node"):
+    """A complex field as three stored fields (ADR 0041): `<name>` drawn at the instant
+    the largest component peaks (so the deformed view shows the response, even at a
+    resonance where the real part is near zero), `<name>_amplitude` (|value| per
+    component) and `<name>_phase` (degrees)."""
+    from puzzle.results.model import Field
+
+    z = np.asarray(real, float) + 1j * np.asarray(imag, float)
+    peak = np.unravel_index(int(np.argmax(np.abs(z))), z.shape)
+    shown = np.real(z * np.exp(-1j * np.angle(z[peak]))) if z.size else np.real(z)
+    return [
+        Field(name, location, list(components), np.asarray(ids), shown),
+        Field(f"{name}_amplitude", location, list(components), np.asarray(ids), np.abs(z)),
+        Field(
+            f"{name}_phase", location, list(components), np.asarray(ids), np.degrees(np.angle(z))
+        ),
+    ]
+
+
 TIME_SCHEMES = ("backward_euler", "crank_nicolson", "bdf2", "theta")
 
 

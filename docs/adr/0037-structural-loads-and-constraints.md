@@ -1,6 +1,6 @@
 # 0037. Structural loads and constraints: body loads, remote loads, springs, couplings, local axes, amplitudes
 
-- Status: Accepted (2026-10-23); built; structural amplitudes come with ADR 0041
+- Status: Accepted (2026-10-23); built; structural amplitudes built with ADR 0041 (2026-10-25)
 - Date: 2026-10-23
 
 ## Context

@@ -37,6 +37,7 @@ from puzzle.adapters.common import (
     globalize,
     initial_temperature,
     nodal_traction,
+    rayleigh,
     remote_load,
     remote_values,
     rigid_motion,
@@ -149,7 +150,9 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
             out.append(f"*ELSET, ELSET={set_name('E', group.name)}")
             out += _chunks(ids)
 
-    out += _materials(project, comp, mesh, expansion=thermal_load is not None)
+    out += _materials(
+        project, comp, mesh, expansion=thermal_load is not None, damping=rayleigh(study)
+    )
     out += _amplitudes(project, comp)
     out += _transforms(project, comp, mesh)
     rigid = _rigid_nodes(comp, mesh)
@@ -186,7 +189,7 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
         # Large-deformation static step: its stress stiffens the steps after it.
         lines = _step(number, step, comp, mesh, faces, physics_types, thermal_load, yields, project)
         first = lines[0] if "NLGEOM" in lines[0] else lines[0] + ", NLGEOM"
-        out += [first, *lines[1:]]
+        out += [STEP_TAG.format(0), first, *lines[1:]]
     preloads = _preload_steps(solve_steps)
     for number, step in enumerate(solve_steps, start=len(prestress) + 1):
         index = number - len(prestress)  # the study's own step number (Feature.steps)
@@ -209,8 +212,46 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
             lines = [lines[0] + ", PERTURBATION", *lines[1:]]
         if index in preloads and "NLGEOM" not in lines[0]:  # a buckling step's preload
             lines = [lines[0].replace("*STEP", "*STEP, NLGEOM", 1), *lines[1:]]
-        out += lines
+        if _modal_based(step):  # its modes first, stored for the superposition (ADR 0041)
+            modes = SolveStep(
+                type="modal",
+                physics=["solid_mechanics"],
+                settings={"modes": step.settings.get("modes", 20)},
+            )
+            first = _step(number, modes, comp, mesh, faces, physics_types, None, False, project)
+            first = [ln for ln in first if not ln.startswith(("*NODE FILE", "*EL FILE", "U"))]
+            out += [STEP_TAG.format(0), first[0], "*FREQUENCY, STORAGE=YES", *first[2:]]
+        if step.type == "frequency_domain" and "frequencies" in step.settings:
+            # Exactly the frequencies asked for: one steady-state step each.
+            from puzzle.adapters.common import frequency_list
+
+            rest = {k: v for k, v in step.settings.items() if k != "frequencies"}
+            for f in frequency_list(step):
+                one = step.model_copy(
+                    update={"settings": rest | {"start_frequency": f, "end_frequency": f}}
+                )
+                out.append(STEP_TAG.format(index))
+                out += _step(
+                    number, one, comp, mesh, faces, physics_types, thermal_load, yields,
+                    project, index=index,
+                )  # fmt: skip
+            continue
+        out += [STEP_TAG.format(index), *lines]
     return "\n".join(out) + "\n"
+
+
+# Before each *STEP: which of the study's solve steps it is (0: a helper, such as a
+# replayed prestress step or the modes a superposition reads). CalculiX numbers every
+# *STEP; the reader maps its results back with `step_owners`.
+STEP_TAG = "** puzzle step {}"
+
+
+def step_owners(deck: str) -> dict[int, int]:
+    """CalculiX's step number -> the study's solve step (0 for helpers), from the tags."""
+    owners = [
+        int(line.split()[-1]) for line in deck.splitlines() if line.startswith("** puzzle step")
+    ]
+    return {n: k for n, k in enumerate(owners, start=1)}
 
 
 def prestress_step_count(project: Project, study: Study, inputs=()) -> int:
@@ -323,7 +364,9 @@ def _beam_nodes(mesh: Mesh) -> set[int]:
     return mesh.beam_nodes() | mesh.shell_nodes()
 
 
-def _materials(project: Project, comp: Component, mesh: Mesh, expansion: bool = False) -> list[str]:
+def _materials(
+    project: Project, comp: Component, mesh: Mesh, expansion: bool = False, damping=None
+) -> list[str]:
     out: list[str] = []
     for i, assignment in enumerate(comp.materials, start=1):
         material = project.get(assignment.material, Material)
@@ -336,6 +379,8 @@ def _materials(project: Project, comp: Component, mesh: Mesh, expansion: bool = 
             )
         name = f"M{i}"
         out += [f"*MATERIAL, NAME={name}"] + _material_cards(material, comp, expansion)
+        if damping is not None:  # Rayleigh damping for structural dynamics (ADR 0041)
+            out.append(f"*DAMPING, ALPHA={damping[0]:.10g}, BETA={damping[1]:.10g}")
         if group.dim == 3:
             out.append(
                 f"*SOLID SECTION, ELSET={set_name('E', assignment.selection)}, MATERIAL={name}"
@@ -468,14 +513,31 @@ def _step(
             "modal": ["*FREQUENCY", str(int(settings.get("modes", 10)))],
             # ADR 0028: load factors on this step's loads, and their mode shapes.
             "buckling": ["*BUCKLE", str(int(settings.get("modes", 4)))],
-            "transient": ["*DYNAMIC"] + [f"{setting('time_step'):.10g}, {setting('end_time'):.10g}"]
+            # ADR 0041: Newmark with the given increment (DIRECT); ALPHA 0 (CalculiX's
+            # default -0.05 damps numerically) unless an HHT alpha is asked for.
+            "transient": [
+                f"*DYNAMIC, DIRECT, ALPHA={float(settings.get('hht_alpha', 0.0)):.6g}",
+                f"{setting('time_step'):.10g}, {setting('end_time'):.10g}",
+            ]
             if step.type == "transient"
             else [],
+            # ADR 0041: harmonic response by modal superposition (CalculiX has no direct
+            # steady-state dynamics); one frequency per data line pair.
+            "frequency_domain": _steady_state(step) if step.type == "frequency_domain" else [],
         }.get(step.type)
+        if step.type in ("transient", "frequency_domain"):  # ADR 0041
+            from puzzle.adapters.common import check_dynamics
+
+            check_dynamics(step, "CalculiX", modal=_modal_based(step))
+        if step.type == "transient" and settings.get("method") == "modal":
+            procedure = [  # ADR 0041: modal superposition over the modes stored before
+                "*MODAL DYNAMIC",
+                f"{setting('time_step'):.10g}, {setting('end_time'):.10g}",
+            ] + _modal_damping(step)
         # Reaction forces (RF) let a study sum the support or contact loads.
         outputs = (
             ["*NODE FILE", "U"]
-            if step.type in ("modal", "buckling")
+            if step.type in ("modal", "buckling") or _modal_based(step)
             else ["*NODE FILE", "U, RF", "*EL FILE", "S, E" + (", PEEQ" if yields else "")]
         )
         if mesh.structural_blocks():  # beams and shells: results at their own nodes
@@ -594,6 +656,39 @@ def _step(
             for n, t in zip(thermal_load.ids, thermal_load.values[:, 0], strict=True)
         ]
     return out + outputs + ["*END STEP"]
+
+
+def _modal_based(step: SolveStep) -> bool:
+    """A step CalculiX solves over modes (ADR 0041): harmonic, or modal transient."""
+    return step.solves("solid_mechanics") and (
+        step.type == "frequency_domain"
+        or (step.type == "transient" and step.settings.get("method") == "modal")
+    )
+
+
+def _steady_state(step: SolveStep) -> list[str]:
+    from puzzle.adapters.common import frequency_list
+
+    freqs = frequency_list(step)
+    # lower, upper, points per interval between eigenfrequencies, bias. A list of
+    # frequencies comes as one step each (lower = upper), as write_inp splits it.
+    points = 2 if len(freqs) == 1 else int(step.settings.get("points", 20))
+    return [
+        "*STEADY STATE DYNAMICS",
+        f"{min(freqs):.10g}, {max(freqs):.10g}, {points}, 1.",
+    ] + _modal_damping(step)
+
+
+def _modal_damping(step: SolveStep) -> list[str]:
+    """*MODAL DAMPING: a ratio for every mode, or Rayleigh's a and b (ADR 0041)."""
+    s = step.settings
+    if "damping_ratio" in s:
+        modes = int(s.get("modes", 20))
+        return ["*MODAL DAMPING", f"1, {modes}, {float(s['damping_ratio']):.10g}"]
+    a, b = float(s.get("rayleigh_alpha", 0.0)), float(s.get("rayleigh_beta", 0.0))
+    if a or b:
+        return ["*MODAL DAMPING, RAYLEIGH", f", , {a:.10g}, {b:.10g}"]
+    return []
 
 
 def _preload_steps(steps) -> dict[int, int]:

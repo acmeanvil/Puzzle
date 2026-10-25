@@ -24,9 +24,10 @@ def test_supported_study_passes_check(bracket):
 
 def test_unsupported_step_is_reported_per_physics(bracket):
     static = _study(bracket, "Static")
-    static.steps.append(SolveStep(type="frequency_domain", physics=["solid_mechanics"]))
+    # Harmonic structural steps are built (ADR 0041); harmonic heat is not.
+    static.steps.append(SolveStep(type="frequency_domain", physics=["heat_transfer"]))
     assert CalculixAdapter().check(bracket, static) == [
-        "calculix does not support frequency_domain solid_mechanics"
+        "calculix does not support frequency_domain heat_transfer"
     ]
 
 
