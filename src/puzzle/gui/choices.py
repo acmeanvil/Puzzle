@@ -27,6 +27,7 @@ from pydantic import BaseModel
 from puzzle.model.schema import (
     Amplitude,
     Component,
+    ConstructionGeometry,
     CoordinateSystem,
     FatigueBlock,
     FatigueSettings,
@@ -49,6 +50,7 @@ REFERENCES = {
     "owner": Component,
     "amplitude": Amplitude,
     "axes": CoordinateSystem,
+    "construction": ConstructionGeometry,
 }
 NONE = "(none)"
 # Words kept as written when a value is turned into a label.
@@ -61,6 +63,9 @@ WORDS = {
     "2d": "2D",
     "dg": "DG",
     "hht": "HHT",
+    "xy": "XY",
+    "yz": "YZ",
+    "zx": "ZX",
 }
 SETTINGS = {
     "time_scheme": ("backward_euler", "crank_nicolson", "bdf2", "theta"),

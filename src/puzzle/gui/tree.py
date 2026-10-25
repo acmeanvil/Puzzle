@@ -11,6 +11,7 @@ from puzzle.gui.choices import label, solver_label
 from puzzle.model.schema import (
     Amplitude,
     Component,
+    ConstructionGeometry,
     CoordinateSystem,
     Geometry,
     Material,
@@ -55,6 +56,7 @@ SECTIONS = [
     ("Transfers", Transfer),
     ("Amplitudes", Amplitude),
     ("Coordinate systems", CoordinateSystem),
+    ("Construction geometry", ConstructionGeometry),
     ("Solver presets", SettingsPreset),
 ]
 

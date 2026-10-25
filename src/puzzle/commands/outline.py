@@ -9,6 +9,7 @@ from __future__ import annotations
 from puzzle.model.schema import (
     Amplitude,
     Component,
+    ConstructionGeometry,
     CoordinateSystem,
     Geometry,
     Material,
@@ -126,6 +127,14 @@ def outline(project: Project, *, ids: bool = False, runs=None) -> str:
             else f"x {a.x_axis}, xy {a.xy_direction} at {a.origin}"
         )
         lines.append(head("Axes", a) + f": {a.type} {where}")
+    for c in project.of_type(ConstructionGeometry):  # ADR 0046
+        if c.type == "path":
+            what = f"path {xyz(c.start)} to {xyz(c.end)}"
+        elif c.axes is not None:
+            what = f"plane {c.plane} of axes {names.get(c.axes, '?')}, offset {c.offset:g} m"
+        else:
+            what = f"plane through {xyz(c.origin)}, normal {tuple(c.normal)}"
+        lines.append(head("Construction", c) + f": {what}")
     for t in project.of_type(Transfer):
         lines.append(
             head("Transfer", t)
@@ -164,9 +173,6 @@ def outline(project: Project, *, ids: bool = False, runs=None) -> str:
     for pr in project.of_type(ResultProbe):
         from puzzle.post.quantities import label_of
 
-        def xyz(point) -> str:
-            return "(" + ", ".join(f"{c:g}" for c in point) + ") m"
-
         of = names.get(pr.source, "?")
         if pr.type == "reaction":  # ADR 0042 result tools
             about = f", moment about {xyz(pr.about)}" if pr.about else ""
@@ -174,15 +180,26 @@ def outline(project: Project, *, ids: bool = False, runs=None) -> str:
         elif pr.type == "selection":
             what = f"{pr.reduction} of {label_of(pr.quantity)} on {pr.selection} of {of}"
         elif pr.type == "path":
+            line = (
+                f"construction path {names.get(pr.construction, '?')}"
+                if pr.construction
+                else f"{xyz(pr.point)} to {xyz(pr.end)}"
+            )
+            what = f"{label_of(pr.quantity)} of {of} along {line}, {pr.samples} points"
+        elif pr.type in ("plane", "section"):
+            plane = names.get(pr.construction, "?")
             what = (
-                f"{label_of(pr.quantity)} of {of} along {xyz(pr.point)} to {xyz(pr.end)}, "
-                f"{pr.samples} points"
+                f"force and moment across plane {plane} of {of}"
+                if pr.type == "section"
+                else f"{pr.reduction} of {label_of(pr.quantity)} on plane {plane} of {of}"
             )
         elif pr.type == "linearized":
-            what = (
-                f"stress linearization ({pr.equivalent}) of {of} from {xyz(pr.point)} to "
-                f"{xyz(pr.end)}"
+            line = (
+                f"along construction path {names.get(pr.construction, '?')}"
+                if pr.construction
+                else f"from {xyz(pr.point)} to {xyz(pr.end)}"
             )
+            what = f"stress linearization ({pr.equivalent}) of {of} {line}"
         else:
             what = f"{label_of(pr.quantity)} of {of} at {xyz(pr.point)}"
         lines.append(head("Probe", pr) + f": {what}")
@@ -199,3 +216,7 @@ def _q(q: Quantity) -> str:
 
 def _values(values: dict[str, Quantity]) -> str:
     return ", ".join(f"{k}={_q(v)}" for k, v in values.items())
+
+
+def xyz(point) -> str:
+    return "(" + ", ".join(f"{c:g}" for c in point) + ") m"

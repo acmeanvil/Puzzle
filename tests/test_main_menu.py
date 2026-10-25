@@ -16,7 +16,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
 
-from PySide6.QtWidgets import QApplication, QMenu, QToolButton  # noqa: E402
+from PySide6.QtWidgets import QApplication, QMenu  # noqa: E402
 
 from puzzle.gui import main_menu, menus  # noqa: E402
 from puzzle.gui.tree import Node  # noqa: E402
@@ -71,7 +71,8 @@ def test_menu_titles(window):
 def test_every_ribbon_button_and_section_item_is_in_the_menus(window):
     have = texts(window)
     ribbons = (window.workbench.ribbon, window.mesh_bench.ribbon, window.results_ribbon)
-    buttons = {b.text() for r in ribbons for b in r.findChildren(QToolButton)}
+    # The ribbons' own tools: not the drop-downs a narrow view folds groups into.
+    buttons = {b.text() for r in ribbons for g in r.groups for b in g[2]}
     missing = {b for b in buttons if b not in have and f"{b}…" not in have}
     assert not missing, missing
     for section in ("Geometry", "Parameters", "Materials", "Meshes", "Components",

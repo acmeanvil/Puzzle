@@ -76,6 +76,11 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         elif node.label == "Coordinate systems":
             add("New Cartesian axes", lambda: new_axes(window, "cartesian"))
             add("New cylindrical axes", lambda: new_axes(window, "cylindrical"))
+        elif node.label == "Construction geometry":  # ADR 0046
+            from puzzle.gui import construction
+
+            add("New path…", lambda: construction.new_path(window))
+            add("New plane…", lambda: construction.new_plane(window))
         elif node.label == "Results":
             from puzzle.gui import result_tools as tools
 
@@ -85,6 +90,8 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
                 ("Result on a selection…", tools.add_selection_result),
                 ("Path…", tools.add_path),
                 ("Linearized stress…", tools.add_linearized),
+                ("Result on a plane…", tools.add_plane_result),
+                ("Section force…", tools.add_section_force),
             ):
                 tool.addAction(text).triggered.connect(lambda _=False, s=slot: s(window))
             add("New combination…", lambda: window.new_derived("linear"))
@@ -94,6 +101,10 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         add("New part…", lambda: new_part(window))
         add("New amplitude…", lambda: edit_amplitude(window))
         add("New coordinate system", lambda: new_axes(window, "cartesian"))
+        from puzzle.gui import construction
+
+        add("New construction path…", lambda: construction.new_path(window))
+        add("New construction plane…", lambda: construction.new_plane(window))
         add("Import geometry…", lambda: import_step_file(window))
         add("New parameter set", lambda: new_parameter_set(window))
         add("New mesh recipe", lambda: new_mesh(window))

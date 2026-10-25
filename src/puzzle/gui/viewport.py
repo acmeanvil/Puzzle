@@ -1172,6 +1172,27 @@ class Viewport(QWidget):
         self._draw_marks()
         self.view.refresh()
 
+    def show_construction(self, kind: str, a, b, size: float) -> None:
+        """A construction path (a line from `a` to `b`) or plane (through `a`, normal
+        `b`, `size` across) over the scene, until the next one (ADR 0046)."""
+        self.shown["construction"] = kind
+        a, b = np.asarray(a, float), np.asarray(b, float)
+        self.pins = [(a, "Start", "#ffcc33"), (b, "End", "#ffcc33")] if kind == "path" else []
+        if self.plotter is not None:
+            import pyvista as pv
+
+            if kind == "path":
+                shape = pv.Line(a, b)
+                self.plotter.add_mesh(shape, color="#ffcc33", line_width=4,
+                                      name="puzzle-construction", reset_camera=False)  # fmt: skip
+            else:
+                shape = pv.Plane(center=a, direction=b, i_size=size, j_size=size)
+                self.plotter.add_mesh(shape, color="#ffcc33", opacity=0.35, show_edges=True,
+                                      name="puzzle-construction", reset_camera=False)  # fmt: skip
+        self._draw_marks()
+        if self.plotter is not None:
+            self.view.refresh()
+
     def mark_point(self, xyz, text: str) -> None:
         """A labelled point pinned in the view until the next scene (the Mesh tab's
         worst elements)."""

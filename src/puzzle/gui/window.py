@@ -44,7 +44,14 @@ from puzzle.gui.tasks import Task, start
 from puzzle.gui.tree import ROLE, ModelTree, Node
 from puzzle.gui.viewport import Viewport
 from puzzle.mesh.mesh import Mesh
-from puzzle.model.schema import Component, Geometry, ResultDefinition, ResultProbe, Study
+from puzzle.model.schema import (
+    Component,
+    ConstructionGeometry,
+    Geometry,
+    ResultDefinition,
+    ResultProbe,
+    Study,
+)
 from puzzle.project.layout import HISTORY, RESULTS_DIR, WORK_DIR
 from puzzle.results.model import Results
 from puzzle.results.store import ResultStore
@@ -1049,6 +1056,10 @@ class MainWindow(QMainWindow):
             return
         self.set_context("model")
         comp = self._component_of(node)
+        built = obj if isinstance(obj, ConstructionGeometry) else None
+        if comp is None and built is not None:  # drawn over the first component
+            comps = s.project.of_type(Component)
+            comp = comps[0] if comps else None
         if comp is None:
             return
         mesh = self.meshes.get(str(comp.id))
@@ -1073,6 +1084,18 @@ class MainWindow(QMainWindow):
         self.viewport.boundaries = self.mesh_boundaries.get(str(comp.id), {})
         self.viewport.vertices = self.mesh_vertices.get(str(comp.id), {})
         self.viewport.show_mesh(mesh, highlight if highlight in mesh.groups else None, entities)
+        if built is not None:  # a construction path or plane (ADR 0046) over the model
+            import numpy as np
+
+            a, b = built.frame(s.project)
+            # A plane wider than the model is across it, and never lost inside a slender
+            # part: at least a quarter of the model's size.
+            size = 0.0
+            if built.type == "plane":
+                across = np.ptp(mesh.coords - np.outer(mesh.coords @ b, b), axis=0).max()
+                whole = np.linalg.norm(np.ptp(mesh.coords, axis=0))
+                size = float(max(1.6 * across, 0.25 * whole))
+            self.viewport.show_construction(built.type, a, b, size)
         self._show_symbols(comp, mesh, node)
 
     # --- the Geometry tab (ADR 0017) --------------------------------------------------
@@ -1508,8 +1531,13 @@ class MainWindow(QMainWindow):
             return
         if probe.type != "point":  # result tools (ADR 0042)
             from puzzle.gui.result_tools import rows
+            from puzzle.post.probes import placed
 
-            self.properties.show_text(rows(self, probe, found))
+            shown = rows(self, placed(self.session.project, probe), found)
+            built = self.session.project.objects.get(probe.construction)
+            if built is not None and probe.type in ("path", "linearized"):
+                shown = {"Along": built.name} | shown
+            self.properties.show_text(shown)
             return
         import numpy as np
 
@@ -1530,6 +1558,19 @@ class MainWindow(QMainWindow):
 
     def _show_kept_probe(self, probe) -> None:
         """Its source's result, with the probe marked, and its value in Properties."""
+        from puzzle.post.cuts import Cut
+        from puzzle.post.probes import placed
+
+        try:
+            at = placed(self.session.project, probe)  # its construction's line or plane
+        except PuzzleError as exc:
+            self.report(exc)
+            at = probe
+        # A plane tool shows the result cut at its plane; leaving it removes that cut.
+        if probe.type in ("plane", "section") and at.point is not None:
+            self.viewport.cut = Cut(origin=tuple(at.point), normal=tuple(at.end))
+        elif self.viewport.cut is not None and self.viewport.cut.origin is not None:
+            self.viewport.cut = None
         src = self.session.project.objects.get(probe.source)
         if isinstance(src, ResultDefinition):
             self.show_derived(src, probe.quantity)
@@ -1543,7 +1584,7 @@ class MainWindow(QMainWindow):
             except PuzzleError as exc:
                 self.report(exc)
         elif self.viewport.result_state is not None and probe.type in ("path", "linearized"):
-            self.viewport.mark_point(probe.point, "Path start")
+            self.viewport.mark_point(at.point, "Path start")
         self.show_probe(probe)
         if probe.type in ("path", "linearized"):  # plotted against the distance (Plots)
             self.plots.show_path(probe)

@@ -50,6 +50,22 @@ def _shape(*shapes: str):
 
 # Fields that only mean something in one mode of their object: (is this the object,
 # does the field apply). A field that doesn't apply isn't shown (ADR 0029).
+def _is_construction(d) -> bool:
+    return {"start", "end", "origin", "normal", "offset"} <= set(d)
+
+
+def _built(kind: str, by_axes: bool | None = None):
+    """A construction geometry's field (ADR 0046): for paths or planes, and for a plane
+    placed by a point (by_axes False) or by a coordinate system (True)."""
+
+    def rule(d) -> bool:
+        if d.get("type") != kind:
+            return False
+        return by_axes is None or (d.get("axes") is not None) == by_axes
+
+    return rule
+
+
 APPLIES = {
     "source": (_is_geometry, lambda d: d.get("source") is not None),
     "source_unit": (_is_geometry, lambda d: d.get("source") is not None),
@@ -61,9 +77,22 @@ APPLIES = {
     "diameter": (_is_section, _shape("circle", "tube")),
     "thickness": (_is_section, _shape("tube", "box")),
 }
+# Construction geometry: a path's ends, or a plane's placing. Keyed (owner check, key):
+# these names are common, so their rules are looked up only for construction objects.
+BUILT = {
+    "start": _built("path"),
+    "end": _built("path"),
+    "origin": _built("plane", by_axes=False),
+    "normal": _built("plane", by_axes=False),
+    "axes": _built("plane"),
+    "plane": _built("plane", by_axes=True),
+    "offset": _built("plane", by_axes=True),
+}
 
 
 def applies(owner: Any, key: Any) -> bool:
+    if isinstance(owner, dict) and key in BUILT and _is_construction(owner):
+        return BUILT[key](owner)
     rule = APPLIES.get(key) if isinstance(owner, dict) else None
     return rule is None or not rule[0](owner) or rule[1](owner)
 

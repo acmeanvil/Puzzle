@@ -196,6 +196,13 @@ def _project(window, menu: QMenu) -> None:
     axes = _sub(menu, "New coordinate system")
     _add(axes, "Cartesian axes", lambda: menus.new_axes(window, "cartesian"))
     _add(axes, "Cylindrical axes", lambda: menus.new_axes(window, "cylindrical"))
+    from puzzle.gui import construction
+
+    built = _sub(menu, "New construction geometry")
+    _add(built, "Path…", lambda: construction.new_path(window),
+         "A straight line for the Path and Linearized stress tools")  # fmt: skip
+    _add(built, "Plane…", lambda: construction.new_plane(window),
+         "A plane for a result over it, or the force across it")  # fmt: skip
     menu.addSeparator()
     menu.addAction(a["settings"])
 
@@ -405,6 +412,10 @@ def _results(window, menu: QMenu) -> None:
         lambda: tools.add_linearized(window),
         "Membrane, bending and peak stress through a wall (ASME VIII-2)",
     )
+    _add(menu, "Result on a plane…", lambda: tools.add_plane_result(window),
+         "A result's maximum, minimum, average or integral over a plane's cut")  # fmt: skip
+    _add(menu, "Section force…", lambda: tools.add_section_force(window),
+         "The force and moment carried across a plane")  # fmt: skip
     menu.addSeparator()
     _add(menu, "Section cut", ribbon.cut, "Cut the model by a plane to see inside")
     _add(menu, "Animate", ribbon.animate, "Play the deformation, or the steps")

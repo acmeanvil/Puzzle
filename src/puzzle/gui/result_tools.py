@@ -285,15 +285,17 @@ def add_path(window):
     start, end = default_path(window, choices[0][1])
 
     def check(v) -> str | None:
-        a, b = _point(v.get("start", ""), per_metre), _point(v.get("end", ""), per_metre)
-        if a is None or b is None:
-            return "Type each end as three numbers: x, y, z"
-        if np.allclose(a, b):
-            return "The two ends are the same point"
+        if not v.get("along"):
+            a, b = _point(v.get("start", ""), per_metre), _point(v.get("end", ""), per_metre)
+            if a is None or b is None:
+                return "Type each end as three numbers: x, y, z"
+            if np.allclose(a, b):
+                return "The two ends are the same point"
         if not v.get("samples", "").isdigit() or not 2 <= int(v["samples"]) <= 10000:
             return "Points along it: a whole number from 2 to 10000"
         return None if v.get("name") else "Give it a name"
 
+    typed = lambda v: not v.get("along")  # noqa: E731
     asks = [
         Ask("source", "Results of", choices=choices),
         Ask(
@@ -302,8 +304,21 @@ def add_path(window):
             choices=lambda v: quantity_choices(window, v.get("source")),
             default=shown_key,
         ),
-        Ask("start", f"From (x, y, z in {unit})", kind="text", default=_shown(start, per_metre)),
-        Ask("end", f"To (x, y, z in {unit})", kind="text", default=_shown(end, per_metre)),
+        Ask("along", "Along", choices=_along(window, "path")),
+        Ask(
+            "start",
+            f"From (x, y, z in {unit})",
+            kind="text",
+            default=_shown(start, per_metre),
+            shown=typed,
+        ),  # fmt: skip
+        Ask(
+            "end",
+            f"To (x, y, z in {unit})",
+            kind="text",
+            default=_shown(end, per_metre),
+            shown=typed,
+        ),  # fmt: skip
         Ask("samples", "Points along it", kind="text", default="50"),
         Ask("name", "Name", kind="text", follow=lambda v: f"Path: {_label(v.get('quantity'))}"),
     ]
@@ -323,8 +338,7 @@ def add_path(window):
             "source": got["source"],
             "type": "path",
             "quantity": got["quantity"],
-            "point": list(_point(got["start"], per_metre)),
-            "end": list(_point(got["end"], per_metre)),
+            **_line(got, per_metre),
             "samples": int(got["samples"]),
         },
     )
@@ -358,19 +372,33 @@ def add_linearized(window):
     start, end = default_wall(window, choices[0][1])
 
     def check(v) -> str | None:
-        a, b = _point(v.get("start", ""), per_metre), _point(v.get("end", ""), per_metre)
-        if a is None or b is None:
-            return "Type each end as three numbers: x, y, z"
-        if np.allclose(a, b):
-            return "The two ends are the same point"
+        if not v.get("along"):
+            a, b = _point(v.get("start", ""), per_metre), _point(v.get("end", ""), per_metre)
+            if a is None or b is None:
+                return "Type each end as three numbers: x, y, z"
+            if np.allclose(a, b):
+                return "The two ends are the same point"
         if not v.get("samples", "").isdigit() or not 3 <= int(v["samples"]) <= 10000:
             return "Points through the wall: a whole number from 3 to 10000"
         return None if v.get("name") else "Give it a name"
 
     asks = [
         Ask("source", "Results of", choices=choices),
-        Ask("start", f"From (x, y, z in {unit})", kind="text", default=_shown(start, per_metre)),
-        Ask("end", f"To (x, y, z in {unit})", kind="text", default=_shown(end, per_metre)),
+        Ask("along", "Along", choices=_along(window, "path")),
+        Ask(
+            "start",
+            f"From (x, y, z in {unit})",
+            kind="text",
+            default=_shown(start, per_metre),
+            shown=lambda v: not v.get("along"),
+        ),  # fmt: skip
+        Ask(
+            "end",
+            f"To (x, y, z in {unit})",
+            kind="text",
+            default=_shown(end, per_metre),
+            shown=lambda v: not v.get("along"),
+        ),  # fmt: skip
         Ask("equivalent", "Equivalent stress", choices=EQUIVALENTS),
         Ask("samples", "Points through the wall", kind="text", default="47"),
         Ask("name", "Name", kind="text", default="Linearized stress"),
@@ -392,12 +420,120 @@ def add_linearized(window):
             "name": _unique(window, got["name"]),
             "source": got["source"],
             "type": "linearized",
-            "point": list(_point(got["start"], per_metre)),
-            "end": list(_point(got["end"], per_metre)),
+            **_line(got, per_metre),
             "samples": int(got["samples"]),
             "equivalent": got["equivalent"],
         },
     )
+
+
+def _along(window, kind: str) -> list[tuple[str, str]]:
+    """A path tool's line: typed in the form, or a construction path (ADR 0046)."""
+    from puzzle.gui.construction import construction_choices
+
+    return [("A line typed here", "")] + [
+        (f"Construction path: {name}", value) for name, value in construction_choices(window, kind)
+    ]
+
+
+def _line(got: dict, per_metre: float) -> dict:
+    if got.get("along"):
+        return {"construction": got["along"]}
+    return {"point": list(_point(got["start"], per_metre)),
+            "end": list(_point(got["end"], per_metre))}  # fmt: skip
+
+
+def _planes(window) -> list[tuple[str, str]] | None:
+    """The construction planes, or None after telling the user how to make one."""
+    from puzzle.gui.construction import construction_choices
+
+    if _no_runs(window):
+        return None
+    planes = construction_choices(window, "plane")
+    if not planes:
+        window.statusBar().showMessage(
+            "Make a plane first: Construction geometry → New plane… (Project menu, or the "
+            "project's right-click menu)",
+            10000,
+        )
+    return planes or None
+
+
+def add_plane_result(window):
+    """A result over a construction plane's cut: maximum, minimum, average or integral
+    (Ansys's results scoped to a Surface)."""
+    planes = _planes(window)
+    if planes is None:
+        return None
+    shown_key = window.results_bar.field.currentData() if window.result else None
+    names = dict((v, n) for n, v in planes)
+    asks = [
+        Ask("source", "Results of", choices=sources(window)),
+        Ask(
+            "quantity",
+            "Result",
+            choices=lambda v: quantity_choices(window, v.get("source")),
+            default=shown_key,
+        ),  # fmt: skip
+        Ask("plane", "On the plane", choices=planes),
+        Ask("reduction", "Value", choices=REDUCTIONS),
+        Ask(
+            "name",
+            "Name",
+            kind="text",
+            follow=lambda v: (
+                f"{_label(v.get('quantity')).capitalize()} on {names.get(v.get('plane'), '')}"
+            ),
+        ),  # fmt: skip
+    ]
+    got = window.ask_form(
+        "Result on a plane",
+        asks,
+        intro="A result over the cut the plane makes through the model. Shown, the model "
+        "is cut at the plane so you see the values on it.",
+        check=lambda v: (
+            None if v.get("quantity") and v.get("name") else "Choose a result, and give it a name"
+        ),  # fmt: skip
+    )
+    if got is None:
+        return None
+    return _create(window, {
+        "name": _unique(window, got["name"]), "source": got["source"], "type": "plane",
+        "quantity": got["quantity"], "construction": got["plane"],
+        "reduction": got["reduction"],
+    })  # fmt: skip
+
+
+def add_section_force(window):
+    """The force and moment carried across a construction plane (Ansys's Force and
+    Moment Reaction on a Surface): the stress's traction summed over the cut."""
+    planes = _planes(window)
+    if planes is None:
+        return None
+    names = dict((v, n) for n, v in planes)
+    got = window.ask_form(
+        "Section force",
+        [
+            Ask("source", "Results of", choices=sources(window)),
+            Ask("plane", "Across the plane", choices=planes),
+            Ask(
+                "name",
+                "Name",
+                kind="text",
+                follow=lambda v: f"Section force at {names.get(v.get('plane'), '')}",
+            ),  # fmt: skip
+        ],
+        intro="The force and moment that the side the plane faces passes on to the rest, "
+        "from the stress over the cut (moment about the cut's centroid). Across a beam, "
+        "they are its shear force, axial force and bending moment there.",
+        check=lambda v: None if v.get("name") else "Give it a name",
+    )
+    if got is None:
+        return None
+    return _create(window, {
+        "name": _unique(window, got["name"]), "source": got["source"], "type": "section",
+        "construction": got["plane"],
+    })  # fmt: skip
 
 
 def _label(key) -> str:
@@ -420,6 +556,8 @@ def title(probe: ResultProbe) -> str:
         "reaction": ("reaction", "reaction"),
         "path": ("path", "path"),
         "linearized": ("linearized stress", "lineariz"),
+        "plane": ("on a plane", " on "),
+        "section": ("section force", "section"),
     }[probe.type]
     return probe.name if hint in probe.name.lower() else f"{probe.name} · {word}"
 
@@ -464,7 +602,38 @@ def rows(window, probe: ResultProbe, found: dict) -> dict[str, str]:
         return out
     if probe.type == "linearized":
         return out | linearized_rows(probe, found)
+    if probe.type == "section":
+        built = window.session.project.objects.get(probe.construction)
+        out["Across"] = built.name if built is not None else "?"
+        for axis in "xyz":
+            out[f"Force {axis.upper()}"] = _value(found["components"][axis], "force")
+        out["Force (total)"] = _value(found["value"], "force")
+        out["Normal force"] = _value(found["normal_force"], "force")
+        out["Shear force"] = _value(found["shear_force"], "force")
+        out["Moment about"] = _position(found["about"]) + " (the cut's centroid)"
+        for axis in "xyz":
+            out[f"Moment {axis.upper()}"] = _moment(found["moment"][axis])
+        out["Moment (total)"] = _moment(found["moment_total"])
+        out["Cut area"] = f"{found['area'] * _per_metre() ** 2:.5g} {_unit()}²"
+        out["Note"] = (
+            "What the side the plane faces passes on to the rest; the cut runs through "
+            "the whole model, so place it where it crosses only the part you want."
+        )
+        return out
     out["Reads"] = found["label"]
+    if probe.type == "plane":
+        built = window.session.project.objects.get(probe.construction)
+        out["On"] = built.name if built is not None else "?"
+        how = dict((b, a) for a, b in REDUCTIONS)[probe.reduction]
+        if probe.reduction == "integral":
+            out[how] = f"{found['value']:.5g} (SI, × m²)"
+        else:
+            out[how] = _value(found["value"], found["unit"])
+        if "point" in found:
+            out["At"] = _position(found["point"])
+        out["Cut area"] = f"{found['area'] * _per_metre() ** 2:.5g} {_unit()}²"
+        out["Shown"] = "The model is cut at the plane while this tool is selected"
+        return out
     if probe.type == "selection":
         out["Over"] = probe.selection
         how = dict((b, a) for a, b in REDUCTIONS)[probe.reduction]
@@ -529,3 +698,15 @@ def linearized_rows(probe: ResultProbe, found: dict) -> dict[str, str]:
     )
     out["Plot"] = "In the Plots tab: total, membrane and membrane + bending along the line"
     return out
+
+
+def _per_metre() -> float:
+    from puzzle.settings import length_unit
+
+    return length_unit()[1]
+
+
+def _unit() -> str:
+    from puzzle.settings import length_unit
+
+    return length_unit()[0]

@@ -205,6 +205,79 @@ def linearized(mesh: Mesh, step: StepResult, start, end, samples: int, kind: str
                   "values": out["series"]["total"]}  # fmt: skip
 
 
+def _cut(mesh: Mesh, step: StepResult, origin, normal):
+    """The model cut by a plane: triangles with the step's fields interpolated onto
+    them, and each triangle's area and centre."""
+    from puzzle.post.vtk import to_grid
+
+    n = np.asarray(normal, float)
+    n = n / np.linalg.norm(n)
+    cut = to_grid(mesh, step).slice(normal=n, origin=np.asarray(origin, float))
+    if cut.n_cells == 0:
+        raise PuzzleError("the plane doesn't cut the model", code="invalid")
+    cut = cut.triangulate()
+    faces = np.asarray(cut.faces).reshape(-1, 4)[:, 1:]
+    xyz = np.asarray(cut.points, float)
+    a, b, c = xyz[faces[:, 0]], xyz[faces[:, 1]], xyz[faces[:, 2]]
+    areas = 0.5 * np.linalg.norm(np.cross(b - a, c - a), axis=1)
+    return cut, faces, areas, (a + b + c) / 3.0, n
+
+
+def over_plane(mesh: Mesh, step: StepResult, item: Item, origin, normal, reduction: str):
+    """The item over the plane's cut through the model: max or min (with where), or
+    the area-weighted mean or integral (values linear across each cut triangle)."""
+    f = step.fields.get(item.field)
+    if f is None:
+        raise PuzzleError(f"no '{item.label}' in this result step", code="not_found")
+    cut, faces, areas, _centres, _n = _cut(mesh, step, origin, normal)
+    if item.field not in cut.point_data:
+        raise PuzzleError(f"'{item.label}' can't be read on a plane", code="unsupported")
+    comps = np.asarray(cut.point_data[item.field], float).reshape(cut.n_points, -1)
+    values = compute(item, comps, f.components)
+    area = float(areas.sum())
+    out = {"area": area, "count": int(cut.n_points), "reduction": reduction}
+    if reduction in ("max", "min"):
+        i = int(np.argmax(values) if reduction == "max" else np.argmin(values))
+        return out | {"value": float(values[i]), "point": np.asarray(cut.points[i]).tolist()}
+    integral = float((values[faces].mean(axis=1) * areas).sum())
+    return out | {"value": integral if reduction == "integral" else integral / area}
+
+
+def section_force(mesh: Mesh, step: StepResult, origin, normal) -> dict:
+    """The force and moment carried across a plane: the stress's traction (sigma n)
+    integrated over the cut, the moment about the cut's centroid. It is what the side
+    the normal points to passes on to the other (Ansys's force reaction on a surface)."""
+    f = step.fields.get("stress")
+    if f is None or f.location == "global":
+        raise PuzzleError("no stress in this result step", code="not_found")
+    order = ("xx", "yy", "zz", "xy", "yz", "zx")
+    if any(c not in f.components for c in order):
+        raise PuzzleError("the stress here isn't a full tensor", code="unsupported")
+    cut, faces, areas, centres, n = _cut(mesh, step, origin, normal)
+    s = np.asarray(cut.point_data["stress"], float).reshape(cut.n_points, -1)
+    xx, yy, zz, xy, yz, zx = (s[:, f.components.index(c)] for c in order)
+    traction = np.stack(
+        [xx * n[0] + xy * n[1] + zx * n[2],
+         xy * n[0] + yy * n[1] + yz * n[2],
+         zx * n[0] + yz * n[1] + zz * n[2]], axis=1
+    )  # fmt: skip
+    forces = traction[faces].mean(axis=1) * areas[:, None]
+    centroid = (centres * areas[:, None]).sum(axis=0) / areas.sum()
+    force = forces.sum(axis=0)
+    moment = np.cross(centres - centroid, forces).sum(axis=0)
+    normal_force = float(force @ n)
+    return {
+        "value": float(np.linalg.norm(force)),
+        "components": dict(zip(("x", "y", "z"), force.tolist(), strict=True)),
+        "moment": dict(zip(("x", "y", "z"), moment.tolist(), strict=True)),
+        "moment_total": float(np.linalg.norm(moment)),
+        "normal_force": normal_force,
+        "shear_force": float(np.linalg.norm(force - normal_force * n)),
+        "about": centroid.tolist(),
+        "area": float(areas.sum()),
+    }
+
+
 def _centroid(mesh: Mesh, group, xyz) -> np.ndarray:
     """A face or body selection's centroid from its elements (the nodes' mean is
     pulled toward wherever the mesh is finer); for points and edges, the nodes' mean."""
@@ -253,7 +326,9 @@ def _source(project, store, probe):
 def _item(probe, items):
     item = next((i for i in items if i.key == probe.quantity), None)
     if item is None:
-        what = "reaction forces" if probe.type == "reaction" else f"'{probe.quantity}'"
+        what = {"reaction": "reaction forces", "section": "stress"}.get(
+            probe.type, f"'{probe.quantity}'"
+        )
         raise PuzzleError(f"probe '{probe.name}': the results have no {what}", code="not_found")
     return item
 
@@ -268,11 +343,34 @@ def at_step(mesh: Mesh, step: StepResult, item: Item, probe) -> dict:
         return along_path(mesh, step, item, probe.point, probe.end, probe.samples)
     if probe.type == "linearized":
         return linearized(mesh, step, probe.point, probe.end, probe.samples, probe.equivalent)
+    if probe.type == "plane":
+        return over_plane(mesh, step, item, probe.point, probe.end, probe.reduction)
+    if probe.type == "section":
+        return section_force(mesh, step, probe.point, probe.end)
     return at_point(mesh, step, item, probe.point)
+
+
+def placed(project, probe):
+    """The probe with its line or plane from its construction geometry (ADR 0046): a
+    path's ends as `point` and `end`; a plane's origin as `point` and normal as `end`."""
+    from puzzle.model.schema import ConstructionGeometry
+
+    if probe.construction is None:
+        return probe
+    c = project.objects.get(probe.construction)
+    if not isinstance(c, ConstructionGeometry):
+        raise PuzzleError(f"probe '{probe.name}': its construction geometry is gone",
+                          code="not_found")  # fmt: skip
+    wants = "plane" if probe.type in ("plane", "section") else "path"
+    if c.type != wants:
+        raise PuzzleError(f"probe '{probe.name}': '{c.name}' is not a {wants}", code="invalid")
+    a, b = c.frame(project)
+    return probe.model_copy(update={"point": tuple(a.tolist()), "end": tuple(b.tolist())})
 
 
 def evaluate(project, store, probe) -> dict:
     """A kept probe's value for its source's current run (or derived result)."""
+    probe = placed(project, probe)
     mesh, results, items = _source(project, store, probe)
     item = _item(probe, items)
     steps = [s for s in results.steps if item.field in s.fields]
@@ -287,6 +385,7 @@ def history(project, store, probe) -> list[dict]:
     """A kept probe at every step of its source's current run that has its quantity:
     [{"step": time, increment or frequency, "value": SI}] (ADR 0038's plots). A path
     gives its largest value along the path at each step."""
+    probe = placed(project, probe)
     mesh, results, items = _source(project, store, probe)
     item = _item(probe, items)
     out = []

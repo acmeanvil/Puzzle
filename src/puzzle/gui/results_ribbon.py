@@ -42,6 +42,10 @@ class ResultsRibbon(Ribbon):
                  "distance", lambda: tools.add_path(window)),
                 ("linearized", "Linearized stress…", "Membrane, bending and peak stress "
                  "through a wall (ASME VIII-2)", lambda: tools.add_linearized(window)),
+                ("plane", "Result on a plane…", "A result's maximum, minimum, average or integral "
+                 "over a construction plane's cut", lambda: tools.add_plane_result(window)),
+                ("section", "Section force…", "The force and moment carried across a "
+                 "construction plane", lambda: tools.add_section_force(window)),
             ],
         )  # fmt: skip
         group(

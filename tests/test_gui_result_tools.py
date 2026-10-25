@@ -3,8 +3,9 @@
 With a result shown, the Results ribbon lists the tools. Reaction… on the support makes
 a tool that sums to the 100 N tip load; it sits in the tree under Results and its
 Properties list the force and moment. A result on a selection, a path and a linearized
-stress are made the same way, the paths plotting against the distance in the Plots tab. The support's own
-menu offers Reaction force….
+stress are made the same way, the paths plotting against the distance in the Plots tab.
+Construction paths and planes feed the line and plane tools. The support's own menu
+offers Reaction force….
 """
 
 import os

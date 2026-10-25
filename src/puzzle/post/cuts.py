@@ -23,9 +23,14 @@ class Cut:
     fraction: float = 0.5  # where across the model's extent, 0..1
     flip: bool = False  # keep the other side
     ghost: bool = True  # show the cut-away side faintly
+    origin: tuple | None = None  # a placed plane (a construction plane, ADR 0046) ...
+    normal: tuple | None = None  # ... instead of axis and fraction
 
     def plane(self, bounds) -> tuple[np.ndarray, np.ndarray]:
         """The plane's origin and normal for a model of these (xmin, xmax, ...) bounds."""
+        if self.origin is not None and self.normal is not None:
+            n = np.asarray(self.normal, float)
+            return np.asarray(self.origin, float), (-n if self.flip else n)
         i = AXES[self.axis]
         lo, hi = bounds[2 * i], bounds[2 * i + 1]
         origin = np.array([(bounds[0] + bounds[1]) / 2, (bounds[2] + bounds[3]) / 2,

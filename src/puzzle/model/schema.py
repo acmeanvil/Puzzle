@@ -1233,6 +1233,61 @@ class ResultDefinition(ProjectObject):
         return own + [c.study for c in self.cases]
 
 
+class ConstructionGeometry(ProjectObject):
+    """A path or a plane placed in the model for result tools only (ADR 0046), as
+    Ansys's Construction Geometry: it is never meshed and never changes a solve.
+
+    - `path`: the straight line from `start` to `end` (metres), for the Path and
+      Linearized stress tools;
+    - `plane`: through `origin` with `normal`, or one of a coordinate system's planes
+      (`axes` and `plane`, offset by `offset` along its normal), for a result over the
+      plane and the force and moment carried across it.
+    """
+
+    kind: ClassVar[str] = "construction"
+
+    type: Literal["path", "plane"] = "path"
+    start: tuple[float, float, float] = Field(default=(0.0, 0.0, 0.0), description="path: from")
+    end: tuple[float, float, float] = Field(default=(1.0, 0.0, 0.0), description="path: to")
+    origin: tuple[float, float, float] = Field(
+        default=(0.0, 0.0, 0.0), description="plane: a point on it"
+    )
+    normal: tuple[float, float, float] = Field(
+        default=(1.0, 0.0, 0.0), description="plane: the direction it faces"
+    )
+    axes: UUID | None = Field(
+        default=None, description="plane: a coordinate system whose plane it is"
+    )
+    plane: Literal["xy", "yz", "zx"] = Field(
+        default="yz", description="plane, with axes: which of the system's planes"
+    )
+    offset: float = Field(default=0.0, description="plane, with axes: along its normal (m)")
+
+    @model_validator(mode="after")
+    def _shape(self) -> ConstructionGeometry:
+        if self.type == "path" and np.allclose(self.start, self.end):
+            raise ValueError("a path's two ends are the same point")
+        if self.type == "plane" and self.axes is None and not np.linalg.norm(self.normal):
+            raise ValueError("a plane's normal has no length")
+        return self
+
+    def frame(self, project: Project | None = None) -> tuple[np.ndarray, np.ndarray]:
+        """A plane's (origin, unit normal) in global axes; a path's (start, end)."""
+        if self.type == "path":
+            return np.asarray(self.start, float), np.asarray(self.end, float)
+        if self.axes is not None and project is not None:
+            axes = project.objects.get(self.axes)
+            if isinstance(axes, CoordinateSystem) and axes.type == "cartesian":
+                columns = axes.rotation()
+                n = columns[:, {"yz": 0, "zx": 1, "xy": 2}[self.plane]]
+                return np.asarray(axes.origin, float) + self.offset * n, n
+        n = np.asarray(self.normal, float)
+        return np.asarray(self.origin, float), n / np.linalg.norm(n)
+
+    def dependencies(self) -> list[UUID]:
+        return [self.axes] if self.axes else []
+
+
 class ResultProbe(ProjectObject):
     """A result tool (ADR 0032, 0042), evaluated for the current run of its source (a
     study, or a derived result) whenever it is shown; values are never stored.
@@ -1244,13 +1299,20 @@ class ResultProbe(ProjectObject):
     - `path`: the result at `samples` points from `point` to `end`;
     - `linearized`: the stress from `point` to `end` (through a wall, surface to
       surface) split into membrane, bending and peak parts (ASME VIII-2 Annex 5-A),
-      with `equivalent` (von Mises or Tresca stress intensity) at both ends.
+      with `equivalent` (von Mises or Tresca stress intensity) at both ends;
+    - `plane`: the result over a construction plane's cut, reduced by `reduction`;
+    - `section`: the force and moment carried across a construction plane.
+
+    A path or linearization may take its line from a construction path (ADR 0046)
+    instead of `point` and `end`.
     """
 
     kind: ClassVar[str] = "probe"
 
     source: UUID = Field(description="a study, or a derived result")
-    type: Literal["point", "selection", "reaction", "path", "linearized"] = "point"
+    type: Literal["point", "selection", "reaction", "path", "linearized", "plane", "section"] = (
+        "point"
+    )
     quantity: str = Field(
         default="reaction_force:total",
         description='a listed result\'s key, e.g. "stress:von_mises"',
@@ -1269,6 +1331,9 @@ class ResultProbe(ProjectObject):
         default="von_mises", description="linearized: von Mises, or Tresca stress intensity"
     )
     step: int = Field(default=-1, description="index into the result steps; -1 = last")
+    construction: UUID | None = Field(
+        default=None, description="path, linearized: a construction path; plane, section: a plane"
+    )
 
     @model_validator(mode="after")
     def _needs(self) -> ResultProbe:
@@ -1276,20 +1341,22 @@ class ResultProbe(ProjectObject):
             "point": ("point",),
             "selection": ("selection",),
             "reaction": ("selection",),
-            "path": ("point", "end"),
-            "linearized": ("point", "end"),
+            "path": () if self.construction else ("point", "end"),
+            "linearized": () if self.construction else ("point", "end"),
+            "plane": ("construction",),
+            "section": ("construction",),
         }[self.type]
         missing = [k for k in need if getattr(self, k) is None]
         if missing:
             raise ValueError(f"a {self.type} probe needs {', '.join(missing)}")
         if self.type == "reaction":
             self.quantity = "reaction_force:total"
-        if self.type == "linearized":
+        if self.type in ("linearized", "section"):
             self.quantity = "stress:von_mises"  # the stress tensor is what's read
         return self
 
     def dependencies(self) -> list[UUID]:
-        return [self.source]
+        return [self.source] + ([self.construction] if self.construction else [])
 
 
 class ProjectUnits(ProjectObject):
@@ -1338,6 +1405,7 @@ OBJECT_TYPES: tuple[type[ProjectObject], ...] = (
     ResultProbe,
     Amplitude,
     CoordinateSystem,
+    ConstructionGeometry,
     SettingsPreset,
 )
 
