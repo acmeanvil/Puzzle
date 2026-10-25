@@ -28,7 +28,7 @@ The maintainer's answers (2026-10-25):
 - **every quantity** in scope (temperature, pressure, heat transfer coefficient, body forces and the rest), in stages;
 - **features take a field** rather than a dedicated imported load per quantity;
 - **sources:** Ansys exports, OpenFOAM and Code_Saturne results, test and measurement data, Exodus and other FE tools, beside generic CSV and VTU;
-- **seeing the connections** concisely and informatively: a generated schematic (point 8).
+- **seeing the connections** concisely and informatively: a schematic, the tree and Properties, and the 3D view, each switchable in the preferences (point 8).
 
 ## Decision
 
@@ -102,15 +102,20 @@ The maintainer's answers (2026-10-25):
    - for agents, MCP `field_import` (made as a proposal) and `field_check`;
    - the outline lists each imported field and where it is used.
 
-8. **A Connections schematic** shows how data flows through the project, concisely (Window → Connections, a read-only map drawn from the model, never edited by hand):
-   - left to right: **sources** (imported fields, and studies whose results feed others) → **what they feed** (the features that take a field, the studies a transfer feeds) → **results**;
-   - only links that carry data: imported fields into features, and transfers between studies. Ordinary references (a component's geometry and mesh) stay in the tree, so the map stays small;
-   - each box is coloured by its state (ADR 0033: up to date, out of date, missing input, not run, failed);
-   - each link is labelled with what it carries and how ("T, +10 mm", "p ×1.2", "temperature, interpolate"), and an imported field's box with its coverage, flagged when low;
-   - a click on a box selects it in the tree; hovering a link shows its mapping, scaling, placement and coverage in full;
-   - laid out automatically in columns, as Ansys Workbench's project schematic is, but generated from the model, so it can't drift from it.
-
-   Field sources in the tree's labels and an in-view display of mapped values on each feature were offered too and not chosen for now. The wizard's verification page still shows the mapped field on the model.
+8. **The connections are shown three ways**, each switched on or off on its own in Settings > Connections (all on by default), so a user keeps what helps and hides the rest:
+   - **a Connections schematic**, the overview (`connections.schematic`; Window → Connections): a read-only map drawn from the model, never edited by hand:
+     - left to right: **sources** (imported fields, and studies whose results feed others) → **what they feed** (the features that take a field, the studies a transfer feeds) → **results**;
+     - only links that carry data: imported fields into features, and transfers between studies. Ordinary references (a component's geometry and mesh) stay in the tree, so the map stays small;
+     - each box is coloured by its state (ADR 0033: up to date, out of date, missing input, not run, failed);
+     - each link is labelled with what it carries and how ("T, +10 mm", "p ×1.2", "temperature, interpolate"), and an imported field's box with its coverage, flagged when low;
+     - a click on a box selects it in the tree; hovering a link shows its mapping, scaling, placement and coverage in full;
+     - laid out automatically in columns, as Ansys Workbench's project schematic is, but generated from the model, so it can't drift from it;
+   - **in the tree and Properties** (`connections.tree`):
+     - a field-fed feature names its source in the tree ("Pressure on Top ← CFD walls ×1.2");
+     - an imported field lists "Used by" with each use's scaling and placement;
+     - Properties shows the whole chain from the file to the solver;
+     - transfers show on the studies they feed;
+   - **in the 3D view** (`connections.view`): selecting a field-fed feature or an imported field draws the mapped values on its faces with the legend (ADR 0038), extrapolated areas hatched, and optionally the source points, so you see where the data lands and where it doesn't.
 
 ## Consequences
 
