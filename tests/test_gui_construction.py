@@ -1,12 +1,15 @@
 """Construction geometry in the GUI (ADR 0046), on a solved bar (CalculiX).
 
-New plane… and New path… make objects under "Construction geometry"; selecting one
-draws it over the model. Section force… across the plane reads the beam's shear, Result
-on a plane… cuts the view at the plane, and Linearized stress… runs along the path.
+New plane… and New path… open panels beside the live view (Pick, then double-click
+the model; on a result the point snaps to a mesh node) and make objects under
+"Construction geometry"; selecting one draws it over the model. Section force… across
+the plane reads the beam's shear, Result on a plane… cuts the view at the plane, and
+Linearized stress… runs along the path.
 """
 
 import os
 
+import numpy as np
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -86,22 +89,42 @@ def test_planes_and_paths_feed_result_tools(app, tmp_path):
     run_study(project, study.id, root, tmp_path / "w", store=ResultStore(root / "results"))
     w = MainWindow(root)
     try:
-        fill(w, how="point", origin="0.1, 0, 0", normal="x", name="Mid-span")
-        construction.new_plane(w)
-        fill(w, start="0.1, 0, 0.005", end="0.1, 0.01, 0.005", name="Depth")
-        construction.new_path(w)
-        made = {c.name: c for c in w.session.project.of_type(ConstructionGeometry)}
-        assert made["Mid-span"].type == "plane" and made["Depth"].type == "path"
-        assert tuple(made["Mid-span"].normal) == (1.0, 0.0, 0.0)
+        plane = construction.new_plane(w)  # a panel beside the live view
+        assert w.side.currentWidget() is plane
+        plane.origin.text.setText("0.1, 0, 0")
+        plane.facing.setCurrentIndex(plane.facing.findData("x"))
+        plane.name.setText("Mid-span")
+        plane.create()
+        assert w.side.currentWidget() is w.properties
 
+        made = {c.name: c for c in w.session.project.of_type(ConstructionGeometry)}
+        assert made["Mid-span"].type == "plane"
+        assert tuple(made["Mid-span"].normal) == (1.0, 0.0, 0.0)
         _select(w, "Mid-span")
-        app.processEvents()
         assert w.viewport.shown.get("construction") == "plane"
-        _select(w, "Depth")
-        app.processEvents()
-        assert w.viewport.shown.get("construction") == "path"
 
         for item in w.tree._items():  # show a result, as a user would first
+            if item.data(0, ROLE).kind == "run":
+                w.tree.setCurrentItem(item)
+        app.processEvents()
+        # A path picked on the result, snapping to mesh nodes: Pick, then double-click.
+        path = construction.new_path(w)
+        assert path.snap() == "node"  # a result is shown: its nodes
+        path.start.pick.setChecked(True)
+        assert w.viewport.capture is not None
+        w.viewport._captured((0.1004, 0.0003, 0.0051))  # where the double-click landed
+        start = path.start.value()
+        mesh = w.viewport.node_mesh()
+        assert min(np.linalg.norm(mesh.coords - start, axis=1)) < 1e-12  # on a node
+        assert w.viewport.capture is None and not path.start.pick.isChecked()
+        path.end.text.setText("0.1, 0.01, 0.005")
+        path.name.setText("Depth")
+        path.create()
+        made = {c.name: c for c in w.session.project.of_type(ConstructionGeometry)}
+        assert made["Depth"].type == "path"
+        _select(w, "Depth")
+        assert w.viewport.shown.get("construction") == "path"
+        for item in w.tree._items():  # back to the result
             if item.data(0, ROLE).kind == "run":
                 w.tree.setCurrentItem(item)
         app.processEvents()

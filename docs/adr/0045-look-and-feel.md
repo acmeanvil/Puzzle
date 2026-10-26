@@ -1,6 +1,6 @@
 # 0045. Look and feel: one theme from tokens, an icon set, better docking, feedback and accessibility
 
-- Status: Proposed
+- Status: Accepted (2026-10-25, with the maintainer's answers)
 - Date: 2026-10-25
 
 ## Context
@@ -72,12 +72,12 @@ Reference points: Ansys Mechanical and Discovery (a graded 3D background, auto-h
 - A third-party docking library is a new dependency to package on three platforms, which is why it is checked first and has a fallback.
 - Fusion gives up macOS-native controls; some Mac users notice. The tokens make it look intentional rather than foreign.
 
-## Questions for the maintainer
+## The maintainer's answers (2026-10-25)
 
-1. **Widget style:** Fusion everywhere, the same on every platform and fully styled (recommended), or each platform's native style?
-2. **Icon set:** Tabler, Lucide, Phosphor or Material Symbols? I lean towards Tabler: the widest coverage in the line style the interim icons already use, and MIT.
-3. **Docking:** try the Qt Advanced Docking System first (recommended), or keep Qt's docks and add what's missing?
-4. **The 3D background:** a soft gradient as in Ansys (recommended), plain, or a setting?
+1. **Widget style:** Fusion everywhere.
+2. **Icon set:** Tabler to start.
+3. **Docking:** try the Qt Advanced Docking System first.
+4. **The 3D background:** a soft gradient by default, changeable in Settings.
 
 ## Alternatives considered
 

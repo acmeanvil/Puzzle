@@ -18,7 +18,13 @@ Selections can't do this: they follow the CAD's faces, and a plane through the m
    - **a plane:** a point and a normal, or one of a Cartesian coordinate system's planes (ADR 0037) moved along its normal.
 
    It is never meshed and never changes a solve or a run key: only result tools read it.
-2. **Made in one form each** (New path…, New plane…), from the tree's section, the project's menu, or Project → New construction geometry. The form starts from what is picked in the view: two points make a path, one point places a plane, three tilt it. Without picks, a path crosses the model's thinnest side at its centre, and a plane cuts across its longest side at the middle. Selecting one draws it over the model: a line with its ends marked, or a translucent square at least a quarter of the model's size.
+2. **Made in a panel** (New path…, New plane…) in the Properties dock, from the tree's section, the project's menu, or Project → New construction geometry. A panel, not a dialog, so the view stays live:
+   - each point has a **Pick** button; the next double-click on the model gives that point, anywhere on a face (`Viewport.capture_point`);
+   - **Picks snap to** mesh nodes (the default when a mesh or a result is shown, so a linearization runs node to node; a picked node is kept to the last digit), CAD corners, or anywhere on the surface. On a deformed result the point is taken back to the undeformed shape first;
+   - a plane can also be tilted through three double-clicked points;
+   - the path or plane is drawn as it changes.
+
+   Without picks, a path crosses the model's thinnest side and a plane cuts across its longest side at the middle (or they start from corners already picked with Pick → Points). Selecting one in the tree draws it over the model: a line with its ends marked, or a translucent square at least a quarter of the model's size.
 3. **Result tools take them.** `ResultProbe.construction` names one:
    - **Path** and **Linearized stress** run along a construction path, or along a line typed in the tool as before.
    - **Result on a plane** (`plane`): any listed result over the plane's cut, as a maximum or minimum (with where it is), an area-weighted average, or an integral. Selecting it cuts the result view at the plane, so the values on it are seen.

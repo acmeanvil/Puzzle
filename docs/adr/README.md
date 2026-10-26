@@ -50,5 +50,5 @@ New record: copy [template.md](template.md) to `NNNN-short-title.md`, set status
 | [0042](0042-result-tools-and-measuring.md) | Result tools (reactions, results over selections, paths) and exact measuring in the geometry | Accepted |
 | [0043](0043-exports.md) | Export the deformed shape as CAD (faceted, morphed B-rep, compensated) and results in neutral formats by physics | Accepted; Export form, point clouds, faceted shape built |
 | [0044](0044-imported-fields.md) | Imported fields: a wizard to bring them in (file, alignment, verification), features that take them with scaling and placement, connections shown three ways | Accepted |
-| [0045](0045-look-and-feel.md) | Look and feel: one theme from tokens (light, dark, high contrast), an icon set, docking, start page, feedback, accessibility | Proposed |
+| [0045](0045-look-and-feel.md) | Look and feel: one theme from tokens (light, dark, high contrast), an icon set, docking, start page, feedback, accessibility | Accepted |
 | [0046](0046-construction-geometry.md) | Construction geometry: paths and planes for result tools (linearization, results on a plane, section forces) | Accepted |

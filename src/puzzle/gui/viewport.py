@@ -516,6 +516,7 @@ class Viewport(QWidget):
         self.picked: list[tuple[int, int]] = []
         self.pick_history: list[list[tuple[int, int]]] = []  # undo while picking
         self.picking = False
+        self.capture = None  # a tool waiting for a double-clicked point
         self.pick_kind = "face"  # the selection filter: face, edge, vertex or body
         self.lines, self.line_entities = None, []
         self.vertices: dict = {}  # (0, tag) -> position, set by the window per mesh
@@ -657,11 +658,67 @@ class Viewport(QWidget):
             self.set_box_mode(False)
         self._update_click()
 
+    def capture_point(self, callback, snap: str = "corner") -> None:
+        """Hand the next double-clicked point on the model to `callback(xyz)` (metres,
+        undeformed), then go back to what double-click did before; None cancels. For
+        tools that need a point anywhere, not only a corner (construction geometry).
+
+        `snap`: "node" moves it to the nearest node of the shown mesh or result (none in
+        a quick preview: then corners), "corner" to a CAD corner within 1% of the
+        model's size, "none" keeps the surface point."""
+        self.capture = callback
+        self.capture_snap = snap
+        self.shown["capturing"] = callback is not None
+        self._update_click()
+
+    def node_mesh(self):
+        """The real mesh shown (meshed, or a result's), whose nodes a pick can snap to;
+        None for a quick preview."""
+        if self.result_state is not None:
+            return self.result_state["mesh"]
+        if self.shown.get("kind") == "mesh":
+            return getattr(self, "mesh", None)
+        return None
+
+    def _captured(self, point) -> None:
+        import pyvista as pv
+
+        callback, self.capture = self.capture, None
+        snap = getattr(self, "capture_snap", "corner")
+        self.shown["capturing"] = False
+        self._update_click()
+        point = np.asarray(point, float)
+        state = self.result_state
+        if state is not None and state.get("scale"):  # the same spot, undeformed
+            u = pv.PolyData(point.reshape(1, 3)).sample(state["grid"]).point_data
+            if "displacement" in u:
+                point = point - state["scale"] * np.asarray(u["displacement"][0])
+        mesh = self.node_mesh() if snap == "node" else None
+        self.shown["snapped"] = None
+        if mesh is not None and len(mesh.coords):
+            i = int(np.argmin(np.linalg.norm(mesh.coords - point, axis=1)))
+            point = np.asarray(mesh.coords[i], float)
+            self.shown["snapped"] = int(mesh.node_ids[i]) if hasattr(mesh, "node_ids") else i
+        elif snap in ("node", "corner"):
+            surface = getattr(self, "surface", None)
+            if self.vertices and surface is not None:
+                size = float(np.linalg.norm(np.ptp(surface.points, axis=0))) or 1.0
+                near = min(self.vertices.values(),
+                           key=lambda v: np.linalg.norm(np.asarray(v) - point))  # fmt: skip
+                if np.linalg.norm(np.asarray(near) - point) <= 0.01 * size:
+                    point = np.asarray(near, float)
+        if callback is not None:
+            callback(tuple(float(v) for v in point))
+
     def _update_click(self) -> None:
-        """Double-click picks while picking, probes a shown result, else does nothing."""
+        """Double-click picks while picking, probes a shown result, else does nothing;
+        a tool waiting for a point (`capture_point`) takes it first."""
         if self.plotter is None:
             return
-        if self.picking:
+        if getattr(self, "capture", None) is not None:
+            self.view.on_double_click = self._captured
+            self.view.on_click = self.view.on_box = None
+        elif self.picking:
             self.view.on_double_click = self._clicked
             self.view.on_click = self._click
             self.view.on_box = self.box_pick
