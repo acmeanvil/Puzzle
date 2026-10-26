@@ -170,6 +170,15 @@ PREFERENCES: list[Preference] = [
         "Power user adds each solver's whole option set and the expert pass-through "
         "to a study's Solver settings… (ADR 0023).",
     ),
+    Preference(
+        "solvers.threads",
+        "Solvers",
+        "Threads per run",
+        0,
+        [("All cores", 0), ("1", 1), ("2", 2), ("4", 4), ("8", 8), ("16", 16)],
+        "How many processor cores a solver run may use (OpenMP, CalculiX's equation "
+        "solver). Your own OMP_NUM_THREADS or CCX_NPROC_* settings win.",
+    ),
 ]
 BY_KEY = {p.key: p for p in PREFERENCES}
 WAITING: dict[str, str] = {}  # group -> why its preferences don't apply yet

@@ -65,6 +65,37 @@ class Runtime(ABC):
         return None
 
 
+# Threads a run may use, for OpenMP solvers and CalculiX's own counters. Without them
+# CalculiX factors on one core (a frictional contact took hours instead of minutes).
+THREAD_VARIABLES = (
+    "OMP_NUM_THREADS",
+    "CCX_NPROC_EQUATION_SOLVER",
+    "CCX_NPROC_STIFFNESS",
+    "CCX_NPROC_RESULTS",
+)
+
+
+def thread_count() -> int:
+    """Settings > Solvers > Threads per run; 0 (the default) means every core."""
+    try:
+        from puzzle.settings import current
+
+        wanted = int(current().get("solvers.threads") or 0)
+    except Exception:  # noqa: BLE001 - no settings (a bare script): every core
+        wanted = 0
+    return wanted if wanted > 0 else max(1, os.cpu_count() or 1)
+
+
+def thread_environment(base: dict[str, str] | None = None) -> dict[str, str]:
+    """`base` (else Puzzle's own environment) with the thread counts added, keeping any
+    the user set themselves."""
+    env = dict(os.environ if base is None else base)
+    n = str(thread_count())
+    for name in THREAD_VARIABLES:
+        env.setdefault(name, n)
+    return env
+
+
 @dataclass(frozen=True)
 class NativeRuntime(Runtime):
     search_path: str | None = None
@@ -96,8 +127,8 @@ class NativeRuntime(Runtime):
         """
         prefix = conda_prefix(Path(argv[0]))
         if prefix is None:
-            return None
-        env = dict(os.environ)
+            return thread_environment()
+        env = thread_environment()
         env["PATH"] = os.pathsep.join([*map(str, env_bin_dirs(prefix)), env.get("PATH", "")])
         env["CONDA_PREFIX"] = str(prefix)
         if (prefix / "share" / "elmersolver").is_dir():
@@ -177,6 +208,9 @@ class ContainerRuntime(Runtime):
         if hasattr(os, "getuid"):  # keep output files owned by the user
             # That user has no home directory in the image; some solvers need one.
             argv += ["--user", f"{os.getuid()}:{os.getgid()}", "-e", "HOME=/tmp"]
+        threads = thread_environment()
+        for name in THREAD_VARIABLES:  # the container sees none of Puzzle's environment
+            argv += ["-e", f"{name}={threads[name]}"]
         return [*argv, self.image, *command]
 
     def describe(self) -> str:
