@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from puzzle.gui.choices import label
+from puzzle.gui.theme import role
 from puzzle.model.schema import Geometry, ParameterSet
 
 GROUPS = [
@@ -81,10 +82,10 @@ class ToolPanel(QWidget):
             pick=self.pick,
         )
         title = QLabel(f"{'Edit' if index is not None else 'New'} {tool_name(kind).lower()}")
-        title.setStyleSheet("font-weight: bold; font-size: 14px")
+        role(title, "title")
         self.error = QLabel("")
         self.error.setWordWrap(True)
-        self.error.setStyleSheet("color: #c53030")
+        role(self.error, "error")
         from puzzle.settings import current
 
         apply, cancel = QPushButton("Apply"), QPushButton("Cancel")
@@ -261,18 +262,18 @@ class Workbench(QWidget):
         column.setContentsMargins(4, 4, 4, 4)
         column.addLayout(top)
         tip = QLabel("The tools are in the ribbon above the view.")
-        tip.setStyleSheet("color: gray")
+        role(tip, "muted")
         column.addWidget(tip)
         history = QLabel("History: tick turns a step on or off, drag reorders, double-click edits")
         history.setWordWrap(True)
-        history.setStyleSheet("color: gray")
+        role(history, "muted")
         column.addWidget(history)
         column.addWidget(self.steps, 2)
 
         sketch_page = QWidget()
         sk = QVBoxLayout(sketch_page)
         self.sketch_title = QLabel("")
-        self.sketch_title.setStyleSheet("font-weight: bold; font-size: 14px")
+        role(self.sketch_title, "title")
         self.sketch_title.setWordWrap(True)
         hint = QLabel(
             "Draw in the main view: pick a tool above the canvas, click to place points, "

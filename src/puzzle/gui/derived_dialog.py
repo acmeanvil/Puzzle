@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from puzzle.errors import PuzzleError
+from puzzle.gui.theme import role
 from puzzle.model.schema import Project, ResultDefinition, Study
 from puzzle.post import derived
 
@@ -131,7 +132,7 @@ class CombinationDialog(QDialog):
         top.row("method", "Method", self.method)
         self.note = QLabel()
         self.note.setWordWrap(True)
-        self.note.setStyleSheet("color: gray")
+        role(self.note, "muted")
         top.add_widget(self.note)
 
         cases = self.form.section("Cases")
@@ -565,7 +566,7 @@ class FatigueDialog(QDialog):
         self.shear = QCheckBox("Shear (torsion) notch sensitivity")
         self.on_mean = QCheckBox("Apply Kf to the mean stress too")
         self.notch_info = QLabel()
-        self.notch_info.setStyleSheet("color: gray")
+        role(self.notch_info, "muted")
         self.notch_info.setWordWrap(True)
         notch.row("notch_from", "Kf from", self.notch_from)
         notch.row("notch_factor", "Kf", self.kf)

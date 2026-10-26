@@ -55,6 +55,7 @@ class Legend:
     bands: int = 0  # 0: smooth
     above: str = "none"  # one colour above a custom range's top, or "none" (the end colour)
     below: str = "none"  # one colour below its bottom
+    text_color: str = "black"  # the bar's numbers and title (the theme's view text)
     position: str = "left"
     size: float = 1.0
 
@@ -130,7 +131,7 @@ class Legend:
             "width": width,
             "height": height,
             "fmt": fmt,
-            "color": "black",
+            "color": self.text_color,
             "title_font_size": round(14 * s),
             "label_font_size": round(12 * s),
             # A label per band edge on a vertical bar; five across, where they'd crowd.

@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from puzzle.gui.theme import role
 from puzzle.model.schema import Component, Study
 
 MARKS = {"done": ("✓", "#2e9d57"), "needed": ("●", "#d4a72c"), "optional": ("○", "#8a96a3")}
@@ -38,9 +39,9 @@ class AdvisorPanel(QWidget):
         layout.setContentsMargins(6, 6, 6, 6)
         self.heading = QLabel("")
         self.heading.setWordWrap(True)
-        self.heading.setStyleSheet("font-weight: bold; font-size: 14px")
+        role(self.heading, "title")
         self.scope = QLabel("")
-        self.scope.setStyleSheet("color: gray")
+        role(self.scope, "muted")
         self.scope.setWordWrap(True)
         layout.addWidget(self.heading)
         layout.addWidget(self.scope)

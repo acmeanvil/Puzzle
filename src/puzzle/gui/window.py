@@ -41,6 +41,7 @@ from puzzle.errors import PuzzleError
 from puzzle.gui.agent_panel import AgentPanel
 from puzzle.gui.properties import PropertiesPanel
 from puzzle.gui.tasks import Task, start
+from puzzle.gui.theme import role
 from puzzle.gui.tree import ROLE, ModelTree, Node
 from puzzle.gui.viewport import Viewport
 from puzzle.mesh.mesh import Mesh
@@ -108,7 +109,7 @@ class ResultsBar(QWidget):
         self.deform = QCheckBox("Deformed")
         self.deform.setChecked(True)
         self.title = ElidedLabel("")
-        self.title.setStyleSheet("color: gray")
+        role(self.title, "muted")
         for label, widget in (("Result", self.field), ("Step", self.step)):
             row.addWidget(QLabel(label))
             row.addWidget(widget)
@@ -123,7 +124,7 @@ class ResultsBar(QWidget):
         row.addWidget(self.title, 1)
         # ADR 0033: a result made before the model changed says so, with a way back.
         self.stale = QLabel("")
-        self.stale.setStyleSheet("color: #d4a72c")
+        role(self.stale, "needed")
         self.rerun = QPushButton("Run again")
         for w in (self.stale, self.rerun):
             row.addWidget(w)
@@ -285,6 +286,9 @@ class PickBar(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self, root: Path | None = None, *, provider_factory=None) -> None:
         super().__init__()
+        from puzzle.gui import theme
+
+        theme.apply()  # Fusion, coloured by the chosen theme (ADR 0045)
         self.setWindowTitle("Puzzle")
         self.resize(1400, 900)
         # Menus show words only: the few actions shared with the toolbar would otherwise
@@ -807,6 +811,7 @@ class MainWindow(QMainWindow):
         from puzzle.settings import reload
 
         reload()
+        self.apply_theme()
         self.apply_toolbar_style()
         self.agent.agent = None  # the next message builds the agent with the new settings
         self.agent.input.update_hint()  # the send keys may have changed
@@ -817,6 +822,19 @@ class MainWindow(QMainWindow):
         if self.session is not None:
             self.refresh()
         self.statusBar().showMessage("Settings saved", 5000)
+
+    def apply_theme(self) -> None:
+        """The chosen theme on the window, its icons and the 3D view (ADR 0045)."""
+        from puzzle.gui import theme
+        from puzzle.gui.icons import icon
+
+        t = theme.apply()
+        for name, action in self.actions_by_name.items():
+            if not icon(name).isNull():  # redrawn in the new text colour
+                action.setIcon(icon(name))
+        if self.viewport.plotter is not None:
+            theme.view_background(self.viewport.plotter, t)
+            self.viewport.view.refresh()
 
     def new_project(self, root: Path, name: str, units: str | None = None) -> None:
         """Create an empty project in `root` and open it; `units` (a unit system) makes

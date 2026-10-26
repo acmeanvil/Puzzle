@@ -35,6 +35,7 @@ from puzzle.agent.providers import ProviderError
 from puzzle.agent.settings import load_settings, settings_path
 from puzzle.commands.model import SetAutonomy
 from puzzle.errors import PuzzleError
+from puzzle.gui.theme import role
 
 # Autonomy levels as people read them (ADR 0015).
 LEVELS = {
@@ -126,7 +127,7 @@ class AgentPanel(QWidget):
             self.level.addItem(text, key)
         self.level.activated.connect(lambda _: self._set_level(self.level.currentData()))
         self.model_label = QLabel("")
-        self.model_label.setStyleSheet("color: gray")
+        role(self.model_label, "muted")
         new_chat = QPushButton("New chat")
         new_chat.clicked.connect(self.new_chat)
         key = QPushButton("API key…")

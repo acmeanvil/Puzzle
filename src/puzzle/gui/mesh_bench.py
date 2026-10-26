@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from puzzle.gui.theme import role
 from puzzle.model.schema import Component, MeshRecipe, Quantity
 
 # Each control's fields: (key, readable name, kind). Kinds: selection[:entity], length,
@@ -203,7 +204,7 @@ class MeshBench(QWidget):
         self.component = QComboBox()
         self.component.currentIndexChanged.connect(lambda _: self._component_chosen())
         self.recipe_label = QLabel("")
-        self.recipe_label.setStyleSheet("color: gray")
+        role(self.recipe_label, "muted")
         self.controls = QListWidget()
         self.controls.itemDoubleClicked.connect(lambda item: self.edit(self.controls.row(item)))
         self.controls.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -253,7 +254,7 @@ class MeshBench(QWidget):
         layout.addWidget(self.recipe_label)
         hint = QLabel("Controls, in order: double-click edits; the tools are above the view.")
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: gray")
+        role(hint, "muted")
         layout.addWidget(hint)
         layout.addWidget(self.controls, 1)
         layout.addWidget(QLabel("Methods"))

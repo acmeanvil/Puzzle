@@ -84,3 +84,12 @@ Reference points: Ansys Mechanical and Discovery (a graded 3D background, auto-h
 - **A ready-made theme** (qt-material, QDarkStyle): quick, but it styles Qt's controls only, not Puzzle's own panels, and its colours would still fight the inline styles.
 - **QML (Qt Quick) for the interface:** modern visuals, but a second toolkit beside the widgets the whole GUI is built on, and the off-screen 3D view embeds in widgets.
 - **Each platform's native look:** familiar per platform, but three looks to test, and style sheets only partly apply on macOS.
+
+## Built (2026-10-25)
+
+- **Steps 1 and 3, and most of step 2:**
+  - `gui/theme.py`: tokens for light, dark and high contrast; Fusion on every platform; the palette and one style sheet made from the tokens; `role(widget, "muted" | "title" | "error" | "needed" | "done")` in place of inline colours (36 inline styles moved; a few computed colours remain).
+  - Preferences under Settings > Interface: Theme (follow the system, light, dark, high contrast) and 3D background (soft gradient by default, or plain). The 3D view keeps a light ground in every theme, where result colours read best.
+  - Ribbon buttons are drawn from palette colours, so they follow the theme.
+  - **Icons:** Tabler's outline set (MIT), vendored under `gui/tabler/` with its licence, mapped in `icons.TABLER`. Puzzle's own mesh and wireframe icons are drawn in Tabler's grid and stroke. Icons are redrawn in the theme's text colour when the theme changes.
+- **Docking (step 4): the packaging check.** PySide6-QtAds 5.1.1 (LGPL-2.1) has PyPI wheels for macOS, Linux and Windows, but none on conda-forge. It pins PySide6-Essentials 6.11.2 from PyPI. In a test it docked the off-screen 3D view, tabbed Agent with Advisor, auto-hid Messages in a side bar, and saved and restored layouts. Adopting it means taking PySide6 from PyPI in the pixi `gui` feature instead of conda-forge, while VTK keeps linking conda-forge's own Qt (it loads none of Qt's libraries unless its Qt module is imported, which Puzzle doesn't). That choice is the maintainer's: until then the GUI keeps `QDockWidget`.

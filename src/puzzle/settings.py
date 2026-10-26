@@ -86,6 +86,28 @@ PREFERENCES: list[Preference] = [
         "Tooltips always give a button's name and shortcut.",
     ),
     Preference(
+        "interface.theme",
+        "Interface",
+        "Theme",
+        "system",
+        [
+            ("Follow the system", "system"),
+            ("Light", "light"),
+            ("Dark", "dark"),
+            ("High contrast", "high_contrast"),
+        ],  # fmt: skip
+        "Colours of the whole window (ADR 0045). The 3D view keeps a light ground in every "
+        "theme, where result colours read best.",
+    ),
+    Preference(
+        "interface.view_background",
+        "Interface",
+        "3D background",
+        "gradient",
+        [("Soft gradient", "gradient"), ("Plain", "plain")],
+        "Behind the model in the 3D view.",
+    ),
+    Preference(
         "geometry.preview",
         "Geometry",
         "Tool preview",

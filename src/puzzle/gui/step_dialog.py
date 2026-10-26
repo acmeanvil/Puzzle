@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 from puzzle.geometry.steps import STEPS, format_profile, parse_profile
+from puzzle.gui.theme import role
 
 # (shown name, stored value)
 CHOICES = {
@@ -368,7 +369,7 @@ class StepDialog(QDialog):
         self.form = StepForm(kind, args, name, features, params, sketches)
         self.name, self.widgets, self.params = self.form.name, self.form.widgets, self.form.params
         self.error = QLabel("")
-        self.error.setStyleSheet("color: #c53030")
+        role(self.error, "error")
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )

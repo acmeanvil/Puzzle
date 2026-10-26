@@ -26,11 +26,16 @@ from PySide6.QtWidgets import (
 )
 
 HEIGHT = 24  # every ribbon button, in pixels
-STYLE = (
-    "QLabel#ribbon_title { color: #8a96a3; font-size: 11px; font-weight: 600; }"
-    "QFrame#ribbon_group { border-right: 1px solid palette(mid); }"
-    "QToolButton { padding: 0px 8px; }"
-    "QToolButton:checked { background: #3d7bd9; color: white; border-radius: 3px; }"
+STYLE = (  # palette colours, so it follows the theme (ADR 0045)
+    "QLabel#ribbon_title { color: palette(placeholder-text); font-size: 11px;"
+    " font-weight: 600; }"
+    "QFrame#ribbon_group { border: none; border-right: 1px solid palette(mid); }"
+    "QToolButton { padding: 0px 8px; background: palette(button);"
+    " border: 1px solid palette(mid); border-radius: 3px; }"
+    "QToolButton:hover { border-color: palette(highlight); }"
+    "QToolButton:pressed, QToolButton:checked { background: palette(highlight);"
+    " color: palette(highlighted-text); border-color: palette(highlight); }"
+    "QToolButton:disabled { color: palette(placeholder-text); }"
 )
 
 

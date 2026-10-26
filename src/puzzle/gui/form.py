@@ -32,6 +32,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from puzzle.gui.theme import role
+
 # Field key -> what it means, with its source where it has one. One table for the
 # description box, tooltips and the Advisor.
 DESCRIPTIONS = {
@@ -115,7 +117,7 @@ class Section(QWidget):
         name = QLabel(label)
         name.setBuddy(widget)
         units = QLabel(unit)
-        units.setStyleSheet("color: gray")
+        role(units, "muted")
         self.grid.addWidget(name, r, 0, Qt.AlignmentFlag.AlignRight)
         self.grid.addWidget(widget, r, 1)
         self.grid.addWidget(units, r, 2)

@@ -49,6 +49,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from puzzle.gui.theme import role
 from puzzle.materials.registry import BY_KEY, GROUPS, MODELS, PROPERTIES, completeness
 
 KEY = Qt.ItemDataRole.UserRole
@@ -175,7 +176,7 @@ class TableEditor(QDialog):
         remove = QPushButton("Remove row")
         remove.clicked.connect(lambda: self.grid.removeRow(max(self.grid.currentRow(), 0)))
         self.error = QLabel("")
-        self.error.setStyleSheet("color: #c53030")
+        role(self.error, "error")
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
@@ -294,7 +295,7 @@ class CurveBuilder(QDialog):
         self.info = QLabel("")
         self.info.setWordWrap(True)
         self.error = QLabel("")
-        self.error.setStyleSheet("color: #c53030")
+        role(self.error, "error")
         self.error.setWordWrap(True)
         self.plot = Curve("total strain", "stress")
         self.plot.setMinimumSize(420, 320)
@@ -450,7 +451,7 @@ class MaterialEditor(QWidget):
         self.name = QLineEdit()
         self.description = QLineEdit()
         self.family = QLabel("")
-        self.family.setStyleSheet("color: gray")
+        role(self.family, "muted")
         head = QFormLayout()
         head.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         head.addRow("Name", self.name)
@@ -573,7 +574,7 @@ class MaterialEditor(QWidget):
             "Completeness tab says which."
         )
         note.setWordWrap(True)
-        note.setStyleSheet("color: gray")
+        role(note, "muted")
         column.addWidget(note)
         column.addStretch()
         scroll = QScrollArea()
@@ -650,7 +651,7 @@ class MaterialEditor(QWidget):
             "Basquin takes E from Young's modulus; Langer's ln N = A − B ln(εa% − C)."
         )
         note.setWordWrap(True)
-        note.setStyleSheet("color: gray")
+        role(note, "muted")
         column.addWidget(note)
         column.addStretch()
         scroll = QScrollArea()
@@ -795,7 +796,7 @@ class MaterialEditor(QWidget):
             "solver's input. A solver that can't place them refuses the study."
         )
         warn.setWordWrap(True)
-        warn.setStyleSheet("color: #b7791f")
+        role(warn, "needed")
         self.keyword_solver = QComboBox()
         for key, name in SOLVERS.items():
             self.keyword_solver.addItem(name, key)

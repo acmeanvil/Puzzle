@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from puzzle.gui.theme import role
 from puzzle.model.schema import ConstructionGeometry, CoordinateSystem
 
 NORMALS = [
@@ -194,10 +195,10 @@ class _Panel(QWidget):
         outer.addWidget(scroll)
         layout = QVBoxLayout(inner)
         heading = QLabel(title)
-        heading.setStyleSheet("font-weight: bold; font-size: 14px")
+        role(heading, "title")
         about = QLabel(intro)
         about.setWordWrap(True)
-        about.setStyleSheet("color: gray")
+        role(about, "muted")
         layout.addWidget(heading)
         layout.addWidget(about)
         self.form = QFormLayout()
@@ -214,7 +215,7 @@ class _Panel(QWidget):
         self.form.addRow("Picks snap to", self.snapping)
         self.message = QLabel("")
         self.message.setWordWrap(True)
-        self.message.setStyleSheet("color: #d1453b")
+        role(self.message, "error")
         layout.addWidget(self.message)
         buttons = QHBoxLayout()
         self.create_button = QPushButton("Create")

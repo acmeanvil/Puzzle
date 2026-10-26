@@ -23,6 +23,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from puzzle.gui.theme import role
+
 HINT = (
     "Double-click in the view to pick (Shift adds). One pick: its size and position. "
     "Two: the distance and angle between them. The filter in the pick bar says what a "
@@ -37,10 +39,10 @@ class MeasurePanel(QWidget):
         self.cache: dict = {}  # (geometry, content) -> named geometry
         layout = QVBoxLayout(self)
         title = QLabel("Measure")
-        title.setStyleSheet("font-weight: bold; font-size: 14px")
+        role(title, "title")
         self.hint = QLabel(HINT)
         self.hint.setWordWrap(True)
-        self.hint.setStyleSheet("color: gray")
+        role(self.hint, "muted")
         self.message = QLabel("")
         self.message.setWordWrap(True)
         self.table = QTableWidget(0, 2)

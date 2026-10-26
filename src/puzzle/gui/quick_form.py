@@ -42,6 +42,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from puzzle.gui.theme import role
+
 
 @dataclass
 class Ask:
@@ -79,11 +81,11 @@ class QuickForm(QDialog):
         if intro:
             text = QLabel(intro)
             text.setWordWrap(True)
-            text.setStyleSheet("color: gray")
+            role(text, "muted")
             layout.addWidget(text)
         self.message = QLabel("")
         self.message.setWordWrap(True)
-        self.message.setStyleSheet("color: #d1453b")
+        role(self.message, "error")
         self.message.hide()
         layout.addWidget(self.message)
         self.form = QFormLayout()

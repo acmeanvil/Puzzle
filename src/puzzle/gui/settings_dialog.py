@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from puzzle.gui.theme import role
 from puzzle.settings import PREFERENCES, WAITING, Settings
 
 AGENT = "Agent"
@@ -79,7 +80,7 @@ class SettingsDialog(QDialog):
         column = QVBoxLayout(page)
         if group in WAITING:
             note = QLabel(WAITING[group])
-            note.setStyleSheet("color: gray")
+            role(note, "muted")
             column.addWidget(note)
         form = QFormLayout()
         for pref in [p for p in PREFERENCES if p.group == group]:
@@ -99,7 +100,7 @@ class SettingsDialog(QDialog):
             if pref.help and not pref.key.startswith("units.custom."):
                 hint = QLabel(pref.help)
                 hint.setWordWrap(True)
-                hint.setStyleSheet("color: gray")
+                role(hint, "muted")
                 form.addRow("", hint)
         column.addLayout(form)
         column.addStretch()
@@ -227,7 +228,7 @@ class ProjectUnitsDialog(QDialog):
             "what is shown; values are kept as typed and solvers get SI."
         )
         note.setWordWrap(True)
-        note.setStyleSheet("color: gray")
+        role(note, "muted")
         self.use.toggled.connect(self.system.setEnabled)
         self.system.setEnabled(self.use.isChecked())
         buttons = QDialogButtonBox(

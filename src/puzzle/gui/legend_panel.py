@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from puzzle.gui.theme import role
 from puzzle.post.legend import BANDS, COLORMAPS, OUTSIDE, POSITIONS, SIZES
 
 
@@ -51,10 +52,10 @@ class LegendPanel(QWidget):
         self._loading = True
         layout = QVBoxLayout(self)
         title = QLabel("Legend")
-        title.setStyleSheet("font-weight: bold; font-size: 14px")
+        role(title, "title")
         layout.addWidget(title)
         self.about = QLabel("")
-        self.about.setStyleSheet("color: gray")
+        role(self.about, "muted")
         self.about.setWordWrap(True)
         layout.addWidget(self.about)
 
@@ -110,7 +111,7 @@ class LegendPanel(QWidget):
         layout.addWidget(place)
 
         self.message = QLabel("")
-        self.message.setStyleSheet("color: #d1453b")
+        role(self.message, "error")
         self.message.setWordWrap(True)
         layout.addWidget(self.message)
         close = QPushButton("Close")

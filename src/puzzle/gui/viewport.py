@@ -528,7 +528,9 @@ class Viewport(QWidget):
         if rendering_available():
             self.view = SceneView(self)
             self.plotter = self.view.plotter
-            self.plotter.set_background("white", top="#dfe6ee")
+            from puzzle.gui.theme import view_background
+
+            view_background(self.plotter)  # a soft gradient, or plain (ADR 0045)
             self.plotter.add_axes()  # once: every add_axes makes another marker
             layout.addWidget(self.view)
         else:
