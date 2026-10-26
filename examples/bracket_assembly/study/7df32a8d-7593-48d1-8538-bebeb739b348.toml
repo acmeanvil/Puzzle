@@ -1,0 +1,11 @@
+id = "7df32a8d-7593-48d1-8538-bebeb739b348"
+name = "Bolted"
+component = "38f69f25-dcd5-48c6-aae9-819a4e706747"
+solver = "calculix"
+steps = [
+    { type = "stationary", physics = [], settings = {} },
+]
+
+[solver_settings]
+
+[expert_settings]

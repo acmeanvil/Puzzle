@@ -1,0 +1,79 @@
+id = "c5b920c2-bf1a-4b5b-ab38-7deeed1c0483"
+name = "Base"
+facet_angle = 40.0
+scope = "global"
+
+[[history]]
+kind = "box"
+name = "Plate"
+suppressed = false
+
+[history.args]
+dx = 0.12
+dy = 0.08
+dz = 0.01
+
+[[history]]
+kind = "hole"
+name = "Hole1"
+suppressed = false
+
+[history.args]
+r = 0.004
+x = 0.03
+y = 0.04
+
+[[history]]
+kind = "hole"
+name = "Hole2"
+suppressed = false
+
+[history.args]
+r = 0.004
+x = 0.09
+y = 0.04
+
+[[selections]]
+name = "Body"
+entity = "body"
+members = [
+    "Body",
+]
+
+[selections.anchors]
+
+[[selections]]
+name = "Bottom"
+entity = "face"
+members = [
+    "Plate/-z",
+]
+
+[selections.anchors]
+
+[[selections]]
+name = "Top"
+entity = "face"
+members = [
+    "Plate/+z",
+]
+
+[selections.anchors]
+
+[[selections]]
+name = "Hole 1"
+entity = "face"
+members = [
+    "Hole1/wall",
+]
+
+[selections.anchors]
+
+[[selections]]
+name = "Hole 2"
+entity = "face"
+members = [
+    "Hole2/wall",
+]
+
+[selections.anchors]

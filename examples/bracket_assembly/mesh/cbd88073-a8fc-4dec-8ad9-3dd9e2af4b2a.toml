@@ -1,0 +1,20 @@
+id = "cbd88073-a8fc-4dec-8ad9-3dd9e2af4b2a"
+name = "Tets 8 mm"
+mesher = "gmsh"
+element_order = 2
+element_shape = "tetrahedra"
+controls = []
+curvature_points = 12
+algorithm_2d = "frontal_delaunay"
+algorithm_3d = "delaunay"
+optimiser = "gmsh"
+high_order_optimise = "elastic_and_optimise"
+smoothing = 1
+
+[global_size]
+value = 8.0
+unit = "mm"
+
+[gmsh_options]
+
+[netgen_options]

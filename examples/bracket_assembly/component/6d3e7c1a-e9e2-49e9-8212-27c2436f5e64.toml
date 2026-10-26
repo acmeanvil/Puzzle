@@ -1,0 +1,75 @@
+id = "6d3e7c1a-e9e2-49e9-8212-27c2436f5e64"
+name = "Bonded bracket"
+dimension = "3d"
+mesh = "f3f9dd9b-4a5c-4209-ba1d-53bdfa26979f"
+selections = []
+materials = [
+    { material = "e0a137f5-7590-45d5-8fb8-ef71614c0f7e", selection = "Base/Body" },
+    { material = "e0a137f5-7590-45d5-8fb8-ef71614c0f7e", selection = "Bracket/Body" },
+]
+couplings = []
+beam_sections = []
+shell_sections = []
+connectors = []
+
+[[parts]]
+name = "Base"
+geometry = "c5b920c2-bf1a-4b5b-ab38-7deeed1c0483"
+translation = [
+    0.0,
+    0.0,
+    0.0,
+]
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[[parts]]
+name = "Bracket"
+geometry = "cbcf68b4-bb98-464e-87a8-e62e5cbf735a"
+translation = [
+    0.0,
+    0.0,
+    0.01,
+]
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[[contacts]]
+name = "Seat"
+type = "bonded"
+source = "Bracket/Seat"
+target = "Base/Top"
+
+[contacts.extensions]
+
+[[physics]]
+type = "solid_mechanics"
+
+[[physics.features]]
+type = "fixed"
+selection = "Base/Bottom"
+steps = []
+
+[physics.features.values]
+
+[physics.features.extensions]
+
+[[physics.features]]
+type = "force"
+selection = "Bracket/Push"
+steps = []
+
+[physics.features.values.y]
+value = -1.0
+unit = "kN"
+
+[physics.features.extensions]
+
+[physics.settings]
+temperature_dependent_materials = false

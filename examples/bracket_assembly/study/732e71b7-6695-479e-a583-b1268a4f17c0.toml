@@ -1,0 +1,11 @@
+id = "732e71b7-6695-479e-a583-b1268a4f17c0"
+name = "Bonded"
+component = "6d3e7c1a-e9e2-49e9-8212-27c2436f5e64"
+solver = "calculix"
+steps = [
+    { type = "stationary", physics = [], settings = {} },
+]
+
+[solver_settings]
+
+[expert_settings]

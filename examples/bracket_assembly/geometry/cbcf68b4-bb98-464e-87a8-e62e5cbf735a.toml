@@ -1,0 +1,92 @@
+id = "cbcf68b4-bb98-464e-87a8-e62e5cbf735a"
+name = "Bracket"
+facet_angle = 40.0
+scope = "global"
+
+[[history]]
+kind = "box"
+name = "Flange"
+suppressed = false
+
+[history.args]
+dx = 0.12
+dy = 0.08
+dz = 0.008
+
+[[history]]
+kind = "box"
+name = "Upright"
+suppressed = false
+
+[history.args]
+dx = 0.12
+dy = 0.008
+dz = 0.06
+y0 = 0.07200000000000001
+z0 = 0.008
+mode = "add"
+
+[[history]]
+kind = "hole"
+name = "Hole1"
+suppressed = false
+
+[history.args]
+r = 0.004
+x = 0.03
+y = 0.04
+
+[[history]]
+kind = "hole"
+name = "Hole2"
+suppressed = false
+
+[history.args]
+r = 0.004
+x = 0.09
+y = 0.04
+
+[[selections]]
+name = "Body"
+entity = "body"
+members = [
+    "Body",
+]
+
+[selections.anchors]
+
+[[selections]]
+name = "Seat"
+entity = "face"
+members = [
+    "Flange/-z",
+]
+
+[selections.anchors]
+
+[[selections]]
+name = "Push"
+entity = "face"
+members = [
+    "Upright/+z",
+]
+
+[selections.anchors]
+
+[[selections]]
+name = "Hole 1"
+entity = "face"
+members = [
+    "Hole1/wall",
+]
+
+[selections.anchors]
+
+[[selections]]
+name = "Hole 2"
+entity = "face"
+members = [
+    "Hole2/wall",
+]
+
+[selections.anchors]

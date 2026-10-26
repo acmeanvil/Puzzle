@@ -1,0 +1,20 @@
+id = "f3f9dd9b-4a5c-4209-ba1d-53bdfa26979f"
+name = "Tets 4 mm"
+mesher = "gmsh"
+element_order = 2
+element_shape = "tetrahedra"
+controls = []
+curvature_points = 12
+algorithm_2d = "frontal_delaunay"
+algorithm_3d = "delaunay"
+optimiser = "gmsh"
+high_order_optimise = "elastic_and_optimise"
+smoothing = 1
+
+[global_size]
+value = 4.0
+unit = "mm"
+
+[gmsh_options]
+
+[netgen_options]
