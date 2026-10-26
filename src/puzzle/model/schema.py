@@ -1330,6 +1330,26 @@ class ResultProbe(ProjectObject):
     equivalent: Literal["von_mises", "tresca"] = Field(
         default="von_mises", description="linearized: von Mises, or Tresca stress intensity"
     )
+    components: Literal["global", "line"] = Field(
+        default="global",
+        description="linearized: components in the global axes, or the line's own (through "
+        "the wall, meridional, hoop)",
+    )
+    hoop_direction: tuple[float, float, float] | None = Field(
+        default=None, description="linearized, line axes: the hoop direction; none: automatic"
+    )
+    bending: Literal["all", "normal"] = Field(
+        default="all",
+        description="linearized: bending for every component, or (ASME VIII-2 5-A.4.1.2, "
+        "line axes) for the meridional and hoop normal stresses only",
+    )
+    allowable: float | None = Field(
+        default=None, description="linearized: the allowable stress S (Pa) for the checks"
+    )
+    membrane: Literal["general", "local"] = Field(
+        default="general",
+        description="linearized: the membrane is general (Pm ≤ S) or local (PL ≤ 1.5 S) primary",
+    )
     step: int = Field(default=-1, description="index into the result steps; -1 = last")
     construction: UUID | None = Field(
         default=None, description="path, linearized: a construction path; plane, section: a plane"
@@ -1357,6 +1377,29 @@ class ResultProbe(ProjectObject):
 
     def dependencies(self) -> list[UUID]:
         return [self.source] + ([self.construction] if self.construction else [])
+
+
+class TreeGroup(ProjectObject):
+    """A folder in the model tree, under one section's heading ("Studies", "Results",
+    ...): only how the tree is organised, never an input to a solve. `members` are the
+    keys of what it holds: object ids, "run:<run id>", "sweep:<study id>", or other
+    groups' ids (a group inside a group)."""
+
+    kind: ClassVar[str] = "group"
+
+    section: str = Field(description="the tree section's heading it sits under")
+    members: list[str] = Field(default_factory=list)
+
+
+class TreeLabels(ProjectObject):
+    """The names given in the tree to things that aren't project objects: stored runs
+    (`runs`: run id -> name) and a swept study's group of runs (`sweeps`: study id ->
+    name). The runs are a cache; their names belong to the project."""
+
+    kind: ClassVar[str] = "labels"
+
+    runs: dict[str, str] = Field(default_factory=dict)
+    sweeps: dict[str, str] = Field(default_factory=dict)
 
 
 class ProjectUnits(ProjectObject):
@@ -1407,6 +1450,8 @@ OBJECT_TYPES: tuple[type[ProjectObject], ...] = (
     CoordinateSystem,
     ConstructionGeometry,
     SettingsPreset,
+    TreeGroup,
+    TreeLabels,
 )
 
 

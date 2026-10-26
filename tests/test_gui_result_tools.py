@@ -108,9 +108,11 @@ def test_result_tools_from_the_ribbon(app, tmp_path):
         assert lin.samples == 47
         _select(w, "probe", lin.name)
         app.processEvents()
-        rows = _texts(w)
-        assert rows["Equivalent"] == "Stress intensity (Tresca)"
-        assert "(start)" in rows["Membrane + bending"] and "Bending XX" in rows
+        panel = w.linearization_panel  # the ASME breakdown, its table in Messages
+        assert w.side.currentWidget() is panel
+        assert panel.equivalent.currentData() == "tresca"
+        assert w.output_tabs.currentWidget() is panel.report
+        assert "Bending, start" in panel.text() and "\tXX\t" in panel.text()
         assert [n.split(": ")[1] for n, _ in w.plots.series] == [
             "total",
             "membrane",

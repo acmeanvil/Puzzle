@@ -76,7 +76,7 @@ Reference points: Ansys Mechanical and Discovery (a graded 3D background, auto-h
 
 1. **Widget style:** Fusion everywhere.
 2. **Icon set:** Tabler to start.
-3. **Docking:** try the Qt Advanced Docking System first.
+3. **Docking:** try the Qt Advanced Docking System first. *Superseded the same day; see "Docking, decided" below.*
 4. **The 3D background:** a soft gradient by default, changeable in Settings.
 
 ## Alternatives considered
@@ -93,3 +93,16 @@ Reference points: Ansys Mechanical and Discovery (a graded 3D background, auto-h
   - Ribbon buttons are drawn from palette colours, so they follow the theme.
   - **Icons:** Tabler's outline set (MIT), vendored under `gui/tabler/` with its licence, mapped in `icons.TABLER`. Puzzle's own mesh and wireframe icons are drawn in Tabler's grid and stroke. Icons are redrawn in the theme's text colour when the theme changes.
 - **Docking (step 4): the packaging check.** PySide6-QtAds 5.1.1 (LGPL-2.1) has PyPI wheels for macOS, Linux and Windows, but none on conda-forge. It pins PySide6-Essentials 6.11.2 from PyPI. In a test it docked the off-screen 3D view, tabbed Agent with Advisor, auto-hid Messages in a side bar, and saved and restored layouts. Adopting it means taking PySide6 from PyPI in the pixi `gui` feature instead of conda-forge, while VTK keeps linking conda-forge's own Qt (it loads none of Qt's libraries unless its Qt module is imported, which Puzzle doesn't). That choice is the maintainer's: until then the GUI keeps `QDockWidget`.
+
+## Docking, decided (2026-10-25, superseding answer 3)
+
+The packaging check showed the Advanced Docking System would cost flexibility:
+- it pins one exact PySide6 version, so every Qt upgrade waits on that project;
+- it has no conda-forge build, which Puzzle's packaging aims for;
+- it would put a second Qt beside VTK's.
+
+So Puzzle keeps Qt's own `QDockWidget`, behind one module of its own, `gui/docking.py` (`Docks`). The window adds, shows, tabs, hides and saves its panels only through it, so a different docking library can replace Qt's later by changing that module alone. On top of Qt's docks it gives what the Advanced Docking System offered:
+- **tab groups:** the Agent and the Advisor share the right side as tabs;
+- **named layouts:** Window → Layouts → Modelling, Results, Agent beside the model, and the user's own saved ones ("Save current layout…"), kept per user;
+- **auto-hide:** a side panel can be set to hide into a slim bar on its edge; clicking its name there shows it, and it hides again once the view is used;
+- **floating** panels on a second screen, as Qt's docks already allow.

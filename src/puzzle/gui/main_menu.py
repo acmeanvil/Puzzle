@@ -187,6 +187,11 @@ def _project(window, menu: QMenu) -> None:
     menu.addSeparator()
     menu.addAction(a["undo"])
     menu.addAction(a["delete"])
+    rename = _add(menu, "Rename", lambda: _rename(window), "Rename what is selected in the tree",
+                  "F2")  # fmt: skip
+    window.actions_by_name["rename"] = rename
+    _add(menu, "New group…", lambda: _group(window),
+         "A folder in the tree for what is selected, under its heading")  # fmt: skip
     menu.addSeparator()
     _add(menu, "New parameter set", lambda: menus.new_parameter_set(window))
     _add(menu, "Add parameter…", lambda: _add_parameter(window),
@@ -205,6 +210,28 @@ def _project(window, menu: QMenu) -> None:
          "A plane for a result over it, or the force across it")  # fmt: skip
     menu.addSeparator()
     menu.addAction(a["settings"])
+
+
+def _rename(window) -> None:
+    from puzzle.gui.tree import RENAMABLE
+
+    item = window.tree.currentItem()
+    node = window.tree.current()
+    if item is not None and node is not None and node.kind in RENAMABLE:
+        window.tree.editItem(item)
+    else:
+        window.statusBar().showMessage("Select something in the tree to rename", 6000)
+
+
+def _group(window) -> None:
+    from puzzle.gui import organise
+
+    item = window.tree.currentItem()
+    section = window.tree.section_of(item) if item is not None else None
+    if section is None:
+        window.statusBar().showMessage("Select something under a heading in the tree", 6000)
+        return
+    organise.new_group(window, section, organise.selected_keys(window, section))
 
 
 def _add_parameter(window) -> None:
@@ -473,7 +500,50 @@ def _window(window, menu: QMenu, agent: QAction, messages: QAction) -> None:
     menu.addAction(agent)
     menu.addAction(messages)
     menu.addSeparator()
+    layouts = _sub(menu, "Layouts")  # ADR 0045: built-in and the user's own
+    layouts.aboutToShow.connect(lambda: _fill_layouts(window, layouts))
+    _fill_layouts(window, layouts)
+    hide = _sub(menu, "Auto-hide")
+    for key, text in (("model", "Model"), ("properties", "Properties"), ("agent", "Agent"),
+                      ("advisor", "Advisor")):  # fmt: skip
+        action = QAction(text, window)
+        action.setCheckable(True)
+        action.setToolTip(f"Hide the {text} panel into a bar on its edge; click there to show it")
+        action.toggled.connect(lambda on, k=key: window.docks.set_auto_hide(k, on))
+        hide.aboutToShow.connect(lambda a=action, k=key: a.setChecked(k in window.docks.auto))
+        hide.addAction(action)
+        window.actions_by_name[f"auto_hide_{key}"] = action
     _add(menu, "Reset layout", window.reset_layout, free=True)
+
+
+def _fill_layouts(window, menu: QMenu) -> None:
+    """Window → Layouts: each layout, then save and delete."""
+    from puzzle.gui.quick_form import Ask
+
+    menu.clear()
+    names = window.docks.names()
+    for name, key in names:
+        _add(menu, name, lambda k=key: window.docks.apply(k), free=True)
+    menu.addSeparator()
+
+    def save() -> None:
+        got = window.ask_form("Save layout", [Ask("name", "Name", kind="text",
+                                                   default="My layout")],
+                              check=lambda v: None if v.get("name", "").strip()
+                              else "Give it a name")  # fmt: skip
+        if got is not None:
+            window.docks.save(got["name"].strip())
+            window.statusBar().showMessage(f"Layout '{got['name'].strip()}' saved", 5000)
+
+    def delete() -> None:
+        own = [(n, k) for n, k in window.docks.names() if k.startswith("user:")]
+        got = window.ask_form("Delete a layout", [Ask("key", "Layout", choices=own)])
+        if got is not None:
+            window.docks.delete(got["key"])
+
+    _add(menu, "Save current layout…", save, free=True)
+    if any(k.startswith("user:") for _, k in names):
+        _add(menu, "Delete a layout…", delete, free=True)
 
 
 def _help(window, menu: QMenu) -> None:

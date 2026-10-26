@@ -1,11 +1,23 @@
-"""The model tree: every project object, its parts, and the stored runs."""
+"""The model tree: every project object, its parts, and the stored runs.
+
+Anything under a section's heading can be renamed (F2, or right-click → Rename): a
+project object, a result tool, a stored run, a swept study's group of runs, a group.
+Groups (`TreeGroup`) are folders under one heading; items are dragged into and out of
+them, or moved with right-click → Move to group. Both are edits of the project, so they
+undo; neither changes a result."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QTreeWidget, QTreeWidgetItem
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QLineEdit,
+    QStyledItemDelegate,
+    QTreeWidget,
+    QTreeWidgetItem,
+)
 
 from puzzle.gui.choices import label, solver_label
 from puzzle.model.schema import (
@@ -24,6 +36,8 @@ from puzzle.model.schema import (
     Study,
     SweepStep,
     Transfer,
+    TreeGroup,
+    TreeLabels,
 )
 from puzzle.results.store import RunRecord
 
@@ -61,11 +75,54 @@ SECTIONS = [
 ]
 
 
+# What can be renamed in place, and dragged into a group.
+RENAMABLE = ("object", "probe", "derived", "run", "sweep", "group")
+
+
+def member_key(node: Node) -> str | None:
+    """How a group names an item it holds; None for what can't be grouped."""
+    if node.kind in ("object", "probe", "derived", "group"):
+        return node.object
+    if node.kind in ("run", "sweep"):
+        return f"{node.kind}:{node.object}"
+    return None
+
+
+class NameDelegate(QStyledItemDelegate):
+    """Edits an item's name, not its text ("Path 1", not "Path 1 · path"); the new name
+    goes to the window as a command (`renamed`), never straight into the item."""
+
+    renamed = Signal(object, str)  # the Node, the new name
+
+    def setEditorData(self, editor, index) -> None:  # noqa: N802 - Qt's name
+        node = index.data(ROLE)
+        editor.setText(node.label if node is not None else index.data())
+        editor.selectAll()
+
+    def setModelData(self, editor, model, index) -> None:  # noqa: N802 - Qt's name
+        node = index.data(ROLE)
+        text = editor.text().strip() if isinstance(editor, QLineEdit) else ""
+        if node is not None and text and text != node.label:
+            self.renamed.emit(node, text)
+
+
 class ModelTree(QTreeWidget):
+    moved = Signal(list, object, str)  # member keys, the target group id (or None), section
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setHeaderHidden(True)
         self.setUniformRowHeights(True)
+        self.names = NameDelegate(self)
+        self.setItemDelegate(self.names)
+        self.renamed = self.names.renamed
+        self.setEditTriggers(QAbstractItemView.EditTrigger.EditKeyPressed)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.setDropIndicatorShown(True)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
+        self.setDefaultDropAction(Qt.DropAction.MoveAction)
 
     def populate(
         self,
@@ -114,13 +171,19 @@ class ModelTree(QTreeWidget):
                 item = self._add(section, text, Node("probe", str(p.id), "", p.name))
                 self._state(item, states.get(str(p.source)))
             sweeps: dict[str, tuple[QTreeWidgetItem, set]] = {}  # study id -> heading, points
+            named = next(iter(project.of_type(TreeLabels)), None)  # names given in the tree
             for r in reversed(runs):  # newest first
                 when = f"{solver_label(r.solver)} · {r.started_at:%Y-%m-%d %H:%M}"
+                study = project.objects.get(_uuid(r.study_id))
+                study_name = study.name if study is not None else r.study_name  # renamed
                 labels = r.point_labels()
                 if labels:  # one point of a swept study: under the study's heading
                     if r.study_id not in sweeps:
+                        head_text = (named.sweeps.get(r.study_id) if named else None) or (
+                            f"{study_name}: compare"
+                        )
                         head = self._add(
-                            section, f"{r.study_name}: compare", Node("sweep", r.study_id)
+                            section, head_text, Node("sweep", r.study_id, "", head_text)
                         )
                         sweeps[r.study_id] = (head, set())
                         self._add(head, "Compare…", Node("compare", r.study_id, "", "Compare"))
@@ -132,7 +195,9 @@ class ModelTree(QTreeWidget):
                     text = f"{point} · {when}"
                     run = self._add(head, text, Node("run", r.run_id, "", text))
                 else:
-                    text = f"{r.study_name} · {when}"
+                    text = (named.runs.get(r.run_id) if named else None) or (
+                        f"{study_name} · {when}"
+                    )
                     run = self._add(section, text, Node("run", r.run_id, "", text))
                 self._state(run, run_state(r, project))
                 # Every result the run can show, by field (double-click or select one).
@@ -143,6 +208,7 @@ class ModelTree(QTreeWidget):
                         groups[item.group] = self._add(run, item.group, node)
                     leaf = Node("result", r.run_id, item.key, item.label)
                     self._add(groups[item.group], item.label, leaf)
+        self._group(root, project)
         self._roll_up(self.invisibleRootItem())
         for item in self._items():
             node = item.data(0, ROLE)
@@ -150,6 +216,99 @@ class ModelTree(QTreeWidget):
                 item.setExpanded(True)
             if keep is not None and node == keep:
                 self.setCurrentItem(item)
+
+    def _group(self, root: QTreeWidgetItem, project: Project) -> None:
+        """Each section's groups as folders at its top, holding their members."""
+        groups = project.of_type(TreeGroup)
+        if not groups:
+            return
+        for i in range(root.childCount()):
+            section = root.child(i)
+            title = section.data(0, ROLE).label
+            mine = [g for g in groups if g.section == title]
+            if not mine:
+                continue
+            ids = {str(g.id) for g in mine}
+            nested = {m for g in mine for m in g.members if m in ids}
+            folders = {str(g.id): QTreeWidgetItem([g.name]) for g in mine}
+            for g in mine:
+                folders[str(g.id)].setData(0, ROLE, Node("group", str(g.id), "", g.name))
+            owner = {m: str(g.id) for g in mine for m in g.members}
+            items = [section.child(j) for j in range(section.childCount())]
+            for item in items:  # members into their folders
+                key = member_key(item.data(0, ROLE))
+                if key in owner:
+                    section.removeChild(item)
+                    folders[owner[key]].addChild(item)
+            for n, g in enumerate(g for g in mine if str(g.id) not in nested):
+                section.insertChild(n, folders[str(g.id)])
+            for g in mine:  # groups inside groups, first in their folder
+                for m in reversed(g.members):
+                    if m in folders and m != str(g.id):
+                        folders[str(g.id)].insertChild(0, folders[m])
+            for folder in folders.values():
+                self._flags(folder)
+
+    def section_of(self, item: QTreeWidgetItem) -> str | None:
+        """The heading an item sits under ("Studies", "Results", ...)."""
+        while item is not None:
+            node = item.data(0, ROLE)
+            if node is not None and node.kind == "section":
+                return node.label
+            item = item.parent()
+        return None
+
+    def item_for(self, node: Node) -> QTreeWidgetItem | None:
+        for item in self._items():
+            found = item.data(0, ROLE)
+            if (found.kind, found.object, found.path) == (node.kind, node.object, node.path):
+                return item
+        return None
+
+    def groupable(self, item: QTreeWidgetItem) -> bool:
+        """Directly under a section or a group: a top-level thing that can be moved."""
+        parent = item.parent()
+        up = parent.data(0, ROLE) if parent is not None else None
+        node = item.data(0, ROLE)
+        return (up is not None and up.kind in ("section", "group")
+                and member_key(node) is not None)  # fmt: skip
+
+    def _flags(self, item: QTreeWidgetItem) -> None:
+        node = item.data(0, ROLE)
+        flags = item.flags() & ~Qt.ItemFlag.ItemIsDragEnabled & ~Qt.ItemFlag.ItemIsDropEnabled
+        if node.kind in RENAMABLE:
+            flags |= Qt.ItemFlag.ItemIsEditable
+        if node.kind in ("section", "group") or member_key(node) is not None:
+            flags |= Qt.ItemFlag.ItemIsDropEnabled
+        if member_key(node) is not None:
+            flags |= Qt.ItemFlag.ItemIsDragEnabled
+        item.setFlags(flags)
+
+    def dropEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        """A drop moves the dragged items into a group (onto it, or onto one of its
+        members) or out of every group (onto the heading or an ungrouped item), within
+        one section. The window makes it a command; Qt never moves the items itself."""
+        target = self.itemAt(event.position().toPoint())
+        event.setDropAction(Qt.DropAction.IgnoreAction)
+        event.ignore()
+        if target is None:
+            return
+        section = self.section_of(target)
+        dragged = [i for i in self.selectedItems() if self.groupable(i)
+                   and self.section_of(i) == section]  # fmt: skip
+        if not dragged or section is None:
+            return
+        node = target.data(0, ROLE)
+        if node.kind == "group":
+            group = node.object
+        else:
+            parent = target.parent()
+            up = parent.data(0, ROLE) if parent is not None else None
+            group = up.object if up is not None and up.kind == "group" else None
+        keys = [member_key(i.data(0, ROLE)) for i in dragged]
+        if group is not None and group in keys:
+            return  # a group into itself
+        self.moved.emit(keys, group, section)
 
     def _state(self, item: QTreeWidgetItem, state) -> None:
         """An item's state icon and, in its tooltip, what it means."""
@@ -168,7 +327,7 @@ class ModelTree(QTreeWidget):
         found = [self._roll_up(item.child(i)) for i in range(item.childCount())]
         own = item.data(0, STATE) if item is not self.invisibleRootItem() else None
         node = item.data(0, ROLE) if item is not self.invisibleRootItem() else None
-        if node is not None and node.kind in ("project", "section", "sweep"):
+        if node is not None and node.kind in ("project", "section", "sweep", "group"):
             below = [s for s in found if s]
             if below:
                 state = worst(below)
@@ -248,6 +407,7 @@ class ModelTree(QTreeWidget):
     def _add(self, parent, text: str, node: Node) -> QTreeWidgetItem:
         item = QTreeWidgetItem(parent, [text])
         item.setData(0, ROLE, node)
+        self._flags(item)
         return item
 
     def _items(self) -> list[QTreeWidgetItem]:
@@ -285,3 +445,12 @@ def _feature_label(physics: str, kind: str) -> str:
 
     spec = next((s for s in CATALOG.get(physics, []) if s.type == kind), None)
     return spec.label if spec else label(kind)
+
+
+def _uuid(text: str):
+    from uuid import UUID
+
+    try:
+        return UUID(str(text))
+    except ValueError:
+        return None

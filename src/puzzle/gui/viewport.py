@@ -197,11 +197,24 @@ class SceneView(QWidget):
         from PySide6.QtGui import QPainter
 
         if self._image is not None:
-            QPainter(self).drawImage(0, 0, self._image)
+            # Mid-resize the last frame is stretched to fit; the real one follows.
+            QPainter(self).drawImage(self.rect(), self._image)
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        """While a dock's separator is dragged the view is resized many times a second;
+        a full render each time (a Retina-sized frame read back) made the drag stick.
+        So it renders once the resizing pauses."""
         super().resizeEvent(event)
-        self.refresh()
+        if self._image is None:
+            self.refresh()
+            return
+        if not hasattr(self, "_settle"):
+            self._settle = QTimer(self)
+            self._settle.setSingleShot(True)
+            self._settle.setInterval(150)
+            self._settle.timeout.connect(self.refresh)
+        self._settle.start()
+        self.update()
 
     # mouse -------------------------------------------------------------------------------
 

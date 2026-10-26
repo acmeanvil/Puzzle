@@ -66,12 +66,17 @@ def outline(project: Project, *, ids: bool = False, runs=None) -> str:
         for a in c.materials:
             lines.append(f"    material {names.get(a.material, '?')} -> {a.selection}")
         for k in c.contacts:
-            lines.append(f"    contact {k.name}: {k.type} {k.source} ~ {k.target} ({k.capability})")
+            mu = f", friction {k.friction:g}" if k.friction is not None else ""
+            lines.append(
+                f"    contact {k.name}: {k.type} {k.source} ~ {k.target}{mu} ({k.capability})"
+            )
         for f in c.connectors:  # ADR 0027
             lines.append(
                 f"    fastener {f.name}: {f.source} -> {f.target}, diameter {_q(f.diameter)}, "
                 f"{names.get(f.material, '?')}, {f.ends} ends"
+                + (f", pretension {_q(f.pretension)}" if f.pretension else "")
             )
+
         for s in c.shell_sections:  # ADR 0027 shells
             lines.append(f"    shell on {s.selection}: {s.describe()}")
         for b in c.beam_sections:  # ADR 0027

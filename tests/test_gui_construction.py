@@ -151,8 +151,29 @@ def test_planes_and_paths_feed_result_tools(app, tmp_path):
         assert w.viewport.shown.get("cut") is not None
         _select(w, probes["linearized"].name)
         app.processEvents()
-        rows = _texts(w)
-        assert rows["Along"] == "Depth" and "Membrane + bending" in rows
+        panel = w.linearization_panel
+        assert w.side.currentWidget() is panel and "along Depth" in panel._about()
         assert w.viewport.cut is None  # leaving a plane tool removes its cut
+        # ASME presentation: the line's axes, bending for the normal stresses, a check.
+        panel.axes.setCurrentIndex(panel.axes.findData("line"))  # one edit; it is read again
+        panel = w.linearization_panel
+        panel.bending.setCurrentIndex(panel.bending.findData("normal"))
+        panel = w.linearization_panel
+        panel.allowable.setText("138")  # in the panel's unit, MPa
+        panel.edited()
+        panel = w.linearization_panel
+        lin = w.session.project.objects[probes["linearized"].id]
+        assert (lin.components, lin.bending) == ("line", "normal")
+        assert lin.allowable == pytest.approx(138e6)
+        text = panel.text()
+        assert "Hoop (h)" in text and "Primary membrane, Pm ≤ S" in text
+        assert panel.checks.isVisibleTo(panel.report) and panel.checks.rowCount() == 3
+        panel.units.setCurrentIndex(panel.units.findData("ksi"))
+        assert "Stress (ksi)" in panel.text()  # how it reads only: the tool is unchanged
+        assert w.session.project.objects[probes["linearized"].id].allowable == lin.allowable
+        _select(w, "Mid-span")  # another item: back to Properties, the tab goes
+        assert w.side.currentWidget() is w.properties
+        assert all(w.output_tabs.tabText(i) != "Linearization"
+                   for i in range(w.output_tabs.count()))  # fmt: skip
     finally:
         w.close()

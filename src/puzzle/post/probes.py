@@ -164,9 +164,21 @@ def along_path(mesh: Mesh, step: StepResult, item: Item, start, end, samples: in
     }
 
 
-def linearized(mesh: Mesh, step: StepResult, start, end, samples: int, kind: str) -> dict:
+def linearized(
+    mesh: Mesh,
+    step: StepResult,
+    start,
+    end,
+    samples: int,
+    kind: str,
+    components: str = "global",
+    hoop=None,
+    bending: str = "all",
+) -> dict:
     """The stress from `start` to `end` (through a wall) as membrane, bending and peak
-    parts (`puzzle.post.linearize`), with the points it was read at."""
+    parts (`puzzle.post.linearize`), with the points it was read at; components in the
+    global axes or the line's own, bending for all components or (ASME) the normal ones
+    across the line."""
     import pyvista as pv
 
     from puzzle.post import linearize
@@ -200,7 +212,8 @@ def linearized(mesh: Mesh, step: StepResult, start, end, samples: int, kind: str
         )
     data = np.asarray(probe.point_data["stress"], float).reshape(samples, -1)
     tensors = data[:, [f.components.index(c) for c in linearize.ORDER]]
-    out = linearize.report(t * length, tensors, kind)
+    frame = linearize.line_frame(a, b, hoop) if components == "line" else None
+    out = linearize.report(t * length, tensors, kind, frame, bending == "normal")
     return out | {"distance": (t * length).tolist(), "points": points.tolist(),
                   "values": out["series"]["total"]}  # fmt: skip
 
@@ -342,7 +355,13 @@ def at_step(mesh: Mesh, step: StepResult, item: Item, probe) -> dict:
     if probe.type == "path":
         return along_path(mesh, step, item, probe.point, probe.end, probe.samples)
     if probe.type == "linearized":
-        return linearized(mesh, step, probe.point, probe.end, probe.samples, probe.equivalent)
+        from puzzle.post.linearize import checks
+
+        out = linearized(mesh, step, probe.point, probe.end, probe.samples, probe.equivalent,
+                         probe.components, probe.hoop_direction, probe.bending)  # fmt: skip
+        if probe.allowable:
+            out["checks"] = checks(out, probe.allowable, probe.membrane)
+        return out
     if probe.type == "plane":
         return over_plane(mesh, step, item, probe.point, probe.end, probe.reduction)
     if probe.type == "section":

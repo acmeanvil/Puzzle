@@ -16,7 +16,6 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
-    QDockWidget,
     QFileDialog,
     QHBoxLayout,
     QInputDialog,
@@ -378,11 +377,14 @@ class MainWindow(QMainWindow):
         self.workbench.ribbon.hide()
         column.insertWidget(1, self.mesh_bench.ribbon)  # the mesh tools (ADR 0019)
         self.mesh_bench.ribbon.hide()
-        self.model_dock = self._dock("Model", self.left_tabs, left)
+        from puzzle.gui.docking import Docks
+
+        self.docks = Docks(self)  # every panel, tab group and layout (ADR 0045)
+        self.model_dock = self.docks.add("model", "Model", self.left_tabs, left)
         self.side = QStackedWidget()  # the properties, or a tool's options
         self.side.addWidget(self.properties)
-        self.properties_dock = self._dock("Properties", self.side, left)
-        self.splitDockWidget(self.model_dock, self.properties_dock, Qt.Orientation.Vertical)
+        self.properties_dock = self.docks.add("properties", "Properties", self.side, left)
+        self.docks.split("model", "properties")
         tabs = QTabWidget()
         tabs.addTab(self.log, "Output")
         tabs.addTab(self.history, "History")
@@ -392,18 +394,25 @@ class MainWindow(QMainWindow):
         self.output_tabs = tabs
         # Its pages' minimum (the plots') would hold the dock open even when folded.
         tabs.setMinimumHeight(tabs.tabBar().sizeHint().height())
-        self.messages_dock = self._dock("Messages", tabs, Qt.DockWidgetArea.BottomDockWidgetArea)
+        self.messages_dock = self.docks.add(
+            "messages", "Messages", tabs, Qt.DockWidgetArea.BottomDockWidgetArea
+        )
         self.agent = AgentPanel(self, provider_factory)
-        self.agent_dock = self._dock("Agent", self.agent, right)
+        self.agent_dock = self.docks.add("agent", "Agent", self.agent, right)
         # The model gets the room (ADR 0031): the agent opens when wanted or when a
-        # proposal arrives; messages fold to their tab bar until there is news.
-        self.agent_dock.hide()
+        # proposal arrives; messages fold to their tab bar until there is news. It is
+        # hidden once the Advisor is tabbed with it (Qt groups only shown docks).
         # ADR 0040: what to do next; it opens for new projects until closed once.
         from puzzle.gui.advisor_panel import AdvisorPanel
 
         self.advisor = AdvisorPanel(self)
-        self.advisor_dock = self._dock("Advisor", self.advisor, right)
+        self.advisor_dock = self.docks.add("advisor", "Advisor", self.advisor, right)
+        self.docks.tab("agent", "advisor")  # one place on the right, as tabs
+        self.agent_dock.hide()
         self.advisor_dock.hide()
+        self.docks.builtin("modelling", "Modelling", lambda: self._layout("modelling"))
+        self.docks.builtin("results", "Results", lambda: self._layout("results"))
+        self.docks.builtin("agent", "Agent beside the model", lambda: self._layout("agent"))
         self.advisor_dock.installEventFilter(self)
         self.advisor_dock.visibilityChanged.connect(
             lambda shown: self.advisor.refresh() if shown else None
@@ -428,6 +437,11 @@ class MainWindow(QMainWindow):
         self.statusBar().addPermanentWidget(self.context_label)
         self.fold_messages(True)
         self.tree.currentItemChanged.connect(lambda *_: self._selected())
+        from puzzle.gui import organise
+
+        self.tree.renamed.connect(lambda node, text: organise.rename(self, node, text))
+        self.tree.moved.connect(lambda keys, group, section: organise.move(self, keys, group,
+                                                                           section))  # fmt: skip
         self.tree.itemDoubleClicked.connect(lambda *_: self._open_item())
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._context_menu)
@@ -511,7 +525,7 @@ class MainWindow(QMainWindow):
         self.agent.refresh()
         waiting = self.agent.proposals.count()
         if waiting > self._proposals_seen:  # a new proposal: open the agent, no focus
-            self.agent_dock.show()
+            self.docks.show("agent")
         self._proposals_seen = waiting
         self.workbench.refresh()
         self._selected()
@@ -851,7 +865,7 @@ class MainWindow(QMainWindow):
         from puzzle.settings import current
 
         if current().get("advisor.open_new"):  # a new project: the Advisor shows the way
-            self.advisor_dock.show()
+            self.docks.show("advisor")
             if self.agent_dock.isHidden():  # alone on its side: narrow, the view keeps room
                 self.resizeDocks([self.advisor_dock], [320], Qt.Orientation.Horizontal)
 
@@ -1052,6 +1066,11 @@ class MainWindow(QMainWindow):
             )
             return
         obj = s.project.objects.get(_uuid(node.object)) if node.object else None
+        if not isinstance(obj, ResultProbe):
+            self._drop_linearization()
+        if node.kind == "group" and obj is not None:  # a folder: what it holds, by name
+            self.properties.show_text(self._group_rows(obj))
+            return
         if obj is None:
             self.properties.show_text({"project": s.project.name} if node.kind == "project" else {})
             return
@@ -1547,6 +1566,19 @@ class MainWindow(QMainWindow):
             self.report(exc)
             self.properties.show_text({"Tool": probe.name, "Value": "not available"})
             return
+        if probe.type == "linearized":  # the ASME breakdown, in its own panel
+            from puzzle.gui.linearization_panel import LinearizationPanel
+            from puzzle.post.probes import placed
+
+            self._drop_linearization()
+            self.linearization_panel = LinearizationPanel(
+                self, placed(self.session.project, probe), found
+            )
+            self.show_tool(self.linearization_panel)
+            self.properties_dock.setWindowTitle("Linearized stress")
+            self.linearization_panel.show_report()
+            return
+        self._drop_linearization()
         if probe.type != "point":  # result tools (ADR 0042)
             from puzzle.gui.result_tools import rows
             from puzzle.post.probes import placed
@@ -1573,6 +1605,33 @@ class MainWindow(QMainWindow):
         if found["distance"] > 0:
             rows["Note"] = f"outside the mesh: read {_position_delta(found['distance'])} away"
         self.properties.show_text(rows)
+
+    def _group_rows(self, group) -> dict:
+        from puzzle.gui.tree import ROLE
+
+        held = []
+        for item in self.tree._items():
+            parent = item.parent()
+            up = parent.data(0, ROLE) if parent is not None else None
+            if up is not None and up.kind == "group" and up.object == str(group.id):
+                held.append(item.text(0))
+        rows = {"Group": group.name, "Under": group.section}
+        rows["Holds"] = ", ".join(held) if held else "nothing yet: drag items here"
+        rows["Tip"] = "Drag items in or out, or right-click → Move to group; F2 renames"
+        return rows
+
+    def _drop_linearization(self) -> None:
+        """Back to Properties from a linearization's panel (another item is shown)."""
+        panel = getattr(self, "linearization_panel", None)
+        if panel is None:
+            return
+        if self.side.currentWidget() is panel:
+            self.show_tool(None)
+        self.side.removeWidget(panel)
+        panel.drop_report()
+        panel.hide()
+        panel.deleteLater()
+        self.linearization_panel = None
 
     def _show_kept_probe(self, probe) -> None:
         """Its source's result, with the probe marked, and its value in Properties."""
@@ -1604,8 +1663,12 @@ class MainWindow(QMainWindow):
         elif self.viewport.result_state is not None and probe.type in ("path", "linearized"):
             self.viewport.mark_point(at.point, "Path start")
         self.show_probe(probe)
-        if probe.type in ("path", "linearized"):  # plotted against the distance (Plots)
+        if probe.type == "path":  # plotted against the distance (Plots)
             self.plots.show_path(probe)
+        elif probe.type == "linearized":  # its plot is ready behind the breakdown
+            self.plots.show_path(probe)
+            if getattr(self, "linearization_panel", None) is not None:
+                self.linearization_panel.show_report()
 
     # --- picking -------------------------------------------------------------------
 
@@ -1931,7 +1994,8 @@ class MainWindow(QMainWindow):
         item = self.tree.itemAt(pos)
         if item is None or self.session is None:
             return
-        self.tree.setCurrentItem(item)
+        if not item.isSelected():  # keep a multiple selection (Move to group takes it all)
+            self.tree.setCurrentItem(item)
         menu = build_menu(self, self.tree.current())
         if menu is not None:
             menu.exec(self.tree.viewport().mapToGlobal(pos))
@@ -2179,13 +2243,6 @@ class MainWindow(QMainWindow):
             node = node[int(part)] if isinstance(node, list) else getattr(node, part)
         return getattr(node, "selection", None)
 
-    def _dock(self, title: str, widget, area) -> QDockWidget:
-        dock = QDockWidget(title, self)
-        dock.setObjectName(title)
-        dock.setWidget(widget)
-        self.addDockWidget(area, dock)
-        return dock
-
     def _reload_soon(self) -> None:
         self._reload_timer.start()
         # Some editors replace the file; keep watching the new one.
@@ -2200,7 +2257,7 @@ class MainWindow(QMainWindow):
 
     # --- layout (ADR 0031) ----------------------------------------------------------
 
-    def fold_messages(self, folded: bool) -> None:
+    def fold_messages(self, folded: bool, resize: bool = True) -> None:
         """Messages as just their tab bar (folded), or open with the selected tab.
 
         Folding resizes the dock; it never caps its height, so the separator above it
@@ -2209,15 +2266,37 @@ class MainWindow(QMainWindow):
         left the separator stuck."""
         from PySide6.QtWidgets import QStackedWidget as Stack
 
+        dock = self.messages_dock
+        if not folded and dock.isHidden():
+            # Closed with its ×: opening Messages (the button, a run's news, a tab, the
+            # linearization's breakdown) brings the dock back too, docked at the bottom
+            # if it had been floating (a closed floating window is easily lost).
+            # Re-docking resizes it: not a drag to fold (`_messages_resized`), until the
+            # layout settles and the open height is set.
+            self._resizing_messages = True
+            if dock.isFloating():
+                dock.setFloating(False)
+            dock.show()
+            dock.raise_()
+
+            def settle() -> None:
+                if not self.messages_folded:
+                    self.resizeDocks([dock], [self._messages_open_height], Qt.Orientation.Vertical)
+                self._resizing_messages = False
+
+            QTimer.singleShot(60, settle)
         stack = self.output_tabs.findChild(Stack)
         if stack is not None:
             stack.setVisible(not folded)
         was = getattr(self, "messages_folded", None)
         self.messages_folded = folded
-        if was is not None and was != folded and self.messages_dock.isVisible():
+        if resize and was is not None and was != folded and dock.isVisible():
             height = self._folded_height() if folded else self._messages_open_height
             held, self._resizing_messages = self._resizing_messages, True
-            self.resizeDocks([self.messages_dock], [height], Qt.Orientation.Vertical)
+            if dock.isFloating():  # its own window: resize that, not the dock area
+                dock.resize(dock.width(), height)
+            else:
+                self.resizeDocks([dock], [height], Qt.Orientation.Vertical)
             self._resizing_messages = held
         action = self.actions_by_name.get("messages") if hasattr(self, "actions_by_name") else None
         if action is not None and action.isChecked() == folded:
@@ -2235,10 +2314,12 @@ class MainWindow(QMainWindow):
         if getattr(self, "_resizing_messages", False):
             return
         folded = self._folded_height()
+        # The drag sets the height: folding or unfolding here never resizes the dock,
+        # or it would jump away from the separator under the mouse.
         if self.messages_folded and height > folded + 24:
-            self.fold_messages(False)
+            self.fold_messages(False, resize=False)
         elif not self.messages_folded and height <= folded + 8:
-            self.fold_messages(True)
+            self.fold_messages(True, resize=False)
         if not self.messages_folded and height > folded + 24:
             self._messages_open_height = height
 
@@ -2252,17 +2333,14 @@ class MainWindow(QMainWindow):
 
     def _restore_layout(self) -> None:
         """The layout this user left, else the default sizes."""
-        from PySide6.QtCore import QByteArray
 
         from puzzle.settings import window_state_path
 
         path = window_state_path()
         try:
             data = path.read_bytes() if path.exists() else b""
-            geometry, _, state = data.partition(b"\n--state--\n")
             self._resizing_messages = True  # the restore's own resizes aren't drags
-            if state and self.restoreState(QByteArray(state)):
-                self.restoreGeometry(QByteArray(geometry))
+            if data and self.docks.restore(data):
                 QTimer.singleShot(0, lambda: self._sync_messages_fold(restored=True))
                 return
         except OSError:
@@ -2270,22 +2348,29 @@ class MainWindow(QMainWindow):
         self._size_docks()
         QTimer.singleShot(0, self._sync_messages_fold)
 
-    def _sync_messages_fold(self, restored: bool = False, tries: int = 10) -> None:
+    def _sync_messages_fold(
+        self, restored: bool = False, tries: int = 10, decided: bool | None = None
+    ) -> None:
         """Once the layout is applied: Messages folded or open as a restored layout left
         them (by its height), else folded, sized to match. Qt lays the dock area out
-        after the first show, so the size is set again until it holds."""
+        after the first show, so the size is set again until it holds. The fold is
+        decided once; if the user opens or folds Messages meanwhile, the pass stops."""
         folded_height = self._folded_height()
-        height = self.messages_dock.height()
-        folded = not restored or height <= folded_height + 24
-        if restored and not folded:
-            self._messages_open_height = height
-        self.messages_folded = folded
-        self.fold_messages(folded)
-        target = folded_height if folded else self._messages_open_height
+        if decided is None:
+            height = self.messages_dock.height()
+            decided = not restored or height <= folded_height + 24
+            if restored and not decided:
+                self._messages_open_height = height
+            self.messages_folded = decided
+            self.fold_messages(decided)
+        elif self.messages_folded != decided:  # the user's own fold or unfold won
+            self._resizing_messages = False
+            return
+        target = folded_height if decided else self._messages_open_height
         self._resizing_messages = True
         self.resizeDocks([self.messages_dock], [target], Qt.Orientation.Vertical)
         if abs(self.messages_dock.height() - target) > 4 and tries > 0:
-            QTimer.singleShot(20, lambda: self._sync_messages_fold(not folded, tries - 1))
+            QTimer.singleShot(20, lambda: self._sync_messages_fold(restored, tries - 1, decided))
             return
         self._resizing_messages = False
 
@@ -2295,8 +2380,7 @@ class MainWindow(QMainWindow):
         path = window_state_path()
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            data = bytes(self.saveGeometry()) + b"\n--state--\n" + bytes(self.saveState())
-            path.write_bytes(data)
+            path.write_bytes(self.docks.state())
         except OSError:
             pass  # a layout is a convenience; never fail closing over it
 
@@ -2305,10 +2389,22 @@ class MainWindow(QMainWindow):
         from puzzle.settings import window_state_path
 
         window_state_path().unlink(missing_ok=True)
-        for dock in (self.model_dock, self.properties_dock, self.messages_dock):
-            dock.show()
-        self.agent_dock.hide()
-        self.fold_messages(True)
+        self.docks.apply("modelling")
+
+    def _layout(self, name: str) -> None:
+        """A built-in layout (Window → Layouts): the model and its properties on the
+        left; Messages folded (Modelling) or open on the plots (Results); the agent
+        beside the model (Agent)."""
+        for key in ("model", "properties", "messages"):
+            self.docks.show(key, front=False)
+        self.advisor_dock.hide()
+        if name == "agent":
+            self.docks.show("agent")
+        else:
+            self.agent_dock.hide()
+        self.fold_messages(name != "results")
+        if name == "results":
+            self.output_tabs.setCurrentWidget(self.plots)
         self._size_docks()
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802 - Qt's name

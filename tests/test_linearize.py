@@ -62,3 +62,71 @@ def test_report_gives_the_governing_value_and_plot_series():
     assert out["parts"]["end"]["membrane_bending"]["equivalent"] == pytest.approx(60)
     assert len(out["series"]["membrane_bending"]) == len(x)
     assert out["series"]["membrane_bending"][0] == pytest.approx(140)
+
+
+def test_the_line_frame_is_right_handed_and_follows_the_hoop():
+    from puzzle.post.linearize import line_frame
+
+    r = line_frame((0, 0, 0), (2, 0, 0), hoop=(0, 1, 0.3))
+    n, t, h = r.T
+    assert np.allclose(n, (1, 0, 0)) and np.allclose(h, np.array([0, 1, 0.3]) / np.hypot(1, 0.3))
+    assert np.allclose(t, np.cross(h, n)) and np.allclose(r.T @ r, np.eye(3))
+    assert np.allclose(line_frame((0, 0, 0), (0, 0, 1))[:, 2] @ (0, 0, 1), 0)  # default hoop
+
+
+def test_rotating_a_uniaxial_stress_onto_the_line():
+    from puzzle.post.linearize import line_frame, rotate
+
+    sigma = np.array([[0, 0, 0, 0, 0, 0], [5.0, 0, 0, 0, 0, 0]])  # xx only
+    local = rotate(sigma, line_frame((0, 0, 0), (1, 0, 0), hoop=(0, 0, 1)))
+    assert local[1, 0] == pytest.approx(5.0) and np.allclose(local[1, 1:], 0)
+    diagonal = rotate(sigma, line_frame((0, 0, 0), (1, 1, 0), hoop=(0, 0, 1)))
+    assert diagonal[1, 0] == pytest.approx(2.5) and diagonal[1, 1] == pytest.approx(2.5)
+
+
+def test_asme_bending_is_for_the_normal_stresses_across_the_line_only():
+    # A linear stress along the line (nn) and the same in the hoop (hh): ASME's option
+    # leaves nn's linear part in the peak and keeps hh's as bending.
+    t = 0.02
+    x = np.linspace(0, t, 47)
+    field = np.zeros((len(x), 6))
+    field[:, 0] = field[:, 2] = 30e6 * (1 - 2 * x / t)
+    full = linearize(x, field)
+    asme = linearize(x, field, normal_only=True)
+    assert full["start"]["bending"][0] == pytest.approx(30e6)
+    assert asme["start"]["bending"][0] == 0.0 and asme["start"]["peak"][0] == pytest.approx(30e6)
+    assert asme["start"]["bending"][2] == pytest.approx(30e6)
+
+
+def test_thick_cylinder_membrane_hoop_stress_is_p_ri_over_t():
+    # Lamé, internal pressure p, closed ends: sigma_theta = A + B/r², sigma_r = A - B/r².
+    from puzzle.post.linearize import line_frame
+
+    p, ri, ro = 10e6, 0.1, 0.15
+    a, b = p * ri**2 / (ro**2 - ri**2), p * ri**2 * ro**2 / (ro**2 - ri**2)
+    r = np.linspace(ri, ro, 47)
+    field = np.zeros((len(r), 6))
+    field[:, 0], field[:, 1], field[:, 2] = a - b / r**2, a + b / r**2, a  # on the x axis
+    out = report(r - ri, field, "tresca", frame=line_frame((ri, 0, 0), (ro, 0, 0), (0, 1, 0)))
+    m = out["parts"]["start"]["membrane"]["components"]
+    assert m["hh"] == pytest.approx(p * ri / (ro - ri), rel=1e-4)  # the hoop membrane
+    assert m["nn"] == pytest.approx(-p * ri / (ri + ro), rel=1e-4)  # radial: ∫ sigma_r / t
+    assert m["tt"] == pytest.approx(a)  # axial, uniform
+    total_in = out["parts"]["start"]["total"]["components"]
+    assert total_in["nn"] == pytest.approx(-p) and total_in["hh"] == pytest.approx(a + b / ri**2)
+    s1, _s2, s3 = out["parts"]["start"]["total"]["principal"]
+    assert out["parts"]["start"]["total"]["tresca"] == pytest.approx(s1 - s3)
+
+
+def test_checks_against_an_allowable():
+    from puzzle.post.linearize import checks
+
+    t = 0.01
+    x = np.linspace(0, t, 21)
+    out = report(x, _field(x, 100e6 + 60e6 * (1 - 2 * x / t)))
+    rows = checks(out, 120e6)
+    assert [r["ok"] for r in rows] == [True, True, True]
+    assert rows[0]["ratio"] == pytest.approx(100 / 120)
+    assert rows[1]["value"] == pytest.approx(160e6) and rows[1]["limit"] == pytest.approx(180e6)
+    local = checks(out, 60e6, membrane="local")
+    assert local[0]["limit"] == pytest.approx(90e6) and not local[0]["ok"]

@@ -1,6 +1,7 @@
 """Stress linearization along a line through a wall (ASME BPVC VIII-2, Annex 5-A).
 
-A pressure-vessel check classes the stress across a wall into
+A pressure-vessel check classes the stress across a wall, along a stress
+classification line (SCL), into
 - **membrane** (the mean through the thickness),
 - **bending** (the linear part, equal and opposite at the two faces), and
 - **peak** (what is left: the total less membrane and bending).
@@ -12,13 +13,26 @@ Ansys's PRSECT does:
     bending   b_ij = (6/t²) ∫ s_ij (t/2 − x) dx    (at the start; −b_ij at the end)
     peak      p_ij = s_ij − m_ij ∓ b_ij             (at either end)
 
-with x along the line from its start, t its length. Equivalent values are then taken
-from the linearized tensors: von Mises (VIII-2 since 2007) or the stress intensity
-(Tresca: the largest difference of principal stresses; the older rules). Integrals use
-Simpson's rule over evenly spaced points (an odd count; Ansys uses 47).
+with x along the line from its start, t its length. Integrals use Simpson's rule over
+evenly spaced points (an odd count; Ansys uses 47).
 
-Components are in the global axes. An equivalent stress doesn't depend on the axes,
-so the classification checks (Pm, PL + Pb, ...) read the same in any frame.
+**Axes.** Components are given in the global axes, or in the line's own (`line_frame`):
+n through the wall along the line, h the hoop direction (chosen, else the global axis
+most across the line), t = h × n the meridional one. Annex 5-A (5-A.4.1.2) computes
+bending only for the hoop and meridional normal stresses, not for the stress along the
+SCL or the shears; `normal_only` does that, in the line's axes. Equivalent stresses
+don't depend on the axes, only on which parts carry bending.
+
+**Equivalents.** von Mises (VIII-2 since 2007) and the stress intensity (Tresca: the
+largest difference of principal stresses, the older rules), with the principal
+stresses, for each part at both ends.
+
+**Checks** (`checks`, VIII-2 5.2.2.4, elastic analysis) against an allowable S: the
+membrane as general primary (Pm ≤ S) or local primary (PL ≤ 1.5 S), membrane + bending
+as primary (PL + Pb ≤ 1.5 S) and as primary + secondary (PL + Pb + Q ≤ 3 S, when the
+load includes secondary stress such as thermal). S_PL = 1.5 S and S_PS = 3 S here; where
+Part 5 allows the yield strength instead, compare by hand. Which load is primary and
+which secondary is the engineer's call: the numbers are the linearized stresses.
 """
 
 from __future__ import annotations
@@ -35,6 +49,38 @@ LABELS = {
     "total": "Total",
 }
 EQUIVALENTS = {"von_mises": "von Mises", "tresca": "Stress intensity (Tresca)"}
+LOCAL = ("nn", "tt", "hh", "nt", "th", "hn")  # the line's axes: through, meridional, hoop
+LOCAL_LABELS = {
+    "nn": "Through the wall (n)", "tt": "Meridional (t)", "hh": "Hoop (h)",
+    "nt": "Shear nt", "th": "Shear th", "hn": "Shear hn",
+}  # fmt: skip
+GLOBAL_LABELS = {c: c.upper() for c in ORDER}
+
+
+def line_frame(start, end, hoop=None) -> np.ndarray:
+    """The line's axes as columns (n, t, h): n along the line, h the hoop direction
+    (`hoop`, else the global axis most across the line) made square to n, t = h × n."""
+    n = np.asarray(end, float) - np.asarray(start, float)
+    n /= np.linalg.norm(n)
+    if hoop is None or not np.linalg.norm(hoop):
+        hoop = np.eye(3)[int(np.argmin(np.abs(n)))]
+    h = np.asarray(hoop, float) - (np.asarray(hoop, float) @ n) * n
+    if np.linalg.norm(h) < 1e-9:
+        raise ValueError("the hoop direction lies along the line")
+    h /= np.linalg.norm(h)
+    return np.column_stack([n, np.cross(h, n), h])
+
+
+def rotate(tensors, frame: np.ndarray) -> np.ndarray:
+    """(…, 6) global tensors in the axes `frame`'s columns give (Rᵀ σ R), same order."""
+    m = np.einsum("ji,...jk,kl->...il", frame, _matrix(tensors), frame)
+    return np.stack([m[..., 0, 0], m[..., 1, 1], m[..., 2, 2],
+                     m[..., 0, 1], m[..., 1, 2], m[..., 2, 0]], -1)  # fmt: skip
+
+
+def principal(v) -> np.ndarray:
+    """Principal stresses S1 ≥ S2 ≥ S3 of (…, 6) tensors."""
+    return np.linalg.eigvalsh(_matrix(v))[..., ::-1]
 
 
 def simpson(y: np.ndarray, x: np.ndarray) -> np.ndarray:
@@ -74,11 +120,12 @@ def equivalent(v: np.ndarray, kind: str = "von_mises") -> np.ndarray:
     )
 
 
-def linearize(distance, tensors) -> dict:
-    """Membrane, bending and peak parts of `tensors` ((n, 6), xx…zx, SI) sampled at
-    `distance` ((n,), evenly spaced from the line's start). Returns each part's six
-    components at the start ("start") and at the end ("end"); membrane is the same at
-    both."""
+def linearize(distance, tensors, normal_only: bool = False) -> dict:
+    """Membrane, bending and peak parts of `tensors` ((n, 6), SI) sampled at `distance`
+    ((n,), evenly spaced from the line's start). Returns each part's six components at
+    the start ("start") and at the end ("end"); membrane is the same at both.
+    `normal_only` (tensors in the line's axes): bending for the meridional and hoop
+    normal stresses only, as Annex 5-A asks."""
     x = np.asarray(distance, float) - float(distance[0])
     s = np.asarray(tensors, float)
     t = float(x[-1])
@@ -86,6 +133,8 @@ def linearize(distance, tensors) -> dict:
         raise ValueError("the line has no length")
     membrane = simpson(s, x) / t
     bending = 6.0 / t**2 * simpson(s * (t / 2.0 - x)[:, None], x)
+    if normal_only:
+        bending = bending * np.array([0.0, 1.0, 1.0, 0.0, 0.0, 0.0])
     out = {}
     for end, sign, total in (("start", 1.0, s[0]), ("end", -1.0, s[-1])):
         mb = membrane + sign * bending
@@ -99,36 +148,71 @@ def linearize(distance, tensors) -> dict:
     return out
 
 
-def report(distance, tensors, kind: str = "von_mises") -> dict:
-    """`linearize`, with each part's equivalent at both ends and the distributions along
-    the line (total, membrane, membrane + bending) for a plot. `value` is the largest
-    membrane + bending equivalent, the usual governing number."""
+def report(
+    distance,
+    tensors,
+    kind: str = "von_mises",
+    frame: np.ndarray | None = None,
+    normal_only: bool = False,
+) -> dict:
+    """`linearize`, with each part at both ends as components, principal stresses and
+    both equivalents, the total at the middle, and the distributions along the line
+    (total, membrane, membrane + bending) for a plot. `frame`: give the components in
+    those axes (`line_frame`); `value` is the largest membrane + bending equivalent of
+    `kind`, the usual governing number."""
     x = np.asarray(distance, float) - float(distance[0])
-    parts = linearize(distance, tensors)
+    s = np.asarray(tensors, float) if frame is None else rotate(tensors, frame)
+    names = ORDER if frame is None else LOCAL
+    parts = linearize(distance, s, normal_only and frame is not None)
     t = float(x[-1])
-    rows = {}
-    for end in ("start", "end"):
-        rows[end] = {
-            part: {
-                "components": dict(zip(ORDER, parts[end][part].tolist(), strict=True)),
-                "equivalent": float(equivalent(parts[end][part], kind)),
-            }
-            for part in PARTS
+
+    def row(v) -> dict:
+        return {
+            "components": dict(zip(names, np.asarray(v).tolist(), strict=True)),
+            "principal": principal(v).tolist(),
+            "von_mises": float(equivalent(v, "von_mises")),
+            "tresca": float(equivalent(v, "tresca")),
+            "equivalent": float(equivalent(v, kind)),
         }
+
+    rows = {end: {part: row(parts[end][part]) for part in PARTS} for end in ("start", "end")}
     m = parts["start"]["membrane"]
     b = parts["start"]["bending"]
     linear = m[None, :] + b[None, :] * (1.0 - 2.0 * x / t)[:, None]
+    middle = np.array([np.interp(t / 2, x, s[:, i]) for i in range(6)])
     return {
         "parts": rows,
+        "middle": row(middle),
         "equivalent": kind,
+        "components_in": "global" if frame is None else "line",
+        "frame": None if frame is None else np.asarray(frame).tolist(),
+        "bending": "normal" if normal_only and frame is not None else "all",
         "thickness": t,
         "value": max(
             rows["start"]["membrane_bending"]["equivalent"],
             rows["end"]["membrane_bending"]["equivalent"],
         ),  # fmt: skip
         "series": {
-            "total": equivalent(tensors, kind).tolist(),
+            "total": equivalent(s, kind).tolist(),
             "membrane": [rows["start"]["membrane"]["equivalent"]] * len(x),
             "membrane_bending": equivalent(linear, kind).tolist(),
         },
     }
+
+
+def checks(found: dict, allowable: float, membrane: str = "general") -> list[dict]:
+    """VIII-2 5.2.2.4's elastic checks on a linearization (`report`), with the
+    equivalent it used: each {name, value, limit, ratio, ok}. `membrane`: "general"
+    (Pm ≤ S) or "local" (PL ≤ 1.5 S) primary membrane."""
+    s = float(allowable)
+    parts = found["parts"]
+    pm = parts["start"]["membrane"]["equivalent"]
+    mb = max(parts[e]["membrane_bending"]["equivalent"] for e in ("start", "end"))
+    rows = [
+        ("Primary membrane, Pm ≤ S", pm, s) if membrane == "general"
+        else ("Local primary membrane, PL ≤ 1.5 S", pm, 1.5 * s),
+        ("Primary membrane + bending, PL + Pb ≤ 1.5 S", mb, 1.5 * s),
+        ("Primary + secondary, PL + Pb + Q ≤ 3 S", mb, 3.0 * s),
+    ]  # fmt: skip
+    return [{"name": n, "value": v, "limit": lim, "ratio": v / lim, "ok": v <= lim}
+            for n, v, lim in rows]  # fmt: skip
