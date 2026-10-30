@@ -35,8 +35,11 @@ input.
 
 | Study | Nodes | Time | Largest displacement | Largest von Mises |
 | --- | --- | --- | --- | --- |
-| Bonded | 53,367 | 36 s | 0.080 mm | 50 MPa |
-| Bolted | 25,541 | 38 min | 0.232 mm | 177 MPa (at the bolts) |
+| Bonded | 53,367 | 15 s solve (22 s in all) | 0.080 mm | 50 MPa |
+| Bolted | 20,724 | 15.6 min solve | 0.232 mm | 170 MPa (at the bolts) |
+
+Every run prints its time per stage. For the bolted study: mesh 1.9 s, write 0.5 s,
+solve 935 s, read 0.4 s, store 0.1 s. The solve is all of it.
 
 The bolted joint is softer than the glued one: the flange's back edge lifts where the
 glue held it, and the bolts carry the moment.
@@ -53,8 +56,20 @@ glue held it, and the bolts carry the moment.
 
 ## Known limits
 
-- **The bolted study is slow** (38 min on 8 cores). CalculiX's surface-to-surface
-  contact makes about 108,000 contact elements for this seat, and friction makes the
-  system unsymmetric, which its SPOOLES solver factors slowly (this build has no
-  PARDISO). Its node-to-surface contact needs about 2,200 but doesn't converge with
-  Puzzle's penalty stiffness yet; tuning it is a follow-up.
+- **The bolted study is slow** (15.6 min on 8 cores), and contact is why: the same
+  deck with the seat tied instead solves in under a minute. CalculiX's
+  surface-to-surface contact makes about 108,000 contact elements for this seat, and
+  friction makes the system unsymmetric, which its SPOOLES solver factors slowly (this
+  build has no PARDISO). Each contact iteration costs about 20 s.
+- **What was tried** (the same bolted deck):
+
+  | Change | Time | Answer vs. the stiffest contact |
+  | --- | --- | --- |
+  | Penalty 50 E/h, load ramped from 10 % (the old default) | 37.6 min | reference |
+  | Penalty 50 E/h, full load at once | 27 min | the same |
+  | Penalty 10 E/h, full load (the "balanced" default now) | 13.6 min | within 0.05 % |
+  | Penalty 1 E/h, full load ("fast") | 5.4 min | 0.7 % |
+  | Node-to-surface contact | 9 min | 51 % off: wrong |
+
+  Beam bolts in place of solid ones take about 5,000 nodes out of the mesh but barely
+  change the time, since the contact iterations dominate.
