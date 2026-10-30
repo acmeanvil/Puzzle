@@ -1,0 +1,68 @@
+# 0050. Bolts: types, a generator, and a bolt table with results along each bolt
+
+- Status: Proposed
+- Date: 2026-10-30
+
+## Context
+
+Fasteners (ADR 0027) are now beam bolts by default: light, exact for a Timoshenko beam, on CalculiX and Code_Aster. A model is made of them one at a time ("Add fastener…": two face selections, a diameter, a material, the ends), or from coaxial holes ("Fasteners from holes…", `geometry/holes.py`). Real assemblies have tens or hundreds of bolts of a few kinds, and the questions about them are tabular: which bolt carries most, how close each is to its proof load, how the bending runs along it.
+
+The maintainer asked for:
+- a way to specify each bolt's type and what it attaches to;
+- an **automatic bolt generator**, its anchors given by direct picks, selection sets, or a geometry rule (sorting the model's holes), including through the agent;
+- a **tabbed bolt table**: one tab to see and edit every bolt's properties, one with each bolt's loads and moments along its length.
+
+Nastran (CBAR/CBEAM with RBE2/RBE3 spiders, a bolt preload), Ansys (bolt beams, bolt pretension, the Bolt Tools and the bolt table in Workbench) and Algor's beam bolts are the reference points.
+
+## Decision (proposed)
+
+1. **Bolt types.** A project object, **Bolt type** (kind `bolt_type`), is a bolt's specification once, shared by every bolt of that kind:
+   - **size:** nominal diameter, and the tensile stress area (from the standard, or computed from the pitch);
+   - **grade:** a material (E, ν, and the proof and yield strengths the checks use), from the library or given;
+   - **preload:** none, a force, a percentage of the proof load, or a torque with a nut factor K (F = T / (K d));
+   - **formulation:** beam (default) or solid (ADR 0027);
+   - **ends:** rigid or distributing;
+   - **attachment:** the hole's wall, or the annulus under the head and nut (a head and nut diameter); the spider takes those faces' nodes.
+
+   A built-in list covers the published standards: ISO metric coarse M3–M30 in grades 4.6, 8.8, 10.9 and 12.9, and UNC #4–1" in SAE grades 2, 5 and 8 (stress areas, proof loads). Users add their own types. A bolt names its type (`BeamFastener.type`); a value set on the bolt itself overrides the type's.
+2. **What a bolt attaches to:** its two ends, each a face selection (a hole wall or an annulus), as now. It may also have more than two plates (a bolt through a stack): the ends are its first and last faces, and the plates between are joined by the same beam through intermediate nodes.
+3. **The bolt generator** (Bolts → Generate bolts…, a panel with the view live) proposes bolts, previewed in the view and listed with a tick each. Generate makes them, with their face selections, in one command (one undo). Anchors come from any of:
+   - **picks:** hole faces picked in the view, paired by axis;
+   - **selection sets:** each face of one set paired with the coaxial face of another (a flange's holes to its mate's);
+   - **a rule:** the model's cylindrical faces filtered and paired: a diameter range, parts or part pairs, an axis direction, coaxial within a tolerance, a minimum and maximum length, through holes only. The rule is stored with the bolts it made, so it can be run again after the geometry changes and says what it would add or remove;
+   - **the agent:** "put M10s through every 10.5 mm hole between the flange and the housing" becomes a rule (MCP `bolts_generate`, made as a proposal), shown in the same preview before anything is made.
+
+   Each proposed bolt gets a type (chosen, or matched by hole diameter), a name by a pattern ("Flange bolt 1…n"), and a group in the tree (ADR tree groups).
+4. **The bolt table** (Window → Bolts, a dock with two tabs):
+   - **Properties:** one row per bolt: name, type, the two ends, diameter, length (computed), preload, formulation, end style, group. Cells edit in place (each edit a command; several rows at once for a column). Rows are filtered and sorted, a bolt selected in the table is selected in the tree and drawn in the view, and the table exports to CSV.
+   - **Results:** for a run and step chosen in the tab:
+     - each bolt's axial force, shear, torsion and bending moment at both ends, and the largest bending moment;
+     - its utilisation against its type's proof load: σ = F/As + M/Z, with Z = πd³/32 on the stress area's diameter, and against yield. The worst is sorted first and marked;
+     - a selected bolt's **loads and moments along its length** as a plot: N, V and T constant along a beam bolt and M linear between its two ends (from both solvers' end forces), or per section for a solid bolt;
+     - the table and plot export to CSV.
+5. **Checks:**
+   - the generator's rules on a flange with holes of three sizes (counts and pairings);
+   - the table's utilisation against a hand calculation;
+   - the along-length moments against a cantilevered bolt's M(x) = P (L − x);
+   - a preload from a torque against F = T/(K d);
+   - editing in the table as commands (undo).
+
+**Order of work:**
+1. bolt types and the built-in standard list;
+2. the bolt table's Properties tab;
+3. the Results tab, with utilisation and the along-length plot;
+4. the generator: picks and selection sets, then rules, then the agent;
+5. head and nut annulus attachment, and bolts through stacks.
+
+## Consequences
+
+- Bolts become a managed set: specified once by type, placed in bulk, checked in one table, and regenerated when the geometry changes.
+- `BeamFastener` gains a type reference and overrides; the adapters read the resolved values, so solvers see no change.
+- The built-in standards data is published standard values (stress areas, proof loads), shipped with Puzzle like the generic materials.
+
+## Questions for the maintainer
+
+1. **Standards:** ISO metric and UNC/SAE to start (recommended), or others too (ASTM A325/A490, metric fine pitch)?
+2. **Preload:** force, percentage of proof and torque all offered (recommended), with which default (75 % of proof, a common practice)?
+3. **Attachment default:** the hole wall (as now) or the head and nut annulus (closer to how a bolt clamps)?
+4. **The table:** a dock beside Messages (recommended), or a separate window?
