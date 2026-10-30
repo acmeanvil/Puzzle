@@ -49,6 +49,14 @@ PROPERTIES: list[PropertyDef] = [
         help="Engineering ultimate; the curve builder and fatigue use it",
     ),
     PropertyDef(
+        "proof_strength",
+        "Proof strength",
+        "Pa",
+        "pressure",
+        "Structural",
+        help="A fastener's proof stress (ISO 898-1, SAE J429, ASTM); preloads and checks use it",
+    ),
+    PropertyDef(
         "thermal_expansion",
         "Thermal expansion coefficient",
         "1/K",

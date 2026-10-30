@@ -12,6 +12,14 @@ from puzzle.materials import (
 )
 from puzzle.model import Project, Quantity
 
+# Bolting steels (ASTM bolt and stud specifications, SAE J429, ISO 898-1)
+BOLTING = {
+    "astm_a193_b7", "astm_a193_b16", "astm_a193_b8_cl1", "astm_a193_b8m_cl2", "astm_a320_l7",
+    "astm_a307_a", "astm_a449", "astm_a354_bd", "astm_f3125_a325", "astm_f3125_a490",
+    "sae_j429_grade_2", "sae_j429_grade_5", "sae_j429_grade_8", "iso_898_1_class_4_6",
+    "iso_898_1_class_8_8", "iso_898_1_class_10_9", "iso_898_1_class_12_9",
+}  # fmt: skip
+
 GENERIC = {
     "structural_steel",
     "stainless_steel_304",
@@ -22,7 +30,7 @@ GENERIC = {
     "ptfe",
     "air",
     "water",
-}
+} | BOLTING
 
 
 def test_generic_set_is_shipped():
@@ -126,11 +134,10 @@ def test_default_user_library_location(monkeypatch):
 
 
 def test_search():
-    assert search_library("steel") == [
-        "electrical_steel",
-        "stainless_steel_304",
-        "structural_steel",
-    ]
+    # the bolting steels match by their group, "Bolting Steel"
+    assert search_library("steel") == sorted(
+        {"electrical_steel", "stainless_steel_304", "structural_steel"} | BOLTING
+    )
 
 
 def test_adding_copies_into_the_project():

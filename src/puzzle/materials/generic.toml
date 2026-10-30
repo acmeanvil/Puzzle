@@ -158,3 +158,291 @@ thermal_expansion = { value = 120e-6, unit = "1/K" }
 electrical_conductivity = { value = 1e-16, unit = "S/m" }
 relative_permittivity = { value = 2.1 }
 relative_permeability = { value = 1.0 }
+
+# Bolting steels: ASTM bolt and stud specifications, SAE J429 grades and ISO 898-1
+# property classes. Strengths are the standards' specified minimums for the size range
+# named (they fall for larger diameters); physical properties are typical for the alloy.
+# A307 sets no yield or proof; its yield here is a typical minimum.
+
+[astm_a193_b7]
+name = "ASTM A193 B7"
+type = "Metal"
+group = "Bolting Steel"
+description = "Cr-Mo (AISI 4140) alloy steel bolting and studs for high-temperature or pressure service, quenched and tempered; values for diameters up to 2.5 in"
+sources = ["ASTM A193/A193M, Table 2: grade B7, up to 2.5 in"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 205, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+yield_strength = { value = 724, unit = "MPa" }
+tensile_strength = { value = 862, unit = "MPa" }
+thermal_conductivity = { value = 42.6, unit = "W/(m*K)" }
+specific_heat = { value = 473, unit = "J/(kg*K)" }
+thermal_expansion = { value = 1.23e-05, unit = "1/K" }
+electrical_conductivity = { value = 4500000.0, unit = "S/m" }
+
+[astm_a193_b16]
+name = "ASTM A193 B16"
+type = "Metal"
+group = "Bolting Steel"
+description = "Cr-Mo-V alloy steel bolting and studs for high-temperature service; values for diameters up to 2.5 in"
+sources = ["ASTM A193/A193M, Table 2: grade B16, up to 2.5 in"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 205, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+yield_strength = { value = 724, unit = "MPa" }
+tensile_strength = { value = 862, unit = "MPa" }
+thermal_conductivity = { value = 42.6, unit = "W/(m*K)" }
+specific_heat = { value = 473, unit = "J/(kg*K)" }
+thermal_expansion = { value = 1.23e-05, unit = "1/K" }
+electrical_conductivity = { value = 4500000.0, unit = "S/m" }
+
+[astm_a193_b8_cl1]
+name = "ASTM A193 B8 Class 1"
+type = "Metal"
+group = "Bolting Steel"
+description = "Type 304 stainless steel bolting and studs, carbide solution treated"
+sources = ["ASTM A193/A193M, Table 2: grade B8 class 1"]
+density = { value = 8000, unit = "kg/m^3" }
+youngs_modulus = { value = 193, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+yield_strength = { value = 207, unit = "MPa" }
+tensile_strength = { value = 517, unit = "MPa" }
+thermal_conductivity = { value = 16.2, unit = "W/(m*K)" }
+specific_heat = { value = 500, unit = "J/(kg*K)" }
+thermal_expansion = { value = 1.73e-05, unit = "1/K" }
+electrical_conductivity = { value = 1390000.0, unit = "S/m" }
+
+[astm_a193_b8m_cl2]
+name = "ASTM A193 B8M Class 2"
+type = "Metal"
+group = "Bolting Steel"
+description = "Type 316 stainless steel bolting and studs, strain hardened; values for diameters up to 3/4 in"
+sources = ["ASTM A193/A193M, Table 2: grade B8M class 2, up to 3/4 in"]
+density = { value = 8000, unit = "kg/m^3" }
+youngs_modulus = { value = 193, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+yield_strength = { value = 655, unit = "MPa" }
+tensile_strength = { value = 758, unit = "MPa" }
+thermal_conductivity = { value = 16.2, unit = "W/(m*K)" }
+specific_heat = { value = 500, unit = "J/(kg*K)" }
+thermal_expansion = { value = 1.73e-05, unit = "1/K" }
+electrical_conductivity = { value = 1390000.0, unit = "S/m" }
+
+[astm_a320_l7]
+name = "ASTM A320 L7"
+type = "Metal"
+group = "Bolting Steel"
+description = "Cr-Mo alloy steel bolting and studs for low-temperature service (impact tested to -101 °C); values for diameters up to 2.5 in"
+sources = ["ASTM A320/A320M, Table 2: grade L7, up to 2.5 in"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 205, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+yield_strength = { value = 724, unit = "MPa" }
+tensile_strength = { value = 862, unit = "MPa" }
+thermal_conductivity = { value = 42.6, unit = "W/(m*K)" }
+specific_heat = { value = 473, unit = "J/(kg*K)" }
+thermal_expansion = { value = 1.23e-05, unit = "1/K" }
+electrical_conductivity = { value = 4500000.0, unit = "S/m" }
+
+[astm_a307_a]
+name = "ASTM A307 Grade A"
+type = "Metal"
+group = "Bolting Steel"
+description = "Carbon steel bolts and studs for general use; the standard sets no yield or proof, so the yield is a typical minimum"
+sources = ["ASTM A307, grade A: tensile 60 ksi minimum"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 205, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+yield_strength = { value = 248, unit = "MPa" }
+tensile_strength = { value = 414, unit = "MPa" }
+thermal_conductivity = { value = 51.9, unit = "W/(m*K)" }
+specific_heat = { value = 486, unit = "J/(kg*K)" }
+thermal_expansion = { value = 1.17e-05, unit = "1/K" }
+electrical_conductivity = { value = 5900000.0, unit = "S/m" }
+
+[astm_a449]
+name = "ASTM A449"
+type = "Metal"
+group = "Bolting Steel"
+description = "Quenched and tempered medium-carbon steel bolts and studs; values for diameters up to 1 in"
+sources = ["ASTM A449, Table 3: up to 1 in"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 205, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+proof_strength = { value = 585, unit = "MPa" }
+yield_strength = { value = 634, unit = "MPa" }
+tensile_strength = { value = 827, unit = "MPa" }
+thermal_conductivity = { value = 51.9, unit = "W/(m*K)" }
+specific_heat = { value = 486, unit = "J/(kg*K)" }
+thermal_expansion = { value = 1.17e-05, unit = "1/K" }
+electrical_conductivity = { value = 5900000.0, unit = "S/m" }
+
+[astm_a354_bd]
+name = "ASTM A354 BD"
+type = "Metal"
+group = "Bolting Steel"
+description = "Quenched and tempered alloy steel bolts and studs; values for diameters up to 2.5 in"
+sources = ["ASTM A354, Table 2: grade BD, up to 2.5 in"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 205, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+proof_strength = { value = 827, unit = "MPa" }
+yield_strength = { value = 896, unit = "MPa" }
+tensile_strength = { value = 1034, unit = "MPa" }
+thermal_conductivity = { value = 42.6, unit = "W/(m*K)" }
+specific_heat = { value = 473, unit = "J/(kg*K)" }
+thermal_expansion = { value = 1.23e-05, unit = "1/K" }
+electrical_conductivity = { value = 4500000.0, unit = "S/m" }
+
+[astm_f3125_a325]
+name = "ASTM F3125 Grade A325"
+type = "Metal"
+group = "Bolting Steel"
+description = "Heavy hex structural bolts, medium-carbon steel, quenched and tempered (formerly A325)"
+sources = ["ASTM F3125/F3125M, Table 3: grade A325"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 205, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+proof_strength = { value = 585, unit = "MPa" }
+yield_strength = { value = 634, unit = "MPa" }
+tensile_strength = { value = 827, unit = "MPa" }
+thermal_conductivity = { value = 51.9, unit = "W/(m*K)" }
+specific_heat = { value = 486, unit = "J/(kg*K)" }
+thermal_expansion = { value = 1.17e-05, unit = "1/K" }
+electrical_conductivity = { value = 5900000.0, unit = "S/m" }
+
+[astm_f3125_a490]
+name = "ASTM F3125 Grade A490"
+type = "Metal"
+group = "Bolting Steel"
+description = "Heavy hex structural bolts, alloy steel, quenched and tempered (formerly A490)"
+sources = ["ASTM F3125/F3125M, Table 3: grade A490"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 205, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+proof_strength = { value = 827, unit = "MPa" }
+yield_strength = { value = 896, unit = "MPa" }
+tensile_strength = { value = 1034, unit = "MPa" }
+thermal_conductivity = { value = 42.6, unit = "W/(m*K)" }
+specific_heat = { value = 473, unit = "J/(kg*K)" }
+thermal_expansion = { value = 1.23e-05, unit = "1/K" }
+electrical_conductivity = { value = 4500000.0, unit = "S/m" }
+
+[sae_j429_grade_2]
+name = "SAE J429 Grade 2"
+type = "Metal"
+group = "Bolting Steel"
+description = "Low or medium carbon steel bolts and screws; values for diameters 1/4 to 3/4 in"
+sources = ["SAE J429, Table 1: grade 2, 1/4 to 3/4 in"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 205, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+proof_strength = { value = 379, unit = "MPa" }
+yield_strength = { value = 393, unit = "MPa" }
+tensile_strength = { value = 510, unit = "MPa" }
+thermal_conductivity = { value = 51.9, unit = "W/(m*K)" }
+specific_heat = { value = 486, unit = "J/(kg*K)" }
+thermal_expansion = { value = 1.17e-05, unit = "1/K" }
+electrical_conductivity = { value = 5900000.0, unit = "S/m" }
+
+[sae_j429_grade_5]
+name = "SAE J429 Grade 5"
+type = "Metal"
+group = "Bolting Steel"
+description = "Medium carbon steel bolts and screws, quenched and tempered; values for diameters 1/4 to 1 in"
+sources = ["SAE J429, Table 1: grade 5, 1/4 to 1 in"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 205, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+proof_strength = { value = 585, unit = "MPa" }
+yield_strength = { value = 634, unit = "MPa" }
+tensile_strength = { value = 827, unit = "MPa" }
+thermal_conductivity = { value = 51.9, unit = "W/(m*K)" }
+specific_heat = { value = 486, unit = "J/(kg*K)" }
+thermal_expansion = { value = 1.17e-05, unit = "1/K" }
+electrical_conductivity = { value = 5900000.0, unit = "S/m" }
+
+[sae_j429_grade_8]
+name = "SAE J429 Grade 8"
+type = "Metal"
+group = "Bolting Steel"
+description = "Medium carbon alloy steel bolts and screws, quenched and tempered"
+sources = ["SAE J429, Table 1: grade 8, 1/4 to 1.5 in"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 205, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+proof_strength = { value = 827, unit = "MPa" }
+yield_strength = { value = 896, unit = "MPa" }
+tensile_strength = { value = 1034, unit = "MPa" }
+thermal_conductivity = { value = 42.6, unit = "W/(m*K)" }
+specific_heat = { value = 473, unit = "J/(kg*K)" }
+thermal_expansion = { value = 1.23e-05, unit = "1/K" }
+electrical_conductivity = { value = 4500000.0, unit = "S/m" }
+
+[iso_898_1_class_4_6]
+name = "ISO 898-1 Class 4.6"
+type = "Metal"
+group = "Bolting Steel"
+description = "Low or medium carbon steel bolts, screws and studs, property class 4.6"
+sources = ["ISO 898-1:2013, Table 3: property class 4.6"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 205, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+proof_strength = { value = 225, unit = "MPa" }
+yield_strength = { value = 240, unit = "MPa" }
+tensile_strength = { value = 400, unit = "MPa" }
+thermal_conductivity = { value = 51.9, unit = "W/(m*K)" }
+specific_heat = { value = 486, unit = "J/(kg*K)" }
+thermal_expansion = { value = 1.17e-05, unit = "1/K" }
+electrical_conductivity = { value = 5900000.0, unit = "S/m" }
+
+[iso_898_1_class_8_8]
+name = "ISO 898-1 Class 8.8"
+type = "Metal"
+group = "Bolting Steel"
+description = "Medium carbon steel bolts, screws and studs, quenched and tempered, property class 8.8; values for M16 and smaller (above M16: proof 600, yield 660, tensile 830 MPa)"
+sources = ["ISO 898-1:2013, Table 3: property class 8.8, d up to 16 mm"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 205, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+proof_strength = { value = 580, unit = "MPa" }
+yield_strength = { value = 640, unit = "MPa" }
+tensile_strength = { value = 800, unit = "MPa" }
+thermal_conductivity = { value = 51.9, unit = "W/(m*K)" }
+specific_heat = { value = 486, unit = "J/(kg*K)" }
+thermal_expansion = { value = 1.17e-05, unit = "1/K" }
+electrical_conductivity = { value = 5900000.0, unit = "S/m" }
+
+[iso_898_1_class_10_9]
+name = "ISO 898-1 Class 10.9"
+type = "Metal"
+group = "Bolting Steel"
+description = "Alloy or medium carbon steel bolts, screws and studs, quenched and tempered, property class 10.9"
+sources = ["ISO 898-1:2013, Table 3: property class 10.9"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 205, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+proof_strength = { value = 830, unit = "MPa" }
+yield_strength = { value = 940, unit = "MPa" }
+tensile_strength = { value = 1040, unit = "MPa" }
+thermal_conductivity = { value = 42.6, unit = "W/(m*K)" }
+specific_heat = { value = 473, unit = "J/(kg*K)" }
+thermal_expansion = { value = 1.23e-05, unit = "1/K" }
+electrical_conductivity = { value = 4500000.0, unit = "S/m" }
+
+[iso_898_1_class_12_9]
+name = "ISO 898-1 Class 12.9"
+type = "Metal"
+group = "Bolting Steel"
+description = "Alloy steel bolts, screws and studs, quenched and tempered, property class 12.9"
+sources = ["ISO 898-1:2013, Table 3: property class 12.9"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 205, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+proof_strength = { value = 970, unit = "MPa" }
+yield_strength = { value = 1100, unit = "MPa" }
+tensile_strength = { value = 1220, unit = "MPa" }
+thermal_conductivity = { value = 42.6, unit = "W/(m*K)" }
+specific_heat = { value = 473, unit = "J/(kg*K)" }
+thermal_expansion = { value = 1.23e-05, unit = "1/K" }
+electrical_conductivity = { value = 4500000.0, unit = "S/m" }
