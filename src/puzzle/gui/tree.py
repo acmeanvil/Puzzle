@@ -210,6 +210,9 @@ class ModelTree(QTreeWidget):
                     self._add(groups[item.group], item.label, leaf)
         self._group(root, project)
         self._roll_up(self.invisibleRootItem())
+        from puzzle.gui.theme import colour_levels
+
+        colour_levels(self)  # headings by depth (ADR 0045)
         for item in self._items():
             node = item.data(0, ROLE)
             if self._key(item) in opened or node.kind in ("project", "section"):

@@ -219,6 +219,9 @@ class PropertiesPanel(QTreeWidget):
             node = node[int(part)] if isinstance(node, list) else node[part]
         self._fill(self.invisibleRootItem(), node, path, names)
         self.expandToDepth(1)
+        from puzzle.gui.theme import colour_levels
+
+        colour_levels(self, depth_of_top=1)  # its groups as the tree's next levels
         self._filling = False
 
     def show_text(self, rows: dict[str, Any]) -> None:

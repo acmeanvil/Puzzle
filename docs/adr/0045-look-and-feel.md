@@ -94,6 +94,8 @@ Reference points: Ansys Mechanical and Discovery (a graded 3D background, auto-h
   - **Icons:** Tabler's outline set (MIT), vendored under `gui/tabler/` with its licence, mapped in `icons.TABLER`. Puzzle's own mesh and wireframe icons are drawn in Tabler's grid and stroke. Icons are redrawn in the theme's text colour when the theme changes.
 - **Docking (step 4): the packaging check.** PySide6-QtAds 5.1.1 (LGPL-2.1) has PyPI wheels for macOS, Linux and Windows, but none on conda-forge. It pins PySide6-Essentials 6.11.2 from PyPI. In a test it docked the off-screen 3D view, tabbed Agent with Advisor, auto-hid Messages in a side bar, and saved and restored layouts. Adopting it means taking PySide6 from PyPI in the pixi `gui` feature instead of conda-forge, while VTK keeps linking conda-forge's own Qt (it loads none of Qt's libraries unless its Qt module is imported, which Puzzle doesn't). That choice is the maintainer's: until then the GUI keeps `QDockWidget`.
 
+- **Heading colours (2026-10-29, the maintainer's request):** the model tree's and Properties' headings coloured by depth from the theme's `levels` (the project and sections, then what is under them, ...), a medium weight; items that don't expand keep the plain text colour (`theme.colour_levels`; Settings > Interface > Heading colours).
+
 ## Docking, decided (2026-10-25, superseding answer 3)
 
 The packaging check showed the Advanced Docking System would cost flexibility:

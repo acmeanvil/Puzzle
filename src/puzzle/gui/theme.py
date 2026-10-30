@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from PySide6.QtCore import Qt
+
 THEMES = [
     ("Follow the system", "system"),
     ("Light", "light"),
@@ -45,6 +47,9 @@ class Tokens:
     view_bottom: str
     view_plain: str
     view_text: str  # legend and labels drawn in the 3D view
+    # Tree and Properties headings by depth (the project, then sections, then what is
+    # under them, ...); items that don't expand keep the plain text colour.
+    levels: tuple[str, ...] = ()
 
 
 LIGHT = Tokens(
@@ -52,14 +57,14 @@ LIGHT = Tokens(
     muted="#6a737d", border="#c9ced6", accent="#3d7bd9", accent_text="#ffffff",
     focus="#3d7bd9", done="#2e9d57", needed="#c08a1e", warning="#c08a1e", error="#c53030",
     running="#3d7bd9", view_top="#dfe6ee", view_bottom="#ffffff", view_plain="#ffffff",
-    view_text="#1f2328",
+    view_text="#1f2328", levels=("#1d5fbf", "#0f7a6b", "#7a4bc2", "#a15c00"),
 )  # fmt: skip
 DARK = Tokens(
     "dark", surface="#2b2d31", raised="#383b41", sunken="#1e1f22", text="#e6e8eb",
     muted="#8a96a3", border="#4a4e55", accent="#3d7bd9", accent_text="#ffffff",
     focus="#6aa1f0", done="#4caf50", needed="#d4a72c", warning="#d4a72c", error="#e5534b",
     running="#4f8fe6", view_top="#dfe6ee", view_bottom="#ffffff", view_plain="#ffffff",
-    view_text="#1f2328",
+    view_text="#1f2328", levels=("#6aa8ff", "#4fd1b5", "#c39bff", "#f0b45a"),
 )  # fmt: skip
 # The 3D view stays light in the dark theme: result colours read best on a light
 # ground, as in Ansys and COMSOL. High contrast is black and white with yellow focus.
@@ -68,7 +73,7 @@ HIGH_CONTRAST = Tokens(
     muted="#ffffff", border="#ffffff", accent="#ffd400", accent_text="#000000",
     focus="#ffd400", done="#7CFC00", needed="#ffd400", warning="#ffd400", error="#ff6b6b",
     running="#7fdbff", view_top="#ffffff", view_bottom="#ffffff", view_plain="#ffffff",
-    view_text="#000000",
+    view_text="#000000", levels=("#ffd400", "#7fdbff", "#7cfc00", "#ff9cf0"),
 )  # fmt: skip
 SETS = {"light": LIGHT, "dark": DARK, "high_contrast": HIGH_CONTRAST}
 
@@ -181,3 +186,29 @@ def view_background(plotter, t: Tokens | None = None, kind: str | None = None) -
         plotter.set_background(t.view_plain)
     else:
         plotter.set_background(t.view_bottom, top=t.view_top)
+
+
+def colour_levels(tree, depth_of_top: int = 0) -> None:
+    """Headings coloured by depth in a QTreeWidget (the model tree, Properties): an
+    item that has children takes its level's colour and a medium weight; one without
+    keeps the plain text colour. Settings > Interface > Heading colours turns it off."""
+    from PySide6.QtGui import QBrush, QColor
+
+    from puzzle.settings import current as settings
+
+    on = settings().get("interface.heading_colours") is not False
+    levels = current().levels
+    stack = [(tree.invisibleRootItem(), depth_of_top - 1)]
+    while stack:
+        parent, depth = stack.pop()
+        for i in range(parent.childCount()):
+            item = parent.child(i)
+            font = item.font(0)
+            if on and item.childCount() and levels:
+                item.setForeground(0, QBrush(QColor(levels[(depth + 1) % len(levels)])))
+                font.setWeight(font.Weight.DemiBold)
+            else:
+                item.setData(0, Qt.ItemDataRole.ForegroundRole, None)  # the palette's
+                font.setWeight(font.Weight.Normal)
+            item.setFont(0, font)
+            stack.append((item, depth + 1))

@@ -100,6 +100,15 @@ PREFERENCES: list[Preference] = [
         "theme, where result colours read best.",
     ),
     Preference(
+        "interface.heading_colours",
+        "Interface",
+        "Heading colours",
+        True,
+        [("By level", True), ("Plain", False)],
+        "Headings in the model tree and Properties coloured by depth: the project and its "
+        "sections one colour, what is under them the next; items that don't expand stay plain.",
+    ),
+    Preference(
         "interface.view_background",
         "Interface",
         "3D background",
