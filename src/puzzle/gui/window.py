@@ -2142,16 +2142,36 @@ class MainWindow(QMainWindow):
             self.open_compare(node.object)
 
     def _context_menu(self, pos) -> None:
+        from PySide6.QtWidgets import QMenu
+
         from puzzle.gui.menus import build_menu
 
         item = self.tree.itemAt(pos)
-        if item is None or self.session is None:
+        if self.session is None:
             return
-        if not item.isSelected():  # keep a multiple selection (Move to group takes it all)
-            self.tree.setCurrentItem(item)
-        menu = build_menu(self, self.tree.current())
-        if menu is not None:
-            menu.exec(self.tree.viewport().mapToGlobal(pos))
+        menu = None
+        if item is not None:
+            if not item.isSelected():  # keep a multiple selection (Move to group takes it all)
+                self.tree.setCurrentItem(item)
+            menu = build_menu(self, self.tree.current())
+        menu = menu or QMenu(self)
+        if menu.actions():
+            menu.addSeparator()
+        if item is not None and item.childCount():
+            menu.addAction("Expand all below").triggered.connect(
+                lambda: self.tree.expandRecursively(self.tree.indexFromItem(item))
+            )
+        menu.addAction("Expand all").triggered.connect(self.tree.expandAll)
+        menu.addAction("Collapse all").triggered.connect(self._collapse_tree)
+        menu.exec(self.tree.viewport().mapToGlobal(pos))
+
+    def _collapse_tree(self) -> None:
+        """Everything folded but the project and its section headings, so the tree
+        still shows what is in it."""
+        self.tree.collapseAll()
+        root = self.tree.invisibleRootItem()
+        for i in range(root.childCount()):
+            root.child(i).setExpanded(True)
 
     # --- helpers -----------------------------------------------------------------
 

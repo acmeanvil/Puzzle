@@ -149,3 +149,24 @@ def test_drop_moves_into_a_group(app, tmp_path):
         assert _item(w, "object", "Pulse").parent().data(0, ROLE).kind == "section"
     finally:
         w.close()
+
+
+def test_expand_and_collapse_all(app, tmp_path):
+    from puzzle.commands.model import Create
+    from puzzle.model.schema import Project
+
+    root = tmp_path / "p"
+    save_project(Project(name="p"), root)
+    w = MainWindow(root)
+    try:
+        for name in ("Ramp", "Pulse"):
+            w.submit(Create(kind="amplitude", data={"name": name, "points": [[0, 0], [1, 1]]}))
+        organise.new_group(w, "Amplitudes", [], name="Loads")
+        w.tree.expandAll()
+        assert all(i.isExpanded() for i in w.tree._items() if i.childCount())
+        w._collapse_tree()
+        project = w.tree.invisibleRootItem().child(0)
+        assert project.isExpanded()  # the project still shows its headings
+        assert not any(i.isExpanded() for i in w.tree._items() if i is not project)
+    finally:
+        w.close()
