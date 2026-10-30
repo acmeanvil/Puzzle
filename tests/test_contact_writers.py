@@ -68,7 +68,7 @@ def test_calculix_writes_contact_pairs(tmp_path):
     inp = write_inp(project, study, mesh)
     assert "*CONTACT PAIR, INTERACTION=I_SLIDE, TYPE=SURFACE TO SURFACE" in inp
     assert "*SURFACE BEHAVIOR, PRESSURE-OVERCLOSURE=LINEAR" in inp
-    assert "*FRICTION\n0.2, " in inp and "*STATIC\n0.1, 1.0" in inp
+    assert "*FRICTION\n0.2, " in inp and "*STATIC\n1, 1.0" in inp  # contact: full load first
 
 
 def test_code_aster_contact(tmp_path):

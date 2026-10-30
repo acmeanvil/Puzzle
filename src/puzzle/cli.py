@@ -276,6 +276,8 @@ def _run(args) -> int:
         for w in m.warnings:
             print(f"  warning: {w}")
         print(f"Solved in {run.job.duration_s:.1f} s ({run.job.runtime}); run {run.run_id[:8]}")
+        if run.timings:  # where the time went around the solver too
+            print("  " + ", ".join(f"{k} {v:.1f} s" for k, v in run.timings.items()))
     _summarise(run.results)
     return 0
 

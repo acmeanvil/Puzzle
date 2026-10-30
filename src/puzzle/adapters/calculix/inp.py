@@ -569,9 +569,13 @@ def _step(
         raise InputError(
             "geometric_nonlinearity applies to static structural steps", code="unsupported"
         )
-    # Nonlinear steps (contact, large deflection) go in at most 1/n of the load at a time;
-    # each increment's results are kept, so a load-deflection curve can be drawn.
-    increments = int(step.settings.get("increments", 10 if (contact or nlgeom) else 1))
+    # Plasticity, lift-off and large deflection go in at most 1/n of the load at a time
+    # (their path matters; each increment's results are kept for a load-deflection
+    # curve). Contact alone starts at the full load and CalculiX cuts back only if it
+    # must: the bolted bracket took 17 iterations so, against 117 ramped in ten.
+    ramped = nlgeom or ((yields or lifting) and step.type == "stationary"
+                        and "solid_mechanics" in solved)  # fmt: skip
+    increments = int(step.settings.get("increments", 10 if ramped else 1))
     first = float(step.settings.get("initial_increment", 1 / increments))  # fraction of load
     op = ", OP=NEW" if number > 1 else ""
     settings = step.settings
@@ -1405,6 +1409,12 @@ def _feature_rows(f: Feature, mesh: Mesh, faces: FaceLookup, rigid=None) -> dict
 
 
 CONTACTS = {"bonded_nonconformal", "frictionless", "frictional"}
+# Contact penalty K = factor × E / h. 50 keeps a stack loaded through its interface
+# within 0.2 % (test_contact); a softer one converges in far fewer iterations where
+# bending governs (the bolted bracket: 0.5 took 17 iterations against 117, the same
+# deflection to 0.7 %) but adds the interface's compliance to a through-loaded stack
+# (1.0: 8 % there). Per contact: extensions["calculix"]["penalty_factor"].
+PENALTY_FACTOR = 50.0
 
 
 def _contacts(project: Project, comp: Component, mesh: Mesh, faces: FaceLookup) -> list[str]:
@@ -1412,9 +1422,9 @@ def _contacts(project: Project, comp: Component, mesh: Mesh, faces: FaceLookup) 
 
     - A nonconformal bond is a *TIE: slave nodes follow the master faces.
     - Frictionless and frictional contact are surface-to-surface *CONTACT PAIRs with a
-      linear penalty: K = 50 E / h (stiffest material, slave face size), so the
-      overclosure stays near 2% of an element-sized strain. Friction adds *FRICTION with
-      a stick slope of the same order.
+      linear penalty: K = factor × E / h (the softer material, the slave face size;
+      `PENALTY_FACTOR`, as Ansys's FKN), so the overclosure stays a small fraction of
+      an element. Friction adds *FRICTION with a stick slope of the same order.
     """
     out: list[str] = []
     for i, c in enumerate(comp.contacts, start=1):
@@ -1439,10 +1449,9 @@ def _contacts(project: Project, comp: Component, mesh: Mesh, faces: FaceLookup) 
         h = (slave_area / max(len(slave_faces), 1)) ** 0.5
         # The softer body governs the local compliance; a rigid-ish platen must not
         # stiffen the penalty (it made rim contact chatter in the Belleville check).
-        # Factor 50 keeps overclosure ~2% of an element strain; bending-dominated line
-        # contact (disc springs, rims) converges only with less, as Ansys advises 0.01-0.1
-        # of its default there: contact.extensions["calculix"]["penalty_factor"].
-        factor = float(c.extensions.get("calculix", {}).get("penalty_factor", 50.0))
+        # Bending-dominated line contact (disc springs, rims) may need less, as Ansys
+        # advises 0.01-0.1 of its default there: extensions["calculix"]["penalty_factor"].
+        factor = float(c.extensions.get("calculix", {}).get("penalty_factor", PENALTY_FACTOR))
         soft = min(_modulus(project, comp, c.source), _modulus(project, comp, c.target))
         stiffness = factor * soft / h
         interaction = set_name("I", c.name)

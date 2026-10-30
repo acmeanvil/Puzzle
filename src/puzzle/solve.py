@@ -6,8 +6,9 @@ transferred fields are mapped onto its mesh (puzzle.transfer) and handed to its 
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -40,6 +41,9 @@ class StudyRun:
     input_file: Path | None = None
     # A swept study (ADR 0018): one run per point, with the point in words.
     points: list[tuple[dict[str, str], StudyRun]] | None = None
+    # Seconds per stage of a fresh run (mesh, write, solve, read, store): where the
+    # time goes around the solver, as well as in it.
+    timings: dict[str, float] = field(default_factory=dict)
 
 
 def run_study(
@@ -125,8 +129,18 @@ def run_study(
                 upstream=upstream,
             )
     started = datetime.now(UTC)
+    timings: dict[str, float] = {}
+    clock = time.perf_counter()
+
+    def lap(stage: str) -> None:
+        nonlocal clock
+        now = time.perf_counter()
+        timings[stage] = timings.get(stage, 0.0) + now - clock
+        clock = now
+
     if meshed is None:
         meshed = generate_mesh(project, study.component, root, workdir / "mesh")
+    lap("mesh")
     inputs = [
         Input(
             map_field(
@@ -142,6 +156,7 @@ def run_study(
         )
         for t in project.transfers_into(study.id)
     ]
+    lap("transfers")
     # An adapter that writes one solve step per input runs a multi-step study one step
     # at a time on the same mesh; the steps are independent analyses.
     steps = study.solve_steps()
@@ -172,9 +187,11 @@ def run_study(
         indices = [n - 1, n] if limit is not None and _preloaded(steps, n) else [n]
         seen = _in_step(project, study.component, indices) if limit is not None else project
         input_file = adapter.write_input(seen, part, meshed.mesh, where, inputs)
+        lap("write")
         job = run_job(
             adapter.command(input_file), where, runtime, on_output=on_output, timeout_s=timeout_s
         )
+        lap("solve")
         if not job.ok:
             tail = log_tail(job.log)
             raise StudyError(
@@ -184,6 +201,7 @@ def run_study(
                 details={"exit_code": job.returncode, "log": str(job.log), "log_tail": tail},
             )
         part_results = adapter.read_results(input_file)
+        lap("read")
         if len(parts) > 1:
             for step in part_results.steps:
                 step.index = n
@@ -211,6 +229,9 @@ def run_study(
             duration_s=(datetime.now(UTC) - started).total_seconds(),
             point=_point[1] if _point else None,
         )
+        lap("store")
+    if on_output is not None and timings:
+        on_output("Time: " + ", ".join(f"{k} {v:.1f} s" for k, v in timings.items()))
     return StudyRun(
         mesh=meshed.mesh,
         results=results,
@@ -219,6 +240,7 @@ def run_study(
         mesh_result=meshed,
         job=job,
         input_file=input_file,
+        timings=timings,
     )
 
 
