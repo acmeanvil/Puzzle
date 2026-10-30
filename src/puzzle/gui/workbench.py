@@ -269,6 +269,20 @@ class Workbench(QWidget):
         role(history, "muted")
         column.addWidget(history)
         column.addWidget(self.steps, 2)
+        # The part's selections: a click highlights one in the view, a double-click
+        # edits it there, right-click has the tree's menu (replace, add, remove picks).
+        named = QLabel("Selections: click shows one, double-click edits it in the view")
+        named.setWordWrap(True)
+        role(named, "muted")
+        column.addWidget(named)
+        self.selection_list = QListWidget()
+        self.selection_list.itemClicked.connect(
+            lambda item: self.window.highlight_part_selection(self.selection_list.row(item))
+        )
+        self.selection_list.itemDoubleClicked.connect(self._edit_selection)
+        self.selection_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.selection_list.customContextMenuRequested.connect(self._selection_menu)
+        column.addWidget(self.selection_list, 1)
 
         sketch_page = QWidget()
         sk = QVBoxLayout(sketch_page)
@@ -345,6 +359,35 @@ class Workbench(QWidget):
             item.setCheckState(on)
             self.steps.addItem(item)
         self.steps.blockSignals(False)
+        from puzzle.gui.tree import _count
+
+        self.selection_list.clear()
+        for sel in geo.selections if geo else []:
+            self.selection_list.addItem(f"{sel.name}  ({_count(len(sel.members), sel.entity)})")
+
+    def _selection_node(self, row: int):
+        from puzzle.gui.tree import Node
+
+        geo = self.geometry()
+        if geo is None or not 0 <= row < len(geo.selections):
+            return None
+        return Node("selection", str(geo.id), f"selections.{row}", geo.selections[row].name)
+
+    def _edit_selection(self, item) -> None:
+        geo = self.geometry()
+        if geo is not None:
+            self.window.edit_selection_in_view(geo, self.selection_list.row(item))
+
+    def _selection_menu(self, pos) -> None:
+        """The tree's own menu for the selection: Edit in the view, Replace with picked,
+        Add picked, Remove picked, Remove selection."""
+        from puzzle.gui.menus import build_menu
+
+        item = self.selection_list.itemAt(pos)
+        node = self._selection_node(self.selection_list.row(item)) if item else None
+        menu = build_menu(self.window, node) if node else None
+        if menu is not None:
+            menu.exec(self.selection_list.viewport().mapToGlobal(pos))
 
     def show_part(self, geo_id) -> None:
         self.geo_id = geo_id

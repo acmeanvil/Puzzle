@@ -199,8 +199,9 @@ def _project(window, menu: QMenu) -> None:
     _add(menu, "New amplitude…", lambda: menus.edit_amplitude(window),
          "A factor against time, for loads in transient steps")  # fmt: skip
     axes = _sub(menu, "New coordinate system")
-    _add(axes, "Cartesian axes", lambda: menus.new_axes(window, "cartesian"))
-    _add(axes, "Cylindrical axes", lambda: menus.new_axes(window, "cylindrical"))
+    _add(axes, "Cartesian…", lambda: menus.new_axes(window, "cartesian"))
+    _add(axes, "Cylindrical…", lambda: menus.new_axes(window, "cylindrical"))
+    _add(axes, "Spherical…", lambda: menus.new_axes(window, "spherical"))
     from puzzle.gui import construction
 
     built = _sub(menu, "New construction geometry")

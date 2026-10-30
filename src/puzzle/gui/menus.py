@@ -74,8 +74,9 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         elif node.label == "Amplitudes":
             add("New amplitude…", lambda: edit_amplitude(window))
         elif node.label == "Coordinate systems":
-            add("New Cartesian axes", lambda: new_axes(window, "cartesian"))
-            add("New cylindrical axes", lambda: new_axes(window, "cylindrical"))
+            add("New Cartesian system…", lambda: new_axes(window, "cartesian"))
+            add("New cylindrical system…", lambda: new_axes(window, "cylindrical"))
+            add("New spherical system…", lambda: new_axes(window, "spherical"))
         elif node.label == "Construction geometry":  # ADR 0046
             from puzzle.gui import construction
 
@@ -100,7 +101,7 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
     elif node.kind == "project":
         add("New part…", lambda: new_part(window))
         add("New amplitude…", lambda: edit_amplitude(window))
-        add("New coordinate system", lambda: new_axes(window, "cartesian"))
+        add("New coordinate system…", lambda: new_axes(window, "cartesian"))
         from puzzle.gui import construction
 
         add("New construction path…", lambda: construction.new_path(window))
@@ -170,7 +171,17 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
                 )
         add("Remove", lambda: remove(window, obj, node.path))
     elif isinstance(obj, Geometry) and node.kind == "selection":
-        sel = obj.selections[int(node.path.split(".")[1])]
+        index = int(node.path.split(".")[1])
+        sel = obj.selections[index]
+        picked = bool(window.viewport.picked)
+        add("Edit in the view", lambda: window.edit_selection_in_view(obj, index))
+        for text, mode in (("Replace with picked", "replace"), ("Add picked", "add"),
+                           ("Remove picked", "remove")):  # fmt: skip
+            action = add(text, lambda m=mode: window.edit_selection(obj, index, m))
+            action.setEnabled(picked)
+            if not picked:
+                action.setToolTip("Pick in the view first (Pick, then double-click)")
+        menu.addSeparator()
         if sel.entity == "face":
             add("New cylindrical axes from this face", lambda: axes_from_face(window, obj, sel))
         add("Remove selection", lambda: remove(window, obj, node.path))
@@ -423,12 +434,11 @@ def axes_from_face(window, geometry, selection):
     )
 
 
-def new_axes(window, type_: str):
-    """Local axes (ADR 0037) for displacements and forces; origin and directions are
-    edited in Properties, and features pick them there (Axes)."""
-    n = len(window.session.project.of_type(CoordinateSystem)) + 1
-    word = "Cylindrical" if type_ == "cylindrical" else "Axes"
-    return window.submit(Create(kind="axes", data={"name": f"{word} {n}", "type": type_}))
+def new_axes(window, type_: str = "cartesian"):
+    """New coordinate system… (ADR 0049): the panel, of this type to start."""
+    from puzzle.gui.axes_panel import new_axes as panel
+
+    return panel(window, type_)
 
 
 def edit_amplitude(window, amplitude=None):
@@ -813,8 +823,10 @@ def add_parameter(window, params: ParameterSet):
 
 
 def _adder(menu: QMenu):
-    def add(text: str, slot) -> None:
-        menu.addAction(text).triggered.connect(lambda _=False: slot())
+    def add(text: str, slot):
+        action = menu.addAction(text)
+        action.triggered.connect(lambda _=False: slot())
+        return action
 
     return add
 

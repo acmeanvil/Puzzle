@@ -1180,9 +1180,12 @@ def _transforms(project: Project, comp: Component, mesh: Mesh) -> list[str]:
         if axes.type == "cartesian":
             r = axes.rotation()
             a, b, kind = r[:, 0], r[:, 1], "R"
+        elif axes.type != "cylindrical":  # *TRANSFORM has no spherical type
+            raise InputError(f"displacement in {axes.type} axes isn't written yet "
+                             f"(on {f.selection})")  # fmt: skip
         else:
-            o = np.asarray(axes.origin, float)
-            a, b, kind = o, o + np.asarray(axes.axis, float), "C"
+            o = axes.centre()
+            a, b, kind = o, o + axes.orientation()[:, 2], "C"
         nums = ", ".join(f"{c:.13g}" for c in (*a, *b))
         out += [f"*TRANSFORM, NSET={set_name('N', f.selection)}, TYPE={kind}", nums]
         transformed |= set(mesh.groups[f.selection].node_ids.tolist())

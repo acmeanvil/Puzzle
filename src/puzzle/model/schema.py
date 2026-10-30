@@ -642,48 +642,116 @@ class Feature(BaseModel):
 
 
 class CoordinateSystem(ProjectObject):
-    """Local axes (ADR 0037) that displacements and forces can be given in.
+    """A coordinate system (ADR 0037, 0049) that inputs and results can be given in.
 
-    Cartesian: x along `x_axis`, y in the plane of `x_axis` and `xy_direction`, z their
-    cross product. Cylindrical about the line through `origin` along `axis`: a feature's
-    x, y, z values are radial, tangential (θ, anticlockwise about `axis`) and axial."""
+    Its orientation (local x, y, z in global terms) comes from, in order:
+    - `angles`: rotations in degrees about x, then the turned y, then the twice-turned z
+      (Ansys's rotate X/Y/Z), from the global axes;
+    - `points`: three points: the origin, one on x, one in the xy plane;
+    - `x_axis` and `xy_direction` (Cartesian), or `axis` with `x_axis` where θ or φ
+      starts (cylindrical, spherical).
+
+    A feature's or result's x, y, z then mean x, y, z (Cartesian); r, θ, z (cylindrical:
+    θ anticlockwise about z); r, θ, φ (spherical: θ the polar angle from z, φ the
+    azimuth about it)."""
 
     kind: ClassVar[str] = "axes"
 
-    type: Literal["cartesian", "cylindrical"] = "cartesian"
+    type: Literal["cartesian", "cylindrical", "spherical"] = "cartesian"
     origin: tuple[float, float, float] = (0.0, 0.0, 0.0)
     x_axis: tuple[float, float, float] = (1.0, 0.0, 0.0)
     xy_direction: tuple[float, float, float] = (0.0, 1.0, 0.0)
     axis: tuple[float, float, float] = Field(
-        default=(0.0, 0.0, 1.0), description="cylindrical: the axis direction"
+        default=(0.0, 0.0, 1.0), description="cylindrical, spherical: the axis (local z)"
+    )
+    angles: tuple[float, float, float] | None = Field(
+        default=None, description="rotations about x, y, z in turn (degrees), from global"
+    )
+    points: list[tuple[float, float, float]] | None = Field(
+        default=None, description="three points: the origin, one on x, one in the xy plane"
     )
 
-    def rotation(self) -> np.ndarray:
-        """Cartesian: the 3x3 matrix whose columns are the local x, y, z in global."""
+    @model_validator(mode="after")
+    def _shape(self) -> CoordinateSystem:
+        if self.points is not None and len(self.points) != 3:
+            raise ValueError("a coordinate system by points takes three: origin, x, xy plane")
+        return self
+
+    def centre(self) -> np.ndarray:
+        """The origin (the first of three points, when given by points)."""
+        return np.asarray(self.points[0] if self.points else self.origin, float)
+
+    def orientation(self) -> np.ndarray:
+        """The 3x3 matrix whose columns are the local x, y, z in global terms."""
+        if self.angles is not None:
+            a, b, c = np.radians(self.angles)
+            rx = np.array([[1, 0, 0], [0, np.cos(a), -np.sin(a)], [0, np.sin(a), np.cos(a)]])
+            ry = np.array([[np.cos(b), 0, np.sin(b)], [0, 1, 0], [-np.sin(b), 0, np.cos(b)]])
+            rz = np.array([[np.cos(c), -np.sin(c), 0], [np.sin(c), np.cos(c), 0], [0, 0, 1]])
+            return rx @ ry @ rz  # about x, then the turned y, then the turned z
+        if self.points is not None:
+            o, px, pxy = (np.asarray(v, float) for v in self.points)
+            return _orthonormal(px - o, pxy - o, self.name)
+        if self.type == "cartesian":
+            return _orthonormal(np.asarray(self.x_axis, float),
+                                np.asarray(self.xy_direction, float), self.name)  # fmt: skip
+        z = np.asarray(self.axis, float)
+        z = z / np.linalg.norm(z)
         x = np.asarray(self.x_axis, float)
-        x /= np.linalg.norm(x)
-        z = np.cross(x, np.asarray(self.xy_direction, float))
-        if not np.linalg.norm(z):
-            raise ValueError(f"axes '{self.name}': x and the xy direction are parallel")
-        z /= np.linalg.norm(z)
+        x = x - (x @ z) * z
+        if np.linalg.norm(x) < 1e-9:  # x along the axis: any direction across it
+            x = np.eye(3)[int(np.argmin(np.abs(z)))]
+            x = x - (x @ z) * z
+        x = x / np.linalg.norm(x)
         return np.column_stack([x, np.cross(z, x), z])
 
+    def rotation(self) -> np.ndarray:
+        """The orientation (kept for ADR 0037's callers)."""
+        return self.orientation()
+
     def frames(self, xyz) -> np.ndarray:
-        """Local axes at points (n, 3, 3): columns radial, tangential, axial for a
-        cylindrical system; the same rotation everywhere for a Cartesian one."""
+        """Local axes at points (n, 3, 3; columns the axes): the same rotation everywhere
+        for a Cartesian system; radial, tangential (θ), axial for a cylindrical one; r, θ
+        (polar), φ (azimuthal) for a spherical one. On the axis (or at the centre) the
+        system's own x, y, z stand in."""
         xyz = np.atleast_2d(np.asarray(xyz, float))
+        n = len(xyz)
+        r0 = self.orientation()
         if self.type == "cartesian":
-            return np.repeat(self.rotation()[None], len(xyz), axis=0)
-        a = np.asarray(self.axis, float) / np.linalg.norm(self.axis)
-        d = xyz - np.asarray(self.origin, float)
-        r = d - np.outer(d @ a, a)
-        r /= np.maximum(np.linalg.norm(r, axis=1, keepdims=True), 1e-300)
-        t = np.cross(a, r)
-        return np.stack([r, t, np.repeat(a[None], len(xyz), axis=0)], axis=2)
+            return np.repeat(r0[None], n, axis=0)
+        z = r0[:, 2]
+        d = xyz - self.centre()
+        if self.type == "cylindrical":
+            r = d - np.outer(d @ z, z)
+            length = np.linalg.norm(r, axis=1, keepdims=True)
+            r = np.where(length > 1e-12, r / np.maximum(length, 1e-300), r0[:, 0])
+            t = np.cross(z, r)
+            return np.stack([r, t, np.repeat(z[None], n, axis=0)], axis=2)
+        length = np.linalg.norm(d, axis=1, keepdims=True)
+        r = np.where(length > 1e-12, d / np.maximum(length, 1e-300), z)
+        phi = np.cross(z, r)
+        across = np.linalg.norm(phi, axis=1, keepdims=True)
+        phi = np.where(across > 1e-12, phi / np.maximum(across, 1e-300), r0[:, 1])
+        theta = np.cross(phi, r)
+        return np.stack([r, theta, phi], axis=2)
 
     def to_global(self, local, xyz) -> np.ndarray:
         """Vectors given in these axes, at points, in global components (n, 3)."""
         return np.einsum("nij,j->ni", self.frames(xyz), np.asarray(local, float))
+
+    def to_local(self, vectors, xyz) -> np.ndarray:
+        """Global vectors (n, 3) at points, in these axes."""
+        return np.einsum("nji,nj->ni", self.frames(xyz), np.asarray(vectors, float))
+
+
+def _orthonormal(x: np.ndarray, xy: np.ndarray, name: str) -> np.ndarray:
+    """Columns x, y, z from a direction and a second one in the xy plane."""
+    x = x / np.linalg.norm(x)
+    z = np.cross(x, xy)
+    if not np.linalg.norm(z):
+        raise ValueError(f"axes '{name}': x and the xy direction are parallel")
+    z /= np.linalg.norm(z)
+    return np.column_stack([x, np.cross(z, x), z])
 
 
 class Amplitude(ProjectObject):
@@ -1277,10 +1345,10 @@ class ConstructionGeometry(ProjectObject):
             return np.asarray(self.start, float), np.asarray(self.end, float)
         if self.axes is not None and project is not None:
             axes = project.objects.get(self.axes)
-            if isinstance(axes, CoordinateSystem) and axes.type == "cartesian":
+            if isinstance(axes, CoordinateSystem):  # any type: its own x, y, z axes
                 columns = axes.rotation()
                 n = columns[:, {"yz": 0, "zx": 1, "xy": 2}[self.plane]]
-                return np.asarray(axes.origin, float) + self.offset * n, n
+                return axes.centre() + self.offset * n, n
         n = np.asarray(self.normal, float)
         return np.asarray(self.origin, float), n / np.linalg.norm(n)
 

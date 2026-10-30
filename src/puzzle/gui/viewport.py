@@ -105,6 +105,15 @@ def _display(values, kind: str | None):
 KIND_DIM = {"vertex": 0, "edge": 1, "face": 2, "body": 3}
 
 
+def _warp_name(data) -> str | None:
+    """The global displacement in sampled data: its copy when the results are in a
+    coordinate system (ADR 0049), else the field itself; None without one."""
+    for name in ("displacement_global", "displacement"):
+        if name in data:
+            return name
+    return None
+
+
 def _mode(modifiers, plain: str) -> str:
     """A click's pick mode (ADR 0034): Shift adds, Ctrl or ⌘ removes, plain `plain`."""
     if modifiers is None:
@@ -706,8 +715,9 @@ class Viewport(QWidget):
         state = self.result_state
         if state is not None and state.get("scale"):  # the same spot, undeformed
             u = pv.PolyData(point.reshape(1, 3)).sample(state["grid"]).point_data
-            if "displacement" in u:
-                point = point - state["scale"] * np.asarray(u["displacement"][0])
+            name = _warp_name(u)
+            if name:
+                point = point - state["scale"] * np.asarray(u[name][0])
         mesh = self.node_mesh() if snap == "node" else None
         self.shown["snapped"] = None
         if mesh is not None and len(mesh.coords):
@@ -969,14 +979,16 @@ class Viewport(QWidget):
         )
         base = grid  # undeformed: positions where values are read and reported
         scale = 0.0
-        if deform and "displacement" in grid.point_data:
-            u = np.nan_to_num(grid.point_data["displacement"])
+        # Results in a coordinate system (ADR 0049) keep global displacements for this.
+        warp = "displacement_global" if "displacement_global" in grid.point_data else "displacement"
+        if deform and warp in grid.point_data:
+            u = np.nan_to_num(grid.point_data[warp])
             umax = float(np.linalg.norm(u, axis=1).max())
             scale = 0.1 * grid.length / umax if umax > 0 else 0.0
             if scale and deform_factor != 1.0:  # an animation frame (ADR 0038)
                 scale *= deform_factor
             if scale:
-                grid = grid.warp_by_vector("displacement", factor=scale)
+                grid = grid.warp_by_vector(warp, factor=scale)
         label = step.label()
         on_points = name in grid.point_data
         where = np.asarray(base.points if on_points else base.cell_centers().points)
@@ -1158,8 +1170,9 @@ class Viewport(QWidget):
         point = np.asarray(xyz_shown, float)
         if state["scale"]:  # back to the undeformed geometry: the same spot in the cell
             u = pv.PolyData(point.reshape(1, 3)).sample(state["grid"]).point_data
-            if "displacement" in u:
-                point = point - state["scale"] * np.asarray(u["displacement"][0])
+            name = _warp_name(u)
+            if name:
+                point = point - state["scale"] * np.asarray(u[name][0])
         return self._probe_at(point, xyz_shown, add)
 
     def probe_undeformed(self, point, add: bool = False) -> dict | None:
@@ -1173,8 +1186,9 @@ class Viewport(QWidget):
         shown = np.asarray(point, float)
         if state["scale"]:
             u = pv.PolyData(shown.reshape(1, 3)).sample(state["base"]).point_data
-            if "displacement" in u:
-                shown = shown + state["scale"] * np.asarray(u["displacement"][0])
+            name = _warp_name(u)
+            if name:
+                shown = shown + state["scale"] * np.asarray(u[name][0])
         return self._probe_at(np.asarray(point, float), shown, add)
 
     def _probe_at(self, point, shown, add: bool) -> dict:
@@ -1261,6 +1275,35 @@ class Viewport(QWidget):
                 shape = pv.Plane(center=a, direction=b, i_size=size, j_size=size)
                 self.plotter.add_mesh(shape, color="#ffcc33", opacity=0.35, show_edges=True,
                                       name="puzzle-construction", reset_camera=False)  # fmt: skip
+        self._draw_marks()
+        if self.plotter is not None:
+            self.view.refresh()
+
+    def show_triad(self, system, size: float) -> None:
+        """A coordinate system's x, y, z arrows (red, green, blue) at its origin; for a
+        cylindrical or spherical one, its axis too (ADR 0049)."""
+        self.shown["triad"] = system.type
+        origin = system.centre()
+        axes = system.orientation()
+        names = {"cartesian": "xyz", "cylindrical": ("θ=0", "", "z"),
+                 "spherical": ("φ=0", "", "z")}[system.type]  # fmt: skip
+        colours = ("#e5534b", "#4caf50", "#4f8fe6")
+        self.pins = [
+            (origin + size * axes[:, i], names[i], c) for i, c in enumerate(colours) if names[i]
+        ]
+        if self.plotter is not None:
+            import pyvista as pv
+
+            for i, colour in enumerate(("#e5534b", "#4caf50", "#4f8fe6")):
+                if system.type != "cartesian" and i == 1:
+                    continue  # θ and φ turn about the axis: no fixed y to draw
+                arrow = pv.Arrow(start=origin, direction=axes[:, i], scale=size)
+                self.plotter.add_mesh(arrow, color=colour, name=f"puzzle-triad-{i}",
+                                      reset_camera=False)  # fmt: skip
+            if system.type != "cartesian":  # the axis, both ways
+                line = pv.Line(origin - 2 * size * axes[:, 2], origin + 2 * size * axes[:, 2])
+                self.plotter.add_mesh(line, color="#4f8fe6", line_width=2,
+                                      name="puzzle-triad-axis", reset_camera=False)  # fmt: skip
         self._draw_marks()
         if self.plotter is not None:
             self.view.refresh()

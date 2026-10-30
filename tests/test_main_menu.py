@@ -24,8 +24,9 @@ from puzzle.gui.window import MainWindow  # noqa: E402
 
 EXAMPLE = Path(__file__).parents[1] / "examples" / "cantilever"
 # Tree items whose menu bar twin reads a little differently.
-RENAMED = {"Add from library…": "Add material…", "New Cartesian axes": "Cartesian axes",
-           "New cylindrical axes": "Cylindrical axes", "Reaction…": "Reaction…"}  # fmt: skip
+RENAMED = {"Add from library…": "Add material…", "New Cartesian system…": "Cartesian…",
+           "New cylindrical system…": "Cylindrical…", "New spherical system…": "Spherical…",
+           "Reaction…": "Reaction…"}  # fmt: skip
 
 
 @pytest.fixture(scope="module")

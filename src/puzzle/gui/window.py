@@ -47,6 +47,7 @@ from puzzle.mesh.mesh import Mesh
 from puzzle.model.schema import (
     Component,
     ConstructionGeometry,
+    CoordinateSystem,
     Geometry,
     ResultDefinition,
     ResultProbe,
@@ -97,19 +98,26 @@ class ResultsBar(QWidget):
     """Which result to show (every one the run's fields give: total deformation, its
     components, equivalent and principal stresses, ...), the step, and deformation."""
 
-    def __init__(self, on_change) -> None:
+    def __init__(self, on_change, on_axes=None) -> None:
         super().__init__()
         row = QHBoxLayout(self)
         row.setContentsMargins(6, 2, 6, 2)
         self.field = QComboBox()  # the result: data is a post.quantities key
         self.field.setMinimumWidth(240)
         self.items: dict = {}
+        # ADR 0049: components along a coordinate system's axes (global unless chosen).
+        self.axes = QComboBox()
+        self.axes.addItem("Global", None)
+        self.axes.setToolTip(
+            "Components along a coordinate system's axes: in a cylindrical system the "
+            "normal stress along θ is the hoop stress"
+        )
         self.step = QSpinBox()
         self.deform = QCheckBox("Deformed")
         self.deform.setChecked(True)
         self.title = ElidedLabel("")
         role(self.title, "muted")
-        for label, widget in (("Result", self.field), ("Step", self.step)):
+        for label, widget in (("Result", self.field), ("In axes", self.axes), ("Step", self.step)):
             row.addWidget(QLabel(label))
             row.addWidget(widget)
         row.addWidget(self.deform)
@@ -129,10 +137,27 @@ class ResultsBar(QWidget):
             row.addWidget(w)
             w.hide()
         self.field.currentIndexChanged.connect(lambda _: on_change())
+        self.axes.currentIndexChanged.connect(lambda _: (on_axes or on_change)())
         self.step.valueChanged.connect(lambda _: on_change())
         self.deform.toggled.connect(lambda _: on_change())
 
-    def load(self, results: Results, chosen: str | None = None, items=None) -> None:
+    def set_systems(self, project, keep: str | None = None) -> None:
+        """Global, then the project's coordinate systems by name; `keep` stays chosen."""
+        from puzzle.model.schema import CoordinateSystem
+
+        self.axes.blockSignals(True)
+        self.axes.clear()
+        self.axes.addItem("Global", None)
+        for system in project.of_type(CoordinateSystem):
+            self.axes.addItem(system.name, str(system.id))
+        i = self.axes.findData(keep)
+        self.axes.setCurrentIndex(i if i >= 0 else 0)
+        self.axes.setVisible(self.axes.count() > 1)
+        self.axes.blockSignals(False)
+
+    def load(
+        self, results: Results, chosen: str | None = None, items=None, axes: str | None = None
+    ) -> None:
         """The run's results, grouped by field; `chosen` (a key) or the last choice stays
         selected when the run has it, else the default (deformation, temperature, ...).
         `items` lists them when the fields alone don't say (a derived result's)."""
@@ -143,7 +168,7 @@ class ResultsBar(QWidget):
             for s in results.steps:
                 for f in s.fields.values():
                     fields.setdefault(f.name, (f.name, f.location, f.components))
-            items = catalog(list(fields.values()))
+            items = catalog(list(fields.values()), axes)
         chosen = chosen or self.field.currentData()
         for w in (self.field, self.step):
             w.blockSignals(True)
@@ -318,7 +343,7 @@ class MainWindow(QMainWindow):
         self.tree = ModelTree()
         self.properties = PropertiesPanel()
         self.viewport = Viewport()
-        self.results_bar = ResultsBar(self._redraw_result)
+        self.results_bar = ResultsBar(self._redraw_result, self._axes_changed)
         self.results_bar.hide()
         # Which part of the work is on screen (ADR 0029): model, geometry, sketch or
         # results. Panels that belong to one context show only in it.
@@ -1093,7 +1118,7 @@ class MainWindow(QMainWindow):
             return
         self.set_context("model")
         comp = self._component_of(node)
-        built = obj if isinstance(obj, ConstructionGeometry) else None
+        built = obj if isinstance(obj, ConstructionGeometry | CoordinateSystem) else None
         if comp is None and built is not None:  # drawn over the first component
             comps = s.project.of_type(Component)
             comp = comps[0] if comps else None
@@ -1121,6 +1146,12 @@ class MainWindow(QMainWindow):
         self.viewport.boundaries = self.mesh_boundaries.get(str(comp.id), {})
         self.viewport.vertices = self.mesh_vertices.get(str(comp.id), {})
         self.viewport.show_mesh(mesh, highlight if highlight in mesh.groups else None, entities)
+        if isinstance(built, CoordinateSystem):  # its triad (ADR 0049)
+            import numpy as np
+
+            size = 0.25 * float(np.linalg.norm(np.ptp(mesh.coords, axis=0)))
+            self.viewport.show_triad(built, size)
+            built = None
         if built is not None:  # a construction path or plane (ADR 0046) over the model
             import numpy as np
 
@@ -1245,6 +1276,22 @@ class MainWindow(QMainWindow):
         self.viewport.vertices = self.mesh_vertices.get(cid, {})
         self.viewport.show_mesh(mesh, None, [])
 
+    def highlight_part_selection(self, index: int) -> None:
+        """The Geometry tab: one of the part's selections lit in the view."""
+        geo = self.workbench.geometry()
+        if geo is None or not 0 <= index < len(geo.selections):
+            return
+        comp = self._standalone(geo)
+        mesh = self._preview(comp)
+        if mesh is None:
+            return
+        name = f"{comp.parts[0].name}/{geo.selections[index].name}"
+        self.mesh_component = str(comp.id)
+        self.viewport.boundaries = self.mesh_boundaries.get(str(comp.id), {})
+        self.viewport.vertices = self.mesh_vertices.get(str(comp.id), {})
+        self.viewport.show_mesh(mesh, name if name in mesh.groups else None,
+                                self._entities_of(comp, name))  # fmt: skip
+
     def preview_history(self, geo_id, history) -> None:
         """Preview the part with `history` instead of its own (None: its own again)."""
         self.pending = (geo_id, history) if geo_id is not None else None
@@ -1298,8 +1345,11 @@ class MainWindow(QMainWindow):
             self._result_run = run_id
         study = self.session.project.objects.get(_uuid(record.study_id))
         self._result_component = getattr(study, "component", None)
+        # A result shown afresh starts in global axes (ADR 0049), or the plot's own.
+        self.results_bar.set_systems(self.session.project, getattr(self, "_plot_axes", None))
+        self._plot_axes = None
         self.results_bar.blockSignals(True)
-        self.results_bar.load(self.result[1], key)
+        self.results_bar.load(self.result[1], key, axes=self._axes_type())
         self.results_bar.blockSignals(False)
         from puzzle.project.status import run_state
 
@@ -1385,10 +1435,48 @@ class MainWindow(QMainWindow):
                 self.tree.select(Node("derived", str(made.id)))
         return outcome
 
+    def _axes_system(self):
+        from puzzle.model.schema import CoordinateSystem
+
+        chosen = self.results_bar.axes.currentData()
+        if self.session is None or chosen is None:  # global
+            return None
+        found = self.session.project.objects.get(_uuid(chosen))
+        return found if isinstance(found, CoordinateSystem) else None
+
+    def _axes_type(self) -> str | None:
+        system = self._axes_system()
+        return system.type if system is not None else None
+
+    def _axes_changed(self) -> None:
+        """Another coordinate system for the components: relabel, keep the result."""
+        if self.result is None:
+            return
+        key = self.results_bar.field.currentData()
+        self.results_bar.blockSignals(True)
+        self.results_bar.load(self.result[1], key, axes=self._axes_type())
+        self.results_bar.blockSignals(False)
+        self._redraw_result()
+
+    def _results_in_axes(self, mesh, results):
+        """The shown results with vectors and tensors in the chosen system (cached for
+        this run and system: the rotation is per node)."""
+        system = self._axes_system()
+        if system is None:
+            return results
+        from puzzle.post.axes import in_axes
+
+        key = (id(results), str(system.id), system.model_dump_json())
+        cache = getattr(self, "_axes_cache", None)
+        if cache is None or cache[0] != key:
+            self._axes_cache = (key, in_axes(mesh, results, system))
+        return self._axes_cache[1]
+
     def _redraw_result(self) -> None:
         if self.result is None:
             return
         mesh, results = self.result
+        results = self._results_in_axes(mesh, results)
         item = self.results_bar.item()
         field = item.field if item is not None else None
         steps = [s for s in results.steps if field in s.fields]
@@ -1749,32 +1837,92 @@ class MainWindow(QMainWindow):
     def add_picks_to_selection(self, node: Node | None = None):
         """Add the picked entities to the selection chosen in the tree (of the same kind)."""
         node = node or self.tree.current()
-        geo, members = self._picked_geometry()
-        if geo is None or node is None or node.kind != "selection" or node.object != str(geo.id):
+        if node is None or node.kind != "selection":
+            self.statusBar().showMessage("Select a selection in the tree first", 8000)
+            return None
+        geo = self.session.project.objects.get(_uuid(node.object))
+        return self.edit_selection(geo, int(node.path.split(".")[1]), "add")
+
+    def edit_selection(self, geo, index: int, mode: str):
+        """A selection from the picks: `mode` "replace" (the picks become it), "add" or
+        "remove" (the picks join it or leave it). One command; undo takes it back."""
+        geo = self.session.project.objects.get(geo.id, geo)  # the project's current copy
+        picked_geo, members = self._picked_geometry()
+        if picked_geo is None:
+            return None
+        sel = geo.selections[index]
+        if picked_geo.id != geo.id:
             self.statusBar().showMessage(
-                "Select a selection of the picked entities' geometry", 8000
+                f"The picks are on {picked_geo.name}; '{sel.name}' belongs to {geo.name}", 8000
             )
             return None
-        index = int(node.path.split(".")[1])
-        kind = geo.selections[index].entity
-        if kind != self.viewport.pick_kind:
+        if sel.entity != self.viewport.pick_kind:
             self.statusBar().showMessage(
-                f"'{node.label}' holds {kind}s; set the filter to {FILTERS[kind]} to add to it",
+                f"'{sel.name}' holds {FILTERS[sel.entity].lower()}; set the filter to "
+                f"{FILTERS[sel.entity]} and pick again",
                 8000,
             )
             return None
-        current = geo.selections[index].members
-        merged = current + [m for m in members if m not in current]
-        anchors = {**self._anchors_of(members), **geo.selections[index].anchors}
+        picked = list(dict.fromkeys(members))
+        current = list(sel.members)
+        if mode == "replace":
+            new, anchors = picked, self._anchors_of(picked)
+        elif mode == "add":
+            new = current + [m for m in picked if m not in current]
+            anchors = {**self._anchors_of(picked), **sel.anchors}
+        else:
+            new = [m for m in current if m not in picked]
+            anchors = {m: a for m, a in sel.anchors.items() if m in new}
+        if not new:
+            self.statusBar().showMessage(
+                f"That would leave '{sel.name}' empty; remove the selection instead", 8000
+            )
+            return None
+        if new == current:
+            self.statusBar().showMessage(f"'{sel.name}' already is that", 6000)
+            return None
         ops = [
-            EditOp(op="set", path=f"selections.{index}.members", value=merged),
+            EditOp(op="set", path=f"selections.{index}.members", value=new),
             EditOp(op="set", path=f"selections.{index}.anchors", value=anchors),
         ]
         out = self.submit(Edit(object=str(geo.id), ops=ops))
         if out is not None:
             self.viewport.clear_picks()
             self.viewport.pick_history.clear()  # the selection is what undo takes back
+            n = len(new)
+            what = FILTERS[sel.entity].lower() if n != 1 else ONE[sel.entity]
+            self.statusBar().showMessage(f"'{sel.name}' now holds {n} {what}", 6000)
         return out
+
+    def edit_selection_in_view(self, geo, index: int) -> None:
+        """Pick a selection's members in the view, its filter set: double-click to add
+        or take away, then right-click it → Replace with picked."""
+        from puzzle.gui.viewport import KIND_DIM
+
+        geo = self.session.project.objects.get(geo.id, geo)
+        sel = geo.selections[index]
+        self.tree.select(Node("selection", str(geo.id), f"selections.{index}", sel.name))
+        self._selected()
+        comp = self.session.project.objects.get(_uuid(self.mesh_component or "")) or next(
+            (c for c, _ in self._standalones.values() if str(c.id) == self.mesh_component), None
+        )
+        parts = [p.name for p in getattr(comp, "parts", []) if p.geometry == geo.id]
+        if comp is None or not parts:
+            self.statusBar().showMessage(f"Show a component with {geo.name} first", 8000)
+            return
+        names = self.mesh_names.get(str(comp.id), {})
+        dim = KIND_DIM[sel.entity]
+        entities = [e for e, (p, n) in names.items()
+                    if p in parts and n in sel.members and e[0] == dim]  # fmt: skip
+        box = self.pick_bar.filter
+        box.setCurrentIndex(box.findData(sel.entity))
+        self.toggle_picking(True)
+        self.viewport.pick(entities, "replace")
+        self.statusBar().showMessage(
+            f"'{sel.name}' is picked: double-click to add or take away (Shift adds, ⌘ or "
+            "Ctrl takes away), then right-click it → Replace with picked",
+            15000,
+        )
 
     def pick_alike(self, tolerance: float = 1e-3) -> None:
         """Every entity of the picked ones' kind and size (G3 anchors: kind and measure,

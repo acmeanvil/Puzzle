@@ -52,6 +52,19 @@ SCALARS = {
 AXES = {"x": "X", "y": "Y", "z": "Z"}
 SUFFIXES = {"range": "range", "mean": "mean"}  # fields a range combination makes
 PAIRS = {"xx": "X", "yy": "Y", "zz": "Z", "xy": "XY", "yz": "YZ", "zx": "ZX"}
+# Component names in a coordinate system's axes (ADR 0049; post/axes.py rotates them).
+AXIS_NAMES = {
+    "cartesian": {"x": "x′", "y": "y′", "z": "z′"},
+    "cylindrical": {"x": "r (radial)", "y": "θ (tangential)", "z": "z (axial)"},
+    "spherical": {"x": "r (radial)", "y": "θ (meridional)", "z": "φ (azimuthal)"},
+}
+PAIR_NAMES = {
+    "cartesian": {"xx": "x′", "yy": "y′", "zz": "z′", "xy": "x′y′", "yz": "y′z′", "zx": "z′x′"},
+    "cylindrical": {"xx": "r (radial)", "yy": "θ (hoop)", "zz": "z (axial)", "xy": "rθ",
+                    "yz": "θz", "zx": "zr"},
+    "spherical": {"xx": "r (radial)", "yy": "θ (meridional)", "zz": "φ (hoop)", "xy": "rθ",
+                  "yz": "θφ", "zx": "φr"},
+}  # fmt: skip
 
 
 @dataclass(frozen=True)
@@ -70,16 +83,20 @@ class Item:
         return self.what not in ("total", "value", "von_mises", "equivalent", "max_shear")
 
 
-def catalog(fields: list[tuple[str, str, list[str]]]) -> list[Item]:
+def catalog(fields: list[tuple[str, str, list[str]]], axes: str | None = None) -> list[Item]:
     """The results a run can show: `fields` are (name, location, components) as stored.
-    Whole-model (global) values are not drawn on the mesh and are left out."""
+    Whole-model (global) values are not drawn on the mesh and are left out. `axes` (a
+    coordinate system's type) names the components along its axes (ADR 0049)."""
+    axis_names = AXIS_NAMES.get(axes, AXES)
+    pair_names = PAIR_NAMES.get(axes, PAIRS)
+    fields = [f for f in fields if f[0] != "displacement_global"]  # the view's warp only
     items: list[Item] = []
     for name, location, comps in fields:
         if location == "global":
             continue
         base, _, word = name.rpartition("_")
         if word in SUFFIXES and base:  # a combination's range or mean (ADR 0025)
-            for i in catalog([(base, location, comps)]):
+            for i in catalog([(base, location, comps)], axes):
                 text = f"{i.label} ({SUFFIXES[word]})"
                 group = f"{i.group} {SUFFIXES[word]}"
                 items.append(Item(f"{name}:{i.what}", text, name, i.what, group, i.unit))
@@ -90,7 +107,8 @@ def catalog(fields: list[tuple[str, str, list[str]]]) -> list[Item]:
             )
             items.append(Item(f"{name}:total", total, name, "total", group, unit))
             items += [
-                Item(f"{name}:{c}", f"{prefix} {AXES[c]}", name, c, group, unit) for c in comps
+                Item(f"{name}:{c}", f"{prefix} {axis_names[c]}", name, c, group, unit)
+                for c in comps
             ]
         elif len(comps) == 6:
             group, word, unit = TENSORS.get(name, (words(name), name.replace("_", " "), None))
@@ -115,7 +133,9 @@ def catalog(fields: list[tuple[str, str, list[str]]]) -> list[Item]:
             for c in comps:
                 kind = "Normal" if c in ("xx", "yy", "zz") else "Shear"
                 items.append(
-                    Item(f"{name}:{c}", f"{kind} {word} {PAIRS.get(c, c)}", name, c, group, unit)
+                    Item(
+                        f"{name}:{c}", f"{kind} {word} {pair_names.get(c, c)}", name, c, group, unit
+                    )
                 )
         else:
             group, unit = SCALARS.get(name, (words(name), None))

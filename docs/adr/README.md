@@ -54,4 +54,4 @@ New record: copy [template.md](template.md) to `NNNN-short-title.md`, set status
 | [0046](0046-construction-geometry.md) | Construction geometry: paths and planes for result tools (linearization, results on a plane, section forces) | Accepted |
 | [0047](0047-magnetodynamics.md) | Magnetodynamics: time-harmonic eddy currents first (Elmer, FEniCSx), then transient; losses, impedance, skin depth, heat and force couplings | Accepted |
 | [0048](0048-2d-geometry.md) | 2D models: planar and axisymmetric geometry (sketches, shapes, sections of 3D parts), meshing and solving on the four FE solvers | Accepted |
-| [0049](0049-coordinate-systems.md) | Coordinate systems everywhere: Cartesian, cylindrical, spherical; typed, three points, from geometry, relative or attached; used by inputs and results | Proposed |
+| [0049](0049-coordinate-systems.md) | Coordinate systems everywhere: Cartesian, cylindrical, spherical; typed, three points, from geometry, relative or attached; used by inputs and results | Accepted |

@@ -90,9 +90,30 @@ BUILT = {
 }
 
 
+def _is_axes(d) -> bool:
+    return {"x_axis", "xy_direction", "axis", "angles", "points"} <= set(d)
+
+
+def _axes_field(key: str, d) -> bool:
+    """A coordinate system shows only how it is defined (ADR 0049)."""
+    by_angles, by_points = d.get("angles") is not None, d.get("points") is not None
+    plain = not by_angles and not by_points
+    round_ = d.get("type") != "cartesian"
+    return {
+        "origin": not by_points,
+        "x_axis": plain and not round_,
+        "xy_direction": plain and not round_,
+        "axis": plain and round_,
+        "angles": by_angles,
+        "points": by_points,
+    }.get(key, True)
+
+
 def applies(owner: Any, key: Any) -> bool:
     if isinstance(owner, dict) and key in BUILT and _is_construction(owner):
         return BUILT[key](owner)
+    if isinstance(owner, dict) and _is_axes(owner):
+        return _axes_field(key, owner)
     rule = APPLIES.get(key) if isinstance(owner, dict) else None
     return rule is None or not rule[0](owner) or rule[1](owner)
 

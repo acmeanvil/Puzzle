@@ -354,8 +354,8 @@ def _cylindrical(project, f) -> dict:
     axes = local_axes(project, f)
     return {
         "cylindrical": {
-            "origin": list(axes.origin),
-            "axis": list(np.asarray(axes.axis, float) / np.linalg.norm(axes.axis)),
+            "origin": axes.centre().tolist(),
+            "axis": axes.orientation()[:, 2].tolist(),
             "local": [f.values[a].to_si() for a in "xyz"],
         }
     }

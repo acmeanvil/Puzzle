@@ -622,7 +622,7 @@ def global_force(project, f) -> list[float]:
     if axes is None:
         return v
     if axes.type != "cartesian":
-        raise InputError(f"a force in cylindrical axes isn't defined (on {f.selection})")
+        raise InputError(f"a force in {axes.type} axes isn't defined (on {f.selection})")
     return (axes.rotation() @ np.asarray(v)).tolist()
 
 
@@ -661,8 +661,8 @@ def cylindrical_expressions(axes, local, coords: tuple[str, str, str]) -> list[s
     """The global components of a vector given radially, tangentially and axially in
     cylindrical axes, as expressions in the coordinate names `coords` (for solvers that
     take formulas: Code_Aster's X, Y, Z; Elmer's tx(0), tx(1), tx(2))."""
-    a = np.asarray(axes.axis, float) / np.linalg.norm(axes.axis)
-    o = np.asarray(axes.origin, float)
+    a = axes.orientation()[:, 2]
+    o = axes.centre()
     ur, ut, uz = (float(v) for v in local)
     d = [f"({c}-({o[i]:.12g}))" for i, c in enumerate(coords)]
     dot = "+".join(f"{d[i]}*({a[i]:.12g})" for i in range(3))

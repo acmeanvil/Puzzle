@@ -176,6 +176,8 @@ class PointRow(QWidget):
 class _Panel(QWidget):
     """What both panels share: a title, an intro, a form, a message and Create/Cancel."""
 
+    kind = "construction"  # the project object Create makes
+
     def __init__(self, window, title: str, intro: str) -> None:
         from puzzle.settings import length_unit
 
@@ -262,7 +264,7 @@ class _Panel(QWidget):
             return None
         from puzzle.commands.model import Create
 
-        out = self.window.submit(Create(kind="construction", data=self.data()))
+        out = self.window.submit(Create(kind=self.kind, data=self.data()))
         self.close_panel()
         return out
 
