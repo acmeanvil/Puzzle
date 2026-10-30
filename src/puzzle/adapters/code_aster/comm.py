@@ -212,6 +212,14 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             raise InputError(f"a beam section names '{b.selection}', which is not meshed")
         names.setdefault(b.selection, f"G{len(names) + 1}")
         beams.append((names[b.selection], b))
+    for i, (c, end) in enumerate(zip(fasteners, fastener_ends, strict=True), start=1):
+        if c.formulation == "beam":  # a bolt beam's round section, its 1-axis across it
+            from puzzle.model.schema import BeamSection
+
+            beams.append((f"F{i}", BeamSection(selection=f"F{i}", shape="circle",
+                                               diameter=c.diameter,
+                                               orientation=tuple(end["side"]))))  # fmt: skip
+    bolt_beams = any(c.formulation == "beam" for c in fasteners)
     for part in beam_parts:
         if not any(b.selection.split("/", 1)[0] == part for b in comp.beam_sections):
             raise InputError(f"the line body '{part}' has no beam section", code="invalid")
@@ -246,7 +254,13 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     for i, (node, *_rest) in enumerate(gaps, start=1):
         points.add(f"C{i}", node, "GAPS")
     for i, end in enumerate(fastener_ends, start=1):
-        if end["distributing"]:  # a 6-dof master point per end for LIAISON_RBE3
+        if end.get("cut"):  # a beam bolt's cut: its rotations tied across it
+            points.add(f"T{i}A", end["cut"][0])
+            points.add(f"T{i}B", end["cut"][1])
+        if end.get("beam"):  # the beam's own end nodes: named, no element of their own
+            points.add(f"E{i}A", end["masters"][0])  # (an element there would halve the
+            points.add(f"E{i}B", end["masters"][1])  # node's averaged beam forces)
+        elif end["distributing"]:  # a 6-dof master point per end for LIAISON_RBE3
             points.add(f"M{i}A", end["masters"][0], "MASTERS")
             points.add(f"M{i}B", end["masters"][1], "MASTERS")
     for k, cut in enumerate(cuts, start=1):
@@ -295,25 +309,25 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
                 "mesh = DEFI_GROUP(reuse=mesh, MAILLAGE=mesh, CREA_GROUP_NO=_F(GROUP_MA=("
                 + ", ".join(
                     f"'{g}'"
-                    for g in [n for n in points.names if n.startswith("M")]
+                    for g in [n for n in points.names if n.startswith(("M", "T", "E"))]
                     + sorted(
                         {
                             names[sel]
                             for c in fasteners
-                            if c.ends == "distributing"
+                            if c.ends == "distributing" or c.formulation == "beam"
                             for sel in (c.source, c.target)
                         }
                     )
                     + [
                         f"F{i}{e}"
                         for i, c in enumerate(fasteners, start=1)
-                        if c.ends == "distributing"
+                        if c.ends == "distributing" and c.formulation != "beam"
                         for e in "AB"
                     ]
                 )
                 + ",)))"
             ]
-            if any(c.ends == "distributing" for c in fasteners)
+            if any(c.ends == "distributing" or c.formulation == "beam" for c in fasteners)
             else []
         ),  # fmt: skip
         "model = AFFE_MODELE(MAILLAGE=mesh, "
@@ -321,6 +335,11 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         + "".join(
             f" _F(GROUP_MA='{names[p]}', PHENOMENE='MECANIQUE', MODELISATION='POU_D_T'),"
             for p in beam_parts
+        )
+        + "".join(
+            f" _F(GROUP_MA='F{i}', PHENOMENE='MECANIQUE', MODELISATION='POU_D_T'),"
+            for i, c in enumerate(fasteners, start=1)
+            if c.formulation == "beam"
         )
         + "".join(
             f" _F(GROUP_MA='{names[p]}', PHENOMENE='MECANIQUE', MODELISATION='DKT'),"
@@ -386,7 +405,8 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         out += _thermal_loads(project, features, names, mesh)
     else:
         extra = _pretension_loads(bolts, cuts)
-        extra.update(_fastener_loads(fastener_ends, fasteners, names))
+        for key, items in _fastener_loads(fastener_ends, fasteners, names).items():
+            extra[key] = extra.get(key, []) + items  # both write LIAISON_DDL
         # In a transient step, loads following an amplitude get their own charge,
         # multiplied by it (ADR 0041); the rest act from t = 0 at full value.
         timed = [f for f in features if f.amplitude] if step.type == "transient" else []
@@ -529,14 +549,16 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             + "NEWTON=_F(REAC_ITER=1), CONVERGENCE=_F(ITER_GLOB_MAXI=200, RESI_GLOB_RELA=1e-6), "
             "INCREMENT=_F(LIST_INST=DEFI_LIST_REEL(DEBUT=0.0, "
             f"INTERVALLE=_F(JUSQU_A=1.0, NOMBRE={increments}))))",
-            "res = CALC_CHAMP(reuse=res, RESULTAT=res, CONTRAINTE=('SIGM_NOEU',), "
-            "FORCE=('REAC_NODA',)"
+            "res = CALC_CHAMP(reuse=res, RESULTAT=res, CONTRAINTE=('SIGM_NOEU',"
+            + (" 'EFGE_NOEU'," if bolt_beams else "")
+            + "), FORCE=('REAC_NODA',)"
             # V1 of VMIS_ISOT_TRAC is the cumulated (equivalent) plastic strain p.
             + (", VARI_INTERNE=('VARI_NOEU',), DEFORMATION=('EPSP_NOEU',)" if plastic else "")
             + ")",
             _table("res", "DEPL", "displacement", which),
             _table("res", "SIGM_NOEU", "stress", which),
             _table("res", "REAC_NODA", "reaction_force", which),
+            *([_table("res", "EFGE_NOEU", "beam_forces", which)] if bolt_beams else []),
             *(
                 [
                     _table("res", "EPSP_NOEU", "plastic_strain", which),
@@ -548,7 +570,9 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         ]
     else:
         solids = any(b.dim == 3 for b in mesh.blocks)
-        options = (["'SIGM_NOEU'"] if solids else []) + (["'EFGE_NOEU'"] if beam_parts else [])
+        options = (["'SIGM_NOEU'"] if solids else []) + (
+            ["'EFGE_NOEU'"] if beam_parts or bolt_beams else []
+        )
         out += [
             f"res = MECA_STATIQUE(MODELE=model, CHAM_MATER=mater, {cara}EXCIT=("
             + ", ".join(f"_F(CHARGE={c})" for c in charges)
@@ -558,7 +582,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             + "FORCE=('REAC_NODA',))",
             _table("res", "DEPL", "displacement"),
             *([_table("res", "SIGM_NOEU", "stress")] if solids else []),
-            *([_table("res", "EFGE_NOEU", "beam_forces")] if beam_parts else []),
+            *([_table("res", "EFGE_NOEU", "beam_forces")] if beam_parts or bolt_beams else []),
             _table("res", "REAC_NODA", "reaction_force"),
         ]
     out.append("FIN()")
@@ -730,8 +754,44 @@ def _with_bolts(mesh: Mesh, fasteners, original: Mesh, names: dict, held=None):
     for i, f in enumerate(fasteners, start=1):
         what = f"fastener '{f.name}'"
         a, b = (fastener_end(s, original, what) for s in (f.source, f.target))
-        axis, _side = fastener_frame(a.centre, b.centre)
+        axis, side = fastener_frame(a.centre, b.centre)
         tight = f.pretension is not None
+        if f.formulation == "beam":  # a POU_D_T line between the ends' centres, no mesh
+            mid = (a.centre + b.centre) / 2
+            nodes, points = [node, node + 1], [a.centre, b.centre]
+            lines = [[node, node + 1]]
+            cut_nodes = None
+            node += 2
+            if tight:  # split at the middle: the halves' end nodes cut by the opening
+                m1, m2, ref = node, node + 1, node + 2
+                node += 3
+                nodes += [m1, m2, ref]
+                points += [mid, mid, mid]
+                lines = [[nodes[0], m1], [m2, nodes[1]]]
+                cut_nodes = [m1, m2]
+                pretensioned.append((
+                    Feature(type="bolt_pretension", selection=f.source,
+                            values={"F": f.pretension}),
+                    SectionCut(ref, axis, mid, {m1: m2}, set()),
+                ))  # fmt: skip
+            ids.append(np.array(nodes))
+            xyz.append(np.array(points))
+            entity = (1, BOLT_TAG + i)
+            conn = np.array(lines, dtype=np.int64)
+            blocks.append(CellBlock("line2", 1, entity, np.arange(elem, elem + len(conn)), conn))
+            elem += len(conn)
+            beam_nodes = [n for n in nodes if n != (nodes[-1] if tight else None)]
+            groups[f"__bolt{i}"] = Group(f"__bolt{i}", 1, [entity], np.unique(beam_nodes))
+            names[f"__bolt{i}"] = f"F{i}"
+            ends.append({
+                "name": f.name, "axis": [float(c) for c in axis],
+                "side": [float(c) for c in side], "beam": True,
+                "a": {"centre": [float(c) for c in a.centre], "nodes": [nodes[0]],
+                      "xyz": [a.centre.tolist()]},
+                "distributing": f.ends == "distributing", "masters": nodes[:2],
+                "cut": cut_nodes,
+            })  # fmt: skip
+            continue
         coords, tets, at_a, at_b, middle = bolt_mesh(
             a.centre, b.centre, f.diameter.to_si(), f.elements, tight
         )
@@ -800,8 +860,26 @@ def _fastener_loads(ends: list[dict], fasteners, names: dict) -> dict[str, list[
     """Rigid ends: the hole's face and the bolt end move as one (LIAISON_SOLIDE).
     Distributing ends: the bolt end is rigid with its master point, and the master
     follows the hole on average (LIAISON_RBE3)."""
-    out: dict[str, list[str]] = {"LIAISON_SOLIDE": [], "LIAISON_RBE3": []}
+    out: dict[str, list[str]] = {"LIAISON_SOLIDE": [], "LIAISON_RBE3": [], "LIAISON_DDL": []}
     for i, (end, f) in enumerate(zip(ends, fasteners, strict=True), start=1):
+        if end.get("beam"):  # the beam's end node is the spider's master
+            for label, sel in (("A", f.source), ("B", f.target)):
+                master = f"E{i}{label}"
+                if f.ends == "rigid":
+                    out["LIAISON_SOLIDE"].append(f"_F(GROUP_NO=('{names[sel]}', '{master}'))")
+                else:
+                    out["LIAISON_RBE3"].append(
+                        f"_F(GROUP_NO_MAIT='{master}', DDL_MAIT=('DX', 'DY', 'DZ', 'DRX', "
+                        f"'DRY', 'DRZ'), GROUP_NO_ESCL=('{names[sel]}',), "
+                        "DDL_ESCL=('DX-DY-DZ',), COEF_ESCL=(1.0,))"
+                    )
+            if end.get("cut"):  # one beam through the cut: its rotations continue
+                for dof in ("DRX", "DRY", "DRZ"):
+                    out["LIAISON_DDL"].append(
+                        f"_F(GROUP_NO=('T{i}B', 'T{i}A'), DDL=('{dof}', '{dof}'), "
+                        "COEF_MULT=(1.0, -1.0), COEF_IMPO=0.0)"
+                    )
+            continue
         for label, sel in (("A", f.source), ("B", f.target)):
             if not end["distributing"]:
                 out["LIAISON_SOLIDE"].append(f"_F(GROUP_MA=('{names[sel]}', 'F{i}{label}'))")

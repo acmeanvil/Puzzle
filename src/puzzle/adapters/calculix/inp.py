@@ -941,6 +941,13 @@ def _fasteners(project: Project, comp: Component, mesh: Mesh, first_node: int):
                     )
         d = f.diameter.to_si()
         tight = f.pretension is not None
+        if f.formulation == "beam":
+            lines, node, elem, end = _beam_bolt(project, f, i, a, b, axis, side, node, elem,
+                                                held, mesh)  # fmt: skip
+            out += lines
+            printed += [end["a"]["nodes"][0], end["a"]["turn"]]
+            ends.append(end)
+            continue
         xyz, tets, at_a, at_b, middle = bolt_mesh(a.centre, b.centre, d, f.elements, tight)
         twins: dict[int, int] = {}
         if tight:  # cut at its mid-plane, as a bolt section (ADR 0037)
@@ -1006,6 +1013,83 @@ def _fasteners(project: Project, comp: Component, mesh: Mesh, first_node: int):
         )
     out += [f"*NSET, NSET={FASTENER_ENDS}", *_chunks(np.array(printed))]
     return out, node - first_node, elem - first_elem, ends
+
+
+def _beam_bolt(project, f, i: int, a, b, axis, side, node: int, elem: int, held, mesh):
+    """A fastener as a two-node Timoshenko beam (ADR 0027), exactly: each end's spider
+    (rigid: the hole in a rigid body; distributing: RBE3 to a centre node, then a rigid
+    arm) carries a node at the bolt's middle, and six springs join the two middle nodes
+    in the bolt's frame (`common.beam_bolt_stiffness`). No bolt mesh. A pretension cuts
+    the axial spring's end from its node by an opening along the axis (the reference
+    node's dof 1), as the solid bolt's section is cut. -> (lines, next node, next
+    element, the end's info for the reader: its middle node and rotation node)"""
+    from puzzle.adapters.common import beam_bolt_stiffness, rbe3_rows
+
+    length = float(np.linalg.norm(b.centre - a.centre))
+    middle = (a.centre + b.centre) / 2
+    springs = beam_bolt_stiffness(project.get(f.material, Material), f.diameter.to_si(), length)
+    out: list[str] = []
+    rows: list[str] = []
+    spiders = {}
+    for name, end in (("A", a), ("B", b)):
+        move, turn = node, node + 1  # at the middle: the spider's translation and rotation
+        node += 2
+        rows += [_node_row(move, middle), _node_row(turn, middle)]
+        if f.ends == "rigid":
+            out += [
+                f"*NSET, NSET=N_FB{i}{name}",
+                *_chunks(np.asarray(end.nodes)),
+                f"*RIGID BODY, NSET=N_FB{i}{name}, REF NODE={move}, ROT NODE={turn}",
+            ]
+        else:  # RBE3 about the middle: the hole follows the middle node on average
+            out.append("*EQUATION")
+            for terms in _rbe3_equations(rbe3_rows(end, mesh, middle), move, turn, held):
+                out.append(str(len(terms)))
+                for t in range(0, len(terms), 4):
+                    out.append(", ".join(f"{n}, {j}, {c:.12g}" for n, j, c in terms[t : t + 4]))
+        spiders[name] = (move, turn)
+    (move_a, turn_a), (move_b, turn_b) = spiders["A"], spiders["B"]
+    far, ref = move_b, None
+    if f.pretension is not None:  # the axial spring ends at a cut node, opened along the axis
+        ref, far = node, node + 1
+        node += 2
+        rows += [_node_row(ref, middle), _node_row(far, middle)]
+        out.append("*EQUATION")
+        for dof in (1, 2, 3):  # move_b = far + axis × opening
+            # The spider's node is the dependent one: CalculiX passes no force through a
+            # spring whose own node is the dependent term of an equation with an opening.
+            terms = [f"{move_b}, {dof}, 1.", f"{far}, {dof}, -1."]
+            if abs(axis[dof - 1]) > 1e-12:
+                terms.append(f"{ref}, 1, {-axis[dof - 1]:.13g}")
+            out += [str(len(terms)), ", ".join(terms)]
+    orient = f"OF{i}"
+    out += [f"*ORIENTATION, NAME={orient}",
+            ", ".join(f"{c:.13g}" for c in (*axis, *side))]  # fmt: skip
+    pairs = [((move_a, far), "T", springs["translation"]),
+             ((turn_a, turn_b), "R", springs["rotation"])]  # fmt: skip
+    for (n1, n2), tag, values in pairs:
+        for dof, k in enumerate(values, start=1):
+            elset = f"E_FB{i}{tag}{dof}"
+            out += [
+                f"*ELEMENT, TYPE=SPRING2, ELSET={elset}",
+                f"{elem}, {n1}, {n2}",
+                f"*SPRING, ELSET={elset}, ORIENTATION={orient}",
+                f"{dof}, {dof}",
+                f"{k:.13g}",
+            ]
+            elem += 1
+    info = {
+        "name": f.name,
+        "axis": [float(c) for c in axis],
+        "pretension": None if ref is None else [ref, f.pretension.to_si()],
+        "a": {
+            "centre": [float(c) for c in a.centre],
+            "nodes": [move_a],
+            "xyz": [middle.tolist()],
+            "turn": turn_a,
+        },
+    }
+    return ["*NODE", *rows, *out], node, elem, info
 
 
 def _node_row(n: int, p) -> str:

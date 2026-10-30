@@ -784,12 +784,13 @@ def fastener_end(selection: str, mesh: Mesh, what: str) -> FastenerEnd:
     return FastenerEnd(centre, ids, weights)
 
 
-def rbe3_rows(end: FastenerEnd, mesh: Mesh) -> list[list[tuple[int, int, float]]]:
+def rbe3_rows(end: FastenerEnd, mesh: Mesh, about=None) -> list[list[tuple[int, int, float]]]:
     """A distributing (RBE3) end's relations, one row per dof of the reference point:
     its translation is the weighted mean of the nodes' (dofs 1-3), its rotation the
     least-squares rotation of the nodes about the centre (dofs 4-6), so rigid motions
     are exact and it adds no stiffness. Row k: [(node, dof, coefficient)] with
-    reference dof k = Σ coefficient × u(node, dof)."""
+    reference dof k = Σ coefficient × u(node, dof). `about`: a reference point
+    elsewhere (a beam bolt's middle), whose translation adds θ × (about − centre)."""
     r = mesh.node_coords(end.nodes) - end.centre
     w = end.weights
     inertia = (w * (r * r).sum(axis=1)).sum() * np.eye(3) - (w[:, None] * r).T @ r
@@ -807,6 +808,16 @@ def rbe3_rows(end: FastenerEnd, mesh: Mesh) -> list[list[tuple[int, int, float]]
             coef = wi * (inv[k] @ skew)
             row += [(int(n), j + 1, float(c)) for j, c in enumerate(coef) if abs(c) > 1e-14]
         rows.append(row)
+    if about is not None:  # u_p = ū + θ × d = ū − skew(d) θ, d = about − centre
+        d = np.asarray(about, float) - end.centre
+        skew = np.array([[0, -d[2], d[1]], [d[2], 0, -d[0]], [-d[1], d[0], 0]])
+        for k in range(3):
+            merged: dict[tuple[int, int], float] = {(n, j): c for n, j, c in rows[k]}
+            for m in range(3):
+                if abs(skew[k, m]) > 0:
+                    for n, j, c in rows[3 + m]:
+                        merged[(n, j)] = merged.get((n, j), 0.0) - skew[k, m] * c
+            rows[k] = [(n, j, c) for (n, j), c in merged.items() if abs(c) > 1e-14]
     return rows
 
 
@@ -889,6 +900,8 @@ def fastener_values(reactions: dict, ends: list[dict]) -> np.ndarray:
         arm = np.asarray(end["xyz"]) - np.asarray(end["centre"])
         forces = -np.array([reactions.get(n, np.zeros(3)) for n in end["nodes"]])
         force, moment = forces.sum(axis=0), np.cross(arm, forces).sum(axis=0)
+        if end.get("turn") is not None:  # a beam bolt's rotation node carries its moment
+            moment = moment - np.asarray(reactions.get(end["turn"], np.zeros(3)))
         along, twist = float(force @ axis), float(moment @ axis)
         values.append(
             [
@@ -920,3 +933,28 @@ def check_rigid_ends(fasteners, mesh: Mesh, held: set[int] | None = None) -> Non
                     "ends, or hold another face)",
                     code="unsupported",
                 )
+
+
+def beam_bolt_stiffness(material, diameter: float, length: float) -> dict:
+    """A round bolt as a two-node Timoshenko beam, written as the exact equivalent: rigid
+    arms from each end to the middle and six springs there (ADR 0027).
+
+    For a beam of length L the 12 x 12 stiffness is reproduced term for term by
+    - axial EA/L and torsion GJ/L,
+    - bending EI/L about each axis across the bolt,
+    - shear 12EI / (L³ (1 + Φ)) along each axis across it, Φ = 12EI / (κGA L²),
+    with κ = 6(1 + ν) / (7 + 6ν), the round section's shear factor (Cowper). -> the
+    springs in the bolt's frame: {"translation": (kx, ky, kz), "rotation": (rx, ry, rz)}."""
+    e = material.properties["youngs_modulus"].to_si()
+    nu = material.properties["poissons_ratio"].to_si()
+    g = e / (2 * (1 + nu))
+    a = np.pi * diameter**2 / 4
+    i = np.pi * diameter**4 / 64
+    j = 2 * i
+    kappa = 6 * (1 + nu) / (7 + 6 * nu)
+    phi = 12 * e * i / (kappa * g * a * length**2)
+    shear = 12 * e * i / (length**3 * (1 + phi))
+    return {
+        "translation": (e * a / length, shear, shear),
+        "rotation": (g * j / length, e * i / length, e * i / length),
+    }

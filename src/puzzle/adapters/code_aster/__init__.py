@@ -169,6 +169,35 @@ def _fastener_fields(results, input_file: Path) -> None:
         if rf is None:
             continue
         reactions = {int(n): v for n, v in zip(rf.ids, rf.values, strict=True)}
-        values = fastener_values(reactions, ends)
+        values = fastener_values(reactions, [e for e in ends if not e.get("beam")])
+        if any(e.get("beam") for e in ends):  # beam bolts: their own end forces
+            solid = iter(values)
+            values = np.array([
+                _beam_bolt_values(e, step.fields.get("beam_forces")) if e.get("beam")
+                else next(solid)
+                for e in ends
+            ])  # fmt: skip
         ids = np.arange(1, len(ends) + 1)
         step.fields["fastener"] = Field("fastener", "global", FASTENER_COMPONENTS, ids, values)
+
+
+def _beam_bolt_values(end: dict, forces):
+    """A beam bolt's forces at its first end (FASTENER_COMPONENTS) from EFGE_NOEU there:
+    N, Vy, Vz, T, My, Mz in the beam's axes (x along it, y the section's 1-axis)."""
+    import numpy as np
+
+    if forces is None:
+        return np.full(10, np.nan)
+    node = end["a"]["nodes"][0]
+    at = np.flatnonzero(np.asarray(forces.ids) == node)
+    if not len(at):
+        return np.full(10, np.nan)
+    c = {k: j for j, k in enumerate(forces.components)}
+    v = np.asarray(forces.values)[at[0]]
+    x = np.asarray(end["axis"], float)
+    y = np.asarray(end["side"], float)
+    z = np.cross(x, y)
+    force = v[c["N"]] * x + v[c["Vy"]] * y + v[c["Vz"]] * z
+    moment = v[c["T"]] * x + v[c["My"]] * y + v[c["Mz"]] * z
+    return np.array([v[c["N"]], float(np.hypot(v[c["Vy"]], v[c["Vz"]])), v[c["T"]],
+                     float(np.hypot(v[c["My"]], v[c["Mz"]])), *force, *moment])  # fmt: skip

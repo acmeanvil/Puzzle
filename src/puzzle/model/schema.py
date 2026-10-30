@@ -945,6 +945,11 @@ class BeamFastener(BaseModel):
     pretension: Quantity | None = Field(
         default=None, description="a force applied in the first step, then locked"
     )
+    formulation: Literal["beam", "solid"] = Field(
+        default="beam",
+        description="beam: a two-node Timoshenko beam between the ends, no mesh (Nastran "
+        "CBAR with RBE2/RBE3 spiders); solid: a small meshed bolt",
+    )
 
 
 class Component(ProjectObject):
