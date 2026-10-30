@@ -348,6 +348,7 @@ class MainWindow(QMainWindow):
         self.tree = ModelTree()
         self.properties = PropertiesPanel()
         self.viewport = Viewport()
+        self.viewport.construction_planes = self._construction_planes  # for section cuts
         self.results_bar = ResultsBar(self._redraw_result, self._axes_changed)
         self.results_bar.hide()
         # Which part of the work is on screen (ADR 0029): model, geometry, sketch or
@@ -415,6 +416,12 @@ class MainWindow(QMainWindow):
         self.side.addWidget(self.properties)
         self.properties_dock = self.docks.add("properties", "Properties", self.side, left)
         self.docks.split("model", "properties")
+        from puzzle.gui.sections_panel import SectionsPanel
+
+        self.sections = SectionsPanel(self)  # saved section cuts (ADR 0038)
+        self.sections_dock = self.docks.add("sections", "Sections", self.sections, left)
+        self.docks.tab("properties", "sections")
+        self.properties_dock.raise_()  # Properties in front; Sections a tab beside it
         tabs = QTabWidget()
         tabs.addTab(self.log, "Output")
         tabs.addTab(self.history, "History")
@@ -552,6 +559,7 @@ class MainWindow(QMainWindow):
             self.history.addItem(_history_line(entry, names))
         self.refresh_problems()
         self.plots.refresh()
+        self.sections.refresh()
         self.agent.refresh()
         waiting = self.agent.proposals.count()
         if waiting > self._proposals_seen:  # a new proposal: open the agent, no focus
@@ -1725,6 +1733,20 @@ class MainWindow(QMainWindow):
         panel.hide()
         panel.deleteLater()
         self.linearization_panel = None
+
+    def _construction_planes(self) -> list[tuple]:
+        """(name, id, origin, normal) of the project's construction planes, which a
+        section cut can follow (ADR 0038, 0046); one that can't be placed is left out."""
+        out = []
+        project = self.session.project if self.session is not None else None
+        for obj in project.objects.values() if project is not None else []:
+            if isinstance(obj, ConstructionGeometry) and obj.type == "plane":
+                try:
+                    origin, normal = obj.frame(project)
+                except (PuzzleError, ValueError):
+                    continue
+                out.append((obj.name, str(obj.id), tuple(origin), tuple(normal)))
+        return sorted(out)
 
     def _show_kept_probe(self, probe) -> None:
         """Its source's result, with the probe marked, and its value in Properties."""

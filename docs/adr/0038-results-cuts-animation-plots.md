@@ -66,6 +66,18 @@ Asked by the maintainer: a custom range, size and placement, other colours, and 
 - **CLI:** `puzzle show` draws the same legend from the preferences, and `--range bottom,top` sets a custom range; `puzzle settings` now takes numbers for numeric choices (bands 9, size 1.5).
 - **Checks:** `tests/test_gui_legend.py`.
 
+## Built: placed cut planes and saved sections (2026-10-30)
+
+Asked by the maintainer: besides cuts across X, Y or Z, a custom plane from a face (picked live, or a selection set) with an offset, or a construction plane; and custom sections saved and recalled from a Sections panel tab in the side bar.
+
+- **Placed planes:** the cut bar's plane list has Across X, Y and Z (with the slider), then Picked face, each face selection ("Face selection: Tip (Bar)") and each construction plane (ADR 0046). A placed plane shows an offset field in the display length unit, moving it along its normal.
+  - `post/cuts.py` `face_plane(mesh, entities)`: through the faces' area-weighted centroid, along their area-weighted normal; a curved face whose normals cancel (round a cylinder) takes the plane that best fits its points. `face_at(mesh, point)` finds the face under a point.
+  - **Picked face:** Pick face, then a double-click on the result; a face already picked in the mesh view is taken first.
+  - `Cut.offset` and `Cut.source`; the view records the plane's origin and normal (`Viewport.shown["cut"]`).
+- **Saved sections:** a `SectionCut` (kind `cut`) keeps how the cut is placed: across an axis at a fraction, a face selection, a construction plane (both re-placed each time, so they follow the geometry), or a picked face's plane as a fixed origin and normal (mesh faces aren't kept), plus the offset, flip and ghost. `cuts.from_saved` turns one back into a `Cut`.
+  - **Sections panel** (`gui/sections_panel.py`, a tab beside Properties; Window → Sections, Ctrl+4): Save current cut ("Section n"), a click recalls one (opening the cut bar set to it), double-click or F2 renames, Delete; each a command, so they undo. The tooltip says where each one is ("along Tip (Bar), offset 50 mm").
+- **Checks:** `tests/test_section_cut_planes.py`: the Tip face's plane and an offset cut 50 mm in, a cylinder's side, the bar's list and modes, saving, recalling, renaming, deleting and undo.
+
 ## Consequences
 
 - Most result reading stays inside Puzzle; ParaView export remains for the rest.

@@ -1501,6 +1501,29 @@ class ProjectUnits(ProjectObject):
         return v
 
 
+class SectionCut(ProjectObject):
+    """A section cut saved to recall (ADR 0038): the plane the view cut along, kept in
+    the project and listed in the Sections panel. It never changes a solve.
+
+    `plane` says how it is placed: across `x`, `y` or `z` at `fraction` of the model's
+    extent; along a face `selection` ("Part/Name"); along a `construction` plane; or
+    `fixed` at `origin` facing `normal` (a face picked on a result: mesh faces aren't
+    kept, so its plane is). The placed ones move `offset` metres along their normal.
+    """
+
+    kind: ClassVar[str] = "cut"
+
+    plane: Literal["x", "y", "z", "selection", "construction", "fixed"] = "x"
+    fraction: float = Field(default=0.5, ge=0.0, le=1.0, description="across x, y or z: where")
+    selection: str | None = Field(default=None, description="a face selection, Part/Name")
+    construction: UUID | None = Field(default=None, description="a construction plane")
+    origin: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    normal: tuple[float, float, float] = (1.0, 0.0, 0.0)
+    offset: float = Field(default=0.0, description="along the plane's normal (m)")
+    flip: bool = Field(default=False, description="keep the other side")
+    ghost: bool = Field(default=True, description="show the cut-away side faintly")
+
+
 class SettingsPreset(ProjectObject):
     """Solver settings saved to apply to any study (ADR 0023): "robust contact", "fast
     transient". The shared settings go on each solve step; each solver's own block and
@@ -1527,6 +1550,7 @@ OBJECT_TYPES: tuple[type[ProjectObject], ...] = (
     Amplitude,
     CoordinateSystem,
     ConstructionGeometry,
+    SectionCut,
     SettingsPreset,
     TreeGroup,
     TreeLabels,

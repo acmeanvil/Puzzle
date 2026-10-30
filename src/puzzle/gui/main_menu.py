@@ -486,6 +486,7 @@ def _window(window, menu: QMenu, agent: QAction, messages: QAction) -> None:
         (window.model_dock, "Model", "Ctrl+1"),
         (window.properties_dock, "Properties", "Ctrl+2"),
         (window.advisor_dock, "Advisor", "Ctrl+3"),
+        (window.sections_dock, "Sections", "Ctrl+4"),
     ):
         # Not the dock's own toggle action: Qt renames that with the dock's title
         # (Properties reads "Tool" while a tool is open).
@@ -506,7 +507,7 @@ def _window(window, menu: QMenu, agent: QAction, messages: QAction) -> None:
     _fill_layouts(window, layouts)
     hide = _sub(menu, "Auto-hide")
     for key, text in (("model", "Model"), ("properties", "Properties"), ("agent", "Agent"),
-                      ("advisor", "Advisor")):  # fmt: skip
+                      ("advisor", "Advisor"), ("sections", "Sections")):  # fmt: skip
         action = QAction(text, window)
         action.setCheckable(True)
         action.setToolTip(f"Hide the {text} panel into a bar on its edge; click there to show it")

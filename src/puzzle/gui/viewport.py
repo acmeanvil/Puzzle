@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import numpy as np
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QComboBox, QLabel, QVBoxLayout, QWidget
 
 from puzzle.gui.tasks import rendering_available
 from puzzle.mesh.mesh import Mesh
@@ -477,12 +477,37 @@ class ViewBar(QWidget):
             bar.raise_()
 
 
+class _Sources(QComboBox):
+    """The cut's plane choices, listed afresh each time the list opens (selections and
+    construction planes come and go)."""
+
+    def __init__(self, bar) -> None:
+        super().__init__()
+        self.bar = bar
+
+    def showPopup(self) -> None:  # noqa: N802 - Qt's name
+        self.bar.refresh_sources()
+        super().showPopup()
+
+
 class CutBar(QWidget):
-    """A section cut's controls (ADR 0038): the plane's axis, where across the model,
-    which side is kept, and a ghost of the rest."""
+    """A section cut's controls (ADR 0038): the plane, where it is, which side is kept,
+    and a ghost of the rest.
+
+    The plane is across X, Y or Z at a place across the model (the slider), or placed:
+    a face picked on the shown result, a face selection, or a construction plane (ADR
+    0046), each moved along its normal by an offset in the display length unit."""
+
+    AXES = (("Across X", "axis:x"), ("Across Y", "axis:y"), ("Across Z", "axis:z"))
 
     def __init__(self, viewport) -> None:
-        from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QSlider
+        from PySide6.QtWidgets import (
+            QCheckBox,
+            QDoubleSpinBox,
+            QHBoxLayout,
+            QPushButton,
+            QSlider,
+        )
 
         super().__init__(viewport)
         self.viewport = viewport
@@ -494,34 +519,196 @@ class CutBar(QWidget):
         )
         row = QHBoxLayout(self)
         row.setContentsMargins(6, 2, 6, 2)
-        self.axis = QComboBox()
-        for text, key in (("Across X", "x"), ("Across Y", "y"), ("Across Z", "z")):
-            self.axis.addItem(text, key)
+        self.axis = _Sources(self)
+        self.face = None  # the picked face, (2, tag)
+        self.refresh_sources()
+        self.pick = QPushButton("Pick face")
+        self.pick.setToolTip("Double-click a face of the result to cut along it")
+        self.pick.clicked.connect(self.pick_face)
         self.position = QSlider(Qt.Orientation.Horizontal)
         self.position.setRange(0, 100)
         self.position.setValue(50)
         self.position.setFixedWidth(160)
+        self.offset = QDoubleSpinBox()
+        self.offset.setRange(-1e9, 1e9)
+        self.offset.setDecimals(4)
+        self.offset.setToolTip("Moves the plane along its normal")
         self.flip = QCheckBox("Flip")
         self.ghost = QCheckBox("Ghost")
         self.ghost.setChecked(True)
-        for w in (self.axis, self.position, self.flip, self.ghost):
+        for w in (self.axis, self.pick, self.position, self.offset, self.flip, self.ghost):
             row.addWidget(w)
         self.axis.currentIndexChanged.connect(self.apply)
         self.position.valueChanged.connect(self.apply)
+        self.offset.valueChanged.connect(self.apply)
         self.flip.toggled.connect(self.apply)
         self.ghost.toggled.connect(self.apply)
+        self._modes()
+
+    def choice(self) -> tuple[str, str | None]:
+        """The chosen plane as (kind, ref): axis x/y/z, face, selection Part/Name, plane id.
+        Items hold "kind:ref" text: Qt doesn't match Python tuples as item data."""
+        kind, _, ref = (self.axis.currentData() or "axis:x").partition(":")
+        return kind, ref or None
+
+    def sources(self) -> list[tuple[str, str]]:
+        """(name, "kind:ref") for every plane the cut can follow."""
+        out = list(self.AXES)
+        out.append(("Picked face", "face:"))
+        state = self.viewport.result_state
+        mesh = state["mesh"] if state is not None else self.viewport.mesh
+        if mesh is not None:
+            for name, g in sorted(mesh.groups.items()):
+                if g.dim == 2 and "/" in name:
+                    part, sel = name.split("/", 1)
+                    out.append((f"Face selection: {sel} ({part})", f"selection:{name}"))
+        planes = getattr(self.viewport, "construction_planes", None)
+        for name, key, _origin, _normal in planes() if planes else []:
+            out.append((f"Construction plane: {name}", f"plane:{key}"))
+        return out
+
+    def refresh_sources(self) -> None:
+        current = self.axis.currentData()
+        self.axis.blockSignals(True)
+        self.axis.clear()
+        for text, data in self.sources():
+            self.axis.addItem(text, data)
+        i = self.axis.findData(current) if current is not None else 0
+        self.axis.setCurrentIndex(max(i, 0))
+        self.axis.blockSignals(False)
+
+    def _modes(self) -> None:
+        kind = self.choice()[0]
+        self.position.setVisible(kind == "axis")
+        self.offset.setVisible(kind != "axis")
+        self.pick.setVisible(kind == "face")
+        from puzzle.settings import length_unit
+
+        self.offset.setSuffix(f" {length_unit()[0]}")
+        self.adjustSize()
+
+    def pick_face(self) -> None:
+        """The next double-click on the shown result picks the face to cut along."""
+        self.viewport.capture_point(self._face_at, snap="none")
+
+    def _face_at(self, point) -> None:
+        from puzzle.post.cuts import face_at
+
+        state = self.viewport.result_state
+        mesh = state["mesh"] if state is not None else self.viewport.mesh
+        if point is None or mesh is None:
+            return
+        self.face, self.fixed = face_at(mesh, point), None
+        self.apply()
+
+    def use_face(self, entity) -> None:
+        """Cut along a face (2, tag), as if it had been picked."""
+        self.face = tuple(entity)
+        i = self.axis.findData("face:")
+        self.axis.setCurrentIndex(i)
+        self.apply()
+
+    def plane(self):
+        """The chosen placed plane's (origin, normal), or None for an axis or nothing yet."""
+        from puzzle.post.cuts import face_plane
+
+        kind, ref = self.choice()
+        state = self.viewport.result_state
+        mesh = state["mesh"] if state is not None else self.viewport.mesh
+        if kind == "face":
+            if self.face is None and getattr(self, "fixed", None) is not None:
+                origin, normal = self.fixed  # a recalled section's plane
+                return np.asarray(origin, float), np.asarray(normal, float)
+            if self.face is None and self.viewport.picked:  # the faces picked in the mesh view
+                faces = [e for e in self.viewport.picked if e[0] == 2]
+                self.face = faces[0] if faces else None
+            if self.face is None or mesh is None:
+                return None
+            return face_plane(mesh, [self.face])
+        if kind == "selection" and mesh is not None and ref in mesh.groups:
+            return face_plane(mesh, mesh.groups[ref].entities)
+        if kind == "plane":
+            planes = getattr(self.viewport, "construction_planes", None)
+            for _name, key, origin, normal in planes() if planes else []:
+                if key == ref:
+                    return np.asarray(origin, float), np.asarray(normal, float)
+        return None
+
+    def saved(self) -> dict | None:
+        """The cut as a saved section's fields (`SectionCut`), None with nothing to cut
+        along yet. A picked face is kept as its plane: mesh faces aren't kept."""
+        from puzzle.settings import length_unit
+
+        kind, ref = self.choice()
+        out = {"flip": self.flip.isChecked(), "ghost": self.ghost.isChecked()}
+        if kind == "axis":
+            return out | {"plane": ref, "fraction": self.position.value() / 100}
+        out["offset"] = self.offset.value() / length_unit()[1]
+        if kind == "selection":
+            return out | {"plane": "selection", "selection": ref}
+        if kind == "plane":
+            return out | {"plane": "construction", "construction": ref}
+        placed = self.plane()
+        if placed is None:
+            return None
+        origin, normal = placed
+        return out | {"plane": "fixed", "origin": tuple(origin.tolist()),
+                      "normal": tuple(normal.tolist())}  # fmt: skip
+
+    def recall(self, saved) -> None:
+        """Set the controls to a saved section (`SectionCut`) and cut along it."""
+        from puzzle.settings import length_unit
+
+        self.refresh_sources()
+        widgets = (self.axis, self.position, self.offset, self.flip, self.ghost)
+        for w in widgets:
+            w.blockSignals(True)
+        try:
+            if saved.plane in ("x", "y", "z"):
+                data = f"axis:{saved.plane}"
+                self.position.setValue(round(saved.fraction * 100))
+            elif saved.plane == "selection":
+                data = f"selection:{saved.selection}"
+            elif saved.plane == "construction":
+                data = f"plane:{saved.construction}"
+            else:
+                data = "face:"
+            i = self.axis.findData(data)
+            if i < 0 and saved.plane != "fixed":
+                raise ValueError(f"section '{saved.name}': its plane isn't here")
+            self.axis.setCurrentIndex(max(i, 0) if saved.plane != "fixed" else
+                                      self.axis.findData("face:"))  # fmt: skip
+            self.offset.setValue(saved.offset * length_unit()[1])
+            self.flip.setChecked(saved.flip)
+            self.ghost.setChecked(saved.ghost)
+        finally:
+            for w in widgets:
+                w.blockSignals(False)
+        self.fixed = (saved.origin, saved.normal) if saved.plane == "fixed" else None
+        self.apply()
 
     def apply(self, *_) -> None:
         from puzzle.post.cuts import Cut
+        from puzzle.settings import length_unit
 
-        self.viewport.set_cut(
-            Cut(
-                self.axis.currentData(),
-                self.position.value() / 100,
-                self.flip.isChecked(),
-                self.ghost.isChecked(),
-            )
-        )
+        self._modes()
+        kind, ref = self.choice()
+        flip, ghost = self.flip.isChecked(), self.ghost.isChecked()
+        if kind == "axis":
+            cut = Cut(ref, self.position.value() / 100, flip, ghost)
+        else:
+            try:
+                placed = self.plane()
+            except ValueError:
+                placed = None
+            if placed is None:  # nothing to cut along yet (no face picked)
+                self.viewport.set_cut(None)
+                return
+            origin, normal = placed
+            offset = self.offset.value() / length_unit()[1]  # display unit -> m
+            cut = Cut(flip=flip, ghost=ghost, origin=tuple(origin.tolist()),
+                      normal=tuple(normal.tolist()), offset=offset, source=kind)  # fmt: skip
+        self.viewport.set_cut(cut)
 
 
 class Viewport(QWidget):
@@ -1036,7 +1223,10 @@ class Viewport(QWidget):
             from puzzle.post.cuts import clip
 
             grid, away = clip(grid, self.cut, base.bounds)
-            self.shown["cut"] = {"axis": self.cut.axis, "fraction": self.cut.fraction}
+            origin, normal = self.cut.plane(base.bounds)
+            self.shown["cut"] = {"axis": self.cut.axis, "fraction": self.cut.fraction,
+                                 "source": self.cut.source or "axis",
+                                 "origin": origin.tolist(), "normal": normal.tolist()}  # fmt: skip
         if self.plotter is not None:
             self.plotter.clear()
             self._mark_actors = []

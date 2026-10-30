@@ -73,7 +73,7 @@ def test_cut_animation_plots_cli_and_agents(tmp_path, capsys):
             time.sleep(0.02)
 
         w.viewport.set_cut(Cut("x", 0.5))
-        assert w.viewport.shown["cut"] == {"axis": "x", "fraction": 0.5}
+        assert w.viewport.shown["cut"].items() >= {"axis": "x", "fraction": 0.5}.items()
         full = w.viewport.shown["scale"]
         frames = w.animation_frames()
         assert len(frames) == 24 and frames[0] == ("deform", 0.0)  # one static step
