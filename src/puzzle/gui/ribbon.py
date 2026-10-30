@@ -60,7 +60,7 @@ class Ribbon(QWidget):
         b.setAutoRaise(True)
         b.setCheckable(checkable)
         b.setFixedHeight(HEIGHT)
-        b.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        b.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         b.setMinimumWidth(b.sizeHint().width())  # never "C…r": fold the group instead
         b.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         return b
@@ -104,8 +104,21 @@ class Ribbon(QWidget):
         holder.hide()
         self.bar.insertWidget(self.bar.count() - 1, holder)
         self.groups.append((box, holder, buttons))
+        self._even()
         self.fold()
         return box
+
+    def _even(self) -> None:
+        """Every tool button in the ribbon as wide as the widest (and all one height):
+        a ribbon reads as one set of tools."""
+        tools = [b for _box, _holder, buttons in self.groups for b in buttons]
+        if not tools:
+            return
+        folded = [holder.findChild(QToolButton) for _box, holder, _buttons in self.groups]
+        widest = max(b.sizeHint().width() for b in [*tools, *folded] if b is not None)
+        for b in [*tools, *folded]:
+            if b is not None:
+                b.setFixedWidth(widest)
 
     @staticmethod
     def _fill(menu: QMenu, buttons: list[QToolButton]) -> None:

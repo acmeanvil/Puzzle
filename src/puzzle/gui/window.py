@@ -238,11 +238,10 @@ class PickBar(QWidget):
         self.box.setCheckable(True)
         self.box.setToolTip("Drag a box to pick what is inside (B)")
         self.box.toggled.connect(window.viewport.set_box_mode)
-        from PySide6.QtWidgets import QMenu, QToolButton
+        from PySide6.QtWidgets import QMenu
 
-        tools = QToolButton()
-        tools.setText("Select")
-        tools.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        tools = QPushButton("Select")  # a push button like its neighbours, with a menu
+        tools.setToolTip("Extend, same as these, whole part, undo pick")
         menu = QMenu(tools)
         self.tool_actions = {}
         for key, text, tip, slot in (
@@ -278,6 +277,12 @@ class PickBar(QWidget):
         row.addWidget(self.label, 1)
         for b in (new, add, clear):
             row.addWidget(b)
+        # One size for the bar's buttons (the largest's), and the filter as tall.
+        from puzzle.gui.theme import same_size
+
+        buttons = [self.box, tools, measure, new, add, clear]
+        same_size(buttons)
+        self.filter.setFixedHeight(buttons[0].height())
         window.viewport.picked_changed.connect(self.update_picks)
 
     def update_picks(self, picked) -> None:

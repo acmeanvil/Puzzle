@@ -212,3 +212,19 @@ def colour_levels(tree, depth_of_top: int = 0) -> None:
                 font.setWeight(font.Weight.Normal)
             item.setFont(0, font)
             stack.append((item, depth + 1))
+
+
+def same_size(widgets, width: bool = True, height: bool = True) -> None:
+    """Peers made one size, the largest one's (ADR 0045: a row of buttons reads as a
+    set only when they match)."""
+    widgets = list(widgets)
+    if not widgets:
+        return
+    hints = [w.sizeHint() for w in widgets]
+    w_max = max(h.width() for h in hints)
+    h_max = max(h.height() for h in hints)
+    for w in widgets:
+        if width:
+            w.setFixedWidth(w_max)
+        if height:
+            w.setFixedHeight(h_max)
