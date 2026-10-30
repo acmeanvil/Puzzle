@@ -584,6 +584,11 @@ class Contact(BaseModel):
     target: str
     friction: float | None = Field(default=None, ge=0)
     meshing: Literal["conformal", "nonconformal"] | None = None
+    stiffness: Literal["accurate", "balanced", "fast"] = Field(
+        default="balanced",
+        description="a penalty contact's stiffness: accurate (stiff, slow to converge), "
+        "balanced (the default), fast (soft: quick, but a through-loaded stack gives way more)",
+    )
     extensions: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     @model_validator(mode="after")

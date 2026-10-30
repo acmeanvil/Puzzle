@@ -1409,12 +1409,14 @@ def _feature_rows(f: Feature, mesh: Mesh, faces: FaceLookup, rigid=None) -> dict
 
 
 CONTACTS = {"bonded_nonconformal", "frictionless", "frictional"}
-# Contact penalty K = factor × E / h. 50 keeps a stack loaded through its interface
-# within 0.2 % (test_contact); a softer one converges in far fewer iterations where
-# bending governs (the bolted bracket: 0.5 took 17 iterations against 117, the same
-# deflection to 0.7 %) but adds the interface's compliance to a through-loaded stack
-# (1.0: 8 % there). Per contact: extensions["calculix"]["penalty_factor"].
-PENALTY_FACTOR = 50.0
+# Contact penalty K = factor × E / h, by the contact's stiffness. Measured on the
+# bolted bracket (from the full load, 8 cores) and on a stack loaded through its
+# interface (test_contact), where the interface's give shows most (~8 % / factor):
+#   accurate 50: 88 iterations, 27 min; the stack within 0.2 %
+#   balanced 10: 44 iterations, 14 min; the bracket's deflection within 0.05 %, the stack 0.8 %
+#   fast 1 (0.5 measured): 17 iterations, 5 min; the bracket 0.7 %, the stack 8 %
+# extensions["calculix"]["penalty_factor"] overrides it per contact.
+PENALTY_FACTORS = {"accurate": 50.0, "balanced": 10.0, "fast": 1.0}
 
 
 def _contacts(project: Project, comp: Component, mesh: Mesh, faces: FaceLookup) -> list[str]:
@@ -1451,7 +1453,9 @@ def _contacts(project: Project, comp: Component, mesh: Mesh, faces: FaceLookup) 
         # stiffen the penalty (it made rim contact chatter in the Belleville check).
         # Bending-dominated line contact (disc springs, rims) may need less, as Ansys
         # advises 0.01-0.1 of its default there: extensions["calculix"]["penalty_factor"].
-        factor = float(c.extensions.get("calculix", {}).get("penalty_factor", PENALTY_FACTOR))
+        factor = float(c.extensions.get("calculix", {}).get(
+            "penalty_factor", PENALTY_FACTORS[c.stiffness]
+        ))  # fmt: skip
         soft = min(_modulus(project, comp, c.source), _modulus(project, comp, c.target))
         stiffness = factor * soft / h
         interaction = set_name("I", c.name)

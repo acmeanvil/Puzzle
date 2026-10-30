@@ -243,7 +243,10 @@ def _stack(tmp_path, solver, contact, features=None, *, overhang=0.0, order=2):
 
 @over("calculix", "code_aster")
 def test_frictionless_stack_is_uniaxial(tmp_path, solver):
-    contact = Contact(name="Interface", type="frictionless", source="Cap/Bottom", target="Base/Top")
+    # Accurate: the stack is loaded through the interface, where a penalty's give adds to
+    # the blocks' own (balanced, the default, is 0.8 % over here; see PENALTY_FACTORS).
+    contact = Contact(name="Interface", type="frictionless", source="Cap/Bottom",
+                      target="Base/Top", stiffness="accurate")  # fmt: skip
     project, study = _stack(tmp_path, solver, contact)
     run = run_study(project, study.id, tmp_path, tmp_path / "run", timeout_s=900)
 
