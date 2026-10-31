@@ -97,7 +97,9 @@ class AdvisorPanel(QWidget):
         except Exception:  # noqa: BLE001 - an unreadable store: no runs, said elsewhere
             runs = []
         meshed = comp is not None and str(comp.id) in w.meshes
-        self.advice = advise(w.session.project, runs, comp, study, meshed=meshed)
+        self.advice = advise(
+            w.session.project, runs, comp, study, meshed=meshed, root=w.session.root
+        )
         first = next_step(self.advice)
         self.heading.setText(f"Next: {first.label or first.title}" if first else "All set")
         about = [x.name for x in (comp, study) if x is not None]

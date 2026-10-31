@@ -256,6 +256,23 @@ PREFERENCES: list[Preference] = [
         "so far); the cores per run are shared out among them, so each gets cores ÷ "
         "processes threads. One process is threads only.",
     ),
+    Preference(
+        "solvers.stall_minutes",
+        "Solvers",
+        "Stall warning",
+        10,
+        [
+            ("Off", 0),
+            ("2 minutes", 2),
+            ("5 minutes", 5),
+            ("10 minutes", 10),
+            ("20 minutes", 20),
+            ("45 minutes", 45),
+        ],  # fmt: skip
+        "The Solution panel warns when a running solve has reported nothing (no "
+        "increment, iteration or message) for this long; the run keeps going unless you "
+        "stop it (ADR 0054).",
+    ),
 ]
 BY_KEY = {p.key: p for p in PREFERENCES}
 WAITING: dict[str, str] = {}  # group -> why its preferences don't apply yet

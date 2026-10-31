@@ -552,6 +552,12 @@ def _window(window, menu: QMenu, agent: QAction, messages: QAction) -> None:
         menu.addAction(action)
     menu.addAction(agent)
     menu.addAction(messages)
+    solution = QAction("Solution", window)
+    solution.setShortcut(QKeySequence("Ctrl+6"))
+    solution.setToolTip("A solve's progress and convergence (ADR 0054)")
+    solution.triggered.connect(lambda: window.open_solution())
+    window.actions_by_name["solution"] = solution
+    menu.addAction(solution)
     menu.addSeparator()
     _add(menu, "3D view background…", lambda: window.pick_view_background(),
          "A colour of your own behind the model (Settings > Interface for a gradient)")  # fmt: skip

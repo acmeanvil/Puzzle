@@ -130,6 +130,14 @@ def _shown(values, per_metre: float) -> str:
 # --- making them -------------------------------------------------------------------------
 
 
+# ADR 0054: a probe can be followed while its study solves (the Solution panel).
+TRACK = [("After the solve", False), ("While solving too (Solution panel)", True)]
+
+
+def _trackable(quantity: str | None) -> bool:
+    return (quantity or "").split(":")[0] in ("displacement", "temperature", "reaction_force")
+
+
 def _create(window, data: dict):
     from puzzle.commands.model import Create
 
@@ -183,6 +191,12 @@ def add_reaction(window, selection: str | None = None, source: str | None = None
             default="0, 0, 0",
             shown=lambda v: v.get("about") == "point",
         ),
+        Ask(
+            "track",
+            "Follow",
+            choices=TRACK,
+            help="Also plot it in the Solution panel as the study solves (ADR 0054)",
+        ),
         Ask("name", "Name", kind="text", follow=lambda v: f"Reaction on {v.get('selection')}"),
     ]
 
@@ -207,6 +221,7 @@ def add_reaction(window, selection: str | None = None, source: str | None = None
         "source": got["source"],
         "type": "reaction",
         "selection": got["selection"],
+        "track": bool(got.get("track")),
     }
     if got.get("about") == "point":
         data["about"] = list(_point(got["point"], per_metre))
@@ -229,6 +244,13 @@ def add_selection_result(window):
         ),
         Ask("selection", "Over", choices=lambda v: selection_choices(window, v.get("source"))),
         Ask("reduction", "Value", choices=REDUCTIONS),
+        Ask(
+            "track",
+            "Follow",
+            choices=TRACK,
+            shown=lambda v: _trackable(v.get("quantity")) and v.get("reduction") != "integral",
+            help="Also plot it in the Solution panel as the study solves (ADR 0054)",
+        ),
         Ask("name", "Name", kind="text", follow=lambda v: _selection_title(window, v)),
     ]
     got = window.ask_form(
@@ -251,6 +273,9 @@ def add_selection_result(window):
             "quantity": got["quantity"],
             "selection": got["selection"],
             "reduction": got["reduction"],
+            "track": bool(got.get("track"))
+            and _trackable(got["quantity"])
+            and got["reduction"] != "integral",
         },
     )
 

@@ -6,6 +6,7 @@ transferred fields are mapped onto its mesh (puzzle.transfer) and handed to its 
 
 from __future__ import annotations
 
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
@@ -45,6 +46,7 @@ class StudyRun:
     # time goes around the solver, as well as in it.
     timings: dict[str, float] = field(default_factory=dict)
     cores: str = ""  # what the solve used: "4 cores", "2 processes x 2 threads"
+    events: list = field(default_factory=list)  # progress events (ADR 0054)
 
 
 def _cores(adapter) -> str:
@@ -71,6 +73,8 @@ def run_study(
     solver: str | None = None,
     meshed: MeshResult | None = None,
     _point: tuple[str, dict[str, str]] | None = None,
+    on_event: Callable | None = None,
+    cancel: threading.Event | None = None,
 ) -> StudyRun:
     """Run `study_id` with its primary solver. Geometry paths resolve against `root`.
 
@@ -78,6 +82,9 @@ def run_study(
     with the same inputs (same run key, ADR 0009) is returned instead of solving again.
     `solver` runs one of the study's shoot-out solvers instead, and `meshed` reuses a
     mesh already generated for this study (a shoot-out runs every solver on one mesh).
+    `on_event` gets the run's progress events (ADR 0054: stages, steps, increments,
+    iterations, messages), which are also kept in the run folder's `progress.jsonl` and
+    with the stored run; setting `cancel` stops the solver (code `stopped`).
     """
     from puzzle.bolts import resolved
 
@@ -105,6 +112,8 @@ def run_study(
             on_output=on_output,
             timeout_s=timeout_s,
             solver=study.solver,
+            on_event=on_event,
+            cancel=cancel,
         )
     adapters = available_adapters()
     if study.solver not in adapters:
@@ -144,20 +153,32 @@ def run_study(
                 on_output=on_output,
                 timeout_s=timeout_s,
                 upstream=upstream,
+                on_event=on_event,
+                cancel=cancel,
             )
     started = datetime.now(UTC)
     timings: dict[str, float] = {}
     clock = time.perf_counter()
+    from puzzle import progress
+
+    record = progress.Recorder(on_event)
+    record.write_to(workdir)
+
+    def begin(stage: str) -> None:
+        record(progress.Stage(name=stage, state="start"))
 
     def lap(stage: str) -> None:
         nonlocal clock
         now = time.perf_counter()
         timings[stage] = timings.get(stage, 0.0) + now - clock
         clock = now
+        record(progress.Stage(name=stage, state="end", seconds=round(timings[stage], 3)))
 
+    begin("mesh")
     if meshed is None:
         meshed = generate_mesh(project, study.component, root, workdir / "mesh")
     lap("mesh")
+    begin("transfers")
     inputs = [
         Input(
             map_field(
@@ -212,20 +233,47 @@ def run_study(
         # sorts them out itself.
         indices = [n - 1, n] if limit is not None and _preloaded(steps, n) else [n]
         seen = _in_step(project, study.component, indices) if limit is not None else project
+        begin("write")
         input_file = adapter.write_input(seen, part, written, where, inputs)
         lap("write")
+        begin("solve")
+        parser = adapter.progress(input_file, n, len(parts))
+        if parser is not None:  # probes followed while solving (ADR 0054)
+            from puzzle.trackers import trackers
+
+            parser.trackers, notes = trackers(seen, part, written)
+            for note in notes:
+                record(progress.Message(level="info", text=f"Not tracked: {note}"))
         job = run_job(
-            adapter.command(input_file), where, runtime, on_output=on_output, timeout_s=timeout_s
+            adapter.command(input_file),
+            where,
+            runtime,
+            on_output=on_output,
+            timeout_s=timeout_s,
+            cancel=cancel,
+            parser=parser,
+            on_event=record,
         )
         lap("solve")
+        if job.cancelled:
+            raise StudyError(
+                f"{study.name} was stopped", code="stopped", path=study.name,
+                details={"log": str(job.log), "progress": str(workdir / progress.FILE)},
+            )  # fmt: skip
         if not job.ok:
             tail = log_tail(job.log)
             raise StudyError(
                 f"{study.solver} failed (exit {job.returncode}):\n" + "\n".join(tail),
                 code="solver_failed",
                 path=study.name,
-                details={"exit_code": job.returncode, "log": str(job.log), "log_tail": tail},
+                details={
+                    "exit_code": job.returncode,
+                    "log": str(job.log),
+                    "log_tail": tail,
+                    "progress": progress.summary(record.events),
+                },
             )
+        begin("read")
         part_results = adapter.read_results(input_file)
         lap("read")
         if len(parts) > 1:
@@ -243,6 +291,7 @@ def run_study(
 
     run_id = None
     if store is not None:
+        begin("store")
         run_id = store.write_run(
             run_key=run_key,
             study_id=str(study.id),
@@ -256,6 +305,7 @@ def run_study(
             point=_point[1] if _point else None,
         )
         lap("store")
+        store.write_progress(run_id, record.events)
     cores = _cores(adapter)
     if on_output is not None and timings:
         on_output("Time: " + ", ".join(f"{k} {v:.1f} s" for k, v in timings.items())
@@ -270,10 +320,14 @@ def run_study(
         input_file=input_file,
         timings=timings,
         cores=cores,
+        events=record.events,
     )
 
 
-def _run_sweep(project, study, root, workdir, *, store, reuse, on_output, timeout_s, solver):
+def _run_sweep(
+    project, study, root, workdir, *, store, reuse, on_output, timeout_s, solver,
+    on_event=None, cancel=None,
+):  # fmt: skip
     """Each point of the sweep as its own run (cached by the point's run key). A sweep
     of materials only meshes once: the geometry is the same at every point."""
     from puzzle import sweep
@@ -298,6 +352,8 @@ def _run_sweep(project, study, root, workdir, *, store, reuse, on_output, timeou
             solver=solver,
             meshed=shared_mesh,
             _point=(key, words),
+            on_event=on_event,
+            cancel=cancel,
         )
         if sweep.materials_only(study) and run.mesh_result is not None:
             shared_mesh = run.mesh_result

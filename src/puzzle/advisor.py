@@ -98,10 +98,12 @@ def advise(
     component: Component | None = None,
     study: Study | None = None,
     meshed: bool = False,
+    root=None,
 ) -> list[Advice]:
     """The workflow's steps for `component` and `study` (each defaults to the only one,
     or the first; the study to one of the component's). `runs`: the stored run records;
-    `meshed`: whether the component's mesh is on hand."""
+    `meshed`: whether the component's mesh is on hand; `root`: the project folder, where
+    a failed run's progress is read for a diagnosis (ADR 0054)."""
     from puzzle.project.status import status
 
     out: list[Advice] = []
@@ -221,9 +223,27 @@ def advise(
         add("results", "optional", "Older results are kept until then.", "results", "Show them")
     else:
         later = "Once the study's problems are solved." if trouble else ""
-        add("run", "optional" if trouble else "needed", later, "run", "Run")
+        failed = _failed_attempt(root, study) if root is not None and not trouble else ""
+        add("run", "optional" if trouble else "needed", failed or later, "run",
+            "Run again" if failed else "Run")  # fmt: skip
         add("results", "optional", "Comes after a run.")
     return out
+
+
+def _failed_attempt(root, study: Study) -> str:
+    """Why the study's last attempt failed, from its progress (ADR 0054), or ''."""
+    from puzzle import progress
+
+    try:
+        events = progress.latest_attempt(root, study.name)
+    except OSError:
+        return ""
+    s = progress.state(events)
+    if not s.failed and not any(isinstance(e, progress.Diverged) for e in events):
+        return ""
+    found = progress.diagnose(events)
+    head = f"The last run failed ({s.failed})." if s.failed else "The last run failed."
+    return f"{head} {found[0].text}" if found else head
 
 
 def _assigned(project: Project, comp: Component, part: str) -> bool:

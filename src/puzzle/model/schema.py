@@ -1659,6 +1659,12 @@ class ResultProbe(ProjectObject):
     construction: UUID | None = Field(
         default=None, description="path, linearized: a construction path; plane, section: a plane"
     )
+    track: bool = Field(
+        default=False,
+        description="follow it while its study solves (ADR 0054): a point, selection or "
+        "reaction probe of displacement, temperature or reaction force, plotted in the "
+        "Solution panel",
+    )
 
     @model_validator(mode="after")
     def _needs(self) -> ResultProbe:

@@ -69,7 +69,10 @@ def _parser() -> argparse.ArgumentParser:
         "--no-reuse", action="store_true", help="solve even if an identical run is stored"
     )
     p.add_argument("--timeout", type=float, help="seconds before the solver is stopped")
-    p.add_argument("-v", "--verbose", action="store_true", help="print solver output")
+    p.add_argument(
+        "-v", "--verbose", "--log", action="store_true",
+        help="print the solver's whole log instead of a one-line progress status",
+    )  # fmt: skip
     p.set_defaults(handler=_run)
 
     p = sub.add_parser("runs", help="list stored runs")
@@ -79,13 +82,20 @@ def _parser() -> argparse.ArgumentParser:
     for name, handler, helptext in (
         ("show", _show, "view a result"),
         ("export", _export, "results for other software: ParaView, point clouds, CAD"),
+        ("progress", _progress, "how a run converged: steps, increments, cut-backs, messages"),
     ):
         p = sub.add_parser(name, help=helptext)
         p.add_argument("project", type=Path)
         target = p.add_mutually_exclusive_group(required=True)
         target.add_argument("--study", help="the study's latest run")
         target.add_argument("--run", help="a run id (from `puzzle runs`)")
-        if name == "show":
+        if name == "progress":  # ADR 0054
+            target.add_argument(
+                "--folder", type=Path, help="a run's folder (.puzzle/runs/...), for a failed run"
+            )
+            p.add_argument("--plot", type=Path, help="save the convergence plot as a PNG")
+            p.add_argument("--json", action="store_true", help="the summary as JSON")
+        elif name == "show":
             p.add_argument("--field", default="displacement")
             p.add_argument(
                 "--scalar", help="array to colour by, e.g. von_mises, displacement_magnitude"
@@ -259,13 +269,18 @@ def _run(args) -> int:
 
     study = _study(_load(args.project), args.study)
     print(f"Running '{study.name}' with {study.solver} ...")
+    status = None if args.verbose else _LiveStatus()
     try:
         outcome = Session(args.project).submit(
             RunStudy(study=str(study.id), reuse=not args.no_reuse, timeout_s=args.timeout),
             on_output=print if args.verbose else None,
+            on_event=status,
         )
     except (FileNotFoundError, ValueError) as exc:
         raise CliError(str(exc)) from exc
+    finally:
+        if status is not None:
+            status.close()
     run = outcome.run
     if run.cached:
         print(f"Unchanged since run {run.run_id[:8]}: reused its results.")
@@ -280,6 +295,100 @@ def _run(args) -> int:
             times = ", ".join(f"{k} {v:.1f} s" for k, v in run.timings.items())
             print(f"  {times} ({run.cores})" if run.cores else f"  {times}")
     _summarise(run.results)
+    return 0
+
+
+class _LiveStatus:
+    """`puzzle run`'s one line of progress (ADR 0054): rewritten in place on a terminal,
+    a line per increment or step otherwise (logs, CI)."""
+
+    def __init__(self) -> None:
+        import sys
+
+        from puzzle.progress import State
+
+        self.state = State()
+        self.tty = sys.stdout.isatty()
+        self.last = ""
+        self.shown = 0.0
+
+    def __call__(self, event) -> None:
+        import time
+
+        from puzzle.progress import Converged, Diverged, Increment, Message, Stage, Step
+
+        self.state.add(event)
+        if isinstance(event, Message) and event.level == "error":
+            self._end_line()
+            print(f"  {event.text}")
+        line = self.state.line()
+        frac = self.state.fraction()
+        if frac is not None:
+            line = f"{frac * 100:3.0f} %  {line}"
+        if self.tty:
+            now = time.monotonic()
+            if line != self.last and (now - self.shown > 0.2 or not isinstance(event, Message)):
+                print("\r" + line[:120].ljust(len(self.last[:120])), end="", flush=True)
+                self.last, self.shown = line, now
+        elif isinstance(event, (Step, Increment, Converged, Diverged, Stage)) and line != self.last:
+            if not isinstance(event, Stage) or event.state == "start":
+                print(f"  {line}")
+                self.last = line
+
+    def _end_line(self) -> None:
+        if self.tty and self.last:
+            print()
+            self.last = ""
+
+    def close(self) -> None:
+        self._end_line()
+
+
+def _progress(args) -> int:
+    """How a run converged (ADR 0054): a summary, JSON, or a PNG of the plots."""
+    import json
+
+    from puzzle import progress
+
+    if args.folder is not None:
+        events, title = progress.read(args.folder), str(args.folder)
+        if not events:
+            raise CliError(f"no progress kept in {args.folder}")
+    else:
+        store, record = _target(args)
+        events = store.read_progress(record.run_id)
+        title = f"{record.study_name} ({record.solver}, run {record.run_id[:8]})"
+    summary = progress.summary(events)
+    if args.plot is not None:
+        from puzzle.gui.solution_panel import save_png
+
+        save_png(events, title, args.plot)
+        print(f"Saved {args.plot}")
+    if args.json:
+        print(json.dumps(summary, indent=2))
+        return 0
+    if not events:
+        print(f"{title}: kept without its progress (an older Puzzle)")
+        return 0
+    print(title)
+    s = progress.state(events)
+    print(f"  {s.line()}")
+    counts = (
+        f"{summary['increments']} increments, {summary['cutbacks']} cut-backs, "
+        f"{summary['iterations']} iterations, {summary['converged_increments']} converged"
+    )
+    print(f"  {counts}")
+    if summary.get("stages_s"):
+        print("  " + ", ".join(f"{k} {v:.1f} s" for k, v in summary["stages_s"].items()))
+    for key, label in (("equations", "equations"), ("memory_mb", "MB"), ("cores", "cores")):
+        if key in summary:
+            print(
+                f"  {summary[key]:,} {label}" if key != "memory_mb" else f"  {summary[key]:,.0f} MB"
+            )
+    for m in summary.get("messages", []):
+        print(f"  {m['level']}: {m['text']}")
+    if summary.get("messages_total", 0) > len(summary.get("messages", [])):
+        print(f"  ({summary['messages_total']} messages in all; the last 20 shown)")
     return 0
 
 
@@ -608,7 +717,7 @@ def _advise(args) -> int:
         runs = ResultStore(Path(args.project) / RESULTS_DIR).runs()
     except PuzzleError:
         runs = []
-    advice = advise(project, runs, comp, study)
+    advice = advise(project, runs, comp, study, root=args.project)
     first = next_step(advice)
     print(f"Next: {first.label or first.title}" if first else "All set")
     marks = {"done": "✓", "needed": "●", "optional": "○"}

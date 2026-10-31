@@ -25,6 +25,7 @@ CODES = {
     "invalid_input": "the study cannot be written for this solver",
     "mesh_failed": "meshing failed",
     "solver_failed": "the solver ran but failed",
+    "stopped": "the run was stopped before it finished",
     "unsupported": "not implemented yet",
     "incomplete_material": "a material lacks a property the study needs",
     # Results

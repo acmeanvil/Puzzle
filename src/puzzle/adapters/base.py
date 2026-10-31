@@ -299,6 +299,12 @@ class SolverAdapter(ABC):
         on `mesh`'s nodes. An adapter that can't use one must refuse it (`refuse_inputs`).
         """
 
+    def progress(self, input_file: Path, step: int = 1, of: int = 1):
+        """A `puzzle.progress.Parser` for this solver's log (ADR 0054), or None when it
+        reports no progress yet. `step` of `of`: which of the study's solve steps the
+        job runs, for adapters that run one step per job."""
+        return None
+
     @abstractmethod
     def command(self, input_file: Path) -> list[str]:
         """The command line that runs the solver on `input_file` (inside its container)."""

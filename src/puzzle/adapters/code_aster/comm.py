@@ -70,6 +70,32 @@ CONTACTS = {"bonded_nonconformal", "frictionless", "frictional"}
 TEMPERATURE_UNIT = 90  # the transferred temperature table
 
 
+TRACK_TITLE = "PZTRK{}"  # a SUIVI_DDL column's title, read back by the progress parser
+_EVAL = {"max": "MAX", "min": "MIN", "mean": "MOY"}
+
+
+def followed(trackers: list) -> list:
+    """The trackers Code_Aster follows in its Newton table (SUIVI_DDL): a displacement
+    component over a selection, its maximum, minimum or mean (ADR 0054). Others are
+    left to the finished result."""
+    return [
+        t for t in trackers
+        if t.selection and t.field == "displacement" and t.what in ("x", "y", "z")
+        and t.reduce in _EVAL
+    ]  # fmt: skip
+
+
+def _suivi(tracked: list, names: dict[str, str]) -> str:
+    if not tracked:
+        return ""
+    entries = [
+        f"_F(NOM_CHAM='DEPL', NOM_CMP=('D{t.what.upper()}',), GROUP_NO='{names[t.selection]}', "
+        f"EVAL_CHAM='{_EVAL[t.reduce]}', TITRE=('{TRACK_TITLE.format(i)}',))"
+        for i, t in enumerate(tracked, start=1)
+    ]
+    return f"SUIVI_DDL=({', '.join(entries)},), "
+
+
 def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs=()) -> Path:
     comp = project.get(study.component, Component)
     thermal_load = next((i.field for i in inputs if i.field.name == "temperature"), None)
@@ -165,6 +191,11 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     # A tie projects the source (slave) face's nodes into the target part's volume.
     tie_groups = [g for c in ties for g in (c.source, c.target.split("/", 1)[0])]
     tie_groups += [g for c in touching for g in (c.source, c.target)]
+    from puzzle.trackers import trackers
+
+    # ADR 0054: probes tracked while solving, as SUIVI_DDL columns in the Newton table.
+    tracked = [] if thermal else followed(trackers(project, study, mesh)[0])
+    tie_groups += [t.selection for t in tracked]
     groups = list(
         dict.fromkeys(
             [a.selection for a in comp.materials]
@@ -286,7 +317,11 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         for sel in (c.source, c.target)
         if sel is not None
     }
-    unnoded = sorted({g for gs in excluded.values() for g in gs} - noded)
+    unnoded = sorted(
+        ({g for gs in excluded.values() for g in gs} | {names[t.selection] for t in tracked})
+        - noded
+        - {names[g] for g in point_groups}
+    )
     out = [
         "DEBUT(LANG='EN')",
         "mesh = LIRE_MAILLAGE(FORMAT='MED', UNITE=20)",
@@ -309,7 +344,8 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             if faces
             else []
         ),
-        # Fastener faces left out of contact that aren't node groups yet.
+        # Fastener faces left out of contact, and tracked selections (ADR 0054), that
+        # aren't node groups yet.
         *(
             [
                 "mesh = DEFI_GROUP(reuse=mesh, MAILLAGE=mesh, CREA_GROUP_NO=_F(GROUP_MA=("
@@ -579,7 +615,8 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             + behaviour
             # As Code_Aster's 3D contact validation (ssnv128): tangent every iteration.
             + "NEWTON=_F(REAC_ITER=1), CONVERGENCE=_F(ITER_GLOB_MAXI=200, RESI_GLOB_RELA=1e-6), "
-            "INCREMENT=_F(LIST_INST=times))",
+            + _suivi(tracked, names)
+            + "INCREMENT=_F(LIST_INST=times))",
             "res = CALC_CHAMP(reuse=res, RESULTAT=res, CONTRAINTE=('SIGM_NOEU',"
             + (" 'EFGE_NOEU'," if bolt_beams else "")
             + "), FORCE=('REAC_NODA',)"

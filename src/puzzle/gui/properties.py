@@ -85,6 +85,11 @@ APPLIES = {
     "toward": (_is_section, lambda d: d.get("orient") == "toward"),
     "toward_point": (_is_section, lambda d: d.get("orient") == "toward"),
     "reference": (_is_section, lambda d: d.get("orient") in ("normal", "edge")),
+    # ADR 0054: probes followed while solving are points, selections and reactions.
+    "track": (
+        lambda d: {"quantity", "reduction", "samples"} <= set(d),
+        lambda d: d.get("type") in ("point", "selection", "reaction"),
+    ),
 }
 # Construction geometry: a path's ends, or a plane's placing. Keyed (owner check, key):
 # these names are common, so their rules are looked up only for construction objects.

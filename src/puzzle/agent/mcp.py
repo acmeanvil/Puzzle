@@ -780,7 +780,7 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
             runs = ResultStore(root / RESULTS_DIR).runs()
         except PuzzleError:
             runs = []
-        advice = advise(s.project, runs, comp, chosen)
+        advice = advise(s.project, runs, comp, chosen, root=root)
         first = next_step(advice)
         return {
             "next": first.as_dict() if first else None,
@@ -824,6 +824,51 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
              "of_proof": b.proof, "of_yield": b.yielding}
             for b in rows
         ]}  # fmt: skip
+
+    @tool(
+        description="How a study's last solve went or is going (ADR 0054): steps, increments, "
+        "cut-backs, iterations, last residuals against their criteria, equations, memory, "
+        "tracked probes' last values, the solver's warnings and errors in English, and "
+        "diagnoses (what a failure means and what to try). Reads the newest attempt, so a "
+        "failed, stopped or running solve is included; `run` picks a stored run instead."
+    )
+    @guarded
+    def run_progress(study: str, run: str | None = None) -> dict[str, Any]:
+        from puzzle import progress
+        from puzzle.commands import resolve
+        from puzzle.model.schema import Study
+        from puzzle.project.layout import RESULTS_DIR
+        from puzzle.results.store import ResultStore
+
+        s = session()
+        found = resolve(s.project, study, Study)
+        store = ResultStore(root / RESULTS_DIR)
+        if run is not None:
+            hits = [r for r in store.runs() if r.run_id.startswith(run)]
+            if len(hits) != 1:
+                raise PuzzleError(f"run '{run}' matches {len(hits)} runs", code="not_found")
+            events, source = store.read_progress(hits[0].run_id), f"stored run {hits[0].run_id}"
+        else:
+            events, source = progress.latest_attempt(root, found.name), "newest run folder"
+            if not events:
+                runs = [r for r in store.runs() if r.study_id == str(found.id)]
+                if runs:
+                    events = store.read_progress(runs[-1].run_id)
+                    source = f"stored run {runs[-1].run_id}"
+        if not events:
+            raise PuzzleError(f"study '{found.name}' has no progress kept yet", code="not_found")
+        st = progress.state(events)
+        return {
+            "study": found.name,
+            "source": source,
+            "status": "failed"
+            if st.failed
+            else ("finished" if st.finished else "running or stopped"),
+            "now": st.line(),
+            "fraction": st.fraction(),
+            **progress.summary(events),
+            "diagnoses": [{"code": d.code, "text": d.text} for d in progress.diagnose(events)],
+        }
 
     @tool(
         description="Standard structural sections (ADR 0055): `standard` aisc or en; with no "

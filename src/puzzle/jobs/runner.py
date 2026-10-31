@@ -41,12 +41,22 @@ def run_job(
     on_output: Callable[[str], None] | None = None,
     cancel: threading.Event | None = None,
     timeout_s: float | None = None,
+    parser=None,
+    on_event: Callable | None = None,
 ) -> JobResult:
     """Run `command` in `workdir`; stdout and stderr go to `workdir/solver.log`.
 
     Returns when the process exits, is cancelled through `cancel`, or exceeds
     `timeout_s`. A stopped process is sent SIGTERM, then SIGKILL after a grace period.
+    A `parser` (`puzzle.progress.Parser`, ADR 0054) reads each line, and its side files
+    every poll, into events for `on_event`; it never holds the run up.
     """
+
+    def emit(events) -> None:
+        if on_event is not None:
+            for e in events:
+                on_event(e)
+
     argv = runtime.wrap(command, workdir)
     log_path = workdir / LOG_NAME
     start = time.monotonic()
@@ -84,6 +94,10 @@ def run_job(
                     log.write(f"\n[puzzle: log truncated at {MAX_LOG_BYTES} bytes]\n")
                 if on_output:
                     on_output(line.rstrip("\n"))
+                if parser is not None:
+                    emit(parser.safe_feed(line.rstrip("\n")))
+            elif parser is not None:  # quiet: side files may have grown
+                emit(parser.safe(parser.poll))
             if not finished and cancel is not None and cancel.is_set():
                 cancelled = True
                 _stop(proc)
@@ -92,6 +106,9 @@ def run_job(
                 _stop(proc)
 
         returncode = proc.wait()
+        if parser is not None:
+            emit(parser.safe(parser.poll))
+            emit(parser.safe(lambda: parser.finish(returncode == 0)))
 
     return JobResult(
         returncode=returncode,

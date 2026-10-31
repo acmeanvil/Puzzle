@@ -8,6 +8,7 @@ history.jsonl, so changes another client makes (an agent over MCP, the CLI) show
 from __future__ import annotations
 
 import copy
+import threading
 from pathlib import Path
 
 from PySide6.QtCore import QFileSystemWatcher, QSize, Qt, QTimer
@@ -435,6 +436,10 @@ class MainWindow(QMainWindow):
         self.properties_dock.raise_()  # Properties in front; Sections a tab beside it
         tabs = QTabWidget()
         tabs.addTab(self.log, "Output")
+        from puzzle.gui.solution_panel import SolutionPanel
+
+        self.solution = SolutionPanel(self)  # progress and convergence (ADR 0054)
+        tabs.addTab(self.solution, "Solution")
         tabs.addTab(self.history, "History")
         tabs.addTab(self.problems, "Problems")
         self.plots = PlotsPanel(self)
@@ -681,7 +686,9 @@ class MainWindow(QMainWindow):
                 self.problems.addItem(f"{geo} (geometry {f['severity']}): {f['message']}")
         for line in self.detached_lines():
             self.problems.addItem(line)
-        self.output_tabs.setTabText(2, f"Problems ({self.problems.count()})")
+        self.output_tabs.setTabText(
+            self.output_tabs.indexOf(self.problems), f"Problems ({self.problems.count()})"
+        )
 
     def _problem_chosen(self, item) -> None:
         """A problem's object, selected in the tree (ADR 0033)."""
@@ -1099,13 +1106,18 @@ class MainWindow(QMainWindow):
             return None
         s = self.session
         self.fold_messages(False)
-        self.output_tabs.setCurrentWidget(self.log)
+        # The Solution tab comes forward (ADR 0054); the log is one tab away.
+        self.output_tabs.setCurrentWidget(self.solution)
         self.log.appendPlainText(f"--- {study.name}: {study.solver}")
+        from puzzle.gui.choices import solver_label
+
+        cancel = threading.Event()
+        self.solution.start(f"{study.name}: {solver_label(study.solver)}", cancel)
 
         sid = str(study.id)
 
-        def work(emit):
-            return s.submit(RunStudy(study=sid), on_output=emit)
+        def work(emit, emit_event):
+            return s.submit(RunStudy(study=sid), on_output=emit, on_event=emit_event, cancel=cancel)
 
         def done(outcome) -> None:
             self.running.discard(sid)
@@ -1113,20 +1125,29 @@ class MainWindow(QMainWindow):
             self.refresh()
             run = outcome.run
             cached = " (reused an identical run)" if run is not None and run.cached else ""
+            self.solution.finish(True, "Reused an identical earlier run" if cached else "")
             self.statusBar().showMessage(f"{study.name} finished{cached}", 8000)
             self.fold_messages(True)  # good news needs no log; it stays one click away
             if run is not None and run.run_id:
                 self.tree.select(Node("run", run.run_id, "", ""))
                 self._select_run(run.run_id)
 
-        def failed(_exc) -> None:
+        def failed(exc) -> None:
             self.running.discard(sid)
             self.failed_studies.add(sid)
+            stopped = getattr(exc, "code", "") == "stopped"
+            self.solution.finish(
+                False, "Stopped" if stopped else "Failed: see the messages and the Output log"
+            )
+            if self.solution.events:  # how it got there explains more than the log tail
+                self.output_tabs.setCurrentWidget(self.solution)
             self.refresh()
 
         self.running.add(sid)
         self.refresh()  # the tree shows it running
-        return self.background(f"Running {study.name}…", work, done, failed=failed)
+        return self.background(
+            f"Running {study.name}…", work, done, failed=failed, on_event=self.solution.add
+        )
 
     # --- selection ---------------------------------------------------------------
 
@@ -1406,6 +1427,12 @@ class MainWindow(QMainWindow):
         if getattr(self, "_result_run", None) != run_id or self.result is None:
             self.result = (store.read_mesh(record.mesh_id), store.read_results(run_id))
             self._result_run = run_id
+            if not self.solution.running:  # how this run converged (ADR 0054)
+                self.solution.show_history(
+                    f"{record.study_name}: {solver_label(record.solver)}, "
+                    f"{record.started_at.astimezone():%Y-%m-%d %H:%M}",
+                    store.read_progress(run_id),
+                )
         study = self.session.project.objects.get(_uuid(record.study_id))
         self._result_component = getattr(study, "component", None)
         # A result shown afresh starts in global axes (ADR 0049), or the plot's own.
@@ -2285,14 +2312,19 @@ class MainWindow(QMainWindow):
     def _edit(self, object_id: str, path: str, value) -> None:
         self.submit(Edit(object=object_id, ops=[EditOp(op="set", path=path, value=value)]))
 
-    def background(self, message: str, work, done, *, failed=None, output=None, lock=True) -> Task:
+    def background(
+        self, message: str, work, done, *, failed=None, output=None, lock=True, on_event=None
+    ) -> Task:
         """Run `work(emit)` on the thread pool; `done(result)` back on the GUI thread.
 
         `lock` greys out Mesh and Run meanwhile (one solve at a time); `output` takes
-        the lines `emit` sends (default: the Output log).
+        the lines `emit` sends (default: the Output log). With `on_event`, work is
+        called as `work(emit, emit_event)` and the events arrive there (ADR 0054).
         """
         self.statusBar().showMessage(message)
-        task = Task(work)
+        task = Task(work, events=on_event is not None)
+        if on_event is not None:
+            task.signals.event.connect(on_event)
         task.lock = lock
         if lock:
             for name in ("mesh", "run"):
@@ -2320,6 +2352,12 @@ class MainWindow(QMainWindow):
         if not any(t.lock for t in self.tasks):
             for name in ("mesh", "run"):
                 self.actions_by_name[name].setEnabled(True)
+
+    def open_solution(self) -> None:
+        """The messages area open on the Solution tab (Window → Solution)."""
+        self.messages_dock.show()
+        self.fold_messages(False)
+        self.output_tabs.setCurrentWidget(self.solution)
 
     def report(self, exc: Exception) -> None:
         self.fold_messages(False)

@@ -95,6 +95,12 @@ class CalculixAdapter(SolverAdapter):
             path.with_suffix(".fasteners.json").write_text(json.dumps(ends))
         return path
 
+    def progress(self, input_file: Path, step: int = 1, of: int = 1):
+        """Steps, increments, iterations and messages from the log (ADR 0054)."""
+        from puzzle.adapters.calculix.progress import CalculixProgress as P
+
+        return P(input_file, step, of)
+
     def command(self, input_file: Path) -> list[str]:
         return ["ccx", "-i", input_file.with_suffix("").name]
 

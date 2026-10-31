@@ -13,6 +13,7 @@ from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
 
 class TaskSignals(QObject):
     output = Signal(str)  # a line of solver or mesher output
+    event = Signal(object)  # a progress event (ADR 0054)
     done = Signal(object)  # the function's return value
     failed = Signal(object)  # the exception
 
@@ -20,14 +21,15 @@ class TaskSignals(QObject):
 class Task(QRunnable):
     """Runs `fn(on_output)` on the thread pool; signals arrive on the GUI thread."""
 
-    def __init__(self, fn: Callable[[Callable[[str], None]], Any]) -> None:
+    def __init__(self, fn: Callable[..., Any], events: bool = False) -> None:
         super().__init__()
         self.fn = fn
+        self.events = events  # fn(emit, emit_event): it reports progress events too
         self.signals = TaskSignals()
 
     def run(self) -> None:
         try:
-            result = self.fn(self._emit)
+            result = self.fn(self._emit, self._event) if self.events else self.fn(self._emit)
         except Exception as exc:  # noqa: BLE001 - reported to the user, not swallowed
             exc.trace = traceback.format_exc()
             self._send(self.signals.failed, exc)
@@ -36,6 +38,9 @@ class Task(QRunnable):
 
     def _emit(self, line: str) -> None:
         self._send(self.signals.output, line)
+
+    def _event(self, event) -> None:
+        self._send(self.signals.event, event)
 
     @staticmethod
     def _send(signal, value) -> None:

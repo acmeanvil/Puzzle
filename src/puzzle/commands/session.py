@@ -114,8 +114,12 @@ class Session:
         *,
         rationale: str = "",
         on_output=None,
+        on_event=None,
+        cancel=None,
     ) -> Outcome:
-        """Apply `command` for `actor`, or record it as a proposal (agents at "propose")."""
+        """Apply `command` for `actor`, or record it as a proposal (agents at "propose").
+        A run reports progress events to `on_event` (ADR 0054) and stops when `cancel`
+        (a threading.Event) is set."""
         cmd = parse_command(command)
         with self._locked():
             decision = self._authorize(cmd, actor)
@@ -127,7 +131,7 @@ class Session:
             timeout = self._run_timeout(cmd, actor)
             snapshot = copy.deepcopy(self.project)
         # Solve outside the lock, so other clients can keep working meanwhile.
-        run, data = self._run(snapshot, study, cmd, timeout, on_output)
+        run, data = self._run(snapshot, study, cmd, timeout, on_output, on_event, cancel)
         with self._locked():
             seq = self._log(
                 {"type": "command", "actor": actor.to_dict(), "command": _dump(cmd), "result": data}
@@ -517,7 +521,10 @@ class Session:
                 return p
         raise PuzzleError(f"no proposal {proposal_id}", code="not_found")
 
-    def _run(self, project: Project, study: Study, cmd: RunStudy, timeout, on_output):
+    def _run(
+        self, project: Project, study: Study, cmd: RunStudy, timeout, on_output,
+        on_event=None, cancel=None,
+    ):  # fmt: skip
         from puzzle.results.query import summary
         from puzzle.results.store import ResultStore
         from puzzle.solve import run_study
@@ -533,6 +540,8 @@ class Session:
             reuse=cmd.reuse,
             timeout_s=timeout,
             on_output=on_output,
+            on_event=on_event,
+            cancel=cancel,
         )
         data: dict[str, Any] = {
             "study": study.name,
@@ -550,6 +559,13 @@ class Session:
                 "nodes": int(len(run.mesh.node_ids)),
                 "min_quality": run.mesh_result.min_quality,
                 "warnings": run.mesh_result.warnings,
+            }
+        if run.events and not run.cached:  # how it converged, in counts (ADR 0054)
+            from puzzle.progress import summary as progress_summary
+
+            p = progress_summary(run.events)
+            data["progress"] = {
+                k: p[k] for k in ("increments", "cutbacks", "iterations") if p.get(k)
             }
         data["summary"] = summary(run.results)
         return run, data

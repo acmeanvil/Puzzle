@@ -114,6 +114,9 @@ SCHEMAS = {
             ("values", FLOATS),
         ]
     ),
+    # A run's progress events as JSON lines (ADR 0054): how it converged. Stores made
+    # before it simply have no history for their runs.
+    "progress": pa.schema([("run_id", pa.string()), ("events", pa.large_string())]),
 }
 PARTITIONS = {"nodes": ["mesh_id"], "cells": ["mesh_id"], "fields": ["run_id", "field"]}
 # zstd (ADR 0008): about a fifth smaller than Delta's default Snappy for result stores.
@@ -210,6 +213,22 @@ class ResultStore:
         }
         self._append("runs", pa.Table.from_pylist([record], schema=SCHEMAS["runs"]))
         return run_id
+
+    def write_progress(self, run_id: str, events: list) -> None:
+        """Keep a run's progress events (ADR 0054) with it."""
+        from puzzle.progress import dumps
+
+        if events:
+            self._check_format(create=True)
+            row = {"run_id": run_id, "events": dumps(events)}
+            self._append("progress", pa.Table.from_pylist([row], schema=SCHEMAS["progress"]))
+
+    def read_progress(self, run_id: str) -> list:
+        """A stored run's progress events; [] for a run kept without them."""
+        from puzzle.progress import loads
+
+        rows = self._rows("progress", filter=pc.field("run_id") == run_id).to_pylist()
+        return loads("".join(r["events"] for r in rows))
 
     def write_mesh(self, mesh: Mesh) -> str:
         self._check_format(create=True)
@@ -359,7 +378,7 @@ class ResultStore:
         if not re.fullmatch(r"[0-9a-f]+", run_id):  # it goes into a predicate
             raise KeyError(f"no run {run_id}")
         gone = {"runs": 1, "meshes": 0}
-        for name in ("runs", "fields"):
+        for name in ("runs", "fields", "progress"):
             if self._exists(name):
                 DeltaTable(str(self.root / name)).delete(f"run_id = '{run_id}'")
         mid = record.mesh_id
