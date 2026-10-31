@@ -12,6 +12,7 @@ nonconformal bonded interfaces map to mesh tying (LIAISON_MAIL).
 
 from __future__ import annotations
 
+import functools
 from pathlib import Path
 
 from puzzle.adapters.base import (
@@ -83,9 +84,19 @@ class CodeAsterAdapter(SolverAdapter):
     def command(self, input_file: Path) -> list[str]:
         return ["run_aster", input_file.name]
 
+    parallel_processes = True  # with an MPI build (ADR 0053)
+
+    def processes(self) -> int:
+        """Processes for a run: Settings > Solvers > Parallel processes per run on an
+        MPI build of Code_Aster (conda-forge's openmpi variant, the -mpi image), else 1."""
+        from puzzle.jobs.runtime import process_count
+
+        n = process_count()
+        return n if n > 1 and mpi_build() else 1
+
     def settings_schema(self) -> list:
         """Code_Aster's own settings (ADR 0023); the shared ones are on each step."""
-        from puzzle.adapters.code_aster.comm import METHODS
+        from puzzle.adapters.code_aster.comm import ACCELERATIONS, MEMORY, METHODS, ORDERINGS
         from puzzle.adapters.settings import SolverSetting
 
         return [
@@ -93,6 +104,30 @@ class CodeAsterAdapter(SolverAdapter):
                 "method", "Linear solver", "SOLVEUR/METHODE", "choice", "MUMPS", METHODS,
                 description="The method for every linear system; iterative ones suit large "
                 "models and take a preconditioner Code_Aster chooses.",
+            ),
+            SolverSetting(
+                "acceleration", "MUMPS acceleration", "SOLVEUR/ACCELERATION", "choice", "AUTO",
+                ACCELERATIONS,
+                description="Full rank is exact; low rank compresses the factors to the "
+                "tolerance below, often several times faster on large 3D solids.",
+            ),
+            SolverSetting(
+                "low_rank_threshold", "Low-rank tolerance", "SOLVEUR/LOW_RANK_SEUIL", "number",
+                0.0, power=True,
+                description="How far low-rank factors may differ (relative): 1e-9 keeps "
+                "results to about that, larger is faster; 0 lets MUMPS decide.",
+            ),
+            SolverSetting(
+                "ordering", "MUMPS ordering", "SOLVEUR/RENUM", "choice", "AUTO", ORDERINGS,
+                power=True,
+                description="How the unknowns are numbered before factoring; it sets the "
+                "factors' size. METIS suits large 3D meshes.",
+            ),
+            SolverSetting(
+                "factor_memory", "MUMPS factors kept", "SOLVEUR/GESTION_MEMOIRE", "choice",
+                "AUTO", MEMORY, power=True,
+                description="In memory is fastest when they fit; on disk lets a large model "
+                "run in less memory.",
             ),
             SolverSetting(
                 "reac_iter", "Tangent matrix every", "NEWTON/REAC_ITER", "integer", 1,
@@ -201,3 +236,41 @@ def _beam_bolt_values(end: dict, forces):
     moment = v[c["T"]] * x + v[c["My"]] * y + v[c["Mz"]] * z
     return np.array([v[c["N"]], float(np.hypot(v[c["Vy"]], v[c["Vz"]])), v[c["T"]],
                      float(np.hypot(v[c["My"]], v[c["Mz"]])), *force, *moment])  # fmt: skip
+
+
+def mpi_build() -> bool:
+    """Whether the Code_Aster that runs here was built with MPI."""
+    from puzzle.jobs.runtime import ContainerRuntime, NativeRuntime, runtime_for
+
+    try:
+        runtime = runtime_for("code_aster")
+    except Exception:  # noqa: BLE001 - nothing to run it with: no MPI either
+        return False
+    if isinstance(runtime, ContainerRuntime):
+        return _image_label(runtime.engine, runtime.image) == "openmpi"
+    if isinstance(runtime, NativeRuntime):
+        import shutil
+
+        exe = shutil.which("run_aster", path=runtime._path())
+        if exe is None:
+            return False
+        bin_dir = Path(exe).parent
+        return any((bin_dir / name).exists() for name in ("mpiexec", "mpiexec.exe", "mpirun"))
+    return False
+
+
+@functools.cache
+def _image_label(engine: str, image: str) -> str | None:
+    import subprocess
+
+    from puzzle.jobs.runtime import find_engine
+
+    exe = find_engine(engine)
+    if exe is None:
+        return None
+    probe = [exe, "image", "inspect", "--format", '{{index .Config.Labels "puzzle.mpi"}}', image]
+    try:
+        out = subprocess.run(probe, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out.stdout.strip() or None if out.returncode == 0 else None

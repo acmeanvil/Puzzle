@@ -55,4 +55,8 @@ New record: copy [template.md](template.md) to `NNNN-short-title.md`, set status
 | [0047](0047-magnetodynamics.md) | Magnetodynamics: time-harmonic eddy currents first (Elmer, FEniCSx), then transient; losses, impedance, skin depth, heat and force couplings | Accepted |
 | [0048](0048-2d-geometry.md) | 2D models: planar and axisymmetric geometry (sketches, shapes, sections of 3D parts), meshing and solving on the four FE solvers | Accepted |
 | [0049](0049-coordinate-systems.md) | Coordinate systems everywhere: Cartesian, cylindrical, spherical; typed, three points, from geometry, relative or attached; used by inputs and results | Accepted |
-| [0050](0050-bolt-manager.md) | Bolts: types (standard sizes and grades, preload), an automatic generator (picks, sets, rules, the agent), a bolt table with results along each bolt | Proposed |
+| [0050](0050-bolt-manager.md) | Bolts: types (standard sizes and grades, preload), an automatic generator (picks, sets, rules, the agent), a bolt table with results along each bolt | Accepted |
+| [0051](0051-calculix-with-pardiso.md) | Build CalculiX with MKL PARDISO (a pixi env and build task) and prefer it: 2-4x faster factoring, identical answers | Accepted |
+| [0052](0052-gpu-wishlist.md) | GPUs for meshing and solving: researched, a wishlist (FEniCSx PETSc GPU first, then CalculiX GPU PaStiX); no work now | Accepted |
+| [0053](0053-solver-cores-and-code-aster-speed.md) | Cores per run (physical cores by default) and parallel processes in Settings; Code_Aster sized from them, MUMPS options, MPI builds, full-load contact with automatic cutting | Accepted |
+| [0054](0054-solve-progress-and-convergence.md) | Every solve's progress and convergence: typed events from each solver, a Solution tab (progress, convergence and time plots, result trackers, messages, stall warning), history kept with the run, diagnoses in the Advisor | Accepted |

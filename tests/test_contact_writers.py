@@ -78,6 +78,10 @@ def test_code_aster_contact(tmp_path):
     comm = (export.parent / "job.comm").read_text()
     assert "DEFI_CONTACT(MODELE=model, FORMULATION='CONTINUE', FROTTEMENT='SANS'" in comm
     assert "STAT_NON_LINE(" in comm and "ORIE_PEAU" in comm and "REAC_NODA" in comm
+    # ADR 0053: the full load at once, cut down by Code_Aster only if an increment fails.
+    assert "INTERVALLE=_F(JUSQU_A=1.0, NOMBRE=1)" in comm
+    assert "ACTION='DECOUPE'" in comm and "INCREMENT=_F(LIST_INST=times)" in comm
+    assert "P ncpus" in export.read_text()
 
 
 def _rough(tmp_path, features=FIXED, order=2):
@@ -116,3 +120,27 @@ def test_code_aster_friction_on_first_order_meshes(tmp_path):
     with pytest.raises(InputError, match="shares nodes") as err:
         adapter.write_input(*_rough(tmp_path / "c", held, order=1), tmp_path / "c" / "case")
     assert err.value.details["conflicts"] == ["Right/Start"]
+
+
+def test_code_aster_leaves_bolt_tied_nodes_out_of_contact():
+    """A bolt hole's edge lies on the seat face: its nodes are tied to the bolt, so
+    Code_Aster's contact must skip them (SANS_GROUP_NO) or its matrix is singular."""
+    from types import SimpleNamespace as NS
+
+    import numpy as np
+
+    from puzzle.adapters.code_aster.comm import _contact_exclusions, _defi_contact
+
+    groups = {
+        "Bracket/Seat": NS(node_ids=np.array([1, 2, 3, 4])),
+        "Bracket/Hole": NS(node_ids=np.array([4, 5])),
+        "Base/Hole": NS(node_ids=np.array([7, 8])),
+        "Base/Top": NS(node_ids=np.array([7, 9])),
+    }
+    names = {"Bracket/Seat": "G1", "Bracket/Hole": "G2", "Base/Hole": "G3", "Base/Top": "G4"}
+    contact = NS(name="Seat", source="Bracket/Seat", target="Base/Top", type="frictional",
+                 friction=0.2, extensions={})  # fmt: skip
+    bolt = NS(source="Bracket/Hole", target="Base/Hole")
+    excluded = _contact_exclusions([contact], [bolt], NS(groups=groups), names)
+    assert excluded == {"Seat": ["G2"]}  # the base's hole touches only the master side
+    assert "SANS_GROUP_NO=('G2',)" in _defi_contact([contact], names, excluded)

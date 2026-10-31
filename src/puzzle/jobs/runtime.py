@@ -19,6 +19,7 @@ import subprocess
 import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from functools import cache
 from pathlib import Path
 
 # Images built from containers/<solver>/Dockerfile. Not published yet.
@@ -64,6 +65,12 @@ class Runtime(ABC):
         """Environment variables for the process; None inherits Puzzle's own."""
         return None
 
+    def memory(self) -> int | None:
+        """Bytes of memory a run can have here (the machine's, or a container VM's)."""
+        from puzzle.machine import memory_bytes
+
+        return memory_bytes()
+
 
 # Threads a run may use, for OpenMP solvers and CalculiX's own counters. Without them
 # CalculiX factors on one core (a frictional contact took hours instead of minutes).
@@ -75,22 +82,38 @@ THREAD_VARIABLES = (
 )
 
 
-def thread_count() -> int:
-    """Settings > Solvers > Threads per run; 0 (the default) means every core."""
+def _setting(key: str, fallback: int) -> int:
     try:
         from puzzle.settings import current
 
-        wanted = int(current().get("solvers.threads") or 0)
-    except Exception:  # noqa: BLE001 - no settings (a bare script): every core
-        wanted = 0
-    return wanted if wanted > 0 else max(1, os.cpu_count() or 1)
+        return int(current().get(key) or fallback)
+    except Exception:  # noqa: BLE001 - no settings (a bare script)
+        return fallback
 
 
-def thread_environment(base: dict[str, str] | None = None) -> dict[str, str]:
+def thread_count() -> int:
+    """Settings > Solvers > Cores per run: 0 (the default) means the physical cores."""
+    from puzzle.machine import physical_cores
+
+    wanted = _setting("solvers.threads", 0)
+    return wanted if wanted > 0 else physical_cores()
+
+
+def process_count() -> int:
+    """Settings > Solvers > Parallel processes per run (MPI, where a solver can split)."""
+    return max(1, min(_setting("solvers.processes", 1), thread_count()))
+
+
+def threads_per_process(processes: int | None = None) -> int:
+    """The cores per run shared out among a run's processes, at least one each."""
+    return max(1, thread_count() // (processes or 1))
+
+
+def thread_environment(base: dict[str, str] | None = None, processes: int = 1) -> dict[str, str]:
     """`base` (else Puzzle's own environment) with the thread counts added, keeping any
-    the user set themselves."""
+    the user set themselves; `processes` share the cores (an MPI run)."""
     env = dict(os.environ if base is None else base)
-    n = str(thread_count())
+    n = str(threads_per_process(processes))
     for name in THREAD_VARIABLES:
         env.setdefault(name, n)
     return env
@@ -142,7 +165,8 @@ class NativeRuntime(Runtime):
 
 
 # The pixi solver environments (pixi.toml), and where each keeps its programs.
-PIXI_SOLVER_ENVS = ("calculix", "fenicsx", "code-aster", "netgen")
+# calculix-pardiso first: a CalculiX built with PARDISO, when one was built there.
+PIXI_SOLVER_ENVS = ("calculix-pardiso", "calculix", "fenicsx", "code-aster", "netgen")
 
 
 def pixi_solver_dirs() -> list[Path]:
@@ -216,6 +240,10 @@ class ContainerRuntime(Runtime):
     def describe(self) -> str:
         return f"{self.engine}:{self.image}"
 
+    def memory(self) -> int | None:
+        """The engine's own memory (Docker Desktop's VM has less than the Mac)."""
+        return _engine_memory(self.engine)
+
     def available(self, executable: str) -> bool:
         exe = find_engine(self.engine)
         if exe is None:
@@ -233,6 +261,19 @@ class ContainerRuntime(Runtime):
         env = dict(os.environ)
         env["PATH"] = os.pathsep.join([str(Path(exe).parent), env.get("PATH", "")])
         return env
+
+
+@cache
+def _engine_memory(engine: str) -> int | None:
+    exe = find_engine(engine)
+    if exe is None:
+        return None
+    try:
+        out = subprocess.run([exe, "info", "--format", "{{.MemTotal}}"], capture_output=True,
+                             text=True, timeout=20, check=True).stdout  # fmt: skip
+        return int(out.strip()) or None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
 
 
 def runtime_for(solver: str) -> Runtime:

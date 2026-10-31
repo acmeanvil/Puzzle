@@ -34,6 +34,22 @@ class Preference:
     ready: bool = True  # False: defined, waiting for the feature that uses it
 
 
+def _core_choices() -> list[tuple[str, int]]:
+    """Cores per run: the physical cores (0, the default), or a number up to the logical
+    cores, from this computer (ADR 0053)."""
+    from puzzle.machine import logical_cores, physical_cores
+
+    return [(f"Physical cores ({physical_cores()})", 0)] + [
+        (str(n), n) for n in range(1, logical_cores() + 1)
+    ]
+
+
+def _process_choices() -> list[tuple[str, int]]:
+    from puzzle.machine import physical_cores
+
+    return [("1 (threads only)", 1)] + [(str(n), n) for n in range(2, physical_cores() + 1)]
+
+
 def _legend_preferences() -> list[Preference]:
     """The result legend's look (gui Legend…, post/legend.py), kept between sessions."""
     from puzzle.post.legend import BANDS, COLORMAPS, OUTSIDE, POSITIONS, SIZES
@@ -182,11 +198,22 @@ PREFERENCES: list[Preference] = [
     Preference(
         "solvers.threads",
         "Solvers",
-        "Threads per run",
+        "Cores per run",
         0,
-        [("All cores", 0), ("1", 1), ("2", 2), ("4", 4), ("8", 8), ("16", 16)],
-        "How many processor cores a solver run may use (OpenMP, CalculiX's equation "
-        "solver). Your own OMP_NUM_THREADS or CCX_NPROC_* settings win.",
+        _core_choices(),
+        "How many processor cores one solver run may use (threads, or threads times "
+        "processes). Physical cores is usually fastest: finite element solves gain little "
+        "from a second thread per core. Your own OMP_NUM_THREADS or CCX_NPROC_* win.",
+    ),
+    Preference(
+        "solvers.processes",
+        "Solvers",
+        "Parallel processes per run",
+        1,
+        _process_choices(),
+        "Splits the model across this many processes (MPI) where the solver can (Code_Aster "
+        "so far); the cores per run are shared out among them, so each gets cores ÷ "
+        "processes threads. One process is threads only.",
     ),
 ]
 BY_KEY = {p.key: p for p in PREFERENCES}

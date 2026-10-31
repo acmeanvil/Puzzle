@@ -44,6 +44,17 @@ class StudyRun:
     # Seconds per stage of a fresh run (mesh, write, solve, read, store): where the
     # time goes around the solver, as well as in it.
     timings: dict[str, float] = field(default_factory=dict)
+    cores: str = ""  # what the solve used: "4 cores", "2 processes x 2 threads"
+
+
+def _cores(adapter) -> str:
+    """What a run may use, in words (Settings > Solvers, ADR 0053)."""
+    from puzzle.jobs.runtime import thread_count, threads_per_process
+
+    n = adapter.processes()
+    if n > 1:
+        return f"{n} processes x {threads_per_process(n)} threads"
+    return f"{thread_count()} cores"
 
 
 def run_study(
@@ -230,8 +241,10 @@ def run_study(
             point=_point[1] if _point else None,
         )
         lap("store")
+    cores = _cores(adapter)
     if on_output is not None and timings:
-        on_output("Time: " + ", ".join(f"{k} {v:.1f} s" for k, v in timings.items()))
+        on_output("Time: " + ", ".join(f"{k} {v:.1f} s" for k, v in timings.items())
+                  + f" ({cores})")  # fmt: skip
     return StudyRun(
         mesh=meshed.mesh,
         results=results,
@@ -241,6 +254,7 @@ def run_study(
         job=job,
         input_file=input_file,
         timings=timings,
+        cores=cores,
     )
 
 

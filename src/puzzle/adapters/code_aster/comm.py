@@ -156,7 +156,6 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         raise InputError(
             "geometric_nonlinearity applies to static structural steps", code="unsupported"
         )
-    increments = int(step.settings.get("increments", 10))
     plastic = (
         [a for a in comp.materials if project.get(a.material, Material).models.plasticity]
         if not thermal and step.type == "stationary"
@@ -179,6 +178,12 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     names = safe_names(groups)
     supports = _spring_nodes(springs, mesh)
     gaps = _spring_nodes(lifting, mesh)
+    # ADR 0053, as CalculiX (ADR 0039): a contact-only step starts at the full load and
+    # Code_Aster cuts the step down only when an increment fails (DEFI_LIST_INST);
+    # plasticity, large deflection and compression-only gaps keep the 10-step ramp,
+    # since their answer follows the loading path.
+    ramped = nlgeom or bool(plastic) or bool(gaps)
+    increments = int(step.settings.get("increments", 10 if ramped else 1))
     top = int(mesh.node_ids.max())
     cuts = list(
         section_cuts(comp, mesh, {id(f): top + 1 + k for k, f in enumerate(bolts)}).values()
@@ -272,6 +277,14 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
 
     phenomenon, model = ("THERMIQUE", "3D") if thermal else ("MECANIQUE", "3D")
     faces = sorted({names[g] for c in touching for g in (c.source, c.target)})
+    excluded = _contact_exclusions(touching, fasteners, mesh, names)
+    noded = {  # fastener faces made node groups below
+        names[sel]
+        for c in fasteners
+        if c.ends == "distributing" or c.formulation == "beam"
+        for sel in (c.source, c.target)
+    }
+    unnoded = sorted({g for gs in excluded.values() for g in gs} - noded)
     out = [
         "DEBUT(LANG='EN')",
         "mesh = LIRE_MAILLAGE(FORMAT='MED', UNITE=20)",
@@ -292,6 +305,16 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
                 + ",)))"
             ]
             if faces
+            else []
+        ),
+        # Fastener faces left out of contact that aren't node groups yet.
+        *(
+            [
+                "mesh = DEFI_GROUP(reuse=mesh, MAILLAGE=mesh, CREA_GROUP_NO=_F(GROUP_MA=("
+                + ", ".join(f"'{g}'" for g in unnoded)
+                + ",)))"
+            ]
+            if unnoded
             else []
         ),
         # Pretension relations name single nodes: their point groups as node groups.
@@ -536,9 +559,15 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             parts.append("_F(GROUP_MA='GAPS', RELATION='DIS_CHOC')")
         behaviour = f"COMPORTEMENT=({', '.join(parts)},), "
         out += [
-            *([_defi_contact(touching, names)] if touching else []),
+            *([_defi_contact(touching, names, excluded)] if touching else []),
             # Ramp the loads: friction and large deflection depend on the loading path.
             "ramp = DEFI_FONCTION(NOM_PARA='INST', VALE=(0.0, 0.0, 1.0, 1.0))",
+            # A failed increment is cut in four, up to five times (1/1024 of a step),
+            # rather than ending the run.
+            "times = DEFI_LIST_INST(DEFI_LIST=_F(LIST_INST=DEFI_LIST_REEL(DEBUT=0.0, "
+            f"INTERVALLE=_F(JUSQU_A=1.0, NOMBRE={increments}))), "
+            "ECHEC=_F(EVENEMENT='ERREUR', ACTION='DECOUPE', SUBD_METHODE='MANUEL', "
+            "SUBD_PAS=4, SUBD_NIVEAU=5))",
             f"res = STAT_NON_LINE(MODELE=model, CHAM_MATER=mater, {cara}"
             "EXCIT=("
             + ", ".join(f"_F(CHARGE={c}, FONC_MULT=ramp)" for c in charges)
@@ -547,8 +576,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             + behaviour
             # As Code_Aster's 3D contact validation (ssnv128): tangent every iteration.
             + "NEWTON=_F(REAC_ITER=1), CONVERGENCE=_F(ITER_GLOB_MAXI=200, RESI_GLOB_RELA=1e-6), "
-            "INCREMENT=_F(LIST_INST=DEFI_LIST_REEL(DEBUT=0.0, "
-            f"INTERVALLE=_F(JUSQU_A=1.0, NOMBRE={increments}))))",
+            "INCREMENT=_F(LIST_INST=times))",
             "res = CALC_CHAMP(reuse=res, RESULTAT=res, CONTRAINTE=('SIGM_NOEU',"
             + (" 'EFGE_NOEU'," if bolt_beams else "")
             + "), FORCE=('REAC_NODA',)"
@@ -603,14 +631,14 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             | ({"plastic_strain", "plastic_strain_equivalent"} if plastic else set())
         )
     )
+    from puzzle.adapters.code_aster import CodeAsterAdapter
+
+    processes = CodeAsterAdapter().processes()  # MPI on a parallel build (ADR 0053)
     export = workdir / f"{JOB}.export"
     export.write_text(
         "\n".join(
             [
-                "P time_limit 3600",
-                "P memory_limit 4096",
-                "P ncpus 1",
-                "P mpi_nbcpu 1",
+                *resources(processes, low_rank=_low_rank(comm.read_text())),
                 f"F comm {JOB}.comm D 1",
                 f"F mmed {JOB}.med D 20",
                 f"F mess {JOB}.mess R 6",
@@ -1022,6 +1050,31 @@ METHODS = (
     ("Preconditioned conjugate gradient (iterative)", "GCPC"),
     ("PETSc (iterative; parallel Code_Aster builds only)", "PETSC"),
 )
+# MUMPS's own options (ADR 0053). Block low rank (LR) compresses the factors to a
+# tolerance: faster and smaller on large 3D solids, approximate to that tolerance.
+ACCELERATIONS = (
+    ("Code_Aster's choice", "AUTO"),
+    ("Full rank (exact)", "FR"),
+    ("Full rank, faster (exact)", "FR+"),
+    ("Low rank (to a tolerance)", "LR"),
+    ("Low rank, faster (to a tolerance)", "LR+"),
+)
+ORDERINGS = (
+    ("Code_Aster's choice", "AUTO"),
+    ("METIS", "METIS"),
+    ("SCOTCH", "SCOTCH"),
+    ("PORD", "PORD"),
+    ("Approximate minimum degree (AMD)", "AMD"),
+    ("Approximate minimum fill (AMF)", "AMF"),
+    ("Quasi-dense AMD (QAMD)", "QAMD"),
+)
+MEMORY = (
+    ("Code_Aster's choice", "AUTO"),
+    ("In memory (fastest)", "IN_CORE"),
+    ("On disk (least memory)", "OUT_OF_CORE"),
+)
+MUMPS_ONLY = {"acceleration": "ACCELERATION", "low_rank_threshold": "LOW_RANK_SEUIL",
+              "ordering": "RENUM", "factor_memory": "GESTION_MEMOIRE"}  # fmt: skip
 
 
 def with_settings(comm: str, study, step) -> str:
@@ -1047,6 +1100,17 @@ def with_settings(comm: str, study, step) -> str:
     method = own.get("method") or ("GCPC" if given.get("linear_solver") == "iterative" else None)
     if method:
         place(SOLVING, "SOLVEUR.METHODE", f"'{method}'")
+    mumps = [k for k in MUMPS_ONLY if k in own]
+    if mumps and method not in (None, "MUMPS"):
+        raise InputError(f"Code_Aster: {', '.join(mumps)} are MUMPS options; the linear "
+                         f"solver is {method}", code="invalid")  # fmt: skip
+    if "low_rank_threshold" in own and not str(own.get("acceleration", "")).startswith("LR"):
+        raise InputError("Code_Aster: a low-rank tolerance needs a low-rank acceleration "
+                         "(LR or LR+)", code="invalid")  # fmt: skip
+    for key in mumps:
+        value = own[key]
+        text = f"{float(value):.6g}" if key == "low_rank_threshold" else f"'{value}'"
+        place(SOLVING, f"SOLVEUR.{MUMPS_ONLY[key]}", text)
     if "tolerance" in given:
         place(NONLINEAR, "CONVERGENCE.RESI_GLOB_RELA", f"{float(given['tolerance']):.6g}")
     if "max_iterations" in given:
@@ -1149,6 +1213,37 @@ def _traction(index: int, m: Material) -> str:
     )
 
 
+def _low_rank(text: str) -> bool:
+    """Whether the .comm asks MUMPS for low-rank factors (LR or LR+), from a solver
+    setting or an expert one."""
+    return re.search(r"ACCELERATION\s*=\s*['\"]LR", text) is not None
+
+
+def resources(processes: int = 1, low_rank: bool = False) -> list[str]:
+    """The export's resource lines (ADR 0053): threads and memory per process from
+    Settings > Solvers and the runtime's memory, and no time limit worth meeting.
+    A `low_rank` MUMPS run gets one thread: with more, this build's MUMPS hangs (the
+    bonded bracket ran 11 hours at 400 % CPU; 35 s on one thread).
+
+    run_aster sets OpenMP's (and so MUMPS's and BLAS's) threads from `ncpus`, ignoring
+    OMP_NUM_THREADS, and `memory_limit` is per process in MB: too small makes MUMPS
+    factor out of core. `time_limit` stops the run when reached, so it is a week; Puzzle
+    stops runs itself."""
+    from puzzle.jobs.runtime import runtime_for, threads_per_process
+
+    try:
+        memory = runtime_for("code_aster").memory()
+    except Exception:  # noqa: BLE001 - no runtime to ask: Code_Aster's usual default
+        memory = None
+    mb = int(0.75 * memory / 2**20 / processes) if memory else 4096
+    return [
+        "P time_limit 604800",
+        f"P memory_limit {max(mb, 1024)}",
+        f"P ncpus {1 if low_rank else threads_per_process(processes)}",
+        f"P mpi_nbcpu {processes}",
+    ]
+
+
 def _material(m: Material, thermal: bool, expansion: bool = False, damping=None) -> str:
     p = {k: q.to_si() for k, q in m.properties.items()}
 
@@ -1208,7 +1303,25 @@ def _check_friction(contacts, features, mesh: Mesh) -> None:
             )
 
 
-def _defi_contact(contacts, names: dict[str, str]) -> str:
+def _contact_exclusions(contacts, fasteners, mesh: Mesh, names: dict) -> dict[str, list[str]]:
+    """Per contact, the fastener faces (MED names) that share nodes with its slave face.
+
+    A bolt hole meets the seat face along its edge, and those nodes are tied to the
+    bolt (LIAISON_RBE3 or LIAISON_SOLIDE): a contact multiplier on them too makes the
+    matrix singular (LAGS_F1 on the bolted bracket), so they are left out of the
+    contact (SANS_GROUP_NO), as Code_Aster advises. CalculiX needs no such exclusion.
+    """
+    tied = sorted({sel for f in fasteners for sel in (f.source, f.target)})
+    out = {}
+    for c in contacts:
+        slave = mesh.groups[c.source].node_ids
+        shared = [names[s] for s in tied if np.intersect1d(slave, mesh.groups[s].node_ids).size]
+        if shared:
+            out[c.name] = shared
+    return out
+
+
+def _defi_contact(contacts, names: dict[str, str], excluded=None) -> str:
     """Continuous (augmented Lagrangian) contact, with Coulomb friction when any zone has
     it; source faces are the slave side.
 
@@ -1220,6 +1333,8 @@ def _defi_contact(contacts, names: dict[str, str]) -> str:
     zones = []
     for c in contacts:
         zone = f"_F(GROUP_MA_MAIT='{names[c.target]}', GROUP_MA_ESCL='{names[c.source]}'"
+        if (excluded or {}).get(c.name):
+            zone += ", SANS_GROUP_NO=(" + ", ".join(f"'{g}'" for g in excluded[c.name]) + ",)"
         init = c.extensions.get("code_aster", {}).get("contact_init")
         if init:
             zone += f", CONTACT_INIT='{init}'"

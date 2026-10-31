@@ -51,7 +51,7 @@ check = { cmd = "pytest", depends-on = ["lint", "install-solvers"] }
 import-materials = "python scripts/import_materials.py"
 
 [feature.dev.target.unix.activation.env]
-PUZZLE_SOLVER_PATH = "$PIXI_PROJECT_ROOT/.pixi/envs/calculix/bin:$PIXI_PROJECT_ROOT/.pixi/envs/fenicsx/bin:$PIXI_PROJECT_ROOT/.pixi/envs/code-aster/bin:$PIXI_PROJECT_ROOT/.pixi/envs/netgen/bin"
+PUZZLE_SOLVER_PATH = "$PIXI_PROJECT_ROOT/.pixi/envs/calculix-pardiso/bin:$PIXI_PROJECT_ROOT/.pixi/envs/calculix/bin:$PIXI_PROJECT_ROOT/.pixi/envs/fenicsx/bin:$PIXI_PROJECT_ROOT/.pixi/envs/code-aster/bin:$PIXI_PROJECT_ROOT/.pixi/envs/netgen/bin"
 
 [feature.dev.target.win.activation.env]
 PUZZLE_SOLVER_PATH = "%PIXI_PROJECT_ROOT%\\.pixi\\envs\\calculix\\Library\\bin;%PIXI_PROJECT_ROOT%\\.pixi\\envs\\fenicsx;%PIXI_PROJECT_ROOT%\\.pixi\\envs\\code-aster\\Library\\bin;%PIXI_PROJECT_ROOT%\\.pixi\\envs\\netgen"
@@ -65,6 +65,27 @@ keyring = ">=25"  # API keys in the OS keychain
 # One feature per native solver.
 [feature.calculix.dependencies]
 calculix = "2.23.*"
+
+# CalculiX built with MKL's PARDISO (2-4x faster factoring than conda-forge's SPOOLES,
+# the same answers): `pixi run -e calculix-pardiso build-calculix` compiles it into this
+# environment, and Puzzle uses it before `calculix`. MKL: Intel Linux and Macs only here.
+[feature.calculix-pardiso]
+platforms = ["linux-64", "osx-64"]
+
+[feature.calculix-pardiso.dependencies]
+c-compiler = "*"
+fortran-compiler = "*"
+make = "*"
+mkl = "2023.*"
+mkl-devel = "2023.*"
+arpack = "*"
+spooles = "*"
+libblas = "*"
+liblapack = "*"
+llvm-openmp = "*"
+
+[feature.calculix-pardiso.tasks]
+build-calculix = "bash scripts/build_calculix_pardiso.sh"
 
 [feature.fenicsx.dependencies]
 python = "3.12.*"
@@ -90,6 +111,7 @@ default = { solve-group = "main" }
 dev = { features = ["dev", "gui"], solve-group = "main" }
 full = { features = ["dev", "gui"], solve-group = "main" }
 calculix = { features = ["calculix"], no-default-feature = true }
+calculix-pardiso = { features = ["calculix-pardiso"], no-default-feature = true }
 fenicsx = { features = ["fenicsx"], no-default-feature = true }
 code-aster = { features = ["code-aster"], no-default-feature = true }
 netgen = { features = ["netgen"], no-default-feature = true }

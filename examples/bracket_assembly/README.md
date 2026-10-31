@@ -31,7 +31,7 @@ The fasteners have distributing ends (RBE3). The base's hole walls meet its fixe
 face, and a rigid end can't also be held there; Puzzle says so before writing the
 input.
 
-## Measured (CalculiX 2.23, 8 cores, Intel Mac)
+## Measured (CalculiX 2.23, 4 cores (8 threads), Intel Mac)
 
 | Study | Nodes | Time | Largest displacement | Largest von Mises |
 | --- | --- | --- | --- | --- |
@@ -56,11 +56,13 @@ glue held it, and the bolts carry the moment.
 
 ## Known limits
 
-- **The bolted study is slow** (15.6 min on 8 cores), and contact is why: the same
+- **The bolted study is slow** (15.6 min on 4 cores, 8 threads), and contact is why: the same
   deck with the seat tied instead solves in under a minute. CalculiX's
   surface-to-surface contact makes about 108,000 contact elements for this seat, and
-  friction makes the system unsymmetric, which its SPOOLES solver factors slowly (this
-  build has no PARDISO). Each contact iteration costs about 20 s.
+  friction makes the system unsymmetric, which conda-forge's SPOOLES factors slowly.
+  Each contact iteration costs about 20 s. CalculiX built with PARDISO (ADR 0051,
+  `pixi run -e calculix-pardiso build-calculix`) solves it in 246 s, with the same
+  answer.
 - **What was tried** (the same bolted deck):
 
   | Change | Time | Answer vs. the stiffest contact |
@@ -73,3 +75,6 @@ glue held it, and the bolts carry the moment.
 
   Beam bolts in place of solid ones take about 5,000 nodes out of the mesh but barely
   change the time, since the contact iterations dominate.
+- **Code_Aster** (first-order mesh, ADR 0053): the bolted study does not converge with
+  friction. Its friction multipliers go singular whichever friction algorithm is used.
+  With frictionless contact it solves in 17 s. Run the bolted study on CalculiX.

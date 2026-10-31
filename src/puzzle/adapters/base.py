@@ -103,6 +103,15 @@ class SolverAdapter(ABC):
     capabilities: ClassVar[Capabilities]
     # Solve steps one input file can hold; run_study splits longer studies (None: any).
     max_solve_steps: ClassVar[int | None] = None
+    # Whether it can split a run across processes (MPI, Settings > Solvers > Parallel
+    # processes per run, ADR 0053); the others run one process with every core's threads.
+    parallel_processes: ClassVar[bool] = False
+
+    def processes(self) -> int:
+        """How many processes a run uses: the setting where it can split, else one."""
+        from puzzle.jobs.runtime import process_count
+
+        return process_count() if self.parallel_processes else 1
 
     def settings_schema(self) -> list:
         """This solver's own settings (ADR 0023): `adapters.settings.SolverSetting`s.

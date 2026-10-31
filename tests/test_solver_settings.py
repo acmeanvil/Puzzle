@@ -164,3 +164,56 @@ def test_shared_settings_a_solver_cant_translate_are_refused(tmp_path):
     assert foam == []  # both are OpenFOAM's to take
     study.expert_settings = {"openfoam": {"fvSolution/p": "1"}}
     assert any("not a dictionary entry" in p for p in OpenFoamAdapter().check(project, study))
+
+
+def test_mumps_options_are_placed_and_checked():
+    """ADR 0053: MUMPS's acceleration, low-rank tolerance, ordering and memory go on
+    every SOLVEUR; only with MUMPS, and a tolerance only with low rank."""
+    from puzzle.adapters.code_aster.comm import with_settings
+    from puzzle.model.schema import SolveStep, Study
+
+    step = SolveStep(type="stationary")
+
+    def study(**own):
+        nobody = "00000000-0000-0000-0000-000000000000"
+        return Study(name="S", component=nobody, solver="code_aster", steps=[step],
+                     solver_settings={"code_aster": own})  # fmt: skip
+
+    out = with_settings(COMM, study(acceleration="LR", low_rank_threshold=1e-9, ordering="METIS",
+                                    factor_memory="IN_CORE"), step)  # fmt: skip
+    assert out.count("ACCELERATION='LR'") == 2 and out.count("LOW_RANK_SEUIL=1e-09") == 2
+    assert "RENUM='METIS'" in out and "GESTION_MEMOIRE='IN_CORE'" in out
+    assert with_settings(COMM, study(), step) == COMM  # nothing set: nothing written
+    with pytest.raises(PuzzleError, match="MUMPS options"):
+        with_settings(COMM, study(method="MULT_FRONT", acceleration="FR+"), step)
+    with pytest.raises(PuzzleError, match="needs a low-rank"):
+        with_settings(COMM, study(acceleration="FR", low_rank_threshold=1e-9), step)
+
+
+def test_code_aster_export_takes_the_cores_and_memory(monkeypatch):
+    """ADR 0053: run_aster's ncpus (its threads) and memory per process from Settings >
+    Solvers and the runtime, and no one-hour limit."""
+    from puzzle import settings
+    from puzzle.adapters.code_aster import comm
+    from puzzle.jobs import runtime
+
+    settings.current().set("solvers.threads", 2)
+    monkeypatch.setattr(runtime.NativeRuntime, "memory", lambda self: 8 * 2**30)
+    monkeypatch.setattr(runtime.ContainerRuntime, "memory", lambda self: 8 * 2**30)
+    lines = comm.resources()
+    assert "P ncpus 2" in lines and "P mpi_nbcpu 1" in lines
+    assert "P memory_limit 6144" in lines and "P time_limit 604800" in lines
+    assert "P memory_limit 3072" in comm.resources(processes=2)
+
+
+def test_code_aster_low_rank_runs_on_one_thread():
+    """ADR 0053: MUMPS's low-rank factoring hangs with several OpenMP threads in this
+    Code_Aster build, so a .comm asking for it (setting or expert line) gets ncpus 1."""
+    from puzzle import settings
+    from puzzle.adapters.code_aster import comm
+
+    settings.current().set("solvers.threads", 4)
+    assert comm._low_rank("SOLVEUR=_F(ACCELERATION='LR+', LOW_RANK_SEUIL=1e-09)")
+    assert not comm._low_rank("SOLVEUR=_F(ACCELERATION='FR+')")
+    assert "P ncpus 1" in comm.resources(low_rank=True)
+    assert "P ncpus 4" in comm.resources()
