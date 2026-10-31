@@ -596,10 +596,28 @@ class Contact(BaseModel):
         description="a penalty contact's stiffness: accurate (stiff, slow to converge), "
         "balanced (the default), fast (soft: quick, but a through-loaded stack gives way more)",
     )
+    search_distance: Quantity | None = Field(
+        default=None,
+        description="how far apart the faces may start and still count as in reach (Ansys's "
+        "pinball); empty: 1 % of the model's size (ADR 0056)",
+    )
+    interface: Literal["as_is", "adjust", "offset"] = Field(
+        default="as_is",
+        description="the faces as meshed; adjust: the source nodes within the search "
+        "distance moved onto the target (closing a small gap or penetration); offset: "
+        "the faces start `offset` apart (+ a clearance, − an interference: a press fit)",
+    )
+    offset: Quantity | None = Field(
+        default=None, description="the initial clearance (+) or interference (−), for offset"
+    )
     extensions: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _check(self) -> Contact:
+        if (self.interface == "offset") != (self.offset is not None):
+            raise ValueError("an offset is given for, and only for, the offset interface")
+        if self.interface != "as_is" and self.type in ("bonded", "no_separation"):
+            raise ValueError("adjust and offset are for frictionless and frictional contact")
         if (self.type == "frictional") != (self.friction is not None):
             raise ValueError("a friction coefficient is required for, and only for, frictional")
         if self.meshing == "conformal" and self.type != "bonded":

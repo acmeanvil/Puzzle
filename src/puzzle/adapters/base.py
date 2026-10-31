@@ -299,6 +299,13 @@ class SolverAdapter(ABC):
         on `mesh`'s nodes. An adapter that can't use one must refuse it (`refuse_inputs`).
         """
 
+    def contact_summary(self, project, component, mesh=None) -> dict[str, str]:
+        """What this solver is given for each contact, in its own words, by contact name
+        (ADR 0056: the Contact tool's Setup tab); with a mesh, its numbers too. Built from
+        the code that writes the input, so it never says what the input doesn't. {}:
+        this adapter describes none."""
+        return {}
+
     def progress(self, input_file: Path, step: int = 1, of: int = 1):
         """A `puzzle.progress.Parser` for this solver's log (ADR 0054), or None when it
         reports no progress yet. `step` of `of`: which of the study's solve steps the

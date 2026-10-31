@@ -95,6 +95,11 @@ class CalculixAdapter(SolverAdapter):
             path.with_suffix(".fasteners.json").write_text(json.dumps(ends))
         return path
 
+    def contact_summary(self, project, component, mesh=None) -> dict[str, str]:
+        from puzzle.adapters.calculix.inp import contact_summary
+
+        return contact_summary(project, component, mesh)
+
     def progress(self, input_file: Path, step: int = 1, of: int = 1):
         """Steps, increments, iterations and messages from the log (ADR 0054)."""
         from puzzle.adapters.calculix.progress import CalculixProgress as P

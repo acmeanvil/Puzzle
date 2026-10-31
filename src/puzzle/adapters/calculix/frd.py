@@ -24,6 +24,9 @@ FIELDS = {
     "FLUX": ("heat_flux", ["x", "y", "z"]),
     "FORC": ("reaction_force", ["x", "y", "z"]),
     "PE": ("plastic_strain_equivalent", [""]),  # PEEQ, from *EL FILE ... PEEQ
+    # *CONTACT FILE CDIS, CSTR (ADR 0056): COPEN, CSLIP1, CSLIP2, CPRESS, CSHEAR1, CSHEAR2
+    # on every node, zero off the contact; post/contact.py keeps the slave nodes.
+    "CONTACT": ("contact_calculix", ["open", "slip1", "slip2", "pressure", "shear1", "shear2"]),
 }
 
 

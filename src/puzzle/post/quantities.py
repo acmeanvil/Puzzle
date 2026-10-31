@@ -48,6 +48,12 @@ SCALARS = {
     "temperature": ("Temperature", "temperature"),
     "pressure": ("Pressure", "pressure"),
     "electric_potential": ("Electric potential", None),
+    # ADR 0056: on contacts' source (slave) faces only.
+    "contact_pressure": ("Contact pressure", "pressure"),
+    "contact_shear": ("Contact frictional stress", "pressure"),
+    "contact_gap": ("Contact gap (− penetration)", "length"),
+    "contact_sliding": ("Contact sliding distance", "length"),
+    "contact_status": ("Contact status (0 open, 1 sliding, 2 sticking)", None),
 }
 AXES = {"x": "X", "y": "Y", "z": "Z"}
 SUFFIXES = {"range": "range", "mean": "mean"}  # fields a range combination makes

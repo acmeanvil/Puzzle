@@ -236,6 +236,15 @@ def _parser() -> argparse.ArgumentParser:
     )
     p.set_defaults(handler=_selections)
 
+    p = sub.add_parser(
+        "contacts", help="each contact's setup, what the solver is given, its initial state"
+    )
+    p.add_argument("project", type=Path)
+    p.add_argument("component", nargs="?", help="a component's name (default: all with contacts)")
+    p.add_argument("--solver", help="one solver's view (default: the component's studies')")
+    p.add_argument("--json", action="store_true", help="the report as JSON")
+    p.set_defaults(handler=_contacts)
+
     p = sub.add_parser("settings", help="your preferences (ADR 0024): list them, or set one")
     p.add_argument("key", nargs="?", help="e.g. units.system")
     p.add_argument("value", nargs="?", help="e.g. engineering; omit to show the choices")
@@ -808,6 +817,52 @@ def _selections(args) -> int:
                 Session(args.project).submit(Edit(object=str(geo.id), ops=ops))
                 print(f"  reattached ({len(choices)} selection(s); undo with puzzle undo)")
     return 1 if detached and not args.accept_all else 0
+
+
+def _contacts(args) -> int:
+    """ADR 0056: the Contact tool's Setup and Initial state, and the checks."""
+    import json
+
+    from puzzle import contact_check
+    from puzzle.mesh import generate_mesh
+    from puzzle.model.schema import Component
+    from puzzle.project.layout import WORK_DIR
+
+    project = _load(args.project)
+    comps = [c for c in project.of_type(Component)
+             if (args.component in (None, c.name)) and c.contacts]  # fmt: skip
+    if not comps:
+        print(f"no component '{args.component}' with contacts" if args.component
+              else "no contacts")  # fmt: skip
+        return 1
+    reports = []
+    for comp in comps:
+        out = args.project / WORK_DIR / "cli-mesh" / str(comp.id)
+        mesh = generate_mesh(project, comp.id, args.project, out).mesh
+        reports.append(contact_check.report(project, comp, mesh, args.solver))
+    if args.json:
+        print(json.dumps(reports, indent=2))
+        return 0
+    length = contact_check.shown_length
+    for r in reports:
+        print(f"{r['component']}:")
+        for c in r["contacts"]:
+            friction = f", friction {c['friction']:g}" if c["friction"] is not None else ""
+            print(f"  {c['name']}: {c['type']}{friction}, {c['source']} -> {c['target']}")
+            for solver, text in c["solver_input"].items():
+                print(f"    {solver}: {text}")
+            s = c.get("initial", {})
+            if s.get("status"):
+                gap = s["largest_gap_m"]
+                print(f"    starts {s['status']}: {s['shares'].get('closed', 0):.0%} in touch, "
+                      f"largest gap {length(gap) if gap is not None else '-'}, penetration "
+                      f"{length(s['largest_penetration_m'])}, search distance "
+                      f"{length(s['search_distance_m'])}")  # fmt: skip
+            elif s.get("note"):
+                print(f"    not checked: {s['note']}")
+        for w in r["warnings"]:
+            print(f"  warning: {w['message']}")
+    return 0
 
 
 def _settings(args) -> int:

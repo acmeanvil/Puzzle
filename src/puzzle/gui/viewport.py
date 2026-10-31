@@ -799,7 +799,11 @@ class Viewport(QWidget):
         self.view_bar = ViewBar(self)
 
     def show_mesh(
-        self, mesh: Mesh, highlight: str | None = None, entities: list | None = None
+        self,
+        mesh: Mesh,
+        highlight: str | None = None,
+        entities: list | None = None,
+        ghost: bool = False,
     ) -> None:
         """The mesh's volume, with a selection highlighted (a mesh group `Part/Name`, or
         its face `entities` when it was made after meshing) and picked faces marked."""
@@ -843,7 +847,7 @@ class Viewport(QWidget):
                 color="#c9d3dd",
                 show_edges=True,
                 edge_color="#7a8794",
-                opacity=0.35 if dim else 1,
+                opacity=0.35 if dim or ghost else 1,
             )
             from puzzle.post.vtk import beam_lines
 
@@ -1274,7 +1278,26 @@ class Viewport(QWidget):
                 unit or (item.label if item is not None else words(name)),
                 bar_format(*(clim or (self.shown["min"], self.shown["max"]))),
             )
-            self.plotter.add_mesh(grid, scalars=name, clim=clim, scalar_bar_args=bar, **colours)
+            defined = ~np.isnan(np.asarray(values, float).reshape(len(values), -1)).any(axis=1)
+            if on_points and 0 < defined.sum() < len(defined):
+                # A field on part of the mesh (contact results on slave faces, ADR 0056):
+                # those faces in colour over a see-through body; they often lie inside.
+                skin = grid.extract_surface()
+                lo_hi = (float(np.nanmin(values)), float(np.nanmax(values)))
+                if lo_hi[0] == lo_hi[1]:
+                    lo_hi = (lo_hi[0] - 1e-30 - abs(lo_hi[0]) * 1e-9,
+                             lo_hi[1] + 1e-30 + abs(lo_hi[1]) * 1e-9)  # fmt: skip
+                faces = skin.threshold(lo_hi, scalars=name, all_scalars=True)
+                self.plotter.add_mesh(grid, color="#c9d3dd", opacity=0.25, reset_camera=False)
+                actor = self.plotter.add_mesh(faces, scalars=name, clim=clim or lo_hi,
+                                              scalar_bar_args=bar, **colours)  # fmt: skip
+                mapper = actor.GetMapper()
+                mapper.SetResolveCoincidentTopologyToPolygonOffset()
+                mapper.SetRelativeCoincidentTopologyPolygonOffsetParameters(-2, -2)
+                self.shown["partial"] = int(defined.sum())
+            else:
+                self.plotter.add_mesh(grid, scalars=name, clim=clim, scalar_bar_args=bar,
+                                      **colours)  # fmt: skip
             self.legend.finish(self.plotter)
             from puzzle.post.view import draw_beams
 
@@ -1465,6 +1488,46 @@ class Viewport(QWidget):
     def _probe_click(self, xyz) -> None:
         add = bool(self.view.modifiers & Qt.KeyboardModifier.ShiftModifier)
         self.probe(xyz, add=add)
+
+    def show_contact_state(self, mesh: Mesh, states, colours: dict[str, str]) -> None:
+        """The mesh with each checked contact's source faces coloured by their initial
+        state (ADR 0056): a face takes the worst of its corners' (closed, near, open,
+        far, overhanging, in that order)."""
+        from puzzle.contact_check import STATUSES, surface
+
+        self.show_mesh(mesh, ghost=True)  # contact faces lie inside joints: see through
+        self.shown["contact_state"] = {s.name: s.status for s in states}
+        if self.plotter is None:
+            return
+        import pyvista as pv
+
+        for s in states:
+            if not len(s.nodes):
+                continue
+            face = surface(mesh, s.source)
+            if face is None:
+                continue
+            code = dict(zip(s.nodes.tolist(), s.codes.tolist(), strict=True))
+            worst = np.array([max(code.get(int(n), 0) for n in tri) for tri in face.corners])
+            rgb = np.array([[int(c[i : i + 2], 16) for i in (1, 3, 5)]
+                            for c in (colours[k] for k in STATUSES)], dtype=np.uint8)  # fmt: skip
+            points = face.triangles.reshape(-1, 3)
+            cells = np.hstack([np.full((len(face.corners), 1), 3),
+                               np.arange(len(points)).reshape(-1, 3)]).ravel()  # fmt: skip
+            poly = pv.PolyData(points, cells)
+            poly.cell_data["status"] = rgb[worst]
+            actor = self.plotter.add_mesh(
+                poly,
+                scalars="status",
+                rgb=True,
+                show_edges=False,
+                name=f"puzzle-contact-{s.name}",
+                reset_camera=False,
+            )
+            mapper = actor.GetMapper()
+            mapper.SetResolveCoincidentTopologyToPolygonOffset()
+            mapper.SetRelativeCoincidentTopologyPolygonOffsetParameters(-2, -2)
+        self.view.refresh()
 
     def show_seeds(self, points) -> None:
         """The edges' future nodes as small dots over the scene (ADR 0019 edge seeds)."""

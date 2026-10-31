@@ -388,6 +388,8 @@ def _model(window, menu: QMenu) -> None:
     _add(menu, "Find contacts…", _with_component(
         window, lambda c: find_contacts_dialog(window, c)),
         "Where the parts touch: proposals to make bonded contacts")  # fmt: skip
+    _add(menu, "Contact tool", lambda: window.open_contacts(),
+         "Every contact's setup, what the solver is given, and its initial state")  # fmt: skip
     from puzzle.gui.bolt_types import new_bolt_type
 
     _add(menu, "New bolt type…", lambda: new_bolt_type(window),
@@ -538,6 +540,7 @@ def _window(window, menu: QMenu, agent: QAction, messages: QAction) -> None:
         (window.advisor_dock, "Advisor", "Ctrl+3"),
         (window.sections_dock, "Sections", "Ctrl+4"),
         (window.bolts_dock, "Bolts", "Ctrl+5"),
+        (window.contacts_dock, "Contacts", "Ctrl+7"),
     ):
         # Not the dock's own toggle action: Qt renames that with the dock's title
         # (Properties reads "Tool" while a tool is open).

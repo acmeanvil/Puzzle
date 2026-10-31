@@ -156,6 +156,12 @@ class AdvisorPanel(QWidget):
             return None
         if action == "add_material":
             return w._add_material_dialog()
+        if action == "contact_tool":
+            return w.open_contacts("initial")
+        if action == "find_contacts":
+            from puzzle.gui.contact_search import find_contacts_dialog
+
+            return find_contacts_dialog(w, comp)
         if action == "material_builder":
             return w.open_material_builder()
         if action == "new_mesh":

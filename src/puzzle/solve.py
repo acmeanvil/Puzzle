@@ -204,6 +204,8 @@ def run_study(
 
     # ADR 0055: beams oriented by a system, a point, a face or an edge, as vectors.
     written, project = with_orientations(project, study.component, written)
+    written = _adjust_contacts(project, study, written, record)
+    _contact_warnings(project, study, written, record)
     # An adapter that writes one solve step per input runs a multi-step study one step
     # at a time on the same mesh; the steps are independent analyses.
     steps = study.solve_steps()
@@ -275,6 +277,10 @@ def run_study(
             )
         begin("read")
         part_results = adapter.read_results(input_file)
+        from puzzle.post.contact import finish as contact_fields
+
+        # ADR 0056: contact pressure, status, gap and sliding on the slave nodes.
+        contact_fields(part_results, seen, seen.objects[study.component], written)
         lap("read")
         if len(parts) > 1:
             for step in part_results.steps:
@@ -410,3 +416,37 @@ def _in_step(project: Project, component_id, indices: list[int]) -> Project:
     copy = replace(project, objects=dict(project.objects))
     copy.objects[component_id] = comp.model_copy(update={"physics": physics})
     return copy
+
+
+def _contact_warnings(project, study, mesh, record) -> None:
+    """ADR 0056: the contacts' checks on the mesh solved, logged before the solve (as
+    warnings: they don't stop it). A check that fails never stops a run either."""
+    from puzzle import contact_check, progress
+
+    comp = project.objects.get(study.component)
+    if comp is None or not comp.contacts:
+        return
+    try:
+        found = contact_check.checks(project, comp, mesh, study.solver)
+    except Exception as exc:  # noqa: BLE001 - a check, not the solve
+        record(progress.Message(level="info", text=f"Contacts not checked: {exc}"))
+        return
+    for w in found:
+        record(progress.Message(level="warning", text=w.message, code=w.code))
+
+
+def _adjust_contacts(project, study, mesh, record):
+    """ADR 0056: contacts adjusted to touch, or given an offset, get their source nodes
+    moved in the mesh written, for every solver alike; logged as it is done."""
+    from puzzle import contact_check, progress
+
+    comp = project.objects.get(study.component)
+    wanted = ("adjust", "offset")
+    if comp is None or not any(getattr(c, "interface", "") in wanted for c in comp.contacts):
+        return mesh
+    mesh, moved = contact_check.adjusted(comp, mesh)
+    for name, (count, largest) in moved.items():
+        record(progress.Message(level="info", text=f"Contact '{name}': {count} source nodes "
+                                "moved to start touching (or the offset apart), the most by "
+                                f"{contact_check.shown_length(largest)}"))  # fmt: skip
+    return mesh

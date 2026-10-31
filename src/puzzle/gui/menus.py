@@ -120,6 +120,8 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
             from puzzle.gui.contact_search import find_contacts_dialog
 
             add("Find contacts…", lambda: find_contacts_dialog(window, obj))
+        if obj.contacts:
+            add("Contact tool", lambda: window.open_contacts())
         from puzzle.gui.fastener_dialog import add_fastener, fasteners_from_holes
 
         add("Add fastener…", lambda: add_fastener(window, obj))

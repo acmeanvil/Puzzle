@@ -409,6 +409,16 @@ def summary(events: list[Event]) -> dict[str, Any]:
 # a message; the groups carry over. Unknown text passes through unchanged.
 TRANSLATIONS: list[tuple[str, str]] = [
     (
+        r"Arrêt suite à l'échec de l'appariement de contact lors de l'actualisation "
+        r"géométrique\.?",
+        "Stopped: contact pairing failed when the geometry was updated.",
+    ),
+    (
+        r"Échec de l'appariement de contact lors de l'actualisation géométrique en Newton "
+        r"généralisé\.?",
+        "Contact pairing failed when the geometry was updated (generalised Newton).",
+    ),
+    (
         r"Le nombre maximum d'itérations de Newton est atteint",
         "The maximum number of Newton iterations was reached",
     ),
@@ -534,7 +544,8 @@ _PIVOT = re.compile(r"Degree of freedom at node (\S+), component (\S+)")
 
 @dataclass(frozen=True)
 class Diagnosis:
-    # redundant_constraints, friction_singular, rigid_body, cutbacks, chattering, iterations
+    # redundant_constraints, friction_singular, pairing_failed, rigid_body, cutbacks,
+    # chattering, iterations
     code: str
     text: str  # what it means and what to try, in plain words
 
@@ -552,6 +563,14 @@ def diagnose(events: list[Event]) -> list[Diagnosis]:
             "neither touch nor slide. Check that the contact's source face lies within its "
             "target, that no source node is also held or tied (bolt ends, supports), and "
             "that the model is held by more than friction; or try frictionless contact first.",
+        ))  # fmt: skip
+    elif any("contact pairing failed" in t.lower() for t in texts):
+        out.append(Diagnosis(
+            "pairing_failed",
+            "Contact pairing failed: Code_Aster could not project the contact's source nodes "
+            "onto its target as the geometry moved. Make the source face only the part that "
+            "can touch (split the face), check the source lies over the target, or run the "
+            "study on CalculiX (a Hertz line contact runs there, not on Code_Aster here).",
         ))  # fmt: skip
     elif any(c.startswith(("LAGS", "LAGR")) for c in components):
         out.append(Diagnosis(

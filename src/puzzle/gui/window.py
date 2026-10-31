@@ -471,6 +471,18 @@ class MainWindow(QMainWindow):
         self.docks.tab("messages", "bolts")
         self.bolts_dock.visibilityChanged.connect(lambda shown: shown and self.bolts.refresh())
         self.bolts_dock.hide()  # Window → Bolts, or Model → Bolt table
+        # ADR 0056: every contact's setup and initial state, tabbed there too.
+        from puzzle.gui.contact_tool import ContactPanel
+
+        self.contacts = ContactPanel(self)
+        self.contacts_dock = self.docks.add(
+            "contacts", "Contacts", self.contacts, Qt.DockWidgetArea.BottomDockWidgetArea
+        )
+        self.docks.tab("messages", "contacts")
+        self.contacts_dock.visibilityChanged.connect(
+            lambda shown: shown and self.contacts.refresh()
+        )
+        self.contacts_dock.hide()  # Window → Contacts, or Model → Contact tool
         self.agent_dock.hide()
         self.advisor_dock.hide()
         self.docks.builtin("modelling", "Modelling", lambda: self._layout("modelling"))
@@ -535,6 +547,8 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Open project", exc.message)
             return
         self.meshes.clear()
+        self.contacts.initial.found.clear()
+        self.contacts.initial.warnings.clear()
         self.result = None
         self.viewport.clear()
         self.set_context("model")
@@ -587,6 +601,7 @@ class MainWindow(QMainWindow):
         self.plots.refresh()
         self.sections.refresh()
         self.bolts.refresh()
+        self.contacts.refresh()
         self.agent.refresh()
         waiting = self.agent.proposals.count()
         if waiting > self._proposals_seen:  # a new proposal: open the agent, no focus
@@ -681,6 +696,10 @@ class MainWindow(QMainWindow):
             item = QListWidgetItem(f"{p.object}: {p.message}")
             item.setData(Qt.ItemDataRole.UserRole, p.object)  # double-click selects it
             self.problems.addItem(item)
+        for w in self._contact_warnings():  # ADR 0056: warnings, not blocking
+            item = QListWidgetItem(f"{w.object} (contact warning): {w.message}")
+            item.setData(Qt.ItemDataRole.UserRole, w.object)
+            self.problems.addItem(item)
         for geo, findings in self.geometry_findings.items():  # from "Check geometry"
             for f in findings:
                 self.problems.addItem(f"{geo} (geometry {f['severity']}): {f['message']}")
@@ -689,6 +708,20 @@ class MainWindow(QMainWindow):
         self.output_tabs.setTabText(
             self.output_tabs.indexOf(self.problems), f"Problems ({self.problems.count()})"
         )
+
+    def _contact_warnings(self) -> list:
+        """The Contact tool's last check, and how each component's bodies are held
+        (that needs no mesh), each once."""
+        from puzzle.contact_check import held_by_contact_only
+        from puzzle.model.schema import Component
+
+        out = list(self.contacts.warnings()) if hasattr(self, "contacts") else []
+        seen = {(w.code, w.object) for w in out}
+        for comp in self.session.project.of_type(Component):
+            for w in held_by_contact_only(self.session.project, comp):
+                if (w.code, w.object) not in seen:
+                    out.append(w)
+        return out
 
     def _problem_chosen(self, item) -> None:
         """A problem's object, selected in the tree (ADR 0033)."""
@@ -1086,6 +1119,9 @@ class MainWindow(QMainWindow):
             self.mesh_selections[str(comp.id)] = meshed.selections
             self.mesh_quality[str(comp.id)] = meshed.quality
             self.mesh_element_quality[str(comp.id)] = meshed.element_quality
+            # A new mesh: the last contact check was on the old one.
+            self.contacts.initial.found.pop(str(comp.id), None)
+            self.contacts.initial.warnings.pop(str(comp.id), None)
             self.refresh_problems()
             for w in meshed.warnings:
                 self.log.appendPlainText(f"mesh: {w}")
@@ -1816,6 +1852,17 @@ class MainWindow(QMainWindow):
         panel.hide()
         panel.deleteLater()
         self.linearization_panel = None
+
+    def open_contacts(self, tab: str = "setup") -> None:
+        """Show the Contact tool (ADR 0056) at its Setup, Initial state or Results tab."""
+        self.contacts_dock.show()
+        self.contacts_dock.raise_()
+        self.contacts.tabs.setCurrentWidget(
+            {"initial": self.contacts.initial, "results": self.contacts.results}.get(
+                tab, self.contacts.setup
+            )
+        )
+        self.contacts.refresh()
 
     def open_bolts(self, tab: str = "properties") -> None:
         """Show the bolt table (ADR 0050) at its Properties or Results tab."""

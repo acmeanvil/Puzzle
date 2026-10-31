@@ -19,8 +19,8 @@ from dataclasses import asdict, dataclass
 from puzzle.model.schema import Component, Geometry, Material, MeshRecipe, Project, Study
 
 STEPS = (
-    "geometry", "selections", "materials", "mesh", "physics", "conditions", "study", "run",
-    "results",
+    "geometry", "selections", "materials", "mesh", "physics", "conditions", "contacts", "study",
+    "run", "results",
 )  # fmt: skip
 
 # Step -> (title, what it is for): the one table of the Advisor's words.
@@ -35,6 +35,10 @@ TEXT = {
     "mesh": ("Mesh", "Meshing happens when a study runs; meshing now checks it first."),
     "physics": ("Physics", "What to solve: structural, heat, flow, electromagnetic…"),
     "conditions": ("Supports and loads", "What holds the model and what acts on it."),
+    "contacts": (
+        "Contacts",
+        "How the parts meet: bonded, sliding, or with friction; check where each starts.",
+    ),
     "study": ("Study", "Which analysis to run (static, modal, transient…) and on which solver."),
     "run": ("Run", "Solve the study; results are kept until the model changes."),
     "results": (
@@ -196,6 +200,7 @@ def advise(
     else:
         count = sum(len(p.features) for p in component.physics)
         add("conditions", "done", f"{count} supports and loads.")
+    _contacts(project, component, add)
 
     if study is None:
         add("study", "needed", f"No study runs {component.name} yet.", "new_study", "New study…")
@@ -228,6 +233,26 @@ def advise(
             "Run again" if failed else "Run")  # fmt: skip
         add("results", "optional", "Comes after a run.")
     return out
+
+
+def _contacts(project, component, add) -> None:
+    """ADR 0056: parts that may need contacts, and bodies held only by sliding ones
+    (warnings that need no mesh; the Contact tool checks the rest on the mesh)."""
+    from puzzle.contact_check import held_by_contact_only
+
+    if len(component.parts) < 2:
+        return
+    if not component.contacts and not component.connectors:
+        add("contacts", "optional", f"{len(component.parts)} parts and no contacts: find where "
+            "they touch.", "find_contacts", "Find contacts…")  # fmt: skip
+        return
+    found = held_by_contact_only(project, component)
+    if found:
+        add("contacts", "needed", found[0].message, "contact_tool", "Contact tool")
+    elif component.contacts:
+        n = len(component.contacts)
+        add("contacts", "done", f"{n} contact{'s' * (n > 1)}; the Contact tool checks where "
+            "they start.", "contact_tool", "Contact tool")  # fmt: skip
 
 
 def _failed_attempt(root, study: Study) -> str:

@@ -50,6 +50,9 @@ class Tokens:
     # Tree and Properties headings by depth (the project, then sections, then what is
     # under them, ...); items that don't expand keep the plain text colour.
     levels: tuple[str, ...] = ()
+    # A contact's initial state in the view (ADR 0056): closed, near, open, far,
+    # overhanging. The view stays light in every theme.
+    contact: tuple[str, ...] = ("#2e9d57", "#d4b106", "#f0883e", "#c53030", "#8250df")
 
 
 LIGHT = Tokens(
@@ -74,6 +77,7 @@ HIGH_CONTRAST = Tokens(
     focus="#ffd400", done="#7CFC00", needed="#ffd400", warning="#ffd400", error="#ff6b6b",
     running="#7fdbff", view_top="#ffffff", view_bottom="#ffffff", view_plain="#ffffff",
     view_text="#000000", levels=("#ffd400", "#7fdbff", "#7cfc00", "#ff9cf0"),
+    contact=("#00a000", "#e0c000", "#ff8000", "#ff0000", "#a000ff"),
 )  # fmt: skip
 SETS = {"light": LIGHT, "dark": DARK, "high_contrast": HIGH_CONTRAST}
 

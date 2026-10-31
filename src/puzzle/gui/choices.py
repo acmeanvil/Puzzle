@@ -83,6 +83,10 @@ STEP_CHOICES = {
 
 # Values whose words aren't their key's (ADR 0050 bolt standards and preloads).
 VALUES = {
+    # A contact's interface treatment (ADR 0056)
+    "as_is": "As meshed",
+    "adjust": "Adjust to touch",
+    "offset": "Offset (clearance or interference)",
     "iso_coarse": "ISO metric, coarse pitch",
     "iso_fine": "ISO metric, fine pitch",
     "unc": "Unified coarse (UNC)",

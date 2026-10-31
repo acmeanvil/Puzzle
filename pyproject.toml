@@ -23,6 +23,7 @@ dependencies = [
     "tomli-w>=1.0",
     "gmsh>=4.13",
     "numpy>=1.26",
+    "scipy>=1.11",  # KD-trees for contact checks (ADR 0056)
     "deltalake>=1.0",
     "pyarrow>=16",
     "mcp>=2.0,<3",  # the agent server (ADR 0015); 2.x API

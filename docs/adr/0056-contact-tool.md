@@ -1,6 +1,6 @@
 # 0056. A contact tool: each contact's particulars before and after the solve
 
-- Status: Accepted (2026-10-30; built after ADR 0054)
+- Status: Accepted (2026-10-30); built 2026-10-31 (one benchmark open: Hertz on Code_Aster)
 - Date: 2026-10-30
 
 ## Context
@@ -36,3 +36,91 @@ It cost time on the bolted bracket: frictional contact on Code_Aster failed four
 - **Leave it to the log and the solver's own messages:** what we have; it needed an expert to read a singular friction multiplier.
 - **An initial-state check only, no contact results:** the most useful half before a run, but pressure and status are what tell a converged contact from a wrong one.
 - **One tool per solver:** the questions are the same; only what each solver is given differs, which the Setup tab shows.
+
+## Built
+
+Phase 1 (2026-10-31): decision items 1 (Setup and Initial state tabs), 3 and 4; the
+initial-state benchmark of item 5.
+
+- `puzzle.contact_check`: a face selection as flat triangles with outward normals
+  (from the volume element each lies on); the nearest target point to every source
+  node (a scipy KD-tree over triangle centres, then an exact check of any triangle that
+  could be closer: centre within the best distance plus the triangle's reach); the gap
+  along the target's normal and the offset to the side. Node statuses: closed (a
+  penetration, or a gap within 2 % of the target's element size, as two differently
+  meshed curved faces never coincide), near (within a tenth of the search distance),
+  open (within it), far, overhanging (off to the side by more than 10 % of the element
+  size, with the normal gap in reach). Shares are of the source's area (corner nodes, a
+  third of each triangle). `Contact.search_distance` (default 1 % of the model's
+  bounding-box diagonal).
+- Checks (`checks`, `held_by_contact_only`) are warnings, not `Project.problems`
+  (which refuse a run: a body held by a preloaded frictional joint is fine):
+  `contact_overhang`, `contact_slave_held` (held or another contact's source),
+  `contact_slave_bolted` (Code_Aster's SANS_GROUP_NO), `contact_far`,
+  `contact_shared_outline` (frictional on Code_Aster; the source outline's nodes on the
+  target's outline), `contact_only_hold` and `free_body` (a graph from supports
+  through bonds, no-separation contacts and bolts; sliding contacts don't join). They
+  are logged as progress warnings when a solve starts (`solve._contact_warnings`),
+  listed in the GUI's Problems as contact warnings, and given by the Advisor's new
+  Contacts step.
+- `Adapter.contact_summary(project, component, mesh)`: CalculiX (`*TIE`, or
+  `*CONTACT PAIR` with K = factor E/h and its numbers, from `_penalty`, which the deck
+  uses too) and Code_Aster (`LIAISON_MAIL`, or `DEFI_CONTACT` with the law,
+  `CONTACT_INIT` and the SANS_GROUP_NO node count from `_contact_exclusions`).
+- GUI `gui/contact_tool.py`: Window → Contacts (Ctrl+7), Model → Contact tool, a
+  component's menu; Setup edits as commands (several rows at once; a frictional type
+  gets μ = 0.2, a non-bond leaves conformal meshing); Initial state checks in the
+  background (meshing first) and draws the source faces by status over a see-through
+  mesh (`Viewport.show_contact_state`, colours `Tokens.contact`).
+- MCP `contact_check(component, solver)`, CLI `puzzle contacts PROJECT [component]
+  [--solver] [--json]`, skill `contact-tool`.
+- Tests: `tests/test_contact_check.py` (the split bar a known gap apart, into a known
+  penetration, 5 mm apart, 3 mm sideways: 30 % overhanging; a shared outline; held
+  source nodes; the agent's report, MCP, CLI, Advisor, the solve's log),
+  `tests/test_gui_contact_tool.py`. On the bolted bracket the Code_Aster view gives the
+  bolt-end exclusion and the shared seat outline: what the 2026-10-30 failure came to.
+
+Phase 2 (2026-10-31): the Results tab (item 1), interface treatment (item 2) and the
+benchmarks (item 5).
+
+- Contact fields on the source nodes (`post/contact.py`, run after reading):
+  `contact_pressure`, `contact_shear` (the frictional stress's size), `contact_gap`
+  (− penetration), `contact_sliding`, `contact_status` (0 open, 1 sliding, 2
+  sticking). CalculiX: `*CONTACT FILE` CDIS, CSTR on static contact steps (one CONTACT
+  block: COPEN, CSLIP1/2, CPRESS, CSHEAR1/2, on every node, zero off contact), the
+  status from p and μ (sticking below 99 % of μ p). Code_Aster: the CONT_NOEU table
+  (status, gap, slip, nodal forces) and, from DEPL, the multipliers: LAGS_C is the
+  pressure itself, LAGS_F1/F2 the friction semi-multipliers (τ = μ p |λ_f|). Forces
+  turned into pressures by the consistent area matrix reproduce LAGS_C on quadratic
+  faces but oscillate on linear ones (Code_Aster integrates at the nodes there), so
+  that is only the fallback. Per contact (`contact_results`): normal and frictional
+  force, area in contact, sticking share, largest pressure, penetration, sliding, gap.
+  The view draws a field defined on part of the mesh on those faces over a
+  see-through body (`Viewport.show_result`), as contact faces lie inside joints.
+- Interface treatment moves the mesh, not a solver card: `Contact.interface` adjust
+  (source nodes within the search distance onto the target) or offset (`offset` from
+  it along the target's normal: + clearance, − interference), in the mesh written
+  (`contact_check.adjusted`, `solve._adjust_contacts`), the same for every solver.
+  CalculiX's `*CLEARANCE` was tried first: it sets the gap rather than adding to it,
+  and on the press fit its displacements were right but its contact pressures three
+  times Lamé's; the moved geometry gave Lamé's to 0.2 %. Nearest points are found on
+  the target's own six-node faces (`on_curved`, Gauss-Newton from the flat triangle's
+  point): flat triangles are off by the chord's sag (8 µm on the press fit, against a
+  20 µm interference), which also sharpens the initial state on curved faces.
+- GUI Results tab (run and step; Pressure, Status, Sliding, Gap, Frictional stress
+  buttons), Setup's Interface and Offset columns; MCP `contact_results`; the skill;
+  Code_Aster's "échec de l'appariement" translated, with the diagnosis
+  `pairing_failed`. `contact_slave_held` now flags any hold only under friction (a
+  frictionless source edge on a symmetry or plane-strain face is fine).
+- Benchmarks: `tests/integration/test_contact_results.py`: the frictionless stack
+  carries p A = 2000 N (CalculiX 2000.04 N, every node 20 MPa to 0.04 %; Code_Aster
+  2000.0 N, its pressure its own LAGS_C, mean 20.1 MPa); the sliding block slides
+  everywhere with frictional over normal force = μ (0.300 on both).
+  `tests/integration/test_press_fit.py`: Lamé, plane strain, 20 µm interference:
+  pressure CalculiX −0.32 %, Code_Aster −0.20 %; the bore's hoop stress −2.5 %, −2.3 %.
+  `tests/integration/test_hertz.py`: a cylinder on a block, plane strain: CalculiX's
+  peak pressure within 0.7 % of Hertz's for the force carried, the half-width within an
+  element. Code_Aster's pairing fails before its first increment on this 3D line
+  contact (the whole quarter or its bottom 1 mm as the source, POINT_FIXE or Newton
+  geometry, quadratic or linear tets): marked an expected failure, open.
+

@@ -212,6 +212,31 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         }
 
     @tool(
+        description="Check a component's contacts before solving (ADR 0056): per contact "
+        "its setup, what each solver is given (`solver_input`, from the code that writes the "
+        "input), and its initial state on the mesh: `status` (closed, near, open, far, "
+        "overhanging), `shares` of the source face's area by status, the largest gap and "
+        "penetration and the nearest distance (m), and the search distance (m). `warnings` "
+        "name each contact problem and its fix (overhanging source faces, held or bolted "
+        "source nodes, faces far apart, a shared outline under Code_Aster friction, bodies "
+        "held only by sliding contact). `solver`: one solver's view; default the "
+        "component's studies'. Meshes the component."
+    )
+    @guarded
+    def contact_check(component: str, solver: str | None = None) -> dict[str, Any]:
+        from puzzle import contact_check as check
+        from puzzle.commands import resolve
+        from puzzle.mesh import generate_mesh
+        from puzzle.model.schema import Component
+        from puzzle.project.layout import WORK_DIR
+
+        s = session()
+        comp = resolve(s.project, component, Component)
+        out = root / WORK_DIR / "mcp-mesh" / str(comp.id)
+        mesh = generate_mesh(s.project, comp.id, root, out).mesh
+        return check.report(s.project, comp, mesh, solver)
+
+    @tool(
         description="Propose bolts for a component's holes (ADR 0050). Holes are the "
         "parts' cylindrical faces; a bolt joins two holes of different parts on one axis. "
         "With a rule (`rule` names it): hole diameters `min_diameter`/`max_diameter` (m), "
@@ -824,6 +849,32 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
              "of_proof": b.proof, "of_yield": b.yielding}
             for b in rows
         ]}  # fmt: skip
+
+    @tool(
+        description="Each frictionless or frictional contact's results in a study's latest "
+        "run (ADR 0056): normal and frictional force (N), area in contact (m^2 and share of "
+        "the source face), largest pressure (Pa), penetration, gap and sliding (m), and the "
+        "share of the contact area sticking. `step`: a result step, 1-based among those "
+        "with contact results (default the last). The fields contact_pressure, "
+        "contact_shear, contact_gap, contact_sliding and contact_status (0 open, 1 sliding, "
+        "2 sticking) on the source faces are read with the result_* tools."
+    )
+    @guarded
+    def contact_results(study: str, step: int | None = None) -> dict[str, Any]:
+        from puzzle.post.contact import run_contact_results
+        from puzzle.project.layout import RESULTS_DIR
+        from puzzle.results.store import ResultStore
+
+        record, _, _ = latest(study)
+        chosen, found, steps = run_contact_results(
+            session().project, ResultStore(root / RESULTS_DIR), record.run_id, step
+        )
+        return {
+            "run_id": record.run_id,
+            "step": chosen.label(),
+            "steps": len(steps),
+            "contacts": [r.to_dict() for r in found],
+        }
 
     @tool(
         description="How a study's last solve went or is going (ADR 0054): steps, increments, "

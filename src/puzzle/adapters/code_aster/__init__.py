@@ -81,6 +81,11 @@ class CodeAsterAdapter(SolverAdapter):
         mark_mesh_nodes(path, mesh)  # pretension twins and reference nodes come after
         return path
 
+    def contact_summary(self, project, component, mesh=None) -> dict[str, str]:
+        from puzzle.adapters.code_aster.comm import contact_summary
+
+        return contact_summary(project, component, mesh)
+
     def progress(self, input_file: Path, step: int = 1, of: int = 1):
         """Steps, increments, iterations and messages from the log (ADR 0054)."""
         from puzzle.adapters.code_aster.progress import CodeAsterProgress as P

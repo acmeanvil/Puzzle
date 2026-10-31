@@ -680,6 +680,11 @@ def _step(
                 f"{line}, OUTPUT=2D" if line in ("*NODE FILE", "*EL FILE") else line
                 for line in outputs
             ]
+        if (
+            any(c.type in ("frictionless", "frictional") for c in comp.contacts)
+            and step.type == "stationary"
+        ):  # ADR 0056: contact opening and slips, pressure and shears, on slave nodes
+            outputs += ["*CONTACT FILE", "CDIS, CSTR"]
         if comp.connectors and step.type not in ("modal", "buckling"):
             # Fastener forces and moments (ADR 0027): the helper nodes' reactions.
             outputs += [f"*NODE PRINT, NSET={FASTENER_ENDS}", "RF"]
@@ -1503,16 +1508,7 @@ def _contacts(project: Project, comp: Component, mesh: Mesh, faces: FaceLookup) 
         if c.capability == "bonded_nonconformal":
             out += [f"*TIE, NAME={set_name('T', c.name)}", ", ".join(names)]
             continue
-        h = (slave_area / max(len(slave_faces), 1)) ** 0.5
-        # The softer body governs the local compliance; a rigid-ish platen must not
-        # stiffen the penalty (it made rim contact chatter in the Belleville check).
-        # Bending-dominated line contact (disc springs, rims) may need less, as Ansys
-        # advises 0.01-0.1 of its default there: extensions["calculix"]["penalty_factor"].
-        factor = float(c.extensions.get("calculix", {}).get(
-            "penalty_factor", PENALTY_FACTORS[c.stiffness]
-        ))  # fmt: skip
-        soft = min(_modulus(project, comp, c.source), _modulus(project, comp, c.target))
-        stiffness = factor * soft / h
+        _factor, _soft, _h, stiffness = _penalty(project, comp, c, slave_area, len(slave_faces))
         interaction = set_name("I", c.name)
         out += [
             f"*CONTACT PAIR, INTERACTION={interaction}, TYPE=SURFACE TO SURFACE",
@@ -1523,6 +1519,60 @@ def _contacts(project: Project, comp: Component, mesh: Mesh, faces: FaceLookup) 
         ]
         if c.type == "frictional":
             out += ["*FRICTION", f"{c.friction:.10g}, {stiffness:.6g}"]
+    return out
+
+
+def _penalty(project, comp, c, slave_area: float, faces: int):
+    """A contact pair's penalty: (factor, the softer E, slave face size h, K = factor E / h).
+
+    The softer body governs the local compliance; a rigid-ish platen must not stiffen
+    the penalty (it made rim contact chatter in the Belleville check). Bending-dominated
+    line contact (disc springs, rims) may need less, as Ansys advises 0.01-0.1 of its
+    default there: extensions["calculix"]["penalty_factor"]."""
+    h = (slave_area / max(faces, 1)) ** 0.5
+    factor = float(c.extensions.get("calculix", {}).get(
+        "penalty_factor", PENALTY_FACTORS[c.stiffness]
+    ))  # fmt: skip
+    soft = min(_modulus(project, comp, c.source), _modulus(project, comp, c.target))
+    return factor, soft, h, factor * soft / h
+
+
+def contact_summary(project: Project, comp: Component, mesh: Mesh | None = None) -> dict:
+    """What `_contacts` writes for each contact, in words (ADR 0056); with a mesh, the
+    penalty's numbers too. Built from the same functions the deck is."""
+    from puzzle.contact_check import moved_words, shown_length
+
+    out = {}
+    for c in comp.contacts:
+        if c.capability == "bonded_conformal":
+            out[c.name] = "Shared nodes (meshed conformally): nothing to write"
+            continue
+        if c.capability not in CONTACTS:
+            out[c.name] = f"Not written: CalculiX refuses {c.capability.replace('_', ' ')}"
+            continue
+        if c.capability == "bonded_nonconformal":
+            out[c.name] = (f"*TIE: the nodes of {c.source} (slave) follow the faces of "
+                           f"{c.target} (master)")  # fmt: skip
+            continue
+        factor = float(c.extensions.get("calculix", {}).get(
+            "penalty_factor", PENALTY_FACTORS[c.stiffness]))  # fmt: skip
+        text = (f"*CONTACT PAIR, surface to surface, slave {c.source}; linear penalty "
+                f"K = {factor:g} E/h")  # fmt: skip
+        group = mesh.groups.get(c.source) if mesh is not None else None
+        if group is not None:
+            try:
+                faces = sum(len(b.ids) for b in surface_blocks(group, mesh))
+                _f, soft, h, k = _penalty(project, comp, c, surface_area(group, mesh), faces)
+                text += f" = {k:.3g} N/m³ (E = {soft / 1e9:.4g} GPa, h = {shown_length(h)})"
+            except InputError as exc:
+                text += f" ({exc.message})"
+        else:
+            text += " (h from the mesh)"
+        if c.type == "frictional":
+            text += f"; *FRICTION μ = {c.friction:g}, stick slope K"
+        text += moved_words(c)
+        text += "; static steps start at a tenth of the load"
+        out[c.name] = text
     return out
 
 

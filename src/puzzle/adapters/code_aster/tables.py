@@ -32,6 +32,24 @@ COMPONENTS = {
 }
 
 
+# CONT_NOEU (ADR 0056) -> raw fields that post/contact.py turns into the neutral ones:
+# nodal forces (N), not pressures; CONT 0 none, 1 sticking, 2 sliding.
+CONTACT = {
+    "contact_normal_force": {"RN": ""},
+    "contact_normal_vector": {"RNX": "x", "RNY": "y", "RNZ": "z"},
+    "contact_force": {"RX": "x", "RY": "y", "RZ": "z"},
+    "contact_status_code_aster": {"CONT": ""},
+    "contact_gap_code_aster": {"JEU": ""},
+    "contact_sliding_code_aster": {"GLI": ""},
+}
+
+
+MULTIPLIERS = {
+    "contact_lags_c": {"LAGS_C": ""},
+    "contact_lags_f": {"LAGS_F1": "1", "LAGS_F2": "2"},
+}
+
+
 def read_table(path: Path) -> list[dict[str, str]]:
     """Rows of an IMPR_TABLE file (comment lines start with #)."""
     lines = [
@@ -40,9 +58,9 @@ def read_table(path: Path) -> list[dict[str, str]]:
     return [{k.strip(): (v or "").strip() for k, v in row.items()} for row in csv.DictReader(lines)]
 
 
-def nodal_fields(rows: list[dict[str, str]], name: str) -> dict[int, Field]:
+def nodal_fields(rows: list[dict[str, str]], name: str, comps=None) -> dict[int, Field]:
     """One field per NUME_ORDRE (step or mode), keyed by that number."""
-    comps = COMPONENTS[name]
+    comps = comps or COMPONENTS[name]
     by_order: dict[int, list[dict[str, str]]] = {}
     for row in rows:
         # A node no element gives this field to (a discrete's own node) prints "-".
@@ -84,6 +102,18 @@ def read_results(workdir: Path) -> Results:
         for order, field in nodal_fields(tables[name], name).items():
             step = steps.setdefault(order, StepResult(1, "", times[order]))
             step.fields[name] = field
+    if "contact" in tables:
+        times = {int(r["NUME_ORDRE"]): float(r.get("INST") or 1.0) for r in tables["contact"]}
+        # The continuous contact's multipliers ride in DEPL: LAGS_C is the pressure
+        # (compression negative), LAGS_F1/F2 the friction semi-multipliers.
+        found = [(tables["contact"], CONTACT)]
+        if tables.get("displacement") and "LAGS_C" in tables["displacement"][0]:
+            found.append((tables["displacement"], MULTIPLIERS))
+        for rows, kinds in found:
+            for name, comps in kinds.items():
+                for order, field in nodal_fields(rows, name, comps).items():
+                    step = steps.setdefault(order, StepResult(1, "", times.get(order, 1.0)))
+                    step.fields[name] = field
     results.steps = [steps[o] for o in sorted(steps)]
     # A stepped structural solve also stores its unloaded start (t = 0): nothing to show,
     # and CalculiX doesn't report it, so it goes. A transient heat start is the initial

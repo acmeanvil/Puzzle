@@ -60,6 +60,7 @@ TABLES = {
     "buckling": 88,
     "beam_forces": 89,
     "displacement_imag": 91,  # a harmonic response's imaginary part (ADR 0041)
+    "contact": 92,  # CONT_NOEU on the slave nodes (ADR 0056)
 }
 FORMAT_R = "1PE18.10"
 
@@ -626,6 +627,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             _table("res", "DEPL", "displacement", which),
             _table("res", "SIGM_NOEU", "stress", which),
             _table("res", "REAC_NODA", "reaction_force", which),
+            *([_table("res", "CONT_NOEU", "contact", which)] if touching else []),
             *([_table("res", "EFGE_NOEU", "beam_forces", which)] if bolt_beams else []),
             *(
                 [
@@ -669,6 +671,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             if step.type == "frequency_domain"
             else {"displacement", "stress", "reaction_force", "beam_forces"}
             | ({"plastic_strain", "plastic_strain_equivalent"} if plastic else set())
+            | ({"contact"} if touching else set())
         )
     )
     from puzzle.adapters.code_aster import CodeAsterAdapter
@@ -1376,6 +1379,62 @@ def _contact_exclusions(contacts, fasteners, mesh: Mesh, names: dict) -> dict[st
         shared = [names[s] for s in tied if np.intersect1d(slave, mesh.groups[s].node_ids).size]
         if shared:
             out[c.name] = shared
+    return out
+
+
+def contact_summary(project, comp, mesh: Mesh | None = None) -> dict[str, str]:
+    """What the .comm gives each contact, in words (ADR 0056), from the functions that
+    write it: LIAISON_MAIL ties, DEFI_CONTACT zones and their SANS_GROUP_NO exclusions."""
+    from puzzle.bolts import resolved
+
+    out = {}
+    touching = [c for c in comp.contacts if c.type in ("frictionless", "frictional")]
+    friction = any(c.type == "frictional" for c in touching)
+    quadratic = mesh is not None and any(
+        b.element in ("tet10", "hex20", "wedge15", "pyramid13") for b in mesh.blocks
+    )
+    excluded = {}
+    if mesh is not None and touching:
+        try:
+            fasteners = resolved(project).objects.get(comp.id, comp).connectors
+        except Exception:  # an unresolvable bolt: shown as stored
+            fasteners = comp.connectors
+        present = [c for c in touching if c.source in mesh.groups]
+        fasteners = [f for f in fasteners if all(
+            s is None or s in mesh.groups for s in (f.source, f.target))]  # fmt: skip
+        named = {g: g for g in mesh.groups}
+        for name, groups in _contact_exclusions(present, fasteners, mesh, named).items():
+            slave = mesh.groups[next(c.source for c in present if c.name == name)].node_ids
+            nodes = np.unique(np.concatenate([mesh.groups[g].node_ids for g in groups]))
+            excluded[name] = (groups, int(np.intersect1d(slave, nodes).size))
+    for c in comp.contacts:
+        if c.capability == "bonded_conformal":
+            out[c.name] = "Shared nodes (meshed conformally): nothing to write"
+        elif c.capability not in CONTACTS:
+            out[c.name] = f"Not written: Code_Aster refuses {c.capability.replace('_', ' ')}"
+        elif c.capability == "bonded_nonconformal":
+            out[c.name] = (f"LIAISON_MAIL: the nodes of {c.source} tied into the volume of "
+                           f"{c.target.split('/', 1)[0]} (structural studies only)")  # fmt: skip
+        else:
+            law = (f"Coulomb μ = {c.friction:g}" if c.type == "frictional"
+                   else "frictionless" + (" (COULOMB = 0 beside a frictional zone)"
+                                          if friction else ""))  # fmt: skip
+            text = (
+                f"DEFI_CONTACT continuous (augmented Lagrangian), slave {c.source}, {law}; "
+                "faces turned outward (ORIE_PEAU); STAT_NON_LINE over 10 increments"
+            )
+            init = c.extensions.get("code_aster", {}).get("contact_init")
+            if init:
+                text += f"; CONTACT_INIT='{init}'"
+            from puzzle.contact_check import moved_words
+
+            text += moved_words(c)
+            if c.name in excluded:
+                groups, count = excluded[c.name]
+                text += f"; SANS_GROUP_NO: {count} nodes on bolt ends ({', '.join(groups)})"
+            if c.type == "frictional" and quadratic:
+                text += "; refused on this quadratic mesh (friction needs element_order 1)"
+            out[c.name] = text
     return out
 
 
