@@ -13,7 +13,7 @@ import json
 from graphlib import CycleError, TopologicalSorter
 from uuid import UUID
 
-from puzzle.model.schema import ParameterSet, Project, ProjectObject, Study, Transfer
+from puzzle.model.schema import Component, ParameterSet, Project, ProjectObject, Study, Transfer
 
 
 def _inputs(project: Project, obj: ProjectObject) -> list[UUID]:
@@ -32,7 +32,15 @@ def _digest(payload: object) -> str:
 def _own(obj: ProjectObject, *, drop: frozenset[str] = frozenset()) -> dict:
     # A shoot-out never changes the primary solver's result, so it never stales it.
     exclude = {"name", *drop} | ({"shootout"} if isinstance(obj, Study) else set())
-    return obj.model_dump(mode="json", exclude=exclude)
+    data = obj.model_dump(mode="json", exclude=exclude)
+    data.pop("hidden", None)  # what the view shows never changes a solve
+    if isinstance(obj, Component):  # how bolts are listed and made never changes a solve
+        data.pop("bolt_rules", None)
+        for bolt in data.get("connectors", []):
+            bolt.pop("group", None)
+            bolt.pop("rule", None)
+            bolt.pop("through", None)
+    return data
 
 
 def content_hashes(project: Project) -> dict[UUID, str]:

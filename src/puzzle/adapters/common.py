@@ -280,9 +280,15 @@ def surface_blocks(group: Group, mesh: Mesh) -> list[CellBlock]:
 
 
 def surface_area(group: Group, mesh: Mesh) -> float:
-    """Total area of a face selection, from its (flat-sided) triangles."""
+    """Total area of a face selection, on the faces' own geometry: curved second-order
+    triangles as the solver integrates them (a force spread as F / A then sums to F;
+    flat triangles' area is a little high around a hole, 0.2 % on an M8 clearance hole),
+    flat ones (and quads) from their corners."""
+    blocks = surface_blocks(group, mesh)
+    if blocks and all(b.element in ("tri3", "tri6") for b in blocks):
+        return sum(float(da.sum()) for *_, da in _quadrature(group, mesh))
     area = 0.0
-    for b in surface_blocks(group, mesh):
+    for b in blocks:
         if b.element.startswith("quad"):
             # Two triangles per (planar) quad: corners 0-1-2 and 0-2-3.
             q = mesh.node_coords(b.connectivity[:, :4].ravel()).reshape(-1, 4, 3)
@@ -784,6 +790,32 @@ def fastener_end(selection: str, mesh: Mesh, what: str) -> FastenerEnd:
     return FastenerEnd(centre, ids, weights)
 
 
+def fastener_ends(f, mesh: Mesh, what: str | None = None) -> tuple[FastenerEnd, FastenerEnd]:
+    """A fastener's two ends: its selections', or for a bolt to ground (ADR 0050) its
+    hole's end and a fixed point `ground_length` (default 2 d) along the hole's axis,
+    on the side `ground_direction` points to. The axis is square to the hole wall's
+    normals, so a short hole and a long one give it alike."""
+    what = what or f"fastener '{f.name}'"
+    a = fastener_end(f.source, mesh, what)
+    if not f.ground:
+        return a, fastener_end(f.target, mesh, what)
+    _ids, areas, normals = support_nodes(mesh.groups[f.source], mesh)
+    axis = np.linalg.svd(areas[:, None] * normals, full_matrices=False)[2][-1]
+    toward = np.asarray(f.ground_direction, float)
+    if axis @ toward < 0:
+        axis = -axis
+    if abs(axis @ toward) < 1e-6 * np.linalg.norm(toward):
+        raise InputError(f"{what}: its ground direction lies across the hole, not along it")
+    d = f.diameter.to_si() if f.diameter is not None else 0.01
+    length = f.ground_length.to_si() if f.ground_length is not None else 2 * d
+    return a, FastenerEnd(a.centre + length * axis, np.zeros(0, np.int64), np.zeros(0))
+
+
+def fastener_selections(fasteners) -> list[str]:
+    """Every end selection of these fasteners (a bolt to ground has one)."""
+    return [s for f in fasteners for s in (f.source, f.target) if s is not None]
+
+
 def rbe3_rows(end: FastenerEnd, mesh: Mesh, about=None) -> list[list[tuple[int, int, float]]]:
     """A distributing (RBE3) end's relations, one row per dof of the reference point:
     its translation is the weighted mean of the nodes' (dofs 1-3), its rotation the
@@ -924,7 +956,7 @@ def check_rigid_ends(fasteners, mesh: Mesh, held: set[int] | None = None) -> Non
     for f in fasteners:
         if f.ends != "rigid":
             continue
-        for sel in (f.source, f.target):
+        for sel in (s for s in (f.source, f.target) if s is not None):
             group = mesh.groups.get(sel)
             if group is not None and held & {int(n) for n in group.node_ids}:
                 raise InputError(

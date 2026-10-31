@@ -460,7 +460,9 @@ class MeshBench(QWidget):
         if comp is None:
             return None
         s = self.window.session
-        project = copy.deepcopy(s.project)
+        from puzzle.suppress import applied
+
+        project = applied(copy.deepcopy(s.project))  # suppressed geometry left out
         out = s.root / WORK_DIR / "gui-seeds" / str(comp.id)
 
         def work(_emit):

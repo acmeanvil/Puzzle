@@ -184,6 +184,11 @@ def view_background(plotter, t: Tokens | None = None, kind: str | None = None) -
     kind = kind or settings().get("interface.view_background")
     if kind == "plain":
         plotter.set_background(t.view_plain)
+    elif kind == "colour":  # the user's own (Settings > Interface, Window menu)
+        plotter.set_background(settings().get("interface.view_colour"))
+    elif kind == "colour_gradient":
+        plotter.set_background(settings().get("interface.view_colour"),
+                               top=settings().get("interface.view_colour_top"))  # fmt: skip
     else:
         plotter.set_background(t.view_bottom, top=t.view_top)
 

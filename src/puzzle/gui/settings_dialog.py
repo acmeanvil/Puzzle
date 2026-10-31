@@ -88,10 +88,13 @@ class SettingsDialog(QDialog):
                 heading = QLabel("My own units, per quantity")
                 heading.setStyleSheet("font-weight: bold; margin-top: 8px")
                 form.addRow(heading)
-            box = QComboBox()
-            for text, value in pref.choices:
-                box.addItem(text, value)
-            box.setCurrentIndex(max(box.findData(self.settings.get(pref.key)), 0))
+            if pref.kind == "colour":
+                box = ColourButton(self.settings.get(pref.key), pref.label)
+            else:
+                box = QComboBox()
+                for text, value in pref.choices:
+                    box.addItem(text, value)
+                box.setCurrentIndex(max(box.findData(self.settings.get(pref.key)), 0))
             box.setEnabled(pref.ready)
             if pref.help:
                 box.setToolTip(pref.help)
@@ -201,6 +204,33 @@ class SettingsDialog(QDialog):
         self.agent.send_images = self.images.currentData()
         save_settings(self.agent, self.agent_path)
         self.accept()
+
+
+class ColourButton(QPushButton):
+    """A colour preference: shows the colour, and a click opens the colour picker.
+    `currentData()` gives "#rrggbb", as a choice box gives its value."""
+
+    def __init__(self, colour: str, title: str = "Colour") -> None:
+        super().__init__()
+        self.title = title
+        self._set(colour)
+        self.clicked.connect(self.pick)
+
+    def _set(self, colour: str) -> None:
+        self.colour = colour
+        self.setText(colour)
+        self.setStyleSheet(f"QPushButton {{ background: {colour}; }}")  # the user's colour
+
+    def pick(self) -> None:
+        from PySide6.QtGui import QColor
+        from PySide6.QtWidgets import QColorDialog
+
+        chosen = QColorDialog.getColor(QColor(self.colour), self, self.title)
+        if chosen.isValid():
+            self._set(chosen.name())
+
+    def currentData(self) -> str:  # noqa: N802 - matches QComboBox
+        return self.colour
 
 
 class ProjectUnitsDialog(QDialog):

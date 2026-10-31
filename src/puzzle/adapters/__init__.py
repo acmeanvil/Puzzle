@@ -16,7 +16,10 @@ def available_adapters() -> dict[str, type[SolverAdapter]]:
 
 def check_study(project: Project, study: Study) -> dict[str, list[str]]:
     """Check a study against its primary solver and every shoot-out solver."""
+    from puzzle.bolts import resolved
+
     adapters = available_adapters()
+    project = resolved(project)  # bolts with their types' values (ADR 0050)
     return {
         solver: adapters[solver]().check(project, study)
         if solver in adapters

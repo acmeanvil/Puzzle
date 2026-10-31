@@ -118,6 +118,7 @@ class HistoryStep(BaseModel):
         "rotate",
         "pattern",
         "split",
+        "imprint",
         "enclosure",
         "polyline",
         "sheet",
@@ -150,6 +151,12 @@ class Geometry(ProjectObject):
     scope: Literal["global", "local"] = "global"
     owner: UUID | None = Field(default=None, description="Owning component, for local geometry")
     selections: list[NamedSelection] = Field(default_factory=list)
+    hidden: bool = Field(default=False, description="not drawn in the view; still solved")
+    suppressed: bool = Field(
+        default=False,
+        description="left out of meshing and solving: the parts made of it, and their loads, "
+        "contacts, bolts and materials, are dropped from every study",
+    )
 
     @model_validator(mode="after")
     def _owner_matches_scope(self) -> Geometry:
@@ -866,15 +873,46 @@ class BeamSection(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     selection: str = Field(description="the part, or Part/Selection of its edges")
-    shape: Literal["rectangle", "circle", "tube", "box"] = "rectangle"
+    shape: Literal["rectangle", "circle", "tube", "box", "library"] = "rectangle"
+    standard: Literal["aisc", "en"] | None = Field(
+        default=None, description="library: the section table (ADR 0055)"
+    )
+    designation: str | None = Field(default=None, description="library: W12X26, IPE 300, ...")
     width: Quantity | None = Field(default=None, description="rectangle, box: along the first axis")
     height: Quantity | None = Field(default=None, description="rectangle, box: across it")
     diameter: Quantity | None = Field(default=None, description="circle, tube: outside")
     thickness: Quantity | None = Field(default=None, description="tube, box: the wall")
     orientation: tuple[float, float, float] = (0.0, 1.0, 0.0)
+    # How the first axis is found (ADR 0055): a vector (`orientation`), a coordinate
+    # system's axis, toward a point, along a face's normal or an edge; then made square
+    # to each member and turned by `roll` degrees about it.
+    orient: Literal["vector", "axes", "toward", "normal", "edge"] = "vector"
+    axes: UUID | None = Field(default=None, description="axes: the coordinate system")
+    axes_axis: Literal["x", "y", "z"] = Field(default="y", description="axes: which axis")
+    toward: str | None = Field(default=None, description="toward: a point selection")
+    toward_point: tuple[float, float, float] | None = Field(
+        default=None, description="toward: a point (m), if no selection"
+    )
+    reference: str | None = Field(
+        default=None, description="normal: a face selection; edge: an edge selection"
+    )
+    roll: float = Field(default=0.0, description="degrees about the member, after orienting")
 
     @model_validator(mode="after")
     def _sizes(self) -> BeamSection:
+        if self.shape == "library":
+            from puzzle import sections
+
+            if self.standard is None or not self.designation:
+                raise ValueError("a library section needs its standard and designation")
+            try:
+                found = sections.get(self.standard, self.designation)
+            except KeyError as exc:
+                raise ValueError(exc.args[0]) from None
+            if found.shape not in sections.SUPPORTED:
+                raise ValueError(f"{self.designation}: single angles aren't taken by beams yet "
+                                 "(their principal axes lie at an angle to the legs)")  # fmt: skip
+            return self
         need = {
             "rectangle": ("width", "height"),
             "circle": ("diameter",),
@@ -888,6 +926,8 @@ class BeamSection(BaseModel):
 
     def describe(self) -> str:
         """`rectangle 20 × 40 mm`, as typed (the outline and the tree)."""
+        if self.shape == "library":
+            return f"{self.designation} ({'AISC' if self.standard == 'aisc' else 'EN'})"
         sizes = {
             "rectangle": ("width", "height"),
             "circle": ("diameter",),
@@ -905,6 +945,12 @@ class BeamSection(BaseModel):
     def properties(self) -> dict[str, float]:
         """Area, second moments about the first and second axes, torsion constant (SI)."""
         import math
+
+        if self.shape == "library":
+            from puzzle import sections
+
+            sec = sections.get(self.standard, self.designation)
+            return {"area": sec.A, "i1": sec.I1, "i2": sec.I2, "j": sec.J}
 
         if self.shape in ("circle", "tube"):
             d = self.diameter.to_si()
@@ -942,19 +988,194 @@ class BeamFastener(BaseModel):
     kind: Literal["beam_fastener"] = "beam_fastener"
     name: str
     source: str = Field(description="Part/Selection at one end (a hole face, usually)")
-    target: str = Field(description="Part/Selection at the other end")
-    diameter: Quantity
-    material: UUID
-    ends: Literal["rigid", "distributing"] = "rigid"
+    target: str | None = Field(
+        default=None, description="Part/Selection at the other end; none for a bolt to ground"
+    )
+    ground: bool = Field(
+        default=False,
+        description="the other end is fixed in space (an anchor into a foundation not "
+        "modelled), `ground_length` along the hole's axis toward `ground_direction`",
+    )
+    ground_length: Quantity | None = Field(default=None, description="default 2 d")
+    ground_direction: tuple[float, float, float] = (0.0, 0.0, -1.0)
+    type: UUID | None = Field(
+        default=None,
+        description="a bolt type (ADR 0050); its values fill what the bolt leaves unset",
+    )
+    diameter: Quantity | None = None
+    material: UUID | None = None
+    ends: Literal["rigid", "distributing"] | None = None
     elements: int = Field(default=1, ge=1, description="beam elements along it")
     pretension: Quantity | None = Field(
         default=None, description="a force applied in the first step, then locked"
     )
-    formulation: Literal["beam", "solid"] = Field(
-        default="beam",
+    formulation: Literal["beam", "solid"] | None = Field(
+        default=None,
         description="beam: a two-node Timoshenko beam between the ends, no mesh (Nastran "
         "CBAR with RBE2/RBE3 spiders); solid: a small meshed bolt",
     )
+    group: str | None = Field(default=None, description="a group the bolt is listed under")
+    rule: str | None = Field(default=None, description="the bolt rule that made it (ADR 0050)")
+    through: list[str] = Field(
+        default_factory=list,
+        description="the holes of a stack's middle plates it passes (clearance holes: they "
+        "are clamped by contact, not joined to it)",
+    )
+    bearing: list[str | None] = Field(
+        default_factory=list,
+        description="each end's bearing ring, a face selection (an imprint's annulus) "
+        "the head or nut bears on; unset: the mesh's faces out to the bearing diameter",
+    )
+    joint: Literal["hole_walls", "through_nut", "tapped", "stud_nuts", "stud_tapped"] | None = (
+        Field(default=None, description="what its ends bear on; its type's if unset")
+    )
+
+    @model_validator(mode="after")
+    def _filled(self) -> BeamFastener:
+        """Without a type a bolt carries its own values, and the defaults hold; with one,
+        what it leaves unset comes from the type (`puzzle.bolts.resolve`)."""
+        if self.target is None and not self.ground:
+            raise ValueError(f"fastener '{self.name}' needs its other end, or to be grounded")
+        if self.ground and self.formulation == "solid":
+            raise ValueError(f"fastener '{self.name}': a bolt to ground is a beam bolt")
+        if self.type is None:
+            if self.diameter is None or self.material is None:
+                raise ValueError(f"fastener '{self.name}' needs a diameter and a material, "
+                                 "or a bolt type")  # fmt: skip
+            if self.ends is None:
+                self.ends = "rigid"
+            if self.formulation is None:
+                self.formulation = "beam"
+            if self.joint is None:
+                self.joint = "hole_walls"
+        return self
+
+
+def _named_diameter(size: str | None) -> float | None:
+    """The nominal diameter (m) a size's name gives: M10 → 0.010, 1/2-13 UNC → 0.0127."""
+    from puzzle import bolts
+
+    if not size:
+        return None
+    hit = next((s for s in bolts.SIZES if s.name == size), None)
+    return hit.diameter if hit is not None else None
+
+
+class BoltRule(BaseModel):
+    """Which of a component's holes get bolts (ADR 0050), kept so the rule can be run
+    again when the geometry changes. Holes are the parts' cylindrical faces; a bolt
+    joins two holes of different parts on one axis. Each filter left unset passes all."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    min_diameter: Quantity | None = Field(default=None, description="the hole's, at least")
+    max_diameter: Quantity | None = Field(default=None, description="the hole's, at most")
+    parts: list[str] = Field(default_factory=list, description="only holes of these parts")
+    axis: tuple[float, float, float] | None = Field(default=None, description="holes along it")
+    axis_tolerance: float = Field(default=5.0, gt=0, le=90, description="degrees")
+    coaxial_tolerance: Quantity | None = Field(
+        default=None, description="axes this close are one line (default 0.1 % of the model)"
+    )
+    min_length: Quantity | None = Field(default=None, description="between the holes' centres")
+    max_length: Quantity | None = None
+    type: UUID | None = Field(
+        default=None, description="the bolt type to give; none: matched by hole diameter"
+    )
+    names: str = Field(default="Bolt {n}", description="{n} counts up; {rule} is this name")
+    group: str | None = Field(default=None, description="the group the bolts are listed under")
+    same_part: bool = Field(
+        default=False, description="also join two holes of one part (a split clamp)"
+    )
+    ground_unpaired: bool = Field(
+        default=False, description="a hole with no partner gets a bolt to ground (an anchor)"
+    )
+    ground_direction: tuple[float, float, float] = (0.0, 0.0, -1.0)
+    ground_length: Quantity | None = Field(default=None, description="default 2 d")
+    bearing_faces: bool = Field(
+        default=False,
+        description="imprint each head's and nut's bearing ring in the parts' geometry, "
+        "so the bolts bear on exact faces (ADR 0050)",
+    )
+
+
+class BoltType(ProjectObject):
+    """A kind of bolt, given once for every bolt of that kind (ADR 0050): its size,
+    grade, preload, formulation and ends. A bolt names it (`BeamFastener.type`) and
+    may set any of these itself instead.
+
+    The size is a standard one (`standard` and `size`, from `puzzle.bolts.SIZES`) or
+    `custom`; the stress area is computed from the pitch unless given. The preload is
+    none, a force, a share of the yield load (70 % by default) or a torque with a nut
+    factor (F = T / (K d))."""
+
+    kind: ClassVar[str] = "bolt_type"
+
+    standard: Literal["iso_coarse", "iso_fine", "unc", "unf", "custom"] = "iso_coarse"
+    size: str | None = Field(default=None, description="the standard's name, e.g. M10")
+    diameter: Quantity | None = Field(default=None, description="from the size, or given")
+    pitch: Quantity | None = None
+    stress_area: Quantity | None = Field(
+        default=None, description="computed from the pitch if unset"
+    )
+    bearing_diameter: Quantity | None = Field(
+        default=None, description="the face under the head or nut (joint styles)"
+    )
+    material: UUID = Field(description="the grade, a material with yield and proof strengths")
+    preload: Literal["none", "force", "yield_percent", "torque"] = "yield_percent"
+    preload_percent: float = Field(default=70.0, gt=0, le=100, description="of the yield load")
+    preload_force: Quantity | None = None
+    torque: Quantity | None = None
+    nut_factor: float = Field(default=0.2, gt=0, description="K in F = T / (K d)")
+    formulation: Literal["beam", "solid"] = "beam"
+    ends: Literal["rigid", "distributing"] = "distributing"
+    joint: Literal["hole_walls", "through_nut", "tapped", "stud_nuts", "stud_tapped"] = Field(
+        default="hole_walls",
+        description="what each end bears on: hole walls; a bolt and nut (head and nut "
+        "annuli); a cap screw in a tapped hole (head annulus, thread); a stud with two nuts; "
+        "a stud in a tapped hole with a nut (thread, nut annulus)",
+    )
+    engagement: Quantity | None = Field(
+        default=None, description="a tapped hole's engaged thread length (default 1.5 d)"
+    )
+
+    def dependencies(self) -> list[UUID]:
+        return [self.material]
+
+    @model_validator(mode="after")
+    def _from_the_standard(self) -> BoltType:
+        """A standard size sets the diameter, pitch and bearing diameter (so they always
+        agree with it); a size not of the standard becomes the standard's nearest."""
+        from puzzle import bolts
+
+        if self.standard == "custom":
+            if self.diameter is None:
+                raise ValueError(f"bolt type '{self.name}': a custom size needs its diameter")
+            return self
+        found = bolts.size(self.standard, self.size) if self.size else None
+        if found is None:
+            options = bolts.sizes(self.standard)
+            if self.size is None and self.diameter is None:
+                raise ValueError(f"bolt type '{self.name}': choose a size")
+            given = self.diameter
+            want = given.to_si() if given is not None else _named_diameter(self.size)
+            found = min(options, key=lambda o: abs(o.diameter - (want or 0.0)))
+        inch = self.standard in ("unc", "unf")
+        unit, per = ("in", 0.0254) if inch else ("mm", 1e-3)
+        self.size = found.name
+        self.diameter = Quantity(value=round(found.diameter / per, 6), unit=unit)
+        self.pitch = Quantity(value=round(found.pitch / per, 6), unit=unit)
+        self.bearing_diameter = Quantity(value=round(found.bearing / per, 6), unit=unit)
+        self.stress_area = None  # from the pitch, by the standard's formula
+        return self
+
+    @model_validator(mode="after")
+    def _preload_given(self) -> BoltType:
+        if self.preload == "force" and self.preload_force is None:
+            raise ValueError(f"bolt type '{self.name}': a force preload needs its force")
+        if self.preload == "torque" and self.torque is None:
+            raise ValueError(f"bolt type '{self.name}': a torque preload needs its torque")
+        return self
 
 
 class Component(ProjectObject):
@@ -984,6 +1205,9 @@ class Component(ProjectObject):
     connectors: list[BeamFastener] = Field(
         default_factory=list, description="fasteners between parts, without geometry (ADR 0027)"
     )
+    bolt_rules: list[BoltRule] = Field(
+        default_factory=list, description="which holes get bolts, to run again (ADR 0050)"
+    )
 
     def dependencies(self) -> list[UUID]:
         amplitudes = [
@@ -998,14 +1222,17 @@ class Component(ProjectObject):
             self.mesh,
             *(m.material for m in self.materials),
             *amplitudes,
-            *(c.material for c in self.connectors),
+            *(c.material for c in self.connectors if c.material is not None),
+            *(c.type for c in self.connectors if c.type is not None),
+            *(r.type for r in self.bolt_rules if r.type is not None),
+            *(b.axes for b in self.beam_sections if b.axes is not None),
         ]
 
     def used_selections(self) -> list[str]:
         used = [a.selection for a in self.materials]
         used += [s for c in self.contacts for s in (c.source, c.target)]
         used += [f.selection for p in self.physics for f in p.features]
-        used += [s for c in self.connectors for s in (c.source, c.target)]
+        used += [s for c in self.connectors for s in (c.source, c.target) if s is not None]
         used += [b.selection for b in self.beam_sections]
         used += [s.selection for s in self.shell_sections]
         return used
@@ -1551,6 +1778,7 @@ OBJECT_TYPES: tuple[type[ProjectObject], ...] = (
     CoordinateSystem,
     ConstructionGeometry,
     SectionCut,
+    BoltType,
     SettingsPreset,
     TreeGroup,
     TreeLabels,
@@ -1647,6 +1875,26 @@ class Project:
         """Return human-readable problems; an empty list means the project is consistent."""
         return [p.message for p in self.problems()]
 
+    def _suppressed(self, study: Study) -> list:
+        """A study whose component has every part suppressed has nothing to solve."""
+        from puzzle.errors import Problem
+        from puzzle.suppress import suppressed_parts
+
+        comp = self.objects.get(study.component)
+        if not isinstance(comp, Component) or not comp.parts:
+            return []
+        if len(suppressed_parts(self, comp)) < len(comp.parts):
+            return []
+        return [
+            Problem(
+                "suppressed",
+                study.name,
+                f"study '{study.name}': every part of '{comp.name}' is suppressed, so there is "
+                "nothing to solve (unsuppress one under Geometry)",
+                {"component": comp.name},
+            )
+        ]
+
     def _unconstrained(self, study: Study) -> list:
         """A static or transient structural solve with nothing holding the body: the
         stiffness is singular, and CalculiX still returns a "result" (kilometres of
@@ -1665,6 +1913,7 @@ class Project:
             "compression_only_support",
         )
         held = any(f.type in holding for p in solid for f in p.features)
+        held = held or any(c.ground for c in comp.connectors)  # bolts to ground (ADR 0050)
         steps = [
             s
             for s in study.solve_steps()
@@ -1753,6 +2002,7 @@ class Project:
         known = self.parameter_names()
         for study in self.of_type(Study):
             out += self._unconstrained(study)
+            out += self._suppressed(study)
             seen_solve = False
             for step in study.steps:
                 if isinstance(step, SolveStep):

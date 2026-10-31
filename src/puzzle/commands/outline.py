@@ -6,8 +6,13 @@ their units. `outline(project)` is meant to stay short enough for a small model.
 
 from __future__ import annotations
 
+import contextlib
+
+from puzzle.bolts import resolve
+from puzzle.errors import PuzzleError
 from puzzle.model.schema import (
     Amplitude,
+    BoltType,
     Component,
     ConstructionGeometry,
     CoordinateSystem,
@@ -51,6 +56,21 @@ def outline(project: Project, *, ids: bool = False, runs=None) -> str:
         props = _values(m.properties)
         tables = f"; tables: {', '.join(sorted(m.tables))}" if m.tables else ""
         lines.append(head("Material", m) + f": {props}{tables}")
+    for t in project.of_type(BoltType):  # ADR 0050
+        grade = project.objects.get(t.material)
+        if t.preload == "force":
+            preload = f"preload {_q(t.preload_force)}"
+        elif t.preload == "torque":
+            preload = f"torque {_q(t.torque)}, K {t.nut_factor:g}"
+        elif t.preload == "yield_percent":
+            preload = f"preload {t.preload_percent:g} % of yield"
+        else:
+            preload = "no preload"
+        lines.append(
+            head("Bolt type", t) + f": {t.size or _q(t.diameter)} ({t.standard}), "
+            f"{grade.name if grade is not None else '?'}, {preload}, {t.formulation}, "
+            f"{t.ends} ends"
+        )
     for r in project.of_type(MeshRecipe):
         size = f", global {_q(r.global_size)}" if r.global_size else ""
         mesher = f" ({r.mesher})" if r.mesher != "gmsh" else ""
@@ -70,11 +90,16 @@ def outline(project: Project, *, ids: bool = False, runs=None) -> str:
             lines.append(
                 f"    contact {k.name}: {k.type} {k.source} ~ {k.target}{mu} ({k.capability})"
             )
-        for f in c.connectors:  # ADR 0027
+        for f in c.connectors:  # ADR 0027; a bolt type's values filled in (ADR 0050)
+            typed = f" (type {names.get(f.type, '?')})" if f.type is not None else ""
+            with contextlib.suppress(PuzzleError):  # no yield strength: shown unresolved
+                f = resolve(project, f)
             lines.append(
-                f"    fastener {f.name}: {f.source} -> {f.target}, diameter {_q(f.diameter)}, "
+                f"    fastener {f.name}: {f.source} -> {f.target or 'ground'}, "
+                f"diameter {_q(f.diameter)}, "
                 f"{names.get(f.material, '?')}, {f.ends} ends"
                 + (f", pretension {_q(f.pretension)}" if f.pretension else "")
+                + typed
             )
 
         for s in c.shell_sections:  # ADR 0027 shells

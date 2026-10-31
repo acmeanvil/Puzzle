@@ -26,6 +26,7 @@ from puzzle.adapters.common import (
     check_contacts,
     check_dynamics,
     cylindrical_expressions,
+    fastener_selections,
     frequency_list,
     globalize,
     initial_temperature,
@@ -168,7 +169,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         dict.fromkeys(
             [a.selection for a in comp.materials]
             + [f.selection for f in features + preload + springs + lifting + bolts]
-            + [sel for c in fasteners for sel in (c.source, c.target)]
+            + fastener_selections(fasteners)
             + tie_groups
         )
     )
@@ -283,6 +284,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         for c in fasteners
         if c.ends == "distributing" or c.formulation == "beam"
         for sel in (c.source, c.target)
+        if sel is not None
     }
     unnoded = sorted({g for gs in excluded.values() for g in gs} - noded)
     out = [
@@ -339,6 +341,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
                             for c in fasteners
                             if c.ends == "distributing" or c.formulation == "beam"
                             for sel in (c.source, c.target)
+                            if sel is not None
                         }
                     )
                     + [
@@ -766,7 +769,7 @@ def _with_bolts(mesh: Mesh, fasteners, original: Mesh, names: dict, held=None):
         SectionCut,
         bolt_mesh,
         check_rigid_ends,
-        fastener_end,
+        fastener_ends,
         fastener_frame,
         split_bolt,
     )
@@ -781,7 +784,7 @@ def _with_bolts(mesh: Mesh, fasteners, original: Mesh, names: dict, held=None):
     ends, pretensioned = [], []
     for i, f in enumerate(fasteners, start=1):
         what = f"fastener '{f.name}'"
-        a, b = (fastener_end(s, original, what) for s in (f.source, f.target))
+        a, b = fastener_ends(f, original, what)
         axis, side = fastener_frame(a.centre, b.centre)
         tight = f.pretension is not None
         if f.formulation == "beam":  # a POU_D_T line between the ends' centres, no mesh
@@ -893,6 +896,12 @@ def _fastener_loads(ends: list[dict], fasteners, names: dict) -> dict[str, list[
         if end.get("beam"):  # the beam's end node is the spider's master
             for label, sel in (("A", f.source), ("B", f.target)):
                 master = f"E{i}{label}"
+                if sel is None:  # a bolt to ground (ADR 0050): its far end held
+                    out.setdefault("DDL_IMPO", []).append(
+                        f"_F(GROUP_NO='{master}', DX=0.0, DY=0.0, DZ=0.0, DRX=0.0, DRY=0.0, "
+                        "DRZ=0.0)"
+                    )
+                    continue
                 if f.ends == "rigid":
                     out["LIAISON_SOLIDE"].append(f"_F(GROUP_NO=('{names[sel]}', '{master}'))")
                 else:
@@ -996,7 +1005,19 @@ def _discrete_cara(
     ]
     sections = []
     for group, b in beams:  # ADR 0027 beams: POU_D_T sections; local y is the first axis
-        if b.shape == "rectangle":
+        if b.shape == "library":  # ADR 0055: the table's values; IY about local y, strong
+            from puzzle import sections as tables
+
+            sec = tables.get(b.standard, b.designation)
+            what = (
+                "SECTION='GENERALE', CARA=('A', 'IY', 'IZ', 'JX', 'AY', 'AZ'), VALE=("
+                + ", ".join(
+                    f"{v:.10g}"
+                    for v in (sec.A, sec.I1, sec.I2, sec.J, sec.A / sec.A1, sec.A / sec.A2)
+                )  # fmt: skip
+                + ")"
+            )
+        elif b.shape == "rectangle":
             what = (
                 f"SECTION='RECTANGLE', CARA=('HY', 'HZ'), VALE=({b.width.to_si():.10g}, "
                 f"{b.height.to_si():.10g})"
@@ -1311,7 +1332,7 @@ def _contact_exclusions(contacts, fasteners, mesh: Mesh, names: dict) -> dict[st
     matrix singular (LAGS_F1 on the bolted bracket), so they are left out of the
     contact (SANS_GROUP_NO), as Code_Aster advises. CalculiX needs no such exclusion.
     """
-    tied = sorted({sel for f in fasteners for sel in (f.source, f.target)})
+    tied = sorted(set(fastener_selections(fasteners)))
     out = {}
     for c in contacts:
         slave = mesh.groups[c.source].node_ids

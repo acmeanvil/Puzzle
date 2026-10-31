@@ -79,6 +79,12 @@ def run_study(
     `solver` runs one of the study's shoot-out solvers instead, and `meshed` reuses a
     mesh already generated for this study (a shoot-out runs every solver on one mesh).
     """
+    from puzzle.bolts import resolved
+
+    project = resolved(project)  # bolts take their types' values (ADR 0050)
+    from puzzle.suppress import applied
+
+    project = applied(project)  # suppressed geometry is left out of meshing and solving
     study = project.get(study_id, Study)
     if solver is not None and solver != study.solver:
         if solver not in study.all_solvers():
@@ -168,6 +174,15 @@ def run_study(
         for t in project.transfers_into(study.id)
     ]
     lap("transfers")
+    from puzzle.bolts import with_joints
+
+    # ADR 0050: bolts that bear on a head or nut annulus or a tapped thread get those
+    # faces as mesh groups, and their ends point at them.
+    written, project = with_joints(project, study.component, meshed.mesh)
+    from puzzle.beams import with_orientations
+
+    # ADR 0055: beams oriented by a system, a point, a face or an edge, as vectors.
+    written, project = with_orientations(project, study.component, written)
     # An adapter that writes one solve step per input runs a multi-step study one step
     # at a time on the same mesh; the steps are independent analyses.
     steps = study.solve_steps()
@@ -197,7 +212,7 @@ def run_study(
         # sorts them out itself.
         indices = [n - 1, n] if limit is not None and _preloaded(steps, n) else [n]
         seen = _in_step(project, study.component, indices) if limit is not None else project
-        input_file = adapter.write_input(seen, part, meshed.mesh, where, inputs)
+        input_file = adapter.write_input(seen, part, written, where, inputs)
         lap("write")
         job = run_job(
             adapter.command(input_file), where, runtime, on_output=on_output, timeout_s=timeout_s

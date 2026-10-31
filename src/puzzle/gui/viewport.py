@@ -24,6 +24,30 @@ HIGHLIGHT = "#ff8c00"
 PICKED = "#e53e3e"
 
 
+def without_parts(mesh: Mesh, parts, boundaries: dict | None = None) -> Mesh:
+    """The mesh with these parts' elements left out (hidden or suppressed geometry). A
+    block goes when it lies on one of those parts' volumes or faces (`boundaries`: a
+    volume's faces; a preview has faces only), or when all its nodes are theirs; a face
+    shared with a shown part stays."""
+    import dataclasses
+
+    groups = [mesh.groups[p] for p in parts if p in mesh.groups]
+    if not groups:
+        return mesh
+    volumes = {e for g in groups for e in g.entities}
+    faces = {f for v in volumes for f in (boundaries or {}).get(v, [])}
+    shown = {f for v, fs in (boundaries or {}).items() if v not in volumes for f in fs}
+    gone_entities = volumes | (faces - shown)
+    owned = [g.node_ids for g in groups if len(g.node_ids)]
+    owned += [b.connectivity.ravel() for b in mesh.blocks if b.entity in gone_entities]
+    gone = np.unique(np.concatenate(owned)) if owned else np.zeros(0, np.int64)
+    kept = [
+        b for b in mesh.blocks
+        if b.entity not in gone_entities and not np.isin(b.connectivity, gone).all()
+    ]  # fmt: skip
+    return dataclasses.replace(mesh, blocks=kept)
+
+
 def entity_surface(mesh: Mesh):
     """Every surface element as one pickable surface; cell data `entity` indexes the
     returned list of Gmsh entities (dim, tag) the faces belong to."""
@@ -721,6 +745,8 @@ class Viewport(QWidget):
         self.mesh: Mesh | None = None
         self.highlight: str | None = None
         self.highlight_entities: list[tuple[int, int]] = []
+        # Which of a mesh's parts not to draw (the window: hidden or suppressed geometry).
+        self.hidden_parts = None
         self.surface, self.entities = None, []
         self.picked: list[tuple[int, int]] = []
         self.pick_history: list[list[tuple[int, int]]] = []  # undo while picking
@@ -781,6 +807,13 @@ class Viewport(QWidget):
         self.glyphs, self._glyph_actors, self.pins = [], [], []
         self._clear_labels()
         self._update_click()
+        hidden = sorted(self.hidden_parts(mesh)) if self.hidden_parts else []
+        if hidden:  # hidden and suppressed geometry isn't drawn
+            key = (id(mesh), tuple(hidden))
+            if getattr(self, "_shown_key", None) != key:
+                self._shown_key = key
+                self._shown_mesh = without_parts(mesh, hidden, self.boundaries)
+            mesh = self._shown_mesh
         if mesh is not self.mesh:
             self.mesh = mesh
             self.surface, self.entities = entity_surface(mesh)
@@ -1317,11 +1350,16 @@ class Viewport(QWidget):
                 continue
             if not len(g.points):
                 continue
+            if g.kind == "hex":  # a bolt's head or nut (ADR 0050): a hex prism
+                a, b = (np.asarray(p, float) for p in g.points[:2])
+                prism = pv.Cylinder(center=(a + b) / 2, direction=b - a, radius=g.radius,
+                                    height=float(np.linalg.norm(b - a)), resolution=6)  # fmt: skip
+                self._add_bolt_part(prism, g, name)
+                continue
             if g.kind == "tube":  # a fastener (ADR 0027): a bar between its two ends
                 a, b = (np.asarray(p, float) for p in g.points[:2])
-                tube = pv.Tube(pointa=a, pointb=b, radius=g.radius, n_sides=16)
-                self.plotter.add_mesh(tube, color=g.colour, name=name, reset_camera=False)
-                self._glyph_actors.append(name)
+                tube = pv.Tube(pointa=a, pointb=b, radius=g.radius, n_sides=16, capping=True)
+                self._add_bolt_part(tube, g, name)
                 continue
             if g.kind == "arrow":  # arrows end on the face: their tails stand off it
                 starts = g.points - g.directions * size
@@ -1336,6 +1374,24 @@ class Viewport(QWidget):
             arrows = cloud.glyph(orient="vectors", scale=False, factor=factor, geom=geom)
             self.plotter.add_mesh(arrows, color=g.colour, name=name, reset_camera=False)
             self._glyph_actors.append(name)
+
+    def _add_bolt_part(self, geom, g, name: str) -> None:
+        """A bolt's shank, head or nut (ADR 0050): its colour and opacity, and its outline
+        (rims and corners, not every facet) when Settings > Geometry > Bolt edges is on."""
+        self.plotter.add_mesh(geom, color=g.colour, opacity=g.opacity, name=name,
+                              reset_camera=False)  # fmt: skip
+        self._glyph_actors.append(name)
+        if g.edges:
+            outline = geom.extract_feature_edges(
+                feature_angle=30, boundary_edges=True, non_manifold_edges=False,
+                manifold_edges=False,
+            )  # fmt: skip
+            edge = f"{name}-edges"
+            darker = "#" + "".join(f"{int(int(g.colour[i:i + 2], 16) * 0.6):02x}"
+                                   for i in (1, 3, 5))  # fmt: skip
+            self.plotter.add_mesh(outline, color=darker, line_width=1.5, name=edge,
+                                  reset_camera=False, opacity=1.0)  # fmt: skip
+            self._glyph_actors.append(edge)
 
     def set_cut(self, cut) -> None:
         """A section cut on results (`post.cuts.Cut`), or None; the result is redrawn."""

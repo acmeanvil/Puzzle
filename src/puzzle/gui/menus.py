@@ -77,6 +77,10 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
             add("New Cartesian system…", lambda: new_axes(window, "cartesian"))
             add("New cylindrical system…", lambda: new_axes(window, "cylindrical"))
             add("New spherical system…", lambda: new_axes(window, "spherical"))
+        elif node.label == "Bolt types":  # ADR 0050
+            from puzzle.gui.bolt_types import new_bolt_type
+
+            add("New bolt type…", lambda: new_bolt_type(window))
         elif node.label == "Construction geometry":  # ADR 0046
             from puzzle.gui import construction
 
@@ -127,6 +131,9 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         add("Add shell thickness…", lambda: add_shell_thickness(window, obj))
         if len(obj.parts) > 1:
             add("Fasteners from holes…", lambda: fasteners_from_holes(window, obj))
+            from puzzle.gui.bolt_generator_panel import generate_bolts
+
+            add("Generate bolts…", lambda: generate_bolts(window, obj))
         physics = menu.addMenu("Add physics")
         present = {p.type for p in obj.physics}
         for kind in CATALOG:
@@ -197,6 +204,13 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         add("Check geometry", lambda: check_geometry_of(window, obj))
         if obj.selections:
             add("Reattach selections…", lambda: reattach_selections(window, obj))
+        menu.addSeparator()  # what the view shows, and what studies solve
+        add("Show" if obj.hidden else "Hide", lambda: show_geometry(window, [obj], obj.hidden))
+        add("Hide all others", lambda: hide_others(window, obj))
+        add("Show all", lambda: show_all(window))
+        add("Swap hidden", lambda: swap_hidden(window))
+        add("Unsuppress" if obj.suppressed else "Suppress",
+            lambda: suppress_geometry(window, obj, not obj.suppressed))  # fmt: skip
         menu.addSeparator()
         add("Delete", window.delete_selected)
     elif isinstance(obj, Geometry) and node.kind == "operation":
@@ -838,3 +852,52 @@ def _uuid(text: str):
         return UUID(text)
     except ValueError:
         return text
+
+
+# --- hiding and suppressing geometry --------------------------------------------------------
+# Hidden: not drawn, still meshed and solved. Suppressed: left out of meshing and solving
+# (puzzle.suppress), and not drawn. Each is one command batch, so it undoes.
+
+
+def _set_flags(window, changes: list[tuple]) -> object:
+    from puzzle.commands.model import Edit, EditOp
+
+    edits = [Edit(object=str(g.id), ops=[EditOp(op="set", path=field, value=value)])
+             for g, field, value in changes if getattr(g, field) != value]  # fmt: skip
+    if not edits:
+        return None
+    out = window.submit(edits[0]) if len(edits) == 1 else window.submit_batch(edits)
+    redraw = getattr(window, "_selected", None)
+    if redraw is not None:  # the view shows what it held, now without the hidden parts
+        redraw()
+    return out
+
+
+def _geometries(window):
+    from puzzle.model.schema import Geometry
+
+    return list(window.session.project.of_type(Geometry))
+
+
+def show_geometry(window, geometries, shown: bool):
+    """Show (or hide) these geometries in the view."""
+    return _set_flags(window, [(g, "hidden", not shown) for g in geometries])
+
+
+def hide_others(window, keep):
+    """Every geometry hidden but this one, which is shown."""
+    return _set_flags(window, [(g, "hidden", g.id != keep.id) for g in _geometries(window)])
+
+
+def show_all(window):
+    return _set_flags(window, [(g, "hidden", False) for g in _geometries(window)])
+
+
+def swap_hidden(window):
+    """What is hidden is shown, and what is shown is hidden."""
+    return _set_flags(window, [(g, "hidden", not g.hidden) for g in _geometries(window)])
+
+
+def suppress_geometry(window, geometry, suppressed: bool):
+    """Leave a geometry out of meshing and solving (or bring it back)."""
+    return _set_flags(window, [(geometry, "suppressed", suppressed)])

@@ -42,6 +42,9 @@ Read results with `result_summary` first, then `result_stats`, `result_value_at`
 `result_integral` or `result_total` (reaction forces), and `render` to look.
 Numbers come only from solver runs: label your own estimates as estimates.
 Errors carry a `code` and `details`.
+
+Before a task in an area that has a skill (bolts, beam sections, ...), read it with
+`skill_read`: it gives the steps, tools and pitfalls. `skills_list` lists them.
 """
 
 
@@ -73,6 +76,25 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
 
     server = MCPServer(name="puzzle", instructions=INSTRUCTIONS)
     tool = server.tool
+
+    # --- skills (ADR 0057) ---------------------------------------------------------
+
+    @tool(description="The skills: one line each, saying when to read it (`skill_read`).")
+    def skills_list() -> dict[str, Any]:
+        from puzzle.agent.skills import skills
+
+        return {"skills": [{"name": s.name, "when": s.description, "adr": s.adr}
+                           for s in skills().values()]}  # fmt: skip
+
+    @tool(description="One skill's how-to: the steps, the tools and their arguments, units "
+          "and the usual mistakes, for a task in its area.")  # fmt: skip
+    def skill_read(name: str) -> dict[str, Any]:
+        from puzzle.agent.skills import read
+
+        try:
+            return {"skill": read(name)}
+        except KeyError as exc:
+            raise ToolError(json.dumps({"code": "not_found", "message": exc.args[0]})) from None
 
     # --- the model ------------------------------------------------------------------
 
@@ -188,6 +210,89 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
             ],
             "make_bonded": batch,
         }
+
+    @tool(
+        description="Propose bolts for a component's holes (ADR 0050). Holes are the "
+        "parts' cylindrical faces; a bolt joins two holes of different parts on one axis. "
+        "With a rule (`rule` names it): hole diameters `min_diameter`/`max_diameter` (m), "
+        "`parts`, an `axis` [x, y, z] (within 5 degrees), lengths between the holes' "
+        "centres `min_length`/`max_length` (m); or `first` and `second`, two face "
+        "selections (Part/Selection) whose holes pair up. `bolt_type` is a bolt type's "
+        "name, else each hole gets the largest type that fits; `names` a pattern with {n}; "
+        "`group` where they are listed. `ground_unpaired`: a hole with no partner gets a "
+        "bolt to ground (an anchor, `ground_length` m below it, default 2 d); `same_part`: "
+        "two holes of one part may be joined; `bearing_faces`: imprint the rings under heads "
+        "and nuts in the parts' geometry. Returns the proposals, the bolts the rule made "
+        "before that have lost their holes (`stale`), and `make_bolts`, the batch to pass "
+        "to submit (face selections, bolts, the rule kept on the component). Nothing is "
+        "made here."
+    )
+    @guarded
+    def bolts_generate(
+        component: str,
+        rule: str = "Bolt rule",
+        min_diameter: float | None = None,
+        max_diameter: float | None = None,
+        parts: list[str] | None = None,
+        axis: list[float] | None = None,
+        min_length: float | None = None,
+        max_length: float | None = None,
+        first: str | None = None,
+        second: str | None = None,
+        bolt_type: str | None = None,
+        names: str = "Bolt {n}",
+        group: str | None = None,
+        material: str | None = None,
+        ground_unpaired: bool = False,
+        ground_length: float | None = None,
+        same_part: bool = False,
+        bearing_faces: bool = False,
+    ) -> dict[str, Any]:
+        from puzzle import bolt_generator as gen
+        from puzzle.commands import resolve
+        from puzzle.model.schema import BoltRule, BoltType, Component, Material, Quantity
+
+        s = session()
+        comp = resolve(s.project, component, Component)
+        kind = resolve(s.project, bolt_type, BoltType) if bolt_type else None
+        grade = resolve(s.project, material, Material) if material else None
+        metres = lambda v: Quantity(value=v, unit="m") if v is not None else None  # noqa: E731
+        if first and second:
+            found = gen.by_sets(s.project, comp, root, first, second)
+            the_rule = None
+        else:
+            the_rule = BoltRule(
+                name=rule, min_diameter=metres(min_diameter), max_diameter=metres(max_diameter),
+                parts=parts or [], axis=tuple(axis) if axis else None,
+                min_length=metres(min_length), max_length=metres(max_length),
+                type=kind.id if kind else None, names=names, group=group,
+                ground_unpaired=ground_unpaired, ground_length=metres(ground_length),
+                same_part=same_part, bearing_faces=bearing_faces,
+            )  # fmt: skip
+            found = gen.by_rule(s.project, comp, root, the_rule)
+        planned = gen.plan(s.project, comp, found, the_rule, kind)
+        try:
+            given = str(grade.id) if grade else None
+            batch = gen.commands(s.project, comp, planned, material=given, rule=the_rule)
+        except ValueError as exc:  # no type fits a hole and no material was given
+            raise PuzzleError(str(exc), code="invalid") from None
+        return {
+            "proposals": [
+                {
+                    "name": p.name,
+                    "holes": [f"{p.pair.source_part}/{p.pair.source_face}",
+                              f"{p.pair.target_part}/{p.pair.target_face}"],
+                    "hole_diameter_m": p.pair.diameter,
+                    "length_m": p.length,
+                    "bolt_type": p.type_name,
+                    "note": p.note,
+                }
+                for p in planned.add
+            ],
+            "already_there": planned.kept,
+            "stale": planned.stale,
+            "make_bolts": [c.model_dump(mode="json") for c in batch],
+        }  # fmt: skip
 
     @tool(
         description="Mesh a component with its recipe and report the mesh (ADR 0019): node "
@@ -698,6 +803,52 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
             }
             for r in ResultStore(root / RESULTS_DIR).runs()
         ]
+
+    @tool(
+        description="Each bolt's loads in a study's latest run (ADR 0050), worst first: "
+        "axial (N, + tension), shear (N), torsion and bending at each end (N m), the "
+        "stress |N|/As + M/Z (Pa) and its share of the grade's proof and yield strengths."
+    )
+    @guarded
+    def bolt_results(study: str, step: int | None = None) -> dict[str, Any]:
+        from puzzle.bolts import bolt_results as found
+        from puzzle.project.layout import RESULTS_DIR
+        from puzzle.results.store import ResultStore
+
+        record, _, _ = latest(study)
+        rows = found(session().project, ResultStore(root / RESULTS_DIR), record.run_id, step)
+        return {"run_id": record.run_id, "bolts": [
+            {"name": b.name, "axial_N": b.loads.axial[0], "shear_N": b.loads.shear[0],
+             "torsion_Nm": b.loads.torsion[0], "bending_first_end_Nm": b.loads.bending[0],
+             "bending_second_end_Nm": b.loads.bending[-1], "stress_Pa": b.stress,
+             "of_proof": b.proof, "of_yield": b.yielding}
+            for b in rows
+        ]}  # fmt: skip
+
+    @tool(
+        description="Standard structural sections (ADR 0055): `standard` aisc or en; with no "
+        "`family`, the families; with one, its designations (filtered by `contains`), each "
+        "with depth and width (m), A (m^2), I strong and weak (m^4), J (m^4) and mass (kg/m)."
+    )
+    @guarded
+    def sections_find(standard: str, family: str | None = None,
+                      contains: str | None = None) -> dict[str, Any]:  # fmt: skip
+        from puzzle import sections
+
+        if standard not in sections.STANDARDS:
+            raise PuzzleError(f"no section standard '{standard}': aisc or en", code="invalid")
+        if family is None:
+            return {"families": sections.families(standard)}
+        out = []
+        for d in sections.designations(standard, family):
+            if contains and contains.lower() not in d.lower():
+                continue
+            sec = sections.get(standard, d)
+            out.append({"designation": d, "depth_m": sec.depth, "width_m": sec.width,
+                        "A_m2": sec.A, "I_strong_m4": sec.I1, "I_weak_m4": sec.I2,
+                        "J_m4": sec.J, "mass_kg_m": sec.mass,
+                        "beams_take_it": sec.shape in sections.SUPPORTED})  # fmt: skip
+        return {"sections": out[:60], "more": max(0, len(out) - 60)}
 
     @tool(description="Every step and field of a study's latest run, in a few numbers.")
     @guarded

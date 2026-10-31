@@ -129,6 +129,8 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
             if b.dim != own.dim:  # the part's own elements: solids, beams or shells
                 continue
             ccx_type, order = ELEMENTS[b.element]
+            if ccx_type == "B32" and _closed_sections(comp, part.name):
+                ccx_type = "B32R"  # CalculiX expands BOX and PIPE sections on B32R only
             conn = b.connectivity[:, order] if order else b.connectivity
             for cut in cuts.values():
                 rows = np.flatnonzero(np.isin(b.ids, list(cut.moved)))
@@ -364,6 +366,44 @@ def _prestress_steps(project: Project, study: Study, inputs) -> list[SolveStep]:
     return steps
 
 
+def _closed_sections(comp: Component, part: str) -> bool:
+    """Whether a line body's sections are boxes or pipes (typed, or table HSS and pipe):
+    CalculiX expands those on B32R elements only."""
+    from puzzle import sections as tables
+
+    for b in comp.beam_sections:
+        if b.selection.split("/", 1)[0] != part:
+            continue
+        if b.shape in ("box", "tube"):
+            return True
+        if b.shape == "library" and tables.get(b.standard, b.designation).shape in ("RHS", "CHS"):
+            return True
+    return False
+
+
+def _library_section(b) -> tuple[str, list[float]]:
+    """A table section CalculiX can expand (ADR 0055): rectangular HSS as BOX and round
+    HSS or pipe as PIPE, of the design wall. Its U1 beam would take an I's bending but
+    give its torsion G (I11 + I22) / L, far stiffer than G J, so open shapes go to
+    Code_Aster."""
+    from puzzle import sections as tables
+
+    sec = tables.get(b.standard, b.designation)
+    t = sec.sizes.get("tdes") or sec.sizes.get("t")
+    if sec.shape == "RHS" and t:
+        return "BOX", [sec.sizes["B"], sec.sizes["Ht"], t, t, t, t]
+    if sec.shape == "CHS":
+        od = sec.sizes["OD"]
+        wall = t or (od - sec.sizes["ID"]) / 2
+        return "PIPE", [od / 2, wall]
+    raise InputError(
+        f"CalculiX can't take {b.designation} (an open section): its beams expand into "
+        "solids of closed outlines only, and its general beam gets an open section's "
+        "torsion wrong. Run this study on Code_Aster, which takes every table section",
+        code="unsupported",
+    )
+
+
 def _beam_sections(comp: Component, mesh: Mesh, selection: str, material: str) -> list[str]:
     """*BEAM SECTION for each section on a line body (ADR 0027). CalculiX expands beams
     into solids: a round section's CIRC takes its diameter twice, and needs B32."""
@@ -381,7 +421,9 @@ def _beam_sections(comp: Component, mesh: Mesh, selection: str, material: str) -
         if group is None:
             raise InputError(f"a beam section names '{b.selection}', which is not meshed")
         quadratic = all(blk.element == "line3" for blk in group.blocks(mesh) if blk.dim == 1)
-        if b.shape == "rectangle":
+        if b.shape == "library":  # ADR 0055: closed shapes expand; open ones can't
+            kind, sizes = _library_section(b)
+        elif b.shape == "rectangle":
             kind, sizes = "RECT", [b.width.to_si(), b.height.to_si()]
         elif b.shape == "circle":
             if not quadratic:
@@ -397,6 +439,12 @@ def _beam_sections(comp: Component, mesh: Mesh, selection: str, material: str) -
         else:
             t = b.thickness.to_si()
             kind, sizes = "BOX", [b.width.to_si(), b.height.to_si(), t, t, t, t]
+        if kind in ("BOX", "PIPE") and not quadratic:
+            raise InputError(
+                "CalculiX takes box and pipe beam sections on second-order beams (B32R): "
+                "set the mesh recipe's element order to 2",
+                code="unsupported",
+            )
         out += [
             f"*BEAM SECTION, ELSET={set_name('E', b.selection)}, MATERIAL={material}, "
             f"SECTION={kind}",
@@ -706,6 +754,9 @@ def _step(
         for f in ph.features
     ):
         extra["*BOUNDARY"] = ["N_SPRING_GROUND, 1, 3, 0."]  # the springs' grounds
+    if "solid_mechanics" in solved and any(c.ground for c in comp.connectors):
+        # ADR 0050: bolts to ground end at a node held in all six dofs, in every step.
+        extra.setdefault("*BOUNDARY", []).append("N_BOLT_GROUND, 1, 6, 0.")
     locked: list[str] = []
     if "solid_mechanics" in solved and step.type != "modal":
         for f in [f for ph in comp.physics for f in ph.features if f.type in PRETENSION]:
@@ -910,7 +961,7 @@ def _fasteners(project: Project, comp: Component, mesh: Mesh, first_node: int):
     for the reader. -> (lines, nodes used, elements used, ends info)"""
     from puzzle.adapters.common import (
         bolt_mesh,
-        fastener_end,
+        fastener_ends,
         fastener_frame,
         rbe3_rows,
         split_bolt,
@@ -932,10 +983,10 @@ def _fasteners(project: Project, comp: Component, mesh: Mesh, first_node: int):
     _type, order = ELEMENTS["tet10"]
     for i, f in enumerate(comp.connectors, start=1):
         what = f"fastener '{f.name}'"
-        a, b = (fastener_end(s, mesh, what) for s in (f.source, f.target))
+        a, b = fastener_ends(f, mesh, what)
         axis, side = fastener_frame(a.centre, b.centre)
         if f.ends == "rigid":
-            for sel in (f.source, f.target):
+            for sel in (s for s in (f.source, f.target) if s is not None):
                 if held & {int(n) for n in mesh.groups[sel].node_ids}:
                     raise InputError(
                         f"{what}: '{sel}' shares nodes with a fixed or displaced selection; "
@@ -1039,6 +1090,10 @@ def _beam_bolt(project, f, i: int, a, b, axis, side, node: int, elem: int, held,
         move, turn = node, node + 1  # at the middle: the spider's translation and rotation
         node += 2
         rows += [_node_row(move, middle), _node_row(turn, middle)]
+        if name == "B" and f.ground:  # a bolt to ground: the far end held (each step)
+            out += ["*NSET, NSET=N_BOLT_GROUND", f"{move}, {turn}"]
+            spiders[name] = (move, turn)
+            continue
         if f.ends == "rigid":
             out += [
                 f"*NSET, NSET=N_FB{i}{name}",

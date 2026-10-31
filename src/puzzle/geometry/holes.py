@@ -10,7 +10,7 @@ fasteners.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -25,6 +25,7 @@ class HolePair:
     target_face: str
     diameter: float  # m, the smaller hole's
     centre_distance: float  # m, between the two faces' centres
+    through: list = field(default_factory=list)  # (part, face) of a stack's middle holes
 
 
 def _cylinders(
@@ -107,6 +108,9 @@ def fastener_commands(project, comp, pairs: list[HolePair], material, ends: str 
             (pair.source_part, pair.source_face),
             (pair.target_part, pair.target_face),
         ):
+            if part is None:  # a bolt to ground (ADR 0050): one hole only
+                sides.append(None)
+                continue
             geometry = project.get(parts[part].geometry, Geometry)
             known = [*geometry.selections, *made.get(geometry.id, [])]
             hole = len([s for s in known if s.name.startswith("Hole")]) + 1
@@ -119,6 +123,7 @@ def fastener_commands(project, comp, pairs: list[HolePair], material, ends: str 
                 name=f"Bolt {n}",
                 source=sides[0],
                 target=sides[1],
+                ground=sides[1] is None,
                 diameter=Quantity(value=round(pair.diameter * 1e3, 6), unit="mm"),
                 material=material,
                 ends=ends,

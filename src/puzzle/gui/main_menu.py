@@ -166,6 +166,36 @@ def _in_mesh_tab(window, then: Callable[[], object]) -> None:
     then()
 
 
+def _with_geometry(window, action) -> Callable[[], None]:
+    """The geometry selected in the tree, else one chosen by name."""
+
+    def run() -> None:
+        from puzzle.model.schema import Geometry
+
+        project = window.session.project if window.session is not None else None
+        if project is None:
+            return
+        node = window.tree.current()
+        obj = project.objects.get(_uuid_or_none(node.object)) if node and node.object else None
+        if not isinstance(obj, Geometry):
+            items = [(g.name, str(g.id)) for g in project.of_type(Geometry)]
+            chosen = window.choose("Geometry", "Which geometry?", items)
+            obj = project.objects.get(_uuid_or_none(chosen)) if chosen else None
+        if isinstance(obj, Geometry):
+            action(obj)
+
+    return run
+
+
+def _uuid_or_none(text):
+    from uuid import UUID
+
+    try:
+        return UUID(str(text))
+    except ValueError:
+        return None
+
+
 def _with_component(window, action: Callable[[Component], object]) -> Callable[[], None]:
     def run() -> None:
         comp = current_component(window)
@@ -284,6 +314,16 @@ def _geometry(window, menu: QMenu) -> None:
             _add(sub, "Check", lambda: _in_geometry_tab(window, wb._check),
                  "Gaps, slivers, short edges, overlapping bodies")  # fmt: skip
     menu.addSeparator()
+    shown = _sub(menu, "Show and suppress")  # Ansys's hide and suppress, by geometry
+    _add(shown, "Hide or show", _with_geometry(window, lambda g: menus.show_geometry(
+        window, [g], g.hidden)), "The selected geometry: not drawn, still solved")  # fmt: skip
+    _add(shown, "Hide all others", _with_geometry(window, lambda g: menus.hide_others(window, g)))
+    _add(shown, "Show all", lambda: menus.show_all(window))
+    _add(shown, "Swap hidden", lambda: menus.swap_hidden(window),
+         "What is hidden is shown, and what is shown hidden")  # fmt: skip
+    _add(shown, "Suppress or unsuppress", _with_geometry(window, lambda g: menus.suppress_geometry(
+        window, g, not g.suppressed)), "Left out of meshing and solving")  # fmt: skip
+    menu.addSeparator()
     menu.addAction(window.actions_by_name["pick"])
     filters = _sub(menu, "Pick filter")
     from puzzle.gui.window import FILTERS
@@ -348,6 +388,16 @@ def _model(window, menu: QMenu) -> None:
     _add(menu, "Find contacts…", _with_component(
         window, lambda c: find_contacts_dialog(window, c)),
         "Where the parts touch: proposals to make bonded contacts")  # fmt: skip
+    from puzzle.gui.bolt_types import new_bolt_type
+
+    _add(menu, "New bolt type…", lambda: new_bolt_type(window),
+         "A bolt's size, grade and preload, given once for every bolt of that kind")  # fmt: skip
+    from puzzle.gui.bolt_generator_panel import generate_bolts
+
+    _add(menu, "Generate bolts…", _with_component(window, lambda c: generate_bolts(window, c)),
+         "Bolts for the holes a rule, two selections or picks find, previewed first")  # fmt: skip
+    _add(menu, "Bolt table", lambda: window.open_bolts(),
+         "Every bolt's properties and results, in a docked table")  # fmt: skip
     _add(menu, "Add fastener…", _with_component(window, lambda c: add_fastener(window, c)))
     _add(menu, "Fasteners from holes…", _with_component(
         window, lambda c: fasteners_from_holes(window, c)),
@@ -487,6 +537,7 @@ def _window(window, menu: QMenu, agent: QAction, messages: QAction) -> None:
         (window.properties_dock, "Properties", "Ctrl+2"),
         (window.advisor_dock, "Advisor", "Ctrl+3"),
         (window.sections_dock, "Sections", "Ctrl+4"),
+        (window.bolts_dock, "Bolts", "Ctrl+5"),
     ):
         # Not the dock's own toggle action: Qt renames that with the dock's title
         # (Properties reads "Tool" while a tool is open).
@@ -502,12 +553,15 @@ def _window(window, menu: QMenu, agent: QAction, messages: QAction) -> None:
     menu.addAction(agent)
     menu.addAction(messages)
     menu.addSeparator()
+    _add(menu, "3D view background…", lambda: window.pick_view_background(),
+         "A colour of your own behind the model (Settings > Interface for a gradient)")  # fmt: skip
     layouts = _sub(menu, "Layouts")  # ADR 0045: built-in and the user's own
     layouts.aboutToShow.connect(lambda: _fill_layouts(window, layouts))
     _fill_layouts(window, layouts)
     hide = _sub(menu, "Auto-hide")
     for key, text in (("model", "Model"), ("properties", "Properties"), ("agent", "Agent"),
-                      ("advisor", "Advisor"), ("sections", "Sections")):  # fmt: skip
+                      ("advisor", "Advisor"), ("sections", "Sections"),
+                      ("bolts", "Bolts")):  # fmt: skip
         action = QAction(text, window)
         action.setCheckable(True)
         action.setToolTip(f"Hide the {text} panel into a bar on its edge; click there to show it")

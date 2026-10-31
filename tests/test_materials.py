@@ -18,6 +18,11 @@ BOLTING = {
     "astm_a307_a", "astm_a449", "astm_a354_bd", "astm_f3125_a325", "astm_f3125_a490",
     "sae_j429_grade_2", "sae_j429_grade_5", "sae_j429_grade_8", "iso_898_1_class_4_6",
     "iso_898_1_class_8_8", "iso_898_1_class_10_9", "iso_898_1_class_12_9",
+    # from Lacewing Lab (Shigley Tables 8-9 to 8-11)
+    "sae_j429_grade_1", "sae_j429_grade_2_large", "sae_j429_grade_4", "sae_j429_grade_5_large",
+    "sae_j429_grade_5_2", "sae_j429_grade_7", "sae_j429_grade_8_2", "astm_f3125_a325_large",
+    "astm_a354_bc", "iso_898_1_class_4_8", "iso_898_1_class_5_8", "iso_898_1_class_8_8_large",
+    "iso_898_1_class_9_8",
 }  # fmt: skip
 
 GENERIC = {
@@ -134,10 +139,12 @@ def test_default_user_library_location(monkeypatch):
 
 
 def test_search():
-    # the bolting steels match by their group, "Bolting Steel"
-    assert search_library("steel") == sorted(
-        {"electrical_steel", "stainless_steel_304", "structural_steel"} | BOLTING
-    )
+    assert search_library("steel") == [
+        "electrical_steel",
+        "stainless_steel_304",
+        "structural_steel",
+    ]
+    assert search_library("fastener") == sorted(BOLTING)  # by their group, "Fastener"
 
 
 def test_adding_copies_into_the_project():

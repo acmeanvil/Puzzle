@@ -123,7 +123,11 @@ def test_native_runs_activate_the_solver_environment(tmp_path):
     env = NativeRuntime().environment([str(exe)])
     assert env["CONDA_PREFIX"] == str(prefix.resolve())
     assert env["PATH"].split(os.pathsep)[0].startswith(str(prefix.resolve()))
-    assert NativeRuntime().environment([str(tmp_path / "loose-binary")]) is None
+    # A binary in no environment activates none: Puzzle's own environment, with the thread
+    # counts every run gets (ADR 0053).
+    loose = NativeRuntime().environment([str(tmp_path / "loose-binary")])
+    assert loose.get("CONDA_PREFIX") == os.environ.get("CONDA_PREFIX")
+    assert loose["PATH"] == os.environ["PATH"] and loose["OMP_NUM_THREADS"]
 
 
 def test_a_flood_of_output_is_capped(tmp_path, native, monkeypatch):

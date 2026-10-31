@@ -32,6 +32,7 @@ class Preference:
     choices: list[tuple[str, Any]] = field(default_factory=list)  # (shown, stored); [] = text
     help: str = ""
     ready: bool = True  # False: defined, waiting for the feature that uses it
+    kind: str = "choice"  # choice (choices, or text when none) or colour (a "#rrggbb")
 
 
 def _core_choices() -> list[tuple[str, int]]:
@@ -129,8 +130,24 @@ PREFERENCES: list[Preference] = [
         "Interface",
         "3D background",
         "gradient",
-        [("Soft gradient", "gradient"), ("Plain", "plain")],
-        "Behind the model in the 3D view.",
+        [
+            ("Soft gradient", "gradient"),
+            ("Plain", "plain"),
+            ("A colour of my own", "colour"),
+            ("A gradient of my own", "colour_gradient"),
+        ],
+        "Behind the model in the 3D view (Window → 3D view background… picks a colour).",
+    ),
+    Preference(
+        "interface.view_colour",
+        "Interface",
+        "My background colour",
+        "#2b2f36",
+        help="A colour of my own; a gradient of my own runs from it at the bottom.",
+        kind="colour",
+    ),
+    Preference(
+        "interface.view_colour_top", "Interface", "My gradient's top", "#6a7382", kind="colour"
     ),
     Preference(
         "geometry.preview",
@@ -139,6 +156,30 @@ PREFERENCES: list[Preference] = [
         "live",
         [("As values change", "live"), ("When I press Preview", "on_demand")],
         "A tool's result is previewed in the view before Apply. On demand suits large parts.",
+    ),
+    Preference(
+        "geometry.bolt_colour",
+        "Geometry",
+        "Bolt colour",
+        "#d9a520",
+        help="Bolts in the view: their shanks, heads and nuts (drawing only, ADR 0050).",
+        kind="colour",
+    ),
+    Preference(
+        "geometry.bolt_opacity",
+        "Geometry",
+        "Bolt opacity",
+        0.5,
+        [(f"{p} %", p / 100) for p in (100, 75, 50, 25, 10)],
+        "How solid bolts are drawn: see-through shows the holes and parts behind them.",
+    ),
+    Preference(
+        "geometry.bolt_edges",
+        "Geometry",
+        "Bolt edges",
+        True,
+        [("Outlined", True), ("None", False)],
+        "Bolts' outlines (the shank's rims, the heads' and nuts' corners) drawn as lines.",
     ),
     Preference(
         "meshing.element_types",

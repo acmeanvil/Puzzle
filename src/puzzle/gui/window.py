@@ -219,11 +219,21 @@ def _count(n: int, kind: str) -> str:
 class PickBar(QWidget):
     """What is picked in the view, and what to do with it."""
 
+    def minimumSizeHint(self):  # noqa: N802 - Qt's name
+        from PySide6.QtCore import QSize
+
+        return QSize(300, super().minimumSizeHint().height())
+
     def __init__(self, window) -> None:
         super().__init__()
         self.window = window
         row = QHBoxLayout(self)
         row.setContentsMargins(6, 2, 6, 2)
+        # Never wider than the view lets it be: in a narrow window the row clips its
+        # last buttons rather than pushing the docks aside.
+        from PySide6.QtWidgets import QLayout
+
+        row.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
         self.label = ElidedLabel("")
         self.filter = QComboBox()  # what a double-click picks
         for kind, label in FILTERS.items():
@@ -349,6 +359,7 @@ class MainWindow(QMainWindow):
         self.properties = PropertiesPanel()
         self.viewport = Viewport()
         self.viewport.construction_planes = self._construction_planes  # for section cuts
+        self.viewport.hidden_parts = self._hidden_parts  # hidden or suppressed geometry
         self.results_bar = ResultsBar(self._redraw_result, self._axes_changed)
         self.results_bar.hide()
         # Which part of the work is on screen (ADR 0029): model, geometry, sketch or
@@ -445,6 +456,16 @@ class MainWindow(QMainWindow):
         self.advisor = AdvisorPanel(self)
         self.advisor_dock = self.docks.add("advisor", "Advisor", self.advisor, right)
         self.docks.tab("agent", "advisor")  # one place on the right, as tabs
+        # ADR 0050: every bolt's properties and results, tabbed with the messages.
+        from puzzle.gui.bolt_table import BoltPanel
+
+        self.bolts = BoltPanel(self)
+        self.bolts_dock = self.docks.add(
+            "bolts", "Bolts", self.bolts, Qt.DockWidgetArea.BottomDockWidgetArea
+        )
+        self.docks.tab("messages", "bolts")
+        self.bolts_dock.visibilityChanged.connect(lambda shown: shown and self.bolts.refresh())
+        self.bolts_dock.hide()  # Window → Bolts, or Model → Bolt table
         self.agent_dock.hide()
         self.advisor_dock.hide()
         self.docks.builtin("modelling", "Modelling", lambda: self._layout("modelling"))
@@ -560,6 +581,7 @@ class MainWindow(QMainWindow):
         self.refresh_problems()
         self.plots.refresh()
         self.sections.refresh()
+        self.bolts.refresh()
         self.agent.refresh()
         waiting = self.agent.proposals.count()
         if waiting > self._proposals_seen:  # a new proposal: open the agent, no focus
@@ -888,6 +910,31 @@ class MainWindow(QMainWindow):
             theme.view_background(self.viewport.plotter, t)
             self.viewport.view.refresh()
 
+    def pick_view_background(self, colour: str | None = None) -> str | None:
+        """Window → 3D view background…: a colour of the user's own behind the model,
+        kept as a preference (Settings > Interface > 3D background) and shown now."""
+        from PySide6.QtGui import QColor
+        from PySide6.QtWidgets import QColorDialog
+
+        from puzzle.gui import theme
+        from puzzle.settings import current
+
+        prefs = current()
+        if colour is None:
+            chosen = QColorDialog.getColor(QColor(prefs.get("interface.view_colour")), self,
+                                           "3D view background")  # fmt: skip
+            if not chosen.isValid():
+                return None
+            colour = chosen.name()
+        prefs.set("interface.view_colour", colour)
+        prefs.set("interface.view_background", "colour")
+        prefs.save()
+        if self.viewport.plotter is not None:
+            theme.view_background(self.viewport.plotter)
+            self.viewport.view.refresh()
+        self.viewport.shown["background"] = colour
+        return colour
+
     def new_project(self, root: Path, name: str, units: str | None = None) -> None:
         """Create an empty project in `root` and open it; `units` (a unit system) makes
         the project show those units to everyone who opens it (ADR 0030)."""
@@ -1015,7 +1062,10 @@ class MainWindow(QMainWindow):
 
         s = self.session
         out = s.root / WORK_DIR / "gui-mesh" / str(comp.id)
-        project = copy.deepcopy(s.project)  # the GUI may edit while this meshes
+        from puzzle.suppress import applied
+
+        # The GUI may edit while this meshes; suppressed geometry is left out, as in a run.
+        project = applied(copy.deepcopy(s.project))
 
         def work(_emit):
             return generate_mesh(project, comp.id, s.root, out)
@@ -1534,7 +1584,13 @@ class MainWindow(QMainWindow):
         unit = current().display_units()["force"]
         axial = field.values[:, field.components.index("axial")]
         tubes = []
-        for g, c, value in zip(_fastener_symbols(comp, mesh), comp.connectors, axial, strict=False):
+        for g, c, value in zip(
+            # One tube per bolt; heads and nuts aren't labelled.
+            [g for g in _fastener_symbols(comp, mesh, self.session.project) if g.kind == "tube"],
+            comp.connectors,
+            axial,
+            strict=False,
+        ):
             shown = convert(float(value), "N", unit)
             kind = "tension" if value >= 0 else "compression"
             tubes.append((g, f"{c.name}: {shown:.4g} {pretty(unit)} {kind}", value >= 0))
@@ -1733,6 +1789,35 @@ class MainWindow(QMainWindow):
         panel.hide()
         panel.deleteLater()
         self.linearization_panel = None
+
+    def open_bolts(self, tab: str = "properties") -> None:
+        """Show the bolt table (ADR 0050) at its Properties or Results tab."""
+        self.bolts_dock.show()
+        self.bolts_dock.raise_()
+        self.bolts.tabs.setCurrentWidget(
+            self.bolts.results if tab == "results" else self.bolts.properties
+        )
+        self.bolts.refresh()
+
+    def _hidden_parts(self, mesh) -> set[str]:
+        """The parts in this mesh made of hidden or suppressed geometry: not drawn."""
+        from puzzle.model.schema import Geometry
+
+        session = self.session
+        if session is None:
+            return set()
+        project = session.project
+        out = set()
+        for comp in project.of_type(Component):
+            for part in comp.parts:
+                g = project.objects.get(part.geometry)
+                if isinstance(g, Geometry) and (g.hidden or g.suppressed):
+                    out.add(part.name)
+        for gid, (comp, _recipe) in getattr(self, "_standalones", {}).items():
+            g = project.objects.get(_uuid(gid))
+            if isinstance(g, Geometry) and (g.hidden or g.suppressed):
+                out |= {p.name for p in comp.parts}
+        return {p for p in out if p in mesh.groups}
 
     def _construction_planes(self) -> list[tuple]:
         """(name, id, origin, normal) of the project's construction planes, which a
@@ -2363,7 +2448,9 @@ class MainWindow(QMainWindow):
         for p in comp.parts:
             geo = project.objects.get(p.geometry)
             if isinstance(geo, Geometry):
-                shapes.append(geo.model_dump(mode="json", exclude={"selections", "name"}))
+                # Hidden and suppressed only change what is drawn: no new preview.
+                shown = {"selections", "name", "hidden", "suppressed"}
+                shapes.append(geo.model_dump(mode="json", exclude=shown))
                 shapes.append(self._files_stamp(geo))  # a file replaced outside Puzzle
         params = [ps.model_dump(mode="json") for ps in project.of_type(ParameterSet)]
         pending = None

@@ -159,6 +159,19 @@ def test_fastener_in_shear(tmp_path, solver, ends):
     print(f"{solver} {ends} shear: {shear:.6g} N (P {P:g}), axial {axial:.4g} N")
     assert shear == pytest.approx(P, rel=1e-4)
     assert abs(axial) < 0.05 * P
+    # ADR 0050: the moment along the bolt, by statics of the ceiling plate, which hangs on
+    # the bolt alone: P acts at its +x face's centre, 20 mm along and 2.5 mm above the
+    # bolt's upper end, 7.5 mm above its lower end; so |M| runs 7.5 P mm to 2.5 P mm.
+    from puzzle.adapters.common import fastener_end
+    from puzzle.bolts import along
+
+    a, b = (fastener_end(sel, run.mesh, "Bolt").centre for sel in ("Block/+z", "Ceiling/-z"))
+    loads = along(f.values[0], a, b)
+    print(f"{solver} {ends} bending {loads.bending[0]:.5g} -> {loads.bending[-1]:.5g} N·m")
+    assert loads.bending[0] == pytest.approx(float(f.values[0, c["bending"]]), rel=1e-9)
+    assert loads.bending[0] == pytest.approx(0.0075 * P, rel=1e-3)
+    assert loads.bending[-1] == pytest.approx(0.0025 * P, rel=1e-3)
+    assert loads.shear[0] == pytest.approx(P, rel=1e-4)
 
 
 @over("calculix")

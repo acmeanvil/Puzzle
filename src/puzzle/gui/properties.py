@@ -76,6 +76,15 @@ APPLIES = {
     "height": (_is_section, _shape("rectangle", "box")),
     "diameter": (_is_section, _shape("circle", "tube")),
     "thickness": (_is_section, _shape("tube", "box")),
+    # ADR 0055: a table section's standard and designation; how its first axis is set.
+    "standard": (_is_section, _shape("library")),
+    "designation": (_is_section, _shape("library")),
+    "orientation": (_is_section, lambda d: d.get("orient", "vector") == "vector"),
+    "axes": (_is_section, lambda d: d.get("orient") == "axes"),
+    "axes_axis": (_is_section, lambda d: d.get("orient") == "axes"),
+    "toward": (_is_section, lambda d: d.get("orient") == "toward"),
+    "toward_point": (_is_section, lambda d: d.get("orient") == "toward"),
+    "reference": (_is_section, lambda d: d.get("orient") in ("normal", "edge")),
 }
 # Construction geometry: a path's ends, or a plane's placing. Keyed (owner check, key):
 # these names are common, so their rules are looked up only for construction objects.
@@ -109,7 +118,30 @@ def _axes_field(key: str, d) -> bool:
     }.get(key, True)
 
 
+def _is_bolt_type(d) -> bool:
+    return {"preload", "nut_factor", "standard"} <= set(d)
+
+
+def _bolt_type_field(key: str, d) -> bool:
+    """A bolt type (ADR 0050) shows the preload's own value only, and its dimensions
+    only for a custom size (a standard size sets them)."""
+    custom = d.get("standard") == "custom"
+    return {
+        "preload_percent": d.get("preload") == "yield_percent",
+        "preload_force": d.get("preload") == "force",
+        "torque": d.get("preload") == "torque",
+        "nut_factor": d.get("preload") == "torque",
+        "size": not custom,
+        "diameter": custom,
+        "pitch": custom,
+        "stress_area": custom,
+        "bearing_diameter": custom,
+    }.get(key, True)
+
+
 def applies(owner: Any, key: Any) -> bool:
+    if isinstance(owner, dict) and _is_bolt_type(owner):
+        return _bolt_type_field(key, owner)
     if isinstance(owner, dict) and key in BUILT and _is_construction(owner):
         return BUILT[key](owner)
     if isinstance(owner, dict) and _is_axes(owner):

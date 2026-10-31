@@ -53,6 +53,7 @@ REFERENCES = {
     "construction": ConstructionGeometry,
 }
 NONE = "(none)"
+FROM_TYPE = "From its bolt type"
 # Words kept as written when a value is turned into a label.
 WORDS = {
     "srss": "SRSS",
@@ -80,12 +81,29 @@ STEP_CHOICES = {
 }
 
 
+# Values whose words aren't their key's (ADR 0050 bolt standards and preloads).
+VALUES = {
+    "iso_coarse": "ISO metric, coarse pitch",
+    "iso_fine": "ISO metric, fine pitch",
+    "unc": "Unified coarse (UNC)",
+    "unf": "Unified fine (UNF)",
+    "yield_percent": "Share of the yield load",
+    "hole_walls": "Hole wall to hole wall",
+    "through_nut": "Bolt and nut (head and nut annuli)",
+    "tapped": "Cap screw in a tapped hole (head annulus, thread)",
+    "stud_nuts": "Stud with two nuts (nut annuli)",
+    "stud_tapped": "Stud in a tapped hole, with a nut (thread, nut annulus)",
+}
+
+
 def label(value: Any) -> str:
     """A key as words: "solid_mechanics" -> "Solid mechanics", "bdf2" -> "BDF2"."""
     if value is None:
         return NONE
     if not isinstance(value, str):
         return str(value)
+    if value in VALUES:
+        return VALUES[value]
     words = value.replace("_", " ").split(" ")
     out = [WORDS.get(w.lower(), w) for w in words]
     text = " ".join(out)
@@ -222,6 +240,40 @@ def _field(project, obj, owner, field, in_list):
     if field == "physics" and in_list and component is not None:
         kinds = dict.fromkeys(p.type for p in component.physics)
         return [(label(k), k) for k in kinds]
+    if type(owner).__name__ == "BeamFastener" and not in_list:  # ADR 0027, 0050
+        if field == "type":
+            from puzzle.model.schema import BoltType
+
+            found = sorted(project.of_type(BoltType), key=lambda o: o.name)
+            return [("None: the bolt's own values", None)] + [(o.name, str(o.id)) for o in found]
+        if field in ("source", "target"):
+            names = _selections(project, component, entity="face")
+            return [(n, n) for n in names] if names else None
+        if field in ("ends", "formulation", "joint") and owner.type is not None:
+            return [(FROM_TYPE, None)] + [(label(v), v) for v in _literal_values(
+                type(owner).model_fields[field].annotation)[0]]  # fmt: skip
+    if type(owner).__name__ == "BeamSection" and not in_list:  # ADR 0055
+        from puzzle import sections
+
+        if field == "standard":
+            return [(text, key) for key, text in sections.STANDARDS.items()]
+        if field == "designation" and owner.standard:
+            family = sections.get(owner.standard, owner.designation).family if (
+                owner.designation) else None  # fmt: skip
+            return [(d, d) for d in sections.designations(owner.standard, family)]
+        if field == "orient":
+            from puzzle.gui.beam_dialog import ORIENTS
+
+            return list(ORIENTS)
+        if field == "toward":
+            return [(NONE, None)] + [(n, n) for n in _selections(project, component, "vertex")]
+        if field == "reference":
+            entity = "face" if owner.orient == "normal" else "edge"
+            return [(NONE, None)] + [(n, n) for n in _selections(project, component, entity)]
+    if field == "size" and type(owner).__name__ == "BoltType" and not in_list:
+        from puzzle.bolts import sizes
+
+        return [(z.name, z.name) for z in sizes(owner.standard)] or None
     if field == "type" and type(owner).__name__ == "Feature":
         from puzzle.model.catalog import CATALOG
 
@@ -297,14 +349,18 @@ def _component(project, obj):
     return None
 
 
-def _selections(project, comp) -> list[str]:
+def _selections(project, comp, entity: str | None = None) -> list[str]:
     if comp is None:
         return []
     names = []
     for part in comp.parts:
         geo = project.objects.get(part.geometry)
         if isinstance(geo, Geometry):
-            names += [f"{part.name}/{s.name}" for s in geo.selections]
+            names += [
+                f"{part.name}/{s.name}"
+                for s in geo.selections
+                if entity is None or s.entity == entity
+            ]
     return names + [s.name for s in comp.selections]
 
 

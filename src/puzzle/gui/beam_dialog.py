@@ -1,8 +1,11 @@
-"""Beam sections in the GUI (ADR 0027 beams).
+"""Beam sections in the GUI (ADR 0027 beams, ADR 0055 tables and orienting).
 
-Add beam section…: which line part (or edge selection) it covers, the shape, its sizes
-in the display length unit (only the ones the shape takes), and the direction of the
-section's first axis (a rectangle's width lies along it).
+Add beam section…: which line part (or edge selection) it covers, the shape (typed
+sizes in the display length unit, or a standard section: the AISC or EN table, a
+family, a designation, its sizes and properties shown), and how the section's first
+axis is set (a rectangle's width and an I's flanges lie along it): a global direction,
+a coordinate system's axis, toward a point, along a face's normal or an edge, then
+turned by a roll angle about the member.
 """
 
 from __future__ import annotations
@@ -12,10 +15,12 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QLabel,
     QLineEdit,
     QVBoxLayout,
 )
 
+from puzzle.gui.theme import role
 from puzzle.model.schema import Geometry
 
 SHAPES = [
@@ -23,12 +28,14 @@ SHAPES = [
     ("Circle (solid)", "circle"),
     ("Tube (round, hollow)", "tube"),
     ("Box (rectangular, hollow)", "box"),
+    ("From the section tables (AISC, EN)", "library"),
 ]
 SIZES = {
     "rectangle": ("width", "height"),
     "circle": ("diameter",),
     "tube": ("diameter", "thickness"),
     "box": ("width", "height", "thickness"),
+    "library": (),
 }
 SIZE_LABELS = {
     "width": "Width (along the first axis)",
@@ -41,6 +48,27 @@ AXES = [
     ("Global Z", (0.0, 0.0, 1.0)),
     ("Global X", (1.0, 0.0, 0.0)),
 ]
+ORIENTS = [
+    ("A global direction", "vector"),
+    ("A coordinate system's axis", "axes"),
+    ("Toward a point", "toward"),
+    ("Along a face's normal", "normal"),
+    ("Along an edge", "edge"),
+]
+
+
+def _selections_of(project, comp, entity: str) -> list[str]:
+    out = []
+    for part in comp.parts:
+        geo = project.objects.get(part.geometry)
+        if isinstance(geo, Geometry):
+            out += [f"{part.name}/{s.name}" for s in geo.selections if s.entity == entity]
+    return out
+
+
+def mode_words(mode: str) -> str:
+    return {"axes": "coordinate system", "toward": "point selection",
+            "normal": "face selection", "edge": "edge selection"}[mode]  # fmt: skip
 
 
 def section_targets(project, comp) -> list[str]:
@@ -74,9 +102,50 @@ class AddBeamSection(QDialog):
         self.form.addRow("Shape", self.shape)
         for key, box in self.sizes.items():
             self.form.addRow(f"{SIZE_LABELS[key]} ({self.unit})", box)
-        self.form.addRow("Section's first axis", self.axis)
+        # A standard section (ADR 0055).
+        from puzzle import sections
+
+        self.standard, self.family, self.designation = QComboBox(), QComboBox(), QComboBox()
+        for key, text in sections.STANDARDS.items():
+            self.standard.addItem(text, key)
+        self.about = role(QLabel(""), "muted")
+        self.about.setWordWrap(True)
+        self.form.addRow("Table", self.standard)
+        self.form.addRow("Family", self.family)
+        self.form.addRow("Section", self.designation)
+        self.form.addRow("", self.about)
+        self.standard.currentIndexChanged.connect(self._families)
+        self.family.currentIndexChanged.connect(self._designations)
+        self.designation.currentIndexChanged.connect(self._about)
+        self._families()
+        # How the first axis is set.
+        from puzzle.model.schema import CoordinateSystem
+
+        self.orient, self.system, self.system_axis = QComboBox(), QComboBox(), QComboBox()
+        for text, value in ORIENTS:
+            self.orient.addItem(text, value)
+        for cs in sorted(project.of_type(CoordinateSystem), key=lambda c: c.name):
+            self.system.addItem(cs.name, str(cs.id))
+        for axis in "xyz":
+            self.system_axis.addItem(f"Its {axis} axis", axis)
+        self.system_axis.setCurrentIndex(1)
+        self.point, self.face, self.edge = QComboBox(), QComboBox(), QComboBox()
+        for box, entity in ((self.point, "vertex"), (self.face, "face"), (self.edge, "edge")):
+            for name in _selections_of(project, comp, entity):
+                box.addItem(name, name)
+        self.roll = QLineEdit("0")
+        self.form.addRow("Section's first axis", self.orient)
+        self.form.addRow("Direction", self.axis)
+        self.form.addRow("Coordinate system", self.system)
+        self.form.addRow("Axis", self.system_axis)
+        self.form.addRow("Point", self.point)
+        self.form.addRow("Face", self.face)
+        self.form.addRow("Edge", self.edge)
+        self.form.addRow("Then turned about the member by (°)", self.roll)
         self.shape.currentIndexChanged.connect(self._show_sizes)
+        self.orient.currentIndexChanged.connect(self._show_orient)
         self._show_sizes()
+        self._show_orient()
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
@@ -90,6 +159,48 @@ class AddBeamSection(QDialog):
         wanted = SIZES[self.shape.currentData()]
         for key, box in self.sizes.items():
             self.form.setRowVisible(box, key in wanted)
+        table = self.shape.currentData() == "library"
+        for box in (self.standard, self.family, self.designation, self.about):
+            self.form.setRowVisible(box, table)
+
+    def _families(self) -> None:
+        from puzzle import sections
+
+        self.family.blockSignals(True)
+        self.family.clear()
+        for f in sections.families(self.standard.currentData()):
+            self.family.addItem(f, f)
+        self.family.blockSignals(False)
+        self._designations()
+
+    def _designations(self) -> None:
+        from puzzle import sections
+
+        self.designation.blockSignals(True)
+        self.designation.clear()
+        for d in sections.designations(self.standard.currentData(), self.family.currentData()):
+            self.designation.addItem(d, d)
+        self.designation.blockSignals(False)
+        self._about()
+
+    def _about(self) -> None:
+        from puzzle import sections
+
+        name = self.designation.currentData()
+        if not name:
+            self.about.setText("")
+            return
+        sec = sections.get(self.standard.currentData(), name)
+        mass = f", {sec.mass:.4g} kg/m" if sec.mass else ""
+        note = "" if sec.shape in sections.SUPPORTED else " Single angles aren't taken yet."
+        self.about.setText(sec.describe() + f", J {sec.J * 1e8:.4g} cm⁴{mass}.{note}")
+
+    def _show_orient(self) -> None:
+        mode = self.orient.currentData()
+        shown = {"vector": [self.axis], "axes": [self.system, self.system_axis],
+                 "toward": [self.point], "normal": [self.face], "edge": [self.edge]}  # fmt: skip
+        for box in (self.axis, self.system, self.system_axis, self.point, self.face, self.edge):
+            self.form.setRowVisible(box, box in shown[mode])
 
     def value(self) -> dict:
         from puzzle.model.units import plain
@@ -101,9 +212,26 @@ class AddBeamSection(QDialog):
             "selection": self.selection.currentData(),
             "shape": shape,
             "orientation": list(self.axis.currentData()),
+            "orient": self.orient.currentData(),
+            "roll": float(self.roll.text() or 0),
         }
         for key in SIZES[shape]:
             out[key] = {"value": float(self.sizes[key].text()), "unit": unit}
+        if shape == "library":
+            out["standard"] = self.standard.currentData()
+            out["designation"] = self.designation.currentData()
+        mode = out["orient"]
+        picked = {"axes": self.system, "toward": self.point, "normal": self.face,
+                  "edge": self.edge}.get(mode)  # fmt: skip
+        if picked is not None and picked.currentData() is None:
+            raise ValueError(f"there is nothing to orient by: add a {mode_words(mode)} first")
+        if mode == "axes":
+            out["axes"] = self.system.currentData()
+            out["axes_axis"] = self.system_axis.currentData()
+        elif mode == "toward":
+            out["toward"] = self.point.currentData()
+        elif mode in ("normal", "edge"):
+            out["reference"] = (self.face if mode == "normal" else self.edge).currentData()
         return out
 
 
@@ -115,8 +243,9 @@ def add_beam_section(window, comp):
         return None
     try:
         value = dialog.value()
-    except ValueError:
-        window.statusBar().showMessage("Type a number for each size", 8000)
+    except ValueError as exc:
+        words = str(exc) if "orient" in str(exc) else "Type a number for each size"
+        window.statusBar().showMessage(words[:1].upper() + words[1:], 8000)
         return None
     op = EditOp(op="append", path="beam_sections", value=value)
     return window.submit(Edit(object=str(comp.id), ops=[op]))

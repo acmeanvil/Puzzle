@@ -27,15 +27,26 @@ NAME = "built-in"
 MAX_ROUNDS = 16
 MAX_TOOL_CHARS = 8000  # longer tool output is cut, with a note, to keep context small
 
-SYSTEM = (
-    INSTRUCTIONS
-    + """
+
+def _system() -> str:
+    from puzzle.agent.skills import catalog
+
+    return (
+        INSTRUCTIONS
+        + """
 You are Puzzle's built-in assistant. The user sees the model tree, the 3D view and
 your replies side by side, and reviews your proposals in the agent panel. Answer
 briefly and concretely: name the objects, give values with units. When you propose
 changes, say what they do and why in the rationale. Do not invent results.
+
+Skills (read one with `skill_read` before a task in its area):
 """
-)
+        + catalog()
+        + "\n"
+    )
+
+
+SYSTEM = _system()
 
 
 @dataclass

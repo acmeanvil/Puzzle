@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 from puzzle.gui.choices import label, solver_label
 from puzzle.model.schema import (
     Amplitude,
+    BoltType,
     Component,
     ConstructionGeometry,
     CoordinateSystem,
@@ -71,8 +72,23 @@ SECTIONS = [
     ("Amplitudes", Amplitude),
     ("Coordinate systems", CoordinateSystem),
     ("Construction geometry", ConstructionGeometry),
+    ("Bolt types", BoltType),
     ("Solver presets", SettingsPreset),
 ]
+
+
+def _mark_hidden(item, geometry) -> None:
+    """A hidden geometry in italics, a suppressed one struck through, each saying so."""
+    font = item.font(0)
+    font.setItalic(geometry.hidden)
+    font.setStrikeOut(geometry.suppressed)
+    item.setFont(0, font)
+    words = []
+    if geometry.suppressed:
+        words.append("suppressed: left out of meshing and solving")
+    if geometry.hidden:
+        words.append("hidden: not drawn, still solved")
+    item.setToolTip(0, f"{geometry.name}, " + "; ".join(words))
 
 
 # What can be renamed in place, and dragged into a group.
@@ -151,6 +167,8 @@ class ModelTree(QTreeWidget):
             for obj in objects:
                 item = self._add(section, obj.name, Node("object", str(obj.id), "", obj.name))
                 self._state(item, states.get(str(obj.id)))
+                if isinstance(obj, Geometry) and (obj.hidden or obj.suppressed):
+                    _mark_hidden(item, obj)
                 self._children(item, obj, project)
         defined = project.of_type(ResultDefinition)
         probes = project.of_type(ResultProbe)
@@ -376,9 +394,11 @@ class ModelTree(QTreeWidget):
             for i, k in enumerate(obj.contacts):
                 text = f"Contact {k.name} ({label(k.type).lower()})"
                 self._add(item, text, Node("contact", oid, f"contacts.{i}", k.name))
-            for i, c in enumerate(obj.connectors):  # ADR 0027
+            for i, c in enumerate(obj.connectors):  # ADR 0027; a bolt type's (ADR 0050)
+                kind = names.get(str(c.type)) if c.type is not None else None
                 d = c.diameter
-                text = f"Fastener {c.name} (Ø {d.value:g} {d.unit}): {c.source} → {c.target}"
+                size = kind or (f"Ø {d.value:g} {d.unit}" if d is not None else "?")
+                text = f"Fastener {c.name} ({size}): {c.source} → {c.target or 'ground'}"
                 self._add(item, text, Node("connector", oid, f"connectors.{i}", c.name))
             for i, s in enumerate(obj.shell_sections):  # ADR 0027 shells
                 text = f"Shell on {s.selection}: {s.describe()}"

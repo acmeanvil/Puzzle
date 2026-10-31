@@ -155,3 +155,65 @@ def test_sheets_are_ribbon_tools():
     from puzzle.gui.workbench import GROUPS
 
     assert {"sheet", "curved_sheet"} <= set(dict(GROUPS)["Create"])
+
+
+def test_a_table_section_oriented_toward_a_point(app, tmp_path):
+    """ADR 0055: a W12X26 from the AISC table, its first axis toward a point selection;
+    the dialog shows the section's sizes, Properties only the fields that apply."""
+    from test_gui_names import bad, texts
+
+    from puzzle.commands.model import Edit, EditOp
+    from puzzle.project import load_project
+
+    root = _frame(tmp_path)
+    p = load_project(root)
+    geo = p.of_type(Geometry)[0]
+    from puzzle.model.schema import NamedSelection
+
+    geo.selections.append(NamedSelection(name="Corner", entity="vertex",
+                                         rule={"plane": {"axis": "x", "at": 1.0}}))  # fmt: skip
+    save_project(p, root)
+    window = MainWindow(root)
+
+    def table(dialog):
+        dialog.shape.setCurrentIndex(dialog.shape.findData("library"))
+        assert dialog.form.isRowVisible(dialog.designation)
+        assert not dialog.form.isRowVisible(dialog.sizes["width"])
+        dialog.standard.setCurrentIndex(dialog.standard.findData("aisc"))
+        dialog.family.setCurrentIndex(dialog.family.findData("W"))
+        dialog.designation.setCurrentIndex(dialog.designation.findData("W12X26"))
+        assert dialog.about.text().startswith("W12X26: 310 × 165 mm")
+        dialog.orient.setCurrentIndex(dialog.orient.findData("toward"))
+        assert dialog.form.isRowVisible(dialog.point) and not dialog.form.isRowVisible(dialog.axis)
+        dialog.point.setCurrentIndex(dialog.point.findData("F/Corner"))
+        dialog.roll.setText("90")
+        return True
+
+    window.run_dialog = table
+    try:
+        add_beam_section(window, window.session.project.of_type(Component)[0])
+        project = window.session.project
+        (section,) = project.of_type(Component)[0].beam_sections
+        assert (section.shape, section.standard, section.designation) == (
+            "library",
+            "aisc",
+            "W12X26",
+        )
+        assert (section.orient, section.toward, section.roll) == ("toward", "F/Corner", 90.0)
+        assert "beam section on F: W12X26 (AISC)" in outline(project)
+        (item,) = [i for i in window.tree._items() if i.data(0, ROLE).kind == "beam_section"]
+        assert item.text(0) == "Beam section on F: W12X26 (AISC)"
+        window.tree.setCurrentItem(item)
+        app.processEvents()
+        shown = texts(window)
+        assert "Designation" in shown and "Toward" in shown and "Roll" in shown
+        assert "Width" not in shown and "Orientation" not in shown and "Reference" not in shown
+        assert not [t for t in shown if bad(t)], shown
+        comp = project.of_type(Component)[0]
+        window.submit(Edit(object=str(comp.id), ops=[EditOp(op="set",
+                           path="beam_sections.0.designation", value="IPE 300")]))  # fmt: skip
+        assert window.session.project.of_type(Component)[0].beam_sections[0].designation == (
+            "W12X26"
+        )  # refused: IPE 300 isn't an AISC section
+    finally:
+        window.close()

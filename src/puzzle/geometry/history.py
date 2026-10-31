@@ -32,6 +32,7 @@ the part, the first one starts it):
 | rotate | angle (deg), axis, x, y, z (a point on the axis) | (names kept) |
 | pattern | feature, count, dx, dy, dz, or angle + axis for a circular one | <feature>#2/..., ... |
 | split | axis or normal, at or x, y, z | section (the cut face inside); split faces keep names |
+| imprint | hole (a wall's face name), r | annulus (rings at the hole's mouths); others keep names |
 | enclosure | margin, or factor of the part size | +x ... of the box; body `<name>` |
 | import, heal, remove, fragment | see puzzle.geometry.prep | preparing imported CAD (G2) |
 | sketch | sketch, plane and offset, or face (a planar face, axis-aligned) | (no faces: a profile) |
@@ -145,6 +146,7 @@ WORDS = {
     "unit",
     "sketch",  # resolved by the sketch solver itself (its dimensions may name parameters)
     "face",  # a sketch step's face to sketch on
+    "hole",  # an imprint's hole wall (ADR 0050)
 }
 
 
@@ -623,6 +625,80 @@ def _split(state, op, a):
         state.names[f"{op.name}/section"] = inside
 
 
+def _imprint(state, op, a):
+    """Bearing rings (ADR 0050): the circle of radius `r` about a hole's axis imprinted
+    on the faces at both mouths of the hole (`hole`: the wall's face name), so the
+    ring under a bolt's head or nut is a face of its own: "<op>/annulus" (both mouths'
+    rings). The faces split keep their names. Nothing is cut: the solid is unchanged."""
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeWire
+    from OCP.gp import gp_Ax3, gp_Circ
+
+    walls = state.names.get(a["hole"])
+    if not walls:
+        raise GeometryError(f"imprint '{op.name}': no face '{a['hole']}'")
+    surface = BRepAdaptor_Surface(walls[0])
+    if surface.GetType() != GeomAbs_Cylinder:
+        raise GeometryError(f"imprint '{op.name}': '{a['hole']}' is not a hole's wall")
+    cyl = surface.Cylinder()
+    ax = cyl.Axis()
+    o, d = ax.Location(), ax.Direction()
+    origin, axis = (o.X(), o.Y(), o.Z()), (d.X(), d.Y(), d.Z())
+    r = float(a["r"])
+    if r <= cyl.Radius():
+        raise GeometryError(f"imprint '{op.name}': the ring must be wider than the hole")
+    along = []
+    for w in walls:  # the wall's extent along its axis: the two mouths
+        exp = TopExp_Explorer(w, TopAbs_VERTEX)
+        while exp.More():
+            p = _static(TopoDS, "Vertex")(exp.Current())
+            from OCP.BRep import BRep_Tool
+
+            q = _static(BRep_Tool, "Pnt")(p)
+            along.append(sum((c - c0) * k for c, c0, k in zip((q.X(), q.Y(), q.Z()), origin,
+                                                               axis, strict=True)))  # fmt: skip
+            exp.Next()
+    if not along:
+        raise GeometryError(f"imprint '{op.name}': '{a['hole']}' has no ends")
+    disks = []
+    for t in (min(along), max(along)):
+        centre = gp_Pnt(*(c0 + t * k for c0, k in zip(origin, axis, strict=True)))
+        frame = gp_Ax2(centre, gp_Dir(*axis))
+        edge = BRepBuilderAPI_MakeEdge(gp_Circ(frame, r)).Edge()
+        wire = BRepBuilderAPI_MakeWire(edge).Wire()
+        disks.append((BRepBuilderAPI_MakeFace(gp_Pln(gp_Ax3(frame)), wire).Face(), centre))
+    sp = BRepAlgoAPI_Splitter()
+    args, tools = TopTools_ListOfShape(), TopTools_ListOfShape()
+    args.Append(state.shape)
+    for disk, _c in disks:
+        tools.Append(disk)
+    sp.SetArguments(args)
+    sp.SetTools(tools)
+    sp.Build()
+    if not sp.IsDone():
+        raise GeometryError(f"imprint '{op.name}' failed")
+    state.names, state.bodies = _carry(sp, state.names), _carry(sp, state.bodies)
+    state.shape = sp.Shape()
+    tol = 1e-6 * max(_size(state.shape), 1e-9)
+    rings = []
+    for f in _faces(state.shape):  # the planar faces on a mouth's plane, inside the circle
+        if BRepAdaptor_Surface(f).GetType() != GeomAbs_Plane:
+            continue
+        props = GProp_GProps()
+        _static(BRepGProp, "SurfaceProperties")(f, props)
+        c = props.CentreOfMass()
+        for _disk, centre in disks:
+            rel = (c.X() - centre.X(), c.Y() - centre.Y(), c.Z() - centre.Z())
+            height = sum(x * k for x, k in zip(rel, axis, strict=True))
+            radial = math.sqrt(max(sum(x * x for x in rel) - height**2, 0.0))
+            if abs(height) < tol and radial < r and props.Mass() < math.pi * r**2:
+                rings.append(f)
+                break
+    if not rings:
+        raise GeometryError(f"imprint '{op.name}': no flat face at the hole's mouths to "
+                            "imprint (the hole opens onto a curved face?)")  # fmt: skip
+    state.names[f"{op.name}/annulus"] = rings
+
+
 def _enclosure(state, op, a):
     """An air (or fluid) box around the part, sharing the interface faces with it, so
     the mesh is conformal: body `<op name>`, its outer faces `<op name>/+x` ..."""
@@ -704,6 +780,7 @@ MODIFIERS = {
     "rotate": _rotate,
     "pattern": _pattern,
     "split": _split,
+    "imprint": _imprint,
     "enclosure": _enclosure,
 }
 

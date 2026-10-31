@@ -113,6 +113,11 @@ STEPS: dict[str, list[StepField]] = {
         StepField("dz", "length", 0.0),
     ],
     "split": [StepField("axis", "axis", "x", "Plane normal"), StepField("at", "length", 0.0)],
+    # ADR 0050: a bolt's bearing rings at a hole's mouths.
+    "imprint": [
+        StepField("hole", "text", "H/wall", "The hole's wall (its face name)"),
+        StepField("r", "length", 0.008, "Ring's outer radius"),
+    ],  # fmt: skip
     "enclosure": [StepField("margin", "length", 0.01, "Margin")],
     "heal": [StepField("tolerance", "length", 1e-6)],
     "remove": [StepField("rule", "rule", {"holes_below": 0.003}, "Faces")],

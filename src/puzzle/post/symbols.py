@@ -32,6 +32,32 @@ BLUE, RED, ORANGE, GREEN, GREY, PURPLE = (
     "#8a94a3",
     "#9b6ad6",
 )
+# Bolts (ADR 0050): a colour of their own, brass by default, apart from loads, supports
+# and parts; Settings > Geometry > Bolt colour changes it.
+BOLT = "#d9a520"
+
+
+def bolt_look() -> dict:
+    """A bolt's colour, opacity and outline from Settings > Geometry."""
+    from puzzle.settings import current
+
+    try:
+        prefs = current()
+        return {"opacity": float(prefs.get("geometry.bolt_opacity")),
+                "edges": bool(prefs.get("geometry.bolt_edges"))}  # fmt: skip
+    except Exception:  # noqa: BLE001 - no settings: the defaults
+        return {"opacity": 0.5, "edges": True}
+
+
+def bolt_colour() -> str:
+    from puzzle.settings import current
+
+    try:
+        return current().get("geometry.bolt_colour") or BOLT
+    except Exception:  # noqa: BLE001 - no settings (a bare script): the default
+        return BOLT
+
+
 TINTS = {
     "temperature": ORANGE,
     "convection": ORANGE,
@@ -66,6 +92,8 @@ class Glyphs:
     directions: np.ndarray = field(default_factory=lambda: np.zeros((0, 3)))
     faces: list = field(default_factory=list)
     radius: float = 0.0  # a tube's (a fastener's)
+    opacity: float = 1.0
+    edges: bool = False  # outline a tube or hex (a bolt's) with lines
 
 
 def _face_samples(mesh: Mesh, faces, per_face: int):
@@ -154,29 +182,86 @@ def symbols(
             else:
                 out.append(Glyphs(name, "tint", TINTS.get(f.type, GREY), faces=faces))
     if only is None:
-        out += _fastener_symbols(component, mesh)
+        out += _fastener_symbols(component, mesh, project)
     return out
 
 
-def _fastener_symbols(component, mesh: Mesh) -> list[Glyphs]:
-    """Each fastener (ADR 0027) as a tube of its diameter between its ends' centres."""
-    from puzzle.adapters.common import fastener_end
+def _fastener_symbols(component, mesh: Mesh, project=None) -> list[Glyphs]:
+    """Each fastener (ADR 0027) as a tube of its diameter between its ends' centres, in
+    the bolts' own colour; a bolt of a type (ADR 0050) takes the type's diameter when the
+    project is given, and is drawn with its head and nut (hex prisms on the plates'
+    outer faces, as its joint style puts them: none on a tapped thread or the ground).
+    Drawing only: a beam bolt's head and nut are no part of its analysis."""
+    from puzzle.adapters.common import fastener_ends
+    from puzzle.bolts import resolve
 
     out = []
     for c in getattr(component, "connectors", []):
+        if project is not None:
+            c = resolve(project, c)
         try:
-            a, b = (fastener_end(s, mesh, c.name).centre for s in (c.source, c.target))
+            ends = fastener_ends(c, mesh, c.name)
         except Exception:  # an end not meshed yet, or not a face: nothing to draw
             continue
+        d = c.diameter.to_si() if c.diameter is not None else 0.01
+        a, b = (e.centre for e in ends)
         out.append(
             Glyphs(
                 f"Fastener {c.name}",
                 "tube",
-                GREY,
+                bolt_colour(),
                 np.array([a, b]),
-                radius=c.diameter.to_si() / 2,
-            )
+                radius=d / 2,
+                **bolt_look(),
+            )  # fmt: skip
         )
+        out += _head_and_nut(project, c, mesh, ends, d)
+    return out
+
+
+def _face_axis(mesh: Mesh, selection: str):
+    """A bolt end face's axis from its normals: a flat annulus's normal, or the axis of a
+    hole wall (square to all its normals)."""
+    from puzzle.adapters.common import support_nodes
+
+    group = mesh.groups.get(selection)
+    if group is None or group.dim != 2:
+        return None
+    _ids, areas, normals = support_nodes(group, mesh)
+    _u, sv, vt = np.linalg.svd(areas[:, None] * normals, full_matrices=False)
+    return vt[0] if sv[0] > 3 * sv[1] else vt[-1]
+
+
+def _head_and_nut(project, c, mesh, ends, d: float) -> list[Glyphs]:
+    """The hex head and nut a bolt shows, in schematic proportions (ISO 4017/4032: head
+    0.7 d high, nut 0.85 d, across flats from the bearing diameter)."""
+    from puzzle.bolts import JOINTS
+    from puzzle.model.schema import BoltType
+
+    a, b = ends
+    if np.linalg.norm(b.centre - a.centre) < 1e-12:
+        return []
+    axis = (b.centre - a.centre) / np.linalg.norm(b.centre - a.centre)
+    true = _face_axis(mesh, c.source)  # the hole's own axis, not centre to centre
+    if true is not None:
+        axis = true if true @ axis >= 0 else -true
+    btype = project.objects.get(c.type) if project is not None and c.type is not None else None
+    bearing = (btype.bearing_diameter.to_si() if isinstance(btype, BoltType)
+               and btype.bearing_diameter is not None else 1.6 * d)  # fmt: skip
+    across = bearing / 0.9  # dw is about 0.9 s
+    kinds = JOINTS.get(c.joint or "hole_walls", ("wall", "wall"))
+    if c.joint in (None, "hole_walls"):  # a plain bolt: a head and a nut all the same
+        kinds = ("head", "nut")
+    out = []
+    for end, kind, outward in ((a, kinds[0], -axis), (b, kinds[1], axis)):
+        if kind not in ("head", "nut") or not len(end.nodes):  # a thread, or the ground
+            continue
+        s = (mesh.node_coords(end.nodes) - end.centre) @ outward
+        mouth = end.centre + float(s.max()) * outward
+        height = (0.7 if kind == "head" else 0.85) * d
+        out.append(Glyphs(f"Fastener {c.name} {kind}", "hex", bolt_colour(),
+                          np.array([mouth, mouth + height * outward]),
+                          radius=across / np.sqrt(3), **bolt_look()))  # fmt: skip
     return out
 
 
