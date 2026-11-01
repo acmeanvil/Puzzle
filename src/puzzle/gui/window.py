@@ -1568,7 +1568,11 @@ class MainWindow(QMainWindow):
         if self.session is None or chosen is None:  # global
             return None
         found = self.session.project.objects.get(_uuid(chosen))
-        return found if isinstance(found, CoordinateSystem) else None
+        if not isinstance(found, CoordinateSystem):
+            return None
+        from puzzle.axes import absolute  # one that follows geometry or a part (ADR 0049)
+
+        return absolute(self.session.project, found, self.session.root)
 
     def _axes_type(self) -> str | None:
         system = self._axes_system()

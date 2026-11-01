@@ -51,6 +51,7 @@ REFERENCES = {
     "owner": Component,
     "amplitude": Amplitude,
     "axes": CoordinateSystem,
+    "relative_to": CoordinateSystem,  # ADR 0049 step 3
     "construction": ConstructionGeometry,
     "field": ImportedField,  # a feature value's imported field (ADR 0044)
 }

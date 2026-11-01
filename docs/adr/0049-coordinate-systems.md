@@ -1,6 +1,6 @@
 # 0049. Coordinate systems everywhere: Cartesian, cylindrical and spherical, defined many ways, used by every input and result
 
-- Status: Accepted (2026-10-29, with the maintainer's answers)
+- Status: Accepted (2026-10-29, with the maintainer's answers); steps 1–2 built 2026-10-29, steps 3–4 2026-11-01
 - Date: 2026-10-26
 
 ## Context
@@ -109,4 +109,30 @@ The maintainer asked for arbitrary Cartesian, cylindrical and polar systems, use
 - **GUI:** New coordinate system… (Model → New coordinate system, the section's and the project's menus) is a panel: type; by directions, rotation angles or three points (each point picked: Pick, then double-click, snapping to nodes or corners). The triad shows as it changes and when a system is selected (x, y, z in red, green, blue; a cylindrical or spherical system's axis, and where θ or φ starts). Properties shows only the fields its definition uses.
 - **Results in axes:** `post/axes.py` rotates vectors and tensors into a system per node (or element centre), after the solve, for every solver; the global displacement is kept as `displacement_global` for the deformed shape and for probes' back-mapping. The results bar's **In axes** dropdown starts at Global each time a result is shown; the components are named for the system (`quantities.catalog(..., axes)`): "Normal stress θ (hoop)", "Deformation r (radial)".
 - **Checks:** frames orthonormal and right-handed for each type, rotation angles, three points, spherical axes on the equator, round trips (`tests/test_coordinate_systems.py`); **Lamé's thick cylinder** under 100 MPa solved in global axes and read in a cylindrical system: hoop stress at the bore p (ro² + ri²)/(ro² − ri²) and outside 2p ri²/(ro² − ri²) within 3 %, radial −p and 0 (`tests/integration/test_results_in_axes.py`); the panel, the triad, Properties and the results bar (`tests/test_gui_axes.py`).
-- **Next:** steps 3 to 5: systems from faces and edges (aligned to an edge or curve, at a fraction along it), relative and attached systems; material and beam orientations; result tools (probes, paths, reactions) and exports with an axes choice of their own.
+- **Next (then):** steps 3 to 5: systems from faces and edges (aligned to an edge or curve, at a fraction along it), relative and attached systems; material and beam orientations; result tools (probes, paths, reactions) and exports with an axes choice of their own.
+
+## Built (2026-11-01): steps 3 and 4
+
+- **Systems that follow something** (`puzzle.axes`). A `CoordinateSystem` may be:
+  - **from geometry:** `geometry` (or the attached part's), `entity` face or edge, and `entity_name`:
+    - a planar face gives its centroid and outward normal as z, with x from the system's own `x_axis` laid in the face;
+    - a cylindrical or conical face gives its axis, the origin on the axis level with the face's centre;
+    - a spherical face gives its centre;
+    - an edge gives the point `along` it (0 to 1) and its tangent there as x, with z along a circle's axis, else from `xy_direction`.
+  - **attached to a part** (`component`, `part`): it follows the part instance's placement;
+  - **relative to another system** (`relative_to`): its origin and axes are in that system's.
+
+  `axes.absolute(project, cs, root)` turns any of these into plain global points; `run_study` hands adapters `axes.resolved_project`, and the results bar, imported fields and load glyphs resolve their systems the same way. The stored system keeps how it was made, so it re-derives after an edit. A face or edge that is gone is an error naming it, and a cycle of relative systems is refused. At their defaults the new fields are left out of content hashes.
+- **GUI:** the New coordinate system panel adds "From a face or edge" (a geometry's named face or edge selection; "along" for an edge), "Relative to the axes of" and "Attached to the part". The triad previews the resolved system. Properties shows only the fields a definition uses.
+- **Material directions:** `MaterialAssignment.axes`, a system whose x, y, z (or a cylindrical one's r, θ, z) are the material's 1, 2, 3; without it, the material's own axis1 and axis2.
+  - CalculiX writes `*ELASTIC, TYPE=ENGINEERING CONSTANTS` and `*CONDUCTIVITY, TYPE=ORTHO`, with `*ORIENTATION` (RECTANGULAR, or CYLINDRICAL through two points on the axis) on the `*SOLID SECTION`. Spherical material axes are refused.
+  - Code_Aster, Elmer and FEniCSx refuse these models, as before.
+  - Beam orientation from a system was built with ADR 0055 (`BeamSection.orient = "axes"`).
+- **Checks:**
+  - `tests/test_axes_derived.py`: a face's centroid and normal, a pin's axis, a ball's centre, an edge's tangent, a relative system, an attached system following its part, re-derivation after an edit, a lost face named, older hashes kept;
+  - `tests/integration/test_axes_derived_solve.py`: a force in axes taken from the tip face stretches the bar by FL/EA on CalculiX and Code_Aster;
+  - `tests/integration/test_orthotropic.py`, with strain read in the bar's middle half:
+    - material axes turned 90°: E2 (exact), unturned E1;
+    - cylindrical axes on a transversely isotropic rod: E3 (to 1e-5). With E1 ≠ E2 a cylindrically orthotropic rod builds radial and hoop stresses (Lekhnitskii), 1.8 % stiffer;
+    - conduction along a turned axis: k2.
+- **Next:** step 5 (acceleration and rotation body loads, mesh boxes and exports in a system); orthotropic materials on Code_Aster (ELAS_ORTH, MASSIF ANGL_REP).

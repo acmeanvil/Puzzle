@@ -270,6 +270,14 @@ def _frames(project, f, pts) -> np.ndarray:
     axes = project.objects.get(f.axes) if project is not None and f.axes else None
     if axes is None:
         return np.tile(np.eye(3), (len(pts), 1, 1))
+    if axes.derived():  # ADR 0049: from geometry or a part; the root is the cwd here
+        from puzzle.axes import absolute
+        from puzzle.errors import PuzzleError
+
+        try:
+            axes = absolute(project, axes)
+        except (PuzzleError, OSError):
+            return np.tile(np.eye(3), (len(pts), 1, 1))  # drawn global until it resolves
     return axes.frames(pts) if len(pts) else np.zeros((0, 3, 3))
 
 

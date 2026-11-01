@@ -175,7 +175,7 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
 
             i, j = int(node.path.split(".")[1]), int(node.path.split(".")[3])
             feature = obj.physics[i].features[j]
-            if feature.values:  # ADR 0044: a value from an imported field
+            if _field_values(feature):  # ADR 0044: a value some solver takes from a field
                 add("Take a value from an imported field…",
                     lambda: value_from_field(window, obj, i, j))  # fmt: skip
             if feature.fields:
@@ -933,7 +933,7 @@ def value_from_field(window, comp, i: int, j: int):
         return None
     by_id = {str(f.id): f for f in fields}
     values = window.ask_form("Value from an imported field", [
-        Ask("value", "Value", choices=[(label(k), k) for k in feature.values]),
+        Ask("value", "Value", choices=[(label(k), k) for k in _field_values(feature)]),
         Ask("field", "Imported field", choices=[(f.name, str(f.id)) for f in fields]),
         Ask("column", "Column", choices=lambda v: _columns(by_id[v["field"]])),
         Ask("scale", "Scale by", kind="text", default="1"),
@@ -953,6 +953,16 @@ def value_from_field(window, comp, i: int, j: int):
         use["offset"] = {"value": float(number), "unit": unit.strip() or "dimensionless"}
     path = f"physics.{i}.features.{j}.fields.{values['value']}"
     return window.submit(Edit(object=str(comp.id), ops=[EditOp(op="set", path=path, value=use)]))
+
+
+def _field_values(feature) -> list[str]:
+    """The feature's values some solver takes from an imported field (ADR 0044)."""
+    from puzzle.adapters import available_adapters
+
+    taken = set()
+    for adapter in available_adapters().values():
+        taken |= set(adapter.capabilities.field_features)
+    return [k for k in feature.values if f"{feature.type}:{k}" in taken]
 
 
 def _columns(f) -> list[tuple[str, str]]:

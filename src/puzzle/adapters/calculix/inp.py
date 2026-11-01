@@ -573,9 +573,22 @@ def _materials(
         out += [f"*MATERIAL, NAME={name}"] + _material_cards(material, comp, expansion)
         if damping is not None:  # Rayleigh damping for structural dynamics (ADR 0041)
             out.append(f"*DAMPING, ALPHA={damping[0]:.10g}, BETA={damping[1]:.10g}")
+        directed = (
+            material.models.orthotropic_elasticity or material.models.anisotropic_conductivity
+        )
+        if directed is not None and group.dim == 3:  # its directions (ADR 0049)
+            out += _orientation(project, assignment, material, f"OR{i}")
+        elif assignment.axes is not None:
+            raise InputError(
+                f"material '{material.name}' has no directions for its axes to set "
+                "(an orthotropic or anisotropic model)",
+                code="invalid",
+            )
         if group.dim == 3 or region:
+            orient = f", ORIENTATION=OR{i}" if directed is not None and group.dim == 3 else ""
             out.append(
                 f"*SOLID SECTION, ELSET={set_name('E', assignment.selection)}, MATERIAL={name}"
+                + orient
             )
             if region and not mesh.axisymmetric:  # plane stress: the part's thickness
                 part = assignment.selection.split("/", 1)[0]
@@ -600,7 +613,18 @@ def _material_cards(m: Material, comp: Component, expansion: bool = False) -> li
             raise InputError(f"material '{m.name}' is missing {', '.join(missing)}")
         return [p[k] for k in keys]
 
-    if "solid_mechanics" in types:
+    ortho = m.models.orthotropic_elasticity
+    if "solid_mechanics" in types and ortho is not None:  # in the material axes (ADR 0049)
+        o = ortho
+        cards += ["*ELASTIC, TYPE=ENGINEERING CONSTANTS",
+                  _row_floats([o.e1, o.e2, o.e3, o.nu12, o.nu13, o.nu23, o.g12, o.g13]),
+                  f"{o.g23:.10g}"]  # fmt: skip
+        if m.models.plasticity is not None:
+            raise InputError(f"material '{m.name}': orthotropic plasticity is not written",
+                             code="unsupported")  # fmt: skip
+        if "density" in p:
+            cards += ["*DENSITY", f"{p['density']:.10g}"]
+    elif "solid_mechanics" in types:
         e, nu = need("youngs_modulus", "poissons_ratio")
         cards += ["*ELASTIC", f"{e:.10g}, {nu:.10g}"]
         if m.models.plasticity is not None:  # von Mises, isotropic hardening (ADR 0020)
@@ -620,7 +644,11 @@ def _material_cards(m: Material, comp: Component, expansion: bool = False) -> li
                 need(prop)
             return []
 
-        cards += card("*CONDUCTIVITY", "thermal_conductivity", required=True)
+        aniso = m.models.anisotropic_conductivity
+        if aniso is not None:  # along the material axes (ADR 0049)
+            cards += ["*CONDUCTIVITY, TYPE=ORTHO", _row_floats([aniso.k1, aniso.k2, aniso.k3])]
+        else:
+            cards += card("*CONDUCTIVITY", "thermal_conductivity", required=True)
         cards += card("*SPECIFIC HEAT", "specific_heat")
         if "*DENSITY" not in cards:
             cards += card("*DENSITY", "density")
@@ -631,6 +659,33 @@ def _material_cards(m: Material, comp: Component, expansion: bool = False) -> li
         ref = table.reference_temperature if table and table.reference_temperature else ROOM_K
         cards += [f"*EXPANSION, ZERO={ref:.10g}", f"{p['thermal_expansion']:.10g}"]
     return cards
+
+
+def _row_floats(values) -> str:
+    return ", ".join(f"{v:.10g}" for v in values)
+
+
+def _orientation(project: Project, assignment, m: Material, name: str) -> list[str]:
+    """*ORIENTATION for a material with directions (ADR 0049): the assignment's system
+    (Cartesian: its x and y; cylindrical: two points on its axis, so 1 is radial, 2
+    tangential, 3 axial), else the material's own axis1 and axis2."""
+    from puzzle.model.schema import CoordinateSystem
+
+    if assignment.axes is not None:
+        cs = project.get(assignment.axes, CoordinateSystem)
+        r, o = cs.orientation(), cs.centre()
+        if cs.type == "cylindrical":
+            return [
+                f"*ORIENTATION, NAME={name}, SYSTEM=CYLINDRICAL",
+                _row_floats([*o, *(o + r[:, 2])]),
+            ]
+        if cs.type == "spherical":
+            raise InputError(f"CalculiX takes no spherical material axes ('{cs.name}')",
+                             code="unsupported")  # fmt: skip
+        return [f"*ORIENTATION, NAME={name}, SYSTEM=RECTANGULAR", _row_floats([*r[:, 0], *r[:, 1]])]
+    model = m.models.orthotropic_elasticity or m.models.anisotropic_conductivity
+    return [f"*ORIENTATION, NAME={name}, SYSTEM=RECTANGULAR",
+            _row_floats([*model.axis1, *model.axis2])]  # fmt: skip
 
 
 def _plastic_card(m: Material) -> list[str]:

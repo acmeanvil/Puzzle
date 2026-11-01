@@ -92,6 +92,9 @@ def run_study(
     from puzzle.suppress import applied
 
     project = applied(project)  # suppressed geometry is left out of meshing and solving
+    from puzzle.axes import resolved_project
+
+    project = resolved_project(project, root)  # axes from geometry, parts, others (ADR 0049)
     study = project.get(study_id, Study)
     if solver is not None and solver != study.solver:
         if solver not in study.all_solvers():

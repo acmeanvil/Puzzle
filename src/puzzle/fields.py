@@ -240,7 +240,9 @@ def place(points: np.ndarray, placement, project=None) -> np.ndarray:
 
         if project is None:
             raise FieldError("a placement in a coordinate system needs the project")
-        cs = project.get(placement.axes, CoordinateSystem)
+        from puzzle.axes import absolute
+
+        cs = absolute(project, project.get(placement.axes, CoordinateSystem))
         out = cs.centre() + out @ np.asarray(cs.orientation()).T
     if any(placement.rotation):
         about = np.asarray(placement.about, dtype=float)

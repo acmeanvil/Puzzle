@@ -114,3 +114,33 @@ def test_systems_made_shown_and_used_by_results(app, tmp_path):
         assert bar.axes.currentData() is None
     finally:
         w.close()
+
+
+def test_a_system_from_a_face_attached_to_a_part(app, tmp_path):
+    """ADR 0049 step 3: the panel makes a system from a named face, following its part."""
+    root = tmp_path / "bar"
+    root.mkdir()
+    project, comp = bar_project(write_bar_step(root / "bar.step"), [], 10.0)
+    comp.parts[0].translation = (1.0, 0.0, 0.0)
+    save_project(project, root)
+    w = MainWindow(root)
+    try:
+        panel = menus.new_axes(w, "cartesian")
+        panel.how.setCurrentIndex(panel.how.findData("entity"))
+        tip = next(i for i in range(panel.source.count()) if "Tip" in panel.source.itemText(i))
+        panel.source.setCurrentIndex(tip)
+        attached = next(i for i in range(panel.attached.count())
+                        if panel.attached.itemData(i))  # fmt: skip
+        panel.attached.setCurrentIndex(attached)
+        panel.name.setText("Tip axes")
+        assert panel.problem() is None
+        assert np.allclose(panel.resolved().centre(), [1.2, 0.005, 0.005])  # moved with it
+        panel.create()
+        made = next(c for c in w.session.project.of_type(CoordinateSystem) if c.name == "Tip axes")
+        assert made.entity == "face" and made.part == "Bar" and made.geometry is None
+        _select(w, "Tip axes")
+        keys = [w.properties.topLevelItem(i).text(0)
+                for i in range(w.properties.topLevelItemCount())]  # fmt: skip
+        assert "Entity name" in keys and "Origin" not in keys and "Angles" not in keys
+    finally:
+        w.close()

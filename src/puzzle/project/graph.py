@@ -36,10 +36,19 @@ def _own(obj: ProjectObject, *, drop: frozenset[str] = frozenset()) -> dict:
     data.pop("hidden", None)  # what the view shows never changes a solve
     if data.get("share_faces") is True:  # the default: older projects keep their hashes
         data.pop("share_faces")
+    if obj.kind == "axes":  # ADR 0049 step 3's fields at their defaults: older hashes kept
+        for key, default in (("relative_to", None), ("component", None), ("part", None),
+                             ("geometry", None), ("entity", None), ("entity_name", None),
+                             ("along", 0.5)):  # fmt: skip
+            if key in data and data[key] == default:
+                data.pop(key)
     if isinstance(obj, Component) and data.get("planar_model") == "plane_stress":
         data.pop("planar_model")  # the default: older projects keep their hashes
     if isinstance(obj, Component):  # how bolts are listed and made never changes a solve
         data.pop("bolt_rules", None)
+        for assignment in data.get("materials", []):  # ADR 0049: no axes, as before them
+            if assignment.get("axes") is None:
+                assignment.pop("axes", None)
         for physics in data.get("physics", []):  # ADR 0044: no field use, as before it
             for feature in physics.get("features", []):
                 if not feature.get("fields"):

@@ -260,3 +260,27 @@ def engineering_units():
     s.save()
     settings.reload()
     return s
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _close_windows_after_each_module():
+    """GUI tests open windows and leave them: their timers, watchers and layouts kept
+    running, so each later test ran slower, and a full run seemed to hang late on. Every
+    module's windows are closed and deleted when it ends."""
+    yield
+    import sys
+
+    if "PySide6.QtWidgets" not in sys.modules:
+        return
+    from PySide6.QtCore import QCoreApplication, QEvent
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    if app is None:
+        return
+    for widget in app.topLevelWidgets():
+        widget.hide()
+        widget.close()
+        widget.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    app.processEvents()

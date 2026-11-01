@@ -658,6 +658,11 @@ class MaterialAssignment(BaseModel):
 
     material: UUID
     selection: str
+    axes: UUID | None = Field(
+        default=None,
+        description="the material's directions 1, 2, 3 (ADR 0049): a system's x, y, z, or a "
+        "cylindrical one's r, θ, z; empty: the material's own axis1 and axis2",
+    )
 
 
 class FieldPlacement(BaseModel):
@@ -790,12 +795,42 @@ class CoordinateSystem(ProjectObject):
     points: list[tuple[float, float, float]] | None = Field(
         default=None, description="three points: the origin, one on x, one in the xy plane"
     )
+    # ADR 0049 step 3: systems that follow something else. `puzzle.axes.absolute`
+    # resolves them (the stored object keeps how it was made, so it re-derives).
+    relative_to: UUID | None = Field(
+        default=None, description="another system: this one's origin and axes are in its axes"
+    )
+    component: UUID | None = Field(default=None, description="with `part`: the component")
+    part: str | None = Field(
+        default=None, description="a part instance it is attached to: it follows its placement"
+    )
+    geometry: UUID | None = Field(
+        default=None, description="the geometry `entity_name` is on (implied by `part`)"
+    )
+    entity: Literal["face", "edge"] | None = Field(
+        default=None,
+        description="from a face (planar: centroid and normal as z; cylindrical or conical: "
+        "its axis; spherical: its centre) or an edge (x along its tangent at `along`)",
+    )
+    entity_name: str | None = None
+    along: float = Field(default=0.5, ge=0.0, le=1.0, description="where on the edge (0 to 1)")
 
     @model_validator(mode="after")
     def _shape(self) -> CoordinateSystem:
         if self.points is not None and len(self.points) != 3:
             raise ValueError("a coordinate system by points takes three: origin, x, xy plane")
+        if (self.entity is None) != (self.entity_name is None):
+            raise ValueError("a system from geometry names its entity kind and name")
+        if (self.part is None) != (self.component is None):
+            raise ValueError("an attached system names its component and part")
         return self
+
+    def dependencies(self) -> list[UUID]:
+        return [r for r in (self.relative_to, self.component, self.geometry) if r is not None]
+
+    def derived(self) -> bool:
+        """Whether it follows another system, a part or geometry (see puzzle.axes)."""
+        return self.relative_to is not None or self.part is not None or self.entity is not None
 
     def centre(self) -> np.ndarray:
         """The origin (the first of three points, when given by points)."""
@@ -1351,6 +1386,7 @@ class Component(ProjectObject):
             *(c.type for c in self.connectors if c.type is not None),
             *(r.type for r in self.bolt_rules if r.type is not None),
             *(b.axes for b in self.beam_sections if b.axes is not None),
+            *(m.axes for m in self.materials if m.axes is not None),
         ]
 
     def used_selections(self) -> list[str]:

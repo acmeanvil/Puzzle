@@ -117,15 +117,22 @@ def _is_axes(d) -> bool:
 def _axes_field(key: str, d) -> bool:
     """A coordinate system shows only how it is defined (ADR 0049)."""
     by_angles, by_points = d.get("angles") is not None, d.get("points") is not None
-    plain = not by_angles and not by_points
+    from_entity = d.get("entity") is not None  # ADR 0049 step 3: from a face or edge
+    plain = not by_angles and not by_points and not from_entity
     round_ = d.get("type") != "cartesian"
     return {
-        "origin": not by_points,
-        "x_axis": plain and not round_,
+        "origin": not by_points and not from_entity,
+        "x_axis": (plain and not round_) or from_entity,  # an entity's x hint
         "xy_direction": plain and not round_,
         "axis": plain and round_,
         "angles": by_angles,
         "points": by_points,
+        "geometry": from_entity and d.get("part") is None,
+        "entity": from_entity,
+        "entity_name": from_entity,
+        "along": d.get("entity") == "edge",
+        "component": d.get("part") is not None,
+        "part": d.get("part") is not None,
     }.get(key, True)
 
 
