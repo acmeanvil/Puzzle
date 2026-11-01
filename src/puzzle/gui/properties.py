@@ -72,8 +72,10 @@ APPLIES = {
     "facet_angle": (_is_geometry, _faceted),
     "share_faces": (_is_geometry, lambda d: not _faceted(d)),
     # ADR 0048: plane stress or strain only for a planar component.
-    "planar_model": (lambda d: "dimension" in d and "parts" in d,
-                     lambda d: d.get("dimension") == "2d_planar"),  # fmt: skip
+    "planar_model": (
+        lambda d: "dimension" in d and "parts" in d,
+        lambda d: d.get("dimension") == "2d_planar",
+    ),  # fmt: skip
     "history": (_is_geometry, lambda d: d.get("source") is None),
     # A beam section's sizes (ADR 0027): only those its shape takes.
     "width": (_is_section, _shape("rectangle", "box")),
