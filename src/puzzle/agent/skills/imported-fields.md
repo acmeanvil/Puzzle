@@ -1,6 +1,6 @@
 ---
 name: imported-fields
-description: values from another tool or a test as loads: importing a file (CSV, VTU, Fluent, Exodus, EnSight, OpenFOAM), checking it, fields varying in time, and a feature taking a value from it
+description: loads from another tool or a test: importing CSV, VTU, Fluent, Exodus, EnSight or OpenFOAM data, checking it, time, vectors, conservative mapping
 adr: 0044
 ---
 An **imported field** (kind `field`) is a file of points and values in the project
@@ -71,6 +71,35 @@ A feature takes a value from a field through `fields` (value name → use):
 - A use's own `placement` moves the field again for this use only.
 - Remove the use (`"op": "remove"` on that path) to go back to the feature's number.
 
+## Vectors (stage 2)
+
+Three features are vectors, one use per component:
+- **body_force** "Body force density" (on a body): `fx, fy, fz` in N/m^3, a force per
+  volume with no density (Lorentz forces J × B from an EM run; unlike `gravity`, which
+  is an acceleration times the material's density);
+- **traction** "Traction (force per area)" (on faces): `tx, ty, tz` in Pa, e.g. CFD wall
+  shear plus pressure. Inward normal traction equals a pressure: t = −p n;
+- **displacement** `x, y, z` from a field: imposed per node (a measured shape, a
+  submodel's boundary); a component neither given nor taken from a field stays free.
+
+A body force's or traction's missing component is zero. When a placement (the field's
+or the use's) turns the points, the vectors turn with them: then every component must
+come from **the same field with the same placement and mapping** (columns may differ),
+else it is refused. Scale and offset act on the file's components before the turn.
+Don't give such a feature `axes`: place the field instead.
+
+## Conservative mapping
+
+`"mapping": "conservative"` keeps a force-type value's total (pressure, traction,
+heat_flux on faces; body_force on bodies): the values are mapped linearly, then corrected
+in proportion to the local magnitude (v + |v| k) so ∫ v over the target equals the
+source's ∑ w v; zero stays zero. It needs `"weight": "<column>"`: each point's area (a
+face load) or volume (a body load); a weight column without a unit is in the points'
+length unit squared or cubed. Puzzle's own exports carry it: the wall cloud's `area`
+column, the Lorentz cloud's `dV`. Without a weight, or on a temperature or a
+displacement, it is refused. A vector's components are conserved as one vector, so all
+three need the same conservative use settings.
+
 Which values take a field, by solver (`Capabilities.field_features`; the rest are
 refused by name, never ignored):
 - **body_temperature T** (a structural feature on a body: "Temperature (thermal
@@ -84,12 +113,17 @@ refused by name, never ignored):
   forces, flux and films as FORMULEs over the faces; Elmer: restart variables read by
   `Equals`; FEniCSx: Lagrange functions). Code_Aster refuses flux and film fields on 2D
   models so far.
+- **body_force fx/fy/fz, traction tx/ty/tz, displacement x/y/z:** CalculiX and
+  Code_Aster (consistent nodal forces ∫N t dA, ∫N f dV; displacements per node).
+  Uniform body_force and traction: all four FE solvers (not 2D models yet).
 
 ## Mistakes
 
 - A temperature given both by a transfer and a body temperature: refused, keep one.
 - Offsets add a difference: `offset` 10 K and 10 °C are the same step.
 - The check on the data alone (no `on`) says nothing about coverage: give the target.
+- CalculiX's reaction forces leave out the share of a body load applied straight to the
+  held nodes (a fraction of a per cent on a coarse mesh); Code_Aster's include it.
 - A field varying in time with no time given (a static use outside a study): refused;
   `field_check` reports on its first time and lists `times`.
 - CLI twins: `puzzle import-field PROJECT FILE [FILE...] [--times s...] [--every-step]

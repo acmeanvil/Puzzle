@@ -75,6 +75,20 @@ CATALOG: dict[str, list[FeatureSpec]] = {
             entity="body",
             values={"T": (20.0, "degC")},
         ),  # fmt: skip
+        # ADR 0044 stage 2: a force per volume (no density: e.g. Lorentz forces J × B)
+        # and a force per area (e.g. CFD wall shear plus pressure), uniform or from
+        # imported fields.
+        FeatureSpec(
+            "body_force",
+            "Body force density",
+            entity="body",
+            values={"fx": (0.0, "N/m^3"), "fy": (0.0, "N/m^3"), "fz": (0.0, "N/m^3")},
+        ),
+        FeatureSpec(
+            "traction",
+            "Traction (force per area)",
+            values={"tx": (0.0, "Pa"), "ty": (0.0, "Pa"), "tz": (0.0, "Pa")},
+        ),
         # Body loads (ADR 0037): on a body, per volume, through the material's density.
         FeatureSpec(
             "gravity",

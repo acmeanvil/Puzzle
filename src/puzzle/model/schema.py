@@ -756,11 +756,21 @@ class FieldUse(BaseModel):
     scale: float = 1.0
     offset: Quantity | None = Field(default=None, description="added after scaling")
     placement: FieldPlacement = Field(default_factory=FieldPlacement)
-    mapping: Literal["linear", "nearest", "inverse_distance"] = "linear"
+    mapping: Literal["linear", "nearest", "inverse_distance", "conservative"] = Field(
+        default="linear",
+        description="conservative: linear, then corrected so the target's total equals "
+        "the source's (force-type values; needs `weight`)",
+    )
     beyond: Literal["nearest", "zero", "refuse"] = Field(
         default="nearest", description="past max_distance from any point"
     )
     max_distance: Quantity | None = None
+    weight: str | None = Field(
+        default=None,
+        description="conservative mapping: the column holding each point's area (a face "
+        "load) or volume (a body load); no unit means the points' length unit squared or "
+        "cubed",
+    )
 
 
 class Feature(BaseModel):

@@ -393,7 +393,7 @@ def test_lorentz_force_is_j_cross_b(tmp_path):
     job.step = step
     (csv,), notes = write(job)
     header = csv.read_text().splitlines()[0]
-    assert header == "x [m],y [m],z [m],f_x [N/m^3],f_y [N/m^3],f_z [N/m^3],|f| [N/m^3]"
+    assert header == ("x [m],y [m],z [m],f_x [N/m^3],f_y [N/m^3],f_z [N/m^3],|f| [N/m^3],dV [m^3]")
     rows = np.loadtxt(csv, delimiter=",", skiprows=1)
     assert rows[:, :3] == pytest.approx(COORDS)
     exact = np.column_stack([j[:, 1] * b[:, 2] - j[:, 2] * b[:, 1],
@@ -401,6 +401,9 @@ def test_lorentz_force_is_j_cross_b(tmp_path):
                              j[:, 0] * b[:, 1] - j[:, 1] * b[:, 0]])  # fmt: skip
     assert rows[:, 3:6] == pytest.approx(exact, rel=1e-8)
     assert rows[:, 6] == pytest.approx(np.linalg.norm(exact, axis=1), rel=1e-8)
+    # ADR 0044: each node's ∫N dV, a tet10's -V/20 at corners and V/5 at mid-edges
+    volume = abs(np.linalg.det(CORNERS[1:4] - CORNERS[0])) / 6
+    assert rows[:, 7] == pytest.approx([-volume / 20] * 4 + [volume / 5] * 6, rel=1e-6)
 
     del step.fields["magnetic_flux_density"]
     with pytest.raises(PuzzleError, match="no magnetic flux density B"):

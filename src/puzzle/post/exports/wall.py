@@ -28,7 +28,8 @@ wall fields, so these are computed here from the cells next to the wall:
   written as a column. An adiabatic wall has no h.
 
 Fluid properties (density, dynamic viscosity, thermal conductivity) come from the
-component's material.
+component's material. The last column is each face's area, the weight a conservative
+import (ADR 0044 stage 2) integrates the wall loads with.
 """
 
 from __future__ import annotations
@@ -69,6 +70,7 @@ class Wall:
     normals: np.ndarray  # (n, 3) unit, into the fluid
     cell1: np.ndarray  # (n,) adjacent cell index
     d1: np.ndarray  # (n,) its centre's distance from the wall
+    areas: np.ndarray | None = None  # (n,) the faces' areas (ADR 0044: conservative imports)
 
 
 def wall_faces(mesh, vol: fluid.Volume, faces: fluid.Faces, blocks) -> Wall:
@@ -88,6 +90,7 @@ def wall_faces(mesh, vol: fluid.Volume, faces: fluid.Faces, blocks) -> Wall:
         np.cross(xyz[:, 1] - xyz[:, 0], xyz[:, 2] - xyz[:, 0]),
         np.cross(xyz[:, 2] - xyz[:, 0], xyz[:, 3] - xyz[:, 1]),
     )
+    areas = 0.5 * np.linalg.norm(normal, axis=1)  # a triangle's, or a quad's by its diagonals
     normal /= np.linalg.norm(normal, axis=1)[:, None]
     cell1 = fluid.adjacent(faces, blocks)
     if (cell1 < 0).any():
@@ -96,7 +99,7 @@ def wall_faces(mesh, vol: fluid.Volume, faces: fluid.Faces, blocks) -> Wall:
     flip = np.einsum("ij,ij->i", offset, normal) < 0
     normal[flip] *= -1
     d1 = np.einsum("ij,ij->i", offset, normal)
-    return Wall(centres, normal, cell1, d1)
+    return Wall(centres, normal, cell1, d1, areas)
 
 
 def _cells(step, name: str, vol: fluid.Volume, mesh) -> np.ndarray | None:
@@ -251,6 +254,8 @@ def write(job):
                     ("heat transfer coefficient", "film", flux / (t_wall - t_ref)),
                     ("reference temperature", "temperature", np.full(len(flux), t_ref)),
                 ]
+        if columns:  # each face's area: a conservative import's weights (ADR 0044)
+            columns.append(("area", "area", w.areas))
         if not columns:
             raise PuzzleError(
                 f"no wall quantity could be computed on '{name}'",

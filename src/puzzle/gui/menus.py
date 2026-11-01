@@ -940,13 +940,20 @@ def value_from_field(window, comp, i: int, j: int):
         Ask("offset", "Then add (e.g. 10 K, 0.1 MPa)", kind="text", default=""),
         Ask("mapping", "Mapping", choices=[("Linear between the points", "linear"),
                                             ("Nearest point", "nearest"),
-                                            ("Inverse distance", "inverse_distance")]),
+                                            ("Inverse distance", "inverse_distance"),
+                                            ("Conservative: keeps the total force",
+                                             "conservative")]),
+        # ADR 0044 stage 2: what a conservative mapping integrates the source with
+        Ask("weight", "Each point's area or volume (conservative)",
+            choices=lambda v: [("None", "")] + _columns(by_id[v["field"]])),
     ], intro=f"{label(feature.type)} on {feature.selection} takes this value from the field, "
              "mapped onto its faces or bodies each run.")  # fmt: skip
     if values is None:
         return None
     use = {"field": values["field"], "column": values["column"], "mapping": values["mapping"],
            "scale": float(values["scale"] or 1)}  # fmt: skip
+    if values.get("weight"):
+        use["weight"] = values["weight"]
     offset = (values.get("offset") or "").strip()
     if offset:
         number, _, unit = offset.partition(" ")

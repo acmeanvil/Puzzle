@@ -23,6 +23,8 @@ from puzzle.adapters.base import (
     STRUCTURAL_FEATURES,
     SUPPORT_FEATURES,
     THERMAL_FEATURES,
+    VECTOR_FIELD_FEATURES,
+    VECTOR_LOAD_FEATURES,
     Capabilities,
     SolverAdapter,
     refuse_inputs,
@@ -51,7 +53,8 @@ class CodeAsterAdapter(SolverAdapter):
         | RIGID_REMOTE_FEATURES
         | SUPPORT_FEATURES
         | PRETENSION_FEATURES
-        | LIFTING_FEATURES,
+        | LIFTING_FEATURES
+        | VECTOR_LOAD_FEATURES,
         connectors=frozenset({"beam_fastener:rigid", "beam_fastener:distributing"}),
         beams=True,  # ADR 0027, tests/integration/test_beams.py
         shared_settings=frozenset(  # ADR 0023
@@ -83,10 +86,12 @@ class CodeAsterAdapter(SolverAdapter):
         dimensions=frozenset({"3d", "2d_planar", "2d_axisymmetric"}),
         # ADR 0044: a temperature load, a varying pressure as consistent nodal forces,
         # heat flux and film values as FORMULEs over the faces' shape functions
-        # (tests/integration/test_imported_fields_parity.py)
+        # (test_imported_fields_parity.py); stage 2: tractions, body forces and
+        # displacements (test_imported_vectors.py)
         field_features=frozenset(
             {"body_temperature:T", "pressure:p", "heat_flux:q", "convection:h", "convection:T_inf"}
-        ),
+        )
+        | VECTOR_FIELD_FEATURES,
         time_schemes=frozenset({"backward_euler", "crank_nicolson", "theta"}),
     )
 

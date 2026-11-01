@@ -5,7 +5,10 @@ interpolation functions, Abaqus mapped fields).
 CSV: x, y, z [m], the force density's components and magnitude [N/m^3], at every node
 where both the current density J [A/m^2] and the magnetic flux density B [T] are stored
 (Elmer's and FEniCSx's magnetostatics store both per node); one selection's nodes if
-asked. Outside conductors J is zero and so is the force.
+asked. Outside conductors J is zero and so is the force. The last column, dV [m^3], is
+each node's share of the volume, ∫N dV over its elements (ADR 0044 stage 2): ∑ dV f is
+the total force ∫ f dV of the field as interpolated, which a conservative import keeps
+(quadratic elements give corner nodes a small negative share).
 """
 
 from __future__ import annotations
@@ -42,7 +45,12 @@ def write(job):
     force = lorentz(j.at(ids), b.at(ids))
     xyz = job.mesh.node_coords(ids)
     header = "x [m],y [m],z [m],f_x [N/m^3],f_y [N/m^3],f_z [N/m^3],|f| [N/m^3]"
-    table = np.column_stack([xyz, force, np.linalg.norm(force, axis=1)])
+    columns = [xyz, force, np.linalg.norm(force, axis=1)]
+    share = _volumes(job, ids)
+    if share is not None:
+        header += ",dV [m^3]"
+        columns.append(share)
+    table = np.column_stack(columns)
     job.path.write_text(
         header + "\n" + "\n".join(",".join(f"{v:.9g}" for v in row) for row in table) + "\n"
     )
@@ -52,6 +60,23 @@ def write(job):
         "on": job.selection or "every node with J and B",
         "units": "SI: m, N/m^3",
     }
+
+
+def _volumes(job, ids) -> np.ndarray | None:
+    """Each node's ∫N dV over the selection's elements (a body), else the whole mesh's;
+    None when the mesh has elements the integration doesn't take."""
+    from puzzle.adapters.common import InputError, node_weights
+    from puzzle.mesh.mesh import Group
+
+    group = job.mesh.groups.get(job.selection) if job.selection is not None else None
+    if group is None or group.dim != 3:
+        entities = sorted({b.entity for b in job.mesh.blocks if b.dim == 3})
+        group = Group("mesh", 3, entities, job.mesh.node_ids)
+    try:
+        w = node_weights(group, job.mesh, "body")
+    except InputError:
+        return None
+    return np.array([w.get(int(i), 0.0) for i in ids])
 
 
 def lorentz(j: np.ndarray, b: np.ndarray) -> np.ndarray:

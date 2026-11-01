@@ -26,6 +26,11 @@ one, else k (1, 2, ...: CalculiX's total time when each static step lasts 1), li
 between the field's times and held at the first or last outside them, as an Amplitude
 is. A transient step takes the whole history (adapters that follow it list the feature
 in `Capabilities.field_histories`; the rest refuse it).
+
+Stage 2: `vector_values` maps a vector feature's components (`VECTORS`) as one vector,
+  rotated with the points when a placement turns them; `conserve` makes a conservative
+  use's total on the target equal the source's (`CONSERVED`: force-type values, the
+  source's points weighted by their area or volume).
 """
 
 from __future__ import annotations
@@ -557,32 +562,59 @@ def check(project, root: Path, f, targets: np.ndarray | None = None, tolerance: 
 # --- a feature's field use, on its nodes -------------------------------------------------------
 
 
-def use_values(project, root: Path, use, targets: np.ndarray, time: float | None = None
-               ) -> tuple[np.ndarray, np.ndarray]:  # fmt: skip
+def _scaled(use, values: np.ndarray) -> np.ndarray:
+    """A use's scale, then its offset (an offset in a temperature unit adds a difference:
+    °C and K steps are the same)."""
+    offset = use.offset.to_si() if use.offset is not None else 0.0
+    if use.offset is not None and use.offset.unit in ("degC", "°C", "degF", "°F"):
+        offset = use.offset.value * (5 / 9 if "F" in use.offset.unit else 1.0)
+    return use.scale * values + offset
+
+
+def _column(f, c: Cloud, name: str) -> np.ndarray:
+    if name not in c.values:
+        raise FieldError(
+            f"field '{f.name}' has no column '{name}' (it has {sorted(c.values)})",
+            code="not_found",
+        )
+    return c.values[name]
+
+
+def _at(f, states, time: float | None) -> list[tuple[float, Cloud]]:
+    """The field's states to blend at `time` (s), with their weights: linear between the
+    two times about it, held at the first or last outside them."""
+    if states[0][0] is None:
+        return [(1.0, states[0][1])]
+    if time is None:
+        raise FieldError(f"field '{f.name}' varies in time: say at which time to take it")
+    times = np.array([s for s, _ in states])
+    if time <= times[0] or len(times) == 1:
+        return [(1.0, states[0][1])]
+    if time >= times[-1]:
+        return [(1.0, states[-1][1])]
+    j = int(np.searchsorted(times, time))  # times[j - 1] < time <= times[j]
+    w = (time - times[j - 1]) / (times[j] - times[j - 1])
+    return [(1 - w, states[j - 1][1]), (w, states[j][1])]
+
+
+def use_values(project, root: Path, use, targets: np.ndarray, time: float | None = None,
+               weights=None, entity=None) -> tuple[np.ndarray, np.ndarray]:  # fmt: skip
     """A field use's values (SI, scaled and offset) at `targets`, and their distances. A
     field varying in time is taken at `time` (s): linearly between its two times about
-    it, held at the first or last outside them."""
+    it, held at the first or last outside them. A conservative use needs the targets'
+    `weights` (∫N dA or ∫N dV per target, from `adapters.common.node_weights`) and
+    whether it is spread over a "face" or a "body"."""
     from puzzle.model.schema import ImportedField
 
     f = project.get(use.field, ImportedField)
-    states = clouds(project, root, f, use)
-    if states[0][0] is None:
-        return _mapped(f, states[0][1], use, targets)
-    if time is None:
-        raise FieldError(f"field '{f.name}' varies in time: say at which time to take it")
-    times = np.array([t for t, _ in states])
-    if time <= times[0] or len(times) == 1:
-        return _mapped(f, states[0][1], use, targets)
-    if time >= times[-1]:
-        return _mapped(f, states[-1][1], use, targets)
-    j = int(np.searchsorted(times, time))  # times[j - 1] < time <= times[j]
-    w = (time - times[j - 1]) / (times[j] - times[j - 1])
-    before, d0 = _mapped(f, states[j - 1][1], use, targets)
-    after, d1 = _mapped(f, states[j][1], use, targets)
-    return (1 - w) * before + w * after, np.maximum(d0, d1)
+    parts = [(w, _mapped(f, c, use, targets, weights, entity))
+             for w, c in _at(f, clouds(project, root, f, use), time)]  # fmt: skip
+    values = sum(w * v for w, (v, _) in parts)
+    return values, np.maximum.reduce([d for _, (_, d) in parts])
 
 
-def use_history(project, root: Path, use, targets: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def use_history(project, root: Path, use, targets: np.ndarray, weights=None, entity=None
+                ) -> tuple[np.ndarray, np.ndarray]:  # fmt: skip
     """A field use's times (s) and its values at `targets` at each, (n, times): what a
     transient step follows, linearly between the times."""
     from puzzle.model.schema import ImportedField
@@ -591,7 +623,7 @@ def use_history(project, root: Path, use, targets: np.ndarray) -> tuple[np.ndarr
     states = clouds(project, root, f, use)
     if states[0][0] is None:
         raise FieldError(f"field '{f.name}' holds still in time")
-    values = np.column_stack([_mapped(f, c, use, targets)[0] for _, c in states])
+    values = np.column_stack([_mapped(f, c, use, targets, weights, entity)[0] for _, c in states])
     return np.array([t for t, _ in states]), values
 
 
@@ -605,21 +637,152 @@ def step_time(step, k: int) -> float:
     return value.to_si() if hasattr(value, "to_si") else float(value)
 
 
-def _mapped(f, c: Cloud, use, targets) -> tuple[np.ndarray, np.ndarray]:
-    if use.column not in c.values:
-        raise FieldError(
-            f"field '{f.name}' has no column '{use.column}' (it has {sorted(c.values)})",
-            code="not_found",
-        )
+def _mapped(f, c: Cloud, use, targets, weights=None, entity=None
+            ) -> tuple[np.ndarray, np.ndarray]:  # fmt: skip
+    source = _scaled(use, _column(f, c, use.column))
     limit = use.max_distance.to_si() if use.max_distance is not None else None
-    values, dist = map_values(
-        c.points, c.values[use.column], targets, use.mapping, use.beyond, limit
+    mapping = "linear" if use.mapping == "conservative" else use.mapping
+    values, dist = map_values(c.points, source, targets, mapping, use.beyond, limit)
+    if use.mapping == "conservative":
+        if weights is None:
+            raise FieldError("conservative mapping needs the target's areas or volumes")
+        total = source_weights(f, c, use, entity) @ source
+        values = conserve(np.array([total]), values[:, None], np.asarray(weights))[:, 0]
+    return values, dist
+
+
+# --- vectors and totals (stage 2) -------------------------------------------------------------
+
+# Feature values that make one vector: taken from one field and placement, they are
+# rotated with the points; a conservative mapping keeps their total as a vector.
+VECTORS = {
+    "displacement": ("x", "y", "z"),
+    "body_force": ("fx", "fy", "fz"),
+    "traction": ("tx", "ty", "tz"),
+}
+# Values a conservative mapping applies to (their total is a force, or a heat flow), and
+# what they're spread over: per area on faces, per volume on bodies.
+CONSERVED = {"pressure": "face", "traction": "face", "heat_flux": "face", "body_force": "body"}
+
+
+def turn(project, f, use) -> np.ndarray:
+    """The rotation (3 x 3) a use's points get, the field's placement then the use's: the
+    linear part of the two placements, which a vector's components follow too."""
+    zero, unit = np.zeros((1, 3)), np.eye(3)
+    a = place(unit, f.placement, project) - place(zero, f.placement, project)
+    b = place(unit, use.placement, project) - place(zero, use.placement, project)
+    return b.T @ a.T
+
+
+def source_weights(f, c: Cloud, use, entity: str | None) -> np.ndarray:
+    """Each field point's area (a face load) or volume (a body load), m² or m³, from the
+    use's weight column; a column without a unit is in the points' length unit squared
+    or cubed."""
+    if entity is None:
+        raise FieldError("conservative mapping applies to force-type values only "
+                         f"({', '.join(sorted(CONSERVED))})")  # fmt: skip
+    if not use.weight:
+        raise FieldError(
+            f"conservative mapping of field '{f.name}' needs each point's "
+            f"{'area' if entity == 'face' else 'volume'}: name the column holding it "
+            "(weight). Without one the source's total isn't defined",
+            path=f.name,
+        )
+    w = _column(f, c, use.weight)
+    column = next(col for col in f.columns if col.name == use.weight)
+    if not column.unit:  # read as written: in the points' unit to a power
+        a, _, _ = _si(f.length_unit)
+        w = w * a ** (2 if entity == "face" else 3)
+    return np.asarray(w, dtype=float)
+
+
+def conserve(total: np.ndarray, values: np.ndarray, weights: np.ndarray) -> np.ndarray:
+    """Mapped values (n, c) corrected so their integral ∑ w v equals the source's `total`
+    (c,): v + |v| k, k = (total - ∑ w v) / ∑ w |v|. The correction goes where the load
+    is (zero stays zero), turns with a rotation, and is exact whatever the shapes."""
+    values = np.asarray(values, dtype=float)
+    size = np.linalg.norm(values, axis=1)
+    spread = float(weights @ size)
+    if spread <= 1e-300 or not np.isfinite(spread):
+        if np.allclose(total, 0.0):
+            return values
+        raise FieldError(
+            "conservative mapping: no load lands on the target (check the field's placement)"
+        )
+    k = (np.asarray(total, dtype=float) - weights @ values) / spread
+    return values + size[:, None] * k[None, :]
+
+
+def vector_values(project, root: Path, f, targets, weights=None, time: float | None = None
+                  ) -> dict[str, np.ndarray]:  # fmt: skip
+    """A vector feature's components at `targets` (SI), from its fields and uniform
+    values. When a placement turns the points, or the mapping is conservative, the
+    components must come from one field and placement: they are rotated with the points
+    (and conserved) as one vector. Otherwise each component maps on its own."""
+    from puzzle.model.schema import ImportedField
+
+    names = VECTORS[f.type]
+    if f.type == "displacement":  # a component it doesn't name is left free
+        present = [n for n in names if n in f.fields or n in f.values]
+    else:  # a load's missing component is zero
+        present = list(names)
+    if f.axes is not None:
+        raise FieldError(
+            f"{f.type} on '{f.selection}' takes its vector from an imported field: place "
+            "the field (its placement or the use's) instead of giving the feature axes",
+            code="unsupported",
+        )
+    uses = {n: f.fields[n] for n in present if n in f.fields}
+    fields_of = {n: project.get(u.field, ImportedField) for n, u in uses.items()}
+    turned = any(
+        not np.allclose(turn(project, fields_of[n], u), np.eye(3)) for n, u in uses.items()
     )
-    offset = use.offset.to_si() if use.offset is not None else 0.0
-    # An offset in a temperature unit adds a difference: °C and K steps are the same.
-    if use.offset is not None and use.offset.unit in ("degC", "°C", "degF", "°F"):
-        offset = use.offset.value * (5 / 9 if "F" in use.offset.unit else 1.0)
-    return use.scale * values + offset, dist
+    together = turned or any(u.mapping == "conservative" for u in uses.values())
+    if not together:
+        out = {}
+        for n in present:
+            if n in uses:
+                out[n] = use_values(project, root, uses[n], targets, time)[0]
+            else:
+                q = f.values.get(n)
+                out[n] = np.full(len(targets), q.to_si() if q is not None else 0.0)
+        return out
+    first = uses[next(iter(uses))]
+    alike = all(
+        u.field == first.field and u.placement == first.placement and u.mapping == first.mapping
+        and u.weight == first.weight and u.beyond == first.beyond
+        and u.max_distance == first.max_distance
+        for u in uses.values()
+    )  # fmt: skip
+    if set(uses) != set(present) or not alike:
+        why = "turns the points" if turned else "is conservative"
+        raise FieldError(
+            f"{f.type} on '{f.selection}': its placement {why}, so its components "
+            f"({', '.join(present)}) must all come from one field with the same placement "
+            "and mapping, to be rotated and conserved as one vector",
+            code="invalid_input",
+        )
+    field_ = fields_of[next(iter(uses))]
+    limit = first.max_distance.to_si() if first.max_distance is not None else None
+    mapping = "linear" if first.mapping == "conservative" else first.mapping
+    mapped = np.zeros((len(targets), 3))
+    for w, c in _at(field_, clouds(project, root, field_, first), time):
+        full = np.zeros((len(c.points), 3))
+        for d, n in enumerate(names):
+            if n in uses:
+                full[:, d] = _scaled(uses[n], _column(field_, c, uses[n].column))
+        full = full @ turn(project, field_, first).T  # the file's axes to the model's
+        part = np.column_stack([
+            map_values(c.points, full[:, d], targets, mapping, first.beyond, limit)[0]
+            for d in range(3)
+        ])  # fmt: skip
+        if first.mapping == "conservative":
+            if weights is None:
+                raise FieldError("conservative mapping needs the target's areas or volumes")
+            total = source_weights(field_, c, first, CONSERVED.get(f.type)) @ full
+            part = conserve(total, part, np.asarray(weights))
+        mapped += w * part
+    return {n: mapped[:, d] for d, n in enumerate(names) if n in present}
 
 
 # --- making one, and checking one on a model ---------------------------------------------------
@@ -749,8 +912,27 @@ def field_inputs(project, root: Path, study, mesh) -> list:
             if any(varies(u) for u in f.fields.values()):
                 when = [k for k, s in enumerate(steps, 1)
                         if s.solves(physics.type) and (not f.steps or k in f.steps)]  # fmt: skip
+            weights = _weights(f, group, mesh, ids)
             for k in when:
                 step = steps[k - 1] if k is not None else None
+                if f.type in VECTORS:  # stage 2: the components as one vector
+                    if (
+                        step is not None
+                        and step.type == "transient"
+                        and any(varies(u) for u in f.fields.values())
+                    ):
+                        raise FieldError(
+                            f"{f.type} from a field varying in time can't be followed "
+                            f"through the transient step {k} yet (on {f.selection})",
+                            code="unsupported",
+                        )
+                    time = step_time(step, k) if k is not None else None
+                    for name, values in vector_values(project, root, f, xyz, weights,
+                                                      time).items():  # fmt: skip
+                        key = feature_key(f, name)
+                        field_ = Field(key, "node", [""], ids, values[:, None])
+                        out.append(Input(field_, "feature", f.selection, key, step=k))
+                    continue
                 names = set(f.fields) | ({"T"} if f.type == "body_temperature" else set())
                 for name in sorted(names):
                     key, use, history = feature_key(f, name), f.fields.get(name), None
@@ -763,10 +945,14 @@ def field_inputs(project, root: Path, study, mesh) -> list:
                                 f"the transient step {k} yet (on {f.selection})",
                                 code="unsupported",
                             )
-                        history, values = use_history(project, root, use, xyz)
+                        history, values = use_history(
+                            project, root, use, xyz, weights, CONSERVED.get(f.type)
+                        )
                     else:
                         time = step_time(step, k) if k is not None else None
-                        values, _ = use_values(project, root, use, xyz, time)
+                        values, _ = use_values(
+                            project, root, use, xyz, time, weights, CONSERVED.get(f.type)
+                        )
                     if f.type == "body_temperature":
                         temperature.setdefault(k, {}).update(
                             zip(ids.tolist(), values.tolist(), strict=True)
@@ -792,3 +978,20 @@ def field_inputs(project, root: Path, study, mesh) -> list:
         out.append(Input(Field("temperature", "node", [""], ids, values), "load", None,
                          "body temperature", step=k))  # fmt: skip
     return out
+
+
+def _weights(f, group, mesh, ids) -> np.ndarray | None:
+    """The selection's node weights (∫N dA or ∫N dV) when a use of `f` is conservative."""
+    if not any(u.mapping == "conservative" for u in f.fields.values()):
+        return None
+    entity = CONSERVED.get(f.type)
+    if entity is None:
+        raise FieldError(
+            f"conservative mapping keeps a total force or heat flow: {f.type} has none "
+            f"(it applies to {', '.join(sorted(CONSERVED))})",
+            path=f.selection,
+        )
+    from puzzle.adapters.common import node_weights
+
+    w = node_weights(group, mesh, entity)
+    return np.array([w.get(int(i), 0.0) for i in ids])

@@ -26,11 +26,15 @@ FACES = {
 BODY_LOADS = {"gravity", "acceleration", "rotation"}  # ADR 0037: on bodies, per volume
 REMOTE = {"remote_force", "remote_force_rigid", "remote_displacement"}  # ADR 0037: on faces
 PRETENSION = {"bolt_pretension", "bolt_adjustment"}  # ADR 0037: on a section face
+# ADR 0044 stage 2: a force per volume (no density) and a force per area, uniform or
+# from imported fields.
+VECTOR_LOADS = {"body_force", "traction"}
 STRUCTURAL = (
     {"fixed", "displacement", "force", "pressure", "elastic_support", "compression_only_support"}
     | BODY_LOADS
     | REMOTE
     | PRETENSION
+    | VECTOR_LOADS
 )
 HOLDING = ("fixed", "displacement", "remote_displacement")  # kept as constraints in modal
 THERMAL = {"temperature", "heat_flux", "convection"}
@@ -677,6 +681,141 @@ def pressure_forces(group, mesh: Mesh, pressure) -> dict[int, np.ndarray]:
                 for nid, f in zip(column, n[k] * t, strict=True):
                     out[int(nid)] = out.get(int(nid), 0.0) + f
     return out
+
+
+# --- vector loads from nodal values (ADR 0044 stage 2) -----------------------------------
+
+
+def _tet_rule(n: int = 4):
+    """A collapsed Gauss rule on the reference tetrahedron (xi, eta, zeta, weight): n
+    points a direction, exact to degree 2n - 1 (quadratic shape functions times a
+    quadratic field and a curved element's Jacobian, with n = 4)."""
+    g, w = np.polynomial.legendre.leggauss(n)
+    g, w = (g + 1) / 2, w / 2
+    out = []
+    for a, wa in zip(g, w, strict=True):
+        for b, wb in zip(g, w, strict=True):
+            for c, wc in zip(g, w, strict=True):
+                xi, eta, zeta = a, b * (1 - a), c * (1 - a) * (1 - b)
+                out.append((xi, eta, zeta, wa * wb * wc * (1 - a) ** 2 * (1 - b)))
+    return out
+
+
+_TET_RULE = _tet_rule()
+
+
+def _tet_shape(element: str, xi: float, eta: float, zeta: float):
+    """Gmsh-ordered shape functions of a tet4 or tet10 and their derivatives (3, k) in
+    xi, eta, zeta; tet10's edge nodes are (0-1, 1-2, 2-0, 0-3, 2-3, 1-3)."""
+    lam = np.array([1.0 - xi - eta - zeta, xi, eta, zeta])
+    dlam = np.array([[-1.0, 1, 0, 0], [-1.0, 0, 1, 0], [-1.0, 0, 0, 1]])  # d lam / d(xi..)
+    if element == "tet4":
+        return lam, dlam
+    edges = [(0, 1), (1, 2), (2, 0), (0, 3), (2, 3), (1, 3)]
+    n = np.concatenate([lam * (2 * lam - 1), [4 * lam[i] * lam[j] for i, j in edges]])
+    dn = np.concatenate(
+        [dlam * (4 * lam - 1), np.stack([4 * (dlam[:, i] * lam[j] + lam[i] * dlam[:, j])
+                                         for i, j in edges], axis=1)], axis=1,
+    )  # fmt: skip
+    return n, dn
+
+
+def _volume_quadrature(group, mesh: Mesh):
+    """Quadrature over a body selection's volume elements (tet4, tet10): for each block
+    and point, (connectivity, N, volumes dV (ne,))."""
+    blocks = [b for b in group.blocks(mesh) if b.dim == 3]
+    if not blocks:
+        raise InputError(f"'{group.name}' must be a body selection for a load per volume")
+    for b in blocks:
+        if b.element not in ("tet4", "tet10"):
+            raise InputError(f"a load per volume on {b.element} elements is not supported yet")
+        nodes = mesh.node_coords(b.connectivity.ravel()).reshape(len(b.connectivity), -1, 3)
+        for xi, eta, zeta, w in _TET_RULE:
+            n, dn = _tet_shape(b.element, xi, eta, zeta)
+            jac = np.einsum("dk,eki->eid", dn, nodes)  # (ne, 3 xyz, 3 ref)
+            yield b.connectivity, n, w * np.abs(np.linalg.det(jac))
+
+
+def _consistent(points, at) -> dict[int, np.ndarray]:
+    """∑ ∫ N_k v dΩ per node k, v interpolated from its nodal values `at(ids)` ((m, c))
+    with the elements' own shape functions."""
+    out: dict[int, np.ndarray] = {}
+    for conn, n, dw in points:
+        nodal = np.asarray(at(conn.ravel()), float).reshape(*conn.shape, -1)
+        v = np.einsum("k,ekc->ec", n, nodal) * dw[:, None]
+        for k, column in enumerate(conn.T):
+            for nid, f in zip(column, n[k] * v, strict=True):
+                out[int(nid)] = out.get(int(nid), 0.0) + f
+    return out
+
+
+def _face_points(group, mesh: Mesh):
+    for conn, n, _x, da in _quadrature(group, mesh):
+        yield conn, n, da
+
+
+def traction_forces(group, mesh: Mesh, at) -> dict[int, np.ndarray]:
+    """Consistent nodal forces ∫ N_k t dA of a traction (force per area) given at the
+    face selection's nodes (`at(ids) -> (m, 3)`), interpolated with the faces' own shape
+    functions on their curved geometry (ADR 0044)."""
+    if mesh.planar:
+        raise InputError("a traction on a 2D model's edges is not written yet", code="unsupported")
+    return _consistent(_face_points(group, mesh), at)
+
+
+def body_forces(group, mesh: Mesh, at) -> dict[int, np.ndarray]:
+    """Consistent nodal forces ∫ N_k f dV of a force per volume given at the body
+    selection's nodes (`at(ids) -> (m, 3)`), interpolated with the elements' shape
+    functions (ADR 0044). Unlike gravity, no density: f is the force density itself."""
+    if mesh.planar:
+        raise InputError("a body force in a 2D model is not written yet", code="unsupported")
+    return _consistent(_volume_quadrature(group, mesh), at)
+
+
+def face_shares(block: CellBlock, mesh: Mesh) -> np.ndarray:
+    """∫ N_k dA per face and node (ne, k) of a tri3/tri6 surface block, on the faces'
+    curved geometry: ∑_k share p_k is the face's exact ∫ p dA of the interpolated p."""
+    if block.element not in ("tri3", "tri6"):
+        raise InputError(f"a conservative value on {block.element} faces is not supported yet")
+    nodes = mesh.node_coords(block.connectivity.ravel()).reshape(len(block.connectivity), -1, 3)
+    out = np.zeros(block.connectivity.shape)
+    for xi, eta, w in _TRI_RULE:
+        n, dxi, deta = _shape(block.element, xi, eta)
+        jac = np.cross(np.einsum("k,eki->ei", dxi, nodes), np.einsum("k,eki->ei", deta, nodes))
+        out += np.outer(0.5 * w * np.linalg.norm(jac, axis=1), n)
+    return out
+
+
+def node_weights(group, mesh: Mesh, entity: str) -> dict[int, float]:
+    """Each node's share ∫ N_k dA (entity "face") or ∫ N_k dV ("body") of the selection:
+    a nodal field's integral is ∑ w_k v_k, exactly as the consistent forces sum
+    (quadratic elements give corners a zero (faces) or negative (volumes) share)."""
+    points = _face_points(group, mesh) if entity == "face" else _volume_quadrature(group, mesh)
+    return {k: float(v[0]) for k, v in _consistent(points, lambda ids: np.ones(len(ids))).items()}
+
+
+def feature_vector(f, components, given: dict, ids) -> tuple[np.ndarray, list[int]]:
+    """A vector feature's values at nodes `ids` ((m, 3), SI) and which components it
+    sets: each from its imported field's mapped input (ADR 0044, `given` by
+    `fields.feature_key`) or its uniform value; a component it doesn't set is zero."""
+    from puzzle.fields import feature_key
+
+    ids = np.asarray(ids)
+    out, present = np.zeros((len(ids), 3)), []
+    for d, name in enumerate(components):
+        if name in f.fields:
+            field = given.get(feature_key(f, name))
+            if field is None:
+                raise InputError(
+                    f"{f.type} on '{f.selection}': its field for {name} was not mapped"
+                )
+            out[:, d] = field.at(ids)[:, 0]
+        elif name in f.values:
+            out[:, d] = f.values[name].to_si()
+        else:
+            continue
+        present.append(d)
+    return out, present
 
 
 def remote_values(f) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:

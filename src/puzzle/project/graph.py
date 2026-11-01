@@ -61,6 +61,9 @@ def _own(obj: ProjectObject, *, drop: frozenset[str] = frozenset()) -> dict:
             for feature in physics.get("features", []):
                 if not feature.get("fields"):
                     feature.pop("fields", None)
+                for use in (feature.get("fields") or {}).values():  # stage 2: no weight
+                    if use.get("weight") is None:
+                        use.pop("weight", None)
         for bolt in data.get("connectors", []):
             bolt.pop("group", None)
             bolt.pop("rule", None)

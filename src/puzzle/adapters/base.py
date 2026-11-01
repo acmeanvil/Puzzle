@@ -50,6 +50,14 @@ RIGID_REMOTE_FEATURES = frozenset({"remote_force_rigid"})
 SUPPORT_FEATURES = frozenset({"elastic_support"})  # ADR 0037: stiffness per area
 LIFTING_FEATURES = frozenset({"compression_only_support"})  # ADR 0037: nonlinear
 PRETENSION_FEATURES = frozenset({"bolt_pretension", "bolt_adjustment"})  # ADR 0037
+# ADR 0044 stage 2: a force per volume and a force per area (tests/integration/
+# test_imported_vectors.py), and the vector values that may come from imported fields.
+VECTOR_LOAD_FEATURES = frozenset({"body_force", "traction"})
+VECTOR_FIELD_FEATURES = frozenset(
+    {f"{t}:{c}" for t, cs in (("body_force", "fxfyfz"), ("traction", "txtytz"))
+     for c in (cs[0:2], cs[2:4], cs[4:6])}
+    | {"displacement:x", "displacement:y", "displacement:z"}
+)  # fmt: skip
 
 
 @dataclass(frozen=True)

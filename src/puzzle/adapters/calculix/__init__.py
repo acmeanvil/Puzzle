@@ -13,6 +13,8 @@ from puzzle.adapters.base import (
     STRUCTURAL_FEATURES,
     SUPPORT_FEATURES,
     THERMAL_FEATURES,
+    VECTOR_FIELD_FEATURES,
+    VECTOR_LOAD_FEATURES,
     Capabilities,
     SolverAdapter,
 )
@@ -45,7 +47,8 @@ class CalculixAdapter(SolverAdapter):
         | RIGID_REMOTE_FEATURES
         | SUPPORT_FEATURES
         | PRETENSION_FEATURES
-        | LIFTING_FEATURES,
+        | LIFTING_FEATURES
+        | VECTOR_LOAD_FEATURES,
         feature_steps=True,
         connectors=frozenset({"beam_fastener:rigid", "beam_fastener:distributing"}),
         beams=True,  # ADR 0027, tests/integration/test_beams.py
@@ -57,7 +60,8 @@ class CalculixAdapter(SolverAdapter):
         # ADR 0044: values from imported fields (tests/integration/test_imported_fields.py)
         field_features=frozenset(
             {"body_temperature:T", "pressure:p", "heat_flux:q", "convection:h", "convection:T_inf"}
-        ),
+        )
+        | VECTOR_FIELD_FEATURES,  # stage 2: tests/integration/test_imported_vectors.py
         # ADR 0044: a face value from a field varying in time, through transient steps
         # (an amplitude per face; tests/integration/test_imported_fields_time.py)
         field_histories=frozenset({"pressure:p", "heat_flux:q"}),

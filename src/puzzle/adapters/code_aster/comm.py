@@ -22,13 +22,16 @@ from puzzle.adapters.common import (
     REMOTE,
     STRUCTURAL,
     THERMAL,
+    VECTOR_LOADS,
     InputError,
     as_planar,
+    body_forces,
     body_load,
     check_contacts,
     check_dynamics,
     cylindrical_expressions,
     fastener_selections,
+    feature_vector,
     frequency_list,
     globalize,
     initial_temperature,
@@ -47,6 +50,7 @@ from puzzle.adapters.common import (
     thermal_tables,
     time_scheme,
     time_settings,
+    traction_forces,
 )
 from puzzle.mesh.med import safe_names, write_med
 from puzzle.mesh.mesh import CellBlock, Group, Mesh
@@ -349,6 +353,35 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             parts = ", ".join(f"F{a.upper()}={force[k]:.12g}" for k, a in enumerate("xyz"))
             field_forces.append(f"_F(GROUP_NO='FP{j}N{i}', {parts})")
     features = [f for f in features if not (f.type == "pressure" and "p" in f.fields)]
+    # ADR 0044 stage 2: a traction or body force from a field as consistent nodal forces
+    # (∫N t dA, ∫N f dV), a displacement from a field per node (DDL_IMPO), each node in
+    # its own point group.
+    field_imposed: list[str] = []
+    vectors = [f for f in features if f.type in VECTOR_LOADS and f.fields]
+    for j, f in enumerate(vectors, 1):
+        keys = ("tx", "ty", "tz") if f.type == "traction" else ("fx", "fy", "fz")
+        nodal = traction_forces if f.type == "traction" else body_forces
+
+        def at(ids, f=f, keys=keys):
+            return feature_vector(f, keys, given, ids)[0]
+
+        forces = nodal(mesh.groups[f.selection], mesh, at)
+        for i, (node, force) in enumerate(sorted(forces.items()), start=1):
+            if not force.any():
+                continue
+            points.add(f"FV{j}N{i}", node)
+            parts = ", ".join(f"F{a.upper()}={force[k]:.12g}" for k, a in enumerate("xyz"))
+            field_forces.append(f"_F(GROUP_NO='FV{j}N{i}', {parts})")
+    shapes = [f for f in features if f.type == "displacement" and f.fields]
+    for j, f in enumerate(shapes, 1):
+        ids = mesh.groups[f.selection].node_ids
+        u, present = feature_vector(f, "xyz", given, ids)
+        present = [d for d in present if not (mesh.planar and d == 2)]
+        for i, node in enumerate(ids, start=1):
+            points.add(f"FD{j}N{i}", int(node))
+            dofs = ", ".join(f"D{'XYZ'[d]}={u[i - 1, d]:.12g}" for d in present)
+            field_imposed.append(f"_F(GROUP_NO='FD{j}N{i}', {dofs})")
+    features = [f for f in features if not any(f is g for g in vectors + shapes)]
     write_med(points.mesh, workdir / f"{JOB}.med", names)
 
     model = _modelisation(comp, thermal)
@@ -408,10 +441,10 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         *(
             [
                 "mesh = DEFI_GROUP(reuse=mesh, MAILLAGE=mesh, CREA_GROUP_NO=_F(GROUP_MA=("
-                + ", ".join(f"'{g}'" for g in points.names if g.startswith("FP"))
+                + ", ".join(f"'{g}'" for g in points.names if g.startswith(("FP", "FV", "FD")))
                 + ",)))"
             ]
-            if field_forces
+            if field_forces or field_imposed
             else []
         ),
         # Pretension relations name single nodes: their point groups as node groups.
@@ -539,6 +572,8 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         extra = _pretension_loads(bolts, cuts)
         if field_forces:
             extra["FORCE_NODALE"] = extra.get("FORCE_NODALE", []) + field_forces
+        if field_imposed:  # ADR 0044 stage 2: a displacement from a field, per node
+            extra["DDL_IMPO"] = extra.get("DDL_IMPO", []) + field_imposed
         for key, items in _fastener_loads(fastener_ends, fasteners, names).items():
             extra[key] = extra.get(key, []) + items  # both write LIAISON_DDL
         # In a transient step, loads following an amplitude get their own charge,
@@ -2017,6 +2052,7 @@ def _loads(
     contour: list[str] = []  # forces on a 2D model's edges
     nodal: list[str] = []
     gravity, rotation, rigid, shell_pressure = [], [], [], []
+    internal: list[str] = []  # forces per volume (ADR 0044 stage 2)
     tied = [
         f"_F(GROUP_MA_MAIT='{names[c.target.split('/', 1)[0]]}', "
         f"GROUP_MA_ESCL='{names[c.source]}', TYPE_RACCORD='MASSIF')"
@@ -2072,6 +2108,14 @@ def _loads(
                     f"_F(GROUP_MA='{g}', VITESSE={load.omega:.12g}, AXE=({axis}), "
                     f"CENTRE=({centre}))"
                 )
+        elif f.type in VECTOR_LOADS and mesh.planar:
+            raise InputError(f"a {f.type} in a 2D model is not written yet", code="unsupported")
+        elif f.type == "body_force":  # uniform, per volume, no density (ADR 0044)
+            comps = ", ".join(f"F{a.upper()}={v.get(f'f{a}', 0.0):.12g}" for a in "xyz")
+            internal.append(f"_F(GROUP_MA='{g}', {comps})")
+        elif f.type == "traction":  # uniform, per area (ADR 0044)
+            comps = ", ".join(f"F{a.upper()}={v.get(f't{a}', 0.0):.12g}" for a in "xyz")
+            face_force.append(f"_F(GROUP_MA='{g}', {comps})")
         elif f.type == "temperature":
             temperature.append(f"_F(GROUP_MA='{g}', TEMP={v['T']:.12g})")
         elif f.type == "heat_flux":
@@ -2100,6 +2144,7 @@ def _loads(
         + kw("PRES_REP", pressure)
         + kw("FORCE_COQUE", shell_pressure)
         + kw("PESANTEUR", gravity)
+        + kw("FORCE_INTERNE", internal)
         + kw("LIAISON_SOLIDE", rigid + extra.get("LIAISON_SOLIDE", []))
         + kw("LIAISON_RBE3", extra.get("LIAISON_RBE3", []))
         + kw("ROTATION", rotation)

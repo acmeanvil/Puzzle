@@ -353,6 +353,12 @@ def solve_solid(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
             add_load(ufl.inner(fem.Constant(msh, traction), v) * ds(tag(f["group"])), f)
         elif f["type"] == "pressure" and not modal:
             add_load(-vals["p"] * ufl.inner(n, v) * ds(tag(f["group"])), f)
+        elif f["type"] == "traction" and not modal:  # force per area (ADR 0044)
+            t = np.array([vals.get(c, 0.0) for c in ("tx", "ty", "tz")])
+            add_load(ufl.inner(fem.Constant(msh, t), v) * ds(tag(f["group"])), f)
+        elif f["type"] == "body_force" and not modal:  # force per volume, no density
+            b = np.array([vals.get(c, 0.0) for c in ("fx", "fy", "fz")])
+            add_load(ufl.inner(fem.Constant(msh, b), v) * dx(tag(f["group"])), f)
         elif f["type"] == "elastic_support":  # a foundation: kn normal, kt tangential
             kn, kt = vals.get("kn", 0.0), vals.get("kt", 0.0)
             un, vn = ufl.dot(u, n), ufl.dot(v, n)

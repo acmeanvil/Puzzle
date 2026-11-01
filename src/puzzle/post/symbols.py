@@ -5,6 +5,8 @@ input: one glyph set per feature, drawn on the feature's faces.
 - prescribed displacement: arrows along each prescribed direction, blue;
 - force: one arrow at the faces' centre, along the force, red;
 - pressure: arrows into the face (out of it for a negative pressure), red;
+- traction: arrows on the face along it, red; body force density: one arrow along it at
+  the model's centre, as gravity's; either from an imported field: the faces tinted red;
 - heat flux: arrows into the face, orange; temperature and convection: the face tinted;
 - flow: inlet arrows into the face, outlet arrows out of it, green; walls and symmetry
   tinted;
@@ -161,6 +163,17 @@ def symbols(
                     out.append(Glyphs(name, "arrow", RED, pts.mean(axis=0)[None], d[None]))
             elif f.type in ("gravity", "acceleration", "rotation"):
                 out.append(_body_symbol(f, name, mesh))
+            elif f.type in ("body_force", "traction"):  # ADR 0044: uniform, or a field's
+                keys = ("fx", "fy", "fz") if f.type == "body_force" else ("tx", "ty", "tz")
+                v = None if f.fields else _vector(f.values, keys)
+                if v is not None and f.type == "body_force":  # one arrow, as gravity's
+                    d = (v / np.linalg.norm(v))[None]
+                    out.append(Glyphs(name, "arrow", RED, mesh.coords.mean(axis=0)[None], d))
+                elif v is not None and len(pts):  # arrows on the faces along the traction
+                    d = np.tile(v / np.linalg.norm(v), (len(pts), 1))
+                    out.append(Glyphs(name, "arrow", RED, pts, d))
+                elif faces:  # from a field: the faces tinted (its values vary)
+                    out.append(Glyphs(name, "tint", RED, faces=faces))
             elif f.type in ("remote_force", "remote_force_rigid") and len(pts):
                 from puzzle.adapters.common import remote_values
 

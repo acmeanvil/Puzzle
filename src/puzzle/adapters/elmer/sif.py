@@ -123,10 +123,11 @@ def write_case(
         raise InputError("the Elmer adapter solves magnetic fields driven by one coil for now")
     features = [f for f in features if f.type != "coil_current"]
     # Body loads (ADR 0037) act on bodies, as body forces; the rest are boundaries.
-    loads = globalize(project, [f for f in features if f.type in BODY_LOADS])  # ADR 0049
+    per_volume = BODY_LOADS | {"body_force"}  # ADR 0044: a force density, no density
+    loads = globalize(project, [f for f in features if f.type in per_volume])  # ADR 0049
     for f in loads:
         body_load_on_material(comp, f, "Elmer")
-    features = globalize(project, [f for f in features if f.type not in BODY_LOADS])
+    features = globalize(project, [f for f in features if f.type not in per_volume])
     boundary_names = list(dict.fromkeys(f.selection for f in features))
     body_names = [a.selection for a in comp.materials]
     if not body_names:
@@ -278,7 +279,12 @@ def write_case(
 def _body_force(loads: list[Feature], material: Material) -> list[str]:
     """Stress Bodyforce per component: rho times the summed load fields; a rotation's
     centrifugal field is a MATC expression in the coordinates (ADR 0037)."""
-    rho = material.properties["density"].to_si()
+    given = np.zeros(3)  # body forces (ADR 0044): N/m^3 as they are
+    for f in loads:
+        if f.type == "body_force":
+            given += [f.values[c].to_si() if c in f.values else 0.0 for c in ("fx", "fy", "fz")]
+    loads = [f for f in loads if f.type != "body_force"]
+    rho = material.properties["density"].to_si() if loads else 0.0
     uniform = np.zeros(3)
     spin = []
     for f in loads:
@@ -290,9 +296,9 @@ def _body_force(loads: list[Feature], material: Material) -> list[str]:
     out = []
     for i in range(3):
         if not spin:
-            out.append(f"  Stress Bodyforce {i + 1} = {rho * uniform[i]:.10g}")
+            out.append(f"  Stress Bodyforce {i + 1} = {rho * uniform[i] + given[i]:.10g}")
             continue
-        terms = [f"{rho * uniform[i]:.10g}"]
+        terms = [f"{rho * uniform[i] + given[i]:.10g}"]
         for load in spin:
             (cx, cy, cz), (nx, ny, nz) = load.centre, load.axis
             d = [f"(tx({j})-({c:.10g}))" for j, c in enumerate((cx, cy, cz))]
@@ -467,6 +473,10 @@ def _boundary(
                 for d, a in ((1, "x"), (2, "y"), (3, "z"))
                 if a in v and d in dims
             ]
+        elif f.type == "traction" and mesh.planar:
+            raise InputError("a traction in a 2D model is not written yet", code="unsupported")
+        elif f.type == "traction":  # a force per area, uniform (ADR 0044): Elmer's Force i
+            out += [f"  Force {d} = {v.get(f't{a}', 0.0):.10g}" for d, a in enumerate("xyz", 1)]
         elif f.type == "force":
             # Elmer's Force is per area: a 2D edge's is length x thickness, or 2 pi r dl.
             group = mesh.groups[f.selection]

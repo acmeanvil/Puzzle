@@ -150,7 +150,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         [f for ph in comp.physics if ph.type == physics for f in ph.features if f.type in wanted],
     )
     for f in features:
-        if f.type in BODY_LOADS:  # cells carry one tag: the material's body (ADR 0037)
+        if f.type in BODY_LOADS | {"body_force"}:  # cells carry one tag: the material's
             body_load_on_material(comp, f, "FEniCSx")
     coils = [f for f in features if f.type == "coil_current"]
     if physics == "magnetic_fields" and len(coils) != 1:

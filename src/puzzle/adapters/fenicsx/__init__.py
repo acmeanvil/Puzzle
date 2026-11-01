@@ -27,6 +27,7 @@ from puzzle.adapters.base import (
     STRUCTURAL_FEATURES,
     SUPPORT_FEATURES,
     THERMAL_FEATURES,
+    VECTOR_LOAD_FEATURES,
     Capabilities,
     SolverAdapter,
 )
@@ -55,7 +56,8 @@ class FenicsxAdapter(SolverAdapter):
         | STRUCTURAL_FEATURES
         | PDE_FEATURES
         | REMOTE_FEATURES
-        | SUPPORT_FEATURES,
+        | SUPPORT_FEATURES
+        | VECTOR_LOAD_FEATURES,  # uniform only (ADR 0044 stage 2)
         shared_settings=frozenset(  # ADR 0023
             {"linear_solver", "tolerance", "max_iterations", "output_every"}
         ),

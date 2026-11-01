@@ -88,3 +88,20 @@ def test_directions(window):
     centre = mesh.coords.mean(axis=0)
     # Into the face: from the tip end towards the bar's middle.
     assert np.all(np.einsum("ij,ij->i", tip.directions, centre - tip.points) > 0)
+
+
+def test_a_traction_and_a_body_force_point_along_themselves(window):
+    """ADR 0044 stage 2: traction arrows on the face along it; one arrow for a body force."""
+    w = window
+    comp = w.session.project.of_type(Component)[0]
+    mesh = w.meshes[str(comp.id)]
+    comp.physics[0].features += [
+        Feature(type="traction", selection="Bar/Tip", values={"tz": Quantity(value=-2, unit="Pa")}),
+        Feature(type="body_force", selection="Bar/Body",
+                values={"fy": Quantity(value=3, unit="N/m^3")}),
+    ]  # fmt: skip
+    glyphs = {g.feature: g for g in symbols(comp, mesh, lambda s: w._entities_of(comp, s))}
+    traction = glyphs["Traction on Bar/Tip"]
+    assert len(traction.points) > 1 and np.allclose(traction.directions, [0, 0, -1])
+    body = glyphs["Body force on Bar/Body"]
+    assert len(body.points) == 1 and np.allclose(body.directions, [[0, 1, 0]])

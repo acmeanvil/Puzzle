@@ -402,8 +402,10 @@ def test_wall_cloud_in_display_units(tmp_path, engineering_units):
     files, _ = wall.write(_job(mesh, fm.poiseuille(mesh), tmp_path / "w.csv",
                                quantity="wall_pressure", units="display"))  # fmt: skip
     header, table = _read_csv(files[0])
-    assert header == ["x [mm]", "y [mm]", "z [mm]", "wall pressure [MPa]"]
+    # the faces' areas last (ADR 0044: a conservative import's weights)
+    assert header == ["x [mm]", "y [mm]", "z [mm]", "wall pressure [MPa]", "area [mm²]"]
     assert table[:, 0].max() < fm.LENGTH * 1000 and table[:, 0].max() > fm.LENGTH * 500
+    assert (table[:, -1] > 0).all()
 
 
 def test_wall_cloud_refuses_unknowns(tmp_path):

@@ -30,12 +30,15 @@ from puzzle.adapters.common import (
     PRETENSION,
     STRUCTURAL,
     THERMAL,
+    VECTOR_LOADS,
     FaceLookup,
     InputError,
     as_planar,
+    body_forces,
     body_load,
     check_contacts,
     fastener_values,
+    feature_vector,
     globalize,
     initial_temperature,
     nodal_edge_forces,
@@ -50,6 +53,7 @@ from puzzle.adapters.common import (
     surface_blocks,
     thermal_tables,
     time_scheme,
+    traction_forces,
 )
 from puzzle.mesh.mesh import Mesh
 from puzzle.model.schema import Component, Feature, Material, Project, SolveStep, Study
@@ -1547,6 +1551,21 @@ def _feature_rows(f: Feature, mesh: Mesh, faces: FaceLookup, rigid=None) -> dict
     elif f.type == "fixed":  # on beam nodes it clamps: rotations too (ADR 0027)
         on_beams = bool(_beam_nodes(mesh) & {int(n) for n in group.node_ids})
         boundary.append(f"{nset}, 1, {6 if on_beams else 3}, 0.")
+    elif f.type == "displacement" and f.fields:  # per node, from a field (ADR 0044)
+        u, present = feature_vector(f, "xyz", _step_given(), group.node_ids)
+        boundary += [
+            f"{n}, {d + 1}, {d + 1}, {u[i, d]:.10g}"
+            for i, n in enumerate(group.node_ids)
+            for d in present
+            if not (mesh.planar and d == 2)
+        ]
+    elif f.type in VECTOR_LOADS:  # consistent nodal forces (ADR 0044): ∫N t dA, ∫N f dV
+        names = ("tx", "ty", "tz") if f.type == "traction" else ("fx", "fy", "fz")
+        given = _step_given()
+        nodal = traction_forces if f.type == "traction" else body_forces
+        forces = nodal(group, mesh, lambda ids: feature_vector(f, names, given, ids)[0])
+        for node, force in sorted(forces.items()):
+            cload += [f"{node}, {d + 1}, {force[d]:.10g}" for d in range(3) if force[d]]
     elif f.type == "displacement":
         boundary += [
             f"{nset}, {d}, {d}, {v[axis]:.10g}"
@@ -1760,6 +1779,14 @@ def _given(f, name):
     return (given[own], own) if own in given else (given.get(key), key)
 
 
+def _step_given() -> dict:
+    """GIVEN as this step sees it: a value varying in time is its "key@k" for this step."""
+    given, suffix = GIVEN.get() or {}, f"@{STEP_INDEX.get()}"
+    out = {k: v for k, v in given.items() if "@" not in k}
+    out |= {k[: -len(suffix)]: v for k, v in given.items() if k.endswith(suffix)}
+    return out
+
+
 def _history(f, name):
     """A transient step's times for a feature value following a field in time, or None."""
     if name not in f.fields:
@@ -1796,7 +1823,14 @@ def _face_values(f, name, group, mesh: Mesh, faces: FaceLookup, uniform=None):
         if field is None:
             out += [(e, n, uniform) for e, n in hits]
             continue
-        means = field.at(b.connectivity.ravel())[:, 0].reshape(b.connectivity.shape).mean(axis=1)
+        nodal = field.at(b.connectivity.ravel())[:, 0].reshape(b.connectivity.shape)
+        if f.fields[name].mapping == "conservative":  # ADR 0044: each face's own ∫ v dA / A
+            from puzzle.adapters.common import face_shares
+
+            shares = face_shares(b, mesh)
+            means = (shares * nodal).sum(axis=1) / shares.sum(axis=1)
+        else:
+            means = nodal.mean(axis=1)
         out += [(e, n, float(m)) for (e, n), m in zip(hits, means, strict=True)]
     return out
 
