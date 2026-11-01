@@ -203,6 +203,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             code="unsupported",
         )
     _check_friction(touching, features, mesh)
+    _check_curved(touching, mesh)
     nlgeom = bool(step.settings.get("geometric_nonlinearity", False))
     if nlgeom and (thermal or step.type != "stationary"):
         raise InputError(
@@ -1418,6 +1419,24 @@ def _check_friction(contacts, features, mesh: Mesh) -> None:
                 "node by both. Constrain those parts away from the interface, or swap "
                 "source and target",
                 details={"conflicts": clash},
+            )
+
+
+def _check_curved(contacts, mesh: Mesh) -> None:
+    """A curved face on a face of another shape (Hertz's line or point contact): its
+    continuous contact fails to pair the faces before the first increment here, with
+    the whole curve or only the part that touches as the source, on linear or quadratic
+    tets (tests/integration/test_hertz.py). Refused rather than left to fail."""
+    from puzzle.contact_check import nonconforming
+
+    for c in contacts:
+        if (line := nonconforming(c, mesh)) is not None:
+            raise InputError(
+                f"contact '{c.name}': its source face ({c.source}) is curved and meets its "
+                "target along a line or at a point (as a cylinder or ball on a plate); "
+                "Code_Aster's contact fails to pair such faces. Run the study on CalculiX",
+                code="unsupported",
+                details=line,
             )
 
 

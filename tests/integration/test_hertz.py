@@ -114,14 +114,8 @@ def _hertz(tmp_path, solver):
     return p, study, comp
 
 
-@over("calculix", "code_aster")
+@over("calculix")
 def test_hertz_line_contact(tmp_path, solver):
-    if solver == "code_aster":
-        # Code_Aster 18's continuous contact fails to pair here, before the first
-        # increment (66,198 projection failures), with the whole quarter or only its
-        # bottom 1 mm as the source, POINT_FIXE or Newton geometry, quadratic or linear
-        # tets; its line-contact validation is 2D. Open (ADR 0056).
-        pytest.xfail("Code_Aster's contact pairing fails on this 3D line contact")
     p, study, comp = _hertz(tmp_path, solver)
     run = run_study(p, study.id, tmp_path, tmp_path / "run", timeout_s=3600)
     props = library_material("structural_steel").properties
@@ -147,3 +141,24 @@ def test_hertz_line_contact(tmp_path, solver):
     inside = closed & (xyz[:, 0] < 0.8 * a)
     expected = p0 * np.sqrt(1 - (xyz[inside, 0] / a) ** 2)
     assert np.abs(pressure.values[inside, 0] - expected).max() < 0.1 * p0
+
+
+def test_code_aster_refuses_a_line_contact_and_the_checks_warn(tmp_path):
+    """Code_Aster 18's continuous contact fails to pair this model before its first
+    increment (66,198 projection failures), with the whole quarter or its bottom 1 mm as
+    the source, POINT_FIXE or Newton geometry, quadratic or linear tets; its line-contact
+    validation is 2D. So the writer refuses a curved face on a face of another shape, and
+    the checks warn before the run; CalculiX runs it (above). Open (ADR 0056)."""
+    from puzzle.adapters.code_aster.comm import write_case
+    from puzzle.adapters.common import InputError
+    from puzzle.contact_check import checks
+    from puzzle.mesh import generate_mesh
+
+    p, study, comp = _hertz(tmp_path, "code_aster")
+    mesh = generate_mesh(p, comp.id, tmp_path, tmp_path / "mesh").mesh
+    warned = [w for w in checks(p, comp, mesh, "code_aster") if w.code == "contact_nonconforming"]
+    assert len(warned) == 1 and "CalculiX" in warned[0].message
+    assert not [w for w in checks(p, comp, mesh, "calculix") if w.code == "contact_nonconforming"]
+    with pytest.raises(InputError, match="curved") as refused:
+        write_case(p, study, mesh, tmp_path / "case")
+    assert refused.value.code == "unsupported"

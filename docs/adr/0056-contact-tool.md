@@ -1,6 +1,6 @@
 # 0056. A contact tool: each contact's particulars before and after the solve
 
-- Status: Accepted (2026-10-30); built 2026-10-31 (one benchmark open: Hertz on Code_Aster)
+- Status: Accepted (2026-10-30); built 2026-10-31 (Hertz on Code_Aster refused up front; making it run is open)
 - Date: 2026-10-30
 
 ## Context
@@ -122,5 +122,10 @@ benchmarks (item 5).
   peak pressure within 0.7 % of Hertz's for the force carried, the half-width within an
   element. Code_Aster's pairing fails before its first increment on this 3D line
   contact (the whole quarter or its bottom 1 mm as the source, POINT_FIXE or Newton
-  geometry, quadratic or linear tets): marked an expected failure, open.
+  geometry, quadratic or linear tets). So Code_Aster refuses such contacts up front
+  (2026-11-01): `contact_check.nonconforming` finds a curved source face (normals turning
+  by more than 2°) whose gaps differ across it by more than a quarter of the target's
+  element size (a cylinder or ball on a plate; a press fit and flat faces don't count);
+  the writer refuses it (`unsupported`, naming CalculiX) and `checks` warns
+  (`contact_nonconforming`) in Problems and the Advisor. Making it run stays open.
 

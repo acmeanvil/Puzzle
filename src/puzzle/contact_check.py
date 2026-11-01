@@ -420,6 +420,17 @@ def checks(project, component, mesh: Mesh | None = None, solver: str | None = No
                 {"component": component.name, "share": s.shares["overhanging"]},
             ))  # fmt: skip
         out += _slave_clashes(project, component, c, mesh, solver)
+        line = nonconforming(c, mesh, s) if solver in (None, "code_aster") else None
+        if line:
+            out.append(Problem(
+                "contact_nonconforming", c.name,
+                f"contact '{c.name}': its source face ({c.source}) is curved and meets its "
+                "target along a line or at a point (as a cylinder or ball on a plate; gaps "
+                f"across it from {shown_length(line['gap_min_m'])} to "
+                f"{shown_length(line['gap_max_m'])}). Code_Aster's contact fails to pair "
+                "such faces, so it refuses them; run the study on CalculiX",
+                {"component": component.name} | line,
+            ))  # fmt: skip
         if c.type == "frictional" and solver in (None, "code_aster"):
             share = shared_outline(mesh, c.source, c.target)
             if share > 0.5:
@@ -432,6 +443,37 @@ def checks(project, component, mesh: Mesh | None = None, solver: str | None = No
                     {"component": component.name, "share": share},
                 ))  # fmt: skip
     return out
+
+
+CURVED_SPREAD = 2.0  # a source face whose normals turn by more (degrees) is curved
+GAP_SPREAD = 0.25  # gaps that differ by more than this share of the element size: not alike
+
+
+def nonconforming(contact, mesh: Mesh, s: ContactState | None = None) -> dict | None:
+    """A curved source face meeting a face of another shape (a cylinder or ball on a
+    plate, Hertz's line and point contacts): its normals turn by more than
+    `CURVED_SPREAD` and the gaps across it differ by more than `GAP_SPREAD` of the
+    target's element size. A press fit (one curve inside a like one) and flat faces
+    don't count. Code_Aster's continuous contact fails to pair such faces before its
+    first increment (tests/integration/test_hertz.py), so it refuses them."""
+    if contact.type not in ("frictionless", "frictional"):
+        return None
+    s = s if s is not None else state(contact, mesh)
+    source, target = surface(mesh, contact.source), surface(mesh, contact.target)
+    if not s.status or source is None or target is None:
+        return None
+    within = (s.codes != 3) & (s.codes != 4)
+    if within.sum() < 3:
+        return None
+    mean = source.normals.mean(axis=0)
+    mean /= max(float(np.linalg.norm(mean)), 1e-300)
+    turn = float(np.degrees(np.arccos(np.clip(source.normals @ mean, -1.0, 1.0))).max())
+    gaps = s.gaps[within]
+    spread = float(gaps.max() - gaps.min())
+    h = float(np.median(target.sizes))
+    if turn <= CURVED_SPREAD or spread <= GAP_SPREAD * h:
+        return None
+    return {"turn_deg": turn, "gap_min_m": float(gaps.min()), "gap_max_m": float(gaps.max())}
 
 
 def _slave_clashes(project, component, contact, mesh: Mesh, solver) -> list[Problem]:

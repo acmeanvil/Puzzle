@@ -70,6 +70,9 @@ offset. Benchmarked against Lamé on both solvers (pressure within 0.3 %).
 - `contact_far`: the faces never meet within the search distance. A bonded contact there
   is wrong; check the selections, or raise `search_distance` if the gap is meant
   (quantity, e.g. `{"value": 2, "unit": "mm"}`).
+- `contact_nonconforming`: a curved source face meeting a face of another shape (a cylinder or
+  ball on a plate: line or point contact). Code_Aster refuses it (its pairing fails); set the
+  study's solver to CalculiX.
 - `contact_shared_outline`: frictional contact on Code_Aster between faces of the same
   outline is known to fail. Run that study on CalculiX (`solver`: "calculix"), or make
   one face smaller.
