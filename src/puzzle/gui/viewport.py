@@ -127,6 +127,18 @@ def _display(values, kind: str | None):
     return np.asarray(converted), pretty(target)
 
 
+def _short_unit(unit: str) -> str:
+    """A unit pint spells out ("kilogram / meter / second ** 2") as people write it."""
+    if not unit:
+        return ""
+    from puzzle.model.units import registry
+
+    try:
+        return f"{registry().Unit(unit):~P}"
+    except Exception:  # noqa: BLE001 - shown as it is
+        return unit
+
+
 KIND_DIM = {"vertex": 0, "edge": 1, "face": 2, "body": 3}
 
 
@@ -1614,6 +1626,126 @@ class Viewport(QWidget):
         self._draw_marks()
         if self.plotter is not None:
             self.view.refresh()
+
+    def show_field_values(
+        self,
+        mesh: Mesh,
+        selection: str | None,
+        node_ids,
+        values,
+        beyond,
+        *,
+        title: str,
+        unit: str = "",
+        points=None,
+        point_values=None,
+        beyond_colour: str = "#d62ad1",
+    ) -> dict:
+        """An imported field's values mapped on a selection's faces (a body's: its
+        outer faces), over the shown mesh, with the legend; faces touching a node
+        farther than the tolerance from the data (`beyond`) in `beyond_colour`; the
+        data's `points` too when given (ADR 0044 decision 8). `values` are SI in
+        `unit`, shown in the display units."""
+        from puzzle.model.units import kind_of
+
+        kind = kind_of(unit) if unit else None
+        shown_values, shown_unit = _display(np.asarray(values, float), kind)
+        shown_unit = shown_unit or _short_unit(unit)
+        beyond = np.asarray(beyond, bool)
+        self.shown["field_values"] = {
+            "title": title,
+            "selection": selection,
+            "nodes": int(len(node_ids)),
+            "extrapolated": int(beyond.sum()),
+            "min": float(np.nanmin(shown_values)) if len(shown_values) else 0.0,
+            "max": float(np.nanmax(shown_values)) if len(shown_values) else 0.0,
+            "unit": shown_unit,
+            "points": 0 if points is None else int(len(points)),
+        }
+        if self.plotter is None or not len(node_ids):
+            return self.shown["field_values"]
+        order = np.argsort(mesh.node_ids)
+        at = order[np.searchsorted(mesh.node_ids, np.asarray(node_ids), sorter=order)]
+        group = mesh.groups.get(selection) if selection else None
+        if group is not None and group.dim == 2:
+            surface = selection_surface(mesh, selection)
+        else:  # a body: the outer faces whose corners are all its nodes
+            surface, _ = entity_surface(mesh)
+        if surface is None:
+            return self.shown["field_values"]
+        data = np.full(surface.n_points, np.nan)
+        data[at] = shown_values
+        far = np.zeros(surface.n_points, bool)
+        far[at] = beyond
+        surface.point_data["field"] = data
+        corners = surface.faces.reshape(-1, 4)[:, 1:] if surface.is_all_triangles else None
+        if corners is None:  # quads as well: walk the cells
+            corners = [surface.get_cell(i).point_ids for i in range(surface.n_cells)]
+        inside = np.array([np.isfinite(data[c]).all() for c in corners], bool)
+        touched = np.array([far[c].any() for c in corners], bool) & inside
+        lo, hi = self.shown["field_values"]["min"], self.shown["field_values"]["max"]
+        if lo == hi:
+            lo, hi = lo - abs(lo) * 1e-9 - 1e-30, hi + abs(hi) * 1e-9 + 1e-30
+        bar = self.legend.bar_args(shown_unit or title, bar_format(lo, hi))
+        colours = self.legend.mesh_args(False)
+        self.plotter.remove_actor("puzzle-field-values")
+        self.plotter.remove_actor("puzzle-field-beyond")
+        self.plotter.remove_actor("puzzle-field-points")
+        if inside.any():
+            actor = self.plotter.add_mesh(
+                surface.extract_cells(np.flatnonzero(inside)), scalars="field", clim=(lo, hi),
+                scalar_bar_args=bar, name="puzzle-field-values", reset_camera=False, **colours,
+            )  # fmt: skip
+            mapper = actor.GetMapper()
+            mapper.SetResolveCoincidentTopologyToPolygonOffset()
+            mapper.SetRelativeCoincidentTopologyPolygonOffsetParameters(-2, -2)
+            self.legend.finish(self.plotter)
+        if touched.any():
+            actor = self.plotter.add_mesh(
+                surface.extract_cells(np.flatnonzero(touched)), color=beyond_colour,
+                show_edges=False, name="puzzle-field-beyond", reset_camera=False,
+            )  # fmt: skip
+            mapper = actor.GetMapper()
+            mapper.SetResolveCoincidentTopologyToPolygonOffset()
+            mapper.SetRelativeCoincidentTopologyPolygonOffsetParameters(-3, -3)
+        if points is not None and len(points):
+            self._field_points(points, point_values, kind, (lo, hi))
+        self.view.refresh()
+        return self.shown["field_values"]
+
+    def show_field_points(self, points, values=None, unit: str = "", bar: bool = False) -> None:
+        """An imported field's points over the scene, coloured by `values` (SI in
+        `unit`) when given: the alignment page redraws them as the placement changes."""
+        from puzzle.model.units import kind_of
+
+        points = np.asarray(points, float).reshape(-1, 3)
+        self.shown["field_points"] = len(points)
+        if self.plotter is None:
+            return
+        self.plotter.remove_actor("puzzle-field-points")
+        if len(points):
+            kind = kind_of(unit) if unit else None
+            self._field_points(points, values, kind, None, bar)
+        self.view.refresh()
+
+    def _field_points(self, points, values, kind, clim, bar: bool = False) -> None:
+        import pyvista as pv
+
+        cloud = pv.PolyData(np.asarray(points, float))
+        if values is None:
+            self.plotter.add_mesh(cloud, color="#ffcc33", point_size=8, reset_camera=False,
+                                  render_points_as_spheres=True,
+                                  name="puzzle-field-points")  # fmt: skip
+            return
+        shown_values, shown_unit = _display(np.asarray(values, float), kind)
+        cloud.point_data["data"] = shown_values
+        lo, hi = clim or (float(np.nanmin(shown_values)), float(np.nanmax(shown_values)))
+        title = shown_unit or "Data"
+        args = {"scalar_bar_args": self.legend.bar_args(title, bar_format(lo, hi))} if bar else {}
+        self.plotter.add_mesh(cloud, scalars="data", clim=(lo, hi if hi > lo else lo + 1e-30),
+                              point_size=9, render_points_as_spheres=True, reset_camera=False,
+                              show_scalar_bar=bar, name="puzzle-field-points",
+                              **self.legend.mesh_args(False), **args)  # fmt: skip
 
     def mark_point(self, xyz, text: str) -> None:
         """A labelled point pinned in the view until the next scene (the Mesh tab's

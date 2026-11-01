@@ -283,6 +283,16 @@ class PropertiesPanel(QTreeWidget):
             QTreeWidgetItem(self.invisibleRootItem(), [key, format_value(value)])
         self._filling = False
 
+    def add_rows(self, title: str, rows: list[tuple[str, str]]) -> QTreeWidgetItem:
+        """A read-only group under what is shown (an imported field's uses, a feature's
+        chain from the file to the solver, ADR 0044)."""
+        group = QTreeWidgetItem(self.invisibleRootItem(), [title, ""])
+        for key, value in rows:
+            item = QTreeWidgetItem(group, [key, str(value)])
+            item.setToolTip(1, str(value))
+        group.setExpanded(True)
+        return group
+
     def _fill(self, parent, node: Any, path: str, names: dict) -> None:
         items = node.items() if isinstance(node, dict) else enumerate(node)
         for key, value in items:

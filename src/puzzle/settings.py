@@ -69,6 +69,27 @@ def _legend_preferences() -> list[Preference]:
     ]  # fmt: skip
 
 
+def _connection_preferences() -> list[Preference]:
+    """How imported fields' connections are shown (ADR 0044 decision 8), each on its own."""
+    from puzzle.post.legend import OUTSIDE
+
+    on_off = [("Shown", True), ("Hidden", False)]
+    return [
+        Preference("connections.tree", "Connections", "In the tree and Properties", True,
+                   on_off, "A field-fed feature names its source in the tree; Properties "
+                   "lists an imported field's uses and a feature's chain from the file to "
+                   "the solver."),
+        Preference("connections.view", "Connections", "In the 3D view", True, on_off,
+                   "Selecting a field-fed feature or an imported field colours the mapped "
+                   "values on its faces or bodies, extrapolated areas marked."),
+        Preference("connections.points", "Connections", "The data's points in the view",
+                   False, on_off, "The imported points drawn over the mapped values."),
+        Preference("connections.beyond_color", "Connections", "Extrapolated areas", "magenta",
+                   [c for c in OUTSIDE if c[1] != "none"],
+                   "Where the model is farther from the data than the tolerance."),
+    ]  # fmt: skip
+
+
 # The send keys as the platform names them: Qt reports the Mac's Command key as Control.
 SEND_KEYS = "⌘+Enter" if sys.platform == "darwin" else "Ctrl+Enter"
 
@@ -307,6 +328,7 @@ PREFERENCES: list[Preference] = [
         "increment, iteration or message) for this long; the run keeps going unless you "
         "stop it (ADR 0054).",
     ),
+    *_connection_preferences(),
 ]
 BY_KEY = {p.key: p for p in PREFERENCES}
 WAITING: dict[str, str] = {}  # group -> why its preferences don't apply yet

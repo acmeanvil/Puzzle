@@ -158,6 +158,13 @@ class AlignPage(QWizardPage):
         row, self.about = _triple()
         form.addRow("About the point (m)", row)
         form.addRow("In the axes of", self.axes)
+        from puzzle.gui.field_align_panel import AlignHelpers
+
+        self.helpers = AlignHelpers(wizard, self)  # point pairs, boxes, a best fit
+        form.addRow(self.helpers)
+
+    def initializePage(self) -> None:  # noqa: N802 - Qt's name
+        self.helpers.show_target()  # the target, and the points drawn over it
 
     def placement(self) -> dict:
         def read(edits):
@@ -193,6 +200,9 @@ class CheckPage(QWizardPage):
                     targets.append((f"{c.name}: {part.name}/{s.name}",
                                     f"{c.name}/{part.name}/{s.name}"))  # fmt: skip
         self.target = _combo(targets, None)
+        from puzzle.gui.field_align_panel import VerifyView
+
+        self.view = VerifyView(wizard)  # the field mapped and coloured on the target
         self.run = QPushButton("Check")
         self.run.clicked.connect(self.check)
         self.report = QLabel("Not checked yet.")
@@ -202,32 +212,47 @@ class CheckPage(QWizardPage):
         row.addWidget(self.run)
         column = QVBoxLayout(self)
         column.addLayout(row)
+        column.addWidget(self.view)
         column.addWidget(self.report, 1)
         self.last: dict | None = None
 
-    def check(self) -> None:
-        import tempfile
+    def initializePage(self) -> None:  # noqa: N802 - Qt's name
+        self.view.columns()
+        align = self.wizard_.align.helpers.target.currentData()
+        if align and self.target.currentData() is None:  # the one aligned on
+            self.target.setCurrentIndex(max(self.target.findData(align), 0))
 
-        from puzzle.fields import check, target_points
+    def check(self) -> None:
+        from puzzle.fields import check
+        from puzzle.gui.field_align_panel import with_target
 
         f, folder = self.wizard_.draft()
         window = self.wizard_.window
         where = self.target.currentData()
         self.report.setText("Checking…")
 
-        def work(emit):
-            targets = None
-            if where:
-                with tempfile.TemporaryDirectory(prefix="puzzle-field-") as tmp:
-                    targets = target_points(window.session.project, window.session.root,
-                                            where, Path(tmp))  # fmt: skip
-            return check(window.session.project, folder, f, targets)
+        def run(mesh, selection) -> None:
+            from puzzle.field_display import selection_nodes
 
-        window.background("Checking the field", work, self.show_report,
-                          failed=lambda exc: self.report.setText(str(exc)), lock=False)  # fmt: skip
+            targets = selection_nodes(mesh, selection)[1] if mesh is not None else None
 
-    def show_report(self, report: dict) -> None:
+            def work(emit):
+                return check(window.session.project, folder, f, targets)
+
+            def failed(exc) -> None:
+                self.report.setText(str(exc))
+
+            window.background("Checking the field", work, lambda r: self.show_report(r, where),
+                              failed=failed, lock=False)  # fmt: skip
+
+        # The target meshed as a study would, once per component (the window's mesh
+        # when it has one), and kept for the alignment helpers and the picture.
+        with_target(self.wizard_, where, run, failed=lambda exc: self.report.setText(str(exc)))
+
+    def show_report(self, report: dict, where: str | None = None) -> None:
         self.last = report
+        if where:
+            self.view.draw(where)  # the field mapped and coloured on the target
         lines = [f"{report['points']} points" + (" (sparse)" if report["sparse"] else "")]
         for name, c in report["columns"].items():
             lines.append(
@@ -298,8 +323,12 @@ class FieldWizard(QWizard):
 
 
 def import_field(window):
-    """File → Import field…: the wizard, then one command."""
+    """File → Import field…: the wizard, then one command on Finish. Not modal: its
+    alignment page picks points in the main view and draws the data over the model."""
     wizard = FieldWizard(window)
-    if wizard.exec() != QWizard.DialogCode.Accepted:
-        return None
-    return wizard.finish()
+    wizard.setModal(False)
+    wizard.accepted.connect(wizard.finish)
+    wizard.finished.connect(lambda _result: window._selected())  # the view as it was
+    window._field_wizard = wizard  # kept while open
+    wizard.show()
+    return wizard

@@ -416,7 +416,8 @@ class ModelTree(QTreeWidget):
                 )
                 for j, f in enumerate(ph.features):
                     text = f"{_feature_label(ph.type, f.type)} on {f.selection}"
-                    for use in f.fields.values():  # ADR 0044: where its values come from
+                    sources = f.fields.values() if _connections_shown() else ()
+                    for use in sources:  # ADR 0044: where its values come from
                         source = project.objects.get(use.field)
                         scale = f" ×{use.scale:g}" if use.scale != 1 else ""
                         text += f" ← {getattr(source, 'name', 'a missing field')}{scale}"
@@ -466,6 +467,13 @@ NOUNS = {
 def _count(n: int, entity: str) -> str:
     one, many = NOUNS.get(entity, (entity, entity + "s"))
     return f"{n} {one if n == 1 else many}"
+
+
+def _connections_shown() -> bool:
+    """Settings > Connections > In the tree and Properties (ADR 0044)."""
+    from puzzle.settings import current
+
+    return bool(current().get("connections.tree"))
 
 
 def _feature_label(physics: str, kind: str) -> str:

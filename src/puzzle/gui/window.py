@@ -50,6 +50,7 @@ from puzzle.model.schema import (
     ConstructionGeometry,
     CoordinateSystem,
     Geometry,
+    ImportedField,
     ResultDefinition,
     ResultProbe,
     Study,
@@ -1375,6 +1376,9 @@ class MainWindow(QMainWindow):
             names,
             lambda path: choices(project, obj, path),
         )
+        from puzzle.gui import field_view
+
+        field_view.show_properties(self, obj, node)  # ADR 0044: uses, and the chain
         if isinstance(obj, ResultDefinition):
             self.show_derived(obj)
             return
@@ -1382,6 +1386,8 @@ class MainWindow(QMainWindow):
             self._show_kept_probe(obj)
             return
         self.set_context("model")
+        if isinstance(obj, ImportedField) and field_view.show_field(self, obj, node):
+            return  # its values on the faces it feeds, or its points (ADR 0044)
         comp = self._component_of(node)
         built = obj if isinstance(obj, ConstructionGeometry | CoordinateSystem) else None
         if comp is None and built is not None:  # drawn over the first component
@@ -1430,6 +1436,8 @@ class MainWindow(QMainWindow):
                 size = float(max(1.6 * across, 0.25 * whole))
             self.viewport.show_construction(built.type, a, b, size)
         self._show_symbols(comp, mesh, node)
+        if node.kind == "feature":  # a field-fed one: its mapped values (ADR 0044)
+            field_view.show_feature(self, comp, node, mesh)
 
     # --- the Geometry tab (ADR 0017) --------------------------------------------------
 
