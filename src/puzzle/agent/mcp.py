@@ -24,6 +24,9 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from puzzle.commands import Actor, Session, command_schema, outline
 from puzzle.errors import PuzzleError
+from puzzle.post.exports import EXPORTS as _EXPORTS
+
+EXPORT_NAMES = sorted(_EXPORTS)
 
 INSTRUCTIONS = """\
 You are working in a Puzzle FEM/CFD project with its user. Start with `outline`:
@@ -801,12 +804,10 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
 
     @tool(
         description="Write a study's latest results for other software (ADR 0043). format: "
-        "paraview (.pvd/.vtu, every field and step), point_cloud (CSV x, y, z and one "
-        "result per node; quantity as in result_stats, optionally one selection's nodes), "
-        "deformed_stl or deformed_step (the deformed outer surface, scale to exaggerate, "
-        "compensate for -u). path is inside the project folder (e.g. exports/shape). "
-        "axes (a coordinate system's name, ADR 0049): vectors and tensors in its axes "
-        "(paraview and point_cloud; cylindrical r, θ, z). Returns the files written."
+        + ", ".join(EXPORT_NAMES)
+        + ". Which to choose, and each one's options: skill_read('exports'). path is inside "
+        "the project folder (e.g. exports/shape). axes (a coordinate system's name, ADR "
+        "0049): vectors and tensors in its axes. Returns the files written."
     )
     @guarded
     def export(

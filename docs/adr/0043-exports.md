@@ -1,6 +1,6 @@
 # 0043. Export the deformed shape as CAD and results in neutral formats
 
-- Status: Accepted (2026-10-25, the maintainer); steps 1 and 2 built (2026-10-25)
+- Status: Accepted (2026-10-25, the maintainer); steps 1 and 2 built (2026-10-25); steps 3–7 built (2026-11-01)
 - Date: 2026-10-25
 
 ## Context
@@ -96,6 +96,104 @@ What the environment has (pixi `dev`, 2026-10-25):
 - **Twins:** `puzzle export PROJECT --study S OUT --format F [--step --quantity --selection --scale --compensate --units]`; MCP `export`, which writes inside the project folder only.
 - **Checks** (`tests/integration/test_exports.py`): ParaView read back by VTK; the point cloud's tip value equals the stored deflection, and a selection's cloud has its nodes only; the STL's lowest point is the tip deflection (×10 when exaggerated, mirrored when compensated); the STEP declares millimetres and its coordinates span the bar's 200 mm with the tip moved down. Puzzle's own importer doesn't convert a tessellated STEP's units on reading, so the test reads the file's units and coordinates directly.
 - **Next (order of ADR 0043):** Exodus II and UNV; EnSight Gold and CGNS for fluids; the morphed B-rep STEP; Nastran and Abaqus decks; glTF.
+
+## Built: every format of the plan (2026-11-01)
+
+- **One writer per format:** `post/exports/` is a package; `EXPORTS` names each format's
+  writer (`module:function`), the options it takes (`step`, `quantity`, `selection`,
+  `units`, `scale`, `compensate`; the Export form, CLI and MCP offer only those) and its
+  physics. A writer takes a `Job` (project, run, mesh, results, chosen step, path,
+  options, `extra` for its own) and returns its files and the sidecar's notes. 17
+  formats now. `h5py` joined the environment for CGNS (HDF5 1.14 on every platform).
+- **Exodus II, VTKHDF, UNV (step 3):**
+  - `exodus`: written through SciPy's netCDF-3 writer (VTK's `vtkIOSSWriter` renumbers
+    elements 1..n and writes no info records; `vtkExodusIIWriter` names no sets).
+    Every step a time step (time, frequency in Hz, or load factor; step numbers when
+    values repeat), nodal, element and global variables, one block per part, every
+    selection a node set and face selections side sets by name, Puzzle's node and
+    element numbers in the maps, SI said in the info records.
+  - `vtkhdf`: every step in one HDF5 file (`vtkHDFWriter`); stored fields only, no sets.
+  - `unv`: datasets 164, 2411, 2412 (I-DEAS node orders), 2467 (parts and selections as
+    groups) and 2414 (I-DEAS tensor order; modes as "normal mode" with their number
+    and frequency, so correlation tools read them). Global values aren't carried;
+    modal mass and damping are 0 (not stored).
+  - Checks (`tests/test_exports_formats_a.py`, `integration/test_exports_formats_a_calculix.py`):
+    Exodus read raw and by VTK's Exodus and IOSS readers (coordinates and fields
+    bit-identical, side sets drawn by VTK on the selections' faces corner for corner);
+    VTKHDF by `vtkHDFReader` at every step; UNV parsed from its fixed-width records
+    (coordinates to 17 digits, values to 6, CalculiX's four modes with their frequencies).
+- **Fluids (step 4):**
+  - `ensight`: EnSight Gold, C binary (float32): every step a time set, part 1 the
+    volume and each face selection a part named after it.
+  - `cgns`: CGNS 4.4 over HDF5 by h5py (the SIDS file mapping, no CGNS library): one
+    unstructured zone, each face selection a FamilySpecified `BC_t` whose family holds
+    the type from its fluid feature; names `Part_Selection` (CGNS allows no "/"), the
+    exact name in a Descriptor; per step cell-centred and vertex solutions in
+    `BaseIterativeData`/`ZoneIterativeData` (`FlowSolutionVertexPointers` is an
+    addition VTK reads); SI by `DimensionalUnits`.
+  - `tecplot`: ASCII FE zones per part and step, cell values via VARLOCATION, geometry
+    shared across steps; quadratic meshes by their corners.
+  - `wall_cloud`: wall pressure, wall shear stress, y+, and the heat transfer
+    coefficient with its reference temperature at each wall's face centres. The CFD
+    adapters store no wall fields, so they are computed from the wall cell: τ = μ u_t/d
+    (the solvers' own one-cell gradient), a standard wall function in RANS log-layer
+    cells (an estimate, not the solver's value), q = k (T_w − T_cell)/d. The reference
+    temperature is `export(..., reference_temperature=)` from Python, else the inlet's.
+  - Checks (`tests/test_exports_fluid.py`, `integration/test_exports_fluid_runs.py`):
+    EnSight read back by VTK and the Code_Saturne reader, CGNS by `vtkCGNSReader`
+    (patch names, values exact), Tecplot by a parser, signed volumes and tet10 order on
+    every cell type. On real runs: laminar channel τ −0.45 % against 6μU/h (the run's
+    own dp/dx error), heated channel h +0.16 % against Nu = 8.235, turbulent k-ε wall
+    function τ −2.4 % (Code_Saturne) and +0.2 % (OpenFOAM) against the force balance.
+- **The morphed B-rep and compensation (step 5, `morphed_step`):**
+  - each solid part's placed CAD is converted to B-splines and its geometry moved in
+    place (faces stay shared, nothing is sewn): every surface and edge curve refined
+    to degree 3 with poles about the mesh spacing apart (at most 64 spans), each pole
+    moved by u × scale (−u compensated) interpolated in the part's mesh (off the body,
+    the nearest cell plus the gradient), then three corrections towards interpolating
+    x + u at the Greville points; vertices moved by u; `SameParameter`, a validity
+    check, `ShapeFix` only when needed;
+  - the export compares every deformed surface node with the morphed face at the same
+    parameters, and the volume change with the mesh's; outside 1 % of the largest
+    displacement (`tolerance` in extra) it refuses (`export_failed`, the numbers, and
+    the faceted `deformed_step` suggested); written as AP214 in mm, a named body per
+    part, an assembly for several;
+  - not followed (refused by the checks): kinks and jumps finer than the poles (contact,
+    plastic hinges, two materials in one part), folding exaggerations; shells, beams,
+    2D and faceted parts are refused outright;
+  - checks (`tests/test_morph.py`, `integration/test_exports_morphed.py`): cantilever tip
+    within 1e-4 of the stored deflection, deviation 3e-5 of it at any scale up to 500,
+    volume change equal to the mesh's; heated plate with a hole: volume (1 + αΔT)³ to
+    1e-4, edges and hole radius × (1 + αΔT); split-bar assembly with a body per part.
+- **Decks, glTF and the Lorentz force (steps 6 and 7):**
+  - `nastran`: `.bdf` bulk data, large-field (GRID in metres; CTETRA, CHEXA and CPENTA in
+    both orders, CTRIA, CQUAD, CBAR; PSOLID, PSHELL or PBAR and a MAT1 per assignment;
+    each selection a SET1, plus SET3 for element selections, with a table of numbers to
+    names) and a `.pch` punch per step (displacements, eigenvalues as (2πf)² or the
+    buckling factor, solid stresses in OES1 word order: **not checked against a
+    Nastran**, and pyNastran has no punch reader). Loads and supports aren't written;
+    2D models are refused.
+  - `abaqus_inp`: the mesh, sets named as the CalculiX decks name them, materials and
+    sections, and a step's nodal temperatures beside it as `*TEMPERATURE` data;
+    `abaqus_displacement`: the same with a step's displacements as `*BOUNDARY` data (a
+    submodel's boundary). Material tables aren't written, only room-temperature values.
+  - `gltf`: binary glTF 2.0 written by hand: each part's surface coloured (linear RGB)
+    by the legend's colour map, deformed by displacement × scale, the legend in
+    `extras`, values in `_VALUE`; the range is the data's (no custom range yet).
+  - `lorentz_cloud`: J × B (N/m³) per node where both are stored.
+  - Checks (`tests/test_exports_formats_d.py`, `integration/test_exports_formats_d_runs.py`):
+    CalculiX solves decks including the exported mesh (the cantilever's tip equal to
+    the stored run's to the `.frd`'s six digits; exported tip displacements reproduce
+    the bar's middle deflection; exported temperatures grow a free bar by α ΔT L to
+    1e-6); pyNastran reads the bulk data with every volume positive and the total
+    exact; VTK's glTF reader reads the same points and triangles, the extremes the
+    colour map's ends; in the wire J × B points inward with μ0 J² r / 2 (FEniCSx median
+    1.001, Elmer 1.04 at 0.25 mm: its direct solve fails at 0.15 mm, out of memory).
+- **Probes** (found here): VTK's default probe tolerance extrapolated a neighbouring
+  cell at nodes; `post/probes.sample` probes tightly first (ADR 0032's tools use it).
+- **Not yet:** Nastran stresses checked in a Nastran; the wall cloud's single quantity
+  and reference temperature in the Export form; a custom legend range in glTF; sweep
+  points' materials in the decks; MED results.
 
 ## Consequences
 
