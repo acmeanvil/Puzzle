@@ -19,6 +19,9 @@ offer only where they apply:
 - `selection`: one selection's nodes only;
 - `units`: SI or the display units;
 - `scale`, `compensate`: the deformed shape's exaggeration, and -u instead of +u.
+
+The wall cloud also reads `quantity` (one of `wall.QUANTITIES`, else all of them) and
+`reference_temperature` (K, through `extra`) for its heat transfer coefficient.
 """
 
 from __future__ import annotations
@@ -103,6 +106,32 @@ EXPORTS = {
         "I-DEAS universal file (.unv)", ".unv",
         "nodes, elements, groups and results per step (modes with their frequencies)",
         "unv:write", options=frozenset(), physics=frozenset({STRUCTURAL, THERMAL}),
+    ),
+    "ensight": Export(
+        "EnSight Gold (.case)", ".case",
+        "every field of every step, per cell and per node; each face selection a part "
+        "named after it", "ensight:write", options=frozenset(),
+        physics=frozenset({FLUID, THERMAL}),
+    ),
+    "cgns": Export(
+        "CGNS (.cgns, HDF5)", ".cgns",
+        "the mesh, every step's flow solution (cell-centred and nodal) and each face "
+        "selection as a boundary condition named after it", "cgns:write",
+        options=frozenset(), physics=frozenset({FLUID, THERMAL}),
+    ),
+    "tecplot": Export(
+        "Tecplot ASCII (.dat)", ".dat",
+        "every field of every step, cell-centred or nodal; a zone per part and face "
+        "selection", "tecplot:write", options=frozenset(),
+        physics=frozenset({FLUID, THERMAL}),
+    ),
+    "wall_cloud": Export(
+        "Wall quantities (.csv: x, y, z, values)", ".csv",
+        "wall pressure, shear stress, y+ and heat transfer coefficient (with its reference "
+        "temperature) at a wall's face centres, for a structure or a conjugate heat "
+        "transfer model elsewhere", "wall:write",
+        options=frozenset({"step", "selection", "units"}), physics=frozenset({FLUID}),
+        needs="velocity",
     ),
 }  # fmt: skip
 
