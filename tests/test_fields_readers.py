@@ -53,7 +53,7 @@ def _made(root, path, name="F", **extra) -> tuple[Project, ImportedField]:
 
 
 def _values(p, f, root, column, targets, time=None):
-    return use_values(p, root, FieldUse(field=f.id, column=column), targets, time)[0]
+    return use_values(p, root, FieldUse(field=f.id, column=column), targets, time=time)[0]
 
 
 # --- Fluent profiles ------------------------------------------------------------------------

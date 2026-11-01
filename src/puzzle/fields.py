@@ -597,8 +597,8 @@ def _at(f, states, time: float | None) -> list[tuple[float, Cloud]]:
     return [(1 - w, states[j - 1][1]), (w, states[j][1])]
 
 
-def use_values(project, root: Path, use, targets: np.ndarray, time: float | None = None,
-               weights=None, entity=None) -> tuple[np.ndarray, np.ndarray]:  # fmt: skip
+def use_values(project, root: Path, use, targets: np.ndarray, weights=None, entity=None, *,
+               time: float | None = None) -> tuple[np.ndarray, np.ndarray]:  # fmt: skip
     """A field use's values (SI, scaled and offset) at `targets`, and their distances. A
     field varying in time is taken at `time` (s): linearly between its two times about
     it, held at the first or last outside them. A conservative use needs the targets'
@@ -742,7 +742,7 @@ def vector_values(project, root: Path, f, targets, weights=None, time: float | N
         out = {}
         for n in present:
             if n in uses:
-                out[n] = use_values(project, root, uses[n], targets, time)[0]
+                out[n] = use_values(project, root, uses[n], targets, time=time)[0]
             else:
                 q = f.values.get(n)
                 out[n] = np.full(len(targets), q.to_si() if q is not None else 0.0)
@@ -951,7 +951,7 @@ def field_inputs(project, root: Path, study, mesh) -> list:
                     else:
                         time = step_time(step, k) if k is not None else None
                         values, _ = use_values(
-                            project, root, use, xyz, time, weights, CONSERVED.get(f.type)
+                            project, root, use, xyz, weights, CONSERVED.get(f.type), time=time
                         )
                     if f.type == "body_temperature":
                         temperature.setdefault(k, {}).update(
