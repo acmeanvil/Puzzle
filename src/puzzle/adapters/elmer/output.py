@@ -45,7 +45,10 @@ def read_series(
 ) -> Results:
     """One result step per output file (transient), or the single steady/modal result."""
     if len(vtus) == 1:
-        return read_results(vtus[0], node_ids, log_text)
+        results = read_results(vtus[0], node_ids, log_text)
+        if times and [s.kind for s in results.steps] == ["frequency_domain"]:
+            results.steps[0].value = times[0]  # a one-frequency scan: its frequency
+        return results
     results = Results(solver="elmer")
     for vtu, t in zip(vtus, times, strict=False):
         (step,) = read_results(vtu, node_ids, log_text).steps
@@ -82,6 +85,20 @@ def read_results(vtu: Path, node_ids: np.ndarray, log_text: str) -> Results:
             hz = math.sqrt(max(lam[m - 1], 0.0)) / (2 * math.pi) if m <= len(lam) else float("nan")
             disp = field("displacement", ["x", "y", "z"], data[f"displacement EigenMode{m}"])
             results.steps.append(StepResult(1, "modal", hz, m, {"displacement": disp}))
+        return results
+
+    if "displacement HarmonicMode1" in data:  # a harmonic scan's frequency (ADR 0041)
+        from puzzle.adapters.common import harmonic_fields
+
+        parts = harmonic_fields(
+            "displacement",
+            ids,
+            data["displacement HarmonicMode1"][order],
+            data["displacement Im HarmonicMode1"][order],
+            ["x", "y", "z"],
+        )
+        results.steps.append(StepResult(1, "frequency_domain", 1.0, None,
+                                        {f.name: f for f in parts}))  # fmt: skip
         return results
 
     step = StepResult(1, "", 1.0)

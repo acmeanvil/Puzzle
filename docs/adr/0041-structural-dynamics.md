@@ -1,6 +1,6 @@
 # 0041. Structural dynamics: transient and harmonic response
 
-- Status: Accepted (2026-10-25, the maintainer); built 2026-10-25 on CalculiX (direct and modal) and Code_Aster (direct); Elmer and FEniCSx to follow
+- Status: Accepted (2026-10-25, the maintainer); built 2026-10-25 on CalculiX (direct and modal) and Code_Aster (direct), 2026-10-31 on FEniCSx and Elmer (direct)
 - Date: 2026-10-23
 
 ## Context
@@ -63,7 +63,28 @@ Machines, mounts and anything near a resonance need a response to a time-varying
   | Harmonic, 5 % Rayleigh damping | within 1 %, phase within 0.1° | the same |
 
   With 60 steps a period the undamped peak read 2.5 % low on both solvers: Newmark stretches the second mode's period by 3.6 %, and that mode carries 2.5 % of the deflection. That is a time-step matter, not a solver error.
-- **Not yet:** Code_Aster's modal method (`PROJ_BASE` and `DYNA_VIBRA` on a generalized basis); Elmer and FEniCSx dynamics; amplitudes in harmonic steps (frequency-dependent loads); base excitation; stress results in harmonic steps; the NAFEMS forced-vibration cases.
+- **Not yet:** Code_Aster's modal method (`PROJ_BASE` and `DYNA_VIBRA` on a generalized basis); amplitudes in harmonic steps (frequency-dependent loads); base excitation; stress results in harmonic steps; the NAFEMS forced-vibration cases.
+
+## Built on FEniCSx and Elmer (2026-10-31)
+
+- **FEniCSx** (`study.py` `solve_transient`, `solve_harmonic`): the stiffness and mass are assembled once and the held dofs eliminated. SciPy's sparse LU factors the effective matrix once, so it runs with or without PETSc.
+  - Transient: Newmark's average acceleration, or HHT with `hht_alpha` in [−1/3, 0]. It starts from the consistent acceleration M⁻¹F(0), and loads follow their amplitudes.
+  - Harmonic: (K + iωC − ω²M)U = F at each frequency.
+  - Rayleigh C = αM + βK in both. Nodal stress is projected at every output step of a transient.
+- **Elmer** (`sif.py`): StressSolve with `Time Derivative Order = 2` and Bossak with alpha 0 (Newmark's average acceleration). Rayleigh damping goes in the Material block (`Rayleigh Damping Alpha/Beta`). Force and pressure follow amplitudes as tables in time.
+  - Harmonic: a `Scanning` simulation, one scan per frequency (`Frequency = Variable Time`), with `Harmonic Analysis = True`. ResultOutputSolve's `Eigen Vector Component = "complex"` writes the real and imaginary parts (`displacement HarmonicMode1`, `displacement Im HarmonicMode1`).
+  - HHT is refused: Elmer's alpha method is Bossak's, which isn't HHT.
+- **Both:** solve directly; the modal method is refused with the reason.
+- **Benchmarks** (the same tests):
+
+  | Case | FEniCSx | Elmer |
+  | --- | --- | --- |
+  | Sudden load, undamped | within 1.33 %, as CalculiX | within 1.66 % |
+  | Sudden load, 5 % Rayleigh damping | within 1.98 %, as CalculiX | within 3.50 % (1.3 % on average) |
+  | Ramped by an amplitude | within 0.35 % | within 0.35 % |
+  | Harmonic, undamped and damped | within 1 % (−0.83 % at 600 Hz), phase within 0.1° | identical to FEniCSx |
+
+  Elmer's Bossak scheme starts from zero acceleration rather than M⁻¹F(0), so after a sudden load its first step moves half as far (−1.17e-5 m against −2.43e-5 m). Its history therefore lags early: the worst error falls at t = 0.22 T1. This is how Elmer starts its time scheme, and the gap shrinks with the time step.
 
 ## Consequences
 

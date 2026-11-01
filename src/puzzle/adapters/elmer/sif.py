@@ -25,10 +25,13 @@ from puzzle.adapters.common import (
     body_load,
     body_load_on_material,
     check_contacts,
+    check_dynamics,
     cylindrical_expressions,
+    frequency_list,
     globalize,
     initial_temperature,
     local_axes,
+    rayleigh,
     refuse_large_deflection,
     refuse_line_bodies,
     remote_load,
@@ -80,7 +83,7 @@ def write_case(
     step = steps[0]
     solved = set(step.physics) or {p.type for p in comp.physics}
     allowed = {
-        "solid_mechanics": ("stationary", "modal"),
+        "solid_mechanics": ("stationary", "modal", "transient", "frequency_domain"),
         "heat_transfer": ("stationary", "transient"),
         "electrostatics": ("stationary",),
         "magnetic_fields": ("stationary",),
@@ -93,6 +96,10 @@ def write_case(
     if step.type not in allowed[next(iter(solved))]:
         raise InputError(f"the Elmer adapter does not run {step.type} {sorted(solved)} steps yet")
     transient = step.type == "transient"
+    harmonic = step.type == "frequency_domain"  # ADR 0041: a scan, one frequency each
+    if solved == {"solid_mechanics"} and (transient or harmonic):
+        _check_dynamics(step)
+    damping = rayleigh(study) if solved == {"solid_mechanics"} else None
 
     wanted = {
         "solid_mechanics": STRUCTURAL,
@@ -144,7 +151,7 @@ def write_case(
         "Simulation",
         "  Max Output Level = 5",
         "  Coordinate System = Cartesian 3D",
-        *_time_block(step),
+        *_time_block(step, structural=solved == {"solid_mechanics"}),
         *restart,
         "End",
         "",
@@ -172,6 +179,12 @@ def write_case(
         material = project.get(assignment.material, Material)
         tables = thermal_tables(material, comp) if "heat_transfer" in solved else {}
         out += _material(i, material, solved, tables)
+        if damping is not None:  # C = alpha M + beta K, in the Material block
+            out[-2:-2] = [
+                "  Rayleigh Damping = Logical True",
+                f"  Rayleigh Damping Alpha = Real {damping[0]:.10g}",
+                f"  Rayleigh Damping Beta = Real {damping[1]:.10g}",
+            ]
         if thermal_load is not None:  # thermal strain alpha (T - T_ref) in StressSolve
             alpha = material.properties.get("thermal_expansion")
             if alpha is None:
@@ -204,12 +217,13 @@ def write_case(
         out += [f"Solver {number}", *block, "End", ""]
     out += [
         f"Solver {len(solvers) + 1}",
-        f"  Exec Solver = {'After Timestep' if transient else 'After Simulation'}",
+        f"  Exec Solver = {'After Timestep' if transient or harmonic else 'After Simulation'}",
         '  Equation = "Result Output"',
         '  Procedure = "ResultOutputSolve" "ResultOutputSolver"',
         f'  Output File Name = "{OUTPUT}"',
         "  Vtu Format = True",
         "  Ascii Output = True",
+        *(['  Eigen Vector Component = String "complex"'] if harmonic else []),
         "End",
         "",
     ]
@@ -232,6 +246,8 @@ def write_case(
         dt, _, n = time_settings(step)
         every = int(step.settings.get("output_every", 1))  # ADR 0023: Output Intervals
         times = [k * dt for k in range(every, n + 1, every)]
+    elif harmonic:  # one output per scanned frequency, in Hz
+        times = frequency_list(step)
     else:
         times = [1.0]
     (workdir / MESH_DIR / TIMES).write_text("\n".join(f"{t:.12g}" for t in times) + "\n")
@@ -326,7 +342,18 @@ def _solvers(step, solved: set[str], coils: list[Feature]) -> list[list[str]]:
                 "  Eigen Analysis = True",
                 f"  Eigen System Values = {int(step.settings.get('modes', 10))}",
             ]
+        elif step.type == "frequency_domain":  # each scan solves at its own frequency
+            rows = [f"    {k} {hz:.10g}" for k, hz in enumerate(frequency_list(step), start=1)]
+            block += [
+                "  Harmonic Analysis = True",
+                "  Frequency = Variable Time",
+                "    Real",
+                *rows,
+                "    End",
+            ]
         else:
+            if step.type == "transient":
+                block += ["  Time Derivative Order = 2", "  Bossak Alpha = 0.0"]
             block.append("  Calculate Stresses = True")
         return [block]
     if solved == {"electrostatics"}:
@@ -408,11 +435,10 @@ def _boundary(
             ]
         elif f.type == "force":
             area = surface_area(mesh.groups[f.selection], mesh)
-            out += [
-                f"  Force {d} = {v[a] / area:.10g}"
-                for d, a in ((1, "x"), (2, "y"), (3, "z"))
-                if v.get(a)
-            ]
+            points = (amplitudes or {}).get(f.amplitude)
+            for d, a in ((1, "x"), (2, "y"), (3, "z")):
+                if v.get(a):
+                    out += _in_time(f"Force {d}", v[a] / area, points)
         elif f.type == "elastic_support":  # springs to ground per area (ADR 0037)
             out += _springs(f, mesh)
         elif f.type == "remote_force":  # its RBE3-equivalent traction (ADR 0037)
@@ -423,7 +449,7 @@ def _boundary(
             out += _matc_cross("Displacement", motion.u0, motion.theta, motion.point)
         elif f.type == "pressure":
             # Elmer's Normal Force pulls along the outward normal; pressure pushes inward.
-            out.append(f"  Normal Force = {-v['p']:.10g}")
+            out += _in_time("Normal Force", -v["p"], (amplitudes or {}).get(f.amplitude))
         elif f.type == "temperature":
             out.append(f"  Temperature = {v['T']:.10g}")
         elif f.type == "heat_flux":
@@ -581,7 +607,32 @@ def _reference(comp) -> float:
     return reference_temperature(comp)
 
 
-def _time_block(step) -> list[str]:
+def _check_dynamics(step) -> None:
+    """What Elmer's elasticity solver can't do in a structural transient or harmonic
+    step (ADR 0041): refused with the reason."""
+    check_dynamics(step, "Elmer", modal=False)
+    if step.settings.get("method", "direct") == "modal":
+        raise InputError(
+            "Elmer solves structural dynamics directly: set method to direct", code="unsupported"
+        )
+    if float(step.settings.get("hht_alpha", 0.0)) != 0.0:
+        raise InputError(
+            "Elmer's structural transients use Newmark's average acceleration (Bossak with "
+            "alpha 0); HHT numerical damping (hht_alpha) is not written for Elmer",
+            code="unsupported",
+        )
+
+
+def _time_block(step, structural: bool = False) -> list[str]:
+    if step.type == "frequency_domain":  # a scan: one steady solve per frequency
+        n = len(frequency_list(step))
+        return [
+            "  Simulation Type = Scanning",
+            f"  Timestep Intervals(1) = {n}",
+            "  Timestep Sizes(1) = 1.0",
+            "  Output Intervals(1) = 1",
+            "  Steady State Max Iterations = 1",
+        ]
     if step.type != "transient":
         return [
             "  Simulation Type = Steady state",
@@ -589,6 +640,14 @@ def _time_block(step) -> list[str]:
             "  Output Intervals(1) = 1",
         ]
     dt, _, n = time_settings(step)
+    if structural:  # second order in time: Bossak with alpha 0 is Newmark (1/4, 1/2)
+        return [
+            "  Simulation Type = Transient",
+            "  Timestepping Method = Bossak",
+            f"  Timestep Sizes(1) = {dt:.12g}",
+            f"  Timestep Intervals(1) = {n}",
+            "  Output Intervals(1) = 1",
+        ]
     scheme, theta = time_scheme(step)
     method = {
         "backward_euler": ["  Timestepping Method = BDF", "  BDF Order = 1"],

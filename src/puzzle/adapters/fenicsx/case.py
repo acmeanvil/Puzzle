@@ -20,10 +20,14 @@ from puzzle.adapters.common import (
     body_load,
     body_load_on_material,
     check_contacts,
+    check_dynamics,
+    frequency_list,
     globalize,
+    harmonic_fields,
     initial_temperature,
     local_axes,
     match_points,
+    rayleigh,
     refuse_large_deflection,
     refuse_line_bodies,
     remote_load,
@@ -117,7 +121,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     step = steps[0]
     solved = set(step.physics) or {p.type for p in comp.physics}
     allowed = {
-        "solid_mechanics": ("stationary", "modal"),
+        "solid_mechanics": ("stationary", "modal", "transient", "frequency_domain"),
         "heat_transfer": ("stationary", "transient"),
         "electrostatics": ("stationary",),
         "magnetic_fields": ("stationary",),
@@ -160,7 +164,12 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
 
     case = {
         "physics": physics,
-        "step": {"type": step.type, "modes": int(step.settings.get("modes", 10)), **_time(step)},
+        "step": {
+            "type": step.type,
+            "modes": int(step.settings.get("modes", 10)),
+            **_time(step),
+            **(_dynamics(study, step) if physics == "solid_mechanics" else {}),
+        },
         "initial_temperature": initial_temperature(
             next((p for p in comp.physics if p.type == "heat_transfer"), None)
         ),
@@ -223,7 +232,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         groups = list(dict.fromkeys(volumes + groups + faces))
     workdir.mkdir(parents=True, exist_ok=True)
     if thermal_load is not None:
-        if physics != "solid_mechanics" or step.type == "modal":
+        if physics != "solid_mechanics" or step.type != "stationary":
             raise InputError(
                 "a temperature load applies to static structural steps", code="unsupported"
             )
@@ -260,6 +269,28 @@ def read_results(workdir: Path) -> Results:
         return Field(name, "node", comps, ids[order], values[order])
 
     results = Results(solver="fenicsx")
+    if "dynamic_times" in data:  # a structural transient (ADR 0041)
+        for t, u, s in zip(
+            data["dynamic_times"], data["displacement_series"], data["stress_series"], strict=True
+        ):
+            fields = {
+                "displacement": field("displacement", ["x", "y", "z"], u),
+                "stress": field("stress", ["xx", "yy", "zz", "xy", "yz", "zx"], s),
+            }
+            results.steps.append(StepResult(1, "transient", float(t), None, fields))
+        return results
+    if "harmonic_frequencies" in data:  # one step per frequency (ADR 0041)
+        for hz, re_, im in zip(
+            data["harmonic_frequencies"],
+            data["displacement_real"],
+            data["displacement_imag"],
+            strict=True,
+        ):
+            parts = harmonic_fields("displacement", ids[order], re_[order], im[order], "xyz")
+            results.steps.append(
+                StepResult(1, "frequency_domain", float(hz), None, {f.name: f for f in parts})
+            )
+        return results
     if "times" in data and "custom_fields" in data:
         name = str(data["custom_fields"][0])
         for t, values in zip(data["times"], data[f"series_{name}"], strict=True):
@@ -324,6 +355,28 @@ def _time(step) -> dict:
     dt, _, n = time_settings(step)
     scheme, theta = time_scheme(step)
     return {"time_step": dt, "steps": n, "scheme": scheme, "theta": theta}
+
+
+def _dynamics(study, step) -> dict:
+    """A structural transient's or harmonic step's settings for study.py (ADR 0041):
+    solved directly (FEniCSx has no modal superposition here), Rayleigh damping."""
+    if step.type not in ("transient", "frequency_domain"):
+        return {}
+    check_dynamics(step, "FEniCSx", modal=False)
+    if step.settings.get("method", "direct") == "modal":
+        raise InputError(
+            "FEniCSx solves structural dynamics directly: set method to direct",
+            code="unsupported",
+        )
+    out: dict = {"rayleigh": list(rayleigh(study) or (0.0, 0.0))}
+    if step.type == "transient":
+        alpha = float(step.settings.get("hht_alpha", 0.0))
+        if not -1 / 3 <= alpha <= 0:
+            raise InputError("hht_alpha is between -1/3 and 0", code="invalid")
+        out["hht_alpha"] = alpha
+    else:
+        out["frequencies"] = frequency_list(step)
+    return out
 
 
 def _body_load(f) -> dict:

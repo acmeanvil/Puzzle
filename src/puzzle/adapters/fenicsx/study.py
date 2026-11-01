@@ -4,8 +4,10 @@
 
 case.json says what to solve:
     {"physics": "solid_mechanics" | "heat_transfer" | "electrostatics" | "magnetic_fields",
-     "step": {"type": "stationary" | "modal" | "transient", "modes": 10,
-              "time_step": 10.0, "steps": 60,           (transient heat only)
+     "step": {"type": "stationary" | "modal" | "transient" | "frequency_domain",
+              "modes": 10, "time_step": 10.0, "steps": 60,             (transients)
+              "hht_alpha": 0.0, "rayleigh": [alpha_M, beta_K],      (structural dynamics)
+              "frequencies": [100.0, ...],                           (harmonic, Hz)
               "scheme": "backward_euler" | "crank_nicolson" | "bdf2" | "theta", "theta": 1.0},
      "initial_temperature": 293.15,
      "materials": [{"group": "Bar/Body", "properties": {"youngs_modulus": ..., ...},
@@ -16,6 +18,8 @@ Values are SI. Group names are Gmsh physical group names in mesh.msh.
 results.npz holds `coords` (one row per output node) and, as computed, `displacement`,
 `stress` (xx, yy, zz, xy, yz, zx), `temperature`, `frequencies` (Hz) and `modes`
 (mode x node x 3), `times` and `temperature_series` (step x node) for transients,
+`dynamic_times`, `displacement_series` and `stress_series` for structural transients,
+`harmonic_frequencies`, `displacement_real` and `displacement_imag` for harmonic steps,
 `potential`, `electric_field` and `electric_energy` (J); `magnetic_flux_density`,
 `current_density` and `magnetic_energy` (J); plus `backend` (which linear algebra
 solved it).
@@ -292,6 +296,13 @@ def solve_solid(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
     n = ufl.FacetNormal(msh)
     modal = case["step"]["type"] == "modal"
     bcs, L = [], ufl.inner(fem.Constant(msh, np.zeros(3)), v) * dx
+    loads = []  # (load form, its amplitude table or None): dynamics scale each in time
+
+    def add_load(term, f):
+        nonlocal L
+        L += term
+        loads.append((term, np.asarray(f["amplitude"], dtype=float) if "amplitude" in f else None))
+
     if thermal is not None:
         L += ufl.inner(lmbda * ufl.tr(thermal) * ufl.Identity(3) + 2 * mu * thermal, eps(v)) * dx
     for f in case["features"]:
@@ -320,9 +331,9 @@ def solve_solid(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
                     bcs.append(dirichlet(vals[axis], dofs, V.sub(i)))
         elif f["type"] == "force" and not modal:
             traction = np.array([vals.get(c, 0.0) for c in "xyz"]) / f["area"]
-            L += ufl.inner(fem.Constant(msh, traction), v) * ds(tag(f["group"]))
+            add_load(ufl.inner(fem.Constant(msh, traction), v) * ds(tag(f["group"])), f)
         elif f["type"] == "pressure" and not modal:
-            L += -vals["p"] * ufl.inner(n, v) * ds(tag(f["group"]))
+            add_load(-vals["p"] * ufl.inner(n, v) * ds(tag(f["group"])), f)
         elif f["type"] == "elastic_support":  # a foundation: kn normal, kt tangential
             kn, kt = vals.get("kn", 0.0), vals.get("kt", 0.0)
             un, vn = ufl.dot(u, n), ufl.dot(v, n)
@@ -332,7 +343,7 @@ def solve_solid(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
         elif f["type"] == "remote_force" and not modal:  # RBE3-equivalent traction
             t0, twist, centre = (ufl.as_vector(w) for w in f["traction"])
             t = t0 + ufl.cross(twist, ufl.SpatialCoordinate(msh) - centre)
-            L += ufl.inner(t, v) * ds(tag(f["group"]))
+            add_load(ufl.inner(t, v) * ds(tag(f["group"])), f)
         elif f["type"] == "remote_displacement":  # the face moves rigidly
             u0, theta, point = (np.asarray(w, dtype=float) for w in f["motion"])
             motion = fem.Function(V)
@@ -353,9 +364,15 @@ def solve_solid(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
                 axis = ufl.as_vector(load["axis"])
                 d = x - c
                 b = load["omega"] ** 2 * (d - ufl.dot(d, axis) * axis)
-            L += rho * ufl.inner(b, v) * dx(tag(f["group"]))
+            add_load(rho * ufl.inner(b, v) * dx(tag(f["group"])), f)
 
     out["coords"] = V.tabulate_dof_coordinates()
+    if case["step"]["type"] in ("transient", "frequency_domain"):
+        rho = piecewise("density")
+        stress = _stress_projector(msh, degree, dx, sigma, V)
+        dynamics = solve_transient if case["step"]["type"] == "transient" else solve_harmonic
+        dynamics(case["step"], a, ufl.inner(rho * u, v) * dx, loads, bcs, V, stress, out)
+        return
     if modal:
         rho = piecewise("density")
         count = int(case["step"].get("modes", 10))
@@ -378,6 +395,150 @@ def solve_solid(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
     p, q = ufl.TrialFunction(S), ufl.TestFunction(S)
     mass, rhs = ufl.inner(p, q) * dx, ufl.inner(voigt, q) * dx
     out["stress"] = solve_linear(mass, rhs, [], S, "s", mass_matrix=True).x.array.reshape(-1, 6)
+
+
+# --- structural dynamics (ADR 0041) -----------------------------------------------------
+# Matrices are assembled once, without boundary conditions, and the held dofs eliminated:
+# SciPy factors the effective matrix once, on either backend (PETSc or not).
+
+
+def _scipy(form):
+    m = fem.assemble_matrix(fem.form(form))
+    m.scatter_reverse()
+    return m.to_scipy().tocsr()
+
+
+def _vector(form, size: int) -> np.ndarray:
+    b = fem.assemble_vector(fem.form(form))
+    b.scatter_reverse(la.InsertMode.add)
+    return b.array[:size].copy()
+
+
+def _held(bcs, size: int) -> tuple[np.ndarray, np.ndarray]:
+    """The dofs the boundary conditions hold, and their values."""
+    values = np.zeros(size)
+    dofs = []
+    for bc in bcs:
+        dofs.append(bc.dof_indices()[0])
+        bc.set(values)
+    held = np.unique(np.concatenate(dofs)) if dofs else np.zeros(0, dtype=np.int32)
+    held = held[held < size]
+    return held, values[held]
+
+
+def _stress_projector(msh, degree, dx, sigma, V):
+    """A function from a displacement array to nodal stress (xx, yy, zz, xy, yz, zx):
+    the L2 projection, its mass matrix factored once."""
+    from scipy.sparse.linalg import splu
+
+    S = fem.functionspace(msh, ("Lagrange", degree, (6,)))
+    p, q = ufl.TrialFunction(S), ufl.TestFunction(S)
+    mass = splu(_scipy(ufl.inner(p, q) * dx).tocsc())
+    uh = fem.Function(V)
+    s = sigma(uh)
+    voigt = ufl.as_vector([s[0, 0], s[1, 1], s[2, 2], s[0, 1], s[1, 2], s[2, 0]])
+    rhs = fem.form(ufl.inner(voigt, q) * dx)
+    size = S.dofmap.index_map.size_local * 6
+
+    def project(values: np.ndarray) -> np.ndarray:
+        uh.x.array[: len(values)] = values
+        uh.x.scatter_forward()
+        b = fem.assemble_vector(rhs)
+        b.scatter_reverse(la.InsertMode.add)
+        return mass.solve(b.array[:size]).reshape(-1, 6)
+
+    return project
+
+
+def _load_vectors(loads, size: int):
+    """Each load's vector and amplitude table; the constant ones summed into one."""
+    steady = np.zeros(size)
+    varying = []
+    for term, table in loads:
+        vector = _vector(term, size)
+        if table is None:
+            steady += vector
+        else:
+            varying.append((vector, table))
+    return lambda t: (
+        steady
+        + sum(
+            (np.interp(t, table[:, 0], table[:, 1]) * vec for vec, table in varying), np.zeros(size)
+        )
+    )
+
+
+def solve_transient(step, a, m, loads, bcs, V, stress, out) -> None:
+    """Newmark's average acceleration (beta 1/4, gamma 1/2) or HHT-alpha (alpha in
+    [-1/3, 0], beta = (1 - alpha)^2 / 4, gamma = 1/2 - alpha), with Rayleigh damping
+    C = alpha_M M + beta_K K; from rest, the loads at their t = 0 values (a sudden load)."""
+    from scipy.sparse.linalg import splu
+
+    size = V.dofmap.index_map.size_local * 3
+    K, M = _scipy(a)[:size, :size], _scipy(m)[:size, :size]
+    am, bk = step.get("rayleigh", [0.0, 0.0])
+    C = am * M + bk * K
+    force = _load_vectors(loads, size)
+    held, prescribed = _held(bcs, size)
+    free = np.setdiff1d(np.arange(size), held)
+    alpha = float(step.get("hht_alpha", 0.0))
+    beta, gamma = (1 - alpha) ** 2 / 4, 0.5 - alpha
+    dt, steps = float(step["time_step"]), int(step["steps"])
+    u, vel = np.zeros(size), np.zeros(size)
+    u[held] = prescribed
+    acc = np.zeros(size)
+    Mff = M[free][:, free]
+    acc[free] = splu(Mff.tocsc()).solve((force(0.0) - K @ u - C @ vel)[free])
+    A = (M + (1 + alpha) * (gamma * dt * C + beta * dt * dt * K))[free][:, free]
+    factor = splu(A.tocsc())
+    every = int(setting("output_every", 1))
+    times, series, stresses = [], [], []
+    for k in range(1, steps + 1):
+        t = k * dt
+        t_alpha = t + alpha * dt  # HHT's load time (alpha <= 0)
+        u_pred = u + dt * vel + dt * dt * (0.5 - beta) * acc
+        v_pred = vel + dt * (1 - gamma) * acc
+        u_pred[held], v_pred[held] = prescribed, 0.0
+        rhs = force(t_alpha) - (1 + alpha) * (C @ v_pred + K @ u_pred) + alpha * (C @ vel + K @ u)
+        new_acc = np.zeros(size)
+        new_acc[free] = factor.solve(rhs[free])
+        u = u_pred + beta * dt * dt * new_acc
+        vel = v_pred + gamma * dt * new_acc
+        acc = new_acc
+        if k % every == 0:
+            times.append(t)
+            series.append(u.reshape(-1, 3).copy())
+            stresses.append(stress(u))
+    out["dynamic_times"] = np.asarray(times)
+    out["displacement_series"] = np.asarray(series)
+    out["stress_series"] = np.asarray(stresses)
+
+
+def solve_harmonic(step, a, m, loads, bcs, V, stress, out) -> None:
+    """(K + i w C - w^2 M) U = F at each frequency, F the loads at their full values;
+    held dofs prescribed (in phase). Displacement as real and imaginary parts."""
+    from scipy.sparse.linalg import splu
+
+    size = V.dofmap.index_map.size_local * 3
+    K, M = _scipy(a)[:size, :size], _scipy(m)[:size, :size]
+    am, bk = step.get("rayleigh", [0.0, 0.0])
+    C = am * M + bk * K
+    F = _load_vectors([(term, None) for term, _ in loads], size)(0.0)
+    held, prescribed = _held(bcs, size)
+    free = np.setdiff1d(np.arange(size), held)
+    real, imag = [], []
+    for hz in step["frequencies"]:
+        w = 2 * np.pi * hz
+        Z = (K + 1j * w * C - w * w * M).tocsr()
+        U = np.zeros(size, dtype=complex)
+        U[held] = prescribed
+        rhs = F - Z[:, held] @ U[held]
+        U[free] = splu(Z[free][:, free].tocsc()).solve(rhs[free].astype(complex))
+        real.append(U.real.reshape(-1, 3))
+        imag.append(U.imag.reshape(-1, 3))
+    out["harmonic_frequencies"] = np.asarray(step["frequencies"], dtype=float)
+    out["displacement_real"] = np.asarray(real)
+    out["displacement_imag"] = np.asarray(imag)
 
 
 def solve_heat(case, msh, degree, dx, ds, facets, tag, of_temperature, out) -> None:

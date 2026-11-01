@@ -59,7 +59,7 @@ class ElmerAdapter(SolverAdapter):
     max_solve_steps = 1
     capabilities = Capabilities(
         physics={
-            "solid_mechanics": frozenset({"stationary", "transient", "modal"}),
+            "solid_mechanics": frozenset({"stationary", "transient", "modal", "frequency_domain"}),
             "heat_transfer": frozenset({"stationary", "transient"}),
             "electrostatics": frozenset({"stationary"}),
             "electric_currents": frozenset({"stationary"}),
@@ -74,7 +74,7 @@ class ElmerAdapter(SolverAdapter):
         shared_settings=frozenset(  # ADR 0023
             {"linear_solver", "tolerance", "max_iterations", "output_every"}
         ),
-        amplitude_features=frozenset({"heat_flux"}),  # ADR 0037, benchmarked
+        amplitude_features=frozenset({"heat_flux", "force", "pressure"}),  # benchmarked
         axes_features=frozenset(
             {"displacement:cartesian", "displacement:cylindrical", "force:cartesian"}
         ),  # ADR 0037: local axes

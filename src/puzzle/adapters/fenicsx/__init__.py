@@ -10,7 +10,8 @@ FEniCSx has two roles in Puzzle:
 
 Built-in physics live in study.py, which runs inside the FEniCSx environment;
 the adapter writes mesh.msh, case.json and a copy of the script, and reads back
-results.npz. Implemented so far: linear elasticity (static, modal) and steady heat.
+results.npz. Implemented so far: linear elasticity (static, modal, transient by
+Newmark/HHT, harmonic; ADR 0041), heat, electrostatics and magnetostatics.
 Nonconformal (mortar) interfaces are not part of dolfinx, so only conformally meshed
 bonded interfaces are supported.
 """
@@ -47,7 +48,7 @@ class FenicsxAdapter(SolverAdapter):
             "magnetic_fields": frozenset({"stationary", "transient", "frequency_domain"}),
             "electromagnetic_waves": frozenset({"frequency_domain"}),
             "heat_transfer": frozenset({"stationary", "transient"}),
-            "solid_mechanics": frozenset({"stationary", "modal"}),
+            "solid_mechanics": frozenset({"stationary", "modal", "transient", "frequency_domain"}),
         },
         features=ELECTROMAGNETIC_FEATURES
         | THERMAL_FEATURES
@@ -58,7 +59,7 @@ class FenicsxAdapter(SolverAdapter):
         shared_settings=frozenset(  # ADR 0023
             {"linear_solver", "tolerance", "max_iterations", "output_every"}
         ),
-        amplitude_features=frozenset({"heat_flux"}),  # ADR 0037, benchmarked
+        amplitude_features=frozenset({"heat_flux", "force", "pressure"}),  # benchmarked
         axes_features=frozenset(
             {"displacement:cartesian", "displacement:cylindrical", "force:cartesian"}
         ),  # ADR 0037: local axes

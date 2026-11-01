@@ -12,7 +12,10 @@ as the sum of its Euler-Bernoulli modes (β L = 1.875, 4.694, 7.855, ...; the fi
 
 Newmark's average acceleration (no numerical damping), 60 steps a period (200 undamped,
 so the second mode is followed). The history is checked to 4 % of the largest
-deflection and the peak to 2 %; CalculiX and Code_Aster give the same history.
+deflection and the peak to 2 %; CalculiX, Code_Aster and FEniCSx give the same history.
+Elmer starts from zero acceleration (its Bossak scheme takes no initial one), so after a
+sudden load its first step moves half as far and its history lags early: 3.5 % at
+t = 0.22 T1 with 5 % damping, 1.3 % on average.
 """
 
 import numpy as np
@@ -88,7 +91,7 @@ def _check(name, solver, t, u, ref):
     assert np.min(u) == pytest.approx(np.min(ref), rel=2e-2)
 
 
-@over("calculix", "code_aster")
+@over("calculix", "code_aster", "fenicsx", "elmer")
 def test_sudden_load(tmp_path, solver):
     pytest.importorskip("OCP")
     # Undamped, the second mode (2.5 % of the deflection) must be followed too: with 60
@@ -97,7 +100,7 @@ def test_sudden_load(tmp_path, solver):
     _check("sudden load, undamped", solver, t, u, sudden(t))
 
 
-@over("calculix", "code_aster")
+@over("calculix", "code_aster", "fenicsx", "elmer")
 def test_rayleigh_damping(tmp_path, solver):
     pytest.importorskip("OCP")
     a = 2 * ZETA * W[0]  # mass-proportional: 5 % in the first mode
@@ -107,7 +110,7 @@ def test_rayleigh_damping(tmp_path, solver):
     assert np.ptp(u[late]) < 0.75 * np.ptp(sudden(t[late]))
 
 
-@over("calculix", "code_aster")
+@over("calculix", "code_aster", "fenicsx", "elmer")
 def test_ramped_load_follows_its_amplitude(tmp_path, solver):
     pytest.importorskip("OCP")
     t, u = _run(tmp_path, solver, 2 * T1, amplitude=[(0.0, 0.0), (T1, 1.0), (3 * T1, 1.0)])
@@ -121,12 +124,12 @@ def harmonic(f, zeta=None):
     return -(S / (1 - r**2 + 2j * z * r)).sum()
 
 
-@over("calculix", "code_aster")
+@over("calculix", "code_aster", "fenicsx", "elmer")
 @pytest.mark.parametrize("damped", [False, True], ids=["undamped", "damped"])
 def test_harmonic_response(tmp_path, solver, damped):
     """Below and above the first mode, undamped and with 5 % Rayleigh mass damping in
     the first mode: the tip's amplitude within 1 % and its phase within 2 degrees.
-    Code_Aster solves the full system; CalculiX superposes its first 20 modes."""
+    Code_Aster and FEniCSx solve the full system; CalculiX superposes its first 20 modes."""
     pytest.importorskip("OCP")
     force = Feature(type="force", selection="Bar/Tip", values={"y": Quantity(value=-P, unit="N")})
     physics = Physics(
@@ -165,7 +168,8 @@ def test_modal_superposition_transient(tmp_path, solver):
 
 
 def test_what_a_solver_cannot_do_is_refused(tmp_path):
-    """A damping ratio without modes, and Code_Aster's modal transient, are refused."""
+    """A damping ratio without modes, modal transients on Code_Aster, FEniCSx and Elmer,
+    and HHT on Elmer, are refused."""
     pytest.importorskip("OCP")
     from puzzle.adapters.calculix.inp import write_inp
     from puzzle.adapters.code_aster.comm import write_case
@@ -190,3 +194,20 @@ def test_what_a_solver_cannot_do_is_refused(tmp_path):
     study.steps = [modal]
     with pytest.raises(PuzzleError, match="Code_Aster solves transients directly"):
         write_case(project, study, mesh, tmp_path / "ca")
+    from puzzle.adapters.fenicsx.case import write_case as write_fenicsx
+
+    study.solver = "fenicsx"
+    with pytest.raises(PuzzleError, match="FEniCSx solves structural dynamics directly"):
+        write_fenicsx(project, study, mesh, tmp_path / "fx")
+    from puzzle.adapters.elmer.sif import write_case as write_elmer
+
+    study.solver = "elmer"
+    with pytest.raises(PuzzleError, match="Elmer solves structural dynamics directly"):
+        write_elmer(project, study, mesh, tmp_path / "el")
+    study.steps = [
+        SolveStep(
+            type="transient", physics=["solid_mechanics"], settings=timing | {"hht_alpha": -0.1}
+        )
+    ]
+    with pytest.raises(PuzzleError, match="HHT numerical damping"):
+        write_elmer(project, study, mesh, tmp_path / "el2")
