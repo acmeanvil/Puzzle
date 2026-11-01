@@ -3,10 +3,13 @@
 Steps:
 1. Import each part's geometry and describe it on its own (the reference names).
 2. Import all parts into one model and place them (rotation, then translation).
-3. Fragment the parts joined by conformal bonded contacts, so they share faces
-   and nodes (ADR 0005). Nonconformal parts stay separate.
-4. Find every named entity again by its signature and build physical groups:
-   one per part (its bodies) and one per named selection, "Part/Selection".
+3. Fragment the touching bodies of each part (`Geometry.share_faces`: a STEP file
+   gives every body its own faces, so they would be meshed apart), then the parts
+   joined by conformal bonded contacts, so they share faces and nodes (ADR 0005).
+   Nonconformal parts stay separate.
+4. Find every named entity again by its signature (a face a fragment split, by its
+   pieces) and build physical groups: one per part (its bodies) and one per named
+   selection, "Part/Selection".
 5. Mesh with the recipe's sizes and element order; save `mesh.msh`.
 """
 
@@ -23,11 +26,13 @@ from puzzle.errors import PuzzleError
 from puzzle.geometry.meshfile import is_mesh_file
 from puzzle.geometry.model import (
     ENTITY_DIM,
+    describe,
     import_step,
     load_facets,
     load_shapes,
     match,
     place,
+    rotation_matrix,
 )
 from puzzle.geometry.session import gmsh_session
 from puzzle.mesh.mesh import ELEMENT_NAMES, CellBlock, Group, Mesh
@@ -140,6 +145,8 @@ def generate_mesh(
             new = sorted(set(gmsh.model.getEntities()) - before)
             top = max((d for d, _ in new), default=3)  # a solid, a sheet, or lines (beams)
             volumes[part.name] = [e for e in new if e[0] == top]
+            if top == 3 and len(volumes[part.name]) > 1 and geometries[part.name].share_faces:
+                volumes[part.name] = _share_faces(part.name, volumes[part.name])
             place(volumes[part.name], part.translation, part.rotation)
         if not faceted:
             gmsh.model.occ.synchronize()
@@ -160,7 +167,9 @@ def generate_mesh(
                 raise MeshError(f"part '{part.name}': bodies {missing} were lost while placing it")
             # Faces, edges and vertices only among the part's own bodies' boundaries: two
             # parts can have identical faces in the same place (two halves touching).
-            found[part.name] = match(ref.entities, _closure(list(bodies.values())), **placement)
+            closure = _closure(list(bodies.values()))
+            found[part.name] = match(ref.entities, closure, **placement)
+            _pieces(ref.entities, closure, found[part.name], **placement)
 
         _physical_groups(comp, geometries, references, found, warnings)
         names = {
@@ -323,6 +332,52 @@ def _closure(volumes: list[tuple[int, int]]) -> list[tuple[int, int]]:
         level = sorted(set(gmsh.model.getBoundary(level, combined=False, oriented=False)))
         out += level
     return sorted(set(out))
+
+
+def _share_faces(part: str, volumes: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Fragment one part's bodies by each other, so bodies that touch share the faces
+    between them (and so their nodes). Overlapping bodies are refused: fragmenting
+    would cut the overlap out as a body of its own."""
+    out, _ = gmsh.model.occ.fragment(volumes, [])
+    gmsh.model.occ.synchronize()
+    joined = [e for e in out if e[0] == 3]
+    if len(joined) != len(volumes):
+        raise MeshError(
+            f"part '{part}': its bodies overlap ({len(volumes)} bodies became "
+            f"{len(joined)} when joined); remove the overlap, or turn off Share faces "
+            "on its geometry"
+        )
+    return joined
+
+
+def _pieces(reference, candidates, found: dict, *, translation, rotation, tol: float) -> None:
+    """Re-find faces and edges a fragment split: an unmatched entity is the set of
+    candidates of its kind lying in its placed bounding box whose measures add up to
+    its own. Found sets go into `found` as lists; others stay unmatched (and warned of)."""
+    missing = [e for e in reference if e.name not in found and e.dim in (1, 2)]
+    if not missing:
+        return
+    r = rotation_matrix(rotation)
+    shift = np.asarray(translation, dtype=float)
+    pool = sorted((dt for dt in candidates if dt[0] in (1, 2)), key=lambda dt: (-dt[0], dt[1]))
+    described = list(zip(describe(pool), pool, strict=True))
+    for ref in missing:
+        lo, hi = np.asarray(ref.bbox[:3]), np.asarray(ref.bbox[3:])
+        corners = np.array([[(lo, hi)[i >> k & 1][k] for k in range(3)] for i in range(8)])
+        placed = corners @ r.T + shift
+        pad = tol + 1e-6  # OCC pads bounding boxes by ~1e-7 m
+        box_lo, box_hi = placed.min(axis=0) - pad, placed.max(axis=0) + pad
+        inside = [
+            (e, dt)
+            for e, dt in described
+            if e.dim == ref.dim
+            and e.kind == ref.kind
+            and np.all(np.asarray(e.bbox[:3]) >= box_lo)
+            and np.all(np.asarray(e.bbox[3:]) <= box_hi)
+        ]
+        total = sum(e.measure for e, _ in inside)
+        if len(inside) > 1 and abs(total - ref.measure) <= 1e-5 * max(ref.measure, 1e-30):
+            found[ref.name] = [dt for _, dt in inside]
 
 
 def _fragment_conformal(comp: Component, volumes: dict[str, list[tuple[int, int]]]) -> None:

@@ -81,8 +81,8 @@ def _block(path):
 
 def _hertz(tmp_path, solver):
     p = Project(name="hertz")
-    cyl = p.add(Geometry(name="Cylinder", source="cylinder.brep",
-                         selections=_cylinder(tmp_path / "cylinder.brep")))  # fmt: skip
+    cyl = p.add(Geometry(name="Cylinder", source="cylinder.step",
+                         selections=_cylinder(tmp_path / "cylinder.step")))  # fmt: skip
     block = p.add(Geometry(name="Block", source="block.step",
                            selections=_block(tmp_path / "block.step")))  # fmt: skip
     steel = add_library_material(p, "structural_steel")

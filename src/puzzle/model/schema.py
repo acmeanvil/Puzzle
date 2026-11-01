@@ -152,6 +152,11 @@ class Geometry(ProjectObject):
     owner: UUID | None = Field(default=None, description="Owning component, for local geometry")
     selections: list[NamedSelection] = Field(default_factory=list)
     hidden: bool = Field(default=False, description="not drawn in the view; still solved")
+    share_faces: bool = Field(
+        default=True,
+        description="touching bodies are meshed joined, with shared faces and nodes; off "
+        "meshes each body apart (a STEP file stores every body with its own faces)",
+    )
     suppressed: bool = Field(
         default=False,
         description="left out of meshing and solving: the parts made of it, and their loads, "

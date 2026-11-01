@@ -18,6 +18,7 @@ Meshing sits between geometry and solver and drives much of commercial tools' us
   - Conformal: the touching parts are fragmented (OCCT boolean fragments) before meshing so they share faces and nodes. The solver sees one continuous mesh and needs no contact condition.
   - Nonconformal: the parts are meshed independently and the solver ties them (CalculiX `*TIE`, Elmer mortar tie contact). This is the fallback when fragmenting fails or produces poor elements, for example with sliver gaps or very different mesh sizes.
   - All other contact types are always meshed nonconformally.
+- Bodies of one part (amended 2026-10-31): touching bodies of the same geometry are fragmented together before meshing, so they share faces and nodes (`Geometry.share_faces`, on by default). STEP stores each solid with its own copy of the face between them, so a multi-body STEP part would otherwise be meshed as loose bodies with nothing joining them. Converting the file to BREP doesn't help: the sharing is already gone when STEP is read. Overlapping bodies are refused rather than cut apart. A face the join splits is re-found by its pieces, so selections on it keep working. Turning the option off meshes each body apart.
 
 ## Consequences
 

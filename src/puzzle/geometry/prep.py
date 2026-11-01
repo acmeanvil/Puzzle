@@ -453,8 +453,8 @@ def check(shape, small: float | None = None) -> list[dict]:
             _finding(
                 "not_shared",
                 "note",
-                f"{len(unshared)} pairs of bodies touch without sharing faces: fragment them "
-                "for a conformal mesh, or bond them with a contact",
+                f"{len(unshared)} pairs of bodies touch without sharing faces: meshing joins "
+                "them (Share faces), unless that is turned off for this geometry",
                 count=len(unshared),
             )
         )

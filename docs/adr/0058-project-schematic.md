@@ -1,6 +1,6 @@
 # 0058. A project schematic: the whole project as nodes and wires, generated from the model
 
-- Status: Proposed (draft for the maintainer's review)
+- Status: Accepted (2026-10-31)
 - Date: 2026-10-31
 
 ## Context
@@ -69,11 +69,12 @@ ADR 0033), tree groups (`TreeGroup`), and the readable labels (`gui/choices.py`)
      Always shown.
    - **Use wires** say "is built from": file → geometry, geometry → component, material
      → component, mesh recipe → component, component → study, parameter set → sweep.
-     Thin, grey, unlabelled. Shown by the setting `schematic.uses`: **for the selected
-     node** (the default: selecting a geometry draws its users, selecting a study draws
-     what it is built from), **all**, or **none**. A resource used more than once
-     carries a count ("used by 3"), so sharing is visible without drawing every wire
-     (the octopus's third cause).
+     Thin, grey, unlabelled. Shown by the setting `schematic.uses`: **all** (the
+     default, so sharing is seen at a glance), **for the selected node** (selecting a
+     geometry draws its users, selecting a study what it is built from), or **none**.
+     With all shown, selecting a node still brings its own wires forward and dims the
+     rest (item 5), and a resource used more than once carries a count ("used by 3"),
+     so a busy picture stays readable (the octopus's third cause).
 
 4. **Nodes have ports, as Blender's do.** A study node's inputs are its component and
    each transfer or imported field it takes; its outputs are the fields its runs make
@@ -89,12 +90,17 @@ ADR 0033), tree groups (`TreeGroup`), and the readable labels (`gui/choices.py`)
    go out of date if it changed (its downstream through use and data wires), so a
    change's reach is seen before it is made (the octopus's fifth cause).
 
-6. **Layout is automatic and stable**: layered by column, then ordered within a column
-   to shorten wires (barycentric ordering, a few sweeps), written in Python with no
-   Graphviz dependency; the same project always lays out the same way, and adding an
-   object moves its neighbours little. Tree groups (`TreeGroup`) are frames around
-   their nodes and fold into one node. Positions are never stored in the project; what
-   is folded is a per-user view preference.
+6. **Layout is automatic and stable, and dragged positions are remembered per user**:
+   layered by column, then ordered within a column to shorten wires (barycentric
+   ordering, a few sweeps), written in Python with no Graphviz dependency; the same
+   project always lays out the same way, and adding an object moves its neighbours
+   little. A node the user drags keeps its place: positions (and what is folded) are a
+   per-user view preference, kept in the user data dir by project and object id
+   (`schematic.json`), never in the project, so they never change a hash, a run or
+   another user's picture. Nodes not dragged are still laid out automatically around
+   the pinned ones; a node whose object is deleted drops its position; Tidy layout
+   forgets them all. Tree groups (`TreeGroup`) are frames around their nodes and fold
+   into one node. Where a node sits still never means anything (ADR 0009's rule 1).
 
 7. **Interaction, all through what exists**:
    - a click selects the object in the tree and Properties; a double-click opens it
@@ -146,8 +152,12 @@ data wires, `─` use wires shown because "Base plate" is selected):
 - A project reads at a glance: what comes in, what is shared, what feeds what, and
   what is out of date and why, without opening each object.
 - ADR 0009's "transfers are the only schematic edges" becomes "transfers are the only
-  edges between studies": use wires are a second, visibly different kind, shown for the
-  selected node by default, which keeps the octopus away while showing sharing.
+  edges between studies": use wires are a second, visibly different kind (thin, grey,
+  unlabelled, brought forward for the selected node), which shows sharing without
+  the octopus's tangle of look-alike wires.
+- Remembered positions live outside the project, so two users can arrange the same
+  project differently and neither changes it; the layout code must place new nodes
+  around pinned ones without moving them.
 - Every object kind needs a node or a chip, its ports and its readable label; a new
   kind of object must say which, or it won't appear (a test lists every kind against
   the schematic, as `test_gui_names.py` checks the tree).
@@ -171,13 +181,13 @@ data wires, `─` use wires shown because "Base plate" is selected):
 - **A web view (a JavaScript graph library in a Qt WebEngine)**: rich, but a browser
   engine in the GUI for one panel; Qt's graphics scene draws nodes and wires well.
 
-## Questions for review
+## Review (2026-10-31)
 
-1. Results as their own column (runs, derived results), or as output ports on the
-   study only?
-2. Use wires for the selected node by default, or all shown by default?
-3. Should dragged positions be remembered per user (looks only), or is a fixed
-   automatic layout better?
-4. Is drawing wires to make transfers (phase 2) wanted, or should the schematic stay
-   read-only?
-5. A dock, a tab beside Model/Geometry/Mesh, or both?
+The maintainer's answers to the draft's questions:
+
+1. Results are their own column (runs, derived results, fatigue), as item 2 has it.
+2. Use wires are all shown by default (`schematic.uses = all`); for the selected node
+   only and none stay as settings.
+3. Dragged positions are remembered per user (item 6).
+4. Drawing wires makes transfers and parts (phase 2), as item 7 has it.
+5. Both: a Window → Schematic dock and a Schematic tab beside Model, Geometry and Mesh.

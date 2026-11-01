@@ -70,6 +70,7 @@ APPLIES = {
     "source": (_is_geometry, lambda d: d.get("source") is not None),
     "source_unit": (_is_geometry, lambda d: d.get("source") is not None),
     "facet_angle": (_is_geometry, _faceted),
+    "share_faces": (_is_geometry, lambda d: not _faceted(d)),
     "history": (_is_geometry, lambda d: d.get("source") is None),
     # A beam section's sizes (ADR 0027): only those its shape takes.
     "width": (_is_section, _shape("rectangle", "box")),

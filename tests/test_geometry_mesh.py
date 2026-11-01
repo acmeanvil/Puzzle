@@ -292,3 +292,62 @@ def test_identical_touching_parts_keep_their_own_faces(tmp_path):
     assert len(np.intersect1d(left, right)) == 0
     assert np.allclose(mesh.node_coords(right)[:, 0], 0.1)
     assert np.allclose(mesh.node_coords(left)[:, 0], 0.1)
+
+
+def _two_bodies(tmp_path: Path, upper_z: float = 0.01) -> tuple[Project, Component]:
+    """A 20 x 20 x 10 mm block with a 10 x 10 x 10 mm block standing on its top, written
+    to one STEP file as two solids (each with its own faces, as STEP stores them)."""
+
+    def build(occ):
+        occ.addBox(0, 0, 0, 0.02, 0.02, 0.01)
+        occ.addBox(0.005, 0.005, upper_z, 0.01, 0.01, 0.01)
+
+    step = _write_step(tmp_path / "two.step", build)
+    model = import_step(step)
+    [lower, upper] = sorted(model.of_dim(3), key=lambda e: e.center[2])
+    top = [f.name for f in model.of_dim(2)
+           if abs(f.center[2] - 0.01) < 1e-6 and f.measure > 2e-4]  # fmt: skip
+    p = Project(name="two bodies")
+    geo = p.add(Geometry(name="Stack", source=step.name, selections=[
+        NamedSelection(name="Lower", entity="body", members=[lower.name]),
+        NamedSelection(name="Upper", entity="body", members=[upper.name]),
+        NamedSelection(name="Shelf", entity="face", members=top),
+    ]))  # fmt: skip
+    mesh = p.add(MeshRecipe(name="Mesh", global_size=Quantity(value=2.5, unit="mm")))
+    comp = p.add(Component(name="Stack", parts=[PartInstance(name="Stack", geometry=geo.id)],
+                           mesh=mesh.id))  # fmt: skip
+    return p, comp
+
+
+def test_touching_bodies_from_step_share_nodes(tmp_path):
+    """STEP gives each body its own copy of the face between them; the mesher joins
+    them again, and the lower block's top, split by the join, is still one selection."""
+    project, comp = _two_bodies(tmp_path)
+    result = generate_mesh(project, comp.id, tmp_path, tmp_path / "m")
+    mesh = result.mesh
+    assert result.warnings == []
+    shared = np.intersect1d(
+        mesh.groups["Stack/Lower"].node_ids, mesh.groups["Stack/Upper"].node_ids
+    )
+    xyz = mesh.node_coords(shared)
+    assert len(shared) > 10 and np.allclose(xyz[:, 2], 0.01)
+    assert xyz[:, 0].min() == pytest.approx(0.005) and xyz[:, 0].max() == pytest.approx(0.015)
+    # The whole 20 x 20 mm top: the ring around the upper block and the face under it.
+    shelf = mesh.node_coords(mesh.groups["Stack/Shelf"].node_ids)
+    assert np.allclose(shelf[:, 2], 0.01)
+    assert shelf[:, 0].min() == pytest.approx(0.0) and shelf[:, 0].max() == pytest.approx(0.02)
+    assert np.any(np.all(np.abs(shelf[:, :2] - 0.01) < 0.004, axis=1))  # under the upper block
+
+
+def test_bodies_kept_apart_when_share_faces_is_off(tmp_path):
+    project, comp = _two_bodies(tmp_path)
+    project.get(comp.parts[0].geometry, Geometry).share_faces = False
+    mesh = generate_mesh(project, comp.id, tmp_path, tmp_path / "m").mesh
+    lower, upper = mesh.groups["Stack/Lower"].node_ids, mesh.groups["Stack/Upper"].node_ids
+    assert len(np.intersect1d(lower, upper)) == 0
+
+
+def test_overlapping_bodies_are_refused(tmp_path):
+    project, comp = _two_bodies(tmp_path, upper_z=0.008)
+    with pytest.raises(MeshError, match="bodies overlap"):
+        generate_mesh(project, comp.id, tmp_path, tmp_path / "m")
