@@ -117,6 +117,29 @@ refused by name, never ignored):
   Code_Aster (consistent nodal forces ∫N t dA, ∫N f dV; displacements per node).
   Uniform body_force and traction: all four FE solvers (not 2D models yet).
 
+## Stage 3: initial stress, shell thickness, graded materials (CalculiX, Code_Aster)
+
+Elmer and FEniCSx refuse all three by name.
+- **initial_stress** (a structural feature on a body, "Initial stress": `sxx`, `syy`,
+  `szz`, `sxy`, `syz`, `szx` in MPa; uniform, or each from a field column): the stress
+  the static step starts from. Components from a field are in the field's own axes and
+  turn with its placement and the use's (R σ Rᵀ), so take them all from **one field
+  with one placement**; components not taken from it are uniform in those axes. Static
+  steps only (linear or `geometric_nonlinearity`), every step (`steps` empty), global
+  axes (`axes` empty); solids only. CalculiX writes it per integration point, Code_Aster
+  as `ETAT_INIT` of a STAT_NON_LINE (the static step then runs nonlinear).
+  - Not self-equilibrated, it relaxes: a free bar from σxx = σ0 shortens σ0 L / E. A
+    weld's residual stress (no net force or moment) barely moves a free part but stays
+    in the stress results, which are the total.
+- **Shell thickness:** `shell_sections.<i>.fields.thickness` (a use, as a feature's;
+  values in a length unit). CalculiX: exact, per node (`*NODAL THICKNESS`); Code_Aster
+  DKT: one thickness per element (its nodes' mean), binned within 0.5 %.
+- **Graded material:** `materials.<i>.fields.youngs_modulus` or
+  `.thermal_conductivity` (Pa, W/(m K)): each element takes its nodes' mean, binned
+  into materials within 0.5 % of it on both solvers. Isotropic materials only (no
+  plasticity or material axes); for conductivity set the heat physics'
+  `temperature_dependent_materials` false (a table would be ignored, so it's refused).
+
 ## Mistakes
 
 - A temperature given both by a transfer and a body temperature: refused, keep one.

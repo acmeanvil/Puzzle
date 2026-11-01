@@ -665,6 +665,12 @@ class MaterialAssignment(BaseModel):
         description="the material's directions 1, 2, 3 (ADR 0049): a system's x, y, z, or a "
         "cylindrical one's r, θ, z; empty: the material's own axis1 and axis2",
     )
+    # ADR 0044 stage 3: a graded material, a property ("youngs_modulus",
+    # "thermal_conductivity") taken from an imported field in place of the material's.
+    fields: dict[str, FieldUse] = Field(
+        default_factory=dict,
+        description="properties taken from imported fields, by property key (ADR 0044)",
+    )
 
 
 class FieldPlacement(BaseModel):
@@ -1038,6 +1044,11 @@ class ShellSection(BaseModel):
     selection: str = Field(description="the part, or Part/Selection of its faces")
     thickness: Quantity
     offset: float = Field(default=0.0, ge=-0.5, le=0.5, description="in thicknesses")
+    # ADR 0044 stage 3: a thickness varying over the sheet, from an imported field.
+    fields: dict[str, FieldUse] = Field(
+        default_factory=dict,
+        description="'thickness' taken from an imported field in place of `thickness`",
+    )
 
     def describe(self) -> str:
         """`10 mm thick`, as typed (the outline and the tree)."""
@@ -1413,6 +1424,13 @@ class Component(ProjectObject):
             for p in self.physics
             for f in p.features
             for use in f.fields.values()
+            for ref in (use.field, use.placement.axes)
+            if ref is not None
+        ]
+        amplitudes += [  # ADR 0044 stage 3: graded materials and shell thicknesses
+            ref
+            for owner in (*self.materials, *self.shell_sections)
+            for use in owner.fields.values()
             for ref in (use.field, use.placement.axes)
             if ref is not None
         ]

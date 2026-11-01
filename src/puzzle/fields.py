@@ -31,6 +31,10 @@ Stage 2: `vector_values` maps a vector feature's components (`VECTORS`) as one v
   rotated with the points when a placement turns them; `conserve` makes a conservative
   use's total on the target equal the source's (`CONSERVED`: force-type values, the
   source's points weighted by their area or volume).
+
+Stage 3: an `initial_stress` tensor turned with the placements (`rotate_tensors`,
+  R σ Rᵀ), and graded material properties and shell thicknesses (`stage3_inputs`), all
+  as "feature" inputs for the adapters (`adapters/graded.py` bins them per element).
 """
 
 from __future__ import annotations
@@ -901,6 +905,9 @@ def field_inputs(project, root: Path, study, mesh) -> list:
         if physics.type not in solved:
             continue
         for f in physics.features:
+            if f.type == "initial_stress":  # ADR 0044 stage 3: a tensor, turned as one
+                out.append(initial_stress_input(project, root, f, mesh))
+                continue
             if f.type != "body_temperature" and not f.fields:
                 continue
             group = mesh.groups.get(f.selection)
@@ -966,6 +973,7 @@ def field_inputs(project, root: Path, study, mesh) -> list:
                     else:
                         field_ = Field(key, "node", [""], ids, values[:, None])
                         out.append(Input(field_, "feature", f.selection, key, step=k))
+    out += stage3_inputs(project, root, comp, solved, mesh)  # ADR 0044 stage 3
     still = temperature.pop(None, {})
     per_step: dict[int | None, dict[int, float]] = {None: still} if still else {}
     if temperature:  # some vary: every step gets its own, the still ones in each
@@ -995,3 +1003,143 @@ def _weights(f, group, mesh, ids) -> np.ndarray | None:
 
     w = node_weights(group, mesh, entity)
     return np.array([w.get(int(i), 0.0) for i in ids])
+
+
+# --- stage 3 (ADR 0044): initial stress, shell thickness, graded materials -----------------
+
+STRESS = ("sxx", "syy", "szz", "sxy", "syz", "szx")  # an initial_stress feature's values
+STRESS_COMPONENTS = ("xx", "yy", "zz", "xy", "yz", "zx")  # its Field's, as results' stress
+# Material properties an assignment may take from a field, and the physics that uses each.
+GRADED = {"youngs_modulus": "solid_mechanics", "thermal_conductivity": "heat_transfer"}
+
+
+def material_key(selection: str, prop: str) -> str:
+    """How a graded property reaches adapters ("material:Bar/Body:youngs_modulus")."""
+    return f"material:{selection}:{prop}"
+
+
+def shell_key(selection: str) -> str:
+    """How a shell section's thickness field reaches adapters ("shell:Sheet:thickness")."""
+    return f"shell:{selection}:thickness"
+
+
+def placement_rotation(placement, project=None) -> np.ndarray:
+    """The rotation a placement turns vectors and tensors by: the coordinate system's
+    axes first, then the rotation about x, y, z (the move and the pivot turn nothing)."""
+    r = np.eye(3)
+    if placement.axes is not None:
+        from puzzle.axes import absolute
+        from puzzle.model.schema import CoordinateSystem
+
+        if project is None:
+            raise FieldError("a placement in a coordinate system needs the project")
+        cs = absolute(project, project.get(placement.axes, CoordinateSystem))
+        r = np.asarray(cs.orientation(), dtype=float)
+    if any(placement.rotation):
+        r = _rotation(placement.rotation) @ r
+    return r
+
+
+def use_rotation(project, use) -> np.ndarray:
+    """From a field's file to the model for one use: the field's placement, then the use's."""
+    from puzzle.model.schema import ImportedField
+
+    f = project.get(use.field, ImportedField)
+    return placement_rotation(use.placement, project) @ placement_rotation(f.placement, project)
+
+
+def rotate_tensors(values: np.ndarray, r: np.ndarray) -> np.ndarray:
+    """(n, 6) symmetric tensors (xx, yy, zz, xy, yz, zx) turned by R: R σ Rᵀ."""
+    v = np.asarray(values, dtype=float)
+    t = np.empty((len(v), 3, 3))
+    t[:, 0, 0], t[:, 1, 1], t[:, 2, 2] = v[:, 0], v[:, 1], v[:, 2]
+    t[:, 0, 1] = t[:, 1, 0] = v[:, 3]
+    t[:, 1, 2] = t[:, 2, 1] = v[:, 4]
+    t[:, 2, 0] = t[:, 0, 2] = v[:, 5]
+    t = np.einsum("ij,njk,lk->nil", r, t, r)
+    return np.column_stack([t[:, 0, 0], t[:, 1, 1], t[:, 2, 2], t[:, 0, 1], t[:, 1, 2], t[:, 2, 0]])
+
+
+def initial_stress_values(project, root: Path, feature, xyz: np.ndarray) -> np.ndarray:
+    """An initial_stress feature's tensor (Pa; xx, yy, zz, xy, yz, zx) at points.
+
+    Components from a field are in the field's own axes and turn with its placement and
+    the use's (R σ Rᵀ), so they must all come from one field placed one way; components
+    left uniform are then in those axes too. Without a field: the model's axes."""
+    uses = dict(feature.fields)
+    unknown = sorted(set(uses) - set(STRESS))
+    if unknown:
+        raise FieldError(
+            f"an initial stress has no value {', '.join(unknown)} (it has {', '.join(STRESS)})"
+        )
+    if len({(u.field, u.placement.model_dump_json()) for u in uses.values()}) > 1:
+        raise FieldError(
+            f"initial stress on {feature.selection}: take every component from one field "
+            "with one placement, so the tensor turns as one",
+            code="invalid",
+        )
+    columns = []
+    for k in STRESS:
+        if k in uses:
+            columns.append(use_values(project, root, uses[k], xyz)[0])
+        else:
+            q = feature.values.get(k)
+            columns.append(np.full(len(xyz), q.to_si() if q is not None else 0.0))
+    values = np.column_stack(columns)
+    if uses:
+        values = rotate_tensors(values, use_rotation(project, next(iter(uses.values()))))
+    return values
+
+
+def initial_stress_input(project, root: Path, feature, mesh):
+    """An initial_stress feature on its body's nodes, as a "feature" input named
+    `feature_key(f, "stress")` with six components."""
+    from puzzle.results.model import Field
+    from puzzle.transfer import Input
+
+    group = mesh.groups.get(feature.selection)
+    if group is None:
+        raise FieldError(f"initial stress on '{feature.selection}': no such selection in the mesh")
+    values = initial_stress_values(project, root, feature, mesh.node_coords(group.node_ids))
+    key = feature_key(feature, "stress")
+    field_ = Field(key, "node", list(STRESS_COMPONENTS), group.node_ids, values)
+    return Input(field_, "feature", feature.selection, key)
+
+
+def stage3_inputs(project, root: Path, comp, solved: set[str], mesh) -> list:
+    """Graded material properties (`material_key`) and shell thicknesses (`shell_key`)
+    from fields, as "feature" inputs on their selections' nodes; a property the study's
+    physics doesn't use is left out."""
+    from puzzle.results.model import Field
+    from puzzle.transfer import Input
+
+    owners = [(a.selection, prop, use, material_key(a.selection, prop))
+              for a in comp.materials for prop, use in sorted(a.fields.items())]  # fmt: skip
+    owners += [(s.selection, name, use, shell_key(s.selection))
+               for s in comp.shell_sections for name, use in sorted(s.fields.items())]  # fmt: skip
+    out = []
+    for selection, name, use, key in owners:
+        if key.startswith("shell:") and name != "thickness":
+            raise FieldError(f"a shell section takes only its thickness from a field, not {name}")
+        if key.startswith("material:"):
+            if name not in GRADED:
+                raise FieldError(
+                    f"the material on {selection} can't take {name} from a field (only "
+                    f"{', '.join(GRADED)})",
+                    code="unsupported",
+                )
+            if GRADED[name] not in solved:
+                continue
+        group = mesh.groups.get(selection)
+        if group is None:
+            raise FieldError(f"{key}: no selection '{selection}' in the mesh")
+        values, _ = use_values(project, root, use, mesh.node_coords(group.node_ids))
+        if not np.all(values > 0):
+            raise FieldError(
+                f"{name} on {selection} from a field must be positive everywhere "
+                f"(smallest {values.min():.4g})",
+                code="invalid",
+            )
+        field_ = Field(key, "node", [""], group.node_ids, values[:, None])
+        out.append(Input(field_, "feature", selection, key))
+    return out

@@ -59,6 +59,15 @@ VECTOR_FIELD_FEATURES = frozenset(
     | {"displacement:x", "displacement:y", "displacement:z"}
 )  # fmt: skip
 
+# ADR 0044 stage 3: an initial (residual) stress on bodies, uniform or from a field; the
+# field keys stage 3 adds ("initial_stress:sxx", a graded "material:<property>", and
+# "shell:thickness"), benchmarked on CalculiX and Code_Aster (test_imported_stage3.py).
+INITIAL_STRESS_FEATURES = frozenset({"initial_stress"})
+STAGE3_FIELDS = frozenset(
+    {f"initial_stress:{k}" for k in ("sxx", "syy", "szz", "sxy", "syz", "szx")}
+    | {"material:youngs_modulus", "material:thermal_conductivity", "shell:thickness"}
+)
+
 
 @dataclass(frozen=True)
 class Capabilities:
@@ -290,6 +299,22 @@ class SolverAdapter(ABC):
             if c not in caps.couplings | allowed
         ]
         problems += self._material_problems(project, component, study)
+        problems += [  # ADR 0044 stage 3: graded materials and shell thicknesses
+            f"{self.name} does not take {what} from an imported field yet (on {selection})"
+            for selection, what, key in [
+                *(
+                    (a.selection, f"a material's {p}", f"material:{p}")
+                    for a in component.materials
+                    for p in a.fields
+                ),
+                *(
+                    (s.selection, "a shell thickness", "shell:thickness")
+                    for s in component.shell_sections
+                    if s.fields
+                ),
+            ]  # fmt: skip
+            if key not in caps.field_features
+        ]
         for c in component.connectors:  # ADR 0027: refused, never ignored
             if f"{c.kind}:{c.ends}" not in caps.connectors:
                 problems.append(

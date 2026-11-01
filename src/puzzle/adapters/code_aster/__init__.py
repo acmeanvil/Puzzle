@@ -16,10 +16,12 @@ import functools
 from pathlib import Path
 
 from puzzle.adapters.base import (
+    INITIAL_STRESS_FEATURES,
     LIFTING_FEATURES,
     PRETENSION_FEATURES,
     REMOTE_FEATURES,
     RIGID_REMOTE_FEATURES,
+    STAGE3_FIELDS,
     STRUCTURAL_FEATURES,
     SUPPORT_FEATURES,
     THERMAL_FEATURES,
@@ -54,7 +56,8 @@ class CodeAsterAdapter(SolverAdapter):
         | SUPPORT_FEATURES
         | PRETENSION_FEATURES
         | LIFTING_FEATURES
-        | VECTOR_LOAD_FEATURES,
+        | VECTOR_LOAD_FEATURES
+        | INITIAL_STRESS_FEATURES,  # ADR 0044 stage 3
         connectors=frozenset({"beam_fastener:rigid", "beam_fastener:distributing"}),
         beams=True,  # ADR 0027, tests/integration/test_beams.py
         shared_settings=frozenset(  # ADR 0023
@@ -91,7 +94,8 @@ class CodeAsterAdapter(SolverAdapter):
         field_features=frozenset(
             {"body_temperature:T", "pressure:p", "heat_flux:q", "convection:h", "convection:T_inf"}
         )
-        | VECTOR_FIELD_FEATURES,
+        | VECTOR_FIELD_FEATURES
+        | STAGE3_FIELDS,  # ADR 0044 stage 3 (tests/integration/test_imported_stage3.py)
         time_schemes=frozenset({"backward_euler", "crank_nicolson", "theta"}),
     )
 

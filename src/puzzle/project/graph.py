@@ -57,6 +57,11 @@ def _own(obj: ProjectObject, *, drop: frozenset[str] = frozenset()) -> dict:
         for assignment in data.get("materials", []):  # ADR 0049: no axes, as before them
             if assignment.get("axes") is None:
                 assignment.pop("axes", None)
+            if not assignment.get("fields"):  # ADR 0044 stage 3: no field use, as before
+                assignment.pop("fields", None)
+        for section in data.get("shell_sections", []):
+            if not section.get("fields"):
+                section.pop("fields", None)
         for physics in data.get("physics", []):  # ADR 0044: no field use, as before it
             for feature in physics.get("features", []):
                 if not feature.get("fields"):

@@ -227,9 +227,14 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     # ADR 0054: probes tracked while solving, as SUIVI_DDL columns in the Newton table.
     tracked = [] if thermal else followed(trackers(project, study, mesh)[0])
     tie_groups += [t.selection for t in tracked]
+    # ADR 0044 stage 3: an initial stress the static step starts from (STAT_NON_LINE).
+    from puzzle.adapters.graded import initial_stresses
+
+    initial = [] if thermal else initial_stresses(comp, study, "Code_Aster")
     groups = list(
         dict.fromkeys(
             [a.selection for a in comp.materials]
+            + [f.selection for f in initial]
             + [f.selection for f in features + preload + springs + lifting + bolts]
             + fastener_selections(fasteners)
             + tie_groups
@@ -382,6 +387,15 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             dofs = ", ".join(f"D{'XYZ'[d]}={u[i - 1, d]:.12g}" for d in present)
             field_imposed.append(f"_F(GROUP_NO='FD{j}N{i}', {dofs})")
     features = [f for f in features if not any(f is g for g in vectors + shapes)]
+    # ADR 0044 stage 3: graded materials and varying shell thicknesses, binned into
+    # element groups of their own; an initial stress on solids only.
+    graded, shells = _stage3_bins(project, comp, mesh, points, given, thermal, shells)
+    if initial and (beam_parts or shell_parts or bolt_beams):
+        raise InputError(
+            "Code_Aster takes an initial stress on solid models only so far (no beams, "
+            "shells or beam bolts)",
+            code="unsupported",
+        )
     write_med(points.mesh, workdir / f"{JOB}.med", names)
 
     model = _modelisation(comp, thermal)
@@ -530,6 +544,15 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
                 f"material '{m.name}': Code_Aster's temperature tables (THER_NL) are isotropic; "
                 "set the heat physics' temperature-dependent materials off to use its "
                 "anisotropic conductivity", code="unsupported")  # fmt: skip
+        if i in graded:  # ADR 0044 stage 3: one material per bin of the graded property
+            damping = None if thermal else rayleigh(study)
+            for k, (group, mk) in enumerate(graded[i], start=1):
+                out.append(
+                    f"mat{i}_{k} = DEFI_MATERIAU("
+                    f"{_material(mk, thermal, thermal_load is not None, damping)})"
+                )
+                assignments.append(f"_F(GROUP_MA='{group}', MATER=mat{i}_{k})")
+            continue
         if nonlinear:
             out += _ther_nl(i, m, t)
         else:
@@ -687,7 +710,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             f"IMPR_TABLE(TABLE=RECU_TABLE(CO=res, NOM_PARA='FREQ'), UNITE={TABLES['frequency']}, "
             f"FORMAT='TABLEAU', SEPARATEUR=',', FORMAT_R='{FORMAT_R}')",
         ]
-    elif touching or nlgeom or plastic or gaps:
+    elif touching or nlgeom or plastic or gaps or initial:
         # Green-Lagrange strain: large rotations, as CalculiX's NLGEOM (GROT_GDEP refuses tet10);
         # with plasticity, logarithmic strains (true stress against true strain).
         strains = ", DEFORMATION='GREEN_LAGRANGE'" if nlgeom else ""
@@ -708,6 +731,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         behaviour = f"COMPORTEMENT=({', '.join(parts)},), "
         out += [
             *([_defi_contact(touching, names, excluded)] if touching else []),
+            *_initial_stress_field(initial, mesh, given, names, workdir),  # ADR 0044 stage 3
             # Ramp the loads: friction and large deflection depend on the loading path.
             "ramp = DEFI_FONCTION(NOM_PARA='INST', VALE=(0.0, 0.0, 1.0, 1.0))",
             # A failed increment is cut in four, up to five times (1/1024 of a step),
@@ -721,6 +745,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             + ", ".join(f"_F(CHARGE={c}, FONC_MULT=ramp)" for c in charges)
             + ",), "
             + ("CONTACT=contact, " if touching else "")
+            + ("ETAT_INIT=_F(SIGM=sig0), " if initial else "")
             + behaviour
             # As Code_Aster's 3D contact validation (ssnv128): tangent every iteration.
             + "NEWTON=_F(REAC_ITER=1), CONVERGENCE=_F(ITER_GLOB_MAXI=200, RESI_GLOB_RELA=1e-6), "
@@ -798,6 +823,9 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
                     [f"F libr transferred-temperature.txt D {TEMPERATURE_UNIT}"]
                     if thermal_load is not None
                     else []
+                ),
+                *(  # ADR 0044 stage 3
+                    [f"F libr {INITIAL_STRESS_FILE} D {INITIAL_STRESS_UNIT}"] if initial else []
                 ),
             ]
         )
@@ -2186,3 +2214,170 @@ def _theta(step) -> float:
     if theta is None:
         raise InputError(f"Code_Aster does not offer the {scheme} time scheme", code="unsupported")
     return theta
+
+
+# --- ADR 0044 stage 3: initial stress, binned shell thicknesses and graded materials -------
+
+INITIAL_STRESS_UNIT = 97  # the initial stress table
+INITIAL_STRESS_FILE = "initial-stress.txt"
+SIEF = "('SIXX', 'SIYY', 'SIZZ', 'SIXY', 'SIXZ', 'SIYZ')"
+BIN_TAG = 700_000  # Gmsh entities for binned element groups, clear of the mesh's own
+
+
+def _initial_stress_field(initial, mesh: Mesh, given: dict, names: dict, workdir: Path):
+    """`sig0`, the initial stress at the Gauss points for STAT_NON_LINE's ETAT_INIT: per
+    feature a nodal SIEF field (matched to Code_Aster's nodes by coordinates, as the
+    temperature load), turned into Gauss-point values by the elements' shape functions
+    (CREA_CHAMP DISC), then summed over each feature's elements (ASSE)."""
+    from puzzle.adapters.graded import nodal, solid_blocks, stress_field, uniform_stress
+
+    if not initial:
+        return []
+    rows = []
+    for j, f in enumerate(initial, start=1):
+        group = mesh.groups[f.selection]
+        solid_blocks(group, mesh)
+        field = stress_field(f, given)
+        ids = group.node_ids
+        values = (np.broadcast_to(uniform_stress(f), (len(ids), 6)) if field is None
+                  else nodal(field, ids))  # fmt: skip
+        values = values[:, [0, 1, 2, 3, 5, 4]]  # ours xx yy zz xy yz zx; SIXZ before SIYZ
+        rows.append(np.column_stack([mesh.node_coords(ids), np.full(len(ids), j), values]))
+    workdir.mkdir(parents=True, exist_ok=True)
+    np.savetxt(workdir / INITIAL_STRESS_FILE, np.vstack(rows), fmt="%.15g")
+    zero = (
+        "CREA_CHAMP(TYPE_CHAM='NOEU_SIEF_R', OPERATION='AFFE', MAILLAGE=mesh, "
+        f"AFFE=_F(TOUT='OUI', NOM_CMP={SIEF}, VALE=(0.0,) * 6))"
+    )
+    out = [
+        "import numpy as np",
+        f"_srows = np.loadtxt('fort.{INITIAL_STRESS_UNIT}', ndmin=2)",
+        "_skey = lambda xyz: tuple(np.round(np.asarray(xyz) * 1e9).astype(np.int64))",
+        "_sxyz = mesh.getCoordinates().toNumpy().reshape(-1, 3)",
+        f"isn0 = {zero}",
+        "isg0 = CREA_CHAMP(TYPE_CHAM='ELGA_SIEF_R', OPERATION='DISC', MODELE=model, CHAM_GD=isn0)",
+    ]
+    for j in range(1, len(initial) + 1):
+        out += [
+            f"isn{j} = {zero}",
+            f"_sgiven = {{_skey(r[:3]): r[4:] for r in _srows if int(r[3]) == {j}}}",
+            f"isn{j}.setValues([float(v) for c in _sxyz for v in _sgiven.get(_skey(c), "
+            "(0.0,) * 6)])",
+            f"isg{j} = CREA_CHAMP(TYPE_CHAM='ELGA_SIEF_R', OPERATION='DISC', MODELE=model, "
+            f"CHAM_GD=isn{j})",
+        ]
+    parts = ["_F(TOUT='OUI', CHAM_GD=isg0)"] + [
+        f"_F(GROUP_MA='{names[f.selection]}', CHAM_GD=isg{j}, CUMUL='OUI')"
+        for j, f in enumerate(initial, start=1)
+    ]
+    out.append("sig0 = CREA_CHAMP(TYPE_CHAM='ELGA_SIEF_R', OPERATION='ASSE', MODELE=model, "
+               f"ASSE=({', '.join(parts)},))")  # fmt: skip
+    return out
+
+
+def _stage3_bins(project, comp, mesh: Mesh, points, given: dict, thermal: bool, shells):
+    """Graded materials and varying shell thicknesses as element groups (ADR 0044 stage 3).
+
+    Each element's value is the mean of its nodes' mapped values; elements are binned
+    so none is more than `graded.TOLERANCE` (0.5 %) from its bin's value (DKT's
+    thickness is one value per element anyway). Each bin is an element group of the mesh
+    written: -> ({material index: [(group, material with the bin's value)]}, shells with
+    each varying one replaced by its bins)."""
+    from puzzle.adapters.graded import TOLERANCE, binned, element_values, solid_blocks
+    from puzzle.fields import material_key, shell_key
+    from puzzle.model.schema import Quantity
+
+    sets: dict[str, np.ndarray] = {}
+    graded: dict[int, list] = {}
+    units = {"youngs_modulus": "Pa", "thermal_conductivity": "W/(m*K)"}
+    for i, a in enumerate(comp.materials, start=1):
+        fields = {p: given[material_key(a.selection, p)] for p in sorted(a.fields)
+                  if material_key(a.selection, p) in given}  # fmt: skip
+        if not fields:
+            continue
+        m = project.get(a.material, Material)
+        if m.models.used():
+            raise InputError(
+                f"material '{m.name}': a property from a field is written for isotropic "
+                "materials only (no plasticity, no material axes)",
+                code="unsupported",
+            )
+        if "thermal_conductivity" in fields and "thermal_conductivity" in thermal_tables(m, comp):
+            raise InputError(
+                f"material '{m.name}': its conductivity comes from a field, so its "
+                "temperature table can't apply; set the heat physics' temperature-dependent "
+                "materials off",
+                code="unsupported",
+            )
+        blocks = solid_blocks(mesh.groups[a.selection], mesh)
+        ids = np.concatenate([b.ids for b in blocks])
+        per, levels = {}, {}
+        for prop, field in fields.items():
+            values = np.concatenate([element_values(field, b)[:, 0] for b in blocks])
+            per[prop], levels[prop], _ = binned(values, TOLERANCE)
+        props = sorted(fields)
+        combos, labels = np.unique(np.column_stack([per[p] for p in props]), axis=0,
+                                   return_inverse=True)  # fmt: skip
+        graded[i] = []
+        for k, combo in enumerate(combos, start=1):
+            update = {p: Quantity(value=float(levels[p][c]), unit=units[p])
+                      for p, c in zip(props, combo, strict=True)}  # fmt: skip
+            group = f"GM{i}_{k}"
+            sets[group] = ids[labels.ravel() == k - 1]
+            graded[i].append(
+                (group, m.model_copy(update={"properties": {**m.properties, **update}}))
+            )
+    out_shells = []
+    for j, (name, s) in enumerate(shells, start=1):
+        if not s.fields:
+            out_shells.append((name, s))
+            continue
+        field = given.get(shell_key(s.selection))
+        if field is None:
+            raise InputError(f"the shell thickness on '{s.selection}': its field was not mapped")
+        own = {id(b) for b in mesh.shell_blocks()}
+        blocks = [b for b in mesh.groups[s.selection].blocks(mesh) if id(b) in own]
+        ids = np.concatenate([b.ids for b in blocks])
+        values = np.concatenate([element_values(field, b)[:, 0] for b in blocks])
+        labels, levels, _ = binned(values, TOLERANCE)
+        for k, level in enumerate(levels, start=1):
+            group = f"SH{j}_{k}"
+            sets[group] = ids[labels == k - 1]
+            thick = Quantity(value=float(level), unit="m")
+            out_shells.append((group, s.model_copy(update={"thickness": thick, "fields": {}})))
+    if sets:
+        _split_groups(points.mesh, sets, names=points.out)
+    return graded, out_shells
+
+
+def _split_groups(mesh: Mesh, sets: dict[str, np.ndarray], names: dict) -> None:
+    """Element groups for bins, in place: each set's elements moved onto entities of
+    their own (MED groups are made of whole entities), which every group that held the
+    old entity also gets; the set's group named in `names` to be written."""
+    tag = BIN_TAG
+    for set_name, ids in sets.items():
+        entities, nodes = [], []
+        for index, b in enumerate(list(mesh.blocks)):
+            hit = np.isin(b.ids, ids)
+            if not hit.any():
+                continue
+            tag += 1
+            new = (b.dim, tag)
+            mesh.blocks[index] = CellBlock(b.element, b.dim, b.entity, b.ids[~hit],
+                                           b.connectivity[~hit])  # fmt: skip
+            mesh.blocks.append(CellBlock(b.element, b.dim, new, b.ids[hit], b.connectivity[hit]))
+            for key, g in list(mesh.groups.items()):
+                if b.entity in g.entities:
+                    mesh.groups[key] = Group(g.name, g.dim, [*g.entities, new], g.node_ids)
+            entities.append(new)
+            nodes.append(b.connectivity[hit].ravel())
+        dim = entities[0][0]
+        mesh.groups[f"__{set_name}"] = Group(f"__{set_name}", dim, entities,
+                                             np.unique(np.concatenate(nodes)))  # fmt: skip
+        names[f"__{set_name}"] = set_name
+    mesh.blocks[:] = [b for b in mesh.blocks if len(b.ids)]
+    present = {b.entity for b in mesh.blocks}
+    for key, g in list(mesh.groups.items()):
+        if any(e not in present for e in g.entities):
+            mesh.groups[key] = Group(g.name, g.dim, [e for e in g.entities if e in present],
+                                     g.node_ids)  # fmt: skip

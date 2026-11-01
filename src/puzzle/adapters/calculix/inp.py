@@ -247,6 +247,7 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
         int(max(b.ids.max() for b in mesh.blocks)) + 1 + fastener_elems,
     )
     out += _contacts(project, comp, mesh, faces)
+    out += _initial_stresses(comp, mesh, study, inputs)  # ADR 0044 stage 3
 
     solve_steps = study.solve_steps()
     if not solve_steps:
@@ -561,6 +562,9 @@ def _shell_sections(comp: Component, mesh: Mesh, selection: str, material: str) 
         if s.selection not in mesh.groups:
             raise InputError(f"a shell thickness names '{s.selection}', which is not meshed")
         offset = f", OFFSET={s.offset:.6g}" if s.offset else ""
+        if s.fields:  # ADR 0044 stage 3: a thickness per node, from an imported field
+            out += _nodal_thickness(s, mesh, material, offset)
+            continue
         out += [
             f"*SHELL SECTION, ELSET={set_name('E', s.selection)}, MATERIAL={material}{offset}",
             f"{s.thickness.to_si():.10g}",
@@ -593,6 +597,11 @@ def _materials(
                 f"sheet bodies, not '{assignment.selection}'"
             )
         name = f"M{i}"
+        graded = _graded(assignment)
+        if graded:  # ADR 0044 stage 3: elements binned by a property from a field
+            out += _graded_materials(assignment, material, graded, comp, mesh, name, expansion,
+                                     damping)  # fmt: skip
+            continue
         out += [f"*MATERIAL, NAME={name}"] + _material_cards(material, comp, expansion)
         if damping is not None:  # Rayleigh damping for structural dynamics (ADR 0041)
             out.append(f"*DAMPING, ALPHA={damping[0]:.10g}, BETA={damping[1]:.10g}")
@@ -1883,3 +1892,139 @@ def _row(values) -> str:
 def _chunks(ids, per_line: int = 16) -> list[str]:
     ids = [str(int(i)) for i in ids]
     return [", ".join(ids[i : i + per_line]) + "," for i in range(0, len(ids), per_line)]
+
+
+# --- ADR 0044 stage 3: initial stress, nodal shell thickness, graded materials -------------
+
+
+def _initial_stresses(comp: Component, mesh: Mesh, study: Study, inputs=()) -> list[str]:
+    """*INITIAL CONDITIONS, TYPE=STRESS: each element's stress at its integration points
+    (gauss.f's), interpolated from the nodal field by the element's shape functions. The
+    data lines are element, point, then σ11, σ22, σ33, σ12, σ13, σ23. CalculiX takes it
+    as the stress the static step starts from, in linear steps and NLGEOM ones alike: a
+    stress that isn't self-equilibrated relaxes (a free bar under σ0 shortens σ0 L / E)."""
+    from puzzle.adapters.graded import (
+        initial_stresses,
+        integration_points,
+        nodal,
+        solid_blocks,
+        stress_field,
+        uniform_stress,
+    )
+
+    features = initial_stresses(comp, study, "CalculiX")
+    if not features:
+        return []
+    if any(i.role == "prestress" for i in inputs):
+        raise InputError(
+            "an initial stress and a transferred prestress together are not written: "
+            "CalculiX's prestress is a replayed step",
+            code="unsupported",
+        )
+    by_element: dict[int, np.ndarray] = {}
+    for f in features:
+        group = mesh.groups.get(f.selection)
+        if group is None:
+            raise InputError(f"initial stress on '{f.selection}': no such selection in the mesh")
+        field = stress_field(f, GIVEN.get() or {})
+        for b in solid_blocks(group, mesh):
+            shape = integration_points(b.element)  # (points, nodes)
+            if field is None:
+                at = np.broadcast_to(uniform_stress(f), (len(b.ids), len(shape), 6))
+            else:
+                values = nodal(field, b.connectivity.ravel()).reshape(*b.connectivity.shape, 6)
+                at = np.einsum("pk,ekc->epc", shape, values)
+            for eid, s in zip(b.ids.tolist(), at, strict=True):
+                by_element[eid] = by_element.get(eid, 0.0) + s
+    out = ["*INITIAL CONDITIONS, TYPE=STRESS"]
+    for eid in sorted(by_element):
+        for p, s in enumerate(by_element[eid], start=1):  # ours xx yy zz xy yz zx
+            out.append(f"{eid}, {p}, " + _row_floats([s[0], s[1], s[2], s[3], s[5], s[4]]))
+    return out
+
+
+def _nodal_thickness(s, mesh: Mesh, material: str, offset: str) -> list[str]:
+    """A shell section whose thickness varies (ADR 0044 stage 3): *NODAL THICKNESS per
+    node from the mapped field, and NODAL THICKNESS on the section (whose own line is
+    then only read past)."""
+    from puzzle.adapters.graded import nodal
+    from puzzle.fields import shell_key
+
+    field = (GIVEN.get() or {}).get(shell_key(s.selection))
+    if field is None:
+        raise InputError(f"the shell thickness on '{s.selection}': its field was not mapped")
+    nodes = mesh.groups[s.selection].node_ids
+    t = nodal(field, nodes)[:, 0]
+    return [
+        f"*SHELL SECTION, ELSET={set_name('E', s.selection)}, MATERIAL={material}{offset}, "
+        "NODAL THICKNESS",
+        f"{s.thickness.to_si():.10g}",
+        "*NODAL THICKNESS",
+        *(f"{int(n)}, {v:.10g}" for n, v in zip(nodes, t, strict=True)),
+    ]
+
+
+def _graded(assignment) -> dict:
+    """A material assignment's field-driven properties this deck writes: key -> field."""
+    from puzzle.fields import material_key
+
+    given = GIVEN.get() or {}
+    out = {}
+    for prop in assignment.fields:
+        field = given.get(material_key(assignment.selection, prop))
+        if field is not None:  # None: a property the study's physics doesn't use
+            out[prop] = field
+    return out
+
+
+def _graded_materials(
+    assignment, material: Material, graded: dict, comp: Component, mesh: Mesh, name: str,
+    expansion: bool, damping,
+) -> list[str]:  # fmt: skip
+    """A graded material (ADR 0044 stage 3): each element's property is the mean of its
+    nodes' mapped values, and elements are binned into materials so none is more than
+    `graded.TOLERANCE` (0.5 %) from its bin's value: one *MATERIAL, element set and
+    *SOLID SECTION per bin."""
+    from puzzle.adapters.graded import TOLERANCE, binned, element_values, solid_blocks
+    from puzzle.model.schema import Quantity
+
+    if material.models.used():
+        raise InputError(
+            f"material '{material.name}': a property from a field is written for isotropic "
+            "elastic materials only (no plasticity, no material axes)",
+            code="unsupported",
+        )
+    tables = thermal_tables(material, comp)
+    if "thermal_conductivity" in graded and "thermal_conductivity" in tables:
+        raise InputError(
+            f"material '{material.name}': its conductivity comes from a field, so its "
+            "temperature table can't apply; set the heat physics' temperature-dependent "
+            "materials off",
+            code="unsupported",
+        )
+    group = mesh.groups[assignment.selection]
+    blocks = solid_blocks(group, mesh)
+    ids = np.concatenate([b.ids for b in blocks])
+    labels = np.zeros(len(ids), dtype=int)
+    levels: dict[str, np.ndarray] = {}
+    props = sorted(graded)
+    per = {}
+    for prop in props:
+        values = np.concatenate([element_values(graded[prop], b)[:, 0] for b in blocks])
+        per[prop], levels[prop], _ = binned(values, TOLERANCE)
+    keys = np.column_stack([per[p] for p in props])
+    combos, labels = np.unique(keys, axis=0, return_inverse=True)
+    out = []
+    for k, combo in enumerate(combos, start=1):
+        unit = {"youngs_modulus": "Pa", "thermal_conductivity": "W/(m*K)"}
+        props_k = dict(material.properties)
+        for prop, level in zip(props, combo, strict=True):
+            props_k[prop] = Quantity(value=float(levels[prop][level]), unit=unit[prop])
+        m = material.model_copy(update={"properties": props_k})
+        mname, eset = f"{name}_{k}", f"E_{name}_{k}"
+        out += [f"*MATERIAL, NAME={mname}", *_material_cards(m, comp, expansion)]
+        if damping is not None:
+            out.append(f"*DAMPING, ALPHA={damping[0]:.10g}, BETA={damping[1]:.10g}")
+        out += [f"*ELSET, ELSET={eset}", *_chunks(ids[labels.ravel() == k - 1])]
+        out.append(f"*SOLID SECTION, ELSET={eset}, MATERIAL={mname}")
+    return out

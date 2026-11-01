@@ -89,6 +89,15 @@ CATALOG: dict[str, list[FeatureSpec]] = {
             "Traction (force per area)",
             values={"tx": (0.0, "Pa"), "ty": (0.0, "Pa"), "tz": (0.0, "Pa")},
         ),
+        # An initial or residual stress on a body (ADR 0044 stage 3): the stress the body
+        # starts from, uniform or from an imported field (its tensor turned with the
+        # field's placement). Not self-equilibrated, it relaxes: a free bar shortens.
+        FeatureSpec(
+            "initial_stress",
+            "Initial stress",
+            entity="body",
+            values={k: (0.0, "MPa") for k in ("sxx", "syy", "szz", "sxy", "syz", "szx")},
+        ),
         # Body loads (ADR 0037): on a body, per volume, through the material's density.
         FeatureSpec(
             "gravity",

@@ -6,10 +6,12 @@ import json
 from pathlib import Path
 
 from puzzle.adapters.base import (
+    INITIAL_STRESS_FEATURES,
     LIFTING_FEATURES,
     PRETENSION_FEATURES,
     REMOTE_FEATURES,
     RIGID_REMOTE_FEATURES,
+    STAGE3_FIELDS,
     STRUCTURAL_FEATURES,
     SUPPORT_FEATURES,
     THERMAL_FEATURES,
@@ -48,7 +50,8 @@ class CalculixAdapter(SolverAdapter):
         | SUPPORT_FEATURES
         | PRETENSION_FEATURES
         | LIFTING_FEATURES
-        | VECTOR_LOAD_FEATURES,
+        | VECTOR_LOAD_FEATURES
+        | INITIAL_STRESS_FEATURES,  # ADR 0044 stage 3
         feature_steps=True,
         connectors=frozenset({"beam_fastener:rigid", "beam_fastener:distributing"}),
         beams=True,  # ADR 0027, tests/integration/test_beams.py
@@ -61,7 +64,8 @@ class CalculixAdapter(SolverAdapter):
         field_features=frozenset(
             {"body_temperature:T", "pressure:p", "heat_flux:q", "convection:h", "convection:T_inf"}
         )
-        | VECTOR_FIELD_FEATURES,  # stage 2: tests/integration/test_imported_vectors.py
+        | VECTOR_FIELD_FEATURES  # stage 2: tests/integration/test_imported_vectors.py
+        | STAGE3_FIELDS,  # ADR 0044 stage 3 (tests/integration/test_imported_stage3.py)
         # ADR 0044: a face value from a field varying in time, through transient steps
         # (an amplitude per face; tests/integration/test_imported_fields_time.py)
         field_histories=frozenset({"pressure:p", "heat_flux:q"}),
