@@ -7,8 +7,10 @@
   and rotated in its file, placed back by the field's placement;
 - **a convection coefficient:** an imported h on the tip gives the uniform h's answer.
 
-CalculiX takes the values per face; Code_Aster a temperature load, and a pressure as
-consistent nodal forces (both give CalculiX's numbers to every digit printed).
+CalculiX takes the values per face; Code_Aster a temperature load, a pressure as
+consistent nodal forces and a film as FORMULEs over the faces; Elmer restart variables;
+FEniCSx Lagrange functions (all give CalculiX's numbers to every digit printed).
+test_imported_fields_parity.py checks varying face values on every solver.
 """
 
 import numpy as np
@@ -112,7 +114,7 @@ def _pressure_case(tmp_path, solver, placement=None, rotate=None):
     return _tip(_solve(tmp_path, project, comp, solver), component=0), p
 
 
-@over("calculix", "code_aster")
+@over("calculix", "code_aster", "fenicsx", "elmer")
 def test_an_imported_pressure_is_the_uniform_one_and_survives_a_move(tmp_path, solver):
     u, p = _pressure_case(tmp_path / "a", solver)
     # The same data written turned 90° about z and 1 m along y, then placed back.
@@ -139,7 +141,7 @@ def _undo_turn_then_move():
     }
 
 
-@over("calculix")  # Code_Aster: refused so far (its ECHANGE takes one value per group)
+@over("calculix", "code_aster", "fenicsx", "elmer")
 def test_an_imported_film_coefficient_is_the_uniform_one(tmp_path, solver):
     h, T_inf = 250.0, 300.0
     g = np.linspace(-0.002, 0.012, 6)
@@ -169,18 +171,22 @@ def test_what_a_solver_cannot_take_from_a_field_is_refused(tmp_path):
     def get_adapter(name):
         return available_adapters()[name]()
 
+    # A film coefficient from a field is taken by every FE solver; a held temperature
+    # from one by none yet.
     physics = Physics(type="heat_transfer", features=[
         Feature(type="convection", selection="Bar/Tip",
-                values={"h": qty(10, "W/(m^2*K)"), "T_inf": qty(300, "K")})])  # fmt: skip
+                values={"h": qty(10, "W/(m^2*K)"), "T_inf": qty(300, "K")}),
+        Feature(type="temperature", selection="Bar/Root",
+                values={"T": qty(300, "K")})])  # fmt: skip
     project, comp = bar_project(write_bar_step(tmp_path / "bar.step"), [physics], mesh_size_mm=10)
     path = _csv(tmp_path / "h.csv", np.zeros((4, 3)) + [[L, 0, 0]], np.ones(4), "x,y,z,h")
     field = _add_field(project, tmp_path, path, name="HTC")
     physics.features[0].fields["h"] = FieldUse(field=field.id, column="h")
     study = project.add(Study(name="s", component=comp.id, solver="code_aster",
                               steps=[SolveStep(type="stationary")]))  # fmt: skip
-    problems = get_adapter("code_aster").check(project, study)
-    assert any("convection's h from an imported field" in p for p in problems)
-    assert (
-        get_adapter("calculix").check(project, study.model_copy(update={"solver": "calculix"}))
-        == []
-    )
+    for solver in ("calculix", "code_aster", "elmer", "fenicsx"):
+        assert get_adapter(solver).check(project, study.model_copy(update={"solver": solver})) == []
+    physics.features[1].fields["T"] = FieldUse(field=field.id, column="h")
+    for solver in ("calculix", "code_aster", "elmer", "fenicsx"):
+        problems = get_adapter(solver).check(project, study.model_copy(update={"solver": solver}))
+        assert any("temperature's T from an imported field" in p for p in problems), solver

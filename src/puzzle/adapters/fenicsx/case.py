@@ -112,7 +112,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     from puzzle.adapters.base import refuse_inputs
 
     comp = project.get(study.component, Component)
-    refuse_inputs(inputs, "FEniCSx", {("load", "temperature")})
+    refuse_inputs(inputs, "FEniCSx", {("load", "temperature"), ("feature", "*")})
     thermal_load = next((i.field for i in inputs if i.field.name == "temperature"), None)
     check_contacts(comp, set(), "FEniCSx")
     refuse_line_bodies(mesh, "FEniCSx")
@@ -254,6 +254,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             "file": "temperature.npz",
             "reference": _reference_temperature(comp),
         }
+    _field_files(features, case["features"], inputs, mesh, workdir)
     write_med(mesh, workdir / "mesh.msh", {g: g for g in groups})
     case["settings"] = _settings(study, step)  # ADR 0023
     (workdir / "case.json").write_text(json.dumps(case, indent=2))
@@ -349,6 +350,25 @@ def read_results(workdir: Path) -> Results:
             step.fields[name] = Field(name, "global", [""], np.array([0]), value)
     results.steps.append(step)
     return results
+
+
+def _field_files(features, written: list[dict], inputs, mesh: Mesh, workdir: Path) -> None:
+    """Values from imported fields (ADR 0044): each one's nodal values on its selection
+    in an .npz by coordinates, named in the feature's "fields", for study.py to build a
+    Lagrange function from."""
+    from puzzle.fields import feature_key
+
+    given = {i.source: i.field for i in inputs if i.role == "feature"}
+    for k, (f, entry) in enumerate(zip(features, written, strict=True)):
+        for name in sorted(f.fields):
+            field = given.get(feature_key(f, name))
+            if field is None:
+                raise InputError(
+                    f"{f.type} on '{f.selection}': its field for {name} was not mapped"
+                )
+            file = f"field-{k}-{name}.npz"
+            np.savez(workdir / file, coords=mesh.node_coords(field.ids), values=field.values[:, 0])
+            entry.setdefault("fields", {})[name] = file
 
 
 def _reference_temperature(comp) -> float:

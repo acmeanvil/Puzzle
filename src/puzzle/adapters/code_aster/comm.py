@@ -43,6 +43,7 @@ from puzzle.adapters.common import (
     support_nodes,
     support_stiffness,
     surface_area,
+    surface_blocks,
     thermal_tables,
     time_scheme,
     time_settings,
@@ -533,7 +534,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     out.append(f"mater = AFFE_MATERIAU(MAILLAGE=mesh, AFFE=({', '.join(assignments)},){varc})")
     charges = ["load"]
     if thermal:  # loads following an amplitude get their own charge (ADR 0037)
-        out += _thermal_loads(project, features, names, mesh, comp)
+        out += _thermal_loads(project, features, names, mesh, comp, given)
     else:
         extra = _pretension_loads(bolts, cuts)
         if field_forces:
@@ -1802,12 +1803,21 @@ def _timed_loads(project, features, names, mesh, comp=None) -> list[str]:
     return out
 
 
-def _thermal_loads(project, features, names, mesh, comp=None) -> list[str]:
+def _thermal_loads(project, features, names, mesh, comp=None, given=None) -> list[str]:
     """`excit`: the thermal charges, those following an amplitude multiplied by it
-    (DEFI_FONCTION of time, held constant outside its points)."""
+    (DEFI_FONCTION of time, held constant outside its points); values from imported
+    fields (`given`, feature key -> nodal Field) as functions of x, y, z (ADR 0044)."""
     from puzzle.model.schema import Amplitude
 
     out, excit = [], []
+    fielded = [
+        f for f in features if f.type in FIELD_THERMAL and set(f.fields) & FIELD_THERMAL[f.type]
+    ]
+    features = [f for f in features if f not in fielded]
+    if fielded:
+        lines, items = _field_thermal_loads(project, fielded, names, mesh, given or {})
+        out += lines
+        excit += items
     plain = [f for f in features if not f.amplitude]
     base = _loads(plain, names, mesh, True, comp=comp)
     if base != "load = AFFE_CHAR_THER(MODELE=model)":  # Code_Aster refuses an empty charge
@@ -1833,6 +1843,143 @@ def _thermal_loads(project, features, names, mesh, comp=None) -> list[str]:
         excit.append("_F(CHARGE=load)")
     out.append(f"excit = ({', '.join(excit)},)")
     return out
+
+
+# ADR 0044: thermal values Code_Aster takes from imported fields.
+FIELD_THERMAL = {"heat_flux": {"q"}, "convection": {"h", "T_inf"}}
+
+# Written once into a .comm that has any: a field's nodal values on a face selection,
+# evaluated where Code_Aster asks (its Gauss points) with the faces' own shape functions,
+# so the load is the field's finite-element interpolant, as a consistent nodal load of
+# it would be. A point is placed on the nearest faces' corner planes, then (six-node
+# faces) on the curved face by Gauss-Newton; values are cached by point.
+ON_FACES = """
+import numpy as _np
+
+
+def _shape(six, xi, eta):
+    z = 1.0 - xi - eta
+    if not six:
+        return (_np.array([z, xi, eta]), _np.array([-1.0, 1.0, 0.0]),
+                _np.array([-1.0, 0.0, 1.0]))
+    n = _np.array([z * (2 * z - 1), xi * (2 * xi - 1), eta * (2 * eta - 1), 4 * z * xi,
+                   4 * xi * eta, 4 * eta * z])
+    dxi = _np.array([1 - 4 * z, 4 * xi - 1, 0.0, 4 * (z - xi), 4 * eta, -4 * eta])
+    deta = _np.array([1 - 4 * z, 0.0, 4 * eta - 1, -4 * xi, 4 * xi, 4 * (z - eta)])
+    return n, dxi, deta
+
+
+class OnFaces:
+    def __init__(self, xyz, faces, values):
+        self.xyz, self.faces = _np.asarray(xyz, float), _np.asarray(faces, int)
+        self.values, self.six = _np.asarray(values, float), self.faces.shape[1] == 6
+        self.centre = self.xyz[self.faces[:, :3]].mean(axis=1)
+        self.cache = {}
+
+    def _local(self, e, p):
+        nodes = self.xyz[self.faces[e]]
+        a, b, c = nodes[:3]
+        xi, eta = _np.linalg.lstsq(_np.column_stack([b - a, c - a]), p - a, rcond=None)[0]
+        for _ in range(4 if self.six else 0):
+            n, dxi, deta = _shape(True, xi, eta)
+            jac = _np.column_stack([dxi @ nodes, deta @ nodes])
+            step = _np.linalg.lstsq(jac, p - n @ nodes, rcond=None)[0]
+            xi, eta = xi + step[0], eta + step[1]
+        return xi, eta
+
+    def __call__(self, x, y, z):
+        key = (x, y, z)
+        if key not in self.cache:
+            p = _np.array([x, y, z])
+            d = ((self.centre - p) ** 2).sum(axis=1)
+            near = _np.argsort(d)[:8] if len(d) > 8 else _np.argsort(d)
+            best = None
+            for e in near:
+                xi, eta = self._local(e, p)
+                outside = -min(xi, eta, 1.0 - xi - eta)
+                if best is None or outside < best[0]:
+                    best = (outside, e, xi, eta)
+            _, e, xi, eta = best
+            n = _shape(self.six, xi, eta)[0]
+            self.cache[key] = float(n @ self.values[self.faces[e]])
+        return self.cache[key]
+"""
+
+
+def _on_faces(name: str, group, mesh: Mesh, field) -> list[str]:
+    """`name` = OnFaces(...): a field's nodal values on a face selection's elements."""
+    blocks = surface_blocks(group, mesh)
+    if mesh.planar or any(b.element not in ("tri3", "tri6") for b in blocks):
+        raise InputError(
+            f"Code_Aster takes values from imported fields on triangle faces of 3D models only "
+            f"so far ('{group.name}')",
+            code="unsupported",
+        )
+    if len({b.element for b in blocks}) > 1:
+        raise InputError(f"'{group.name}' mixes face element types", code="unsupported")
+    connectivity = np.vstack([b.connectivity for b in blocks])
+    ids, local = np.unique(connectivity, return_inverse=True)
+    xyz = mesh.node_coords(ids)
+    values = field.at(ids)[:, 0]
+
+    def rows(a) -> str:
+        return "[" + ", ".join("[" + ", ".join(f"{v:.17g}" for v in r) + "]" for r in a) + "]"
+
+    return [
+        f"{name} = OnFaces({rows(xyz)},",
+        f"    {[list(map(int, r)) for r in local.reshape(connectivity.shape)]},",
+        f"    [{', '.join(f'{v:.17g}' for v in values)}])",
+    ]
+
+
+def _field_thermal_loads(project, features, names, mesh: Mesh, given: dict):
+    """Heat fluxes and films with values from imported fields (ADR 0044): one
+    AFFE_CHAR_THER_F charge each, its field values FORMULEs of x, y, z over `OnFaces`
+    (a uniform value beside one a DEFI_CONSTANTE), a flux following an amplitude
+    multiplied by it. Returns (lines, excit items)."""
+    from puzzle.fields import feature_key
+    from puzzle.model.schema import Amplitude
+
+    lines, excit = [ON_FACES], []
+    for k, f in enumerate(features, start=1):
+        g, group = names[f.selection], mesh.groups[f.selection]
+        functions = {}
+        for j, name in enumerate(("q",) if f.type == "heat_flux" else ("h", "T_inf")):
+            fn = f"ff{k}_{j}"
+            if name in f.fields:
+                field = given.get(feature_key(f, name))
+                if field is None:
+                    raise InputError(
+                        f"{f.type} on '{f.selection}': its field for {name} was not mapped"
+                    )
+                lines += _on_faces(f"on{k}_{j}", group, mesh, field)
+                lines.append(
+                    f"{fn} = FORMULE(VALE='on(X, Y, Z)', NOM_PARA=('X', 'Y', 'Z'), on=on{k}_{j})"
+                )
+            else:
+                lines.append(f"{fn} = DEFI_CONSTANTE(VALE={f.values[name].to_si():.12g})")
+            functions[name] = fn
+        if f.type == "heat_flux":
+            lines.append(
+                f"fload{k} = AFFE_CHAR_THER_F(MODELE=model, "
+                f"FLUX_REP=_F(GROUP_MA='{g}', FLUN={functions['q']}))"
+            )
+        else:
+            lines.append(
+                f"fload{k} = AFFE_CHAR_THER_F(MODELE=model, ECHANGE=_F(GROUP_MA='{g}', "
+                f"COEF_H={functions['h']}, TEMP_EXT={functions['T_inf']}))"
+            )
+        if f.amplitude:
+            points = project.get(f.amplitude, Amplitude).points
+            values = ", ".join(f"{t:.12g}, {v:.12g}" for t, v in points)
+            lines.append(
+                f"famp{k} = DEFI_FONCTION(NOM_PARA='INST', VALE=({values}), "
+                "PROL_GAUCHE='CONSTANT', PROL_DROITE='CONSTANT')"
+            )
+            excit.append(f"_F(CHARGE=fload{k}, FONC_MULT=famp{k})")
+        else:
+            excit.append(f"_F(CHARGE=fload{k})")
+    return lines, excit
 
 
 def _ther_non_line(step, comp: Component) -> str:

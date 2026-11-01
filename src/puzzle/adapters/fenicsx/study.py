@@ -12,7 +12,8 @@ case.json says what to solve:
      "initial_temperature": 293.15,
      "materials": [{"group": "Bar/Body", "properties": {"youngs_modulus": ..., ...},
                     "tables": {"thermal_conductivity": [[T, k], ...]}}],   (heat only)
-     "features": [{"type": "fixed", "group": "Bar/Root", "values": {...}, "area": ...}]}
+     "features": [{"type": "fixed", "group": "Bar/Root", "values": {...}, "area": ...,
+                   "fields": {"p": "field-0-p.npz"}}]}       (values from imported fields)
 Values are SI. Group names are Gmsh physical group names in mesh.msh.
 
 results.npz holds `coords` (one row per output node) and, as computed, `displacement`,
@@ -103,6 +104,10 @@ def main() -> None:
                 value += (v1 - v0) / (t1 - t0) * (clamped - t0)
             expr += indicator * value
         return expr
+
+    for f in case["features"]:  # ADR 0044: values from imported fields, as functions
+        for name, file in f.get("fields", {}).items():
+            f["values"][name] = face_field(file, msh, degree)
 
     out: dict[str, np.ndarray] = {"backend": np.array(BACKEND)}
     solve = {
@@ -246,6 +251,17 @@ def interpolate_nodal(points: np.ndarray, values: np.ndarray, at: np.ndarray) ->
     out = (weights * values[index]).sum(axis=1) / weights.sum(axis=1)
     out[exact] = values[index[exact, 0]]
     return out
+
+
+def face_field(file: str, msh, degree: int) -> fem.Function:
+    """An imported field's nodal values on a selection (ADR 0044) as a Lagrange function
+    of the mesh's degree: exact at the selection's nodes, so on its faces it is the
+    field's finite-element interpolant (elsewhere it is never integrated)."""
+    data = np.load(file)
+    S = fem.functionspace(msh, ("Lagrange", degree))
+    u = fem.Function(S)
+    u.x.array[:] = interpolate_nodal(data["coords"], data["values"], S.tabulate_dof_coordinates())
+    return u
 
 
 def dirichlet(value, dofs, V) -> fem.DirichletBC:

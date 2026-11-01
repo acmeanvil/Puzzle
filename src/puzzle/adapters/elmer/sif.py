@@ -139,12 +139,16 @@ def write_case(
     emesh = write_mesh(mesh, workdir / MESH_DIR, body_names, boundary_names)
     thermal_load = next((i.field for i in inputs if i.field.name == "temperature"), None)
     restart = []
+    variables: list[tuple[str, np.ndarray]] = []
     if thermal_load is not None:
         if solved != {"solid_mechanics"} or step.type != "stationary":
             raise InputError(
                 "a temperature load applies to static structural steps", code="unsupported"
             )
-        _write_restart(workdir / MESH_DIR / RESTART, thermal_load, emesh)
+        variables.append(("temperature", thermal_load.at(emesh.node_ids)[:, 0]))
+    fielded = _field_variables(features, inputs, emesh, variables)  # ADR 0044
+    if variables:
+        _write_restart(workdir / MESH_DIR / RESTART, variables, transient)
         restart = [f'  Restart File = "{RESTART}"', "  Restart Position = 1"]
 
     out = [
@@ -254,6 +258,7 @@ def write_case(
             amplitudes,
             {f.selection: local_axes(project, f) for f in features if f.axes is not None},
             comp,
+            fielded,
         )
 
     if transient:
@@ -431,12 +436,20 @@ def _boundary(
     amplitudes=None,
     axes_of=None,
     comp=None,
+    fielded=None,
 ) -> list[str]:
-    """A boundary's conditions; `amplitudes` (id -> points) make a value follow time."""
+    """A boundary's conditions; `amplitudes` (id -> points) make a value follow time;
+    `fielded` (feature key -> restart variable) takes values from imported fields."""
+    from puzzle.fields import feature_key
+
     out = [f"Boundary Condition {index}", f"  Target Boundaries(1) = {index}", f'  Name = "{name}"']
     dims = (1, 2) if mesh.planar else (1, 2, 3)  # a 2D model moves in its plane (ADR 0048)
     for f in features:
         v = {k: q.to_si() for k, q in f.values.items()}
+        variable = {k: (fielded or {}).get(feature_key(f, k)) for k in f.fields}
+        if any(variable.values()):  # ADR 0044: nodal values, by the faces' basis functions
+            out += _field_keywords(f, variable, v, (amplitudes or {}).get(f.amplitude))
+            continue
         if f.type == "fixed":
             out += [f"  Displacement {d} = 0" for d in dims]
         elif f.type == "displacement" and f.axes is not None:  # cylindrical, all three
@@ -543,23 +556,101 @@ def _in_time(keyword: str, value: float, points) -> list[str]:
     return [f"  {keyword} = Variable Time", "    Real", *rows, "    End"]
 
 
-def _write_restart(path: Path, field, emesh: ElmerMesh) -> None:
-    """An ASCII Elmer result holding one variable, Temperature, in Elmer node order."""
-    values = field.at(emesh.node_ids)[:, 0]
-    n = len(values)
+# ADR 0044: the face values Elmer takes from imported fields, as (keyword, factor): the
+# value the keyword wants is the factor times Puzzle's (Normal Force pulls along the
+# outward normal; a pressure pushes inward).
+FIELD_KEYWORDS = {
+    ("pressure", "p"): ("Normal Force", -1.0),
+    ("heat_flux", "q"): ("Heat Flux", 1.0),
+    ("convection", "h"): ("Heat Transfer Coefficient", 1.0),
+    ("convection", "T_inf"): ("External Temperature", 1.0),
+}
+
+
+def _field_variables(features, inputs, emesh: ElmerMesh, variables: list) -> dict[str, str]:
+    """Each value from an imported field (ADR 0044) as a nodal variable of the restart
+    file (`variables` gets them, in Elmer node order, zero off the selection), which a
+    boundary condition reads with `Equals`: Elmer interpolates nodal values with the
+    faces' own basis functions, so the load is the field's finite-element interpolant.
+    Returns feature key -> variable name."""
+    from puzzle.fields import feature_key
+
+    given = {i.source: i.field for i in inputs if i.role == "feature"}
+    out: dict[str, str] = {}
+    for f in features:
+        for name in sorted(f.fields):
+            if (f.type, name) not in FIELD_KEYWORDS:
+                continue  # refused by the capability check
+            key = feature_key(f, name)
+            field = given.get(key)
+            if field is None:
+                raise InputError(
+                    f"{f.type} on '{f.selection}': its field for {name} was not mapped"
+                )
+            values = np.zeros(len(emesh.node_ids))
+            on = np.isin(emesh.node_ids, field.ids)
+            values[on] = field.at(emesh.node_ids[on])[:, 0] * FIELD_KEYWORDS[(f.type, name)][1]
+            out[key] = f"puzzlefield{len(out) + 1}"
+            variables.append((out[key], values))
+    return out
+
+
+def _field_keywords(f: Feature, variable: dict, v: dict, points) -> list[str]:
+    """A boundary's keywords for a feature some of whose values come from fields: those
+    `Equals` their restart variable (times the amplitude, in MATC, when it has one), the
+    rest as constants."""
+    out = []
+    for name in sorted(set(v) | set(variable)):
+        if (f.type, name) not in FIELD_KEYWORDS:
+            continue
+        keyword, factor = FIELD_KEYWORDS[(f.type, name)]
+        var = variable.get(name)
+        if var is None:
+            out += _in_time(keyword, factor * v[name], points if f.type != "convection" else None)
+        elif points is None or f.type == "convection":
+            out.append(f"  {keyword} = Equals {var}")
+        else:
+            out += [
+                f"  {keyword} = Variable Time, {var}",
+                f'    Real MATC "tx(1)*({_matc_amplitude(points, "tx(0)")})"',
+            ]
+    return out
+
+
+def _matc_amplitude(points, t: str) -> str:
+    """An amplitude's factor at time `t` as a MATC expression: linear between its points,
+    held at the end values beyond them (MATC's comparisons give 1 or 0)."""
+    expr = [f"{points[0][1]:.12g}"]
+    for (ta, va), (tb, vb) in zip(points[:-1], points[1:], strict=True):
+        if tb == ta or vb == va:
+            continue
+        slope = (vb - va) / (tb - ta)
+        inside = f"({t}-({ta:.12g}))*({t}>({ta:.12g}))*({t}<({tb:.12g}))"
+        past = f"({tb - ta:.12g})*({t}>=({tb:.12g}))"
+        expr.append(f"({slope:.12g})*({inside}+{past})")
+    return "+".join(expr)
+
+
+def _write_restart(path: Path, variables: list[tuple[str, np.ndarray]], transient=False) -> None:
+    """An ASCII Elmer result holding nodal variables (a transferred temperature, values
+    from imported fields), in Elmer node order. It is read at time 0 in a transient run."""
+    n = len(variables[0][1])
     lines = [
         " ASCII 3",
         "!File started by Puzzle",
         " Degrees of freedom: ",
-        f"temperature              :  {n}  {n}   1 : puzzle transfer",
-        " Total DOFs:            1",
+        *(f"{name}              :  {n}  {n}   1 : puzzle input" for name, _ in variables),
+        f" Total DOFs:            {len(variables)}",
         f" Number Of Nodes:  {n}",
-        "Time:       1      1  1.00000000E+000",
-        "temperature",
-        f"Perm:  {n}  {n}",
-        *(f"{i} {i}" for i in range(1, n + 1)),
-        *(f"{v:.17g}" for v in values),
+        f"Time:       1      1  {0.0 if transient else 1.0:.8E}",
     ]
+    for name, values in variables:
+        lines += [
+            name,
+            f"Perm:  {n}  {n}",
+            *(f"{i} {i}" for i in range(1, n + 1)),
+            *(f"{v:.17g}" for v in values),
+        ]
     path.write_text("\n".join(lines) + "\n")
 
 

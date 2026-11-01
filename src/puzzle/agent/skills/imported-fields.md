@@ -40,8 +40,15 @@ Which values take a field, by solver (`Capabilities.field_features`; the rest ar
 refused by name, never ignored):
 - **body_temperature T** (a structural feature on a body: "Temperature (thermal
   load)"; thermal strain from the physics' `reference_temperature`): every FE solver.
-- **pressure p:** CalculiX (per face), Code_Aster (as consistent nodal forces).
-- **heat_flux q, convection h and T_inf:** CalculiX.
+- **pressure p, heat_flux q, convection h and T_inf** (on face selections): CalculiX,
+  Code_Aster, Elmer and FEniCSx, steady or transient, a flux or pressure also times
+  its amplitude. CalculiX takes one value per face (the mean of its nodes), which
+  smears a field that varies within a few elements (a linear flux's spread across a
+  10 mm face came out 4.6 % short on 2.5 mm tets); the other three integrate the
+  field's own finite-element interpolant (Code_Aster: pressure as consistent nodal
+  forces, flux and films as FORMULEs over the faces; Elmer: restart variables read by
+  `Equals`; FEniCSx: Lagrange functions). Code_Aster refuses flux and film fields on 2D
+  models so far.
 
 ## Mistakes
 

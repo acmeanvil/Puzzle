@@ -81,8 +81,12 @@ class CodeAsterAdapter(SolverAdapter):
             {"plasticity", "orthotropic_elasticity", "anisotropic_conductivity"}
         ),
         dimensions=frozenset({"3d", "2d_planar", "2d_axisymmetric"}),
-        # ADR 0044: a temperature load, and a varying pressure as consistent nodal forces
-        field_features=frozenset({"body_temperature:T", "pressure:p"}),
+        # ADR 0044: a temperature load, a varying pressure as consistent nodal forces,
+        # heat flux and film values as FORMULEs over the faces' shape functions
+        # (tests/integration/test_imported_fields_parity.py)
+        field_features=frozenset(
+            {"body_temperature:T", "pressure:p", "heat_flux:q", "convection:h", "convection:T_inf"}
+        ),
         time_schemes=frozenset({"backward_euler", "crank_nicolson", "theta"}),
     )
 

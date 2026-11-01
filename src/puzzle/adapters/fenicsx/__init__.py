@@ -75,6 +75,11 @@ class FenicsxAdapter(SolverAdapter):
         couplings=frozenset({"joule_heating", "thermal_expansion"}),
         dimensions=frozenset({"3d", "2d_planar", "2d_axisymmetric"}),
         time_schemes=frozenset({"backward_euler", "crank_nicolson", "bdf2", "theta"}),
+        # ADR 0044: face values as Lagrange functions of the field's nodal values
+        # (tests/integration/test_imported_fields_parity.py)
+        field_features=frozenset(
+            {"body_temperature:T", "pressure:p", "heat_flux:q", "convection:h", "convection:T_inf"}
+        ),
     )
 
     def settings_schema(self) -> list:

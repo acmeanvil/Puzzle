@@ -91,6 +91,11 @@ class ElmerAdapter(SolverAdapter):
         couplings=frozenset({"thermal_expansion", "joule_heating"}),
         dimensions=frozenset({"3d", "2d_planar", "2d_axisymmetric"}),
         time_schemes=frozenset({"backward_euler", "crank_nicolson", "bdf2", "theta"}),
+        # ADR 0044: face values as restart variables the boundaries read with Equals
+        # (tests/integration/test_imported_fields_parity.py)
+        field_features=frozenset(
+            {"body_temperature:T", "pressure:p", "heat_flux:q", "convection:h", "convection:T_inf"}
+        ),
     )
 
     def settings_schema(self) -> list:
@@ -133,7 +138,7 @@ class ElmerAdapter(SolverAdapter):
     def write_input(
         self, project: Project, study: Study, mesh: Mesh, workdir: Path, inputs=()
     ) -> Path:
-        refuse_inputs(inputs, "Elmer", {("load", "temperature")})
+        refuse_inputs(inputs, "Elmer", {("load", "temperature"), ("feature", "*")})
         sif, emesh = write_case(project, study, mesh, workdir, inputs)
         np.savetxt(workdir / MESH_DIR / NODE_MAP, emesh.node_ids, fmt="%d")
         return sif
