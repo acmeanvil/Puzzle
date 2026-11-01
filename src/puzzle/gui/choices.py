@@ -32,6 +32,7 @@ from puzzle.model.schema import (
     FatigueBlock,
     FatigueSettings,
     Geometry,
+    ImportedField,
     Material,
     MeshRecipe,
     Project,
@@ -51,6 +52,7 @@ REFERENCES = {
     "amplitude": Amplitude,
     "axes": CoordinateSystem,
     "construction": ConstructionGeometry,
+    "field": ImportedField,  # a feature value's imported field (ADR 0044)
 }
 NONE = "(none)"
 FROM_TYPE = "From its bolt type"

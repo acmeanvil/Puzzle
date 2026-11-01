@@ -660,6 +660,75 @@ class MaterialAssignment(BaseModel):
     selection: str
 
 
+class FieldPlacement(BaseModel):
+    """Where field points go on the model (ADR 0044): rotated about `about` by `rotation`
+    (degrees about x, then y, then z), then moved by `translation` (m); or given in a
+    coordinate system's axes (`axes`), before the rotation and move."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    translation: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    rotation: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    about: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    axes: UUID | None = None
+
+    def moved(self) -> bool:
+        return any(self.translation) or any(self.rotation) or self.axes is not None
+
+
+class FieldColumn(BaseModel):
+    """One column of an imported field's file: a coordinate, a value, or ignored."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    role: Literal["x", "y", "z", "value", "ignore"] = "value"
+    unit: str = Field(default="", description="the value's unit; coordinates use length_unit")
+
+
+class ImportedField(ProjectObject):
+    """Values at points from another tool or a test (ADR 0044): a file in the project,
+    how to read it, and where its points sit on the model. Mapped onto the target mesh
+    each run, never stored mapped."""
+
+    kind: ClassVar[str] = "field"
+
+    file: str = Field(description="the file, relative to the project")
+    file_hash: str = Field(default="", description="its SHA-256: a changed file stales its users")
+    format: Literal["csv", "vtu"] = "csv"
+    delimiter: str | None = Field(default=None, description="None: commas, semicolons, tabs "
+                                  "or spaces, found from the file")  # fmt: skip
+    skip_rows: int = Field(default=0, ge=0, description="rows before the header (or the data)")
+    header: bool = True
+    columns: list[FieldColumn] = Field(default_factory=list)
+    length_unit: str = Field(default="m", description="the points' unit")
+    placement: FieldPlacement = Field(default_factory=FieldPlacement)
+
+    def dependencies(self) -> list[UUID]:
+        return [self.placement.axes] if self.placement.axes is not None else []
+
+    def value_columns(self) -> list[str]:
+        return [c.name for c in self.columns if c.role == "value"]
+
+
+class FieldUse(BaseModel):
+    """A feature value taken from an imported field (ADR 0044), with its own scaling,
+    placement on top of the field's, and mapping onto the feature's selection."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    field: UUID
+    column: str
+    scale: float = 1.0
+    offset: Quantity | None = Field(default=None, description="added after scaling")
+    placement: FieldPlacement = Field(default_factory=FieldPlacement)
+    mapping: Literal["linear", "nearest", "inverse_distance"] = "linear"
+    beyond: Literal["nearest", "zero", "refuse"] = Field(
+        default="nearest", description="past max_distance from any point"
+    )
+    max_distance: Quantity | None = None
+
+
 class Feature(BaseModel):
     """A boundary condition, load or initial value applied to a named selection."""
 
@@ -681,6 +750,10 @@ class Feature(BaseModel):
     steps: list[int] = Field(
         default_factory=list,
         description="the solve steps (1, 2, ...) it applies in; empty: every step (ADR 0037)",
+    )
+    fields: dict[str, FieldUse] = Field(
+        default_factory=dict,
+        description="values taken from imported fields in place of `values` (ADR 0044)",
     )
 
     def active(self, index: int | None) -> bool:
@@ -1261,6 +1334,14 @@ class Component(ProjectObject):
             for ref in (f.amplitude, f.axes)
             if ref is not None
         ]
+        amplitudes += [  # imported fields (ADR 0044) and their placements' axes
+            ref
+            for p in self.physics
+            for f in p.features
+            for use in f.fields.values()
+            for ref in (use.field, use.placement.axes)
+            if ref is not None
+        ]
         return [
             *(p.geometry for p in self.parts),
             self.mesh,
@@ -1821,6 +1902,7 @@ OBJECT_TYPES: tuple[type[ProjectObject], ...] = (
     Component,
     Study,
     Transfer,
+    ImportedField,
     ResultDefinition,
     ProjectUnits,
     ResultProbe,

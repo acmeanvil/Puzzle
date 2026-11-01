@@ -27,6 +27,7 @@ from puzzle.model.schema import (
     ConstructionGeometry,
     CoordinateSystem,
     Geometry,
+    ImportedField,
     Material,
     MeshRecipe,
     ParameterSet,
@@ -69,6 +70,7 @@ SECTIONS = [
     ("Components", Component),
     ("Studies", Study),
     ("Transfers", Transfer),
+    ("Imported fields", ImportedField),  # ADR 0044
     ("Amplitudes", Amplitude),
     ("Coordinate systems", CoordinateSystem),
     ("Construction geometry", ConstructionGeometry),

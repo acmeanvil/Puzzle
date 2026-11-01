@@ -245,6 +245,29 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", help="the report as JSON")
     p.set_defaults(handler=_contacts)
 
+    p = sub.add_parser("import-field", help="bring in values at points from a file (ADR 0044)")
+    p.add_argument("project", type=Path)
+    p.add_argument("file", type=Path, help="CSV/TXT/DAT (x, y, z and values) or VTU")
+    p.add_argument("--name", help="the field's name (default: the file's)")
+    p.add_argument("--unit", help="the points' length unit (default: from the header, else m)")
+    p.add_argument(
+        "--column", action="append", default=[], metavar="NAME:ROLE[:UNIT]",
+        help="a column's role (x, y, z, value, ignore) and unit, e.g. p:value:MPa",
+    )  # fmt: skip
+    p.add_argument("--translate", nargs=3, type=float, metavar=("X", "Y", "Z"), help="metres")
+    p.add_argument("--rotate", nargs=3, type=float, metavar=("RX", "RY", "RZ"), help="degrees")
+    p.add_argument("--about", nargs=3, type=float, metavar=("X", "Y", "Z"), help="metres")
+    p.set_defaults(handler=_import_field)
+
+    p = sub.add_parser("field-check", help="an imported field's verification report")
+    p.add_argument("project", type=Path)
+    p.add_argument("field", help="the field's name")
+    p.add_argument("--on", help="Component or Component/Part/Selection to check coverage on")
+    p.add_argument("--tolerance", type=float, help="mm (default: 2 %% of the target, or the "
+                   "data's spacing)")  # fmt: skip
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(handler=_field_check)
+
     p = sub.add_parser("settings", help="your preferences (ADR 0024): list them, or set one")
     p.add_argument("key", nargs="?", help="e.g. units.system")
     p.add_argument("value", nargs="?", help="e.g. engineering; omit to show the choices")
@@ -862,6 +885,65 @@ def _contacts(args) -> int:
                 print(f"    not checked: {s['note']}")
         for w in r["warnings"]:
             print(f"  warning: {w['message']}")
+    return 0
+
+
+def _import_field(args) -> int:
+    from puzzle.commands import Session
+    from puzzle.commands.model import Create
+    from puzzle.fields import new_field_data, sniff
+
+    _load(args.project)
+    if not args.file.exists():
+        raise CliError(f"no file {args.file}")
+    found = sniff(args.file)
+    columns = {c["name"]: dict(c) for c in found["columns"]}
+    for spec in args.column:
+        name, _, rest = spec.partition(":")
+        role, _, unit = rest.partition(":")
+        if name not in columns:
+            raise CliError(f"no column '{name}' in {args.file.name} ({', '.join(columns)})")
+        columns[name].update({k: v for k, v in (("role", role), ("unit", unit)) if v})
+    placement = {k: tuple(v) for k, v in (("translation", args.translate),
+                 ("rotation", args.rotate), ("about", args.about)) if v}  # fmt: skip
+    data = new_field_data(args.project, args.file, args.name, length_unit=args.unit,
+                          columns=list(columns.values()), placement=placement or None)  # fmt: skip
+    Session(args.project).submit(Create(kind="field", data=data))
+    values = [c["name"] for c in data["columns"] if c["role"] == "value"]
+    print(f"Imported field '{data['name']}' from {data['file']}: values {', '.join(values)}; "
+          f"points in {data['length_unit']}")  # fmt: skip
+    return 0
+
+
+def _field_check(args) -> int:
+    import json
+    import tempfile
+
+    from puzzle.fields import check, target_points
+    from puzzle.model.schema import ImportedField
+
+    project = _load(args.project)
+    f = next((x for x in project.of_type(ImportedField) if x.name == args.field), None)
+    if f is None:
+        raise CliError(f"no imported field '{args.field}'")
+    targets = None
+    if args.on:
+        with tempfile.TemporaryDirectory(prefix="puzzle-field-") as work:
+            targets = target_points(project, args.project, args.on, Path(work))
+    tol = args.tolerance / 1000 if args.tolerance is not None else None
+    report = check(project, args.project, f, targets, tol)
+    if args.json:
+        print(json.dumps(report, indent=2))
+        return 0
+    print(f"{f.name}: {report['points']} points" + (" (sparse)" if report["sparse"] else ""))
+    for name, c in report["columns"].items():
+        print(f"  {name}: {c['min']:.6g} to {c['max']:.6g}, mean {c['mean']:.6g} {c['unit']}")
+    if "coverage" in report:
+        far = report["largest_distance"] * 1e3
+        print(f"  coverage of {args.on}: {report['coverage']:.1%} within "
+              f"{report['tolerance'] * 1e3:.3g} mm; farthest {far:.3g} mm")  # fmt: skip
+    for w in report["warnings"]:
+        print(f"  warning: {w}")
     return 0
 
 

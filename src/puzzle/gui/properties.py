@@ -20,7 +20,7 @@ from puzzle.gui.choices import label
 
 PATH = Qt.ItemDataRole.UserRole
 READ_ONLY = {"kind"}
-HIDDEN = {"id"}  # internal: never shown
+HIDDEN = {"id", "file_hash"}  # internal: never shown
 # Plain numbers stored in a fixed unit: the unit goes with the name.
 UNITS = {"translation": " (m)", "rotation": " (degrees)", "facet_angle": " (degrees)"}
 # What an unset optional value says (ADR 0029: never "null").
