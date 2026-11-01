@@ -133,6 +133,37 @@ EXPORTS = {
         options=frozenset({"step", "selection", "units"}), physics=frozenset({FLUID}),
         needs="velocity",
     ),
+    "nastran": Export(
+        "Nastran bulk data and punch results (.bdf + .pch)", ".bdf",
+        "the mesh, properties, materials and selections as sets (large-field, metres); "
+        "displacements, mode eigenvalues and solid stresses per step as punch",
+        "nastran:write", options=frozenset(), physics=frozenset({STRUCTURAL}),
+    ),
+    "abaqus_inp": Export(
+        "Abaqus/CalculiX mesh and temperatures (.inp)", ".inp",
+        "the mesh, sets, materials and sections; a step's nodal temperatures as "
+        "*TEMPERATURE data beside it",
+        "abaqus:write", physics=frozenset({STRUCTURAL, THERMAL}),
+    ),
+    "abaqus_displacement": Export(
+        "Abaqus/CalculiX mesh and displacements as *BOUNDARY (.inp)", ".inp",
+        "the mesh deck, and a step's nodal displacements as *BOUNDARY data (a submodel's "
+        "boundary)", "abaqus:write_displacement",
+        options=frozenset({"step", "selection"}), physics=frozenset({STRUCTURAL}),
+        needs_displacement=True, needs="displacement",
+    ),
+    "gltf": Export(
+        "glTF 3D picture (.glb)", ".glb",
+        "each part's outer surface coloured by one result (the legend's colour map), "
+        "deformed by the step's displacement times the scale",
+        "gltf:write", options=frozenset({"step", "quantity", "scale"}),
+    ),
+    "lorentz_cloud": Export(
+        "Lorentz force density J × B (.csv point cloud)", ".csv",
+        "x, y, z and the body force per volume J × B (N/m^3) per node, for a structural "
+        "model elsewhere", "lorentz:write", options=frozenset({"step", "selection"}),
+        physics=frozenset({EM}),
+    ),
 }  # fmt: skip
 
 

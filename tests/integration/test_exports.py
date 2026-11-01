@@ -102,6 +102,7 @@ def test_formats_are_listed():
     assert set(EXPORTS) >= {
         "paraview", "point_cloud", "deformed_stl", "deformed_step",
         "exodus", "vtkhdf", "unv", "ensight", "cgns", "tecplot", "wall_cloud",
+        "nastran", "abaqus_inp", "abaqus_displacement", "gltf", "lorentz_cloud",
     }  # fmt: skip
 
 
