@@ -76,7 +76,7 @@ def _held_across(project):
                     values={"y": qty(0, "mm"), "z": qty(0, "mm")})]  # fmt: skip
 
 
-@over("calculix")
+@over("calculix", "code_aster")
 @pytest.mark.parametrize("turned", [True, False], ids=["turned", "unturned"])
 def test_a_turned_orthotropic_bar_stretches_by_the_axis_along_it(tmp_path, solver, turned):
     L, B, H = BAR
@@ -91,7 +91,7 @@ def test_a_turned_orthotropic_bar_stretches_by_the_axis_along_it(tmp_path, solve
     assert strain == pytest.approx(F / (B * H * E), rel=5e-3)
 
 
-@over("calculix")
+@over("calculix", "code_aster")
 def test_cylindrical_material_axes_make_3_the_axial_one(tmp_path, solver):
     r, L = 0.005, 0.1
     from puzzle.materials import add_library_material
@@ -123,7 +123,7 @@ def test_cylindrical_material_axes_make_3_the_axial_one(tmp_path, solver):
     assert strain == pytest.approx(F / (area * E3), rel=5e-3)
 
 
-@over("calculix")
+@over("calculix", "code_aster")
 def test_conduction_along_a_turned_axis(tmp_path, solver):
     L = BAR[0]
     k1, k2, k3, q, T0 = 10.0, 40.0, 5.0, 2000.0, 300.0
@@ -141,3 +141,45 @@ def test_conduction_along_a_turned_axis(tmp_path, solver):
     run = run_study(project, study.id, tmp_path, tmp_path / "run", timeout_s=600)
     tip = run.results.last("temperature").at(run.mesh.groups["Bar/Tip"].node_ids)[:, 0].mean()
     assert tip == pytest.approx(T0 - q * L / k2, abs=1e-3 * q * L / k2)
+
+
+@over("calculix", "code_aster")
+def test_radial_conduction_in_cylindrical_axes(tmp_path, solver):
+    """A tube heated through its bore, its outside held at T0, its ends insulated: the
+    heat flows radially only, so T(ri) = T0 + q ri ln(ro / ri) / k1 with 1 radial in a
+    cylindrical system. k2 (tangential) and k3 (axial) differ, so a swapped axis shows."""
+    from puzzle.materials import add_library_material
+    from puzzle.model import Component, MaterialAssignment, MeshRecipe, PartInstance, Project
+
+    ri, ro, L = 0.004, 0.008, 0.01
+    k1, k2, k3, q, T0 = 10.0, 40.0, 5.0, 5000.0, 300.0
+    project = Project(name="tube")
+    geo = project.add(Geometry(name="Tube", history=[
+        HistoryStep(kind="cylinder", name="Outer", args={"r": ro, "h": L, "axis": "z"}),
+        HistoryStep(kind="cylinder", name="Bore", args={"r": ri, "h": L, "axis": "z",
+                                                        "mode": "cut"})],
+        selections=[NamedSelection(name="Body", entity="body", members=["Body"]),
+                    NamedSelection(name="Inside", entity="face", members=["Bore/wall"]),
+                    NamedSelection(name="Outside", entity="face",
+                                   members=["Outer/wall"])]))  # fmt: skip
+    steel = add_library_material(project, "structural_steel")
+    mesh = project.add(MeshRecipe(name="M", global_size=qty(0.8, "mm")))
+    physics = Physics(type="heat_transfer", settings=CONSTANT, features=[
+        Feature(type="temperature", selection="Tube/Outside", values={"T": qty(T0, "K")}),
+        Feature(type="heat_flux", selection="Tube/Inside", values={"q": qty(q, "W/m^2")})])  # fmt: skip
+    comp = project.add(Component(name="Tube", mesh=mesh.id,
+                                 parts=[PartInstance(name="Tube", geometry=geo.id)],
+                                 materials=[MaterialAssignment(material=steel.id,
+                                                               selection="Tube/Body")],
+                                 physics=[physics]))  # fmt: skip
+    axes = project.add(CoordinateSystem(name="Axial", type="cylindrical", axis=(0.0, 0.0, 1.0)))
+    _orthotropic(project, comp, axes.id,
+                 MaterialModels(anisotropic_conductivity=AnisotropicConductivity(
+                     k1=k1, k2=k2, k3=k3)))  # fmt: skip
+    study = project.add(Study(name="s", component=comp.id, solver=solver,
+                              steps=[SolveStep(type="stationary")]))  # fmt: skip
+    run = run_study(project, study.id, tmp_path, tmp_path / "run", timeout_s=600)
+    inside = run.results.last("temperature").at(run.mesh.groups["Tube/Inside"].node_ids)[:, 0]
+    rise = q * ri * math.log(ro / ri) / k1
+    print(f"{solver}: bore {inside.mean() - T0:.5g} K above the outside (k1: {rise:.5g} K)")
+    assert inside.mean() - T0 == pytest.approx(rise, rel=1e-2)

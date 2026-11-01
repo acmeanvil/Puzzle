@@ -126,7 +126,8 @@ The maintainer asked for arbitrary Cartesian, cylindrical and polar systems, use
 - **GUI:** the New coordinate system panel adds "From a face or edge" (a geometry's named face or edge selection; "along" for an edge), "Relative to the axes of" and "Attached to the part". The triad previews the resolved system. Properties shows only the fields a definition uses.
 - **Material directions:** `MaterialAssignment.axes`, a system whose x, y, z (or a cylindrical one's r, θ, z) are the material's 1, 2, 3; without it, the material's own axis1 and axis2.
   - CalculiX writes `*ELASTIC, TYPE=ENGINEERING CONSTANTS` and `*CONDUCTIVITY, TYPE=ORTHO`, with `*ORIENTATION` (RECTANGULAR, or CYLINDRICAL through two points on the axis) on the `*SOLID SECTION`. Spherical material axes are refused.
-  - Code_Aster, Elmer and FEniCSx refuse these models, as before.
+  - Code_Aster (2026-11-01) writes `ELAS_ORTH` and `THER_ORTH` with `AFFE_CARA_ELEM` `MASSIF` (Cartesian: `ANGL_REP`, nautical angles; cylindrical: `ANGL_AXE` and `ORIG_AXE`), passed to the thermal solves too. Its cylindrical frame has L axial, T tangential and N radial, so the constants are written in that order (`comm.CYLINDRICAL`; ν_ji = ν_ij E_j / E_i). 3D only; orthotropic plasticity and anisotropic conductivity with temperature tables (THER_NL) are refused.
+  - Elmer and FEniCSx refuse these models, as before.
   - Beam orientation from a system was built with ADR 0055 (`BeamSection.orient = "axes"`).
 - **Checks:**
   - `tests/test_axes_derived.py`: a face's centroid and normal, a pin's axis, a ball's centre, an edge's tangent, a relative system, an attached system following its part, re-derivation after an edit, a lost face named, older hashes kept;
@@ -134,7 +135,9 @@ The maintainer asked for arbitrary Cartesian, cylindrical and polar systems, use
   - `tests/integration/test_orthotropic.py`, with strain read in the bar's middle half:
     - material axes turned 90°: E2 (exact), unturned E1;
     - cylindrical axes on a transversely isotropic rod: E3 (to 1e-5). With E1 ≠ E2 a cylindrically orthotropic rod builds radial and hoop stresses (Lekhnitskii), 1.8 % stiffer;
-    - conduction along a turned axis: k2.
+    - conduction along a turned axis: k2;
+    - radial conduction in a tube heated through its bore, in cylindrical axes: the bore's rise q rᵢ ln(rₒ/rᵢ) / k1 (CalculiX 1.3861 K against 1.3863 K), which shows a swapped radial axis;
+    - all on CalculiX and Code_Aster.
 ## Built (2026-11-01): step 5
 
 - **Body loads in a system:** `common.globalize` turns gravity and acceleration given in a Cartesian system into global vectors. A rotation in a Cartesian or cylindrical system turns about that system's z through its origin, whatever the feature's own axis says. All four FE solvers claim these (`axes_features`). Elmer's body loads now go through `globalize` too.
@@ -144,4 +147,4 @@ The maintainer asked for arbitrary Cartesian, cylindrical and polar systems, use
   - `tests/integration/test_body_loads_in_axes.py` on CalculiX, Code_Aster, FEniCSx and Elmer: gravity in turned axes, and a rotation about a cylindrical system's axis (the feature's own axis set wrong), each equal to its global twin to 1e-6;
   - `tests/test_axes_derived.py`: a 45° box refines inside itself and not beside;
   - `tests/integration/test_exports.py`: a point cloud's x in turned axes is the global y.
-- **Not yet:** orthotropic materials on Code_Aster (ELAS_ORTH, MASSIF ANGL_REP); result tools (probes, paths, reactions) with an axes choice of their own (the results bar has one).
+- **Not yet:** orthotropic materials on Elmer and FEniCSx, and in 2D models on Code_Aster; result tools (probes, paths, reactions) with an axes choice of their own (the results bar has one).

@@ -75,8 +75,11 @@ class CodeAsterAdapter(SolverAdapter):
             {"bonded_conformal", "bonded_nonconformal", "frictionless", "frictional"}
         ),
         couplings=frozenset({"thermal_expansion"}),
-        # VMIS_ISOT_TRAC in STAT_NON_LINE, p and EPSP out (tests/integration/test_plasticity.py).
-        material_models=frozenset({"plasticity"}),
+        # VMIS_ISOT_TRAC in STAT_NON_LINE, p and EPSP out (tests/integration/test_plasticity.py);
+        # ELAS_ORTH and THER_ORTH in MASSIF axes (tests/integration/test_orthotropic.py).
+        material_models=frozenset(
+            {"plasticity", "orthotropic_elasticity", "anisotropic_conductivity"}
+        ),
         dimensions=frozenset({"3d", "2d_planar", "2d_axisymmetric"}),
         # ADR 0044: a temperature load, and a varying pressure as consistent nodal forces
         field_features=frozenset({"body_temperature:T", "pressure:p"}),

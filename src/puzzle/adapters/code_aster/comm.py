@@ -369,6 +369,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         - noded
         - {names[g] for g in point_groups}
     )
+    massif = _material_axes(project, comp, names, thermal)
     out = [
         "DEBUT(LANG='EN')",
         "mesh = LIRE_MAILLAGE(FORMAT='MED', UNITE=20)",
@@ -478,14 +479,23 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             [n for n in points.names if n.startswith("M")],
             beams,
             shells,
+            massif,
         ),
     ]
-    cara = "CARA_ELEM=cara, " if points.sets or beams or shells else ""
+    cara = "CARA_ELEM=cara, " if points.sets or beams or shells or massif else ""
     assignments = []
     materials = [project.get(a.material, Material) for a in comp.materials]
     tables = [thermal_tables(m, comp) if thermal else {} for m in materials]
     nonlinear = any(tables)  # temperature tables: THER_NL and THER_NON_LINE
     for i, (a, m, t) in enumerate(zip(comp.materials, materials, tables, strict=True), start=1):
+        if m.models.orthotropic_elasticity and m.models.plasticity and not thermal:
+            raise InputError(f"material '{m.name}': orthotropic plasticity is not written",
+                             code="unsupported")  # fmt: skip
+        if nonlinear and m.models.anisotropic_conductivity:
+            raise InputError(
+                f"material '{m.name}': Code_Aster's temperature tables (THER_NL) are isotropic; "
+                "set the heat physics' temperature-dependent materials off to use its "
+                "anisotropic conductivity", code="unsupported")  # fmt: skip
         if nonlinear:
             out += _ther_nl(i, m, t)
         else:
@@ -495,8 +505,10 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
                 out.append(_traction(i, m))
                 traction = f", TRACTION=_F(SIGM=trac{i})"
             damping = None if thermal else rayleigh(study)
+            order = _axes_order(project, a)
             out.append(
-                f"mat{i} = DEFI_MATERIAU({_material(m, thermal, expansion, damping)}{traction})"
+                f"mat{i} = DEFI_MATERIAU({_material(m, thermal, expansion, damping, order)}"
+                f"{traction})"
             )
         assignments.append(f"_F(GROUP_MA='{names[a.selection]}', MATER=mat{i})")
     for i, c in enumerate(fasteners, start=1):  # each bolt in its own material
@@ -546,7 +558,9 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
 
     if thermal:
         out += [
-            _ther_non_line(step, comp) if nonlinear else _ther_lineaire(step, comp),
+            (_ther_non_line(step, comp) if nonlinear else _ther_lineaire(step, comp)).replace(
+                "CHAM_MATER=mater, ", f"CHAM_MATER=mater, {cara}", 1
+            ),
             _table("res", "TEMP", "temperature"),
         ]
     elif step.type == "buckling":
@@ -1068,13 +1082,20 @@ def _negligible(project, comp, mesh: Mesh) -> float:
 
 
 def _discrete_cara(
-    supports, references: int, tiny: float = 0.0, gaps=(), masters=(), beams=(), shells=()
+    supports,
+    references: int,
+    tiny: float = 0.0,
+    gaps=(),
+    masters=(),
+    beams=(),
+    shells=(),
+    massif=(),
 ) -> list[str]:
     """Each spring's stiffness in its own axes (REPERE='LOCAL'; global is the default):
     x along the face normal (kn), y and z along the face (kt). A pretension reference
     node carries a negligible stiffness (`tiny`) along its first dof, only to have
     dofs; its other two are held."""
-    if not supports and not references and not gaps and not masters and not beams and not shells:
+    if not (supports or references or gaps or masters or beams or shells or massif):
         return []
     stiff, axes = [], []
     nodes = [("S", i, s) for i, s in enumerate(supports, start=1)]
@@ -1148,6 +1169,7 @@ def _discrete_cara(
         ("POUTRE", sections),
         ("COQUE", plates),
         ("ORIENTATION", axes),
+        ("MASSIF", list(massif)),
     ]
     out = ["cara = AFFE_CARA_ELEM(MODELE=model"]
     for key, items in blocks:
@@ -1363,7 +1385,96 @@ def resources(processes: int = 1, low_rank: bool = False) -> list[str]:
     ]
 
 
-def _material(m: Material, thermal: bool, expansion: bool = False, damping=None) -> str:
+def _axes_order(project: Project, assignment) -> tuple[int, int, int]:
+    """Which of Puzzle's material axes Code_Aster's L T N are for this assignment."""
+    from puzzle.model.schema import CoordinateSystem
+
+    if assignment.axes is None:
+        return CARTESIAN
+    cs = project.get(assignment.axes, CoordinateSystem)
+    return CYLINDRICAL if cs.type == "cylindrical" else CARTESIAN
+
+
+def _nautical(r: np.ndarray) -> tuple[float, float, float]:
+    """Code_Aster's nautical angles (degrees) of a frame whose columns are its axes:
+    alpha about Z, then beta about the new Y, then gamma about the new X."""
+    x = r[:, 0]
+    alpha = np.degrees(np.arctan2(x[1], x[0]))
+    beta = np.degrees(np.arctan2(-x[2], np.hypot(x[0], x[1])))
+    gamma = np.degrees(np.arctan2(r[2, 1], r[2, 2]))
+    return float(alpha), float(beta), float(gamma)
+
+
+def _material_axes(project: Project, comp: Component, names: dict, thermal: bool) -> list[str]:
+    """MASSIF orientations for materials with directions (ADR 0049): the assignment's
+    system (Cartesian by ANGL_REP; cylindrical by its axis, ANGL_AXE and ORIG_AXE, whose
+    L is axial, T tangential and N radial: `CYLINDRICAL`), else the material's own axis1
+    and axis2."""
+    from puzzle.model.schema import CoordinateSystem
+
+    out = []
+    for a in comp.materials:
+        m = project.get(a.material, Material)
+        model = m.models.anisotropic_conductivity if thermal else m.models.orthotropic_elasticity
+        if model is None:
+            continue
+        if comp.dimension != "3d":
+            raise InputError(
+                f"material '{m.name}': Code_Aster writes material directions in 3D models only "
+                "so far", code="unsupported")  # fmt: skip
+        group = names[a.selection]
+        if a.axes is not None:
+            cs = project.get(a.axes, CoordinateSystem)
+            if cs.type == "spherical":
+                raise InputError(f"Code_Aster takes no spherical material axes ('{cs.name}')",
+                                 code="unsupported")  # fmt: skip
+            r = cs.orientation()
+            if cs.type == "cylindrical":
+                z = r[:, 2]
+                alpha = np.degrees(np.arctan2(z[1], z[0]))
+                beta = np.degrees(np.arctan2(-z[2], np.hypot(z[0], z[1])))
+                o = cs.centre()
+                out.append(f"_F(GROUP_MA='{group}', ANGL_AXE=({alpha:.12g}, {beta:.12g}), "
+                           f"ORIG_AXE=({o[0]:.12g}, {o[1]:.12g}, {o[2]:.12g}))")  # fmt: skip
+                continue
+        else:
+            x = np.asarray(model.axis1, float)
+            x /= np.linalg.norm(x)
+            y = np.asarray(model.axis2, float)
+            y = y - (y @ x) * x
+            y /= np.linalg.norm(y)
+            r = np.column_stack([x, y, np.cross(x, y)])
+        angles = ", ".join(f"{v:.12g}" for v in _nautical(r))
+        out.append(f"_F(GROUP_MA='{group}', ANGL_REP=({angles}))")
+    return out
+
+
+# Code_Aster's L T N against Puzzle's material axes 1 2 3: the same in Cartesian axes; a
+# cylindrical frame (ANGL_AXE) has L axial, T tangential and N radial, where Puzzle's
+# (and CalculiX's) are 1 radial, 2 tangential, 3 axial (test_orthotropic.py's tube).
+CARTESIAN = (0, 1, 2)
+CYLINDRICAL = (2, 1, 0)
+
+
+def _ortho_constants(o, order=CARTESIAN) -> dict[str, float]:
+    """ELAS_ORTH's nine constants with L T N = Puzzle's axes `order`: nu_ji = nu_ij E_j / E_i."""
+    e = (o.e1, o.e2, o.e3)
+    nu = {(0, 1): o.nu12, (0, 2): o.nu13, (1, 2): o.nu23}
+    g = {frozenset((0, 1)): o.g12, frozenset((0, 2)): o.g13, frozenset((1, 2)): o.g23}
+
+    def ratio(i, j):
+        return nu[(i, j)] if (i, j) in nu else nu[(j, i)] * e[i] / e[j]
+
+    L, T, N = order
+    return {"E_L": e[L], "E_T": e[T], "E_N": e[N],
+            "NU_LT": ratio(L, T), "NU_LN": ratio(L, N), "NU_TN": ratio(T, N),
+            "G_LT": g[frozenset((L, T))], "G_LN": g[frozenset((L, N))],
+            "G_TN": g[frozenset((T, N))]}  # fmt: skip
+
+
+def _material(
+    m: Material, thermal: bool, expansion: bool = False, damping=None, order=CARTESIAN
+) -> str:
     p = {k: q.to_si() for k, q in m.properties.items()}
 
     def need(*keys: str) -> list[float]:
@@ -1373,17 +1484,30 @@ def _material(m: Material, thermal: bool, expansion: bool = False, damping=None)
         return [p[k] for k in keys]
 
     if thermal:
-        (k,) = need("thermal_conductivity")
         rho_cp = (
             p["density"] * p["specific_heat"] if {"density", "specific_heat"} <= p.keys() else 1.0
         )
+        aniso = m.models.anisotropic_conductivity
+        if aniso is not None:  # along the material axes (ADR 0049), L T N as `order`
+            k = (aniso.k1, aniso.k2, aniso.k3)
+            lt, tt, nt = (k[i] for i in order)
+            return (f"THER_ORTH=_F(LAMBDA_L={lt:.12g}, LAMBDA_T={tt:.12g}, "
+                    f"LAMBDA_N={nt:.12g}, RHO_CP={rho_cp:.12g})")  # fmt: skip
+        (k,) = need("thermal_conductivity")
         return f"THER=_F(LAMBDA={k:.12g}, RHO_CP={rho_cp:.12g})"
-    e, nu = need("youngs_modulus", "poissons_ratio")
     rho = f", RHO={p['density']:.12g}" if "density" in p else ""
-    alpha = f", ALPHA={need('thermal_expansion')[0]:.12g}" if expansion else ""
     # Rayleigh damping C = a M + b K (ADR 0041): Code_Aster's AMOR_ALPHA multiplies the
     # stiffness and AMOR_BETA the mass, the other way round from the usual names.
     amor = f", AMOR_ALPHA={damping[1]:.12g}, AMOR_BETA={damping[0]:.12g}" if damping else ""
+    o = m.models.orthotropic_elasticity
+    if o is not None:  # in the material axes (ADR 0049), L T N taken as `order` of 1 2 3
+        a = need("thermal_expansion")[0] if expansion else None
+        alpha = f", ALPHA_L={a:.12g}, ALPHA_T={a:.12g}, ALPHA_N={a:.12g}" if expansion else ""
+        c = _ortho_constants(o, order)
+        return "ELAS_ORTH=_F(" + ", ".join(f"{k}={v:.12g}" for k, v in c.items()) + (
+            f"{rho}{alpha}{amor})")  # fmt: skip
+    e, nu = need("youngs_modulus", "poissons_ratio")
+    alpha = f", ALPHA={need('thermal_expansion')[0]:.12g}" if expansion else ""
     return f"ELAS=_F(E={e:.12g}, NU={nu:.12g}{rho}{alpha}{amor})"
 
 
