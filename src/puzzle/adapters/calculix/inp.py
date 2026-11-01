@@ -31,12 +31,15 @@ from puzzle.adapters.common import (
     THERMAL,
     FaceLookup,
     InputError,
+    as_planar,
     body_load,
     check_contacts,
     fastener_values,
     globalize,
     initial_temperature,
+    nodal_edge_forces,
     nodal_traction,
+    plane_thickness,
     rayleigh,
     remote_load,
     remote_values,
@@ -67,6 +70,16 @@ ELEMENTS = {
     "quad4": ("S4", None),
     "quad8": ("S8", None),
 }
+# 2D models (ADR 0048): plane stress, plane strain, axisymmetric, and heat; Gmsh's
+# corner-then-edge order is CalculiX's.
+PLANAR_ELEMENTS = {
+    "plane_stress": {"tri3": "CPS3", "tri6": "CPS6", "quad4": "CPS4", "quad8": "CPS8"},
+    "plane_strain": {"tri3": "CPE3", "tri6": "CPE6", "quad4": "CPE4", "quad8": "CPE8"},
+    "axisymmetric": {"tri3": "CAX3", "tri6": "CAX6", "quad4": "CAX4", "quad8": "CAX8"},
+    # CalculiX has no DC2D elements: its plane-stress ones carry temperature in heat steps.
+    "heat": {"tri3": "CPS3", "tri6": "CPS6", "quad4": "CPS4", "quad8": "CPS8"},
+    "heat_axisymmetric": {"tri3": "DCAX3", "tri6": "DCAX6", "quad4": "DCAX4", "quad8": "DCAX8"},
+}
 # Share of a uniform traction carried by each node of a surface element.
 NODE_SHARES = {
     "tri3": [1 / 3] * 3,
@@ -91,8 +104,42 @@ def set_name(prefix: str, name: str) -> str:
     return f"{prefix}_{re.sub(r'[^A-Za-z0-9]+', '_', signed).strip('_').upper()}"
 
 
+def _planar_kind(comp: Component, study: Study) -> str | None:
+    """Which 2D elements a 2D model is written with (ADR 0048), or None in 3D."""
+    if comp.dimension == "3d":
+        return None
+    solved = set()
+    for s in study.solve_steps():
+        solved |= set(s.physics) or {p.type for p in comp.physics}
+    if solved == {"heat_transfer"}:
+        return "heat_axisymmetric" if comp.dimension == "2d_axisymmetric" else "heat"
+    if solved != {"solid_mechanics"}:
+        raise InputError(
+            "a 2D model on CalculiX solves structures or heat, one at a time, not "
+            f"{sorted(solved)}",
+            code="unsupported",
+        )
+    return "axisymmetric" if comp.dimension == "2d_axisymmetric" else comp.planar_model
+
+
+def _refuse_in_2d(comp: Component) -> None:
+    """What CalculiX's 2D models don't take here yet (ADR 0048), refused by name."""
+    if comp.connectors or comp.beam_sections:
+        raise InputError("fasteners and beams are not written in 2D models", code="unsupported")
+    for ph in comp.physics:
+        for f in ph.features:
+            if f.type in ("remote_force", "remote_force_rigid", "remote_displacement") or (
+                f.type in ("bolt_pretension", "bolt_adjustment")
+            ):
+                raise InputError(f"{f.type} is not written in 2D models yet", code="unsupported")
+
+
 def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
     comp = project.get(study.component, Component)
+    as_planar(mesh, comp)
+    planar = _planar_kind(comp, study)
+    if planar is not None:
+        _refuse_in_2d(comp)
     refuse_inputs(inputs, "CalculiX", {("load", "temperature"), ("prestress", "stress")})
     # A temperature field from a thermal study, as a thermal load on structural steps.
     thermal_load = next((i.field for i in inputs if i.field.name == "temperature"), None)
@@ -106,7 +153,7 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
             "CalculiX contact pairs are written for static structural steps only so far",
             code="unsupported",
         )
-    volume_blocks = [b for b in mesh.blocks if b.dim == 3]
+    volume_blocks = mesh.region_blocks() if planar else [b for b in mesh.blocks if b.dim == 3]
     for b in volume_blocks:
         if b.element not in ELEMENTS:
             raise InputError(f"CalculiX adapter does not support {b.element} elements yet")
@@ -128,7 +175,12 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
         for b in own.blocks(mesh):
             if b.dim != own.dim:  # the part's own elements: solids, beams or shells
                 continue
-            ccx_type, order = ELEMENTS[b.element]
+            if planar is not None:
+                if b.element not in PLANAR_ELEMENTS[planar]:
+                    raise InputError(f"CalculiX has no 2D {b.element} element", code="unsupported")
+                ccx_type, order = PLANAR_ELEMENTS[planar][b.element], None
+            else:
+                ccx_type, order = ELEMENTS[b.element]
             if ccx_type == "B32" and _closed_sections(comp, part.name):
                 ccx_type = "B32R"  # CalculiX expands BOX and PIPE sections on B32R only
             conn = b.connectivity[:, order] if order else b.connectivity
@@ -143,7 +195,8 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
     for group in mesh.groups.values():
         out.append(f"*NSET, NSET={set_name('N', group.name)}")
         out += _chunks(group.node_ids)
-        written = {id(b) for b in mesh.structural_blocks()}  # beams and shells
+        # Beams and shells, or a 2D model's regions: element sets beside the solids.
+        written = {id(b) for b in mesh.structural_blocks() + mesh.region_blocks()}
         blocks = [
             b for b in group.blocks(mesh) if b.dim == group.dim and (b.dim == 3 or id(b) in written)
         ]
@@ -503,7 +556,8 @@ def _materials(
         material = project.get(assignment.material, Material)
         group = mesh.groups.get(assignment.selection)
         shell = group is not None and group.dim == 2 and _on_shells(mesh, group)
-        if group is None or (group.dim not in (1, 3) and not shell):
+        region = group is not None and group.dim == 2 and mesh.planar  # ADR 0048
+        if group is None or (group.dim not in (1, 3) and not shell and not region):
             raise InputError(
                 f"material '{material.name}' must be assigned to bodies, line bodies or "
                 f"sheet bodies, not '{assignment.selection}'"
@@ -512,10 +566,13 @@ def _materials(
         out += [f"*MATERIAL, NAME={name}"] + _material_cards(material, comp, expansion)
         if damping is not None:  # Rayleigh damping for structural dynamics (ADR 0041)
             out.append(f"*DAMPING, ALPHA={damping[0]:.10g}, BETA={damping[1]:.10g}")
-        if group.dim == 3:
+        if group.dim == 3 or region:
             out.append(
                 f"*SOLID SECTION, ELSET={set_name('E', assignment.selection)}, MATERIAL={name}"
             )
+            if region and not mesh.axisymmetric:  # plane stress: the part's thickness
+                part = assignment.selection.split("/", 1)[0]
+                out.append(f"{plane_thickness(comp, part):.10g}")
         elif group.dim == 2:
             out += _shell_sections(comp, mesh, assignment.selection, name)
         else:
@@ -675,7 +732,7 @@ def _step(
             if step.type in ("modal", "buckling") or _modal_based(step)
             else ["*NODE FILE", "U, RF", "*EL FILE", "S, E" + (", PEEQ" if yields else "")]
         )
-        if mesh.structural_blocks():  # beams and shells: results at their own nodes
+        if mesh.structural_blocks() or mesh.planar:  # results at their own nodes
             outputs = [
                 f"{line}, OUTPUT=2D" if line in ("*NODE FILE", "*EL FILE") else line
                 for line in outputs
@@ -703,6 +760,8 @@ def _step(
             else [],
         }.get(step.type)
         outputs = ["*NODE FILE", "NT", "*EL FILE", "HFL"]
+        if mesh.planar:  # a 2D model's results at its own nodes (ADR 0048)
+            outputs = [f"{x}, OUTPUT=2D" if x.startswith("*") else x for x in outputs]
     elif solved == {"solid_mechanics", "heat_transfer"} and "thermal_expansion" in comp.couplings:
         procedure = (
             ["*COUPLED TEMPERATURE-DISPLACEMENT, STEADY STATE"]
@@ -1401,17 +1460,24 @@ def _feature_rows(f: Feature, mesh: Mesh, faces: FaceLookup, rigid=None) -> dict
         raise InputError(f"{f.type} on '{f.selection}': no such selection in the mesh")
     nset = set_name("N", f.selection)
     v = {k: q.to_si() for k, q in f.values.items()}
-    if f.type == "fixed":  # on beam nodes it clamps: rotations too (ADR 0027)
+    if f.type == "fixed" and mesh.planar:  # a 2D model's nodes move in the plane only
+        boundary.append(f"{nset}, 1, 2, 0.")
+    elif f.type == "fixed":  # on beam nodes it clamps: rotations too (ADR 0027)
         on_beams = bool(_beam_nodes(mesh) & {int(n) for n in group.node_ids})
         boundary.append(f"{nset}, 1, {6 if on_beams else 3}, 0.")
     elif f.type == "displacement":
         boundary += [
             f"{nset}, {d}, {d}, {v[axis]:.10g}"
             for d, axis in ((1, "x"), (2, "y"), (3, "z"))
-            if axis in v
+            if axis in v and not (mesh.planar and d == 3)
         ]
     elif f.type == "temperature":
         boundary.append(f"{nset}, 11, 11, {v['T']:.10g}")
+    elif f.type == "force" and mesh.planar:  # on 2D edges, consistently (ADR 0048)
+        forces = nodal_edge_forces(group, mesh, [v.get(a, 0.0) for a in "xyz"])
+        cload += [
+            f"{n}, {d + 1}, {fn[d]:.10g}" for n, fn in forces.items() for d in (0, 1) if fn[d]
+        ]
     elif f.type == "force":
         cload += _nodal_forces(group, mesh, [v.get(a, 0.0) for a in "xyz"])
     elif f.type == "pressure" and group.dim == 2 and _on_shells(mesh, group):

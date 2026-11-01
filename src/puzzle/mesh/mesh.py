@@ -65,6 +65,10 @@ class Mesh:
     coords: np.ndarray  # (N, 3) float64, metres
     blocks: list[CellBlock] = field(default_factory=list)
     groups: dict[str, Group] = field(default_factory=dict)
+    # A 2D model's mesh (ADR 0048): its faces are regions (plane or axisymmetric
+    # elements), not shells. Set from the component by the mesher and the adapters.
+    planar: bool = False
+    axisymmetric: bool = False  # a 2D model turned about Y (X the radius)
 
     def element_counts(self) -> dict[str, int]:
         counts: dict[str, int] = {}
@@ -89,8 +93,12 @@ class Mesh:
         return self._part_blocks(1)
 
     def shell_blocks(self) -> list[CellBlock]:
-        """Surface elements of sheet bodies (ADR 0027 shells)."""
-        return self._part_blocks(2)
+        """Surface elements of sheet bodies (ADR 0027 shells); none in a 2D model."""
+        return [] if self.planar else self._part_blocks(2)
+
+    def region_blocks(self) -> list[CellBlock]:
+        """A 2D model's elements (ADR 0048): its parts' faces."""
+        return self._part_blocks(2) if self.planar else []
 
     def beam_nodes(self) -> set[int]:
         return {int(n) for b in self.beam_blocks() for n in b.connectivity.ravel()}

@@ -280,6 +280,8 @@ def generate_mesh(
         gmsh.option.setNumber("Mesh.SaveAll", 0)
         gmsh.write(str(path))
         mesh = _extract()
+        mesh.planar = planar
+        mesh.axisymmetric = comp.dimension == "2d_axisymmetric"
 
     return MeshResult(
         mesh=mesh,

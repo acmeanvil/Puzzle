@@ -16,6 +16,11 @@ FACES = {
     "tet4": [(0, 1, 2), (0, 3, 1), (1, 3, 2), (2, 3, 0)],
     "tet10": [(0, 1, 2), (0, 3, 1), (1, 3, 2), (2, 3, 0)],
     "hex8": [(0, 1, 2, 3), (4, 7, 6, 5), (0, 4, 5, 1), (1, 5, 6, 2), (2, 6, 7, 3), (3, 7, 4, 0)],
+    # 2D elements' faces are their edges (ADR 0048), numbered as CalculiX and Abaqus do.
+    "tri3": [(0, 1), (1, 2), (2, 0)],
+    "tri6": [(0, 1), (1, 2), (2, 0)],
+    "quad4": [(0, 1), (1, 2), (2, 3), (3, 0)],
+    "quad8": [(0, 1), (1, 2), (2, 3), (3, 0)],
 }
 
 BODY_LOADS = {"gravity", "acceleration", "rotation"}  # ADR 0037: on bodies, per volume
@@ -262,7 +267,7 @@ class FaceLookup:
 
     def of(self, surface: CellBlock) -> list[tuple[int, int]]:
         """(parent element id, face number) for each element of a surface block."""
-        corners = 3 if surface.element.startswith("tri") else 4
+        corners = {"tri": 3, "lin": 2}.get(surface.element[:3], 4)
         out = []
         for row in surface.connectivity[:, :corners]:
             hit = self.lookup.get(frozenset(row.tolist()))
@@ -273,9 +278,12 @@ class FaceLookup:
 
 
 def surface_blocks(group: Group, mesh: Mesh) -> list[CellBlock]:
-    blocks = [b for b in group.blocks(mesh) if b.dim == 2]
+    """A face selection's surface elements; a 2D model's edge selection's line elements."""
+    dim = 1 if mesh.planar else 2
+    blocks = [b for b in group.blocks(mesh) if b.dim == dim]
     if not blocks:
-        raise InputError(f"'{group.name}' must be a face selection for surface loads")
+        kind = "an edge" if mesh.planar else "a face"
+        raise InputError(f"'{group.name}' must be {kind} selection for surface loads")
     return blocks
 
 
@@ -313,6 +321,46 @@ def surface_area(group: Group, mesh: Mesh) -> float:
 # --- 2D models (ADR 0048) ----------------------------------------------------------------
 
 AXISYMMETRIC = "2d_axisymmetric"
+
+
+def as_planar(mesh: Mesh, component) -> Mesh:
+    """Mark a mesh as the component's 2D model (or not), whatever loaded it: a mesh
+    read back from the results store carries no flags."""
+    mesh.planar = component.dimension != "3d"
+    mesh.axisymmetric = component.dimension == AXISYMMETRIC
+    return mesh
+
+
+def nodal_edge_forces(group: Group, mesh: Mesh, total) -> dict[int, np.ndarray]:
+    """A total force on a 2D edge selection as nodal forces, consistently: each node's
+    share of the traction's integral, weighted by 2 pi r on an axisymmetric model (a
+    part's thickness is the same along its edges, so it cancels)."""
+    gauss = np.array([-np.sqrt(3 / 5), 0.0, np.sqrt(3 / 5)])
+    gw = np.array([5 / 9, 8 / 9, 5 / 9])
+    shares: dict[int, float] = {}
+    for b in group.blocks(mesh):
+        if b.dim != 1:
+            continue
+        xyz = mesh.node_coords(b.connectivity.ravel()).reshape(len(b.ids), -1, 3)
+        if b.element == "line3":
+            shape = np.stack([gauss * (gauss - 1) / 2, gauss * (gauss + 1) / 2, 1 - gauss**2])
+            slope = np.stack([gauss - 0.5, gauss + 0.5, -2 * gauss])
+        else:
+            shape = np.stack([(1 - gauss) / 2, (1 + gauss) / 2])
+            slope = np.stack([-0.5 * np.ones(3), 0.5 * np.ones(3)])
+        points = np.einsum("kg,ekc->egc", shape, xyz)
+        w = np.linalg.norm(np.einsum("kg,ekc->egc", slope, xyz), axis=2) * gw
+        if mesh.axisymmetric:
+            w = w * 2 * np.pi * np.abs(points[..., 0])
+        per_node = np.einsum("kg,eg->ek", shape, w)
+        for nodes, row in zip(b.connectivity, per_node, strict=True):
+            for n, share in zip(nodes, row, strict=True):
+                shares[int(n)] = shares.get(int(n), 0.0) + float(share)
+    if not shares:
+        raise InputError(f"'{group.name}' must be an edge selection for a force in 2D")
+    whole = sum(shares.values())
+    total = np.asarray(total, dtype=float)
+    return {n: total * s / whole for n, s in sorted(shares.items())}
 
 
 def plane_thickness(component, part: str) -> float:

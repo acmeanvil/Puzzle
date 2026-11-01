@@ -53,6 +53,7 @@ class CalculixAdapter(SolverAdapter):
             {"linear_solver", "tolerance", "max_iterations", "output_every"}
         ),
         shells=True,  # ADR 0027, tests/integration/test_shells.py
+        dimensions=frozenset({"3d", "2d_planar", "2d_axisymmetric"}),  # ADR 0048
         # ADR 0037 (heat flux) and 0041 (structural loads in dynamics), benchmarked
         amplitude_features=frozenset({"heat_flux", "force", "pressure"}),
         axes_features=frozenset(
