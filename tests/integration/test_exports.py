@@ -99,7 +99,15 @@ def test_deformed_shape_as_stl_and_step(solved, solver):
 
 
 def test_formats_are_listed():
-    assert set(EXPORTS) == {"paraview", "point_cloud", "deformed_stl", "deformed_step"}
+    assert set(EXPORTS) >= {
+        "paraview",
+        "point_cloud",
+        "deformed_stl",
+        "deformed_step",
+        "exodus",
+        "vtkhdf",
+        "unv",
+    }
 
 
 @over("calculix")

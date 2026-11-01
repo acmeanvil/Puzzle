@@ -90,6 +90,20 @@ EXPORTS = {
         options=frozenset({"step", "scale", "compensate"}), physics=frozenset({STRUCTURAL}),
         needs_displacement=True, needs="displacement",
     ),
+    "exodus": Export(
+        "Exodus II (.exo)", ".exo",
+        "every field of every step; parts as element blocks, selections as node and side sets",
+        "exodus:write", options=frozenset(),
+    ),
+    "vtkhdf": Export(
+        "VTKHDF (.vtkhdf)", ".vtkhdf", "every field of every step in one HDF5 file",
+        "vtkhdf:write", options=frozenset(),
+    ),
+    "unv": Export(
+        "I-DEAS universal file (.unv)", ".unv",
+        "nodes, elements, groups and results per step (modes with their frequencies)",
+        "unv:write", options=frozenset(), physics=frozenset({STRUCTURAL, THERMAL}),
+    ),
 }  # fmt: skip
 
 
