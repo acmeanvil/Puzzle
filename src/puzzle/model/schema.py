@@ -456,7 +456,8 @@ class TransfiniteControl(BaseModel):
 
 
 class BoxControl(BaseModel):
-    """An element size inside an axis-aligned box (corners in m)."""
+    """An element size inside a box (corners in m): along the global axes, or along a
+    Cartesian system's (`axes`, ADR 0049: the corners in its axes)."""
 
     model_config = ConfigDict(extra="forbid")
     kind: Literal["box"] = "box"
@@ -464,6 +465,7 @@ class BoxControl(BaseModel):
     low: tuple[float, float, float]
     high: tuple[float, float, float]
     size: Quantity
+    axes: UUID | None = None
 
     def describe(self) -> str:
         return f"size {self.size.value:g} {self.size.unit} in box {self.name}"

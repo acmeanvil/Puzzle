@@ -124,3 +124,21 @@ def test_cli_and_agents_export(solved, solver, capsys):
     assert files[0].endswith("exports/shape.stl") and (root / "exports" / "shape.stl").exists()
     with pytest.raises(Exception, match="exports go inside the project folder"):
         asyncio.run(server.call_tool("export", asked | {"path": str(tmp / "away")}))
+
+
+@over("calculix")
+def test_a_point_cloud_in_a_systems_axes(solved, solver):
+    """ADR 0049 step 5: components in a system (x of axes turned 90° about z is global y);
+    a deformed shape stays global."""
+    from puzzle.errors import PuzzleError
+    from puzzle.model.schema import CoordinateSystem
+
+    project, store, run_id, tmp, tip = solved
+    project.add(CoordinateSystem(name="Turned", angles=(0.0, 0.0, 90.0)))
+    (csv, note) = export(project, store, run_id, "point_cloud", tmp / "out" / "turned",
+                         quantity="displacement:x", axes="Turned")  # fmt: skip
+    rows = np.loadtxt(csv, delimiter=",", skiprows=1)
+    assert rows[:, 3].min() == pytest.approx(tip, rel=1e-9)  # the global y deflection
+    assert "in axes 'Turned' (cartesian" in note.read_text()
+    with pytest.raises(PuzzleError, match="global axes only"):
+        export(project, store, run_id, "deformed_stl", tmp / "out" / "shape", axes="Turned")

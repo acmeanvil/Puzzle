@@ -62,6 +62,10 @@ class CalculixAdapter(SolverAdapter):
         amplitude_features=frozenset({"heat_flux", "force", "pressure"}),
         axes_features=frozenset(
             {
+                "gravity:cartesian",  # ADR 0049 step 5: made global by common.globalize
+                "acceleration:cartesian",
+                "rotation:cartesian",
+                "rotation:cylindrical",
                 "displacement:cartesian",
                 "displacement:cartesian:partial",
                 "displacement:cylindrical",

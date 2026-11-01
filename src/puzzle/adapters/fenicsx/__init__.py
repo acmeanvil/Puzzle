@@ -61,7 +61,15 @@ class FenicsxAdapter(SolverAdapter):
         ),
         amplitude_features=frozenset({"heat_flux", "force", "pressure"}),  # benchmarked
         axes_features=frozenset(
-            {"displacement:cartesian", "displacement:cylindrical", "force:cartesian"}
+            {
+                "gravity:cartesian",  # ADR 0049 step 5: made global by common.globalize
+                "acceleration:cartesian",
+                "rotation:cartesian",
+                "rotation:cylindrical",
+                "displacement:cartesian",
+                "displacement:cylindrical",
+                "force:cartesian",
+            }
         ),  # ADR 0037: local axes
         contacts=frozenset({"bonded_conformal"}),
         couplings=frozenset({"joule_heating", "thermal_expansion"}),

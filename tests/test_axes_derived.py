@@ -109,3 +109,25 @@ def test_plain_systems_keep_their_hashes():
     assert "relative_to" in data and before == content_hashes(p)[cs.id]
     cs.relative_to = _axes(p, name="Other").id
     assert content_hashes(p)[cs.id] != before
+
+
+def test_a_mesh_box_along_a_turned_system(tmp_path):
+    """ADR 0049 step 5: a fine box turned 45° about z refines inside it, not beside it."""
+    from puzzle.mesh import generate_mesh
+    from puzzle.model.schema import BoxControl, NamedSelection
+
+    p = Project(name="box")
+    geo = p.add(Geometry(name="Plate", history=[
+        HistoryStep(kind="box", name="P", args={"dx": 0.1, "dy": 0.1, "dz": 0.005})],
+        selections=[NamedSelection(name="Body", entity="body", members=["Body"])]))  # fmt: skip
+    turned = _axes(p, name="Diagonal", origin=(0.05, 0.05, 0.0), angles=(0.0, 0.0, 45.0))
+    fine = BoxControl(name="Strip", low=(-0.04, -0.005, -0.01), high=(0.04, 0.005, 0.01),
+                      size=Quantity(value=0.5, unit="mm"), axes=turned.id)  # fmt: skip
+    mesh = p.add(MeshRecipe(name="M", global_size=Quantity(value=5, unit="mm"),
+                            element_order=1, controls=[fine]))  # fmt: skip
+    comp = p.add(Component(name="C", mesh=mesh.id, parts=[PartInstance(name="P", geometry=geo.id)]))
+    xyz = generate_mesh(p, comp.id, tmp_path, tmp_path / "m").mesh.coords
+    local = (xyz - [0.05, 0.05, 0.0]) @ turned.orientation()  # in the turned axes
+    inside = (np.abs(local[:, 0]) < 0.03) & (np.abs(local[:, 1]) < 0.004)
+    beside = (np.abs(local[:, 0]) < 0.03) & (np.abs(local[:, 1] - 0.02) < 0.004)
+    assert inside.sum() > 10 * max(beside.sum(), 1)

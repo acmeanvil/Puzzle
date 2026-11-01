@@ -217,7 +217,7 @@ def generate_mesh(
                 methods=methods,
             )
         if seeds:  # the edges only, with the recipe's sizes: where their nodes will fall
-            _sizes(recipe, comp, found, warnings)
+            _sizes(recipe, comp, found, warnings, project, root)
             gmsh.model.mesh.generate(1)
             _ids, coords, _ = gmsh.model.mesh.getNodes(1, -1, includeBoundary=True)
             return MeshResult(
@@ -234,13 +234,13 @@ def generate_mesh(
             _options(recipe)
             mesh_with_netgen(recipe, out_dir, *_netgen_controls(recipe))
         elif planar:  # ADR 0048: triangles, or quadrilaterals for "hexahedra"
-            _sizes(recipe, comp, found, warnings)
+            _sizes(recipe, comp, found, warnings, project, root)
             if recipe.element_shape == "hexahedra":
                 gmsh.option.setNumber("Mesh.RecombineAll", 1)
                 gmsh.option.setNumber("Mesh.SecondOrderIncomplete", 1)  # 8-node quads
             gmsh.model.mesh.generate(2)
         else:
-            _sizes(recipe, comp, found, warnings)
+            _sizes(recipe, comp, found, warnings, project, root)
             if recipe.element_shape == "hexahedra":
                 # Structured hexes: every block-like volume gets a transfinite mesh, recombined.
                 gmsh.model.mesh.setTransfiniteAutomatic()
@@ -568,7 +568,7 @@ def _model_size() -> float:
     return float(np.linalg.norm([x1 - x0, y1 - y0, z1 - z0])) or 1.0
 
 
-def _sizes(recipe: MeshRecipe, comp: Component, found, warnings) -> None:
+def _sizes(recipe: MeshRecipe, comp: Component, found, warnings, project=None, root=None) -> None:
     """The global size, then each control: size fields (combined by their minimum) and
     transfinite edges. Two size controls giving the same entity different sizes stop
     the mesh with both named (ADR 0019 review: never changed silently)."""
@@ -637,6 +637,8 @@ def _sizes(recipe: MeshRecipe, comp: Component, found, warnings) -> None:
                 gmsh.model.mesh.setTransfiniteCurve(
                     e, control.count + 1, "Progression", control.progression
                 )
+        elif control.kind == "box" and control.axes is not None:  # turned (ADR 0049)
+            fields.append(_turned_box(control, project, root))
         elif control.kind in ("box", "ball"):
             f = gmsh.model.mesh.field.add("Box" if control.kind == "box" else "Ball")
             gmsh.model.mesh.field.setNumber(f, "VIn", control.size.to_si())
@@ -660,6 +662,32 @@ def _sizes(recipe: MeshRecipe, comp: Component, found, warnings) -> None:
         smallest = gmsh.model.mesh.field.add("Min")
         gmsh.model.mesh.field.setNumbers(smallest, "FieldsList", fields)
         gmsh.model.mesh.field.setAsBackgroundMesh(smallest)
+
+
+def _turned_box(control, project, root) -> int:
+    """A box along a Cartesian system's axes, its corners in them: a MathEval field (Gmsh's
+    Box follows the global axes), the size inside where every local coordinate is
+    within the box's half-widths."""
+    from puzzle.axes import absolute
+    from puzzle.model.schema import CoordinateSystem
+
+    cs = absolute(project, project.get(control.axes, CoordinateSystem), root)
+    if cs.type != "cartesian":
+        raise MeshError(f"a mesh box '{control.name}' lies along a Cartesian system's axes",
+                        code="invalid")  # fmt: skip
+    r, o = cs.orientation(), cs.centre()
+    lo, hi = np.asarray(control.low, float), np.asarray(control.high, float)
+    middle, half = (lo + hi) / 2, np.abs(hi - lo) / 2
+    terms = []
+    for i in range(3):  # local u_i = r[:, i] . (X - o), measured from the box's middle
+        shift = float(r[:, i] @ o) + middle[i]
+        local = "+".join(f"({r[j, i]:.15g})*{v}" for j, v in enumerate("xyz"))
+        terms.append(f"Fabs({local}-({shift:.15g}))-({half[i]:.15g})")
+    outside = f"Max(Max({terms[0]},{terms[1]}),{terms[2]})"
+    inside, far = control.size.to_si(), 1e22
+    f = gmsh.model.mesh.field.add("MathEval")
+    gmsh.model.mesh.field.setString(f, "F", f"{inside:.15g}+{far - inside:.15g}*Step({outside})")
+    return f
 
 
 QUALITY = {  # Gmsh's measure, and the bin edges of its histogram

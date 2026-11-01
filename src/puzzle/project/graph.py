@@ -36,6 +36,10 @@ def _own(obj: ProjectObject, *, drop: frozenset[str] = frozenset()) -> dict:
     data.pop("hidden", None)  # what the view shows never changes a solve
     if data.get("share_faces") is True:  # the default: older projects keep their hashes
         data.pop("share_faces")
+    if obj.kind == "mesh":  # a box in global axes, as before boxes took a system
+        for control in data.get("controls", []):
+            if control.get("kind") == "box" and control.get("axes") is None:
+                control.pop("axes", None)
     if obj.kind == "axes":  # ADR 0049 step 3's fields at their defaults: older hashes kept
         for key, default in (("relative_to", None), ("component", None), ("part", None),
                              ("geometry", None), ("entity", None), ("entity_name", None),

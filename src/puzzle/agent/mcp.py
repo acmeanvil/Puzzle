@@ -762,7 +762,8 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         "result per node; quantity as in result_stats, optionally one selection's nodes), "
         "deformed_stl or deformed_step (the deformed outer surface, scale to exaggerate, "
         "compensate for -u). path is inside the project folder (e.g. exports/shape). "
-        "Returns the files written."
+        "axes (a coordinate system's name, ADR 0049): vectors and tensors in its axes "
+        "(paraview and point_cloud; cylindrical r, θ, z). Returns the files written."
     )
     @guarded
     def export(
@@ -774,6 +775,7 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         selection: str | None = None,
         scale: float = 1.0,
         compensate: bool = False,
+        axes: str | None = None,
     ) -> dict[str, Any]:
         from puzzle.commands import resolve
         from puzzle.model.schema import Study
@@ -793,7 +795,7 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
             )
         files = write(s.project, store, record.run_id, format, out, step=step,
                       quantity=quantity, selection=selection, scale=scale,
-                      compensate=compensate)  # fmt: skip
+                      compensate=compensate, axes=axes, root=root)  # fmt: skip
         return {"files": [str(f) for f in files]}
 
     @tool(

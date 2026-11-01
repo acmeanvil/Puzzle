@@ -53,6 +53,7 @@ FIELDS = {
         ("low", "Low corner", "point"),
         ("high", "High corner", "point"),
         ("size", "Element size inside", "length"),
+        ("axes", "Along the axes of", "axes"),  # ADR 0049: corners in a system's axes
     ],
     "ball": [
         ("name", "Name", "text"),
@@ -109,6 +110,17 @@ class ControlPanel(QWidget):
         layout.addLayout(row)
 
     def _widget(self, what: str, value):
+        if what == "axes":  # global, or a Cartesian system (ADR 0049)
+            from puzzle.model.schema import CoordinateSystem
+
+            box = QComboBox()
+            box.addItem("Global axes", None)
+            for cs in self.bench.window.session.project.of_type(CoordinateSystem):
+                if cs.type == "cartesian":
+                    box.addItem(cs.name, str(cs.id))
+            if value is not None:
+                box.setCurrentIndex(max(0, box.findData(str(value))))
+            return box, ""
         if what.startswith("selection"):
             box = QComboBox()
             entity = what.split(":", 1)[1] if ":" in what else None
@@ -159,7 +171,10 @@ class ControlPanel(QWidget):
         unit = plain(current().display_units()["length"])
         out = {"kind": self.kind}
         for key, (what, widget) in self.widgets.items():
-            if what.startswith("selection"):
+            if what == "axes":
+                if widget.currentData():
+                    out[key] = widget.currentData()
+            elif what.startswith("selection"):
                 out[key] = widget.currentData()
             elif what == "length":
                 out[key] = {"value": float(widget.text()), "unit": unit}

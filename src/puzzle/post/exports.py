@@ -67,8 +67,11 @@ def export(
     scale: float = 1.0,
     compensate: bool = False,
     units: str = "si",
+    axes: str | None = None,
+    root: Path | None = None,
 ) -> list[Path]:
-    """Write a stored run's results as `fmt` (an `EXPORTS` key) at `path`."""
+    """Write a stored run's results as `fmt` (an `EXPORTS` key) at `path`; with `axes`
+    (a coordinate system's name or id), vectors and tensors in its axes (ADR 0049)."""
     if fmt not in EXPORTS:
         raise PuzzleError(
             f"no export format '{fmt}'", code="invalid", details={"formats": sorted(EXPORTS)}
@@ -77,10 +80,28 @@ def export(
     mesh, results = store.read_mesh(record.mesh_id), store.read_results(run_id)
     if not results.steps:
         raise PuzzleError("the run has no result steps", code="not_found")
+    turned = None
+    if axes:
+        if EXPORTS[fmt].needs_displacement:
+            raise PuzzleError("a deformed shape is exported in global axes only", code="invalid")
+        from puzzle.axes import absolute
+        from puzzle.commands import resolve
+        from puzzle.model.schema import CoordinateSystem
+        from puzzle.post.axes import in_axes
+
+        named = resolve(project, axes, CoordinateSystem)
+        turned = absolute(project, named, root)
+        results = in_axes(mesh, results, turned)
     path = Path(path).with_suffix(EXPORTS[fmt].suffix)
     path.parent.mkdir(parents=True, exist_ok=True)
     chosen = _step(results, step, "displacement" if EXPORTS[fmt].needs_displacement else None)
     notes = {"format": EXPORTS[fmt].label}
+    if turned is not None:
+        letters = {"cartesian": "x, y, z", "cylindrical": "r, θ, z", "spherical": "r, θ, φ"}
+        notes["components"] = (
+            f"in axes '{named.name}' ({turned.type}: {letters[turned.type]}; the component "
+            "slots keep their names, xx meaning the first axis)"
+        )
     if fmt == "paraview":
         from puzzle.post.vtk import export as vtu
 

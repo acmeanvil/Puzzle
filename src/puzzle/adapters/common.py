@@ -801,6 +801,36 @@ def globalize(project, features):
             g = axes.rotation() @ np.asarray(local)
             values = {a: Quantity(value=float(v), unit=unit) for a, v in zip("xyz", g, strict=True)}
             f = f.model_copy(update={"values": values, "axes": None})
+        elif (
+            axes is not None and axes.type == "cartesian" and f.type in ("gravity", "acceleration")
+        ):
+            # ADR 0049 step 5: a body load's vector given in the system's axes.
+            keys = [f"{f.type[0]}{a}" for a in "xyz"]  # gx, gy, gz or ax, ay, az
+            local = [f.values[k].to_si() if k in f.values else 0.0 for k in keys]
+            g = axes.rotation() @ np.asarray(local)
+            values = {
+                k: Quantity(value=float(v), unit="m/s^2") for k, v in zip(keys, g, strict=True)
+            }
+            f = f.model_copy(update={"values": values, "axes": None})
+        elif (
+            axes is not None and axes.type in ("cartesian", "cylindrical") and f.type == "rotation"
+        ):
+            # About the system's z axis, through its origin (ADR 0049 step 5).
+            centre, axis = axes.centre(), axes.orientation()[:, 2]
+            values = dict(f.values)
+            values.update(
+                {
+                    f"{a}0": Quantity(value=float(c), unit="m")
+                    for a, c in zip("xyz", centre, strict=True)
+                }
+            )
+            values.update(
+                {
+                    f"n{a}": Quantity(value=float(c), unit="dimensionless")
+                    for a, c in zip("xyz", axis, strict=True)
+                }
+            )
+            f = f.model_copy(update={"values": values, "axes": None})
         out.append(f)
     return out
 

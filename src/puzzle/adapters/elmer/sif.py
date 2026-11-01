@@ -123,7 +123,7 @@ def write_case(
         raise InputError("the Elmer adapter solves magnetic fields driven by one coil for now")
     features = [f for f in features if f.type != "coil_current"]
     # Body loads (ADR 0037) act on bodies, as body forces; the rest are boundaries.
-    loads = [f for f in features if f.type in BODY_LOADS]
+    loads = globalize(project, [f for f in features if f.type in BODY_LOADS])  # ADR 0049
     for f in loads:
         body_load_on_material(comp, f, "Elmer")
     features = globalize(project, [f for f in features if f.type not in BODY_LOADS])

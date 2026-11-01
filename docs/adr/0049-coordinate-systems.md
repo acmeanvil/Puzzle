@@ -1,6 +1,6 @@
 # 0049. Coordinate systems everywhere: Cartesian, cylindrical and spherical, defined many ways, used by every input and result
 
-- Status: Accepted (2026-10-29, with the maintainer's answers); steps 1–2 built 2026-10-29, steps 3–4 2026-11-01
+- Status: Accepted (2026-10-29, with the maintainer's answers); built: steps 1–2 2026-10-29, steps 3–5 2026-11-01
 - Date: 2026-10-26
 
 ## Context
@@ -135,4 +135,13 @@ The maintainer asked for arbitrary Cartesian, cylindrical and polar systems, use
     - material axes turned 90°: E2 (exact), unturned E1;
     - cylindrical axes on a transversely isotropic rod: E3 (to 1e-5). With E1 ≠ E2 a cylindrically orthotropic rod builds radial and hoop stresses (Lekhnitskii), 1.8 % stiffer;
     - conduction along a turned axis: k2.
-- **Next:** step 5 (acceleration and rotation body loads, mesh boxes and exports in a system); orthotropic materials on Code_Aster (ELAS_ORTH, MASSIF ANGL_REP).
+## Built (2026-11-01): step 5
+
+- **Body loads in a system:** `common.globalize` turns gravity and acceleration given in a Cartesian system into global vectors. A rotation in a Cartesian or cylindrical system turns about that system's z through its origin, whatever the feature's own axis says. All four FE solvers claim these (`axes_features`). Elmer's body loads now go through `globalize` too.
+- **Mesh boxes along a system:** `BoxControl.axes` takes a Cartesian system, the corners then in its axes. Gmsh's Box field follows the global axes, so a turned box is a MathEval field: the inside size where every local coordinate is within the half-widths (`Max` of `Fabs(u_i) - h_i`, then `Step`). The Mesh tab's box form has "Along the axes of".
+- **Exports in a system:** `export(..., axes=)`, CLI `export --axes` and MCP `export(axes=)`. ParaView files and point clouds get their vectors and tensors in the system's axes, and the sidecar says so. The deformed-shape exports refuse axes, since a shape is global.
+- **Checks:**
+  - `tests/integration/test_body_loads_in_axes.py` on CalculiX, Code_Aster, FEniCSx and Elmer: gravity in turned axes, and a rotation about a cylindrical system's axis (the feature's own axis set wrong), each equal to its global twin to 1e-6;
+  - `tests/test_axes_derived.py`: a 45° box refines inside itself and not beside;
+  - `tests/integration/test_exports.py`: a point cloud's x in turned axes is the global y.
+- **Not yet:** orthotropic materials on Code_Aster (ELAS_ORTH, MASSIF ANGL_REP); result tools (probes, paths, reactions) with an axes choice of their own (the results bar has one).

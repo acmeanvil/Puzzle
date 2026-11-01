@@ -126,6 +126,7 @@ def _parser() -> argparse.ArgumentParser:
                 "--compensate", action="store_true", help="deformed shape: moved by -u instead"
             )
             p.add_argument("--units", choices=["si", "display"], default="si")
+            p.add_argument("--axes", help="a coordinate system: components in its axes")
         p.set_defaults(handler=handler)
 
     p = sub.add_parser("plot", help="a kept probe over the steps, as CSV")
@@ -535,6 +536,8 @@ def _export(args) -> int:
             scale=args.scale,
             compensate=args.compensate,
             units=args.units,
+            axes=args.axes,
+            root=args.project,
         )
     except PuzzleError as exc:
         print(exc.message)
