@@ -100,7 +100,7 @@ def test_deformed_shape_as_stl_and_step(solved, solver):
 
 def test_formats_are_listed():
     assert set(EXPORTS) >= {
-        "paraview", "point_cloud", "deformed_stl", "deformed_step",
+        "paraview", "point_cloud", "deformed_stl", "deformed_step", "morphed_step",
         "exodus", "vtkhdf", "unv", "ensight", "cgns", "tecplot", "wall_cloud",
         "nastran", "abaqus_inp", "abaqus_displacement", "gltf", "lorentz_cloud",
     }  # fmt: skip

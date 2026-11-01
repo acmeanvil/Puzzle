@@ -164,6 +164,13 @@ EXPORTS = {
         "model elsewhere", "lorentz:write", options=frozenset({"step", "selection"}),
         physics=frozenset({EM}),
     ),
+    "morphed_step": Export(
+        "Deformed shape (.step, morphed CAD)", ".step",
+        "each solid part's CAD faces moved by u: real surfaces CAD can edit, one body per "
+        "part", "morphed:write_job",
+        options=frozenset({"step", "scale", "compensate"}), physics=frozenset({STRUCTURAL}),
+        needs_displacement=True, needs="displacement",
+    ),
 }  # fmt: skip
 
 
@@ -197,6 +204,8 @@ def export(
             f"no export format '{fmt}'", code="invalid", details={"formats": sorted(EXPORTS)}
         )
     spec = EXPORTS[fmt]
+    if root is None:  # the project folder holds the results store
+        root = Path(store.root).parent
     record = store.get_run(run_id)
     mesh, results = store.read_mesh(record.mesh_id), store.read_results(run_id)
     if not results.steps:
