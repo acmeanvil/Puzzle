@@ -240,32 +240,71 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         return check.report(s.project, comp, mesh, solver)
 
     @tool(
-        description="Read a field file (ADR 0044: x, y, z and values, CSV/TXT/DAT or VTU) "
-        "that is inside the project folder (`file`, relative to it) and say how it would be "
-        "read: format, columns with their roles (x, y, z, value, ignore) and units, the "
-        "points' length unit. Returns `create`, the command that adds it as an imported "
-        "field: change its `columns`, `length_unit`, or `placement` (translation m, "
+        description="Read a field file (ADR 0044: x, y, z and values: CSV/TXT/DAT, VTU, a "
+        "Fluent profile .prof, Exodus II .exo/.e, EnSight Gold .case, or an OpenFOAM case "
+        "folder) that is inside the project folder (`file`, relative to it) and say how it "
+        "would be read: format, columns with their roles (x, y, z, value, time, ignore) and "
+        "units, the points' length unit, and for multi-step sources their `steps` (time, "
+        "index) and `regions` (blocks, parts, patches, profiles). `region` reads one of "
+        "those, `index` one step (default the last). Varying in time: `files` (more files, "
+        "one per time, same layout) with `times` (s, one per file, `file`'s first), or "
+        "`every_step` (every step of the source, at its own times or at `times`); a CSV time "
+        "column is a column with role time. Returns `create`, the command that adds it as an "
+        "imported field: change its `columns`, `length_unit`, or `placement` (translation m, "
         "rotation degrees about x, y, z, about m, axes a coordinate system's id) if the "
         "guess is wrong, then pass it to `submit`. Check it with `field_check` first."
     )
     @guarded
-    def field_import(file: str, name: str | None = None) -> dict[str, Any]:
+    def field_import(
+        file: str,
+        name: str | None = None,
+        region: str | None = None,
+        index: str | None = None,
+        files: list[str] | None = None,
+        times: list[float] | None = None,
+        every_step: bool = False,
+    ) -> dict[str, Any]:
         from puzzle.errors import PuzzleError
         from puzzle.fields import file_hash, sniff
 
-        path = (root / file).resolve()
-        if not path.is_relative_to(root.resolve()) or not path.exists():
-            raise PuzzleError(f"no file '{file}' inside the project", code="not_found")
+        def inside(rel: str) -> Path:
+            path = (root / rel).resolve()
+            if not path.is_relative_to(root.resolve()) or not path.exists():
+                raise PuzzleError(f"no file '{rel}' inside the project", code="not_found")
+            return path
+
+        path = inside(file)
         found = sniff(path)
         data = {
             "name": name or path.stem,
-            "file": str(path.relative_to(root.resolve())),
+            "file": path.relative_to(root.resolve()).as_posix(),
             "file_hash": file_hash(path),
             **{
                 k: found[k]
                 for k in ("format", "delimiter", "skip_rows", "header", "length_unit", "columns")
             },  # fmt: skip
         }
+        data.update({k: v for k, v in (("region", region), ("index", index)) if v})
+        if files:
+            if times is None or len(times) != len(files) + 1:
+                raise PuzzleError(f"{len(files) + 1} files need as many times (s)",
+                                  code="invalid_input")  # fmt: skip
+            data["times"] = [{"time": times[0], "file": data["file"], "file_hash":
+                              data["file_hash"]}]  # fmt: skip
+            for t, rel in zip(times[1:], files, strict=True):
+                more = inside(rel)
+                data["times"].append({"time": t, "file": more.relative_to(root.resolve())
+                                      .as_posix(), "file_hash": file_hash(more)})  # fmt: skip
+        elif every_step:
+            steps = found.get("steps") or []
+            if len(steps) < 2 or (times is not None and len(times) != len(steps)):
+                raise PuzzleError(
+                    f"{file} has {len(steps)} steps; every_step needs two or "
+                    "more (and as many times, if given)",
+                    code="invalid_input",
+                )
+            data["times"] = [{"time": times[k] if times else s["time"], "index": s["index"]}
+                             for k, s in enumerate(steps)]  # fmt: skip
         return {"read": found, "create": {"command": "create", "kind": "field", "data": data}}
 
     @tool(

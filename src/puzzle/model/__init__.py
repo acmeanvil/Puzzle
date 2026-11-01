@@ -8,6 +8,7 @@ from puzzle.model.schema import (
     Feature,
     FieldColumn,
     FieldPlacement,
+    FieldTime,
     FieldUse,
     Geometry,
     ImportedField,
@@ -59,5 +60,6 @@ __all__ = [
     "FieldUse",
     "FieldColumn",
     "FieldPlacement",
+    "FieldTime",
     "Unknown",
 ]

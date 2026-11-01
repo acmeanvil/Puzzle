@@ -32,6 +32,10 @@ class Input:
     selection: str | None = None  # where it applies; None: everywhere
     source: str = ""  # the transfer's name, for messages
     study: object = None  # the source study's id, for adapters that replay it (prestress)
+    # ADR 0044, a field varying in time: the solve step (from 1) it applies in, None every
+    # step; and for a transient step its times (s), one value column each.
+    step: int | None = None
+    times: tuple[float, ...] | None = None
 
 
 def pick(results: Results, field: str, step: int = -1) -> Field:

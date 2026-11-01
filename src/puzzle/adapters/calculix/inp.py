@@ -83,6 +83,12 @@ PLANAR_ELEMENTS = {
 }
 # Field-driven feature values (ADR 0044) for the deck being written: key -> nodal Field.
 GIVEN: ContextVar[dict | None] = ContextVar("calculix_field_values", default=None)
+# A field varying in time (ADR 0044): the study's step being written (values keyed
+# "key@k" in GIVEN are that step's), each transient history's times ("key@k" -> times),
+# and the amplitudes the histories need (history -> card name), written before the steps.
+STEP_INDEX: ContextVar[int | None] = ContextVar("calculix_step_index", default=None)
+HISTORY_TIMES: ContextVar[dict | None] = ContextVar("calculix_history_times", default=None)
+HISTORIES: ContextVar[dict | None] = ContextVar("calculix_histories", default=None)
 # Share of a uniform traction carried by each node of a surface element.
 NODE_SHARES = {
     "tri3": [1 / 3] * 3,
@@ -147,9 +153,13 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
         inputs, "CalculiX", {("load", "temperature"), ("prestress", "stress"), ("feature", "*")}
     )
     # ADR 0044: values from imported fields, on their selections' nodes, by feature key.
-    GIVEN.set({i.source: i.field for i in inputs if i.role == "feature"})
-    # A temperature field from a thermal study, as a thermal load on structural steps.
-    thermal_load = next((i.field for i in inputs if i.field.name == "temperature"), None)
+    GIVEN.set({_keyed(i): i.field for i in inputs if i.role == "feature"})
+    HISTORY_TIMES.set({_keyed(i): i.times for i in inputs if i.role == "feature" and i.times})
+    HISTORIES.set({})
+    # A temperature field from a thermal study, as a thermal load on structural steps; a
+    # body temperature varying in time gives each step its own (ADR 0044).
+    temperatures = {i.step: i.field for i in inputs if i.field.name == "temperature"}
+    thermal_load = temperatures.get(None, next(iter(temperatures.values()), None))
     check_contacts(comp, CONTACTS, "CalculiX")
     touching = [c for c in comp.contacts if c.type in ("frictionless", "frictional")]
     if touching and any(
@@ -255,6 +265,7 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
     preloads = _preload_steps(solve_steps)
     for number, step in enumerate(solve_steps, start=len(prestress) + 1):
         index = number - len(prestress)  # the study's own step number (Feature.steps)
+        STEP_INDEX.set(index)
         lines = _step(
             number,
             step,
@@ -262,7 +273,7 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
             mesh,
             faces,
             physics_types,
-            thermal_load,
+            temperatures.get(index, thermal_load),
             yields,
             project,
             index=index,
@@ -294,11 +305,19 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
                 )
                 out.append(STEP_TAG.format(index))
                 out += with_settings(_step(
-                    number, one, comp, mesh, faces, physics_types, thermal_load, yields,
-                    project, index=index,
+                    number, one, comp, mesh, faces, physics_types,
+                    temperatures.get(index, thermal_load), yields, project, index=index,
                 ), study, step, index)  # fmt: skip
             continue
         out += [STEP_TAG.format(index), *with_settings(lines, study, step, index)]
+    STEP_INDEX.set(None)
+    if HISTORIES.get():  # ADR 0044: the amplitudes fields varying in time follow
+        first = next(i for i, line in enumerate(out) if line.startswith(STEP_TAG[:12]))
+        cards = []
+        for (times, values), name in HISTORIES.get().items():
+            cards.append(f"*AMPLITUDE, NAME={name}")
+            cards += [f"{t:.10g}, {v:.10g}" for t, v in zip(times, values, strict=True)]
+        out[first:first] = cards
     expert = study.expert_settings.get("calculix", {})
     if "model" in expert:  # pass-through cards for the model, before the first step
         first = next(i for i, line in enumerate(out) if line.startswith(STEP_TAG[:12]))
@@ -1503,8 +1522,8 @@ def _features(
     for f in features:
         amp = amplitudes.get(f.amplitude) if f.amplitude else None
         rows = _feature_rows(f, mesh, faces, (rigid or {}).get(id(f)))
-        for card, lines in rows.items():
-            cards.setdefault((card, amp), []).extend(lines)
+        for card, lines in rows.items():  # (card, amplitude) keys: a field's histories
+            cards.setdefault(card if isinstance(card, tuple) else (card, amp), []).extend(lines)
     out: list[str] = []
     order = ("*BOUNDARY", "*CLOAD", "*DLOAD", "*DFLUX", "*FILM")
     for (card, amp), lines in sorted(
@@ -1515,8 +1534,9 @@ def _features(
     return out
 
 
-def _feature_rows(f: Feature, mesh: Mesh, faces: FaceLookup, rigid=None) -> dict[str, list[str]]:
+def _feature_rows(f: Feature, mesh: Mesh, faces: FaceLookup, rigid=None) -> dict:
     boundary, cload, dload, dflux, film = [], [], [], [], []
+    histories: dict[tuple[str, str], list[str]] = {}  # (card, amplitude) -> rows
     group = mesh.groups.get(f.selection)
     if group is None:
         raise InputError(f"{f.type} on '{f.selection}': no such selection in the mesh")
@@ -1547,6 +1567,8 @@ def _feature_rows(f: Feature, mesh: Mesh, faces: FaceLookup, rigid=None) -> dict
         # normal, as on a solid's face; CalculiX's shell P pushes along it (Gmsh orients
         # the elements with the face).
         dload.append(f"{set_name('E', f.selection)}, P, {-v['p']:.10g}")
+    elif f.type == "pressure" and _history(f, "p") is not None:  # in time (ADR 0044)
+        histories.update(_history_rows(f, "p", "*DLOAD", "P", group, mesh, faces))
     elif f.type == "pressure" and "p" in f.fields:  # per face, from a field (ADR 0044)
         dload += [f"{e}, P{n}, {p:.10g}" for e, n, p in _face_values(f, "p", group, mesh, faces)]
     elif f.type == "pressure":
@@ -1582,6 +1604,8 @@ def _feature_rows(f: Feature, mesh: Mesh, faces: FaceLookup, rigid=None) -> dict
                 f"{elset}, CENTRIF, {load.omega**2:.10g}, {c[0]:.10g}, {c[1]:.10g}, "
                 f"{c[2]:.10g}, {n[0]:.10g}, {n[1]:.10g}, {n[2]:.10g}"
             )
+    elif f.type == "heat_flux" and _history(f, "q") is not None:
+        histories.update(_history_rows(f, "q", "*DFLUX", "S", group, mesh, faces))
     elif f.type == "heat_flux" and "q" in f.fields:
         dflux += [f"{e}, S{n}, {q:.10g}" for e, n, q in _face_values(f, "q", group, mesh, faces)]
     elif f.type == "heat_flux":
@@ -1598,6 +1622,7 @@ def _feature_rows(f: Feature, mesh: Mesh, faces: FaceLookup, rigid=None) -> dict
         "*DLOAD": dload,
         "*DFLUX": dflux,
         "*FILM": film,
+        **histories,
     }
 
 
@@ -1720,12 +1745,49 @@ def _modulus(project: Project, comp: Component, selection: str) -> float:
     raise InputError(f"contact on '{selection}' needs a youngs_modulus on its part's material")
 
 
+def _keyed(i) -> str:
+    """An input's key in GIVEN: its feature key, and its step when it has one."""
+    return i.source if i.step is None else f"{i.source}@{i.step}"
+
+
+def _given(f, name):
+    """The field mapped for a feature's value (this step's when it varies in time), and
+    its key in GIVEN."""
+    from puzzle.fields import feature_key
+
+    given, key = GIVEN.get() or {}, feature_key(f, name)
+    own = f"{key}@{STEP_INDEX.get()}"
+    return (given[own], own) if own in given else (given.get(key), key)
+
+
+def _history(f, name):
+    """A transient step's times for a feature value following a field in time, or None."""
+    if name not in f.fields:
+        return None
+    return (HISTORY_TIMES.get() or {}).get(_given(f, name)[1])
+
+
+def _history_rows(f, name, card, label, group, mesh: Mesh, faces: FaceLookup) -> dict:
+    """A value following a field in time through a transient step (ADR 0044): each face
+    loaded by 1 times an amplitude of its own history (the mean of its nodes' values at
+    each of the field's times, against step time), one amplitude per distinct history."""
+    field, times = _given(f, name)[0], _history(f, name)
+    known = HISTORIES.get()
+    rows: dict[tuple[str, str], list[str]] = {}
+    for b in surface_blocks(group, mesh):
+        shape = b.connectivity.shape
+        means = field.at(b.connectivity.ravel()).reshape(*shape, len(times)).mean(axis=1)
+        for (e, n), h in zip(faces.of(b), means, strict=True):
+            key = (tuple(times), tuple(float(f"{v:.10g}") for v in h))
+            amp = known.setdefault(key, f"FIELD{len(known) + 1}")
+            rows.setdefault((card, amp), []).append(f"{e}, {label}{n}, 1.")
+    return rows
+
+
 def _face_values(f, name, group, mesh: Mesh, faces: FaceLookup, uniform=None):
     """(element, face number, value) per face of the selection: the mean of a field's
     nodal values over the face's nodes (ADR 0044), or `uniform` when it has no field."""
-    from puzzle.fields import feature_key
-
-    field = (GIVEN.get() or {}).get(feature_key(f, name)) if name in f.fields else None
+    field = _given(f, name)[0] if name in f.fields else None
     if field is None and name in f.fields:
         raise InputError(f"{f.type} on '{f.selection}': its field for {name} was not mapped")
     out = []

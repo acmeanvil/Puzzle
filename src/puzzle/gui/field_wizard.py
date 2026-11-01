@@ -31,8 +31,16 @@ ROLES = [
     ("Y coordinate", "y"),
     ("Z coordinate", "z"),
     ("A value", "value"),
+    ("Time (rows grouped by it)", "time"),
     ("Ignored", "ignore"),
 ]
+TIMING = [
+    ("Holds still", "still"),
+    ("Varies in time: every step of the source", "every_step"),
+    ("Varies in time: one file per time", "files"),
+]
+FILTER = ("Fields (*.csv *.txt *.dat *.vtu *.vtk *.prof *.exo *.e *.case);;"
+          "All files (*)")  # fmt: skip
 LENGTHS = [("Metres", "m"), ("Millimetres", "mm"), ("Centimetres", "cm"), ("Inches", "in"),
            ("Feet", "ft")]  # fmt: skip
 
@@ -65,17 +73,36 @@ class FilePage(QWizardPage):
         self.setTitle("File")
         self.setSubTitle(
             "Points and values: CSV, TXT or DAT (Puzzle's point clouds, Ansys External Data, "
-            "test data), or VTU. Give each column its role and unit."
+            "test data), VTU, a Fluent profile, Exodus II, EnSight Gold, or an OpenFOAM case "
+            "folder. Give each column its role and unit."
         )
         self.wizard_ = wizard
         self.path = QLineEdit()
         self.path.setReadOnly(True)
         browse = QPushButton("Choose…")
         browse.clicked.connect(self.choose)
+        folder = QPushButton("OpenFOAM case…")
+        folder.clicked.connect(self.choose_case)
         top = QHBoxLayout()
         top.addWidget(self.path, 1)
         top.addWidget(browse)
+        top.addWidget(folder)
         self.length = _combo(LENGTHS, "m")
+        self.region = _combo([("The whole source", "")], "")
+        self.step = _combo([("The last", "")], "")
+        self.timing = _combo(TIMING, "still")
+        self.timing.currentIndexChanged.connect(lambda _i: self._timing_changed())
+        self.more = QLineEdit()
+        self.more.setReadOnly(True)
+        self.more.setPlaceholderText("more files, one per time")
+        add = QPushButton("Add files…")
+        add.clicked.connect(self.choose_more)
+        more_row = QHBoxLayout()
+        more_row.addWidget(self.more, 1)
+        more_row.addWidget(add)
+        self.times = QLineEdit()
+        self.times.setPlaceholderText("seconds, one per file (or per step), e.g. 0, 5, 10")
+        self.extra: list[Path] = []
         self.table = QTableWidget(0, 3)
         self.table.setHorizontalHeaderLabels(["Column", "Role", "Unit"])
         self.table.horizontalHeader().setStretchLastSection(True)
@@ -83,6 +110,11 @@ class FilePage(QWizardPage):
         role(self.note, "muted")
         form = QFormLayout()
         form.addRow("Points in", self.length)
+        form.addRow("Region", self.region)
+        form.addRow("Step", self.step)
+        form.addRow("In time", self.timing)
+        form.addRow("Files", more_row)
+        form.addRow("Times (s)", self.times)
         column = QVBoxLayout(self)
         column.addLayout(top)
         column.addLayout(form)
@@ -91,11 +123,38 @@ class FilePage(QWizardPage):
         self.found: dict | None = None
 
     def choose(self) -> None:
-        chosen, _ = QFileDialog.getOpenFileName(
-            self, "Import field", "", "Fields (*.csv *.txt *.dat *.vtu *.vtk);;All files (*)"
-        )
+        chosen, _ = QFileDialog.getOpenFileName(self, "Import field", "", FILTER)
         if chosen:
             self.load(Path(chosen))
+
+    def choose_case(self) -> None:
+        chosen = QFileDialog.getExistingDirectory(self, "OpenFOAM case folder")
+        if chosen:
+            self.load(Path(chosen))
+
+    def choose_more(self) -> None:
+        chosen, _ = QFileDialog.getOpenFileNames(self, "More files, one per time", "", FILTER)
+        if chosen:
+            self.set_more([Path(c) for c in chosen])
+
+    def set_more(self, paths: list[Path]) -> None:
+        """The files after the first, one per time (tests call this directly)."""
+        self.extra = list(paths)
+        self.more.setText(", ".join(p.name for p in self.extra))
+        self.timing.setCurrentIndex(self.timing.findData("files"))
+
+    def _timing_changed(self) -> None:
+        how = self.timing.currentData()
+        self.step.setEnabled(how == "still")
+        self.more.setEnabled(how == "files")
+        self.times.setEnabled(how != "still")
+
+    def timing_data(self) -> dict:
+        """What the field's times come from: still, every step, or files with times."""
+        how = self.timing.currentData()
+        text = self.times.text().replace(";", ",").replace(" ", ",")
+        times = [float(t) for t in text.split(",") if t.strip()] or None
+        return {"how": how, "times": times, "files": self.extra}
 
     def load(self, path: Path) -> None:
         """Read a file's likely layout into the page (tests call this directly)."""
@@ -116,7 +175,23 @@ class FilePage(QWizardPage):
             self.table.setItem(i, 0, name)
             self.table.setCellWidget(i, 1, _combo(ROLES, c["role"]))
             self.table.setCellWidget(i, 2, QLineEdit(c["unit"]))
-        self.note.setText(f"{len(self.found['columns'])} columns read from {path.name}")
+        whole = {"exodus": "Every node or element", "ensight": "The volume parts",
+                 "openfoam": "The cells", "fluent_profile": "Every profile"}  # fmt: skip
+        regions = [(whole.get(self.found["format"], "The whole file"), "")]
+        regions += [(r, r) for r in self.found.get("regions", [])]
+        steps = [("The last", "")] + [(f"{s['index']}: {s['time']:g}", s["index"])
+                                      for s in self.found.get("steps", [])]  # fmt: skip
+        for box, pairs in ((self.region, regions), (self.step, steps)):
+            box.clear()
+            for text, value in pairs:
+                box.addItem(text, value)
+        multi = len(self.found.get("steps", [])) > 1
+        self.timing.setCurrentIndex(self.timing.findData("still"))
+        self._timing_changed()
+        notes = "; ".join(self.found.get("notes", []))
+        self.note.setText(f"{len(self.found['columns'])} columns read from {path.name}"
+                          + (f", {len(self.found['steps'])} steps" if multi else "")
+                          + (f" ({notes})" if notes else ""))  # fmt: skip
         self.completeChanged.emit()
 
     def columns(self) -> list[dict]:
@@ -131,7 +206,11 @@ class FilePage(QWizardPage):
 
     def isComplete(self) -> bool:  # noqa: N802 - Qt's name
         roles = [c["role"] for c in self.columns()] if self.found else []
-        return bool(self.found) and {"x", "y", "z"} <= set(roles) and "value" in roles
+        if not self.found:
+            return False
+        # A table names its coordinate columns; the other formats carry their points.
+        placed = self.found["format"] != "csv" or {"x", "y", "z"} <= set(roles)
+        return placed and "value" in roles
 
 
 class AlignPage(QWizardPage):
@@ -293,10 +372,25 @@ class FieldWizard(QWizard):
 
     def draft(self):
         """The field as it stands, reading the chosen file where it is (nothing copied)."""
-        from puzzle.model.schema import FieldColumn, FieldPlacement, ImportedField
+        from puzzle.model.schema import FieldColumn, FieldPlacement, FieldTime, ImportedField
 
         path = Path(self.file.path.text())
         found = self.file.found or {}
+        timing = self.file.timing_data()
+        times = []
+        if timing["how"] == "files":
+            files = [path, *timing["files"]]
+            given = timing["times"] or []
+            if len(given) != len(files):
+                raise ValueError(f"{len(files)} files need {len(files)} times (s)")
+            times = [FieldTime(time=t, file=str(f)) for t, f in zip(given, files, strict=True)]
+        elif timing["how"] == "every_step":
+            steps = found.get("steps", [])
+            given = timing["times"] or [s["time"] for s in steps]
+            if len(given) != len(steps):
+                raise ValueError(f"the source has {len(steps)} steps; give as many times")
+            times = [FieldTime(time=t, index=s["index"]) for t, s in zip(given, steps,
+                     strict=True)]  # fmt: skip
         f = ImportedField(
             name=self.naming.name.text() or path.stem,
             file=path.name,
@@ -307,6 +401,9 @@ class FieldWizard(QWizard):
             columns=[FieldColumn(**c) for c in self.file.columns()],
             length_unit=self.file.length.currentData(),
             placement=FieldPlacement(**self.align.placement()),
+            region=self.file.region.currentData() or "",
+            index=self.file.step.currentData() or "" if timing["how"] == "still" else "",
+            times=times,
         )
         return f, path.parent
 
@@ -316,9 +413,15 @@ class FieldWizard(QWizard):
         from puzzle.fields import import_file
 
         f, _ = self.draft()
-        rel, digest = import_file(self.window.session.root, Path(self.file.path.text()))
+        root = self.window.session.root
+        rel, digest = import_file(root, Path(self.file.path.text()))
         data = f.model_dump(mode="json", exclude={"id", "kind"})
         data.update(file=rel, file_hash=digest)
+        for t in data["times"]:  # one file per time: each copied in too
+            if t["file"]:
+                t["file"], t["file_hash"] = import_file(root, Path(t["file"]))
+        if not data["times"]:
+            data.pop("times")
         return self.window.submit(Create(kind="field", data=data))
 
 

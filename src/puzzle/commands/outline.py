@@ -186,6 +186,9 @@ def outline(project: Project, *, ids: bool = False, runs=None) -> str:
             head("Imported field", f)
             + f": {f.file}, values {', '.join(f.value_columns()) or '-'}, points in "
             + f"{f.length_unit}"
+            + (f" ({f.format})" if f.format != "csv" else "")
+            + (f", at {len(f.times)} times" if f.times else "")
+            + (", rows by time" if f.varies() and not f.times else "")
             + (f"; used by {'; '.join(uses)}" if uses else "; not used")
         )
     for d in project.of_type(ResultDefinition):

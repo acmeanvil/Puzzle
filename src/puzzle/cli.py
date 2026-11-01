@@ -351,13 +351,25 @@ def _parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("import-field", help="bring in values at points from a file (ADR 0044)")
     p.add_argument("project", type=Path)
-    p.add_argument("file", type=Path, help="CSV/TXT/DAT (x, y, z and values) or VTU")
+    p.add_argument("file", type=Path, nargs="+", help="CSV/TXT/DAT (x, y, z and values), VTU, "
+                   "a Fluent profile (.prof), Exodus II (.exo, .e), EnSight Gold (.case) or an "
+                   "OpenFOAM case folder; several files (one per time) with --times")  # fmt: skip
     p.add_argument("--name", help="the field's name (default: the file's)")
     p.add_argument("--unit", help="the points' length unit (default: from the header, else m)")
     p.add_argument(
         "--column", action="append", default=[], metavar="NAME:ROLE[:UNIT]",
-        help="a column's role (x, y, z, value, ignore) and unit, e.g. p:value:MPa",
+        help="a column's role (x, y, z, value, time, ignore) and unit, e.g. p:value:MPa",
     )  # fmt: skip
+    p.add_argument("--region", help="a block, node set, part, patch or profile of the source")
+    p.add_argument("--step", help="the source's step to read (Exodus/EnSight number from 1, "
+                   "OpenFOAM time directory; default the last)")  # fmt: skip
+    p.add_argument(
+        "--every-step",
+        action="store_true",
+        help="vary in time over every step of the source (Exodus, EnSight, OpenFOAM)",
+    )
+    p.add_argument("--times", nargs="+", type=float, metavar="S",
+                   help="seconds: one per file, or per step with --every-step")  # fmt: skip
     p.add_argument("--translate", nargs=3, type=float, metavar=("X", "Y", "Z"), help="metres")
     p.add_argument("--rotate", nargs=3, type=float, metavar=("RX", "RY", "RZ"), help="degrees")
     p.add_argument("--about", nargs=3, type=float, metavar=("X", "Y", "Z"), help="metres")
@@ -1000,24 +1012,30 @@ def _import_field(args) -> int:
     from puzzle.fields import new_field_data, sniff
 
     _load(args.project)
-    if not args.file.exists():
-        raise CliError(f"no file {args.file}")
-    found = sniff(args.file)
+    first, *more = args.file
+    for path in args.file:
+        if not path.exists():
+            raise CliError(f"no file {path}")
+    found = sniff(first)
     columns = {c["name"]: dict(c) for c in found["columns"]}
     for spec in args.column:
         name, _, rest = spec.partition(":")
         role, _, unit = rest.partition(":")
         if name not in columns:
-            raise CliError(f"no column '{name}' in {args.file.name} ({', '.join(columns)})")
+            raise CliError(f"no column '{name}' in {first.name} ({', '.join(columns)})")
         columns[name].update({k: v for k, v in (("role", role), ("unit", unit)) if v})
     placement = {k: tuple(v) for k, v in (("translation", args.translate),
                  ("rotation", args.rotate), ("about", args.about)) if v}  # fmt: skip
-    data = new_field_data(args.project, args.file, args.name, length_unit=args.unit,
-                          columns=list(columns.values()), placement=placement or None)  # fmt: skip
+    data = new_field_data(args.project, first, args.name, length_unit=args.unit,
+                          columns=list(columns.values()), placement=placement or None,
+                          region=args.region, index=args.step, files=more or None,
+                          times=args.times, every_step=args.every_step)  # fmt: skip
     Session(args.project).submit(Create(kind="field", data=data))
     values = [c["name"] for c in data["columns"] if c["role"] == "value"]
     print(f"Imported field '{data['name']}' from {data['file']}: values {', '.join(values)}; "
           f"points in {data['length_unit']}")  # fmt: skip
+    if data.get("times"):
+        print("  varies in time: " + ", ".join(f"{t['time']:g} s" for t in data["times"]))
     return 0
 
 

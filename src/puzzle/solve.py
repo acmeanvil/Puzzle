@@ -252,7 +252,9 @@ def run_study(
         indices = [n - 1, n] if limit is not None and _preloaded(steps, n) else [n]
         seen = _in_step(project, study.component, indices) if limit is not None else project
         begin("write")
-        input_file = adapter.write_input(seen, part, written, where, inputs)
+        input_file = adapter.write_input(
+            seen, part, written, where, _step_inputs(inputs, n, parts, steps)
+        )
         lap("write")
         begin("solve")
         parser = adapter.progress(input_file, n, len(parts))
@@ -407,6 +409,17 @@ def _preloaded(steps, n: int) -> bool:
         and n > 1
         and steps[n - 2].type == "stationary"
     )
+
+
+def _step_inputs(inputs: list, n: int, parts: list, steps: list) -> list:
+    """The inputs a job sees (ADR 0044): one job per step (or a one-step study) gets its
+    own step's values of a field varying in time as plain inputs; one deck for every
+    step (CalculiX) gets them all, tagged by step."""
+    if len(parts) != len(steps) or not any(i.step is not None for i in inputs):
+        return inputs
+    from dataclasses import replace
+
+    return [replace(i, step=None) for i in inputs if i.step in (None, n)]
 
 
 def _in_step(project: Project, component_id, indices: list[int]) -> Project:

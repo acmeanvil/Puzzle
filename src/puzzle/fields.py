@@ -13,7 +13,19 @@ a file, placed on the model and mapped onto a mesh when a study runs.
   distance; past `max_distance` the nearest value, zero, or a refusal.
 - `check` is the verification report: counts, ranges, coverage of the target within a
   tolerance, the distance histogram, points off the model, and plain-word warnings.
-- `use_values` is what a study's run asks for: a feature's field use on its nodes.
+- `use_values` is what a study's run asks for: a feature's field use on its nodes, at
+  a time when the field varies in time (`use_history` for every time, transient steps).
+
+Formats beyond CSV and VTU (Fluent profiles, Exodus II, EnSight Gold, OpenFOAM case
+folders) are read by `puzzle.field_readers`.
+
+Time (ADR 0044 decision 2.1, 3): a field varies in time when it lists `times` (a file
+each, or a multi-step source's steps) or has a time column (rows grouped by its value).
+A study's solve step k takes it at the step's time: its `end_time` setting when it has
+one, else k (1, 2, ...: CalculiX's total time when each static step lasts 1), linearly
+between the field's times and held at the first or last outside them, as an Amplitude
+is. A transient step takes the whole history (adapters that follow it list the feature
+in `Capabilities.field_histories`; the rest refuse it).
 """
 
 from __future__ import annotations
@@ -33,7 +45,12 @@ FIELDS_DIR = "fields"
 FORMATS = {
     "csv": "Delimited text (CSV, TXT, DAT: Puzzle's point clouds, Ansys External Data, tests)",
     "vtu": "VTK unstructured grid (.vtu, .vtk): point or cell data",
+    "fluent_profile": "Ansys Fluent profile (.prof): point profiles",
+    "exodus": "Exodus II (.exo, .e): nodal or element variables, every time step",
+    "ensight": "EnSight Gold (.case: Code_Saturne, Puzzle's exports): per node or element",
+    "openfoam": "OpenFOAM case folder: a time directory's cell or patch values",
 }
+READERS = ("fluent_profile", "exodus", "ensight", "openfoam")  # in puzzle.field_readers
 COMMENTS = ("#", "%", "//", "!")
 SPARSE = 20  # fewer points than this is test data: flagged, interpolated with care
 
@@ -55,25 +72,60 @@ class Cloud:
 
 
 def import_file(root: Path, path: Path) -> tuple[str, str]:
-    """Copy a field file into the project; its path relative to the project, and hash."""
+    """Copy a field file into the project; its path relative to the project, and hash.
+    A source of several files comes with them: an EnSight case with its geometry and
+    variable files (into `fields/<case>/`), an OpenFOAM case's polyMesh and time
+    directories (into `fields/<case>/`, the case folder being what the field names)."""
+    from puzzle.field_readers import format_of, openfoam_case, source_files
+
+    path = Path(path)
     target_dir = Path(root) / FIELDS_DIR
     target_dir.mkdir(parents=True, exist_ok=True)
-    target = target_dir / Path(path).name
-    if Path(path).resolve() != target.resolve():
+    fmt = format_of(path)
+    if fmt in ("ensight", "openfoam"):
+        top = openfoam_case(path) if fmt == "openfoam" else path.parent
+        name = top.name if fmt == "openfoam" else path.stem
+        folder = target_dir / name
+        if top.resolve() != folder.resolve():
+            for f in source_files(path, fmt):
+                dest = folder / f.resolve().relative_to(top.resolve())
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(f, dest)
+        target = folder if fmt == "openfoam" else folder / path.name
+        return target.relative_to(root).as_posix(), file_hash(target)
+    target = target_dir / path.name
+    if path.resolve() != target.resolve():
         shutil.copyfile(path, target)
     return f"{FIELDS_DIR}/{target.name}", file_hash(target)
 
 
 def file_hash(path: Path) -> str:
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    """SHA-256 of a field file, or of every file a several-file source is made of."""
+    from puzzle.field_readers import format_of, source_files
+
+    path = Path(path)
+    fmt = format_of(path)
+    if fmt not in ("ensight", "openfoam"):
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    digest = hashlib.sha256()
+    top = path if path.is_dir() else path.parent
+    for f in sorted(source_files(path, fmt)):
+        digest.update(f.resolve().relative_to(top.resolve()).as_posix().encode())
+        digest.update(hashlib.sha256(f.read_bytes()).digest())
+    return digest.hexdigest()
 
 
 def sniff(path: Path) -> dict:
     """A file's likely reading: format, delimiter, rows to skip, header, and columns
     (name, role, unit); the length unit when the coordinates name one."""
+    from puzzle.field_readers import format_of
+
     path = Path(path)
     if path.suffix.lower() in (".vtu", ".vtk"):
         return _sniff_vtu(path)
+    fmt = format_of(path)
+    if fmt in READERS:
+        return _sniff_reader(path, fmt)
     lines = path.read_text(errors="replace").splitlines()
     skip = 0
     while skip < len(lines) and (
@@ -91,6 +143,10 @@ def sniff(path: Path) -> dict:
     for i, raw in enumerate(names):
         name, unit = _name_and_unit(raw)
         role = _coordinate(name) or ("value" if i >= 3 or header else "xyz"[i])
+        if header and _label(name):  # node or element numbers (Ansys, Fluent): not values
+            role = "ignore"
+        if header and name.strip().lower() in ("time", "time value"):
+            role = "time"
         if role in ("x", "y", "z"):
             length = length or unit or None
             unit = ""
@@ -102,6 +158,27 @@ def sniff(path: Path) -> dict:
         "header": header,
         "columns": columns,
         "length_unit": length or "m",
+    }
+
+
+def _sniff_reader(path: Path, fmt: str) -> dict:
+    """What a Fluent profile, Exodus, EnSight or OpenFOAM source offers, as `sniff`
+    says it: value columns (and where each sits: "locations"), its steps ("steps":
+    time and index, for a field varying in time) and its regions."""
+    from puzzle.field_readers import sniff_source
+
+    offer = sniff_source(path, fmt)
+    return {
+        "format": fmt,
+        "delimiter": None,
+        "skip_rows": 0,
+        "header": True,
+        "columns": [{"name": c.name, "role": "value", "unit": ""} for c in offer.columns],
+        "length_unit": "m",
+        "locations": {c.name: c.location for c in offer.columns},
+        "steps": [{"time": s.time, "index": s.index} for s in offer.steps],
+        "regions": offer.regions,
+        "notes": offer.notes,
     }
 
 
@@ -153,21 +230,62 @@ def _number(text: str) -> float | None:
 
 
 def _coordinate(name: str) -> str | None:
-    key = name.strip().lower().replace("-coordinate", "").replace(" coordinate", "")
+    """x, y or z from "x", "X-Coordinate" (Fluent), "X Location" (Ansys Mechanical)."""
+    key = name.strip().lower()
+    for word in ("-coordinate", " coordinate", " location", "-location", " coord"):
+        key = key.replace(word, "")
     return key if key in ("x", "y", "z") else None
+
+
+def _label(name: str) -> bool:
+    """A node or element number column (Ansys's "Node Number", Fluent's "nodenumber")."""
+    key = name.strip().lower().replace(" ", "").replace("_", "")
+    return key in ("nodenumber", "node", "nodeid", "elementnumber", "element", "elementid",
+                   "cellnumber", "id")  # fmt: skip
 
 
 def _default_names(n: int) -> list[str]:
     return ["x", "y", "z", *(f"value {i}" for i in range(1, n - 2))][:n]
 
 
-def read_table(root: Path, f) -> tuple[np.ndarray, dict[str, np.ndarray]]:
-    """An ImportedField's file as raw points (file units) and value columns (file units)."""
-    path = Path(root) / f.file
+def read_table(root: Path, f, file: str = "", index: str | None = None
+               ) -> tuple[np.ndarray, dict[str, np.ndarray]]:  # fmt: skip
+    """An ImportedField's file as raw points (file units) and value columns (file units):
+    `file` (default the field's own) at the source's step `index` (default the field's)."""
+    path = Path(root) / (file or f.file)
     if not path.exists():
-        raise FieldError(f"field '{f.name}': its file {f.file} is missing", path=f.name)
+        raise FieldError(f"field '{f.name}': its file {file or f.file} is missing", path=f.name)
     if f.format == "vtu":
         return _read_vtu(path, f)
+    if f.format in READERS:
+        from puzzle.field_readers import read_source
+
+        names = [c.name for c in f.columns if c.role == "value"]
+        return read_source(path, f.format, names, f.region, f.index if index is None else index)
+    points, values, _ = _read_csv(path, f)
+    return points, values
+
+
+def snapshots(root: Path, f) -> list[tuple[float | None, np.ndarray, dict[str, np.ndarray]]]:
+    """The field at each of its times (s), in time order: (time, raw points, values).
+    A field that holds still is one snapshot at time None."""
+    if f.times:
+        out = [(t.time, *read_table(root, f, t.file, t.index)) for t in f.times]
+        return sorted(out, key=lambda s: s[0])
+    if f.format in ("csv",) and any(c.role == "time" for c in f.columns):
+        points, values, times = _read_csv(Path(root) / f.file, f)
+        a, b, _ = _si(next(c.unit for c in f.columns if c.role == "time") or "s")
+        times = a * times + b
+        out = []
+        for t in np.unique(times):
+            rows = times == t
+            out.append((float(t), points[rows], {k: v[rows] for k, v in values.items()}))
+        return out
+    return [(None, *read_table(root, f))]
+
+
+def _read_csv(path: Path, f) -> tuple[np.ndarray, dict[str, np.ndarray], np.ndarray | None]:
+    """A delimited file's points, value columns, and time column if it has one."""
     lines = path.read_text(errors="replace").splitlines()[f.skip_rows + (1 if f.header else 0) :]
     rows = []
     for ln in lines:
@@ -188,7 +306,8 @@ def read_table(root: Path, f) -> tuple[np.ndarray, dict[str, np.ndarray]]:
         raise FieldError(f"field '{f.name}' names no {', '.join(missing)} column", path=f.name)
     points = table[:, [by_role["x"], by_role["y"], by_role["z"]]]
     values = {c.name: table[:, i] for i, c in enumerate(f.columns) if c.role == "value"}
-    return points, values
+    at = next((i for i, c in enumerate(f.columns) if c.role == "time"), None)
+    return points, values, (table[:, at] if at is not None else None)
 
 
 def _read_vtu(path: Path, f) -> tuple[np.ndarray, dict[str, np.ndarray]]:
@@ -254,8 +373,16 @@ def place(points: np.ndarray, placement, project=None) -> np.ndarray:
 
 def cloud(project, root: Path, f, use=None) -> Cloud:
     """An imported field on the model: points in metres, placed by the field's own
-    placement and then the use's; values in SI."""
-    raw, values = read_table(root, f)
+    placement and then the use's; values in SI. A field varying in time: its first."""
+    return clouds(project, root, f, use)[0][1]
+
+
+def clouds(project, root: Path, f, use=None) -> list[tuple[float | None, Cloud]]:
+    """The field on the model at each of its times (s; None when it holds still)."""
+    return [(t, _placed(project, f, raw, values, use)) for t, raw, values in snapshots(root, f)]
+
+
+def _placed(project, f, raw, values, use) -> Cloud:
     a, b, _ = _si(f.length_unit)
     points = place(a * raw + b, f.placement, project)
     if use is not None:
@@ -359,7 +486,9 @@ def check(project, root: Path, f, targets: np.ndarray | None = None, tolerance: 
     `tolerance` of a data point (default 2 % of the target's size, or 1.5 times the
     data's median spacing when that is larger: a coarse grid still covers), a histogram of
     distances, data points far off the target, and warnings in plain words."""
-    c = cloud(project, root, f, use)
+    states = clouds(project, root, f, use)
+    c = states[0][1]  # coverage on the first time's points; ranges over every time
+    every = {n: np.concatenate([s.values[n] for _, s in states]) for n in c.values}
     report: dict = {
         "field": f.name,
         "points": int(len(c.points)),
@@ -371,11 +500,13 @@ def check(project, root: Path, f, targets: np.ndarray | None = None, tolerance: 
                 "mean": float(v.mean()),
                 "unit": c.units.get(name, ""),
             }  # fmt: skip
-            for name, v in c.values.items()
+            for name, v in every.items()
         },
         "bounds": [c.points.min(axis=0).tolist(), c.points.max(axis=0).tolist()],
         "warnings": [],
     }
+    if states[0][0] is not None:
+        report["times"] = [float(t) for t, _ in states]
     if report["sparse"]:
         report["warnings"].append(
             f"only {len(c.points)} points: sparse data (test points), interpolated between them"
@@ -426,12 +557,55 @@ def check(project, root: Path, f, targets: np.ndarray | None = None, tolerance: 
 # --- a feature's field use, on its nodes -------------------------------------------------------
 
 
-def use_values(project, root: Path, use, targets: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """A field use's values (SI, scaled and offset) at `targets`, and their distances."""
+def use_values(project, root: Path, use, targets: np.ndarray, time: float | None = None
+               ) -> tuple[np.ndarray, np.ndarray]:  # fmt: skip
+    """A field use's values (SI, scaled and offset) at `targets`, and their distances. A
+    field varying in time is taken at `time` (s): linearly between its two times about
+    it, held at the first or last outside them."""
     from puzzle.model.schema import ImportedField
 
     f = project.get(use.field, ImportedField)
-    c = cloud(project, root, f, use)
+    states = clouds(project, root, f, use)
+    if states[0][0] is None:
+        return _mapped(f, states[0][1], use, targets)
+    if time is None:
+        raise FieldError(f"field '{f.name}' varies in time: say at which time to take it")
+    times = np.array([t for t, _ in states])
+    if time <= times[0] or len(times) == 1:
+        return _mapped(f, states[0][1], use, targets)
+    if time >= times[-1]:
+        return _mapped(f, states[-1][1], use, targets)
+    j = int(np.searchsorted(times, time))  # times[j - 1] < time <= times[j]
+    w = (time - times[j - 1]) / (times[j] - times[j - 1])
+    before, d0 = _mapped(f, states[j - 1][1], use, targets)
+    after, d1 = _mapped(f, states[j][1], use, targets)
+    return (1 - w) * before + w * after, np.maximum(d0, d1)
+
+
+def use_history(project, root: Path, use, targets: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """A field use's times (s) and its values at `targets` at each, (n, times): what a
+    transient step follows, linearly between the times."""
+    from puzzle.model.schema import ImportedField
+
+    f = project.get(use.field, ImportedField)
+    states = clouds(project, root, f, use)
+    if states[0][0] is None:
+        raise FieldError(f"field '{f.name}' holds still in time")
+    values = np.column_stack([_mapped(f, c, use, targets)[0] for _, c in states])
+    return np.array([t for t, _ in states]), values
+
+
+def step_time(step, k: int) -> float:
+    """The time (s) a solve step takes a field varying in time at: its end_time setting
+    when it has one, else its number k from 1 (CalculiX's total time when each static
+    step lasts 1)."""
+    value = step.settings.get("end_time") if step is not None else None
+    if value is None:
+        return float(k)
+    return value.to_si() if hasattr(value, "to_si") else float(value)
+
+
+def _mapped(f, c: Cloud, use, targets) -> tuple[np.ndarray, np.ndarray]:
     if use.column not in c.values:
         raise FieldError(
             f"field '{f.name}' has no column '{use.column}' (it has {sorted(c.values)})",
@@ -451,10 +625,24 @@ def use_values(project, root: Path, use, targets: np.ndarray) -> tuple[np.ndarra
 # --- making one, and checking one on a model ---------------------------------------------------
 
 
-def new_field_data(root: Path, path: Path, name: str | None = None, **overrides) -> dict:
+def new_field_data(
+    root: Path,
+    path: Path,
+    name: str | None = None,
+    *,
+    files: list[Path] | None = None,
+    times: list[float] | None = None,
+    every_step: bool = False,
+    **overrides,
+) -> dict:
     """What a Create command for a new imported field holds: the file copied into the
     project, hashed, and read as `sniff` guesses unless `overrides` say otherwise
-    (columns as dicts, length_unit, placement as a dict, ...)."""
+    (columns as dicts, length_unit, placement as a dict, region, index, ...).
+
+    Varying in time (ADR 0044): `files` are more files of the same layout, one per time,
+    after `path`, with `times` (s) one per file, `path`'s first; or `every_step` takes
+    every step of a multi-step source (Exodus, EnSight, OpenFOAM times) at its own
+    time, or at `times` when given (one per step)."""
     rel, digest = import_file(root, path)
     found = sniff(Path(root) / rel)
     data = {
@@ -465,7 +653,33 @@ def new_field_data(root: Path, path: Path, name: str | None = None, **overrides)
         "columns": found["columns"],
     }
     data.update({k: v for k, v in overrides.items() if v is not None})
+    data["times"] = _times(root, path, rel, digest, found, files, times, every_step)
+    if not data["times"]:
+        data.pop("times")
     return data
+
+
+def _times(root, path, rel, digest, found, files, times, every_step) -> list[dict]:
+    if files:
+        if times is None or len(times) != len(files) + 1:
+            raise FieldError(f"{len(files) + 1} files need {len(files) + 1} times, one each")
+        out = [{"time": float(times[0]), "file": rel, "file_hash": digest}]
+        for t, more in zip(times[1:], files, strict=True):
+            r, d = import_file(root, more)
+            out.append({"time": float(t), "file": r, "file_hash": d})
+        return out
+    if every_step:
+        steps = found.get("steps") or []
+        if len(steps) < 2:
+            raise FieldError(f"{Path(path).name} holds {len(steps)} step(s): nothing varies")
+        if times is not None and len(times) != len(steps):
+            raise FieldError(f"{Path(path).name} has {len(steps)} steps; give as many times")
+        return [{"time": float(times[k] if times is not None else s["time"]), "index": s["index"]}
+                for k, s in enumerate(steps)]  # fmt: skip
+    if times:
+        raise FieldError("times go with several files or every_step; a time column is a "
+                         "column with the role time")  # fmt: skip
+    return []
 
 
 def target_points(project, root: Path, where: str, work: Path) -> np.ndarray:
@@ -500,16 +714,25 @@ def field_inputs(project, root: Path, study, mesh) -> list:
     """The inputs a study's imported fields and body temperatures make (ADR 0044): a
     body temperature (uniform or a field) becomes a temperature load on the body's nodes,
     as a transfer's would; any other field-driven value goes as a "feature" input on its
-    selection's nodes, named by `feature_key`, for the adapter to write per face."""
-    from puzzle.model.schema import Component
+    selection's nodes, named by `feature_key`, for the adapter to write per face.
+
+    A field varying in time gives one input per solve step (`Input.step`), at the step's
+    time (`step_time`); in a transient step, its whole history (`Input.times`, one value
+    column per time) for the adapter to follow."""
+    from puzzle.model.schema import Component, ImportedField
     from puzzle.results.model import Field
     from puzzle.transfer import Input
 
     comp = project.get(study.component, Component)
+    steps = study.solve_steps()
     solved = set()
-    for s in study.solve_steps():
+    for s in steps:
         solved |= set(s.physics) or {p.type for p in comp.physics}
-    temperature: dict[int, float] = {}
+
+    def varies(use) -> bool:
+        return project.get(use.field, ImportedField).varies()
+
+    temperature: dict[int | None, dict[int, float]] = {}
     out = []
     for physics in comp.physics:
         if physics.type not in solved:
@@ -522,19 +745,50 @@ def field_inputs(project, root: Path, study, mesh) -> list:
                 raise FieldError(f"{f.type} on '{f.selection}': no such selection in the mesh")
             ids = group.node_ids
             xyz = mesh.node_coords(ids)
-            for name in sorted(set(f.fields) | ({"T"} if f.type == "body_temperature" else set())):
-                if name in f.fields:
-                    values, _ = use_values(project, root, f.fields[name], xyz)
-                else:
-                    values = np.full(len(ids), f.values[name].to_si())
-                if f.type == "body_temperature":
-                    temperature.update(zip(ids.tolist(), values.tolist(), strict=True))
-                    continue
-                field_ = Field(feature_key(f, name), "node", [""], ids, values[:, None])
-                out.append(Input(field_, "feature", f.selection, feature_key(f, name)))
-    if temperature:
-        ids = np.array(sorted(temperature), dtype=np.int64)
-        values = np.array([temperature[i] for i in ids.tolist()])[:, None]
+            when: list[int | None] = [None]
+            if any(varies(u) for u in f.fields.values()):
+                when = [k for k, s in enumerate(steps, 1)
+                        if s.solves(physics.type) and (not f.steps or k in f.steps)]  # fmt: skip
+            for k in when:
+                step = steps[k - 1] if k is not None else None
+                names = set(f.fields) | ({"T"} if f.type == "body_temperature" else set())
+                for name in sorted(names):
+                    key, use, history = feature_key(f, name), f.fields.get(name), None
+                    if use is None:
+                        values = np.full(len(ids), f.values[name].to_si())
+                    elif step is not None and step.type == "transient" and varies(use):
+                        if f.type == "body_temperature":
+                            raise FieldError(
+                                f"a body temperature varying in time can't be followed through "
+                                f"the transient step {k} yet (on {f.selection})",
+                                code="unsupported",
+                            )
+                        history, values = use_history(project, root, use, xyz)
+                    else:
+                        time = step_time(step, k) if k is not None else None
+                        values, _ = use_values(project, root, use, xyz, time)
+                    if f.type == "body_temperature":
+                        temperature.setdefault(k, {}).update(
+                            zip(ids.tolist(), values.tolist(), strict=True)
+                        )
+                        continue
+                    if history is not None:
+                        comps = [f"{t:g} s" for t in history]
+                        field_ = Field(key, "node", comps, ids, values)
+                        out.append(Input(field_, "feature", f.selection, key, step=k,
+                                         times=tuple(float(t) for t in history)))  # fmt: skip
+                    else:
+                        field_ = Field(key, "node", [""], ids, values[:, None])
+                        out.append(Input(field_, "feature", f.selection, key, step=k))
+    still = temperature.pop(None, {})
+    per_step: dict[int | None, dict[int, float]] = {None: still} if still else {}
+    if temperature:  # some vary: every step gets its own, the still ones in each
+        every = range(1, len(steps) + 1)
+        per_step = {k: still | temperature.get(k, {}) for k in every}
+        per_step = {k: v for k, v in per_step.items() if v}
+    for k, temps in sorted(per_step.items(), key=lambda kv: kv[0] or 0):
+        ids = np.array(sorted(temps), dtype=np.int64)
+        values = np.array([temps[i] for i in ids.tolist()])[:, None]
         out.append(Input(Field("temperature", "node", [""], ids, values), "load", None,
-                         "body temperature"))  # fmt: skip
+                         "body temperature", step=k))  # fmt: skip
     return out

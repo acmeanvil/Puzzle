@@ -1,0 +1,15 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  A two-cell case for Puzzle's OpenFOAM field reader (ADR 0044), written by hand.
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    location    "system";
+    object      controlDict;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+application simpleFoam;
+writeFormat ascii;

@@ -86,6 +86,13 @@ STEP_CHOICES = {
 
 # Values whose words aren't their key's (ADR 0050 bolt standards and preloads).
 VALUES = {
+    # An imported field's file format (ADR 0044)
+    "csv": "Delimited text",
+    "vtu": "VTK unstructured grid",
+    "fluent_profile": "Fluent profile",
+    "exodus": "Exodus II",
+    "ensight": "EnSight Gold",
+    "openfoam": "OpenFOAM",
     # A contact's interface treatment (ADR 0056)
     "as_is": "As meshed",
     "adjust": "Adjust to touch",

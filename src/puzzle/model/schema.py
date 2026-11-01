@@ -689,8 +689,21 @@ class FieldColumn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str
-    role: Literal["x", "y", "z", "value", "ignore"] = "value"
+    role: Literal["x", "y", "z", "value", "time", "ignore"] = "value"
     unit: str = Field(default="", description="the value's unit; coordinates use length_unit")
+
+
+class FieldTime(BaseModel):
+    """One time of a field that varies in time (ADR 0044): its own file, or a step of a
+    multi-step source (an Exodus or EnSight step, an OpenFOAM time directory)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    time: float = Field(description="s")
+    file: str = Field(default="", description="relative to the project; empty: the field's file")
+    file_hash: str = ""
+    index: str = Field(default="", description="the source's step: an Exodus or EnSight step "
+                       "number from 1, or an OpenFOAM time directory; empty: the last")  # fmt: skip
 
 
 class ImportedField(ProjectObject):
@@ -702,7 +715,7 @@ class ImportedField(ProjectObject):
 
     file: str = Field(description="the file, relative to the project")
     file_hash: str = Field(default="", description="its SHA-256: a changed file stales its users")
-    format: Literal["csv", "vtu"] = "csv"
+    format: Literal["csv", "vtu", "fluent_profile", "exodus", "ensight", "openfoam"] = "csv"
     delimiter: str | None = Field(default=None, description="None: commas, semicolons, tabs "
                                   "or spaces, found from the file")  # fmt: skip
     skip_rows: int = Field(default=0, ge=0, description="rows before the header (or the data)")
@@ -710,9 +723,23 @@ class ImportedField(ProjectObject):
     columns: list[FieldColumn] = Field(default_factory=list)
     length_unit: str = Field(default="m", description="the points' unit")
     placement: FieldPlacement = Field(default_factory=FieldPlacement)
+    region: str = Field(default="", description="a part of the source: an Exodus block or node "
+                        "set, an EnSight part, an OpenFOAM patch, a Fluent profile; empty: "
+                        "the volume (all of a profile file)")  # fmt: skip
+    index: str = Field(default="", description="the step read when the field holds still: as "
+                       "FieldTime.index; empty: the last")  # fmt: skip
+    times: list[FieldTime] = Field(
+        default_factory=list,
+        description="a field varying in time: its times, each a file or a source's step; "
+        "a study's step takes it at the step's time, linearly between, held outside",
+    )
 
     def dependencies(self) -> list[UUID]:
         return [self.placement.axes] if self.placement.axes is not None else []
+
+    def varies(self) -> bool:
+        """Whether the field varies in time: listed times, or a time column."""
+        return bool(self.times) or any(c.role == "time" for c in self.columns)
 
     def value_columns(self) -> list[str]:
         return [c.name for c in self.columns if c.role == "value"]

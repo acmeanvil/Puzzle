@@ -1,0 +1,9 @@
+FORMAT
+type: ensight gold
+
+GEOMETRY
+model: tet.geo
+
+VARIABLE
+scalar per node: T tet.T
+scalar per element: q tet.q

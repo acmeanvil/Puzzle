@@ -96,6 +96,32 @@ class Capabilities:
     field_features: frozenset[str] = frozenset({"body_temperature:T"})
     """Feature values taken from an imported field (ADR 0044), as "type:value"; a body
     temperature becomes a temperature load, which every adapter here applies."""
+    field_histories: frozenset[str] = frozenset()
+    """Feature values ("type:value") that follow an imported field varying in time
+    through a transient step (ADR 0044); the rest are refused there. Other steps take
+    such a field at their own time, which every field feature allows."""
+
+
+def _time_field_problems(solver: str, project, study, physics, caps) -> list[str]:
+    """Imported fields varying in time (ADR 0044) where they can't be followed: through a
+    transient step unless the adapter lists the value, or beside an amplitude."""
+    from puzzle.model.schema import ImportedField
+
+    out = []
+    transient = any(s.type == "transient" and s.solves(physics.type) for s in study.solve_steps())
+    for f in physics.features:
+        for key, use in f.fields.items():
+            field = project.objects.get(use.field)
+            if not isinstance(field, ImportedField) or not field.varies():
+                continue
+            if f.amplitude is not None:
+                out.append(f"{f.type} on {f.selection} follows an amplitude and a field "
+                           f"varying in time ({field.name}); keep one")  # fmt: skip
+            elif transient and f"{f.type}:{key}" not in caps.field_histories:
+                out.append(f"{solver} can't follow {f.type}'s {key} from a field varying in "
+                           f"time ({field.name}) through a transient step yet (on "
+                           f"{f.selection})")  # fmt: skip
+    return out
 
 
 def refuse_inputs(inputs: Sequence, solver: str, accepted: set[tuple[str, str]] = frozenset()):
@@ -196,6 +222,7 @@ class SolverAdapter(ABC):
                 for key in f.fields
                 if f"{f.type}:{key}" not in caps.field_features
             ]
+            problems += _time_field_problems(self.name, project, study, physics, caps)
             for f in physics.features:  # some steps only (ADR 0037): refused, never ignored
                 # Split studies (one job per step) see only each step's features.
                 if f.steps and not (caps.feature_steps or self.max_solve_steps is not None):
