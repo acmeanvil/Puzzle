@@ -18,6 +18,12 @@ EXAMPLE = Path(__file__).parents[1] / "examples" / "cantilever"
 def _example(tmp_path) -> Path:
     root = tmp_path / "original"
     shutil.copytree(EXAMPLE, root, ignore=shutil.ignore_patterns(".puzzle"))
+    # History and results are ignored by git: a fresh checkout has none, so make them.
+    if not (root / "history.jsonl").exists():
+        (root / "history.jsonl").write_text('{"kind": "command"}\n')
+    (root / "results").mkdir(exist_ok=True)
+    if not (root / "results" / "store.json").exists():
+        (root / "results" / "store.json").write_text('{"format": 2}')
     (root / ".puzzle" / "runs" / "study-1").mkdir(parents=True)  # a solver's working files
     (root / ".puzzle" / "runs" / "gui-mesh").mkdir(parents=True)  # a kept mesh
     (root / ".puzzle" / "runs" / "gui-mesh" / "mesh.msh").write_text("mesh")
