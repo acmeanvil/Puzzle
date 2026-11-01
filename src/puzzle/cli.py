@@ -54,6 +54,75 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
 
+def _versions(args) -> int:
+    from puzzle.project import versions
+
+    if args.show:
+        v = versions.get(
+            args.project, args.show if args.show in ("good", "latest") else int(args.show)
+        )
+        print(json.dumps(v.to_dict(), indent=2))
+        return 0
+    from datetime import datetime, timedelta
+
+    def when(text, end=False):
+        if not text:
+            return None
+        t = datetime.fromisoformat(text)
+        if end and "T" not in text:  # a date: through the end of that day
+            t += timedelta(days=1) - timedelta(microseconds=1)
+        return t
+
+    every = versions.versions(args.project)
+    unknown = set(args.types or []) - set(versions.TYPES)
+    if unknown:
+        raise CliError(
+            f"unknown type {', '.join(sorted(unknown))}; one of {', '.join(versions.TYPES)}"
+        )
+    found = versions.select(every, by=args.by, types=args.types, since=when(args.since),
+                            until=when(args.until, end=True), good=True if args.good else None,
+                            text=args.search)  # fmt: skip
+    if not every:
+        print("no versions yet (one is made at the first change)")
+    elif not found:
+        print(f"none of the {len(every)} versions match")
+    for v in reversed(found):
+        when = v.when.astimezone().strftime("%Y-%m-%d %H:%M")
+        good = "  known good" if v.good else ""
+        print(f"{v.number:>4}  {when}  {v.by:<8} {v.what}{good}")
+    return 0
+
+
+def _version_save(args) -> int:
+    from puzzle.commands import Session
+
+    v = Session(args.project).save_version(label=args.label, note=args.note, good=args.good)
+    print(f"saved version {v.number}" + (f": {v.label}" if v.label else ""))
+    return 0
+
+
+def _version_restore(args) -> int:
+    from puzzle.commands import Session
+
+    which = args.version if args.version in ("good", "latest") else int(args.version)
+    s = Session(args.project)
+    s.restore_version(which)
+    entry = s.history_entries()[-1]
+    print(f"restored version {entry['restored']}; the state replaced is version "
+          f"{entry['files_from']}, and undo takes the restore back")  # fmt: skip
+    return 0
+
+
+def _save_as(args) -> int:
+    from puzzle.project.copy import save_as
+
+    done = save_as(args.project, args.dest, args.name)
+    print(done.summary())
+    for was, now in done.brought_in.items():
+        print(f"  {was} -> {now}")
+    return 0
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="puzzle", description="Puzzle FEM multi-solver front end")
     sub = parser.add_subparsers(required=True, metavar="COMMAND")
@@ -74,6 +143,40 @@ def _parser() -> argparse.ArgumentParser:
         help="print the solver's whole log instead of a one-line progress status",
     )  # fmt: skip
     p.set_defaults(handler=_run)
+
+    p = sub.add_parser("save-as", help="a full, independent copy of the project in a new folder")
+    p.add_argument("project", type=Path)
+    p.add_argument("dest", type=Path, help="a new or empty folder outside the project")
+    p.add_argument("--name", help="the copy's name (default: the project's)")
+    p.set_defaults(handler=_save_as)
+
+    p = sub.add_parser("versions", help="the project's versions, newest first (ADR 0059)")
+    p.add_argument("project", type=Path)
+    p.add_argument("--show", metavar="N", help="one version's summary in full")
+    p.add_argument("--by", choices=["you", "puzzle", "agent"], help="who made them")
+    p.add_argument("--type", action="append", dest="types", metavar="TYPE",
+                   help="user, first, opened, before_run, edits, before_restore, copied "
+                   "(repeat for several)")  # fmt: skip
+    p.add_argument("--since", help="from this date (YYYY-MM-DD) or time (YYYY-MM-DDTHH:MM)")
+    p.add_argument("--until", help="up to this date or time (a date includes its day)")
+    p.add_argument("--good", action="store_true", help="known good ones only")
+    p.add_argument("--search", default="", help="words in the label, note or changes")
+    p.set_defaults(handler=_versions)
+
+    p = sub.add_parser("version-save", help="save a version of the project as it is now")
+    p.add_argument("project", type=Path)
+    p.add_argument("--label", default="", help="a few words naming it")
+    p.add_argument("--note", default="")
+    p.add_argument("--good", action="store_true", help="mark it known good")
+    p.set_defaults(handler=_version_save)
+
+    p = sub.add_parser(
+        "version-restore",
+        help="make the project a version's again (the state replaced is kept as a version)",
+    )
+    p.add_argument("project", type=Path)
+    p.add_argument("version", help="its number, or 'good' for the latest known good")
+    p.set_defaults(handler=_version_restore)
 
     p = sub.add_parser("runs", help="list stored runs")
     p.add_argument("project", type=Path)

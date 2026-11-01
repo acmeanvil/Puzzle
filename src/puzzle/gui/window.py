@@ -483,6 +483,18 @@ class MainWindow(QMainWindow):
             lambda shown: shown and self.contacts.refresh()
         )
         self.contacts_dock.hide()  # Window → Contacts, or Model → Contact tool
+        # ADR 0059: the project's versions, tabbed with the messages too.
+        from puzzle.gui.versions_panel import VersionsPanel
+
+        self.versions = VersionsPanel(self)
+        self.versions_dock = self.docks.add(
+            "versions", "Versions", self.versions, Qt.DockWidgetArea.BottomDockWidgetArea
+        )
+        self.docks.tab("messages", "versions")
+        self.versions_dock.visibilityChanged.connect(
+            lambda shown: shown and self.versions.refresh()
+        )
+        self.versions_dock.hide()  # Window → Versions, or Project → Versions…
         self.agent_dock.hide()
         self.advisor_dock.hide()
         self.docks.builtin("modelling", "Modelling", lambda: self._layout("modelling"))
@@ -602,6 +614,8 @@ class MainWindow(QMainWindow):
         self.sections.refresh()
         self.bolts.refresh()
         self.contacts.refresh()
+        if self.versions_dock.isVisible():
+            self.versions.refresh()
         self.agent.refresh()
         waiting = self.agent.proposals.count()
         if waiting > self._proposals_seen:  # a new proposal: open the agent, no focus
@@ -847,6 +861,18 @@ class MainWindow(QMainWindow):
         for name, text, key, slot in (
             ("new", "New…", QKeySequence.StandardKey.New, self._new_dialog),
             ("open", "Open…", QKeySequence.StandardKey.Open, self._open_dialog),
+            (
+                "save_as",
+                "Save as new project…",
+                QKeySequence.StandardKey.SaveAs,
+                lambda: self._save_as_dialog(),
+            ),
+            (
+                "save_version",
+                "Save version…",
+                QKeySequence.StandardKey.Save,
+                lambda: self.save_version_dialog(),
+            ),
             ("undo", "Undo", QKeySequence.StandardKey.Undo, self.undo),
             ("mesh", "Mesh", "Ctrl+M", self.mesh_selected),
             ("run", "Run", "Ctrl+R", self.run_selected),
@@ -1017,6 +1043,125 @@ class MainWindow(QMainWindow):
         )
         if got is not None:
             self.new_project(Path(got["folder"]), got["name"], got["units"])
+
+    # --- versions (ADR 0059) ----------------------------------------------------
+
+    def open_versions(self) -> None:
+        self.docks.show("versions")
+        self.versions.refresh()
+
+    def save_version(self, label: str = "", note: str = "", good: bool = False):
+        try:
+            v = self.session.save_version(label=label, note=note, good=good)
+        except PuzzleError as exc:
+            self.report(exc)
+            return None
+        words = f"Saved version {v.number}" + (f": {v.label}" if v.label else "")
+        self.statusBar().showMessage(words, 6000)
+        self.versions.refresh()
+        return v
+
+    def save_version_dialog(self) -> None:
+        from puzzle.gui.quick_form import Ask
+
+        if self.session is None:
+            return
+        got = self.ask_form(
+            "Save version",
+            [
+                Ask("label", "Label", kind="text",
+                    help="A few words, such as 'Before the redesign'"),
+                Ask("note", "Note", kind="multiline"),
+                Ask("good", "Known good",
+                    choices=[("Not marked", False), ("Mark it known good", True)]),
+            ],
+            intro="Keeps the project as it is now, to come back to (Project → Versions…). "
+            "Puzzle also keeps versions itself, before runs and after a run of changes.",
+        )  # fmt: skip
+        if got is not None:
+            self.save_version(got["label"], got["note"], bool(got["good"]))
+
+    def restore_version(self, number, confirm: bool = True) -> bool:
+        """Make the project version `number`'s (or "good") after asking; undo takes it
+        back."""
+        from puzzle.gui.quick_form import Ask
+        from puzzle.project import versions
+
+        try:
+            v = versions.get(self.session.root, number)
+        except PuzzleError as exc:
+            self.report(exc)
+            return False
+        if confirm:
+            got = self.ask_form(
+                f"Restore version {v.number}?",
+                [Ask("sure", "Restore", choices=[("Restore it", True), ("Cancel", False)])],
+                intro=f"{v.what} ({v.when.astimezone():%Y-%m-%d %H:%M}, by {v.by}). The "
+                "project as it is now is kept as a version first, and Undo takes the "
+                "restore back. Results stay.",
+            )
+            if got is None or not got["sure"]:
+                return False
+        try:
+            self.session.restore_version(v.number)
+        except PuzzleError as exc:
+            self.report(exc)
+            return False
+        self.reload()
+        self.statusBar().showMessage(f"Restored version {v.number}: {v.what}", 8000)
+        self.versions.refresh()
+        return True
+
+    def roll_back_good(self, confirm: bool = True) -> bool:
+        return self.restore_version("good", confirm)
+
+    def save_as(self, dest: Path, name: str, open_copy: bool = True, version=None):
+        """Save as New Project: a full, independent copy of the open project in `dest`
+        (puzzle.project.copy), then open the copy if asked."""
+        from puzzle.project.copy import save_as
+
+        try:
+            done = save_as(self.session.root, dest, name, version=version)
+        except PuzzleError as exc:
+            self.report(exc)
+            return None
+        self.statusBar().showMessage(done.summary(), 8000)
+        if open_copy:
+            self.open(done.root)
+        return done
+
+    def _save_as_dialog(self, version=None) -> None:
+        from puzzle.gui.quick_form import Ask
+
+        if self.session is None:
+            return
+        here = self.session.root
+        got = self.ask_form(
+            "Save as new project",
+            [
+                Ask("name", "Name", kind="text", default=f"{self.session.project.name} copy"),
+                Ask("folder", "Folder", kind="folder",
+                    help="A new or empty folder outside this project's"),
+                Ask("open", "Then", choices=[("Open the copy", True),
+                                             ("Stay in this project", False)]),
+            ],
+            intro=(f"A new project from version {version}: " if version is not None
+                   else "A full copy: ")
+            + "geometry and its files, meshes, results, imported fields, versions and "
+            "history. The two projects are independent afterwards.",
+            check=lambda v: (
+                "Choose a folder"
+                if not v["folder"]
+                else (
+                    "Choose a folder outside this project's"
+                    if Path(v["folder"]).resolve() == here.resolve()
+                    or here.resolve() in Path(v["folder"]).resolve().parents
+                    else ("Give it a name" if not v["name"] else None)
+                )
+            ),
+        )  # fmt: skip
+        if got is not None:
+            self.save_as(Path(got["folder"]), got["name"], bool(got["open"]), version)
 
     def _open_dialog(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Open a Puzzle project")

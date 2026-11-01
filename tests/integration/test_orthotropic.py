@@ -166,7 +166,8 @@ def test_radial_conduction_in_cylindrical_axes(tmp_path, solver):
     mesh = project.add(MeshRecipe(name="M", global_size=qty(0.8, "mm")))
     physics = Physics(type="heat_transfer", settings=CONSTANT, features=[
         Feature(type="temperature", selection="Tube/Outside", values={"T": qty(T0, "K")}),
-        Feature(type="heat_flux", selection="Tube/Inside", values={"q": qty(q, "W/m^2")})])  # fmt: skip
+        Feature(type="heat_flux", selection="Tube/Inside",
+                values={"q": qty(q, "W/m^2")})])  # fmt: skip
     comp = project.add(Component(name="Tube", mesh=mesh.id,
                                  parts=[PartInstance(name="Tube", geometry=geo.id)],
                                  materials=[MaterialAssignment(material=steel.id,

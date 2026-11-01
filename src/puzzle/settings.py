@@ -228,6 +228,40 @@ PREFERENCES: list[Preference] = [
         "How the agent panel's message box sends what you typed.",
     ),
     Preference(
+        "versions.auto",
+        "Versions",
+        "Automatic versions",
+        True,
+        [("On", True), ("Off: only the ones I save", False)],
+        "Puzzle keeps a version of the project before each run, after a run of changes "
+        "and before a restore, so you can roll back (ADR 0059). Versions you save are "
+        "always kept.",
+    ),
+    Preference(
+        "versions.every_edits",
+        "Versions",
+        "A version after this many changes",
+        20,
+        [(str(n), n) for n in (5, 10, 20, 50, 100)],
+        "Or after the time below, whichever comes first.",
+    ),
+    Preference(
+        "versions.every_minutes",
+        "Versions",
+        "Or after this long",
+        15,
+        [("5 minutes", 5), ("15 minutes", 15), ("30 minutes", 30), ("1 hour", 60)],
+    ),
+    Preference(
+        "versions.keep_auto",
+        "Versions",
+        "Automatic versions kept",
+        30,
+        [("10", 10), ("30", 30), ("100", 100), ("All", 0)],
+        "Older automatic versions are thinned to one a day. Yours and the known good "
+        "ones are kept until you delete them.",
+    ),
+    Preference(
         "solvers.level",
         "Solvers",
         "Solver settings shown",

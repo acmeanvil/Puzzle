@@ -433,3 +433,15 @@ def test_an_old_results_store_can_be_moved_aside(app, tmp_path, monkeypatch):
         while w.tasks:
             app.processEvents()
         w.close()
+
+
+def test_save_as_new_project_opens_an_independent_copy(window, tmp_path):
+    before = window.session.root
+    name = window.session.project.name
+    assert window.actions_by_name["save_as"].text() == "Save as new project…"
+    done = window.save_as(tmp_path / "copy", "Copy of the bar")
+    assert done is not None and window.session.root == done.root
+    assert window.session.project.name == "Copy of the bar"
+    assert Session(before).project.name == name  # the original keeps its name
+    stay = window.save_as(tmp_path / "second", "Another", open_copy=False)
+    assert stay is not None and window.session.root == done.root

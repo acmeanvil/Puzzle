@@ -576,6 +576,49 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
     def proposals() -> list[dict[str, Any]]:
         return session().proposals()
 
+    # --- versions (ADR 0059) --------------------------------------------------------
+
+    @tool(description="The project's versions, newest first: number, time, by, what, known "
+          "good, and each one's summary (studies and their state, what changed). Filter by "
+          "who (by: you, puzzle, agent), types (user, first, opened, before_run, edits, "
+          "before_restore, copied), since/until (ISO dates), good, and text.")  # fmt: skip
+    @guarded
+    def versions_list(
+        limit: int = 20, by: str | None = None, types: list[str] | None = None,
+        since: str | None = None, until: str | None = None, good: bool | None = None,
+        text: str = "",
+    ) -> dict[str, Any]:  # fmt: skip
+        """Filters: by (you, puzzle, agent), types (user, first, opened, before_run, edits,
+        before_restore, copied), since/until (ISO dates or times), good, text."""
+        from datetime import datetime
+
+        from puzzle.project import versions
+
+        every = versions.versions(root)
+        found = versions.select(
+            every, by=by, types=types, good=good, text=text,
+            since=datetime.fromisoformat(since) if since else None,
+            until=datetime.fromisoformat(until) if until else None,
+        )  # fmt: skip
+        return {"versions": [v.to_dict() for v in reversed(found[-limit:])],
+                "matching": len(found), "count": len(every)}  # fmt: skip
+
+    @tool(description="Save a version of the project as it is now (before a risky batch "
+          "of changes, say), with a label; `good` marks it known good.")  # fmt: skip
+    @guarded
+    def version_save(label: str, note: str = "", good: bool = False) -> dict[str, Any]:
+        if actor.is_agent and session().project.agent.level == "advise":
+            raise PuzzleError("agents only advise in this project", code="not_allowed")
+        return session().save_version(actor, label=label, note=note, good=good).to_dict()
+
+    @tool(description="Make the project a version's again: its number, or 'good' for the "
+          "latest known good. The state replaced is kept as a version and undo takes the "
+          "restore back. Agents restore only where the autonomy level lets them act.")  # fmt: skip
+    @guarded
+    def version_restore(version: str) -> dict[str, Any]:
+        which = version if version in ("good", "latest") else int(version)
+        return session().restore_version(which, actor).to_dict()
+
     @tool(description="The autonomy level, budget and what agents have used of it.")
     @guarded
     def autonomy() -> dict[str, Any]:

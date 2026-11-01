@@ -21,6 +21,7 @@ CODES = {
     "confirmation_required": "the change needs a further confirmation",
     "not_undoable": "the command cannot be undone",
     "busy": "another client holds the project lock",
+    "exists": "the folder or file is already there",
     # Running studies
     "invalid_input": "the study cannot be written for this solver",
     "mesh_failed": "meshing failed",

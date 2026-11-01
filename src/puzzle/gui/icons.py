@@ -26,6 +26,8 @@ TABLER_DIR = Path(__file__).with_name("tabler")
 TABLER = {
     "new": "file-plus",
     "open": "folder-open",
+    "save_as": "copy",
+    "save_version": "device-floppy",
     "undo": "arrow-back-up",
     "settings": "settings",
     "run": "player-play",

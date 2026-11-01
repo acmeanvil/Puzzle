@@ -212,8 +212,14 @@ def _project(window, menu: QMenu) -> None:
     from puzzle.gui import menus
 
     a = window.actions_by_name
-    for name in ("new", "open", "reload"):
+    for name in ("new", "open", "save_as", "reload"):
         menu.addAction(a[name])
+    menu.addSeparator()  # ADR 0059: versions in place of a Save
+    menu.addAction(a["save_version"])
+    _add(menu, "Versions…", lambda: window.open_versions(),
+         "The project's versions: filter them, see what each held, restore one")  # fmt: skip
+    _add(menu, "Roll back to last known good…", lambda: window.roll_back_good(),
+         "Restore the latest version marked known good (a solved state)")  # fmt: skip
     menu.addSeparator()
     menu.addAction(a["undo"])
     menu.addAction(a["delete"])
@@ -545,6 +551,7 @@ def _window(window, menu: QMenu, agent: QAction, messages: QAction) -> None:
         (window.sections_dock, "Sections", "Ctrl+4"),
         (window.bolts_dock, "Bolts", "Ctrl+5"),
         (window.contacts_dock, "Contacts", "Ctrl+7"),
+        (window.versions_dock, "Versions", "Ctrl+8"),
     ):
         # Not the dock's own toggle action: Qt renames that with the dock's title
         # (Properties reads "Tool" while a tool is open).

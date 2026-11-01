@@ -104,6 +104,7 @@ class Session:
             raise PuzzleError(f"{root} is not a Puzzle project", code="not_found")
         self.root = root
         self.project = load_project(root)
+        self._opened_checked = False  # ADR 0059: one "opened" version check per session
 
     # --- submitting --------------------------------------------------------------
 
@@ -130,12 +131,17 @@ class Session:
             study = resolve(self.project, cmd.study, Study)
             timeout = self._run_timeout(cmd, actor)
             snapshot = copy.deepcopy(self.project)
+            solved_from = self._auto_version(
+                "before_run", actor, words={"study": study.name}, always_latest=True
+            )
         # Solve outside the lock, so other clients can keep working meanwhile.
         run, data = self._run(snapshot, study, cmd, timeout, on_output, on_event, cancel)
         with self._locked():
             seq = self._log(
                 {"type": "command", "actor": actor.to_dict(), "command": _dump(cmd), "result": data}
             )
+            if solved_from is not None:  # the state it solved from works (ADR 0059)
+                self._mark_solved(solved_from, study.name)
         return Outcome("applied", seq=seq, data=data, problems=self.project.problems(), run=run)
 
     def submit_batch(
@@ -160,6 +166,7 @@ class Session:
             decisions = {self._authorize(c, actor) for c in cmds}
             if "propose" in decisions:
                 return self._propose(cmds, actor, rationale)
+            self._check_opened(actor)
             before = _snapshot(self.project)
             trial = copy.deepcopy(self.project)
             results = []
@@ -172,7 +179,9 @@ class Session:
             self.project = trial
             dumped = {"command": "batch", "commands": [_dump(c) for c in cmds]}
             extra = {"rationale": rationale} if rationale else {}
-            return self._record(dumped, actor, before, extra=extra, data={"steps": results})
+            out = self._record(dumped, actor, before, extra=extra, data={"steps": results})
+            self._edits_version(actor)
+            return out
 
     def propose(
         self, commands: list[dict[str, Any] | _Command], actor: Actor, *, rationale: str = ""
@@ -310,6 +319,13 @@ class Session:
                     details={"objects": names},
                 )
             before = current
+            if (entry.get("command") or {}).get("command") == "restore_version" and entry.get(
+                "files_from"
+            ):  # a restore's files go back too (ADR 0059)
+                from puzzle.project import versions
+
+                versions.restore_files(self.root, versions.get(self.root, entry["files_from"]))
+                self.project = load_project(self.root)
             for i in state["after"]:
                 self.project.objects.pop(UUID(i), None)
             for snap in state["before"].values():
@@ -318,6 +334,122 @@ class Session:
             return self._record(
                 {"command": "undo", "seq": seq}, actor, before, extra={"undoes": seq}
             )
+
+    # --- versions (ADR 0059) ------------------------------------------------------
+
+    def save_version(
+        self, actor: Actor = USER, *, label: str = "", note: str = "", good: bool = False
+    ):
+        """A version of the project as it is now, saved on purpose (always made)."""
+        from puzzle.project import versions
+
+        with self._locked():
+            return versions.save(
+                self.root, how="user", trigger="user", actor=actor.to_dict(), label=label,
+                note=note, good=good, good_reason="marked by you" if good else "",
+                history_seq=self._last_seq(), project=self.project,
+            )  # fmt: skip
+
+    def restore_version(self, number: int | str, actor: Actor = USER) -> Outcome:
+        """Make the project version `number`'s (or "good": the latest known good). The
+        state replaced is kept as a "before restoring" version first, and the restore
+        is one history entry, so undo takes it back."""
+        from puzzle.project import versions
+
+        if actor.is_agent and self.project.agent.level not in ("act", "act_in_budget"):
+            raise PuzzleError(
+                "restoring a version replaces much at once: ask the user to restore it",
+                code="not_allowed",
+            )
+        with self._locked():
+            target = versions.get(self.root, number)
+            kept = self._auto_version(
+                "before_restore", actor, words={"version": target.number},
+                always_latest=True, forced=True,
+            )  # fmt: skip
+            before = _snapshot(self.project)
+            changed = versions.restore_files(self.root, target)
+            self.project = load_project(self.root)
+            return self._record(
+                {"command": "restore_version", "version": target.number}, actor, before,
+                extra={"restored": target.number, "files_from": kept.number if kept else None,
+                       "files": changed},
+            )  # fmt: skip
+
+    def mark_version(self, number: int, good: bool = True, actor: Actor = USER):
+        from puzzle.project import versions
+
+        if actor.is_agent and self.project.agent.level == "advise":
+            raise PuzzleError("agents only advise in this project", code="not_allowed")
+        with self._locked():
+            return versions.mark(self.root, number, good, "marked by you" if good else "")
+
+    def _last_seq(self) -> int:
+        return max((e.get("seq", 0) for e in self.history_entries()), default=0)
+
+    def _versions_on(self) -> bool:
+        from puzzle.settings import current
+
+        try:
+            return bool(current().get("versions.auto"))
+        except Exception:  # noqa: BLE001 - no settings (a bare script): on
+            return True
+
+    def _auto_version(
+        self, trigger: str, actor: Actor, *, words=None, always_latest=False, forced=False
+    ):
+        """An automatic version when something changed since the latest; with
+        `always_latest`, the latest version when nothing did (the state it holds).
+        `forced` makes one even with automatic versions off (before a restore)."""
+        from puzzle.project import versions
+
+        if not forced and not self._versions_on():
+            return None
+        try:
+            made = versions.save(
+                self.root, how="auto", trigger=trigger, actor=actor.to_dict(),
+                history_seq=self._last_seq(), project=self.project, words=words,
+                only_if_changed=True,
+            )  # fmt: skip
+        except OSError:  # a read-only or full disk never stops the work itself
+            return None
+        return made if made is not None or not always_latest else versions.latest(self.root)
+
+    def _check_opened(self, actor: Actor) -> None:
+        """Before this session's first change: a version of the project as found, when
+        it changed outside Puzzle (or has none yet)."""
+        if self._opened_checked:
+            return
+        self._opened_checked = True
+        from puzzle.project import versions
+
+        first = versions.latest(self.root) is None
+        self._auto_version("first" if first else "opened", actor)
+
+    def _edits_version(self, actor: Actor) -> None:
+        from puzzle.project import versions
+        from puzzle.settings import current
+
+        if not self._versions_on():
+            return
+        try:
+            every = int(current().get("versions.every_edits"))
+            minutes = float(current().get("versions.every_minutes"))
+        except Exception:  # noqa: BLE001
+            every, minutes = 20, 15.0
+        now, count = versions.due(self.root, every, minutes)
+        if now:
+            self._auto_version("edits", actor, words={"count": count})
+
+    def _mark_solved(self, v, study: str) -> None:
+        from puzzle.project import versions
+
+        try:
+            current = versions.get(self.root, v.number)
+            reason = "; ".join(r for r in (current.good_reason, f"solved {study}") if r)
+            versions.mark(self.root, v.number, True, reason)
+        except (PuzzleError, OSError):
+            pass
 
     # --- reading ---------------------------------------------------------------
 
@@ -396,12 +528,15 @@ class Session:
     ) -> Outcome:
         if isinstance(cmd, SetAutonomy):
             return self._set_autonomy(cmd, actor)
+        self._check_opened(actor)
         before = _snapshot(self.project)
         data = _execute(self.project, cmd)
         extra: dict[str, Any] = {"result": data} if data else {}
         if approved_by:
             extra |= {"approved_by": approved_by.to_dict(), "proposal": proposal}
-        return self._record(_dump(cmd), actor, before, extra=extra, data=data)
+        out = self._record(_dump(cmd), actor, before, extra=extra, data=data)
+        self._edits_version(actor)
+        return out
 
     def _record(
         self,
