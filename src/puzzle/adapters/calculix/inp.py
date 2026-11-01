@@ -37,13 +37,16 @@ from puzzle.adapters.common import (
     body_forces,
     body_load,
     check_contacts,
+    consistent_faces,
     fastener_values,
     feature_vector,
+    flux_sources,
     globalize,
     initial_temperature,
     nodal_edge_forces,
     nodal_traction,
     plane_thickness,
+    pressure_forces,
     rayleigh,
     remote_load,
     remote_values,
@@ -938,7 +941,7 @@ def _step(
     out += _features(features, mesh, faces, op, _amplitude_names(comp), rigid, extra)
     if op:  # a card not written again would keep the step before's loads: clear it
         resets = (["*BOUNDARY", "*CLOAD", "*DLOAD"] if "solid_mechanics" in solved else []) + (
-            ["*BOUNDARY", "*DFLUX", "*FILM"] if "heat_transfer" in solved else []
+            ["*BOUNDARY", "*CFLUX", "*DFLUX", "*FILM"] if "heat_transfer" in solved else []
         )
         for card in dict.fromkeys(resets):
             if not any(line.startswith(card) for line in out):
@@ -1538,7 +1541,7 @@ def _features(
         for card, lines in rows.items():  # (card, amplitude) keys: a field's histories
             cards.setdefault(card if isinstance(card, tuple) else (card, amp), []).extend(lines)
     out: list[str] = []
-    order = ("*BOUNDARY", "*CLOAD", "*DLOAD", "*DFLUX", "*FILM")
+    order = ("*BOUNDARY", "*CLOAD", "*DLOAD", "*CFLUX", "*DFLUX", "*FILM")
     for (card, amp), lines in sorted(
         cards.items(), key=lambda k: (order.index(k[0][0]), k[0][1] or "")
     ):
@@ -1548,7 +1551,7 @@ def _features(
 
 
 def _feature_rows(f: Feature, mesh: Mesh, faces: FaceLookup, rigid=None) -> dict:
-    boundary, cload, dload, dflux, film = [], [], [], [], []
+    boundary, cload, dload, cflux, dflux, film = [], [], [], [], [], []
     histories: dict[tuple[str, str], list[str]] = {}  # (card, amplitude) -> rows
     group = mesh.groups.get(f.selection)
     if group is None:
@@ -1597,6 +1600,11 @@ def _feature_rows(f: Feature, mesh: Mesh, faces: FaceLookup, rigid=None) -> dict
         dload.append(f"{set_name('E', f.selection)}, P, {-v['p']:.10g}")
     elif f.type == "pressure" and _history(f, "p") is not None:  # in time (ADR 0044)
         histories.update(_history_rows(f, "p", "*DLOAD", "P", group, mesh, faces))
+    elif f.type == "pressure" and "p" in f.fields and consistent_faces(group, mesh):
+        # From a field (ADR 0044): consistent nodal forces ∫N (-p n) dA, the field's own
+        # interpolant; a value per face would smear a field varying within a few faces.
+        for node, force in sorted(pressure_forces(group, mesh, _given(f, "p")[0]).items()):
+            cload += [f"{node}, {d + 1}, {force[d]:.10g}" for d in range(3) if force[d]]
     elif f.type == "pressure" and "p" in f.fields:  # per face, from a field (ADR 0044)
         dload += [f"{e}, P{n}, {p:.10g}" for e, n, p in _face_values(f, "p", group, mesh, faces)]
     elif f.type == "pressure":
@@ -1634,6 +1642,10 @@ def _feature_rows(f: Feature, mesh: Mesh, faces: FaceLookup, rigid=None) -> dict
             )
     elif f.type == "heat_flux" and _history(f, "q") is not None:
         histories.update(_history_rows(f, "q", "*DFLUX", "S", group, mesh, faces))
+    elif f.type == "heat_flux" and "q" in f.fields and consistent_faces(group, mesh):
+        field = _given(f, "q")[0]  # consistent nodal heat flows ∫N q dA (ADR 0044)
+        flows = flux_sources(group, mesh, field.at)
+        cflux += [f"{node}, 11, {q:.10g}" for node, q in sorted(flows.items()) if q]
     elif f.type == "heat_flux" and "q" in f.fields:
         dflux += [f"{e}, S{n}, {q:.10g}" for e, n, q in _face_values(f, "q", group, mesh, faces)]
     elif f.type == "heat_flux":
@@ -1648,6 +1660,7 @@ def _feature_rows(f: Feature, mesh: Mesh, faces: FaceLookup, rigid=None) -> dict
         "*BOUNDARY": boundary,
         "*CLOAD": cload,
         "*DLOAD": dload,
+        "*CFLUX": cflux,
         "*DFLUX": dflux,
         "*FILM": film,
         **histories,

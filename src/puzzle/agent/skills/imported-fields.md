@@ -106,11 +106,10 @@ refused by name, never ignored):
   load)"; thermal strain from the physics' `reference_temperature`): every FE solver.
 - **pressure p, heat_flux q, convection h and T_inf** (on face selections): CalculiX,
   Code_Aster, Elmer and FEniCSx, steady or transient, a flux or pressure also times
-  its amplitude. CalculiX takes one value per face (the mean of its nodes), which
-  smears a field that varies within a few elements (a linear flux's spread across a
-  10 mm face came out 4.6 % short on 2.5 mm tets); the other three integrate the
-  field's own finite-element interpolant (Code_Aster: pressure as consistent nodal
-  forces, flux and films as FORMULEs over the faces; Elmer: restart variables read by
+  its amplitude. All four integrate the field's own finite-element interpolant
+  (CalculiX: pressure and flux as consistent nodal loads, films one value per face;
+  Code_Aster: pressure as consistent nodal forces, flux and films as FORMULEs over
+  the faces; Elmer: restart variables read by
   `Equals`; FEniCSx: Lagrange functions). Code_Aster refuses flux and film fields on 2D
   models so far.
 - **body_force fx/fy/fz, traction tx/ty/tz, displacement x/y/z:** CalculiX and

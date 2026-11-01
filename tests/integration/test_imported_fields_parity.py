@@ -145,10 +145,10 @@ def test_an_imported_linear_heat_flux_balances_and_spreads(tmp_path, solver):
         f"y = 0 edge {low:.6g} ({exact_low:.6g}), y = w edge {high:.6g} ({exact_high:.6g})"
     )
     assert mean == pytest.approx(exact_mean, abs=0.002 * (exact_mean - T0))
-    # The others integrate the field's interpolant (FEniCSx: 10.175 K of 10.177);
-    # CalculiX's one value per face smears the spread to 9.71 K, 4.6 % short.
+    # Every solver integrates the field's own interpolant (FEniCSx: 10.175 K of 10.177;
+    # CalculiX as *CFLUX nodal heat flows: one value per face had smeared it to 9.71 K).
     spread, exact_spread = high - low, exact_high - exact_low
-    assert spread == pytest.approx(exact_spread, rel=0.06 if solver == "calculix" else 0.01)
+    assert spread == pytest.approx(exact_spread, rel=0.01)
 
 
 @over(*SOLVERS)

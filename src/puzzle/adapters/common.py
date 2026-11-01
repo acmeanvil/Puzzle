@@ -763,6 +763,24 @@ def traction_forces(group, mesh: Mesh, at) -> dict[int, np.ndarray]:
     return _consistent(_face_points(group, mesh), at)
 
 
+def flux_sources(group, mesh: Mesh, at) -> dict[int, float]:
+    """Consistent nodal heat flows ∫ N_k q dA (W) of a heat flux given at the face
+    selection's nodes (`at(ids) -> (m, 1)`), interpolated with the faces' own shape
+    functions on their curved geometry (ADR 0044): the field's own interpolant, where a
+    value per face would smear it."""
+    if mesh.planar:
+        raise InputError("a heat flux field on a 2D model's edges is written per face",
+                         code="unsupported")  # fmt: skip
+    return {n: float(q[0]) for n, q in _consistent(_face_points(group, mesh), at).items()}
+
+
+def consistent_faces(group, mesh: Mesh) -> bool:
+    """Whether a face selection's nodal loads can be integrated (3D, triangle faces)."""
+    return not mesh.planar and all(
+        b.element in ("tri3", "tri6") for b in surface_blocks(group, mesh)
+    )
+
+
 def body_forces(group, mesh: Mesh, at) -> dict[int, np.ndarray]:
     """Consistent nodal forces ∫ N_k f dV of a force per volume given at the body
     selection's nodes (`at(ids) -> (m, 3)`), interpolated with the elements' shape
