@@ -59,7 +59,8 @@ def main() -> None:
     with open("case.json") as f:
         case = json.load(f)
     SETTINGS.update(case.get("settings", {}))
-    data = read_from_msh("mesh.msh", MPI.COMM_WORLD, 0, gdim=3)
+    planar = case.get("dimension", "3d") != "3d"  # ADR 0048: a 2D model in the XY plane
+    data = read_from_msh("mesh.msh", MPI.COMM_WORLD, 0, gdim=2 if planar else 3)
     msh, cells, facets, groups = data.mesh, data.cell_tags, data.facet_tags, data.physical_groups
     degree = (msh.geometry.cmaps[0] if hasattr(msh.geometry, "cmaps") else msh.geometry.cmap).degree
     dx = ufl.Measure("dx", domain=msh, subdomain_data=cells)
@@ -112,6 +113,8 @@ def main() -> None:
     }.get(case["physics"])
     if case["physics"] == "custom_pde":
         solve_custom(case, msh, degree, cells, facets, tag, piecewise, out)
+    elif case["physics"] == "solid_mechanics" and planar:
+        solve_solid_2d(case, msh, degree, dx, ds, facets, tag, piecewise, out)
     elif case["physics"] == "heat_transfer":
         solve_heat(case, msh, degree, dx, ds, facets, tag, of_temperature, out)
     else:
@@ -541,32 +544,106 @@ def solve_harmonic(step, a, m, loads, bcs, V, stress, out) -> None:
     out["displacement_imag"] = np.asarray(imag)
 
 
+def solve_solid_2d(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
+    """Plane stress, plane strain or axisymmetric elasticity (ADR 0048), Y the axis and
+    X the radius. Every integral carries the part's weight: its thickness (plane stress;
+    1 m of depth in plane strain) or 2 pi r, so loads given as totals are consistent."""
+    V = fem.functionspace(msh, ("Lagrange", degree, (2,)))
+    fdim = msh.topology.dim - 1
+    E, nu = piecewise("youngs_modulus"), piecewise("poissons_ratio")
+    mu = E / (2 * (1 + nu))
+    lmbda = E * nu / ((1 + nu) * (1 - 2 * nu))
+    axi = case["dimension"] == "2d_axisymmetric"
+    if not axi and case.get("planar_model") == "plane_stress":
+        lmbda = 2 * lmbda * mu / (lmbda + 2 * mu)
+    x = ufl.SpatialCoordinate(msh)
+    weight = 2 * np.pi * x[0] if axi else piecewise("thickness")
+    I2 = ufl.Identity(2)
+
+    def parts(w):
+        """In-plane strain and stress, and the out-of-plane (hoop) strain and stress."""
+        e = ufl.sym(ufl.grad(w))
+        hoop = w[0] / x[0] if axi else 0.0
+        tr = ufl.tr(e) + hoop
+        return e, hoop, lmbda * tr * I2 + 2 * mu * e, lmbda * tr + 2 * mu * hoop
+
+    u, v = ufl.TrialFunction(V), ufl.TestFunction(V)
+    _eu, _hu, su, shu = parts(u)
+    ev, hv, _, _ = parts(v)
+    a = (ufl.inner(su, ev) + (shu * hv if axi else 0)) * weight * dx
+    n = ufl.FacetNormal(msh)
+    bcs, L = [], ufl.inner(fem.Constant(msh, np.zeros(2)), v) * dx
+    for f in case["features"]:
+        where, vals = facets.find(tag(f["group"])), f.get("values", {})
+        if f["type"] == "fixed":
+            bcs.append(dirichlet(np.zeros(2), fem.locate_dofs_topological(V, fdim, where), V))
+        elif f["type"] == "displacement":
+            for i, axis in enumerate("xy"):
+                if axis in vals:
+                    dofs = fem.locate_dofs_topological(V.sub(i), fdim, where)
+                    bcs.append(dirichlet(vals[axis], dofs, V.sub(i)))
+        elif f["type"] == "force":  # the total over the edge, spread over its weight
+            traction = np.array([vals.get(c, 0.0) for c in "xy"]) / f["area"]
+            L += ufl.inner(fem.Constant(msh, traction), v) * weight * ds(tag(f["group"]))
+        elif f["type"] == "pressure":
+            L += -vals["p"] * ufl.inner(n, v) * weight * ds(tag(f["group"]))
+        elif f["type"] == "elastic_support":
+            kn, kt = vals.get("kn", 0.0), vals.get("kt", 0.0)
+            un, vn = ufl.dot(u, n), ufl.dot(v, n)
+            a += kn * un * vn * weight * ds(tag(f["group"]))
+            if kt:
+                a += kt * ufl.inner(u - un * n, v - vn * n) * weight * ds(tag(f["group"]))
+        else:
+            raise SystemExit(f"{f['type']} is not written for 2D models")
+    uh = solve_linear(a, L, bcs, V, "u")
+    out["coords"] = V.tabulate_dof_coordinates()
+    disp = uh.x.array.reshape(-1, 2)
+    out["displacement"] = np.column_stack([disp, np.zeros(len(disp))])
+    e, _hoop, s, s_hoop = parts(uh)
+    zero = 0.0 * s[0, 0]
+    if axi:
+        zz = s_hoop
+    elif case.get("planar_model") == "plane_strain":
+        zz = lmbda * ufl.tr(e)
+    else:
+        zz = zero
+    voigt = ufl.as_vector([s[0, 0], s[1, 1], zz, s[0, 1], zero, zero])
+    S = fem.functionspace(msh, ("Lagrange", degree, (6,)))
+    p, q = ufl.TrialFunction(S), ufl.TestFunction(S)
+    mass, rhs = ufl.inner(p, q) * dx, ufl.inner(voigt, q) * dx
+    out["stress"] = solve_linear(mass, rhs, [], S, "s", mass_matrix=True).x.array.reshape(-1, 6)
+
+
 def solve_heat(case, msh, degree, dx, ds, facets, tag, of_temperature, out) -> None:
     """Heat conduction; temperature tables make it nonlinear, solved by Picard iteration
     (properties at the previous iterate), which needs only linear solves on any backend."""
     V = fem.functionspace(msh, ("Lagrange", degree))
     T, v = ufl.TrialFunction(V), ufl.TestFunction(V)
+    fdim = msh.topology.dim - 1
+    # Axisymmetric (ADR 0048): every integral weighted by the radius x (2 pi cancels);
+    # in plane, the thickness cancels as every load here is per area.
+    r = ufl.SpatialCoordinate(msh)[0] if case.get("dimension") == "2d_axisymmetric" else 1.0
     previous = fem.Function(V)  # the last iterate
     previous.x.array[:] = case["initial_temperature"]
     nonlinear = any(m.get("tables") for m in case["materials"])
-    k = of_temperature("thermal_conductivity", previous)
+    k = r * of_temperature("thermal_conductivity", previous)
     a = k * ufl.inner(ufl.grad(T), ufl.grad(v)) * dx
     L = fem.Constant(msh, 0.0) * v * dx
     bcs, films, amplitudes = [], [], []
     for f in case["features"]:
         where, vals = facets.find(tag(f["group"])), f.get("values", {})
         if f["type"] == "temperature":
-            bcs.append(dirichlet(vals["T"], fem.locate_dofs_topological(V, 2, where), V))
+            bcs.append(dirichlet(vals["T"], fem.locate_dofs_topological(V, fdim, where), V))
         elif f["type"] == "heat_flux":
             factor = 1.0
             if "amplitude" in f:  # ADR 0037: q times the amplitude at each step's time
                 factor = fem.Constant(msh, 0.0)
                 amplitudes.append((factor, np.asarray(f["amplitude"], dtype=float)))
-            L += vals["q"] * factor * v * ds(tag(f["group"]))
+            L += r * vals["q"] * factor * v * ds(tag(f["group"]))
         elif f["type"] == "convection":
-            films.append((vals["h"], tag(f["group"])))
-            a += vals["h"] * T * v * ds(tag(f["group"]))
-            L += vals["h"] * vals["T_inf"] * v * ds(tag(f["group"]))
+            films.append((r * vals["h"], tag(f["group"])))
+            a += r * vals["h"] * T * v * ds(tag(f["group"]))
+            L += r * vals["h"] * vals["T_inf"] * v * ds(tag(f["group"]))
     out["coords"] = V.tabulate_dof_coordinates()
 
     def picard(a_form, L_form, iterate: fem.Function) -> fem.Function:
@@ -596,10 +673,10 @@ def solve_heat(case, msh, degree, dx, ds, facets, tag, of_temperature, out) -> N
     scheme = case["step"].get("scheme", "backward_euler")
     old, older = fem.Function(V), fem.Function(V)
     old.x.array[:] = older.x.array[:] = case["initial_temperature"]
-    capacity = rho * cp / dt
+    capacity = r * rho * cp / dt
 
     def operator_on(u):
-        k_u = of_temperature("thermal_conductivity", u)
+        k_u = r * of_temperature("thermal_conductivity", u)
         form = k_u * ufl.inner(ufl.grad(u), ufl.grad(v)) * dx
         for h, where in films:
             form += h * u * v * ds(where)

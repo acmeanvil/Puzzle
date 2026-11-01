@@ -61,16 +61,18 @@ def read_table(path: Path) -> list[dict[str, str]]:
 def nodal_fields(rows: list[dict[str, str]], name: str, comps=None) -> dict[int, Field]:
     """One field per NUME_ORDRE (step or mode), keyed by that number."""
     comps = comps or COMPONENTS[name]
+    # A 2D model's tables (ADR 0048) have no DZ, SIYZ or SIXZ column: those are zero.
+    # A column printed but empty at a node (a discrete's own node: "-") skips the node.
+    printed = [c for c in comps if rows and c in rows[0]]
     by_order: dict[int, list[dict[str, str]]] = {}
     for row in rows:
-        # A node no element gives this field to (a discrete's own node) prints "-".
-        if any(row.get(c, "-") in ("-", "") for c in comps):
+        if not printed or any(row.get(c, "-") in ("-", "") for c in printed):
             continue
         by_order.setdefault(int(row["NUME_ORDRE"]), []).append(row)
     out = {}
     for order, group in by_order.items():
         ids = np.array([int(r["NOEUD"]) for r in group], dtype=np.int64)
-        values = np.array([[float(r[c]) for c in comps] for r in group])
+        values = np.array([[float(r[c]) if c in printed else 0.0 for c in comps] for r in group])
         sort = np.argsort(ids)
         out[order] = Field(name, "node", list(comps.values()), ids[sort], values[sort])
     return out

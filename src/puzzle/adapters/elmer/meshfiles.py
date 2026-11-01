@@ -25,6 +25,11 @@ ELEMENTS = {
     "tri3": (303, None),
     "tri6": (306, None),
     "quad4": (404, None),
+    # 2D models (ADR 0048): Gmsh's corner-then-edge order, and line3's ends then middle,
+    # are Elmer's.
+    "quad8": (408, None),
+    "line2": (202, None),
+    "line3": (203, None),
 }
 
 
@@ -44,12 +49,14 @@ def write_mesh(mesh: Mesh, directory: Path, bodies: list[str], boundaries: list[
     def renumber(conn: np.ndarray) -> np.ndarray:
         return np.vectorize(elmer_id.__getitem__, otypes=[np.int64])(conn)
 
-    volume = [b for b in mesh.blocks if b.dim == 3]
+    top = 2 if mesh.planar else 3  # a 2D model's bodies are its regions (ADR 0048)
+    volume = mesh.region_blocks() if mesh.planar else [b for b in mesh.blocks if b.dim == 3]
     body_of: dict[int, int] = {}
     for index, name in enumerate(bodies, start=1):
         group = mesh.groups.get(name)
-        if group is None or group.dim != 3:
-            raise InputError(f"'{name}' is not a body selection")
+        if group is None or group.dim != top:
+            kind = "a region (face) selection" if mesh.planar else "a body selection"
+            raise InputError(f"'{name}' is not {kind}")
         for b in group.blocks(mesh):
             for eid in b.ids:
                 body_of.setdefault(int(eid), index)

@@ -32,6 +32,13 @@ def read_vtu(path: Path) -> dict[str, np.ndarray]:
     return arrays
 
 
+def _xyz(values: np.ndarray) -> np.ndarray:
+    """A vector as x, y, z: a 2D model's (ADR 0048) has no z, or a zero one."""
+    if values.shape[1] >= 3:
+        return values[:, :3]
+    return np.column_stack([values, np.zeros((len(values), 3 - values.shape[1]))])
+
+
 def eigenvalues(log_text: str) -> list[float]:
     """Eigenvalues (omega^2) from the solver log, in mode order."""
     found: dict[int, float] = {}
@@ -103,9 +110,15 @@ def read_results(vtu: Path, node_ids: np.ndarray, log_text: str) -> Results:
 
     step = StepResult(1, "", 1.0)
     if "displacement" in data:
-        step.fields["displacement"] = field("displacement", ["x", "y", "z"], data["displacement"])
-    if all(f"stress_{c}" in data for c in STRESS):
-        stress = np.column_stack([data[f"stress_{c}"][:, 0] for c in STRESS])
+        step.fields["displacement"] = field(
+            "displacement", ["x", "y", "z"], _xyz(data["displacement"])
+        )
+    planar = all(f"stress_{c}" in data for c in STRESS[:4])  # a 2D model: no yz, xz
+    if all(f"stress_{c}" in data for c in STRESS) or planar:
+        zero = np.zeros(len(ids))
+        stress = np.column_stack(
+            [data[f"stress_{c}"][:, 0] if f"stress_{c}" in data else zero for c in STRESS]
+        )
         step.fields["stress"] = field("stress", ["xx", "yy", "zz", "xy", "yz", "zx"], stress)
     if "temperature" in data:
         step.fields["temperature"] = field("temperature", [""], data["temperature"])

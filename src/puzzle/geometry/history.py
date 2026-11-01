@@ -22,6 +22,7 @@ the part, the first one starts it):
 | polyline | points (a line body, for beams) | none: edge-N, vertex-N by position |
 | sheet | points (a flat polygon: a sheet body, for shells) | face |
 | face | profile (sketch), plane, offset (a flat region: 2D, shells) | face; edges by side |
+| section | part (a geometry), plane, offset, half (ADR 0048) | face; edges by 3D face |
 | curved_sheet | r, length, angle, x0, y0, z0 (a cylinder panel on x, centred on +z) | surface |
 | cone | r1, r2, h, x, y, z, axis | wall, start, end |
 | sphere | r, x, y, z | surface |
@@ -130,9 +131,37 @@ class NamedShape:
         return found, missing
 
 
-def ops_of(geometry) -> list[Op]:
-    """A project geometry's history as operations, suppressed steps left out."""
-    return [Op(s.kind, s.name, dict(s.args)) for s in geometry.history if not s.suppressed]
+def ops_of(geometry, project=None, _seen=()) -> list[Op]:
+    """A project geometry's history as operations, suppressed steps left out. A section
+    of another part (ADR 0048) carries that part's own operations (or its file), so
+    regenerating stays a function of the operations alone; it needs `project`."""
+    out = []
+    for s in geometry.history:
+        if s.suppressed:
+            continue
+        args = dict(s.args)
+        if s.kind == "section":
+            args["_part"] = _section_source(geometry, args.get("part"), project, _seen)
+        out.append(Op(s.kind, s.name, args))
+    return out
+
+
+def _section_source(geometry, part, project, seen) -> dict:
+    """What a section cuts: the named geometry's operations, or its file."""
+    from uuid import UUID
+
+    from puzzle.model.schema import Geometry
+
+    if project is None or not part:
+        raise GeometryError("a section names the part it cuts (its geometry)")
+    other = project.objects.get(UUID(str(part)))
+    if not isinstance(other, Geometry):
+        raise GeometryError(f"a section names geometry {part}, which is not in the project")
+    if other.id == geometry.id or other.id in seen:
+        raise GeometryError(f"geometry '{geometry.name}' would be a section of itself")
+    if other.history:
+        return {"ops": ops_of(other, project, (*seen, geometry.id))}
+    return {"file": other.source}
 
 
 # Arguments that are never parameter names.
@@ -150,6 +179,9 @@ WORDS = {
     "sketch",  # resolved by the sketch solver itself (its dimensions may name parameters)
     "face",  # a sketch step's face to sketch on
     "hole",  # an imprint's hole wall (ADR 0050)
+    "part",  # a section's geometry (its id)
+    "_part",  # a section's part, filled in by ops_of
+    "half",
     "faces",  # a split_face's faces, by name
     "direction",  # a split_face's projection: both, forward or backward
 }
@@ -473,6 +505,49 @@ def _face(state, a):
     return face, names
 
 
+def _section(state, a):
+    """A section of another part (ADR 0048): its cut by a plane, laid in the XY plane at
+    z = 0 (the plane's own u and v becoming x and y), the half at u >= 0 only with
+    `half` (an axisymmetric section: the part's axis on the plane's v). The region is
+    "face"; each edge is named after the 3D face it cuts ("<op>/Tube/wall"), so loads
+    on it follow the 3D part through its edits."""
+    from OCP.gp import gp_Ax3
+
+    from puzzle.geometry.profile import NORMALS, PLANES
+
+    source = a.get("_part") or {}
+    if "ops" in source:
+        part = _regenerate(source["ops"], state.params, state.root)
+        solid, names = part.shape, part.names
+    else:
+        solid, names, _ = _import(state, {"file": source.get("file", "")})
+    plane, offset = a.get("plane", "xy"), float(a.get("offset", 0.0))
+    origin = gp_Pnt(*PLANES[plane](0.0, 0.0, offset))
+    frame = gp_Ax3(origin, gp_Dir(*NORMALS[plane]), gp_Dir(*PLANES[plane](1.0, 0.0, 0.0)))
+    size = 10 * max(_size(solid), 1e-9)
+    low = 0.0 if a.get("half") else -size
+    cutter = BRepBuilderAPI_MakeFace(gp_Pln(frame), low, size, -size, size).Face()
+    common = BRepAlgoAPI_Common(solid, cutter)
+    common.Build()
+    if not common.IsDone() or not _faces(common.Shape()):
+        raise GeometryError("the plane does not cut the part")
+    edges: Names = {}
+    for name, faces in names.items():
+        made = [
+            e for f in faces for e in _list(common.Generated(f)) if e.ShapeType() == TopAbs_EDGE
+        ]
+        if made:
+            edges[name] = made
+    flat = gp_Trsf()
+    flat.SetTransformation(frame)  # into the plane's own (u, v, w): w = 0
+    move = BRepBuilderAPI_Transform(common.Shape(), flat, True)
+    shape = move.Shape()
+    out: Names = {"face": _faces(shape)}
+    for name, es in edges.items():
+        out[name] = [_static(TopoDS, "Edge")(move.ModifiedShape(e)) for e in es]
+    return shape, out
+
+
 def _curved_sheet(state, a):
     """A cylindrical panel (ADR 0027 shells): radius r, `length` along x from (x0, y0,
     z0) on its axis, spanning `angle` degrees centred on +z (a barrel roof)."""
@@ -497,6 +572,7 @@ TOOLS = {
     "polyline": _polyline,
     "sheet": _sheet,
     "face": _face,
+    "section": _section,
     "curved_sheet": _curved_sheet,
     "import": _import,
     "box": _box,

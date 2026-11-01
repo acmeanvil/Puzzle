@@ -48,6 +48,7 @@ GROUPS = [
             "polyline",
             "sheet",
             "face",
+            "section",
             "curved_sheet",
         ],
     ),
@@ -55,7 +56,8 @@ GROUPS = [
     ("Prepare", ["heal", "remove", "fragment", "enclosure"]),
 ]
 NAMES = {"remove": "Remove features", "heal": "Heal", "fragment": "Share faces",
-         "split_face": "Split face by sketch", "face": "Face from sketch"}  # fmt: skip
+         "split_face": "Split face by sketch", "face": "Face from sketch",
+         "section": "Section of a part"}  # fmt: skip
 PLANES = [("XY plane", "xy"), ("YZ plane", "yz"), ("XZ plane", "xz")]
 ON_FACE = "face"
 
@@ -82,6 +84,11 @@ class ToolPanel(QWidget):
             workbench.params(),
             menus.sketch_steps(geo, before),
             pick=self.pick,
+            parts=[
+                (g.name, str(g.id))
+                for g in workbench.window.session.project.of_type(Geometry)
+                if g.id != geo.id
+            ],
         )
         title = QLabel(f"{'Edit' if index is not None else 'New'} {tool_name(kind).lower()}")
         role(title, "title")

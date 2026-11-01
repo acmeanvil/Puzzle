@@ -100,7 +100,7 @@ def _structure(features):
 SIDES = {"Bottom": ["S/side-1"], "Right": ["S/side-2"], "Top": ["S/side-3"], "Left": ["S/side-4"]}
 
 
-@over("calculix")
+@over("calculix", "code_aster", "fenicsx", "elmer")
 def test_plane_stress_strip_in_tension(tmp_path, solver):
     L, H, t, F = 0.04, 0.02, 0.002, 4000.0
     features = [
@@ -120,7 +120,7 @@ def test_plane_stress_strip_in_tension(tmp_path, solver):
     assert np.median(s[:, 0]) == pytest.approx(sigma, rel=2e-3)
 
 
-@over("calculix")
+@over("calculix", "code_aster", "fenicsx", "elmer")
 def test_plane_stress_kirsch_hole(tmp_path, solver):
     """σx at the top of the hole: 3 σ."""
     half, a, sigma = 0.1, 0.005, 10e6
@@ -164,7 +164,7 @@ def _lame(r):
     return A + B / r**2, (1 + NU) / E * ((1 - 2 * NU) * A * r + B / r)
 
 
-@over("calculix")
+@over("calculix", "code_aster", "fenicsx", "elmer")
 def test_plane_strain_lame_ring(tmp_path, solver):
     features = [
         Feature(type="displacement", selection="Part/Xaxis", values={"y": mm(0)}),
@@ -188,7 +188,7 @@ def test_plane_strain_lame_ring(tmp_path, solver):
     assert s[on_y, 0] == pytest.approx(_lame(A_IN)[0], rel=0.02)
 
 
-@over("calculix")
+@over("calculix", "code_aster", "fenicsx", "elmer")
 def test_axisymmetric_lame_cylinder(tmp_path, solver):
     h = 0.01
     features = [
@@ -207,7 +207,7 @@ def test_axisymmetric_lame_cylinder(tmp_path, solver):
     assert s[:, 2].mean() == pytest.approx(_lame(A_IN)[0], rel=0.02)  # zz: the hoop stress
 
 
-@over("calculix")
+@over("calculix", "code_aster", "fenicsx", "elmer")
 def test_axisymmetric_bar_pulled_along_its_axis(tmp_path, solver):
     """A force on an axisymmetric edge is the whole revolution's."""
     r, L, F = 0.01, 0.05, 10e3
@@ -230,7 +230,7 @@ def _heat(features):
     return [Physics(type="heat_transfer", features=features, settings=CONSTANT)]
 
 
-@over("calculix")
+@over("calculix", "code_aster", "fenicsx", "elmer")
 def test_planar_conduction_with_a_flux(tmp_path, solver):
     L, q, T0 = 0.04, 5000.0, 300.0
     features = [
@@ -244,7 +244,7 @@ def test_planar_conduction_with_a_flux(tmp_path, solver):
     assert T[:, 0].mean() == pytest.approx(T0 - q * L / K, abs=1e-3 * q * L / K)
 
 
-@over("calculix")
+@over("calculix", "code_aster", "fenicsx", "elmer")
 def test_axisymmetric_conduction_through_a_wall(tmp_path, solver):
     Ta, Tb = 400.0, 300.0
     features = [

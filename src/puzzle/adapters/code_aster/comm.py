@@ -19,9 +19,11 @@ from puzzle.adapters.common import (
     BODY_LOADS,
     HOLDING,
     PRETENSION,
+    REMOTE,
     STRUCTURAL,
     THERMAL,
     InputError,
+    as_planar,
     body_load,
     check_contacts,
     check_dynamics,
@@ -30,6 +32,7 @@ from puzzle.adapters.common import (
     frequency_list,
     globalize,
     initial_temperature,
+    load_area,
     local_axes,
     rayleigh,
     remote_load,
@@ -97,8 +100,28 @@ def _suivi(tracked: list, names: dict[str, str]) -> str:
     return f"SUIVI_DDL=({', '.join(entries)},), "
 
 
+def _refuse_in_2d(comp: Component) -> None:
+    """What Code_Aster's 2D models don't take here yet (ADR 0048), refused by name."""
+    if comp.connectors or comp.beam_sections:
+        raise InputError("fasteners and beams are not written in 2D models", code="unsupported")
+    for c in comp.contacts:
+        if c.capability != "bonded_conformal":
+            raise InputError(
+                f"contact '{c.name}' ({c.capability}) is not written in 2D models yet",
+                code="unsupported",
+            )
+    unwritten = REMOTE | PRETENSION | {"elastic_support", "compression_only_support"}
+    for ph in comp.physics:
+        for f in ph.features:
+            if f.type in unwritten:
+                raise InputError(f"{f.type} is not written in 2D models yet", code="unsupported")
+
+
 def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs=()) -> Path:
     comp = project.get(study.component, Component)
+    as_planar(mesh, comp)  # ADR 0048: a 2D model's faces are regions, not shells
+    if mesh.planar:
+        _refuse_in_2d(comp)
     thermal_load = next((i.field for i in inputs if i.field.name == "temperature"), None)
     check_contacts(comp, CONTACTS, "Code_Aster")
     steps = study.solve_steps()
@@ -264,7 +287,9 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     # Shells (ADR 0027): sheet bodies as DKT (Kirchhoff plates and shells), which takes
     # three- and four-node faces.
     shell_parts = [
-        p.name for p in comp.parts if mesh.groups.get(p.name) and mesh.groups[p.name].dim == 2
+        p.name
+        for p in comp.parts
+        if mesh.groups.get(p.name) and mesh.groups[p.name].dim == 2 and not mesh.planar
     ]
     if any(b.element in ("tri6", "quad8", "quad9") for b in mesh.shell_blocks()) and not thermal:
         raise InputError(
@@ -273,7 +298,9 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             code="unsupported",
         )
     shells = []
-    for s in comp.shell_sections:
+    # A plane-stress part's thickness only spreads its loads (C_PLAN is per unit
+    # thickness): no shell characteristics for it.
+    for s in [] if mesh.planar else comp.shell_sections:
         if s.selection not in mesh.groups:
             raise InputError(f"a shell thickness names '{s.selection}', which is not meshed")
         names.setdefault(s.selection, f"G{len(names) + 1}")
@@ -308,8 +335,12 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             points.add(f"P{k}B{i}", twin)
     write_med(points.mesh, workdir / f"{JOB}.med", names)
 
-    phenomenon, model = ("THERMIQUE", "3D") if thermal else ("MECANIQUE", "3D")
-    faces = sorted({names[g] for c in touching for g in (c.source, c.target)})
+    model = _modelisation(comp, thermal)
+    phenomenon = "THERMIQUE" if thermal else "MECANIQUE"
+    faces = {names[g] for c in touching for g in (c.source, c.target)}
+    if mesh.planar:  # a 2D model's edges aren't oriented by the mesher: pressure needs it
+        faces |= {names[f.selection] for f in features if f.type == "pressure"}
+    faces = sorted(faces)
     excluded = _contact_exclusions(touching, fasteners, mesh, names)
     noded = {  # fastener faces made node groups below
         names[sel]
@@ -465,7 +496,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     out.append(f"mater = AFFE_MATERIAU(MAILLAGE=mesh, AFFE=({', '.join(assignments)},){varc})")
     charges = ["load"]
     if thermal:  # loads following an amplitude get their own charge (ADR 0037)
-        out += _thermal_loads(project, features, names, mesh)
+        out += _thermal_loads(project, features, names, mesh, comp)
     else:
         extra = _pretension_loads(bolts, cuts)
         for key, items in _fastener_loads(fastener_ends, fasteners, names).items():
@@ -475,8 +506,8 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         timed = [f for f in features if f.amplitude] if step.type == "transient" else []
         if timed:
             features = [f for f in features if not f.amplitude]
-            out += _timed_loads(project, timed, names, mesh)
-        plain = _loads(features, names, mesh, thermal, ties, extra)
+            out += _timed_loads(project, timed, names, mesh, comp)
+        plain = _loads(features, names, mesh, thermal, ties, extra, comp)
         if plain.endswith("(MODELE=model)"):  # everything is in loadf: no empty charge
             charges = []
         else:
@@ -552,7 +583,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             f"_F(CHARGE=tload{k}, FONC_MULT=tamp{k})"
             for k in range(1, 1 + len({f.amplitude for f in timed}))
         ]
-        solids = any(b.dim == 3 for b in mesh.blocks)
+        solids = mesh.planar or any(b.dim == 3 for b in mesh.blocks)
         out += [
             f"times = DEFI_LIST_REEL(DEBUT=0.0, INTERVALLE=_F(JUSQU_A={end:.12g}, PAS={dt:.12g}))",
             f"res = DYNA_NON_LINE(MODELE=model, CHAM_MATER=mater, {cara}"
@@ -639,7 +670,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             ),
         ]
     else:
-        solids = any(b.dim == 3 for b in mesh.blocks)
+        solids = mesh.planar or any(b.dim == 3 for b in mesh.blocks)
         options = (["'SIGM_NOEU'"] if solids else []) + (
             ["'EFGE_NOEU'"] if beam_parts or bolt_beams else []
         )
@@ -1581,7 +1612,7 @@ def _remote_loads(features, names, mesh, project=None) -> list[str]:
     return [*lines, call + ")"]
 
 
-def _timed_loads(project, features, names, mesh) -> list[str]:
+def _timed_loads(project, features, names, mesh, comp=None) -> list[str]:
     """Structural loads following an amplitude (ADR 0041): one charge per amplitude,
     `tload<k>` with its function `tamp<k>` (held constant outside its points)."""
     from puzzle.model.schema import Amplitude
@@ -1596,18 +1627,20 @@ def _timed_loads(project, features, names, mesh) -> list[str]:
             f"tamp{k} = DEFI_FONCTION(NOM_PARA='INST', VALE=({values}), "
             "PROL_GAUCHE='CONSTANT', PROL_DROITE='CONSTANT')"
         )
-        out.append(_loads(members, names, mesh, False).replace("load = ", f"tload{k} = ", 1))
+        out.append(
+            _loads(members, names, mesh, False, comp=comp).replace("load = ", f"tload{k} = ", 1)
+        )
     return out
 
 
-def _thermal_loads(project, features, names, mesh) -> list[str]:
+def _thermal_loads(project, features, names, mesh, comp=None) -> list[str]:
     """`excit`: the thermal charges, those following an amplitude multiplied by it
     (DEFI_FONCTION of time, held constant outside its points)."""
     from puzzle.model.schema import Amplitude
 
     out, excit = [], []
     plain = [f for f in features if not f.amplitude]
-    base = _loads(plain, names, mesh, True)
+    base = _loads(plain, names, mesh, True, comp=comp)
     if base != "load = AFFE_CHAR_THER(MODELE=model)":  # Code_Aster refuses an empty charge
         out.append(base)
         excit.append("_F(CHARGE=load)")
@@ -1622,7 +1655,9 @@ def _thermal_loads(project, features, names, mesh) -> list[str]:
             f"amp{k} = DEFI_FONCTION(NOM_PARA='INST', VALE=({values}), "
             "PROL_GAUCHE='CONSTANT', PROL_DROITE='CONSTANT')"
         )
-        out.append(_loads(members, names, mesh, True).replace("load = ", f"load{k} = ", 1))
+        out.append(
+            _loads(members, names, mesh, True, comp=comp).replace("load = ", f"load{k} = ", 1)
+        )
         excit.append(f"_F(CHARGE=load{k}, FONC_MULT=amp{k})")
     if not excit:  # nothing imposed at all: the charge as it always was
         out.append(base)
@@ -1651,11 +1686,19 @@ def _ther_non_line(step, comp: Component) -> str:
 
 
 def _loads(
-    features: list[Feature], names: dict[str, str], mesh: Mesh, thermal: bool, ties=(), extra=None
+    features: list[Feature],
+    names: dict[str, str],
+    mesh: Mesh,
+    thermal: bool,
+    ties=(),
+    extra=None,
+    comp=None,
 ) -> str:
-    """The plain load charge; `extra` adds items by keyword (pretension's)."""
+    """The plain load charge; `extra` adds items by keyword (pretension's); `comp` gives
+    a 2D model's thicknesses (ADR 0048)."""
     extra = extra or {}
     imposed, face_force, pressure, temperature, flux, exchange = [], [], [], [], [], []
+    contour: list[str] = []  # forces on a 2D model's edges
     nodal: list[str] = []
     gravity, rotation, rigid, shell_pressure = [], [], [], []
     tied = [
@@ -1666,7 +1709,17 @@ def _loads(
     for f in features:
         g = names[f.selection]
         v = {k: q.to_si() for k, q in f.values.items()}
-        if f.type == "fixed":
+        if f.type == "fixed" and mesh.planar:  # a 2D model's nodes move in its plane
+            imposed.append(f"_F(GROUP_MA='{g}', DX=0.0, DY=0.0)")
+        elif f.type == "displacement" and mesh.planar:
+            dofs = ", ".join(f"D{a.upper()}={v[a]:.12g}" for a in "xy" if a in v)
+            if dofs:
+                imposed.append(f"_F(GROUP_MA='{g}', {dofs})")
+        elif f.type == "force" and mesh.planar:  # on 2D edges: per unit length (ADR 0048)
+            area = load_area(mesh.groups[f.selection], mesh, comp)
+            comps = ", ".join(f"F{a.upper()}={v[a] / area:.12g}" for a in "xy" if v.get(a))
+            contour.append(f"_F(GROUP_MA='{g}', {comps})")
+        elif f.type == "fixed":
             beam_nodes = mesh.beam_nodes() | mesh.shell_nodes()  # nodes with rotations
             on_beams = beam_nodes & {int(n) for n in mesh.groups[f.selection].node_ids}
             rotations = ", DRX=0.0, DRY=0.0, DRZ=0.0" if on_beams else ""  # a clamp
@@ -1727,6 +1780,7 @@ def _loads(
         + kw("FORCE_NODALE", nodal + extra.get("FORCE_NODALE", []))
         + kw("LIAISON_DDL", extra.get("LIAISON_DDL", []))
         + kw("FORCE_FACE", face_force)
+        + kw("FORCE_CONTOUR", contour)
         + kw("PRES_REP", pressure)
         + kw("FORCE_COQUE", shell_pressure)
         + kw("PESANTEUR", gravity)
@@ -1736,6 +1790,18 @@ def _loads(
         + kw("LIAISON_MAIL", tied)
         + ")"
     )
+
+
+def _modelisation(comp: Component, thermal: bool) -> str:
+    """Code_Aster's modelisation for the component's dimension (ADR 0048): Y is the
+    axisymmetric axis, as Code_Aster's AXIS takes it."""
+    if comp.dimension == "2d_axisymmetric":
+        return "AXIS"
+    if comp.dimension == "2d_planar":
+        if thermal:
+            return "PLAN"
+        return "C_PLAN" if comp.planar_model == "plane_stress" else "D_PLAN"
+    return "3D"
 
 
 def _ther_lineaire(step, comp: Component) -> str:

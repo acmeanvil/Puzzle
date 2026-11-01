@@ -53,7 +53,7 @@ New record: copy [template.md](template.md) to `NNNN-short-title.md`, set status
 | [0045](0045-look-and-feel.md) | Look and feel: one theme from tokens (light, dark, high contrast), an icon set, docking, start page, feedback, accessibility | Accepted |
 | [0046](0046-construction-geometry.md) | Construction geometry: paths and planes for result tools (linearization, results on a plane, section forces) | Accepted |
 | [0047](0047-magnetodynamics.md) | Magnetodynamics: time-harmonic eddy currents first (Elmer, FEniCSx), then transient; losses, impedance, skin depth, heat and force couplings | Accepted |
-| [0048](0048-2d-geometry.md) | 2D models: planar and axisymmetric geometry (sketches, shapes, sections of 3D parts), meshing and solving on the four FE solvers | Accepted |
+| [0048](0048-2d-geometry.md) | 2D models: planar and axisymmetric geometry (sketches, shapes, sections of 3D parts), meshing and solving on the four FE solvers | Accepted; round 1 built (four solvers, section of a part) |
 | [0049](0049-coordinate-systems.md) | Coordinate systems everywhere: Cartesian, cylindrical, spherical; typed, three points, from geometry, relative or attached; used by inputs and results | Accepted |
 | [0050](0050-bolt-manager.md) | Bolts: types (standard sizes and grades, preload), an automatic generator (picks, sets, rules, the agent), a bolt table with results along each bolt | Accepted |
 | [0051](0051-calculix-with-pardiso.md) | Build CalculiX with MKL PARDISO (a pixi env and build task) and prefer it: 2-4x faster factoring, identical answers | Accepted |

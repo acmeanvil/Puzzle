@@ -124,6 +124,7 @@ class HistoryStep(BaseModel):
         "polyline",
         "sheet",
         "face",
+        "section",
         "curved_sheet",
         "sketch",  # a 2D sketch on a plane or a planar face, for extrude and revolve (ADR 0017)
     ]
@@ -164,6 +165,15 @@ class Geometry(ProjectObject):
         description="left out of meshing and solving: the parts made of it, and their loads, "
         "contacts, bolts and materials, are dropped from every study",
     )
+
+    def dependencies(self) -> list[UUID]:
+        """The parts this geometry's sections cut (ADR 0048): an edit to one stales it."""
+        out = []
+        for s in self.history:
+            part = str(s.args.get("part", "")) if s.kind == "section" else ""
+            if len(part) == 36:  # a geometry's id
+                out.append(UUID(part))
+        return out
 
     @model_validator(mode="after")
     def _owner_matches_scope(self) -> Geometry:

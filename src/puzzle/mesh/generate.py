@@ -282,6 +282,8 @@ def generate_mesh(
         mesh = _extract()
         mesh.planar = planar
         mesh.axisymmetric = comp.dimension == "2d_axisymmetric"
+        if planar:  # exactly in the plane: CalculiX refuses 1e-18 m of round-off
+            mesh.coords[:, 2] = 0.0
 
     return MeshResult(
         mesh=mesh,

@@ -63,8 +63,7 @@ def test_induction_heating_runs_on_elmer_only(induction):
     study = _study(induction, "Induction heating")
     assert induction.validate() == []
     assert ElmerAdapter().check(induction, study) == []
-    assert CalculixAdapter().check(induction, study) == [
-        "calculix does not support 2d_axisymmetric models",
+    assert CalculixAdapter().check(induction, study) == [  # 2D itself is fine (ADR 0048)
         "calculix does not support magnetic_fields physics",
         "calculix does not support joule_heating coupling",
     ]

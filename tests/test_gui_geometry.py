@@ -237,6 +237,18 @@ def test_the_step_dialog_asks_for_the_sketch_faces_and_direction(app):
     assert again.values()["direction"] == "forward"
 
 
+def test_a_section_step_picks_its_part_by_name(app):
+    """ADR 0048: the part to cut is a dropdown of the other geometries, by name."""
+    from puzzle.gui.step_dialog import StepDialog
+
+    d = StepDialog("section", {}, "Cut", parts=[("Tube", "id-1"), ("Plate", "id-2")])
+    assert [d.widgets["part"].itemText(i) for i in range(2)] == ["Tube", "Plate"]
+    assert d.values() == {"part": "id-1", "plane": "xy", "offset": 0.0, "half": False}
+    parts = [("Tube", "id-1"), ("Plate", "id-2")]
+    again = StepDialog("section", {"part": "id-2", "half": True}, parts=parts)
+    assert again.values()["part"] == "id-2" and again.values()["half"] is True
+
+
 def test_selecting_a_step_highlights_its_faces(app, window):
     answer(
         window,

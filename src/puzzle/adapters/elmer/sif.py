@@ -22,6 +22,7 @@ from puzzle.adapters.common import (
     STRUCTURAL,
     THERMAL,
     InputError,
+    as_planar,
     body_load,
     body_load_on_material,
     check_contacts,
@@ -30,6 +31,7 @@ from puzzle.adapters.common import (
     frequency_list,
     globalize,
     initial_temperature,
+    load_area,
     local_axes,
     rayleigh,
     refuse_large_deflection,
@@ -74,6 +76,9 @@ def write_case(
     project: Project, study: Study, mesh: Mesh, workdir: Path, inputs=()
 ) -> tuple[Path, ElmerMesh]:
     comp = project.get(study.component, Component)
+    as_planar(mesh, comp)
+    if mesh.planar:
+        _refuse_in_2d(comp)
     check_contacts(comp, set(), "Elmer")
     refuse_line_bodies(mesh, "Elmer")
     refuse_large_deflection(study.solve_steps(), "Elmer")
@@ -150,7 +155,7 @@ def write_case(
         "",
         "Simulation",
         "  Max Output Level = 5",
-        "  Coordinate System = Cartesian 3D",
+        f"  Coordinate System = {COORDINATES[comp.dimension]}",
         *_time_block(step, structural=solved == {"solid_mechanics"}),
         *restart,
         "End",
@@ -202,15 +207,23 @@ def write_case(
             "",
         ]
 
-    solvers = _solvers(step, solved, coils)
+    solvers = _solvers(step, solved, coils, dofs=2 if mesh.planar else 3)
     if solved == {"magnetic_fields"}:
         # Conductors also run the coil solver; everything else only the field solvers.
         out += ["Equation 1", "  Active Solvers(3) = 1 2 3", "End", ""]
         out += ["Equation 2", "  Active Solvers(2) = 2 3", "End", ""]
         out += ["Body Force 1", '  Electric Potential = Equals "CoilPot"', "End", ""]
     else:
-        out += ["Equation 1", "  Active Solvers(1) = 1", "End", ""]
-        out += ["Equation 2", "  Active Solvers(1) = 1", "End", ""]
+        # ADR 0048: a planar structure is plane strain unless Plane Stress is set.
+        plane = (
+            ["  Plane Stress = True"]
+            if comp.dimension == "2d_planar"
+            and comp.planar_model == "plane_stress"
+            and solved == {"solid_mechanics"}
+            else []
+        )
+        out += ["Equation 1", "  Active Solvers(1) = 1", *plane, "End", ""]
+        out += ["Equation 2", "  Active Solvers(1) = 1", *plane, "End", ""]
         for k, block in enumerate(forces, start=1):
             out += [f"Body Force {k}", *block, "End", ""]
     for number, block in enumerate(solvers, start=1):
@@ -240,6 +253,7 @@ def write_case(
             mesh,
             amplitudes,
             {f.selection: local_axes(project, f) for f in features if f.axes is not None},
+            comp,
         )
 
     if transient:
@@ -328,13 +342,13 @@ def _material(
     return out + ["End", ""]
 
 
-def _solvers(step, solved: set[str], coils: list[Feature]) -> list[list[str]]:
+def _solvers(step, solved: set[str], coils: list[Feature], dofs: int = 3) -> list[list[str]]:
     """The solver blocks, without their Solver/End lines, in solver order."""
     if solved == {"solid_mechanics"}:
         block = [
             '  Equation = "Linear elasticity"',
             '  Procedure = "StressSolve" "StressSolver"',
-            "  Variable = -dofs 3 Displacement",
+            f"  Variable = -dofs {dofs} Displacement",
             *DIRECT,
         ]
         if step.type == "modal":
@@ -410,14 +424,21 @@ def _solvers(step, solved: set[str], coils: list[Feature]) -> list[list[str]]:
 
 
 def _boundary(
-    index: int, name: str, features: list[Feature], mesh: Mesh, amplitudes=None, axes_of=None
+    index: int,
+    name: str,
+    features: list[Feature],
+    mesh: Mesh,
+    amplitudes=None,
+    axes_of=None,
+    comp=None,
 ) -> list[str]:
     """A boundary's conditions; `amplitudes` (id -> points) make a value follow time."""
     out = [f"Boundary Condition {index}", f"  Target Boundaries(1) = {index}", f'  Name = "{name}"']
+    dims = (1, 2) if mesh.planar else (1, 2, 3)  # a 2D model moves in its plane (ADR 0048)
     for f in features:
         v = {k: q.to_si() for k, q in f.values.items()}
         if f.type == "fixed":
-            out += [f"  Displacement {d} = 0" for d in (1, 2, 3)]
+            out += [f"  Displacement {d} = 0" for d in dims]
         elif f.type == "displacement" and f.axes is not None:  # cylindrical, all three
             exprs = cylindrical_expressions(
                 axes_of[f.selection], [v[a] for a in "xyz"], ("tx(0)", "tx(1)", "tx(2)")
@@ -431,12 +452,14 @@ def _boundary(
             out += [
                 f"  Displacement {d} = {v[a]:.10g}"
                 for d, a in ((1, "x"), (2, "y"), (3, "z"))
-                if a in v
+                if a in v and d in dims
             ]
         elif f.type == "force":
-            area = surface_area(mesh.groups[f.selection], mesh)
+            # Elmer's Force is per area: a 2D edge's is length x thickness, or 2 pi r dl.
+            group = mesh.groups[f.selection]
+            area = load_area(group, mesh, comp) if mesh.planar else surface_area(group, mesh)
             points = (amplitudes or {}).get(f.amplitude)
-            for d, a in ((1, "x"), (2, "y"), (3, "z")):
+            for d, a in ((1, "x"), (2, "y"), (3, "z"))[: len(dims)]:
                 if v.get(a):
                     out += _in_time(f"Force {d}", v[a] / area, points)
         elif f.type == "elastic_support":  # springs to ground per area (ADR 0037)
@@ -605,6 +628,31 @@ def _reference(comp) -> float:
     from puzzle.adapters.calculix.inp import reference_temperature
 
     return reference_temperature(comp)
+
+
+COORDINATES = {
+    "3d": "Cartesian 3D",
+    "2d_planar": "Cartesian 2D",
+    "2d_axisymmetric": "Axi Symmetric",
+}
+
+
+def _refuse_in_2d(comp: Component) -> None:
+    """What Elmer's 2D models don't take here yet (ADR 0048), refused by name."""
+    if comp.connectors or comp.beam_sections:
+        raise InputError("fasteners and beams are not written in 2D models", code="unsupported")
+    for c in comp.contacts:
+        if c.capability != "bonded_conformal":
+            raise InputError(
+                f"contact '{c.name}' ({c.capability}) is not written in 2D models yet",
+                code="unsupported",
+            )
+    for ph in comp.physics:
+        for f in ph.features:
+            if f.type in ("remote_force", "remote_force_rigid", "remote_displacement") or (
+                f.type in ("bolt_pretension", "bolt_adjustment") or f.axes is not None
+            ):
+                raise InputError(f"{f.type} is not written in 2D models yet", code="unsupported")
 
 
 def _check_dynamics(step) -> None:

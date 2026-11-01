@@ -3,7 +3,8 @@
 A field: its argument name, a kind, a default and a label. Kinds: length (typed in mm,
 stored in m), angle (degrees), number, count, axis, mode, plane, profile (points in mm,
 "u, v; u, v; ..." or "dxf: file.dxf"), rule (edges or faces, as JSON), file, feature
-(an earlier tool step), faces (picked, or {} for a default), direction, text. A
+(an earlier tool step), faces (picked, or {} for a default), direction, geometry (another
+part, by id), half, text. A
 length, angle or number may instead be a parameter's name, kept as given.
 """
 
@@ -52,6 +53,12 @@ STEPS: dict[str, list[StepField]] = {
         StepField("plane", "plane", "xy"),
         StepField("offset", "length", 0.0),
         MODE,
+    ],
+    "section": [
+        StepField("part", "geometry", "", "Part to cut"),
+        StepField("plane", "plane", "xy", "Cutting plane"),
+        StepField("offset", "length", 0.0),
+        StepField("half", "half", False, "Keep"),
     ],
     "curved_sheet": [
         StepField("r", "length", 0.1, "Radius"),

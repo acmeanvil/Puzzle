@@ -17,6 +17,7 @@ from puzzle.adapters.common import (
     STRUCTURAL,
     THERMAL,
     InputError,
+    as_planar,
     body_load,
     body_load_on_material,
     check_contacts,
@@ -25,15 +26,16 @@ from puzzle.adapters.common import (
     globalize,
     harmonic_fields,
     initial_temperature,
+    load_area,
     local_axes,
     match_points,
+    plane_thickness,
     rayleigh,
     refuse_large_deflection,
     refuse_line_bodies,
     remote_load,
     remote_values,
     rigid_motion,
-    surface_area,
     thermal_tables,
     time_scheme,
     time_settings,
@@ -161,9 +163,14 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     for g in groups:
         if g not in mesh.groups:
             raise InputError(f"no selection '{g}' in the mesh")
+    as_planar(mesh, comp)
+    if mesh.planar:
+        _check_2d(comp, physics, step, features, thermal_load)
 
     case = {
         "physics": physics,
+        "dimension": comp.dimension,  # ADR 0048
+        "planar_model": comp.planar_model,
         "step": {
             "type": step.type,
             "modes": int(step.settings.get("modes", 10)),
@@ -178,7 +185,8 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
                 "group": a.selection,
                 "properties": {
                     k: q.to_si() for k, q in project.get(a.material, Material).properties.items()
-                },
+                }
+                | _thickness(comp, a.selection, physics),
                 "tables": (
                     thermal_tables(project.get(a.material, Material), comp)
                     if physics == "heat_transfer"
@@ -193,7 +201,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
                 "group": f.selection,
                 "values": {k: q.to_si() for k, q in f.values.items()},
                 **(
-                    {"area": surface_area(mesh.groups[f.selection], mesh)}
+                    {"area": load_area(mesh.groups[f.selection], mesh, comp)}
                     if f.type == "force"
                     else {}
                 ),
@@ -355,6 +363,35 @@ def _time(step) -> dict:
     dt, _, n = time_settings(step)
     scheme, theta = time_scheme(step)
     return {"time_step": dt, "steps": n, "scheme": scheme, "theta": theta}
+
+
+def _check_2d(comp, physics, step, features, thermal_load) -> None:
+    """What FEniCSx's 2D models (ADR 0048) don't take yet, refused by name."""
+    if physics not in ("solid_mechanics", "heat_transfer"):
+        raise InputError(
+            f"2D models on FEniCSx solve structures or heat, not {physics}", code="unsupported"
+        )
+    if physics == "solid_mechanics" and step.type != "stationary":
+        raise InputError(
+            f"2D structures on FEniCSx are static so far, not {step.type}", code="unsupported"
+        )
+    if thermal_load is not None:
+        raise InputError("a temperature load is not written in 2D yet", code="unsupported")
+    allowed = {"fixed", "displacement", "force", "pressure", "elastic_support"} | THERMAL
+    for f in features:
+        if f.type not in allowed or f.axes is not None or f.amplitude is not None:
+            raise InputError(
+                f"{f.type} on '{f.selection}' is not written in 2D models on FEniCSx yet",
+                code="unsupported",
+            )
+
+
+def _thickness(comp, selection: str, physics: str) -> dict:
+    """A planar part's thickness for study.py's weights (plane stress; 1 m in plane
+    strain); none needed for heat, whose loads are per area."""
+    if comp.dimension != "2d_planar" or physics != "solid_mechanics":
+        return {}
+    return {"thickness": plane_thickness(comp, selection.split("/", 1)[0])}
 
 
 def _dynamics(study, step) -> dict:

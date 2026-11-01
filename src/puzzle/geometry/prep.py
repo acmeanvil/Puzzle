@@ -539,7 +539,7 @@ def shape_of(project, geometry, root: Path):
         params = {
             k: q.to_si() for ps in project.of_type(ParameterSet) for k, q in ps.values.items()
         }
-        return regenerate(ops_of(geometry), params, root).shape
+        return regenerate(ops_of(geometry, project), params, root).shape
     return read_cad(Path(root) / geometry.source)[0]
 
 

@@ -1,6 +1,6 @@
 # 0048. 2D models: planar and axisymmetric geometry made, updated and solved like 3D
 
-- Status: Accepted (2026-10-26, with the maintainer's answers)
+- Status: Accepted (2026-10-26, with the maintainer's answers); round 1 built 2026-10-31
 - Date: 2026-10-26
 
 ## Context
@@ -66,6 +66,48 @@ The maintainer asked for 2D geometry creation and updating sooner rather than la
 3. planar imports;
 4. the revolved view and per-360° totals in the result tools;
 5. 2D magnetics (ADR 0047), then 2D CFD.
+
+## Built: round 1 (2026-10-31)
+
+- **Geometry:**
+  - `face` (Face from sketch) makes a flat region from a profile: a sketch, typed points, or circles and circular holes. Each side is named after the sketch's edge ("Ring/outer"; typed profiles side-1, side-2, ...).
+  - Edge names ride in the history's name table with the face names, so every operation carries them through OCCT's history. `name_all` names edges an operation named before naming the rest by the faces they join.
+  - `section` (Section of a part) cuts another geometry by a plane and lays the cut in XY at z = 0. `half` keeps the side at u ≥ 0, for an axisymmetric section. Each edge is named after the 3D face it cuts ("Cut/Tube/wall"), so loads on it follow the 3D part through its edits.
+  - `ops_of(geometry, project)` hands a section the part's own operations, or its file. The cut part is a dependency, so editing it stales the section.
+  - Both steps are in the Geometry tab's ribbon; the part to cut is a dropdown of the other geometries by name.
+- **Meshing:**
+  - A 2D component's parts must be faces. They are meshed by Gmsh in 2D, as triangles or as 8-node quadrilaterals (the recipe's hexahedra), and regions of one part share their edges.
+  - Faces off z = 0 are refused (`not_planar`), as are axisymmetric faces at x < 0 (`negative_radius`). Nodes are snapped to exactly z = 0, since CalculiX refuses round-off.
+  - Quality is measured on the 2D elements. `Mesh.planar` keeps a 2D model's faces from being taken for shells, and `Mesh.region_blocks()` returns them.
+- **Model:**
+  - `Component.planar_model` is plane stress (the default) or plane strain.
+  - The plane-stress thickness comes from a thickness section per part (`common.plane_thickness`).
+  - A force on an edge spreads over `common.load_area`: length × thickness, 1 m deep in plane strain, or 2π∫r dl axisymmetric. An axisymmetric force is the whole revolution's.
+- **Solvers:**
+  - **CalculiX:** CPS/CPE/CAX elements. It has no DC2D elements, so heat runs on CPS, or on DCAX for axisymmetric heat. Thickness goes on the `*SOLID SECTION`; edge loads are written by edge number; results come back at the 2D nodes (OUTPUT=2D).
+  - **Code_Aster:** C_PLAN, D_PLAN and AXIS, and PLAN and AXIS for heat. C_PLAN works per unit thickness, so an edge force becomes F / load_area in `FORCE_CONTOUR`. Pressure edges are turned outward by ORIE_PEAU, because Gmsh doesn't orient 2D boundary lines.
+  - **Elmer:** `Cartesian 2D` or `Axi Symmetric`, with `Plane Stress = True` in the Equation. Two displacement dofs, 2D element codes 303–408 and 202–203.
+  - **FEniCSx:** the mesh is read with gdim = 2. Integrals are weighted by thickness, or by 2πr axisymmetric, with hoop strain u/r; plane stress uses λ* = 2λμ / (λ + 2μ).
+  - On all four: stress is stored as six components (zz is the hoop stress axisymmetric; yz = zx = 0), and fixed holds x and y. What isn't written in 2D is refused by name: beams, fasteners, remote loads, pretension, non-conformal contacts, and on FEniCSx 2D dynamics and body loads.
+- **Benchmarks** (`tests/integration/test_planar_benchmarks.py`, `test_section_solve.py`):
+
+  | Case | CalculiX | Code_Aster | FEniCSx | Elmer |
+  | --- | --- | --- | --- | --- |
+  | Plane-stress strip in tension (σ, εx, εy) | within 0.2 % | within 0.2 % | within 0.2 % | within 0.2 % |
+  | Kirsch, σx at the hole (exact 3.003 σ) | 3.046 σ | 3.033 σ | 3.030 σ | 3.030 σ |
+  | Lamé plane strain, hoop at the bore (166.67 MPa) | 166.57 | 166.57 | 166.05 | 166.05 |
+  | Lamé axisymmetric, hoop at the bore (166.67 MPa) | 166.33 | 166.43 | 166.92 | 166.91 |
+  | Axisymmetric bar, axial stretch | exact | exact | exact | exact |
+  | Planar conduction with a flux; axisymmetric conduction (log) | within 0.1 % | within 0.1 % | within 0.1 % | within 0.1 % |
+  | A 3D tube's half section, Lamé (outer radial displacement) | within 0.5 % | within 0.5 % | within 0.5 % | within 0.5 % |
+
+- **Not yet:**
+  - the 2D shapes and operations (round 2), apart from `face`;
+  - planar imports (round 3);
+  - the revolved view and per-360° labels on totals (round 4; Code_Aster's axisymmetric reactions are probably per radian, unchecked);
+  - the pick bar's Regions, Edges and Points labels;
+  - 2D dynamics on FEniCSx, and the 2D modal, transient and harmonic benchmarks;
+  - 2D magnetics and CFD (round 5).
 
 ## Consequences
 

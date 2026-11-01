@@ -242,7 +242,8 @@ class SolverAdapter(ABC):
                 )
         if component.beam_sections and not caps.beams:
             problems.append(f"{self.name} does not write beams (line bodies) yet")
-        if component.shell_sections and not caps.shells:
+        # In a 2D model thickness sections are plane-stress thicknesses, not shells.
+        if component.shell_sections and not caps.shells and component.dimension == "3d":
             problems.append(f"{self.name} does not write shells (sheet bodies) yet")
         # ADR 0023: the study's settings for this solver, and its pass-through.
         from puzzle.adapters.common import InputError

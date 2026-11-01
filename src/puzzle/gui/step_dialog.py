@@ -42,6 +42,10 @@ CHOICES = {
         ("A new body", "new"),
     ],
     "plane": [("XY plane", "xy"), ("YZ plane", "yz"), ("XZ plane", "xz")],
+    "half": [  # a section (ADR 0048): the whole cut, or the half at u >= 0
+        ("The whole cut", False),
+        ("The half at u ≥ 0 (an axisymmetric section)", True),
+    ],
     "direction": [
         ("Both ways through the part", "both"),
         ("Along the plane's normal", "forward"),
@@ -262,11 +266,13 @@ class StepForm(QWidget):
         params: dict[str, float] | None = None,
         sketches=(),
         pick=None,
+        parts=(),
     ) -> None:
         super().__init__()
         from puzzle.gui.choices import label
 
         self.kind = kind
+        self.parts = list(parts)  # (name, geometry id): what a section may cut
         self.params = dict(params or {})
         self.fields = STEPS[kind]
         self.pick = pick
@@ -284,12 +290,21 @@ class StepForm(QWidget):
             form.addRow((f.label or label(f.name)) + unit, widget)
 
     def _widget(self, f, value, features, sketches):
+        if f.kind == "geometry":  # another geometry of the project, by name (ADR 0048)
+            box = QComboBox()
+            for text, v in self.parts:
+                box.addItem(text, v)
+            if value and box.findData(str(value)) >= 0:
+                box.setCurrentIndex(box.findData(str(value)))
+            box.currentIndexChanged.connect(lambda _: self.changed.emit())
+            return box
         if f.kind in CHOICES or f.kind == "feature":
             box = QComboBox()
             for text, v in CHOICES.get(f.kind) or [(n, n) for n in features]:
                 box.addItem(text, v)
-            if value:
-                box.setCurrentIndex(max(box.findData(str(value)), 0))
+            if value is not None and value != "":
+                found = box.findData(value if isinstance(value, bool) else str(value))
+                box.setCurrentIndex(max(found, 0))
             box.currentIndexChanged.connect(lambda _: self.changed.emit())
             return box
         if f.kind == "profile":
@@ -371,13 +386,14 @@ class StepDialog(QDialog):
         parent=None,
         params: dict[str, float] | None = None,
         sketches=(),
+        parts=(),
     ):
         super().__init__(parent)
         from puzzle.gui.choices import label
 
         self.kind = kind
         self.setWindowTitle(f"{label(kind)} step")
-        self.form = StepForm(kind, args, name, features, params, sketches)
+        self.form = StepForm(kind, args, name, features, params, sketches, parts=parts)
         self.name, self.widgets, self.params = self.form.name, self.form.widgets, self.form.params
         self.error = QLabel("")
         role(self.error, "error")

@@ -2230,7 +2230,10 @@ class MainWindow(QMainWindow):
             for ps in self.session.project.of_type(ParameterSet)
             for k, q in ps.values.items()
         }
-        dialog = StepDialog(kind, args, name, features, self, params=params)
+        from puzzle.model.schema import Geometry
+
+        parts = [(g.name, str(g.id)) for g in self.session.project.of_type(Geometry)]
+        dialog = StepDialog(kind, args, name, features, self, params=params, parts=parts)
         if dialog.exec() and dialog.result_args is not None:
             return dialog.name.text().strip() or name, dialog.result_args
         return None

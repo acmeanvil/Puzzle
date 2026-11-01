@@ -393,7 +393,7 @@ def named_geometry(project, geometry, root) -> Named:
 
     params = {k: q.to_si() for ps in project.of_type(ParameterSet) for k, q in ps.values.items()}
     if geometry.history:
-        return name_all(regenerate(ops_of(geometry), params, root))
+        return name_all(regenerate(ops_of(geometry, project), params, root))
     shape = regenerate([Op("import", "F", {"file": str(Path(root) / geometry.source)})])
     plain = NamedShape(
         shape.shape,
