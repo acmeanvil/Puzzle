@@ -1,6 +1,6 @@
 # 0044. Imported fields: a wizard to bring them in, and features that take them
 
-- Status: Accepted (2026-10-25, with the maintainer's answers)
+- Status: Accepted (2026-10-25, with the maintainer's answers); stage 1 built 2026-11-01 (CalculiX and Code_Aster; the rest listed below)
 - Date: 2026-10-25
 
 ## Context
@@ -116,6 +116,46 @@ The maintainer's answers (2026-10-25):
      - Properties shows the whole chain from the file to the solver;
      - transfers show on the studies they feed;
    - **in the 3D view** (`connections.view`): selecting a field-fed feature or an imported field draws the mapped values on its faces with the legend (ADR 0038), extrapolated areas hatched, and optionally the source points, so you see where the data lands and where it doesn't.
+
+## Built: stage 1 (2026-11-01)
+
+- **The object:** `ImportedField` (kind `field`, the tree's "Imported fields" section). It holds:
+  - the file, copied into the project's `fields/` folder, and its SHA-256, so a changed file stales its users;
+  - how the file is read: the format (csv, vtu), delimiter, rows to skip, header, and each column's role (x, y, z, value, ignore) and unit;
+  - the points' length unit;
+  - a `FieldPlacement`: a coordinate system's axes, then a rotation in degrees about x, then y, then z, about a point, then a move.
+- **Reading** (`puzzle.fields`): `sniff` guesses the delimiter (comma, semicolon, tab or whitespace), comment and header rows, and roles and units. A `name [unit]` header names both, which is how Puzzle's own point clouds (ADR 0043) and Ansys's External Data write them. VTU point or cell data is read with pyvista.
+- **Features take a field** through `Feature.fields`, a value name mapped to a `FieldUse`. A use holds the column, scale, offset (a temperature offset adds a difference), its own placement, the mapping and `max_distance` with `beyond` (nearest, zero, refuse).
+  - Linear mapping works in the points' own span: Delaunay cells for scattered 3D points, triangles for a wall's points, segments for a line. Outside it a target takes the nearest value. Nearest and inverse distance are the other mappings.
+  - An unused `fields` is left out of content hashes, so older projects keep theirs.
+- **Verification** (`fields.check`):
+  - point count, and each column's range and mean in SI;
+  - with a target: coverage within a tolerance, the distance histogram, points off the model, and the data's size against the target's;
+  - warnings: sparse data, an uncovered share, "misses most of the target", and "spans 1e+03 times the target's size: check its length unit" (millimetres read as metres).
+  - The default tolerance is 2 % of the target, or 1.5 × the data's median point spacing when that is larger, so a coarse grid that does cover the target isn't called uncovered.
+- **In studies:** `run_study` maps each use onto the mesh (`fields.field_inputs`).
+  - A new structural feature, **body temperature** ("Temperature (thermal load)", on a body, uniform or from a field), becomes a temperature load, which all four FE solvers apply. A temperature from both a transfer and a body temperature is refused.
+  - Other field-driven values reach the adapter as `feature` inputs named `type:selection:value`. That name survives the per-step copies split studies get.
+  - CalculiX writes pressure, heat flux and films per face, using the mean of the face's nodes.
+  - Code_Aster writes a varying pressure as consistent nodal forces (`common.pressure_forces`, ∫N(−p n)dA with outward normals) on point groups, since its PRES_REP takes one value per group.
+  - `Capabilities.field_features` lists what each adapter takes; the rest is refused by name.
+- **GUI:**
+  - Project (and the section's menu) → Import field… opens a four-page wizard: File (roles and units per column), Alignment, Verification (the target meshed in the background, the report shown) and Name. Finish copies the file in and adds the field, as one command.
+  - A feature's menu → Take a value from an imported field… is one form, and Back to uniform values removes the uses.
+  - The tree names a field-fed feature's source ("Convection on Tip ← CFD walls ×1.5"), and the outline lists each field and where it's used.
+- **Twins:** `puzzle import-field` and `puzzle field-check`; MCP `field_import`, which reads files inside the project only and returns the Create command to submit, and `field_check`; the skill `imported-fields`.
+- **Benchmarks** (`tests/integration/test_imported_fields.py`, `tests/test_fields.py`):
+  - a linear field maps exactly;
+  - an imported linear temperature on the steel bar against its free expansion: +0.3 % on CalculiX, Code_Aster, FEniCSx and Elmer alike;
+  - an imported uniform pressure on the tip equals the uniform feature (−0.18 % from −pL/E, the mesh's own error). A copy written turned 90° and moved 1 m, then placed back, gives the same digits, on CalculiX and Code_Aster;
+  - an imported film coefficient equals the uniform one (CalculiX).
+- **Not yet:**
+  - the Ansys and Fluent profile, Exodus II, and OpenFOAM and Code_Saturne readers (CSV covers Ansys's External Data CSV);
+  - conservative mapping; the alignment helpers (point pairs, a best fit);
+  - fields varying in time; vector and tensor fields (stages 2 and 3);
+  - the 3D view's mapped values and source points;
+  - the Connections schematic, which ADR 0058 replaces;
+  - convection and flux from fields on Code_Aster, and face fields on Elmer and FEniCSx.
 
 ## Consequences
 

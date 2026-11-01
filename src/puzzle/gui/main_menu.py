@@ -228,6 +228,10 @@ def _project(window, menu: QMenu) -> None:
          "A named value (8 mm) that geometry steps can use")  # fmt: skip
     _add(menu, "New amplitude…", lambda: menus.edit_amplitude(window),
          "A factor against time, for loads in transient steps")  # fmt: skip
+    from puzzle.gui.field_wizard import import_field
+
+    _add(menu, "Import field…", lambda: import_field(window),
+         "Values at points from another tool or a test, as loads (ADR 0044)")  # fmt: skip
     axes = _sub(menu, "New coordinate system")
     _add(axes, "Cartesian…", lambda: menus.new_axes(window, "cartesian"))
     _add(axes, "Cylindrical…", lambda: menus.new_axes(window, "cylindrical"))

@@ -416,6 +416,10 @@ class ModelTree(QTreeWidget):
                 )
                 for j, f in enumerate(ph.features):
                     text = f"{_feature_label(ph.type, f.type)} on {f.selection}"
+                    for use in f.fields.values():  # ADR 0044: where its values come from
+                        source = project.objects.get(use.field)
+                        scale = f" ×{use.scale:g}" if use.scale != 1 else ""
+                        text += f" ← {getattr(source, 'name', 'a missing field')}{scale}"
                     path = f"physics.{i}.features.{j}"
                     self._add(p_item, text, Node("feature", oid, path, f.selection))
         elif isinstance(obj, Study):

@@ -170,6 +170,24 @@ def outline(project: Project, *, ids: bool = False, runs=None) -> str:
             head("Transfer", t)
             + f": {t.field} ({t.role}) {names.get(t.source, '?')} -> {names.get(t.target, '?')}"
         )
+    from puzzle.model.schema import ImportedField
+
+    for f in project.of_type(ImportedField):  # ADR 0044: the file, and where it is used
+        uses = [
+            f"{feat.type}.{key} on {feat.selection} in {c.name}"
+            + (f" x{use.scale:g}" if use.scale != 1 else "")
+            for c in project.of_type(Component)
+            for ph in c.physics
+            for feat in ph.features
+            for key, use in feat.fields.items()
+            if use.field == f.id
+        ]
+        lines.append(
+            head("Imported field", f)
+            + f": {f.file}, values {', '.join(f.value_columns()) or '-'}, points in "
+            + f"{f.length_unit}"
+            + (f"; used by {'; '.join(uses)}" if uses else "; not used")
+        )
     for d in project.of_type(ResultDefinition):
         if d.method == "fatigue":
             f = d.fatigue

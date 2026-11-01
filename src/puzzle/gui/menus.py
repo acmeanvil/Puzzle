@@ -77,6 +77,10 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
             add("New Cartesian system…", lambda: new_axes(window, "cartesian"))
             add("New cylindrical system…", lambda: new_axes(window, "cylindrical"))
             add("New spherical system…", lambda: new_axes(window, "spherical"))
+        elif node.label == "Imported fields":  # ADR 0044
+            from puzzle.gui.field_wizard import import_field
+
+            add("Import field…", lambda: import_field(window))
         elif node.label == "Bolt types":  # ADR 0050
             from puzzle.gui.bolt_types import new_bolt_type
 
@@ -171,6 +175,11 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
 
             i, j = int(node.path.split(".")[1]), int(node.path.split(".")[3])
             feature = obj.physics[i].features[j]
+            if feature.values:  # ADR 0044: a value from an imported field
+                add("Take a value from an imported field…",
+                    lambda: value_from_field(window, obj, i, j))  # fmt: skip
+            if feature.fields:
+                add("Back to uniform values", lambda: uniform_again(window, obj, i, j))
             if feature.type in tools.SUPPORTS:  # ADR 0042: what this support takes
                 add(
                     "Reaction force…",
@@ -903,3 +912,55 @@ def swap_hidden(window):
 def suppress_geometry(window, geometry, suppressed: bool):
     """Leave a geometry out of meshing and solving (or bring it back)."""
     return _set_flags(window, [(geometry, "suppressed", suppressed)])
+
+
+# --- imported fields (ADR 0044) ------------------------------------------------------------
+
+
+def value_from_field(window, comp, i: int, j: int):
+    """One form: which value, which field and column, scaling, offset and mapping; then
+    one Edit setting the feature's field use."""
+    from puzzle.gui.choices import label
+    from puzzle.gui.quick_form import Ask
+    from puzzle.model.schema import ImportedField
+
+    feature = comp.physics[i].features[j]
+    fields = window.session.project.of_type(ImportedField)
+    if not fields:
+        window.statusBar().showMessage(
+            "No imported fields yet: Imported fields → Import field… first", 8000
+        )
+        return None
+    by_id = {str(f.id): f for f in fields}
+    values = window.ask_form("Value from an imported field", [
+        Ask("value", "Value", choices=[(label(k), k) for k in feature.values]),
+        Ask("field", "Imported field", choices=[(f.name, str(f.id)) for f in fields]),
+        Ask("column", "Column", choices=lambda v: _columns(by_id[v["field"]])),
+        Ask("scale", "Scale by", kind="text", default="1"),
+        Ask("offset", "Then add (e.g. 10 K, 0.1 MPa)", kind="text", default=""),
+        Ask("mapping", "Mapping", choices=[("Linear between the points", "linear"),
+                                            ("Nearest point", "nearest"),
+                                            ("Inverse distance", "inverse_distance")]),
+    ], intro=f"{label(feature.type)} on {feature.selection} takes this value from the field, "
+             "mapped onto its faces or bodies each run.")  # fmt: skip
+    if values is None:
+        return None
+    use = {"field": values["field"], "column": values["column"], "mapping": values["mapping"],
+           "scale": float(values["scale"] or 1)}  # fmt: skip
+    offset = (values.get("offset") or "").strip()
+    if offset:
+        number, _, unit = offset.partition(" ")
+        use["offset"] = {"value": float(number), "unit": unit.strip() or "dimensionless"}
+    path = f"physics.{i}.features.{j}.fields.{values['value']}"
+    return window.submit(Edit(object=str(comp.id), ops=[EditOp(op="set", path=path, value=use)]))
+
+
+def _columns(f) -> list[tuple[str, str]]:
+    return [(c, c) for c in f.value_columns()]
+
+
+def uniform_again(window, comp, i: int, j: int):
+    """Every value of the feature back to its own number (the field uses removed)."""
+    ops = [EditOp(op="remove", path=f"physics.{i}.features.{j}.fields.{k}")
+           for k in comp.physics[i].features[j].fields]  # fmt: skip
+    return window.submit(Edit(object=str(comp.id), ops=ops))

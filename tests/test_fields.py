@@ -176,3 +176,49 @@ def test_the_cli_imports_a_field_and_checks_it(tmp_path, capsys):
     assert main(["field-check", str(root), "Oven"]) == 0
     out = capsys.readouterr().out
     assert "27 points" in out and "353.15" in out  # 80 °C in K
+
+
+def test_the_agent_imports_a_field_from_inside_the_project_only(tmp_path):
+    pytest.importorskip("mcp")
+    import asyncio
+
+    from puzzle.agent.mcp import build_server
+    from puzzle.commands import Session
+    from puzzle.project.store import save_project
+
+    root = tmp_path / "proj"
+    save_project(Project(name="agent"), root)
+    (root / "fields").mkdir()
+    _write(root / "fields" / "t.csv", _grid(3), np.full(27, 40.0))
+    _write(tmp_path / "outside.csv", _grid(2), np.ones(8))
+    server = build_server(root, "test")
+
+    def call(name, args):
+        result = asyncio.run(server.call_tool(name, args))
+        return result, result.structured_content.get("result", result.structured_content)
+
+    _, out = call("field_import", {"file": "fields/t.csv", "name": "Bake"})
+    assert out["read"]["length_unit"] == "mm" and out["create"]["kind"] == "field"
+    Session(root).submit(out["create"])
+    _, report = call("field_check", {"field": "Bake"})
+    assert report["points"] == 27 and report["columns"]["T"]["mean"] == pytest.approx(313.15)
+    with pytest.raises(Exception, match="inside the project"):  # never outside it
+        call("field_import", {"file": "../outside.csv"})
+
+
+def test_the_outline_lists_a_field_and_its_uses(tmp_path):
+    from puzzle.commands.outline import outline
+    from puzzle.model import Component, Feature, MeshRecipe, PartInstance, Physics
+    from puzzle.model.schema import Geometry
+
+    p, f, _root = _field(tmp_path, _grid(2), np.ones(8))
+    geo = p.add(Geometry(name="G", source="g.step"))
+    mesh = p.add(MeshRecipe(name="M", global_size=Quantity(value=1, unit="mm")))
+    feat = Feature(type="body_temperature", selection="P/Body",
+                   values={"T": Quantity(value=20, unit="degC")},
+                   fields={"T": FieldUse(field=f.id, column="T", scale=2)})  # fmt: skip
+    p.add(Component(name="Oven", parts=[PartInstance(name="P", geometry=geo.id)], mesh=mesh.id,
+                    physics=[Physics(type="solid_mechanics", features=[feat])]))  # fmt: skip
+    text = outline(p)
+    assert "Imported field Temps: fields/in.csv, values T, points in mm" in text
+    assert "used by body_temperature.T on P/Body in Oven x2" in text

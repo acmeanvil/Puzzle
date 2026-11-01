@@ -237,6 +237,60 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         return check.report(s.project, comp, mesh, solver)
 
     @tool(
+        description="Read a field file (ADR 0044: x, y, z and values, CSV/TXT/DAT or VTU) "
+        "that is inside the project folder (`file`, relative to it) and say how it would be "
+        "read: format, columns with their roles (x, y, z, value, ignore) and units, the "
+        "points' length unit. Returns `create`, the command that adds it as an imported "
+        "field: change its `columns`, `length_unit`, or `placement` (translation m, "
+        "rotation degrees about x, y, z, about m, axes a coordinate system's id) if the "
+        "guess is wrong, then pass it to `submit`. Check it with `field_check` first."
+    )
+    @guarded
+    def field_import(file: str, name: str | None = None) -> dict[str, Any]:
+        from puzzle.errors import PuzzleError
+        from puzzle.fields import file_hash, sniff
+
+        path = (root / file).resolve()
+        if not path.is_relative_to(root.resolve()) or not path.exists():
+            raise PuzzleError(f"no file '{file}' inside the project", code="not_found")
+        found = sniff(path)
+        data = {
+            "name": name or path.stem,
+            "file": str(path.relative_to(root.resolve())),
+            "file_hash": file_hash(path),
+            **{
+                k: found[k]
+                for k in ("format", "delimiter", "skip_rows", "header", "length_unit", "columns")
+            },  # fmt: skip
+        }
+        return {"read": found, "create": {"command": "create", "kind": "field", "data": data}}
+
+    @tool(
+        description="An imported field's verification report (ADR 0044): points, each "
+        "column's range and mean (SI), and with `on` (a component, or Component/Part/"
+        "Selection) the share of it within `tolerance_mm` of a data point, the farthest "
+        "distance, points off the model, and warnings (sparse data, uncovered areas, a "
+        "length unit that looks wrong). Meshes the component when `on` is given."
+    )
+    @guarded
+    def field_check(field: str, on: str | None = None, tolerance_mm: float | None = None
+                    ) -> dict[str, Any]:  # fmt: skip
+        import tempfile
+
+        from puzzle.commands import resolve
+        from puzzle.fields import check, target_points
+        from puzzle.model.schema import ImportedField
+
+        s = session()
+        f = resolve(s.project, field, ImportedField)
+        targets = None
+        if on:
+            with tempfile.TemporaryDirectory(prefix="puzzle-field-") as work:
+                targets = target_points(s.project, root, on, Path(work))
+        tol = tolerance_mm / 1000 if tolerance_mm is not None else None
+        return check(s.project, root, f, targets, tol)
+
+    @tool(
         description="Propose bolts for a component's holes (ADR 0050). Holes are the "
         "parts' cylindrical faces; a bolt joins two holes of different parts on one axis. "
         "With a rule (`rule` names it): hole diameters `min_diameter`/`max_diameter` (m), "
