@@ -119,6 +119,7 @@ class HistoryStep(BaseModel):
         "pattern",
         "split",
         "imprint",
+        "split_face",
         "enclosure",
         "polyline",
         "sheet",

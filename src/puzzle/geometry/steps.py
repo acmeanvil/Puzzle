@@ -3,8 +3,8 @@
 A field: its argument name, a kind, a default and a label. Kinds: length (typed in mm,
 stored in m), angle (degrees), number, count, axis, mode, plane, profile (points in mm,
 "u, v; u, v; ..." or "dxf: file.dxf"), rule (edges or faces, as JSON), file, feature
-(an earlier tool step), text. A length, angle or number may instead be a parameter's
-name, kept as given.
+(an earlier tool step), faces (picked, or {} for a default), direction, text. A
+length, angle or number may instead be a parameter's name, kept as given.
 """
 
 from __future__ import annotations
@@ -118,6 +118,11 @@ STEPS: dict[str, list[StepField]] = {
         StepField("hole", "text", "H/wall", "The hole's wall (its face name)"),
         StepField("r", "length", 0.008, "Ring's outer radius"),
     ],  # fmt: skip
+    "split_face": [
+        StepField("profile", "profile", "", "Sketch to project"),
+        StepField("faces", "faces", {}, "Faces to split"),
+        StepField("direction", "direction", "both", "Project"),
+    ],
     "enclosure": [StepField("margin", "length", 0.01, "Margin")],
     "heal": [StepField("tolerance", "length", 1e-6)],
     "remove": [StepField("rule", "rule", {"holes_below": 0.003}, "Faces")],

@@ -33,6 +33,7 @@ the part, the first one starts it):
 | pattern | feature, count, dx, dy, dz, or angle + axis for a circular one | <feature>#2/..., ... |
 | split | axis or normal, at or x, y, z | section (the cut face inside); split faces keep names |
 | imprint | hole (a wall's face name), r | annulus (rings at the hole's mouths); others keep names |
+| split_face | profile (sketch), faces (default: on its plane), direction | region; others kept |
 | enclosure | margin, or factor of the part size | +x ... of the box; body `<name>` |
 | import, heal, remove, fragment | see puzzle.geometry.prep | preparing imported CAD (G2) |
 | sketch | sketch, plane and offset, or face (a planar face, axis-aligned) | (no faces: a profile) |
@@ -147,6 +148,8 @@ WORDS = {
     "sketch",  # resolved by the sketch solver itself (its dimensions may name parameters)
     "face",  # a sketch step's face to sketch on
     "hole",  # an imprint's hole wall (ADR 0050)
+    "faces",  # a split_face's faces, by name
+    "direction",  # a split_face's projection: both, forward or backward
 }
 
 
@@ -699,6 +702,121 @@ def _imprint(state, op, a):
     state.names[f"{op.name}/annulus"] = rings
 
 
+def _split_face(state, op, a):
+    """A sketch projected along its plane's normal splits the faces it falls on
+    (SpaceClaim's project-to-body): the faces named in `faces`, or by default those
+    lying on the sketch's plane. Only faces are split; the solid is unchanged. The
+    pieces inside the sketch's outline are "<op>/region"; split faces keep their names
+    on every piece. `direction`: both (default), forward (along the normal) or backward,
+    for a projection that would otherwise reach both sides of a curved part."""
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Section
+    from OCP.BRepFeat import BRepFeat_SplitShape
+
+    from puzzle.geometry.profile import NORMALS, profile_face
+
+    a = _with_sketch(state, op, a)
+    if "profile" not in a:
+        raise GeometryError(f"split_face '{op.name}' has no sketch to project")
+    plane, offset = a.get("plane", "xy"), a.get("offset", 0.0)
+    sketch, _edges, _labels = profile_face(a["profile"], plane, offset, state.root, state.params)
+    n = NORMALS[plane]
+    targets = _split_targets(state, op, a, sketch, n)
+    reach = 4 * max(_size(state.shape), 1e-9) + abs(offset)
+    back, ahead = {"both": (reach, reach), "forward": (0.0, reach), "backward": (reach, 0.0)}[
+        a.get("direction", "both")
+    ]
+    shift = gp_Trsf()
+    shift.SetTranslation(gp_Vec(*(-back * c for c in n)))
+    start = BRepBuilderAPI_Transform(sketch, shift, True).Shape()
+    prism = BRepPrimAPI_MakePrism(start, gp_Vec(*((back + ahead) * c for c in n))).Shape()
+    splitter = BRepFeat_SplitShape(state.shape)
+    crossed = []
+    for f in targets:
+        section = BRepAlgoAPI_Section(f, prism, False)
+        section.ComputePCurveOn1(True)
+        section.Approximation(True)
+        section.Build()
+        edges = _subshapes(section.Shape(), TopAbs_EDGE) if section.IsDone() else []
+        for e in edges:
+            splitter.Add(e, f)
+        if edges:
+            crossed.append(f)
+    if not crossed:
+        raise GeometryError(f"split_face '{op.name}': the sketch falls on none of its faces")
+    splitter.Build()
+    if not splitter.IsDone():
+        raise GeometryError(f"split_face '{op.name}' failed")
+    pieces = [p for f in crossed for p in (_list(splitter.Modified(f)) or [f])]
+    state.names, state.bodies = _carry(splitter, state.names), _carry(splitter, state.bodies)
+    state.shape = splitter.Shape()
+    inside = [p for p in pieces if _projects_inside(p, sketch, n, offset)]
+    if not inside:
+        raise GeometryError(f"split_face '{op.name}': no face lies inside the sketch")
+    state.names[f"{op.name}/region"] = [
+        f for f in _faces(state.shape) if any(f.IsSame(p) for p in inside)
+    ]
+
+
+def _split_targets(state, op, a, sketch, n) -> list:
+    """The faces a split_face works on: those it names, else those on the sketch's plane."""
+    named = a.get("faces") or []
+    if isinstance(named, dict):  # the step dialog's form: {"face": [...]}, or {} for the default
+        named = named.get("face") or []
+    if isinstance(named, str):
+        named = [named]
+    if named:
+        out = []
+        for name in named:
+            faces = state.names.get(name)
+            if not faces:
+                raise GeometryError(f"split_face '{op.name}': no face '{name}'")
+            out += faces
+        return out
+    level = sum(c * k for c, k in zip(signature(sketch)[2], n, strict=True))
+    tol = 1e-6 * max(_size(state.shape), 1e-9)
+    out = []
+    for f in _faces(state.shape):
+        surface = BRepAdaptor_Surface(f)
+        if surface.GetType() != GeomAbs_Plane:
+            continue
+        d = surface.Plane().Axis().Direction()
+        along = abs(d.X() * n[0] + d.Y() * n[1] + d.Z() * n[2])
+        height = sum(c * k for c, k in zip(signature(f)[2], n, strict=True))
+        if abs(along - 1.0) < 1e-9 and abs(height - level) < tol:
+            out.append(f)
+    if not out:
+        raise GeometryError(
+            f"split_face '{op.name}': no face lies on the sketch's plane; name the faces"
+        )
+    return out
+
+
+def _projects_inside(face, sketch, n, offset) -> bool:
+    """Whether a point on `face` (not its centre of mass, which may lie off a curved
+    face) falls inside the sketch's outline when moved along `n` onto its plane."""
+    from OCP.BRep import BRep_Tool
+    from OCP.BRepClass import BRepClass_FaceClassifier
+    from OCP.BRepTools import BRepTools
+    from OCP.gp import gp_Pnt2d
+    from OCP.TopAbs import TopAbs_IN
+
+    umin, umax, vmin, vmax = _static(BRepTools, "UVBounds")(face)
+    surface = _static(BRep_Tool, "Surface")(face)
+    level = sum(c * k for c, k in zip(signature(sketch)[2], n, strict=True))
+    tol = 1e-7
+    for i in range(1, 8):
+        for j in range(1, 8):
+            u, v = umin + (umax - umin) * i / 8, vmin + (vmax - vmin) * j / 8
+            if BRepClass_FaceClassifier(face, gp_Pnt2d(u, v), tol).State() != TopAbs_IN:
+                continue
+            p = surface.Value(u, v)
+            xyz = (p.X(), p.Y(), p.Z())
+            h = sum(c * k for c, k in zip(xyz, n, strict=True)) - level
+            on = gp_Pnt(*(c - h * k for c, k in zip(xyz, n, strict=True)))
+            return BRepClass_FaceClassifier(sketch, on, tol).State() == TopAbs_IN
+    return False
+
+
 def _enclosure(state, op, a):
     """An air (or fluid) box around the part, sharing the interface faces with it, so
     the mesh is conformal: body `<op name>`, its outer faces `<op name>/+x` ..."""
@@ -781,6 +899,7 @@ MODIFIERS = {
     "pattern": _pattern,
     "split": _split,
     "imprint": _imprint,
+    "split_face": _split_face,
     "enclosure": _enclosure,
 }
 

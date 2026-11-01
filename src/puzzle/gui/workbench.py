@@ -50,10 +50,11 @@ GROUPS = [
             "curved_sheet",
         ],
     ),
-    ("Modify", ["fillet", "chamfer", "move", "rotate", "pattern", "split"]),
+    ("Modify", ["fillet", "chamfer", "move", "rotate", "pattern", "split", "split_face"]),
     ("Prepare", ["heal", "remove", "fragment", "enclosure"]),
 ]
-NAMES = {"remove": "Remove features", "heal": "Heal", "fragment": "Share faces"}
+NAMES = {"remove": "Remove features", "heal": "Heal", "fragment": "Share faces",
+         "split_face": "Split face by sketch"}  # fmt: skip
 PLANES = [("XY plane", "xy"), ("YZ plane", "yz"), ("XZ plane", "xz")]
 ON_FACE = "face"
 

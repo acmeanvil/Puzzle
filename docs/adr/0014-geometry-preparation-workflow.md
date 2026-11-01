@@ -105,6 +105,10 @@ Measured in `tests/test_selection_naming.py` and `tests/test_gui_geometry.py`:
 
 Measured in `tests/test_sketch.py`: a dimensioned plate solves to its dimensions; an obround of two lines and two tangent arcs extrudes to (40 x 10 + pi 5^2) x 2 mm^3 to 1e-9; a revolved rectangle gives 2 pi R A; a sketched plate meshes with "Plate/right" on x = W for W = 60 and 80 mm, with no warnings. `tests/test_gui_sketch.py` drives the editor by clicks and dimensions.
 
+## Split face by sketch (2026-10-31)
+
+`split_face` projects a sketch (a sketch step, or a profile of its own) along its plane's normal onto faces and splits them there, as SpaceClaim's project-to-body does. It works on the faces it names, or by default on those lying on the sketch's plane. Curved faces work too, and `direction` (both, forward, backward) keeps a projection to one side of a round part. Only faces are split: OCCT's `BRepFeat_SplitShape` adds the section edges, and the solid is unchanged. The pieces inside the outline are named `<step>/region`, and split faces keep their names on every piece. Measured in `tests/test_split_face.py`: a square on a plate's top is 400 mm² exactly; a 10 mm circle projected onto a 50 mm round bar matches the exact patch area to 1e-5. The region also meshes as a selection. It is the GUI's Split face by sketch tool, with faces picked in the view.
+
 ## Consequences
 
 - One history covers both CAD preparation and light modelling, and geometry parameters can sit in a sweep like any other parameter.

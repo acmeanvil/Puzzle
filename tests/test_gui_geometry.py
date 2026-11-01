@@ -223,6 +223,20 @@ def test_step_dialog_units_and_parameters(app):
     assert filleted.values()["rule"] == {"face": "L/end"}
 
 
+def test_the_step_dialog_asks_for_the_sketch_faces_and_direction(app):
+    from puzzle.gui.step_dialog import StepDialog
+
+    d = StepDialog("split_face", {}, "Pad", sketches=["Spot"])
+    args = d.values()
+    assert args["profile"] == {"sketch": "Spot"}  # the part's latest sketch
+    assert args["faces"] == {} and args["direction"] == "both"
+    d.widgets["faces"].set_picked(["Bar/wall"])
+    assert d.values()["faces"] == {"face": ["Bar/wall"]}
+    again = StepDialog("split_face", {"faces": {"face": ["Bar/wall"]}, "direction": "forward"})
+    assert again.widgets["faces"].picked == ["Bar/wall"]
+    assert again.values()["direction"] == "forward"
+
+
 def test_selecting_a_step_highlights_its_faces(app, window):
     answer(
         window,

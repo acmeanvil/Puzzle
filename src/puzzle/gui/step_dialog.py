@@ -42,7 +42,14 @@ CHOICES = {
         ("A new body", "new"),
     ],
     "plane": [("XY plane", "xy"), ("YZ plane", "yz"), ("XZ plane", "xz")],
+    "direction": [
+        ("Both ways through the part", "both"),
+        ("Along the plane's normal", "forward"),
+        ("Against the plane's normal", "backward"),
+    ],
 }
+# Which faces a projected sketch splits (split_face): a preset, or faces picked.
+SPLIT_PRESETS = [("Faces on the sketch's plane", {})]
 TYPED, INLINE, PICKED = "typed", "inline", "picked"
 EDGE_PRESETS = [
     ("Outer vertical edges", {"parallel": "z", "outer": True}),
@@ -137,13 +144,13 @@ class RuleField(QWidget):
 
     changed = Signal()
 
-    def __init__(self, value, entity: str, pick=None) -> None:
+    def __init__(self, value, entity: str, pick=None, presets=None) -> None:
         super().__init__()
         self.entity = entity  # "edge" or "face"
         self.picked: list[str] = []
         self.choice = QComboBox()
-        if entity == "edge":
-            for text, rule in EDGE_PRESETS:
+        if presets is not None or entity == "edge":
+            for text, rule in EDGE_PRESETS if presets is None else presets:
                 self.choice.addItem(text, rule)
         else:
             for text, key, _unit in FACE_PRESETS:
@@ -287,6 +294,10 @@ class StepForm(QWidget):
             return box
         if f.kind == "profile":
             field = ProfileField(value, self.open_sketch, sketches)
+            field.changed.connect(self.changed.emit)
+            return field
+        if f.kind == "faces":  # faces to work on: a preset or picked ones
+            field = RuleField(value, "face", self.pick, SPLIT_PRESETS)
             field.changed.connect(self.changed.emit)
             return field
         if f.kind == "rule":
