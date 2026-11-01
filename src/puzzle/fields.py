@@ -21,7 +21,6 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
-import re
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -36,7 +35,6 @@ FORMATS = {
     "vtu": "VTK unstructured grid (.vtu, .vtk): point or cell data",
 }
 COMMENTS = ("#", "%", "//", "!")
-UNIT_IN_NAME = re.compile(r"^\s*(?P<name>[^\[\(]+?)\s*[\[\(](?P<unit>[^\]\)]*)[\]\)]\s*$")
 SPARSE = 20  # fewer points than this is test data: flagged, interpolated with care
 
 
@@ -91,10 +89,7 @@ def sniff(path: Path) -> dict:
     names = [c.strip() for c in cells] if header else _default_names(len(cells))
     columns, length = [], None
     for i, raw in enumerate(names):
-        name, unit = raw, ""
-        m = UNIT_IN_NAME.match(raw)
-        if m:
-            name, unit = m.group("name").strip(), m.group("unit").strip()
+        name, unit = _name_and_unit(raw)
         role = _coordinate(name) or ("value" if i >= 3 or header else "xyz"[i])
         if role in ("x", "y", "z"):
             length = length or unit or None
@@ -119,6 +114,17 @@ def _sniff_vtu(path: Path) -> dict:
                 if n not in grid.point_data]  # fmt: skip
     return {"format": "vtu", "delimiter": None, "skip_rows": 0, "header": True,
             "columns": columns, "length_unit": "m"}  # fmt: skip
+
+
+def _name_and_unit(header: str) -> tuple[str, str]:
+    """ "p [MPa]" or "h (W/(m^2*K))": the name, and the unit between the first opening
+    bracket and the last closing one (units hold brackets of their own)."""
+    text = header.strip()
+    for opening, closing in (("[", "]"), ("(", ")")):
+        if text.endswith(closing) and opening in text:
+            at = text.index(opening)
+            return text[:at].strip(), text[at + 1 : -1].strip()
+    return text, ""
 
 
 def _blank(line: str) -> bool:
@@ -477,3 +483,56 @@ def target_points(project, root: Path, where: str, work: Path) -> np.ndarray:
     if group is None:
         raise FieldError(f"component '{name}' has no selection '{selection}'", code="not_found")
     return mesh.node_coords(group.node_ids)
+
+
+# --- into a study's run ------------------------------------------------------------------------
+
+
+def feature_key(feature, value: str) -> str:
+    """How a feature's field-driven value is named to adapters: its type, selection and
+    value ("pressure:Plate/Top:p"), which survives the per-step copies split studies get."""
+    return f"{feature.type}:{feature.selection}:{value}"
+
+
+def field_inputs(project, root: Path, study, mesh) -> list:
+    """The inputs a study's imported fields and body temperatures make (ADR 0044): a
+    body temperature (uniform or a field) becomes a temperature load on the body's nodes,
+    as a transfer's would; any other field-driven value goes as a "feature" input on its
+    selection's nodes, named by `feature_key`, for the adapter to write per face."""
+    from puzzle.model.schema import Component
+    from puzzle.results.model import Field
+    from puzzle.transfer import Input
+
+    comp = project.get(study.component, Component)
+    solved = set()
+    for s in study.solve_steps():
+        solved |= set(s.physics) or {p.type for p in comp.physics}
+    temperature: dict[int, float] = {}
+    out = []
+    for physics in comp.physics:
+        if physics.type not in solved:
+            continue
+        for f in physics.features:
+            if f.type != "body_temperature" and not f.fields:
+                continue
+            group = mesh.groups.get(f.selection)
+            if group is None:
+                raise FieldError(f"{f.type} on '{f.selection}': no such selection in the mesh")
+            ids = group.node_ids
+            xyz = mesh.node_coords(ids)
+            for name in sorted(set(f.fields) | ({"T"} if f.type == "body_temperature" else set())):
+                if name in f.fields:
+                    values, _ = use_values(project, root, f.fields[name], xyz)
+                else:
+                    values = np.full(len(ids), f.values[name].to_si())
+                if f.type == "body_temperature":
+                    temperature.update(zip(ids.tolist(), values.tolist(), strict=True))
+                    continue
+                field_ = Field(feature_key(f, name), "node", [""], ids, values[:, None])
+                out.append(Input(field_, "feature", f.selection, feature_key(f, name)))
+    if temperature:
+        ids = np.array(sorted(temperature), dtype=np.int64)
+        values = np.array([temperature[i] for i in ids.tolist()])[:, None]
+        out.append(Input(Field("temperature", "node", [""], ids, values), "load", None,
+                         "body temperature"))  # fmt: skip
+    return out

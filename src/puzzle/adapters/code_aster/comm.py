@@ -34,6 +34,7 @@ from puzzle.adapters.common import (
     initial_temperature,
     load_area,
     local_axes,
+    pressure_forces,
     rayleigh,
     remote_load,
     remote_values,
@@ -333,6 +334,19 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         for i, (node, twin) in enumerate(cut.doubles.items(), start=1):
             points.add(f"P{k}A{i}", node)
             points.add(f"P{k}B{i}", twin)
+    # ADR 0044: a pressure from an imported field, as consistent nodal forces at the
+    # face's nodes (Code_Aster's PRES_REP takes one value per group).
+    given = {i.source: i.field for i in inputs if i.role == "feature"}
+    field_forces: list[str] = []
+    for j, f in enumerate([f for f in features if f.type == "pressure" and "p" in f.fields], 1):
+        from puzzle.fields import feature_key
+
+        forces = pressure_forces(mesh.groups[f.selection], mesh, given[feature_key(f, "p")])
+        for i, (node, force) in enumerate(sorted(forces.items()), start=1):
+            points.add(f"FP{j}N{i}", node)
+            parts = ", ".join(f"F{a.upper()}={force[k]:.12g}" for k, a in enumerate("xyz"))
+            field_forces.append(f"_F(GROUP_NO='FP{j}N{i}', {parts})")
+    features = [f for f in features if not (f.type == "pressure" and "p" in f.fields)]
     write_med(points.mesh, workdir / f"{JOB}.med", names)
 
     model = _modelisation(comp, thermal)
@@ -385,6 +399,16 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
                 + ",)))"
             ]
             if unnoded
+            else []
+        ),
+        # A field's pressure as nodal forces (ADR 0044): their point groups as node groups.
+        *(
+            [
+                "mesh = DEFI_GROUP(reuse=mesh, MAILLAGE=mesh, CREA_GROUP_NO=_F(GROUP_MA=("
+                + ", ".join(f"'{g}'" for g in points.names if g.startswith("FP"))
+                + ",)))"
+            ]
+            if field_forces
             else []
         ),
         # Pretension relations name single nodes: their point groups as node groups.
@@ -499,6 +523,8 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         out += _thermal_loads(project, features, names, mesh, comp)
     else:
         extra = _pretension_loads(bolts, cuts)
+        if field_forces:
+            extra["FORCE_NODALE"] = extra.get("FORCE_NODALE", []) + field_forces
         for key, items in _fastener_loads(fastener_ends, fasteners, names).items():
             extra[key] = extra.get(key, []) + items  # both write LIAISON_DDL
         # In a transient step, loads following an amplitude get their own charge,

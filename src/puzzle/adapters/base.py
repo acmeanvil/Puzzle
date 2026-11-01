@@ -14,8 +14,18 @@ from puzzle.results.model import Results
 
 # Feature types, grouped by physics, for adapters to combine.
 STRUCTURAL_FEATURES = frozenset(
-    {"fixed", "displacement", "force", "pressure", "gravity", "acceleration", "rotation"}
-)  # body loads (ADR 0037): benchmarked on CalculiX, Code_Aster, Elmer and FEniCSx
+    {
+        "fixed",
+        "displacement",
+        "force",
+        "pressure",
+        "gravity",
+        "acceleration",
+        "rotation",
+        "body_temperature",
+    }  # fmt: skip
+)  # body loads (ADR 0037): benchmarked on CalculiX, Code_Aster, Elmer and FEniCSx; a body
+# temperature (ADR 0044) reaches every adapter as a temperature load (as a transfer's)
 THERMAL_FEATURES = frozenset({"temperature", "heat_flux", "convection"})
 ELECTROMAGNETIC_FEATURES = frozenset(
     {
@@ -83,6 +93,9 @@ class Capabilities:
     axes_features: frozenset[str] = frozenset()
     """Features given in local axes (ADR 0037), as "type:axes type", with ":partial" when
     only some components are prescribed (e.g. "displacement:cylindrical:partial")."""
+    field_features: frozenset[str] = frozenset({"body_temperature:T"})
+    """Feature values taken from an imported field (ADR 0044), as "type:value"; a body
+    temperature becomes a temperature load, which every adapter here applies."""
 
 
 def refuse_inputs(inputs: Sequence, solver: str, accepted: set[tuple[str, str]] = frozenset()):
@@ -90,7 +103,7 @@ def refuse_inputs(inputs: Sequence, solver: str, accepted: set[tuple[str, str]] 
     from puzzle.adapters.common import InputError
 
     for i in inputs:
-        if (i.role, i.field.name) not in accepted:
+        if (i.role, i.field.name) not in accepted and (i.role, "*") not in accepted:
             raise InputError(
                 f"the {solver} adapter does not take a transferred {i.field.name} "
                 f"({i.role}, from '{i.source}') yet",
@@ -176,6 +189,13 @@ class SolverAdapter(ABC):
                     problems.append(
                         f"{self.name} does not take {words} axes yet (on {f.selection})"
                     )
+            problems += [  # imported fields (ADR 0044): refused, never ignored
+                f"{self.name} does not take {f.type}'s {key} from an imported field yet "
+                f"(on {f.selection})"
+                for f in physics.features
+                for key in f.fields
+                if f"{f.type}:{key}" not in caps.field_features
+            ]
             for f in physics.features:  # some steps only (ADR 0037): refused, never ignored
                 # Split studies (one job per step) see only each step's features.
                 if f.steps and not (caps.feature_steps or self.max_solve_steps is not None):

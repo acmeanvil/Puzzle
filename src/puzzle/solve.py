@@ -194,6 +194,19 @@ def run_study(
         )
         for t in project.transfers_into(study.id)
     ]
+    from puzzle.fields import field_inputs
+
+    # ADR 0044: imported fields and body temperatures, mapped onto this mesh.
+    made = field_inputs(project, root, study, meshed.mesh)
+    if any(i.field.name == "temperature" for i in made) and any(
+        i.field.name == "temperature" for i in inputs
+    ):
+        raise StudyError(
+            f"study '{study.name}' takes a temperature load from a transfer and from a body "
+            "temperature; keep one",
+            code="invalid_input",
+        )
+    inputs += made
     lap("transfers")
     from puzzle.bolts import with_joints
 

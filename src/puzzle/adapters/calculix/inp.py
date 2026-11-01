@@ -19,6 +19,7 @@ Solve step settings: `modes` (int, modal, default 10); `time_step` and `end_time
 from __future__ import annotations
 
 import re
+from contextvars import ContextVar
 
 import numpy as np
 
@@ -80,6 +81,8 @@ PLANAR_ELEMENTS = {
     "heat": {"tri3": "CPS3", "tri6": "CPS6", "quad4": "CPS4", "quad8": "CPS8"},
     "heat_axisymmetric": {"tri3": "DCAX3", "tri6": "DCAX6", "quad4": "DCAX4", "quad8": "DCAX8"},
 }
+# Field-driven feature values (ADR 0044) for the deck being written: key -> nodal Field.
+GIVEN: ContextVar[dict | None] = ContextVar("calculix_field_values", default=None)
 # Share of a uniform traction carried by each node of a surface element.
 NODE_SHARES = {
     "tri3": [1 / 3] * 3,
@@ -140,7 +143,11 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
     planar = _planar_kind(comp, study)
     if planar is not None:
         _refuse_in_2d(comp)
-    refuse_inputs(inputs, "CalculiX", {("load", "temperature"), ("prestress", "stress")})
+    refuse_inputs(
+        inputs, "CalculiX", {("load", "temperature"), ("prestress", "stress"), ("feature", "*")}
+    )
+    # ADR 0044: values from imported fields, on their selections' nodes, by feature key.
+    GIVEN.set({i.source: i.field for i in inputs if i.role == "feature"})
     # A temperature field from a thermal study, as a thermal load on structural steps.
     thermal_load = next((i.field for i in inputs if i.field.name == "temperature"), None)
     check_contacts(comp, CONTACTS, "CalculiX")
@@ -1485,6 +1492,8 @@ def _feature_rows(f: Feature, mesh: Mesh, faces: FaceLookup, rigid=None) -> dict
         # normal, as on a solid's face; CalculiX's shell P pushes along it (Gmsh orients
         # the elements with the face).
         dload.append(f"{set_name('E', f.selection)}, P, {-v['p']:.10g}")
+    elif f.type == "pressure" and "p" in f.fields:  # per face, from a field (ADR 0044)
+        dload += [f"{e}, P{n}, {p:.10g}" for e, n, p in _face_values(f, "p", group, mesh, faces)]
     elif f.type == "pressure":
         dload += [f"{e}, P{n}, {v['p']:.10g}" for e, n in _element_faces(group, mesh, faces)]
     elif f.type == "remote_force":  # an RBE3-equivalent traction (ADR 0037)
@@ -1518,12 +1527,15 @@ def _feature_rows(f: Feature, mesh: Mesh, faces: FaceLookup, rigid=None) -> dict
                 f"{elset}, CENTRIF, {load.omega**2:.10g}, {c[0]:.10g}, {c[1]:.10g}, "
                 f"{c[2]:.10g}, {n[0]:.10g}, {n[1]:.10g}, {n[2]:.10g}"
             )
+    elif f.type == "heat_flux" and "q" in f.fields:
+        dflux += [f"{e}, S{n}, {q:.10g}" for e, n, q in _face_values(f, "q", group, mesh, faces)]
     elif f.type == "heat_flux":
         dflux += [f"{e}, S{n}, {v['q']:.10g}" for e, n in _element_faces(group, mesh, faces)]
     elif f.type == "convection":
+        hs = _face_values(f, "h", group, mesh, faces, v.get("h"))
+        ts = _face_values(f, "T_inf", group, mesh, faces, v.get("T_inf"))
         film += [
-            f"{e}, F{n}, {v['T_inf']:.10g}, {v['h']:.10g}"
-            for e, n in _element_faces(group, mesh, faces)
+            f"{e}, F{n}, {t:.10g}, {h:.10g}" for (e, n, h), (_, _, t) in zip(hs, ts, strict=True)
         ]
     return {
         "*BOUNDARY": boundary,
@@ -1651,6 +1663,25 @@ def _modulus(project: Project, comp: Component, selection: str) -> float:
             if "youngs_modulus" in props:
                 return props["youngs_modulus"].to_si()
     raise InputError(f"contact on '{selection}' needs a youngs_modulus on its part's material")
+
+
+def _face_values(f, name, group, mesh: Mesh, faces: FaceLookup, uniform=None):
+    """(element, face number, value) per face of the selection: the mean of a field's
+    nodal values over the face's nodes (ADR 0044), or `uniform` when it has no field."""
+    from puzzle.fields import feature_key
+
+    field = (GIVEN.get() or {}).get(feature_key(f, name)) if name in f.fields else None
+    if field is None and name in f.fields:
+        raise InputError(f"{f.type} on '{f.selection}': its field for {name} was not mapped")
+    out = []
+    for b in surface_blocks(group, mesh):
+        hits = faces.of(b)
+        if field is None:
+            out += [(e, n, uniform) for e, n in hits]
+            continue
+        means = field.at(b.connectivity.ravel())[:, 0].reshape(b.connectivity.shape).mean(axis=1)
+        out += [(e, n, float(m)) for (e, n), m in zip(hits, means, strict=True)]
+    return out
 
 
 def _element_faces(group, mesh: Mesh, faces: FaceLookup) -> list[tuple[int, int]]:

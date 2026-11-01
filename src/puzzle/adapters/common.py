@@ -646,6 +646,39 @@ def nodal_traction(group, mesh: Mesh, traction) -> dict[int, np.ndarray]:
     return out
 
 
+def pressure_forces(group, mesh: Mesh, pressure) -> dict[int, np.ndarray]:
+    """Consistent nodal forces of a pressure varying over a face selection (ADR 0044):
+    ∫ N_k (-p n) dA, p interpolated from its nodal values (`pressure`, a nodal Field)
+    with the faces' own shape functions, n the outward normal (away from the solid each
+    face bounds). For solvers that take no per-face pressure."""
+    solids = [b for b in mesh.blocks if b.dim == 3]
+    faces = FaceLookup.build(solids)
+    centre_of = {}
+    for b in solids:
+        corners = mesh.node_coords(b.connectivity[:, :4].ravel()).reshape(len(b.ids), 4, 3)
+        centre_of.update(zip(b.ids.tolist(), corners.mean(axis=1), strict=True))
+    out: dict[int, np.ndarray] = {}
+    for b in surface_blocks(group, mesh):
+        if b.element not in ("tri3", "tri6"):
+            raise InputError(f"a varying pressure on {b.element} faces is not supported yet")
+        parents = [centre_of[e] for e, _ in faces.of(b)]
+        nodes = mesh.node_coords(b.connectivity.ravel()).reshape(len(b.connectivity), -1, 3)
+        p_nodes = pressure.at(b.connectivity.ravel())[:, 0].reshape(b.connectivity.shape)
+        middle = nodes[:, :3].mean(axis=1)
+        for xi, eta, w in _TRI_RULE:
+            n, dxi, deta = _shape(b.element, xi, eta)
+            jac = np.cross(np.einsum("k,eki->ei", dxi, nodes), np.einsum("k,eki->ei", deta, nodes))
+            # Outward: away from the parent element's centre.
+            outward = np.einsum("ei,ei->e", jac, middle - np.asarray(parents)) >= 0
+            jac = np.where(outward[:, None], jac, -jac)
+            p = p_nodes @ n
+            t = -p[:, None] * jac * (0.5 * w)  # -p n dA, |jac| dA/2 folded in
+            for k, column in enumerate(b.connectivity.T):
+                for nid, f in zip(column, n[k] * t, strict=True):
+                    out[int(nid)] = out.get(int(nid), 0.0) + f
+    return out
+
+
 def remote_values(f) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
     """A remote force feature's force, moment and point (None: the face centroid)."""
     v = {k: q.to_si() for k, q in f.values.items()}

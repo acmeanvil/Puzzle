@@ -70,13 +70,15 @@ class CodeAsterAdapter(SolverAdapter):
         # VMIS_ISOT_TRAC in STAT_NON_LINE, p and EPSP out (tests/integration/test_plasticity.py).
         material_models=frozenset({"plasticity"}),
         dimensions=frozenset({"3d", "2d_planar", "2d_axisymmetric"}),
+        # ADR 0044: a temperature load, and a varying pressure as consistent nodal forces
+        field_features=frozenset({"body_temperature:T", "pressure:p"}),
         time_schemes=frozenset({"backward_euler", "crank_nicolson", "theta"}),
     )
 
     def write_input(
         self, project: Project, study: Study, mesh: Mesh, workdir: Path, inputs=()
     ) -> Path:
-        refuse_inputs(inputs, "Code_Aster", {("load", "temperature")})
+        refuse_inputs(inputs, "Code_Aster", {("load", "temperature"), ("feature", "*")})
         path = write_case(project, study, mesh, workdir, inputs)
         mark_mesh_nodes(path, mesh)  # pretension twins and reference nodes come after
         return path

@@ -67,6 +67,14 @@ CATALOG: dict[str, list[FeatureSpec]] = {
         # first solve step, locked at that length in the steps after.
         FeatureSpec("bolt_pretension", "Bolt pretension (force)", values={"F": (10.0, "kN")}),
         FeatureSpec("bolt_adjustment", "Bolt pretension (adjustment)", values={"d": (0.1, "mm")}),
+        # A temperature on a body (ADR 0044): thermal strain from the reference
+        # temperature; uniform, or from an imported field.
+        FeatureSpec(
+            "body_temperature",
+            "Temperature (thermal load)",
+            entity="body",
+            values={"T": (20.0, "degC")},
+        ),  # fmt: skip
         # Body loads (ADR 0037): on a body, per volume, through the material's density.
         FeatureSpec(
             "gravity",
