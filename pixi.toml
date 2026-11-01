@@ -32,6 +32,7 @@ pyvista = ">=0.44"
 mcp = ">=2.0,<3"
 ocp = ">=8.0"  # OpenCASCADE bindings; the same conda-forge occt as gmsh (ADR 0004)
 ezdxf = ">=1.1"  # DXF profiles for extrude and revolve (ADR 0014)
+h5py = ">=3.10"
 
 [pypi-dependencies]
 puzzle-fem = { path = ".", editable = true }

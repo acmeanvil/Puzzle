@@ -33,8 +33,11 @@ def export_results(window, source: str | None = None):
 
     if tools._no_runs(window):
         return None
-    cloud = lambda v: v.get("format") == "point_cloud"  # noqa: E731
-    shape = lambda v: str(v.get("format", "")).startswith("deformed")  # noqa: E731
+
+    def takes(option):
+        return lambda v: v.get("format") in EXPORTS and EXPORTS[v["format"]].takes(option)
+
+    cloud, shape = takes("quantity"), takes("scale")
 
     def check(v) -> str | None:
         if shape(v):
@@ -53,10 +56,14 @@ def export_results(window, source: str | None = None):
                 "format",
                 "Format",
                 choices=[(e.label, k) for k, e in EXPORTS.items()],
-                help="ParaView: every result; a point cloud: one result for another tool's "
-                "mesh; the deformed shape: for CAD",
+                help="; ".join(f"{e.label.split(' (')[0]}: {e.carries}" for e in EXPORTS.values()),
             ),
-            Ask("step", "Step", choices=lambda v: _steps(window, v.get("source"))),
+            Ask(
+                "step",
+                "Step",
+                choices=lambda v: _steps(window, v.get("source")),
+                shown=takes("step"),
+            ),
             Ask(
                 "quantity",
                 "Result",
@@ -69,9 +76,9 @@ def export_results(window, source: str | None = None):
                 choices=lambda v: (
                     [("The whole model", "")] + tools.selection_choices(window, v.get("source"))
                 ),
-                shown=cloud,
+                shown=takes("selection"),
             ),
-            Ask("units", "Units", choices=UNITS, shown=cloud),
+            Ask("units", "Units", choices=UNITS, shown=takes("units")),
             Ask(
                 "scale",
                 "Exaggeration",
@@ -80,7 +87,7 @@ def export_results(window, source: str | None = None):
                 shown=shape,
                 help="1 is the true deformation; larger exaggerates it (and says so)",
             ),
-            Ask("compensate", "Shape", choices=SHAPES, shown=shape),
+            Ask("compensate", "Shape", choices=SHAPES, shown=takes("compensate")),
         ],  # fmt: skip
         intro="Results for other software. Each export writes a .txt beside it naming the "
         "study, run, step and units.",
