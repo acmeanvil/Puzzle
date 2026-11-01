@@ -13,3 +13,4 @@ htmlcov/
 .vscode/
 .pixi/
 output/
+.claude/worktrees/

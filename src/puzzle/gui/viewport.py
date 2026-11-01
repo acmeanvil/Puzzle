@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QComboBox, QLabel, QVBoxLayout, QWidget
 from puzzle.gui.tasks import rendering_available
 from puzzle.mesh.mesh import Mesh
 from puzzle.post.legend import bar_format
+from puzzle.post.probes import sample as probe_sample
 from puzzle.post.quantities import compute
 from puzzle.post.view import DEFAULT_SCALAR
 from puzzle.post.vtk import pick_step, to_grid
@@ -929,7 +930,6 @@ class Viewport(QWidget):
         return None
 
     def _captured(self, point) -> None:
-        import pyvista as pv
 
         callback, self.capture = self.capture, None
         snap = getattr(self, "capture_snap", "corner")
@@ -938,7 +938,7 @@ class Viewport(QWidget):
         point = np.asarray(point, float)
         state = self.result_state
         if state is not None and state.get("scale"):  # the same spot, undeformed
-            u = pv.PolyData(point.reshape(1, 3)).sample(state["grid"]).point_data
+            u = probe_sample(point.reshape(1, 3), state["grid"]).point_data
             name = _warp_name(u)
             if name:
                 point = point - state["scale"] * np.asarray(u[name][0])
@@ -1431,14 +1431,13 @@ class Viewport(QWidget):
     def probe(self, xyz_shown, add: bool = False) -> dict | None:
         """Read the shown result where the (deformed) view shows `xyz_shown`: the value
         in display units, the point in the undeformed geometry. `add` keeps the others."""
-        import pyvista as pv
 
         state = self.result_state
         if state is None or state["item"] is None:
             return None
         point = np.asarray(xyz_shown, float)
         if state["scale"]:  # back to the undeformed geometry: the same spot in the cell
-            u = pv.PolyData(point.reshape(1, 3)).sample(state["grid"]).point_data
+            u = probe_sample(point.reshape(1, 3), state["grid"]).point_data
             name = _warp_name(u)
             if name:
                 point = point - state["scale"] * np.asarray(u[name][0])
@@ -1447,14 +1446,13 @@ class Viewport(QWidget):
     def probe_undeformed(self, point, add: bool = False) -> dict | None:
         """A probe at a point of the undeformed geometry (a kept probe), read there and
         drawn where the deformed view shows it."""
-        import pyvista as pv
 
         state = self.result_state
         if state is None or state["item"] is None:
             return None
         shown = np.asarray(point, float)
         if state["scale"]:
-            u = pv.PolyData(shown.reshape(1, 3)).sample(state["base"]).point_data
+            u = probe_sample(shown.reshape(1, 3), state["base"]).point_data
             name = _warp_name(u)
             if name:
                 shown = shown + state["scale"] * np.asarray(u[name][0])

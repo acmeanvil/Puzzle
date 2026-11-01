@@ -17,10 +17,32 @@ from puzzle.post.quantities import Item, compute
 from puzzle.results.model import StepResult
 
 
+def sample(points, grid):
+    """VTK's probe of `grid` at `points` (a PolyData or an (n, 3) array), with a tight
+    tolerance first: VTK's default lets a point take a neighbouring cell and extrapolate
+    it (0.1 % of a mode's largest displacement off at a node). Points the tight probe
+    misses (on a face, typically) are read again at the default tolerance."""
+    import pyvista as pv
+
+    cloud = points if isinstance(points, pv.PolyData) else pv.PolyData(
+        np.asarray(points, float).reshape(-1, 3))  # fmt: skip
+    size = float(np.linalg.norm(np.ptp(np.asarray(grid.points, float), axis=0))) or 1.0
+    tight = cloud.sample(grid, tolerance=1e-8 * size)
+    valid = np.asarray(tight.point_data["vtkValidPointMask"], bool)
+    if valid.all():
+        return tight
+    loose = cloud.sample(grid)
+    redo = np.flatnonzero(~valid)
+    for name in tight.point_data:
+        a = np.asarray(tight.point_data[name]).copy()
+        a[redo] = np.asarray(loose.point_data[name])[redo]
+        tight.point_data[name] = a
+    return tight
+
+
 def at_point(mesh: Mesh, step: StepResult, item: Item, xyz) -> dict:
     """The item's value at `xyz` (undeformed, metres), and the field's components there.
     Outside the mesh, the nearest point of it is used and `distance` says how far."""
-    import pyvista as pv
 
     from puzzle.post.vtk import to_grid
 
@@ -36,7 +58,7 @@ def at_point(mesh: Mesh, step: StepResult, item: Item, xyz) -> dict:
         nearest = np.asarray(surface.points[idx])
         distance = float(np.linalg.norm(nearest - point[0]))
         point = nearest.reshape(1, 3)
-    probe = pv.PolyData(point).sample(grid)
+    probe = sample(point, grid)
     data = probe.point_data
     if item.field not in data:
         raise PuzzleError(f"'{item.label}' can't be read at a point", code="unsupported")
@@ -133,7 +155,6 @@ def reaction(mesh: Mesh, step: StepResult, selection: str, about=None) -> dict:
 def along_path(mesh: Mesh, step: StepResult, item: Item, start, end, samples: int) -> dict:
     """The item at `samples` points from `start` to `end` (undeformed), interpolated in
     the elements; points outside the mesh are NaN. `distance` is along the path."""
-    import pyvista as pv
 
     from puzzle.post.vtk import to_grid
 
@@ -143,7 +164,7 @@ def along_path(mesh: Mesh, step: StepResult, item: Item, start, end, samples: in
     a, b = np.asarray(start, float), np.asarray(end, float)
     t = np.linspace(0.0, 1.0, samples)
     points = a[None, :] + t[:, None] * (b - a)[None, :]
-    probe = pv.PolyData(points).sample(to_grid(mesh, step))
+    probe = sample(points, to_grid(mesh, step))
     if item.field not in probe.point_data:
         raise PuzzleError(f"'{item.label}' can't be read along a path", code="unsupported")
     comps = np.asarray(probe.point_data[item.field], float).reshape(samples, -1)
@@ -179,7 +200,6 @@ def linearized(
     parts (`puzzle.post.linearize`), with the points it was read at; components in the
     global axes or the line's own, bending for all components or (ASME) the normal ones
     across the line."""
-    import pyvista as pv
 
     from puzzle.post import linearize
     from puzzle.post.vtk import to_grid
@@ -200,7 +220,7 @@ def linearized(
     nudged = points.copy()
     nudged[0] += 1e-7 * (b - a)
     nudged[-1] -= 1e-7 * (b - a)
-    probe = pv.PolyData(nudged).sample(to_grid(mesh, step))
+    probe = sample(nudged, to_grid(mesh, step))
     inside = np.asarray(probe.point_data["vtkValidPointMask"], bool)
     if not inside.all():
         gap = points[int(np.argmin(inside))]
