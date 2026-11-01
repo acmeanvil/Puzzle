@@ -24,6 +24,8 @@ CODES = {
     # Running studies
     "invalid_input": "the study cannot be written for this solver",
     "mesh_failed": "meshing failed",
+    "not_planar": "a 2D model's faces must lie in the XY plane at z = 0",
+    "negative_radius": "an axisymmetric model must lie at x >= 0 (Y is the axis)",
     "solver_failed": "the solver ran but failed",
     "stopped": "the run was stopped before it finished",
     "unsupported": "not implemented yet",

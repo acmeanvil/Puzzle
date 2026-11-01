@@ -115,6 +115,10 @@ def name_all(named: NamedShape) -> Named:
                 f"{entity}-{i}": [s] for i, s in enumerate(_subshapes(named.shape, kind), start=1)
             }
         return Named(named.shape, of, max(_size(named.shape), 1e-12))
+    given = _Index()  # edges an operation named (a 2D face's sides): those names first
+    for name, edges in sorted(named.edges.items()):
+        for e in edges:
+            given.get(e).append(name)
     for entity, kind in (("edge", TopAbs_EDGE), ("vertex", TopAbs_VERTEX)):
         meets = _Index()
         order = []
@@ -122,6 +126,8 @@ def name_all(named: NamedShape) -> Named:
             names = label.get(f)
             first = min(names) if names else "?"
             for sub in _subshapes(f, kind):
+                if kind == TopAbs_EDGE and given.get(sub):
+                    continue
                 around = meets.get(sub)
                 if not around:
                     order.append(sub)
@@ -135,6 +141,8 @@ def name_all(named: NamedShape) -> Named:
             subs = sorted(subs, key=lambda s: tuple(round(c, 9) for c in _centre(s)))
             for i, sub in enumerate(subs, start=1):
                 out[base if i == 1 else f"{base}#{i}"] = [sub]
+        if kind == TopAbs_EDGE:
+            out = {**{n: list(es) for n, es in named.edges.items()}, **out}
         of[entity] = out
     return Named(named.shape, of, max(_size(named.shape), 1e-12))
 

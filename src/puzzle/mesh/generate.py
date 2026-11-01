@@ -99,13 +99,15 @@ def generate_mesh(
     """
     comp = project.get(component_id, Component)
     recipe = project.get(comp.mesh, MeshRecipe)
-    if comp.dimension != "3d":
-        raise MeshError(f"{comp.dimension} meshing is not implemented yet")
+    planar = comp.dimension != "3d"  # ADR 0048: faces in the XY plane, meshed in 2D
+    if planar and recipe.mesher == "netgen":
+        raise MeshError("2D models are meshed with Gmsh (Netgen's 2D is not wired in)")
     if recipe.mesher == "netgen" and recipe.element_shape == "hexahedra":
         raise MeshError(
             "Netgen meshes tetrahedra (and boundary-layer prisms); use Gmsh for hexahedra"
         )
-    if not preview and recipe.element_shape == "hexahedra" and recipe.element_order != 1:
+    hexes = recipe.element_shape == "hexahedra" and not planar  # 2D: quadrilaterals
+    if not preview and hexes and recipe.element_order != 1:
         raise MeshError("second-order hexahedra are not supported yet; use element_order 1")
 
     geometries = {p.name: project.get(p.geometry, Geometry) for p in comp.parts}
@@ -145,12 +147,21 @@ def generate_mesh(
             new = sorted(set(gmsh.model.getEntities()) - before)
             top = max((d for d, _ in new), default=3)  # a solid, a sheet, or lines (beams)
             volumes[part.name] = [e for e in new if e[0] == top]
-            if top == 3 and len(volumes[part.name]) > 1 and geometries[part.name].share_faces:
-                volumes[part.name] = _share_faces(part.name, volumes[part.name])
+            if planar and top != 2:
+                raise MeshError(
+                    f"part '{part.name}': a {comp.dimension} component's parts are faces in "
+                    "the XY plane (a sketch's face or a sheet), not "
+                    + ("solids" if top == 3 else "lines")
+                )
+            joined = top == 3 or planar  # 2D regions share their edges, as bodies faces
+            if joined and len(volumes[part.name]) > 1 and geometries[part.name].share_faces:
+                volumes[part.name] = _share_faces(part.name, volumes[part.name], top)
             place(volumes[part.name], part.translation, part.rotation)
         if not faceted:
             gmsh.model.occ.synchronize()
             _fragment_conformal(comp, volumes)
+        if planar:
+            _check_plane(comp)
 
         for part in comp.parts if not faceted else []:
             ref = references[part.name]
@@ -222,6 +233,12 @@ def generate_mesh(
 
             _options(recipe)
             mesh_with_netgen(recipe, out_dir, *_netgen_controls(recipe))
+        elif planar:  # ADR 0048: triangles, or quadrilaterals for "hexahedra"
+            _sizes(recipe, comp, found, warnings)
+            if recipe.element_shape == "hexahedra":
+                gmsh.option.setNumber("Mesh.RecombineAll", 1)
+                gmsh.option.setNumber("Mesh.SecondOrderIncomplete", 1)  # 8-node quads
+            gmsh.model.mesh.generate(2)
         else:
             _sizes(recipe, comp, found, warnings)
             if recipe.element_shape == "hexahedra":
@@ -241,8 +258,9 @@ def generate_mesh(
             # curves (fillets, small holes); Gmsh's optimiser untangles them.
             gmsh.option.setNumber("Mesh.HighOrderOptimize", HIGH_ORDER[recipe.high_order_optimise])
         gmsh.model.mesh.setOrder(recipe.element_order)
-        min_quality = _min_quality()
-        quality, element_quality = mesh_quality()
+        dim = 2 if planar else 3
+        min_quality = _min_quality(dim)
+        quality, element_quality = mesh_quality(dim)
         if min_quality <= 0:
             raise MeshError(
                 "the mesh has inverted elements (the worst near "
@@ -334,13 +352,13 @@ def _closure(volumes: list[tuple[int, int]]) -> list[tuple[int, int]]:
     return sorted(set(out))
 
 
-def _share_faces(part: str, volumes: list[tuple[int, int]]) -> list[tuple[int, int]]:
-    """Fragment one part's bodies by each other, so bodies that touch share the faces
-    between them (and so their nodes). Overlapping bodies are refused: fragmenting
-    would cut the overlap out as a body of its own."""
+def _share_faces(part: str, volumes: list[tuple[int, int]], dim: int = 3) -> list[tuple[int, int]]:
+    """Fragment one part's bodies (or a 2D part's regions) by each other, so those that
+    touch share the faces (edges) between them, and so their nodes. Overlaps are
+    refused: fragmenting would cut the overlap out as a body of its own."""
     out, _ = gmsh.model.occ.fragment(volumes, [])
     gmsh.model.occ.synchronize()
-    joined = [e for e in out if e[0] == 3]
+    joined = [e for e in out if e[0] == dim]
     if len(joined) != len(volumes):
         raise MeshError(
             f"part '{part}': its bodies overlap ({len(volumes)} bodies became "
@@ -378,6 +396,31 @@ def _pieces(reference, candidates, found: dict, *, translation, rotation, tol: f
         total = sum(e.measure for e, _ in inside)
         if len(inside) > 1 and abs(total - ref.measure) <= 1e-5 * max(ref.measure, 1e-30):
             found[ref.name] = [dt for _, dt in inside]
+
+
+def _check_plane(comp: Component) -> None:
+    """A 2D model lies in the XY plane at z = 0; an axisymmetric one at x >= 0 (Y is the
+    axis, X the radius: ADR 0048)."""
+    lo = hi = None
+    for dim, tag in gmsh.model.getEntities(2):
+        box = np.asarray(gmsh.model.getBoundingBox(dim, tag))
+        lo = box[:3] if lo is None else np.minimum(lo, box[:3])
+        hi = box[3:] if hi is None else np.maximum(hi, box[3:])
+    if lo is None:
+        raise MeshError("a 2D component needs faces to mesh")
+    tol = 1e-6 * max(float(np.max(hi - lo)), 1e-9) + 1e-6  # OCC pads boxes by ~1e-7 m
+    if lo[2] < -tol or hi[2] > tol:
+        raise MeshError(
+            "a 2D model lies in the XY plane at z = 0; these faces reach z = "
+            f"{lo[2]:.4g} to {hi[2]:.4g} m",
+            code="not_planar",
+        )
+    if comp.dimension == "2d_axisymmetric" and lo[0] < -tol:
+        raise MeshError(
+            f"an axisymmetric model lies at x >= 0 (Y is the axis, X the radius); it reaches "
+            f"x = {lo[0]:.4g} m",
+            code="negative_radius",
+        )
 
 
 def _fragment_conformal(comp: Component, volumes: dict[str, list[tuple[int, int]]]) -> None:
@@ -625,12 +668,12 @@ QUALITY = {  # Gmsh's measure, and the bin edges of its histogram
 WORST = 10
 
 
-def mesh_quality() -> tuple[dict, tuple]:
-    """The volume elements' quality (ADR 0019): for each measure its min, mean and
-    histogram, and the worst-shaped elements with their centres; and each element's
-    shape (ids, values). The edge aspect ratio is the longest edge over the shortest
-    (1 is ideal)."""
-    _types, tags, _ = gmsh.model.mesh.getElements(3)
+def mesh_quality(dim: int = 3) -> tuple[dict, tuple]:
+    """The volume elements' quality (ADR 0019; a 2D model's faces, ADR 0048): for each
+    measure its min, mean and histogram, and the worst-shaped elements with their
+    centres; and each element's shape (ids, values). The edge aspect ratio is the
+    longest edge over the shortest (1 is ideal)."""
+    _types, tags, _ = gmsh.model.mesh.getElements(dim)
     ids = np.concatenate([np.asarray(t) for t in tags]) if tags else np.array([], dtype=np.int64)
     if not len(ids):
         return {}, ()
@@ -727,12 +770,12 @@ def _netgen_controls(recipe: MeshRecipe) -> tuple[list[dict], list[dict]]:
     return sizes, layers
 
 
-def _min_quality() -> float:
-    types, tags, _ = gmsh.model.mesh.getElements(3)
+def _min_quality(dim: int = 3) -> float:
+    types, tags, _ = gmsh.model.mesh.getElements(dim)
     ids = np.concatenate([np.asarray(t) for t in tags]) if tags else np.array([], dtype=np.int64)
     if not len(ids):
-        if len(gmsh.model.mesh.getElements(1)[1]):  # beams only: no volume to judge
-            return 1.0
+        if len(gmsh.model.mesh.getElements(1)[1]) or len(gmsh.model.mesh.getElements(2)[1]):
+            return 1.0  # beams or shells only: no volume to judge
         raise MeshError("meshing produced no volume elements")
     return float(np.min(gmsh.model.mesh.getElementQualities(ids, "minSJ")))
 

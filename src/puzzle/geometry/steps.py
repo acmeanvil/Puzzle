@@ -47,6 +47,12 @@ STEPS: dict[str, list[StepField]] = {
             "Corners (mm, in one plane): x, y, z; …",
         ),
     ],
+    "face": [
+        StepField("profile", "profile", "0, 0; 50, 0; 50, 30; 0, 30", "Profile (mm)"),
+        StepField("plane", "plane", "xy"),
+        StepField("offset", "length", 0.0),
+        MODE,
+    ],
     "curved_sheet": [
         StepField("r", "length", 0.1, "Radius"),
         StepField("length", "length", 0.2, "Length along x"),

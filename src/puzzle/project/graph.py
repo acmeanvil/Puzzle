@@ -36,6 +36,8 @@ def _own(obj: ProjectObject, *, drop: frozenset[str] = frozenset()) -> dict:
     data.pop("hidden", None)  # what the view shows never changes a solve
     if data.get("share_faces") is True:  # the default: older projects keep their hashes
         data.pop("share_faces")
+    if isinstance(obj, Component) and data.get("planar_model") == "plane_stress":
+        data.pop("planar_model")  # the default: older projects keep their hashes
     if isinstance(obj, Component):  # how bolts are listed and made never changes a solve
         data.pop("bolt_rules", None)
         for bolt in data.get("connectors", []):

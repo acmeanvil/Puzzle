@@ -47,6 +47,7 @@ GROUPS = [
             "hole",
             "polyline",
             "sheet",
+            "face",
             "curved_sheet",
         ],
     ),
@@ -54,7 +55,7 @@ GROUPS = [
     ("Prepare", ["heal", "remove", "fragment", "enclosure"]),
 ]
 NAMES = {"remove": "Remove features", "heal": "Heal", "fragment": "Share faces",
-         "split_face": "Split face by sketch"}  # fmt: skip
+         "split_face": "Split face by sketch", "face": "Face from sketch"}  # fmt: skip
 PLANES = [("XY plane", "xy"), ("YZ plane", "yz"), ("XZ plane", "xz")]
 ON_FACE = "face"
 

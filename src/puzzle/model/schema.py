@@ -123,6 +123,7 @@ class HistoryStep(BaseModel):
         "enclosure",
         "polyline",
         "sheet",
+        "face",
         "curved_sheet",
         "sketch",  # a 2D sketch on a plane or a planar face, for extrude and revolve (ADR 0017)
     ]
@@ -1212,7 +1213,16 @@ class Component(ProjectObject):
 
     kind: ClassVar[str] = "component"
 
-    dimension: Literal["3d", "2d_planar", "2d_axisymmetric"] = "3d"
+    dimension: Literal["3d", "2d_planar", "2d_axisymmetric"] = Field(
+        default="3d",
+        description="2D models lie in the XY plane at z = 0; axisymmetric ones turn about Y, "
+        "X being the radius (ADR 0048)",
+    )
+    planar_model: Literal["plane_stress", "plane_strain"] = Field(
+        default="plane_stress",
+        description="a planar structure: plane stress (a thin plate, its thickness from the "
+        "part's thickness section) or plane strain (a long section, per metre of depth)",
+    )
     parts: list[PartInstance] = Field(min_length=1)
     mesh: UUID
     selections: list[NamedSelection] = Field(default_factory=list)

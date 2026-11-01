@@ -21,6 +21,7 @@ the part, the first one starts it):
 | cylinder | r, h, x, y, z, axis | wall, start, end |
 | polyline | points (a line body, for beams) | none: edge-N, vertex-N by position |
 | sheet | points (a flat polygon: a sheet body, for shells) | face |
+| face | profile (sketch), plane, offset (a flat region: 2D, shells) | face; edges by side |
 | curved_sheet | r, length, angle, x0, y0, z0 (a cylinder panel on x, centred on +z) | surface |
 | cone | r1, r2, h, x, y, z, axis | wall, start, end |
 | sphere | r, x, y, z | surface |
@@ -109,6 +110,7 @@ class NamedShape:
     shape: TopoDS_Shape
     names: Names  # face names
     bodies: Names = field(default_factory=dict)  # body names -> solids
+    edges: Names = field(default_factory=dict)  # edges an operation named (a 2D face's sides)
 
     def faces(self) -> list:
         return _faces(self.shape)
@@ -211,16 +213,27 @@ def _regenerate(ops: list[Op], params: dict[str, float] | None, root) -> NamedSh
     if state.shape is None:
         raise GeometryError("no solid yet: extrude or revolve a sketch, or add a primitive")
     # Keep only what is in the final shape (OCCT may report intermediates).
-    final, solids = _faces(state.shape), _subshapes(state.shape, TopAbs_SOLID)
-    names = {n: [f for f in fs if any(f.IsSame(g) for g in final)] for n, fs in state.names.items()}
+    names, edges = _split_names(state.names, state.shape)
+    solids = _subshapes(state.shape, TopAbs_SOLID)
     bodies = {
         n: [b for b in bs if any(b.IsSame(g) for g in solids)] for n, bs in state.bodies.items()
     }
-    return NamedShape(
-        state.shape,
-        {n: fs for n, fs in names.items() if fs},
-        {n: b for n, b in bodies.items() if b},
-    )
+    return NamedShape(state.shape, names, {n: b for n, b in bodies.items() if b}, edges)
+
+
+def _split_names(names: Names, shape) -> tuple[Names, Names]:
+    """Face names and edge names (both ride in one table through the operations, which
+    carry any sub-shape alike), each kept to what is in `shape`."""
+    out: dict[int, Names] = {TopAbs_FACE: {}, TopAbs_EDGE: {}}
+    final = {k: _subshapes(shape, k) for k in out}
+    for n, shapes in names.items():
+        for kind, table in out.items():
+            kept = [
+                x for x in shapes if x.ShapeType() == kind and any(x.IsSame(g) for g in final[kind])
+            ]
+            if kept:
+                table[n] = kept
+    return out[TopAbs_FACE], out[TopAbs_EDGE]
 
 
 @dataclass
@@ -445,6 +458,21 @@ def _sheet(state, a):
     return shape, {"face": [shape]}
 
 
+def _face(state, a):
+    """A flat region from a profile (ADR 0048 2D models, or a sheet for shells): "face",
+    and each side named after the sketch's edge ("<op>/outer", ...; typed profiles name
+    them side-1, side-2, ...). A side keeps its name through later operations."""
+    from puzzle.geometry.profile import profile_face
+
+    face, edges, labels = profile_face(
+        a["profile"], a.get("plane", "xy"), a.get("offset", 0.0), state.root, state.params
+    )
+    names: Names = {"face": _faces(face)}
+    for label, e in zip(labels, edges, strict=True):
+        names.setdefault(label, []).append(e)
+    return face, names
+
+
 def _curved_sheet(state, a):
     """A cylindrical panel (ADR 0027 shells): radius r, `length` along x from (x0, y0,
     z0) on its axis, spanning `angle` degrees centred on +z (a barrel roof)."""
@@ -468,6 +496,7 @@ def _curved_sheet(state, a):
 TOOLS = {
     "polyline": _polyline,
     "sheet": _sheet,
+    "face": _face,
     "curved_sheet": _curved_sheet,
     "import": _import,
     "box": _box,
@@ -1006,7 +1035,8 @@ def _edges_by_rule(state, rule: dict) -> list:
     if "edges" in rule:
         from puzzle.geometry.naming import name_all
 
-        named = name_all(NamedShape(shape, state.names, state.bodies)).of["edge"]
+        faces, edges = _split_names(state.names, shape)
+        named = name_all(NamedShape(shape, faces, state.bodies, edges)).of["edge"]
         missing = [n for n in rule["edges"] if n not in named]
         if missing:
             raise GeometryError(f"no edge {', '.join(missing)} on the part at this step")

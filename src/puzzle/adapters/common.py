@@ -310,6 +310,67 @@ def surface_area(group: Group, mesh: Mesh) -> float:
     return area
 
 
+# --- 2D models (ADR 0048) ----------------------------------------------------------------
+
+AXISYMMETRIC = "2d_axisymmetric"
+
+
+def plane_thickness(component, part: str) -> float:
+    """A planar part's thickness in m: its thickness section in plane stress (required),
+    1 m of depth in plane strain."""
+    if component.planar_model == "plane_strain":
+        return 1.0
+    for s in component.shell_sections:
+        if s.selection == part or s.selection.split("/", 1)[0] == part:
+            return s.thickness.to_si()
+    raise InputError(
+        f"a plane-stress part needs its thickness: part '{part}' has none (Add thickness…)",
+        code="invalid_input",
+        path=part,
+    )
+
+
+def edge_weights(group: Group, mesh: Mesh, component) -> list[tuple[np.ndarray, np.ndarray]]:
+    """A 2D edge selection's Gauss points: (points (n, 3), weights (n,)) per line block,
+    the weight being what a traction there acts on: dl x thickness (plane stress), dl
+    per metre (plane strain), 2 pi r dl (axisymmetric, the whole revolution)."""
+    gauss = np.array([-np.sqrt(3 / 5), 0.0, np.sqrt(3 / 5)])
+    gw = np.array([5 / 9, 8 / 9, 5 / 9])
+    part = group.name.split("/", 1)[0]
+    axi = component.dimension == AXISYMMETRIC
+    out = []
+    for b in group.blocks(mesh):
+        if b.dim != 1:
+            continue
+        xyz = mesh.node_coords(b.connectivity.ravel()).reshape(len(b.ids), -1, 3)
+        if b.element == "line3":  # Gmsh: ends 0, 1, then the middle 2
+            shape = np.stack([gauss * (gauss - 1) / 2, gauss * (gauss + 1) / 2, 1 - gauss**2])
+            slope = np.stack([gauss - 0.5, gauss + 0.5, -2 * gauss])
+        else:
+            shape = np.stack([(1 - gauss) / 2, (1 + gauss) / 2])
+            slope = np.stack([-0.5 * np.ones(3), 0.5 * np.ones(3)])
+        points = np.einsum("kg,ekc->egc", shape, xyz)
+        dl = np.linalg.norm(np.einsum("kg,ekc->egc", slope, xyz), axis=2) * gw
+        if axi:
+            w = 2 * np.pi * np.abs(points[..., 0]) * dl
+        else:
+            w = dl * (plane_thickness(component, part) if part in _parts(component) else 1.0)
+        out.append((points.reshape(-1, 3), w.ravel()))
+    return out
+
+
+def _parts(component) -> set[str]:
+    return {p.name for p in component.parts}
+
+
+def load_area(group: Group, mesh: Mesh, component) -> float:
+    """What a force on a selection spreads over: a face's area in 3D, a 2D edge's
+    length times its thickness (or 2 pi r dl, axisymmetric)."""
+    if component.dimension == "3d" or group.dim != 1:
+        return surface_area(group, mesh)
+    return float(sum(w.sum() for _, w in edge_weights(group, mesh, component)))
+
+
 def match_points(
     points: np.ndarray, reference: np.ndarray, ids: np.ndarray, rel_tol: float = 1e-5
 ) -> np.ndarray:
