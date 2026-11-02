@@ -82,6 +82,9 @@ class FenicsxAdapter(SolverAdapter):
         field_features=frozenset(
             {"body_temperature:T", "pressure:p", "heat_flux:q", "convection:h", "convection:T_inf"}
         ),
+        # A pressure varying with frequency in a harmonic step: a load per frequency, each
+        # times a hat function of frequency (test_imported_fields_frequency.py)
+        field_spectra=frozenset({"pressure:p"}),
     )
 
     def settings_schema(self) -> list:

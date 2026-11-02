@@ -96,6 +96,9 @@ class CodeAsterAdapter(SolverAdapter):
         )
         | VECTOR_FIELD_FEATURES
         | STAGE3_FIELDS,  # ADR 0044 stage 3 (tests/integration/test_imported_stage3.py)
+        # A pressure varying with frequency in a harmonic step: a charge per frequency,
+        # each times a hat function of FREQ (test_imported_fields_frequency.py)
+        field_spectra=frozenset({"pressure:p"}),
         time_schemes=frozenset({"backward_euler", "crank_nicolson", "theta"}),
     )
 

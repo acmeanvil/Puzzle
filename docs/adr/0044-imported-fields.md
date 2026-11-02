@@ -170,9 +170,22 @@ The maintainer's answers (2026-10-25):
 - **Connections** (`gui/field_view.py`, `puzzle.field_display`): selecting a field-fed feature or an imported field maps it in the background and draws the values on its faces or bodies, extrapolated faces marked and the source points optional. Properties lists an imported field's uses in words and a feature's chain from the file to the solvers that take it. Settings > Connections switches the tree and Properties (`connections.tree`) and the view (`connections.view`) apart, and sets the points and the extrapolated colour. The Connections schematic is ADR 0058's.
 - **Twins:** `puzzle import-field` takes several files, `--times`, `--every-step`, `--region`, `--step`; MCP `field_import` the same; the `imported-fields` skill covers formats, time, vectors, conservative mapping and stage 3.
 
+## Built: frequency as a field's axis (2026-11-01)
+
+- **A field varies in time or with frequency, never both.** `ImportedField.axis` (time by default, left out of content hashes so older fields keep theirs) says what `times` hold: seconds or hertz. A CSV column with the role `frequency` groups the rows instead (sniffed from a `frequency` or `freq` header or a Hz, kHz or MHz unit; converted to Hz). A time and a frequency column together are refused by the schema. `ImportedField.along()` gives the axis.
+- **Harmonic steps only.** `fields.field_inputs` hands a `frequency_domain` step the use's values at each of the field's frequencies (`Input.frequencies`, one value column each); the adapter interpolates them linearly per asked frequency, held at the first or last outside them, as the time machinery is.
+- **Refused with the code `field_axis`** (new in `errors.CODES`): a frequency field on a feature active in any other step (limit it with `Feature.steps`), a time field in a harmonic step, both axes on one feature. `Adapter.check` reports the same, and a frequency field beside an amplitude.
+- **Solvers** (`Capabilities.field_spectra`, pressure `p`):
+  - CalculiX: one `*AMPLITUDE` against frequency per face, the face's mean at each given frequency, on the `*DLOAD` of the `*STEADY STATE DYNAMICS` step (which reads amplitudes against frequency), whether the step lists its frequencies or sweeps a range;
+  - Code_Aster: a charge of consistent nodal forces per given frequency, each assembled into its own vector and multiplied in `DYNA_VIBRA` by a hat function of FREQ (1 at its frequency, 0 at the ones beside it, held outside), so their sum interpolates the field;
+  - FEniCSx: a Lagrange function per given frequency, each load times the same hat function, the load vector built per frequency;
+  - Elmer refuses it (its Scanning run would need the loads per scan); traction, body force and body temperature varying with frequency are refused everywhere.
+- **Twins:** `puzzle import-field --frequencies`, MCP `field_import(frequencies=...)`, the wizard's column role "Frequency" and "Varies with frequency" choices, the outline ("at 3 frequencies", "rows by frequency"); the skill's section on harmonic steps.
+- **Benchmark** (`tests/integration/test_imported_fields_frequency.py`): the steel cantilever with a pressure on its top face given at 0, 200, 400 and 800 Hz (10, 20, 5, 15 kPa), the step at 100, 150, 300 and 600 Hz. Each frequency's tip equals a uniform 10 kPa run's scaled by p(f) / 10 kPa to 1e-5 (the `.frd`'s digits), on CalculiX, Code_Aster and FEniCSx alike, and the Euler-Bernoulli modal sum (five modes) within 0.6 %: −2.2219e-4 m at 100 Hz against −2.2307e-4 m, 1.79572e-5 m at 600 Hz (CalculiX; Code_Aster and FEniCSx 1.79575e-5) against 1.79319e-5 m. `tests/test_fields_frequency.py` checks the reading, the interpolation and every refusal.
+
 ## Still open
 
-- Frequency as a field's axis (time only); films and body temperatures following a history through a transient step; vectors varying in time through a transient step.
+- Films and body temperatures following a history through a transient step; vectors varying in time through a transient step, or with frequency through a harmonic one; a field varying with frequency on Elmer (per scan); heat flux or other values varying with frequency.
 - Fortran-binary and structured EnSight, binary OpenFOAM, Fluent transient profiles; a field from one of the project's own runs (transfers cover that inside Puzzle).
 - Vector fields on Elmer and FEniCSx, vector loads in 2D models, weights taken from a VTU file's cells, all three components chosen at once in the GUI's form.
 - Code_Aster flux and film fields on 2D models; Code_Aster initial stress on beams and shells.

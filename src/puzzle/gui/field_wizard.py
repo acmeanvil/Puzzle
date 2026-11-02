@@ -32,12 +32,15 @@ ROLES = [
     ("Z coordinate", "z"),
     ("A value", "value"),
     ("Time (rows grouped by it)", "time"),
+    ("Frequency (rows grouped by it, for harmonic steps)", "frequency"),
     ("Ignored", "ignore"),
 ]
 TIMING = [
     ("Holds still", "still"),
     ("Varies in time: every step of the source", "every_step"),
     ("Varies in time: one file per time", "files"),
+    ("Varies with frequency: every step of the source", "every_step_frequency"),
+    ("Varies with frequency: one file per frequency", "files_frequency"),
 ]
 FILTER = ("Fields (*.csv *.txt *.dat *.vtu *.vtk *.prof *.exo *.e *.case);;"
           "All files (*)")  # fmt: skip
@@ -101,7 +104,8 @@ class FilePage(QWizardPage):
         more_row.addWidget(self.more, 1)
         more_row.addWidget(add)
         self.times = QLineEdit()
-        self.times.setPlaceholderText("seconds, one per file (or per step), e.g. 0, 5, 10")
+        self.times.setPlaceholderText("seconds (hertz with frequency), one per file (or per "
+                                      "step), e.g. 0, 5, 10")  # fmt: skip
         self.extra: list[Path] = []
         self.table = QTableWidget(0, 3)
         self.table.setHorizontalHeaderLabels(["Column", "Role", "Unit"])
@@ -114,7 +118,7 @@ class FilePage(QWizardPage):
         form.addRow("Step", self.step)
         form.addRow("In time", self.timing)
         form.addRow("Files", more_row)
-        form.addRow("Times (s)", self.times)
+        form.addRow("Times (s) or frequencies (Hz)", self.times)
         column = QVBoxLayout(self)
         column.addLayout(top)
         column.addLayout(form)
@@ -141,20 +145,24 @@ class FilePage(QWizardPage):
         """The files after the first, one per time (tests call this directly)."""
         self.extra = list(paths)
         self.more.setText(", ".join(p.name for p in self.extra))
-        self.timing.setCurrentIndex(self.timing.findData("files"))
+        if self.timing.currentData() != "files_frequency":  # one per frequency stays so
+            self.timing.setCurrentIndex(self.timing.findData("files"))
 
     def _timing_changed(self) -> None:
         how = self.timing.currentData()
         self.step.setEnabled(how == "still")
-        self.more.setEnabled(how == "files")
+        self.more.setEnabled(how in ("files", "files_frequency"))
         self.times.setEnabled(how != "still")
 
     def timing_data(self) -> dict:
-        """What the field's times come from: still, every step, or files with times."""
+        """What the field's times come from: still, every step, or files with times;
+        `axis` time, or frequency (the times are then hertz)."""
         how = self.timing.currentData()
         text = self.times.text().replace(";", ",").replace(" ", ",")
         times = [float(t) for t in text.split(",") if t.strip()] or None
-        return {"how": how, "times": times, "files": self.extra}
+        axis = "frequency" if how.endswith("_frequency") else "time"
+        how = how.removesuffix("_frequency")
+        return {"how": how, "times": times, "files": self.extra, "axis": axis}
 
     def load(self, path: Path) -> None:
         """Read a file's likely layout into the page (tests call this directly)."""
@@ -382,7 +390,7 @@ class FieldWizard(QWizard):
             files = [path, *timing["files"]]
             given = timing["times"] or []
             if len(given) != len(files):
-                raise ValueError(f"{len(files)} files need {len(files)} times (s)")
+                raise ValueError(f"{len(files)} files need {len(files)} times or frequencies")
             times = [FieldTime(time=t, file=str(f)) for t, f in zip(given, files, strict=True)]
         elif timing["how"] == "every_step":
             steps = found.get("steps", [])
@@ -404,6 +412,7 @@ class FieldWizard(QWizard):
             region=self.file.region.currentData() or "",
             index=self.file.step.currentData() or "" if timing["how"] == "still" else "",
             times=times,
+            axis=timing["axis"] if times else "time",
         )
         return f, path.parent
 

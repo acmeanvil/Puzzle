@@ -355,10 +355,12 @@ def read_results(workdir: Path) -> Results:
 def _field_files(features, written: list[dict], inputs, mesh: Mesh, workdir: Path) -> None:
     """Values from imported fields (ADR 0044): each one's nodal values on its selection
     in an .npz by coordinates, named in the feature's "fields", for study.py to build a
-    Lagrange function from."""
+    Lagrange function from. A field varying with frequency in a harmonic step: a file
+    per frequency, listed in "spectra" with the frequencies (Hz)."""
     from puzzle.fields import feature_key
 
     given = {i.source: i.field for i in inputs if i.role == "feature"}
+    spectra = {i.source: i.frequencies for i in inputs if i.role == "feature" and i.frequencies}
     for k, (f, entry) in enumerate(zip(features, written, strict=True)):
         for name in sorted(f.fields):
             field = given.get(feature_key(f, name))
@@ -366,6 +368,18 @@ def _field_files(features, written: list[dict], inputs, mesh: Mesh, workdir: Pat
                 raise InputError(
                     f"{f.type} on '{f.selection}': its field for {name} was not mapped"
                 )
+            frequencies = spectra.get(feature_key(f, name))
+            if frequencies:
+                files = []
+                for s in range(len(frequencies)):
+                    files.append(f"field-{k}-{name}-{s}.npz")
+                    np.savez(workdir / files[-1], coords=mesh.node_coords(field.ids),
+                             values=field.values[:, s])  # fmt: skip
+                entry.setdefault("spectra", {})[name] = {
+                    "frequencies": [float(x) for x in frequencies],
+                    "files": files,
+                }
+                continue
             file = f"field-{k}-{name}.npz"
             np.savez(workdir / file, coords=mesh.node_coords(field.ids), values=field.values[:, 0])
             entry.setdefault("fields", {})[name] = file

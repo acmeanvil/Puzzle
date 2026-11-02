@@ -69,6 +69,7 @@ class CalculixAdapter(SolverAdapter):
         # ADR 0044: a face value from a field varying in time, through transient steps
         # (an amplitude per face; tests/integration/test_imported_fields_time.py)
         field_histories=frozenset({"pressure:p", "heat_flux:q"}),
+        field_spectra=frozenset({"pressure:p"}),
         # ADR 0037 (heat flux) and 0041 (structural loads in dynamics), benchmarked
         amplitude_features=frozenset({"heat_flux", "force", "pressure"}),
         axes_features=frozenset(

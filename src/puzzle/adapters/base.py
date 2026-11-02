@@ -117,24 +117,49 @@ class Capabilities:
     """Feature values ("type:value") that follow an imported field varying in time
     through a transient step (ADR 0044); the rest are refused there. Other steps take
     such a field at their own time, which every field feature allows."""
+    field_spectra: frozenset[str] = frozenset()
+    """Feature values ("type:value") taken per frequency from an imported field varying
+    with frequency in a harmonic step (ADR 0044); the rest are refused there."""
 
 
 def _time_field_problems(solver: str, project, study, physics, caps) -> list[str]:
-    """Imported fields varying in time (ADR 0044) where they can't be followed: through a
-    transient step unless the adapter lists the value, or beside an amplitude."""
+    """Imported fields varying in time or with frequency (ADR 0044) where they can't be
+    followed: in time through a transient step unless the adapter lists the value, with
+    frequency through a harmonic step unless it lists it there; a frequency field
+    outside harmonic steps, a time field inside one; either beside an amplitude."""
     from puzzle.model.schema import ImportedField
 
     out = []
-    transient = any(s.type == "transient" and s.solves(physics.type) for s in study.solve_steps())
     for f in physics.features:
+        steps = [s for k, s in enumerate(study.solve_steps(), 1)
+                 if s.solves(physics.type) and (not f.steps or k in f.steps)]  # fmt: skip
+        types = {s.type for s in steps}
         for key, use in f.fields.items():
             field = project.objects.get(use.field)
             if not isinstance(field, ImportedField) or not field.varies():
                 continue
+            axis = field.along()
+            over = "with frequency" if axis == "frequency" else "in time"
             if f.amplitude is not None:
                 out.append(f"{f.type} on {f.selection} follows an amplitude and a field "
-                           f"varying in time ({field.name}); keep one")  # fmt: skip
-            elif transient and f"{f.type}:{key}" not in caps.field_histories:
+                           f"varying {over} ({field.name}); keep one")  # fmt: skip
+            elif axis == "frequency" and types - {"frequency_domain"}:
+                out.append(f"{f.type} on {f.selection} takes a field varying with frequency "
+                           f"({field.name}), which applies in harmonic steps only: limit "
+                           f"the feature to those steps")  # fmt: skip
+            elif axis == "frequency" and f"{f.type}:{key}" not in caps.field_spectra:
+                out.append(f"{solver} can't apply {f.type}'s {key} from a field varying with "
+                           f"frequency ({field.name}) in a harmonic step yet (on "
+                           f"{f.selection})")  # fmt: skip
+            elif axis == "time" and "frequency_domain" in types:
+                out.append(f"{f.type} on {f.selection} takes a field varying in time "
+                           f"({field.name}) in a harmonic step: give it a frequency axis, or "
+                           f"limit the feature to other steps")  # fmt: skip
+            elif (
+                axis == "time"
+                and "transient" in types
+                and f"{f.type}:{key}" not in caps.field_histories
+            ):
                 out.append(f"{solver} can't follow {f.type}'s {key} from a field varying in "
                            f"time ({field.name}) through a transient step yet (on "
                            f"{f.selection})")  # fmt: skip

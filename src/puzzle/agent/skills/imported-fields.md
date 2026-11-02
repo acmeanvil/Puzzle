@@ -59,6 +59,25 @@ mesh, so a remesh or a changed file just reruns.
   pressure p and heat_flux q (an amplitude per face, `Capabilities.field_histories`);
   everything else is refused there, as is a field varying in time beside an amplitude.
 
+## Varying with frequency (harmonic steps)
+
+- A field's axis is time **or** frequency, never both. Frequency: a CSV column with role
+  `frequency` (sniffed from a header `frequency`, `freq`, or a unit Hz/kHz/MHz; its unit
+  converted to Hz), or `field_import(..., files=[...], frequencies=[50, 100, 200])` (Hz,
+  one per file; or with `every_step`), which sets the field's `axis` to `frequency`.
+  `puzzle import-field ... --frequencies 50 100 200` does the same.
+- It applies in `frequency_domain` steps only: at each asked frequency the load is the
+  field linearly between its two frequencies about it, held at the first or last
+  outside them. Taken by pressure `p` on CalculiX (an amplitude against frequency per
+  face in its *STEADY STATE DYNAMICS step), Code_Aster (a charge per given frequency,
+  each times a hat function of FREQ in DYNA_VIBRA) and FEniCSx (a load vector per
+  frequency, combined per frequency); `Capabilities.field_spectra` lists them. Elmer,
+  vectors (traction, body force) and body temperatures refuse it.
+- Mistakes refused with the code `field_axis`: a frequency field on a feature active in
+  a static, modal or transient step (limit it with `Feature.steps` to the harmonic
+  steps), a time field in a harmonic step, both axes on one feature. A frequency field
+  beside an `amplitude` is refused too: keep one.
+
 ## Use it
 
 A feature takes a value from a field through `fields` (value name → use):

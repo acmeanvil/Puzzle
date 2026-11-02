@@ -46,8 +46,8 @@ def _own(obj: ProjectObject, *, drop: frozenset[str] = frozenset()) -> dict:
                              ("along", 0.5)):  # fmt: skip
             if key in data and data[key] == default:
                 data.pop(key)
-    if obj.kind == "field":  # ADR 0044's region, step and times unset: older hashes kept
-        for key, default in (("region", ""), ("index", ""), ("times", [])):
+    if obj.kind == "field":  # ADR 0044's region, step, times, axis unset: older hashes kept
+        for key, default in (("region", ""), ("index", ""), ("times", []), ("axis", "time")):
             if key in data and data[key] == default:
                 data.pop(key)
     if isinstance(obj, Component) and data.get("planar_model") == "plane_stress":

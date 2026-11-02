@@ -30,6 +30,7 @@ CODES = {
     "solver_failed": "the solver ran but failed",
     "stopped": "the run was stopped before it finished",
     "unsupported": "not implemented yet",
+    "field_axis": "an imported field's axis (time or frequency) doesn't fit the step it is in",
     "incomplete_material": "a material lacks a property the study needs",
     # Results
     "stale_store": "the results store has an older format; delete it to rebuild",

@@ -349,14 +349,39 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     # face's nodes (Code_Aster's PRES_REP takes one value per group).
     given = {i.source: i.field for i in inputs if i.role == "feature"}
     field_forces: list[str] = []
+    # A pressure varying with frequency in a harmonic step: the nodal forces at each of
+    # the field's frequencies, each its own charge, multiplied in DYNA_VIBRA by a hat
+    # function of FREQ (linear between the frequencies, held outside them).
+    spectral: list[tuple[tuple[float, ...], list[list[str]]]] = []
     for j, f in enumerate([f for f in features if f.type == "pressure" and "p" in f.fields], 1):
         from puzzle.fields import feature_key
+        from puzzle.results.model import Field
 
-        forces = pressure_forces(mesh.groups[f.selection], mesh, given[feature_key(f, "p")])
-        for i, (node, force) in enumerate(sorted(forces.items()), start=1):
+        key = feature_key(f, "p")
+        frequencies = next((i.frequencies for i in inputs if i.role == "feature"
+                            and i.source == key and i.frequencies), None)  # fmt: skip
+        field = given[key]
+        columns = range(field.values.shape[1]) if frequencies else [0]
+        per = [pressure_forces(mesh.groups[f.selection], mesh,
+                               Field(key, "node", [""], field.ids, field.values[:, [c]]))
+               for c in columns]  # fmt: skip
+        rows: list[list[str]] = [[] for _ in per]
+        for i, node in enumerate(sorted(set().union(*per)), start=1):
             points.add(f"FP{j}N{i}", node)
-            parts = ", ".join(f"F{a.upper()}={force[k]:.12g}" for k, a in enumerate("xyz"))
-            field_forces.append(f"_F(GROUP_NO='FP{j}N{i}', {parts})")
+            for forces, out_rows in zip(per, rows, strict=True):
+                force = forces.get(node, np.zeros(3))
+                parts = ", ".join(f"F{a.upper()}={force[k]:.12g}" for k, a in enumerate("xyz"))
+                out_rows.append(f"_F(GROUP_NO='FP{j}N{i}', {parts})")
+        if frequencies:
+            if step.type != "frequency_domain":
+                raise InputError(
+                    f"a pressure varying with frequency (on {f.selection}) applies in "
+                    f"harmonic steps only, not {step.type}",
+                    code="field_axis",
+                )
+            spectral.append((tuple(frequencies), rows))
+        else:
+            field_forces += rows[0]
     features = [f for f in features if not (f.type == "pressure" and "p" in f.fields)]
     # ADR 0044 stage 2: a traction or body force from a field as consistent nodal forces
     # (∫N t dA, ∫N f dV), a displacement from a field per node (DDL_IMPO), each node in
@@ -458,7 +483,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
                 + ", ".join(f"'{g}'" for g in points.names if g.startswith(("FP", "FV", "FD")))
                 + ",)))"
             ]
-            if field_forces or field_imposed
+            if field_forces or field_imposed or spectral
             else []
         ),
         # Pretension relations name single nodes: their point groups as node groups.
@@ -625,6 +650,8 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     elif step.type == "buckling":
         out += _buckling(step, cara, charges, preload, names, mesh, ties)
     elif step.type == "frequency_domain":  # harmonic response, direct (ADR 0041)
+        spectra = _spectral_loads(spectral)
+        out += spectra["charges"]
         if step.settings.get("method", "direct") == "modal":
             raise InputError(
                 "Code_Aster solves harmonic response directly here (method direct); "
@@ -646,11 +673,14 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             )
             + "),",
             "           VECT_ASSE=(_F(VECTEUR=CO('force'), OPTION='CHAR_MECA', "
-            f"CHARGE=({', '.join(charges)},)),))",
+            f"CHARGE=({', '.join(charges)},)),{spectra['vectors']}))",
             f"freqs = DEFI_LIST_REEL(VALE=({freqs},))",
+            *spectra["functions"],
             "res = DYNA_VIBRA(TYPE_CALCUL='HARM', BASE_CALCUL='PHYS', MATR_MASS=mass, "
             + ("MATR_AMOR=damp, " if damped else "")
-            + "MATR_RIGI=stiff, LIST_FREQ=freqs, EXCIT=_F(VECT_ASSE=force, COEF_MULT=1.0))",
+            + "MATR_RIGI=stiff, LIST_FREQ=freqs, EXCIT=(_F(VECT_ASSE=force, COEF_MULT=1.0),"
+            + spectra["excit"]
+            + "))",
             # Tables take no complex values: each frequency's real and imaginary parts
             # as two real results, the frequency in INST; the reader joins them.
             "parts = {'REEL': [], 'IMAG': []}",
@@ -1343,6 +1373,41 @@ def _check_buckling(features, step) -> None:
             f"Code_Aster buckling steps take plain supports and loads so far, not {odd}",
             code="unsupported",
         )
+
+
+def _spectral_loads(spectral) -> dict:
+    """A harmonic step's loads varying with frequency (ADR 0044): per field and given
+    frequency f_s a charge of its nodal forces, its assembled vector, and a hat function
+    of FREQ (1 at f_s, 0 at the frequencies beside it, the first and last held outside)
+    that multiplies it in DYNA_VIBRA; their sum interpolates the field linearly."""
+    out = {"charges": [], "vectors": "", "functions": [], "excit": ""}
+    for j, (frequencies, rows) in enumerate(spectral, start=1):
+        n = len(frequencies)
+        for s, (f, items) in enumerate(zip(frequencies, rows, strict=True), start=1):
+            name = f"{j}_{s}"
+            out["charges"].append(
+                f"sp{name} = AFFE_CHAR_MECA(MODELE=model, FORCE_NODALE=({', '.join(items)},))"
+            )
+            out["vectors"] += (
+                f"\n                      _F(VECTEUR=CO('fq{name}'), OPTION='CHAR_MECA', "
+                f"CHARGE=(sp{name},)),"
+            )
+            if n == 1:
+                out["excit"] += f" _F(VECT_ASSE=fq{name}, COEF_MULT=1.0),"
+                continue
+            points = []
+            if s > 1:
+                points += [(frequencies[s - 2], 0.0)]
+            points += [(f, 1.0)]
+            if s < n:
+                points += [(frequencies[s], 0.0)]
+            vale = ", ".join(f"{x:.12g}, {y:g}" for x, y in points)
+            out["functions"].append(
+                f"ht{name} = DEFI_FONCTION(NOM_PARA='FREQ', VALE=({vale}), INTERPOL='LIN', "
+                "PROL_GAUCHE='CONSTANT', PROL_DROITE='CONSTANT')"
+            )
+            out["excit"] += f" _F(VECT_ASSE=fq{name}, FONC_MULT=ht{name}),"
+    return out
 
 
 def _buckling(step, cara: str, charges: list[str], preload, names, mesh, ties) -> list[str]:

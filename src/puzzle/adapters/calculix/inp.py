@@ -161,7 +161,13 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
     )
     # ADR 0044: values from imported fields, on their selections' nodes, by feature key.
     GIVEN.set({_keyed(i): i.field for i in inputs if i.role == "feature"})
-    HISTORY_TIMES.set({_keyed(i): i.times for i in inputs if i.role == "feature" and i.times})
+    HISTORY_TIMES.set(
+        {  # a transient step's times (s), or a harmonic step's frequencies (Hz)
+            _keyed(i): i.times or i.frequencies
+            for i in inputs
+            if i.role == "feature" and (i.times or i.frequencies)
+        }
+    )
     HISTORIES.set({})
     # A temperature field from a thermal study, as a thermal load on structural steps; a
     # body temperature varying in time gives each step its own (ADR 0044).
@@ -1598,7 +1604,7 @@ def _feature_rows(f: Feature, mesh: Mesh, faces: FaceLookup, rigid=None) -> dict
         # normal, as on a solid's face; CalculiX's shell P pushes along it (Gmsh orients
         # the elements with the face).
         dload.append(f"{set_name('E', f.selection)}, P, {-v['p']:.10g}")
-    elif f.type == "pressure" and _history(f, "p") is not None:  # in time (ADR 0044)
+    elif f.type == "pressure" and _history(f, "p") is not None:  # in time or frequency
         histories.update(_history_rows(f, "p", "*DLOAD", "P", group, mesh, faces))
     elif f.type == "pressure" and "p" in f.fields and consistent_faces(group, mesh):
         # From a field (ADR 0044): consistent nodal forces ∫N (-p n) dA, the field's own
@@ -1810,7 +1816,8 @@ def _step_given() -> dict:
 
 
 def _history(f, name):
-    """A transient step's times for a feature value following a field in time, or None."""
+    """A transient step's times for a feature value following a field in time, or a
+    harmonic step's frequencies for one varying with frequency; None otherwise."""
     if name not in f.fields:
         return None
     return (HISTORY_TIMES.get() or {}).get(_given(f, name)[1])
@@ -1819,7 +1826,9 @@ def _history(f, name):
 def _history_rows(f, name, card, label, group, mesh: Mesh, faces: FaceLookup) -> dict:
     """A value following a field in time through a transient step (ADR 0044): each face
     loaded by 1 times an amplitude of its own history (the mean of its nodes' values at
-    each of the field's times, against step time), one amplitude per distinct history."""
+    each of the field's times, against step time), one amplitude per distinct history.
+    A field varying with frequency gives amplitudes against frequency, which is how a
+    *STEADY STATE DYNAMICS step reads them: each frequency's load, linear between."""
     field, times = _given(f, name)[0], _history(f, name)
     known = HISTORIES.get()
     rows: dict[tuple[str, str], list[str]] = {}
