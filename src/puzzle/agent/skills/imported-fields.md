@@ -110,11 +110,22 @@ refused by name, never ignored):
   (CalculiX: pressure and flux as consistent nodal loads, films one value per face;
   Code_Aster: pressure as consistent nodal forces, flux and films as FORMULEs over
   the faces; Elmer: restart variables read by
-  `Equals`; FEniCSx: Lagrange functions). Code_Aster refuses flux and film fields on 2D
-  models so far.
-- **body_force fx/fy/fz, traction tx/ty/tz, displacement x/y/z:** CalculiX and
-  Code_Aster (consistent nodal forces ∫N t dA, ∫N f dV; displacements per node).
-  Uniform body_force and traction: all four FE solvers (not 2D models yet).
+  `Equals`; FEniCSx: Lagrange functions). On 2D models (ADR 0048) the selection is an
+  edge; Code_Aster interpolates along the edges (`OnEdges`).
+- **body_force fx/fy/fz, traction tx/ty/tz, displacement x/y/z:** CalculiX,
+  Code_Aster, Elmer and FEniCSx in 3D, uniform or from fields (CalculiX and
+  Code_Aster: consistent nodal forces ∫N t dA, ∫N f dV, displacements per node; Elmer:
+  restart variables read by `Force i`, `Stress Bodyforce i`, `Displacement i =
+  Equals`; FEniCSx: Lagrange functions; all four integrate the same interpolant).
+  Elmer and FEniCSx store no reaction forces, so check a conservative total there by
+  the displacements.
+- **In 2D models** tractions and body forces run on CalculiX and Code_Aster only: a
+  traction goes on an edge selection and a body force on the region (the part's face
+  selection), x and y only (z is out of the plane; in an axisymmetric model x is the
+  radius, y the axis); both are per area or volume as in 3D, the thickness (plane
+  stress) or the revolution (axisymmetric) is applied for you. Give 2D field points at
+  z = 0 (a line of points along an edge, a grid over a region). Conservative mapping
+  is refused in 2D models; map linearly.
 
 ## Stage 3: initial stress, shell thickness, graded materials (CalculiX, Code_Aster)
 

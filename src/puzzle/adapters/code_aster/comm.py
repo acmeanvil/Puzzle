@@ -408,6 +408,13 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     for j, f in enumerate([f for f in features if f.type == "pressure" and "p" in f.fields], 1):
         from puzzle.fields import feature_key
 
+        if mesh.planar:  # its normals come from the solids' faces
+            raise InputError(
+                "Code_Aster takes a pressure from a field in 3D models only so far: in 2D, "
+                "a traction normal to the edge does it",
+                code="unsupported",
+            )
+
         forces = pressure_forces(mesh.groups[f.selection], mesh, given[feature_key(f, "p")])
         for i, (node, force) in enumerate(sorted(forces.items()), start=1):
             points.add(f"FP{j}N{i}", node)
@@ -416,7 +423,8 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     features = [f for f in features if not (f.type == "pressure" and "p" in f.fields)]
     # ADR 0044 stage 2: a traction or body force from a field as consistent nodal forces
     # (∫N t dA, ∫N f dV), a displacement from a field per node (DDL_IMPO), each node in
-    # its own point group.
+    # its own point group. A 2D model's are per metre of depth (C_PLAN, D_PLAN) or per
+    # radian (AXIS), as Code_Aster takes FORCE_NODALE there.
     field_imposed: list[str] = []
     vectors = [f for f in features if f.type in VECTOR_LOADS and f.fields]
     for j, f in enumerate(vectors, 1):
@@ -426,12 +434,13 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         def at(ids, f=f, keys=keys):
             return feature_vector(f, keys, given, ids)[0]
 
-        forces = nodal(mesh.groups[f.selection], mesh, at)
+        forces = nodal(mesh.groups[f.selection], mesh, at, comp, per_unit=True)
+        axes = "xy" if mesh.planar else "xyz"  # z is out of a 2D model's plane
         for i, (node, force) in enumerate(sorted(forces.items()), start=1):
-            if not force.any():
+            if not force[: len(axes)].any():
                 continue
             points.add(f"FV{j}N{i}", node)
-            parts = ", ".join(f"F{a.upper()}={force[k]:.12g}" for k, a in enumerate("xyz"))
+            parts = ", ".join(f"F{a.upper()}={force[k]:.12g}" for k, a in enumerate(axes))
             field_forces.append(f"_F(GROUP_NO='FV{j}N{i}', {parts})")
     shapes = [f for f in features if f.type == "displacement" and f.fields]
     for j, f in enumerate(shapes, 1):
@@ -2026,16 +2035,54 @@ class OnFaces:
             n = _shape(self.six, xi, eta)[0]
             self.cache[key] = float(n @ self.values[self.faces[e]])
         return self.cache[key]
+
+
+class OnEdges(OnFaces):
+    # The same on a 2D model's edges (line2, line3: ends, then the middle): a point is
+    # placed on the nearest edges' chords, then (three-node edges) on the curve.
+
+    def __init__(self, xyz, faces, values):
+        super().__init__(xyz, faces, values)
+        self.centre = self.xyz[self.faces[:, :2]].mean(axis=1)
+
+    def _line(self, s):
+        if self.faces.shape[1] == 3:
+            return (_np.array([s * (s - 1) / 2, s * (s + 1) / 2, 1 - s * s]),
+                    _np.array([s - 0.5, s + 0.5, -2 * s]))
+        return _np.array([(1 - s) / 2, (1 + s) / 2]), _np.array([-0.5, 0.5])
+
+    def __call__(self, x, y, z=0.0):
+        key = (x, y, z)
+        if key not in self.cache:
+            p = _np.array([x, y, z])
+            d = ((self.centre - p) ** 2).sum(axis=1)
+            near = _np.argsort(d)[:8] if len(d) > 8 else _np.argsort(d)
+            best = None
+            for e in near:
+                nodes = self.xyz[self.faces[e]]
+                a, b = nodes[:2]
+                s = 2 * float((p - a) @ (b - a) / max((b - a) @ (b - a), 1e-300)) - 1
+                for _ in range(4 if self.faces.shape[1] == 3 else 0):
+                    n, dn = self._line(s)
+                    tangent = dn @ nodes
+                    s += float(tangent @ (p - n @ nodes) / max(tangent @ tangent, 1e-300))
+                if best is None or abs(s) - 1 < best[0]:
+                    best = (abs(s) - 1, e, min(max(s, -1.0), 1.0))
+            _, e, s = best
+            self.cache[key] = float(self._line(s)[0] @ self.values[self.faces[e]])
+        return self.cache[key]
 """
 
 
 def _on_faces(name: str, group, mesh: Mesh, field) -> list[str]:
-    """`name` = OnFaces(...): a field's nodal values on a face selection's elements."""
+    """`name` = OnFaces(...): a field's nodal values on a face selection's elements (a
+    2D model's edges: OnEdges, ADR 0048)."""
     blocks = surface_blocks(group, mesh)
-    if mesh.planar or any(b.element not in ("tri3", "tri6") for b in blocks):
+    kinds = ("line2", "line3") if mesh.planar else ("tri3", "tri6")
+    if any(b.element not in kinds for b in blocks):
         raise InputError(
-            f"Code_Aster takes values from imported fields on triangle faces of 3D models only "
-            f"so far ('{group.name}')",
+            f"Code_Aster takes values from imported fields on triangle faces (3D) or line "
+            f"edges (2D) only so far ('{group.name}')",
             code="unsupported",
         )
     if len({b.element for b in blocks}) > 1:
@@ -2049,7 +2096,7 @@ def _on_faces(name: str, group, mesh: Mesh, field) -> list[str]:
         return "[" + ", ".join("[" + ", ".join(f"{v:.17g}" for v in r) + "]" for r in a) + "]"
 
     return [
-        f"{name} = OnFaces({rows(xyz)},",
+        f"{name} = {'OnEdges' if mesh.planar else 'OnFaces'}({rows(xyz)},",
         f"    {[list(map(int, r)) for r in local.reshape(connectivity.shape)]},",
         f"    [{', '.join(f'{v:.17g}' for v in values)}])",
     ]
@@ -2076,8 +2123,10 @@ def _field_thermal_loads(project, features, names, mesh: Mesh, given: dict):
                         f"{f.type} on '{f.selection}': its field for {name} was not mapped"
                     )
                 lines += _on_faces(f"on{k}_{j}", group, mesh, field)
+                xyz = "'X', 'Y'" if mesh.planar else "'X', 'Y', 'Z'"  # a 2D model has no Z
                 lines.append(
-                    f"{fn} = FORMULE(VALE='on(X, Y, Z)', NOM_PARA=('X', 'Y', 'Z'), on=on{k}_{j})"
+                    f"{fn} = FORMULE(VALE='on({xyz.replace(chr(39), '')})', NOM_PARA=({xyz}), "
+                    f"on=on{k}_{j})"
                 )
             else:
                 lines.append(f"{fn} = DEFI_CONSTANTE(VALE={f.values[name].to_si():.12g})")
@@ -2196,8 +2245,12 @@ def _loads(
                     f"_F(GROUP_MA='{g}', VITESSE={load.omega:.12g}, AXE=({axis}), "
                     f"CENTRE=({centre}))"
                 )
-        elif f.type in VECTOR_LOADS and mesh.planar:
-            raise InputError(f"a {f.type} in a 2D model is not written yet", code="unsupported")
+        elif f.type == "body_force" and mesh.planar:  # per volume on the region (ADR 0048)
+            comps = ", ".join(f"F{a.upper()}={v.get(f'f{a}', 0.0):.12g}" for a in "xy")
+            internal.append(f"_F(GROUP_MA='{g}', {comps})")
+        elif f.type == "traction" and mesh.planar:  # per area on 2D edges: FORCE_CONTOUR
+            comps = ", ".join(f"F{a.upper()}={v.get(f't{a}', 0.0):.12g}" for a in "xy")
+            contour.append(f"_F(GROUP_MA='{g}', {comps})")
         elif f.type == "body_force":  # uniform, per volume, no density (ADR 0044)
             comps = ", ".join(f"F{a.upper()}={v.get(f'f{a}', 0.0):.12g}" for a in "xyz")
             internal.append(f"_F(GROUP_MA='{g}', {comps})")

@@ -27,6 +27,7 @@ from puzzle.adapters.base import (
     STRUCTURAL_FEATURES,
     SUPPORT_FEATURES,
     THERMAL_FEATURES,
+    VECTOR_FIELD_FEATURES,
     VECTOR_LOAD_FEATURES,
     Capabilities,
     SolverAdapter,
@@ -57,7 +58,7 @@ class FenicsxAdapter(SolverAdapter):
         | PDE_FEATURES
         | REMOTE_FEATURES
         | SUPPORT_FEATURES
-        | VECTOR_LOAD_FEATURES,  # uniform only (ADR 0044 stage 2)
+        | VECTOR_LOAD_FEATURES,  # ADR 0044 stage 2, uniform or from fields
         shared_settings=frozenset(  # ADR 0023
             {"linear_solver", "tolerance", "max_iterations", "output_every"}
         ),
@@ -81,7 +82,8 @@ class FenicsxAdapter(SolverAdapter):
         # (tests/integration/test_imported_fields_parity.py)
         field_features=frozenset(
             {"body_temperature:T", "pressure:p", "heat_flux:q", "convection:h", "convection:T_inf"}
-        ),
+        )
+        | VECTOR_FIELD_FEATURES,  # stage 2: tests/integration/test_imported_vectors.py
     )
 
     def settings_schema(self) -> list:

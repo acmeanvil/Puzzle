@@ -337,6 +337,14 @@ def face_field(file: str, msh, degree: int) -> fem.Function:
     return u
 
 
+def vector_value(msh, components):
+    """A load's vector: a constant, or (ADR 0044) a UFL vector whose components from
+    imported fields are their Lagrange functions."""
+    if any(isinstance(c, fem.Function) for c in components):
+        return ufl.as_vector([c if isinstance(c, fem.Function) else float(c) for c in components])
+    return fem.Constant(msh, np.asarray(components, dtype=float))
+
+
 def dirichlet(value, dofs, V) -> fem.DirichletBC:
     return fem.dirichletbc(np.asarray(value, dtype=np.float64), dofs, V)
 
@@ -418,20 +426,28 @@ def solve_solid(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
             bcs.append(fem.dirichletbc(target, fem.locate_dofs_topological(V, 2, where)))
         elif f["type"] == "displacement":
             for i, axis in enumerate("xyz"):
-                if axis in vals:
-                    dofs = fem.locate_dofs_topological(V.sub(i), 2, where)
-                    bcs.append(dirichlet(vals[axis], dofs, V.sub(i)))
+                if axis not in vals:
+                    continue
+                if isinstance(vals[axis], fem.Function):  # from an imported field (ADR 0044)
+                    Vi, _ = V.sub(i).collapse()
+                    given = fem.Function(Vi)
+                    given.interpolate(vals[axis])  # the same Lagrange element: exact
+                    dofs = fem.locate_dofs_topological((V.sub(i), Vi), 2, where)
+                    bcs.append(fem.dirichletbc(given, dofs, V.sub(i)))
+                    continue
+                dofs = fem.locate_dofs_topological(V.sub(i), 2, where)
+                bcs.append(dirichlet(vals[axis], dofs, V.sub(i)))
         elif f["type"] == "force" and not modal:
             traction = np.array([vals.get(c, 0.0) for c in "xyz"]) / f["area"]
             add_load(ufl.inner(fem.Constant(msh, traction), v) * ds(tag(f["group"])), f)
         elif f["type"] == "pressure" and not modal:
             add_load(-vals["p"] * ufl.inner(n, v) * ds(tag(f["group"])), f)
         elif f["type"] == "traction" and not modal:  # force per area (ADR 0044)
-            t = np.array([vals.get(c, 0.0) for c in ("tx", "ty", "tz")])
-            add_load(ufl.inner(fem.Constant(msh, t), v) * ds(tag(f["group"])), f)
+            t = vector_value(msh, [vals.get(c, 0.0) for c in ("tx", "ty", "tz")])
+            add_load(ufl.inner(t, v) * ds(tag(f["group"])), f)
         elif f["type"] == "body_force" and not modal:  # force per volume, no density
-            b = np.array([vals.get(c, 0.0) for c in ("fx", "fy", "fz")])
-            add_load(ufl.inner(fem.Constant(msh, b), v) * dx(tag(f["group"])), f)
+            b = vector_value(msh, [vals.get(c, 0.0) for c in ("fx", "fy", "fz")])
+            add_load(ufl.inner(b, v) * dx(tag(f["group"])), f)
         elif f["type"] == "elastic_support":  # a foundation: kn normal, kt tangential
             kn, kt = vals.get("kn", 0.0), vals.get("kt", 0.0)
             un, vn = ufl.dot(u, n), ufl.dot(v, n)
