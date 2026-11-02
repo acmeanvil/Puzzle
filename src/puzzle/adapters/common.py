@@ -1372,26 +1372,45 @@ def check_rigid_ends(fasteners, mesh: Mesh, held: set[int] | None = None) -> Non
                 )
 
 
-def beam_bolt_stiffness(material, diameter: float, length: float) -> dict:
-    """A round bolt as a two-node Timoshenko beam, written as the exact equivalent: rigid
-    arms from each end to the middle and six springs there (ADR 0027).
-
-    For a beam of length L the 12 x 12 stiffness is reproduced term for term by
+def timoshenko_springs(
+    e: float,
+    g: float,
+    a: float,
+    i1: float,
+    i2: float,
+    j: float,
+    a1: float,
+    a2: float,
+    length: float,
+) -> dict:
+    """A uniform straight two-node Timoshenko beam written as its exact equivalent: rigid
+    arms from each end to the middle and six springs there (ADR 0027, 0055). Force and
+    moment uncouple at the middle (the elastic centre), so the arms and springs give the
+    12 x 12 stiffness term for term:
     - axial EA/L and torsion GJ/L,
-    - bending EI/L about each axis across the bolt,
-    - shear 12EI / (L³ (1 + Φ)) along each axis across it, Φ = 12EI / (κGA L²),
-    with κ = 6(1 + ν) / (7 + 6ν), the round section's shear factor (Cowper). -> the
-    springs in the bolt's frame: {"translation": (kx, ky, kz), "rotation": (rx, ry, rz)}."""
+    - bending EI1/L about the first axis (y) and EI2/L about the second (z),
+    - shear 12EI / (L³ (1 + Φ)), Φ = 12EI / (G A_s L²): along y with I2 and the shear
+      area A1 (along y), along z with I1 and A2.
+    -> the springs in the beam's frame (x along it, y the section's first axis):
+    {"translation": (kx, ky, kz), "rotation": (rx, ry, rz)}."""
+
+    def shear(i: float, area: float) -> float:
+        phi = 12 * e * i / (g * area * length**2)
+        return 12 * e * i / (length**3 * (1 + phi))
+
+    return {
+        "translation": (e * a / length, shear(i2, a1), shear(i1, a2)),
+        "rotation": (g * j / length, e * i1 / length, e * i2 / length),
+    }
+
+
+def beam_bolt_stiffness(material, diameter: float, length: float) -> dict:
+    """A round bolt as a two-node Timoshenko beam (`timoshenko_springs`), its shear area
+    κA with κ = 6(1 + ν) / (7 + 6ν), the round section's shear factor (Cowper)."""
     e = material.properties["youngs_modulus"].to_si()
     nu = material.properties["poissons_ratio"].to_si()
     g = e / (2 * (1 + nu))
     a = np.pi * diameter**2 / 4
     i = np.pi * diameter**4 / 64
-    j = 2 * i
     kappa = 6 * (1 + nu) / (7 + 6 * nu)
-    phi = 12 * e * i / (kappa * g * a * length**2)
-    shear = 12 * e * i / (length**3 * (1 + phi))
-    return {
-        "translation": (e * a / length, shear, shear),
-        "rotation": (g * j / length, e * i / length, e * i / length),
-    }
+    return timoshenko_springs(e, g, a, i, i, 2 * i, kappa * a, kappa * a, length)

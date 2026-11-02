@@ -24,6 +24,8 @@ from contextvars import ContextVar
 import numpy as np
 
 from puzzle.adapters.base import refuse_inputs
+from puzzle.adapters.calculix import spring_beams
+from puzzle.adapters.calculix.spring_beams import SpringBeams
 from puzzle.adapters.common import (
     BODY_LOADS,
     HOLDING,
@@ -98,6 +100,8 @@ HISTORY_TIMES: ContextVar[dict | None] = ContextVar("calculix_history_times", de
 HISTORIES: ContextVar[dict | None] = ContextVar("calculix_histories", default=None)
 # The component being written: a 2D model's loads per area or volume need its thickness.
 COMPONENT: ContextVar[Component | None] = ContextVar("calculix_component", default=None)
+# Beams of open table sections written as springs (ADR 0055, `spring_beams`), numbered.
+SPRING_BEAMS: ContextVar[SpringBeams | None] = ContextVar("calculix_spring_beams", default=None)
 # Share of a uniform traction carried by each node of a surface element.
 NODE_SHARES = {
     "tri3": [1 / 3] * 3,
@@ -163,6 +167,7 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
     )
     # ADR 0044: values from imported fields, on their selections' nodes, by feature key.
     COMPONENT.set(comp)
+    SPRING_BEAMS.set(None)  # set once numbered, below
     GIVEN.set({_keyed(i): i.field for i in inputs if i.role == "feature"})
     HISTORY_TIMES.set(
         {  # a transient step's times (s), or a harmonic step's frequencies (Hz)
@@ -191,6 +196,11 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
         if b.element not in ELEMENTS:
             raise InputError(f"CalculiX adapter does not support {b.element} elements yet")
     faces = FaceLookup.build(volume_blocks)
+    # ADR 0055: line parts of open table sections become springs, not beam elements.
+    springy = spring_beams.build(project, comp, mesh)
+    if springy is not None:
+        spring_beams.check(project, comp, study, springy, inputs, rayleigh(study))
+    sprung = springy.parts if springy is not None else set()
     out: list[str] = ["*HEADING", f"Puzzle study: {study.name}"]
 
     out.append("*NODE, NSET=N_ALL")
@@ -207,6 +217,8 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
         own = mesh.groups[part.name]
         for b in own.blocks(mesh):
             if b.dim != own.dim:  # the part's own elements: solids, beams or shells
+                continue
+            if part.name in sprung:  # written as springs below (ADR 0055)
                 continue
             if planar is not None:
                 if b.element not in PLANAR_ELEMENTS[planar]:
@@ -229,7 +241,9 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
         out.append(f"*NSET, NSET={set_name('N', group.name)}")
         out += _chunks(group.node_ids)
         # Beams and shells, or a 2D model's regions: element sets beside the solids.
-        written = {id(b) for b in mesh.structural_blocks() + mesh.region_blocks()}
+        written = {id(b) for b in mesh.structural_blocks() + mesh.region_blocks()} - {
+            id(b) for name in sprung for b in mesh.groups[name].blocks(mesh)
+        }
         blocks = [
             b for b in group.blocks(mesh) if b.dim == group.dim and (b.dim == 3 or id(b) in written)
         ]
@@ -239,7 +253,12 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
             out += _chunks(ids)
 
     out += _materials(
-        project, comp, mesh, expansion=thermal_load is not None, damping=rayleigh(study)
+        project,
+        comp,
+        mesh,
+        expansion=thermal_load is not None,
+        damping=rayleigh(study),
+        sprung=sprung,
     )
     out += _amplitudes(project, comp)
     out += _transforms(project, comp, mesh)
@@ -252,12 +271,17 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
     fastener_lines, fastener_nodes, fastener_elems, ends = _fasteners(project, comp, mesh, first)
     tight = [e["pretension"] for e in ends if e["pretension"]]  # (reference node, force)
     out += fastener_lines
-    out += _springs(
+    lines, next_node, next_elem = _springs(
         comp,
         mesh,
         first + fastener_nodes,
         int(max(b.ids.max() for b in mesh.blocks)) + 1 + fastener_elems,
     )
+    out += lines
+    if springy is not None:  # their helper nodes and elements come last
+        spring_beams.number(springy, mesh, next_node, next_elem)
+        out += spring_beams.lines(springy, mesh)
+    SPRING_BEAMS.set(springy)
     out += _contacts(project, comp, mesh, faces)
     out += _initial_stresses(comp, mesh, study, inputs)  # ADR 0044 stage 3
 
@@ -478,10 +502,10 @@ def _closed_sections(comp: Component, part: str) -> bool:
 
 
 def _library_section(b) -> tuple[str, list[float]]:
-    """A table section CalculiX can expand (ADR 0055): rectangular HSS as BOX and round
-    HSS or pipe as PIPE, of the design wall. Its U1 beam would take an I's bending but
-    give its torsion G (I11 + I22) / L, far stiffer than G J, so open shapes go to
-    Code_Aster."""
+    """A closed table section CalculiX expands (ADR 0055): rectangular HSS as BOX and
+    round HSS or pipe as PIPE, of the design wall. Open shapes never come here: their
+    parts are written as exact springs (`spring_beams`), since CalculiX's U1 beam would
+    give their torsion G (I11 + I22) / L, far stiffer than G J."""
     from puzzle import sections as tables
 
     sec = tables.get(b.standard, b.designation)
@@ -492,12 +516,7 @@ def _library_section(b) -> tuple[str, list[float]]:
         od = sec.sizes["OD"]
         wall = t or (od - sec.sizes["ID"]) / 2
         return "PIPE", [od / 2, wall]
-    raise InputError(
-        f"CalculiX can't take {b.designation} (an open section): its beams expand into "
-        "solids of closed outlines only, and its general beam gets an open section's "
-        "torsion wrong. Run this study on Code_Aster, which takes every table section",
-        code="unsupported",
-    )
+    raise InputError(f"CalculiX can't expand {b.designation} into a solid", code="unsupported")
 
 
 def _beam_sections(comp: Component, mesh: Mesh, selection: str, material: str) -> list[str]:
@@ -595,7 +614,12 @@ def _beam_nodes(mesh: Mesh) -> set[int]:
 
 
 def _materials(
-    project: Project, comp: Component, mesh: Mesh, expansion: bool = False, damping=None
+    project: Project,
+    comp: Component,
+    mesh: Mesh,
+    expansion: bool = False,
+    damping=None,
+    sprung: set[str] = frozenset(),
 ) -> list[str]:
     out: list[str] = []
     for i, assignment in enumerate(comp.materials, start=1):
@@ -639,7 +663,7 @@ def _materials(
                 out.append(f"{plane_thickness(comp, part):.10g}")
         elif group.dim == 2:
             out += _shell_sections(comp, mesh, assignment.selection, name)
-        else:
+        elif assignment.selection.split("/", 1)[0] not in sprung:  # springs take no section
             out += _beam_sections(comp, mesh, assignment.selection, name)
     if not comp.materials:
         raise InputError(f"component '{comp.name}' has no material assignments")
@@ -1304,7 +1328,7 @@ def _beam_bolt(project, f, i: int, a, b, axis, side, node: int, elem: int, held,
                 f"{elem}, {n1}, {n2}",
                 f"*SPRING, ELSET={elset}, ORIENTATION={orient}",
                 f"{dof}, {dof}",
-                f"{k:.13g}",
+                f"{k:.13e}",  # an exponent always: CalculiX read a bare whole number as no data
             ]
             elem += 1
     info = {
@@ -1377,6 +1401,14 @@ def _rbe3_equations(
     return out
 
 
+def spring_beam_info(project: Project, study: Study, mesh: Mesh) -> list[dict]:
+    """Each spring-beam segment's nodes, rotation nodes, axes and springs (ADR 0055), as
+    the deck numbers them: the reader's way to section forces. Written after the deck,
+    which numbered them."""
+    beams = SPRING_BEAMS.get()
+    return beams.info() if beams is not None else []
+
+
 def fastener_info(project: Project, study: Study, mesh: Mesh) -> list[dict]:
     """Each fastener's name, axis and helper nodes, as the deck numbers them."""
     comp = project.get(study.component, Component)
@@ -1418,10 +1450,11 @@ def read_fastener_forces(dat_text: str, ends: list[dict]) -> list[tuple[int, flo
 
 def _springs(
     comp: Component, mesh: Mesh, first_node: int, first_elem: int | None = None
-) -> list[str]:
+) -> tuple[list[str], int, int]:
     """Elastic supports (ADR 0037) as SPRINGA elements to grounded nodes: one along each
     face node's normal (kn × its area) and, with kt, two along its tangents. Springs of
-    equal stiffness share an element set (CalculiX takes one stiffness per set)."""
+    equal stiffness share an element set (CalculiX takes one stiffness per set).
+    -> (lines, the next free node id, the next free element id)"""
     from puzzle.adapters.common import support_nodes, support_stiffness
 
     node = first_node
@@ -1459,7 +1492,7 @@ def _springs(
                     bins.setdefault(key, []).append(f"{elem}, {nid}, {node}")
                     node, elem = node + 1, elem + 1
     if not nodes:
-        return []
+        return [], node, elem
     out = ["*NODE", *nodes, "*NSET, NSET=N_SPRING_GROUND"]
     out += _chunks(np.arange(first_node, node))
     for i, (stiffness, rows) in enumerate(sorted(bins.items()), start=1):
@@ -1474,7 +1507,8 @@ def _springs(
             f"*GAP, ELSET=E_GAP{i}",
             f"0., {n[0]:.9g}, {n[1]:.9g}, {n[2]:.9g}, , {stiffness:.10e}",
         ]
-    return out  # the grounds are held in every step (_step), where OP=NEW can't drop them
+    # The grounds are held in every step (_step), where OP=NEW can't drop them.
+    return out, node, elem
 
 
 def _transforms(project: Project, comp: Component, mesh: Mesh) -> list[str]:
@@ -1570,8 +1604,16 @@ def _feature_rows(f: Feature, mesh: Mesh, faces: FaceLookup, rigid=None) -> dict
     if f.type == "fixed" and mesh.planar:  # a 2D model's nodes move in the plane only
         boundary.append(f"{nset}, 1, 2, 0.")
     elif f.type == "fixed":  # on beam nodes it clamps: rotations too (ADR 0027)
-        on_beams = bool(_beam_nodes(mesh) & {int(n) for n in group.node_ids})
-        boundary.append(f"{nset}, 1, {6 if on_beams else 3}, 0.")
+        nodes = {int(n) for n in group.node_ids}
+        sprung = SPRING_BEAMS.get()
+        springy = sprung.nodes & nodes if sprung is not None else set()
+        on_beams = _beam_nodes(mesh) & nodes
+        if springy:  # ADR 0055: spring beams' rotations are their rotation nodes'
+            boundary.append(f"{nset}, 1, 3, 0.")
+            boundary += [f"{n}, 4, 6, 0." for n in sorted(on_beams - springy)]
+            boundary += spring_beams.fixed_rows(sprung, group)
+        else:
+            boundary.append(f"{nset}, 1, {6 if on_beams else 3}, 0.")
     elif f.type == "displacement" and f.fields:  # per node, from a field (ADR 0044)
         u, present = feature_vector(f, "xyz", _step_given(), group.node_ids)
         boundary += [
@@ -1638,6 +1680,8 @@ def _feature_rows(f: Feature, mesh: Mesh, faces: FaceLookup, rigid=None) -> dict
             for i, n in enumerate(group.node_ids)
             for d in range(3)
         ]
+    elif f.type in BODY_LOADS and spring_beams.in_part(SPRING_BEAMS.get(), f.selection):
+        cload += spring_beams.body_rows(SPRING_BEAMS.get(), f, group, mesh)  # ADR 0055
     elif f.type in BODY_LOADS:  # per volume, on the body's elements (ADR 0037)
         load, elset = body_load(f), set_name("E", f.selection)
         if load.uniform is not None:

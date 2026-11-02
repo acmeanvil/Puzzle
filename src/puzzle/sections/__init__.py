@@ -13,7 +13,7 @@ A single angle (L) bends about principal axes at an angle to its legs, so its `I
 axis to u. Its first axis runs along one leg (both tables' x leg: the shorter of an
 unequal angle) and the other leg along the second axis; u lies `alpha` from the first
 axis toward the second (both tables' tan α; checked against the legs' own product of
-inertia in tests/test_beam_angles.py). The shear centre (the heel) is taken at the
+inertia in tests/test_angle_sections.py). The shear centre (the heel) is taken at the
 centroid, as the beam elements take it.
 """
 
