@@ -1,6 +1,6 @@
 # 0044. Imported fields: a wizard to bring them in, and features that take them
 
-- Status: Accepted (2026-10-25, with the maintainer's answers); stage 1 built 2026-11-01 (CalculiX and Code_Aster; the rest listed below)
+- Status: Accepted (2026-10-25, with the maintainer's answers); built 2026-11-01 (stages 1 to 3; what is left is listed under "Still open")
 - Date: 2026-10-25
 
 ## Context
@@ -149,13 +149,34 @@ The maintainer's answers (2026-10-25):
   - an imported linear temperature on the steel bar against its free expansion: +0.3 % on CalculiX, Code_Aster, FEniCSx and Elmer alike;
   - an imported uniform pressure on the tip equals the uniform feature (−0.18 % from −pL/E, the mesh's own error). A copy written turned 90° and moved 1 m, then placed back, gives the same digits, on CalculiX and Code_Aster;
   - an imported film coefficient equals the uniform one (CalculiX).
-- **Not yet:**
-  - the Ansys and Fluent profile, Exodus II, and OpenFOAM and Code_Saturne readers (CSV covers Ansys's External Data CSV);
-  - conservative mapping; the alignment helpers (point pairs, a best fit);
-  - fields varying in time; vector and tensor fields (stages 2 and 3);
-  - the 3D view's mapped values and source points;
-  - the Connections schematic, which ADR 0058 replaces;
-  - convection and flux from fields on Code_Aster, and face fields on Elmer and FEniCSx.
+
+## Built: the rest (2026-11-01)
+
+- **Readers** (`puzzle.field_readers`): Ansys Fluent point profiles (`.prof`; a `region` picks one), Exodus II (netCDF-3 through SciPy, netCDF-4 through h5py), EnSight Gold (C Binary or ASCII, its files copied in with the `.case`) and OpenFOAM case folders (ASCII vol fields at OpenFOAM's own cell centres, or the written `C`; a patch at its face centres). Vectors and tensors become one column per component (`U_x`, `stress_xx`, ...); element values sit at element centres; `region` and `index` pick a part and a step. Ansys Mechanical's and Fluent's other text exports are delimited text whose number and location headers `sniff` now recognises. Round trips from Puzzle's own Exodus and EnSight writers, a hand-written profile, and a two-cell OpenFOAM case (its prism's centroid exact to 1e-14) give back the values put in.
+- **Fields varying in time:** `ImportedField.times` (a file each, or a source's steps) or a column with the role `time`. Solve step k takes the field at its `end_time` setting, else at k, linearly between the field's times and held outside them, as an Amplitude is; each job of a split study gets its own step's values (`Input.step`). Two static steps on a 0 → 20 MPa ramp equal uniform 10 and 20 MPa to 1e-6 on CalculiX and Code_Aster. Through a transient step, CalculiX follows a pressure or heat flux history (an `*AMPLITUDE` per face history: equal to a uniform flux on an Amplitude to 1e-9); `Capabilities.field_histories` refuses the rest.
+- **Vectors (stage 2):** two new structural features, **body force density** (`body_force`, fx, fy, fz in N/m³: per volume, no density, e.g. Lorentz forces) and **traction** (`traction`, tx, ty, tz in Pa), uniform on all four FE solvers or from fields on CalculiX and Code_Aster; a **displacement** from a field, imposed per node. A vector's components are one `FieldUse` each (`fields.VECTORS`); when a placement turns the points or the mapping is conservative they must come from one field and placement, and are mapped and turned as one vector. CalculiX and Code_Aster write consistent nodal forces (∫N t dA, ∫N f dV; Code_Aster's `FORCE_FACE` and `FORCE_INTERNE` when uniform). A body force equal to ρg gives gravity's tip displacement to 9 digits and an inward traction the pressure's, on all four solvers; a shear traction is −0.47 % from Timoshenko; a turned and moved copy of a traction field placed back gives the uniform answer to every digit; a linear displacement field is exact at the nodes.
+- **Conservative mapping** (pressure, traction, heat flux, body force): linear, then corrected by v + |v| k so that ∫ v over the target equals the source's Σ w v, w each point's area or volume from the use's `weight` column (Puzzle's wall cloud now writes `area`, its Lorentz cloud `dV`); refused without one. Coarse Lorentz and wall-pressure clouds keep their totals, confirmed by the root reactions (Code_Aster exactly; CalculiX within 7e-7, its reactions leaving out the body load applied straight to held nodes).
+- **Every FE solver takes the scalar face values** (pressure, heat flux, film coefficient, ambient temperature), steady or transient, with temperature tables too:
+  - CalculiX: pressure and heat flux as consistent nodal loads (`*CLOAD`, `*CFLUX`), films one value per face;
+  - Code_Aster: pressure as consistent nodal forces, flux and films as their own `AFFE_CHAR_THER_F` charges whose values are FORMULEs over a small interpolator written into the `.comm` (the faces' shape functions at Code_Aster's Gauss points: `ECHANGE`/`FLUX_REP` take one value per group, `EVOL_CHAR` one per element);
+  - Elmer: nodal variables in its restart file, read by the boundary conditions with `Equals` (an amplitude in MATC);
+  - FEniCSx: Lagrange functions of the nodal values.
+  A linear tip flux gives the energy-balance mean 775.023 K and the series' spread across the tip, 10.177 K, to 10.175–10.176 K on all four (`test_imported_fields_parity.py`); uniform imported h and T_inf give the 1D answer 351.61134 K with or without temperature tables.
+- **Stage 3** (CalculiX and Code_Aster; Elmer and FEniCSx refuse by name):
+  - **initial stress** (`initial_stress`, six components, uniform or from a field, the tensor turned R σ Rᵀ with the placements): CalculiX `*INITIAL CONDITIONS, TYPE=STRESS` at its integration points; Code_Aster `ETAT_INIT=_F(SIGM=...)` in STAT_NON_LINE (solids only). A free bar relaxes by −σ0 L / E within 1 %, with and without large deflection; a field, and a turned copy placed back, equal the uniform feature; a self-equilibrated residual stress barely moves it;
+  - **shell thickness from a field**: CalculiX `*NODAL THICKNESS`, Code_Aster DKT elements binned by thickness within 0.5 %; a tapered strip's tip deflection matches ∫ M x / (E I) dx within 1.5 %;
+  - **graded materials**: Young's modulus and conductivity from fields, elements binned into materials within 0.5 % (`adapters/graded.py`); a bar with E from 200 to 100 GPa matches ∫ F / (E A) dx, and graded conduction T0 + q ∫ dx / k, within 1 %.
+- **Alignment helpers** (`puzzle.field_align`): three or more point pairs fitted by Kabsch's SVD with the residual (a known placement recovered to 1e-14); bounding boxes matched centre to centre, optionally turned to line up the longest sides; a best fit by rigid ICP onto the target's faces (point to plane) from the current placement, with the RMS before and after (a misplaced bar from 0.89 mm to 3e-17). Each gives a `FieldPlacement`. The wizard is modeless: the Alignment page has them as buttons, pairs typed or picked in the view, and draws the data's points as they move; the Verification page colours the field on the target with the legend and marks faces past the tolerance.
+- **Connections** (`gui/field_view.py`, `puzzle.field_display`): selecting a field-fed feature or an imported field maps it in the background and draws the values on its faces or bodies, extrapolated faces marked and the source points optional. Properties lists an imported field's uses in words and a feature's chain from the file to the solvers that take it. Settings > Connections switches the tree and Properties (`connections.tree`) and the view (`connections.view`) apart, and sets the points and the extrapolated colour. The Connections schematic is ADR 0058's.
+- **Twins:** `puzzle import-field` takes several files, `--times`, `--every-step`, `--region`, `--step`; MCP `field_import` the same; the `imported-fields` skill covers formats, time, vectors, conservative mapping and stage 3.
+
+## Still open
+
+- Frequency as a field's axis (time only); films and body temperatures following a history through a transient step; vectors varying in time through a transient step.
+- Fortran-binary and structured EnSight, binary OpenFOAM, Fluent transient profiles; a field from one of the project's own runs (transfers cover that inside Puzzle).
+- Vector fields on Elmer and FEniCSx, vector loads in 2D models, weights taken from a VTU file's cells, all three components chosen at once in the GUI's form.
+- Code_Aster flux and film fields on 2D models; Code_Aster initial stress on beams and shells.
+- The alignment helpers over MCP.
 
 ## Consequences
 
