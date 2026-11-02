@@ -217,3 +217,148 @@ def test_a_table_section_oriented_toward_a_point(app, tmp_path):
         )  # refused: IPE 300 isn't an AISC section
     finally:
         window.close()
+
+
+# --- ADR 0055: members drawn with their outline, and orienting by a pick ------------------
+
+
+def _frame_and_roof(tmp_path, sections=()):
+    """The L frame (a column up z, a beam along x) and a box beside it whose +y face
+    (at y = 0.4) a pick can orient the frame by."""
+    from puzzle.project import load_project
+
+    root = _frame(tmp_path)
+    p = load_project(root)
+    roof = p.add(Geometry(name="Roof", history=[HistoryStep(kind="box", name="B", args={
+        "dx": 0.6, "dy": 0.1, "dz": 0.6, "x0": 0.2, "y0": 0.3, "z0": 0.2})]))  # fmt: skip
+    comp = p.of_type(Component)[0]
+    comp.parts.append(PartInstance(name="R", geometry=roof.id))
+    comp.beam_sections.extend(sections)
+    save_project(p, root)
+    return root
+
+
+def _meshed(app, root):
+    import time
+
+    from puzzle.gui.tree import Node
+
+    window = MainWindow(root)
+    comp = window.session.project.of_type(Component)[0]
+    window.tree.select(Node("object", str(comp.id), "", comp.name))
+    window.mesh_selected()
+    end = time.monotonic() + 300
+    while window.tasks:
+        app.processEvents()
+        assert time.monotonic() < end
+        time.sleep(0.02)
+    window.tree.select(Node("object", str(comp.id), "", comp.name))
+    window._selected()
+    return window
+
+
+def test_members_are_drawn_with_their_section(app, tmp_path):
+    """A W12X26 on the frame: both members drawn as the section swept along them, on
+    the axes the solver gets; the view toolbar turns them back into lines."""
+    from puzzle.model.schema import BeamSection
+
+    w12 = BeamSection(selection="F", shape="library", standard="aisc", designation="W12X26",
+                      orientation=(0.0, 1.0, 0.0))  # fmt: skip
+    window = _meshed(app, _frame_and_roof(tmp_path, [w12]))
+    try:
+        assert window.viewport.shown["beams"] == [("F", "W12X26"), ("F", "W12X26")]
+        comp = window.session.project.of_type(Component)[0]
+        members = window._beam_members(window.meshes[str(comp.id)])
+        for m in members:
+            assert abs(m.first @ (0, 1, 0)) == pytest.approx(1.0)
+        bar = window.viewport.view_bar.actions_by_name["beams"]
+        bar.trigger()
+        assert window.viewport.shown["beams"] == []
+        bar.trigger()
+        assert len(window.viewport.shown["beams"]) == 2
+        # Over a result too, deformed and coloured by the value.
+        import numpy as np
+
+        from puzzle.results.model import Field, Results, StepResult
+
+        mesh = window.meshes[str(comp.id)]
+        u = Field("displacement", "node", ["x", "y", "z"], mesh.node_ids,
+                  np.outer(mesh.coords[:, 2], [1e-3, 0, 0]))  # fmt: skip
+        results = Results("code_aster", [StepResult(1, "stationary", 1.0,
+                                                    fields={"displacement": u})])  # fmt: skip
+        window._result_component = str(comp.id)
+        shown = window.viewport.show_result(mesh, results, "displacement")
+        assert shown["beams"] == [("F", "W12X26"), ("F", "W12X26")]
+    finally:
+        window.close()
+
+
+def test_orient_by_a_face_picked_in_the_view(app, tmp_path):
+    """Pick a face in the view from the form: it closes, the double-click on the roof's
+    +y face comes back as a new selection chosen in the form, and OK makes the
+    selection and the section in one command. From a section's menu a pick of the same
+    face reuses that selection. The view then draws the members with first axis y."""
+    from puzzle.gui.beam_dialog import orient_by_pick
+
+    window = _meshed(app, _frame_and_roof(tmp_path))
+    comp = window.session.project.of_type(Component)[0]
+    seen = []
+
+    def form(dialog):
+        if not seen:  # the first time: a table section, then Pick a face
+            dialog.shape.setCurrentIndex(dialog.shape.findData("library"))
+            dialog.standard.setCurrentIndex(dialog.standard.findData("aisc"))
+            dialog.family.setCurrentIndex(dialog.family.findData("W"))
+            dialog.designation.setCurrentIndex(dialog.designation.findData("W12X26"))
+            assert dialog.outline.regions  # the outline drawn in the form
+            dialog.orient.setCurrentIndex(dialog.orient.findData("normal"))
+            assert dialog.form.isRowVisible(dialog.pick_face)
+            assert not dialog.form.isRowVisible(dialog.pick_edge)
+            seen.append(dialog.face.currentData())
+            dialog.pick_face.click()
+            return False
+        seen.append((dialog.face.currentData(), dialog.face.currentText()))
+        assert dialog.orient.currentData() == "normal"
+        return True
+
+    window.run_dialog = form
+    try:
+        before = len(window.session.history(limit=100))
+        assert add_beam_section(window, comp) is None  # waiting for the pick
+        assert window.viewport.shown["capturing"]
+        window.viewport._captured((0.5, 0.4, 0.5))  # a double-click on the +y face
+        name = "R/Beam orientation face"
+        assert seen[1] == (name, f"{name} (picked)")
+        project = window.session.project
+        roof = next(g for g in project.of_type(Geometry) if g.name == "Roof")
+        (sel,) = roof.selections
+        assert (sel.name, sel.entity, list(sel.members)) == ("Beam orientation face", "face",
+                                                             ["B/+y"])  # fmt: skip
+        (section,) = project.of_type(Component)[0].beam_sections
+        assert (section.orient, section.reference, section.designation) == (
+            "normal", name, "W12X26")  # fmt: skip
+        assert len(window.session.history(limit=100)) == before + 1  # one command
+
+        # From the section's menu, the same face: its selection is used again.
+        orient_by_pick(window, project.of_type(Component)[0], 0, "face")
+        window.viewport._captured((0.4, 0.4, 0.3))
+        project = window.session.project
+        assert len(next(g for g in project.of_type(Geometry) if g.name == "Roof").selections) == 1
+        assert project.of_type(Component)[0].beam_sections[0].reference == name
+
+        # Meshed again, the members follow the face's normal.
+        window.mesh_selected()
+        import time
+
+        end = time.monotonic() + 300
+        while window.tasks:
+            app.processEvents()
+            assert time.monotonic() < end
+            time.sleep(0.02)
+        mesh = window.meshes[str(comp.id)]
+        members = window._beam_members(mesh)
+        assert len(members) == 2
+        for m in members:
+            assert abs(m.first @ (0, 1, 0)) == pytest.approx(1.0)
+    finally:
+        window.close()

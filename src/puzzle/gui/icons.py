@@ -52,6 +52,8 @@ DRAWINGS = {
     "mesh": '<path d="M4 20L12 4l8 16z"/><path d="M8 12h8M12 4v16M8 12l4 8 4-8"/>',
     "wireframe": '<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l16 9M20 7.5l-16 9'
     'M12 3v18"/>',
+    # An I-beam's end: beams drawn with their sections (ADR 0055).
+    "beams": '<path d="M6 4h12v3h-4.5v10H18v3H6v-3h4.5V7H6z"/>',
 }
 
 

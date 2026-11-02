@@ -27,10 +27,14 @@ VTK_CELLS = {
 }
 
 
-def beam_lines(grid):
+def beam_lines(grid, skip=None):
     """The grid's beam elements alone (None without any), drawn again as thick lines:
-    a line cell renders one pixel wide otherwise."""
+    a line cell renders one pixel wide otherwise. `skip`: element ids drawn otherwise
+    (as their section's outline, ADR 0055)."""
     lines = grid.extract_cells_by_type([3, 21])
+    if skip is not None and len(skip) and lines.n_cells and "element_id" in lines.cell_data:
+        keep = ~np.isin(np.asarray(lines.cell_data["element_id"]), np.asarray(skip))
+        lines = lines.extract_cells(np.flatnonzero(keep)) if not keep.all() else lines
     return lines if lines.n_cells else None
 
 

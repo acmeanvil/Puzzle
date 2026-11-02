@@ -462,6 +462,8 @@ class ViewBar(QWidget):
         self.actions_by_name["extremes"].setChecked(True)
         add("symbols", "Supports and loads", viewport.set_symbols_shown, checkable=True)
         self.actions_by_name["symbols"].setChecked(True)
+        add("beams", "Beams drawn with their sections", viewport.set_beams_shown, checkable=True)
+        self.actions_by_name["beams"].setChecked(True)
         add("clear", "Clear probes", viewport.clear_probes, "Esc")
         add("copy", "Copy image", self.copy_image)
         add("camera", "Save image…", self.save_image)
@@ -769,6 +771,9 @@ class Viewport(QWidget):
         self.lines, self.line_entities = None, []
         self.vertices: dict = {}  # (0, tag) -> position, set by the window per mesh
         self.boundaries: dict = {}  # (3, tag) -> its faces, set by the window per mesh
+        # The window's: a mesh -> its beam members with their sections (ADR 0055), drawn
+        # as the section's outline swept along them; None draws beams as lines.
+        self.beam_members = None
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self.shown: dict = {}  # what is on screen: kind, scalar, range, highlight
@@ -793,6 +798,7 @@ class Viewport(QWidget):
             "view": "iso",
             "extremes": True,
             "symbols": True,
+            "beams": True,  # beams as their sections' outlines, else as lines
         }
         self.glyphs: list = []  # the supports' and loads' symbols (ADR 0035)
         self._glyph_actors: list[str] = []
@@ -843,7 +849,9 @@ class Viewport(QWidget):
         except ValueError:  # a surface-only preview of the geometry: nothing meshed yet
             grid = None
         cells = grid.n_cells if grid is not None else (self.surface.n_cells if self.surface else 0)
+        members = self._beams(mesh) if grid is not None else []
         self.shown = {
+            "beams": [(m.selection, m.shape) for m in members],
             "kind": "mesh" if grid is not None else "preview",
             "cells": cells,
             "highlight": highlight,
@@ -864,7 +872,10 @@ class Viewport(QWidget):
             )
             from puzzle.post.vtk import beam_lines
 
-            if (lines := beam_lines(grid)) is not None:
+            if members:
+                self._draw_beam_solid(members, mesh.node_coords)
+            skip = np.concatenate([m.element_ids for m in members]) if members else None
+            if (lines := beam_lines(grid, skip)) is not None:
                 self.plotter.add_mesh(lines, color="#5b6875", line_width=5)
         elif self.surface is not None:
             self.plotter.add_mesh(self.surface, color="#c9d3dd", smooth_shading=False)
@@ -1226,6 +1237,7 @@ class Viewport(QWidget):
             if scale:
                 grid = grid.warp_by_vector(warp, factor=scale)
         label = step.label()
+        members = self._beams(mesh)
         on_points = name in grid.point_data
         where = np.asarray(base.points if on_points else base.cell_centers().points)
         shown_at = np.asarray(grid.points if on_points else grid.cell_centers().points)
@@ -1258,6 +1270,7 @@ class Viewport(QWidget):
             "max_at": where[hi].tolist(),
             "min_at": where[lo].tolist(),
             "cut": None,
+            "beams": [(m.selection, m.shape) for m in members],
         }
         tail = f" {unit}" if unit else ""
         self._extremes = [
@@ -1313,7 +1326,11 @@ class Viewport(QWidget):
             self.legend.finish(self.plotter)
             from puzzle.post.view import draw_beams
 
-            draw_beams(self.plotter, grid, scalars=name, clim=clim, **colours)
+            if members:
+                self._draw_result_beams(members, base, warp if scale else None, scale,
+                                        name if on_points else None, clim, colours)  # fmt: skip
+            skip = np.concatenate([m.element_ids for m in members]) if members else None
+            draw_beams(self.plotter, grid, skip, scalars=name, clim=clim, **colours)
             self._frame(mesh)
         self._draw_marks()  # recorded in `shown` without OpenGL too
         self._update_click()
@@ -1432,6 +1449,74 @@ class Viewport(QWidget):
         """A section cut on results (`post.cuts.Cut`), or None; the result is redrawn."""
         self.cut = cut
         self.redraw_needed.emit()
+
+    # --- beams drawn with their sections (ADR 0055) ------------------------------------
+
+    def _beams(self, mesh) -> list:
+        """The beam members to draw with their outline: none when beams are shown as
+        lines, or the window gives none (a mesh without sections)."""
+        if not self.style.get("beams", True) or self.beam_members is None:
+            return []
+        try:
+            return list(self.beam_members(mesh) or [])
+        except Exception:  # noqa: BLE001 - a section the view can't draw stays a line
+            return []
+
+    def _draw_beam_solid(self, members, positions) -> None:
+        from puzzle.post.beam_shapes import solid
+
+        swept = solid(members, positions)
+        if swept is not None:
+            self.plotter.add_mesh(swept, color="#9aa7b4", reset_camera=False)
+            self._outline_edges(swept)
+
+    def _outline_edges(self, swept) -> None:
+        """The swept sections' corners as thin lines: flat grey faces alone read as a
+        silhouette, not an I or a channel."""
+        edges = swept.extract_feature_edges(40, boundary_edges=False, manifold_edges=False)
+        if edges.n_cells:
+            self.plotter.add_mesh(edges, color="#3d4650", line_width=1, reset_camera=False)
+
+    def _draw_result_beams(self, members, base, warp, scale, scalar, clim, colours) -> None:
+        """Members over a result: at the deformed nodes, coloured by the shown nodal
+        value (a vector, or a value per element, leaves them plain)."""
+        from puzzle.post.beam_shapes import solid
+
+        ids = np.asarray(base.point_data["node_id"])
+        order = np.argsort(ids)
+        points = np.asarray(base.points)
+        u = np.nan_to_num(np.asarray(base.point_data[warp])) if warp else None
+
+        def index(node_ids):
+            return order[np.searchsorted(ids, node_ids, sorter=order)]
+
+        def positions(node_ids):
+            i = index(node_ids)
+            return points[i] + (scale * u[i] if u is not None else 0.0)
+
+        data = np.asarray(base.point_data[scalar], float) if scalar is not None else None
+        plain = data is None or data.ndim != 1
+        swept = solid(members, positions, None if plain else (lambda n: data[index(n)]))
+        if swept is None:
+            return
+        if plain:
+            self.plotter.add_mesh(swept, color="#9aa7b4", reset_camera=False)
+            self._outline_edges(swept)
+            return
+        lo_hi = clim or (float(np.nanmin(data)), float(np.nanmax(data)))
+        self.plotter.add_mesh(swept, scalars="value", clim=lo_hi, show_scalar_bar=False,
+                              reset_camera=False, **colours)  # fmt: skip
+        self._outline_edges(swept)
+
+    def set_beams_shown(self, on: bool) -> None:
+        """Beams as their sections' outlines (on) or as lines; the view is redrawn."""
+        self.style["beams"] = on
+        if self.result_state is not None:
+            self.redraw_needed.emit()
+        elif self.mesh is not None:
+            glyphs = self.glyphs
+            self.show_mesh(self.mesh, self.highlight, self.highlight_entities)
+            self.show_symbols(glyphs)
 
     def set_symbols_shown(self, on: bool) -> None:
         self.style["symbols"] = on

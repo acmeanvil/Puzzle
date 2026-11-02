@@ -27,6 +27,12 @@ selection. The section's first axis lies across a rectangle's width and an I's f
    - `toward`: `toward` (a point selection) or `toward_point` [x, y, z] in m: each member
      faces it (a ring of columns facing a centre);
    - `normal` or `edge`: `reference`, a face selection's normal or an edge's direction.
+     No selection yet? Make one in the same batch: an `edit` appending to the face's
+     geometry's `selections` ({"name", "entity": "face", "members": [...]}), then the
+     section with `reference` "Part/Name". (In the GUI the user can pick the face in
+     the view from the form or the section's menu.)
+5. Check it: the view draws each member with its section's outline on the axes the
+   solver gets, so `render` shows whether the flanges face the right way.
 
 ## Watch for
 

@@ -8,6 +8,7 @@ history.jsonl, so changes another client makes (an agent over MCP, the CLI) show
 from __future__ import annotations
 
 import copy
+import json
 import threading
 from pathlib import Path
 
@@ -362,6 +363,7 @@ class MainWindow(QMainWindow):
         self.viewport = Viewport()
         self.viewport.construction_planes = self._construction_planes  # for section cuts
         self.viewport.hidden_parts = self._hidden_parts  # hidden or suppressed geometry
+        self.viewport.beam_members = self._beam_members  # beams with their outline (ADR 0055)
         self.results_bar = ResultsBar(self._redraw_result, self._axes_changed)
         self.results_bar.hide()
         # Which part of the work is on screen (ADR 0029): model, geometry, sketch or
@@ -2060,6 +2062,32 @@ class MainWindow(QMainWindow):
             if isinstance(g, Geometry) and (g.hidden or g.suppressed):
                 out |= {p.name for p in comp.parts}
         return {p for p in out if p in mesh.groups}
+
+    def _beam_members(self, mesh) -> list:
+        """The shown component's beam members with their sections and first axes, as
+        the solver gets them (ADR 0055): the view sweeps each section along them. Kept
+        while the mesh and the sections are the same."""
+        from puzzle.model.schema import CoordinateSystem
+        from puzzle.post.beam_shapes import members
+
+        session = self.session
+        if session is None:
+            return []
+        project = session.project
+        on_result = self.viewport.result_state is not None
+        cid = getattr(self, "_result_component", None) if on_result else self.mesh_component
+        comp = project.objects.get(_uuid(str(cid))) if cid is not None else None
+        if not isinstance(comp, Component) or not comp.beam_sections:
+            return []
+        systems = [cs.model_dump_json() for cs in project.of_type(CoordinateSystem)]
+        key = (str(comp.id), json.dumps([b.model_dump(mode="json") for b in comp.beam_sections]),
+               tuple(systems))  # fmt: skip
+        cached = getattr(self, "_beam_cache", None)
+        if cached is not None and cached[0] is mesh and cached[1] == key:
+            return cached[2]
+        found, _problems = members(project, comp, mesh, session.root)
+        self._beam_cache = (mesh, key, found)
+        return found
 
     def _construction_planes(self) -> list[tuple]:
         """(name, id, origin, normal) of the project's construction planes, which a

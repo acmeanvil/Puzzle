@@ -36,12 +36,17 @@ def _rotate(v: np.ndarray, about: np.ndarray, degrees: float) -> np.ndarray:
     return v * math.cos(t) + np.cross(k, v) * math.sin(t) + k * (k @ v) * (1 - math.cos(t))
 
 
-def first_axis(project, mesh, section, member_xyz: np.ndarray, what: str) -> np.ndarray:
-    """The section's first axis for one straight member (its nodes' coordinates)."""
+def first_axis(
+    project, mesh, section, member_xyz: np.ndarray, what: str, along: np.ndarray | None = None
+) -> np.ndarray:
+    """The section's first axis for one straight member (its nodes' coordinates). `along`,
+    the member's direction start to end, fixes which way `roll` turns: right-handed about
+    it (the line through the nodes alone has no direction)."""
     from puzzle.adapters.common import InputError, support_nodes
     from puzzle.model.schema import CoordinateSystem
 
-    along = _direction(member_xyz)
+    line = _direction(member_xyz)
+    along = line if along is None or line @ along >= 0 else -line
     at = member_xyz.mean(axis=0)
     if section.orient == "vector":
         v = np.asarray(section.orientation, float)
@@ -144,7 +149,8 @@ def with_orientations(project, component_id, mesh):
         axes = []
         for blk in members:
             xyz = mesh.node_coords(np.unique(blk.connectivity))
-            axis = first_axis(project, mesh, b, xyz, f"beam section on '{b.selection}'")
+            axis = first_axis(project, mesh, b, xyz, f"beam section on '{b.selection}'",
+                              along=_along(mesh, blk))  # fmt: skip
             if angle is not None:
                 axis = principal(axis, _along(mesh, blk), angle.alpha, b.mirror)
             axes.append(axis)

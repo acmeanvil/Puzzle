@@ -187,6 +187,13 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
                         window, selection=feature.selection, source=tools.study_of(window, obj)
                     ),
                 )
+        if node.kind == "beam_section":  # ADR 0055: its first axis from a pick
+            from puzzle.gui.beam_dialog import orient_by_pick
+
+            index = int(node.path.split(".")[1])
+            add("Orient by a picked face…", lambda: orient_by_pick(window, obj, index, "face"))
+            add("Orient along a picked edge…",
+                lambda: orient_by_pick(window, obj, index, "edge"))  # fmt: skip
         add("Remove", lambda: remove(window, obj, node.path))
     elif isinstance(obj, Geometry) and node.kind == "selection":
         index = int(node.path.split(".")[1])

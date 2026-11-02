@@ -87,3 +87,38 @@ def test_a_beam_section_takes_single_angles_now():
 
     b = BeamSection(selection="F", shape="library", standard="aisc", designation="L4X4X1/2")
     assert not b.mirror and not b.principal
+
+
+def test_roll_turns_right_handed_about_the_member_from_start_to_end():
+    from puzzle.beams import first_axis
+    from puzzle.model.schema import BeamSection
+
+    cm = lambda v: {"value": v, "unit": "cm"}  # noqa: E731
+    b = BeamSection(selection="F", shape="rectangle", width=cm(1), height=cm(2),
+                    orientation=(0, 1, 0), roll=90.0)  # fmt: skip
+    # Nodes in id order, which says nothing of the member's direction.
+    xyz = np.array([[0.5, 0, 0], [1.0, 0, 0], [0.0, 0, 0]])
+    forward = first_axis(None, None, b, xyz, "t", along=np.array([1.0, 0, 0]))
+    backward = first_axis(None, None, b, xyz, "t", along=np.array([-1.0, 0, 0]))
+    assert forward == pytest.approx([0, 0, 1])  # y turned 90° about +x
+    assert backward == pytest.approx([0, 0, -1])
+
+
+@pytest.mark.parametrize("standard, designation", [("aisc", "L5X3-1/2X1/4"),
+                                                   ("en", "L 200 x 100 x 14")])  # fmt: skip
+def test_an_angle_is_drawn_with_the_tables_x_leg_along_its_first_axis(standard, designation):
+    from puzzle.model.schema import BeamSection
+    from puzzle.post.beam_shapes import outline
+
+    sec = sections.get(standard, designation)
+    s = sec.sizes
+    x_leg = s["d"] if standard == "aisc" else s["bf"]
+    y_leg = s["b"] if standard == "aisc" else s["d"]
+    kw = {"selection": "F", "shape": "library", "standard": standard, "designation": designation}
+    loop = outline(BeamSection(**kw))[0][0]
+    assert np.ptp(loop[:, 0]) == pytest.approx(x_leg) and np.ptp(loop[:, 1]) == pytest.approx(y_leg)
+    # The heel is at the low corner; mirrored, the other leg points the other way.
+    centroid_to_heel = loop.min(axis=0)
+    mirrored = outline(BeamSection(**kw, mirror=True))[0][0]
+    assert mirrored.max(axis=0)[1] == pytest.approx(-centroid_to_heel[1])
+    assert mirrored[:, 1].mean() == pytest.approx(-loop[:, 1].mean())
