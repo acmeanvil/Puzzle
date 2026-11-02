@@ -130,10 +130,11 @@ def render(
     }
 
 
-def draw_beams(plotter, grid, **style) -> None:
-    """Beam elements again as thick lines over the grid (ADR 0027)."""
+def draw_beams(plotter, grid, skip=None, **style) -> None:
+    """Beam elements again as thick lines over the grid (ADR 0027), but those in
+    `skip` (element ids drawn as their section's outline)."""
     from puzzle.post.vtk import beam_lines
 
-    lines = beam_lines(grid)
+    lines = beam_lines(grid, skip)
     if lines is not None:
         plotter.add_mesh(lines, line_width=5, show_scalar_bar=False, **style)

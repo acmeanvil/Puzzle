@@ -417,6 +417,12 @@ def _model(window, menu: QMenu) -> None:
     _add(menu, "Add beam section…", _with_component(
         window, lambda c: add_beam_section(window, c)),
         "A cross-section for a line body (a frame)")  # fmt: skip
+    from puzzle.gui.beam_dialog import orient_from_menu
+
+    _add(menu, "Orient a beam section by a pick…", _with_component(
+        window, lambda c: orient_from_menu(window, c)),
+        "A beam section's first axis along a face's normal or an edge picked in the view",
+    )  # fmt: skip
     from puzzle.gui.beam_dialog import add_shell_thickness
 
     _add(menu, "Add shell thickness…", _with_component(

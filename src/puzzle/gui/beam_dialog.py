@@ -5,11 +5,18 @@ sizes in the display length unit, or a standard section: the AISC or EN table, a
 family, a designation, its sizes and properties shown), and how the section's first
 axis is set (a rectangle's width and an I's flanges lie along it): a global direction,
 a coordinate system's axis, toward a point, along a face's normal or an edge, then
-turned by a roll angle about the member.
+turned by a roll angle about the member. The face or edge may be picked in the view:
+Pick in the view closes the form, the next double-click on the model chooses the
+entity, and the form comes back with it (a selection of it is made with the section,
+in one command, unless one already holds just that entity). An existing section is
+oriented by a pick from its menu (`orient_by_pick`). The form draws the section's
+outline (ADR 0055 decision 5).
 """
 
 from __future__ import annotations
 
+from PySide6.QtCore import QPointF, QSize, Qt
+from PySide6.QtGui import QPainter, QPainterPath, QPalette, QPen
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -17,7 +24,9 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QLabel,
     QLineEdit,
+    QPushButton,
     QVBoxLayout,
+    QWidget,
 )
 
 from puzzle.gui.theme import role
@@ -71,6 +80,75 @@ def mode_words(mode: str) -> str:
             "normal": "face selection", "edge": "edge selection"}[mode]  # fmt: skip
 
 
+PICK = 2  # the form's result when it closes to pick in the view
+PICK_WORDS = {"face": "a face", "edge": "an edge"}
+
+
+class OutlineView(QWidget):
+    """A section's outline (`post.beam_shapes.outline`) drawn to scale, its first axis
+    across and its second up, in the theme's colours."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.regions: list = []
+        self.setMinimumHeight(120)
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt's name
+        return QSize(220, 140)
+
+    def set_section(self, section) -> None:
+        """A `BeamSection` (or None): its outline, or nothing when it can't be drawn."""
+        from puzzle.post.beam_shapes import outline
+
+        try:
+            self.regions = outline(section) if section is not None else []
+        except (KeyError, ValueError, AttributeError):
+            self.regions = []
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        import numpy as np
+
+        if not self.regions:
+            return
+        loops = [loop for region in self.regions for loop in region if loop is not None]
+        pts = np.concatenate(loops)
+        lo, hi = pts.min(axis=0), pts.max(axis=0)
+        span = float(max(hi - lo)) or 1.0
+        margin = 16
+        scale = min(self.width() - 2 * margin, self.height() - 2 * margin) / span
+        centre = (lo + hi) / 2
+
+        def at(p):
+            return QPointF(self.width() / 2 + (p[0] - centre[0]) * scale,
+                           self.height() / 2 - (p[1] - centre[1]) * scale)  # fmt: skip
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        palette = self.palette()
+        path = QPainterPath()
+        path.setFillRule(Qt.FillRule.OddEvenFill)
+        for loop in loops:
+            path.moveTo(at(loop[0]))
+            for p in loop[1:]:
+                path.lineTo(at(p))
+            path.closeSubpath()
+        fill = palette.color(QPalette.ColorRole.Highlight)
+        fill.setAlpha(90)
+        painter.fillPath(path, fill)
+        painter.setPen(QPen(palette.color(QPalette.ColorRole.WindowText), 1.2))
+        painter.drawPath(path)
+        # The section's axes through its centroid: 1 across, 2 up.
+        muted = palette.color(QPalette.ColorRole.PlaceholderText)
+        painter.setPen(QPen(muted, 1, Qt.PenStyle.DashLine))
+        o = at((0.0, 0.0))
+        painter.drawLine(QPointF(margin / 2, o.y()), QPointF(self.width() - margin / 2, o.y()))
+        painter.drawLine(QPointF(o.x(), margin / 2), QPointF(o.x(), self.height() - margin / 2))
+        painter.drawText(QPointF(self.width() - margin, o.y() - 4), "1")
+        painter.drawText(QPointF(o.x() + 4, margin), "2")
+        painter.end()
+
+
 def section_targets(project, comp) -> list[str]:
     """The parts, then their edge selections: what a section can cover."""
     out = [p.name for p in comp.parts]
@@ -117,6 +195,7 @@ class AddBeamSection(QDialog):
         self.standard.currentIndexChanged.connect(self._families)
         self.family.currentIndexChanged.connect(self._designations)
         self.designation.currentIndexChanged.connect(self._about)
+        self.designation.currentIndexChanged.connect(lambda _: self._draw_outline())
         self._families()
         # How the first axis is set.
         from puzzle.model.schema import CoordinateSystem
@@ -140,9 +219,25 @@ class AddBeamSection(QDialog):
         self.form.addRow("Axis", self.system_axis)
         self.form.addRow("Point", self.point)
         self.form.addRow("Face", self.face)
+        self.pick_face = QPushButton("Pick a face in the view")
+        self.pick_face.setToolTip("Close this form, double-click a face of the model, and "
+                                  "the form comes back with it chosen")  # fmt: skip
+        self.form.addRow("", self.pick_face)
         self.form.addRow("Edge", self.edge)
+        self.pick_edge = QPushButton("Pick an edge in the view")
+        self.pick_edge.setToolTip("Close this form, double-click an edge of the model, and "
+                                  "the form comes back with it chosen")  # fmt: skip
+        self.form.addRow("", self.pick_edge)
+        self.picking: str | None = None  # "face" or "edge" when closed to pick
+        self.new_selections: dict[str, dict] = {}  # "Part/Name" -> the selection to make
+        self.pick_face.clicked.connect(lambda: self._pick("face"))
+        self.pick_edge.clicked.connect(lambda: self._pick("edge"))
         self.form.addRow("Then turned about the member by (°)", self.roll)
+        self.outline = OutlineView()
+        self.form.addRow("Outline", self.outline)
         self.shape.currentIndexChanged.connect(self._show_sizes)
+        for box in self.sizes.values():
+            box.editingFinished.connect(self._draw_outline)
         self.orient.currentIndexChanged.connect(self._show_orient)
         self._show_sizes()
         self._show_orient()
@@ -162,6 +257,37 @@ class AddBeamSection(QDialog):
         table = self.shape.currentData() == "library"
         for box in (self.standard, self.family, self.designation, self.about):
             self.form.setRowVisible(box, table)
+        self._draw_outline()
+
+    def _draw_outline(self) -> None:
+        if not hasattr(self, "outline"):
+            return  # still being built
+        from puzzle.model.schema import BeamSection
+
+        try:
+            value = self.value(check=False)
+            value.pop("selection", None)
+            section = BeamSection(selection="-", **value)
+        except (ValueError, TypeError):
+            section = None
+        self.outline.set_section(section)
+
+    def _pick(self, kind: str) -> None:
+        """Close to pick `kind` in the view; `add_beam_section` brings the form back."""
+        self.picking = kind
+        self.done(PICK)
+
+    def take_pick(self, kind: str, name: str, selection: dict | None) -> None:
+        """A picked entity's selection `name` ("Part/Name") chosen for `kind`, and the
+        selection to make with the section when it is new."""
+        box = self.face if kind == "face" else self.edge
+        if selection is not None:
+            self.new_selections[name] = selection
+        if box.findData(name) < 0:
+            words = f"{name} (picked)" if selection is not None else name
+            box.addItem(words, name)
+        box.setCurrentIndex(box.findData(name))
+        self.orient.setCurrentIndex(self.orient.findData("normal" if kind == "face" else "edge"))
 
     def _families(self) -> None:
         from puzzle import sections
@@ -201,8 +327,10 @@ class AddBeamSection(QDialog):
                  "toward": [self.point], "normal": [self.face], "edge": [self.edge]}  # fmt: skip
         for box in (self.axis, self.system, self.system_axis, self.point, self.face, self.edge):
             self.form.setRowVisible(box, box in shown[mode])
+        self.form.setRowVisible(self.pick_face, mode == "normal")
+        self.form.setRowVisible(self.pick_edge, mode == "edge")
 
-    def value(self) -> dict:
+    def value(self, check: bool = True) -> dict:
         from puzzle.model.units import plain
         from puzzle.settings import current
 
@@ -223,7 +351,7 @@ class AddBeamSection(QDialog):
         mode = out["orient"]
         picked = {"axes": self.system, "toward": self.point, "normal": self.face,
                   "edge": self.edge}.get(mode)  # fmt: skip
-        if picked is not None and picked.currentData() is None:
+        if check and picked is not None and picked.currentData() is None:
             raise ValueError(f"there is nothing to orient by: add a {mode_words(mode)} first")
         if mode == "axes":
             out["axes"] = self.system.currentData()
@@ -235,11 +363,25 @@ class AddBeamSection(QDialog):
         return out
 
 
-def add_beam_section(window, comp):
+def add_beam_section(window, comp, dialog: AddBeamSection | None = None):
+    """The form, then one command: the section, with the selection a pick made."""
     from puzzle.commands.model import Edit, EditOp
 
-    dialog = AddBeamSection(window.session.project, comp, window)
-    if not window.run_dialog(dialog):
+    if dialog is None:
+        dialog = AddBeamSection(window.session.project, comp, window)
+    dialog.picking = None
+    accepted = window.run_dialog(dialog)
+    if dialog.picking is not None:  # back with the picked entity (or as it was)
+        kind = dialog.picking
+
+        def got(name, selection):
+            if name is not None:
+                dialog.take_pick(kind, name, selection)
+            add_beam_section(window, comp, dialog)
+
+        pick_entity(window, comp, kind, got)
+        return None
+    if not accepted:
         return None
     try:
         value = dialog.value()
@@ -248,7 +390,129 @@ def add_beam_section(window, comp):
         window.statusBar().showMessage(words[:1].upper() + words[1:], 8000)
         return None
     op = EditOp(op="append", path="beam_sections", value=value)
-    return window.submit(Edit(object=str(comp.id), ops=[op]))
+    edit = Edit(object=str(comp.id), ops=[op])
+    made = selection_commands(window, comp, dialog.new_selections, value.get("reference"))
+    return window.submit_batch([*made, edit]) if made else window.submit(edit)
+
+
+# --- orienting by a pick in the view (ADR 0055) -------------------------------------------
+
+
+def pick_entity(window, comp, kind: str, done) -> None:
+    """The next double-click on the model picks a face or an edge (`kind`) of `comp`;
+    `done(name, selection)` gets its selection's name ("Part/Name"): one that holds
+    just that entity, else a new one to make (`selection`: its value, None when it
+    exists). `done(None, None)` when nothing was hit."""
+    from puzzle.gui.tree import Node
+
+    cid = str(comp.id)
+    if window.mesh_component != cid:  # its model in the view, to pick on
+        window.tree.select(Node("object", cid, "", comp.name))
+        window._selected()
+    view = window.viewport
+
+    def captured(xyz) -> None:
+        if xyz is None:
+            done(None, None)
+            return
+        entity = view.entity_at(xyz, kind)
+        named = window.mesh_names.get(cid, {}).get(entity) if entity is not None else None
+        if named is None:
+            window.statusBar().showMessage(f"No {kind} there; pick again from the form", 8000)
+            done(None, None)
+            return
+        done(*picked_selection(window, comp, kind, *named))
+
+    view.capture_point(captured, snap="none")
+    window.statusBar().showMessage(
+        f"Double-click {PICK_WORDS[kind]} of the model to orient the beams by", 20000
+    )
+
+
+def picked_selection(window, comp, kind: str, part_name: str, member: str):
+    """("Part/Name", the new selection's value or None): an existing selection of the
+    part's geometry that holds just this entity, else a new one named for its use."""
+    project = window.session.project
+    part = next(p for p in comp.parts if p.name == part_name)
+    geo = project.objects.get(part.geometry)
+    for sel in geo.selections:
+        if sel.entity == kind and list(sel.members) == [member]:
+            return f"{part_name}/{sel.name}", None
+    taken = {s.name for s in geo.selections}
+    base = "Beam orientation face" if kind == "face" else "Beam orientation edge"
+    names = (f"{base} {k}" if k > 1 else base for k in range(1, 1000))
+    name = next(n for n in names if n not in taken)
+    anchors = window.mesh_anchors.get(str(comp.id), {})
+    anchor = anchors.get((part_name, kind, member))
+    value = {"name": name, "entity": kind, "members": [member],
+             "anchors": {member: anchor} if anchor is not None else {}}  # fmt: skip
+    return f"{part_name}/{name}", value
+
+
+def selection_commands(window, comp, new: dict, used: str | None) -> list:
+    """The command making the picked selection the section uses, if it is new."""
+    from puzzle.commands.model import Edit, EditOp
+
+    if not used or used not in new:
+        return []
+    part_name = used.partition("/")[0]
+    part = next(p for p in comp.parts if p.name == part_name)
+    return [Edit(object=str(part.geometry),
+                 ops=[EditOp(op="append", path="selections", value=new[used])])]  # fmt: skip
+
+
+def orient_by_pick(window, comp, index: int, kind: str) -> None:
+    """An existing beam section oriented by a face's normal or along an edge picked in
+    the view: one command (with the selection, when it is new)."""
+    from puzzle.commands.model import Edit, EditOp
+
+    def got(name, selection):
+        if name is None:
+            return
+        current = window.session.project.objects.get(comp.id, comp)
+        ops = [EditOp(op="set", path=f"beam_sections.{index}.orient",
+                      value="normal" if kind == "face" else "edge"),
+               EditOp(op="set", path=f"beam_sections.{index}.reference", value=name)]  # fmt: skip
+        edit = Edit(object=str(current.id), ops=ops)
+        made = selection_commands(window, current, {name: selection} if selection else {}, name)
+        out = window.submit_batch([*made, edit]) if made else window.submit(edit)
+        if out is not None:
+            what = "normal of" if kind == "face" else "direction of"
+            window.statusBar().showMessage(f"Its first axis now follows the {what} {name}", 8000)
+
+    pick_entity(window, comp, kind, got)
+
+
+def orient_from_menu(window, comp) -> None:
+    """Model → Orient a beam section by a pick…: which section and by what, in one
+    form (the section chosen in the tree first), then the pick."""
+    from puzzle.gui.quick_form import Ask
+
+    if not comp.beam_sections:
+        window.statusBar().showMessage(f"{comp.name} has no beam section yet", 8000)
+        return
+    node = window.tree.current()
+    here = None
+    if node is not None and node.kind == "beam_section" and node.object == str(comp.id):
+        here = int(node.path.split(".")[1])
+    sections = [(f"Beam section on {b.selection}: {b.describe()}", i)
+                for i, b in enumerate(comp.beam_sections)]  # fmt: skip
+    if here is not None:
+        sections.insert(0, sections.pop(here))
+    got = window.ask_form(
+        "Orient a beam section by a pick",
+        [
+            Ask("section", "Beam section", choices=sections),
+            Ask(
+                "kind",
+                "Its first axis",
+                choices=[("Along a picked face's normal", "face"), ("Along a picked edge", "edge")],
+            ),
+        ],  # fmt: skip
+        intro="Then double-click the face or edge in the view.",
+    )
+    if got is not None:
+        orient_by_pick(window, comp, got["section"], got["kind"])
 
 
 # --- shells (ADR 0027) -------------------------------------------------------------------
