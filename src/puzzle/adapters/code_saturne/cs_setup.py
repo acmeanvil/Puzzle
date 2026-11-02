@@ -6,7 +6,7 @@ Uses Code_Saturne's own case model (the code behind its GUI), so setup.xml is va
 for the installed version. case.json:
     {"mesh": "mesh.msh",
      "density": 998.2, "viscosity": 1.002e-3,
-     "iterations": 500,
+     "iterations": 500, "listing_every": 1,
      "zones": [{"label": "Inlet", "selection": "2", "nature": "inlet", "velocity": 0.001},
                {"label": "Outlet", "selection": "3", "nature": "outlet", "pressure": 0.0}, ...],
      "turbulence": "off" | "k-epsilon-PL" | "k-omega-SST",
@@ -28,6 +28,7 @@ from code_saturne.model.Boundary import Boundary
 from code_saturne.model.FluidCharacteristicsModel import FluidCharacteristicsModel
 from code_saturne.model.LocalizationModel import LocalizationModel, Zone
 from code_saturne.model.NumericalParamEquationModel import NumericalParamEquationModel
+from code_saturne.model.OutputControlModel import OutputControlModel
 from code_saturne.model.SolutionDomainModel import SolutionDomainModel
 from code_saturne.model.ThermalScalarModel import ThermalScalarModel
 from code_saturne.model.TimeStepModel import TimeStepModel
@@ -70,6 +71,10 @@ def main() -> None:
     else:
         steps.setTimePassing(-1)  # steady (SIMPLE)
     steps.setStopCriterion("iterations", int(spec["iterations"]))
+    if spec.get("listing_every"):
+        # The listing's convergence table every few iterations, not Code_Saturne's
+        # every 50: it is how Puzzle follows the residuals (ADR 0054).
+        OutputControlModel(case).setListingFrequency(int(spec["listing_every"]))
 
     zones = LocalizationModel("BoundaryZone", case)
     for z in spec["zones"]:

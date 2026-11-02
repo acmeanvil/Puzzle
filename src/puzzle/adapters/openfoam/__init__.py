@@ -76,6 +76,12 @@ class OpenFoamAdapter(SolverAdapter):
         refuse_inputs(inputs, "OpenFOAM")
         return write_case(project, study, mesh, workdir)
 
+    def progress(self, input_file: Path, step: int = 1, of: int = 1):
+        """The Allrun steps and simpleFoam's residuals against residualControl (ADR 0054)."""
+        from puzzle.adapters.openfoam.progress import OpenFoamProgress as P
+
+        return P(input_file, step, of)
+
     def command(self, input_file: Path) -> list[str]:
         return case_command()
 

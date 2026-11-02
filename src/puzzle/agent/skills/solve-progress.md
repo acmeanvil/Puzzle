@@ -26,8 +26,26 @@ failed or stopped solve keeps it too, in its run folder.
      with contact or plasticity take `increments`), or hold the model before contact.
    - `chattering`: contact opening and closing in turn; more increments, or a softer
      contact.
+   - `not_converged` (CFD, OpenFOAM and Code_Saturne): a steady flow solve used all its
+     `iterations` with a residual above its criterion. If it says still falling, raise
+     the step's `iterations`; if stalled, look at the mesh near walls and corners
+     (`mesh_quality`) before anything else. The results exist but may be wrong.
 3. `run_progress("<study>", run="<run id>")` reads a stored run's history instead (run
    ids from `runs`).
+
+## CFD runs (OpenFOAM, Code_Saturne)
+
+- A steady flow solve is one increment of many iterations: `now` reads "iteration 170
+  of 500" and the residual furthest from its criterion; progress is the iteration over
+  the step's `iterations` setting.
+- OpenFOAM's residuals are each field's initial residual (`Ux`, `Uy`, `Uz`, `p`, `k`,
+  `epsilon`, `omega`, `T`) against its `residualControl` criterion (the step's
+  `tolerance` sets p's and U's); it stops early once all are below (`Converged`).
+  `continuity` has no criterion.
+- Code_Saturne's are each variable's time residual (`velocity`, `pressure`, `k`,
+  `epsilon`, `omega`, `temperature`); it always runs all its `iterations` and has no
+  criterion, so Puzzle counts it converged when every residual fell three decades from
+  its largest. A heat-transfer channel converges much faster with `pseudo_time_step`.
 
 ## Follow a result while it solves (trackers)
 

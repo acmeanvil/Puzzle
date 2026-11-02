@@ -294,3 +294,149 @@ def test_the_solution_panel_draws_a_run(tmp_path):
     assert "15,203 equations" in panel.resources.text()
     save_png(events, "Bolted", tmp_path / "p.png")
     assert (tmp_path / "p.png").stat().st_size > 10_000
+
+
+# --- OpenFOAM and Code_Saturne (ADR 0054 phase 3) -----------------------------------
+
+
+def _case(name: str, tmp_path) -> Path:
+    """A recorded CFD run folder, its logs unzipped as the solver left them."""
+    where = tmp_path / name
+    shutil.copytree(DATA / name, where)
+    for log in where.rglob("*.gz"):
+        log.with_suffix("").write_bytes(gzip.decompress(log.read_bytes()))
+        log.unlink()
+    return where
+
+
+def _run(parser, case: Path, ok: bool = True) -> list:
+    """The parser as the job runner drives it: stdout lines, polls, then the end."""
+    events = []
+    log = case / "solver.log"
+    for line in log.read_text(errors="replace").splitlines() if log.exists() else []:
+        events += parser.safe_feed(line)
+        events += parser.safe(parser.poll)
+    return events + parser.safe(parser.poll) + parser.finish(ok)
+
+
+def _openfoam(name: str, tmp_path, ok: bool = True) -> list:
+    from puzzle.adapters.openfoam.progress import OpenFoamProgress
+
+    case = _case(name, tmp_path)
+    return _run(OpenFoamProgress(case / "Allrun"), case, ok)
+
+
+def _saturne(name: str, tmp_path, ok: bool = True) -> list:
+    from puzzle.adapters.code_saturne.progress import CodeSaturneProgress
+
+    case = _case(name, tmp_path)
+    return _run(CodeSaturneProgress(case / "case.json"), case, ok)
+
+
+def test_openfoam_laminar_channel_converges_in_170_iterations(tmp_path):
+    """The channel benchmark on simpleFoam: residualControl p 1e-6 and U 1e-7 (as the
+    log's "SIMPLE: convergence criteria" says), met at iteration 170 of 500."""
+    events = _openfoam("openfoam_channel", tmp_path)
+    [step] = _of(events, Step)
+    assert (step.type, step.iterations, step.end_time) == ("stationary", 500, None)
+    its = _of(events, Iteration)
+    assert [e.number for e in its] == list(range(1, 171))
+    assert its[0].residuals["Ux"] == pytest.approx(0.999999999961)
+    assert its[0].residuals["p"] == pytest.approx(1.0)
+    assert its[0].criteria == {"Ux": 1e-7, "Uy": 1e-7, "Uz": 1e-7, "p": 1e-6}
+    assert its[-1].residuals["Uz"] == pytest.approx(8.49767261407e-08)
+    assert its[-1].residuals["continuity"] == pytest.approx(1.17507139995e-10)
+    assert "continuity" not in its[-1].criteria  # simpleFoam has none for it
+    [done] = _of(events, Converged)
+    assert done.iterations == 170
+    texts = [m.text for m in _of(events, Message)]
+    assert texts[:2] == [
+        "Converting the mesh (gmshToFoam)",
+        "Faces outside every selection become walls",
+    ]
+    assert "Solving (simpleFoam)" in texts
+    s = progress.state(events)
+    assert s.fraction() == 1.0 and not s.failed
+    assert "iteration 170 of 500" in s.line() and "(needs 1e-07)" in s.line()
+    assert progress.diagnose(events) == []
+
+
+def test_openfoam_stopped_short_is_not_converged(tmp_path):
+    """A k-epsilon channel (test_turbulent_channel.py's) given 150 iterations where it
+    needs about 1500: k and epsilon match residualControl's "(k|epsilon|omega)" key;
+    the run ends at its limit with Uz, the spanwise velocity, flat far above 1e-7."""
+    events = _openfoam("openfoam_turbulent_short", tmp_path)
+    its = _of(events, Iteration)
+    assert len(its) == 150 and not _of(events, Converged)
+    assert set(its[0].residuals) == {"Ux", "Uy", "Uz", "p", "k", "epsilon", "continuity"}
+    assert its[0].criteria["k"] == its[0].criteria["epsilon"] == 1e-6
+    assert its[-1].residuals["Uz"] == pytest.approx(0.183145184987)
+    [short] = _of(events, Diverged)
+    assert not short.final  # the result exists; it may not have converged
+    assert any("iteration limit (150)" in m.text for m in _of(events, Message))
+    s = progress.state(events)
+    assert s.fraction() == 1.0 and not s.failed and "Uz 1.83e-01" in s.line()
+    [d] = progress.diagnose(events)
+    assert d.code == "not_converged"
+    assert "all 150 iterations" in d.text and "Uz" in d.text and "stalled" in d.text
+
+
+def test_openfoam_fatal_error_in_an_expert_setting(tmp_path):
+    """An expert setting naming a pressure solver that doesn't exist: simpleFoam stops
+    in its first iteration with a FOAM FATAL IO ERROR."""
+    events = _openfoam("openfoam_fatal", tmp_path, ok=False)
+    [error] = [m for m in _of(events, Message) if m.level == "error"]
+    assert error.code == "FOAM FATAL IO ERROR"
+    assert error.text.startswith("OpenFOAM input error: Unknown symmetric matrix solver type")
+    assert "file: system/fvSolution/solvers/p" in error.text
+    [final] = _of(events, Diverged)
+    assert final.final and final.reason == "Unknown symmetric matrix solver type Nonsense"
+    assert progress.state(events).failed
+    assert [d.code for d in progress.diagnose(events)] == ["bad_setting"]
+
+
+def test_code_saturne_parameter_error(tmp_path):
+    """A negative viscosity (through the expert pass-through): Code_Saturne's parameter
+    check stops it before the first time step; the message is its own, without the
+    source path and the call stack, and given once though the listing repeats it."""
+    events = _saturne("code_saturne_fatal", tmp_path, ok=False)
+    errors = [m for m in _of(events, Message) if m.level == "error"]
+    assert errors[0].code == "cs_parameters"
+    assert errors[0].text == (
+        "Error while reading reference dynamic viscosity value Parameter: "
+        "cs_glob_fluid_properties->viscl0 = -1 while its value must be greater than 0. "
+        "1 parameter error(s) reported."
+    )
+    assert [m.text for m in errors[1:]] == ["Error running the calculation."]  # its stdout
+    assert not _of(events, Iteration)
+    [final] = _of(events, Diverged)
+    assert final.final and "viscl0 = -1" in final.reason
+    assert [d.code for d in progress.diagnose(events)] == ["bad_setting"]
+
+
+def test_the_solution_panel_draws_cfd_residuals(tmp_path):
+    """Each field over its criterion (continuity has none, so it isn't drawn); a solver
+    without criteria (Code_Saturne) has its residuals drawn as they are."""
+    import os
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    from puzzle.gui.solution_panel import SolutionPanel
+
+    app = QApplication.instance() or QApplication([])  # noqa: F841
+    panel = SolutionPanel(None)
+    panel.show_history("Channel: OpenFOAM", _openfoam("openfoam_channel", tmp_path))
+    names = [n for n, _, _ in panel.convergence.series]
+    assert names == ["Velocity x", "Velocity y", "Velocity z", "Pressure"]
+    assert len(panel.convergence.series[0][1]) == 170
+    assert panel.convergence.y_label == "Residual / criterion" and panel.convergence.lines
+    assert "steady" in panel.times.empty
+    raw = [Step(iterations=2), Increment(),
+           Iteration(number=1, residuals={"velocity": 30.0}),
+           Iteration(number=2, residuals={"velocity": 3.0})]  # fmt: skip
+    panel.show_history("Channel: Code_Saturne", raw)
+    assert panel.convergence.series[0][0] == "Velocity"
+    assert panel.convergence.series[0][1] == [(1, 30.0), (2, 3.0)]
+    assert panel.convergence.y_label == "Residual" and not panel.convergence.lines

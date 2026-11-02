@@ -81,6 +81,12 @@ class CodeSaturneAdapter(SolverAdapter):
         refuse_inputs(inputs, "Code_Saturne")
         return write_case(project, study, mesh, workdir)
 
+    def progress(self, input_file: Path, step: int = 1, of: int = 1):
+        """Time steps and the listing's convergence table, read as it grows (ADR 0054)."""
+        from puzzle.adapters.code_saturne.progress import CodeSaturneProgress as P
+
+        return P(input_file, step, of)
+
     def command(self, input_file: Path) -> list[str]:
         return case_command()
 

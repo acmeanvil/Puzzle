@@ -153,6 +153,8 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
         "density": props["density"],
         "viscosity": props["dynamic_viscosity"],
         "iterations": int(steps[0].settings.get("iterations", 500)),
+        # The listing every iteration up to 500, then ~500 times a run (ADR 0054).
+        "listing_every": max(1, round(int(steps[0].settings.get("iterations", 500)) / 500)),
         "pseudo_time_step": _seconds(steps[0].settings.get("pseudo_time_step")),
         "turbulence": TURBULENCE[model],
         "thermal": (

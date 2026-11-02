@@ -46,6 +46,21 @@ NAMES = {  # residual names as people read them
     "contact pressure": "Contact pressure",
     "contact geometry": "Contact geometry",
     "friction": "Friction",
+    # CFD (OpenFOAM's field names, Code_Saturne's variables)
+    "Ux": "Velocity x",
+    "Uy": "Velocity y",
+    "Uz": "Velocity z",
+    "U": "Velocity",
+    "p": "Pressure",
+    "p_rgh": "Pressure",
+    "T": "Temperature",
+    "epsilon": "Dissipation (ε)",
+    "omega": "Specific dissipation (ω)",
+    "k": "Turbulent energy (k)",
+    "nuTilda": "Turbulent viscosity (ν̃)",
+    "velocity": "Velocity",
+    "pressure": "Pressure",
+    "continuity": "Continuity error",
 }
 
 
@@ -409,6 +424,9 @@ class SolutionPanel(QWidget):
         criteria: dict[str, float] = {}
         marks: list[tuple[float, str]] = []
         n = 0
+        # Each residual over its criterion; a run whose solver has none (Code_Saturne's
+        # fixed iteration count) plots the residuals themselves.
+        judged = any(e.criteria for e in events if isinstance(e, progress.Iteration))
         steps_seen: set[int] = set()
         incs: list[tuple[float, float]] = []
         cut_incs: list[tuple[float, float]] = []
@@ -421,6 +439,8 @@ class SolutionPanel(QWidget):
                     if crit:  # against its criterion: below 1 has converged
                         by_name.setdefault(name, []).append((n, value / crit))
                         criteria[name] = crit
+                    elif not judged:
+                        by_name.setdefault(name, []).append((n, value))
             elif isinstance(e, progress.Increment):
                 count += 1
                 if e.cutback or e.attempt > 1:
@@ -437,12 +457,14 @@ class SolutionPanel(QWidget):
             (NAMES.get(k, k.capitalize()), pts, colours[i % len(colours)])
             for i, (k, pts) in enumerate(by_name.items())
         ]
-        line = [("criterion", 1.0, QColor(tokens().muted))] if series else []
+        line = [("criterion", 1.0, QColor(tokens().muted))] if series and judged else []
+        self.convergence.y_label = "Residual / criterion" if judged or not series else "Residual"
         self.convergence.set_data(series, line, marks if len(marks) < 2000 else [])
         times = [("Step time", sorted(incs + cut_incs), colours[0])] if incs or cut_incs else []
         if cut_incs:
             times.append(("Cut back", cut_incs, QColor(tokens().error)))
-        self.times.set_data(times)
+        steady = "No time steps: a steady solve, its iterations on the left"
+        self.times.set_data(times, empty=steady if n and not times else "No increments yet")
         tracked: dict[str, list[tuple[float, float]]] = {}
         for e in events:
             if isinstance(e, progress.Tracked) and e.time is not None:

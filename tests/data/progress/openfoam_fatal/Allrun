@@ -1,0 +1,10 @@
+set -e
+gmshToFoam mesh.msh > log.gmshToFoam 2>&1
+if grep -q defaultFaces constant/polyMesh/boundary; then
+  foamDictionary constant/polyMesh/boundary -entry entry0/defaultFaces/type -set wall > /dev/null
+fi
+foamDictionary constant/polyMesh/boundary -entry entry0/Channel_Walls/type -set wall > /dev/null
+foamDictionary constant/polyMesh/boundary -entry entry0/Channel_Sides/type -set symmetry > /dev/null
+foamDictionary system/fvSolution -entry solvers/p/solver -set Nonsense > /dev/null
+simpleFoam > log.simpleFoam 2>&1
+postProcess -func writeCellCentres -latestTime > log.postProcess 2>&1
