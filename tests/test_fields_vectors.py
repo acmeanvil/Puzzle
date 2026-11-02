@@ -355,3 +355,66 @@ def test_a_weight_left_at_its_default_keeps_older_hashes():
     )
     data = _own(comp)
     assert "weight" not in data["physics"][0]["features"][0]["fields"]["p"]
+
+
+def _rectangle_2d(x0, x1, h, n=4) -> Mesh:
+    """A 2D model's rectangle [x0, x1] x [0, h] at z = 0 in tri3s (n x n squares, two
+    each), with the groups "P/Region" and "P/Right" (the x = x1 edge, line2s)."""
+    xs, ys = np.linspace(x0, x1, n + 1), np.linspace(0.0, h, n + 1)
+    coords = np.array([[x, y, 0.0] for y in ys for x in xs])
+
+    def nid(i, j):
+        return j * (n + 1) + i + 1
+
+    tris = []
+    for i in range(n):
+        for j in range(n):
+            a, b, c, d = nid(i, j), nid(i + 1, j), nid(i + 1, j + 1), nid(i, j + 1)
+            tris += [[a, b, c], [a, c, d]]
+    lines = [[nid(n, j), nid(n, j + 1)] for j in range(n)]
+    region = CellBlock("tri3", 2, (2, 1), np.arange(1, len(tris) + 1), np.array(tris))
+    edge = CellBlock("line2", 1, (1, 1), np.arange(1, n + 1) + len(tris), np.array(lines))
+    ids = np.arange(1, len(coords) + 1)
+    groups = {
+        "P/Region": Group("P/Region", 2, [(2, 1)], ids),
+        "P/Right": Group("P/Right", 1, [(1, 1)], np.unique(lines)),
+    }
+    return Mesh(ids, coords, [region, edge], groups, planar=True)
+
+
+@pytest.mark.parametrize("dimension", ["2d_planar", "2d_axisymmetric"])
+def test_2d_loads_are_whole_for_calculix_and_per_unit_for_code_aster(dimension):
+    """ADR 0048: a traction on an edge and a body force on the region sum to their
+    integrals times the thickness (plane stress) or 2 pi r (axisymmetric); Code_Aster's
+    are per metre of depth or per radian."""
+    from puzzle.model import Component, PartInstance
+    from puzzle.model.schema import ShellSection
+
+    a, b, h, t, c = 0.01, 0.02, 0.01, 0.002, 1e9
+    mesh = _rectangle_2d(a, b, h)
+    mesh.axisymmetric = dimension == "2d_axisymmetric"
+    some = ImportedField(name="F", file="x.csv").id  # any id: nothing is looked up
+    thick = ShellSection(selection="P", thickness=Quantity(value=2, unit="mm"))
+    comp = Component(name="C", dimension=dimension, mesh=some, shell_sections=[thick],
+                     parts=[PartInstance(name="P", geometry=some)])  # fmt: skip
+    edge, region = mesh.groups["P/Right"], mesh.groups["P/Region"]
+
+    def shear(ids):
+        return np.tile([5e6, 1e6, 0.0], (len(ids), 1))
+
+    def radial(ids):
+        return np.column_stack([c * mesh.node_coords(ids)[:, 0], 0 * ids, 0 * ids])
+
+    pull = sum(traction_forces(edge, mesh, shear, comp).values())
+    each = sum(traction_forces(edge, mesh, shear, comp, per_unit=True).values())
+    spin = sum(body_forces(region, mesh, radial, comp).values())
+    if mesh.axisymmetric:  # ∫ t 2πr dl at r = b; ∫ c r 2πr dA = 2π c h (b³ - a³) / 3
+        np.testing.assert_allclose(pull, np.array([5e6, 1e6, 0]) * 2 * np.pi * b * h)
+        np.testing.assert_allclose(each, np.array([5e6, 1e6, 0]) * b * h)
+        np.testing.assert_allclose(spin[0], 2 * np.pi * c * h * (b**3 - a**3) / 3)
+    else:  # ∫ t dl and ∫ c x dA, times the thickness
+        np.testing.assert_allclose(pull, np.array([5e6, 1e6, 0]) * h * t)
+        np.testing.assert_allclose(each, np.array([5e6, 1e6, 0]) * h)
+        np.testing.assert_allclose(spin[0], c * h * (b**2 - a**2) / 2 * t)
+    with pytest.raises(PuzzleError, match="conservative mapping in a 2D model"):
+        node_weights(region, mesh, "body")
