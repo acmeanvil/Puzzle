@@ -147,7 +147,7 @@ def write_case(
                 "a temperature load applies to static structural steps", code="unsupported"
             )
         variables.append(("temperature", thermal_load.at(emesh.node_ids)[:, 0]))
-    fielded = _field_variables(features, inputs, emesh, variables)  # ADR 0044
+    fielded = _field_variables(features + loads, inputs, emesh, variables)  # ADR 0044
     if variables:
         _write_restart(workdir / MESH_DIR / RESTART, variables, transient)
         restart = [f'  Restart File = "{RESTART}"', "  Restart Position = 1"]
@@ -181,7 +181,7 @@ def write_case(
         mine = [f for f in loads if f.selection == assignment.selection]
         if mine:
             material = project.get(assignment.material, Material)
-            forces.append(_body_force(mine, material))
+            forces.append(_body_force(mine, material, fielded))
             out.append(f"  Body Force = {len(forces)}")
         if "heat_transfer" in solved:
             out.append("  Initial Condition = 1")
@@ -276,13 +276,24 @@ def write_case(
     return sif, emesh
 
 
-def _body_force(loads: list[Feature], material: Material) -> list[str]:
+def _body_force(loads: list[Feature], material: Material, fielded=None) -> list[str]:
     """Stress Bodyforce per component: rho times the summed load fields; a rotation's
-    centrifugal field is a MATC expression in the coordinates (ADR 0037)."""
+    centrifugal field is a MATC expression in the coordinates (ADR 0037); a body force
+    density from an imported field (ADR 0044) is its restart variable, read at the nodes
+    (`fielded`: feature key -> variable), so Elmer integrates its interpolant."""
+    from puzzle.fields import feature_key
+
     given = np.zeros(3)  # body forces (ADR 0044): N/m^3 as they are
+    field_vars: list[list[str]] = [[], [], []]
     for f in loads:
-        if f.type == "body_force":
-            given += [f.values[c].to_si() if c in f.values else 0.0 for c in ("fx", "fy", "fz")]
+        if f.type != "body_force":
+            continue
+        for i, c in enumerate(("fx", "fy", "fz")):
+            var = (fielded or {}).get(feature_key(f, c)) if c in f.fields else None
+            if var is not None:
+                field_vars[i].append(var)
+            elif c in f.values:
+                given[i] += f.values[c].to_si()
     loads = [f for f in loads if f.type != "body_force"]
     rho = material.properties["density"].to_si() if loads else 0.0
     uniform = np.zeros(3)
@@ -295,18 +306,25 @@ def _body_force(loads: list[Feature], material: Material) -> list[str]:
             spin.append(load)
     out = []
     for i in range(3):
-        if not spin:
-            out.append(f"  Stress Bodyforce {i + 1} = {rho * uniform[i] + given[i]:.10g}")
+        constant = rho * uniform[i] + given[i]
+        mine = field_vars[i]
+        if not spin and not mine:
+            out.append(f"  Stress Bodyforce {i + 1} = {constant:.10g}")
             continue
-        terms = [f"{rho * uniform[i] + given[i]:.10g}"]
+        if not spin and len(mine) == 1 and constant == 0.0:
+            out.append(f"  Stress Bodyforce {i + 1} = Equals {mine[0]}")
+            continue
+        terms = [f"{constant:.10g}", *(f"tx({k})" for k in range(len(mine)))]
+        shift = len(mine)  # the coordinates follow the field variables
         for load in spin:
             (cx, cy, cz), (nx, ny, nz) = load.centre, load.axis
-            d = [f"(tx({j})-({c:.10g}))" for j, c in enumerate((cx, cy, cz))]
+            d = [f"(tx({j + shift})-({c:.10g}))" for j, c in enumerate((cx, cy, cz))]
             dot = f"({d[0]}*({nx:.10g})+{d[1]}*({ny:.10g})+{d[2]}*({nz:.10g}))"
             n_i = (nx, ny, nz)[i]
             terms.append(f"{rho * load.omega**2:.10g}*({d[i]}-{dot}*({n_i:.10g}))")
+        names = [*mine, *(["Coordinate 1", "Coordinate 2", "Coordinate 3"] if spin else [])]
         out += [
-            f"  Stress Bodyforce {i + 1} = Variable Coordinate 1, Coordinate 2, Coordinate 3",
+            f"  Stress Bodyforce {i + 1} = Variable {', '.join(names)}",
             f'    Real MATC "{" + ".join(terms)}"',
         ]
     return out
@@ -568,9 +586,14 @@ def _in_time(keyword: str, value: float, points) -> list[str]:
 
 # ADR 0044: the face values Elmer takes from imported fields, as (keyword, factor): the
 # value the keyword wants is the factor times Puzzle's (Normal Force pulls along the
-# outward normal; a pressure pushes inward).
+# outward normal; a pressure pushes inward). Vectors (stage 2) go per component: a
+# traction is Elmer's Force i (per area), a displacement its Displacement i, a body force
+# density its Stress Bodyforce i (written by _body_force, in the Body Force block).
 FIELD_KEYWORDS = {
     ("pressure", "p"): ("Normal Force", -1.0),
+    **{("traction", f"t{a}"): (f"Force {d}", 1.0) for d, a in enumerate("xyz", 1)},
+    **{("displacement", a): (f"Displacement {d}", 1.0) for d, a in enumerate("xyz", 1)},
+    **{("body_force", f"f{a}"): (f"Stress Bodyforce {d}", 1.0) for d, a in enumerate("xyz", 1)},
     ("heat_flux", "q"): ("Heat Flux", 1.0),
     ("convection", "h"): ("Heat Transfer Coefficient", 1.0),
     ("convection", "T_inf"): ("External Temperature", 1.0),

@@ -399,7 +399,8 @@ def _check_2d(comp, physics, step, features, thermal_load) -> None:
         raise InputError("a temperature load is not written in 2D yet", code="unsupported")
     allowed = {"fixed", "displacement", "force", "pressure", "elastic_support"} | THERMAL
     for f in features:
-        if f.type not in allowed or f.axes is not None or f.amplitude is not None:
+        fielded = f.type == "displacement" and f.fields  # ADR 0044: 3D only so far
+        if f.type not in allowed or f.axes is not None or f.amplitude is not None or fielded:
             raise InputError(
                 f"{f.type} on '{f.selection}' is not written in 2D models on FEniCSx yet",
                 code="unsupported",

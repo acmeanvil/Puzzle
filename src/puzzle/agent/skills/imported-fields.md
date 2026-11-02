@@ -112,9 +112,13 @@ refused by name, never ignored):
   the faces; Elmer: restart variables read by
   `Equals`; FEniCSx: Lagrange functions). Code_Aster refuses flux and film fields on 2D
   models so far.
-- **body_force fx/fy/fz, traction tx/ty/tz, displacement x/y/z:** CalculiX and
-  Code_Aster (consistent nodal forces ∫N t dA, ∫N f dV; displacements per node).
-  Uniform body_force and traction: all four FE solvers (not 2D models yet).
+- **body_force fx/fy/fz, traction tx/ty/tz, displacement x/y/z:** CalculiX,
+  Code_Aster, Elmer and FEniCSx, uniform or from fields (CalculiX and Code_Aster:
+  consistent nodal forces ∫N t dA, ∫N f dV, displacements per node; Elmer: restart
+  variables read by `Force i`, `Stress Bodyforce i`, `Displacement i = Equals`;
+  FEniCSx: Lagrange functions; all four integrate the same interpolant). 3D models
+  only so far (FEniCSx refuses a field displacement in 2D). Elmer and FEniCSx store no
+  reaction forces, so check a conservative total there by the displacements.
 
 ## Stage 3: initial stress, shell thickness, graded materials (CalculiX, Code_Aster)
 

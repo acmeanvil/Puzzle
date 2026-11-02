@@ -1,5 +1,5 @@
 """Imported fields, stage 2 (ADR 0044), on the 200 x 10 x 10 mm steel bar held at its
-root, CalculiX and Code_Aster alike:
+root, on all four FE solvers (CalculiX, Code_Aster, Elmer, FEniCSx):
 
 - **a body force density is gravity without the density:** a uniform fz = −ρ g gives
   gravity's displacements, to the solvers' digits;
@@ -9,6 +9,10 @@ root, CalculiX and Code_Aster alike:
 - **imported vectors:** a traction field gives the uniform feature's answer, and so does a
   copy written turned 90° about z and moved, points and vectors, placed back by the
   use's placement (the vectors turn with the points);
+- **an imported body force density:** a field of −ρ g gives gravity's displacements, and
+  the cantilever's under its weight, q L⁴ / (8 E I) + q L² / (2 κ G A);
+- **an imported linear traction:** tx = σ (2 z / h − 1) on the tip has no resultant and a
+  moment M = σ (2 / h) I: pure bending, the tip's mean uz = −M L² / (2 E I) = −σ L² / (E h);
 - **an imported displacement:** a linear field on the tip is imposed at its nodes exactly;
 - **conservative mapping (EM → structural):** a coarse Lorentz-force cloud, as the
   ADR 0043 export writes it (f = J × B and each node's volume dV), mapped
@@ -17,7 +21,12 @@ root, CalculiX and Code_Aster alike:
 
 CalculiX writes tractions and body forces as consistent nodal forces (∫N t dA, ∫N f dV)
 and field displacements per node; Code_Aster the uniform ones as FORCE_FACE and
-FORCE_INTERNE and the field ones as nodal forces and DDL_IMPO on one-node groups.
+FORCE_INTERNE and the field ones as nodal forces and DDL_IMPO on one-node groups; Elmer
+the field values as restart variables (Force i, Stress Bodyforce i and Displacement i =
+Equals them) and FEniCSx as Lagrange functions: the last two integrate the field's
+interpolant, which is the consistent nodal forces' load. Elmer and FEniCSx store no
+reaction forces, so the conservative Lorentz cloud is checked there by the tip's
+displacement against CalculiX's, the same discrete load on the same mesh.
 """
 
 import numpy as np
@@ -50,6 +59,7 @@ NU = STEEL["poissons_ratio"].to_si()
 RHO = STEEL["density"].to_si()
 G = 9.81
 REACTIONS = ("calculix", "code_aster")  # the solvers that store reaction forces
+SOLVERS = ("calculix", "code_aster", "elmer", "fenicsx")
 TURN = np.array([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])  # +90° about z
 AWAY = np.array([0.0, 1.0, 0.0])  # and 1 m along y
 BACK = FieldPlacement(
@@ -117,7 +127,7 @@ def _reaction(run):
     return np.asarray(total(run.results, run.mesh, "reaction_force", "Bar/Root")["total"])
 
 
-@over("calculix", "code_aster", "fenicsx", "elmer")
+@over(*SOLVERS)
 def test_a_body_force_density_is_gravity_without_the_density(tmp_path, solver):
     gravity = _run(
         tmp_path / "g",
@@ -140,7 +150,7 @@ def test_a_body_force_density_is_gravity_without_the_density(tmp_path, solver):
         np.testing.assert_allclose(_reaction(force), expected, rtol=1e-5, atol=1e-5 * -weight[2])
 
 
-@over("calculix", "code_aster", "fenicsx", "elmer")
+@over(*SOLVERS)
 def test_a_traction_is_a_pressure_inward_and_bends_the_bar_along_z(tmp_path, solver):
     p, tau = 10e6, 1e6  # Pa
     pressed = _run(
@@ -180,7 +190,7 @@ def _tip_points():
     return np.column_stack([np.full(yy.size, L), yy.ravel(), zz.ravel()])
 
 
-@over("calculix", "code_aster")
+@over(*SOLVERS)
 def test_an_imported_traction_is_the_uniform_one_and_turns_with_its_points(tmp_path, solver):
     t = np.array([0.0, 2e5, 1e6])  # Pa: shear in y and z
     points = _tip_points()
@@ -225,7 +235,75 @@ def test_an_imported_traction_is_the_uniform_one_and_turns_with_its_points(tmp_p
         assert c == pytest.approx(a, rel=1e-7)
 
 
-@over("calculix", "code_aster")
+@over(*SOLVERS)
+def test_an_imported_body_force_is_gravity_and_the_cantilever_under_its_weight(tmp_path, solver):
+    points = _body_points()
+    path = _csv(tmp_path / "weight.csv", points, np.tile([0.0, 0.0, -RHO * G], (len(points), 1)),
+                "x [m],y [m],z [m],fx [N/m^3],fy [N/m^3],fz [N/m^3]")  # fmt: skip
+    gravity = _run(
+        tmp_path / "g",
+        lambda _: [Feature(type="gravity", selection="Bar/Body", values={"gz": qty(-G, "m/s^2")})],
+        solver,
+    )
+    imported = _run(
+        tmp_path / "f",
+        lambda ids: [
+            Feature(
+                type="body_force",
+                selection="Bar/Body",
+                values={},
+                fields={c: FieldUse(field=ids[0], column=c) for c in ("fx", "fy", "fz")},
+            )
+        ],
+        solver,
+        [(path, "Weight")],
+    )
+    a, b = _tip(gravity, 2), _tip(imported, 2)
+    q, inertia, shear = RHO * G * B * H, B * H**3 / 12, E / (2 * (1 + NU))
+    exact = -(q * L**4 / (8 * E * inertia) + q * L**2 / (2 * 5 / 6 * shear * B * H))
+    print(f"{solver}: tip uz under gravity {a:.9g} m, imported fz = -rho g {b:.9g} m, "
+          f"Timoshenko {exact:.6g} m ({b / exact - 1:+.2%})")  # fmt: skip
+    assert b == pytest.approx(a, rel=1e-6)
+    assert b == pytest.approx(exact, rel=0.03)
+
+
+@over(*SOLVERS)
+def test_an_imported_linear_traction_bends_the_bar(tmp_path, solver):
+    sigma = 10e6  # Pa, the traction at the tip's top and bottom
+    points = _tip_points()
+    tx = sigma * (2 * points[:, 2] / H - 1)
+    zero = np.zeros(len(points))
+    path = _csv(tmp_path / "bend.csv", points, np.column_stack([tx, zero, zero]),
+                "x [m],y [m],z [m],tx [Pa],ty [Pa],tz [Pa]")  # fmt: skip
+    run = _run(
+        tmp_path / "b",
+        lambda ids: [
+            Feature(
+                type="traction",
+                selection="Bar/Tip",
+                values={},
+                fields={c: FieldUse(field=ids[0], column=c) for c in ("tx", "ty", "tz")},
+            )
+        ],
+        solver,
+        [(path, "Bending")],
+    )
+    w, exact = _tip(run, 2), -sigma * L**2 / (E * H)
+    stretch = _tip(run, 0)
+    print(f"{solver}: tip uz {w:.6g} m, pure bending {exact:.6g} m ({w / exact - 1:+.2%}), "
+          f"mean ux {stretch:.3g} m")  # fmt: skip
+    assert w == pytest.approx(exact, rel=0.02)
+    assert abs(stretch) < 1e-3 * abs(exact)  # no resultant: the tip does not stretch
+
+
+def _body_points():
+    """A grid past the bar's ends and sides, so the linear mapping spans the body."""
+    xs, gs = np.linspace(-0.01, L + 0.01, 6), np.linspace(-0.002, 0.012, 4)
+    xx, yy, zz = np.meshgrid(xs, gs, gs, indexing="ij")
+    return np.column_stack([xx.ravel(), yy.ravel(), zz.ravel()])
+
+
+@over(*SOLVERS)
 def test_an_imported_linear_displacement_is_imposed_exactly(tmp_path, solver):
     points = _tip_points()
     u = np.column_stack([1e-5 + 2e-3 * points[:, 1], -3e-3 * points[:, 2], 0 * points[:, 0]])
@@ -259,6 +337,27 @@ def test_an_imported_linear_displacement_is_imposed_exactly(tmp_path, solver):
 def test_a_coarse_lorentz_cloud_mapped_conservatively_keeps_its_total(tmp_path, solver):
     """The EM → structural chain: f = J × B on a coarse 4 x 2 x 2 grid of cells (their
     centres and volumes), varying along the bar, onto the bar's finer mesh."""
+    run, source = _lorentz(tmp_path, solver)
+    reaction, expected = _reaction(run), _expected_reaction(run, source)
+    print(f"{solver}: source total {source} N, root reaction {reaction} N ({expected} N)")
+    np.testing.assert_allclose(reaction, expected, rtol=1e-5, atol=1e-5 * np.abs(source).max())
+
+
+@over("code_aster", "elmer", "fenicsx")
+def test_a_coarse_lorentz_cloud_moves_the_bar_as_on_calculix(tmp_path, solver):
+    """The same conserved cloud: the same nodal load on the same mesh, so the tip moves
+    as CalculiX's does, to the solvers' agreement (Elmer and FEniCSx store no
+    reactions, so this is where their totals show)."""
+    reference, _ = _lorentz(tmp_path / "calculix", "calculix")
+    run, _ = _lorentz(tmp_path / solver, solver)
+    for d in (0, 2):
+        a, b = _tip(reference, d), _tip(run, d)
+        print(f"{solver}: tip u{'xyz'[d]} {b:.9g} m, CalculiX {a:.9g} m ({b / a - 1:+.2e})")
+        assert b == pytest.approx(a, rel=1e-4)
+
+
+def _lorentz(where, solver):
+    """The bar under a coarse conserved Lorentz cloud, and the cloud's total force."""
     n = (4, 2, 2)
     h = np.array([L, B, H]) / n
     centres = np.array(
@@ -273,15 +372,16 @@ def test_a_coarse_lorentz_cloud_mapped_conservatively_keeps_its_total(tmp_path, 
     f = np.column_stack([2e4 * s**2, 0 * s, -5e4 * (1 + s)])  # N/m^3
     dv = np.full(len(centres), np.prod(h))
     header = "x [m],y [m],z [m],f_x [N/m^3],f_y [N/m^3],f_z [N/m^3],|f| [N/m^3],dV [m^3]"
+    where.mkdir(parents=True, exist_ok=True)
     path = _csv(
-        tmp_path / "lorentz.csv",
+        where / "lorentz.csv",
         centres,
         np.column_stack([f, np.linalg.norm(f, axis=1), dv]),
         header,
     )
     source = dv @ f  # ∫ J × B dV, N
     run = _run(
-        tmp_path / "c",
+        where / "c",
         lambda ids: [
             Feature(
                 type="body_force",
@@ -298,9 +398,7 @@ def test_a_coarse_lorentz_cloud_mapped_conservatively_keeps_its_total(tmp_path, 
         solver,
         [(path, "Lorentz")],
     )
-    reaction, expected = _reaction(run), _expected_reaction(run, source)
-    print(f"{solver}: source total {source} N, root reaction {reaction} N ({expected} N)")
-    np.testing.assert_allclose(reaction, expected, rtol=1e-5, atol=1e-5 * np.abs(source).max())
+    return run, source
 
 
 @over("calculix", "code_aster")
