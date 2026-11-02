@@ -1115,6 +1115,12 @@ class BeamSection(BaseModel):
         default=None, description="normal: a face selection; edge: an edge selection"
     )
     roll: float = Field(default=0.0, description="degrees about the member, after orienting")
+    mirror: bool = Field(
+        default=False, description="single angles: the other leg on the other side"
+    )
+    # Set by `beams.with_orientations` only: `orientation` is already an angle's
+    # principal axis, so it isn't turned again.
+    principal: bool = False
 
     @model_validator(mode="after")
     def _sizes(self) -> BeamSection:
@@ -1128,8 +1134,7 @@ class BeamSection(BaseModel):
             except KeyError as exc:
                 raise ValueError(exc.args[0]) from None
             if found.shape not in sections.SUPPORTED:
-                raise ValueError(f"{self.designation}: single angles aren't taken by beams yet "
-                                 "(their principal axes lie at an angle to the legs)")  # fmt: skip
+                raise ValueError(f"{self.designation}: beams don't take this shape")
             return self
         need = {
             "rectangle": ("width", "height"),

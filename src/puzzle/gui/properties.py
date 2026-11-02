@@ -40,6 +40,18 @@ def _faceted(d: dict) -> bool:
     return str(d.get("source") or "").lower().endswith((".stl", ".obj", ".3mf"))
 
 
+def _is_angle(d: dict) -> bool:
+    """A table single angle (ADR 0055)."""
+    if d.get("shape") != "library" or not d.get("designation"):
+        return False
+    from puzzle import sections
+
+    try:
+        return sections.get(d.get("standard"), d["designation"]).shape == "L"
+    except KeyError:
+        return False
+
+
 def _is_section(d: dict) -> bool:
     return "shape" in d and "orientation" in d
 
@@ -91,6 +103,8 @@ APPLIES = {
     "toward": (_is_section, lambda d: d.get("orient") == "toward"),
     "toward_point": (_is_section, lambda d: d.get("orient") == "toward"),
     "reference": (_is_section, lambda d: d.get("orient") in ("normal", "edge")),
+    "mirror": (_is_section, lambda d: _is_angle(d)),  # a single angle's other leg
+    "principal": (_is_section, lambda d: False),  # set while solving only
     # ADR 0054: probes followed while solving are points, selections and reactions.
     "track": (
         lambda d: {"quantity", "reduction", "samples"} <= set(d),

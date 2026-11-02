@@ -7,6 +7,14 @@ lies across the flanges (the strong axis's direction: EN y-y, AISC x-x), so the 
 runs along its second. `I1` is the second moment about the first axis (the strong
 one), `I2` about the second, `J` the torsion constant, `A1`/`A2` the shear areas for
 shear along each axis (EN's Avz where tabulated; else the web's or flanges' areas).
+
+A single angle (L) bends about principal axes at an angle to its legs, so its `I1` and
+`I2` are the principal ones (major u, minor v) and `alpha` is the angle from its first
+axis to u. Its first axis runs along one leg (both tables' x leg: the shorter of an
+unequal angle) and the other leg along the second axis; u lies `alpha` from the first
+axis toward the second (both tables' tan α; checked against the legs' own product of
+inertia in tests/test_beam_angles.py). The shear centre (the heel) is taken at the
+centroid, as the beam elements take it.
 """
 
 from __future__ import annotations
@@ -18,9 +26,8 @@ from functools import cache
 from importlib.resources import files
 
 STANDARDS = {"aisc": "AISC (US)", "en": "EN / ISO (Europe)"}
-# Shapes a beam takes so far; single angles bend about principal axes at an angle to
-# their legs, which waits for its own benchmark.
-SUPPORTED = {"I", "C", "T", "RHS", "CHS", "2L"}
+# Shapes a beam takes: all the tables hold.
+SUPPORTED = {"I", "C", "T", "RHS", "CHS", "2L", "L"}
 
 
 @dataclass(frozen=True)
@@ -37,6 +44,7 @@ class Section:
     A2: float  # shear along the second (the web)
     mass: float | None  # kg/m
     sizes: dict = field(default_factory=dict)  # depth, width, thicknesses (m), for drawing
+    alpha: float = 0.0  # degrees, single angles: the first axis to the major principal one
 
     @property
     def depth(self) -> float | None:
@@ -101,7 +109,30 @@ def get(standard: str, designation: str) -> Section:
         raise KeyError(f"no {STANDARDS[standard]} section '{designation}'")
     row = table[designation]
     a1, a2 = _shear_areas(row)
+    i1, i2, j, alpha = row["Ix"], row.get("Iy", row["Ix"]), row.get("J") or 0.0, 0.0
+    if row["shape"] == "L":
+        i1, i2, j, alpha = _angle(row)
     sizes = {k: row[k] for k in ("d", "Ht", "OD", "ID", "bf", "B", "b", "tw", "tf", "t", "tdes",
                                  "r", "x", "y", "eo") if k in row}  # fmt: skip
-    return Section(standard, designation, row["family"], row["shape"], row["A"], row["Ix"],
-                   row["Iy"], row.get("J") or 0.0, a1, a2, row.get("mass"), sizes)  # fmt: skip
+    return Section(standard, designation, row["family"], row["shape"], row["A"], i1, i2, j,
+                   a1, a2, row.get("mass"), sizes, alpha)  # fmt: skip
+
+
+def _angle(row: dict) -> tuple[float, float, float, float]:
+    """A single angle's principal second moments (major, minor), J and alpha.
+
+    AISC tabulates Ix, Iy (about axes along the legs), Iz (the minor principal one) and
+    tan α; the major one is Ix + Iy − Iz. EN tabulates Iu and Iv, and α for unequal
+    angles only (an equal one's is 45°), and no torsion constant: J is then the thin
+    walls' (b₁ + b₂ − t) t³ / 3 (within 1.5 % of AISC's on its equal angles)."""
+    if "Iu" in row:
+        major, minor = row["Iu"], row["Iv"]
+    else:
+        minor = row["Iz"]
+        major = row["Ix"] + row["Iy"] - minor
+    alpha = row.get("alpha", 45.0)
+    j = row.get("J")
+    if not j:
+        legs = (row.get("d") or 0.0) + (row.get("b") or row.get("bf") or row.get("d") or 0.0)
+        j = (legs - row["t"]) * row["t"] ** 3 / 3
+    return major, minor, j, alpha

@@ -8,6 +8,11 @@ normal or an edge's direction; it is made square to the member and turned by `ro
 different directions (a ring of columns facing a centre) is split into one section per
 member, each on a mesh line group of its own (one per meshed edge), so both solvers
 take plain vectors.
+
+A single angle is written in its principal axes: its first axis runs along one leg,
+the other leg along member × first axis (the other way when `mirror`), and the vector
+written is the major principal axis, `Section.alpha` from the first axis toward the
+other leg. The member's direction is its edge's, first node to last.
 """
 
 from __future__ import annotations
@@ -81,6 +86,34 @@ def first_axis(project, mesh, section, member_xyz: np.ndarray, what: str) -> np.
     return v / np.linalg.norm(v)
 
 
+def _angle(section):
+    """The library single angle a beam section is, or None."""
+    if section.shape != "library":
+        return None
+    from puzzle import sections
+
+    found = sections.get(section.standard, section.designation)
+    return found if found.shape == "L" else None
+
+
+def principal(first: np.ndarray, along: np.ndarray, alpha: float, mirror: bool) -> np.ndarray:
+    """An angle's major principal axis from its first axis (along one leg), the member's
+    direction (start to end) and alpha (degrees, toward the other leg)."""
+    other = np.cross(along / np.linalg.norm(along), first)
+    if mirror:
+        other = -other
+    t = math.radians(alpha)
+    u = math.cos(t) * first + math.sin(t) * other
+    return u / np.linalg.norm(u)
+
+
+def _along(mesh, block) -> np.ndarray:
+    """A member's direction, its edge's first node to its last."""
+    rows = np.asarray(block.connectivity)
+    a, b = mesh.node_coords(np.array([rows[0, 0], rows[-1, 1]]))
+    return b - a
+
+
 def with_orientations(project, component_id, mesh):
     """(the mesh with a line group per member where a section needs one, the project
     whose beam sections are plain vectors). Sections given as a vector with no roll
@@ -91,13 +124,18 @@ def with_orientations(project, component_id, mesh):
     comp = project.objects.get(component_id)
     if not isinstance(comp, Component) or not comp.beam_sections:
         return mesh, project
-    if all(b.orient == "vector" and not b.roll for b in comp.beam_sections):
+
+    def plain(b) -> bool:
+        return b.orient == "vector" and not b.roll and (b.principal or _angle(b) is None)
+
+    if all(plain(b) for b in comp.beam_sections):
         return mesh, project
     sections = []
     for b in comp.beam_sections:
-        if b.orient == "vector" and not b.roll:
+        if plain(b):
             sections.append(b)
             continue
+        angle = _angle(b)
         group = mesh.groups.get(b.selection)
         if group is None:
             sections.append(b)  # the adapter says it isn't meshed
@@ -106,11 +144,15 @@ def with_orientations(project, component_id, mesh):
         axes = []
         for blk in members:
             xyz = mesh.node_coords(np.unique(blk.connectivity))
-            axes.append(first_axis(project, mesh, b, xyz, f"beam section on '{b.selection}'"))
-        plain = {"orient": "vector", "roll": 0.0}
+            axis = first_axis(project, mesh, b, xyz, f"beam section on '{b.selection}'")
+            if angle is not None:
+                axis = principal(axis, _along(mesh, blk), angle.alpha, b.mirror)
+            axes.append(axis)
+        # Written as a plain vector; an angle's is already its principal axis.
+        plain_ = {"orient": "vector", "roll": 0.0, "principal": angle is not None}
         if len(members) <= 1 or all(np.allclose(a, axes[0], atol=1e-9) for a in axes):
             vector = tuple(float(c) for c in axes[0]) if axes else b.orientation
-            sections.append(b.model_copy(update=plain | {"orientation": vector}))
+            sections.append(b.model_copy(update=plain_ | {"orientation": vector}))
             continue
         for k, (blk, a) in enumerate(zip(members, axes, strict=True), start=1):
             # Keep the part first: adapters find a part's sections by "Part/...".
@@ -122,7 +164,7 @@ def with_orientations(project, component_id, mesh):
                 mesh = dataclasses.replace(
                     mesh, groups={**mesh.groups, name: Group(name, 1, [blk.entity], nodes)}
                 )
-            sections.append(b.model_copy(update=plain | {
+            sections.append(b.model_copy(update=plain_ | {
                 "selection": name, "orientation": tuple(float(c) for c in a)}))  # fmt: skip
     objects = dict(project.objects)
     objects[comp.id] = comp.model_copy(update={"beam_sections": sections})

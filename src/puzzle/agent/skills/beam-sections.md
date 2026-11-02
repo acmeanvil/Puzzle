@@ -33,7 +33,10 @@ selection. The section's first axis lies across a rectangle's width and an I's f
 - CalculiX takes table HSS and pipe only, on second-order meshes (B32R); I-shapes,
   channels and tees need Code_Aster (CalculiX's general beam gets their torsion wrong).
   Code_Aster beams need first-order meshes (element order 1).
-- Single angles (L) aren't taken yet; double angles (2L) are.
+- Single angles (L) bend about principal axes at α to their legs: give the first axis
+  along one leg (the table's x leg, the shorter of an unequal angle); the other leg lies
+  along member × first axis, or the other way with `"mirror": true`. Puzzle turns it
+  to the principal axis itself; don't add α as a `roll`.
 - An orientation along a member gives no direction across it: the run is refused with
   the member named; choose another.
 - Elmer and FEniCSx refuse beams.
