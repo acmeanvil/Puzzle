@@ -700,14 +700,22 @@ def _not_converged(events: list[Event]) -> Diagnosis | None:
         last = its[-1]
         earlier = next((e for e in its if e.number >= 0.75 * last.number and name in e.residuals),
                        last)  # fmt: skip
-        falling = abs(last.residuals[name]) < 0.3 * abs(earlier.residuals[name])
-        then = (
-            "it was still falling: raise the step's iterations"
-            if falling
-            else "it had stalled over the last quarter of the run: check the mesh quality near "
-            "walls and corners, try a lower relaxation or a first-order scheme to start, or "
-            "loosen the step's tolerance if the flow is really unsteady"
-        )
+        # The fall over the last quarter, in decades per iteration, extrapolated.
+        span = last.number - earlier.number
+        drop = math.log10(abs(last.residuals[name]) / abs(earlier.residuals[name]) or 1e-300)
+        rate = drop / span if span else 0.0
+        more = math.log10(ratio) / -rate if rate < 0 else None
+        if more is None or more > 20 * limit:
+            then = (
+                "it had stalled over the last quarter of the run: check the mesh quality "
+                "near walls and corners, try a lower relaxation or a first-order scheme to "
+                "start, or loosen the step's tolerance if the flow is really unsteady"
+            )
+        else:
+            then = (
+                f"it was still falling, and at its rate over the last quarter it needs about "
+                f"{math.ceil(more / 10) * 10:.0f} more iterations: raise the step's iterations"
+            )
         how = (
             f"was still {ratio:.3g} times its criterion"
             if last.criteria

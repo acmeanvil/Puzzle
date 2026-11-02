@@ -361,6 +361,21 @@ def test_openfoam_laminar_channel_converges_in_170_iterations(tmp_path):
     assert progress.diagnose(events) == []
 
 
+def test_openfoam_heated_channel_reads_the_scalar_after_the_flow(tmp_path):
+    """scalarTransport solves T after each iteration's ExecutionTime line, and after
+    "SIMPLE solution converged in 170 iterations": T belongs to that iteration, and
+    T's 1e-8 criterion counts."""
+    events = _openfoam("openfoam_heated", tmp_path)
+    its = _of(events, Iteration)
+    assert len(its) == 170 and all("T" in e.residuals for e in its)
+    assert its[0].residuals["T"] == pytest.approx(0.999999999766)
+    assert its[-1].residuals["T"] == pytest.approx(3.95096217959e-10)
+    assert its[-1].criteria["T"] == 1e-8
+    [done] = _of(events, Converged)
+    assert done.iterations == 170 and events.index(done) > events.index(its[-1])
+    assert progress.state(events).fraction() == 1.0
+
+
 def test_openfoam_stopped_short_is_not_converged(tmp_path):
     """A k-epsilon channel (test_turbulent_channel.py's) given 150 iterations where it
     needs about 1500: k and epsilon match residualControl's "(k|epsilon|omega)" key;
@@ -378,7 +393,9 @@ def test_openfoam_stopped_short_is_not_converged(tmp_path):
     assert s.fraction() == 1.0 and not s.failed and "Uz 1.83e-01" in s.line()
     [d] = progress.diagnose(events)
     assert d.code == "not_converged"
-    assert "all 150 iterations" in d.text and "Uz" in d.text and "stalled" in d.text
+    # Uz fell 0.25 decades over the last 38 iterations; 6.3 more decades to go
+    assert "all 150 iterations" in d.text and "Uz" in d.text
+    assert "about 950 more iterations" in d.text  # the benchmark runs 1500
 
 
 def test_openfoam_fatal_error_in_an_expert_setting(tmp_path):
@@ -393,6 +410,60 @@ def test_openfoam_fatal_error_in_an_expert_setting(tmp_path):
     assert final.final and final.reason == "Unknown symmetric matrix solver type Nonsense"
     assert progress.state(events).failed
     assert [d.code for d in progress.diagnose(events)] == ["bad_setting"]
+
+
+def test_code_saturne_laminar_channel_listing(tmp_path):
+    """The channel benchmark on Code_Saturne, its listing printed every iteration: the
+    time residuals match its residuals.csv (35.877771 and 36.631608 at step 1), all
+    500 steps run, and the residuals fell over seven decades: converged."""
+    events = _saturne("code_saturne_channel", tmp_path)
+    [step] = _of(events, Step)
+    assert (step.type, step.iterations) == ("stationary", 500)
+    its = _of(events, Iteration)
+    assert [e.number for e in its] == list(range(1, 501))
+    assert its[0].residuals == {"velocity": pytest.approx(35.8778),
+                                "pressure": pytest.approx(36.6316)}  # fmt: skip
+    assert its[1].residuals["pressure"] == pytest.approx(599.758)  # its peak
+    assert its[-1].residuals["velocity"] == pytest.approx(1.20155e-06)
+    assert not its[0].criteria  # Code_Saturne runs its iteration count
+    [done] = _of(events, Converged)
+    assert done.iterations == 500
+    texts = [m.text for m in _of(events, Message)]
+    assert texts[:3] == ["Preparing the calculation", "Reading the mesh (preprocessor)", "Solving"]
+    s = progress.state(events)
+    assert s.fraction() == 1.0 and "iteration 500 of 500" in s.line()
+    assert progress.diagnose(events) == []
+
+
+def test_code_saturne_k_epsilon_variables(tmp_path):
+    """test_turbulent_channel.py's k-epsilon channel on Code_Saturne, 300 iterations:
+    k and epsilon get their own residuals."""
+    events = _saturne("code_saturne_turbulent", tmp_path)
+    its = _of(events, Iteration)
+    assert len(its) == 300
+    assert set(its[0].residuals) == {"velocity", "pressure", "k", "epsilon"}
+    assert its[-1].residuals["epsilon"] == pytest.approx(0.00401226)
+    assert len(_of(events, Converged)) == 1
+
+
+def test_code_saturne_short_of_three_decades_is_not_converged(tmp_path):
+    """The same listing cut at step 40, as if that were the limit: velocity had fallen
+    from 35.9 to 6.3e-2, 2.8 decades, short of three, and still falling."""
+    from puzzle.adapters.code_saturne.progress import CodeSaturneProgress
+
+    case = _case("code_saturne_channel", tmp_path)
+    listing = case / "CASE" / "RESU" / "puzzle" / "run_solver.log"
+    text = listing.read_text()
+    listing.write_text(text[: text.index("TIME STEP NUMBER              41")])
+    (case / "case.json").write_text(
+        (case / "case.json").read_text().replace('"iterations": 500', '"iterations": 40')
+    )
+    events = _run(CodeSaturneProgress(case / "case.json"), case)
+    assert len(_of(events, Iteration)) == 40 and not _of(events, Converged)
+    assert any("fell only 2.8 decades" in m.text for m in _of(events, Message))
+    [d] = progress.diagnose(events)
+    assert d.code == "not_converged" and "velocity" in d.text
+    assert "about 10 more iterations" in d.text
 
 
 def test_code_saturne_parameter_error(tmp_path):
@@ -440,3 +511,13 @@ def test_the_solution_panel_draws_cfd_residuals(tmp_path):
     assert panel.convergence.series[0][0] == "Velocity"
     assert panel.convergence.series[0][1] == [(1, 30.0), (2, 3.0)]
     assert panel.convergence.y_label == "Residual" and not panel.convergence.lines
+
+
+def test_a_flat_residual_at_the_limit_has_stalled():
+    events = [Step(iterations=40), Increment()] + [
+        Iteration(number=n, residuals={"p": 1e-3 * (1 - 0.001 * n)}, criteria={"p": 1e-6})
+        for n in range(1, 41)
+    ]
+    [d] = progress.diagnose(events)
+    assert d.code == "not_converged" and "stalled" in d.text and "mesh quality" in d.text
+    assert progress.diagnose(events[:-1]) == []  # short of its limit: still running

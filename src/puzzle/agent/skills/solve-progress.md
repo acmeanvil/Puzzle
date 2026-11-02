@@ -27,9 +27,12 @@ failed or stopped solve keeps it too, in its run folder.
    - `chattering`: contact opening and closing in turn; more increments, or a softer
      contact.
    - `not_converged` (CFD, OpenFOAM and Code_Saturne): a steady flow solve used all its
-     `iterations` with a residual above its criterion. If it says still falling, raise
-     the step's `iterations`; if stalled, look at the mesh near walls and corners
-     (`mesh_quality`) before anything else. The results exist but may be wrong.
+     `iterations` with a residual above its criterion. If it says still falling, it
+     estimates how many more iterations: raise the step's `iterations` past that; if
+     stalled, look at the mesh near walls and corners (`mesh_quality`) before anything
+     else. The results exist but may be wrong.
+   - `bad_setting`: the solver refused its input before solving; look at the study's
+     `expert_settings` for that solver first.
 3. `run_progress("<study>", run="<run id>")` reads a stored run's history instead (run
    ids from `runs`).
 

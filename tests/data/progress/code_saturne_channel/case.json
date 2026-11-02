@@ -1,0 +1,34 @@
+{
+  "mesh": "mesh.msh",
+  "density": 998.2,
+  "viscosity": 0.001002,
+  "iterations": 500,
+  "listing_every": 1,
+  "pseudo_time_step": null,
+  "turbulence": "off",
+  "thermal": null,
+  "zones": [
+    {
+      "label": "Channel_Inlet",
+      "selection": "2",
+      "nature": "inlet",
+      "velocity": 0.001
+    },
+    {
+      "label": "Channel_Outlet",
+      "selection": "3",
+      "nature": "outlet",
+      "pressure": 0.0
+    },
+    {
+      "label": "Channel_Walls",
+      "selection": "4",
+      "nature": "wall"
+    },
+    {
+      "label": "Channel_Sides",
+      "selection": "5",
+      "nature": "symmetry"
+    }
+  ]
+}

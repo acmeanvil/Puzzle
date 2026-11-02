@@ -134,7 +134,8 @@ class OpenFoamProgress(Parser):
         self.started = False
         self.number = 0  # the SIMPLE iteration being read
         self.residuals: dict[str, float] = {}
-        self.converged = False
+        self.converged = 0  # the iteration simpleFoam said it converged in
+        self.said_converged = False
         self.ended = False
         self.gave_up = False
         self.error: list[str] | None = None
@@ -175,7 +176,7 @@ class OpenFoamProgress(Parser):
         for tail, _ in self.tails:
             for line in tail.flush():
                 out += self._line(line)
-        out += self._iteration() + self._error()
+        out += self._iteration() + self._converged() + self._error()
         if self.number and not self.converged and self.ended and ok:
             out.append(Message(
                 level="warning",
@@ -220,12 +221,12 @@ class OpenFoamProgress(Parser):
             self.residuals.setdefault("continuity", float(m[1]))  # no criterion
             return out
         if (m := _CONVERGED.search(stripped)) is not None:
-            out += self._iteration()
-            self.converged = True
-            return out + [Converged(step=self.step, increment=1, iterations=int(m[1]))]
+            # Function objects (scalarTransport's T) still solve this iteration after it.
+            self.converged = int(m[1])
+            return out
         if stripped == "End" and self.number:
             self.ended = True
-            return out + self._iteration()
+            return out + self._iteration() + self._converged()
         if (m := _FIELD.match(stripped)) is not None:  # "SIMPLE: convergence criteria"
             self.control[m[1].strip('"')] = float(m[2])  # what simpleFoam itself read
             return out
@@ -261,6 +262,12 @@ class OpenFoamProgress(Parser):
                           residuals=self.residuals, criteria=criteria)  # fmt: skip
         self.residuals = {}
         return [event]
+
+    def _converged(self) -> list[Event]:
+        if not self.converged or self.said_converged:
+            return []
+        self.said_converged = True
+        return [Converged(step=self.step, increment=1, iterations=self.converged)]
 
     def _warning(self) -> list[Event]:
         text, self.warning = " ".join(self.warning or []), None
