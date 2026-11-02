@@ -1,0 +1,81 @@
+Header
+  CHECK KEYWORDS Warn
+  Mesh DB "." "mesh"
+End
+
+Simulation
+  Max Output Level = 5
+  Coordinate System = Cartesian 3D
+  Simulation Type = Scanning
+  Timestep Intervals(1) = 4
+  Timestep Sizes(1) = 1.0
+  Output Intervals(1) = 1
+  Steady State Max Iterations = 1
+End
+
+Constants
+  Stefan Boltzmann = 5.670374419e-08
+  Permittivity Of Vacuum = 8.8541878128e-12
+End
+
+Body 1
+  Target Bodies(1) = 1
+  Equation = 2
+  Material = 1
+End
+
+Material 1
+  Name = "Structural steel"
+  Density = 7850
+  Youngs Modulus = 2.1e+11
+  Poisson Ratio = 0.3
+End
+
+Equation 1
+  Active Solvers(1) = 1
+End
+
+Equation 2
+  Active Solvers(1) = 1
+End
+
+Solver 1
+  Equation = "Linear elasticity"
+  Procedure = "StressSolve" "StressSolver"
+  Variable = -dofs 3 Displacement
+  Linear System Solver = Direct
+  Linear System Direct Method = Umfpack
+  Harmonic Analysis = True
+  Frequency = Variable Time
+    Real
+    1 100
+    2 150
+    3 300
+    4 600
+    End
+End
+
+Solver 2
+  Exec Solver = After Timestep
+  Equation = "Result Output"
+  Procedure = "ResultOutputSolve" "ResultOutputSolver"
+  Output File Name = "case"
+  Vtu Format = True
+  Ascii Output = True
+  Eigen Vector Component = String "complex"
+End
+
+Boundary Condition 1
+  Target Boundaries(1) = 1
+  Name = "Bar/Root"
+  Displacement 1 = 0
+  Displacement 2 = 0
+  Displacement 3 = 0
+End
+
+Boundary Condition 2
+  Target Boundaries(1) = 2
+  Name = "Bar/Tip"
+  Force 2 = -1000000
+End
+

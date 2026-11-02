@@ -53,6 +53,13 @@ def _numbers(text: str, keyword: str) -> list[float]:
     return [float(v) for v in re.findall(keyword + r"\s*=\s*" + _NUM, text)]
 
 
+def _combined(parts: dict[str, float], what: str) -> float:
+    """A tracker's value from its columns: one component, or the magnitude of three."""
+    if what == "total":
+        return float(sum(v * v for v in parts.values()) ** 0.5)
+    return next(iter(parts.values()))
+
+
 class CodeAsterProgress(Parser):
     def __init__(self, input_file: Path, step: int = 1, of: int = 1) -> None:
         super().__init__(step, of)
@@ -67,7 +74,7 @@ class CodeAsterProgress(Parser):
             self.criteria["relative"] = rela[0] if rela else 1e-6
         if maxi:
             self.criteria["absolute"] = maxi[0]
-        self.tracked_now: dict[str, float] = {}  # tracker -> its value this iteration
+        self.tracked_now: dict[str, tuple] = {}  # tracker name -> (components, tracker)
         self.started = False
         self.increment = 0
         self.level = 1
@@ -117,9 +124,11 @@ class CodeAsterProgress(Parser):
                 residuals[key] = number
             else:
                 titles = self._titles()
-                title = next((t for t in titles if t in name), None)
+                title = next((t for t in titles if re.search(rf"\b{t}\b", name)), None)
                 if title is not None:
-                    self.tracked_now[titles[title]] = number
+                    tracker, c = titles[title]  # a reaction: FORC_NODA's mean times the nodes
+                    scale = len(tracker.nodes) if tracker.reduce == "sum" else 1
+                    self.tracked_now.setdefault(tracker.name, ({}, tracker))[0][c] = number * scale
         if newton is None:
             return tracked
         self.newton = newton
@@ -136,13 +145,22 @@ class CodeAsterProgress(Parser):
             *tracked,
         ]
 
-    def _titles(self) -> dict[str, str]:
-        """SUIVI_DDL column titles -> tracker names (the order comm.py wrote them in)."""
-        from puzzle.adapters.code_aster.comm import TRACK_TITLE, followed
+    def _not_followed(self) -> list[Event]:
+        from puzzle.adapters.code_aster.comm import followed
 
-        return {
-            TRACK_TITLE.format(i): t.name for i, t in enumerate(followed(self.trackers), start=1)
-        }
+        kept = followed(self.trackers)
+        return [
+            Message(level="info", text=f"Not tracked: {t.name}: Code_Aster follows up to four "
+                    "displacement or reaction components while solving (a magnitude takes "
+                    "three); it is read from the finished result")
+            for t in self.trackers if not any(t is k for k in kept)
+        ]  # fmt: skip
+
+    def _titles(self) -> dict[str, tuple]:
+        """SUIVI_DDL column titles -> (tracker, component), as comm.py wrote them."""
+        from puzzle.adapters.code_aster.comm import followed, tracked_columns
+
+        return {title: (t, c) for title, t, c in tracked_columns(followed(self.trackers))}
 
     # --- lines -----------------------------------------------------------------------
 
@@ -151,6 +169,7 @@ class CodeAsterProgress(Parser):
         if not self.started:
             self.started = True
             out.append(Step(number=self.step, of=self.of, end_time=self.end_time))
+            out += self._not_followed()
         stripped = line.strip()
         # A boxed message: ╔ ... ║ <A> <CODE> ║ ... ╚
         if stripped.startswith("╔"):
@@ -204,8 +223,8 @@ class CodeAsterProgress(Parser):
                 )  # fmt: skip
                 out += [  # the trackers at the converged iteration
                     Tracked(name=n, step=self.step, increment=self.increment, time=self.time,
-                            value=v, unit="m")
-                    for n, v in self.tracked_now.items()
+                            value=_combined(parts, t.what), unit=t.unit)
+                    for n, (parts, t) in self.tracked_now.items()
                 ]  # fmt: skip
             self.tracked_now = {}
             return out

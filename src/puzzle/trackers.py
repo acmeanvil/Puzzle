@@ -29,6 +29,7 @@ class Tracker:
     reduce: str = "value"  # value (one node), max, min, mean, or sum (a reaction)
     unit: str = ""
     selection: str | None = None  # the mesh group, where the probe has one
+    points: np.ndarray | None = field(default=None, repr=False)  # the nodes' positions (n x 3)
 
     def value(self, ids: np.ndarray, values: np.ndarray) -> float | None:
         """The tracked number from one field's node ids and values (n x components)."""
@@ -59,6 +60,7 @@ def trackers(project, study, mesh: Mesh) -> tuple[list[Tracker], list[str]]:
         if not getattr(probe, "track", False) or probe.source != study.id:
             continue
         name, _, what = probe.quantity.partition(":")
+        what = what or ("value" if name == "temperature" else "total")
         if probe.type == "reaction":
             name, what = "reaction_force", what if what in ("x", "y", "z") else "total"
         if name not in FIELDS or what not in ("total", "x", "y", "z", "value"):
@@ -79,5 +81,7 @@ def trackers(project, study, mesh: Mesh) -> tuple[list[Tracker], list[str]]:
         else:
             notes.append(f"{probe.name}: a {probe.type} probe is not tracked while solving")
             continue
-        out.append(Tracker(probe.name, name, what, nodes, reduce, FIELDS[name], selection))
+        row = {int(n): i for i, n in enumerate(np.asarray(mesh.node_ids))}
+        points = np.asarray(mesh.coords, dtype=float)[[row[int(n)] for n in nodes if int(n) in row]]
+        out.append(Tracker(probe.name, name, what, nodes, reduce, FIELDS[name], selection, points))
     return out, notes

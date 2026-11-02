@@ -117,6 +117,12 @@ class FenicsxAdapter(SolverAdapter):
     ) -> Path:
         return write_case(project, study, mesh, workdir, inputs)
 
+    def progress(self, input_file: Path, step: int = 1, of: int = 1):
+        """Events study.py prints as tagged lines (ADR 0054)."""
+        from puzzle.adapters.fenicsx.progress import FenicsxProgress
+
+        return FenicsxProgress(input_file, step, of)
+
     def command(self, input_file: Path) -> list[str]:
         python = fenicsx_python()
         if python is None:

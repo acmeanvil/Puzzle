@@ -145,6 +145,12 @@ class ElmerAdapter(SolverAdapter):
         np.savetxt(workdir / MESH_DIR / NODE_MAP, emesh.node_ids, fmt="%d")
         return sif
 
+    def progress(self, input_file: Path, step: int = 1, of: int = 1):
+        """Time steps, nonlinear iterations and messages from the log (ADR 0054)."""
+        from puzzle.adapters.elmer.progress import ElmerProgress
+
+        return ElmerProgress(input_file, step, of)
+
     def command(self, input_file: Path) -> list[str]:
         return ["ElmerSolver", input_file.name]
 

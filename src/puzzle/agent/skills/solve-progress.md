@@ -42,10 +42,17 @@ submit({"command": "create", "kind": "probe", "data": {"name": "Tip deflection",
 
 - Types: `point` (needs `point`, metres), `selection` (max, min or mean), `reaction`
   (the force a selection takes). Quantities: `displacement` (`:total`, `:x`, `:y`,
-  `:z`), `temperature:value`, reactions.
-- CalculiX follows all of them; Code_Aster follows displacement components over a
-  selection (max, min, mean) in nonlinear static solves. Others are noted as not
-  tracked and still work on the finished result (`probes`).
+  `:z`), `temperature` (or `temperature:value`), reactions.
+- CalculiX follows all of them; Code_Aster, in nonlinear static solves, follows up to
+  four columns: a displacement component over a selection (max, min, mean), a point's
+  displacement, a reaction (a magnitude takes three columns, one per component), in
+  the probes' order; FEniCSx and Elmer follow
+  displacement and temperature (point and selection probes, not reactions) at every
+  time step. Others are noted as not tracked and still work on the finished result
+  (`probes`).
+- Progress comes from CalculiX, Code_Aster, FEniCSx and Elmer: time steps (or harmonic
+  frequencies, counted k of n) and nonlinear iterations (Picard or Newton on FEniCSx,
+  `ComputeChange` on Elmer, as a relative change against the tolerance).
 - A linear solve has one increment: nothing to follow while solving.
 
 ## Mistakes to avoid

@@ -109,6 +109,16 @@ def main() -> None:
         for name, file in f.get("fields", {}).items():
             f["values"][name] = face_field(file, msh, degree)
 
+    load_trackers()
+    step = case["step"]
+    transient = step["type"] == "transient"
+    emit(
+        "step",
+        type=step["type"],
+        end_time=float(step.get("time_step", 1.0)) * int(step.get("steps", 1))
+        if transient
+        else None,
+    )
     out: dict[str, np.ndarray] = {"backend": np.array(BACKEND)}
     solve = {
         "solid_mechanics": solve_solid,
@@ -124,6 +134,12 @@ def main() -> None:
         solve_heat(case, msh, degree, dx, ds, facets, tag, of_temperature, out)
     else:
         solve(case, msh, degree, dx, ds, facets, tag, piecewise, out)
+    if not transient and step["type"] != "frequency_domain":  # one solve: one increment
+        if "displacement" in out:
+            track("displacement", out["coords"], out["displacement"], 1)
+        if "temperature" in out:
+            track("temperature", out["coords"], out["temperature"], 1)
+        emit("converged", increment=1)
     np.savez("results.npz", **out)
 
 
@@ -147,9 +163,66 @@ def setting(key: str, default):
     return SETTINGS.get(key, default)
 
 
+# --- progress (ADR 0054) ----------------------------------------------------------------
+# Events go to the log as tagged JSON lines, which Puzzle's FEniCSx parser reads; the
+# kinds and fields are puzzle.progress's. Tracked probes come from trackers.json, which
+# Puzzle writes beside this script when a probe is followed while solving.
+
+TAG = "PUZZLE-EVENT "
+TRACKERS: list[dict] = []  # [{"name", "field", "what", "reduce", "unit", "points"}]
+
+
+def emit(kind: str, **data) -> None:
+    print(TAG + json.dumps({"kind": kind, **data}), flush=True)
+
+
+def load_trackers() -> None:
+    if os.path.exists("trackers.json"):
+        with open("trackers.json") as f:
+            TRACKERS[:] = json.load(f)
+
+
+def track(field: str, coords: np.ndarray, values: np.ndarray, increment: int, time=None) -> None:
+    """Each tracker of `field` from nodal `values` (one row per row of `coords`): the
+    nearest node to each of its points, reduced as Puzzle's Tracker.value does."""
+    values = np.asarray(values, dtype=float)
+    values = values[:, None] if values.ndim == 1 else values
+    for t in TRACKERS:
+        if t["field"] != field:
+            continue
+        if t.get("_n") != len(coords):  # nearest rows, found once per output space
+            from scipy.spatial import cKDTree
+
+            points = np.asarray(t["points"], dtype=float).reshape(-1, 3)
+            t["_idx"] = cKDTree(np.asarray(coords)[:, :3]).query(points)[1]
+            t["_n"] = len(coords)
+        rows = values[t["_idx"]]
+        if t["what"] == "total":
+            per = np.linalg.norm(rows, axis=1)
+        else:
+            per = rows[:, {"x": 0, "y": 1, "z": 2}.get(t["what"], 0)]
+        reduce = {"min": np.min, "mean": np.mean}.get(t["reduce"], np.max)
+        emit("tracked", name=t["name"], increment=increment, time=time,
+             value=float(reduce(per)), unit=t.get("unit", ""))  # fmt: skip
+
+
+_EQUATIONS: set = set()
+
+
+def equations(V, name: str) -> None:
+    """The size of each field's system, once per field (a Resource event)."""
+    if name in _EQUATIONS:
+        return
+    _EQUATIONS.add(name)
+    index = V.dofmap.index_map
+    emit("resource", equations=int(index.size_global * V.dofmap.index_map_bs))
+
+
 def solve_linear(a, L, bcs, V, name: str, *, mass_matrix: bool = False) -> fem.Function:
     """Solve a(u, v) = L(v) with Dirichlet conditions `bcs` for a Function on V."""
     method, extra = setting("linear_method", "lu"), setting("petsc_options", {})
+    if not mass_matrix:
+        equations(V, name)
     if BACKEND != "petsc" and not mass_matrix and (method != "lu" or extra):
         raise SystemExit(
             "this dolfinx has no PETSc (SciPy backend): the linear method and PETSc options "
@@ -517,6 +590,7 @@ def solve_transient(step, a, m, loads, bcs, V, stress, out) -> None:
     A = (M + (1 + alpha) * (gamma * dt * C + beta * dt * dt * K))[free][:, free]
     factor = splu(A.tocsc())
     every = int(setting("output_every", 1))
+    coords = V.tabulate_dof_coordinates()
     times, series, stresses = [], [], []
     for k in range(1, steps + 1):
         t = k * dt
@@ -530,6 +604,10 @@ def solve_transient(step, a, m, loads, bcs, V, stress, out) -> None:
         u = u_pred + beta * dt * dt * new_acc
         vel = v_pred + gamma * dt * new_acc
         acc = new_acc
+        emit("increment", number=k, size=dt, time=t, end_time=dt * steps)
+        if TRACKERS:
+            track("displacement", coords, u.reshape(-1, 3), k, t)
+        emit("converged", increment=k, iterations=1, time=t)
         if k % every == 0:
             times.append(t)
             series.append(u.reshape(-1, 3).copy())
@@ -558,7 +636,10 @@ def solve_harmonic(step, a, m, loads, bcs, V, stress, out) -> None:
         U = np.zeros(size, dtype=complex)
         U[held] = prescribed
         rhs = F - Z[:, held] @ U[held]
+        number = len(real) + 1
+        emit("increment", number=number, time=number, end_time=len(step["frequencies"]))
         U[free] = splu(Z[free][:, free].tocsc()).solve(rhs[free].astype(complex))
+        emit("converged", increment=number, iterations=1, time=number)
         real.append(U.real.reshape(-1, 3))
         imag.append(U.imag.reshape(-1, 3))
     out["harmonic_frequencies"] = np.asarray(step["frequencies"], dtype=float)
@@ -668,15 +749,20 @@ def solve_heat(case, msh, degree, dx, ds, facets, tag, of_temperature, out) -> N
             L += r * vals["h"] * vals["T_inf"] * v * ds(tag(f["group"]))
     out["coords"] = V.tabulate_dof_coordinates()
 
+    increment = [1]  # the time step Picard's iterations belong to
+
     def picard(a_form, L_form, iterate: fem.Function) -> fem.Function:
         if not nonlinear:
             return solve_linear(a_form, L_form, bcs, V, "t")
         limit, tolerance = setting("max_iterations", 100), setting("tolerance", 1e-10)
-        for _ in range(limit):
+        for i in range(1, limit + 1):
             current = solve_linear(a_form, L_form, bcs, V, "t")
             change = np.abs(current.x.array - iterate.x.array).max()
             scale = max(np.abs(current.x.array).max(), 1.0)
             iterate.x.array[:] = current.x.array
+            emit("iteration", increment=increment[0], number=i,
+                 residuals={"temperature change": change / scale},
+                 criteria={"temperature change": tolerance})  # fmt: skip
             if change <= tolerance * scale:
                 break
         else:
@@ -721,9 +807,13 @@ def solve_heat(case, msh, degree, dx, ds, facets, tag, of_temperature, out) -> N
         for factor, table in amplitudes:  # the loads' factors at this step's end time
             factor.value = np.interp((n + 1) * dt, table[:, 0], table[:, 1])
         a_t, L_t = euler if n == 0 else later
+        increment[0], t = n + 1, (n + 1) * dt
+        emit("increment", number=n + 1, size=dt, time=t, end_time=dt * steps)
         current = picard(a_t, L_t, previous)
         older.x.array[:] = old.x.array
         old.x.array[:] = current.x.array
+        track("temperature", out["coords"], current.x.array, n + 1, t)
+        emit("converged", increment=n + 1, time=t)
         series.append(current.x.array.copy())
     every = setting("output_every", 1)
     out["times"] = (dt * np.arange(1, steps + 1))[every - 1 :: every]
@@ -854,15 +944,20 @@ def solve_custom(case, msh, degree, cells, facets, tag, piecewise, out) -> None:
             F = F - g * v * ds(tag(f["group"]))
     J = ufl.derivative(F, u, du)
 
+    increment = [1]
+
     def newton() -> None:
         for bc in bcs:
             bc.set(u.x.array)  # start from the boundary values; corrections keep them
         zero = [dirichlet(0.0, dofs, space) for dofs, space in held]
         limit, tolerance = setting("max_iterations", 50), setting("tolerance", 1e-10)
-        for _ in range(limit):
+        for i in range(1, limit + 1):
             delta = solve_linear(J, -F, zero, V, "newton")
             u.x.array[:] += delta.x.array
-            if np.abs(delta.x.array).max() <= tolerance * max(np.abs(u.x.array).max(), 1.0):
+            change = np.abs(delta.x.array).max() / max(np.abs(u.x.array).max(), 1.0)
+            emit("iteration", increment=increment[0], number=i,
+                 residuals={"correction": change}, criteria={"correction": tolerance})  # fmt: skip
+            if change <= tolerance:
                 return
         raise SystemExit(f"custom PDE: Newton did not converge in {limit} iterations")
 
@@ -881,10 +976,13 @@ def solve_custom(case, msh, degree, cells, facets, tag, piecewise, out) -> None:
         return
     steps = case["step"]["steps"]
     series = []
-    for _ in range(steps):
+    for n in range(1, steps + 1):
+        increment[0], t = n, n * float(dt.value)
+        emit("increment", number=n, size=float(dt.value), time=t, end_time=steps * float(dt.value))
         newton()
         u_n.x.array[:] = u.x.array
         series.append(nodal())
+        emit("converged", increment=n, time=t)
     every = setting("output_every", 1)
     out["times"] = (float(dt.value) * np.arange(1, steps + 1))[every - 1 :: every]
     out[f"series_{name}"] = np.asarray(series)[every - 1 :: every]

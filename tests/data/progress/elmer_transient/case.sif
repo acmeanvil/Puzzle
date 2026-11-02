@@ -1,0 +1,72 @@
+Header
+  CHECK KEYWORDS Warn
+  Mesh DB "." "mesh"
+End
+
+Simulation
+  Max Output Level = 5
+  Coordinate System = Cartesian 3D
+  Simulation Type = Transient
+  Timestepping Method = BDF
+  BDF Order = 1
+  Timestep Sizes(1) = 20
+  Timestep Intervals(1) = 20
+  Output Intervals(1) = 1
+End
+
+Constants
+  Stefan Boltzmann = 5.670374419e-08
+  Permittivity Of Vacuum = 8.8541878128e-12
+End
+
+Body 1
+  Target Bodies(1) = 1
+  Equation = 2
+  Material = 1
+  Initial Condition = 1
+End
+
+Material 1
+  Name = "Structural steel"
+  Density = 7850
+  Heat Conductivity = 53.33
+  Heat Capacity = 439.8
+End
+
+Initial Condition 1
+  Temperature = 293.15
+End
+
+Equation 1
+  Active Solvers(1) = 1
+End
+
+Equation 2
+  Active Solvers(1) = 1
+End
+
+Solver 1
+  Equation = "Heat Equation"
+  Procedure = "HeatSolve" "HeatSolver"
+  Variable = Temperature
+  Nonlinear System Max Iterations = 50
+  Nonlinear System Convergence Tolerance = 1e-10
+  Linear System Solver = Direct
+  Linear System Direct Method = Umfpack
+End
+
+Solver 2
+  Exec Solver = After Timestep
+  Equation = "Result Output"
+  Procedure = "ResultOutputSolve" "ResultOutputSolver"
+  Output File Name = "case"
+  Vtu Format = True
+  Ascii Output = True
+End
+
+Boundary Condition 1
+  Target Boundaries(1) = 1
+  Name = "Bar/Root"
+  Temperature = 373.15
+End
+

@@ -4,8 +4,9 @@ and in the run folder; and result trackers followed while it solves.
 
 The tip is pulled to strain * L at time 1, ramped, so the tracked tip displacement is
 strain * L * t at every increment; the root's reaction ends at the closed-form stress
-times the bar's 10 x 10 mm section (CalculiX; Code_Aster tracks displacements only)."""
+times the bar's 10 x 10 mm section, on both."""
 
+import numpy as np
 import pytest
 from plastic_bar import STRAIN, STRESS, L, plastic_bar
 from solvers import over
@@ -23,7 +24,9 @@ def test_progress_and_trackers_while_solving(solver, tmp_path):
     p.add(ResultProbe(name="Tip pull", source=study.id, type="selection", selection="Bar/Tip",
                       quantity="displacement:x", reduction="max", track=True))  # fmt: skip
     p.add(ResultProbe(name="Root force", source=study.id, type="reaction", selection="Bar/Root",
-                      track=True))  # fmt: skip
+                      quantity="reaction_force:x", track=True))  # fmt: skip
+    p.add(ResultProbe(name="Tip corner", source=study.id, type="point", point=(L, 0.0, 0.0),
+                      quantity="displacement:x", track=True))  # fmt: skip
     seen = []
     store = ResultStore(tmp_path / "results")
     run = run_study(p, study.id, tmp_path, tmp_path / "run", store=store, on_event=seen.append,
@@ -42,15 +45,44 @@ def test_progress_and_trackers_while_solving(solver, tmp_path):
     assert len(tip) == 10
     for e in tip:
         assert e.value == pytest.approx(STRAIN * L * e.time, rel=1e-6)
-    root = [e for e in seen if isinstance(e, progress.Tracked) and e.name == "Root force"]
+    corner = [e for e in seen if isinstance(e, progress.Tracked) and e.name == "Tip corner"]
+    notes = [e.text for e in seen if isinstance(e, progress.Message)]
     if solver == "calculix":
-        assert abs(root[-1].value) == pytest.approx(STRESS * 0.01 * 0.01, rel=1e-3)
-    else:  # SUIVI_DDL follows displacement components; the note says so
-        assert not root
-        notes = [e.text for e in seen if isinstance(e, progress.Message)]
-        assert not any("Tip pull" in n for n in notes)
+        assert len(corner) == 10
+        for e in corner:
+            assert e.value == pytest.approx(STRAIN * L * e.time, rel=1e-6)
+    else:  # SUIVI_DDL's four columns: the tip (1) and the reaction's components (3)
+        assert not corner and any("Tip corner" in n for n in notes)
+    root = [e for e in seen if isinstance(e, progress.Tracked) and e.name == "Root force"]
+    assert len(root) == 10
+    # The root's reaction: the closed-form stress times the 10 x 10 mm section, and the
+    # stored result's reaction summed there (Code_Aster: FORC_NODA's mean times the nodes).
+    assert abs(root[-1].value) == pytest.approx(STRESS * 0.01 * 0.01, rel=1e-3)
+    reaction = run.results.last("reaction_force").at(run.mesh.groups["Bar/Root"].node_ids)
+    assert abs(root[-1].value) == pytest.approx(abs(reaction[:, 0].sum()), rel=1e-4)
+    assert not any(n in t for t in notes for n in ("Tip pull", "Root force"))
 
     # Kept with the run, and in its folder as it went.
     kept = store.read_progress(run.run_id)
     assert [type(e) for e in kept] == [type(e) for e in seen[: len(kept)]]
     assert len(progress.read(tmp_path / "run")) >= len(kept) - 1
+
+
+@over("calculix", "code_aster")
+def test_a_point_and_its_total_displacement_while_solving(solver, tmp_path):
+    """A point probe (Code_Aster: a one-node group) of the total displacement, which on
+    the pulled bar's free corner is the pull plus the contraction across it."""
+    p = plastic_bar(solver, increments=4)
+    study = next(s for s in p.of_type(Study) if s.name == "Pull")
+    p.add(ResultProbe(name="Corner", source=study.id, type="point", point=(L, 0.01, 0.01),
+                      quantity="displacement:total", track=True))  # fmt: skip
+    seen = []
+    run = run_study(p, study.id, tmp_path, tmp_path / "run", on_event=seen.append,
+                    timeout_s=900)  # fmt: skip
+    corner = [e for e in seen if isinstance(e, progress.Tracked) and e.name == "Corner"]
+    assert len(corner) == 4
+    u = run.results.last("displacement")
+    xyz = run.mesh.node_coords(u.ids)
+    k = int(np.argmin(np.linalg.norm(xyz - np.array([L, 0.01, 0.01]), axis=1)))
+    assert corner[-1].value == pytest.approx(float(np.linalg.norm(u.values[k])), rel=1e-6)
+    assert corner[-1].value > STRAIN * L  # the contraction adds to the pull

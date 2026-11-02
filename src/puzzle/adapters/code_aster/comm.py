@@ -84,26 +84,82 @@ TRACK_TITLE = "PZTRK{}"  # a SUIVI_DDL column's title, read back by the progress
 _EVAL = {"max": "MAX", "min": "MIN", "mean": "MOY"}
 
 
+POINT_GROUP = "PZTP{}"  # the one-node group of a tracked point
+MAX_COLUMNS = 4  # SUIVI_DDL's limit
+
+
 def followed(trackers: list) -> list:
-    """The trackers Code_Aster follows in its Newton table (SUIVI_DDL): a displacement
-    component over a selection, its maximum, minimum or mean (ADR 0054). Others are
-    left to the finished result."""
+    """The trackers Code_Aster follows in its Newton table (SUIVI_DDL, ADR 0054): a
+    displacement component over a selection (maximum, minimum or mean), a point's
+    displacement, or a selection's reaction (FORC_NODA's mean there, which the parser
+    multiplies by the node count: SUIVI_DDL has no sum). A total (a magnitude) at a
+    point or of a reaction is followed as its three components. SUIVI_DDL takes four
+    columns at most, filled in the probes' order. Others are left to the finished
+    result."""
+
+    def kind(t) -> bool:
+        if t.what not in ("x", "y", "z", "total"):
+            return False
+        if t.field == "reaction_force":
+            return bool(t.selection) and t.reduce == "sum"
+        if t.field != "displacement":
+            return False
+        if t.selection:
+            return t.what != "total" and t.reduce in _EVAL
+        return t.points is not None
+
+    out, columns = [], 0
+    for t in trackers:
+        need = 3 if t.what == "total" else 1
+        if kind(t) and columns + need <= MAX_COLUMNS:
+            out.append(t)
+            columns += need
+    return out
+
+
+def tracked_columns(tracked: list) -> list[tuple[str, object, str]]:
+    """(SUIVI_DDL title, tracker, component) per column: one per component followed."""
     return [
-        t for t in trackers
-        if t.selection and t.field == "displacement" and t.what in ("x", "y", "z")
-        and t.reduce in _EVAL
-    ]  # fmt: skip
+        (TRACK_TITLE.format(i) + (c.upper() if t.what == "total" else ""), t, c)
+        for i, t in enumerate(tracked, start=1)
+        for c in (("x", "y", "z") if t.what == "total" else (t.what,))
+    ]
 
 
 def _suivi(tracked: list, names: dict[str, str]) -> str:
     if not tracked:
         return ""
-    entries = [
-        f"_F(NOM_CHAM='DEPL', NOM_CMP=('D{t.what.upper()}',), GROUP_NO='{names[t.selection]}', "
-        f"EVAL_CHAM='{_EVAL[t.reduce]}', TITRE=('{TRACK_TITLE.format(i)}',))"
-        for i, t in enumerate(tracked, start=1)
-    ]
+    index = {id(t): i for i, t in enumerate(tracked, start=1)}
+    entries = []
+    for title, t, c in tracked_columns(tracked):
+        group = names[t.selection] if t.selection else POINT_GROUP.format(index[id(t)])
+        field, how = (
+            ("FORC_NODA", "MOY") if t.reduce == "sum" else ("DEPL", _EVAL.get(t.reduce, "MAX"))
+        )
+        entries.append(
+            f"_F(NOM_CHAM='{field}', NOM_CMP=('D{c.upper()}',), GROUP_NO='{group}', "
+            f"EVAL_CHAM='{how}', TITRE=('{title}',))"
+        )
     return f"SUIVI_DDL=({', '.join(entries)},), "
+
+
+def _point_groups(tracked: list, mesh) -> list[str]:
+    """One-node groups for tracked points: the nodes within a hair of each point
+    (Code_Aster's sphere needs a radius above zero)."""
+    import numpy as np
+
+    xyz = np.asarray(mesh.coords, dtype=float)
+    tol = 1e-6 * float(np.linalg.norm(xyz.max(axis=0) - xyz.min(axis=0)) or 1.0)
+    out = []
+    for i, t in enumerate(tracked, start=1):
+        if t.selection is None:
+            x, y, z = (float(v) for v in t.points[0])
+            out.append(
+                "mesh = DEFI_GROUP(reuse=mesh, MAILLAGE=mesh, CREA_GROUP_NO=_F("
+                f"NOM='{POINT_GROUP.format(i)}', OPTION='ENV_SPHERE', POINT=({x!r}, {y!r}, {z!r}), "
+                f"RAYON={tol!r}, PRECISION={tol!r}))"
+            )
+    return out
 
 
 def _refuse_in_2d(comp: Component) -> None:
@@ -226,7 +282,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
 
     # ADR 0054: probes tracked while solving, as SUIVI_DDL columns in the Newton table.
     tracked = [] if thermal else followed(trackers(project, study, mesh)[0])
-    tie_groups += [t.selection for t in tracked]
+    tie_groups += [t.selection for t in tracked if t.selection]
     # ADR 0044 stage 3: an initial stress the static step starts from (STAT_NON_LINE).
     from puzzle.adapters.graded import initial_stresses
 
@@ -413,7 +469,10 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         if sel is not None
     }
     unnoded = sorted(
-        ({g for gs in excluded.values() for g in gs} | {names[t.selection] for t in tracked})
+        (
+            {g for gs in excluded.values() for g in gs}
+            | {names[t.selection] for t in tracked if t.selection}
+        )
         - noded
         - {names[g] for g in point_groups}
     )
@@ -451,6 +510,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             if unnoded
             else []
         ),
+        *_point_groups(tracked, mesh),
         # A field's pressure as nodal forces (ADR 0044): their point groups as node groups.
         *(
             [
