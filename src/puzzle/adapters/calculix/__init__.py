@@ -20,10 +20,12 @@ from puzzle.adapters.base import (
     Capabilities,
     SolverAdapter,
 )
+from puzzle.adapters.calculix import spring_beams
 from puzzle.adapters.calculix.frd import read_frd
 from puzzle.adapters.calculix.inp import (
     InputError,
     fastener_info,
+    spring_beam_info,
     write_inp,
 )
 from puzzle.adapters.common import drop_helper_nodes, mark_mesh_nodes, plastic_strain_tensor
@@ -54,7 +56,9 @@ class CalculixAdapter(SolverAdapter):
         | INITIAL_STRESS_FEATURES,  # ADR 0044 stage 3
         feature_steps=True,
         connectors=frozenset({"beam_fastener:rigid", "beam_fastener:distributing"}),
-        beams=True,  # ADR 0027, tests/integration/test_beams.py
+        # ADR 0027, tests/integration/test_beams.py; open table sections as exact
+        # springs (ADR 0055, tests/integration/test_beam_sections.py)
+        beams=True,
         shared_settings=frozenset(  # ADR 0023
             {"linear_solver", "tolerance", "max_iterations", "output_every"}
         ),
@@ -113,6 +117,9 @@ class CalculixAdapter(SolverAdapter):
         # static block and numbers modes.
         buckling = [n for n, s in enumerate(study.solve_steps(), start=1) if s.type == "buckling"]
         path.with_suffix(".buckling").write_text(json.dumps(buckling))
+        beams = spring_beam_info(project, study, mesh)
+        if beams:  # ADR 0055: the reader turns the springs' stretch into section forces
+            path.with_name(path.stem + spring_beams.INFO_SUFFIX).write_text(json.dumps(beams))
         ends = fastener_info(project, study, mesh)
         if ends:  # ADR 0027: the reader turns their helper nodes' reactions into forces
             path.with_suffix(".fasteners.json").write_text(json.dumps(ends))
@@ -175,6 +182,7 @@ class CalculixAdapter(SolverAdapter):
         if not frd.exists():
             raise FileNotFoundError(f"CalculiX wrote no results ({frd.name}); see the solver log")
         results = read_frd(frd)
+        _spring_beam_forces(results, input_file)  # before the rotation nodes go
         drop_helper_nodes(results, input_file)  # rigid-body nodes, grounds, twins
         elastic = input_file.with_suffix(".elastic.json")
         if elastic.exists():  # CalculiX writes PEEQ only: the tensor comes from S and E
@@ -215,6 +223,33 @@ def _harmonic(results) -> None:
             "displacement", real.ids, real.values, imag.at(real.ids), real.components
         )
         step.fields.update({f.name: f for f in parts})
+
+
+def _spring_beam_forces(results, input_file: Path) -> None:
+    """Beams written as springs (ADR 0055): their section forces as the nodal field
+    `beam_forces`, Code_Aster's (N, Vy, Vz, T, My, Mz in each member's axes), and their
+    nodes' reaction forces, both from the springs' ends' reactions."""
+    marker = input_file.with_name(input_file.stem + spring_beams.INFO_SUFFIX)
+    if not marker.exists():
+        return
+    from puzzle.results.model import Field
+
+    info = json.loads(marker.read_text())
+    for step in results.steps:
+        rf = step.fields.get("reaction_force")
+        if rf is None:  # modes and harmonic steps have no reactions
+            continue
+        ids, values = spring_beams.section_forces(info, rf.ids, rf.values)
+        if len(ids):
+            step.fields["beam_forces"] = Field(
+                "beam_forces", "node", list(spring_beams.COMPONENTS), ids, values
+            )
+        values = rf.values.copy()
+        row = {int(n): i for i, n in enumerate(rf.ids)}
+        for node, force in spring_beams.reactions(info, rf.ids, rf.values).items():
+            if node in row:
+                values[row[node], :3] = force
+        step.fields["reaction_force"] = Field(rf.name, rf.location, rf.components, rf.ids, values)
 
 
 def _fastener_fields(results, input_file: Path) -> None:

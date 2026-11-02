@@ -60,3 +60,37 @@ def test_springs_and_arms_are_the_timoshenko_beam(length_over_d):
     got = _arms_and_springs(beam_bolt_stiffness(steel, d, length), length)
     want = _timoshenko(e, nu, d, length)
     assert np.allclose(got, want, rtol=1e-9, atol=1e-6 * np.abs(want).max())
+
+
+def _general_timoshenko(e, g, a, i1, i2, j, a1, a2, length):
+    """The textbook two-node Timoshenko beam along x of any section: bending about y
+    with I1 (uz, ry), about z with I2 (uy, rz); shear along y on A1, along z on A2."""
+    k = np.zeros((12, 12))
+    k[0, 0] = k[6, 6] = e * a / length
+    k[0, 6] = k[6, 0] = -e * a / length
+    k[3, 3] = k[9, 9] = g * j / length
+    k[3, 9] = k[9, 3] = -g * j / length
+    for v, r, s, i, area in ((1, 5, 1, i2, a1), (2, 4, -1, i1, a2)):
+        phi = 12 * e * i / (g * area * length**2)
+        c = e * i / (length**3 * (1 + phi))
+        k[v, v] = k[v + 6, v + 6] = 12 * c
+        k[v, v + 6] = k[v + 6, v] = -12 * c
+        k[v, r] = k[r, v] = k[v, r + 6] = k[r + 6, v] = s * 6 * c * length
+        k[v + 6, r] = k[r, v + 6] = k[v + 6, r + 6] = k[r + 6, v + 6] = -s * 6 * c * length
+        k[r, r] = k[r + 6, r + 6] = (4 + phi) * c * length**2
+        k[r, r + 6] = k[r + 6, r] = (2 - phi) * c * length**2
+    return k
+
+
+@pytest.mark.parametrize("length", [0.05, 0.3, 2.0])
+def test_springs_and_arms_are_any_sections_timoshenko_beam(length):
+    """ADR 0055: an open table section (a W12X26) written as springs on CalculiX."""
+    from puzzle import sections
+    from puzzle.adapters.common import timoshenko_springs
+
+    w = sections.get("aisc", "W12X26")
+    e, g = 210e9, 210e9 / 2.6
+    props = (e, g, w.A, w.I1, w.I2, w.J, w.A1, w.A2)
+    got = _arms_and_springs(timoshenko_springs(*props, length), length)
+    want = _general_timoshenko(*props, length)
+    assert np.allclose(got, want, rtol=1e-9, atol=1e-9 * np.abs(want).max())

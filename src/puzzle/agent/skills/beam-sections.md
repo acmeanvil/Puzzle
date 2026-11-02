@@ -30,8 +30,13 @@ selection. The section's first axis lies across a rectangle's width and an I's f
 
 ## Watch for
 
-- CalculiX takes table HSS and pipe only, on second-order meshes (B32R); I-shapes,
-  channels and tees need Code_Aster (CalculiX's general beam gets their torsion wrong).
+- CalculiX takes table HSS and pipe as expanded solids, on second-order meshes (B32R),
+  and open shapes (I, channels, tees, angles) as exact Timoshenko springs, on either
+  mesh order (static, modal, transient and harmonic steps; `beam_forces` and reactions
+  as Code_Aster's). On those springs it refuses heat, thermal loads, buckling, large
+  deflection, prestress, plasticity, Rayleigh damping, centrifugal loads, and a part
+  mixing open and closed sections or sharing nodes with solids, shells or other
+  beams: run such studies on Code_Aster. Their mass is lumped (no rotary inertia).
   Code_Aster beams need first-order meshes (element order 1).
 - Single angles (L) aren't taken yet; double angles (2L) are.
 - An orientation along a member gives no direction across it: the run is refused with
