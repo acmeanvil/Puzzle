@@ -401,6 +401,11 @@ class MainWindow(QMainWindow):
         # The centre is the 3D view, or the sketch canvas while sketching (ADR 0017).
         self.centre = QStackedWidget()
         self.centre.addWidget(centre)
+        from puzzle.gui.start_page import StartPage
+
+        self.start_page = StartPage(self)  # before a project is open
+        self.centre.addWidget(self.start_page)
+        self.centre.setCurrentWidget(self.start_page)
         self.setCentralWidget(self.centre)
         left, right = Qt.DockWidgetArea.LeftDockWidgetArea, Qt.DockWidgetArea.RightDockWidgetArea
         # Left: the model tree, and the Geometry tab beside it, with the properties of
@@ -572,6 +577,12 @@ class MainWindow(QMainWindow):
             self.watcher.removePaths(self.watcher.files())
         self.watcher.addPath(str(history))
         self.setWindowTitle(f"Puzzle — {self.session.project.name}")
+        from puzzle.gui.start_page import remember
+
+        remember(self.session.root)
+        self.start_page.fill()
+        if self.centre.currentWidget() is self.start_page:
+            self.centre.setCurrentIndex(0)  # the 3D view
         self.agent.project_opened()
         self.refresh()
         # Open on the model, not an empty view: select the first component.
@@ -1587,7 +1598,7 @@ class MainWindow(QMainWindow):
         if workspace is None:
             old = self.centre.currentWidget()
             self.centre.setCurrentIndex(0)
-            if old is not self.centre.widget(0):
+            if old is not self.centre.widget(0) and old is not self.start_page:
                 self.centre.removeWidget(old)
                 old.deleteLater()
             if self.context == "sketch":
