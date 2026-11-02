@@ -1,0 +1,36 @@
+FoamFile
+{
+    version 2.0;
+    format ascii;
+    class dictionary;
+    object controlDict;
+}
+
+application simpleFoam;
+startFrom startTime;
+startTime 0;
+stopAt endTime;
+endTime 300;
+deltaT 1;
+writeControl timeStep;
+writeInterval 300;
+purgeWrite 0;
+writeFormat ascii;
+writePrecision 12;
+writeCompression off;
+timeFormat general;
+timePrecision 8;
+runTimeModifiable off;
+functions
+{
+    T
+    {
+        type scalarTransport;
+        libs (solverFunctionObjects);
+        field T;
+        alphaD 1.411420977;
+        alphaDt 1.176470588;
+        nCorr 1;
+        writeControl writeTime;
+    }
+}

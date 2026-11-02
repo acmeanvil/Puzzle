@@ -86,3 +86,40 @@ def test_a_point_and_its_total_displacement_while_solving(solver, tmp_path):
     k = int(np.argmin(np.linalg.norm(xyz - np.array([L, 0.01, 0.01]), axis=1)))
     assert corner[-1].value == pytest.approx(float(np.linalg.norm(u.values[k])), rel=1e-6)
     assert corner[-1].value > STRAIN * L  # the contraction adds to the pull
+
+
+@over("openfoam", "code_saturne")
+def test_cfd_residuals_while_solving(solver, tmp_path):
+    """The laminar channel benchmark (ADR 0054 phase 3): one residual per field each
+    iteration, arriving while it solves; OpenFOAM stops once residualControl is met
+    (170 iterations), Code_Saturne runs a shortened count and counts as converged once
+    its residuals fell three decades."""
+    from pathlib import Path
+
+    from puzzle.project import load_project
+
+    bench = Path(__file__).parents[2] / "benchmarks" / "channel_flow"
+    p = load_project(bench)
+    study = next(s for s in p.of_type(Study) if s.name == "Channel flow")
+    study.solver, study.shootout = solver, None
+    limit = 500 if solver == "openfoam" else 120
+    study.steps[0].settings["iterations"] = limit
+    seen = []
+    run_study(p, study.id, bench, tmp_path / "run", on_event=seen.append, timeout_s=1800)
+
+    [step] = [e for e in seen if isinstance(e, progress.Step)]
+    assert step.iterations == limit
+    its = [e for e in seen if isinstance(e, progress.Iteration)]
+    names = {"openfoam": {"Ux", "Uy", "Uz", "p", "continuity"},
+             "code_saturne": {"velocity", "pressure"}}[solver]  # fmt: skip
+    assert set(its[0].residuals) == names
+    solved = [e.t for e in seen if isinstance(e, progress.Stage) and e.name == "solve"]
+    assert its[0].t < solved[-1] - 1.0  # they came while it solved, not at the end
+    [done] = [e for e in seen if isinstance(e, progress.Converged)]
+    if solver == "openfoam":
+        assert its[-1].criteria["p"] == 1e-6 and done.iterations < limit
+        assert all(its[-1].residuals[k] < c for k, c in its[-1].criteria.items())
+    else:
+        assert [e.number for e in its] == list(range(1, limit + 1))
+    s = progress.state(seen)
+    assert s.fraction() == pytest.approx(1.0) and not s.failed

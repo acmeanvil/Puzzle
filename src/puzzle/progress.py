@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import re
 import time
 from collections.abc import Callable, Iterable
@@ -47,13 +48,15 @@ class Stage(Event):
 @dataclass(frozen=True)
 class Step(Event):
     """Solve step `number` of `of` starts; `end_time` is its time period (None for
-    modal, buckling and the like, which have no time)."""
+    modal, buckling and the like, which have no time). `iterations` is a steady
+    solve's iteration limit (simpleFoam, Code_Saturne): its progress when it has no time."""
 
     kind: ClassVar[str] = "step"
     number: int = 1
     of: int = 1
     type: str = ""
     end_time: float | None = None
+    iterations: int | None = None
 
 
 @dataclass(frozen=True)
@@ -219,6 +222,30 @@ class Parser:
             return []
 
 
+class Tail:
+    """A log file another process writes, read as whole new lines on each call
+    (Code_Saturne's listing, OpenFOAM's log.simpleFoam): the runner only streams stdout."""
+
+    def __init__(self, path: Path) -> None:
+        self.path, self.offset, self.rest = path, 0, ""
+
+    def lines(self) -> list[str]:
+        if not self.path.exists():
+            return []
+        with self.path.open("rb") as f:
+            f.seek(self.offset)
+            data = f.read()
+        self.offset += len(data)
+        text = self.rest + data.decode(errors="replace")
+        *whole, self.rest = text.split("\n")
+        return whole
+
+    def flush(self) -> list[str]:
+        """What's left at the end, a last line without its newline included."""
+        out, self.rest = self.lines() + ([self.rest] if self.rest else []), ""
+        return out
+
+
 # --- recording ---------------------------------------------------------------------
 
 
@@ -268,6 +295,8 @@ class State:
     step_type: str = ""
     end_time: float | None = None
     time: float | None = None
+    max_iterations: int | None = None  # a steady solve's iteration limit
+    step_converged: bool = False
     increment: int = 0
     iteration: int = 0
     iterations: int = 0  # cumulative
@@ -296,6 +325,7 @@ class State:
                 self.steps_done += 1
             self.step, self.steps, self.step_type = e.number, e.of, e.type
             self.end_time, self.time, self.increment = e.end_time, None, 0
+            self.max_iterations, self.step_converged = e.iterations, False
         elif isinstance(e, Increment):
             self.increment, self.iteration = e.number, 0
             if e.cutback or e.attempt > 1:
@@ -308,6 +338,7 @@ class State:
             self.residuals, self.criteria = dict(e.residuals), dict(e.criteria)
         elif isinstance(e, Converged):
             self.converged += 1
+            self.step_converged = True
             if e.time is not None:
                 self.time = e.time
         elif isinstance(e, Diverged):
@@ -324,12 +355,14 @@ class State:
 
     def fraction(self) -> float | None:
         """How far through the solve: steps done plus this step's time over its end
-        time; None when nothing tells yet."""
+        time (or a steady solve's iteration over its limit); None when nothing tells yet."""
         if not self.steps:
             return None
         within = 0.0
         if self.end_time and self.time is not None:
             within = min(max(self.time / self.end_time, 0.0), 1.0)
+        elif self.max_iterations:
+            within = 1.0 if self.step_converged else min(self.iteration / self.max_iterations, 1.0)
         return min((max(self.step - 1, 0) + within) / self.steps, 1.0)
 
     def line(self) -> str:
@@ -345,9 +378,11 @@ class State:
             )
             bits.append(f"increment {self.increment}{cut}")
         if self.iteration:
-            bits.append(f"iteration {self.iteration}")
-        if self.residuals:
-            name, value = next(iter(self.residuals.items()))
+            of = f" of {self.max_iterations}" if self.max_iterations and not self.end_time else ""
+            bits.append(f"iteration {self.iteration}{of}")
+        if self.residuals:  # the one furthest from its criterion, else the first
+            name, value = max(self.residuals.items(), key=lambda kv: kv[1] / self.criteria[kv[0]]
+                              if self.criteria.get(kv[0]) else -1.0)  # fmt: skip
             crit = self.criteria.get(name)
             bits.append(f"{name} {value:.2e}" + (f" (needs {crit:.0e})" if crit else ""))
         if self.failed:
@@ -610,7 +645,89 @@ def diagnose(events: list[Event]) -> list[Diagnosis]:
             "An increment used up its iterations without converging: smaller increments or a "
             "ramped load usually help.",
         ))  # fmt: skip
+    if (d := _not_converged(events)) is not None:
+        out.append(d)
+    refused = next((e for e in events if isinstance(e, Message) and e.level == "error"
+                    and e.code in ("FOAM FATAL IO ERROR", "cs_parameters")), None)  # fmt: skip
+    if refused is not None:
+        out.append(Diagnosis(
+            "bad_setting",
+            f"The solver refused its input before solving: {refused.text} If the study has "
+            "expert (pass-through) settings for this solver, check those first; otherwise "
+            "the adapter wrote something the solver can't read, which is a Puzzle bug.",
+        ))  # fmt: skip
     return out
+
+
+# A steady solve with no criterion of its own (Code_Saturne runs its iteration count)
+# counts as converged when every residual fell this many decades from its largest.
+STEADY_DECADES = 3.0
+
+
+def worst_residual(its: list[Iteration]) -> tuple[str, float] | None:
+    """The residual furthest from converged at the last iteration, and how far: its
+    value over its criterion, or (no criteria) over its largest value times
+    10^-STEADY_DECADES. Above 1: not converged."""
+    if not its:
+        return None
+    last = its[-1]
+    if last.criteria:
+        far = {k: last.residuals[k] / c for k, c in last.criteria.items() if k in last.residuals}
+    else:
+        peak: dict[str, float] = {}
+        for e in its:
+            for k, v in e.residuals.items():
+                peak[k] = max(peak.get(k, 0.0), abs(v))
+        far = {k: abs(v) / (peak[k] * 10**-STEADY_DECADES) for k, v in last.residuals.items()
+               if peak.get(k)}  # fmt: skip
+    if not far:
+        return None
+    name = max(far, key=far.__getitem__)
+    return name, far[name]
+
+
+def _not_converged(events: list[Event]) -> Diagnosis | None:
+    """A steady solve (a Step with an iteration limit) that used its iterations with a
+    residual still above its criterion: still falling (more iterations) or stalled."""
+    limits = {e.number: e.iterations for e in events if isinstance(e, Step) and e.iterations}
+    done = {e.step for e in events if isinstance(e, Converged)}
+    for step, limit in limits.items():
+        its = [e for e in events if isinstance(e, Iteration) and e.step == step and e.residuals]
+        worst = worst_residual(its)
+        if step in done or worst is None or its[-1].number < limit or worst[1] <= 1.0:
+            continue
+        name, ratio = worst
+        last = its[-1]
+        earlier = next((e for e in its if e.number >= 0.75 * last.number and name in e.residuals),
+                       last)  # fmt: skip
+        # The fall over the last quarter, in decades per iteration, extrapolated.
+        span = last.number - earlier.number
+        drop = math.log10(abs(last.residuals[name]) / abs(earlier.residuals[name]) or 1e-300)
+        rate = drop / span if span else 0.0
+        more = math.log10(ratio) / -rate if rate < 0 else None
+        if more is None or more > 20 * limit:
+            then = (
+                "it had stalled over the last quarter of the run: check the mesh quality "
+                "near walls and corners, try a lower relaxation or a first-order scheme to "
+                "start, or loosen the step's tolerance if the flow is really unsteady"
+            )
+        else:
+            then = (
+                f"it was still falling, and at its rate over the last quarter it needs about "
+                f"{math.ceil(more / 10) * 10:.0f} more iterations: raise the step's iterations"
+            )
+        how = (
+            f"was still {ratio:.3g} times its criterion"
+            if last.criteria
+            else f"had fallen only {STEADY_DECADES - math.log10(ratio):.1f} decades from its "
+            f"largest (converged here means {STEADY_DECADES:g})"
+        )
+        return Diagnosis(
+            "not_converged",
+            f"The solve used all {limit} iterations and its {name} residual {how}; {then}. "
+            "Its results are the last iteration's.",
+        )
+    return None
 
 
 def _chatters(events: list[Event]) -> bool:
