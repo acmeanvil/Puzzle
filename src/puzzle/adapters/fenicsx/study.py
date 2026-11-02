@@ -108,6 +108,8 @@ def main() -> None:
     for f in case["features"]:  # ADR 0044: values from imported fields, as functions
         for name, file in f.get("fields", {}).items():
             f["values"][name] = face_field(file, msh, degree)
+        for spectrum in f.get("spectra", {}).values():  # one function per frequency
+            spectrum["functions"] = [face_field(file, msh, degree) for file in spectrum["files"]]
 
     load_trackers()
     step = case["step"]
@@ -396,12 +398,16 @@ def solve_solid(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
     n = ufl.FacetNormal(msh)
     modal = case["step"]["type"] == "modal"
     bcs, L = [], ufl.inner(fem.Constant(msh, np.zeros(3)), v) * dx
-    loads = []  # (load form, its amplitude table or None): dynamics scale each in time
+    # (load form, its amplitude table or None, along "time" or "frequency"): dynamics
+    # scale each in time, or per frequency in a harmonic step (ADR 0044)
+    loads = []
 
-    def add_load(term, f):
+    def add_load(term, f, table=None, axis="time"):
         nonlocal L
         L += term
-        loads.append((term, np.asarray(f["amplitude"], dtype=float) if "amplitude" in f else None))
+        if table is None and "amplitude" in f:
+            table = np.asarray(f["amplitude"], dtype=float)
+        loads.append((term, table, axis))
 
     if thermal is not None:
         L += ufl.inner(lmbda * ufl.tr(thermal) * ufl.Identity(3) + 2 * mu * thermal, eps(v)) * dx
@@ -440,6 +446,10 @@ def solve_solid(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
         elif f["type"] == "force" and not modal:
             traction = np.array([vals.get(c, 0.0) for c in "xyz"]) / f["area"]
             add_load(ufl.inner(fem.Constant(msh, traction), v) * ds(tag(f["group"])), f)
+        elif f["type"] == "pressure" and not modal and "p" in f.get("spectra", {}):
+            spectrum = f["spectra"]["p"]  # varying with frequency: a load per frequency
+            for p, hat in zip(spectrum["functions"], hats(spectrum["frequencies"]), strict=True):
+                add_load(-p * ufl.inner(n, v) * ds(tag(f["group"])), f, hat, "frequency")
         elif f["type"] == "pressure" and not modal:
             add_load(-vals["p"] * ufl.inner(n, v) * ds(tag(f["group"])), f)
         elif f["type"] == "traction" and not modal:  # force per area (ADR 0044)
@@ -564,13 +574,29 @@ def _stress_projector(msh, degree, dx, sigma, V):
     return project
 
 
-def _load_vectors(loads, size: int):
-    """Each load's vector and amplitude table; the constant ones summed into one."""
+def hats(frequencies) -> list[np.ndarray]:
+    """Per frequency of a field varying with frequency (ADR 0044), its factor against
+    frequency: 1 there, 0 at the ones beside it, the first and last held outside; their
+    loads summed so interpolate the field linearly between its frequencies."""
+    out = []
+    for s, hz in enumerate(frequencies):
+        points = [(frequencies[s - 1], 0.0)] if s > 0 else []
+        points.append((hz, 1.0))
+        if s + 1 < len(frequencies):
+            points.append((frequencies[s + 1], 0.0))
+        out.append(np.asarray(points, dtype=float))
+    return out
+
+
+def _load_vectors(loads, size: int, axis: str = "time"):
+    """Each load's vector and amplitude table along `axis` (time, or frequency in a
+    harmonic step); the constant ones, and those with a table along the other axis,
+    summed into one."""
     steady = np.zeros(size)
     varying = []
-    for term, table in loads:
+    for term, table, along in loads:
         vector = _vector(term, size)
-        if table is None:
+        if table is None or along != axis:
             steady += vector
         else:
             varying.append((vector, table))
@@ -634,19 +660,21 @@ def solve_transient(step, a, m, loads, bcs, V, stress, out) -> None:
 
 
 def solve_harmonic(step, a, m, loads, bcs, V, stress, out) -> None:
-    """(K + i w C - w^2 M) U = F at each frequency, F the loads at their full values;
-    held dofs prescribed (in phase). Displacement as real and imaginary parts."""
+    """(K + i w C - w^2 M) U = F at each frequency, F the loads at their full values
+    (those varying with frequency at that frequency, ADR 0044); held dofs prescribed
+    (in phase). Displacement as real and imaginary parts."""
     from scipy.sparse.linalg import splu
 
     size = V.dofmap.index_map.size_local * 3
     K, M = _scipy(a)[:size, :size], _scipy(m)[:size, :size]
     am, bk = step.get("rayleigh", [0.0, 0.0])
     C = am * M + bk * K
-    F = _load_vectors([(term, None) for term, _ in loads], size)(0.0)
+    force = _load_vectors(loads, size, "frequency")
     held, prescribed = _held(bcs, size)
     free = np.setdiff1d(np.arange(size), held)
     real, imag = [], []
     for hz in step["frequencies"]:
+        F = force(hz)
         w = 2 * np.pi * hz
         Z = (K + 1j * w * C - w * w * M).tocsr()
         U = np.zeros(size, dtype=complex)

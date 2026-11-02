@@ -243,13 +243,16 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         description="Read a field file (ADR 0044: x, y, z and values: CSV/TXT/DAT, VTU, a "
         "Fluent profile .prof, Exodus II .exo/.e, EnSight Gold .case, or an OpenFOAM case "
         "folder) that is inside the project folder (`file`, relative to it) and say how it "
-        "would be read: format, columns with their roles (x, y, z, value, time, ignore) and "
+        "would be read: format, columns with their roles (x, y, z, value, time, frequency, "
+        "ignore) and "
         "units, the points' length unit, and for multi-step sources their `steps` (time, "
         "index) and `regions` (blocks, parts, patches, profiles). `region` reads one of "
         "those, `index` one step (default the last). Varying in time: `files` (more files, "
         "one per time, same layout) with `times` (s, one per file, `file`'s first), or "
         "`every_step` (every step of the source, at its own times or at `times`); a CSV time "
-        "column is a column with role time. Returns `create`, the command that adds it as an "
+        "column is a column with role time. Varying with frequency (for harmonic steps "
+        "only): `frequencies` (Hz) in place of `times`, or a CSV column with role frequency. "
+        "Returns `create`, the command that adds it as an "
         "imported field: change its `columns`, `length_unit`, or `placement` (translation m, "
         "rotation degrees about x, y, z, about m, axes a coordinate system's id) if the "
         "guess is wrong, then pass it to `submit`. Check it with `field_check` first."
@@ -263,9 +266,15 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         files: list[str] | None = None,
         times: list[float] | None = None,
         every_step: bool = False,
+        frequencies: list[float] | None = None,
     ) -> dict[str, Any]:
         from puzzle.errors import PuzzleError
         from puzzle.fields import file_hash, sniff
+
+        if frequencies is not None:
+            if times is not None:
+                raise PuzzleError("give times or frequencies, not both", code="invalid_input")
+            times = frequencies
 
         def inside(rel: str) -> Path:
             path = (root / rel).resolve()
@@ -305,6 +314,12 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
                 )
             data["times"] = [{"time": times[k] if times else s["time"], "index": s["index"]}
                              for k, s in enumerate(steps)]  # fmt: skip
+        if frequencies is not None:
+            if not data.get("times"):
+                raise PuzzleError("frequencies go with files or every_step; a CSV frequency "
+                                  "column is a column with role frequency",
+                                  code="invalid_input")  # fmt: skip
+            data["axis"] = "frequency"
         return {"read": found, "create": {"command": "create", "kind": "field", "data": data}}
 
     @tool(

@@ -358,7 +358,8 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--unit", help="the points' length unit (default: from the header, else m)")
     p.add_argument(
         "--column", action="append", default=[], metavar="NAME:ROLE[:UNIT]",
-        help="a column's role (x, y, z, value, time, ignore) and unit, e.g. p:value:MPa",
+        help="a column's role (x, y, z, value, time, frequency, ignore) and unit, e.g. "
+        "p:value:MPa",
     )  # fmt: skip
     p.add_argument("--region", help="a block, node set, part, patch or profile of the source")
     p.add_argument("--step", help="the source's step to read (Exodus/EnSight number from 1, "
@@ -370,6 +371,9 @@ def _parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--times", nargs="+", type=float, metavar="S",
                    help="seconds: one per file, or per step with --every-step")  # fmt: skip
+    p.add_argument("--frequencies", nargs="+", type=float, metavar="HZ",
+                   help="in place of --times: the field varies with frequency (Hz), for "
+                   "harmonic steps")  # fmt: skip
     p.add_argument("--translate", nargs=3, type=float, metavar=("X", "Y", "Z"), help="metres")
     p.add_argument("--rotate", nargs=3, type=float, metavar=("RX", "RY", "RZ"), help="degrees")
     p.add_argument("--about", nargs=3, type=float, metavar=("X", "Y", "Z"), help="metres")
@@ -1029,12 +1033,15 @@ def _import_field(args) -> int:
     data = new_field_data(args.project, first, args.name, length_unit=args.unit,
                           columns=list(columns.values()), placement=placement or None,
                           region=args.region, index=args.step, files=more or None,
-                          times=args.times, every_step=args.every_step)  # fmt: skip
+                          times=args.times, every_step=args.every_step,
+                          frequencies=args.frequencies)  # fmt: skip
     Session(args.project).submit(Create(kind="field", data=data))
     values = [c["name"] for c in data["columns"] if c["role"] == "value"]
     print(f"Imported field '{data['name']}' from {data['file']}: values {', '.join(values)}; "
           f"points in {data['length_unit']}")  # fmt: skip
-    if data.get("times"):
+    if data.get("times") and data.get("axis") == "frequency":
+        print("  varies with frequency: " + ", ".join(f"{t['time']:g} Hz" for t in data["times"]))
+    elif data.get("times"):
         print("  varies in time: " + ", ".join(f"{t['time']:g} s" for t in data["times"]))
     return 0
 

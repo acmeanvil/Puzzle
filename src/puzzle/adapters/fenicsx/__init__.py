@@ -84,6 +84,9 @@ class FenicsxAdapter(SolverAdapter):
             {"body_temperature:T", "pressure:p", "heat_flux:q", "convection:h", "convection:T_inf"}
         )
         | VECTOR_FIELD_FEATURES,  # stage 2: tests/integration/test_imported_vectors.py
+        # A pressure varying with frequency in a harmonic step: a load per frequency, each
+        # times a hat function of frequency (test_imported_fields_frequency.py)
+        field_spectra=frozenset({"pressure:p"}),
     )
 
     def settings_schema(self) -> list:

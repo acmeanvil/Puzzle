@@ -27,6 +27,12 @@ between the field's times and held at the first or last outside them, as an Ampl
 is. A transient step takes the whole history (adapters that follow it list the feature
 in `Capabilities.field_histories`; the rest refuse it).
 
+Frequency: a field's axis may be frequency instead (`ImportedField.axis`, or a column
+with the role `frequency`; Hz), never both. It applies in harmonic steps only, as its
+values at each of its frequencies (`Input.frequencies`) that the adapter interpolates
+per asked frequency (`Capabilities.field_spectra`); anywhere else, and a time field in a
+harmonic step, is refused with the code `field_axis` (`_fits_axis`).
+
 Stage 2: `vector_values` maps a vector feature's components (`VECTORS`) as one vector,
   rotated with the points when a placement turns them; `conserve` makes a conservative
   use's total on the target equal the source's (`CONSERVED`: force-type values, the
@@ -156,6 +162,9 @@ def sniff(path: Path) -> dict:
             role = "ignore"
         if header and name.strip().lower() in ("time", "time value"):
             role = "time"
+        if header and (name.strip().lower() in ("frequency", "freq")
+                       or unit.strip().lower() in ("hz", "khz", "mhz")):  # fmt: skip
+            role = "frequency"
         if role in ("x", "y", "z"):
             length = length or unit or None
             unit = ""
@@ -277,13 +286,15 @@ def read_table(root: Path, f, file: str = "", index: str | None = None
 
 def snapshots(root: Path, f) -> list[tuple[float | None, np.ndarray, dict[str, np.ndarray]]]:
     """The field at each of its times (s), in time order: (time, raw points, values).
-    A field that holds still is one snapshot at time None."""
+    A field that holds still is one snapshot at time None; one varying with frequency
+    has frequencies (Hz) in place of times."""
     if f.times:
         out = [(t.time, *read_table(root, f, t.file, t.index)) for t in f.times]
         return sorted(out, key=lambda s: s[0])
-    if f.format in ("csv",) and any(c.role == "time" for c in f.columns):
+    axis = next((c for c in f.columns if c.role in ("time", "frequency")), None)
+    if f.format in ("csv",) and axis is not None:
         points, values, times = _read_csv(Path(root) / f.file, f)
-        a, b, _ = _si(next(c.unit for c in f.columns if c.role == "time") or "s")
+        a, b, _ = _si(axis.unit or ("s" if axis.role == "time" else "Hz"))
         times = a * times + b
         out = []
         for t in np.unique(times):
@@ -294,7 +305,8 @@ def snapshots(root: Path, f) -> list[tuple[float | None, np.ndarray, dict[str, n
 
 
 def _read_csv(path: Path, f) -> tuple[np.ndarray, dict[str, np.ndarray], np.ndarray | None]:
-    """A delimited file's points, value columns, and time column if it has one."""
+    """A delimited file's points, value columns, and time (or frequency) column if it
+    has one."""
     lines = path.read_text(errors="replace").splitlines()[f.skip_rows + (1 if f.header else 0) :]
     rows = []
     for ln in lines:
@@ -315,7 +327,7 @@ def _read_csv(path: Path, f) -> tuple[np.ndarray, dict[str, np.ndarray], np.ndar
         raise FieldError(f"field '{f.name}' names no {', '.join(missing)} column", path=f.name)
     points = table[:, [by_role["x"], by_role["y"], by_role["z"]]]
     values = {c.name: table[:, i] for i, c in enumerate(f.columns) if c.role == "value"}
-    at = next((i for i, c in enumerate(f.columns) if c.role == "time"), None)
+    at = next((i for i, c in enumerate(f.columns) if c.role in ("time", "frequency")), None)
     return points, values, (table[:, at] if at is not None else None)
 
 
@@ -590,7 +602,8 @@ def _at(f, states, time: float | None) -> list[tuple[float, Cloud]]:
     if states[0][0] is None:
         return [(1.0, states[0][1])]
     if time is None:
-        raise FieldError(f"field '{f.name}' varies in time: say at which time to take it")
+        what = "with frequency" if f.along() == "frequency" else "in time"
+        raise FieldError(f"field '{f.name}' varies {what}: say at which to take it")
     times = np.array([s for s, _ in states])
     if time <= times[0] or len(times) == 1:
         return [(1.0, states[0][1])]
@@ -620,13 +633,14 @@ def use_values(project, root: Path, use, targets: np.ndarray, weights=None, enti
 def use_history(project, root: Path, use, targets: np.ndarray, weights=None, entity=None
                 ) -> tuple[np.ndarray, np.ndarray]:  # fmt: skip
     """A field use's times (s) and its values at `targets` at each, (n, times): what a
-    transient step follows, linearly between the times."""
+    transient step follows, linearly between the times. A field varying with frequency
+    gives its frequencies (Hz): what a harmonic step applies, one value per frequency."""
     from puzzle.model.schema import ImportedField
 
     f = project.get(use.field, ImportedField)
     states = clouds(project, root, f, use)
     if states[0][0] is None:
-        raise FieldError(f"field '{f.name}' holds still in time")
+        raise FieldError(f"field '{f.name}' holds still")
     values = np.column_stack([_mapped(f, c, use, targets, weights, entity)[0] for _, c in states])
     return np.array([t for t, _ in states]), values
 
@@ -800,6 +814,7 @@ def new_field_data(
     files: list[Path] | None = None,
     times: list[float] | None = None,
     every_step: bool = False,
+    frequencies: list[float] | None = None,
     **overrides,
 ) -> dict:
     """What a Create command for a new imported field holds: the file copied into the
@@ -809,7 +824,14 @@ def new_field_data(
     Varying in time (ADR 0044): `files` are more files of the same layout, one per time,
     after `path`, with `times` (s) one per file, `path`'s first; or `every_step` takes
     every step of a multi-step source (Exodus, EnSight, OpenFOAM times) at its own
-    time, or at `times` when given (one per step)."""
+    time, or at `times` when given (one per step). `frequencies` (Hz) in place of
+    `times` make a field that varies with frequency (`axis` frequency), for harmonic
+    steps; a CSV's frequency column does the same row by row."""
+    if frequencies is not None:
+        if times is not None:
+            raise FieldError("a field varies in time or with frequency: give times or "
+                             "frequencies, not both")  # fmt: skip
+        times, overrides["axis"] = frequencies, "frequency"
     rel, digest = import_file(root, path)
     found = sniff(Path(root) / rel)
     data = {
@@ -885,7 +907,9 @@ def field_inputs(project, root: Path, study, mesh) -> list:
 
     A field varying in time gives one input per solve step (`Input.step`), at the step's
     time (`step_time`); in a transient step, its whole history (`Input.times`, one value
-    column per time) for the adapter to follow."""
+    column per time) for the adapter to follow. A field varying with frequency applies
+    in harmonic steps only, as its values at each of its frequencies (`Input.frequencies`)
+    for the adapter to interpolate per frequency; a time field there is refused too."""
     from puzzle.model.schema import Component, ImportedField
     from puzzle.results.model import Field
     from puzzle.transfer import Input
@@ -920,17 +944,23 @@ def field_inputs(project, root: Path, study, mesh) -> list:
                 when = [k for k, s in enumerate(steps, 1)
                         if s.solves(physics.type) and (not f.steps or k in f.steps)]  # fmt: skip
             weights = _weights(f, group, mesh, ids)
+            axes = {project.get(u.field, ImportedField).along() for u in f.fields.values()}
+            spectral = "frequency" in axes
+            over = "with frequency" if spectral else "in time"
             for k in when:
                 step = steps[k - 1] if k is not None else None
+                if step is not None:
+                    _fits_axis(f, k, step, axes)
                 if f.type in VECTORS:  # stage 2: the components as one vector
                     if (
                         step is not None
-                        and step.type == "transient"
+                        and step.type in ("transient", "frequency_domain")
                         and any(varies(u) for u in f.fields.values())
                     ):
                         raise FieldError(
-                            f"{f.type} from a field varying in time can't be followed "
-                            f"through the transient step {k} yet (on {f.selection})",
+                            f"{f.type} from a field varying {over} can't be followed "
+                            f"through the {step.type.replace('_', ' ')} step {k} yet "
+                            f"(on {f.selection})",
                             code="unsupported",
                         )
                     time = step_time(step, k) if k is not None else None
@@ -945,11 +975,15 @@ def field_inputs(project, root: Path, study, mesh) -> list:
                     key, use, history = feature_key(f, name), f.fields.get(name), None
                     if use is None:
                         values = np.full(len(ids), f.values[name].to_si())
-                    elif step is not None and step.type == "transient" and varies(use):
+                    elif (
+                        step is not None
+                        and step.type in ("transient", "frequency_domain")
+                        and varies(use)
+                    ):
                         if f.type == "body_temperature":
                             raise FieldError(
-                                f"a body temperature varying in time can't be followed through "
-                                f"the transient step {k} yet (on {f.selection})",
+                                f"a body temperature varying {over} can't be followed "
+                                f"through the step {k} yet (on {f.selection})",
                                 code="unsupported",
                             )
                         history, values = use_history(
@@ -966,10 +1000,11 @@ def field_inputs(project, root: Path, study, mesh) -> list:
                         )
                         continue
                     if history is not None:
-                        comps = [f"{t:g} s" for t in history]
-                        field_ = Field(key, "node", comps, ids, values)
-                        out.append(Input(field_, "feature", f.selection, key, step=k,
-                                         times=tuple(float(t) for t in history)))  # fmt: skip
+                        axis = tuple(float(t) for t in history)
+                        unit = "Hz" if spectral else "s"
+                        field_ = Field(key, "node", [f"{t:g} {unit}" for t in axis], ids, values)
+                        given = {"frequencies" if spectral else "times": axis}
+                        out.append(Input(field_, "feature", f.selection, key, step=k, **given))
                     else:
                         field_ = Field(key, "node", [""], ids, values[:, None])
                         out.append(Input(field_, "feature", f.selection, key, step=k))
@@ -986,6 +1021,35 @@ def field_inputs(project, root: Path, study, mesh) -> list:
         out.append(Input(Field("temperature", "node", [""], ids, values), "load", None,
                          "body temperature", step=k))  # fmt: skip
     return out
+
+
+def _fits_axis(f, k: int, step, axes: set) -> None:
+    """Refuse a field whose axis doesn't fit the step it applies in (ADR 0044): a field
+    varying with frequency outside a harmonic step, one varying in time inside one, or
+    both on one feature."""
+    harmonic = step.type == "frequency_domain"
+    if {"time", "frequency"} <= axes:
+        raise FieldError(
+            f"{f.type} on {f.selection} takes fields varying in time and with frequency; "
+            "keep one axis",
+            code="field_axis",
+            path=f.selection,
+        )
+    if "frequency" in axes and not harmonic:
+        raise FieldError(
+            f"{f.type} on {f.selection} follows a field varying with frequency, which "
+            f"applies in harmonic (frequency domain) steps only, not the {step.type} "
+            f"step {k}; limit the feature to the harmonic steps",
+            code="field_axis",
+            path=f.selection,
+        )
+    if "time" in axes and harmonic:
+        raise FieldError(
+            f"{f.type} on {f.selection} follows a field varying in time, which a "
+            f"harmonic step ({k}) can't take: give the field a frequency axis",
+            code="field_axis",
+            path=f.selection,
+        )
 
 
 def _weights(f, group, mesh, ids) -> np.ndarray | None:

@@ -695,7 +695,7 @@ class FieldColumn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str
-    role: Literal["x", "y", "z", "value", "time", "ignore"] = "value"
+    role: Literal["x", "y", "z", "value", "time", "frequency", "ignore"] = "value"
     unit: str = Field(default="", description="the value's unit; coordinates use length_unit")
 
 
@@ -705,7 +705,7 @@ class FieldTime(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    time: float = Field(description="s")
+    time: float = Field(description="s, or Hz when the field's axis is frequency")
     file: str = Field(default="", description="relative to the project; empty: the field's file")
     file_hash: str = ""
     index: str = Field(default="", description="the source's step: an Exodus or EnSight step "
@@ -740,12 +740,37 @@ class ImportedField(ProjectObject):
         "a study's step takes it at the step's time, linearly between, held outside",
     )
 
+    axis: Literal["time", "frequency"] = Field(
+        default="time",
+        description="what `times` hold: times (s), or frequencies (Hz) for a field that "
+        "varies with frequency, applied per frequency in harmonic steps",
+    )
+
+    @model_validator(mode="after")
+    def _one_axis(self):
+        roles = {c.role for c in self.columns}
+        if {"time", "frequency"} <= roles:
+            raise ValueError("a field varies in time or with frequency, not both: one "
+                             "time or frequency column")  # fmt: skip
+        if "time" in roles and self.axis == "frequency":
+            raise ValueError("a field with a time column has the axis time")
+        return self
+
     def dependencies(self) -> list[UUID]:
         return [self.placement.axes] if self.placement.axes is not None else []
 
     def varies(self) -> bool:
-        """Whether the field varies in time: listed times, or a time column."""
-        return bool(self.times) or any(c.role == "time" for c in self.columns)
+        """Whether the field varies along its axis (time or frequency): listed times or
+        frequencies, or a time or frequency column."""
+        return bool(self.times) or any(c.role in ("time", "frequency") for c in self.columns)
+
+    def along(self) -> str | None:
+        """The axis the field varies along: "time", "frequency", or None (holds still)."""
+        if not self.varies():
+            return None
+        if self.axis == "frequency" or any(c.role == "frequency" for c in self.columns):
+            return "frequency"
+        return "time"
 
     def value_columns(self) -> list[str]:
         return [c.name for c in self.columns if c.role == "value"]
