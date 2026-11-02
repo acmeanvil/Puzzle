@@ -754,12 +754,81 @@ def _face_points(group, mesh: Mesh):
         yield conn, n, da
 
 
-def traction_forces(group, mesh: Mesh, at) -> dict[int, np.ndarray]:
+def planar_depth(component, selection: str, per_unit: bool = False):
+    """What a 2D model's (ADR 0048) loads act on beside dl or dA, as a function of the
+    points (n, 3): the part's thickness (plane stress), 1 m (plane strain) or 2 pi r
+    (axisymmetric, the whole revolution), as CalculiX takes forces. `per_unit` gives
+    Code_Aster's instead: per metre of depth (C_PLAN, D_PLAN) and per radian (AXIS)."""
+    if component.dimension == AXISYMMETRIC:
+        scale = 1.0 if per_unit else 2 * np.pi
+        return lambda x: scale * np.abs(x[..., 0])
+    part = selection.split("/", 1)[0]
+    t = 1.0 if per_unit or part not in _parts(component) else plane_thickness(component, part)
+    return lambda x: np.full(x.shape[:-1], t)
+
+
+_GAUSS3 = ((-np.sqrt(3 / 5), 5 / 9), (0.0, 8 / 9), (np.sqrt(3 / 5), 5 / 9))
+
+
+def _line_shape(element: str, s: float):
+    """Gmsh-ordered shape functions of a line2 or line3 (ends 0, 1, then the middle 2)
+    and their derivatives in s (-1..1)."""
+    if element == "line3":
+        return (np.array([s * (s - 1) / 2, s * (s + 1) / 2, 1 - s * s]),
+                np.array([s - 0.5, s + 0.5, -2 * s]))  # fmt: skip
+    return np.array([(1 - s) / 2, (1 + s) / 2]), np.array([-0.5, 0.5])
+
+
+def _edge_points(group, mesh: Mesh, depth):
+    """Quadrature over a 2D model's edge selection (line2, line3), each point weighted
+    by dl x `depth(points)`: (connectivity, N, weights (ne,)) per block and point."""
+    blocks = [b for b in group.blocks(mesh) if b.dim == 1]
+    if not blocks:
+        raise InputError(f"'{group.name}' must be an edge selection for a load on edges")
+    for b in blocks:
+        if b.element not in ("line2", "line3"):
+            raise InputError(f"a load on {b.element} edges is not supported", code="unsupported")
+        nodes = mesh.node_coords(b.connectivity.ravel()).reshape(len(b.connectivity), -1, 3)
+        for s, w in _GAUSS3:
+            n, dn = _line_shape(b.element, s)
+            x = np.einsum("k,eki->ei", n, nodes)
+            dl = np.linalg.norm(np.einsum("k,eki->ei", dn, nodes), axis=1)
+            yield b.connectivity, n, w * dl * depth(x)
+
+
+def _region_points(group, mesh: Mesh, depth):
+    """Quadrature over a 2D model's region selection (tri3, tri6 in the XY plane), each
+    point weighted by dA x `depth(points)`: (connectivity, N, weights (ne,))."""
+    blocks = [b for b in group.blocks(mesh) if b.dim == 2]
+    if not blocks:
+        raise InputError(f"'{group.name}' must be a face (region) selection for a load per volume")
+    for b in blocks:
+        if b.element not in ("tri3", "tri6"):
+            raise InputError(f"a load per volume on {b.element} elements is not supported yet",
+                             code="unsupported")  # fmt: skip
+        nodes = mesh.node_coords(b.connectivity.ravel()).reshape(len(b.connectivity), -1, 3)
+        for xi, eta, w in _TRI_RULE:
+            n, dxi, deta = _shape(b.element, xi, eta)
+            x = np.einsum("k,eki->ei", n, nodes)
+            jac = np.cross(np.einsum("k,eki->ei", dxi, nodes), np.einsum("k,eki->ei", deta, nodes))
+            yield b.connectivity, n, 0.5 * w * np.linalg.norm(jac, axis=1) * depth(x)
+
+
+def _planar_depth(group, mesh: Mesh, component, per_unit: bool):
+    if component is None:
+        raise InputError(f"a load on '{group.name}' in a 2D model needs its component")
+    return planar_depth(component, group.name, per_unit)
+
+
+def traction_forces(group, mesh: Mesh, at, component=None, per_unit=False) -> dict[int, np.ndarray]:
     """Consistent nodal forces ∫ N_k t dA of a traction (force per area) given at the
     face selection's nodes (`at(ids) -> (m, 3)`), interpolated with the faces' own shape
-    functions on their curved geometry (ADR 0044)."""
+    functions on their curved geometry (ADR 0044). On a 2D model's edges, ∫ N_k t dl
+    times `planar_depth` (thickness, or 2 pi r: CalculiX's whole forces; `per_unit`:
+    Code_Aster's per metre or per radian)."""
     if mesh.planar:
-        raise InputError("a traction on a 2D model's edges is not written yet", code="unsupported")
+        depth = _planar_depth(group, mesh, component, per_unit)
+        return _consistent(_edge_points(group, mesh, depth), at)
     return _consistent(_face_points(group, mesh), at)
 
 
@@ -781,12 +850,14 @@ def consistent_faces(group, mesh: Mesh) -> bool:
     )
 
 
-def body_forces(group, mesh: Mesh, at) -> dict[int, np.ndarray]:
+def body_forces(group, mesh: Mesh, at, component=None, per_unit=False) -> dict[int, np.ndarray]:
     """Consistent nodal forces ∫ N_k f dV of a force per volume given at the body
     selection's nodes (`at(ids) -> (m, 3)`), interpolated with the elements' shape
-    functions (ADR 0044). Unlike gravity, no density: f is the force density itself."""
+    functions (ADR 0044). Unlike gravity, no density: f is the force density itself. In
+    a 2D model, ∫ N_k f dA over its region times `planar_depth`, as `traction_forces`."""
     if mesh.planar:
-        raise InputError("a body force in a 2D model is not written yet", code="unsupported")
+        depth = _planar_depth(group, mesh, component, per_unit)
+        return _consistent(_region_points(group, mesh, depth), at)
     return _consistent(_volume_quadrature(group, mesh), at)
 
 
@@ -808,6 +879,11 @@ def node_weights(group, mesh: Mesh, entity: str) -> dict[int, float]:
     """Each node's share ∫ N_k dA (entity "face") or ∫ N_k dV ("body") of the selection:
     a nodal field's integral is ∑ w_k v_k, exactly as the consistent forces sum
     (quadratic elements give corners a zero (faces) or negative (volumes) share)."""
+    if mesh.planar:
+        raise InputError(
+            "conservative mapping in a 2D model is not written yet: map linearly",
+            code="unsupported",
+        )
     points = _face_points(group, mesh) if entity == "face" else _volume_quadrature(group, mesh)
     return {k: float(v[0]) for k, v in _consistent(points, lambda ids: np.ones(len(ids))).items()}
 

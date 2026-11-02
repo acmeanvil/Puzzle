@@ -777,6 +777,12 @@ def _refuse_in_2d(comp: Component) -> None:
                 f.type in ("bolt_pretension", "bolt_adjustment") or f.axes is not None
             ):
                 raise InputError(f"{f.type} is not written in 2D models yet", code="unsupported")
+            if f.type in ("body_force", "traction", "displacement") and f.fields:
+                raise InputError(  # ADR 0044: vector fields in 3D only on Elmer so far
+                    f"{f.type} from a field on '{f.selection}' is not written in 2D models "
+                    "on Elmer yet",
+                    code="unsupported",
+                )
 
 
 def _check_dynamics(step) -> None:

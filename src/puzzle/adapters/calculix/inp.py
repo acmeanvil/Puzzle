@@ -96,6 +96,8 @@ GIVEN: ContextVar[dict | None] = ContextVar("calculix_field_values", default=Non
 STEP_INDEX: ContextVar[int | None] = ContextVar("calculix_step_index", default=None)
 HISTORY_TIMES: ContextVar[dict | None] = ContextVar("calculix_history_times", default=None)
 HISTORIES: ContextVar[dict | None] = ContextVar("calculix_histories", default=None)
+# The component being written: a 2D model's loads per area or volume need its thickness.
+COMPONENT: ContextVar[Component | None] = ContextVar("calculix_component", default=None)
 # Share of a uniform traction carried by each node of a surface element.
 NODE_SHARES = {
     "tri3": [1 / 3] * 3,
@@ -160,6 +162,7 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
         inputs, "CalculiX", {("load", "temperature"), ("prestress", "stress"), ("feature", "*")}
     )
     # ADR 0044: values from imported fields, on their selections' nodes, by feature key.
+    COMPONENT.set(comp)
     GIVEN.set({_keyed(i): i.field for i in inputs if i.role == "feature"})
     HISTORY_TIMES.set({_keyed(i): i.times for i in inputs if i.role == "feature" and i.times})
     HISTORIES.set({})
@@ -1572,12 +1575,15 @@ def _feature_rows(f: Feature, mesh: Mesh, faces: FaceLookup, rigid=None) -> dict
             if not (mesh.planar and d == 2)
         ]
     elif f.type in VECTOR_LOADS:  # consistent nodal forces (ADR 0044): ∫N t dA, ∫N f dV
+        # (a 2D model's: on its edges and region, times thickness or 2 pi r, ADR 0048)
         names = ("tx", "ty", "tz") if f.type == "traction" else ("fx", "fy", "fz")
         given = _step_given()
         nodal = traction_forces if f.type == "traction" else body_forces
-        forces = nodal(group, mesh, lambda ids: feature_vector(f, names, given, ids)[0])
+        forces = nodal(group, mesh, lambda ids: feature_vector(f, names, given, ids)[0],
+                       COMPONENT.get())  # fmt: skip
+        dofs = (0, 1) if mesh.planar else range(3)  # z is out of a 2D model's plane
         for node, force in sorted(forces.items()):
-            cload += [f"{node}, {d + 1}, {force[d]:.10g}" for d in range(3) if force[d]]
+            cload += [f"{node}, {d + 1}, {force[d]:.10g}" for d in dofs if force[d]]
     elif f.type == "displacement":
         boundary += [
             f"{nset}, {d}, {d}, {v[axis]:.10g}"
