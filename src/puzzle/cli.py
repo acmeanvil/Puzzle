@@ -349,6 +349,15 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", help="the report as JSON")
     p.set_defaults(handler=_contacts)
 
+    p = sub.add_parser(
+        "schematic", help="the project as nodes and wires: what feeds and shares what (ADR 0058)"
+    )
+    p.add_argument("project", type=Path)
+    p.add_argument("--svg", type=Path, metavar="FILE", help="save the picture as SVG")
+    p.add_argument("--json", action="store_true", help="the nodes, ports and wires as JSON")
+    p.add_argument("--no-uses", action="store_true", help="leave out the grey use wires (SVG)")
+    p.set_defaults(handler=_schematic)
+
     p = sub.add_parser("import-field", help="bring in values at points from a file (ADR 0044)")
     p.add_argument("project", type=Path)
     p.add_argument("file", type=Path, nargs="+", help="CSV/TXT/DAT (x, y, z and values), VTU, "
@@ -962,6 +971,54 @@ def _selections(args) -> int:
                 Session(args.project).submit(Edit(object=str(geo.id), ops=ops))
                 print(f"  reattached ({len(choices)} selection(s); undo with puzzle undo)")
     return 1 if detached and not args.accept_all else 0
+
+
+def _schematic(args) -> int:
+    """ADR 0058: the schematic as text (columns, then what feeds and shares what), JSON or
+    an SVG picture."""
+    import json
+
+    from puzzle import schematic
+    from puzzle.settings import current
+
+    project = _load(args.project)
+    try:
+        runs = _store(args.project).runs()
+    except PuzzleError:  # an old store: the model still shows
+        runs = []
+    s = schematic.build(project, runs, root=args.project,
+                        fields=bool(current().get("connections.schematic")))  # fmt: skip
+    if args.svg:
+        from puzzle.schematic import view_state
+        from puzzle.schematic.layout import layout
+        from puzzle.schematic.svg import to_svg
+
+        view = view_state.load(args.project)
+        lay = layout(s, view.positions, frozenset(view.unfolded))
+        args.svg.write_text(to_svg(s, lay, "none" if args.no_uses else "all", project.name))
+        print(f"saved {args.svg}")
+    if args.json:
+        print(json.dumps(s.to_dict(), indent=1))
+        return 0
+    if args.svg:
+        return 0
+    from puzzle.project.status import WORDS
+
+    for c, column in enumerate(schematic.COLUMNS):
+        nodes = [n for n in s.nodes.values() if n.column == c]
+        if not nodes:
+            continue
+        print(f"{column}:")
+        for n in nodes:
+            extra = "  ".join(x for x in (n.subtitle, n.badge, *n.chips) if x)
+            state = WORDS.get(n.state, n.state).lower()
+            reason = f": {n.reason}" if n.reason else ""
+            print(f"  {n.label}  [{state}{reason}]" + (f"  {extra}" if extra else ""))
+    flow = s.flow_lines()
+    if flow:
+        print("Flow:")
+        print("\n".join(f"  {line}" for line in flow))
+    return 0
 
 
 def _contacts(args) -> int:

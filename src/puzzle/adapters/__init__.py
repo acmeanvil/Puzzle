@@ -9,6 +9,16 @@ from importlib.metadata import entry_points
 from puzzle.adapters.base import Capabilities, SolverAdapter
 from puzzle.model.schema import Project, Study
 
+# Each solver's name as people write it, for every client (the GUI, the schematic, the CLI).
+SOLVER_NAMES = {
+    "calculix": "CalculiX",
+    "code_aster": "Code_Aster",
+    "code_saturne": "Code_Saturne",
+    "elmer": "Elmer",
+    "fenicsx": "FEniCSx",
+    "openfoam": "OpenFOAM",
+}
+
 
 def available_adapters() -> dict[str, type[SolverAdapter]]:
     return {ep.name: ep.load() for ep in entry_points(group="puzzle.adapters")}
@@ -28,4 +38,4 @@ def check_study(project: Project, study: Study) -> dict[str, list[str]]:
     }
 
 
-__all__ = ["Capabilities", "SolverAdapter", "available_adapters", "check_study"]
+__all__ = ["SOLVER_NAMES", "Capabilities", "SolverAdapter", "available_adapters", "check_study"]

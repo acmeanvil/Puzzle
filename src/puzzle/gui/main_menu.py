@@ -430,6 +430,8 @@ def _model(window, menu: QMenu) -> None:
         "A thickness for a sheet body (a plate or thin wall)")  # fmt: skip
     menu.addSeparator()
     _add(menu, "New study…", lambda: menus.new_study(window))
+    _add(menu, "New transfer…", lambda: menus.new_transfer(window),
+         "One study's result into another (a temperature into a structural study)")  # fmt: skip
     run = window.actions_by_name["run"]  # the toolbar's too: asks which study if none is selected
     run.triggered.disconnect()
     run.triggered.connect(lambda _=False: _run(window))
@@ -558,6 +560,7 @@ def _window(window, menu: QMenu, agent: QAction, messages: QAction) -> None:
         (window.bolts_dock, "Bolts", "Ctrl+5"),
         (window.contacts_dock, "Contacts", "Ctrl+7"),
         (window.versions_dock, "Versions", "Ctrl+8"),
+        (window.schematic_dock, "Schematic", "Ctrl+9"),
     ):
         # Not the dock's own toggle action: Qt renames that with the dock's title
         # (Properties reads "Tool" while a tool is open).

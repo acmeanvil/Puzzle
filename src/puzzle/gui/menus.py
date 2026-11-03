@@ -77,6 +77,8 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
             add("New Cartesian system…", lambda: new_axes(window, "cartesian"))
             add("New cylindrical system…", lambda: new_axes(window, "cylindrical"))
             add("New spherical system…", lambda: new_axes(window, "spherical"))
+        elif node.label == "Transfers":
+            add("New transfer…", lambda: new_transfer(window))
         elif node.label == "Imported fields":  # ADR 0044
             from puzzle.gui.field_wizard import import_field
 
@@ -617,6 +619,138 @@ def new_study(window):
         "steps": [{"type": step, "physics": physics, "settings": settings}],
     }
     return window.submit(Create(kind="study", data=data))
+
+
+ROLES = [
+    ("As a load (a temperature's thermal strain)", "load"),
+    ("As the starting state", "initial_condition"),
+    ("As prestress (stiffness from a static study)", "prestress"),
+]
+MAPPINGS = [
+    ("Interpolate (linear in the source's elements)", "interpolate"),
+    ("Nearest node", "nearest"),
+]
+
+
+def new_transfer(window, source: str | None = None, field: str | None = None,
+                 target: str | None = None):  # fmt: skip
+    """A transfer: one study's result field into another study (ADR 0009), in one form.
+    The schematic opens it with both ends filled when a wire is drawn (ADR 0058)."""
+    from puzzle.gui.quick_form import Ask
+    from puzzle.schematic import outputs, words
+
+    project = window.session.project
+    studies = {s.name: s for s in project.of_type(Study)}
+    if len(studies) < 2:
+        window.statusBar().showMessage("A transfer joins two studies: make another study first",
+                                       8000)  # fmt: skip
+        return None
+    by_id = {str(s.id): s.name for s in studies.values()}
+
+    def fields(v) -> list:
+        study = studies.get(v.get("source"))
+        found = outputs(project, study) if study else []
+        if field and study is not None and str(study.id) == source and field not in found:
+            found.append(field)
+        return [(words(f), f) for f in found] or [("(no results)", "")]
+
+    def steps(v) -> list:
+        study = studies.get(v.get("target"))
+        n = len(study.solve_steps()) if study else 1
+        return [(f"Step {i + 1}", i) for i in range(max(n, 1))]
+
+    got = window.ask_form(
+        "New transfer",
+        [
+            Ask(
+                "source",
+                "From study",
+                choices=[(n, n) for n in studies],
+                default=by_id.get(source or ""),
+            ),
+            Ask(
+                "field",
+                "Result",
+                choices=fields,
+                default=field,
+                help="What its physics produce; the last result step is taken",
+            ),
+            Ask(
+                "target",
+                "Into study",
+                choices=[(n, n) for n in studies],
+                default=by_id.get(target or ""),
+            ),
+            Ask("target_step", "Into its step", choices=steps, shown=lambda v: len(steps(v)) > 1),
+            Ask(
+                "role", "Used", choices=ROLES, default="prestress" if field == "stress" else "load"
+            ),
+            Ask(
+                "mapping",
+                "Onto its mesh",
+                choices=MAPPINGS,
+                help="Two studies on one mesh copy the values; on different meshes they are mapped",
+            ),
+            Ask(
+                "name",
+                "Name",
+                kind="text",
+                follow=lambda v: f"{words(v.get('field') or '')} from {v.get('source')}",
+            ),
+        ],  # fmt: skip
+        check=lambda v: (
+            "A study can't feed itself"
+            if v["source"] == v["target"]
+            else "Choose a result"
+            if not v.get("field")
+            else None
+        ),
+    )
+    if got is None:
+        return None
+    data = {
+        "name": got["name"] or f"{got['field']} from {got['source']}",
+        "source": str(studies[got["source"]].id),
+        "field": got["field"],
+        "target": str(studies[got["target"]].id),
+        "target_step": int(got.get("target_step") or 0),
+        "role": got["role"],
+        "mapping": got["mapping"],
+    }
+    return window.submit(Create(kind="transfer", data=data))
+
+
+def add_part(window, geometry: str, component: str):
+    """A geometry added to a component as one more part (the schematic's drop)."""
+    from uuid import UUID
+
+    from puzzle.gui.quick_form import Ask
+
+    project = window.session.project
+    geo, comp = project.objects.get(UUID(geometry)), project.objects.get(UUID(component))
+    if not isinstance(geo, Geometry) or not isinstance(comp, Component):
+        return None
+    taken = {p.name for p in comp.parts}
+    name, n = geo.name, 2
+    while name in taken:
+        name, n = f"{geo.name} {n}", n + 1
+    got = window.ask_form(
+        f"Add {geo.name} to {comp.name}",
+        [Ask("name", "Part name", kind="text", default=name)],
+        intro=f"{comp.name} gets {geo.name} as one more part, placed where the geometry is.",
+        check=lambda v: (
+            "Give it a name"
+            if not v["name"]
+            else f"{comp.name} already has a part '{v['name']}'"
+            if v["name"] in taken
+            else None
+        ),  # fmt: skip
+    )
+    if got is None:
+        return None
+    part = {"name": got["name"], "geometry": geometry}
+    return window.submit(Edit(object=component, ops=[EditOp(op="append", path="parts",
+                                                            value=part)]))  # fmt: skip
 
 
 def import_step_file(window, path: Path | None = None):

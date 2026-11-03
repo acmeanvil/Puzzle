@@ -159,6 +159,19 @@ CATALOG: dict[str, list[FeatureSpec]] = {
     ],
 }
 
+# The result fields each physics produces (ADR 0058: a study's output ports, shown before
+# it has run). Contact results come on top where a component has contacts (ADR 0056), a
+# harmonic step's amplitude and phase on top of the displacement (ADR 0041).
+OUTPUTS = {
+    "solid_mechanics": ["displacement", "stress", "strain", "reaction_force"],
+    "heat_transfer": ["temperature", "heat_flux"],
+    "electrostatics": ["electric_potential", "electric_field"],
+    "magnetic_fields": ["magnetic_flux_density", "current_density"],
+    "fluid_flow": ["velocity", "pressure"],
+}
+CONTACT_OUTPUTS = ["contact_pressure", "contact_shear", "contact_gap", "contact_status"]
+HARMONIC_OUTPUTS = ["displacement_amplitude", "displacement_phase"]
+
 STEP_TYPES = ["stationary", "transient", "modal", "buckling", "frequency_domain"]
 # What a new step of a type starts with, so its settings show in Properties.
 STEP_DEFAULTS = {"modal": {"modes": 6}, "buckling": {"modes": 4, "preload": False}}

@@ -14,7 +14,7 @@ from puzzle.agent import skills
 
 ADRS = Path(__file__).resolve().parents[1] / "docs" / "adr"
 # ADRs whose finished work an agent uses: each must have a skill (ADR 0057's rule).
-WITH_SKILLS = {"0043", "0044", "0050", "0054", "0055", "0056", "0059"}
+WITH_SKILLS = {"0043", "0044", "0050", "0054", "0055", "0056", "0058", "0059"}
 
 
 def _tools(tmp_path) -> set[str]:

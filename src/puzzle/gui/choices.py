@@ -24,6 +24,7 @@ from typing import Any, Literal, Union
 
 from pydantic import BaseModel
 
+from puzzle.adapters import SOLVER_NAMES as SOLVERS
 from puzzle.model.schema import (
     Amplitude,
     Component,
@@ -384,16 +385,6 @@ def _physics_of_feature(obj, feature) -> str | None:
             if any(f is feature for f in p.features):
                 return p.type
     return None
-
-
-SOLVERS = {
-    "calculix": "CalculiX",
-    "code_aster": "Code_Aster",
-    "code_saturne": "Code_Saturne",
-    "elmer": "Elmer",
-    "fenicsx": "FEniCSx",
-    "openfoam": "OpenFOAM",
-}
 
 
 def solver_label(key: str) -> str:

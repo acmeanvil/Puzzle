@@ -66,6 +66,7 @@ CONTEXT_NAMES = {
     "sketch": "Sketch",
     "mesh": "Mesh",
     "results": "Results",
+    "schematic": "Schematic",
 }
 
 
@@ -423,6 +424,13 @@ class MainWindow(QMainWindow):
 
         self.mesh_bench = MeshBench(self)
         self.left_tabs.addTab(self.mesh_bench, "Mesh")
+        # ADR 0058: the schematic, in the centre while its tab is open, and as a dock.
+        from puzzle.gui.schematic_view import SchematicPanel, SchematicSide
+
+        self.schematic = SchematicPanel(self)
+        self.centre.addWidget(self.schematic)
+        self.schematic_side = SchematicSide(self.schematic)
+        self.left_tabs.addTab(self.schematic_side, "Schematic")
         self.left_tabs.currentChanged.connect(lambda _: self._tab_changed())
         column.insertWidget(0, self.workbench.ribbon)  # the geometry tools, above the view
         self.workbench.ribbon.hide()
@@ -503,6 +511,15 @@ class MainWindow(QMainWindow):
             lambda shown: shown and self.versions.refresh()
         )
         self.versions_dock.hide()  # Window → Versions, or Project → Versions…
+        self.schematic_panel = SchematicPanel(self)  # beside the 3D view (ADR 0058)
+        self.schematic_dock = self.docks.add(
+            "schematic", "Schematic", self.schematic_panel, Qt.DockWidgetArea.BottomDockWidgetArea
+        )
+        self.docks.tab("messages", "schematic")
+        self.schematic_dock.visibilityChanged.connect(
+            lambda shown: shown and self.schematic_panel.refresh()
+        )
+        self.schematic_dock.hide()  # Window → Schematic
         self.agent_dock.hide()
         self.advisor_dock.hide()
         self.docks.builtin("modelling", "Modelling", lambda: self._layout("modelling"))
@@ -636,6 +653,10 @@ class MainWindow(QMainWindow):
             self.docks.show("agent")
         self._proposals_seen = waiting
         self.workbench.refresh()
+        if self.centre.currentWidget() is self.schematic:
+            self.schematic.refresh()
+        if not self.schematic_dock.isHidden():
+            self.schematic_panel.refresh()
         self._selected()
         if self.advisor_dock.isVisible():
             self.advisor.refresh()
@@ -750,6 +771,22 @@ class MainWindow(QMainWindow):
                 if (w.code, w.object) not in seen:
                     out.append(w)
         return out
+
+    def select_in_tree(self, key: tuple[str, str]) -> bool:
+        """Select the tree item of (kind, object), so Properties shows it (the schematic's
+        click, ADR 0058). The tab stays as it is."""
+        kind, obj = key
+        for tree_item in self.tree._items():
+            node = tree_item.data(0, ROLE)
+            if node is not None and node.kind == kind and node.object == obj:
+                self.tree.setCurrentItem(tree_item)
+                return True
+        return False
+
+    def show_results_of(self, run_id: str) -> None:
+        """A run's results in the 3D view, its item selected in the Model tab."""
+        self.left_tabs.setCurrentIndex(0)
+        self.select_in_tree(("run", run_id))
 
     def _problem_chosen(self, item) -> None:
         """A problem's object, selected in the tree (ADR 0033)."""
@@ -1456,7 +1493,12 @@ class MainWindow(QMainWindow):
 
     def set_context(self, context: str) -> None:
         """What is on screen: "model", "geometry", "sketch" or "results" (ADR 0029).
-        The results bar belongs to results, the ribbon to geometry and sketches."""
+        The results bar belongs to results, the ribbon to geometry and sketches. While
+        the schematic fills the centre, it stays the context (a selection made there
+        still fills Properties, ADR 0058)."""
+        if getattr(self, "schematic", None) is not None and self.centre.currentWidget() is \
+                self.schematic:  # fmt: skip
+            context = "schematic"
         self.context = context
         if hasattr(self, "context_label"):
             self.context_label.setText(CONTEXT_NAMES.get(context, context))
@@ -1467,7 +1509,15 @@ class MainWindow(QMainWindow):
 
     def _tab_changed(self) -> None:
         current = self.left_tabs.currentWidget()
-        if current is self.workbench:
+        on = current is self.schematic_side
+        if on:
+            self.schematic.refresh()
+            self.centre.setCurrentWidget(self.schematic)
+        elif self.centre.currentWidget() is self.schematic:
+            self.centre.setCurrentIndex(0)  # the 3D view again
+        if on:
+            self.set_context("schematic")
+        elif current is self.workbench:
             self.set_context("geometry")
             self.workbench.refresh()
         elif current is self.mesh_bench:
@@ -1600,7 +1650,7 @@ class MainWindow(QMainWindow):
         if workspace is None:
             old = self.centre.currentWidget()
             self.centre.setCurrentIndex(0)
-            if old is not self.centre.widget(0) and old is not self.start_page:
+            if old not in (self.centre.widget(0), self.start_page, self.schematic):
                 self.centre.removeWidget(old)
                 old.deleteLater()
             if self.context == "sketch":

@@ -84,6 +84,9 @@ def _connection_preferences() -> list[Preference]:
                    "values on its faces or bodies, extrapolated areas marked."),
         Preference("connections.points", "Connections", "The data's points in the view",
                    False, on_off, "The imported points drawn over the mapped values."),
+        Preference("connections.schematic", "Connections", "In the schematic", True,
+                   on_off, "Imported fields and their files as nodes, wired into the "
+                   "features, materials and sections they drive (ADR 0058)."),
         Preference("connections.beyond_color", "Connections", "Extrapolated areas", "magenta",
                    [c for c in OUTSIDE if c[1] != "none"],
                    "Where the model is farther from the data than the tolerance."),
@@ -329,6 +332,16 @@ PREFERENCES: list[Preference] = [
         "stop it (ADR 0054).",
     ),
     *_connection_preferences(),
+    Preference(
+        "schematic.uses",
+        "Schematic",
+        "Use wires",
+        "all",
+        [("All", "all"), ("For the selected node", "selected"), ("None", "none")],
+        "The thin grey wires saying what each thing is built from (a geometry into the "
+        "components using it, a component into its studies). All shows sharing at a "
+        "glance; the selected node's own wires always come forward (ADR 0058).",
+    ),
 ]
 BY_KEY = {p.key: p for p in PREFERENCES}
 WAITING: dict[str, str] = {}  # group -> why its preferences don't apply yet

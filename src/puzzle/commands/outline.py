@@ -258,11 +258,23 @@ def outline(project: Project, *, ids: bool = False, runs=None) -> str:
         else:
             what = f"{label_of(pr.quantity)} of {of} at {xyz(pr.point)}"
         lines.append(head("Probe", pr) + f": {what}")
+    lines += _flow(project, runs)
     problems = project.problems()
     if problems:
         lines.append("Problems:")
         lines += [f"    [{p.code}] {p.message}" for p in problems]
     return "\n".join(lines)
+
+
+def _flow(project: Project, runs) -> list[str]:
+    """What feeds what and what is shared, from the schematic (ADR 0058)."""
+    from puzzle import schematic
+
+    try:
+        found = schematic.build(project, runs or (), states={}).flow_lines()
+    except (ValueError, KeyError):  # a broken model: its problems say why
+        return []
+    return ["Flow:", *(f"    {line}" for line in found)] if found else []
 
 
 def _q(q: Quantity) -> str:

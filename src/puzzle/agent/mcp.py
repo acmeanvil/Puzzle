@@ -966,6 +966,68 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
             "steps": [a.as_dict() for a in advice],
         }
 
+    @tool(
+        description="The project schematic (ADR 0058): every file, resource, component, "
+        "study and result as a node (column, state and its reason, ports), and the wires "
+        "between them: `data` wires carry values (transfers, imported fields, runs into "
+        "derived results; labelled with what flows), `use` wires say what is built from "
+        "what (geometry into components, components into studies). Give `node` (a name) "
+        "to get what it is built from (`upstream`) and what would go out of date if it "
+        "changed (`downstream`). Use it to explain how a project fits together."
+    )
+    @guarded
+    def schematic(node: str | None = None) -> dict[str, Any]:
+        from puzzle import schematic as sch
+        from puzzle.project.layout import RESULTS_DIR
+        from puzzle.results.store import ResultStore
+
+        s = session()
+        try:
+            runs = ResultStore(root / RESULTS_DIR).runs()
+        except PuzzleError:
+            runs = []
+        built = sch.build(s.project, runs, root=root)
+        names = {n.id: n.label for n in built.nodes.values()}
+        out: dict[str, Any] = {
+            "nodes": [
+                {
+                    "name": n.label,
+                    "kind": sch.KIND_WORDS.get(n.kind, n.kind),
+                    "column": sch.COLUMNS[n.column],
+                    "state": n.state,
+                    **({"reason": n.reason} if n.reason else {}),
+                    **({"details": n.subtitle} if n.subtitle else {}),
+                    **({"chips": n.chips} if n.chips else {}),
+                    **({"badge": n.badge} if n.badge else {}),
+                    "inputs": [p.label for p in n.inputs()],
+                    "outputs": [p.label for p in n.outputs()],
+                }
+                for n in built.nodes.values()
+            ],  # fmt: skip
+            "wires": [
+                {
+                    "kind": w.kind,
+                    "from": names[w.source],
+                    "to": names[w.target],
+                    **({"carries": w.label} if w.label else {}),
+                }
+                for w in built.wires
+            ],  # fmt: skip
+            "flow": built.flow_lines(),
+        }
+        if node:
+            found = [n for n in built.nodes.values() if n.label == node]
+            if not found:
+                raise PuzzleError(f"no node named '{node}'", code="not_found",
+                                  details={"nodes": sorted(names.values())})  # fmt: skip
+            n = found[0]
+            out["node"] = {
+                "name": n.label,
+                "upstream": sorted(names[k] for k in built.upstream(n.id)),
+                "downstream": sorted(names[k] for k in built.downstream(n.id)),
+            }
+        return out
+
     @tool(description="Stored runs: study, solver, when, how long.")
     @guarded
     def runs() -> list[dict[str, Any]]:

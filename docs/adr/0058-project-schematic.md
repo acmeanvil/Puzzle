@@ -1,6 +1,6 @@
 # 0058. A project schematic: the whole project as nodes and wires, generated from the model
 
-- Status: Accepted (2026-10-31)
+- Status: Built (2026-11-02); accepted 2026-10-31
 - Date: 2026-10-31
 
 ## Context
@@ -191,3 +191,58 @@ The maintainer's answers to the draft's questions:
 3. Dragged positions are remembered per user (item 6).
 4. Drawing wires makes transfers and parts (phase 2), as item 7 has it.
 5. Both: a Window → Schematic dock and a Schematic tab beside Model, Geometry and Mesh.
+
+## Built (2026-11-02)
+
+All three phases.
+
+- **The structure** (`puzzle.schematic`): `build(project, runs, states, root, folded,
+  fields)` gives nodes (column, state and reason, ports, chips with their other users,
+  badge, a component's parts and materials, "used by N"), wires (data or use, labelled
+  and coloured by what flows: temperature, displacement, stress, pressure, velocity,
+  other) and tree groups. `SHOWN` says for every kind of object whether it is a node, a
+  chip, a wire, a frame or not shown (presets, labels, units and section cuts: nothing
+  refers to them); a test checks every kind against it. A study's output ports come from
+  the catalog's new `OUTPUTS` per physics (plus contact results where a contact isn't
+  bonded, a harmonic step's amplitude and phase), so a study not yet run shows them.
+  Results: each study's runs as one node `runs:<study>` (the latest run's state; a
+  sweep's or shoot-out's badge); derived results take data wires from them. Files not in
+  the project folder are marked missing. A folded group becomes one node, its wires
+  rerouted to it.
+- **Layout** (`schematic.layout`): columns split into sub-columns where nodes of one
+  column feed each other (a study fed by another to its right, a derived result fed by
+  another), barycentric ordering (four sweeps), then placed near their neighbours
+  without overlap; pinned (dragged) nodes stay and the rest are pushed clear of them.
+  250 nodes lay out in well under a second. `rows()` measures a node, so the GUI and the
+  SVG put ports where the wires end.
+- **The user's view** (`schematic.view_state`): positions, unfolded components and
+  folded groups in `<user data dir>/schematic.json` by project folder; gone nodes are
+  forgotten; Tidy layout forgets the positions.
+- **GUI** (`gui/schematic_view.py`): the Schematic tab beside Model, Geometry and Mesh
+  puts the schematic in the centre in place of the 3D view (its page holds how to read
+  it and the selected node's state, what it is built from and what a change reaches);
+  Window → Schematic (⌘9) docks another beside the view, tabbed with the messages. A
+  click selects the object in the tree and Properties (a file selects its reader, the
+  Results node its latest run); a double-click opens a geometry in the Geometry tab, a
+  mesh recipe in the Mesh tab, a run's results in the view, a folded group again;
+  right-click gives the tree's menu. Selection lights the node, its upstream and its
+  own wires' other ends ("What a change reaches" lights the downstream instead), the
+  rest dimmed; search by name or kind and a state filter dim the same way; the use
+  wires setting (`schematic.uses`: all, for the selected node, none) is in the bar;
+  zoom with the wheel, pan by dragging, Fit, a minimap past 12 nodes; Export… as SVG
+  (`schematic.svg`) or PNG.
+- **Phase 2**: dragging from a study's output port onto another study opens New
+  transfer… (`menus.new_transfer`, also under Transfers in the tree and Model → New
+  transfer…: the GUI had no transfer form before) with both ends and the field filled;
+  dropping a geometry on a component asks the part's name and appends it
+  (`menus.add_part`). Both are ordinary commands, undoable.
+- **Phase 3**: imported fields are resource nodes with an output per value column, fed
+  by their files, wired into the features, material assignments and shell sections they
+  drive (an input port each, "p ×1.2"); `connections.schematic` switches them off.
+- **Twins**: `puzzle schematic PROJECT [--svg FILE] [--json] [--no-uses]`; MCP
+  `schematic(node)` with upstream and downstream; the outline's `Flow:` section; the skill
+  `project-schematic`. Tests: `tests/test_schematic.py`, `tests/test_schematic_gui.py`.
+
+Not done: wires are not routed around nodes (cubic curves only), and a chip is not
+clickable on its own (its object is reached from the tree).
+
