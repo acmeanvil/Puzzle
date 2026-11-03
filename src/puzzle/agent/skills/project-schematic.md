@@ -57,3 +57,5 @@ One study's result into another, one `submit`:
   project.
 - Coordinate systems, amplitudes, bolt types and construction geometry are chips, not
   nodes: look for them in `chips`.
+- Operators (Reduce, Check, Plot, ...) are nodes of kind Operator in the Results column,
+  their wires data wires; to make or read them, see the skill `schematic-operators`.

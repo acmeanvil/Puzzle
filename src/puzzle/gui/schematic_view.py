@@ -4,9 +4,10 @@ scene, drawn from `puzzle.schematic.build` and laid out by `puzzle.schematic.lay
 It never holds anything itself: a click selects the object in the tree (and so in
 Properties), a double-click opens it where it is edited, a right-click gives the tree's
 own menu, dragging a node only moves it (remembered per user, `schematic.view_state`),
-and drawing a wire from a study's output onto another study opens the transfer form;
-dropping a geometry on a component adds it as a part. Both are ordinary commands, so
-they are undoable and logged.
+and drawing a wire from a study's output onto another study opens the transfer form, and
+any output onto an operator's input wires it (ADR 0062); dropping a geometry on a
+component adds it as a part. All are ordinary commands, so they are undoable and
+logged. Tab, or a double-click on the empty canvas, finds an operator by name.
 
 The window shows it twice: the Schematic tab beside Model, Geometry and Mesh puts it in
 the centre in place of the 3D view, and Window → Schematic docks one beside the view.
@@ -58,6 +59,28 @@ def _state_colour(state: str) -> QColor:
     from puzzle.gui.icons import STATE_DRAWINGS
 
     return QColor(STATE_DRAWINGS.get(state, STATE_DRAWINGS["complete"])[0])
+
+
+# What a wire may be drawn from: a study (into a study: a transfer), and anything with
+# an output an operator takes (ADR 0062).
+WIRES_FROM = ("study", "runs", "result", "operator", "parameters")
+
+
+def _socket(painter: QPainter, shape: str, at: QPointF) -> None:
+    """A port's socket in its type's shape (ADR 0062 item 2)."""
+    from PySide6.QtGui import QPolygonF
+
+    x, y = at.x(), at.y()
+    if shape == "diamond":
+        painter.drawPolygon(QPolygonF([QPointF(x, y - 5.5), QPointF(x + 5.5, y),
+                                       QPointF(x, y + 5.5), QPointF(x - 5.5, y)]))  # fmt: skip
+    elif shape == "square":
+        painter.drawRect(QRectF(x - 4.5, y - 4.5, 9, 9))
+    elif shape == "triangle":
+        painter.drawPolygon(QPolygonF([QPointF(x - 4.5, y - 5.5), QPointF(x + 5.5, y),
+                                       QPointF(x - 4.5, y + 5.5)]))  # fmt: skip
+    else:
+        painter.drawEllipse(at, 4.5, 4.5)
 
 
 def _flow_colour(carries: str) -> QColor:
@@ -119,6 +142,12 @@ class NodeItem(QGraphicsObject):
                 painter.setPen(QColor(t.text))
                 text = metrics.elidedText(r.text, Qt.TextElideMode.ElideRight, int(self.w - 40))
                 painter.drawText(band, Qt.AlignmentFlag.AlignVCenter, text)
+            elif r.kind == "value":  # an operator's value; a check's verdict in its colour
+                painter.setFont(bold)
+                colour = sch.VERDICT_COLOURS.get(r.key)
+                painter.setPen(QColor(colour) if colour else QColor(t.text))
+                text = metrics.elidedText(r.text, Qt.TextElideMode.ElideRight, int(self.w - 20))
+                painter.drawText(band, Qt.AlignmentFlag.AlignVCenter, text)
             elif r.kind in ("subtitle", "badge", "used", "fold", "part"):
                 painter.setFont(small)
                 painter.setPen(QColor(t.muted))
@@ -134,11 +163,12 @@ class NodeItem(QGraphicsObject):
                                  Qt.AlignmentFlag.AlignVCenter, r.text)  # fmt: skip
             elif r.kind in ("in", "out"):
                 port = node.port(r.key)
-                colour = _flow_colour(port.carries if port else "")
+                colour = QColor(sch.port_colour(port)) if port is not None and (
+                    port.type or port.carries) else _flow_colour("")  # fmt: skip
                 x = self.w if r.kind == "out" else 0.0
                 painter.setPen(QPen(QColor(t.sunken), 1.5))
                 painter.setBrush(colour)
-                painter.drawEllipse(QPointF(x, r.middle), 4.5, 4.5)
+                _socket(painter, sch.socket_shape(port), QPointF(x, r.middle))
                 painter.setFont(plain)
                 painter.setPen(QColor(t.text))
                 align = (
@@ -146,10 +176,20 @@ class NodeItem(QGraphicsObject):
                 )
                 painter.drawText(band, align | Qt.AlignmentFlag.AlignVCenter, r.text)
 
-    def port_at(self, pos: QPointF):
-        """The output port under `pos` (in the item's coordinates), if any."""
+    def port_at(self, pos: QPointF, side: str = "out"):
+        """The port on `side` under `pos` (in the item's coordinates), if any."""
+        x = self.w if side == "out" else 0.0
         for r in rows(self.node, self.unfolded):
-            if r.kind == "out" and abs(pos.x() - self.w) <= 9 and abs(pos.y() - r.middle) <= 8:
+            if r.kind == side and abs(pos.x() - x) <= 9 and abs(pos.y() - r.middle) <= 8:
+                return r.key
+        return None
+
+    def input_near(self, scene_pos: QPointF):
+        """The input port whose row is under a scene point (anywhere along the row, so
+        a wire dropped on the node's label finds it)."""
+        pos = self.mapFromScene(scene_pos)
+        for r in rows(self.node, self.unfolded):
+            if r.kind == "in" and r.top <= pos.y() < r.top + r.height:
                 return r.key
         return None
 
@@ -169,7 +209,7 @@ class NodeItem(QGraphicsObject):
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt's name
         port = self.port_at(event.pos()) if event.button() == Qt.MouseButton.LeftButton else None
-        if port is not None and self.node.kind == "study":
+        if port is not None and self.node.kind in WIRES_FROM:
             self.panel.start_wire(self, port)
             event.accept()
             return
@@ -208,7 +248,7 @@ class WireItem(QGraphicsPathItem):
         self.wire, self.a, self.b = wire, a, b
         self.setZValue(1 if wire.kind == "data" else 0)
         if wire.kind == "data":
-            self.setPen(QPen(_flow_colour(wire.carries), 2.5))
+            self.setPen(QPen(QColor(sch.wire_colour(wire)), 2.5))
             if wire.label:
                 self.setToolTip(wire.label)
         else:
@@ -297,6 +337,26 @@ class SchematicCanvas(QGraphicsView):
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setBackgroundBrush(QBrush(QColor(_colours().surface)))
+
+    def event(self, event) -> bool:
+        """Tab opens the operator palette (ADR 0062), not the next widget's focus."""
+        from PySide6.QtCore import QEvent
+
+        if event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Tab:
+            panel = getattr(self.scene(), "panel", None)
+            if panel is not None and panel.window.session is not None:
+                centre = self.mapToScene(self.viewport().rect().center())
+                panel.open_palette(centre)
+                return True
+        return super().event(event)
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        """A double-click on the empty canvas opens the operator palette there."""
+        panel = getattr(self.scene(), "panel", None)
+        if self.itemAt(event.position().toPoint()) is None and panel is not None:
+            panel.open_palette(self.mapToScene(event.position().toPoint()))
+            return
+        super().mouseDoubleClickEvent(event)
 
     def wheelEvent(self, event) -> None:  # noqa: N802 - Qt's name
         steps = event.angleDelta().y() / 120.0
@@ -443,9 +503,14 @@ class SchematicPanel(QWidget):
         group_ids = {str(o.id) for o in session.project.objects.values() if o.kind == "group"}
         if self.view.prune(self._node_ids(session.project, runs), group_ids):
             view_state.save(session.root, self.view)
+        try:
+            store = self.window._store()
+        except Exception:  # noqa: BLE001 - no store: operators show no values
+            store = None
         self.schematic = sch.build(session.project, runs, states, root=session.root,
                                    folded=frozenset(self.view.folded),
-                                   fields=bool(current().get("connections.schematic")))  # fmt: skip
+                                   fields=bool(current().get("connections.schematic")),
+                                   store=store)  # fmt: skip
         self._draw()
         self.canvas.setVisible(bool(self.schematic.nodes))
         self.empty.setVisible(not self.schematic.nodes)
@@ -489,7 +554,7 @@ class SchematicPanel(QWidget):
             self.scene.addItem(item)
             if w.kind == "data" and w.label:
                 label = self.scene.addSimpleText(w.label)
-                label.setBrush(_flow_colour(w.carries))
+                label.setBrush(QColor(sch.wire_colour(w)))
                 font = label.font()
                 font.setPointSizeF(max(font.pointSizeF() - 1.5, 7.0))
                 label.setFont(font)
@@ -682,7 +747,7 @@ class SchematicPanel(QWidget):
     def start_wire(self, item: NodeItem, port: str) -> None:
         path = QGraphicsPathItem()
         port_obj = item.node.port(port)
-        pen = QPen(_flow_colour(port_obj.carries if port_obj else ""), 2.5, Qt.PenStyle.DashLine)
+        pen = QPen(QColor(sch.port_colour(port_obj)), 2.5, Qt.PenStyle.DashLine)
         path.setPen(pen)
         path.setZValue(4)
         self.scene.addItem(path)
@@ -705,12 +770,66 @@ class SchematicPanel(QWidget):
         target = self._node_under(point, not_item=item)
         if target is None:
             return
-        if target.node.kind != "study":
+        if target.node.kind == "operator":  # ADR 0062: into one of its inputs
+            self.wire_operator(item.node, port, target.node, target.input_near(point))
+            return
+        if target.node.kind != "study" or item.node.kind != "study":
             self.window.statusBar().showMessage(
-                "A result goes into a study: drop the wire on a study", 8000
-            )
+                "A study's result goes into another study, or any output into an "
+                "operator's input: drop the wire there", 8000)  # fmt: skip
             return
         self.make_transfer(item.node, port, target.node)
+
+    def source_of(self, node: sch.Node, port: str) -> tuple[str | None, str]:
+        """(object id, port) an operator reads for a node's output: a results node's
+        study, a derived result's or operator's own."""
+        if node.kind == "runs":
+            return node.id.removeprefix("runs:"), port or "result"
+        if node.kind in ("study", "result", "operator", "parameters"):
+            return node.object, port or ("result" if node.kind in ("study", "result")
+                                         else "out")  # fmt: skip
+        return None, port
+
+    def wire_operator(self, source: sch.Node, port: str, target: sch.Node, key: str | None):
+        """A wire dropped on an operator: into the input under it, else the first that
+        takes it. One that fits nowhere says why and changes nothing."""
+        from uuid import UUID
+
+        from puzzle.gui.operators import wire
+        from puzzle.operators import TYPE_WORDS, TYPES, accepts, output_type
+
+        project = self.window.session.project
+        oid, port = self.source_of(source, port)
+        op = project.objects.get(UUID(target.object))
+        given = output_type(project, UUID(oid), port) if oid else None
+        if op is None or given is None:
+            return None
+        specs = TYPES[op.type].inputs
+        chosen = next((p for p in specs if p.key == key), None)
+        if chosen is None or not accepts(chosen, given):
+            chosen = next((p for p in specs if accepts(p, given)), None)
+        if chosen is None:
+            self.window.statusBar().showMessage(
+                f"{op.name} takes no {TYPE_WORDS[given].lower()}", 8000)  # fmt: skip
+            return None
+        return wire(self.window, str(op.id), chosen.key, oid, port)
+
+    def palette_source(self) -> tuple[str | None, str]:
+        """What the palette wires a new operator from: the selected node's result or
+        value (a parameter set has several: none)."""
+        node = self.schematic.nodes.get(self.current)
+        if node is None or node.kind == "parameters":
+            return None, "out"
+        if node.kind == "operator":
+            outs = node.outputs()
+            return (node.object, outs[0].key) if outs else (None, "out")
+        return self.source_of(node, "")
+
+    def open_palette(self, at: QPointF | None = None):
+        """The operator palette (Tab, or a double-click on the empty canvas): the new
+        operator placed where asked."""
+        where = (at.x(), at.y()) if at is not None else None
+        return self.window.open_operator_palette(where)
 
     def make_transfer(self, source: sch.Node, port: str, target: sch.Node):
         from puzzle.gui.menus import new_transfer
@@ -764,6 +883,11 @@ class SchematicPanel(QWidget):
             w.show_results_of(node.object)
         elif node.kind == "mesh":
             w.left_tabs.setCurrentWidget(w.mesh_bench)
+        elif node.kind == "operator" and node.subtitle == "Plot":  # its table, plotted
+            from uuid import UUID
+
+            w.select_in_tree((kind, obj))
+            w.plots.show_operator(w.session.project.objects.get(UUID(obj)))
         else:
             w.left_tabs.setCurrentIndex(0)
             w.select_in_tree((kind, obj))
@@ -834,7 +958,11 @@ class SchematicSide(QWidget):
             "derived results), coloured by what flows. Thin grey wires say what each "
             "thing is built from.\n\nClick a node to select it; double-click to open it; "
             "right-click for its menu. Drag a study's output onto another study to make a "
-            "transfer, a geometry onto a component to add a part."
+            "transfer, a geometry onto a component to add a part.\n\nOperators compute "
+            "from results: press Tab (or double-click the empty canvas) to add one, wired "
+            "from the selected node; drag any output onto an operator's input to wire it. "
+            "Socket shapes say what a port carries: circles results and fields, diamonds "
+            "numbers, squares tables, triangles verdicts."
         )
         legend.setWordWrap(True)
         theme.role(legend, "muted")

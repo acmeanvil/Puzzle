@@ -1,6 +1,6 @@
 # 0062. Operators in the schematic: data, geometry, Python and result nodes, as Grasshopper's
 
-- Status: Accepted (2026-11-02)
+- Status: Accepted (2026-11-02); phase 1 built (2026-11-03)
 - Date: 2026-11-02
 
 ## Context
@@ -184,3 +184,50 @@ The maintainer's answers:
 4. Sliders preview geometry live while dragging, mesh on release or on Mesh, and never
    solve (item 4).
 5. The optimisation ADR is written next (ADR 0063).
+
+## Phase 1 built (2026-11-03)
+
+- **The object**: `model.schema.Operator` (kind `operator`). Its `inputs` are keyed by
+  port, each an `OperatorInput`: a wire `{"source": <id>, "port": <output>}` (named
+  `source`, not `from`, which Python reserves) or a typed `value` (a quantity, a
+  number, a text). Its own settings are plain fields (`quantity`, `selection`,
+  `reduction`, `step`, `keep`, `compare`, `against`, `file`, `format`), and each type
+  reads its own (`operators.TYPES[...].settings`). `puzzle.operators` holds the
+  registry: types with their typed ports, the port types with their colours and
+  socket shapes, `outputs_of`, `accepts`, `refuse`, `refuse_cycles`, `problems`
+  (`operator_input`), `describe` and `inputs_from`.
+- **Sources**: a study (`result`, or one field such as `stress`), a derived result
+  (`result`; this is item 6's Combine, so there is no separate Combine operator), a
+  result tool (its value), a parameter set's parameter (a number), and other
+  operators' outputs.
+- **Operators**: Reduce, Filter, Check, Panel, Plot and Export
+  (`operators.evaluate`). Values are dataclasses per type and are never stored. A
+  `Context` carries the step or sweep point, so a Plot repeats the same chain per step
+  or per point. A check's margin is limit / value − 1 for at most and value / limit − 1
+  for at least; a stress compared with a length is refused. An export writes only
+  inside the project folder, as CSV or a result format.
+- **Commands**: a wrong type, an unknown port, or a value typed where only a wire may
+  go is refused. So is any reference loop, transfers' included: `refuse_cycles` now
+  runs for every edit that adds a reference. The object is put back as it was. An
+  operator is as fresh as what it reads (`status._operators`).
+- **Schematic**: operator nodes sit in the Results column, to the right of what they
+  read. Ports have a type, socket shape and colour (`port_colour`, `wire_colour`,
+  `socket_shape`; the SVG draws the same). The node shows its value, and a check shows
+  its verdict in green or red. Parameter sets gain a number port per value, and runs
+  and derived-result nodes gain a `Result` port.
+- **GUI**: wires can be drawn from any output onto an operator's input; one that fits
+  no input is refused. Tab, or a double-click on the empty canvas, opens a search
+  palette, wired from the selected node. Other ways in: an Operators section in the
+  tree, New operator under Results (tree and menu bar), Find an operator….
+  Properties shows each input as a dropdown of what may be wired in, a typed value
+  with its unit, and the output. Plots draw in the Plots panel; an export writes from
+  Export now.
+- **Twins**: `puzzle operators PROJECT [NAME] [--json] [--export]`, MCP
+  `operator_value` and `operator_add`, an Operator line per operator in the outline,
+  and the skill `schematic-operators`. Tests: `tests/test_operators.py` (values checked
+  by hand on two tets) and `tests/test_operators_gui.py` (the cantilever on CalculiX).
+
+Not done in phase 1:
+- Selecting a Filter does not yet preview its field in the 3D view.
+- The ASME checks of a linearization (ADR 0042) are not offered as a Check.
+- The Expression operator comes with the data operators in phase 2.

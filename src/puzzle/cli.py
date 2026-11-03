@@ -358,6 +358,14 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--no-uses", action="store_true", help="leave out the grey use wires (SVG)")
     p.set_defaults(handler=_schematic)
 
+    p = sub.add_parser("operators", help="the project's operators and their values (ADR 0062)")
+    p.add_argument("project", type=Path)
+    p.add_argument("name", nargs="?", help="one operator (default: all)")
+    p.add_argument("--json", action="store_true", help="the values as JSON (SI)")
+    p.add_argument("--export", action="store_true",
+                   help="write each export operator's file (or the one named)")  # fmt: skip
+    p.set_defaults(handler=_operators)
+
     p = sub.add_parser("import-field", help="bring in values at points from a file (ADR 0044)")
     p.add_argument("project", type=Path)
     p.add_argument("file", type=Path, nargs="+", help="CSV/TXT/DAT (x, y, z and values), VTU, "
@@ -971,6 +979,36 @@ def _selections(args) -> int:
                 Session(args.project).submit(Edit(object=str(geo.id), ops=ops))
                 print(f"  reattached ({len(choices)} selection(s); undo with puzzle undo)")
     return 1 if detached and not args.accept_all else 0
+
+
+def _operators(args) -> int:
+    """ADR 0062: each operator's wiring and value; --export writes export operators."""
+    import json
+
+    from puzzle.commands import resolve
+    from puzzle.model.schema import Operator
+    from puzzle.operators import describe
+    from puzzle.operators import evaluate as ev
+
+    project = _load(args.project)
+    ops = ([resolve(project, args.name, Operator)] if args.name
+           else project.of_type(Operator))  # fmt: skip
+    ctx = ev.Context(project, _store(args.project))
+    if args.export:
+        for op in ops:
+            if op.type == "export":
+                for path in ev.export(ctx, op, args.project):
+                    print(f"wrote {path}")
+        return 0
+    if args.json:
+        print(json.dumps([ev.summary(ctx, op) for op in ops], indent=1, default=str))
+        return 0
+    if not ops:
+        print("no operators")
+    for op in ops:
+        text = ev.detail(ctx, op)
+        print(f"{op.name}: {text}\n    {describe(project, op)}")
+    return 0
 
 
 def _schematic(args) -> int:

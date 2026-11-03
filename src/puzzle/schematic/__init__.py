@@ -56,6 +56,7 @@ SHOWN = {
     "component": "node",
     "study": "node",
     "result": "node",
+    "operator": "node",  # ADR 0062
     "transfer": "wire",
     "axes": "chip",
     "amplitude": "chip",
@@ -86,6 +87,7 @@ KIND_WORDS = {
     "study": "Study",
     "runs": "Results",
     "result": "Derived result",
+    "operator": "Operator",
     "group": "Group",
 }
 # What flows along a data wire, for its colour (as Blender colours sockets by type).
@@ -104,6 +106,7 @@ class Port:
     label: str
     side: str  # "in" or "out"
     carries: str = ""  # the field it takes or gives ("temperature")
+    type: str = ""  # an operator port's type (ADR 0062: number, field, ...), "" otherwise
 
 
 @dataclass
@@ -123,6 +126,8 @@ class Node:
     rows: list[str] = field(default_factory=list)  # a component's parts and materials
     used_by: int = 0  # use wires out of it (a resource used more than once says so)
     group: str = ""  # the tree group it sits in
+    value: str = ""  # an operator's value as shown (ADR 0062): "212 MPa", "Pass: ..."
+    verdict: str = ""  # a check's "pass" or "fail"
 
     def port(self, key: str) -> Port | None:
         return next((p for p in self.ports if p.key == key), None)
@@ -144,6 +149,7 @@ class Wire:
     label: str = ""
     carries: str = ""
     object: str = ""  # a transfer's or field use's object, for selecting the wire
+    type: str = ""  # what an operator's wire carries (ADR 0062): number, field, ...
 
     @property
     def flow(self) -> str:
@@ -211,6 +217,41 @@ class Schematic:
                                if w.kind == "use" and w.source == n.id)  # fmt: skip
                 lines.append(f"{KIND_WORDS[n.kind].lower()} {n.label} used by {', '.join(users)}")
         return lines
+
+
+def port_colour(port: Port | None) -> str:
+    """A socket's colour: an operator port's by its type (ADR 0062), a field's by what
+    flows (a result port carrying a field keeps that field's colour)."""
+    from puzzle.operators import TYPE_COLOURS
+
+    if port is None:
+        return FLOW_COLOURS["other"]
+    if port.type and port.type != "result":
+        return TYPE_COLOURS[port.type]
+    if port.carries:
+        return FLOW_COLOURS[flow_of(port.carries)]
+    return TYPE_COLOURS["result"] if port.type else "#8a94a3"
+
+
+def wire_colour(wire: Wire) -> str:
+    """A data wire's colour, as its socket's."""
+    from puzzle.operators import TYPE_COLOURS
+
+    if wire.type and wire.type != "result":
+        return TYPE_COLOURS[wire.type]
+    if wire.type == "result" and not wire.carries:
+        return TYPE_COLOURS["result"]
+    return FLOW_COLOURS[wire.flow]
+
+
+def socket_shape(port: Port | None) -> str:
+    """circle, diamond, square or triangle (ADR 0062 item 2: a type's own shape)."""
+    from puzzle.operators import SHAPES
+
+    return SHAPES.get(port.type, "circle") if port is not None else "circle"
+
+
+VERDICT_COLOURS = {"pass": "#2f9e44", "fail": "#e03131"}
 
 
 def flow_of(field_name: str) -> str:
@@ -290,12 +331,14 @@ def build(
     root: Path | None = None,
     folded: frozenset[str] = frozenset(),
     fields: bool = True,
+    store=None,
 ) -> Schematic:
     """The schematic of `project`. `runs` are the result store's records, `states` the
     objects' states (`project.status.status`; computed here when not given), `root` the
     project folder (files not found there are marked missing), `folded` the tree groups
-    drawn as one node, and `fields` whether imported fields are shown (the preference
-    `connections.schematic`)."""
+    drawn as one node, `fields` whether imported fields are shown (the preference
+    `connections.schematic`), and `store` the results store, given when the operators'
+    values are to be shown (ADR 0062)."""
     from puzzle.adapters import SOLVER_NAMES
     from puzzle.project.status import State, run_state, status
 
@@ -341,9 +384,10 @@ def build(
                 sub = "history" if obj.history else ("file" if obj.source else "")
                 if obj.suppressed:
                     sub = "suppressed"
-            elif isinstance(obj, ParameterSet):
-                sub = ", ".join(obj.values)
-            add(Node(str(obj.id), kind, RESOURCES, obj.name, subtitle=sub, object=str(obj.id)))
+            node = add(Node(str(obj.id), kind, RESOURCES, obj.name, subtitle=sub,
+                            object=str(obj.id)))  # fmt: skip
+            if isinstance(obj, ParameterSet):  # each value a number to wire (ADR 0062)
+                node.ports = [Port(k, k, "out", type="number") for k in obj.values]
     if fields:
         for f in project.of_type(ImportedField):
             cols = [c.name for c in f.columns if c.role == "value"]
@@ -412,13 +456,14 @@ def build(
                     badge=_sweep_badge(s))  # fmt: skip
         st = run_state(latest, project)
         node.state, node.reason = st.state, st.reason
-        node.ports = [Port(f, words(f), "out", f) for f in outputs(project, s)]
+        node.ports = [Port("result", "Result", "out", type="result")]
+        node.ports += [Port(f, words(f), "out", f) for f in outputs(project, s)]
         out.nodes[node.id] = node
         use(str(s.id), node.id)
     for d in project.of_type(ResultDefinition):
         method = "Fatigue" if d.method == "fatigue" else words(d.method)
         node = add(Node(str(d.id), "result", RESULTS, d.name, subtitle=method, object=str(d.id)))
-        node.ports = [Port("in", "Cases", "in")]
+        node.ports = [Port("result", "Result", "out", type="result"), Port("in", "Cases", "in")]
         for ref in dict.fromkeys(d.dependencies()):
             src = out.nodes.get(f"runs:{ref}") or out.nodes.get(str(ref))
             if src is not None:
@@ -426,11 +471,91 @@ def build(
                                       label=words(d.quantity or "") if getattr(d, "quantity", "")
                                       else "", carries=d.quantity or ""))  # fmt: skip
 
+    _operators(project, out, store, states)
     _chips(project, out, names)
     for n in out.nodes.values():
         n.used_by = len({w.target for w in out.wires if w.kind == "use" and w.source == n.id})
     _groups(project, out, folded)
     return out
+
+
+def _operators(project: Project, out: Schematic, store, states: dict) -> None:
+    """Operators (ADR 0062) as nodes after what they read, a typed port per input and
+    output, joined by data wires; with a `store`, each shows its value."""
+    from puzzle.model.schema import Operator
+    from puzzle.operators import TYPES
+
+    ops = project.of_type(Operator)
+    for op in ops:
+        t = TYPES[op.type]
+        node = Node(str(op.id), "operator", RESULTS, op.name, subtitle=t.label,
+                    object=str(op.id))  # fmt: skip
+        st = states.get(str(op.id))
+        if st is not None:
+            node.state, node.reason = st.state, st.reason
+        node.ports = [Port(p.key, p.label, "out", type=p.type) for p in t.outputs]
+        node.ports += [Port(p.key, p.label, "in", type=p.type) for p in t.inputs]
+        out.nodes[node.id] = node
+    for op in ops:
+        node = out.nodes[str(op.id)]
+        for key, inp in op.inputs.items():
+            if inp.source is None:
+                if inp.value is not None:  # a typed value, shown on its port
+                    port = node.port(key)
+                    if port is not None:
+                        port.label = f"{port.label}: {_typed_text(inp.value)}"
+                continue
+            src, port, label = _wire_end(project, out, inp.source, inp.port)
+            if src is None:
+                continue
+            spec = TYPES[op.type].input(key)
+            given = _given(project, inp.source, inp.port)
+            carries = inp.port if given == "result" and inp.port not in ("result", "out") else ""
+            out.wires.append(Wire(src.id, node.id, "data", port, key, label, carries,
+                                  str(op.id), given or (spec.type if spec else "")))  # fmt: skip
+    if store is not None and ops:
+        from puzzle.operators import evaluate as ev
+
+        ctx = ev.Context(project, store)
+        for op in ops:
+            node = out.nodes[str(op.id)]
+            node.value, node.verdict = ev.shown(ctx, op)
+
+
+def _given(project: Project, source, port: str) -> str | None:
+    from puzzle.operators import output_type
+
+    return output_type(project, source, port)
+
+
+def _typed_text(value) -> str:
+    from puzzle.model.schema import Quantity
+    from puzzle.model.units import pretty
+
+    if isinstance(value, Quantity):
+        return f"{value.value:g} {pretty(value.unit)}".strip().removesuffix(" dimensionless")
+    return f"{value:g}" if isinstance(value, float) else str(value)
+
+
+def _wire_end(project: Project, out: Schematic, source, port: str):
+    """(node, its port, the wire's label) a wire into an operator starts from: a study's
+    results node (the study itself before it has run), a derived result, the node a
+    result tool reads, a parameter set's value, another operator's output."""
+    from puzzle.model.schema import ResultProbe, Study
+
+    obj = project.objects.get(source)
+    if obj is None:
+        return None, "", ""
+    if isinstance(obj, Study):
+        node = out.nodes.get(f"runs:{obj.id}") or out.nodes.get(str(obj.id))
+        if node is not None and node.port(port) is None and port in ("result", "out"):
+            return node, "", ""
+        label = "" if port in ("result", "out") else words(port).lower()
+        return node, port, label
+    if isinstance(obj, ResultProbe):
+        node = out.nodes.get(f"runs:{obj.source}") or out.nodes.get(str(obj.source))
+        return node, "result", f"{CHIP_WORDS['probe'].lower()} {obj.name}"
+    return out.nodes.get(str(obj.id)), port, ""
 
 
 def _folder(path: str) -> str:

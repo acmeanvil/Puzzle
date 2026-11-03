@@ -1,0 +1,189 @@
+"""Operators in the window (ADR 0062), on the cantilever's Tip load run (CalculiX).
+
+The palette (Tab in the schematic) makes a Reduce wired from the selected results
+node; the node shows its value. A Check gets its limit typed in Properties and turns
+green or red. A wire drawn from the results onto an operator's input wires it; one
+that doesn't fit is refused. A Plot draws in the Plots panel, an Export writes its file.
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import time
+from pathlib import Path
+from uuid import UUID
+
+import pytest
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+pytest.importorskip("PySide6")
+
+from PySide6.QtWidgets import QApplication  # noqa: E402
+from solvers import available  # noqa: E402
+
+from puzzle.gui import operators  # noqa: E402
+from puzzle.gui.tree import ROLE  # noqa: E402
+from puzzle.gui.window import MainWindow  # noqa: E402
+from puzzle.model.schema import Operator, Study  # noqa: E402
+from puzzle.project import load_project, save_project  # noqa: E402
+
+pytestmark = [
+    pytest.mark.usefixtures("engineering_units"),
+    pytest.mark.skipif(not available("calculix"), reason="calculix not available"),
+]
+EXAMPLE = Path(__file__).parents[1] / "examples" / "cantilever"
+
+
+@pytest.fixture(scope="module")
+def app():
+    return QApplication.instance() or QApplication([])
+
+
+@pytest.fixture(scope="module")
+def solved(app, tmp_path_factory):
+    """The cantilever with its Tip load run, solved once for the module."""
+    root = tmp_path_factory.mktemp("ops") / "cantilever"
+    skip = shutil.ignore_patterns("results*", ".puzzle", "history.jsonl")
+    shutil.copytree(EXAMPLE, root, ignore=skip)
+    p = load_project(root)
+    next(s for s in p.of_type(Study) if s.name == "Tip load").solver = "calculix"
+    save_project(p, root)
+    w = MainWindow(root)
+    for item in w.tree._items():
+        node = item.data(0, ROLE)
+        if node.kind == "object" and node.label == "Tip load":
+            w.tree.setCurrentItem(item)
+    w.run_selected()
+    end = time.monotonic() + 600
+    while w.tasks:
+        app.processEvents()
+        assert time.monotonic() < end
+        time.sleep(0.02)
+    w.close()
+    return root
+
+
+@pytest.fixture
+def window(app, solved, tmp_path):
+    root = tmp_path / "cantilever"
+    shutil.copytree(solved, root, ignore=shutil.ignore_patterns(".puzzle"))
+    w = MainWindow(root)
+    w.left_tabs.setCurrentWidget(w.schematic_side)
+    yield w
+    while w.tasks:  # previews still drawing
+        app.processEvents()
+        time.sleep(0.02)
+    w.close()
+
+
+def _study(w):
+    return next(s for s in w.session.project.of_type(Study) if s.name == "Tip load")
+
+
+def _op(w, name):
+    return next(o for o in w.session.project.of_type(Operator) if o.name == name)
+
+
+def _node(w, name):
+    return next(i for i in w.schematic.items.values() if i.node.label == name)
+
+
+def _rows(w) -> dict:
+    out, stack = {}, [w.properties.invisibleRootItem()]
+    while stack:
+        item = stack.pop()
+        for i in range(item.childCount()):
+            child = item.child(i)
+            out.setdefault(child.text(0), child)
+            stack.append(child)
+    return out
+
+
+def test_the_palette_makes_a_reduce_wired_from_the_selected_results(window):
+    w = window
+    runs = w.schematic.items[f"runs:{_study(w).id}"]
+    w.schematic.chosen(runs.node)
+    palette = w.schematic.open_palette()
+    palette.search.setText("redu")
+    assert [palette.list.item(i).isHidden() for i in range(palette.list.count())].count(
+        False) == 1  # fmt: skip
+    palette._make()
+    op = _op(w, "Reduce 1")
+    assert op.inputs["result"].source == _study(w).id and op.inputs["result"].port == "result"
+    node = w.schematic.items[str(op.id)].node
+    assert node.value.endswith(" mm") and node.state == "up_to_date"  # the tip deflection
+    assert w.tree.current().object == str(op.id)  # selected, so Properties shows it
+    rows = _rows(w)
+    assert "Inputs" in rows and rows["Shows"].text(1) == node.value
+    assert "Against" not in rows and "Reduction" in rows  # its own settings only
+    box = w.properties.dropdown("inputs.result")
+    assert box.currentText() == "Tip load: Result"
+
+
+def test_a_check_with_a_typed_limit_turns_red_then_green(window):
+    w = window
+    reduce_id = operators.new_operator(w, "reduce", str(_study(w).id), "result")
+    check_id = operators.new_operator(w, "check", reduce_id, "out")
+    check = w.session.project.objects[UUID(check_id)]
+    assert check.inputs["value"].source == _op(w, "Reduce 1").id
+    assert "limit input is not wired" in w.schematic.items[check_id].node.reason
+    w.select_in_tree(("object", check_id))
+    row = _rows(w)["Typed value"]
+    row.setText(1, "0.001 mm")  # far less than the tip moves
+    node = w.schematic.items[check_id].node
+    assert node.verdict == "fail" and node.value.startswith("Fail, margin -")
+    w.select_in_tree(("object", check_id))
+    _rows(w)["Typed value"].setText(1, "100 mm")
+    assert w.schematic.items[check_id].node.verdict == "pass"
+    _rows(w)["Typed value"].setText(1, "12 wibbles")  # not a unit: put back, nothing changed
+    assert _op(w, "Check 1").inputs["limit"].value.unit == "mm"
+
+
+def test_a_wire_drawn_onto_an_operator_wires_it(window):
+    w = window
+    op_id = operators.new_operator(w, "reduce")
+    runs = w.schematic.items[f"runs:{_study(w).id}"]
+    w.schematic.start_wire(runs, "stress")
+    target = w.schematic.items[op_id]
+    w.schematic.end_wire(target.sceneBoundingRect().center())
+    op = _op(w, "Reduce 1")
+    assert op.inputs["result"].port == "stress"
+    assert w.schematic.items[op_id].node.value.endswith(" MPa")  # von Mises, its first
+    wires = [x for x in w.schematic.wires if x.b is w.schematic.items[op_id]]
+    assert len(wires) == 1 and wires[0].wire.target_port == "result"
+    check_id = operators.new_operator(w, "check")
+    w.schematic.start_wire(w.schematic.items[f"runs:{_study(w).id}"], "result")
+    w.schematic.end_wire(w.schematic.items[check_id].sceneBoundingRect().center())
+    assert not _op(w, "Check 1").inputs  # a result fits no input of a check
+    assert "takes no result" in w.statusBar().currentMessage()
+
+
+def test_plot_shows_in_the_plots_panel_and_export_writes(window):
+    w = window
+    reduce_id = operators.new_operator(w, "reduce", str(_study(w).id), "result")
+    plot_id = operators.new_operator(w, "plot", reduce_id, "out")
+    plot = w.session.project.objects[UUID(plot_id)]
+    operators.show_plot(w, plot)
+    assert w.output_tabs.currentWidget() is w.plots
+    assert len(w.plots.series) == 1 and len(w.plots.series[0][1]) == 1  # one static step
+    export_id = operators.new_operator(w, "export", reduce_id, "out")
+    operators.export_now(w, w.session.project.objects[UUID(export_id)])
+    written = w.session.root / "exports" / "Export_1.csv"
+    assert written.read_text().startswith("name,value [m]")
+    w.session.undo()  # an export changes no model: the last command was its creation
+    assert not any(o.type == "export" for o in w.session.project.of_type(Operator))
+
+
+def test_tab_opens_the_palette(window):
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtGui import QKeyEvent
+
+    w = window
+    w.schematic.canvas.event(QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Tab,
+                                       Qt.KeyboardModifier.NoModifier))  # fmt: skip
+    palette = w.last_palette
+    assert palette.isVisible() and palette.at is not None
+    palette.choose("panel")
+    op = _op(w, "Panel 1")
+    assert w.schematic.view.positions[str(op.id)] == pytest.approx(palette.at, abs=0.1)

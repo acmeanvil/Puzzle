@@ -258,6 +258,11 @@ def outline(project: Project, *, ids: bool = False, runs=None) -> str:
         else:
             what = f"{label_of(pr.quantity)} of {of} at {xyz(pr.point)}"
         lines.append(head("Probe", pr) + f": {what}")
+    from puzzle.model.schema import Operator
+    from puzzle.operators import describe
+
+    for op in project.of_type(Operator):  # ADR 0062; values: `operator_value`
+        lines.append(head("Operator", op) + f": {describe(project, op)}")
     lines += _flow(project, runs)
     problems = project.problems()
     if problems:

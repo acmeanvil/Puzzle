@@ -25,12 +25,12 @@ PAD = 6.0
 GAP_X = 160.0  # room for a data wire's label
 GAP_Y = 22.0
 KIND_ORDER = ["file", "geometry", "field", "material", "mesh", "parameters", "component",
-              "group", "study", "runs", "result"]  # fmt: skip
+              "group", "study", "runs", "result", "operator"]  # fmt: skip
 
 
 @dataclass(frozen=True)
 class Row:
-    kind: str  # title, subtitle, badge, chip, in, out, part, used
+    kind: str  # title, subtitle, badge, value, chip, in, out, part, used
     key: str
     text: str
     top: float
@@ -56,6 +56,8 @@ def rows(node: Node, unfolded: bool = False) -> list[Row]:
         put("subtitle", "", node.subtitle, LINE - 2)
     if node.badge:
         put("badge", "", node.badge)
+    if node.value:  # an operator's value (ADR 0062)
+        put("value", node.verdict, node.value)
     for chip in node.chips:
         put("chip", chip, chip)
     for p in node.outputs():  # outputs first, as Blender lists them

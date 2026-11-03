@@ -772,6 +772,14 @@ class MainWindow(QMainWindow):
                     out.append(w)
         return out
 
+    def open_operator_palette(self, at=None):
+        """Find an operator by name and make it (ADR 0062), wired from the schematic's
+        selected node when it has an output that fits."""
+        from puzzle.gui import operators
+
+        source, port = self.schematic.palette_source()
+        return operators.open_palette(self, at, source, port)
+
     def select_in_tree(self, key: tuple[str, str]) -> bool:
         """Select the tree item of (kind, object), so Properties shows it (the schematic's
         click, ADR 0058). The tab stays as it is."""
@@ -1416,16 +1424,29 @@ class MainWindow(QMainWindow):
             self.properties.show_text({"project": s.project.name} if node.kind == "project" else {})
             return
         from puzzle.gui.choices import choices
+        from puzzle.model.schema import Operator
 
         project = s.project
         self._mark_problems(obj.name)
+
+        def options(path):
+            if isinstance(obj, Operator):  # ADR 0062: from the results it reads
+                from puzzle.gui import operators
+
+                found = operators.choices(self, obj, path)
+                if found is not None:
+                    return found
+            return choices(project, obj, path)
+
         self.properties.show_object(
-            str(obj.id),
-            obj.model_dump(mode="json"),
-            node.path,
-            names,
-            lambda path: choices(project, obj, path),
+            str(obj.id), obj.model_dump(mode="json"), node.path, names, options
         )
+        if isinstance(obj, Operator):
+            from puzzle.gui import operators
+
+            operators.show(self, obj)
+            self.set_context("model")
+            return
         from puzzle.gui import field_view
 
         field_view.show_properties(self, obj, node)  # ADR 0044: uses, and the chain
@@ -3121,11 +3142,48 @@ class PlotsPanel(QWidget):
             )
             self.probes.addItem(item)
             self.x.addItem(p.name, str(p.id))
+        from puzzle.model.schema import Operator
+
+        for op in project.of_type(Operator):  # ADR 0062: plot operators, their own x
+            if op.type != "plot":
+                continue
+            item = QListWidgetItem(f"{op.name} (plot)")
+            item.setData(ROLE, str(op.id))
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(
+                Qt.CheckState.Checked if str(op.id) in ticked else Qt.CheckState.Unchecked
+            )
+            self.probes.addItem(item)
         found = self.x.findData(x)
         self.x.setCurrentIndex(found if found >= 0 else 0)
         self.probes.blockSignals(False)
         self.x.blockSignals(False)
         self.redraw()
+
+    def show_operator(self, op) -> None:
+        """A plot operator's table (ADR 0062): ticked alone, the Plots tab opened."""
+        self.show_path(op)
+
+    def _operators(self, project, store, ops) -> None:
+        """Ticked plot operators: each table's first column against its second, in
+        display units."""
+        import numpy as np
+
+        from puzzle.gui.viewport import _display
+        from puzzle.operators import evaluate as ev
+
+        ctx = ev.Context(project, store)
+        for op in ops:
+            table = ev.value(ctx, op)
+            xs = [r[0] for r in table.rows]
+            if not all(isinstance(x, float) for x in xs):  # points by name: their order
+                xs = [float(i + 1) for i in range(len(xs))]
+            kinds = table.kinds or [None, None]
+            x_shown, x_unit = _display(np.array(xs, float), kinds[0])
+            y_shown, _ = _display(np.array([r[1] for r in table.rows], float), kinds[1])
+            pts = list(zip(map(float, x_shown), map(float, y_shown), strict=True))
+            self.series.append((op.name, pts))
+            self.curve.x_label = table.columns[0] + (f" ({x_unit})" if x_unit else "")
 
     def show_path(self, probe) -> None:
         """A path's plot: ticked alone, the Plots tab opened (ADR 0042)."""
@@ -3181,6 +3239,15 @@ class PlotsPanel(QWidget):
             for i in range(self.probes.count())
             if self.probes.item(i).checkState() == Qt.CheckState.Checked
         ]
+        plots = [p for p in ticked if p is not None and p.kind == "operator"]
+        ticked = [p for p in ticked if p is not None and p.kind != "operator"]
+        if plots and not ticked:  # plot operators carry their own x (ADR 0062)
+            try:
+                self._operators(project, store, plots)
+            except PuzzleError as exc:
+                self.window.report(exc)
+            self.curve.set_series(self.series)
+            return
         paths = [p for p in ticked if p is not None and p.type in ("path", "linearized")]
         if paths:  # paths plot against the distance; steps don't mix with them
             try:
@@ -3197,6 +3264,8 @@ class PlotsPanel(QWidget):
                 if item.checkState() != Qt.CheckState.Checked:
                     continue
                 probe = project.objects.get(_uuid(item.data(ROLE)))
+                if probe is None or probe.kind == "operator":
+                    continue
                 values = history(project, store, probe)
                 if against is not None:
                     xs = [a["value"] for a in against]

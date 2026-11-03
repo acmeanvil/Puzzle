@@ -1938,6 +1938,81 @@ class ResultProbe(ProjectObject):
         return [self.source] + ([self.construction] if self.construction else [])
 
 
+class OperatorInput(BaseModel):
+    """One input port of an operator (ADR 0062): a wire from another object's output
+    (`source` and its `port`), or a value typed in (`value`) when nothing is wired."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: UUID | None = Field(
+        default=None, description="the study, derived result, result tool, parameter set or "
+        "operator wired in")  # fmt: skip
+    port: str = Field(
+        default="out", description="which of its outputs: a parameter's name, a result's "
+        "field, or an operator's output")  # fmt: skip
+    value: Quantity | float | str | None = Field(
+        default=None, description="typed in, when nothing is wired: 200 MPa"
+    )
+
+
+class Operator(ProjectObject):
+    """A node that computes (ADR 0062), as Grasshopper's: typed input ports, each a wire
+    from another object's output or a value typed in, and typed outputs. Post-solve
+    operators (phase 1) read results and are evaluated on demand, never stored:
+
+    - `reduce`: a result over the model or a `selection` as one number (`reduction`);
+    - `filter`: a result kept on a `selection` and/or above or below a limit (`keep`);
+    - `check`: a number (or a field's extreme) against a limit, a verdict with its margin;
+    - `panel`: shows any output's value;
+    - `plot`: a number against the steps or a sweep's points, as a table;
+    - `export`: any output to a file in the project (`file`; CSV, or a result format).
+
+    Which inputs and settings each type takes is `puzzle.operators.TYPES`.
+    """
+
+    kind: ClassVar[str] = "operator"
+
+    type: Literal["reduce", "filter", "check", "panel", "plot", "export"]
+    inputs: dict[str, OperatorInput] = Field(default_factory=dict)
+    quantity: str | None = Field(
+        default=None, description='reduce, filter: a listed result\'s key, e.g. '
+        '"stress:von_mises"; none: the wired field\'s first')  # fmt: skip
+    selection: str | None = Field(
+        default=None, description="reduce: over this selection (Part/Selection, or a part); "
+        "filter: keep it; none: the whole model")  # fmt: skip
+    reduction: Literal["max", "min", "mean", "integral"] = "max"
+    step: int = Field(default=-1, description="index into the result steps; -1 = last")
+    keep: Literal["all", "above", "below"] = Field(
+        default="all", description="filter: keep values above or below its limit input"
+    )
+    compare: Literal["at_most", "at_least"] = Field(
+        default="at_most", description="check: passes when the value is at most (or at "
+        "least) the limit")  # fmt: skip
+    against: Literal["step", "sweep"] = Field(
+        default="step", description="plot: against the steps (time, frequency, increment) "
+        "or a sweep's points")  # fmt: skip
+    file: str = Field(default="", description="export: the file, inside the project folder")
+    format: str = Field(
+        default="csv", description="export: csv, or a result export format (ADR 0043)"
+    )
+
+    @model_validator(mode="after")
+    def _ports(self) -> Operator:
+        from puzzle.operators import TYPES
+
+        known = {p.key for p in TYPES[self.type].inputs}
+        unknown = sorted(set(self.inputs) - known)
+        if unknown:
+            raise ValueError(
+                f"a {self.type} operator has no input {', '.join(unknown)}; "
+                f"its inputs are {', '.join(sorted(known))}"
+            )
+        return self
+
+    def dependencies(self) -> list[UUID]:
+        return list(dict.fromkeys(i.source for i in self.inputs.values() if i.source))
+
+
 class TreeGroup(ProjectObject):
     """A folder in the model tree, under one section's heading ("Studies", "Results",
     ...): only how the tree is organised, never an input to a solve. `members` are the
@@ -2029,6 +2104,7 @@ OBJECT_TYPES: tuple[type[ProjectObject], ...] = (
     ResultDefinition,
     ProjectUnits,
     ResultProbe,
+    Operator,
     Amplitude,
     CoordinateSystem,
     ConstructionGeometry,
@@ -2330,4 +2406,7 @@ class Project:
                     )
                     for p in sorted(unpinned)
                 ]
+        from puzzle.operators import problems as operator_problems
+
+        out += operator_problems(self)
         return out

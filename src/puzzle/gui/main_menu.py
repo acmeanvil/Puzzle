@@ -529,6 +529,15 @@ def _results(window, menu: QMenu) -> None:
     _add(menu, "Compare sweep points…", lambda: _compare(window),
          "A swept study's points side by side")  # fmt: skip
     menu.addSeparator()
+    from puzzle.gui import operators
+    from puzzle.operators import TYPES
+
+    sub = _sub(menu, "New operator")  # ADR 0062
+    for t in TYPES.values():
+        _add(sub, t.label, lambda k=t.key: operators.new_operator(window, k), t.help)
+    _add(menu, "Find an operator…", lambda: window.open_operator_palette(),
+         "Search the operators by name (Tab in the schematic)")  # fmt: skip
+    menu.addSeparator()
     _add(menu, "Export…", lambda: _export(window),
          "Results for other software: ParaView, point clouds, the deformed shape")  # fmt: skip
 

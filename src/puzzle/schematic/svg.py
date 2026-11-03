@@ -6,7 +6,15 @@ from __future__ import annotations
 from html import escape
 
 from puzzle.project.status import WORDS
-from puzzle.schematic import FLOW_COLOURS, KIND_WORDS, STATE_COLOURS, Schematic
+from puzzle.schematic import (
+    KIND_WORDS,
+    STATE_COLOURS,
+    VERDICT_COLOURS,
+    Schematic,
+    port_colour,
+    socket_shape,
+    wire_colour,
+)
 from puzzle.schematic.layout import TITLE, Layout, rows
 
 MARGIN = 30.0
@@ -63,7 +71,7 @@ def to_svg(s: Schematic, lay: Layout, uses: str = "all", title: str = "") -> str
         if wire.kind == "use":
             out.append(f'<path d="{path}" fill="none" stroke="{USE}" stroke-width="1"/>')
             continue
-        colour = FLOW_COLOURS[wire.flow]
+        colour = wire_colour(wire)
         out.append(f'<path d="{path}" fill="none" stroke="{colour}" stroke-width="2.5"/>')
         if wire.label:
             mx, my = (p0[0] + p1[0]) / 2 + dx, (p0[1] + p1[1]) / 2 + dy - 5
@@ -97,6 +105,10 @@ def _node(node, lay: Layout, dx: float, dy: float) -> list[str]:
                        f'fill="{state}"/>')  # fmt: skip
             out.append(f'<text x="{x + 10:.1f}" y="{base:.1f}" fill="{TEXT}" '
                        f'font-weight="bold">{escape(_cut(r.text, 30))}</text>')  # fmt: skip
+        elif r.kind == "value":  # an operator's value; a check's verdict in its colour
+            colour = VERDICT_COLOURS.get(r.key, TEXT)
+            out.append(f'<text x="{x + 10:.1f}" y="{base:.1f}" fill="{colour}" '
+                       f'font-weight="bold">{escape(_cut(r.text, 34))}</text>')  # fmt: skip
         elif r.kind in ("subtitle", "badge", "used", "fold", "part"):
             out.append(f'<text x="{x + 10:.1f}" y="{base:.1f}" fill="{MUTED}">'
                        f"{escape(_cut(r.text, 36))}</text>")  # fmt: skip
@@ -107,21 +119,32 @@ def _node(node, lay: Layout, dx: float, dy: float) -> list[str]:
                        f"{escape(_cut(r.text, 36))}</text>")  # fmt: skip
         elif r.kind in ("in", "out"):
             port = node.port(r.key)
-            colour = FLOW_COLOURS["other"] if port is None else _port_colour(port.carries)
+            colour = port_colour(port) if port is not None and (port.type or port.carries) \
+                else USE  # fmt: skip
             px = x + (w if r.kind == "out" else 0)
             anchor = "end" if r.kind == "out" else "start"
             tx = x + w - 10 if r.kind == "out" else x + 10
-            out.append(f'<circle cx="{px:.1f}" cy="{y + r.middle:.1f}" r="4" fill="{colour}" '
-                       f'stroke="{FILL}"/><text x="{tx:.1f}" y="{base:.1f}" fill="{TEXT}" '
+            out.append(_socket(socket_shape(port), px, y + r.middle, colour)
+                       + f'<text x="{tx:.1f}" y="{base:.1f}" fill="{TEXT}" '
                        f'text-anchor="{anchor}">{escape(_cut(r.text, 34))}</text>')  # fmt: skip
     out.append("</g>")
     return out
 
 
-def _port_colour(carries: str) -> str:
-    from puzzle.schematic import flow_of
-
-    return FLOW_COLOURS[flow_of(carries)] if carries else USE
+def _socket(shape: str, cx: float, cy: float, colour: str) -> str:
+    style = f'fill="{colour}" stroke="{FILL}"'
+    if shape == "diamond":
+        pts = (
+            f"{cx:.1f},{cy - 5:.1f} {cx + 5:.1f},{cy:.1f} {cx:.1f},{cy + 5:.1f} "
+            f"{cx - 5:.1f},{cy:.1f}"
+        )
+        return f'<polygon points="{pts}" {style}/>'
+    if shape == "square":
+        return f'<rect x="{cx - 4:.1f}" y="{cy - 4:.1f}" width="8" height="8" {style}/>'
+    if shape == "triangle":
+        pts = f"{cx - 4:.1f},{cy - 5:.1f} {cx + 5:.1f},{cy:.1f} {cx - 4:.1f},{cy + 5:.1f}"
+        return f'<polygon points="{pts}" {style}/>'
+    return f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="4" {style}/>'
 
 
 def _cut(text: str, n: int) -> str:

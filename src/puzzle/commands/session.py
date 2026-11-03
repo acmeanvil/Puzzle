@@ -763,6 +763,11 @@ def _execute(project: Project, cmd: _Command) -> dict[str, Any]:
                 "the project has its units already: edit them instead", code="invalid"
             )
         project.add(obj)
+        try:
+            _refuse_wiring(project, obj)
+        except PuzzleError:
+            del project.objects[obj.id]
+            raise
         return {"id": str(obj.id), "name": obj.name}
     if isinstance(cmd, Edit):
         obj = resolve(project, cmd.object)
@@ -772,6 +777,11 @@ def _execute(project: Project, cmd: _Command) -> dict[str, Any]:
         if data.get("id") != str(obj.id):
             raise PuzzleError("an object's id cannot change", code="invalid", path=obj.name)
         project.objects[obj.id] = _validate(type(obj), data, obj.name)
+        try:
+            _refuse_wiring(project, project.objects[obj.id])
+        except PuzzleError:
+            project.objects[obj.id] = obj
+            raise
         return {}
     if isinstance(cmd, Delete):
         obj = resolve(project, cmd.object)
@@ -798,6 +808,17 @@ def _execute(project: Project, cmd: _Command) -> dict[str, Any]:
         copy_ = project.copy_component(comp.id, cmd.name)
         return {"id": str(copy_.id), "name": copy_.name}
     raise PuzzleError(f"{cmd.command} is not applied here", code="unsupported")
+
+
+def _refuse_wiring(project: Project, obj: ProjectObject) -> None:
+    """An operator wired wrongly, or any reference loop (ADR 0062), is refused (the
+    caller puts the object back as it was)."""
+    from puzzle import operators
+
+    if obj.kind == "operator":
+        operators.refuse(project, obj)
+    if obj.dependencies() or obj.kind in ("transfer", "study"):
+        operators.refuse_cycles(project)
 
 
 def resolve(project: Project, ref: str, cls: type[ProjectObject] = ProjectObject):

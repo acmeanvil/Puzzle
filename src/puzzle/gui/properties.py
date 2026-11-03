@@ -171,7 +171,27 @@ def _bolt_type_field(key: str, d) -> bool:
     }.get(key, True)
 
 
+def _is_operator(d) -> bool:
+    return {"inputs", "reduction", "against", "compare"} <= set(d)
+
+
+OPERATOR_SETTINGS = ("inputs", "quantity", "selection", "reduction", "step", "keep",
+                     "compare", "against", "file", "format")  # fmt: skip
+
+
+def _operator_field(key: str, d) -> bool:
+    """An operator (ADR 0062) shows the settings its type reads; its inputs are drawn
+    by the window as dropdowns of what may be wired in."""
+    from puzzle.operators import TYPES
+
+    if key not in OPERATOR_SETTINGS:
+        return True
+    return key != "inputs" and key in TYPES[d["type"]].settings
+
+
 def applies(owner: Any, key: Any) -> bool:
+    if isinstance(owner, dict) and _is_operator(owner):
+        return _operator_field(key, owner)
     if isinstance(owner, dict) and _is_bolt_type(owner):
         return _bolt_type_field(key, owner)
     if isinstance(owner, dict) and key in BUILT and _is_construction(owner):
@@ -208,6 +228,7 @@ def format_value(value: Any) -> str:
 
 
 STEPS = "steps"  # marks a feature's steps row, edited as text
+TYPED = "typed input"  # marks an operator's typed input row (ADR 0062)
 SHOWN = Qt.ItemDataRole.UserRole + 7
 ALL_STEPS = "All steps"
 
@@ -307,6 +328,32 @@ class PropertiesPanel(QTreeWidget):
         group.setExpanded(True)
         return group
 
+    def add_inputs(self, rows) -> QTreeWidgetItem:
+        """An operator's inputs (ADR 0062): each a dropdown of what may be wired in; one
+        that takes a typed value ("200 MPa") has its own row under it while unwired.
+        `rows` are (key, label, [(name, value)], current, typed text or None)."""
+        self._filling = True
+        group = QTreeWidgetItem(self.invisibleRootItem(), ["Inputs", ""])
+        for key, title, options, current, typed in rows:
+            item = QTreeWidgetItem(group, [title, ""])
+            self._dropdown(item, f"inputs.{key}", current, options, self._wired)
+            if typed is not None:
+                row = QTreeWidgetItem(item, ["Typed value", typed])
+                row.setFlags(row.flags() | Qt.ItemFlag.ItemIsEditable)
+                row.setData(1, PATH, (f"inputs.{key}", TYPED))
+                row.setData(1, SHOWN, typed)
+                row.setToolTip(1, "Typed with its unit, e.g. 200 MPa")
+                item.setExpanded(True)
+        group.setExpanded(True)
+        self._filling = False
+        return group
+
+    def _wired(self, box: QComboBox) -> None:
+        value = box.currentData()
+        if self._filling or value == "typed":
+            return
+        self.edited.emit(self.object_id, box.property("path"), value or {})
+
     def _fill(self, parent, node: Any, path: str, names: dict) -> None:
         items = node.items() if isinstance(node, dict) else enumerate(node)
         for key, value in items:
@@ -349,8 +396,9 @@ class PropertiesPanel(QTreeWidget):
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
             item.setData(1, PATH, (sub, value))
 
-    def _dropdown(self, item, path: str, value, options) -> None:
-        """A choice field: readable names shown, the value itself stored."""
+    def _dropdown(self, item, path: str, value, options, on_change=None) -> None:
+        """A choice field: readable names shown, the value itself stored; `on_change`
+        (given the box) in place of an edit at `path`."""
         box = QComboBox()
         box.setProperty("path", path)
         for text, v in options:
@@ -361,6 +409,10 @@ class PropertiesPanel(QTreeWidget):
             index = box.count() - 1
         box.setCurrentIndex(index)
         item.setText(1, "")
+        if on_change is not None:
+            box.currentIndexChanged.connect(lambda _i, b=box: on_change(b))
+            self.setItemWidget(item, 1, box)
+            return
         box.currentIndexChanged.connect(
             lambda _i, b=box: (
                 None
@@ -389,6 +441,18 @@ class PropertiesPanel(QTreeWidget):
         if self._filling or column != 1 or item.data(1, PATH) is None:
             return
         path, old = item.data(1, PATH)
+        if old == TYPED:  # an operator's typed input (ADR 0062)
+            from puzzle.gui.operators import parse_typed
+
+            try:
+                typed = parse_typed(item.text(1))
+            except ValueError:
+                self._filling = True
+                item.setText(1, item.data(1, SHOWN))
+                self._filling = False
+                return
+            self.edited.emit(self.object_id, path, {} if typed is None else {"value": typed})
+            return
         try:
             value = parse_value(item.text(1), old)
         except ValueError:

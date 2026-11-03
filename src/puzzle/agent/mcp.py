@@ -967,6 +967,57 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         }
 
     @tool(
+        description="An operator's value (ADR 0062): its outputs in SI (a number with its "
+        "unit and where a maximum is, a verdict with its margin, a table's rows), what the "
+        "schematic node shows, and how it is wired. Without a name: every operator."
+    )
+    @guarded
+    def operator_value(name: str | None = None) -> dict[str, Any]:
+        return {"operators": _operator_values(session(), name)}
+
+    def _operator_values(s: Session, name: str | None) -> list[dict[str, Any]]:
+        from puzzle.commands import resolve
+        from puzzle.model.schema import Operator
+        from puzzle.operators import describe
+        from puzzle.operators import evaluate as ev
+        from puzzle.project.layout import RESULTS_DIR
+        from puzzle.results.store import ResultStore
+
+        ops = [resolve(s.project, name, Operator)] if name else s.project.of_type(Operator)
+        ctx = ev.Context(s.project, ResultStore(root / RESULTS_DIR))
+        return [ev.summary(ctx, op) | {"wiring": describe(s.project, op)} for op in ops]
+
+    @tool(
+        description="Add an operator (ADR 0062): `type` reduce, filter, check, panel, plot "
+        "or export; `inputs` by port, each {source: a study, derived result, result tool, "
+        "parameter set or operator by name, port: its output} or {value: '200 MPa'}; "
+        "`settings` its own fields (quantity, selection, reduction, step, keep, compare, "
+        "against, file, format). A study's ports: result, or a field (stress). Read the "
+        "skill schematic-operators first. One undoable command; returns its value."
+    )
+    @guarded
+    def operator_add(
+        type: str,  # noqa: A002 - the operator's type, as the schema names it
+        name: str | None = None,
+        inputs: dict[str, Any] | None = None,
+        settings: dict[str, Any] | None = None,
+        rationale: str = "",
+    ) -> dict[str, Any]:
+        from puzzle.operators import TYPES, default_name, inputs_from
+
+        s = session()
+        if type not in TYPES:
+            raise PuzzleError(f"no operator type '{type}'", code="invalid",
+                              details={"types": sorted(TYPES)})  # fmt: skip
+        data = {"name": name or default_name(s.project, type), "type": type,
+                "inputs": inputs_from(s.project, inputs or {}), **(settings or {})}  # fmt: skip
+        out = s.submit({"command": "create", "kind": "operator", "data": data}, actor,
+                       rationale=rationale).to_dict()  # fmt: skip
+        if out.get("status") == "applied":
+            out["value"] = _operator_values(s, data["name"])[0]
+        return out
+
+    @tool(
         description="The project schematic (ADR 0058): every file, resource, component, "
         "study and result as a node (column, state and its reason, ports), and the wires "
         "between them: `data` wires carry values (transfers, imported fields, runs into "

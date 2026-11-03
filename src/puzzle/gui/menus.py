@@ -79,6 +79,8 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
             add("New spherical system…", lambda: new_axes(window, "spherical"))
         elif node.label == "Transfers":
             add("New transfer…", lambda: new_transfer(window))
+        elif node.label == "Operators":  # ADR 0062
+            _operator_menu(window, menu)
         elif node.label == "Imported fields":  # ADR 0044
             from puzzle.gui.field_wizard import import_field
 
@@ -108,6 +110,7 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
             add("New combination…", lambda: window.new_derived("linear"))
             add("New equation…", lambda: window.new_derived("equation"))
             add("New fatigue tool…", lambda: window.new_derived("fatigue"))
+            _operator_menu(window, menu)
     elif node.kind == "project":
         add("New part…", lambda: new_part(window))
         add("New amplitude…", lambda: edit_amplitude(window))
@@ -292,6 +295,16 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
             action.triggered.connect(lambda _=False, k=t: add_step(window, obj, k))
         menu.addSeparator()
         add("Delete", window.delete_selected)
+    elif obj is not None and obj.kind == "operator" and node.kind == "object":
+        from puzzle.gui import operators
+
+        if obj.type == "export":
+            add("Export now", lambda: operators.export_now(window, obj))
+        if obj.type == "plot":
+            add("Show in Plots", lambda: operators.show_plot(window, obj))
+        _operator_menu(window, menu, str(obj.id), "out", "New operator from this")
+        menu.addSeparator()
+        add("Delete", window.delete_selected)
     elif isinstance(obj, Study) and node.kind == "step":
         add("Remove step", lambda: remove(window, obj, node.path))
     elif node.kind == "object":
@@ -321,6 +334,21 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
 
     organise.add_to_menu(window, menu, node)  # Rename, groups (any heading's items)
     return menu if menu.actions() else None
+
+
+def _operator_menu(window, menu, source=None, port="out", title="New operator") -> None:
+    """A submenu of operator types (ADR 0062), wired from `source` when given."""
+    from puzzle.gui import operators
+    from puzzle.operators import TYPES
+
+    sub = QMenu(title, menu)  # parented, so Qt keeps it (as main_menu._sub)
+    sub.setToolTipsVisible(True)
+    menu.addMenu(sub)
+    for t in TYPES.values():
+        action = sub.addAction(t.label)
+        action.setToolTip(t.help)
+        action.triggered.connect(lambda _=False, k=t.key: operators.new_operator(
+            window, k, source, port))  # fmt: skip
 
 
 # --- the commands behind the entries ------------------------------------------------------

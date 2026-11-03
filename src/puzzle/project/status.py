@@ -90,7 +90,38 @@ def status(project: Project, runs=(), running=frozenset(), failed=frozenset()) -
             out[str(d.id)] = State(state, "a study it reads is " + WORDS[state].lower())
         else:
             out[str(d.id)] = State("up_to_date" if state == "up_to_date" else "complete")
+    _operators(project, out)
     return out
+
+
+def _operators(project: Project, out: dict[str, State]) -> None:
+    """Operators (ADR 0062) are as fresh as what they read, through other operators."""
+    from puzzle.model.schema import Operator, ResultProbe
+
+    done: set[str] = set()
+
+    def of(obj, seen=()) -> State | None:
+        key = str(obj.id)
+        if isinstance(obj, ResultProbe):  # a result tool is its source's
+            src = project.objects.get(obj.source)
+            return of(src, seen) if src is not None else None
+        if not isinstance(obj, Operator) or key in done or key in seen:
+            return out.get(key)
+        if out[key].state != "missing":
+            inputs = [of(project.objects[d], (*seen, key)) for d in obj.dependencies()
+                      if d in project.objects]  # fmt: skip
+            state = worst(s for s in inputs if s is not None)
+            if state in ("out_of_date", "not_run", "failed"):
+                out[key] = State(state, "a study it reads is " + WORDS[state].lower())
+            elif state == "missing":
+                out[key] = State(state, "something it reads has a missing input")
+            else:
+                out[key] = State("up_to_date" if state == "up_to_date" else "complete")
+        done.add(key)
+        return out[key]
+
+    for op in project.of_type(Operator):
+        of(op)
 
 
 def _study(study: Study, keys: dict[str, list[str]], runs, running, failed) -> State:

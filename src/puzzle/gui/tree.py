@@ -30,6 +30,7 @@ from puzzle.model.schema import (
     ImportedField,
     Material,
     MeshRecipe,
+    Operator,
     ParameterSet,
     Project,
     ResultDefinition,
@@ -74,6 +75,7 @@ SECTIONS = [
     ("Amplitudes", Amplitude),
     ("Coordinate systems", CoordinateSystem),
     ("Construction geometry", ConstructionGeometry),
+    ("Operators", Operator),  # ADR 0062
     ("Bolt types", BoltType),
     ("Solver presets", SettingsPreset),
 ]
