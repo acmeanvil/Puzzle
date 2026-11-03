@@ -362,14 +362,18 @@ _CACHE: dict[str, Derived] = {}
 _CACHE_SIZE = 16
 
 
-def run_for(project, store, study_id: UUID, point: str | None = None):
-    """The run a case reads: the study's newest (with that sweep point, if given)."""
+def run_for(project, store, study_id: UUID, point: str | None = None,
+            solver: str | None = None):  # fmt: skip
+    """The run a case reads: the study's newest (with that sweep point, and from that
+    solver, if given: a shoot-out's runs are the study's too)."""
     from puzzle.sweep import title
 
     study = project.objects.get(study_id)
     name = study.name if study is not None else str(study_id)
     for r in reversed(store.runs()):  # newest first
         if r.study_id != str(study_id) or r.status != "completed":
+            continue
+        if solver is not None and r.solver != solver:
             continue
         labels = r.point_labels()
         if point is None or (labels and title(labels) == point):
@@ -440,13 +444,10 @@ def source_of(project, store, definition, seen: tuple = ()):
 
 
 def parameters(project) -> dict[str, float]:
-    from puzzle.model.schema import ParameterSet
+    """The project's parameters by name, SI, with Numbers and Sliders (ADR 0062)."""
+    from puzzle.operators import parameter_values
 
-    out = {}
-    for ps in project.of_type(ParameterSet):
-        for name, q in ps.values.items():
-            out.setdefault(name, q.to_si())
-    return out
+    return parameter_values(project)
 
 
 def _equation(project, store, definition, seen) -> Derived:

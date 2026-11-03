@@ -537,6 +537,10 @@ def _results(window, menu: QMenu) -> None:
         _add(sub, t.label, lambda k=t.key: operators.new_operator(window, k), t.help)
     _add(menu, "Find an operator…", lambda: window.open_operator_palette(),
          "Search the operators by name (Tab in the schematic)")  # fmt: skip
+    from puzzle.gui.optimisation_panel import new_optimisation
+
+    _add(menu, "New optimisation…", lambda: new_optimisation(window),
+         "Run a study once per point of a plan: design of experiments, the best point")  # fmt: skip
     menu.addSeparator()
     _add(menu, "Export…", lambda: _export(window),
          "Results for other software: ParaView, point clouds, the deformed shape")  # fmt: skip
@@ -570,6 +574,7 @@ def _window(window, menu: QMenu, agent: QAction, messages: QAction) -> None:
         (window.contacts_dock, "Contacts", "Ctrl+7"),
         (window.versions_dock, "Versions", "Ctrl+8"),
         (window.schematic_dock, "Schematic", "Ctrl+9"),
+        (window.optimisation_dock, "Optimisation", "Ctrl+0"),
     ):
         # Not the dock's own toggle action: Qt renames that with the dock's title
         # (Properties reads "Tool" while a tool is open).
@@ -578,7 +583,10 @@ def _window(window, menu: QMenu, agent: QAction, messages: QAction) -> None:
         action.setChecked(not dock.isHidden())
         action.setShortcut(QKeySequence(keys))
         action.setToolTip(f"Show or hide the {text} panel")
-        action.toggled.connect(dock.setVisible)
+        key = next((k for k, d in window.docks.panels.items() if d is dock), None)
+        action.toggled.connect(
+            lambda on, d=dock, k=key: window.docks.show(k) if on and k else d.setVisible(on)
+        )  # back in its tab
         dock.visibilityChanged.connect(lambda _v, a=action, d=dock: a.setChecked(not d.isHidden()))
         window.actions_by_name[text.lower()] = action
         menu.addAction(action)

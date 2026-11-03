@@ -83,6 +83,10 @@ def _socket(painter: QPainter, shape: str, at: QPointF) -> None:
         painter.drawEllipse(at, 4.5, 4.5)
 
 
+def _fraction(low: float, high: float, value: float) -> float:
+    return min(max((value - low) / (high - low), 0.0), 1.0) if high > low else 0.0
+
+
 def _flow_colour(carries: str) -> QColor:
     return QColor(sch.FLOW_COLOURS[sch.flow_of(carries)]) if carries else QColor("#8a94a3")
 
@@ -148,6 +152,17 @@ class NodeItem(QGraphicsObject):
                 painter.setPen(QColor(colour) if colour else QColor(t.text))
                 text = metrics.elidedText(r.text, Qt.TextElideMode.ElideRight, int(self.w - 20))
                 painter.drawText(band, Qt.AlignmentFlag.AlignVCenter, text)
+            elif r.kind == "slider" and node.slider is not None:  # its knob (ADR 0062)
+                low, high, value = node.slider
+                left, right = 14.0, self.w - 14.0
+                painter.setPen(QPen(QColor(t.border), 3))
+                painter.drawLine(QPointF(left, r.middle), QPointF(right, r.middle))
+                at = left + (right - left) * _fraction(low, high, value)
+                painter.setPen(QPen(QColor(t.accent), 3))
+                painter.drawLine(QPointF(left, r.middle), QPointF(at, r.middle))
+                painter.setPen(QPen(QColor(t.sunken), 1.5))
+                painter.setBrush(QColor(t.accent))
+                painter.drawEllipse(QPointF(at, r.middle), 6, 6)
             elif r.kind in ("subtitle", "badge", "used", "fold", "part"):
                 painter.setFont(small)
                 painter.setPen(QColor(t.muted))
@@ -213,18 +228,43 @@ class NodeItem(QGraphicsObject):
             self.panel.start_wire(self, port)
             event.accept()
             return
+        knob = self.knob_row()
+        if knob is not None and knob.top <= event.pos().y() < knob.top + knob.height:
+            self._sliding = True  # dragging the knob, not the node
+            self.panel.slide(self.node, self.knob_value(event.pos().x()))
+            event.accept()
+            return
         self._pressed_at = self.pos()
         super().mousePressEvent(event)
+
+    def knob_row(self):
+        if self.node.slider is None:
+            return None
+        return next((r for r in rows(self.node, self.unfolded) if r.kind == "slider"), None)
+
+    def knob_value(self, x: float) -> float:
+        """The value under x along the knob's track (SI)."""
+        low, high, _ = self.node.slider
+        left, right = 14.0, self.w - 14.0
+        f = min(max((x - left) / max(right - left, 1.0), 0.0), 1.0)
+        return low + f * (high - low)
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802 - Qt's name
         if self.panel.drawing is not None:
             self.panel.wire_to(event.scenePos())
+            return
+        if getattr(self, "_sliding", False):
+            self.panel.slide(self.node, self.knob_value(event.pos().x()))
             return
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt's name
         if self.panel.drawing is not None:
             self.panel.end_wire(event.scenePos())
+            return
+        if getattr(self, "_sliding", False):
+            self._sliding = False
+            self.panel.slide_done(self.node)
             return
         super().mouseReleaseEvent(event)
         fold = next((r for r in rows(self.node, self.unfolded) if r.kind == "fold"), None)
@@ -251,6 +291,9 @@ class WireItem(QGraphicsPathItem):
             self.setPen(QPen(QColor(sch.wire_colour(wire)), 2.5))
             if wire.label:
                 self.setToolTip(wire.label)
+        elif wire.kind == "drives":  # an optimisation runs its study (ADR 0063)
+            self.setPen(QPen(QColor(_colours().accent), 1.5, Qt.PenStyle.DashLine))
+            self.setToolTip("Runs this study once per point it chooses")
         else:
             self.setPen(QPen(QColor(_colours().muted), 1))
         self.label = None
@@ -773,6 +816,12 @@ class SchematicPanel(QWidget):
         if target.node.kind == "operator":  # ADR 0062: into one of its inputs
             self.wire_operator(item.node, port, target.node, target.input_near(point))
             return
+        if item.node.kind in ("operator", "parameters") and target.node.kind == "geometry":
+            self.drive_geometry(item.node, port, target.node)  # a history argument
+            return
+        if item.node.kind == "operator" and target.node.kind == "study":
+            self.sweep_study(item.node, port, target.node)  # a sweep over it
+            return
         if target.node.kind != "study" or item.node.kind != "study":
             self.window.statusBar().showMessage(
                 "A study's result goes into another study, or any output into an "
@@ -813,6 +862,31 @@ class SchematicPanel(QWidget):
                 f"{op.name} takes no {TYPE_WORDS[given].lower()}", 8000)  # fmt: skip
             return None
         return wire(self.window, str(op.id), chosen.key, oid, port)
+
+    def drive_geometry(self, source: sch.Node, port: str, target: sch.Node):
+        """A number dropped on a geometry: which history argument it drives (one form)."""
+        from puzzle.gui.operators import drive_argument
+
+        return drive_argument(self.window, source, port, target.object)
+
+    def sweep_study(self, source: sch.Node, port: str, target: sch.Node):
+        """An operator's list (or a Number or Slider) dropped on a study: swept over."""
+        from puzzle.gui.operators import sweep_over
+
+        return sweep_over(self.window, source.object, port, target.object)
+
+    def slide(self, node: sch.Node, value: float) -> None:
+        """A slider's knob dragged: the value previewed, never written (item 4)."""
+        self.window.slide(node.object, value)
+        item = self.items.get(node.id)
+        if item is not None:
+            low, high, _ = node.slider
+            node.slider = (low, high, self.window.slider_value(node.object))
+            node.value = self.window.slider_text(node.object)
+            item.update()
+
+    def slide_done(self, node: sch.Node) -> None:
+        self.window.slide_done(node.object)
 
     def palette_source(self) -> tuple[str | None, str]:
         """What the palette wires a new operator from: the selected node's result or

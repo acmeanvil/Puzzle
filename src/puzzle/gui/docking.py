@@ -110,6 +110,7 @@ class Docks:
         self.panels: dict[str, QDockWidget] = {}
         self.builtins: dict[str, tuple[str, Callable[[], None]]] = {}  # key -> (name, apply)
         self.auto: set[str] = set()  # panels that hide into the side bar
+        self.partners: dict[str, str] = {}  # a panel -> the one it shares a tab with
         self.peeking: str | None = None  # an auto-hidden panel shown for now
         self.bars: dict[Qt.DockWidgetArea, QToolBar] = {}
         QApplication.instance().focusChanged.connect(self._focus_moved)
@@ -139,6 +140,7 @@ class Docks:
     def tab(self, first: str, second: str) -> None:
         """`second` in a tab beside `first`, sharing its place."""
         self.window.tabifyDockWidget(self.panels[first], self.panels[second])
+        self.partners[second] = first
 
     def show(self, key: str, front: bool = True) -> None:
         """Open a panel (an auto-hidden one shows over its side), its tab to the front."""
@@ -146,6 +148,17 @@ class Docks:
         if key in self.auto:
             self._peek(key)
             return
+        partner = self.panels.get(self.partners.get(key, ""))
+        if (
+            dock.isHidden()
+            and partner is not None
+            and not partner.isHidden()
+            and not partner.isFloating()
+            and not self.window.tabifiedDockWidgets(dock)
+        ):
+            # A saved layout from before this panel was tabbed: put it back in its tab,
+            # not in a strip of its own squeezing its neighbours.
+            self.window.tabifyDockWidget(partner, dock)  # fmt: skip
         dock.show()
         if front:
             dock.raise_()

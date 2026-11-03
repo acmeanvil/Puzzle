@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from html import escape
 
+from puzzle.operators import TYPE_COLOURS
 from puzzle.project.status import WORDS
 from puzzle.schematic import (
     KIND_WORDS,
@@ -71,6 +72,10 @@ def to_svg(s: Schematic, lay: Layout, uses: str = "all", title: str = "") -> str
         if wire.kind == "use":
             out.append(f'<path d="{path}" fill="none" stroke="{USE}" stroke-width="1"/>')
             continue
+        if wire.kind == "drives":
+            out.append(f'<path d="{path}" fill="none" stroke="{MUTED}" stroke-width="1.5" '
+                       'stroke-dasharray="5 4"/>')  # fmt: skip
+            continue
         colour = wire_colour(wire)
         out.append(f'<path d="{path}" fill="none" stroke="{colour}" stroke-width="2.5"/>')
         if wire.label:
@@ -109,6 +114,15 @@ def _node(node, lay: Layout, dx: float, dy: float) -> list[str]:
             colour = VERDICT_COLOURS.get(r.key, TEXT)
             out.append(f'<text x="{x + 10:.1f}" y="{base:.1f}" fill="{colour}" '
                        f'font-weight="bold">{escape(_cut(r.text, 34))}</text>')  # fmt: skip
+        elif r.kind == "slider" and node.slider is not None:
+            low, high, value = node.slider
+            f = min(max((value - low) / (high - low), 0.0), 1.0) if high > low else 0.0
+            left, right = x + 14, x + w - 14
+            at = left + (right - left) * f
+            out.append(f'<line x1="{left:.1f}" y1="{y + r.middle:.1f}" x2="{right:.1f}" '
+                       f'y2="{y + r.middle:.1f}" stroke="{BORDER}" stroke-width="3"/>'
+                       f'<circle cx="{at:.1f}" cy="{y + r.middle:.1f}" r="5" '
+                       f'fill="{TYPE_COLOURS["number"]}"/>')  # fmt: skip
         elif r.kind in ("subtitle", "badge", "used", "fold", "part"):
             out.append(f'<text x="{x + 10:.1f}" y="{base:.1f}" fill="{MUTED}">'
                        f"{escape(_cut(r.text, 36))}</text>")  # fmt: skip

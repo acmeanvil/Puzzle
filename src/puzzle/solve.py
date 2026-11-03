@@ -89,6 +89,9 @@ def run_study(
     from puzzle.bolts import resolved
 
     project = resolved(project)  # bolts take their types' values (ADR 0050)
+    from puzzle import operators
+
+    project = operators.resolved(project)  # sweeps take their lists' values (ADR 0062)
     from puzzle.suppress import applied
 
     project = applied(project)  # suppressed geometry is left out of meshing and solving

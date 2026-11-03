@@ -1,6 +1,6 @@
 # 0063. Design optimisation and design of experiments: a study that chooses its own points
 
-- Status: Accepted (2026-11-02)
+- Status: Accepted (2026-11-02); phase 1 built (2026-11-03)
 - Date: 2026-11-02
 
 ## Context
@@ -178,3 +178,70 @@ The maintainer's answers:
 4. Shoot-outs for sure: an optimisation of a shoot-out study is a repeated shoot-out
    (item 8).
 5. Robust design comes later, but it is needed to close this ADR (item 11, phase 4).
+
+## Phase 1 built (2026-11-03)
+
+- **The object**: `model.schema.Optimisation` (kind `optimisation`, its own tree
+  section).
+  - `study` is the study it drives.
+  - `variables` are `DesignVariable`s: a parameter by name (a parameter set's value,
+    or a Number or Slider operator, ADR 0062), continuous or integer between `low` and
+    `high`, or a `choice` of quantities.
+  - The objective and `constraints` are `DesignOutput`s: an operator's or a result
+    tool's output by id and port; `sense` for the objective, `lower`/`upper` for a
+    constraint. A Check read as an output gives its margin.
+  - Also `method`, `levels`, `samples`, `seed`, `max_solves`, `max_minutes`, and
+    `reads` (primary or worst, for a shoot-out).
+- **Running** (`puzzle.optimise`):
+  - `plan` makes the design of experiments' points (SI) with
+    `scipy.stats.qmc.LatinHypercube` and `Sobol` (a power-of-two base, cut to size)
+    or a full factorial. They are seeded, so the same every time.
+  - `applied` sets a point on a project copy through `sweep.apply`, which now also
+    sets a Number or Slider swept by name.
+  - `run` solves each point with `run_study(..., _point=(run key, labels))`, so it is
+    stored with its labels and cached by its key, and a resume reuses every stored
+    point. A shoot-out runs every solver per point on one mesh, and the point keeps
+    each solver's outputs (`by_solver`). A failed point is infeasible with its reason
+    and the rest run. `cancel` stops after the running point.
+  - `points` rebuilds the table from the stored runs without solving. The operators
+    read each point's run by its title, and by solver: `Context.solver` and
+    `derived.run_for(..., solver)`. Before this, a shoot-out solver's run could be
+    read as the study's.
+  - Also `best`, `apply_commands` (one batch), `suggestion` and `sensitivities`
+    (Pearson's r per variable and output).
+- **Applied only when asked**:
+  - The Advisor's Optimisation step suggests the best point; its button applies it.
+  - The finished notice says the best point and to use Apply best.
+  - `optimisation_apply` makes a proposal at "propose".
+  - Apply best (panel, menu, CLI `--apply`) saves a version first, then submits one
+    batch: one undo.
+- **GUI**:
+  - New optimisation… (tree section, a study's menu, Results menu) asks everything in
+    one form: variables one a line ("t: 4 mm .. 8 mm", "n: 2 .. 6 integer", "t: 4 mm,
+    6 mm, 8 mm") and constraints by name ("Tip deflection <= 2 mm").
+  - The Optimisation dock (Window → Optimisation, Ctrl+0) has Run, Stop and Apply
+    best; the points table (variables, objective, constraints, feasible or why not,
+    time; the best in bold; a double-click opens a point's run); a plot of the
+    objective or a constraint by point, or the objective against a variable; and the
+    sensitivities.
+- **Schematic**: the node sits right of its study. Inputs are wired from the
+  variables' parameters and from the objective and constraint outputs. A dashed
+  "drives" mark joins it to its study; the upstream and downstream walks skip it, so
+  there is no loop. The node shows the point count and the best value.
+- **Twins**: `puzzle optimise PROJECT NAME [--points] [--budget N] [--apply] [--json]`,
+  MCP `optimisation_run` (at act), `optimisation_points` and `optimisation_apply`, an
+  Optimisation line in the outline, and the skill `design-optimisation`.
+- **Tests**:
+  - `tests/test_optimise.py`: a closed-form stand-in study (δ = 4FL³/(Ewt³)), the grid
+    best found by hand, reuse, failed points, stop and budget, seeded plans in bounds,
+    sensitivities, shoot-out solvers.
+  - `tests/integration/test_optimise_cantilever.py`: CalculiX, t from 4 to 10 mm, every
+    deflection within 3 % of the closed form, 8 mm the best, the second run all
+    reused.
+  - `tests/test_optimise_gui.py`.
+
+Not done in phase 1:
+- The objective's history is not yet a live plot in the Solution panel as points
+  finish: each point's solve progress shows as any run's does, and the table fills
+  when the run ends.
+- No Pareto plot yet (phase 2).

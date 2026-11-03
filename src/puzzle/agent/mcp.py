@@ -499,12 +499,11 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
     @guarded
     def sketch_check(sketch: dict[str, Any]) -> dict[str, Any]:
         from puzzle.geometry.sketch import SketchError, describe, loops, solve
-        from puzzle.model.schema import ParameterSet
 
         s = session()
-        params = {
-            k: q.to_si() for ps in s.project.of_type(ParameterSet) for k, q in ps.values.items()
-        }
+        from puzzle.operators import parameter_values
+
+        params = parameter_values(s.project)
         try:
             solved = solve(sketch, params)
             if solved.status == "ok":
@@ -967,6 +966,84 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         }
 
     @tool(
+        description="An optimisation's points (ADR 0063), from the stored runs, solving "
+        "nothing: each point's variables (SI and as labelled), its runs, objective, "
+        "constraints, feasible or why not; the best feasible point, the suggestion to "
+        "apply it, and each variable's sensitivities (correlation with each output)."
+    )
+    @guarded
+    def optimisation_points(name: str) -> dict[str, Any]:
+        return _optimisation_points(session(), name)
+
+    def _optimisation_points(s: Session, name: str) -> dict[str, Any]:
+        from puzzle import optimise
+        from puzzle.commands import resolve
+        from puzzle.model.schema import Optimisation
+        from puzzle.project.layout import RESULTS_DIR
+        from puzzle.results.store import ResultStore
+
+        opt = resolve(s.project, name, Optimisation)
+        pts = optimise.points(s.project, ResultStore(root / RESULTS_DIR), opt)
+        top = optimise.best(opt, pts)
+        return {"points": [p.to_dict() for p in pts],
+                "best": top.to_dict() if top else None,
+                "suggestion": optimise.suggestion(s.project, opt, pts),
+                "sensitivities": optimise.sensitivities(opt, pts)}  # fmt: skip
+
+    @tool(
+        description="Run an optimisation's points (ADR 0063; needs autonomy 'act', as "
+        "runs do; each point is a stored run, a point run before is reused); `budget` runs "
+        "at most that many points this time. Returns the points as optimisation_points."
+    )
+    @guarded
+    def optimisation_run(name: str, budget: int | None = None) -> dict[str, Any]:
+        from puzzle import optimise
+        from puzzle.commands import resolve
+        from puzzle.model.schema import Optimisation
+        from puzzle.project.layout import RESULTS_DIR, WORK_DIR
+        from puzzle.results.store import ResultStore
+
+        s = session()
+        if s.project.agent.level not in ("act", "act_in_budget"):
+            raise PuzzleError("running an optimisation needs autonomy 'act'",
+                              code="not_allowed")  # fmt: skip
+        opt = resolve(s.project, name, Optimisation)
+        if budget:
+            opt = opt.model_copy(update={"max_solves": budget})
+        store = ResultStore(root / RESULTS_DIR)
+        optimise.run(s.project, opt, root, root / WORK_DIR / "optimise" / str(opt.id),
+                     store=store)  # fmt: skip
+        return _optimisation_points(s, name)
+
+    @tool(
+        description="Put an optimisation's best feasible point (or point `index`) into "
+        "the model's parameters (ADR 0063): one batch, so one undo; a version is saved "
+        "first. At 'propose' it becomes a proposal for the user to accept."
+    )
+    @guarded
+    def optimisation_apply(name: str, index: int | None = None,
+                           rationale: str = "") -> dict[str, Any]:  # fmt: skip
+        from puzzle import optimise
+        from puzzle.commands import resolve
+        from puzzle.model.schema import Optimisation
+        from puzzle.project.layout import RESULTS_DIR
+        from puzzle.results.store import ResultStore
+
+        s = session()
+        opt = resolve(s.project, name, Optimisation)
+        pts = optimise.points(s.project, ResultStore(root / RESULTS_DIR), opt)
+        pick = optimise.best(opt, pts) if index is None else next(
+            (p for p in pts if p.index == index), None)  # fmt: skip
+        if pick is None or not pick.run:
+            raise PuzzleError("no such point run yet", code="not_found")
+        commands = optimise.apply_commands(s.project, opt, pick)
+        if s.project.agent.level in ("act", "act_in_budget"):
+            s.save_version(actor, label=f"Before {opt.name}'s point {pick.index}")
+        return s.submit_batch(
+            commands, actor, rationale=rationale or f"{opt.name}: point {pick.index}, {pick.title}"
+        ).to_dict()
+
+    @tool(
         description="An operator's value (ADR 0062): its outputs in SI (a number with its "
         "unit and where a maximum is, a verdict with its margin, a table's rows), what the "
         "schematic node shows, and how it is wired. Without a name: every operator."
@@ -988,12 +1065,16 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         return [ev.summary(ctx, op) | {"wiring": describe(s.project, op)} for op in ops]
 
     @tool(
-        description="Add an operator (ADR 0062): `type` reduce, filter, check, panel, plot "
-        "or export; `inputs` by port, each {source: a study, derived result, result tool, "
-        "parameter set or operator by name, port: its output} or {value: '200 MPa'}; "
-        "`settings` its own fields (quantity, selection, reduction, step, keep, compare, "
-        "against, file, format). A study's ports: result, or a field (stress). Read the "
-        "skill schematic-operators first. One undoable command; returns its value."
+        description="Add an operator (ADR 0062): `type` reduce, filter, check, panel, plot, "
+        "export (after solving) or number, slider, series, range, expression, table, list, "
+        "pairs (data, before solving: Numbers, Sliders and Expressions then act as "
+        "parameters by their name); `inputs` by port, each {source: a study, derived "
+        "result, result tool, parameter set or operator by name, port: its output} or "
+        "{value: '200 MPa'}; `settings` its own fields (quantity, selection, reduction, "
+        "step, keep, compare, against, file, format, low, high, increment, expression, "
+        "text, operation, column, combination). A study's ports: result, or a field "
+        "(stress). Read the skill schematic-operators first. One undoable command; "
+        "returns its value."
     )
     @guarded
     def operator_add(

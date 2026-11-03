@@ -348,6 +348,22 @@ class PropertiesPanel(QTreeWidget):
         self._filling = False
         return group
 
+    def add_slider(self, low: float, high: float, value: float, moved, released):
+        """A slider's track (ADR 0062): dragging calls `moved(SI value)`, letting go
+        `released()`."""
+        from PySide6.QtWidgets import QSlider
+
+        item = QTreeWidgetItem(self.invisibleRootItem(), ["Drag", ""])
+        bar = QSlider(Qt.Orientation.Horizontal)
+        bar.setRange(0, 1000)
+        span = high - low if high > low else 1.0
+        bar.setValue(int(round(1000 * min(max((value - low) / span, 0.0), 1.0))))
+        bar.valueChanged.connect(lambda n: moved(low + span * n / 1000))
+        bar.sliderReleased.connect(released)
+        self.setItemWidget(item, 1, bar)
+        self.slider = bar
+        return bar
+
     def _wired(self, box: QComboBox) -> None:
         value = box.currentData()
         if self._filling or value == "typed":

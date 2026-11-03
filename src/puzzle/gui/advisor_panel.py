@@ -146,6 +146,10 @@ class AdvisorPanel(QWidget):
             comp = comps[0] if comps else None
         if study is None and comp is not None:
             study = next((s for s in project.of_type(Study) if s.component == comp.id), None)
+        if action.startswith("apply_best:"):  # ADR 0063: only when asked
+            from puzzle.gui.optimisation_panel import apply_best
+
+            return apply_best(w, action.split(":", 1)[1])
         if action == "import_geometry":
             return menus.import_step_file(w)
         if action == "pick":

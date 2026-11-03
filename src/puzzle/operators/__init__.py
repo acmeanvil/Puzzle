@@ -132,8 +132,81 @@ TYPES: dict[str, OperatorType] = {
             (),
             ("file", "format"),
         ),
+        # Data operators (phase 2): they compute before a solve.
+        OperatorType(
+            "number", "Number", "Data",
+            "A value with its unit, typed in: a parameter by this operator's name.",
+            (PortSpec("value", "Value", ("number",), typed="number"),),
+            (PortSpec("out", "Value", ("number",)),),
+            (),
+        ),
+        OperatorType(
+            "slider", "Slider", "Data",
+            "A value dragged between a low and a high, in steps: a parameter by this "
+            "operator's name. Dragging previews the geometry it drives; it never solves.",
+            (PortSpec("value", "Value", ("number",), required=False, typed="number"),),
+            (PortSpec("out", "Value", ("number",)),),
+            ("low", "high", "increment"),
+        ),
+        OperatorType(
+            "series", "Series", "Data",
+            "A list from a start, a step and a count: 2, 4, 6, 8.",
+            (PortSpec("start", "Start", ("number",), typed="number"),
+             PortSpec("step", "Step", ("number",), typed="number"),
+             PortSpec("count", "Count", ("number",), typed="number")),
+            (PortSpec("out", "List", ("list",)),),
+            (),
+        ),
+        OperatorType(
+            "range", "Range", "Data",
+            "A list of evenly spaced values from a start to an end, both included.",
+            (PortSpec("start", "Start", ("number",), typed="number"),
+             PortSpec("end", "End", ("number",), typed="number"),
+             PortSpec("count", "Count", ("number",), typed="number")),
+            (PortSpec("out", "List", ("list",)),),
+            (),
+        ),
+        OperatorType(
+            "expression", "Expression", "Data",
+            "A formula over x, y, z and the project's parameters, with units checked "
+            "(2 * x + 5 mm). A list in gives a list out, item by item.",
+            (PortSpec("x", "x", ("number", "list"), required=False, typed="number"),
+             PortSpec("y", "y", ("number", "list"), required=False, typed="number"),
+             PortSpec("z", "z", ("number", "list"), required=False, typed="number")),
+            (PortSpec("out", "Value", ("number",)),),
+            ("expression",),
+        ),
+        OperatorType(
+            "table", "Table", "Data",
+            "Named columns with units, typed in or read from a CSV (the table keeps the "
+            "rows, so they are hashed and versioned with the project).",
+            (),
+            (PortSpec("out", "Table", ("table",)),),
+            ("text",),
+        ),
+        OperatorType(
+            "list", "List", "Data",
+            "One list made from another: an item, a slice, sorted, reversed, its length, a "
+            "table's column, the sum, the smallest or largest.",
+            (PortSpec("list", "List", ("list", "table")),
+             PortSpec("index", "Index", ("number",), required=False, typed="number"),
+             PortSpec("end", "End", ("number",), required=False, typed="number")),
+            (PortSpec("out", "List", ("list",)), PortSpec("first", "First", ("number",))),
+            ("operation", "column"),
+        ),
+        OperatorType(
+            "pairs", "Pairs", "Data",
+            "Two lists into a table: item by item, or every combination.",
+            (PortSpec("a", "A", ("list",)), PortSpec("b", "B", ("list",))),
+            (PortSpec("out", "Table", ("table",)),),
+            ("combination",),
+        ),
     )
 }  # fmt: skip
+# Types that compute from data, before a solve: pre-solve when nothing they read is a
+# result (ADR 0062 item 3), and then parameters by their name.
+DATA = frozenset({"number", "slider", "series", "range", "expression", "table", "list",
+                  "pairs"})  # fmt: skip
 
 
 def accepts(spec: PortSpec, given: str) -> bool:
@@ -243,6 +316,14 @@ def refuse(project, op) -> None:
                     f"{spec_of.label} '{op.name}': its {spec.label.lower()} input takes "
                     f"{_types(spec.types)}, not a {TYPE_WORDS[given].lower()}",
                     code="invalid", path=op.name)  # fmt: skip
+            if op.type in DATA and not is_pre(project, op):
+                uses = [u for o in (op, *(project.objects[d] for d in downstream(project, op.id)))
+                        for u in model_uses(project, o)]  # fmt: skip
+                if uses:
+                    raise PuzzleError(
+                        f"'{op.name}' feeds the model ({uses[0]}), so it can't read results: "
+                        "a loop from results back into the model is an optimisation "
+                        "(ADR 0063)", code="inconsistent", path=op.name)  # fmt: skip
         elif inp.value is not None and not spec.typed:
             raise PuzzleError(
                 f"{spec_of.label} '{op.name}': its {spec.label.lower()} input must be wired",
@@ -330,6 +411,27 @@ def describe(project, op) -> str:
         from puzzle.operators.evaluate import export_path
 
         bits.append(f"to {export_path(op)} ({op.format})")
+    elif op.type == "slider":
+
+        def q(v):
+            return f"{v.value:g} {v.unit}".removesuffix(" dimensionless") if v else "?"
+
+        bits.append(f"from {q(op.low)} to {q(op.high)}"
+                    + (f" in steps of {q(op.increment)}" if op.increment else ""))  # fmt: skip
+    elif op.type == "expression":
+        bits.append(repr(op.expression))
+    elif op.type == "table":
+        rows = [r for r in op.text.strip().splitlines() if r.strip()]
+        bits.append(f"{max(len(rows) - 1, 0)} rows: {rows[0] if rows else 'empty'}")
+    elif op.type == "list":
+        bits.append(op.operation + (f" of column {op.column}" if op.column else ""))
+    elif op.type == "pairs":
+        bits.append(op.combination)
+    if op.type in DATA:
+        bits.append("(before solving)" if is_pre(project, op) else "(after solving)")
+        uses = model_uses(project, op)
+        if uses:
+            bits.append("drives " + ", ".join(uses))
     wired = []
     for spec in t.inputs:
         inp = op.inputs.get(spec.key)
@@ -368,4 +470,125 @@ def inputs_from(project, given: dict) -> dict:
             with contextlib.suppress(ValueError):  # else a text
                 inp["value"] = {"value": float(number), "unit": unit.strip() or "dimensionless"}
         out[key] = inp
+    return out
+
+
+def is_pre(project, op, seen=()) -> bool:
+    """A data operator that reads no results, directly or through others: it computes
+    before a solve, and its value goes into the studies' content hashes."""
+    from puzzle.model.schema import Operator, ParameterSet
+
+    if op.type not in DATA or op.id in seen:
+        return op.type in DATA
+    for inp in op.inputs.values():
+        if inp.source is None:
+            continue
+        src = project.objects.get(inp.source)
+        if isinstance(src, ParameterSet):
+            continue
+        if not isinstance(src, Operator) or not is_pre(project, src, (*seen, op.id)):
+            return False
+    return True
+
+
+def pre_solve(project) -> list:
+    """The operators that compute before a solve."""
+    from puzzle.model.schema import Operator
+
+    return [o for o in project.of_type(Operator) if is_pre(project, o)]
+
+
+def parameter_values(project, overrides: dict | None = None) -> dict[str, float]:
+    """Every parameter by name, SI: the parameter sets' values, then each pre-solve
+    number operator's (Number, Slider, a number Expression) by the operator's name.
+    `overrides` (operator id -> SI value) are a slider being dragged (the preview's)."""
+    from puzzle.model.schema import ParameterSet
+
+    out = {k: q.to_si() for ps in project.of_type(ParameterSet) for k, q in ps.values.items()}
+    numbers = [o for o in pre_solve(project) if TYPES[o.type].outputs
+               and TYPES[o.type].outputs[0].type == "number"]  # fmt: skip
+    if not numbers:
+        return out
+    from puzzle.operators import evaluate as ev
+
+    ctx = ev.Context(project, None, overrides=dict(overrides or {}))
+    for op in numbers:
+        try:
+            got = ev.value(ctx, op)
+        except PuzzleError:
+            continue  # an operator in error: its problem says why
+        if isinstance(got, ev.Number):
+            out.setdefault(op.name, got.value)
+    return out
+
+
+def resolved(project):
+    """The project with every sweep parameter that takes its values from an operator
+    given them (as SI quantities), for counting and running the points. The project
+    passed in is never changed."""
+    from puzzle.model.schema import Quantity, Study
+
+    wired = [(s, i, j) for s in project.of_type(Study) for i, step in enumerate(s.sweeps())
+             for j, p in enumerate(step.parameters) if p.source is not None]  # fmt: skip
+    if not wired:
+        return project
+    import copy
+
+    from puzzle.model.units import DIMENSIONS
+    from puzzle.operators import evaluate as ev
+
+    out = copy.deepcopy(project)
+    ctx = ev.Context(out, None)
+    for study, i, j in wired:
+        param = out.objects[study.id].sweeps()[i].parameters[j]
+        try:
+            got = ev.source(ctx, param.source, param.port)
+        except PuzzleError:
+            continue  # no points: the problem says why
+        values = ev.as_list(got)
+        unit = DIMENSIONS[values.kind][1] if values.kind in DIMENSIONS else "dimensionless"
+        param.values = [Quantity(value=float(v), unit=unit) for v in values.values]
+    return out
+
+
+def model_uses(project, op) -> list[str]:
+    """Where the model reads an operator, in words: history arguments naming it, sweeps
+    over it or taking their values from it."""
+    from puzzle.model.schema import Geometry, Study
+
+    found = []
+    for g in project.of_type(Geometry):
+        for step in g.history:
+            for key, value in step.args.items():
+                if value == op.name:
+                    found.append(f"{g.name}: {step.name} {key}")
+    for s in project.of_type(Study):
+        for step in s.sweeps():
+            for p in step.parameters:
+                if p.source == op.id or (p.source is None and p.name == op.name):
+                    found.append(f"study {s.name}'s sweep")
+    return found
+
+
+def with_values(project, overrides: dict):
+    """A copy of the project with Numbers' and Sliders' values set (operator id -> SI),
+    for previewing a slider while it is dragged; the project passed in is unchanged."""
+    import copy
+
+    from puzzle.model.schema import OperatorInput, Quantity
+    from puzzle.model.units import DIMENSIONS
+
+    out = copy.deepcopy(project)
+    for oid, value in overrides.items():
+        op = out.objects.get(oid)
+        if op is None or op.type not in ("number", "slider"):
+            continue
+        from puzzle.operators import evaluate as ev
+
+        try:
+            kind = ev.value(ev.Context(project, None), project.objects[oid]).kind
+        except PuzzleError:
+            kind = None
+        unit = DIMENSIONS[kind][1] if kind in DIMENSIONS else "dimensionless"
+        op.inputs["value"] = OperatorInput(value=Quantity(value=float(value), unit=unit))
     return out

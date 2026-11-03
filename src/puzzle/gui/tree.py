@@ -31,6 +31,7 @@ from puzzle.model.schema import (
     Material,
     MeshRecipe,
     Operator,
+    Optimisation,
     ParameterSet,
     Project,
     ResultDefinition,
@@ -76,6 +77,7 @@ SECTIONS = [
     ("Coordinate systems", CoordinateSystem),
     ("Construction geometry", ConstructionGeometry),
     ("Operators", Operator),  # ADR 0062
+    ("Optimisations", Optimisation),  # ADR 0063
     ("Bolt types", BoltType),
     ("Solver presets", SettingsPreset),
 ]

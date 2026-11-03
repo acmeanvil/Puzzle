@@ -58,6 +58,8 @@ def rows(node: Node, unfolded: bool = False) -> list[Row]:
         put("badge", "", node.badge)
     if node.value:  # an operator's value (ADR 0062)
         put("value", node.verdict, node.value)
+    if node.slider is not None:  # its knob, dragged along the row
+        put("slider", "", "")
     for chip in node.chips:
         put("chip", chip, chip)
     for p in node.outputs():  # outputs first, as Blender lists them

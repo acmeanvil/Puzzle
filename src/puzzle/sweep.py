@@ -36,6 +36,13 @@ def apply(project: Project, study: Study, point: dict) -> Project:
                 a.material = material.id
         else:
             sets = [ps for ps in p.of_type(ParameterSet) if key in ps.values]
+            from puzzle.model.schema import Operator, OperatorInput
+
+            slider = [o for o in p.of_type(Operator) if o.name == key
+                      and o.type in ("number", "slider")]  # fmt: skip
+            if not sets and slider:  # a Number or Slider swept by name (ADR 0062)
+                slider[0].inputs["value"] = OperatorInput(value=value)
+                continue
             if not sets:
                 raise PuzzleError(
                     f"study '{study.name}' sweeps unknown parameter '{key}'", code="inconsistent"

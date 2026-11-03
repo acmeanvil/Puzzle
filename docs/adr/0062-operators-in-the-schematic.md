@@ -1,6 +1,6 @@
 # 0062. Operators in the schematic: data, geometry, Python and result nodes, as Grasshopper's
 
-- Status: Accepted (2026-11-02); phase 1 built (2026-11-03)
+- Status: Accepted (2026-11-02); phases 1 and 2 built (2026-11-03)
 - Date: 2026-11-02
 
 ## Context
@@ -231,3 +231,56 @@ Not done in phase 1:
 - Selecting a Filter does not yet preview its field in the 3D view.
 - The ASME checks of a linearization (ADR 0042) are not offered as a Check.
 - The Expression operator comes with the data operators in phase 2.
+
+## Phase 2 built (2026-11-03)
+
+- **Data operators**: Number, Slider (`low`, `high`, `increment`: snapped and held in
+  range), Series and Range (lists), Expression, Table, List and Pairs.
+  - Expression is the ADR 0025 language over pint quantities
+    (`operators/expression.py`). "5 mm" after a number, or units as names; a sum or
+    comparison of unlike units is refused. Its names are x, y and z (its inputs) and
+    the parameter sets' parameters. Other operators come in by wire, never by name, so
+    every dependency is a wire.
+  - Table keeps its rows as CSV `text` ("Read a CSV…" copies a file in), so they are
+    hashed and versioned with the project.
+  - List does item, slice, sort, reverse, length, column, sum, min and max. Pairs zips
+    (the shorter list repeats its last item) or crosses two lists into a table.
+- **Pre-solve**: a data operator that reads nothing but parameter sets and other such
+  operators (`operators.is_pre`) computes before a solve. Every study reads them, as it
+  reads the parameter sets (`project/graph._inputs`), so changing a slider stales its
+  studies; a post-solve operator never does. `operators.parameter_values(project,
+  overrides)` returns every parameter by name: the parameter sets', then each
+  pre-solve number operator's. It replaces the six copies of the parameter-set
+  dictionary (geometry regeneration, naming and meshing, the workbench, the step
+  dialog, the sketch check, derived equations).
+- **Driving the model**:
+  - A history argument names the operator, as it names a parameter: wiring writes that
+    name. The geometry stays one node, with an input port per driven argument.
+  - A sweep parameter may take its values from a list operator (`SweepParameter.source`
+    and `port`). `operators.resolved(project)` fills the values in for counting and
+    running (`run_hashes`, `run_study`, the schematic badge, the outline, Compare), and
+    each point is an ordinary stored run.
+  - A Number or Slider can be swept by name: `sweep.apply` sets its value.
+  - An operator that reads results is refused when it feeds the model (code
+    `inconsistent`): loops are ADR 0063's.
+- **Schematic and GUI**:
+  - Pre-solve operators sit in the Resources column, beside the parameter sets.
+  - Wires from operators and parameters run into the geometry arguments and sweeps they
+    drive.
+  - A slider node has a knob. Dragging it, or the slider in Properties, previews the
+    geometry it drives through `MainWindow.slider_overrides` (`operators.with_values`
+    on the preview's copy) and never solves. Letting go writes one undoable Edit, in
+    the unit shown.
+  - Selecting a Number or Slider shows the geometry it drives.
+  - A wire dropped on a geometry asks which argument it drives. A list dropped on a
+    study asks which parameter it sweeps.
+- **Twins**: `operator_add` takes every type; the outline says what each data operator
+  drives and whether it runs before or after solving; the skill `schematic-operators`
+  covers both. Tests: `tests/test_data_operators.py` (values by hand, units, hashes,
+  sweeps, a slider driving an OCCT box's width) and `tests/test_data_operators_gui.py`.
+
+Not done in phase 2:
+- Renaming an operator doesn't rename the history arguments that name it (as with
+  parameters today).
+- A list's points don't yet feed a sketch's dimensions (phase 3, with geometry from
+  data).

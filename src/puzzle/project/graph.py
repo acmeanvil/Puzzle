@@ -20,8 +20,12 @@ def _inputs(project: Project, obj: ProjectObject) -> list[UUID]:
     deps = list(obj.dependencies())
     if isinstance(obj, Study):
         deps += [t.id for t in project.transfers_into(obj.id)]
-        # Parameters are global: every study reads all parameter sets.
+        # Parameters are global: every study reads all parameter sets, and every operator
+        # computing before a solve (ADR 0062: a Number, a Slider, an Expression).
         deps += [p.id for p in project.of_type(ParameterSet)]
+        from puzzle.operators import pre_solve
+
+        deps += [o.id for o in pre_solve(project) if o.id not in deps]
     return deps
 
 
@@ -101,6 +105,9 @@ def run_hashes(project: Project) -> dict[UUID, dict[str, list[str]]]:
     point. So a point already computed is a cache hit when other points are added,
     and a shoot-out solver's runs survive a change of primary solver.
     """
+    from puzzle.operators import resolved
+
+    project = resolved(project)  # sweeps over a list: its values are the points
     hashes = content_hashes(project)
     runs: dict[UUID, dict[str, list[str]]] = {}
     for study in project.of_type(Study):

@@ -358,6 +358,7 @@ class MainWindow(QMainWindow):
         self.tasks: list[Task] = []  # keep running tasks alive
         # A tool's pending history (geometry id, steps as dicts): previewed, not saved.
         self.pending: tuple | None = None
+        self.slider_overrides: dict = {}  # a slider being dragged: operator id -> SI value
 
         self.tree = ModelTree()
         self.properties = PropertiesPanel()
@@ -511,6 +512,16 @@ class MainWindow(QMainWindow):
             lambda shown: shown and self.versions.refresh()
         )
         self.versions_dock.hide()  # Window → Versions, or Project → Versions…
+        from puzzle.gui.optimisation_panel import OptimisationPanel  # ADR 0063
+
+        self.optimisation = OptimisationPanel(self)
+        self.optimisation_dock = self.docks.add(
+            "optimisation", "Optimisation", self.optimisation,
+            Qt.DockWidgetArea.BottomDockWidgetArea)  # fmt: skip
+        self.docks.tab("messages", "optimisation")
+        self.optimisation_dock.visibilityChanged.connect(
+            lambda shown: shown and self.optimisation.refresh())  # fmt: skip
+        self.optimisation_dock.hide()  # Window → Optimisation, or an optimisation's menu
         self.schematic_panel = SchematicPanel(self)  # beside the 3D view (ADR 0058)
         self.schematic_dock = self.docks.add(
             "schematic", "Schematic", self.schematic_panel, Qt.DockWidgetArea.BottomDockWidgetArea
@@ -647,6 +658,8 @@ class MainWindow(QMainWindow):
         self.contacts.refresh()
         if self.versions_dock.isVisible():
             self.versions.refresh()
+        if not self.optimisation_dock.isHidden():
+            self.optimisation.refresh()
         self.agent.refresh()
         waiting = self.agent.proposals.count()
         if waiting > self._proposals_seen:  # a new proposal: open the agent, no focus
@@ -771,6 +784,11 @@ class MainWindow(QMainWindow):
                 if (w.code, w.object) not in seen:
                     out.append(w)
         return out
+
+    def show_optimisation(self, opt_id: str) -> None:
+        """The Optimisation panel on one optimisation's points (ADR 0063)."""
+        self.docks.show("optimisation")
+        self.optimisation.show(opt_id)
 
     def open_operator_palette(self, at=None):
         """Find an operator by name and make it (ADR 0062), wired from the schematic's
@@ -1446,6 +1464,7 @@ class MainWindow(QMainWindow):
 
             operators.show(self, obj)
             self.set_context("model")
+            self._show_driven(obj)  # a Number or Slider: the geometry it drives
             return
         from puzzle.gui import field_view
 
@@ -2490,13 +2509,9 @@ class MainWindow(QMainWindow):
     def edit_step(self, kind: str, args: dict, name: str, features: list[str]):
         """The step dialog: (name, args) when accepted, else None."""
         from puzzle.gui.step_dialog import StepDialog
-        from puzzle.model.schema import ParameterSet
+        from puzzle.operators import parameter_values
 
-        params = {
-            k: q.to_si()
-            for ps in self.session.project.of_type(ParameterSet)
-            for k, q in ps.values.items()
-        }
+        params = parameter_values(self.session.project)
         from puzzle.model.schema import Geometry
 
         parts = [(g.name, str(g.id)) for g in self.session.project.of_type(Geometry)]
@@ -2534,9 +2549,10 @@ class MainWindow(QMainWindow):
             )
         # In the study's own order (its sweep's points), not by run time: points run
         # in the same second may come back in either order.
+        from puzzle.operators import resolved
         from puzzle.sweep import labels
 
-        study = self.session.project.objects.get(_uuid(study_id))
+        study = resolved(self.session.project).objects.get(_uuid(study_id))
         order = []
         if isinstance(study, Study):
             order = [title(labels(self.session.project, p)) for p in study.sweep_points()]
@@ -2576,6 +2592,77 @@ class MainWindow(QMainWindow):
         """Where to save a file (tests replace this)."""
         chosen, _ = QFileDialog.getSaveFileName(self, title, default, filters)
         return chosen or None
+
+    def ask_open_path(self, title: str, filters: str) -> str | None:
+        """A file to read (tests replace this)."""
+        chosen, _ = QFileDialog.getOpenFileName(self, title, str(self.session.root), filters)
+        return chosen or None
+
+    # --- sliders (ADR 0062 item 4): dragged values preview, never solve -------------
+
+    def slide(self, op_id: str, value: float) -> None:
+        """A slider dragged to `value` (SI): the geometry it drives previewed with it;
+        nothing is written until it is let go (`slide_done`)."""
+        from uuid import UUID
+
+        oid = UUID(op_id)
+        self.slider_overrides = {oid: value}
+        self.slider_overrides = {oid: self.slider_value(op_id)}  # snapped and held in range
+        op = self.session.project.objects.get(oid)
+        if op is not None:
+            self._show_driven(op)
+
+    def slider_value(self, op_id: str) -> float:
+        from uuid import UUID
+
+        from puzzle.operators import evaluate as ev
+
+        op = self.session.project.objects[UUID(op_id)]
+        ctx = ev.Context(self.session.project, None, overrides=dict(self.slider_overrides))
+        return ev.value(ctx, op).value
+
+    def slider_text(self, op_id: str) -> str:
+        from uuid import UUID
+
+        from puzzle.operators import evaluate as ev
+
+        op = self.session.project.objects[UUID(op_id)]
+        ctx = ev.Context(self.session.project, None, overrides=dict(self.slider_overrides))
+        return ev.value(ctx, op).text()
+
+    def slide_done(self, op_id: str):
+        """The slider let go: its value written as one command (in the display unit)."""
+        from uuid import UUID
+
+        from puzzle.model.units import DIMENSIONS, shown
+        from puzzle.operators import evaluate as ev
+        from puzzle.settings import current
+
+        oid = UUID(op_id)
+        if oid not in self.slider_overrides:
+            return None
+        op = self.session.project.objects[oid]
+        ctx = ev.Context(self.session.project, None, overrides=dict(self.slider_overrides))
+        got = ev.value(ctx, op)
+        self.slider_overrides = {}
+        si = DIMENSIONS[got.kind][1] if got.kind else "dimensionless"
+        v, unit = shown(got.value, si, current().display_units()) if got.kind else (
+            got.value, si)  # fmt: skip
+        typed = {"value": {"value": float(f"{v:.10g}"), "unit": unit}}
+        return self.submit(Edit(object=op_id, ops=[EditOp(op="set", path="inputs.value",
+                                                          value=typed)]))  # fmt: skip
+
+    def _show_driven(self, op) -> None:
+        """The first component an operator drives, previewed in the 3D view."""
+        from puzzle.gui.operators import driven_components
+
+        comps = driven_components(self.session.project, op)
+        if not comps:
+            return
+        mesh = self._preview(comps[0])
+        if mesh is not None:
+            self.mesh_component = str(comps[0].id)
+            self.viewport.show_mesh(mesh, None, [])
 
     def ask_text(self, title: str, label: str, default: str = "") -> str | None:
         text, ok = QInputDialog.getText(self, title, label, text=default)
@@ -2755,6 +2842,10 @@ class MainWindow(QMainWindow):
 
         s = self.session
         project = copy.deepcopy(s.project)
+        if self.slider_overrides:  # a slider being dragged (ADR 0062): its value only
+            from puzzle.operators import with_values
+
+            project = with_values(project, self.slider_overrides)
         if self.pending is not None:  # a tool's step, previewed before it is applied
             from puzzle.model.schema import HistoryStep
 
@@ -2795,8 +2886,6 @@ class MainWindow(QMainWindow):
         import hashlib
         import json
 
-        from puzzle.model.schema import ParameterSet
-
         project = self.session.project
         parts = [p.model_dump(mode="json") for p in comp.parts]
         shapes = []
@@ -2807,7 +2896,9 @@ class MainWindow(QMainWindow):
                 shown = {"selections", "name", "hidden", "suppressed"}
                 shapes.append(geo.model_dump(mode="json", exclude=shown))
                 shapes.append(self._files_stamp(geo))  # a file replaced outside Puzzle
-        params = [ps.model_dump(mode="json") for ps in project.of_type(ParameterSet)]
+        from puzzle.operators import parameter_values
+
+        params = sorted(parameter_values(project, self.slider_overrides).items())
         pending = None
         if self.pending is not None and any(p.geometry == self.pending[0] for p in comp.parts):
             pending = [str(self.pending[0]), self.pending[1]]

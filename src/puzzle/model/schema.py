@@ -1519,12 +1519,19 @@ class SweepParameter(BaseModel):
         default=None, description="A material assignment's selection: this is a material choice"
     )
     materials: list[UUID] = Field(default_factory=list)
+    source: UUID | None = Field(
+        default=None, description="an operator whose list gives the values (ADR 0062), in "
+        "place of listing them")  # fmt: skip
+    port: str = Field(default="out", description="the operator's output it reads")
 
     @model_validator(mode="after")
     def _values_or_materials(self) -> SweepParameter:
         if self.location is not None:
-            if not self.materials or self.values:
+            if not self.materials or self.values or self.source:
                 raise ValueError("a material choice lists materials (and no values)")
+        elif self.source is not None:
+            if self.materials:
+                raise ValueError("a swept parameter takes its values from its operator")
         elif not self.values or self.materials:
             raise ValueError("a swept parameter lists values (and no materials)")
         return self
@@ -1554,7 +1561,9 @@ class SweepStep(BaseModel):
 
     @model_validator(mode="after")
     def _paired_choice_lengths_match(self) -> SweepStep:
-        if self.combination == "paired" and len({len(p.choices()) for p in self.parameters}) > 1:
+        unresolved = any(p.source is not None and not p.values for p in self.parameters)
+        lengths = {len(p.choices()) for p in self.parameters}
+        if self.combination == "paired" and not unresolved and len(lengths) > 1:
             raise ValueError("paired sweep parameters need the same number of values")
         return self
 
@@ -1612,7 +1621,8 @@ class Study(ProjectObject):
         return [self.solver, *(self.shootout.solvers if self.shootout else [])]
 
     def dependencies(self) -> list[UUID]:
-        return [self.component]
+        wired = [p.source for s in self.sweeps() for p in s.parameters if p.source]
+        return [self.component, *dict.fromkeys(wired)]
 
     def sweeps(self) -> list[SweepStep]:
         return [s for s in self.steps if isinstance(s, SweepStep)]
@@ -1967,12 +1977,19 @@ class Operator(ProjectObject):
     - `plot`: a number against the steps or a sweep's points, as a table;
     - `export`: any output to a file in the project (`file`; CSV, or a result format).
 
+    Data operators (phase 2) compute before a solve, and those that read no results act
+    as parameters by their name (`operators.parameter_values`): `number`, `slider`
+    (`low`, `high`, `increment`), `series` and `range` (lists), `expression` (units
+    checked), `table` (its rows as CSV `text`), `list` (`operation`) and `pairs`
+    (zip or cross two lists into a table).
+
     Which inputs and settings each type takes is `puzzle.operators.TYPES`.
     """
 
     kind: ClassVar[str] = "operator"
 
-    type: Literal["reduce", "filter", "check", "panel", "plot", "export"]
+    type: Literal["reduce", "filter", "check", "panel", "plot", "export", "number", "slider",
+                  "series", "range", "expression", "table", "list", "pairs"]  # fmt: skip
     inputs: dict[str, OperatorInput] = Field(default_factory=dict)
     quantity: str | None = Field(
         default=None, description='reduce, filter: a listed result\'s key, e.g. '
@@ -1995,6 +2012,24 @@ class Operator(ProjectObject):
     format: str = Field(
         default="csv", description="export: csv, or a result export format (ADR 0043)"
     )
+    # Data operators (phase 2)
+    low: Quantity | None = Field(default=None, description="slider: its lowest value")
+    high: Quantity | None = Field(default=None, description="slider: its highest value")
+    increment: Quantity | None = Field(
+        default=None, description="slider: the step it moves in; none: smooth"
+    )
+    expression: str = Field(
+        default="", description="expression: over x, y, z and the project's parameters, "
+        "units checked, e.g. 2 * x + 5 mm")  # fmt: skip
+    text: str = Field(
+        default="", description="table: its rows typed as CSV (a header of names with units "
+        "in brackets: t [mm], load [kN]), when it reads no file")  # fmt: skip
+    operation: Literal["item", "slice", "sort", "reverse", "length", "column", "sum", "min",
+                       "max"] = Field(default="item", description="list: what it does")  # fmt: skip
+    column: str = Field(default="", description="list, column: the table column it takes")
+    combination: Literal["zip", "cross"] = Field(
+        default="zip", description="pairs: item by item (Grasshopper's longest list), or "
+        "every combination (cross reference)")  # fmt: skip
 
     @model_validator(mode="after")
     def _ports(self) -> Operator:
@@ -2011,6 +2046,83 @@ class Operator(ProjectObject):
 
     def dependencies(self) -> list[UUID]:
         return list(dict.fromkeys(i.source for i in self.inputs.values() if i.source))
+
+
+class DesignVariable(BaseModel):
+    """One variable an optimisation changes (ADR 0063 item 2): a parameter, by name (a
+    parameter set's value, or a Number or Slider operator), between `low` and `high`,
+    or one of `choices`. It starts from its current value."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(description="a parameter: a parameter set's value, a Number or Slider")
+    kind: Literal["continuous", "integer", "choice"] = "continuous"
+    low: Quantity | None = None
+    high: Quantity | None = None
+    choices: list[Quantity] = Field(default_factory=list, description="choice: its values")
+
+    @model_validator(mode="after")
+    def _bounded(self) -> DesignVariable:
+        if self.kind == "choice":
+            if not self.choices:
+                raise ValueError(f"design variable '{self.name}' lists its choices")
+        elif self.low is None or self.high is None:
+            raise ValueError(f"design variable '{self.name}' needs its low and high")
+        elif self.low.to_si() >= self.high.to_si():
+            raise ValueError(f"design variable '{self.name}': low must be below high")
+        return self
+
+    def values(self) -> list[float]:
+        """A choice's values (SI)."""
+        return [c.to_si() for c in self.choices]
+
+
+class DesignOutput(BaseModel):
+    """An objective or a constraint (ADR 0063 item 3): an output an operator, a result
+    tool or a derived result gives (post-solve, ADR 0062), with its limits."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: UUID = Field(description="an operator or a result tool")
+    port: str = Field(default="out", description="its output")
+    sense: Literal["minimise", "maximise"] = Field(
+        default="minimise", description="objective: which way is better"
+    )
+    lower: Quantity | None = Field(default=None, description="constraint: at least this")
+    upper: Quantity | None = Field(default=None, description="constraint: at most this")
+
+
+class Optimisation(ProjectObject):
+    """A study run once per point the optimisation chooses (ADR 0063), as a sweep runs
+    one per listed point: its runs are the study's own, stored with their points and
+    cached by their run keys, so a stopped one resumes and a later one reuses them.
+
+    Phase 1 is design of experiments: `method` full_factorial (`levels` per variable),
+    latin_hypercube or sobol (`samples` points, `seed`). The objective (minimised or
+    maximised) and the constraints read post-solve outputs at each point. A shoot-out
+    study runs every solver per point (`reads` the primary's outputs, or the worst).
+    """
+
+    kind: ClassVar[str] = "optimisation"
+
+    study: UUID
+    variables: list[DesignVariable] = Field(min_length=1)
+    objective: DesignOutput | None = None
+    constraints: list[DesignOutput] = Field(default_factory=list)
+    method: Literal["full_factorial", "latin_hypercube", "sobol"] = "latin_hypercube"
+    samples: int = Field(default=10, ge=1, le=10000, description="points of a sampled DOE")
+    levels: int = Field(default=3, ge=2, le=50, description="full factorial: per variable")
+    seed: int = Field(default=0, description="the sampler's seed: the same points each run")
+    max_solves: int | None = Field(default=None, ge=1, description="the most points run")
+    max_minutes: float | None = Field(default=None, gt=0, description="the most wall time")
+    reads: Literal["primary", "worst"] = Field(
+        default="primary", description="a shoot-out study: the primary solver's outputs, "
+        "or the worst of the solvers (a constraint held on every one)")  # fmt: skip
+
+    def dependencies(self) -> list[UUID]:
+        outs = [o.source for o in ([self.objective] if self.objective else [])]
+        outs += [c.source for c in self.constraints]
+        return [self.study, *dict.fromkeys(outs)]
 
 
 class TreeGroup(ProjectObject):
@@ -2105,6 +2217,7 @@ OBJECT_TYPES: tuple[type[ProjectObject], ...] = (
     ProjectUnits,
     ResultProbe,
     Operator,
+    Optimisation,
     Amplitude,
     CoordinateSystem,
     ConstructionGeometry,
@@ -2176,7 +2289,9 @@ class Project:
         return [t for t in self.of_type(Transfer) if t.target == study_id]
 
     def parameter_names(self) -> set[str]:
-        return {name for ps in self.of_type(ParameterSet) for name in ps.values}
+        """The parameter sets' values, and the Numbers and Sliders (ADR 0062) by name."""
+        own = {name for ps in self.of_type(ParameterSet) for name in ps.values}
+        return own | {o.name for o in self.of_type(Operator) if o.type in ("number", "slider")}
 
     def selection_names(self, comp: Component) -> set[str]:
         names = {s.name for s in comp.selections}

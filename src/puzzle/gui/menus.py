@@ -81,6 +81,10 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
             add("New transfer…", lambda: new_transfer(window))
         elif node.label == "Operators":  # ADR 0062
             _operator_menu(window, menu)
+        elif node.label == "Optimisations":  # ADR 0063
+            from puzzle.gui.optimisation_panel import new_optimisation
+
+            add("New optimisation…", lambda: new_optimisation(window))
         elif node.label == "Imported fields":  # ADR 0044
             from puzzle.gui.field_wizard import import_field
 
@@ -289,10 +293,22 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         add("New combination…", lambda: window.new_derived("linear", str(obj.id)))
         add("New equation…", lambda: window.new_derived("equation", str(obj.id)))
         add("New fatigue tool…", lambda: window.new_derived("fatigue", str(obj.id)))
+        from puzzle.gui.optimisation_panel import new_optimisation
+
+        add("New optimisation…", lambda: new_optimisation(window, str(obj.id)))  # ADR 0063
         steps = menu.addMenu("Add step")
         for t in STEP_TYPES:
             action = steps.addAction(label(t))
             action.triggered.connect(lambda _=False, k=t: add_step(window, obj, k))
+        menu.addSeparator()
+        add("Delete", window.delete_selected)
+    elif obj is not None and obj.kind == "optimisation" and node.kind == "object":
+        from puzzle.gui import optimisation_panel as panel
+
+        add("Run", lambda: panel.run(window, str(obj.id)))
+        add("Stop", lambda: panel.stop(window))
+        add("Show points", lambda: window.show_optimisation(str(obj.id)))
+        add("Apply best", lambda: panel.apply_best(window, str(obj.id)))
         menu.addSeparator()
         add("Delete", window.delete_selected)
     elif obj is not None and obj.kind == "operator" and node.kind == "object":
@@ -302,6 +318,8 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
             add("Export now", lambda: operators.export_now(window, obj))
         if obj.type == "plot":
             add("Show in Plots", lambda: operators.show_plot(window, obj))
+        if obj.type == "table":
+            add("Read a CSV…", lambda: operators.read_csv(window, obj))
         _operator_menu(window, menu, str(obj.id), "out", "New operator from this")
         menu.addSeparator()
         add("Delete", window.delete_selected)

@@ -115,6 +115,14 @@ def show(window, op) -> None:
     except PuzzleError as exc:
         text = exc.message
     panel.add_rows("Output", [("Shows", text)])
+    if op.type == "slider":  # drag here as on its node: previews, never solves
+        from puzzle.schematic import _slider_of
+
+        found = _slider_of(ev.Context(window.session.project, None), op)
+        if found is not None:
+            low, high, value = found
+            panel.add_slider(low, high, value, lambda v: window.slide(str(op.id), v),
+                             lambda: window.slide_done(str(op.id)))  # fmt: skip
 
 
 def choices(window, op, path: str):
@@ -244,3 +252,137 @@ def open_palette(window, at=None, source=None, port="out") -> Palette:
     palette.open()
     palette.search.setFocus()
     return palette
+
+
+# --- phase 2: what data operators drive ---------------------------------------------
+
+
+def _driver(window, source: str, port: str) -> str | None:
+    """The parameter name a source gives a history argument: a pre-solve number
+    operator's own name, or a parameter set's parameter."""
+    from puzzle.model.schema import Operator, ParameterSet
+    from puzzle.operators import is_pre
+
+    obj = window.session.project.objects.get(UUID(source))
+    if isinstance(obj, ParameterSet):
+        return port if port in obj.values else None
+    outs = TYPES[obj.type].outputs if isinstance(obj, Operator) else ()
+    if outs and outs[0].type == "number" and is_pre(window.session.project, obj):
+        return obj.name
+    return None
+
+
+def drive_argument(window, source_node, port: str, geometry_id: str):
+    """Wire a number into one of a geometry's history arguments (ADR 0062 item 5): the
+    argument then names it, as arguments name parameters. One form: which argument."""
+    from puzzle.gui.properties import format_value
+    from puzzle.gui.quick_form import Ask
+    from puzzle.model.schema import Geometry
+
+    project = window.session.project
+    source = source_node.object
+    name = _driver(window, source, port if source_node.kind == "parameters" else "out")
+    geo = project.objects.get(UUID(geometry_id))
+    if name is None or not isinstance(geo, Geometry):
+        window.statusBar().showMessage(
+            "A number that reads no results (a Number, Slider or Expression, or a "
+            "parameter) drives a history argument", 8000)  # fmt: skip
+        return None
+    options = []
+    for i, step in enumerate(geo.history):
+        for key, value in step.args.items():
+            if isinstance(value, (int, float)) and not isinstance(value, bool) or (
+                    isinstance(value, str) and value in _numbers(project)):  # fmt: skip
+                options.append((f"{step.name}: {key} (now {format_value(value)})",
+                                f"{i}:{key}"))  # fmt: skip
+    if not options:
+        window.statusBar().showMessage(f"{geo.name} has no history argument to drive", 8000)
+        return None
+    got = window.ask_form(f"Drive {geo.name} by {name}", [
+        Ask("argument", "History argument", choices=options,
+            help="It takes the value from now on; its own value is replaced")])  # fmt: skip
+    if not got:
+        return None
+    index, key = got["argument"].split(":", 1)
+    return window.submit(Edit(object=geometry_id, ops=[EditOp(
+        op="set", path=f"history.{index}.args.{key}", value=name)]))  # fmt: skip
+
+
+def _numbers(project) -> set[str]:
+    from puzzle.operators import parameter_values
+
+    return set(parameter_values(project))
+
+
+def sweep_over(window, source: str, port: str, study_id: str):
+    """A study swept over an operator's list (or a Number or Slider by name, its
+    values listed): one form for the parameter it sets (ADR 0062 item 4)."""
+    from puzzle.gui.quick_form import Ask
+    from puzzle.model.schema import Operator, Study
+    from puzzle.operators import output_type
+
+    project = window.session.project
+    op = project.objects.get(UUID(source))
+    study = project.objects.get(UUID(study_id))
+    given = output_type(project, UUID(source), port) if op is not None else None
+    if not isinstance(op, Operator) or not isinstance(study, Study) or given != "list":
+        window.statusBar().showMessage(
+            "A list (a Series, Range or List) dropped on a study sweeps it", 8000)  # fmt: skip
+        return None
+    names = sorted(project.parameter_names())
+    if not names:
+        window.statusBar().showMessage(
+            "A sweep sets a parameter: make a parameter set, a Number or a Slider first",
+            8000)  # fmt: skip
+        return None
+    why = "One run per item of the list, each with this parameter at that value"
+    got = window.ask_form(
+        f"Sweep {study.name} over {op.name}",
+        [Ask("parameter", "Parameter it sets", choices=[(n, n) for n in names], help=why)],
+    )
+    if not got:
+        return None
+    param = {"name": got["parameter"], "source": source, "port": port}
+    sweeps = [i for i, s in enumerate(study.steps) if s.type == "parametric_sweep"]
+    if sweeps:
+        op_ = EditOp(op="append", path=f"steps.{sweeps[0]}.parameters", value=param)
+    else:
+        steps = [s.model_dump(mode="json") for s in study.steps]
+        sweep = {"type": "parametric_sweep", "parameters": [param]}
+        op_ = EditOp(op="set", path="steps", value=[sweep, *steps])
+    return window.submit(Edit(object=study_id, ops=[op_]))
+
+
+def read_csv(window, op, path: str | None = None):
+    """A table's rows read from a CSV (ADR 0062): kept in the table, so the project
+    holds them; read again to update."""
+    from pathlib import Path
+
+    if path is None:
+        path = window.ask_open_path("Read a CSV into the table", "CSV (*.csv *.txt)") \
+            if hasattr(window, "ask_open_path") else None  # fmt: skip
+    if not path:
+        return None
+    text = Path(path).read_text()
+    from puzzle.operators.evaluate import parse_table
+
+    try:
+        parse_table(text)
+    except PuzzleError as exc:
+        window.report(exc)
+        return None
+    return window.submit(Edit(object=str(op.id), ops=[EditOp(op="set", path="text",
+                                                             value=text)]))  # fmt: skip
+
+
+def driven_components(project, op) -> list:
+    """The components whose geometry an operator drives (its name, or a pre-solve
+    operator reading it, named by a history argument)."""
+    from puzzle.model.schema import Component, Geometry
+    from puzzle.operators import downstream
+
+    names = {op.name} | {project.objects[d].name for d in downstream(project, op.id)}
+    geos = {g.id for g in project.of_type(Geometry)
+            if any(v in names for s in g.history for v in s.args.values()
+                   if isinstance(v, str))}  # fmt: skip
+    return [c for c in project.of_type(Component) if any(p.geometry in geos for p in c.parts)]

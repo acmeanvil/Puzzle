@@ -79,6 +79,35 @@ class Table:
 
 
 @dataclass
+class ListValue:
+    values: Any  # an array of SI values, or a list of texts
+    kind: str | None = None
+    label: str = ""
+
+    type = "list"
+
+    @property
+    def numeric(self) -> bool:
+        return isinstance(self.values, np.ndarray)
+
+    def text(self) -> str:
+        n = len(self.values)
+        shown = [quantity_text(float(v), self.kind) if self.numeric else str(v)
+                 for v in list(self.values)[:4]]  # fmt: skip
+        more = ", …" if n > 4 else ""
+        return f"[{', '.join(shown)}{more}] ({n} item{'s' if n != 1 else ''})"
+
+
+def as_list(v) -> ListValue:
+    """A value as a list: a number is a one-item list (ADR 0062 item 2)."""
+    if isinstance(v, ListValue):
+        return v
+    if isinstance(v, Number):
+        return ListValue(np.array([v.value]), v.kind, v.label)
+    raise PuzzleError("a list is needed here", code="invalid")
+
+
+@dataclass
 class FieldValue:
     mesh: Any
     step: Any  # the StepResult read
@@ -174,6 +203,8 @@ class Context:
     point: str | None = None  # a sweep point's title: every study read takes that run
     step: int | None = None  # every result read takes this step index
     memo: dict = field(default_factory=dict)
+    overrides: dict = field(default_factory=dict)  # a slider being dragged: id -> SI value
+    solver: str | None = None  # a shoot-out's solver whose runs are read (ADR 0063)
 
     def at(self, *, point: str | None = None, step: int | None = None) -> Context:
         return replace(self, point=point if point is not None else self.point,
@@ -239,9 +270,9 @@ def source(ctx: Context, oid: UUID, port: str):
         unit = q.unit if q.unit != "dimensionless" else ""
         return Number(q.to_si(), kind_of(unit) if unit else None, port)
     if isinstance(obj, Study):
-        key = ("run", oid, ctx.point)
+        key = ("run", oid, ctx.point, ctx.solver)
         if key not in ctx.memo:
-            record = derived.run_for(ctx.project, ctx.store, oid, ctx.point)
+            record = derived.run_for(ctx.project, ctx.store, oid, ctx.point, ctx.solver)
             mesh, results = _read(ctx.store, record)
             ctx.memo[key] = ResultValue(mesh, results, derived._items_of(results),
                                         [record.run_id], obj.name)  # fmt: skip
@@ -432,6 +463,8 @@ def _filter(ctx: Context, op) -> dict[str, Any]:
 def _number(op, got, what: str) -> Number | None:
     if got is None or isinstance(got, Number):
         return got
+    if isinstance(got, ListValue) and len(got.values) == 1 and got.numeric:
+        return Number(float(got.values[0]), got.kind, got.label)
     raise PuzzleError(f"'{op.name}': its {what} must be a number", code="invalid")
 
 
@@ -553,8 +586,199 @@ def _over_sweep(ctx: Context, op) -> Table:
     return Table([x_name, label], rows, [x_kind, kind])
 
 
+# --- data operators (phase 2) ----------------------------------------------------------
+
+
+def _typed_number(ctx: Context, op, key: str, default: Number | None = None) -> Number | None:
+    got = _input(ctx, op, key)
+    return default if got is None else _number(op, got, key)
+
+
+def _number_op(ctx: Context, op) -> dict[str, Any]:
+    got = _typed_number(ctx, op, "value")
+    if op.id in ctx.overrides:  # dragged: the preview's value
+        got = Number(float(ctx.overrides[op.id]), got.kind if got else None)
+    return {"out": Number(got.value, got.kind, op.name)}
+
+
+def _slider(ctx: Context, op) -> dict[str, Any]:
+    low = typed(op.low) if op.low is not None else None
+    high = typed(op.high) if op.high is not None else None
+    got = _typed_number(ctx, op, "value", low or Number(0.0, high.kind if high else None))
+    if op.id in ctx.overrides:
+        got = Number(float(ctx.overrides[op.id]), got.kind)
+    for bound in (low, high):
+        if bound is not None:
+            _same_kind(op, got.kind, bound.kind)
+    v = got.value
+    if op.increment is not None and op.increment.value:
+        step, base = typed(op.increment).value, low.value if low else 0.0
+        v = base + round((v - base) / step) * step
+    if low is not None:
+        v = max(v, low.value)
+    if high is not None:
+        v = min(v, high.value)
+    kind = got.kind or (low.kind if low else None) or (high.kind if high else None)
+    return {"out": Number(float(v), kind, op.name)}
+
+
+def _count(op, got: Number) -> int:
+    n = int(round(got.value))
+    if not 0 <= n <= 100_000:
+        raise PuzzleError(f"'{op.name}': a count from 0 to 100000, not {n}", code="invalid")
+    return n
+
+
+def _series(ctx: Context, op) -> dict[str, Any]:
+    start, step = _typed_number(ctx, op, "start"), _typed_number(ctx, op, "step")
+    n = _count(op, _typed_number(ctx, op, "count"))
+    _same_kind(op, start.kind, step.kind)
+    values = start.value + step.value * np.arange(n)
+    return {"out": ListValue(values, start.kind or step.kind, op.name)}
+
+
+def _range(ctx: Context, op) -> dict[str, Any]:
+    start, end = _typed_number(ctx, op, "start"), _typed_number(ctx, op, "end")
+    n = _count(op, _typed_number(ctx, op, "count"))
+    _same_kind(op, start.kind, end.kind)
+    return {"out": ListValue(np.linspace(start.value, end.value, n), start.kind or end.kind,
+                             op.name)}  # fmt: skip
+
+
+def _expression(ctx: Context, op) -> dict[str, Any]:
+    from puzzle.model.schema import ParameterSet
+    from puzzle.model.units import kind_of
+    from puzzle.operators.expression import evaluate as formula
+
+    values: dict[str, tuple] = {}
+    for ps in ctx.project.of_type(ParameterSet):
+        for k, q in ps.values.items():
+            unit = q.unit if q.unit != "dimensionless" else ""
+            values.setdefault(k, (q.to_si(), kind_of(unit) if unit else None))
+    listed = False
+    for key in ("x", "y", "z"):
+        got = _input(ctx, op, key)
+        if got is None:
+            continue
+        if isinstance(got, ListValue):
+            if not got.numeric:
+                raise PuzzleError(f"'{op.name}': {key} is a list of texts", code="invalid")
+            values[key], listed = (got.values, got.kind), True
+        else:
+            got = _number(op, got, key)
+            values[key] = (got.value, got.kind)
+    out, kind = formula(op.expression, values)
+    if listed or np.ndim(out):
+        return {"out": ListValue(np.atleast_1d(np.asarray(out, float)), kind, op.name)}
+    return {"out": Number(float(out), kind, op.name)}
+
+
+def parse_table(text: str) -> Table:
+    """A typed table: a header row of names, each with its unit in brackets (t [mm],
+    load [kN]), then rows; numbers are turned into SI, other cells kept as text."""
+    from puzzle.model.units import kind_of, known, to_si
+
+    rows = [r for r in csv.reader(io.StringIO(text.strip())) if any(c.strip() for c in r)]
+    if not rows:
+        return Table([], [], [])
+    names, units = [], []
+    for cell in rows[0]:
+        cell = cell.strip()
+        name, _, unit = cell.partition("[")
+        unit = unit.rstrip("]").strip()
+        if unit and not known(unit):
+            raise PuzzleError(f"unknown unit '{unit}' in the column '{name.strip()}'",
+                              code="invalid")  # fmt: skip
+        names.append(name.strip())
+        units.append(unit)
+    out = []
+    for r in rows[1:]:
+        row = []
+        for i, cell in enumerate(r[: len(names)]):
+            try:
+                v = float(cell)
+                row.append(to_si(v, units[i]) if units[i] else v)
+            except ValueError:
+                row.append(cell.strip())
+        out.append(row)
+    return Table(names, out, [kind_of(u) if u else None for u in units])
+
+
+def _table(ctx: Context, op) -> dict[str, Any]:
+    return {"out": parse_table(op.text)}
+
+
+def _column(op, table: Table) -> ListValue:
+    name = op.column or (table.columns[0] if table.columns else "")
+    if name not in table.columns:
+        raise PuzzleError(f"'{op.name}': the table has no column '{name}'", code="not_found",
+                          details={"columns": table.columns})  # fmt: skip
+    i = table.columns.index(name)
+    cells = [r[i] for r in table.rows if i < len(r)]
+    kind = table.kinds[i] if i < len(table.kinds) else None
+    if all(isinstance(c, (int, float)) for c in cells):
+        return ListValue(np.array(cells, float), kind, name)
+    return ListValue([str(c) for c in cells], None, name)
+
+
+def _list(ctx: Context, op) -> dict[str, Any]:
+    got = _input(ctx, op, "list")
+    lst = _column(op, got) if isinstance(got, Table) else as_list(got)
+    values = lst.values
+    index = _typed_number(ctx, op, "index")
+    end = _typed_number(ctx, op, "end")
+    numeric = lst.numeric
+    kind = lst.kind
+    if op.operation in ("item", "slice"):
+        n = len(values)
+        if op.operation == "item":
+            i = int(index.value) if index else 0
+            if not -n <= i < n:
+                raise PuzzleError(f"'{op.name}': no item {i} in {n}", code="not_found")
+            picked = [values[i]]
+        else:
+            a = int(index.value) if index else 0
+            b = int(end.value) if end else n
+            picked = list(values[a:b])
+        values = np.array(picked, float) if numeric else picked
+    elif op.operation == "sort":
+        values = np.sort(values) if numeric else sorted(values)
+    elif op.operation == "reverse":
+        values = values[::-1] if numeric else list(reversed(values))
+    elif op.operation == "length":
+        values, kind = np.array([float(len(values))]), None
+    elif op.operation in ("sum", "min", "max"):
+        if not numeric:
+            raise PuzzleError(f"'{op.name}': a {op.operation} needs numbers", code="invalid")
+        fn = {"sum": np.sum, "min": np.min, "max": np.max}[op.operation]
+        values = np.array([float(fn(values))]) if len(values) else np.array([])
+    out = ListValue(values, kind, op.name)
+    first = None
+    if len(values) and isinstance(values, np.ndarray):
+        first = Number(float(values[0]), kind, op.name)
+    result = {"out": out}
+    if first is not None:
+        result["first"] = first
+    return result
+
+
+def _pairs(ctx: Context, op) -> dict[str, Any]:
+    a, b = as_list(_input(ctx, op, "a")), as_list(_input(ctx, op, "b"))
+    av, bv = list(a.values), list(b.values)
+    if op.combination == "cross":
+        rows = [[x, y] for x in av for y in bv]
+    else:  # item by item; the shorter list repeats its last item (longest list)
+        n = max(len(av), len(bv))
+        rows = [[av[min(i, len(av) - 1)], bv[min(i, len(bv) - 1)]] for i in range(n)] \
+            if av and bv else []  # fmt: skip
+    rows = [[float(x) if not isinstance(x, str) else x for x in r] for r in rows]
+    return {"out": Table([a.label or "a", b.label or "b"], rows, [a.kind, b.kind])}
+
+
 _EVALUATE = {"reduce": _reduce, "filter": _filter, "check": _check, "panel": _panel,
-             "plot": _plot, "export": _export}  # fmt: skip
+             "plot": _plot, "export": _export, "number": _number_op, "slider": _slider,
+             "series": _series, "range": _range, "expression": _expression,
+             "table": _table, "list": _list, "pairs": _pairs}  # fmt: skip
 
 
 # --- what a node shows, and exporting -------------------------------------------------
@@ -629,6 +853,9 @@ def export(ctx: Context, op, root: Path) -> list[Path]:
 
 
 def as_csv(v) -> str:
+    if isinstance(v, ListValue):
+        rows = [[float(x)] if v.numeric else [x] for x in v.values]
+        return Table([v.label or "value"], rows, [v.kind]).csv()
     if isinstance(v, Table):
         return v.csv()
     if isinstance(v, Number):
@@ -680,6 +907,12 @@ def _data(v) -> Any:
     if isinstance(v, Verdict):
         return {"passed": v.passed, "value": v.value, "limit": v.limit, "margin": v.margin,
                 "text": v.text()}  # fmt: skip
+    if isinstance(v, ListValue):
+        d = {"values": [float(x) for x in v.values] if v.numeric else list(v.values),
+             "text": v.text()}  # fmt: skip
+        if v.kind:
+            d["unit"] = DIMENSIONS[v.kind][1]
+        return d
     if isinstance(v, Table):
         return {"columns": [_heading(c, k) for c, k in zip(v.columns, v.kinds, strict=False)],
                 "rows": v.rows}  # fmt: skip

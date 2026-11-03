@@ -57,6 +57,7 @@ SHOWN = {
     "study": "node",
     "result": "node",
     "operator": "node",  # ADR 0062
+    "optimisation": "node",  # ADR 0063
     "transfer": "wire",
     "axes": "chip",
     "amplitude": "chip",
@@ -88,6 +89,7 @@ KIND_WORDS = {
     "runs": "Results",
     "result": "Derived result",
     "operator": "Operator",
+    "optimisation": "Optimisation",
     "group": "Group",
 }
 # What flows along a data wire, for its colour (as Blender colours sockets by type).
@@ -128,6 +130,7 @@ class Node:
     group: str = ""  # the tree group it sits in
     value: str = ""  # an operator's value as shown (ADR 0062): "212 MPa", "Pass: ..."
     verdict: str = ""  # a check's "pass" or "fail"
+    slider: tuple[float, float, float] | None = None  # a slider's (low, high, value), SI
 
     def port(self, key: str) -> Port | None:
         return next((p for p in self.ports if p.key == key), None)
@@ -143,7 +146,7 @@ class Node:
 class Wire:
     source: str
     target: str
-    kind: str  # "data" or "use"
+    kind: str  # "data", "use", or "drives" (study -> the optimisation running it, ADR 0063)
     source_port: str = ""  # "" joins the node itself (use wires)
     target_port: str = ""
     label: str = ""
@@ -188,6 +191,8 @@ class Schematic:
         while frontier:
             here = frontier.pop()
             for w in self.wires:
+                if w.kind == "drives":  # a mark, not a dependency: no loop through it
+                    continue
                 a, b = (w.source, w.target) if forward else (w.target, w.source)
                 if a == here and b not in seen and b != start:
                     seen.add(b)
@@ -208,6 +213,8 @@ class Schematic:
         names = {n.id: n.label for n in self.nodes.values()}
         lines = []
         for w in self.wires:
+            if w.kind == "drives":
+                lines.append(f"{names[w.target]} runs {names[w.source]} once per point")
             if w.kind == "data":
                 what = f" ({w.label})" if w.label else ""
                 lines.append(f"{names[w.source]} -> {names[w.target]}{what}")
@@ -340,9 +347,11 @@ def build(
     `connections.schematic`), and `store` the results store, given when the operators'
     values are to be shown (ADR 0062)."""
     from puzzle.adapters import SOLVER_NAMES
+    from puzzle.operators import resolved
     from puzzle.project.status import State, run_state, status
 
     runs = list(runs)
+    listed = resolved(project)  # sweeps over an operator's list count its values
     if states is None:
         states = status(project, runs)
     names = {str(o.id): o.name for o in project.objects.values()}
@@ -421,7 +430,7 @@ def build(
         steps = ", ".join(words(st.type) for st in s.solve_steps())
         sub = " · ".join(x for x in (SOLVER_NAMES.get(s.solver, s.solver), steps, what) if x)
         node = add(Node(str(s.id), "study", STUDIES, s.name, subtitle=sub, object=str(s.id),
-                        badge=_sweep_badge(s)))  # fmt: skip
+                        badge=_sweep_badge(listed.objects.get(s.id, s))))  # fmt: skip
         node.ports = [Port("component", "Component", "in")]
         node.ports += [Port(f, words(f), "out", f) for f in outputs(project, s)]
         use(str(s.component), str(s.id), "component")
@@ -453,7 +462,7 @@ def build(
         label = f"{s.name}: results"
         node = Node(f"runs:{s.id}", "runs", RESULTS, label, object=latest.run_id,
                     subtitle=f"{len(mine)} run{'s' if len(mine) != 1 else ''}",
-                    badge=_sweep_badge(s))  # fmt: skip
+                    badge=_sweep_badge(listed.objects.get(s.id, s)))  # fmt: skip
         st = run_state(latest, project)
         node.state, node.reason = st.state, st.reason
         node.ports = [Port("result", "Result", "out", type="result")]
@@ -472,6 +481,7 @@ def build(
                                       else "", carries=d.quantity or ""))  # fmt: skip
 
     _operators(project, out, store, states)
+    _optimisations(project, out, store)
     _chips(project, out, names)
     for n in out.nodes.values():
         n.used_by = len({w.target for w in out.wires if w.kind == "use" and w.source == n.id})
@@ -483,12 +493,14 @@ def _operators(project: Project, out: Schematic, store, states: dict) -> None:
     """Operators (ADR 0062) as nodes after what they read, a typed port per input and
     output, joined by data wires; with a `store`, each shows its value."""
     from puzzle.model.schema import Operator
-    from puzzle.operators import TYPES
+    from puzzle.operators import TYPES, is_pre
 
     ops = project.of_type(Operator)
+    pre = {op.id for op in ops if is_pre(project, op)}
     for op in ops:
         t = TYPES[op.type]
-        node = Node(str(op.id), "operator", RESULTS, op.name, subtitle=t.label,
+        column = RESOURCES if op.id in pre else RESULTS  # beside what it feeds (item 8)
+        node = Node(str(op.id), "operator", column, op.name, subtitle=t.label,
                     object=str(op.id))  # fmt: skip
         st = states.get(str(op.id))
         if st is not None:
@@ -513,13 +525,142 @@ def _operators(project: Project, out: Schematic, store, states: dict) -> None:
             carries = inp.port if given == "result" and inp.port not in ("result", "out") else ""
             out.wires.append(Wire(src.id, node.id, "data", port, key, label, carries,
                                   str(op.id), given or (spec.type if spec else "")))  # fmt: skip
-    if store is not None and ops:
+    _model_wires(project, out, pre)
+    if ops:  # pre-solve ones need no results, so they always show their values
         from puzzle.operators import evaluate as ev
 
         ctx = ev.Context(project, store)
         for op in ops:
+            if store is None and op.id not in pre:
+                continue
             node = out.nodes[str(op.id)]
             node.value, node.verdict = ev.shown(ctx, op)
+            if op.type == "slider":
+                node.slider = _slider_of(ctx, op)
+
+
+def _optimisations(project: Project, out: Schematic, store) -> None:
+    """Optimisations (ADR 0063 item 9) right of the study they drive: inputs wired from
+    the design variables and the objective and constraint outputs, a dashed "drives"
+    mark to the study (not a data wire: nothing flows back, so the graph has no
+    cycle), the best value so far and the point count."""
+    from puzzle.model.schema import Optimisation
+
+    by_name: dict[str, tuple[str, str]] = {}
+    for ps in project.of_type(ParameterSet):
+        for k in ps.values:
+            by_name.setdefault(k, (str(ps.id), k))
+    for o in project.objects.values():
+        if o.kind == "operator" and o.type in ("number", "slider"):
+            by_name.setdefault(o.name, (str(o.id), "out"))
+    for opt in project.of_type(Optimisation):
+        from puzzle.optimise import METHODS
+
+        node = Node(str(opt.id), "optimisation", RESULTS, opt.name,
+                    subtitle=METHODS[opt.method], object=str(opt.id))  # fmt: skip
+        node.ports = [Port(f"var:{v.name}", f"Variable: {v.name}", "in", type="number")
+                      for v in opt.variables]  # fmt: skip
+        if opt.objective is not None:
+            node.ports.append(Port("objective", "Objective", "in", type="number"))
+        node.ports += [Port(f"constraint:{i}", f"Constraint {i + 1}", "in", type="number")
+                       for i in range(len(opt.constraints))]  # fmt: skip
+        out.nodes[node.id] = node
+        for v in opt.variables:
+            src = by_name.get(v.name)
+            if src and src[0] in out.nodes:
+                out.wires.append(Wire(src[0], node.id, "data", src[1], f"var:{v.name}", "",
+                                      "", str(opt.id), "number"))  # fmt: skip
+        ends = ([("objective", opt.objective)] if opt.objective else []) + [
+            (f"constraint:{i}", c) for i, c in enumerate(opt.constraints)]  # fmt: skip
+        for key, o in ends:
+            src, port, label = _wire_end(project, out, o.source, o.port)
+            if src is not None:
+                out.wires.append(Wire(src.id, node.id, "data", port, key, label, "",
+                                      str(opt.id), "number"))  # fmt: skip
+        if str(opt.study) in out.nodes:  # drawn study to optimisation, left to right
+            out.wires.append(Wire(str(opt.study), node.id, "drives", label="drives",
+                                  object=str(opt.id)))  # fmt: skip
+        if store is not None:
+            from puzzle import optimise
+
+            try:
+                pts = optimise.points(project, store, opt)
+            except Exception:  # noqa: BLE001 - a broken optimisation still draws
+                continue
+            node.badge = f"{sum(p.run for p in pts)} of {len(pts)} points"
+            top = optimise.best(opt, pts)
+            if top is not None:
+                from puzzle.operators.evaluate import quantity_text
+
+                best = ("best " + quantity_text(top.objective, top.kinds.get("objective"))
+                        if top.objective is not None else "a feasible point")  # fmt: skip
+                node.value = f"{best} at {top.title}"
+
+
+def _slider_of(ctx, op) -> tuple[float, float, float] | None:
+    """(low, high, value) in SI, for the knob drawn on a slider's node."""
+    from puzzle.errors import PuzzleError
+    from puzzle.operators import evaluate as ev
+
+    try:
+        v = ev.value(ctx, op).value
+    except PuzzleError:
+        return None
+    low = op.low.to_si() if op.low is not None else min(0.0, v)
+    high = op.high.to_si() if op.high is not None else max(v * 2, low + 1.0)
+    return (low, high, v)
+
+
+def _model_wires(project: Project, out: Schematic, pre: set) -> None:
+    """What drives the model (ADR 0062 items 4, 5): a history argument naming a
+    parameter or a pre-solve operator becomes an input port on its geometry (the
+    history stays one node), and a sweep over an operator's list, or over a Number or
+    Slider by name, one on its study; each joined by a data wire from its source."""
+    from puzzle.model.schema import Operator
+
+    by_name: dict[str, tuple[str, str]] = {}  # parameter -> (node id, port)
+    for ps in project.of_type(ParameterSet):
+        for k in ps.values:
+            by_name.setdefault(k, (str(ps.id), k))
+    for op in project.of_type(Operator):
+        if op.id in pre and str(op.id) in out.nodes:
+            by_name.setdefault(op.name, (str(op.id), "out"))
+    for g in project.of_type(Geometry):
+        node = out.nodes.get(str(g.id))
+        if node is None:
+            continue
+        for i, step in enumerate(g.history):
+            for key, value in step.args.items():
+                if not isinstance(value, str) or value not in by_name:
+                    continue
+                src, port = by_name[value]
+                if src not in out.nodes:
+                    continue
+                pkey = f"arg:{i}:{key}"
+                node.ports.append(Port(pkey, f"{step.name}: {key}", "in", type="number"))
+                out.wires.append(Wire(src, node.id, "data", port, pkey, value, "",
+                                      str(g.id), "number"))  # fmt: skip
+    for st in project.of_type(Study):
+        node = out.nodes.get(str(st.id))
+        if node is None:
+            continue
+        for n, step in enumerate(st.sweeps()):
+            for j, prm in enumerate(step.parameters):
+                if prm.source is not None:
+                    src, port, kind = str(prm.source), prm.port, "list"
+                elif prm.location is None and prm.name in by_name:
+                    (src, port), kind = by_name[prm.name], "number"
+                    if project.objects.get(UUID(src)) is None or \
+                            project.objects[UUID(src)].kind != "operator":  # fmt: skip
+                        continue  # a parameter set's sweep: as before, a use wire
+                else:
+                    continue
+                if src not in out.nodes:
+                    continue
+                pkey = f"sweep:{n}:{j}"
+                node.ports.append(Port(pkey, f"Sweep: {prm.name}", "in", type=kind))
+                out.wires.append(Wire(src, node.id, "data", port, pkey, "swept", "",
+                                      str(st.id), kind))  # fmt: skip
 
 
 def _given(project: Project, source, port: str) -> str | None:

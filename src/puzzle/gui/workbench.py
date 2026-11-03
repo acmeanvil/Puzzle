@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
 
 from puzzle.gui.choices import label
 from puzzle.gui.theme import role
-from puzzle.model.schema import Geometry, ParameterSet
+from puzzle.model.schema import Geometry
 
 GROUPS = [
     (
@@ -323,8 +323,9 @@ class Workbench(QWidget):
     # --- state ------------------------------------------------------------------------
 
     def params(self) -> dict[str, float]:
-        project = self.window.session.project
-        return {k: q.to_si() for ps in project.of_type(ParameterSet) for k, q in ps.values.items()}
+        from puzzle.operators import parameter_values
+
+        return parameter_values(self.window.session.project, self.window.slider_overrides)
 
     def geometry(self) -> Geometry | None:
         s = self.window.session

@@ -389,9 +389,9 @@ def named_geometry(project, geometry, root) -> Named:
     from pathlib import Path
 
     from puzzle.geometry.history import Op, ops_of, regenerate
-    from puzzle.model.schema import ParameterSet
+    from puzzle.operators import parameter_values
 
-    params = {k: q.to_si() for ps in project.of_type(ParameterSet) for k, q in ps.values.items()}
+    params = parameter_values(project)
     if geometry.history:
         return name_all(regenerate(ops_of(geometry, project), params, root))
     shape = regenerate([Op("import", "F", {"file": str(Path(root) / geometry.source)})])

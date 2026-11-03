@@ -366,6 +366,19 @@ def _parser() -> argparse.ArgumentParser:
                    help="write each export operator's file (or the one named)")  # fmt: skip
     p.set_defaults(handler=_operators)
 
+    p = sub.add_parser("optimise", help="run an optimisation's points, or list them (ADR 0063)")
+    p.add_argument("project", type=Path)
+    p.add_argument("name", help="the optimisation")
+    p.add_argument("--points", action="store_true", help="list the points; solve nothing")
+    p.add_argument("--budget", type=int, metavar="N", help="run at most N points this time")
+    p.add_argument(
+        "--apply",
+        action="store_true",
+        help="put the best feasible point's values into the model (one undo)",
+    )
+    p.add_argument("--json", action="store_true", help="the points as JSON")
+    p.set_defaults(handler=_optimise)
+
     p = sub.add_parser("import-field", help="bring in values at points from a file (ADR 0044)")
     p.add_argument("project", type=Path)
     p.add_argument("file", type=Path, nargs="+", help="CSV/TXT/DAT (x, y, z and values), VTU, "
@@ -979,6 +992,50 @@ def _selections(args) -> int:
                 Session(args.project).submit(Edit(object=str(geo.id), ops=ops))
                 print(f"  reattached ({len(choices)} selection(s); undo with puzzle undo)")
     return 1 if detached and not args.accept_all else 0
+
+
+def _optimise(args) -> int:
+    """ADR 0063: run an optimisation (stored points are reused: resume), list its points,
+    or apply its best point."""
+    import json
+
+    from puzzle import optimise
+    from puzzle.commands import Session, resolve
+    from puzzle.model.schema import Optimisation
+    from puzzle.project.layout import WORK_DIR
+
+    s = Session(args.project)
+    opt = resolve(s.project, args.name, Optimisation)
+    store = _store(args.project)
+    if args.apply:
+        top = optimise.best(opt, optimise.points(s.project, store, opt))
+        if top is None:
+            print(f"{opt.name} has no feasible point yet")
+            return 1
+        s.save_version(label=f"Before {opt.name}'s best point")
+        s.submit_batch(optimise.apply_commands(s.project, opt, top))
+        print(f"applied point {top.index}: {top.title}")
+        return 0
+    if not args.points:
+        if args.budget:
+            opt = opt.model_copy(update={"max_solves": args.budget})
+        optimise.run(s.project, opt, args.project, args.project / WORK_DIR / "optimise"
+                     / str(opt.id), store=store, on_output=print)  # fmt: skip
+        opt = resolve(s.project, args.name, Optimisation)
+    pts = optimise.points(s.project, store, opt)
+    if args.json:
+        print(json.dumps([p.to_dict() for p in pts], indent=1, default=str))
+        return 0
+    top = optimise.best(opt, pts)
+    for p in pts:
+        mark = "*" if p is top else " "
+        status = "feasible" if p.feasible else (p.reason or "infeasible")
+        obj = "" if p.objective is None else f"  objective {p.objective:.6g}"
+        print(f"{mark} {p.index:3d}  {p.title}{obj}  [{status}]")
+    said = optimise.suggestion(s.project, opt, pts)
+    if said:
+        print(f"best: {said} (--apply to use it)")
+    return 0
 
 
 def _operators(args) -> int:

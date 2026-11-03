@@ -125,12 +125,17 @@ def outline(project: Project, *, ids: bool = False, runs=None) -> str:
         st = states.get(str(obj.id))
         return f"  [{st.words.lower()}]" if st is not None else ""
 
+    from puzzle.operators import resolved
+
+    swept = resolved(project)  # a sweep over an operator's list: its values (ADR 0062)
     for s in project.of_type(Study):
         lines.append(head("Study", s) + f": {s.solver} on {names.get(s.component, '?')}" + state(s))
-        for step in s.steps:
+        for n, step in enumerate(s.steps):
             if isinstance(step, SweepStep):
-                params = ", ".join(p.name for p in step.parameters)
-                lines.append(f"    sweep {params} ({len(step.points())} points)")
+                params = ", ".join(p.name + (f" <- {names.get(p.source, '?')}" if p.source
+                                             else "") for p in step.parameters)  # fmt: skip
+                count = len(swept.objects[s.id].steps[n].points())
+                lines.append(f"    sweep {params} ({count} points)")
             else:
                 physics = f" {', '.join(step.physics)}" if step.physics else ""
                 settings = f" {step.settings}" if step.settings else ""
@@ -263,6 +268,26 @@ def outline(project: Project, *, ids: bool = False, runs=None) -> str:
 
     for op in project.of_type(Operator):  # ADR 0062; values: `operator_value`
         lines.append(head("Operator", op) + f": {describe(project, op)}")
+    from puzzle.model.schema import Optimisation
+
+    for opt in project.of_type(Optimisation):  # ADR 0063; points: `optimisation_points`
+        from puzzle.optimise import METHODS, plan
+
+        variables = ", ".join(
+            f"{v.name} {v.low.value:g}..{v.high.value:g} {v.low.unit}"
+            if v.kind != "choice" else f"{v.name} in {len(v.choices)} choices"
+            for v in opt.variables)  # fmt: skip
+        what = []
+        if opt.objective is not None:
+            what.append(f"{opt.objective.sense} {names.get(opt.objective.source, '?')}")
+        for c in opt.constraints:
+            limit = (f"<= {c.upper.value:g} {c.upper.unit}" if c.upper is not None
+                     else f">= {c.lower.value:g} {c.lower.unit}" if c.lower is not None
+                     else "")  # fmt: skip
+            what.append(f"{names.get(c.source, '?')} {limit}".replace(" dimensionless", ""))
+        lines.append(head("Optimisation", opt) + f": {METHODS[opt.method].lower()} of "
+                     f"{names.get(opt.study, '?')} ({len(plan(opt))} points) over "
+                     f"{variables}; {'; '.join(what)}")  # fmt: skip
     lines += _flow(project, runs)
     problems = project.problems()
     if problems:

@@ -25,6 +25,11 @@ STEPS = (
 
 # Step -> (title, what it is for): the one table of the Advisor's words.
 TEXT = {
+    "optimise": (
+        "Optimisation",
+        "A design of experiments or an optimisation ran: its best "
+        "point can be applied to the model.",
+    ),  # fmt: skip
     "geometry": ("Geometry", "The shape to analyse: import a CAD file or draw a part."),
     "selections": (
         "Selections",
@@ -232,7 +237,33 @@ def advise(
         add("run", "optional" if trouble else "needed", failed or later, "run",
             "Run again" if failed else "Run")  # fmt: skip
         add("results", "optional", "Comes after a run.")
+    _optimisations(project, root, add)
     return out
+
+
+def _optimisations(project: Project, root, add) -> None:
+    """An optimisation's best point, suggested and never applied by itself (ADR 0063
+    item 6): "Apply the best point: t = 6 mm: Mass 2.1 kg, every constraint holds"."""
+    from puzzle.model.schema import Optimisation
+
+    opts = project.of_type(Optimisation)
+    if not opts or root is None:
+        return
+    from pathlib import Path
+
+    from puzzle import optimise
+    from puzzle.project.layout import RESULTS_DIR
+    from puzzle.results.store import ResultStore
+
+    try:
+        store = ResultStore(Path(root) / RESULTS_DIR)
+        for opt in opts:
+            said = optimise.suggestion(project, opt, optimise.points(project, store, opt))
+            if said:
+                add("optimise", "optional", f"{opt.name}: {said}.", f"apply_best:{opt.id}",
+                    "Apply best…")  # fmt: skip
+    except Exception:  # noqa: BLE001 - the Advisor never fails over an optimisation
+        return
 
 
 def _contacts(project, component, add) -> None:
