@@ -54,6 +54,10 @@ DRAWINGS = {
     'M12 3v18"/>',
     # An I-beam's end: beams drawn with their sections (ADR 0055).
     "beams": '<path d="M6 4h12v3h-4.5v10H18v3H6v-3h4.5V7H6z"/>',
+    # A panel's title bar: float it out of the window, or dock it back in.
+    "float": '<rect x="3" y="8" width="13" height="13" rx="2"/><path d="M11 3h10v10M21 3l-9 9"/>',
+    "dock": '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15h18"/>'
+    '<path d="M12 6v6M9.5 9.5 12 12l2.5-2.5"/>',
 }
 
 

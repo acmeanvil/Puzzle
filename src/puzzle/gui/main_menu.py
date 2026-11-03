@@ -598,6 +598,8 @@ def _window(window, menu: QMenu, agent: QAction, messages: QAction) -> None:
         hide.aboutToShow.connect(lambda a=action, k=key: a.setChecked(k in window.docks.auto))
         hide.addAction(action)
         window.actions_by_name[f"auto_hide_{key}"] = action
+    _add(menu, "Dock all panels", window.docks.dock_all,
+         "Bring every floating panel back into the window", free=True)  # fmt: skip
     _add(menu, "Reset layout", window.reset_layout, free=True)
 
 

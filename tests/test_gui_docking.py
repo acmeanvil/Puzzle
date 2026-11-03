@@ -85,3 +85,29 @@ def test_a_closed_floating_messages_comes_back_docked(window):
         time.sleep(0.02)
     assert window.messages_dock.isVisible() and not window.messages_dock.isFloating()
     assert not window.messages_folded
+
+
+def test_a_floating_panel_docks_back_from_its_own_title_bar(window):
+    from puzzle.gui.docking import DockTitle
+
+    app = QApplication.instance()
+    for dock in window.docks.panels.values():  # never the system's frame, which can't
+        assert isinstance(dock.titleBarWidget(), DockTitle)  # dock back on macOS
+    dock = window.properties_dock
+    title = dock.titleBarWidget()
+    assert title.label.text() == "Properties"
+    title.toggle.click()
+    app.processEvents()
+    assert dock.isFloating() and "Dock it back" in title.toggle.toolTip()
+    title.toggle.click()
+    app.processEvents()
+    assert not dock.isFloating() and "Float" in title.toggle.toolTip()
+
+
+def test_window_menu_docks_every_floating_panel(window):
+    for dock in (window.properties_dock, window.messages_dock):
+        dock.setFloating(True)
+    action = next(a for m in window.menuBar().actions() if m.menu()
+                  for a in m.menu().actions() if a.text() == "Dock all panels")  # fmt: skip
+    action.trigger()
+    assert not window.properties_dock.isFloating() and not window.messages_dock.isFloating()

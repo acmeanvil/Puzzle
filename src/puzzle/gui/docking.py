@@ -8,6 +8,11 @@ replace Qt's `QDockWidget` by changing this module alone.
 - **Tab groups:** `tab(a, b)` puts two panels in one place as tabs (Agent and Advisor).
 - **Named layouts:** built-in ones the window registers (`builtin`), and the user's own,
   saved as files under `<user data dir>/layouts/` (Window → Layouts).
+- **Title bars:** every panel has Puzzle's own (`DockTitle`: its name, Float or Dock,
+  and close), because a floating panel otherwise gets the system's window frame, which
+  on macOS has no way back into the window (a double-click there zooms). Dragging the
+  title still moves and docks it, a double-click docks or floats it, and Window → Dock
+  all panels brings every floating one back.
 - **Auto-hide:** a side panel can hide into a slim bar on its window edge; clicking its
   name there shows it over its side, and it hides again once focus leaves it (a click in
   the 3D view). Which panels auto-hide is part of a saved layout.
@@ -21,7 +26,15 @@ from pathlib import Path
 
 from PySide6.QtCore import QByteArray, QSize, Qt
 from PySide6.QtGui import QPainter
-from PySide6.QtWidgets import QApplication, QDockWidget, QToolBar, QToolButton
+from PySide6.QtWidgets import (
+    QApplication,
+    QDockWidget,
+    QHBoxLayout,
+    QLabel,
+    QToolBar,
+    QToolButton,
+    QWidget,
+)
 
 STATE, AUTO = b"\n--state--\n", b"\n--auto--\n"
 
@@ -51,6 +64,46 @@ class SideButton(QToolButton):
         painter.end()
 
 
+class DockTitle(QWidget):
+    """A panel's title bar: its name, Float or Dock, and close. Mouse presses on the
+    name are left to Qt, which drags the panel and docks or floats it on a
+    double-click."""
+
+    def __init__(self, dock: QDockWidget) -> None:
+        super().__init__(dock)
+        from puzzle.gui import theme
+        from puzzle.gui.icons import icon
+
+        self.dock = dock
+        row = QHBoxLayout(self)
+        row.setContentsMargins(8, 2, 2, 2)
+        row.setSpacing(2)
+        self.label = theme.role(QLabel(dock.windowTitle()), "muted")
+        row.addWidget(self.label, 1)
+        self.toggle = QToolButton()
+        self.toggle.setAutoRaise(True)
+        self.toggle.clicked.connect(lambda: dock.setFloating(not dock.isFloating()))
+        self.close_button = QToolButton()
+        self.close_button.setAutoRaise(True)
+        self.close_button.setIcon(icon("clear"))
+        self.close_button.setToolTip("Close the panel (Window brings it back)")
+        self.close_button.clicked.connect(dock.close)
+        for b in (self.toggle, self.close_button):
+            b.setIconSize(QSize(14, 14))
+            row.addWidget(b)
+        dock.windowTitleChanged.connect(self.label.setText)
+        dock.topLevelChanged.connect(lambda _floating: self._show_state())
+        self._show_state()
+
+    def _show_state(self) -> None:
+        from puzzle.gui.icons import icon
+
+        floating = self.dock.isFloating()
+        self.toggle.setIcon(icon("dock" if floating else "float"))
+        self.toggle.setToolTip("Dock it back in the window" if floating
+                               else "Float it in a window of its own")  # fmt: skip
+
+
 class Docks:
     def __init__(self, window) -> None:
         self.window = window
@@ -68,9 +121,17 @@ class Docks:
         dock.setObjectName(title)  # saved layouts name docks by this
         dock.setWidget(widget)
         dock.setProperty("panel", key)
+        dock.setTitleBarWidget(DockTitle(dock))  # never the system's frame when floating
         self.window.addDockWidget(area, dock)
         self.panels[key] = dock
         return dock
+
+    def dock_all(self) -> int:
+        """Every floating panel back into the window; how many were."""
+        floating = [d for d in self.panels.values() if d.isFloating()]
+        for dock in floating:
+            dock.setFloating(False)
+        return len(floating)
 
     def split(self, first: str, second: str, orientation=Qt.Orientation.Vertical) -> None:
         self.window.splitDockWidget(self.panels[first], self.panels[second], orientation)
