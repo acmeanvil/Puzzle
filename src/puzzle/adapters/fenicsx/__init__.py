@@ -22,6 +22,7 @@ from pathlib import Path
 
 from puzzle.adapters.base import (
     ELECTROMAGNETIC_FEATURES,
+    HEAT_SOURCE_FEATURES,
     PDE_FEATURES,
     REMOTE_FEATURES,
     STRUCTURAL_FEATURES,
@@ -54,6 +55,7 @@ class FenicsxAdapter(SolverAdapter):
         },
         features=ELECTROMAGNETIC_FEATURES
         | THERMAL_FEATURES
+        | HEAT_SOURCE_FEATURES  # ADR 0047
         | STRUCTURAL_FEATURES
         | PDE_FEATURES
         | REMOTE_FEATURES
@@ -81,7 +83,14 @@ class FenicsxAdapter(SolverAdapter):
         # ADR 0044: face values as Lagrange functions of the field's nodal values
         # (tests/integration/test_imported_fields_parity.py)
         field_features=frozenset(
-            {"body_temperature:T", "pressure:p", "heat_flux:q", "convection:h", "convection:T_inf"}
+            {
+                "heat_generation:q",
+                "body_temperature:T",
+                "pressure:p",
+                "heat_flux:q",
+                "convection:h",
+                "convection:T_inf",
+            }
         )
         | VECTOR_FIELD_FEATURES,  # stage 2: tests/integration/test_imported_vectors.py
         # A pressure varying with frequency in a harmonic step: a load per frequency, each

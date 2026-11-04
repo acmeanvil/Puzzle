@@ -134,6 +134,13 @@ CATALOG: dict[str, list[FeatureSpec]] = {
             "Convection",
             values={"h": (10.0, "W/(m^2*K)"), "T_inf": (20.0, "degC")},
         ),
+        # ADR 0047: per volume on a body; a number, an imported field or a transferred loss
+        FeatureSpec(
+            "heat_generation",
+            "Heat generation (per volume)",
+            entity="body",
+            values={"q": (0.0, "W/m^3")},
+        ),
     ],
     "electrostatics": [
         FeatureSpec("electric_potential", "Electric potential", values={"V": (0.0, "V")}),
@@ -141,10 +148,28 @@ CATALOG: dict[str, list[FeatureSpec]] = {
         FeatureSpec("surface_charge", "Surface charge", values={"rho_s": (0.0, "C/m^2")}),
     ],
     "magnetic_fields": [
-        FeatureSpec("coil_current", "Coil current", entity="body", values={"I": (1.0, "A")}),
+        # ADR 0047: a massive conductor carries eddy currents; a winding's turns don't.
+        FeatureSpec(
+            "coil_current",
+            "Coil current (massive conductor)",
+            entity="body",
+            values={"I": (1.0, "A"), "phase": (0.0, "deg")},
+        ),
+        FeatureSpec(
+            "stranded_coil",
+            "Stranded coil (winding)",
+            entity="body",
+            values={
+                "I": (1.0, "A"),
+                "phase": (0.0, "deg"),
+                "turns": (1.0, "dimensionless"),
+                "fill": (1.0, "dimensionless"),
+            },
+        ),
         FeatureSpec("coil_start", "Coil current enters"),
         FeatureSpec("coil_end", "Coil current leaves"),
-        FeatureSpec("magnetic_insulation", "Magnetic insulation"),
+        FeatureSpec("magnetic_insulation", "Magnetic insulation (flux tangential)"),
+        FeatureSpec("magnetic_symmetry", "Magnetic symmetry (flux normal)"),
     ],
     "fluid_flow": [
         FeatureSpec("velocity_inlet", "Velocity inlet", values={"U": (1.0, "m/s")}),
@@ -171,6 +196,9 @@ OUTPUTS = {
 }
 CONTACT_OUTPUTS = ["contact_pressure", "contact_shear", "contact_gap", "contact_status"]
 HARMONIC_OUTPUTS = ["displacement_amplitude", "displacement_phase"]
+# ADR 0047: a frequency-domain (or winding) magnetic study's losses, energy and impedance
+EDDY_OUTPUTS = ["loss_density", "joule_loss", "magnetic_energy", "coil_resistance",
+                "coil_inductance"]  # fmt: skip
 
 STEP_TYPES = ["stationary", "transient", "modal", "buckling", "frequency_domain"]
 # What a new step of a type starts with, so its settings show in Properties.

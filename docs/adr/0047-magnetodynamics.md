@@ -1,6 +1,6 @@
 # 0047. Magnetodynamics: time-harmonic eddy currents first, then transient, on Elmer and FEniCSx
 
-- Status: Accepted (2026-10-26, with the maintainer's answers)
+- Status: Accepted (2026-10-26, with the maintainer's answers); stage 1 (time-harmonic) built 2026-11-04
 - Date: 2026-10-26
 
 ## Context
@@ -78,6 +78,48 @@ Out of scope here: moving parts (rotating machines, sliding interfaces), circuit
 3. **Coils:** stranded and massive both in stage 1.
 4. **Coupling:** heat generation and the loss → heat transfer in stage 1.
 5. **Axisymmetric 2D:** yes, with Elmer's MagnetoDynamics2DHarmonic. The 2D geometry it needs (creating and updating planar and axisymmetric models) comes sooner, as its own decision (ADR 0048), and 2D magnetics follows it.
+
+## Built (stage 1, 2026-11-04)
+
+Items 1 to 4 of the order of work.
+
+- **Coils.** The coil type is the feature: `coil_current` is a massive conductor (`I`, `phase`), `stranded_coil` a winding (`I` per turn, `phase`, `turns`, `fill`). Each coil is paired with the terminal faces whose nodes lie on its body. A winding without terminals is a closed loop (Elmer). Any number of coils is allowed. `magnetic_symmetry` writes the natural condition. `adapters/eddy.py` holds what both solvers share: the coils, the reader's metadata, and the results.
+- **Elmer** (`adapters/elmer/magnetics.py`):
+  - The study runs as a Scanning run, with `Angular Frequency` a table over the scan index.
+  - The harmonic A–V system is solved by BiCGStab(4): UMFPACK reports it singular, and the real-arithmetic direct solve gave NaN.
+  - A massive conductor gets its current as a uniform normal current density on its start face (I over the face's area as meshed) and V = 0 on its end face.
+  - A winding runs CoilSolver first, as its own Component with `Coil Type`; without one, CoilSolver scales all windings together to 1 A. CoilSolver uses unit conductivity, and its field flows from the end face to the start, hence a factor −N I. The winding's body has σ = 0 in the solve.
+  - Losses, energy and impedance are computed from the per-element output.
+- **FEniCSx** (`study.py` `solve_magnetodynamics`):
+  - The unknowns are A (Nédélec) and V (Lagrange) in real and imaginary blocks. V is coupled in every conductor; with V = 0 there (the A* form), a passive conductor whose faces have n × A = 0 let current out through them.
+  - Each winding's source comes from a unit conduction solve in its body.
+  - Element values are matched to Puzzle's elements by corner centres.
+- **Results**, per frequency:
+  - B per node, and J per element, as amplitude, phase and the field at the peak instant;
+  - `loss_density`, ½|J|²/σ per element (a winding's ½|J|²/(σ fill));
+  - `joule_loss`: the total and each body;
+  - `magnetic_energy`: ¼ ∫ B·H*;
+  - `coil_resistance` and `coil_inductance`: each coil's voltage over its current. That is the massive conductor's start-face potential, or the winding's DC resistance plus jω times its flux linkage ∫ A·J / I.
+- **Skin depth** (`puzzle/magnetics.py`):
+  - A warning when a conductor's recipe size is coarser than δ/2 at the study's highest frequency. It appears in Problems, the outline, the Advisor's Skin depth step and MCP `magnetic_check`.
+  - At a solve's start, warnings for the elements meshed and for an air region under 2.5 coil sizes.
+  - "Add a skin-depth refinement" (Results menu, the Advisor's button) adds a refine-near control per conductor: δ/3 within δ of its surface, back to the body's size by 4δ. It is not a boundary layer, because prisms would not run on FEniCSx's Nédélec solve.
+- **Heat generation** (`heat_generation`, W/m³ on a body) on all four FE solvers:
+  - CalculiX `*DFLUX ... BF`;
+  - Code_Aster `SOURCE`, and an `OnCells` FORMULE for a field;
+  - Elmer `Heat Source` = q/ρ;
+  - FEniCSx q·v dx.
+
+  It takes a number, an imported field or a transferred `loss_density`. A transferred loss is averaged to nodes over the losing elements, mapped, and scaled so the target body takes the power lost in it.
+- **Measured** (`tests/integration/test_eddy_currents.py`, `test_heat_generation.py`):
+  - Skin effect in a round copper wire, against the Bessel solution: R within 0.2 % at a/δ = 0.48 and 0.7 % at a/δ = 2.1; L within 0.4 %; |J| across the wire within 2.4 % on average. The same on both solvers.
+  - A winding at 0 Hz and 5 kHz: R within 0.74 % (the meshed section is smaller) and L within 0.5 % of N² μ0 L (¼ + ln R/a) / 2π.
+  - Two windings at 10 A, 0° and 6 A, 90°: each section carries its own current to 1e-3 and 0.05°.
+  - Shoot-out, Elmer against FEniCSx on one mesh, a driven wire beside a passive one at 10 kHz: losses and energy equal to 7 digits, R 0.05 %, L 0.16 %.
+  - Heat generation on all four solvers: uniform, the middle's rise equal to the closed form to five digits; from a field rising along the bar, the peak within 0.003 %.
+  - Elmer's 1 kHz losses heating a CalculiX wire: the temperature rise within 2 % of the 1D solution.
+
+Left for stage 2: transient (item 5), Lorentz forces (item 6), axisymmetric 2D (item 7), closed windings on FEniCSx, and the sphere and TEAM 7 checks.
 
 ## Alternatives considered
 

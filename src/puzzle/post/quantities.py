@@ -37,6 +37,27 @@ VECTORS = {
         None,
     ),
     "current_density": ("Current density", ("Current density magnitude", "Current density"), None),
+    # ADR 0047: a harmonic magnetic field's amplitude and phase per component
+    "magnetic_flux_density_amplitude": (
+        "Magnetic flux density amplitude",
+        ("Magnetic flux density amplitude (all components)", "Magnetic flux density amplitude"),
+        None,
+    ),
+    "magnetic_flux_density_phase": (
+        "Magnetic flux density phase",
+        ("Phase (vector of angles)", "Phase, °"),
+        None,
+    ),
+    "current_density_amplitude": (
+        "Current density amplitude",
+        ("Current density amplitude (all components)", "Current density amplitude"),
+        None,
+    ),
+    "current_density_phase": (
+        "Current density phase",
+        ("Phase (vector of angles)", "Phase, °"),
+        None,
+    ),
 }
 TENSORS = {
     "stress": ("Stress", "stress", "pressure"),
@@ -58,6 +79,8 @@ SCALARS = {
     "error_estimate": ("Error estimate (energy norm)", None),
     "error_ratio": ("Refinement ratio (above 1: refine)", None),
     "error_jump": ("Gradient jump indicator", None),
+    # ADR 0047: time-averaged Joule loss per volume (W/m³), per element
+    "loss_density": ("Loss density (time-averaged)", None),
 }
 AXES = {"x": "X", "y": "Y", "z": "Z"}
 SUFFIXES = {"range": "range", "mean": "mean"}  # fields a range combination makes

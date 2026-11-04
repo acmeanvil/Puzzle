@@ -27,6 +27,9 @@ STRUCTURAL_FEATURES = frozenset(
 )  # body loads (ADR 0037): benchmarked on CalculiX, Code_Aster, Elmer and FEniCSx; a body
 # temperature (ADR 0044) reaches every adapter as a temperature load (as a transfer's)
 THERMAL_FEATURES = frozenset({"temperature", "heat_flux", "convection"})
+# ADR 0047: a heat source per volume (W/m³) on a body: a number, an imported field, or a
+# transferred loss density; benchmarked on the four FE solvers (test_heat_generation.py)
+HEAT_SOURCE_FEATURES = frozenset({"heat_generation"})
 ELECTROMAGNETIC_FEATURES = frozenset(
     {
         "electric_potential",
@@ -34,6 +37,8 @@ ELECTROMAGNETIC_FEATURES = frozenset(
         "surface_charge",
         "current_density",
         "coil_current",
+        "stranded_coil",  # ADR 0047
+        "magnetic_symmetry",
         "coil_start",
         "coil_end",
         "magnetic_insulation",

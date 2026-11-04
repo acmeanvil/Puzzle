@@ -548,6 +548,8 @@ def _results(window, menu: QMenu) -> None:
          "The study on finer and finer meshes: is the mesh fine enough?")  # fmt: skip
     _add(menu, "Adapt the mesh…", lambda: _adapt(window),
          "Mesh again where the error is, pass after pass, until it is at a target")  # fmt: skip
+    _add(menu, "Add a skin-depth refinement", lambda: _skin(window),
+         "Finer elements near each conductor's surface, for its skin depth")  # fmt: skip
     menu.addSeparator()
     _add(menu, "Export…", lambda: _export(window),
          "Results for other software: ParaView, point clouds, the deformed shape")  # fmt: skip
@@ -559,6 +561,18 @@ def _convergence(window) -> None:
     study = current_study(window, "Check mesh convergence")
     if study is not None:
         convergence_panel.check(window, str(study.id))
+
+
+def _skin(window) -> None:
+    from puzzle.gui.advisor_panel import add_skin_refinement
+
+    study = current_study(window, "Add a skin-depth refinement")
+    if study is None:
+        return
+    if add_skin_refinement(window, str(study.id)) is None:
+        window.statusBar().showMessage(
+            f"{study.name}: every conductor is already fine enough for its skin depth", 8000
+        )
 
 
 def _adapt(window) -> None:

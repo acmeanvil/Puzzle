@@ -17,6 +17,7 @@ import numpy as np
 
 from puzzle.adapters.common import (
     BODY_LOADS,
+    HEAT_SOURCES,
     HOLDING,
     PRETENSION,
     REMOTE,
@@ -216,7 +217,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             f"the Code_Aster adapter does not run {step.type} {sorted(solved)} steps yet"
         )
 
-    wanted = THERMAL if thermal else STRUCTURAL
+    wanted = THERMAL | HEAT_SOURCES if thermal else STRUCTURAL
     features = [
         f for ph in comp.physics if ph.type in solved for f in ph.features if f.type in wanted
     ]
@@ -2043,7 +2044,7 @@ def _thermal_loads(project, features, names, mesh, comp=None, given=None) -> lis
 
 
 # ADR 0044: thermal values Code_Aster takes from imported fields.
-FIELD_THERMAL = {"heat_flux": {"q"}, "convection": {"h", "T_inf"}}
+FIELD_THERMAL = {"heat_flux": {"q"}, "heat_generation": {"q"}, "convection": {"h", "T_inf"}}
 
 # Written once into a .comm that has any: a field's nodal values on a face selection,
 # evaluated where Code_Aster asks (its Gauss points) with the faces' own shape functions,
@@ -2102,6 +2103,35 @@ class OnFaces:
         return self.cache[key]
 
 
+class OnCells:
+    # A body's tetrahedra (corner nodes): the point's barycentric weights in the nearest
+    # cell holding it (or the least outside), its nodes' values weighted.
+
+    def __init__(self, xyz, cells, values):
+        self.xyz, self.cells = _np.asarray(xyz, float), _np.asarray(cells, int)
+        self.values = _np.asarray(values, float)
+        self.centre = self.xyz[self.cells].mean(axis=1)
+        self.cache = {}
+
+    def __call__(self, x, y, z):
+        key = (x, y, z)
+        if key not in self.cache:
+            p = _np.array([x, y, z])
+            d = ((self.centre - p) ** 2).sum(axis=1)
+            near = _np.argsort(d)[:12] if len(d) > 12 else _np.argsort(d)
+            best = None
+            for e in near:
+                a, b, c, q = self.xyz[self.cells[e]]
+                w = _np.linalg.solve(_np.column_stack([b - a, c - a, q - a]), p - a)
+                weights = _np.array([1.0 - w.sum(), *w])
+                outside = -weights.min()
+                if best is None or outside < best[0]:
+                    best = (outside, e, weights)
+            _, e, weights = best
+            self.cache[key] = float(weights @ self.values[self.cells[e]])
+        return self.cache[key]
+
+
 class OnEdges(OnFaces):
     # The same on a 2D model's edges (line2, line3: ends, then the middle): a point is
     # placed on the nearest edges' chords, then (three-node edges) on the curve.
@@ -2137,6 +2167,22 @@ class OnEdges(OnFaces):
             self.cache[key] = float(self._line(s)[0] @ self.values[self.faces[e]])
         return self.cache[key]
 """
+
+
+def _on_cells(name: str, group, mesh: Mesh, field) -> list[str]:
+    """`name` = OnCells(...): a field's nodal values on a body's tetrahedra (their
+    corners), interpolated linearly in the one holding the point (ADR 0047)."""
+    from puzzle.adapters.graded import solid_blocks
+
+    corners = np.vstack([b.connectivity[:, :4] for b in solid_blocks(group, mesh)])
+    ids, local = np.unique(corners, return_inverse=True)
+    xyz, values = mesh.node_coords(ids), field.at(ids)[:, 0]
+    rows = ", ".join("[" + ", ".join(f"{v:.17g}" for v in r) + "]" for r in xyz)
+    return [
+        f"{name} = OnCells([{rows}],",
+        f"    {[list(map(int, r)) for r in local.reshape(corners.shape)]},",
+        f"    [{', '.join(f'{v:.17g}' for v in values)}])",
+    ]
 
 
 def _on_faces(name: str, group, mesh: Mesh, field) -> list[str]:
@@ -2179,7 +2225,7 @@ def _field_thermal_loads(project, features, names, mesh: Mesh, given: dict):
     for k, f in enumerate(features, start=1):
         g, group = names[f.selection], mesh.groups[f.selection]
         functions = {}
-        for j, name in enumerate(("q",) if f.type == "heat_flux" else ("h", "T_inf")):
+        for j, name in enumerate(("h", "T_inf") if f.type == "convection" else ("q",)):
             fn = f"ff{k}_{j}"
             if name in f.fields:
                 field = given.get(feature_key(f, name))
@@ -2187,7 +2233,10 @@ def _field_thermal_loads(project, features, names, mesh: Mesh, given: dict):
                     raise InputError(
                         f"{f.type} on '{f.selection}': its field for {name} was not mapped"
                     )
-                lines += _on_faces(f"on{k}_{j}", group, mesh, field)
+                if f.type == "heat_generation":  # over the body's cells (ADR 0047)
+                    lines += _on_cells(f"on{k}_{j}", group, mesh, field)
+                else:
+                    lines += _on_faces(f"on{k}_{j}", group, mesh, field)
                 xyz = "'X', 'Y'" if mesh.planar else "'X', 'Y', 'Z'"  # a 2D model has no Z
                 lines.append(
                     f"{fn} = FORMULE(VALE='on({xyz.replace(chr(39), '')})', NOM_PARA=({xyz}), "
@@ -2200,6 +2249,11 @@ def _field_thermal_loads(project, features, names, mesh: Mesh, given: dict):
             lines.append(
                 f"fload{k} = AFFE_CHAR_THER_F(MODELE=model, "
                 f"FLUX_REP=_F(GROUP_MA='{g}', FLUN={functions['q']}))"
+            )
+        elif f.type == "heat_generation":
+            lines.append(
+                f"fload{k} = AFFE_CHAR_THER_F(MODELE=model, "
+                f"SOURCE=_F(GROUP_MA='{g}', SOUR={functions['q']}))"
             )
         else:
             lines.append(
@@ -2251,6 +2305,7 @@ def _loads(
     a 2D model's thicknesses (ADR 0048)."""
     extra = extra or {}
     imposed, face_force, pressure, temperature, flux, exchange = [], [], [], [], [], []
+    source: list[str] = []  # heat per volume (ADR 0047)
     contour: list[str] = []  # forces on a 2D model's edges
     nodal: list[str] = []
     gravity, rotation, rigid, shell_pressure = [], [], [], []
@@ -2326,6 +2381,8 @@ def _loads(
             temperature.append(f"_F(GROUP_MA='{g}', TEMP={v['T']:.12g})")
         elif f.type == "heat_flux":
             flux.append(f"_F(GROUP_MA='{g}', FLUN={v['q']:.12g})")
+        elif f.type == "heat_generation":
+            source.append(f"_F(GROUP_MA='{g}', SOUR={v['q']:.12g})")
         elif f.type == "convection":
             exchange.append(f"_F(GROUP_MA='{g}', COEF_H={v['h']:.12g}, TEMP_EXT={v['T_inf']:.12g})")
 
@@ -2337,6 +2394,7 @@ def _loads(
             "load = AFFE_CHAR_THER(MODELE=model"
             + kw("TEMP_IMPO", temperature)
             + kw("FLUX_REP", flux)
+            + kw("SOURCE", source)
             + kw("ECHANGE", exchange)
             + ")"
         )

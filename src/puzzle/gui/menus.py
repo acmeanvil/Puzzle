@@ -730,6 +730,13 @@ def new_transfer(window, source: str | None = None, field: str | None = None,
         n = len(study.solve_steps()) if study else 1
         return [(f"Step {i + 1}", i) for i in range(max(n, 1))]
 
+    def bodies(v) -> list:
+        """The target component's bodies (a loss density heats one, ADR 0047)."""
+        study = studies.get(v.get("target"))
+        comp = project.objects.get(study.component) if study else None
+        names = [a.selection for a in comp.materials] if isinstance(comp, Component) else []
+        return [(n, n) for n in names] or [("(no bodies)", "")]
+
     got = window.ask_form(
         "New transfer",
         [
@@ -753,6 +760,13 @@ def new_transfer(window, source: str | None = None, field: str | None = None,
                 default=by_id.get(target or ""),
             ),
             Ask("target_step", "Into its step", choices=steps, shown=lambda v: len(steps(v)) > 1),
+            Ask(
+                "target_selection",
+                "Heats the body",
+                choices=bodies,
+                shown=lambda v: v.get("field") == "loss_density",
+                help="The losses become a heat generation there, with the same total",
+            ),
             Ask(
                 "role", "Used", choices=ROLES, default="prestress" if field == "stress" else "load"
             ),
@@ -788,6 +802,8 @@ def new_transfer(window, source: str | None = None, field: str | None = None,
         "role": got["role"],
         "mapping": got["mapping"],
     }
+    if got["field"] == "loss_density" and got.get("target_selection"):
+        data["target_selection"] = got["target_selection"]
     return window.submit(Create(kind="transfer", data=data))
 
 

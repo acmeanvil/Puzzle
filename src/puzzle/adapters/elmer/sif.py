@@ -17,6 +17,7 @@ import numpy as np
 from puzzle.adapters.common import (
     BODY_LOADS,
     ELECTROSTATIC,
+    HEAT_SOURCES,
     HOLDING,
     MAGNETIC,
     STRUCTURAL,
@@ -44,6 +45,7 @@ from puzzle.adapters.common import (
     time_scheme,
     time_settings,
 )
+from puzzle.adapters.elmer import magnetics
 from puzzle.adapters.elmer.meshfiles import ElmerMesh, write_mesh
 from puzzle.mesh.mesh import Mesh
 from puzzle.model.schema import Component, Feature, Material, Project, Study
@@ -91,7 +93,7 @@ def write_case(
         "solid_mechanics": ("stationary", "modal", "transient", "frequency_domain"),
         "heat_transfer": ("stationary", "transient"),
         "electrostatics": ("stationary",),
-        "magnetic_fields": ("stationary",),
+        "magnetic_fields": ("stationary", "frequency_domain"),  # ADR 0047
     }
     if len(solved) != 1 or next(iter(solved)) not in allowed:
         raise InputError(
@@ -108,7 +110,7 @@ def write_case(
 
     wanted = {
         "solid_mechanics": STRUCTURAL,
-        "heat_transfer": THERMAL,
+        "heat_transfer": THERMAL | HEAT_SOURCES,
         "electrostatics": ELECTROSTATIC,
         "magnetic_fields": MAGNETIC,
     }[next(iter(solved))]
@@ -117,13 +119,22 @@ def write_case(
     ]
     if step.type == "modal":
         features = [f for f in features if f.type in HOLDING]
+    if solved == {"magnetic_fields"} and magnetics.needed(step, features):  # ADR 0047
+        lines, emesh = magnetics.write(project, comp, step, features, mesh, workdir,
+                                       write_mesh, _time_block)  # fmt: skip
+        freqs = frequency_list(step) if harmonic else [1.0]
+        (workdir / MESH_DIR / TIMES).write_text("\n".join(f"{t:.12g}" for t in freqs) + "\n")
+        sif = workdir / f"{OUTPUT}.sif"
+        sif.write_text(with_settings("\n".join(lines) + "\n", study, step))
+        return sif, emesh
     # Coil currents act on bodies; every other feature is a boundary condition.
     coils = [f for f in features if f.type == "coil_current"]
     if len(coils) > 1 or (solved == {"magnetic_fields"} and not coils):
         raise InputError("the Elmer adapter solves magnetic fields driven by one coil for now")
     features = [f for f in features if f.type != "coil_current"]
     # Body loads (ADR 0037) act on bodies, as body forces; the rest are boundaries.
-    per_volume = BODY_LOADS | {"body_force"}  # ADR 0044: a force density, no density
+    # ADR 0044: a force density, no density; ADR 0047: a heat source per volume
+    per_volume = BODY_LOADS | {"body_force"} | HEAT_SOURCES
     loads = globalize(project, [f for f in features if f.type in per_volume])  # ADR 0049
     for f in loads:
         body_load_on_material(comp, f, "Elmer")
@@ -283,6 +294,11 @@ def _body_force(loads: list[Feature], material: Material, fielded=None) -> list[
     (`fielded`: feature key -> variable), so Elmer integrates its interpolant."""
     from puzzle.fields import feature_key
 
+    heat = [f for f in loads if f.type == "heat_generation"]
+    loads = [f for f in loads if f.type != "heat_generation"]
+    out = _heat_source(heat, material, fielded) if heat else []
+    if not loads:
+        return out
     given = np.zeros(3)  # body forces (ADR 0044): N/m^3 as they are
     field_vars: list[list[str]] = [[], [], []]
     for f in loads:
@@ -304,7 +320,6 @@ def _body_force(loads: list[Feature], material: Material, fielded=None) -> list[
             uniform += np.asarray(load.uniform)
         elif load.omega:
             spin.append(load)
-    out = []
     for i in range(3):
         constant = rho * uniform[i] + given[i]
         mine = field_vars[i]
@@ -328,6 +343,30 @@ def _body_force(loads: list[Feature], material: Material, fielded=None) -> list[
             f'    Real MATC "{" + ".join(terms)}"',
         ]
     return out
+
+
+def _heat_source(heat: list[Feature], material: Material, fielded=None) -> list[str]:
+    """ADR 0047: Elmer's Heat Source is per mass, so q / ρ; a q from a field (or a
+    transferred loss) is its restart variable over ρ in MATC."""
+    from puzzle.fields import feature_key
+
+    rho = material.properties.get("density")
+    if rho is None:
+        raise InputError(f"heat generation needs density on '{material.name}' (Elmer's source is "
+                         "per mass)")  # fmt: skip
+    rho = rho.to_si()
+    constant, variables = 0.0, []
+    for f in heat:
+        var = (fielded or {}).get(feature_key(f, "q")) if "q" in f.fields else None
+        if var is not None:
+            variables.append(var)
+        else:
+            constant += f.values["q"].to_si()
+    if not variables:
+        return [f"  Heat Source = {constant / rho:.10g}"]
+    terms = " + ".join([f"{constant:.10g}", *(f"tx({k})" for k in range(len(variables)))])
+    return [f"  Heat Source = Variable {', '.join(variables)}",
+            f'    Real MATC "({terms})/({rho:.10g})"']  # fmt: skip
 
 
 def _material(
@@ -595,6 +634,7 @@ FIELD_KEYWORDS = {
     **{("displacement", a): (f"Displacement {d}", 1.0) for d, a in enumerate("xyz", 1)},
     **{("body_force", f"f{a}"): (f"Stress Bodyforce {d}", 1.0) for d, a in enumerate("xyz", 1)},
     ("heat_flux", "q"): ("Heat Flux", 1.0),
+    ("heat_generation", "q"): ("Heat Source", 1.0),  # over ρ in the body force (ADR 0047)
     ("convection", "h"): ("Heat Transfer Coefficient", 1.0),
     ("convection", "T_inf"): ("External Temperature", 1.0),
 }
@@ -706,8 +746,9 @@ PRECONDITIONERS = (
 
 
 def _magnetic(lines: list[str]) -> bool:
-    """The A-V solve: Elmer gauges it as a direct solve; an iterative one stalls."""
-    return any("WhitneyAVSolver" in line for line in lines)
+    """The A-V solve keeps its own linear system: the static one direct (Elmer gauges
+    it; iterative ones stall), the harmonic one BiCGStab (UMFPACK fails on it)."""
+    return any("WhitneyAV" in line for line in lines)
 
 
 def with_settings(sif: str, study: Study, step) -> str:

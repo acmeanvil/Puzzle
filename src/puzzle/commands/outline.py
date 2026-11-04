@@ -296,6 +296,12 @@ def outline(project: Project, *, ids: bool = False, runs=None) -> str:
     if problems:
         lines.append("Problems:")
         lines += [f"    [{p.code}] {p.message}" for p in problems]
+    from puzzle.magnetics import warnings
+
+    found = warnings(project)  # ADR 0047: warnings, not blocking
+    if found:
+        lines.append("Warnings:")
+        lines += [f"    [{w.code}] {w.object}: {w.message}" for w in found]
     return "\n".join(lines)
 
 

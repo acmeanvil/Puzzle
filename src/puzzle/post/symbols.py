@@ -71,6 +71,8 @@ TINTS = {
     "coil_start": PURPLE,
     "coil_end": PURPLE,
     "magnetic_insulation": PURPLE,
+    "magnetic_symmetry": PURPLE,
+    "stranded_coil": PURPLE,
     "dirichlet": GREY,
     "elastic_support": BLUE,
     "compression_only_support": BLUE,

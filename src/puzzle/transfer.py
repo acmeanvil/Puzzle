@@ -169,3 +169,72 @@ def _interpolate(source: Mesh, values: np.ndarray, queries: np.ndarray) -> np.nd
         idx = np.asarray(missing)
         out[idx] = values[_nearest(source.coords, queries[idx])]
     return out
+
+
+def losses_to_nodes(field: Field, mesh: Mesh) -> Field:
+    """An element loss density as nodal values: each node the mean of the losing
+    elements (value > 0) around it, so a conductor's surface keeps its value instead of
+    being averaged with the air beside it (ADR 0047)."""
+    index = {int(n): i for i, n in enumerate(mesh.node_ids)}
+    by_element = dict(zip(field.ids.tolist(), field.values[:, 0], strict=True))
+    total, count = np.zeros(len(mesh.node_ids)), np.zeros(len(mesh.node_ids))
+    for b in mesh.blocks:
+        if b.dim != 3:
+            continue
+        values = np.array([by_element.get(int(e), 0.0) for e in b.ids])
+        losing = values > 0
+        rows = np.vectorize(index.__getitem__, otypes=[np.int64])(b.connectivity[losing])
+        np.add.at(total, rows, values[losing, None].repeat(rows.shape[1], axis=1))
+        np.add.at(count, rows, 1.0)
+    values = np.divide(total, count, out=np.zeros_like(total), where=count > 0)
+    return Field(field.name, "node", [""], mesh.node_ids.copy(), values[:, None])
+
+
+def _integral(mesh: Mesh, selection: str | None, values_at) -> float:
+    """∫ q dV over a body (every volume element when None): each tetrahedron its nodes'
+    mean times its volume."""
+    from puzzle.adapters.eddy import tet_volumes
+
+    blocks = mesh.groups[selection].blocks(mesh) if selection else mesh.blocks
+    index = {int(n): i for i, n in enumerate(mesh.node_ids)}
+    total = 0.0
+    for b in (b for b in blocks if b.dim == 3):
+        local = np.vectorize(index.__getitem__, otypes=[np.int64])(b.connectivity[:, :4])
+        total += float((values_at(b.connectivity).mean(axis=1) * tet_volumes(mesh.coords, local)
+                        ).sum())  # fmt: skip
+    return total
+
+
+def heat_from_losses(transfer, field: Field, source: Mesh, target: Mesh):
+    """A loss density (W/m³ per element) as a heat generation on the transfer's target
+    body: nodal (`losses_to_nodes`), mapped onto the target mesh, then scaled so the
+    target body takes the power lost in it at the source (the same body by name there;
+    else every conductor's). Returns the Input and the heat generation feature it drives."""
+    from puzzle.adapters.common import InputError
+    from puzzle.fields import feature_key
+    from puzzle.model.schema import Feature, FieldUse, Quantity
+
+    body = transfer.target_selection
+    if not body or body not in target.groups or target.groups[body].dim != 3:
+        raise InputError(f"transfer '{transfer.name}': a loss density heats a body: set its "
+                         "target selection to one", code="invalid_input")  # fmt: skip
+    nodal = losses_to_nodes(field, source)
+    mapped = map_field(nodal, source, target, transfer.mapping)
+    by_element = dict(zip(field.ids.tolist(), field.values[:, 0], strict=True))
+    blocks = source.groups[body].blocks(source) if body in source.groups else source.blocks
+    from puzzle.adapters.eddy import tet_volumes
+
+    index = {int(n): i for i, n in enumerate(source.node_ids)}
+    lost = 0.0
+    for b in (b for b in blocks if b.dim == 3):
+        local = np.vectorize(index.__getitem__, otypes=[np.int64])(b.connectivity[:, :4])
+        lost += float((np.array([by_element.get(int(e), 0.0) for e in b.ids])
+                       * tet_volumes(source.coords, local)).sum())  # fmt: skip
+    taken = _integral(target, body, lambda conn: mapped.at(conn.ravel()).reshape(conn.shape))
+    if taken > 0:
+        mapped = Field(mapped.name, "node", [""], mapped.ids, mapped.values * (lost / taken))
+    feature = Feature(type="heat_generation", selection=body,
+                      values={"q": Quantity(value=0.0, unit="W/m^3")},
+                      fields={"q": FieldUse(field=transfer.id, column=field.name)})  # fmt: skip
+    key = feature_key(feature, "q")
+    return Input(mapped, "feature", body, key, transfer.source), feature

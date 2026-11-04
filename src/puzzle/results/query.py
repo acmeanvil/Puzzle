@@ -33,7 +33,11 @@ def summary(results: Results) -> list[dict[str, Any]]:
         entry["fields"] = {}
         for name, f in step.fields.items():
             if f.location == "global":
-                entry["fields"][name] = float(f.values[0, 0])
+                if len(f.components) > 1 and f.values.shape[0] == 1:  # named entries
+                    entry["fields"][name] = dict(zip(f.components, map(float, f.values[0]),
+                                                     strict=True))  # fmt: skip
+                else:
+                    entry["fields"][name] = float(f.values[0, 0])
                 continue
             values, label = _scalar(f, None)
             entry["fields"][name] = {

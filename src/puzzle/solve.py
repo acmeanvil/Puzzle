@@ -193,21 +193,18 @@ def run_study(
                 f"{h.selection} by {h.distance}" for h in study.morph.handles)))  # fmt: skip
     lap("mesh")
     begin("transfers")
-    inputs = [
-        Input(
-            map_field(
-                pick(upstream[t.source].results, t.field, t.source_step),
-                upstream[t.source].mesh,
-                meshed.mesh,
-                t.mapping,
-            ),
-            t.role,
-            t.target_selection,
-            t.name,
-            t.source,
-        )
-        for t in project.transfers_into(study.id)
-    ]
+    inputs, heating = [], []
+    for t in project.transfers_into(study.id):
+        picked = pick(upstream[t.source].results, t.field, t.source_step)
+        if t.field == "loss_density":  # ADR 0047: losses heat the target body
+            from puzzle.transfer import heat_from_losses
+
+            given, feature = heat_from_losses(t, picked, upstream[t.source].mesh, meshed.mesh)
+            inputs.append(given)
+            heating.append(feature)
+            continue
+        inputs.append(Input(map_field(picked, upstream[t.source].mesh, meshed.mesh, t.mapping),
+                            t.role, t.target_selection, t.name, t.source))  # fmt: skip
     from puzzle.fields import field_inputs
 
     # ADR 0044: imported fields and body temperatures, mapped onto this mesh.
@@ -221,6 +218,8 @@ def run_study(
             code="invalid_input",
         )
     inputs += made
+    if heating:  # the heat generation each transferred loss drives, in the target's heat
+        project = _with_heat_sources(project, study, heating)
     lap("transfers")
     from puzzle.bolts import with_joints
 
@@ -233,6 +232,7 @@ def run_study(
     written, project = with_orientations(project, study.component, written)
     written = _adjust_contacts(project, study, written, record)
     _contact_warnings(project, study, written, record)
+    _magnetic_warnings(project, study, written, record)
     # An adapter that writes one solve step per input runs a multi-step study one step
     # at a time on the same mesh; the steps are independent analyses.
     steps = study.solve_steps()
@@ -470,6 +470,40 @@ def _contact_warnings(project, study, mesh, record) -> None:
         found = contact_check.checks(project, comp, mesh, study.solver)
     except Exception as exc:  # noqa: BLE001 - a check, not the solve
         record(progress.Message(level="info", text=f"Contacts not checked: {exc}"))
+        return
+    for w in found:
+        record(progress.Message(level="warning", text=w.message, code=w.code))
+
+
+def _with_heat_sources(project, study, features):
+    """A copy of the project whose study component's heat physics has the heat
+    generation features transferred losses drive (ADR 0047)."""
+    from puzzle.model.schema import Component
+
+    comp = project.get(study.component, Component)
+    heat = next((p for p in comp.physics if p.type == "heat_transfer"), None)
+    if heat is None:
+        raise StudyError(f"study '{study.name}' takes a loss density but solves no heat",
+                         code="invalid_input")  # fmt: skip
+    physics = [p.model_copy(update={"features": [*p.features, *features]})
+               if p is heat else p for p in comp.physics]  # fmt: skip
+    copy = replace(project, objects=dict(project.objects))
+    copy.objects[comp.id] = comp.model_copy(update={"physics": physics})
+    return copy
+
+
+def _magnetic_warnings(project, study, mesh, record) -> None:
+    """ADR 0047: the skin depth against the elements meshed, and the air around the
+    coils, logged before the solve (warnings: they don't stop it)."""
+    from puzzle import magnetics, progress
+
+    comp = project.objects.get(study.component)
+    if comp is None or not any(p.type == "magnetic_fields" for p in comp.physics):
+        return
+    try:
+        found = magnetics.mesh_warnings(project, study, mesh)
+    except Exception as exc:  # noqa: BLE001 - a check, not the solve
+        record(progress.Message(level="info", text=f"Magnetic checks not made: {exc}"))
         return
     for w in found:
         record(progress.Message(level="warning", text=w.message, code=w.code))

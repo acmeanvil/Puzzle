@@ -13,6 +13,7 @@ import numpy as np
 from puzzle.adapters.common import (
     BODY_LOADS,
     ELECTROSTATIC,
+    HEAT_SOURCES,
     MAGNETIC,
     STRUCTURAL,
     THERMAL,
@@ -36,6 +37,7 @@ from puzzle.adapters.common import (
     remote_load,
     remote_values,
     rigid_motion,
+    surface_area,
     thermal_tables,
     time_scheme,
     time_settings,
@@ -126,7 +128,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         "solid_mechanics": ("stationary", "modal", "transient", "frequency_domain"),
         "heat_transfer": ("stationary", "transient"),
         "electrostatics": ("stationary",),
-        "magnetic_fields": ("stationary",),
+        "magnetic_fields": ("stationary", "frequency_domain"),  # ADR 0047
         "custom_pde": ("stationary", "transient"),
     }
     if len(solved) != 1 or next(iter(solved)) not in allowed:
@@ -140,7 +142,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
 
     wanted = {
         "solid_mechanics": STRUCTURAL,
-        "heat_transfer": THERMAL,
+        "heat_transfer": THERMAL | HEAT_SOURCES,
         "electrostatics": ELECTROSTATIC,
         "magnetic_fields": MAGNETIC,
         "custom_pde": {"dirichlet", "neumann"},
@@ -150,10 +152,13 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         [f for ph in comp.physics if ph.type == physics for f in ph.features if f.type in wanted],
     )
     for f in features:
-        if f.type in BODY_LOADS | {"body_force"}:  # cells carry one tag: the material's
+        if f.type in BODY_LOADS | {"body_force"} | HEAT_SOURCES:  # cells: one tag each
             body_load_on_material(comp, f, "FEniCSx")
+    magnetics = physics == "magnetic_fields" and (
+        step.type == "frequency_domain" or any(f.type == "stranded_coil" for f in features)
+    )  # ADR 0047: the A–V solve; else the static one-coil path
     coils = [f for f in features if f.type == "coil_current"]
-    if physics == "magnetic_fields" and len(coils) != 1:
+    if physics == "magnetic_fields" and not magnetics and len(coils) != 1:
         raise InputError("the FEniCSx adapter solves magnetic fields driven by one coil for now")
     if not comp.materials and physics != "custom_pde":  # a PDE may need no material
         raise InputError(f"component '{comp.name}' has no material assignments")
@@ -255,6 +260,8 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             "reference": _reference_temperature(comp),
         }
     _field_files(features, case["features"], inputs, mesh, workdir)
+    if magnetics:
+        case["magnetics"] = _magnetics(project, comp, step, features, mesh, workdir)
     write_med(mesh, workdir / "mesh.msh", {g: g for g in groups})
     case["settings"] = _settings(study, step)  # ADR 0023
     (workdir / "case.json").write_text(json.dumps(case, indent=2))
@@ -265,6 +272,72 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     return target
 
 
+def _magnetics(project, comp, step, features, mesh, workdir: Path) -> dict:
+    """The A–V solve's coils and bodies (ADR 0047), and the reader's metadata."""
+    from puzzle.adapters import eddy
+
+    coils = eddy.coils(project, comp, features, mesh, solver="FEniCSx")
+    if step.type != "frequency_domain" and any(c.kind == "massive" for c in coils):
+        raise InputError(
+            "a static magnetic study takes one massive conductor or windings, not both",
+            code="unsupported",
+        )
+    if step.type != "frequency_domain" and any(c.current[1] for c in coils):
+        raise InputError("a coil's phase applies in frequency-domain steps only")
+    winding = {c.body for c in coils if c.kind == "stranded"}
+    bodies = []
+    for a in comp.materials:
+        props = project.get(a.material, Material).properties
+        needs = ("relative_permeability", "electrical_conductivity")
+        missing = [k for k in needs if k not in props]
+        if missing:
+            raise InputError(f"material for '{a.selection}' is missing {', '.join(missing)}")
+        bodies.append({"name": a.selection, "mu_r": props["relative_permeability"].to_si(),
+                       "sigma": 0.0 if a.selection in winding
+                       else props["electrical_conductivity"].to_si()})  # fmt: skip
+    frequencies = frequency_list(step) if step.type == "frequency_domain" else [0.0]
+    eddy.write_meta(workdir / eddy.META, bodies, coils, frequencies)
+    eddy.element_table(mesh, [a.selection for a in comp.materials], workdir / eddy.ELEMENTS)
+    return {
+        "bodies": bodies,
+        "frequencies": frequencies,
+        "coils": [
+            {"body": c.body, "kind": c.kind, "current": list(c.current), "turns": c.turns,
+             "start": c.start, "end": c.end,
+             "area": surface_area(mesh.groups[c.start], mesh) if c.start else None}
+            for c in coils
+        ],
+    }  # fmt: skip
+
+
+def _read_magnetics(workdir: Path, data, node_ids, ids) -> Results:
+    """One step per frequency from the A–V solve: element values matched to Puzzle's
+    elements by their centres, then the shared results (`adapters.eddy`)."""
+    from puzzle.adapters import eddy
+
+    meta = eddy.read_meta(workdir / eddy.META)
+    table = dict(np.load(workdir / eddy.ELEMENTS))
+    rows = match_points(data["cell_midpoints"], table["centres"], np.arange(len(table["ids"])))
+    where = np.empty(len(rows), np.int64)
+    where[rows] = np.arange(len(rows))  # element k of the table is cell where[k]
+    results = Results(solver="fenicsx")
+    massive = [c for c in meta["coils"] if c.kind == "massive"]
+    for k, hz in enumerate(data["magnetic_frequencies"]):
+
+        def cplx(name, k=k):
+            return data[f"mag_{name}_re"][k] + 1j * data[f"mag_{name}_im"][k]
+
+        volts = cplx("voltage") if massive else []
+        start = {c.body: complex(v) for c, v in zip(massive, volts, strict=True)}
+        b_nodal = np.empty((len(ids), 3), complex)
+        b_nodal[:] = cplx("b")
+        results.steps.append(eddy.step_result(
+            meta, float(hz), table, cplx("B")[where], cplx("J")[where], cplx("A")[where],
+            start, ids, b_nodal,
+        ))  # fmt: skip
+    return results
+
+
 def read_results(workdir: Path) -> Results:
     path = workdir / RESULTS
     if not path.exists():
@@ -272,6 +345,8 @@ def read_results(workdir: Path) -> Results:
     data = np.load(path)
     node_ids = np.loadtxt(workdir / "node-ids.txt", dtype=np.int64, ndmin=1)
     ids = match_points(data["coords"], np.load(workdir / "node-coords.npy"), node_ids)
+    if "magnetic_frequencies" in data:  # ADR 0047
+        return _read_magnetics(workdir, data, node_ids, ids)
     order = np.argsort(ids)
 
     def field(name: str, comps: list[str], values: np.ndarray) -> Field:

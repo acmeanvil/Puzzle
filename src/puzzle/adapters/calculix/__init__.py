@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from puzzle.adapters.base import (
+    HEAT_SOURCE_FEATURES,
     INITIAL_STRESS_FEATURES,
     LIFTING_FEATURES,
     PRETENSION_FEATURES,
@@ -47,6 +48,7 @@ class CalculixAdapter(SolverAdapter):
         },
         features=STRUCTURAL_FEATURES
         | THERMAL_FEATURES
+        | HEAT_SOURCE_FEATURES  # ADR 0047
         | REMOTE_FEATURES
         | RIGID_REMOTE_FEATURES
         | SUPPORT_FEATURES
@@ -66,7 +68,14 @@ class CalculixAdapter(SolverAdapter):
         dimensions=frozenset({"3d", "2d_planar", "2d_axisymmetric"}),  # ADR 0048
         # ADR 0044: values from imported fields (tests/integration/test_imported_fields.py)
         field_features=frozenset(
-            {"body_temperature:T", "pressure:p", "heat_flux:q", "convection:h", "convection:T_inf"}
+            {
+                "heat_generation:q",
+                "body_temperature:T",
+                "pressure:p",
+                "heat_flux:q",
+                "convection:h",
+                "convection:T_inf",
+            }
         )
         | VECTOR_FIELD_FEATURES  # stage 2: tests/integration/test_imported_vectors.py
         | STAGE3_FIELDS,  # ADR 0044 stage 3 (tests/integration/test_imported_stage3.py)

@@ -778,6 +778,12 @@ class MainWindow(QMainWindow):
             item = QListWidgetItem(f"{w.object} (contact warning): {w.message}")
             item.setData(Qt.ItemDataRole.UserRole, w.object)
             self.problems.addItem(item)
+        from puzzle.magnetics import warnings as magnetic_warnings
+
+        for w in magnetic_warnings(s.project):  # ADR 0047: the skin depth, not blocking
+            item = QListWidgetItem(f"{w.object} (mesh warning): {w.message}")
+            item.setData(Qt.ItemDataRole.UserRole, w.object)
+            self.problems.addItem(item)
         for geo, findings in self.geometry_findings.items():  # from "Check geometry"
             for f in findings:
                 self.problems.addItem(f"{geo} (geometry {f['severity']}): {f['message']}")

@@ -28,6 +28,7 @@ from puzzle.adapters.calculix import spring_beams
 from puzzle.adapters.calculix.spring_beams import SpringBeams
 from puzzle.adapters.common import (
     BODY_LOADS,
+    HEAT_SOURCES,
     HOLDING,
     PRETENSION,
     STRUCTURAL,
@@ -926,7 +927,7 @@ def _step(
         # tolerances (0.5% residual, 1% correction) stop short. Linear cases converge at once.
         out += ["*CONTROLS, PARAMETERS=FIELD", "1e-7, 1e-7, 0., 0., 0.02, 1e-5, 1e-3, 1e-8"]
     wanted = (STRUCTURAL if "solid_mechanics" in solved else set()) | (
-        THERMAL if "heat_transfer" in solved else set()
+        THERMAL | HEAT_SOURCES if "heat_transfer" in solved else set()
     )
     features = [
         f
@@ -1696,6 +1697,17 @@ def _feature_rows(f: Feature, mesh: Mesh, faces: FaceLookup, rigid=None) -> dict
                 f"{elset}, CENTRIF, {load.omega**2:.10g}, {c[0]:.10g}, {c[1]:.10g}, "
                 f"{c[2]:.10g}, {n[0]:.10g}, {n[1]:.10g}, {n[2]:.10g}"
             )
+    elif f.type == "heat_generation" and "q" in f.fields:  # per element (ADR 0044, 0047)
+        from puzzle.adapters.graded import element_values, solid_blocks
+
+        field = _given(f, "q")[0]
+        if field is None:
+            raise InputError(f"heat generation on '{f.selection}': its field was not mapped")
+        for b in solid_blocks(group, mesh):  # each element its nodes' mean
+            q = element_values(field, b)[:, 0]
+            dflux += [f"{e}, BF, {x:.10g}" for e, x in zip(b.ids, q, strict=True) if x]
+    elif f.type == "heat_generation":  # W/m³ on the body's elements
+        dflux.append(f"{set_name('E', f.selection)}, BF, {v['q']:.10g}")
     elif f.type == "heat_flux" and _history(f, "q") is not None:
         histories.update(_history_rows(f, "q", "*DFLUX", "S", group, mesh, faces))
     elif f.type == "heat_flux" and "q" in f.fields and consistent_faces(group, mesh):

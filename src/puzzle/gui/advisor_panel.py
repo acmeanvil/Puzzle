@@ -146,6 +146,8 @@ class AdvisorPanel(QWidget):
             comp = comps[0] if comps else None
         if study is None and comp is not None:
             study = next((s for s in project.of_type(Study) if s.component == comp.id), None)
+        if action.startswith("skin_depth:"):  # ADR 0047
+            return add_skin_refinement(w, action.split(":", 1)[1])
         if action.startswith("convergence:"):  # ADR 0066
             from puzzle.gui.convergence_panel import check
 
@@ -242,3 +244,20 @@ class AdvisorPanel(QWidget):
             EXAMPLE, target, ignore=shutil.ignore_patterns("results*", ".puzzle", "history.jsonl")
         )
         self.window.open(target)
+
+
+def add_skin_refinement(window, study_id: str):
+    """Refine each conductor of the study near its surface for its skin depth (ADR
+    0047): one Edit of the mesh recipe's controls."""
+    from puzzle.commands.model import Edit, EditOp
+    from puzzle.magnetics import skin_refinement
+    from puzzle.model.schema import Component, MeshRecipe, Study
+
+    project = window.session.project
+    study = project.get(study_id, Study)
+    recipe = project.get(project.get(study.component, Component).mesh, MeshRecipe)
+    controls = skin_refinement(project, study)
+    if not controls:
+        return None
+    ops = [EditOp(op="append", path="controls", value=c.model_dump(mode="json")) for c in controls]
+    return window.submit(Edit(object=str(recipe.id), ops=ops))

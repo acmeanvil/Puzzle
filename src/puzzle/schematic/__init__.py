@@ -284,7 +284,12 @@ def words(name: str) -> str:
 
 def outputs(project: Project, study: Study) -> list[str]:
     """The fields a study's runs make, from its physics (the catalog), not from a run."""
-    from puzzle.model.catalog import CONTACT_OUTPUTS, HARMONIC_OUTPUTS, OUTPUTS
+    from puzzle.model.catalog import (
+        CONTACT_OUTPUTS,
+        EDDY_OUTPUTS,
+        HARMONIC_OUTPUTS,
+        OUTPUTS,
+    )
 
     comp = project.objects.get(study.component)
     if not isinstance(comp, Component):
@@ -303,6 +308,11 @@ def outputs(project: Project, study: Study) -> list[str]:
                 out += HARMONIC_OUTPUTS
             if any(c.type != "bonded" for c in comp.contacts):
                 out += CONTACT_OUTPUTS
+        if ph.type == "magnetic_fields" and (
+            any(s.type == "frequency_domain" for s in study.solve_steps())
+            or any(f.type == "stranded_coil" for f in ph.features)
+        ):
+            out += EDDY_OUTPUTS
     return list(dict.fromkeys(out))
 
 

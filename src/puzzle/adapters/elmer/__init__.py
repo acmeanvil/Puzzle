@@ -36,6 +36,7 @@ import numpy as np
 
 from puzzle.adapters.base import (
     ELECTROMAGNETIC_FEATURES,
+    HEAT_SOURCE_FEATURES,
     REMOTE_FEATURES,
     STRUCTURAL_FEATURES,
     SUPPORT_FEATURES,
@@ -70,6 +71,7 @@ class ElmerAdapter(SolverAdapter):
         },
         features=STRUCTURAL_FEATURES
         | THERMAL_FEATURES
+        | HEAT_SOURCE_FEATURES  # ADR 0047
         | ELECTROMAGNETIC_FEATURES
         | REMOTE_FEATURES
         | SUPPORT_FEATURES
@@ -97,7 +99,14 @@ class ElmerAdapter(SolverAdapter):
         # ADR 0044: face values as restart variables the boundaries read with Equals
         # (tests/integration/test_imported_fields_parity.py)
         field_features=frozenset(
-            {"body_temperature:T", "pressure:p", "heat_flux:q", "convection:h", "convection:T_inf"}
+            {
+                "heat_generation:q",
+                "body_temperature:T",
+                "pressure:p",
+                "heat_flux:q",
+                "convection:h",
+                "convection:T_inf",
+            }
         )
         | VECTOR_FIELD_FEATURES,  # stage 2: tests/integration/test_imported_vectors.py
     )
@@ -165,4 +174,10 @@ class ElmerAdapter(SolverAdapter):
         node_ids = np.loadtxt(mesh_dir / NODE_MAP, dtype=np.int64, ndmin=1)
         times_file = mesh_dir / TIMES
         times = np.loadtxt(times_file, ndmin=1).tolist() if times_file.exists() else [1.0]
+        from puzzle.adapters.eddy import META
+
+        if (mesh_dir / META).exists():  # ADR 0047: magnetodynamics
+            from puzzle.adapters.elmer.magnetics import read_magnetics
+
+            return read_magnetics(vtus, mesh_dir, node_ids)
         return read_series(vtus, times, node_ids, log.read_text() if log.exists() else "")

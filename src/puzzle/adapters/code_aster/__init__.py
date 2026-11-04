@@ -16,6 +16,7 @@ import functools
 from pathlib import Path
 
 from puzzle.adapters.base import (
+    HEAT_SOURCE_FEATURES,
     INITIAL_STRESS_FEATURES,
     LIFTING_FEATURES,
     PRETENSION_FEATURES,
@@ -51,6 +52,7 @@ class CodeAsterAdapter(SolverAdapter):
         },
         features=STRUCTURAL_FEATURES
         | THERMAL_FEATURES
+        | HEAT_SOURCE_FEATURES  # ADR 0047
         | REMOTE_FEATURES
         | RIGID_REMOTE_FEATURES
         | SUPPORT_FEATURES
@@ -92,7 +94,14 @@ class CodeAsterAdapter(SolverAdapter):
         # (test_imported_fields_parity.py); stage 2: tractions, body forces and
         # displacements (test_imported_vectors.py)
         field_features=frozenset(
-            {"body_temperature:T", "pressure:p", "heat_flux:q", "convection:h", "convection:T_inf"}
+            {
+                "heat_generation:q",
+                "body_temperature:T",
+                "pressure:p",
+                "heat_flux:q",
+                "convection:h",
+                "convection:T_inf",
+            }
         )
         | VECTOR_FIELD_FEATURES
         | STAGE3_FIELDS,  # ADR 0044 stage 3 (tests/integration/test_imported_stage3.py)

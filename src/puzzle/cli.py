@@ -1580,6 +1580,12 @@ def _summarise(results) -> None:
             parts.append(f"max |B| {b.max():.4g} T")
         if "magnetic_energy" in step.fields:
             parts.append(f"magnetic energy {step.fields['magnetic_energy'].values[0, 0]:.4g} J")
+        if "joule_loss" in step.fields:  # ADR 0047: the total is the first entry
+            parts.append(f"loss {step.fields['joule_loss'].values[0, 0]:.4g} W")
+        if "coil_resistance" in step.fields:
+            r, ind = step.fields["coil_resistance"], step.fields["coil_inductance"]
+            parts += [f"{c}: R {r.values[0, k]:.4g} Ω, L {ind.values[0, k]:.4g} H"
+                      for k, c in enumerate(r.components)]  # fmt: skip
         if "temperature" in step.fields:
             t = step.fields["temperature"].values
             parts.append(f"temperature {t.min():.5g} to {t.max():.5g} K")

@@ -38,9 +38,17 @@ STRUCTURAL = (
 )
 HOLDING = ("fixed", "displacement", "remote_displacement")  # kept as constraints in modal
 THERMAL = {"temperature", "heat_flux", "convection"}
+HEAT_SOURCES = {"heat_generation"}  # ADR 0047: per volume, on bodies (the FE solvers)
 FLUID = {"velocity_inlet", "mass_flow_inlet", "pressure_outlet", "wall", "symmetry"}
 ELECTROSTATIC = {"electric_potential", "ground", "surface_charge"}
-MAGNETIC = {"coil_current", "coil_start", "coil_end", "magnetic_insulation"}
+MAGNETIC = {
+    "coil_current",
+    "stranded_coil",
+    "coil_start",
+    "coil_end",
+    "magnetic_insulation",
+    "magnetic_symmetry",
+}  # ADR 0047
 
 
 ROOM_K = 293.15

@@ -1123,6 +1123,39 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         return conv.report(lv, conv.verdicts(lv, goal), goal)
 
     @tool(
+        description="A magnetic study's skin-depth check (ADR 0047): each conductor's "
+        "skin depth δ at the study's highest frequency, the element size its mesh recipe "
+        "asks for, whether that is coarser than δ/2, and the refine-near controls to append "
+        "to the recipe's `controls` (one Edit) when it is."
+    )
+    @guarded
+    def magnetic_check(study: str) -> dict[str, Any]:
+        from puzzle import magnetics
+        from puzzle.adapters.eddy import skin_depth
+        from puzzle.model.schema import Component, MeshRecipe, Study
+
+        s = session()
+        st = s.project.get(study, Study)
+        comp = s.project.get(st.component, Component)
+        recipe = s.project.get(comp.mesh, MeshRecipe)
+        hz = magnetics._frequency(st)
+        rows = []
+        for body, mu, sigma in magnetics.conductors(s.project, comp):
+            delta = skin_depth(hz, mu, sigma) if hz else None
+            size = magnetics.recipe_size(recipe, body)
+            rows.append({"body": body, "skin_depth_m": delta, "element_size_m": size,
+                         "too_coarse": bool(delta and size and size > delta / 2)})  # fmt: skip
+        return {
+            "frequency_hz": hz,
+            "recipe": recipe.name,
+            "conductors": rows,
+            "controls": [
+                c.model_dump(mode="json") for c in magnetics.skin_refinement(s.project, st)
+            ],
+            "warnings": [w.message for w in magnetics.warnings(s.project) if w.object == st.name],
+        }
+
+    @tool(
         description="Run an optimisation's points (ADR 0063; needs autonomy 'act', as "
         "runs do; each point is a stored run, a point run before is reused, so a stopped "
         "optimiser resumes on its path); `budget` solves at most that many new points this "

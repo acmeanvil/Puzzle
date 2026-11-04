@@ -128,7 +128,10 @@ def main() -> None:
         "electrostatics": solve_electrostatics,
         "magnetic_fields": solve_magnetostatics,
     }.get(case["physics"])
-    if case["physics"] == "custom_pde":
+    if case.get("magnetics"):  # ADR 0047: harmonic magnetic fields, windings
+        case["_cells"] = lambda g: cells.find(tag(g))
+        solve_magnetodynamics(case, msh, degree, dx, ds, facets, tag, piecewise, out)
+    elif case["physics"] == "custom_pde":
         solve_custom(case, msh, degree, cells, facets, tag, piecewise, out)
     elif case["physics"] == "solid_mechanics" and planar:
         solve_solid_2d(case, msh, degree, dx, ds, facets, tag, piecewise, out)
@@ -787,6 +790,8 @@ def solve_heat(case, msh, degree, dx, ds, facets, tag, of_temperature, out) -> N
                 factor = fem.Constant(msh, 0.0)
                 amplitudes.append((factor, np.asarray(f["amplitude"], dtype=float)))
             L += r * vals["q"] * factor * v * ds(tag(f["group"]))
+        elif f["type"] == "heat_generation":  # W/m³ on a body (ADR 0047): q or a field's
+            L += r * vals["q"] * v * dx(tag(f["group"]))
         elif f["type"] == "convection":
             films.append((r * vals["h"], tag(f["group"])))
             a += r * vals["h"] * T * v * ds(tag(f["group"]))
@@ -1113,6 +1118,191 @@ def solve_magnetostatics(case, msh, degree, dx, ds, facets, tag, piecewise, out)
     out["magnetic_flux_density"] = project(B, msh, degree, dx, "b")
     out["current_density"] = project(J, msh, degree, dx, "j", region=dc)
     out["magnetic_energy"] = np.array(integral(0.5 / mu * ufl.inner(B, B) * dx))
+
+
+def solve_magnetodynamics(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
+    """Time-harmonic A–V (ADR 0047), or static windings, in real arithmetic.
+
+    Unknowns A = Ar + j Ai (Nédélec edges) and V = Vr + j Vi (Lagrange), V coupled in
+    the conductors (σ > 0; a winding has σ = 0). With J = J_s − σ (jω A + ∇V):
+        ∫ ν curl A · curl q + σ (jω A + ∇V) · q = ∫ J_s · q
+        ∫ σ (jω A + ∇V) · ∇w = (I / area) ∫_start w        (each massive conductor)
+    split into real and imaginary blocks, so real PETSc (and SciPy) solve it. V keeps
+    J·n = 0 on a conductor's faces even where n × A = 0 holds (V = 0 there instead, the
+    A* form, lets current out through them, as if shorted). A small mass term gauges A
+    where σ = 0; a tiny conductance and mass hold V outside the conductors and fix its
+    constant in one no terminal touches. A winding's J_s is a unit-conductivity
+    conduction solve in its body, scaled to N I.
+    """
+    import basix.ufl
+
+    mag = case["magnetics"]
+    cell = msh.basix_cell()
+    tdim = msh.topology.dim
+    nu = 1 / (MU_0 * piecewise("relative_permeability"))
+    space0 = fem.functionspace(msh, ("DG", 0))
+
+    def indicator(groups) -> fem.Function:
+        f = fem.Function(space0)
+        for g in groups:
+            f.x.array[cells_of(g)] = 1.0
+        return f
+
+    cells_of = case["_cells"]
+    sigma = fem.Function(space0)
+    for b in mag["bodies"]:
+        sigma.x.array[cells_of(b["name"])] = b["sigma"]
+    massive = [c for c in mag["coils"] if c["kind"] == "massive"]
+    windings = [c for c in mag["coils"] if c["kind"] == "stranded"]
+    chi_m = indicator([b["name"] for b in mag["bodies"] if b["sigma"] > 0])  # conductors
+    reference = float(np.max(sigma.x.array)) or 1.0
+    size = np.ptp(msh.geometry.x, axis=0).max()
+    gauge = 1e-6 / (MU_0 * size**2)
+
+    # Each winding's source: J_s = N I × (unit current density of a conduction solve).
+    S = fem.functionspace(msh, ("Lagrange", 1))
+    shapes = []
+    for c in windings:
+        if c["start"] is None:
+            raise SystemExit(
+                f"FEniCSx needs a winding's terminal faces (coil '{c['body']}' is closed)"
+            )
+        w, z = ufl.TrialFunction(S), ufl.TestFunction(S)
+        dc = dx(tag(c["body"]))
+        a_v = ufl.inner(ufl.grad(w), ufl.grad(z)) * dc
+        a_v += 1e-12 * ufl.inner(ufl.grad(w), ufl.grad(z)) * dx
+        bcs_v = [
+            dirichlet(value, fem.locate_dofs_topological(S, tdim - 1, facets.find(tag(g))), S)
+            for g, value in ((c["start"], 1.0), (c["end"], 0.0))
+        ]
+        phi = solve_linear(a_v, fem.Constant(msh, 0.0) * z * dx, bcs_v, S, f"coil{len(shapes)}")
+        unit = integral(ufl.inner(ufl.grad(phi), ufl.grad(phi)) * dc)
+        shapes.append(-(indicator([c["body"]]) / unit) * ufl.grad(phi))
+
+    def source(part: int):
+        total = 0 * ufl.as_vector([0.0, 0.0, 0.0])
+        for c, shape in zip(windings, shapes, strict=True):
+            total = total + c["turns"] * c["current"][part] * shape
+        return total
+
+    ne = basix.ufl.element("N1curl", cell, degree)
+    pe = basix.ufl.element("Lagrange", cell, degree)
+    with_v = any(b["sigma"] > 0 for b in mag["bodies"])
+    W = fem.functionspace(msh, basix.ufl.mixed_element([ne, ne, pe, pe] if with_v else [ne, ne]))
+    trial, test = ufl.TrialFunctions(W), ufl.TestFunctions(W)
+    Ar, Ai = trial[0], trial[1]
+    qr, qi = test[0], test[1]
+    omega = fem.Constant(msh, 0.0)
+
+    # Boundary conditions: n × A = 0 on terminals and insulated faces; V = 0 at the ends.
+    bcs = []
+    held = {
+        f["group"]
+        for f in case["features"]
+        if f["type"] in ("coil_start", "coil_end", "magnetic_insulation")
+    }
+    for k in (0, 1):
+        sub, _ = W.sub(k).collapse()
+        zero = fem.Function(sub)
+        for g in sorted(held):
+            dofs = fem.locate_dofs_topological((W.sub(k), sub), tdim - 1, facets.find(tag(g)))
+            bcs.append(fem.dirichletbc(zero, dofs, W.sub(k)))
+    if with_v:
+        for k in (2, 3):
+            sub, _ = W.sub(k).collapse()
+            zero = fem.Function(sub)
+            for c in massive:
+                where = facets.find(tag(c["end"]))
+                dofs = fem.locate_dofs_topological((W.sub(k), sub), tdim - 1, where)
+                bcs.append(fem.dirichletbc(zero, dofs, W.sub(k)))
+
+    a = (
+        nu * (ufl.inner(ufl.curl(Ar), ufl.curl(qr)) + ufl.inner(ufl.curl(Ai), ufl.curl(qi)))
+        + gauge * (ufl.inner(Ar, qr) + ufl.inner(Ai, qi))
+        + omega * sigma * (ufl.inner(Ar, qi) - ufl.inner(Ai, qr))
+    ) * dx
+    L = (ufl.inner(source(0), qr) + ufl.inner(source(1), qi)) * dx
+    if with_v:
+        Vr, Vi, wr, wi = trial[2], trial[3], test[2], test[3]
+        sm = chi_m * sigma
+        a += sm * (ufl.inner(ufl.grad(Vr), qr) + ufl.inner(ufl.grad(Vi), qi)) * dx
+        a += (
+            sm
+            * (
+                ufl.inner(ufl.grad(Vr) - omega * Ai, ufl.grad(wr))
+                + ufl.inner(ufl.grad(Vi) + omega * Ar, ufl.grad(wi))
+            )
+            * dx
+        )
+        a += (
+            1e-12
+            * reference
+            * (
+                ufl.inner(ufl.grad(Vr), ufl.grad(wr))
+                + ufl.inner(ufl.grad(Vi), ufl.grad(wi))
+                + (Vr * wr + Vi * wi) / size**2
+            )
+            * dx
+        )
+        for c in massive:
+            start = ds(tag(c["start"]))
+            L += (c["current"][0] * wr + c["current"][1] * wi) / c["area"] * start
+
+    vector0 = fem.functionspace(msh, ("DG", 0, (3,)))
+
+    def cellwise(expr) -> np.ndarray:
+        f = fem.Function(vector0)
+        f.interpolate(fem.Expression(expr, vector0.element.interpolation_points))
+        return f.x.array.reshape(-1, 3).copy()
+
+    frequencies = mag["frequencies"]
+    series: dict[str, list] = {
+        k: []
+        for k in (
+            "b_re",
+            "b_im",
+            "B_re",
+            "B_im",
+            "J_re",
+            "J_im",
+            "A_re",
+            "A_im",
+            "voltage_re",
+            "voltage_im",
+        )
+    }
+    for k, hz in enumerate(frequencies, start=1):
+        omega.value = 2 * np.pi * hz
+        emit("increment", increment=k, time=hz)
+        uh = solve_linear(a, L, bcs, W, "av")
+        ar, ai = uh.sub(0).collapse(), uh.sub(1).collapse()
+        vr = uh.sub(2).collapse() if with_v else None
+        vi = uh.sub(3).collapse() if with_v else None
+        for part, (A_, other) in enumerate(((ar, ai), (ai, ar))):
+            key = "re" if part == 0 else "im"
+            sign = 1.0 if part == 0 else -1.0  # −σ jω (Ar + j Ai) = σω Ai − j σω Ar
+            eddy = sign * omega * sigma * other
+            if with_v:
+                eddy = eddy - chi_m * sigma * ufl.grad(vr if part == 0 else vi)
+            J = source(part) + eddy
+            series[f"B_{key}"].append(cellwise(ufl.curl(A_)))
+            series[f"J_{key}"].append(cellwise(J))
+            series[f"A_{key}"].append(cellwise(A_))
+            series[f"b_{key}"].append(project(ufl.curl(A_), msh, degree, dx, f"b{key}"))
+        volts = []
+        for c in massive:
+            start = ds(tag(c["start"]))
+            volts.append([integral(v * start) / c["area"] for v in (vr, vi)])
+        series["voltage_re"].append([v[0] for v in volts])
+        series["voltage_im"].append([v[1] for v in volts])
+        emit("converged", increment=k)
+    out["coords"] = fem.functionspace(msh, ("Lagrange", degree)).tabulate_dof_coordinates()
+    count = msh.topology.index_map(tdim).size_local
+    corners = msh.geometry.dofmap[:count, :4]  # a tet's first four nodes: its vertices
+    out["cell_midpoints"] = msh.geometry.x[corners].mean(axis=1)  # as Puzzle's centres
+    out["magnetic_frequencies"] = np.array(frequencies, float)
+    for key, values in series.items():
+        out[f"mag_{key}"] = np.array(values, float)
 
 
 if __name__ == "__main__":

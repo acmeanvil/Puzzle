@@ -43,6 +43,10 @@ TEXT = {
     "materials": ("Materials", "Every body needs a material with the properties the study uses."),
     "component": ("Component", "Puts the parts, their materials and a mesh recipe together."),
     "mesh": ("Mesh", "Meshing happens when a study runs; meshing now checks it first."),
+    "skin_depth": (
+        "Skin depth",
+        "Eddy currents crowd into a skin δ deep; a conductor's elements should be δ/2 or finer.",
+    ),  # ADR 0047
     "physics": ("Physics", "What to solve: structural, heat, flow, electromagnetic…"),
     "conditions": ("Supports and loads", "What holds the model and what acts on it."),
     "contacts": (
@@ -81,7 +85,7 @@ NEEDS = {
         ("a potential", ("electric_potential",), "electric_potential", ()),
         ("a ground", ("ground",), "ground", ()),
     ],
-    "magnetic_fields": [("a coil current", ("coil_current",), "coil_current", ())],
+    "magnetic_fields": [("a coil", ("coil_current", "stranded_coil"), "coil_current", ())],
     "custom_pde": [("a Dirichlet condition", ("dirichlet",), "dirichlet", ())],
 }  # fmt: skip
 
@@ -179,6 +183,7 @@ def advise(
         add("mesh", "done", "Meshed.")
     else:
         add("mesh", "optional", action="mesh", label="Mesh now")
+    _skin_depth(project, component, study, add)
 
     if not component.physics:
         add("physics", "needed", f"{component.name} solves nothing yet.", "add_physics",
@@ -245,6 +250,20 @@ def advise(
     _optimisations(project, root, add)
     _convergence(project, study, root, add)
     return out
+
+
+def _skin_depth(project: Project, component, study, add) -> None:
+    """ADR 0047: a conductor meshed coarser than half its skin depth."""
+    from puzzle.magnetics import warnings
+
+    studies = {s.name: s for s in project.of_type(Study) if s.component == component.id}
+    found = [w for w in warnings(project) if w.object in studies]
+    if study is not None:
+        found = [w for w in found if w.object == study.name] or found
+    if found:
+        target = studies[found[0].object]
+        add("skin_depth", "needed", found[0].message, f"skin_depth:{target.id}",
+            "Add a skin-depth refinement")  # fmt: skip
 
 
 _ESTIMATES: dict[str, str] = {}  # run id -> the estimate's words (runs never change)
