@@ -54,6 +54,10 @@ SCALARS = {
     "contact_gap": ("Contact gap (− penetration)", "length"),
     "contact_sliding": ("Contact sliding distance", "length"),
     "contact_status": ("Contact status (0 open, 1 sliding, 2 sticking)", None),
+    # ADR 0066: error estimates, per element
+    "error_estimate": ("Error estimate (energy norm)", None),
+    "error_ratio": ("Refinement ratio (above 1: refine)", None),
+    "error_jump": ("Gradient jump indicator", None),
 }
 AXES = {"x": "X", "y": "Y", "z": "Z"}
 SUFFIXES = {"range": "range", "mean": "mean"}  # fields a range combination makes

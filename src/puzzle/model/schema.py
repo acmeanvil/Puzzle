@@ -1823,7 +1823,8 @@ class ResultDefinition(ProjectObject):
 
     kind: ClassVar[str] = "result"
 
-    method: Literal["linear", "srss", "envelope", "range", "equation", "fatigue"]
+    method: Literal["linear", "srss", "envelope", "range", "equation", "fatigue",
+                    "error_estimate"]  # fmt: skip
     cases: list[ResultCase] = Field(default_factory=list)
     quantity: str | None = None
     extreme: Literal["max", "min"] = "max"
@@ -1833,10 +1834,15 @@ class ResultDefinition(ProjectObject):
     expression: str | None = None
     unit: str | None = None
     fatigue: FatigueSettings | None = None
+    # ADR 0066 phase 2: the target error the refinement ratio is for (0.02 = 2 %)
+    error_target: float = Field(default=0.02, gt=0, lt=1)
 
     @model_validator(mode="after")
     def _complete(self) -> ResultDefinition:
-        if self.method == "fatigue":
+        if self.method == "error_estimate":
+            if self.source is None:
+                raise ValueError("an error estimate needs the study it reads")
+        elif self.method == "fatigue":
             if self.fatigue is None:
                 raise ValueError("a fatigue result needs its settings")
         elif self.method == "equation":

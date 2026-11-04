@@ -298,6 +298,9 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         add("New combination…", lambda: window.new_derived("linear", str(obj.id)))
         add("New equation…", lambda: window.new_derived("equation", str(obj.id)))
         add("New fatigue tool…", lambda: window.new_derived("fatigue", str(obj.id)))
+        add(
+            "New error estimate…", lambda: window.new_derived("error_estimate", str(obj.id))
+        )  # ADR 0066
         from puzzle.gui.optimisation_panel import new_optimisation
 
         add("New optimisation…", lambda: new_optimisation(window, str(obj.id)))  # ADR 0063
@@ -354,6 +357,7 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         add("New combination…", lambda: window.new_derived("linear", study))
         add("New equation…", lambda: window.new_derived("equation", study))
         add("New fatigue tool…", lambda: window.new_derived("fatigue", study))
+        add("New error estimate…", lambda: window.new_derived("error_estimate", study))
         menu.addSeparator()
         add("Delete results…", lambda: window.delete_run(node.object))
     elif node.kind == "derived" and obj is not None:

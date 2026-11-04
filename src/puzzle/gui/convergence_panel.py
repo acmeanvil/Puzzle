@@ -90,6 +90,77 @@ def run(window, study_id: str) -> None:
     window.background(f"Checking {study.name}'s mesh convergence…", work, done)
 
 
+FIELDS = [("Displacement (structural) or temperature (heat)", None)]
+
+
+def error_estimate(window, study_id=None, definition=None):
+    """An error estimate (ADR 0066 phase 2) as a derived result, in one form: the
+    study, the field (the physics' own, or any nodal field's gradient jumps), the
+    target the refinement ratio is for. Made, or changed, by one command."""
+    from puzzle.commands.model import Create, Edit, EditOp
+    from puzzle.gui.quick_form import Ask
+    from puzzle.model.schema import Study
+
+    project = window.session.project
+    studies = [(s.name, str(s.id)) for s in project.of_type(Study)]
+    if not studies:
+        window.statusBar().showMessage("An error estimate reads a study's run: make one first",
+                                       8000)  # fmt: skip
+        return None
+
+    def fields(v) -> list:
+        """The physics' own, then the chosen study's other nodal fields."""
+        from uuid import UUID as _U
+
+        from puzzle.post.derived import run_for
+        from puzzle.post.quantities import words
+
+        try:
+            record = run_for(project, window._store(), _U(v.get("source") or studies[0][1]))
+            step = window._store().read_results(record.run_id).steps[-1]
+        except Exception:  # noqa: BLE001 - no run yet: the physics' own only
+            return FIELDS
+        own = ("displacement", "temperature")
+        return FIELDS + [(f"{words(n)}: a relative indicator", n)
+                         for n, f in step.fields.items()
+                         if f.location == "node" and n not in own]  # fmt: skip
+
+    d = definition
+    got = window.ask_form("Error estimate", [
+        Ask("source", "Study", choices=studies,
+            default=str(d.source) if d else study_id),
+        Ask("quantity", "From", choices=fields, default=d.quantity if d else None,
+            help="Displacement and temperature give the energy-norm error "
+            "(Zienkiewicz–Zhu); other fields their gradient's jumps between elements"),
+        Ask("target", "Target error (%)", kind="text",
+            default=f"{(d.error_target if d else 0.02) * 100:g}",
+            help="The refinement ratio is above 1 where an element is too big for it"),
+        Ask("name", "Name", kind="text", default=d.name if d else "Error estimate"),
+    ], check=lambda v: None if _percent(v.get("target")) else "the target is a "
+       "percentage between 0 and 100")  # fmt: skip
+    if not got:
+        return None
+    data = {"name": got["name"], "method": "error_estimate", "source": got["source"],
+            "quantity": got.get("quantity"), "error_target": _percent(got["target"])}  # fmt: skip
+    if d is None:
+        outcome = window.submit(Create(kind="result", data=data))
+    else:
+        current = d.model_dump(mode="json")
+        ops = [EditOp(op="set", path=k, value=v) for k, v in data.items() if current.get(k) != v]
+        outcome = window.submit(Edit(object=str(d.id), ops=ops)) if ops else None
+    if outcome is not None and getattr(outcome, "created", None):
+        return outcome.created[0]["id"]
+    return None
+
+
+def _percent(text) -> float | None:
+    try:
+        t = float(str(text).strip().rstrip("%")) / 100
+    except ValueError:
+        return None
+    return t if 0 < t < 1 else None
+
+
 class ConvergencePanel(QWidget):
     """One study's convergence check: the meshes, a plot per quantity, the verdicts."""
 

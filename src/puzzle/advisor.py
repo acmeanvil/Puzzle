@@ -232,7 +232,7 @@ def advise(
     word = state.state if state else "not_run"
     if word == "up_to_date":
         add("run", "done", "Its results match the model.")
-        add("results", "optional", "", "results", "Show results")
+        add("results", "optional", _estimate(project, study, root), "results", "Show results")
     elif word == "out_of_date":
         add("run", "needed", "The model changed since the last run.", "run", "Run again")
         add("results", "optional", "Older results are kept until then.", "results", "Show them")
@@ -245,6 +245,38 @@ def advise(
     _optimisations(project, root, add)
     _convergence(project, study, root, add)
     return out
+
+
+_ESTIMATES: dict[str, str] = {}  # run id -> the estimate's words (runs never change)
+LARGEST_ESTIMATE = 100_000  # elements: past it the Advisor leaves the estimate out
+
+
+def _estimate(project: Project, study, root) -> str:
+    """ADR 0066 phase 2: the newest run's error estimate in words ("error 12 % (energy
+    norm), largest at B/Fillet: refine there"), or "" when it has none."""
+    if root is None:
+        return ""
+    from pathlib import Path
+
+    from puzzle.post import estimates
+    from puzzle.post.derived import run_for
+    from puzzle.project.layout import RESULTS_DIR
+    from puzzle.results.store import ResultStore
+
+    try:
+        store = ResultStore(Path(root) / RESULTS_DIR)
+        record = run_for(project, store, study.id)
+        if record.run_id not in _ESTIMATES:
+            mesh = store.read_mesh(record.mesh_id)
+            if sum(len(b.ids) for b in mesh.blocks if b.dim == 3) > LARGEST_ESTIMATE:
+                return ""  # too slow to work out on every refresh: error_estimate does
+            est = estimates.of_run(project, store, record.run_id)
+            target = study.convergence.target if study.convergence else 0.02
+            words = estimates.words(mesh, est, target)
+            _ESTIMATES[record.run_id] = words[0].upper() + words[1:] + "."
+        return _ESTIMATES[record.run_id]
+    except Exception:  # noqa: BLE001 - not every run has a field to estimate from
+        return ""
 
 
 def _convergence(project: Project, study, root, add) -> None:

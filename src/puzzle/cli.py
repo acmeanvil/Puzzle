@@ -399,6 +399,21 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", help="levels and verdicts as JSON")
     p.set_defaults(handler=_convergence)
 
+    p = sub.add_parser("error-estimate", help="how far a run is from the exact answer, per "
+                       "element (Zienkiewicz–Zhu; ADR 0066)")  # fmt: skip
+    p.add_argument("project", type=Path)
+    p.add_argument("study", help="the study (its newest run)")
+    p.add_argument("--field", help="a nodal field's gradient jumps instead (relative only)")
+    p.add_argument(
+        "--target",
+        type=float,
+        default=0.02,
+        metavar="T",
+        help="the error the refinement ratio is for (default 0.02 = 2 %%)",
+    )
+    p.add_argument("--json", action="store_true", help="the summary as JSON")
+    p.set_defaults(handler=_error_estimate)
+
     p = sub.add_parser("import-field", help="bring in values at points from a file (ADR 0044)")
     p.add_argument("project", type=Path)
     p.add_argument("file", type=Path, nargs="+", help="CSV/TXT/DAT (x, y, z and values), VTU, "
@@ -1037,6 +1052,34 @@ def _convergence(args) -> int:
     else:
         print("\n".join(conv.lines(lv, vs)))
     return 0 if vs and all(v.state == "converged" for v in vs) else 1
+
+
+def _error_estimate(args) -> int:
+    """ADR 0066 phase 2: a study's newest run's error estimate, and where it is largest."""
+    import json
+
+    from puzzle.commands import Session, resolve
+    from puzzle.model.schema import Study
+    from puzzle.post import estimates
+    from puzzle.post.derived import run_for
+
+    s = Session(args.project)
+    store = _store(args.project)
+    study = resolve(s.project, args.study, Study)
+    record = run_for(s.project, store, study.id)
+    est = estimates.of_run(s.project, store, record.run_id, field_name=args.field)
+    mesh = store.read_mesh(record.mesh_id)
+    if args.json:
+        print(json.dumps(estimates.summary(mesh, est, args.target), indent=1))
+    else:
+        print(f"{study.name}: {estimates.words(mesh, est, args.target)}")
+        for spot in estimates.hot_spots(mesh, est):
+            at = ", ".join(spot["selections"]) or "inside"
+            xyz = ", ".join(f"{c:.4g}" for c in spot["centre"])
+            print(f"  element {spot['element']}: {spot['error']:.3g} at ({xyz}) m, {at}")
+        for note in est.notes:
+            print(f"  note: {note}")
+    return 0 if est.relative <= args.target or est.physics == "field" else 1
 
 
 def _optimise(args) -> int:

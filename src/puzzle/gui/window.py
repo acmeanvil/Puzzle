@@ -1797,6 +1797,10 @@ class MainWindow(QMainWindow):
         from puzzle.gui.derived_dialog import CombinationDialog, EquationDialog, FatigueDialog
 
         project, store = self.session.project, self._store()
+        if method == "error_estimate":  # ADR 0066: one short form
+            from puzzle.gui.convergence_panel import error_estimate
+
+            return error_estimate(self, study, definition)
         if method == "fatigue":
             dialog = FatigueDialog(project, store, self, definition=definition, study=study)
         elif method == "equation":

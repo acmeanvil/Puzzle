@@ -213,3 +213,46 @@ The maintainer's answers:
   reported not converged (GCI 26 %), their extrapolation nearer the answer than the
   finest mesh.
 
+## Phase 2 (built, 2026-11-04)
+
+- `puzzle/post/estimates.py`, solver-neutral, from the stored nodal field, the mesh and
+  the component's materials (isotropic E and ν, or k; a material's single values, not
+  its temperature tables):
+  - Zienkiewicz–Zhu: each element's stress (Voigt) or flux −k∇T from the field's
+    gradient at its nodes, recovered by a volume-weighted nodal average per material
+    (an interface's jump is not an error), and the difference in the energy norm per
+    element. The rule is 4-point Gauss on linear tets, and the 4-point rule on the
+    eight sub-tetrahedra (32 points) on quadratic ones. The model's
+    η = √(Σe² / (Σe² + ΣU²)).
+  - The gradient jump across each interior face, ½ Σ h_F A_F |[σ n]|² / E (heat: / k),
+    vectorised over the faces; boundary faces are left out (their loads are not
+    known). On any nodal field (`field` mode: each component's gradient, unit
+    weight), as the relative indicator for other physics.
+  - `Estimate.ratio(target)` is Zienkiewicz–Zhu's refinement ratio, and
+    `sizes(target)` gives h ξ^(−1/p) (phase 3 meshes from it). `fields` gives element
+    fields `error_estimate`, `error_ratio`, `error_jump` and the global
+    `error_relative`. `of_run` reads a run.
+  - Linear and quadratic tets; other element types are left out with a note.
+  - `hot_spots` (the largest errors with their centres and the selections they
+    touch), `summary` and `words` ("error 4.2 % (energy norm), largest at
+    B/Fillet: refine there").
+- Shown: a derived result of method `error_estimate` (`source`, `error_target`, a
+  `quantity` for another field; ADR 0025) draws the element fields in the results
+  view ("Error estimate (energy norm)", "Refinement ratio (above 1: refine)",
+  "Gradient jump indicator"), with the relative error as its note. The GUI makes it
+  from a study's or run's New error estimate… (one form; its fields from the run). The
+  Advisor's Results step says the newest run's estimate (cached per run; left out
+  past 100 000 elements). CLI `puzzle error-estimate`, MCP `error_estimate`; the
+  skill `mesh-convergence` covers both.
+- Verified (`tests/test_estimates.py`, on a cube of Kuhn tets with exact fields):
+  - zero error for linear fields;
+  - effectivity 1.01 against the exact energy-norm error of u = (x², 0, 0) on linear
+    tets;
+  - observed orders 1.0 (linear tets) and 1.96 (quadratic tets);
+  - no false error at a conductivity interface.
+
+  On CalculiX (`tests/integration/test_error_estimates.py`), the cantilever's η goes
+  3.17, 2.23, 2.12 % on quadratic tets (flattening at the clamped root's singular
+  edges, where the largest element errors sit) and 64, 54, 43 % on linear tets
+  (locking). The jump indicator reads about 4× the exact error: an indicator, not a
+  measure.

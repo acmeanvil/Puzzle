@@ -40,7 +40,12 @@ COMBINATIONS = {
     "envelope": "Envelope (maximum or minimum)",
     "range": "Range and mean",
 }
-METHODS = {**COMBINATIONS, "equation": "Equation", "fatigue": "Fatigue tool"}
+METHODS = {
+    **COMBINATIONS,
+    "equation": "Equation",
+    "fatigue": "Fatigue tool",
+    "error_estimate": "Error estimate",
+}
 
 
 def _reduce_or_pairwise(fn_reduce, fn_pair):
@@ -409,6 +414,8 @@ def evaluate(project, store, definition, _seen: tuple = ()) -> Derived:
         return Derived(mesh, results, items, run_ids, warnings)
     if definition.method == "equation":
         return _equation(project, store, definition, seen)
+    if definition.method == "error_estimate":
+        return _error_estimate(project, store, definition)
     records = [run_for(project, store, c.study, c.point) for c in definition.cases]
     key = _key(definition, [r.run_id for r in records])
     if key in _CACHE:
@@ -452,6 +459,24 @@ def parameters(project) -> dict[str, float]:
     from puzzle.operators import parameter_values
 
     return parameter_values(project)
+
+
+def _error_estimate(project, store, definition) -> Derived:
+    """ADR 0066 phase 2: the source study's run's error estimate as element fields."""
+    from puzzle.post import estimates
+
+    record = run_for(project, store, definition.source, definition.source_point)
+    key = _key(definition, [record.run_id])
+    if key in _CACHE:
+        return _CACHE[key]
+    est = estimates.of_run(project, store, record.run_id, field_name=definition.quantity,
+                           step=definition.source_step)  # fmt: skip
+    fields = est.fields(definition.error_target)
+    results = Results(record.solver, [StepResult(1, "stationary", 0.0, fields=fields)])
+    notes = [*est.notes, f"relative error {est.relative * 100:.3g} % (energy norm)"
+             if est.physics != "field" else "a relative indicator (no energy norm)"]  # fmt: skip
+    return _remember(key, Derived(store.read_mesh(record.mesh_id), results,
+                                  _items_of(results), [record.run_id], notes))  # fmt: skip
 
 
 def _equation(project, store, definition, seen) -> Derived:

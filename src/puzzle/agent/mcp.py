@@ -1029,6 +1029,36 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
                    if opt.method == "robust" else {})}  # fmt: skip
 
     @tool(
+        description="Error estimate (ADR 0066 phase 2) of a study's newest run (or a sweep "
+        "point's, `point` as its title), from the stored field: displacement gives the "
+        "Zienkiewicz–Zhu energy-norm error, temperature the same on the heat flux, "
+        "`field` any nodal field's gradient jumps (relative only). Returns the relative "
+        "error, how many elements are too big for `target` (0.02 = 2 %), the hot spots "
+        "(element, error, centre in m, selections touched) and notes. Solves nothing."
+    )
+    @guarded
+    def error_estimate(study: str, field: str | None = None, target: float = 0.02,
+                       point: str | None = None) -> dict[str, Any]:  # fmt: skip
+        from puzzle.commands import resolve
+        from puzzle.model.schema import Study
+        from puzzle.post import estimates
+        from puzzle.post.derived import run_for
+        from puzzle.project.layout import RESULTS_DIR
+        from puzzle.results.store import ResultStore
+
+        s = session()
+        store = ResultStore(root / RESULTS_DIR)
+        st = resolve(s.project, study, Study)
+        record = run_for(s.project, store, st.id, point)
+        est = estimates.of_run(s.project, store, record.run_id, field_name=field)
+        mesh = store.read_mesh(record.mesh_id)
+        return {
+            "run": record.run_id,
+            "words": estimates.words(mesh, est, target),
+            **estimates.summary(mesh, est, target),
+        }
+
+    @tool(
         description="Mesh convergence (ADR 0066): the study (or a mesh study, by name) on "
         "`levels` meshes, each one's sizes divided by `ratio`, its quantities judged by "
         "Roache's grid convergence index: observed order, extrapolated value, GCI against "

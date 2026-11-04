@@ -47,3 +47,40 @@ def test_the_panel_shows_meshes_plot_and_verdict(app, tmp_path):
     assert names == ["Largest total deformation", "Largest total deformation: extrapolated"]
     assert "converged within" in panel.summary.text()
     assert not panel.run_button.isEnabled()
+
+
+def test_the_error_estimate_and_convergence_forms(app, tmp_path, monkeypatch):
+    from forms import fill
+
+    from puzzle.gui.window import MainWindow
+    from puzzle.model.schema import ResultDefinition, Study
+    from puzzle.project import save_project
+
+    p, _ = project()
+    save_project(p, tmp_path / "p")
+    w = MainWindow(tmp_path / "p")
+    try:
+        study = next(iter(w.session.project.of_type(Study)))
+        fill(w, source=str(study.id), target="5", name="How far off")
+        w.new_derived("error_estimate", str(study.id))
+        (d,) = w.session.project.of_type(ResultDefinition)
+        assert d.method == "error_estimate" and d.error_target == 0.05 and d.quantity is None
+        box = w.last_form.widgets["quantity"]
+        offered = [box.itemText(i) for i in range(box.count())]
+        assert offered == ["Displacement (structural) or temperature (heat)"]  # no run yet
+        fill(w, target="10")
+        w.new_derived("error_estimate", definition=d)
+        (d,) = w.session.project.of_type(ResultDefinition)
+        assert d.error_target == 0.1
+        fill(w, levels=4, ratio=2.0, target="1")
+        from puzzle.gui import convergence_panel
+
+        ran = []
+        monkeypatch.setattr(convergence_panel, "run", lambda window, sid: ran.append(sid))
+        convergence_panel.check(w, str(study.id))
+        assert ran == [str(study.id)]
+        study = next(iter(w.session.project.of_type(Study)))
+        assert (study.convergence.levels, study.convergence.ratio) == (4, 2.0)
+        assert study.convergence.target == 0.01
+    finally:
+        w.close()

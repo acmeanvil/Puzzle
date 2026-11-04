@@ -1,6 +1,6 @@
 ---
 name: mesh-convergence
-description: is the mesh fine enough: a study on three or more meshes, each finer by a ratio, judged by Roache's grid convergence index (observed order, extrapolated value, GCI against a target, default 2 %)
+description: is the mesh fine enough: a study on finer and finer meshes judged by Roache's GCI (order, extrapolated value, 2 % target), and one run's Zienkiewicz–Zhu error estimate
 adr: 0066
 ---
 Read this before saying a result is accurate, when the user asks whether the mesh is
@@ -45,11 +45,34 @@ From the three finest meshes that ran, each quantity gets:
    converged, suggest a finer recipe, or a size control where the quantity is read,
    and check again.
 
+## One run's error estimate
+
+Without solving again, `error_estimate(study)` says how far the newest run is from
+the exact answer. Displacement gives the Zienkiewicz–Zhu energy-norm error, from the
+stress recovered at the nodes; temperature does the same with the heat flux. The
+result is a relative error ("error 4.2 % (energy norm), largest at B/Fillet: refine
+there"), how many elements are too big for `target`, and the hot spots. Each hot spot
+gives the element, its error, its centre in m and the selections it touches. Use it:
+
+- before a convergence check, to see where to put a size control;
+- when a check is too costly, as a single-run estimate (it is an estimate, not a
+  bound: effectivity near 1 on smooth fields).
+
+`field` names any other nodal field (velocity, electric potential), giving the jumps
+of its gradient between elements. That is a relative indicator for where to refine,
+not an error. The estimate's numbers are in the energy norm: compare them with
+the target, not with a stress in Pa. A sharp re-entrant corner or a point load is
+singular: its error stays high however fine the mesh, so judge quantities away from
+it. A derived result of method `error_estimate` (`source` the study, `error_target`)
+draws the error, refinement ratio and jump per element in the results view.
+
 ## Tools
 
 - `mesh_convergence(study, levels, ratio, target, solve)`: the levels (label,
   elements, nodes, values, why one did not run) and the verdicts. `converged` is true
   only when every quantity converged.
+- `error_estimate(study, field, target, point)`: one run's estimate, solving nothing.
+- CLI: `puzzle error-estimate PROJECT STUDY [--field F] [--target T] [--json]`.
 - CLI: `puzzle convergence PROJECT STUDY [--levels N] [--ratio R] [--target T]
   [--points] [--json]`. Its exit code is 0 only when converged.
 - GUI: a study's Check mesh convergence…, and the Convergence panel (Window →

@@ -41,6 +41,8 @@ def _own(obj: ProjectObject, *, drop: frozenset[str] = frozenset()) -> dict:
         data.pop("morph", None)
     if isinstance(obj, Study):  # ADR 0066: a check of the study never changes its solve
         data.pop("convergence", None)
+    if obj.kind == "result" and data.get("error_target") == 0.02:  # ADR 0066's default
+        data.pop("error_target")
     data.pop("hidden", None)  # what the view shows never changes a solve
     data.pop("tags", None)  # nor do the words it is found by (ADR 0064A J6)
     if data.get("share_faces") is True:  # the default: older projects keep their hashes
