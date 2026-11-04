@@ -194,3 +194,48 @@ def rolling(ctx, op) -> dict[str, Any]:
     kinds = _kinds(t)
     kinds[name] = kinds.get(col)
     return {"out": _made(frame.with_columns(x.alias(name)), kinds)}
+
+
+def _cells(op, t, spacing_q):
+    """Each row's cell of a grid `spacing` wide over its x, y, z."""
+    import numpy as np
+
+    _names(op, ["x", "y", "z"], t)
+    if spacing_q is None or spacing_q.to_si() <= 0:
+        raise PuzzleError(f"'{op.name}': give the spacing", code="inconsistent")
+    h = spacing_q.to_si()
+    xyz = t.frame.select(["x", "y", "z"]).to_numpy().astype(float)
+    return np.floor(xyz / h).astype(np.int64), xyz, h
+
+
+def merge_points(ctx, op) -> dict[str, Any]:
+    """Rows whose points are closer than `spacing` made one (ADR 0064A D5): their x, y,
+    z and numbers averaged, the first of any text kept."""
+    import numpy as np
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+    from scipy.spatial import cKDTree
+
+    pl = _pl()
+    t = _table(op, _ev()._input(ctx, op, "table"))
+    _, xyz, h = _cells(op, t, op.spacing)
+    pairs = cKDTree(xyz).query_pairs(h, output_type="ndarray")
+    n = len(xyz)
+    graph = coo_matrix((np.ones(len(pairs)), (pairs[:, 0], pairs[:, 1])), shape=(n, n))
+    _, group = connected_components(graph, directed=False)
+    frame = t.frame.with_columns(pl.Series("__group", group))
+    aggs = [(pl.col(c).mean() if t.frame[c].dtype.is_numeric() else pl.col(c).first()).alias(c)
+            for c in t.columns]  # fmt: skip
+    out = frame.group_by("__group", maintain_order=True).agg(aggs).drop("__group")
+    return {"out": _made(out, _kinds(t))}
+
+
+def thin_points(ctx, op) -> dict[str, Any]:
+    """One row kept per cell of a `spacing` grid (ADR 0064A D7): a dense cloud thinned,
+    the first row of each cell kept as it is."""
+    pl = _pl()
+    t = _table(op, _ev()._input(ctx, op, "table"))
+    cells, _, _ = _cells(op, t, op.spacing)
+    frame = t.frame.with_columns(pl.Series("__cell", [f"{a},{b},{c}" for a, b, c in cells]))
+    out = frame.unique(subset=["__cell"], keep="first", maintain_order=True).drop("__cell")
+    return {"out": _made(out, _kinds(t))}

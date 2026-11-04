@@ -58,6 +58,9 @@ class ProjectObject(BaseModel):
 
     id: UUID = Field(default_factory=uuid4)
     name: str
+    tags: list[str] = Field(
+        default_factory=list, description="words to find and filter it by (ADR 0064A J6); "
+        "never change a solve")  # fmt: skip
 
     def dependencies(self) -> list[UUID]:
         """IDs of the objects this one reads from; used for hashing and staleness."""
@@ -719,9 +722,15 @@ class ImportedField(ProjectObject):
 
     kind: ClassVar[str] = "field"
 
-    file: str = Field(description="the file, relative to the project")
+    file: str = Field(default="", description="the file, relative to the project")
+    source: UUID | None = Field(
+        default=None, description="a table operator whose rows are the points and values, "
+        "in place of a file (ADR 0064 phase 3; format table)")  # fmt: skip
+    port: str = Field(default="out", description="the source's output")
     file_hash: str = Field(default="", description="its SHA-256: a changed file stales its users")
-    format: Literal["csv", "vtu", "fluent_profile", "exodus", "ensight", "openfoam"] = "csv"
+    format: Literal["csv", "vtu", "fluent_profile", "exodus", "ensight", "openfoam", "table"] = (
+        "csv"
+    )
     delimiter: str | None = Field(default=None, description="None: commas, semicolons, tabs "
                                   "or spaces, found from the file")  # fmt: skip
     skip_rows: int = Field(default=0, ge=0, description="rows before the header (or the data)")
@@ -757,7 +766,8 @@ class ImportedField(ProjectObject):
         return self
 
     def dependencies(self) -> list[UUID]:
-        return [self.placement.axes] if self.placement.axes is not None else []
+        out = [self.placement.axes] if self.placement.axes is not None else []
+        return out + ([self.source] if self.source is not None else [])
 
     def varies(self) -> bool:
         """Whether the field varies along its axis (time or frequency): listed times or
@@ -812,6 +822,9 @@ class Feature(BaseModel):
     type: str
     selection: str
     values: dict[str, Quantity] = Field(default_factory=dict)
+    when: str | None = Field(
+        default=None, description="a parameter (a Toggle): the feature applies while it "
+        "is not 0, and is left out of the solve while it is (ADR 0064A A3)")  # fmt: skip
     extensions: dict[str, dict[str, Any]] = Field(
         default_factory=dict, description="Per-solver settings with no neutral equivalent"
     )
@@ -2007,7 +2020,8 @@ class Operator(ProjectObject):
                   "unpivot", "distinct", "fill_missing", "rolling", "mesh_table",
                   "project_table", "run_history", "history_table", "mode_table",
                   "contact_table", "bolt_table", "nearest", "section", "divide",
-                  "clearance", "text", "preview"]  # fmt: skip
+                  "clearance", "text", "preview", "toggle", "choice", "slider2d",
+                  "merge_points", "thin_points"]  # fmt: skip
     inputs: dict[str, OperatorInput] = Field(default_factory=dict)
     quantity: str | None = Field(
         default=None, description='reduce, filter: a listed result\'s key, e.g. '
@@ -2107,6 +2121,15 @@ class Operator(ProjectObject):
                      "contacts"] = Field(default="parts",
                                          description="project table: which objects")  # fmt: skip
     other: str = Field(default="", description="clearance: the second part or selection")
+    options: list[Quantity] = Field(
+        default_factory=list, description="choice: the presets (M8, M10, M12 as 8 mm, ...)"
+    )
+    labels: list[str] = Field(default_factory=list, description="choice: their names")
+    low2: Quantity | None = Field(default=None, description="2D slider: y's lowest")
+    high2: Quantity | None = Field(default=None, description="2D slider: y's highest")
+    spacing: Quantity | None = Field(
+        default=None, description="merge points: closer than this are one; thin points: "
+        "one kept per cell this size")  # fmt: skip
     template: str = Field(
         default="", description='text: with {x}, {y}, {z} for the inputs ("σ max = {x} at '
         '{y}"); {x:.1f} for places')  # fmt: skip

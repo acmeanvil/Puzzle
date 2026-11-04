@@ -122,6 +122,19 @@ def show(window, op) -> None:
     viewer = getattr(window, "table_view", None)
     if viewer is not None:
         viewer.show_table(op)  # a table's rows in the Table tab (ADR 0064)
+    if op.type == "slider2d":  # two sliders, x then y (ADR 0064A A2)
+        for port, key, low, high in (("x", "value", op.low, op.high),
+                                     ("y", "value2", op.low2, op.high2)):  # fmt: skip
+            if low is None or high is None:
+                continue
+            try:
+                now = ev.value(ev.Context(window.session.project, None), op, port).value
+            except PuzzleError:
+                continue
+            held = {"v": now}  # dragged to; written once on release (one undo)
+            panel.add_slider(low.to_si(), high.to_si(), now,
+                             lambda v, h=held: h.update(v=v),
+                             lambda k=key, h=held: _slide2d(window, op, k, h["v"]))  # fmt: skip
     if op.type == "slider":  # drag here as on its node: previews, never solves
         from puzzle.schematic import _slider_of
 
@@ -130,6 +143,39 @@ def show(window, op) -> None:
             low, high, value = found
             panel.add_slider(low, high, value, lambda v: window.slide(str(op.id), v),
                              lambda: window.slide_done(str(op.id)))  # fmt: skip
+
+
+def _slide2d(window, op, key: str, si: float) -> None:
+    """A 2D slider's x or y set where its slider was let go: one Edit."""
+    from puzzle.model.units import DIMENSIONS, convert, kind_of
+
+    q = op.low if key == "value" else op.low2
+    unit = q.unit
+    kind = kind_of(unit) if unit != "dimensionless" else None
+    value = convert(si, DIMENSIONS[kind][1], unit) if kind else si
+    window.properties.edited.emit(
+        str(op.id), f"inputs.{key}", {"value": {"value": float(f"{value:.6g}"), "unit": unit}}
+    )
+
+
+def use_as_field(window, op):
+    """An imported field reading a table operator's rows (ADR 0064 phase 3): x, y, z the
+    points, every other number a value. Made in one step, then its uses are set as any
+    field's (a feature's value from it)."""
+    from puzzle import fields
+    from puzzle.commands.model import Create
+
+    try:
+        data = fields.from_table(window.session.project, op.id)
+    except PuzzleError as exc:
+        window.statusBar().showMessage(exc.message, 8000)
+        return None
+    outcome = window.submit(Create(kind="field", data=data))
+    if outcome is not None and outcome.created:
+        oid = outcome.created[0]["id"]
+        window.select_in_tree(("object", oid))
+        return oid
+    return None
 
 
 PREVIEWED = 200  # points a Preview pins at most: labels beyond that are clutter

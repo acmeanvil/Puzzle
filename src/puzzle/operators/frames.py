@@ -562,6 +562,9 @@ def _puzzle(op, text: str, t):
             values[name] = (s.cast(float).fill_null(math.nan).to_numpy(), kind)
         elif s.dtype == _pl().Boolean:
             values[name] = (s.cast(float).to_numpy(), None)
+        elif s.dtype.is_temporal():  # dates as ISO text: started > "2026-11-01" compares
+            values[name] = (np.asarray([None if v is None else v.isoformat()
+                                        for v in s.to_list()], dtype=object), "text")  # fmt: skip
         else:
             values[name] = (np.asarray(s.to_list(), dtype=object), "text")
     try:

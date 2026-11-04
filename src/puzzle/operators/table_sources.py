@@ -216,7 +216,7 @@ def run_history(ctx, op):
     labels = sorted({k for r in runs for k in r.point_labels()})
     rows = []
     for i, r in enumerate(runs, 1):
-        row = {"run": i, "id": r.run_id, "started": r.started_at.isoformat(timespec="seconds"),
+        row = {"run": i, "id": r.run_id, "started": r.started_at,
                "solver": r.solver, "status": r.status, "seconds": float(r.duration_s)}  # fmt: skip
         row.update({k: r.point_labels().get(k) for k in labels})
         rows.append(row)

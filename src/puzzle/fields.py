@@ -284,10 +284,14 @@ def read_table(root: Path, f, file: str = "", index: str | None = None
     return points, values
 
 
-def snapshots(root: Path, f) -> list[tuple[float | None, np.ndarray, dict[str, np.ndarray]]]:
+def snapshots(root: Path, f, project=None
+              ) -> list[tuple[float | None, np.ndarray, dict[str, np.ndarray]]]:  # fmt: skip
     """The field at each of its times (s), in time order: (time, raw points, values).
     A field that holds still is one snapshot at time None; one varying with frequency
-    has frequencies (Hz) in place of times."""
+    has frequencies (Hz) in place of times. A field fed by a table operator (ADR 0064
+    phase 3) reads its rows, which needs the project."""
+    if f.source is not None:
+        return _from_table(project, root, f)
     if f.times:
         out = [(t.time, *read_table(root, f, t.file, t.index)) for t in f.times]
         return sorted(out, key=lambda s: s[0])
@@ -302,6 +306,73 @@ def snapshots(root: Path, f) -> list[tuple[float | None, np.ndarray, dict[str, n
             out.append((float(t), points[rows], {k: v[rows] for k, v in values.items()}))
         return out
     return [(None, *read_table(root, f))]
+
+
+def _from_table(project, root: Path, f):
+    """A table operator's rows as the field's snapshots: its x, y, z columns (metres) and
+    value columns (SI, as tables hold them), split by its time or frequency column if it
+    has one. A table from a run reads that run as it is stored (ADR 0064 item 5)."""
+    from puzzle.operators import evaluate as ev
+
+    if project is None:
+        raise FieldError(f"field '{f.name}' reads a table operator: it needs the project",
+                         path=f.name)  # fmt: skip
+    store = None
+    results = Path(root) / "results"
+    if results.exists():
+        from puzzle.results.store import ResultStore
+
+        store = ResultStore(results)
+    try:
+        table = ev.source(ev.Context(project, store, root=Path(root)), f.source, f.port)
+    except PuzzleError as exc:
+        raise FieldError(f"field '{f.name}': its table: {exc.message}", path=f.name) from None
+    if not isinstance(table, ev.Table):
+        raise FieldError(f"field '{f.name}': its source is not a table", path=f.name)
+    frame = table.frame
+    roles = {c.role: c.name for c in f.columns if c.role in ("x", "y", "z", "time", "frequency")}
+    missing = [r for r in ("x", "y", "z") if roles.get(r) not in frame.columns]
+    if missing:
+        raise FieldError(f"field '{f.name}': its table has no {', '.join(missing)} column",
+                         path=f.name)  # fmt: skip
+    points = frame.select([roles["x"], roles["y"], roles["z"]]).to_numpy().astype(float)
+    values = {c.name: frame[c.name].cast(float).to_numpy() for c in f.columns
+              if c.role == "value" and c.name in frame.columns}  # fmt: skip
+    axis = roles.get("time") or roles.get("frequency")
+    if axis is None:
+        return [(None, points, values)]
+    t = frame[axis].cast(float).to_numpy()
+    return [(float(u), points[t == u], {k: v[t == u] for k, v in values.items()})
+            for u in np.unique(t)]  # fmt: skip
+
+
+def from_table(project, op_id, name: str | None = None) -> dict:
+    """An imported field's data reading a table operator (ADR 0064 phase 3): x, y, z by
+    name, every other number a value in its SI unit, metres. For a Create command."""
+    from puzzle.model.units import DIMENSIONS
+    from puzzle.operators import evaluate as ev
+
+    op = project.objects[op_id]
+    table = ev.value(ev.Context(project, None), op)
+    if not isinstance(table, ev.Table):
+        raise FieldError(f"'{op.name}' doesn't give a table", path=op.name)
+    columns = []
+    for c, kind in zip(table.columns, table.kinds, strict=False):
+        if c in ("x", "y", "z") or c in ("time", "frequency"):
+            columns.append({"name": c, "role": c})
+        elif table.frame[c].dtype.is_numeric():
+            columns.append({"name": c, "role": "value",
+                            "unit": DIMENSIONS[kind][1] if kind in DIMENSIONS else ""})  # fmt: skip
+        else:
+            columns.append({"name": c, "role": "ignore"})
+    return {
+        "name": name or f"{op.name} field",
+        "format": "table",
+        "source": str(op.id),
+        "port": "out",
+        "columns": columns,
+        "length_unit": "m",
+    }
 
 
 def _read_csv(path: Path, f) -> tuple[np.ndarray, dict[str, np.ndarray], np.ndarray | None]:
@@ -400,7 +471,8 @@ def cloud(project, root: Path, f, use=None) -> Cloud:
 
 def clouds(project, root: Path, f, use=None) -> list[tuple[float | None, Cloud]]:
     """The field on the model at each of its times (s; None when it holds still)."""
-    return [(t, _placed(project, f, raw, values, use)) for t, raw, values in snapshots(root, f)]
+    return [(t, _placed(project, f, raw, values, use))
+            for t, raw, values in snapshots(root, f, project)]  # fmt: skip
 
 
 def _placed(project, f, raw, values, use) -> Cloud:

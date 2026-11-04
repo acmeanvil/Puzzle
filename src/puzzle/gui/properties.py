@@ -235,7 +235,27 @@ STEPS = "steps"  # marks a feature's steps row, edited as text
 LISTED = "listed"  # marks an operator's list of names, edited as "a, b, c" (ADR 0064)
 # An operator's lists of names: one row of text each, even when empty.
 TEXT_LISTS = {"pick": "Columns", "drop": "Columns left out", "by": "By",
-              "aggregations": "Aggregations", "quantities": "Results"}  # fmt: skip
+              "aggregations": "Aggregations", "quantities": "Results",
+              "labels": "Names"}  # fmt: skip
+QUANTITIES = "quantities"  # marks a list of quantities edited as "8 mm, 10 mm, 12 mm"
+QUANTITY_LISTS = {"options": "Options"}  # a Choice's presets (ADR 0064A A4)
+
+
+def quantities_text(values: list[dict]) -> str:
+    return ", ".join(format_value(v) for v in values)
+
+
+def parse_quantities(text: str) -> list[dict]:
+    from puzzle.model.units import known, plain
+
+    out = []
+    for part in parse_list(text):
+        number, _, unit = part.partition(" ")
+        unit = plain(unit.strip()) if unit.strip() else "dimensionless"
+        if not known(unit):
+            raise ValueError(f"unknown unit '{unit}'")
+        out.append({"value": float(number), "unit": unit})
+    return out
 
 
 def list_text(values: list[str]) -> str:
@@ -282,6 +302,8 @@ def parse_value(text: str, old: Any) -> Any:
         return parse_steps(text)
     if old == LISTED:
         return parse_list(text)
+    if old == QUANTITIES:
+        return parse_quantities(text)
     text = text.strip()
     if is_quantity(old):
         from puzzle.model.units import plain, shown
@@ -418,8 +440,18 @@ class PropertiesPanel(QTreeWidget):
                 item.setData(1, PATH, (sub, STEPS))
                 item.setData(1, SHOWN, steps_text(value))  # put back if the text won't parse
                 continue
-            if key in TEXT_LISTS and isinstance(node, dict) and _is_operator(node):
-                item = QTreeWidgetItem(parent, [TEXT_LISTS[key], list_text(value)])
+            if key in QUANTITY_LISTS and isinstance(node, dict) and _is_operator(node):
+                item = QTreeWidgetItem(parent, [QUANTITY_LISTS[key], quantities_text(value)])
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
+                item.setData(1, PATH, (sub, QUANTITIES))
+                item.setData(1, SHOWN, quantities_text(value))
+                continue
+            listed = (key in TEXT_LISTS and isinstance(node, dict) and _is_operator(node)) or (
+                key == "tags" and not path
+            )  # an object's tags, every kind (ADR 0064A J6)
+            if listed:
+                title_ = TEXT_LISTS.get(key, "Tags")
+                item = QTreeWidgetItem(parent, [title_, list_text(value)])
                 item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
                 item.setData(1, PATH, (sub, LISTED))
                 item.setData(1, SHOWN, list_text(value))
@@ -509,7 +541,8 @@ class PropertiesPanel(QTreeWidget):
             value = parse_value(item.text(1), old)
         except ValueError:
             self._filling = True
-            item.setText(1, item.data(1, SHOWN) if old == STEPS else format_value(old))
+            item.setText(1, item.data(1, SHOWN) if old in (STEPS, QUANTITIES)
+                         else format_value(old))  # fmt: skip
             self._filling = False
             return
         self.edited.emit(self.object_id, path, value)

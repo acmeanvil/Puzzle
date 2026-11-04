@@ -1,6 +1,6 @@
 # 0064. Dataframe operators: results as polars tables to shape, reduce and export
 
-- Status: Accepted (2026-11-03): review answered, the operator list from 0064A; phases 1 and 2 built (2026-11-04)
+- Status: Accepted (2026-11-03): review answered, the operator list from 0064A; phases 1 to 3 built (2026-11-04)
 - Date: 2026-11-03
 
 ## Context
@@ -370,3 +370,55 @@ Not done in phase 2:
   contacting or bolted run in a test.
 - A section's table holds the cut's points, not its triangles (the force and moment
   integrate over them).
+
+## Phase 3 built (2026-11-04)
+
+- **Tables into a study**:
+  - An imported field (ADR 0044) can read a table operator instead of a file:
+    `ImportedField.source` and `port`, format `table`. Its x, y and z columns are the
+    points (metres), its value columns the values (SI, as tables hold them), and a time
+    or frequency column splits it into snapshots.
+  - Everything downstream is the imported field's own: placement, mapping, use as a
+    load or temperature.
+  - `fields.from_table` makes the field's data from a table operator, with the roles
+    guessed and the units SI. The GUI's "Use as a field…" sits on every table
+    operator's menu.
+  - The field depends on its operator, so reshaping the table (a filter's condition)
+    stales the studies it feeds. A table from a run reads the run as stored.
+- **Toggle** [A3]: `toggle`, 1 or 0, a parameter by its name. A feature's `when`
+  names a parameter, and while it is 0 the feature is left out of the solve
+  (`suppress.applied`, with suppressed parts). Properties offers When as a dropdown of
+  the parameters, "Always" first.
+- **Choice** [A4]: `choice`, presets (`options`, `labels`) picked by the `index`
+  input, a parameter by its name; its `options` port is the list a sweep runs over.
+  Properties takes the options typed as "8 mm, 10 mm, 12 mm".
+- **2D slider** [A2]: `slider2d` gives two parameters, `<name>_x` and `<name>_y`,
+  with two sliders in Properties, each written on release.
+- **Points** [D5, D7]: `merge_points` (rows closer than `spacing` made one, numbers
+  averaged) and `thin_points` (one row kept per cell of `spacing`).
+- **Complex parts** [B9]: `real(amplitude, phase)` and `imag(amplitude, phase)` in
+  the Expression, the phase in degrees as harmonic results store it.
+- **Dates** [B11]: a run history's `started` is a date column. Puzzle's syntax
+  compares dates as ISO text (`started > "2026-11-01"`); polars' compares them as
+  dates.
+- **Tags** [J6]: every object has `tags`, edited in Properties as one text row, left
+  out of content hashes, so they never stale anything.
+- **Hashes stay put**: an operator's settings at their defaults, a feature's unset
+  `when` and a field's unset table source are left out of content hashes, so adding
+  a setting stales nothing.
+- **Tests**:
+  - `tests/test_tables3.py`: a table reshaped by a filter feeding a field (points in
+    metres, °C as kelvin, the filter's change staling it); a toggle dropping a feature
+    at 0 and keeping it at 1; a choice and its options; a 2D slider's two parameters;
+    merged and thinned points by hand; real and imaginary parts; dates in a filter;
+    tags leaving the hash alone.
+  - `tests/test_operators_gui.py`: Use as a field, a Choice's options typed, the When
+    dropdown.
+
+Not done in phase 3:
+- A File operator's files are not in the content hash: an edited CSV doesn't stale
+  the study its table feeds until the operator changes. Import the file as a field
+  (hashed) where that matters.
+- A study reading a run's table doesn't run that study first: run it, then this one.
+- The 2D slider has no pad on its schematic node yet, only the two sliders in
+  Properties.

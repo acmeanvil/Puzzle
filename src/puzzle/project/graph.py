@@ -38,6 +38,7 @@ def _own(obj: ProjectObject, *, drop: frozenset[str] = frozenset()) -> dict:
     exclude = {"name", *drop} | ({"shootout"} if isinstance(obj, Study) else set())
     data = obj.model_dump(mode="json", exclude=exclude)
     data.pop("hidden", None)  # what the view shows never changes a solve
+    data.pop("tags", None)  # nor do the words it is found by (ADR 0064A J6)
     if data.get("share_faces") is True:  # the default: older projects keep their hashes
         data.pop("share_faces")
     if obj.kind == "mesh":  # a box in global axes, as before boxes took a system
@@ -50,8 +51,16 @@ def _own(obj: ProjectObject, *, drop: frozenset[str] = frozenset()) -> dict:
                              ("along", 0.5)):  # fmt: skip
             if key in data and data[key] == default:
                 data.pop(key)
+    if obj.kind == "operator":  # settings at their defaults: adding one stales nothing
+        from puzzle.model.schema import Operator
+
+        for key, f in Operator.model_fields.items():
+            if key in data and not f.is_required() and data[key] == f.get_default(
+                    call_default_factory=True):  # fmt: skip
+                data.pop(key)
     if obj.kind == "field":  # ADR 0044's region, step, times, axis unset: older hashes kept
-        for key, default in (("region", ""), ("index", ""), ("times", []), ("axis", "time")):
+        for key, default in (("region", ""), ("index", ""), ("times", []), ("axis", "time"),
+                             ("source", None), ("port", "out")):  # fmt: skip
             if key in data and data[key] == default:
                 data.pop(key)
     if isinstance(obj, Component) and data.get("planar_model") == "plane_stress":
@@ -70,6 +79,8 @@ def _own(obj: ProjectObject, *, drop: frozenset[str] = frozenset()) -> dict:
             for feature in physics.get("features", []):
                 if not feature.get("fields"):
                     feature.pop("fields", None)
+                if feature.get("when") is None:  # ADR 0064A A3: no toggle, as before
+                    feature.pop("when", None)
                 for use in (feature.get("fields") or {}).values():  # stage 2: no weight
                     if use.get("weight") is None:
                         use.pop("weight", None)

@@ -741,7 +741,53 @@ def _tables() -> dict:
             "contact_table": out(sources.contact_table), "bolt_table": out(sources.bolt_table),
             "nearest": out(sources.nearest), "section": sources.section,
             "divide": out(sources.divide), "clearance": out(sources.clearance),
-            "text": _text, "preview": lambda ctx, op: {}}  # fmt: skip
+            "text": _text, "preview": lambda ctx, op: {}, "toggle": _toggle,
+            "choice": _choice, "slider2d": _slider2d,
+            "merge_points": reshape.merge_points, "thin_points": reshape.thin_points}  # fmt: skip
+
+
+def _toggle(ctx: Context, op) -> dict[str, Any]:
+    """A switch (ADR 0064A A3): 1 while on (the default), 0 off."""
+    got = _typed_number(ctx, op, "value")
+    on = got is None or got.value != 0
+    return {"out": Number(1.0 if on else 0.0, None, op.name)}
+
+
+def _choice(ctx: Context, op) -> dict[str, Any]:
+    """One preset of a list (ADR 0064A A4), by the `index` input (0, the first, by
+    default); every preset as a list too, for a sweep over them."""
+    if not op.options:
+        raise PuzzleError(f"'{op.name}': list its options", code="inconsistent")
+    from puzzle.model.units import kind_of
+
+    unit = op.options[0].unit
+    kind = kind_of(unit) if unit and unit != "dimensionless" else None
+    values = np.array([q.to_si() for q in op.options], float)
+    got = _typed_number(ctx, op, "index")
+    i = int(round(got.value)) if got is not None else 0
+    if not 0 <= i < len(values):
+        raise PuzzleError(f"'{op.name}': no option {i} of {len(values)}", code="invalid")
+    label = op.labels[i] if i < len(op.labels) else op.name
+    return {"out": Number(float(values[i]), kind, label),
+            "options": ListValue(values, kind, op.name)}  # fmt: skip
+
+
+def _slider2d(ctx: Context, op) -> dict[str, Any]:
+    """Two values dragged together (ADR 0064A A2); each defaults to its range's middle."""
+    from puzzle.model.units import kind_of
+
+    out = {}
+    for port, key, low, high in (("x", "value", op.low, op.high),
+                                 ("y", "value2", op.low2, op.high2)):  # fmt: skip
+        got = _typed_number(ctx, op, key)
+        if got is None:
+            if low is None or high is None:
+                raise PuzzleError(f"'{op.name}': {port} needs its value or its range",
+                                  code="inconsistent")  # fmt: skip
+            unit = low.unit if low.unit != "dimensionless" else ""
+            got = Number((low.to_si() + high.to_si()) / 2, kind_of(unit) if unit else None)
+        out[port] = Number(got.value, got.kind, f"{op.name}_{port}")
+    return out
 
 
 def _text(ctx: Context, op) -> dict[str, Any]:

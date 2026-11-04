@@ -320,6 +320,11 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
             add("Show in Plots", lambda: operators.show_plot(window, obj))
         if obj.type == "table":
             add("Read a CSV…", lambda: operators.read_csv(window, obj))
+        from puzzle.operators import TYPES
+
+        outs = TYPES[obj.type].outputs
+        if outs and outs[0].type == "table":  # ADR 0064 phase 3: rows as a field's points
+            add("Use as a field…", lambda: operators.use_as_field(window, obj))
         _operator_menu(window, menu, str(obj.id), "out", "New operator from this")
         menu.addSeparator()
         add("Delete", window.delete_selected)

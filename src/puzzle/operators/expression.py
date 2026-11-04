@@ -14,7 +14,8 @@ Functions: abs, sqrt, exp, log, log10, sin, cos, tan, min, max, where (as derive
 results'), and asin, acos, atan, atan2 (giving radians), degrees and radians (converting
 an angle's number), clamp(x, low, high), round(x, n), floor and ceil; and over vectors
 (ADR 0064A row D3) norm(x, y, z), dist(x1, y1, z1, x2, y2, z2), dot(a…, b…) and
-angle(a…, b…) in radians. Rounding works on
+angle(a…, b…) in radians; real(amplitude, phase) and imag(amplitude, phase) for a
+harmonic result, its phase in degrees as Puzzle stores it. Rounding works on
 the value in SI: round a length in millimetres as round(t / mm, 1) * mm.
 """
 
@@ -148,7 +149,7 @@ def evaluate(expression: str, values: dict[str, tuple]) -> tuple[np.ndarray | fl
 
 
 EXTRA = ("asin", "acos", "atan", "atan2", "degrees", "radians", "clamp", "round", "floor",
-         "ceil", "norm", "dist", "dot", "angle")  # fmt: skip
+         "ceil", "norm", "dist", "dot", "angle", "real", "imag")  # fmt: skip
 
 
 def _extra(ureg, fn: str, args):
@@ -162,6 +163,10 @@ def _extra(ureg, fn: str, args):
     if fn == "atan2":
         y, x = args
         return ureg.Quantity(np.arctan2(y.magnitude, x.to(y.units).magnitude), "dimensionless")
+    if fn in ("real", "imag"):  # a harmonic result from amplitude and phase (degrees)
+        a, phase = args
+        phi = np.radians(phase.to("dimensionless").magnitude)
+        return a * (np.cos(phi) if fn == "real" else np.sin(phi))
     if fn == "norm":  # norm(x, y, z): a vector's length
         a = args[0]
         return (sum(b.to(a.units) ** 2 for b in args)) ** 0.5

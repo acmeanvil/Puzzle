@@ -294,3 +294,30 @@ def test_a_preview_pins_the_worst_nodes_and_a_bar_chart(window):
     w.properties.edited.emit(plot, "column", "peak")
     w.plots.show_operator(w.session.project.objects[UUID(plot)])
     assert w.plots.curve.bars == {0} and len(w.plots.curve.series[0][1]) == 1
+
+
+def test_phase_three_in_the_window(window):
+    w = window
+    from puzzle.gui.operators import new_operator, use_as_field
+
+    tbl = new_operator(w, "table")
+    w.properties.edited.emit(tbl, "text", "x [mm], y [mm], z [mm], T [degC]\n0, 0, 0, 20")
+    fid = use_as_field(w, w.session.project.objects[UUID(tbl)])
+    f = w.session.project.objects[UUID(fid)]
+    assert f.format == "table" and f.source == UUID(tbl)
+    ch = new_operator(w, "choice")
+    w.select_in_tree(("object", ch))
+    rows = _rows(w)
+    assert "Options" in rows and "Names" in rows
+    rows["Options"].setText(1, "8 mm, 10 mm, 12 mm")  # typed in, as a list of quantities
+    op = w.session.project.objects[UUID(ch)]
+    assert [q.value for q in op.options] == [8, 10, 12] and op.options[0].unit == "mm"
+    sw = new_operator(w, "toggle")
+    from puzzle.gui.choices import choices
+    from puzzle.model.schema import Component
+
+    comp = next(iter(w.session.project.of_type(Component)))
+
+    got = choices(w.session.project, comp, "physics.0.features.0.when")
+    assert got[0] == ("Always", None)
+    assert (w.session.project.objects[UUID(sw)].name,) * 2 in got

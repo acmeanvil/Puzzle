@@ -52,12 +52,23 @@ def without(project, comp):
 
 
 def applied(project):
-    """The project with every component's suppressed parts taken out."""
+    """The project with every component's suppressed parts taken out, and every feature
+    whose `when` parameter (a Toggle, ADR 0064A A3) is 0."""
     from puzzle.model.schema import Component
 
     changed = {}
+    params = None
     for comp in project.of_type(Component):
         trimmed = without(project, comp)
+        if any(f.when for ph in trimmed.physics for f in ph.features):
+            if params is None:
+                from puzzle.operators import parameter_values
+
+                params = parameter_values(project)
+            physics = [ph.model_copy(update={"features": [
+                f for f in ph.features if not f.when or params.get(f.when, 1.0) != 0]})
+                for ph in trimmed.physics]  # fmt: skip
+            trimmed = trimmed.model_copy(update={"physics": physics})
         if trimmed is not comp and trimmed.parts:
             changed[comp.id] = trimmed
     if not changed:

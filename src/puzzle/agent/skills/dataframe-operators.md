@@ -103,6 +103,24 @@ Related, from the same ADR:
 - `preview`: a table with x, y, z, labelled by `column`, pinned in the 3D view.
 - `plot`, from a table: `by[0]` against `column`, `chart` line, bar or scatter.
 
+## Before a solve (phase 3)
+
+- A table into a study: a table's x, y, z and value columns become an imported field.
+  `submit` a `create` of kind `field` with `{"name": ..., "format": "table",
+  "source": "<table operator id>", "columns": [{"name": "x", "role": "x"}, ...,
+  {"name": "T", "role": "value", "unit": "K"}], "length_unit": "m"}`. Values are SI,
+  so give each value column its SI unit. Then use the field as any imported field
+  (skill `imported-fields`).
+- `toggle` (the `value` input 1 or 0) is a parameter. A feature's `when` names it, and
+  the feature drops out of the solve while it is 0.
+- `choice`: `options` (quantities), `labels`, and the `index` input; its `options`
+  port is a list for a sweep.
+- `slider2d`: `low`/`high` and `low2`/`high2`, the inputs `value` and `value2`; the
+  parameters are `<name>_x` and `<name>_y`.
+- `merge_points` and `thin_points` (`spacing`) tidy a cloud before it becomes a field.
+- The Expression's real(a, phase) and imag(a, phase) take the phase in degrees.
+- Every object takes `tags` (a list of words). They never stale a study.
+
 ## Recipes
 
 - **The 20 worst nodes**: `result_table` (`quantities: ["stress:von_mises"]`) →

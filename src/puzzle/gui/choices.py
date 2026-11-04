@@ -157,6 +157,12 @@ def choices(project: Project, obj, path: str) -> list[tuple[str, Any]] | None:
         return _dict_entry(project, obj, owner, field, last, keys)
     else:
         return None
+    from puzzle.model.schema import Feature
+
+    if field == "when" and isinstance(owner, Feature):  # ADR 0064A A3: a toggle, by name
+        from puzzle.operators import parameter_values
+
+        return [("Always", None)] + [(n, n) for n in sorted(parameter_values(project))]
     out = _field(project, obj, owner, field, in_list)
     if field == "optimiser" and isinstance(owner, MeshRecipe) and out is not None:
         from puzzle.settings import current

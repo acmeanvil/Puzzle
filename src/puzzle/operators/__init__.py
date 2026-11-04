@@ -483,6 +483,47 @@ TYPES: dict[str, OperatorType] = {
             ("column",),
         ),
         OperatorType(
+            "toggle", "Toggle", "Inputs",
+            "A switch, 1 (on) or 0 (off), a parameter by its name: a feature whose When "
+            "names it applies only while it is on.",
+            (PortSpec("value", "On", ("number",), required=False, typed="number"),),
+            (PortSpec("out", "Value", ("number",)),),
+            (),
+        ),
+        OperatorType(
+            "choice", "Choice", "Inputs",
+            "One of a list of presets (M8, M10, M12), a parameter by its name; a sweep "
+            "or optimisation can run over them.",
+            (PortSpec("index", "Pick", ("number",), required=False, typed="number"),),
+            (PortSpec("out", "Value", ("number",)), PortSpec("options", "Options", ("list",))),
+            ("options", "labels"),
+        ),
+        OperatorType(
+            "slider2d", "2D slider", "Inputs",
+            "Two values dragged together (width and thickness), parameters <name>_x and "
+            "<name>_y.",
+            (PortSpec("value", "x", ("number",), required=False, typed="number"),
+             PortSpec("value2", "y", ("number",), required=False, typed="number")),
+            (PortSpec("x", "x", ("number",)), PortSpec("y", "y", ("number",))),
+            ("low", "high", "low2", "high2"),
+        ),
+        OperatorType(
+            "merge_points", "Merge points", "Tables",
+            "Rows whose points (x, y, z) are closer than a spacing made one, their values "
+            "averaged: duplicates from a scan or a test rig.",
+            (PortSpec("table", "Table", ("table",)),),
+            (PortSpec("out", "Table", ("table",)),),
+            ("spacing",),
+        ),
+        OperatorType(
+            "thin_points", "Thin points", "Tables",
+            "One row kept per cell of a spacing: a dense imported cloud thinned before "
+            "mapping.",
+            (PortSpec("table", "Table", ("table",)),),
+            (PortSpec("out", "Table", ("table",)),),
+            ("spacing",),
+        ),
+        OperatorType(
             "pairs", "Pairs", "Data",
             "Two lists into a table: item by item, or every combination.",
             (PortSpec("a", "A", ("list",)), PortSpec("b", "B", ("list",))),
@@ -541,6 +582,11 @@ GROUP_OF = {
     "clearance": "Geometry",
     "text": "Logic",
     "preview": "Outputs",
+    "toggle": "Inputs",
+    "choice": "Inputs",
+    "slider2d": "Inputs",
+    "merge_points": "Tables",
+    "thin_points": "Tables",
     "check": "Checks",
     "panel": "Outputs",
     "plot": "Outputs",
@@ -604,6 +650,11 @@ ALIASES = {
     "clearance": ("collision", "clash", "minimum distance", "interference"),
     "text": ("format", "concatenate", "text join", "label"),
     "preview": ("custom preview", "text tag", "point list", "dot display"),
+    "toggle": ("boolean toggle", "button", "switch", "on off"),
+    "choice": ("value list", "dropdown", "presets", "catalogue"),
+    "slider2d": ("md slider", "pad", "two sliders"),
+    "merge_points": ("cull duplicates", "point groups", "weld"),
+    "thin_points": ("reduce point cloud", "downsample", "decimate"),
 }  # fmt: skip
 TYPES = {k: replace(t, group=GROUP_OF.get(k, t.group), aliases=ALIASES.get(k, ()))
          for k, t in TYPES.items()}  # fmt: skip
@@ -614,7 +665,8 @@ DATA = frozenset({"number", "slider", "series", "range", "expression", "table", 
                   "pairs", "random", "file", "columns", "filter_rows", "sort", "top_n",
                   "new_column", "convert_units", "round", "group", "to_number", "lookup",
                   "measure", "join", "stack", "pivot", "unpivot", "distinct", "fill_missing",
-                  "rolling", "project_table", "divide", "clearance", "text"})  # fmt: skip
+                  "rolling", "project_table", "divide", "clearance", "text", "toggle",
+                  "choice", "slider2d", "merge_points", "thin_points"})  # fmt: skip
 # Table operators (ADR 0064): data operators that read tables, so pre-solve when their
 # table is (a file, a typed table) and post-solve when it comes from a run.
 
@@ -994,6 +1046,13 @@ def parameter_values(project, overrides: dict | None = None) -> dict[str, float]
 
     ctx = ev.Context(project, None, overrides=dict(overrides or {}))
     for op in numbers:
+        if op.type == "slider2d":  # two parameters: <name>_x and <name>_y
+            try:
+                out.setdefault(f"{op.name}_x", ev.value(ctx, op, "x").value)
+                out.setdefault(f"{op.name}_y", ev.value(ctx, op, "y").value)
+            except PuzzleError:
+                pass
+            continue
         try:
             got = ev.value(ctx, op)
         except PuzzleError:
