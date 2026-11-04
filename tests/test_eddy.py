@@ -192,6 +192,11 @@ def test_a_loss_transfer_keeps_its_total(tmp_path):
     taken = _integral(coarse, "Bar/Body",
                       lambda conn: given.field.at(conn.ravel()).reshape(conn.shape))  # fmt: skip
     assert taken == pytest.approx(total, rel=1e-3)
+    from puzzle.adapters.common import body_forces
+
+    group = coarse.groups["Bar/Body"]  # what the solvers apply: consistent nodal loads
+    flows = body_forces(group, coarse, lambda ids: given.field.at(ids)[:, :1])
+    assert sum(v[0] for v in flows.values()) == pytest.approx(total, rel=1e-3)
 
 
 def test_cfd_solvers_refuse_heat_generation(tmp_path):
@@ -207,3 +212,35 @@ def test_cfd_solvers_refuse_heat_generation(tmp_path):
         adapter = available_adapters()[solver]()
         problems = adapter.check(project, study.model_copy(update={"solver": solver}))
         assert any("heat_generation" in p or "heat generation" in p.lower() for p in problems)
+
+
+def test_axisymmetric_fields_from_a_known_potential():
+    """A_φ = B0 r / 2 is a uniform axial field B0; a winding's J = N I / section; the
+    force on a hoop current in an axial field is radial: f_r = ½ Re(J B_z*)."""
+    b0, omega = 0.2, 2 * math.pi * 50
+    corners = np.array([[1, 2, 3], [2, 4, 3]])
+    xy = {1: (0.01, 0.0), 2: (0.02, 0.0), 3: (0.01, 0.01), 4: (0.02, 0.01)}
+    area = np.full(2, 0.5e-4)
+    radius = np.array([np.mean([xy[n][0] for n in row]) for row in corners])
+    table = {"ids": np.array([10, 11]), "body": np.array([0, 0]), "corners": corners,
+             "area": area, "radius": radius, "volume": 2 * math.pi * radius * area}  # fmt: skip
+    meta = {"bodies": [{"name": "Coil", "mu_r": 1.0, "sigma": 0.0}], "frequencies": [50.0],
+            "coils": [eddy.Coil("Coil", "stranded", (2.0, 0.0), turns=5, fill=1.0,
+                                conductivity=5.8e7)], "axisymmetric": True}  # fmt: skip
+    potential = {n: b0 * x / 2 + 0j for n, (x, _) in xy.items()}
+    B, J, A = eddy.axisymmetric_fields(meta, table, xy, potential, omega)
+    assert B[:, 1].real == pytest.approx(b0, rel=1e-9) and np.abs(B[:, 0]).max() < 1e-12
+    assert J[:, 2] == pytest.approx(5 * 2.0 / area.sum())
+    step = eddy.step_result(meta, 50.0, table, B, J, A, {}, np.array([1, 2, 3, 4]),
+                            eddy.nodal_average(table, B, np.array([1, 2, 3, 4])))  # fmt: skip
+    f = step.fields["lorentz_force_density"].values
+    assert f[:, 0] == pytest.approx(0.5 * J[:, 2].real * b0) and np.abs(f[:, 1]).max() < 1e-9
+
+
+def test_elmer_refuses_bdf2_for_magnetic_transients(tmp_path):
+    step = SolveStep(type="transient", settings={
+        "time_step": Quantity(value=1e-4, unit="s"), "end_time": Quantity(value=1e-3, unit="s"),
+        "time_scheme": "bdf2"})  # fmt: skip
+    project, _, study, mesh = _setup(tmp_path, [_coil(phase=0.0), *TERMINALS], step)
+    with pytest.raises(InputError, match="backward Euler"):
+        ElmerAdapter().write_input(project, study, mesh, tmp_path / "case")

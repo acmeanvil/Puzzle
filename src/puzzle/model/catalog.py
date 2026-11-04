@@ -197,7 +197,8 @@ OUTPUTS = {
 CONTACT_OUTPUTS = ["contact_pressure", "contact_shear", "contact_gap", "contact_status"]
 HARMONIC_OUTPUTS = ["displacement_amplitude", "displacement_phase"]
 # ADR 0047: a frequency-domain (or winding) magnetic study's losses, energy and impedance
-EDDY_OUTPUTS = ["loss_density", "joule_loss", "magnetic_energy", "coil_resistance",
+EDDY_OUTPUTS = [
+    "lorentz_force_density","loss_density", "joule_loss", "magnetic_energy", "coil_resistance",
                 "coil_inductance"]  # fmt: skip
 
 STEP_TYPES = ["stationary", "transient", "modal", "buckling", "frequency_domain"]

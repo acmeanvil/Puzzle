@@ -1,6 +1,6 @@
 ---
 name: eddy-currents
-description: AC magnetic fields: massive conductors and windings at a phase, losses, coil R and L, skin-depth meshing, losses as heat for a thermal study (Elmer, FEniCSx)
+description: AC and transient magnetic fields: massive conductors and windings, losses, coil R and L, skin depth, axisymmetric models, losses as heat and forces as loads (Elmer, FEniCSx)
 adr: 0047
 ---
 Read this before setting up an AC magnetic study (eddy currents, induction heating, a
@@ -29,6 +29,19 @@ energy are time averages.
   written) on a cut through the middle of a symmetric model.
 - A static study takes windings, or one massive conductor (then no phase).
 
+## Transient and axisymmetric
+
+- A `transient` step (`time_step`, `end_time`, `time_scheme`, `output_every`) solves A–V
+  in time; a coil's current follows its `amplitude` (none: a step from t = 0). Elmer takes
+  backward Euler only (its BDF2 measured wrong on this system); FEniCSx backward Euler or
+  `bdf2`. Results per output time: B, J, loss and energy as instantaneous values; no R
+  or L.
+- A `2d_axisymmetric` component (X the radius, Y the axis) solves A_φ: windings and
+  passive conductors (a billet, a crucible), static or frequency-domain. The hoop
+  direction is a field's out-of-plane component. A massive ring is refused (it needs a
+  circuit). Build the regions as separate parts bonded edge to edge: face steps of one
+  geometry are fused into one face.
+
 ## Steps
 
 1. Build the parts: the conductors, the coil, and air around them out to about five
@@ -52,6 +65,9 @@ energy are time averages.
    `target_selection` the body to heat, into a heat study. It becomes a
    `heat_generation` there with the same total power, on any FE solver and any mesh.
    `heat_generation` also takes a number (W/m³) or an imported field.
+6. Forces on a structure: a transfer with `field: "lorentz_force_density"` (½ Re(J × B*)
+   per element, N/m³), `role: "load"`, `target_selection` a body, into a structural
+   study: a `body_force` there with each component's total kept.
 
 ## Mistakes
 
@@ -61,4 +77,7 @@ energy are time averages.
   `magnetic_insulation` on those ends too, or its natural condition forces the flux
   normal there and spurious eddy currents appear.
 - A phase in a static step is refused.
-- Transient magnetics, Lorentz forces and axisymmetric 2D are not built yet.
+- A winding with no terminal faces (a closed loop) runs on Elmer only; FEniCSx needs
+  both faces.
+- Reactions in a structural study fed by forces: CalculiX's reaction at a held node
+  leaves out the load on that node itself.

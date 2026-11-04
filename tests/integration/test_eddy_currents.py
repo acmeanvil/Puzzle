@@ -366,7 +366,8 @@ def test_shootout_elmer_and_fenicsx(tmp_path):
 
 def test_losses_heat_the_wire(tmp_path):
     """Elmer's losses at 1 kHz (a/δ = 0.48: nearly uniform) into a CalculiX heat study of
-    the wire alone, its ends held at T0: T = T0 + q̄ z (L − z) / (2k), q̄ = loss / volume."""
+    the wire alone, its ends held at T0: T = T0 + q̄ z (L − z) / (2k), q̄ = loss / volume.
+    2 kA, so the rise (about 10 K) is well above the .frd's printed digits."""
     from solvers import available
 
     if not (available("elmer") and available("calculix")):
@@ -380,7 +381,7 @@ def test_losses_heat_the_wire(tmp_path):
         [(0.0, A)],
         [1e3],
         wire_size=0.25,
-        coils=lambda n: [_coil("coil_current", f"{n[0]}/Body", 100.0)],
+        coils=lambda n: [_coil("coil_current", f"{n[0]}/Body", 2000.0)],
     )
     wire = next(g for g in project.of_type(Geometry) if g.name == "Wire1")
     copper = next(m for m in project.objects.values() if getattr(m, "name", "") == "Copper")
@@ -436,3 +437,131 @@ def test_losses_heat_the_wire(tmp_path):
     rise = q * L**2 / (8 * k)
     print(f"wire heats {t.values.max() - t0:.4g} K above its ends (1D: {rise:.4g} K)")
     assert np.abs(t.values[:, 0] - exact).max() < 0.02 * rise
+
+
+def _step_current(tmp_path, solver, wire_size, scheme, divisions, end, every=1):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    project, study = _project(
+        tmp_path, solver, [(0.0, A)], [], wire_size=wire_size,
+        coils=lambda n: [_coil("coil_current", f"{n[0]}/Body", CURRENT)])  # fmt: skip
+    tau = MU0 * _sigma(project) * A**2
+    dt = tau / divisions
+    study.steps = [SolveStep(type="transient", settings={
+        "time_step": Quantity(value=dt, unit="s"), "end_time": Quantity(value=end * tau, unit="s"),
+        "time_scheme": scheme, "output_every": every})]  # fmt: skip
+    return run_study(project, study.id, tmp_path, tmp_path / "run", timeout_s=3600), tau
+
+
+def _diffused(r, t, tau):
+    """The step current's density at radius r, time t (series over J1's zeros)."""
+    from scipy.special import jn_zeros
+
+    beta = jn_zeros(1, 400)
+    terms = jv(0, np.outer(r, beta) / A) / jv(2, beta) * np.exp(-(beta**2) * t / tau)
+    return CURRENT / (math.pi * A**2) * (1 - terms.sum(1))
+
+
+@over("fenicsx")
+def test_a_step_current_diffuses_into_the_wire(tmp_path, solver):
+    """Transient (ADR 0047 stage 2): a step current I into the wire. With τ = μ0 σ a²
+    and J1(βn) = 0: J(r, t) = I / (π a²) [1 − Σ J0(βn r / a) / J2(βn) exp(−βn² t / τ)];
+    at first it flows in a skin, then fills the wire. BDF2, Δt = τ/200."""
+    run, tau = _step_current(tmp_path, solver, 0.12, "bdf2", 200, 0.3, every=20)
+    uniform = CURRENT / (math.pi * A**2)
+    for step in run.results.steps:
+        j = step.fields["current_density"]
+        centre = _centres(run.mesh, j.ids)
+        r = np.hypot(centre[:, 0], centre[:, 1])
+        # The middle third: near the terminals the current enters evenly, not in a skin.
+        inside = (r < A * 0.97) & (np.abs(centre[:, 2] - L / 2) < L / 6)
+        got, want = j.values[inside, 2], _diffused(r[inside], step.value, tau)
+        core, skin = r[inside] < 0.4 * A, r[inside] > 0.7 * A
+        print(f"t = {step.value / tau:.2f} τ: core {got[core].mean() / uniform:.4f} (exact "
+              f"{want[core].mean() / uniform:.4f}), skin {got[skin].mean() / uniform:.4f} "
+              f"({want[skin].mean() / uniform:.4f})")  # fmt: skip
+        assert abs(got[core].mean() - want[core].mean()) < 0.04 * uniform
+        assert abs(got[skin].mean() - want[skin].mean()) < 0.04 * uniform
+
+
+def test_transient_shootout_elmer_and_fenicsx(tmp_path):
+    """Backward Euler on one coarse mesh: Elmer's and FEniCSx's current densities at
+    each step agree (the same discrete problem)."""
+    from solvers import available
+
+    if not (available("elmer") and available("fenicsx")):
+        pytest.skip("needs Elmer and FEniCSx")
+    runs = {s: _step_current(tmp_path / s, s, 0.2, "backward_euler", 100, 0.1, every=5)[0]
+            for s in ("elmer", "fenicsx")}  # fmt: skip
+    uniform = CURRENT / (math.pi * A**2)
+    for a, b in zip(runs["elmer"].results.steps, runs["fenicsx"].results.steps, strict=True):
+        ja, jb = a.fields["current_density"], b.fields["current_density"]
+        common = np.intersect1d(ja.ids, jb.ids)
+        worst = np.abs(ja.at(common) - jb.at(common)).max() / uniform
+        print(f"t = {a.value:.3g} s: largest difference {worst:.2e} of the uniform density")
+        assert a.value == pytest.approx(b.value)
+        assert worst < 0.01
+
+
+def _line_force(wires, currents, on: int) -> np.ndarray:
+    """Force per length (N/m) on line current `on` from the others and every wire's image
+    in the insulated outer cylinder (A = 0 there: an image −I at R²/x)."""
+    sources = [(x, i) for k, (x, i) in enumerate(zip(wires, currents, strict=True)) if k != on]
+    sources += [(R**2 / x, -i) for x, i in zip(wires, currents, strict=True)]
+    p = np.array([wires[on], 0.0])
+    force = np.zeros(2)
+    for x, i in sources:
+        d = p - np.array([x, 0.0])
+        b = MU0 * i / (2 * math.pi) * np.array([-d[1], d[0]]) / (d @ d)  # B = (Bx, By)
+        force += currents[on] * np.array([-b[1], b[0]])  # I ẑ × B
+    return force
+
+
+@solver
+def test_lorentz_forces_push_the_wires_apart(tmp_path, solver):
+    """Two windings, 10 A each way at 50 Hz: the time-averaged force on Wire2 against
+    ½ μ0 I² / 2π d per length with the images; then that force density loads a
+    CalculiX study of Wire2 held at one end, whose reaction balances it."""
+    from puzzle.model import Transfer
+
+    xs, i0 = (-1.4e-3, 1.4e-3), 10.0
+    currents = {"Wire1/Body": (i0, 0.0), "Wire2/Body": (i0, 180.0)}
+    project, ac = _project(
+        tmp_path, solver, [(x, 0.6e-3) for x in xs], [50.0], wire_size=0.25,
+        coils=lambda n: [_coil("stranded_coil", f"{w}/Body", *currents[f"{w}/Body"])
+                         for w in n])  # fmt: skip
+    run = run_study(project, ac.id, tmp_path, tmp_path / "ac", timeout_s=1800)
+    (step,) = run.results.steps
+    f = step.fields["lorentz_force_density"]
+    mine = np.isin(f.ids, run.mesh.groups["Wire2/Body"].blocks(run.mesh)[0].ids)
+    total = (f.values[mine] * _volumes(run.mesh, f.ids[mine])[:, None]).sum(axis=0)
+    exact = 0.5 * _line_force(xs, (i0, -i0), 1) * L  # a time average: ½ of the peak's
+    print(f"{solver}: force on Wire2 {total[0]:.5g} N (exact {exact[0]:.5g} N)")
+    assert total[0] == pytest.approx(exact[0], rel=0.02)
+    assert abs(total[1]) < 0.01 * abs(total[0])
+
+    from solvers import available
+
+    if not available("calculix"):
+        return
+    wire = next(g for g in project.of_type(Geometry) if g.name == "Wire2")
+    copper = next(m for m in project.objects.values() if getattr(m, "name", "") == "Copper")
+    mesh = project.add(MeshRecipe(name="Wire2 only", element_order=2,
+                                  global_size=Quantity(value=0.3, unit="mm")))  # fmt: skip
+    comp = project.add(Component(
+        name="Wire2 held", mesh=mesh.id,
+        parts=[PartInstance(name="Wire2", geometry=wire.id, translation=(xs[1], 0.0, 0.0))],
+        materials=[MaterialAssignment(material=copper.id, selection="Wire2/Body")],
+        physics=[Physics(type="solid_mechanics",
+                         features=[Feature(type="fixed", selection="Wire2/Start")])]))  # fmt: skip
+    held = project.add(Study(name="Held", component=comp.id, solver="calculix",
+                             steps=[SolveStep(type="stationary")]))  # fmt: skip
+    project.add(Transfer(name="Forces", source=ac.id, field="lorentz_force_density",
+                         target=held.id, role="load", target_selection="Wire2/Body"))  # fmt: skip
+    out = run_study(project, held.id, tmp_path, tmp_path / "held", timeout_s=1800)
+    held_nodes = out.mesh.groups["Wire2/Start"].node_ids  # CalculiX's RF: every node's
+    reaction = out.results.last("reaction_force").at(held_nodes).sum(axis=0)
+    print(f"reaction {reaction[0]:.5g} N against the force {total[0]:.5g} N")
+    # The load on the held face's own nodes goes straight into the support, outside
+    # CalculiX's reactions there: they carry a little less than the total.
+    assert -reaction[0] == pytest.approx(total[0], rel=0.03)
+    assert -reaction[0] < total[0]

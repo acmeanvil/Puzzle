@@ -12,6 +12,7 @@ Results are the same on both solvers, computed here from element values:
 - `loss_density` (W/m³, time-averaged: ½|J|²/σ; a winding's ½|J|²/(σ fill));
 - `joule_loss` (W): its components are "total" and each body;
 - `magnetic_energy` (J, time-averaged: ¼ ∫ B·H*);
+- `lorentz_force_density` (N/m³ per element, time-averaged: ½ Re(J × B*));
 - `coil_resistance` (Ω) and `coil_inductance` (H), one component per coil, from each
   coil's voltage over its current: a massive conductor's terminal potential, a
   winding's DC resistance plus jω times its flux linkage ∫ A·J / I.
@@ -49,6 +50,7 @@ class Coil:
     start: str | None = None
     end: str | None = None
     start_nodes: list[int] = field(default_factory=list)  # Puzzle node ids
+    amplitude: list[list[float]] | None = None  # (time, factor) points: a transient's current
 
     @property
     def phasor(self) -> complex:
@@ -115,6 +117,10 @@ def coils(project, comp, features, mesh, *, solver: str) -> list[Coil]:
             raise InputError(f"coil '{f.selection}': fill is a share of the section, 0 to 1")
         if coil.start:
             coil.start_nodes = sorted(_nodes(mesh, coil.start))
+        if f.amplitude:  # a transient's current follows it (ADR 0037)
+            from puzzle.model.schema import Amplitude
+
+            coil.amplitude = [list(p) for p in project.get(f.amplitude, Amplitude).points]
         out.append(coil)
     claimed = {c.start for c in out} | {c.end for c in out}
     loose = [t.selection for t in terminals if t.selection not in claimed]
@@ -125,17 +131,14 @@ def coils(project, comp, features, mesh, *, solver: str) -> list[Coil]:
     return out
 
 
-def write_meta(path: Path, bodies: list[dict], coils_: list[Coil], frequencies) -> None:
-    """What the result reader needs: each body's μr and σ, the coils, the frequencies."""
-    path.write_text(
-        json.dumps(
-            {
-                "bodies": bodies,
-                "coils": [asdict(c) for c in coils_],
-                "frequencies": list(frequencies),
-            }
-        )
-    )
+def write_meta(path: Path, bodies: list[dict], coils_: list[Coil], frequencies,
+               times=None, axisymmetric: bool = False) -> None:  # fmt: skip
+    """What the result reader needs: each body's μr and σ, the coils, the frequencies
+    (harmonic; [0] for a static solve) or the output times (transient, s)."""
+    path.write_text(json.dumps({"bodies": bodies, "coils": [asdict(c) for c in coils_],
+                                "frequencies": list(frequencies),
+                                "times": list(times) if times else None,
+                                "axisymmetric": axisymmetric}))  # fmt: skip
 
 
 def read_meta(path: Path) -> dict:
@@ -208,6 +211,8 @@ def globals_(
             "magnetic_energy", "global", [""], np.array([0]), np.array([[energy]])
         ),
     }
+    if meta.get("times"):  # a transient: instantaneous values, no impedance
+        return density, out
     resistance, inductance = [], []
     for c in meta["coils"]:
         current = c.phasor
@@ -258,7 +263,7 @@ def element_table(mesh, bodies: list[str], path: Path) -> None:
 
 
 def step_result(meta: dict, hz: float, table, B, J, A, start: dict[str, complex], node_ids,
-                b_nodal):  # fmt: skip
+                b_nodal, time: float | None = None):  # fmt: skip
     """One frequency's (or the static solve's) result step: B per node (amplitude and
     phase when harmonic), J and the loss density per element, and the whole-model
     values. B, J, A are complex element values in `table`'s order; `b_nodal` complex
@@ -269,7 +274,7 @@ def step_result(meta: dict, hz: float, table, B, J, A, start: dict[str, complex]
     ids, body, volume = table["ids"], table["body"], table["volume"]
     density, whole = globals_(meta, 2 * math.pi * hz, body, volume, B, J, A, start)
     by_id, order = np.argsort(ids), np.argsort(node_ids)
-    harmonic = meta["frequencies"] != [0.0]
+    harmonic = meta["frequencies"] != [0.0] and not meta.get("times")
     xyz = ["x", "y", "z"]
     if harmonic:
         fields = [
@@ -284,5 +289,81 @@ def step_result(meta: dict, hz: float, table, B, J, A, start: dict[str, complex]
             Field("current_density", "element", xyz, ids[by_id], J.real[by_id]),
         ]
     fields.append(Field("loss_density", "element", [""], ids[by_id], density[by_id, None]))
+    # The force on the currents per volume (N/m³): ½ Re(J × B*) averaged over a period.
+    force = 0.5 * np.cross(J, B.conj()).real if harmonic else np.cross(J.real, B.real)
+    if meta.get("axisymmetric"):  # (r, z, hoop) is left-handed: f_r = J B_z, f_z = −J B_r
+        force = -force
+    fields.append(Field("lorentz_force_density", "element", xyz, ids[by_id], force[by_id]))
     kind, value = ("frequency_domain", hz) if harmonic else ("", 1.0)
+    if time is not None:
+        kind, value = "transient", time
     return StepResult(1, kind, value, None, {f.name: f for f in fields} | whole)
+
+
+# --- axisymmetric 2D (ADR 0047 item 7): A_φ on the r–z plane --------------------------
+#
+# The model lies in the XY plane, X the radius and Y the axis (ADR 0048). The unknown is
+# the hoop component A_φ; the hoop direction is a field's out-of-plane component, as a 2D
+# stress's zz is: positive right-handed about +Y, so a positive winding current gives a
+# positive axial B inside it. Every integral is weighted by 2πr.
+
+
+def axisymmetric_table(mesh, bodies: list[str], path: Path) -> None:
+    """Each region triangle's Puzzle id, body, corner node ids, centroid radius and
+    revolved volume 2π r A (its corners: first-order geometry)."""
+    body_of: dict[int, int] = {}
+    for index, name in enumerate(bodies):
+        for b in mesh.groups[name].blocks(mesh):
+            for eid in b.ids:
+                body_of.setdefault(int(eid), index)
+    blocks = mesh.region_blocks()
+    ids = np.concatenate([b.ids for b in blocks]).astype(np.int64)
+    corners = np.concatenate([b.connectivity[:, :3] for b in blocks]).astype(np.int64)
+    xyz = mesh.node_coords(corners.ravel()).reshape(-1, 3, 3)
+    d1, d2 = xyz[:, 1, :2] - xyz[:, 0, :2], xyz[:, 2, :2] - xyz[:, 0, :2]
+    area = 0.5 * np.abs(d1[:, 0] * d2[:, 1] - d1[:, 1] * d2[:, 0])
+    radius = xyz[:, :, 0].mean(axis=1)
+    np.savez(path, ids=ids, body=np.array([body_of[int(e)] for e in ids], np.int64),
+             corners=corners, area=area, radius=radius, volume=2 * math.pi * radius * area,
+             centres=xyz.mean(axis=1))  # fmt: skip
+
+
+def axisymmetric_fields(meta: dict, table, mesh_coords: dict, potential: dict, omega: float):
+    """B, J and A per triangle (complex (n, 3): B = (B_r, B_z, 0), J and A hoop) from
+    A_φ at the corners, linear in each triangle: B_r = −∂A/∂z, B_z = ∂A/∂r + A/r,
+    J = J_s − jωσA (a winding's J_s = N I over its section). `mesh_coords` and
+    `potential` map node id → (x, y) and → complex A_φ."""
+    corners = table["corners"]
+    xy = np.array([[mesh_coords[int(n)] for n in row] for row in corners])  # (n, 3, 2)
+    a = np.array([[potential[int(n)] for n in row] for row in corners])  # (n, 3)
+    d1, d2 = xy[:, 1] - xy[:, 0], xy[:, 2] - xy[:, 0]
+    det = d1[:, 0] * d2[:, 1] - d1[:, 1] * d2[:, 0]
+    da1, da2 = a[:, 1] - a[:, 0], a[:, 2] - a[:, 0]
+    dadr = (da1 * d2[:, 1] - da2 * d1[:, 1]) / det
+    dadz = (da2 * d1[:, 0] - da1 * d2[:, 0]) / det
+    centre, r = a.mean(axis=1), np.maximum(table["radius"], 1e-30)
+    n = len(corners)
+    B = np.zeros((n, 3), complex)
+    B[:, 0], B[:, 1] = -dadz, dadr + centre / r
+    bodies = [b["name"] for b in meta["bodies"]]
+    sigma = np.array([b["sigma"] for b in meta["bodies"]], float)[table["body"]]
+    source = np.zeros(n, complex)
+    for c in meta["coils"]:
+        inside = table["body"] == bodies.index(c.body)
+        source[inside] = c.turns * c.phasor / table["area"][inside].sum()
+    J, A = np.zeros((n, 3), complex), np.zeros((n, 3), complex)
+    J[:, 2] = source - 1j * omega * sigma * centre
+    A[:, 2] = centre
+    return B, J, A
+
+
+def nodal_average(table, values: np.ndarray, node_ids: np.ndarray) -> np.ndarray:
+    """Element values (n, c) averaged onto the corner nodes, in `node_ids`' order."""
+    row = {int(k): i for i, k in enumerate(node_ids)}
+    total = np.zeros((len(node_ids), values.shape[1]), values.dtype)
+    count = np.zeros(len(node_ids))
+    for k in range(table["corners"].shape[1]):
+        rows = np.array([row[int(x)] for x in table["corners"][:, k]])
+        np.add.at(total, rows, values)
+        np.add.at(count, rows, 1.0)
+    return total / np.maximum(count, 1)[:, None]

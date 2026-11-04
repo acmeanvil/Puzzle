@@ -177,7 +177,10 @@ class ElmerAdapter(SolverAdapter):
         from puzzle.adapters.eddy import META
 
         if (mesh_dir / META).exists():  # ADR 0047: magnetodynamics
-            from puzzle.adapters.elmer.magnetics import read_magnetics
+            from puzzle.adapters.elmer.magnetics import read_axisymmetric, read_magnetics
 
+            if (mesh_dir / "puzzle-node-coords.npy").exists():  # axisymmetric 2D
+                coords = np.load(mesh_dir / "puzzle-node-coords.npy")
+                return read_axisymmetric(vtus, mesh_dir, node_ids, coords)
             return read_magnetics(vtus, mesh_dir, node_ids)
         return read_series(vtus, times, node_ids, log.read_text() if log.exists() else "")

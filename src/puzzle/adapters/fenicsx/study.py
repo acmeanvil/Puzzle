@@ -128,7 +128,10 @@ def main() -> None:
         "electrostatics": solve_electrostatics,
         "magnetic_fields": solve_magnetostatics,
     }.get(case["physics"])
-    if case.get("magnetics"):  # ADR 0047: harmonic magnetic fields, windings
+    if case.get("magnetics") and planar:  # ADR 0047 item 7: axisymmetric A_φ
+        case["_cells"] = lambda g: cells.find(tag(g))
+        solve_magnetic_axisymmetric(case, msh, degree, dx, facets, tag, piecewise, out)
+    elif case.get("magnetics"):  # ADR 0047: harmonic magnetic fields, windings
         case["_cells"] = lambda g: cells.find(tag(g))
         solve_magnetodynamics(case, msh, degree, dx, ds, facets, tag, piecewise, out)
     elif case["physics"] == "custom_pde":
@@ -274,6 +277,63 @@ def solve_linear(a, L, bcs, V, name: str, *, mass_matrix: bool = False) -> fem.F
         uh.x.array[:n] = spsolve(matrix.tocsc(), b.array[:n])
     uh.x.scatter_forward()
     return uh
+
+
+class Factored:
+    """a(u, v) = L(v) solved many times with one matrix: assembled and factored once
+    (again after `refactor`), only the right-hand side assembled per solve. For time
+    stepping with a fixed step, where a LinearProblem per step re-factors every time."""
+
+    def __init__(self, a, L, bcs, V, name: str):
+        self.a, self.L, self.bcs, self.V = fem.form(a), fem.form(L), bcs, V
+        equations(V, name)
+        self.solver = None
+
+    def refactor(self) -> None:
+        self.solver = None
+
+    def _factor(self) -> None:
+        if BACKEND == "petsc":
+            from dolfinx.fem.petsc import assemble_matrix as assemble
+
+            A = assemble(self.a, bcs=self.bcs)
+            A.assemble()
+            ksp = PETSc.KSP().create(self.V.mesh.comm)
+            ksp.setOperators(A)
+            ksp.setType("preonly")
+            ksp.getPC().setType("lu")
+            ksp.getPC().setFactorSolverType(LU_PACKAGE)
+            self.solver, self.matrix = ksp, A
+        else:
+            from scipy.sparse.linalg import splu
+
+            A = fem.assemble_matrix(self.a, bcs=self.bcs)
+            A.scatter_reverse()
+            self.solver = splu(A.to_scipy().tocsc())
+
+    def solve(self) -> fem.Function:
+        if self.solver is None:
+            self._factor()
+        uh = fem.Function(self.V)
+        if BACKEND == "petsc":
+            from dolfinx.fem.petsc import apply_lifting, assemble_vector, set_bc
+
+            b = assemble_vector(self.L)
+            apply_lifting(b, [self.a], bcs=[self.bcs])
+            b.ghostUpdate(addv=PETSc.InsertMode.ADD, mode=PETSc.ScatterMode.REVERSE)
+            set_bc(b, self.bcs)
+            self.solver.solve(b, uh.x.petsc_vec)
+            b.destroy()
+        else:
+            b = fem.assemble_vector(self.L)
+            fem.apply_lifting(b.array, [self.a], bcs=[self.bcs])
+            b.scatter_reverse(la.InsertMode.add)
+            for bc in self.bcs:
+                bc.set(b.array)
+            n = self.solver.shape[0]
+            uh.x.array[:n] = self.solver.solve(b.array[:n])
+        uh.x.scatter_forward()
+        return uh
 
 
 def eigenpairs(a, m, bcs, count: int) -> tuple[list[float], list[np.ndarray]]:
@@ -1188,6 +1248,10 @@ def solve_magnetodynamics(case, msh, degree, dx, ds, facets, tag, piecewise, out
     ne = basix.ufl.element("N1curl", cell, degree)
     pe = basix.ufl.element("Lagrange", cell, degree)
     with_v = any(b["sigma"] > 0 for b in mag["bodies"])
+    if case["step"]["type"] == "transient":
+        return _magnetic_transient(case, msh, degree, dx, ds, facets, tag, out, sigma, chi_m, nu,
+                                   gauge, reference, size, massive, windings, shapes, ne, pe,
+                                   with_v)  # fmt: skip
     W = fem.functionspace(msh, basix.ufl.mixed_element([ne, ne, pe, pe] if with_v else [ne, ne]))
     trial, test = ufl.TrialFunctions(W), ufl.TestFunctions(W)
     Ar, Ai = trial[0], trial[1]
@@ -1301,6 +1365,176 @@ def solve_magnetodynamics(case, msh, degree, dx, ds, facets, tag, piecewise, out
     corners = msh.geometry.dofmap[:count, :4]  # a tet's first four nodes: its vertices
     out["cell_midpoints"] = msh.geometry.x[corners].mean(axis=1)  # as Puzzle's centres
     out["magnetic_frequencies"] = np.array(frequencies, float)
+    for key, values in series.items():
+        out[f"mag_{key}"] = np.array(values, float)
+
+
+def solve_magnetic_axisymmetric(case, msh, degree, dx, facets, tag, piecewise, out) -> None:
+    """Axisymmetric magnetic fields (ADR 0047 item 7) in A_φ (x the radius, y the axis),
+    real and imaginary parts as two Lagrange unknowns:
+        ∫ ν curl A · curl v r + jω σ A v r = ∫ J_s v r   (curl: (−∂A/∂z, ∂A/∂r + A/r))
+    a winding's J_s = N I over its section; A = 0 on the axis and on insulated edges
+    (flux along them). Writes A_φ at the nodes per frequency; Puzzle derives the rest."""
+    import basix.ufl
+
+    mag = case["magnetics"]
+    x = ufl.SpatialCoordinate(msh)
+    r = x[0]
+    nu = 1 / (MU_0 * piecewise("relative_permeability"))
+    sigma = fem.functionspace(msh, ("DG", 0))
+    sig = fem.Function(sigma)
+    for b in mag["bodies"]:
+        from_cells = cells_of_tag(case, b["name"])
+        sig.x.array[from_cells] = b["sigma"]
+    pe = basix.ufl.element("Lagrange", msh.basix_cell(), degree)
+    W = fem.functionspace(msh, basix.ufl.mixed_element([pe, pe]))
+    (ar, ai), (vr, vi) = ufl.TrialFunctions(W), ufl.TestFunctions(W)
+    omega = fem.Constant(msh, 0.0)
+
+    def curl(u):  # (B_r, B_z) of A_φ = u: (−∂u/∂z, ∂u/∂r + u/r)
+        return ufl.as_vector([-u.dx(1), u.dx(0) + u / r])
+
+    # The curl form: its natural condition is H tangential = 0 (flux normal), which
+    # ∇A·∇v + A v / r² misses by a boundary term at the outer radius.
+    a = (nu * (ufl.inner(curl(ar), curl(vr)) + ufl.inner(curl(ai), curl(vi))) * r
+         + omega * sig * (ar * vi - ai * vr) * r) * dx  # fmt: skip
+    L = fem.Constant(msh, 0.0) * vr * dx
+    for c in mag["coils"]:
+        area = integral(fem.Constant(msh, 1.0) * dx(tag(c["body"])))
+        jr, ji = (c["turns"] * c["current"][k] / area for k in (0, 1))
+        L += (jr * vr + ji * vi) * r * dx(tag(c["body"]))
+    bcs = []
+    held = {f["group"] for f in case["features"] if f["type"] == "magnetic_insulation"}
+    for k in (0, 1):
+        sub, _ = W.sub(k).collapse()
+        zero = fem.Function(sub)
+        axis = fem.locate_dofs_geometrical((W.sub(k), sub),
+                                           lambda p: np.isclose(p[0], 0.0, atol=1e-12))  # fmt: skip
+        bcs.append(fem.dirichletbc(zero, axis, W.sub(k)))
+        for g in sorted(held):
+            dofs = fem.locate_dofs_topological((W.sub(k), sub), 1, facets.find(tag(g)))
+            bcs.append(fem.dirichletbc(zero, dofs, W.sub(k)))
+    re_, im_ = [], []
+    for k, hz in enumerate(mag["frequencies"], start=1):
+        omega.value = 2 * np.pi * hz
+        emit("increment", increment=k, time=hz)
+        uh = solve_linear(a, L, bcs, W, "aphi")
+        re_.append(uh.sub(0).collapse().x.array.copy())
+        im_.append(uh.sub(1).collapse().x.array.copy())
+        emit("converged", increment=k)
+    out["coords"] = W.sub(0).collapse()[0].tabulate_dof_coordinates()
+    out["magnetic_frequencies"] = np.array(mag["frequencies"], float)
+    out["axi_re"], out["axi_im"] = np.array(re_), np.array(im_)
+
+
+def cells_of_tag(case, name: str):
+    return case["_cells"](name)
+
+
+def _factor(points, t: float) -> float:
+    """An amplitude's factor at time t: linear between its points, held beyond them."""
+    if not points:
+        return 1.0  # no amplitude: a step from t = 0
+    ts, vs = zip(*points, strict=True)
+    return float(np.interp(t, ts, vs))
+
+
+def _magnetic_transient(case, msh, degree, dx, ds, facets, tag, out, sigma, chi_m, nu, gauge,
+                        reference, size, massive, windings, shapes, ne, pe,
+                        with_v) -> None:  # fmt: skip
+    """A–V in time (ADR 0047 stage 2), real: σ ∂A/∂t + σ ∇V + curl ν curl A = J_s(t),
+    ∫ σ (∂A/∂t + ∇V)·∇w = I(t)/area ∫_start w, by backward Euler or BDF2 (its first step
+    backward Euler), each coil's current times its amplitude at the step's end."""
+    import basix.ufl
+
+    step = case["step"]
+    dt, count = float(step["time_step"]), int(step["steps"])
+    bdf2 = step.get("scheme") == "bdf2"
+    if step.get("scheme") not in (None, "backward_euler", "bdf2"):
+        raise SystemExit("FEniCSx solves magnetic transients by backward Euler or BDF2")
+    every = int(setting("output_every", 1))
+    tdim = msh.topology.dim
+    W = fem.functionspace(msh, basix.ufl.mixed_element([ne, pe] if with_v else [ne]))
+    trial, test = ufl.TrialFunctions(W), ufl.TestFunctions(W)
+    A, q = trial[0], test[0]
+    N = W.sub(0).collapse()[0]
+    previous, before = fem.Function(N), fem.Function(N)
+    c0 = fem.Constant(msh, 1.0)  # 1.5 for BDF2
+    c1, c2 = fem.Constant(msh, 1.0), fem.Constant(msh, 0.0)  # history: c1 Aⁿ + c2 Aⁿ⁻¹
+    history = c1 * previous + c2 * before
+    winding_scale = [fem.Constant(msh, 0.0) for _ in windings]
+    massive_scale = [fem.Constant(msh, 0.0) for _ in massive]
+    source = 0 * ufl.as_vector([0.0, 0.0, 0.0])
+    for c, shape, s in zip(windings, shapes, winding_scale, strict=True):
+        source = source + c["turns"] * c["current"][0] * s * shape
+    bcs = []
+    held = {f["group"] for f in case["features"]
+            if f["type"] in ("coil_start", "coil_end", "magnetic_insulation")}  # fmt: skip
+    sub, _ = W.sub(0).collapse()
+    zero = fem.Function(sub)
+    for g in sorted(held):
+        dofs = fem.locate_dofs_topological((W.sub(0), sub), tdim - 1, facets.find(tag(g)))
+        bcs.append(fem.dirichletbc(zero, dofs, W.sub(0)))
+    a = (nu * ufl.inner(ufl.curl(A), ufl.curl(q)) + gauge * ufl.inner(A, q)
+         + sigma * c0 / dt * ufl.inner(A, q)) * dx  # fmt: skip
+    L = (ufl.inner(source, q) + sigma / dt * ufl.inner(history, q)) * dx
+    if with_v:
+        V, w = trial[1], test[1]
+        sv, _ = W.sub(1).collapse()
+        zv = fem.Function(sv)
+        for c in massive:
+            dofs = fem.locate_dofs_topological((W.sub(1), sv), tdim - 1, facets.find(tag(c["end"])))
+            bcs.append(fem.dirichletbc(zv, dofs, W.sub(1)))
+        sm = chi_m * sigma
+        a += (
+            sm
+            * (ufl.inner(ufl.grad(V), q) + ufl.inner(c0 / dt * A + ufl.grad(V), ufl.grad(w)))
+            * dx
+        )
+        a += 1e-12 * reference * (ufl.inner(ufl.grad(V), ufl.grad(w)) + V * w / size**2) * dx
+        L += sm / dt * ufl.inner(history, ufl.grad(w)) * dx
+        for c, s in zip(massive, massive_scale, strict=True):
+            L += c["current"][0] * s / c["area"] * w * ds(tag(c["start"]))
+    vector0 = fem.functionspace(msh, ("DG", 0, (3,)))
+
+    def cellwise(expr) -> np.ndarray:
+        f = fem.Function(vector0)
+        f.interpolate(fem.Expression(expr, vector0.element.interpolation_points))
+        return f.x.array.reshape(-1, 3).copy()
+
+    series: dict[str, list] = {k: [] for k in ("b_re", "B_re", "J_re", "A_re")}
+    times = []
+    system = Factored(a, L, bcs, W, "av")
+    for k in range(1, count + 1):
+        t = k * dt
+        for c, s in zip(windings, winding_scale, strict=True):
+            s.value = _factor(c.get("amplitude"), t)
+        for c, s in zip(massive, massive_scale, strict=True):
+            s.value = _factor(c.get("amplitude"), t)
+        if bdf2 and k == 2:  # BDF2 from the second step: a new matrix, factored once
+            c0.value, c1.value, c2.value = 1.5, 2.0, -0.5
+            system.refactor()
+        emit("increment", increment=k, time=t)
+        uh = system.solve()
+        ah = uh.sub(0).collapse()
+        if k % every == 0:
+            rate = (c0 * ah - history) / dt
+            J = source - sigma * rate
+            if with_v:
+                J = J - chi_m * sigma * ufl.grad(uh.sub(1).collapse())
+            series["B_re"].append(cellwise(ufl.curl(ah)))
+            series["J_re"].append(cellwise(J))
+            series["A_re"].append(cellwise(ah))
+            series["b_re"].append(project(ufl.curl(ah), msh, degree, dx, "b"))
+            times.append(t)
+        before.x.array[:] = previous.x.array
+        previous.x.array[:] = ah.x.array
+        emit("converged", increment=k)
+    out["coords"] = fem.functionspace(msh, ("Lagrange", degree)).tabulate_dof_coordinates()
+    count_cells = msh.topology.index_map(tdim).size_local
+    corners = msh.geometry.dofmap[:count_cells, :4]
+    out["cell_midpoints"] = msh.geometry.x[corners].mean(axis=1)
+    out["magnetic_times"] = np.array(times, float)
     for key, values in series.items():
         out[f"mag_{key}"] = np.array(values, float)
 

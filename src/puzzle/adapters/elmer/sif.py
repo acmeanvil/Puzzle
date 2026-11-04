@@ -93,7 +93,7 @@ def write_case(
         "solid_mechanics": ("stationary", "modal", "transient", "frequency_domain"),
         "heat_transfer": ("stationary", "transient"),
         "electrostatics": ("stationary",),
-        "magnetic_fields": ("stationary", "frequency_domain"),  # ADR 0047
+        "magnetic_fields": ("stationary", "frequency_domain", "transient"),  # ADR 0047
     }
     if len(solved) != 1 or next(iter(solved)) not in allowed:
         raise InputError(
@@ -119,10 +119,23 @@ def write_case(
     ]
     if step.type == "modal":
         features = [f for f in features if f.type in HOLDING]
+    if solved == {"magnetic_fields"} and mesh.planar:  # ADR 0047 item 7
+        if comp.dimension != "2d_axisymmetric":
+            raise InputError("2D magnetic fields run axisymmetric models so far",
+                             code="unsupported")  # fmt: skip
+        lines, emesh = magnetics.write_axisymmetric(project, comp, step, features, mesh,
+                                                    workdir, write_mesh, _time_block)  # fmt: skip
+        freqs = frequency_list(step) if harmonic else [1.0]
+        (workdir / MESH_DIR / TIMES).write_text("\n".join(f"{t:.12g}" for t in freqs) + "\n")
+        sif = workdir / f"{OUTPUT}.sif"
+        sif.write_text(with_settings("\n".join(lines) + "\n", study, step))
+        np.save(workdir / MESH_DIR / "puzzle-node-coords.npy", mesh.coords)
+        return sif, emesh
     if solved == {"magnetic_fields"} and magnetics.needed(step, features):  # ADR 0047
         lines, emesh = magnetics.write(project, comp, step, features, mesh, workdir,
                                        write_mesh, _time_block)  # fmt: skip
-        freqs = frequency_list(step) if harmonic else [1.0]
+        freqs = (frequency_list(step) if harmonic else magnetics.transient_times(step)
+                 if transient else [1.0])  # fmt: skip
         (workdir / MESH_DIR / TIMES).write_text("\n".join(f"{t:.12g}" for t in freqs) + "\n")
         sif = workdir / f"{OUTPUT}.sif"
         sif.write_text(with_settings("\n".join(lines) + "\n", study, step))

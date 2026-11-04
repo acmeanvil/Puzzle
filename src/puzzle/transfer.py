@@ -172,37 +172,92 @@ def _interpolate(source: Mesh, values: np.ndarray, queries: np.ndarray) -> np.nd
 
 
 def losses_to_nodes(field: Field, mesh: Mesh) -> Field:
-    """An element loss density as nodal values: each node the mean of the losing
-    elements (value > 0) around it, so a conductor's surface keeps its value instead of
-    being averaged with the air beside it (ADR 0047)."""
+    """An element loss (or force) density as nodal values: each node the mean of the
+    elements around it carrying any (a value not zero), so a conductor's surface keeps
+    its value instead of being averaged with the air beside it (ADR 0047)."""
     index = {int(n): i for i, n in enumerate(mesh.node_ids)}
-    by_element = dict(zip(field.ids.tolist(), field.values[:, 0], strict=True))
-    total, count = np.zeros(len(mesh.node_ids)), np.zeros(len(mesh.node_ids))
+    width = field.values.shape[1]  # a vector (a force density) goes component by component
+    by_element = dict(zip(field.ids.tolist(), field.values, strict=True))
+    total, count = np.zeros((len(mesh.node_ids), width)), np.zeros(len(mesh.node_ids))
     for b in mesh.blocks:
         if b.dim != 3:
             continue
-        values = np.array([by_element.get(int(e), 0.0) for e in b.ids])
-        losing = values > 0
+        values = np.array([by_element.get(int(e), np.zeros(width)) for e in b.ids])
+        losing = np.abs(values).sum(axis=1) > 0
         rows = np.vectorize(index.__getitem__, otypes=[np.int64])(b.connectivity[losing])
-        np.add.at(total, rows, values[losing, None].repeat(rows.shape[1], axis=1))
-        np.add.at(count, rows, 1.0)
-    values = np.divide(total, count, out=np.zeros_like(total), where=count > 0)
-    return Field(field.name, "node", [""], mesh.node_ids.copy(), values[:, None])
+        for corner in range(rows.shape[1]):
+            np.add.at(total, rows[:, corner], values[losing])
+            np.add.at(count, rows[:, corner], 1.0)
+    values = total / np.where(count > 0, count, 1.0)[:, None]
+    return Field(field.name, "node", list(field.components), mesh.node_ids.copy(), values)
+
+
+def _tet_rule(n: int = 4):
+    """Points (barycentric ξ, η, ζ) and weights on the unit tetrahedron (volume 1/6): a
+    collapsed n³ Gauss–Legendre rule, exact far past a curved tet10's cubic Jacobian."""
+    g, w = np.polynomial.legendre.leggauss(n)
+    g, w = (g + 1) / 2, w / 2
+    u, v, t = np.meshgrid(g, g, g, indexing="ij")
+    wu, wv, wt = np.meshgrid(w, w, w, indexing="ij")
+    xi, eta, zeta = u, v * (1 - u), t * (1 - u) * (1 - v)
+    weight = wu * wv * wt * (1 - u) ** 2 * (1 - v)
+    return np.column_stack([xi.ravel(), eta.ravel(), zeta.ravel()]), weight.ravel()
+
+
+def _tet10_shapes(p):
+    """Gmsh tet10 shape functions and their gradients at reference points `p` (m, 3)."""
+    x, y, z = p.T
+    l0 = 1 - x - y - z
+    lam = [l0, x, y, z]
+    dlam = np.array([[-1, -1, -1], [1, 0, 0], [0, 1, 0], [0, 0, 1]], float)
+    n = [li * (2 * li - 1) for li in lam] + [4 * lam[i] * lam[j] for i, j in EDGES]
+    grads = [np.outer(4 * li - 1, dlam[k]) for k, li in enumerate(lam)]
+    grads += [4 * (np.outer(lam[j], dlam[i]) + np.outer(lam[i], dlam[j])) for i, j in EDGES]
+    return np.array(n).T, np.stack(grads, axis=1)  # (m, 10), (m, 10, 3)
 
 
 def _integral(mesh: Mesh, selection: str | None, values_at) -> float:
-    """∫ q dV over a body (every volume element when None): each tetrahedron its nodes'
-    mean times its volume."""
+    """∫ q dV over a body (every volume element when None) of the nodal values'
+    interpolant on each element's own geometry: a linear tetrahedron's corner mean
+    times its volume; a quadratic one by quadrature over its curved shape (edge nodes
+    on a curved face: the volume a solver integrates)."""
     from puzzle.adapters.eddy import tet_volumes
 
     blocks = mesh.groups[selection].blocks(mesh) if selection else mesh.blocks
     index = {int(n): i for i, n in enumerate(mesh.node_ids)}
     total = 0.0
     for b in (b for b in blocks if b.dim == 3):
+        values = values_at(b.connectivity)
+        if values.shape[1] == 10:
+            points, weights = _tet_rule()
+            shape, grad = _tet10_shapes(points)
+            xyz = mesh.node_coords(b.connectivity.ravel()).reshape(-1, 10, 3)
+            jac = np.einsum("enc,qnd->eqcd", xyz, grad)  # dx_c/dξ_d per element, point
+            det = np.abs(np.linalg.det(jac))
+            total += float(np.einsum("en,qn,eq,q->", values, shape, det, weights))
+            continue
         local = np.vectorize(index.__getitem__, otypes=[np.int64])(b.connectivity[:, :4])
-        total += float((values_at(b.connectivity).mean(axis=1) * tet_volumes(mesh.coords, local)
-                        ).sum())  # fmt: skip
+        total += float((values.mean(axis=1) * tet_volumes(mesh.coords, local)).sum())
     return total
+
+
+EDGES = ((0, 1), (1, 2), (0, 2), (0, 3), (2, 3), (1, 3))  # tet10 edge nodes 4..9, Gmsh order
+
+
+def linear_in_elements(mesh: Mesh, field: Field) -> Field:
+    """The field with each quadratic tetrahedron's edge nodes set to their corners' mean:
+    linear inside every element, so it has one integral whatever the solver's quadrature
+    (the 10 nodes' mean, the quadratic weights, the corners'), and a total kept by
+    rescaling stays kept (ADR 0047)."""
+    values = field.values.copy()
+    row = {int(n): i for i, n in enumerate(field.ids)}
+    for b in mesh.blocks:
+        if b.dim != 3 or b.connectivity.shape[1] != 10:
+            continue
+        rows = np.vectorize(row.__getitem__, otypes=[np.int64])(b.connectivity)
+        for k, (i, j) in enumerate(EDGES):
+            values[rows[:, 4 + k]] = 0.5 * (values[rows[:, i]] + values[rows[:, j]])
+    return Field(field.name, field.location, list(field.components), field.ids, values)
 
 
 def heat_from_losses(transfer, field: Field, source: Mesh, target: Mesh):
@@ -219,7 +274,7 @@ def heat_from_losses(transfer, field: Field, source: Mesh, target: Mesh):
         raise InputError(f"transfer '{transfer.name}': a loss density heats a body: set its "
                          "target selection to one", code="invalid_input")  # fmt: skip
     nodal = losses_to_nodes(field, source)
-    mapped = map_field(nodal, source, target, transfer.mapping)
+    mapped = linear_in_elements(target, map_field(nodal, source, target, transfer.mapping))
     by_element = dict(zip(field.ids.tolist(), field.values[:, 0], strict=True))
     blocks = source.groups[body].blocks(source) if body in source.groups else source.blocks
     from puzzle.adapters.eddy import tet_volumes
@@ -238,3 +293,59 @@ def heat_from_losses(transfer, field: Field, source: Mesh, target: Mesh):
                       fields={"q": FieldUse(field=transfer.id, column=field.name)})  # fmt: skip
     key = feature_key(feature, "q")
     return Input(mapped, "feature", body, key, transfer.source), feature
+
+
+def _body_total(mesh: Mesh, selection: str | None, by_element: dict, width: int) -> np.ndarray:
+    """Σ value × volume of a body's elements (every volume element when it is not in
+    the mesh), from per-element values."""
+    from puzzle.adapters.eddy import tet_volumes
+
+    blocks = mesh.groups[selection].blocks(mesh) if selection in mesh.groups else mesh.blocks
+    index = {int(n): i for i, n in enumerate(mesh.node_ids)}
+    total = np.zeros(width)
+    for b in (b for b in blocks if b.dim == 3):
+        local = np.vectorize(index.__getitem__, otypes=[np.int64])(b.connectivity[:, :4])
+        values = np.array([by_element.get(int(e), np.zeros(width)) for e in b.ids])
+        total += (values * tet_volumes(mesh.coords, local)[:, None]).sum(axis=0)
+    return total
+
+
+def forces_from_lorentz(transfer, field: Field, source: Mesh, target: Mesh):
+    """A Lorentz force density (N/m³ per element) as a body force on the transfer's target
+    body (ADR 0047 item 6): nodal, mapped, then each component scaled so the body takes
+    the total force on it at the source. Returns the Inputs (fx, fy, fz) and the
+    body_force feature they drive."""
+    from puzzle.adapters.common import InputError
+    from puzzle.fields import feature_key
+    from puzzle.model.schema import Feature, FieldUse, Quantity
+
+    body = transfer.target_selection
+    if not body or body not in target.groups or target.groups[body].dim != 3:
+        raise InputError(f"transfer '{transfer.name}': a force density acts on a body: set "
+                         "its target selection to one", code="invalid_input")  # fmt: skip
+    mapped = linear_in_elements(
+        target, map_field(losses_to_nodes(field, source), source, target, transfer.mapping)
+    )
+    wanted = _body_total(source, body, dict(zip(field.ids.tolist(), field.values, strict=True)), 3)
+    taken = np.array([_integral(target, body, lambda conn, c=c: mapped.at(conn.ravel())[:, c]
+                                .reshape(conn.shape)) for c in range(3)])  # fmt: skip
+    scale = np.ones(3)
+    big = np.abs(wanted).max() or 1.0
+    for c in range(3):  # a component that carries force keeps its total
+        if abs(wanted[c]) > 1e-6 * big and abs(taken[c]) > 1e-9 * big:
+            scale[c] = wanted[c] / taken[c]
+    names = ("fx", "fy", "fz")
+    feature = Feature(type="body_force", selection=body,
+                      values={n: Quantity(value=0.0, unit="N/m^3") for n in names},
+                      fields={n: FieldUse(field=transfer.id, column=n) for n in names})  # fmt: skip
+    inputs = [
+        Input(
+            Field(n, "node", [""], mapped.ids, mapped.values[:, [c]] * scale[c]),
+            "feature",
+            body,
+            feature_key(feature, n),
+            transfer.source,
+        )  # fmt: skip
+        for c, n in enumerate(names)
+    ]
+    return inputs, feature

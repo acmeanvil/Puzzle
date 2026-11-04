@@ -703,6 +703,11 @@ MAPPINGS = [
 ]
 
 
+# ADR 0047: fields a transfer hands to one body of the target (as a heat generation, a
+# body force), so the form asks which.
+BODY_FIELDS = ("loss_density", "lorentz_force_density")
+
+
 def new_transfer(window, source: str | None = None, field: str | None = None,
                  target: str | None = None):  # fmt: skip
     """A transfer: one study's result field into another study (ADR 0009), in one form.
@@ -731,7 +736,8 @@ def new_transfer(window, source: str | None = None, field: str | None = None,
         return [(f"Step {i + 1}", i) for i in range(max(n, 1))]
 
     def bodies(v) -> list:
-        """The target component's bodies (a loss density heats one, ADR 0047)."""
+        """The target component's bodies (a loss density heats one, a force density
+        loads one: ADR 0047)."""
         study = studies.get(v.get("target"))
         comp = project.objects.get(study.component) if study else None
         names = [a.selection for a in comp.materials] if isinstance(comp, Component) else []
@@ -762,10 +768,10 @@ def new_transfer(window, source: str | None = None, field: str | None = None,
             Ask("target_step", "Into its step", choices=steps, shown=lambda v: len(steps(v)) > 1),
             Ask(
                 "target_selection",
-                "Heats the body",
+                "On the body",
                 choices=bodies,
-                shown=lambda v: v.get("field") == "loss_density",
-                help="The losses become a heat generation there, with the same total",
+                shown=lambda v: v.get("field") in BODY_FIELDS,
+                help="A loss density heats it, a force density loads it, each total kept",
             ),
             Ask(
                 "role", "Used", choices=ROLES, default="prestress" if field == "stress" else "load"
@@ -802,7 +808,7 @@ def new_transfer(window, source: str | None = None, field: str | None = None,
         "role": got["role"],
         "mapping": got["mapping"],
     }
-    if got["field"] == "loss_density" and got.get("target_selection"):
+    if got["field"] in BODY_FIELDS and got.get("target_selection"):
         data["target_selection"] = got["target_selection"]
     return window.submit(Create(kind="transfer", data=data))
 

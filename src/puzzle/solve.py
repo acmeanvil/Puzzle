@@ -201,7 +201,15 @@ def run_study(
 
             given, feature = heat_from_losses(t, picked, upstream[t.source].mesh, meshed.mesh)
             inputs.append(given)
-            heating.append(feature)
+            heating.append(("heat_transfer", feature))
+            continue
+        if t.field == "lorentz_force_density":  # ADR 0047: forces load the target body
+            from puzzle.transfer import forces_from_lorentz
+
+            given, feature = forces_from_lorentz(t, picked, upstream[t.source].mesh,
+                                                 meshed.mesh)  # fmt: skip
+            inputs += given
+            heating.append(("solid_mechanics", feature))
             continue
         inputs.append(Input(map_field(picked, upstream[t.source].mesh, meshed.mesh, t.mapping),
                             t.role, t.target_selection, t.name, t.source))  # fmt: skip
@@ -476,17 +484,20 @@ def _contact_warnings(project, study, mesh, record) -> None:
 
 
 def _with_heat_sources(project, study, features):
-    """A copy of the project whose study component's heat physics has the heat
-    generation features transferred losses drive (ADR 0047)."""
+    """A copy of the project whose study component's physics have the features
+    transferred fields drive (ADR 0047): a loss density's heat generation in its heat
+    physics, a Lorentz force density's body force in its structure."""
     from puzzle.model.schema import Component
 
     comp = project.get(study.component, Component)
-    heat = next((p for p in comp.physics if p.type == "heat_transfer"), None)
-    if heat is None:
-        raise StudyError(f"study '{study.name}' takes a loss density but solves no heat",
-                         code="invalid_input")  # fmt: skip
-    physics = [p.model_copy(update={"features": [*p.features, *features]})
-               if p is heat else p for p in comp.physics]  # fmt: skip
+    physics = list(comp.physics)
+    for kind, feature in features:
+        at = next((i for i, p in enumerate(physics) if p.type == kind), None)
+        if at is None:
+            raise StudyError(f"study '{study.name}' takes a {feature.type.replace('_', ' ')} "
+                             f"field but solves no {kind.replace('_', ' ')}",
+                             code="invalid_input")  # fmt: skip
+        physics[at] = physics[at].model_copy(update={"features": [*physics[at].features, feature]})
     copy = replace(project, objects=dict(project.objects))
     copy.objects[comp.id] = comp.model_copy(update={"physics": physics})
     return copy

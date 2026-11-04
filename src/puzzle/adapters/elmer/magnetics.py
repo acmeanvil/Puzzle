@@ -33,7 +33,9 @@ from puzzle.results.model import Results
 
 def needed(step, features) -> bool:
     """Whether this writer handles the study (else the static one-coil path does)."""
-    return step.type == "frequency_domain" or any(f.type == "stranded_coil" for f in features)
+    return step.type in ("frequency_domain", "transient") or any(
+        f.type == "stranded_coil" for f in features
+    )
 
 
 def iterative(tolerance: float = 1e-9) -> list[str]:
@@ -57,10 +59,16 @@ def write(project, comp, step, features, mesh, workdir: Path, write_mesh, time_b
     from puzzle.model.schema import Material
 
     harmonic = step.type == "frequency_domain"
-    if step.type not in ("stationary", "frequency_domain"):
-        raise InputError(f"Elmer does not run {step.type} magnetic fields yet")
+    transient = step.type == "transient"  # ADR 0047 stage 2: A–V in time
     coils = eddy.coils(project, comp, features, mesh, solver="Elmer")
-    if not harmonic:
+    if transient and any(c.current[1] for c in coils):
+        raise InputError("a coil's phase applies in frequency-domain steps only")
+    if transient and step.settings.get("time_scheme", "backward_euler") != "backward_euler":
+        # Measured on the transient skin effect: Elmer's BDF2 on the A–V system lags like
+        # backward Euler and worse, not second order (FEniCSx's BDF2 is).
+        raise InputError("Elmer solves magnetic transients by backward Euler only; FEniCSx "
+                         "also takes bdf2", code="unsupported")  # fmt: skip
+    if step.type == "stationary":
         if any(c.kind == "massive" for c in coils):
             raise InputError(
                 "a static magnetic study takes one massive conductor or windings, not both",
@@ -77,6 +85,7 @@ def write(project, comp, step, features, mesh, workdir: Path, write_mesh, time_b
     eddy.element_table(mesh, bodies, workdir / "mesh" / eddy.ELEMENTS)
 
     frequencies = frequency_list(step) if harmonic else [0.0]
+    times = transient_times(step) if transient else None
     winding_of = {c.body: c for c in windings}
     meta_bodies = []
     out = [
@@ -171,7 +180,8 @@ def write(project, comp, step, features, mesh, workdir: Path, write_mesh, time_b
             '  Variable = "AV"',
             '  Procedure = "MagnetoDynamics" "WhitneyAVSolver"',
             "  Use Magnetic Norm = Logical True",
-            *DIRECT,
+            # In time the σ/Δt term makes BiCGStab converge; UMFPACK took minutes a step.
+            *(iterative() if transient else DIRECT),
         ]
     )
     solvers.append(
@@ -202,7 +212,7 @@ def write(project, comp, step, features, mesh, workdir: Path, write_mesh, time_b
     )
     solvers.append(
         [
-            f"  Exec Solver = {'After Timestep' if harmonic else 'After Simulation'}",
+            f"  Exec Solver = {'After Timestep' if harmonic or transient else 'After Simulation'}",
             '  Equation = "Result Output"',
             '  Procedure = "ResultOutputSolve" "ResultOutputSolver"',
             '  Output File Name = "case"',
@@ -240,11 +250,16 @@ def write(project, comp, step, features, mesh, workdir: Path, write_mesh, time_b
         if name in starts:
             c = starts[name]
             area = surface_area(mesh.groups[name], mesh)
-            block += [
-                f"  Electric Current Density = Real {c.current[0] / area:.10g}",
-                f"  Electric Current Density im = Real {c.current[1] / area:.10g}",
-                *tangential,
-            ]
+            if harmonic:
+                block += [
+                    f"  Electric Current Density = Real {c.current[0] / area:.10g}",
+                    f"  Electric Current Density im = Real {c.current[1] / area:.10g}",
+                ]
+            else:  # static, or in time: a step from t = 0, or following its amplitude
+                from puzzle.adapters.elmer.sif import _in_time
+
+                block += _in_time("Electric Current Density", c.current[0] / area, c.amplitude)
+            block += tangential
         elif name in ends:
             block += [
                 *tangential,
@@ -257,7 +272,7 @@ def write(project, comp, step, features, mesh, workdir: Path, write_mesh, time_b
             block += tangential  # B·n = 0
         # magnetic_symmetry: the natural condition (n × H = 0, flux normal): nothing
         out += [*block, "End", ""]
-    eddy.write_meta(workdir / "mesh" / eddy.META, meta_bodies, coils, frequencies)
+    eddy.write_meta(workdir / "mesh" / eddy.META, meta_bodies, coils, frequencies, times)
     return out, emesh
 
 
@@ -267,11 +282,28 @@ def _angular(frequencies: list[float]) -> list[str]:
     return ["  Angular Frequency = Variable Time", "    Real", *rows, "    End"]
 
 
+def transient_times(step) -> list[float]:
+    """A transient step's output times (s): every `output_every`-th step."""
+    from puzzle.adapters.common import time_settings
+
+    dt, _, n = time_settings(step)
+    every = int(step.settings.get("output_every", 1))
+    return [k * dt for k in range(every, n + 1, every)]
+
+
 def _source(c: eddy.Coil, harmonic: bool) -> list[str]:
     """A winding's current density: CoilSolver's 1 A field times −N I (it flows from
-    the end face to the start one)."""
+    the end face to the start one); in time, times its amplitude."""
     scale = -c.turns * c.phasor
     lines = []
+    if c.amplitude and not harmonic:
+        from puzzle.adapters.elmer.sif import _matc_amplitude
+
+        factor = _matc_amplitude(c.amplitude, "tx(1)")
+        for k in (1, 2, 3):
+            lines += [f'  Current Density {k} = Variable "CoilCurrent {k}", Time',
+                      f'    Real MATC "tx(0)*({scale.real:.12g})*({factor})"']  # fmt: skip
+        return lines
     for part, value in (("", scale.real), (" im", scale.imag)) if harmonic else (("", scale.real),):
         for k in (1, 2, 3):
             lines += [
@@ -300,7 +332,12 @@ def read_magnetics(vtus: list[Path], mesh_dir: Path, node_ids: np.ndarray) -> Re
     table = np.load(mesh_dir / eddy.ELEMENTS)
     position = {int(n): i for i, n in enumerate(node_ids)}
     results = Results(solver="elmer")
-    for vtu, hz in zip(vtus, meta["frequencies"], strict=True):
+    times = meta.get("times")
+    steps = [(0.0, t) for t in times] if times else [(hz, None) for hz in meta["frequencies"]]
+    if times and len(vtus) > len(times):  # Elmer wrote every step: keep the output steps
+        every = len(vtus) // len(times)
+        vtus = vtus[every - 1 :: every][: len(times)]
+    for vtu, (hz, time) in zip(vtus, steps, strict=True):
         nodal = read_vtu(vtu)
         cells = {k.removesuffix(" e"): v for k, v in _cells(vtu, len(table["ids"])).items()}
 
@@ -319,6 +356,102 @@ def read_magnetics(vtus: list[Path], mesh_dir: Path, node_ids: np.ndarray) -> Re
         results.steps.append(eddy.step_result(
             meta, hz, table, cplx(cells, "magnetic flux density", n),
             cplx(cells, "current density", n), cplx(cells, "magnetic vector potential", n),
-            start, node_ids, cplx(nodal, "magnetic flux density", len(node_ids)),
+            start, node_ids, cplx(nodal, "magnetic flux density", len(node_ids)), time,
         ))  # fmt: skip
+    return results
+
+
+def write_axisymmetric(project, comp, step, features, mesh, workdir: Path, write_mesh,
+                       time_block):  # fmt: skip
+    """An axisymmetric magnetic study (ADR 0047 item 7): MagnetoDynamics2D(Harmonic) in
+    A_φ, windings' J = N I / section as body forces, `magnetic_insulation` A = 0 (flux
+    along the edge), `magnetic_symmetry` the natural condition. Massive conductors and
+    transients are refused here."""
+    from puzzle.model.schema import Material
+
+    if step.type not in ("stationary", "frequency_domain"):
+        raise InputError("axisymmetric magnetic fields run static or frequency-domain steps",
+                         code="unsupported")  # fmt: skip
+    harmonic = step.type == "frequency_domain"
+    coils = eddy.coils(project, comp, features, mesh, solver="Elmer")
+    if any(c.kind == "massive" for c in coils):
+        raise InputError("an axisymmetric model takes windings (stranded coils); a massive "
+                         "ring's total current needs a circuit, not built yet",
+                         code="unsupported")  # fmt: skip
+    if not harmonic and any(c.current[1] for c in coils):
+        raise InputError("a coil's phase applies in frequency-domain steps only")
+    boundaries = list(dict.fromkeys(f.selection for f in features if f.type not in eddy.COILS))
+    bodies = [a.selection for a in comp.materials]
+    emesh = write_mesh(mesh, workdir / "mesh", bodies, boundaries)
+    eddy.axisymmetric_table(mesh, bodies, workdir / "mesh" / eddy.ELEMENTS)
+    table = np.load(workdir / "mesh" / eddy.ELEMENTS)
+    frequencies = frequency_list(step) if harmonic else [0.0]
+    winding_of = {c.body: c for c in coils}
+    out = ["Header", "  CHECK KEYWORDS Warn", '  Mesh DB "." "mesh"', "End", "",
+           "Simulation", "  Max Output Level = 5", "  Coordinate System = Axi Symmetric",
+           *time_block(step), *(_angular(frequencies) if harmonic else []), "End", ""]  # fmt: skip
+    forces, meta_bodies = [], []
+    for i, a in enumerate(comp.materials, start=1):
+        m = project.get(a.material, Material)
+        p = {k: q.to_si() for k, q in m.properties.items()}
+        missing = [k for k in ("relative_permeability", "electrical_conductivity") if k not in p]
+        if missing:
+            raise InputError(f"material '{m.name}' is missing {', '.join(missing)}")
+        sigma = 0.0 if a.selection in winding_of else p["electrical_conductivity"]
+        meta_bodies.append({"name": a.selection, "mu_r": p["relative_permeability"],
+                            "sigma": sigma})  # fmt: skip
+        out += [f"Body {i}", f"  Target Bodies(1) = {i}", "  Equation = 1", f"  Material = {i}"]
+        if a.selection in winding_of:
+            c = winding_of[a.selection]
+            density = c.turns * c.phasor / table["area"][table["body"] == i - 1].sum()
+            forces.append([f"  Current Density = Real {density.real:.10g}",
+                           *([f"  Current Density im = Real {density.imag:.10g}"]
+                             if harmonic else [])])  # fmt: skip
+            out.append(f"  Body Force = {len(forces)}")
+        out += ["End", "", f"Material {i}", f'  Name = "{m.name}"',
+                f"  Relative Permeability = {p['relative_permeability']:.10g}",
+                f"  Electric Conductivity = {sigma:.10g}", "End", ""]  # fmt: skip
+    for k, block in enumerate(forces, start=1):
+        out += [f"Body Force {k}", *block, "End", ""]
+    variable = '"Potential[Potential re:1 Potential im:1]"' if harmonic else "Potential"
+    procedure = "MagnetoDynamics2DHarmonic" if harmonic else "MagnetoDynamics2D"
+    out += ["Equation 1", "  Active Solvers(2) = 1 2", "End", "",
+            "Solver 1", '  Equation = "MGDyn2D"', f"  Variable = {variable}",
+            f'  Procedure = "MagnetoDynamics2D" "{procedure}"', *DIRECT, "End", "",
+            "Solver 2",
+            f"  Exec Solver = {'After Timestep' if harmonic else 'After Simulation'}",
+            '  Equation = "Result Output"',
+            '  Procedure = "ResultOutputSolve" "ResultOutputSolver"',
+            '  Output File Name = "case"', "  Vtu Format = True", "  Ascii Output = True",
+            "End", ""]  # fmt: skip
+    for name in boundaries:
+        kinds = {f.type for f in features if f.selection == name}
+        index = emesh.boundaries[name]
+        block = [f"Boundary Condition {index}", f"  Target Boundaries(1) = {index}",
+                 f'  Name = "{name}"']  # fmt: skip
+        if "magnetic_insulation" in kinds:  # A = 0 along it: the flux stays along it
+            block += (["  Potential re = Real 0", "  Potential im = Real 0"] if harmonic
+                      else ["  Potential = Real 0"])  # fmt: skip
+        out += [*block, "End", ""]
+    eddy.write_meta(workdir / "mesh" / eddy.META, meta_bodies, coils, frequencies,
+                    axisymmetric=True)  # fmt: skip
+    return out, emesh
+
+
+def read_axisymmetric(vtus: list[Path], mesh_dir: Path, node_ids: np.ndarray, coords) -> Results:
+    """A_φ per node from Elmer, then the shared fields (`eddy.axisymmetric_fields`)."""
+    from puzzle.adapters.elmer.output import read_vtu
+
+    meta = eddy.read_meta(mesh_dir / eddy.META)
+    table = dict(np.load(mesh_dir / eddy.ELEMENTS))
+    xy = {int(n): c[:2] for n, c in zip(node_ids, coords, strict=True)}
+    results = Results(solver="elmer")
+    for vtu, hz in zip(vtus, meta["frequencies"], strict=True):
+        nodal = read_vtu(vtu)
+        re = nodal.get("potential re", nodal.get("potential"))[:, 0]
+        im = nodal.get("potential im", np.zeros((len(re), 1)))[:, 0]
+        potential = dict(zip(node_ids.tolist(), re + 1j * im, strict=True))
+        B, J, A = eddy.axisymmetric_fields(meta, table, xy, potential, 2 * math.pi * hz)
+        b_nodal = eddy.nodal_average(table, B, node_ids)
+        results.steps.append(eddy.step_result(meta, hz, table, B, J, A, {}, node_ids, b_nodal))
     return results

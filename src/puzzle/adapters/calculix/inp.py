@@ -1697,15 +1697,14 @@ def _feature_rows(f: Feature, mesh: Mesh, faces: FaceLookup, rigid=None) -> dict
                 f"{elset}, CENTRIF, {load.omega**2:.10g}, {c[0]:.10g}, {c[1]:.10g}, "
                 f"{c[2]:.10g}, {n[0]:.10g}, {n[1]:.10g}, {n[2]:.10g}"
             )
-    elif f.type == "heat_generation" and "q" in f.fields:  # per element (ADR 0044, 0047)
-        from puzzle.adapters.graded import element_values, solid_blocks
-
+    elif f.type == "heat_generation" and "q" in f.fields:  # from a field (ADR 0044, 0047)
         field = _given(f, "q")[0]
         if field is None:
             raise InputError(f"heat generation on '{f.selection}': its field was not mapped")
-        for b in solid_blocks(group, mesh):  # each element its nodes' mean
-            q = element_values(field, b)[:, 0]
-            dflux += [f"{e}, BF, {x:.10g}" for e, x in zip(b.ids, q, strict=True) if x]
+        # Consistent nodal heat flows ∫ N_k q dV on the elements' own (curved) shape, so
+        # the total is the field's integral: what a transferred loss keeps.
+        flows = body_forces(group, mesh, lambda ids: field.at(ids)[:, :1])
+        cflux += [f"{n}, 11, {q[0]:.10g}" for n, q in sorted(flows.items()) if q[0]]
     elif f.type == "heat_generation":  # W/m³ on the body's elements
         dflux.append(f"{set_name('E', f.selection)}, BF, {v['q']:.10g}")
     elif f.type == "heat_flux" and _history(f, "q") is not None:

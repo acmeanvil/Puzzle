@@ -53,6 +53,11 @@ VECTORS = {
         ("Current density amplitude (all components)", "Current density amplitude"),
         None,
     ),
+    "lorentz_force_density": (
+        "Lorentz force density",
+        ("Lorentz force density magnitude", "Lorentz force density"),
+        None,
+    ),  # ADR 0047: time-averaged, per element
     "current_density_phase": (
         "Current density phase",
         ("Phase (vector of angles)", "Phase, °"),

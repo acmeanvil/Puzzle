@@ -1,6 +1,6 @@
 # 0047. Magnetodynamics: time-harmonic eddy currents first, then transient, on Elmer and FEniCSx
 
-- Status: Accepted (2026-10-26, with the maintainer's answers); stage 1 (time-harmonic) built 2026-11-04
+- Status: Accepted (2026-10-26, with the maintainer's answers); stages 1 and 2 built 2026-11-04 (the sphere and TEAM 7 checks left)
 - Date: 2026-10-26
 
 ## Context
@@ -119,7 +119,31 @@ Items 1 to 4 of the order of work.
   - Heat generation on all four solvers: uniform, the middle's rise equal to the closed form to five digits; from a field rising along the bar, the peak within 0.003 %.
   - Elmer's 1 kHz losses heating a CalculiX wire: the temperature rise within 2 % of the 1D solution.
 
-Left for stage 2: transient (item 5), Lorentz forces (item 6), axisymmetric 2D (item 7), closed windings on FEniCSx, and the sphere and TEAM 7 checks.
+## Built (stage 2, 2026-11-04)
+
+Items 5 to 7.
+
+- **Transient** (item 5): A–V in time, each coil's current following its Amplitude, or a step from t = 0.
+  - Elmer runs WhitneyAVSolver in a transient simulation, solved by BiCGStab: UMFPACK took minutes a step. It is backward Euler only. Elmer's `BDF Order = 2` measured wrong on this system: it lagged like backward Euler and worse, where FEniCSx's BDF2 matched a time-converged run.
+  - Elmer's `Exec Intervals` counts from step 1, and its output solver ignores `Output Intervals`. So Elmer writes every step, and the reader keeps the output steps.
+  - FEniCSx factors the system once (again when BDF2 starts), with backward Euler or BDF2.
+  - Results per output time are instantaneous: B, J, the loss and the energy, with no R or L.
+- **Lorentz forces** (item 6): `lorentz_force_density`, ½ Re(J × B*) per element. A transfer of it into a structural study becomes a `body_force` on its target body, each component's total kept, as for losses.
+  - A transferred field is made linear in each element: a tet10's edge nodes become their corners' mean.
+  - The totals are integrated over the elements' own curved shape. The solvers' consistent loads integrate it the same way.
+  - CalculiX's field-driven heat generation is now consistent nodal flows (CFLUX) rather than a mean per element.
+- **Axisymmetric 2D** (item 7): A_φ for windings and passive conductors, static or frequency-domain.
+  - Elmer runs MagnetoDynamics2D(Harmonic), solved directly; FEniCSx a Lagrange A_φ in real and imaginary blocks.
+  - FEniCSx uses the curl form, ∫ ν curl A·curl v r. The Laplacian form ∇A·∇v + A v/r² misses a boundary term, so its natural condition pinned the field 21 % high.
+  - Puzzle derives B, J, losses, energy, impedance and forces from the nodal A_φ, the same for both solvers (`eddy.axisymmetric_fields`). The hoop direction is the out-of-plane component, and the (r, z, hoop) frame is left-handed, so the force's sign is flipped.
+  - A massive ring is refused (it needs a circuit). The face steps of one 2D geometry fuse into one face, so regions are separate parts bonded edge to edge.
+- **Measured:**
+  - Transient skin effect, a step current into the wire, against the Bessel series. FEniCSx BDF2 at Δt = τ/200, in the wire's middle third, is within 0.5 % of the uniform density at 0.1, 0.2 and 0.3 τ. Near the terminals the current enters evenly, not in a skin.
+  - Elmer and FEniCSx, backward Euler on one mesh: equal to 1e-6.
+  - Two windings at 10 A each way: the force on one within 1.7 % of the line-current value with the outer boundary's images, on both solvers. Handed to a CalculiX study of the wire held at one end, the reaction is within 1.5 % of the total, the rest being the load on the held nodes.
+  - A copper billet in a long solenoid at a/δ = 3.4, on both solvers: loss 0.311 W against 0.31099 W, the centre's B within 0.2 %.
+
+Left: closed windings on FEniCSx (it needs both terminal faces), a massive ring in 2D (a circuit), and the sphere and TEAM 7 checks.
 
 ## Alternatives considered
 

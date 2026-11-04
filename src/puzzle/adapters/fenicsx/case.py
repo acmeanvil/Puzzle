@@ -128,7 +128,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         "solid_mechanics": ("stationary", "modal", "transient", "frequency_domain"),
         "heat_transfer": ("stationary", "transient"),
         "electrostatics": ("stationary",),
-        "magnetic_fields": ("stationary", "frequency_domain"),  # ADR 0047
+        "magnetic_fields": ("stationary", "frequency_domain", "transient"),  # ADR 0047
         "custom_pde": ("stationary", "transient"),
     }
     if len(solved) != 1 or next(iter(solved)) not in allowed:
@@ -155,7 +155,8 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         if f.type in BODY_LOADS | {"body_force"} | HEAT_SOURCES:  # cells: one tag each
             body_load_on_material(comp, f, "FEniCSx")
     magnetics = physics == "magnetic_fields" and (
-        step.type == "frequency_domain" or any(f.type == "stranded_coil" for f in features)
+        step.type in ("frequency_domain", "transient")
+        or any(f.type == "stranded_coil" for f in features)
     )  # ADR 0047: the A–V solve; else the static one-coil path
     coils = [f for f in features if f.type == "coil_current"]
     if physics == "magnetic_fields" and not magnetics and len(coils) != 1:
@@ -277,7 +278,7 @@ def _magnetics(project, comp, step, features, mesh, workdir: Path) -> dict:
     from puzzle.adapters import eddy
 
     coils = eddy.coils(project, comp, features, mesh, solver="FEniCSx")
-    if step.type != "frequency_domain" and any(c.kind == "massive" for c in coils):
+    if step.type == "stationary" and any(c.kind == "massive" for c in coils):
         raise InputError(
             "a static magnetic study takes one massive conductor or windings, not both",
             code="unsupported",
@@ -296,15 +297,27 @@ def _magnetics(project, comp, step, features, mesh, workdir: Path) -> dict:
                        "sigma": 0.0 if a.selection in winding
                        else props["electrical_conductivity"].to_si()})  # fmt: skip
     frequencies = frequency_list(step) if step.type == "frequency_domain" else [0.0]
-    eddy.write_meta(workdir / eddy.META, bodies, coils, frequencies)
-    eddy.element_table(mesh, [a.selection for a in comp.materials], workdir / eddy.ELEMENTS)
+    times = None
+    if step.type == "transient":
+        from puzzle.adapters.elmer.magnetics import transient_times
+
+        times = transient_times(step)
+    axisymmetric = comp.dimension == "2d_axisymmetric"
+    if axisymmetric and any(c.kind == "massive" for c in coils):
+        raise InputError("an axisymmetric model takes windings (stranded coils); a massive "
+                         "ring's total current needs a circuit, not built yet",
+                         code="unsupported")  # fmt: skip
+    eddy.write_meta(workdir / eddy.META, bodies, coils, frequencies, times, axisymmetric)
+    table = eddy.axisymmetric_table if axisymmetric else eddy.element_table
+    table(mesh, [a.selection for a in comp.materials], workdir / eddy.ELEMENTS)
     return {
         "bodies": bodies,
         "frequencies": frequencies,
         "coils": [
             {"body": c.body, "kind": c.kind, "current": list(c.current), "turns": c.turns,
              "start": c.start, "end": c.end,
-             "area": surface_area(mesh.groups[c.start], mesh) if c.start else None}
+             "area": surface_area(mesh.groups[c.start], mesh) if c.start else None,
+             "amplitude": c.amplitude}
             for c in coils
         ],
     }  # fmt: skip
@@ -317,23 +330,39 @@ def _read_magnetics(workdir: Path, data, node_ids, ids) -> Results:
 
     meta = eddy.read_meta(workdir / eddy.META)
     table = dict(np.load(workdir / eddy.ELEMENTS))
+    if meta.get("axisymmetric"):  # A_φ at the nodes; Puzzle derives B, J, losses
+        coords = np.load(workdir / "node-coords.npy")
+        xy = {int(n): c[:2] for n, c in zip(node_ids, coords, strict=True)}
+        results = Results(solver="fenicsx")
+        for k, hz in enumerate(data["magnetic_frequencies"]):
+            potential = dict(zip(ids.tolist(), data["axi_re"][k] + 1j * data["axi_im"][k],
+                                 strict=True))  # fmt: skip
+            B, J, A = eddy.axisymmetric_fields(meta, table, xy, potential, 2 * np.pi * hz)
+            b_nodal = eddy.nodal_average(table, B, node_ids)
+            results.steps.append(eddy.step_result(meta, float(hz), table, B, J, A, {},
+                                                  node_ids, b_nodal))  # fmt: skip
+        return results
     rows = match_points(data["cell_midpoints"], table["centres"], np.arange(len(table["ids"])))
     where = np.empty(len(rows), np.int64)
     where[rows] = np.arange(len(rows))  # element k of the table is cell where[k]
     results = Results(solver="fenicsx")
     massive = [c for c in meta["coils"] if c.kind == "massive"]
-    for k, hz in enumerate(data["magnetic_frequencies"]):
+    transient = "magnetic_times" in data
+    axis = data["magnetic_times"] if transient else data["magnetic_frequencies"]
+    for k, at in enumerate(axis):
+        hz, time = (0.0, float(at)) if transient else (float(at), None)
 
         def cplx(name, k=k):
-            return data[f"mag_{name}_re"][k] + 1j * data[f"mag_{name}_im"][k]
+            im = data.get(f"mag_{name}_im")
+            return data[f"mag_{name}_re"][k] + (1j * im[k] if im is not None else 0j)
 
-        volts = cplx("voltage") if massive else []
+        volts = cplx("voltage") if massive and not transient else [0.0] * len(massive)
         start = {c.body: complex(v) for c, v in zip(massive, volts, strict=True)}
         b_nodal = np.empty((len(ids), 3), complex)
         b_nodal[:] = cplx("b")
         results.steps.append(eddy.step_result(
             meta, float(hz), table, cplx("B")[where], cplx("J")[where], cplx("A")[where],
-            start, ids, b_nodal,
+            start, ids, b_nodal, time,
         ))  # fmt: skip
     return results
 
@@ -345,7 +374,7 @@ def read_results(workdir: Path) -> Results:
     data = np.load(path)
     node_ids = np.loadtxt(workdir / "node-ids.txt", dtype=np.int64, ndmin=1)
     ids = match_points(data["coords"], np.load(workdir / "node-coords.npy"), node_ids)
-    if "magnetic_frequencies" in data:  # ADR 0047
+    if "magnetic_frequencies" in data or "magnetic_times" in data:  # ADR 0047
         return _read_magnetics(workdir, data, node_ids, ids)
     order = np.argsort(ids)
 
@@ -476,6 +505,11 @@ def _time(step) -> dict:
 
 def _check_2d(comp, physics, step, features, thermal_load) -> None:
     """What FEniCSx's 2D models (ADR 0048) don't take yet, refused by name."""
+    if physics == "magnetic_fields" and comp.dimension == "2d_axisymmetric":
+        if step.type not in ("stationary", "frequency_domain"):
+            raise InputError("axisymmetric magnetic fields run static or frequency-domain "
+                             "steps", code="unsupported")  # fmt: skip
+        return  # ADR 0047 item 7: windings only, checked with the coils
     if physics not in ("solid_mechanics", "heat_transfer"):
         raise InputError(
             f"2D models on FEniCSx solve structures or heat, not {physics}", code="unsupported"
