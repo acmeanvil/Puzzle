@@ -2140,7 +2140,8 @@ class Operator(ProjectObject):
         default=None, description="measure: the component (its parts placed) or geometry"
     )
     measurement: Literal["length", "area", "volume", "mass", "radius", "centroid_x",
-                         "centroid_y", "centroid_z", "size_x", "size_y", "size_z"] = Field(
+                         "centroid_y", "centroid_z", "size_x", "size_y", "size_z",
+                         "least_radius", "sharp_edges"] = Field(
         default="volume", description="measure: what of the part or selection")  # fmt: skip
     aggregations: list[str] = Field(
         default_factory=list, description='group: e.g. "max(von_mises)", "count()", '

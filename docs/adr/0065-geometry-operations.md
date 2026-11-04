@@ -1,6 +1,6 @@
 # 0065. Geometry operations from the Grasshopper review: sweeps, lofts, splines, mirror, scale, SubD, faceted booleans, morphing and queries
 
-- Status: Accepted (2026-11-03)
+- Status: Accepted (2026-11-03); phase 1 built (2026-11-04)
 - Date: 2026-11-03
 
 ## Context
@@ -203,3 +203,44 @@ The maintainer's answers:
 4. `thicken` and `patch`: in scope.
 5. Welds: no operation of their own. Pipe and sweep along an edge chain make a bead
    ("we can make it work"), and the skill shows how.
+
+## Phase 1 built (2026-11-04)
+
+- **New history steps** (`geometry/sweeps.py`, registered in `history.TOOLS` and
+  `MODIFIERS`):
+  - `spline`: `GeomAPI_Interpolate` through points, with end tangents if given; a line
+    body.
+  - `sweep`: `BRepOffsetAPI_MakePipe` of a profile face along a path; corrected
+    Frenet, Frenet or fixed frame.
+  - `pipe`: a circle or annulus made square to the path where it starts.
+  - `loft`: `ThruSections`, smooth or ruled.
+  - `mirror`: `gp_Trsf.SetMirror`; with `keep`, the copy is fused and unified.
+  - `scale`: `SetScale`, or `gp_GTrsf` with `BRepBuilderAPI_GTransform` when
+    non-uniform.
+  - Paths are points (`path`, smooth or straight) or an earlier spline or polyline step
+    (`along`).
+  - Faces are named as section 4 says. A mirrored copy's are `<name>~m`. The faces on
+    the mirror plane go inside the fused part, so they leave the names.
+- **Measure** (item 9): faces gain the least radius of curvature, sampled with
+  `BRepLProp_SLProps` on a 9 × 9 grid of their parameters. Bodies gain topology
+  counts (with free edges), sharp edges (`BRep_Tool.Continuity` = C0) and the oriented
+  box (`Bnd_OBB`). They are shown in the Measure panel's rows and MCP
+  `geometry_measure`; the Measure operator's `measurement` takes `least_radius` and
+  `sharp_edges`.
+- **GUI**: the Geometry ribbon has a Sweep group (spline, sweep, pipe, loft), and
+  Modify gains mirror and scale. The step dialog has yes/no and frame dropdowns, and a
+  loft's sections are typed as "xy 0: 0, 0; 50, 0; 50, 50 | xy 40: …".
+- **Skill**: `geometry-operations`.
+- **Tests** (`tests/test_sweeps.py`, closed forms):
+  - Pipe and tube volumes π (R² − r²) L, within 1e-6.
+  - A pipe round a quarter circle by Pappus, within 0.2 %.
+  - A square swept straight as a prism.
+  - A ruled loft between squares as a frustum, h/3 (A₁ + A₂ + √(A₁A₂)).
+  - A mirrored half doubling the volume with `~m` names; the other hand.
+  - Scaling by 8 and by 6 (non-uniform).
+  - A spline through its points within 1e-9.
+  - A box's topology, 12 sharp edges and oriented box.
+  - A fillet's least radius, 3 mm. With four vertical fillets: 16 sharp edges and 24
+    edges in all.
+  - A rotated box's oriented box.
+  - The sections' syntax.

@@ -61,6 +61,11 @@ class Entity:
     axis: tuple[float, float, float] | None = None  # cylinders, circles
     direction: tuple[float, float, float] | None = None  # straight edges
     bounds: tuple[tuple[float, float, float], tuple[float, float, float]] | None = None
+    # ADR 0065 item 9: what an analyst asks of the geometry beyond sizes
+    least_radius: float | None = None  # faces: the sharpest curvature's radius
+    topology: dict | None = None  # bodies: solids, shells, faces, edges, free edges
+    sharp_edges: int | None = None  # bodies: edges where faces meet at a corner (G0)
+    oriented: tuple[float, float, float] | None = None  # bodies: the oriented box's sizes
 
 
 @dataclass
@@ -135,6 +140,7 @@ def _entity(entity: str, name: str, shapes: list) -> Entity:
             cylinder = surface.Cylinder()
             out.radius = cylinder.Radius()
             out.axis = _xyz(cylinder.Axis().Direction())
+        out.least_radius = least_radius(shapes)
     else:
         out.volume = props.Mass()
         out.area = _props("face", shape).Mass()
@@ -142,7 +148,91 @@ def _entity(entity: str, name: str, shapes: list) -> Entity:
         _static(BRepBndLib, "AddOptimal")(shape, box, False, False)
         lo, hi = box.CornerMin(), box.CornerMax()
         out.bounds = (_xyz(lo), _xyz(hi))
+        out.topology = topology(shape)
+        out.sharp_edges = sharp_edges(shape)
+        out.oriented = oriented_box(shape)
     return out
+
+
+def least_radius(faces: list, samples: int = 9) -> float | None:
+    """The smallest radius of curvature over faces (sampled on a grid of their
+    parameters): a fillet's radius, the tightest bend; None where all are flat."""
+    from OCP.BRepLProp import BRepLProp_SLProps
+
+    worst = 0.0
+    for f in faces:
+        s = BRepAdaptor_Surface(f)
+        if s.GetType() == GeomAbs_Plane:
+            continue
+        u0, u1, v0, v1 = s.FirstUParameter(), s.LastUParameter(), s.FirstVParameter(), \
+            s.LastVParameter()  # fmt: skip
+        props = BRepLProp_SLProps(s, 2, 1e-9)
+        for i in range(samples):
+            for j in range(samples):
+                props.SetParameters(u0 + (u1 - u0) * (i + 0.5) / samples,
+                                    v0 + (v1 - v0) * (j + 0.5) / samples)  # fmt: skip
+                if props.IsCurvatureDefined():
+                    worst = max(worst, abs(props.MaxCurvature()), abs(props.MinCurvature()))
+    return 1.0 / worst if worst > 1e-12 else None
+
+
+def topology(shape) -> dict:
+    """How many solids, shells, faces and edges, and free edges (on one face only: a
+    hole in the skin)."""
+    from OCP.collections import (
+        IndexedDataMap_TopoDS_Shape_List_TopoDS_Shape_TopTools_ShapeMapHasher as EdgeFaces,
+    )
+    from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_SHELL, TopAbs_SOLID
+    from OCP.TopExp import TopExp
+
+    from puzzle.geometry.history import _subshapes
+
+    edge_faces = EdgeFaces()
+    _static(TopExp, "MapShapesAndAncestors")(shape, TopAbs_EDGE, TopAbs_FACE, edge_faces)
+    free = sum(1 for i in range(1, edge_faces.Extent() + 1)
+               if edge_faces.FindFromIndex(i).Size() == 1)  # fmt: skip
+    return {"solids": len(_subshapes(shape, TopAbs_SOLID)),
+            "shells": len(_subshapes(shape, TopAbs_SHELL)),
+            "faces": len(_subshapes(shape, TopAbs_FACE)),
+            "edges": len(_subshapes(shape, TopAbs_EDGE)), "free_edges": free}  # fmt: skip
+
+
+def sharp_edges(shape) -> int:
+    """Edges where their two faces meet at a corner, not tangent (continuity G0)."""
+    from OCP.BRep import BRep_Tool
+    from OCP.collections import (
+        IndexedDataMap_TopoDS_Shape_List_TopoDS_Shape_TopTools_ShapeMapHasher as EdgeFaces,
+    )
+    from OCP.GeomAbs import GeomAbs_C0
+    from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE
+    from OCP.TopExp import TopExp
+    from OCP.TopoDS import TopoDS
+
+    m = EdgeFaces()
+    _static(TopExp, "MapShapesAndAncestors")(shape, TopAbs_EDGE, TopAbs_FACE, m)
+    count = 0
+    for i in range(1, m.Extent() + 1):
+        faces = list(m.FindFromIndex(i))
+        if len(faces) != 2:
+            continue
+        e = _static(TopoDS, "Edge")(m.FindKey(i))
+        a, b = (_static(TopoDS, "Face")(f) for f in faces)
+        if a.IsSame(b):  # a seam
+            continue
+        if _static(BRep_Tool, "Continuity")(e, a, b) == GeomAbs_C0:
+            count += 1
+    return count
+
+
+def oriented_box(shape) -> tuple[float, float, float]:
+    """The sizes of the smallest box round the shape in its own directions, largest
+    first (a tilted plate's true length, width and thickness)."""
+    from OCP.Bnd import Bnd_OBB
+
+    obb = Bnd_OBB()
+    _static(BRepBndLib, "AddOBB")(shape, obb, False, True, False)
+    sizes = sorted((2 * obb.XHSize(), 2 * obb.YHSize(), 2 * obb.ZHSize()), reverse=True)
+    return tuple(float(v) for v in sizes)
 
 
 def _angle(a: Entity, b: Entity) -> float | None:
@@ -276,6 +366,17 @@ def rows(m: Measurement) -> list[tuple[str, float | tuple, str]]:
             lo, hi = e.bounds
             for i, axis in enumerate(AXES):
                 out.append((f"{head}Size in {axis.upper()}", hi[i] - lo[i], "m"))
+        if e.least_radius is not None:
+            out.append((f"{head}Least radius of curvature", e.least_radius, "m"))
+        if e.oriented is not None:
+            for word, size in zip(("Length", "Width", "Thickness"), e.oriented, strict=True):
+                out.append((f"{head}{word} (its own axes)", size, "m"))
+        if e.topology is not None:
+            t = e.topology
+            out.append((f"{head}Topology: {t['solids']} solids, {t['faces']} faces, "
+                        f"{t['edges']} edges, {t['free_edges']} free edges", "", ""))  # fmt: skip
+        if e.sharp_edges is not None:
+            out.append((f"{head}Sharp edges (not tangent)", float(e.sharp_edges), ""))
     p = m.pair
     if "minimum_distance" in p:
         out.append(("Minimum distance", p["minimum_distance"], "m"))

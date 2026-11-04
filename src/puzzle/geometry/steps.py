@@ -40,6 +40,59 @@ STEPS: dict[str, list[StepField]] = {
             "points", "points", [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], "Points (mm): x, y, z; …"
         ),
     ],
+    # ADR 0065: curves, sweeps and lofts, mirror and scale.
+    "spline": [
+        StepField(
+            "points",
+            "points",
+            [[0.0, 0.0, 0.0], [0.05, 0.02, 0.0], [0.1, 0.0, 0.0]],
+            "Through (mm): x, y, z; …",
+        ),
+        StepField("closed", "yesno", False, "Closed"),
+    ],
+    "sweep": [
+        StepField("profile", "profile", "-5, -5; 5, -5; 5, 5; -5, 5", "Profile (mm)"),
+        StepField("plane", "plane", "yz", "Profile plane (square to the path's start)"),
+        StepField("offset", "length", 0.0),
+        StepField("path", "points", [[0.0, 0.0, 0.0], [0.1, 0.0, 0.0]], "Path (mm): x, y, z; …"),
+        StepField("smooth", "yesno", True, "A smooth curve through the path's points"),
+        StepField("frame", "frame", "corrected", "Profile along the path"),
+        MODE,
+    ],
+    "pipe": [
+        StepField("r", "length", 0.005, "Outer radius"),
+        StepField("inner", "length", 0.0, "Inner radius (0: solid)"),
+        StepField("path", "points", [[0.0, 0.0, 0.0], [0.1, 0.0, 0.0]], "Path (mm): x, y, z; …"),
+        StepField("smooth", "yesno", True, "A smooth curve through the path's points"),
+        MODE,
+    ],
+    "loft": [
+        StepField(
+            "sections",
+            "sections",
+            [
+                {
+                    "plane": "xy",
+                    "offset": 0.0,
+                    "profile": {"points": [[0, 0], [0.05, 0], [0.05, 0.05], [0, 0.05]]},
+                },
+                {
+                    "plane": "xy",
+                    "offset": 0.04,
+                    "profile": {"points": [[0.01, 0.01], [0.04, 0.01], [0.04, 0.04], [0.01, 0.04]]},
+                },
+            ],
+            "Profiles: plane offset (mm): u, v; … | next",
+        ),
+        StepField("ruled", "yesno", False, "Straight between the profiles"),
+        MODE,
+    ],
+    "mirror": [
+        StepField("axis", "axis", "x", "Mirror plane's normal"),
+        *AT,
+        StepField("keep", "yesno", True, "Keep the original (a whole part from its half)"),
+    ],
+    "scale": [StepField("factor", "number", 1.0, "Factor"), *AT],
     "sheet": [
         StepField(
             "points",
@@ -153,6 +206,26 @@ def parse_profile(text: str) -> dict:
         if pair.strip():
             points.append([_coordinate(c) for c in pair.replace(" ", "").split(",")])
     return {"points": points}
+
+
+def parse_sections(text: str) -> list[dict]:
+    """ "xy 0: 0, 0; 50, 0; 50, 30 | xy 40: 10, 10; ..." -> a loft's sections: each its
+    plane, offset (mm in, m stored) and profile."""
+    out = []
+    for part in text.split("|"):
+        head, _, body = part.partition(":")
+        bits = head.split()
+        if len(bits) != 2 or not body.strip():
+            raise ValueError("each profile is: plane offset: u, v; u, v; … (e.g. xy 40: 0, 0; "
+                             "50, 0; 50, 30)")  # fmt: skip
+        out.append({"plane": bits[0], "offset": _coordinate(bits[1]),
+                    "profile": parse_profile(body)})  # fmt: skip
+    return out
+
+
+def format_sections(sections: list[dict]) -> str:
+    return " | ".join(f"{s.get('plane', 'xy')} {_mm(s.get('offset', 0.0))}: "
+                      f"{format_profile(s.get('profile', {}))}" for s in sections)  # fmt: skip
 
 
 def _coordinate(text: str):

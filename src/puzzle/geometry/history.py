@@ -33,6 +33,12 @@ the part, the first one starts it):
 | move | dx, dy, dz | (names kept) |
 | rotate | angle (deg), axis, x, y, z (a point on the axis) | (names kept) |
 | pattern | feature, count, dx, dy, dz, or angle + axis for a circular one | <feature>#2/..., ... |
+| spline | points, closed, start_tangent, end_tangent (a smooth line body) | none |
+| sweep | profile, plane, offset, path (points; smooth) or along, frame | start, end, side-N |
+| pipe | r, inner (a tube), path or along | wall, bore, start, end |
+| loft | sections (each profile, plane, offset), ruled | start, end, the first's side-N |
+| mirror | x, y, z and normal (or axis), keep (fuse the copy: a whole part) | <name>~m on the copy |
+| scale | factor, or fx, fy, fz, about x, y, z | (names kept) |
 | split | axis or normal, at or x, y, z | section (the cut face inside); split faces keep names |
 | imprint | hole (a wall's face name), r | annulus (rings at the hole's mouths); others keep names |
 | split_face | profile (sketch), faces (default: on its plane), direction | region; others kept |
@@ -184,6 +190,8 @@ WORDS = {
     "half",
     "faces",  # a split_face's faces, by name
     "direction",  # a split_face's projection: both, forward or backward
+    "along",  # a sweep's or pipe's path: an earlier spline or polyline step (ADR 0065)
+    "frame",  # a sweep's frame along its path
 }
 
 
@@ -1007,6 +1015,18 @@ MODIFIERS = {
     "split_face": _split_face,
     "enclosure": _enclosure,
 }
+
+
+def _more_operations() -> None:
+    """ADR 0065's operations (splines, sweeps, pipes, lofts, mirror, scale), kept in
+    their own module."""
+    from puzzle.geometry import sweeps
+
+    TOOLS.update(sweeps.TOOLS)
+    MODIFIERS.update(sweeps.MODIFIERS)
+
+
+_more_operations()
 
 
 # --- naming through operations --------------------------------------------------------

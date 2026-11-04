@@ -42,6 +42,12 @@ CHOICES = {
         ("A new body", "new"),
     ],
     "plane": [("XY plane", "xy"), ("YZ plane", "yz"), ("XZ plane", "xz")],
+    "yesno": [("Yes", True), ("No", False)],
+    "frame": [  # ADR 0065: how a sweep's profile turns along its path
+        ("Square to the path, without twisting (corrected Frenet)", "corrected"),
+        ("Following the path's curvature (Frenet)", "frenet"),
+        ("Fixed in space", "fixed"),
+    ],
     "half": [  # a section (ADR 0048): the whole cut, or the half at u >= 0
         ("The whole cut", False),
         ("The half at u ≥ 0 (an axisymmetric section)", True),
@@ -328,6 +334,10 @@ class StepForm(QWidget):
             return spin
         if f.kind == "points":  # x, y, z in mm, ";" between points (a polyline's)
             text = "; ".join(", ".join(f"{c * 1000:g}" for c in p) for p in value or [])
+        elif f.kind == "sections":  # a loft's profiles (ADR 0065)
+            from puzzle.geometry.steps import format_sections
+
+            text = format_sections(value or [])
         elif f.kind == "length":
             scale = _unit("length")[1]
             text = f"{value * scale:.6g}" if isinstance(value, (int, float)) else str(value)
@@ -439,6 +449,10 @@ def _parse(kind: str, text: str):
         if any(len(p) != 3 for p in points):
             raise ValueError("each point is x, y, z (mm), points separated by ;")
         return points
+    if kind == "sections":
+        from puzzle.geometry.steps import parse_sections
+
+        return parse_sections(text)
     if kind == "rule":
         try:
             return json.loads(text)

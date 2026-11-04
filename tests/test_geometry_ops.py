@@ -202,7 +202,7 @@ def test_parameters_drive_the_shape_and_names_survive():
             "mode must be",
         ),
         ([Op("pattern", "P", {"feature": "X", "count": 2, "dx": 1})], "no earlier tool"),
-        ([Op("spline", "S", {})], "unknown operation"),
+        ([Op("warp", "S", {})], "unknown operation"),
     ],
 )
 def test_mistakes_are_explained(ops, message):

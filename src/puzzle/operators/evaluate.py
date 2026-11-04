@@ -974,6 +974,15 @@ def _measure(ctx: Context, op) -> dict[str, Any]:
     except MeasureError as exc:
         raise PuzzleError(f"'{op.name}': {exc}", code="invalid") from None
     what = op.measurement
+    if what == "least_radius":  # ADR 0065 item 9: the sharpest fillet, sets the mesh size
+        radii = [e.least_radius for e in m.entities if e.least_radius is not None]
+        if not radii:
+            raise PuzzleError(f"'{op.name}': {op.selection or geo.name} is flat",
+                              code="not_found")  # fmt: skip
+        return {"out": Number(float(min(radii)), "length", "Least radius")}
+    if what == "sharp_edges":
+        count = sum(e.sharp_edges or 0 for e in m.entities)
+        return {"out": Number(float(count), None, "Sharp edges")}
     if what in MEASURED:
         attr, kind = MEASURED[what]
         vals = [getattr(e, attr) for e in m.entities if getattr(e, attr) is not None]
