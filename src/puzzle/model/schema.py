@@ -1618,6 +1618,33 @@ class Shootout(BaseModel):
     metrics: list[ComparisonMetric] = Field(default_factory=list)
 
 
+class MorphHandle(BaseModel):
+    """A face selection whose nodes a morph moves (ADR 0065 phase 2): `distance` (m,
+    or a parameter's name, so an optimisation's variable drives it) along `direction`,
+    or along the face's outward normal."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    selection: str = Field(description="Part/Selection: a face selection")
+    distance: float | str = Field(description="how far (m), or a parameter's name")
+    direction: tuple[float, float, float] | None = Field(
+        default=None, description="the way it moves; none: the face's outward normal"
+    )
+
+
+class Morph(BaseModel):
+    """A mesh morph (ADR 0065 phase 2): its handles, the selections held still (default:
+    the supports), and the least element quality it may leave."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    handles: list[MorphHandle] = Field(default_factory=list)
+    fixed: list[str] = Field(default_factory=list, description="selections held still")
+    quality_floor: float = Field(
+        default=0.05, gt=0, lt=1, description="the least tet shape quality allowed (1 regular)"
+    )
+
+
 class Study(ProjectObject):
     kind: ClassVar[str] = "study"
 
@@ -1625,6 +1652,9 @@ class Study(ProjectObject):
     solver: str
     steps: list[Step] = Field(default_factory=list)
     shootout: Shootout | None = None
+    morph: Morph | None = Field(
+        default=None, description="the mesh morphed after meshing (ADR 0065 phase 2): "
+        "handles moved, the rest following; shape optimisation without remeshing")  # fmt: skip
     # ADR 0023: each solver's own settings ({solver: {key: value}}, from its adapter's
     # settings_schema) and expert pass-through ({solver: {path: value}}).
     solver_settings: dict[str, dict[str, float | int | str | bool]] = Field(default_factory=dict)

@@ -1,6 +1,6 @@
 # 0065. Geometry operations from the Grasshopper review: sweeps, lofts, splines, mirror, scale, SubD, faceted booleans, morphing and queries
 
-- Status: Accepted (2026-11-03); phase 1 built (2026-11-04)
+- Status: Accepted (2026-11-03); phases 1 and 2 built (2026-11-04)
 - Date: 2026-11-03
 
 ## Context
@@ -244,3 +244,37 @@ The maintainer's answers:
     edges in all.
   - A rotated box's oriented box.
   - The sections' syntax.
+
+## Phase 2 built (2026-11-04): mesh morphing
+
+- **A study's `morph`** (`model.schema.Morph`):
+  - `handles` are `MorphHandle`s: a face selection, a `distance` (metres, or a
+    parameter's name), and a `direction` (none means the face's outward normal).
+  - `fixed` selections are held still (default: the component's fixed and displacement
+    supports).
+  - `quality_floor` is the least tet shape quality the morph may leave.
+  - No morph leaves the study's hash as it was.
+- **`mesh/morph.py`**:
+  - It moves every handle's nodes, holds the fixed ones, and spreads the motion to
+    every other node with scipy's thin-plate `RBFInterpolator` (linear part; dense
+    below 3000 control points, else 64 neighbours). Control points end exactly where
+    they were sent.
+  - It refuses a morph that inverts elements (a tet's signed volume changes sign) or
+    leaves a shape quality below the floor, with the count.
+- **In `run_study`**: the morph is applied right after meshing, before transfers and
+  imported fields are mapped, so they map onto the moved nodes. A shoot-out's second
+  solver gets the morphed mesh, not a second morph. The Solution log says "mesh
+  morphed: B/Top by dt".
+- **With ADR 0063**: a handle's distance names a parameter, so an optimisation's
+  variable drives it. Every point keeps the same mesh with its nodes moved, so there is
+  no remeshing noise.
+- **GUI**: a study's menu has **Add a morph handle…**, one form: the face, how far (a
+  length or a parameter), which way, and what stays still.
+- **Tests**:
+  - `tests/test_morph.py`: the beam's top morphed up 2 mm with its bottom held makes the
+    mesh's volume L W (t + dt) within 1e-6, x and y untouched, the top at 8 mm. Along
+    the normal, 1 mm. Too far is refused; an unknown parameter is refused.
+  - `tests/integration/test_optimise_cantilever.py` on CalculiX: dt from 0 to 3 mm,
+    morphed. Every deflection is within 3 % of 4 F L³ / (E w (6 mm + dt)³), they fall
+    at every step, and every run has the same nodes.
+  - `tests/test_operators_gui.py`: the form, undone in one step.

@@ -282,6 +282,7 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         from puzzle.model.schema import SettingsPreset
 
         add("Save settings as preset…", lambda: save_preset(window, obj))
+        add("Add a morph handle…", lambda: add_morph_handle(window, obj))  # ADR 0065
         presets = project.of_type(SettingsPreset)
         if presets:
             apply = menu.addMenu("Apply settings preset")
@@ -1173,3 +1174,74 @@ def uniform_again(window, comp, i: int, j: int):
     ops = [EditOp(op="remove", path=f"physics.{i}.features.{j}.fields.{k}")
            for k in comp.physics[i].features[j].fields]  # fmt: skip
     return window.submit(Edit(object=str(comp.id), ops=ops))
+
+
+def add_morph_handle(window, study):
+    """A morph handle on a study (ADR 0065 phase 2) in one form: the face selection that
+    moves, how far (a length, or a parameter's name: an optimisation's variable), the
+    way, and what stays still."""
+    from puzzle.commands.model import Edit
+    from puzzle.gui.quick_form import Ask
+    from puzzle.model.schema import Component, Geometry
+    from puzzle.operators import parameter_values
+
+    project = window.session.project
+    comp = project.objects.get(study.component)
+    if not isinstance(comp, Component):
+        return None
+    faces = []
+    for part in comp.parts:
+        geo = project.objects.get(part.geometry)
+        for s in getattr(geo, "selections", []) if isinstance(geo, Geometry) else []:
+            if s.entity == "face":
+                faces.append((f"{part.name}/{s.name}", f"{part.name}/{s.name}"))
+    if not faces:
+        window.statusBar().showMessage("A morph moves a face selection: make one first", 8000)
+        return None
+    params = sorted(parameter_values(project))
+    ways = [("Along the face's outward normal", "normal"), ("Along +X", "x"),
+            ("Along +Y", "y"), ("Along +Z", "z")]  # fmt: skip
+    vectors = {"normal": None, "x": (1.0, 0.0, 0.0), "y": (0.0, 1.0, 0.0), "z": (0.0, 0.0, 1.0)}
+
+    def check(v) -> str | None:
+        d = v.get("distance", "").strip()
+        if d in params:
+            return None
+        try:
+            _length(d)
+        except ValueError:
+            return f"'{d}' is neither a length (2 mm) nor a parameter ({', '.join(params)})"
+        return None
+
+    got = window.ask_form("Add a morph handle", [
+        Ask("selection", "Face that moves", choices=faces),
+        Ask("distance", "How far (a length, or a parameter)", kind="text",
+            default=params[0] if params else "1 mm"),
+        Ask("direction", "Which way", choices=ways),
+        Ask("fixed", "Held still", choices=[("The supports", None)] + faces),
+    ], check=check)  # fmt: skip
+    if not got:
+        return None
+    d = got["distance"].strip()
+    handle = {"selection": got["selection"], "distance": d if d in params else _length(d),
+              "direction": vectors[got["direction"]]}  # fmt: skip
+    morph = (study.morph.model_dump(mode="json") if study.morph is not None
+             else {"handles": [], "fixed": []})  # fmt: skip
+    morph["handles"].append(handle)
+    if got.get("fixed") and got["fixed"] not in morph["fixed"]:
+        morph["fixed"].append(got["fixed"])
+    return window.submit(
+        Edit(object=str(study.id), ops=[{"op": "set", "path": "morph", "value": morph}])
+    )
+
+
+def _length(text: str) -> float:
+    """ "2 mm" -> 0.002 (m); a bare number is in the display unit of lengths."""
+    from puzzle.model.units import known, plain, to_si
+    from puzzle.settings import length_unit
+
+    number, _, unit = text.strip().partition(" ")
+    unit = plain(unit.strip()) if unit.strip() else length_unit()[0]
+    if not known(unit):
+        raise ValueError(unit)
+    return to_si(float(number), unit)

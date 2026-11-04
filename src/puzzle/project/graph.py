@@ -37,6 +37,8 @@ def _own(obj: ProjectObject, *, drop: frozenset[str] = frozenset()) -> dict:
     # A shoot-out never changes the primary solver's result, so it never stales it.
     exclude = {"name", *drop} | ({"shootout"} if isinstance(obj, Study) else set())
     data = obj.model_dump(mode="json", exclude=exclude)
+    if isinstance(obj, Study) and data.get("morph") is None:  # ADR 0065: none, as before
+        data.pop("morph", None)
     data.pop("hidden", None)  # what the view shows never changes a solve
     data.pop("tags", None)  # nor do the words it is found by (ADR 0064A J6)
     if data.get("share_faces") is True:  # the default: older projects keep their hashes

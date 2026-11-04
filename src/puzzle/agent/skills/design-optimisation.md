@@ -115,7 +115,8 @@ user to accept. The CLI is `puzzle optimise PROJECT NAME --apply`.
   (an Expression over a parameter). An output in error makes the point infeasible
   with that error.
 - Points that change geometry remesh each time, and the mesh adds noise to the
-  response. Look at the sensitivities and the table before trusting a narrow
+  response. For a shape change, a study's `morph` (skill `geometry-operations`)
+  moves the same mesh instead. Look at the sensitivities and the table before trusting a narrow
   difference.
 - Changing the plan (levels, samples, seed, bounds), the method's settings, or the
   model changes the points. Points already stored are reused only where a new point

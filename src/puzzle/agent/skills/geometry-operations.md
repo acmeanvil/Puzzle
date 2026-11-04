@@ -30,6 +30,18 @@ are in metres, and any number may name a parameter (a Slider drives it).
   cylinders into general surfaces, so radii stop being exact. To fix an import's units,
   set the import's unit instead.
 
+## Mesh morphing (phase 2)
+
+A study's `morph` moves its mesh's nodes after meshing, with no remeshing:
+`{"handles": [{"selection": "Part/Top", "distance": "dt", "direction": [0, 0, 1]}],
+"fixed": ["Part/Bottom"]}` (a `submit` setting the study's `morph`). The `distance` is
+metres or a parameter's name. Leave out `direction` to move along the face's outward
+normal. `fixed` defaults to the supports. For shape optimisation (skill
+`design-optimisation`), make the variable the handle's parameter: every point keeps
+the same mesh, so a local optimiser sees a smooth response. A morph that inverts
+elements or crushes one below `quality_floor` is refused. Move less, or hold fewer
+nodes next to the handle.
+
 ## Measure (ADR 0042, with ADR 0065's queries)
 
 `geometry_measure` and the Measure operator also give:

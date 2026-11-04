@@ -183,6 +183,14 @@ def run_study(
     begin("mesh")
     if meshed is None:
         meshed = generate_mesh(project, study.component, root, workdir / "mesh")
+        if study.morph is not None:  # ADR 0065 phase 2: moved nodes, the same mesh
+            import dataclasses
+
+            from puzzle.mesh.morph import morphed
+
+            meshed = dataclasses.replace(meshed, mesh=morphed(project, study, meshed.mesh))
+            record(progress.Message(text="mesh morphed: " + ", ".join(
+                f"{h.selection} by {h.distance}" for h in study.morph.handles)))  # fmt: skip
     lap("mesh")
     begin("transfers")
     inputs = [

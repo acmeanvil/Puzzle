@@ -365,3 +365,24 @@ def test_a_snapshot_export_writes_a_png(window):
     ctx = ev.Context(w.session.project, w._store(), root=w.session.root)
     (path,) = ev.export(ctx, op, w.session.root)
     assert path.name == "tip.png" and path.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_a_morph_handle_from_the_study_menu(window):
+    w = window
+    from forms import fill
+
+    from puzzle.gui.menus import add_morph_handle
+
+    study = _study(w)
+    comp = w.session.project.objects[study.component]
+    face = next(f"{p.name}/{s.name}" for p in comp.parts
+                for s in w.session.project.objects[p.geometry].selections
+                if s.entity == "face")  # fmt: skip
+    fill(w, selection=face, distance="2 mm", direction="z", fixed=None)
+    add_morph_handle(w, study)
+    morph = w.session.project.objects[study.id].morph
+    assert morph.handles[0].selection == face
+    assert morph.handles[0].distance == pytest.approx(0.002) and morph.handles[0].direction == (
+        0.0, 0.0, 1.0)  # fmt: skip
+    w.session.undo()
+    assert w.session.project.objects[study.id].morph is None

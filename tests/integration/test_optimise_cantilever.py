@@ -87,3 +87,56 @@ def test_thinnest_cantilever_under_a_thickness_tolerance(tmp_path):
     assert t == pytest.approx(0.00725 + 2.326e-4, abs=4e-5), [pt.title for pt in pts]
     assert summary["outputs"]["constraint 1"]["holds"] == pytest.approx(0.99, abs=0.005)
     assert len(pts) <= 26
+
+
+def test_thickness_by_morphing_the_mesh(tmp_path):
+    # ADR 0065 phase 2: the beam meshed once at t = 6 mm and morphed thicker by dt (the
+    # top face up, the bottom held), so every point has the same mesh (the same nodes
+    # and elements, moved): no remeshing noise. The deflection follows 4 F L³ / (E w t³)
+    # for t = 6 mm + dt within 3 %, and falls with dt at every step.
+    pytest.importorskip("OCP")
+    from puzzle.model.schema import (
+        Geometry,
+        Morph,
+        MorphHandle,
+        NamedSelection,
+        Operator,
+        ParameterSet,
+        Quantity,
+        Study,
+    )
+
+    p, opt = beam_project()
+    p.of_type(ParameterSet)[0].values["dt"] = Quantity(value=0, unit="mm")
+    geo = next(iter(p.of_type(Geometry)))
+    geo.selections += [
+        NamedSelection(name="Top", entity="face", rule={"plane": {"axis": "z", "at": 0.006}}),
+        NamedSelection(name="Bottom", entity="face", rule={"plane": {"axis": "z", "at": 0.0}}),
+    ]
+    study = next(iter(p.of_type(Study)))
+    study.morph = Morph(handles=[MorphHandle(selection="B/Top", distance="dt",
+                                             direction=(0, 0, 1))], fixed=["B/Bottom"])  # fmt: skip
+    thick = next(o for o in p.of_type(Operator) if o.name == "Thickness")
+    thick.expression = "t + dt"
+    opt.variables[0] = opt.variables[0].model_copy(
+        update={
+            "name": "dt",
+            "low": Quantity(value=0, unit="mm"),
+            "high": Quantity(value=3, unit="mm"),
+        }
+    )
+    opt.levels = 4
+    root = tmp_path / "beam"
+    save_project(p, root)
+    store = ResultStore(root / RESULTS_DIR)
+    steel = next(m for m in p.objects.values() if m.kind == "material")
+    E = steel.properties["youngs_modulus"].to_si()
+    pts = optimise.run(p, opt, root, tmp_path / "w", store=store)
+    assert all(pt.run for pt in pts)
+    deflections = [pt.constraints[0] for pt in pts]
+    for pt, d in zip(pts, deflections, strict=True):
+        t = 0.006 + pt.values["dt"]
+        assert d == pytest.approx(4 * F * L**3 / (E * W * t**3), rel=0.03), pt.title
+    assert all(a > b for a, b in zip(deflections, deflections[1:], strict=False))
+    meshes = {store.read_mesh(r.mesh_id).node_ids.size for r in store.runs()}
+    assert len(meshes) == 1  # one mesh, moved: the same nodes at every point
