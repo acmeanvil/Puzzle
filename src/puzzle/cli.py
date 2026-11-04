@@ -366,6 +366,15 @@ def _parser() -> argparse.ArgumentParser:
                    help="write each export operator's file (or the one named)")  # fmt: skip
     p.set_defaults(handler=_operators)
 
+    p = sub.add_parser("table", help="a table operator's rows (ADR 0064), in display units")
+    p.add_argument("project", type=Path)
+    p.add_argument("name", help="the operator")
+    p.add_argument("--rows", type=int, default=20, metavar="N", help="rows shown (default 20)")
+    p.add_argument("--csv", type=Path, metavar="FILE", help="write it all as CSV")
+    p.add_argument("--parquet", type=Path, metavar="FILE", help="write it all as Parquet")
+    p.add_argument("--xlsx", type=Path, metavar="FILE", help="write it all as Excel")
+    p.set_defaults(handler=_table)
+
     p = sub.add_parser("optimise", help="run an optimisation's points, or list them (ADR 0063)")
     p.add_argument("project", type=Path)
     p.add_argument("name", help="the optimisation")
@@ -1084,6 +1093,35 @@ def _operators(args) -> int:
     for op in ops:
         text = ev.detail(ctx, op)
         print(f"{op.name}: {text}\n    {describe(project, op)}")
+    return 0
+
+
+def _table(args) -> int:
+    """ADR 0064: a table operator's rows in the display units, or the whole of it to a
+    file."""
+    from puzzle.commands import resolve
+    from puzzle.model.schema import Operator
+    from puzzle.operators import evaluate as ev
+    from puzzle.operators import frames
+
+    project = _load(args.project)
+    op = resolve(project, args.name, Operator)
+    got = ev.value(ev.Context(project, _store(args.project), root=args.project), op)
+    if not isinstance(got, ev.Table):
+        print(f"{op.name} is not a table: {got.text()}")
+        return 1
+    for fmt in ("csv", "parquet", "xlsx"):
+        path = getattr(args, fmt)
+        if path is not None:
+            frames.write(got, path, fmt)
+            print(f"wrote {path} ({got.frame.height} rows)")
+            return 0
+    import polars as pl
+
+    shown = frames.shown_frame(got)
+    with pl.Config(tbl_rows=args.rows, tbl_cols=-1, tbl_width_chars=160):
+        print(shown.head(args.rows))
+    print(f"{got.frame.height} rows × {got.frame.width}")
     return 0
 
 

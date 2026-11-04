@@ -4,6 +4,7 @@ values, units and row counts checked by hand."""
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 from test_operators import XYZ, Store, wire
 
@@ -160,3 +161,91 @@ def test_tables_keep_working_where_lists_read_them(setup):
     assert got.values.tolist() == pytest.approx([0.004, 0.006, 0.008]) and got.kind == "length"
     table = value(ctx, t)
     assert table.rows == [[0.004], [0.006], [0.008]] and "3 rows × 1" in table.text()
+
+
+def test_lookup_list_statistics_and_verdicts(setup):
+    p, _study, ctx = setup
+    curve = op(p, "table", name="Curve", text="T [degC], E [GPa]\n20, 210\n200, 190\n400, 160")
+    at = OperatorInput(value=Quantity(value=110, unit="degC"))
+    look = p.add(Operator(name="E at T", type="lookup", by=["T"], column="E",
+                          inputs={"table": wire(curve), "at": at}))  # fmt: skip
+    got = value(ctx, look)  # halfway between 20 and 200 °C: 200 GPa
+    assert got.value == pytest.approx(200e9) and got.kind == "pressure"
+    look.interpolation = "step"  # the row at or before 110 °C
+    assert value(ctx, look).value == pytest.approx(210e9)
+    look.interpolation = "nearest"
+    look.inputs["at"] = OperatorInput(value=Quantity(value=150, unit="degC"))
+    assert value(ctx, look).value == pytest.approx(190e9)
+    nums = op(p, "table", name="N", text="v [MPa], w\n100, 1\n200, 1\n600, 2")
+    stats = {}
+    for how in ("mean", "median", "std", "percentile", "weighted_mean"):
+        lst = p.add(Operator(name=f"L {how}", type="list", operation=how, column="v",
+                             inputs={"list": wire(nums)}))  # fmt: skip
+        if how == "percentile":
+            lst.inputs["index"] = OperatorInput(value=Quantity(value=50))
+        if how == "weighted_mean":
+            w = p.add(Operator(name="W", type="list", operation="column", column="w",
+                               inputs={"list": wire(nums)}))  # fmt: skip
+            lst.inputs["weights"] = wire(w)
+        stats[how] = value(ctx, lst)
+    assert stats["mean"].values[0] == pytest.approx(300e6) and stats["mean"].kind == "pressure"
+    assert stats["median"].values[0] == pytest.approx(200e6)
+    assert stats["percentile"].values[0] == pytest.approx(200e6)
+    assert stats["std"].values[0] == pytest.approx(np.std([100e6, 200e6, 600e6]))
+    assert stats["weighted_mean"].values[0] == pytest.approx((100 + 200 + 1200) / 4 * 1e6)
+    from puzzle.model.schema import ParameterSet
+
+    p.add(ParameterSet(name="Loads", values={"stress": Quantity(value=200, unit="MPa")}))
+    ok = p.add(Operator(name="OK", type="expression", expression="stress <= 250 MPa"))
+    v = ev.value(ev.Context(p, ctx.store), ok, "passes")
+    assert v.passed and v.margin == pytest.approx(0.25) and v.kind == "pressure"
+    ok.expression = "stress > 250 MPa or stress < 0 MPa"
+    v = ev.value(ev.Context(p, ctx.store), ok, "passes")
+    assert not v.passed and v.short().startswith("Fail")
+    ok.expression = "round(stress / MPa / 3, 1) * MPa + clamp(5 MPa, 0 MPa, 2 MPa)"
+    assert ev.value(ev.Context(p, ctx.store), ok).value == pytest.approx(68.7e6)
+    ok.expression = "degrees(atan2(1 m, 1 m))"
+    assert ev.value(ev.Context(p, ctx.store), ok).value == pytest.approx(45)
+
+
+def test_measure_from_the_geometry(tmp_path):
+    pytest.importorskip("OCP")
+    from optimise_beam import beam_project
+
+    from puzzle.model.schema import Component
+    from puzzle.project import save_project
+
+    p, _ = beam_project()  # a steel box 200 x 20 x t, t = 6 mm
+    root = tmp_path / "beam"
+    save_project(p, root)
+    comp = next(iter(p.of_type(Component)))
+    m = p.add(Operator(name="M", type="measure", target=comp.id, selection="B",
+                       measurement="volume"))  # fmt: skip
+    ctx = ev.Context(p, None, root=root)
+    assert ev.value(ctx, m).value == pytest.approx(0.2 * 0.02 * 0.006)
+    m.measurement = "mass"  # structural steel, 7850 kg/m³
+    got = ev.value(ev.Context(p, None, root=root), m)
+    assert got.value == pytest.approx(0.2 * 0.02 * 0.006 * 7850, rel=1e-3) and got.kind == "mass"
+    m.selection, m.measurement = "B/Tip", "area"
+    assert ev.value(ev.Context(p, None, root=root), m).value == pytest.approx(0.02 * 0.006)
+    m.selection, m.measurement = "B", "centroid_x"
+    assert ev.value(ev.Context(p, None, root=root), m).value == pytest.approx(0.1)
+    m.measurement = "size_z"
+    assert ev.value(ev.Context(p, None, root=root), m).value == pytest.approx(0.006)
+    from puzzle.operators import is_pre
+
+    assert is_pre(p, m)  # a geometry's measure is known before solving
+
+
+def test_the_table_command(tmp_path, capsys):
+    from puzzle.cli import main
+    from puzzle.project import save_project
+
+    p = Project("p")
+    p.add(Operator(name="Loads", type="table", text="case, F [kN]\nA, 1.5\nB, 2.5"))
+    save_project(p, tmp_path / "p")
+    assert main(["table", str(tmp_path / "p"), "Loads"]) == 0
+    out = capsys.readouterr().out
+    assert "2 rows × 2" in out and "case" in out
+    assert main(["table", str(tmp_path / "p"), "Loads", "--csv", str(tmp_path / "l.csv")]) == 0
+    assert (tmp_path / "l.csv").read_text().splitlines()[1] == "A,1500"  # SI display units

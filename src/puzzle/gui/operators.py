@@ -37,6 +37,8 @@ def new_operator(window, type_: str, source: str | None = None, port: str = "out
     outcome = window.submit(Create(kind="operator", data=data))
     if outcome is None or not outcome.created:
         return None
+    used = [type_] + [k for k in getattr(window, "recent_operators", []) if k != type_]
+    window.recent_operators = used[:RECENT]  # offered first next time (this session)
     oid = outcome.created[0]["id"]
     if at is not None:  # where it was asked for, as if dragged there
         from puzzle.schematic import view_state
@@ -110,11 +112,14 @@ def show(window, op) -> None:
     from puzzle.operators import evaluate as ev
 
     try:
-        ctx = ev.Context(window.session.project, window._store())
+        ctx = ev.Context(window.session.project, window._store(), root=window.session.root)
         text = ev.detail(ctx, op)
     except PuzzleError as exc:
         text = exc.message
     panel.add_rows("Output", [("Shows", text)])
+    viewer = getattr(window, "table_view", None)
+    if viewer is not None:
+        viewer.show_table(op)  # a table's rows in the Table tab (ADR 0064)
     if op.type == "slider":  # drag here as on its node: previews, never solves
         from puzzle.schematic import _slider_of
 
@@ -130,6 +135,14 @@ def choices(window, op, path: str):
     reads, the selection from their mesh), or None for the usual ones."""
     from puzzle.gui import result_tools as tools
 
+    project = window.session.project
+    if op.type == "measure":  # ADR 0064: what to measure, by name
+        return _measure_choices(project, op, path)
+    if path == "column" and op.type != "list":  # a table's columns, as it is now
+        columns = table_columns(window, op)
+        if columns:
+            return [(c, c) for c in columns]
+        return None
     if path not in ("quantity", "selection"):
         return None
     study = upstream_study(window.session.project, op)
@@ -141,6 +154,46 @@ def choices(window, op, path: str):
         return [("The whole model", None)] + tools.selection_choices(window, study)
     except PuzzleError:  # no run yet: typed in
         return None
+
+
+def table_columns(window, op) -> list[str]:
+    """The columns of the table wired into an operator, from its value now (empty when
+    it can't be worked out yet)."""
+    from puzzle.operators import evaluate as ev
+
+    inp = op.inputs.get("table")
+    if inp is None or inp.source is None:
+        return []
+    try:
+        root = window.session.root
+        got = ev.source(ev.Context(window.session.project, window._store(), root=root),
+                        inp.source, inp.port)  # fmt: skip
+    except PuzzleError:
+        return []
+    return list(got.columns) if isinstance(got, ev.Table) else []
+
+
+def _measure_choices(project, op, path):
+    """Measure's target (a component or geometry) and its parts or selections."""
+    from puzzle.model.schema import Component, Geometry
+
+    if path == "target":
+        return [(f"{c.name} (component)", str(c.id)) for c in project.of_type(Component)] + [
+            (f"{g.name} (geometry)", str(g.id)) for g in project.of_type(Geometry)]  # fmt: skip
+    if path != "selection":
+        return None
+    obj = project.objects.get(op.target) if op.target else None
+    if isinstance(obj, Component):
+        out = []
+        for part in obj.parts:
+            geo = project.objects.get(part.geometry)
+            out.append((f"{part.name} (the whole part)", part.name))
+            for sel in getattr(geo, "selections", []):
+                out.append((f"{part.name}/{sel.name}", f"{part.name}/{sel.name}"))
+        return out
+    if isinstance(obj, Geometry):
+        return [("The whole body", None)] + [(s.name, s.name) for s in obj.selections]
+    return None
 
 
 def upstream_study(project, op, seen=()) -> str | None:
@@ -183,9 +236,38 @@ def show_plot(window, op) -> None:
     window.plots.show_operator(op)
 
 
+RECENT = 5  # recently made operator types the palette and menu offer first
+
+
+def fitting(window, source: str | None, port: str = "out") -> list[str]:
+    """The types whose first input takes `source`'s output: what fits after it."""
+    from puzzle.operators import accepts, output_type
+
+    if not source:
+        return []
+    given = output_type(window.session.project, UUID(source), port)
+    if given is None:
+        return []
+    return [t.key for t in TYPES.values() if t.inputs and any(accepts(p, given)
+                                                               for p in t.inputs)]  # fmt: skip
+
+
+def recent(window) -> list[str]:
+    return list(getattr(window, "recent_operators", []))
+
+
+def ordered() -> list:
+    """Every type by group, in the order work flows (ADR 0064 item 6)."""
+    from puzzle.operators import GROUPS
+
+    return sorted(TYPES.values(), key=lambda t: GROUPS.index(t.group))
+
+
 class Palette(QDialog):
     """Find an operator by name (Tab, or a double-click on the empty canvas, as
-    Grasshopper's and Blender's search): Enter or a double-click makes it."""
+    Grasshopper's and Blender's search): Enter or a double-click makes it. What fits
+    the selected node's output comes first, then the recently used, then every type by
+    group; a search also reads other tools' names ("cull pattern" finds Filter rows)."""
 
     def __init__(self, window, at=None, source=None, port="out") -> None:
         super().__init__(window)
@@ -193,16 +275,31 @@ class Palette(QDialog):
         self.setWindowTitle("Add an operator")
         self.made: str | None = None
         column = QVBoxLayout(self)
-        self.search = QLineEdit(placeholderText="Operator name: reduce, check, plot…")
+        self.search = QLineEdit(placeholderText="Operator name: reduce, check, sort, cull…")
         self.search.textChanged.connect(self._filter)
         self.search.returnPressed.connect(self._make)
         self.list = QListWidget()
         self.list.itemActivated.connect(lambda _item: self._make())
-        for t in TYPES.values():
-            item = QListWidgetItem(f"{t.label}  ·  {t.group}")
-            item.setData(ROLE, t.key)
-            item.setToolTip(t.help)
-            self.list.addItem(item)
+        fits = fitting(window, source, port)
+        used = [k for k in recent(window) if k in TYPES]
+        sections = []
+        if fits:
+            sections.append(("Fits here", [TYPES[k] for k in fits]))
+        if used:
+            sections.append(("Recently used", [TYPES[k] for k in used]))
+        sections.append(("Every operator", ordered()))
+        for title, types in sections:
+            head = QListWidgetItem(title)
+            head.setFlags(Qt.ItemFlag.NoItemFlags)  # a heading: not chosen
+            font = head.font()
+            font.setBold(True)
+            head.setFont(font)
+            self.list.addItem(head)
+            for t in types:
+                item = QListWidgetItem(f"{t.label}  ·  {t.group}")
+                item.setData(ROLE, t.key)
+                item.setToolTip(t.help)
+                self.list.addItem(item)
         self.help = QLabel("")
         self.help.setWordWrap(True)
         from puzzle.gui import theme
@@ -212,28 +309,40 @@ class Palette(QDialog):
         column.addWidget(self.search)
         column.addWidget(self.list, 1)
         column.addWidget(self.help)
-        self.list.setCurrentRow(0)
-        self.resize(320, 300)
+        self._filter("")
+        self.resize(360, 380)
 
     def _filter(self, text: str) -> None:
         words = text.lower().split()
         first = named = None
+        shown: set[str] = set()
         for i in range(self.list.count()):
             item = self.list.item(i)
-            t = TYPES[item.data(ROLE)]
-            hay = f"{t.label} {t.group} {t.help}".lower()
-            hide = not all(w in hay for w in words)
+            key = item.data(ROLE)
+            if key is None:  # a heading: shown unless searching
+                item.setHidden(bool(words))
+                continue
+            t = TYPES[key]
+            alias = next((a for a in t.aliases if words and all(w in a for w in words)), None)
+            hay = f"{t.label} {t.group} {t.help} {' '.join(t.aliases)}".lower()
+            hide = not all(w in hay for w in words) or (bool(words) and key in shown)
             item.setHidden(hide)
-            if not hide and first is None:
+            item.setText(f"{t.label}  ·  {t.group}" + (f"   (as {alias})" if alias and
+                                                        not hide else ""))  # fmt: skip
+            if hide:
+                continue
+            shown.add(key)
+            if first is None:
                 first = item
-            if not hide and named is None and all(w in t.label.lower() for w in words):
+            if named is None and all(w in t.label.lower() for w in words):
                 named = item  # a name that matches comes before a description that does
         first = named or first
         if first is not None:
             self.list.setCurrentItem(first)
 
     def _described(self, item, _old=None) -> None:
-        self.help.setText(TYPES[item.data(ROLE)].help if item is not None else "")
+        key = item.data(ROLE) if item is not None else None
+        self.help.setText(TYPES[key].help if key else "")
 
     def choose(self, key: str) -> str | None:
         """Make the operator of type `key` (the list's choice; tests call it)."""
@@ -243,7 +352,7 @@ class Palette(QDialog):
 
     def _make(self) -> None:
         item = self.list.currentItem()
-        if item is not None and not item.isHidden():
+        if item is not None and not item.isHidden() and item.data(ROLE):
             self.choose(item.data(ROLE))
 
 

@@ -197,8 +197,11 @@ def test_the_toolbar_lists_every_operator_by_group(window):
     menu.aboutToShow.emit()
     actions = menu.actions()
     assert actions[0].text().startswith("Find an operator")
-    groups = {a.text(): a.menu() for a in actions if a.menu() is not None}
-    assert set(groups) == {t.group for t in TYPES.values()}
+    groups = {a.text(): a.menu() for a in actions if a.menu() is not None
+              and a.text() not in ("Fits the selection", "Recently used")}  # fmt: skip
+    from puzzle.operators import GROUPS
+
+    assert list(groups) == [g for g in GROUPS if any(t.group == g for t in TYPES.values())]
     listed = {a.text() for m in groups.values() for a in m.actions()}
     assert listed == {t.label for t in TYPES.values()}
     runs = w.schematic.items[f"runs:{_study(w).id}"]
@@ -210,3 +213,61 @@ def test_the_toolbar_lists_every_operator_by_group(window):
               if getattr(o, "type", None) == "reduce" and o.name.startswith("Reduce"))  # fmt: skip
     assert op.inputs["result"].source == _study(w).id
     assert str(op.id) in w.schematic.view.positions
+    w.schematic.chosen(runs.node)
+    menu.aboutToShow.emit()  # with the run selected: what fits it comes first
+    fits = next(a.menu() for a in menu.actions() if a.text() == "Fits the selection")
+    assert {"Reduce", "Result table", "Filter"} <= {a.text() for a in fits.actions()}
+
+
+def test_the_palette_finds_by_other_names_and_offers_what_fits(window):
+    w = window
+    runs = w.schematic.items[f"runs:{_study(w).id}"]
+    w.schematic.chosen(runs.node)
+    palette = w.schematic.open_palette()
+    heads = [palette.list.item(i).text() for i in range(palette.list.count())
+             if palette.list.item(i).data(Qt.ItemDataRole.UserRole) is None]  # fmt: skip
+    assert heads[0] == "Fits here" and heads[-1] == "Every operator"
+    palette.search.setText("cull pattern")  # Grasshopper's name
+    item = palette.list.currentItem()
+    assert item.data(Qt.ItemDataRole.UserRole) == "filter_rows"
+    assert item.text().endswith("(as cull pattern)")
+    palette.search.setText("vlookup")  # Excel's
+    assert palette.list.currentItem().data(Qt.ItemDataRole.UserRole) == "lookup"
+    palette.search.setText("")
+    palette.choose("sort")
+    again = w.schematic.open_palette()
+    heads = [again.list.item(i).text() for i in range(again.list.count())
+             if again.list.item(i).data(Qt.ItemDataRole.UserRole) is None]  # fmt: skip
+    assert "Recently used" in heads
+    again.reject()
+
+
+def test_a_result_table_in_the_table_viewer(window):
+    w = window
+    from puzzle.gui.operators import new_operator
+
+    study = _study(w)
+    tid = new_operator(w, "result_table", str(study.id), "result")
+    table = w.session.project.objects[UUID(tid)]
+    assert table.inputs["result"].source == study.id
+    rows = _rows(w)
+    assert rows["Results"].text(1) == ""  # an empty list still has its row, typed in
+    w.properties.edited.emit(tid, "quantities", ["displacement:total"])
+    top = new_operator(w, "top_n", tid, "out")
+    w.select_in_tree(("object", top))
+    viewer = w.table_view
+    assert viewer.op.id == UUID(top) and viewer.table is not None
+    assert viewer.grid.rowCount() == 10  # ten by default
+    heads = [viewer.grid.horizontalHeaderItem(c).text() for c in range(viewer.grid.columnCount())]
+    assert heads[0] == "node" and heads[1].startswith("x [") and heads[-1].startswith(
+        "deformation")  # fmt: skip
+    box = w.properties.dropdown("column")  # the table's own columns, by name
+    names = [box.itemText(i) for i in range(box.count())]
+    assert "node" in names and "deformation" in names
+    srt = new_operator(w, "sort", tid, "out")
+    w.select_in_tree(("object", srt))
+    viewer._header(0)  # a Sort's header click sets its order: one edit
+    op = w.session.project.objects[UUID(srt)]
+    assert op.by == ["node"] and op.descending is False
+    viewer._header(0)
+    assert w.session.project.objects[UUID(srt)].descending is True

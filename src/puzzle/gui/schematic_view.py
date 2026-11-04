@@ -915,22 +915,43 @@ class SchematicPanel(QWidget):
 
     def _operator_menu(self) -> None:
         """The toolbar's Add operator menu, built when opened: Find an operator… (the
-        palette), then every operator type by its group."""
+        palette), what fits the selected node, the recently used, then every type by
+        its group, in the order work flows (ADR 0064 item 6)."""
+        from puzzle.gui import operators as ops
         from puzzle.operators import TYPES
 
         menu = self.operators.menu()
         menu.clear()
+        # Submenus are made here and kept on the panel: Qt's clear() deletes a submenu
+        # it made with addMenu(title) while its entry can outlive it.
+        for old in getattr(self, "_submenus", []):
+            old.deleteLater()
+        self._submenus: list[QMenu] = []
+
+        def submenu(title: str) -> QMenu:
+            sub = QMenu(title)
+            sub.setToolTipsVisible(True)
+            self._submenus.append(sub)
+            menu.addMenu(sub)
+            return sub
+
         if self.window.session is None:
             menu.addAction("Open a project first").setEnabled(False)
             return
         menu.addAction("Find an operator…  (Tab)", lambda: self.open_palette(self._centre()))
+        source, port = self.palette_source()
+        for title, keys in (("Fits the selection", ops.fitting(self.window, source, port)),
+                            ("Recently used", ops.recent(self.window))):  # fmt: skip
+            if keys:
+                sub = submenu(title)
+                for k in keys:
+                    sub.addAction(TYPES[k].label, lambda k=k: self.add_operator(k)
+                                  ).setToolTip(TYPES[k].help)  # fmt: skip
         menu.addSeparator()
         groups: dict[str, QMenu] = {}
-        order = {"Data": 0, "Results": 1, "Tables": 2, "Display": 3}  # as the flow runs
-        for t in sorted(TYPES.values(), key=lambda t: order.get(t.group, 9)):
+        for t in ops.ordered():
             if t.group not in groups:
-                groups[t.group] = menu.addMenu(t.group)
-                groups[t.group].setToolTipsVisible(True)
+                groups[t.group] = submenu(t.group)
             action = groups[t.group].addAction(t.label, lambda k=t.key: self.add_operator(k))
             action.setToolTip(t.help)
 

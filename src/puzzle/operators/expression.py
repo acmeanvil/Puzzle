@@ -168,10 +168,13 @@ def _extra(ureg, fn: str, args):
         x, lo, hi = args
         return ureg.Quantity(np.clip(x.magnitude, lo.to(x.units).magnitude,
                                      hi.to(x.units).magnitude), x.units)  # fmt: skip
+    # rounding works on the value in base units (SI), or the plain number when it has
+    # none: round(t / mm, 1) is t in millimetres to one place
+    x = args[0].to("dimensionless") if args[0].dimensionless else args[0].to_base_units()
     if fn == "round":
         n = int(bare(args[1])) if len(args) > 1 else 0
-        return ureg.Quantity(np.round(args[0].magnitude, n), args[0].units)
-    return ureg.Quantity(getattr(np, fn)(args[0].magnitude), args[0].units)  # floor, ceil
+        return ureg.Quantity(np.round(x.magnitude, n), x.units)
+    return ureg.Quantity(getattr(np, fn)(x.magnitude), x.units)  # floor, ceil
 
 
 def _words(exc) -> str:

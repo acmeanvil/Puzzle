@@ -2003,7 +2003,7 @@ class Operator(ProjectObject):
                   "series", "range", "expression", "table", "list", "pairs",
                   "random", "result_table", "points_table", "file", "columns",
                   "filter_rows", "sort", "top_n", "new_column", "convert_units", "round",
-                  "group", "to_number"]  # fmt: skip
+                  "group", "to_number", "lookup", "measure"]  # fmt: skip
     inputs: dict[str, OperatorInput] = Field(default_factory=dict)
     quantity: str | None = Field(
         default=None, description='reduce, filter: a listed result\'s key, e.g. '
@@ -2039,7 +2039,10 @@ class Operator(ProjectObject):
         default="", description="table: its rows typed as CSV (a header of names with units "
         "in brackets: t [mm], load [kN]), when it reads no file")  # fmt: skip
     operation: Literal["item", "slice", "sort", "reverse", "length", "column", "sum", "min",
-                       "max"] = Field(default="item", description="list: what it does")  # fmt: skip
+                       "max", "mean", "median", "std", "percentile", "product",
+                       "weighted_mean"] = Field(
+        default="item", description="list: what it does (percentile: the index input is "
+        "the percent; weighted mean: the weights input)")  # fmt: skip
     column: str = Field(default="", description="list, column: the table column it takes")
     distribution: Literal["normal", "uniform", "lognormal"] = Field(
         default="normal", description="random: normal or log-normal (spread = standard "
@@ -2076,6 +2079,15 @@ class Operator(ProjectObject):
         "its result's unit")  # fmt: skip
     decimals: int = Field(default=3, ge=0, le=15, description="round: places or figures")
     significant: bool = Field(default=False, description="round: significant figures")
+    interpolation: Literal["linear", "step", "nearest"] = Field(
+        default="linear", description="lookup: between the table's rows"
+    )
+    target: UUID | None = Field(
+        default=None, description="measure: the component (its parts placed) or geometry"
+    )
+    measurement: Literal["length", "area", "volume", "mass", "radius", "centroid_x",
+                         "centroid_y", "centroid_z", "size_x", "size_y", "size_z"] = Field(
+        default="volume", description="measure: what of the part or selection")  # fmt: skip
     aggregations: list[str] = Field(
         default_factory=list, description='group: e.g. "max(von_mises)", "count()", '
         '"mean(stress_xx) as avg", "quantile(von_mises, 0.95)"')  # fmt: skip
@@ -2097,7 +2109,10 @@ class Operator(ProjectObject):
         return self
 
     def dependencies(self) -> list[UUID]:
-        return list(dict.fromkeys(i.source for i in self.inputs.values() if i.source))
+        out = [i.source for i in self.inputs.values() if i.source]
+        if self.target is not None:
+            out.append(self.target)
+        return list(dict.fromkeys(out))
 
 
 class Scatter(BaseModel):

@@ -175,8 +175,12 @@ def _is_operator(d) -> bool:
     return {"inputs", "reduction", "against", "compare"} <= set(d)
 
 
-OPERATOR_SETTINGS = ("inputs", "quantity", "selection", "reduction", "step", "keep",
-                     "compare", "against", "file", "format")  # fmt: skip
+def _operator_settings() -> frozenset[str]:
+    """Every operator field that some type reads (all but the object's own and its
+    type): each type shows only those it reads (TYPES[...].settings)."""
+    from puzzle.model.schema import Operator, ProjectObject
+
+    return frozenset(Operator.model_fields) - frozenset(ProjectObject.model_fields) - {"type"}
 
 
 def _operator_field(key: str, d) -> bool:
@@ -184,7 +188,7 @@ def _operator_field(key: str, d) -> bool:
     by the window as dropdowns of what may be wired in."""
     from puzzle.operators import TYPES
 
-    if key not in OPERATOR_SETTINGS:
+    if key not in _operator_settings():
         return True
     return key != "inputs" and key in TYPES[d["type"]].settings
 
@@ -228,6 +232,30 @@ def format_value(value: Any) -> str:
 
 
 STEPS = "steps"  # marks a feature's steps row, edited as text
+LISTED = "listed"  # marks an operator's list of names, edited as "a, b, c" (ADR 0064)
+# An operator's lists of names: one row of text each, even when empty.
+TEXT_LISTS = {"pick": "Columns", "drop": "Columns left out", "by": "By",
+              "aggregations": "Aggregations", "quantities": "Results"}  # fmt: skip
+
+
+def list_text(values: list[str]) -> str:
+    return ", ".join(values)
+
+
+def parse_list(text: str) -> list[str]:
+    """ "x, y, quantile(v, 0.95)" → three items: commas inside brackets stay put."""
+    out, depth, cur = [], 0, ""
+    for ch in text:
+        if ch == "," and depth == 0:
+            out.append(cur.strip())
+            cur = ""
+            continue
+        depth += {"(": 1, ")": -1}.get(ch, 0)
+        cur += ch
+    out.append(cur.strip())
+    return [x for x in out if x]
+
+
 TYPED = "typed input"  # marks an operator's typed input row (ADR 0062)
 SHOWN = Qt.ItemDataRole.UserRole + 7
 ALL_STEPS = "All steps"
@@ -252,6 +280,8 @@ def parse_value(text: str, old: Any) -> Any:
     """The typed text, as the type the field held: "5 mm" for a quantity, JSON otherwise."""
     if old == STEPS:
         return parse_steps(text)
+    if old == LISTED:
+        return parse_list(text)
     text = text.strip()
     if is_quantity(old):
         from puzzle.model.units import plain, shown
@@ -387,6 +417,12 @@ class PropertiesPanel(QTreeWidget):
                 item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
                 item.setData(1, PATH, (sub, STEPS))
                 item.setData(1, SHOWN, steps_text(value))  # put back if the text won't parse
+                continue
+            if key in TEXT_LISTS and isinstance(node, dict) and _is_operator(node):
+                item = QTreeWidgetItem(parent, [TEXT_LISTS[key], list_text(value)])
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
+                item.setData(1, PATH, (sub, LISTED))
+                item.setData(1, SHOWN, list_text(value))
                 continue
             if isinstance(value, (dict, list)) and not is_quantity(value):
                 if not value:  # nothing to show: adding is in the item's context menu

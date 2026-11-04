@@ -461,6 +461,10 @@ class MainWindow(QMainWindow):
         tabs.addTab(self.problems, "Problems")
         self.plots = PlotsPanel(self)
         tabs.addTab(self.plots, "Plots")
+        from puzzle.gui.table_viewer import TableViewer
+
+        self.table_view = TableViewer(self)  # ADR 0064: a table operator's rows
+        tabs.addTab(self.table_view, "Table")
         self.output_tabs = tabs
         # Its pages' minimum (the plots') would hold the dock open even when folded.
         tabs.setMinimumHeight(tabs.tabBar().sizeHint().height())

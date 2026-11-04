@@ -530,11 +530,14 @@ def _results(window, menu: QMenu) -> None:
          "A swept study's points side by side")  # fmt: skip
     menu.addSeparator()
     from puzzle.gui import operators
-    from puzzle.operators import TYPES
 
-    sub = _sub(menu, "New operator")  # ADR 0062
-    for t in TYPES.values():
-        _add(sub, t.label, lambda k=t.key: operators.new_operator(window, k), t.help)
+    sub = _sub(menu, "New operator")  # ADR 0062, by group in the order work flows (0064)
+    groups = {}
+    for t in operators.ordered():
+        if t.group not in groups:
+            groups[t.group] = _sub(sub, t.group)
+        _add(groups[t.group], t.label, lambda k=t.key: operators.new_operator(window, k),
+             t.help)  # fmt: skip
     _add(menu, "Find an operator…", lambda: window.open_operator_palette(),
          "Search the operators by name (Tab in the schematic)")  # fmt: skip
     from puzzle.gui.optimisation_panel import new_optimisation

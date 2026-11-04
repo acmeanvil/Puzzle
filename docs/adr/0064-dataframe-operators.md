@@ -1,6 +1,6 @@
 # 0064. Dataframe operators: results as polars tables to shape, reduce and export
 
-- Status: Accepted (2026-11-03): review answered, the operator list from 0064A
+- Status: Accepted (2026-11-03): review answered, the operator list from 0064A; phase 1 built (2026-11-04)
 - Date: 2026-11-03
 
 ## Context
@@ -231,3 +231,82 @@ The maintainer's answers:
    then feed a study (item 5).
 6. Review Grasshopper's nodes (https://grasshopperdocs.com/completeIndex.html) for
    those that apply to Puzzle, as a table to review: `0064A-grasshopper-review.md`.
+
+## Phase 1 built (2026-11-04)
+
+- **One table type**:
+  - `operators.evaluate.Table` is a polars DataFrame with a quantity kind per column
+    (values SI), plus `units`, each column's shown unit set by Convert units.
+  - Built from columns and rows (a typed table, a plot's points) or from a frame. It
+    keeps `columns`, `rows`, `csv()` and `text()` ("3 rows × 2: t, load"), so Lists,
+    Points and sweeps read it as before.
+  - polars and xlsxwriter are in the default environment.
+- **Sources** (`operators/frames.py`):
+  - `result_table`: node or element, x, y, z (an element's centre), part, step, the
+    step's time, frequency or load factor, and the quantities by key (`*` for all of a
+    field), named as equations name them. It takes `steps` one or all, a `selection`,
+    and `layout` long or wide (Settings > Results > Table layout by default).
+  - `points_table`: the `points` port that studies with sweeps and optimisations now
+    offer.
+  - `file`: CSV with `name [unit]` headers, Parquet or Excel, inside the project, with
+    patterns stacked and a `file` column.
+- **Table operators**:
+  - `columns` (pick with `as`, drop), `filter_rows`, `sort`, `top_n` (per group),
+    `new_column`, `convert_units`, `round` (places or significant figures, in shown
+    units), `group` (max, min, mean, median, sum, std, count, first, last, quantile),
+    `to_number`.
+  - They are data operators: pre-solve when their table is (a file, a typed table),
+    post-solve when it comes from a run.
+- **Both expression syntaxes**:
+  - Puzzle's, units checked: the Expression evaluator now takes a table's columns
+    (text columns compared as text, `part == "Bracket"`).
+  - polars': built by walking the `ast` against an allow-list (`pl.col`, `pl.lit`,
+    `pl.when` and expression methods), never `eval`'d. `__import__` and the like are
+    refused.
+- **Exports**: an Export of a table writes CSV, Parquet or Excel by its file's suffix,
+  in shown units with `name [unit]` headers.
+- **From 0064A for phase 1**:
+  - The Expression gains comparisons as verdicts (a `passes` port: one comparison keeps
+    its margin) [B2]. It also gains asin, acos, atan, atan2, degrees, radians, clamp,
+    round, floor and ceil [B3]; rounding works in base units.
+  - List gains mean, median, std, percentile, product and weighted mean [B5].
+  - `lookup` (linear, step, nearest) [A5].
+  - `measure` (length, area, volume, mass with the part's density, radius, centroid,
+    size, from the exact geometry) [E4, F3]. It is kept out of the parameters the
+    geometry reads (`reads_geometry`), so it can't loop.
+  - The File source with patterns [A7, J1]; the condition in Filter rows [J2]; Convert
+    units [J4]; Group [J3].
+- **Presentation** (item 6):
+  - The seven groups (`operators.GROUPS`, `GROUP_OF`) everywhere: the schematic's Add
+    operator menu, the menu bar's Results → New operator, and the palette.
+  - Aliases per type (`ALIASES`: Grasshopper's, Excel's and SQL's names). "cull
+    pattern" finds Filter rows and says so: "(as cull pattern)".
+  - The palette and menu list what fits the selected node first ("Fits here", "Fits
+    the selection"), then the recently used (this session), then every type by group.
+  - Properties shows each type's own settings (now derived from the schema), lists of
+    names as one text row ("x, y, von_mises as vm"), and dropdowns of the upstream
+    table's columns, of Measure's components, geometries, parts and selections.
+  - The **Table viewer** is a Table tab beside Plots: the selected table's first 500
+    rows in shown units, with the count. A header click on a Sort sets its order (one
+    Edit); elsewhere it sorts the view.
+- **Twins**:
+  - CLI `puzzle table PROJECT OPERATOR [--csv|--parquet|--xlsx FILE] [--rows N]`.
+  - MCP `operator_value` gives a table's columns, `row_count` and first 20 rows.
+  - The outline describes each table operator.
+  - The skill `dataframe-operators`.
+- **Tests**:
+  - `tests/test_tables.py`, on the hand-made two-tet results (T = t·x, σxx = 100·t·x
+    MPa): long and wide tables, selections, filters in both syntaxes with units and
+    refusals, top N per step, new column, group's values and kinds, to number, units
+    and rounding, the three export formats read back, files stacked, lookup, list
+    statistics, verdicts with margins, new functions, measure of the beam (volume,
+    mass, area, centroid, size), the CLI.
+  - `tests/test_operators_gui.py`: the toolbar's groups and "Fits the selection",
+    aliases in the palette, the recently used, the Table viewer on the cantilever's
+    run, column dropdowns, Sort by header.
+
+Not done in phase 1:
+- Clicking a cell to filter (the viewer sorts, and sets a Sort's order).
+- Recently used types last only for the session.
+- A typed polars expression can't use `pl.Expr.map_elements`, `pl.Expr.cast` or I/O:
+  by design.

@@ -14,7 +14,7 @@ one and they never stale a run.
 from __future__ import annotations
 
 import contextlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from uuid import UUID
 
 from puzzle.errors import Problem, PuzzleError
@@ -73,6 +73,7 @@ class OperatorType:
     inputs: tuple[PortSpec, ...]
     outputs: tuple[PortSpec, ...]
     settings: tuple[str, ...]  # the Operator fields this type reads
+    aliases: tuple[str, ...] = ()  # other tools' names that find it (ADR 0064 item 6)
 
     def input(self, key: str) -> PortSpec | None:
         return next((p for p in self.inputs if p.key == key), None)
@@ -173,7 +174,8 @@ TYPES: dict[str, OperatorType] = {
             (PortSpec("x", "x", ("number", "list"), required=False, typed="number"),
              PortSpec("y", "y", ("number", "list"), required=False, typed="number"),
              PortSpec("z", "z", ("number", "list"), required=False, typed="number")),
-            (PortSpec("out", "Value", ("number",)),),
+            (PortSpec("out", "Value", ("number",)),
+             PortSpec("passes", "Passes", ("verdict",))),
             ("expression",),
         ),
         OperatorType(
@@ -187,10 +189,12 @@ TYPES: dict[str, OperatorType] = {
         OperatorType(
             "list", "List", "Data",
             "One list made from another: an item, a slice, sorted, reversed, its length, a "
-            "table's column, the sum, the smallest or largest.",
+            "table's column; or a statistic: sum, smallest, largest, mean, median, standard "
+            "deviation, a percentile, product, weighted mean.",
             (PortSpec("list", "List", ("list", "table")),
              PortSpec("index", "Index", ("number",), required=False, typed="number"),
-             PortSpec("end", "End", ("number",), required=False, typed="number")),
+             PortSpec("end", "End", ("number",), required=False, typed="number"),
+             PortSpec("weights", "Weights", ("list",), required=False)),
             (PortSpec("out", "List", ("list",)), PortSpec("first", "First", ("number",))),
             ("operation", "column"),
         ),
@@ -300,6 +304,23 @@ TYPES: dict[str, OperatorType] = {
             ("column", "reduction", "by"),
         ),
         OperatorType(
+            "lookup", "Lookup", "Data",
+            "A value read off a table at a number (or a list): y at x, linear between rows, "
+            "stepped or nearest. Grasshopper's Graph Mapper, Excel's VLOOKUP.",
+            (PortSpec("table", "Table", ("table",)),
+             PortSpec("at", "At", ("number", "list"), typed="number")),
+            (PortSpec("out", "Value", ("number",)),),
+            ("by", "column", "interpolation"),
+        ),
+        OperatorType(
+            "measure", "Measure", "Geometry",
+            "A part's or selection's length, area, volume, mass (with its material), "
+            "centroid, size or radius, from the exact geometry: no solve needed.",
+            (),
+            (PortSpec("out", "Value", ("number",)),),
+            ("target", "selection", "measurement"),
+        ),
+        OperatorType(
             "pairs", "Pairs", "Data",
             "Two lists into a table: item by item, or every combination.",
             (PortSpec("a", "A", ("list",)), PortSpec("b", "B", ("list",))),
@@ -308,11 +329,88 @@ TYPES: dict[str, OperatorType] = {
         ),
     )
 }  # fmt: skip
+
+# The seven groups, in the order work flows (ADR 0064 item 6): the toolbar's Add
+# operator menu, the palette, the outline and the skills all use them.
+GROUPS = ("Inputs", "Geometry", "Logic", "Results", "Tables", "Checks", "Outputs")
+GROUP_OF = {
+    "number": "Inputs",
+    "slider": "Inputs",
+    "series": "Inputs",
+    "range": "Inputs",
+    "random": "Inputs",
+    "table": "Inputs",
+    "file": "Inputs",
+    "measure": "Geometry",
+    "expression": "Logic",
+    "list": "Logic",
+    "pairs": "Logic",
+    "lookup": "Logic",
+    "result_table": "Results",
+    "points_table": "Results",
+    "reduce": "Results",
+    "filter": "Results",
+    "columns": "Tables",
+    "filter_rows": "Tables",
+    "sort": "Tables",
+    "top_n": "Tables",
+    "new_column": "Tables",
+    "convert_units": "Tables",
+    "round": "Tables",
+    "group": "Tables",
+    "to_number": "Tables",
+    "check": "Checks",
+    "panel": "Outputs",
+    "plot": "Outputs",
+    "export": "Outputs",
+}
+# Grasshopper's, Excel's and SQL's names for each (ADR 0064A), so a search finds it.
+ALIASES = {
+    "number": ("constant", "value", "parameter"),
+    "slider": ("number slider", "digit scroller", "control knob"),
+    "series": ("sequence", "arithmetic series"),
+    "range": ("linspace", "divide domain", "domain"),
+    "random": ("jitter", "monte carlo", "noise", "scatter"),
+    "table": ("csv", "typed table", "data"),
+    "file": ("read file", "import coordinates", "data input", "query directory", "excel",
+             "parquet", "csv file"),
+    "measure": ("area", "volume", "length", "mass", "centroid", "bounding box",
+                "area moments", "volume moments", "dimensions"),
+    "expression": ("evaluate", "formula", "smaller than", "larger than", "equality",
+                   "gate and", "gate or", "compare", "math"),
+    "list": ("list item", "sub list", "list length", "sort list", "reverse list",
+             "mass addition", "average", "statistics", "median", "percentile",
+             "weighted average"),
+    "pairs": ("longest list", "cross reference", "zip", "weave"),
+    "lookup": ("graph mapper", "vlookup", "interpolate", "lookup table"),
+    "result_table": ("deconstruct mesh", "results to table", "export results"),
+    "points_table": ("sweep points", "design points", "gene pool"),
+    "reduce": ("maximum", "minimum", "extremes", "bounds", "integral", "mean"),
+    "filter": ("threshold", "mask", "cull"),
+    "columns": ("select columns", "rename", "drop columns", "pick columns"),
+    "filter_rows": ("cull pattern", "cull index", "dispatch", "where", "filter content",
+                    "select rows"),
+    "sort": ("order by", "order content", "sort list"),
+    "top_n": ("worst", "largest", "head", "limit", "highest"),
+    "new_column": ("calculated column", "add column", "formula column"),
+    "convert_units": ("unit system", "units"),
+    "round": ("truncate", "significant figures"),
+    "group": ("group by", "group content", "aggregate", "pivot table", "sum by"),
+    "to_number": ("cherry picker", "extract", "single value"),
+    "check": ("allowable", "pass fail", "verdict", "margin"),
+    "panel": ("param viewer", "note"),
+    "plot": ("quick graph", "bar graph", "chart", "value tracker"),
+    "export": ("data output", "save", "write csv", "write excel", "bake"),
+}  # fmt: skip
+TYPES = {k: replace(t, group=GROUP_OF.get(k, t.group), aliases=ALIASES.get(k, ()))
+         for k, t in TYPES.items()}  # fmt: skip
+
 # Types that compute from data, before a solve: pre-solve when nothing they read is a
 # result (ADR 0062 item 3), and then parameters by their name.
 DATA = frozenset({"number", "slider", "series", "range", "expression", "table", "list",
                   "pairs", "random", "file", "columns", "filter_rows", "sort", "top_n",
-                  "new_column", "convert_units", "round", "group", "to_number"})  # fmt: skip
+                  "new_column", "convert_units", "round", "group", "to_number", "lookup",
+                  "measure"})  # fmt: skip
 # Table operators (ADR 0064): data operators that read tables, so pre-solve when their
 # table is (a file, a typed table) and post-solve when it comes from a run.
 
@@ -566,6 +664,10 @@ def describe(project, op) -> str:
         bits.append(f"{op.decimals} {'figures' if op.significant else 'places'}")
     elif op.type == "group":
         bits.append(", ".join(op.aggregations) + (f" per {', '.join(op.by)}" if op.by else ""))
+    elif op.type == "lookup":
+        bits.append(f"{op.column} at {', '.join(op.by)} ({op.interpolation})")
+    elif op.type == "measure":
+        bits.append(f"{op.measurement} of {op.selection or 'the whole part'}")
     elif op.type == "to_number":
         bits.append(f"{op.reduction} of {op.column}")
     if op.type in DATA:
@@ -639,6 +741,21 @@ def pre_solve(project) -> list:
     return [o for o in project.of_type(Operator) if is_pre(project, o)]
 
 
+def reads_geometry(project, op, seen: frozenset = frozenset()) -> bool:
+    """Whether an operator reads the geometry (a Measure, or something wired from one):
+    then it can't be a parameter the geometry reads, or regenerating would loop."""
+    from puzzle.model.schema import Operator
+
+    if op.type == "measure":
+        return True
+    for inp in op.inputs.values():
+        src = project.objects.get(inp.source) if inp.source else None
+        if (isinstance(src, Operator) and src.id not in seen
+                and reads_geometry(project, src, seen | {op.id})):  # fmt: skip
+            return True
+    return False
+
+
 def parameter_values(project, overrides: dict | None = None) -> dict[str, float]:
     """Every parameter by name, SI: the parameter sets' values, then each pre-solve
     number operator's (Number, Slider, a number Expression) by the operator's name.
@@ -647,7 +764,8 @@ def parameter_values(project, overrides: dict | None = None) -> dict[str, float]
 
     out = {k: q.to_si() for ps in project.of_type(ParameterSet) for k, q in ps.values.items()}
     numbers = [o for o in pre_solve(project) if TYPES[o.type].outputs
-               and TYPES[o.type].outputs[0].type == "number"]  # fmt: skip
+               and TYPES[o.type].outputs[0].type == "number"
+               and not reads_geometry(project, o)]  # fmt: skip
     if not numbers:
         return out
     from puzzle.operators import evaluate as ev

@@ -114,6 +114,9 @@ def _cells(pl, name: str, cells: list):
     return pl.Series(name, [None if v is None else str(v) for v in cells], dtype=pl.String)
 
 
+PREVIEW = 20  # a table's rows an agent or the CLI's JSON is given (ADR 0064)
+
+
 def display_unit(kind: str | None) -> str | None:
     """The unit a kind shows in (Settings > Units), else its SI unit."""
     from puzzle.model.units import DIMENSIONS
@@ -717,7 +720,7 @@ def _tables() -> dict:
             "filter_rows": frames.filter_rows, "sort": frames.sort, "top_n": frames.top_n,
             "new_column": frames.new_column, "convert_units": frames.convert_units,
             "round": frames.round_values, "group": frames.group,
-            "to_number": frames.to_number}  # fmt: skip
+            "to_number": frames.to_number, "lookup": _lookup, "measure": _measure}  # fmt: skip
 
 
 def _random(ctx: Context, op) -> dict[str, Any]:
@@ -769,7 +772,147 @@ def _expression(ctx: Context, op) -> dict[str, Any]:
     out, kind = formula(op.expression, values)
     if listed or np.ndim(out):
         return {"out": ListValue(np.atleast_1d(np.asarray(out, float)), kind, op.name)}
-    return {"out": Number(float(out), kind, op.name)}
+    result = {"out": Number(float(out), kind, op.name)}
+    verdict = _comparison(op, values, formula)
+    if verdict is not None:
+        result["passes"] = verdict
+    return result
+
+
+def _comparison(op, values, formula) -> Verdict | None:
+    """An Expression that compares (ADR 0064A row B2) as a verdict: one comparison
+    (σ <= 250 MPa) keeps its two sides, so the margin means something; and/or of
+    several is just pass or fail."""
+    import ast
+
+    from puzzle.operators.expression import _prepared
+
+    try:
+        body = ast.parse(_prepared(op.expression), mode="eval").body
+    except SyntaxError:
+        return None
+    if isinstance(body, ast.Compare) and len(body.ops) == 1 and isinstance(
+            body.ops[0], (ast.Lt, ast.LtE, ast.Gt, ast.GtE)):  # fmt: skip
+        left, lk = formula(ast.unparse(body.left), values)
+        right, _ = formula(ast.unparse(body.comparators[0]), values)
+        at_most = isinstance(body.ops[0], (ast.Lt, ast.LtE))
+        passed = left <= right if at_most else left >= right
+        if isinstance(body.ops[0], (ast.Lt, ast.Gt)):
+            passed = passed and left != right
+        return Verdict(bool(passed), float(left), float(right),
+                       "at_most" if at_most else "at_least", lk)  # fmt: skip
+    if isinstance(body, (ast.Compare, ast.BoolOp)) or (
+            isinstance(body, ast.UnaryOp) and isinstance(body.op, ast.Not)):  # fmt: skip
+        passed = bool(formula(op.expression, values)[0])
+        return Verdict(passed, 1.0 if passed else 0.0, 1.0, "at_least", None)
+    return None
+
+
+def _lookup(ctx: Context, op) -> dict[str, Any]:
+    """y read off a table at x (ADR 0064A row A5): linear between rows (ends held),
+    stepped (the row at or before x) or the nearest row."""
+    from puzzle.operators import frames
+
+    t = frames._table(op, _input(ctx, op, "table"))
+    xcol = op.by[0] if op.by else t.columns[0]
+    ycol = op.column or (t.columns[1] if len(t.columns) > 1 else "")
+    frames._names(op, [xcol, ycol], t)
+    kinds = dict(zip(t.columns, t.kinds, strict=False))
+    data = t.frame.select([xcol, ycol]).drop_nulls().sort(xcol)
+    xs, ys = data[xcol].cast(float).to_numpy(), data[ycol].cast(float).to_numpy()
+    if not len(xs):
+        raise PuzzleError(f"'{op.name}': the table has no rows to read", code="not_found")
+    at = _input(ctx, op, "at")
+    lst = as_list(at) if at is not None else ListValue(np.array([xs[0]]), kinds.get(xcol))
+    _same_kind(op, lst.kind, kinds.get(xcol))
+    x = np.asarray(lst.values, float)
+    if op.interpolation == "linear":
+        y = np.interp(x, xs, ys)
+    elif op.interpolation == "step":
+        y = ys[np.clip(np.searchsorted(xs, x, side="right") - 1, 0, len(xs) - 1)]
+    else:
+        y = ys[np.abs(xs[None, :] - x[:, None]).argmin(axis=1)]
+    kind = kinds.get(ycol)
+    if isinstance(at, ListValue):
+        return {"out": ListValue(y, kind, op.name)}
+    return {"out": Number(float(y[0]), kind, op.name)}
+
+
+MEASURED = {"length": ("length", "length"), "area": ("area", "area"),
+            "volume": ("volume", "volume"), "radius": ("radius", "length")}  # fmt: skip
+
+
+def _measure(ctx: Context, op) -> dict[str, Any]:
+    """A part's or selection's measure from the exact geometry (ADR 0042's Measure as a
+    node, ADR 0064A rows E4 and F3): no mesh, no solve. Mass is the volume times the
+    density of the material assigned to the part."""
+    from puzzle.geometry.measure import MeasureError, measure
+    from puzzle.geometry.naming import by_rule, named_geometry
+    from puzzle.model.schema import Component, Geometry, Material
+
+    obj = ctx.project.objects.get(op.target) if op.target else None
+    part_name, _, sel = (op.selection or "").partition("/")
+    if isinstance(obj, Component):
+        part = next((p for p in obj.parts if p.name == part_name), None)
+        if part is None:
+            raise PuzzleError(f"'{op.name}': {obj.name} has no part '{part_name}'",
+                              code="not_found")  # fmt: skip
+        geo = ctx.project.get(part.geometry, Geometry)
+    elif isinstance(obj, Geometry):
+        geo, sel = obj, op.selection or ""
+    else:
+        raise PuzzleError(f"'{op.name}': measure a component's part or a geometry",
+                          code="inconsistent")  # fmt: skip
+    key = ("named", geo.id)
+    if key not in ctx.memo:
+        ctx.memo[key] = named_geometry(ctx.project, geo, ctx.root or Path("."))
+    named = ctx.memo[key]
+    if sel:
+        s = next((x for x in geo.selections if x.name == sel), None)
+        if s is None:
+            raise PuzzleError(f"'{op.name}': {geo.name} has no selection '{sel}'",
+                              code="not_found")  # fmt: skip
+        members = by_rule(named, s.entity, s.rule) if s.rule else list(s.members)
+        picks = [(s.entity, m) for m in members]
+    else:
+        picks = [("body", n) for n in named.of.get("body", {})]
+    try:
+        m = measure(named, picks)
+    except MeasureError as exc:
+        raise PuzzleError(f"'{op.name}': {exc}", code="invalid") from None
+    what = op.measurement
+    if what in MEASURED:
+        attr, kind = MEASURED[what]
+        vals = [getattr(e, attr) for e in m.entities if getattr(e, attr) is not None]
+        if not vals:
+            raise PuzzleError(f"'{op.name}': {op.selection or geo.name} has no {what}",
+                              code="not_found")  # fmt: skip
+        value = float(min(vals)) if what == "radius" else float(sum(vals))
+        return {"out": Number(value, kind, f"{what.capitalize()} of "
+                              f"{op.selection or geo.name}")}  # fmt: skip
+    if what == "mass":
+        vols = [e.volume for e in m.entities if e.volume is not None]
+        density = None
+        if isinstance(obj, Component):
+            for a in obj.materials:
+                if a.selection.split("/")[0] == part_name:
+                    mat = ctx.project.objects.get(a.material)
+                    if isinstance(mat, Material) and "density" in mat.properties:
+                        density = mat.properties["density"].to_si()
+                        break
+        if density is None or not vols:
+            raise PuzzleError(
+                f"'{op.name}': a mass needs the part's volume and the density of the "
+                "material assigned to it", code="incomplete_material")  # fmt: skip
+        return {"out": Number(float(sum(vols)) * density, "mass", f"Mass of {part_name}")}
+    axis = "xyz".index(what[-1])
+    if what.startswith("centroid"):
+        weights = [e.volume or e.area or e.length or 1.0 for e in m.entities]
+        c = np.average([e.centre[axis] for e in m.entities], weights=weights)
+        return {"out": Number(float(c), "length", f"Centroid {what[-1]}")}
+    lo = min(e.bounds[0][axis] for e in m.entities if e.bounds)
+    hi = max(e.bounds[1][axis] for e in m.entities if e.bounds)
+    return {"out": Number(float(hi - lo), "length", f"Size in {what[-1]}")}
 
 
 def parse_table(text: str) -> Table:
@@ -846,11 +989,25 @@ def _list(ctx: Context, op) -> dict[str, Any]:
         values = values[::-1] if numeric else list(reversed(values))
     elif op.operation == "length":
         values, kind = np.array([float(len(values))]), None
-    elif op.operation in ("sum", "min", "max"):
+    elif op.operation in ("sum", "min", "max", "mean", "median", "std", "percentile",
+                          "product", "weighted_mean"):  # fmt: skip
         if not numeric:
             raise PuzzleError(f"'{op.name}': a {op.operation} needs numbers", code="invalid")
-        fn = {"sum": np.sum, "min": np.min, "max": np.max}[op.operation]
-        values = np.array([float(fn(values))]) if len(values) else np.array([])
+        if op.operation == "weighted_mean":
+            w = _input(ctx, op, "weights")
+            if not isinstance(w, ListValue) or len(w.values) != len(values):
+                raise PuzzleError(f"'{op.name}': a weighted mean needs weights, one a value",
+                                  code="inconsistent")  # fmt: skip
+            got = float(np.average(values, weights=w.values))
+        elif op.operation == "percentile":
+            got = float(np.percentile(values, index.value if index else 50.0))
+        elif op.operation == "product":
+            got, kind = float(np.prod(values)), (kind if len(values) == 1 else None)
+        else:
+            fn = {"sum": np.sum, "min": np.min, "max": np.max, "mean": np.mean,
+                  "median": np.median, "std": np.std}[op.operation]  # fmt: skip
+            got = float(fn(values))
+        values = np.array([got]) if len(values) else np.array([])
     out = ListValue(values, kind, op.name)
     first = None
     if len(values) and isinstance(values, np.ndarray):
@@ -1019,9 +1176,10 @@ def _data(v) -> Any:
         if v.kind:
             d["unit"] = DIMENSIONS[v.kind][1]
         return d
-    if isinstance(v, Table):
+    if isinstance(v, Table):  # its schema and first rows, never a whole result table
         return {"columns": [_heading(c, k) for c, k in zip(v.columns, v.kinds, strict=False)],
-                "rows": v.rows}  # fmt: skip
+                "row_count": v.frame.height, "rows": [list(r) for r in
+                                                       v.frame.head(PREVIEW).rows()]}  # fmt: skip
     if v is None:
         return None
     return {"text": v.text()}
