@@ -1,6 +1,6 @@
 # 0063. Design optimisation and design of experiments: a study that chooses its own points
 
-- Status: Accepted (2026-11-02); phase 1 built (2026-11-03)
+- Status: Accepted (2026-11-02); phases 1 and 2 built (2026-11-03)
 - Date: 2026-11-02
 
 ## Context
@@ -245,3 +245,69 @@ Not done in phase 1:
   finish: each point's solve progress shows as any run's does, and the table fills
   when the run ends.
 - No Pareto plot yet (phase 2).
+
+## Phase 2 built (2026-11-03)
+
+- **Methods** (`Optimisation.method`, from scipy):
+  - `cobyla`: `minimize(method="COBYLA")` with the constraints as constraints.
+  - `nelder_mead`: the constraints as a penalty (100 times each scaled breach).
+  - `differential_evolution`, with scipy's `NonlinearConstraint`, `integrality` for
+    integer and choice variables (a choice by its index), Latin hypercube start,
+    deferred updating, no gradient polish.
+  - Settings: `tolerance`, `population` (per generation), `generations`, `seed`;
+    `max_solves` caps every method (a local one's default is 50).
+  - COBYLA and Nelder–Mead refuse choice variables (code `invalid`).
+- **What an optimiser sees**:
+  - The local methods move each variable from 0 to 1 over its range, so a step means
+    the same for every variable. They start from the variables' current values (item
+    2), as does differential evolution's first member.
+  - The objective is scaled by its first value. Each limit is a margin scaled by the
+    limit, positive when it holds.
+  - COBYLA keeps a tenth of the tolerance inside each limit: it ends on an active
+    limit, and the grid's nearest point to it was otherwise just past.
+  - A failed point is worse than every point so far and breaks every limit.
+  - Each continuous variable is rounded to `DesignVariable.resolution` (default a round
+    thousandth of its range), so the same point is the same run, and labels stay short.
+- **Resume by replay**:
+  - Every method is deterministic for one project, its settings and seed.
+  - `points` replays the optimiser over the stored runs, reading each point it asks
+    for, and stops at the first point not run. `run` replays the same way and solves
+    from there, so a stopped or budgeted optimisation goes on along the same path. The
+    test checks the path matches an uninterrupted run's, with each point solved once.
+  - Stored runs are now found by the point's run key, not its title, so a point of a
+    changed model is not read from an old run.
+  - `run(..., budget=N)` solves at most N new points this time (CLI `--budget`, MCP
+    `optimisation_run`'s `budget`); `max_solves` stays the optimisation's own cap.
+  - `Points.ended` says how it stopped: converged, reached its most points, past the
+    budget, stopped, or (reading) not run yet.
+- **The Pareto front** (item 5): `pareto(opt, points, keys)`, the feasible points no
+  other feasible point beats on every output. The objective counts by its sense; a
+  constraint counts as better further from its limit (`better`).
+  - Panel: Plot → "Pareto front: <objective> against <constraint>", the front as a line
+    over the feasible points as dots (`Curve.set_series(..., dots=)`).
+  - MCP `optimisation_points` gives `pareto` and `ended`; the CLI prints the front.
+- **Live table**: `run`'s `on_point` goes to the GUI as a task event. The panel adds
+  each point as it finishes (`OptimisationPanel.add_point`), not only at the end.
+- **Elsewhere**:
+  - New optimisation… offers every method, its Points field being a sampled plan's
+    points or an optimiser's most.
+  - The outline says "COBYLA of Beam (up to 50 points)".
+  - The schematic node's badge counts an optimiser's points ("12 points").
+- **Tests**:
+  - `tests/test_optimisers.py`: COBYLA and Nelder–Mead find the lightest beam by hand
+    (w at its bound, t = 5.848 mm, within 0.2 %). Nelder–Mead on Rosenbrock reaches
+    (1, 1) within 0.02. Differential evolution on Rosenbrock, and with a catalogue of
+    thicknesses (t 6 mm, w 10 mm, 60 mm²). Also: resume after a budget, stop, failed
+    points, choices refused, snapping, the outline, and a DOE's Pareto front checked
+    against a brute-force count.
+  - `tests/test_optimise_gui.py`: COBYLA on the CalculiX beam fills the panel point by
+    point and ends on the deflection limit (t 7.26 mm, deflection 1.977 mm against 2 mm,
+    five solves). The Pareto plot is offered and drawn.
+
+Not done in phase 2:
+- A generation's points run one after another; running them in parallel (ADR 0053)
+  needs concurrent `run_study` calls on one store, not tried yet.
+- Points are not yet `Iteration` progress events (item 7); the panel's table is the
+  live view.
+- COBYLA on Rosenbrock's valley stalls on the 0.001 grid (Nelder–Mead and differential
+  evolution reach the minimum); COBYLA is for smooth sizing, as item 4 says.

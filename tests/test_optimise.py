@@ -61,7 +61,7 @@ def stand_in(store, fail=lambda w, t: False, calls=None):
 
     def solve(project, study_id, root, workdir, *, store=store, solver, _point, **_):
         values = parameter_values(project)
-        w, t = values["w"], values["t"]
+        w, t = values.get("w", 0.02), values.get("t", 0.005)  # a beam, or any study
         if calls is not None:
             calls.append((solver, w, t))
         if fail(w, t):

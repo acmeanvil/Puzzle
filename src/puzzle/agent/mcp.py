@@ -969,7 +969,8 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         description="An optimisation's points (ADR 0063), from the stored runs, solving "
         "nothing: each point's variables (SI and as labelled), its runs, objective, "
         "constraints, feasible or why not; the best feasible point, the suggestion to "
-        "apply it, and each variable's sensitivities (correlation with each output)."
+        "apply it, each variable's sensitivities (correlation with each output), how an "
+        "optimiser `ended`, and the `pareto` front's point indexes."
     )
     @guarded
     def optimisation_points(name: str) -> dict[str, Any]:
@@ -985,15 +986,18 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         opt = resolve(s.project, name, Optimisation)
         pts = optimise.points(s.project, ResultStore(root / RESULTS_DIR), opt)
         top = optimise.best(opt, pts)
-        return {"points": [p.to_dict() for p in pts],
+        return {"points": [p.to_dict() for p in pts], "ended": pts.ended,
                 "best": top.to_dict() if top else None,
                 "suggestion": optimise.suggestion(s.project, opt, pts),
-                "sensitivities": optimise.sensitivities(opt, pts)}  # fmt: skip
+                "sensitivities": optimise.sensitivities(opt, pts),
+                "pareto": [p.index for p in optimise.pareto(opt, pts)]
+                if len(optimise.output_keys(opt)) > 1 else []}  # fmt: skip
 
     @tool(
         description="Run an optimisation's points (ADR 0063; needs autonomy 'act', as "
-        "runs do; each point is a stored run, a point run before is reused); `budget` runs "
-        "at most that many points this time. Returns the points as optimisation_points."
+        "runs do; each point is a stored run, a point run before is reused, so a stopped "
+        "optimiser resumes on its path); `budget` solves at most that many new points this "
+        "time. Returns the points as optimisation_points."
     )
     @guarded
     def optimisation_run(name: str, budget: int | None = None) -> dict[str, Any]:
@@ -1008,11 +1012,9 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
             raise PuzzleError("running an optimisation needs autonomy 'act'",
                               code="not_allowed")  # fmt: skip
         opt = resolve(s.project, name, Optimisation)
-        if budget:
-            opt = opt.model_copy(update={"max_solves": budget})
         store = ResultStore(root / RESULTS_DIR)
         optimise.run(s.project, opt, root, root / WORK_DIR / "optimise" / str(opt.id),
-                     store=store)  # fmt: skip
+                     store=store, budget=budget)  # fmt: skip
         return _optimisation_points(s, name)
 
     @tool(

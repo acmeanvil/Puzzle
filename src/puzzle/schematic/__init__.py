@@ -587,7 +587,9 @@ def _optimisations(project: Project, out: Schematic, store) -> None:
                 pts = optimise.points(project, store, opt)
             except Exception:  # noqa: BLE001 - a broken optimisation still draws
                 continue
-            node.badge = f"{sum(p.run for p in pts)} of {len(pts)} points"
+            done = sum(p.run for p in pts)
+            node.badge = (f"{done} points" if optimise.adaptive(opt)
+                          else f"{done} of {len(pts)} points")  # fmt: skip
             top = optimise.best(opt, pts)
             if top is not None:
                 from puzzle.operators.evaluate import quantity_text

@@ -271,7 +271,8 @@ def outline(project: Project, *, ids: bool = False, runs=None) -> str:
     from puzzle.model.schema import Optimisation
 
     for opt in project.of_type(Optimisation):  # ADR 0063; points: `optimisation_points`
-        from puzzle.optimise import METHODS, plan
+        from puzzle.optimise import METHODS, adaptive
+        from puzzle.optimise import limit as most
 
         variables = ", ".join(
             f"{v.name} {v.low.value:g}..{v.high.value:g} {v.low.unit}"
@@ -285,8 +286,9 @@ def outline(project: Project, *, ids: bool = False, runs=None) -> str:
                      else f">= {c.lower.value:g} {c.lower.unit}" if c.lower is not None
                      else "")  # fmt: skip
             what.append(f"{names.get(c.source, '?')} {limit}".replace(" dimensionless", ""))
-        lines.append(head("Optimisation", opt) + f": {METHODS[opt.method].lower()} of "
-                     f"{names.get(opt.study, '?')} ({len(plan(opt))} points) over "
+        count = f"up to {most(opt)} points" if adaptive(opt) else f"{most(opt)} points"
+        lines.append(head("Optimisation", opt) + f": {METHODS[opt.method]} of "
+                     f"{names.get(opt.study, '?')} ({count}) over "
                      f"{variables}; {'; '.join(what)}")  # fmt: skip
     lines += _flow(project, runs)
     problems = project.problems()

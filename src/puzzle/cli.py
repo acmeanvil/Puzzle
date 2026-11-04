@@ -370,7 +370,7 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("project", type=Path)
     p.add_argument("name", help="the optimisation")
     p.add_argument("--points", action="store_true", help="list the points; solve nothing")
-    p.add_argument("--budget", type=int, metavar="N", help="run at most N points this time")
+    p.add_argument("--budget", type=int, metavar="N", help="solve at most N new points this time")
     p.add_argument(
         "--apply",
         action="store_true",
@@ -1017,10 +1017,9 @@ def _optimise(args) -> int:
         print(f"applied point {top.index}: {top.title}")
         return 0
     if not args.points:
-        if args.budget:
-            opt = opt.model_copy(update={"max_solves": args.budget})
         optimise.run(s.project, opt, args.project, args.project / WORK_DIR / "optimise"
-                     / str(opt.id), store=store, on_output=print)  # fmt: skip
+                     / str(opt.id), store=store, on_output=print,
+                     budget=args.budget)  # fmt: skip
         opt = resolve(s.project, args.name, Optimisation)
     pts = optimise.points(s.project, store, opt)
     if args.json:
@@ -1032,6 +1031,12 @@ def _optimise(args) -> int:
         status = "feasible" if p.feasible else (p.reason or "infeasible")
         obj = "" if p.objective is None else f"  objective {p.objective:.6g}"
         print(f"{mark} {p.index:3d}  {p.title}{obj}  [{status}]")
+    if pts.ended:
+        print(f"{optimise.METHODS[opt.method]}: {pts.ended}")
+    if len(optimise.output_keys(opt)) > 1:
+        front = optimise.pareto(opt, pts)
+        if front:
+            print("Pareto front: points " + ", ".join(str(p.index) for p in front))
     said = optimise.suggestion(s.project, opt, pts)
     if said:
         print(f"best: {said} (--apply to use it)")

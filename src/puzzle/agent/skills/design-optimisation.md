@@ -1,6 +1,6 @@
 ---
 name: design-optimisation
-description: design of experiments and optimisation: a study run once per point of a plan over parameters, an objective and constraints read at each point, the best point suggested and applied on request
+description: design of experiments and optimisers (COBYLA, Nelder–Mead, differential evolution): a study run per point over parameters, objective and constraints, Pareto front, best point applied on request
 adr: 0063
 ---
 An optimisation (kind `optimisation`) runs one study once per point it chooses, as a
@@ -9,8 +9,21 @@ stored with the point's labels (`t: 8 mm`), cached by its run key, and opens lik
 other run. A point already run is never solved again, so a stopped optimisation
 resumes, and a bigger plan reuses the points it shares with a smaller one.
 
-Phase 1 is design of experiments. The points are planned up front, full factorial,
-Latin hypercube or Sobol, and are the same every time for one seed.
+A design of experiments plans its points up front (full factorial, Latin hypercube,
+Sobol), the same every time for one seed: for seeing the design space and the
+sensitivities first. An optimiser chooses each point from the last:
+
+- `cobyla`: local, with the constraints as constraints; a few continuous or integer
+  variables and a smooth response (most sizing). It starts from the variables' current
+  values and usually needs the fewest solves.
+- `nelder_mead`: local, the constraints as a penalty; for a noisy response.
+- `differential_evolution`: global, for choices, integers or several optima;
+  `population` points per generation for up to `generations`, seeded. It costs
+  population × (generations + 1) solves at most.
+
+Optimisers round each continuous variable to its `resolution` (default a round
+thousandth of its range), so the same point is the same run. They are replayed over
+the stored runs, so a stopped one resumes where it was.
 
 ## Set one up
 
@@ -31,22 +44,33 @@ Latin hypercube or Sobol, and are the same every time for one seed.
      `choices`, a list of quantities).
    - `method` is `full_factorial` (`levels` per variable; an integer variable is
      rounded, a choice uses its choices), `latin_hypercube` or `sobol` (`samples`
-     points, `seed`).
+     points, `seed`), or `cobyla`, `nelder_mead`, `differential_evolution`
+     (`population`, `generations`, `seed`). COBYLA and Nelder–Mead refuse choice
+     variables.
+   - `tolerance` (default 0.001): an optimiser stops when its steps or the
+     objective change by less than this share.
    - A constraint has `upper`, `lower`, or both.
-   - Budgets: `max_solves` (the most points) and `max_minutes`.
+   - Budgets: `max_solves` (the most points; 50 for a local optimiser when unset) and
+     `max_minutes`.
    - A shoot-out study runs every solver per point. `reads` is `primary` (the default)
      or `worst` (a constraint held on every solver).
 
 ## Run and read
 
-- `optimisation_run(name, budget)` needs autonomy "act", as runs do. It returns the
-  points. The CLI is `puzzle optimise PROJECT NAME [--budget N]`.
+- `optimisation_run(name, budget)` needs autonomy "act", as runs do. `budget` is
+  the most new points solved this call (stored ones are free), so a long optimisation
+  can go in slices. It returns the points. The CLI is
+  `puzzle optimise PROJECT NAME [--budget N]`.
 - `optimisation_points(name)` solves nothing and reads the stored runs. It gives each
   point's `values` (SI), `labels`, `runs` (by solver), `objective`, `constraints`,
   `feasible` or the `reason` it isn't ("Tip deflection above 2 mm", or "mesh_failed:
   ..."), and `seconds`. It also gives the `best` feasible point, the `suggestion` text,
   and `sensitivities` (each variable's correlation r with each output: a first look at
-  what matters, not a gradient).
+  what matters, not a gradient). `ended` says how an optimiser stopped ("converged",
+  "reached its most points", "not run yet" when it stopped part way). `pareto` lists
+  the indexes of the feasible points that no other beats on every output (the
+  objective and each constraint, each away from its limit): the trade-off when a
+  second objective was made a constraint.
 - A failed point is infeasible with its reason, and the rest still run.
 
 ## The best point
@@ -67,5 +91,11 @@ user to accept. The CLI is `puzzle optimise PROJECT NAME --apply`.
 - Points that change geometry remesh each time, and the mesh adds noise to the
   response. Look at the sensitivities and the table before trusting a narrow
   difference.
-- Changing the plan (levels, samples, seed, bounds) changes the points. Points already
-  stored are reused only where a new point equals an old one.
+- Changing the plan (levels, samples, seed, bounds), the method's settings, or the
+  model changes the points. Points already stored are reused only where a new point
+  equals an old one with the same run key.
+- A local optimiser's best point sits on an active constraint, within a grid step or
+  two of the resolution. Where the mesh changes with the variable, the response is a
+  little noisy, so do not read more into the last digit.
+- A region of failed points (mesh refused) tells an optimiser nothing; it can get
+  stuck there. Start from values that solve.

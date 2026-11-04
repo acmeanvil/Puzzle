@@ -114,3 +114,42 @@ def test_the_form_refuses_what_cant_run(app, tmp_path):
     finally:
         wait(app, w)
         w.close()
+
+
+def test_an_optimiser_fills_the_panel_as_points_finish(app, tmp_path):
+    # COBYLA from t = 6 mm on the beam: the thinnest t holding 2 mm is 7.37 mm by hand
+    # (Euler-Bernoulli); the tet mesh is a few per cent stiffer, so a little less here.
+    # COBYLA ends at the limit: the best point's deflection is just inside 2 mm.
+    p, opt = beam_project()
+    opt.method, opt.max_solves = "cobyla", 25
+    opt.variables[0].resolution = opt.variables[0].low.model_copy(update={"value": 0.01})
+    root = tmp_path / "beam"
+    save_project(p, root)
+    w = MainWindow(root)
+    try:
+        oid = str(opt.id)
+        w.show_optimisation(oid)
+        seen = []
+        add = w.optimisation.add_point
+        w.optimisation.add_point = lambda pt: (seen.append(w.optimisation.table.rowCount()),
+                                               add(pt))  # fmt: skip
+        panel.run(w, oid)
+        wait(app, w)
+        assert seen[:3] == [0, 1, 2]  # a row a point, as each finished
+        pts = w.optimisation.points
+        assert len(pts) >= 4 and pts.ended == "converged"
+        top = next(p for p in pts if w.optimisation.table.item(p.index - 1, 0).font().bold())
+        assert top.values["t"] == pytest.approx(0.00737, rel=0.04)
+        assert 0.98 * 0.002 <= top.constraints[0] <= 0.002  # within two grid steps
+        assert "points run; converged." in w.optimisation.summary.text()
+        texts = [w.optimisation.plot_of.itemText(i) for i in range(w.optimisation.plot_of.count())]
+        assert "Pareto front: Thickness against Tip deflection" in texts
+        w.optimisation.plot_of.setCurrentIndex(texts.index(
+            "Pareto front: Thickness against Tip deflection"))  # fmt: skip
+        front, feasible = w.optimisation.curve.series
+        assert front[0] == "Pareto front" and len(feasible[1]) >= len(front[1]) >= 1
+        w.schematic.refresh()
+        assert w.schematic.items[oid].node.badge == f"{len(pts)} points"
+    finally:
+        wait(app, w)
+        w.close()

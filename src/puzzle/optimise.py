@@ -8,9 +8,14 @@ already run is never solved again, a stopped optimisation resumes, and every poi
 run opens like any other. The objective and constraints are post-solve outputs (ADR
 0062), read at each point's run.
 
-Phase 1 is design of experiments: the points are chosen up front (`plan`: full
-factorial, Latin hypercube or Sobol, seeded), so `points` can rebuild the table from
-the stored runs at any time, without solving.
+A design of experiments chooses its points up front (`plan`: full factorial, Latin
+hypercube or Sobol, seeded). An optimiser (COBYLA, Nelder–Mead, differential evolution,
+from scipy) chooses each point from the outputs of the last. Both are deterministic:
+the same project, settings and seed ask for the same points in the same order. So
+`points` rebuilds the table from the stored runs at any time without solving (an
+optimiser is replayed, each point it asks for read from the store, until one isn't
+there), and `run` resumes the same way: the replay reaches the first point not run,
+and solving goes on from there.
 """
 
 from __future__ import annotations
@@ -32,7 +37,13 @@ METHODS = {
     "full_factorial": "Full factorial",
     "latin_hypercube": "Latin hypercube",
     "sobol": "Sobol sequence",
+    "cobyla": "COBYLA",
+    "nelder_mead": "Nelder–Mead",
+    "differential_evolution": "Differential evolution",
 }
+DOE = ("full_factorial", "latin_hypercube", "sobol")
+LOCAL_POINTS = 50  # a local optimiser's most points when the optimisation sets none
+PENALTY = 100.0  # Nelder–Mead: the objective plus this times each constraint's breach
 
 
 @dataclass
@@ -107,6 +118,13 @@ def check(project: Project, opt: Optimisation) -> None:
     if opt.objective is None and not opt.constraints:
         raise PuzzleError(f"optimisation '{opt.name}' has no objective or constraint to read",
                           code="inconsistent")  # fmt: skip
+    if opt.method in ("cobyla", "nelder_mead"):
+        listed = [v.name for v in opt.variables if v.kind == "choice"]
+        if listed:
+            raise PuzzleError(
+                f"optimisation '{opt.name}': {METHODS[opt.method]} moves continuous and "
+                f"integer variables; {', '.join(listed)} is a list of choices (use "
+                "differential evolution or a design of experiments)", code="invalid")  # fmt: skip
 
 
 def plan(opt: Optimisation) -> list[dict[str, float]]:
@@ -254,31 +272,305 @@ def _solvers(study: Study) -> list[str]:
     return study.all_solvers()
 
 
-def _stored(store, study: Study, title: str) -> dict[str, Any]:
-    """The newest completed run of each solver at a point, by its title."""
-    from puzzle.sweep import title as title_of
-
+def _stored(store, study: Study, keys: dict[str, str]) -> dict[str, Any]:
+    """The newest completed run of each solver at a point, by the point's run keys (so a
+    point of a changed model is not read from an old run)."""
     found = {}
     for r in store.runs():  # oldest first: the newest wins
-        mine = r.study_id == str(study.id) and r.status == "completed" and r.point_labels()
-        if mine and title_of(r.point_labels()) == title:
+        mine = r.study_id == str(study.id) and r.status == "completed"
+        if mine and keys.get(r.solver) == r.run_key:
             found[r.solver] = r
     return found
 
 
-def points(project: Project, store, opt: Optimisation) -> list[Point]:
-    """Every planned point with what its stored runs say, without solving (the table)."""
-    study = project.get(opt.study, Study)
-    out = []
-    for i, values in enumerate(plan(opt), start=1):
-        p = _point(project, opt, i, values)
-        stored = _stored(store, study, p.title) if store is not None else {}
+class Points(list):
+    """An optimisation's points in the order they were asked for, and how it ended
+    (`ended`: converged, the budget, stopped, or a point not run yet)."""
+
+    ended: str = ""
+
+
+class _Stop(Exception):
+    """No more points: the budget, Stop, the time, or (reading only) a point not run."""
+
+
+class _Runner:
+    """The points an optimisation asks for, each once: read from the store when its run
+    is there, solved otherwise (or, reading only, `_Stop` at the first not run)."""
+
+    def __init__(self, project, opt, root, workdir, store, solve, on_output=None,
+                 on_point=None, cancel=None, reuse=True, budget=None) -> None:  # fmt: skip
+        self.project, self.opt, self.root, self.workdir = project, opt, root, workdir
+        self.store, self.solve, self.on_output, self.on_point = store, solve, on_output, on_point
+        self.cancel, self.reuse, self.budget = cancel, reuse, budget
+        self.study = project.get(opt.study, Study)
+        self.started, self.solved = time.monotonic(), 0
+        self.points: Points = Points()
+        self.seen: dict[str, Point] = {}
+        self.limit = limit(opt)
+
+    def at(self, values: dict[str, float]) -> Point:
+        from puzzle.project.graph import run_hashes
+
+        p = _point(self.project, self.opt, len(self.points) + 1, values)
+        if p.title in self.seen:
+            return self.seen[p.title]
+        if len(self.points) >= self.limit:
+            raise _Stop("reached its most points")
+        try:
+            at = applied(self.project, self.opt, values)
+            keys = {s: k[0] for s, k in run_hashes(at)[self.study.id].items()}
+        except PuzzleError as exc:  # the point can't be set up: infeasible, go on
+            p.reason = f"{exc.code}: {exc.message}"
+            return self._keep(p)
+        stored = {}
+        if self.store is not None and (self.reuse or self.solve is None):
+            stored = _stored(self.store, self.study, keys)
         if stored:
             p.runs = {s: r.run_id for s, r in stored.items()}
             p.seconds = sum(r.duration_s for r in stored.values())
-            evaluate(applied(project, opt, values), store, opt, p)
-        out.append(p)
+        elif self.solve is None:
+            raise _Stop("not run yet")
+        else:
+            if self.cancel is not None and self.cancel.is_set():
+                raise _Stop("stopped before it ran")
+            minutes = self.opt.max_minutes
+            if minutes is not None and time.monotonic() - self.started > 60 * minutes:
+                raise _Stop("past the time budget")
+            if self.budget is not None and self.solved >= self.budget:
+                raise _Stop("past this run's budget")
+            self._solve(at, p, keys)
+            self.solved += 1
+        if p.runs:
+            evaluate(at, self.store, self.opt, p)
+        return self._keep(p)
+
+    def _keep(self, p: Point) -> Point:
+        self.points.append(p)
+        self.seen[p.title] = p
+        if self.on_point is not None and self.solve is not None:
+            self.on_point(p)
+        return p
+
+    def _solve(self, at: Project, p: Point, keys: dict[str, str]) -> None:
+        if self.on_output:
+            self.on_output(f"--- {self.opt.name}: point {p.index}: {p.title}")
+        meshed = None
+        for solver in _solvers(self.study):
+            try:
+                run_ = self.solve(at, self.study.id, self.root,
+                                  self.workdir / f"point-{p.index}" / solver, store=self.store,
+                                  reuse=self.reuse, on_output=self.on_output, solver=solver,
+                                  meshed=meshed, _point=(keys[solver], p.labels),
+                                  cancel=self.cancel)  # fmt: skip
+            except PuzzleError as exc:
+                if solver == self.study.solver:
+                    p.reason = f"{exc.code}: {exc.message}"
+                    break
+                p.by_solver[solver] = {"failed": exc.message}  # feasible on the others
+                continue
+            meshed = meshed or getattr(run_, "mesh_result", None)
+            p.runs[solver] = run_.run_id
+        if p.runs:
+            stored = {r.run_id: r for r in self.store.runs()}
+            p.seconds = sum(stored[r].duration_s for r in p.runs.values() if r in stored)
+
+
+def adaptive(opt: Optimisation) -> bool:
+    """An optimiser, choosing each point from the last (not a design of experiments)."""
+    return opt.method not in DOE
+
+
+def _members(opt: Optimisation) -> int:
+    """Differential evolution's points per generation, as scipy makes them."""
+    d = len(opt.variables)
+    return max(5, math.ceil(opt.population / d) * d)
+
+
+def limit(opt: Optimisation) -> int:
+    """The most points an optimisation runs: its plan's, its `max_solves`, or else an
+    optimiser's own (50 for a local one; differential evolution's generations)."""
+    if not adaptive(opt):
+        return len(plan(opt))
+    if opt.method == "differential_evolution":
+        n = _members(opt) * (opt.generations + 1)
+    else:
+        n = LOCAL_POINTS
+    return opt.max_solves if opt.max_solves is not None else n
+
+
+def resolution(var) -> float:
+    """What an optimiser rounds a continuous variable to (SI): its `resolution`, else a
+    round thousandth of its range (0.001 mm for 4 mm .. 10 mm)."""
+    if var.resolution is not None:
+        return var.resolution.to_si()
+    span = var.high.to_si() - var.low.to_si()
+    return 10.0 ** math.floor(math.log10(span / 1000))
+
+
+def snap(var, x: float) -> float:
+    """A variable's value as an optimiser's point holds it: an integer, or a multiple of
+    its resolution, inside its bounds. The same value always gives the same point."""
+    lo, hi = var.low.to_si(), var.high.to_si()
+    if var.kind == "integer":
+        return float(np.clip(round(x), math.ceil(lo), math.floor(hi)))
+    step = resolution(var)
+    return float(f"{float(np.clip(round(x / step) * step, lo, hi)):.12g}")
+
+
+class _Merit:
+    """The numbers an optimiser sees for a point: the objective scaled by its first
+    value (minimised: a maximised one is negated), and each limit as a margin scaled by
+    the limit (positive holds). A point that failed is worse than every point so far
+    and breaks every limit, so the optimiser moves away from it."""
+
+    def __init__(self, opt: Optimisation) -> None:
+        self.opt = opt
+        self.scale: float | None = None
+        self.worst = 0.0
+        self.limits = [
+            (i, q, side)
+            for i, c in enumerate(opt.constraints)
+            for q, side in ((c.upper, -1.0), (c.lower, 1.0))
+            if q is not None
+        ]
+
+    def objective(self, p: Point) -> float:
+        obj = self.opt.objective
+        if obj is None:
+            return 0.0
+        if p.objective is None or not math.isfinite(p.objective):
+            return self.worst + 1.0
+        if self.scale is None:
+            self.scale = abs(p.objective) or 1.0
+        value = (1 if obj.sense == "minimise" else -1) * p.objective / self.scale
+        self.worst = max(self.worst, value)
+        return value
+
+    def margins(self, p: Point) -> list[float]:
+        out = []
+        for i, q, side in self.limits:
+            v = p.constraints[i] if i < len(p.constraints) else None
+            limit_ = q.to_si()
+            ok = v is not None and math.isfinite(v)
+            out.append(side * (v - limit_) / (abs(limit_) or 1.0) if ok else -1.0)
+        return out
+
+    def penalised(self, p: Point) -> float:
+        return self.objective(p) + PENALTY * sum(max(0.0, -g) for g in self.margins(p))
+
+
+def _coded(opt: Optimisation, project: Project) -> tuple[list, list, list[bool]]:
+    """The optimiser's view of the variables: bounds, the start (the variables' current
+    values), and which are whole numbers. Local methods move every variable between 0
+    and 1 (low to high), so steps mean the same for each; differential evolution keeps
+    integers and choices (by index) whole."""
+    from puzzle.operators import parameter_values
+
+    now = parameter_values(project)
+    de = opt.method == "differential_evolution"
+    bounds, start, whole = [], [], []
+    for v in opt.variables:
+        if v.kind == "choice":
+            vals = v.values()
+            here = now.get(v.name, vals[0])
+            bounds.append((0, len(vals) - 1))
+            start.append(float(np.argmin([abs(x - here) for x in vals])))
+            whole.append(True)
+            continue
+        lo, hi = v.low.to_si(), v.high.to_si()
+        here = float(np.clip(now.get(v.name, (lo + hi) / 2), lo, hi))
+        if de and v.kind == "integer":
+            bounds.append((math.ceil(lo), math.floor(hi)))
+            start.append(float(np.clip(round(here), math.ceil(lo), math.floor(hi))))
+            whole.append(True)
+        else:
+            bounds.append((0.0, 1.0))
+            start.append((here - lo) / (hi - lo))
+            whole.append(False)
+    return bounds, start, whole
+
+
+def _decoded(opt: Optimisation, c) -> dict[str, float]:
+    de = opt.method == "differential_evolution"
+    out = {}
+    for v, x in zip(opt.variables, c, strict=True):
+        if v.kind == "choice":
+            vals = v.values()
+            out[v.name] = vals[int(np.clip(round(float(x)), 0, len(vals) - 1))]
+        elif de and v.kind == "integer":
+            out[v.name] = snap(v, float(x))
+        else:
+            lo, hi = v.low.to_si(), v.high.to_si()
+            out[v.name] = snap(v, lo + float(np.clip(x, 0.0, 1.0)) * (hi - lo))
     return out
+
+
+def _optimise(r: _Runner) -> str:
+    """Run the optimiser over the runner's points; how it ended, in words."""
+    import warnings
+
+    from scipy.optimize import NonlinearConstraint, differential_evolution, minimize
+
+    opt = r.opt
+    merit = _Merit(opt)
+    bounds, start, whole = _coded(opt, r.project)
+
+    def at(c) -> Point:
+        return r.at(_decoded(opt, c))
+
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)  # scipy on penalised points
+            if opt.method == "cobyla":
+                # a little inside each limit: COBYLA ends on an active limit, and the
+                # grid's nearest point to it may be just past
+                inside = opt.tolerance / 10
+                cons = [{"type": "ineq",
+                         "fun": lambda c, j=j: merit.margins(at(c))[j] - inside}
+                        for j in range(len(merit.limits))]  # fmt: skip
+                res = minimize(lambda c: merit.objective(at(c)), np.array(start),
+                               method="COBYLA", bounds=bounds, constraints=cons,
+                               options={"rhobeg": 0.25, "tol": opt.tolerance,
+                                        "maxiter": 100000})  # fmt: skip
+            elif opt.method == "nelder_mead":
+                x0 = np.array(start)
+                simplex = [x0] + [x0 + np.eye(len(x0))[i] * (0.25 if x0[i] <= 0.75 else -0.25)
+                                  for i in range(len(x0))]  # fmt: skip
+                res = minimize(lambda c: merit.penalised(at(c)), x0, method="Nelder-Mead",
+                               bounds=bounds, options={"initial_simplex": np.array(simplex),
+                               "xatol": opt.tolerance, "fatol": opt.tolerance,
+                               "maxfev": 100000})  # fmt: skip
+            else:
+                cons = ()
+                if merit.limits:
+                    cons = NonlinearConstraint(lambda c: np.array(merit.margins(at(c))), 0,
+                                               np.inf)  # fmt: skip
+                res = differential_evolution(
+                    lambda c: merit.objective(at(c)), bounds, x0=np.array(start),
+                    maxiter=opt.generations, popsize=math.ceil(opt.population /
+                    len(opt.variables)), tol=opt.tolerance, seed=opt.seed, polish=False,
+                    init="latinhypercube", updating="deferred", integrality=whole,
+                    constraints=cons)  # fmt: skip
+    except _Stop as stop:
+        return str(stop)
+    return "converged" if res.success else str(res.message)
+
+
+def points(project: Project, store, opt: Optimisation) -> Points:
+    """Every point with what its stored runs say, without solving (the table). A design
+    of experiments lists every planned point; an optimiser is replayed over the stored
+    runs, so its points are listed up to the first not run yet."""
+    r = _Runner(project, opt, None, None, store, None)
+    if adaptive(opt):
+        r.points.ended = _optimise(r)
+        return r.points
+    for values in plan(opt):
+        try:
+            r.at(values)
+        except _Stop:
+            r._keep(_point(project, opt, len(r.points) + 1, values))
+    return r.points
 
 
 def run(
@@ -293,55 +585,33 @@ def run(
     on_point: Callable[[Point], None] | None = None,
     cancel=None,
     reuse: bool = True,
-) -> list[Point]:
-    """Run each planned point not run yet (a stored point is reused: resume), then read
-    its outputs. A point that fails (mesh refused, solver diverged) is infeasible with
-    its reason; the optimisation goes on. `cancel` stops after the running point."""
-    from puzzle.project.graph import run_hashes
-
+    budget: int | None = None,
+) -> Points:
+    """Run the points not run yet (a stored point is read back, not solved: resume),
+    each read for its outputs. A point that fails (mesh refused, solver diverged) is
+    infeasible with its reason; the optimisation goes on. `cancel` stops after the
+    running point; `budget` solves at most that many new points this time."""
     if solve is None:
         from puzzle.solve import run_study as solve
     check(project, opt)
-    study = project.get(opt.study, Study)
-    started = time.monotonic()
-    out: list[Point] = []
-    planned = plan(opt)
-    for i, values in enumerate(planned, start=1):
-        p = _point(project, opt, i, values)
-        if cancel is not None and cancel.is_set():
-            p.reason = "stopped before it ran"
-            out.append(p)
-            continue
-        if opt.max_minutes is not None and time.monotonic() - started > 60 * opt.max_minutes:
-            p.reason = "past the time budget"
-            out.append(p)
-            continue
-        at = applied(project, opt, values)
-        keys = run_hashes(at)[study.id]
+    r = _Runner(project, opt, root, workdir, store, solve, on_output, on_point, cancel, reuse,
+                budget)  # fmt: skip
+    if adaptive(opt):
+        r.points.ended = _optimise(r)
         if on_output:
-            on_output(f"--- {opt.name}: point {i} of {len(planned)}: {p.title}")
-        meshed = None
-        for solver in _solvers(study):
-            try:
-                run_ = solve(at, study.id, root, workdir / f"point-{i}" / solver, store=store,
-                             reuse=reuse, on_output=on_output, solver=solver, meshed=meshed,
-                             _point=(keys[solver][0], p.labels), cancel=cancel)  # fmt: skip
-            except PuzzleError as exc:
-                if solver == study.solver:
-                    p.reason = f"{exc.code}: {exc.message}"
-                    break
-                p.by_solver[solver] = {"failed": exc.message}  # feasible on the others
-                continue
-            meshed = meshed or getattr(run_, "mesh_result", None)
-            p.runs[solver] = run_.run_id
-        if p.runs:
-            stored = {r.run_id: r for r in store.runs()}
-            p.seconds = sum(stored[r].duration_s for r in p.runs.values() if r in stored)
-            evaluate(at, store, opt, p)
-        out.append(p)
-        if on_point:
-            on_point(p)
-    return out
+            on_output(f"--- {opt.name}: {METHODS[opt.method]} {r.points.ended} after "
+                      f"{len(r.points)} points ({r.solved} solved now)")  # fmt: skip
+        return r.points
+    for values in plan(opt):
+        try:
+            r.at(values)
+        except _Stop as stop:
+            p = _point(project, opt, len(r.points) + 1, values)
+            if p.title not in r.seen:
+                p.reason = str(stop)
+                r._keep(p)
+    r.points.ended = "planned points run"
+    return r.points
 
 
 # --- the best point and applying it ---------------------------------------------------
@@ -435,3 +705,48 @@ def sensitivities(opt: Optimisation, pts: list[Point]) -> dict[str, dict[str, fl
             row[name] = float(np.corrcoef(xs[ok], np.array(ys, float)[ok])[0, 1])
         out[v.name] = row
     return out
+
+
+# --- the Pareto front -----------------------------------------------------------------
+
+
+def output_keys(opt: Optimisation) -> list[str]:
+    """The outputs a point has: "objective", then "constraint 1", "constraint 2"..."""
+    return (["objective"] if opt.objective else []) + [
+        f"constraint {i + 1}" for i in range(len(opt.constraints))]  # fmt: skip
+
+
+def output_of(p: Point, key: str) -> float | None:
+    if key == "objective":
+        return p.objective
+    i = int(key.removeprefix("constraint ")) - 1
+    return p.constraints[i] if i < len(p.constraints) else None
+
+
+def better(opt: Optimisation, key: str) -> int:
+    """Which way an output is better, 1 smaller or −1 larger: the objective by its
+    sense; a constraint away from its limit (an upper one smaller, a lower one larger)."""
+    if key == "objective":
+        return 1 if opt.objective.sense == "minimise" else -1
+    c = opt.constraints[int(key.removeprefix("constraint ")) - 1]
+    return -1 if c.upper is None and c.lower is not None else 1
+
+
+def pareto(opt: Optimisation, pts: list[Point], keys: list[str] | None = None) -> list[Point]:
+    """The feasible points no other feasible point beats on every output of `keys`
+    (default all: the objective and each constraint), in order of the first: the
+    trade-off to pick from when one objective was made constraints (ADR 0063 item 5)."""
+    keys = keys or output_keys(opt)
+    signs = [better(opt, k) for k in keys]
+    rows = []
+    for p in pts:
+        vals = [output_of(p, k) for k in keys]
+        if p.feasible and all(v is not None and math.isfinite(v) for v in vals):
+            rows.append((p, [s * v for s, v in zip(signs, vals, strict=True)]))
+    front = []
+    for p, a in rows:
+        beaten = any(all(x <= y for x, y in zip(b, a, strict=True)) and b != a
+                     for _, b in rows)  # fmt: skip
+        if not beaten:
+            front.append((p, a))
+    return [p for p, _ in sorted(front, key=lambda pa: pa[1])]

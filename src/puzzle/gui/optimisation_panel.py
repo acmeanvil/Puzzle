@@ -1,6 +1,7 @@
 """Optimisations in the window (ADR 0063): made in one form, run in the background
-(each point a stored run, the Output log saying which), and read in the Optimisation
-panel: the points table, a plot, the sensitivities and the best point, which is
+(each point a stored run, the Output log saying which, the panel filling as points
+finish), and read in the Optimisation panel: the points table, a plot (by point,
+against a variable, the Pareto front), the sensitivities and the best point, which is
 suggested and applied only when asked (one undoable batch, a version saved first).
 """
 
@@ -137,9 +138,12 @@ def new_optimisation(window, study_id: str | None = None):
         Ask("sense", "Best is", choices=SENSES),
         Ask("constraints", "Constraints", kind="multiline", default="",
             help="One a line, by an operator's or result tool's name: Tip <= 1 mm"),
-        Ask("method", "Plan", choices=[(t, k) for k, t in METHODS.items()],
-            default="latin_hypercube"),
-        Ask("samples", "Points (sampled plans)", kind="text", default="10"),
+        Ask("method", "Method", choices=[(t, k) for k, t in METHODS.items()],
+            default="latin_hypercube", help="A design of experiments plans its points; "
+            "COBYLA and Nelder–Mead improve on the current values; differential "
+            "evolution searches the whole range"),
+        Ask("samples", "Points", kind="text", default="10",
+            help="A sampled plan's points, or the most an optimiser runs"),
         Ask("name", "Name", kind="text", default="Optimisation"),
     ], check=check)  # fmt: skip
     if not got:
@@ -148,7 +152,10 @@ def new_optimisation(window, study_id: str | None = None):
             "variables": parse_variables(got["variables"]),
             "constraints": parse_constraints(got["constraints"], names)}  # fmt: skip
     if got.get("samples", "").strip().isdigit():
-        data["samples"] = int(got["samples"])
+        from puzzle.optimise import DOE
+
+        key = "samples" if got["method"] in DOE else "max_solves"
+        data[key] = int(got["samples"])
     if got.get("objective"):
         data["objective"] = {"source": got["objective"], "sense": got["sense"]}
     outcome = window.submit(Create(kind="optimisation", data=data))
@@ -173,9 +180,15 @@ def run(window, opt_id: str) -> None:
     window.optimisation_stop = stop
     project, root, store = s.project, s.root, window._store()
 
-    def work(emit):
+    def work(emit, emit_event):
         return optimise.run(project, opt, root, root / WORK_DIR / "optimise" / str(opt.id),
-                            store=store, on_output=emit, cancel=stop)  # fmt: skip
+                            store=store, on_output=emit, cancel=stop,
+                            on_point=emit_event)  # fmt: skip
+
+    def finished_point(point) -> None:  # the panel fills as points finish
+        panel = getattr(window, "optimisation", None)
+        if panel is not None and panel.opt_id == opt_id:
+            panel.add_point(point)
 
     def done(points) -> None:
         window.optimisation_stop = None
@@ -183,11 +196,16 @@ def run(window, opt_id: str) -> None:
         window.show_optimisation(opt_id)
         said = optimise.suggestion(window.session.project, opt, points)
         n = sum(p.run for p in points)
-        text = f"{opt.name}: {n} of {len(points)} points run"
+        text = f"{opt.name}: {n} of {len(points)} points run" + (
+            f" ({points.ended})" if optimise.adaptive(opt) and points.ended else ""
+        )
         window.statusBar().showMessage(text + (f". Best: {said} (Apply best to use it)"
                                                if said else ""), 15000)  # fmt: skip
 
-    window.background(f"Optimising {opt.name}…", work, done)
+    panel = getattr(window, "optimisation", None)
+    if panel is not None and panel.opt_id == opt_id:
+        panel.start_live()
+    window.background(f"Optimising {opt.name}…", work, done, on_event=finished_point)
 
 
 def stop(window) -> None:
@@ -223,6 +241,7 @@ class OptimisationPanel(QWidget):
         self.window = window
         self.opt_id: str | None = None
         self.points: list = []
+        self.live = False  # a run is filling the table
         column = QVBoxLayout(self)
         top = QHBoxLayout()
         self.title = theme.role(QLabel("No optimisation shown"), "title")
@@ -272,6 +291,28 @@ class OptimisationPanel(QWidget):
         except PuzzleError as exc:
             self.summary.setText(exc.message)
             self.points = []
+        self.live = False
+        self._render(opt)
+
+    def start_live(self) -> None:
+        """A run is starting: points arrive one by one (`add_point`) and are drawn as
+        they come, without reading the store again."""
+        self.live = True
+
+    def add_point(self, point) -> None:
+        s = self.window.session
+        opt = s.project.objects.get(UUID(self.opt_id)) if self.opt_id and s else None
+        if opt is None:
+            return
+        if not self.live:  # the first point of a run: the table starts over
+            self.live, self.points = True, []
+        self.points = [p for p in self.points if p.title != point.title] + [point]
+        self._render(opt)
+
+    def _render(self, opt) -> None:
+        from puzzle import optimise
+
+        s = self.window.session
         names = {o.id: o.name for o in s.project.objects.values()}
         heads = ["#", *[v.name for v in opt.variables]]
         if opt.objective is not None:
@@ -308,9 +349,15 @@ class OptimisationPanel(QWidget):
         sens = optimise.sensitivities(opt, self.points)
         words = "; ".join(f"{v}: " + ", ".join(f"{k} r = {x:+.2f}" for k, x in row.items())
                           for v, row in sens.items() if row)  # fmt: skip
-        self.title.setText(f"{opt.name}: {optimise.METHODS[opt.method].lower()}")
+        self.title.setText(f"{opt.name}: {optimise.METHODS[opt.method]}")
+        if optimise.adaptive(opt):
+            ended = getattr(self.points, "ended", "")
+            head = f"{run_count} points run" + (
+                "; running." if self.live else f"; {ended}." if ended else ".")  # fmt: skip
+        else:
+            head = f"{run_count} of {len(self.points)} points run."
         self.summary.setText(
-            f"{run_count} of {len(self.points)} points run."
+            head
             + (f" Best: {best}." if best else (" The model is at the best point."
                                                if top is not None else ""))
             + (f" Sensitivities: {words}." if words else ""))  # fmt: skip
@@ -324,6 +371,13 @@ class OptimisationPanel(QWidget):
                 self.plot_of.addItem(f"Objective against {v.name}", v.name)
         for i, c in enumerate(opt.constraints):
             self.plot_of.addItem(f"{names.get(c.source, 'Constraint')} by point", f"c{i}")
+        keys = optimise.output_keys(opt)
+        label = {k: names.get(o.source, k) for k, o in zip(
+            keys, ([opt.objective] if opt.objective else []) + list(opt.constraints),
+            strict=True)}  # fmt: skip
+        for a, b in [(keys[0], k) for k in keys[1:]]:
+            self.plot_of.addItem(f"Pareto front: {label[a]} against {label[b]}",
+                                 f"pareto:{a}:{b}")  # fmt: skip
         found = self.plot_of.findData(keep)
         self.plot_of.setCurrentIndex(max(found, 0))
         self.plot_of.blockSignals(False)
@@ -343,10 +397,30 @@ class OptimisationPanel(QWidget):
             pts = [(float(p.index), p.constraints[i]) for p in done
                    if p.constraints and p.constraints[i] is not None]  # fmt: skip
             self.curve.x_label = "Point"
+        elif what.startswith("pareto:"):
+            self._pareto(*what.split(":")[1:])
+            return
         else:
             pts = sorted((p.values[what], p.objective) for p in done if p.objective is not None)
             self.curve.x_label = f"{what} (SI)"
         self.curve.set_series([(self.plot_of.currentText(), pts)])
+
+    def _pareto(self, a: str, b: str) -> None:
+        """The feasible points as dots, the front (those no other beats on both) as a
+        line: x the second output, y the first (the objective)."""
+        from puzzle import optimise
+
+        opt = self.window.session.project.objects.get(UUID(self.opt_id))
+
+        def xy(p):
+            return optimise.output_of(p, b), optimise.output_of(p, a)
+
+        ok = [p for p in self.points if p.feasible and None not in xy(p)]
+        front = optimise.pareto(opt, ok, [a, b])
+        self.curve.x_label = self.plot_of.currentText().rsplit(" against ", 1)[-1] + " (SI)"
+        self.curve.set_series([("Pareto front", [xy(p) for p in front]),
+                               ("Feasible points", [xy(p) for p in ok])],
+                              dots={1})  # fmt: skip
 
     def _open_run(self, item) -> None:
         run_id = item.data(ROLE)

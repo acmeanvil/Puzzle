@@ -86,6 +86,7 @@ class Curve(QWidget):
         self.series: list[tuple[str, list[tuple[float, float]]]] = []
         self.x_label, self.y_label = x_label, y_label
         self.log = log  # both axes logarithmic (S-N and strain-life curves)
+        self.dots: set[int] = set()  # series drawn as points only
         self.setMinimumSize(220, 160)
 
     @property
@@ -95,11 +96,15 @@ class Curve(QWidget):
     def set_points(self, points, label: str = "") -> None:
         self.set_series([(label, points)] if points else [])
 
-    def set_series(self, series) -> None:
+    def set_series(self, series, dots=()) -> None:
+        """Curves as (name, points); those whose index is in `dots` are drawn as points
+        only (a scatter), the others joined in order of x."""
+
         def keep(x, y):
             return math.isfinite(x) and math.isfinite(y) and (not self.log or (x > 0 and y > 0))
 
         self.series = [(name, [(x, y) for x, y in pts if keep(x, y)]) for name, pts in series]
+        self.dots = set(dots)
         self.update()
 
     def paintEvent(self, _event) -> None:  # noqa: N802 - Qt's name
@@ -148,9 +153,10 @@ class Curve(QWidget):
             colour = QColor(self.COLOURS[k % len(self.COLOURS)])
             p.setPen(QPen(colour, 2))
             q = [at(x, y) for x, y in sorted(pts)]
-            for a, b in zip(q, q[1:], strict=False):
-                p.drawLine(a, b)
-            if len(q) <= 40:
+            if k not in self.dots:
+                for a, b in zip(q, q[1:], strict=False):
+                    p.drawLine(a, b)
+            if len(q) <= 40 or k in self.dots:
                 for c in q:
                     p.drawEllipse(c, 2.5, 2.5)
             if name:

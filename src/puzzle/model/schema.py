@@ -2060,6 +2060,10 @@ class DesignVariable(BaseModel):
     low: Quantity | None = None
     high: Quantity | None = None
     choices: list[Quantity] = Field(default_factory=list, description="choice: its values")
+    resolution: Quantity | None = Field(
+        default=None, description="the local and evolutionary methods round a continuous "
+        "variable to this (default a round thousandth of its range), so a point's run is "
+        "found again")  # fmt: skip
 
     @model_validator(mode="after")
     def _bounded(self) -> DesignVariable:
@@ -2097,10 +2101,13 @@ class Optimisation(ProjectObject):
     one per listed point: its runs are the study's own, stored with their points and
     cached by their run keys, so a stopped one resumes and a later one reuses them.
 
-    Phase 1 is design of experiments: `method` full_factorial (`levels` per variable),
-    latin_hypercube or sobol (`samples` points, `seed`). The objective (minimised or
-    maximised) and the constraints read post-solve outputs at each point. A shoot-out
-    study runs every solver per point (`reads` the primary's outputs, or the worst).
+    `method` is a design of experiments, full_factorial (`levels` per variable),
+    latin_hypercube or sobol (`samples` points, `seed`), or an optimiser choosing each
+    point from the last: cobyla or nelder_mead (local, from the variables' current
+    values) or differential_evolution (global; `population` per generation for
+    `generations`). The objective (minimised or maximised) and the constraints read
+    post-solve outputs at each point. A shoot-out study runs every solver per point
+    (`reads` the primary's outputs, or the worst).
     """
 
     kind: ClassVar[str] = "optimisation"
@@ -2109,12 +2116,31 @@ class Optimisation(ProjectObject):
     variables: list[DesignVariable] = Field(min_length=1)
     objective: DesignOutput | None = None
     constraints: list[DesignOutput] = Field(default_factory=list)
-    method: Literal["full_factorial", "latin_hypercube", "sobol"] = "latin_hypercube"
+    method: Literal[
+        "full_factorial",
+        "latin_hypercube",
+        "sobol",
+        "cobyla",
+        "nelder_mead",
+        "differential_evolution",
+    ] = "latin_hypercube"
     samples: int = Field(default=10, ge=1, le=10000, description="points of a sampled DOE")
     levels: int = Field(default=3, ge=2, le=50, description="full factorial: per variable")
     seed: int = Field(default=0, description="the sampler's seed: the same points each run")
     max_solves: int | None = Field(default=None, ge=1, description="the most points run")
     max_minutes: float | None = Field(default=None, gt=0, description="the most wall time")
+    tolerance: float = Field(
+        default=1e-3,
+        gt=0,
+        lt=1,
+        description="optimisers: stop when the points or the objective change less than this share",
+    )
+    population: int = Field(
+        default=10, ge=4, le=1000, description="differential evolution: points per generation"
+    )
+    generations: int = Field(
+        default=10, ge=1, le=1000, description="differential evolution: the most generations"
+    )
     reads: Literal["primary", "worst"] = Field(
         default="primary", description="a shoot-out study: the primary solver's outputs, "
         "or the worst of the solvers (a constraint held on every one)")  # fmt: skip
