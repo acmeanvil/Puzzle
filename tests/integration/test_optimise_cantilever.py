@@ -42,3 +42,22 @@ def test_thinnest_cantilever_by_design_of_experiments(tmp_path):
     runs = len(store.runs())
     again = optimise.run(p, opt, root, tmp_path / "w2", store=store)  # resume: all stored
     assert len(store.runs()) == runs and [a.runs for a in again] == [b.runs for b in pts]
+
+
+@pytest.mark.parametrize("method", ["bayesian", "response_surface"])
+def test_thinnest_cantilever_by_a_model_of_the_outputs(tmp_path, method):
+    # ADR 0063 phase 3: from four Latin hypercube points, the model picks the rest; the
+    # best t sits on the 2 mm limit, within 4 % of 7.37 mm by hand (the tet mesh is a
+    # few per cent stiffer than Euler-Bernoulli), in at most a dozen solves
+    pytest.importorskip("OCP")
+    p, opt = beam_project()
+    opt.method, opt.samples = method, 4
+    opt.variables[0].resolution = opt.variables[0].low.model_copy(update={"value": 0.01})
+    root = tmp_path / "beam"
+    save_project(p, root)
+    store = ResultStore(root / RESULTS_DIR)
+    pts = optimise.run(p, opt, root, tmp_path / "w", store=store)
+    top = optimise.best(opt, pts)
+    assert top is not None and len(pts) <= 12, [pt.title for pt in pts]
+    assert top.values["t"] == pytest.approx(0.00737, rel=0.04)
+    assert 0.98 * LIMIT <= top.constraints[0] <= LIMIT

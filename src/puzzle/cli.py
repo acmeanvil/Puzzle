@@ -1030,9 +1030,14 @@ def _optimise(args) -> int:
         mark = "*" if p is top else " "
         status = "feasible" if p.feasible else (p.reason or "infeasible")
         obj = "" if p.objective is None else f"  objective {p.objective:.6g}"
-        print(f"{mark} {p.index:3d}  {p.title}{obj}  [{status}]")
+        origin = f"  ({p.origin})" if p.origin else ""
+        print(f"{mark} {p.index:3d}  {p.title}{obj}  [{status}]{origin}")
     if pts.ended:
         print(f"{optimise.METHODS[opt.method]}: {pts.ended}")
+    if opt.method == "response_surface":
+        fit = optimise.fit_quality(opt, pts)
+        print("surface fit (leave-one-out): " + ", ".join(
+            f"{k} {v * 100:.1f} %" for k, v in fit.items() if v is not None))  # fmt: skip
     if len(optimise.output_keys(opt)) > 1:
         front = optimise.pareto(opt, pts)
         if front:

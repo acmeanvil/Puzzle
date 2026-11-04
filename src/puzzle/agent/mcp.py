@@ -970,7 +970,8 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         "nothing: each point's variables (SI and as labelled), its runs, objective, "
         "constraints, feasible or why not; the best feasible point, the suggestion to "
         "apply it, each variable's sensitivities (correlation with each output), how an "
-        "optimiser `ended`, and the `pareto` front's point indexes."
+        "optimiser `ended`, the `pareto` front's point indexes, and a response surface's "
+        "`surface_fit` (leave-one-out error per output, a share of its range)."
     )
     @guarded
     def optimisation_points(name: str) -> dict[str, Any]:
@@ -991,7 +992,9 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
                 "suggestion": optimise.suggestion(s.project, opt, pts),
                 "sensitivities": optimise.sensitivities(opt, pts),
                 "pareto": [p.index for p in optimise.pareto(opt, pts)]
-                if len(optimise.output_keys(opt)) > 1 else []}  # fmt: skip
+                if len(optimise.output_keys(opt)) > 1 else [],
+                **({"surface_fit": optimise.fit_quality(opt, pts)}
+                   if opt.method == "response_surface" else {})}  # fmt: skip
 
     @tool(
         description="Run an optimisation's points (ADR 0063; needs autonomy 'act', as "

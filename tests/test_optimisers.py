@@ -200,3 +200,72 @@ def test_the_outline_says_an_optimisers_budget():
     assert "Differential evolution of Beam (up to 50 points)" in outline(p)  # 10 x (4 + 1)
     opt.method, opt.levels = "full_factorial", 2
     assert "Full factorial of Beam (4 points)" in outline(p)
+
+
+# --- phase 3: Bayesian optimisation and response surfaces -------------------------
+
+
+@pytest.mark.parametrize("method", ["bayesian", "response_surface"])
+def test_modelled_methods_find_the_lightest_beam_in_few_solves(tmp_path, method):
+    # from 8 Latin hypercube points, a few more by the model: within 0.5 % of 58.48 mm²
+    p, opt = project(method, samples=8)
+    pts, store = run(p, opt, tmp_path)
+    top = optimise.best(opt, pts)
+    assert top.labels["w"] == "10 mm"
+    assert top.objective == pytest.approx(10 * T_BEST * 1e3, rel=5e-3)
+    assert len(pts) <= 14 and pts.ended.startswith("converged")
+    assert [pt.origin for pt in pts[:8]] == ["initial plan"] * 8
+    assert {pt.origin for pt in pts[8:]} == {"expected improvement" if method == "bayesian"
+                                            else "surface optimum"}  # fmt: skip
+    # the start is the Latin hypercube design of the same seed and size: shared runs
+    lhs = optimise.plan(opt.model_copy(update={"method": "latin_hypercube"}))
+    assert [pt.values for pt in pts[:8]] == lhs
+    # replayed from the store, the same points (and the table is cached until it changes)
+    again = optimise.points(p, store, opt)
+    assert [pt.title for pt in again] == [pt.title for pt in pts]
+    assert optimise.points(p, store, opt) is again
+
+
+def test_a_bayesian_run_resumes_on_its_path(tmp_path):
+    p, opt = project("bayesian", samples=6)
+    whole, _ = run(p, opt, tmp_path)
+    store, calls = Store(), []
+    solve = stand_in(store, calls=calls)
+    run(p, opt, tmp_path, store, solve=solve, budget=8)
+    second, _ = run(p, opt, tmp_path, store, solve=solve)
+    assert [pt.title for pt in second] == [pt.title for pt in whole]
+    assert len(calls) == len(whole)
+
+
+def test_surface_fit_is_shown(tmp_path):
+    # the area w t is a quadratic in (w, t), so a quadratic surface fits it exactly;
+    # the deflection, 1/(w t³), it does not
+    p, opt = project("response_surface", samples=8, surface="quadratic")
+    pts, _ = run(p, opt, tmp_path)
+    fit = optimise.fit_quality(opt, pts)
+    assert fit["objective"] < 1e-9 and 0.01 < fit["constraint 1"] < 0.2
+    p, opt = project("response_surface", samples=4, surface="quadratic")
+    from puzzle.errors import PuzzleError
+
+    with pytest.raises(PuzzleError, match="has 6 coefficients"):
+        optimise.check(p, opt)
+
+
+def test_surrogates_on_known_functions():
+    import numpy as np
+
+    from puzzle import surrogates
+
+    rng = np.random.default_rng(0)
+    x = rng.random((12, 2))
+    y = np.sin(3 * x[:, 0]) + x[:, 1] ** 2
+    gp = surrogates.fit_gaussian(x, y)
+    mu, sd = gp.predict(x)
+    assert np.allclose(mu, y, atol=1e-3) and np.all(sd < 0.05)  # through its data
+    far = gp.predict(np.array([[3.0, 3.0]]))[1][0]
+    assert far > 5 * sd.max()  # unsure away from it
+    q = surrogates.Surface("quadratic", x, 1 + 2 * x[:, 0] - x[:, 1] + 3 * x[:, 0] * x[:, 1])
+    assert q(np.array([[0.5, 0.5]]))[0] == pytest.approx(1 + 1 - 0.5 + 0.75)
+    assert surrogates.expected_improvement(np.array([0.0]), np.array([1e-9]), 1.0)[0] == (
+        pytest.approx(1.0))  # fmt: skip
+    assert surrogates.feasibility(np.array([0.0]), np.array([1.0]))[0] == pytest.approx(0.5)

@@ -2105,8 +2105,11 @@ class Optimisation(ProjectObject):
     latin_hypercube or sobol (`samples` points, `seed`), or an optimiser choosing each
     point from the last: cobyla or nelder_mead (local, from the variables' current
     values) or differential_evolution (global; `population` per generation for
-    `generations`). The objective (minimised or maximised) and the constraints read
-    post-solve outputs at each point. A shoot-out study runs every solver per point
+    `generations`), or bayesian (a Gaussian process of each output, the next point by
+    expected improvement) or response_surface (a surface fitted to the points, its best
+    point solved to check it), both starting from `samples` Latin hypercube points. The
+    objective (minimised or maximised) and the constraints read post-solve outputs at
+    each point. A shoot-out study runs every solver per point
     (`reads` the primary's outputs, or the worst).
     """
 
@@ -2123,8 +2126,19 @@ class Optimisation(ProjectObject):
         "cobyla",
         "nelder_mead",
         "differential_evolution",
+        "bayesian",
+        "response_surface",
     ] = "latin_hypercube"
-    samples: int = Field(default=10, ge=1, le=10000, description="points of a sampled DOE")
+    surface: Literal["rbf", "quadratic"] = Field(
+        default="rbf", description="response surface: radial basis functions through "
+        "every point, or a quadratic by least squares")  # fmt: skip
+    samples: int = Field(
+        default=10,
+        ge=1,
+        le=10000,
+        description="points of a sampled DOE, or the "
+        "Latin hypercube a Bayesian or response surface run starts from",
+    )
     levels: int = Field(default=3, ge=2, le=50, description="full factorial: per variable")
     seed: int = Field(default=0, description="the sampler's seed: the same points each run")
     max_solves: int | None = Field(default=None, ge=1, description="the most points run")

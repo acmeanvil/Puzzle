@@ -108,6 +108,12 @@ VALUES = {
     "tapped": "Cap screw in a tapped hole (head annulus, thread)",
     "stud_nuts": "Stud with two nuts (nut annuli)",
     "stud_tapped": "Stud in a tapped hole, with a nut (thread, nut annulus)",
+    # An optimisation's method and surface (ADR 0063)
+    "sobol": "Sobol sequence",
+    "cobyla": "COBYLA",
+    "nelder_mead": "Nelder–Mead",
+    "bayesian": "Bayesian (Gaussian process)",
+    "rbf": "Radial basis functions",
 }
 
 

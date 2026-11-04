@@ -20,6 +20,16 @@ sensitivities first. An optimiser chooses each point from the last:
 - `differential_evolution`: global, for choices, integers or several optima;
   `population` points per generation for up to `generations`, seeded. It costs
   population × (generations + 1) solves at most.
+- `bayesian`: for expensive models, where every solve counts. A Gaussian process of
+  each output chooses the point with the most expected improvement that is likely
+  feasible. It starts from `samples` Latin hypercube points (4 to 2 × the variables
+  + 4 is plenty) and stops at `samples` + 20 or when little improvement is left. It
+  was the most accurate in the fewest solves on the cantilever benchmark.
+- `response_surface`: a surface (`surface` `rbf` or `quadratic`) through the points,
+  its best point solved to check it, refitted, until that point is already solved.
+  The cheapest when the response is smooth. Read `surface_fit` (leave-one-out error
+  per output, a share of its range): above about 10 %, don't trust the surface's
+  optimum without the check solve (which it always makes).
 
 Optimisers round each continuous variable to its `resolution` (default a round
 thousandth of its range), so the same point is the same run. They are replayed over
@@ -70,7 +80,8 @@ the stored runs, so a stopped one resumes where it was.
   "reached its most points", "not run yet" when it stopped part way). `pareto` lists
   the indexes of the feasible points that no other beats on every output (the
   objective and each constraint, each away from its limit): the trade-off when a
-  second objective was made a constraint.
+  second objective was made a constraint. Each point's `origin` says what chose it
+  ("initial plan", "expected improvement", "surface optimum").
 - A failed point is infeasible with its reason, and the rest still run.
 
 ## The best point

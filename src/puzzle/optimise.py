@@ -10,7 +10,8 @@ run opens like any other. The objective and constraints are post-solve outputs (
 
 A design of experiments chooses its points up front (`plan`: full factorial, Latin
 hypercube or Sobol, seeded). An optimiser (COBYLA, Nelder–Mead, differential evolution,
-from scipy) chooses each point from the outputs of the last. Both are deterministic:
+from scipy; Bayesian optimisation and response surfaces, on `puzzle.surrogates`)
+chooses each point from the outputs of the last. Both are deterministic:
 the same project, settings and seed ask for the same points in the same order. So
 `points` rebuilds the table from the stored runs at any time without solving (an
 optimiser is replayed, each point it asks for read from the store, until one isn't
@@ -40,7 +41,11 @@ METHODS = {
     "cobyla": "COBYLA",
     "nelder_mead": "Nelder–Mead",
     "differential_evolution": "Differential evolution",
+    "bayesian": "Bayesian (Gaussian process)",
+    "response_surface": "Response surface",
 }
+MODELLED = ("bayesian", "response_surface")  # a model of the outputs picks each point
+CANDIDATES = 11  # 2^11 Sobol candidates a step, where a model is searched
 DOE = ("full_factorial", "latin_hypercube", "sobol")
 LOCAL_POINTS = 50  # a local optimiser's most points when the optimisation sets none
 PENALTY = 100.0  # Nelder–Mead: the objective plus this times each constraint's breach
@@ -61,6 +66,7 @@ class Point:
     seconds: float = 0.0
     by_solver: dict[str, dict] = field(default_factory=dict)  # a shoot-out's outputs
     kinds: dict[str, str | None] = field(default_factory=dict)  # output -> unit kind
+    origin: str = ""  # what chose it: "initial plan", "expected improvement"...
 
     @property
     def title(self) -> str:
@@ -77,6 +83,7 @@ class Point:
                 "runs": self.runs, "objective": self.objective,
                 "constraints": self.constraints, "feasible": self.feasible,
                 "reason": self.reason, "seconds": self.seconds, "kinds": self.kinds,
+                **({"origin": self.origin} if self.origin else {}),
                 **({"solvers": self.by_solver} if self.by_solver else {})}  # fmt: skip
 
 
@@ -118,6 +125,15 @@ def check(project: Project, opt: Optimisation) -> None:
     if opt.objective is None and not opt.constraints:
         raise PuzzleError(f"optimisation '{opt.name}' has no objective or constraint to read",
                           code="inconsistent")  # fmt: skip
+    if opt.method == "response_surface" and opt.surface == "quadratic":
+        from puzzle.surrogates import quadratic_terms
+
+        need = quadratic_terms(len(opt.variables))
+        if opt.samples < need:
+            raise PuzzleError(
+                f"optimisation '{opt.name}': a quadratic surface over {len(opt.variables)} "
+                f"variables has {need} coefficients, so it starts from {need} points at "
+                f"least (samples is {opt.samples})", code="invalid")  # fmt: skip
     if opt.method in ("cobyla", "nelder_mead"):
         listed = [v.name for v in opt.variables if v.kind == "choice"]
         if listed:
@@ -309,10 +325,11 @@ class _Runner:
         self.seen: dict[str, Point] = {}
         self.limit = limit(opt)
 
-    def at(self, values: dict[str, float]) -> Point:
+    def at(self, values: dict[str, float], origin: str = "") -> Point:
         from puzzle.project.graph import run_hashes
 
         p = _point(self.project, self.opt, len(self.points) + 1, values)
+        p.origin = origin
         if p.title in self.seen:
             return self.seen[p.title]
         if len(self.points) >= self.limit:
@@ -394,6 +411,10 @@ def limit(opt: Optimisation) -> int:
         return len(plan(opt))
     if opt.method == "differential_evolution":
         n = _members(opt) * (opt.generations + 1)
+    elif opt.method == "bayesian":
+        n = opt.samples + 20
+    elif opt.method == "response_surface":
+        n = opt.samples + 10
     else:
         n = LOCAL_POINTS
     return opt.max_solves if opt.max_solves is not None else n
@@ -412,9 +433,12 @@ def snap(var, x: float) -> float:
     """A variable's value as an optimiser's point holds it: an integer, or a multiple of
     its resolution, inside its bounds. The same value always gives the same point."""
     lo, hi = var.low.to_si(), var.high.to_si()
-    if var.kind == "integer":
+    return _snapped(var.kind, lo, hi, None if var.kind == "integer" else resolution(var), x)
+
+
+def _snapped(kind: str, lo: float, hi: float, step: float | None, x: float) -> float:
+    if kind == "integer":
         return float(np.clip(round(x), math.ceil(lo), math.floor(hi)))
-    step = resolution(var)
     return float(f"{float(np.clip(round(x / step) * step, lo, hi)):.12g}")
 
 
@@ -513,6 +537,13 @@ def _optimise(r: _Runner) -> str:
     from scipy.optimize import NonlinearConstraint, differential_evolution, minimize
 
     opt = r.opt
+    if opt.method in MODELLED:
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")  # fits on few points
+                return (_bayesian if opt.method == "bayesian" else _surface)(r)
+        except _Stop as stop:
+            return str(stop)
     merit = _Merit(opt)
     bounds, start, whole = _coded(opt, r.project)
 
@@ -557,13 +588,232 @@ def _optimise(r: _Runner) -> str:
     return "converged" if res.success else str(res.message)
 
 
+# --- methods that model the outputs (phase 3) -----------------------------------------
+
+
+def _spec(opt: Optimisation) -> list[tuple]:
+    """Each variable in SI once (name, kind, low, high, resolution, choices): unit
+    conversions are slow, and a model's search converts thousands of points."""
+    out = []
+    for v in opt.variables:
+        if v.kind == "choice":
+            out.append((v.name, "choice", 0.0, 0.0, None, v.values()))
+        else:
+            step = None if v.kind == "integer" else resolution(v)
+            out.append((v.name, v.kind, v.low.to_si(), v.high.to_si(), step, None))
+    return out
+
+
+def _scaled(opt: Optimisation, values: dict[str, float], spec=None) -> np.ndarray:
+    """A point's variables scaled 0..1, low to high (a choice by its index)."""
+    out = []
+    for name, kind, lo, hi, _step, vals in spec or _spec(opt):
+        x = values[name]
+        if kind == "choice":
+            i = int(np.argmin([abs(c - x) for c in vals]))
+            out.append(i / (len(vals) - 1) if len(vals) > 1 else 0.0)
+        else:
+            out.append((x - lo) / (hi - lo))
+    return np.array(out)
+
+
+def _from_scaled(opt: Optimisation, u, spec=None) -> dict[str, float]:
+    out = {}
+    for (name, kind, lo, hi, step, vals), x in zip(spec or _spec(opt), u, strict=True):
+        x = float(np.clip(x, 0.0, 1.0))
+        if kind == "choice":
+            out[name] = vals[int(round(x * (len(vals) - 1)))]
+        else:
+            out[name] = _snapped(kind, lo, hi, step, lo + x * (hi - lo))
+    return out
+
+
+def _initial(r: _Runner) -> None:
+    """The Latin hypercube a modelled method starts from: the same points as a Latin
+    hypercube design with this seed and size, so its runs are shared."""
+    first = r.opt.model_copy(update={"method": "latin_hypercube", "max_solves": None})
+    for values in plan(first):
+        r.at(values, "initial plan")
+
+
+def _data(opt: Optimisation, pts: list[Point]):
+    """What the models are fitted to: the points (0..1), the scaled objective, and each
+    limit's scaled margin (a failed point the worst, every limit broken)."""
+    merit = _Merit(opt)
+    spec = _spec(opt)
+    x = np.array([_scaled(opt, p.values, spec) for p in pts])
+    f = np.array([merit.objective(p) for p in pts])
+    g = np.array([merit.margins(p) for p in pts], float).reshape(len(pts), len(merit.limits))
+    return x, f, g
+
+
+def _candidates(opt: Optimisation, step: int, near) -> np.ndarray:
+    """Where a model is searched: a Sobol set over the whole range, and (Bayesian)
+    a cloud round the best point so far; seeded by the step, so a replay matches."""
+    from scipy.stats import qmc
+
+    d = len(opt.variables)
+    u = qmc.Sobol(d, scramble=True, seed=opt.seed + 1000 * step).random_base2(CANDIDATES)
+    if near is not None:
+        rng = np.random.default_rng(opt.seed + step)
+        u = np.vstack([u, np.clip(near + rng.normal(0.0, 0.05, (512, d)), 0.0, 1.0)])
+    return u
+
+
+def _key(opt: Optimisation, values: dict[str, float]) -> tuple:
+    return tuple(values[v.name] for v in opt.variables)
+
+
+def _fresh(r: _Runner, u: np.ndarray) -> tuple[np.ndarray, list[dict]]:
+    """The candidates as points not run yet, each once, snapped onto the grid."""
+    seen = {_key(r.opt, p.values) for p in r.points}
+    spec = _spec(r.opt)
+    keep, values = [], []
+    for row in u:
+        vals = _from_scaled(r.opt, row, spec)
+        k = _key(r.opt, vals)
+        if k not in seen:
+            seen.add(k)
+            keep.append(_scaled(r.opt, vals, spec))
+            values.append(vals)
+    return np.array(keep), values
+
+
+def _bayesian(r: _Runner) -> str:
+    """Bayesian optimisation (ADR 0063 item 4): a Gaussian process of the objective and
+    of each limit's margin over the points so far; the next point the one with the
+    most expected improvement times the probability that every limit holds (before a
+    feasible point, the most likely feasible). Stops when the best expected improvement
+    is below the tolerance (a share of the objective's first value)."""
+    from puzzle.surrogates import expected_improvement, feasibility, fit_gaussian
+
+    opt = r.opt
+    _initial(r)
+    step = 0
+    while True:
+        step += 1
+        pts = list(r.points)
+        x, f, g = _data(opt, pts)
+        ok = np.array([p.feasible for p in pts])
+        near = x[np.flatnonzero(ok)[np.argmin(f[ok])]] if ok.any() else None
+        cand, values = _fresh(r, _candidates(opt, step, near))
+        if not values:
+            return "every point of its grid is run"
+        score = np.ones(len(cand))
+        for j in range(g.shape[1]):
+            score *= feasibility(*fit_gaussian(x, g[:, j]).predict(cand))
+        if opt.objective is not None and ok.any():
+            mu, sd = fit_gaussian(x, f).predict(cand)
+            score *= expected_improvement(mu, sd, float(f[ok].min()))
+            if float(score.max()) < opt.tolerance:
+                return "converged"
+            why = "expected improvement"
+        elif ok.any():
+            return "found a feasible point"  # constraints only: that was the question
+        else:
+            why = "likely feasible"
+        r.at(values[int(np.argmax(score))], why)
+
+
+def _surface(r: _Runner) -> str:
+    """A response surface (ADR 0063 item 4): surfaces of the objective and each limit's
+    margin through the solved points, optimised (a Sobol search, then COBYLA on the
+    surface), and that point solved to check it; refitted with it, until the surface's
+    best point is one already solved."""
+    from scipy.optimize import minimize
+
+    from puzzle.surrogates import Surface
+
+    opt = r.opt
+    d = len(opt.variables)
+    _initial(r)
+    step = 0
+    while True:
+        step += 1
+        pts = [p for p in r.points if p.run]
+        if len(pts) < d + 2:
+            return "too few points solved to fit a surface"
+        x, f, g = _data(opt, pts)
+        sf = Surface(opt.surface, x, f) if opt.objective is not None else None
+        sg = [Surface(opt.surface, x, g[:, j]) for j in range(g.shape[1])]
+        u = _candidates(opt, step, None)
+        pf = sf(u) if sf is not None else np.zeros(len(u))
+        pg = np.column_stack([s(u) for s in sg]) if sg else np.zeros((len(u), 0))
+        feasible = np.all(pg >= 0, axis=1)
+        k = int(np.argmin(np.where(feasible, pf, np.inf)) if feasible.any()
+                else np.argmax(pg.min(axis=1)))  # fmt: skip
+        best = u[k]
+        if sf is not None and feasible.any():
+            inside = opt.tolerance / 10
+            cons = [{"type": "ineq", "fun": lambda c, s=s, a=inside: float(s(c)[0]) - a}
+                    for s in sg]  # fmt: skip
+            got = minimize(lambda c, f_=sf: float(f_(c)[0]), best, method="COBYLA",
+                           bounds=[(0.0, 1.0)] * d, constraints=cons,
+                           options={"rhobeg": 0.1, "tol": opt.tolerance / 10,
+                                    "maxiter": 2000})  # fmt: skip
+            if all(float(s(got.x)[0]) >= 0 for s in sg) and float(sf(got.x)[0]) <= pf[k]:
+                best = got.x
+        values = _from_scaled(opt, best)
+        if _key(opt, values) in {_key(opt, p.values) for p in r.points}:
+            return "converged: the surface's best point is solved"
+        r.at(values, "surface optimum")
+
+
+def fit_quality(opt: Optimisation, pts: list[Point]) -> dict[str, float | None]:
+    """How well a response surface (of the optimisation's kind) fits each output: its
+    leave-one-out error as a share of the output's range over the solved points (ADR
+    0063 item 4: a poor fit is seen). None where too few points to tell."""
+    from puzzle.surrogates import leave_one_out
+
+    out = {}
+    for key in output_keys(opt):
+        done = [p for p in pts if p.run and output_of(p, key) is not None]
+        if not done:
+            out[key] = None
+            continue
+        x = np.array([_scaled(opt, p.values) for p in done])
+        out[key] = leave_one_out(opt.surface, x, np.array([output_of(p, key) for p in done]))
+    return out
+
+
+_REPLAYS: dict[tuple, Points] = {}  # replayed tables: a Bayesian replay refits its models
+
+
+def _replay_key(project: Project, store, opt: Optimisation) -> tuple | None:
+    """What a replayed table depends on: the optimisation, the model (its study's run
+    keys), and the store's runs (their count and the newest)."""
+    if store is None:
+        return None
+    from puzzle.project.graph import run_hashes
+
+    try:
+        keys = run_hashes(project).get(opt.study)
+    except PuzzleError:
+        return None
+    runs = store.runs()
+    outputs = "".join(
+        o.model_dump_json()
+        for o in project.objects.values()
+        if o.kind in ("operator", "probe", "result")
+    )  # what reads the runs
+    return (opt.model_dump_json(), repr(keys), outputs, str(getattr(store, "root", id(store))),
+            len(runs), runs[-1].run_id if runs else "")  # fmt: skip
+
+
 def points(project: Project, store, opt: Optimisation) -> Points:
     """Every point with what its stored runs say, without solving (the table). A design
     of experiments lists every planned point; an optimiser is replayed over the stored
     runs, so its points are listed up to the first not run yet."""
     r = _Runner(project, opt, None, None, store, None)
     if adaptive(opt):
+        key = _replay_key(project, store, opt)
+        if key is not None and key in _REPLAYS:
+            return _REPLAYS[key]
         r.points.ended = _optimise(r)
+        if key is not None:
+            if len(_REPLAYS) >= 8:
+                _REPLAYS.pop(next(iter(_REPLAYS)))
+            _REPLAYS[key] = r.points
         return r.points
     for values in plan(opt):
         try:

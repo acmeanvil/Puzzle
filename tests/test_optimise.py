@@ -66,7 +66,7 @@ def stand_in(store, fail=lambda w, t: False, calls=None):
             calls.append((solver, w, t))
         if fail(w, t):
             raise PuzzleError("the mesh was refused", code="mesh_failed")
-        run_id = f"r{len(store.records)}"
+        run_id = f"r{len(store.records)}-{uuid4().hex[:8]}"  # unique, as a store's are
         u = np.array([[0.0, 0, 0], [0, -deflection(w, t), 0]])
         field = Field("displacement", "node", ["x", "y", "z"], np.array([1, 2]), u)
         store.results[run_id] = Results(

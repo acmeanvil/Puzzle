@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
     QPushButton,
     QToolButton,
     QVBoxLayout,
@@ -442,8 +443,8 @@ class Minimap(QGraphicsView):
 
 
 class SchematicPanel(QWidget):
-    """The schematic with its bar: search, state filter, use wires, what a change
-    reaches, fit, tidy, export."""
+    """The schematic with its bar: add operator, search, state filter, use wires, what
+    a change reaches, fit, tidy, export."""
 
     selected = Signal(str)  # a node id, "" for none
 
@@ -486,6 +487,17 @@ class SchematicPanel(QWidget):
             "(downstream), instead of what it is built from"
         )
         self.reach.toggled.connect(lambda _: self.highlight())
+        self.operators = QToolButton(text="Add operator ▾")  # ADR 0062, beside Tab
+        # Qt's own arrow overlaps the text on a button sized to it; the label has one
+        self.operators.setStyleSheet("QToolButton::menu-indicator { image: none; width: 0; }")
+        self.operators.setToolTip(
+            "Add an operator (numbers, sliders, expressions, tables; reduce, check, "
+            "plot, export), wired from the selected node's output when it fits"
+        )
+        self.operators.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.operators.setMenu(QMenu(self.operators))
+        self.operators.menu().setToolTipsVisible(True)
+        self.operators.menu().aboutToShow.connect(self._operator_menu)
         self.fit = QPushButton("Fit")
         self.fit.clicked.connect(self.fit_all)
         self.tidy = QPushButton("Tidy layout")
@@ -501,7 +513,7 @@ class SchematicPanel(QWidget):
                 QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
             )
             combo.setMinimumContentsLength(6)
-        for w in (self.search, self.state_filter, self.uses, self.reach):
+        for w in (self.operators, self.search, self.state_filter, self.uses, self.reach):
             bar.addWidget(w)
         bar.addStretch(1)
         for w in (self.fit, self.tidy, self.export):
@@ -898,6 +910,39 @@ class SchematicPanel(QWidget):
             outs = node.outputs()
             return (node.object, outs[0].key) if outs else (None, "out")
         return self.source_of(node, "")
+
+    def _operator_menu(self) -> None:
+        """The toolbar's Add operator menu, built when opened: Find an operator… (the
+        palette), then every operator type by its group."""
+        from puzzle.operators import TYPES
+
+        menu = self.operators.menu()
+        menu.clear()
+        if self.window.session is None:
+            menu.addAction("Open a project first").setEnabled(False)
+            return
+        menu.addAction("Find an operator…  (Tab)", lambda: self.open_palette(self._centre()))
+        menu.addSeparator()
+        groups: dict[str, QMenu] = {}
+        order = {"Data": 0, "Results": 1, "Display": 2}  # inputs first, as the flow runs
+        for t in sorted(TYPES.values(), key=lambda t: order.get(t.group, 9)):
+            if t.group not in groups:
+                groups[t.group] = menu.addMenu(t.group)
+                groups[t.group].setToolTipsVisible(True)
+            action = groups[t.group].addAction(t.label, lambda k=t.key: self.add_operator(k))
+            action.setToolTip(t.help)
+
+    def _centre(self) -> QPointF:
+        return self.canvas.mapToScene(self.canvas.viewport().rect().center())
+
+    def add_operator(self, type_: str) -> str | None:
+        """An operator from the toolbar: wired from the selected node when its output
+        fits, placed in the middle of the view."""
+        from puzzle.gui.operators import new_operator
+
+        source, port = self.palette_source()
+        at = self._centre()
+        return new_operator(self.window, type_, source, port, (at.x(), at.y()))
 
     def open_palette(self, at: QPointF | None = None):
         """The operator palette (Tab, or a double-click on the empty canvas): the new

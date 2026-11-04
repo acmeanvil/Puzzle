@@ -143,7 +143,8 @@ def new_optimisation(window, study_id: str | None = None):
             "COBYLA and Nelder–Mead improve on the current values; differential "
             "evolution searches the whole range"),
         Ask("samples", "Points", kind="text", default="10",
-            help="A sampled plan's points, or the most an optimiser runs"),
+            help="A sampled plan's points (Bayesian and response surface: the plan they "
+            "start from), or the most a local or evolutionary optimiser runs"),
         Ask("name", "Name", kind="text", default="Optimisation"),
     ], check=check)  # fmt: skip
     if not got:
@@ -152,9 +153,9 @@ def new_optimisation(window, study_id: str | None = None):
             "variables": parse_variables(got["variables"]),
             "constraints": parse_constraints(got["constraints"], names)}  # fmt: skip
     if got.get("samples", "").strip().isdigit():
-        from puzzle.optimise import DOE
+        from puzzle.optimise import DOE, MODELLED
 
-        key = "samples" if got["method"] in DOE else "max_solves"
+        key = "samples" if got["method"] in DOE + MODELLED else "max_solves"
         data[key] = int(got["samples"])
     if got.get("objective"):
         data["objective"] = {"source": got["objective"], "sense": got["sense"]}
@@ -294,6 +295,20 @@ class OptimisationPanel(QWidget):
         self.live = False
         self._render(opt)
 
+    def _fit_text(self, opt, names) -> str:
+        """A response surface's fit (ADR 0063 item 4: a poor fit is seen): each output's
+        leave-one-out error as a share of its range."""
+        from puzzle import optimise
+
+        if opt.method != "response_surface":
+            return ""
+        fit = optimise.fit_quality(opt, self.points)
+        sources = ([opt.objective] if opt.objective else []) + list(opt.constraints)
+        parts = [f"{names.get(o.source, k)} {fit[k] * 100:.1f} %"
+                 for k, o in zip(optimise.output_keys(opt), sources, strict=True)
+                 if fit.get(k) is not None]  # fmt: skip
+        return (" Surface fit (leave-one-out error): " + ", ".join(parts) + ".") if parts else ""
+
     def start_live(self) -> None:
         """A run is starting: points arrive one by one (`add_point`) and are drawn as
         they come, without reading the store again."""
@@ -319,6 +334,9 @@ class OptimisationPanel(QWidget):
             heads.append(names.get(opt.objective.source, "Objective"))
         heads += [names.get(c.source, "Constraint") for c in opt.constraints]
         heads += ["Feasible", "Time"]
+        chosen = opt.method in optimise.MODELLED
+        if chosen:
+            heads.append("Chosen by")  # the initial plan, or what the model picked
         self.table.setColumnCount(len(heads))
         self.table.setHorizontalHeaderLabels(heads)
         self.table.setRowCount(len(self.points))
@@ -335,6 +353,8 @@ class OptimisationPanel(QWidget):
                              else quantity_text(c, p.kinds.get(f"constraint {i + 1}")))  # fmt: skip
             cells.append("Yes" if p.feasible else (p.reason or "No"))
             cells.append(f"{p.seconds:.0f} s" if p.run else "")
+            if chosen:
+                cells.append(p.origin.capitalize())
             for c, text in enumerate(cells):
                 item = QTableWidgetItem(text)
                 item.setData(ROLE, next(iter(p.runs.values()), ""))
@@ -360,7 +380,8 @@ class OptimisationPanel(QWidget):
             head
             + (f" Best: {best}." if best else (" The model is at the best point."
                                                if top is not None else ""))
-            + (f" Sensitivities: {words}." if words else ""))  # fmt: skip
+            + (f" Sensitivities: {words}." if words else "")
+            + self._fit_text(opt, names))  # fmt: skip
         self.apply_button.setEnabled(bool(best))
         keep = self.plot_of.currentData()
         self.plot_of.blockSignals(True)

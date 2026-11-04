@@ -1,6 +1,6 @@
 # 0063. Design optimisation and design of experiments: a study that chooses its own points
 
-- Status: Accepted (2026-11-02); phases 1 and 2 built (2026-11-03)
+- Status: Accepted (2026-11-02); phases 1, 2 and 3 built (2026-11-03)
 - Date: 2026-11-02
 
 ## Context
@@ -70,7 +70,8 @@ So the points can't be listed in advance, which is what a sweep needs.
      solve counts (tens of solves, not hundreds). From optuna (MIT, pure Python, on
      conda-forge; its GP sampler for continuous and integer variables, TPE where
      choices are many), added to Puzzle's environment; the points stay Puzzle's runs,
-     optuna only proposes them.
+     optuna only proposes them. *Changed in phase 3: optuna's GP sampler needs
+     PyTorch, so Puzzle fits its own Gaussian process in scipy (`puzzle.surrogates`).*
    A budget bounds every method: the most solves, solver time or wall time, and a
    tolerance on the objective. Agents spend their own budget too (ADR 0015).
 
@@ -311,3 +312,64 @@ Not done in phase 2:
   live view.
 - COBYLA on Rosenbrock's valley stalls on the 0.001 grid (Nelder–Mead and differential
   evolution reach the minimum); COBYLA is for smooth sizing, as item 4 says.
+
+## Phase 3 built (2026-11-03)
+
+- **Bayesian optimisation without optuna** (a change to item 4, the maintainer's choice):
+  optuna's Gaussian-process sampler needs PyTorch, several hundred megabytes on every
+  install for one method. `puzzle.surrogates` has the model instead, in numpy and scipy:
+  - A Gaussian process with a Matérn 5/2 kernel: a length scale per variable, signal
+    and noise by maximum marginal likelihood (L-BFGS-B from two fixed starts, so the
+    same data give the same fit). The noise term takes a remeshed point's scatter.
+  - Expected improvement, and the probability that a margin holds.
+- **`bayesian`**:
+  - It starts from `samples` Latin hypercube points: the same points as a Latin
+    hypercube design of that seed and size, so their runs are shared.
+  - It models the objective and each limit's margin with a Gaussian process.
+  - The next point is the most expected improvement times the probability that every
+    limit holds; before any point is feasible, the most likely feasible point.
+  - The search covers 2048 Sobol candidates over the range plus 512 round the best
+    point, snapped to the variables' grid, so no point is asked for twice.
+  - It stops when the best expected improvement is below `tolerance` (a share of the
+    objective's first value), or at `samples` + 20 points.
+  - Choices are allowed, by their index.
+- **`response_surface`**:
+  - It starts from the same Latin hypercube.
+  - It fits a surface (`surface`: `rbf`, scipy's thin-plate `RBFInterpolator` with a
+    linear part through every point; or `quadratic` by least squares) to the objective
+    and to each margin.
+  - It optimises on the surface (a Sobol search, then COBYLA on the surface, a little
+    inside each limit) and solves that point to check it, then refits with it. It
+    stops when the surface's best point is already solved, or at `samples` + 10.
+  - A quadratic surface needs as many starting points as it has coefficients, (d + 1)
+    (d + 2) / 2, or it is refused.
+  - `fit_quality` is each output's leave-one-out error as a share of its range. It is
+    shown in the panel's summary, MCP `optimisation_points` (`surface_fit`) and the
+    CLI, so a poor fit is seen.
+- **Points say what chose them** (`Point.origin`): "initial plan", "expected
+  improvement", "likely feasible", "surface optimum". This is a "Chosen by" column in
+  the panel for these two methods, and in the CLI and MCP output.
+- **Speed**:
+  - Each step converts the variables' bounds to SI once (`_spec`): a model's search
+    converts thousands of points, and pint conversions cost 0.4 ms each.
+  - The replayed table is cached until the optimisation, the study's run keys, the
+    operators, result tools or derived results, or the store's runs change. A Bayesian
+    replay refits its models, and the schematic, Advisor and panel all read the table.
+- **Tests**:
+  - `tests/test_optimisers.py`: both methods find the lightest beam (within 0.5 % of
+    58.48 mm², at most 14 points from 8). The start is the Latin hypercube design, and
+    the replay matches. A Bayesian run resumes on its path. A quadratic fits the area
+    exactly (leave-one-out error below 1e-9) and the deflection not (1 to 20 %). Also
+    the surrogates on known functions.
+  - `tests/integration/test_optimise_cantilever.py` on CalculiX, from four points:
+    - Bayesian: t = 7.24 mm, deflection 1.994 mm against the 2 mm limit, 7 solves.
+    - Response surface (RBF): t = 7.25 mm, 1.986 mm, 6 solves.
+    - For comparison, COBYLA ended at 7.26 mm in 5 solves.
+  - A test fix: the stand-in store's run ids are unique now. Reused ids ("r3" in
+    every test) hit the derived-result cache, which is keyed by run id, so one test
+    read another's results.
+
+Not done in phase 3:
+- A plot of a response surface itself (the panel shows its fit as numbers).
+- TPE for many choices (the ADR's other optuna sampler): the Gaussian process takes
+  choices by index, and differential evolution remains the method for many of them.

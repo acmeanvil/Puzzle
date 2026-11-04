@@ -187,3 +187,26 @@ def test_tab_opens_the_palette(window):
     palette.choose("panel")
     op = _op(w, "Panel 1")
     assert w.schematic.view.positions[str(op.id)] == pytest.approx(palette.at, abs=0.1)
+
+
+def test_the_toolbar_lists_every_operator_by_group(window):
+    from puzzle.operators import TYPES
+
+    w = window
+    menu = w.schematic.operators.menu()
+    menu.aboutToShow.emit()
+    actions = menu.actions()
+    assert actions[0].text().startswith("Find an operator")
+    groups = {a.text(): a.menu() for a in actions if a.menu() is not None}
+    assert set(groups) == {t.group for t in TYPES.values()}
+    listed = {a.text() for m in groups.values() for a in m.actions()}
+    assert listed == {t.label for t in TYPES.values()}
+    runs = w.schematic.items[f"runs:{_study(w).id}"]
+    w.schematic.chosen(runs.node)  # wired from the selected run, as Tab's palette is
+    reduce = next(a for a in groups["Results"].actions() if a.text() == TYPES["reduce"].label)
+    assert reduce.toolTip() == TYPES["reduce"].help
+    reduce.trigger()
+    op = next(o for o in w.session.project.objects.values()
+              if getattr(o, "type", None) == "reduce" and o.name.startswith("Reduce"))  # fmt: skip
+    assert op.inputs["result"].source == _study(w).id
+    assert str(op.id) in w.schematic.view.positions
