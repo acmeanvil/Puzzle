@@ -1,6 +1,6 @@
 # 0064. Dataframe operators: results as polars tables to shape, reduce and export
 
-- Status: Proposed; review answered (2026-11-03), operator list under review
+- Status: Accepted (2026-11-03): review answered, the operator list from 0064A
 - Date: 2026-11-03
 
 ## Context
@@ -112,15 +112,30 @@ organise, reduce, filter and sort the results data.
      and the target's hash covers the source's run key), and cycles are refused, as
      ADR 0062 refuses them.
 
-6. **GUI**:
-   - The schematic's Add operator menu gains a Tables group.
-   - A table node shows "1 234 rows × 6 columns" and its first column names.
-   - Properties edits each operator with dropdowns of the upstream table's columns
-     (readable names, never ids), and expressions are checked as typed.
-   - A **Table viewer** (a dock beside Plots) shows the selected table's rows: a
-     sortable grid, column types and units, and the count. Clicking a header to sort,
-     or a cell to filter, writes that operator's settings as one Edit, so the view and
-     the node never disagree.
+6. **GUI: presenting the operators** (0064A's "Presenting them", adopted with its
+   review):
+   - **Few node types, each with modes**: about 45 types in all (one List with a Mode
+     dropdown, one Expression, one Filter rows). The title shows the mode ("List ·
+     sort"), and changing it keeps the wires that still fit.
+   - **Seven groups in the order work flows**, the same in the toolbar's Add operator
+     menu, the palette, the outline, MCP's lists and the skills: Inputs, Geometry,
+     Logic, Results, Tables, Checks, Outputs, coloured by output type.
+   - **What fits first**: with a node selected, or a wire dropped on empty canvas, a
+     "Fits here" section lists the nodes whose input takes that output; recently used
+     nodes follow.
+   - **Aliases**: Grasshopper's, Excel's and SQL's names find the node ("Cull Pattern →
+     Filter rows (every nth)").
+   - **Recipes**: small wired chains for common jobs (worst N nodes labelled, peak per
+     part as a bar chart, two solvers' difference, mass from geometry, reactions in kN,
+     a stress margin). Users' own clusters (item 9) save the same way.
+   - **Help**: one line and an example per node in the palette; readable dropdowns;
+     advanced options folded.
+   - **Values on the canvas**: a table node shows "1 234 rows × 6"; hovering a wire
+     shows what flows.
+   - The **Table viewer** (a dock beside Plots) shows the selected table's rows: a
+     sortable grid, column types and units, and the count. Sorting or filtering there
+     writes that operator's settings as one Edit. Properties offers the upstream
+     table's columns as dropdowns.
 
 7. **Twins**:
    - CLI `puzzle table PROJECT OPERATOR [--csv | --parquet FILE] [--rows N]`.
@@ -130,15 +145,44 @@ organise, reduce, filter and sort the results data.
    - A skill `dataframe-operators`: when to use which, the units, the mistakes (joining
      different meshes by node id, aggregating across solvers).
 
-8. **Phases**:
-   1. Frame, the Result table and Points table sources, Columns, Filter rows, Sort,
-      Top N, New column, Convert units, Group and aggregate, To number, the Table
-      viewer, CSV, Parquet and Excel export, both expression syntaxes.
-   2. Join, Stack, Pivot and unpivot, Round, Distinct, cumulative and rolling, Plot, the
-      probe, contact, bolt and mode sources, the wide layout setting.
-   3. Pre-solve tables: imported fields and files reshaped, To field into a study's
-      loads, a run's table into another study as a transfer.
-   4. The operators the Grasshopper review accepts (`0064A-grasshopper-review.md`).
+8. **Phases** (0064A's row ids in brackets):
+   1. **Tables and the presentation.**
+      - Frame; the Result table, Points table and File sources (CSV, Parquet, xlsx, a
+        folder) [A7, J1].
+      - Columns, Filter rows with its condition builder [J2], Sort, Top N, New column,
+        Convert units [J4], Group and aggregate [J3], Round [B7], To number.
+      - CSV, Parquet and Excel export [A8]; both expression syntaxes.
+      - The Expression gains comparisons as verdicts [B2] and more functions [B3]; List
+        gains statistics [B5]; Lookup [A5]; Measure [E4, F3].
+      - The Table viewer [A13]; item 6's groups, modes, aliases, help and "Fits here".
+   2. **Combining and showing.**
+      - Join, Stack [C2], Pivot and unpivot, Distinct, Fill missing [C7], cumulative
+        and rolling [B6].
+      - List modes [B8, C4, C5, C11 lists]; Text [C12, J7]; vector expressions [D3].
+      - Nearest [D4, G2], Divide [E5], Section [F10], Clearance [F11].
+      - The Mesh table [G1], Project table [J5], Run history [A12], and the probe,
+        contact, bolt and mode sources.
+      - Preview in the 3D view [I1]; bar and scatter plots [I3]; the wide layout setting.
+   3. **Pre-solve tables and model inputs.**
+      - Imported fields and files reshaped, To field into a study's loads, a run's
+        table into another study as a transfer.
+      - Toggle [A3], Choice [A4], the 2D slider [A2].
+      - Points tidy and point-cloud thinning [D5, D7]; complex columns for harmonic
+        tables [B9]; date and time columns [B11]; tags on objects [J6].
+   4. **Reuse and reports**: clusters with their own ports, saved across projects
+      [A11]; recipes; Snapshot (a result view saved as a PNG) [J8].
+   - **Later**: reroute dots [A14], Freeze [A15].
+   - **Elsewhere** (0064A's outcome):
+     - ADR 0062 phase 3: geometry from data [D1, D2, D6, D8, E1, F4, F5, C11 sets of
+       selections, H4].
+     - ADR 0063: [A16, C9].
+     - A geometry ADR (0065): [E2, F2, F9, F12–F16, H2, H3, H6, E7's Measure
+       additions].
+     - A meshing ADR (0066): adaptive refinement [G3].
+
+9. **Clusters** [A11]: a group (ADR 0058) given input and output ports becomes one
+   node. It can be saved to the user's library and dropped into another project,
+   where it is copied in (not linked), so a project stays self-contained.
 
 ## Consequences
 

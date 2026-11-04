@@ -284,3 +284,15 @@ Not done in phase 2:
   parameters today).
 - A list's points don't yet feed a sketch's dimensions (phase 3, with geometry from
   data).
+
+## Phase 3 additions from the Grasshopper review (2026-11-03)
+
+ADR 0064A accepted these for phase 3 (geometry from data), with their row ids:
+
+- Points from numbers or table columns, and back [D1], in a coordinate system [D2].
+- Planes from data: a construction plane a Slider drives [D6].
+- Grids of points on a plane, a face or in a box [D8].
+- Profiles from data: polyline, circle, rectangle and polygon [E1].
+- Selection by rule as a node with data inputs [F4, F5], and selection sets (union,
+  intersection and difference of named selections) [C11].
+- Patterns in two directions and along a path, and Pattern by list [H4].
