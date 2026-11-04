@@ -1,6 +1,6 @@
 # 0066. Mesh convergence, error estimates and adaptive refinement
 
-- Status: Proposed
+- Status: Accepted (2026-11-03)
 - Date: 2026-11-03
 
 ## Context
@@ -31,8 +31,13 @@ What exists to build on:
 
 ## Decision
 
-1. **A mesh convergence study** (the first phase): a study's `convergence` setting
-   runs it on a sequence of meshes:
+1. **A mesh convergence study** (the first phase), two ways in (review answer 1):
+   - a study's own `convergence` setting, for the quick check;
+   - a **mesh study** object (kind `mesh_study`, under Studies, as an optimisation is)
+     naming the study, the levels and the quantities, for full control and for
+     several studies on one component.
+
+   Either way it runs the study on a sequence of meshes:
    - Each level scales the recipe's sizes by a ratio (default 1.5, at least three
      levels).
    - Each level is a stored run, labelled as a point is ("mesh: 2.5 mm, 41 230
@@ -80,22 +85,27 @@ What exists to build on:
      and between the recipe's minimum and maximum.
    - Each pass is a stored run with its mesh, labelled "pass 2: 63 104 nodes, error
      4.9 %".
-   - It stops at the target error (default 5 % in the energy norm), when the quantities
-     of interest change less than a tolerance, or at a budget (passes, elements, time).
+   - It stops at a target the user picks (review answer 2): the energy-norm error, or
+     a quantity of interest's change between passes, both defaulting to **2 %**. It
+     also stops at a budget (passes, elements, time).
    - The passes show as optimisation points do (ADR 0063): a table, and a plot of error
      and the quantities against elements.
-   - The final pass is the study's result. Earlier passes' runs stay until deleted, as
-     any runs do.
+   - The final pass is the study's result. Earlier passes' runs are kept for review by
+     default; an option deletes them when the run finishes, keeping their table (review
+     answer 5).
 
 5. **Solvers and meshers**:
    - **Solvers**: every finite-element adapter, since the estimate is Puzzle's own.
      CFD uses the gradient indicator on velocity or a chosen field; boundary layers
      (ADR 0019) are kept as their own control.
    - **Gmsh**: takes the size field directly.
-   - **Netgen**: takes a mesh-size file of points with sizes, which is coarser (review
-     question 3).
-   - **Anisotropic adaptation** (stretched elements following a metric from the
-     field's Hessian, as MMG does): left for review question 4.
+   - **Netgen**: supported as an adjunct to Gmsh (review answer 3), through its
+     mesh-size file of points with sizes; coarser than Gmsh's field, and said so.
+   - **Anisotropic adaptation** (review answer 4: now): elements stretched along a
+     metric from the field's Hessian, by MMG (`mmg3d`, LGPL as a separate program,
+     conda-forge). Gmsh's named groups are carried through by MMG's references, and
+     checked after each pass. It is for CFD (boundary and shear layers) and thin
+     features.
 
 6. **Twins**:
    - The CLI: `puzzle convergence PROJECT STUDY` and `puzzle adapt PROJECT STUDY`, each
@@ -115,10 +125,12 @@ What exists to build on:
    - An L-shaped corner's error refusing to converge, reported as a singularity.
 
 8. **Phases**:
-   1. The convergence study with GCI, its table and plot, the Advisor's step.
+   1. Convergence studies (the study setting and the mesh study object) with GCI, the
+      table and plot, the Advisor's step.
    2. Error estimates (ZZ structural and heat, gradient jumps), the indicator field.
-   3. Sizes from data (tables and runs) and adaptive refinement on Gmsh.
-   4. Netgen's size file, CFD indicators, and the review's answer on anisotropy.
+   3. Sizes from data (tables and runs) and adaptive refinement on Gmsh and Netgen,
+      with the 2 % default target and the keep-passes option.
+   4. Anisotropic adaptation with MMG, and CFD indicators.
 
 ## Consequences
 
@@ -155,3 +167,14 @@ What exists to build on:
    now, later or never?
 5. Should passes before the final one be kept as runs, or deleted when the adaptive
    run finishes (keeping only their table)?
+
+## Review (2026-11-03)
+
+The maintainer's answers:
+
+1. Both: a study's `convergence` setting and a mesh study object (item 1).
+2. The target is the user's choice (energy-norm error or a quantity's change),
+   defaulting to 2 % (item 4).
+3. Netgen supported, as an adjunct to Gmsh (item 5).
+4. Anisotropic adaptation now, with MMG (item 5, phase 4).
+5. Earlier passes: kept for review by default, deleting them an option (item 4).

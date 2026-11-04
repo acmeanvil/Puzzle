@@ -1,6 +1,6 @@
 # 0065. Geometry operations from the Grasshopper review: sweeps, lofts, splines, mirror, scale, SubD, faceted booleans, morphing and queries
 
-- Status: Proposed
+- Status: Accepted (2026-11-03)
 - Date: 2026-11-03
 
 ## Context
@@ -115,7 +115,7 @@ What exists to build on:
      numpy.
    - **c. A faceted limit surface:** the cage subdivided n times into triangles, then
      the faceted path (item 6). Simple, but its faces aren't smooth for meshing.
-   The proposal is a then b, b being phase 4.
+   The review chose a, then b (phase 4).
 
 8. **Morphing** [H6], two kinds with different jobs:
    - **Mesh morphing, for shape optimisation.** Handles (faces or construction points)
@@ -151,13 +151,15 @@ What exists to build on:
     between two squares a frustum's volume, a mirror's mass doubled, a spline through
     its points.
 
-11. **Phases**:
+11. **Phases** (reordered by the review: mesh morphing earlier):
     1. Mirror, scale, spline (as a path and a line body), sweep and pipe, loft; the
        Measure queries.
-    2. Patch, thicken, regions on faces, intersection points and curves; DXF splines
-       kept.
-    3. Mesh morphing for optimisation (with ADR 0063), the sketcher's spline.
-    4. Faceted booleans (manifold3d), SubD (the review's choice), B-rep `deform`.
+    2. Mesh morphing for optimisation (with ADR 0063): handles, the radial-basis morph,
+       the quality check, morphs per optimisation point.
+    3. Patch, thicken, regions on faces, intersection points and curves; DXF splines
+       kept; the sketcher's spline.
+    4. Faceted booleans (manifold3d), SubD (a: documented through NURBS, then b: the
+       `subd` step from a control cage), B-rep `deform`.
 
 ## Consequences
 
@@ -189,3 +191,15 @@ What exists to build on:
 4. `thicken` (shell to solid) and `patch` in scope?
 5. Anything missing from the lists for welds (a fillet bead along an edge), since pipe
    and sweep come close?
+
+
+## Review (2026-11-03)
+
+The maintainer's answers:
+
+1. SubD: a (through NURBS, documented), then b (a `subd` step from a control cage).
+2. manifold3d for faceted booleans: yes.
+3. Mesh morphing earlier: now phase 2, before patches and regions.
+4. `thicken` and `patch`: in scope.
+5. Welds: no operation of their own. Pipe and sweep along an edge chain make a bead
+   ("we can make it work"), and the skill shows how.
