@@ -1841,6 +1841,15 @@ class Viewport(QWidget):
         if self.plotter is not None:
             self.view.refresh()
 
+    def pin_points(self, marks: list[tuple]) -> None:
+        """Labelled points pinned in the view until the next scene (ADR 0064's Preview:
+        a table's rows): (xyz, text) pairs."""
+        self.pins = [(np.asarray(xyz, float), text, "#ffcc33") for xyz, text in marks]
+        self.shown["pins"] = [text for _, text in marks]
+        self._draw_marks()
+        if self.plotter is not None:
+            self.view.refresh()
+
     def _marks(self) -> list[tuple]:
         marks = list(self._extremes) if self.style["extremes"] and self.result_state else []
         marks += getattr(self, "pins", [])

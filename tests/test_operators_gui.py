@@ -271,3 +271,26 @@ def test_a_result_table_in_the_table_viewer(window):
     assert op.by == ["node"] and op.descending is False
     viewer._header(0)
     assert w.session.project.objects[UUID(srt)].descending is True
+
+
+def test_a_preview_pins_the_worst_nodes_and_a_bar_chart(window):
+    w = window
+    from puzzle.gui.operators import new_operator, preview
+
+    study = _study(w)
+    tid = new_operator(w, "result_table", str(study.id), "result")
+    top = new_operator(w, "top_n", tid, "out")
+    pv = new_operator(w, "preview", top, "out")
+    op = w.session.project.objects[UUID(pv)]
+    assert op.inputs["table"].source == UUID(top)
+    assert preview(w, op) == 10
+    pins = w.viewport.shown["pins"]
+    assert len(pins) == 10 and all(p.endswith("mm") for p in pins)  # deformation, shown
+    grp = new_operator(w, "group", tid, "out")
+    w.properties.edited.emit(grp, "by", ["part"])
+    w.properties.edited.emit(grp, "aggregations", ["max(deformation) as peak"])
+    plot = new_operator(w, "plot", grp, "out")
+    w.properties.edited.emit(plot, "chart", "bar")
+    w.properties.edited.emit(plot, "column", "peak")
+    w.plots.show_operator(w.session.project.objects[UUID(plot)])
+    assert w.plots.curve.bars == {0} and len(w.plots.curve.series[0][1]) == 1

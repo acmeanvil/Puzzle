@@ -71,6 +71,38 @@ Related, from the same ADR:
 - An Expression that compares (`stress <= 250 MPa`) also gives a verdict on its
   `passes` port, with a margin.
 
+## Combining (phase 2)
+
+- `join`: `table` and `other` on `by` (default the first shared column), `how` inner,
+  left or full. A column in both gets the second table's name, or `suffix`
+  ("_aster": then `vm_aster - vm` in a New column is the solvers' difference).
+- `stack`: `table`, `other`, `third`, with a `from` column (`new_name`).
+- `pivot`: `by` (the row keys), `column` (its values become columns), `pick` (the
+  values). `unpivot` is the reverse.
+- `distinct` (`by`), `fill_missing` (`fill`: forward, backward, mean, zero, value with
+  the `value` input, or drop; `pick`), and `rolling` (`column`, `reduction`, `window` 0
+  for running, `by` the order, `pick` the groups).
+
+## More sources (phase 2)
+
+- `mesh_table` (from a result): element, type, part, x, y, z, shape (1 regular, 0 flat)
+  and aspect. "The 10 worst elements": sort by shape, top 10 smallest.
+- `project_table` (`objects`: parts, bolts, materials, selections, studies, features,
+  contacts). Parts carry their volume and mass.
+- `run_history` (from a study), `history_table` (from a result tool), `mode_table`,
+  `contact_table`, `bolt_table` (from a result; `step`).
+- `nearest`: `result` and `points` (a table with x, y, z): the node, its distance and
+  the `quantities` there.
+- `section`: `result`, `target` (a construction plane), `quantities`. Its `out` is the
+  cut as a table; `force` and `moment` are numbers.
+- `divide`: `target` (a construction path, or a geometry with `selection` an edge), the
+  `count` input; it gives x, y, z and s.
+- `clearance`: `target` (a component), `selection` and `other` (parts, or
+  "Part/Selection"), the least distance where they are placed.
+- `text`: `template` with `{x}`, `{y}`, `{z}` (`{x:.1f}` for places).
+- `preview`: a table with x, y, z, labelled by `column`, pinned in the 3D view.
+- `plot`, from a table: `by[0]` against `column`, `chart` line, bar or scatter.
+
 ## Recipes
 
 - **The 20 worst nodes**: `result_table` (`quantities: ["stress:von_mises"]`) →
@@ -79,7 +111,11 @@ Related, from the same ADR:
   `["max(von_mises)"]`) → `convert_units` (MPa) → Plot or export.
 - **Margin table**: `result_table` → `new_column` (`margin = 250 MPa / von_mises - 1`)
   → `filter_rows` (`margin < 0.2`) → `sort` (by margin).
-- **Two solvers' difference**: phase 2's Join. Until then, compare two `to_number`s.
+- **Two solvers' difference**: two `result_table`s (one per solver's run, or a
+  shoot-out's) → `join` (by node, suffix "_2") → `new_column` (`diff = von_mises_2 -
+  von_mises`) → `top_n`.
+- **Test gauges against the model**: a `file` of gauge positions → `nearest` (a
+  result, `quantities`) → `join` with the measured values → `new_column` (the ratio).
 
 ## Mistakes
 

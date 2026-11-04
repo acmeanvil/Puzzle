@@ -558,6 +558,16 @@ def _export(ctx: Context, op) -> dict[str, Any]:
 
 
 def _plot(ctx: Context, op) -> dict[str, Any]:
+    got = _input(ctx, op, "value")
+    if isinstance(got, Table):  # a column against another (ADR 0064 phase 2)
+        from puzzle.operators import frames
+
+        x = op.by[0] if op.by else got.columns[0]
+        y = op.column or (got.columns[1] if len(got.columns) > 1 else got.columns[0])
+        frames._names(op, [x, y], got)
+        kinds = dict(zip(got.columns, got.kinds, strict=False))
+        rows = [list(r) for r in got.frame.select([x, y]).rows()]
+        return {"out": Table([x, y], rows, [kinds.get(x), kinds.get(y)])}
     if op.against == "sweep":
         return {"out": _over_sweep(ctx, op)}
     base = _upstream_result(ctx, op)
@@ -703,7 +713,8 @@ def _range(ctx: Context, op) -> dict[str, Any]:
 
 def _tables() -> dict:
     """The table operators (ADR 0064), in `operators.frames`."""
-    from puzzle.operators import frames
+    from puzzle.operators import frames, reshape
+    from puzzle.operators import table_sources as sources
 
     def out(fn):
         return lambda ctx, op: {"out": fn(ctx, op)}
@@ -720,7 +731,43 @@ def _tables() -> dict:
             "filter_rows": frames.filter_rows, "sort": frames.sort, "top_n": frames.top_n,
             "new_column": frames.new_column, "convert_units": frames.convert_units,
             "round": frames.round_values, "group": frames.group,
-            "to_number": frames.to_number, "lookup": _lookup, "measure": _measure}  # fmt: skip
+            "to_number": frames.to_number, "lookup": _lookup, "measure": _measure,
+            "join": reshape.join, "stack": reshape.stack, "pivot": reshape.pivot,
+            "unpivot": reshape.unpivot, "distinct": reshape.distinct,
+            "fill_missing": reshape.fill_missing, "rolling": reshape.rolling,
+            "mesh_table": out(sources.mesh_table), "project_table": out(sources.project_table),
+            "run_history": out(sources.run_history),
+            "history_table": out(sources.history_table), "mode_table": out(sources.mode_table),
+            "contact_table": out(sources.contact_table), "bolt_table": out(sources.bolt_table),
+            "nearest": out(sources.nearest), "section": sources.section,
+            "divide": out(sources.divide), "clearance": out(sources.clearance),
+            "text": _text, "preview": lambda ctx, op: {}}  # fmt: skip
+
+
+def _text(ctx: Context, op) -> dict[str, Any]:
+    """A line from its inputs (ADR 0064A rows C12, J7): {x}, {y}, {z} each as its value
+    reads in the display units ("212 MPa"); {x:.1f} gives places of the shown number."""
+    import re
+
+    from puzzle.model.units import DIMENSIONS, pretty, shown
+    from puzzle.settings import current
+
+    got = {k: _input(ctx, op, k) for k in ("x", "y", "z")}
+
+    def fill(m) -> str:
+        key, spec = m.group(1), m.group(2)
+        v = got.get(key)
+        if v is None:
+            raise PuzzleError(f"'{op.name}': {{{key}}} has nothing wired", code="inconsistent")
+        if isinstance(v, Number) and spec:
+            if v.kind in DIMENSIONS:
+                n, unit = shown(v.value, DIMENSIONS[v.kind][1], current().display_units())
+                return f"{n:{spec}} {pretty(unit)}"
+            return f"{v.value:{spec}}"
+        return v.text()
+
+    text = re.sub(r"\{([xyz])(?::([^}]*))?\}", fill, op.template or "{x}")
+    return {"out": Text(text)}
 
 
 def _random(ctx: Context, op) -> dict[str, Any]:
@@ -937,6 +984,9 @@ def parse_table(text: str) -> Table:
     for r in rows[1:]:
         row = []
         for i, cell in enumerate(r[: len(names)]):
+            if not cell.strip():  # an empty cell is a missing value, not text
+                row.append(None)
+                continue
             try:
                 v = float(cell)
                 row.append(to_si(v, units[i]) if units[i] else v)
@@ -963,6 +1013,89 @@ def _column(op, table: Table) -> ListValue:
     return ListValue([str(c) for c in cells], None, name)
 
 
+MODES = ("index_of", "shift", "chunk", "insert", "replace", "repeat", "every_nth",
+         "at_indexes", "unique", "union", "intersection", "difference", "remap", "bin",
+         "differences", "cumulative_sum", "moving_average")  # fmt: skip
+
+
+def _mode(ctx: Context, op, lst: ListValue, index, end):
+    """The List operator's other modes (ADR 0064A rows B6, B8, C4, C5, C11), on a list
+    and the `index`, `end` and `other` inputs."""
+    values, kind, numeric = lst.values, lst.kind, lst.numeric
+    other = _input(ctx, op, "other")
+    other = as_list(other) if other is not None else None
+    n = int(index.value) if index is not None else 1
+    pick = np.array if numeric else list
+    seq = list(values)
+    how = op.operation
+    if how == "index_of":
+        if other is None:
+            raise PuzzleError(f"'{op.name}': index of what? wire the other list",
+                              code="inconsistent")  # fmt: skip
+        out = [float(seq.index(v)) if v in seq else -1.0 for v in list(other.values)]
+        return np.array(out), None
+    if how == "shift":
+        return pick(seq[n:] + seq[:n]) if seq else pick([]), kind
+    if how == "chunk":  # the n-th chunk of `end` items (from 0)
+        size = int(end.value) if end is not None else 1
+        return pick(seq[n * size : (n + 1) * size]), kind
+    if how == "insert":
+        if other is None:
+            raise PuzzleError(f"'{op.name}': insert what? wire the other list",
+                              code="inconsistent")  # fmt: skip
+        return pick(seq[:n] + list(other.values) + seq[n:]), kind
+    if how == "replace":
+        if other is None or not len(other.values):
+            raise PuzzleError(f"'{op.name}': replace with what? wire the other list",
+                              code="inconsistent")  # fmt: skip
+        seq[n] = list(other.values)[0]
+        return pick(seq), kind
+    if how == "repeat":
+        return pick(seq * max(n, 0)), kind
+    if how == "every_nth":
+        start = int(end.value) if end is not None else 0
+        return pick(seq[start :: max(n, 1)]), kind
+    if how == "at_indexes":
+        if other is None:
+            raise PuzzleError(f"'{op.name}': which indexes? wire them as the other list",
+                              code="inconsistent")  # fmt: skip
+        return pick([seq[int(i)] for i in other.values if -len(seq) <= int(i) < len(seq)]), kind
+    if how in ("unique", "union", "intersection", "difference"):
+        b = list(other.values) if other is not None else []
+        if how == "unique":
+            got = list(dict.fromkeys(seq))
+        elif how == "union":
+            got = list(dict.fromkeys(seq + b))
+        elif how == "intersection":
+            got = [v for v in dict.fromkeys(seq) if v in b]
+        else:
+            got = [v for v in dict.fromkeys(seq) if v not in b]
+        return pick(got), kind
+    if not numeric:
+        raise PuzzleError(f"'{op.name}': {how.replace('_', ' ')} needs numbers", code="invalid")
+    x = np.asarray(values, float)
+    if how == "remap":  # to 0..1, or onto index..end
+        lo, hi = float(x.min()), float(x.max())
+        u = (x - lo) / (hi - lo) if hi > lo else np.zeros_like(x)
+        if index is not None and end is not None:
+            _same_kind(op, index.kind, end.kind)
+            return index.value + u * (end.value - index.value), index.kind
+        return u, None
+    if how == "bin":  # which of the other list's edges each value falls between
+        if other is None:
+            raise PuzzleError(f"'{op.name}': bin by what? wire the edges as the other list",
+                              code="inconsistent")  # fmt: skip
+        _same_kind(op, kind, other.kind)
+        return np.digitize(x, np.asarray(other.values, float)).astype(float), None
+    if how == "differences":
+        return np.diff(x), kind
+    if how == "cumulative_sum":
+        return np.cumsum(x), kind
+    w = max(n, 1)  # moving average over `index` items, the ends over what there is
+    c = np.convolve(x, np.ones(w), "same") / np.convolve(np.ones_like(x), np.ones(w), "same")
+    return c, kind
+
+
 def _list(ctx: Context, op) -> dict[str, Any]:
     got = _input(ctx, op, "list")
     lst = _column(op, got) if isinstance(got, Table) else as_list(got)
@@ -983,6 +1116,8 @@ def _list(ctx: Context, op) -> dict[str, Any]:
             b = int(end.value) if end else n
             picked = list(values[a:b])
         values = np.array(picked, float) if numeric else picked
+    elif op.operation in MODES:
+        values, kind = _mode(ctx, op, lst, index, end)
     elif op.operation == "sort":
         values = np.sort(values) if numeric else sorted(values)
     elif op.operation == "reverse":

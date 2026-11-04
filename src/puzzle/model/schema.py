@@ -2003,7 +2003,11 @@ class Operator(ProjectObject):
                   "series", "range", "expression", "table", "list", "pairs",
                   "random", "result_table", "points_table", "file", "columns",
                   "filter_rows", "sort", "top_n", "new_column", "convert_units", "round",
-                  "group", "to_number", "lookup", "measure"]  # fmt: skip
+                  "group", "to_number", "lookup", "measure", "join", "stack", "pivot",
+                  "unpivot", "distinct", "fill_missing", "rolling", "mesh_table",
+                  "project_table", "run_history", "history_table", "mode_table",
+                  "contact_table", "bolt_table", "nearest", "section", "divide",
+                  "clearance", "text", "preview"]  # fmt: skip
     inputs: dict[str, OperatorInput] = Field(default_factory=dict)
     quantity: str | None = Field(
         default=None, description='reduce, filter: a listed result\'s key, e.g. '
@@ -2019,6 +2023,9 @@ class Operator(ProjectObject):
     compare: Literal["at_most", "at_least"] = Field(
         default="at_most", description="check: passes when the value is at most (or at "
         "least) the limit")  # fmt: skip
+    chart: Literal["line", "bar", "scatter"] = Field(
+        default="line", description="plot: drawn as a line, bars or points"
+    )
     against: Literal["step", "sweep"] = Field(
         default="step", description="plot: against the steps (time, frequency, increment) "
         "or a sweep's points")  # fmt: skip
@@ -2040,7 +2047,10 @@ class Operator(ProjectObject):
         "in brackets: t [mm], load [kN]), when it reads no file")  # fmt: skip
     operation: Literal["item", "slice", "sort", "reverse", "length", "column", "sum", "min",
                        "max", "mean", "median", "std", "percentile", "product",
-                       "weighted_mean"] = Field(
+                       "weighted_mean", "index_of", "shift", "chunk", "insert", "replace",
+                       "repeat", "every_nth", "at_indexes", "unique", "union",
+                       "intersection", "difference", "remap", "bin", "differences",
+                       "cumulative_sum", "moving_average"] = Field(
         default="item", description="list: what it does (percentile: the index input is "
         "the percent; weighted mean: the weights input)")  # fmt: skip
     column: str = Field(default="", description="list, column: the table column it takes")
@@ -2079,6 +2089,27 @@ class Operator(ProjectObject):
         "its result's unit")  # fmt: skip
     decimals: int = Field(default=3, ge=0, le=15, description="round: places or figures")
     significant: bool = Field(default=False, description="round: significant figures")
+    how: Literal["inner", "left", "full"] = Field(
+        default="inner", description="join: the rows in both, every row of the first, or "
+        "every row of either")  # fmt: skip
+    suffix: str = Field(default="", description="join: after a column in both (default: "
+                        "the second table's name)")  # fmt: skip
+    fill: Literal["forward", "backward", "mean", "zero", "value", "drop"] = Field(
+        default="forward", description="fill missing: from the row before or after, the "
+        "mean, zero, the value input, or drop the row")  # fmt: skip
+    window: int = Field(
+        default=0,
+        ge=0,
+        le=100000,
+        description="rolling: rows in the window; 0 is running (cumulative)",
+    )
+    objects: Literal["parts", "bolts", "materials", "selections", "studies", "features",
+                     "contacts"] = Field(default="parts",
+                                         description="project table: which objects")  # fmt: skip
+    other: str = Field(default="", description="clearance: the second part or selection")
+    template: str = Field(
+        default="", description='text: with {x}, {y}, {z} for the inputs ("σ max = {x} at '
+        '{y}"); {x:.1f} for places')  # fmt: skip
     interpolation: Literal["linear", "step", "nearest"] = Field(
         default="linear", description="lookup: between the table's rows"
     )

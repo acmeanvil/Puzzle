@@ -117,6 +117,8 @@ def show(window, op) -> None:
     except PuzzleError as exc:
         text = exc.message
     panel.add_rows("Output", [("Shows", text)])
+    if op.type == "preview":
+        preview(window, op)
     viewer = getattr(window, "table_view", None)
     if viewer is not None:
         viewer.show_table(op)  # a table's rows in the Table tab (ADR 0064)
@@ -128,6 +130,33 @@ def show(window, op) -> None:
             low, high, value = found
             panel.add_slider(low, high, value, lambda v: window.slide(str(op.id), v),
                              lambda: window.slide_done(str(op.id)))  # fmt: skip
+
+
+PREVIEWED = 200  # points a Preview pins at most: labels beyond that are clutter
+
+
+def preview(window, op) -> int:
+    """A Preview operator's table drawn in the 3D view (ADR 0064A row I1): each row's
+    x, y, z pinned with its `column`'s value as the label (in display units), at most
+    PREVIEWED. Returns how many were pinned."""
+    from puzzle.operators import evaluate as ev
+
+    try:
+        ctx = ev.Context(window.session.project, window._store(), root=window.session.root)
+        got = ev._input(ctx, op, "table")
+    except PuzzleError as exc:
+        window.statusBar().showMessage(exc.message, 8000)
+        return 0
+    if not isinstance(got, ev.Table) or not {"x", "y", "z"} <= set(got.columns):
+        window.statusBar().showMessage(f"{op.name}: its table needs x, y and z", 8000)
+        return 0
+    label = op.column if op.column in got.columns else got.columns[-1]
+    kind = dict(zip(got.columns, got.kinds, strict=False)).get(label)
+    rows = got.frame.select(["x", "y", "z", label]).head(PREVIEWED).rows()
+    marks = [((x, y, z), ev.quantity_text(v, kind) if isinstance(v, float) else str(v))
+             for x, y, z, v in rows if None not in (x, y, z)]  # fmt: skip
+    window.viewport.pin_points(marks)
+    return len(marks)
 
 
 def choices(window, op, path: str):

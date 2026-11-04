@@ -29,6 +29,7 @@ PORT_TYPES = {
     "field": "a result on the mesh, per node or element",
     "result": "a run, or a derived result",
     "verdict": "pass or fail, with the margin",
+    "text": "words: a label or a line for a report",
 }
 TYPE_WORDS = {
     "number": "Number",
@@ -39,15 +40,16 @@ TYPE_WORDS = {
     "field": "Field",
     "result": "Result",
     "verdict": "Verdict",
+    "text": "Text",
 }
 # Socket shapes, as Grasshopper and Blender tell types apart at a glance.
 SHAPES = {"number": "diamond", "list": "diamond", "table": "square", "points": "square",
           "geometry": "square", "field": "circle", "result": "circle",
-          "verdict": "triangle"}  # fmt: skip
+          "verdict": "triangle", "text": "diamond"}  # fmt: skip
 # Their colours on a light ground (the SVG; the GUI draws the same).
 TYPE_COLOURS = {"number": "#2b8a3e", "list": "#5c940d", "table": "#e67700",
                 "points": "#c2255c", "geometry": "#495057", "field": "#7048e8",
-                "result": "#1c7ed6", "verdict": "#d6336c"}  # fmt: skip
+                "result": "#1c7ed6", "verdict": "#d6336c", "text": "#868e96"}  # fmt: skip
 ANY = tuple(PORT_TYPES)
 
 
@@ -121,10 +123,11 @@ TYPES: dict[str, OperatorType] = {
         OperatorType(
             "plot", "Plot", "Results",
             "A number against the steps (time, frequency, increment) or a sweep's points, "
-            "as a table, drawn in the Plots panel.",
-            (PortSpec("value", "Value", ("number",)),),
+            "or a table's column against another, drawn in the Plots panel as a line, "
+            "bars or points.",
+            (PortSpec("value", "Value", ("number", "table")),),
             (PortSpec("out", "Table", ("table",)),),
-            ("against",),
+            ("against", "chart", "by", "column"),
         ),
         OperatorType(
             "export", "Export", "Display",
@@ -189,12 +192,15 @@ TYPES: dict[str, OperatorType] = {
         OperatorType(
             "list", "List", "Data",
             "One list made from another: an item, a slice, sorted, reversed, its length, a "
-            "table's column; or a statistic: sum, smallest, largest, mean, median, standard "
-            "deviation, a percentile, product, weighted mean.",
+            "table's column; a statistic (sum, smallest, largest, mean, median, standard "
+            "deviation, percentile, product, weighted mean); index of, shift, chunk, insert, "
+            "replace, repeat, every nth, at indexes, unique, union, intersection, "
+            "difference, remap, bin, differences, cumulative sum, moving average.",
             (PortSpec("list", "List", ("list", "table")),
              PortSpec("index", "Index", ("number",), required=False, typed="number"),
              PortSpec("end", "End", ("number",), required=False, typed="number"),
-             PortSpec("weights", "Weights", ("list",), required=False)),
+             PortSpec("weights", "Weights", ("list",), required=False),
+             PortSpec("other", "Other list", ("list",), required=False)),
             (PortSpec("out", "List", ("list",)), PortSpec("first", "First", ("number",))),
             ("operation", "column"),
         ),
@@ -321,6 +327,162 @@ TYPES: dict[str, OperatorType] = {
             ("target", "selection", "measurement"),
         ),
         OperatorType(
+            "join", "Join", "Tables",
+            "Two tables side by side, matched on key columns (node, point): two solvers' "
+            "results by node, then a New column for their difference.",
+            (PortSpec("table", "Table", ("table",)), PortSpec("other", "Second table", ("table",))),
+            (PortSpec("out", "Table", ("table",)),),
+            ("by", "how", "suffix"),
+        ),
+        OperatorType(
+            "stack", "Stack", "Tables",
+            "Tables' rows one after another, with a column naming each row's table.",
+            (PortSpec("table", "Table", ("table",)), PortSpec("other", "Second", ("table",)),
+             PortSpec("third", "Third", ("table",), required=False)),
+            (PortSpec("out", "Table", ("table",)),),
+            ("new_name",),
+        ),
+        OperatorType(
+            "pivot", "Pivot", "Tables",
+            "Long to wide: a row per key, a column per value of another column (a column "
+            "per step, per solver).",
+            (PortSpec("table", "Table", ("table",)),),
+            (PortSpec("out", "Table", ("table",)),),
+            ("by", "column", "pick", "reduction"),
+        ),
+        OperatorType(
+            "unpivot", "Unpivot", "Tables",
+            "Wide to long: columns folded into a name column and a value column.",
+            (PortSpec("table", "Table", ("table",)),),
+            (PortSpec("out", "Table", ("table",)),),
+            ("by", "pick", "new_name"),
+        ),
+        OperatorType(
+            "distinct", "Distinct", "Tables",
+            "Rows kept once: whole rows alike, or alike on some columns.",
+            (PortSpec("table", "Table", ("table",)),),
+            (PortSpec("out", "Table", ("table",)),),
+            ("by",),
+        ),
+        OperatorType(
+            "fill_missing", "Fill missing", "Tables",
+            "Missing values filled from the row before or after, the mean, zero or a "
+            "value; or those rows dropped.",
+            (PortSpec("table", "Table", ("table",)),
+             PortSpec("value", "Value", ("number",), required=False, typed="number")),
+            (PortSpec("out", "Table", ("table",)),),
+            ("pick", "fill"),
+        ),
+        OperatorType(
+            "rolling", "Running and rolling", "Tables",
+            "A running or rolling sum, mean, maximum or minimum along an ordered column "
+            "(time), per group: a history's peak so far.",
+            (PortSpec("table", "Table", ("table",)),),
+            (PortSpec("out", "Table", ("table",)),),
+            ("column", "reduction", "window", "by", "pick", "new_name"),
+        ),
+        OperatorType(
+            "mesh_table", "Mesh table", "Results",
+            "A run's mesh, one row per element: type, part, centre, shape quality and "
+            "aspect: the worst elements and where.",
+            (PortSpec("result", "Result", ("result",)),),
+            (PortSpec("out", "Table", ("table",)),),
+            (),
+        ),
+        OperatorType(
+            "project_table", "Project table", "Inputs",
+            "The project's objects as rows: parts with material, volume and mass; bolts; "
+            "materials; selections; studies; features; contacts.",
+            (),
+            (PortSpec("out", "Table", ("table",)),),
+            ("objects",),
+        ),
+        OperatorType(
+            "run_history", "Run history", "Results",
+            "A study's runs, one row each: when, solver, status, seconds, the point.",
+            (PortSpec("source", "Study", ("result",)),),
+            (PortSpec("out", "Table", ("table",)),),
+            (),
+        ),
+        OperatorType(
+            "history_table", "Probe history", "Results",
+            "A result tool's value at every step, as a table.",
+            (PortSpec("probe", "Result tool", ("number",)),),
+            (PortSpec("out", "Table", ("table",)),),
+            (),
+        ),
+        OperatorType(
+            "mode_table", "Mode table", "Results",
+            "A modal or buckling run's modes: frequency or load factor.",
+            (PortSpec("result", "Result", ("result",)),),
+            (PortSpec("out", "Table", ("table",)),),
+            (),
+        ),
+        OperatorType(
+            "contact_table", "Contact table", "Results",
+            "Each contact's forces, closed area, pressure, penetration, sliding and gap.",
+            (PortSpec("result", "Result", ("result",)),),
+            (PortSpec("out", "Table", ("table",)),),
+            ("step",),
+        ),
+        OperatorType(
+            "bolt_table", "Bolt table", "Results",
+            "Each bolt's axial, shear, torsion, bending, stress and use of proof and yield.",
+            (PortSpec("result", "Result", ("result",)),),
+            (PortSpec("out", "Table", ("table",)),),
+            ("step",),
+        ),
+        OperatorType(
+            "nearest", "Nearest", "Results",
+            "Each of a table's points (x, y, z) at its nearest node: its distance and the "
+            "results there (test gauges matched to the model).",
+            (PortSpec("result", "Result", ("result",)), PortSpec("points", "Points", ("table",))),
+            (PortSpec("out", "Table", ("table",)),),
+            ("quantities", "step"),
+        ),
+        OperatorType(
+            "section", "Section", "Results",
+            "A result over a construction plane's cut as a table, and the force and moment "
+            "across it.",
+            (PortSpec("result", "Result", ("result",)),),
+            (PortSpec("out", "Table", ("table",)), PortSpec("force", "Normal force", ("number",)),
+             PortSpec("moment", "Moment", ("number",))),
+            ("target", "quantities", "step"),
+        ),
+        OperatorType(
+            "divide", "Divide", "Geometry",
+            "Points evenly along a construction path or a named edge (a weld line): x, y, "
+            "z and the distance along.",
+            (PortSpec("count", "Points", ("number",), required=False, typed="number"),),
+            (PortSpec("out", "Table", ("table",)),),
+            ("target", "selection"),
+        ),
+        OperatorType(
+            "clearance", "Clearance", "Geometry",
+            "The least distance between two parts (or selections) where they are placed: "
+            "a constraint with no solve.",
+            (),
+            (PortSpec("out", "Value", ("number",)),),
+            ("target", "selection", "other"),
+        ),
+        OperatorType(
+            "text", "Text", "Logic",
+            "A line from values: \"σ max = {x} at {y}\", each in its display unit; for "
+            "panels, exports and reports.",
+            (PortSpec("x", "x", ANY, required=False), PortSpec("y", "y", ANY, required=False),
+             PortSpec("z", "z", ANY, required=False)),
+            (PortSpec("out", "Text", ("text",)),),
+            ("template",),
+        ),
+        OperatorType(
+            "preview", "Preview", "Outputs",
+            "A table's rows drawn in the 3D view as labelled points (x, y, z and a column "
+            "for the label): the worst nodes, marked.",
+            (PortSpec("table", "Table", ("table",)),),
+            (),
+            ("column",),
+        ),
+        OperatorType(
             "pairs", "Pairs", "Data",
             "Two lists into a table: item by item, or every combination.",
             (PortSpec("a", "A", ("list",)), PortSpec("b", "B", ("list",))),
@@ -359,6 +521,26 @@ GROUP_OF = {
     "round": "Tables",
     "group": "Tables",
     "to_number": "Tables",
+    "join": "Tables",
+    "stack": "Tables",
+    "pivot": "Tables",
+    "unpivot": "Tables",
+    "distinct": "Tables",
+    "fill_missing": "Tables",
+    "rolling": "Tables",
+    "mesh_table": "Results",
+    "run_history": "Results",
+    "history_table": "Results",
+    "mode_table": "Results",
+    "contact_table": "Results",
+    "bolt_table": "Results",
+    "nearest": "Results",
+    "section": "Results",
+    "project_table": "Inputs",
+    "divide": "Geometry",
+    "clearance": "Geometry",
+    "text": "Logic",
+    "preview": "Outputs",
     "check": "Checks",
     "panel": "Outputs",
     "plot": "Outputs",
@@ -401,6 +583,27 @@ ALIASES = {
     "panel": ("param viewer", "note"),
     "plot": ("quick graph", "bar graph", "chart", "value tracker"),
     "export": ("data output", "save", "write csv", "write excel", "bake"),
+    "join": ("merge", "vlookup", "match", "combine tables"),
+    "stack": ("concatenate", "append", "entwine", "union all"),
+    "pivot": ("wide", "crosstab", "flip matrix"),
+    "unpivot": ("melt", "long", "explode"),
+    "distinct": ("unique", "cull duplicates", "delete consecutive", "create set"),
+    "fill_missing": ("replace nulls", "clean tree", "null item", "fill"),
+    "rolling": ("running total", "cumulative", "moving average", "smooth numbers",
+                "blur numbers"),
+    "mesh_table": ("deconstruct mesh", "element quality", "mesh quality"),
+    "project_table": ("bill of materials", "query model objects", "content details"),
+    "run_history": ("data recorder", "value tracker", "runs"),
+    "history_table": ("probe history", "over time"),
+    "mode_table": ("frequencies", "eigenvalues", "modes"),
+    "contact_table": ("contact forces", "contact pressure"),
+    "bolt_table": ("fastener forces", "bolt forces"),
+    "nearest": ("closest point", "pull point", "proximity", "mesh closest point", "gauges"),
+    "section": ("brep plane", "mesh plane", "contour", "cut", "section force"),
+    "divide": ("divide curve", "divide length", "curve frames", "points along"),
+    "clearance": ("collision", "clash", "minimum distance", "interference"),
+    "text": ("format", "concatenate", "text join", "label"),
+    "preview": ("custom preview", "text tag", "point list", "dot display"),
 }  # fmt: skip
 TYPES = {k: replace(t, group=GROUP_OF.get(k, t.group), aliases=ALIASES.get(k, ()))
          for k, t in TYPES.items()}  # fmt: skip
@@ -410,7 +613,8 @@ TYPES = {k: replace(t, group=GROUP_OF.get(k, t.group), aliases=ALIASES.get(k, ()
 DATA = frozenset({"number", "slider", "series", "range", "expression", "table", "list",
                   "pairs", "random", "file", "columns", "filter_rows", "sort", "top_n",
                   "new_column", "convert_units", "round", "group", "to_number", "lookup",
-                  "measure"})  # fmt: skip
+                  "measure", "join", "stack", "pivot", "unpivot", "distinct", "fill_missing",
+                  "rolling", "project_table", "divide", "clearance", "text"})  # fmt: skip
 # Table operators (ADR 0064): data operators that read tables, so pre-solve when their
 # table is (a file, a typed table) and post-solve when it comes from a run.
 
@@ -664,6 +868,21 @@ def describe(project, op) -> str:
         bits.append(f"{op.decimals} {'figures' if op.significant else 'places'}")
     elif op.type == "group":
         bits.append(", ".join(op.aggregations) + (f" per {', '.join(op.by)}" if op.by else ""))
+    elif op.type == "join":
+        bits.append(f"{op.how} on {', '.join(op.by) or 'the first shared column'}")
+    elif op.type in ("pivot", "unpivot", "distinct"):
+        bits.append(", ".join(op.by) or "")
+    elif op.type == "fill_missing":
+        bits.append(op.fill)
+    elif op.type == "rolling":
+        bits.append(f"{'running' if op.window == 0 else f'{op.window}-row'} {op.reduction} "
+                    f"of {op.column}")  # fmt: skip
+    elif op.type == "project_table":
+        bits.append(op.objects)
+    elif op.type == "clearance":
+        bits.append(f"{op.selection} to {op.other}")
+    elif op.type == "text":
+        bits.append(repr(op.template))
     elif op.type == "lookup":
         bits.append(f"{op.column} at {', '.join(op.by)} ({op.interpolation})")
     elif op.type == "measure":
@@ -741,12 +960,15 @@ def pre_solve(project) -> list:
     return [o for o in project.of_type(Operator) if is_pre(project, o)]
 
 
+GEOMETRY_READERS = frozenset({"measure", "clearance", "divide", "project_table"})
+
+
 def reads_geometry(project, op, seen: frozenset = frozenset()) -> bool:
     """Whether an operator reads the geometry (a Measure, or something wired from one):
     then it can't be a parameter the geometry reads, or regenerating would loop."""
     from puzzle.model.schema import Operator
 
-    if op.type == "measure":
+    if op.type in GEOMETRY_READERS:
         return True
     for inp in op.inputs.values():
         src = project.objects.get(inp.source) if inp.source else None

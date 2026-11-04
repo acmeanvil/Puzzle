@@ -12,7 +12,9 @@ when the Expression is a Check's input, ADR 0064A row B2).
 
 Functions: abs, sqrt, exp, log, log10, sin, cos, tan, min, max, where (as derived
 results'), and asin, acos, atan, atan2 (giving radians), degrees and radians (converting
-an angle's number), clamp(x, low, high), round(x, n), floor and ceil. Rounding works on
+an angle's number), clamp(x, low, high), round(x, n), floor and ceil; and over vectors
+(ADR 0064A row D3) norm(x, y, z), dist(x1, y1, z1, x2, y2, z2), dot(a…, b…) and
+angle(a…, b…) in radians. Rounding works on
 the value in SI: round a length in millimetres as round(t / mm, 1) * mm.
 """
 
@@ -146,7 +148,7 @@ def evaluate(expression: str, values: dict[str, tuple]) -> tuple[np.ndarray | fl
 
 
 EXTRA = ("asin", "acos", "atan", "atan2", "degrees", "radians", "clamp", "round", "floor",
-         "ceil")  # fmt: skip
+         "ceil", "norm", "dist", "dot", "angle")  # fmt: skip
 
 
 def _extra(ureg, fn: str, args):
@@ -160,6 +162,24 @@ def _extra(ureg, fn: str, args):
     if fn == "atan2":
         y, x = args
         return ureg.Quantity(np.arctan2(y.magnitude, x.to(y.units).magnitude), "dimensionless")
+    if fn == "norm":  # norm(x, y, z): a vector's length
+        a = args[0]
+        return (sum(b.to(a.units) ** 2 for b in args)) ** 0.5
+    if fn == "dist":  # dist(x1, y1, z1, x2, y2, z2): two points apart
+        half = len(args) // 2
+        a, b = args[:half], args[half:]
+        return (sum((p - q.to(p.units)) ** 2 for p, q in zip(a, b, strict=True))) ** 0.5
+    if fn == "dot":  # dot(ax, ay, az, bx, by, bz)
+        half = len(args) // 2
+        return sum(p * q for p, q in zip(args[:half], args[half:], strict=True))
+    if fn == "angle":  # angle(ax, ay, az, bx, by, bz): radians between two directions
+        half = len(args) // 2
+        a, b = args[:half], args[half:]
+        dot = sum(p * q for p, q in zip(a, b, strict=True))
+        na = (sum(p * p for p in a)) ** 0.5
+        nb = (sum(q * q for q in b)) ** 0.5
+        c = (dot / (na * nb)).to("dimensionless").magnitude
+        return ureg.Quantity(np.arccos(np.clip(c, -1, 1)), "dimensionless")
     if fn == "degrees":
         return ureg.Quantity(np.degrees(bare(args[0])), "dimensionless")
     if fn == "radians":

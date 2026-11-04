@@ -83,8 +83,11 @@ def pivot(ctx, op) -> dict[str, Any]:
     t = _table(op, _ev()._input(ctx, op, "table"))
     on = _names(op, [op.column or t.columns[-1]], t)[0]
     index = _names(op, list(op.by), t) if op.by else [t.columns[0]]
-    values = _names(op, list(op.pick), t) if op.pick else [
-        c for c in t.columns if c not in index and c != on and t.frame[c].dtype.is_numeric()]  # fmt: skip
+    values = (
+        _names(op, list(op.pick), t)
+        if op.pick
+        else [c for c in t.columns if c not in index and c != on and t.frame[c].dtype.is_numeric()]
+    )
     how = op.reduction if op.reduction in ("max", "min", "mean", "sum", "first",
                                            "last", "median") else "first"  # fmt: skip
     frame = t.frame.pivot(on=on, index=index, values=values, aggregate_function=how)
@@ -112,8 +115,11 @@ def unpivot(ctx, op) -> dict[str, Any]:
     kinds = _kinds(t)
     found = {kinds.get(c) for c in folded}
     if len(found) > 1:
-        raise PuzzleError(f"'{op.name}': the columns folded are of different kinds "
-                          f"({', '.join(sorted(str(k) for k in found))})", code="invalid")  # fmt: skip
+        raise PuzzleError(
+            f"'{op.name}': the columns folded are of different kinds "
+            f"({', '.join(sorted(str(k) for k in found))})",
+            code="invalid",
+        )
     name = op.new_name.strip() or "variable"
     frame = t.frame.unpivot(on=folded, index=index or None, variable_name=name,
                             value_name="value")  # fmt: skip

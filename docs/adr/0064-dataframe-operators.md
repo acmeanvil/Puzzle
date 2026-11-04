@@ -1,6 +1,6 @@
 # 0064. Dataframe operators: results as polars tables to shape, reduce and export
 
-- Status: Accepted (2026-11-03): review answered, the operator list from 0064A; phase 1 built (2026-11-04)
+- Status: Accepted (2026-11-03): review answered, the operator list from 0064A; phases 1 and 2 built (2026-11-04)
 - Date: 2026-11-03
 
 ## Context
@@ -310,3 +310,63 @@ Not done in phase 1:
 - Recently used types last only for the session.
 - A typed polars expression can't use `pl.Expr.map_elements`, `pl.Expr.cast` or I/O:
   by design.
+
+## Phase 2 built (2026-11-04)
+
+- **Combining and reshaping** (`operators/reshape.py`):
+  - `join` (inner, left or full on `by`; a clashing column gets the second table's
+    name or `suffix`; keys of different kinds refused).
+  - `stack` (two or three tables, a `from` column; a column of different kinds
+    refused).
+  - `pivot` (a row per `by`, a column per value of `column`, `reduction` where several
+    meet) and `unpivot` (one kind across what it folds).
+  - `distinct`.
+  - `fill_missing` (forward, backward, mean, zero, a value, or drop).
+  - `rolling` (running when `window` is 0, else rolling; sum, mean, max, min, in the
+    order of `by`, per group of `pick`).
+- **More tables** (`operators/table_sources.py`):
+  - `mesh_table`: each element's type, part, centre, shape quality (12 (3V)^(2/3) /
+    Σl² for tets, 4√3 A / Σl² for triangles: 1 regular) and aspect [G1].
+  - `project_table`: parts with material, volume and mass from the exact geometry;
+    bolts, materials, selections, studies, features and contacts [J5].
+  - `run_history`: a study's runs [A12].
+  - `history_table`: a result tool's value at every step.
+  - `mode_table`: frequencies or load factors.
+  - `contact_table` (ADR 0056's totals) and `bolt_table` (ADR 0050's loads and use).
+  - `nearest`: each of a table's points at its nearest node, the distance and the
+    results there [D4, G2].
+  - `section`: a result over a construction plane's cut as a table, with the normal
+    force and moment across it as numbers [F10].
+  - `divide`: points evenly along a construction path or a named edge [E5].
+  - `clearance`: the least distance between two placed parts or selections [F11].
+  - Measure, Clearance, Divide and the project table read the geometry, so they (and
+    anything wired from them) are kept out of the parameters the geometry reads
+    (`GEOMETRY_READERS`).
+- **Logic and lists**:
+  - `text`, a line from its inputs in display units, `{x:.1f}` for places, on a new
+    `text` port type [C12, J7].
+  - The List's modes: index of, shift, chunk, insert, replace, repeat, every nth, at
+    indexes, unique, union, intersection, difference, remap, bin, differences,
+    cumulative sum, moving average, on an `other` list input [B6, B8, C4, C5, C11].
+  - The Expression's norm, dist, dot and angle [D3].
+- **Showing**:
+  - `preview` pins a table's rows (x, y, z, and `column` as the label, at most 200) in
+    the 3D view when selected [I1].
+  - Plot takes a table (a column against another) and a `chart`: line, bars (from
+    zero; text keys in order) or points [I3].
+- Empty cells in typed and CSV tables are missing values now, not text.
+- **Tests**:
+  - `tests/test_tables2.py`: join with a solver difference and kind refusals; stack;
+    pivot and unpivot; distinct; four fills; running and rolling along time per node;
+    the mesh table's shape and aspect by hand (the corner tet 12 (1/2)^(2/3) / 9 and
+    √2; the regular tet 1 and 1); probe history 1, 2, 3; run history; modes; nearest
+    nodes and their distance; a section's cut at x = 0.5 (T = 1.5); points along a
+    path; text; ten list modes; vector functions; a plot of a table; the materials
+    table; clearance 5 mm between placed boxes; part masses.
+  - `tests/test_operators_gui.py`: Preview pins ten labels; a bar chart from a group.
+
+Not done in phase 2:
+- The contact and bolt tables are checked by their code paths, not yet on a
+  contacting or bolted run in a test.
+- A section's table holds the cut's points, not its triangles (the force and moment
+  integrate over them).

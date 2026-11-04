@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import math
 
-from PySide6.QtCore import QPointF, Qt
+from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -87,6 +87,7 @@ class Curve(QWidget):
         self.x_label, self.y_label = x_label, y_label
         self.log = log  # both axes logarithmic (S-N and strain-life curves)
         self.dots: set[int] = set()  # series drawn as points only
+        self.bars: set[int] = set()  # series drawn as bars
         self.setMinimumSize(220, 160)
 
     @property
@@ -96,15 +97,16 @@ class Curve(QWidget):
     def set_points(self, points, label: str = "") -> None:
         self.set_series([(label, points)] if points else [])
 
-    def set_series(self, series, dots=()) -> None:
+    def set_series(self, series, dots=(), bars=()) -> None:
         """Curves as (name, points); those whose index is in `dots` are drawn as points
-        only (a scatter), the others joined in order of x."""
+        only (a scatter), in `bars` as bars from zero, the others joined in order of x."""
 
         def keep(x, y):
             return math.isfinite(x) and math.isfinite(y) and (not self.log or (x > 0 and y > 0))
 
         self.series = [(name, [(x, y) for x, y in pts if keep(x, y)]) for name, pts in series]
         self.dots = set(dots)
+        self.bars = set(bars)
         self.update()
 
     def paintEvent(self, _event) -> None:  # noqa: N802 - Qt's name
@@ -153,6 +155,19 @@ class Curve(QWidget):
             colour = QColor(self.COLOURS[k % len(self.COLOURS)])
             p.setPen(QPen(colour, 2))
             q = [at(x, y) for x, y in sorted(pts)]
+            if k in self.bars:  # a bar per point, from zero, a little narrower than its gap
+                xs_ = sorted(x for x, _ in pts)
+                gap = min((b - a for a, b in zip(xs_, xs_[1:], strict=False)), default=1.0)
+                half = max(0.35 * (at(gap, 0).x() - at(0, 0).x()), 2.0)
+                base = at(0, 0).y()
+                p.setBrush(colour)
+                for c in q:
+                    p.drawRect(QRectF(c.x() - half, min(c.y(), base), 2 * half,
+                                      abs(base - c.y())))  # fmt: skip
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                if name:
+                    p.drawText(left + 10, top + 16 + 16 * k, name)
+                continue
             if k not in self.dots:
                 for a, b in zip(q, q[1:], strict=False):
                     p.drawLine(a, b)

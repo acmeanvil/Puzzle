@@ -115,8 +115,12 @@ def project_table(ctx, op):
         for comp in project.of_type(Component):
             mats = {a.selection.split("/")[0]: names.get(a.material) for a in comp.materials}
             for part in comp.parts:
-                row = {"component": comp.name, "part": part.name,
-                       "geometry": names.get(part.geometry), "material": mats.get(part.name)}  # fmt: skip
+                row = {
+                    "component": comp.name,
+                    "part": part.name,
+                    "geometry": names.get(part.geometry),
+                    "material": mats.get(part.name),
+                }
                 row.update(_part_mass(ctx, comp, part, mats))
                 rows.append(row)
         kinds = {"volume": "volume", "mass": "mass"}
@@ -127,10 +131,15 @@ def project_table(ctx, op):
         for comp in resolved_project.of_type(Component):
             for f in comp.connectors:
                 pre = getattr(f, "preload", None)
-                rows.append({"component": comp.name, "bolt": f.name,
-                             "type": names.get(getattr(f, "bolt_type", None)),
-                             "diameter": getattr(f, "diameter", None) and f.diameter.to_si(),
-                             "preload": pre.to_si() if hasattr(pre, "to_si") else None})  # fmt: skip
+                rows.append(
+                    {
+                        "component": comp.name,
+                        "bolt": f.name,
+                        "type": names.get(getattr(f, "bolt_type", None)),
+                        "diameter": getattr(f, "diameter", None) and f.diameter.to_si(),
+                        "preload": pre.to_si() if hasattr(pre, "to_si") else None,
+                    }
+                )
         kinds = {"diameter": "length", "preload": "force"}
     elif what == "materials":
         for m in project.of_type(Material):

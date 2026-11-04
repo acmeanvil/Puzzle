@@ -3277,6 +3277,7 @@ class PlotsPanel(QWidget):
             x_shown, x_unit = _display(np.array(xs, float), kinds[0])
             y_shown, _ = _display(np.array([r[1] for r in table.rows], float), kinds[1])
             pts = list(zip(map(float, x_shown), map(float, y_shown), strict=True))
+            self.charts[len(self.series)] = op.chart  # line, bars or points (ADR 0064)
             self.series.append((op.name, pts))
             self.curve.x_label = table.columns[0] + (f" ({x_unit})" if x_unit else "")
 
@@ -3337,11 +3338,14 @@ class PlotsPanel(QWidget):
         plots = [p for p in ticked if p is not None and p.kind == "operator"]
         ticked = [p for p in ticked if p is not None and p.kind != "operator"]
         if plots and not ticked:  # plot operators carry their own x (ADR 0062)
+            self.charts: dict[int, str] = {}
             try:
                 self._operators(project, store, plots)
             except PuzzleError as exc:
                 self.window.report(exc)
-            self.curve.set_series(self.series)
+            self.curve.set_series(
+                self.series, dots={i for i, c in self.charts.items() if c == "scatter"},
+                bars={i for i, c in self.charts.items() if c == "bar"})  # fmt: skip
             return
         paths = [p for p in ticked if p is not None and p.type in ("path", "linearized")]
         if paths:  # paths plot against the distance; steps don't mix with them
