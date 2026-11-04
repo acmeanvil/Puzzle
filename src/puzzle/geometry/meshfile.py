@@ -145,3 +145,45 @@ def _read_3mf(path: Path) -> tuple[np.ndarray, float]:
     if not placed:
         raise MeshFileError(f"{path.name} has no meshes in its build")
     return np.concatenate(placed), scale
+
+
+# --- booleans on faceted parts (ADR 0065 item 6, phase 4) -------------------------------
+
+MODES = ("add", "cut", "intersect")
+
+
+def _manifold(tris: np.ndarray):
+    """Triangles (n, 3, 3) as a manifold3d solid: vertices merged by position (STL keeps
+    each triangle's own corners)."""
+    from manifold3d import Manifold, Mesh
+
+    pts = tris.reshape(-1, 3)
+    keys = np.round(pts / max(float(np.ptp(pts)), 1e-12) * 1e9).astype(np.int64)
+    _, index, inverse = np.unique(keys, axis=0, return_index=True, return_inverse=True)
+    verts = pts[index].astype(np.float32)
+    faces = inverse.reshape(-1, 3).astype(np.uint32)
+    solid = Manifold(Mesh(vert_properties=verts, tri_verts=faces))
+    if solid.is_empty():
+        raise MeshFileError("a faceted part is not a closed solid (it has holes or "
+                            "overlapping triangles): heal it first")  # fmt: skip
+    return solid
+
+
+def boolean(a: np.ndarray, b: np.ndarray, mode: str) -> np.ndarray:
+    """Two faceted solids (triangles, (n, 3, 3)) united (`add`), cut or intersected by
+    manifold3d, whose result is always closed and manifold: its triangles."""
+    if mode not in MODES:
+        raise MeshFileError(f"mode is one of {', '.join(MODES)}, not '{mode}'")
+    sa, sb = _manifold(a), _manifold(b)
+    out = {"add": sa + sb, "cut": sa - sb, "intersect": sa ^ sb}[mode]
+    if out.is_empty():
+        raise MeshFileError(f"the {mode} leaves nothing")
+    mesh = out.to_mesh()
+    verts = np.asarray(mesh.vert_properties, float)[:, :3]
+    return verts[np.asarray(mesh.tri_verts, int)]
+
+
+def volume(tris: np.ndarray) -> float:
+    """A closed triangle mesh's volume (the divergence theorem)."""
+    a, b, c = tris[:, 0], tris[:, 1], tris[:, 2]
+    return float(np.einsum("ij,ij->i", a, np.cross(b, c)).sum() / 6)

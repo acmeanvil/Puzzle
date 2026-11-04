@@ -526,6 +526,15 @@ TYPES: dict[str, OperatorType] = {
             ("spacing",),
         ),
         OperatorType(
+            "intersection", "Intersection", "Geometry",
+            "Where two parts or selections meet, or a construction plane cuts one: curves "
+            "as points along them (a weld line, a section's outline), or crossing points.",
+            (PortSpec("count", "Points per curve", ("number",), required=False,
+                      typed="number"),),
+            (PortSpec("out", "Table", ("table",)),),
+            ("target", "selection", "other"),
+        ),
+        OperatorType(
             "pairs", "Pairs", "Data",
             "Two lists into a table: item by item, or every combination.",
             (PortSpec("a", "A", ("list",)), PortSpec("b", "B", ("list",))),
@@ -589,6 +598,7 @@ GROUP_OF = {
     "slider2d": "Inputs",
     "merge_points": "Tables",
     "thin_points": "Tables",
+    "intersection": "Geometry",
     "check": "Checks",
     "panel": "Outputs",
     "plot": "Outputs",
@@ -658,6 +668,8 @@ ALIASES = {
     "slider2d": ("md slider", "pad", "two sliders"),
     "merge_points": ("cull duplicates", "point groups", "weld"),
     "thin_points": ("reduce point cloud", "downsample", "decimate"),
+    "intersection": ("brep brep", "curve curve", "section", "weld line", "meet",
+                     "brep plane"),
 }  # fmt: skip
 TYPES = {k: replace(t, group=GROUP_OF.get(k, t.group), aliases=ALIASES.get(k, ()))
          for k, t in TYPES.items()}  # fmt: skip
@@ -669,7 +681,8 @@ DATA = frozenset({"number", "slider", "series", "range", "expression", "table", 
                   "new_column", "convert_units", "round", "group", "to_number", "lookup",
                   "measure", "join", "stack", "pivot", "unpivot", "distinct", "fill_missing",
                   "rolling", "project_table", "divide", "clearance", "text", "toggle",
-                  "choice", "slider2d", "merge_points", "thin_points"})  # fmt: skip
+                  "choice", "slider2d", "merge_points", "thin_points",
+                  "intersection"})  # fmt: skip
 # Table operators (ADR 0064): data operators that read tables, so pre-solve when their
 # table is (a file, a typed table) and post-solve when it comes from a run.
 
@@ -1015,7 +1028,8 @@ def pre_solve(project) -> list:
     return [o for o in project.of_type(Operator) if is_pre(project, o)]
 
 
-GEOMETRY_READERS = frozenset({"measure", "clearance", "divide", "project_table"})
+GEOMETRY_READERS = frozenset({"measure", "clearance", "divide", "project_table",
+                              "intersection"})  # fmt: skip
 
 
 def reads_geometry(project, op, seen: frozenset = frozenset()) -> bool:

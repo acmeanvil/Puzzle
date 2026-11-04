@@ -39,6 +39,10 @@ the part, the first one starts it):
 | loft | sections (each profile, plane, offset), ruled | start, end, the first's side-N |
 | mirror | x, y, z and normal (or axis), keep (fuse the copy: a whole part) | <name>~m on the copy |
 | scale | factor, or fx, fy, fz, about x, y, z | (names kept) |
+| patch | rule (boundary edges) or points (a closed boundary), through | patch |
+| thicken | t, both (half each side): a sheet made a solid | offset, side; the sheet's kept |
+| subd | file (an OBJ quad cage) or points + faces, levels: Catmull–Clark to B-splines | face-N |
+| deform | kind (twist, taper, bend, box), axis, angle, factor, toward, corners | (names kept) |
 | split | axis or normal, at or x, y, z | section (the cut face inside); split faces keep names |
 | imprint | hole (a wall's face name), r | annulus (rings at the hole's mouths); others keep names |
 | split_face | profile (sketch), faces (default: on its plane), direction | region; others kept |
@@ -192,6 +196,8 @@ WORDS = {
     "direction",  # a split_face's projection: both, forward or backward
     "along",  # a sweep's or pipe's path: an earlier spline or polyline step (ADR 0065)
     "frame",  # a sweep's frame along its path
+    "kind",  # a deform's kind: twist, taper, bend or box
+    "toward",  # a bend's direction
 }
 
 
@@ -1020,9 +1026,10 @@ MODIFIERS = {
 def _more_operations() -> None:
     """ADR 0065's operations (splines, sweeps, pipes, lofts, mirror, scale), kept in
     their own module."""
-    from puzzle.geometry import sweeps
+    from puzzle.geometry import subd, sweeps
 
     TOOLS.update(sweeps.TOOLS)
+    TOOLS["subd"] = subd._subd
     MODIFIERS.update(sweeps.MODIFIERS)
 
 

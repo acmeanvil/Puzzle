@@ -7,6 +7,7 @@ metres, on the profile's plane (u, v):
      "lines":    {"bottom": ["A", "B"], ...},                  from point to point
      "arcs":     {"round": ["C", "S", "E"]},                   centre, start, end (ccw)
      "circles":  {"bore": ["O", 0.004]},                       centre, radius
+     "splines":  {"curve": ["A", "P1", "P2", "B"]},            smooth through points
      "construction": ["axis"],                                 drawn, constrained, not cut
      "constraints": [["horizontal", "bottom"], ["length", "bottom", "L"], ...]}
 
@@ -271,6 +272,9 @@ def loops(sketch: dict, solved: Solved) -> list[list[tuple[str, str, tuple]]]:
     for n, (c, a, b) in sketch.get("arcs", {}).items():
         if n not in skip:
             pieces.append(("arc", n, a, b, (p[c], p[a], p[b])))
+    for n, refs in sketch.get("splines", {}).items():  # ADR 0065: smooth through points
+        if n not in skip and len(refs) >= 2:
+            pieces.append(("spline", n, refs[0], refs[-1], tuple(p[r] for r in refs)))
     out = [
         [("circle", n, (p[c], solved.radii.get(n, r)))]
         for n, (c, r) in sketch.get("circles", {}).items()
@@ -309,6 +313,11 @@ def _area(loop) -> float:
         return math.pi * loop[0][2][1] ** 2
     pts = []
     for kind, _, geo in loop:
-        pts += [geo[0], geo[1]] if kind == "line" else [geo[1], geo[2]]
+        if kind == "line":
+            pts += [geo[0], geo[1]]
+        elif kind == "spline":
+            pts += list(geo)
+        else:
+            pts += [geo[1], geo[2]]
     xs, ys = [q[0] for q in pts], [q[1] for q in pts]
     return (max(xs) - min(xs)) * (max(ys) - min(ys))

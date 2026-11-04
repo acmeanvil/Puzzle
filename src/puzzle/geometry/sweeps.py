@@ -236,5 +236,186 @@ def _scale(state, op, a):
     state.shape = mk.Shape()
 
 
-TOOLS = {"spline": _spline, "sweep": _sweep, "pipe": _pipe, "loft": _loft}
-MODIFIERS = {"mirror": _mirror, "scale": _scale}
+def _patch(state, a):
+    """A surface filling a closed boundary (ADR 0065 item 4, phase 3): the edges a `rule`
+    picks (as a fillet's: `{"edges": ["A|B", ...]}`, `{"face": ...}`), or a closed
+    polygon of `points`; it passes through `through` points if given. Capping a gap in
+    imported CAD, or closing a region. Its face is `<step>/patch`."""
+    from OCP.BRepFill import BRepFill_Filling
+    from OCP.GeomAbs import GeomAbs_C0
+
+    h = _h()
+    fill = BRepFill_Filling()
+    if a.get("rule"):
+        if state.shape is None:
+            raise h.GeometryError("a patch on edges needs a part to find them on")
+        edges = h._edges_by_rule(state, a["rule"])
+        if not edges:
+            raise h.GeometryError("the patch's rule picks no edges")
+    else:
+        pts = _points(a)
+        if len(pts) < 3:
+            raise h.GeometryError("a patch needs a boundary: a rule's edges, or 3 points")
+        poly = BRepBuilderAPI_MakePolygon()
+        for q in pts:
+            poly.Add(q)
+        poly.Close()
+        edges = h._subshapes(poly.Wire(), h.TopAbs_EDGE)
+    for e in edges:
+        fill.Add(e, GeomAbs_C0, True)
+    for q in _points(a, "through"):
+        fill.Add(q)
+    fill.Build()
+    if not fill.IsDone():
+        raise h.GeometryError("the patch failed (is the boundary closed?)")
+    face = fill.Face()
+    return face, {"patch": [face]}
+
+
+def _offset(shape, t: float, thicken: bool):
+    from OCP.BRepOffset import BRepOffset_MakeOffset, BRepOffset_Skin
+    from OCP.GeomAbs import GeomAbs_Intersection
+
+    mo = BRepOffset_MakeOffset()
+    mo.Initialize(shape, t, 1e-7, BRepOffset_Skin, False, False, GeomAbs_Intersection,
+                  thicken, False)  # fmt: skip
+    mo.MakeOffsetShape()
+    return mo
+
+
+def _thicken(state, op, a):
+    """A sheet (a face or shell) made a solid of thickness `t` (ADR 0065 item 4, phase
+    3), by OCCT's offset in thickening mode: along its normal, or `both` ways (half
+    each). The sheet's faces keep their names; the opposite face is `<step>/offset` and
+    the rim faces `<step>/side`."""
+    h = _h()
+    t = float(a["t"])
+    if t <= 0:
+        raise h.GeometryError(f"thicken '{op.name}': the thickness must be positive")
+    names = dict(state.names)
+    shape = state.shape
+    if a.get("both"):  # moved back half the thickness, then thickened through
+        moved = _offset(shape, -t / 2, False)
+        if not moved.IsDone():
+            raise h.GeometryError(f"thicken '{op.name}': moving the sheet back failed")
+        shape = moved.Shape()
+        after = h._faces(shape)
+        carried = {n: [g for f in fs for g in h._list(moved.Modified(f))]
+                   for n, fs in names.items()}  # fmt: skip
+        if not any(carried.values()) and len(after) == 1:  # one face: its names go with it
+            carried = {n: after for n in names}
+        names = {n: fs for n, fs in carried.items() if fs}
+    mo = _offset(shape, t, True)
+    if not mo.IsDone():
+        raise h.GeometryError(f"thicken '{op.name}' failed (a bend tighter than the "
+                              "thickness?)")  # fmt: skip
+    solid = mo.Shape()
+    faces = h._faces(solid)
+    kept = {n: [f for f in faces if any(f.IsSame(g) for g in fs)] for n, fs in names.items()}
+    kept = {n: fs for n, fs in kept.items() if fs}
+    named = [g for fs in kept.values() for g in fs]
+    new = [f for f in faces if not any(f.IsSame(g) for g in named)]
+    if new:  # the largest new face is the offset side, the rest the rim
+        from OCP.BRepGProp import BRepGProp
+        from OCP.GProp import GProp_GProps
+
+        def area(f):
+            props = GProp_GProps()
+            BRepGProp.SurfaceProperties_s(f, props)
+            return props.Mass()
+
+        new.sort(key=area, reverse=True)
+        kept[f"{op.name}/offset"] = new[:1]
+        if len(new) > 1:
+            kept[f"{op.name}/side"] = new[1:]
+    state.names, state.shape = kept, solid
+    solids = h._subshapes(solid, h.TopAbs_SOLID)
+    state.bodies = {n: solids for n in state.bodies} or {"Body": solids}
+
+
+def _along(a) -> int:
+    return "xyz".index(a.get("axis", "z"))
+
+
+def deformation(kind: str, a, bounds):
+    """The displacement field of a deformation over the shape's bounds: (n, 3) points ->
+    (n, 3) displacements.
+
+    - twist: `angle` (deg) about the axis through x, y, z, growing linearly from the
+      shape's start to its end along the axis;
+    - taper: the section scaled linearly to `factor` at the far end, about the axis;
+    - bend: the shape along the axis bent by `angle` (deg) toward `toward` (an axis
+      across it), as a beam bends round an arc of radius length / angle;
+    - box: a free-form box, the bounds' eight corners moved by `corners` (eight [dx, dy,
+      dz], in x, y, z order of the corners: x fastest), the rest trilinearly.
+    """
+    import numpy as np
+
+    lo, hi = np.array(bounds[:3]), np.array(bounds[3:])
+    k = _along(a)
+    centre = np.array([a.get("x", (lo[0] + hi[0]) / 2), a.get("y", (lo[1] + hi[1]) / 2),
+                       a.get("z", (lo[2] + hi[2]) / 2)])  # fmt: skip
+    length = max(hi[k] - lo[k], 1e-12)
+
+    def move(p):
+        s = (p[:, k] - lo[k]) / length  # 0 to 1 along the axis
+        d = np.zeros_like(p)
+        if kind == "twist":
+            th = np.radians(float(a["angle"])) * s
+            i, j = [m for m in range(3) if m != k]
+            u, v = p[:, i] - centre[i], p[:, j] - centre[j]
+            d[:, i] = u * np.cos(th) - v * np.sin(th) - u
+            d[:, j] = u * np.sin(th) + v * np.cos(th) - v
+        elif kind == "taper":
+            f = 1 + (float(a["factor"]) - 1) * s
+            for m in range(3):
+                if m != k:
+                    d[:, m] = (p[:, m] - centre[m]) * (f - 1)
+        elif kind == "bend":
+            j = "xyz".index(a.get("toward", "y" if k != 1 else "z"))
+            phi_total = np.radians(float(a["angle"]))
+            if abs(phi_total) < 1e-12:
+                return d
+            r = length / phi_total
+            phi = s * phi_total
+            y = p[:, j] - centre[j]
+            d[:, k] = lo[k] + (r - y) * np.sin(phi) - p[:, k]
+            d[:, j] = centre[j] + r - (r - y) * np.cos(phi) - p[:, j]
+        elif kind == "box":
+            c = np.asarray(a["corners"], float).reshape(8, 3)
+            t = (p - lo) / np.where(hi > lo, hi - lo, 1.0)
+            for n in range(8):
+                ix, iy, iz = n & 1, (n >> 1) & 1, (n >> 2) & 1
+                w = ((t[:, 0] if ix else 1 - t[:, 0]) * (t[:, 1] if iy else 1 - t[:, 1])
+                     * (t[:, 2] if iz else 1 - t[:, 2]))  # fmt: skip
+                d += w[:, None] * c[n]
+        else:
+            raise _h().GeometryError(f"deform is twist, taper, bend or box, not '{kind}'")
+        return d
+
+    return move
+
+
+def _deform(state, op, a):
+    """The part deformed (ADR 0065 item 8): twist, taper, bend or a free-form box
+    (`kind`), its faces turned to NURBS and their poles moved (the morphed export's
+    method). Faces keep their names; radii stop being exact."""
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_NurbsConvert
+
+    from puzzle.errors import PuzzleError
+    from puzzle.post.exports.morphed import morph
+
+    h = _h()
+    conv = BRepBuilderAPI_NurbsConvert(state.shape, True)
+    names, bodies = h._carry(conv, state.names), h._carry(conv, state.bodies)
+    bounds = h._bounds(state.shape)
+    move = deformation(a.get("kind", "twist"), a, bounds)
+    try:
+        moved = morph(conv.Shape(), move, max(h._size(state.shape) / 12, 1e-9), convert=False)
+    except PuzzleError as exc:
+        raise h.GeometryError(f"deform '{op.name}': {exc.message}") from None
+    state.shape, state.names, state.bodies = moved, names, bodies
+
+
+TOOLS = {"spline": _spline, "sweep": _sweep, "pipe": _pipe, "loft": _loft, "patch": _patch}
+MODIFIERS = {"mirror": _mirror, "scale": _scale, "thicken": _thicken, "deform": _deform}

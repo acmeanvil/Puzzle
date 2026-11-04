@@ -150,6 +150,15 @@ def _sketch_loops(sketch: dict, to3d, plane: str, params: dict[str, float]):
                 circle = gp_Circ(gp_Ax2(to3d(cu, cv), normal), r)
                 arc = GC_MakeArcOfCircle(circle, to3d(su, sv), to3d(eu, ev), True).Value()
                 built.append(BRepBuilderAPI_MakeEdge(arc).Edge())
+            elif kind == "spline":  # ADR 0065 phase 3: smooth through its points
+                from OCP.TopAbs import TopAbs_EDGE
+                from OCP.TopExp import TopExp_Explorer
+                from OCP.TopoDS import TopoDS
+
+                from puzzle.geometry.sweeps import spline_wire
+
+                wire = spline_wire([to3d(u, v) for u, v in geo])
+                built.append(TopoDS.Edge(TopExp_Explorer(wire, TopAbs_EDGE).Current()))
             else:
                 (cu, cv), r = geo
                 built.append(
@@ -251,7 +260,9 @@ def _dxf_loops(spec: dict, to3d, plane: str, offset: float, root: Path | None) -
             c, r = entity.dxf.center, entity.dxf.radius
             edge = _loop({"circle": [c.x * scale, c.y * scale, r * scale]}, to3d, plane, offset)
             pieces.append((None, None, edge[0]))
-        elif kind in ("LWPOLYLINE", "POLYLINE", "SPLINE", "ELLIPSE"):
+        elif kind == "SPLINE":  # ADR 0065 phase 3: kept smooth, one edge
+            pieces.append(_spline(entity, scale, to3d, dxfpath))
+        elif kind in ("LWPOLYLINE", "POLYLINE", "ELLIPSE"):
             # Flattened to segments: bulges, splines and ellipses become short lines.
             p = dxfpath.make_path(entity)
             pts = [(v.x, v.y) for v in p.flattening(distance=1e-3 / scale)]
@@ -267,6 +278,31 @@ def _dxf_loops(spec: dict, to3d, plane: str, offset: float, root: Path | None) -
     loops = _chain(pieces, tol=1e-6)
     loops.sort(key=_extent, reverse=True)  # the outer loop encloses the others
     return loops
+
+
+def _spline(entity, scale, to3d, dxfpath):
+    """A DXF spline as one smooth edge through its fit points (or, without them, through
+    points along it), so a profile keeps its curve instead of short lines."""
+    from puzzle.geometry.sweeps import spline_wire
+
+    fit = [(v[0], v[1]) for v in getattr(entity, "fit_points", [])]
+    if len(fit) < 2:
+        fit = [(v.x, v.y) for v in dxfpath.make_path(entity).flattening(distance=1e-4 / scale)]
+        step = max(1, len(fit) // 200)  # a smooth curve needs few points
+        fit = fit[::step] + ([fit[-1]] if (len(fit) - 1) % step else [])
+    closed = bool(getattr(entity, "closed", False))
+    if closed and fit[0] == fit[-1]:
+        fit = fit[:-1]
+    pts = [to3d(u * scale, v * scale) for u, v in fit]
+    wire = spline_wire(pts, closed=closed)
+    from OCP.TopAbs import TopAbs_EDGE
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopoDS import TopoDS
+
+    edge = TopoDS.Edge(TopExp_Explorer(wire, TopAbs_EDGE).Current())
+    if closed:
+        return None, None, edge
+    return pts[0], pts[-1], edge
 
 
 def _segment(a, b, scale, to3d):

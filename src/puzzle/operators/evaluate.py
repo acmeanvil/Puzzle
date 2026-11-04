@@ -743,7 +743,8 @@ def _tables() -> dict:
             "divide": out(sources.divide), "clearance": out(sources.clearance),
             "text": _text, "preview": lambda ctx, op: {}, "toggle": _toggle,
             "choice": _choice, "slider2d": _slider2d,
-            "merge_points": reshape.merge_points, "thin_points": reshape.thin_points}  # fmt: skip
+            "merge_points": reshape.merge_points, "thin_points": reshape.thin_points,
+            "intersection": out(sources.intersection)}  # fmt: skip
 
 
 def _toggle(ctx: Context, op) -> dict[str, Any]:

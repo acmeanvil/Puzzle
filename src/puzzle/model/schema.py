@@ -2051,7 +2051,7 @@ class Operator(ProjectObject):
                   "project_table", "run_history", "history_table", "mode_table",
                   "contact_table", "bolt_table", "nearest", "section", "divide",
                   "clearance", "text", "preview", "toggle", "choice", "slider2d",
-                  "merge_points", "thin_points"]  # fmt: skip
+                  "merge_points", "thin_points", "intersection"]  # fmt: skip
     inputs: dict[str, OperatorInput] = Field(default_factory=dict)
     quantity: str | None = Field(
         default=None, description='reduce, filter: a listed result\'s key, e.g. '

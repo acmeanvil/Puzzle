@@ -72,6 +72,7 @@ class SketchModel:
             "lines": spec.get("lines", {}),
             "arcs": spec.get("arcs", {}),
             "circles": spec.get("circles", {}),
+            "splines": spec.get("splines", {}),
             "construction": spec.get("construction", []),
             "constraints": spec.get("constraints", []),
         }
@@ -90,7 +91,7 @@ class SketchModel:
     def entities(self) -> dict[str, str]:
         """Every named thing: name -> kind (point, line, arc, circle)."""
         out = {n: "point" for n in self.spec["points"]}
-        for kind in ("lines", "arcs", "circles"):
+        for kind in ("lines", "arcs", "circles", "splines"):
             out.update({n: kind[:-1] for n in self.spec[kind]})
         return out
 
@@ -108,6 +109,13 @@ class SketchModel:
     def add_circle(self, centre: str, r: float) -> str:
         name = self._new("circle-", self.entities())
         self.spec["circles"][name] = [centre, r]
+        return name
+
+    def add_spline(self, points: list[str]) -> str:
+        """A smooth curve through points (ADR 0065 phase 3): its ends join lines and arcs
+        as theirs do; its points take constraints as any point does."""
+        name = self._new("spline-", self.entities())
+        self.spec["splines"][name] = list(points)
         return name
 
     def add_arc(self, centre: str, start: str, end: str) -> str:
@@ -128,12 +136,12 @@ class SketchModel:
         kinds = self.entities()
         gone = {name}
         if kinds.get(name) == "point":
-            for kind in ("lines", "arcs", "circles"):
+            for kind in ("lines", "arcs", "circles", "splines"):
                 for n, refs in list(self.spec[kind].items()):
                     if name in refs:
                         gone.add(n)
         for n in gone:
-            for kind in ("points", "lines", "arcs", "circles"):
+            for kind in ("points", "lines", "arcs", "circles", "splines"):
                 self.spec[kind].pop(n, None)
         self.spec["construction"] = [n for n in self.spec["construction"] if n not in gone]
         self.spec["constraints"] = [
@@ -141,7 +149,8 @@ class SketchModel:
             for c in self.spec["constraints"]
             if not gone & {x for x in c[1:] if isinstance(x, str)}
         ]
-        used = {p for k in ("lines", "arcs") for refs in self.spec[k].values() for p in refs}
+        used = {p for k in ("lines", "arcs", "splines") for refs in self.spec[k].values()
+                for p in refs}  # fmt: skip
         used |= {c for c, _ in self.spec["circles"].values()}
         for p in [p for p in self.spec["points"] if p not in used]:
             del self.spec["points"][p]  # a point nothing uses any more
@@ -152,10 +161,10 @@ class SketchModel:
             raise SketchError(f"'{new}' is already a name in this sketch")
         if not new.replace("-", "").replace("_", "").isalnum():
             raise SketchError("names are letters, digits, - and _")
-        for kind in ("points", "lines", "arcs", "circles"):
+        for kind in ("points", "lines", "arcs", "circles", "splines"):
             if old in self.spec[kind]:
                 self.spec[kind][new] = self.spec[kind].pop(old)
-        for kind in ("lines", "arcs", "circles"):
+        for kind in ("lines", "arcs", "circles", "splines"):
             for n, refs in self.spec[kind].items():
                 self.spec[kind][n] = [new if r == old else r for r in refs]
         self.spec["construction"] = [new if n == old else n for n in self.spec["construction"]]
@@ -374,6 +383,8 @@ class SketchCanvas(QGraphicsView):
             scene.addEllipse(pts[c].x() - rr, pts[c].y() - rr, 2 * rr, 2 * rr, pen(n))
         for n, (c, s, e) in m.spec["arcs"].items():
             scene.addPath(_arc_path(pts[c], pts[s], pts[e]), pen(n))
+        for n, refs in m.spec.get("splines", {}).items():  # drawn through its points
+            scene.addPath(_spline_path([pts[r] for r in refs]), pen(n))
         dot = 3.0 / self.transform().m11()
         fixed = {c[1] for c in m.spec["constraints"] if c[0] == "fix"}
         for n, p in pts.items():
@@ -473,6 +484,7 @@ TOOLS = [
     ("rect", "Rectangle"),
     ("circle", "Circle"),
     ("arc", "Arc"),
+    ("spline", "Spline"),
 ]
 RELATIONS = [
     ("horizontal", "Horizontal"),
@@ -648,6 +660,11 @@ class SketchWorkspace(QWidget):
             d = abs(math.dist((u, v), m.point(c)) - math.dist(m.point(s), m.point(c)))
             if d <= best_d:
                 best, best_d = n, d
+        for n, refs in m.spec.get("splines", {}).items():  # near any piece between points
+            for a, b in zip(refs, refs[1:], strict=False):
+                d = _to_segment((u, v), m.point(a), m.point(b))
+                if d <= best_d:
+                    best, best_d = n, d
         return best
 
     def _point_at(self, u: float, v: float) -> str:
@@ -701,6 +718,13 @@ class SketchWorkspace(QWidget):
                 m.resolve()
             else:
                 c.preview = [(u, v)]
+        elif self.tool == "spline":  # points clicked in turn; a double-click ends it
+            near = self.nearest(u, v, points_only=True)
+            name = near or m.add_point(u, v)
+            self._spline = getattr(self, "_spline", []) + [name]
+            c.preview = [m.point(p) for p in self._spline]
+            if len(self._spline) > 2 and name == self._spline[0]:  # closed on its start
+                self._finish_spline()
         elif self.tool == "arc":
             c.preview.append((u, v))
             if len(c.preview) == 3:
@@ -715,9 +739,20 @@ class SketchWorkspace(QWidget):
                 m.resolve()
         self.changed()
 
+    def _finish_spline(self) -> None:
+        points = getattr(self, "_spline", [])
+        if len(points) >= 2:
+            self.model.add_spline(points)
+            self.model.resolve()
+        self._spline = []
+        self.canvas.preview = []
+
     def _double(self, u: float, v: float) -> None:
         if self.tool == "line":
             self.canvas.preview = []
+            self.changed()
+        elif self.tool == "spline":
+            self._finish_spline()
             self.changed()
         elif self.tool == "select":
             hit = self.nearest(u, v)
@@ -898,10 +933,29 @@ def _to_segment(p, a, b) -> float:
     return math.dist(p, (ax + t * dx, ay + t * dy))
 
 
+def _spline_path(points) -> QPainterPath:
+    """A smooth path through points for drawing (Catmull-Rom as cubic Béziers); the
+    model's curve is OCCT's interpolation, which this follows closely."""
+    path = QPainterPath(points[0])
+    for i in range(len(points) - 1):
+        p0 = points[max(i - 1, 0)]
+        p1, p2 = points[i], points[i + 1]
+        p3 = points[min(i + 2, len(points) - 1)]
+        c1 = p1 + (p2 - p0) / 6
+        c2 = p2 - (p3 - p1) / 6
+        path.cubicTo(c1, c2, p2)
+    return path
+
+
 def summary(spec: dict) -> str:
     """A sketch in a few words, for the step dialog: "4 lines, 1 circle"."""
     parts = []
-    for kind, one in (("lines", "line"), ("arcs", "arc"), ("circles", "circle")):
+    for kind, one in (
+        ("lines", "line"),
+        ("arcs", "arc"),
+        ("circles", "circle"),
+        ("splines", "spline"),
+    ):
         n = len(spec.get(kind, {}))
         if n:
             parts.append(f"{n} {one}{'s' if n != 1 else ''}")

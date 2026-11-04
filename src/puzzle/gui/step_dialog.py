@@ -43,6 +43,12 @@ CHOICES = {
     ],
     "plane": [("XY plane", "xy"), ("YZ plane", "yz"), ("XZ plane", "xz")],
     "yesno": [("Yes", True), ("No", False)],
+    "deform": [
+        ("Twist about the axis", "twist"),
+        ("Taper toward the far end", "taper"),
+        ("Bend round an arc", "bend"),
+        ("Free-form box (move its corners)", "box"),
+    ],
     "frame": [  # ADR 0065: how a sweep's profile turns along its path
         ("Square to the path, without twisting (corrected Frenet)", "corrected"),
         ("Following the path's curvature (Frenet)", "frenet"),

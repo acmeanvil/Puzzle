@@ -93,6 +93,31 @@ STEPS: dict[str, list[StepField]] = {
         StepField("keep", "yesno", True, "Keep the original (a whole part from its half)"),
     ],
     "scale": [StepField("factor", "number", 1.0, "Factor"), *AT],
+    "patch": [
+        StepField("rule", "rule", {"edges": []}, "Boundary edges"),
+        StepField("points", "points", [], "Or a boundary (mm): x, y, z; …"),
+        MODE,
+    ],
+    "subd": [
+        StepField("file", "file", "", "Control cage (an OBJ of quads)"),
+        StepField("levels", "count", 3, "Subdivision levels"),
+        StepField("scale", "number", 0.001, "Scale (the file's unit in m: 0.001 for mm)"),
+        MODE,
+    ],
+    "deform": [
+        StepField("kind", "deform", "twist", "Deformation"),
+        StepField("axis", "axis", "z", "Along"),
+        StepField("angle", "angle", 30.0, "Angle (twist, bend)"),
+        StepField("factor", "number", 0.8, "End size (taper)"),
+        StepField("toward", "axis", "y", "Bent toward (bend)"),
+        StepField(
+            "corners", "rule", [[0.0, 0.0, 0.0]] * 8, "Corner moves (box; m, eight [dx, dy, dz])"
+        ),
+    ],
+    "thicken": [
+        StepField("t", "length", 0.002, "Thickness"),
+        StepField("both", "yesno", False, "Half to each side"),
+    ],
     "sheet": [
         StepField(
             "points",

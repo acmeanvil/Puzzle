@@ -30,6 +30,29 @@ are in metres, and any number may name a parameter (a Slider drives it).
   cylinders into general surfaces, so radii stop being exact. To fix an import's units,
   set the import's unit instead.
 
+- `patch`: a surface over a boundary, `rule` (edges, as a fillet's) or `points` (a
+  closed polygon), optionally `through` points; face `patch`. Caps a gap in imported
+  CAD.
+- `thicken`: a sheet made a solid, `t`, `both` for half each side; new faces `offset`
+  and `side`.
+- Sheets and faces combine with `mode` add, cut or intersect, as solids do (regions for
+  2D models).
+- DXF splines stay smooth. A sketch takes `"splines": {"name": ["A", "P1", "B"]}`, a
+  smooth edge through those points.
+- The `intersection` operator (skill `dataframe-operators`' Geometry group): `target`
+  a component, `selection` and `other` (parts, "Part/Selection", or a construction
+  plane's name). It gives the curves where they meet as points (x, y, z, s, `curve`),
+  for a weld line or a section's outline.
+
+- `subd`: a SubD from a quad control cage, `file` (an OBJ) with `scale` (0.001 for
+  millimetres), or `points` and `faces` (quads), and `levels` (3 is plenty). It gives a
+  smooth B-rep solid, faces `face-N` after the cage's.
+- `deform`: `kind` twist (`angle`), taper (`factor` at the far end), bend (`angle`,
+  `toward`) or box (`corners`: eight [dx, dy, dz]), along `axis`. It keeps the names;
+  radii stop being exact.
+- Faceted parts (STL, OBJ, 3MF) combine in the GUI's Combine with another faceted part…,
+  as a new faceted geometry.
+
 ## Mesh morphing (phase 2)
 
 A study's `morph` moves its mesh's nodes after meshing, with no remeshing:

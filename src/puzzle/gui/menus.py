@@ -229,6 +229,10 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
                 "Edit as history (keep the file as its first step)", lambda: to_history(window, obj)
             )
         add("Check geometry", lambda: check_geometry_of(window, obj))
+        from puzzle.geometry.meshfile import is_mesh_file
+
+        if obj.source and is_mesh_file(obj.source):  # ADR 0065: STL, OBJ, 3MF booleans
+            add("Combine with another faceted part…", lambda: combine_faceted(window, obj))
         if obj.selections:
             add("Reattach selections…", lambda: reattach_selections(window, obj))
         menu.addSeparator()  # what the view shows, and what studies solve
@@ -1245,3 +1249,48 @@ def _length(text: str) -> float:
     if not known(unit):
         raise ValueError(unit)
     return to_si(float(number), unit)
+
+
+def combine_faceted(window, geo):
+    """Two faceted parts (STL, OBJ, 3MF) united, cut or intersected (ADR 0065 phase 4,
+    manifold3d) into a new faceted geometry, its STL written into the project's
+    imported folder; the two parts are left as they are."""
+    from pathlib import Path
+
+    from puzzle.commands.model import Create
+    from puzzle.geometry import meshfile
+    from puzzle.gui.quick_form import Ask
+    from puzzle.model.schema import Geometry
+
+    project, root = window.session.project, Path(window.session.root)
+    others = [(g.name, str(g.id)) for g in project.of_type(Geometry)
+              if g.id != geo.id and g.source and meshfile.is_mesh_file(g.source)]  # fmt: skip
+    if not others:
+        window.statusBar().showMessage("Another faceted part (STL, OBJ, 3MF) is needed", 8000)
+        return None
+    got = window.ask_form("Combine faceted parts", [
+        Ask("other", "With", choices=others),
+        Ask("mode", "How", choices=[("United (add)", "add"), (f"{geo.name} minus it (cut)",
+                                    "cut"), ("Only where they overlap", "intersect")]),
+        Ask("name", "Name", kind="text", default=f"{geo.name} combined"),
+    ])  # fmt: skip
+    if not got:
+        return None
+    from uuid import UUID
+
+    other = project.objects[UUID(got["other"])]
+
+    def tris(g):
+        path = Path(g.source) if Path(g.source).is_absolute() else root / g.source
+        return meshfile.triangles(path, g.source_unit)
+
+    try:
+        out = meshfile.boolean(tris(geo), tris(other), got["mode"])
+    except meshfile.MeshFileError as exc:
+        window.statusBar().showMessage(str(exc), 10000)
+        return None
+    stem = "".join(c if c.isalnum() or c in "-_" else "_" for c in got["name"]).strip("_")
+    rel = f"imported/{stem or 'combined'}.stl"
+    meshfile.write_stl(out, root / rel)
+    return window.submit(Create(kind="geometry", data={"name": got["name"], "source": rel,
+                                                       "source_unit": "m"}))  # fmt: skip

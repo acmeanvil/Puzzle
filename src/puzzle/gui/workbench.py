@@ -52,7 +52,7 @@ GROUPS = [
             "curved_sheet",
         ],
     ),
-    ("Sweep", ["spline", "sweep", "pipe", "loft"]),  # ADR 0065
+    ("Sweep", ["spline", "sweep", "pipe", "loft", "patch", "thicken", "subd"]),  # ADR 0065
     (
         "Modify",
         [
@@ -62,6 +62,7 @@ GROUPS = [
             "rotate",
             "mirror",
             "scale",
+            "deform",
             "pattern",
             "split",
             "split_face",
@@ -72,7 +73,8 @@ GROUPS = [
 NAMES = {"remove": "Remove features", "heal": "Heal", "fragment": "Share faces",
          "split_face": "Split face by sketch", "face": "Face from sketch",
          "section": "Section of a part", "sweep": "Sweep along a path",
-         "pipe": "Pipe along a path", "loft": "Loft through profiles"}  # fmt: skip
+         "pipe": "Pipe along a path", "loft": "Loft through profiles",
+         "subd": "SubD from a cage"}  # fmt: skip
 PLANES = [("XY plane", "xy"), ("YZ plane", "yz"), ("XZ plane", "xz")]
 ON_FACE = "face"
 

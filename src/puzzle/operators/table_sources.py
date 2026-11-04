@@ -481,3 +481,98 @@ def clearance(ctx, op):
     if d is None:
         raise PuzzleError(f"'{op.name}': no distance between them", code="not_found")
     return ev.Number(float(d), "length", f"Clearance {op.selection} to {op.other}")
+
+
+def _placed(ctx, comp, text: str):
+    """A component's part or "Part/Selection" as shapes where the part is placed."""
+    from OCP.TopLoc import TopLoc_Location
+
+    from puzzle.geometry.contacts import _placement
+    from puzzle.geometry.measure import _cast
+    from puzzle.geometry.naming import by_rule, named_geometry
+    from puzzle.model.schema import Geometry
+
+    part_name, _, sel = text.partition("/")
+    part = next((p for p in comp.parts if p.name == part_name), None)
+    if part is None:
+        raise PuzzleError(f"{comp.name} has no part '{part_name}'", code="not_found")
+    geo = ctx.project.get(part.geometry, Geometry)
+    named = named_geometry(ctx.project, geo, ctx.root or ".")
+    if sel:
+        s = next((x for x in geo.selections if x.name == sel), None)
+        if s is None:
+            raise PuzzleError(f"{geo.name} has no selection '{sel}'", code="not_found")
+        members = by_rule(named, s.entity, s.rule) if s.rule else list(s.members)
+        entity = s.entity
+    else:
+        entity, members = "body", list(named.of.get("body", {}))
+    shapes = [m for name in members for m in named.of.get(entity, {}).get(name, [])]
+    if any(part.translation) or any(part.rotation):
+        where = TopLoc_Location(_placement(part.translation, part.rotation))
+        shapes = [_cast(entity, m.Moved(where)) for m in shapes]
+    return shapes
+
+
+def intersection(ctx, op):
+    """Where two parts or selections of a component meet (ADR 0065 item 5, phase 3), or
+    where a construction plane (`other`, by name) cuts one: the curves as points evenly
+    along them (the `count` input per curve, default 21: a weld line, a section's
+    outline) with s, the distance along, and `curve`, each curve's number; or the
+    points where an edge crosses a face. Recomputed with the geometry."""
+    from OCP.BRepAdaptor import BRepAdaptor_Curve
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Section
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
+    from OCP.GCPnts import GCPnts_AbscissaPoint, GCPnts_UniformAbscissa
+    from OCP.gp import gp_Dir, gp_Pln, gp_Pnt
+
+    from puzzle.geometry.history import TopAbs_EDGE, TopAbs_VERTEX, _subshapes
+    from puzzle.geometry.measure import _compound
+    from puzzle.model.schema import Component, ConstructionGeometry
+
+    pl = _pl()
+    ev = _ev()
+    comp = ctx.project.objects.get(op.target) if op.target else None
+    if not isinstance(comp, Component):
+        raise PuzzleError(f"'{op.name}': pick a component", code="inconsistent")
+    a = _compound(_placed(ctx, comp, op.selection))
+    plane = next((c for c in ctx.project.of_type(ConstructionGeometry)
+                  if c.name == op.other and c.type == "plane"), None)  # fmt: skip
+    if plane is not None:
+        o, n = plane.frame(ctx.project)
+        b = BRepBuilderAPI_MakeFace(gp_Pln(gp_Pnt(*o), gp_Dir(*n))).Face()
+    else:
+        b = _compound(_placed(ctx, comp, op.other))
+    sec = BRepAlgoAPI_Section(a, b)
+    sec.Build()
+    if not sec.IsDone():
+        raise PuzzleError(f"'{op.name}': the intersection failed", code="invalid")
+    result = sec.Shape()
+    count = ev._typed_number(ctx, op, "count")
+    n = max(2, int(count.value) if count is not None else 21)
+    rows = {"curve": [], "x": [], "y": [], "z": [], "s": []}
+    for k, e in enumerate(_subshapes(result, TopAbs_EDGE), start=1):
+        curve = BRepAdaptor_Curve(e)
+        u = GCPnts_UniformAbscissa(curve, n)
+        for i in range(1, u.NbPoints() + 1):
+            q = curve.Value(u.Parameter(i))
+            rows["curve"].append(k)
+            rows["x"].append(q.X())
+            rows["y"].append(q.Y())
+            rows["z"].append(q.Z())
+            rows["s"].append(GCPnts_AbscissaPoint.Length_s(curve, curve.FirstParameter(),
+                                                            u.Parameter(i)))  # fmt: skip
+    if not rows["x"]:  # an edge through a face: points only
+        from OCP.BRep import BRep_Tool
+
+        for k, v in enumerate(_subshapes(result, TopAbs_VERTEX), start=1):
+            q = BRep_Tool.Pnt_s(v)
+            rows["curve"].append(k)
+            rows["x"].append(q.X())
+            rows["y"].append(q.Y())
+            rows["z"].append(q.Z())
+            rows["s"].append(0.0)
+    if not rows["x"]:
+        raise PuzzleError(f"'{op.name}': {op.selection} and {op.other} don't meet",
+                          code="not_found")  # fmt: skip
+    return _made(pl.DataFrame(rows), {"x": "length", "y": "length", "z": "length",
+                                      "s": "length"})  # fmt: skip

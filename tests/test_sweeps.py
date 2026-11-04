@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
+import polars as pl
 import pytest
 
 pytest.importorskip("OCP")
@@ -138,3 +140,142 @@ def test_loft_sections_typed_in_the_step_dialog():
     assert parse_sections(format_sections(got)) == got
     with pytest.raises(ValueError, match="plane offset"):
         parse_sections("0, 0; 1, 1")
+
+
+def test_thicken_a_sheet_and_patch_a_boundary():
+    from OCP.BRepGProp import BRepGProp as G
+    from OCP.GProp import GProp_GProps as P
+
+    from puzzle.geometry.history import _bounds
+
+    def area(shape):
+        props = P()
+        G.SurfaceProperties_s(shape, props)
+        return props.Mass()
+
+    sheet = [Op("sheet", "S", {"points": [[0, 0, 0], [0.1, 0, 0], [0.1, 0.05, 0], [0, 0.05, 0]]})]
+    flat = regenerate(sheet + [Op("thicken", "T", {"t": 0.004})])
+    assert volume(flat.shape) == pytest.approx(0.1 * 0.05 * 0.004, rel=1e-9)
+    assert {"S/face", "T/offset", "T/side"} <= set(flat.names)
+    both = regenerate(sheet + [Op("thicken", "T", {"t": 0.004, "both": True})])
+    assert (_bounds(both.shape)[2], _bounds(both.shape)[5]) == pytest.approx((-0.002, 0.002))
+    assert "S/face" in both.names
+    # a cylindrical panel, r 0.1 m, 80° by 0.2 m, thickened 5 mm outward: the annular
+    # sector's volume θ/2 ((r + t)² − r²) L
+    panel = regenerate([Op("curved_sheet", "C", {"r": 0.1, "length": 0.2, "angle": 80.0}),
+                        Op("thicken", "T", {"t": 0.005})])  # fmt: skip
+    assert volume(panel.shape) == pytest.approx(
+        math.radians(80) / 2 * (0.105**2 - 0.1**2) * 0.2, rel=1e-6)  # fmt: skip
+    patch = regenerate([Op("patch", "P", {"points": [[0, 0, 0], [0.1, 0, 0], [0.1, 0.1, 0],
+                                                     [0, 0.1, 0]]})])  # fmt: skip
+    assert area(patch.shape) == pytest.approx(0.01, rel=1e-6) and "P/patch" in patch.names
+    with pytest.raises(GeometryError, match="must be positive"):
+        regenerate(sheet + [Op("thicken", "T", {"t": 0})])
+
+
+def test_regions_on_faces_and_a_dxf_spline_kept_smooth(tmp_path):
+    from OCP.BRepGProp import BRepGProp as G
+    from OCP.GProp import GProp_GProps as P
+
+    def area(shape):
+        props = P()
+        G.SurfaceProperties_s(shape, props)
+        return props.Mass()
+
+    a = Op("sheet", "A", {"points": [[0, 0, 0], [0.1, 0, 0], [0.1, 0.1, 0], [0, 0.1, 0]]})
+    b = {"points": [[0.05, 0, 0], [0.15, 0, 0], [0.15, 0.1, 0], [0.05, 0.1, 0]]}
+    for mode, want in (("add", 0.015), ("cut", 0.005), ("intersect", 0.005)):
+        got = regenerate([a, Op("sheet", "B", {**b, "mode": mode})])
+        assert area(got.shape) == pytest.approx(want, rel=1e-9), mode
+    ezdxf = pytest.importorskip("ezdxf")
+    doc = ezdxf.new()
+    msp = doc.modelspace()
+    # a half-disc outline: a straight base and a spline arch through points on the
+    # circle r = 50 mm; the spline kept smooth gives the half disc's area π r² / 2
+    arch = [(50 * math.cos(t), 50 * math.sin(t)) for t in [i * math.pi / 16 for i in range(17)]]
+    msp.add_spline(fit_points=[(x, y, 0) for x, y in arch])
+    msp.add_line((-50, 0), (50, 0))
+    doc.header["$INSUNITS"] = 4  # mm
+    doc.saveas(tmp_path / "arch.dxf")
+    shape = regenerate([Op("extrude", "E", {"profile": {"dxf": "arch.dxf"}, "distance": 0.01})],
+                       root=tmp_path).shape  # fmt: skip
+    assert volume(shape) == pytest.approx(math.pi * 0.05**2 / 2 * 0.01, rel=2e-4)
+
+
+def test_a_sketch_with_a_spline():
+    r = 0.05
+    ts = [i * math.pi / 8 for i in range(9)]
+    points = {f"P{i}": [r * math.cos(t), r * math.sin(t)] for i, t in enumerate(ts)}
+    sketch = {"points": points, "lines": {"base": ["P8", "P0"]},
+              "splines": {"arch": [f"P{i}" for i in range(9)]}}  # fmt: skip
+    got = regenerate([Op("extrude", "E", {"profile": {"sketch": sketch}, "distance": 0.01})])
+    assert volume(got.shape) == pytest.approx(math.pi * r**2 / 2 * 0.01, rel=5e-4)
+    assert "E/arch" in got.names and "E/base" in got.names
+
+
+def test_the_sketch_editors_spline_tool():
+    pytest.importorskip("PySide6")
+    import os
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    from puzzle.gui.sketcher import SketchModel, summary
+
+    QApplication.instance() or QApplication([])
+    m = SketchModel()
+    a, b, c = m.add_point(0, 0), m.add_point(0.01, 0.01), m.add_point(0.02, 0)
+    name = m.add_spline([a, b, c])
+    assert m.entities()[name] == "spline" and summary(m.spec) == "1 spline"
+    m.delete(b)  # a point of it: the spline goes with it
+    assert not m.spec["splines"]
+
+
+def test_intersection_curves_and_points(tmp_path):
+    from optimise_beam import beam_project
+
+    from puzzle.model.schema import Component, ConstructionGeometry, Operator, PartInstance
+    from puzzle.operators import evaluate as ev
+    from puzzle.project import save_project
+
+    p, _ = beam_project()  # a box 200 x 20 x 6 mm
+    comp = next(iter(p.of_type(Component)))
+    comp.parts.append(PartInstance(name="B2", geometry=comp.parts[0].geometry,
+                                   translation=(0.0, 0.0, 0.006)))  # stacked on top  # fmt: skip
+    p.add(ConstructionGeometry(name="Mid", type="plane", origin=(0.1, 0, 0), normal=(1, 0, 0)))
+    root = tmp_path / "beam"
+    save_project(p, root)
+    cut = p.add(Operator(name="Cut", type="intersection", target=comp.id, selection="B",
+                         other="Mid"))  # fmt: skip
+    got = ev.value(ev.Context(p, None, root=root), cut).frame
+    assert np.allclose(got["x"].to_numpy(), 0.1)  # the section's outline at x = 0.1
+    per = got.group_by("curve").agg(pl.col("s").max()).sort("curve")["s"].to_list()
+    assert sorted(per) == pytest.approx(sorted([0.02, 0.006, 0.02, 0.006]))  # its four sides
+    meet = p.add(Operator(name="Meet", type="intersection", target=comp.id,
+                          selection="B", other="B2"))  # fmt: skip
+    got = ev.value(ev.Context(p, None, root=root), meet).frame
+    assert np.allclose(got["z"].to_numpy(), 0.006)  # where the stack's faces touch
+
+
+def test_deform_twist_taper_bend_and_box():
+    from puzzle.geometry.history import _bounds
+
+    box = [Op("box", "B", {"dx": 0.02, "dy": 0.02, "dz": 0.2})]
+    v0 = 0.02 * 0.02 * 0.2
+
+    def run(kind, **extra):
+        return regenerate(box + [Op("deform", "D", {"kind": kind, "axis": "z", **extra})])
+
+    twisted = run("twist", angle=90.0)
+    assert volume(twisted.shape) == pytest.approx(v0, rel=1e-4) and "B/+z" in twisted.names
+    tapered = run("taper", factor=0.5)  # to half the section's size: a frustum's volume
+    assert volume(tapered.shape) == pytest.approx(0.2 / 3 * (4e-4 + 1e-4 + 2e-4), rel=1e-4)
+    bent = run("bend", angle=90.0, toward="y")  # round a radius L / θ = 0.1273 m
+    r = 0.2 / (math.pi / 2)
+    assert volume(bent.shape) == pytest.approx(v0, rel=2e-3)
+    assert _bounds(bent.shape)[4] == pytest.approx(0.01 + r, rel=2e-3)  # every fibre at 90°
+    sheared = run("box", corners=[[0, 0, 0]] * 4 + [[0.01, 0, 0]] * 4)  # the top moved 10 mm
+    assert _bounds(sheared.shape)[3] == pytest.approx(0.03, rel=1e-4)
+    assert volume(sheared.shape) == pytest.approx(v0, rel=1e-4)
+    with pytest.raises(GeometryError, match="twist, taper, bend or box"):
+        run("melt")

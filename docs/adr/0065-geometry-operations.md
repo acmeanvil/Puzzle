@@ -1,6 +1,6 @@
 # 0065. Geometry operations from the Grasshopper review: sweeps, lofts, splines, mirror, scale, SubD, faceted booleans, morphing and queries
 
-- Status: Accepted (2026-11-03); phases 1 and 2 built (2026-11-04)
+- Status: Built (2026-11-04): phases 1 to 4
 - Date: 2026-11-03
 
 ## Context
@@ -278,3 +278,79 @@ The maintainer's answers:
     morphed. Every deflection is within 3 % of 4 F L³ / (E w (6 mm + dt)³), they fall
     at every step, and every run has the same nodes.
   - `tests/test_operators_gui.py`: the form, undone in one step.
+
+## Phase 3 built (2026-11-04)
+
+- **`patch`**: `BRepFill_Filling` over a boundary, either the edges a rule picks (as a
+  fillet's: `{"edges": [...]}`, `{"face": ...}`) or a closed polygon of points,
+  optionally through more points. Face `<step>/patch`.
+- **`thicken`**: OCCT's offset in thickening mode (`BRepOffset_MakeOffset`) makes a
+  sheet a solid along its normal, or half to each side (`both`: moved back first). The
+  sheet keeps its names; the new faces are `offset` and `side`.
+- **Regions on faces**: the add, cut and intersect modes work on sheets and faces as on
+  solids (OCCT's booleans on faces, then the unify). Union, difference and overlap of
+  two squares are checked.
+- **Intersection points and curves**: an `intersection` operator (ADR 0064's Geometry
+  group, not a construction object, so it feeds tables). It takes a component and two
+  parts or selections, or a part and a construction plane by name (`other`), and gives
+  `BRepAlgoAPI_Section`'s curves as points along each (`count`, `s`, `curve`), or its
+  crossing points. A section's outline or a weld line is a table that recomputes with
+  the geometry, to divide, probe or preview.
+- **DXF splines kept**: a SPLINE is one smooth edge through its fit points (or points
+  along it) instead of short segments.
+- **The sketcher's spline**: `"splines": {"name": [points]}`, solved with its points (their
+  constraints as any point's), a smooth edge in the profile, drawn through its points
+  in the editor. A Spline tool adds points by clicks and ends on a double-click or on
+  its first point.
+- **Tests** (`tests/test_sweeps.py`):
+  - A flat sheet thickened, volume A t within 1e-9; half to each side, z from −2 to
+    2 mm.
+  - A cylindrical panel thickened outward: θ/2 ((r + t)² − r²) L within 1e-6.
+  - A patch of a square, area 0.01 m².
+  - Region booleans: 0.015, 0.005 and 0.005 m².
+  - A DXF arch: the half disc's area within 0.02 %.
+  - A sketch with a spline arch: π r² / 2 within 0.05 %.
+  - The editor's spline.
+  - Intersections: the section's four sides at x = 0.1, and two stacked boxes meeting at
+    z = 6 mm.
+
+## Phase 4 built (2026-11-04)
+
+- **Faceted booleans** (item 6): manifold3d (Apache 2.0). It is not on conda-forge
+  after all, but PyPI has wheels for all five platforms, so it is a pixi PyPI
+  dependency and in the `geometry` extra.
+  - `meshfile.boolean(a, b, mode)`: triangles merged by position into manifold solids,
+    united, cut or intersected; the result is closed and manifold.
+  - A geometry from an STL, OBJ or 3MF has **Combine with another faceted part…**. It
+    writes the result to `imported/<name>.stl` as a new faceted geometry and leaves the
+    two parts as they are.
+  - A part with holes in its skin is refused.
+- **SubD** (item 7, b after a): a `subd` history step from a quad cage (an OBJ, or
+  points and faces). `geometry/subd.py`:
+  - Catmull–Clark in numpy, tracking each cage face's patch as a grid through the
+    levels, then the limit masks.
+  - Each patch's grid of limit points is interpolated by `GeomAPI_PointsToBSplineSurface`
+    with uniform parameters, so neighbours share their boundary curves. The patches are
+    sewn and made a solid.
+  - Faces are `face-N`, after the cage faces. Option a (SubD as NURBS in STEP) needed
+    nothing new: those STEP files import as any B-rep.
+- **`deform`** (item 8): twist, taper, bend (round an arc of radius length / angle) or a
+  free-form box (eight corner moves, trilinear). It moves the B-rep's poles with the
+  morphed export's method, now with `convert=False`, so the faces are moved in place
+  and keep their names.
+- **Tests**:
+  - `tests/test_faceted_boolean.py`: two unit cubes overlapping by half give a union of
+    1.5 m³, and a difference and overlap of 0.5 m³ each, within 1e-6. The union is
+    written and read back as STL; a bad mode and a holed cube are refused.
+  - `tests/test_subd.py`: a cube cage gives one closed solid (6 faces, 12 edges, no free
+    edges). Its volume matches the limit surface, faceted at six levels, within 0.05 %;
+    three and four levels agree within 0.02 %; the OBJ cage in millimetres gives the
+    same.
+  - `tests/test_sweeps.py`, deform:
+    - A 90° twist keeps the volume.
+    - A taper to half gives the frustum's volume.
+    - A 90° bend reaches y = 0.01 + L/θ and keeps its volume within 0.2 %.
+    - A box shear moves the top 10 mm and keeps the volume.
+    - An unknown kind is refused.
+
+This closes the ADR.

@@ -257,9 +257,12 @@ def _spacing(points: np.ndarray, triangles: np.ndarray) -> float:
 # --- the morph (pure OCCT) -------------------------------------------------------------
 
 
-def morph(shape, move: Callable[[np.ndarray], np.ndarray], spacing: float):
+def morph(shape, move: Callable[[np.ndarray], np.ndarray], spacing: float,
+          convert: bool = True):  # fmt: skip
     """`shape` with its geometry moved by `move` (points (n, 3) -> displacements (n, 3)),
-    poles about `spacing` apart. Raises when the moved shape isn't a valid solid."""
+    poles about `spacing` apart. Raises when the moved shape isn't a valid solid.
+    `convert` False: the shape is NURBS already and is moved in place (its faces stay
+    the same objects, so names on them hold: ADR 0065's `deform`)."""
     from OCP.BRep import BRep_Builder, BRep_Tool
     from OCP.BRepBuilderAPI import BRepBuilderAPI_NurbsConvert
     from OCP.BRepCheck import BRepCheck_Analyzer
@@ -271,7 +274,7 @@ def morph(shape, move: Callable[[np.ndarray], np.ndarray], spacing: float):
 
     from puzzle.geometry.history import _static
 
-    nurbs = BRepBuilderAPI_NurbsConvert(shape, True).Shape()
+    nurbs = BRepBuilderAPI_NurbsConvert(shape, True).Shape() if convert else shape
     surface_of, curve_of = _static(BRep_Tool, "Surface"), _static(BRep_Tool, "Curve")
     pnt_of, tol_of = _static(BRep_Tool, "Pnt"), _static(BRep_Tool, "Tolerance")
     degenerated = _static(BRep_Tool, "Degenerated")

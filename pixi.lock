@@ -740,6 +740,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.1-pyh5ded981_0.conda
       - pypi: ./
       - pypi: https://files.pythonhosted.org/packages/02/6f/b7025abfa2d22d65a4b5fa5f12fdeeda10e5dd96d42ddccaa546c1c5a35b/py_slvs-1.0.6-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+      - pypi: https://files.pythonhosted.org/packages/9e/04/91323ab10f23d185931b572622589673ec561a8106fa1ae0f2fc876fb960/manifold3d-3.5.4-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
       linux-aarch64:
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/_openmp_mutex-4.5-20_gnu.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/aiohttp-3.14.5-py312he7c6268_0.conda
@@ -1123,6 +1124,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.1-pyh5ded981_0.conda
       - pypi: ./
       - pypi: https://files.pythonhosted.org/packages/b2/b0/ebe2728ee889707be4fb4c7220b4441df3a15a16f000a44006a0f2ee2890/py_slvs-1.0.6-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
+      - pypi: https://files.pythonhosted.org/packages/c3/f2/15ab84b2a80dcdc91ef53cde5fafdeb63cc3989646f17da7542011522b58/manifold3d-3.5.4-cp312-cp312-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl
       osx-64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_3.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/aiohappyeyeballs-2.7.1-pyhd8ed1ab_0.conda
@@ -1446,6 +1448,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstandard-0.25.0-py312hdc27ec5_4.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-hbc1a06c_7.conda
       - pypi: ./
+      - pypi: https://files.pythonhosted.org/packages/1f/95/3b2e63c154d3b2e70cb8e52fc72a061eaf1bc82e826c955b324381162dc7/manifold3d-3.5.4-cp312-cp312-macosx_10_14_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/38/89/edd72f86faac3c8948398cbcf909ebe3e45bbb1d1f857cc9854a627e3c48/py_slvs-1.0.6-cp312-cp312-macosx_10_13_x86_64.whl
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_3.conda
@@ -1782,6 +1785,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstandard-0.25.0-py312hbd136b4_4.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hf451053_7.conda
       - pypi: ./
+      - pypi: https://files.pythonhosted.org/packages/66/28/6ec4f751be1b5868964eb92925da789c985efdaff5f0a5f85b47cbd87428/manifold3d-3.5.4-cp312-cp312-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/66/46/748381fa23c5fc4020f4bc582e20f2483fae32b05e3b39544495129c943e/py_slvs-1.0.6-cp312-cp312-macosx_11_0_arm64.whl
       win-64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_3.conda
@@ -2096,6 +2100,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/win-64/zstd-1.5.7-h534d264_7.conda
       - pypi: ./
       - pypi: https://files.pythonhosted.org/packages/5f/85/afc20196fea3b0264c6cf61ffcc69386cca26643efb115dcbb45d402a0fd/py_slvs-1.0.6-cp312-cp312-win_amd64.whl
+      - pypi: https://files.pythonhosted.org/packages/a9/35/6b67f3af439f209b6f4ba653a5f3500f56464c99274fb4aa21323886c762/manifold3d-3.5.4-cp312-cp312-win_amd64.whl
   dev:
     channels:
     - url: https://conda.anaconda.org/conda-forge/
@@ -2518,6 +2523,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.1-pyh5ded981_0.conda
       - pypi: ./
       - pypi: https://files.pythonhosted.org/packages/02/6f/b7025abfa2d22d65a4b5fa5f12fdeeda10e5dd96d42ddccaa546c1c5a35b/py_slvs-1.0.6-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+      - pypi: https://files.pythonhosted.org/packages/9e/04/91323ab10f23d185931b572622589673ec561a8106fa1ae0f2fc876fb960/manifold3d-3.5.4-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
       linux-aarch64:
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/_openmp_mutex-4.5-20_gnu.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/aiohttp-3.14.5-py312he7c6268_0.conda
@@ -2927,6 +2933,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.1-pyh5ded981_0.conda
       - pypi: ./
       - pypi: https://files.pythonhosted.org/packages/b2/b0/ebe2728ee889707be4fb4c7220b4441df3a15a16f000a44006a0f2ee2890/py_slvs-1.0.6-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
+      - pypi: https://files.pythonhosted.org/packages/c3/f2/15ab84b2a80dcdc91ef53cde5fafdeb63cc3989646f17da7542011522b58/manifold3d-3.5.4-cp312-cp312-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl
       osx-64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_3.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/aiohappyeyeballs-2.7.1-pyhd8ed1ab_0.conda
@@ -3273,6 +3280,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstandard-0.25.0-py312hdc27ec5_4.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-hbc1a06c_7.conda
       - pypi: ./
+      - pypi: https://files.pythonhosted.org/packages/1f/95/3b2e63c154d3b2e70cb8e52fc72a061eaf1bc82e826c955b324381162dc7/manifold3d-3.5.4-cp312-cp312-macosx_10_14_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/38/89/edd72f86faac3c8948398cbcf909ebe3e45bbb1d1f857cc9854a627e3c48/py_slvs-1.0.6-cp312-cp312-macosx_10_13_x86_64.whl
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_3.conda
@@ -3632,6 +3640,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstandard-0.25.0-py312hbd136b4_4.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hf451053_7.conda
       - pypi: ./
+      - pypi: https://files.pythonhosted.org/packages/66/28/6ec4f751be1b5868964eb92925da789c985efdaff5f0a5f85b47cbd87428/manifold3d-3.5.4-cp312-cp312-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/66/46/748381fa23c5fc4020f4bc582e20f2483fae32b05e3b39544495129c943e/py_slvs-1.0.6-cp312-cp312-macosx_11_0_arm64.whl
       win-64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_3.conda
@@ -3969,6 +3978,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/win-64/zstd-1.5.7-h534d264_7.conda
       - pypi: ./
       - pypi: https://files.pythonhosted.org/packages/5f/85/afc20196fea3b0264c6cf61ffcc69386cca26643efb115dcbb45d402a0fd/py_slvs-1.0.6-cp312-cp312-win_amd64.whl
+      - pypi: https://files.pythonhosted.org/packages/a9/35/6b67f3af439f209b6f4ba653a5f3500f56464c99274fb4aa21323886c762/manifold3d-3.5.4-cp312-cp312-win_amd64.whl
   fenicsx:
     channels:
     - url: https://conda.anaconda.org/conda-forge/
@@ -5832,6 +5842,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.1-pyh5ded981_0.conda
       - pypi: ./
       - pypi: https://files.pythonhosted.org/packages/02/6f/b7025abfa2d22d65a4b5fa5f12fdeeda10e5dd96d42ddccaa546c1c5a35b/py_slvs-1.0.6-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+      - pypi: https://files.pythonhosted.org/packages/9e/04/91323ab10f23d185931b572622589673ec561a8106fa1ae0f2fc876fb960/manifold3d-3.5.4-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
       linux-aarch64:
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/_openmp_mutex-4.5-20_gnu.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/aiohttp-3.14.5-py312he7c6268_0.conda
@@ -6241,6 +6252,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.1-pyh5ded981_0.conda
       - pypi: ./
       - pypi: https://files.pythonhosted.org/packages/b2/b0/ebe2728ee889707be4fb4c7220b4441df3a15a16f000a44006a0f2ee2890/py_slvs-1.0.6-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
+      - pypi: https://files.pythonhosted.org/packages/c3/f2/15ab84b2a80dcdc91ef53cde5fafdeb63cc3989646f17da7542011522b58/manifold3d-3.5.4-cp312-cp312-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl
       osx-64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_3.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/aiohappyeyeballs-2.7.1-pyhd8ed1ab_0.conda
@@ -6587,6 +6599,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstandard-0.25.0-py312hdc27ec5_4.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-hbc1a06c_7.conda
       - pypi: ./
+      - pypi: https://files.pythonhosted.org/packages/1f/95/3b2e63c154d3b2e70cb8e52fc72a061eaf1bc82e826c955b324381162dc7/manifold3d-3.5.4-cp312-cp312-macosx_10_14_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/38/89/edd72f86faac3c8948398cbcf909ebe3e45bbb1d1f857cc9854a627e3c48/py_slvs-1.0.6-cp312-cp312-macosx_10_13_x86_64.whl
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_3.conda
@@ -6946,6 +6959,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstandard-0.25.0-py312hbd136b4_4.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hf451053_7.conda
       - pypi: ./
+      - pypi: https://files.pythonhosted.org/packages/66/28/6ec4f751be1b5868964eb92925da789c985efdaff5f0a5f85b47cbd87428/manifold3d-3.5.4-cp312-cp312-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/66/46/748381fa23c5fc4020f4bc582e20f2483fae32b05e3b39544495129c943e/py_slvs-1.0.6-cp312-cp312-macosx_11_0_arm64.whl
       win-64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_3.conda
@@ -7283,6 +7297,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/win-64/zstd-1.5.7-h534d264_7.conda
       - pypi: ./
       - pypi: https://files.pythonhosted.org/packages/5f/85/afc20196fea3b0264c6cf61ffcc69386cca26643efb115dcbb45d402a0fd/py_slvs-1.0.6-cp312-cp312-win_amd64.whl
+      - pypi: https://files.pythonhosted.org/packages/a9/35/6b67f3af439f209b6f4ba653a5f3500f56464c99274fb4aa21323886c762/manifold3d-3.5.4-cp312-cp312-win_amd64.whl
   netgen:
     channels:
     - url: https://conda.anaconda.org/conda-forge/
@@ -40980,6 +40995,7 @@ packages:
   - cadquery-ocp>=7.7 ; extra == 'geometry'
   - ezdxf>=1.1 ; extra == 'geometry'
   - py-slvs>=1.0.6 ; extra == 'geometry'
+  - manifold3d>=3.0 ; extra == 'geometry'
   - meshio>=5.3 ; extra == 'mesh'
   - pyvista>=0.44 ; extra == 'post'
   - pyside6>=6.7 ; extra == 'gui'
@@ -40995,6 +41011,14 @@ packages:
   name: py-slvs
   version: 1.0.6
   sha256: 0a16cf9dcc453dcf9a920e61f03dba8ac426d03f397414d91243afce7f031c9b
+- pypi: https://files.pythonhosted.org/packages/1f/95/3b2e63c154d3b2e70cb8e52fc72a061eaf1bc82e826c955b324381162dc7/manifold3d-3.5.4-cp312-cp312-macosx_10_14_x86_64.whl
+  name: manifold3d
+  version: 3.5.4
+  sha256: b1ae587cf7cfa489fb50bba84a0e048d9daadd105b6a047a312e45a7602163fa
+  requires_dist:
+  - numpy ; python_full_version < '3.12'
+  - numpy>=1.26.0b1 ; python_full_version >= '3.12'
+  requires_python: '>=3.9'
 - pypi: https://files.pythonhosted.org/packages/38/89/edd72f86faac3c8948398cbcf909ebe3e45bbb1d1f857cc9854a627e3c48/py_slvs-1.0.6-cp312-cp312-macosx_10_13_x86_64.whl
   name: py-slvs
   version: 1.0.6
@@ -41003,11 +41027,43 @@ packages:
   name: py-slvs
   version: 1.0.6
   sha256: 97996401b6ff69c639e89399b5004a1d30e11cf0b26a32abd70cac3ad4667a13
+- pypi: https://files.pythonhosted.org/packages/66/28/6ec4f751be1b5868964eb92925da789c985efdaff5f0a5f85b47cbd87428/manifold3d-3.5.4-cp312-cp312-macosx_11_0_arm64.whl
+  name: manifold3d
+  version: 3.5.4
+  sha256: d440e37d1e9888f90f42c70b4b3da98655be54105616e7739d84692bf7bda671
+  requires_dist:
+  - numpy ; python_full_version < '3.12'
+  - numpy>=1.26.0b1 ; python_full_version >= '3.12'
+  requires_python: '>=3.9'
 - pypi: https://files.pythonhosted.org/packages/66/46/748381fa23c5fc4020f4bc582e20f2483fae32b05e3b39544495129c943e/py_slvs-1.0.6-cp312-cp312-macosx_11_0_arm64.whl
   name: py-slvs
   version: 1.0.6
   sha256: 2eb1a5652eb3c8371119b06cd357d599614778172fb271dbc23995ae4179006d
+- pypi: https://files.pythonhosted.org/packages/9e/04/91323ab10f23d185931b572622589673ec561a8106fa1ae0f2fc876fb960/manifold3d-3.5.4-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
+  name: manifold3d
+  version: 3.5.4
+  sha256: 4a985892699268bbf07192b78b5e5569034c41ce74bf8183495123e8095af4fe
+  requires_dist:
+  - numpy ; python_full_version < '3.12'
+  - numpy>=1.26.0b1 ; python_full_version >= '3.12'
+  requires_python: '>=3.9'
+- pypi: https://files.pythonhosted.org/packages/a9/35/6b67f3af439f209b6f4ba653a5f3500f56464c99274fb4aa21323886c762/manifold3d-3.5.4-cp312-cp312-win_amd64.whl
+  name: manifold3d
+  version: 3.5.4
+  sha256: 5be1025860df8a83ed3c4fd585d87376b075e23ea45e833578fe77eacc49bee1
+  requires_dist:
+  - numpy ; python_full_version < '3.12'
+  - numpy>=1.26.0b1 ; python_full_version >= '3.12'
+  requires_python: '>=3.9'
 - pypi: https://files.pythonhosted.org/packages/b2/b0/ebe2728ee889707be4fb4c7220b4441df3a15a16f000a44006a0f2ee2890/py_slvs-1.0.6-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
   name: py-slvs
   version: 1.0.6
   sha256: f45c467a4526a09d2b9d32c1e48ef394bdea8110d4f4c3228c9a1fa22bfaa055
+- pypi: https://files.pythonhosted.org/packages/c3/f2/15ab84b2a80dcdc91ef53cde5fafdeb63cc3989646f17da7542011522b58/manifold3d-3.5.4-cp312-cp312-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl
+  name: manifold3d
+  version: 3.5.4
+  sha256: 4f4e8ca1c59d68047b262dbdb6e917ac4abff2942a65e7e469f4a398ce1f0b9b
+  requires_dist:
+  - numpy ; python_full_version < '3.12'
+  - numpy>=1.26.0b1 ; python_full_version >= '3.12'
+  requires_python: '>=3.9'

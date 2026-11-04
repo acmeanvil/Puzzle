@@ -39,6 +39,7 @@ xlsxwriter = ">=3.0"  # their Excel export (ADR 0064)
 [pypi-dependencies]
 puzzle-fem = { path = ".", editable = true }
 py-slvs = ">=1.0.6"  # SolveSpace's constraint solver for sketches (ADR 0014, G5); not on conda-forge
+manifold3d = ">=3.0"  # booleans on faceted meshes (ADR 0065); wheels for every platform, not on conda-forge
 
 [tasks]
 test = "pytest"
