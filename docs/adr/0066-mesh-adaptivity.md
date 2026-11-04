@@ -178,3 +178,38 @@ The maintainer's answers:
 3. Netgen supported, as an adjunct to Gmsh (item 5).
 4. Anisotropic adaptation now, with MMG (item 5, phase 4).
 5. Earlier passes: kept for review by default, deleting them an option (item 4).
+
+## Phase 1 (built, 2026-11-04)
+
+- `puzzle/convergence.py`: `levels` plans the meshes (each recipe size divided by
+  ratio^k; transfinite counts multiplied; Gmsh's `Mesh.MeshSizeFactor` when the recipe
+  has no global size; Netgen refused without one). `run` solves each level as the
+  study's own stored run (labels `mesh: level 2: 4 mm`, cached by run key, so a check
+  resumes) or, `read_only`, reads back what ran. `verdicts` applies Roache's GCI to the
+  three finest: refinement ratios from the element counts, observed order by
+  fixed-point iteration, extrapolated value, GCI with safety 1.25, and states
+  converged, not converged, oscillating, not in the asymptotic range (order outside
+  0.5 to 6) and too few levels. `settings`, `report` and `lines` are shared by the
+  clients.
+- Schema: `Convergence` (levels, ratio, target, quantities as `DesignOutput`s) on
+  `Study.convergence` (left out of the study's hash), and `MeshStudy` (kind
+  `mesh_study`) for several checks of one study. The default quantity is the largest
+  value of the study's first result.
+- The Advisor's Mesh convergence step reads the verdicts, never solves: "1 of 3 meshes
+  run", "converged within 0.03 % (GCI)", or "needed" with Check mesh convergence….
+- CLI `puzzle convergence PROJECT STUDY [--levels] [--ratio] [--target] [--points]
+  [--json]` (exit 0 only when converged); MCP `mesh_convergence` (solving needs "act");
+  GUI: a study's Check mesh convergence… (one form; the settings kept on the study as
+  one Edit), run in the background, and the Convergence panel (`gui/convergence_panel.py`:
+  the meshes' table in display units to six digits, each quantity plotted against
+  elements with its extrapolated line, the verdicts, Run the rest). Skill
+  `mesh-convergence`. The outline gives each check's settings and the meshes run;
+  the schematic draws a mesh study right of its study ("drives"), with the meshes run
+  and the verdict.
+- Benchmark `tests/integration/test_mesh_convergence.py` (CalculiX): the 200 × 20 × 6
+  mm steel cantilever on second-order tets from 8 mm converges with observed order
+  4.1 and GCI 0.03 %, extrapolated 3.5013 mm against Timoshenko's 3.5297 mm (−0.8 %,
+  the wide beam's Poisson stiffening). First-order tets from 4 mm lock and are
+  reported not converged (GCI 26 %), their extrapolation nearer the answer than the
+  finest mesh.
+

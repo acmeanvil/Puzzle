@@ -388,6 +388,17 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", help="the points as JSON")
     p.set_defaults(handler=_optimise)
 
+    p = sub.add_parser("convergence", help="a study on finer and finer meshes, judged by the "
+                       "grid convergence index (ADR 0066)")  # fmt: skip
+    p.add_argument("project", type=Path)
+    p.add_argument("study", help="the study, or a mesh study")
+    p.add_argument("--levels", type=int, metavar="N", help="how many meshes (default 3)")
+    p.add_argument("--ratio", type=float, metavar="R", help="each mesh's sizes over the next")
+    p.add_argument("--target", type=float, metavar="T", help="the GCI that counts as converged")
+    p.add_argument("--points", action="store_true", help="read the meshes run; solve nothing")
+    p.add_argument("--json", action="store_true", help="levels and verdicts as JSON")
+    p.set_defaults(handler=_convergence)
+
     p = sub.add_parser("import-field", help="bring in values at points from a file (ADR 0044)")
     p.add_argument("project", type=Path)
     p.add_argument("file", type=Path, nargs="+", help="CSV/TXT/DAT (x, y, z and values), VTU, "
@@ -1001,6 +1012,31 @@ def _selections(args) -> int:
                 Session(args.project).submit(Edit(object=str(geo.id), ops=ops))
                 print(f"  reattached ({len(choices)} selection(s); undo with puzzle undo)")
     return 1 if detached and not args.accept_all else 0
+
+
+def _convergence(args) -> int:
+    """ADR 0066: solve the levels not run yet (or only read them), then the verdicts."""
+    import json
+
+    from puzzle import convergence as conv
+    from puzzle.commands import Session
+    from puzzle.project.layout import WORK_DIR
+
+    s = Session(args.project)
+    study, c = conv.settings(s.project, args.study)
+    count = args.levels or c.levels
+    ratio = args.ratio or c.ratio
+    target = args.target or c.target
+    lv = conv.run(s.project, study, args.project, args.project / WORK_DIR / "convergence"
+                  / str(study.id), store=_store(args.project), count=count, ratio=ratio,
+                  outputs=c.quantities, on_output=None if args.json else print,
+                  read_only=args.points)  # fmt: skip
+    vs = conv.verdicts(lv, target)
+    if args.json:
+        print(json.dumps(conv.report(lv, vs, target), indent=1, default=str))
+    else:
+        print("\n".join(conv.lines(lv, vs)))
+    return 0 if vs and all(v.state == "converged" for v in vs) else 1
 
 
 def _optimise(args) -> int:

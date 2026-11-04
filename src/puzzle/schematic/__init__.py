@@ -58,6 +58,7 @@ SHOWN = {
     "result": "node",
     "operator": "node",  # ADR 0062
     "optimisation": "node",  # ADR 0063
+    "mesh_study": "node",  # ADR 0066
     "transfer": "wire",
     "axes": "chip",
     "amplitude": "chip",
@@ -90,6 +91,7 @@ KIND_WORDS = {
     "result": "Derived result",
     "operator": "Operator",
     "optimisation": "Optimisation",
+    "mesh_study": "Mesh study",
     "group": "Group",
 }
 # What flows along a data wire, for its colour (as Blender colours sockets by type).
@@ -482,6 +484,7 @@ def build(
 
     _operators(project, out, store, states)
     _optimisations(project, out, store)
+    _mesh_studies(project, out, store)
     _chips(project, out, names)
     for n in out.nodes.values():
         n.used_by = len({w.target for w in out.wires if w.kind == "use" and w.source == n.id})
@@ -537,6 +540,36 @@ def _operators(project: Project, out: Schematic, store, states: dict) -> None:
             node.value, node.verdict = ev.shown(ctx, op)
             if op.type == "slider":
                 node.slider = _slider_of(ctx, op)
+
+
+def _mesh_studies(project: Project, out: Schematic, store) -> None:
+    """Mesh studies (ADR 0066) right of the study they drive, as optimisations are: a
+    "drives" mark from the study, the meshes run and the verdict."""
+    from puzzle.model.schema import MeshStudy
+
+    for ms in project.of_type(MeshStudy):
+        node = Node(str(ms.id), "mesh_study", RESULTS, ms.name,
+                    subtitle=f"{ms.levels} meshes, ratio {ms.ratio:g}",
+                    object=str(ms.id))  # fmt: skip
+        out.nodes[node.id] = node
+        if str(ms.study) in out.nodes:
+            out.wires.append(Wire(str(ms.study), node.id, "drives", label="drives",
+                                  object=str(ms.id)))  # fmt: skip
+        study = project.objects.get(ms.study)
+        if store is None or study is None:
+            continue
+        from puzzle import convergence as conv
+
+        try:
+            levels = conv.run(project, study, Path("."), Path("."), store=store,
+                              count=ms.levels, ratio=ms.ratio, outputs=ms.quantities,
+                              read_only=True)  # fmt: skip
+        except Exception:  # noqa: BLE001 - a broken check still draws
+            continue
+        node.badge = f"{sum(1 for lv in levels if lv.run)} of {len(levels)} meshes"
+        vs = conv.verdicts(levels, ms.target)
+        if any(v.state != "too few levels" for v in vs):
+            node.value = "; ".join(v.words for v in vs)
 
 
 def _optimisations(project: Project, out: Schematic, store) -> None:

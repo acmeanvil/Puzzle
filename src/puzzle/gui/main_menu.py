@@ -544,9 +544,19 @@ def _results(window, menu: QMenu) -> None:
 
     _add(menu, "New optimisation…", lambda: new_optimisation(window),
          "Run a study once per point of a plan: design of experiments, the best point")  # fmt: skip
+    _add(menu, "Check mesh convergence…", lambda: _convergence(window),
+         "The study on finer and finer meshes: is the mesh fine enough?")  # fmt: skip
     menu.addSeparator()
     _add(menu, "Export…", lambda: _export(window),
          "Results for other software: ParaView, point clouds, the deformed shape")  # fmt: skip
+
+
+def _convergence(window) -> None:
+    from puzzle.gui import convergence_panel
+
+    study = current_study(window, "Check mesh convergence")
+    if study is not None:
+        convergence_panel.check(window, str(study.id))
 
 
 def _compare(window) -> None:
@@ -578,6 +588,7 @@ def _window(window, menu: QMenu, agent: QAction, messages: QAction) -> None:
         (window.versions_dock, "Versions", "Ctrl+8"),
         (window.schematic_dock, "Schematic", "Ctrl+9"),
         (window.optimisation_dock, "Optimisation", "Ctrl+0"),
+        (window.convergence_dock, "Convergence", "Ctrl+Shift+0"),
     ):
         # Not the dock's own toggle action: Qt renames that with the dock's title
         # (Properties reads "Tool" while a tool is open).

@@ -526,6 +526,16 @@ class MainWindow(QMainWindow):
         self.optimisation_dock.visibilityChanged.connect(
             lambda shown: shown and self.optimisation.refresh())  # fmt: skip
         self.optimisation_dock.hide()  # Window → Optimisation, or an optimisation's menu
+        from puzzle.gui.convergence_panel import ConvergencePanel  # ADR 0066
+
+        self.convergence = ConvergencePanel(self)
+        self.convergence_dock = self.docks.add(
+            "convergence", "Convergence", self.convergence,
+            Qt.DockWidgetArea.BottomDockWidgetArea)  # fmt: skip
+        self.docks.tab("messages", "convergence")
+        self.convergence_dock.visibilityChanged.connect(
+            lambda shown: shown and self.convergence.refresh())  # fmt: skip
+        self.convergence_dock.hide()  # a study's Check mesh convergence…, or Window
         self.schematic_panel = SchematicPanel(self)  # beside the 3D view (ADR 0058)
         self.schematic_dock = self.docks.add(
             "schematic", "Schematic", self.schematic_panel, Qt.DockWidgetArea.BottomDockWidgetArea
@@ -664,6 +674,8 @@ class MainWindow(QMainWindow):
             self.versions.refresh()
         if not self.optimisation_dock.isHidden():
             self.optimisation.refresh()
+        if not self.convergence_dock.isHidden():
+            self.convergence.refresh()
         self.agent.refresh()
         waiting = self.agent.proposals.count()
         if waiting > self._proposals_seen:  # a new proposal: open the agent, no focus
@@ -793,6 +805,11 @@ class MainWindow(QMainWindow):
         """The Optimisation panel on one optimisation's points (ADR 0063)."""
         self.docks.show("optimisation")
         self.optimisation.show(opt_id)
+
+    def show_convergence(self, study_id: str) -> None:
+        """The Convergence panel on one study's mesh convergence check (ADR 0066)."""
+        self.docks.show("convergence")
+        self.convergence.show(study_id)
 
     def open_operator_palette(self, at=None):
         """Find an operator by name and make it (ADR 0062), wired from the schematic's

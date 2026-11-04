@@ -146,6 +146,10 @@ class AdvisorPanel(QWidget):
             comp = comps[0] if comps else None
         if study is None and comp is not None:
             study = next((s for s in project.of_type(Study) if s.component == comp.id), None)
+        if action.startswith("convergence:"):  # ADR 0066
+            from puzzle.gui.convergence_panel import check
+
+            return check(w, action.split(":", 1)[1])
         if action.startswith("apply_best:"):  # ADR 0063: only when asked
             from puzzle.gui.optimisation_panel import apply_best
 

@@ -1618,6 +1618,20 @@ class Shootout(BaseModel):
     metrics: list[ComparisonMetric] = Field(default_factory=list)
 
 
+class Convergence(BaseModel):
+    """A mesh convergence check (ADR 0066): the study on `levels` meshes, each finer by
+    `ratio` (sizes divided), its `quantities` (operators or result tools; none: the
+    maximum of its first result) judged by the GCI against `target`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    levels: int = Field(default=3, ge=2, le=8)
+    ratio: float = Field(default=1.5, gt=1, le=4, description="each mesh's sizes over the next")
+    target: float = Field(default=0.02, gt=0, lt=1, description="the GCI that counts as "
+                          "converged (0.02 = 2 %)")  # fmt: skip
+    quantities: list[DesignOutput] = Field(default_factory=list)
+
+
 class MorphHandle(BaseModel):
     """A face selection whose nodes a morph moves (ADR 0065 phase 2): `distance` (m,
     or a parameter's name, so an optimisation's variable drives it) along `direction`,
@@ -1652,6 +1666,9 @@ class Study(ProjectObject):
     solver: str
     steps: list[Step] = Field(default_factory=list)
     shootout: Shootout | None = None
+    convergence: Convergence | None = Field(
+        default=None, description="a mesh convergence check of this study (ADR 0066); "
+        "never changes its solve")  # fmt: skip
     morph: Morph | None = Field(
         default=None, description="the mesh morphed after meshing (ADR 0065 phase 2): "
         "handles moved, the rest following; shape optimisation without remeshing")  # fmt: skip
@@ -2370,6 +2387,26 @@ class Optimisation(ProjectObject):
         return [self.study, *dict.fromkeys(outs)]
 
 
+class MeshStudy(ProjectObject):
+    """A mesh convergence study as its own object (ADR 0066 item 1): a study, its levels,
+    ratio, target and quantities, for several checks of one study or full control."""
+
+    kind: ClassVar[str] = "mesh_study"
+
+    study: UUID
+    levels: int = Field(default=3, ge=2, le=8)
+    ratio: float = Field(default=1.5, gt=1, le=4)
+    target: float = Field(default=0.02, gt=0, lt=1)
+    quantities: list[DesignOutput] = Field(default_factory=list)
+
+    def dependencies(self) -> list[UUID]:
+        return [self.study, *dict.fromkeys(q.source for q in self.quantities)]
+
+    def check(self) -> Convergence:
+        return Convergence(levels=self.levels, ratio=self.ratio, target=self.target,
+                           quantities=self.quantities)  # fmt: skip
+
+
 class TreeGroup(ProjectObject):
     """A folder in the model tree, under one section's heading ("Studies", "Results",
     ...): only how the tree is organised, never an input to a solve. `members` are the
@@ -2463,6 +2500,7 @@ OBJECT_TYPES: tuple[type[ProjectObject], ...] = (
     ResultProbe,
     Operator,
     Optimisation,
+    MeshStudy,
     Amplitude,
     CoordinateSystem,
     ConstructionGeometry,

@@ -1029,6 +1029,37 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
                    if opt.method == "robust" else {})}  # fmt: skip
 
     @tool(
+        description="Mesh convergence (ADR 0066): the study (or a mesh study, by name) on "
+        "`levels` meshes, each one's sizes divided by `ratio`, its quantities judged by "
+        "Roache's grid convergence index: observed order, extrapolated value, GCI against "
+        "`target` (0.02 = 2 %). `solve` false (the default) only reads the meshes already "
+        "run; solving needs autonomy 'act'. Each level is a stored run, reused next time."
+    )
+    @guarded
+    def mesh_convergence(
+        study: str,
+        levels: int | None = None,
+        ratio: float | None = None,
+        target: float | None = None,
+        solve: bool = False,
+    ) -> dict[str, Any]:
+        from puzzle import convergence as conv
+        from puzzle.project.layout import RESULTS_DIR, WORK_DIR
+        from puzzle.results.store import ResultStore
+
+        s = session()
+        if solve and s.project.agent.level not in ("act", "act_in_budget"):
+            raise PuzzleError("solving a convergence check needs autonomy 'act'",
+                              code="not_allowed")  # fmt: skip
+        st, c = conv.settings(s.project, study)
+        goal = target or c.target
+        lv = conv.run(s.project, st, root, root / WORK_DIR / "convergence" / str(st.id),
+                      store=ResultStore(root / RESULTS_DIR), count=levels or c.levels,
+                      ratio=ratio or c.ratio, outputs=c.quantities,
+                      read_only=not solve)  # fmt: skip
+        return conv.report(lv, conv.verdicts(lv, goal), goal)
+
+    @tool(
         description="Run an optimisation's points (ADR 0063; needs autonomy 'act', as "
         "runs do; each point is a stored run, a point run before is reused, so a stopped "
         "optimiser resumes on its path); `budget` solves at most that many new points this "

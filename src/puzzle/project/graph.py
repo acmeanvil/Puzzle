@@ -39,6 +39,8 @@ def _own(obj: ProjectObject, *, drop: frozenset[str] = frozenset()) -> dict:
     data = obj.model_dump(mode="json", exclude=exclude)
     if isinstance(obj, Study) and data.get("morph") is None:  # ADR 0065: none, as before
         data.pop("morph", None)
+    if isinstance(obj, Study):  # ADR 0066: a check of the study never changes its solve
+        data.pop("convergence", None)
     data.pop("hidden", None)  # what the view shows never changes a solve
     data.pop("tags", None)  # nor do the words it is found by (ADR 0064A J6)
     if data.get("share_faces") is True:  # the default: older projects keep their hashes

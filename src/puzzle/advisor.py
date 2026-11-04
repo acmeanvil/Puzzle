@@ -30,6 +30,11 @@ TEXT = {
         "A design of experiments or an optimisation ran: its best "
         "point can be applied to the model.",
     ),  # fmt: skip
+    "convergence": (
+        "Mesh convergence",
+        "The study's quantities on finer and finer meshes: whether the mesh is fine "
+        "enough (ADR 0066).",
+    ),  # fmt: skip
     "geometry": ("Geometry", "The shape to analyse: import a CAD file or draw a part."),
     "selections": (
         "Selections",
@@ -238,7 +243,46 @@ def advise(
             "Run again" if failed else "Run")  # fmt: skip
         add("results", "optional", "Comes after a run.")
     _optimisations(project, root, add)
+    _convergence(project, study, root, add)
     return out
+
+
+def _convergence(project: Project, study, root, add) -> None:
+    """ADR 0066: the study's mesh convergence verdict, from levels already run (never
+    solved here): "Largest total deformation: converged within 0.4 % (GCI)"."""
+    from puzzle.model.schema import MeshStudy
+
+    if study is None or root is None:
+        return
+    checks = [m.check() for m in project.of_type(MeshStudy) if m.study == study.id]
+    if study.convergence is not None:
+        checks.insert(0, study.convergence)
+    if not checks:
+        return
+    from pathlib import Path
+
+    from puzzle import convergence as conv
+    from puzzle.project.layout import RESULTS_DIR
+    from puzzle.results.store import ResultStore
+
+    try:
+        c = checks[0]
+        store = ResultStore(Path(root) / RESULTS_DIR)
+        lv = conv.run(project, study, Path(root), Path(root), store=store, count=c.levels,
+                      ratio=c.ratio, outputs=c.quantities, read_only=True)  # fmt: skip
+        ran = sum(1 for x in lv if x.run)
+        if ran < len(lv):
+            add("convergence", "optional", f"{ran} of {len(lv)} meshes run.",
+                f"convergence:{study.id}", "Check mesh convergence…")  # fmt: skip
+            return
+        vs = conv.verdicts(lv, c.target)
+        bad = [v for v in vs if v.state != "converged"]
+        words = "; ".join(f"{v.quantity}: {v.words}" for v in (bad or vs))
+        add("convergence", "needed" if bad else "done", words + ".",
+            f"convergence:{study.id}" if bad else None,
+            "Check mesh convergence…" if bad else "")  # fmt: skip
+    except Exception:  # noqa: BLE001 - the Advisor never fails over a convergence check
+        return
 
 
 def _optimisations(project: Project, root, add) -> None:

@@ -30,6 +30,7 @@ from puzzle.model.schema import (
     ImportedField,
     Material,
     MeshRecipe,
+    MeshStudy,
     Operator,
     Optimisation,
     ParameterSet,
@@ -78,6 +79,7 @@ SECTIONS = [
     ("Construction geometry", ConstructionGeometry),
     ("Operators", Operator),  # ADR 0062
     ("Optimisations", Optimisation),  # ADR 0063
+    ("Mesh studies", MeshStudy),  # ADR 0066
     ("Bolt types", BoltType),
     ("Solver presets", SettingsPreset),
 ]

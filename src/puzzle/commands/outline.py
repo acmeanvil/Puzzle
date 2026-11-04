@@ -290,12 +290,33 @@ def outline(project: Project, *, ids: bool = False, runs=None) -> str:
         lines.append(head("Optimisation", opt) + f": {METHODS[opt.method]} of "
                      f"{names.get(opt.study, '?')} ({count}) over "
                      f"{variables}; {'; '.join(what)}")  # fmt: skip
+    lines += _convergence(project, runs, head, names)
     lines += _flow(project, runs)
     problems = project.problems()
     if problems:
         lines.append("Problems:")
         lines += [f"    [{p.code}] {p.message}" for p in problems]
     return "\n".join(lines)
+
+
+def _convergence(project: Project, runs, head, names) -> list[str]:
+    """Each study's mesh convergence check (ADR 0066): its settings and the meshes run;
+    the verdict itself is `mesh_convergence`'s (it reads the values)."""
+    from puzzle.model.schema import MeshStudy, Study
+
+    checks = [(head("Study", s) + " mesh convergence", s.id, s.convergence)
+              for s in project.of_type(Study) if s.convergence is not None]  # fmt: skip
+    checks += [(head("Mesh study", m) + f" of {names.get(m.study, '?')}", m.study, m.check())
+               for m in project.of_type(MeshStudy)]  # fmt: skip
+    out = []
+    for title, study_id, c in checks:
+        ran = {r.point_labels().get("mesh") for r in runs or ()
+               if r.study_id == str(study_id) and r.status == "completed"
+               and (r.point_labels() or {}).get("mesh")}  # fmt: skip
+        count = f"; {len(ran)} of {c.levels} meshes run" if runs is not None else ""
+        out.append(f"{title}: {c.levels} meshes, each finer by {c.ratio:g}, target GCI "
+                   f"{c.target * 100:g} %{count}")  # fmt: skip
+    return out
 
 
 def _flow(project: Project, runs) -> list[str]:

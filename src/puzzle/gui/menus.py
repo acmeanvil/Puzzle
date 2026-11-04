@@ -301,6 +301,13 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         from puzzle.gui.optimisation_panel import new_optimisation
 
         add("New optimisation…", lambda: new_optimisation(window, str(obj.id)))  # ADR 0063
+        from puzzle.gui import convergence_panel
+
+        add(
+            "Check mesh convergence…", lambda: convergence_panel.check(window, str(obj.id))
+        )  # ADR 0066
+        if obj.convergence is not None:
+            add("Show mesh convergence", lambda: window.show_convergence(str(obj.id)))
         steps = menu.addMenu("Add step")
         for t in STEP_TYPES:
             action = steps.addAction(label(t))
