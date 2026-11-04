@@ -309,6 +309,14 @@ def _convergence(project: Project, runs, head, names) -> list[str]:
     checks += [(head("Mesh study", m) + f" of {names.get(m.study, '?')}", m.study, m.check())
                for m in project.of_type(MeshStudy)]  # fmt: skip
     out = []
+    for st in project.of_type(Study):
+        if st.adapt is not None:
+            a = st.adapt
+            ran = sum(1 for r in runs or () if r.study_id == str(st.id)
+                      and r.status == "completed" and "adapt" in r.point_labels())  # fmt: skip
+            count = f"; {ran} passes run" if runs is not None else ""
+            out.append(f"{head('Study', st)} adaptive refinement: {a.criterion} to "
+                       f"{a.target * 100:g} %, up to {a.passes} passes{count}")  # fmt: skip
     for title, study_id, c in checks:
         ran = {r.point_labels().get("mesh") for r in runs or ()
                if r.study_id == str(study_id) and r.status == "completed"

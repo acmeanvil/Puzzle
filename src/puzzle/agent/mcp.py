@@ -1029,6 +1029,36 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
                    if opt.method == "robust" else {})}  # fmt: skip
 
     @tool(
+        description="Adaptive refinement (ADR 0066 phase 3): solve, estimate the error, "
+        "mesh again with each element sized for `target` (0.02 = 2 %), pass after pass, "
+        "until the energy-norm error (or, with the study's adapt.criterion 'quantity', "
+        "its quantities' change) is at the target or `passes` ran. Settings default to "
+        "the study's `adapt`. Each pass is a stored run, reused next time. Solving needs "
+        "autonomy 'act'; `solve` false only reads the passes run."
+    )
+    @guarded
+    def mesh_adapt(study: str, target: float | None = None, passes: int | None = None,
+                   solve: bool = False) -> dict[str, Any]:  # fmt: skip
+        from puzzle import adapt
+        from puzzle.commands import resolve
+        from puzzle.model.schema import Adapt, Study
+        from puzzle.project.layout import RESULTS_DIR, WORK_DIR
+        from puzzle.results.store import ResultStore
+
+        s = session()
+        if solve and s.project.agent.level not in ("act", "act_in_budget"):
+            raise PuzzleError("adaptive refinement solves: it needs autonomy 'act'",
+                              code="not_allowed")  # fmt: skip
+        st = resolve(s.project, study, Study)
+        a = st.adapt or Adapt()
+        changes = {k: v for k, v in (("target", target), ("passes", passes)) if v}
+        a = Adapt.model_validate({**a.model_dump(), **changes})
+        out = adapt.run(s.project, st, root, root / WORK_DIR / "adapt" / str(st.id),
+                        store=ResultStore(root / RESULTS_DIR), settings=a,
+                        read_only=not solve)  # fmt: skip
+        return out.to_dict()
+
+    @tool(
         description="Error estimate (ADR 0066 phase 2) of a study's newest run (or a sweep "
         "point's, `point` as its title), from the stored field: displacement gives the "
         "Zienkiewicz–Zhu energy-norm error, temperature the same on the heat flux, "

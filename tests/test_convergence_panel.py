@@ -84,3 +84,52 @@ def test_the_error_estimate_and_convergence_forms(app, tmp_path, monkeypatch):
         assert study.convergence.target == 0.01
     finally:
         w.close()
+
+
+def test_the_adapt_form_and_the_passes_view(app, tmp_path, monkeypatch):
+    import json
+
+    from forms import fill
+
+    from puzzle.gui import convergence_panel
+    from puzzle.gui.window import MainWindow
+    from puzzle.model.schema import Study
+    from puzzle.project import save_project
+
+    p, _ = project()
+    save_project(p, tmp_path / "p")
+    w = MainWindow(tmp_path / "p")
+    try:
+        study = next(iter(w.session.project.of_type(Study)))
+        ran = []
+        monkeypatch.setattr(convergence_panel, "run_adapt", lambda win, sid: ran.append(sid))
+        fill(w, target="1.5", passes=4, keep=False)
+        convergence_panel.adapt_form(w, str(study.id))
+        study = next(iter(w.session.project.of_type(Study)))
+        assert (study.adapt.target, study.adapt.passes, study.adapt.keep_passes) == (
+            0.015,
+            4,
+            False,
+        )
+        assert ran == [str(study.id)]
+        kept = tmp_path / "p" / "results" / "adapt"
+        kept.mkdir(parents=True)
+        (kept / f"{study.id}.json").write_text(
+            json.dumps(
+                {
+                    "ended": "converged: error 1.2 % ≤ 1.5 %",
+                    "passes": [
+                        {"index": 1, "run": "a", "nodes": 10, "elements": 20, "error": 0.03},
+                        {"index": 2, "run": "b", "nodes": 30, "elements": 60, "error": 0.012},
+                    ],
+                }
+            )
+        )
+        w.show_convergence(str(study.id), "adapt")
+        panel = w.convergence
+        assert panel.title.text() == "S: adaptive refinement"
+        assert [panel.table.item(r, 3).text() for r in range(2)] == ["3 %", "1.2 %"]
+        assert panel.summary.text().startswith("Converged: error 1.2 %")
+        assert not panel.run_button.isEnabled()
+    finally:
+        w.close()

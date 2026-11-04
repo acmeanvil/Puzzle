@@ -399,6 +399,22 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", help="levels and verdicts as JSON")
     p.set_defaults(handler=_convergence)
 
+    p = sub.add_parser("adapt", help="mesh again from the error estimate, pass after "
+                       "pass, until it is at a target (ADR 0066)")  # fmt: skip
+    p.add_argument("project", type=Path)
+    p.add_argument("study")
+    p.add_argument("--target", type=float, metavar="T", help="the error to reach (0.02 = 2 %%)")
+    p.add_argument("--budget", type=int, metavar="N", help="at most N passes")
+    p.add_argument("--max-elements", type=int, metavar="N", help="stop past N elements")
+    p.add_argument(
+        "--delete-passes",
+        action="store_true",
+        help="delete the earlier passes' runs at the end (their table is kept)",
+    )
+    p.add_argument("--points", action="store_true", help="read the passes run; solve nothing")
+    p.add_argument("--json", action="store_true", help="the passes as JSON")
+    p.set_defaults(handler=_adapt)
+
     p = sub.add_parser("error-estimate", help="how far a run is from the exact answer, per "
                        "element (Zienkiewicz–Zhu; ADR 0066)")  # fmt: skip
     p.add_argument("project", type=Path)
@@ -1052,6 +1068,33 @@ def _convergence(args) -> int:
     else:
         print("\n".join(conv.lines(lv, vs)))
     return 0 if vs and all(v.state == "converged" for v in vs) else 1
+
+
+def _adapt(args) -> int:
+    """ADR 0066 phase 3: adaptive refinement passes (stored runs, resumed)."""
+    import json
+
+    from puzzle import adapt
+    from puzzle.commands import Session, resolve
+    from puzzle.model.schema import Adapt, Study
+    from puzzle.project.layout import WORK_DIR
+
+    s = Session(args.project)
+    study = resolve(s.project, args.study, Study)
+    a = study.adapt or Adapt()
+    changes = {k: v for k, v in (("target", args.target), ("passes", args.budget),
+                                 ("max_elements", args.max_elements)) if v}  # fmt: skip
+    if args.delete_passes:
+        changes["keep_passes"] = False
+    a = Adapt.model_validate({**a.model_dump(), **changes})
+    out = adapt.run(s.project, study, args.project, args.project / WORK_DIR / "adapt"
+                    / str(study.id), store=_store(args.project), settings=a,
+                    on_output=None if args.json else print, read_only=args.points)  # fmt: skip
+    if args.json:
+        print(json.dumps(out.to_dict(), indent=1))
+    else:
+        print("\n".join(adapt.lines(out)))
+    return 0 if out.converged else 1
 
 
 def _error_estimate(args) -> int:

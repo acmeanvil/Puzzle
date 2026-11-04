@@ -41,6 +41,7 @@ def _own(obj: ProjectObject, *, drop: frozenset[str] = frozenset()) -> dict:
         data.pop("morph", None)
     if isinstance(obj, Study):  # ADR 0066: a check of the study never changes its solve
         data.pop("convergence", None)
+        data.pop("adapt", None)  # each pass's own recipe is in its run key
     if obj.kind == "result" and data.get("error_target") == 0.02:  # ADR 0066's default
         data.pop("error_target")
     data.pop("hidden", None)  # what the view shows never changes a solve

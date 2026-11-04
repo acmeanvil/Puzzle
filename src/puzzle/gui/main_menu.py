@@ -546,6 +546,8 @@ def _results(window, menu: QMenu) -> None:
          "Run a study once per point of a plan: design of experiments, the best point")  # fmt: skip
     _add(menu, "Check mesh convergence…", lambda: _convergence(window),
          "The study on finer and finer meshes: is the mesh fine enough?")  # fmt: skip
+    _add(menu, "Adapt the mesh…", lambda: _adapt(window),
+         "Mesh again where the error is, pass after pass, until it is at a target")  # fmt: skip
     menu.addSeparator()
     _add(menu, "Export…", lambda: _export(window),
          "Results for other software: ParaView, point clouds, the deformed shape")  # fmt: skip
@@ -557,6 +559,14 @@ def _convergence(window) -> None:
     study = current_study(window, "Check mesh convergence")
     if study is not None:
         convergence_panel.check(window, str(study.id))
+
+
+def _adapt(window) -> None:
+    from puzzle.gui import convergence_panel
+
+    study = current_study(window, "Adapt the mesh")
+    if study is not None:
+        convergence_panel.adapt_form(window, str(study.id))
 
 
 def _compare(window) -> None:

@@ -153,6 +153,74 @@ def error_estimate(window, study_id=None, definition=None):
     return None
 
 
+CRITERIA = [("Energy-norm error", "energy"), ("Quantities' change between passes", "quantity")]
+PASSES = [(f"Up to {n} passes", n) for n in (3, 4, 5, 6, 8)]
+KEEP = [("Keep them for review", True), ("Delete them (keep their table)", False)]
+
+
+def adapt_form(window, study_id: str):
+    """Adaptive refinement (ADR 0066 phase 3) in one form; the settings kept on the
+    study (one Edit), then the passes run in the background."""
+    from puzzle.commands.model import Edit, EditOp
+    from puzzle.gui.quick_form import Ask
+    from puzzle.model.schema import Adapt
+
+    study = window.session.project.objects.get(UUID(study_id))
+    if study is None:
+        return None
+    a = study.adapt or Adapt()
+    got = window.ask_form("Adapt the mesh", [
+        Ask("target", "Target (%)", kind="text", default=f"{a.target * 100:g}",
+            help="Mesh again until the error (or the quantities' change) is this or less"),
+        Ask("criterion", "Judged by", choices=CRITERIA, default=a.criterion,
+            help="The quantities are the study's convergence quantities (operators or "
+            "result tools)"),
+        Ask("passes", "Budget", choices=PASSES, default=a.passes),
+        Ask("keep", "Earlier passes", choices=KEEP, default=a.keep_passes),
+    ], check=lambda v: None if _percent(v.get("target")) else "the target is a "
+       "percentage between 0 and 100")  # fmt: skip
+    if not got:
+        return None
+    quantities = list(a.quantities) or (list(study.convergence.quantities)
+                                        if study.convergence else [])  # fmt: skip
+    if got["criterion"] == "quantity" and not quantities:
+        window.statusBar().showMessage("The quantity criterion watches the study's "
+                                       "convergence quantities: add one first", 10000)  # fmt: skip
+        return None
+    value = {**a.model_dump(mode="json"), "target": _percent(got["target"]),
+             "criterion": got["criterion"], "passes": int(got["passes"]),
+             "keep_passes": bool(got["keep"]),
+             "quantities": [q.model_dump(mode="json") for q in quantities]}  # fmt: skip
+    window.submit(Edit(object=study_id, ops=[EditOp(op="set", path="adapt", value=value)]))
+    return run_adapt(window, study_id)
+
+
+def run_adapt(window, study_id: str) -> None:
+    """The passes in the background; the panel shows them after."""
+    from puzzle import adapt
+    from puzzle.project.layout import WORK_DIR
+
+    s = window.session
+    study = s.project.objects.get(UUID(study_id))
+    if study is None:
+        return
+    stop = threading.Event()
+    window.convergence_stop = stop
+    project, root, store = s.project, s.root, window._store()
+
+    def work(emit):
+        return adapt.run(project, study, root, root / WORK_DIR / "adapt" / study_id,
+                         store=store, on_output=emit, cancel=stop)  # fmt: skip
+
+    def done(out) -> None:
+        window.convergence_stop = None
+        window.refresh()
+        window.show_convergence(study_id, "adapt")
+        window.statusBar().showMessage(f"{study.name}: {out.ended}", 15000)
+
+    window.background(f"Adapting {study.name}'s mesh…", work, done)
+
+
 def _percent(text) -> float | None:
     try:
         t = float(str(text).strip().rstrip("%")) / 100
@@ -179,7 +247,7 @@ class ConvergencePanel(QWidget):
         top.addWidget(self.title, 1)
         self.run_button = QPushButton("Run the rest")
         self.run_button.setToolTip("Solve the meshes not run yet")
-        self.run_button.clicked.connect(lambda: self.study_id and run(window, self.study_id))
+        self.run_button.clicked.connect(self._run_rest)
         top.addWidget(self.run_button)
         column.addLayout(top)
         self.table = QTableWidget(0, 0)
@@ -191,9 +259,15 @@ class ConvergencePanel(QWidget):
         self.summary.setWordWrap(True)
         column.addWidget(self.summary)
 
-    def show(self, study_id: str) -> None:  # noqa: A003 - shows a study's check
-        self.study_id = study_id
+        self.mode = "convergence"  # or "adapt": the study's adaptive passes
+
+    def show(self, study_id: str, mode: str = "convergence") -> None:  # noqa: A003
+        self.study_id, self.mode = study_id, mode
         self.refresh()
+
+    def _run_rest(self) -> None:
+        if self.study_id:
+            (run_adapt if self.mode == "adapt" else run)(self.window, self.study_id)
 
     def refresh(self) -> None:
         from puzzle import convergence as conv
@@ -205,6 +279,8 @@ class ConvergencePanel(QWidget):
             self.title.setText("No convergence check shown")
             self.table.setRowCount(0)
             return
+        if self.mode == "adapt":
+            return self._show_adapt(study)
         _, c = conv.settings(s.project, study.name)
         self.title.setText(f"{study.name}: mesh convergence")
         try:
@@ -248,6 +324,48 @@ class ConvergencePanel(QWidget):
         if ran < len(self.levels):
             lines.append(f"{ran} of {len(self.levels)} meshes run.")
         self.summary.setText("\n".join(lines))
+
+    def _show_adapt(self, study) -> None:
+        """The passes: the kept table if there is one (it outlives deleted passes),
+        else what the store holds."""
+        import json
+
+        from puzzle import adapt
+        from puzzle.errors import PuzzleError
+        from puzzle.project.layout import RESULTS_DIR
+
+        s = self.window.session
+        self.title.setText(f"{study.name}: adaptive refinement")
+        kept = s.root / RESULTS_DIR / "adapt" / f"{study.id}.json"
+        try:
+            if kept.exists():
+                data = json.loads(kept.read_text())
+                passes = [adapt.Pass(**{k: v for k, v in p.items()}) for p in data["passes"]]
+                ended = data["ended"]
+            else:
+                out = adapt.run(s.project, study, s.root, s.root, store=self.window._store(),
+                                read_only=True)  # fmt: skip
+                passes, ended = out.passes, out.ended
+        except (PuzzleError, OSError, ValueError, KeyError) as exc:
+            self.summary.setText(str(getattr(exc, "message", exc)))
+            return
+        names = list(dict.fromkeys(k for p in passes for k in p.values))
+        heads = ["Pass", "Elements", "Nodes", "Error", *names]
+        self.table.setColumnCount(len(heads))
+        self.table.setHorizontalHeaderLabels(heads)
+        self.table.setRowCount(len(passes))
+        for r, p in enumerate(passes):
+            cells = [str(p.index), str(p.elements) if p.run else "", str(p.nodes) if p.run else "",
+                     f"{p.error * 100:.3g} %" if p.error is not None else p.reason]  # fmt: skip
+            cells += [_number(p.values.get(n), p.kinds.get(n)) for n in names]
+            for col, text in enumerate(cells):
+                self.table.setItem(r, col, QTableWidgetItem(text))
+        self.table.resizeColumnsToContents()
+        self.plot.y_label = "Error (%)"
+        self.plot.set_series([("Error", [(float(p.elements), p.error * 100) for p in passes
+                                         if p.run and p.error is not None])])  # fmt: skip
+        self.run_button.setEnabled(not ended.startswith("converged"))
+        self.summary.setText(ended[0].upper() + ended[1:] + ".")
 
 
 def _number(value, kind) -> str:

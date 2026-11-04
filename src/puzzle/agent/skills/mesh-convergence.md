@@ -66,12 +66,31 @@ singular: its error stays high however fine the mesh, so judge quantities away f
 it. A derived result of method `error_estimate` (`source` the study, `error_target`)
 draws the error, refinement ratio and jump per element in the results view.
 
+## Adaptive refinement
+
+`mesh_adapt(study, target, passes, solve=true)` meshes again where the error is, pass
+after pass, until the energy-norm error is at `target`. With the study's
+`adapt.criterion` "quantity", it stops instead when its quantities change by at most
+the target between passes. Use it when a convergence check says "not converged" and
+the error sits in a few places: it reaches the target in far fewer elements than
+uniform refinement.
+
+- Settings live in the study's `adapt`: target, criterion, quantities, passes,
+  max_elements, keep_passes.
+- Each pass is a stored run, `adapt: pass k`. The last pass is the result.
+- Earlier passes are kept unless `keep_passes` is false.
+- Netgen refines through its size file, more slowly than Gmsh.
+- A size control from data is the mesh control `size_field`, with `run` (a run's
+  estimate, for `target`) or `table` (an operator giving x, y, z and size in m).
+
 ## Tools
 
 - `mesh_convergence(study, levels, ratio, target, solve)`: the levels (label,
   elements, nodes, values, why one did not run) and the verdicts. `converged` is true
   only when every quantity converged.
 - `error_estimate(study, field, target, point)`: one run's estimate, solving nothing.
+- `mesh_adapt(study, target, passes, solve)`: the passes (elements, nodes, error,
+  quantities) and why it ended. CLI `puzzle adapt PROJECT STUDY`.
 - CLI: `puzzle error-estimate PROJECT STUDY [--field F] [--target T] [--json]`.
 - CLI: `puzzle convergence PROJECT STUDY [--levels N] [--ratio R] [--target T]
   [--points] [--json]`. Its exit code is 0 only when converged.

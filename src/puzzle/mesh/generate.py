@@ -232,7 +232,12 @@ def generate_mesh(
             from puzzle.mesh.netgen_mesher import mesh_with_netgen
 
             _options(recipe)
-            mesh_with_netgen(recipe, out_dir, *_netgen_controls(recipe))
+            mesh_with_netgen(
+                recipe,
+                out_dir,
+                *_netgen_controls(recipe),
+                size_file=_netgen_size_file(recipe, out_dir, project, root),
+            )
         elif planar:  # ADR 0048: triangles, or quadrilaterals for "hexahedra"
             _sizes(recipe, comp, found, warnings, project, root)
             if recipe.element_shape == "hexahedra":
@@ -652,6 +657,12 @@ def _sizes(recipe: MeshRecipe, comp: Component, found, warnings, project=None, r
                 for axis, c in zip("XYZ", control.centre, strict=True):
                     gmsh.model.mesh.field.setNumber(f, f"{axis}Center", c)
             fields.append(f)
+        elif control.kind == "size_field":  # ADR 0066 phase 3: sizes from data
+            from puzzle.mesh import size_field
+
+            smallest = gmsh.option.getNumber("Mesh.MeshSizeMin")
+            sizes = size_field.resolve(control, project, root)
+            fields.append(size_field.gmsh_field(sizes.clamp(smallest, coarse)))
         elif control.kind == "boundary_layer":
             raise MeshError(
                 "boundary layers are meshed by Netgen: set the recipe's mesher to Netgen "
@@ -760,6 +771,8 @@ def _netgen_controls(recipe: MeshRecipe) -> tuple[list[dict], list[dict]]:
     refused, naming Gmsh."""
     sizes, layers = [], []
     for control in recipe.controls:
+        if control.kind == "size_field":  # its size file: `_netgen_size_file`
+            continue
         if control.kind not in ("size", "boundary_layer"):
             raise MeshError(
                 f"Netgen takes size controls and boundary layers; a "
@@ -800,6 +813,25 @@ def _netgen_controls(recipe: MeshRecipe) -> tuple[list[dict], list[dict]]:
                 }
             )
     return sizes, layers
+
+
+def _netgen_size_file(recipe: MeshRecipe, out_dir: Path, project, root) -> str | None:
+    """Sizes from data as Netgen's size file (ADR 0066): every size field's points,
+    each at most the recipe's size (Netgen only restricts its local size)."""
+    from puzzle.mesh import size_field
+
+    found = [size_field.resolve(c, project, root) for c in recipe.controls
+             if c.kind == "size_field"]  # fmt: skip
+    if not found:
+        return None
+    largest = recipe.global_size.to_si() if recipe.global_size else _model_size() / 10
+    pts = np.vstack([s.points for s in found])
+    h = np.concatenate([np.minimum(s.sizes, largest) for s in found])
+    work = out_dir / "netgen"
+    work.mkdir(parents=True, exist_ok=True)
+    size_field.netgen_file(size_field.Sizes(pts, h, np.zeros((0, 4), np.int64)),
+                           work / "sizes.msz")  # fmt: skip
+    return "sizes.msz"
 
 
 def _min_quality(dim: int = 3) -> float:

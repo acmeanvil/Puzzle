@@ -76,6 +76,8 @@ def main(case_path: Path) -> None:
         layered.append((names, layer["thickness"]))
     geo = OCCGeometry(shape)
     params = {"maxh": case["maxh"], **case.get("options", {})}
+    if case.get("size_file"):  # ADR 0066: sizes from data, points with sizes
+        params["meshsizefilename"] = str(here / case["size_file"])
     if layered:
         from netgen.meshing import BoundaryLayerParameters
 

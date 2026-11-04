@@ -311,6 +311,10 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         )  # ADR 0066
         if obj.convergence is not None:
             add("Show mesh convergence", lambda: window.show_convergence(str(obj.id)))
+        add("Adapt the mesh…", lambda: convergence_panel.adapt_form(window, str(obj.id)))
+        if obj.adapt is not None:
+            add("Show adaptive passes",
+                lambda: window.show_convergence(str(obj.id), "adapt"))  # fmt: skip
         steps = menu.addMenu("Add step")
         for t in STEP_TYPES:
             action = steps.addAction(label(t))

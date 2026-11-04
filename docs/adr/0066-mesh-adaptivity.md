@@ -256,3 +256,39 @@ The maintainer's answers:
   edges, where the largest element errors sit) and 64, 54, 43 % on linear tets
   (locking). The jump indicator reads about 4× the exact error: an indicator, not a
   measure.
+
+## Phase 3 (built, 2026-11-04)
+
+- `puzzle/mesh/size_field.py`: `Sizes` (points, sizes, tetrahedra).
+  - Sources: `from_estimate` (an estimate's h ξ^(−1/p), clamped 4× finer and 2×
+    coarser per pass and to the recipe's sizes, each corner node taking the smallest
+    of its elements) and `from_points` (a table's points, joined by Delaunay).
+  - `gmsh_field`: a list-based "SS" view read by a PostView field, min-combined with
+    the other controls.
+  - `netgen_file`: Netgen's `meshsizefilename` of points and sizes, each at most the
+    recipe's size.
+  - `resolve`: a control's sizes from its run or its table operator (x, y, z and
+    size columns).
+- The mesh control `size_field` (`run` or `table`, `target`, `field`, `finer`,
+  `coarser`) carries the source run's id, which is part of the recipe's hash.
+- `puzzle/adapt.py` and `Study.adapt` (`Adapt`: target, criterion `energy` or
+  `quantity` with quantities, passes, max elements, keep passes; left out of the
+  study's hash): pass 1 is the study's own recipe. Each later pass adds one size
+  field from the pass before's run, and each pass is a stored run labelled
+  `adapt: pass k`, found again by its run key (resume). It stops when the criterion
+  holds or at the budget. The table goes to `results/adapt/<study id>.json`, and
+  earlier passes' runs are deleted when asked.
+- CLI `puzzle adapt PROJECT STUDY [--target] [--budget] [--max-elements]
+  [--delete-passes] [--points] [--json]`; MCP `mesh_adapt` (solving needs "act");
+  GUI a study's Adapt the mesh… (one form, the settings kept on the study) and the
+  Convergence panel's passes view (from the kept table, so deleted passes still
+  show); the outline says each study's adaptive settings and passes run; skill
+  `mesh-convergence`.
+- Verified:
+  - `tests/test_size_field.py`: a table grading a Gmsh box from 0.02 to 0.2 m, and
+    Netgen's file.
+  - `tests/test_adapt.py`: the loop on a stand-in, converging in three passes,
+    resuming, deleting and the quantity criterion.
+  - `tests/integration/test_adapt.py` (CalculiX): the cantilever adapted with Gmsh to
+    1.24 % in 1273 elements (uniform refinement took 3037 for 2.12 %), the tip within
+    0.2 % of the converged value; with Netgen 3.94 → 1.71 % over its passes.

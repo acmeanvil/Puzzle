@@ -506,13 +506,42 @@ class BoundaryLayerControl(BaseModel):
         )
 
 
+class SizeFieldControl(BaseModel):
+    """Sizes from data (ADR 0066 item 3): from an earlier run's error estimate (`run`:
+    each element's size for `target`, at most `finer` times finer or `coarser` times
+    coarser) or a table operator's x, y, z and size columns (`table`). Gmsh takes it as
+    a background field, min-combined with the other controls; Netgen as its size file.
+    The run's id is in the recipe's hash, so the mesh is reproducible."""
+
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["size_field"] = "size_field"
+    run: str | None = None
+    table: UUID | None = None
+    target: float = Field(default=0.02, gt=0, lt=1)
+    field: str | None = Field(default=None, description="a nodal field's jumps instead")
+    finer: float = Field(default=4.0, ge=1)
+    coarser: float = Field(default=2.0, ge=1)
+
+    @model_validator(mode="after")
+    def _one_source(self) -> SizeFieldControl:
+        if (self.run is None) == (self.table is None):
+            raise ValueError("sizes from data come from a run or a table, one of them")
+        return self
+
+    def describe(self) -> str:
+        if self.run:
+            return f"sizes from run {self.run[:8]}'s error estimate for {self.target * 100:g} %"
+        return "sizes from a table"
+
+
 MeshControl = Annotated[
     SizeControl
     | RefineNearControl
     | TransfiniteControl
     | BoxControl
     | BallControl
-    | BoundaryLayerControl,
+    | BoundaryLayerControl
+    | SizeFieldControl,
     Field(discriminator="kind"),
 ]
 
@@ -1632,6 +1661,32 @@ class Convergence(BaseModel):
     quantities: list[DesignOutput] = Field(default_factory=list)
 
 
+class Adapt(BaseModel):
+    """Adaptive refinement (ADR 0066 item 4): solve, estimate, mesh again from the
+    estimate, until `criterion` holds at `target` (`energy`: the energy-norm error;
+    `quantity`: each of `quantities` changing by at most it between passes), or the
+    budget (`passes`, `max_elements`). `keep_passes` False deletes the earlier passes'
+    runs when it finishes (their table is kept)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    target: float = Field(default=0.02, gt=0, lt=1)
+    criterion: Literal["energy", "quantity"] = "energy"
+    quantities: list[DesignOutput] = Field(default_factory=list)
+    passes: int = Field(default=5, ge=2, le=12)
+    max_elements: int | None = Field(default=None, ge=1)
+    keep_passes: bool = True
+    field: str | None = None
+    finer: float = Field(default=4.0, ge=1)
+    coarser: float = Field(default=2.0, ge=1)
+
+    @model_validator(mode="after")
+    def _quantities(self) -> Adapt:
+        if self.criterion == "quantity" and not self.quantities:
+            raise ValueError("the quantity criterion needs a quantity to watch")
+        return self
+
+
 class MorphHandle(BaseModel):
     """A face selection whose nodes a morph moves (ADR 0065 phase 2): `distance` (m,
     or a parameter's name, so an optimisation's variable drives it) along `direction`,
@@ -1669,6 +1724,9 @@ class Study(ProjectObject):
     convergence: Convergence | None = Field(
         default=None, description="a mesh convergence check of this study (ADR 0066); "
         "never changes its solve")  # fmt: skip
+    adapt: Adapt | None = Field(
+        default=None, description="adaptive refinement (ADR 0066): passes until the "
+        "error estimate is at a target; each pass its own run")  # fmt: skip
     morph: Morph | None = Field(
         default=None, description="the mesh morphed after meshing (ADR 0065 phase 2): "
         "handles moved, the rest following; shape optimisation without remeshing")  # fmt: skip

@@ -75,7 +75,8 @@ def _match(theirs: list, ours: dict[int, np.ndarray], size: float, what: str) ->
     return out
 
 
-def mesh_with_netgen(recipe, out_dir: Path, sizes: list[dict], layers: list[dict]) -> None:
+def mesh_with_netgen(recipe, out_dir: Path, sizes: list[dict], layers: list[dict],
+                     size_file: str | None = None) -> None:  # fmt: skip
     """Mesh the current Gmsh OCC model with Netgen and load the mesh into it."""
     from puzzle.mesh.generate import MeshError, _model_size
 
@@ -96,6 +97,7 @@ def mesh_with_netgen(recipe, out_dir: Path, sizes: list[dict], layers: list[dict
         "options": dict(recipe.netgen_options),
         "sizes": sizes,
         "layers": layers,
+        **({"size_file": size_file} if size_file else {}),  # ADR 0066: in `work`
     }
     (work / "case.json").write_text(json.dumps(case))
     from puzzle.jobs.runtime import NativeRuntime

@@ -806,10 +806,11 @@ class MainWindow(QMainWindow):
         self.docks.show("optimisation")
         self.optimisation.show(opt_id)
 
-    def show_convergence(self, study_id: str) -> None:
-        """The Convergence panel on one study's mesh convergence check (ADR 0066)."""
+    def show_convergence(self, study_id: str, mode: str = "convergence") -> None:
+        """The Convergence panel on one study's mesh convergence check, or its adaptive
+        refinement passes (`mode` "adapt"; ADR 0066)."""
         self.docks.show("convergence")
-        self.convergence.show(study_id)
+        self.convergence.show(study_id, mode)
 
     def open_operator_palette(self, at=None):
         """Find an operator by name and make it (ADR 0062), wired from the schematic's
