@@ -138,7 +138,7 @@ organise, reduce, filter and sort the results data.
       probe, contact, bolt and mode sources, the wide layout setting.
    3. Pre-solve tables: imported fields and files reshaped, To field into a study's
       loads, a run's table into another study as a transfer.
-   4. The operators the Grasshopper review accepts (`0064-grasshopper-review.md`).
+   4. The operators the Grasshopper review accepts (`0064A-grasshopper-review.md`).
 
 ## Consequences
 
@@ -186,4 +186,4 @@ The maintainer's answers:
 5. Both pre- and post-solve: an imported field can be reshaped by frame operators and
    then feed a study (item 5).
 6. Review Grasshopper's nodes (https://grasshopperdocs.com/completeIndex.html) for
-   those that apply to Puzzle, as a table to review: `0064-grasshopper-review.md`.
+   those that apply to Puzzle, as a table to review: `0064A-grasshopper-review.md`.

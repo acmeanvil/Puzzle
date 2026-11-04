@@ -1,0 +1,262 @@
+# 0064A. Grasshopper's components against Puzzle (review of ADR 0064)
+
+For review answer 6 of [ADR 0064](0064-dataframe-operators.md): which of Grasshopper's
+nodes apply to Puzzle, and how to present the ones that do.
+
+**Source:** the 817 core components that ship with Rhino 8 and Grasshopper, from
+<https://grasshopperdocs.com/completeIndex.html>, in 11 categories:
+
+| Category | Params | Display | Curve | Mesh | Sets | Transform | Maths | Surface | Intersect | Vector | Rhino 8 content |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Components | 48 | 46 | 111 | 62 | 89 | 55 | 102 | 90 | 52 | 79 | 83 |
+
+Third-party add-ons (Kangaroo, Karamba, Ladybug and so on) are left out. Galapagos is
+ADR 0063.
+
+**How to read the table:**
+
+- A row groups the components that do one job. Puzzle's answer to a row is one node,
+  or one mode of a node, or nothing.
+- **Today**: what Puzzle has now: *exists* (an operator, a tool or a history
+  operation), *planned* (an ADR names it), or *none*.
+- **Mine**: my recommendation:
+  - *Yes*: a node, in the phase named. Phase numbers are 0064's unless another ADR is
+    named.
+  - *Later*: worth it, not yet.
+  - *No*: out of scope for an FEM/CFD tool, or already covered another way.
+- **Yours**: tick one box by typing an x inside it (`[x] yes`).
+- **Change**: what to do instead, when you tick change (or a note on any row).
+
+## A. Inputs and parameters (Params)
+
+| # | Grasshopper | For Puzzle | Today | Proposal | Mine | Yours | Change |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| A1 | Number Slider, Digit Scroller, Control Knob | A parameter with a range | exists: Slider, Number | — | Yes, done | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| A2 | MD Slider | Two parameters on one pad (w and t together) | none | 2D slider | Later | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| A3 | Boolean Toggle, Button | A switch: a feature on or off, a contact frictional or bonded | none | **Toggle**: a yes/no parameter that features and choices read | Yes (0062) | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| A4 | Value List | Preset choices: bolt size M8/M10/M12, a mesh size, a material | none (sweeps list materials) | **Choice**: named presets driving a parameter; a sweep or optimisation runs over them | Yes (0062) | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| A5 | Graph Mapper | A function drawn or typed: y from x | Amplitude (time only) | **Lookup**: interpolate a table (linear, step) at a number or list | Yes, 1 | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| A6 | Panel | Show a value on the canvas | exists: Panel | — | Yes, done | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| A7 | Read File, Import Coordinates, Data Input | Data from a file | Table (CSV), imported fields | **File** source: CSV, Parquet, xlsx, a folder of them | Yes, 1 | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| A8 | Data Output | Write data to a file | exists: Export | xlsx and Parquet added | Yes, 1 | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| A9 | Expression, Variant, Evaluate | Formulas | exists: Expression | — | Yes, done | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| A10 | Constant | A project-wide value used by name | exists: Number (parameters by name) | — | Yes, done | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| A11 | Cluster | A chain folded into one reusable node with its own ports | groups fold (0058), no ports | **Cluster**: a group with inputs and outputs, saved to reuse in other projects | Later | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| A12 | Data Recorder, Value Tracker | Values kept over time | runs are kept | **Run history** source: one row per run of a study (its outputs, when, the model version) | Yes, 2 | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| A13 | Param Viewer, Cherry Picker | Look inside a value | none | the **Table viewer** (0064 item 6) | Yes, 1 | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| A14 | Relay | A bend point on a long wire | none | Reroute dot in the schematic (drawing only, not an operator) | Later | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| A15 | Data Dam | Hold a value until released | none | **Freeze** on any node: keep the last value, don't recompute (slow chains) | Later | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| A16 | Fitness Landscape, Gene Pool | Galapagos's design space | exists: Optimisation (0063) | Response-surface plot | Yes (0063, not done) | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| A17 | Gradient, Colour Picker/Swatch/Wheel | Colours | the theme and the Legend | — | No | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| A18 | Image Sampler, Import SHP/PDB/3DM/Image, Atom, Object Details, Clock, Calendar | GIS, chemistry, Rhino documents | — | — | No | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| A19 | Predicate, Receiver, Context Bake/Print, Geometry Pipeline/Cache, Field, Group, Mesh Point | Rhino and Grasshopper plumbing | — | — | No | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+
+## B. Numbers (Maths)
+
+| # | Grasshopper | For Puzzle | Today | Proposal | Mine | Yours | Change |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| B1 | Negative, Absolute, Division, Addition … Power, Modulus (13) | Arithmetic | exists: Expression | none: a node per operator is the clutter to avoid (see *Presenting them*) | No (Expression) | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| B2 | Smaller, Larger, Equality, Similarity, Gates And/Or/Not/Xor/Nand/Nor/Xnor/Majority (12) | Comparisons and logic | Check (a verdict) | An Expression that compares gives a verdict (`von_mises < 250 MPa and gap > 0`) | Yes, 1 | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| B3 | Trig (Sine … ArcTangent, Degrees, Radians), Polynomials (Square … Log N) | Functions | Expression: abs, sqrt, exp, log, log10, sin, cos, tan, min, max, where | add asin, acos, atan, atan2, degrees, radians, clamp, round, floor, ceil | Yes, 1 | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| B4 | Pi, Golden Ratio, Epsilon | Constants | pi, e | — | Yes, done | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| B5 | Mass Addition, Mass Multiplication, Average, Weighted Average, Extremes, Minimum, Maximum, Bounds | Statistics of a list | List: sum, min, max | List gains mean, weighted mean, median, standard deviation, percentile, product | Yes, 1 | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| B6 | Relative Differences, Smooth Numbers, Blur Numbers, Interpolate data | A list's shape | none | List gains differences, cumulative sum, moving average; the Lookup (A5) interpolates | Yes, 2 | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| B7 | Round, Truncate, Clamp | Tidying numbers | none | **Round** (0064, plus lists); clamp in the Expression | Yes, 1 | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| B8 | Construct/Deconstruct Domain, Divide Domain, Remap Numbers, Includes, Find Domain, Consecutive Domains | Ranges | exists: Range | List gains remap (to 0..1 or a range) and bin (which range a value falls in) | Yes, 2 | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| B9 | Create Complex, Complex Components/Conjugate/Argument/Modulus | Complex numbers | harmonic results are amplitude and phase | Expression on amplitude/phase when harmonic tables come | Later | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| B10 | Right/Triangle Trigonometry, Circumcentre, Incentre, Orthocentre, Centroid | Triangle geometry | — | — | No | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| B11 | Construct Date … Date Range (8) | Dates | runs have times | a run table's time column (A12) is enough | No | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| B12 | Construct/Invert/Transpose Matrix, Swap Rows/Columns, Display Matrix | Matrices | — | — | No | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+
+## C. Lists, trees, sets and text (Sets)
+
+| # | Grasshopper | For Puzzle | Today | Proposal | Mine | Yours | Change |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| C1 | Data trees: Graft, Flatten, Unflatten, Simplify, Prune, Clean, Trim, Match, Path Mapper, Split Tree, Explode Tree, Flip Matrix, Shift Paths, Tree Item/Branch/Statistics, Relative Item(s), Construct/Deconstruct Path, Path Compare, Stream Filter/Gate (26) | Nested lists | none | **No data trees.** A table with a group column (part, step, point, solver) does what a tree does, and Group and aggregate, Pivot and Filter rows read better than paths. This is the single largest simplification. | No (tables instead) | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| C2 | Merge, Entwine | Several streams into one | Pairs | **Stack** (0064) for tables; List join for lists | Yes, 2 | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| C3 | List Item, Sub List, Reverse List, Sort List, List Length | Picking and ordering | exists: List (item, slice, sort, reverse, length) | — | Yes, done | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| C4 | Item Index, Shift List, Split List, Partition List, Insert/Replace Items, Repeat/Duplicate/Stack Data | More list moves | none | List gains index of, shift, chunk, insert, replace, repeat | Yes, 2 | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| C5 | Dispatch, Cull Pattern, Cull Nth, Cull Index, Sift Pattern, Pick'n'Choose, Random Reduce | Keeping some items | none | List filter: by a condition, every nth, by indexes; tables use Filter rows | Yes, 2 | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| C6 | Shortest List, Longest List, Cross Reference, Weave | Matching two lists | exists: Pairs (longest, cross) | — | Yes, done | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| C7 | Null Item, Replace Nulls, Combine Data, Clean Tree | Missing values | none | Fill missing (0064) for tables; lists skip a failed point's value | Yes, 2 | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| C8 | Range, Series | Number sequences | exists | — | Yes, done | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| C9 | Random, Jitter | Random numbers, seeded | none | **Random**: seeded samples (uniform, normal, log-normal); robust design's scatter (0063 phase 4) | Yes (0063 phase 4) | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| C10 | Fibonacci, Char Sequence | — | — | — | No | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| C11 | Create Set, Set Union/Intersection/Difference, SubSet, Disjoint, Member Index, Delete Consecutive, Key/Value Search | Set logic | none | List set operations (unique, union, intersection, difference) and, more useful, **Selection sets**: union, intersection or difference of named selections as a new selection that features read (pre-solve) | Yes (sets of selections: 0062) | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| C12 | Concatenate, Format, Text Join/Split/Trim/Case/Fragment/Length, Replace/Sort/Match Text, Characters, Text Distance | Text | none | **Text**: format a line from values (`"σ max = {s:.0f} MPa at {node}"`) for Panels, exports and reports; split and join | Yes, 2 | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| C13 | Text On Surface | Text on geometry | — | — | No | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+
+## D. Points, vectors and planes (Vector)
+
+| # | Grasshopper | For Puzzle | Today | Proposal | Mine | Yours | Change |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| D1 | Construct Point, Deconstruct, Numbers to Points, Points to Numbers | Points from numbers and back | `points` port (0062) | **Points**: from x, y, z (numbers, lists or table columns), and back to a table | Yes (0062 phase 3) | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| D2 | Point Polar/Cylindrical/Oriented, To Polar, Plane Coordinates, Barycentric | Points in other axes | coordinate systems (0049) | Points take a coordinate system (cylindrical r, θ, z: a bolt circle) | Yes (0062 phase 3) | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| D3 | Vector XYZ, Deconstruct Vector, Length, Unit, Reverse, Multiply, Divide, Amplitude, Addition, Rotate, Cross/Dot Product, Angle, Unit X/Y/Z, Vector 2Pt, Distance | Vector maths | none | Expression over vectors: `norm`, `dot`, `cross`, `angle`, `dist` on points and vector columns (a reaction's direction, a force's angle) | Yes, 2 | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| D4 | Closest Point(s), Pull Point, Project Point | Nearest | probes snap to nodes | **Nearest**: each point's nearest mesh node or face, its distance and value: test gauges matched to the model | Yes, 2 | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| D5 | Point Groups, Cull Duplicates, Sort Points, Sort Along Curve | Tidying points | imported fields map points | Points gain merge-duplicates, sort along a path | Later | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| D6 | XY/XZ/YZ Plane, Construct Plane, Plane Origin/Offset/Normal, Plane 3Pt, Plane Fit, Line+Pt, Line+Line, Align/Rotate/Adjust/Flip Plane | Planes from data | construction planes (0046) as objects | **Plane** from data: a construction plane whose offset a Slider drives (a section cut swept along a part) | Yes (0062 phase 3) | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| D7 | Point Cloud Attributes/Closest Point/Reduce | Point clouds | imported fields (0044) | thinning of a large imported cloud | Later | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| D8 | Square/Rectangular/Hexagonal/Triangular/Radial Grid, Populate 2D/3D/Geometry | Point grids | none | **Grid**: points on a plane, a face or in a box (rectangular, radial, random): probe grids for result tables, hole and bolt layouts for Pattern by list | Yes (0062 phase 3) | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| D9 | Point Charge, Line Charge, Vector/Spin Force, Field Line, Break/Merge/Evaluate Field, Scalar/Direction/Perpendicular/Tensor Display | Analytic vector fields | results are fields | Streamlines and tensor glyphs belong to post-processing (a CFD view tool), not operators | No (another ADR) | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| D10 | Solar Incidence, Blend Colours | — | — | — | No | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+
+## E. Curves (Curve)
+
+| # | Grasshopper | For Puzzle | Today | Proposal | Mine | Yours | Change |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| E1 | Line, Line SDL, PolyLine, Circle (CNR, 3Pt), Arc (3Pt, SED), Rectangle (2Pt, 3Pt), Polygon, Ellipse | Simple profiles from data | sketches (G5), `polyline` history step | **Profile**: a polyline, circle, rectangle or polygon from points and numbers, as a profile for extrude and revolve or a beam line | Yes (0062 phase 3) | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| E2 | Interpolate, Nurbs Curve, Tangent Curve, Kinky Curve, Bezier Span, BiArc, PolyArc, Blend Curve, Catenary | Freeform curves | none | A spline through points (a sweep path, a cable), when sweeps come | Later | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| E3 | Circle Fit, Fit Line, Tangent Arcs/Lines, Circle TanTan(Tan), InCircle, InEllipse, Modified Arc, Line 4Pt, Line 2Plane, TwoByFourJam, Polygon Edge | Constructions | the sketcher's constraints | — | No | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| E4 | Length, Length Domain/Parameter, Segment Lengths, End Points, Curve Middle, Closed, Planar, Extremes, Polygon Center | Measuring a curve | Measure tool (0042) | **Measure** (see F3) | Yes, 1 | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| E5 | Evaluate Curve/Length, Point On Curve, Curve Frame(s), Perp/Horizontal Frame(s), Divide Curve/Length/Distance, Shatter, Dash Pattern | Points along a path | path tools (0046), Path probe | **Divide**: points (and frames) along a construction path or a named edge: a result table along a weld line | Yes, 2 | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| E6 | Curve Closest Point, Curve Proximity, Curve Nearest Object, Point In Curve(s), Curve Side | Point and curve tests | — | the Nearest (D4) and Filter rows cover the uses | No | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| E7 | Curvature, Torsion, Derivatives, Curvature Graph, Control Points/Polygon, Discontinuity, Deconstruct Arc/Rectangle, Curve Domain | NURBS internals | — | — | No | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| E8 | Offset (Loose, 3D, on Srf), Flip, Seam, Join, Rebuild, Fit, Extend, Simplify, To Polyline, Project, Pull, Collapse, Reduce, Smooth, Fillet (Distance), Explode, Iso Curve, Geodesic, Sub Curve, Tween, Connect, Contour | Curve editing | the sketcher and history | — | No | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+
+## F. Surfaces and solids (Surface, Intersect)
+
+| # | Grasshopper | For Puzzle | Today | Proposal | Mine | Yours | Change |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| F1 | Center Box, Box 2Pt, Domain Box, Box Rectangle, Sphere (4Pt), Cylinder, Cone, Plane Surface | Primitives | exist: box, cylinder, cone, sphere history steps, driven by operators (0062) | — | Yes, done | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| F2 | Extrude (Linear, Point, Along), Revolution, Rail Revolution | Sweeps of a profile | exist: extrude, revolve | extrude along a path | Later | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| F3 | Area, Volume, Area Moments, Volume Moments, Bounding Box, Box Properties, Dimensions | Mass properties | Measure tool (0042) | **Measure** as an operator: length, area, volume, mass (with the material), centroid, inertia, bounding box of a part or selection. A mass objective needs no solve. | Yes, 1 | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| F4 | Edges from Points/Faces/Directions/Length/Linearity, Convex Edges, Closed Edges | Picking edges by rule | selection rules (plane, parallel, outer) | **Selection by rule**: rules as a node with data inputs (edges longer than L, faces facing +z, convex edges), feeding features | Yes (0062 phase 3) | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| F5 | Point In Brep(s), Shape In Brep | Containment | rule `inside` boxes | the Selection by rule takes a region | Yes (with F4) | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| F6 | Solid Union/Intersection/Difference, Trim Solid, Split Brep (Multiple) | Booleans | exist: history `mode` add, cut, intersect; split | — | Yes, done | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| F7 | Brep Join, Merge Faces, Cap Holes (Ex), Untrim, Retrim, Copy Trim, Flip | Repair | exist: heal, fragment (G2) | — | Yes, done | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| F8 | Fillet Edge | Fillets | exists: fillet by rule | — | Yes, done | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| F9 | Loft, Control Point/Fit Loft, Sweep1, Sweep2, Pipe, Pipe Variable, Network/Edge/Sum/Ruled Surface, Boundary Surfaces, Patch, Fragment Patch, 4Point Surface, Surface From Points | Freeform surfacing | none | Pipe (around a beam line: tubing) and Loft are the likely ones, as new history operations, in a geometry ADR | Later | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| F10 | Brep \| Plane, Mesh \| Plane, Contour (ex) | Sections | exist: section cuts (0038), plane and section tools | **Section** as an operator: the result over a plane as a table, and the force across it | Yes, 2 | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| F11 | Collision One\|Many / Many\|Many, Clash, Brep \| Brep | Interference | find_contacts (0039), minimum distance (0042) | **Clearance**: the least distance (or overlap) between two parts as a number, a constraint for optimisation | Yes, 2 | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| F12 | Deconstruct Brep, Brep Wireframe/Edges/Topology, Evaluate Box/Surface, Box Corners, Surface Points, Closest Points, Point In Trim, Curvature, Osculating Circles, Is Planar | Brep internals | — | the Measure covers what an analyst asks | No | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| F13 | Offset Surface (Loose), Transpose, Isotrim, Divide Surface, Surface Frames, Plane Through Shape, Quad Sphere, Sphere Fit | Surface utilities | — | Divide Surface is the Grid on a face (D8) | No | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| F14 | SubD (7) | Subdivision surfaces | — | — | No | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| F15 | Curve/Line/Plane intersections (CLX, LLX, PCX, PLX, PPX, 3PX, SLX, BLX, CCX, MCX, CX, BCX, SCX), Plane Region, IsoVist, Region Union/Difference/Intersection, Box/Region Slits, Surface Split, Split/Trim with Brep(s)/Region(s), Point Cloud Section/Contour | 2D and curve intersections | — | — | No | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| F16 | Mesh Union/Difference/Intersection/Split, Mesh \| Mesh, Mesh \| Curve, Mesh \| Ray | Triangle-mesh booleans | faceted geometry (STL) | — | No | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+
+## G. Meshes (Mesh)
+
+| # | Grasshopper | For Puzzle | Today | Proposal | Mine | Yours | Change |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| G1 | Deconstruct Mesh/Face, Face Normals, Face Boundaries, Mesh Edges, Mesh Eval | The mesh as data | mesh quality (0019) | **Mesh table** source: nodes, elements, their quality (scaled Jacobian, aspect) and groups: "the 10 worst elements and where" | Yes, 2 | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| G2 | Mesh Closest Point, Mesh Inclusion, Proximity 2D/3D, OcTree, QuadTree | Spatial queries | KD-trees in contact checks | the Nearest (D4), and Filter rows by distance (`dist(x, y, z, P) < 5 mm`) | Yes (with D4) | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| G3 | Settings (Speed/Quality/Custom), Mesh Brep, Mesh Surface, Simple Mesh | Meshing settings | mesh recipes (0019) | a recipe's size from a Slider exists. **Size from a table** is the interesting one: refine where the last run's stress was high (adaptive refinement), in its own ADR | Later | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| G4 | Triangulate, Quadrangulate, Weld/Unweld, Align Vertices, Smooth, Delete/Cull Faces/Vertices, Flip/Unify, Join, Disjoint, Split Plane, Blur | Mesh editing | Gmsh and Netgen own the mesh | — | No | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| G5 | Construct Mesh, Mesh Triangle/Quad/Plane/Box/Sphere (Ex), Mesh Colours, Mesh Spray | Display meshes | — | — | No | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| G6 | Delaunay Mesh/Edges, Voronoi (Groups, Cell, 3D), Convex Hull, MetaBall (3), ShrinkWrap, Quad Remesh (Settings), Substrate, Facet Dome | Computational geometry | — | Voronoi and lattices are generative design, not analysis | No | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| G7 | Occlusion, Exposure, Mesh Shadow | Sun and view studies | — | radiation belongs in a heat-physics feature, not a mesh node | No | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+
+## H. Moving and copying (Transform)
+
+| # | Grasshopper | For Puzzle | Today | Proposal | Mine | Yours | Change |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| H1 | Move, Move To Plane, Rotate, Rotate Axis/3D/Direction, Orient (Direction) | Placing parts | exist: move, rotate steps; part placement | — | Yes, done | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| H2 | Mirror, Mirror Curve/Surface | Mirroring | none | **mirror** history operation (symmetric halves, left and right hands) | Yes (geometry, small) | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| H3 | Scale, Scale NU | Scaling | import units | **scale** history operation (a model drawn in the wrong unit) | Later | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| H4 | Linear Array, Polar Array, Rectangular Array, Box Array, Curve Array | Patterns | exists: `pattern` (linear, circular) | rectangular (two directions) and along a path; Pattern by list (0062 phase 3) | Yes (0062 phase 3) | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| H5 | Kaleidoscope, Camera Obscura, Triangle/Rectangle/Box Mapping, Shear (Angle), Project (Along) | Affine maps | — | — | No | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| H6 | Twist, Taper, Bend, Stretch, Maelstrom, Flow, Splop, Sporph, Box/Surface Morph, Twisted/Surface/Blend Box, Map to Surface, Point/Spatial Deform | Morphing | the morphed STEP export (0043) | mesh morphing for shape optimisation is a separate, larger idea | Later (own ADR) | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| H7 | Group, Named Group, Ungroup, Merge/Split Group, Compound, Split, Transform, Inverse Transform, Transform Matrix | Transform plumbing | coordinate systems (0049) | — | No | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+
+## I. Showing results (Display)
+
+| # | Grasshopper | For Puzzle | Today | Proposal | Mine | Yours | Change |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| I1 | Custom Preview, Dot Display, Point List, Point Order, Vector Display (Ex), Text Tag (3D), Symbol Display/Simple/Advanced, Cloud Display, Custom Curve Preview | Drawing data in the 3D view | marks (0032), the To field (0064) | **Preview**: a table's rows drawn in the view as points, arrows or labels ("the 20 worst nodes, labelled") | Yes, 2 | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| I2 | Legend | Colour bar | exists: Legend (results) | — | Yes, done | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| I3 | Quick Graph, Bar Graph, Pie Chart | Charts | exists: Plot (lines) | Plot gains bar charts (peak stress per part) and scatter; no pie | Yes, 2 | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| I4 | Text/Marker/Line/Aligned/Linear/Serial/Angular/Circular/Arc Dimension, Pattern/Gradient Hatch, Make2D (and views) | Drawings | — | — | No | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| I5 | Colour RGB … Split AHSL (11), Create/Deconstruct Material | Colours and materials | the theme | — | No | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+
+## J. Rhino 8 content (Rhino)
+
+| # | Grasshopper | For Puzzle | Today | Proposal | Mine | Yours | Change |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| J1 | Query Directory, Import Content | Many files at once | none | the File source reads a folder (all of a test campaign's CSVs, a column naming the file) | Yes, 1 | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| J2 | Filter Content, And/Or/Not/Equality/Greater/Less/Contains/Match/Union/Intersection Filter | Filters built from blocks | — | **a condition builder** in Filter rows' form (column, comparison, value; and/or), writing the same expression, for those who'd rather not type one | Yes, 1 | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| J3 | Group Content, Order Content | Grouping and ordering | — | Group and aggregate, Sort (0064) | Yes, 1 | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| J4 | Convert Units, Unit System | Units | display and project units (0024, 0030) | Convert units (0064) | Yes, 1 | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| J5 | Query Model Objects/Layers/Block Definitions, Model Object, Content Details/Information | The model as data | the outline (text) | **Project table** source: the project's objects as rows (every bolt with its size and preload, every part with its material, volume and mass): a bill of materials, checks over all bolts | Yes, 2 | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| J6 | User Text | Key/value notes on objects | none | tags on objects, for filtering them | Later | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| J7 | Text Field Expression, Evaluate Text Fields | Text from values | — | the Text node (C12) | Yes (with C12) | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| J8 | Model Viewport/View, Zoom Extents, Query Viewports/Pages | Views | saved views, screenshots | **Snapshot**: an output that saves the 3D view of a result as a PNG for a report | Later | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+| J9 | Annotation styles and settings (13), Leader, Text Dot/Entity, Dimensions, Centermark, Fonts, Linetypes, Hatches, Layers, Blocks, Render Materials, Display/Drafting/Print/Render/Visibility Attributes | Rhino document properties | — | — | No | [ ] yes<br>[ ] later<br>[ ] no<br>[ ] change | |
+
+## What the review adds up to
+
+- **Yes**:
+  - About 45 rows, mostly as modes of a few nodes. The new nodes are:
+    - inputs: Toggle, Choice, Lookup;
+    - tables and lists: File, Run history, Mesh table, Project table, Text;
+    - geometry: Points, Grid, Plane, Profile, Measure, Selection by rule, Selection
+      sets, Divide, Nearest;
+    - results: Section, Clearance, Preview;
+    - Random, for 0063's robust design.
+  - New modes of the List, Expression and Plot nodes.
+  - Two small history operations, mirror and rectangular pattern.
+- **No**:
+  - Data trees (C1), replaced by tables with group columns.
+  - A node per arithmetic or logic operator (B1, B2), covered by the Expression.
+  - NURBS internals, drawing, colour, Rhino documents and computational geometry.
+- **Later**: clusters, freeze, reroute dots, freeform surfacing (loft, sweep, pipe),
+  mesh morphing and adaptive refinement (their own ADRs), snapshots, tags.
+
+## Presenting them
+
+Grasshopper shows its 817 components as icon tabs: 11 categories × 4 to 7 panels.
+That suits a designer who learns them once, but most of it is noise to an analyst. My
+proposal for Puzzle, for review with the table:
+
+1. **Few node types, each with modes.** One List node with a Mode dropdown (item,
+   slice, sort, statistics, set operations…) instead of 30 list nodes. One Expression
+   instead of 40 maths nodes. One Filter rows, one Group and aggregate. The target is
+   about 45 node types in all.
+   - A node's title shows its mode ("List · sort"), so the canvas still reads at a
+     glance.
+   - Changing the mode keeps the wires that still fit.
+2. **Seven groups, in the order work flows**, the same everywhere: the toolbar's
+   Add operator menu, the palette, the outline, MCP's lists and the skills.
+   - **Inputs**: Number, Slider, Toggle, Choice, Series, Range, Random, Table, File.
+   - **Geometry**: Points, Grid, Plane, Profile, Measure, Selection by rule, Selection
+     sets.
+   - **Logic**: Expression, List, Pairs, Lookup, Text.
+   - **Results**: Result table, Reduce, Filter, Section, Nearest, Clearance, the run,
+     mesh and project tables.
+   - **Tables**: Columns, Filter rows, Sort, Top N, New column, Convert units, Round,
+     Group and aggregate, Join, Stack, Pivot.
+   - **Checks**: Check, and the 0063 objectives.
+   - **Outputs**: Panel, Plot, Preview, Export.
+   The groups are colour-coded by the type of their output (the socket colours of
+   0062), so a group's nodes look related.
+3. **The palette and menu suggest what fits first.**
+   - With a node selected, or a wire dragged out and dropped on empty canvas
+     (Blender's and Unreal's way), a "Fits here" section lists only the nodes whose
+     input takes that output, with the likeliest first: from a result table, Filter
+     rows, Sort, Top N.
+   - Everything else follows below, by group.
+   - Recently used nodes come first in the palette.
+4. **Search knows other names.** Each node lists aliases. Grasshopper's names ("cull",
+   "dispatch", "flatten", "cherry picker", "graph mapper"), Excel's ("vlookup",
+   "pivot table") and SQL's ("where", "group by") all find the Puzzle node. The palette
+   says which: "Cull Pattern → Filter rows (mode: every nth)".
+5. **Recipes, not only nodes.** A Recipes section inserts a small, already wired
+   chain for common jobs:
+   - the 20 worst nodes, labelled in the view;
+   - peak stress per part, as a bar chart;
+   - two solvers' displacement difference by node;
+   - mass from the geometry (Measure × density);
+   - the reaction per support, in kN;
+   - a stress margin against an allowable (Check).
+   These are Grasshopper's user objects and clusters, shipped as starters. A user's
+   own cluster (A11, later) saves the same way.
+6. **One line of help and an example per node, shown in the palette.** For instance:
+   "Top N: the N rows with the largest value of a column, e.g. the 20 highest von
+   Mises nodes." Every option is a readable dropdown (as the GUI rule says).
+   Advanced options sit in a folded section of the node's Properties.
+7. **Nodes show their value.** A table node shows "1 234 rows × 6", a number its value,
+   a check its verdict. Hovering a wire shows what flows on it, so a chain explains
+   itself without opening anything.
+
+If this direction is right, it becomes 0064's item 6 (GUI). The table's rows marked
+Yes become the phases' operator lists, and ADR 0062's add menu is regrouped to match.
