@@ -121,7 +121,18 @@ Related, from the same ADR:
 - The Expression's real(a, phase) and imag(a, phase) take the phase in degrees.
 - Every object takes `tags` (a list of words). They never stale a study.
 
-## Recipes
+## Recipes and clusters (phase 4)
+
+`recipes` lists the ready-wired chains Puzzle ships, and the user's saved clusters
+(keys `mine:<name>`), with their input ports. `recipe_insert(key, bindings)` puts one
+in, each port bound to a source (`{"result": {"source": "<study id>", "port":
+"result"}}`), as one batch. Then adjust the copies' settings (the stress margin's
+limit, the measure's part) with `submit`. The recipes are: `worst_nodes`,
+`peak_per_part`, `solver_difference` (ports result and other), `stress_margin`,
+`reactions_kn` and `mass_from_geometry`. An Export of a result with `format: "png"`
+saves a picture of it.
+
+## Recipes by hand
 
 - **The 20 worst nodes**: `result_table` (`quantities: ["stress:von_mises"]`) →
   `top_n` (`column: "von_mises"`, count 20) → `export` `worst.xlsx`.

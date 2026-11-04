@@ -154,6 +154,11 @@ def add_to_menu(window, menu, node) -> None:
     menu.addAction("Rename…\tF2").triggered.connect(lambda: tree.editItem(item))
     if node.kind == "group":
         menu.addAction("Ungroup").triggered.connect(lambda: ungroup(window, node.object))
+        if section == "Operators":  # ADR 0064: a chain kept to use again
+            from puzzle.gui.operators import save_cluster
+
+            menu.addAction("Save as cluster…").triggered.connect(
+                lambda: save_cluster(window, node.object))  # fmt: skip
     if not tree.groupable(item) or section is None:
         return
     keys = selected_keys(window, section) or [member_key(node)]

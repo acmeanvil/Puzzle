@@ -198,7 +198,8 @@ def test_the_toolbar_lists_every_operator_by_group(window):
     actions = menu.actions()
     assert actions[0].text().startswith("Find an operator")
     groups = {a.text(): a.menu() for a in actions if a.menu() is not None
-              and a.text() not in ("Fits the selection", "Recently used")}  # fmt: skip
+              and a.text() not in ("Fits the selection", "Recently used", "Recipes",
+                                   "My clusters")}  # fmt: skip
     from puzzle.operators import GROUPS
 
     assert list(groups) == [g for g in GROUPS if any(t.group == g for t in TYPES.values())]
@@ -321,3 +322,46 @@ def test_phase_three_in_the_window(window):
     got = choices(w.session.project, comp, "physics.0.features.0.when")
     assert got[0] == ("Always", None)
     assert (w.session.project.objects[UUID(sw)].name,) * 2 in got
+
+
+def test_recipes_from_the_toolbar_and_a_cluster_saved(window):
+    w = window
+    from puzzle.gui.operators import insert_template, save_cluster
+    from puzzle.model.schema import TreeGroup
+
+    study = _study(w)
+    runs = w.schematic.items[f"runs:{study.id}"]
+    w.schematic.chosen(runs.node)
+    menu = w.schematic.operators.menu()
+    menu.aboutToShow.emit()
+    recipes = next(a.menu() for a in menu.actions() if a.text() == "Recipes")
+    assert "Worst nodes" in [a.text() for a in recipes.actions()]
+    source, port = w.schematic.palette_source()
+    insert_template(w, "peak_per_part", source, port)
+    table = next(o for o in w.session.project.objects.values()
+                 if getattr(o, "name", "") == "Peak per part: Result table")  # fmt: skip
+    assert table.inputs["result"].source == study.id  # wired from the selected run
+    group = next(g for g in w.session.project.of_type(TreeGroup) if g.name == "Peak per part")
+    from forms import fill
+
+    fill(w, name="My peaks")
+    assert save_cluster(w, str(group.id)).endswith("my_peaks.json")
+    menu.aboutToShow.emit()
+    mine = next(a.menu() for a in menu.actions() if a.text() == "My clusters")
+    assert "My peaks" in [a.text() for a in mine.actions()]  # (others saved too)
+
+
+@pytest.mark.skipif(not os.environ.get("PUZZLE_RENDER_TESTS"), reason="renders off screen")
+def test_a_snapshot_export_writes_a_png(window):
+    w = window
+    from puzzle.gui.operators import new_operator
+    from puzzle.operators import evaluate as ev
+
+    study = _study(w)
+    snap = new_operator(w, "export", str(study.id), "result")
+    w.properties.edited.emit(snap, "file", "report/tip.png")
+    w.properties.edited.emit(snap, "format", "png")
+    op = w.session.project.objects[UUID(snap)]
+    ctx = ev.Context(w.session.project, w._store(), root=w.session.root)
+    (path,) = ev.export(ctx, op, w.session.root)
+    assert path.name == "tip.png" and path.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"

@@ -131,10 +131,12 @@ TYPES: dict[str, OperatorType] = {
         ),
         OperatorType(
             "export", "Export", "Display",
-            "Any output to a file in the project: CSV, or a result in an export format.",
+            "Any output to a file in the project: CSV, Parquet or Excel for tables, a "
+            "result in an export format, or a result's view as a PNG (format png: a "
+            "snapshot for a report).",
             (PortSpec("value", "Value", ANY),),
             (),
-            ("file", "format"),
+            ("file", "format", "quantity", "step"),
         ),
         # Data operators (phase 2): they compute before a solve.
         OperatorType(
@@ -628,7 +630,8 @@ ALIASES = {
     "check": ("allowable", "pass fail", "verdict", "margin"),
     "panel": ("param viewer", "note"),
     "plot": ("quick graph", "bar graph", "chart", "value tracker"),
-    "export": ("data output", "save", "write csv", "write excel", "bake"),
+    "export": ("data output", "save", "write csv", "write excel", "bake", "snapshot",
+               "screenshot", "png", "model view"),
     "join": ("merge", "vlookup", "match", "combine tables"),
     "stack": ("concatenate", "append", "entwine", "union all"),
     "pivot": ("wide", "crosstab", "flip matrix"),

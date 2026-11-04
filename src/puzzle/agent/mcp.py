@@ -605,6 +605,33 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         return s.submit(command, actor, rationale=rationale).to_dict()
 
     @tool(
+        description="The recipes (ready-wired operator chains: worst nodes, peak per part, "
+        "solver difference, stress margin, reactions in kN, mass from geometry) and the "
+        "user's saved clusters (ADR 0064): key, name, help and input ports."
+    )
+    @guarded
+    def recipes() -> list[dict[str, Any]]:
+        from puzzle.operators import clusters
+
+        return clusters.summary()
+
+    @tool(
+        description="Put a recipe or cluster into the project (ADR 0064): `key` from "
+        'recipes, `bindings` each port name to a source {"source": id, "port": '
+        "\"result\"} (a study's result, a table operator's out). One batch, one undo; at "
+        "'propose' a proposal."
+    )
+    @guarded
+    def recipe_insert(key: str, bindings: dict[str, dict[str, str]] | None = None,
+                      rationale: str = "") -> dict[str, Any]:  # fmt: skip
+        from puzzle.operators import clusters
+
+        s = session()
+        wired = {k: (v["source"], v.get("port", "out")) for k, v in (bindings or {}).items()}
+        batch = clusters.commands(s.project, key, wired)
+        return s.submit_batch(batch, actor, rationale=rationale).to_dict()
+
+    @tool(
         description="Ask the user to review commands before they apply, whatever the level. "
         "Use only when you want their review; changes they asked for go through submit."
     )

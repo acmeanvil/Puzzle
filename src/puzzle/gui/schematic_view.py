@@ -947,6 +947,20 @@ class SchematicPanel(QWidget):
                 for k in keys:
                     sub.addAction(TYPES[k].label, lambda k=k: self.add_operator(k)
                                   ).setToolTip(TYPES[k].help)  # fmt: skip
+        from puzzle.operators import clusters
+
+        found = clusters.templates()
+        for title, keys in (
+            ("Recipes", [k for k in found if not k.startswith("mine:")]),
+            ("My clusters", [k for k in found if k.startswith("mine:")]),
+        ):
+            if keys:
+                sub = submenu(title)
+                for k in keys:
+                    sub.addAction(
+                        found[k]["name"],
+                        lambda k=k: ops.insert_template(self.window, k, source, port),
+                    ).setToolTip(found[k].get("help", ""))
         menu.addSeparator()
         groups: dict[str, QMenu] = {}
         for t in ops.ordered():

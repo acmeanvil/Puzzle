@@ -1276,6 +1276,8 @@ def export(ctx: Context, op, root: Path) -> list[Path]:
     path = Path(root) / rel
     path.parent.mkdir(parents=True, exist_ok=True)
     got = _input(ctx, op, "value")
+    if isinstance(got, ResultValue) and (op.format == "png" or rel.suffix.lower() == ".png"):
+        return [_snapshot(ctx, op, got, path)]  # ADR 0064A J8: a result's view, saved
     if isinstance(got, ResultValue):
         from puzzle.post.exports import export as write
 
@@ -1294,6 +1296,27 @@ def export(ctx: Context, op, root: Path) -> list[Path]:
         return [path]
     path.write_text(as_csv(got))
     return [path]
+
+
+def _snapshot(ctx: Context, op, got: ResultValue, path: Path) -> Path:
+    """A result rendered off screen to a PNG (ADR 0064A J8): its `quantity`'s field
+    (else the first listed), deformed, at `step`, in display units as the view draws
+    it. For reports, written with every export."""
+    from puzzle.post.quantities import default
+    from puzzle.post.view import View, render
+
+    item = next((i for i in got.items if i.key == op.quantity), None) if op.quantity \
+        else default(got.items)  # fmt: skip
+    if item is None:
+        raise PuzzleError(f"'{op.name}': {got.label} has no '{op.quantity}'", code="not_found")
+    step = None if op.step == -1 else op.step
+    if path.suffix.lower() != ".png":
+        path = path.with_suffix(".png")
+    try:
+        render(got.mesh, got.results, View(field=item.field, step=step), screenshot=path)
+    except KeyError as exc:
+        raise PuzzleError(f"'{op.name}': {exc.args[0]}", code="not_found") from None
+    return path
 
 
 def as_csv(v) -> str:

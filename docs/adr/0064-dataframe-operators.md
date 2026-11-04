@@ -1,6 +1,6 @@
 # 0064. Dataframe operators: results as polars tables to shape, reduce and export
 
-- Status: Accepted (2026-11-03): review answered, the operator list from 0064A; phases 1 to 3 built (2026-11-04)
+- Status: Built (2026-11-04): phases 1 to 4; reroute dots and Freeze left for later, as reviewed
 - Date: 2026-11-03
 
 ## Context
@@ -422,3 +422,43 @@ Not done in phase 3:
 - A study reading a run's table doesn't run that study first: run it, then this one.
 - The 2D slider has no pad on its schematic node yet, only the two sliders in
   Properties.
+
+## Phase 4 built (2026-11-04)
+
+- **Clusters** (item 9, row A11), in `operators/clusters.py`:
+  - A group of operators in the tree's Operators section has **Save as cluster…**. Its
+    operators are kept as a template in the user's library
+    (`<user data dir>/clusters/<name>.json`): their settings (only those not at their
+    defaults), the wires among them, and every input wired from outside as a named
+    port.
+  - In any project it is under Add operator → **My clusters**. Putting it in copies the
+    operators with new ids (never linked) and wires its first port from the selected
+    node when the types fit. The operators are named "<cluster>: <type>" and gathered
+    in a tree group of the cluster's name, so the schematic folds them as one node.
+    It is one batch, so one undo.
+- **Recipes** (item 6): the same templates shipped with Puzzle, under Add operator →
+  **Recipes**:
+  - worst nodes: the 20 highest von Mises, pinned in the view and exported to Excel;
+  - peak per part: as a bar chart in MPa;
+  - solver difference: two results joined by node, the 10 that differ most;
+  - stress margin: a check against 250 MPa;
+  - reactions in kN: per part and step;
+  - mass from geometry.
+  MCP `recipes` lists them (and the user's clusters); `recipe_insert(key, bindings)`
+  puts one in through the session, at the autonomy level like any submit.
+- **Snapshot** [J8]: an Export of a result with format `png` (or a `.png` file)
+  renders its `quantity` at its `step` off screen, deformed, to the PNG: a result's
+  view for a report, written with the other exports (`puzzle operators --export`).
+- **Tests**:
+  - `tests/test_clusters.py`: the worst-nodes recipe wired to a run (300 MPa at the hot
+    node, by hand) and undone in one step; every recipe put in; a cluster saved, put
+    into another project as copies, and evaluated there.
+  - `tests/test_operators_gui.py`: Recipes from the toolbar wired from the selected
+    run, Save as cluster, My clusters; a snapshot's PNG (with `PUZZLE_RENDER_TESTS`).
+
+This closes the ADR. Left for later, as the review said: reroute dots on wires (A14)
+and Freeze (A15). Not done:
+- A pad for the 2D slider on its node.
+- A cell click filtering in the Table viewer.
+- Hashing a File operator's files.
+- Running a study that a table from another study's run feeds.

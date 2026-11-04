@@ -158,6 +158,57 @@ def _slide2d(window, op, key: str, si: float) -> None:
     )
 
 
+def save_cluster(window, group_id: str) -> str | None:
+    """A group of operators kept as a cluster in the user's library (ADR 0064 item 9),
+    to put into any project: its inputs from outside become its ports."""
+    from puzzle.gui.quick_form import Ask
+    from puzzle.model.schema import Operator
+    from puzzle.operators import clusters
+
+    project = window.session.project
+    group = project.objects.get(UUID(group_id))
+    members = [UUID(m) for m in getattr(group, "members", []) if _is_uuid(m)]
+    ops = [m for m in members if isinstance(project.objects.get(m), Operator)]
+    if not ops:
+        window.statusBar().showMessage("A cluster is made of a group's operators", 8000)
+        return None
+    got = window.ask_form("Save as cluster", [
+        Ask("name", "Name", kind="text", default=group.name),
+        Ask("help", "What it does", kind="text", default=""),
+    ])  # fmt: skip
+    if not got:
+        return None
+    path = clusters.save(project, ops, got["name"], got.get("help", ""))
+    window.statusBar().showMessage(f"Saved the cluster {got['name']}: it is under Add "
+                                   "operator → My clusters in every project", 10000)  # fmt: skip
+    return str(path)
+
+
+def _is_uuid(text: str) -> bool:
+    try:
+        UUID(text)
+    except ValueError:
+        return False
+    return True
+
+
+def insert_template(window, key: str, source: str | None = None, port: str = "out"):
+    """A recipe or cluster put in (ADR 0064 item 6), its first port wired from the
+    selected node when that fits: one batch, one undo."""
+    from puzzle.operators import clusters, output_type
+
+    found = clusters.templates()[key]
+    bindings = {}
+    ports = found.get("ports", [])
+    if source and ports:
+        given = output_type(window.session.project, UUID(source), port)
+        first = ports[0]
+        if given is not None and (given == first["type"] or {given, first["type"]} <= {
+                "result", "field"}):  # fmt: skip
+            bindings[first["name"]] = (source, port)
+    return window.submit_batch(clusters.commands(window.session.project, key, bindings))
+
+
 def use_as_field(window, op):
     """An imported field reading a table operator's rows (ADR 0064 phase 3): x, y, z the
     points, every other number a value. Made in one step, then its uses are set as any
