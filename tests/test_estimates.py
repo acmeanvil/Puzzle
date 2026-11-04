@@ -246,3 +246,27 @@ def test_a_derived_error_estimate_and_the_advisor(tmp_path, monkeypatch):
     monkeypatch.setattr("puzzle.results.store.ResultStore", lambda *_: store)
     text = advisor._estimate(p, study, tmp_path)
     assert text.startswith("Error ") and "largest at B/End" in text
+
+
+def test_cell_values_become_nodal_for_cfd():
+    from puzzle import adapt
+    from puzzle.results.model import Field, Results, StepResult
+
+    mesh = cube(4)
+    (b,) = mesh.blocks
+    pos = {int(n): i for i, n in enumerate(mesh.node_ids)}
+    centres = mesh.coords[np.vectorize(pos.__getitem__)(b.connectivity)].mean(axis=1)
+    u = np.column_stack([2 * centres[:, 0], np.zeros(len(b.ids)), np.zeros(len(b.ids))])
+    cells = Field("velocity", "element", ["x", "y", "z"], b.ids, u)
+    nodal = est.nodal(mesh, cells)
+    assert nodal.location == "node" and len(nodal.ids) == len(mesh.node_ids)
+    x = mesh.node_coords(nodal.ids)[:, 0]
+    inner = (x > 0.2) & (x < 0.8)
+    # the cells' centres around a Kuhn patch's node are lopsided: within half the
+    # change across one element (h = 0.25, slope 2; measured 0.16)
+    assert np.abs(nodal.values[inner, 0] - 2 * x[inner]).max() < 0.25
+    res = Results("openfoam", [StepResult(1, "stationary", 0.0, fields={"velocity": cells})])
+    speed = adapt.adaptation_field(res, mesh, None)
+    assert speed.shape == (len(mesh.node_ids),) and speed.max() > 1.5
+    got = est.estimate(mesh, nodal.at, (1.0,), "field")
+    assert got.physics == "field" and got.relative >= 0

@@ -306,6 +306,37 @@ def _traction(physics: str, s: np.ndarray, n: np.ndarray) -> np.ndarray:
 PHYSICS = {"displacement": "structural", "temperature": "heat"}
 
 
+def nodal(mesh, f):
+    """A per-element field (a finite-volume solver's cells) as nodal values: each node
+    the volume-weighted mean of the volume elements around it."""
+    from puzzle.results.model import Field
+
+    pos = {int(n): i for i, n in enumerate(mesh.node_ids)}
+    total = np.zeros((len(mesh.node_ids), f.values.shape[1]))
+    weight = np.zeros(len(mesh.node_ids))
+    order = np.argsort(f.ids)
+    for b in mesh.blocks:
+        if b.dim != 3:
+            continue
+        at = np.searchsorted(f.ids, b.ids, sorter=order)
+        at = np.clip(at, 0, len(f.ids) - 1)
+        found = f.ids[order[at]] == b.ids
+        if not found.any():
+            continue
+        corners = np.vectorize(pos.__getitem__)(b.connectivity[found][:, :4])
+        x = mesh.coords[corners]
+        vol = np.abs(np.einsum("ij,ij->i", np.cross(x[:, 1] - x[:, 0], x[:, 2] - x[:, 0]),
+                               x[:, 3] - x[:, 0])) / 6  # fmt: skip
+        vals = f.values[order[at[found]]]
+        for k in range(b.connectivity.shape[1]):
+            nodes = np.vectorize(pos.__getitem__)(b.connectivity[found][:, k])
+            np.add.at(total, nodes, vals * vol[:, None])
+            np.add.at(weight, nodes, vol)
+    keep = weight > 0
+    return Field(f.name, "node", list(f.components), mesh.node_ids[keep],
+                 total[keep] / weight[keep, None])  # fmt: skip
+
+
 def of_run(project, store, run_id: str, *, field_name: str | None = None,
            step: int = -1) -> Estimate:  # fmt: skip
     """The estimate for a stored run's step: its displacement (structural, each
@@ -324,7 +355,9 @@ def of_run(project, store, run_id: str, *, field_name: str | None = None,
         raise PuzzleError("the run has no displacement or temperature to estimate from; "
                           "name a field", code="invalid")  # fmt: skip
     f = st.fields[name]
-    if f.location != "node":
+    if f.location == "element":  # CFD's cell values (ADR 0066 phase 4): to the nodes
+        f = nodal(mesh, f)
+    elif f.location != "node":
         raise PuzzleError(f"'{name}' is per {f.location}: an estimate needs nodal values",
                           code="unsupported")  # fmt: skip
     physics = PHYSICS.get(name, "field") if field_name is None or name in PHYSICS else "field"

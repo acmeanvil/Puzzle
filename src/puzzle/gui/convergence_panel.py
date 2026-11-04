@@ -156,6 +156,10 @@ def error_estimate(window, study_id=None, definition=None):
 CRITERIA = [("Energy-norm error", "energy"), ("Quantities' change between passes", "quantity")]
 PASSES = [(f"Up to {n} passes", n) for n in (3, 4, 5, 6, 8)]
 KEEP = [("Keep them for review", True), ("Delete them (keep their table)", False)]
+METHODS = [
+    ("Isotropic: the recipe's mesher, sized from the error", "isotropic"),
+    ("Anisotropic: MMG, stretched along the field's layers", "anisotropic"),
+]
 
 
 def adapt_form(window, study_id: str):
@@ -175,6 +179,9 @@ def adapt_form(window, study_id: str):
         Ask("criterion", "Judged by", choices=CRITERIA, default=a.criterion,
             help="The quantities are the study's convergence quantities (operators or "
             "result tools)"),
+        Ask("method", "Elements", choices=METHODS, default=a.method,
+            help="Anisotropic elements follow thin layers (heat, flow, thin parts); MMG "
+            "remeshes tetrahedra only"),
         Ask("passes", "Budget", choices=PASSES, default=a.passes),
         Ask("keep", "Earlier passes", choices=KEEP, default=a.keep_passes),
     ], check=lambda v: None if _percent(v.get("target")) else "the target is a "
@@ -189,6 +196,7 @@ def adapt_form(window, study_id: str):
         return None
     value = {**a.model_dump(mode="json"), "target": _percent(got["target"]),
              "criterion": got["criterion"], "passes": int(got["passes"]),
+             "method": got.get("method") or "isotropic",
              "keep_passes": bool(got["keep"]),
              "quantities": [q.model_dump(mode="json") for q in quantities]}  # fmt: skip
     window.submit(Edit(object=study_id, ops=[EditOp(op="set", path="adapt", value=value)]))

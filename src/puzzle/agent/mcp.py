@@ -1033,12 +1033,14 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         "mesh again with each element sized for `target` (0.02 = 2 %), pass after pass, "
         "until the energy-norm error (or, with the study's adapt.criterion 'quantity', "
         "its quantities' change) is at the target or `passes` ran. Settings default to "
-        "the study's `adapt`. Each pass is a stored run, reused next time. Solving needs "
-        "autonomy 'act'; `solve` false only reads the passes run."
+        "the study's `adapt`. `method` 'anisotropic' remeshes with MMG along the field's "
+        "Hessian (thin layers: heat, flow); 'isotropic' with the recipe's mesher. Each "
+        "pass is a stored run, reused next time. Solving needs autonomy 'act'; `solve` "
+        "false only reads the passes run."
     )
     @guarded
     def mesh_adapt(study: str, target: float | None = None, passes: int | None = None,
-                   solve: bool = False) -> dict[str, Any]:  # fmt: skip
+                   method: str | None = None, solve: bool = False) -> dict[str, Any]:  # fmt: skip
         from puzzle import adapt
         from puzzle.commands import resolve
         from puzzle.model.schema import Adapt, Study
@@ -1051,7 +1053,8 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
                               code="not_allowed")  # fmt: skip
         st = resolve(s.project, study, Study)
         a = st.adapt or Adapt()
-        changes = {k: v for k, v in (("target", target), ("passes", passes)) if v}
+        changes = {k: v for k, v in (("target", target), ("passes", passes),
+                                     ("method", method)) if v}  # fmt: skip
         a = Adapt.model_validate({**a.model_dump(), **changes})
         out = adapt.run(s.project, st, root, root / WORK_DIR / "adapt" / str(st.id),
                         store=ResultStore(root / RESULTS_DIR), settings=a,

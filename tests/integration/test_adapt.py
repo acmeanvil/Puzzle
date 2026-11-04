@@ -6,7 +6,8 @@ Measured (CalculiX 2.22): Gmsh 665 → 1227 → 1273 elements, error 3.17 → 1.
 1.24 %, converged in three passes, where uniform refinement (sizes ÷ 1.5 twice) took
 3037 elements to reach 2.12 %. The tip deflection stays within 0.1 % of the
 converged 3.5013 mm. Netgen (its size file restricts only): 524 → 765 elements,
-error 3.94 → 1.71 % in four passes."""
+error 3.94 → 1.71 % in four passes. And MMG's anisotropic passes on a heat layer
+(ADR 0066 phase 4), against isotropic ones."""
 
 from __future__ import annotations
 
@@ -62,3 +63,59 @@ def test_netgen_adapts_through_its_size_file(tmp_path):
     errors = [p.error for p in out.passes]
     assert errors[0] > errors[1] > errors[2] and errors[2] < 0.025
     assert [r.run_id for r in store.runs()] == [out.passes[-1].run]  # earlier ones deleted
+
+
+def heated_bar(tmp_path, method: str):
+    """Steel bar 200 × 10 × 10 mm from 20 °C, its end held at 100 °C for 2 s: a thin
+    layer of heat (erfc), from 10 mm tets, adapted to a 0.2 % energy-norm error."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from conftest_geometry import bar_project, write_bar_step
+
+    from puzzle.model import Feature, Physics, SolveStep
+
+    root = tmp_path / method
+    root.mkdir(parents=True)
+    hot = Feature(type="temperature", selection="Bar/Root",
+                  values={"T": Quantity(value=100, unit="degC")})  # fmt: skip
+    heat = Physics(type="heat_transfer", features=[hot],
+                   settings={"initial_temperature": Quantity(value=20, unit="degC"),
+                             "temperature_dependent_materials": False})  # fmt: skip
+    p, comp = bar_project(write_bar_step(root / "bar.step"), [heat], mesh_size_mm=10)
+    study = p.add(Study(name="t", component=comp.id, solver="calculix", steps=[SolveStep(
+        type="transient", settings={"time_step": Quantity(value=0.1, unit="s"),
+                                    "end_time": Quantity(value=2, unit="s")})]))  # fmt: skip
+    save_project(p, root)
+    store = ResultStore(root / "results")
+    settings = Adapt(target=0.002, passes=4, method=method, field="temperature")
+    return adapt.run(p, study, root, root / "work", store=store, settings=settings), store
+
+
+def test_mmg_follows_a_heat_layer_better_than_isotropic(tmp_path):
+    """Measured: both from 403 elements at 1.75 %; MMG 1647 elements at 0.053 %,
+    isotropic Gmsh 1710 at 0.14 %, each in two passes. Within 0.6 K of the erfc
+    solution either way (the rest is backward Euler's time error)."""
+    from puzzle.mesh.mmg import mmg_binary
+
+    if mmg_binary() is None:
+        pytest.skip("mmg not available")
+    import math
+
+    import numpy as np
+    from scipy.special import erfc
+
+    from puzzle.materials import library_material
+
+    ani, store = heated_bar(tmp_path, "anisotropic")
+    iso, _ = heated_bar(tmp_path, "isotropic")
+    assert ani.converged and iso.converged
+    a, i = ani.passes[-1], iso.passes[-1]
+    assert a.error < i.error / 2 and a.elements <= i.elements * 1.1
+    steel = library_material("structural_steel").properties
+    k, rho, cp = (steel[q].to_si() for q in ("thermal_conductivity", "density", "specific_heat"))
+    record = next(r for r in store.runs() if r.run_id == a.run)
+    mesh = store.read_mesh(record.mesh_id)
+    temp = store.read_results(a.run).steps[-1].fields["temperature"]
+    x = mesh.node_coords(temp.ids)[:, 0]
+    exact = 293.15 + 80 * erfc(x / (2 * math.sqrt(k / (rho * cp) * 2.0)))
+    assert np.abs(temp.values[:, 0] - exact).max() < 0.7
+    assert "Bar/Root" in mesh.groups and len(mesh.groups["Bar/Root"].node_ids) > 4

@@ -80,6 +80,13 @@ uniform refinement.
 - Each pass is a stored run, `adapt: pass k`. The last pass is the result.
 - Earlier passes are kept unless `keep_passes` is false.
 - Netgen refines through its size file, more slowly than Gmsh.
+- `method` "anisotropic" remeshes with MMG along the field's Hessian. Elements
+  stretch along thin layers (a heat front, a boundary or shear layer in flow, a thin
+  wall). On a heated bar it reached 0.05 % where isotropic passes reached 0.14 %,
+  with as many elements. It brings nothing on smooth structural fields, so keep
+  structures isotropic. MMG takes tetrahedra only: a boundary layer's prisms are
+  refused. For flow, set `field` ("velocity") and the quantity criterion, since flow
+  has no energy norm here.
 - A size control from data is the mesh control `size_field`, with `run` (a run's
   estimate, for `target`) or `table` (an operator giving x, y, z and size in m).
 

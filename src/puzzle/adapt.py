@@ -75,6 +75,58 @@ def refined(project, study, source_run: str, settings):
     return _replace(project, recipe.id, new)
 
 
+def _mmg_key(base: str, source_run: str, a) -> str:
+    """An MMG pass's run key: the study's own, the run its metric came from, and the
+    settings that shape it."""
+    import hashlib
+
+    text = json.dumps([base, source_run, "mmg", a.target, a.field, a.finer, a.stretch])
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+SCALARS = ("temperature", "pressure", "electric_potential")
+VECTORS = ("displacement", "velocity")
+
+
+def adaptation_field(results, mesh, name: str | None):
+    """The nodal scalar MMG adapts to: `name`'s values (a vector's magnitude), or the
+    run's own displacement, temperature or velocity; cell values averaged to nodes."""
+    import numpy as np
+
+    from puzzle.post.estimates import nodal
+
+    step = results.steps[-1]
+    name = name or next((n for n in (*VECTORS, *SCALARS) if n in step.fields), None)
+    if name is None or name not in step.fields:
+        raise PuzzleError("no field to adapt to: name one (adapt.field)", code="invalid")
+    f = step.fields[name]
+    if f.location == "element":
+        f = nodal(mesh, f)
+    vals = f.at(mesh.node_ids)
+    return np.linalg.norm(vals, axis=1) if vals.shape[1] > 1 else vals[:, 0]
+
+
+def _mmg_pass(project, study, store, source_run: str, a, workdir: Path):
+    """The next pass's mesh from the source run by MMG, as a MeshResult."""
+    import numpy as np
+
+    from puzzle.mesh import mmg
+    from puzzle.mesh.generate import MeshResult, _model_size  # noqa: F401
+    from puzzle.model.schema import Component, MeshRecipe
+
+    record = next(r for r in store.runs() if r.run_id == source_run)
+    mesh = store.read_mesh(record.mesh_id)
+    values = adaptation_field(store.read_results(source_run), mesh, a.field)
+    comp = project.get(study.component, Component)
+    recipe = project.get(comp.mesh, MeshRecipe)
+    span = float(np.linalg.norm(np.ptp(mesh.coords, axis=0)))
+    hmax = recipe.global_size.to_si() if recipe.global_size else span / 10
+    new = mmg.adapt_mesh(mesh, values, workdir / "mmg", target=a.target,
+                         hmin=hmax / (a.finer**2 * 4), hmax=hmax,
+                         order=recipe.element_order, stretch=a.stretch)  # fmt: skip
+    return MeshResult(mesh=new, path=workdir / "mmg", min_quality=mmg.quality(new))
+
+
 def _stored(store, study, key: str):
     return next((r for r in reversed(store.runs()) if r.study_id == str(study.id)
                  and r.status == "completed" and r.run_key == key), None)  # fmt: skip
@@ -108,8 +160,16 @@ def run(project, study, root: Path, workdir: Path, *, store, settings=None, solv
     for k in range(1, a.passes + 1):
         p = Pass(k)
         passes.append(p)
-        at = project if previous is None else refined(project, study, previous, a)
-        key = run_hashes(at)[study.id][study.solver][0]
+        meshed = None
+        if previous is None:
+            at = project
+            key = run_hashes(at)[study.id][study.solver][0]
+        elif a.method == "anisotropic":  # ADR 0066 phase 4: MMG along the Hessian
+            at = project
+            key = _mmg_key(run_hashes(at)[study.id][study.solver][0], previous, a)
+        else:
+            at = refined(project, study, previous, a)
+            key = run_hashes(at)[study.id][study.solver][0]
         record = _stored(store, study, key)
         if record is None:
             if read_only:
@@ -123,8 +183,11 @@ def run(project, study, root: Path, workdir: Path, *, store, settings=None, solv
             if on_output:
                 on_output(f"--- adaptive refinement: {p.label}")
             try:
+                if previous is not None and a.method == "anisotropic":
+                    meshed = _mmg_pass(at, study, store, previous, a, workdir / f"pass-{k}")
                 got = solve(at, study.id, root, workdir / f"pass-{k}", store=store,
-                            _point=(key, {"adapt": p.label}), cancel=cancel)  # fmt: skip
+                            _point=(key, {"adapt": p.label}), cancel=cancel,
+                            **({"meshed": meshed} if meshed is not None else {}))  # fmt: skip
             except PuzzleError as exc:
                 p.reason = f"{exc.code}: {exc.message}"
                 ended = f"{p.label} failed: {exc.message}"

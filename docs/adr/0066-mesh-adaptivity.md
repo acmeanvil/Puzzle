@@ -1,6 +1,6 @@
 # 0066. Mesh convergence, error estimates and adaptive refinement
 
-- Status: Accepted (2026-11-03)
+- Status: Built (2026-11-04; accepted 2026-11-03)
 - Date: 2026-11-03
 
 ## Context
@@ -292,3 +292,38 @@ The maintainer's answers:
   - `tests/integration/test_adapt.py` (CalculiX): the cantilever adapted with Gmsh to
     1.24 % in 1273 elements (uniform refinement took 3037 for 2.12 %), the tip within
     0.2 % of the converged value; with Netgen 3.94 → 1.71 % over its passes.
+
+## Phase 4 (built, 2026-11-04)
+
+- `puzzle/mesh/mmg.py`: anisotropic adaptation with MMG (`mmg3d_O3` from the pixi
+  `mmg` environment through conda-forge's `mmgpy`, built for linux-64, osx-64 and
+  win-64 only; or `PUZZLE_MMG`), run as a separate program on Medit files.
+  - The metric is built from the field's Hessian: its gradient recovered at the
+    nodes, then the gradient of that, symmetrised. Eigenvalues are
+    λ = (2/9) |μ| / (target × range), clamped to the sizes and to a `stretch` aspect
+    ratio. The `.sol` holds the tensor in Medit's order (m11 m12 m22 m13 m23 m33),
+    checked against an elongated metric.
+  - Gmsh's entities become MMG's references: bodies on tetrahedra, faces on
+    triangles (interfaces between bodies too), curves as ridges, geometric points as
+    required corners. The mesh read back is rebuilt by them into the same blocks and
+    named groups.
+  - Second order adds edge midpoints, since MMG's elements are straight-sided. Other
+    volume elements (a boundary layer's prisms) are refused.
+- `Adapt.method = "anisotropic"`: each pass after the first remeshes the pass
+  before's mesh by MMG, along `field`'s Hessian (a vector's magnitude; default the
+  run's displacement, velocity or temperature) and hands it to `run_study(meshed=)`.
+  Its run key comes from the study's, the source run and the settings, so it resumes.
+- CFD: a finite-volume run's cell values are averaged to the nodes by volume
+  (`estimates.nodal`), so the jump indicator and MMG's metric work on OpenFOAM and
+  Code_Saturne results.
+- GUI: the Adapt the mesh… form's Elements choice; CLI `adapt --anisotropic`; MCP
+  `mesh_adapt(method=)`.
+- Verified:
+  - `tests/test_mmg.py`: a tanh layer on a cube gives elements 4:1 across it in two
+    passes, with the named face kept on its face, at first and second order.
+  - `tests/integration/test_adapt.py`: a steel bar heated at one end for 2 s (an erfc
+    layer) from 10 mm tets, adapted to 0.2 %. MMG reached 0.053 % in 1647 elements and
+    isotropic Gmsh 0.14 % in 1710, each in two passes, within 0.6 K of the erfc
+    solution (the rest is the time step's).
+  - On the cantilever, MMG brings nothing: displacement has no layer to stretch
+    along, so structural studies should stay isotropic.

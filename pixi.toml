@@ -105,6 +105,17 @@ python = "3.12.*"
 netgen = ">=6.2.2601"
 numpy = ">=1.26"
 
+# MMG, the anisotropic remesher (ADR 0066 phase 4), through mmgpy: its own environment
+# as Netgen's, run as a separate program (MMG is LGPL). conda-forge builds mmgpy for
+# these platforms only.
+[feature.mmg]
+platforms = ["linux-64", "osx-64", "win-64"]
+
+[feature.mmg.dependencies]
+python = "3.12.*"
+mmgpy = ">=0.18"
+numpy = ">=1.26"
+
 [feature.code-aster]
 platforms = ["linux-64", "win-64"]
 
@@ -120,3 +131,4 @@ calculix-pardiso = { features = ["calculix-pardiso"], no-default-feature = true 
 fenicsx = { features = ["fenicsx"], no-default-feature = true }
 code-aster = { features = ["code-aster"], no-default-feature = true }
 netgen = { features = ["netgen"], no-default-feature = true }
+mmg = { features = ["mmg"], no-default-feature = true }

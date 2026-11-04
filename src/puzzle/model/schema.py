@@ -1679,6 +1679,11 @@ class Adapt(BaseModel):
     field: str | None = None
     finer: float = Field(default=4.0, ge=1)
     coarser: float = Field(default=2.0, ge=1)
+    # ADR 0066 phase 4: "anisotropic" remeshes with MMG along the Hessian of `field`
+    # (default the physics' own: displacement magnitude, temperature, velocity
+    # magnitude), elements at most `stretch` times longer than wide
+    method: Literal["isotropic", "anisotropic"] = "isotropic"
+    stretch: float = Field(default=50.0, ge=1)
 
     @model_validator(mode="after")
     def _quantities(self) -> Adapt:

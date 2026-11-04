@@ -407,6 +407,11 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--budget", type=int, metavar="N", help="at most N passes")
     p.add_argument("--max-elements", type=int, metavar="N", help="stop past N elements")
     p.add_argument(
+        "--anisotropic",
+        action="store_true",
+        help="remesh with MMG along the field's Hessian (stretched elements)",
+    )
+    p.add_argument(
         "--delete-passes",
         action="store_true",
         help="delete the earlier passes' runs at the end (their table is kept)",
@@ -1086,6 +1091,8 @@ def _adapt(args) -> int:
                                  ("max_elements", args.max_elements)) if v}  # fmt: skip
     if args.delete_passes:
         changes["keep_passes"] = False
+    if args.anisotropic:
+        changes["method"] = "anisotropic"
     a = Adapt.model_validate({**a.model_dump(), **changes})
     out = adapt.run(s.project, study, args.project, args.project / WORK_DIR / "adapt"
                     / str(study.id), store=_store(args.project), settings=a,
