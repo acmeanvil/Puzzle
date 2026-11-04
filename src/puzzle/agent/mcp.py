@@ -970,8 +970,11 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         "nothing: each point's variables (SI and as labelled), its runs, objective, "
         "constraints, feasible or why not; the best feasible point, the suggestion to "
         "apply it, each variable's sensitivities (correlation with each output), how an "
-        "optimiser `ended`, the `pareto` front's point indexes, and a response surface's "
-        "`surface_fit` (leave-one-out error per output, a share of its range)."
+        "optimiser `ended`, the `pareto` front's point indexes, a response surface's "
+        "`surface_fit` (leave-one-out error per output, a share of its range), and robust "
+        "design's `robust` (the design chosen; each output's mean, sd and ±3σ range over "
+        "the scatter, SI; each constraint's probability of holding; the surface's miss at "
+        "each checked point)."
     )
     @guarded
     def optimisation_points(name: str) -> dict[str, Any]:
@@ -994,7 +997,9 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
                 "pareto": [p.index for p in optimise.pareto(opt, pts)]
                 if len(optimise.output_keys(opt)) > 1 else [],
                 **({"surface_fit": optimise.fit_quality(opt, pts)}
-                   if opt.method == "response_surface" else {})}  # fmt: skip
+                   if opt.method == "response_surface" else {}),
+                **({"robust": optimise.robust_summary(s.project, opt, pts)}
+                   if opt.method == "robust" else {})}  # fmt: skip
 
     @tool(
         description="Run an optimisation's points (ADR 0063; needs autonomy 'act', as "

@@ -1,6 +1,6 @@
 # 0063. Design optimisation and design of experiments: a study that chooses its own points
 
-- Status: Accepted (2026-11-02); phases 1, 2 and 3 built (2026-11-03)
+- Status: Built (2026-11-03): phases 1 to 4
 - Date: 2026-11-02
 
 ## Context
@@ -373,3 +373,78 @@ Not done in phase 3:
 - A plot of a response surface itself (the panel shows its fit as numbers).
 - TPE for many choices (the ADR's other optuna sampler): the Gaussian process takes
   choices by index, and differential evolution remains the method for many of them.
+
+## Phase 4 built (2026-11-03): robust design
+
+- **What scatters** (`model.schema.Scatter`): normal or log-normal with a standard
+  deviation, or uniform within a half-width; given as a quantity (`spread`) or as a
+  share of the value (`cv`).
+  - A **random** variable (`DesignVariable.kind = "random"`) isn't chosen. It stays at
+    its parameter's current value and scatters: a load, a modulus, a gap.
+  - A chosen variable may scatter too, about the value chosen: a manufacturing
+    tolerance.
+  - Other methods refuse random variables, and robust design refuses an optimisation
+    where nothing scatters.
+- **What's asked** (`DesignOutput`):
+  - The objective's `statistic`: its own value (`nominal`), the mean over the scatter,
+    or the mean plus `sigmas` standard deviations.
+  - A constraint's `probability`: it holds with at least this probability ("deflection
+    ≤ 2 mm at 99 %"). Without one, a constraint holds at the variables' own values.
+- **The method** (`robust`, `optimise._robust`):
+  - A Latin hypercube of `samples` over the chosen variables' ranges, widened by their
+    scatter, and the random ones' ±3σ (a log-normal by its quantiles, a uniform by its
+    half-width).
+  - A response surface (`surface`) through the solved points.
+  - Monte Carlo on the surface, with common random numbers (the same seeded draws for
+    every candidate, so designs compare fairly). It covers 256 Sobol candidates over
+    the chosen variables, plus as many round the last choice, each judged by 2000
+    samples.
+  - The best feasible candidate is solved at its own values ("robust design"), and at
+    the sample that decides each probability ("probability check": the sample at the
+    1 − p quantile of the margin), so the surface is checked where the answer comes
+    from. Then it refits.
+  - It stops when the design moves less than the tolerance, or at `samples` + 20.
+  - Without chosen variables, it is an uncertainty analysis at the current values.
+- **The answer** (`robust_summary`):
+  - The design chosen.
+  - With the full `monte_carlo` samples (default 20 000), each output's mean, standard
+    deviation and ±3σ points, and each constraint's probability of holding against its
+    target.
+  - The surface's miss at each checked point, from a surface fitted without it.
+  - Shown in the panel's summary, MCP `optimisation_points` (`robust`) and the CLI.
+- **Applying it**: Apply best sets the chosen variables only. Random variables stay as
+  they are, and the suggestion doesn't name them.
+- **Random operator** (ADR 0064A row C9): `random`, seeded samples about a mean (normal,
+  log-normal or uniform; `distribution`, `seed`) as a list. A sweep over it is Monte
+  Carlo with real solves. It shares `operators.evaluate.draw`.
+- **Panel**:
+  - Plot → "Surface: <output> against <variable>", for response surfaces, Bayesian and
+    robust runs: a slice through the best point with the solved points as dots. This
+    is item 4's fitness landscape and phase 3's open item.
+  - Robust design adds "Distribution: <output>", the probability density over the
+    scatter.
+  - New optimisation… reads `F: random ± 10 N`, `E: random lognormal 5 %`,
+    `t: 4 mm .. 8 mm uniform ± 0.1 mm` and `Tip <= 1 mm at 99 %`, and asks which
+    statistic robust design reads.
+- **Tests**:
+  - `tests/test_optimisers.py`, the stand-in beam with the load F normal, 100 N ± 10 N:
+    - At t 6 mm the deflection's mean is 0.9259 mm (within 0.2 %), its sd 10 % of that
+      (within 3 %), and P(δ ≤ 1.1 × mean) = Φ(1) = 0.8413 (within 0.01).
+    - "δ ≤ 1 mm at 99 %" chooses t = 6.274 mm in 18 points. By hand, F's 99th
+      percentile (123.26 N) needs 6.272 mm.
+    - Apply best sets t alone.
+    - Also: refusals, the Random operator's statistics and seeding, the plots' data and
+      the form's syntax.
+  - `tests/test_optimisation_panel.py`: the summary and plots.
+  - `tests/integration/test_optimise_cantilever.py`, CalculiX: t made to a normal
+    tolerance (sd 0.1 mm) with the 2 mm deflection at 99 %.
+    - It chose t = 7.48 mm in 8 solves. By hand: the deterministic 7.25 mm on this mesh
+      plus 2.326 × 0.1 mm.
+    - Mean deflection 1.810 mm, sd 0.072 mm; the limit holds at 99.21 %.
+    - The surface missed the checked solves by 0.2 % at most.
+
+This closes the ADR. Left for later, and not holding it open:
+- NSGA-II (item 5).
+- Running a generation's points in parallel.
+- Points as `Iteration` progress events.
+- A plot of a surface over two variables at once (slices one at a time now).

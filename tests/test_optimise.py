@@ -62,12 +62,13 @@ def stand_in(store, fail=lambda w, t: False, calls=None):
     def solve(project, study_id, root, workdir, *, store=store, solver, _point, **_):
         values = parameter_values(project)
         w, t = values.get("w", 0.02), values.get("t", 0.005)  # a beam, or any study
+        load = values.get("F", F)  # robust design scatters it
         if calls is not None:
             calls.append((solver, w, t))
         if fail(w, t):
             raise PuzzleError("the mesh was refused", code="mesh_failed")
         run_id = f"r{len(store.records)}-{uuid4().hex[:8]}"  # unique, as a store's are
-        u = np.array([[0.0, 0, 0], [0, -deflection(w, t), 0]])
+        u = np.array([[0.0, 0, 0], [0, -deflection(w, t) * load / F, 0]])
         field = Field("displacement", "node", ["x", "y", "z"], np.array([1, 2]), u)
         store.results[run_id] = Results(
             solver, [StepResult(1, "stationary", 1.0, fields={"displacement": field})]

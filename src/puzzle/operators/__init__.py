@@ -195,6 +195,16 @@ TYPES: dict[str, OperatorType] = {
             ("operation", "column"),
         ),
         OperatorType(
+            "random", "Random", "Data",
+            "Seeded samples about a mean (normal, log-normal or uniform): a load's or a "
+            "modulus's scatter; a sweep over them is Monte Carlo with real solves.",
+            (PortSpec("mean", "Mean", ("number",), typed="number"),
+             PortSpec("spread", "Spread", ("number",), typed="number"),
+             PortSpec("count", "Count", ("number",), typed="number")),
+            (PortSpec("out", "List", ("list",)),),
+            ("distribution", "seed"),
+        ),
+        OperatorType(
             "pairs", "Pairs", "Data",
             "Two lists into a table: item by item, or every combination.",
             (PortSpec("a", "A", ("list",)), PortSpec("b", "B", ("list",))),
@@ -206,7 +216,7 @@ TYPES: dict[str, OperatorType] = {
 # Types that compute from data, before a solve: pre-solve when nothing they read is a
 # result (ADR 0062 item 3), and then parameters by their name.
 DATA = frozenset({"number", "slider", "series", "range", "expression", "table", "list",
-                  "pairs"})  # fmt: skip
+                  "pairs", "random"})  # fmt: skip
 
 
 def accepts(spec: PortSpec, given: str) -> bool:
@@ -427,6 +437,8 @@ def describe(project, op) -> str:
         bits.append(op.operation + (f" of column {op.column}" if op.column else ""))
     elif op.type == "pairs":
         bits.append(op.combination)
+    elif op.type == "random":
+        bits.append(f"{op.distribution}, seed {op.seed}")
     if op.type in DATA:
         bits.append("(before solving)" if is_pre(project, op) else "(after solving)")
         uses = model_uses(project, op)

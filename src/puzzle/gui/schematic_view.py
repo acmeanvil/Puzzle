@@ -508,6 +508,8 @@ class SchematicPanel(QWidget):
         self.export.clicked.connect(lambda: self.export_picture())
         # Narrow windows squeeze the bar, never widen the window (the centre's minimum).
         self.search.setMinimumWidth(60)
+        for button in (self.operators, self.reach, self.fit, self.tidy, self.export):
+            button.setMinimumWidth(36)  # its text clips rather than set the minimum
         for combo in (self.state_filter, self.uses):
             combo.setSizeAdjustPolicy(
                 QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import csv
 import io
+import math
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -645,6 +646,30 @@ def _range(ctx: Context, op) -> dict[str, Any]:
                              op.name)}  # fmt: skip
 
 
+def _random(ctx: Context, op) -> dict[str, Any]:
+    """Seeded samples (the same each time): normal or log-normal with the spread as the
+    standard deviation (log-normal's mean is the mean given), or uniform within plus or
+    minus the spread."""
+    mean, spread = _typed_number(ctx, op, "mean"), _typed_number(ctx, op, "spread")
+    n = _count(op, _typed_number(ctx, op, "count"))
+    _same_kind(op, mean.kind, spread.kind)
+    values = draw(op.distribution, mean.value, spread.value, n, op.seed)
+    return {"out": ListValue(values, mean.kind or spread.kind, op.name)}
+
+
+def draw(distribution: str, mean: float, spread: float, n: int, seed: int) -> np.ndarray:
+    """n seeded samples about `mean`; shared with robust design's Monte Carlo."""
+    rng = np.random.default_rng(seed)
+    if distribution == "uniform":
+        return rng.uniform(mean - spread, mean + spread, n)
+    if distribution == "lognormal":
+        if mean <= 0:
+            raise PuzzleError("a log-normal scatter needs a positive mean", code="invalid")
+        sigma = math.sqrt(math.log(1 + (spread / mean) ** 2))
+        return mean * np.exp(rng.normal(-(sigma**2) / 2, sigma, n))  # its mean is `mean`
+    return rng.normal(mean, spread, n)
+
+
 def _expression(ctx: Context, op) -> dict[str, Any]:
     from puzzle.model.schema import ParameterSet
     from puzzle.model.units import kind_of
@@ -778,6 +803,7 @@ def _pairs(ctx: Context, op) -> dict[str, Any]:
 _EVALUATE = {"reduce": _reduce, "filter": _filter, "check": _check, "panel": _panel,
              "plot": _plot, "export": _export, "number": _number_op, "slider": _slider,
              "series": _series, "range": _range, "expression": _expression,
+             "random": _random,
              "table": _table, "list": _list, "pairs": _pairs}  # fmt: skip
 
 

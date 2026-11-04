@@ -27,23 +27,55 @@ from puzzle.errors import PuzzleError
 
 ROLE = Qt.ItemDataRole.UserRole
 SENSES = [("Smallest (minimise)", "minimise"), ("Largest (maximise)", "maximise")]
+STATISTICS = [
+    ("The mean over the scatter", "mean"),
+    ("Its own value", "nominal"),
+    ("The mean plus 3 standard deviations", "mean_plus_sd"),
+]
+
+
+SCATTER = re.compile(
+    r"(?:\b(normal|uniform|lognormal)\s+)?(?:±|\+-|\+/-)\s*(.+)$|"
+    r"(?:\b(normal|uniform|lognormal)\s+)?(\d[\d.eE+-]*)\s*%$"
+)
+
+
+def _scatter(text: str) -> tuple[str, dict | None]:
+    """A line's scatter at its end ("± 10 N", "uniform ± 0.1 mm", "lognormal 5 %"): the
+    rest of the line and the scatter (robust design, ADR 0063 item 11)."""
+    m = SCATTER.search(text)
+    if not m:
+        return text, None
+    rest = text[: m.start()].strip()
+    if m.group(2) is not None:
+        return rest, {"distribution": m.group(1) or "normal", "spread": _quantity(m.group(2))}
+    return rest, {"distribution": m.group(3) or "normal", "cv": float(m.group(4)) / 100}
 
 
 def parse_variables(text: str) -> list[dict]:
     """One variable a line: "t: 4 mm .. 8 mm", "n: 2 .. 6 integer", "t: 4 mm, 6 mm, 8 mm"
-    (choices)."""
+    (choices). Robust design: "F: random ± 10 N" (normal; or uniform, lognormal; or a
+    share, "random lognormal 5 %") stays at its value and scatters; a range may scatter
+    too, "t: 4 mm .. 8 mm uniform ± 0.1 mm" (a tolerance)."""
     out = []
     for line in [x.strip() for x in text.splitlines() if x.strip()]:
         name, _, rest = line.partition(":")
         if not rest.strip():
             raise ValueError(f"'{line}': write name: low .. high")
-        rest = rest.strip()
+        rest, scatter = _scatter(rest.strip())
+        if rest.startswith("random"):
+            if scatter is None:
+                raise ValueError(f"'{line}': a random variable says how it scatters, "
+                                 "e.g. random ± 10 N")  # fmt: skip
+            out.append({"name": name.strip(), "kind": "random", "scatter": scatter})
+            continue
         integer = rest.endswith(" integer")
         rest = rest.removesuffix(" integer").strip()
         if ".." in rest:
             low, high = (_quantity(x) for x in rest.split("..", 1))
             out.append({"name": name.strip(), "kind": "integer" if integer else "continuous",
-                        "low": low, "high": high})  # fmt: skip
+                        "low": low, "high": high,
+                        **({"scatter": scatter} if scatter else {})})  # fmt: skip
         else:
             out.append({"name": name.strip(), "kind": "choice",
                         "choices": [_quantity(x) for x in rest.split(",")]})  # fmt: skip
@@ -54,17 +86,22 @@ def parse_variables(text: str) -> list[dict]:
 
 def parse_constraints(text: str, names: dict[str, str]) -> list[dict]:
     """One constraint a line: "Tip <= 1 mm", "First frequency >= 30 Hz", by the name of
-    an operator or a result tool."""
+    an operator or a result tool; robust design's "Tip <= 1 mm at 99 %" holds it at a
+    probability over the scatter."""
     out = []
     for line in [x.strip() for x in text.splitlines() if x.strip()]:
         m = re.match(r"(.+?)\s*(<=|≤|>=|≥)\s*(.+)$", line)
         if not m:
             raise ValueError(f"'{line}': write name <= limit, or name >= limit")
-        name, sign, limit = m.group(1).strip(), m.group(2), _quantity(m.group(3))
+        name, sign, limit = m.group(1).strip(), m.group(2), m.group(3).strip()
+        held = re.search(r"\s+at\s+([\d.]+)\s*%$", limit)  # robust design's probability
+        probability = float(held.group(1)) / 100 if held else None
+        limit = _quantity(limit[: held.start()] if held else limit)
         if name not in names:
             raise ValueError(f"no operator or result tool '{name}'")
         side = "upper" if sign in ("<=", "≤") else "lower"
-        out.append({"source": names[name], "port": "out", side: limit})
+        out.append({"source": names[name], "port": "out", side: limit,
+                    **({"probability": probability} if probability else {})})  # fmt: skip
     return out
 
 
@@ -132,12 +169,16 @@ def new_optimisation(window, study_id: str | None = None):
         Ask("study", "Study it runs", choices=studies, default=study_id),
         Ask("variables", "Design variables", kind="multiline",
             default=f"{first}: 1 .. 2", help="One a line: t: 4 mm .. 8 mm; n: 2 .. 6 "
-            "integer; t: 4 mm, 6 mm, 8 mm (choices)"),
+            "integer; t: 4 mm, 6 mm, 8 mm (choices); robust design: F: random ± 10 N"),
         Ask("objective", "Objective", choices=[("None: constraints only", None)]
             + [(n, i) for n, i in names.items()]),
         Ask("sense", "Best is", choices=SENSES),
+        Ask("statistic", "Robust design reads", choices=STATISTICS,
+            help="Robust design's objective: at the variables' own values, their mean "
+            "over the scatter, or the mean plus three standard deviations"),
         Ask("constraints", "Constraints", kind="multiline", default="",
-            help="One a line, by an operator's or result tool's name: Tip <= 1 mm"),
+            help="One a line, by an operator's or result tool's name: Tip <= 1 mm (robust "
+            "design: Tip <= 1 mm at 99 %)"),
         Ask("method", "Method", choices=[(t, k) for k, t in METHODS.items()],
             default="latin_hypercube", help="A design of experiments plans its points; "
             "COBYLA and Nelder–Mead improve on the current values; differential "
@@ -159,6 +200,8 @@ def new_optimisation(window, study_id: str | None = None):
         data[key] = int(got["samples"])
     if got.get("objective"):
         data["objective"] = {"source": got["objective"], "sense": got["sense"]}
+        if got["method"] == "robust":
+            data["objective"]["statistic"] = got.get("statistic") or "mean"
     outcome = window.submit(Create(kind="optimisation", data=data))
     if outcome is not None and outcome.created:
         oid = outcome.created[0]["id"]
@@ -309,6 +352,34 @@ class OptimisationPanel(QWidget):
                  if fit.get(k) is not None]  # fmt: skip
         return (" Surface fit (leave-one-out error): " + ", ".join(parts) + ".") if parts else ""
 
+    def _robust_text(self, opt, names) -> str:
+        """Robust design's answer: each output's mean ± standard deviation and ±3σ range
+        over the scatter, and each constraint's probability of holding."""
+        from puzzle import optimise
+        from puzzle.operators.evaluate import quantity_text
+
+        if opt.method != "robust" or self.live:
+            return ""
+        got = optimise.robust_summary(self.window.session.project, opt, self.points)
+        if not got:
+            return ""
+        sources = ([opt.objective] if opt.objective else []) + list(opt.constraints)
+        parts = []
+        for k, o in zip(optimise.output_keys(opt), sources, strict=True):
+            row = got["outputs"].get(k)
+            if row is None:
+                continue
+            q = lambda v, kind=row["kind"]: quantity_text(v, kind)  # noqa: E731
+            text = f"{names.get(o.source, k)} {q(row['mean'])} ± {q(row['sd'])} " \
+                   f"({q(row['low'])} to {q(row['high'])} at ±3σ)"  # fmt: skip
+            if "holds" in row:
+                want = f" (wanted {row['wanted'] * 100:g} %)" if row["wanted"] else ""
+                text += f", holds {row['holds'] * 100:.2f} %{want}"
+            parts.append(text)
+        head = (" Robust design: " + ", ".join(f"{k} = {v}" for k, v in got["labels"].items())
+                + ".") if got["labels"] else " Over the scatter:"  # fmt: skip
+        return head + " " + "; ".join(parts) + f" ({got['samples']} samples on the surface)."
+
     def start_live(self) -> None:
         """A run is starting: points arrive one by one (`add_point`) and are drawn as
         they come, without reading the store again."""
@@ -381,7 +452,8 @@ class OptimisationPanel(QWidget):
             + (f" Best: {best}." if best else (" The model is at the best point."
                                                if top is not None else ""))
             + (f" Sensitivities: {words}." if words else "")
-            + self._fit_text(opt, names))  # fmt: skip
+            + self._fit_text(opt, names)
+            + self._robust_text(opt, names))  # fmt: skip
         self.apply_button.setEnabled(bool(best))
         keep = self.plot_of.currentData()
         self.plot_of.blockSignals(True)
@@ -399,6 +471,15 @@ class OptimisationPanel(QWidget):
         for a, b in [(keys[0], k) for k in keys[1:]]:
             self.plot_of.addItem(f"Pareto front: {label[a]} against {label[b]}",
                                  f"pareto:{a}:{b}")  # fmt: skip
+        if opt.method in ("response_surface", "robust", "bayesian"):  # the landscape
+            for k in keys:
+                for v in opt.variables:
+                    if v.kind != "choice":
+                        self.plot_of.addItem(f"Surface: {label[k]} against {v.name}",
+                                             f"surface:{k}:{v.name}")  # fmt: skip
+        if opt.method == "robust":
+            for k in keys:
+                self.plot_of.addItem(f"Distribution: {label[k]}", f"dist:{k}")
         found = self.plot_of.findData(keep)
         self.plot_of.setCurrentIndex(max(found, 0))
         self.plot_of.blockSignals(False)
@@ -421,10 +502,30 @@ class OptimisationPanel(QWidget):
         elif what.startswith("pareto:"):
             self._pareto(*what.split(":")[1:])
             return
+        elif what.startswith(("surface:", "dist:")):
+            self._modelled(what)
+            return
         else:
             pts = sorted((p.values[what], p.objective) for p in done if p.objective is not None)
             self.curve.x_label = f"{what} (SI)"
         self.curve.set_series([(self.plot_of.currentText(), pts)])
+
+    def _modelled(self, what: str) -> None:
+        """A surface along one variable through the best point, with the solved points
+        as dots; or (robust design) an output's distribution over the scatter."""
+        from puzzle import optimise
+
+        s = self.window.session
+        opt = s.project.objects.get(UUID(self.opt_id))
+        if what.startswith("dist:"):
+            hist = optimise.distribution(s.project, opt, self.points, what[5:])
+            self.curve.x_label = "Value (SI)"
+            self.curve.set_series([("Probability density", hist)])
+            return
+        _, key, var = what.split(":", 2)
+        line, dots = optimise.surface_slice(s.project, opt, self.points, key, var)
+        self.curve.x_label = f"{var} (SI)"
+        self.curve.set_series([("Surface", line), ("Solved points", dots)], dots={1})
 
     def _pareto(self, a: str, b: str) -> None:
         """The feasible points as dots, the front (those no other beats on both) as a

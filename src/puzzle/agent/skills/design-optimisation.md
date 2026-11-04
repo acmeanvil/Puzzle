@@ -31,6 +31,21 @@ sensitivities first. An optimiser chooses each point from the last:
   per output, a share of its range): above about 10 %, don't trust the surface's
   optimum without the check solve (which it always makes).
 
+- `robust`: design under scatter. A variable of kind `random` (`{"name": "F", "kind":
+  "random", "scatter": {"distribution": "normal", "spread": {"value": 10, "unit":
+  "N"}}}`, or `"cv": 0.05` for 5 % of its value) stays at its current value and
+  scatters. A chosen variable may have a `scatter` too (a tolerance). A constraint's
+  `probability` (0.99) holds it over the scatter; the objective's `statistic` is
+  `nominal`, `mean` or `mean_plus_sd` (with `sigmas`). It starts from `samples` Latin
+  hypercube points, fits a surface, runs Monte Carlo on it (`monte_carlo` samples), and
+  solves the chosen design and the sample deciding each probability to check it. With
+  no chosen variables it is an uncertainty analysis at the current values. Read
+  `robust` in `optimisation_points`: each output's mean, sd and ±3σ (SI), each
+  constraint's `holds` against `wanted`, and `checks` (the surface's miss at each
+  checked solve; above a few per cent, add `samples`).
+- The `random` operator makes seeded samples (a list); a sweep over it is Monte Carlo
+  with real solves, for checking robust design's surface by brute force.
+
 Optimisers round each continuous variable to its `resolution` (default a round
 thousandth of its range), so the same point is the same run. They are replayed over
 the stored runs, so a stopped one resumes where it was.
@@ -110,3 +125,6 @@ user to accept. The CLI is `puzzle optimise PROJECT NAME --apply`.
   little noisy, so do not read more into the last digit.
 - A region of failed points (mesh refused) tells an optimiser nothing; it can get
   stuck there. Start from values that solve.
+- Robust design: a random variable must be a parameter the model reads (a feature's
+  value can't name one yet; a history argument can). Probabilities near 1 (0.9999)
+  need `monte_carlo` large enough to see the tail: at least 100 / (1 − p) samples.

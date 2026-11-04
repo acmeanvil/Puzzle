@@ -33,6 +33,8 @@ mcp = ">=2.0,<3"
 ocp = ">=8.0"  # OpenCASCADE bindings; the same conda-forge occt as gmsh (ADR 0004)
 ezdxf = ">=1.1"  # DXF profiles for extrude and revolve (ADR 0014)
 h5py = ">=3.10"
+polars = ">=1.0"  # dataframe operators (ADR 0064)
+xlsxwriter = ">=3.0"  # their Excel export (ADR 0064)
 
 [pypi-dependencies]
 puzzle-fem = { path = ".", editable = true }

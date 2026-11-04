@@ -27,6 +27,8 @@ dependencies = [
     "deltalake>=1.0",
     "pyarrow>=16",
     "mcp>=2.0,<3",  # the agent server (ADR 0015); 2.x API
+    "polars>=1.0",  # dataframe operators (ADR 0064)
+    "xlsxwriter>=3.0",  # their Excel export (ADR 0064)
 ]
 
 [project.scripts]

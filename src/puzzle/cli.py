@@ -1034,6 +1034,15 @@ def _optimise(args) -> int:
         print(f"{mark} {p.index:3d}  {p.title}{obj}  [{status}]{origin}")
     if pts.ended:
         print(f"{optimise.METHODS[opt.method]}: {pts.ended}")
+    if opt.method == "robust":
+        got = optimise.robust_summary(s.project, opt, pts)
+        if got:
+            if got["labels"]:
+                print("robust design: " + ", ".join(f"{k} = {v}" for k, v in got["labels"].items()))
+            for k, row in got["outputs"].items():
+                held = f", holds {row['holds'] * 100:.2f} %" if "holds" in row else ""
+                print(f"  {k}: mean {row['mean']:.6g} ± {row['sd']:.6g} (SI), "
+                      f"{row['low']:.6g} to {row['high']:.6g} at ±3σ{held}")  # fmt: skip
     if opt.method == "response_surface":
         fit = optimise.fit_quality(opt, pts)
         print("surface fit (leave-one-out): " + ", ".join(

@@ -43,8 +43,9 @@ METHODS = {
     "differential_evolution": "Differential evolution",
     "bayesian": "Bayesian (Gaussian process)",
     "response_surface": "Response surface",
+    "robust": "Robust design",
 }
-MODELLED = ("bayesian", "response_surface")  # a model of the outputs picks each point
+MODELLED = ("bayesian", "response_surface", "robust")  # a model of the outputs picks each point
 CANDIDATES = 11  # 2^11 Sobol candidates a step, where a model is searched
 DOE = ("full_factorial", "latin_hypercube", "sobol")
 LOCAL_POINTS = 50  # a local optimiser's most points when the optimisation sets none
@@ -90,17 +91,37 @@ class Point:
 # --- the variables --------------------------------------------------------------------
 
 
-def _unit(var) -> str:
-    """The unit a variable's values are labelled in: its bounds' (or choices')."""
+def _unit(var, project: Project | None = None) -> str:
+    """The unit a variable's values are labelled in: its bounds' (or choices'); a random
+    one's spread's, or else its parameter's own."""
+    if var.kind == "random":
+        if var.scatter.spread is not None:
+            return var.scatter.spread.unit
+        return _parameter_unit(project, var.name) if project is not None else "dimensionless"
     q = var.low if var.kind != "choice" else var.choices[0]
     return q.unit if q is not None else "dimensionless"
 
 
-def quantity(var, si: float) -> Quantity:
+def _parameter_unit(project: Project, name: str) -> str:
+    from puzzle.model.schema import Operator, ParameterSet
+
+    for ps in project.of_type(ParameterSet):
+        if name in ps.values:
+            return ps.values[name].unit
+    for op in project.of_type(Operator):
+        if op.name == name:
+            given = op.inputs.get("value")
+            q = given.value if given is not None and given.value is not None else op.low
+            if q is not None:
+                return q.unit
+    return "dimensionless"
+
+
+def quantity(var, si: float, project: Project | None = None) -> Quantity:
     """A variable's SI value in its own unit (12 mm, not 0.012 m)."""
     from puzzle.model.units import DIMENSIONS, convert, kind_of
 
-    unit = _unit(var)
+    unit = _unit(var, project)
     kind = kind_of(unit) if unit != "dimensionless" else None
     value = convert(si, DIMENSIONS[kind][1], unit) if kind else si
     return Quantity(value=float(f"{value:.12g}"), unit=unit)
@@ -134,6 +155,20 @@ def check(project: Project, opt: Optimisation) -> None:
                 f"optimisation '{opt.name}': a quadratic surface over {len(opt.variables)} "
                 f"variables has {need} coefficients, so it starts from {need} points at "
                 f"least (samples is {opt.samples})", code="invalid")  # fmt: skip
+    random = [v.name for v in opt.variables if v.kind == "random"]
+    if opt.method == "robust":
+        if not random and not any(v.scatter for v in opt.variables):
+            raise PuzzleError(f"optimisation '{opt.name}': robust design needs something "
+                              "that scatters: a random variable, or a variable's scatter",
+                              code="invalid")  # fmt: skip
+        listed = [v.name for v in opt.variables if v.kind == "choice"]
+        if listed:
+            raise PuzzleError(f"optimisation '{opt.name}': robust design moves continuous "
+                              f"and integer variables; {', '.join(listed)} is a list of "
+                              "choices", code="invalid")  # fmt: skip
+    elif random:
+        raise PuzzleError(f"optimisation '{opt.name}': {', '.join(random)} is random, which "
+                          "only robust design reads", code="invalid")  # fmt: skip
     if opt.method in ("cobyla", "nelder_mead"):
         listed = [v.name for v in opt.variables if v.kind == "choice"]
         if listed:
@@ -187,7 +222,7 @@ def plan(opt: Optimisation) -> list[dict[str, float]]:
 
 def _point(project: Project, opt: Optimisation, index: int, values: dict) -> Point:
     by = {v.name: v for v in opt.variables}
-    quantities = {k: quantity(by[k], x) for k, x in values.items()}
+    quantities = {k: quantity(by[k], x, project) for k, x in values.items()}
     from puzzle.sweep import labels
 
     return Point(index, dict(values), labels(project, quantities))
@@ -200,7 +235,8 @@ def applied(project: Project, opt: Optimisation, values: dict) -> Project:
 
     by = {v.name: v for v in opt.variables}
     study = project.get(opt.study, Study)
-    return sweep.apply(project, study, {k: quantity(by[k], x) for k, x in values.items()})
+    return sweep.apply(project, study, {k: quantity(by[k], x, project)
+                                        for k, x in values.items()})  # fmt: skip
 
 
 # --- reading a point's outputs --------------------------------------------------------
@@ -415,6 +451,8 @@ def limit(opt: Optimisation) -> int:
         n = opt.samples + 20
     elif opt.method == "response_surface":
         n = opt.samples + 10
+    elif opt.method == "robust":
+        n = opt.samples + 20
     else:
         n = LOCAL_POINTS
     return opt.max_solves if opt.max_solves is not None else n
@@ -541,7 +579,8 @@ def _optimise(r: _Runner) -> str:
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")  # fits on few points
-                return (_bayesian if opt.method == "bayesian" else _surface)(r)
+                return {"bayesian": _bayesian, "response_surface": _surface,
+                        "robust": _robust}[opt.method](r)  # fmt: skip
         except _Stop as stop:
             return str(stop)
     merit = _Merit(opt)
@@ -776,6 +815,304 @@ def fit_quality(opt: Optimisation, pts: list[Point]) -> dict[str, float | None]:
     return out
 
 
+# --- robust design (phase 4) ----------------------------------------------------------
+
+DESIGN_CANDIDATES = 8  # 2^8 Sobol candidate designs a step, each with its Monte Carlo
+CANDIDATE_SAMPLES = 2000  # Monte Carlo samples per candidate design while choosing
+
+
+@dataclass
+class _Var:
+    """A variable as robust design sees it: where the surface spans (`lo`..`hi`, SI),
+    the grid it is rounded to, its value (a random one's current value), its scatter."""
+
+    name: str
+    kind: str
+    lo: float
+    hi: float
+    step: float | None
+    nominal: float | None
+    scatter: Any
+    design: tuple[float, float] | None  # a chosen variable's own low and high
+
+
+def _span(scatter, value: float) -> tuple[float, float]:
+    """Where a scattered value falls, nearly always: ±3 standard deviations (log-normal:
+    its quantiles), or the uniform's half-width."""
+    dev = scatter.deviation(value)
+    if scatter.distribution == "uniform":
+        return value - dev, value + dev
+    if scatter.distribution == "lognormal":
+        s = math.sqrt(math.log(1 + (dev / value) ** 2))
+        return value * math.exp(-s * s / 2 - 3 * s), value * math.exp(-s * s / 2 + 3 * s)
+    return value - 3 * dev, value + 3 * dev
+
+
+def _robust_vars(project: Project, opt: Optimisation) -> list[_Var]:
+    from puzzle.operators import parameter_values
+
+    now = parameter_values(project)
+    out = []
+    for v in opt.variables:
+        if v.kind == "random":
+            x0 = now[v.name]
+            lo, hi = _span(v.scatter, x0)
+            out.append(_Var(v.name, "random", lo, hi, None, x0, v.scatter, None))
+            continue
+        lo, hi = v.low.to_si(), v.high.to_si()
+        own = (lo, hi)
+        if v.scatter is not None:  # a tolerance about the value chosen: the surface spans it
+            lo, hi = _span(v.scatter, lo)[0], _span(v.scatter, hi)[1]
+        step = None if v.kind == "integer" else (
+            v.resolution.to_si() if v.resolution is not None
+            else 10.0 ** math.floor(math.log10((own[1] - own[0]) / 1000)))  # fmt: skip
+        out.append(_Var(v.name, v.kind, lo, hi, step, None, v.scatter, own))
+    for var in out:
+        if var.kind == "random":
+            var.step = 10.0 ** math.floor(math.log10((var.hi - var.lo) / 1000))
+    return out
+
+
+def _robust_point(vs: list[_Var], si: dict[str, float]) -> dict[str, float]:
+    """Values onto the variables' grids, inside where the surface spans."""
+    return {v.name: _snapped("integer" if v.kind == "integer" else "continuous", v.lo, v.hi,
+                             v.step, si[v.name]) for v in vs}  # fmt: skip
+
+
+def _robust_unit(vs: list[_Var], x: np.ndarray) -> np.ndarray:
+    lo = np.array([v.lo for v in vs])
+    hi = np.array([v.hi for v in vs])
+    return np.clip((x - lo) / (hi - lo), 0.0, 1.0)
+
+
+def _draws(opt: Optimisation, vs: list[_Var], n: int):
+    """Standard normal and uniform draws per variable, seeded: the same samples for every
+    candidate design (common random numbers), so two designs compare fairly."""
+    rng = np.random.default_rng(opt.seed)
+    return rng.standard_normal((n, len(vs))), rng.random((n, len(vs)))
+
+
+def _scattered(vs: list[_Var], base: dict[str, float], z, u) -> np.ndarray:
+    """Monte Carlo samples (n, d) of every variable about `base` (a design's values and
+    the random variables' own)."""
+    cols = []
+    for j, v in enumerate(vs):
+        x0 = base[v.name]
+        if v.scatter is None:
+            cols.append(np.full(len(z), x0))
+            continue
+        dev = v.scatter.deviation(x0)
+        if v.scatter.distribution == "uniform":
+            cols.append(x0 + dev * (2 * u[:, j] - 1))
+        elif v.scatter.distribution == "lognormal":
+            s = math.sqrt(math.log(1 + (dev / x0) ** 2))
+            cols.append(x0 * np.exp(-s * s / 2 + s * z[:, j]))
+        else:
+            cols.append(x0 + dev * z[:, j])
+    return np.column_stack(cols)
+
+
+def _surfaces(opt: Optimisation, vs: list[_Var], pts: list[Point]):
+    """Surfaces of the objective and each constraint through the solved points."""
+    from puzzle.surrogates import Surface
+
+    def fit(key):
+        done = [p for p in pts if p.run and output_of(p, key) is not None]
+        if len(done) < len(vs) + 2:
+            return None
+        x = _robust_unit(vs, np.array([[p.values[v.name] for v in vs] for p in done]))
+        return Surface(opt.surface, x, np.array([output_of(p, key) for p in done]))
+
+    return {k: fit(k) for k in output_keys(opt)}
+
+
+def _holds(c: DesignOutput, v: np.ndarray) -> np.ndarray:
+    ok = np.ones(v.shape, bool)
+    if c.upper is not None:
+        ok &= v <= c.upper.to_si()
+    if c.lower is not None:
+        ok &= v >= c.lower.to_si()
+    return ok
+
+
+def _margin(c: DesignOutput, v: np.ndarray) -> np.ndarray:
+    """How far inside its limits (positive holds), scaled by each limit."""
+    out = np.full(v.shape, np.inf)
+    if c.upper is not None:
+        lim = c.upper.to_si()
+        out = np.minimum(out, (lim - v) / (abs(lim) or 1.0))
+    if c.lower is not None:
+        lim = c.lower.to_si()
+        out = np.minimum(out, (v - lim) / (abs(lim) or 1.0))
+    return out
+
+
+def _judge(opt: Optimisation, vs, surf, base: dict, z, u) -> dict[str, Any]:
+    """A design over its scatter, on the surfaces: the objective's statistic, each
+    constraint's probability of holding (or its value at the nominal point), feasible,
+    and the samples behind them."""
+    x = _scattered(vs, base, z, u)
+    ux = _robust_unit(vs, x)
+    nominal = _robust_unit(vs, np.array([[base[v.name] for v in vs]]))
+    out: dict[str, Any] = {"x": x, "feasible": True, "worst": np.inf, "values": {}}
+    if opt.objective is not None and surf.get("objective") is not None:
+        f = surf["objective"](ux)
+        mean, sd = float(np.mean(f)), float(np.std(f))
+        sign = 1 if opt.objective.sense == "minimise" else -1
+        stat = {"nominal": float(surf["objective"](nominal)[0]), "mean": mean,
+                "mean_plus_sd": mean + sign * opt.objective.sigmas * sd}  # fmt: skip
+        out["objective"] = stat[opt.objective.statistic]
+        out["values"]["objective"] = f
+    for i, c in enumerate(opt.constraints):
+        key = f"constraint {i + 1}"
+        if surf.get(key) is None:
+            continue
+        v = surf[key](ux)
+        out["values"][key] = v
+        if c.probability is not None:
+            held = float(np.mean(_holds(c, v)))
+            gap = held - c.probability
+        else:
+            gap = float(_margin(c, surf[key](nominal))[0])
+        out["worst"] = min(out["worst"], gap)
+        out["feasible"] &= gap >= 0
+    return out
+
+
+def _robust(r: _Runner) -> str:
+    """Robust design (ADR 0063 item 11): a Latin hypercube over the chosen and the random
+    variables, a response surface through it, and Monte Carlo on the surface: each
+    candidate design's objective statistic and its constraints' probabilities over the
+    scatter. The best design is solved at its own values, and at the sample that decides
+    each probability, to check the surface where it matters; refitted, until those
+    points are already solved."""
+    from scipy.stats import qmc
+
+    opt = r.opt
+    vs = _robust_vars(r.project, opt)
+    design = [v for v in vs if v.design is not None]
+    rng_u = qmc.LatinHypercube(len(vs), seed=opt.seed).random(opt.samples)
+    for row in rng_u:
+        si = {v.name: v.lo + x * (v.hi - v.lo) for v, x in zip(vs, row, strict=True)}
+        r.at(_robust_point(vs, si), "initial plan")
+    z, u = _draws(opt, vs, CANDIDATE_SAMPLES)
+    nominal = {v.name: v.nominal for v in vs if v.kind == "random"}
+    step, previous = 0, None
+    while True:
+        step += 1
+        surf = _surfaces(opt, vs, r.points)
+        if any(s is None for s in surf.values()):
+            return "too few points solved to fit a surface"
+        if design:
+            # one fixed global set (so the choice doesn't jitter with the draw), plus a
+            # finer one round the last choice, a twentieth of each range wide
+            unit = qmc.Sobol(len(design), scramble=True, seed=opt.seed).random_base2(
+                DESIGN_CANDIDATES)  # fmt: skip
+            if previous is not None:
+                at = np.array([(previous[v.name] - v.design[0]) / (v.design[1] - v.design[0])
+                               for v in design])  # fmt: skip
+                near = qmc.Sobol(len(design), scramble=True, seed=opt.seed + 1).random_base2(
+                    DESIGN_CANDIDATES)  # fmt: skip
+                unit = np.vstack([unit, np.clip(at + (near - 0.5) / 20, 0, 1), at[None]])
+            cands = [{v.name: v.design[0] + x * (v.design[1] - v.design[0])
+                      for v, x in zip(design, row, strict=True)} for row in unit]  # fmt: skip
+            judged = [(c, _judge(opt, vs, surf, {**c, **nominal}, z, u)) for c in cands]
+            ok = [(c, j) for c, j in judged if j["feasible"]]
+            if ok and opt.objective is not None:
+                sign = 1 if opt.objective.sense == "minimise" else -1
+                chosen = min(ok, key=lambda cj: sign * cj[1]["objective"])[0]
+            else:
+                chosen = max(judged, key=lambda cj: cj[1]["worst"])[0]
+        else:
+            chosen = {}
+        base = _robust_point(vs, {**chosen, **nominal})
+        if previous is not None and not design:
+            return "done: the distributions at the current values"
+        if previous is not None and all(  # the design has settled: within the tolerance
+            abs(base[v.name] - previous[v.name])
+            <= max(opt.tolerance * (v.design[1] - v.design[0]), 2 * (v.step or 1))
+            for v in design):  # fmt: skip
+            return "converged: the design moved less than the tolerance"
+        previous = base
+        checks = [(base, "robust design")]
+        here = _judge(opt, vs, surf, base, z, u)
+        for i, c in enumerate(opt.constraints):  # the sample that decides each probability
+            key = f"constraint {i + 1}"
+            if c.probability is None or key not in here["values"]:
+                continue
+            m = _margin(c, here["values"][key])
+            k = int(np.argsort(m)[int((1 - c.probability) * len(m))])
+            sample = {v.name: here["x"][k, j] for j, v in enumerate(vs)}
+            checks.append((_robust_point(vs, sample), "probability check"))
+        done = {_key(opt, p.values) for p in r.points}
+        fresh = [(vals, why) for vals, why in checks if _key(opt, vals) not in done]
+        if not fresh:
+            return "converged: the robust design and its checks are solved"
+        for vals, why in fresh:
+            r.at(vals, why)
+
+
+def robust_summary(project: Project, opt: Optimisation, pts: list[Point]) -> dict[str, Any]:
+    """The robust design's answer: the design chosen (its own values), and each output's
+    distribution over the scatter on the surface (mean, standard deviation, the 0.135 %
+    and 99.865 % points, i.e. ±3σ, and a constraint's probability of holding), with how
+    far the surface missed at each checked point before that point was added."""
+    from puzzle.surrogates import Surface
+
+    vs = _robust_vars(project, opt)
+    designs = [p for p in pts if p.origin == "robust design" and p.run]
+    if not designs:
+        return {}
+    base = dict(designs[-1].values)
+    for v in vs:
+        if v.kind == "random":
+            base[v.name] = v.nominal
+    surf = _surfaces(opt, vs, pts)
+    if any(s is None for s in surf.values()):
+        return {}
+    z, u = _draws(opt, vs, opt.monte_carlo)
+    judged = _judge(opt, vs, surf, base, z, u)
+    outputs = {}
+    for i, key in enumerate(output_keys(opt)):
+        vals = judged["values"].get(key)
+        if vals is None:
+            continue
+        row = {
+            "mean": float(np.mean(vals)),
+            "sd": float(np.std(vals)),
+            "low": float(np.quantile(vals, 0.00135)),
+            "high": float(np.quantile(vals, 0.99865)),
+            "kind": designs[-1].kinds.get(key),
+        }
+        if key != "objective":
+            c = opt.constraints[i - (1 if opt.objective else 0)]
+            row["holds"] = float(np.mean(_holds(c, vals)))
+            row["wanted"] = c.probability
+        outputs[key] = row
+    checks = []
+    solved = [p for p in pts if p.run]
+    for p in solved:
+        if p.origin not in ("robust design", "probability check"):
+            continue
+        others = [q for q in solved if q is not p]
+        miss = {}
+        for key in output_keys(opt):
+            have = [q for q in others if output_of(q, key) is not None]
+            if output_of(p, key) is None or len(have) < len(vs) + 2:
+                continue
+            x = _robust_unit(vs, np.array([[q.values[v.name] for v in vs] for q in have]))
+            s = Surface(opt.surface, x, np.array([output_of(q, key) for q in have]))
+            at = _robust_unit(vs, np.array([[p.values[v.name] for v in vs]]))
+            got, want = float(s(at)[0]), output_of(p, key)
+            miss[key] = abs(got - want) / (abs(want) or 1.0)
+        checks.append({"index": p.index, "origin": p.origin, "miss": miss})
+    return {"design": {v.name: base[v.name] for v in vs if v.design is not None},
+            "labels": {k: v for k, v in designs[-1].labels.items()
+                       if k in {x.name for x in vs if x.design is not None}},
+            "feasible": bool(judged["feasible"]), "outputs": outputs, "checks": checks,
+            "samples": opt.monte_carlo}  # fmt: skip
+
+
 _REPLAYS: dict[tuple, Points] = {}  # replayed tables: a Bayesian replay refits its models
 
 
@@ -869,7 +1206,13 @@ def run(
 
 def best(opt: Optimisation, pts: list[Point]) -> Point | None:
     """The best feasible point: the objective's least (or greatest); with constraints
-    only, the first feasible."""
+    only, the first feasible. Robust design's best is the design it chose (feasible by
+    its probabilities, not by one point), when it chose variables at all."""
+    if opt.method == "robust":
+        if not any(v.kind != "random" for v in opt.variables):
+            return None
+        chosen = [p for p in pts if p.origin == "robust design" and p.run]
+        return chosen[-1] if chosen else None
     feasible = [p for p in pts if p.feasible]
     if not feasible:
         return None
@@ -889,7 +1232,10 @@ def apply_commands(project: Project, opt: Optimisation, point: Point) -> list[di
 
     by = {v.name: v for v in opt.variables}
     commands = []
+    random = {v.name for v in opt.variables if v.kind == "random"}  # not chosen: left as is
     for name, si in point.values.items():
+        if name in random:
+            continue
         q = quantity(by[name], si).model_dump(mode="json")
         sets = [ps for ps in project.of_type(ParameterSet) if name in ps.values]
         if sets:
@@ -920,7 +1266,8 @@ def suggestion(project: Project, opt: Optimisation, pts: list[Point]) -> str:
     if all(abs(now.get(k, math.nan) - v) <= 1e-12 * max(abs(v), 1) for k, v in
            top.values.items()):  # fmt: skip
         return ""  # the model is at the best point already
-    what = ", ".join(f"{k} = {v}" for k, v in top.labels.items())
+    random = {v.name for v in opt.variables if v.kind == "random"}
+    what = ", ".join(f"{k} = {v}" for k, v in top.labels.items() if k not in random)
     if opt.objective is not None and top.objective is not None:
         from puzzle.operators import evaluate as ev
 
@@ -1000,3 +1347,60 @@ def pareto(opt: Optimisation, pts: list[Point], keys: list[str] | None = None) -
         if not beaten:
             front.append((p, a))
     return [p for p, _ in sorted(front, key=lambda pa: pa[1])]
+
+
+# --- what the panel plots from a surface ------------------------------------------------
+
+
+def surface_slice(project: Project, opt: Optimisation, pts: list[Point], key: str,
+                  var: str, n: int = 60):  # fmt: skip
+    """A response surface or robust design's surface of one output along one variable,
+    through the best point (the others held there), and the solved points: (line, dots),
+    each [(x, y)] in SI. ADR 0063 item 4's fitness landscape, one slice at a time."""
+    from puzzle.surrogates import Surface
+
+    done = [p for p in pts if p.run and output_of(p, key) is not None]
+    top = best(opt, pts) or (done[-1] if done else None)
+    if top is None:
+        return [], []
+    if opt.method == "robust":
+        vs = _robust_vars(project, opt)
+        spans = {v.name: (v.lo, v.hi) for v in vs}
+        names = [v.name for v in vs]
+    else:
+        spans = {name: (lo, hi) for name, kind, lo, hi, _s, _c in _spec(opt) if kind != "choice"}
+        names = [v.name for v in opt.variables]
+    if var not in spans or len(done) < len(names) + 2:
+        return [], [(p.values[var], output_of(p, key)) for p in done]
+    lo = np.array([spans.get(k, (0.0, 1.0))[0] for k in names])
+    hi = np.array([spans.get(k, (0.0, 1.0))[1] for k in names])
+
+    def unit(rows):
+        return np.clip((np.asarray(rows, float) - lo) / (hi - lo), 0.0, 1.0)
+
+    x = unit([[p.values[k] for k in names] for p in done])
+    s = Surface(opt.surface if opt.method != "bayesian" else "rbf", x,
+                np.array([output_of(p, key) for p in done]))  # fmt: skip
+    j = names.index(var)
+    along = np.linspace(spans[var][0], spans[var][1], n)
+    rows = np.array([[top.values[k] for k in names]] * n, float)
+    rows[:, j] = along
+    line = list(zip(along.tolist(), s(unit(rows)).tolist(), strict=True))
+    return line, [(p.values[var], output_of(p, key)) for p in done]
+
+
+def distribution(project: Project, opt: Optimisation, pts: list[Point], key: str,
+                 bins: int = 40) -> list[tuple[float, float]]:  # fmt: skip
+    """A robust design's output over its scatter at the design chosen: a histogram as
+    (value, probability density) pairs, from the Monte Carlo on the surface."""
+    vs = _robust_vars(project, opt)
+    designs = [p for p in pts if p.origin == "robust design" and p.run]
+    surf = _surfaces(opt, vs, pts)
+    if not designs or surf.get(key) is None:
+        return []
+    base = dict(designs[-1].values)
+    base.update({v.name: v.nominal for v in vs if v.kind == "random"})
+    z, u = _draws(opt, vs, opt.monte_carlo)
+    vals = surf[key](_robust_unit(vs, _scattered(vs, base, z, u)))
+    density, edges = np.histogram(vals, bins=bins, density=True)
+    return list(zip(((edges[:-1] + edges[1:]) / 2).tolist(), density.tolist(), strict=True))

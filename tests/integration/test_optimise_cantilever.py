@@ -61,3 +61,29 @@ def test_thinnest_cantilever_by_a_model_of_the_outputs(tmp_path, method):
     assert top is not None and len(pts) <= 12, [pt.title for pt in pts]
     assert top.values["t"] == pytest.approx(0.00737, rel=0.04)
     assert 0.98 * LIMIT <= top.constraints[0] <= LIMIT
+
+
+def test_thinnest_cantilever_under_a_thickness_tolerance(tmp_path):
+    # ADR 0063 phase 4: t made to a normal tolerance, standard deviation 0.1 mm, and the
+    # 2 mm deflection held at 99 %. The deflection falls as t grows, so 99 % of parts
+    # hold when t's 1st percentile does: by hand, the deterministic thinnest t on this
+    # mesh (7.24 to 7.26 mm, the Bayesian and COBYLA answers) plus 2.326 × 0.1 mm.
+    pytest.importorskip("OCP")
+    from puzzle.model.schema import Quantity, Scatter
+
+    p, opt = beam_project()
+    opt.method, opt.samples = "robust", 6
+    opt.variables[0].low = Quantity(value=6, unit="mm")
+    opt.variables[0].high = Quantity(value=9, unit="mm")
+    opt.variables[0].resolution = Quantity(value=0.01, unit="mm")
+    opt.variables[0].scatter = Scatter(spread=Quantity(value=0.1, unit="mm"))
+    opt.constraints[0].probability = 0.99
+    root = tmp_path / "beam"
+    save_project(p, root)
+    store = ResultStore(root / RESULTS_DIR)
+    pts = optimise.run(p, opt, root, tmp_path / "w", store=store)
+    summary = optimise.robust_summary(p, opt, pts)
+    t = summary["design"]["t"]
+    assert t == pytest.approx(0.00725 + 2.326e-4, abs=4e-5), [pt.title for pt in pts]
+    assert summary["outputs"]["constraint 1"]["holds"] == pytest.approx(0.99, abs=0.005)
+    assert len(pts) <= 26

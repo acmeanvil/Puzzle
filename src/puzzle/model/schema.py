@@ -1981,7 +1981,8 @@ class Operator(ProjectObject):
     as parameters by their name (`operators.parameter_values`): `number`, `slider`
     (`low`, `high`, `increment`), `series` and `range` (lists), `expression` (units
     checked), `table` (its rows as CSV `text`), `list` (`operation`) and `pairs`
-    (zip or cross two lists into a table).
+    (zip or cross two lists into a table), `random` (seeded samples about a mean:
+    `distribution`, `seed`; Monte Carlo through a sweep).
 
     Which inputs and settings each type takes is `puzzle.operators.TYPES`.
     """
@@ -1989,7 +1990,8 @@ class Operator(ProjectObject):
     kind: ClassVar[str] = "operator"
 
     type: Literal["reduce", "filter", "check", "panel", "plot", "export", "number", "slider",
-                  "series", "range", "expression", "table", "list", "pairs"]  # fmt: skip
+                  "series", "range", "expression", "table", "list", "pairs",
+                  "random"]  # fmt: skip
     inputs: dict[str, OperatorInput] = Field(default_factory=dict)
     quantity: str | None = Field(
         default=None, description='reduce, filter: a listed result\'s key, e.g. '
@@ -2027,6 +2029,10 @@ class Operator(ProjectObject):
     operation: Literal["item", "slice", "sort", "reverse", "length", "column", "sum", "min",
                        "max"] = Field(default="item", description="list: what it does")  # fmt: skip
     column: str = Field(default="", description="list, column: the table column it takes")
+    distribution: Literal["normal", "uniform", "lognormal"] = Field(
+        default="normal", description="random: normal or log-normal (spread = standard "
+        "deviation), or uniform (spread = half-width)")  # fmt: skip
+    seed: int = Field(default=0, description="random: the same samples each time")
     combination: Literal["zip", "cross"] = Field(
         default="zip", description="pairs: item by item (Grasshopper's longest list), or "
         "every combination (cross reference)")  # fmt: skip
@@ -2048,15 +2054,44 @@ class Operator(ProjectObject):
         return list(dict.fromkeys(i.source for i in self.inputs.values() if i.source))
 
 
+class Scatter(BaseModel):
+    """How a value scatters about its own (ADR 0063 item 11): normal or log-normal with a
+    standard deviation, or uniform within plus or minus a half-width. The spread is a
+    quantity (`spread`: 0.1 mm, 5 MPa) or a share of the value (`cv`: 0.05 is 5 %)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    distribution: Literal["normal", "uniform", "lognormal"] = "normal"
+    spread: Quantity | None = Field(
+        default=None, description="normal, log-normal: the standard deviation; uniform: "
+        "the half-width (a tolerance's plus or minus)")  # fmt: skip
+    cv: float | None = Field(default=None, gt=0, lt=1,
+                             description="the spread as a share of the value instead")  # fmt: skip
+
+    @model_validator(mode="after")
+    def _one(self) -> Scatter:
+        if (self.spread is None) == (self.cv is None):
+            raise ValueError("a scatter gives its spread or its cv (a share), one of them")
+        return self
+
+    def deviation(self, value: float) -> float:
+        """The standard deviation (normal, log-normal) or half-width (uniform), SI."""
+        return self.spread.to_si() if self.spread is not None else self.cv * abs(value)
+
+
 class DesignVariable(BaseModel):
     """One variable an optimisation changes (ADR 0063 item 2): a parameter, by name (a
     parameter set's value, or a Number or Slider operator), between `low` and `high`,
-    or one of `choices`. It starts from its current value."""
+    or one of `choices`. It starts from its current value.
+
+    Robust design (item 11): a `random` variable isn't chosen; it stays at its current
+    value with its `scatter` (a load, a modulus, a gap). A chosen variable may scatter
+    too, about the value chosen (a manufacturing tolerance)."""
 
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(description="a parameter: a parameter set's value, a Number or Slider")
-    kind: Literal["continuous", "integer", "choice"] = "continuous"
+    kind: Literal["continuous", "integer", "choice", "random"] = "continuous"
     low: Quantity | None = None
     high: Quantity | None = None
     choices: list[Quantity] = Field(default_factory=list, description="choice: its values")
@@ -2064,10 +2099,16 @@ class DesignVariable(BaseModel):
         default=None, description="the local and evolutionary methods round a continuous "
         "variable to this (default a round thousandth of its range), so a point's run is "
         "found again")  # fmt: skip
+    scatter: Scatter | None = Field(
+        default=None, description="robust design: how it scatters about its value"
+    )
 
     @model_validator(mode="after")
     def _bounded(self) -> DesignVariable:
-        if self.kind == "choice":
+        if self.kind == "random":
+            if self.scatter is None:
+                raise ValueError(f"random variable '{self.name}' needs its scatter")
+        elif self.kind == "choice":
             if not self.choices:
                 raise ValueError(f"design variable '{self.name}' lists its choices")
         elif self.low is None or self.high is None:
@@ -2094,6 +2135,14 @@ class DesignOutput(BaseModel):
     )
     lower: Quantity | None = Field(default=None, description="constraint: at least this")
     upper: Quantity | None = Field(default=None, description="constraint: at most this")
+    statistic: Literal["nominal", "mean", "mean_plus_sd"] = Field(
+        default="nominal", description="robust design's objective: at the variables' own "
+        "values, the mean over their scatter, or the mean plus `sigmas` standard "
+        "deviations (smaller is safer)")  # fmt: skip
+    sigmas: float = Field(default=3.0, gt=0, description="mean_plus_sd: how many")
+    probability: float | None = Field(
+        default=None, gt=0, lt=1, description="robust design's constraint: it holds with "
+        "at least this probability over the scatter (0.999); none: at the own values")  # fmt: skip
 
 
 class Optimisation(ProjectObject):
@@ -2107,7 +2156,10 @@ class Optimisation(ProjectObject):
     values) or differential_evolution (global; `population` per generation for
     `generations`), or bayesian (a Gaussian process of each output, the next point by
     expected improvement) or response_surface (a surface fitted to the points, its best
-    point solved to check it), both starting from `samples` Latin hypercube points. The
+    point solved to check it), both starting from `samples` Latin hypercube points, or
+    robust (design under scatter: a surface over the chosen and random variables, Monte
+    Carlo on it, the chosen design and the extremes that decide each probability solved
+    to check it). The
     objective (minimised or maximised) and the constraints read post-solve outputs at
     each point. A shoot-out study runs every solver per point
     (`reads` the primary's outputs, or the worst).
@@ -2128,7 +2180,14 @@ class Optimisation(ProjectObject):
         "differential_evolution",
         "bayesian",
         "response_surface",
+        "robust",
     ] = "latin_hypercube"
+    monte_carlo: int = Field(
+        default=20000,
+        ge=100,
+        le=1_000_000,
+        description="robust design: samples drawn on the surface",
+    )
     surface: Literal["rbf", "quadratic"] = Field(
         default="rbf", description="response surface: radial basis functions through "
         "every point, or a quadratic by least squares")  # fmt: skip
