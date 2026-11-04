@@ -125,8 +125,11 @@ def names(items: list[Item]) -> dict[str, Item]:
     return {name_of(i): i for i in items}
 
 
-def parse(expression: str) -> ast.Expression:
-    """The expression's tree, refusing anything outside the small language."""
+def parse(expression: str, *, text: bool = False, functions=None) -> ast.Expression:
+    """The expression's tree, refusing anything outside the small language. `text`
+    allows quoted strings (the Expression operator's table columns, ADR 0064);
+    `functions` are the names a call may use (default: FUNCTIONS)."""
+    functions = FUNCTIONS if functions is None else functions
     try:
         tree = ast.parse(expression.strip(), mode="eval")
     except SyntaxError as exc:
@@ -156,13 +159,14 @@ def parse(expression: str) -> ast.Expression:
                 "+ - * / ** %, comparisons and the listed functions",
                 code="invalid",
             )
-        if isinstance(node, ast.Constant) and not isinstance(node.value, (int, float)):
+        if isinstance(node, ast.Constant) and not isinstance(node.value, (int, float)) \
+                and not (text and isinstance(node.value, str)):  # fmt: skip
             raise PuzzleError("equations take numbers only, not text", code="invalid")
         if isinstance(node, ast.Call):
-            if not isinstance(node.func, ast.Name) or node.func.id not in FUNCTIONS:
+            if not isinstance(node.func, ast.Name) or node.func.id not in functions:
                 what = node.func.id if isinstance(node.func, ast.Name) else "that"
                 raise PuzzleError(
-                    f"no function '{what}'; the functions are {', '.join(FUNCTIONS)}",
+                    f"no function '{what}'; the functions are {', '.join(functions)}",
                     code="invalid",
                 )
             if node.keywords:

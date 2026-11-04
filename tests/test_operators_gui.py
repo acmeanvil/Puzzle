@@ -19,6 +19,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
 
+from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 from solvers import available  # noqa: E402
 
@@ -105,9 +106,8 @@ def test_the_palette_makes_a_reduce_wired_from_the_selected_results(window):
     runs = w.schematic.items[f"runs:{_study(w).id}"]
     w.schematic.chosen(runs.node)
     palette = w.schematic.open_palette()
-    palette.search.setText("redu")
-    assert [palette.list.item(i).isHidden() for i in range(palette.list.count())].count(
-        False) == 1  # fmt: skip
+    palette.search.setText("redu")  # Reduce by name (and Group and aggregate's help)
+    assert palette.list.currentItem().data(Qt.ItemDataRole.UserRole) == "reduce"
     palette._make()
     op = _op(w, "Reduce 1")
     assert op.inputs["result"].source == _study(w).id and op.inputs["result"].port == "result"

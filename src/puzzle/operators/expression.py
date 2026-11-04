@@ -5,6 +5,15 @@ a pressure to a length is refused.
 
 A unit is written after a number ("5 mm", "200 MPa") or as a name ("x / mm"). Names are
 x, y, z (the inputs), the project's parameters, pi and e, and any unit pint knows.
+
+Over a table (ADR 0064) the names are its columns: numbers as quantities, text columns
+as text, so `part == "Bracket"` compares. Comparisons give true or false (a verdict
+when the Expression is a Check's input, ADR 0064A row B2).
+
+Functions: abs, sqrt, exp, log, log10, sin, cos, tan, min, max, where (as derived
+results'), and asin, acos, atan, atan2 (giving radians), degrees and radians (converting
+an angle's number), clamp(x, low, high), round(x, n), floor and ceil. Rounding works on
+the value in SI: round a length in millimetres as round(t / mm, 1) * mm.
 """
 
 from __future__ import annotations
@@ -35,9 +44,13 @@ def evaluate(expression: str, values: dict[str, tuple]) -> tuple[np.ndarray | fl
     if not expression.strip():
         raise PuzzleError("the expression is empty", code="inconsistent")
     ureg = registry()
-    tree = parse(_prepared(expression))
+    tree = parse(
+        _prepared(expression), text=True, functions={**FUNCTIONS, **{k: None for k in EXTRA}}
+    )
 
     def q(value, kind):
+        if kind == "text":  # a table's text column: compared as it is
+            return np.asarray(value, dtype=object)
         unit = DIMENSIONS[kind][1] if kind in DIMENSIONS else "dimensionless"
         return ureg.Quantity(np.asarray(value, float) if np.ndim(value) else float(value), unit)
 
@@ -72,6 +85,8 @@ def evaluate(expression: str, values: dict[str, tuple]) -> tuple[np.ndarray | fl
             c, a, b = args
             return ureg.Quantity(np.where(np.asarray(c), a.magnitude, b.to(a.units).magnitude),
                                  a.units)  # fmt: skip
+        if fn in EXTRA:
+            return _extra(ureg, fn, args)
         if fn in ("exp", "log", "log10", "sin", "cos", "tan"):
             x = args[0].to("dimensionless").magnitude  # refuses a unit
             return ureg.Quantity(FUNCTIONS[fn](x), "dimensionless")
@@ -81,6 +96,8 @@ def evaluate(expression: str, values: dict[str, tuple]) -> tuple[np.ndarray | fl
         if isinstance(node, ast.Expression):
             return walk(node.body)
         if isinstance(node, ast.Constant):
+            if isinstance(node.value, str):
+                return node.value
             return ureg.Quantity(float(node.value), "dimensionless")
         if isinstance(node, ast.Name):
             return name(node.id)
@@ -126,6 +143,35 @@ def evaluate(expression: str, values: dict[str, tuple]) -> tuple[np.ndarray | fl
                           "divide by a unit to make it one", code="invalid")  # fmt: skip
     magnitude = base.to(DIMENSIONS[kind][1]).magnitude if kind else base.magnitude
     return (np.asarray(magnitude, float) if np.ndim(magnitude) else float(magnitude)), kind
+
+
+EXTRA = ("asin", "acos", "atan", "atan2", "degrees", "radians", "clamp", "round", "floor",
+         "ceil")  # fmt: skip
+
+
+def _extra(ureg, fn: str, args):
+    """The functions beyond derived results' (ADR 0064A row B3)."""
+
+    def bare(a):  # a dimensionless quantity's number
+        return a.to("dimensionless").magnitude
+
+    if fn in ("asin", "acos", "atan"):
+        return ureg.Quantity(getattr(np, "arc" + fn[1:])(bare(args[0])), "dimensionless")
+    if fn == "atan2":
+        y, x = args
+        return ureg.Quantity(np.arctan2(y.magnitude, x.to(y.units).magnitude), "dimensionless")
+    if fn == "degrees":
+        return ureg.Quantity(np.degrees(bare(args[0])), "dimensionless")
+    if fn == "radians":
+        return ureg.Quantity(np.radians(bare(args[0])), "dimensionless")
+    if fn == "clamp":
+        x, lo, hi = args
+        return ureg.Quantity(np.clip(x.magnitude, lo.to(x.units).magnitude,
+                                     hi.to(x.units).magnitude), x.units)  # fmt: skip
+    if fn == "round":
+        n = int(bare(args[1])) if len(args) > 1 else 0
+        return ureg.Quantity(np.round(args[0].magnitude, n), args[0].units)
+    return ureg.Quantity(getattr(np, fn)(args[0].magnitude), args[0].units)  # floor, ceil
 
 
 def _words(exc) -> str:

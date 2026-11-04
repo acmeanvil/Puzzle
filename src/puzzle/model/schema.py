@@ -1884,7 +1884,8 @@ class ResultProbe(ProjectObject):
         default=None, description="point: where; path: the start"
     )
     selection: str | None = Field(default=None, description="Part/Selection, or a part")
-    reduction: Literal["max", "min", "mean", "integral"] = "max"
+    reduction: Literal["max", "min", "mean", "integral", "sum", "median", "first", "last",
+                       "count"] = "max"  # fmt: skip
     about: tuple[float, float, float] | None = Field(
         default=None, description="reaction: the moment's point; none: the nodes' centroid"
     )
@@ -1984,6 +1985,15 @@ class Operator(ProjectObject):
     (zip or cross two lists into a table), `random` (seeded samples about a mean:
     `distribution`, `seed`; Monte Carlo through a sweep).
 
+    Tables (ADR 0064, polars underneath, a quantity kind per column): `result_table`
+    (a run's results per node or element, `quantities`, `steps`, `layout`),
+    `points_table` (a sweep's or optimisation's points), `file` (CSV, Parquet, Excel;
+    a pattern stacks several), and the table operators `columns` (`pick`, `drop`),
+    `filter_rows` (`condition`, `syntax`), `sort` (`by`, `descending`), `top_n`
+    (`column`, `largest`, per `by`), `new_column` (`new_name`, `expression`, `syntax`),
+    `convert_units` (`column`, `unit`), `round` (`decimals`, `significant`), `group`
+    (`by`, `aggregations`) and `to_number` (`column`, `reduction`).
+
     Which inputs and settings each type takes is `puzzle.operators.TYPES`.
     """
 
@@ -1991,7 +2001,9 @@ class Operator(ProjectObject):
 
     type: Literal["reduce", "filter", "check", "panel", "plot", "export", "number", "slider",
                   "series", "range", "expression", "table", "list", "pairs",
-                  "random"]  # fmt: skip
+                  "random", "result_table", "points_table", "file", "columns",
+                  "filter_rows", "sort", "top_n", "new_column", "convert_units", "round",
+                  "group", "to_number"]  # fmt: skip
     inputs: dict[str, OperatorInput] = Field(default_factory=dict)
     quantity: str | None = Field(
         default=None, description='reduce, filter: a listed result\'s key, e.g. '
@@ -2033,6 +2045,40 @@ class Operator(ProjectObject):
         default="normal", description="random: normal or log-normal (spread = standard "
         "deviation), or uniform (spread = half-width)")  # fmt: skip
     seed: int = Field(default=0, description="random: the same samples each time")
+    # Tables (ADR 0064)
+    quantities: list[str] = Field(
+        default_factory=list, description='result table: the results, by key ("stress:'
+        'von_mises"), "*" for all of the field; none: the first')  # fmt: skip
+    steps: Literal["one", "all"] = Field(
+        default="one", description="result table: the step `step`, or every step"
+    )
+    layout: Literal["setting", "long", "wide"] = Field(
+        default="setting", description="result table: a row per item per step (long), a "
+        "column per step (wide), or as Settings > Results > Table layout says")  # fmt: skip
+    pick: list[str] = Field(
+        default_factory=list, description='columns, round: these columns, in order; '
+        '"von_mises as vm" renames')  # fmt: skip
+    drop: list[str] = Field(default_factory=list, description="columns: left out")
+    by: list[str] = Field(
+        default_factory=list, description="sort: by these; group, top N: per these; to "
+        "number: the row where this one is largest")  # fmt: skip
+    descending: bool = Field(default=False, description="sort: largest first")
+    largest: bool = Field(default=True, description="top N: the largest, else smallest")
+    condition: str = Field(
+        default="", description='filter rows: kept where this holds, e.g. von_mises > '
+        '200 MPa')  # fmt: skip
+    syntax: Literal["puzzle", "polars"] = Field(
+        default="puzzle", description="filter rows, new column: Puzzle's expressions "
+        "(units checked) or polars' (pl.col(...), SI)")  # fmt: skip
+    new_name: str = Field(default="", description="new column: its name")
+    unit: str = Field(
+        default="", description="convert units: the column's unit; new column (polars): "
+        "its result's unit")  # fmt: skip
+    decimals: int = Field(default=3, ge=0, le=15, description="round: places or figures")
+    significant: bool = Field(default=False, description="round: significant figures")
+    aggregations: list[str] = Field(
+        default_factory=list, description='group: e.g. "max(von_mises)", "count()", '
+        '"mean(stress_xx) as avg", "quantile(von_mises, 0.95)"')  # fmt: skip
     combination: Literal["zip", "cross"] = Field(
         default="zip", description="pairs: item by item (Grasshopper's longest list), or "
         "every combination (cross reference)")  # fmt: skip

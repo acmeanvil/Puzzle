@@ -204,6 +204,101 @@ TYPES: dict[str, OperatorType] = {
             (PortSpec("out", "List", ("list",)),),
             ("distribution", "seed"),
         ),
+        # Tables (ADR 0064): polars frames with a quantity kind per column.
+        OperatorType(
+            "result_table", "Result table", "Tables",
+            "A run's results as a table: node (or element), x, y, z, part, step and the "
+            "results chosen, one row per item per step.",
+            (PortSpec("result", "Result", ("result", "field")),),
+            (PortSpec("out", "Table", ("table",)),),
+            ("quantities", "step", "steps", "selection", "layout"),
+        ),
+        OperatorType(
+            "points_table", "Points table", "Tables",
+            "A sweep's or an optimisation's points as a table: the variables, outputs, "
+            "feasible and the run.",
+            (PortSpec("source", "Points", ("table",)),),
+            (PortSpec("out", "Table", ("table",)),),
+            (),
+        ),
+        OperatorType(
+            "file", "File", "Tables",
+            "A table from a file in the project: CSV (headers 'name [unit]'), Parquet or "
+            "Excel; a pattern (tests/*.csv) stacks several, with a file column.",
+            (),
+            (PortSpec("out", "Table", ("table",)),),
+            ("file",),
+        ),
+        OperatorType(
+            "columns", "Columns", "Tables",
+            "Pick, order, rename or drop columns: x, y, von_mises as vm.",
+            (PortSpec("table", "Table", ("table",)),),
+            (PortSpec("out", "Table", ("table",)),),
+            ("pick", "drop"),
+        ),
+        OperatorType(
+            "filter_rows", "Filter rows", "Tables",
+            "The rows where a condition holds: von_mises > 200 MPa and part == "
+            "\"Bracket\" (units checked), or a polars expression.",
+            (PortSpec("table", "Table", ("table",)),),
+            (PortSpec("out", "Table", ("table",)),),
+            ("condition", "syntax"),
+        ),
+        OperatorType(
+            "sort", "Sort", "Tables",
+            "Rows in order of one or more columns, ascending or descending.",
+            (PortSpec("table", "Table", ("table",)),),
+            (PortSpec("out", "Table", ("table",)),),
+            ("by", "descending"),
+        ),
+        OperatorType(
+            "top_n", "Top N", "Tables",
+            "The N rows with the largest (or smallest) value of a column, e.g. the 20 "
+            "highest von Mises nodes; per group with By.",
+            (PortSpec("table", "Table", ("table",)),
+             PortSpec("count", "N", ("number",), required=False, typed="number")),
+            (PortSpec("out", "Table", ("table",)),),
+            ("column", "largest", "by"),
+        ),
+        OperatorType(
+            "new_column", "New column", "Tables",
+            "A column worked out from the others: margin = 250 MPa / von_mises - 1, units "
+            "checked; or a polars expression.",
+            (PortSpec("table", "Table", ("table",)),),
+            (PortSpec("out", "Table", ("table",)),),
+            ("new_name", "expression", "syntax", "unit"),
+        ),
+        OperatorType(
+            "convert_units", "Convert units", "Tables",
+            "A column shown and exported in another unit of its kind: stress in MPa, "
+            "reactions in kN.",
+            (PortSpec("table", "Table", ("table",)),),
+            (PortSpec("out", "Table", ("table",)),),
+            ("column", "unit"),
+        ),
+        OperatorType(
+            "round", "Round", "Tables",
+            "Numbers rounded in their shown units: decimal places or significant figures.",
+            (PortSpec("table", "Table", ("table",)),),
+            (PortSpec("out", "Table", ("table",)),),
+            ("pick", "decimals", "significant"),
+        ),
+        OperatorType(
+            "group", "Group and aggregate", "Tables",
+            "Rows grouped by columns (part, step, point), each group reduced: "
+            "max(von_mises), count(), quantile(von_mises, 0.95).",
+            (PortSpec("table", "Table", ("table",)),),
+            (PortSpec("out", "Table", ("table",)),),
+            ("by", "aggregations"),
+        ),
+        OperatorType(
+            "to_number", "To number", "Tables",
+            "One value of a column (max, min, mean, sum, median, first, last, count): "
+            "for checks, panels and optimisations.",
+            (PortSpec("table", "Table", ("table",)),),
+            (PortSpec("out", "Value", ("number",)),),
+            ("column", "reduction", "by"),
+        ),
         OperatorType(
             "pairs", "Pairs", "Data",
             "Two lists into a table: item by item, or every combination.",
@@ -216,7 +311,10 @@ TYPES: dict[str, OperatorType] = {
 # Types that compute from data, before a solve: pre-solve when nothing they read is a
 # result (ADR 0062 item 3), and then parameters by their name.
 DATA = frozenset({"number", "slider", "series", "range", "expression", "table", "list",
-                  "pairs", "random"})  # fmt: skip
+                  "pairs", "random", "file", "columns", "filter_rows", "sort", "top_n",
+                  "new_column", "convert_units", "round", "group", "to_number"})  # fmt: skip
+# Table operators (ADR 0064): data operators that read tables, so pre-solve when their
+# table is (a file, a typed table) and post-solve when it comes from a run.
 
 
 def accepts(spec: PortSpec, given: str) -> bool:
@@ -247,9 +345,16 @@ def outputs_of(project, obj) -> list[tuple[str, str, str]]:
         from puzzle.post.quantities import words
         from puzzle.schematic import outputs
 
-        return [("result", "Result", "result")] + [
-            (f, words(f), "result") for f in outputs(project, obj)
-        ]
+        points = [("points", "Sweep points", "table")] if obj.sweeps() else []
+        return (
+            [("result", "Result", "result")]
+            + [(f, words(f), "result") for f in outputs(project, obj)]
+            + points
+        )
+    from puzzle.model.schema import Optimisation
+
+    if isinstance(obj, Optimisation):
+        return [("points", "Points", "table")]
     return []
 
 
@@ -262,7 +367,7 @@ def output_type(project, source: UUID, port: str) -> str | None:
     if obj is None:
         return None
     if isinstance(obj, Study):  # any field: a run may hold more than the catalog lists
-        return "result"
+        return "table" if port == "points" else "result"
     found = next((t for k, _, t in outputs_of(project, obj) if k == port), None)
     return found
 
@@ -439,6 +544,30 @@ def describe(project, op) -> str:
         bits.append(op.combination)
     elif op.type == "random":
         bits.append(f"{op.distribution}, seed {op.seed}")
+    elif op.type == "result_table":
+        what = ", ".join(op.quantities) or "its first result"
+        bits.append(f"{what}, {'every step' if op.steps == 'all' else 'one step'}")
+    elif op.type == "file":
+        bits.append(op.file or "no file")
+    elif op.type == "columns":
+        bits.append(", ".join(op.pick) + (f" without {', '.join(op.drop)}" if op.drop else ""))
+    elif op.type == "filter_rows":
+        bits.append(repr(op.condition) + (" (polars)" if op.syntax == "polars" else ""))
+    elif op.type == "sort":
+        bits.append(", ".join(op.by) + (" descending" if op.descending else ""))
+    elif op.type == "top_n":
+        bits.append(f"{'largest' if op.largest else 'smallest'} {op.column}"
+                    + (f" per {', '.join(op.by)}" if op.by else ""))  # fmt: skip
+    elif op.type == "new_column":
+        bits.append(f"{op.new_name} = {op.expression}")
+    elif op.type == "convert_units":
+        bits.append(f"{op.column} in {op.unit}")
+    elif op.type == "round":
+        bits.append(f"{op.decimals} {'figures' if op.significant else 'places'}")
+    elif op.type == "group":
+        bits.append(", ".join(op.aggregations) + (f" per {', '.join(op.by)}" if op.by else ""))
+    elif op.type == "to_number":
+        bits.append(f"{op.reduction} of {op.column}")
     if op.type in DATA:
         bits.append("(before solving)" if is_pre(project, op) else "(after solving)")
         uses = model_uses(project, op)

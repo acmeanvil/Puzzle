@@ -926,7 +926,7 @@ class SchematicPanel(QWidget):
         menu.addAction("Find an operator…  (Tab)", lambda: self.open_palette(self._centre()))
         menu.addSeparator()
         groups: dict[str, QMenu] = {}
-        order = {"Data": 0, "Results": 1, "Display": 2}  # inputs first, as the flow runs
+        order = {"Data": 0, "Results": 1, "Tables": 2, "Display": 3}  # as the flow runs
         for t in sorted(TYPES.values(), key=lambda t: order.get(t.group, 9)):
             if t.group not in groups:
                 groups[t.group] = menu.addMenu(t.group)

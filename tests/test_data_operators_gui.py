@@ -168,4 +168,4 @@ def test_the_properties_slider_and_a_table_from_a_csv(app, window, tmp_path):
     tid = operators.new_operator(w, "table")
     operators.read_csv(w, w.session.project.objects[UUID(tid)], str(csv))
     assert _op(w, "Table 1").text.startswith("t [mm]")
-    assert w.schematic.items[tid].node.value == "2 rows: t, load"
+    assert w.schematic.items[tid].node.value == "2 rows × 2: t, load"

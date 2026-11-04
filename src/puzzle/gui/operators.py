@@ -217,7 +217,7 @@ class Palette(QDialog):
 
     def _filter(self, text: str) -> None:
         words = text.lower().split()
-        first = None
+        first = named = None
         for i in range(self.list.count()):
             item = self.list.item(i)
             t = TYPES[item.data(ROLE)]
@@ -226,6 +226,9 @@ class Palette(QDialog):
             item.setHidden(hide)
             if not hide and first is None:
                 first = item
+            if not hide and named is None and all(w in t.label.lower() for w in words):
+                named = item  # a name that matches comes before a description that does
+        first = named or first
         if first is not None:
             self.list.setCurrentItem(first)
 

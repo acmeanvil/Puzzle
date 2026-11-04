@@ -66,6 +66,10 @@ def _legend_preferences() -> list[Preference]:
                    OUTSIDE, "Values below the bottom in one colour."),
         Preference("results.legend_position", "Results", "Legend position", "left", POSITIONS),
         Preference("results.legend_size", "Results", "Legend size", 1.0, SIZES),
+        Preference("results.table_layout", "Results", "Table layout", "long",
+                   [("A row per node or element per step (long)", "long"),
+                    ("A column per step (wide)", "wide")],
+                   "How a result table operator lays out its steps (ADR 0064)."),
     ]  # fmt: skip
 
 

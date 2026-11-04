@@ -56,27 +56,72 @@ class Text:
         return self.text_
 
 
-@dataclass
 class Table:
-    columns: list[str]
-    rows: list[list[Any]]
-    kinds: list[str | None] = field(default_factory=list)
+    """Named columns, values SI and a quantity kind per column, held in a polars
+    DataFrame (ADR 0064). Built from columns and rows (a typed table, a plot's points)
+    or from a frame (`frame=`). `units` are columns' shown units set by Convert units;
+    the others show in the display units."""
 
     type = "table"
 
+    def __init__(self, columns=(), rows=(), kinds=(), *, frame=None, units=None) -> None:
+        import polars as pl
+
+        if frame is None:
+            names, data = list(columns), {}
+            for i, c in enumerate(names):
+                cells = [r[i] if i < len(r) else None for r in rows]
+                data[c] = _cells(pl, c, cells)
+            frame = pl.DataFrame(data) if names else pl.DataFrame()
+        self.frame = frame
+        given = list(kinds)
+        self.kinds = [given[i] if i < len(given) else None for i in range(frame.width)]
+        self.units: dict[str, str] = dict(units or {})
+
+    @property
+    def columns(self) -> list[str]:
+        return list(self.frame.columns)
+
+    @property
+    def rows(self) -> list[list[Any]]:
+        return [list(r) for r in self.frame.rows()]
+
     def text(self) -> str:
-        return f"{len(self.rows)} row{'s' if len(self.rows) != 1 else ''}: " + ", ".join(
-            self.columns
-        )
+        h, w = self.frame.height, self.frame.width
+        names = ", ".join(self.columns[:6]) + (", …" if w > 6 else "")
+        return f"{h} row{'s' if h != 1 else ''} × {w}: {names}"
 
     def csv(self) -> str:
         buf = io.StringIO()
         w = csv.writer(buf, lineterminator="\n")
-        kinds = self.kinds or [None] * len(self.columns)
-        w.writerow([_heading(c, k) for c, k in zip(self.columns, kinds, strict=False)])
-        for r in self.rows:
-            w.writerow([f"{v:.9g}" if isinstance(v, float) else v for v in r])
+        w.writerow([_heading(c, k) for c, k in zip(self.columns, self.kinds, strict=False)])
+        for r in self.frame.rows():
+            w.writerow(["" if v is None else f"{v:.9g}" if isinstance(v, float) else v
+                        for v in r])  # fmt: skip
         return buf.getvalue()
+
+
+def _cells(pl, name: str, cells: list):
+    """A column from Python cells: integers, numbers, true/false or text."""
+    present = [v for v in cells if v is not None]
+    if present and all(isinstance(v, bool) for v in present):
+        return pl.Series(name, cells, dtype=pl.Boolean)
+    if present and all(isinstance(v, int) and not isinstance(v, bool) for v in present):
+        return pl.Series(name, cells, dtype=pl.Int64)
+    if all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in present):
+        return pl.Series(name, [None if v is None else float(v) for v in cells],
+                         dtype=pl.Float64)  # fmt: skip
+    return pl.Series(name, [None if v is None else str(v) for v in cells], dtype=pl.String)
+
+
+def display_unit(kind: str | None) -> str | None:
+    """The unit a kind shows in (Settings > Units), else its SI unit."""
+    from puzzle.model.units import DIMENSIONS
+    from puzzle.settings import current
+
+    if kind is None or kind not in DIMENSIONS:
+        return None
+    return current().display_units().get(kind) or DIMENSIONS[kind][1]
 
 
 @dataclass
@@ -206,6 +251,7 @@ class Context:
     memo: dict = field(default_factory=dict)
     overrides: dict = field(default_factory=dict)  # a slider being dragged: id -> SI value
     solver: str | None = None  # a shoot-out's solver whose runs are read (ADR 0063)
+    root: Any = None  # the project folder, where a file operator reads (ADR 0064)
 
     def at(self, *, point: str | None = None, step: int | None = None) -> Context:
         return replace(self, point=point if point is not None else self.point,
@@ -270,6 +316,12 @@ def source(ctx: Context, oid: UUID, port: str):
             raise PuzzleError(f"parameter set '{obj.name}' has no '{port}'", code="not_found")
         unit = q.unit if q.unit != "dimensionless" else ""
         return Number(q.to_si(), kind_of(unit) if unit else None, port)
+    if port == "points":  # a sweep's or optimisation's points as a table (ADR 0064)
+        from puzzle.model.schema import Optimisation
+        from puzzle.operators import frames
+
+        if isinstance(obj, (Study, Optimisation)):
+            return frames.points_table(ctx, obj)
     if isinstance(obj, Study):
         key = ("run", oid, ctx.point, ctx.solver)
         if key not in ctx.memo:
@@ -646,6 +698,28 @@ def _range(ctx: Context, op) -> dict[str, Any]:
                              op.name)}  # fmt: skip
 
 
+def _tables() -> dict:
+    """The table operators (ADR 0064), in `operators.frames`."""
+    from puzzle.operators import frames
+
+    def out(fn):
+        return lambda ctx, op: {"out": fn(ctx, op)}
+
+    def points(ctx, op):
+        inp = op.inputs.get("source")
+        if inp is None or inp.source is None:
+            raise PuzzleError(f"'{op.name}': wire a swept study's or an optimisation's "
+                              "points into it", code="inconsistent")  # fmt: skip
+        return {"out": source(ctx, inp.source, "points")}
+
+    return {"result_table": out(frames.result_table), "points_table": points,
+            "file": out(frames.file_table), "columns": frames.columns,
+            "filter_rows": frames.filter_rows, "sort": frames.sort, "top_n": frames.top_n,
+            "new_column": frames.new_column, "convert_units": frames.convert_units,
+            "round": frames.round_values, "group": frames.group,
+            "to_number": frames.to_number}  # fmt: skip
+
+
 def _random(ctx: Context, op) -> dict[str, Any]:
     """Seeded samples (the same each time): normal or log-normal with the spread as the
     standard deviation (log-normal's mean is the mean given), or uniform within plus or
@@ -803,7 +877,7 @@ def _pairs(ctx: Context, op) -> dict[str, Any]:
 _EVALUATE = {"reduce": _reduce, "filter": _filter, "check": _check, "panel": _panel,
              "plot": _plot, "export": _export, "number": _number_op, "slider": _slider,
              "series": _series, "range": _range, "expression": _expression,
-             "random": _random,
+             "random": _random, **_tables(),
              "table": _table, "list": _list, "pairs": _pairs}  # fmt: skip
 
 
@@ -874,6 +948,12 @@ def export(ctx: Context, op, root: Path) -> list[Path]:
             raise PuzzleError(f"'{op.name}': a derived result can't be exported as a run",
                               code="unsupported")  # fmt: skip
         return write(ctx.project, ctx.store, got.run_ids[0], op.format, path, root=Path(root))
+    if isinstance(got, Table):  # in its shown units, by the file's suffix (ADR 0064)
+        from puzzle.operators import frames
+
+        fmt = {".parquet": "parquet", ".xlsx": "xlsx"}.get(path.suffix.lower(), op.format)
+        frames.write(got, path, fmt if fmt in ("parquet", "xlsx") else "csv")
+        return [path]
     path.write_text(as_csv(got))
     return [path]
 
