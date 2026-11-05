@@ -218,6 +218,9 @@ def _project(window, menu: QMenu) -> None:
     menu.addAction(a["save_version"])
     _add(menu, "Versions…", lambda: window.open_versions(),
          "The project's versions: filter them, see what each held, restore one")  # fmt: skip
+    _add(menu, "Remote hosts…", lambda: _hosts(window),
+         "Machines studies can run on, reached by SSH: yours, not the project's (ADR 0021)",
+         free=True)  # fmt: skip
     _add(menu, "Trust this project…", lambda: trust_project(window),
          "Let its Python scripts and custom equations run: only if you know where it came "
          "from (ADR 0062)")  # fmt: skip
@@ -442,6 +445,22 @@ def _model(window, menu: QMenu) -> None:
     menu.addAction(run)
     _add(menu, "Solver settings…", lambda: _solver_settings(window),
          "How each solver solves the study: linear solver, tolerances, output")  # fmt: skip
+    _add(menu, "Run on…", lambda: _run_on(window),
+         "Here, or a remote host reached by SSH (ADR 0021)")  # fmt: skip
+
+
+def _hosts(window) -> None:
+    from puzzle.gui.hosts_dialog import open_hosts
+
+    open_hosts(window)
+
+
+def _run_on(window) -> None:
+    from puzzle.gui.hosts_dialog import run_on
+
+    study = current_study(window, "Run on")
+    if study is not None:
+        run_on(window, study)
 
 
 def _solver_settings(window) -> None:

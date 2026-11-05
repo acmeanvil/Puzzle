@@ -1634,6 +1634,32 @@ class ComparisonMetric(BaseModel):
     tolerance: float = Field(gt=0)
 
 
+class RemoteRun(BaseModel):
+    """Where a study runs when not here (ADR 0021): a host from the user's hosts.toml
+    and what to ask it for. Out of the content hashes: a result is the same wherever
+    it was computed."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    host: str = Field(description="a host's name from your hosts (Project → Remote hosts…)")
+    processes: int = Field(default=1, ge=1, description="MPI processes, where the solver splits")
+    threads: int = Field(default=0, ge=0, description="threads per process; 0 shares the "
+                         "host's cores out")  # fmt: skip
+    memory_gb: float = Field(default=0.0, ge=0, description="memory to ask for, GB; 0 is "
+                             "the host's default")  # fmt: skip
+    walltime: str = Field(default="", description="the scheduler's time limit, HH:MM:SS; "
+                          "empty is the host's")  # fmt: skip
+    partition: str = Field(default="", description="the scheduler's partition or queue")
+    account: str = Field(default="", description="the scheduler's account")
+
+    def resources(self):
+        from puzzle.jobs.remote import Resources
+
+        return Resources(processes=self.processes, threads=self.threads,
+                         memory_gb=self.memory_gb, walltime=self.walltime,
+                         partition=self.partition, account=self.account)  # fmt: skip
+
+
 class Shootout(BaseModel):
     """Runs the same study on further solvers and compares their results (ADR 0011).
 
@@ -1735,6 +1761,9 @@ class Study(ProjectObject):
     morph: Morph | None = Field(
         default=None, description="the mesh morphed after meshing (ADR 0065 phase 2): "
         "handles moved, the rest following; shape optimisation without remeshing")  # fmt: skip
+    remote: RemoteRun | None = Field(
+        default=None, description="run on a remote host (ADR 0021); none runs here. "
+        "Never changes the result or its run key")  # fmt: skip
     # ADR 0023: each solver's own settings ({solver: {key: value}}, from its adapter's
     # settings_schema) and expert pass-through ({solver: {path: value}}).
     solver_settings: dict[str, dict[str, float | int | str | bool]] = Field(default_factory=dict)
@@ -2645,6 +2674,8 @@ class Budget(BaseModel):
 
     runs: int = Field(default=5, ge=0, description="fresh solver runs")
     solver_seconds: float = Field(default=600.0, ge=0, description="total solver wall time")
+    core_hours: float = Field(default=2.0, ge=0, description="cores × hours on remote hosts "
+                              "(ADR 0021)")  # fmt: skip
 
 
 class AgentSettings(BaseModel):

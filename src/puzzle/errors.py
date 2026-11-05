@@ -11,6 +11,11 @@ from dataclasses import dataclass, field
 from typing import Any
 
 CODES = {
+    "unknown_host": "no remote host by that name in your hosts.toml (ADR 0021)",
+    "host_unreachable": "ssh could not reach the remote host, or lost it (ADR 0021)",
+    "queue_rejected": "the remote host's scheduler refused the job (ADR 0021)",
+    "walltime_exceeded": "the job ran past its walltime on the remote host (ADR 0021)",
+    "transfer_failed": "copying a case to or from the remote host failed (ADR 0021)",
     "untrusted": "the project is not trusted: its scripts and equations don't run (ADR 0062)",
     "script_failed": "a script operator raised an error, or left no result (ADR 0062)",
     "timeout": "it ran past its time limit and was stopped",

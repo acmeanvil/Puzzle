@@ -63,6 +63,14 @@ def run_job(
     cancelled = timed_out = False
 
     with log_path.open("w") as log:
+
+        def say(line: str) -> None:  # the runtime's own notes (a remote copy's size)
+            log.write(line + "\n")
+            log.flush()
+            if on_output:
+                on_output(line)
+
+        runtime.prepare(command, workdir, say)
         proc = subprocess.Popen(
             argv,
             cwd=workdir,
@@ -98,14 +106,21 @@ def run_job(
                     emit(parser.safe_feed(line.rstrip("\n")))
             elif parser is not None:  # quiet: side files may have grown
                 emit(parser.safe(parser.poll))
+            stopping = cancelled or timed_out
             if not finished and cancel is not None and cancel.is_set():
                 cancelled = True
-                _stop(proc)
             elif not finished and timeout_s is not None and time.monotonic() - start > timeout_s:
                 timed_out = True
+            if not finished and (cancelled or timed_out) and not stopping:
+                runtime.cancel(workdir)  # the far end first (a remote run), then here
                 _stop(proc)
 
         returncode = proc.wait()
+        try:  # the case back (a remote one) even after a failure: its log says why
+            runtime.finish(workdir, say)
+        except Exception:
+            if returncode == 0 and not (cancelled or timed_out):
+                raise
         if parser is not None:
             emit(parser.safe(parser.poll))
             emit(parser.safe(lambda: parser.finish(returncode == 0)))

@@ -659,6 +659,32 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
     def proposals() -> list[dict[str, Any]]:
         return session().proposals()
 
+    # --- remote hosts (ADR 0021) -----------------------------------------------------
+
+    @tool(description="The user's remote hosts (their hosts.toml): name, address, how "
+          "solvers run there, scheduler, cores. A study runs on one when its `remote` names "
+          "it, or run_study has `host`. Hosts are the user's: agents list and check them, "
+          "never add them.")  # fmt: skip
+    @guarded
+    def hosts_list() -> dict[str, Any]:
+        from puzzle import hosts
+
+        return {"hosts": [{"name": h.name, "address": h.target, "runtime": h.runtime,
+                           "scheduler": h.scheduler, "partition": h.partition,
+                           "cores": h.cores, "walltime": h.walltime}
+                          for h in hosts.load().values()]}  # fmt: skip
+
+    @tool(description="Reach a remote host over SSH and say what it has: reachable or why "
+          "not, its cores, which solvers run there, whether its scheduler answers.")  # fmt: skip
+    @guarded
+    def host_check(name: str) -> dict[str, Any]:
+        from dataclasses import asdict
+
+        from puzzle import hosts
+
+        found = hosts.check(hosts.get(name))
+        return asdict(found) | {"words": found.words()}
+
     # --- versions (ADR 0059) --------------------------------------------------------
 
     @tool(description="The project's versions, newest first: number, time, by, what, known "

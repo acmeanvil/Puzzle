@@ -26,7 +26,7 @@ New record: copy [template.md](template.md) to `NNNN-short-title.md`, set status
 | [0018](0018-materials-as-sweep-choices.md) | A study's materials are a table: one material, or several run side by side and compared | Accepted |
 | [0019](0019-mesh-workbench.md) | Mesh in a workbench with the full breadth of Gmsh and Netgen | Accepted |
 | [0020](0020-material-builder.md) | A material builder for the global library, complete for every solver | Accepted |
-| [0021](0021-remote-solvers.md) | Run solvers remotely: SSH hosts, HPC schedulers, later cloud batch | Accepted |
+| [0021](0021-remote-solvers.md) | Run solvers remotely: SSH hosts, HPC schedulers, later cloud batch | Accepted; SSH hosts, Slurm and PBS built (reattach and cloud batch later) |
 | [0022](0022-local-expert-ai.md) | Choose the "local expert" model by measurement on the user's machine | Accepted |
 | [0023](0023-solver-settings.md) | Full access to each solver's settings: typed, with an expert pass-through | Accepted; built for all six solvers, with presets |
 | [0024](0024-application-settings.md) | One application Settings dialog for per-user preferences, outside projects | Accepted |

@@ -13,6 +13,8 @@ Selection (ADR 0013), per solver:
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import os
 import shutil
 import subprocess
@@ -70,6 +72,20 @@ class Runtime(ABC):
         from puzzle.machine import memory_bytes
 
         return memory_bytes()
+
+    # A remote runtime (ADR 0021) stages the case before the job, fetches it after and
+    # stops the far end on a cancel; here they do nothing.
+    def prepare(self, command: list[str], workdir: Path, say=None) -> None:
+        """Before the job: what the runtime needs in place."""
+        return None
+
+    def finish(self, workdir: Path, say=None) -> None:
+        """After the job (run or failed): its files where the adapter reads them."""
+        return None
+
+    def cancel(self, workdir: Path) -> None:
+        """On a cancel or a timeout, after the local process is stopped."""
+        return None
 
 
 # Threads a run may use, for OpenMP solvers and CalculiX's own counters. Without them
@@ -276,7 +292,28 @@ def _engine_memory(engine: str) -> int | None:
         return None
 
 
+# The remote host a run goes to (ADR 0021): set by run_study around a study's jobs, so
+# adapters asking runtime_for (Elmer's MPI check, Code_Aster's memory) see that host.
+_REMOTE: contextvars.ContextVar = contextvars.ContextVar("puzzle_remote", default=None)
+
+
+@contextlib.contextmanager
+def on_host(host, resources=None):
+    """Runtimes inside are the host's (`host` None: this machine's, as usual)."""
+    token = _REMOTE.set((host, resources) if host is not None else None)
+    try:
+        yield
+    finally:
+        _REMOTE.reset(token)
+
+
 def runtime_for(solver: str) -> Runtime:
+    remote = _REMOTE.get()
+    if remote is not None:
+        from puzzle.jobs.remote import RemoteRuntime, Resources
+
+        host, resources = remote
+        return RemoteRuntime(host, solver, resources or Resources())
     key = solver.upper()
     kind = os.environ.get(f"PUZZLE_{key}_RUNTIME") or os.environ.get("PUZZLE_RUNTIME", "auto")
     native = NativeRuntime(search_path=os.environ.get("PUZZLE_SOLVER_PATH"))

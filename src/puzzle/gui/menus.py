@@ -282,6 +282,9 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         from puzzle.gui.solver_settings import edit_solver_settings
 
         add("Solver settings…", lambda: edit_solver_settings(window, obj))  # ADR 0023
+        from puzzle.gui.hosts_dialog import run_on
+
+        add("Run on…", lambda: run_on(window, obj))  # ADR 0021
         from puzzle.gui.solver_settings import apply_preset, save_preset
         from puzzle.model.schema import SettingsPreset
 

@@ -59,7 +59,28 @@ def _cores(adapter) -> str:
     return f"{thread_count()} cores"
 
 
-def run_study(
+def run_study(project: Project, study_id, root: Path, workdir: Path, *, host: str | None = None,
+              **kwargs) -> StudyRun:  # fmt: skip
+    """Run `study_id` (see `_run_study`), on a remote host when its `remote` names one
+    or `host` does (ADR 0021): every job's runtime is then that host's, and studies it
+    takes transfers from run where their own `remote` says."""
+    from puzzle.jobs.runtime import on_host
+
+    study = project.get(study_id, Study)
+    name = host or (study.remote.host if study.remote is not None else None)
+    if not name:
+        with on_host(None):
+            return _run_study(project, study_id, root, workdir, **kwargs)
+    from puzzle import hosts
+    from puzzle.jobs.remote import Resources
+
+    target = hosts.get(name)
+    resources = study.remote.resources() if study.remote is not None else Resources()
+    with on_host(target, resources):
+        return _run_study(project, study_id, root, workdir, **kwargs)
+
+
+def _run_study(
     project: Project,
     study_id,
     root: Path,
@@ -309,6 +330,14 @@ def run_study(
             )  # fmt: skip
         if not job.ok:
             tail = log_tail(job.log)
+            from puzzle.jobs.remote import RemoteRuntime, failure
+
+            if isinstance(runtime, RemoteRuntime):  # ADR 0021: the host's own failures
+                said = failure(tail, job.returncode, runtime.host)
+                if said is not None:
+                    raise StudyError(said.message, code=said.code, path=study.name,
+                                     details={**(said.details or {}), "log": str(job.log),
+                                              "log_tail": tail})  # fmt: skip
             raise StudyError(
                 f"{study.solver} failed (exit {job.returncode}):\n" + "\n".join(tail),
                 code="solver_failed",

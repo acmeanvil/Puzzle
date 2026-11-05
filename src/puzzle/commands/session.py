@@ -473,11 +473,11 @@ class Session:
 
     def budget_used(self) -> dict[str, float]:
         """Fresh agent runs and solver seconds since autonomy was last set."""
-        runs, seconds = 0, 0.0
+        runs, seconds, core_hours = 0, 0.0, 0.0
         for e in self.history_entries():
             command = e.get("command") or {}
             if e["type"] == "command" and command.get("command") == "set_autonomy":
-                runs, seconds = 0, 0.0
+                runs, seconds, core_hours = 0, 0.0, 0.0
             elif (
                 e["type"] == "command"
                 and command.get("command") == "run_study"
@@ -486,7 +486,8 @@ class Session:
             ):
                 runs += 1
                 seconds += e.get("result", {}).get("duration_s", 0.0)
-        return {"runs": runs, "solver_seconds": seconds}
+                core_hours += e.get("result", {}).get("core_hours", 0.0)
+        return {"runs": runs, "solver_seconds": seconds, "core_hours": core_hours}
 
     # --- internals --------------------------------------------------------------
 
@@ -535,6 +536,15 @@ class Session:
             return cmd.timeout_s
         budget, used = self.project.agent.budget, self.budget_used()
         left = budget.solver_seconds - used["solver_seconds"]
+        remote = cmd.host or getattr(getattr(resolve(self.project, cmd.study, Study), "remote",
+                                             None), "host", None)  # fmt: skip
+        hours_left = budget.core_hours - used["core_hours"]
+        if remote and hours_left <= 0:  # ADR 0021: remote time can cost money
+            raise PuzzleError(
+                "the agent's remote core-hours are spent; propose the run instead",
+                code="budget_exceeded",
+                details={"budget": budget.model_dump(), "used": used},
+            )
         if used["runs"] >= budget.runs or left <= 0:
             raise PuzzleError(
                 "the agent's run budget is spent; propose the run instead",
@@ -698,6 +708,7 @@ class Session:
             workdir,
             store=ResultStore(self.root / RESULTS_DIR),
             reuse=cmd.reuse,
+            host=cmd.host,
             timeout_s=timeout,
             on_output=on_output,
             on_event=on_event,
@@ -715,6 +726,10 @@ class Session:
             ]
         if not run.cached and run.job is not None and run.mesh_result is not None:
             data["duration_s"] = run.job.duration_s
+            on = cmd.host or (study.remote.host if study.remote is not None else None)
+            if on:  # ADR 0021: where it ran, and its cores × hours for the budget
+                data["host"] = on
+                data["core_hours"] = _cores_on(on, study) * run.job.duration_s / 3600
             data["mesh"] = {
                 "nodes": int(len(run.mesh.node_ids)),
                 "min_quality": run.mesh_result.min_quality,
@@ -968,3 +983,16 @@ def _dump(cmd: _Command) -> dict[str, Any]:
 
 def slug(name: str) -> str:
     return "".join(c if c.isalnum() else "-" for c in name.lower()).strip("-") or "study"
+
+
+def _cores_on(name: str, study: Study) -> int:
+    """The cores a remote run held: processes × threads, else the host's cores."""
+    from puzzle import hosts
+
+    r = study.remote
+    if r is not None and r.threads:
+        return r.processes * r.threads
+    try:
+        return hosts.get(name).cores or (r.processes if r is not None else 1)
+    except PuzzleError:
+        return r.processes if r is not None else 1

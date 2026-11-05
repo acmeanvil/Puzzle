@@ -138,6 +138,7 @@ def _parser() -> argparse.ArgumentParser:
         "--no-reuse", action="store_true", help="solve even if an identical run is stored"
     )
     p.add_argument("--timeout", type=float, help="seconds before the solver is stopped")
+    p.add_argument("--host", help="run on this remote host (puzzle hosts list), this once")
     p.add_argument(
         "-v", "--verbose", "--log", action="store_true",
         help="print the solver's whole log instead of a one-line progress status",
@@ -489,6 +490,25 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("package", nargs="?", help="add: a conda-forge package, e.g. sympy")
     p.set_defaults(handler=_scripts)
 
+    p = sub.add_parser("hosts", help="remote hosts to run studies on (ADR 0021)")
+    p.add_argument("action", choices=["list", "add", "check", "remove"])
+    p.add_argument("name", nargs="?", help="the host's name")
+    p.add_argument("--address", help="add: an ssh alias, host name or IP address")
+    p.add_argument("--user", default="")
+    p.add_argument("--port", type=int, default=0)
+    p.add_argument("--runtime", default="native", choices=["native", "docker", "podman",
+                                                            "apptainer"])  # fmt: skip
+    p.add_argument("--envs-dir", default="~/puzzle/.pixi/envs",
+                   help="native: the pixi solver environments there")  # fmt: skip
+    p.add_argument("--work-dir", default="~/puzzle-runs", help="where runs go there")
+    p.add_argument("--cores", type=int, default=0)
+    p.add_argument("--memory-gb", type=float, default=0.0)
+    p.add_argument("--scheduler", default="none", choices=["none", "slurm", "pbs"])
+    p.add_argument("--partition", default="")
+    p.add_argument("--account", default="")
+    p.add_argument("--walltime", default="01:00:00", help="HH:MM:SS")
+    p.set_defaults(handler=_hosts)
+
     p = sub.add_parser("agent-key", help="store, check or remove the agent's API key")
     p.add_argument("action", choices=["set", "status", "clear"])
     p.add_argument("--provider", default="anthropic", choices=["anthropic", "openai"])
@@ -520,7 +540,9 @@ def _run(args) -> int:
     status = None if args.verbose else _LiveStatus()
     try:
         outcome = Session(args.project).submit(
-            RunStudy(study=str(study.id), reuse=not args.no_reuse, timeout_s=args.timeout),
+            RunStudy(
+                study=str(study.id), reuse=not args.no_reuse, timeout_s=args.timeout, host=args.host
+            ),
             on_output=print if args.verbose else None,
             on_event=status,
         )
@@ -1440,6 +1462,40 @@ def _trust(args) -> int:
     print(f"'{project.name}' is trusted" + (f"; its code can run: {', '.join(held)}" if held
                                             else ""))  # fmt: skip
     return 0
+
+
+def _hosts(args) -> int:
+    """The user's remote hosts: list, add (or replace), check, remove (ADR 0021)."""
+    from puzzle import hosts
+
+    if args.action == "list":
+        known = hosts.load()
+        if not known:
+            print(f"no hosts yet ({hosts.hosts_path()}); add one with puzzle hosts add NAME "
+                  "--address ADDRESS")  # fmt: skip
+        for h in known.values():
+            queue = "" if h.scheduler == "none" else f", {h.scheduler} {h.partition}".rstrip()
+            print(f"{h.name}: {h.target} ({h.runtime}{queue}), cores {h.cores or 'all'}")
+        return 0
+    if not args.name:
+        raise CliError("name the host")
+    if args.action == "add":
+        if not args.address:
+            raise CliError("--address is needed: an ssh alias, host name or IP address")
+        h = hosts.Host(name=args.name, address=args.address, user=args.user, port=args.port,
+                       runtime=args.runtime, envs_dir=args.envs_dir, work_dir=args.work_dir,
+                       cores=args.cores, memory_gb=args.memory_gb, scheduler=args.scheduler,
+                       partition=args.partition, account=args.account,
+                       walltime=args.walltime)  # fmt: skip
+        print(f"saved {h.name} in {hosts.add(h)}")
+        return 0
+    if args.action == "remove":
+        hosts.remove(args.name)
+        print(f"removed {args.name}")
+        return 0
+    found = hosts.check(hosts.get(args.name))
+    print(found.words())
+    return 0 if found.reachable else 1
 
 
 def _scripts(args) -> int:
