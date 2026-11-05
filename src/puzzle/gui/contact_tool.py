@@ -429,7 +429,16 @@ class InitialTab(QWidget):
                 self.show_in_view()
 
         self.note.setText(f"Checking {comp.name}…")
-        self.window.background(f"Checking the contacts of {comp.name}…", work, done, lock=False)
+        from puzzle.gui.feedback import busy
+
+        busy(self.table, True, f"Checking {comp.name}…")
+        self.window.background(
+            f"Checking the contacts of {comp.name}…",
+            lambda emit: work(emit),
+            lambda result: (busy(self.table, False), done(result)),
+            failed=lambda _exc: busy(self.table, False),
+            lock=False,
+        )
 
     def refresh(self) -> None:
         names = {str(c.id): c.name for c in self.components()} if self.window.session else {}

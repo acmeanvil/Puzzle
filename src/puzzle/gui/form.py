@@ -94,7 +94,7 @@ class Section(QWidget):
         self.header.setCheckable(True)
         self.header.setChecked(open)
         self.header.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self.header.setStyleSheet("QToolButton { border: none; font-weight: bold; }")
+        self.header.setStyleSheet("QToolButton { border: none; font-weight: 600; }")
         self.header.setArrowType(Qt.ArrowType.DownArrow if open else Qt.ArrowType.RightArrow)
         self.header.toggled.connect(self.set_open)
         self.body = QWidget()
@@ -186,9 +186,7 @@ class FormPanel(QWidget):
         self.description.setMinimumHeight(48)
         self.description.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         self.description.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-        self.description.setStyleSheet(
-            "QLabel { color: gray; border-top: 1px solid rgba(128,128,128,90); padding: 6px; }"
-        )
+        role(self.description, "description")
         column.addWidget(self.description)
         self.default_description = default_description
         self.rows: dict[str, tuple] = {}
@@ -221,12 +219,16 @@ class FormPanel(QWidget):
         """The banner: an error that blocks OK (red), or a result line; None hides it."""
         self.message.setVisible(bool(text))
         self.message.setText(text or "")
-        style = (
-            "background: rgba(229, 83, 75, 40); color: #ff8a80;"
-            if error
-            else "background: rgba(79, 143, 230, 30);"
-        )
-        self.message.setStyleSheet(f"QLabel {{ {style} padding: 6px; border-radius: 4px; }}")
+        role(self.message, "banner_error" if error else "banner_info")
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        """Tab follows the rows as they sit (ADR 0045)."""
+        super().showEvent(event)
+        from puzzle.gui.theme import tab_in_order
+
+        if self.layout() is not None:
+            self.layout().activate()
+        tab_in_order(self)
 
 
 def fit_to_screen(dialog, width: int, height: int) -> None:

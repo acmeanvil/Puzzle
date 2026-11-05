@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 from puzzle.errors import PuzzleError
+from puzzle.gui.theme import current as tokens
 from puzzle.gui.viewport import Viewport, _display
 from puzzle.post import compare
 from puzzle.post.quantities import catalog, default
@@ -71,7 +72,7 @@ class Bars(QWidget):
         for i, (text, v) in enumerate(self.bars):
             bar = (base - 20) * abs(v) / top
             x = int(i * slot + slot * 0.2)
-            p.fillRect(x, int(base - bar), int(slot * 0.6), int(bar), QColor("#4f7cac"))
+            p.fillRect(x, int(base - bar), int(slot * 0.6), int(bar), QColor(tokens().plot))
             p.drawText(x, int(base - bar) - 4, f"{v:.4g} {self.unit}".strip())
             p.drawText(x, h - 6, text)
         p.end()

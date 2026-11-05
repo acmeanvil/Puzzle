@@ -220,6 +220,15 @@ class QuickForm(QDialog):
         if self.check is None or not self.check(self.values()):
             self.accept()
 
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        """Tab follows the rows as they sit (ADR 0045)."""
+        super().showEvent(event)
+        from puzzle.gui.theme import tab_in_order
+
+        if self.layout() is not None:
+            self.layout().activate()
+        tab_in_order(self)
+
 
 def ask_form(window, title: str, asks: list[Ask], intro: str = "", check=None) -> dict | None:
     """The values of a one-dialog form, or None if cancelled (or blocked by `check`)."""

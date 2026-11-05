@@ -49,6 +49,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from puzzle.gui.theme import current as tokens
 from puzzle.gui.theme import role
 from puzzle.materials.registry import BY_KEY, GROUPS, MODELS, PROPERTIES, completeness
 
@@ -78,8 +79,6 @@ def _number(text: str) -> float:
 class Curve(QWidget):
     """A small plot of one or more curves (x, y), with the axes' ranges and a legend,
     for checking a curve at a glance."""
-
-    COLOURS = ["#2b6cb0", "#dd6b20", "#2f855a"]
 
     def __init__(self, x_label: str = "", y_label: str = "", log: bool = False) -> None:
         super().__init__()
@@ -112,10 +111,11 @@ class Curve(QWidget):
     def paintEvent(self, _event) -> None:  # noqa: N802 - Qt's name
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.fillRect(self.rect(), QColor("#fbfcfd"))
+        t = tokens()
+        p.fillRect(self.rect(), QColor(t.canvas))
         every = [pt for _, pts in self.series for pt in pts]
         if len(every) < 2:
-            p.setPen(QColor("#8a94a3"))
+            p.setPen(QColor(t.canvas_muted))
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Two points or more to plot")
             return
         tx = math.log10 if self.log else (lambda v: v)
@@ -136,13 +136,13 @@ class Curve(QWidget):
         def shown(v):
             return f"{10**v:.3g}" if self.log else f"{v:.4g}"
 
-        p.setPen(QPen(QColor("#b8c2cc"), 1))
+        p.setPen(QPen(QColor(t.canvas_axis), 1))
         p.drawRect(left, top, w, h)
         if self.log:  # a line per decade of cycles
             for d in range(int(x0) + 1, int(x1)):
                 gx = left + (d - x0) / (x1 - x0) * w
                 p.drawLine(QPointF(gx, top), QPointF(gx, top + h))
-        p.setPen(QColor("#4a5560"))
+        p.setPen(QColor(t.canvas_text))
         p.drawText(4, top + 10, shown(y1))
         p.drawText(4, top + h, shown(y0))
         p.drawText(left, top + h + 16, shown(x0))
@@ -152,7 +152,8 @@ class Curve(QWidget):
         if self.y_label:
             p.drawText(4, top + h // 2, self.y_label)
         for k, (name, pts) in enumerate(self.series):
-            colour = QColor(self.COLOURS[k % len(self.COLOURS)])
+            series = tokens().series
+            colour = QColor(series[k % len(series)])
             p.setPen(QPen(colour, 2))
             q = [at(x, y) for x, y in sorted(pts)]
             if k in self.bars:  # a bar per point, from zero, a little narrower than its gap
@@ -1106,7 +1107,9 @@ class MaterialEditor(QWidget):
             for c, text in enumerate((solver, r["analysis"], status)):
                 item = QTableWidgetItem(text)
                 if c == 2:
-                    item.setForeground(QColor("#2f855a" if status == "Complete" else "#b7791f"))
+                    item.setForeground(
+                        QColor(tokens().done if status == "Complete" else tokens().needed)
+                    )
                 self.report.setItem(i, c, item)
         return None
 
@@ -1194,7 +1197,7 @@ class MaterialBuilder(QDialog):
     def _edited(self) -> None:
         problem = self.editor.show_report()
         self.status.setText(problem or "")
-        self.status.setStyleSheet("color: #c53030" if problem else "")
+        role(self.status, "error" if problem else "plain")
 
     # --- actions -------------------------------------------------------------------------
 

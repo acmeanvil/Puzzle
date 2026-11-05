@@ -249,7 +249,8 @@ def run(window, opt_id: str) -> None:
     panel = getattr(window, "optimisation", None)
     if panel is not None and panel.opt_id == opt_id:
         panel.start_live()
-    window.background(f"Optimising {opt.name}…", work, done, on_event=finished_point)
+    window.background(f"Optimising {opt.name}…", work, done, on_event=finished_point,
+                      cancel=stop)  # fmt: skip
 
 
 def stop(window) -> None:

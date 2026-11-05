@@ -662,6 +662,13 @@ def _window(window, menu: QMenu, agent: QAction, messages: QAction) -> None:
     window.actions_by_name["solution"] = solution
     menu.addAction(solution)
     menu.addSeparator()
+    # Keyboard paths between the panels (ADR 0045 decision 9): F6 forward, Shift+F6 back.
+    _add(menu, "Next panel", lambda: window.focus_panel(1),
+         "Move the keyboard focus to the next panel: tree, Properties, view, messages, agent",
+         "F6", free=True)  # fmt: skip
+    _add(menu, "Previous panel", lambda: window.focus_panel(-1),
+         "Move the keyboard focus to the previous panel", "Shift+F6", free=True)  # fmt: skip
+    menu.addSeparator()
     _add(menu, "3D view background…", lambda: window.pick_view_background(),
          "A colour of your own behind the model (Settings > Interface for a gradient)")  # fmt: skip
     layouts = _sub(menu, "Layouts")  # ADR 0045: built-in and the user's own

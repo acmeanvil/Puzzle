@@ -21,8 +21,13 @@ from puzzle.results.model import Results
 
 # Surface element -> how many of its nodes are corners.
 CORNERS = {"tri3": 3, "tri6": 3, "quad4": 4, "quad8": 4, "quad9": 4}
-HIGHLIGHT = "#ff8c00"
-PICKED = "#e53e3e"
+
+
+def _t():
+    """The theme's tokens (ADR 0045): the view's colours are named there."""
+    from puzzle.gui.theme import current
+
+    return current()
 
 
 def without_parts(mesh: Mesh, parts, boundaries: dict | None = None) -> Mesh:
@@ -410,11 +415,8 @@ class ViewBar(QWidget):
         self.viewport = viewport
         self.setObjectName("view_bar")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setStyleSheet(
-            "QWidget#view_bar { background: rgba(40, 44, 52, 150); border-radius: 6px; }"
-            "QToolButton { color: white; padding: 2px; border: none; }"
-            "QToolButton:checked { background: rgba(79, 143, 230, 180); border-radius: 4px; }"
-        )
+        # Colours from the app's style sheet (theme.py: QWidget#view_bar).
+        self.setStyleSheet("QToolButton { padding: 2px; border: none; }")
         row = QHBoxLayout(self)
         row.setContentsMargins(4, 2, 4, 2)
         row.setSpacing(1)
@@ -552,10 +554,8 @@ class CutBar(QWidget):
         self.viewport = viewport
         self.setObjectName("cut_bar")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setStyleSheet(
-            "QWidget#cut_bar { background: rgba(40, 44, 52, 170); border-radius: 6px; }"
-            "QLabel, QCheckBox { color: white; }"
-        )
+        t = _t()  # the bar's ground is the app's style sheet's (QWidget#cut_bar)
+        self.setStyleSheet(f"QLabel, QCheckBox {{ color: {t.overlay_text}; }}")
         row = QHBoxLayout(self)
         row.setContentsMargins(6, 2, 6, 2)
         self.axis = _Sources(self)
@@ -865,9 +865,9 @@ class Viewport(QWidget):
         if grid is not None:
             self.plotter.add_mesh(
                 grid,
-                color="#c9d3dd",
+                color=_t().geometry_face,
                 show_edges=True,
-                edge_color="#7a8794",
+                edge_color=_t().geometry_edge,
                 opacity=0.35 if dim or ghost else 1,
             )
             from puzzle.post.vtk import beam_lines
@@ -876,18 +876,21 @@ class Viewport(QWidget):
                 self._draw_beam_solid(members, mesh.node_coords)
             skip = np.concatenate([m.element_ids for m in members]) if members else None
             if (lines := beam_lines(grid, skip)) is not None:
-                self.plotter.add_mesh(lines, color="#5b6875", line_width=5)
+                self.plotter.add_mesh(lines, color=_t().geometry_line, line_width=5)
         elif self.surface is not None:
-            self.plotter.add_mesh(self.surface, color="#c9d3dd", smooth_shading=False)
+            self.plotter.add_mesh(self.surface, color=_t().geometry_face, smooth_shading=False)
             edges = self.surface.extract_feature_edges(
                 30, boundary_edges=True, manifold_edges=False
             )
-            self.plotter.add_mesh(edges, color="#4a5560", line_width=1.5)
+            self.plotter.add_mesh(edges, color=_t().mesh_edge, line_width=1.5)
         if highlight is not None:
             surface = selection_surface(mesh, highlight)
             if surface is not None:
-                self._overlay(surface, HIGHLIGHT)
-        for group, colour in ((self.highlight_entities, HIGHLIGHT), (self.picked, PICKED)):
+                self._overlay(surface, _t().highlight)
+        for group, colour in (
+            (self.highlight_entities, _t().highlight),
+            (self.picked, _t().picked),
+        ):
             self._draw_entities(group, colour)
         self._frame(mesh)
 
@@ -1274,8 +1277,8 @@ class Viewport(QWidget):
         }
         tail = f" {unit}" if unit else ""
         self._extremes = [
-            (shown_at[hi], f"Max {_number(values[hi])}{tail}", "#e5534b"),
-            (shown_at[lo], f"Min {_number(values[lo])}{tail}", "#4f8fe6"),
+            (shown_at[hi], f"Max {_number(values[hi])}{tail}", _t().maximum),
+            (shown_at[lo], f"Min {_number(values[lo])}{tail}", _t().minimum),
         ]
         self.probes = []
         self.probes_changed.emit([])
@@ -1293,7 +1296,7 @@ class Viewport(QWidget):
             self.plotter.clear()
             self._mark_actors = []
             if away is not None and self.cut.ghost and away.n_cells:
-                self.plotter.add_mesh(away, color="#b8c2cc", opacity=0.15, reset_camera=False)
+                self.plotter.add_mesh(away, color=_t().faded, opacity=0.15, reset_camera=False)
             # The legend (post/legend.py): colours, bands, one colour outside a custom
             # range, and the bar's place and size. The title is the unit only: the
             # result's name is in the results bar, and VTK centres a long title over
@@ -1313,7 +1316,9 @@ class Viewport(QWidget):
                     lo_hi = (lo_hi[0] - 1e-30 - abs(lo_hi[0]) * 1e-9,
                              lo_hi[1] + 1e-30 + abs(lo_hi[1]) * 1e-9)  # fmt: skip
                 faces = skin.threshold(lo_hi, scalars=name, all_scalars=True)
-                self.plotter.add_mesh(grid, color="#c9d3dd", opacity=0.25, reset_camera=False)
+                self.plotter.add_mesh(
+                    grid, color=_t().geometry_face, opacity=0.25, reset_camera=False
+                )
                 actor = self.plotter.add_mesh(faces, scalars=name, clim=clim or lo_hi,
                                               scalar_bar_args=bar, **colours)  # fmt: skip
                 mapper = actor.GetMapper()
@@ -1467,7 +1472,7 @@ class Viewport(QWidget):
 
         swept = solid(members, positions)
         if swept is not None:
-            self.plotter.add_mesh(swept, color="#9aa7b4", reset_camera=False)
+            self.plotter.add_mesh(swept, color=_t().beam_face, reset_camera=False)
             self._outline_edges(swept)
 
     def _outline_edges(self, swept) -> None:
@@ -1475,7 +1480,7 @@ class Viewport(QWidget):
         silhouette, not an I or a channel."""
         edges = swept.extract_feature_edges(40, boundary_edges=False, manifold_edges=False)
         if edges.n_cells:
-            self.plotter.add_mesh(edges, color="#3d4650", line_width=1, reset_camera=False)
+            self.plotter.add_mesh(edges, color=_t().beam_edge, line_width=1, reset_camera=False)
 
     def _draw_result_beams(self, members, base, warp, scale, scalar, clim, colours) -> None:
         """Members over a result: at the deformed nodes, coloured by the shown nodal
@@ -1500,7 +1505,7 @@ class Viewport(QWidget):
         if swept is None:
             return
         if plain:
-            self.plotter.add_mesh(swept, color="#9aa7b4", reset_camera=False)
+            self.plotter.add_mesh(swept, color=_t().beam_face, reset_camera=False)
             self._outline_edges(swept)
             return
         lo_hi = clim or (float(np.nanmin(data)), float(np.nanmax(data)))
@@ -1632,7 +1637,7 @@ class Viewport(QWidget):
             return
         self.plotter.add_points(
             points,
-            color="#ffcc33",
+            color=_t().marked,
             point_size=7,
             render_points_as_spheres=True,
             name="puzzle-seeds",
@@ -1644,7 +1649,11 @@ class Viewport(QWidget):
         """Fasteners over a result: (glyph, label, in tension) each; the label pinned at
         the tube's middle (ADR 0027)."""
         self.pins = [
-            (np.asarray(g.points, float).mean(axis=0), text, "#ff8a7a" if pull else "#7ab8ff")
+            (
+                np.asarray(g.points, float).mean(axis=0),
+                text,
+                _t().tension_text if pull else _t().compression_text,
+            )
             for g, text, pull in tubes
         ]
         self.shown["fasteners"] = [text for _g, text, _p in tubes]
@@ -1655,7 +1664,7 @@ class Viewport(QWidget):
         for i, (g, _text, pull) in enumerate(tubes):
             a, b = (np.asarray(p, float) for p in g.points[:2])
             tube = pv.Tube(pointa=a, pointb=b, radius=g.radius, n_sides=16)
-            colour = "#e5534b" if pull else "#3d7bd9"
+            colour = _t().tension if pull else _t().compression
             self.plotter.add_mesh(
                 tube, color=colour, name=f"puzzle-fastener-{i}", reset_camera=False
             )
@@ -1667,17 +1676,17 @@ class Viewport(QWidget):
         `b`, `size` across) over the scene, until the next one (ADR 0046)."""
         self.shown["construction"] = kind
         a, b = np.asarray(a, float), np.asarray(b, float)
-        self.pins = [(a, "Start", "#ffcc33"), (b, "End", "#ffcc33")] if kind == "path" else []
+        self.pins = [(a, "Start", _t().marked), (b, "End", _t().marked)] if kind == "path" else []
         if self.plotter is not None:
             import pyvista as pv
 
             if kind == "path":
                 shape = pv.Line(a, b)
-                self.plotter.add_mesh(shape, color="#ffcc33", line_width=4,
+                self.plotter.add_mesh(shape, color=_t().marked, line_width=4,
                                       name="puzzle-construction", reset_camera=False)  # fmt: skip
             else:
                 shape = pv.Plane(center=a, direction=b, i_size=size, j_size=size)
-                self.plotter.add_mesh(shape, color="#ffcc33", opacity=0.35, show_edges=True,
+                self.plotter.add_mesh(shape, color=_t().marked, opacity=0.35, show_edges=True,
                                       name="puzzle-construction", reset_camera=False)  # fmt: skip
         self._draw_marks()
         if self.plotter is not None:
@@ -1691,14 +1700,14 @@ class Viewport(QWidget):
         axes = system.orientation()
         names = {"cartesian": "xyz", "cylindrical": ("θ=0", "", "z"),
                  "spherical": ("φ=0", "", "z")}[system.type]  # fmt: skip
-        colours = ("#e5534b", "#4caf50", "#4f8fe6")
+        colours = _t().axes
         self.pins = [
             (origin + size * axes[:, i], names[i], c) for i, c in enumerate(colours) if names[i]
         ]
         if self.plotter is not None:
             import pyvista as pv
 
-            for i, colour in enumerate(("#e5534b", "#4caf50", "#4f8fe6")):
+            for i, colour in enumerate(_t().axes):
                 if system.type != "cartesian" and i == 1:
                     continue  # θ and φ turn about the axis: no fixed y to draw
                 arrow = pv.Arrow(start=origin, direction=axes[:, i], scale=size)
@@ -1706,7 +1715,7 @@ class Viewport(QWidget):
                                       reset_camera=False)  # fmt: skip
             if system.type != "cartesian":  # the axis, both ways
                 line = pv.Line(origin - 2 * size * axes[:, 2], origin + 2 * size * axes[:, 2])
-                self.plotter.add_mesh(line, color="#4f8fe6", line_width=2,
+                self.plotter.add_mesh(line, color=_t().path, line_width=2,
                                       name="puzzle-triad-axis", reset_camera=False)  # fmt: skip
         self._draw_marks()
         if self.plotter is not None:
@@ -1724,7 +1733,7 @@ class Viewport(QWidget):
         unit: str = "",
         points=None,
         point_values=None,
-        beyond_colour: str = "#d62ad1",
+        beyond_colour: str | None = None,
     ) -> dict:
         """An imported field's values mapped on a selection's faces (a body's: its
         outer faces), over the shown mesh, with the legend; faces touching a node
@@ -1787,7 +1796,7 @@ class Viewport(QWidget):
             self.legend.finish(self.plotter)
         if touched.any():
             actor = self.plotter.add_mesh(
-                surface.extract_cells(np.flatnonzero(touched)), color=beyond_colour,
+                surface.extract_cells(np.flatnonzero(touched)), color=beyond_colour or _t().beyond,
                 show_edges=False, name="puzzle-field-beyond", reset_camera=False,
             )  # fmt: skip
             mapper = actor.GetMapper()
@@ -1818,7 +1827,7 @@ class Viewport(QWidget):
 
         cloud = pv.PolyData(np.asarray(points, float))
         if values is None:
-            self.plotter.add_mesh(cloud, color="#ffcc33", point_size=8, reset_camera=False,
+            self.plotter.add_mesh(cloud, color=_t().marked, point_size=8, reset_camera=False,
                                   render_points_as_spheres=True,
                                   name="puzzle-field-points")  # fmt: skip
             return
@@ -1835,7 +1844,7 @@ class Viewport(QWidget):
     def mark_point(self, xyz, text: str) -> None:
         """A labelled point pinned in the view until the next scene (the Mesh tab's
         worst elements)."""
-        self.pins = [(np.asarray(xyz, float), text, "#ffcc33")]
+        self.pins = [(np.asarray(xyz, float), text, _t().marked)]
         self.shown["pins"] = [text]
         self._draw_marks()
         if self.plotter is not None:
@@ -1844,7 +1853,7 @@ class Viewport(QWidget):
     def pin_points(self, marks: list[tuple]) -> None:
         """Labelled points pinned in the view until the next scene (ADR 0064's Preview:
         a table's rows): (xyz, text) pairs."""
-        self.pins = [(np.asarray(xyz, float), text, "#ffcc33") for xyz, text in marks]
+        self.pins = [(np.asarray(xyz, float), text, _t().marked) for xyz, text in marks]
         self.shown["pins"] = [text for _, text in marks]
         self._draw_marks()
         if self.plotter is not None:
@@ -1855,7 +1864,8 @@ class Viewport(QWidget):
         marks += getattr(self, "pins", [])
         unit = lambda p: f" {p['unit']}" if p["unit"] else ""  # noqa: E731
         marks += [
-            (np.asarray(p["at"]), f"{_number(p['shown'])}{unit(p)}", "#f5f5f5") for p in self.probes
+            (np.asarray(p["at"]), f"{_number(p['shown'])}{unit(p)}", _t().probe_text)
+            for p in self.probes
         ]
         return marks
 
@@ -1882,7 +1892,7 @@ class Viewport(QWidget):
             self._mark_actors.append(name)
             label = QLabel(text, self.view)
             label.setStyleSheet(
-                f"QLabel {{ background: rgba(30,30,30,190); color: {colour}; padding: 1px 4px;"
+                f"QLabel {{ background: {_t().label_overlay}; color: {colour}; padding: 1px 4px;"
                 " border-radius: 3px; }"
             )
             label.adjustSize()

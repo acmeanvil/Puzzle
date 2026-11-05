@@ -10,7 +10,7 @@ and Ansys ribbons do. The look is one style sheet here, not a copy per ribbon.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, QSize, Qt, QTimer
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QFrame,
@@ -27,8 +27,7 @@ from PySide6.QtWidgets import (
 
 HEIGHT = 24  # every ribbon button, in pixels
 STYLE = (  # palette colours, so it follows the theme (ADR 0045)
-    "QLabel#ribbon_title { color: palette(placeholder-text); font-size: 11px;"
-    " font-weight: 600; }"
+    "QLabel#ribbon_title { color: palette(placeholder-text); font-weight: 600; }"
     "QFrame#ribbon_group { border: none; border-right: 1px solid palette(mid); }"
     "QToolButton { padding: 0px 8px; background: palette(button);"
     " border: 1px solid palette(mid); border-radius: 3px; }"
@@ -37,6 +36,15 @@ STYLE = (  # palette colours, so it follows the theme (ADR 0045)
     " color: palette(highlighted-text); border-color: palette(highlight); }"
     "QToolButton:disabled { color: palette(placeholder-text); }"
 )
+
+
+def _needed(b: QToolButton) -> int:
+    """A button's width with its text whole: the style sheet's padding (8 px a side),
+    the border and, beside an icon, the icon and its gap. Qt's size hint under a
+    style sheet leaves the icon out, so text beside one was elided."""
+    text = b.fontMetrics().horizontalAdvance(b.text())
+    icon = b.iconSize().width() + 6 if not b.icon().isNull() else 0
+    return max(b.sizeHint().width(), text + icon + 2 * 8 + 2 + 6)
 
 
 class Ribbon(QWidget):
@@ -53,16 +61,28 @@ class Ribbon(QWidget):
         self.groups: list[tuple[QFrame, QWidget, list[QToolButton]]] = []
 
     @staticmethod
-    def button(text: str, tip: str = "", checkable: bool = False) -> QToolButton:
+    def button(text: str, tip: str = "", checkable: bool = False, tool: str = "") -> QToolButton:
+        """A ribbon button; `tool` names its icon in `icons.TOOLS` (ADR 0045), drawn
+        beside the text in the theme's colour."""
         b = QToolButton()
         b.setText(text)
+        if tool:
+            from puzzle.gui.icons import TOOLS, icon
+
+            b.setProperty("tool_icon", TOOLS.get(tool, tool))
+            b.setIcon(icon(TOOLS.get(tool, tool)))
+            b.setIconSize(QSize(16, 16))
         b.setToolTip(tip)
         b.setAutoRaise(True)
         b.setCheckable(checkable)
         b.setFixedHeight(HEIGHT)
         b.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        b.setMinimumWidth(b.sizeHint().width())  # never "C…r": fold the group instead
-        b.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        b.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+            if tool
+            else Qt.ToolButtonStyle.ToolButtonTextOnly
+        )
+        b.setMinimumWidth(_needed(b))  # never "C…r": fold the group instead
         return b
 
     def group(self, title: str, buttons: list[QToolButton]) -> QFrame:
@@ -74,6 +94,10 @@ class Ribbon(QWidget):
         column.setSpacing(1)
         name = QLabel(title)
         name.setObjectName("ribbon_title")
+        small = name.font()  # a step under the text, so it follows the system's size
+        if small.pointSizeF() > 0:
+            small.setPointSizeF(small.pointSizeF() * 0.85)
+        name.setFont(small)
         column.addWidget(name)
         grid = QGridLayout()
         grid.setContentsMargins(0, 0, 0, 0)
@@ -108,6 +132,33 @@ class Ribbon(QWidget):
         self.fold()
         return box
 
+    def changeEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        """A new font (Settings > Interface > Text size) or theme: measure again, so
+        no button's text is cut short."""
+        super().changeEvent(event)
+        kinds = (QEvent.Type.FontChange, QEvent.Type.StyleChange,
+                 QEvent.Type.ApplicationFontChange)  # fmt: skip
+        if (
+            event.type() in kinds
+            and getattr(self, "groups", None)
+            and not getattr(self, "_measuring", False)
+        ):
+            self._measuring = True  # once the buttons have their new font too
+            QTimer.singleShot(0, self, self._remeasure)  # dropped if the ribbon goes
+
+    def _remeasure(self) -> None:
+        from shiboken6 import isValid
+
+        self._measuring = False
+        if not isValid(self) or not all(isValid(b) for _x, _h, bs in self.groups for b in bs):
+            return  # the window is closing
+        for _box, _holder, buttons in self.groups:
+            for b in buttons:
+                b.setMinimumWidth(0)
+                b.setMaximumWidth(16777215)
+        self._even()
+        self.fold()
+
     def _even(self) -> None:
         """Every tool button in the ribbon as wide as the widest (and all one height):
         a ribbon reads as one set of tools."""
@@ -115,7 +166,7 @@ class Ribbon(QWidget):
         if not tools:
             return
         folded = [holder.findChild(QToolButton) for _box, holder, _buttons in self.groups]
-        widest = max(b.sizeHint().width() for b in [*tools, *folded] if b is not None)
+        widest = max(_needed(b) for b in [*tools, *folded] if b is not None)
         for b in [*tools, *folded]:
             if b is not None:
                 b.setFixedWidth(widest)
@@ -127,7 +178,7 @@ class Ribbon(QWidget):
         for b in buttons:
             if b.isHidden():
                 continue  # a button its panel hides for now
-            item = QAction(b.text(), menu)
+            item = QAction(b.icon(), b.text(), menu)
             item.setToolTip(b.toolTip())
             item.setEnabled(b.isEnabled())
             if b.isCheckable():

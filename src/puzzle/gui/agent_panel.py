@@ -35,6 +35,7 @@ from puzzle.agent.providers import ProviderError
 from puzzle.agent.settings import load_settings, settings_path
 from puzzle.commands.model import SetAutonomy
 from puzzle.errors import PuzzleError
+from puzzle.gui.theme import current as tokens
 from puzzle.gui.theme import role
 
 # Autonomy levels as people read them (ADR 0015).
@@ -296,7 +297,8 @@ class AgentPanel(QWidget):
         return f"{p.name}: {p.model} ({where})"
 
     def _say(self, who: str, text: str) -> None:
-        colour = {"you": "#2b6cb0", "error": "#c53030"}.get(who, "#444")
+        t = tokens()
+        colour = {"you": t.accent, "error": t.error}.get(who, t.text)
         self.transcript.append(f'<p><b style="color:{colour}">{who}</b>: {html.escape(text)}</p>')
 
     # --- review --------------------------------------------------------------------------
@@ -361,15 +363,15 @@ class AgentPanel(QWidget):
 
 def _event_html(e: Event) -> str:
     if e.kind == "text":
-        return f'<p><b style="color:#2f855a">agent</b>: {html.escape(e.text)}</p>'
+        return f'<p><b style="color:{tokens().done}">agent</b>: {html.escape(e.text)}</p>'
     if e.kind == "tool_call":
         args = json.dumps(e.data.get("arguments", {}))
         args = args if len(args) <= 160 else args[:160] + "…"
-        return f'<p style="color:gray">→ {html.escape(e.text)} {html.escape(args)}</p>'
+        return f'<p style="color:{tokens().muted}">→ {html.escape(e.text)} {html.escape(args)}</p>'
     if e.kind == "error":
-        return f'<p style="color:#c53030">✗ {html.escape(e.text[:300])}</p>'
+        return f'<p style="color:{tokens().error}">✗ {html.escape(e.text[:300])}</p>'
     if e.kind == "tool_result":
-        return f'<p style="color:gray">← {html.escape(_brief(e.text))}</p>'
+        return f'<p style="color:{tokens().muted}">← {html.escape(_brief(e.text))}</p>'
     return ""
 
 

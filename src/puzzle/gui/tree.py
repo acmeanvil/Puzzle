@@ -172,6 +172,7 @@ class ModelTree(QTreeWidget):
             if not objects:
                 continue
             section = self._add(root, title, Node("section", label=title))
+            _section_icon(section, title)
             for obj in objects:
                 item = self._add(section, obj.name, Node("object", str(obj.id), "", obj.name))
                 self._state(item, states.get(str(obj.id)))
@@ -186,6 +187,7 @@ class ModelTree(QTreeWidget):
             from puzzle.sweep import title
 
             section = self._add(root, "Results", Node("section", label="Results"))
+            _section_icon(section, "Results")
             for d in defined:  # derived results (ADR 0025), evaluated when shown
                 text = f"{d.name} · {METHODS[d.method].split(' (')[0].lower()}"
                 item = self._add(section, text, Node("derived", str(d.id), "", d.name))
@@ -428,7 +430,8 @@ class ModelTree(QTreeWidget):
                         scale = f" ×{use.scale:g}" if use.scale != 1 else ""
                         text += f" ← {getattr(source, 'name', 'a missing field')}{scale}"
                     path = f"physics.{i}.features.{j}"
-                    self._add(p_item, text, Node("feature", oid, path, f.selection))
+                    f_item = self._add(p_item, text, Node("feature", oid, path, f.selection))
+                    _feature_icon(f_item, f.type)
         elif isinstance(obj, Study):
             for i, step in enumerate(obj.steps):
                 if isinstance(step, SweepStep):
@@ -480,6 +483,22 @@ def _connections_shown() -> bool:
     from puzzle.settings import current
 
     return bool(current().get("connections.tree"))
+
+
+def _section_icon(item, title: str) -> None:
+    """A section heading's icon (ADR 0045), redrawn in the theme's text colour."""
+    from puzzle.gui.icons import SECTIONS, icon
+
+    if title in SECTIONS:
+        item.setIcon(0, icon(SECTIONS[title]))
+
+
+def _feature_icon(item, kind: str) -> None:
+    """A support's or load's icon, as the view draws it (ADR 0045)."""
+    from puzzle.gui.icons import FEATURES, icon
+
+    if kind in FEATURES:
+        item.setIcon(0, icon(FEATURES[kind]))
 
 
 def _feature_label(physics: str, kind: str) -> str:

@@ -45,6 +45,8 @@ from PySide6.QtWidgets import (
 )
 
 from puzzle.geometry.sketch import DIMENSIONS, SketchError, describe, solve
+from puzzle.gui.theme import current as tokens
+from puzzle.gui.theme import role
 
 MM = 1000.0  # the canvas is drawn in mm; values are shown in the display length unit
 
@@ -55,7 +57,18 @@ def length_unit() -> tuple[str, float]:
     return unit()
 
 
-INK, FREE, PICKED, CONSTRUCTION, BAD = "#1f2933", "#2b6cb0", "#dd6b20", "#8a94a3", "#c53030"
+class _Colours:
+    """The sketch canvas's colours, from the theme's tokens (ADR 0045)."""
+
+    INK = property(lambda self: tokens().canvas_ink)
+    FREE = property(lambda self: tokens().sketch_free)
+    PICKED = property(lambda self: tokens().sketch_picked)
+    CONSTRUCTION = property(lambda self: tokens().canvas_muted)
+    BAD = property(lambda self: tokens().sketch_bad)
+    SOLVED = property(lambda self: tokens().sketch_solved)
+
+
+C = _Colours()
 
 
 # --- the sketch as data ----------------------------------------------------------------
@@ -205,15 +218,16 @@ class SketchModel:
                 self.spec["circles"][n][1] = r
 
     def status(self) -> tuple[str, str]:
-        """(text, colour) for the status line."""
+        """(text, role) for the status line: error, plain, done (fully defined) or
+        running (still free to move)."""
         if self.error:
-            return self.error, BAD
+            return self.error, "error"
         if self.solved is None:
-            return "Draw an outline: Line, Rectangle, Circle or Arc", INK
+            return "Draw an outline: Line, Rectangle, Circle or Arc", "plain"
         text = describe(self.solved, self.spec)
         if self.solved.status != "ok":
-            return text, BAD
-        return text, "#2f855a" if self.solved.dof == 0 else FREE
+            return text, "error"
+        return text, "done" if self.solved.dof == 0 else "running"
 
     # measuring, for new dimensions
     def point(self, name: str) -> tuple[float, float]:
@@ -288,7 +302,7 @@ class SketchCanvas(QGraphicsView):
         self.setScene(QGraphicsScene(self))
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         # A light sheet whatever the system theme: the ink colours are chosen for it.
-        self.setBackgroundBrush(QBrush(QColor("#fbfcfd")))
+        self.setBackgroundBrush(QBrush(QColor(tokens().canvas)))
         self.scale(4.0, -4.0)  # 4 px per mm, y up
         self.setMinimumSize(560, 420)
         self.setDragMode(QGraphicsView.DragMode.NoDrag)
@@ -363,13 +377,13 @@ class SketchCanvas(QGraphicsView):
 
         def pen(name):
             colour = (
-                PICKED
+                C.PICKED
                 if name in self.selected
-                else BAD
+                else C.BAD
                 if name in bad
-                else CONSTRUCTION
+                else C.CONSTRUCTION
                 if name in cons
-                else INK
+                else C.INK
             )
             p = QPen(QColor(colour), width * (1.6 if name in self.selected else 1.0))
             if name in cons:
@@ -388,7 +402,7 @@ class SketchCanvas(QGraphicsView):
         dot = 3.0 / self.transform().m11()
         fixed = {c[1] for c in m.spec["constraints"] if c[0] == "fix"}
         for n, p in pts.items():
-            colour = PICKED if n in self.selected else (INK if n in fixed else FREE)
+            colour = C.PICKED if n in self.selected else (C.INK if n in fixed else C.FREE)
             scene.addEllipse(
                 p.x() - dot,
                 p.y() - dot,
@@ -399,7 +413,7 @@ class SketchCanvas(QGraphicsView):
             )
         self._labels(scene, m, pts)
         if self.preview and self.hover:
-            ghost = QPen(QColor(FREE), width, Qt.PenStyle.DotLine)
+            ghost = QPen(QColor(C.FREE), width, Qt.PenStyle.DotLine)
             path = [QPointF(u * MM, v * MM) for u, v in [*self.preview, self.hover]]
             for a, b in zip(path, path[1:], strict=False):
                 scene.addLine(a.x(), a.y(), b.x(), b.y(), ghost)
@@ -407,7 +421,7 @@ class SketchCanvas(QGraphicsView):
 
     def _grid(self, scene, extent: QRectF) -> None:
         step = 10.0 if self.transform().m11() < 6 else 5.0
-        faint = QPen(QColor("#e3e8ee"), 0)
+        faint = QPen(QColor(tokens().canvas_grid), 0)
         x = math.floor(extent.left() / step) * step
         while x <= extent.right():
             scene.addLine(x, extent.top(), x, extent.bottom(), faint)
@@ -416,7 +430,7 @@ class SketchCanvas(QGraphicsView):
         while y <= extent.bottom():
             scene.addLine(extent.left(), y, extent.right(), y, faint)
             y += step
-        axis = QPen(QColor("#b8c2cc"), 0)
+        axis = QPen(QColor(tokens().canvas_axis), 0)
         scene.addLine(extent.left(), 0, extent.right(), 0, axis)
         scene.addLine(0, extent.top(), 0, extent.bottom(), axis)
 
@@ -425,7 +439,8 @@ class SketchCanvas(QGraphicsView):
         font = QFont()
         font.setPointSize(9)
 
-        def put(text, where: QPointF, colour=CONSTRUCTION):
+        def put(text, where: QPointF, colour=None):
+            colour = colour or C.CONSTRUCTION
             item = scene.addSimpleText(text, font)
             item.setBrush(QBrush(QColor(colour)))
             item.setFlag(item.GraphicsItemFlag.ItemIgnoresTransformations)
@@ -460,7 +475,7 @@ class SketchCanvas(QGraphicsView):
                 put(
                     ("R" if c[0] == "radius" else "⌀" if c[0] == "diameter" else "") + text,
                     anchor,
-                    "#2f855a",
+                    C.SOLVED,
                 )
 
 
@@ -572,6 +587,9 @@ class SketchWorkspace(QWidget):
         side.addWidget(remove)
 
         self.status = QLabel("")
+        bold = self.status.font()
+        bold.setWeight(QFont.Weight.DemiBold)
+        self.status.setFont(bold)
 
         body = QHBoxLayout()
         body.addWidget(self.canvas, 3)
@@ -595,15 +613,15 @@ class SketchWorkspace(QWidget):
         return copy.deepcopy(self.model.spec)
 
     def changed(self) -> None:
-        text, colour = self.model.status()
+        text, state = self.model.status()
         self.status.setText(text)
-        self.status.setStyleSheet(f"color: {colour}; font-weight: bold")
+        role(self.status, state)
         self.constraints.clear()
         bad = set(self.model.solved.failed) if self.model.solved else set()
         for i, c in enumerate(self.model.spec["constraints"]):
             item = QListWidgetItem(constraint_text(c))
             if i in bad:
-                item.setForeground(QColor(BAD))
+                item.setForeground(QColor(C.BAD))
             self.constraints.addItem(item)
         self._enable()
         self.canvas.redraw()
@@ -831,7 +849,7 @@ class SketchWorkspace(QWidget):
             if text in self.params:
                 return text
             self.status.setText(f"'{text}' is neither a number nor a parameter")
-            self.status.setStyleSheet(f"color: {BAD}; font-weight: bold")
+            role(self.status, "error")
             return None
         return number / length_unit()[1] if unit == "mm" else number
 
@@ -900,7 +918,7 @@ class SketchWorkspace(QWidget):
             except SketchError as exc:
                 text = str(exc)
         self.status.setText(text)
-        self.status.setStyleSheet(f"color: {BAD}; font-weight: bold")
+        role(self.status, "error")
         return text
 
 

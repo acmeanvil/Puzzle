@@ -1,6 +1,6 @@
 # 0045. Look and feel: one theme from tokens, an icon set, better docking, feedback and accessibility
 
-- Status: Accepted (2026-10-25, with the maintainer's answers)
+- Status: Accepted (2026-10-25, with the maintainer's answers); built (2026-11-04)
 - Date: 2026-10-25
 
 ## Context
@@ -109,3 +109,24 @@ So Puzzle keeps Qt's own `QDockWidget`, behind one module of its own, `gui/docki
 - **named layouts:** Window → Layouts → Modelling, Results, Agent beside the model, and the user's own saved ones ("Save current layout…"), kept per user;
 - **auto-hide:** a side panel can be set to hide into a slim bar on its edge; clicking its name there shows it, and it hides again once the view is used;
 - **floating** panels on a second screen, as Qt's docks already allow.
+
+## Built, the rest (2026-11-04)
+
+- **Every colour a token (step 2 finished).** The colours still written inline went into `theme.Tokens`: the 3D view's (geometry faces and edges, mesh edges, beams, highlights, picks, construction marks, extreme markers, probe labels, fastener tension and compression, a triad's axes), the view's bars, the separators, the form banners and descriptions, the drawing canvases (the sketcher, the material builder's curves, the compare bars), the agent's transcript and the tree's state icons (drawn again when the theme changes). Widgets take roles (`muted`, `done`, `needed`, `error`, `running`, `strong`, `description`, `banner_error`, `banner_info`) rather than style sheets of their own. `tests/test_look_and_feel.py` fails on a colour literal anywhere in `gui/` outside `theme.py`, and checks each theme's contrast against WCAG 2.1 (text 4.5:1, 7:1 in high contrast; hints and state marks 3:1). That check darkened the light theme's amber "needed" from #c08a1e (2.8:1) to #a87614.
+- **Icons (step 3).** Puzzle's own engineering icons, drawn in Tabler's grid and stroke: fixed support, pin support, displacement, force, pressure, spring, remote force, gravity, acceleration, heat flux, coil, ground, bolt, contact, coordinate triad, fillet and chamfer. Another 57 Tabler icons are vendored (79 in all). `icons.FEATURES` gives every feature type in the catalog an icon, `icons.SECTIONS` every tree section, and `icons.TOOLS` every ribbon tool. The tree shows them on its sections and on each support and load, and the three ribbons show them beside the text. Ribbon buttons are measured again whenever the font or style changes, so no text is cut short. **Menus stay words only**, as the one-ribbon change (2026-10-25) decided, so their text stays aligned.
+- **Feedback (step 5).** `gui/feedback.py`:
+  - toasts at the window's lower right when a run, mesh or export finishes, with an action (Show results, Show why, Open folder), three at most, held while the pointer is over one; Settings > Interface > Notes when work finishes turns them off;
+  - the status bar's progress for all background work: busy, or a fraction when the work can tell (a solve, from its progress events), with Cancel when the work can stop (solves, mesh convergence, adaptation, optimisation);
+  - `busy(panel)` for a panel that waits (the contact check).
+  
+  There is no animation.
+- **Density, type and accessibility (step 6):**
+  - Settings > Interface > Density (comfortable, compact) sets the padding of controls and tree rows.
+  - Text size (as the system, larger, largest) scales the system UI font, which already carries the system's own text scaling. Font sizes are relative, never pixels.
+  - A focus ring from the `focus` token on buttons, check boxes, trees, lists and tabs.
+  - F6 and Shift+F6 (Window → Next panel, Previous panel) move the keyboard focus between the tree, Properties, the 3D view, the messages and the agent's prompt.
+  - Tab moves through the quick forms, the long forms and Settings in their order on screen (`theme.tab_in_order`), not the order the rows were made in.
+  - The Advisor's marks carry accessible names, and toasts say what they are to screen readers.
+- **Checked by looking (decision 10).** `scripts/theme_screens.py OUT` opens a scratch copy of the cantilever, meshes it and runs it, then saves the model, Geometry, Mesh and Results screens, the agent, Settings, a form and a toast in each theme. It is not a pixel-compared test. The first pass found the text cut short on ribbon buttons with icons, which is now fixed.
+
+Not done, and not holding the ADR: menu icons (see above); a full focus-order review of every dialog beyond the shared form classes.

@@ -22,10 +22,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from puzzle.gui.theme import current as tokens
 from puzzle.gui.theme import role
 from puzzle.model.schema import Component, Study
 
-MARKS = {"done": ("✓", "#2e9d57"), "needed": ("●", "#d4a72c"), "optional": ("○", "#8a96a3")}
+# A shape and a role each, so a step's state reads without colour too.
+MARKS = {"done": ("✓", "done"), "needed": ("●", "needed"), "optional": ("○", "muted")}
 EXAMPLE = Path(__file__).parents[3] / "examples" / "cantilever"
 
 
@@ -105,10 +107,11 @@ class AdvisorPanel(QWidget):
         about = [x.name for x in (comp, study) if x is not None]
         self.scope.setText(f"For {' and '.join(about)}" if about else "For the project")
         for row, a in enumerate(self.advice):
-            mark, colour = MARKS[a.state]
-            sign = QLabel(mark)
-            sign.setStyleSheet(f"color: {colour}; font-size: 14px")
-            text = QLabel(f"<b>{a.title}</b><br><span style='color: gray'>{a.detail}</span>")
+            mark, state = MARKS[a.state]
+            sign = role(QLabel(mark), state)
+            sign.setAccessibleName({"done": "Done", "needed": "Needed"}.get(a.state, "Optional"))
+            muted = tokens().muted
+            text = QLabel(f"<b>{a.title}</b><br><span style='color: {muted}'>{a.detail}</span>")
             text.setWordWrap(True)
             self.grid.addWidget(sign, row, 0)
             self.grid.addWidget(text, row, 1)

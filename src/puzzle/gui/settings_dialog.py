@@ -86,7 +86,8 @@ class SettingsDialog(QDialog):
         for pref in [p for p in PREFERENCES if p.group == group]:
             if pref.key == "units.custom.length":
                 heading = QLabel("My own units, per quantity")
-                heading.setStyleSheet("font-weight: bold; margin-top: 8px")
+                heading.setContentsMargins(0, 8, 0, 0)
+                role(heading, "strong")
                 form.addRow(heading)
             if pref.kind == "colour":
                 box = ColourButton(self.settings.get(pref.key), pref.label)
@@ -204,6 +205,15 @@ class SettingsDialog(QDialog):
         self.agent.send_images = self.images.currentData()
         save_settings(self.agent, self.agent_path)
         self.accept()
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        """Tab follows the rows as they sit (ADR 0045)."""
+        super().showEvent(event)
+        from puzzle.gui.theme import tab_in_order
+
+        if self.layout() is not None:
+            self.layout().activate()
+        tab_in_order(self)
 
 
 class ColourButton(QPushButton):

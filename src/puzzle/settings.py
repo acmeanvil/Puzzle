@@ -145,6 +145,31 @@ PREFERENCES: list[Preference] = [
         "theme, where result colours read best.",
     ),
     Preference(
+        "interface.density",
+        "Interface",
+        "Density",
+        "comfortable",
+        [("Comfortable", "comfortable"), ("Compact", "compact")],
+        "Space around controls and tree rows: compact fits more on a laptop screen.",
+    ),
+    Preference(
+        "interface.text_size",
+        "Interface",
+        "Text size",
+        "system",
+        [("As the system", "system"), ("Larger", "larger"), ("Largest", "largest")],
+        "The system's font and its text scaling, or a step larger (ADR 0045).",
+    ),
+    Preference(
+        "interface.toasts",
+        "Interface",
+        "Notes when work finishes",
+        True,
+        [("Show them", True), ("Status bar only", False)],
+        "A short note at the window's corner when a run, mesh or export finishes, with an "
+        "action such as Show results.",
+    ),
+    Preference(
         "interface.heading_colours",
         "Interface",
         "Heading colours",

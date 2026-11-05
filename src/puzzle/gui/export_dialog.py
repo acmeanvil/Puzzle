@@ -122,4 +122,14 @@ def export_results(window, source: str | None = None):
         )
         return None
     window.statusBar().showMessage(f"Wrote {files[0]}", 10000)
+    folder = Path(files[0]).parent
+    window.toasts.show(f"Wrote {Path(files[0]).name}", ("Open folder", lambda: _open(folder)))
     return files
+
+
+def _open(folder: Path) -> None:
+    """The folder in the system's file browser."""
+    from PySide6.QtCore import QUrl
+    from PySide6.QtGui import QDesktopServices
+
+    QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))

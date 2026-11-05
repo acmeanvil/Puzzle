@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
 )
 
 from puzzle import schematic as sch
+from puzzle.gui.theme import current as tokens
 from puzzle.schematic.layout import TITLE, layout, rows
 
 DIM = 0.35  # what is not upstream (or downstream) of the selection
@@ -59,7 +60,7 @@ def _colours():
 def _state_colour(state: str) -> QColor:
     from puzzle.gui.icons import STATE_DRAWINGS
 
-    return QColor(STATE_DRAWINGS.get(state, STATE_DRAWINGS["complete"])[0])
+    return QColor(getattr(tokens(), STATE_DRAWINGS.get(state, STATE_DRAWINGS["complete"])[0]))
 
 
 # What a wire may be drawn from: a study (into a study: a transfer), and anything with
@@ -89,7 +90,7 @@ def _fraction(low: float, high: float, value: float) -> float:
 
 
 def _flow_colour(carries: str) -> QColor:
-    return QColor(sch.FLOW_COLOURS[sch.flow_of(carries)]) if carries else QColor("#8a94a3")
+    return QColor(sch.FLOW_COLOURS[sch.flow_of(carries)]) if carries else QColor(tokens().muted)
 
 
 class NodeItem(QGraphicsObject):

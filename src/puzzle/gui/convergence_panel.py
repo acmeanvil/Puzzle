@@ -87,7 +87,7 @@ def run(window, study_id: str) -> None:
         said = "; ".join(f"{v.quantity}: {v.words}" for v in vs) or "too few meshes ran"
         window.statusBar().showMessage(f"{study.name}: {said}", 15000)
 
-    window.background(f"Checking {study.name}'s mesh convergence…", work, done)
+    window.background(f"Checking {study.name}'s mesh convergence…", work, done, cancel=stop)
 
 
 FIELDS = [("Displacement (structural) or temperature (heat)", None)]
@@ -226,7 +226,7 @@ def run_adapt(window, study_id: str) -> None:
         window.show_convergence(study_id, "adapt")
         window.statusBar().showMessage(f"{study.name}: {out.ended}", 15000)
 
-    window.background(f"Adapting {study.name}'s mesh…", work, done)
+    window.background(f"Adapting {study.name}'s mesh…", work, done, cancel=stop)
 
 
 def _percent(text) -> float | None:

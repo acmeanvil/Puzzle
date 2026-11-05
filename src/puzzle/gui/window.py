@@ -561,16 +561,18 @@ class MainWindow(QMainWindow):
         self._resizing_messages = True
         self.messages_dock.installEventFilter(self)
         self._sized = False  # dock sizes are applied once the window is on screen
-        # Wide, visible separators: Qt's default ones on macOS are a hairline that is
-        # hard to find and grab.
-        self.setStyleSheet(
-            "QMainWindow::separator { background: #3c3f44; width: 6px; height: 6px; }"
-            "QMainWindow::separator:hover { background: #4f8fe6; }"
-        )
+        # Wide, visible separators (Qt's default ones on macOS are a hairline that is
+        # hard to find and grab) come from the theme's style sheet.
 
         self._actions()
+        from puzzle.gui.feedback import StatusProgress, Toasts
+
+        self.toasts = Toasts(self)  # notes when work finishes (ADR 0045)
+        self.progress = StatusProgress()  # long work, with Cancel when it can stop
+        self.statusBar().addPermanentWidget(self.progress)
         self.context_label = QLabel("")
-        self.context_label.setStyleSheet("color: gray; padding: 0 8px")
+        self.context_label.setContentsMargins(8, 0, 8, 0)
+        theme.role(self.context_label, "muted")
         self.statusBar().addPermanentWidget(self.context_label)
         self.fold_messages(True)
         self.tree.currentItemChanged.connect(lambda *_: self._selected())
@@ -1077,6 +1079,11 @@ class MainWindow(QMainWindow):
         for name, action in self.actions_by_name.items():
             if not icon(name).isNull():  # redrawn in the new text colour
                 action.setIcon(icon(name))
+        from PySide6.QtWidgets import QToolButton
+
+        for b in self.findChildren(QToolButton):  # the ribbons' tools
+            if b.property("tool_icon"):
+                b.setIcon(icon(b.property("tool_icon")))
         if self.viewport.plotter is not None:
             theme.view_background(self.viewport.plotter, t)
             self.viewport.view.refresh()
@@ -1377,6 +1384,7 @@ class MainWindow(QMainWindow):
                 self.log.appendPlainText(f"mesh: {w}")
             cells = sum(len(b.ids) for b in meshed.mesh.blocks if b.dim == 3)
             self.statusBar().showMessage(f"Meshed {comp.name}: {cells:,} elements", 8000)
+            self.toasts.show(f"Meshed {comp.name}: {cells:,} elements")
             if then is not None:
                 then(meshed)
             else:
@@ -1417,6 +1425,13 @@ class MainWindow(QMainWindow):
             if run is not None and run.run_id:
                 self.tree.select(Node("run", run.run_id, "", ""))
                 self._select_run(run.run_id)
+                rid = run.run_id
+                self.toasts.show(
+                    f"{study.name} finished{cached}",
+                    ("Show results", lambda: self._show_run(rid)),
+                )
+            else:
+                self.toasts.show(f"{study.name} finished{cached}")
 
         def failed(exc) -> None:
             self.running.discard(sid)
@@ -1428,11 +1443,24 @@ class MainWindow(QMainWindow):
             if self.solution.events:  # how it got there explains more than the log tail
                 self.output_tabs.setCurrentWidget(self.solution)
             self.refresh()
+            if stopped:
+                self.toasts.show(f"{study.name} stopped", state="info")
+            else:
+                self.toasts.show(f"{study.name} failed", ("Show why", self.open_solution),
+                                 state="error")  # fmt: skip
 
         self.running.add(sid)
         self.refresh()  # the tree shows it running
+        from puzzle import progress
+
         return self.background(
-            f"Running {study.name}…", work, done, failed=failed, on_event=self.solution.add
+            f"Running {study.name}…",
+            work,
+            done,
+            failed=failed,
+            on_event=self.solution.add,
+            cancel=cancel,
+            fraction=lambda: progress.state(self.solution.events).fraction(),
         )
 
     # --- selection ---------------------------------------------------------------
@@ -1728,6 +1756,43 @@ class MainWindow(QMainWindow):
         self.set_context("sketch")
         self.centre.addWidget(workspace)
         self.centre.setCurrentWidget(workspace)
+
+    def panels_in_order(self) -> list:
+        """The panels F6 moves between, as they sit: the tree (or the Geometry and Mesh
+        tabs' own), Properties, the 3D view, the messages, the agent's prompt."""
+        view = getattr(self.viewport, "view", self.viewport)  # offscreen: no OpenGL view
+        out = [self.left_tabs.currentWidget(), self.side, view,
+               self.output_tabs.currentWidget(), getattr(self.agent, "input", None)]  # fmt: skip
+        return [w for w in out if w is not None and w.isVisibleTo(self)]
+
+    def focus_panel(self, step: int) -> object:
+        """The keyboard focus to the next (or previous) panel; the widget focused."""
+        from PySide6.QtWidgets import QApplication
+
+        panels = self.panels_in_order()
+        if not panels:
+            return None
+        now = QApplication.focusWidget()
+        at = next((i for i, w in enumerate(panels) if now is not None and
+                   (now is w or w.isAncestorOf(now))), -1)  # fmt: skip
+        target = panels[(at + step) % len(panels)]
+        chain = target if target.focusPolicy() != Qt.FocusPolicy.NoFocus else None
+        if chain is None:  # a container: its first control that takes focus
+            chain = next((c for c in target.findChildren(QWidget)
+                          if c.focusPolicy() != Qt.FocusPolicy.NoFocus and c.isVisible()
+                          and c.isEnabled()), target)  # fmt: skip
+        dock = next((d for d in self.docks.panels.values() if d.isAncestorOf(target)), None)
+        if dock is not None and dock.isHidden():
+            dock.show()
+        chain.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        self.focused_panel = target
+        return chain
+
+    def _show_run(self, run_id: str) -> None:
+        """A run's results in the view, from a toast's Show results."""
+        self.raise_()
+        self.tree.select(Node("run", run_id, "", ""))
+        self._select_run(run_id)
 
     def _select_run(self, run_id: str, key: str | None = None) -> None:
         """A run's results in the view; `key` picks one of them (from the model tree)."""
@@ -2749,16 +2814,34 @@ class MainWindow(QMainWindow):
         self.submit(Edit(object=object_id, ops=[EditOp(op="set", path=path, value=value)]))
 
     def background(
-        self, message: str, work, done, *, failed=None, output=None, lock=True, on_event=None
+        self,
+        message: str,
+        work,
+        done,
+        *,
+        failed=None,
+        output=None,
+        lock=True,
+        on_event=None,
+        cancel=None,
+        fraction=None,
     ) -> Task:
         """Run `work(emit)` on the thread pool; `done(result)` back on the GUI thread.
 
         `lock` greys out Mesh and Run meanwhile (one solve at a time); `output` takes
         the lines `emit` sends (default: the Output log). With `on_event`, work is
         called as `work(emit, emit_event)` and the events arrive there (ADR 0054).
+        The status bar shows it (ADR 0045): Cancel sets `cancel` (a threading.Event the
+        work watches), and `fraction()` (None while it can't tell) fills the bar.
         """
         self.statusBar().showMessage(message)
         task = Task(work, events=on_event is not None)
+        self.progress.start(task, message.rstrip("…"), cancel)
+        if fraction is not None:
+            ticker = QTimer(self, interval=500)
+            ticker.timeout.connect(lambda: self.progress.update(task, fraction()))
+            ticker.start()
+            task.ticker = ticker
         if on_event is not None:
             task.signals.event.connect(on_event)
         task.lock = lock
@@ -2785,6 +2868,9 @@ class MainWindow(QMainWindow):
 
     def _finished(self, task: Task) -> None:
         self.tasks.remove(task)
+        self.progress.stop(task)
+        if getattr(task, "ticker", None) is not None:
+            task.ticker.stop()
         if not any(t.lock for t in self.tasks):
             for name in ("mesh", "run"):
                 self.actions_by_name[name].setEnabled(True)

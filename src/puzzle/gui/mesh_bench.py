@@ -240,15 +240,17 @@ class MeshBench(QWidget):
         for title, tools in TOOLS:
             buttons = []
             for kind, name in tools:
-                b = button(name)
+                b = button(name, tool=kind)
                 b.clicked.connect(lambda _=False, k=kind: self.start_tool(k))
                 self.buttons[kind] = b
                 buttons.append(b)
             group(title, buttons)
-        mesh_now = button("Mesh", "Mesh the component with this recipe")
+        mesh_now = button("Mesh", "Mesh the component with this recipe", tool="mesh")
         mesh_now.clicked.connect(self.mesh)
         self.buttons["mesh"] = mesh_now
-        seeds = button("Show seeds", "Where the edges' nodes will fall, before meshing")
+        seeds = button(
+            "Show seeds", "Where the edges' nodes will fall, before meshing", tool="seeds"
+        )
         seeds.clicked.connect(self.show_seeds)
         self.buttons["seeds"] = seeds
         group("Quality", [mesh_now, seeds])
@@ -258,7 +260,9 @@ class MeshBench(QWidget):
             b.setCheckable(True)
             b.clicked.connect(lambda _=False, v=value: self.set_mesher(v))
             self.mesher[value] = b
-        options = button("Gmsh options…", "Any of Gmsh's own mesh options, searchable")
+        options = button(
+            "Gmsh options…", "Any of Gmsh's own mesh options, searchable", tool="gmsh_options"
+        )
         options.clicked.connect(self.edit_gmsh_options)
         self.buttons["gmsh_options"] = options
         group("Mesher", [*self.mesher.values(), options])

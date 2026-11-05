@@ -254,31 +254,39 @@ class Workbench(QWidget):
         button, group = Ribbon.button, self.ribbon.group
 
         self.new_sketch_button = button(
-            "New sketch…", "Draw a profile on a plane or on a picked flat face"
+            "New sketch…", "Draw a profile on a plane or on a picked flat face", tool="sketch"
         )
         self.new_sketch_button.clicked.connect(lambda: self.new_sketch())
         group("Sketch", [self.new_sketch_button])
         for title, kinds in GROUPS:
             buttons = []
             for kind in kinds:
-                b = button(tool_name(kind))
+                b = button(tool_name(kind), tool=kind)
                 b.clicked.connect(lambda _=False, k=kind: self.start_tool(k))
                 self.tool_buttons[kind] = b
                 buttons.append(b)
             if title == "Prepare":
-                check = button("Check", "Gaps, slivers, short edges, overlapping bodies")
+                check = button(
+                    "Check", "Gaps, slivers, short edges, overlapping bodies", tool="check"
+                )
                 check.clicked.connect(self._check)
                 buttons.append(check)
             group(title, buttons)
         from_picks = button(
-            "New from picks…", "Turn on Pick, double-click in the view, then make a selection"
+            "New from picks…",
+            "Turn on Pick, double-click in the view, then make a selection",
+            tool="from_picks",
         )
-        reattach = button("Reattach…", "Review selections an edit or a new file detached")
+        reattach = button(
+            "Reattach…", "Review selections an edit or a new file detached", tool="reattach"
+        )
         from_picks.clicked.connect(self._from_picks)
         reattach.clicked.connect(self._reattach)
         group("Selections", [from_picks, reattach])
         measure = button(
-            "Measure", "Exact length, area, volume, distance and angle: pick in the view"
+            "Measure",
+            "Exact length, area, volume, distance and angle: pick in the view",
+            tool="measure",
         )
         measure.clicked.connect(lambda: self.window.start_measuring())
         group("Inspect", [measure])

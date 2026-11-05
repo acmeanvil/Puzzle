@@ -20,7 +20,7 @@ class ResultsRibbon(Ribbon):
         def group(title: str, entries) -> None:
             buttons = []
             for key, text, tip, slot in entries:
-                b = self.button(text, tip)
+                b = self.button(text, tip, tool=key)
                 b.clicked.connect(lambda _=False, s=slot: s())
                 self.buttons[key] = b
                 buttons.append(b)
