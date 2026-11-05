@@ -41,7 +41,14 @@ from OCP.GeomAbs import (
 from OCP.GProp import GProp_GProps
 from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_VERTEX
 
-from puzzle.geometry.history import NamedShape, _bounds, _size, _static, _subshapes
+from puzzle.geometry.history import (
+    GeometryError,
+    NamedShape,
+    _bounds,
+    _size,
+    _static,
+    _subshapes,
+)
 
 ENTITIES = ("body", "face", "edge", "vertex")
 # Names that only count positions in a file: they may point elsewhere once it changes.
@@ -245,12 +252,77 @@ class SelectionReport:
         }
 
 
+SETS = ("union", "intersection", "difference")  # rules over other selections (ADR 0062)
+
+
 def resolve(selections, named: Named, aliases: dict[str, str] | None = None):
     """Each selection's members on the regenerated shape (see the module docstring).
 
     `aliases`: older names still accepted for a member (the file's "edge-9" for what is
-    now "A|B"); the report keeps the stored name and resolves to the current one."""
-    return [resolve_one(sel, named, aliases or {}) for sel in selections]
+    now "A|B"); the report keeps the stored name and resolves to the current one.
+    A selection whose rule is a set ({"union": [names]}, intersection, difference: the
+    first less the rest) of other selections of the same kind is resolved after them."""
+    reports: dict[str, SelectionReport] = {}
+    pending = []
+    for sel in selections:
+        if sel.rule and set(sel.rule) & set(SETS):
+            pending.append(sel)
+        else:
+            reports[sel.name] = resolve_one(sel, named, aliases or {})
+    while pending:  # sets of sets, in as many passes as they nest
+        ready = [s for s in pending
+                 if all(n in reports for n in next(iter(s.rule.values())))]  # fmt: skip
+        if not ready:
+            names = ", ".join(s.name for s in pending)
+            raise GeometryError(f"selections {names} name selections that are not there, or "
+                                "each other")  # fmt: skip
+        for sel in ready:
+            ((how, names),) = ((k, v) for k, v in sel.rule.items() if k in SETS)
+            groups = [{m.now for m in reports[n].members if m.now} for n in names]
+            if how == "union":
+                hits = set().union(*groups)
+            elif how == "intersection":
+                hits = set.intersection(*groups) if groups else set()
+            else:
+                hits = groups[0].difference(*groups[1:]) if groups else set()
+            reports[sel.name] = SelectionReport(
+                sel.name, sel.entity, [Member(n, "rule", n) for n in sorted(hits)],
+                rule=dict(sel.rule))  # fmt: skip
+            pending.remove(sel)
+    return [reports[sel.name] for sel in selections]
+
+
+def rule_inputs(project, selections) -> list:
+    """Selections whose rules name parameters (ADR 0062 phase 3, rows F4 and F5): each
+    such value (a number, a point's coordinate list) from the project's parameters and
+    geometric operators, so a slider can move a box or change a radius."""
+    if project is None or not any(s.rule for s in selections):
+        return list(selections)
+    from puzzle.operators import parameter_values
+    from puzzle.operators.geometry_data import values
+
+    numbers, found = parameter_values(project), values(project)
+
+    def put(v):
+        if isinstance(v, str):
+            if v in numbers:
+                return numbers[v]
+            if v in found:
+                seq = found[v]
+                return seq[0] if seq and isinstance(seq[0], list) else seq
+            return v
+        if isinstance(v, dict):
+            return {k: put(x) for k, x in v.items()}
+        if isinstance(v, list):
+            return [put(x) for x in v]
+        return v
+
+    out = []
+    for s in selections:
+        if s.rule and not set(s.rule) & set(SETS):
+            s = s.model_copy(update={"rule": put(s.rule)})
+        out.append(s)
+    return out
 
 
 def resolve_one(sel, named: Named, aliases: dict[str, str] | None = None) -> SelectionReport:
@@ -305,6 +377,10 @@ def by_rule(named: Named, entity: str, rule: dict) -> list[str]:
     {"plane": {"axis": "x", "at": 0.0}}   lying in the plane x = 0 (faces, edges, points)
     {"radius": 0.004}                     cylindrical faces or circular edges of radius r
     {"kind": "Cylinder"}                  of one surface or curve kind
+    {"box": {"low": [..], "high": [..]}}  inside a box (ADR 0062: from data)
+    {"near": {"point": [..], "distance": d}}  its centre within d of a point
+    {"normal": {"direction": [..], "within": 5}}  planar faces facing it (degrees)
+    {"min_area": a, "max_area": b}        faces of an area between (either alone)
     """
     tol = max(1e-6 * named.size, 1e-6)  # OCC bounding boxes are padded (CLAUDE.md)
     out = []
@@ -329,7 +405,46 @@ def _obeys(entity: str, s, rule: dict, tol: float) -> bool:
         r = _radius(entity, s)
         if r is None or abs(r - rule["radius"]) > 1e-6 * max(rule["radius"], 1e-9):
             return False
+    if "box" in rule:
+        b, low, high = _bounds(s), rule["box"]["low"], rule["box"]["high"]
+        if any(b[i] < low[i] - tol or b[i + 3] > high[i] + tol for i in range(3)):
+            return False
+    if "near" in rule:
+        centre = props(entity, s)[2]
+        gap = sum((c - p) ** 2 for c, p in zip(centre, rule["near"]["point"], strict=False))
+        if gap**0.5 > rule["near"]["distance"] + tol:
+            return False
+    if "normal" in rule:
+        n = _plane_normal(entity, s)
+        want = rule["normal"]["direction"]
+        size = sum(w * w for w in want) ** 0.5
+        if n is None or not size:
+            return False
+        cos = sum(a * b for a, b in zip(n, want, strict=True)) / size
+        if math.degrees(math.acos(max(-1.0, min(1.0, cos)))) > rule["normal"].get("within", 1.0):
+            return False
+    if "min_area" in rule or "max_area" in rule:
+        if entity != "face":
+            return False
+        area = props(entity, s)[1]
+        if area < rule.get("min_area", 0.0) - tol**2 or area > rule.get("max_area", math.inf):
+            return False
     return True
+
+
+def _plane_normal(entity: str, s):
+    """A planar face's outward normal, else None."""
+    if entity != "face":
+        return None
+    from OCP.GeomAbs import GeomAbs_Plane
+    from OCP.TopAbs import TopAbs_REVERSED
+
+    surface = BRepAdaptor_Surface(s)
+    if surface.GetType() != GeomAbs_Plane:
+        return None
+    d = surface.Plane().Axis().Direction()
+    sign = -1.0 if s.Orientation() == TopAbs_REVERSED else 1.0
+    return (sign * d.X(), sign * d.Y(), sign * d.Z())
 
 
 def _radius(entity: str, s) -> float | None:
@@ -444,7 +559,8 @@ def _resolve_geometry(project, geometry, root, work_dir) -> Resolved:
         path = Path(root) / geometry.source
     files = _file_names(named, import_step(path))
     back = {f: name for entity in files.values() for name, fs in entity.items() for f in fs}
-    return Resolved(named, path, files, back, resolve(geometry.selections, named, back))
+    selections = rule_inputs(project, geometry.selections)
+    return Resolved(named, path, files, back, resolve(selections, named, back))
 
 
 def check_selections(project, geometry, root) -> Resolved:
@@ -586,3 +702,15 @@ __all__ = [
     "rules_for",
     "suggest_rule",
 ]
+
+
+def members_of(project, geometry, named: Named, name: str) -> list[str]:
+    """One selection's current members by name: a rule's (with its data inputs, ADR
+    0062), a set's over the others, or its listed members."""
+    sel = next((s for s in geometry.selections if s.name == name), None)
+    if sel is None:
+        return []
+    if not sel.rule:
+        return list(sel.members)
+    reports = resolve(rule_inputs(project, geometry.selections), named)
+    return next(r for r in reports if r.selection == name).resolved

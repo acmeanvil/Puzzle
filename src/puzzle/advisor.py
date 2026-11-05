@@ -43,6 +43,7 @@ TEXT = {
     "materials": ("Materials", "Every body needs a material with the properties the study uses."),
     "component": ("Component", "Puts the parts, their materials and a mesh recipe together."),
     "mesh": ("Mesh", "Meshing happens when a study runs; meshing now checks it first."),
+    "trust": ("Trust", "A project from elsewhere runs no code until you trust it."),
     "skin_depth": (
         "Skin depth",
         "Eddy currents crowd into a skin δ deep; a conductor's elements should be δ/2 or finer.",
@@ -130,6 +131,13 @@ def advise(
         title, why = TEXT[step]
         out.append(Advice(step, title, state, detail or why, action, label))
 
+    if not project.trusted:  # ADR 0062: its scripts and equations wait for trust
+        from puzzle.trust import holds_code
+
+        held = holds_code(project)
+        if held:
+            add("trust", "needed", f"It holds code ({', '.join(held)}), which won't run "
+                "until you trust the project.", "trust", "Trust this project…")  # fmt: skip
     geometries = project.of_type(Geometry)
     if not geometries:
         add("geometry", "needed", action="import_geometry", label="Import geometry…")

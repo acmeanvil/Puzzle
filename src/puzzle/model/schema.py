@@ -1954,6 +1954,12 @@ class ConstructionGeometry(ProjectObject):
         default="yz", description="plane, with axes: which of the system's planes"
     )
     offset: float = Field(default=0.0, description="plane, with axes: along its normal (m)")
+    drives: dict[str, str] = Field(
+        default_factory=dict,
+        description="values a parameter sets (ADR 0062 phase 3, row D6): offset, or "
+        "origin.0, origin.1, origin.2, start.k, end.k, normal.k, by the parameter's name "
+        "(a Slider, a Number), so a slider moves the plane",
+    )
 
     @model_validator(mode="after")
     def _shape(self) -> ConstructionGeometry:
@@ -1963,8 +1969,31 @@ class ConstructionGeometry(ProjectObject):
             raise ValueError("a plane's normal has no length")
         return self
 
+    def driven(self, project: Project | None) -> ConstructionGeometry:
+        """This construction with its driven values put in from the parameters."""
+        if not self.drives or project is None:
+            return self
+        from puzzle.operators import parameter_values
+
+        values = parameter_values(project)
+        data = self.model_dump()
+        for path, name in self.drives.items():
+            if name not in values:
+                raise ValueError(f"'{self.name}': no parameter '{name}' for its {path}")
+            field, _, index = path.partition(".")
+            if index:
+                vec = list(data[field])
+                vec[int(index)] = values[name]
+                data[field] = tuple(vec)
+            else:
+                data[field] = values[name]
+        return type(self).model_validate(data | {"drives": {}})
+
     def frame(self, project: Project | None = None) -> tuple[np.ndarray, np.ndarray]:
-        """A plane's (origin, unit normal) in global axes; a path's (start, end)."""
+        """A plane's (origin, unit normal) in global axes; a path's (start, end), with
+        any driven values (`drives`) from the project's parameters."""
+        if self.drives and project is not None:
+            return self.driven(project).frame(project)
         if self.type == "path":
             return np.asarray(self.start, float), np.asarray(self.end, float)
         if self.axes is not None and project is not None:
@@ -2137,8 +2166,33 @@ class Operator(ProjectObject):
                   "project_table", "run_history", "history_table", "mode_table",
                   "contact_table", "bolt_table", "nearest", "section", "divide",
                   "clearance", "text", "preview", "toggle", "choice", "slider2d",
-                  "merge_points", "thin_points", "intersection"]  # fmt: skip
+                  "merge_points", "thin_points", "intersection", "points", "grid",
+                  "profile", "script"]  # fmt: skip
     inputs: dict[str, OperatorInput] = Field(default_factory=dict)
+    # ADR 0062 phase 4: a Python script, run apart in a trusted project
+    code: str = Field(default="out = a", description="script: Python; inputs a, b, c, d "
+                      "by name, it sets out")  # fmt: skip
+    returns: Literal["number", "list", "table", "points", "text"] = Field(
+        default="number", description="script: what its out is"
+    )
+    timeout_s: float = Field(default=30.0, gt=0, le=3600, description="script: its time "
+                             "limit (s), stopped past it")  # fmt: skip
+    # ADR 0062 phase 3: geometry from data
+    axes: UUID | None = Field(
+        default=None,
+        description="points: the coordinate system "
+        "its x, y, z are in (cylindrical: r, θ in degrees, z)",
+    )
+    region: Literal["plane", "box"] = Field(default="plane", description="grid: on a "
+                                            "plane or in a box")  # fmt: skip
+    plane: Literal["xy", "yz", "zx"] = Field(
+        default="xy", description="grid: the axis plane at its origin (no construction plane)"
+    )
+    shape: Literal["polyline", "circle", "rectangle", "polygon"] = Field(
+        default="polyline", description="profile: its outline"
+    )
+    centred: bool = Field(default=True, description="profile: a rectangle centred on x, y "
+                          "(else from its corner)")  # fmt: skip
     quantity: str | None = Field(
         default=None, description='reduce, filter: a listed result\'s key, e.g. '
         '"stress:von_mises"; none: the wired field\'s first')  # fmt: skip
@@ -2616,6 +2670,9 @@ class Project:
     schema_version: int = SCHEMA_VERSION
     objects: dict[UUID, ProjectObject] = field(default_factory=dict)
     agent: AgentSettings = field(default_factory=AgentSettings)
+    # ADR 0062 phase 4: whether its code (scripts, equations) may run; never saved. A
+    # project built here is; one loaded from disk is if its folder is trusted.
+    trusted: bool = field(default=True, compare=False)
 
     def add(self, obj: T) -> T:
         if obj.id in self.objects:
@@ -2761,6 +2818,14 @@ class Project:
         from puzzle.errors import Problem
 
         out: list[Problem] = []
+        if not self.trusted:  # ADR 0062 phase 4: its code is held back until trusted
+            from puzzle.trust import holds_code
+
+            held = holds_code(self)
+            if held:
+                out.append(Problem("untrusted", held[0], "this project is not trusted, so "
+                                   f"its code does not run ({', '.join(held)}): trust it "
+                                   "if you know where it came from"))  # fmt: skip
         for obj in self.objects.values():
             out += [
                 Problem(

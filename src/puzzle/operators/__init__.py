@@ -24,7 +24,8 @@ PORT_TYPES = {
     "number": "a quantity with its unit (SI inside)",
     "list": "numbers, or texts",
     "table": "named columns with units",
-    "points": "positions, in metres",
+    "points": "positions, in metres (a table of x, y, z too)",
+    "profile": "a closed outline: a polyline, circle, rectangle or polygon",
     "geometry": "a geometry object",
     "field": "a result on the mesh, per node or element",
     "result": "a run, or a derived result",
@@ -36,6 +37,7 @@ TYPE_WORDS = {
     "list": "List",
     "table": "Table",
     "points": "Points",
+    "profile": "Profile",
     "geometry": "Geometry",
     "field": "Field",
     "result": "Result",
@@ -44,11 +46,13 @@ TYPE_WORDS = {
 }
 # Socket shapes, as Grasshopper and Blender tell types apart at a glance.
 SHAPES = {"number": "diamond", "list": "diamond", "table": "square", "points": "square",
+          "profile": "square",
           "geometry": "square", "field": "circle", "result": "circle",
           "verdict": "triangle", "text": "diamond"}  # fmt: skip
 # Their colours on a light ground (the SVG; the GUI draws the same).
 TYPE_COLOURS = {"number": "#2b8a3e", "list": "#5c940d", "table": "#e67700",
-                "points": "#c2255c", "geometry": "#495057", "field": "#7048e8",
+                "points": "#c2255c", "profile": "#a61e4d", "geometry": "#495057",
+                "field": "#7048e8",
                 "result": "#1c7ed6", "verdict": "#d6336c", "text": "#868e96"}  # fmt: skip
 ANY = tuple(PORT_TYPES)
 
@@ -106,7 +110,9 @@ TYPES: dict[str, OperatorType] = {
         OperatorType(
             "check", "Check", "Results",
             "A number, or a field's extreme, against an allowable: pass or fail, with the "
-            "margin (limit / value − 1 for at most).",
+            "margin (limit / value − 1 for at most). Fed a stress linearization, ASME "
+            "VIII-2's membrane, membrane + bending and primary + secondary checks against "
+            "the allowable S.",
             (PortSpec("value", "Value", ("number", "field")),
              PortSpec("limit", "Limit", ("number",), typed="number")),
             (PortSpec("out", "Verdict", ("verdict",)),
@@ -162,6 +168,61 @@ TYPES: dict[str, OperatorType] = {
              PortSpec("count", "Count", ("number",), typed="number")),
             (PortSpec("out", "List", ("list",)),),
             (),
+        ),
+        # ADR 0062 phase 4: Python in its own environment, in a trusted project only
+        OperatorType(
+            "script", "Python script", "Logic",
+            "Python run apart (numpy, scipy, polars and what you install): its inputs a, "
+            "b, c, d by name, it sets out. Runs only in a trusted project.",
+            tuple(PortSpec(k, k, ("number", "list", "table", "points", "text"),
+                           required=False, typed="number") for k in "abcd"),
+            (PortSpec("out", "Out", ("number", "list", "table", "points", "text")),),
+            ("returns", "timeout_s"),
+        ),
+        # ADR 0062 phase 3: geometry from data, before a solve (operators.geometry_data)
+        OperatorType(
+            "points", "Points", "Geometry",
+            "Points from x, y and z (numbers or lists, a number repeated) or a table's x, "
+            "y, z columns, in a coordinate system if given. A table of x, y, z too.",
+            (PortSpec("x", "x", ("number", "list"), required=False, typed="number"),
+             PortSpec("y", "y", ("number", "list"), required=False, typed="number"),
+             PortSpec("z", "z", ("number", "list"), required=False, typed="number"),
+             PortSpec("table", "Table", ("table",), required=False)),
+            (PortSpec("out", "Points", ("points",)),),
+            ("axes",),
+        ),
+        OperatorType(
+            "grid", "Grid", "Geometry",
+            "A grid of points on a plane (an axis plane at an origin, or a construction "
+            "plane; counts and sizes along it) or in a box (its corners and three counts).",
+            (PortSpec("nu", "Count along u", ("number",), required=False, typed="number"),
+             PortSpec("nv", "Count along v", ("number",), required=False, typed="number"),
+             PortSpec("nw", "Count along z (box)", ("number",), required=False,
+                      typed="number"),
+             PortSpec("size_u", "Size along u", ("number",), required=False, typed="number"),
+             PortSpec("size_v", "Size along v", ("number",), required=False, typed="number"),
+             *(PortSpec(f"{c}0", f"Origin {c} (box: low {c})", ("number",), required=False,
+                        typed="number") for c in "xyz"),
+             *(PortSpec(f"{c}1", f"Box: high {c}", ("number",), required=False,
+                        typed="number") for c in "xyz")),
+            (PortSpec("out", "Points", ("points",)),),
+            ("region", "plane", "target"),
+        ),
+        OperatorType(
+            "profile", "Profile", "Geometry",
+            "A closed outline from data: a polyline through points, a circle, a rectangle "
+            "or a regular polygon, for a face, an extrusion or a revolve to name.",
+            (PortSpec("points", "Points", ("points",), required=False),
+             PortSpec("x", "Centre (corner) x", ("number",), required=False, typed="number"),
+             PortSpec("y", "Centre (corner) y", ("number",), required=False, typed="number"),
+             PortSpec("radius", "Radius", ("number",), required=False, typed="number"),
+             PortSpec("width", "Width", ("number",), required=False, typed="number"),
+             PortSpec("height", "Height", ("number",), required=False, typed="number"),
+             PortSpec("sides", "Sides", ("number",), required=False, typed="number"),
+             PortSpec("angle", "Turned by (deg)", ("number",), required=False,
+                      typed="number")),
+            (PortSpec("out", "Profile", ("profile",)),),
+            ("shape", "centred"),
         ),
         OperatorType(
             "range", "Range", "Data",
@@ -548,6 +609,10 @@ TYPES: dict[str, OperatorType] = {
 # operator menu, the palette, the outline and the skills all use them.
 GROUPS = ("Inputs", "Geometry", "Logic", "Results", "Tables", "Checks", "Outputs")
 GROUP_OF = {
+    "script": "Logic",
+    "points": "Geometry",
+    "grid": "Geometry",
+    "profile": "Geometry",
     "number": "Inputs",
     "slider": "Inputs",
     "series": "Inputs",
@@ -606,6 +671,10 @@ GROUP_OF = {
 }
 # Grasshopper's, Excel's and SQL's names for each (ADR 0064A), so a search finds it.
 ALIASES = {
+    "script": ("python", "code", "ghpython", "custom", "formula"),
+    "points": ("construct point", "point from xyz", "deconstruct point", "coordinates"),
+    "grid": ("square grid", "populate", "point grid", "array of points"),
+    "profile": ("polyline", "circle", "rectangle", "polygon", "outline", "curve"),
     "number": ("constant", "value", "parameter"),
     "slider": ("number slider", "digit scroller", "control knob"),
     "series": ("sequence", "arithmetic series"),
@@ -682,15 +751,27 @@ DATA = frozenset({"number", "slider", "series", "range", "expression", "table", 
                   "measure", "join", "stack", "pivot", "unpivot", "distinct", "fill_missing",
                   "rolling", "project_table", "divide", "clearance", "text", "toggle",
                   "choice", "slider2d", "merge_points", "thin_points",
-                  "intersection"})  # fmt: skip
+                  "intersection", "points", "grid", "profile", "script"})  # fmt: skip
 # Table operators (ADR 0064): data operators that read tables, so pre-solve when their
 # table is (a file, a typed table) and post-solve when it comes from a run.
+
+
+def first_type(op) -> str:
+    """An operator's first output's type: a script's from its `returns`."""
+    if op.type == "script":
+        return op.returns
+    outputs = TYPES[op.type].outputs
+    return outputs[0].type if outputs else ""
 
 
 def accepts(spec: PortSpec, given: str) -> bool:
     """Whether an input port takes an output of type `given` (a number where a list is
     wanted, as a one-item list)."""
-    return given in spec.types or (given == "number" and "list" in spec.types)
+    return (
+        given in spec.types
+        or (given == "number" and "list" in spec.types)
+        or (given == "points" and "table" in spec.types)
+    )  # points are a table too
 
 
 def outputs_of(project, obj) -> list[tuple[str, str, str]]:
@@ -704,7 +785,8 @@ def outputs_of(project, obj) -> list[tuple[str, str, str]]:
     )
 
     if isinstance(obj, Operator):
-        return [(p.key, p.label, p.type) for p in TYPES[obj.type].outputs]
+        return [(p.key, p.label, first_type(obj) if i == 0 else p.type)
+                for i, p in enumerate(TYPES[obj.type].outputs)]  # fmt: skip
     if isinstance(obj, ParameterSet):
         return [(k, k, "number") for k in obj.values]
     if isinstance(obj, ResultProbe):
@@ -1055,7 +1137,7 @@ def parameter_values(project, overrides: dict | None = None) -> dict[str, float]
 
     out = {k: q.to_si() for ps in project.of_type(ParameterSet) for k, q in ps.values.items()}
     numbers = [o for o in pre_solve(project) if TYPES[o.type].outputs
-               and TYPES[o.type].outputs[0].type == "number"
+               and first_type(o) == "number"
                and not reads_geometry(project, o)]  # fmt: skip
     if not numbers:
         return out
@@ -1149,3 +1231,57 @@ def with_values(project, overrides: dict):
         unit = DIMENSIONS[kind][1] if kind in DIMENSIONS else "dimensionless"
         op.inputs["value"] = OperatorInput(value=Quantity(value=float(value), unit=unit))
     return out
+
+
+def rename_references(project, old: str, new: str) -> list[str]:
+    """A parameter renamed (a Number, Slider or other pre-solve operator, ADR 0062): every
+    place naming it by its text follows. History arguments equal to it (and a sketch's
+    dimensions), sweeps' and optimisations' variables, and the name as a word in
+    expressions and derived-result equations. Edits `project` in place; returns the
+    objects changed, by name."""
+    import re
+
+    from puzzle.geometry.history import WORDS
+    from puzzle.model.schema import Geometry, Operator, Optimisation, ResultDefinition, Study
+
+    word = re.compile(rf"(?<![\w.]){re.escape(old)}(?![\w(])") if old.isidentifier() else None
+    changed = []
+
+    def walk(v, key=""):
+        if key in WORDS and key not in ("profile", "sketch", "positions"):  # other things
+            return v
+        if isinstance(v, dict):
+            return {k: walk(x, k) for k, x in v.items()}
+        if isinstance(v, list):
+            return [walk(x, key) for x in v]
+        return new if v == old else v
+
+    def text(s):
+        return word.sub(new, s) if word and isinstance(s, str) else s
+
+    for obj in list(project.objects.values()):
+        data, before = obj.model_dump(mode="json"), None
+        if isinstance(obj, Geometry):
+            before = data["history"]
+            data["history"] = [s | {"args": walk(s["args"])} for s in before]
+        elif isinstance(obj, Study):
+            before = data["steps"]
+            data["steps"] = [s | ({"parameters": [p | {"name": new if p["name"] == old else
+                                                      p["name"]} for p in s["parameters"]]}
+                                  if s.get("parameters") else {}) for s in before]  # fmt: skip
+        elif isinstance(obj, Optimisation):
+            before = data["variables"]
+            data["variables"] = [v | {"name": new if v["name"] == old else v["name"]}
+                                 for v in before]  # fmt: skip
+        elif isinstance(obj, (Operator, ResultDefinition)) and obj.expression:
+            before = data["expression"]
+            data["expression"] = text(before)
+        else:
+            continue
+        key = {Geometry: "history", Study: "steps", Optimisation: "variables"}.get(
+            type(obj), "expression"
+        )
+        if data[key] != before:
+            project.objects[obj.id] = type(obj).model_validate(data)
+            changed.append(obj.name)
+    return changed

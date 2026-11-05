@@ -386,3 +386,21 @@ def test_a_morph_handle_from_the_study_menu(window):
         0.0, 0.0, 1.0)  # fmt: skip
     w.session.undo()
     assert w.session.project.objects[study.id].morph is None
+
+
+def test_selecting_a_filter_previews_its_field(window):
+    """ADR 0062: a Filter's kept values drawn on the mesh, the rest muted."""
+    from puzzle.commands.model import Create
+    from puzzle.gui import operators as gui_ops
+
+    w = window
+    study = _study(w)
+    data = {"name": "High stress", "type": "filter", "keep": "above",
+            "quantity": "stress:von_mises",
+            "inputs": {"result": {"source": str(study.id), "port": "result"},
+                       "limit": {"value": {"value": 1, "unit": "MPa"}}}}  # fmt: skip
+    w.submit(Create(kind="operator", data=data))
+    assert gui_ops.preview_field(w, _op(w, "High stress"))
+    shown = w.viewport.shown["field_values"]
+    assert shown["title"].startswith("High stress") and shown["nodes"] > 0
+    assert 0 < shown["extrapolated"] < shown["nodes"]  # some values left out, muted

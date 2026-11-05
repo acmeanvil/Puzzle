@@ -127,6 +127,14 @@ def run_study(
             f"no adapter installed for {study.solver}", code="unsupported", path=study.name
         )
     adapter = adapters[study.solver]()
+    comp = project.objects.get(study.component)
+    if comp is not None and any(p.type == "custom_pde" and p.equation for p in comp.physics):
+        from puzzle import trust
+
+        try:  # ADR 0062: a weak form is code, run in a trusted project only
+            trust.require(project, "custom PDE equation")
+        except PuzzleError as exc:
+            raise StudyError(exc.message, code=exc.code, path=study.name) from None
     problems = project.validate() + adapter.check(project, study)
     if problems:
         raise StudyError("; ".join(problems), path=study.name, details={"problems": problems})

@@ -146,10 +146,17 @@ def ops_of(geometry, project=None, _seen=()) -> list[Op]:
     of another part (ADR 0048) carries that part's own operations (or its file), so
     regenerating stays a function of the operations alone; it needs `project`."""
     out = []
+    found = None
     for s in geometry.history:
         if s.suppressed:
             continue
         args = dict(s.args)
+        if project is not None:  # ADR 0062 phase 3: points, profiles, list entries
+            from puzzle.operators.geometry_data import substitute, values
+
+            found = values(project) if found is None else found
+            if found:
+                args = substitute(args, found)
         if s.kind == "section":
             args["_part"] = _section_source(geometry, args.get("part"), project, _seen)
         out.append(Op(s.kind, s.name, args))
@@ -195,6 +202,7 @@ WORDS = {
     "faces",  # a split_face's faces, by name
     "direction",  # a split_face's projection: both, forward or backward
     "along",  # a sweep's or pipe's path: an earlier spline or polyline step (ADR 0065)
+    "positions",  # a pattern's offsets: a Points operator's, put in by ops_of (ADR 0062)
     "frame",  # a sweep's frame along its path
     "kind",  # a deform's kind: twist, taper, bend or box
     "toward",  # a bend's direction
@@ -696,24 +704,64 @@ def _rotate(state, op, a):
     _transform(state, trsf)
 
 
+def _pattern_moves(state, a) -> list:
+    """Each copy's transformation after the original (ADR 0062 phase 3 adds the last
+    three): circular (`angle` per step about `axis` through x, y, z); linear (dx, dy, dz
+    per step, and a second direction dx2, dy2, dz2 for `count2` rows); at `positions`
+    (offsets from the original, e.g. a Points operator's); or `along` an earlier
+    polyline or spline, `count` copies at equal lengths from its start."""
+    out = []
+    if a.get("positions"):
+        for p in a["positions"][1:] if a.get("skip_first", True) else a["positions"]:
+            x, y, z = (list(p) + [0.0, 0.0, 0.0])[:3]
+            trsf = gp_Trsf()
+            trsf.SetTranslation(gp_Vec(float(x), float(y), float(z)))
+            out.append(trsf)
+        return out
+    count = int(a.get("count", 2))
+    if a.get("along"):
+        from OCP.BRepAdaptor import BRepAdaptor_CompCurve
+        from OCP.GCPnts import GCPnts_AbscissaPoint
+
+        from puzzle.geometry.sweeps import path_wire
+
+        curve = BRepAdaptor_CompCurve(path_wire(state, {"along": a["along"]}))
+        length = GCPnts_AbscissaPoint.Length_s(curve)
+        first = curve.Value(curve.FirstParameter())
+        for i in range(1, count):
+            at = GCPnts_AbscissaPoint(curve, length * i / (count - 1), curve.FirstParameter())
+            p = curve.Value(at.Parameter())
+            trsf = gp_Trsf()
+            trsf.SetTranslation(gp_Vec(first, p))
+            out.append(trsf)
+        return out
+    rows = int(a.get("count2", 1))
+    for j in range(rows):
+        for i in range(count):
+            if i == 0 and j == 0:
+                continue
+            trsf = gp_Trsf()
+            if "angle" in a:
+                point = gp_Pnt(a.get("x", 0.0), a.get("y", 0.0), a.get("z", 0.0))
+                trsf.SetRotation(gp_Ax1(point, _axis_dir(a)), math.radians(a["angle"] * i))
+            else:
+                trsf.SetTranslation(gp_Vec(
+                    a.get("dx", 0.0) * i + a.get("dx2", 0.0) * j,
+                    a.get("dy", 0.0) * i + a.get("dy2", 0.0) * j,
+                    a.get("dz", 0.0) * i + a.get("dz2", 0.0) * j))  # fmt: skip
+            out.append(trsf)
+    return out
+
+
 def _pattern(state, op, a):
-    """Copies of an earlier tool operation: linear (dx, dy, dz per step) or circular
-    (angle per step about `axis` through x, y, z); copy i is named `<feature>#<i>`."""
+    """Copies of an earlier tool operation (`_pattern_moves`); copy i is named
+    `<feature>#<i>`, from 2."""
     feature = op.args["feature"]
     if feature not in state.tools:
         raise GeometryError(f"pattern '{op.name}': no earlier tool operation '{feature}'")
     kind, fa = state.tools[feature]
-    for i in range(2, int(a["count"]) + 1):
+    for i, trsf in enumerate(_pattern_moves(state, a), start=2):
         tool, names = TOOLS[kind](state, dict(fa))
-        trsf = gp_Trsf()
-        if "angle" in a:
-            point = gp_Pnt(a.get("x", 0.0), a.get("y", 0.0), a.get("z", 0.0))
-            trsf.SetRotation(gp_Ax1(point, _axis_dir(a)), math.radians(a["angle"] * (i - 1)))
-        else:
-            k = i - 1
-            trsf.SetTranslation(
-                gp_Vec(a.get("dx", 0.0) * k, a.get("dy", 0.0) * k, a.get("dz", 0.0) * k)
-            )
         mk = BRepBuilderAPI_Transform(tool, trsf, True)
         moved = {n: _list(mk.ModifiedShape(f) for f in fs) for n, fs in names.items()}
         copy = Op(kind, f"{feature}#{i}", {"mode": fa.get("mode", "add")})

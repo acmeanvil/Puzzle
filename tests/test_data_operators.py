@@ -224,3 +224,30 @@ def test_a_slider_drives_a_history_argument():
     shape = shape_of(p, geo, ".")
     assert volume_of(shape) == pytest.approx(0.03 * 0.02 * 0.01, rel=1e-9)
     assert np.isclose(parameter_values(p)["width"], 0.03)
+
+
+def test_renaming_a_parameter_renames_what_names_it(tmp_path):
+    """ADR 0062: renaming a Slider follows into history arguments, sweeps, an
+    expression and a derived result's equation, in one command; undo takes it back."""
+    from puzzle.commands import Session
+    from puzzle.commands.model import Edit, EditOp
+    from puzzle.project import save_project
+
+    p = Project("p")
+    slider = p.add(Operator(name="width", type="slider", inputs={"value": q(30, "mm")}))
+    box = HistoryStep(kind="box", name="B", args={"dx": "width", "dy": 0.02, "dz": 0.01,
+                                                 "body": "width"})  # fmt: skip
+    p.add(Geometry(name="Plate", history=[box]))
+    p.add(Operator(name="Area", type="expression", expression="width * 2 + widths"))
+    save_project(p, tmp_path)
+    s = Session(tmp_path)
+    s.submit(Edit(object="width", ops=[EditOp(op="set", path="name", value="span")]))
+    geo = next(o for o in s.project.objects.values() if o.name == "Plate")
+    assert geo.history[0].args["dx"] == "span"
+    assert geo.history[0].args["body"] == "width"  # a body's name, not the parameter
+    area = next(o for o in s.project.objects.values() if o.name == "Area")
+    assert area.expression == "span * 2 + widths"  # whole words only
+    assert s.project.objects[slider.id].name == "span"
+    s.undo()
+    geo = next(o for o in s.project.objects.values() if o.name == "Plate")
+    assert geo.history[0].args["dx"] == "width"

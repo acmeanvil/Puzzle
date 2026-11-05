@@ -116,6 +116,14 @@ python = "3.12.*"
 mmgpy = ">=0.18"
 numpy = ">=1.26"
 
+# ADR 0062 phase 4: the Python environment script operators run in, apart from Puzzle's
+# own (a package a script needs can't break Puzzle); `puzzle scripts add PACKAGE` adds to it.
+[feature.scripts.dependencies]
+python = "3.12.*"
+numpy = ">=1.26"
+scipy = ">=1.11"
+polars = ">=1.0"
+
 [feature.code-aster]
 platforms = ["linux-64", "win-64"]
 
@@ -131,4 +139,5 @@ calculix-pardiso = { features = ["calculix-pardiso"], no-default-feature = true 
 fenicsx = { features = ["fenicsx"], no-default-feature = true }
 code-aster = { features = ["code-aster"], no-default-feature = true }
 netgen = { features = ["netgen"], no-default-feature = true }
+scripts = { features = ["scripts"], no-default-feature = true }
 mmg = { features = ["mmg"], no-default-feature = true }

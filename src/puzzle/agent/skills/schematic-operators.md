@@ -1,6 +1,6 @@
 ---
 name: schematic-operators
-description: operators: results as numbers and verdicts (max stress, pass/fail, a plot over steps or a sweep); sliders and expressions as parameters; a list as a sweep's points
+description: operators: results as numbers and verdicts (pass/fail, ASME checks); sliders and expressions as parameters; points, grids, profiles and patterns from data; Python scripts
 adr: 0062
 ---
 Operators are project objects that compute, wired together like Grasshopper's nodes.
@@ -88,6 +88,42 @@ Inputs can also be set with `submit`: `{"command": "edit", "object": "Strength",
   `inconsistent`. Loops are an optimisation's job (ADR 0063).
 - In the GUI, a slider dragged previews the geometry it drives and never solves.
   Letting go writes one undoable command.
+
+## Geometry from data
+
+- **Points** (x, y, z numbers or lists, or a table's x, y, z columns; `axes` a
+  coordinate system), **Grid** (`region` plane: counts nu, nv and sizes along an axis
+  `plane` at an origin or a construction plane `target`; box: corners x0..z1 and nu,
+  nv, nw) and **Profile** (`shape` polyline through Points, circle, rectangle
+  `centred`, polygon with `sides` and `angle`) compute before a solve.
+- A history argument names them as it names a Number: `profile: "Hex"` on a face,
+  extrude or revolve; `points: "P"` on a polyline or spline; a pattern's
+  `positions: "Spots"` (offsets from the original, the first the original itself);
+  `"sizes[2]"` or `"P[0].x"` for one entry, in a sketch's dimensions too.
+- A pattern also takes a second direction (`count2`, `dx2`, `dy2`, `dz2`) or `along`
+  an earlier polyline or spline (`count` copies at equal lengths).
+- Points are a table of x, y, z: wire them into any table operator.
+- A selection's rule may name parameters (`{"box": {"low": [...], "high": ["reach",
+  0.02, 0.01]}}`), and takes `box`, `near` (point, distance), `normal` (direction,
+  within degrees), `min_area`/`max_area`, or is a set of other selections:
+  `{"union": [...]}`, `{"intersection": [...]}`, `{"difference": [first, rest...]}`.
+- A construction plane's `drives` maps a value to a parameter
+  (`{"origin.0": "cut_at"}`, `{"offset": "h"}`): a slider moves the plane.
+- A Check fed a stress linearization runs ASME VIII-2's three checks against the
+  limit as the allowable S; the verdict is the worst ratio's.
+- Renaming a Number or Slider renames what names it (history, sweeps, expressions).
+
+## Python scripts
+
+A `script` operator's `code` sees inputs a, b, c, d (a number in SI, a list, a table as
+{column: [values]}, points as [[x, y, z], ...], a text) and sets `out`, as its `returns`
+says (number, list, table, points, text). It runs in the pixi `scripts` environment
+(numpy, scipy, polars; `puzzle scripts add PACKAGE`), with `timeout_s`, in an empty
+folder, never reading the project (macOS denies it). It runs only in a **trusted**
+project: one from elsewhere waits until the user trusts it (Project → Trust this
+project…, `puzzle trust`); the problem `untrusted` says so. Never ask to trust a
+project yourself. Below autonomy "act", writing a script (or a custom PDE equation) is
+proposed, and the user accepts it.
 
 ## Read them
 

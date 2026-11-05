@@ -75,6 +75,10 @@ def save_as(root: Path, dest: Path, name: str | None = None, version: int | None
     if start is not None:  # the version's files in place of the current ones
         versions.restore_files(dest, start)
 
+    from puzzle import trust
+
+    if trust.is_trusted(root):  # a copy made here of a trusted project (ADR 0062)
+        trust.trust(dest)
     project = load_project(dest)
     project.name = name or project.name
     out = Copied(dest, project.name)

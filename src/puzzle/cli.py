@@ -479,6 +479,16 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("value", nargs="?", help="e.g. engineering; omit to show the choices")
     p.set_defaults(handler=_settings)
 
+    p = sub.add_parser("trust", help="let a project's scripts and equations run (ADR 0062)")
+    p.add_argument("project", type=Path)
+    p.add_argument("--revoke", action="store_true", help="stop trusting it")
+    p.set_defaults(handler=_trust)
+
+    p = sub.add_parser("scripts", help="the Python environment scripts run in (ADR 0062)")
+    p.add_argument("action", choices=["list", "add"])
+    p.add_argument("package", nargs="?", help="add: a conda-forge package, e.g. sympy")
+    p.set_defaults(handler=_scripts)
+
     p = sub.add_parser("agent-key", help="store, check or remove the agent's API key")
     p.add_argument("action", choices=["set", "status", "clear"])
     p.add_argument("--provider", default="anthropic", choices=["anthropic", "openai"])
@@ -1413,6 +1423,50 @@ def _field_check(args) -> int:
               f"{report['tolerance'] * 1e3:.3g} mm; farthest {far:.3g} mm")  # fmt: skip
     for w in report["warnings"]:
         print(f"  warning: {w}")
+    return 0
+
+
+def _trust(args) -> int:
+    from puzzle import trust
+    from puzzle.project.store import load_project
+
+    project = load_project(args.project)
+    if args.revoke:
+        trust.revoke(args.project)
+        print(f"'{project.name}' is no longer trusted: its scripts and equations won't run")
+        return 0
+    held = trust.holds_code(project)
+    trust.trust(args.project)
+    print(f"'{project.name}' is trusted" + (f"; its code can run: {', '.join(held)}" if held
+                                            else ""))  # fmt: skip
+    return 0
+
+
+def _scripts(args) -> int:
+    """List the scripts environment's packages, or add one (pixi, beside Puzzle's)."""
+    import subprocess
+
+    from puzzle.operators.scripts import ENVIRONMENT, python
+
+    exe = python()
+    if exe is None:
+        print("no scripts environment: pixi install -e scripts", file=sys.stderr)
+        return 1
+    if args.action == "list":
+        done = subprocess.run(["pixi", "list", "-e", ENVIRONMENT], capture_output=True,
+                              text=True)  # fmt: skip
+        print(done.stdout or done.stderr)
+        return done.returncode
+    if not args.package:
+        print("say which package to add", file=sys.stderr)
+        return 2
+    steps = [["pixi", "add", "--feature", ENVIRONMENT, args.package],
+             ["pixi", "install", "-e", ENVIRONMENT]]  # fmt: skip
+    for step in steps:
+        done = subprocess.run(step)
+        if done.returncode:
+            return done.returncode
+    print(f"{args.package} is in the scripts environment")
     return 0
 
 

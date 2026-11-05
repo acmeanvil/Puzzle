@@ -420,14 +420,11 @@ def _edge_points(ctx, op, geo, n: int):
     from OCP.BRepAdaptor import BRepAdaptor_Curve
     from OCP.GCPnts import GCPnts_AbscissaPoint, GCPnts_UniformAbscissa
 
-    from puzzle.geometry.naming import by_rule, named_geometry
+    from puzzle.geometry.naming import members_of, named_geometry
 
     named = named_geometry(ctx.project, geo, ctx.root or ".")
     sel = next((s for s in geo.selections if s.name == op.selection), None)
-    if sel is not None:
-        names = by_rule(named, sel.entity, sel.rule) if sel.rule else list(sel.members)
-    else:
-        names = [op.selection]
+    names = [op.selection] if sel is None else members_of(ctx.project, geo, named, sel.name)
     edges = [e for name in names for e in named.of.get("edge", {}).get(name, [])]
     if not edges:
         raise PuzzleError(f"'{op.name}': {geo.name} has no edge '{op.selection}'",
@@ -489,7 +486,7 @@ def _placed(ctx, comp, text: str):
 
     from puzzle.geometry.contacts import _placement
     from puzzle.geometry.measure import _cast
-    from puzzle.geometry.naming import by_rule, named_geometry
+    from puzzle.geometry.naming import members_of, named_geometry
     from puzzle.model.schema import Geometry
 
     part_name, _, sel = text.partition("/")
@@ -502,7 +499,7 @@ def _placed(ctx, comp, text: str):
         s = next((x for x in geo.selections if x.name == sel), None)
         if s is None:
             raise PuzzleError(f"{geo.name} has no selection '{sel}'", code="not_found")
-        members = by_rule(named, s.entity, s.rule) if s.rule else list(s.members)
+        members = members_of(ctx.project, geo, named, s.name)
         entity = s.entity
     else:
         entity, members = "body", list(named.of.get("body", {}))

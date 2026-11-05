@@ -119,6 +119,22 @@ def show(window, op) -> None:
     panel.add_rows("Output", [("Shows", text)])
     if op.type == "preview":
         preview(window, op)
+    if op.type == "filter":  # ADR 0062: the field it keeps, on the mesh it came from
+        preview_field(window, op)
+    if op.type == "script":  # ADR 0062 phase 4: its code in a box of its own
+        from puzzle.operators.scripts import imports, missing
+
+        panel.add_button("Code", "Edit code…", lambda: edit_code(window, op))
+        try:
+            needs, lacking = imports(op.code), missing(op.code)
+        except PuzzleError as exc:
+            needs, lacking = [], [exc.message]
+        rows = [("Imports", ", ".join(needs) or "the standard library only")]
+        if lacking:
+            rows.append(("Not installed", ", ".join(lacking) + " (puzzle scripts add …)"))
+        if not window.session.project.trusted:
+            rows.append(("Runs", "not until the project is trusted (Project → Trust…)"))
+        panel.add_rows("Script", rows)
     viewer = getattr(window, "table_view", None)
     if viewer is not None:
         viewer.show_table(op)  # a table's rows in the Table tab (ADR 0064)
@@ -232,6 +248,59 @@ def use_as_field(window, op):
 PREVIEWED = 200  # points a Preview pins at most: labels beyond that are clutter
 
 
+def edit_code(window, op):
+    """A script's code in one form (multi-line), written as one Edit."""
+    from puzzle.commands.model import Edit, EditOp
+    from puzzle.gui.quick_form import Ask
+
+    got = window.ask_form(f"{op.name}: code", [
+        Ask("code", "Python (inputs a, b, c, d; set out)", kind="multiline", default=op.code),
+    ])  # fmt: skip
+    if got is None or got["code"] == op.code:
+        return None
+    return window.submit(Edit(object=str(op.id), ops=[EditOp(op="set", path="code",
+                                                             value=got["code"])]))  # fmt: skip
+
+
+def preview_field(window, op) -> bool:
+    """A Filter's field drawn in the 3D view: its kept values on its selection (or the
+    whole model), the values it leaves out in the muted colour. Returns whether drawn."""
+    import numpy as np
+
+    from puzzle.gui import theme
+    from puzzle.operators import evaluate as ev
+
+    try:
+        ctx = ev.Context(window.session.project, window._store(), root=window.session.root)
+        fv = ev.value(ctx, op)
+    except PuzzleError as exc:
+        window.statusBar().showMessage(exc.message, 8000)
+        return False
+    if not isinstance(fv, ev.FieldValue):
+        return False
+    values = np.asarray(fv.values, float)
+    values = values[:, 0] if values.ndim > 1 else values
+    if fv.location == "element":  # drawn per node: each element's value on its nodes
+        from puzzle.post.estimates import nodal
+        from puzzle.results.model import Field
+
+        field = nodal(fv.mesh, Field("filtered", "element", [""], fv.ids, values[:, None]))
+        ids, values = field.ids, field.values[:, 0]
+    else:
+        ids = fv.ids
+    left_out = ~np.isfinite(values)
+    from puzzle.model.units import DIMENSIONS
+
+    kind = fv.item.unit  # a kind ("pressure"); the view wants its SI unit
+    unit = DIMENSIONS[kind][1] if kind in DIMENSIONS else ""
+    window.viewport.show_field_values(
+        fv.mesh, fv.selection, ids, np.where(left_out, np.nan, values), left_out,
+        title=f"{op.name}: {fv.label or fv.item.label}", unit=unit,
+        beyond_colour=theme.current().muted,
+    )  # fmt: skip
+    return True
+
+
 def preview(window, op) -> int:
     """A Preview operator's table drawn in the 3D view (ADR 0064A row I1): each row's
     x, y, z pinned with its `column`'s value as the label (in display units), at most
@@ -264,6 +333,15 @@ def choices(window, op, path: str):
     project = window.session.project
     if op.type == "measure":  # ADR 0064: what to measure, by name
         return _measure_choices(project, op, path)
+    if path == "axes" and op.type == "points":  # ADR 0062 phase 3: by name, never an id
+        from puzzle.model.schema import CoordinateSystem
+
+        return [("Global", None)] + [(c.name, str(c.id)) for c in project.of_type(CoordinateSystem)]
+    if path == "target" and op.type == "grid":
+        from puzzle.model.schema import ConstructionGeometry
+
+        planes = [c for c in project.of_type(ConstructionGeometry) if c.type == "plane"]
+        return [("An axis plane at the origin", None)] + [(c.name, str(c.id)) for c in planes]
     if path == "column" and op.type != "list":  # a table's columns, as it is now
         columns = table_columns(window, op)
         if columns:

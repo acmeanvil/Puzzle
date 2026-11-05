@@ -218,6 +218,9 @@ def _project(window, menu: QMenu) -> None:
     menu.addAction(a["save_version"])
     _add(menu, "Versions…", lambda: window.open_versions(),
          "The project's versions: filter them, see what each held, restore one")  # fmt: skip
+    _add(menu, "Trust this project…", lambda: trust_project(window),
+         "Let its Python scripts and custom equations run: only if you know where it came "
+         "from (ADR 0062)")  # fmt: skip
     _add(menu, "Roll back to last known good…", lambda: window.roll_back_good(),
          "Restore the latest version marked known good (a solved state)")  # fmt: skip
     menu.addSeparator()
@@ -561,6 +564,28 @@ def _convergence(window) -> None:
     study = current_study(window, "Check mesh convergence")
     if study is not None:
         convergence_panel.check(window, str(study.id))
+
+
+def trust_project(window) -> bool:
+    """Trust the open project, after saying what code it holds (ADR 0062)."""
+    from puzzle import trust
+
+    project = window.session.project
+    if project.trusted:
+        window.statusBar().showMessage(f"'{project.name}' is trusted already", 6000)
+        return True
+    held = trust.holds_code(project)
+    what = ("It holds code: " + ", ".join(held) + ". ") if held else ""
+    if not window.ask_yes(
+        "Trust this project",
+        f"{what}Trust '{project.name}' and let its "
+        "scripts and equations run? Only if you know where it came from.",
+    ):
+        return False
+    trust.trust(window.session.root)
+    project.trusted = True
+    window.refresh()
+    return True
 
 
 def _skin(window) -> None:

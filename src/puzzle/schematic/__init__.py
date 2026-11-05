@@ -670,21 +670,33 @@ def _model_wires(project: Project, out: Schematic, pre: set) -> None:
     for op in project.of_type(Operator):
         if op.id in pre and str(op.id) in out.nodes:
             by_name.setdefault(op.name, (str(op.id), "out"))
+    import re
+
+    from puzzle.operators import TYPES, first_type
+
+    kinds = {op.name: first_type(op) for op in project.of_type(Operator)
+             if op.id in pre and TYPES[op.type].outputs}  # fmt: skip
+    entry = re.compile(r"^\s*(.+?)\s*\[\d+\](?:\.[xyz])?\s*$")  # "P[2].x": one of P's
     for g in project.of_type(Geometry):
         node = out.nodes.get(str(g.id))
         if node is None:
             continue
         for i, step in enumerate(g.history):
             for key, value in step.args.items():
-                if not isinstance(value, str) or value not in by_name:
+                if not isinstance(value, str):
                     continue
-                src, port = by_name[value]
+                m = entry.match(value)
+                name = m.group(1) if m and m.group(1) in by_name else value
+                if name not in by_name:
+                    continue
+                src, port = by_name[name]
                 if src not in out.nodes:
                     continue
+                kind = "number" if m else kinds.get(name, "number")  # a points' or profile's
                 pkey = f"arg:{i}:{key}"
-                node.ports.append(Port(pkey, f"{step.name}: {key}", "in", type="number"))
+                node.ports.append(Port(pkey, f"{step.name}: {key}", "in", type=kind))
                 out.wires.append(Wire(src, node.id, "data", port, pkey, value, "",
-                                      str(g.id), "number"))  # fmt: skip
+                                      str(g.id), kind))  # fmt: skip
     for st in project.of_type(Study):
         node = out.nodes.get(str(st.id))
         if node is None:

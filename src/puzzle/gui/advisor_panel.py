@@ -146,6 +146,10 @@ class AdvisorPanel(QWidget):
             comp = comps[0] if comps else None
         if study is None and comp is not None:
             study = next((s for s in project.of_type(Study) if s.component == comp.id), None)
+        if action == "trust":  # ADR 0062
+            from puzzle.gui.main_menu import trust_project
+
+            return trust_project(w)
         if action.startswith("skin_depth:"):  # ADR 0047
             return add_skin_refinement(w, action.split(":", 1)[1])
         if action.startswith("convergence:"):  # ADR 0066

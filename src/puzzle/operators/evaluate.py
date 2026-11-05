@@ -352,7 +352,14 @@ def _input(ctx: Context, op, key: str):
                 "is not wired", code="inconsistent", path=op.name)  # fmt: skip
         return None
     if inp.source is not None:
-        return source(ctx, inp.source, inp.port)
+        got = source(ctx, inp.source, inp.port)
+        if (
+            getattr(got, "type", None) == "points"
+            and spec is not None
+            and ("points" not in spec.types and "table" in spec.types)
+        ):
+            return got.table()  # points are a table of x, y, z too (ADR 0062 phase 3)
+        return got
     return typed(inp.value)
 
 
@@ -369,8 +376,9 @@ def typed(v) -> Number | Text:
     return Text(str(v))
 
 
-def _probe(ctx: Context, probe) -> Number:
-    """A result tool's value (ADR 0032, 0042) at the context's step and point."""
+def _probe_found(ctx: Context, probe):
+    """A result tool's whole answer (ADR 0032, 0042) at the context's step and point,
+    and the result item it read."""
     from puzzle.model.schema import Study
     from puzzle.post import probes
 
@@ -382,8 +390,33 @@ def _probe(ctx: Context, probe) -> Number:
         r = source(ctx, probe.source, "result")
     item = probes._item(probe, r.items)
     step = _step(ctx, r.results, item, probe.step)
-    found = probes.at_step(r.mesh, step, item, probe)
+    return probes.at_step(r.mesh, step, item, probe), item
+
+
+def _probe(ctx: Context, probe) -> Number:
+    """A result tool's value (ADR 0032, 0042) at the context's step and point."""
+    found, item = _probe_found(ctx, probe)
     return Number(float(found["value"]), item.unit, probe.name, found.get("point"))
+
+
+def _asme(ctx: Context, op, probe) -> dict[str, Any]:
+    """A Check on a stress linearization (ADR 0042, 0062): VIII-2 5.2.2.4's elastic
+    checks against the allowable S (the limit wired or typed, else the tool's own),
+    passing when all do; the verdict and margin are the worst ratio's."""
+    from puzzle.post.linearize import checks
+
+    found, _ = _probe_found(ctx, probe)
+    given = _input(ctx, op, "limit")
+    allowable = _number(op, given, "limit").value if given is not None else probe.allowable
+    if not allowable:
+        raise PuzzleError(f"'{op.name}': give the allowable stress S as its limit, or on the "
+                          f"linearization '{probe.name}'", code="inconsistent")  # fmt: skip
+    rows = checks(found, allowable, probe.membrane)
+    worst = max(rows, key=lambda r: r["ratio"])
+    verdict = Verdict(all(r["ok"] for r in rows), worst["value"], worst["limit"], "at_most",
+                      "pressure")  # fmt: skip
+    return {"out": verdict, "margin": Number(verdict.margin, None, "margin", percent=True),
+            "checks": rows}  # fmt: skip
 
 
 def _step(ctx: Context, results, item, index: int):
@@ -534,6 +567,12 @@ def _same_kind(op, a: str | None, b: str | None) -> None:
 
 
 def _check(ctx: Context, op) -> dict[str, Any]:
+    from puzzle.model.schema import ResultProbe
+
+    wired = op.inputs.get("value")
+    probe = ctx.project.objects.get(wired.source) if wired and wired.source else None
+    if isinstance(probe, ResultProbe) and probe.type == "linearized":
+        return _asme(ctx, op, probe)
     got = _input(ctx, op, "value")
     limit = _number(op, _input(ctx, op, "limit"), "limit")
     if isinstance(got, FieldValue):  # the field's worst value
@@ -941,7 +980,7 @@ def _measure(ctx: Context, op) -> dict[str, Any]:
     node, ADR 0064A rows E4 and F3): no mesh, no solve. Mass is the volume times the
     density of the material assigned to the part."""
     from puzzle.geometry.measure import MeasureError, measure
-    from puzzle.geometry.naming import by_rule, named_geometry
+    from puzzle.geometry.naming import members_of, named_geometry
     from puzzle.model.schema import Component, Geometry, Material
 
     obj = ctx.project.objects.get(op.target) if op.target else None
@@ -966,7 +1005,7 @@ def _measure(ctx: Context, op) -> dict[str, Any]:
         if s is None:
             raise PuzzleError(f"'{op.name}': {geo.name} has no selection '{sel}'",
                               code="not_found")  # fmt: skip
-        members = by_rule(named, s.entity, s.rule) if s.rule else list(s.members)
+        members = members_of(ctx.project, geo, named, s.name)
         picks = [(s.entity, m) for m in members]
     else:
         picks = [("body", n) for n in named.of.get("body", {})]
@@ -1222,10 +1261,31 @@ def _pairs(ctx: Context, op) -> dict[str, Any]:
     return {"out": Table([a.label or "a", b.label or "b"], rows, [a.kind, b.kind])}
 
 
+def _geometric():
+    from puzzle.operators import geometry_data as g
+
+    return {"points": g.points, "grid": g.grid, "profile": g.profile, "script": _script}
+
+
+def _script(ctx: Context, op) -> dict[str, Any]:
+    """A Python script (ADR 0062 phase 4), in a trusted project only."""
+    from puzzle import trust
+    from puzzle.operators import scripts
+
+    trust.require(ctx.project, f"script '{op.name}'")
+    inputs = {}
+    for key in "abcd":
+        got = _input(ctx, op, key)
+        if got is not None:
+            inputs[key] = scripts.encode(got)
+    got = scripts.run(op.code, inputs, timeout_s=op.timeout_s, project_root=ctx.root)
+    return {"out": scripts.decode(op, got)}
+
+
 _EVALUATE = {"reduce": _reduce, "filter": _filter, "check": _check, "panel": _panel,
              "plot": _plot, "export": _export, "number": _number_op, "slider": _slider,
              "series": _series, "range": _range, "expression": _expression,
-             "random": _random, **_tables(),
+             "random": _random, **_tables(), **_geometric(),
              "table": _table, "list": _list, "pairs": _pairs}  # fmt: skip
 
 

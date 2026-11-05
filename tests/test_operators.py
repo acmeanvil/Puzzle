@@ -345,3 +345,24 @@ def test_outline_cli_and_mcp(setup, tmp_path, capsys):
     assert cool.inputs["limit"].value == Quantity(value=300, unit="K")
     listed = call("operator_value")["operators"]
     assert sorted(o["name"] for o in listed) == ["Cool", "Hot"]
+
+
+def test_a_check_on_a_linearization_runs_the_asme_checks(setup):
+    """σxx = 300 x MPa along the edge from x = 0 to 1 (the last step): Pm = 150 MPa and
+    PL + Pb = 300 MPa, so against S = 250 MPa all pass and membrane + bending (300 ≤
+    375) governs; against 120 MPa both primary checks fail, membrane + bending the worse
+    (300 against 180)."""
+    p, study, ctx = setup
+    line = p.add(ResultProbe(name="Wall", source=study.id, type="linearized",
+                             quantity="stress:von_mises", point=(0.0, 0.0, 0.0),
+                             end=(1.0, 0.0, 0.0), samples=41))  # fmt: skip
+    inputs = {"value": wire(line), "limit": OperatorInput(value={"value": 250, "unit": "MPa"})}
+    check = p.add(Operator(name="ASME", type="check", inputs=inputs))
+    out = ev.value(ctx, check)
+    assert out.passed and out.value == pytest.approx(300 * MPA, rel=0.01)
+    assert out.limit == pytest.approx(375 * MPA)
+    assert ev.value(ctx, check, "margin").value == pytest.approx(0.25, rel=0.02)
+    check.inputs["limit"] = OperatorInput(value={"value": 120, "unit": "MPa"})
+    ctx.memo.clear()
+    failed = ev.value(ctx, check)
+    assert not failed.passed and failed.limit == pytest.approx(180 * MPA)

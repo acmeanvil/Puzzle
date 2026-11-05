@@ -202,6 +202,18 @@ STEPS: dict[str, list[StepField]] = {
         StepField("dx", "length", 0.01),
         StepField("dy", "length", 0.0),
         StepField("dz", "length", 0.0),
+        # ADR 0062 phase 3: a second direction, positions from data, or along a path
+        StepField("count2", "count", 1, "Rows (second direction)"),
+        StepField("dx2", "length", 0.0),
+        StepField("dy2", "length", 0.0),
+        StepField("dz2", "length", 0.0),
+        StepField(
+            "positions",
+            "text",
+            "",
+            "At positions (a Points operator: offsets, the first the original)",
+        ),
+        StepField("along", "text", "", "Along a path (an earlier polyline or spline)"),
     ],
     "split": [StepField("axis", "axis", "x", "Plane normal"), StepField("at", "length", 0.0)],
     # ADR 0050: a bolt's bearing rings at a hole's mouths.

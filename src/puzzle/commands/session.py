@@ -503,7 +503,32 @@ class Session:
             )
         if level == "propose":
             return "propose"
+        if level != "act" and self._writes_code(cmd):  # ADR 0062: new code is proposed
+            return "propose"
         return "apply"
+
+    def _writes_code(self, cmd: _Command) -> bool:
+        """Whether a command writes code that would run (a script operator, a custom
+        PDE's weak form): below "act" an agent proposes it, the user accepts."""
+        if isinstance(cmd, Create):
+            data = cmd.data
+            return (cmd.kind == "operator" and data.get("type") == "script") or (
+                cmd.kind == "component" and "equation" in json.dumps(data)
+            )
+        if isinstance(cmd, Edit):
+            try:
+                obj = resolve(self.project, cmd.object)
+            except PuzzleError:
+                return False
+            if getattr(obj, "type", None) == "script":
+                return True
+            return any(
+                "equation" in op.path
+                or op.path.endswith("code")
+                or (op.path == "type" and op.value == "script")
+                for op in cmd.ops
+            )
+        return False
 
     def _run_timeout(self, cmd: RunStudy, actor: Actor) -> float | None:
         if not actor.is_agent or self.project.agent.level != "act_in_budget":
@@ -782,6 +807,13 @@ def _execute(project: Project, cmd: _Command) -> dict[str, Any]:
         except PuzzleError:
             project.objects[obj.id] = obj
             raise
+        renamed = data.get("name") != obj.name
+        if renamed and obj.kind == "operator":  # ADR 0062: what names the parameter follows
+            from puzzle import operators
+
+            if operators.is_pre(project, project.objects[obj.id]):
+                followed = operators.rename_references(project, obj.name, data["name"])
+                return {"renamed_in": followed} if followed else {}
         return {}
     if isinstance(cmd, Delete):
         obj = resolve(project, cmd.object)

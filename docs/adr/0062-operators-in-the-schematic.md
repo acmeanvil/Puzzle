@@ -1,6 +1,6 @@
 # 0062. Operators in the schematic: data, geometry, Python and result nodes, as Grasshopper's
 
-- Status: Accepted (2026-11-02); phases 1 and 2 built (2026-11-03)
+- Status: Accepted (2026-11-02); built (phases 1 and 2 2026-11-03, 3 and 4 2026-11-05)
 - Date: 2026-11-02
 
 ## Context
@@ -296,3 +296,39 @@ ADR 0064A accepted these for phase 3 (geometry from data), with their row ids:
 - Selection by rule as a node with data inputs [F4, F5], and selection sets (union,
   intersection and difference of named selections) [C11].
 - Patterns in two directions and along a path, and Pattern by list [H4].
+
+## Phases 3 and 4 built, and the loose ends (2026-11-05)
+
+**Loose ends of phases 1 and 2.**
+- Selecting a Filter draws its kept values in the 3D view (`gui/operators.preview_field`); the values it leaves out are muted.
+- A Check fed a stress linearization runs VIII-2 5.2.2.4's three checks (membrane, membrane + bending, primary + secondary) against the limit as the allowable S, or the tool's own S. It passes when all do; the verdict and margin are the worst ratio's (`evaluate._asme`).
+- Renaming a pre-solve operator renames what names it, in the same command and the same undo (`operators.rename_references`). That covers history arguments (not a body's or a step's own name), a sketch's dimensions, sweeps' and optimisations' variables, and the name as a whole word in expressions and derived-result equations.
+- A list's or points' entries feed a sketch's dimensions (`"P[2].x"`), with phase 3.
+
+**Phase 3, geometry from data** (`operators/geometry_data.py`).
+- Points [D1, D2]: from x, y, z or a table's columns, in a coordinate system. The output is a table of x, y, z too, so table operators take it and its columns are lists again.
+- Grid [D8]: on a plane (an axis plane at an origin, or a construction plane) or in a box.
+- Profile [E1]: polyline, circle, rectangle (centred or from a corner), regular polygon.
+- `history.ops_of` puts their values into a geometry's arguments: a `profile`, a polyline's or spline's `points`, a pattern's `positions`, and `name[i]` or `name[i].x` anywhere. Pre-solve operators were already in the studies' hashes, so they stale what they feed.
+- Patterns [H4] take a second direction (`count2`, `dx2`…), positions from data (offsets, the first the original), and `along` a polyline or spline (`count` copies at equal lengths).
+- Selections [F4, F5, C11]:
+  - rule values may name parameters (`naming.rule_inputs`);
+  - new rule conditions `box`, `near`, `normal` (a planar face's outward normal within degrees), `min_area` and `max_area`;
+  - sets `union`, `intersection` and `difference` of other selections, resolved after them (`naming.resolve`). Table sources read members through `naming.members_of`, so they see sets too.
+- Construction planes [D6] take `drives` (value → parameter), resolved in `frame(project)`, so a slider moves a cut or a plane probe.
+- The schematic wires a geometric operator into the geometry argument naming it, typed points or profile.
+- 2D regions in one geometry: the history mode `separate` (ADR 0048).
+
+**Phase 4, Python scripts** (`operators/scripts.py`, `puzzle/trust.py`).
+- A `script` operator: inputs a to d, `out` as its `returns` says, `timeout_s`, its code edited in a box of its own (Edit code…).
+- It runs in the pixi environment `scripts` (numpy, scipy, polars; `puzzle scripts list|add PACKAGE`) through `-I`, with the environment cleared, in an empty temporary folder. On macOS it runs under `sandbox-exec`, which denies reading or writing the project's folder and the network; elsewhere the folder is only not given.
+- Its imports are the project's record of what it needs: Properties lists them and any the environment lacks.
+- Trust:
+  - A project built or saved by this installation is trusted: its folder goes into `<user data dir>/trusted.json`, and a save-as copy of a trusted project is too.
+  - One loaded from an unregistered folder is not. Its scripts and its custom PDE runs are refused with code `untrusted`, `Project.problems` lists them, and the Advisor's Trust step and Project → Trust this project… (or `puzzle trust`, `--revoke`) let the user trust it.
+  - Agents never trust a project. Below "act", an agent's command writing a script or an equation becomes a proposal.
+- Its code and its inputs' operators are in the hashes.
+
+Tests: `tests/test_geometry_data.py`, `tests/test_scripts.py`, `tests/test_planar_regions.py`, and the additions to `test_operators.py`, `test_data_operators.py` and `test_operators_gui.py`.
+
+Not done: on Linux and Windows nothing stops a script from reading the project's folder: it is only not handed the path. A real sandbox there (bubblewrap, a job object) would be its own work.

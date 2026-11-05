@@ -36,6 +36,10 @@ def save_project(project: Project, root: Path) -> None:
         "agent": project.agent.model_dump(mode="json"),
     }
     (root / "project.toml").write_text(tomli_w.dumps(header))
+    if project.trusted:  # made (or trusted) here: its folder stays trusted (ADR 0062)
+        from puzzle import trust
+
+        trust.trust(root)
 
     keep: set[Path] = set()
     for obj in project.objects.values():
@@ -65,4 +69,7 @@ def load_project(root: Path) -> Project:
     for kind, cls in _BY_KIND.items():
         for path in sorted((root / kind).glob("*.toml")):
             project.add(cls.model_validate(tomllib.loads(path.read_text())))
+    from puzzle import trust
+
+    project.trusted = trust.is_trusted(root)
     return project

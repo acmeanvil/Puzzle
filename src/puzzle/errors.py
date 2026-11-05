@@ -11,6 +11,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 CODES = {
+    "untrusted": "the project is not trusted: its scripts and equations don't run (ADR 0062)",
+    "script_failed": "a script operator raised an error, or left no result (ADR 0062)",
+    "timeout": "it ran past its time limit and was stopped",
     # Commands and the project model
     "not_found": "no object (or field) by that name or id",
     "ambiguous": "the name matches several objects; use the id",

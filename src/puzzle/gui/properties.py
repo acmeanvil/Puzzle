@@ -416,6 +416,16 @@ class PropertiesPanel(QTreeWidget):
         self.slider = bar
         return bar
 
+    def add_button(self, label: str, text: str, clicked):
+        """A button row (a script's Edit code…, ADR 0062)."""
+        from PySide6.QtWidgets import QPushButton
+
+        item = QTreeWidgetItem(self.invisibleRootItem(), [label, ""])
+        button = QPushButton(text)
+        button.clicked.connect(clicked)
+        self.setItemWidget(item, 1, button)
+        return button
+
     def _wired(self, box: QComboBox) -> None:
         value = box.currentData()
         if self._filling or value == "typed":
