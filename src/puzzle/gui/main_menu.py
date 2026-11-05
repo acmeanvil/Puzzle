@@ -216,6 +216,11 @@ def _project(window, menu: QMenu) -> None:
         menu.addAction(a[name])
     menu.addSeparator()  # ADR 0059: versions in place of a Save
     menu.addAction(a["save_version"])
+    _add(menu, "Export project archive…", lambda: _export_archive(window),
+         "The project as one .puzzle file to send: model, and the results, versions and "
+         "history you choose (ADR 0061)")  # fmt: skip
+    _add(menu, "Open project archive…", lambda: _open_archive(window),
+         "A .puzzle file someone sent, checked and opened as a project", free=True)  # fmt: skip
     _add(menu, "Versions…", lambda: window.open_versions(),
          "The project's versions: filter them, see what each held, restore one")  # fmt: skip
     _add(menu, "Remote hosts…", lambda: _hosts(window),
@@ -447,6 +452,18 @@ def _model(window, menu: QMenu) -> None:
          "How each solver solves the study: linear solver, tolerances, output")  # fmt: skip
     _add(menu, "Run on…", lambda: _run_on(window),
          "Here, or a remote host reached by SSH (ADR 0021)")  # fmt: skip
+
+
+def _export_archive(window) -> None:
+    from puzzle.gui.archive_dialog import export_archive
+
+    export_archive(window)
+
+
+def _open_archive(window) -> None:
+    from puzzle.gui.archive_dialog import open_archive
+
+    open_archive(window)
 
 
 def _hosts(window) -> None:

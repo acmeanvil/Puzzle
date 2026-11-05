@@ -123,6 +123,24 @@ def _save_as(args) -> int:
     return 0
 
 
+def _archive(args) -> int:
+    from puzzle.project.archive import Include, write
+
+    done = write(args.project, args.file, Include(results=args.results,
+                                                  versions=not args.no_versions,
+                                                  history=not args.no_history))  # fmt: skip
+    print(done.summary())
+    return 0
+
+
+def _unarchive(args) -> int:
+    from puzzle.project.archive import read
+
+    opened = read(args.file, args.dest, name=args.name)
+    print(opened.summary())
+    return 0
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="puzzle", description="Puzzle FEM multi-solver front end")
     sub = parser.add_subparsers(required=True, metavar="COMMAND")
@@ -150,6 +168,21 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("dest", type=Path, help="a new or empty folder outside the project")
     p.add_argument("--name", help="the copy's name (default: the project's)")
     p.set_defaults(handler=_save_as)
+
+    p = sub.add_parser("archive", help="the project as one .puzzle file to share (ADR 0061)")
+    p.add_argument("project", type=Path)
+    p.add_argument("file", type=Path, help="the archive to write (.puzzle)")
+    p.add_argument("--results", default="latest", choices=["none", "latest", "all"],
+                   help="which runs go in: none, the latest per study (default), all")  # fmt: skip
+    p.add_argument("--no-versions", action="store_true", help="leave the versions out")
+    p.add_argument("--no-history", action="store_true", help="leave the history out")
+    p.set_defaults(handler=_archive)
+
+    p = sub.add_parser("unarchive", help="open a .puzzle archive as a project (ADR 0061)")
+    p.add_argument("file", type=Path)
+    p.add_argument("dest", type=Path, help="a new or empty folder")
+    p.add_argument("--name", help="the project's name there")
+    p.set_defaults(handler=_unarchive)
 
     p = sub.add_parser("versions", help="the project's versions, newest first (ADR 0059)")
     p.add_argument("project", type=Path)

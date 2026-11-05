@@ -59,6 +59,13 @@ def main(project: Path | None = None) -> int:
     app = QApplication.instance() or QApplication(sys.argv[:1])
     app.setApplicationName(NAME)
     app.setWindowIcon(app_icon())  # the Dock's icon too, run from a plain Python
-    window = MainWindow(project)
+    archive = project if project is not None and Path(project).suffix == ".puzzle" else None
+    window = MainWindow(None if archive is not None else project)
     window.show()
+    if archive is not None:  # a .puzzle file opened from the system (ADR 0061)
+        from PySide6.QtCore import QTimer
+
+        from puzzle.gui.archive_dialog import open_archive
+
+        QTimer.singleShot(0, lambda: open_archive(window, str(archive)))
     return app.exec()

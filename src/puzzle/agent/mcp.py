@@ -948,6 +948,23 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
                       compensate=compensate, axes=axes, root=root)  # fmt: skip
         return {"files": [str(f) for f in files]}
 
+    @tool(description="The project as one .puzzle archive to share (ADR 0061), written inside "
+          "the project folder (e.g. exports/model.puzzle). results: none, latest (per study) "
+          "or all; versions and history true or false. Returns its size by part.")  # fmt: skip
+    @guarded
+    def project_archive(path: str, results: str = "latest", versions: bool = True,
+                        history: bool = True) -> dict[str, Any]:  # fmt: skip
+        from puzzle.project.archive import Include, write
+
+        out = (Path(path) if Path(path).is_absolute() else root / path).resolve()
+        if not out.is_relative_to(Path(root).resolve()):  # agents write inside the project
+            raise PuzzleError(f"archives go inside the project folder, not {path}",
+                              code="not_allowed")  # fmt: skip
+        done = write(root, out, Include(results=results, versions=versions, history=history),
+                     by=actor.name if actor.is_agent else "you")  # fmt: skip
+        return {"path": str(done.path), "bytes": done.bytes, "sizes": done.sizes,
+                "summary": done.summary()}  # fmt: skip
+
     @tool(
         description="A study's solver settings (ADR 0023): the shared ones (on each solve "
         "step's settings: linear_solver, tolerance, max_iterations, output_every) and each "

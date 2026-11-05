@@ -1,6 +1,6 @@
 # 0061. Archive a project in one file to share it and open it in another Puzzle
 
-- Status: Proposed
+- Status: Accepted; built (2026-11-04)
 - Date: 2026-11-01
 
 ## Context
@@ -77,3 +77,35 @@ goes in.
 - **tar.gz:** fine on Linux and macOS, less familiar on Windows, and no random access to
   read `archive.json` without unpacking.
 - **Results always in:** too large to mail for most projects; they can be solved again.
+
+## Built (2026-11-04)
+
+- **`puzzle/project/archive.py`.** `write(root, path, Include(results, versions, history))` stages a Save as copy (outside files into `imported/`, no lock, no solver working folders) and prunes it:
+  - results `none` drops the store and the kept meshes;
+  - `latest` keeps each study's newest run (`ResultStore.delete_run` on the rest);
+  - versions and history can be left out.
+
+  It then zips the copy with `archive.json` (format 1, the Puzzle version, when, by, name, the latest version's summary, what was included, every member's SHA-256). Files that are already compressed are stored, not deflated again. The archive is written to a `.part` file first, and archives are never put inside archives. `sizes(root)` gives each part's size for the form.
+- **`read(path, dest, name=)`** checks before writing anything, and refuses with `invalid_archive`:
+  - the format (a newer one names the Puzzle that wrote it);
+  - that every member is in the manifest and every manifest entry is present;
+  - no `..`, absolute paths or links;
+  - the unpacked total (20 GB) and a member's ratio (a bomb).
+
+  It unpacks into a staging folder beside the destination, checks each member's hash as it streams, and moves the whole folder into place only when all passes, so a bad archive leaves nothing behind. A results store of an older format is dropped with a note. The receiver's copy is never trusted, whatever the sender's was. A project holding code (`trust.holds_code`) arrives at autonomy "advise", with a note. One version, "Copied from archive <name>", starts its history.
+- **Portability:** members use `/` and are relative. Names Windows refuses (reserved names, `<>:"\|?*`, a trailing dot or space) are refused at export. **Materials** need nothing extra: a project's materials are its own copies (ADR 0020), so decision 2's materials option and the library-clash note fell away.
+- **Clients:**
+  - GUI: Project → Export project archive… (one form with each part's size, then where to save) and Open project archive… (the manifest shown first: name, who, when, what it holds; then the folder). A `.puzzle` file can also be dropped on the window or passed to `puzzle gui` (`gui/archive_dialog.py`).
+  - CLI: `puzzle archive` and `puzzle unarchive`.
+  - MCP: `project_archive` (inside the project folder only).
+  - The skill `project-archives`.
+- **Tests:** `tests/test_archive.py`:
+  - a round trip;
+  - outside geometry brought in, with results and versions left out;
+  - tampered, escaping, newer and incomplete archives refused with nothing written;
+  - Windows names refused;
+  - code arriving untrusted and advising;
+  - a stale store dropped;
+  - the GUI's export and open forms, and the CLI.
+
+Not done: archives of older formats kept in `tests/data/archives` (there is only format 1 so far; the first change of format adds them); taking the session's lock and making an "archived" version on export (the archive is a read of the folder, made from a staged copy).

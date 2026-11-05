@@ -568,6 +568,7 @@ class MainWindow(QMainWindow):
         from puzzle.gui.feedback import StatusProgress, Toasts
 
         self.toasts = Toasts(self)  # notes when work finishes (ADR 0045)
+        self.setAcceptDrops(True)  # a .puzzle archive dropped on the window (ADR 0061)
         self.progress = StatusProgress()  # long work, with Cancel when it can stop
         self.statusBar().addPermanentWidget(self.progress)
         self.context_label = QLabel("")
@@ -1787,6 +1788,25 @@ class MainWindow(QMainWindow):
         chain.setFocus(Qt.FocusReason.ShortcutFocusReason)
         self.focused_panel = target
         return chain
+
+    def dragEnterEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        """A .puzzle archive dragged onto the window (ADR 0061)."""
+        urls = event.mimeData().urls() if event.mimeData().hasUrls() else []
+        if any(u.toLocalFile().endswith(".puzzle") for u in urls):
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dropEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        urls = event.mimeData().urls() if event.mimeData().hasUrls() else []
+        archives = [u.toLocalFile() for u in urls if u.toLocalFile().endswith(".puzzle")]
+        if not archives:
+            return super().dropEvent(event)
+        event.acceptProposedAction()
+        from puzzle.gui.archive_dialog import open_archive
+
+        open_archive(self, archives[0])
+        return None
 
     def _show_run(self, run_id: str) -> None:
         """A run's results in the view, from a toast's Show results."""

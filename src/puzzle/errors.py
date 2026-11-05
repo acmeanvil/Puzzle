@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 CODES = {
+    "invalid_archive": "a project archive damaged, unsafe or from a newer Puzzle (ADR 0061)",
     "unknown_host": "no remote host by that name in your hosts.toml (ADR 0021)",
     "host_unreachable": "ssh could not reach the remote host, or lost it (ADR 0021)",
     "queue_rejected": "the remote host's scheduler refused the job (ADR 0021)",
