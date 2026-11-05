@@ -4,7 +4,7 @@ A field: its argument name, a kind, a default and a label. Kinds: length (typed 
 stored in m), angle (degrees), number, count, axis, mode, plane, profile (points in mm,
 "u, v; u, v; ..." or "dxf: file.dxf"), rule (edges or faces, as JSON), file, feature
 (an earlier tool step), faces (picked, or {} for a default), direction, geometry (another
-part, by id), half, text. A
+part, by id), half, side (an offset wall's: left, right or both), text. A
 length, angle or number may instead be a parameter's name, kept as given.
 """
 
@@ -25,7 +25,10 @@ MODE = StepField("mode", "mode", "add", "Combine with the part")
 AT = [StepField("x", "length", 0.0), StepField("y", "length", 0.0), StepField("z", "length", 0.0)]
 
 STEPS: dict[str, list[StepField]] = {
-    "import": [StepField("file", "file", "", "CAD file (STEP, IGES, BREP)")],
+    "import": [
+        StepField("file", "file", "", "CAD file (STEP, IGES, BREP)"),
+        StepField("flat", "yesno", False, "Lay flat faces on the XY plane (2D models)"),
+    ],
     "box": [
         StepField("dx", "length", 0.05),
         StepField("dy", "length", 0.03),
@@ -128,6 +131,62 @@ STEPS: dict[str, list[StepField]] = {
     ],
     "face": [
         StepField("profile", "profile", "0, 0; 50, 0; 50, 30; 0, 30", "Profile (mm)"),
+        StepField("plane", "plane", "xy"),
+        StepField("offset", "length", 0.0),
+        MODE,
+    ],
+    # ADR 0048 round 2: 2D shapes (in the plane's u, v: x, y on the XY plane), sides named.
+    "rectangle": [
+        StepField("dx", "length", 0.05, "Width"),
+        StepField("dy", "length", 0.03, "Height"),
+        StepField("x0", "length", 0.0, "Corner x"),
+        StepField("y0", "length", 0.0, "Corner y"),
+        StepField("plane", "plane", "xy"),
+        StepField("offset", "length", 0.0),
+        MODE,
+    ],
+    "circle": [
+        StepField("r", "length", 0.01, "Radius"),
+        StepField("x", "length", 0.0, "Centre x"),
+        StepField("y", "length", 0.0, "Centre y"),
+        StepField("plane", "plane", "xy"),
+        StepField("offset", "length", 0.0),
+        MODE,
+    ],
+    "annulus": [
+        StepField("r_inner", "length", 0.01, "Inner radius"),
+        StepField("r_outer", "length", 0.02, "Outer radius"),
+        StepField("x", "length", 0.0, "Centre x"),
+        StepField("y", "length", 0.0, "Centre y"),
+        StepField("plane", "plane", "xy"),
+        StepField("offset", "length", 0.0),
+        MODE,
+    ],
+    "polygon": [
+        StepField("sides", "count", 6, "Sides"),
+        StepField("r", "length", 0.01, "Radius to the corners"),
+        StepField("x", "length", 0.0, "Centre x"),
+        StepField("y", "length", 0.0, "Centre y"),
+        StepField("angle", "angle", 0.0, "First corner's angle"),
+        StepField("plane", "plane", "xy"),
+        StepField("offset", "length", 0.0),
+        MODE,
+    ],
+    "slot": [
+        StepField("length", "length", 0.04, "Length overall"),
+        StepField("width", "length", 0.01, "Width"),
+        StepField("x", "length", 0.0, "Centre x"),
+        StepField("y", "length", 0.0, "Centre y"),
+        StepField("angle", "angle", 0.0, "Angle of its length"),
+        StepField("plane", "plane", "xy"),
+        StepField("offset", "length", 0.0),
+        MODE,
+    ],
+    "offset": [
+        StepField("line", "profile", "0, 0; 100, 0", "Line (mm): u, v; …"),
+        StepField("t", "length", 0.005, "Wall thickness"),
+        StepField("side", "side", "left", "Wall on"),
+        StepField("closed", "yesno", False, "Closed line (a ring)"),
         StepField("plane", "plane", "xy"),
         StepField("offset", "length", 0.0),
         MODE,

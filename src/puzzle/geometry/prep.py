@@ -340,14 +340,16 @@ def remove_faces(shape, faces: list):
 
 
 def fragment(shape):
-    """Split every body by the others where they touch, so they share those faces."""
+    """Split every body by the others where they touch, so they share those faces; on a
+    part of faces only (a 2D model's regions, ADR 0048), every face by the others, so
+    they share edges."""
     from OCP.BRepAlgoAPI import BRepAlgoAPI_BuilderAlgo
 
-    from puzzle.geometry.history import TopTools_ListOfShape, _subshapes
+    from puzzle.geometry.history import TopTools_ListOfShape, _faces, _subshapes
 
-    solids = _subshapes(shape, TopAbs_SOLID)
+    solids = _subshapes(shape, TopAbs_SOLID) or _faces(shape)
     if len(solids) < 2:
-        raise PrepError("fragment needs at least two bodies")
+        raise PrepError("fragment needs at least two bodies (or two regions)")
     algo = BRepAlgoAPI_BuilderAlgo()
     args = TopTools_ListOfShape()
     for s in solids:

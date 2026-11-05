@@ -446,11 +446,16 @@ def write_axisymmetric(project, comp, step, features, mesh, workdir: Path, write
     natural condition. A Scanning run of 1 + rings scans per frequency: scan 0 the
     windings' J = N I / section, scan j a unit voltage per turn on solid ring j (J =
     σ / 2πr in it); Puzzle combines them so each ring carries its current
-    (`eddy.combine_axisymmetric`). Transients are refused here."""
+    (`eddy.combine_axisymmetric`). Transients are refused here.
+
+    A planar model (ADR 0048) is the same in Cartesian 2D with A_z: currents along z, a
+    solid bar's unit voltage a drop of 1 V per metre (J = σ), every total per metre."""
     from puzzle.model.schema import Material
 
+    planar = comp.dimension == "2d_planar"
+    kind = "planar" if planar else "axisymmetric"
     if step.type not in ("stationary", "frequency_domain"):
-        raise InputError("axisymmetric magnetic fields run static or frequency-domain steps",
+        raise InputError(f"{kind} magnetic fields run static or frequency-domain steps",
                          code="unsupported")  # fmt: skip
     harmonic = step.type == "frequency_domain"
     coils = eddy.coils(project, comp, features, mesh, solver="Elmer")
@@ -459,7 +464,7 @@ def write_axisymmetric(project, comp, step, features, mesh, workdir: Path, write
     boundaries = list(dict.fromkeys(f.selection for f in features if f.type not in eddy.COILS))
     bodies = [a.selection for a in comp.materials]
     emesh = write_mesh(mesh, workdir / "mesh", bodies, boundaries)
-    eddy.axisymmetric_table(mesh, bodies, workdir / "mesh" / eddy.ELEMENTS)
+    eddy.axisymmetric_table(mesh, bodies, workdir / "mesh" / eddy.ELEMENTS, planar)
     table = np.load(workdir / "mesh" / eddy.ELEMENTS)
     frequencies = frequency_list(step) if harmonic else [0.0]
     coil_of = {c.body: c for c in coils}
@@ -474,7 +479,8 @@ def write_axisymmetric(project, comp, step, features, mesh, workdir: Path, write
     rows = [f"    {k * per + r + 1} {2 * math.pi * f:.12g}"
             for k, f in enumerate(frequencies) for r in range(per)]  # fmt: skip
     out = ["Header", "  CHECK KEYWORDS Warn", '  Mesh DB "." "mesh"', "End", "",
-           "Simulation", "  Max Output Level = 5", "  Coordinate System = Axi Symmetric",
+           "Simulation", "  Max Output Level = 5",
+           f"  Coordinate System = {'Cartesian 2D' if planar else 'Axi Symmetric'}",
            "  Simulation Type = Scanning", f"  Timestep Intervals(1) = {scans}",
            "  Timestep Sizes(1) = 1.0", "  Output Intervals(1) = 1",
            "  Steady State Max Iterations = 1",
@@ -504,7 +510,8 @@ def write_axisymmetric(project, comp, step, features, mesh, workdir: Path, write
             if sigma <= 0:
                 raise InputError(f"the solid ring '{c.body}' needs a conductivity")
             role = rings.index(c.body) + 1
-            unit = f'    Real MATC "({picks(role)})*{sigma:.12g}/(2*pi*tx(1))"'
+            over = "" if planar else "/(2*pi*tx(1))"  # 1 V per metre, or per turn
+            unit = f'    Real MATC "({picks(role)})*{sigma:.12g}{over}"'
             forces.append(["  Current Density = Variable Time, Coordinate 1", unit])
         if c is not None:
             out.append(f"  Body Force = {len(forces)}")
@@ -532,7 +539,7 @@ def write_axisymmetric(project, comp, step, features, mesh, workdir: Path, write
                       else ["  Potential = Real 0"])  # fmt: skip
         out += [*block, "End", ""]
     eddy.write_meta(workdir / "mesh" / eddy.META, meta_bodies, coils, frequencies,
-                    axisymmetric=True)  # fmt: skip
+                    axisymmetric=not planar, planar=planar)  # fmt: skip
     return out, emesh
 
 

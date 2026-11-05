@@ -30,6 +30,7 @@ and transfers the forces to a CalculiX contact study.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -48,7 +49,7 @@ from puzzle.adapters.base import (
     refuse_inputs,
 )
 from puzzle.adapters.elmer.output import read_series
-from puzzle.adapters.elmer.sif import MESH_DIR, OUTPUT, TIMES, write_case
+from puzzle.adapters.elmer.sif import MESH_DIR, OUTPUT, THERMAL_ZZ, TIMES, write_case
 from puzzle.jobs.runner import LOG_NAME
 from puzzle.mesh.mesh import Mesh
 from puzzle.model.schema import Project, Study
@@ -211,4 +212,19 @@ class ElmerAdapter(SolverAdapter):
                 coords = np.load(mesh_dir / "puzzle-node-coords.npy")
                 return read_axisymmetric(vtus, mesh_dir, node_ids, coords)
             return read_magnetics(vtus, mesh_dir, node_ids)
-        return read_series(vtus, times, node_ids, log.read_text() if log.exists() else "")
+        results = read_series(vtus, times, node_ids, log.read_text() if log.exists() else "")
+        if (mesh_dir / THERMAL_ZZ).exists():
+            _thermal_zz(results, json.loads((mesh_dir / THERMAL_ZZ).read_text()))
+        return results
+
+
+def _thermal_zz(results: Results, given: dict) -> None:
+    """Plane strain with a temperature load (ADR 0048): Elmer's σz is ν (σx + σy), its
+    thermal part left out; take E α (T - T_ref) off it at each node."""
+    for step in results.steps:
+        stress, temperature = step.fields.get("stress"), step.fields.get("temperature")
+        if stress is None or temperature is None:
+            continue
+        values = np.array(stress.values, dtype=float)
+        values[:, 2] -= given["e_alpha"] * (temperature.at(stress.ids)[:, 0] - given["reference"])
+        stress.values = values

@@ -180,11 +180,30 @@ def _refuse_in_2d(comp: Component) -> None:
                 raise InputError(f"{f.type} is not written in 2D models yet", code="unsupported")
 
 
+def _whole_part_marker(mesh: Mesh, comp: Component, workdir: Path) -> None:
+    """What the reader multiplies Code_Aster's 2D reactions by, so totals mean the whole
+    part (ADR 0048 decision 6): AXIS gives them per radian (2 pi), C_PLAN per unit
+    thickness (each part's thickness on its nodes). Plane strain is per metre already.
+    Measured in tests/integration/test_planar_totals.py."""
+    from puzzle.adapters.common import plane_thickness
+
+    if comp.dimension == "2d_axisymmetric":
+        marker = {"scale": 2 * np.pi}
+    elif comp.planar_model == "plane_stress":
+        parts = [g for g in mesh.groups.values() if "/" not in g.name and g.dim == 2]
+        marker = {"parts": [{"t": plane_thickness(comp, g.name), "nodes": g.node_ids.tolist()}
+                            for g in parts]}  # fmt: skip
+    else:
+        return
+    (workdir / f"{JOB}.totals.json").write_text(json.dumps(marker))
+
+
 def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs=()) -> Path:
     comp = project.get(study.component, Component)
     as_planar(mesh, comp)  # ADR 0048: a 2D model's faces are regions, not shells
     if mesh.planar:
         _refuse_in_2d(comp)
+        _whole_part_marker(mesh, comp, workdir)
     thermal_load = next((i.field for i in inputs if i.field.name == "temperature"), None)
     check_contacts(comp, CONTACTS, "Code_Aster")
     steps = study.solve_steps()

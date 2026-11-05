@@ -23,13 +23,15 @@ the part, the first one starts it):
 | sheet | points (a flat polygon: a sheet body, for shells) | face |
 | face | profile (sketch), plane, offset (a flat region: 2D, shells) | face; edges by side |
 | section | part (a geometry), plane, offset, half (ADR 0048) | face; edges by 3D face |
+| rectangle, circle, annulus, polygon, slot | 2D shapes (`planar.py`, ADR 0048) | face; sides |
+| offset | line, t, side: a wall along a line (`planar.py`) | face; left, right, start, end |
 | curved_sheet | r, length, angle, x0, y0, z0 (a cylinder panel on x, centred on +z) | surface |
 | cone | r1, r2, h, x, y, z, axis | wall, start, end |
 | sphere | r, x, y, z | surface |
 | extrude | profile, distance, plane, offset | start, end, side-1 ... (a sketch's edge names) |
 | revolve | profile, angle (deg), axis (u or v), plane, offset | side-1 ..., start, end |
 | hole | r, x, y (through, along `axis`, default z) | wall |
-| fillet, chamfer | r or d, rule (edges) | edge-1 ... |
+| fillet, chamfer | r or d, rule (edges; a flat part's corners, `planar.py`) | edge-1 ... |
 | move | dx, dy, dz | (names kept) |
 | rotate | angle (deg), axis, x, y, z (a point on the axis) | (names kept) |
 | pattern | feature, count, dx, dy, dz, or angle + axis for a circular one | <feature>#2/..., ... |
@@ -47,7 +49,7 @@ the part, the first one starts it):
 | imprint | hole (a wall's face name), r | annulus (rings at the hole's mouths); others keep names |
 | split_face | profile (sketch), faces (default: on its plane), direction | region; others kept |
 | enclosure | margin, or factor of the part size | +x ... of the box; body `<name>` |
-| import, heal, remove, fragment | see puzzle.geometry.prep | preparing imported CAD (G2) |
+| import, heal, remove, fragment | see puzzle.geometry.prep (import `flat`: faces onto XY) | G2 |
 | sketch | sketch, plane and offset, or face (a planar face, axis-aligned) | (no faces: a profile) |
 
 A sketch step (ADR 0017) adds no solid: extrude and revolve take it by name as their
@@ -199,6 +201,7 @@ WORDS = {
     "part",  # a section's geometry (its id)
     "_part",  # a section's part, filled in by ops_of
     "half",
+    "side",  # an offset wall's side: left, right or both (ADR 0048 round 2)
     "faces",  # a split_face's faces, by name
     "direction",  # a split_face's projection: both, forward or backward
     "along",  # a sweep's or pipe's path: an earlier spline or polyline step (ADR 0065)
@@ -472,6 +475,12 @@ def _import(state, a):
         file = Path(state.root) / file
     shape, parts = read_cad(file, a.get("unit"), a.get("scale", 1.0))
     names = {f"face-{i}": [f] for i, f in enumerate(_faces(shape), start=1)}
+    if not _subshapes(shape, TopAbs_SOLID):  # flat faces (ADR 0048): edges by file order too
+        names |= {f"edge-{i}": [e] for i, e in enumerate(_subshapes(shape, TopAbs_EDGE), 1)}
+    if a.get("flat"):  # ADR 0048 round 3: flat faces laid on the XY plane for a 2D model
+        from puzzle.geometry.planar import lay_flat
+
+        shape, names = lay_flat(shape, names)
     return shape, names, parts
 
 
@@ -524,7 +533,23 @@ def _face(state, a):
     names: Names = {"face": _faces(face)}
     for label, e in zip(labels, edges, strict=True):
         names.setdefault(label, []).append(e)
+    if len(names["face"]) > 1:  # several regions (a DXF's): fused so touching ones share edges
+        return _share_edges(face, names)
     return face, names
+
+
+def _share_edges(shape, names: Names):
+    """Regions side by side made to share the edges where they touch, each kept a face
+    of its own (ADR 0048 round 3), the names carried."""
+    algo = BRepAlgoAPI_BuilderAlgo()
+    args = TopTools_ListOfShape()
+    for f in _faces(shape):
+        args.Append(f)
+    algo.SetArguments(args)
+    algo.Build()
+    if not algo.IsDone():
+        raise GeometryError("the regions could not be joined")
+    return algo.Shape(), _carry(algo, names)
 
 
 def _section(state, a):
@@ -1080,6 +1105,12 @@ def _more_operations() -> None:
     TOOLS.update(sweeps.TOOLS)
     TOOLS["subd"] = subd._subd
     MODIFIERS.update(sweeps.MODIFIERS)
+    # ADR 0048 round 2: 2D shapes, and fillets and chamfers of a flat part's corners.
+    from puzzle.geometry import planar
+
+    TOOLS.update(planar.TOOLS)
+    for kind in ("fillet", "chamfer"):
+        MODIFIERS[kind] = planar._corner_op(kind, MODIFIERS[kind])
 
 
 _more_operations()

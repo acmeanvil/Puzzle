@@ -350,6 +350,7 @@ def _geometry(window, menu: QMenu) -> None:
     from puzzle.gui.window import FILTERS
 
     for kind, text in FILTERS.items():
+        text = {"face": "Faces (regions in 2D)", "body": "Bodies (3D)"}.get(kind, text)
         _add(filters, text, lambda k=kind: _pick_filter(window, k))
     sel = _sub(menu, "Selections")
     _add(sel, "New from picks…", lambda: _in_geometry_tab(window, wb._from_picks),

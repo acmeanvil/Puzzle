@@ -134,12 +134,25 @@ def skin_refinement(project: Project, study: Study) -> list:
     return out
 
 
+TET_EDGES = ((0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3))
+TRI_EDGES = ((0, 1), (1, 2), (2, 0))
+QUAD_EDGES = ((0, 1), (1, 2), (2, 3), (3, 0))
+
+
 def _element_size(mesh, name: str) -> float:
-    """The median edge of a body's elements (m), from their corners."""
+    """The median edge of a body's elements (m), from their corners: tetrahedra, or a
+    2D model's (ADR 0048) triangles and quadrilaterals."""
     edges = []
     for b in mesh.groups[name].blocks(mesh):
-        corners = mesh.node_coords(b.connectivity[:, :4].ravel()).reshape(-1, 4, 3)
-        for i, j in ((0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)):
+        if b.dim == 3:
+            pairs = TET_EDGES
+        elif b.dim == 2:
+            pairs = QUAD_EDGES if b.element.startswith("quad") else TRI_EDGES
+        else:
+            continue
+        n = 1 + max(max(p) for p in pairs)
+        corners = mesh.node_coords(b.connectivity[:, :n].ravel()).reshape(-1, n, 3)
+        for i, j in pairs:
             edges.append(np.linalg.norm(corners[:, i] - corners[:, j], axis=1))
     return float(np.median(np.concatenate(edges))) if edges else 0.0
 

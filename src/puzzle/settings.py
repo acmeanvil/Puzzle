@@ -70,6 +70,13 @@ def _legend_preferences() -> list[Preference]:
                    [("A row per node or element per step (long)", "long"),
                     ("A column per step (wide)", "wide")],
                    "How a result table operator lays out its steps (ADR 0064)."),
+        Preference("results.axisymmetric_view", "Results", "Axisymmetric results", "revolved",
+                   [("Revolved about the axis", "revolved"), ("Flat (the section)", "flat")],
+                   "How a 2D axisymmetric result is drawn (ADR 0048); probes still read "
+                   "the section."),
+        Preference("results.sweep_angle", "Results", "Revolved through", 270.0,
+                   [("90°", 90.0), ("180°", 180.0), ("270°", 270.0), ("360°", 360.0)],
+                   "How far an axisymmetric result is turned about its axis."),
     ]  # fmt: skip
 
 

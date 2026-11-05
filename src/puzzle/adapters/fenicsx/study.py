@@ -615,17 +615,21 @@ def _held(bcs, size: int) -> tuple[np.ndarray, np.ndarray]:
     return held, values[held]
 
 
-def _stress_projector(msh, degree, dx, sigma, V):
+def _stress_projector(msh, degree, dx, sigma, V, voigt_of=None):
     """A function from a displacement array to nodal stress (xx, yy, zz, xy, yz, zx):
-    the L2 projection, its mass matrix factored once."""
+    the L2 projection, its mass matrix factored once. `voigt_of` (a 2D model's) gives
+    the six components of a displacement directly."""
     from scipy.sparse.linalg import splu
 
     S = fem.functionspace(msh, ("Lagrange", degree, (6,)))
     p, q = ufl.TrialFunction(S), ufl.TestFunction(S)
     mass = splu(_scipy(ufl.inner(p, q) * dx).tocsc())
     uh = fem.Function(V)
-    s = sigma(uh)
-    voigt = ufl.as_vector([s[0, 0], s[1, 1], s[2, 2], s[0, 1], s[1, 2], s[2, 0]])
+    if voigt_of is not None:
+        voigt = voigt_of(uh)
+    else:
+        s = sigma(uh)
+        voigt = ufl.as_vector([s[0, 0], s[1, 1], s[2, 2], s[0, 1], s[1, 2], s[2, 0]])
     rhs = fem.form(ufl.inner(voigt, q) * dx)
     size = S.dofmap.index_map.size_local * 6
 
@@ -637,6 +641,12 @@ def _stress_projector(msh, degree, dx, sigma, V):
         return mass.solve(b.array[:size]).reshape(-1, 6)
 
     return project
+
+
+def _xyz(values: np.ndarray, bs: int) -> np.ndarray:
+    """Per node (x, y, z): a 2D model's two components with z = 0 added."""
+    v = np.asarray(values).reshape(-1, bs)
+    return v.copy() if bs == 3 else np.column_stack([v, np.zeros(len(v))])
 
 
 def hats(frequencies) -> list[np.ndarray]:
@@ -679,7 +689,8 @@ def solve_transient(step, a, m, loads, bcs, V, stress, out) -> None:
     C = alpha_M M + beta_K K; from rest, the loads at their t = 0 values (a sudden load)."""
     from scipy.sparse.linalg import splu
 
-    size = V.dofmap.index_map.size_local * 3
+    bs = V.dofmap.index_map_bs  # 3, or 2 in a 2D model (ADR 0048)
+    size = V.dofmap.index_map.size_local * bs
     K, M = _scipy(a)[:size, :size], _scipy(m)[:size, :size]
     am, bk = step.get("rayleigh", [0.0, 0.0])
     C = am * M + bk * K
@@ -713,11 +724,11 @@ def solve_transient(step, a, m, loads, bcs, V, stress, out) -> None:
         acc = new_acc
         emit("increment", number=k, size=dt, time=t, end_time=dt * steps)
         if TRACKERS:
-            track("displacement", coords, u.reshape(-1, 3), k, t)
+            track("displacement", coords, _xyz(u, bs), k, t)
         emit("converged", increment=k, iterations=1, time=t)
         if k % every == 0:
             times.append(t)
-            series.append(u.reshape(-1, 3).copy())
+            series.append(_xyz(u, bs))
             stresses.append(stress(u))
     out["dynamic_times"] = np.asarray(times)
     out["displacement_series"] = np.asarray(series)
@@ -730,7 +741,8 @@ def solve_harmonic(step, a, m, loads, bcs, V, stress, out) -> None:
     (in phase). Displacement as real and imaginary parts."""
     from scipy.sparse.linalg import splu
 
-    size = V.dofmap.index_map.size_local * 3
+    bs = V.dofmap.index_map_bs
+    size = V.dofmap.index_map.size_local * bs
     K, M = _scipy(a)[:size, :size], _scipy(m)[:size, :size]
     am, bk = step.get("rayleigh", [0.0, 0.0])
     C = am * M + bk * K
@@ -749,8 +761,8 @@ def solve_harmonic(step, a, m, loads, bcs, V, stress, out) -> None:
         emit("increment", number=number, time=number, end_time=len(step["frequencies"]))
         U[free] = splu(Z[free][:, free].tocsc()).solve(rhs[free].astype(complex))
         emit("converged", increment=number, iterations=1, time=number)
-        real.append(U.real.reshape(-1, 3))
-        imag.append(U.imag.reshape(-1, 3))
+        real.append(_xyz(U.real, bs))
+        imag.append(_xyz(U.imag, bs))
     out["harmonic_frequencies"] = np.asarray(step["frequencies"], dtype=float)
     out["displacement_real"] = np.asarray(real)
     out["displacement_imag"] = np.asarray(imag)
@@ -759,18 +771,39 @@ def solve_harmonic(step, a, m, loads, bcs, V, stress, out) -> None:
 def solve_solid_2d(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
     """Plane stress, plane strain or axisymmetric elasticity (ADR 0048), Y the axis and
     X the radius. Every integral carries the part's weight: its thickness (plane stress;
-    1 m of depth in plane strain) or 2 pi r, so loads given as totals are consistent."""
+    1 m of depth in plane strain) or 2 pi r, so loads given as totals are consistent.
+    Static, modal, transient and harmonic steps, as in 3D (ADR 0041)."""
     V = fem.functionspace(msh, ("Lagrange", degree, (2,)))
     fdim = msh.topology.dim - 1
     E, nu = piecewise("youngs_modulus"), piecewise("poissons_ratio")
     mu = E / (2 * (1 + nu))
     lmbda = E * nu / ((1 + nu) * (1 - 2 * nu))
     axi = case["dimension"] == "2d_axisymmetric"
-    if not axi and case.get("planar_model") == "plane_stress":
+    plane_stress = not axi and case.get("planar_model") == "plane_stress"
+    # Thermal stress per kelvin of expansion: E / (1 - 2 nu) in 3D and plane strain or
+    # axisymmetric, E / (1 - nu) in plane stress (both 2 lambda' + 2 mu with the reduced
+    # lambda' = 2 lambda mu / (lambda + 2 mu) there).
+    kappa = 3 * lmbda + 2 * mu
+    if plane_stress:
         lmbda = 2 * lmbda * mu / (lmbda + 2 * mu)
+        kappa = 2 * lmbda + 2 * mu
     x = ufl.SpatialCoordinate(msh)
     weight = 2 * np.pi * x[0] if axi else piecewise("thickness")
     I2 = ufl.Identity(2)
+    step_type = case["step"]["type"]
+    modal = step_type == "modal"
+
+    # A transferred temperature field: the stress its free expansion would relieve.
+    heat = None
+    if "temperature_load" in case and not modal:
+        load = case["temperature_load"]
+        data = np.load(load["file"])
+        S1 = fem.functionspace(msh, ("Lagrange", degree))
+        T = fem.Function(S1)
+        T.x.array[:] = interpolate_nodal(
+            data["coords"], data["values"], S1.tabulate_dof_coordinates()
+        )
+        heat = kappa * piecewise("thermal_expansion") * (T - load["reference"])
 
     def parts(w):
         """In-plane strain and stress, and the out-of-plane (hoop) strain and stress."""
@@ -785,6 +818,16 @@ def solve_solid_2d(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> No
     a = (ufl.inner(su, ev) + (shu * hv if axi else 0)) * weight * dx
     n = ufl.FacetNormal(msh)
     bcs, L = [], ufl.inner(fem.Constant(msh, np.zeros(2)), v) * dx
+    loads = []  # (form, amplitude table or None, "time"): scaled in time by dynamics
+
+    def add_load(term, f):
+        nonlocal L
+        L += term
+        table = np.asarray(f["amplitude"], dtype=float) if "amplitude" in f else None
+        loads.append((term, table, "time"))
+
+    if heat is not None:
+        L += heat * (ufl.tr(ev) + (hv if axi else 0)) * weight * dx
     for f in case["features"]:
         where, vals = facets.find(tag(f["group"])), f.get("values", {})
         if f["type"] == "fixed":
@@ -794,35 +837,69 @@ def solve_solid_2d(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> No
                 if axis in vals:
                     dofs = fem.locate_dofs_topological(V.sub(i), fdim, where)
                     bcs.append(dirichlet(vals[axis], dofs, V.sub(i)))
-        elif f["type"] == "force":  # the total over the edge, spread over its weight
+        elif f["type"] == "force" and not modal:  # the edge's total, spread over its weight
             traction = np.array([vals.get(c, 0.0) for c in "xy"]) / f["area"]
-            L += ufl.inner(fem.Constant(msh, traction), v) * weight * ds(tag(f["group"]))
-        elif f["type"] == "pressure":
-            L += -vals["p"] * ufl.inner(n, v) * weight * ds(tag(f["group"]))
+            add_load(ufl.inner(fem.Constant(msh, traction), v) * weight * ds(tag(f["group"])), f)
+        elif f["type"] == "pressure" and not modal:
+            add_load(-vals["p"] * ufl.inner(n, v) * weight * ds(tag(f["group"])), f)
         elif f["type"] == "elastic_support":
             kn, kt = vals.get("kn", 0.0), vals.get("kt", 0.0)
             un, vn = ufl.dot(u, n), ufl.dot(v, n)
             a += kn * un * vn * weight * ds(tag(f["group"]))
             if kt:
                 a += kt * ufl.inner(u - un * n, v - vn * n) * weight * ds(tag(f["group"]))
+        elif f["type"] in ("gravity", "acceleration", "rotation") and not modal:
+            # rho b per volume (ADR 0037), in the plane: a uniform b's x and y; a spin
+            # about z (planar) or about the axis Y (axisymmetric), the case checked so.
+            load, rho = f["load"], piecewise("density")
+            if load["uniform"] is not None:
+                b = fem.Constant(msh, np.asarray(load["uniform"][:2], dtype=float))
+            else:
+                d = x - ufl.as_vector(load["centre"][:2])
+                along = ufl.as_vector(load["axis"][:2])
+                b = load["omega"] ** 2 * (d - ufl.dot(d, along) * along)
+            add_load(rho * ufl.inner(b, v) * weight * dx(tag(f["group"])), f)
+        elif f["type"] in ("force", "pressure", "gravity", "acceleration", "rotation"):
+            continue  # loads: none in a modal step
         else:
             raise SystemExit(f"{f['type']} is not written for 2D models")
-    uh = solve_linear(a, L, bcs, V, "u")
     out["coords"] = V.tabulate_dof_coordinates()
-    disp = uh.x.array.reshape(-1, 2)
-    out["displacement"] = np.column_stack([disp, np.zeros(len(disp))])
-    e, _hoop, s, s_hoop = parts(uh)
-    zero = 0.0 * s[0, 0]
-    if axi:
-        zz = s_hoop
-    elif case.get("planar_model") == "plane_strain":
-        zz = lmbda * ufl.tr(e)
-    else:
-        zz = zero
-    voigt = ufl.as_vector([s[0, 0], s[1, 1], zz, s[0, 1], zero, zero])
+
+    def voigt_of(w):
+        e, _hoop, s, s_hoop = parts(w)
+        zero = 0.0 * s[0, 0]
+        if axi:
+            zz = s_hoop
+        elif case.get("planar_model") == "plane_strain":
+            zz = lmbda * ufl.tr(e)
+        else:
+            zz = zero
+        if heat is not None:  # stress is C : (strain - thermal strain)
+            s = s - heat * I2
+            zz = zz - heat if not plane_stress else zz
+        return ufl.as_vector([s[0, 0], s[1, 1], zz, s[0, 1], zero, zero])
+
+    mass = (
+        ufl.inner(piecewise("density") * u, v) * weight * dx if step_type != "stationary" else None
+    )
+    if step_type in ("transient", "frequency_domain"):
+        stress = _stress_projector(msh, degree, dx, None, V, voigt_of)
+        dynamics = solve_transient if step_type == "transient" else solve_harmonic
+        dynamics(case["step"], a, mass, loads, bcs, V, stress, out)
+        return
+    if modal:
+        count = int(case["step"].get("modes", 10))
+        values, vectors = eigenpairs(a, mass, bcs, count)
+        hz = np.sqrt(np.maximum(values, 0.0)) / (2 * np.pi)
+        order = np.argsort(hz)
+        out["frequencies"] = hz[order]
+        out["modes"] = np.asarray([_xyz(vectors[i], 2) for i in order])
+        return
+    uh = solve_linear(a, L, bcs, V, "u")
+    out["displacement"] = _xyz(uh.x.array, 2)
     S = fem.functionspace(msh, ("Lagrange", degree, (6,)))
     p, q = ufl.TrialFunction(S), ufl.TestFunction(S)
-    mass, rhs = ufl.inner(p, q) * dx, ufl.inner(voigt, q) * dx
+    mass, rhs = ufl.inner(p, q) * dx, ufl.inner(voigt_of(uh), q) * dx
     out["stress"] = solve_linear(mass, rhs, [], S, "s", mass_matrix=True).x.array.reshape(-1, 6)
 
 
@@ -1407,7 +1484,8 @@ def solve_magnetic_axisymmetric(case, msh, degree, dx, facets, tag, piecewise, o
 
     mag = case["magnetics"]
     x = ufl.SpatialCoordinate(msh)
-    r = x[0]
+    planar = case.get("dimension") == "2d_planar"  # ADR 0048: A_z, per metre of depth
+    r = 1.0 if planar else x[0]
     nu = 1 / (MU_0 * piecewise("relative_permeability"))
     sigma = fem.functionspace(msh, ("DG", 0))
     sig = fem.Function(sigma)
@@ -1419,7 +1497,9 @@ def solve_magnetic_axisymmetric(case, msh, degree, dx, facets, tag, piecewise, o
     (ar, ai), (vr, vi) = ufl.TrialFunctions(W), ufl.TestFunctions(W)
     omega = fem.Constant(msh, 0.0)
 
-    def curl(u):  # (B_r, B_z) of A_φ = u: (−∂u/∂z, ∂u/∂r + u/r)
+    def curl(u):  # (B_r, B_z) of A_φ = u: (−∂u/∂z, ∂u/∂r + u/r); planar (∂u/∂y, −∂u/∂x)
+        if planar:
+            return ufl.as_vector([u.dx(1), -u.dx(0)])
         return ufl.as_vector([-u.dx(1), u.dx(0) + u / r])
 
     # The curl form: its natural condition is H tangential = 0 (flux normal), which
@@ -1432,7 +1512,8 @@ def solve_magnetic_axisymmetric(case, msh, degree, dx, facets, tag, piecewise, o
     loads = []
     for c in mag["coils"]:
         if c["kind"] == "massive":
-            loads.append(sig / (2 * np.pi) * vr * dx(tag(c["body"])))  # σ/(2πr) · r
+            unit = sig if planar else sig / (2 * np.pi)  # σ · 1 V/m, or σ/(2πr) · r
+            loads.append(unit * vr * dx(tag(c["body"])))
             continue
         area = integral(fem.Constant(msh, 1.0) * dx(tag(c["body"])))
         jr, ji = (c["turns"] * c["current"][k] / area for k in (0, 1))
@@ -1443,9 +1524,10 @@ def solve_magnetic_axisymmetric(case, msh, degree, dx, facets, tag, piecewise, o
     for k in (0, 1):
         sub, _ = W.sub(k).collapse()
         zero = fem.Function(sub)
-        axis = fem.locate_dofs_geometrical((W.sub(k), sub),
-                                           lambda p: np.isclose(p[0], 0.0, atol=1e-12))  # fmt: skip
-        bcs.append(fem.dirichletbc(zero, axis, W.sub(k)))
+        if not planar:  # A_φ = 0 on the axis
+            on_axis = lambda p: np.isclose(p[0], 0.0, atol=1e-12)  # noqa: E731
+            axis = fem.locate_dofs_geometrical((W.sub(k), sub), on_axis)
+            bcs.append(fem.dirichletbc(zero, axis, W.sub(k)))
         for g in sorted(held):
             dofs = fem.locate_dofs_topological((W.sub(k), sub), 1, facets.find(tag(g)))
             bcs.append(fem.dirichletbc(zero, dofs, W.sub(k)))

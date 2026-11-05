@@ -38,6 +38,8 @@ class CodeSaturneAdapter(SolverAdapter):
         },
         features=FLUID_FEATURES | THERMAL_FEATURES,
         couplings=frozenset({"non_isothermal_flow"}),
+        # ADR 0048: 2D models solved one cell thick (`mesh.layer`).
+        dimensions=frozenset({"3d", "2d_planar", "2d_axisymmetric"}),
         # ADR 0023: its linear solvers are iterative; the steady algorithm runs its own
         # iteration count (the step's iterations), keeping only the converged state.
         shared_settings=frozenset({"linear_solver:iterative"}),

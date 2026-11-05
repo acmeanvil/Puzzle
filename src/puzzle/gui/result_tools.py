@@ -615,6 +615,8 @@ def rows(window, probe: ResultProbe, found: dict) -> dict[str, str]:
         for axis in "xyz":
             out[f"Force {axis.upper()}"] = _value(found["components"][axis], "force")
         out["Force (total)"] = _value(found["value"], "force")
+        if found.get("totals"):  # a 2D model (ADR 0048): what the total covers
+            out["Totals"] = found["totals"].capitalize()
         out["Moment about"] = _position(found["about"]) + ("" if probe.about else " (centroid)")
         for axis in "xyz":
             out[f"Moment {axis.upper()}"] = _moment(found["moment"][axis])
@@ -635,6 +637,8 @@ def rows(window, probe: ResultProbe, found: dict) -> dict[str, str]:
         out["Force (total)"] = _value(found["value"], "force")
         out["Normal force"] = _value(found["normal_force"], "force")
         out["Shear force"] = _value(found["shear_force"], "force")
+        if found.get("totals"):
+            out["Totals"] = found["totals"].capitalize()
         out["Moment about"] = _position(found["about"]) + " (the cut's centroid)"
         for axis in "xyz":
             out[f"Moment {axis.upper()}"] = _moment(found["moment"][axis])

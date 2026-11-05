@@ -282,6 +282,8 @@ def generate_mesh(
 
         path = out_dir / MESH_FILE
         (out_dir / "quality.json").write_text(json.dumps(quality))
+        if planar:
+            _counter_clockwise()
         gmsh.option.setNumber("Mesh.SaveAll", 0)
         gmsh.write(str(path))
         mesh = _extract()
@@ -405,6 +407,24 @@ def _pieces(reference, candidates, found: dict, *, translation, rotation, tol: f
         total = sum(e.measure for e, _ in inside)
         if len(inside) > 1 and abs(total - ref.measure) <= 1e-5 * max(ref.measure, 1e-30):
             found[ref.name] = [dt for _, dt in inside]
+
+
+def _counter_clockwise() -> None:
+    """A 2D model's elements turned counter-clockwise seen from +z (ADR 0048): a face
+    whose outline was drawn clockwise, mirrored or imported facing -z meshes the other
+    way round, and CalculiX refuses those elements (nonpositive Jacobian)."""
+    for dim, tag in gmsh.model.getEntities(2):
+        types, _, nodes = gmsh.model.mesh.getElements(dim, tag)
+        if not len(types):
+            continue
+        per = gmsh.model.mesh.getElementProperties(types[0])[3]
+        corners = np.asarray(nodes[0], dtype=np.int64).reshape(-1, per)[:, :3]
+        ids, xyz, _ = gmsh.model.mesh.getNodes(dim, tag, includeBoundary=True)
+        at = dict(zip(ids.tolist(), np.asarray(xyz).reshape(-1, 3)[:, :2], strict=True))
+        p = np.array([[at[int(n)] for n in tri] for tri in corners])
+        a, b = p[:, 1] - p[:, 0], p[:, 2] - p[:, 0]
+        if (a[:, 0] * b[:, 1] - a[:, 1] * b[:, 0]).sum() < 0:
+            gmsh.model.mesh.reverse([(dim, tag)])
 
 
 def _check_plane(comp: Component) -> None:

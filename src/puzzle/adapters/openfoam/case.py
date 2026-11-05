@@ -35,13 +35,14 @@ from puzzle.adapters.common import (
     match_points,
 )
 from puzzle.adapters.openfoam.foam import latest_time, read_internal_field, write_dict
+from puzzle.mesh import layer
 from puzzle.mesh.med import write_med
 from puzzle.mesh.mesh import Mesh
 from puzzle.model.schema import Component, Material, Project, Study
 from puzzle.results.model import Field, Results, StepResult
 
 TURBULENCE = {"laminar": None, "k-epsilon": "kEpsilon", "k-omega-SST": "kOmegaSST"}
-PATCH_TYPES = {"wall": "wall", "symmetry": "symmetry"}
+PATCH_TYPES = {"wall": "wall", "symmetry": "symmetry", "empty": "empty", "wedge": "wedge"}
 CMU = 0.09
 # Puzzle field name, components, and the factor to SI (filled in per case: rho).
 FIELDS = {
@@ -69,8 +70,13 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
             f"not {sorted(solved)}"
         )
     heat = "heat_transfer" in solved
+    layered = None
+    if comp.dimension != "3d":  # ADR 0048: the 2D mesh one cell thick, empty or wedge sides
+        layer.first_order(mesh, "OpenFOAM")
+        layered = layer.extrude(mesh, comp.dimension == "2d_axisymmetric")
+        mesh = layered.mesh
     if any(
-        b.element not in ("tet4", "hex8", "prism6", "pyramid5") for b in mesh.blocks if b.dim == 3
+        b.element not in ("tet4", "hex8", "wedge6", "pyramid5") for b in mesh.blocks if b.dim == 3
     ):
         raise InputError("OpenFOAM needs a first-order mesh: set element_order = 1")
     if len(comp.materials) != 1:
@@ -89,6 +95,8 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
 
     flow = next(p for p in comp.physics if p.type == "fluid_flow")
     features = [f for f in flow.features if f.type in FLUID]
+    if layered is not None:
+        features = layer.off_axis(features, layered)
     unsupported = [f.type for f in features if f.type == "mass_flow_inlet"]
     if unsupported:
         raise InputError("the OpenFOAM adapter does not support ['mass_flow_inlet'] yet")
@@ -121,11 +129,17 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
                 patch["intensity"] = v.get("intensity", 0.05)
                 patch["mixing_length"] = 0.07 * (
                     v.get("hydraulic_diameter")
+                    or (layered.diameters[f.selection] if layered else None)
                     or hydraulic_diameter(mesh.groups[f.selection], mesh)
                 )
         elif f.type == "pressure_outlet":
             patch["p"] = v.get("p", 0.0)
         patches[f.selection] = patch
+    if layered is not None:
+        thermal = layer.off_axis(thermal, layered)
+        side = "wedge" if layered.axisymmetric else "empty"
+        patches[layer.FRONT] = {"kind": side}
+        patches[layer.BACK] = {"kind": side}
     for f in thermal:
         patch = patches.get(f.selection)
         if patch is None or patch["kind"] not in ("velocity_inlet", "wall"):
@@ -196,6 +210,8 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
         "postProcess -func writeCellCentres -latestTime > log.postProcess 2>&1\n"
     )
     (workdir / "density.txt").write_text(f"{rho:.17g}\n")
+    if layered is not None:
+        layered.save(workdir)
 
     volume = [b for b in mesh.blocks if b.dim == 3]
     np.savetxt(workdir / "element-ids.txt", np.concatenate([b.ids for b in volume]), fmt="%d")
@@ -227,7 +243,9 @@ def read_results(workdir: Path) -> Results:
     centres = read_internal_field(final / "C", n)
     # Node-average centres equal OpenFOAM's for tets and parallelepipeds; others are
     # close enough for the coordinate match's tolerance on fine meshes.
-    ids = match_points(centres, np.load(workdir / "element-centroids.npy"), ids_ref)
+    reference = np.load(workdir / "element-centroids.npy")
+    layered = (workdir / layer.FILE).exists()
+    ids = (layer.match if layered else match_points)(centres, reference, ids_ref)
     order = np.argsort(ids)
     step = StepResult(1, "stationary", 1.0)
     for name, (field_name, comps) in FIELDS.items():
@@ -236,7 +254,7 @@ def read_results(workdir: Path) -> Results:
             continue
         values = read_internal_field(path, n) * (rho if name in SCALED else 1.0)
         step.fields[field_name] = Field(field_name, "element", comps, ids[order], values[order])
-    return Results(solver="openfoam", steps=[step])
+    return layer.to_2d(workdir, Results(solver="openfoam", steps=[step]))
 
 
 def _turbulence_state(speed: float, inlets: list[dict]) -> tuple[float, float, float]:
@@ -289,6 +307,8 @@ def _wall(name: str) -> dict:
 
 def _condition(name: str, patch: dict, rho: float, conductivity: float) -> dict:
     kind = patch["kind"]
+    if kind in ("empty", "wedge"):  # a 2D model's front and back (ADR 0048)
+        return {"type": kind}
     if kind == "symmetry":
         return {"type": "symmetry"}
     if kind == "wall":

@@ -48,7 +48,8 @@ def von_mises(stress: np.ndarray) -> np.ndarray:
 
 
 def to_grid(mesh: Mesh, step: StepResult | None = None):
-    """A pyvista UnstructuredGrid of the volume and beam elements, with the step's nodal fields.
+    """A pyvista UnstructuredGrid of the volume, beam, shell and 2D region elements, with
+    the step's nodal fields.
 
     Vector fields also get a `<name>_magnitude` array, and stress gets `von_mises`.
     """
@@ -56,7 +57,9 @@ def to_grid(mesh: Mesh, step: StepResult | None = None):
 
     cells, types = [], []
     order = np.argsort(mesh.node_ids)
+    # Volumes, beams and shells; a 2D model's regions (ADR 0048) are its elements.
     shown = [b for b in mesh.blocks if b.dim == 3] + mesh.structural_blocks()
+    shown += mesh.region_blocks()
     for b in shown:
         if b.element not in VTK_CELLS:
             raise ValueError(f"viewing {b.element} elements is not supported yet")

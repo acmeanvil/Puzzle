@@ -47,11 +47,11 @@ GROUPS = [
             "hole",
             "polyline",
             "sheet",
-            "face",
-            "section",
             "curved_sheet",
         ],
     ),
+    # ADR 0048: 2D regions for planar and axisymmetric models.
+    ("2D", ["face", "rectangle", "circle", "annulus", "polygon", "slot", "offset", "section"]),
     ("Sweep", ["spline", "sweep", "pipe", "loft", "patch", "thicken", "subd"]),  # ADR 0065
     (
         "Modify",
@@ -74,7 +74,9 @@ NAMES = {"remove": "Remove features", "heal": "Heal", "fragment": "Share faces",
          "split_face": "Split face by sketch", "face": "Face from sketch",
          "section": "Section of a part", "sweep": "Sweep along a path",
          "pipe": "Pipe along a path", "loft": "Loft through profiles",
-         "subd": "SubD from a cage"}  # fmt: skip
+         "subd": "SubD from a cage", "rectangle": "Rectangle", "circle": "Circle",
+         "annulus": "Annulus", "polygon": "Regular polygon", "slot": "Slot",
+         "offset": "Wall along a line"}  # fmt: skip
 PLANES = [("XY plane", "xy"), ("YZ plane", "yz"), ("XZ plane", "xz")]
 ON_FACE = "face"
 

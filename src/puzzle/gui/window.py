@@ -214,10 +214,20 @@ def _measure(value: float, unit: str) -> str:
 # The selection filter: entity kind -> what the pick bar calls it.
 FILTERS = {"face": "Faces", "edge": "Edges", "body": "Bodies", "vertex": "Points"}
 ONE = {"face": "face", "edge": "edge", "body": "body", "vertex": "point"}
+# In a 2D model (ADR 0048 decision 3) a region is a face entity, as a body is in 3D;
+# edges take supports and loads; there are no bodies to pick.
+FILTERS_2D = {"face": "Regions", "edge": "Edges", "vertex": "Points"}
+ONE_2D = {"face": "region", "edge": "edge", "vertex": "point"}
 
 
-def _count(n: int, kind: str) -> str:
-    return f"{n} {ONE[kind] if n == 1 else FILTERS[kind].lower()}"
+def filters(planar: bool = False) -> dict[str, str]:
+    return FILTERS_2D if planar else FILTERS
+
+
+def _count(n: int, kind: str, planar: bool = False) -> str:
+    one = (ONE_2D if planar else ONE).get(kind, ONE[kind])
+    many = filters(planar).get(kind, FILTERS[kind]).lower()
+    return f"{n} {one if n == 1 else many}"
 
 
 class PickBar(QWidget):
@@ -240,11 +250,10 @@ class PickBar(QWidget):
         row.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
         self.label = ElidedLabel("")
         self.filter = QComboBox()  # what a double-click picks
+        self.planar = False
         for kind, label in FILTERS.items():
             self.filter.addItem(label, kind)
-        self.filter.currentIndexChanged.connect(
-            lambda: window.viewport.set_pick_kind(self.filter.currentData())
-        )
+        self.filter.currentIndexChanged.connect(self._kind_chosen)
         row.addWidget(self.filter)
         # The selection tools (ADR 0034): extend across smooth joins, pick alike, a
         # whole part, a box; undo while picking.
@@ -299,14 +308,35 @@ class PickBar(QWidget):
         self.filter.setFixedHeight(buttons[0].height())
         window.viewport.picked_changed.connect(self.update_picks)
 
+    def _kind_chosen(self) -> None:
+        if self.filter.currentData() is not None:
+            self.window.viewport.set_pick_kind(self.filter.currentData())
+
+    def set_planar(self, planar: bool) -> None:
+        """The filter's words for a 2D model (Regions, Edges, Points) or a 3D one."""
+        if planar == self.planar:
+            return
+        self.planar = planar
+        kind = self.window.viewport.pick_kind
+        self.filter.blockSignals(True)
+        self.filter.clear()
+        for k, label in filters(planar).items():
+            self.filter.addItem(label, k)
+        index = self.filter.findData(kind)
+        self.filter.setCurrentIndex(max(index, 0))
+        self.filter.blockSignals(False)
+        if index < 0:  # a body filter in a 2D model: regions
+            self._kind_chosen()
+
     def update_picks(self, picked) -> None:
         names = self.window.picked_names()
         shown = ", ".join(f"{p}/{n}" for p, n in names[:6]) + (" …" if len(names) > 6 else "")
         kind = self.window.viewport.pick_kind
+        words = filters(self.planar).get(kind, FILTERS[kind]).lower()
         text = (
-            f"{_count(len(names), kind)} picked: {shown}"
+            f"{_count(len(names), kind, self.planar)} picked: {shown}"
             if names
-            else f"Click {FILTERS[kind].lower()} to pick (Shift adds, Ctrl or ⌘ removes)"
+            else f"Click {words} to pick (Shift adds, Ctrl or ⌘ removes)"
         )
         size = self.window.viewport.measure(self.window.viewport.picked) if names else {}
         if size.get("area"):
@@ -320,7 +350,8 @@ class PickBar(QWidget):
         self.setVisible(self.window.viewport.picking or bool(names))
 
     def _new(self) -> None:
-        kinds = FILTERS[self.window.viewport.pick_kind].lower()
+        kind = self.window.viewport.pick_kind
+        kinds = filters(self.planar).get(kind, FILTERS[kind]).lower()
         name = self.window.ask_text("New selection", f"Name for the picked {kinds}:", "Selection")
         if name:
             self.window.selection_from_picks(name)
@@ -1561,6 +1592,7 @@ class MainWindow(QMainWindow):
             mine = (f"{node.label}/", f"{node.label}#")
             entities = [e for e, (_, n) in names.items() if e[0] == 2 and n.startswith(mine)]
         self.mesh_component = str(comp.id)
+        self.pick_bar.set_planar(comp.dimension != "3d")
         self.viewport.boundaries = self.mesh_boundaries.get(str(comp.id), {})
         self.viewport.vertices = self.mesh_vertices.get(str(comp.id), {})
         self.viewport.show_mesh(mesh, highlight if highlight in mesh.groups else None, entities)
@@ -1705,6 +1737,7 @@ class MainWindow(QMainWindow):
             return
         cid = str(comp.id)
         self.mesh_component = cid
+        self.pick_bar.set_planar(comp.dimension != "3d")
         self.viewport.boundaries = self.mesh_boundaries.get(cid, {})
         self.viewport.vertices = self.mesh_vertices.get(cid, {})
         self.viewport.show_mesh(mesh, None, [])
@@ -1720,6 +1753,7 @@ class MainWindow(QMainWindow):
             return
         name = f"{comp.parts[0].name}/{geo.selections[index].name}"
         self.mesh_component = str(comp.id)
+        self.pick_bar.set_planar(comp.dimension != "3d")
         self.viewport.boundaries = self.mesh_boundaries.get(str(comp.id), {})
         self.viewport.vertices = self.mesh_vertices.get(str(comp.id), {})
         self.viewport.show_mesh(mesh, name if name in mesh.groups else None,
@@ -1840,6 +1874,9 @@ class MainWindow(QMainWindow):
                 )
         study = self.session.project.objects.get(_uuid(record.study_id))
         self._result_component = getattr(study, "component", None)
+        from puzzle.post.revolve import mark_dimension  # the store keeps no dimension
+
+        mark_dimension(self.result[0], self.session.project.objects.get(self._result_component))
         # A result shown afresh starts in global axes (ADR 0049), or the plot's own.
         self.results_bar.set_systems(self.session.project, getattr(self, "_plot_axes", None))
         self._plot_axes = None
@@ -2446,9 +2483,10 @@ class MainWindow(QMainWindow):
             )
             return None
         if sel.entity != self.viewport.pick_kind:
+            words = filters(self.pick_bar.planar)
+            kind = words.get(sel.entity, FILTERS[sel.entity])
             self.statusBar().showMessage(
-                f"'{sel.name}' holds {FILTERS[sel.entity].lower()}; set the filter to "
-                f"{FILTERS[sel.entity]} and pick again",
+                f"'{sel.name}' holds {kind.lower()}; set the filter to {kind} and pick again",
                 8000,
             )
             return None
@@ -2479,8 +2517,9 @@ class MainWindow(QMainWindow):
             self.viewport.clear_picks()
             self.viewport.pick_history.clear()  # the selection is what undo takes back
             n = len(new)
-            what = FILTERS[sel.entity].lower() if n != 1 else ONE[sel.entity]
-            self.statusBar().showMessage(f"'{sel.name}' now holds {n} {what}", 6000)
+            self.statusBar().showMessage(
+                f"'{sel.name}' now holds {_count(n, sel.entity, self.pick_bar.planar)}", 6000
+            )
         return out
 
     def edit_selection_in_view(self, geo, index: int) -> None:
@@ -2779,6 +2818,7 @@ class MainWindow(QMainWindow):
         mesh = self._preview(comps[0])
         if mesh is not None:
             self.mesh_component = str(comps[0].id)
+            self.pick_bar.set_planar(comps[0].dimension != "3d")
             self.viewport.show_mesh(mesh, None, [])
 
     def ask_text(self, title: str, label: str, default: str = "") -> str | None:

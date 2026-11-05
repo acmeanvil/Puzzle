@@ -1218,6 +1218,12 @@ class Viewport(QWidget):
             if name not in arrays:
                 name = field if field in arrays else f"{field}_magnitude"
             values = grid.point_data[name] if name in grid.point_data else grid.cell_data[name]
+        from puzzle.post.revolve import revolve, revolved_view
+
+        revolved = revolved_view(mesh)  # ADR 0048: an axisymmetric section turned about Y
+        if revolved is not None:
+            grid = revolve(grid, revolved)
+            values = grid.point_data[name] if name in grid.point_data else grid.cell_data[name]
         key = item.key if item is not None else (scalar or field)
         custom = clim is None and key in self.ranges  # the legend's range for this result
         if custom:
@@ -1254,9 +1260,11 @@ class Viewport(QWidget):
             "scale": scale,
             "unit": unit,
             "name": name,
+            "revolved": revolved,
         }
         self.shown = {
             "kind": "result",
+            "revolved": revolved,
             "field": field,
             "scalar": name,
             "step": label,
@@ -1564,6 +1572,10 @@ class Viewport(QWidget):
         from puzzle.post.probes import at_point
 
         state = self.result_state
+        if state.get("revolved") is not None:  # a revolved view: read on the section
+            from puzzle.post.revolve import to_section
+
+            point = to_section(point)
         found = at_point(state["mesh"], state["step"], state["item"], point)
         shown_value, unit = _display(np.array([found["value"]]), state["item"].unit)
         probe = found | {

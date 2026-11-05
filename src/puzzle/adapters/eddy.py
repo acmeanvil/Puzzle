@@ -137,13 +137,14 @@ def coils(project, comp, features, mesh, *, solver: str) -> list[Coil]:
 
 
 def write_meta(path: Path, bodies: list[dict], coils_: list[Coil], frequencies,
-               times=None, axisymmetric: bool = False) -> None:  # fmt: skip
+               times=None, axisymmetric: bool = False, planar: bool = False) -> None:  # fmt: skip
     """What the result reader needs: each body's μr and σ, the coils, the frequencies
-    (harmonic; [0] for a static solve) or the output times (transient, s)."""
+    (harmonic; [0] for a static solve) or the output times (transient, s); whether the
+    model is axisymmetric or planar 2D (whose totals are per metre of depth)."""
     path.write_text(json.dumps({"bodies": bodies, "coils": [asdict(c) for c in coils_],
                                 "frequencies": list(frequencies),
                                 "times": list(times) if times else None,
-                                "axisymmetric": axisymmetric}))  # fmt: skip
+                                "axisymmetric": axisymmetric, "planar": planar}))  # fmt: skip
 
 
 def read_meta(path: Path) -> dict:
@@ -305,17 +306,23 @@ def step_result(meta: dict, hz: float, table, B, J, A, start: dict[str, complex]
     return StepResult(1, kind, value, None, {f.name: f for f in fields} | whole)
 
 
-# --- axisymmetric 2D (ADR 0047 item 7): A_φ on the r–z plane --------------------------
+# --- 2D (ADR 0047 item 7, ADR 0048): A out of the XY plane -----------------------------
 #
-# The model lies in the XY plane, X the radius and Y the axis (ADR 0048). The unknown is
-# the hoop component A_φ; the hoop direction is a field's out-of-plane component, as a 2D
-# stress's zz is: positive right-handed about +Y, so a positive winding current gives a
-# positive axial B inside it. Every integral is weighted by 2πr.
+# Axisymmetric: X the radius and Y the axis. The unknown is the hoop component A_φ; the
+# hoop direction is a field's out-of-plane component, as a 2D stress's zz is: positive
+# right-handed about +Y, so a positive winding current gives a positive axial B inside
+# it. Every integral is weighted by 2πr.
+#
+# Planar: the unknown is A_z, currents flow along z (out of the plane; a return
+# conductor carries a negative current). Every integral is per metre of depth, so the
+# losses (W/m), energy (J/m), resistance (Ω/m) and inductance (H/m) are per metre, and
+# a solid conductor's "voltage" is its drop per metre along z.
 
 
-def axisymmetric_table(mesh, bodies: list[str], path: Path) -> None:
+def axisymmetric_table(mesh, bodies: list[str], path: Path, planar: bool = False) -> None:
     """Each region triangle's Puzzle id, body, corner node ids, centroid radius and
-    revolved volume 2π r A (its corners: first-order geometry)."""
+    revolved volume 2π r A (its corners: first-order geometry); planar, the volume is
+    the area times 1 m of depth."""
     body_of: dict[int, int] = {}
     for index, name in enumerate(bodies):
         for b in mesh.groups[name].blocks(mesh):
@@ -328,9 +335,17 @@ def axisymmetric_table(mesh, bodies: list[str], path: Path) -> None:
     d1, d2 = xyz[:, 1, :2] - xyz[:, 0, :2], xyz[:, 2, :2] - xyz[:, 0, :2]
     area = 0.5 * np.abs(d1[:, 0] * d2[:, 1] - d1[:, 1] * d2[:, 0])
     radius = xyz[:, :, 0].mean(axis=1)
+    volume = area if planar else 2 * math.pi * radius * area
     np.savez(path, ids=ids, body=np.array([body_of[int(e)] for e in ids], np.int64),
-             corners=corners, area=area, radius=radius, volume=2 * math.pi * radius * area,
-             centres=xyz.mean(axis=1))  # fmt: skip
+             corners=corners, area=area, radius=radius, volume=volume,
+             centres=xyz.mean(axis=1), planar=np.array(planar))  # fmt: skip
+
+
+def _drive(table) -> np.ndarray:
+    """A unit voltage's E per element: 1 / 2πr round a ring, 1 per metre along z."""
+    if bool(table.get("planar", False)):
+        return np.ones(len(table["ids"]))
+    return 1 / (2 * math.pi * np.maximum(table["radius"], 1e-30))
 
 
 def _hoop_mean(table, potential: dict) -> np.ndarray:
@@ -343,20 +358,21 @@ def combine_axisymmetric(meta: dict, table, basis: list[dict], omega: float):
     is A_φ with the windings only, `basis[1 + j]` with a unit V on solid ring j alone (a
     source σ V / 2πr in it). Each ring's current I_m = ∫ σ (V_m / 2πr − jωA) dA over its
     section is linear in V; the V giving each its I combine them. Returns the potential
-    (node → A_φ) and each ring's V."""
+    (node → A_φ) and each ring's V. Planar, a solid bar's V is its drop per metre
+    (source σ V) and A is A_z."""
     rings = [c for c in meta["coils"] if c.kind == "massive"]
     if not rings:
         return basis[0], {}
     names = [b["name"] for b in meta["bodies"]]
     sigma = np.array([b["sigma"] for b in meta["bodies"]], float)[table["body"]]
-    r = np.maximum(table["radius"], 1e-30)
+    unit_e = _drive(table)
     inside = [table["body"] == names.index(c.body) for c in rings]
 
     def currents(potential, unit: int | None):
         a = _hoop_mean(table, potential)
         out = []
         for m, mine in enumerate(inside):
-            drive = sigma / (2 * math.pi * r) if unit == m else 0.0
+            drive = sigma * unit_e if unit == m else 0.0
             out.append((table["area"] * (drive - 1j * omega * sigma * a))[mine].sum())
         return np.array(out)
 
@@ -374,7 +390,7 @@ def axisymmetric_fields(meta: dict, table, mesh_coords: dict, potential: dict, o
     A_φ at the corners, linear in each triangle: B_r = −∂A/∂z, B_z = ∂A/∂r + A/r,
     J = J_s − jωσA (a winding's J_s = N I over its section; a solid ring's σ V / 2πr,
     `volts` its voltage per turn). `mesh_coords` and `potential` map node id → (x, y)
-    and → complex A_φ."""
+    and → complex A_φ. Planar (A_z): B = (∂A/∂y, −∂A/∂x, 0), a solid bar's J_s = σ V."""
     corners = table["corners"]
     xy = np.array([[mesh_coords[int(n)] for n in row] for row in corners])  # (n, 3, 2)
     a = np.array([[potential[int(n)] for n in row] for row in corners])  # (n, 3)
@@ -386,14 +402,17 @@ def axisymmetric_fields(meta: dict, table, mesh_coords: dict, potential: dict, o
     centre, r = a.mean(axis=1), np.maximum(table["radius"], 1e-30)
     n = len(corners)
     B = np.zeros((n, 3), complex)
-    B[:, 0], B[:, 1] = -dadz, dadr + centre / r
+    if bool(table.get("planar", False)):  # (∂A/∂y, −∂A/∂x): dadr is ∂/∂x, dadz ∂/∂y
+        B[:, 0], B[:, 1] = dadz, -dadr
+    else:
+        B[:, 0], B[:, 1] = -dadz, dadr + centre / r
     bodies = [b["name"] for b in meta["bodies"]]
     sigma = np.array([b["sigma"] for b in meta["bodies"]], float)[table["body"]]
     source = np.zeros(n, complex)
     for c in meta["coils"]:
         inside = table["body"] == bodies.index(c.body)
         if c.kind == "massive":  # driven by its voltage per turn round the ring
-            source[inside] = (sigma / (2 * math.pi * r))[inside] * (volts or {})[c.body]
+            source[inside] = (sigma * _drive(table))[inside] * (volts or {})[c.body]
         else:
             source[inside] = c.turns * c.phasor / table["area"][inside].sum()
     J, A = np.zeros((n, 3), complex), np.zeros((n, 3), complex)

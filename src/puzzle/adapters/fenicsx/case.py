@@ -156,6 +156,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             body_load_on_material(comp, f, "FEniCSx")
     magnetics = physics == "magnetic_fields" and (
         step.type in ("frequency_domain", "transient")
+        or comp.dimension != "3d"  # ADR 0048: 2D always takes the A_φ / A_z path
         or any(f.type == "stranded_coil" for f in features)
     )  # ADR 0047: the A–V solve; else the static one-coil path
     coils = [f for f in features if f.type == "coil_current"]
@@ -278,7 +279,8 @@ def _magnetics(project, comp, step, features, mesh, workdir: Path) -> dict:
     from puzzle.adapters import eddy
 
     coils = eddy.coils(project, comp, features, mesh, solver="FEniCSx")
-    if step.type == "stationary" and any(c.kind == "massive" for c in coils):
+    massive = any(c.kind == "massive" for c in coils)
+    if step.type == "stationary" and massive and not mesh.planar:  # 2D solves V at 0 Hz
         raise InputError(
             "a static magnetic study takes one massive conductor or windings, not both",
             code="unsupported",
@@ -303,9 +305,14 @@ def _magnetics(project, comp, step, features, mesh, workdir: Path) -> dict:
 
         times = transient_times(step)
     axisymmetric = comp.dimension == "2d_axisymmetric"
-    eddy.write_meta(workdir / eddy.META, bodies, coils, frequencies, times, axisymmetric)
-    table = eddy.axisymmetric_table if axisymmetric else eddy.element_table
-    table(mesh, [a.selection for a in comp.materials], workdir / eddy.ELEMENTS)
+    planar = comp.dimension == "2d_planar"
+    eddy.write_meta(workdir / eddy.META, bodies, coils, frequencies, times, axisymmetric,
+                    planar)  # fmt: skip
+    names = [a.selection for a in comp.materials]
+    if axisymmetric or planar:
+        eddy.axisymmetric_table(mesh, names, workdir / eddy.ELEMENTS, planar)
+    else:
+        eddy.element_table(mesh, names, workdir / eddy.ELEMENTS)
     return {
         "bodies": bodies,
         "frequencies": frequencies,
@@ -326,7 +333,7 @@ def _read_magnetics(workdir: Path, data, node_ids, ids) -> Results:
 
     meta = eddy.read_meta(workdir / eddy.META)
     table = dict(np.load(workdir / eddy.ELEMENTS))
-    if meta.get("axisymmetric"):  # A_φ at the nodes; Puzzle derives B, J, losses
+    if meta.get("axisymmetric") or meta.get("planar"):  # A_φ or A_z at the nodes
         coords = np.load(workdir / "node-coords.npy")
         xy = {int(n): c[:2] for n, c in zip(node_ids, coords, strict=True)}
         results = Results(solver="fenicsx")
@@ -504,29 +511,50 @@ def _time(step) -> dict:
 
 def _check_2d(comp, physics, step, features, thermal_load) -> None:
     """What FEniCSx's 2D models (ADR 0048) don't take yet, refused by name."""
-    if physics == "magnetic_fields" and comp.dimension == "2d_axisymmetric":
+    if physics == "magnetic_fields":  # ADR 0047 item 7, ADR 0048: A_φ or A_z
         if step.type not in ("stationary", "frequency_domain"):
-            raise InputError("axisymmetric magnetic fields run static or frequency-domain "
+            kind = "axisymmetric" if comp.dimension == "2d_axisymmetric" else "planar"
+            raise InputError(f"{kind} magnetic fields run static or frequency-domain "
                              "steps", code="unsupported")  # fmt: skip
-        return  # ADR 0047 item 7: windings only, checked with the coils
+        return  # checked with the coils
     if physics not in ("solid_mechanics", "heat_transfer"):
         raise InputError(
             f"2D models on FEniCSx solve structures or heat, not {physics}", code="unsupported"
         )
-    if physics == "solid_mechanics" and step.type != "stationary":
-        raise InputError(
-            f"2D structures on FEniCSx are static so far, not {step.type}", code="unsupported"
-        )
-    if thermal_load is not None:
+    if physics == "heat_transfer" and thermal_load is not None:
         raise InputError("a temperature load is not written in 2D yet", code="unsupported")
     allowed = {"fixed", "displacement", "force", "pressure", "elastic_support"} | THERMAL
+    allowed |= BODY_LOADS if physics == "solid_mechanics" else set()
     for f in features:
         fielded = f.type == "displacement" and f.fields  # ADR 0044: 3D only so far
-        if f.type not in allowed or f.axes is not None or f.amplitude is not None or fielded:
+        timed = f.amplitude is not None and f.type not in ("force", "pressure")
+        if f.type not in allowed or f.axes is not None or timed or fielded:
             raise InputError(
                 f"{f.type} on '{f.selection}' is not written in 2D models on FEniCSx yet",
                 code="unsupported",
             )
+        if f.type in BODY_LOADS:
+            _body_load_in_plane(comp, f)
+
+
+def _body_load_in_plane(comp, f) -> None:
+    """A 2D body load must lie in the model's plane: a uniform one along x and y (along
+    the axis Y only, axisymmetric), a spin about z (planar) or about the axis Y through
+    x = 0 (axisymmetric)."""
+    load = body_load(f)
+    axi = comp.dimension == "2d_axisymmetric"
+    if load.uniform is not None:
+        bad = abs(load.uniform[2]) > 0 or (axi and abs(load.uniform[0]) > 0)
+        where = "along the axis Y" if axi else "in the XY plane"
+    else:
+        ax = np.abs(load.axis)
+        bad = (ax[1] < 1 - 1e-9 or abs(load.centre[0]) > 0) if axi else ax[2] < 1 - 1e-9
+        where = "about the axis Y" if axi else "about z"
+    if bad:
+        raise InputError(
+            f"{f.type} on '{f.selection}': a 2D model's body load acts {where}",
+            code="unsupported",
+        )
 
 
 def _thickness(comp, selection: str, physics: str) -> dict:

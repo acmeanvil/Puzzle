@@ -40,6 +40,12 @@ CHOICES = {
         ("Cut from the part", "cut"),
         ("Keep only the overlap", "intersect"),
         ("A new body", "new"),
+        ("A region of its own, sharing edges (2D)", "separate"),
+    ],
+    "side": [  # an offset wall (ADR 0048): which side of its line
+        ("The line's left", "left"),
+        ("The line's right", "right"),
+        ("Half on each side", "both"),
     ],
     "plane": [("XY plane", "xy"), ("YZ plane", "yz"), ("XZ plane", "xz")],
     "yesno": [("Yes", True), ("No", False)],

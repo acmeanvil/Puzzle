@@ -149,6 +149,12 @@ def _refuse_in_2d(comp: Component) -> None:
     """What CalculiX's 2D models don't take here yet (ADR 0048), refused by name."""
     if comp.connectors or comp.beam_sections:
         raise InputError("fasteners and beams are not written in 2D models", code="unsupported")
+    for c in comp.contacts:  # no 2D benchmark yet: shared nodes (conformal bonds) only
+        if c.capability != "bonded_conformal":
+            raise InputError(
+                f"contact '{c.name}' ({c.capability}) is not written in 2D models yet",
+                code="unsupported",
+            )
     for ph in comp.physics:
         for f in ph.features:
             if f.type in ("remote_force", "remote_force_rigid", "remote_displacement") or (
@@ -940,6 +946,9 @@ def _step(
         features = [f for f in features if f.type in HOLDING]
     if project is not None:  # Cartesian forces and full displacements in global axes
         features = globalize(project, features)
+    if mesh.planar and _modal_based(step):
+        features = [_as_edge_pressure(f, mesh, comp) if f.type == "force" else f
+                    for f in features]  # fmt: skip
     rigid = _rigid_nodes(comp, mesh)  # the same ids the model section gave them
     nodes, applied = pretension
     extra: dict[str, list[str]] = {}
@@ -997,6 +1006,59 @@ def _modal_based(step: SolveStep) -> bool:
         step.type == "frequency_domain"
         or (step.type == "transient" and step.settings.get("method") == "modal")
     )
+
+
+def _as_edge_pressure(f: Feature, mesh: Mesh, comp: Component) -> Feature:
+    """A 2D edge force in a step solved over modes (ADR 0048): CalculiX loses point
+    loads on 2D elements there ("1-D or 2-D elements may cause problems in steady state
+    calculations": the end of a bar moved 760 times too little), but keeps edge
+    pressures. So a force along the edges' outward normal is written as the pressure
+    -F·n / A (A the load area: length x thickness, or 2 pi r dl); any other is refused."""
+    from puzzle.adapters.common import load_area
+    from puzzle.model.schema import Quantity
+
+    group = mesh.groups[f.selection]
+    force = np.array([f.values[a].to_si() if a in f.values else 0.0 for a in "xy"])
+    normals = _edge_normals(group, mesh)
+    size = float(np.linalg.norm(force))
+    if not size or not len(normals):
+        return f
+    along = normals @ (force / size)
+    if not (np.all(along > 1 - 1e-6) or np.all(along < -(1 - 1e-6))):
+        raise InputError(
+            f"force on '{f.selection}': CalculiX loses point loads on 2D elements in a "
+            "harmonic or modal transient step; a force square to a straight edge is written "
+            "as a pressure, this one is not (use a pressure, or the direct method)",
+            code="unsupported",
+        )
+    p = -float(np.sign(along[0])) * size / load_area(group, mesh, comp)
+    values = {"p": Quantity(value=p, unit="Pa")}
+    return f.model_copy(update={"type": "pressure", "values": values})
+
+
+def _edge_normals(group, mesh: Mesh) -> np.ndarray:
+    """Each of a 2D edge selection's segments' outward normals, in the XY plane: away
+    from the region element beside it."""
+    from puzzle.adapters.common import surface_blocks
+
+    corners = {}
+    for b in mesh.region_blocks():
+        for row in b.connectivity:
+            for i in range(3 if b.element.startswith("tri") else 4):
+                corners.setdefault(int(row[i]), []).append(row)
+    out = []
+    for b in surface_blocks(group, mesh):
+        for row in b.connectivity:
+            a, c = mesh.node_coords(np.asarray(row[:2]))[:, :2]
+            t = c - a
+            n = np.array([t[1], -t[0]]) / max(np.linalg.norm(t), 1e-300)
+            near = [r for r in corners.get(int(row[0]), []) if int(row[1]) in set(map(int, r))]
+            if near:
+                centre = mesh.node_coords(np.asarray(near[0])).mean(axis=0)[:2]
+                if np.dot(centre - (a + c) / 2, n) > 0:
+                    n = -n
+            out.append(n)
+    return np.asarray(out)
 
 
 def _steady_state(step: SolveStep) -> list[str]:

@@ -121,7 +121,8 @@ def test_cfd_runs_on_code_saturne(bracket):
     ]
 
 
-def test_code_saturne_is_3d_only(bracket):
+def test_code_saturne_takes_2d_models(bracket):
+    """ADR 0048 round 5: a 2D flow is solved one cell thick (test_cfd_2d.py)."""
     study = _component_study(
         bracket,
         "Planar flow",
@@ -130,6 +131,4 @@ def test_code_saturne_is_3d_only(bracket):
         "code_saturne",
         dimension="2d_planar",
     )
-    assert CodeSaturneAdapter().check(bracket, study) == [
-        "code_saturne does not support 2d_planar models"
-    ]
+    assert not any("2d_planar" in m for m in CodeSaturneAdapter().check(bracket, study))

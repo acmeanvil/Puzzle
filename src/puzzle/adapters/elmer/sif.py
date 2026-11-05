@@ -10,6 +10,7 @@ leaving through coil_end; magnetic_insulation keeps the flux tangential. Everyth
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -72,6 +73,7 @@ DIRECT = ["  Linear System Solver = Direct", "  Linear System Direct Method = Um
 
 
 RESTART = "puzzle-temperature.result"  # a transferred temperature field, as a restart
+THERMAL_ZZ = "puzzle-thermal-zz.json"  # plane strain: σz's thermal part, added back on reading
 
 
 def write_case(
@@ -119,10 +121,7 @@ def write_case(
     ]
     if step.type == "modal":
         features = [f for f in features if f.type in HOLDING]
-    if solved == {"magnetic_fields"} and mesh.planar:  # ADR 0047 item 7
-        if comp.dimension != "2d_axisymmetric":
-            raise InputError("2D magnetic fields run axisymmetric models so far",
-                             code="unsupported")  # fmt: skip
+    if solved == {"magnetic_fields"} and mesh.planar:  # ADR 0047 item 7, ADR 0048
         lines, emesh = magnetics.write_axisymmetric(project, comp, step, features, mesh,
                                                     workdir, write_mesh, _time_block)  # fmt: skip
         freqs = frequency_list(step) if harmonic else [1.0]
@@ -196,6 +195,7 @@ def write_case(
         "",
     ]
     forces: list[list[str]] = []  # body force blocks for body loads, in body order
+    (workdir / MESH_DIR / THERMAL_ZZ).unlink(missing_ok=True)
     for i, assignment in enumerate(comp.materials, start=1):
         conductor = assignment.selection in coil_bodies
         out += [f"Body {i}", f"  Target Bodies(1) = {i}", f"  Equation = {2 - conductor}"]
@@ -223,8 +223,29 @@ def write_case(
             alpha = material.properties.get("thermal_expansion")
             if alpha is None:
                 raise InputError(f"a temperature load needs thermal_expansion on '{material.name}'")
+            coefficient = alpha.to_si()
+            if (
+                mesh.planar
+                and comp.dimension == "2d_planar"
+                and comp.planar_model != "plane_stress"
+            ):
+                # ADR 0048: Elmer's plane strain leaves out the out-of-plane thermal strain
+                # (εz = 0 holds α ΔT there, which adds ν α ΔT in the plane): its stresses
+                # came out 1 / (1 + ν) of the closed form, so α (1 + ν) is written.
+                coefficient *= 1 + material.properties["poissons_ratio"].to_si()
+                # Its σz leaves the thermal part out too: the reader takes E α (T - T_ref)
+                # off it (`elmer.THERMAL_ZZ`), one material's E α for the whole model.
+                e_alpha = material.properties["youngs_modulus"].to_si() * alpha.to_si()
+                zz = workdir / MESH_DIR / THERMAL_ZZ
+                if zz.exists() and json.loads(zz.read_text())["e_alpha"] != e_alpha:
+                    raise InputError(
+                        "a temperature load in plane strain on Elmer takes materials of one "
+                        "E α so far",
+                        code="unsupported",
+                    )
+                zz.write_text(json.dumps({"e_alpha": e_alpha, "reference": _reference(comp)}))
             out[-2:-2] = [  # inside the Material block, before its End
-                f"  Heat Expansion Coefficient = {alpha.to_si():.10g}",
+                f"  Heat Expansion Coefficient = {coefficient:.10g}",
                 f"  Reference Temperature = {_reference(comp):.10g}",
             ]
     if "heat_transfer" in solved:

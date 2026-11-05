@@ -45,6 +45,15 @@ class ProfileError(ValueError):
     pass
 
 
+class _Unchained(ProfileError):
+    """A drawing whose lines don't join into separate loops (a line shared by two
+    regions, or running past a corner): split into cells instead."""
+
+    def __init__(self, pieces):
+        super().__init__("the DXF outline is not closed (a gap between segments)")
+        self.pieces = pieces
+
+
 def profile_face(
     spec: dict,
     plane: str = "xy",
@@ -60,7 +69,10 @@ def profile_face(
     if "sketch" in spec:
         loops, labels = _sketch_loops(spec["sketch"], to3d, plane, params or {})
     elif "dxf" in spec:
-        loops = _dxf_loops(spec, to3d, plane, offset, root)
+        try:
+            loops = _dxf_loops(spec, to3d, plane, offset, root)
+        except _Unchained as exc:  # lines shared or crossing (ADR 0048 round 3): cells
+            return _cells(exc.pieces, plane)
         labels = None
     else:
         loops = [_loop(spec, to3d, plane, offset)]
@@ -275,7 +287,10 @@ def _dxf_loops(spec: dict, to3d, plane: str, offset: float, root: Path | None) -
         raise ProfileError(
             f"no lines, arcs or circles in {file.name}" + (f" on layer {layer}" if layer else "")
         )
-    loops = _chain(pieces, tol=1e-6)
+    try:
+        loops = _chain(pieces, tol=1e-6)
+    except ProfileError:
+        raise _Unchained(pieces) from None
     loops.sort(key=_extent, reverse=True)  # the outer loop encloses the others
     return loops
 
@@ -345,3 +360,97 @@ def _extent(loop) -> float:
             p = c.Value(t)
             pts.append((p.X(), p.Y(), p.Z()))
     return max(math.dist(p, q) for p in pts for q in pts) if len(pts) > 1 else 0.0
+
+
+def _cells(pieces, plane: str):
+    """Every region a drawing's lines enclose (ADR 0048 round 3), for drawings whose
+    regions share a line drawn once, or whose lines run on past a corner: a plane
+    larger than the drawing is split by every line, and the cells not touching its
+    border are the regions. Each region's edges are named after the drawing's line they
+    lie on (side-N, in the drawing's order); dangling lines are dropped. A loop inside
+    another is a region too here (an insert), not a hole."""
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Splitter
+    from OCP.gp import gp_Ax3, gp_Pln
+    from OCP.TopAbs import TopAbs_EDGE, TopAbs_INTERNAL
+
+    from puzzle.geometry.history import TopTools_ListOfShape, _bounds, _faces, _list, _subshapes
+
+    edges = [e for _s, _t, e in pieces]
+    box = _bounds(_one_compound(edges))
+    size = max(box[3] - box[0], box[4] - box[1], box[5] - box[2], 1e-9)
+    centre = gp_Pnt((box[0] + box[3]) / 2, (box[1] + box[4]) / 2, (box[2] + box[5]) / 2)
+    frame = gp_Ax3(centre, gp_Dir(*NORMALS[plane]), gp_Dir(*PLANES[plane](1.0, 0.0, 0.0)))
+    base = BRepBuilderAPI_MakeFace(gp_Pln(frame), -size, size, -size, size).Face()
+    border = _subshapes(base, TopAbs_EDGE)
+    split = BRepAlgoAPI_Splitter()
+    args, tools = TopTools_ListOfShape(), TopTools_ListOfShape()
+    args.Append(base)
+    for e in edges:
+        tools.Append(e)
+    split.SetArguments(args)
+    split.SetTools(tools)
+    split.Build()
+    if not split.IsDone():
+        raise ProfileError("the drawing's lines could not be split into regions")
+    outer = [x for b in border for x in (_list(split.Modified(b)) or [b])]
+    cells = []
+    for f in _faces(split.Shape()):
+        if any(e.IsSame(o) for e in _subshapes(f, TopAbs_EDGE) for o in outer):
+            continue
+        cells.append(_without_internal(f))
+    if not cells:
+        raise ProfileError("the drawing's lines enclose no region")
+    names, order = [], []
+    for f in cells:
+        for e in _subshapes(f, TopAbs_EDGE):
+            if e.Orientation() == TopAbs_INTERNAL or any(e.IsSame(o) for o in order):
+                continue
+            for k, piece in enumerate(edges, start=1):
+                if any(e.IsSame(m) for m in (_list(split.Modified(piece)) or [piece])):
+                    order.append(e)
+                    names.append(f"side-{k}")
+                    break
+    return _one(cells), order, names
+
+
+def _without_internal(face):
+    """A split cell without the dangling lines left inside it (a drawing's construction
+    lines), rebuilt from its outline and holes."""
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeWire
+    from OCP.BRepTools import BRepTools
+    from OCP.TopAbs import TopAbs_EDGE, TopAbs_INTERNAL, TopAbs_WIRE
+    from OCP.TopoDS import TopoDS
+
+    from puzzle.geometry.history import _static, _subshapes
+
+    edges = _subshapes(face, TopAbs_EDGE)
+    if not any(e.Orientation() == TopAbs_INTERNAL for e in edges):
+        return face
+    outer = _static(BRepTools, "OuterWire")(face)
+    maker = None
+    for w in [outer] + [x for x in _subshapes(face, TopAbs_WIRE) if not x.IsSame(outer)]:
+        kept = [e for e in _subshapes(w, TopAbs_EDGE) if e.Orientation() != TopAbs_INTERNAL]
+        if not kept:
+            continue
+        mk = BRepBuilderAPI_MakeWire()
+        for e in kept:
+            mk.Add(e)
+        if not mk.IsDone() or not mk.Wire().Closed():
+            continue
+        wire = _static(TopoDS, "Wire")(mk.Wire())
+        if maker is None:
+            maker = BRepBuilderAPI_MakeFace(wire, True)
+        else:
+            maker.Add(wire)
+    return maker.Face() if maker is not None and maker.IsDone() else face
+
+
+def _one_compound(shapes):
+    from OCP.BRep import BRep_Builder
+    from OCP.TopoDS import TopoDS_Compound
+
+    compound, builder = TopoDS_Compound(), BRep_Builder()
+    builder.MakeCompound(compound)
+    for s in shapes:
+        builder.Add(compound, s)
+    return compound

@@ -232,15 +232,29 @@ def linearized(
         )
     data = np.asarray(probe.point_data["stress"], float).reshape(samples, -1)
     tensors = data[:, [f.components.index(c) for c in linearize.ORDER]]
+    if hoop is None and _flat(mesh) and abs(a[2]) < 1e-12 and abs(b[2]) < 1e-12:
+        hoop = (0.0, 0.0, 1.0)  # a 2D model (ADR 0048): the hoop is out of the plane
     frame = linearize.line_frame(a, b, hoop) if components == "line" else None
     out = linearize.report(t * length, tensors, kind, frame, bending == "normal")
     return out | {"distance": (t * length).tolist(), "points": points.tolist(),
                   "values": out["series"]["total"]}  # fmt: skip
 
 
-def _cut(mesh: Mesh, step: StepResult, origin, normal):
+def _flat(mesh: Mesh) -> bool:
+    """A 2D model's mesh: marked so, or (a stored mesh, unmarked) one without volumes
+    lying in z = 0."""
+    if mesh.planar:
+        return True
+    if any(b.dim == 3 for b in mesh.blocks) or not len(mesh.coords):
+        return False
+    return bool(np.abs(np.asarray(mesh.coords)[:, 2]).max() < 1e-12)
+
+
+def _cut(mesh: Mesh, step: StepResult, origin, normal, depth=None):
     """The model cut by a plane: triangles with the step's fields interpolated onto
-    them, and each triangle's area and centre."""
+    them, and each triangle's area and centre. A 2D model's cut is a line: its segments
+    (as two-point "faces"), each's area its length times `depth` at its middle (2 pi r
+    axisymmetric, the thickness in plane stress, 1 m in plane strain; ADR 0048)."""
     from puzzle.post.vtk import to_grid
 
     n = np.asarray(normal, float)
@@ -248,6 +262,15 @@ def _cut(mesh: Mesh, step: StepResult, origin, normal):
     cut = to_grid(mesh, step).slice(normal=n, origin=np.asarray(origin, float))
     if cut.n_cells == 0:
         raise PuzzleError("the plane doesn't cut the model", code="invalid")
+    if _flat(mesh):
+        lines = np.asarray(cut.lines).reshape(-1, 3)[:, 1:] if cut.n_lines else None
+        if lines is None or not len(lines):
+            raise PuzzleError("the plane doesn't cut the model", code="invalid")
+        xyz = np.asarray(cut.points, float)
+        a, b = xyz[lines[:, 0]], xyz[lines[:, 1]]
+        mid = (a + b) / 2.0
+        weight = depth(mid) if depth is not None else np.ones(len(mid))
+        return cut, lines, np.linalg.norm(b - a, axis=1) * weight, mid, n
     cut = cut.triangulate()
     faces = np.asarray(cut.faces).reshape(-1, 4)[:, 1:]
     xyz = np.asarray(cut.points, float)
@@ -256,13 +279,14 @@ def _cut(mesh: Mesh, step: StepResult, origin, normal):
     return cut, faces, areas, (a + b + c) / 3.0, n
 
 
-def over_plane(mesh: Mesh, step: StepResult, item: Item, origin, normal, reduction: str):
+def over_plane(mesh: Mesh, step: StepResult, item: Item, origin, normal, reduction: str,
+               depth=None):  # fmt: skip
     """The item over the plane's cut through the model: max or min (with where), or
     the area-weighted mean or integral (values linear across each cut triangle)."""
     f = step.fields.get(item.field)
     if f is None:
         raise PuzzleError(f"no '{item.label}' in this result step", code="not_found")
-    cut, faces, areas, _centres, _n = _cut(mesh, step, origin, normal)
+    cut, faces, areas, _centres, _n = _cut(mesh, step, origin, normal, depth)
     if item.field not in cut.point_data:
         raise PuzzleError(f"'{item.label}' can't be read on a plane", code="unsupported")
     comps = np.asarray(cut.point_data[item.field], float).reshape(cut.n_points, -1)
@@ -276,7 +300,7 @@ def over_plane(mesh: Mesh, step: StepResult, item: Item, origin, normal, reducti
     return out | {"value": integral if reduction == "integral" else integral / area}
 
 
-def section_force(mesh: Mesh, step: StepResult, origin, normal) -> dict:
+def section_force(mesh: Mesh, step: StepResult, origin, normal, depth=None) -> dict:
     """The force and moment carried across a plane: the stress's traction (sigma n)
     integrated over the cut, the moment about the cut's centroid. It is what the side
     the normal points to passes on to the other (Ansys's force reaction on a surface)."""
@@ -286,7 +310,7 @@ def section_force(mesh: Mesh, step: StepResult, origin, normal) -> dict:
     order = ("xx", "yy", "zz", "xy", "yz", "zx")
     if any(c not in f.components for c in order):
         raise PuzzleError("the stress here isn't a full tensor", code="unsupported")
-    cut, faces, areas, centres, n = _cut(mesh, step, origin, normal)
+    cut, faces, areas, centres, n = _cut(mesh, step, origin, normal, depth)
     s = np.asarray(cut.point_data["stress"], float).reshape(cut.n_points, -1)
     xx, yy, zz, xy, yz, zx = (s[:, f.components.index(c)] for c in order)
     traction = np.stack(
@@ -350,8 +374,11 @@ def _source(project, store, probe):
         d = derived.evaluate(project, store, src)
         return d.mesh, d.results, d.items
     if isinstance(src, Study):
+        from puzzle.post.revolve import mark_dimension
+
         record = derived.run_for(project, store, src.id)
         results, mesh = store.read_results(record.run_id), store.read_mesh(record.mesh_id)
+        mark_dimension(mesh, project.objects.get(src.component))  # the store keeps none
         return mesh, results, derived._items_of(results)
     raise PuzzleError(f"probe '{probe.name}': its source is gone", code="not_found")
 
@@ -366,8 +393,9 @@ def _item(probe, items):
     return item
 
 
-def at_step(mesh: Mesh, step: StepResult, item: Item, probe) -> dict:
-    """One probe of any type, at one step."""
+def at_step(mesh: Mesh, step: StepResult, item: Item, probe, depth=None) -> dict:
+    """One probe of any type, at one step. `depth`: what a 2D cut's length stands for
+    (`depth_of`)."""
     if probe.type == "selection":
         return over_selection(mesh, step, item, probe.selection, probe.reduction)
     if probe.type == "reaction":
@@ -383,9 +411,9 @@ def at_step(mesh: Mesh, step: StepResult, item: Item, probe) -> dict:
             out["checks"] = checks(out, probe.allowable, probe.membrane)
         return out
     if probe.type == "plane":
-        return over_plane(mesh, step, item, probe.point, probe.end, probe.reduction)
+        return over_plane(mesh, step, item, probe.point, probe.end, probe.reduction, depth)
     if probe.type == "section":
-        return section_force(mesh, step, probe.point, probe.end)
+        return section_force(mesh, step, probe.point, probe.end, depth)
     return at_point(mesh, step, item, probe.point)
 
 
@@ -416,8 +444,62 @@ def evaluate(project, store, probe) -> dict:
     if not steps:
         raise PuzzleError(f"probe '{probe.name}': no step has {item.label}", code="not_found")
     step = steps[min(probe.step, len(steps) - 1)] if probe.step >= 0 else steps[probe.step]
-    out = at_step(mesh, step, item, probe)
-    return out | {"label": item.label, "unit": item.unit, "step": step.value}
+    comp = _component_of(project, probe)
+    out = at_step(mesh, step, item, probe, depth_of(comp))
+    out = out | {"label": item.label, "unit": item.unit, "step": step.value}
+    if probe.type in ("reaction", "section"):
+        basis = totals_basis(comp)
+        if basis:
+            out["totals"] = basis
+    return out
+
+
+def totals_basis(component) -> str:
+    """What a force total means in a 2D model (ADR 0048 decision 6), in words: the
+    stored reactions are the whole part's on every solver (Code_Aster's are scaled by
+    its reader). Empty for 3D."""
+    dimension = getattr(component, "dimension", "3d")
+    if dimension == "2d_axisymmetric":
+        return "for the full 360°"
+    if dimension == "2d_planar":
+        if component.planar_model == "plane_strain":
+            return "per metre of depth"
+        return "through the part's thickness"
+    return ""
+
+
+def depth_of(component):
+    """What a 2D model's cut line stands for per metre of its length (ADR 0048), as a
+    function of the points: 2 pi r axisymmetric, the thickness in plane stress (one
+    thickness for the model), 1 m in plane strain. None in 3D."""
+    dimension = getattr(component, "dimension", "3d")
+    if dimension == "2d_axisymmetric":
+        return lambda xyz: 2 * np.pi * np.asarray(xyz)[:, 0]
+    if dimension != "2d_planar":
+        return None
+    if component.planar_model == "plane_strain":
+        return lambda xyz: np.ones(len(xyz))
+    from puzzle.adapters.common import plane_thickness
+
+    thicknesses = {plane_thickness(component, p.name) for p in component.parts}
+    if len(thicknesses) != 1:
+        raise PuzzleError("a cut across plane-stress parts of different thicknesses isn't "
+                          "summed yet", code="unsupported")  # fmt: skip
+    t = thicknesses.pop()
+    return lambda xyz: np.full(len(xyz), t)
+
+
+def _component_of(project, probe):
+    from puzzle.model.schema import Component, ResultDefinition, Study
+
+    src = project.objects.get(probe.source)
+    for _ in range(4):  # a derived result: the study it reads (its first case's)
+        if not isinstance(src, ResultDefinition):
+            break
+        first = src.source or next((c.study for c in src.cases), None)
+        src = project.objects.get(first) if first else None
+    comp = project.objects.get(src.component) if isinstance(src, Study) else None
+    return comp if isinstance(comp, Component) else None
 
 
 def history(project, store, probe) -> list[dict]:
@@ -427,9 +509,10 @@ def history(project, store, probe) -> list[dict]:
     probe = placed(project, probe)
     mesh, results, items = _source(project, store, probe)
     item = _item(probe, items)
+    depth = depth_of(_component_of(project, probe))
     out = []
     for step in results.steps:
         if item.field in step.fields:
-            found = at_step(mesh, step, item, probe)
+            found = at_step(mesh, step, item, probe, depth)
             out.append({"step": step.value, "mode": step.mode, "value": found["value"]})
     return out

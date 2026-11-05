@@ -1,6 +1,6 @@
 # 0048. 2D models: planar and axisymmetric geometry made, updated and solved like 3D
 
-- Status: Accepted (2026-10-26, with the maintainer's answers); round 1 built 2026-10-31
+- Status: Accepted (2026-10-26, with the maintainer's answers); round 1 built 2026-10-31; rounds 2 to 5 built 2026-11-05
 - Date: 2026-10-26
 
 ## Context
@@ -101,13 +101,82 @@ The maintainer asked for 2D geometry creation and updating sooner rather than la
   | Planar conduction with a flux; axisymmetric conduction (log) | within 0.1 % | within 0.1 % | within 0.1 % | within 0.1 % |
   | A 3D tube's half section, Lamé (outer radial displacement) | within 0.5 % | within 0.5 % | within 0.5 % | within 0.5 % |
 
-- **Not yet:**
-  - the 2D shapes and operations (round 2), apart from `face`;
-  - planar imports (round 3);
-  - the revolved view and per-360° labels on totals (round 4; Code_Aster's axisymmetric reactions are probably per radian, unchecked);
-  - the pick bar's Regions, Edges and Points labels;
-  - 2D dynamics on FEniCSx, and the 2D modal, transient and harmonic benchmarks;
-  - 2D magnetics and CFD (round 5).
+- **Left after round 1** (all built in rounds 2 to 5 below): the 2D shapes and operations, planar imports, the revolved view and per-360° totals, the pick bar's labels, 2D dynamics on FEniCSx with 2D dynamics benchmarks, 2D magnetics and CFD.
+
+## Built: round 2, 2D shapes and operations (2026-11-05)
+
+- `geometry/planar.py`: shapes as history steps, joined by `mode` (new, add, cut, intersect, separate), on `plane`/`offset`, the region `<step>/face`:
+  - `rectangle` (dx, dy, corner x0, y0): sides -x, +x, -y, +y;
+  - `circle` (r, x, y): `outer`; `annulus` (r_inner, r_outer): `inner`, `outer`;
+  - `polygon` (sides, r to the corners, angle of the first corner): side-1..n;
+  - `slot` (overall length, width, angle): side-1, end-1, side-2, end-2.
+- `offset`: a wall of thickness `t` along a line, to its left, right or half each side, corners mitred; edges `left`, `right`, `start`, `end`; a closed line makes a ring. Refused: a wall thicker than a side or corner allows, a line turning back, a wall crossing itself. Lines are straight segments.
+- Booleans keep the side names; `separate` regions share their edges; `fragment` works on faces; `mirror` of a flat part is one region; `pattern` repeats a shape.
+- `fillet`/`chamfer` on a part made of faces round its corners (OCCT's `MakeFillet2d`), new edges `<step>/edge-i`; corners by `all`, `outer`, `between: [edge, edge]` or `near: [x, y]`; a corner two regions share is refused.
+- Each region faces the plane's normal whichever way its outline runs, and the mesher turns clockwise 2D entities round before writing (`generate._counter_clockwise`): a region outlined clockwise had given CalculiX nonpositive Jacobians.
+- The Geometry tab's 2D ribbon group: Face from sketch, Rectangle, Circle, Annulus, Regular polygon, Slot, Wall along a line, Section of a part; the mode choice gains "A region of its own".
+- The schema's history kinds now list ADR 0065's steps too (they couldn't be saved before); a test checks the schema against the registered operations.
+- Benchmarks (`tests/test_planar_geometry.py`, `tests/integration/test_planar_shapes.py`): areas and edge lengths exact for every shape, fillet, chamfer and wall; hoop at the bore against 166.67 MPa: plane-strain annulus ∩ rectangle CalculiX 166.57, FEniCSx 166.05; axisymmetric wall CalculiX 166.26, FEniCSx 166.95.
+
+## Built: round 3, planar imports (2026-11-05)
+
+- `import` with `flat`: flat faces from STEP, IGES or BREP laid on XY at z = 0 (a face square to z keeps its x, y; one square to x or y takes the YZ or XZ plane's u, v; others their own plane's axes). Solids, curved faces and faces in more than one plane are refused. A flat import names its edges `edge-N` in file order, as its faces are `face-N`.
+- DXF drawn as closed outlines: several regions, fused so touching ones share edges, holes by nesting. DXF whose lines are shared or cross: the plane is split by its lines, every enclosed cell a region, edges named side-N after the line they lie on, stray lines dropped (an inner loop is then a region, not a hole).
+
+## Built: round 4, results (2026-11-05)
+
+- **Revolved view** (`post/revolve.py`): axisymmetric results are drawn turned about Y, 270° by default (Settings > Results > Axisymmetric results: revolved or flat; Revolved through: 90 to 360°). Triangles become wedges and quadrilaterals hexahedra, about 5° a segment; vectors turn with the section, so the warp is right; tensors keep their r, y, hoop slots. Probes and picks map back to the section at r = hypot(x, z). Planar results stay flat. The results store keeps no dimension, so a stored mesh is marked from its component (`revolve.mark_dimension`).
+- **Totals mean the whole part.** Code_Aster's AXIS reactions were per radian (−1500 N for −9425 N) and its C_PLAN ones per unit thickness; its reader now scales them. CalculiX's were already whole-part. Reaction and section tools say what a total covers (`probes.totals_basis`: "for the full 360°", "per metre of depth", "through the part's thickness"), shown as a Totals row.
+- Section and plane tools work in 2D: the cut is a line weighted by 2πr, the thickness or 1 m. 2D linearization takes the hoop as z (it took y before).
+- The pick bar reads Regions, Edges and Points in a 2D component.
+- Benchmarks (`tests/integration/test_planar_totals.py`, `tests/test_revolve.py`):
+
+  | Case | Exact | CalculiX | Code_Aster |
+  | --- | --- | --- | --- |
+  | Axisymmetric tube, foot reaction (360°) | −9424.78 N | −9424.79 | −9424.78 |
+  | Plane-strain strip, per metre | 400000 N/m | 399999 | 400000 |
+  | Plane-stress strip, t = 2 mm | −400 N | −400 | −400 |
+  | Lamé cylinder, linearized hoop membrane p·a/t | 100 MPa | 99.984 | 100.007 |
+  | Lamé cylinder, axial force across a cut | 18849.6 N | 18849.5 | 18851.7 |
+
+## Built: 2D dynamics, body and temperature loads (2026-11-05)
+
+- Modal, transient (Newmark, HHT) and harmonic steps in plane stress, plane strain and axisymmetric models on all four FE solvers. FEniCSx assembles thickness- or 2πr-weighted mass and stiffness once (`solve_solid_2d`; `solve_transient`/`solve_harmonic` take two dofs per node).
+- CalculiX loses point loads on 2D elements in steps solved over modes ("1-D or 2-D elements may cause problems in steady state calculations": the bar's end moved 760× too little), so in harmonic and modal-transient steps an edge force square to the edge is written as the pressure −F·n/A; other directions are refused.
+- Body loads (gravity, acceleration, rotation) in 2D on all four: planar in the XY plane and spin about z; axisymmetric along Y and spin about the axis.
+- Temperature loads in 2D on all four. Elmer's plane strain leaves out the out-of-plane thermal strain (off by 1/(1+ν)), so α(1+ν) is written and σz corrected on reading; materials of different E·α in one plane-strain model are refused there for now.
+- 2D models refuse unwritten contacts on CalculiX too (only conformal bonds), as on Code_Aster and Elmer.
+- Benchmarks (`tests/integration/test_planar_dynamics.py`, 49 cases, all four solvers): axial modes in plane stress and plane strain against Rayleigh–Love (to 0.02 %), cantilever bending 208.6 Hz against Euler–Bernoulli 208.88 less shear, ring breathing 8233.0 Hz (8231.8), sudden end load peak 1.8 % under 2× static (sampling at T/200), harmonic end response within 0.1 % (CalculiX 1.2 % with 200 modes), rotating disc σr and σθ, hanging strip, heated strips and rod exact.
+
+## Built: round 5, 2D magnetics and CFD (2026-11-05)
+
+- **Planar magnetics (A_z)** on Elmer (MagnetoDynamics2D/Harmonic, Cartesian 2D) and FEniCSx, static and frequency-domain, through the axisymmetric path (`eddy` with `planar`): currents along z (a return conductor carries a negative current or a 180° phase), windings J = N I / area, solid bars by superposition of unit-drop bases (1 V/m), B = (∂A/∂y, −∂A/∂x). Totals are per metre of depth (W/m, J/m, Ω/m, H/m). Transients are refused. The skin-depth checks at a solve's start now read 2D elements (they had failed on every 2D mesh and been skipped).
+
+  | Case (copper wire a = 5 mm, 100 A) | Exact | Elmer = FEniCSx |
+  | --- | --- | --- |
+  | DC energy per metre | 2.5526 mJ/m | 2.5491 |
+  | DC resistance | 2.1952e-4 Ω/m | 2.1966e-4 |
+  | AC R/R_dc at a/δ = 2.5 (Bessel) | 1.5050 | 1.5067 |
+  | Winding inductance | 8.1683 µH/m | 8.1572 |
+  | Two-wire line loop inductance | 8.1598e-7 H/m | 8.1487e-7 |
+
+- **2D CFD** on OpenFOAM and Code_Saturne: the 2D mesh is extruded one cell thick in the adapter (`mesh/layer.py`). Planar: front and back `empty` (OpenFOAM) or symmetry (Code_Saturne). Axisymmetric: a 5° wedge about Y, OpenFOAM `wedge`, Code_Saturne symmetry (axisymmetry without swirl); cells on the axis collapse, a quad with corners on the axis is cut in two. Edge selections become the swept faces under the same names; an edge on the axis has no faces, so a symmetry or wall there is dropped and anything else refused. Results come back per 2D element (each layer cell keeps its element's id, matched one-to-one by nearest centre). Code_Saturne's steady algorithm runs away on a wedge, so with no pseudo time step it time-marches at 0.5 h/U. OpenFOAM's first-order check now names prisms `wedge6` (it refused prism boundary layers).
+
+  | Case | Exact | OpenFOAM | Code_Saturne |
+  | --- | --- | --- | --- |
+  | Plane Poiseuille, peak u/U | 1.5 | −0.10 % | −0.21 % |
+  | Plane Poiseuille, dp/dx | −0.12024 Pa/m | −0.34 % | −0.45 % |
+  | Hagen–Poiseuille (axisymmetric), peak u/U | 2.0 | −0.25 % | −0.18 % |
+  | Hagen–Poiseuille, dp/dy | −0.32064 Pa/m | +0.22 % | +0.17 % |
+  | Heated plates, bulk dT/dx | 110.081 K/m | +0.23 % | +0.22 % |
+  | Heated plates, Nu 8.235 profile | | 0.19 % | 0.09 % |
+
+## Still open
+
+- Offset walls of arcs or splines; the new shapes solved on Code_Aster and Elmer (only CalculiX and FEniCSx were run).
+- Code_Aster's live reaction trackers in 2D show per-radian values; a node shared by plane-stress parts of different thicknesses takes the first part's; the revolved view's camera isn't set Y-up; derived results and the Compare window show 2D results flat.
+- 2D magnetic transients; transient 2D CFD; swirl.
+- On CalculiX, oblique edge forces in 2D steps solved over modes; FEniCSx 2D displacements from imported fields and loads in local axes.
 
 ## Consequences
 

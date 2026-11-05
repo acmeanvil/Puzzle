@@ -130,6 +130,24 @@ class HistoryStep(BaseModel):
         "section",
         "curved_sheet",
         "sketch",  # a 2D sketch on a plane or a planar face, for extrude and revolve (ADR 0017)
+        # ADR 0048 round 2: 2D shapes and a wall along a line
+        "rectangle",
+        "circle",
+        "annulus",
+        "polygon",
+        "slot",
+        "offset",
+        # ADR 0065: curves, sweeps, lofts and the modifiers in geometry/sweeps.py and subd.py
+        "spline",
+        "sweep",
+        "pipe",
+        "loft",
+        "patch",
+        "thicken",
+        "subd",
+        "mirror",
+        "scale",
+        "deform",
     ]
     name: str
     args: dict[str, float | str | bool | list[Any] | dict[str, Any]] = Field(default_factory=dict)

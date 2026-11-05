@@ -136,6 +136,8 @@ TOOLS = {
     "box": "iso", "cylinder": "cylinder", "cone": "cone", "sphere": "sphere",
     "extrude": "extrude", "revolve": "revolve", "hole": "hole", "polyline": "line",
     "sheet": "sheet", "face": "polygon", "section": "section", "curved_sheet": "spline",
+    "rectangle": "sheet", "circle": "hole", "annulus": "hole", "polygon": "polygon",
+    "slot": "hole", "offset": "wall",
     "spline": "spline", "sweep": "sweep", "pipe": "cylinder", "loft": "loft",
     "patch": "patch", "thicken": "thicken", "subd": "subd", "fillet": "fillet",
     "chamfer": "chamfer", "move": "move", "rotate": "rotate", "mirror": "mirror",

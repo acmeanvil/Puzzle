@@ -213,6 +213,7 @@ class CodeAsterAdapter(SolverAdapter):
             )
         results = read_tables(workdir)
         _harmonic(results)
+        _whole_part(results, input_file)
         _fastener_fields(results, input_file)  # before the bolts' nodes are dropped
         return drop_helper_nodes(results, input_file)
 
@@ -232,6 +233,34 @@ def _harmonic(results) -> None:
             "displacement", real.ids, real.values, imag.at(real.ids), real.components
         ):
             step.fields[f.name] = f
+
+
+def _whole_part(results, input_file: Path) -> None:
+    """2D reactions made the whole part's (ADR 0048 decision 6): Code_Aster gives them
+    per radian (AXIS) or per unit thickness (C_PLAN); the writer's marker says by what
+    to multiply. A node shared by plane-stress parts of different thicknesses takes the
+    first part's (Code_Aster's sum there mixes both)."""
+    import json
+
+    import numpy as np
+
+    marker = input_file.with_name(f"{JOB}.totals.json")
+    if not marker.exists():
+        return
+    spec = json.loads(marker.read_text())
+    for step in results.steps:
+        rf = step.fields.get("reaction_force")
+        if rf is None:
+            continue
+        if "scale" in spec:
+            factor = np.full(len(rf.ids), float(spec["scale"]))
+        else:
+            factor = np.ones(len(rf.ids))
+            done = np.zeros(len(rf.ids), bool)
+            for part in spec["parts"]:
+                on = np.isin(rf.ids, part["nodes"]) & ~done
+                factor[on], done[on] = part["t"], True
+        rf.values = np.asarray(rf.values, float) * factor[:, None]
 
 
 def _fastener_fields(results, input_file: Path) -> None:

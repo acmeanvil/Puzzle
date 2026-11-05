@@ -201,7 +201,12 @@ def _mirror(state, op, a):
         return
     mk = BRepBuilderAPI_Transform(state.shape, trsf, True)
     copy = {f"{n}~m": h._list([mk.ModifiedShape(f) for f in fs]) for n, fs in state.names.items()}
-    run = BRepAlgoAPI_Fuse(state.shape, mk.Shape())
+    copy_shape = mk.Shape()
+    if not h._subshapes(state.shape, h.TopAbs_SOLID):
+        # A flat part (ADR 0048): the reflection turns a face's normal over, so turn it
+        # back, or the halves stay two faces facing opposite ways.
+        copy_shape = copy_shape.Reversed()
+    run = BRepAlgoAPI_Fuse(state.shape, copy_shape)
     if not run.IsDone():
         raise h.GeometryError(f"mirror '{op.name}': joining the copy failed")
     state.names = h._carry(run, {**state.names, **copy})

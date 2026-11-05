@@ -30,6 +30,7 @@ from puzzle.adapters.common import (
     hydraulic_diameter,
     match_points,
 )
+from puzzle.mesh import layer
 from puzzle.mesh.med import write_med
 from puzzle.mesh.mesh import Mesh
 from puzzle.model.schema import Component, Material, Project, Study
@@ -69,6 +70,11 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
             f"not {sorted(solved)}"
         )
     heat = "heat_transfer" in solved
+    layered = None
+    if comp.dimension != "3d":  # ADR 0048: the 2D mesh one cell thick, symmetric sides
+        layer.first_order(mesh, "Code_Saturne")
+        layered = layer.extrude(mesh, comp.dimension == "2d_axisymmetric")
+        mesh = layered.mesh
     if len(comp.materials) != 1:
         raise InputError("the Code_Saturne adapter needs exactly one fluid material for now")
     props = {
@@ -85,6 +91,8 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
     features = [
         f for p in comp.physics if p.type == "fluid_flow" for f in p.features if f.type in FLUID
     ]
+    if layered is not None:
+        features = layer.off_axis(features, layered)
     unsupported = [f.type for f in features if f.type not in NATURES]
     if unsupported:
         raise InputError(
@@ -105,8 +113,11 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
         for f in p.features
         if f.type in THERMAL
     ]
+    if layered is not None:
+        thermal = layer.off_axis(thermal, layered)
     body = comp.materials[0].selection
-    groups = list(dict.fromkeys([body] + [f.selection for f in features]))
+    sides = [layer.FRONT, layer.BACK] if layered is not None else []
+    groups = list(dict.fromkeys([body] + [f.selection for f in features] + sides))
     for g in groups:
         if g not in mesh.groups:
             raise InputError(f"no selection '{g}' in the mesh")
@@ -126,13 +137,18 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
             if model != "laminar":
                 group = mesh.groups[f.selection]
                 zone["intensity"] = 100.0 * v.get("intensity", 0.05)  # Code_Saturne: percent
-                zone["hydraulic_diameter"] = v.get("hydraulic_diameter") or hydraulic_diameter(
-                    group, mesh
+                zone["hydraulic_diameter"] = (
+                    v.get("hydraulic_diameter")
+                    or (layered.diameters[f.selection] if layered else None)
+                    or hydraulic_diameter(group, mesh)
                 )
         elif f.type == "pressure_outlet":
             zone["pressure"] = v.get("p", 0.0)
         zones.append(zone)
         by_selection[f.selection] = zone
+    for side in sides:  # symmetry: on a wedge's sides, axisymmetry with no swirl
+        zones.append({"label": side.strip("_"), "selection": str(tags[side]),
+                      "nature": "symmetry"})  # fmt: skip
     for f in thermal:
         zone = by_selection.get(f.selection)
         if zone is None or zone["nature"] not in ("inlet", "wall"):
@@ -155,7 +171,8 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
         "iterations": int(steps[0].settings.get("iterations", 500)),
         # The listing every iteration up to 500, then ~500 times a run (ADR 0054).
         "listing_every": max(1, round(int(steps[0].settings.get("iterations", 500)) / 500)),
-        "pseudo_time_step": _seconds(steps[0].settings.get("pseudo_time_step")),
+        "pseudo_time_step": _seconds(steps[0].settings.get("pseudo_time_step"))
+        or _wedge_step(layered, zones),
         "turbulence": TURBULENCE[model],
         "thermal": (
             {
@@ -169,6 +186,8 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
         **_settings(study),  # ADR 0023
     }
     (workdir / "case.json").write_text(json.dumps(spec, indent=2))
+    if layered is not None:
+        layered.save(workdir)
     shutil.copyfile(DRIVER, workdir / DRIVER.name)
 
     volume = [b for b in mesh.blocks if b.dim == 3]
@@ -241,7 +260,9 @@ def read_results(workdir: Path) -> Results:
     parts, variables = read_case(case_file)
     centroids = np.vstack([b.centroids for p in parts for b in p.blocks])
     element_ids = np.loadtxt(workdir / "element-ids.txt", dtype=np.int64, ndmin=1)
-    ids = match_points(centroids, np.load(workdir / "element-centroids.npy"), element_ids)
+    reference = np.load(workdir / "element-centroids.npy")
+    layered = (workdir / layer.FILE).exists()
+    ids = (layer.match if layered else match_points)(centroids, reference, element_ids)
     order = np.argsort(ids)
     step = StepResult(1, "stationary", 1.0)
     for name, (_, components, path) in variables.items():
@@ -249,7 +270,7 @@ def read_results(workdir: Path) -> Results:
             field_name, comps = FIELDS[name]
             values = read_variable(path, parts, components)
             step.fields[field_name] = Field(field_name, "element", comps, ids[order], values[order])
-    return Results(solver="code_saturne", steps=[step])
+    return layer.to_2d(workdir, Results(solver="code_saturne", steps=[step]))
 
 
 def _seconds(value) -> float | None:
@@ -260,3 +281,13 @@ def _seconds(value) -> float | None:
 
 def _label(selection: str) -> str:
     return selection.replace("/", "_").replace(" ", "_")
+
+
+def _wedge_step(layered, zones) -> float | None:
+    """An axisymmetric wedge's pseudo time step when none is set: Code_Saturne's steady
+    algorithm runs away there (the velocity past 1e4 m/s within 25 iterations on a pipe),
+    while marching in time converges, at half a cell's crossing time (ADR 0048)."""
+    if layered is None or not layered.axisymmetric:
+        return None
+    speed = max((z.get("velocity", 0.0) for z in zones), default=0.0)
+    return 0.5 * layered.size / speed if speed > 0 else 0.1
