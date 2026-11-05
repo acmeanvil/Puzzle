@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import math
+import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -38,12 +39,12 @@ def needed(step, features) -> bool:
     )
 
 
-def iterative(tolerance: float = 1e-9) -> list[str]:
+def iterative(tolerance: float = 1e-9, preconditioner: str = "None") -> list[str]:
     return [
         "  Linear System Solver = Iterative",
         "  Linear System Iterative Method = BiCGStabl",
         "  BiCGStabl Polynomial Degree = 4",
-        "  Linear System Preconditioning = None",
+        f"  Linear System Preconditioning = {preconditioner}",
         "  Linear System Max Iterations = 6000",
         f"  Linear System Convergence Tolerance = {tolerance:g}",
         "  Linear System Residual Output = 50",
@@ -148,6 +149,14 @@ def write(project, comp, step, features, mesh, workdir: Path, write_mesh, time_b
             f"  Master Bodies(1) = {bodies.index(c.body) + 1}",
             '  Coil Type = String "stranded"',
             "  Desired Coil Current = Real 1",
+            *(
+                [
+                    f"  Coil Center(3) = {' '.join(f'{v:.10g}' for v in c.centre)}",
+                    f"  Coil Normal(3) = {' '.join(f'{v:.10g}' for v in c.axis)}",
+                ]
+                if c.closed and c.centre
+                else []
+            ),
             "End",
             "",
         ]
@@ -158,7 +167,10 @@ def write(project, comp, step, features, mesh, workdir: Path, write_mesh, time_b
                 '  Equation = "CoilSolver"',
                 '  Procedure = "CoilSolver" "CoilSolver"',
                 "  Exec Solver = Before All",
-                "  Desired Coil Current = Real 1",
+                # A uniform density along the flow carrying the component's 1 A (each
+                # Component has Coil Type stranded), scaled by N I in the body force:
+                # a winding's turns carry equal currents.
+                "  Normalize Coil Current = Logical True",
                 "  Use Unity Conductivity = Logical True",
                 *(["  Coil Closed = Logical True"] if windings[0].closed else []),
                 "  Calculate Elemental Fields = Logical True",
@@ -180,8 +192,11 @@ def write(project, comp, step, features, mesh, workdir: Path, write_mesh, time_b
             '  Variable = "AV"',
             '  Procedure = "MagnetoDynamics" "WhitneyAVSolver"',
             "  Use Magnetic Norm = Logical True",
+            # A closed winding's source makes UMFPACK's matrix singular: iterate then.
             # In time the σ/Δt term makes BiCGStab converge; UMFPACK took minutes a step.
-            *(iterative() if transient else DIRECT),
+            # No preconditioner: ILU0 cut the iterations to 15 but diverged after a few
+            # steps on a finer mesh (the A–V system is singular in the air, ungauged).
+            *(iterative() if transient or any(c.closed for c in windings) else DIRECT),
         ]
     )
     solvers.append(
@@ -202,6 +217,7 @@ def write(project, comp, step, features, mesh, workdir: Path, write_mesh, time_b
             "  Calculate Nodal Fields = Logical True",
             "  Calculate Elemental Fields = Logical True",
             "  Impose Body Force Current = Logical True",
+            *_at_outputs(step),
             "  Linear System Symmetric = True",
             '  Linear System Solver = "Iterative"',
             "  Linear System Iterative Method = CG",
@@ -216,6 +232,7 @@ def write(project, comp, step, features, mesh, workdir: Path, write_mesh, time_b
             '  Equation = "Result Output"',
             '  Procedure = "ResultOutputSolve" "ResultOutputSolver"',
             '  Output File Name = "case"',
+            *_at_outputs(step),
             "  Vtu Format = True",
             "  Ascii Output = True",
         ]
@@ -282,6 +299,15 @@ def _angular(frequencies: list[float]) -> list[str]:
     return ["  Angular Frequency = Variable Time", "    Real", *rows, "    End"]
 
 
+def _at_outputs(step) -> list[str]:
+    """A transient's field calculation and output only at its output steps (every
+    `output_every`-th: Elmer counts Exec Intervals from step 1, hence the offset)."""
+    every = int(step.settings.get("output_every", 1)) if step.type == "transient" else 1
+    if every <= 1:
+        return []
+    return [f"  Exec Intervals = {every}", f"  Exec Intervals Offset = {every - 1}"]
+
+
 def transient_times(step) -> list[float]:
     """A transient step's output times (s): every `output_every`-th step."""
     from puzzle.adapters.common import time_settings
@@ -292,8 +318,9 @@ def transient_times(step) -> list[float]:
 
 
 def _source(c: eddy.Coil, harmonic: bool) -> list[str]:
-    """A winding's current density: CoilSolver's 1 A field times −N I (it flows from
-    the end face to the start one); in time, times its amplitude."""
+    """A winding's current density: CoilSolver's field, normalised as for a stranded
+    coil to a uniform density carrying its component's 1 A (from the end face to the
+    start one), times −N I; in time, times its amplitude."""
     scale = -c.turns * c.phasor
     lines = []
     if c.amplitude and not harmonic:
@@ -334,12 +361,17 @@ def read_magnetics(vtus: list[Path], mesh_dir: Path, node_ids: np.ndarray) -> Re
     results = Results(solver="elmer")
     times = meta.get("times")
     steps = [(0.0, t) for t in times] if times else [(hz, None) for hz in meta["frequencies"]]
-    if times and len(vtus) > len(times):  # Elmer wrote every step: keep the output steps
-        every = len(vtus) // len(times)
-        vtus = vtus[every - 1 :: every][: len(times)]
-    for vtu, (hz, time) in zip(vtus, steps, strict=True):
-        nodal = read_vtu(vtu)
-        cells = {k.removesuffix(" e"): v for k, v in _cells(vtu, len(table["ids"])).items()}
+    parts = _partitions(vtus)
+    if parts:  # an MPI run: one file per partition and step, merged by position
+        coords = np.loadtxt(mesh_dir / "mesh.nodes", usecols=(2, 3, 4), ndmin=2)
+        frames = [_merged(files, coords, table) for files in parts]
+    else:
+        frames = [(read_vtu(v), {k.removesuffix(" e"): a for k, a in
+                                 _cells(v, len(table["ids"])).items()}) for v in vtus]  # fmt: skip
+    if times and len(frames) > len(times):  # Elmer wrote every step: keep the output steps
+        every = len(frames) // len(times)
+        frames = frames[every - 1 :: every][: len(times)]
+    for (nodal, cells), (hz, time) in zip(frames, steps, strict=True):
 
         def cplx(data, name, rows):
             """A harmonic run's `<name> re` + j `<name> im`, a static one's `<name>`."""
@@ -361,12 +393,60 @@ def read_magnetics(vtus: list[Path], mesh_dir: Path, node_ids: np.ndarray) -> Re
     return results
 
 
+PART = re.compile(r"_(\d+)np(\d+)_t(\d+)\.vtu$")  # case_4np2_t0007.vtu: 4 parts, part 2
+
+
+def _partitions(vtus: list[Path]) -> list[list[Path]]:
+    """An MPI run's files grouped by output step (each step's partitions), or []."""
+    steps: dict[int, list[Path]] = {}
+    for v in vtus:
+        m = PART.search(v.name)
+        if m:
+            steps.setdefault(int(m.group(3)), []).append(v)
+    return [sorted(steps[k]) for k in sorted(steps)]
+
+
+def _merged(files: list[Path], coords: np.ndarray, table) -> tuple[dict, dict]:
+    """One step's partitions as whole-mesh arrays: nodal data in Elmer node order
+    (points matched to mesh.nodes by position), element data in the element table's
+    order (each volume cell matched by its corners' centre)."""
+    from puzzle.adapters.common import match_points
+
+    nodal: dict[str, np.ndarray] = {}
+    cells: dict[str, np.ndarray] = {}
+    n_el = len(table["ids"])
+    for f in files:
+        root = ET.parse(f).getroot()
+        points = np.array(root.find(".//Points/DataArray").text.split(), float).reshape(-1, 3)
+        rows = match_points(points, coords, np.arange(len(coords)))
+        for d in root.find(".//PointData").iter("DataArray"):
+            k = int(d.get("NumberOfComponents", "1"))
+            values = np.array((d.text or "").split(), float).reshape(-1, k)
+            nodal.setdefault(d.get("Name"), np.zeros((len(coords), k)))[rows] = values
+        arrays = {d.get("Name"): d.text or "" for d in root.find(".//Cells").iter("DataArray")}
+        types = np.array(arrays["types"].split(), np.int64)
+        offsets = np.array(arrays["offsets"].split(), np.int64)
+        conn = np.array(arrays["connectivity"].split(), np.int64)
+        bulk = np.flatnonzero(np.isin(types, (10, 24)))  # tetrahedra; faces come after
+        starts = np.r_[0, offsets[:-1]][bulk]
+        centres = points[conn[starts[:, None] + np.arange(4)]].mean(axis=1)
+        where = match_points(centres, table["centres"], np.arange(n_el))
+        for d in root.find(".//CellData").iter("DataArray"):
+            k = int(d.get("NumberOfComponents", "1"))
+            values = np.array((d.text or "").split(), float).reshape(-1, k)[bulk]
+            name = d.get("Name").removesuffix(" e")
+            cells.setdefault(name, np.zeros((n_el, k)))[where] = values
+    return nodal, cells
+
+
 def write_axisymmetric(project, comp, step, features, mesh, workdir: Path, write_mesh,
                        time_block):  # fmt: skip
     """An axisymmetric magnetic study (ADR 0047 item 7): MagnetoDynamics2D(Harmonic) in
-    A_φ, windings' J = N I / section as body forces, `magnetic_insulation` A = 0 (flux
-    along the edge), `magnetic_symmetry` the natural condition. Massive conductors and
-    transients are refused here."""
+    A_φ, `magnetic_insulation` A = 0 (flux along the edge), `magnetic_symmetry` the
+    natural condition. A Scanning run of 1 + rings scans per frequency: scan 0 the
+    windings' J = N I / section, scan j a unit voltage per turn on solid ring j (J =
+    σ / 2πr in it); Puzzle combines them so each ring carries its current
+    (`eddy.combine_axisymmetric`). Transients are refused here."""
     from puzzle.model.schema import Material
 
     if step.type not in ("stationary", "frequency_domain"):
@@ -374,10 +454,6 @@ def write_axisymmetric(project, comp, step, features, mesh, workdir: Path, write
                          code="unsupported")  # fmt: skip
     harmonic = step.type == "frequency_domain"
     coils = eddy.coils(project, comp, features, mesh, solver="Elmer")
-    if any(c.kind == "massive" for c in coils):
-        raise InputError("an axisymmetric model takes windings (stranded coils); a massive "
-                         "ring's total current needs a circuit, not built yet",
-                         code="unsupported")  # fmt: skip
     if not harmonic and any(c.current[1] for c in coils):
         raise InputError("a coil's phase applies in frequency-domain steps only")
     boundaries = list(dict.fromkeys(f.selection for f in features if f.type not in eddy.COILS))
@@ -386,10 +462,25 @@ def write_axisymmetric(project, comp, step, features, mesh, workdir: Path, write
     eddy.axisymmetric_table(mesh, bodies, workdir / "mesh" / eddy.ELEMENTS)
     table = np.load(workdir / "mesh" / eddy.ELEMENTS)
     frequencies = frequency_list(step) if harmonic else [0.0]
-    winding_of = {c.body: c for c in coils}
+    coil_of = {c.body: c for c in coils}
+    rings = [c.body for c in coils if c.kind == "massive"]
+    per = 1 + len(rings)  # scans per frequency
+    scans = len(frequencies) * per
+
+    def picks(role: int) -> str:
+        """1 in this role's scans, else 0 (MATC compares to 1 or 0)."""
+        return "+".join(f"(tx(0)=={k * per + role + 1})" for k in range(len(frequencies)))
+
+    rows = [f"    {k * per + r + 1} {2 * math.pi * f:.12g}"
+            for k, f in enumerate(frequencies) for r in range(per)]  # fmt: skip
     out = ["Header", "  CHECK KEYWORDS Warn", '  Mesh DB "." "mesh"', "End", "",
            "Simulation", "  Max Output Level = 5", "  Coordinate System = Axi Symmetric",
-           *time_block(step), *(_angular(frequencies) if harmonic else []), "End", ""]  # fmt: skip
+           "  Simulation Type = Scanning", f"  Timestep Intervals(1) = {scans}",
+           "  Timestep Sizes(1) = 1.0", "  Output Intervals(1) = 1",
+           "  Steady State Max Iterations = 1",
+           *(["  Angular Frequency = Variable Time", "    Real", *rows, "    End"]
+             if harmonic else []),
+           "End", ""]  # fmt: skip
     forces, meta_bodies = [], []
     for i, a in enumerate(comp.materials, start=1):
         m = project.get(a.material, Material)
@@ -397,16 +488,25 @@ def write_axisymmetric(project, comp, step, features, mesh, workdir: Path, write
         missing = [k for k in ("relative_permeability", "electrical_conductivity") if k not in p]
         if missing:
             raise InputError(f"material '{m.name}' is missing {', '.join(missing)}")
-        sigma = 0.0 if a.selection in winding_of else p["electrical_conductivity"]
+        c = coil_of.get(a.selection)
+        winding = c is not None and c.kind == "stranded"
+        sigma = 0.0 if winding else p["electrical_conductivity"]
         meta_bodies.append({"name": a.selection, "mu_r": p["relative_permeability"],
                             "sigma": sigma})  # fmt: skip
         out += [f"Body {i}", f"  Target Bodies(1) = {i}", "  Equation = 1", f"  Material = {i}"]
-        if a.selection in winding_of:
-            c = winding_of[a.selection]
+        if winding:
             density = c.turns * c.phasor / table["area"][table["body"] == i - 1].sum()
-            forces.append([f"  Current Density = Real {density.real:.10g}",
-                           *([f"  Current Density im = Real {density.imag:.10g}"]
-                             if harmonic else [])])  # fmt: skip
+            parts = [("", density.real)] + ([(" im", density.imag)] if harmonic else [])
+            forces.append([line for part, value in parts for line in (
+                f"  Current Density{part} = Variable Time, Coordinate 1",  # tx(0): the scan
+                f'    Real MATC "({picks(0)})*({value:.12g})"')])  # fmt: skip
+        elif c is not None:  # a solid ring: unit voltage per turn in its own scan
+            if sigma <= 0:
+                raise InputError(f"the solid ring '{c.body}' needs a conductivity")
+            role = rings.index(c.body) + 1
+            unit = f'    Real MATC "({picks(role)})*{sigma:.12g}/(2*pi*tx(1))"'
+            forces.append(["  Current Density = Variable Time, Coordinate 1", unit])
+        if c is not None:
             out.append(f"  Body Force = {len(forces)}")
         out += ["End", "", f"Material {i}", f'  Name = "{m.name}"',
                 f"  Relative Permeability = {p['relative_permeability']:.10g}",
@@ -418,9 +518,7 @@ def write_axisymmetric(project, comp, step, features, mesh, workdir: Path, write
     out += ["Equation 1", "  Active Solvers(2) = 1 2", "End", "",
             "Solver 1", '  Equation = "MGDyn2D"', f"  Variable = {variable}",
             f'  Procedure = "MagnetoDynamics2D" "{procedure}"', *DIRECT, "End", "",
-            "Solver 2",
-            f"  Exec Solver = {'After Timestep' if harmonic else 'After Simulation'}",
-            '  Equation = "Result Output"',
+            "Solver 2", "  Exec Solver = After Timestep", '  Equation = "Result Output"',
             '  Procedure = "ResultOutputSolve" "ResultOutputSolver"',
             '  Output File Name = "case"', "  Vtu Format = True", "  Ascii Output = True",
             "End", ""]  # fmt: skip
@@ -446,12 +544,19 @@ def read_axisymmetric(vtus: list[Path], mesh_dir: Path, node_ids: np.ndarray, co
     table = dict(np.load(mesh_dir / eddy.ELEMENTS))
     xy = {int(n): c[:2] for n, c in zip(node_ids, coords, strict=True)}
     results = Results(solver="elmer")
-    for vtu, hz in zip(vtus, meta["frequencies"], strict=True):
+    per = 1 + sum(c.kind == "massive" for c in meta["coils"])  # scans per frequency
+    basis = []
+    for vtu in vtus:
         nodal = read_vtu(vtu)
         re = nodal.get("potential re", nodal.get("potential"))[:, 0]
         im = nodal.get("potential im", np.zeros((len(re), 1)))[:, 0]
-        potential = dict(zip(node_ids.tolist(), re + 1j * im, strict=True))
-        B, J, A = eddy.axisymmetric_fields(meta, table, xy, potential, 2 * math.pi * hz)
+        basis.append(dict(zip(node_ids.tolist(), re + 1j * im, strict=True)))
+    for k, hz in enumerate(meta["frequencies"]):
+        omega = 2 * math.pi * hz
+        potential, volts = eddy.combine_axisymmetric(meta, table, basis[k * per:(k + 1) * per],
+                                                     omega)  # fmt: skip
+        B, J, A = eddy.axisymmetric_fields(meta, table, xy, potential, omega, volts)
         b_nodal = eddy.nodal_average(table, B, node_ids)
-        results.steps.append(eddy.step_result(meta, hz, table, B, J, A, {}, node_ids, b_nodal))
+        results.steps.append(eddy.step_result(meta, hz, table, B, J, A, volts, node_ids,
+                                              b_nodal))  # fmt: skip
     return results

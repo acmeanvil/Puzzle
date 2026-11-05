@@ -37,10 +37,12 @@ energy are time averages.
   `bdf2`. Results per output time: B, J, loss and energy as instantaneous values; no R
   or L.
 - A `2d_axisymmetric` component (X the radius, Y the axis) solves A_φ: windings and
-  passive conductors (a billet, a crucible), static or frequency-domain. The hoop
-  direction is a field's out-of-plane component. A massive ring is refused (it needs a
-  circuit). Build the regions as separate parts bonded edge to edge: face steps of one
-  geometry are fused into one face.
+  passive conductors (a billet, a crucible) and solid rings (`coil_current` on a region,
+  no terminals: its voltage per turn is solved so it carries I), static or
+  frequency-domain. The hoop direction is a field's out-of-plane component. Give each
+  region its own face step with `mode: "separate"` (touching faces share their edges
+  and stay regions; the default "add" fuses them into one face), or separate parts
+  bonded edge to edge.
 
 ## Steps
 
@@ -77,7 +79,11 @@ energy are time averages.
   `magnetic_insulation` on those ends too, or its natural condition forces the flux
   normal there and spurious eddy currents appear.
 - A phase in a static step is refused.
-- A winding with no terminal faces (a closed loop) runs on Elmer only; FEniCSx needs
-  both faces.
+- A winding with no terminal faces is a closed loop (both solvers): it circulates
+  right-handed about its principal axis with the largest moment of inertia (a ring's
+  or racetrack's own axis) through its centroid. A winding's turns carry a uniform
+  current density along them.
+- Settings > Solvers > Parallel processes per run splits a 3D magnetic study on Elmer
+  across MPI processes (ElmerGrid, ElmerSolver_mpi): about 2.5 times faster on four.
 - Reactions in a structural study fed by forces: CalculiX's reaction at a held node
   leaves out the load on that node itself.

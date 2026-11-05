@@ -80,7 +80,7 @@ SETTINGS = {
 }
 STEP_CHOICES = {
     "axis": ["x", "y", "z"],
-    "mode": ["add", "cut", "intersect", "new"],
+    "mode": ["add", "separate", "cut", "intersect", "new"],
     "plane": ["xy", "yz", "xz"],
 }
 

@@ -51,6 +51,8 @@ class Coil:
     end: str | None = None
     start_nodes: list[int] = field(default_factory=list)  # Puzzle node ids
     amplitude: list[list[float]] | None = None  # (time, factor) points: a transient's current
+    centre: list[float] | None = None  # a closed winding's: the current circulates
+    axis: list[float] | None = None  # right-handed about this axis through the centre
 
     @property
     def phasor(self) -> complex:
@@ -108,7 +110,7 @@ def coils(project, comp, features, mesh, *, solver: str) -> list[Coil]:
                 f"coil '{f.selection}' needs both a 'current enters' and a 'current leaves' "
                 "face on it, or neither (a closed winding)"
             )
-        if kind == "massive" and coil.closed:
+        if kind == "massive" and coil.closed and not mesh.planar:  # a 2D ring needs none
             raise InputError(
                 f"the massive conductor '{f.selection}' needs a face where the current enters "
                 "and one where it leaves"
@@ -117,6 +119,9 @@ def coils(project, comp, features, mesh, *, solver: str) -> list[Coil]:
             raise InputError(f"coil '{f.selection}': fill is a share of the section, 0 to 1")
         if coil.start:
             coil.start_nodes = sorted(_nodes(mesh, coil.start))
+        if coil.closed and not mesh.planar:  # its loop's centre and axis
+            centre, axis = coil_axis(mesh, f.selection)
+            coil.centre, coil.axis = centre.tolist(), axis.tolist()
         if f.amplitude:  # a transient's current follows it (ADR 0037)
             from puzzle.model.schema import Amplitude
 
@@ -328,11 +333,48 @@ def axisymmetric_table(mesh, bodies: list[str], path: Path) -> None:
              centres=xyz.mean(axis=1))  # fmt: skip
 
 
-def axisymmetric_fields(meta: dict, table, mesh_coords: dict, potential: dict, omega: float):
+def _hoop_mean(table, potential: dict) -> np.ndarray:
+    """Each triangle's mean A_φ over its corners."""
+    return np.array([np.mean([potential[int(n)] for n in row]) for row in table["corners"]])
+
+
+def combine_axisymmetric(meta: dict, table, basis: list[dict], omega: float):
+    """A solid ring's voltage per turn V is the circuit's unknown (ADR 0047): `basis[0]`
+    is A_φ with the windings only, `basis[1 + j]` with a unit V on solid ring j alone (a
+    source σ V / 2πr in it). Each ring's current I_m = ∫ σ (V_m / 2πr − jωA) dA over its
+    section is linear in V; the V giving each its I combine them. Returns the potential
+    (node → A_φ) and each ring's V."""
+    rings = [c for c in meta["coils"] if c.kind == "massive"]
+    if not rings:
+        return basis[0], {}
+    names = [b["name"] for b in meta["bodies"]]
+    sigma = np.array([b["sigma"] for b in meta["bodies"]], float)[table["body"]]
+    r = np.maximum(table["radius"], 1e-30)
+    inside = [table["body"] == names.index(c.body) for c in rings]
+
+    def currents(potential, unit: int | None):
+        a = _hoop_mean(table, potential)
+        out = []
+        for m, mine in enumerate(inside):
+            drive = sigma / (2 * math.pi * r) if unit == m else 0.0
+            out.append((table["area"] * (drive - 1j * omega * sigma * a))[mine].sum())
+        return np.array(out)
+
+    base = currents(basis[0], None)
+    matrix = np.column_stack([currents(basis[1 + j], j) for j in range(len(rings))])
+    volts = np.linalg.solve(matrix, np.array([c.phasor for c in rings]) - base)
+    combined = {n: basis[0][n] + sum(v * basis[1 + j][n] for j, v in enumerate(volts))
+                for n in basis[0]}  # fmt: skip
+    return combined, {c.body: complex(v) for c, v in zip(rings, volts, strict=True)}
+
+
+def axisymmetric_fields(meta: dict, table, mesh_coords: dict, potential: dict, omega: float,
+                        volts: dict | None = None):  # fmt: skip
     """B, J and A per triangle (complex (n, 3): B = (B_r, B_z, 0), J and A hoop) from
     A_φ at the corners, linear in each triangle: B_r = −∂A/∂z, B_z = ∂A/∂r + A/r,
-    J = J_s − jωσA (a winding's J_s = N I over its section). `mesh_coords` and
-    `potential` map node id → (x, y) and → complex A_φ."""
+    J = J_s − jωσA (a winding's J_s = N I over its section; a solid ring's σ V / 2πr,
+    `volts` its voltage per turn). `mesh_coords` and `potential` map node id → (x, y)
+    and → complex A_φ."""
     corners = table["corners"]
     xy = np.array([[mesh_coords[int(n)] for n in row] for row in corners])  # (n, 3, 2)
     a = np.array([[potential[int(n)] for n in row] for row in corners])  # (n, 3)
@@ -350,7 +392,10 @@ def axisymmetric_fields(meta: dict, table, mesh_coords: dict, potential: dict, o
     source = np.zeros(n, complex)
     for c in meta["coils"]:
         inside = table["body"] == bodies.index(c.body)
-        source[inside] = c.turns * c.phasor / table["area"][inside].sum()
+        if c.kind == "massive":  # driven by its voltage per turn round the ring
+            source[inside] = (sigma / (2 * math.pi * r))[inside] * (volts or {})[c.body]
+        else:
+            source[inside] = c.turns * c.phasor / table["area"][inside].sum()
     J, A = np.zeros((n, 3), complex), np.zeros((n, 3), complex)
     J[:, 2] = source - 1j * omega * sigma * centre
     A[:, 2] = centre
@@ -367,3 +412,24 @@ def nodal_average(table, values: np.ndarray, node_ids: np.ndarray) -> np.ndarray
         np.add.at(total, rows, values)
         np.add.at(count, rows, 1.0)
     return total / np.maximum(count, 1)[:, None]
+
+
+def coil_axis(mesh, body: str) -> tuple[np.ndarray, np.ndarray]:
+    """A closed winding's centre and axis: its volume's centroid, and the principal
+    axis with the largest moment of inertia (a ring's or a racetrack's own axis). A
+    positive current circulates right-handed about it."""
+    blocks = [b for b in mesh.groups[body].blocks(mesh) if b.dim == 3]
+    index = {int(n): i for i, n in enumerate(mesh.node_ids)}
+    centres, weights = [], []
+    for b in blocks:
+        local = np.vectorize(index.__getitem__, otypes=[np.int64])(b.connectivity[:, :4])
+        centres.append(mesh.coords[local].mean(axis=1))
+        weights.append(tet_volumes(mesh.coords, local))
+    x, w = np.vstack(centres), np.concatenate(weights)
+    centre = (x * w[:, None]).sum(axis=0) / w.sum()
+    d = x - centre
+    inertia = np.eye(3) * (w * (d**2).sum(axis=1)).sum() - np.einsum("n,ni,nj->ij", w, d, d)
+    values, vectors = np.linalg.eigh(inertia)
+    axis = vectors[:, np.argmax(values)]
+    k = int(np.argmax(np.abs(axis)))  # sign: its largest component positive
+    return centre, axis * np.sign(axis[k])

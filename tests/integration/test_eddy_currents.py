@@ -565,3 +565,46 @@ def test_lorentz_forces_push_the_wires_apart(tmp_path, solver):
     # CalculiX's reactions there: they carry a little less than the total.
     assert -reaction[0] == pytest.approx(total[0], rel=0.03)
     assert -reaction[0] < total[0]
+
+
+@over("elmer")
+@pytest.mark.parametrize("kind", ["transient", "harmonic"])
+def test_elmer_in_parallel_gives_the_same_answer(tmp_path, solver, kind):
+    """Settings > Solvers > Parallel processes per run (ADR 0053): Elmer's magnetic
+    studies split by ElmerGrid and run on MPI give one process's fields."""
+    import time
+
+    from puzzle import settings
+    from puzzle.machine import physical_cores
+
+    if physical_cores() < 2:
+        pytest.skip("needs two cores")
+    runs, seconds = {}, {}
+    for n in (1, min(4, physical_cores())):
+        settings.current().set("solvers.processes", n)
+        start = time.perf_counter()
+        where = tmp_path / str(n)
+        if kind == "transient":
+            runs[n] = _step_current(where, solver, 0.15, "backward_euler", 100, 0.1, every=5)[0]
+        else:
+            where.mkdir()
+            project, study = _project(where, solver, [(0.0, A)], [2e4], wire_size=0.15,
+                                      coils=lambda n: [_coil("coil_current", f"{n[0]}/Body",
+                                                             CURRENT)])  # fmt: skip
+            runs[n] = run_study(project, study.id, where, where / "run", timeout_s=1800)
+        seconds[n] = time.perf_counter() - start
+    settings.current().set("solvers.processes", 1)
+    (one, many) = runs.values()
+    print(f"{kind}: " + ", ".join(f"{n} process{'es' * (n > 1)} {s:.0f} s"
+                                  for n, s in seconds.items()))  # fmt: skip
+    name = "current_density" if kind == "transient" else "current_density_amplitude"
+    uniform = CURRENT / (math.pi * A**2)
+    assert len(one.results.steps) == len(many.results.steps)
+    for a, b in zip(one.results.steps, many.results.steps, strict=True):
+        ja, jb = a.fields[name], b.fields[name]
+        assert np.array_equal(ja.ids, jb.ids)
+        assert np.abs(ja.values - jb.values).max() < 1e-4 * uniform
+    if kind == "harmonic":
+        steps = (one.results.steps[0], many.results.steps[0])
+        r = [s.fields["coil_resistance"].values[0, 0] for s in steps]
+        assert r[1] == pytest.approx(r[0], rel=1e-4)

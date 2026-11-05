@@ -162,8 +162,36 @@ class ElmerAdapter(SolverAdapter):
 
         return ElmerProgress(input_file, step, of)
 
+    parallel_processes = True  # magnetic studies, where an MPI Elmer is present (ADR 0053)
+
+    def processes(self, input_file: Path | None = None) -> int:
+        """Processes for a run: Settings > Solvers > Parallel processes per run, for a
+        3D magnetic study (its reader merges the partitions) with an MPI Elmer: the
+        image's, or ElmerSolver_mpi beside a native one. Else 1."""
+        from puzzle.adapters.eddy import META
+        from puzzle.jobs.runtime import ContainerRuntime, process_count, runtime_for
+
+        n = process_count()
+        if n <= 1 or input_file is None:
+            return 1
+        mesh_dir = input_file.parent / MESH_DIR
+        if not (mesh_dir / META).exists() or (mesh_dir / "puzzle-node-coords.npy").exists():
+            return 1  # not magnetics, or an axisymmetric model (small: one process)
+        runtime = runtime_for("elmer")
+        mpi = isinstance(runtime, ContainerRuntime) or runtime.available("ElmerSolver_mpi")
+        return n if mpi else 1
+
     def command(self, input_file: Path) -> list[str]:
-        return ["ElmerSolver", input_file.name]
+        n = self.processes(input_file)
+        if n <= 1:
+            return ["ElmerSolver", input_file.name]
+        # ElmerGrid splits the mesh (METIS), then one ElmerSolver_mpi per part.
+        script = input_file.parent / "run-mpi.sh"
+        script.write_text(
+            f"ElmerGrid 2 2 {MESH_DIR} -metiskway {n} > partition.log 2>&1 || exit 1\n"
+            f"exec mpirun --oversubscribe -np {n} ElmerSolver_mpi {input_file.name}\n"
+        )
+        return ["sh", script.name]
 
     def read_results(self, input_file: Path) -> Results:
         mesh_dir = input_file.parent / MESH_DIR

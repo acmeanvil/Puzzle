@@ -314,8 +314,9 @@ PREFERENCES: list[Preference] = [
         "Parallel processes per run",
         1,
         _process_choices(),
-        "Splits the model across this many processes (MPI) where the solver can (Code_Aster "
-        "so far); the cores per run are shared out among them, so each gets cores ÷ "
+        "Splits the model across this many processes (MPI) where the solver can (Code_Aster; "
+        "Elmer's 3D magnetic studies); the cores per run are shared out among them, so each "
+        "gets cores ÷ "
         "processes threads. One process is threads only.",
     ),
     Preference(

@@ -1,6 +1,6 @@
 # 0047. Magnetodynamics: time-harmonic eddy currents first, then transient, on Elmer and FEniCSx
 
-- Status: Accepted (2026-10-26, with the maintainer's answers); stages 1 and 2 built 2026-11-04 (the sphere and TEAM 7 checks left)
+- Status: Accepted (2026-10-26, with the maintainer's answers); built 2026-11-04
 - Date: 2026-10-26
 
 ## Context
@@ -143,7 +143,25 @@ Items 5 to 7.
   - Two windings at 10 A each way: the force on one within 1.7 % of the line-current value with the outer boundary's images, on both solvers. Handed to a CalculiX study of the wire held at one end, the reaction is within 1.5 % of the total, the rest being the load on the held nodes.
   - A copper billet in a long solenoid at a/δ = 3.4, on both solvers: loss 0.311 W against 0.31099 W, the centre's B within 0.2 %.
 
-Left: closed windings on FEniCSx (it needs both terminal faces), a massive ring in 2D (a circuit), and the sphere and TEAM 7 checks.
+## Finished (2026-11-04)
+
+- **Closed windings on FEniCSx.** The source follows E0 = a × (x − c)/ρ², the gradient of the angle about the coil's axis, less ∇φ so it stays in the coil. The axis is the principal axis with the largest moment of inertia, through the centroid (`eddy.coil_axis`): a ring's or a racetrack's own. Elmer gets the same centre and axis (`Coil Center`, `Coil Normal`), so the two agree on the direction.
+- **A winding's current is uniform along its turns,** on both solvers. The density is N I × t/|t|, not the potential flow's own, which crowded toward a ring's inner radius as 1/ρ.
+  - Elmer: `Normalize Coil Current` with each winding a Component of Coil Type stranded.
+  - FEniCSx: the unit direction, with its divergence taken out inside the coil (as Elmer's Fix Input Current Density; ψ = 0 on an open winding's terminals), then divided by the current it carries. That is ∫ J·(−∇φ) dV for an open winding and (1/2π) ∫ J·E0 dV for a closed one, exact for a divergence-free flow kept in the coil. Without the cleaning, the divergence leaked into A through the gauge term and spoilt the flux linkage, 440 % on L.
+- **Solid rings in 2D** by superposition. One basis solution has the windings alone; one more per ring has a unit voltage per turn, J = σ/2πr. Each ring's current is linear in its voltage V, so Puzzle solves for the V giving each its current and combines the basis (`eddy.combine_axisymmetric`); Z = V/I.
+  - Elmer runs the basis as scans, the sources picked by MATC tests on the scan index.
+  - FEniCSx solves every basis from one factored matrix per frequency.
+- **2D regions in one geometry:** the history mode `separate` fuses touching faces without merging them, so each stays a region with its own material and the shared edge is meshed once.
+- **Elmer performance.** On 56 000 tetrahedra one transient step costs about 5 s on one core: about 3 s for the A–V solve, 1 s for the fields, 1 s for the ASCII output. The 30 s steps measured earlier came from other runs sharing the machine and from writing every step.
+  - Measured and rejected: ILU0 cut the iterations from 50 to 15, but diverged after a few steps on a finer mesh, because the system is singular in the air. `Constant Bulk Matrix` changed nothing.
+  - Done: the fields and the output only at output steps (`Exec Intervals` with `Exec Intervals Offset`).
+  - Done: **MPI** under Settings > Solvers > Parallel processes per run, as for Code_Aster (ADR 0053). ElmerGrid partitions the mesh with METIS, `mpirun ElmerSolver_mpi` runs it, and the reader merges each step's partitions by node position and cell centre. It applies to 3D magnetic studies, the image's MPI or `ElmerSolver_mpi` beside a native Elmer. Five steps took 28 s on one process, 17 s on two and 13 s on four. The fine 60-step benchmark took 210 s on one and 83 s on four, with the same fields.
+- **Measured:**
+  - Ring coil, centre field: −0.9 % on FEniCSx and −2.1 % on Elmer, whose CoilSolver measures the section 1.2 % larger.
+  - Solid tube at 500 Hz against the Bessel solution: loss within 0.01 %, R within 0.04 %, L to three digits, on both solvers.
+  - Conducting sphere at a/δ = 2.1 (Landau and Lifshitz §59): 0.0010917 W against 0.0010923 W, on both solvers.
+  - TEAM 7 at 50 Hz: B_z along A1–B1 against the measurements, on both solvers.
 
 ## Alternatives considered
 

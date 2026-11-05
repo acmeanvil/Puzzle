@@ -608,11 +608,12 @@ def _join(state, op, tool, tool_names: Names, mode: str, tool_bodies=None) -> No
         solids = _subshapes(tool, TopAbs_SOLID)
         state.bodies = {**({body: solids} if solids else {}), **(tool_bodies or {})}
         return
-    algo = {"add": BRepAlgoAPI_Fuse, "cut": BRepAlgoAPI_Cut, "intersect": BRepAlgoAPI_Common}.get(
-        mode
-    )
+    # "separate" (a 2D model's regions, ADR 0048): fused so they share their edges, but
+    # not merged into one face, so each stays a region of its own (own material).
+    algo = {"add": BRepAlgoAPI_Fuse, "separate": BRepAlgoAPI_Fuse, "cut": BRepAlgoAPI_Cut,
+            "intersect": BRepAlgoAPI_Common}.get(mode)  # fmt: skip
     if algo is None:
-        raise GeometryError(f"mode must be new, add, cut or intersect, not '{mode}'")
+        raise GeometryError(f"mode must be new, add, separate, cut or intersect, not '{mode}'")
     run = algo(state.shape, tool)
     if not run.IsDone():
         raise GeometryError(f"the {mode} in '{op.name}' failed")

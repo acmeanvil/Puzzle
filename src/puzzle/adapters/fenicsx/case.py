@@ -303,10 +303,6 @@ def _magnetics(project, comp, step, features, mesh, workdir: Path) -> dict:
 
         times = transient_times(step)
     axisymmetric = comp.dimension == "2d_axisymmetric"
-    if axisymmetric and any(c.kind == "massive" for c in coils):
-        raise InputError("an axisymmetric model takes windings (stranded coils); a massive "
-                         "ring's total current needs a circuit, not built yet",
-                         code="unsupported")  # fmt: skip
     eddy.write_meta(workdir / eddy.META, bodies, coils, frequencies, times, axisymmetric)
     table = eddy.axisymmetric_table if axisymmetric else eddy.element_table
     table(mesh, [a.selection for a in comp.materials], workdir / eddy.ELEMENTS)
@@ -317,7 +313,7 @@ def _magnetics(project, comp, step, features, mesh, workdir: Path) -> dict:
             {"body": c.body, "kind": c.kind, "current": list(c.current), "turns": c.turns,
              "start": c.start, "end": c.end,
              "area": surface_area(mesh.groups[c.start], mesh) if c.start else None,
-             "amplitude": c.amplitude}
+             "amplitude": c.amplitude, "centre": c.centre, "axis": c.axis}
             for c in coils
         ],
     }  # fmt: skip
@@ -334,12 +330,15 @@ def _read_magnetics(workdir: Path, data, node_ids, ids) -> Results:
         coords = np.load(workdir / "node-coords.npy")
         xy = {int(n): c[:2] for n, c in zip(node_ids, coords, strict=True)}
         results = Results(solver="fenicsx")
+        per = 1 + sum(c.kind == "massive" for c in meta["coils"])  # basis per frequency
         for k, hz in enumerate(data["magnetic_frequencies"]):
-            potential = dict(zip(ids.tolist(), data["axi_re"][k] + 1j * data["axi_im"][k],
-                                 strict=True))  # fmt: skip
-            B, J, A = eddy.axisymmetric_fields(meta, table, xy, potential, 2 * np.pi * hz)
+            basis = [dict(zip(ids.tolist(), data["axi_re"][i] + 1j * data["axi_im"][i],
+                              strict=True)) for i in range(k * per, (k + 1) * per)]  # fmt: skip
+            omega = 2 * np.pi * hz
+            potential, volts = eddy.combine_axisymmetric(meta, table, basis, omega)
+            B, J, A = eddy.axisymmetric_fields(meta, table, xy, potential, omega, volts)
             b_nodal = eddy.nodal_average(table, B, node_ids)
-            results.steps.append(eddy.step_result(meta, float(hz), table, B, J, A, {},
+            results.steps.append(eddy.step_result(meta, float(hz), table, B, J, A, volts,
                                                   node_ids, b_nodal))  # fmt: skip
         return results
     rows = match_points(data["cell_midpoints"], table["centres"], np.arange(len(table["ids"])))

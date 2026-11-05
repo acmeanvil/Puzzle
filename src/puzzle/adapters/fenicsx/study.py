@@ -311,21 +311,23 @@ class Factored:
             A.scatter_reverse()
             self.solver = splu(A.to_scipy().tocsc())
 
-    def solve(self) -> fem.Function:
+    def solve(self, L=None) -> fem.Function:
+        """With the matrix factored once; `L` another right-hand side (a compiled form)."""
         if self.solver is None:
             self._factor()
+        L = self.L if L is None else L
         uh = fem.Function(self.V)
         if BACKEND == "petsc":
             from dolfinx.fem.petsc import apply_lifting, assemble_vector, set_bc
 
-            b = assemble_vector(self.L)
+            b = assemble_vector(L)
             apply_lifting(b, [self.a], bcs=[self.bcs])
             b.ghostUpdate(addv=PETSc.InsertMode.ADD, mode=PETSc.ScatterMode.REVERSE)
             set_bc(b, self.bcs)
             self.solver.solve(b, uh.x.petsc_vec)
             b.destroy()
         else:
-            b = fem.assemble_vector(self.L)
+            b = fem.assemble_vector(L)
             fem.apply_lifting(b.array, [self.a], bcs=[self.bcs])
             b.scatter_reverse(la.InsertMode.add)
             for bc in self.bcs:
@@ -1221,12 +1223,14 @@ def solve_magnetodynamics(case, msh, degree, dx, ds, facets, tag, piecewise, out
 
     # Each winding's source: J_s = N I × (unit current density of a conduction solve).
     S = fem.functionspace(msh, ("Lagrange", 1))
-    shapes = []
+    shapes, gauges = [], []  # each winding's direction, and the field that counts its current
     for c in windings:
-        if c["start"] is None:
-            raise SystemExit(
-                f"FEniCSx needs a winding's terminal faces (coil '{c['body']}' is closed)"
-            )
+        if c["start"] is None:  # a closed loop: its circulating field, kept in the coil
+            shape, e0 = _closed_shape(msh, S, dx(tag(c["body"])), indicator([c["body"]]), c,
+                                      f"coil{len(shapes)}")  # fmt: skip
+            shapes.append(shape)
+            gauges.append(e0 / (2 * np.pi))  # I = (1/2π) ∫ J·E0 dV
+            continue
         w, z = ufl.TrialFunction(S), ufl.TestFunction(S)
         dc = dx(tag(c["body"]))
         a_v = ufl.inner(ufl.grad(w), ufl.grad(z)) * dc
@@ -1236,8 +1240,32 @@ def solve_magnetodynamics(case, msh, degree, dx, ds, facets, tag, piecewise, out
             for g, value in ((c["start"], 1.0), (c["end"], 0.0))
         ]
         phi = solve_linear(a_v, fem.Constant(msh, 0.0) * z * dx, bcs_v, S, f"coil{len(shapes)}")
-        unit = integral(ufl.inner(ufl.grad(phi), ufl.grad(phi)) * dc)
-        shapes.append(-(indicator([c["body"]]) / unit) * ufl.grad(phi))
+        # A winding's turns carry equal currents: a uniform density along the flow, not
+        # the flow's own (denser inside bends).
+        flow = -ufl.grad(phi)
+        shapes.append(indicator([c["body"]]) * flow / ufl.sqrt(ufl.inner(flow, flow) + 1e-300))
+        gauges.append(-ufl.grad(phi))  # φ falls by 1 from start to end: I = ∫ J·(−∇φ) dV
+
+    # As Elmer's Fix Input Current Density: a uniform density along the turns is not
+    # quite divergence-free, and its divergence would leak into A through the gauge term
+    # (B untouched, the flux linkage ∫ A·J spoilt). Take it out inside the coil:
+    # J − ∇ψ with ∫_coil ∇ψ·∇w = ∫_coil J·∇w, natural on its sides (ψ = 0 on an open
+    # winding's terminals), so the current stays in the coil and keeps its total.
+    for k, (c, shape) in enumerate(zip(windings, shapes, strict=True)):
+        dc = dx(tag(c["body"]))
+        psi, w_ = ufl.TrialFunction(S), ufl.TestFunction(S)
+        a_fix = ufl.inner(ufl.grad(psi), ufl.grad(w_)) * dc + 1e-12 * (
+            ufl.inner(ufl.grad(psi), ufl.grad(w_)) + psi * w_ / size**2) * dx  # fmt: skip
+        ends = [
+            dirichlet(0.0, fem.locate_dofs_topological(S, tdim - 1, facets.find(tag(g))), S)
+            for g in (c["start"], c["end"])
+            if g
+        ]  # an open winding's current enters there
+        fix = solve_linear(a_fix, ufl.inner(shape, ufl.grad(w_)) * dc, ends, S, f"jfix{k}")
+        cleaned = indicator([c["body"]]) * (shape - ufl.grad(fix))
+        # Per ampere: divided by the current it carries through any section, exactly
+        # (the divergence theorem, for a divergence-free flow kept in the coil).
+        shapes[k] = cleaned / integral(ufl.inner(cleaned, gauges[k]) * dc)
 
     def source(part: int):
         total = 0 * ufl.as_vector([0.0, 0.0, 0.0])
@@ -1398,11 +1426,18 @@ def solve_magnetic_axisymmetric(case, msh, degree, dx, facets, tag, piecewise, o
     # ∇A·∇v + A v / r² misses by a boundary term at the outer radius.
     a = (nu * (ufl.inner(curl(ar), curl(vr)) + ufl.inner(curl(ai), curl(vi))) * r
          + omega * sig * (ar * vi - ai * vr) * r) * dx  # fmt: skip
+    # The basis (ADR 0047): the windings alone, then a unit voltage per turn on each
+    # solid ring alone (J = σ / 2πr there); Puzzle combines them for the rings' currents.
     L = fem.Constant(msh, 0.0) * vr * dx
+    loads = []
     for c in mag["coils"]:
+        if c["kind"] == "massive":
+            loads.append(sig / (2 * np.pi) * vr * dx(tag(c["body"])))  # σ/(2πr) · r
+            continue
         area = integral(fem.Constant(msh, 1.0) * dx(tag(c["body"])))
         jr, ji = (c["turns"] * c["current"][k] / area for k in (0, 1))
         L += (jr * vr + ji * vi) * r * dx(tag(c["body"]))
+    loads.insert(0, L)
     bcs = []
     held = {f["group"] for f in case["features"] if f["type"] == "magnetic_insulation"}
     for k in (0, 1):
@@ -1418,9 +1453,11 @@ def solve_magnetic_axisymmetric(case, msh, degree, dx, facets, tag, piecewise, o
     for k, hz in enumerate(mag["frequencies"], start=1):
         omega.value = 2 * np.pi * hz
         emit("increment", increment=k, time=hz)
-        uh = solve_linear(a, L, bcs, W, "aphi")
-        re_.append(uh.sub(0).collapse().x.array.copy())
-        im_.append(uh.sub(1).collapse().x.array.copy())
+        system = Factored(a, loads[0], bcs, W, "aphi")  # one matrix per frequency
+        for load in loads:
+            uh = system.solve(fem.form(load))
+            re_.append(uh.sub(0).collapse().x.array.copy())
+            im_.append(uh.sub(1).collapse().x.array.copy())
         emit("converged", increment=k)
     out["coords"] = W.sub(0).collapse()[0].tabulate_dof_coordinates()
     out["magnetic_frequencies"] = np.array(mag["frequencies"], float)
@@ -1429,6 +1466,24 @@ def solve_magnetic_axisymmetric(case, msh, degree, dx, facets, tag, piecewise, o
 
 def cells_of_tag(case, name: str):
     return case["_cells"](name)
+
+
+def _closed_shape(msh, S, dc, chi, coil, name: str):
+    """A closed winding's current density per ampere: along E0 = a × (x − c) / ρ², the
+    gradient of the angle about its axis a (curl-free, 2π round the loop), less ∇φ so
+    it stays inside the coil (∫ ∇φ·∇w = ∫ E0·∇w over the coil, J·n = 0 on its faces),
+    of unit magnitude (scaled per ampere by the caller). Returns it and E0."""
+    x = ufl.SpatialCoordinate(msh)
+    a = ufl.as_vector(coil["axis"])
+    d = x - ufl.as_vector(coil["centre"])
+    perpendicular = d - ufl.inner(d, a) * a
+    e0 = ufl.cross(a, d) / ufl.inner(perpendicular, perpendicular)
+    w, z = ufl.TrialFunction(S), ufl.TestFunction(S)
+    a_form = ufl.inner(ufl.grad(w), ufl.grad(z)) * dc + 1e-12 * (
+        ufl.inner(ufl.grad(w), ufl.grad(z)) + w * z) * ufl.dx(domain=msh)  # fmt: skip
+    phi = solve_linear(a_form, ufl.inner(e0, ufl.grad(z)) * dc, [], S, name)
+    flow = e0 - ufl.grad(phi)
+    return chi * flow / ufl.sqrt(ufl.inner(flow, flow) + 1e-300), e0
 
 
 def _factor(points, t: float) -> float:
