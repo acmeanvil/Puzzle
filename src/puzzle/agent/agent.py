@@ -69,7 +69,13 @@ class Agent:
     ) -> None:
         self.root = Path(root)
         self.provider = provider
-        self.server = build_server(self.root, NAME, outside=False)
+        from puzzle.agent.settings import load_settings
+
+        picked = load_settings().picked  # "date suite version", when picked (ADR 0022)
+        self.server = build_server(self.root, NAME, outside=False,
+                                   model=getattr(provider, "model", "") or "",
+                                   suite=picked.split("suite ")[-1] if "suite " in picked
+                                   else "")  # fmt: skip
         self.images = (not provider.remote) if images is None else images
         self.max_rounds = max_rounds
         self.messages: list[dict] = []

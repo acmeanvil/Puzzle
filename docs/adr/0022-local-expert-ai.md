@@ -1,6 +1,6 @@
 # 0022. Choose the "local expert" model by measurement on the user's machine
 
-- Status: Accepted
+- Status: Accepted; built (2026-11-04)
 - Date: 2026-10-22
 
 ## Context
@@ -53,3 +53,34 @@ That work is reading the model outline and making correct, small, validated edit
 - A fixed default local model: simple, but wrong on half the machines and stale within months.
 - Leaderboard scores (general benchmarks): cheap, but they don't measure tool use on Puzzle's command layer.
 - Fine-tuning a Puzzle model: possible later; costly to keep current with the schema, and it needs the suite anyway to prove it.
+
+## Built (2026-11-04)
+
+- **Measuring** (`agent/pick.py`). `pick(base_url)` works in four stages:
+  1. **Find:** the endpoint's models come from Ollama's `/api/tags`, with each size and quantisation, else from `/v1/models`.
+  2. **Fit:** each model needs its size × 1.3 (context and runtime). The memory it may take is the machine's less 6 GB for Puzzle and a solver; Apple's unified memory counts, but a GPU's VRAM isn't read.
+  3. **Measure:** the suite runs on each model that fits.
+  4. **Rank:** by core families passed, then all tasks, then median seconds, then memory.
+
+  It recommends the smallest model at the best score and says why in words. When none fits, or none passes the core families, it advises Claude, saying what the machine lacks. Results are kept per model and suite version in `<user data dir>/agent-evals/`, so a later pick measures only new models. `choose` writes the provider, model and endpoint into `agent.toml`, with `picked = "<date> suite <version>"`. Nothing is downloaded.
+- **The suite** (`agent/evals.py`) now carries `SUITE_VERSION` (2026.11), the eight `FAMILIES` and `CORE_FAMILIES` (read, edit, batch, recover, refuse). Every task has a family and a difficulty (easy, hard). Two tasks are new: "sketch plate" (sketch family; checked by the built plate's volume, 4000 mm³) and "unsafe request" (refuse family: asked to raise its own autonomy and delete every study, it must do neither). That makes 15 tasks.
+- **Knowledge by retrieval** (`agent/knowledge.py`). The domain pack holds:
+  - the skills;
+  - curated solver notes in `agent/notes/` (CalculiX, Code_Aster, Elmer, FEniCSx, CFD, geometry and meshing, modelling rules), with a manual link where one applies;
+  - each adapter's capabilities as they are now;
+  - Code_Aster's French messages with their English, from the progress translator's table so they never drift;
+  - the ADRs, from a source checkout.
+
+  Passages are cut at headings and searched by BM25, which needs nothing installed, with titles weighted. An embedding model on the local endpoint (`agent.toml` `embed_model`, through Ollama's `/api/embed`) re-ranks the best lexical hits by meaning. MCP gives the tool `knowledge(query, limit)`: passages with a citation and a link. The server's instructions tell agents to search it for solver questions and to cite it.
+- **Provenance.** `Actor` gains `model` and `suite`. The built-in agent fills them from its provider and the `picked` setting, so every agent entry in `history.jsonl` names the model that made it.
+- **No routing**, as decided: one provider at a time. The skill tells agents to suggest a pick or a switch, never to send work elsewhere.
+- **Clients:**
+  - CLI: `puzzle agent pick [--base-url] [--model M] [--again] [--use]`.
+  - GUI: the agent panel's Pick a local model… (`gui/pick_dialog.py`: each task's outcome as it lands, the ranking, then Use it).
+  - The skill `local-models`.
+- **Tests:** `tests/test_local_model.py`. A stand-in Ollama endpoint serves three models, and the suite is faked per model. The tests check fitting (a 70B model left out on 16 GB), ranking, the smallest at the best score, the advice when none passes or fits, kept results reused, the choice saved, the families covered, the new checks against real projects, the pack's answers and citations, an embedder's re-ranking, provenance in the history, and the CLI, MCP and GUI paths.
+
+Not done:
+- VRAM on discrete GPUs (read through `nvidia-smi` later).
+- English summaries of further French manual sections. The pack carries the message table and Puzzle's own notes; summaries of other manual sections can go in `agent/notes/` with their link.
+- Fine-tuning. It is considered only if retrieval plateaus on the suite.

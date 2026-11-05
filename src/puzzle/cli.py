@@ -542,6 +542,16 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--walltime", default="01:00:00", help="HH:MM:SS")
     p.set_defaults(handler=_hosts)
 
+    p = sub.add_parser("agent", help="choose the local expert model by measurement (ADR 0022)")
+    p.add_argument("action", choices=["pick"])
+    p.add_argument("--base-url", default="http://localhost:11434/v1",
+                   help="the local endpoint (Ollama, llama.cpp, LM Studio)")  # fmt: skip
+    p.add_argument("--model", action="append", help="only these models (repeatable)")
+    p.add_argument("--again", action="store_true", help="measure again, ignoring kept results")
+    p.add_argument("--use", action="store_true", help="save the recommendation in agent.toml")
+    p.add_argument("--workdir", type=Path, help="where the task projects go (default: a temp)")
+    p.set_defaults(handler=_agent_pick)
+
     p = sub.add_parser("agent-key", help="store, check or remove the agent's API key")
     p.add_argument("action", choices=["set", "status", "clear"])
     p.add_argument("--provider", default="anthropic", choices=["anthropic", "openai"])
@@ -1529,6 +1539,38 @@ def _hosts(args) -> int:
     found = hosts.check(hosts.get(args.name))
     print(found.words())
     return 0 if found.reachable else 1
+
+
+def _agent_pick(args) -> int:
+    """Find, fit, measure and rank the endpoint's models; recommend one (ADR 0022)."""
+    import sys as _sys
+
+    from puzzle.agent import pick
+
+    _sys.path.insert(0, str(Path(__file__).parents[2] / "tests"))
+    try:
+        from solvers import available  # CalculiX tasks only where it runs
+
+        solvers = [s for s in ("calculix",) if available(s)]
+    except ImportError:
+        solvers = []
+
+    def said(model, outcome) -> None:
+        print(f"  {model} / {outcome.task}: {'pass' if outcome.passed else 'FAIL'} "
+              f"({outcome.seconds:.0f} s)", flush=True)  # fmt: skip
+
+    found = pick.pick(args.base_url, args.workdir, solvers=solvers, only=args.model,
+                      again=args.again, on_task=said)  # fmt: skip
+    for c in found.candidates:
+        size = f"{c.memory / 1e9:.1f} GB" if c.memory else "size unknown"
+        print(f"{c.name}: {size}" + ("" if c.fits else f", left out: {c.why}"))
+    for m in found.ranked:
+        print(f"  {m.model}: {m.passed}/{m.total} tasks, core {m.core_passed}/{m.core_total}, "
+              f"{m.median_s:.0f} s a task")  # fmt: skip
+    print(f"Recommended: {found.words}")
+    if args.use and found.recommended:
+        print(f"saved in {pick.choose(found.recommended, args.base_url)}")
+    return 0 if found.recommended else 1
 
 
 def _scripts(args) -> int:

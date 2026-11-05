@@ -7,6 +7,8 @@
     base_url = "http://localhost:11434/v1"   # openai only
     api_key_env = "ANTHROPIC_API_KEY"        # the environment variable holding the key
     send_images = false             # let a remote provider see rendered results
+    embed_model = "nomic-embed-text"         # optional: knowledge search by meaning
+    picked = "2026-11-04 suite 2026.11"      # set by `puzzle agent pick` (ADR 0022)
 
 Environment variables PUZZLE_AGENT_PROVIDER, PUZZLE_AGENT_MODEL and
 PUZZLE_AGENT_BASE_URL override the file.
@@ -84,6 +86,8 @@ class AgentSettings:
     base_url: str = "http://localhost:11434/v1"
     api_key_env: str = ""
     send_images: bool | None = None  # default: local providers yes, remote no
+    embed_model: str = ""  # an embedding model on the local endpoint, for knowledge search
+    picked: str = ""  # "2026-11-04 suite 2026.11": when `puzzle agent pick` chose the model
 
     def build(self) -> Provider:
         model = self.model or DEFAULT_MODELS.get(self.provider, "")

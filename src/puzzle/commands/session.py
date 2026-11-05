@@ -56,13 +56,19 @@ STALE_LOCK_S = 120.0  # the lock is never held while a solver runs
 class Actor:
     kind: Literal["user", "agent", "script"]
     name: str = ""
+    # ADR 0022: which model an agent ran on, and the evaluation suite it was picked by,
+    # so a project's history shows which model made which change.
+    model: str = ""
+    suite: str = ""
 
     @property
     def is_agent(self) -> bool:
         return self.kind == "agent"
 
     def to_dict(self) -> dict[str, str]:
-        return {"kind": self.kind, "name": self.name}
+        out = {"kind": self.kind, "name": self.name}
+        out |= {k: v for k, v in (("model", self.model), ("suite", self.suite)) if v}
+        return out
 
 
 USER = Actor("user")

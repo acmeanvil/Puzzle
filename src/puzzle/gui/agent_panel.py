@@ -138,6 +138,11 @@ class AgentPanel(QWidget):
         top.addWidget(QLabel("Agents may"))
         top.addWidget(self.level)
         top.addStretch()
+        pick = QPushButton("Pick a local model…")
+        pick.setToolTip("Measure the local models this computer can run and pick the best "
+                        "small one (ADR 0022)")  # fmt: skip
+        pick.clicked.connect(self._pick_model)
+        top.addWidget(pick)
         top.addWidget(key)
         top.addWidget(new_chat)
 
@@ -290,6 +295,11 @@ class AgentPanel(QWidget):
             return
         self.agent = None  # rebuilt with the new key on the next message
         self._say("note", f"{provider} key stored in the keychain")
+
+    def _pick_model(self) -> None:
+        from puzzle.gui.pick_dialog import PickDialog
+
+        PickDialog(self.window).exec()
 
     def _model_text(self) -> str:
         p = self.agent.provider

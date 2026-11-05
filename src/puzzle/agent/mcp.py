@@ -48,14 +48,17 @@ Errors carry a `code` and `details`.
 
 Before a task in an area that has a skill (bolts, beam sections, ...), read it with
 `skill_read`: it gives the steps, tools and pitfalls. `skills_list` lists them.
+For a question about a solver, an error message or what Puzzle supports, search
+`knowledge` and cite the passages you use.
 """
 
 
-def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True) -> MCPServer:
+def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True,
+                 model: str = "", suite: str = "") -> MCPServer:  # fmt: skip
     """The tools, for an outside agent (`outside`, refused when the project's MCP access
     is off) or for the built-in agent in-process (agent.agent), which the setting does
     not cover."""
-    actor = Actor("agent", client)
+    actor = Actor("agent", client, model=model, suite=suite)
 
     def session() -> Session:
         s = Session(root)
@@ -658,6 +661,21 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
     @guarded
     def proposals() -> list[dict[str, Any]]:
         return session().proposals()
+
+    # --- the domain pack (ADR 0022) --------------------------------------------------
+
+    @tool(description="Search Puzzle's domain pack: the skills, curated solver notes "
+          "(what Puzzle learned about each solver), each solver's capabilities, Code_Aster's "
+          "French messages in English, and the ADRs. Returns passages with a citation "
+          "(source § heading) and, for manual summaries, a link. Cite what you use.")  # fmt: skip
+    @guarded
+    def knowledge(query: str, limit: int = 5) -> dict[str, Any]:
+        from puzzle.agent import knowledge as pack
+        from puzzle.agent.settings import load_settings
+
+        s = load_settings()
+        embed = pack.ollama_embedder(s.base_url, s.embed_model) if s.embed_model else None
+        return {"hits": pack.search(query, limit, embed=embed)}
 
     # --- remote hosts (ADR 0021) -----------------------------------------------------
 
