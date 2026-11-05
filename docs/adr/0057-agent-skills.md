@@ -1,6 +1,6 @@
 # 0057. A skill for agents with every finished feature
 
-- Status: Accepted (2026-10-30, at the maintainer's request)
+- Status: Accepted (2026-10-30, at the maintainer's request); built, with the older ADRs' skills (2026-11-04)
 - Date: 2026-10-30
 
 ## Context
@@ -25,3 +25,33 @@ Puzzle's built-in agent (ADR 0015) runs on Claude or on a local model (Ollama, l
 - **Everything in the system prompt:** simplest, but every request then carries every feature's notes; a small model's context fills and its attention spreads.
 - **Rely on `schema` and error messages:** works for strong models, slowly; small ones loop on refusals.
 - **Claude Code skills in `.claude/skills/`:** serve Claude Code sessions only, not Puzzle's own agent or other MCP clients; the MCP tools serve all three.
+
+## Built: the older ADRs' skills (2026-11-04)
+
+Thirteen skills for finished ADRs that agents use, each checked by `tests/test_agent_skills.py`. Their JSON examples were validated against the schema while they were written.
+
+| Skill | ADR | What it covers |
+| --- | --- | --- |
+| `contacts` | 0039 | finding contacts, the batch of selections and contacts, types per solver |
+| `result-tools` | 0042, 0032 | probes and result tools, the `result_*` tools |
+| `measuring` | 0042 | exact measurements |
+| `solver-settings` | 0023 | shared, own and expert settings; presets |
+| `materials` | 0020 | the library, assignment, completeness, models per solver |
+| `meshing` | 0019 | recipes, controls, quality, the mesh shoot-out |
+| `sweeps` | 0018 | parameter and material sweeps, reading each point |
+| `derived-results` | 0025 | combinations and equations |
+| `fatigue` | 0026 | fatigue data and the fatigue tool |
+| `dynamics` | 0041, 0028 | transient, harmonic and buckling steps |
+| `structural-loads` | 0037 | every support and load, local axes, steps, amplitudes |
+| `coordinate-systems` | 0049 | coordinate systems |
+| `planar-models` | 0048 | 2D models |
+
+With the skills written alongside their ADRs since 0050, every finished ADR an agent uses now has one. The rest are about the GUI or packaging.
+
+Gaps the writing found, for later (none blocks the skills, which say what to do instead):
+- The `result_*` tools read a study's newest run, so on a sweep they see the last point stored. A `point` argument, and point labels in `runs`, would let an agent read each point directly; for now, a one-case combination or a points table does.
+- `result_*` tools take a solve step, not a time, frequency or mode within it, and none takes `axes` (only `export` does; ADR 0049 promised them on `result_stats` and probes). `result_summary` labels a buckling load factor as `frequency_hz`.
+- `capabilities(solver)` leaves out `axes_features`, `amplitude_features`, `time_schemes` and `material_models`.
+- No command applies a solver settings preset (the GUI does). There is no tool listing a geometry's entity names for `geometry_measure`, and none showing edge seeds or each body's meshing method.
+- A sweep run counts as one run in an agent's budget, whatever its points.
+- A body with no material assignment is not reported before a run unless the component has none at all.
