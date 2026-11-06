@@ -60,7 +60,12 @@ def install(installer: Path, prefix: Path, shortcuts: bool) -> Path:
     else:
         raise SystemExit(f"not an installer: {installer}")
     print("+", argv if isinstance(argv, str) else " ".join(argv), flush=True)
-    subprocess.run(argv, check=True)
+    done = subprocess.run(argv, capture_output=True, text=True, errors="replace")
+    print(done.stdout[-5000:], done.stderr[-5000:], sep="\n", flush=True)
+    if done.returncode:
+        for log in sorted(prefix.glob("*.log")) if prefix.is_dir() else []:
+            print(f"--- {log}", log.read_text(errors="replace")[-5000:], sep="\n")
+        raise SystemExit(f"the installer failed ({done.returncode})")
     return prefix
 
 
