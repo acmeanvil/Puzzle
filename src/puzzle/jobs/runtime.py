@@ -170,6 +170,7 @@ class NativeRuntime(Runtime):
         env = thread_environment()
         env["PATH"] = os.pathsep.join([*map(str, env_bin_dirs(prefix)), env.get("PATH", "")])
         env["CONDA_PREFIX"] = str(prefix)
+        env.update(activation_variables(prefix, env))
         if (prefix / "share" / "elmersolver").is_dir():
             # Relocated conda Elmer can't find its files from the compiled-in prefix.
             env["ELMER_HOME"] = str(prefix)
@@ -218,6 +219,54 @@ def conda_prefix(executable: Path) -> Path | None:
         if (parent / "conda-meta").is_dir():
             return parent
     return None
+
+
+def activation_variables(prefix: Path, env: dict[str, str]) -> dict[str, str]:
+    """What the environment's own activation scripts set, on Windows.
+
+    Some packages need theirs: Intel MPI's sets I_MPI_ROOT and its libfabric folders,
+    without which FEniCSx's MPI won't start (ADR 0068's Windows smoke test). `conda
+    activate` runs `etc/conda/activate.d/*.bat`; so does this, once per environment, in
+    cmd, keeping the variables they change. Elsewhere (no such scripts that solvers
+    need yet) and on any failure, nothing.
+    """
+    if os.name != "nt":
+        return {}
+    scripts = sorted((prefix / "etc" / "conda" / "activate.d").glob("*.bat"))
+    if not scripts:
+        return {}
+    return dict(_activated(str(prefix), tuple(map(str, scripts)), env.get("PATH", "")))
+
+
+@cache
+def _activated(prefix: str, scripts: tuple[str, ...], path: str) -> tuple[tuple[str, str], ...]:
+    import tempfile
+
+    lines = ["@echo off", f'set "CONDA_PREFIX={prefix}"', f'set "PATH={path}"']
+    lines += [f'call "{s}"' for s in scripts]
+    lines += ["echo ===puzzle-activated===", "set"]
+    before = {**os.environ, "CONDA_PREFIX": prefix, "PATH": path}
+    with tempfile.TemporaryDirectory() as tmp:
+        bat = Path(tmp) / "activate.bat"
+        bat.write_text("\r\n".join(lines) + "\r\n", newline="")  # no \r\r\n
+        try:
+            out = subprocess.run(["cmd", "/d", "/c", str(bat)], capture_output=True, text=True,
+                                 errors="replace", timeout=60, env=before).stdout  # fmt: skip
+        except (OSError, subprocess.SubprocessError):
+            return ()
+    return tuple(_changed(before, out.split("===puzzle-activated===", 1)[-1]))
+
+
+def _changed(before: dict[str, str], listing: str) -> list[tuple[str, str]]:
+    """The variables in `set`'s listing that differ from `before` (names as Windows
+    compares them, ignoring case)."""
+    old = {k.upper(): v for k, v in before.items()}
+    out = []
+    for line in listing.splitlines():
+        name, eq, value = line.partition("=")
+        if eq and name and old.get(name.upper()) != value:
+            out.append((name, value))
+    return out
 
 
 def env_bin_dirs(prefix: Path) -> list[Path]:

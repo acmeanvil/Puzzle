@@ -10,8 +10,10 @@
 3. Solves the cantilever example's Tip load with CalculiX, with nothing on PATH or
    PUZZLE_SOLVER_PATH pointing at it, so the installed Puzzle must find its own
    `envs/calculix` (`jobs.runtime.environment`), and reads the result back.
-4. Checks each solver environment the installer holds answers (`ccx`, dolfinx, Netgen,
-   MMG, the scripts and runner Pythons).
+4. Checks each solver environment the installer holds answers (dolfinx, Netgen, MMG,
+   the scripts and runner Pythons), each started with the environment Puzzle gives
+   solvers (`NativeRuntime.environment`, so Windows' activation scripts too).
+5. Solves the Tip load again with the installed FEniCSx.
 
 The example is copied with `git archive`, never touched in place.
 """
@@ -99,6 +101,24 @@ def run(argv: list[str], env: dict[str, str], cwd: Path | None = None) -> str:
     return done.stdout
 
 
+# Run an environment's Python with the environment Puzzle gives solvers
+# (`NativeRuntime.environment`: PATH, CONDA_PREFIX and on Windows the activation scripts).
+AS_PUZZLE = """
+import subprocess, sys
+from puzzle.jobs.runtime import NativeRuntime
+argv = [sys.argv[1], "-c", sys.argv[2]]
+sys.exit(subprocess.run(argv, env=NativeRuntime().environment(argv)).returncode)
+"""
+# The copied cantilever's study switched to FEniCSx, as the GUI would (a command).
+TO_FENICSX = """
+import sys
+from pathlib import Path
+from puzzle.commands import Session
+Session(Path(sys.argv[1])).submit({"command": "edit", "object": "Tip load",
+                                   "ops": [{"op": "set", "path": "solver", "value": "fenicsx"}]})
+"""
+
+
 def example(dest: Path) -> Path:
     data = subprocess.run(["git", "archive", "HEAD", "examples/cantilever"], cwd=ROOT,
                           capture_output=True, check=True).stdout  # fmt: skip
@@ -118,7 +138,7 @@ def main(argv: list[str] | None = None) -> int:
     # installer refuses a destination with a "~" in it.
     work = Path(tempfile.mkdtemp(prefix="puzzle-smoke-")).resolve()
     prefix = args.prefix or work / "Puzzle"
-    n = 4
+    n = 5
     try:
         step(1, n, f"installing {args.installer.name}")
         prefix = install(args.installer.resolve(), prefix, args.shortcuts)
@@ -141,7 +161,7 @@ def main(argv: list[str] | None = None) -> int:
         out = run([str(puzzle), "runs", str(project)], env)
         assert "Tip load" in out, out
 
-        step(4, n, "each solver environment answers")
+        step(4, n, "each solver environment answers, started as Puzzle starts solvers")
         envs = prefix / "envs"
         found = sorted(e.name for e in envs.iterdir()) if envs.is_dir() else []
         print("environments:", ", ".join(found))
@@ -153,10 +173,16 @@ def main(argv: list[str] | None = None) -> int:
         }.items():
             if name in found:
                 exe = envs / name / ("python.exe" if WINDOWS else "bin/python")
-                run([str(exe), "-c", code], env)
+                run([str(python), "-c", AS_PUZZLE, str(exe), code], env)
         if "mmg" in found:
             bin_dir = envs / "mmg" / ("Library/bin" if WINDOWS else "bin")
             assert any(bin_dir.glob("mmg3d*")), bin_dir
+
+        step(5, n, "solving the cantilever with the installed FEniCSx")
+        if "fenicsx" in found:
+            run([str(python), "-c", TO_FENICSX, str(project)], env)
+            out = run([str(puzzle), "run", str(project), "--study", "Tip load"], env)
+            assert "fenicsx" in out and "0.0015" in out, out
         step(n, n, f"done: {args.installer.name} works")
         files = (f for f in prefix.rglob("*") if f.is_file() and not f.is_symlink())
         size = sum(f.stat().st_size for f in files)

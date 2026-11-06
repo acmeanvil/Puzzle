@@ -193,3 +193,31 @@ def test_an_engine_off_path_is_found_and_put_on_its_path(monkeypatch, tmp_path):
     assert runtime_for("code_aster") == ContainerRuntime(
         image=DEFAULT_IMAGES["code_aster"], engine="docker"
     )
+
+
+def test_activation_keeps_only_what_the_scripts_changed():
+    from puzzle.jobs.runtime import _changed
+
+    before = {"Path": "C:\\a", "HOME": "C:\\h"}
+    listing = "PATH=C:\\mpi;C:\\a\nHOME=C:\\h\nI_MPI_ROOT=C:\\env\\Library\nnot a variable\n"
+    assert _changed(before, listing) == [
+        ("PATH", "C:\\mpi;C:\\a"),
+        ("I_MPI_ROOT", "C:\\env\\Library"),
+    ]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="activation scripts are run on Windows")
+def test_a_solver_env_on_windows_gets_its_activation_scripts(tmp_path):
+    from puzzle.jobs.runtime import NativeRuntime
+
+    prefix = tmp_path / "envs" / "fenicsx"
+    (prefix / "conda-meta").mkdir(parents=True)
+    scripts = prefix / "etc" / "conda" / "activate.d"
+    scripts.mkdir(parents=True)
+    (scripts / "mpivars.bat").write_text(
+        '@echo off\r\nset "I_MPI_ROOT=%CONDA_PREFIX%\\Library"\r\n'
+    )
+    (prefix / "python.exe").write_bytes(b"")
+    env = NativeRuntime().environment([str(prefix / "python.exe")])
+    assert env["I_MPI_ROOT"] == f"{prefix}\\Library"
+    assert env["CONDA_PREFIX"] == str(prefix)
