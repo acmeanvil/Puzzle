@@ -4,6 +4,8 @@ set their own. Without them CalculiX factors on one core."""
 
 import os
 
+import pytest
+
 from puzzle import settings
 from puzzle.jobs.runtime import (
     THREAD_VARIABLES,
@@ -35,11 +37,14 @@ def test_the_users_own_count_wins(monkeypatch):
 def test_native_and_container_runs_carry_them(monkeypatch, tmp_path):
     for name in THREAD_VARIABLES:
         monkeypatch.delenv(name, raising=False)
-    settings.current().set("solvers.threads", 4)
+    if logical_cores() < 2:
+        pytest.skip("needs 2 logical cores")
+    # 2, not 4: Cores per run offers at most this computer's logical cores (CI has 3).
+    settings.current().set("solvers.threads", 2)
     env = NativeRuntime().environment([str(tmp_path / "ccx")])
-    assert env["CCX_NPROC_EQUATION_SOLVER"] == "4"
+    assert env["CCX_NPROC_EQUATION_SOLVER"] == "2"
     argv = ContainerRuntime(image="puzzle/elmer").wrap(["ElmerSolver"], tmp_path)
-    assert "OMP_NUM_THREADS=4" in argv and "CCX_NPROC_STIFFNESS=4" in argv
+    assert "OMP_NUM_THREADS=2" in argv and "CCX_NPROC_STIFFNESS=2" in argv
 
 
 def test_choices_follow_this_computer():

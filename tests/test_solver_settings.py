@@ -211,9 +211,12 @@ def test_code_aster_low_rank_runs_on_one_thread():
     Code_Aster build, so a .comm asking for it (setting or expert line) gets ncpus 1."""
     from puzzle import settings
     from puzzle.adapters.code_aster import comm
+    from puzzle.machine import logical_cores
 
-    settings.current().set("solvers.threads", 4)
+    if logical_cores() < 2:
+        pytest.skip("needs 2 logical cores")
+    settings.current().set("solvers.threads", 2)  # at most the logical cores (CI has 3)
     assert comm._low_rank("SOLVEUR=_F(ACCELERATION='LR+', LOW_RANK_SEUIL=1e-09)")
     assert not comm._low_rank("SOLVEUR=_F(ACCELERATION='FR+')")
     assert "P ncpus 1" in comm.resources(low_rank=True)
-    assert "P ncpus 4" in comm.resources()
+    assert "P ncpus 2" in comm.resources()
