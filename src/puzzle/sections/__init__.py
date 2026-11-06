@@ -70,12 +70,14 @@ class Section:
 def _table(standard: str) -> dict[str, dict]:
     if standard not in STANDARDS:
         raise KeyError(f"no section standard '{standard}'")
-    data = json.loads(files(__package__).joinpath(f"{standard}.json").read_text())
+    data = json.loads(files(__package__).joinpath(f"{standard}.json").read_text(encoding="utf-8"))
     return {row["designation"]: row for row in data["sections"]}
 
 
 def source(standard: str) -> str:
-    return json.loads(files(__package__).joinpath(f"{standard}.json").read_text())["source"]
+    return json.loads(files(__package__).joinpath(f"{standard}.json").read_text(encoding="utf-8"))[
+        "source"
+    ]
 
 
 def families(standard: str) -> list[str]:

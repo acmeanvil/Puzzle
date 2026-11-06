@@ -132,7 +132,7 @@ def templates() -> dict[str, dict]:
     if folder.exists():
         for path in sorted(folder.glob("*.json")):
             try:
-                out[f"mine:{path.stem}"] = json.loads(path.read_text())
+                out[f"mine:{path.stem}"] = json.loads(path.read_text(encoding="utf-8"))
             except ValueError:
                 continue  # a damaged file is left out, never fatal
     return out
@@ -174,7 +174,7 @@ def save(project, operator_ids: list[UUID], name: str, help_: str = "") -> Path:
     folder = library_dir()
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"{_slug(name)}.json"
-    path.write_text(json.dumps(template, indent=1))
+    path.write_text(json.dumps(template, indent=1), encoding="utf-8")
     return path
 
 

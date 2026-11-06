@@ -146,7 +146,7 @@ def test_systems_and_planes_shown_always_and_kept_out_of_the_project(plates, app
     finally:
         again.close()
     assert {p: p.read_bytes() for p in root.rglob("*.toml")} == before
-    stored = json.loads(visibility.store_path().read_text())
+    stored = json.loads(visibility.store_path().read_text(encoding="utf-8"))
     assert str(plane.id) in stored[str(root.resolve())]["shown"]
 
 

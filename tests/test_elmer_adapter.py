@@ -27,14 +27,14 @@ def test_mesh_files_describe_the_mesh(tmp_path):
     fixed = Feature(type="fixed", selection="Bar/Root")
     sif, mesh = _case(tmp_path, [fixed], SolveStep(type="stationary"))
     d = sif.parent / "mesh"
-    header = (d / "mesh.header").read_text().split()
+    header = (d / "mesh.header").read_text(encoding="utf-8").split()
     n_nodes, n_elements, n_boundary = map(int, header[:3])
     assert n_nodes == len(mesh.node_ids)
     assert n_elements == sum(len(b.ids) for b in mesh.blocks if b.dim == 3)
     assert n_boundary == sum(len(b.ids) for b in mesh.groups["Bar/Root"].blocks(mesh) if b.dim == 2)
-    first = (d / "mesh.elements").read_text().splitlines()[0].split()
+    first = (d / "mesh.elements").read_text(encoding="utf-8").splitlines()[0].split()
     assert first[1:3] == ["1", "510"] and len(first) == 3 + 10  # body 1, quadratic tetra
-    boundary = (d / "mesh.boundary").read_text().splitlines()[0].split()
+    boundary = (d / "mesh.boundary").read_text(encoding="utf-8").splitlines()[0].split()
     assert (
         boundary[1] == "1" and int(boundary[2]) > 0 and boundary[4] == "306"
     )  # with a parent element
@@ -44,7 +44,7 @@ def test_sif_translates_loads(tmp_path):
     fixed = Feature(type="fixed", selection="Bar/Root")
     force = Feature(type="force", selection="Bar/Tip", values={"y": Quantity(value=-100, unit="N")})
     sif, _ = _case(tmp_path, [fixed, force], SolveStep(type="stationary"))
-    text = sif.read_text()
+    text = sif.read_text(encoding="utf-8")
     assert '"StressSolve" "StressSolver"' in text and "Calculate Stresses = True" in text
     assert "Displacement 1 = 0" in text
     traction = float(next(line for line in text.splitlines() if "Force 2 =" in line).split("=")[1])
@@ -57,7 +57,7 @@ def test_pressure_becomes_normal_force(tmp_path):
     sif, _ = _case(
         tmp_path, [Feature(type="fixed", selection="Bar/Root"), p], SolveStep(type="stationary")
     )
-    assert "Normal Force = -2000000" in sif.read_text()
+    assert "Normal Force = -2000000" in sif.read_text(encoding="utf-8")
 
 
 def test_modal_and_heat_solvers(tmp_path):
@@ -66,12 +66,12 @@ def test_modal_and_heat_solvers(tmp_path):
         [Feature(type="fixed", selection="Bar/Root")],
         SolveStep(type="modal", settings={"modes": 5}),
     )
-    assert "Eigen System Values = 5" in sif.read_text()
+    assert "Eigen System Values = 5" in sif.read_text(encoding="utf-8")
     hot = Feature(
         type="temperature", selection="Bar/Root", values={"T": Quantity(value=100, unit="degC")}
     )
     sif, _ = _case(tmp_path / "b", [hot], SolveStep(type="stationary"), physics="heat_transfer")
-    text = sif.read_text()
+    text = sif.read_text(encoding="utf-8")
     assert '"HeatSolve" "HeatSolver"' in text and "Temperature = 373.15" in text
     # Structural steel's EN 1993-1-2 tables become functions of temperature.
     assert "Heat Conductivity = Variable Temperature" in text and "573.15 44.01" in text
@@ -109,7 +109,7 @@ EigenSolve: 1:    1.642173E+06   0.000000E+00
 
 def test_reader_maps_points_to_puzzle_nodes_and_modes_to_hz(tmp_path):
     vtu = tmp_path / "case_t0001.vtu"
-    vtu.write_text(VTU)
+    vtu.write_text(VTU, encoding="utf-8")
     assert set(read_vtu(vtu)) == {"displacement", "displacement EigenMode1"}  # cell data skipped
     results = read_results(vtu, np.array([30, 10, 20]), LOG)
     (mode,) = results.modes()
@@ -130,10 +130,10 @@ def test_transient_heat_sif(tmp_path):
     sif, _ = _case(
         tmp_path, [hot], SolveStep(type="transient", settings=settings), physics="heat_transfer"
     )
-    text = sif.read_text()
+    text = sif.read_text(encoding="utf-8")
     assert "Simulation Type = Transient" in text and "Timestep Sizes(1) = 5" in text
     assert "Timestep Intervals(1) = 6" in text and "Exec Solver = After Timestep" in text
-    times = (sif.parent / "mesh" / "puzzle-times.txt").read_text().split()
+    times = (sif.parent / "mesh" / "puzzle-times.txt").read_text(encoding="utf-8").split()
     assert [float(t) for t in times] == [5, 10, 15, 20, 25, 30]
 
 
@@ -154,7 +154,11 @@ def test_electrostatics_sif(tmp_path):
         Study(name="e", component=comp.id, solver="elmer", steps=[SolveStep(type="stationary")])
     )
     mesh = generate_mesh(project, comp.id, tmp_path, tmp_path / "m").mesh
-    text = ElmerAdapter().write_input(project, study, mesh, tmp_path / "case").read_text()
+    text = (
+        ElmerAdapter()
+        .write_input(project, study, mesh, tmp_path / "case")
+        .read_text(encoding="utf-8")
+    )
     assert '"StatElecSolve" "StatElecSolver"' in text and "Calculate Electric Energy = True" in text
     assert (
         "Relative Permittivity = 4.5" in text
@@ -192,7 +196,11 @@ def test_magnetostatics_sif(tmp_path):
         Study(name="m", component=comp.id, solver="elmer", steps=[SolveStep(type="stationary")])
     )
     mesh = generate_mesh(project, comp.id, tmp_path, tmp_path / "m").mesh
-    text = ElmerAdapter().write_input(project, study, mesh, tmp_path / "case").read_text()
+    text = (
+        ElmerAdapter()
+        .write_input(project, study, mesh, tmp_path / "case")
+        .read_text(encoding="utf-8")
+    )
     assert "Desired Coil Current = Real 2000" in text
     assert '"MagnetoDynamics" "WhitneyAVSolver"' in text and "Solver 4" in text  # + output
     assert "Equation = 1" in text and "Body Force = 1" in text
@@ -236,5 +244,5 @@ def test_time_schemes(tmp_path, scheme, lines):
         SolveStep(type="transient", settings=settings | scheme),
         physics="heat_transfer",
     )
-    text = sif.read_text()
+    text = sif.read_text(encoding="utf-8")
     assert all(line in text for line in lines)

@@ -44,7 +44,7 @@ def _setup(tmp_path, features, step=AC):
 def test_elmer_writes_a_harmonic_massive_conductor(tmp_path):
     project, _, study, mesh = _setup(tmp_path, [_coil(), *TERMINALS])
     sif = ElmerAdapter().write_input(project, study, mesh, tmp_path / "case")
-    text = sif.read_text()
+    text = sif.read_text(encoding="utf-8")
     assert '"MagnetoDynamics" "WhitneyAVHarmonicSolver"' in text
     assert "Simulation Type = Scanning" in text and "Timestep Intervals(1) = 2" in text
     assert f"2 {2 * math.pi * 1000:.12g}" in text  # ω of the second scan
@@ -55,7 +55,7 @@ def test_elmer_writes_a_harmonic_massive_conductor(tmp_path):
     assert "AV re = Real 0" in text  # V = 0 on the end face
     assert "CoilSolver" not in text  # a massive conductor needs none
     assert "BiCGStabl" in text and "Umfpack" not in text  # the harmonic A–V solve
-    meta = json.loads((sif.parent / "mesh" / eddy.META).read_text())
+    meta = json.loads((sif.parent / "mesh" / eddy.META).read_text(encoding="utf-8"))
     assert meta["frequencies"] == [50.0, 1000.0]
     assert meta["coils"][0]["kind"] == "massive" and meta["coils"][0]["start"] == "Bar/Root"
 
@@ -63,7 +63,11 @@ def test_elmer_writes_a_harmonic_massive_conductor(tmp_path):
 def test_elmer_writes_a_winding(tmp_path):
     coil = _coil("stranded_coil", current=3.0, phase=0.0, turns=40, fill=0.5)
     project, _, study, mesh = _setup(tmp_path, [coil, *TERMINALS])
-    text = ElmerAdapter().write_input(project, study, mesh, tmp_path / "case").read_text()
+    text = (
+        ElmerAdapter()
+        .write_input(project, study, mesh, tmp_path / "case")
+        .read_text(encoding="utf-8")
+    )
     assert '"CoilSolver" "CoilSolver"' in text and "Use Unity Conductivity" in text
     assert 'Coil Type = String "stranded"' in text  # its own Component, scaled alone
     assert 'Current Density 1 = Variable "CoilCurrent 1"' in text
@@ -76,7 +80,7 @@ def test_fenicsx_case_carries_the_coils(tmp_path):
     project, _, study, mesh = _setup(tmp_path, [_coil(), *TERMINALS])
     study.solver = "fenicsx"
     FenicsxAdapter().write_input(project, study, mesh, tmp_path / "case")
-    case = json.loads((tmp_path / "case" / "case.json").read_text())
+    case = json.loads((tmp_path / "case" / "case.json").read_text(encoding="utf-8"))
     mag = case["magnetics"]
     assert mag["frequencies"] == [50.0, 1000.0]
     (coil,) = mag["coils"]

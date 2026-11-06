@@ -34,7 +34,7 @@ def read_exodus(path, step: int):
 def read_unv(path) -> dict[int, list[list[str]]]:
     """The datasets of a universal file: number -> each occurrence's lines (between the
     `    -1` delimiters, the number line left out)."""
-    lines = path.read_text().splitlines()
+    lines = path.read_text(encoding="utf-8").splitlines()
     out: dict[int, list[list[str]]] = {}
     i = 0
     while i < len(lines):

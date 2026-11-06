@@ -174,7 +174,7 @@ def test_a_double_click_opens_a_geometry_in_the_geometry_tab(window):
 def test_export_svg_and_png(window, tmp_path):
     w = window
     svg = w.schematic.export_picture(str(tmp_path / "s.svg"))
-    assert "Thermal" in (tmp_path / "s.svg").read_text() and svg
+    assert "Thermal" in (tmp_path / "s.svg").read_text(encoding="utf-8") and svg
     w.schematic.export_picture(str(tmp_path / "s.png"))
     assert (tmp_path / "s.png").stat().st_size > 1000
 

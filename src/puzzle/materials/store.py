@@ -61,7 +61,7 @@ class LibraryStore:
     def entries(self) -> dict[str, dict]:
         if not self.path.exists():
             return {}
-        return json.loads(self.path.read_text()).get("materials", {})
+        return json.loads(self.path.read_text(encoding="utf-8")).get("materials", {})
 
     def save(self, key: str, entry: dict) -> None:
         """Add or replace your material `key` (checked by building it first)."""
@@ -87,7 +87,7 @@ class LibraryStore:
 
         if not self.history.exists():
             return None
-        lines = self.history.read_text().splitlines()
+        lines = self.history.read_text(encoding="utf-8").splitlines()
         if not lines:
             return None
         last = json.loads(lines[-1])
@@ -97,7 +97,7 @@ class LibraryStore:
         else:
             entries[last["key"]] = last["before"]
         self._dump(entries)
-        self.history.write_text("".join(line + "\n" for line in lines[:-1]))
+        self.history.write_text("".join(line + "\n" for line in lines[:-1]), encoding="utf-8")
         reload_library()
         return last["key"]
 
@@ -126,11 +126,13 @@ class LibraryStore:
             entries[key] = entry
         self._dump(entries)
         self.history.parent.mkdir(parents=True, exist_ok=True)
-        with self.history.open("a") as f:
+        with self.history.open("a", encoding="utf-8") as f:
             f.write(json.dumps({"key": key, "before": before}) + "\n")
 
     def _dump(self, entries: dict) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps({"materials": entries}, indent=1, ensure_ascii=False))
+        tmp.write_text(
+            json.dumps({"materials": entries}, indent=1, ensure_ascii=False), encoding="utf-8"
+        )
         tmp.replace(self.path)  # never a half-written file

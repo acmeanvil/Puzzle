@@ -172,7 +172,7 @@ def write_ensight(mesh, results, path: Path, bcs: dict[str, str] | None = None):
             "filename numbers: " + " ".join(str(k) for k in key),
             "time values: " + " ".join(f"{times[k]:.9g}" for k in key),
         ]
-    case.write_text("\n".join(text) + "\n")
+    case.write_text("\n".join(text) + "\n", encoding="utf-8")
     notes = {
         "parts": "volume, " + ", ".join(p.name for p in parts[1:]) if len(parts) > 1 else "volume",
         "steps": str(len(results.steps)),

@@ -170,7 +170,7 @@ def test_plot_shows_in_the_plots_panel_and_export_writes(window):
     export_id = operators.new_operator(w, "export", reduce_id, "out")
     operators.export_now(w, w.session.project.objects[UUID(export_id)])
     written = w.session.root / "exports" / "Export_1.csv"
-    assert written.read_text().startswith("name,value [m]")
+    assert written.read_text(encoding="utf-8").startswith("name,value [m]")
     w.session.undo()  # an export changes no model: the last command was its creation
     assert not any(o.type == "export" for o in w.session.project.of_type(Operator))
 

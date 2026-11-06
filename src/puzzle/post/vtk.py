@@ -151,6 +151,7 @@ def export(mesh: Mesh, results: Results, path: Path) -> list[Path]:
     pvd.write_text(
         '<?xml version="1.0"?>\n<VTKFile type="Collection" version="0.1">\n  <Collection>\n'
         + "\n".join(entries)
-        + "\n  </Collection>\n</VTKFile>\n"
+        + "\n  </Collection>\n</VTKFile>\n",
+        encoding="utf-8",
     )
     return [pvd, *files]

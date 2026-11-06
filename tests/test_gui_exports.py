@@ -54,8 +54,10 @@ def test_export_form(app, tmp_path):
         assert files[0].name == "tip.csv" and files[-1].name == "tip.txt"
         fill(window, format="deformed_step", scale="10", compensate=True)
         files = export_results(window, str(study.id))
-        assert files[0].suffix == ".step" and "x 10 (exaggerated)" in files[-1].read_text()
-        assert "compensated" in files[-1].read_text()
+        assert files[0].suffix == ".step" and "x 10 (exaggerated)" in files[-1].read_text(
+            encoding="utf-8"
+        )
+        assert "compensated" in files[-1].read_text(encoding="utf-8")
         fill(window, format="deformed_stl", scale="0")
         assert export_results(window, str(study.id)) is None
         assert "above zero" in window.last_form.problem()

@@ -64,11 +64,14 @@ def _displacements(dat_text: str) -> dict[int, tuple[float, float, float]]:
 
 
 def test_unit_cube_tension_matches_hand_calculation(tmp_path):
-    (tmp_path / "cube.inp").write_text(CUBE_INP)
+    (tmp_path / "cube.inp").write_text(CUBE_INP, encoding="utf-8")
     result = run_job(["ccx", "-i", "cube"], tmp_path, runtime_for("calculix"), timeout_s=120)
 
-    assert result.ok, result.log.read_text()
-    ux = {node: u[0] for node, u in _displacements((tmp_path / "cube.dat").read_text()).items()}
+    assert result.ok, result.log.read_text(encoding="utf-8")
+    ux = {
+        node: u[0]
+        for node, u in _displacements((tmp_path / "cube.dat").read_text(encoding="utf-8")).items()
+    }
     assert set(ux) == {2, 3, 6, 7}
     for value in ux.values():
         assert value == pytest.approx(FORCE / E, rel=1e-6)

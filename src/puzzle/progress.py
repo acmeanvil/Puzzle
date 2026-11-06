@@ -182,7 +182,7 @@ def loads(text: str) -> list[Event]:
 def read(path: Path) -> list[Event]:
     """A run's events from its folder (or the file itself); [] when there are none."""
     path = path / FILE if path.is_dir() else path
-    return loads(path.read_text()) if path.exists() else []
+    return loads(path.read_text(encoding="utf-8")) if path.exists() else []
 
 
 # --- parsers -----------------------------------------------------------------------
@@ -263,7 +263,7 @@ class Recorder:
     def write_to(self, folder: Path) -> None:
         folder.mkdir(parents=True, exist_ok=True)
         path = folder / FILE
-        path.write_text(dumps(self.events))
+        path.write_text(dumps(self.events), encoding="utf-8")
         self.files.append(path)
 
     def __call__(self, event: Event) -> None:
@@ -272,7 +272,7 @@ class Recorder:
         self.events.append(event)
         for path in self.files:
             try:
-                with path.open("a") as f:
+                with path.open("a", encoding="utf-8") as f:
                     f.write(dumps([event]))
             except OSError:
                 pass

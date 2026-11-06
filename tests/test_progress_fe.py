@@ -70,7 +70,7 @@ def test_fenicsx_trackers_are_written_for_study_py(tmp_path):
     parser.trackers = [point, reaction]
     import json
 
-    (written,) = json.loads((tmp_path / "trackers.json").read_text())
+    (written,) = json.loads((tmp_path / "trackers.json").read_text(encoding="utf-8"))
     assert written["name"] == "Tip" and written["points"] == [[0.2, 0.0, 0.0]]
     notes = [e.text for e in parser.safe_feed("hello") if isinstance(e, Message)]
     assert notes and "Root" in notes[0]
@@ -122,15 +122,15 @@ def test_elmer_errors_and_a_failed_run(tmp_path):
 def test_elmer_trackers_read_each_vtu_once_it_is_complete(tmp_path):
     parser = _elmer("elmer_transient", tmp_path)
     mesh = tmp_path / "mesh"
-    (mesh / "puzzle-node-ids.txt").write_text("10\n11\n12\n")
-    (mesh / "puzzle-times.txt").write_text("20\n40\n")
+    (mesh / "puzzle-node-ids.txt").write_text("10\n11\n12\n", encoding="utf-8")
+    (mesh / "puzzle-times.txt").write_text("20\n40\n", encoding="utf-8")
     vtu = ('<VTKFile><UnstructuredGrid><Piece><PointData><DataArray Name="temperature" '
            'NumberOfComponents="1" format="ascii">{}</DataArray></PointData></Piece>'
            '</UnstructuredGrid></VTKFile>')  # fmt: skip
     parser.trackers = [Tracker("Hot", "temperature", "value", np.array([12]), reduce="max")]
-    (mesh / "case_t0001.vtu").write_text(vtu.format("1 2 3"))
+    (mesh / "case_t0001.vtu").write_text(vtu.format("1 2 3"), encoding="utf-8")
     assert parser.poll() == []  # the newest file may be half written
-    (mesh / "case_t0002.vtu").write_text(vtu.format("4 5 6"))
+    (mesh / "case_t0002.vtu").write_text(vtu.format("4 5 6"), encoding="utf-8")
     (first,) = parser.poll()
     assert (first.value, first.time, first.increment) == (3.0, 20.0, 1)
     (second,) = parser.finish(True)

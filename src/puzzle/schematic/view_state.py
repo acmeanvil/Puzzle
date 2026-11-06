@@ -34,7 +34,7 @@ class ViewState:
 
 def _all() -> dict:
     try:
-        data = json.loads(_path().read_text())
+        data = json.loads(_path().read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
@@ -71,7 +71,7 @@ def save(root: Path, state: ViewState) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, indent=1))
+        tmp.write_text(json.dumps(data, indent=1), encoding="utf-8")
         tmp.replace(path)
     except OSError:  # a read-only home: positions are a convenience only
         pass

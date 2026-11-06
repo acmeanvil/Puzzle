@@ -34,7 +34,7 @@ def read_frd(path: Path, solver: str = "calculix") -> Results:
     results = Results(solver=solver)
     steps: dict[tuple[int, int | None, float], StepResult] = {}
     analysis_step, mode = 0, None
-    lines = path.read_text().splitlines()
+    lines = path.read_text(encoding="utf-8").splitlines()
     i = 0
     while i < len(lines):
         line = lines[i]

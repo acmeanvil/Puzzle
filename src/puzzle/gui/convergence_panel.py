@@ -347,7 +347,7 @@ class ConvergencePanel(QWidget):
         kept = s.root / RESULTS_DIR / "adapt" / f"{study.id}.json"
         try:
             if kept.exists():
-                data = json.loads(kept.read_text())
+                data = json.loads(kept.read_text(encoding="utf-8"))
                 passes = [adapt.Pass(**{k: v for k, v in p.items()}) for p in data["passes"]]
                 ended = data["ended"]
             else:

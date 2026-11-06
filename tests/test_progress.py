@@ -217,7 +217,7 @@ def _project_with_attempt(tmp_path, events):
     save_project(p, root)
     folder = root / WORK_DIR / "bolted-20261031-010101"
     folder.mkdir(parents=True)
-    (folder / progress.FILE).write_text(progress.dumps(events))
+    (folder / progress.FILE).write_text(progress.dumps(events), encoding="utf-8")
     return root, study
 
 
@@ -313,7 +313,9 @@ def _run(parser, case: Path, ok: bool = True) -> list:
     """The parser as the job runner drives it: stdout lines, polls, then the end."""
     events = []
     log = case / "solver.log"
-    for line in log.read_text(errors="replace").splitlines() if log.exists() else []:
+    for line in (
+        log.read_text(errors="replace", encoding="utf-8").splitlines() if log.exists() else []
+    ):
         events += parser.safe_feed(line)
         events += parser.safe(parser.poll)
     return events + parser.safe(parser.poll) + parser.finish(ok)
@@ -453,10 +455,13 @@ def test_code_saturne_short_of_three_decades_is_not_converged(tmp_path):
 
     case = _case("code_saturne_channel", tmp_path)
     listing = case / "CASE" / "RESU" / "puzzle" / "run_solver.log"
-    text = listing.read_text()
-    listing.write_text(text[: text.index("TIME STEP NUMBER              41")])
+    text = listing.read_text(encoding="utf-8")
+    listing.write_text(text[: text.index("TIME STEP NUMBER              41")], encoding="utf-8")
     (case / "case.json").write_text(
-        (case / "case.json").read_text().replace('"iterations": 500', '"iterations": 40')
+        (case / "case.json")
+        .read_text(encoding="utf-8")
+        .replace('"iterations": 500', '"iterations": 40'),
+        encoding="utf-8",
     )
     events = _run(CodeSaturneProgress(case / "case.json"), case)
     assert len(_of(events, Iteration)) == 40 and not _of(events, Converged)

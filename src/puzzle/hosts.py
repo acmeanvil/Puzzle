@@ -150,7 +150,7 @@ def load() -> dict[str, Host]:
     path = hosts_path()
     if not path.exists():
         return {}
-    data = tomllib.loads(path.read_text())
+    data = tomllib.loads(path.read_text(encoding="utf-8"))
     known = {f.name for f in fields(Host)}
     out = {}
     for name, table in data.get("host", {}).items():
@@ -172,7 +172,7 @@ def save(hosts: dict[str, Host]) -> Path:
     path = hosts_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".toml.tmp")
-    tmp.write_text(tomli_w.dumps({"host": tables}))
+    tmp.write_text(tomli_w.dumps({"host": tables}), encoding="utf-8")
     tmp.replace(path)
     return path
 

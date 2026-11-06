@@ -248,7 +248,7 @@ def _activated(prefix: str, scripts: tuple[str, ...], path: str) -> tuple[tuple[
     before = {**os.environ, "CONDA_PREFIX": prefix, "PATH": path}
     with tempfile.TemporaryDirectory() as tmp:
         bat = Path(tmp) / "activate.bat"
-        bat.write_text("\r\n".join(lines) + "\r\n", newline="")  # no \r\r\n
+        bat.write_text("\r\n".join(lines) + "\r\n", newline="", encoding="utf-8")  # no \r\r\n
         try:
             out = subprocess.run(["cmd", "/d", "/c", str(bat)], capture_output=True, text=True,
                                  errors="replace", timeout=60, env=before).stdout  # fmt: skip

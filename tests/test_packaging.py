@@ -19,7 +19,7 @@ import publish_channel  # noqa: E402
 def _run_requirements(recipe: Path) -> dict[str, str]:
     """name → version spec of a recipe's run requirements (a light read of the YAML:
     the recipes keep one requirement per line)."""
-    text = recipe.read_text()
+    text = recipe.read_text(encoding="utf-8")
     run = text.split("  run:\n", 1)[1].split("\ntests:", 1)[0]
     out = {}
     for line in run.splitlines():
@@ -30,7 +30,7 @@ def _run_requirements(recipe: Path) -> dict[str, str]:
 
 
 def test_puzzles_package_needs_what_pixi_installs():
-    pixi = tomllib.loads((ROOT / "pixi.toml").read_text())
+    pixi = tomllib.loads((ROOT / "pixi.toml").read_text(encoding="utf-8"))
     pypi = {k: v for k, v in pixi["pypi-dependencies"].items() if k != "puzzle-fem"}
     wanted = {**pixi["dependencies"], **pixi["feature"]["gui"]["dependencies"], **pypi}
     run = _run_requirements(RECIPES / "puzzle-fem" / "recipe.yaml")
@@ -41,7 +41,7 @@ def test_puzzles_package_needs_what_pixi_installs():
 
 
 def test_the_pypi_only_pieces_have_recipes():
-    pixi = tomllib.loads((ROOT / "pixi.toml").read_text())
+    pixi = tomllib.loads((ROOT / "pixi.toml").read_text(encoding="utf-8"))
     for name in pixi["pypi-dependencies"]:
         if name != "puzzle-fem":
             assert (RECIPES / name / "recipe.yaml").exists(), name
@@ -50,9 +50,11 @@ def test_the_pypi_only_pieces_have_recipes():
 
 
 def test_the_version_comes_from_pyproject():
-    project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
     assert build_packages.version() == project["version"]
-    assert 'env.get("PUZZLE_VERSION"' in (RECIPES / "puzzle-fem" / "recipe.yaml").read_text()
+    assert 'env.get("PUZZLE_VERSION"' in (RECIPES / "puzzle-fem" / "recipe.yaml").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_the_channel_is_the_release_downloads(tmp_path):
@@ -82,7 +84,9 @@ def _channel(root: Path, platform: str, depends: list[str]) -> Path:
         pkgs = {f"{n}-1.0-0.conda": {"name": n, "version": "1.0", "build_number": 0,
                                      "md5": "0" * 32, "depends": depends}
                 for n in names}  # fmt: skip
-        (root / subdir / "repodata.json").write_text(json.dumps({"packages.conda": pkgs}))
+        (root / subdir / "repodata.json").write_text(
+            json.dumps({"packages.conda": pkgs}), encoding="utf-8"
+        )
     return root
 
 
@@ -95,12 +99,12 @@ def test_the_installer_is_exactly_the_lock(tmp_path):
     assert {make_installer._pypi_name(u) for u in pypi} == set(make_installer.OURS)
     channel = _channel(tmp_path / "ch", platform, ["python >=3.12", "numpy"])
     folder = make_installer.write(lock, platform, [str(channel)], tmp_path / "out", "sh")
-    lines = (folder / "base.txt").read_text().splitlines()
+    lines = (folder / "base.txt").read_text(encoding="utf-8").splitlines()
     assert lines[0] == "@EXPLICIT"
     assert len(lines) == 1 + len(base) + 3  # every locked package, by URL and md5, plus ours
     assert all("#" in line and len(line.rsplit("#", 1)[1]) == 32 for line in lines[1:])
     assert not any("pypi.org" in line or "pythonhosted" in line for line in lines)
-    construct = (folder / "construct.yaml").read_text()
+    construct = (folder / "construct.yaml").read_text(encoding="utf-8")
     assert 'environment_file: "base.txt"' in construct and "\nspecs:" not in construct
     assert 'menu_packages:\n  - "puzzle-fem"' in construct
     assert "initialize_conda: false" in construct
@@ -134,10 +138,10 @@ def test_installers_are_unsigned_until_the_certificates_are_set(tmp_path):
     lock = make_installer.read_lock()
     channel = _channel(tmp_path / "ch", "win-64", [])
     unsigned = make_installer.write(lock, "win-64", [str(channel)], tmp_path / "a", "exe", {})
-    assert "signing" not in (unsigned / "construct.yaml").read_text()
+    assert "signing" not in (unsigned / "construct.yaml").read_text(encoding="utf-8")
     signed = make_installer.write(lock, "win-64", [str(channel)], tmp_path / "b", "exe",
                                   {"PUZZLE_WIN_CERTIFICATE": "C:\\cert.pfx"})  # fmt: skip
-    construct = (signed / "construct.yaml").read_text()
+    construct = (signed / "construct.yaml").read_text(encoding="utf-8")
     assert 'signing_certificate: "C:\\\\cert.pfx"' in construct
     assert 'windows_signing_tool: "signtool"' in construct
     mac = {"PUZZLE_MAC_INSTALLER_IDENTITY": "Developer ID Installer: P (X)",
@@ -157,8 +161,10 @@ def test_notarizing_needs_the_installer_identity():
 
 
 def test_ci_builds_an_installer_for_every_platform():
-    workflow = (ROOT / ".github" / "workflows" / "installers.yml").read_text()
-    platforms = tomllib.loads((ROOT / "pixi.toml").read_text())["workspace"]["platforms"]
+    workflow = (ROOT / ".github" / "workflows" / "installers.yml").read_text(encoding="utf-8")
+    platforms = tomllib.loads((ROOT / "pixi.toml").read_text(encoding="utf-8"))["workspace"][
+        "platforms"
+    ]
     for platform in platforms:
         assert f'"platform": "{platform}"' in workflow, platform
     assert "smoke_installer.py" in workflow

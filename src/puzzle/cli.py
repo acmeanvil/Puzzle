@@ -1370,7 +1370,9 @@ def _schematic(args) -> int:
 
         view = view_state.load(args.project)
         lay = layout(s, view.positions, frozenset(view.unfolded))
-        args.svg.write_text(to_svg(s, lay, "none" if args.no_uses else "all", project.name))
+        args.svg.write_text(
+            to_svg(s, lay, "none" if args.no_uses else "all", project.name), encoding="utf-8"
+        )
         print(f"saved {args.svg}")
     if args.json:
         print(json.dumps(s.to_dict(), indent=1))

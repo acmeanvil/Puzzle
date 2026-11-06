@@ -45,7 +45,7 @@ def _path(root: Path) -> Path:
 
 def entries(root: Path) -> list[dict]:
     try:
-        data = json.loads(_path(root).read_text())
+        data = json.loads(_path(root).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return []
     return [e for e in data.get("jobs", []) if isinstance(e, dict) and e.get("job")]

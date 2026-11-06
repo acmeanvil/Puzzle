@@ -1159,7 +1159,7 @@ def section_normal(group, mesh: Mesh) -> np.ndarray:
 def mark_mesh_nodes(input_file, mesh: Mesh) -> None:
     """Leave the mesh's largest node id beside the input, so results at helper nodes
     added past it (rigid bodies, springs' grounds, pretension twins) can be dropped."""
-    input_file.with_suffix(".meshnodes").write_text(str(int(mesh.node_ids.max())))
+    input_file.with_suffix(".meshnodes").write_text(str(int(mesh.node_ids.max())), encoding="utf-8")
 
 
 def drop_helper_nodes(results, input_file):
@@ -1167,7 +1167,7 @@ def drop_helper_nodes(results, input_file):
     last = input_file.with_suffix(".meshnodes")
     if not last.exists():
         return results
-    top = int(last.read_text())
+    top = int(last.read_text(encoding="utf-8"))
     for step in results.steps:
         for name, f in list(step.fields.items()):
             if f.location == "node" and f.ids.size and f.ids.max() > top:

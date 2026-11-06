@@ -105,7 +105,9 @@ class CalculixProgress(Parser):
         self.frd_step = 0
         self.frd_increment = 0
         self.frd_time: float | None = None
-        deck = input_file.read_text(errors="replace") if input_file.exists() else ""
+        deck = (
+            input_file.read_text(errors="replace", encoding="utf-8") if input_file.exists() else ""
+        )
         self.steps = steps_of(deck)
         self.force_crit, self.corr_crit = criteria_of(deck)
         own = [s for s, _, _ in self.steps if s]

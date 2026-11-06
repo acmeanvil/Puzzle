@@ -123,7 +123,8 @@ def test_the_adapt_form_and_the_passes_view(app, tmp_path, monkeypatch):
                         {"index": 2, "run": "b", "nodes": 30, "elements": 60, "error": 0.012},
                     ],
                 }
-            )
+            ),
+            encoding="utf-8",
         )
         w.show_convergence(str(study.id), "adapt")
         panel = w.convergence

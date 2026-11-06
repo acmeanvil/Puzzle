@@ -75,7 +75,7 @@ def _csv(path, points, columns, header):
     rows = [header] + [
         ",".join(f"{c:.12g}" for c in (*p, *v)) for p, v in zip(points, columns, strict=True)
     ]
-    path.write_text("\n".join(rows) + "\n")
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
     return path
 
 

@@ -59,7 +59,7 @@ def _film_csv(path, shift=(0.0, 0.0, 0.0), half=True):
         for z in zs:
             p = np.array([200.0, y, z]) + np.asarray(shift) * 1e3
             rows.append(f"{p[0]:.6f},{p[1]:.6f},{p[2]:.6f},{100 + 10 * y:.3f}")
-    path.write_text("\n".join(rows) + "\n")
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
     return path
 
 

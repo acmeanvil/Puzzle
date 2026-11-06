@@ -281,7 +281,7 @@ def generate_mesh(
             )
 
         path = out_dir / MESH_FILE
-        (out_dir / "quality.json").write_text(json.dumps(quality))
+        (out_dir / "quality.json").write_text(json.dumps(quality), encoding="utf-8")
         if planar:
             _counter_clockwise()
         gmsh.option.setNumber("Mesh.SaveAll", 0)

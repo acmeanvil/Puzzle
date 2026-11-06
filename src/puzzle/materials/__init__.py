@@ -62,7 +62,7 @@ def library_paths() -> list[Path]:
 @cache
 def _load(paths: tuple[Path, ...]) -> dict[str, dict]:
     entries: dict[str, dict] = {}
-    generic = tomllib.loads(files(__package__).joinpath("generic.toml").read_text())
+    generic = tomllib.loads(files(__package__).joinpath("generic.toml").read_text(encoding="utf-8"))
     for key, entry in generic.items():
         entry = dict(entry)
         name, description = entry.pop("name"), entry.pop("description", "")
@@ -85,7 +85,7 @@ def _load(paths: tuple[Path, ...]) -> dict[str, dict]:
             "sources": sources,
         }
     for path in paths:
-        entries.update(json.loads(path.read_text())["materials"])
+        entries.update(json.loads(path.read_text(encoding="utf-8"))["materials"])
     return entries
 
 

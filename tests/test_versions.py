@@ -72,12 +72,12 @@ def test_saved_by_you_restored_and_the_restore_undone(tmp_path):
     good = s.save_version(label="Before the redesign", note="checked by hand", good=True)
     assert good.how == "user" and good.by == "You" and good.what == "Before the redesign"
     study = _rename(s, "Redesign")
-    (root / "notes.txt").write_text("added since")
-    (root / "bar.step").write_text("replaced since")
+    (root / "notes.txt").write_text("added since", encoding="utf-8")
+    (root / "bar.step").write_text("replaced since", encoding="utf-8")
     s.restore_version("good")
     assert s.project.objects[study].name != "Redesign"
     assert not (root / "notes.txt").exists()
-    assert (root / "bar.step").read_text() != "replaced since"
+    assert (root / "bar.step").read_text(encoding="utf-8") != "replaced since"
     kept = versions.latest(root)
     assert (
         kept.trigger == "before_restore" and kept.what == f"Before restoring version {good.number}"
@@ -87,8 +87,8 @@ def test_saved_by_you_restored_and_the_restore_undone(tmp_path):
     # Undo takes the restore back, files too.
     s.undo()
     assert s.project.objects[study].name == "Redesign"
-    assert (root / "notes.txt").read_text() == "added since"
-    assert (root / "bar.step").read_text() == "replaced since"
+    assert (root / "notes.txt").read_text(encoding="utf-8") == "added since"
+    assert (root / "bar.step").read_text(encoding="utf-8") == "replaced since"
 
 
 def test_known_good_marks_and_roll_back(tmp_path):
@@ -121,7 +121,7 @@ def test_thinning_keeps_yours_and_the_good_ones_and_drops_unused_blobs(tmp_path)
     s = Session(root)
     mine = s.save_version(label="mine")
     for k in range(6):
-        (root / "notes.txt").write_text(f"draft {k}")
+        (root / "notes.txt").write_text(f"draft {k}", encoding="utf-8")
         with s._locked():
             s._auto_version("edits", Actor("user"), words={"count": 1})
     autos = [v for v in versions.versions(root) if v.how == "auto"]
@@ -154,7 +154,7 @@ def test_a_copy_from_a_version(tmp_path):
 def test_a_version_file_is_plain_json(tmp_path):
     root = _project(tmp_path)
     v = Session(root).save_version(label="look")
-    data = json.loads((root / "versions" / f"{v.number}.json").read_text())
+    data = json.loads((root / "versions" / f"{v.number}.json").read_text(encoding="utf-8"))
     assert data["label"] == "look" and data["files"]["project.toml"]
 
 
@@ -227,17 +227,19 @@ def test_a_manifest_naming_files_outside_the_project_is_refused(tmp_path):
     v = Session(root).save_version(label="look")
     digest = v.files["project.toml"]
     path = root / "versions" / f"{v.number}.json"
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     for bad in ("../../escape.txt", "/tmp/escape.txt", "C:/escape.txt", "..\\escape.txt",
                 "versions/1.json"):  # fmt: skip
-        path.write_text(json.dumps({**data, "files": {**data["files"], bad: digest}}))
+        path.write_text(
+            json.dumps({**data, "files": {**data["files"], bad: digest}}), encoding="utf-8"
+        )
         with pytest.raises(PuzzleError) as refused:
             versions.get(root, v.number)
         assert refused.value.code == "invalid"
-    path.write_text(json.dumps({**data, "files": {"project.toml": "../../x"}}))
+    path.write_text(json.dumps({**data, "files": {"project.toml": "../../x"}}), encoding="utf-8")
     with pytest.raises(PuzzleError, match="bad hash"):
         versions.get(root, v.number)
-    path.write_text(json.dumps(data))
+    path.write_text(json.dumps(data), encoding="utf-8")
     # A version made in memory, and a link inside the project leading out, too.
     outside = tmp_path / "outside"
     outside.mkdir()

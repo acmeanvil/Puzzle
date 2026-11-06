@@ -143,9 +143,9 @@ def run(code: str, inputs: dict[str, Any], *, timeout_s: float = 30.0,
                           code="unsupported")  # fmt: skip
     with tempfile.TemporaryDirectory(prefix="puzzle-script-") as work:
         folder = Path(work)
-        (folder / "inputs.json").write_text(json.dumps(inputs))
-        (folder / "script.py").write_text(code)
-        (folder / "runner.py").write_text(RUNNER)
+        (folder / "inputs.json").write_text(json.dumps(inputs), encoding="utf-8")
+        (folder / "script.py").write_text(code, encoding="utf-8")
+        (folder / "runner.py").write_text(RUNNER, encoding="utf-8")
         argv = _sandbox([str(exe), "-I", "runner.py"], project_root)
         try:
             done = subprocess.run(argv, cwd=folder, capture_output=True, text=True,
@@ -158,7 +158,7 @@ def run(code: str, inputs: dict[str, Any], *, timeout_s: float = 30.0,
             tail = (done.stderr or done.stdout).strip().splitlines()[-3:]
             raise PuzzleError("the script stopped without a result: " + " / ".join(tail),
                               code="script_failed")  # fmt: skip
-        got = json.loads(result.read_text())
+        got = json.loads(result.read_text(encoding="utf-8"))
     if "error" in got:
         last = got["error"].strip().splitlines()[-1]
         raise PuzzleError(f"the script failed: {last}", code="script_failed",

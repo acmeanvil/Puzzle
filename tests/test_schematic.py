@@ -128,7 +128,7 @@ def test_small_references_are_chips_naming_their_other_users(bracket):
 def test_files_missing_from_the_project_folder_are_marked(bracket, tmp_path):
     s = schematic.build(bracket, root=tmp_path)
     assert _by_label(s, "bracket.step").state == "missing"
-    (tmp_path / "bracket.step").write_text("")
+    (tmp_path / "bracket.step").write_text("", encoding="utf-8")
     assert _by_label(schematic.build(bracket, root=tmp_path), "bracket.step").state == "complete"
 
 

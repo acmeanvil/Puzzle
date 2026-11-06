@@ -334,6 +334,6 @@ def _csv(path: Path, centres, columns, units: str) -> Path:
     table = np.column_stack([xyz, *(v for _, _, v in shown)])
     path.write_text(
         ",".join(header) + "\n"
-        + "\n".join(",".join(f"{v:.9g}" for v in row) for row in table) + "\n"
+        + "\n".join(",".join(f"{v:.9g}" for v in row) for row in table) + "\n", encoding="utf-8"
     )  # fmt: skip
     return path

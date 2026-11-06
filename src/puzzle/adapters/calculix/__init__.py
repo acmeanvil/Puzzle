@@ -113,25 +113,27 @@ class CalculixAdapter(SolverAdapter):
         self, project: Project, study: Study, mesh: Mesh, workdir: Path, inputs=()
     ) -> Path:
         path = workdir / f"{JOB}.inp"
-        path.write_text(write_inp(project, study, mesh, inputs))
+        path.write_text(write_inp(project, study, mesh, inputs), encoding="utf-8")
         # Replayed prestress steps come first in the results; the reader skips them.
         # Elastic constants per material, for the plastic strain tensor (read_results).
         elastic = _elastic_sets(project, study, mesh)
         if elastic:
-            path.with_suffix(".elastic.json").write_text(json.dumps(elastic))
+            path.with_suffix(".elastic.json").write_text(json.dumps(elastic), encoding="utf-8")
         # Helper nodes (rigid bodies, spring grounds) come after the mesh's; the reader
         # leaves them out of the results.
         mark_mesh_nodes(path, mesh)
         # Buckling steps (ADR 0028), by the study's step number: the reader drops their
         # static block and numbers modes.
         buckling = [n for n, s in enumerate(study.solve_steps(), start=1) if s.type == "buckling"]
-        path.with_suffix(".buckling").write_text(json.dumps(buckling))
+        path.with_suffix(".buckling").write_text(json.dumps(buckling), encoding="utf-8")
         beams = spring_beam_info(project, study, mesh)
         if beams:  # ADR 0055: the reader turns the springs' stretch into section forces
-            path.with_name(path.stem + spring_beams.INFO_SUFFIX).write_text(json.dumps(beams))
+            path.with_name(path.stem + spring_beams.INFO_SUFFIX).write_text(
+                json.dumps(beams), encoding="utf-8"
+            )
         ends = fastener_info(project, study, mesh)
         if ends:  # ADR 0027: the reader turns their helper nodes' reactions into forces
-            path.with_suffix(".fasteners.json").write_text(json.dumps(ends))
+            path.with_suffix(".fasteners.json").write_text(json.dumps(ends), encoding="utf-8")
         return path
 
     def contact_summary(self, project, component, mesh=None) -> dict[str, str]:
@@ -195,7 +197,7 @@ class CalculixAdapter(SolverAdapter):
         drop_helper_nodes(results, input_file)  # rigid-body nodes, grounds, twins
         elastic = input_file.with_suffix(".elastic.json")
         if elastic.exists():  # CalculiX writes PEEQ only: the tensor comes from S and E
-            sets = json.loads(elastic.read_text())
+            sets = json.loads(elastic.read_text(encoding="utf-8"))
             for step in results.steps:
                 if "plastic_strain_equivalent" in step.fields and "strain" in step.fields:
                     step.fields["plastic_strain"] = plastic_strain_tensor(
@@ -204,7 +206,7 @@ class CalculixAdapter(SolverAdapter):
         _fastener_fields(results, input_file)
         from puzzle.adapters.calculix.inp import step_owners
 
-        owners = step_owners(input_file.read_text()) if input_file.exists() else {}
+        owners = step_owners(input_file.read_text(encoding="utf-8")) if input_file.exists() else {}
         # Each result to its study step (the deck's tags); helpers' results go: a
         # replayed prestress step, the modes a superposition reads (ADR 0041).
         results.steps = [s for s in results.steps if owners.get(s.index, 0) > 0]
@@ -212,7 +214,9 @@ class CalculixAdapter(SolverAdapter):
             s.index = owners[s.index]
         buckling = input_file.with_suffix(".buckling")
         if buckling.exists():
-            results.steps = _buckling_modes(results.steps, set(json.loads(buckling.read_text())))
+            results.steps = _buckling_modes(
+                results.steps, set(json.loads(buckling.read_text(encoding="utf-8")))
+            )
         _harmonic(results)
         return results
 
@@ -243,7 +247,7 @@ def _spring_beam_forces(results, input_file: Path) -> None:
         return
     from puzzle.results.model import Field
 
-    info = json.loads(marker.read_text())
+    info = json.loads(marker.read_text(encoding="utf-8"))
     for step in results.steps:
         rf = step.fields.get("reaction_force")
         if rf is None:  # modes and harmonic steps have no reactions
@@ -274,8 +278,8 @@ def _fastener_fields(results, input_file: Path) -> None:
     from puzzle.adapters.common import FASTENER_COMPONENTS
     from puzzle.results.model import Field
 
-    ends = json.loads(marker.read_text())
-    blocks = read_fastener_forces(dat.read_text(), ends)
+    ends = json.loads(marker.read_text(encoding="utf-8"))
+    blocks = read_fastener_forces(dat.read_text(encoding="utf-8"), ends)
     for step in results.steps:
         hit = [v for n, t, v in blocks if n == step.index and abs(t - step.value) < 1e-9]
         if hit:

@@ -205,7 +205,7 @@ def _reuse(path: Path, names: list[str]) -> Measured | None:
     """A kept record, re-tallied over just `names`, when it measured all of them (a
     record made without a solver doesn't cover the tasks that run it)."""
     try:
-        kept = Measured(**json.loads(path.read_text()))
+        kept = Measured(**json.loads(path.read_text(encoding="utf-8")))
     except (OSError, ValueError, TypeError):
         return None
     if not kept.complete or not set(names) <= set(kept.tasks):
@@ -261,7 +261,7 @@ def measure(candidate: Candidate, base_url: str, workdir: Path, *, solvers=(),
     m.details = details
     if complete:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(asdict(m), indent=1))
+        path.write_text(json.dumps(asdict(m), indent=1), encoding="utf-8")
     return m
 
 

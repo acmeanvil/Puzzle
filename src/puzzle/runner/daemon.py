@@ -220,7 +220,7 @@ def serve(root: Path, cores: int = 0, memory_gb: float = 0.0) -> None:
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     import fcntl  # Unix only; Puzzle on Windows imports this module for RunnerError
 
-    lock = (root / "runner.lock").open("w")
+    lock = (root / "runner.lock").open("w", encoding="utf-8")
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
@@ -238,7 +238,7 @@ def serve(root: Path, cores: int = 0, memory_gb: float = 0.0) -> None:
     server.settimeout(POLL_S)
     info = {"pid": os.getpid(), "socket": str(path), "protocol": PROTOCOL, "version": VERSION}
     tmp = root / "runner.json.tmp"
-    tmp.write_text(json.dumps(info))
+    tmp.write_text(json.dumps(info), encoding="utf-8")
     os.replace(tmp, root / "runner.json")
     state = {"clients": 0, "last": time.time(), "stop": False}
 

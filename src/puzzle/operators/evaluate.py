@@ -1364,7 +1364,7 @@ def export(ctx: Context, op, root: Path) -> list[Path]:
         fmt = {".parquet": "parquet", ".xlsx": "xlsx"}.get(path.suffix.lower(), op.format)
         frames.write(got, path, fmt if fmt in ("parquet", "xlsx") else "csv")
         return [path]
-    path.write_text(as_csv(got))
+    path.write_text(as_csv(got), encoding="utf-8")
     return [path]
 
 

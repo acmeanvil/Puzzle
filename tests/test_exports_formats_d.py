@@ -192,7 +192,7 @@ def test_nastran_bulk_and_punch(tmp_path):
 
     job = _job(tmp_path, ".bdf")
     (bdf, pch), notes = write(job)
-    cards = _large_field_cards(bdf.read_text())
+    cards = _large_field_cards(bdf.read_text(encoding="utf-8"))
     grids = {int(f[0]): [float(v) for v in f[1:4]] for n, f in cards if n == "GRID"}
     assert sorted(grids) == list(IDS)
     for i, n in enumerate(IDS):
@@ -204,11 +204,11 @@ def test_nastran_bulk_and_punch(tmp_path):
     assert [float(v) for v in mat[1:]] == pytest.approx([210e9, 0.3, 7850, 12.16e-6, 293.15])
     sets = {int(f[0]): _members(f[1:]) for n, f in cards if n == "SET1"}
     assert sets == {1: list(IDS), 3: list(BASE)}
-    text = bdf.read_text()
+    text = bdf.read_text(encoding="utf-8")
     assert "$        3  Block/Base (grids)" in text and "$        2  Block (elements)" in text
     assert "SET3" in text and notes["sets"].startswith("1 Block (grids)")
 
-    lines = pch.read_text().splitlines()
+    lines = pch.read_text(encoding="utf-8").splitlines()
     assert all(len(line) == 80 for line in lines)
     assert [int(line[72:]) for line in lines] == list(range(1, len(lines) + 1))
     shown = _punch_displacements(lines, "$DISPLACEMENTS")
@@ -270,7 +270,7 @@ def test_abaqus_mesh_temperatures_and_boundary(tmp_path):
     from puzzle.post.exports.abaqus import write, write_displacement
 
     (inp, temps), notes = write(_job(tmp_path, ".inp"))
-    text = inp.read_text()
+    text = inp.read_text(encoding="utf-8")
     assert "*ELEMENT, TYPE=C3D10, ELSET=E_BLOCK\n7, 1, 2, 3, 4, 5, 6, 7, 8, 10, 9\n" in text
     assert "*NSET, NSET=N_BLOCK_BASE\n1, 2, 3, 5, 6, 7,\n" in text
     assert "*ELASTIC\n2.1e+11, 0.3" in text and "*EXPANSION, ZERO=293.15" in text
@@ -278,13 +278,13 @@ def test_abaqus_mesh_temperatures_and_boundary(tmp_path):
     rows = [line for line in text.splitlines() if line[:1].isdigit() and line.count(",") == 3]
     xyz = {int(r.split(",")[0]): [float(v) for v in r.split(",")[1:]] for r in rows[:10]}
     assert np.allclose([xyz[n] for n in IDS], COORDS, rtol=1e-12)
-    t = temps.read_text().splitlines()
+    t = temps.read_text(encoding="utf-8").splitlines()
     data = dict(line.split(",") for line in t[t.index("*TEMPERATURE") + 1 :])
     assert float(data["2"]) == pytest.approx(300 + 1000 * S, rel=1e-10)
     assert "10 nodes" in notes["temperatures"]
 
     (inp, bc), notes = write_displacement(_job(tmp_path, "_u", selection="Block/Base"))
-    lines = bc.read_text().splitlines()
+    lines = bc.read_text(encoding="utf-8").splitlines()
     rows = lines[lines.index("*BOUNDARY") + 1 :]
     assert len(rows) == 3 * len(BASE)
     node, first, last, value = rows[4].split(",")
@@ -392,7 +392,7 @@ def test_lorentz_force_is_j_cross_b(tmp_path):
     job = _job(tmp_path, ".csv")
     job.step = step
     (csv,), notes = write(job)
-    header = csv.read_text().splitlines()[0]
+    header = csv.read_text(encoding="utf-8").splitlines()[0]
     assert header == ("x [m],y [m],z [m],f_x [N/m^3],f_y [N/m^3],f_z [N/m^3],|f| [N/m^3],dV [m^3]")
     rows = np.loadtxt(csv, delimiter=",", skiprows=1)
     assert rows[:, :3] == pytest.approx(COORDS)

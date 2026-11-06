@@ -366,7 +366,7 @@ def test_an_old_results_store_does_not_stop_the_project_opening(app, tmp_path, m
         EXAMPLE, root, ignore=shutil.ignore_patterns("results*", ".puzzle", "history.jsonl")
     )
     (root / "results").mkdir()
-    (root / "results" / "store.json").write_text(json.dumps({"format": 1}))
+    (root / "results" / "store.json").write_text(json.dumps({"format": 1}), encoding="utf-8")
     w = MainWindow(root)
     try:
         assert "Bar" in [i.text(0) for i in w.tree._items()]
@@ -421,7 +421,7 @@ def test_an_old_results_store_can_be_moved_aside(app, tmp_path, monkeypatch):
         EXAMPLE, root, ignore=shutil.ignore_patterns("results*", ".puzzle", "history.jsonl")
     )
     (root / "results").mkdir()
-    (root / "results" / "store.json").write_text(json.dumps({"format": 1}))
+    (root / "results" / "store.json").write_text(json.dumps({"format": 1}), encoding="utf-8")
     w = MainWindow(root)
     try:
         assert len(asked) == 1 and "older version of Puzzle" in asked[0][1]

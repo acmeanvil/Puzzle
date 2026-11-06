@@ -175,7 +175,7 @@ def icon(name: str) -> QIcon:
 def _svg(name: str, colour: str) -> bytes | None:
     """The icon's SVG in `colour`: Tabler's file, else Puzzle's own drawing."""
     if name in TABLER:
-        text = (TABLER_DIR / f"{TABLER[name]}.svg").read_text()
+        text = (TABLER_DIR / f"{TABLER[name]}.svg").read_text(encoding="utf-8")
         text = text.replace("currentColor", colour).replace(
             'stroke-width="2"', f'stroke-width="{STROKE}"'
         )

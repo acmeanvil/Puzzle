@@ -111,7 +111,7 @@ class Lock:
 def read_lock(path: Path = LOCK) -> Lock:
     """pixi.lock (format 6+), read line by line: it is 2 MB of YAML that keeps to a few
     fixed shapes, and a YAML parser takes many seconds over it."""
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     head, _, packages = text.partition("\npackages:\n")
     _, _, environments = head.partition("\nenvironments:\n")
     virtual: dict[str, list[str]] = {}
@@ -162,7 +162,7 @@ def _repodata(source: str, subdir: str) -> dict:
         except OSError:
             return {}
     path = Path(source) / subdir / "repodata.json"
-    return json.loads(path.read_text()) if path.exists() else {}
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
 
 
 def _key(rec: dict) -> tuple:
@@ -214,7 +214,9 @@ def unmet(added: list[Package], env: list[Package]) -> list[str]:
 
 
 def version() -> str:
-    return tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
+    return tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"][
+        "version"
+    ]
 
 
 def _explicit(packages: list[Package]) -> str:
@@ -268,7 +270,7 @@ def write(lock: Lock, platform: str, sources: list[str], out: Path, kind: str,
         raise SystemExit("Puzzle's packages need what the lock lacks:\n  " + "\n  ".join(missing))
     folder = out / platform
     (folder / "envs").mkdir(parents=True, exist_ok=True)
-    (folder / "base.txt").write_text(_explicit(base + added))
+    (folder / "base.txt").write_text(_explicit(base + added), encoding="utf-8")
     extra = {}
     for name in EXTRA:
         packages, pypi = lock.packages(name, platform)
@@ -276,9 +278,11 @@ def write(lock: Lock, platform: str, sources: list[str], out: Path, kind: str,
             continue
         if pypi:
             raise SystemExit(f"'{name}' has PyPI packages, which an installer can't carry")
-        (folder / "envs" / f"{name}.txt").write_text(_explicit(packages))
+        (folder / "envs" / f"{name}.txt").write_text(_explicit(packages), encoding="utf-8")
         extra[name] = {"environment_file": f"envs/{name}.txt", "menu_packages": []}
-    (folder / "LICENSE.txt").write_text((ROOT / "LICENSE").read_text())
+    (folder / "LICENSE.txt").write_text(
+        (ROOT / "LICENSE").read_text(encoding="utf-8"), encoding="utf-8"
+    )
     info = {
         "name": "Puzzle",
         "version": version(),
@@ -301,7 +305,8 @@ def write(lock: Lock, platform: str, sources: list[str], out: Path, kind: str,
     (folder / "construct.yaml").write_text(
         f"# Written by scripts/make_installer.py from pixi.lock ({platform}); do not edit.\n"
         + _yaml(info)
-        + "\n"
+        + "\n",
+        encoding="utf-8",
     )
     return folder
 
@@ -328,7 +333,7 @@ def build(folder: Path, out: Path) -> Path:
         argv += ["--conda-exe", str(conda)]
     print("+", " ".join(argv), flush=True)
     subprocess.run(argv, check=True, cwd=folder)
-    info = (folder / "construct.yaml").read_text()
+    info = (folder / "construct.yaml").read_text(encoding="utf-8")
     filename = json.loads(re.search(r"^installer_filename: (.+)$", info, re.M).group(1))
     return out / filename
 

@@ -49,7 +49,7 @@ def test_code_aster_pass_through_reaches_the_solver(tmp_path, solver):
     pytest.importorskip("OCP")
     tip, work = _tip(tmp_path, solver, {}, {"MECA_STATIQUE.SOLVEUR.RENUM": "'METIS'"},
                      {"linear_solver": "direct"})  # fmt: skip
-    comm = next(work.rglob("job.comm")).read_text()
+    comm = next(work.rglob("job.comm")).read_text(encoding="utf-8")
     assert "SOLVEUR=_F(RENUM='METIS')" in comm and tip < 0
 
 
@@ -59,7 +59,7 @@ def test_elmer_pass_through_and_shared_settings(tmp_path, solver):
     tip, work = _tip(tmp_path, solver, {}, {"Solver 1/Linear System Residual Output": "10",
                                             "Simulation/Max Output Level": "3"},
                      {"linear_solver": "iterative"})  # fmt: skip
-    sif = next(work.rglob("case.sif")).read_text()
+    sif = next(work.rglob("case.sif")).read_text(encoding="utf-8")
     assert "Linear System Iterative Method = BiCGStabL" in sif
     assert "Max Output Level = 3" in sif and "Max Output Level = 5" not in sif
     assert "Linear System Residual Output = 10" in sif and tip < 0
@@ -72,7 +72,7 @@ def test_fenicsx_petsc_options_reach_the_solve(tmp_path, solver):
     pytest.importorskip("OCP")
     expert = {"ksp_type": "gmres", "pc_type": "gamg", "ksp_rtol": "1e-11"}
     tip, work = _tip(tmp_path, solver, {}, expert)
-    case = json.loads(next(work.rglob("case.json")).read_text())
+    case = json.loads(next(work.rglob("case.json")).read_text(encoding="utf-8"))
     assert case["settings"]["petsc_options"] == expert and tip < 0
 
 
@@ -112,7 +112,7 @@ def test_cfd_settings_keep_poiseuille(tmp_path, solver):
     study.solver_settings = {solver: own}
     study.expert_settings = {solver: expert}
     run = run_study(project, study.id, bench, tmp_path / "run", timeout_s=1800)
-    written = next((tmp_path / "run").rglob(name)).read_text()
+    written = next((tmp_path / "run").rglob(name)).read_text(encoding="utf-8")
     for text in expected:
         assert text in " ".join(written.split()), text
     u = run.results.last("velocity").values[:, 0]

@@ -18,7 +18,9 @@ ADAPTERS = Path(__file__).parents[1] / "src" / "puzzle" / "adapters"
 
 
 def test_every_property_the_adapters_read_is_registered():
-    generic = tomllib.loads(files("puzzle.materials").joinpath("generic.toml").read_text())
+    generic = tomllib.loads(
+        files("puzzle.materials").joinpath("generic.toml").read_text(encoding="utf-8")
+    )
     shipped = {
         k
         for m in generic.values()
@@ -32,7 +34,7 @@ def test_every_property_the_adapters_read_is_registered():
     )
     read = set()
     for path in ADAPTERS.rglob("*.py"):
-        for match in pattern.finditer(path.read_text()):
+        for match in pattern.finditer(path.read_text(encoding="utf-8")):
             for group in match.groups():
                 read |= set(
                     re.findall(

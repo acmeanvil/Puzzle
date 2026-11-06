@@ -53,7 +53,7 @@ def fakes(tmp_path, monkeypatch):
     monkeypatch.setenv("PUZZLE_USER_DIR", str(user))
     yield bin_dir, home
     for info in home.glob(".puzzle-runner/p*/runner.json"):  # the host's runner stopped
-        _kill(json.loads(info.read_text())["pid"])
+        _kill(json.loads(info.read_text(encoding="utf-8"))["pid"])
 
 
 def _kill(pid: int) -> None:
@@ -64,7 +64,7 @@ def _kill(pid: int) -> None:
 def _case(tmp_path, name="run") -> Path:
     case = tmp_path / "project" / name
     case.mkdir(parents=True)
-    (case / "input.txt").write_text("21\n")
+    (case / "input.txt").write_text("21\n", encoding="utf-8")
     return case
 
 
@@ -92,18 +92,18 @@ def test_a_slurm_job_is_submitted_by_psij_streamed_and_comes_home_whole(tmp_path
     lines = []
     job = run_job(["sh", "-c", "echo solving; sleep 1; echo $(( $(cat input.txt) * 2 )) > "
                    "answer.txt; echo done"], case, rt, on_output=lines.append)  # fmt: skip
-    assert job.ok and job.outcome == "completed", (case / "solver.log").read_text()
+    assert job.ok and job.outcome == "completed", (case / "solver.log").read_text(encoding="utf-8")
     assert "solving" in lines and "done" in lines
-    assert (case / "answer.txt").read_text().strip() == "42"
+    assert (case / "answer.txt").read_text(encoding="utf-8").strip() == "42"
     assert not (home / rt.remote_dir(case)).exists()  # deleted there once home
     jobs = home / ".fake-jobs"
-    submitted = Path((jobs / "1000.sub").read_text().strip())
+    submitted = Path((jobs / "1000.sub").read_text(encoding="utf-8").strip())
     assert submitted.parent == _scheduler_files(home) / "slurm"  # PSI/J's script, not ours
-    script = (jobs / "1000.script").read_text()
+    script = (jobs / "1000.script").read_text(encoding="utf-8")
     assert f'--chdir="{home / rt.remote_dir(case)}"' in script and "--time=0:0:30" in script
     assert "/bin/sh puzzle-solve.sh" in script
     # PSI/J's exit code file beside our own exit status (kept here by PSIJ_BATCH_KEEP_FILES)
-    assert (submitted.parent / "1000.ec").read_text().strip() == "0"
+    assert (submitted.parent / "1000.ec").read_text(encoding="utf-8").strip() == "0"
 
 
 def test_psij_cleans_up_after_itself(tmp_path, fakes):
@@ -169,10 +169,10 @@ def test_a_cancel_stops_the_scheduler_job(tmp_path, fakes):
     job = run_job(["sh", "-c", "echo $$ > solver.pid; sleep 60"], case, rt, cancel=stop)
     assert job.cancelled and job.outcome == "cancelled" and not job.ok
     jobs = home / ".fake-jobs"
-    assert "scancel 1000" in (jobs / "cancels").read_text()
+    assert "scancel 1000" in (jobs / "cancels").read_text(encoding="utf-8")
     assert (jobs / "1000.rc").exists()  # the job ended there
     with pytest.raises(ProcessLookupError):  # and its solver with it
-        os.kill(int((remote / "solver.pid").read_text()), 0)
+        os.kill(int((remote / "solver.pid").read_text(encoding="utf-8")), 0)
 
 
 def _bundle(tmp_path) -> list[str]:
@@ -216,7 +216,7 @@ def test_a_restarted_runner_picks_up_its_scheduler_job(tmp_path, fakes, monkeypa
         got = _wait(c, job["id"])
         assert (got["state"], got["exit_code"], got["native_id"]) == ("failed", 4, "1000")
         c.request("shutdown")
-    assert (case / "out.txt").read_text() == "done\n"
+    assert (case / "out.txt").read_text(encoding="utf-8") == "done\n"
     left = [p.name for p in (client.runner_dir(base) / "psij" / "slurm").iterdir()]
     assert left == []  # the first runner's submit script too, found by the job's id
 
@@ -240,8 +240,8 @@ def test_a_pbs_job_through_psij(tmp_path, fakes, monkeypatch, env, command, host
     assert job.outcome == outcome, job.message
     if outcome == "completed":
         assert job.ok and "solving" in lines
-        assert (case / "answer.txt").read_text().strip() == "7"
-        script = (home / ".fake-jobs" / "1000.script").read_text()
+        assert (case / "answer.txt").read_text(encoding="utf-8").strip() == "7"
+        script = (home / ".fake-jobs" / "1000.script").read_text(encoding="utf-8")
         assert "#PBS -l walltime=0:0:30" in script
     elif outcome == "failed":
         assert job.returncode == 3

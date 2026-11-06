@@ -43,7 +43,7 @@ def physical_cores() -> int:
 def _linux_cores() -> int | None:
     """Distinct (physical id, core id) pairs in /proc/cpuinfo."""
     try:
-        text = open("/proc/cpuinfo").read()  # noqa: SIM115 - one read
+        text = open("/proc/cpuinfo", encoding="utf-8").read()  # noqa: SIM115 - one read
     except OSError:
         return None
     pairs, physical, core = set(), "0", None

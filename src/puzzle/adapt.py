@@ -253,7 +253,7 @@ def _keep_table(root: Path, study, out: Outcome) -> None:
 
     folder = Path(root) / RESULTS_DIR / "adapt"
     folder.mkdir(parents=True, exist_ok=True)
-    (folder / f"{study.id}.json").write_text(json.dumps(out.to_dict(), indent=1))
+    (folder / f"{study.id}.json").write_text(json.dumps(out.to_dict(), indent=1), encoding="utf-8")
 
 
 def lines(out: Outcome) -> list[str]:

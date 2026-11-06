@@ -185,7 +185,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
         "zones": zones,
         **_settings(study),  # ADR 0023
     }
-    (workdir / "case.json").write_text(json.dumps(spec, indent=2))
+    (workdir / "case.json").write_text(json.dumps(spec, indent=2), encoding="utf-8")
     if layered is not None:
         layered.save(workdir)
     shutil.copyfile(DRIVER, workdir / DRIVER.name)

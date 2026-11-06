@@ -51,7 +51,9 @@ def test_an_openfoam_case_varies_over_its_times(app, tmp_path):
 
 def test_two_files_with_their_times(app, tmp_path):
     for t in (0, 10):
-        (tmp_path / f"t{t}.csv").write_text("x,y,z,T [K]\n0,0,0,300\n1,0,0,400\n0,1,0,300\n")
+        (tmp_path / f"t{t}.csv").write_text(
+            "x,y,z,T [K]\n0,0,0,300\n1,0,0,400\n0,1,0,300\n", encoding="utf-8"
+        )
     window = _window(tmp_path)
     wizard = FieldWizard(window)
     wizard.file.load(tmp_path / "t0.csv")

@@ -297,7 +297,7 @@ def test_the_bolt_table(app, tmp_path):
     table.filter.setText("pin")
     assert table.count.text() == "1 of 2 bolts"
     path = table.export(str(tmp_path / "bolts.csv"))
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         exported = list(csv.reader(f))
     assert exported[0][0] == "Name" and [r[0] for r in exported[1:]] == ["Pin"]
     table.filter.setText("")

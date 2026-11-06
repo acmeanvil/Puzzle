@@ -42,7 +42,7 @@ FLUX_SIGN = -1.0
 
 
 def main() -> None:
-    with open("case.json") as f:
+    with open("case.json", encoding="utf-8") as f:
         spec = json.load(f)
     case = Case(package=cs_package.package(), file_name="")
     case["xmlfile"] = "setup.xml"

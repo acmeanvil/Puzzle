@@ -196,7 +196,10 @@ def test_panel_shows_and_export_writes(setup, tmp_path):
     out = p.add(Operator(name="Max T", type="export", inputs={"value": wire(hot)}))
     written = ev.export(ctx, out, tmp_path)
     assert written == [tmp_path / "exports" / "Max_T.csv"]
-    assert written[0].read_text().splitlines() == ["name,value [K]", "Maximum temperature,3"]
+    assert written[0].read_text(encoding="utf-8").splitlines() == [
+        "name,value [K]",
+        "Maximum temperature,3",
+    ]
     out.file = "../outside.csv"
     with pytest.raises(PuzzleError, match="inside the project folder"):
         ev.export(ctx, out, tmp_path)

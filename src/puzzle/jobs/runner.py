@@ -75,7 +75,7 @@ def run_job(
     start = time.monotonic()
     cancelled = timed_out = False
 
-    with log_path.open("w") as log:
+    with log_path.open("w", encoding="utf-8") as log:
 
         def say(line: str) -> None:  # the runtime's own notes (a remote copy's size)
             log.write(line + "\n")
@@ -158,7 +158,7 @@ def _through_runner(service, command, workdir, runtime, *, on_output, cancel, ti
     ctx = pending.CONTEXT.get()
     job = pending.attached(workdir)
     label = {"folder": workdir.name, "runtime": runtime.describe()}
-    log = None if service.log_is_local else log_path.open("w")
+    log = None if service.log_is_local else log_path.open("w", encoding="utf-8")
     written, truncated = 0, False
 
     def say(line: str) -> None:

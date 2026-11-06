@@ -1090,7 +1090,7 @@ class SchematicPanel(QWidget):
             lay = layout(self.schematic, positions, frozenset(self.view.unfolded))
             uses = "none" if self.uses.currentData() == "none" else "all"
             title = self.window.session.project.name if self.window.session else ""
-            Path(path).write_text(to_svg(self.schematic, lay, uses, title))
+            Path(path).write_text(to_svg(self.schematic, lay, uses, title), encoding="utf-8")
         self.window.statusBar().showMessage(f"Saved {path}", 8000)
         return path
 

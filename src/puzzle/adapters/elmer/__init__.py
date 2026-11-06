@@ -190,7 +190,8 @@ class ElmerAdapter(SolverAdapter):
         script = input_file.parent / "run-mpi.sh"
         script.write_text(
             f"ElmerGrid 2 2 {MESH_DIR} -metiskway {n} > partition.log 2>&1 || exit 1\n"
-            f"exec mpirun --oversubscribe -np {n} ElmerSolver_mpi {input_file.name}\n"
+            f"exec mpirun --oversubscribe -np {n} ElmerSolver_mpi {input_file.name}\n",
+            encoding="utf-8",
         )
         return ["sh", script.name]
 
@@ -212,9 +213,11 @@ class ElmerAdapter(SolverAdapter):
                 coords = np.load(mesh_dir / "puzzle-node-coords.npy")
                 return read_axisymmetric(vtus, mesh_dir, node_ids, coords)
             return read_magnetics(vtus, mesh_dir, node_ids)
-        results = read_series(vtus, times, node_ids, log.read_text() if log.exists() else "")
+        results = read_series(
+            vtus, times, node_ids, log.read_text(encoding="utf-8") if log.exists() else ""
+        )
         if (mesh_dir / THERMAL_ZZ).exists():
-            _thermal_zz(results, json.loads((mesh_dir / THERMAL_ZZ).read_text()))
+            _thermal_zz(results, json.loads((mesh_dir / THERMAL_ZZ).read_text(encoding="utf-8")))
         return results
 
 

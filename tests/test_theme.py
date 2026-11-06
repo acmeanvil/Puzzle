@@ -69,7 +69,7 @@ def test_every_icon_draws_in_the_theme_colour(app):
     names = list(icons.TABLER) + list(icons.DRAWINGS)
     for name in names:
         assert not icons.icon(name).isNull(), name
-    assert (icons.TABLER_DIR / "LICENSE").read_text().startswith("MIT License")
+    assert (icons.TABLER_DIR / "LICENSE").read_text(encoding="utf-8").startswith("MIT License")
     dark = icons._svg("run", "#e6e8eb").decode()
     assert "#e6e8eb" in dark and "currentColor" not in dark
 

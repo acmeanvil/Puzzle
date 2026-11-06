@@ -247,7 +247,7 @@ def _whole_part(results, input_file: Path) -> None:
     marker = input_file.with_name(f"{JOB}.totals.json")
     if not marker.exists():
         return
-    spec = json.loads(marker.read_text())
+    spec = json.loads(marker.read_text(encoding="utf-8"))
     for step in results.steps:
         rf = step.fields.get("reaction_force")
         if rf is None:
@@ -276,7 +276,7 @@ def _fastener_fields(results, input_file: Path) -> None:
     marker = input_file.with_name(f"{JOB}.fasteners.json")
     if not marker.exists():
         return
-    ends = json.loads(marker.read_text())
+    ends = json.loads(marker.read_text(encoding="utf-8"))
     for step in results.steps:
         rf = step.fields.get("reaction_force")
         if rf is None:

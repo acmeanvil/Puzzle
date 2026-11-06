@@ -76,7 +76,8 @@ def point_cloud(mesh, results, step, quantity, selection, path: Path, units: str
         ",".join(header)
         + "\n"
         + "\n".join(",".join(f"{v:.9g}" for v in row) for row in table)
-        + "\n"
+        + "\n",
+        encoding="utf-8",
     )
     return [path], {
         "result": item.label,

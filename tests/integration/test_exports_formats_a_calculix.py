@@ -63,7 +63,7 @@ def test_exodus_static_and_modal(runs, solver):
     tmp, (project, store, run_id), (mproject, mstore, mrun_id) = runs
     mesh, results = _stored(store, run_id)
     exo, note = export(project, store, run_id, "exodus", tmp / "out" / "bend")
-    assert exo.suffix == ".exo" and "time values: time (s)" in note.read_text()
+    assert exo.suffix == ".exo" and "time values: time (s)" in note.read_text(encoding="utf-8")
     f = netcdf_file(str(exo), "r", mmap=False)
     v = f.variables
     assert np.array_equal(v["node_num_map"].data, mesh.node_ids)
@@ -100,7 +100,7 @@ def test_exodus_static_and_modal(runs, solver):
     assert len(freqs) == 4
     if np.all(np.diff(freqs) > 0):
         assert np.asarray(f.variables["time_whole"].data).tolist() == freqs
-        assert "frequency (Hz)" in note.read_text()
+        assert "frequency (Hz)" in note.read_text(encoding="utf-8")
     else:  # equal frequencies (a square section's pair) are numbered instead
         assert np.asarray(f.variables["time_whole"].data).tolist() == [1.0, 2.0, 3.0, 4.0]
     for k, s in enumerate(modes.steps):
@@ -138,7 +138,7 @@ def test_unv_static_and_modal(runs, solver):
     tmp, (project, store, run_id), (mproject, mstore, mrun_id) = runs
     mesh, results = _stored(store, run_id)
     path, note = export(project, store, run_id, "unv", tmp / "out" / "bend")
-    assert "SI (dataset 164" in note.read_text()
+    assert "SI (dataset 164" in note.read_text(encoding="utf-8")
     sets = read_unv(path)
     coords, elements = read_mesh(sets)
     assert np.array_equal(np.array([coords[n] for n in mesh.node_ids]), mesh.coords)

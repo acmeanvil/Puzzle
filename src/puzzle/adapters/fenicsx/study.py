@@ -57,7 +57,7 @@ except ImportError:
 
 
 def main() -> None:
-    with open("case.json") as f:
+    with open("case.json", encoding="utf-8") as f:
         case = json.load(f)
     SETTINGS.update(case.get("settings", {}))
     planar = case.get("dimension", "3d") != "3d"  # ADR 0048: a 2D model in the XY plane
@@ -186,7 +186,7 @@ def emit(kind: str, **data) -> None:
 
 def load_trackers() -> None:
     if os.path.exists("trackers.json"):
-        with open("trackers.json") as f:
+        with open("trackers.json", encoding="utf-8") as f:
             TRACKERS[:] = json.load(f)
 
 

@@ -52,11 +52,11 @@ def test_paraview_and_point_cloud(solved, solver):
     files = export(project, store, run_id, "paraview", tmp / "out" / "bend")
     grid = pv.read(str(files[1]))
     assert "displacement" in grid.point_data and files[-1].suffix == ".txt"
-    assert "study: Bend" in files[-1].read_text()
+    assert "study: Bend" in files[-1].read_text(encoding="utf-8")
     (csv, note) = export(project, store, run_id, "point_cloud", tmp / "out" / "cloud",
                          quantity="displacement:y")  # fmt: skip
     rows = np.loadtxt(csv, delimiter=",", skiprows=1)
-    header = csv.read_text().splitlines()[0]
+    header = csv.read_text(encoding="utf-8").splitlines()[0]
     assert header == "x [m],y [m],z [m],Deformation Y [m]"
     assert rows[:, 3].min() == pytest.approx(tip, rel=1e-9)
     mesh = store.read_mesh(store.get_run(run_id).mesh_id)
@@ -83,10 +83,10 @@ def test_deformed_shape_as_stl_and_step(solved, solver):
     assert pv.read(str(back)).points[:, 1].max() == pytest.approx(BAR[1] - tip, rel=1e-6)
 
     step, note = export(project, store, run_id, "deformed_step", tmp / "out" / "shape")
-    text = step.read_text()
+    text = step.read_text(encoding="utf-8")
     assert "TRIANGULATED_SURFACE_SET" in text
     assert "SI_UNIT(.MILLI.,.METRE.)" in text  # the file's unit, as CAD expects
-    assert "deformed: moved by +u" in note.read_text()
+    assert "deformed: moved by +u" in note.read_text(encoding="utf-8")
     # Its coordinates, in millimetres: the bar's length, and the tip moved down.
     import re
 
@@ -143,6 +143,6 @@ def test_a_point_cloud_in_a_systems_axes(solved, solver):
                          quantity="displacement:x", axes="Turned")  # fmt: skip
     rows = np.loadtxt(csv, delimiter=",", skiprows=1)
     assert rows[:, 3].min() == pytest.approx(tip, rel=1e-9)  # the global y deflection
-    assert "in axes 'Turned' (cartesian" in note.read_text()
+    assert "in axes 'Turned' (cartesian" in note.read_text(encoding="utf-8")
     with pytest.raises(PuzzleError, match="global axes only"):
         export(project, store, run_id, "deformed_stl", tmp / "out" / "shape", axes="Turned")

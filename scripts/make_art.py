@@ -259,8 +259,8 @@ def main() -> None:
 
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     ART.mkdir(parents=True, exist_ok=True)
-    (ART / "icon.svg").write_text(icon())
-    (ART / "start.svg").write_text(start())
+    (ART / "icon.svg").write_text(icon(), encoding="utf-8")
+    (ART / "start.svg").write_text(start(), encoding="utf-8")
     render_png(ART / "icon.svg", ART / "icon.png", 1024)
     icns(ART / "icon.svg", ART / "Puzzle.icns")
     ico(ART / "icon.svg", ART / "Puzzle.ico")

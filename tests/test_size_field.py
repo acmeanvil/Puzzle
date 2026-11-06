@@ -53,6 +53,10 @@ def test_bad_tables_are_refused():
 
 def test_netgen_file(tmp_path):
     sizes = size_field.from_points(*table())
-    text = size_field.netgen_file(sizes, tmp_path / "sizes.msz").read_text().splitlines()
+    text = (
+        size_field.netgen_file(sizes, tmp_path / "sizes.msz")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    )
     assert text[0] == "125" and len(text) == 127 and text[-1] == "0"
     assert text[1].split() == ["0", "0", "0", "0.02"]

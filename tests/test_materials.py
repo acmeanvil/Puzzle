@@ -122,7 +122,7 @@ def test_user_library_adds_and_overrides(tmp_path, monkeypatch):
         }
     }
     path = tmp_path / "library.json"
-    path.write_text(json.dumps(user))
+    path.write_text(json.dumps(user), encoding="utf-8")
     monkeypatch.setenv("PUZZLE_MATERIALS", str(path))
     assert library_paths() == [path]
     assert set(library_keys()) == GENERIC | {"special_alloy"}

@@ -89,7 +89,7 @@ def test_the_cantilever_morphed(cantilever, solver):
     step, note = export(project, store, run_id, "morphed_step", root / "out" / "bent", root=root)
     shape, labels, volume = _read(step)
     assert list(labels) == ["Bar"]
-    text = note.read_text()
+    text = note.read_text(encoding="utf-8")
     print(text)
     lowest = _bounds(shape)[0, 1]
     print(f"lowest point {lowest:.9g} m, stored tip deflection {tip:.9g} m")
@@ -110,7 +110,7 @@ def test_the_cantilever_morphed(cantilever, solver):
     shape, _, _ = _read(back)
     assert _bounds(shape)[1, 1] == pytest.approx(B - tip, rel=2e-3)  # the top rises
     assert _bounds(shape)[0, 1] == pytest.approx(0.0, abs=1e-6)  # the root's bottom stays
-    assert "compensated: moved by -u" in note.read_text()
+    assert "compensated: moved by -u" in note.read_text(encoding="utf-8")
 
     # Exaggerated 50 times (the tip 76 mm down on a 200 mm bar): still within tolerance,
     # since the morph is linear in u.
@@ -118,7 +118,7 @@ def test_the_cantilever_morphed(cantilever, solver):
                        root=root)  # fmt: skip
     shape, _, _ = _read(big)
     assert _bounds(shape)[0, 1] == pytest.approx(50 * tip, rel=2e-3)
-    assert "(exaggerated)" in note.read_text()
+    assert "(exaggerated)" in note.read_text(encoding="utf-8")
 
 
 @over("calculix")
@@ -175,7 +175,7 @@ def test_a_heated_plate_grows_by_alpha_dt(tmp_path, solver):
     store, run = _solve(project, comp, root, tmp_path)
     step, note = export(project, store, run.run_id, "morphed_step", root / "out" / "hot",
                         root=root)  # fmt: skip
-    print(note.read_text())
+    print(note.read_text(encoding="utf-8"))
     shape, labels, volume = _read(step)
     e = alpha * dt
     v0 = float(np.prod(size)) - np.pi * r**2 * size[2]
@@ -233,7 +233,7 @@ def test_an_assembly_morphs_part_by_part(tmp_path, solver):
     run = run_study(project, study.id, root, tmp_path / "w", store=store)
     step, note = export(project, store, run.run_id, "morphed_step", root / "out" / "pulled",
                         root=root)  # fmt: skip
-    print(note.read_text())
+    print(note.read_text(encoding="utf-8"))
     _, labels, _ = _read(step)
     assert set(labels) == {"Left", "Right"}
     e_mod = library_material("structural_steel").properties["youngs_modulus"].to_si()

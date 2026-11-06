@@ -39,7 +39,7 @@ class Visibility:
     def load(cls, root: Path) -> Visibility:
         key = str(Path(root).resolve())
         try:
-            data = json.loads(store_path().read_text()).get(key, {})
+            data = json.loads(store_path().read_text(encoding="utf-8")).get(key, {})
         except (OSError, ValueError, AttributeError):
             data = {}
         return cls(key, set(data.get("shown", [])), set(data.get("hidden_features", [])))
@@ -47,7 +47,7 @@ class Visibility:
     def save(self) -> None:
         path = store_path()
         try:
-            every = json.loads(path.read_text())
+            every = json.loads(path.read_text(encoding="utf-8"))
             if not isinstance(every, dict):
                 every = {}
         except (OSError, ValueError):
@@ -56,7 +56,7 @@ class Visibility:
                             "hidden_features": sorted(self.hidden_features)}  # fmt: skip
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(every, indent=1))
+        tmp.write_text(json.dumps(every, indent=1), encoding="utf-8")
         tmp.replace(path)
 
     # --- what menus change -------------------------------------------------------------

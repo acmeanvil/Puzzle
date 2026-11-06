@@ -264,7 +264,7 @@ def test_cgns_names_fit():
 def read_tecplot(path: Path):
     """A small reader for what the writer writes: zones of BLOCK data with
     VARLOCATION, PASSIVEVARLIST, VARSHARELIST and CONNECTIVITYSHAREZONE."""
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     names = re.findall(r'"([^"]*)"', text.split("\n")[1])
     zones, tokens = [], None
     chunks = re.split(r"^ZONE ", text, flags=re.M)[1:]
@@ -350,7 +350,7 @@ def _job(mesh, results, path, **extra):
 
 
 def _read_csv(path):
-    header = path.read_text().split("\n")[0].split(",")
+    header = path.read_text(encoding="utf-8").split("\n")[0].split(",")
     return header, np.loadtxt(path, delimiter=",", skiprows=1)
 
 

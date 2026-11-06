@@ -107,14 +107,14 @@ def _translations() -> list[Passage]:
 def passages() -> tuple[Passage, ...]:
     out: list[Passage] = []
     for path in sorted((HERE / "skills").glob("*.md")):
-        out += _split(f"skill {path.stem}", path.read_text())
+        out += _split(f"skill {path.stem}", path.read_text(encoding="utf-8"))
     for path in sorted((HERE / "notes").glob("*.md")):
-        out += _split(f"note {path.stem}", path.read_text())
+        out += _split(f"note {path.stem}", path.read_text(encoding="utf-8"))
     out += _capabilities()
     out += _translations()
     if ADRS.is_dir():  # a source checkout: the decisions themselves
         for path in sorted(ADRS.glob("[0-9][0-9][0-9][0-9]-*.md")):
-            out += _split(f"ADR {path.name[:4]}", path.read_text())
+            out += _split(f"ADR {path.name[:4]}", path.read_text(encoding="utf-8"))
     return tuple(p for p in out if p.text)
 
 

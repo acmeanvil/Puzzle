@@ -56,7 +56,7 @@ def _project(tmp_path):
     data = tmp_path / "htc.csv"
     rows = ["x [mm],y [mm],z [mm],h [W/(m^2*K)],T [degC]"]
     rows += [f"{x},{y},0,{100 + x},{25}" for x in range(0, 50, 10) for y in range(0, 50, 10)]
-    data.write_text("\n".join(rows) + "\n")
+    data.write_text("\n".join(rows) + "\n", encoding="utf-8")
     return tmp_path / "proj", data
 
 

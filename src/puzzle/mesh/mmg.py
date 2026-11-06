@@ -158,7 +158,7 @@ def write_medit(mesh: Mesh, path: Path) -> np.ndarray:
         for name in ("Corners", "RequiredVertices"):
             out += [name, str(len(corner_ids))] + [str(i) for i in corner_ids]
     out.append("End")
-    path.write_text("\n".join(out) + "\n")
+    path.write_text("\n".join(out) + "\n", encoding="utf-8")
     return used
 
 
@@ -167,12 +167,13 @@ def write_metric(m: np.ndarray, path: Path) -> None:
     rows = [f"{a[0, 0]:.9g} {a[0, 1]:.9g} {a[1, 1]:.9g} {a[0, 2]:.9g} {a[1, 2]:.9g} "
             f"{a[2, 2]:.9g}" for a in m]  # fmt: skip
     path.write_text("\n".join(["MeshVersionFormatted 2", "Dimension 3", "SolAtVertices",
-                               str(len(m)), "1 3", *rows, "End"]) + "\n")  # fmt: skip
+                               str(len(m)), "1 3", *rows, "End"]) + "\n",
+                    encoding="utf-8")  # fmt: skip
 
 
 def read_medit(path: Path) -> dict:
     """Vertices (with refs), and each element section's rows with their refs."""
-    words = path.read_text().split()
+    words = path.read_text(encoding="utf-8").split()
     out: dict = {}
     i = 0
     widths = {"Vertices": 4, "Tetrahedra": 5, "Triangles": 4, "Edges": 3}
@@ -298,7 +299,7 @@ def adapt_mesh(mesh: Mesh, values: np.ndarray, workdir: Path, *, target: float,
            "-out", str(workdir / "out.mesh"), "-hausd", f"{hausd or 1e-3 * size:.6g}",
            "-hgrad", "1.3", "-v", "1"]  # fmt: skip
     done = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
-    (workdir / "mmg.log").write_text(done.stdout + done.stderr)
+    (workdir / "mmg.log").write_text(done.stdout + done.stderr, encoding="utf-8")
     if done.returncode != 0 or not (workdir / "out.mesh").exists():
         tail = (done.stdout + done.stderr).strip().splitlines()[-5:]
         raise PuzzleError("MMG failed: " + " ".join(tail), code="failed")

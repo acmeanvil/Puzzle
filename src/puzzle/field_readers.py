@@ -164,7 +164,7 @@ def _step_position(steps: list[Step], index: str, what: str) -> int:
 def _profiles(path: Path) -> list[tuple[str, str, dict[str, np.ndarray]]]:
     """A Fluent profile file's profiles: (name, type, {field: values}). The layout is
     `((name type n) (field v1 v2 ...) ...)`, several profiles one after another."""
-    text = path.read_text(errors="replace")
+    text = path.read_text(errors="replace", encoding="utf-8")
     out = []
     at = 0
     head = re.compile(r"\(\(\s*([^\s()]+)\s+([A-Za-z-]+)\s+(\d+)(?:\s+\d+)?\s*\)")
@@ -456,7 +456,7 @@ class _Case:
 
 
 def _ensight_case(path: Path) -> _Case:
-    lines = Path(path).read_text(errors="replace").splitlines()
+    lines = Path(path).read_text(errors="replace", encoding="utf-8").splitlines()
     section, geometry, geometry_set, variables = "", "", None, {}
     sets: dict[int, tuple[list[float], list[int]]] = {}
     current, key = None, None

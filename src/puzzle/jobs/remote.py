@@ -129,9 +129,9 @@ class RemoteRuntime(Runtime):
 
     def prepare(self, command: list[str], workdir: Path, say=None) -> None:
         """The driver (and job script) written, then the case copied there."""
-        (workdir / DRIVER).write_text(self.driver(command))
+        (workdir / DRIVER).write_text(self.driver(command), encoding="utf-8")
         if self.host.scheduler != "none":
-            (workdir / JOB_SCRIPT).write_text(self.job_script(command))
+            (workdir / JOB_SCRIPT).write_text(self.job_script(command), encoding="utf-8")
         remote = self.remote_dir(workdir)
         made = self.host.run(f"mkdir -p {quote(remote)}")
         if made.returncode != 0:

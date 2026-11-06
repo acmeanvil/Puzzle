@@ -528,7 +528,11 @@ class Session:
         path = self.root / HISTORY
         if not path.exists():
             return []
-        return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+        return [
+            json.loads(line)
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
 
     def history(self, limit: int = 20) -> list[dict[str, Any]]:
         """The latest entries, newest first, without the undo snapshots."""
@@ -826,7 +830,7 @@ class Session:
         entries = self.history_entries()
         seq = max((e.get("seq", 0) for e in entries), default=0) + 1
         entry = {"seq": seq, "time": datetime.now(UTC).isoformat(), **entry}
-        with path.open("a") as f:
+        with path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry, separators=(",", ":")) + "\n")
         return seq
 

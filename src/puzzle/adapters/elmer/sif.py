@@ -125,9 +125,11 @@ def write_case(
         lines, emesh = magnetics.write_axisymmetric(project, comp, step, features, mesh,
                                                     workdir, write_mesh, _time_block)  # fmt: skip
         freqs = frequency_list(step) if harmonic else [1.0]
-        (workdir / MESH_DIR / TIMES).write_text("\n".join(f"{t:.12g}" for t in freqs) + "\n")
+        (workdir / MESH_DIR / TIMES).write_text(
+            "\n".join(f"{t:.12g}" for t in freqs) + "\n", encoding="utf-8"
+        )
         sif = workdir / f"{OUTPUT}.sif"
-        sif.write_text(with_settings("\n".join(lines) + "\n", study, step))
+        sif.write_text(with_settings("\n".join(lines) + "\n", study, step), encoding="utf-8")
         np.save(workdir / MESH_DIR / "puzzle-node-coords.npy", mesh.coords)
         return sif, emesh
     if solved == {"magnetic_fields"} and magnetics.needed(step, features):  # ADR 0047
@@ -135,9 +137,11 @@ def write_case(
                                        write_mesh, _time_block)  # fmt: skip
         freqs = (frequency_list(step) if harmonic else magnetics.transient_times(step)
                  if transient else [1.0])  # fmt: skip
-        (workdir / MESH_DIR / TIMES).write_text("\n".join(f"{t:.12g}" for t in freqs) + "\n")
+        (workdir / MESH_DIR / TIMES).write_text(
+            "\n".join(f"{t:.12g}" for t in freqs) + "\n", encoding="utf-8"
+        )
         sif = workdir / f"{OUTPUT}.sif"
-        sif.write_text(with_settings("\n".join(lines) + "\n", study, step))
+        sif.write_text(with_settings("\n".join(lines) + "\n", study, step), encoding="utf-8")
         return sif, emesh
     # Coil currents act on bodies; every other feature is a boundary condition.
     coils = [f for f in features if f.type == "coil_current"]
@@ -237,13 +241,16 @@ def write_case(
                 # off it (`elmer.THERMAL_ZZ`), one material's E α for the whole model.
                 e_alpha = material.properties["youngs_modulus"].to_si() * alpha.to_si()
                 zz = workdir / MESH_DIR / THERMAL_ZZ
-                if zz.exists() and json.loads(zz.read_text())["e_alpha"] != e_alpha:
+                if zz.exists() and json.loads(zz.read_text(encoding="utf-8"))["e_alpha"] != e_alpha:
                     raise InputError(
                         "a temperature load in plane strain on Elmer takes materials of one "
                         "E α so far",
                         code="unsupported",
                     )
-                zz.write_text(json.dumps({"e_alpha": e_alpha, "reference": _reference(comp)}))
+                zz.write_text(
+                    json.dumps({"e_alpha": e_alpha, "reference": _reference(comp)}),
+                    encoding="utf-8",
+                )
             out[-2:-2] = [  # inside the Material block, before its End
                 f"  Heat Expansion Coefficient = {coefficient:.10g}",
                 f"  Reference Temperature = {_reference(comp):.10g}",
@@ -315,9 +322,11 @@ def write_case(
         times = frequency_list(step)
     else:
         times = [1.0]
-    (workdir / MESH_DIR / TIMES).write_text("\n".join(f"{t:.12g}" for t in times) + "\n")
+    (workdir / MESH_DIR / TIMES).write_text(
+        "\n".join(f"{t:.12g}" for t in times) + "\n", encoding="utf-8"
+    )
     sif = workdir / f"{OUTPUT}.sif"
-    sif.write_text(with_settings("\n".join(out) + "\n", study, step))
+    sif.write_text(with_settings("\n".join(out) + "\n", study, step), encoding="utf-8")
     return sif, emesh
 
 
@@ -758,7 +767,7 @@ def _write_restart(path: Path, variables: list[tuple[str, np.ndarray]], transien
             *(f"{i} {i}" for i in range(1, n + 1)),
             *(f"{v:.17g}" for v in values),
         ]
-    path.write_text("\n".join(lines) + "\n")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 # ADR 0023: Elmer's own settings, and the shared ones in its terms.

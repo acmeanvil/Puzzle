@@ -29,7 +29,9 @@ CHANNEL = "https://github.com/acmeanvil/Puzzle/releases/download"
 
 
 def version() -> str:
-    return tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
+    return tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"][
+        "version"
+    ]
 
 
 def build(name: str, output: Path) -> None:

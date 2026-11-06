@@ -214,7 +214,7 @@ class ResultsTab(QWidget):
                                                  "CSV files (*.csv)")  # fmt: skip
         if not path:
             return None
-        with open(path, "w", newline="") as f:
+        with open(path, "w", newline="", encoding="utf-8") as f:
             out = csv.writer(f)
             out.writerow(CSV_HEADERS)
             for b in self.found:

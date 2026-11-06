@@ -121,7 +121,7 @@ def test_columns_convert_round_and_exports(setup):
     assert got.frame["force"].to_list() == pytest.approx([1200, 2500])  # 1.2 kN, shown
     exp = op(p, "export", rnd, key="value", file="out/loads.csv")
     ev.export(ev.Context(p, ctx.store, root=ctx.root), exp, ctx.root)
-    text = (ctx.root / "out/loads.csv").read_text().splitlines()
+    text = (ctx.root / "out/loads.csv").read_text(encoding="utf-8").splitlines()
     assert text[0] == "case,force [kN]" and text[1] == "A,1.2"
     exp.file = "out/loads.xlsx"
     ev.export(ev.Context(p, ctx.store, root=ctx.root), exp, ctx.root)
@@ -134,7 +134,7 @@ def test_columns_convert_round_and_exports(setup):
     f = op(p, "file", file="out/loads.*")  # CSV, Excel and Parquet stack, SI each
     both = value(ctx, f)
     assert both.frame.height == 6 and both.frame["force"].to_list() == [1200, 2500] * 3
-    (ctx.root / "out/notes.doc").write_text("x")
+    (ctx.root / "out/notes.doc").write_text("x", encoding="utf-8")
     f.file = "out/notes.doc"
     with pytest.raises(PuzzleError, match="not CSV, Parquet or Excel"):
         value(ctx, f)
@@ -143,7 +143,9 @@ def test_columns_convert_round_and_exports(setup):
     assert got.columns == ["case", "force"] and got.frame["force"].to_list() == [1200, 2500]
     (ctx.root / "tests").mkdir()
     for i in (1, 2):
-        (ctx.root / f"tests/run{i}.csv").write_text(f"gauge, strain\ng1, {i}e-4\n")
+        (ctx.root / f"tests/run{i}.csv").write_text(
+            f"gauge, strain\ng1, {i}e-4\n", encoding="utf-8"
+        )
     f.file = "tests/*.csv"
     got = value(ctx, f)
     assert got.frame.height == 2 and got.frame["file"].to_list() == ["run1.csv", "run2.csv"]
@@ -248,4 +250,6 @@ def test_the_table_command(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "2 rows × 2" in out and "case" in out
     assert main(["table", str(tmp_path / "p"), "Loads", "--csv", str(tmp_path / "l.csv")]) == 0
-    assert (tmp_path / "l.csv").read_text().splitlines()[1] == "A,1500"  # SI display units
+    assert (tmp_path / "l.csv").read_text(encoding="utf-8").splitlines()[
+        1
+    ] == "A,1500"  # SI display units

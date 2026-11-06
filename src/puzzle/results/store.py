@@ -411,14 +411,14 @@ class ResultStore:
         """Refuse a store in another format; on a write, mark a new one with this format."""
         marker = self.root / "store.json"
         if marker.exists():
-            found = json.loads(marker.read_text()).get("format")
+            found = json.loads(marker.read_text(encoding="utf-8")).get("format")
         elif any(self._exists(name) for name in SCHEMAS):
             found = 1  # format 1 stores predate the marker
         else:
             if not create:
                 return
             self.root.mkdir(parents=True, exist_ok=True)
-            marker.write_text(json.dumps({"format": FORMAT}) + "\n")
+            marker.write_text(json.dumps({"format": FORMAT}) + "\n", encoding="utf-8")
             return
         if found != FORMAT:
             raise StaleStore(

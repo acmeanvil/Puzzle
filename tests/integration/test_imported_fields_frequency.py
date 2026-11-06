@@ -66,7 +66,7 @@ def _csv(path):
     rows = ["x [m],y [m],z [m],f [Hz],p [kPa]"]
     for f, p in GIVEN:
         rows += [f"{x:.10g},{B:.10g},{z:.10g},{f:g},{p / 1e3:g}" for x in g for z in zs]
-    path.write_text("\n".join(rows) + "\n")
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
     return path
 
 

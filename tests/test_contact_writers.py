@@ -35,7 +35,7 @@ def test_calculix_ties_nonconformal_bonds(tmp_path):
 def test_code_aster_ties_with_liaison_mail(tmp_path):
     project, study, mesh = _setup(tmp_path, "code_aster", _tie())
     export = CodeAsterAdapter().write_input(project, study, mesh, tmp_path / "case")
-    comm = (export.parent / "job.comm").read_text()
+    comm = (export.parent / "job.comm").read_text(encoding="utf-8")
     assert "LIAISON_MAIL=(_F(GROUP_MA_MAIT=" in comm and "TYPE_RACCORD='MASSIF'" in comm
 
 
@@ -75,13 +75,13 @@ def test_code_aster_contact(tmp_path):
     smooth = Contact(name="Slide", type="frictionless", source="Right/Start", target="Left/End")
     project, study, mesh = _setup(tmp_path, "code_aster", smooth)
     export = CodeAsterAdapter().write_input(project, study, mesh, tmp_path / "case")
-    comm = (export.parent / "job.comm").read_text()
+    comm = (export.parent / "job.comm").read_text(encoding="utf-8")
     assert "DEFI_CONTACT(MODELE=model, FORMULATION='CONTINUE', FROTTEMENT='SANS'" in comm
     assert "STAT_NON_LINE(" in comm and "ORIE_PEAU" in comm and "REAC_NODA" in comm
     # ADR 0053: the full load at once, cut down by Code_Aster only if an increment fails.
     assert "INTERVALLE=_F(JUSQU_A=1.0, NOMBRE=1)" in comm
     assert "ACTION='DECOUPE'" in comm and "INCREMENT=_F(LIST_INST=times)" in comm
-    assert "P ncpus" in export.read_text()
+    assert "P ncpus" in export.read_text(encoding="utf-8")
 
 
 def _rough(tmp_path, features=FIXED, order=2):
@@ -107,7 +107,7 @@ def test_code_aster_friction_on_first_order_meshes(tmp_path):
     assert err.value.code == "unsupported"
 
     export = adapter.write_input(*_rough(tmp_path / "l", order=1), tmp_path / "l" / "case")
-    comm = (export.parent / "job.comm").read_text()
+    comm = (export.parent / "job.comm").read_text(encoding="utf-8")
     assert "FROTTEMENT='COULOMB'" in comm and "COULOMB=0.3" in comm
 
     # A displacement condition on the slave face's nodes is refused up front.

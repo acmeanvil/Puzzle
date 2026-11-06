@@ -95,16 +95,18 @@ def write_mesh(mesh: Mesh, directory: Path, bodies: list[str], boundaries: list[
 
     (directory / "mesh.header").write_text(
         f"{len(mesh.node_ids)} {len(element_lines)} {len(boundary_lines)}\n{len(counts)}\n"
-        + "".join(f"{code} {n}\n" for code, n in sorted(counts.items()))
+        + "".join(f"{code} {n}\n" for code, n in sorted(counts.items())),
+        encoding="utf-8",
     )
     (directory / "mesh.nodes").write_text(
         "".join(
             f"{i + 1} -1 {x:.15g} {y:.15g} {z:.15g}\n" for i, (x, y, z) in enumerate(mesh.coords)
-        )
+        ),
+        encoding="utf-8",
     )
-    (directory / "mesh.elements").write_text("\n".join(element_lines) + "\n")
+    (directory / "mesh.elements").write_text("\n".join(element_lines) + "\n", encoding="utf-8")
     (directory / "mesh.boundary").write_text(
-        "\n".join(boundary_lines) + ("\n" if boundary_lines else "")
+        "\n".join(boundary_lines) + ("\n" if boundary_lines else ""), encoding="utf-8"
     )
     return ElmerMesh(
         node_ids=mesh.node_ids.copy(),

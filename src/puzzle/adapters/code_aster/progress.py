@@ -64,7 +64,7 @@ class CodeAsterProgress(Parser):
     def __init__(self, input_file: Path, step: int = 1, of: int = 1) -> None:
         super().__init__(step, of)
         comm = next(iter(sorted(input_file.parent.glob("*.comm"))), None)
-        text = comm.read_text(errors="replace") if comm is not None else ""
+        text = comm.read_text(errors="replace", encoding="utf-8") if comm is not None else ""
         ends = _numbers(text, "JUSQU_A")
         self.end_time = max(ends) if ends else None
         nonlinear = any(k in text for k in ("STAT_NON_LINE", "DYNA_NON_LINE", "THER_NON_LINE"))

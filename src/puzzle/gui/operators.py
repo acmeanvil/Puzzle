@@ -679,7 +679,7 @@ def read_csv(window, op, path: str | None = None):
             if hasattr(window, "ask_open_path") else None  # fmt: skip
     if not path:
         return None
-    text = Path(path).read_text()
+    text = Path(path).read_text(encoding="utf-8")
     from puzzle.operators.evaluate import parse_table
 
     try:

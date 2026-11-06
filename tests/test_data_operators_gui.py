@@ -164,7 +164,7 @@ def test_the_properties_slider_and_a_table_from_a_csv(app, window, tmp_path):
     bar.sliderReleased.emit()
     assert _op(w, "Slider 1").inputs["value"].value == Quantity(value=10, unit="mm")
     csv = tmp_path / "plates.csv"
-    csv.write_text("t [mm], load [kN]\n2, 1\n4, 3\n")
+    csv.write_text("t [mm], load [kN]\n2, 1\n4, 3\n", encoding="utf-8")
     tid = operators.new_operator(w, "table")
     operators.read_csv(w, w.session.project.objects[UUID(tid)], str(csv))
     assert _op(w, "Table 1").text.startswith("t [mm]")

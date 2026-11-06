@@ -195,7 +195,7 @@ def _whole_part_marker(mesh: Mesh, comp: Component, workdir: Path) -> None:
                             for g in parts]}  # fmt: skip
     else:
         return
-    (workdir / f"{JOB}.totals.json").write_text(json.dumps(marker))
+    (workdir / f"{JOB}.totals.json").write_text(json.dumps(marker), encoding="utf-8")
 
 
 def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs=()) -> Path:
@@ -344,7 +344,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         bolts += [f for f, _cut in tight]
         cuts += [c for _f, c in tight]
     if fastener_ends:  # the reader sums the bolt end faces' reactions (ADR 0027)
-        (workdir / f"{JOB}.fasteners.json").write_text(json.dumps(fastener_ends))
+        (workdir / f"{JOB}.fasteners.json").write_text(json.dumps(fastener_ends), encoding="utf-8")
     # Beams (ADR 0027): line bodies as POU_D_T, which takes two-node lines only.
     beam_parts = [
         p.name for p in comp.parts if mesh.groups.get(p.name) and mesh.groups[p.name].dim == 1
@@ -909,7 +909,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         ]
     out.append("FIN()")
     comm = workdir / f"{JOB}.comm"
-    comm.write_text(with_settings("\n".join(out) + "\n", study, step))
+    comm.write_text(with_settings("\n".join(out) + "\n", study, step), encoding="utf-8")
 
     used = (
         {"temperature"}
@@ -933,7 +933,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     export.write_text(
         "\n".join(
             [
-                *resources(processes, low_rank=_low_rank(comm.read_text())),
+                *resources(processes, low_rank=_low_rank(comm.read_text(encoding="utf-8"))),
                 f"F comm {JOB}.comm D 1",
                 f"F mmed {JOB}.med D 20",
                 f"F mess {JOB}.mess R 6",
@@ -948,7 +948,8 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
                 ),
             ]
         )
-        + "\n"
+        + "\n",
+        encoding="utf-8",
     )
     return export
 

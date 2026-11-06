@@ -44,7 +44,7 @@ def skills() -> dict[str, Skill]:
     out = {}
     for item in sorted(files(__package__).iterdir(), key=lambda p: p.name):
         if item.name.endswith(".md"):
-            skill = _parse(item.read_text())
+            skill = _parse(item.read_text(encoding="utf-8"))
             out[skill.name] = skill
     return out
 

@@ -266,7 +266,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         case["magnetics"] = _magnetics(project, comp, step, features, mesh, workdir)
     write_med(mesh, workdir / "mesh.msh", {g: g for g in groups})
     case["settings"] = _settings(study, step)  # ADR 0023
-    (workdir / "case.json").write_text(json.dumps(case, indent=2))
+    (workdir / "case.json").write_text(json.dumps(case, indent=2), encoding="utf-8")
     target = workdir / SCRIPT.name
     shutil.copyfile(SCRIPT, target)
     np.savetxt(workdir / "node-ids.txt", mesh.node_ids, fmt="%d")

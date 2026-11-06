@@ -55,7 +55,7 @@ def test_a_cube_cage_becomes_a_smooth_solid(tmp_path):
     obj = tmp_path / "cage.obj"
     verts = "".join(f"v {x} {y} {z}\n" for x, y, z in CAGE * 1000)
     quads = "".join("f " + " ".join(str(i + 1) for i in f) + "\n" for f in FACES)
-    obj.write_text(verts + quads)
+    obj.write_text(verts + quads, encoding="utf-8")
     again = regenerate([Op("subd", "S", {"file": "cage.obj", "scale": 0.001, "levels": 3})],
                        root=tmp_path)  # fmt: skip
     assert volume(again.shape) == pytest.approx(volume(got.shape), rel=1e-6)  # mm, scaled to m

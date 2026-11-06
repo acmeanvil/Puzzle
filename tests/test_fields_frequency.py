@@ -41,7 +41,7 @@ def _rows(f):
 
 
 def _file(path, f):
-    path.write_text("\n".join(["x,y,z,p [Pa]", *_rows(f)]) + "\n")
+    path.write_text("\n".join(["x,y,z,p [Pa]", *_rows(f)]) + "\n", encoding="utf-8")
     return path
 
 
@@ -49,7 +49,7 @@ def _spectrum(path):
     """A frequency column in kHz: rows at 0.1 and 0.3 kHz."""
     rows = ["f [kHz],x,y,z,p [Pa]"]
     rows += [f"0.1,{r}" for r in _rows(100.0)] + [f"0.3,{r}" for r in _rows(300.0)]
-    path.write_text("\n".join(rows) + "\n")
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
     return path
 
 

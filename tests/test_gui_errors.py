@@ -50,7 +50,7 @@ def test_an_uncaught_error_is_logged_and_told(installed):
         raise ValueError("no study named 'Tip load'")
     except ValueError:
         sys.excepthook(*sys.exc_info())
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     assert "=== Puzzle started" in text
     assert "ValueError: no study named 'Tip load'" in text and "Traceback" in text
     assert told == ["ValueError: no study named 'Tip load'"]
@@ -58,7 +58,7 @@ def test_an_uncaught_error_is_logged_and_told(installed):
 
 def test_a_long_log_is_started_afresh(tmp_path, monkeypatch):
     path = tmp_path / "gui.log"
-    path.write_text("x" * (errors.MAX_LOG_BYTES + 1))
+    path.write_text("x" * (errors.MAX_LOG_BYTES + 1), encoding="utf-8")
     monkeypatch.setattr(errors, "_tell", lambda m: None)
     hooks = sys.excepthook, threading.excepthook
     try:

@@ -20,15 +20,17 @@ def _example(tmp_path) -> Path:
     shutil.copytree(EXAMPLE, root, ignore=shutil.ignore_patterns(".puzzle"))
     # History and results are ignored by git: a fresh checkout has none, so make them.
     if not (root / "history.jsonl").exists():
-        (root / "history.jsonl").write_text('{"kind": "command"}\n')
+        (root / "history.jsonl").write_text('{"kind": "command"}\n', encoding="utf-8")
     (root / "results").mkdir(exist_ok=True)
     if not (root / "results" / "store.json").exists():
-        (root / "results" / "store.json").write_text('{"format": 2}')
+        (root / "results" / "store.json").write_text('{"format": 2}', encoding="utf-8")
     (root / ".puzzle" / "runs" / "study-1").mkdir(parents=True)  # a solver's working files
     (root / ".puzzle" / "runs" / "gui-mesh").mkdir(parents=True)  # a kept mesh
-    (root / ".puzzle" / "runs" / "gui-mesh" / "mesh.msh").write_text("mesh")
-    (root / ".puzzle" / "lock").write_text("held")
-    (root / ".puzzle" / "jobs.json").write_text('{"jobs": [{"job": "j1"}]}')  # ADR 0067
+    (root / ".puzzle" / "runs" / "gui-mesh" / "mesh.msh").write_text("mesh", encoding="utf-8")
+    (root / ".puzzle" / "lock").write_text("held", encoding="utf-8")
+    (root / ".puzzle" / "jobs.json").write_text(
+        '{"jobs": [{"job": "j1"}]}', encoding="utf-8"
+    )  # ADR 0067
     return root
 
 
@@ -46,10 +48,10 @@ def test_a_full_copy_with_its_own_name_and_nothing_shared(tmp_path):
     assert not (done.root / ".puzzle" / "jobs.json").exists()  # and its runner's jobs
     assert not (done.root / ".puzzle" / "runs" / "study-1").exists()  # disposable
     # Independent: changing the copy leaves the original alone.
-    (done.root / "bar.step").write_text("changed")
+    (done.root / "bar.step").write_text("changed", encoding="utf-8")
     copy.name = "renamed"
     save_project(copy, done.root)
-    assert (root / "bar.step").read_text() != "changed"
+    assert (root / "bar.step").read_text(encoding="utf-8") != "changed"
     assert load_project(root).name == original.name
 
 
@@ -88,11 +90,11 @@ def test_it_refuses_a_folder_inside_the_project_or_one_in_use(tmp_path):
         save_as(root, root / "copy")
     busy = tmp_path / "busy"
     busy.mkdir()
-    (busy / "notes.txt").write_text("mine")
+    (busy / "notes.txt").write_text("mine", encoding="utf-8")
     with pytest.raises(PuzzleError) as refused:
         save_as(root, busy)
     assert refused.value.code == "exists"
-    assert (busy / "notes.txt").read_text() == "mine"
+    assert (busy / "notes.txt").read_text(encoding="utf-8") == "mine"
 
 
 def test_a_missing_outside_file_is_named(tmp_path):

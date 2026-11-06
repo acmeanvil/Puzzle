@@ -116,7 +116,10 @@ def _field(p, where, name, points, columns: dict[str, tuple[np.ndarray, str]]):
     header = ",".join(["x [m]", "y [m]", "z [m]"] + [f"{n} [{u}]" for n, (_, u) in columns.items()])
     data = np.column_stack([points] + [v for v, _ in columns.values()])
     path = where / f"{name}.csv"
-    path.write_text("\n".join([header] + [",".join(f"{c:.15g}" for c in r) for r in data]) + "\n")
+    path.write_text(
+        "\n".join([header] + [",".join(f"{c:.15g}" for c in r) for r in data]) + "\n",
+        encoding="utf-8",
+    )
     return p.add(ImportedField(**new_field_data(where, path, name=name))).id
 
 
