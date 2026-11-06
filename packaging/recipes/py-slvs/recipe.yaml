@@ -1,0 +1,57 @@
+# SolveSpace's constraint solver as a Python module (sketches, ADR 0014 G5). PyPI only;
+# built from its sdist with conda-forge's compilers and SWIG (ADR 0068).
+context:
+  name: py-slvs
+  version: "1.0.6"
+
+package:
+  name: ${{ name }}
+  version: ${{ version }}
+
+source:
+  url: https://files.pythonhosted.org/packages/source/p/py_slvs/py_slvs-${{ version }}.tar.gz
+  sha256: 53a4ff697cb42530b5a6d2f9a0199c874cad48f98891103c5ce8b7d4da40ae72
+
+build:
+  number: 0
+  script:
+    env:
+      # SolveSpace's CMakeLists asks for CMake 2.8; CMake 4 needs this to configure it.
+      CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+    content:
+      # The sdist carries a stale _skbuild folder from its author's machine.
+      - if: unix
+        then: rm -rf _skbuild
+        else: if exist _skbuild rmdir /s /q _skbuild
+      - ${{ PYTHON }} -m pip install . -vv --no-deps --no-build-isolation
+
+requirements:
+  build:
+    - ${{ compiler('c') }}
+    - ${{ stdlib('c') }}
+    - ${{ compiler('cxx') }}
+    - cmake
+    - ninja
+    - swig
+  host:
+    - python
+    - pip
+    - setuptools
+    - wheel
+    - scikit-build
+  run:
+    - python
+
+tests:
+  - python:
+      imports:
+        - py_slvs.slvs
+      pip_check: false
+  - script:
+      - python -c "from py_slvs import slvs; s = slvs.System(); print('slvs ok', s)"
+
+about:
+  homepage: https://github.com/realthunder/slvs_py
+  license: GPL-3.0-only
+  license_file: py_slvs/COPYING.txt
+  summary: Python binding of the SolveSpace geometric constraint solver

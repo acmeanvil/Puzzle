@@ -1,6 +1,6 @@
 # 0068. Ship Puzzle as one installer per system, with every solver inside
 
-- Status: Accepted (2026-11-05)
+- Status: Accepted (2026-11-05); step 1 of 5 built
 - Date: 2026-11-05
 
 ## Context
@@ -187,6 +187,34 @@ Other constraints:
   one file.
 - **A thin installer that downloads solvers on first launch.** Smaller, but not monolithic,
   and it fails offline. It is kept as the optional web installer only.
+
+## Built so far
+
+**Step 1 (2026-11-05): Puzzle's own conda packages and the channel.**
+
+- `packaging/recipes/` (rattler-build):
+  - `puzzle-fem` (noarch, its run requirements exactly pixi.toml's default and gui
+    features, checked by `tests/test_packaging.py`);
+  - `py-slvs` (PyPI sdist, SWIG);
+  - `manifold3d` (PyPI sdist, nanobind, TBB; Clipper2 fetched at manifold's pinned
+    commit).
+
+  Each runs its tests as it builds: imports, a solved sketch system, a cube's volume,
+  `puzzle --help`. `scripts/build_packages.py` builds them in order into a local channel
+  (`pixi run -e packaging build-packages`), printing `[progress] i/n` lines for watchers.
+- Fixes the builds needed, found on macOS Intel:
+  - SolveSpace's CMakeLists needs `CMAKE_POLICY_VERSION_MINIMUM=3.5` under CMake 4;
+  - scikit-build-core's 5 s CMake probe timed out on macOS's first runs of a fresh
+    binary, so the recipe sets `CI` (20 s) and runs CMake once first;
+  - Clipper2 at manifold's pin misses `<iterator>`;
+  - macOS on Intel targets 11.0: current libc++ refuses older, and Qt 6.11 needs 12.
+- The channel is `https://github.com/acmeanvil/Puzzle/releases/download`: one release per
+  platform, tagged with its name. `scripts/publish_channel.py` adds packages and
+  re-indexes with rattler-index; it never replaces a published package, since lock files
+  pin its hash. Puzzle's build number is CI's run number.
+- `.github/workflows/packages.yml` builds on linux-64, linux-aarch64, osx-64, osx-arm64
+  and win-64 when the recipes change, and publishes on a published release or a manual run
+  with "publish" ticked.
 
 ## Decided (2026-11-05, maintainer)
 
