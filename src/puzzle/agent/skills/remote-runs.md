@@ -8,6 +8,11 @@ is too big for this computer, or when a run failed with `host_unreachable`,
 `queue_rejected`, `walltime_exceeded`, `out_of_memory`, `job_lost` or
 `transfer_failed`.
 
+With the job runner on (the default, ADR 0067), a remote solve belongs to a runner Puzzle
+copies to the host: it goes on if Puzzle closes or the connection drops, and is picked up
+later (skill `job-runner`). Slurm and PBS jobs go through PSI/J there; a host can name the
+runner's Python (`python` in hosts.toml).
+
 Hosts are the user's, kept in `<user data dir>/hosts.toml`, never in a project. You
 can list and check them (`hosts_list`, `host_check`) but not add or change them: that
 is the user's job (`puzzle hosts add`, or Project → Remote hosts… in the GUI), because

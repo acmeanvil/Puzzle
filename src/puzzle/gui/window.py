@@ -567,6 +567,13 @@ class MainWindow(QMainWindow):
         self.convergence_dock.visibilityChanged.connect(
             lambda shown: shown and self.convergence.refresh())  # fmt: skip
         self.convergence_dock.hide()  # a study's Check mesh convergence…, or Window
+        from puzzle.gui.jobs_panel import JobsPanel  # ADR 0067: solves with a job runner
+
+        self.jobs = JobsPanel(self)
+        self.jobs_dock = self.docks.add(
+            "jobs", "Jobs", self.jobs, Qt.DockWidgetArea.BottomDockWidgetArea)  # fmt: skip
+        self.docks.tab("messages", "jobs")
+        self.jobs_dock.hide()  # Window → Jobs, or the note when a project opens with some
         self.schematic_panel = SchematicPanel(self)  # beside the 3D view (ADR 0058)
         self.schematic_dock = self.docks.add(
             "schematic", "Schematic", self.schematic_panel, Qt.DockWidgetArea.BottomDockWidgetArea
@@ -667,6 +674,7 @@ class MainWindow(QMainWindow):
         first = next(iter(self.session.project.of_type(Component)), None)
         if first is not None:
             self.tree.select(Node("object", str(first.id)))
+        self._offer_pending()
 
     def reload(self) -> None:
         """Re-read the project from disk: another client may have changed it."""
@@ -693,7 +701,9 @@ class MainWindow(QMainWindow):
                 self.report(exc)
         from puzzle.project.status import status
 
-        self.states = status(s.project, runs, self.running, self.failed_studies)
+        # A study whose solve is with a job runner shows running (ADR 0067), here or not.
+        running = self.running | self._pending_studies()
+        self.states = status(s.project, runs, running, self.failed_studies)
         self.tree.populate(s.project, runs, self._field_catalogs(runs), self.states)
         self.history.clear()
         names = {str(o.id): o.name for o in s.project.objects.values()}
@@ -710,6 +720,8 @@ class MainWindow(QMainWindow):
             self.optimisation.refresh()
         if not self.convergence_dock.isHidden():
             self.convergence.refresh()
+        if not self.jobs_dock.isHidden():
+            self.jobs.refresh()
         self.agent.refresh()
         waiting = self.agent.proposals.count()
         if waiting > self._proposals_seen:  # a new proposal: open the agent, no focus
@@ -1188,6 +1200,87 @@ class MainWindow(QMainWindow):
         if got is not None:
             self.new_project(Path(got["folder"]), got["name"], got["units"])
 
+    # --- jobs with a runner (ADR 0067) -------------------------------------------
+
+    def _pending_studies(self) -> set[str]:
+        """Study ids with a solve that is with a job runner (the pending file: cheap)."""
+        from puzzle.jobs import pending
+
+        if self.session is None:
+            return set()
+        return {e["study"] for e in pending.entries(self.session.root) if e.get("study")}
+
+    def open_jobs(self) -> None:
+        self.docks.show("jobs")
+        self.jobs.refresh()
+
+    def _offer_pending(self) -> None:
+        """A project opened with solves that went on without a Puzzle: say so, and offer
+        to pick them all up."""
+        from puzzle.jobs import pending
+
+        waiting = [e for e in pending.entries(self.session.root)
+                   if e.get("study") not in self.running and not pending.followed(e)]  # fmt: skip
+        if not waiting:
+            return
+        n = len({e.get("workdir") for e in waiting})
+        words = f"{n} solve{'s' if n != 1 else ''} went on while Puzzle was closed"
+        self.toasts.show(words, ("Pick them up", self.resume_all_jobs), state="info")
+
+    def resume_all_jobs(self) -> None:
+        """Every pending job, finished ones first (their results are waiting)."""
+        from puzzle.jobs import overview
+
+        root = self.session.root
+
+        def done(rows) -> None:
+            from puzzle.jobs import pending
+
+            busy = {e["job"] for e in pending.entries(root) if pending.followed(e)}
+            self.resume_jobs([r.job for r in overview.resume_order(rows) if r.job not in busy])
+
+        self.background("Asking the job runner…", lambda _emit: overview.jobs(root), done,
+                        lock=False)  # fmt: skip
+
+    def resume_jobs(self, jobs: list[str]) -> Task | None:
+        """Pick jobs up one after another, each like a run: the Solution panel and the
+        Output log follow it, and its results show as a run's do."""
+        from puzzle.jobs import pending
+
+        queue = list(jobs)
+        s = self.session
+
+        def next_one(_ok: bool = True) -> Task | None:
+            while queue:
+                job = queue.pop(0)
+                entry = next((e for e in pending.entries(s.root) if e["job"] == job), None)
+                if entry is None:  # brought home with a sibling, or dismissed meanwhile
+                    continue
+                study = s.project.objects.get(_uuid(entry.get("study") or ""))
+                if not isinstance(study, Study):
+                    try:
+                        s.resume(job)  # says the study is gone and drops the entry
+                    except PuzzleError as exc:
+                        self.report(exc)
+                    continue
+                if str(study.id) in self.running:
+                    continue  # already followed here
+                return self._start_run(
+                    study, lambda emit, event, cancel, j=job: s.resume(
+                        j, on_output=emit, on_event=event, cancel=cancel),
+                    verb="Picking up", then=next_one)  # fmt: skip
+            if not self.jobs_dock.isHidden():
+                self.jobs.refresh()
+            return None
+
+        return next_one()
+
+    def open_url(self, url) -> None:
+        """A file or page in the system's own viewer (tests replace this)."""
+        from PySide6.QtGui import QDesktopServices
+
+        QDesktopServices.openUrl(url)
+
     # --- versions (ADR 0059) ----------------------------------------------------
 
     def open_versions(self) -> None:
@@ -1437,7 +1530,14 @@ class MainWindow(QMainWindow):
         if not isinstance(study, Study):
             self.statusBar().showMessage("Select a study to run", 5000)
             return None
-        s = self.session
+        s, sid = self.session, str(study.id)
+        return self._start_run(study, lambda emit, event, cancel: s.submit(
+            RunStudy(study=sid), on_output=emit, on_event=event, cancel=cancel))  # fmt: skip
+
+    def _start_run(self, study: Study, call, *, verb: str = "Running", then=None) -> Task:
+        """A run in the background, followed by the Solution panel and the Output log:
+        `call(emit, emit_event, cancel)` runs it (a submit, or a resume, ADR 0067);
+        `then(ok)` afterwards (the next job to pick up)."""
         self.fold_messages(False)
         # The Solution tab comes forward (ADR 0054); the log is one tab away.
         self.output_tabs.setCurrentWidget(self.solution)
@@ -1450,50 +1550,24 @@ class MainWindow(QMainWindow):
         sid = str(study.id)
 
         def work(emit, emit_event):
-            return s.submit(RunStudy(study=sid), on_output=emit, on_event=emit_event, cancel=cancel)
+            return call(emit, emit_event, cancel)
 
         def done(outcome) -> None:
-            self.running.discard(sid)
-            self.failed_studies.discard(sid)
-            self.refresh()
-            run = outcome.run
-            cached = " (reused an identical run)" if run is not None and run.cached else ""
-            self.solution.finish(True, "Reused an identical earlier run" if cached else "")
-            self.statusBar().showMessage(f"{study.name} finished{cached}", 8000)
-            self.fold_messages(True)  # good news needs no log; it stays one click away
-            if run is not None and run.run_id:
-                self.tree.select(Node("run", run.run_id, "", ""))
-                self._select_run(run.run_id)
-                rid = run.run_id
-                self.toasts.show(
-                    f"{study.name} finished{cached}",
-                    ("Show results", lambda: self._show_run(rid)),
-                )
-            else:
-                self.toasts.show(f"{study.name} finished{cached}")
+            self._after_run(outcome, study, sid)
+            if then is not None:
+                then(True)
 
         def failed(exc) -> None:
-            self.running.discard(sid)
-            self.failed_studies.add(sid)
-            stopped = getattr(exc, "code", "") == "stopped"
-            self.solution.finish(
-                False, "Stopped" if stopped else "Failed: see the messages and the Output log"
-            )
-            if self.solution.events:  # how it got there explains more than the log tail
-                self.output_tabs.setCurrentWidget(self.solution)
-            self.refresh()
-            if stopped:
-                self.toasts.show(f"{study.name} stopped", state="info")
-            else:
-                self.toasts.show(f"{study.name} failed", ("Show why", self.open_solution),
-                                 state="error")  # fmt: skip
+            self._run_failed(exc, study, sid)
+            if then is not None:
+                then(False)
 
         self.running.add(sid)
         self.refresh()  # the tree shows it running
         from puzzle import progress
 
         return self.background(
-            f"Running {study.name}…",
+            f"{verb} {study.name}…",
             work,
             done,
             failed=failed,
@@ -1501,6 +1575,42 @@ class MainWindow(QMainWindow):
             cancel=cancel,
             fraction=lambda: progress.state(self.solution.events).fraction(),
         )
+
+    def _after_run(self, outcome, study: Study, sid: str) -> None:
+        self.running.discard(sid)
+        self.failed_studies.discard(sid)
+        self.refresh()
+        run = outcome.run
+        cached = " (reused an identical run)" if run is not None and run.cached else ""
+        self.solution.finish(True, "Reused an identical earlier run" if cached else "")
+        self.statusBar().showMessage(f"{study.name} finished{cached}", 8000)
+        self.fold_messages(True)  # good news needs no log; it stays one click away
+        if run is not None and run.run_id:
+            self.tree.select(Node("run", run.run_id, "", ""))
+            self._select_run(run.run_id)
+            rid = run.run_id
+            self.toasts.show(
+                f"{study.name} finished{cached}",
+                ("Show results", lambda: self._show_run(rid)),
+            )
+        else:
+            self.toasts.show(f"{study.name} finished{cached}")
+
+    def _run_failed(self, exc, study: Study, sid: str) -> None:
+        self.running.discard(sid)
+        self.failed_studies.add(sid)
+        stopped = getattr(exc, "code", "") == "stopped"
+        self.solution.finish(
+            False, "Stopped" if stopped else "Failed: see the messages and the Output log"
+        )
+        if self.solution.events:  # how it got there explains more than the log tail
+            self.output_tabs.setCurrentWidget(self.solution)
+        self.refresh()
+        if stopped:
+            self.toasts.show(f"{study.name} stopped", state="info")
+        else:
+            self.toasts.show(f"{study.name} failed", ("Show why", self.open_solution),
+                             state="error")  # fmt: skip
 
     # --- selection ---------------------------------------------------------------
 

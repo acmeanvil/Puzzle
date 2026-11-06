@@ -4,6 +4,8 @@ from pathlib import Path
 
 # Tests use Puzzle's generic materials only, never a user's local library.
 os.environ["PUZZLE_MATERIALS"] = ""
+# Solves run in-process unless a test turns the job runner on (ADR 0067).
+os.environ.setdefault("PUZZLE_RUNNER", "off")
 # Tests never touch the real keychain (or pop its prompts); key tests install their own.
 os.environ["PYTHON_KEYRING_BACKEND"] = "keyring.backends.null.Keyring"
 # Nor the user's own settings (settings.toml, agent.toml): a scratch user folder.

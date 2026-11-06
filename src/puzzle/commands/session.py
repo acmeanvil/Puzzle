@@ -141,6 +141,14 @@ class Session:
                 return self._propose([cmd], actor, rationale)
             if not isinstance(cmd, RunStudy):
                 return self._apply(cmd, actor)
+        if cmd.resume:
+            return self._resume(cmd, on_output, on_event, cancel, actor)
+        return self._run_command(cmd, actor, on_output, on_event, cancel)
+
+    def _run_command(self, cmd: RunStudy, actor: Actor, on_output, on_event, cancel, *,
+                     workdir: Path | None = None, attach: dict[str, str] | None = None,
+                     resumed: str | None = None) -> Outcome:  # fmt: skip
+        with self._locked():
             study = resolve(self.project, cmd.study, Study)
             timeout = self._run_timeout(cmd, actor)
             snapshot = copy.deepcopy(self.project)
@@ -148,7 +156,10 @@ class Session:
                 "before_run", actor, words={"study": study.name}, always_latest=True
             )
         # Solve outside the lock, so other clients can keep working meanwhile.
-        run, data = self._run(snapshot, study, cmd, timeout, on_output, on_event, cancel)
+        run, data = self._run(snapshot, study, cmd, timeout, on_output, on_event, cancel,
+                              workdir=workdir, attach=attach)  # fmt: skip
+        if resumed:
+            data["resumed"] = resumed
         with self._locked():
             seq = self._log(
                 {"type": "command", "actor": actor.to_dict(), "command": _dump(cmd), "result": data}
@@ -156,6 +167,53 @@ class Session:
             if solved_from is not None:  # the state it solved from works (ADR 0059)
                 self._mark_solved(solved_from, study.name)
         return Outcome("applied", seq=seq, data=data, problems=self.project.problems(), run=run)
+
+    def pending_jobs(self) -> list[dict]:
+        """Solves handed to a job runner whose results are not in yet (ADR 0067): those
+        still running, and those that ended while no Puzzle was following them."""
+        from puzzle.jobs import pending
+
+        return pending.entries(self.root)
+
+    def resume(self, job: str, actor: Actor = USER, *, on_output=None, on_event=None,
+               cancel=None) -> Outcome:  # fmt: skip
+        """Pick up a pending job: the same run (study, run folder) attached to the job
+        instead of submitting it again; finished points and upstream studies are reused.
+        A run like any other (a `run_study` command with `resume`): agents need the
+        autonomy to run, and at "propose" accepting the proposal picks the job up."""
+        entry = self._pending_entry(job)
+        cmd = RunStudy(study=entry["study"], reuse=True, host=entry.get("host"), resume=job)
+        return self.submit(cmd, actor, rationale=f"pick up job {job}", on_output=on_output,
+                           on_event=on_event, cancel=cancel)  # fmt: skip
+
+    def _pending_entry(self, job: str) -> dict:
+        from puzzle.jobs import pending
+
+        mine = [e for e in pending.entries(self.root) if e["job"] == job]
+        if not mine:
+            raise PuzzleError(f"no pending job {job}", code="not_found")
+        entry = mine[0]
+        try:
+            resolve(self.project, entry.get("study") or "", Study)
+        except PuzzleError:
+            pending.remove(self.root, job)
+            raise PuzzleError(f"job {job}'s study is gone from the project",
+                              code="not_found") from None  # fmt: skip
+        if pending.followed(entry):
+            raise PuzzleError(f"job {job} is already being followed by another Puzzle "
+                              f"(process {entry['follower']['pid']})", code="busy")  # fmt: skip
+        return entry
+
+    def _resume(self, cmd: RunStudy, on_output, on_event, cancel, actor: Actor) -> Outcome:
+        from puzzle.jobs import pending
+
+        entry = self._pending_entry(cmd.resume)
+        same = {e["folder"]: e["job"] for e in pending.entries(self.root)
+                if e.get("workdir") == entry["workdir"]}  # fmt: skip
+        return self._run_command(
+            cmd, actor, on_output, on_event, cancel,
+            workdir=Path(entry["workdir"]), attach=same, resumed=cmd.resume,
+        )  # fmt: skip
 
     def submit_batch(
         self, commands: list[dict[str, Any] | _Command], actor: Actor = USER, *, rationale: str = ""
@@ -706,27 +764,32 @@ class Session:
 
     def _run(
         self, project: Project, study: Study, cmd: RunStudy, timeout, on_output,
-        on_event=None, cancel=None,
+        on_event=None, cancel=None, *, workdir: Path | None = None, attach=None,
     ):  # fmt: skip
+        from puzzle.jobs import pending
         from puzzle.results.query import summary
         from puzzle.results.store import ResultStore
         from puzzle.solve import run_study
 
-        stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-        workdir = self.root / WORK_DIR / f"{slug(study.name)}-{stamp}"
-        run = run_study(
-            project,
-            study.id,
-            self.root,
-            workdir,
-            store=ResultStore(self.root / RESULTS_DIR),
-            reuse=cmd.reuse,
-            host=cmd.host,
-            timeout_s=timeout,
-            on_output=on_output,
-            on_event=on_event,
-            cancel=cancel,
-        )
+        if workdir is None:
+            stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+            workdir = self.root / WORK_DIR / f"{slug(study.name)}-{stamp}"
+        on = cmd.host or (study.remote.host if study.remote is not None else None)
+        context = pending.RunContext(self.root, str(study.id), workdir, on)
+        with pending.running(context, attach):
+            run = run_study(
+                project,
+                study.id,
+                self.root,
+                workdir,
+                store=ResultStore(self.root / RESULTS_DIR),
+                reuse=cmd.reuse,
+                host=cmd.host,
+                timeout_s=timeout,
+                on_output=on_output,
+                on_event=on_event,
+                cancel=cancel,
+            )
         data: dict[str, Any] = {
             "study": study.name,
             "solver": study.solver,

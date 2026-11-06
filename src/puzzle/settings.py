@@ -368,6 +368,17 @@ PREFERENCES: list[Preference] = [
         "increment, iteration or message) for this long; the run keeps going unless you "
         "stop it (ADR 0054).",
     ),
+    Preference(
+        "solvers.runner",
+        "Solvers",
+        "Run solves through the job runner",
+        True,
+        [("On: solves outlive Puzzle", True), ("Off: solves stop when Puzzle closes", False)],
+        "On, each solve is handed to Puzzle's job runner (ADR 0067), here or on a remote "
+        "host: it keeps going if Puzzle closes, the computer sleeps or the connection "
+        "drops, and is picked up again when the project is opened. Off, solves run inside "
+        "Puzzle as before.",
+    ),
     *_connection_preferences(),
     Preference(
         "schematic.uses",

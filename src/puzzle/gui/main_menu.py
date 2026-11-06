@@ -675,6 +675,7 @@ def _window(window, menu: QMenu, agent: QAction, messages: QAction) -> None:
         (window.schematic_dock, "Schematic", "Ctrl+9"),
         (window.optimisation_dock, "Optimisation", "Ctrl+0"),
         (window.convergence_dock, "Convergence", "Ctrl+Shift+0"),
+        (window.jobs_dock, "Jobs", "Ctrl+Shift+J"),
     ):
         # Not the dock's own toggle action: Qt renames that with the dock's title
         # (Properties reads "Tool" while a tool is open).

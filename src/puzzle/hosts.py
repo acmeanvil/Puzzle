@@ -61,6 +61,7 @@ class Host:
     walltime: str = "01:00:00"  # the scheduler's limit for a run, HH:MM:SS
     images: dict[str, str] = field(default_factory=dict)  # solver -> image (or .sif path)
     keep_case: bool = False  # leave the remote case folder after the results are fetched
+    python: str = ""  # the job runner's Python 3.10+ there (ADR 0067); empty: the first found
     # The commands that reach it; tests and unusual set-ups (a jump host) change them.
     ssh: list[str] = field(default_factory=lambda: ["ssh"])
     rsync: list[str] = field(default_factory=lambda: ["rsync"])

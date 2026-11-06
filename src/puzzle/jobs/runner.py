@@ -27,6 +27,8 @@ class JobResult:
     runtime: str
     cancelled: bool = False
     timed_out: bool = False
+    outcome: str = ""  # the job runner's final state (ADR 0067); "" when run in-process
+    message: str = ""  # what the runner said about how it ended
 
     @property
     def ok(self) -> bool:
@@ -56,6 +58,17 @@ def run_job(
         if on_event is not None:
             for e in events:
                 on_event(e)
+
+    from puzzle.jobs.service import service_for
+
+    service = service_for(runtime)
+    if service is not None:  # the job runner owns the solve (ADR 0067)
+        try:
+            return _through_runner(service, command, workdir, runtime, on_output=on_output,
+                                   cancel=cancel, timeout_s=timeout_s, parser=parser,
+                                   emit=emit)  # fmt: skip
+        finally:
+            service.close()
 
     argv = runtime.wrap(command, workdir)
     log_path = workdir / LOG_NAME
@@ -133,6 +146,118 @@ def run_job(
         cancelled=cancelled,
         timed_out=timed_out,
     )
+
+
+def _through_runner(service, command, workdir, runtime, *, on_output, cancel, timeout_s,
+                    parser, emit) -> JobResult:  # fmt: skip
+    """Submit (or, resuming, attach to) the job, follow its log and state until it ends,
+    then bring it home. The timeout counts running time only, not time in a queue."""
+    from puzzle.jobs import pending
+
+    log_path = workdir / LOG_NAME
+    ctx = pending.CONTEXT.get()
+    job = pending.attached(workdir)
+    label = {"folder": workdir.name, "runtime": runtime.describe()}
+    log = None if service.log_is_local else log_path.open("w")
+    written, truncated = 0, False
+
+    def say(line: str) -> None:
+        if log is not None:
+            log.write(line + "\n")
+            log.flush()
+        if on_output:
+            on_output(line)
+
+    def lines(text: str) -> None:
+        nonlocal written, truncated
+        for line in text.splitlines(keepends=True):
+            if log is not None:
+                if written < MAX_LOG_BYTES:
+                    log.write(line)
+                    written += len(line)
+                elif not truncated:
+                    truncated = True
+                    log.write(f"\n[puzzle: log truncated at {MAX_LOG_BYTES} bytes]\n")
+            if on_output:
+                on_output(line.rstrip("\n"))
+            if parser is not None:
+                emit(parser.safe_feed(line.rstrip("\n")))
+
+    try:
+        if job is None:
+            service.prepare(command, workdir, say)
+            job = service.submit(command, workdir, label)
+            if ctx is not None:
+                pending.add(ctx, job, service.where, workdir, label)
+        else:
+            if ctx is not None:
+                pending.follow(ctx.root, job)
+            say(f"[puzzle] picked up job {job} on {service.where}")
+        offset, partial, checked = 0, "", 0.0
+        cancelled = timed_out = False
+        state: dict = {}
+        while True:
+            text, offset = service.log(job, offset)
+            text, partial = (partial + text), ""
+            if text and not text.endswith("\n"):
+                text, _, partial = text.rpartition("\n")
+                text = text + "\n" if text else ""
+            if text:
+                lines(text)
+            now = time.monotonic()
+            if not text or now - checked >= service.poll_s:
+                state, checked = service.status(job), now
+                if state["state"] in ("completed", "failed", "cancelled", "walltime_exceeded",
+                                      "out_of_memory", "job_lost"):  # fmt: skip
+                    while True:  # the rest of the log
+                        text, offset = service.log(job, offset)
+                        if not text:
+                            break
+                        lines(partial + text)
+                        partial = ""
+                    if partial:
+                        lines(partial + "\n")
+                    break
+            if cancel is not None and cancel.is_set() and not cancelled:
+                cancelled = True
+                service.cancel(job)
+            running = state.get("elapsed") or 0.0
+            if timeout_s is not None and running > timeout_s and not (timed_out or cancelled):
+                timed_out = True
+                service.cancel(job)
+            if not text:
+                if parser is not None:
+                    emit(parser.safe(parser.poll))
+                time.sleep(service.poll_s)
+        outcome = state["state"]
+        rc = state.get("exit_code")
+        if outcome in ("completed", "failed"):
+            returncode = rc if rc is not None else (0 if outcome == "completed" else 1)
+        elif outcome == "cancelled":
+            returncode = rc if rc not in (None, 0) else -15
+        else:
+            returncode = rc if rc not in (None, 0) else -1
+        ok = returncode == 0 and not (cancelled or timed_out)
+        try:
+            service.finish(job, workdir, say, ok=ok)
+        except Exception:
+            if ok:  # the results are still there: the job stays pending, to fetch again
+                raise
+        if ctx is not None:
+            pending.remove(ctx.root, job)
+        if parser is not None:
+            emit(parser.safe(parser.poll))
+            emit(parser.safe(lambda: parser.finish(ok)))
+        if state.get("message"):
+            say(f"[puzzle] {state['message']}")
+        return JobResult(
+            returncode=returncode, duration_s=float(state.get("elapsed") or 0.0), log=log_path,
+            runtime=f"{runtime.describe()} via the job runner", cancelled=cancelled,
+            timed_out=timed_out, outcome=outcome, message=state.get("message") or "",
+        )  # fmt: skip
+    finally:
+        if log is not None:
+            log.close()
 
 
 def log_tail(path: Path, lines: int = 20, max_bytes: int = 64 * 1024) -> list[str]:

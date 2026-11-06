@@ -130,6 +130,13 @@ platforms = ["linux-64", "win-64"]
 [feature.code-aster.dependencies]
 code-aster = "18.1.*"
 
+[feature.runner.dependencies]
+# The job runner's own copy of PSI/J and its pure-Python dependencies (ADR 0067):
+# `scripts/build_runner.py` packs them into the runner zipapp. Python 3.10, the oldest the
+# runner supports, so what it carries runs on older cluster Pythons too.
+python = "3.10.*"
+psij-python = ">=0.9.11"
+
 [environments]
 default = { solve-group = "main" }
 dev = { features = ["dev", "gui"], solve-group = "main" }
@@ -141,3 +148,4 @@ code-aster = { features = ["code-aster"], no-default-feature = true }
 netgen = { features = ["netgen"], no-default-feature = true }
 scripts = { features = ["scripts"], no-default-feature = true }
 mmg = { features = ["mmg"], no-default-feature = true }
+runner = { features = ["runner"], no-default-feature = true }

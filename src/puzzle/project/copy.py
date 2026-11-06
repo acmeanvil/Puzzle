@@ -58,11 +58,15 @@ def save_as(root: Path, dest: Path, name: str | None = None, version: int | None
         raise PuzzleError(
             f"'{dest}' is not empty: choose a new or empty folder", code="exists", path=str(dest)
         )
+    from puzzle.jobs.pending import FILE as JOBS
+
     work = root / WORK_DIR
 
     def ignore(folder: str, entries: list[str]) -> set[str]:
         here = Path(folder)
-        skip = {e for e in entries if here / e == root / LOCK}
+        # the lock, and the jobs a runner holds for this project (ADR 0067): a copy that
+        # picked them up would fetch the original's solves into the original's folders
+        skip = {e for e in entries if here / e in (root / LOCK, root / JOBS)}
         if here == work:  # solver working folders are disposable; meshes are kept
             skip |= {e for e in entries if e not in KEPT_WORK}
         return skip

@@ -76,6 +76,7 @@ class RunStudy(_Command):
     reuse: bool = True
     timeout_s: float | None = None
     host: str | None = None  # a remote host for this run only (ADR 0021)
+    resume: str | None = None  # a job runner's job to pick up instead of solving (ADR 0067)
     undoable: ClassVar[bool] = False
     edits_model: ClassVar[bool] = False
 

@@ -171,7 +171,7 @@ class HostsDialog(QDialog):
         old = self.hosts.get(values["name"])
         if old is not None:  # what the form doesn't show (images, commands) is kept
             values.update(images=old.images, keep_case=old.keep_case, ssh=old.ssh,
-                          rsync=old.rsync)  # fmt: skip
+                          rsync=old.rsync, python=old.python)  # fmt: skip
         return hosts.Host(**values)
 
     # --- actions -----------------------------------------------------------------------

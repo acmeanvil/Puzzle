@@ -13,6 +13,7 @@
     puzzle autonomy PROJECT [--level ...]        what agents may do here
     puzzle schema {objects,commands}             JSON schemas for clients and agents
     puzzle mcp PROJECT                           serve the project to agents over MCP (stdio)
+    puzzle jobs PROJECT [--resume|--cancel|--dismiss]  solves with a job runner (ADR 0067)
 
 PROJECT is a project directory (one TOML file per object). Results go to
 PROJECT/results, solver working files to PROJECT/.puzzle/runs. Every change goes
@@ -522,6 +523,24 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("action", choices=["list", "add"])
     p.add_argument("package", nargs="?", help="add: a conda-forge package, e.g. sympy")
     p.set_defaults(handler=_scripts)
+
+    p = sub.add_parser("jobs", help="solves with a job runner, not yet home (ADR 0067): list, "
+                       "resume, cancel or dismiss them")  # fmt: skip
+    p.add_argument("project", type=Path)
+    p.add_argument("--live", action="store_true", help="ask remote hosts too (over SSH)")
+    p.add_argument("--json", action="store_true")
+    act = p.add_mutually_exclusive_group()
+    act.add_argument("--resume", nargs="?", const="all", metavar="JOB|STUDY|all",
+                     help="pick a job up and bring its results home (default: all of them, "
+                     "finished ones first)")  # fmt: skip
+    act.add_argument("--cancel", metavar="JOB|STUDY", help="stop a job (it stays listed)")
+    act.add_argument("--dismiss", metavar="JOB|STUDY", help="forget a job without its "
+                     "results (cancelled first if it runs)")  # fmt: skip
+    p.add_argument("--delete-remote", action="store_true",
+                   help="with --dismiss: delete the case on the remote host too")  # fmt: skip
+    p.add_argument("-v", "--verbose", action="store_true",
+                   help="with --resume: print the solver's log")  # fmt: skip
+    p.set_defaults(handler=_jobs)
 
     p = sub.add_parser("hosts", help="remote hosts to run studies on (ADR 0021)")
     p.add_argument("action", choices=["list", "add", "check", "remove"])
@@ -1504,6 +1523,71 @@ def _trust(args) -> int:
     trust.trust(args.project)
     print(f"'{project.name}' is trusted" + (f"; its code can run: {', '.join(held)}" if held
                                             else ""))  # fmt: skip
+    return 0
+
+
+def _jobs(args) -> int:
+    """The project's solves with a job runner (ADR 0067): list, resume, cancel, dismiss."""
+    from puzzle.jobs import overview
+
+    root = args.project
+    _load(root)  # a project, or a clear error
+    if args.cancel:
+        for e in overview.find(root, args.cancel):
+            print(f"{e['job']}: {overview.cancel(root, e['job'])}")
+        return 0
+    if args.dismiss:
+        for e in overview.find(root, args.dismiss):
+            out = overview.dismiss(root, e["job"], delete_remote=args.delete_remote)
+            done = ", ".join(k for k in ("cancelled", "forgotten", "deleted") if out[k])
+            note = f" ({out['note']})" if out["note"] else ""
+            print(f"Dismissed {e['job']}{': ' + done if done else ''}{note}")
+        return 0
+    if args.resume:
+        from puzzle.commands import Session
+
+        rows = overview.jobs(root, live=args.live)
+        if args.resume != "all":
+            wanted = {e["job"] for e in overview.find(root, args.resume)}
+            rows = [r for r in rows if r.job in wanted]
+        if not rows:
+            print("No solves to pick up.")
+            return 0
+        failed = 0
+        for r in overview.resume_order(rows):
+            name = r.study or "a removed study"
+            print(f"Picking up {name} ({r.job}) on {r.where} ...")
+            status = None if args.verbose else _LiveStatus()
+            try:
+                out = Session(root).resume(r.job, on_output=print if args.verbose else None,
+                                           on_event=status)  # fmt: skip
+            except PuzzleError as exc:
+                failed += 1
+                print(f"  {name}: {exc.message} [{exc.code}]")
+                continue
+            finally:
+                if status is not None:
+                    status.close()
+            run = out.run
+            print(f"  {name}: home, run {run.run_id[:8]}" if run is not None and run.run_id
+                  else f"  {name}: {out.status}")  # fmt: skip
+        return 1 if failed else 0
+    rows = overview.jobs(root, live=args.live)
+    if args.json:
+        print(json.dumps([r.to_dict() for r in rows], indent=2))
+        return 0
+    if not rows:
+        print("No solves are with a job runner for this project.")
+        return 0
+    for r in rows:
+        line = f"{r.job}  {r.study or '(removed study)'}  [{r.solver}]  {r.where}  {r.state}"
+        print(line + (f"  {overview.words(r.elapsed)}" if r.elapsed is not None else ""))
+        if r.last_line:
+            print(f"    {r.last_line}")
+        if r.message:
+            print(f"    {r.message}")
+    if any(r.state == overview.NOT_ASKED for r in rows):
+        print("Remote hosts were not asked; --live asks them.")
     return 0
 
 

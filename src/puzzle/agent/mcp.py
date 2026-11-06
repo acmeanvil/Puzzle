@@ -703,6 +703,45 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         found = hosts.check(hosts.get(name))
         return asdict(found) | {"words": found.words()}
 
+    # --- jobs with a runner (ADR 0067) ---------------------------------------------
+
+    @tool(description="The project's solves that are with a job runner and not home yet "
+          "(ADR 0067): each job's id, study, solver, where (this computer or a host), "
+          "state in words (Queued, Running, Finished, Failed, Cancelled, ...), elapsed "
+          "seconds and the log's last line. A finished one waits for job_resume to bring "
+          "its results home. `live` asks remote hosts too (SSH: slow).")  # fmt: skip
+    @guarded
+    def jobs_list(live: bool = False) -> dict[str, Any]:
+        from puzzle.jobs import overview
+
+        session()  # refused when MCP access is off
+        return {"jobs": [r.to_dict() for r in overview.jobs(root, live=live)]}
+
+    @tool(description="Pick up a pending job (its id, or its study's name): the same run "
+          "attached to the job, its results stored as from any run. A run, so the "
+          "autonomy level decides: refused at advise, a proposal at propose.")  # fmt: skip
+    @guarded
+    def job_resume(job: str) -> dict[str, Any]:
+        from puzzle.jobs import overview
+
+        s = session()
+        (first, *_) = overview.find(root, job)
+        return s.resume(first["job"], actor).to_dict()
+
+    @tool(description="Stop a pending job (its id, or its study's name: all its jobs). It "
+          "stays listed until resumed or dismissed by the user. Agents cancel only where "
+          "the autonomy level lets them act.")  # fmt: skip
+    @guarded
+    def job_cancel(job: str) -> dict[str, Any]:
+        from puzzle.jobs import overview
+
+        s = session()
+        if actor.is_agent and s.project.agent.level not in ("act", "act_in_budget"):
+            raise PuzzleError("cancelling a solve needs autonomy 'act'; ask the user",
+                              code="not_allowed")  # fmt: skip
+        return {"cancelled": {e["job"]: overview.cancel(root, e["job"])
+                              for e in overview.find(root, job)}}  # fmt: skip
+
     # --- versions (ADR 0059) --------------------------------------------------------
 
     @tool(description="The project's versions, newest first: number, time, by, what, known "

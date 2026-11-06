@@ -28,6 +28,7 @@ def _example(tmp_path) -> Path:
     (root / ".puzzle" / "runs" / "gui-mesh").mkdir(parents=True)  # a kept mesh
     (root / ".puzzle" / "runs" / "gui-mesh" / "mesh.msh").write_text("mesh")
     (root / ".puzzle" / "lock").write_text("held")
+    (root / ".puzzle" / "jobs.json").write_text('{"jobs": [{"job": "j1"}]}')  # ADR 0067
     return root
 
 
@@ -42,6 +43,7 @@ def test_a_full_copy_with_its_own_name_and_nothing_shared(tmp_path):
                 ".puzzle/runs/gui-mesh/mesh.msh"):  # fmt: skip
         assert (done.root / rel).exists(), rel
     assert not (done.root / ".puzzle" / "lock").exists()  # the original's lock stays
+    assert not (done.root / ".puzzle" / "jobs.json").exists()  # and its runner's jobs
     assert not (done.root / ".puzzle" / "runs" / "study-1").exists()  # disposable
     # Independent: changing the copy leaves the original alone.
     (done.root / "bar.step").write_text("changed")

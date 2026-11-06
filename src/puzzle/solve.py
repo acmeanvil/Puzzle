@@ -6,6 +6,8 @@ transferred fields are mapped onto its mesh (puzzle.transfer) and handed to its 
 
 from __future__ import annotations
 
+import shutil
+import tempfile
 import threading
 import time
 from collections.abc import Callable
@@ -300,9 +302,21 @@ def _run_study(
         indices = [n - 1, n] if limit is not None and _preloaded(steps, n) else [n]
         seen = _in_step(project, study.component, indices) if limit is not None else project
         begin("write")
-        input_file = adapter.write_input(
-            seen, part, written, where, _step_inputs(inputs, n, parts, steps)
-        )
+        from puzzle.jobs import pending
+
+        if pending.attached(where):  # resuming (ADR 0067): the job's folder is left alone
+            scratch = Path(tempfile.mkdtemp(prefix=".resume-", dir=where.parent))
+            try:
+                made = adapter.write_input(
+                    seen, part, written, scratch, _step_inputs(inputs, n, parts, steps)
+                )
+                input_file = where / made.relative_to(scratch)
+            finally:
+                shutil.rmtree(scratch, ignore_errors=True)
+        else:
+            input_file = adapter.write_input(
+                seen, part, written, where, _step_inputs(inputs, n, parts, steps)
+            )
         lap("write")
         begin("solve")
         parser = adapter.progress(input_file, n, len(parts))
@@ -330,6 +344,12 @@ def _run_study(
             )  # fmt: skip
         if not job.ok:
             tail = log_tail(job.log)
+            if job.outcome in ("walltime_exceeded", "out_of_memory", "job_lost"):
+                raise StudyError(  # the host ended it, not the solver (ADR 0067)
+                    job.message or f"{study.solver} ended on its host: {job.outcome}",
+                    code=job.outcome, path=study.name,
+                    details={"log": str(job.log), "log_tail": tail},
+                )  # fmt: skip
             from puzzle.jobs.remote import RemoteRuntime, failure
 
             if isinstance(runtime, RemoteRuntime):  # ADR 0021: the host's own failures

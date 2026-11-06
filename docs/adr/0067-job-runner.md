@@ -1,6 +1,6 @@
 # 0067. Hand every solve to a job runner, the same here and on remote hosts
 
-- Status: Proposed
+- Status: Accepted (2026-11-05); built (2026-11-05)
 - Date: 2026-11-05
 
 ## Context
@@ -27,7 +27,7 @@ already in the right place. What sits behind it is too thin:
 - **Logs cross the network whole.** Progress is parsed here, so a remote solver's log is
   streamed in full (capped at 256 MB) to be read line by line.
 
-## Decision (proposed)
+## Decision
 
 1. **A job runner, `puzzle-runner`: a small program that owns solves.** It takes a case
    folder, a command, a runtime (native, Docker, Podman, Apptainer), resources (processes,
@@ -98,13 +98,105 @@ already in the right place. What sits behind it is too thin:
 3. Schedulers in Python (or through PSI/J), the per-host queue and limits, GPUs.
 4. The Jobs panel, CLI and MCP tools, and the skill `remote-runs` updated.
 
-## Open questions
+## Built (2026-11-05)
 
-- Whether PSI/J is a good fit (licence, dependencies, Windows) or a thin layer of our own
-  is simpler.
-- Whether the local runner should be on by default, or only when the user asks for runs
-  that outlive Puzzle.
-- How long a host keeps a finished job's case before cleaning it up.
+- **The runner** (`src/puzzle/runner/`, standard library only, Python 3.10+) is a daemon of
+  its own: one per user and protocol version (`<dir>/p1/`), jobs as JSON records written
+  atomically, JSON lines over a Unix socket (owner-only; a short path in the temp folder
+  when the folder's is too long for a socket). Requests: hello (protocol checked), submit,
+  status, log (by byte offset, so only new text crosses), cancel, manifest, forget (the
+  case deleted only when the client marked it owned and the job has ended). It stops after
+  15 minutes with nothing running and no client.
+- **Jobs without a scheduler** are its own processes, each in a session of its own (a
+  cancel stops the solver's children too; SIGKILL after 10 s). Each runs `puzzle-solve.sh`,
+  which writes `solver.log` and its own exit status (`puzzle-job.rc`), so how a job ended
+  survives the runner stopping. They queue for the runner's cores (this computer's physical
+  cores, a host's `cores`) and memory; a scheduler queues its own.
+- **Schedulers through PSI/J** (Slurm, PBS; LSF wired but untested). Found while building:
+  - PSI/J's executors package imports its local executor, which needs psutil, so the
+    runner loads PSI/J without it;
+  - its Slurm script always exits 0, so sacct's exit code says nothing about the solve:
+    only `puzzle-job.rc` (else PSI/J's `.ec`) does, and a job counts as a success only
+    when one of them says 0;
+  - one squeue line it can't parse (a reason with spaces, an unknown reason) or a PBS id
+    with no history fails every job's poll, so the runner parses both tolerantly;
+  - a queue that keeps failing makes PSI/J fail every job: the runner reattaches instead,
+    for up to 10 minutes;
+  - sacct can lag behind the queue, so a state that hasn't ended is asked again for up to
+    60 s;
+  - PSI/J leaves its scripts and outputs behind, so the runner removes them.
+  Polling every `PUZZLE_RUNNER_QUEUE_POLL` s (10), giving up after
+  `PUZZLE_RUNNER_QUEUE_ERRORS` failures in a row (12).
+- **On a host**, `build.bundle()` packs the runner and PSI/J's pure-Python tree (from the
+  pixi `runner` environment) into one archive, named by its hash. Puzzle sends it over
+  SSH once, unpacks it into a temporary folder and moves that into place. It then runs
+  `python3 -I -S main.py connect` (the host's `python`, else its pixi environments' or
+  the first Python 3.10+), isolated so the host's own packages never shadow the bundle's.
+  Without the `runner` environment the bundle holds the runner alone, which refuses
+  scheduler jobs (`unsupported`).
+- **Puzzle's side.** `run_job` hands the solve to `service.service_for(runtime)`:
+  `LocalService` runs it in the run folder itself, and `RemoteService` stages it with rsync.
+  Either way it submits, follows the log and state, and cancels. A remote case comes back
+  into a temporary folder, is checked against the runner's manifest, and each file is
+  moved into the run folder; only then is the host's copy deleted (`transfer_failed`
+  otherwise, with the host's copy kept). The timeout and the core-hours count running
+  time only, not time in a queue (ADR 0021's leftover). The runner's endings become
+  codes: `out_of_memory`, `walltime_exceeded`, `job_lost`.
+- **Pending jobs and resuming.** A run's job is recorded in `.puzzle/jobs.json` when it is
+  submitted and removed when its results are in. The file is left out of Save as copies
+  and archives, and each entry names the process following it. `Session.resume(job)` (a
+  `run_study` command with `resume`, so it is proposed at "propose" and picked up on
+  accepting) re-enters the same run folder attached to the job, with input written to a
+  scratch folder so a running job's files are left alone; finished points and upstream
+  studies are reused. A job another live Puzzle follows is refused (`busy`).
+- **Managing them.** The Jobs panel (Window → Jobs: study, solver, where, state, elapsed,
+  last line; Resume, Resume all, Cancel, Open log, Dismiss) and, on opening a project with
+  pending jobs, a toast offering to pick them up. Also CLI `puzzle jobs`, MCP `jobs_list`,
+  `job_resume` and `job_cancel` (agents at act only), and the skill `job-runner`.
+- **Tests:**
+  - `tests/test_runner.py`: the daemon, the queue, cancels, solves here and on a fake
+    host, a damaged fetch, a solve that outlives Puzzle, a CalculiX study resumed, and
+    followers and proposals;
+  - `test_runner_schedulers.py`: Slurm and PBS through PSI/J from the bundle under Python
+    3.10, eight Slurm endings, a failing queue, cancel, a restarted runner reattaching;
+  - `test_jobs_overview.py`, `test_jobs_panel.py`.
+  Tests default to `PUZZLE_RUNNER=off`.
+
+### Not done yet
+
+- Progress is still parsed by Puzzle from the log as it arrives (decision 4). The log
+  crosses by offset, so nothing is sent twice, but the whole log does cross.
+- LSF has no fake scheduler, so no tests. GPUs are passed to PSI/J but not limited in the
+  runner's own queue.
+- Windows runs solves in-process: the runner needs Unix sockets and process groups.
+- Cancel and dismiss from the Jobs panel are working state, not history entries.
+
+## Decided (2026-11-05, maintainer)
+
+- **PSI/J, behind a clean interface.** PSI/J (MIT, pure Python, on conda-forge) drives the
+  batch schedulers. Read before deciding:
+  - It calls `sbatch`/`squeue` itself, so it runs beside the scheduler: inside the runner
+    on the host, never in the GUI.
+  - It reads states from `squeue` only. A job that has left the queue counts as completed,
+    with the exit code from a file its job script writes. So the runner still asks `sacct`
+    for the final state (out of memory, node failure, timeout) where accounting is on.
+  - It reattaches to a job by its scheduler id (`attach`), which is what runs that outlive
+    Puzzle need.
+  - Its local executor needs psutil (compiled) and a SIGCHLD handler, so the runner starts
+    unscheduled jobs itself: a detached process that writes its own exit status.
+  - It pins `packaging<=25`, which Puzzle's environment is past. The runner is therefore
+    always its own process. On a host it runs from one bundle that carries PSI/J and its
+    pure-Python dependencies (built from the pixi `runner` environment, Python 3.10, so
+    older cluster Pythons can run it). Puzzle never imports PSI/J. PSI/J loads its plugins
+    and templates from files, so the bundle is a folder unpacked from one archive, not a
+    zipapp.
+- **On by default, selectable.** Settings > Solvers > "Run solves through the job runner"
+  (`solvers.runner`, on). Off, solves run inside Puzzle as before and stop with it.
+- **A finished job comes home whole, then leaves the host.** The case is fetched into a
+  temporary folder beside the run folder, checked against the runner's manifest (every
+  file's size and hash), and each file moved into the run folder (an atomic rename per
+  file). Only then is the runner told to delete it there. A failed or partial fetch leaves the remote case alone, to be fetched
+  again.
 
 ## Alternatives considered
 
