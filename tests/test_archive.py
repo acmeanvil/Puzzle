@@ -199,3 +199,137 @@ def test_the_cli_archives_and_unarchives(project, tmp_path, capsys):
     assert "Wrote x.puzzle" in capsys.readouterr().out
     assert main(["unarchive", str(tmp_path / "x.puzzle"), str(tmp_path / "y")]) == 0
     assert (tmp_path / "y" / "project.toml").exists()
+
+
+def _with_member(items: dict, name: str, data: bytes) -> None:
+    import hashlib
+
+    items[name] = data
+    info = json.loads(items["archive.json"])
+    info["members"][name] = hashlib.sha256(data).hexdigest()
+    items["archive.json"] = json.dumps(info).encode()
+
+
+def test_a_version_naming_files_outside_the_project_is_refused(project, tmp_path):
+    good = archive.write(project, tmp_path / "good.puzzle").path
+    with zipfile.ZipFile(good) as z:
+        name = next(n for n in z.namelist() if n.startswith("versions/") and n.endswith(".json"))
+        data = json.loads(z.read(name))
+    digest = next(iter(data["files"].values()))
+    for bad in ("../../.zshrc", "/etc/escape"):
+        crafted = {**data, "files": {bad: digest}}
+
+        def change(items, c=crafted):
+            _with_member(items, name, json.dumps(c).encode())
+
+        sent = _tampered(good, tmp_path / "v.puzzle", change)
+        dest = tmp_path / "to-v"
+        with pytest.raises(PuzzleError, match="unsafe") as refused:
+            archive.read(sent, dest)
+        assert refused.value.code == "invalid_archive" and not dest.exists()
+
+
+def test_it_unpacks_into_a_new_nested_folder(project, tmp_path):
+    out = archive.write(project, tmp_path / "a.puzzle")
+    opened = archive.read(out.path, tmp_path / "new" / "deeper" / "there")
+    assert (opened.root / "project.toml").exists()
+    assert [p.name for p in opened.root.parent.iterdir()] == ["there"]  # no stage left
+
+
+def test_autonomy_is_never_carried_in(project, tmp_path):
+    from puzzle.project.store import load_project, save_project
+
+    p = load_project(project)
+    p.agent.level = "act"
+    save_project(p, project)
+    opened = archive.read(archive.write(project, tmp_path / "a.puzzle").path, tmp_path / "t")
+    assert load_project(opened.root).agent.level == "advise"
+    assert any("sender let agents act" in n for n in opened.notes) and not opened.holds_code
+
+
+def test_a_failure_after_unpacking_leaves_no_half_project(project, tmp_path, monkeypatch):
+    from puzzle.project import versions
+
+    out = archive.write(project, tmp_path / "a.puzzle")
+
+    def broken(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(versions, "save", broken)
+    with pytest.raises(OSError, match="disk full"):
+        archive.read(out.path, tmp_path / "new" / "there")
+    assert not (tmp_path / "new").exists()
+    (tmp_path / "empty").mkdir()
+    with pytest.raises(OSError):
+        archive.read(out.path, tmp_path / "empty")
+    assert (tmp_path / "empty").is_dir() and not any((tmp_path / "empty").iterdir())
+
+
+def test_a_huge_archive_json_is_refused_unread(project, tmp_path, monkeypatch):
+    out = archive.write(project, tmp_path / "a.puzzle")
+    monkeypatch.setattr(archive, "MAX_MANIFEST", 100)
+    with pytest.raises(PuzzleError, match="larger than") as refused:
+        archive.manifest(out.path)
+    assert refused.value.code == "invalid_archive"
+
+
+def test_latest_results_keep_every_point_of_the_latest_sweep(tmp_path, monkeypatch):
+    from types import SimpleNamespace as Run
+
+    from puzzle.results import store
+
+    (tmp_path / "results").mkdir()
+    runs = [Run(study_id="s", point='{"E": "1"}', run_id="old1"),
+            Run(study_id="s", point='{"E": "2"}', run_id="old2"),
+            Run(study_id="s", point='{"E": "1"}', run_id="new1"),
+            Run(study_id="s", point='{"E": "2"}', run_id="new2"),
+            Run(study_id="t", point=None, run_id="t1"),
+            Run(study_id="t", point=None, run_id="t2")]  # fmt: skip
+    deleted = []
+
+    class Store:
+        def __init__(self, path):
+            pass
+
+        def runs(self):
+            return runs
+
+        def delete_run(self, run_id):
+            deleted.append(run_id)
+
+    monkeypatch.setattr(store, "ResultStore", Store)
+    archive._prune(tmp_path, Include(results="latest"))
+    assert sorted(deleted) == ["old1", "old2", "t1"]
+
+
+def test_an_absolute_path_inside_the_project_is_made_relative(project, tmp_path):
+    from puzzle.model.schema import Geometry
+    from puzzle.project.store import load_project, save_project
+
+    p = load_project(project)
+    geo = p.of_type(Geometry)[0]
+    rel = geo.source
+    geo.source = str((project / rel).resolve())  # the sender's own disk
+    save_project(p, project)
+    opened = archive.read(archive.write(project, tmp_path / "a.puzzle").path, tmp_path / "t")
+    assert load_project(opened.root).of_type(Geometry)[0].source == Path(rel).as_posix()
+    assert not any("outside the project" in n for n in opened.notes)
+
+
+def test_the_open_form_refuses_a_name_that_is_a_path():
+    pytest.importorskip("PySide6")
+    from puzzle.gui.archive_dialog import _check_open
+
+    assert _check_open({"folder": "/x", "name": "Beam"}) is None
+    for bad in ("../up", "a/b", "a\\b", "..", "C:x"):
+        assert _check_open({"folder": "/x", "name": bad})
+
+
+def test_a_manifest_whose_members_are_not_a_table_is_refused(tmp_path):
+    bad = tmp_path / "bad.puzzle"
+    with zipfile.ZipFile(bad, "w") as z:
+        z.writestr("archive.json", json.dumps({"format": 1, "members": ["project.toml"]}))
+        z.writestr("project.toml", "")
+    with pytest.raises(PuzzleError) as err:
+        archive.read(bad, tmp_path / "out")
+    assert err.value.code == "invalid_archive"

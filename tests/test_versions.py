@@ -218,3 +218,38 @@ def test_a_batch_keeps_the_project_as_found_too(tmp_path):
     s.submit_batch([{"command": "edit", "object": str(study.id),
                      "ops": [{"op": "set", "path": "name", "value": "Batched"}]}])  # fmt: skip
     assert [v.trigger for v in versions.versions(root)] == ["first"]
+
+
+def test_a_manifest_naming_files_outside_the_project_is_refused(tmp_path):
+    """A manifest may arrive in an archive (ADR 0061), and a restore writes where it
+    says: paths leaving the project are refused before anything is written."""
+    root = _project(tmp_path)
+    v = Session(root).save_version(label="look")
+    digest = v.files["project.toml"]
+    path = root / "versions" / f"{v.number}.json"
+    data = json.loads(path.read_text())
+    for bad in ("../../escape.txt", "/tmp/escape.txt", "C:/escape.txt", "..\\escape.txt",
+                "versions/1.json"):  # fmt: skip
+        path.write_text(json.dumps({**data, "files": {**data["files"], bad: digest}}))
+        with pytest.raises(PuzzleError) as refused:
+            versions.get(root, v.number)
+        assert refused.value.code == "invalid"
+    path.write_text(json.dumps({**data, "files": {"project.toml": "../../x"}}))
+    with pytest.raises(PuzzleError, match="bad hash"):
+        versions.get(root, v.number)
+    path.write_text(json.dumps(data))
+    # A version made in memory, and a link inside the project leading out, too.
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (root / "link").symlink_to(outside)
+    for bad in ("../escape.txt", "link/escape.txt"):
+        crafted = versions.Version(**{**data, "files": {bad: digest}})
+        with pytest.raises(PuzzleError) as refused:
+            versions.restore_files(root, crafted)
+        assert refused.value.code == "invalid"
+    with pytest.raises(PuzzleError):
+        versions.materialize(root, versions.Version(**{**data, "files": {"../e.txt": digest}}),
+                             tmp_path / "copy")  # fmt: skip
+    assert not any(outside.iterdir()) and not (tmp_path / "escape.txt").exists()
+    assert not (tmp_path / "e.txt").exists()
+    assert (root / "project.toml").exists()

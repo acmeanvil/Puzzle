@@ -13,10 +13,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import zlib
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from puzzle.errors import PuzzleError
@@ -36,6 +37,7 @@ TRIGGERS = {  # why an automatic version was made, as the browser says it
     "user": "Saved by you",
 }
 KEEP_AUTO = 30  # automatic versions kept in full; older ones thinned to one a day
+DIGEST = re.compile(r"[0-9a-f]{64}")
 
 
 @dataclass
@@ -94,12 +96,37 @@ def folder(root: Path) -> Path:
     return Path(root) / VERSIONS_DIR
 
 
+def safe_path(rel: str) -> str:
+    """A manifest's file path that stays inside the project, else an error: a manifest
+    may have come in an archive (ADR 0061), and a restore writes where it says."""
+    p = PurePosixPath(rel) if isinstance(rel, str) else None
+    if (p is None or not p.parts or rel.startswith(("/", "\\")) or "\\" in rel
+            or p.is_absolute() or ":" in p.parts[0] or ".." in p.parts
+            or p.parts[0] in LEFT_OUT):  # fmt: skip
+        raise PuzzleError(f"a version lists the file '{rel}', which is not inside the project",
+                          code="invalid", path=str(rel))  # fmt: skip
+    return rel
+
+
+def check_manifest(data: dict, name: str = "") -> dict:
+    """A manifest's files checked: safe paths, and blob names that are SHA-256 digests."""
+    files = data.get("files", {}) if isinstance(data, dict) else None
+    if not isinstance(files, dict):
+        raise PuzzleError(f"version manifest {name} is not a version", code="invalid", path=name)
+    for rel, digest in files.items():
+        safe_path(rel)
+        if not isinstance(digest, str) or not DIGEST.fullmatch(digest):
+            raise PuzzleError(f"version manifest {name} lists '{rel}' with a bad hash",
+                              code="invalid", path=name)  # fmt: skip
+    return data
+
+
 def versions(root: Path) -> list[Version]:
     """Every version, oldest first."""
     out = []
     for path in folder(root).glob("*.json"):
         if path.stem.isdigit():
-            out.append(Version(**json.loads(path.read_text())))
+            out.append(Version(**check_manifest(json.loads(path.read_text()), path.name)))
     return sorted(out, key=lambda v: v.number)
 
 
@@ -374,13 +401,25 @@ def collect(root: Path) -> int:
 
 
 def content(root: Path, digest: str) -> bytes:
+    if not isinstance(digest, str) or not DIGEST.fullmatch(digest):
+        raise PuzzleError(f"'{digest}' is not a file's hash", code="invalid")
     return zlib.decompress((folder(root) / BLOBS / digest).read_bytes())
+
+
+def _inside(base: Path, rel: str) -> Path:
+    """Where `rel` goes under `base`, refused when it (or a link on the way) leads out."""
+    path = Path(base) / safe_path(rel)
+    if not path.resolve().is_relative_to(Path(base).resolve()):
+        raise PuzzleError(f"a version lists the file '{rel}', which leads outside the project",
+                          code="invalid", path=rel)  # fmt: skip
+    return path
 
 
 def materialize(root: Path, v: Version, dest: Path) -> None:
     """Write version `v`'s files under `dest` (a restore, or a copy from a version)."""
+    check_manifest({"files": v.files}, str(v.number))
     for rel, digest in v.files.items():
-        path = Path(dest) / rel
+        path = _inside(dest, rel)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(content(root, digest))
 
@@ -390,11 +429,14 @@ def restore_files(root: Path, v: Version) -> dict[str, list[str]]:
     remove the ones it didn't have. Results and the history stay. Callers hold the
     lock and make a "before restoring" version first."""
     root = Path(root)
+    check_manifest({"files": v.files}, str(v.number))
+    for rel in v.files:  # every path checked before anything is written
+        _inside(root, rel)
     now = hashes(root)
     written = [rel for rel, d in v.files.items() if now.get(rel) != d]
     removed = [rel for rel in now if rel not in v.files]
     for rel in written:
-        path = root / rel
+        path = _inside(root, rel)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(content(root, v.files[rel]))
     for rel in removed:

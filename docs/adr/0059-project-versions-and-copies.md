@@ -120,7 +120,12 @@ GUI Project → Save as new project… (⇧⌘S), CLI `puzzle save-as`.
   `materialize`, `summarize`), `puzzle/project/copy.py` (`save_as`), the session's
   `save_version`, `restore_version`, `mark_version` and its implicit versions (on the
   first change, before runs, after edits), undo of a restore putting its files back;
-  error code `exists`.
+  error code `exists`. Manifests' paths are checked when read and before a restore
+  or copy writes (`safe_path`, `check_manifest`: relative, no `..`, drive or
+  backslash, not under `results/`, `versions/` or the history, not through a link out
+  of the project; blob names SHA-256 digests), refused with code `invalid`, since a
+  manifest can arrive in an archive (ADR 0061). Save as makes an absolute geometry path
+  inside the project relative, so the copy reads its own file.
 - GUI `gui/versions_panel.py`, the window's `save_version_dialog`, `restore_version`,
   `roll_back_good`, `save_as` and `_save_as_dialog(version)`; CLI `versions`,
   `version-save`, `version-restore`, `save-as`; MCP `versions_list`, `version_save`,

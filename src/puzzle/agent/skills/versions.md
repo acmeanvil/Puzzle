@@ -52,6 +52,9 @@ call is refused (`not_allowed`): tell the user which version and why, and let th
 
 ## Mistakes
 
+- A version whose manifest lists a file outside the project (`..`, an absolute path,
+  through a link) is refused with code `invalid`: it was made by hand or came in a
+  crafted archive; don't edit manifests.
 - Restoring to undo one small change: use `undo`; a restore replaces everything.
 - Expecting results from a restored state that were deleted since: solve again.
 - Saving a version after every command: Puzzle already keeps them; save one at a

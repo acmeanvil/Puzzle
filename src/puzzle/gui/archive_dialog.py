@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from puzzle.errors import PuzzleError
 from puzzle.project import archive
 
 
@@ -57,6 +58,16 @@ def export_archive(window) -> archive.Written | None:
     return done
 
 
+def _check_open(v: dict) -> str | None:
+    """The name may become a folder inside the chosen one, so it is one name, not a path."""
+    if not v["folder"]:
+        return "Choose a folder"
+    name = (v.get("name") or "").strip()
+    if any(c in name for c in "/\\:") or name in (".", ".."):
+        return "The name can't hold / \\ or :, or be . or .."
+    return None
+
+
 def open_archive(window, path: str | None = None) -> archive.Opened | None:
     from puzzle.gui.quick_form import Ask
 
@@ -79,8 +90,12 @@ def open_archive(window, path: str | None = None) -> archive.Opened | None:
     ], intro=f"{Path(path).name}: '{info.get('name')}', written {info.get('written_at', '')} "
              f"by {info.get('by', '?')} with Puzzle {info.get('puzzle', '?')}. It holds {held}"
              + (f", {results}" if results else "") + ". It is checked before anything is "
-             "written.", check=lambda v: None if v["folder"] else "Choose a folder")  # fmt: skip
+             "written.", check=_check_open)  # fmt: skip
     if got is None:
+        return None
+    problem = _check_open(got)  # again: the form's check is advice a filled form can skip
+    if problem:
+        window.report(PuzzleError(problem, code="invalid", path=got.get("name")))
         return None
     dest = Path(got["folder"])
     if dest.exists() and any(dest.iterdir()):

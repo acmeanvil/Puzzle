@@ -90,8 +90,9 @@ def save_as(root: Path, dest: Path, name: str | None = None, version: int | None
         path = Path(given)
         full = path if path.is_absolute() else (root / path)
         full = full.resolve()
-        if root in full.parents:  # inside the project: copied with it already
-            return given
+        if root in full.parents:  # inside the project: copied with it already; an
+            # absolute path made relative, or the copy would read the original's file
+            return full.relative_to(root).as_posix() if path.is_absolute() else given
         if not full.exists():
             raise PuzzleError(
                 f"geometry file '{given}' is missing, so the copy can't take it along",

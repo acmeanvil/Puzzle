@@ -82,7 +82,7 @@ goes in.
 
 - **`puzzle/project/archive.py`.** `write(root, path, Include(results, versions, history))` stages a Save as copy (outside files into `imported/`, no lock, no solver working folders) and prunes it:
   - results `none` drops the store and the kept meshes;
-  - `latest` keeps each study's newest run (`ResultStore.delete_run` on the rest);
+  - `latest` keeps each study's newest run per sweep point, so a swept study keeps its latest sweep whole (`ResultStore.delete_run` on the rest);
   - versions and history can be left out.
 
   It then zips the copy with `archive.json` (format 1, the Puzzle version, when, by, name, the latest version's summary, what was included, every member's SHA-256). Files that are already compressed are stored, not deflated again. The archive is written to a `.part` file first, and archives are never put inside archives. `sizes(root)` gives each part's size for the form.
@@ -90,9 +90,11 @@ goes in.
   - the format (a newer one names the Puzzle that wrote it);
   - that every member is in the manifest and every manifest entry is present;
   - no `..`, absolute paths or links;
+  - every version manifest's paths inside the project (`versions.check_manifest`);
+  - `archive.json` and version manifests at most 64 MB, checked before reading;
   - the unpacked total (20 GB) and a member's ratio (a bomb).
 
-  It unpacks into a staging folder beside the destination, checks each member's hash as it streams, and moves the whole folder into place only when all passes, so a bad archive leaves nothing behind. A results store of an older format is dropped with a note. The receiver's copy is never trusted, whatever the sender's was. A project holding code (`trust.holds_code`) arrives at autonomy "advise", with a note. One version, "Copied from archive <name>", starts its history.
+  It makes the destination's parent folders, unpacks into a staging folder beside the destination, checks each member's hash as it streams, and moves the whole folder into place only when all passes, so a bad archive leaves nothing behind. A failure after the move (loading, saving, the version) removes the destination again (left empty if it was). A results store of an older format is dropped with a note. The receiver's copy is never trusted, whatever the sender's was, and neither is the sender's autonomy: every archive arrives at "advise" (decision 6 read as "never trusts on arrival"; a note when the sender's level was higher). A project holding code (`trust.holds_code`) says so in a note. Geometry naming files outside the project (only a hand-made archive has them) gets a note. The open form refuses a name holding `/`, `\` or `:` (it may become a folder). One version, "Copied from archive <name>", starts its history.
 - **Portability:** members use `/` and are relative. Names Windows refuses (reserved names, `<>:"\|?*`, a trailing dot or space) are refused at export. **Materials** need nothing extra: a project's materials are its own copies (ADR 0020), so decision 2's materials option and the library-clash note fell away.
 - **Clients:**
   - GUI: Project → Export project archive… (one form with each part's size, then where to save) and Open project archive… (the manifest shown first: name, who, when, what it holds; then the folder). A `.puzzle` file can also be dropped on the window or passed to `puzzle gui` (`gui/archive_dialog.py`).

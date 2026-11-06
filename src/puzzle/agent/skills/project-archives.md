@@ -15,7 +15,8 @@ materials are its own copies.
 ## Steps
 
 1. Choose what goes in. The model always goes in. `results` is `none` (smallest: the
-   receiver solves again), `latest` (each study's newest run, the default) or `all`.
+   receiver solves again), `latest` (each study's newest run, the default; a swept study keeps
+   each point's newest run, so the whole latest sweep) or `all`.
    `versions` and `history` are true or false. Results are a cache by run key, so leave
    them out for mail-sized files.
 2. Write it with MCP `project_archive(path, results, versions, history)`. `path` must
@@ -31,17 +32,21 @@ materials are its own copies.
 
 - The format: a newer one is refused, naming the Puzzle that wrote it.
 - Every file against its hash: a damaged archive is refused.
-- Paths: nothing outside the destination, no absolute paths, no links.
+- Paths: nothing outside the destination, no absolute paths, no links; every
+  version's manifest lists only files inside the project.
+- `archive.json` (and each version manifest) at most 64 MB.
 - The unpacked size, against zip bombs.
 
-All of these come before anything is written, as code `invalid_archive`. A results
+All of these come before anything is written, as code `invalid_archive`; a failure
+after unpacking removes the half-imported folder. A results
 store in an older format is dropped with a note (solve again). At export, file names
 Windows can't make (`aux`, `:`, a trailing dot) are refused.
 
-## Code in an archive
+## Code and autonomy in an archive
 
-A project with script operators or custom PDE equations arrives untrusted (ADR 0062),
-and its agent autonomy is set to "advise". Say so to the user. Only they can trust it
+Every archive arrives with agent autonomy at "advise", whatever the sender allowed
+(a note says when the sender's was higher). A project with script operators or custom
+PDE equations also arrives untrusted (ADR 0062). Say so to the user. Only they can trust it
 (Project → Trust this project…) and raise the autonomy again. Never suggest trusting a
 project whose source the user doesn't know.
 
