@@ -12,7 +12,6 @@ from __future__ import annotations
 import hashlib
 import io
 import os
-import sys
 import tarfile
 from pathlib import Path
 
@@ -35,10 +34,13 @@ def vendor_dir() -> Path | None:
     else beside this Python's environment, else in the source checkout's .pixi)."""
     if os.environ.get("PUZZLE_RUNNER_VENDOR"):
         return Path(os.environ["PUZZLE_RUNNER_VENDOR"])
+    from puzzle.jobs.runtime import environment
+
     here = Path(__file__).resolve()
-    envs = [Path(sys.prefix).parent / "runner", here.parents[3] / ".pixi" / "envs" / "runner"]
-    for env in envs:
-        for lib in sorted(env.glob("lib/python3.*/site-packages")):
+    envs = [environment("runner"), here.parents[3] / ".pixi" / "envs" / "runner"]
+    for env in [e for e in envs if e is not None]:
+        libs = [*sorted(env.glob("lib/python3.*/site-packages")), env / "Lib" / "site-packages"]
+        for lib in libs:
             if (lib / "psij").is_dir():
                 return lib
     return None

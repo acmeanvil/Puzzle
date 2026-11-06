@@ -74,20 +74,14 @@ with open("out.json", "w") as f:
 
 
 def python() -> Path | None:
-    """The scripts environment's Python, beside Puzzle's own pixi environments."""
-    from puzzle.jobs.runtime import pixi_solver_dirs
+    """The scripts environment's Python, beside Puzzle's own environments."""
+    from puzzle.jobs.runtime import environment
 
     if os.environ.get("PUZZLE_SCRIPTS_PYTHON"):
         return Path(os.environ["PUZZLE_SCRIPTS_PYTHON"])
-    for d in pixi_solver_dirs():
-        env = Path(d).parent
-        if env.name == ENVIRONMENT:
-            exe = env / ("python.exe" if os.name == "nt" else "bin/python")
-            if exe.exists():
-                return exe
-    here = Path(sys.prefix).parent / ENVIRONMENT  # .pixi/envs/<dev> → .pixi/envs/scripts
-    exe = here / ("python.exe" if os.name == "nt" else "bin/python")
-    return exe if exe.exists() else None
+    env = environment(ENVIRONMENT)
+    exe = env / ("python.exe" if os.name == "nt" else "bin/python") if env else None
+    return exe if exe is not None and exe.exists() else None
 
 
 def imports(code: str) -> list[str]:

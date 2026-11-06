@@ -52,3 +52,32 @@ Found while building (macOS Intel):
   as "not found". The recipe sets `CI` and runs CMake once first.
 - Clipper2 at manifold's pinned commit uses `std::back_inserter` without `<iterator>`, which
   newer libc++ no longer includes by itself.
+
+## The installers
+
+`scripts/make_installer.py` writes conda constructor's `construct.yaml` from `pixi.lock`
+(`packaging/installer/<platform>/`, ignored by git), and `--build` builds it:
+
+```sh
+pixi run -e packaging make-installer --build                       # this platform, Puzzle's channel
+pixi run -e packaging make-installer --packages packaging/output --type sh --build  # a local puzzle-fem first
+pixi run -e packaging python scripts/smoke_installer.py packaging/installer/Puzzle-0.0.1-osx-64.sh
+```
+
+- An installer is exactly the lock: explicit package lists (`@EXPLICIT`, URL and md5), no
+  solving. The base environment is pixi's `app` environment (Puzzle and its GUI, in the
+  `main` solve group, so the same versions as `dev`, plus conda, which constructor needs
+  for extra environments and the Solvers page's Repair will use); the lock's PyPI entries (Puzzle,
+  py-slvs, manifold3d) become Puzzle's conda packages, whose dependencies must already be
+  in the lock.
+- Each solver environment (`calculix`, `fenicsx`, `code-aster`, `netgen`, `mmg`,
+  `scripts`, `runner`) is an extra environment with pixi's name, installed as
+  `<prefix>/envs/<name>`, where `jobs.runtime.environment` finds it. Those the lock lacks
+  on a platform are left out (Code_Aster on macOS, until decision 4's Linux machine).
+- puzzle-fem carries a menuinst entry (`recipes/puzzle-fem/menu.json`): the Start menu
+  and desktop on Windows (with `.puzzle` archives opening in it), an app in
+  `~/Applications` on macOS, a desktop entry on Linux.
+- Per user, no administrator; the installer asks nothing but where to install.
+- The smoke test installs in batch mode into a temporary folder (no shortcuts unless
+  `--shortcuts`), runs `puzzle --help`, solves the cantilever's Tip load with the
+  installed CalculiX with nothing on PATH, and checks each solver environment answers.

@@ -185,18 +185,31 @@ class NativeRuntime(Runtime):
 PIXI_SOLVER_ENVS = ("calculix-pardiso", "calculix", "fenicsx", "code-aster", "netgen")
 
 
+def environment(name: str) -> Path | None:
+    """Puzzle's own environment `name` (a solver's, netgen, mmg, scripts, runner), if
+    it is beside the one Puzzle runs in.
+
+    Two layouts: a pixi checkout's `.pixi/envs/<name>`, siblings of Puzzle's; and the
+    installer's (ADR 0068), where Puzzle is the base environment and the others are its
+    `envs/<name>`, as conda constructor lays them out. Anything else gives none.
+    """
+    here = Path(sys.prefix).resolve()
+    found = [here / "envs" / name]
+    if here.parent.name == "envs" and here.parent.parent.name == ".pixi":
+        found.append(here.parent / name)
+    return next((env for env in found if env.is_dir()), None)
+
+
 def pixi_solver_dirs() -> list[Path]:
-    """The solver environments beside the pixi environment Puzzle runs in.
+    """The solver environments' program folders beside the environment Puzzle runs in.
 
     `pixi run -e dev` puts them on PUZZLE_SOLVER_PATH, but Puzzle started any other way
-    (the dev env's own `puzzle`, an editor's Python, an MCP client) gets no activation,
-    and solvers went missing. Only a `.pixi/envs/<name>` layout counts; others give none.
+    (the dev env's own `puzzle`, an editor's Python, an MCP client, the installed app)
+    gets no activation, and solvers went missing (`environment` says where they are).
     """
-    envs = Path(sys.prefix).resolve().parent
-    if envs.name != "envs" or envs.parent.name != ".pixi":
-        return []
     subdirs = ["Library/bin", ""] if os.name == "nt" else ["bin"]
-    return [envs / e / d for e in PIXI_SOLVER_ENVS for d in subdirs if (envs / e / d).is_dir()]
+    envs = [env for e in PIXI_SOLVER_ENVS if (env := environment(e)) is not None]
+    return [env / d for env in envs for d in subdirs if (env / d).is_dir()]
 
 
 def conda_prefix(executable: Path) -> Path | None:

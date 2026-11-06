@@ -37,6 +37,8 @@ pixi run -e dev puzzle hosts add lab --address lab.example [--scheduler slurm]  
 pixi run -e dev puzzle run PROJECT --study NAME --host lab                     # solve there once
 pixi run -e dev puzzle jobs PROJECT [--live] [--resume all] [--cancel JOB]       # solves held by the job runner (ADR 0067)
 pixi install -e runner                          # PSI/J for the job runner's schedulers (ADR 0067)
+pixi run -e packaging build-packages            # Puzzle's conda packages into packaging/output (ADR 0068)
+pixi run -e packaging make-installer --build    # the installer from pixi.lock; smoke-test it with scripts/smoke_installer.py
 ```
 
 A plain `.venv` also works (`pip install -e ".[dev]"`); set `PUZZLE_SOLVER_PATH=$PWD/.pixi/envs/calculix/bin` so solver tests find `ccx`. Started from a pixi env without `pixi run` (the env's own `puzzle`, an editor's Python, an MCP client), Puzzle still finds the solver envs beside its own (`jobs.runtime.pixi_solver_dirs`), after PUZZLE_SOLVER_PATH and PATH. Docker and Podman are found off PATH too, where their installers put them (`ENGINE_DIRS`, e.g. Docker Desktop's app folder on macOS), and that folder goes on the engine's PATH.
@@ -87,7 +89,7 @@ Dynamics (ADR 0041): a `transient` step solving solid mechanics is structural dy
 | `examples/cantilever` | Example project; regenerate with `python examples/cantilever/build.py` |
 | `examples/bracket_assembly` | An assembly: an angle bracket on a base plate, bonded or bolted (frictional contact, two pretensioned beam fasteners); geometry histories; `build.py` regenerates it, the README has measured results |
 | `benchmarks/` | Benchmarks as projects (NAFEMS LE1, laminar channel flow); each has build.py, a README with measured results, and an integration test |
-| `containers/`, `packaging/conda-forge/` | Solver images; conda-forge recipes (elmerfem) |
+| `containers/`, `packaging/` | Solver images; `packaging/recipes/` Puzzle's conda packages (puzzle-fem with its menuinst entry, py-slvs, manifold3d; channel = GitHub releases, one per platform); `scripts/make_installer.py` (ADR 0068): construct.yaml from pixi.lock (explicit lists, base = pixi `app` env, each solver env an extra env found as `<prefix>/envs/<name>` by `jobs.runtime.environment`), `scripts/smoke_installer.py`; `packaging/conda-forge/` recipes for conda-forge (elmerfem) |
 
 ## Adapter status
 

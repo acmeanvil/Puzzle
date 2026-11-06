@@ -66,3 +66,62 @@ def test_the_channel_is_the_release_downloads(tmp_path):
     assert publish_channel.channel_url("acmeanvil/Puzzle") == (
         "https://github.com/acmeanvil/Puzzle/releases/download"
     )
+
+
+# --- the installer (step 2) ---------------------------------------------------------
+
+import make_installer  # noqa: E402
+
+
+def _channel(root: Path, platform: str, depends: list[str]) -> Path:
+    """A local channel holding Puzzle's three packages, as build-packages leaves it."""
+    import json
+
+    for subdir, names in ((platform, ["py-slvs", "manifold3d"]), ("noarch", ["puzzle-fem"])):
+        (root / subdir).mkdir(parents=True)
+        pkgs = {f"{n}-1.0-0.conda": {"name": n, "version": "1.0", "build_number": 0,
+                                     "md5": "0" * 32, "depends": depends}
+                for n in names}  # fmt: skip
+        (root / subdir / "repodata.json").write_text(json.dumps({"packages.conda": pkgs}))
+    return root
+
+
+def test_the_installer_is_exactly_the_lock(tmp_path):
+    lock = make_installer.read_lock()
+    platform = "linux-64"
+    base, pypi = lock.packages(make_installer.BASE, platform)
+    assert base, "pixi lock: the app environment is missing"
+    # Only Puzzle's own pieces come from PyPI, and the channel has conda packages of them.
+    assert {make_installer._pypi_name(u) for u in pypi} == set(make_installer.OURS)
+    channel = _channel(tmp_path / "ch", platform, ["python >=3.12", "numpy"])
+    folder = make_installer.write(lock, platform, [str(channel)], tmp_path / "out", "sh")
+    lines = (folder / "base.txt").read_text().splitlines()
+    assert lines[0] == "@EXPLICIT"
+    assert len(lines) == 1 + len(base) + 3  # every locked package, by URL and md5, plus ours
+    assert all("#" in line and len(line.rsplit("#", 1)[1]) == 32 for line in lines[1:])
+    assert not any("pypi.org" in line or "pythonhosted" in line for line in lines)
+    construct = (folder / "construct.yaml").read_text()
+    assert 'environment_file: "base.txt"' in construct and "\nspecs:" not in construct
+    assert 'menu_packages:\n  - "puzzle-fem"' in construct
+    assert "initialize_conda: false" in construct
+    assert '"__glibc>=2.28"' in construct
+    for name in ("calculix", "fenicsx", "code-aster", "netgen", "mmg", "scripts", "runner"):
+        assert (folder / "envs" / f"{name}.txt").exists(), name
+        assert f'environment_file: "envs/{name}.txt"' in construct
+
+
+def test_code_aster_is_left_out_where_the_lock_has_none(tmp_path):
+    lock = make_installer.read_lock()
+    channel = _channel(tmp_path / "ch", "osx-arm64", [])
+    folder = make_installer.write(lock, "osx-arm64", [str(channel)], tmp_path / "out", "pkg")
+    assert not (folder / "envs" / "code-aster.txt").exists()
+    assert (folder / "envs" / "calculix.txt").exists()
+
+
+def test_a_dependency_the_lock_lacks_is_refused(tmp_path):
+    import pytest
+
+    lock = make_installer.read_lock()
+    channel = _channel(tmp_path / "ch", "linux-64", ["not-in-the-lock >=1"])
+    with pytest.raises(SystemExit, match="not-in-the-lock"):
+        make_installer.write(lock, "linux-64", [str(channel)], tmp_path / "out", "sh")

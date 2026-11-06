@@ -17,7 +17,13 @@ source:
 build:
   number: ${{ env.get("PUZZLE_BUILD", default="0") | int }}  # CI's run number
   noarch: python
-  script: ${{ PYTHON }} -m pip install . -vv --no-deps --no-build-isolation
+  script:
+    - ${{ PYTHON }} -m pip install . -vv --no-deps --no-build-isolation
+    # The Start-menu, Dock or desktop entry the installer makes (menuinst, ADR 0068)
+    - mkdir -p "$PREFIX/Menu"
+    - cp packaging/recipes/puzzle-fem/menu.json "$PREFIX/Menu/puzzle-fem.json"
+    - cp src/puzzle/gui/art/Puzzle.icns src/puzzle/gui/art/Puzzle.ico "$PREFIX/Menu/"
+    - cp src/puzzle/gui/art/icon.png "$PREFIX/Menu/Puzzle.png"
   python:
     entry_points:
       - puzzle = puzzle.cli:main
@@ -62,6 +68,7 @@ tests:
       pip_check: false
   - script:
       - puzzle --help
+      - test -f "$PREFIX/Menu/puzzle-fem.json"
       - python -c "import puzzle.gui.theme, py_slvs.slvs, manifold3d, OCP; print('ok')"
 
 about:

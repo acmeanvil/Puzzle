@@ -1,6 +1,6 @@
 # 0068. Ship Puzzle as one installer per system, with every solver inside
 
-- Status: Accepted (2026-11-05); step 1 of 5 built
+- Status: Accepted (2026-11-05); steps 1 and 2 of 5 built
 - Date: 2026-11-05
 
 ## Context
@@ -214,7 +214,44 @@ Other constraints:
   pin its hash. Puzzle's build number is CI's run number.
 - `.github/workflows/packages.yml` builds on linux-64, linux-aarch64, osx-64, osx-arm64
   and win-64 when the recipes change, and publishes on a published release or a manual run
-  with "publish" ticked.
+  with "publish" ticked. First published 2026-11-06 (puzzle-fem 0.0.1, py-slvs 1.0.6,
+  manifold3d 3.5.4 on all five platforms); `pixi add --channel <channel> puzzle-fem`
+  installs a working Puzzle.
+
+**Step 2 (2026-11-06): the installer from the lock file, and its smoke test.**
+
+- `scripts/make_installer.py` (`pixi run -e packaging make-installer [--build]`) writes
+  `construct.yaml` with explicit package lists (`@EXPLICIT`, URL and md5) from
+  `pixi.lock`, so nothing is solved and the installer is exactly the lock:
+  - the base is pixi's new `app` environment: Puzzle and its GUI in the `main` solve
+    group (the same versions as `dev`), plus conda itself. constructor refuses extra
+    environments without conda in the base, and the Solvers page's Repair (decision 6)
+    needs it anyway;
+  - the lock's PyPI entries become Puzzle's conda packages, a local build first
+    (`--packages`) and then the channel. A dependency of theirs that the lock lacks is
+    refused;
+  - each solver environment (calculix, fenicsx, code-aster, netgen, mmg, scripts,
+    runner) is an extra environment with pixi's name. The lock decides per platform:
+    there is no Code_Aster on macOS until the Linux machine (decision 4);
+  - per user, no conda init, no registered Python, and the lock's oldest systems as
+    `virtual_specs`.
+- The installed layout is `<prefix>/envs/<name>`. `jobs.runtime.environment(name)` finds
+  an environment there or as a pixi sibling, and every lookup uses it: solvers, Netgen,
+  MMG, scripts, the runner.
+- puzzle-fem carries a menuinst entry (`packaging/recipes/puzzle-fem/menu.json`, icons
+  including a new `Puzzle.ico`): Start menu and desktop on Windows, where `.puzzle`
+  archives open in Puzzle; an app on macOS; a desktop entry on Linux.
+- `scripts/smoke_installer.py` installs in batch mode into a temporary folder (no
+  shortcuts unless asked). It runs `puzzle --help` and the imports, solves the
+  cantilever's Tip load with the installed CalculiX with nothing on PATH, and checks
+  dolfinx, Netgen, MMG, the scripts and runner Pythons.
+- **Measured, macOS Intel `.sh`:** the installer is 1.09 GB, and the smoke test passes
+  (Tip load: 0.001522 m, solved natively in 2.7 s). Installing takes about 13 minutes on
+  this Mac, mostly extracting seven environments. Step 3 should look at that (the `.pkg`,
+  a faster extraction, fewer duplicate files).
+- `tests/test_packaging.py`: the explicit lists match the lock package for package, the
+  extra environments, Code_Aster left out where the lock has none, and a missing
+  dependency refused.
 
 ## Decided (2026-11-05, maintainer)
 

@@ -15,7 +15,6 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 import gmsh
@@ -31,8 +30,10 @@ def netgen_python() -> Path | None:
     if explicit:
         return Path(explicit)
     dirs = [Path(d) for d in os.environ.get("PUZZLE_SOLVER_PATH", "").split(os.pathsep) if d]
-    envs = Path(sys.prefix).parent
-    dirs += [envs / "netgen" / "bin", envs / "netgen"]
+    from puzzle.jobs.runtime import environment
+
+    env = environment("netgen")
+    dirs += [env / "bin", env] if env else []
     for d in dirs:
         for name in ("python", "python3", "python.exe"):
             exe = d / name

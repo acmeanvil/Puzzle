@@ -157,6 +157,21 @@ def test_pixi_solver_envs_are_found_without_activation(tmp_path, monkeypatch):
     assert runtime.pixi_solver_dirs() == []
 
 
+def test_installed_solver_envs_are_found_under_the_base(tmp_path, monkeypatch):
+    """ADR 0068: the installer makes Puzzle the base environment and each solver one of
+    its `envs/<name>`, as conda constructor lays them out."""
+    from puzzle.jobs import runtime
+
+    base = tmp_path / "Puzzle"
+    sub = "Library/bin" if os.name == "nt" else "bin"
+    for name in ("calculix", "mmg"):
+        (base / "envs" / name / sub).mkdir(parents=True)
+    monkeypatch.setattr(runtime.sys, "prefix", str(base))
+    assert runtime.pixi_solver_dirs() == [base / "envs" / "calculix" / sub]
+    assert runtime.environment("mmg") == base / "envs" / "mmg"
+    assert runtime.environment("netgen") is None
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="uses a shell-script stand-in")
 def test_an_engine_off_path_is_found_and_put_on_its_path(monkeypatch, tmp_path):
     """Docker Desktop on macOS: `docker` lives in the app, not on an app's PATH."""

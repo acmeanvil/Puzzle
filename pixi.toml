@@ -137,19 +137,29 @@ code-aster = "18.1.*"
 python = "3.10.*"
 psij-python = ">=0.9.11"
 
+[feature.app.dependencies]
+# The installed base environment's own conda (ADR 0068): constructor needs it to lay out
+# the solver environments, and the Solvers page's Repair reinstalls one with it.
+conda = ">=25.5"
+
 [feature.packaging.dependencies]
 # Building Puzzle's conda packages and its channel (ADR 0068).
 python = "3.12.*"
 rattler-build = ">=0.80"
 rattler-index = ">=0.34"
+constructor = ">=3.17"  # the installers, from scripts/make_installer.py's construct.yaml
+conda-standalone = ">=26"
 
 [feature.packaging.tasks]
 build-packages = "python scripts/build_packages.py"
+make-installer = "python scripts/make_installer.py"
 
 [environments]
 default = { solve-group = "main" }
 dev = { features = ["dev", "gui"], solve-group = "main" }
 full = { features = ["dev", "gui"], solve-group = "main" }
+# What the installer's base environment holds (ADR 0068): Puzzle and its GUI, no tools.
+app = { features = ["gui", "app"], solve-group = "main" }
 calculix = { features = ["calculix"], no-default-feature = true }
 calculix-pardiso = { features = ["calculix-pardiso"], no-default-feature = true }
 fenicsx = { features = ["fenicsx"], no-default-feature = true }

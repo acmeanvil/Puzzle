@@ -38,13 +38,13 @@ def mmg_binary() -> Path | None:
     """mmg3d: PUZZLE_MMG, the pixi `mmg` environment beside this one, or PATH."""
     if os.environ.get("PUZZLE_MMG"):
         return Path(os.environ["PUZZLE_MMG"])
-    from puzzle.jobs.runtime import pixi_solver_dirs
+    from puzzle.jobs.runtime import environment
 
-    for d in pixi_solver_dirs():
+    env = environment("mmg")
+    for where in [env / "bin", env / "Library" / "bin", env] if env else []:
         for name in ("mmg3d_O3", "mmg3d_O3.exe", "mmg3d", "mmg3d.exe"):
-            for where in (Path(d), Path(d).parent / "mmg" / "bin", Path(d).parent / "mmg"):
-                if (where / name).exists():
-                    return where / name
+            if (where / name).exists():
+                return where / name
     here = Path(__file__).resolve()
     for parent in here.parents:
         for sub in ("bin", "Library/bin", ""):
