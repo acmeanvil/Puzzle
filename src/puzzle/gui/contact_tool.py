@@ -34,7 +34,6 @@ from PySide6.QtWidgets import (
     QStyledItemDelegate,
     QTableWidget,
     QTableWidgetItem,
-    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -633,7 +632,9 @@ class ContactPanel(QWidget):
         self.window = window
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        self.tabs = QTabWidget()
+        from puzzle.gui.docking import ScrollTabs
+
+        self.tabs = ScrollTabs()  # its pages scroll rather than hold the window tall
         self.setup = SetupTab(window)
         self.initial = InitialTab(window)
         self.tabs.addTab(self.setup, "Setup")

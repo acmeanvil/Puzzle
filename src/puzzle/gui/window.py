@@ -449,8 +449,10 @@ class MainWindow(QMainWindow):
         from puzzle.gui.workbench import Workbench
 
         self.workbench = Workbench(self)
-        self.left_tabs = QTabWidget()
-        self.left_tabs.addTab(self.tree, "Model")
+        from puzzle.gui.docking import ScrollTabs
+
+        self.left_tabs = ScrollTabs()  # pages scroll on a short window, never overlap
+        self.left_tabs.addTab(self.tree, "Model", scroll=False)  # a tree scrolls itself
         self.left_tabs.addTab(self.workbench, "Geometry")
         from puzzle.gui.mesh_bench import MeshBench
 

@@ -164,3 +164,25 @@ def test_closed_panels_come_back_from_the_window_menu(app, window):
     assert window.properties_dock.isVisible()
     assert [a.text() for a in menu.actions()][1] == "Properties"  # not the dock's "Tool"
     window.show_tool(None)
+
+
+def test_panels_never_overlap_on_a_short_window(app, window):
+    """The Mesh tab's ~350 px and the Contacts tabs' pages once held their panels taller
+    than a 728 px window could give, so Qt laid Sections over the model tree. Their tabs
+    scroll instead (`docking.ScrollTabs`), and the tabs still speak of the pages."""
+    window.resize(1268, 728)
+    window.show()
+    window.docks.show("contacts")
+    window.docks.show("sections")
+    for _ in range(5):
+        app.processEvents()
+    assert window.minimumSizeHint().height() <= 728
+    shown = [d for d in window.docks.panels.values() if d.isVisible() and not d.isFloating()]
+    shown = [d for d in shown if d.geometry().bottom() > 0]  # a tab behind another is moved off
+    for i, a in enumerate(shown):
+        for b in shown[i + 1 :]:
+            assert not a.geometry().intersects(b.geometry()), (a.objectName(), b.objectName())
+    tabs = window.left_tabs
+    tabs.setCurrentWidget(window.mesh_bench)
+    assert tabs.currentWidget() is window.mesh_bench
+    assert tabs.indexOf(window.workbench) == 1 and tabs.widget(0) is window.tree
