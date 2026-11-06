@@ -47,6 +47,7 @@ def _own(obj: ProjectObject, *, drop: frozenset[str] = frozenset()) -> dict:
         data.pop("error_target")
     data.pop("hidden", None)  # what the view shows never changes a solve
     data.pop("tags", None)  # nor do the words it is found by (ADR 0064A J6)
+    data.pop("made_from", None)  # a construction's words for what it was placed on
     if data.get("share_faces") is True:  # the default: older projects keep their hashes
         data.pop("share_faces")
     if obj.kind == "mesh":  # a box in global axes, as before boxes took a system

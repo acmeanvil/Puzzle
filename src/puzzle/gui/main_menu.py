@@ -253,6 +253,8 @@ def _project(window, menu: QMenu) -> None:
     _add(axes, "Cartesian…", lambda: menus.new_axes(window, "cartesian"))
     _add(axes, "Cylindrical…", lambda: menus.new_axes(window, "cylindrical"))
     _add(axes, "Spherical…", lambda: menus.new_axes(window, "spherical"))
+    _add(menu, "Edit coordinate system…", lambda: _edit_built(window, "axes"),
+         "Redefine a coordinate system: the selected one, or one you choose")  # fmt: skip
     from puzzle.gui import construction
 
     built = _sub(menu, "New construction geometry")
@@ -260,8 +262,37 @@ def _project(window, menu: QMenu) -> None:
          "A straight line for the Path and Linearized stress tools")  # fmt: skip
     _add(built, "Plane…", lambda: construction.new_plane(window),
          "A plane for a result over it, or the force across it")  # fmt: skip
+    _add(menu, "Edit construction geometry…", lambda: _edit_built(window, "construction"),
+         "Redefine a path or plane: the selected one, or one you choose")  # fmt: skip
     menu.addSeparator()
     menu.addAction(a["settings"])
+
+
+def _edit_built(window, kind: str) -> None:
+    """Edit a coordinate system (`axes`) or a construction path or plane: the one
+    selected in the tree, else one chosen by name (D1, D3)."""
+    if window.session is None:
+        return
+    objects = [o for o in window.session.project.objects.values() if o.kind == kind]
+    node = window.tree.current()
+    chosen = window._object(node) if node is not None else None
+    if chosen is None or chosen.kind != kind:
+        what = "coordinate system" if kind == "axes" else "path or plane"
+        if not objects:
+            window.statusBar().showMessage(f"There is no {what} to edit yet", 5000)
+            return
+        ref = window.choose(f"Edit {what}", "Which:", [(o.name, str(o.id)) for o in objects])
+        chosen = next((o for o in objects if str(o.id) == ref), None)
+    if chosen is None:
+        return
+    if kind == "axes":
+        from puzzle.gui.axes_panel import edit_axes
+
+        edit_axes(window, chosen)
+    else:
+        from puzzle.gui.construction import edit_construction
+
+        edit_construction(window, chosen)
 
 
 def _rename(window) -> None:

@@ -7,6 +7,13 @@ panel draws the path or plane as it changes. It starts from the corners picked i
 view (two make a path; one places a plane, three tilt it), else from the model's
 extent: a path through its thinnest side at the centre, a plane across its longest
 side at the middle. Selecting one in the tree draws it over the model.
+
+They can also be placed on the model's geometry: a plane on a face (picked in the view,
+or a face selection), through its centroid facing its normal; a path along a straight
+edge (picked, or an edge selection), between its two ends. The numbers are stored, with
+`made_from` saying in words what they came from. Edit… (the tree's right-click menu, a
+double-click, Model → Construction geometry) reopens the panel filled from the object,
+and Apply changes every field it owns in one command.
 """
 
 from __future__ import annotations
@@ -72,6 +79,53 @@ def picked_points(window) -> list[np.ndarray]:
     view = window.viewport
     return [np.asarray(view.vertices[e], float) for e in view.picked
             if e[0] == 0 and e in view.vertices]  # fmt: skip
+
+
+PICKED = "picked"  # a source's data: the face or edge picked in the view now
+
+
+def model_mesh(window):
+    """The mesh faces and edges are read from: the one shown, else the last meshed."""
+    mesh = window.viewport.node_mesh()
+    if mesh is None and window.meshes:
+        mesh = next(iter(window.meshes.values()))
+    return mesh
+
+
+def geometry_sources(mesh, dim: int) -> list[tuple[str, str]]:
+    """(name, group) for the mesh's face (dim 2) or edge (dim 1) selections, named as
+    "Tip (Bar)"."""
+    out = []
+    for name, group in sorted((mesh.groups if mesh is not None else {}).items()):
+        if group.dim == dim and "/" in name:
+            part, selection = name.split("/", 1)
+            out.append((f"{selection} ({part})", name))
+    return out
+
+
+def picked_entities(window, dim: int) -> list[tuple[int, int]]:
+    return [tuple(e) for e in window.viewport.picked if e[0] == dim]
+
+
+def edge_ends(mesh, entities) -> tuple[np.ndarray, np.ndarray]:
+    """The two ends of a straight edge (Gmsh (1, tag) entities, joined end to end); a
+    curved or closed edge is refused, since a path is a straight line."""
+    keys = {tuple(e) for e in entities}
+    blocks = [b for b in mesh.blocks if b.dim == 1 and tuple(b.entity) in keys]
+    if not blocks:
+        raise ValueError("No edge to place a path on: mesh the component first")
+    corners = np.concatenate([b.connectivity[:, :2] for b in blocks]).ravel()
+    ids, counts = np.unique(corners, return_counts=True)
+    ends = ids[counts == 1]
+    if len(ends) != 2:
+        raise ValueError("A closed edge has no ends: pick a straight edge, or two points")
+    a, b = mesh.node_coords(ends)
+    used = np.unique(np.concatenate([x.connectivity.ravel() for x in blocks]))
+    length = float(np.linalg.norm(b - a))
+    off = np.linalg.norm(np.cross(mesh.node_coords(used) - a, (b - a) / length), axis=1)
+    if off.max() > 1e-4 * length:
+        raise ValueError("A curved edge: a path is straight, so pick a straight edge or two points")
+    return a, b
 
 
 def _unique(window, base: str) -> str:
@@ -174,15 +228,22 @@ class PointRow(QWidget):
 
 
 class _Panel(QWidget):
-    """What both panels share: a title, an intro, a form, a message and Create/Cancel."""
+    """What the panels share: a title, an intro, a form, a message and Create/Cancel, or
+    Apply/Cancel when `editing` an object (one Edit command for every field it owns)."""
 
     kind = "construction"  # the project object Create makes
+    model = ConstructionGeometry
+    # The fields the panel sets. An edit sets each, back to its default when the panel's
+    # choice leaves it out, so an object made another way is left consistent.
+    owned = ("name", "type", "start", "end", "origin", "normal", "axes", "plane", "offset",
+             "made_from")  # fmt: skip
 
-    def __init__(self, window, title: str, intro: str) -> None:
+    def __init__(self, window, title: str, intro: str, editing=None) -> None:
         from puzzle.settings import length_unit
 
         super().__init__()
         self.window = window
+        self.editing = editing
         self.unit, self.per_metre = length_unit()
         self.picking: PointRow | None = None
         # It scrolls rather than squeezing its rows when the dock is short.
@@ -220,7 +281,7 @@ class _Panel(QWidget):
         role(self.message, "error")
         layout.addWidget(self.message)
         buttons = QHBoxLayout()
-        self.create_button = QPushButton("Create")
+        self.create_button = QPushButton("Apply" if editing is not None else "Create")
         self.create_button.setDefault(True)
         self.create_button.clicked.connect(self.create)
         cancel = QPushButton("Cancel")
@@ -262,38 +323,109 @@ class _Panel(QWidget):
         if problem is not None:
             self.message.setText(problem)
             return None
-        from puzzle.commands.model import Create
+        from puzzle.commands.model import Create, Edit
 
-        out = self.window.submit(Create(kind=self.kind, data=self.data()))
+        if self.editing is None:
+            out = self.window.submit(Create(kind=self.kind, data=self.data()))
+        else:
+            out = self.window.submit(Edit(object=str(self.editing.id), ops=self.edit_ops()))
         self.close_panel()
         return out
 
+    def edit_ops(self) -> list[dict]:
+        """Set every owned field: as the panel has it, else back to its default."""
+        data = self.data()
+        ops = []
+        for name in self.owned:
+            value = data[name] if name in data else self.model.model_fields[name].default
+            if isinstance(value, tuple):
+                value = list(value)
+            ops.append({"op": "set", "path": name, "value": value})
+        return ops
+
 
 class PathPanel(_Panel):
-    def __init__(self, window) -> None:
+    HOW = [("Between two points", "points"), ("Along an edge", "edge")]
+
+    def __init__(self, window, editing: ConstructionGeometry | None = None) -> None:
         picked = len(picked_points(window)) >= 2
+        start_note = (
+            ""
+            if editing is not None
+            else "It starts from the two corners picked in the view."
+            if picked
+            else "It starts across the model's thinnest side."
+        )
         super().__init__(
             window,
-            "New path",
+            "Edit path" if editing is not None else "New path",
             "A straight line for result tools: a result along it, or the stress "
-            "linearized through a wall. Pick, then double-click the model. "
-            + (
-                "It starts from the two corners picked in the view."
-                if picked
-                else "It starts across the model's thinnest side."
-            ),
+            "linearized through a wall. Pick, then double-click the model, or place it "
+            "along a straight edge. " + start_note,
+            editing,
         )
-        start, end = default_path(window)
+        start, end = (editing.start, editing.end) if editing else default_path(window)
+        self.how = QComboBox()
+        for text, value in self.HOW:
+            self.how.addItem(text, value)
         self.start = PointRow(self, start, "the path's start")
         self.end = PointRow(self, end, "the path's end")
-        self.name = QLineEdit(_unique(window, "Path"))
+        self.edge = QComboBox()
+        self.edge.addItem("The edge picked in the view", PICKED)
+        for text, value in geometry_sources(model_mesh(window), 1):
+            self.edge.addItem(f"Edge selection: {text}", value)
+        self.edge.setToolTip(
+            "Pick an edge (Pick, then Edges in the pick bar), or choose an edge selection"
+        )
+        self.name = QLineEdit(editing.name if editing else _unique(window, "Path"))
+        self.form.addRow("Placed", self.how)
         self.form.addRow(f"From ({self.unit})", self.start)
         self.form.addRow(f"To ({self.unit})", self.end)
+        self.form.addRow("Edge", self.edge)
         self.form.addRow("Name", self.name)
+        for box in (self.how, self.edge):
+            box.currentIndexChanged.connect(lambda _=0: self.changed())
         self.changed()
 
+    def along_edge(self) -> bool:
+        return self.how.currentData() == "edge"
+
+    def changed(self) -> None:
+        edge = self.along_edge()
+        for widget, on in ((self.start, not edge), (self.end, not edge), (self.edge, edge)):
+            self.form.setRowVisible(widget, on)
+        super().changed()
+
+    def _edge(self) -> tuple[tuple, tuple, str]:
+        """The chosen edge's ends and its words; ValueError says what is wrong."""
+        mesh = model_mesh(self.window)
+        if mesh is None:
+            raise ValueError("Mesh the component to place a path on its edges")
+        source = self.edge.currentData()
+        if source == PICKED:
+            entities = picked_entities(self.window, 1)
+            if not entities:
+                raise ValueError(
+                    "Pick an edge in the view (Pick, then Edges), or choose an edge selection"
+                )
+            words = "the picked edge"
+        else:
+            entities = mesh.groups[source].entities
+            words = f"edge {self.edge.currentText().split(': ', 1)[-1]}"
+        a, b = edge_ends(mesh, entities)
+        return tuple(map(float, a)), tuple(map(float, b)), words
+
+    def ends(self):
+        if self.along_edge():
+            a, b, _ = self._edge()
+            return a, b
+        return self.start.value(), self.end.value()
+
     def problem(self) -> str | None:
-        a, b = self.start.value(), self.end.value()
+        try:
+            a, b = self.ends()
+        except ValueError as exc:
+            return str(exc)
         if a is None or b is None:
             return "Type each end as three numbers: x, y, z"
         if np.allclose(a, b):
@@ -301,29 +433,48 @@ class PathPanel(_Panel):
         return None if self.name.text().strip() else "Give it a name"
 
     def preview(self) -> None:
-        self.window.viewport.show_construction("path", self.start.value(), self.end.value(), 0)
+        a, b = self.ends()
+        self.window.viewport.show_construction("path", a, b, 0)
 
     def data(self) -> dict:
-        return {"name": self.name.text().strip(), "type": "path",
-                "start": list(self.start.value()), "end": list(self.end.value())}  # fmt: skip
+        a, b = self.ends()
+        out = {"name": self.name.text().strip(), "type": "path",
+               "start": list(a), "end": list(b)}  # fmt: skip
+        if self.along_edge():
+            out["made_from"] = self._edge()[2]
+        return out
 
 
 class PlanePanel(_Panel):
-    def __init__(self, window) -> None:
+    def __init__(self, window, editing: ConstructionGeometry | None = None) -> None:
         super().__init__(
             window,
-            "New plane",
+            "Edit plane" if editing is not None else "New plane",
             "A plane for result tools: a result over its cut, or the force and moment "
-            "across it. Pick, then double-click the model; or tilt it through three points.",
+            "across it. Pick, then double-click the model; tilt it through three points; "
+            "or place it on a face.",
+            editing,
         )
         origin, which, typed = default_plane(window)
+        if editing is not None and editing.axes is None:
+            origin, typed = editing.origin, editing.normal
+            n = np.asarray(typed, float) / np.linalg.norm(typed)
+            which = next((k for k, v in AXIS.items() if np.allclose(n, v)), "typed")
         project = window.session.project
         self.systems = [(a.name, str(a.id)) for a in project.of_type(CoordinateSystem)
                         if a.type == "cartesian"]  # fmt: skip
         self.how = QComboBox()
         self.how.addItem("Through a point, facing a direction", "point")
+        self.how.addItem("On a face", "face")
         if self.systems:
             self.how.addItem("One of a coordinate system's planes", "axes")
+        self.face = QComboBox()
+        self.face.addItem("The face picked in the view", PICKED)
+        for text, value in geometry_sources(model_mesh(window), 2):
+            self.face.addItem(f"Face selection: {text}", value)
+        self.face.setToolTip(
+            "Pick a face (Pick, then Faces in the pick bar), or choose a face selection"
+        )
         self.origin = PointRow(self, origin, "a point on the plane")
         self.facing = QComboBox()
         for text, value in NORMALS:
@@ -339,16 +490,22 @@ class PlanePanel(_Panel):
         for text, value in PLANES:
             self.plane.addItem(text, value)
         self.offset = QLineEdit("0")
-        self.name = QLineEdit(_unique(window, "Plane"))
+        self.name = QLineEdit(editing.name if editing else _unique(window, "Plane"))
+        if editing is not None and editing.axes is not None and self.systems:
+            self.how.setCurrentIndex(self.how.findData("axes"))
+            self.axes.setCurrentIndex(max(0, self.axes.findData(str(editing.axes))))
+            self.plane.setCurrentIndex(max(0, self.plane.findData(editing.plane)))
+            self.offset.setText(f"{editing.offset * self.per_metre:.6g}")
         rows = [
             ("Placed", self.how), (f"Through ({self.unit})", self.origin),
             ("Facing", self.facing), ("Direction (x, y, z)", self.direction),
-            ("", self.three), ("Coordinate system", self.axes), ("Its plane", self.plane),
+            ("", self.three), ("Face", self.face), ("Coordinate system", self.axes),
+            ("Its plane", self.plane),
             (f"Moved along its normal ({self.unit})", self.offset), ("Name", self.name),
         ]  # fmt: skip
         for text, widget in rows:
             self.form.addRow(text, widget)
-        for box in (self.how, self.facing, self.axes, self.plane):
+        for box in (self.how, self.facing, self.face, self.axes, self.plane):
             box.currentIndexChanged.connect(lambda _=0: self.changed())
         for line in (self.direction, self.offset):
             line.editingFinished.connect(self.changed)
@@ -356,14 +513,17 @@ class PlanePanel(_Panel):
         self.changed()
 
     def by_point(self) -> bool:
-        return self.how.currentData() != "axes"
+        return self.how.currentData() == "point"
+
+    def on_face(self) -> bool:
+        return self.how.currentData() == "face"
 
     def _show_rows(self) -> None:
-        point = self.by_point()
+        point, face, axes = self.by_point(), self.on_face(), self.how.currentData() == "axes"
         shown = {
             self.origin: point, self.facing: point, self.three: point,
             self.direction: point and self.facing.currentData() == "typed",
-            self.axes: not point, self.plane: not point, self.offset: not point,
+            self.face: face, self.axes: axes, self.plane: axes, self.offset: face or axes,
         }  # fmt: skip
         for widget, on in shown.items():
             self.form.setRowVisible(widget, on)
@@ -407,8 +567,42 @@ class PlanePanel(_Panel):
             return _point(self.direction.text(), 1.0)
         return AXIS[self.facing.currentData()]
 
+    def _face(self) -> tuple[np.ndarray, np.ndarray, str]:
+        """The chosen face's centroid, normal and words; ValueError says what is wrong."""
+        from puzzle.post.cuts import face_plane
+
+        mesh = model_mesh(self.window)
+        if mesh is None:
+            raise ValueError("Mesh the component to place a plane on its faces")
+        source = self.face.currentData()
+        if source == PICKED:
+            entities = picked_entities(self.window, 2)
+            if not entities:
+                raise ValueError(
+                    "Pick a face in the view (Pick, then Faces), or choose a face selection"
+                )
+            words = "the picked face"
+        else:
+            entities = mesh.groups[source].entities
+            words = f"face {self.face.currentText().split(': ', 1)[-1]}"
+        centre, normal = face_plane(mesh, entities)
+        return centre, normal, words
+
+    def _offset(self) -> float | None:
+        try:
+            return float(self.offset.text() or 0) / self.per_metre
+        except ValueError:
+            return None
+
     def problem(self) -> str | None:
-        if self.by_point():
+        if self.on_face():
+            try:
+                self._face()
+            except ValueError as exc:
+                return str(exc)
+            if self._offset() is None:
+                return "The offset is a number"
+        elif self.by_point():
             if self.origin.value() is None:
                 return "Type the point as three numbers: x, y, z"
             n = self.normal()
@@ -423,6 +617,11 @@ class PlanePanel(_Panel):
 
     def data(self) -> dict:
         data = {"name": self.name.text().strip(), "type": "plane"}
+        if self.on_face():
+            centre, normal, words = self._face()
+            origin = centre + self._offset() * normal
+            return data | {"origin": [float(v) for v in origin],
+                           "normal": [float(v) for v in normal], "made_from": words}  # fmt: skip
         if self.by_point():
             return data | {"origin": list(self.origin.value()), "normal": list(self.normal())}
         return data | {"axes": self.axes.currentData(), "plane": self.plane.currentData(),
@@ -451,6 +650,13 @@ def new_plane(window) -> PlanePanel:
     """A plane through the model (Ansys's Surface): a result over its cut, or the force
     and moment carried across it."""
     panel = PlanePanel(window)
+    window.show_tool(panel)
+    return panel
+
+
+def edit_construction(window, obj: ConstructionGeometry) -> _Panel:
+    """Its panel again, filled from it; Apply changes it in one command (D3)."""
+    panel = (PathPanel if obj.type == "path" else PlanePanel)(window, editing=obj)
     window.show_tool(panel)
     return panel
 

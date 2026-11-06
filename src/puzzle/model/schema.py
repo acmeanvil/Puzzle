@@ -2012,6 +2012,11 @@ class ConstructionGeometry(ProjectObject):
         default="yz", description="plane, with axes: which of the system's planes"
     )
     offset: float = Field(default=0.0, description="plane, with axes: along its normal (m)")
+    made_from: str | None = Field(
+        default=None,
+        description='what it was placed on, in words ("face Tip (Bar)"), shown only: the '
+        "numbers above are what it is",
+    )
     drives: dict[str, str] = Field(
         default_factory=dict,
         description="values a parameter sets (ADR 0062 phase 3, row D6): offset, or "

@@ -265,6 +265,16 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         menu.addSeparator()
         add("Delete step", lambda: remove(window, obj, node.path))
     elif isinstance(obj, CoordinateSystem) and node.kind == "object":
+        from puzzle.gui.axes_panel import edit_axes
+
+        add("Edit…", lambda: edit_axes(window, obj))  # D1: every value redefinable
+        menu.addSeparator()
+        add("Delete", window.delete_selected)
+    elif obj is not None and obj.kind == "construction" and node.kind == "object":
+        from puzzle.gui.construction import edit_construction
+
+        add("Edit…", lambda: edit_construction(window, obj))  # D3
+        menu.addSeparator()
         add("Delete", window.delete_selected)
     elif isinstance(obj, Amplitude) and node.kind == "object":
         add("Edit points…", lambda: edit_amplitude(window, obj))

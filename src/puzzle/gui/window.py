@@ -2967,13 +2967,22 @@ class MainWindow(QMainWindow):
         return text.strip() if ok and text.strip() else None
 
     def _open_item(self) -> None:
-        """A double-click on a history step edits it in its dialog."""
+        """A double-click on a history step edits it in its dialog; on a coordinate
+        system or construction geometry, in its panel (D1, D3)."""
         from puzzle.gui import menus
 
         node = self.tree.current()
         obj = self._object(node)
         if node is not None and node.kind == "operation" and isinstance(obj, Geometry):
             menus.edit_step(self, obj, int(node.path.split(".")[1]))
+        elif node is not None and node.kind == "object" and isinstance(obj, CoordinateSystem):
+            from puzzle.gui.axes_panel import edit_axes
+
+            edit_axes(self, obj)
+        elif node is not None and node.kind == "object" and isinstance(obj, ConstructionGeometry):
+            from puzzle.gui.construction import edit_construction
+
+            edit_construction(self, obj)
         elif node is not None and node.kind == "compare":
             self.open_compare(node.object)
 
