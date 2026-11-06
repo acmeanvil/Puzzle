@@ -67,6 +67,20 @@ pyvista = ">=0.44"
 anthropic = ">=0.40"  # the built-in agent's Claude provider
 keyring = ">=25"  # API keys in the OS keychain
 
+# A 3D mouse read directly (ADR 0069). conda-forge builds hidapi everywhere but
+# osx-arm64 so far; there Puzzle runs without one (Settings > 3D mouse says why).
+[feature.gui.target.linux-64.dependencies]
+hidapi = ">=0.14"
+
+[feature.gui.target.linux-aarch64.dependencies]
+hidapi = ">=0.14"
+
+[feature.gui.target.osx-64.dependencies]
+hidapi = ">=0.14"
+
+[feature.gui.target.win-64.dependencies]
+hidapi = ">=0.14"
+
 # One feature per native solver.
 [feature.calculix.dependencies]
 calculix = "2.23.*"

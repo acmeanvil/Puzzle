@@ -404,6 +404,17 @@ class MainWindow(QMainWindow):
         self.viewport.beam_members = self._beam_members  # beams with their outline (ADR 0055)
         if getattr(self.viewport, "view_bar", None) is not None:
             self.viewport.view_bar.on_refresh = self.refresh_view
+        self.mouse3d = None  # a SpaceMouse or similar steering the view (ADR 0069)
+        from puzzle.gui.spacemouse import hid as mouse_hid
+
+        if self.viewport.plotter is not None and mouse_hid.why_not() is None:
+            from puzzle.gui.spacemouse.controller import Controller
+
+            self.mouse3d = Controller(self)
+            self.mouse3d.found.connect(
+                lambda name: name and self.statusBar().showMessage(f"3D mouse: {name}", 5000)
+            )
+            self.mouse3d.start()
         self.results_bar = ResultsBar(self._redraw_result, self._axes_changed)
         self.results_bar.hide()
         # Which part of the work is on screen (ADR 0029): model, geometry, sketch or
@@ -3600,6 +3611,8 @@ class MainWindow(QMainWindow):
             self.resizeDocks([self.advisor_dock], [320], horizontal)  # alone: narrow
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        if getattr(self, "mouse3d", None) is not None:
+            self.mouse3d.stop()
         if self._sized:  # only a window that was on screen has a layout to keep
             self.save_layout()
         self.viewport.close_plotter()

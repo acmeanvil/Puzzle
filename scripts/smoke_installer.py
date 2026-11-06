@@ -66,11 +66,11 @@ def install(installer: Path, prefix: Path, shortcuts: bool) -> Path:
     print(done.stdout[-5000:], done.stderr[-5000:], sep="\n", flush=True)
     if done.returncode:
         for log in sorted(prefix.glob("*.log")) if prefix.is_dir() else []:
-            print(f"--- {log}", log.read_text(errors="replace")[-5000:], sep="\n")
+            print(f"--- {log}", log.read_text(errors="replace", encoding="utf-8")[-5000:], sep="\n")
         if kind == ".pkg":  # installer says only that a script failed; its log says which
             log = Path("/var/log/install.log")
             if log.exists():
-                tail = [ln for ln in log.read_text(errors="replace").splitlines()
+                tail = [ln for ln in log.read_text(errors="replace", encoding="utf-8").splitlines()
                         if "Puzzle" in ln or "install" in ln.lower()][-80:]  # fmt: skip
                 print("--- /var/log/install.log", *tail, sep="\n")
         print(shutil.disk_usage(prefix.parent if prefix.parent.exists() else Path.home()))
@@ -158,6 +158,9 @@ def main(argv: list[str] | None = None) -> int:
         run([str(puzzle), "--help"], env)
         run([str(python), "-c", "import puzzle.gui.theme, py_slvs.slvs, manifold3d, OCP, gmsh;"
              " print('imports ok')"], env)  # fmt: skip
+        if "arm64" not in args.installer.name:  # no conda-forge hidapi there yet (ADR 0069)
+            run([str(python), "-c", "import hid; print('3D mouse: hidapi lists',"
+                 " len(hid.enumerate()), 'devices')"], env)  # fmt: skip
         if args.shortcuts:
             menu = prefix / "Menu" / "puzzle-fem.json"
             assert menu.exists(), menu

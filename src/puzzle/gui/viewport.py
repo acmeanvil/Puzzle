@@ -2037,6 +2037,42 @@ class Viewport(QWidget):
             self.plotter.reset_camera()
             self._render()
 
+    def camera(self):
+        """The camera as (position, focal point, view up), or None without OpenGL."""
+        return self.plotter.camera_position if self.plotter is not None else None
+
+    def set_camera(self, triple) -> None:
+        """Put the camera there (a 3D mouse's move, ADR 0069): drawn on the next frame."""
+        self.shown["camera"] = [tuple(map(float, row)) for row in triple]
+        if self.plotter is not None:
+            self.plotter.camera_position = triple
+            self.plotter.renderer.ResetCameraClippingRange()
+            self._render()
+
+    def pivot(self):
+        """What a 3D mouse turns the view about: the centre of the picked or highlighted
+        faces, edges and points, else the shown model's centre, else None."""
+        group = list(self.picked) or list(self.highlight_entities)
+        if group:
+            points = [np.asarray(self.vertices[e], float) for e in group if e in self.vertices]
+            faces = [e for e in group if e[0] == 2]
+            faces += [f for e in group if e[0] == 3 for f in self.boundaries.get(e, [])]
+            index = [self.entities.index(e) for e in faces if e in self.entities]
+            if index and self.surface is not None:
+                mask = np.isin(self.surface.cell_data["entity"], index)
+                points.append(np.asarray(self.surface.extract_cells(mask).center, float))
+            index = [self.line_entities.index(e) for e in group if e in self.line_entities]
+            if index and self.lines is not None:
+                mask = np.isin(self.lines.cell_data["entity"], index)
+                points.append(np.asarray(self.lines.extract_cells(np.flatnonzero(mask)).center))
+            if points:
+                return np.mean(points, axis=0)
+        mesh = self.mesh
+        coords = getattr(mesh, "coords", None)
+        if coords is not None and len(coords):
+            return (coords.min(axis=0) + coords.max(axis=0)) / 2
+        return None
+
     def look(self, direction: str) -> None:
         """A standard view: "iso", or from "+x", "-x", "+y", "-y", "+z", "-z"."""
         self.style["view"] = direction

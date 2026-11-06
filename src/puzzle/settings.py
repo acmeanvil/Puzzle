@@ -209,6 +209,80 @@ PREFERENCES: list[Preference] = [
     Preference(
         "interface.view_colour_top", "Interface", "My gradient's top", "#6a7382", kind="colour"
     ),
+    # ADR 0069: a 6-DOF navigation device (3Dconnexion SpaceMouse and compatibles).
+    Preference(
+        "mouse3d.enabled",
+        "3D mouse",
+        "3D mouse",
+        True,
+        [("On when one is plugged in", True), ("Off", False)],
+        "A SpaceMouse or similar steers the 3D view: push, pull and twist the cap.",
+    ),
+    Preference(
+        "mouse3d.speed",
+        "3D mouse",
+        "Speed",
+        1.0,
+        [("Slow", 0.4), ("Normal", 1.0), ("Fast", 2.0), ("Fastest", 4.0)],
+    ),
+    Preference(
+        "mouse3d.mode",
+        "3D mouse",
+        "What moves",
+        "object",
+        [
+            ("The model (push the cap, the model goes that way)", "object"),
+            ("The camera (push the cap, the view goes that way)", "camera"),
+        ],
+    ),
+    Preference(
+        "mouse3d.motion",
+        "3D mouse",
+        "Motion",
+        "both",
+        [("Turn and move", "both"), ("Turn only", "rotate"), ("Move only", "translate")],
+    ),
+    Preference(
+        "mouse3d.dominant",
+        "3D mouse",
+        "One axis at a time",
+        False,
+        [("Off", False), ("On: only the strongest push or twist", True)],
+        "Steadier for exact moves: the cap's largest motion alone moves the view.",
+    ),
+    Preference(
+        "mouse3d.invert_zoom",
+        "3D mouse",
+        "Zoom",
+        False,
+        [("Pull up to bring the model nearer", False), ("Push down to bring it nearer", True)],
+    ),
+    Preference(
+        "mouse3d.button_1",
+        "3D mouse",
+        "Left button",
+        "fit",
+        [
+            ("Fit all", "fit"),
+            ("Isometric", "iso"),
+            ("Refresh view", "refresh_view"),
+            ("Section cut", "section"),
+            ("Nothing", ""),
+        ],
+    ),
+    Preference(
+        "mouse3d.button_2",
+        "3D mouse",
+        "Right button",
+        "iso",
+        [
+            ("Fit all", "fit"),
+            ("Isometric", "iso"),
+            ("Refresh view", "refresh_view"),
+            ("Section cut", "section"),
+            ("Nothing", ""),
+        ],
+    ),
     Preference(
         "geometry.preview",
         "Geometry",
@@ -415,7 +489,7 @@ class Settings:
         self.path = Path(path) if path else settings_path()
         self.data: dict[str, Any] = {}
         if self.path.exists():
-            self.data = _flatten(tomllib.loads(self.path.read_text()))
+            self.data = _flatten(tomllib.loads(self.path.read_text(encoding="utf-8")))
 
     def get(self, key: str) -> Any:
         pref = BY_KEY.get(key)
@@ -441,7 +515,7 @@ class Settings:
 
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".toml.tmp")
-        tmp.write_text(tomli_w.dumps(_nest(self.data)))
+        tmp.write_text(tomli_w.dumps(_nest(self.data)), encoding="utf-8")
         tmp.replace(self.path)  # never a half-written file
 
     # what the rest of Puzzle asks

@@ -122,7 +122,7 @@ def settings_path() -> Path:
 
 def load_settings(path: Path | None = None) -> AgentSettings:
     path = path or settings_path()
-    data = tomllib.loads(path.read_text()) if path.exists() else {}
+    data = tomllib.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
     s = AgentSettings(**{k: v for k, v in data.items() if k in AgentSettings.__dataclass_fields__})
     s.provider = os.environ.get("PUZZLE_AGENT_PROVIDER", s.provider)
     s.model = os.environ.get("PUZZLE_AGENT_MODEL", s.model)
@@ -143,5 +143,5 @@ def save_settings(s: AgentSettings, path: Path | None = None) -> Path:
         if getattr(s, k) != getattr(defaults, k) and getattr(s, k) is not None
     }
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(tomli_w.dumps(data))
+    path.write_text(tomli_w.dumps(data), encoding="utf-8")
     return path
