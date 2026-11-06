@@ -48,7 +48,12 @@ jobs:
         shell: bash
         run: >
           pixi run -e packaging build-packages --output output
-          ${{ matrix.noarch && '' || '--no-noarch' }}
+          ${{ !matrix.noarch && '--no-noarch' || '' }}
+      # `noarch && '' || x` was always x: an empty string is false in expressions.
+      - name: Check puzzle-fem was built
+        if: matrix.noarch
+        shell: bash
+        run: ls output/noarch/puzzle-fem-*.conda
       - uses: actions/upload-artifact@v4
         with:
           name: packages-${{ matrix.platform }}
