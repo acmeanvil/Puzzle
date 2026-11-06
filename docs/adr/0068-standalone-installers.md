@@ -1,6 +1,6 @@
 # 0068. Ship Puzzle as one installer per system, with every solver inside
 
-- Status: Proposed
+- Status: Accepted (2026-11-05)
 - Date: 2026-11-05
 
 ## Context
@@ -58,7 +58,7 @@ Other constraints:
 - **Reproducibility.** A study's run key and results name the solver versions (ADR 0011):
   a release must pin every package, as `pixi.lock` does now.
 
-## Decision (proposed)
+## Decision
 
 1. **Puzzle and everything conda-forge lacks become conda packages, in Puzzle's own
    channel.** Recipes are built with rattler-build in CI on each platform and published to
@@ -188,20 +188,24 @@ Other constraints:
 - **A thin installer that downloads solvers on first launch.** Smaller, but not monolithic,
   and it fails offline. It is kept as the optional web installer only.
 
+## Decided (2026-11-05, maintainer)
+
+- **Signing:** certificates are in the works (an Apple Developer ID and Windows code
+  signing). The CI signing steps are built so that they can be switched on when the
+  certificates arrive; until then, test builds are unsigned.
+- **Channel:** GitHub. Puzzle's conda packages are published as GitHub release assets, as
+  a channel (`repodata.json` per platform), beside the installers.
+- **MKL:** CalculiX with PARDISO is built on the user's machine (decision 5). The release
+  ships conda-forge's CalculiX (SPOOLES) and MKL itself, never the two linked together.
+- **Intel Macs:** the first release has installers for both arm64 and x86-64 macOS. Intel
+  support is evaluated again after it.
+
 ## Open questions
 
-- Certificates: an Apple Developer ID (yearly fee) and a Windows code-signing option
-  (Azure Trusted Signing, an OV certificate). Who holds them?
-- Channel host: prefix.dev, anaconda.org or GitHub releases.
-- MKL: build PARDISO CalculiX on the user's machine (decision 5), or get a licence
-  opinion and ship it prebuilt, or ship SPOOLES only (or a free sparse solver, PaStiX or
-  MUMPS through CalculiX's options, if it is fast enough)?
-- macOS Intel: build installers for it while Apple supports it, or arm64 only from the
-  first release?
-- The order of the native ports in decision 4. They are speed-ups now, so they can wait
-  until the installers work.
 - Lima inside a notarized app: whether `limactl` and its VZ driver can be signed with
   Puzzle's identity and the `com.apple.security.virtualization` entitlement. If not, the
   fallback is Podman's machine, or Apple's `container` framework on macOS 26.
 - How much memory the Linux machine may take by default (half the machine's, at most 8
   GB?), and how long it stays up idle.
+- The order of the native ports in decision 4. They are speed-ups, so they can wait until
+  the installers work.
