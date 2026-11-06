@@ -199,13 +199,16 @@ Other constraints:
   ships conda-forge's CalculiX (SPOOLES) and MKL itself, never the two linked together.
 - **Intel Macs:** the first release has installers for both arm64 and x86-64 macOS. Intel
   support is evaluated again after it.
+- **The Linux machine's memory:** half of the computer's memory by default, with no upper
+  limit. A preference (Settings > Solvers, "Memory for Puzzle's Linux environment") lets
+  the user give it more or less; it applies the next time the machine starts.
 
 ## Open questions
 
-- Lima inside a notarized app: whether `limactl` and its VZ driver can be signed with
-  Puzzle's identity and the `com.apple.security.virtualization` entitlement. If not, the
-  fallback is Podman's machine, or Apple's `container` framework on macOS 26.
-- How much memory the Linux machine may take by default (half the machine's, at most 8
-  GB?), and how long it stays up idle.
+- Lima inside a notarized app (to be decided after further investigation): whether
+  `limactl` and its VZ driver can be signed with Puzzle's identity and the
+  `com.apple.security.virtualization` entitlement. If not, the fallback is Podman's
+  machine, or Apple's `container` framework on macOS 26.
+- How long the Linux machine stays up when idle before it stops.
 - The order of the native ports in decision 4. They are speed-ups, so they can wait until
   the installers work.
