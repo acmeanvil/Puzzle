@@ -170,14 +170,17 @@ def test_menus_match_the_item(app, tmp_path):
         assert [a.text() for a in sub.actions()] == [
             s.label for s in menus.specs("solid_mechanics")
         ]
+        view = ["", "Hide symbol", "Hide all other symbols", "Show all symbols"]  # D2
         assert texts(Node("feature", str(comp.id), "physics.0.features.0")) == [
             "Change selection…",
             "Reaction force…",  # a support (ADR 0042)
             "Remove",
+            *view,
         ]
         assert texts(Node("feature", str(comp.id), "physics.0.features.1")) == [
             "Change selection…",
             "Remove",
+            *view,
         ]
 
         # Removing a feature from its menu is one undoable edit.

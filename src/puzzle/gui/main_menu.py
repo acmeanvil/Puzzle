@@ -375,6 +375,30 @@ def _geometry(window, menu: QMenu) -> None:
          "What is hidden is shown, and what is shown hidden")  # fmt: skip
     _add(shown, "Suppress or unsuppress", _with_geometry(window, lambda g: menus.suppress_geometry(
         window, g, not g.suppressed)), "Left out of meshing and solving")  # fmt: skip
+    from puzzle.gui import visibility as vis  # D2, D4
+
+    shown.addSeparator()
+    _add(shown, "Show or hide the selected item", lambda: vis.toggle_selected(window),
+         "A coordinate system or construction object drawn always, a load's or support's "
+         "symbol, or a part's geometry")  # fmt: skip
+    _add(shown, "Hide picked bodies", lambda: vis.hide_picked_bodies(window),
+         "Pick with the Bodies filter, then hide those bodies (still solved)")  # fmt: skip
+    _add(shown, "Show hidden bodies", lambda: vis.show_all_bodies(window))
+    cs_kind, built_kind = vis._kinds()
+    for kind, what in ((cs_kind, "coordinate systems"), (built_kind, "construction geometry")):
+        for on in (True, False):
+            _add(shown, f"{'Show' if on else 'Hide'} all {what}",
+                 lambda k=kind, o=on: vis.show_objects(window, vis._of_kind(window, k), o),
+                 "Drawn always over the model, or only while selected")  # fmt: skip
+    _add(shown, "Show everything", lambda: vis.show_everything(window),
+         "Every geometry, body and symbol, and every system and construction object")  # fmt: skip
+    shown.addSeparator()
+    _add(shown, "Colour…", _with_geometry(window, lambda g: vis.colour_geometry(window, [g])),
+         "The selected geometry's colour in the view")  # fmt: skip
+    _add(shown, "Colour picked bodies…", lambda: vis.colour_picked_bodies(window),
+         "Pick with the Bodies filter, then give those bodies a colour")  # fmt: skip
+    _add(shown, "Reset colour", _with_geometry(window, lambda g: vis.colour_geometry(
+        window, [g], None)), "Back to the theme's colour")  # fmt: skip
     menu.addSeparator()
     menu.addAction(window.actions_by_name["pick"])
     filters = _sub(menu, "Pick filter")

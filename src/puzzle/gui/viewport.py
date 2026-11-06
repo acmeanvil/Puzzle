@@ -30,17 +30,17 @@ def _t():
     return current()
 
 
-def without_parts(mesh: Mesh, parts, boundaries: dict | None = None) -> Mesh:
-    """The mesh with these parts' elements left out (hidden or suppressed geometry). A
-    block goes when it lies on one of those parts' volumes or faces (`boundaries`: a
-    volume's faces; a preview has faces only), or when all its nodes are theirs; a face
-    shared with a shown part stays."""
+def without_parts(mesh: Mesh, parts, boundaries: dict | None = None, bodies=()) -> Mesh:
+    """The mesh with these parts' elements left out (hidden or suppressed geometry), and
+    these `bodies` (volume entities, hidden one by one). A block goes when it lies on one
+    of those volumes or their faces (`boundaries`: a volume's faces; a preview has faces
+    only), or when all its nodes are the parts'; a face shared with a shown body stays."""
     import dataclasses
 
     groups = [mesh.groups[p] for p in parts if p in mesh.groups]
-    if not groups:
+    volumes = {e for g in groups for e in g.entities} | {tuple(b) for b in bodies}
+    if not volumes:
         return mesh
-    volumes = {e for g in groups for e in g.entities}
     faces = {f for v in volumes for f in (boundaries or {}).get(v, [])}
     shown = {f for v, fs in (boundaries or {}).items() if v not in volumes for f in fs}
     gone_entities = volumes | (faces - shown)
@@ -52,6 +52,25 @@ def without_parts(mesh: Mesh, parts, boundaries: dict | None = None) -> Mesh:
         if b.entity not in gone_entities and not np.isin(b.connectivity, gone).all()
     ]  # fmt: skip
     return dataclasses.replace(mesh, blocks=kept)
+
+
+def _colour_bytes(hexes) -> np.ndarray:
+    """(n, 3) bytes for colours given as "#rrggbb" (None: the theme's geometry colour)."""
+    plain = _t().geometry_face
+    out = np.empty((len(hexes), 3), np.uint8)
+    for i, h in enumerate(hexes):
+        h = (h or plain).lstrip("#")
+        out[i] = (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+    return out
+
+
+def _cell_colours(mesh: Mesh, colours: dict) -> np.ndarray:
+    """Each `to_grid` cell's colour, by the entity its block was meshed on."""
+    from puzzle.post.vtk import grid_blocks
+
+    blocks = grid_blocks(mesh)
+    rows = _colour_bytes([colours.get(tuple(b.entity)) for b in blocks])
+    return np.repeat(rows, [len(b.ids) for b in blocks], axis=0)
 
 
 def entity_surface(mesh: Mesh):
@@ -770,8 +789,12 @@ class Viewport(QWidget):
         self.mesh: Mesh | None = None
         self.highlight: str | None = None
         self.highlight_entities: list[tuple[int, int]] = []
-        # Which of a mesh's parts not to draw (the window: hidden or suppressed geometry).
+        # Which of a mesh's parts not to draw (the window: hidden or suppressed geometry),
+        # which bodies (volume entities hidden one by one), and each entity's colour
+        # ((dim, tag) -> "#rrggbb", a body's and its faces'; the user's, in the model).
         self.hidden_parts = None
+        self.hidden_bodies = None
+        self.part_colours = None
         self.surface, self.entities = None, []
         self.picked: list[tuple[int, int]] = []
         self.pick_history: list[list[tuple[int, int]]] = []  # undo while picking
@@ -841,12 +864,14 @@ class Viewport(QWidget):
         self._clear_labels()
         self._update_click()
         hidden = sorted(self.hidden_parts(mesh)) if self.hidden_parts else []
-        if hidden:  # hidden and suppressed geometry isn't drawn
-            key = (id(mesh), tuple(hidden))
+        bodies = sorted(self.hidden_bodies(mesh)) if self.hidden_bodies else []
+        if hidden or bodies:  # hidden and suppressed geometry isn't drawn
+            key = (id(mesh), tuple(hidden), tuple(bodies))
             if getattr(self, "_shown_key", None) != key:
                 self._shown_key = key
-                self._shown_mesh = without_parts(mesh, hidden, self.boundaries)
+                self._shown_mesh = without_parts(mesh, hidden, self.boundaries, bodies)
             mesh = self._shown_mesh
+        colours = dict(self.part_colours(mesh) or {}) if self.part_colours else {}
         if mesh is not self.mesh:
             self.mesh = mesh
             self.surface, self.entities = entity_surface(mesh)
@@ -858,6 +883,8 @@ class Viewport(QWidget):
             grid = to_grid(mesh)
         except ValueError:  # a surface-only preview of the geometry: nothing meshed yet
             grid = None
+        if grid is not None and colours:  # each cell its body's colour, kept by a cut
+            grid.cell_data["puzzle_rgb"] = _cell_colours(mesh, colours)
         away = None
         if grid is not None and self.cut is not None:  # the section cut on the mesh too (I4)
             from puzzle.post.cuts import clip
@@ -877,6 +904,9 @@ class Viewport(QWidget):
             "highlight": highlight,
             "highlighted": list(self.highlight_entities),
             "picked": list(self.picked),
+            "hidden_parts": hidden,
+            "hidden_bodies": [tuple(b) for b in bodies],
+            "colours": colours,
         }
         if away is not None:
             self.shown["cut"] = cut_shown
@@ -887,9 +917,11 @@ class Viewport(QWidget):
         if away is not None and self.cut.ghost and away.n_cells:
             self.plotter.add_mesh(away, color=_t().faded, opacity=0.15, reset_camera=False)
         if grid is not None:
+            painted = {"scalars": "puzzle_rgb", "rgb": True} if colours else {
+                "color": _t().geometry_face}  # fmt: skip
             self.plotter.add_mesh(
                 grid,
-                color=_t().geometry_face,
+                **painted,
                 show_edges=True,
                 edge_color=_t().geometry_edge,
                 opacity=0.35 if dim or ghost else 1,
@@ -902,7 +934,16 @@ class Viewport(QWidget):
             if (lines := beam_lines(grid, skip)) is not None:
                 self.plotter.add_mesh(lines, color=_t().geometry_line, line_width=5)
         elif self.surface is not None:
-            self.plotter.add_mesh(self.surface, color=_t().geometry_face, smooth_shading=False)
+            if colours:  # a face takes its body's colour (the window maps faces too)
+                index = np.asarray(self.surface.cell_data["entity"])
+                faces = [tuple(e) for e in self.entities]
+                self.surface.cell_data["puzzle_rgb"] = _colour_bytes(
+                    [colours.get(faces[i]) for i in index]
+                )
+                paint = {"scalars": "puzzle_rgb", "rgb": True}
+            else:
+                paint = {"color": _t().geometry_face}
+            self.plotter.add_mesh(self.surface, **paint, smooth_shading=False)
             edges = self.surface.extract_feature_edges(
                 30, boundary_edges=True, manifold_edges=False
             )
@@ -1727,6 +1768,38 @@ class Viewport(QWidget):
         self._draw_marks()
         if self.plotter is not None:
             self.view.refresh()
+
+    def show_extras(self, items) -> None:
+        """Coordinate systems and construction paths and planes shown always (D2), over
+        the mesh just drawn: (name, kind, a, b, size) with kind "triad" (a: the system),
+        "path" (from a to b) or "plane" (through a, normal b). Drawn without the pins
+        the selected one gets, so the view doesn't fill with labels."""
+        items = list(items)
+        self.shown["extras"] = [(name, kind) for name, kind, *_ in items]
+        if self.plotter is None or not items:
+            return
+        import pyvista as pv
+
+        for k, (_name, kind, a, b, size) in enumerate(items):
+            tag = f"puzzle-extra-{k}"
+            if kind == "triad":
+                origin, axes = a.centre(), a.orientation()
+                for i, colour in enumerate(_t().axes):
+                    if a.type != "cartesian" and i == 1:
+                        continue
+                    arrow = pv.Arrow(start=origin, direction=axes[:, i], scale=size)
+                    self.plotter.add_mesh(arrow, color=colour, name=f"{tag}-{i}",
+                                          reset_camera=False)  # fmt: skip
+            elif kind == "path":
+                self.plotter.add_mesh(pv.Line(np.asarray(a, float), np.asarray(b, float)),
+                                      color=_t().path, line_width=3, name=tag,
+                                      reset_camera=False)  # fmt: skip
+            else:
+                shape = pv.Plane(center=np.asarray(a, float), direction=np.asarray(b, float),
+                                 i_size=size, j_size=size)  # fmt: skip
+                self.plotter.add_mesh(shape, color=_t().path, opacity=0.25, name=tag,
+                                      reset_camera=False)  # fmt: skip
+        self.view.refresh()
 
     def show_triad(self, system, size: float) -> None:
         """A coordinate system's x, y, z arrows (red, green, blue) at its origin; for a

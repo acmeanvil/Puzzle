@@ -127,11 +127,18 @@ def _vector(values: dict, keys=("x", "y", "z")) -> np.ndarray | None:
 
 
 def symbols(
-    component, mesh: Mesh, entities_of, only: int | None = None, per_face: int = 10, project=None
+    component,
+    mesh: Mesh,
+    entities_of,
+    only: int | None = None,
+    per_face: int = 10,
+    project=None,
+    skip=frozenset(),
 ):
     """Glyph sets for the component's features (`only`: the n-th feature over all its
-    physics). `entities_of(selection)` gives a selection's (dim, tag) faces; `project`
-    resolves features given in local axes (ADR 0037), drawn along those axes."""
+    physics; `skip`: those numbers left out, hidden in the view). `entities_of(selection)`
+    gives a selection's (dim, tag) faces; `project` resolves features given in local axes
+    (ADR 0037), drawn along those axes."""
     from puzzle.gui.choices import label
 
     out: list[Glyphs] = []
@@ -139,7 +146,7 @@ def symbols(
     for ph in component.physics:
         for f in ph.features:
             n += 1
-            if only is not None and n != only:
+            if (only is not None and n != only) or (only is None and n in skip):
                 continue
             faces = [e for e in entities_of(f.selection) if e[0] == 2]
             name = f"{label(f.type)} on {f.selection}"

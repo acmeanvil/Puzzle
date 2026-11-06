@@ -85,6 +85,22 @@ SECTIONS = [
 ]
 
 
+def _visibility_marks(tree, item, obj) -> None:
+    """D2's marks: hidden geometry and bodies muted with the eye-off icon; a system or
+    construction object drawn always with the eye."""
+    from puzzle.gui.visibility import mark
+
+    if isinstance(obj, Geometry):
+        if obj.hidden:
+            mark(item, True, "hidden")
+        elif obj.hidden_bodies:
+            mark(item, True, f"bodies hidden: {', '.join(obj.hidden_bodies)}")
+    elif isinstance(obj, CoordinateSystem | ConstructionGeometry):
+        v = tree.visibility
+        if v is not None and str(obj.id) in v.shown:
+            mark(item, False, "drawn always (right-click to hide)")
+
+
 def _mark_hidden(item, geometry) -> None:
     """A hidden geometry in italics, a suppressed one struck through, each saying so."""
     font = item.font(0)
@@ -135,6 +151,7 @@ class ModelTree(QTreeWidget):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        self.visibility = None  # the window's (gui.visibility): what to mark shown or hidden
         self.setHeaderHidden(True)
         self.setUniformRowHeights(True)
         self.names = NameDelegate(self)
@@ -178,6 +195,7 @@ class ModelTree(QTreeWidget):
                 self._state(item, states.get(str(obj.id)))
                 if isinstance(obj, Geometry) and (obj.hidden or obj.suppressed):
                     _mark_hidden(item, obj)
+                self._mark_visibility(item, obj)
                 self._children(item, obj, project)
         defined = project.of_type(ResultDefinition)
         probes = project.of_type(ResultProbe)
@@ -341,6 +359,9 @@ class ModelTree(QTreeWidget):
             return  # a group into itself
         self.moved.emit(keys, group, section)
 
+    def _mark_visibility(self, item: QTreeWidgetItem, obj) -> None:
+        _visibility_marks(self, item, obj)
+
     def _state(self, item: QTreeWidgetItem, state) -> None:
         """An item's state icon and, in its tooltip, what it means."""
         from puzzle.gui.icons import state_icon
@@ -397,7 +418,12 @@ class ModelTree(QTreeWidget):
         elif isinstance(obj, Component):
             for i, p in enumerate(obj.parts):
                 text = f"Part {p.name}: {names.get(str(p.geometry), '?')}"
-                self._add(item, text, Node("part", oid, f"parts.{i}", p.name))
+                part_item = self._add(item, text, Node("part", oid, f"parts.{i}", p.name))
+                geo = project.objects.get(p.geometry)
+                if isinstance(geo, Geometry) and geo.hidden:
+                    from puzzle.gui.visibility import mark
+
+                    mark(part_item, True, "its geometry is hidden")
             for i, a in enumerate(obj.materials):
                 text = f"{names.get(str(a.material), '?')} → {a.selection}"
                 self._add(item, text, Node("assignment", oid, f"materials.{i}", a.selection))
@@ -432,6 +458,12 @@ class ModelTree(QTreeWidget):
                     path = f"physics.{i}.features.{j}"
                     f_item = self._add(p_item, text, Node("feature", oid, path, f.selection))
                     _feature_icon(f_item, f.type)
+                    v = self.visibility
+                    if v is not None and v.hidden_features:
+                        from puzzle.gui.visibility import feature_key, mark
+
+                        if feature_key(obj, ph, f) in v.hidden_features:
+                            mark(f_item, True, "its symbol is hidden in the view")
         elif isinstance(obj, Study):
             for i, step in enumerate(obj.steps):
                 if isinstance(step, SweepStep):

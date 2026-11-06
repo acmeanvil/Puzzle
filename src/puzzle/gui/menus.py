@@ -386,8 +386,9 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         add("Delete", window.delete_selected)
     elif node.kind in ("sweep", "compare"):
         add("Compare…", lambda: window.open_compare(node.object))
-    from puzzle.gui import organise
+    from puzzle.gui import organise, visibility
 
+    visibility.add_to_menu(window, menu, node, obj)  # show, hide, colour (D2, D4)
     organise.add_to_menu(window, menu, node)  # Rename, groups (any heading's items)
     return menu if menu.actions() else None
 

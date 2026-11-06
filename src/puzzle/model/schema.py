@@ -176,6 +176,16 @@ class Geometry(ProjectObject):
     owner: UUID | None = Field(default=None, description="Owning component, for local geometry")
     selections: list[NamedSelection] = Field(default_factory=list)
     hidden: bool = Field(default=False, description="not drawn in the view; still solved")
+    hidden_bodies: list[str] = Field(
+        default_factory=list, description="its bodies (by name) not drawn; still solved"
+    )
+    colour: str | None = Field(
+        default=None, pattern=r"^#[0-9a-fA-F]{6}$",
+        description="how its parts are drawn (#rrggbb); none: the theme's colour",
+    )  # fmt: skip
+    body_colours: dict[str, str] = Field(
+        default_factory=dict, description="a colour (#rrggbb) for some of its bodies, by name"
+    )
     share_faces: bool = Field(
         default=True,
         description="touching bodies are meshed joined, with shared faces and nodes; off "
@@ -195,6 +205,16 @@ class Geometry(ProjectObject):
             if len(part) == 36:  # a geometry's id
                 out.append(UUID(part))
         return out
+
+    @field_validator("body_colours")
+    @classmethod
+    def _body_colours(cls, value: dict[str, str]) -> dict[str, str]:
+        import re
+
+        bad = [c for c in value.values() if not re.fullmatch(r"#[0-9a-fA-F]{6}", c)]
+        if bad:
+            raise ValueError(f"colours are #rrggbb, not {bad[0]!r}")
+        return value
 
     @model_validator(mode="after")
     def _owner_matches_scope(self) -> Geometry:

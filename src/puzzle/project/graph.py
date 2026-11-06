@@ -45,7 +45,8 @@ def _own(obj: ProjectObject, *, drop: frozenset[str] = frozenset()) -> dict:
         data.pop("remote", None)  # ADR 0021: the same result wherever it is computed
     if obj.kind == "result" and data.get("error_target") == 0.02:  # ADR 0066's default
         data.pop("error_target")
-    data.pop("hidden", None)  # what the view shows never changes a solve
+    for key in ("hidden", "hidden_bodies", "colour", "body_colours"):
+        data.pop(key, None)  # what the view shows, and how, never changes a solve
     data.pop("tags", None)  # nor do the words it is found by (ADR 0064A J6)
     data.pop("made_from", None)  # a construction's words for what it was placed on
     if data.get("share_faces") is True:  # the default: older projects keep their hashes

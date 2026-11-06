@@ -396,6 +396,11 @@ class MainWindow(QMainWindow):
         self.viewport = Viewport()
         self.viewport.construction_planes = self._construction_planes  # for section cuts
         self.viewport.hidden_parts = self._hidden_parts  # hidden or suppressed geometry
+        self.viewport.hidden_bodies = self._hidden_bodies  # bodies hidden one by one (D2)
+        self.viewport.part_colours = self._part_colours  # the user's colours (D4)
+        from puzzle.gui.visibility import Visibility
+
+        self.visibility = Visibility("")  # what the view draws besides (D2), per project
         self.viewport.beam_members = self._beam_members  # beams with their outline (ADR 0055)
         if getattr(self.viewport, "view_bar", None) is not None:
             self.viewport.view_bar.on_refresh = self.refresh_view
@@ -672,6 +677,9 @@ class MainWindow(QMainWindow):
         self.start_page.fill()
         if self.centre.currentWidget() is self.start_page:
             self.centre.setCurrentIndex(0)  # the 3D view
+        from puzzle.gui.visibility import Visibility
+
+        self.visibility = Visibility.load(self.session.root)
         self.agent.project_opened()
         self.refresh()
         # Open on the model, not an empty view: select the first component.
@@ -708,6 +716,7 @@ class MainWindow(QMainWindow):
         # A study whose solve is with a job runner shows running (ADR 0067), here or not.
         running = self.running | self._pending_studies()
         self.states = status(s.project, runs, running, self.failed_studies)
+        self.tree.visibility = self.visibility  # shown and hidden marks (D2)
         self.tree.populate(s.project, runs, self._field_catalogs(runs), self.states)
         self.history.clear()
         names = {str(o.id): o.name for o in s.project.objects.values()}
@@ -1756,6 +1765,7 @@ class MainWindow(QMainWindow):
                 size = float(max(1.6 * across, 0.25 * whole))
             self.viewport.show_construction(built.type, a, b, size)
         self._show_symbols(comp, mesh, node)
+        self._show_extras(mesh, obj)
         if node.kind == "feature":  # a field-fed one: its mapped values (ADR 0044)
             field_view.show_feature(self, comp, node, mesh)
 
@@ -2428,6 +2438,91 @@ class MainWindow(QMainWindow):
         )
         self.bolts.refresh()
 
+    def _shown_component(self, mesh):
+        """The component (or a lone geometry's stand-in) whose mesh is drawn, and the
+        names its mesh gives entities."""
+        cid = next((c for c, m in self.meshes.items() if m is mesh), self.mesh_component)
+        if self.session is None or cid is None:
+            return None, {}
+        comp = self.session.project.objects.get(_uuid(cid))
+        if comp is None:
+            comp = next((c for c, _ in getattr(self, "_standalones", {}).values()
+                         if str(c.id) == cid), None)  # fmt: skip
+        return comp, self.mesh_names.get(cid, {})
+
+    def _part_geometries(self, comp) -> dict:
+        from puzzle.model.schema import Geometry
+
+        project = self.session.project
+        return {p.name: g for p in getattr(comp, "parts", [])
+                if isinstance(g := project.objects.get(p.geometry), Geometry)}  # fmt: skip
+
+    def _hidden_bodies(self, mesh) -> set[tuple[int, int]]:
+        """The shown mesh's bodies hidden one by one (`Geometry.hidden_bodies`)."""
+        comp, names = self._shown_component(mesh)
+        geos = self._part_geometries(comp)
+        if not any(g.hidden_bodies for g in geos.values()):
+            return set()
+        return {e for e, (part, name) in names.items() if e[0] == 3 and part in geos
+                and name in geos[part].hidden_bodies}  # fmt: skip
+
+    def _part_colours(self, mesh) -> dict:
+        """(dim, tag) -> "#rrggbb" for the shown mesh: a body's own colour, else its
+        geometry's, for the body and the faces that bound it (D4)."""
+        comp, names = self._shown_component(mesh)
+        geos = self._part_geometries(comp)
+        if not any(g.colour or g.body_colours for g in geos.values()):
+            return {}
+        boundaries = self.mesh_boundaries.get(str(comp.id), {}) if comp is not None else {}
+        out: dict = {}
+        for e, (part, name) in sorted(names.items(), key=lambda kv: -kv[0][0]):
+            g = geos.get(part)
+            if g is None or e[0] < 2:
+                continue
+            colour = (g.body_colours.get(name) if e[0] == 3 else None) or g.colour
+            if colour is None:
+                continue
+            out.setdefault(e, colour)
+            for face in boundaries.get(e, []):
+                out.setdefault(face, colour)
+        # Geometry with one colour: every face of its part, named or not.
+        for part, g in geos.items():
+            if g.colour and part in getattr(mesh, "groups", {}):
+                for e in mesh.groups[part].entities:
+                    out.setdefault(tuple(e), g.colour)
+                    for face in boundaries.get(tuple(e), []):
+                        out.setdefault(face, g.colour)
+        return out
+
+    def _show_extras(self, mesh, selected) -> None:
+        """Coordinate systems and construction geometry shown always (D2), but the
+        selected one, which is drawn already."""
+        import numpy as np
+
+        from puzzle.model.schema import ConstructionGeometry, CoordinateSystem
+
+        project = self.session.project
+        shown = [project.objects.get(_uuid(i)) for i in sorted(self.visibility.shown)]
+        shown = [o for o in shown if isinstance(o, CoordinateSystem | ConstructionGeometry)
+                 and o is not selected]  # fmt: skip
+        whole = float(np.linalg.norm(np.ptp(mesh.coords, axis=0))) if len(mesh.coords) else 1.0
+        items = []
+        for o in shown:
+            try:
+                if isinstance(o, CoordinateSystem):
+                    from puzzle.axes import absolute
+
+                    system = absolute(project, o, self.session.root)
+                    items.append((o.name, "triad", system, None, 0.2 * whole))
+                else:
+                    a, b = o.frame(project)
+                    items.append((o.name, o.type, a, b, 0.6 * whole))
+            except Exception:  # noqa: BLE001 - one that can't be placed isn't drawn
+                import logging
+
+                logging.getLogger("puzzle.gui").warning("can't draw %s", o.name)
+        self.viewport.show_extras(items)
+
     def _hidden_parts(self, mesh) -> set[str]:
         """The parts in this mesh made of hidden or suppressed geometry: not drawn."""
         from puzzle.model.schema import Geometry
@@ -2764,6 +2859,10 @@ class MainWindow(QMainWindow):
             only = sum(len(p.features) for p in comp.physics[:i]) + j
         elif node.kind not in ("object", "physics"):
             return
+        from puzzle.gui.visibility import feature_key
+
+        keys = [feature_key(comp, ph, f) for ph in comp.physics for f in ph.features]
+        skip = {n for n, k in enumerate(keys) if k in self.visibility.hidden_features}
         try:
             glyphs = symbols(
                 comp,
@@ -2771,10 +2870,12 @@ class MainWindow(QMainWindow):
                 lambda sel: self._entities_of(comp, sel),
                 only,
                 project=self.session.project,
+                skip=skip,
             )
         except (KeyError, ValueError):  # a selection not on this mesh yet: no symbol
             return
         self.viewport.show_symbols(glyphs)
+        self.viewport.shown["hidden_symbols"] = len(skip) if only is None else 0
 
     def _entities_of(self, comp, selection: str) -> list[tuple[int, int]]:
         """A selection's face entities in the shown mesh, through the names it was made with."""
@@ -2792,6 +2893,16 @@ class MainWindow(QMainWindow):
         return [e for e in hits if e[0] < 3] + faces
 
     # --- questions (tests replace these) -----------------------------------------
+
+    def pick_colour(self, initial: str | None = None) -> str | None:
+        """A colour from Qt's colour dialog (its standard palette first), as #rrggbb;
+        None when cancelled (D4)."""
+        from PySide6.QtGui import QColor
+        from PySide6.QtWidgets import QColorDialog
+
+        start = QColor(initial) if initial else self.palette().color(self.backgroundRole())
+        chosen = QColorDialog.getColor(start, self, "Colour")
+        return chosen.name() if chosen.isValid() else None
 
     def choose(self, title: str, label: str, items: list):
         """One of `items`: plain strings, or (shown name, value) pairs so that people

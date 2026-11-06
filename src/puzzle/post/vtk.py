@@ -47,6 +47,13 @@ def von_mises(stress: np.ndarray) -> np.ndarray:
     )
 
 
+def grid_blocks(mesh: Mesh) -> list:
+    """The blocks `to_grid` makes cells of, in its order: volumes, beams and shells, and
+    a 2D model's regions (ADR 0048), which are its elements."""
+    return [b for b in mesh.blocks if b.dim == 3] + mesh.structural_blocks() + (
+        mesh.region_blocks())  # fmt: skip
+
+
 def to_grid(mesh: Mesh, step: StepResult | None = None):
     """A pyvista UnstructuredGrid of the volume, beam, shell and 2D region elements, with
     the step's nodal fields.
@@ -57,9 +64,7 @@ def to_grid(mesh: Mesh, step: StepResult | None = None):
 
     cells, types = [], []
     order = np.argsort(mesh.node_ids)
-    # Volumes, beams and shells; a 2D model's regions (ADR 0048) are its elements.
-    shown = [b for b in mesh.blocks if b.dim == 3] + mesh.structural_blocks()
-    shown += mesh.region_blocks()
+    shown = grid_blocks(mesh)
     for b in shown:
         if b.element not in VTK_CELLS:
             raise ValueError(f"viewing {b.element} elements is not supported yet")
