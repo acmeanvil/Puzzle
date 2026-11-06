@@ -59,8 +59,8 @@ lists the feature types it takes.
    at its length after.
 6. **Over time**: `"amplitude": "<amplitude id>"` makes `force` or `pressure` follow a
    time table in transient steps (skill `dynamics`).
-7. Run with `submit({"command": "run_study", "study": "<name>"})`. Check reactions with
-   `result_total(study, "reaction_force", "<Part/Support>")`.
+7. Run with `submit(command={"command": "run_study", "study": "<name>"})`. Check
+   reactions with `result_total(study, "reaction_force", "<Part/Support>")`.
 
 Bolts as beams between holes, with sizes and preloads: skill `bolts`.
 
@@ -76,6 +76,12 @@ Bolts as beams between holes, with sizes and preloads: skill `bolts`.
   (`<split>/section`). Keep the section clear of other parts. Elmer and FEniCSx refuse
   it, and so does a study with more than one structural step on Code_Aster.
 - A compression-only support makes the step nonlinear (CalculiX adds NLGEOM).
-- Spherical axes on a load are refused; a node on two faces with different axes is
-  refused on CalculiX.
+- Local `axes` are taken only for: `displacement` in Cartesian or cylindrical axes
+  (some components only, e.g. just a radial one: CalculiX only), `force` in
+  Cartesian axes, `gravity` and `acceleration` in Cartesian axes, `rotation` in
+  Cartesian or cylindrical axes. Anything else is refused ("does not take ... axes
+  yet"): spherical axes, a cylindrical force, pressure or remote loads with axes.
+- On CalculiX a cylindrical (or some-components) displacement turns its nodes' axes,
+  so a `displacement`, `force`, `remote_force` or `remote_displacement` without axes
+  on a selection sharing a node with it is refused (`unsupported`).
 - 2D models refuse remote loads and pretension (skill `planar-models`).

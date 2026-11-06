@@ -121,8 +121,11 @@ Everything SI: m, N, N·m, Pa, K. Points are in metres on the undeformed geometr
 ## Mistakes to avoid
 
 - `source` given as a name: refused. Use the id.
-- A reaction on Elmer, FEniCSx or a CFD run: they write no reaction forces, so the tool
-  is refused. Use CalculiX or Code_Aster.
+- Trusting that a reaction tool was accepted: it is made on any selection of any
+  study (only `selection` is checked), and fails only when read. On Elmer, FEniCSx
+  or a CFD run, which write no reaction forces, reading it gives `unsupported`; a
+  selection with no reaction values gives `not_found`. Use CalculiX or Code_Aster,
+  and name the held selection (a face that isn't held reads no support reaction).
 - Reading a support's reaction from `result_stats` of `reaction_force`: that gives one
   node's value. Sum it (`result_total`) or use a reaction tool.
 - A reaction selection that touches a loaded face: shared nodes carry the load too.

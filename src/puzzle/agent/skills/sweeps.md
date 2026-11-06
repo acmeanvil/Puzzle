@@ -45,8 +45,8 @@ of materials only meshes once.
      "port": "out"}` with no `values`. Its values are SI, so points read "t = 0.012 m".
 4. `check_study(study)`: problems before running. Tell the user how many runs the
    sweep makes (the product of the lists, for a grid) before starting.
-5. Run it: `submit` `{"command": "run_study", "study": "Static"}`. The answer has
-   `points`: each point's labels, `run_id` and `cached`.
+5. Run it: `submit(command={"command": "run_study", "study": "Static"})`. The answer has
+   `points`: per point, `point` (its labels), `run_id` and `cached`.
 
 ## Read each point's results
 
@@ -55,9 +55,13 @@ The `result_*` tools read a study's newest run, which is only one point. For a p
 - Make a one-case linear combination naming it, then query it by its name:
   `{"command": "create", "kind": "result", "data": {"name": "Static: Copper",
   "method": "linear", "cases": [{"study": "<study id>", "point": "Copper"}]}}`, then
-  `result_stats(study="Static: Copper", field="stress")`. `point` is the point's title
-  as the results list it: material names, and `name = value unit` for parameters,
-  joined by ", " ("Copper, t = 12 mm").
+  `result_stats(study="Static: Copper", field="stress")`. `point` must equal the
+  point's title exactly, as the results list it. `run_study`'s answer gives each
+  point's labels as a dict (`{"Bar/Body": "Copper", "t": "12 mm"}`); the title
+  joins them in that order with ", ": a material choice by the material's name
+  alone, a parameter as `name = value unit` (no unit when dimensionless). So that
+  point is "Copper, t = 12 mm", and "Copper" alone matches only a sweep of
+  materials alone. A wrong title gives `not_found`.
 - One number per point, as a table: a Reduce on the study, then a Plot of it against
   the sweep: `operator_add("plot", "Peak per point", {"value": {"source":
   "Peak stress"}}, {"against": "sweep"})`; read it with `operator_value(name)`.
@@ -82,6 +86,9 @@ converts to SI for the solver. Results are SI.
 - A material choice whose `location` isn't one of the component's material
   assignments: refused (`inconsistent`). Assign a material there first.
 - A parameter nothing in the model reads: every point gives the same answer.
-- Mixing `values` and `materials` in one parameter, or `values` with `source`: refused.
+- Refused when made: a material choice (with `location`) that has no `materials`,
+  or has `values` or a `source`; a parameter with `materials` (with or without a
+  `source`); a parameter with neither `values` nor a `source`. `values` beside a
+  `source` are not refused but are replaced by the operator's list: leave them out.
 - `paired` with lists of different lengths: refused.
 - Running a large grid without saying how many solves it costs.

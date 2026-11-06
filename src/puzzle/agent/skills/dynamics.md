@@ -45,7 +45,8 @@ linear eigenvalue solve: one result step per mode, its value the load factor.
    feature's `steps`: the dead load `[1]` (held into step 2), the load to scale `[2]`.
    A support with no `steps` acts in both. `shift` (search
    near a factor) works on Code_Aster only.
-8. `check_study`, then run: `submit({"command": "run_study", "study": "<name>"})`.
+8. `check_study`, then run:
+   `submit(command={"command": "run_study", "study": "<name>"})`.
 9. Results:
    - `result_summary`: every result step with its fields' ranges: `time_s` for a
      transient; for buckling a `mode` and its load factor (shown under `frequency_hz`:

@@ -18,7 +18,10 @@ Recipe fields:
 - `element_order`: 1 or 2 (default 2);
 - `element_shape`: "tetrahedra" (default) or "hexahedra" (structured, block-like
   bodies only: six faces of four edges; first order only; Gmsh only);
-- `global_size`: a quantity; without it the largest size is a tenth of the model;
+- `global_size`: a quantity, the largest element size. Without it Netgen's largest
+  size is a tenth of the model; Gmsh sets no largest size and sizes from the
+  geometry (its points and curvature); a refine-near control grows back to a tenth
+  of the model away from its selection, and a size field is capped there;
 - `curvature_points` (default 12 per 2π; 0 ignores curvature), `algorithm_2d`,
   `algorithm_3d`, `optimiser` (gmsh, netgen, off), `high_order_optimise`,
   `smoothing`;

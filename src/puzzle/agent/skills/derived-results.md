@@ -72,8 +72,12 @@ Everything is SI: stresses in Pa, lengths in m, temperatures in K. Write `250e6`
 
 ## Mistakes to avoid
 
-- A linear combination of a nonlinear (plastic, contact) run: allowed, warned, and
-  only an estimate.
+- A linear (or SRSS) combination, or an equation adding runs, of nonlinear runs is
+  not valid superposition. Puzzle warns only for a `linear` combination of a plastic
+  run (one with `plastic_strain_equivalent`). Runs with frictionless or frictional
+  contact, large deflection (NLGEOM) or prestress get no warning: you must tell the
+  user the sum is only an estimate, or solve the combined load case as its own step.
+  An envelope or range over such runs is fine: it picks values, it adds nothing.
 - Mixing per-node and per-element results in one equation: refused.
 - Expecting a combination to keep global values (energies): they are left out.
 - A case whose study has no completed run (or not that point): `not_found`. Run it.

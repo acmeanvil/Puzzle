@@ -97,6 +97,16 @@ plain number (μ). A contact's `search_distance` and `offset` are quantities, e.
 - `"meshing": "conformal"` on anything but bonded: refused.
 - Frictional or frictionless contact on a study run by Elmer or FEniCSx: refused. Set
   the study's solver to CalculiX or Code_Aster, or use bonded.
+- `frictional` contact on Code_Aster where it can't run it. Refused before writing:
+  a second-order mesh (set the recipe's `element_order` to 1, or run on CalculiX,
+  which takes quadratic meshes), and a source (slave) face sharing nodes with a
+  `fixed`, `displacement` or `remote_displacement` selection (hold those parts away
+  from the interface, or swap source and target). Not checked, but needed for it to
+  converge: the source face lies inside the target face (the smaller face is the
+  source).
+- On Code_Aster any contact whose source face is curved and meets its target along
+  a line or at a point (a cylinder or ball on a plate): refused (`unsupported`).
+  Run it on CalculiX.
 - Submitting the commands one by one: a failure leaves half the selections made. Submit
   the list in one `submit`.
 - Making contacts no one asked for: show the proposals first. A large tolerance finds

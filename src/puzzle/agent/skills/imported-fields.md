@@ -16,7 +16,7 @@ mesh, so a remesh or a changed file just reruns.
 2. `field_import(file="fields/cfd.csv", name="CFD walls")`: the guess (`read`) and the
    `create` command. Headers like `x [mm]`, `p [MPa]` give units outright; check the
    roles and the `length_unit` (mm points read as m is the classic mistake).
-3. `submit(create)` (edit its `data` first if the guess is wrong).
+3. `submit(command=<the create command>)` (edit its `data` first if the guess is wrong).
 4. `field_check(field="CFD walls", on="Bracket/Plate/Top")`: `coverage` (share of the
    target within `tolerance` of a data point), `largest_distance`, `off_model`,
    `size_ratio`, and `warnings` in plain words. Low coverage or a size ratio far from 1

@@ -14,8 +14,8 @@ failed or stopped solve keeps it too, in its run folder.
    included). Read `status`, `now` (one line: step, time, increment, iteration,
    residual), `cutbacks`, `failed`, `messages` and above all `diagnoses`: each has a
    `code` and plain advice.
-2. Act on the diagnosis, then run again with `submit({"command": "run_study", "study":
-   "<study>"})`:
+2. Act on the diagnosis, then run again with
+   `submit(command={"command": "run_study", "study": "<study>"})`:
    - `friction_singular`: friction multipliers went singular. Check the contact's source
      face lies within its target, no source node is also held or a bolt end; try
      `type: "frictionless"` on the contact first, then friction.
@@ -56,7 +56,7 @@ A probe with `track: true` whose `source` is the study is followed while it solv
 plotted in the Solution panel (and in `run_progress` as `trackers_last`):
 
 ```
-submit({"command": "create", "kind": "probe", "data": {"name": "Tip deflection",
+submit(command={"command": "create", "kind": "probe", "data": {"name": "Tip deflection",
   "source": "<study id>", "type": "selection", "selection": "Part/Tip",
   "quantity": "displacement:y", "reduction": "min", "track": true}})
 ```

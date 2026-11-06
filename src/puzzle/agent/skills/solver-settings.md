@@ -11,11 +11,16 @@ A study's settings come in three layers. All are optional: an unset one leaves t
 solver's default, so no result moves until you set something.
 
 1. **Shared settings**, on each solve step's `settings` (beside `time_step`,
-   `time_scheme`, `modes`). Every solver translates them into its own terms:
+   `time_scheme`, `modes`). Each solver translates them into its own terms:
    - `linear_solver`: "direct" (default) or "iterative";
    - `tolerance`: relative residual of a nonlinear solve (default 1e-6);
    - `max_iterations`: nonlinear iterations per increment (default 50);
    - `output_every`: keep results every n-th increment or time step (default 1).
+   CalculiX, Code_Aster, Elmer and FEniCSx take all four. The CFD solvers take few:
+   Code_Saturne only `linear_solver` = "iterative"; OpenFOAM `linear_solver` =
+   "iterative" and `tolerance`. Any other shared setting set on a step (even
+   `linear_solver` = "direct") is a problem there ("does not translate the setting")
+   and the run is refused; leave it unset and use the solver's own settings instead.
 2. **Each solver's own**, in the study's `solver_settings`, a block per solver:
    `{"calculix": {"solver": "PARDISO"}}`. Examples: CalculiX `solver`; Code_Aster
    `method` (MUMPS, MULT_FRONT, GCPC), `acceleration`; Elmer `linear_method`,
