@@ -9,8 +9,9 @@ Today Puzzle is installed from a source checkout with pixi: one environment for 
 one per native solver (ADR 0013). The solvers conda-forge lacks run in container images
 (ADR 0007), which the user builds locally. That suits a developer, not an engineer. The
 maintainer's goal (2026-11-05): **one monolithic release per system, a fully working
-Puzzle with every solver, installed with minimal interaction.** Nothing to configure, no
-container engine to install, no compilers.
+Puzzle with every solver, installed with minimal interaction, that works out of the box.**
+Nothing to configure and no compilers. Containers are fine as long as their setup is
+invisible: the user never installs or configures a container engine or a VM.
 
 What there is to package, measured on macOS Intel (2026-11-05):
 
@@ -85,32 +86,44 @@ Other constraints:
    desktop entry, and registers `.puzzle` archives (ADR 0061). It asks nothing but where
    to install.
 3. **Everything inside, nothing downloaded at first launch.** The installer holds every
-   solver the platform can run natively. Size is the price: an estimated 2.5–3.5 GB
-   download and 6–8 GB installed, with packages shared across environments. Engineering
+   solver: those that run natively, and on macOS and Windows the Linux machine with the
+   rest (decision 4). Size is the price: an estimated 2.5–3.5 GB download and 6–8 GB
+   installed on Linux, about 1.5 GB more of each on macOS and Windows for the machine,
+   with packages shared across environments. Engineering
    suites ship far larger. A small web installer (the same installer, fetching from the
    channel) can follow for those who want one.
-4. **Native solvers everywhere we can build them; containers only where we can't.**
-   Containers need an engine the user installs, a VM on macOS and Windows, and slow file
-   sharing, which is the opposite of a monolithic install. So we build the missing solvers
-   natively, in this order of value and effort:
-   - Elmer on every platform (our recipe; Windows with MSYS2-style compilers or
-     conda-forge's MinGW);
-   - Code_Aster on macOS (arm64 first) and linux-aarch64, from source with conda-forge's
-     toolchain (its Linux recipe as the start; MED, MUMPS, PETSc and Scotch are on
-     conda-forge);
-   - Code_Saturne on Linux and macOS (autotools; Python front end; MED and CGNS from
-     conda-forge);
-   - OpenFOAM on macOS and linux-aarch64. On Windows, ESI's own MinGW builds are a
-     candidate: check their licence and packaging.
+4. **Every solver works on every system at install; how it runs is Puzzle's business.**
+   - **Natively** where a conda package exists or we build one: all of them on Linux
+     (Elmer and Code_Saturne build there as our container images already do), and
+     CalculiX, FEniCSx, Netgen and MMG everywhere.
+   - **In Puzzle's own Linux machine** for the rest on macOS and Windows: Code_Aster on
+     macOS, Elmer, Code_Saturne and OpenFOAM. The installer ships a Linux root filesystem
+     with those solvers installed natively in it, built from the same recipes as the
+     container images (`containers/`). It sets it up silently:
+     - on Windows, as a WSL2 distribution imported per user (`wsl --import puzzle …`);
+     - on macOS, as a Lima VM under Apple's Virtualization framework (Lima is Apache-2.0,
+       shipped inside the app, with user-mode networking, so no root).
 
-   What can't be built yet runs in a Linux environment the installer carries:
-   - on Windows, a WSL2 distribution imported by the installer (`wsl --import`; this
-     needs WSL enabled once, with one prompt);
-   - on macOS, a small VM under Apple's Virtualization framework (`container`, or Lima),
-     with the same images.
-
-   Each such solver is listed as "runs in Puzzle's Linux environment", and is dropped
-   from the installer once a native build passes its benchmarks.
+     Puzzle reaches it through the job runner exactly as a remote host (ADR 0021, 0067):
+     `wsl -d puzzle` or Lima's own ssh in place of ssh. The case is staged into the
+     machine's own disk (fast, unlike files shared across the VM boundary), the runner
+     there runs the solver, and the case comes home checked against its manifest. The user
+     sees only the solver's name and "runs in Puzzle's Linux environment" on the Solvers
+     page. No container engine, image pull or settings.
+   - **Started on demand, stopped when idle.** The machine starts with the first solve
+     that needs it (seconds) and stops after a quiet spell, so it costs no memory
+     otherwise. Its memory and cores follow Settings > Solvers (cores per run), and it
+     takes at most a set share of the machine's.
+   - **One interaction may be unavoidable:** Windows without WSL turned on needs WSL
+     enabled once. The installer asks for administrator rights with one prompt and, if
+     Windows wants a restart, finishes the setup by itself after it. Everything else
+     installs per user, without questions.
+   - **Native ports are speed-ups, not prerequisites.** Building Code_Aster for macOS, or
+     Elmer, Code_Saturne and OpenFOAM for macOS and Windows, removes the Linux machine's
+     start-up time and copies for those solvers. Each moves out of the machine once its
+     native build passes the same benchmarks; until then, the machine is how it works.
+   - **Users who already run Docker or Podman** may still choose them (ADR 0013's
+     runtimes, `PUZZLE_RUNTIME`). The release never needs them.
 5. **Solvers compiled as needed, where licences decide.** Prebuilt binaries for everything
    whose licence allows redistribution. CalculiX with PARDISO is built on the user's
    machine (ADR 0051's script, with conda-forge's compilers and MKL). The GPL restricts
@@ -138,10 +151,16 @@ Other constraints:
 
 - An engineer installs one file and has every solver: no pixi, Docker, compilers or
   configuration.
-- Building the missing solvers natively is the large cost: Code_Aster on macOS and
-  Code_Saturne are real porting work, each with its own benchmarks to pass before the
-  installer may drop its container. The Linux environment carried for the rest is a
-  second, temporary path to maintain.
+- Every solver works from the first release on every system: the Linux machine covers
+  what isn't native, with no setup by the user. Native ports can follow solver by solver,
+  as speed-ups.
+- The Linux machine is ours to maintain: a root filesystem per release (about 3–4 GB
+  with its solvers), its start, stop and resource limits, and a WSL and a Lima path.
+  Both reuse the remote-host path of ADR 0021 and 0067, so the runner, staging and checked
+  fetch are not new code.
+- A solve in the machine pays a start-up (a few seconds when stopped) and a copy of the
+  case each way. The copies are local disk to local disk, and far faster than files
+  shared across the VM boundary.
 - CI grows: package builds per platform, installers, signing and notarization, and a smoke
   test of each installer (install silently, run the cantilever on every solver, uninstall).
 - Releases are large. Disk and download sizes go in the release notes.
@@ -156,8 +175,13 @@ Other constraints:
   environment and supports PyPI wheels. But it makes no native installer, shortcut or file
   association, keeps no shared package cache between environments, and isn't notarizable
   as it is. Kept for remote hosts and offline solver bundles, not for the desktop.
-- **Everything in containers, the GUI included.** It needs an engine and X or VNC for the
-  GUI, which ADR 0013 already rejected for the GUI.
+- **Everything in containers, the GUI included.** It needs X or VNC for the GUI, which ADR
+  0013 already rejected.
+- **Containers through Docker or Podman for the gaps.** That means an engine for the user
+  to install and run, image pulls, and slow bind mounts on macOS and Windows. A Linux
+  machine of Puzzle's own, with the solvers installed in it, gives the same result with
+  nothing for the user to do. Bundling Podman and its VM (as Podman Desktop does) is the
+  fallback if Lima can't be shipped inside a notarized app.
 - **Flatpak or Snap.** Their sandboxes block what Puzzle does: start solver processes,
   ssh, container engines, process groups. AppImage may follow for Linux users who want
   one file.
@@ -174,6 +198,10 @@ Other constraints:
   MUMPS through CalculiX's options, if it is fast enough)?
 - macOS Intel: build installers for it while Apple supports it, or arm64 only from the
   first release?
-- The order of the native ports in decision 4, and whether the carried Linux environment
-  is worth building at all, or whether the first releases just list those solvers as
-  "not on this system yet".
+- The order of the native ports in decision 4. They are speed-ups now, so they can wait
+  until the installers work.
+- Lima inside a notarized app: whether `limactl` and its VZ driver can be signed with
+  Puzzle's identity and the `com.apple.security.virtualization` entitlement. If not, the
+  fallback is Podman's machine, or Apple's `container` framework on macOS 26.
+- How much memory the Linux machine may take by default (half the machine's, at most 8
+  GB?), and how long it stays up idle.
