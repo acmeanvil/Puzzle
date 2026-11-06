@@ -114,7 +114,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--shortcuts", action="store_true", help="make the menu entries too")
     p.add_argument("--keep", action="store_true", help="leave the installation there")
     args = p.parse_args(argv)
-    work = Path(tempfile.mkdtemp(prefix="puzzle-smoke-"))
+    # resolve(): Windows' temp folder can come as a short name (RUNNER~1), and the
+    # installer refuses a destination with a "~" in it.
+    work = Path(tempfile.mkdtemp(prefix="puzzle-smoke-")).resolve()
     prefix = args.prefix or work / "Puzzle"
     n = 4
     try:
