@@ -1422,7 +1422,14 @@ class MainWindow(QMainWindow):
             else:
                 self._selected()
 
-        return self.background(f"Meshing {comp.name}…", work, done)
+        def failed(exc) -> None:  # the log has why (`report`); the note says it failed
+            def why() -> None:
+                self.fold_messages(False)
+                self.output_tabs.setCurrentWidget(self.log)
+
+            self.toasts.show(f"Meshing {comp.name} failed", ("Show why", why), state="error")
+
+        return self.background(f"Meshing {comp.name}…", work, done, failed=failed)
 
     def run_selected(self) -> Task | None:
         node = self.tree.current()
@@ -2931,6 +2938,8 @@ class MainWindow(QMainWindow):
         self.progress.stop(task)
         if getattr(task, "ticker", None) is not None:
             task.ticker.stop()
+            task.ticker.deleteLater()  # one per job: parented to the window, so free it
+            task.ticker = None
         if not any(t.lock for t in self.tasks):
             for name in ("mesh", "run"):
                 self.actions_by_name[name].setEnabled(True)

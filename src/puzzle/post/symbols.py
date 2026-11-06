@@ -23,20 +23,16 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from puzzle.gui.theme import LIGHT as _VIEW
 from puzzle.mesh.adjacency import CORNERS
 from puzzle.mesh.mesh import Mesh
 
-BLUE, RED, ORANGE, GREEN, GREY, PURPLE = (
-    "#3d7bd9",
-    "#e5534b",
-    "#e8912d",
-    "#3fa564",
-    "#8a94a3",
-    "#9b6ad6",
-)
+# The colours are the theme's tokens (ADR 0045; theme.py imports no Qt), the light
+# set's, since the 3D view stays light in every theme.
+BLUE, RED, ORANGE, GREEN, GREY, PURPLE = _VIEW.symbols
 # Bolts (ADR 0050): a colour of their own, brass by default, apart from loads, supports
 # and parts; Settings > Geometry > Bolt colour changes it.
-BOLT = "#d9a520"
+BOLT = _VIEW.bolt
 
 
 def bolt_look() -> dict:

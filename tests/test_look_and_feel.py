@@ -53,10 +53,16 @@ LITERAL = re.compile(
 )
 
 
+CORE = GUI.parent  # the core's drawing code takes the theme's tokens too
+TOKENED = [CORE / "post" / "symbols.py", CORE / "post" / "legend.py",
+           *sorted((CORE / "schematic").glob("*.py"))]  # fmt: skip
+
+
 def test_no_colour_literals_outside_the_theme():
-    """Every colour the GUI draws is a named token in theme.py (ADR 0045 consequence)."""
+    """Every colour the GUI draws is a named token in theme.py (ADR 0045 consequence),
+    and so are the view's symbols, the legend's outside colours and the schematic's."""
     found = []
-    for path in sorted(GUI.glob("*.py")):
+    for path in [*sorted(GUI.glob("*.py")), *TOKENED]:
         if path.name == "theme.py":
             continue
         for n, line in enumerate(path.read_text().splitlines(), 1):
@@ -65,28 +71,59 @@ def test_no_colour_literals_outside_the_theme():
     assert found == []
 
 
-def _luminance(colour: str) -> float:
+def test_the_theme_imports_no_qt():
+    """The core reads its colours from theme.py in scripts with no Qt application."""
+    import subprocess
+    import sys
+
+    code = ("import sys; import puzzle.gui.theme, puzzle.post.symbols, puzzle.post.legend,"
+            " puzzle.schematic.svg; print(any(m.startswith('PySide6') for m in sys.modules))"
+            )  # fmt: skip
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                         check=True)  # fmt: skip
+    assert out.stdout.strip() == "False"
+
+
+def _rgb(colour: str, ground: str | None = None) -> list[float]:
+    """A colour's channels 0..1; an rgba() one laid over its ground."""
+    m = re.fullmatch(r"rgba\((\d+),\s*(\d+),\s*(\d+),\s*(\d+)\)", colour)
+    if m:
+        *rgb, a = (int(v) for v in m.groups())
+        under = _rgb(ground or "#ffffff")
+        return [a / 255 * v / 255 + (1 - a / 255) * u for v, u in zip(rgb, under, strict=True)]
     c = colour.lstrip("#")
-    rgb = [int(c[i : i + 2], 16) / 255 for i in (0, 2, 4)]
+    return [int(c[i : i + 2], 16) / 255 for i in (0, 2, 4)]
+
+
+def _luminance(colour: str, ground: str | None = None) -> float:
+    rgb = _rgb(colour, ground)
     lin = [v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4 for v in rgb]
     return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
 
 
-def contrast(a: str, b: str) -> float:
-    la, lb = sorted((_luminance(a), _luminance(b)), reverse=True)
+def contrast(a: str, b: str, under: str | None = None) -> float:
+    """WCAG contrast of `a` on `b` (`b` an rgba() fill laid over `under`)."""
+    la, lb = sorted((_luminance(a), _luminance(b, under)), reverse=True)
     return (la + 0.05) / (lb + 0.05)
 
 
 @pytest.mark.parametrize("name", ["light", "dark", "high_contrast"])
 def test_text_reads_on_each_theme(name):
-    """WCAG 2.1: body text 4.5:1 (7:1 in high contrast), hints and state marks 3:1."""
+    """WCAG 2.1 AA: every text colour 4.5:1 on every ground it is drawn on (body text
+    7:1 in high contrast): muted hints, the state roles (labels, toast marks) and the
+    banners' words on their tinted fills; the canvases' words on the canvas."""
     t = theme.SETS[name]
     body = 7.0 if name == "high_contrast" else 4.5
-    for ground in (t.surface, t.sunken):
-        assert contrast(t.text, ground) >= body
-        for mark in (t.muted, t.error, t.done, t.needed):
-            assert contrast(mark, ground) >= 3.0, (name, mark, ground)
-    assert contrast(t.accent_text, t.accent) >= 3.0
+    for ground in (t.surface, t.raised, t.sunken):  # windows, buttons/toasts, inputs
+        assert contrast(t.text, ground) >= body, (name, ground)
+        for words in (t.muted, t.error, t.done, t.needed, t.running):
+            assert contrast(words, ground) >= 4.5, (name, words, ground)
+        assert contrast(t.banner_error_text, t.banner_error, ground) >= 4.5, (name, ground)
+        assert contrast(t.text, t.banner_info, ground) >= 4.5, (name, ground)
+    assert contrast(t.accent_text, t.accent) >= 4.5  # selected rows, default buttons
+    for words in (t.canvas_ink, t.canvas_text, t.canvas_muted):
+        assert contrast(words, t.canvas) >= 4.5, (name, words)
+    assert contrast(t.view_text, t.view_plain) >= 4.5
 
 
 # --- density and text size ---------------------------------------------------------------
@@ -281,3 +318,140 @@ def test_tab_follows_the_rows_on_screen(app):
             chain.append(w)
         w = w.nextInFocusChain()
     assert chain == [top, high, low]
+
+
+def test_tab_rows_hold_controls_a_few_pixels_apart(app):
+    """Two controls 2 px apart in height read as one row, wherever they sit: banding
+    by round(y / 8) put y = 3 and y = 5 in different rows."""
+    box = QWidget()
+    box.resize(300, 200)
+    right, left, below = QLineEdit(box), QLineEdit(box), QLineEdit(box)
+    right.setGeometry(150, 3, 100, 22)
+    left.setGeometry(10, 5, 100, 22)
+    below.setGeometry(10, 40, 100, 22)
+    box.show()
+    spin(app, 0.05)
+    assert theme.tab_in_order(box) == [left, right, below]
+
+
+def test_tab_order_follows_rows_shown_later(app):
+    """A row shown after the form first showed takes its place on screen in Tab."""
+    box = QWidget()
+    column = QVBoxLayout(box)
+    first, later, last = QLineEdit(), QLineEdit(), QLineEdit()
+    column.addWidget(first)
+    column.addWidget(last)
+    later.hide()
+    column.insertWidget(1, later)
+    box.show()
+    spin(app, 0.1)
+    assert theme.tab_in_order(box) == [first, last]
+    later.show()
+    spin(app, 0.2)
+    assert first.nextInFocusChain() is later and later.nextInFocusChain() is last
+
+
+def test_cancel_stays_for_a_run_while_a_mesh_starts_and_ends(app):
+    """Overlapping jobs: the bar and Cancel stay while any job runs, and Cancel stops
+    the job the bar names."""
+    bar = feedback.StatusProgress()
+    stop = threading.Event()
+    run, mesh = object(), object()
+    bar.start(run, "Running Beam", stop)
+    bar.start(mesh, "Meshing Beam")  # can't be stopped part-way
+    assert not bar.isHidden() and not bar.cancel_button.isHidden()
+    assert "Running Beam" in bar.label.text() and "1 more" in bar.label.text()
+    assert bar.cancel_button.accessibleName() == "Cancel Running Beam"
+    bar.stop(mesh)
+    assert not bar.isHidden() and not bar.cancel_button.isHidden()
+    bar.start(mesh, "Meshing Beam")
+    bar.stop(run)  # the run ends first: the mesh still shows, without Cancel
+    assert not bar.isHidden() and bar.cancel_button.isHidden()
+    assert bar.label.text() == "Meshing Beam"
+    bar.stop(mesh)
+    assert bar.isHidden() and not stop.is_set()
+
+
+def test_busy_keeps_controls_that_were_disabled(app):
+    panel = QWidget()
+    column = QVBoxLayout(panel)
+    column.addWidget(on := QLineEdit())
+    column.addWidget(off := QPushButton("Apply"))
+    off.setEnabled(False)
+    feedback.busy(panel, True)
+    feedback.busy(panel, True, "Still working…")  # twice: still remembers the first state
+    assert not on.isEnabled() and not off.isEnabled()
+    feedback.busy(panel, False)
+    assert on.isEnabled() and not off.isEnabled()
+
+
+def test_toasts_are_named_for_screen_readers(app):
+    w = QMainWindow()
+    w.resize(600, 400)
+    w.show()
+    toasts = feedback.Toasts(w)
+    toast = toasts.show("Beam failed", ("Show why", lambda: None), state="error")
+    assert toast.accessibleName() == "Failed: Beam failed"
+    assert "Show why" in toast.accessibleDescription()
+    assert toast.timer.parent() is toast  # goes with the toast
+    toast.close_now()
+    w.close()
+
+
+def test_ribbon_titles_follow_the_text_size(app):
+    from PySide6.QtGui import QFont
+
+    from puzzle.gui.ribbon import Ribbon
+
+    ribbon = Ribbon()
+    ribbon.group("Shapes", [Ribbon.button("Box"), Ribbon.button("Cylinder")])
+    ribbon.show()
+    spin(app, 0.05)
+    title = ribbon.findChild(feedback.QLabel, "ribbon_title")
+    before = title.font().pointSizeF()
+    font = QFont(app.font())
+    try:
+        app.setFont(QFont(font.family(), round(font.pointSizeF() * 1.5)))
+        spin(app, 0.1)
+        assert title.font().pointSizeF() == pytest.approx(ribbon.font().pointSizeF() * 0.85)
+        assert title.font().pointSizeF() > before
+    finally:
+        app.setFont(font)
+        spin(app, 0.05)
+    ribbon.close()
+
+
+def test_a_failed_mesh_says_so_in_a_toast(app, window, monkeypatch):
+    import puzzle.mesh
+    from puzzle.model.schema import Component
+
+    def broken(*_a, **_k):
+        raise RuntimeError("no volume to mesh")
+
+    monkeypatch.setattr(puzzle.mesh, "generate_mesh", broken)
+    comp = window.session.project.of_type(Component)[0]
+    window.start_meshing(comp)
+    end = time.monotonic() + 5
+    while window.tasks and time.monotonic() < end:
+        spin(app, 0.05)
+    note = window.toasts.shown[-1]
+    assert note.state == "error" and note.text == f"Meshing {comp.name} failed"
+    assert note.action == "Show why"
+    assert "no volume to mesh" in window.log.toPlainText()  # not the only place it shows
+
+
+def test_progress_tickers_go_with_their_job(app, window):
+    from PySide6.QtCore import QCoreApplication, QEvent, QTimer
+
+    def tickers():
+        return [t for t in window.findChildren(QTimer) if t.interval() == 500]
+
+    before = len(tickers())
+    seen = []
+    task = window.background("Counting…", lambda _emit: 1, seen.append,
+                             fraction=lambda: 0.5, lock=False)  # fmt: skip
+    end = time.monotonic() + 5
+    while not seen and time.monotonic() < end:
+        spin(app, 0.05)
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    assert seen == [1] and task.ticker is None and len(tickers()) == before

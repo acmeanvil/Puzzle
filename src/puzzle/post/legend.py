@@ -14,6 +14,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from puzzle.gui.theme import OUTSIDE_COLOURS
+
 COLORMAPS = [
     ("Rainbow, blue to red (turbo)", "turbo"),
     ("Classic rainbow (jet)", "jet"),
@@ -45,7 +47,7 @@ BANDS = [
     ("16 bands", 16),
 ]
 SIZES = [("Small", 0.75), ("Normal", 1.0), ("Large", 1.25), ("Larger", 1.5), ("Largest", 2.0)]
-COLOURS = {"grey": "#a6a6a6", "black": "#000000", "white": "#ffffff", "magenta": "#d62ad1"}
+COLOURS = OUTSIDE_COLOURS  # the theme's (ADR 0045), the same in every theme
 
 
 @dataclass

@@ -26,6 +26,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from uuid import UUID
 
+from puzzle.gui.theme import LIGHT as _LIGHT
 from puzzle.model.schema import (
     Component,
     Geometry,
@@ -97,11 +98,9 @@ KIND_WORDS = {
 # What flows along a data wire, for its colour (as Blender colours sockets by type).
 FLOWS = ("temperature", "displacement", "stress", "pressure", "velocity", "other")
 # Their colours on a light ground (the SVG export; the GUI's come from its theme).
-FLOW_COLOURS = {"temperature": "#d9480f", "displacement": "#1c7ed6", "stress": "#9c36b5",
-                "pressure": "#0c8599", "velocity": "#2f9e44", "other": "#5c677d"}  # fmt: skip
-STATE_COLOURS = {"complete": "#4caf50", "up_to_date": "#4caf50", "missing": "#e5534b",
-                 "failed": "#e5534b", "out_of_date": "#d4a72c", "running": "#4f8fe6",
-                 "not_run": "#8a94a3", "unused": "#8a94a3"}  # fmt: skip
+# They are the theme's tokens (ADR 0045; theme.py imports no Qt), its light set's.
+FLOW_COLOURS = dict(_LIGHT.flows)
+STATE_COLOURS = dict(_LIGHT.states)
 
 
 @dataclass
@@ -239,7 +238,7 @@ def port_colour(port: Port | None) -> str:
         return TYPE_COLOURS[port.type]
     if port.carries:
         return FLOW_COLOURS[flow_of(port.carries)]
-    return TYPE_COLOURS["result"] if port.type else "#8a94a3"
+    return TYPE_COLOURS["result"] if port.type else STATE_COLOURS["not_run"]
 
 
 def wire_colour(wire: Wire) -> str:
@@ -260,7 +259,7 @@ def socket_shape(port: Port | None) -> str:
     return SHAPES.get(port.type, "circle") if port is not None else "circle"
 
 
-VERDICT_COLOURS = {"pass": "#2f9e44", "fail": "#e03131"}
+VERDICT_COLOURS = dict(_LIGHT.verdicts)
 
 
 def flow_of(field_name: str) -> str:

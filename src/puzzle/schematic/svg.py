@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from html import escape
 
+from puzzle.gui.theme import LIGHT
 from puzzle.operators import TYPE_COLOURS
 from puzzle.project.status import WORDS
 from puzzle.schematic import (
@@ -20,8 +21,9 @@ from puzzle.schematic.layout import TITLE, Layout, rows
 
 MARGIN = 30.0
 HEAD = 28.0  # the column headings' band
-TEXT, MUTED, BORDER, FILL, HEADER = "#1f2328", "#6a737d", "#c9ced6", "#ffffff", "#eef1f5"
-USE = "#a0a7b4"
+# The theme's light tokens (ADR 0045; theme.py imports no Qt).
+TEXT, MUTED, BORDER, FILL = LIGHT.text, LIGHT.muted, LIGHT.border, LIGHT.sunken
+HEADER, USE = LIGHT.schematic_header, LIGHT.schematic_use
 
 
 def wire_path(a: tuple[float, float], b: tuple[float, float]) -> str:

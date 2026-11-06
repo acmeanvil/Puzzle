@@ -11,7 +11,7 @@ and Ansys ribbons do. The look is one style sheet here, not a copy per ribbon.
 from __future__ import annotations
 
 from PySide6.QtCore import QEvent, QSize, Qt, QTimer
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QFont
 from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
@@ -59,6 +59,19 @@ class Ribbon(QWidget):
         self.bar.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
         self.bar.addStretch()
         self.groups: list[tuple[QFrame, QWidget, list[QToolButton]]] = []
+        # Each group's title, its folded button's layout (set under the title) and the
+        # group's column: measured again when the font changes.
+        self.titles: list[tuple[QLabel, QVBoxLayout, QVBoxLayout]] = []
+
+    def _title_font(self):
+        """A step under the ribbon's own font, which follows the application's (Settings
+        > Interface > Text size), so titles grow and shrink with the buttons."""
+        small = QFont(self.font())
+        if small.pointSizeF() > 0:
+            small.setPointSizeF(small.pointSizeF() * 0.85)
+        elif small.pixelSize() > 0:
+            small.setPixelSize(max(1, round(small.pixelSize() * 0.85)))
+        return small
 
     @staticmethod
     def button(text: str, tip: str = "", checkable: bool = False, tool: str = "") -> QToolButton:
@@ -94,10 +107,7 @@ class Ribbon(QWidget):
         column.setSpacing(1)
         name = QLabel(title)
         name.setObjectName("ribbon_title")
-        small = name.font()  # a step under the text, so it follows the system's size
-        if small.pointSizeF() > 0:
-            small.setPointSizeF(small.pointSizeF() * 0.85)
-        name.setFont(small)
+        name.setFont(self._title_font())
         column.addWidget(name)
         grid = QGridLayout()
         grid.setContentsMargins(0, 0, 0, 0)
@@ -128,6 +138,7 @@ class Ribbon(QWidget):
         holder.hide()
         self.bar.insertWidget(self.bar.count() - 1, holder)
         self.groups.append((box, holder, buttons))
+        self.titles.append((name, down, column))
         self._even()
         self.fold()
         return box
@@ -156,6 +167,11 @@ class Ribbon(QWidget):
             for b in buttons:
                 b.setMinimumWidth(0)
                 b.setMaximumWidth(16777215)
+        font = self._title_font()
+        for name, down, column in self.titles:
+            name.setFont(font)
+            name.ensurePolished()
+            down.setContentsMargins(0, name.sizeHint().height() + column.spacing(), 0, 0)
         self._even()
         self.fold()
 

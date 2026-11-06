@@ -44,7 +44,11 @@ class Toast(QFrame):
         self.setProperty("state", state)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setFrameShape(QFrame.Shape.StyledPanel)
-        self.setAccessibleName(f"Note: {text}")
+        words_for = {"done": "Finished", "error": "Failed", "info": "Note"}
+        self.setAccessibleName(f"{words_for.get(state, 'Note')}: {text}")
+        self.setAccessibleDescription(
+            f"{text}. {action[0]} is offered." if action is not None else text
+        )
         self.text = text
         row = QHBoxLayout(self)
         row.setContentsMargins(10, 6, 6, 6)
@@ -89,6 +93,16 @@ class Toast(QFrame):
         self.deleteLater()
 
 
+def _announce(widget) -> None:
+    """Tell screen readers a note appeared (an alert), since it takes no focus."""
+    try:
+        from PySide6.QtGui import QAccessible, QAccessibleEvent
+
+        QAccessible.updateAccessibility(QAccessibleEvent(widget, QAccessible.Event.Alert))
+    except Exception:  # noqa: BLE001 - no accessibility bridge: the note still shows
+        pass
+
+
 @dataclass
 class Shown:
     """What a toast said, for tests and the Messages log."""
@@ -125,6 +139,7 @@ class Toasts(QObject):
         toast.raise_()
         toast.timer.start()
         self._place()
+        _announce(toast)
         return toast
 
     def _closed(self, toast: Toast) -> None:
@@ -145,7 +160,8 @@ class Toasts(QObject):
             bottom -= 8
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802 - Qt's name
-        if obj is self.window and event.type() == QEvent.Type.Resize:
+        # getattr: Qt may call this while the window is being torn down.
+        if obj is getattr(self, "window", None) and event.type() == QEvent.Type.Resize:
             self._place()
         return False
 
@@ -195,16 +211,23 @@ class StatusProgress(QWidget):
         self._show()
 
     def cancel(self) -> None:
-        """Stop the newest job that can be stopped."""
-        for job in reversed(list(self.jobs.values())):
-            if job.cancel is not None and not job.stopping:
-                job.cancel.set()
-                job.stopping = True
-                break
+        """Stop the job the bar shows: the newest one that can still be stopped."""
+        job = self._stoppable()
+        if job is not None:
+            job.cancel.set()
+            job.stopping = True
         self._show()
 
+    def _stoppable(self) -> Job | None:
+        return next((j for j in reversed(self.jobs.values())
+                     if j.cancel is not None and not j.stopping), None)  # fmt: skip
+
     def current(self) -> Job | None:
-        return next(reversed(self.jobs.values()), None) if self.jobs else None
+        """The job shown: the newest one Cancel can stop, else the newest. A run that
+        can be stopped keeps its Cancel while a mesh (which can't) starts beside it."""
+        if not self.jobs:
+            return None
+        return self._stoppable() or next(reversed(self.jobs.values()))
 
     def _show(self) -> None:
         job = self.current()
@@ -219,27 +242,42 @@ class StatusProgress(QWidget):
         else:
             self.bar.setRange(0, 1000)
             self.bar.setValue(int(max(0.0, min(1.0, job.fraction)) * 1000))
-        self.cancel_button.setVisible(job.cancel is not None)
-        self.cancel_button.setEnabled(not job.stopping)
+        self.bar.setAccessibleDescription(job.message)
+        stoppable = job.cancel is not None
+        self.cancel_button.setVisible(stoppable)
+        self.cancel_button.setEnabled(stoppable and not job.stopping)
+        if stoppable:  # which job Cancel stops, when several run
+            self.cancel_button.setToolTip(f"Stop {job.message} (a solve stops at its next check)")
+            self.cancel_button.setAccessibleName(f"Cancel {job.message}")
         self.show()
 
 
 def busy(widget: QWidget, on: bool, words: str = "Working…") -> None:
-    """A panel that waits for work: greyed, with a line saying so on top."""
+    """A panel that waits for work: greyed, with a line saying so on top. Controls
+    that were disabled before stay disabled after."""
     note = widget.findChild(QLabel, "busy_note", Qt.FindChildOption.FindDirectChildrenOnly)
     if on:
         if note is None:
             note = role(QLabel(words, widget), "muted")
             note.setObjectName("busy_note")
             note.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            note.setAccessibleName(words)
         note.setText(words)
+        note.setAccessibleName(words)
         note.setGeometry(0, 0, widget.width(), 28)
         note.show()
         note.raise_()
     elif note is not None:
         note.hide()
+    was_busy = bool(widget.property("busy"))
     widget.setProperty("busy", on)
     for child in widget.findChildren(QWidget, options=Qt.FindChildOption.FindDirectChildrenOnly):
-        if child is not note:
-            child.setEnabled(not on)
+        if child is note:
+            continue
+        if on and not was_busy:  # remember how it was, once
+            child.setProperty("enabled_before_busy", child.isEnabled())
+        if on:
+            child.setEnabled(False)
+        elif was_busy:
+            before = child.property("enabled_before_busy")
+            child.setEnabled(True if before is None else bool(before))
+            child.setProperty("enabled_before_busy", None)

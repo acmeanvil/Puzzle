@@ -13,9 +13,11 @@ Widgets take a role instead of an inline colour: `role(widget, "muted")` (or "ti
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from functools import cache
 
-from PySide6.QtCore import Qt
+# No Qt at import: the core (post/symbols.py, post/legend.py, schematic/) reads its
+# colours from here too, in scripts and off-screen renders with no application.
 
 THEMES = [
     ("Follow the system", "system"),
@@ -29,6 +31,11 @@ TEXT_SIZES = [("As the system", "system"), ("Larger", "larger"), ("Largest", "la
 TEXT_SCALE = {"system": 1.0, "larger": 1.15, "largest": 1.3}
 # Padding in pixels (on the 4-pixel grid) per density: (controls, tree rows, buttons).
 PADDING = {"comfortable": (4, 3, 12), "compact": (2, 1, 8)}
+
+
+def _table(**colours):
+    """A token holding named colours (left out of the tokens' hash)."""
+    return field(hash=False, compare=False, default_factory=lambda: dict(colours))
 
 
 @dataclass(frozen=True)
@@ -64,7 +71,7 @@ class Tokens:
     overlay_checked: str = "rgba(79, 143, 230, 180)"
     separator: str = "#3c3f44"
     banner_error: str = "rgba(229, 83, 75, 40)"
-    banner_error_text: str = "#c53030"
+    banner_error_text: str = "#a82828"
     banner_info: str = "rgba(79, 143, 230, 30)"
     rule: str = "rgba(128, 128, 128, 90)"
     # What the 3D view draws (light in every theme, as its ground): geometry before
@@ -87,7 +94,7 @@ class Tokens:
     canvas_axis: str = "#b8c2cc"
     canvas_ink: str = "#1f2933"
     canvas_text: str = "#4a5560"
-    canvas_muted: str = "#8a94a3"
+    canvas_muted: str = "#616b77"  # also text ("Two points or more"): 4.5:1
     sketch_free: str = "#2b6cb0"
     sketch_picked: str = "#dd6b20"
     sketch_solved: str = "#2f855a"
@@ -105,22 +112,43 @@ class Tokens:
     minimum: str = "#4f8fe6"
     probe_text: str = "#f5f5f5"
     beyond: str = "#d62ad1"  # imported field points past the mapping distance
+    # Supports and loads drawn in the view (post/symbols.py, ADR 0035): supports,
+    # mechanical loads, heat, flow, other conditions, electromagnetics; bolts (ADR 0050).
+    symbols: tuple[str, ...] = ("#3d7bd9", "#e5534b", "#e8912d", "#3fa564", "#8a94a3",
+                                "#9b6ad6")  # fmt: skip
+    bolt: str = "#d9a520"
+    # The schematic (ADR 0058) on its light ground, as the SVG export draws it: what a
+    # data wire carries, an object's state, an operator's verdict.
+    flows: dict = _table(temperature="#d9480f", displacement="#1c7ed6", stress="#9c36b5",
+                         pressure="#0c8599", velocity="#2f9e44", other="#5c677d")  # fmt: skip
+    states: dict = _table(complete="#4caf50", up_to_date="#4caf50", missing="#e5534b",
+                          failed="#e5534b", out_of_date="#d4a72c", running="#4f8fe6",
+                          not_run="#8a94a3", unused="#8a94a3")  # fmt: skip
+    verdicts: dict = _table(**{"pass": "#2f9e44", "fail": "#e03131"})
+    schematic_header: str = "#eef1f5"  # the SVG's node headers
+    schematic_use: str = "#a0a7b4"  # its "built from" wires
+
+
+# The legend's one colour above or below a custom range (Settings > Results): named
+# colours the user picks, the same in every theme.
+OUTSIDE_COLOURS = {"grey": "#a6a6a6", "black": "#000000", "white": "#ffffff",
+                   "magenta": "#d62ad1"}  # fmt: skip
 
 
 LIGHT = Tokens(
     "light", surface="#f3f4f6", raised="#e8eaed", sunken="#ffffff", text="#1f2328",
-    muted="#6a737d", border="#c9ced6", accent="#3d7bd9", accent_text="#ffffff",
-    focus="#3d7bd9", done="#2e9d57", needed="#a87614", warning="#a87614", error="#c53030",
-    running="#3d7bd9", view_top="#dfe6ee", view_bottom="#ffffff", view_plain="#ffffff",
+    muted="#5c6570", border="#c9ced6", accent="#2e66c0", accent_text="#ffffff",
+    focus="#2e66c0", done="#1b7339", needed="#8a5f00", warning="#8a5f00", error="#c53030",
+    running="#2e66c0", view_top="#dfe6ee", view_bottom="#ffffff", view_plain="#ffffff",
     view_text="#1f2328", levels=("#1d5fbf", "#0f7a6b", "#7a4bc2", "#a15c00"),
 )  # fmt: skip
 DARK = Tokens(
     "dark", surface="#2b2d31", raised="#383b41", sunken="#1e1f22", text="#e6e8eb",
-    muted="#8a96a3", border="#4a4e55", accent="#3d7bd9", accent_text="#ffffff",
-    focus="#6aa1f0", done="#4caf50", needed="#d4a72c", warning="#d4a72c", error="#e5534b",
-    running="#4f8fe6", view_top="#dfe6ee", view_bottom="#ffffff", view_plain="#ffffff",
+    muted="#a0abb7", border="#4a4e55", accent="#3a74d4", accent_text="#ffffff",
+    focus="#6aa1f0", done="#5cc46a", needed="#d4a72c", warning="#d4a72c", error="#ff8178",
+    running="#79aef5", view_top="#dfe6ee", view_bottom="#ffffff", view_plain="#ffffff",
     view_text="#1f2328", levels=("#6aa8ff", "#4fd1b5", "#c39bff", "#f0b45a"),
-    banner_error_text="#ff8a80",
+    banner_error_text="#ffa198",
 )  # fmt: skip
 # The 3D view stays light in the dark theme: result colours read best on a light
 # ground, as in Ansys and COMSOL. High contrast is black and white with yellow focus.
@@ -315,6 +343,7 @@ def colour_levels(tree, depth_of_top: int = 0) -> None:
     """Headings coloured by depth in a QTreeWidget (the model tree, Properties): an
     item that has children takes its level's colour and a medium weight; one without
     keeps the plain text colour. Settings > Interface > Heading colours turns it off."""
+    from PySide6.QtCore import Qt
     from PySide6.QtGui import QBrush, QColor
 
     from puzzle.settings import current as settings
@@ -337,11 +366,14 @@ def colour_levels(tree, depth_of_top: int = 0) -> None:
             stack.append((item, depth + 1))
 
 
-def tab_in_order(container) -> list:
+def tab_in_order(container, follow: bool = True) -> list:
     """Tab moves through a form's controls as they sit on screen, top to bottom, then
     left to right (ADR 0045 decision 9): Qt's default is the order they were made in,
-    which drifts as rows are inserted. Returns the controls in their new order."""
-    from PySide6.QtCore import QPoint
+    which drifts as rows are inserted. Returns the controls in their new order.
+
+    With `follow`, the order is made again whenever the container's layout changes
+    (a row shown or hidden, a form rebuilt), not only when it first shows."""
+    from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QWidget
 
     def takes(w) -> bool:
@@ -355,15 +387,74 @@ def tab_in_order(container) -> list:
     # Leave a control's own parts (a spin box's line edit) to it.
     controls = [w for w in controls if not any(o is not w and o.isAncestorOf(w)
                                                for o in controls)]  # fmt: skip
-
-    def at(w):
-        p = w.mapTo(container, QPoint(0, 0))
-        return (round(p.y() / 8), p.x())  # rows within 8 px read as one row
-
-    controls.sort(key=at)
+    controls = _in_rows(container, controls)
     for a, b in zip(controls, controls[1:], strict=False):
         QWidget.setTabOrder(a, b)
+    if follow:
+        _follow_layout(container)
     return controls
+
+
+def _in_rows(container, controls) -> list:
+    """Controls in reading order. A row is the controls whose tops lie above the
+    vertical centre of the row's first (topmost) control, so two controls a few
+    pixels apart always share a row (rounding to a band split them at its edge)."""
+    from PySide6.QtCore import QPoint
+
+    placed = []
+    for w in controls:
+        p = w.mapTo(container, QPoint(0, 0))
+        placed.append((p.y(), p.x(), max(1, w.height()), w))
+    placed.sort(key=lambda t: (t[0], t[1]))
+    rows: list[list] = []
+    centre = None
+    for top, x, height, w in placed:
+        if centre is None or top >= centre:
+            rows.append([])
+            centre = top + height / 2
+        rows[-1].append((x, w))
+    return [w for row in rows for _x, w in sorted(row, key=lambda t: t[0])]
+
+
+def _follow_layout(container) -> None:
+    """Put Tab in screen order again whenever the container's layout settles anew."""
+    from PySide6.QtCore import QObject
+
+    if container.findChild(QObject, "puzzle_tab_order") is None:
+        _follower_class()(container)
+
+
+@cache
+def _follower_class():
+    from PySide6.QtCore import QEvent, QObject, QTimer
+
+    class TabFollower(QObject):
+        """The container's child (so it goes with it); keeps no Python state the
+        filter needs, since Qt may call it while the container is being torn down."""
+
+        def __init__(self, container) -> None:
+            super().__init__(container)
+            self.setObjectName("puzzle_tab_order")
+            self.setProperty("pending", False)
+            container.installEventFilter(self)
+
+        def eventFilter(self, obj, event) -> bool:  # noqa: N802 - Qt's name
+            try:
+                changed = event.type() == QEvent.Type.LayoutRequest and obj is self.parent()
+                if changed and not self.property("pending"):  # once per event-loop turn
+                    self.setProperty("pending", True)
+                    QTimer.singleShot(0, self, self.again)  # dropped if the form goes
+            except RuntimeError:  # the container is going
+                pass
+            return False
+
+        def again(self) -> None:
+            self.setProperty("pending", False)
+            container = self.parent()
+            if container is not None and container.isVisible():
+                tab_in_order(container, follow=False)
+
+    return TabFollower
 
 
 def same_size(widgets, width: bool = True, height: bool = True) -> None:
