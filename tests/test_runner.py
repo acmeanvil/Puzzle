@@ -362,3 +362,30 @@ def test_an_agents_resume_is_a_proposal_that_picks_the_job_up(tmp_path):
     (proposal,) = [p for p in s.proposals() if p["id"] == out.proposal]
     assert proposal["commands"][0]["resume"] == job  # accepting it picks this job up
     assert proposal["commands"][0]["study"] == study
+
+
+def test_no_module_imports_unix_only_modules_when_loaded():
+    """Puzzle on Windows loads the runner's modules (for RunnerError) without running
+    the runner, so a module-level `import fcntl` broke every solve there (ADR 0068)."""
+    import ast
+
+    unix = {"fcntl", "termios", "pwd", "grp", "resource", "pty", "tty"}
+    src = Path(__file__).parents[1] / "src" / "puzzle"
+    found = []
+    for path in src.rglob("*.py"):
+        for node in ast.parse(path.read_text()).body:
+            names = []
+            if isinstance(node, ast.Import):
+                names = [a.name for a in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                names = [node.module]
+            found += [f"{path.relative_to(src)}: {n}" for n in names if n.split(".")[0] in unix]
+    assert not found, found
+
+
+def test_test_files_have_unique_names():
+    """tests/ has no __init__.py, so two test files of one name can't both be collected:
+    a second test_adapt.py stopped CI on every platform before any test ran."""
+    root = Path(__file__).parent
+    names = [p.name for p in root.rglob("test_*.py")]
+    assert len(names) == len(set(names)), sorted(n for n in names if names.count(n) > 1)

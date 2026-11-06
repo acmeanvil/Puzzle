@@ -91,10 +91,32 @@ def followed(entry: dict) -> bool:
     if who.get("machine") != socket.gethostname() or who.get("pid") in (None, os.getpid()):
         return False
     try:
-        os.kill(int(who["pid"]), 0)
+        return alive(int(who["pid"]))
+    except (ValueError, OverflowError):
+        return True
+
+
+def alive(pid: int) -> bool:
+    """Whether process `pid` is running. Not `os.kill(pid, 0)` on Windows: there it
+    terminates the process."""
+    if os.name == "nt":
+        import ctypes
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        handle = kernel.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return ctypes.get_last_error() == 5  # access denied: it exists
+        try:
+            code = ctypes.c_ulong()
+            kernel.GetExitCodeProcess(handle, ctypes.byref(code))
+            return code.value == 259  # STILL_ACTIVE
+        finally:
+            kernel.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
     except ProcessLookupError:
         return False
-    except (PermissionError, ValueError, OverflowError):
+    except PermissionError:
         return True
     return True
 

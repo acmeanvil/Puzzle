@@ -18,7 +18,6 @@ Requests and answers are JSON objects, one per line: `{"id": 1, "op": "submit", 
 from __future__ import annotations
 
 import contextlib
-import fcntl
 import hashlib
 import json
 import os
@@ -219,6 +218,8 @@ def serve(root: Path, cores: int = 0, memory_gb: float = 0.0) -> None:
     """Run the daemon for `root` until it has been idle for IDLE_S (no job running, no
     client connected); a second daemon for the same folder exits at once."""
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    import fcntl  # Unix only; Puzzle on Windows imports this module for RunnerError
+
     lock = (root / "runner.lock").open("w")
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)

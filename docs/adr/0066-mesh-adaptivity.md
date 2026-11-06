@@ -289,7 +289,7 @@ The maintainer's answers:
     Netgen's file.
   - `tests/test_adapt.py`: the loop on a stand-in, converging in three passes,
     resuming, deleting and the quantity criterion.
-  - `tests/integration/test_adapt.py` (CalculiX): the cantilever adapted with Gmsh to
+  - `tests/integration/test_adapt_solves.py` (CalculiX): the cantilever adapted with Gmsh to
     1.24 % in 1273 elements (uniform refinement took 3037 for 2.12 %), the tip within
     0.2 % of the converged value; with Netgen 3.94 → 1.71 % over its passes.
 
@@ -321,7 +321,7 @@ The maintainer's answers:
 - Verified:
   - `tests/test_mmg.py`: a tanh layer on a cube gives elements 4:1 across it in two
     passes, with the named face kept on its face, at first and second order.
-  - `tests/integration/test_adapt.py`: a steel bar heated at one end for 2 s (an erfc
+  - `tests/integration/test_adapt_solves.py`: a steel bar heated at one end for 2 s (an erfc
     layer) from 10 mm tets, adapted to 0.2 %. MMG reached 0.053 % in 1647 elements and
     isotropic Gmsh 0.14 % in 1710, each in two passes, within 0.6 K of the erfc
     solution (the rest is the time step's).
