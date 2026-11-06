@@ -166,9 +166,76 @@ def search(query: str, limit: int = 5, embed=None) -> list[dict]:
     for score, i in hits[:limit]:
         p = every[i]
         out.append({"source": p.source, "heading": p.heading, "cite": p.cite(),
-                    "text": p.text[:1500], "link": p.link,
-                    "score": round(float(score), 3)})  # fmt: skip
+                    "link": p.link, "score": round(float(score), 3)}
+                   | _excerpt(p))  # fmt: skip
     return out
+
+
+EXCERPT = 1500  # characters of a hit, about a screen; the rest is a read away
+
+
+def _blocks(text: str) -> list[str]:
+    """Paragraphs, list items and fenced code blocks, in order: the units an excerpt
+    keeps whole."""
+    out, current, fenced = [], [], False
+    for line in text.splitlines():
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+            current.append(line)
+            if not fenced:  # a code block ends: keep it as one unit
+                out.append("\n".join(current))
+                current = []
+            continue
+        if fenced:
+            current.append(line)
+        elif not line.strip() or re.match(r"\s*(?:[-*+]|\d+[.)])\s", line):
+            if current:
+                out.append("\n".join(current))
+            current = [line] if line.strip() else []
+        else:
+            current.append(line)
+    if current:
+        out.append("\n".join(current))
+    return [b for b in out if b.strip()]
+
+
+def _cut(text: str, limit: int) -> str:
+    """One unit longer than the limit, cut at a word (a code block closed again)."""
+    head = text[:limit]
+    head = head[: head.rfind(" ")] if " " in head[limit // 2 :] else head
+    if head.count("```") % 2:
+        head += "\n```"
+    return head.rstrip() + " …"
+
+
+def _more(p: Passage) -> str:
+    kind, _, name = p.source.partition(" ")
+    if kind == "skill":
+        return f'skill_read("{name}") gives the whole skill'
+    if kind == "ADR":
+        return f"docs/adr/{name}-*.md holds the whole ADR"
+    return "a narrower knowledge query brings the rest up"
+
+
+def _excerpt(p: Passage, limit: int = EXCERPT) -> dict:
+    """A hit's text: whole paragraphs, items and code blocks up to `limit`, never cut
+    mid-word or mid-code, and when there is more, how much and how to read it all."""
+    if len(p.text) <= limit:
+        return {"text": p.text}
+    end, tail = 0, ""  # the text as written, up to the end of the last whole unit
+    for block in _blocks(p.text):
+        at = p.text.find(block, end)
+        if at < 0:
+            break
+        if at + len(block) > limit:
+            if limit - at > limit // 3:  # much room left: the long unit's start, at a word
+                tail = p.text[end:at] + _cut(block, limit - at)
+            break
+        end = at + len(block)
+    text = p.text[:end] + tail
+    left = len(p.text) - len(text)
+    return {"text": text + f"\n\n(… {left} more characters here; {_more(p)}.)",
+            "truncated": True}  # fmt: skip
 
 
 def _cos(a, b) -> float:

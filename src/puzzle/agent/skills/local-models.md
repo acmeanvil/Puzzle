@@ -17,7 +17,9 @@ local model to use, or why the agent struggles on their machine.
 - the ADRs, when Puzzle runs from source.
 
 Each hit has `cite` ("note code_aster § Contacts"), the `text` and, for a manual
-summary, a `link`.
+summary, a `link`. A long passage comes as its first paragraphs with `truncated` set
+and a note saying how much is left; for a skill, `skill_read(name)` gives it whole.
+Read it whole before following steps that the excerpt cuts off.
 
 1. Search with the words the user or the log used, the solver's name included.
    French messages are searched as they are.
@@ -31,14 +33,17 @@ summary, a `link`.
 Puzzle doesn't guess which local model is good enough: it measures. The user runs
 `puzzle agent pick` (or the agent panel's Pick a local model…). It:
 1. lists the models the endpoint already has (it downloads nothing);
-2. leaves out those that don't fit the computer's memory;
+2. leaves out those that don't fit the computer's memory, and embedding models;
 3. runs the evaluation tasks on the rest;
 4. ranks them by the core families passed (read, edit, batch, recover, refuse), then
    all tasks, then speed, then memory;
 5. recommends the smallest at the best score.
 
 Results are kept per model and suite version, so a second pick measures only new
-models. When no local model passes the core tasks, the advice is Claude.
+models (or a model whose record lacks tasks this machine now runs, such as those
+needing CalculiX). When the endpoint fails mid-measure, nothing is kept for that model
+and the pick says so: the endpoint failed, not the model. Cancel stops after the task
+under way. When no local model passes the core tasks, the advice is Claude.
 
 You don't run the pick yourself: it changes the user's settings. When a task is beyond
 the current model (it fails the same way twice), say so and suggest the user run a pick

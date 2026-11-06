@@ -74,6 +74,13 @@ class Actor:
 USER = Actor("user")
 
 
+def _same_actor(logged: dict, actor: Actor) -> bool:
+    """Whether a history entry's actor is this one: kind and name only, since the model
+    and suite (ADR 0022) are provenance; an agent moved to another model still owns
+    its edits."""
+    return (logged or {}).get("kind") == actor.kind and (logged or {}).get("name") == actor.name
+
+
 @dataclass
 class Outcome:
     """What a submitted command did."""
@@ -300,7 +307,7 @@ class Session:
                     for s, e in entries.items()
                     if s in live
                     and e.get("undo")
-                    and (not actor.is_agent or e["actor"] == actor.to_dict())
+                    and (not actor.is_agent or _same_actor(e["actor"], actor))
                 ]
                 if not candidates:
                     raise PuzzleError("nothing to undo", code="not_undoable")
@@ -310,7 +317,7 @@ class Session:
                 raise PuzzleError(f"no history entry {seq}", code="not_found")
             if not entry.get("undo") or seq not in live:
                 raise PuzzleError(f"entry {seq} cannot be undone", code="not_undoable")
-            if actor.is_agent and entry["actor"] != actor.to_dict():
+            if actor.is_agent and not _same_actor(entry["actor"], actor):
                 raise PuzzleError("agents may undo only their own changes", code="not_allowed")
             state = entry["undo"]
             current = _snapshot(self.project)

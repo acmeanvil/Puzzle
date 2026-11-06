@@ -1,8 +1,11 @@
 """The agent panel's Pick a local model… (ADR 0022): `agent.pick` in the background,
 each task's outcome as it lands, then the ranking and the recommendation, and Use it
-to save the choice in agent.toml. Nothing is downloaded."""
+to save the choice in agent.toml; Cancel stops after the task under way (what was
+measured in full is still ranked). Nothing is downloaded."""
 
 from __future__ import annotations
+
+import threading
 
 from PySide6.QtWidgets import (
     QDialog,
@@ -25,6 +28,7 @@ class PickDialog(QDialog):
         self.window = window
         self.setWindowTitle("Pick a local model")
         self.found = None
+        self.stop = threading.Event()  # Cancel: measuring stops after the current task
         layout = QVBoxLayout(self)
         intro = role(QLabel("Runs Puzzle's evaluation tasks on each model the local endpoint "
                             "already has that fits this computer's memory, and recommends "
@@ -52,6 +56,11 @@ class PickDialog(QDialog):
         self.use = QPushButton("Use it")
         self.use.setEnabled(False)
         self.use.clicked.connect(self.use_it)
+        self.cancel = QPushButton("Cancel")
+        self.cancel.setEnabled(False)
+        self.cancel.setToolTip("Stop after the task under way")
+        self.cancel.clicked.connect(self.cancel_pick)
+        buttons.addWidget(self.cancel)
         close = QPushButton("Close")
         close.clicked.connect(self.reject)
         buttons.addWidget(self.use)
@@ -64,6 +73,8 @@ class PickDialog(QDialog):
 
         url = self.base_url.text().strip()
         self.start.setEnabled(False)
+        self.stop.clear()
+        self.cancel.setEnabled(True)
         self.log.clear()
         self.log.appendPlainText(f"Asking {url} for its models…")
 
@@ -71,17 +82,30 @@ class PickDialog(QDialog):
             return pick.pick(
                 url,
                 on_task=lambda m, o: emit(
-                    f"{m} / {o.task}: {'pass' if o.passed else 'fail'} ({o.seconds:.0f} s)"
+                    f"{m} / {o.task}: "
+                    f"{'endpoint failed' if o.connection else 'pass' if o.passed else 'fail'}"
+                    f" ({o.seconds:.0f} s)"
                 ),
+                cancel=self.stop,
             )
 
         self.window.background("Measuring local models", work, self.measured, lock=False,
-                               output=self.log.appendPlainText,
+                               output=self.log.appendPlainText, cancel=self.stop,
                                failed=lambda exc: self.failed(exc))  # fmt: skip
+
+    def cancel_pick(self) -> None:
+        self.stop.set()
+        self.cancel.setEnabled(False)
+        self.log.appendPlainText("Stopping after the task under way…")
+
+    def reject(self) -> None:
+        self.stop.set()  # closing stops a pick under way too
+        super().reject()
 
     def measured(self, found) -> None:
         self.found = found
         self.start.setEnabled(True)
+        self.cancel.setEnabled(False)
         for c in found.candidates:
             if not c.fits:
                 self.log.appendPlainText(f"{c.name}: left out, {c.why}")
@@ -89,11 +113,14 @@ class PickDialog(QDialog):
             core = f"core {m.core_passed}/{m.core_total}"
             self.log.appendPlainText(f"{m.model}: {m.passed}/{m.total} tasks, {core}, "
                                      f"{m.median_s:.0f} s a task")  # fmt: skip
+        for m in found.incomplete:
+            self.log.appendPlainText(f"{m.model}: not measured in full, so not ranked")
         self.result.setText(found.words)
         self.use.setEnabled(found.recommended is not None)
 
     def failed(self, exc) -> None:
         self.start.setEnabled(True)
+        self.cancel.setEnabled(False)
         self.result.setText(str(getattr(exc, "message", exc)))
         role(self.result, "error")
 
