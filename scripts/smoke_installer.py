@@ -174,9 +174,9 @@ def main(argv: list[str] | None = None) -> int:
             if name in found:
                 exe = envs / name / ("python.exe" if WINDOWS else "bin/python")
                 run([str(python), "-c", AS_PUZZLE, str(exe), code], env)
-        if "mmg" in found:
-            bin_dir = envs / "mmg" / ("Library/bin" if WINDOWS else "bin")
-            assert any(bin_dir.glob("mmg3d*")), bin_dir
+        if "mmg" in found:  # conda-forge's Windows mmgsuite uses bin\, not Library\bin
+            dirs = [envs / "mmg" / d for d in ("bin", "Library/bin")]
+            assert any(f for d in dirs for f in d.glob("mmg3d*")), dirs
 
         step(5, n, "solving the cantilever with the installed FEniCSx")
         if "fenicsx" in found:
