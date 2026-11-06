@@ -125,3 +125,40 @@ def test_a_dependency_the_lock_lacks_is_refused(tmp_path):
     channel = _channel(tmp_path / "ch", "linux-64", ["not-in-the-lock >=1"])
     with pytest.raises(SystemExit, match="not-in-the-lock"):
         make_installer.write(lock, "linux-64", [str(channel)], tmp_path / "out", "sh")
+
+
+# --- signing and CI (step 3) ---------------------------------------------------------
+
+
+def test_installers_are_unsigned_until_the_certificates_are_set(tmp_path):
+    lock = make_installer.read_lock()
+    channel = _channel(tmp_path / "ch", "win-64", [])
+    unsigned = make_installer.write(lock, "win-64", [str(channel)], tmp_path / "a", "exe", {})
+    assert "signing" not in (unsigned / "construct.yaml").read_text()
+    signed = make_installer.write(lock, "win-64", [str(channel)], tmp_path / "b", "exe",
+                                  {"PUZZLE_WIN_CERTIFICATE": "C:\\cert.pfx"})  # fmt: skip
+    construct = (signed / "construct.yaml").read_text()
+    assert 'signing_certificate: "C:\\\\cert.pfx"' in construct
+    assert 'windows_signing_tool: "signtool"' in construct
+    mac = {"PUZZLE_MAC_INSTALLER_IDENTITY": "Developer ID Installer: P (X)",
+           "PUZZLE_MAC_APP_IDENTITY": "Developer ID Application: P (X)"}  # fmt: skip
+    assert make_installer.signing("osx-arm64", mac) == {
+        "signing_identity_name": mac["PUZZLE_MAC_INSTALLER_IDENTITY"],
+        "notarization_identity_name": mac["PUZZLE_MAC_APP_IDENTITY"],
+    }
+    assert make_installer.signing("linux-64", mac) == {}
+
+
+def test_notarizing_needs_the_installer_identity():
+    import pytest
+
+    with pytest.raises(SystemExit, match="installer identity"):
+        make_installer.signing("osx-64", {"PUZZLE_MAC_APP_IDENTITY": "Developer ID App"})
+
+
+def test_ci_builds_an_installer_for_every_platform():
+    workflow = (ROOT / ".github" / "workflows" / "installers.yml").read_text()
+    platforms = tomllib.loads((ROOT / "pixi.toml").read_text())["workspace"]["platforms"]
+    for platform in platforms:
+        assert f"platform: {platform}" in workflow, platform
+    assert "smoke_installer.py" in workflow

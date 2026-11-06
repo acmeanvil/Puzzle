@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import platform as host
 import re
 import subprocess
@@ -43,6 +44,20 @@ BASE = "app"
 EXTRA = ("calculix", "fenicsx", "code-aster", "netgen", "mmg", "scripts", "runner")
 OURS = ("puzzle-fem", "py-slvs", "manifold3d")  # Puzzle's channel, for the lock's PyPI ones
 TYPES = {"linux": "sh", "osx": "pkg", "win": "exe"}
+# Signing (step 3) is on only when these are set, as CI does from its secrets once the
+# certificates exist; until then installers are unsigned test builds.
+#   macOS: the "Developer ID Installer: ..." identity signs the .pkg (productsign), the
+#     "Developer ID Application: ..." one every Mach-O file constructor puts in it, for
+#     notarization (the workflow then submits and staples it).
+#   Windows: a .pfx certificate for signtool (its password in
+#     CONSTRUCTOR_PFX_CERTIFICATE_PASSWORD), or PUZZLE_WIN_SIGNTOOL=azuresigntool for a
+#     certificate in Azure, configured by AZURE_SIGNTOOL_* variables.
+SIGNING = {
+    "osx": {"signing_identity_name": "PUZZLE_MAC_INSTALLER_IDENTITY",
+            "notarization_identity_name": "PUZZLE_MAC_APP_IDENTITY"},
+    "win": {"signing_certificate": "PUZZLE_WIN_CERTIFICATE",
+            "windows_signing_tool": "PUZZLE_WIN_SIGNTOOL"},
+}  # fmt: skip
 
 
 @dataclass(frozen=True)
@@ -226,7 +241,21 @@ def _yaml(value, indent: int = 0) -> str:
     return json.dumps(value)
 
 
-def write(lock: Lock, platform: str, sources: list[str], out: Path, kind: str) -> Path:
+def signing(platform: str, environ: dict[str, str] | None = None) -> dict[str, str]:
+    """construct.yaml's signing keys for `platform`, from the environment (`SIGNING`)."""
+    environ = os.environ if environ is None else environ
+    keys = SIGNING.get(platform.split("-")[0], {})
+    out = {key: environ[var] for key, var in keys.items() if environ.get(var)}
+    if "notarization_identity_name" in out and "signing_identity_name" not in out:
+        raise SystemExit("notarizing needs the installer identity too "
+                         "(PUZZLE_MAC_INSTALLER_IDENTITY)")  # fmt: skip
+    if "signing_certificate" in out:
+        out.setdefault("windows_signing_tool", "signtool")
+    return out
+
+
+def write(lock: Lock, platform: str, sources: list[str], out: Path, kind: str,
+          environ: dict[str, str] | None = None) -> Path:  # fmt: skip
     """Write the installer's construct.yaml and explicit lists; returns its folder."""
     base, pypi = lock.packages(BASE, platform)
     if not base:
@@ -268,6 +297,7 @@ def write(lock: Lock, platform: str, sources: list[str], out: Path, kind: str) -
     }
     if platform.startswith("win"):
         info["default_prefix"] = "%LOCALAPPDATA%\\Puzzle"  # per user, no administrator
+    info.update(signing(platform, environ))
     (folder / "construct.yaml").write_text(
         f"# Written by scripts/make_installer.py from pixi.lock ({platform}); do not edit.\n"
         + _yaml(info)
@@ -322,7 +352,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"wrote {folder / 'construct.yaml'}")
     if args.build:
         print(f"[progress] 2/{steps} building the {kind} installer", flush=True)
-        print(f"built {build(folder, args.out)}")
+        built = build(folder, args.out)
+        print(f"built {built} ({built.stat().st_size / 1e9:.2f} GB)")
     print(f"[progress] {steps}/{steps} done", flush=True)
     return 0
 

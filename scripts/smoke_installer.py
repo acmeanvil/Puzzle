@@ -26,13 +26,23 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WINDOWS = sys.platform == "win32"
 
 
+TIMES: list[tuple[str, float]] = []  # each step and its seconds, printed at the end
+_started: list[float] = []
+
+
 def step(i: int, n: int, what: str) -> None:
+    now = time.monotonic()
+    if _started and TIMES:
+        TIMES[-1] = (TIMES[-1][0], now - _started[-1])
+    _started.append(now)
+    TIMES.append((what, 0.0))
     print(f"[progress] {i}/{n} {what}", flush=True)
 
 
@@ -41,22 +51,32 @@ def install(installer: Path, prefix: Path, shortcuts: bool) -> Path:
     if kind == ".sh":
         argv = ["bash", str(installer), "-b", "-p", str(prefix)] + ([] if shortcuts else ["-m"])
     elif kind == ".exe":
-        argv = [str(installer), "/S", f"/NoShortcuts={0 if shortcuts else 1}",
-                "/InstallationType=JustMe", f"/D={prefix}"]  # fmt: skip
+        # NSIS wants /D= last and unquoted, spaces and all, so this is one string.
+        argv = (f'"{installer}" /S /NoShortcuts={0 if shortcuts else 1} '
+                f"/InstallationType=JustMe /RegisterPython=0 /AddToPath=0 /D={prefix}")  # fmt: skip
     elif kind == ".pkg":
         argv = ["installer", "-pkg", str(installer), "-target", "CurrentUserHomeDirectory"]
         prefix = Path.home() / "Puzzle"
     else:
         raise SystemExit(f"not an installer: {installer}")
-    print("+", " ".join(argv), flush=True)
+    print("+", argv if isinstance(argv, str) else " ".join(argv), flush=True)
     subprocess.run(argv, check=True)
     return prefix
+
+
+def uninstall(prefix: Path) -> None:
+    """The Windows installer registers an uninstaller; run it so nothing stays listed."""
+    exe = prefix / "Uninstall-Puzzle.exe"
+    if WINDOWS and exe.exists():
+        subprocess.run(f'"{exe}" /S _?={prefix}', check=False)
 
 
 def clean_env() -> dict[str, str]:
     """An environment that knows nothing of this checkout's solvers or Python."""
     keep = ("HOME", "USER", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "TEMP", "TMP",
-            "SYSTEMROOT", "SystemRoot", "COMSPEC", "LANG", "TMPDIR")  # fmt: skip
+            "SYSTEMROOT", "SystemRoot", "WINDIR", "COMSPEC", "PATHEXT", "LANG", "TMPDIR",
+            "PROGRAMDATA", "USERNAME", "NUMBER_OF_PROCESSORS",
+            "PROCESSOR_ARCHITECTURE")  # fmt: skip
     env = {k: v for k, v in os.environ.items() if k in keep}
     env["PATH"] = os.pathsep.join(
         ["C:\\Windows\\System32", "C:\\Windows"] if WINDOWS else ["/usr/bin", "/bin"]
@@ -130,9 +150,15 @@ def main(argv: list[str] | None = None) -> int:
         if "mmg" in found:
             bin_dir = envs / "mmg" / ("Library/bin" if WINDOWS else "bin")
             assert any(bin_dir.glob("mmg3d*")), bin_dir
-        print(f"[progress] {n}/{n} done: {args.installer.name} works", flush=True)
+        step(n, n, f"done: {args.installer.name} works")
+        files = (f for f in prefix.rglob("*") if f.is_file() and not f.is_symlink())
+        size = sum(f.stat().st_size for f in files)
+        print(f"installed size: {size / 1e9:.2f} GB")
+        for what, seconds in TIMES[:-1]:
+            print(f"  {seconds:7.1f} s  {what}")
     finally:
         if not args.keep:
+            uninstall(prefix)
             shutil.rmtree(work, ignore_errors=True)
             if args.installer.suffix == ".pkg" and not args.prefix:
                 shutil.rmtree(prefix, ignore_errors=True)
