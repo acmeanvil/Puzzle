@@ -18,10 +18,15 @@ environments in the host's `envs_dir` (the same environment names as here, so an
 absolute path to a local pixi Python is turned into the remote one), or in Docker,
 Podman or Apptainer with Puzzle's images. With Slurm or PBS the driver writes a job
 script from the run's resources (processes, threads, memory, the walltime), submits
-it, follows its output until it ends, and exits with the job's exit code; the job id
-is kept in the case folder (`puzzle-job.id`). What went wrong is said on a line
-starting `[puzzle]` that `failure` turns into a coded error: `queue_rejected`,
-`walltime_exceeded`, `host_unreachable`, `transfer_failed`.
+it, follows its output until it ends (a failed query retried, not taken as the end),
+and exits with the job's exit code read from the scheduler's record of how it ended
+(sacct's State, PBS's Exit_status; the job script's own exit status when there is no
+record); the job id is kept in the case folder (`puzzle-job.id`), and a cancel that
+comes while the submit runs stops the job as soon as its id is known. What went wrong
+is said on a line starting `[puzzle]` that `failure` turns into a coded error:
+`queue_rejected`, `walltime_exceeded`, `out_of_memory`, `job_lost` (node failure,
+preemption, a cancel from outside, or an unknown outcome), `host_unreachable`,
+`transfer_failed`.
 """
 
 from __future__ import annotations
@@ -48,8 +53,12 @@ DRIVER = "puzzle-run.sh"
 JOB_SCRIPT = "puzzle-job.sh"
 JOB_ID = "puzzle-job.id"
 JOB_LOG = "puzzle-job.log"
+JOB_RC = "puzzle-job.rc"
 MARK = "[puzzle]"
 POLL_S = 5
+# Failed scheduler queries in a row before the driver gives up on following a job
+# (PUZZLE_REMOTE_RETRIES; at the poll interval, a minute).
+QUERY_RETRIES = 12
 # Environments on the host, searched for the solver's program (as pixi_solver_dirs here).
 REMOTE_ENVS = (*PIXI_SOLVER_ENVS, "scripts")
 # What never goes back and forth: the local log the job writes, Python caches.
@@ -181,23 +190,23 @@ class RemoteRuntime(Runtime):
         runtime = self.host.runtime
         if runtime == "native":
             envs = quote(self.host.envs_dir)
-            exe, args = _remote_program(command)
+            exe, name, env, args = _remote_program(command)
+            # The program's own environment when it came from one, else the first holding it.
+            where = shlex.quote(env) if env else " ".join(REMOTE_ENVS)
             lines += [
                 f"ENVS={envs}",
                 f"for e in {' '.join(REMOTE_ENVS)}; do",
                 '  [ -d "$ENVS/$e/bin" ] && PATH="$ENVS/$e/bin:$PATH"',
                 "done",
-                f"for e in {' '.join(REMOTE_ENVS)}; do",
-                f'  if [ -x "$ENVS/$e/bin/{exe.split("/")[-1]}" ]; then',
+                f"for e in {where}; do",
+                f'  if [ -x "$ENVS/$e/bin/"{shlex.quote(name)} ]; then',
                 '    export CONDA_PREFIX="$ENVS/$e"; PATH="$ENVS/$e/bin:$PATH"',
                 '    [ -d "$ENVS/$e/share/elmersolver" ] && export ELMER_HOME="$ENVS/$e"',
                 "    break",
                 "  fi",
                 "done",
                 "export PATH",
-                " ".join(
-                    [exe if exe.startswith("$") else shlex.quote(exe), *map(shlex.quote, args)]
-                ),  # fmt: skip
+                " ".join([exe, *map(shlex.quote, args)]),
             ]
             return lines
         image = self.host.images.get(self.solver) or DEFAULT_IMAGES.get(self.solver)
@@ -226,32 +235,32 @@ class RemoteRuntime(Runtime):
             # sshd starts it as a session leader: kill -- -pid stops the solver too.
             return "\n".join([*head, *self.solve_lines(command)]) + "\n"
         if scheduler == "slurm":
-            submit = f"sbatch --parsable {JOB_SCRIPT}"
-            state = 'squeue -h -j "$id" -o %T 2>/dev/null'
-            code = 'sacct -n -X -j "$id" -o State,ExitCode 2>/dev/null | head -1'
-            timeout = "TIMEOUT"
+            submit, stop = f"sbatch --parsable {JOB_SCRIPT}", "scancel"
         else:
-            submit = f"qsub {JOB_SCRIPT}"
-            state = 'qstat "$id" >/dev/null 2>&1 && echo running'
-            code = 'qstat -xf "$id" 2>/dev/null | grep -E "Exit_status|job_state"'
-            timeout = "Exit_status = -29"
+            submit, stop = f"qsub {JOB_SCRIPT}", "qdel"
         return "\n".join([
             *head,
             f": > {JOB_LOG}",
-            f'id=$({submit} 2>puzzle-submit.err) || {{ echo "{MARK} queue rejected: '
-            f'$(cat puzzle-submit.err)"; exit 97; }}',
-            'id=$(echo "$id" | cut -d";" -f1 | tr -d "[:space:]")',
-            f'echo "$id" > {JOB_ID}',
+            # A cancel (TERM to this process group) stops the job once its id is known:
+            # at once if it is, else as soon as the submit returns it.
+            'id=""; follow=""; stopping=""',
+            f'puzzle_stop() {{ stopping=1; [ -n "$follow" ] && kill $follow 2>/dev/null; '
+            f'if [ -n "$id" ]; then {stop} "$id" >/dev/null 2>&1; '
+            f'echo "{MARK} cancelled job $id"; exit 130; fi; }}',
+            "trap puzzle_stop TERM INT HUP",
+            # The submit itself ignores the cancel, so a job it makes is never orphaned.
+            f"out=$(trap '' TERM INT HUP; {submit} 2>puzzle-submit.err) || {{ "
+            f'[ -n "$stopping" ] && exit 130; '
+            f'echo "{MARK} queue rejected: $(cat puzzle-submit.err)"; exit 97; }}',
+            'id=$(echo "$out" | cut -d";" -f1 | tr -d "[:space:]")',
+            f'echo "$id" > {JOB_ID}.tmp && mv {JOB_ID}.tmp {JOB_ID}',
+            f'[ -n "$stopping" ] && {{ {stop} "$id" >/dev/null 2>&1; '
+            f'echo "{MARK} cancelled job $id"; exit 130; }}',
             f'echo "{MARK} submitted job $id"',
             f"tail -n +1 -f {JOB_LOG} & follow=$!",
-            f"while [ -n \"$({state})\" ]; do sleep {poll_seconds()}; done",
-            "sleep 2; kill $follow 2>/dev/null; wait $follow 2>/dev/null",
-            f"ended=$({code})",
-            f'echo "{MARK} job $id ended: $ended"',
-            f'case "$ended" in *"{timeout}"*) echo "{MARK} walltime exceeded"; exit 124;; esac',
-            'rc=$(echo "$ended" | sed -n "s/.*Exit_status = \\([0-9-]*\\).*/\\1/p")',
-            '[ -z "$rc" ] && rc=$(echo "$ended" | awk \'{print $2}\' | cut -d: -f1)',
-            'exit "${rc:-1}"',
+            *_follow_lines(scheduler),
+            'sleep 2; kill $follow 2>/dev/null; wait $follow 2>/dev/null; follow=""',
+            *_outcome_lines(scheduler),
         ]) + "\n"  # fmt: skip
 
     def job_script(self, command: list[str]) -> str:
@@ -259,12 +268,18 @@ class RemoteRuntime(Runtime):
         r, h = self.resources, self.host
         walltime = r.walltime or h.walltime
         partition, account = r.partition or h.partition, r.account or h.account
-        memory = r.memory_gb or h.memory_gb
-        cpus = str(self.threads() or 1)
+        from puzzle.hosts import check_queue_values
+
+        check_queue_values(f"the run on {h.name}", h.scheduler, walltime=walltime,
+                           partition=partition, account=account)  # fmt: skip
+        memory = float(r.memory_gb or h.memory_gb or 0)
+        processes, cpus = int(r.processes), str(self.threads() or 1)
         if h.scheduler == "slurm":
             directives = ["#SBATCH --job-name=puzzle", f"#SBATCH --output={JOB_LOG}",
-                          f"#SBATCH --ntasks={r.processes}", f"#SBATCH --cpus-per-task={cpus}",
-                          f"#SBATCH --time={walltime}"]  # fmt: skip
+                          f"#SBATCH --ntasks={processes}",
+                          f"#SBATCH --cpus-per-task={cpus}"]  # fmt: skip
+            if walltime:
+                directives.append(f"#SBATCH --time={walltime}")
             if memory:
                 directives.append(f"#SBATCH --mem={int(memory * 1024)}M")
             if partition:
@@ -274,15 +289,21 @@ class RemoteRuntime(Runtime):
             go = ['cd "$SLURM_SUBMIT_DIR" 2>/dev/null || cd "$(dirname "$0")"']
         else:
             directives = ["#PBS -N puzzle", f"#PBS -o {JOB_LOG}", "#PBS -j oe",
-                          f"#PBS -l select=1:ncpus={r.processes * int(cpus)}"
-                          f":mpiprocs={r.processes}" + (f":mem={int(memory)}gb" if memory else ""),
-                          f"#PBS -l walltime={walltime}"]  # fmt: skip
+                          f"#PBS -l select=1:ncpus={processes * int(cpus)}"
+                          f":mpiprocs={processes}"
+                          + (f":mem={int(memory)}gb" if memory else "")]  # fmt: skip
+            if walltime:
+                directives.append(f"#PBS -l walltime={walltime}")
             if partition:
                 directives.append(f"#PBS -q {partition}")
             if account:
                 directives.append(f"#PBS -A {account}")
             go = ['cd "$PBS_O_WORKDIR" 2>/dev/null || cd "$(dirname "$0")"']
-        return "\n".join(["#!/bin/sh", *directives, *go, *self.solve_lines(command)]) + "\n"
+        # The solver's exit status kept beside the case: the outcome when the scheduler
+        # keeps no accounting (sacct off, PBS without job history).
+        keep = [f"rc=$?; echo $rc > {JOB_RC}.tmp && mv {JOB_RC}.tmp {JOB_RC}", 'exit "$rc"']
+        lines = ["#!/bin/sh", *directives, *go, *self.solve_lines(command), *keep]
+        return "\n".join(lines) + "\n"
 
     # --- copying ---------------------------------------------------------------------
 
@@ -321,17 +342,128 @@ def poll_seconds() -> int:
     return max(1, int(os.environ.get("PUZZLE_REMOTE_POLL_S") or POLL_S))
 
 
-def _remote_program(command: list[str]) -> tuple[str, list[str]]:
-    """The program as the host finds it: a local pixi environment's program becomes the
-    same environment's there ($ENVS/<env>/bin/<name>); anything else by name on PATH."""
+def query_retries() -> int:
+    """Failed queries before the driver gives up on a job (PUZZLE_REMOTE_RETRIES)."""
+    import os
+
+    return max(1, int(os.environ.get("PUZZLE_REMOTE_RETRIES") or QUERY_RETRIES))
+
+
+def _remote_program(command: list[str]) -> tuple[str, str, str, list[str]]:
+    """The program as the host finds it: (the shell word that runs it, its name, its
+    pixi environment or "", the arguments). A local pixi environment's program becomes
+    the same environment's there ("$ENVS"/<env>/bin/<name>, the rest quoted, so an
+    envs_dir with spaces works); anything else is found by name on PATH."""
     first = Path(command[0])
     parts = first.parts
     if first.is_absolute() and "envs" in parts:
         i = len(parts) - 1 - parts[::-1].index("envs")
         if i + 2 < len(parts):
             env, name = parts[i + 1], first.name
-            return f'"$ENVS/{env}/bin/{name}"', command[1:]
-    return (first.name if first.is_absolute() else command[0]), command[1:]
+            return '"$ENVS"/' + shlex.quote(f"{env}/bin/{name}"), name, env, command[1:]
+    name = first.name if first.is_absolute() else command[0]
+    return shlex.quote(name), name, "", command[1:]
+
+
+# Slurm states of a job not yet over; PBS job_state letters likewise.
+SLURM_ACTIVE = (
+    "PENDING RUNNING CONFIGURING COMPLETING REQUEUED REQUEUE_FED REQUEUE_HOLD "
+    "RESIZING SUSPENDED SIGNALING STAGE_OUT STOPPED SPECIAL_EXIT RESV_DEL_HOLD"
+)
+PBS_ACTIVE = "B E H M Q R S T U W"
+
+
+def _follow_lines(scheduler: str) -> list[str]:
+    """Wait while the job is queued or running. A query that fails (the controller
+    busy, a network blip) is retried, not taken as the job's end: only the scheduler
+    saying the job is unknown or over ends the wait."""
+    if scheduler == "slurm":
+        query = [
+            'st=$(squeue -h -j "$id" -o %T 2>puzzle-queue.err); q=$?',
+            # Slurm forgets a finished job after a while: "Invalid job id" is its end.
+            'if [ $q -ne 0 ] && grep -qi "invalid job id" puzzle-queue.err; then st=""; q=0; fi',
+            # squeue failed: accounting may still say whether it is running.
+            'if [ $q -ne 0 ]; then st=$(sacct -n -X -P -j "$id" -o State 2>/dev/null '
+            '| head -1 | cut -d" " -f1); [ -n "$st" ] && q=0; fi',
+        ]
+        active = SLURM_ACTIVE
+    else:
+        query = [
+            'all=$(qstat -f "$id" 2>puzzle-queue.err); q=$?',
+            'st=$(echo "$all" | sed -n "s/^ *job_state = //p" | head -1)',
+            'if [ $q -ne 0 ] && grep -qiE "unknown job|has finished" puzzle-queue.err; then '
+            'st=""; q=0; fi',
+        ]
+        active = PBS_ACTIVE
+    return [
+        "fail=0",
+        "while :; do",
+        *(f"  {line}" for line in query),
+        '  if [ -n "$st" ]; then',
+        f'    case " {active} " in *" $st "*) fail=0; sleep {poll_seconds()}; continue;; esac',
+        "    break  # over: completed, failed, finished",
+        "  fi",
+        "  [ $q -eq 0 ] && break  # no longer known: over",
+        "  fail=$((fail + 1))",
+        f"  if [ $fail -ge {query_retries()} ]; then",
+        "    sleep 2; kill $follow 2>/dev/null",
+        f'    echo "{MARK} job $id outcome unknown: lost track of it, the scheduler did '
+        'not answer ($(tr "\\n" " " < puzzle-queue.err))"; exit 99',
+        "  fi",
+        f"  sleep {poll_seconds()}",
+        "done",
+    ]
+
+
+def _outcome_lines(scheduler: str) -> list[str]:
+    """The job's exit code from the scheduler's own record of how it ended: a walltime,
+    a memory limit or the scheduler's own ending (node failure, preemption) each said
+    on a [puzzle] line with an exit code of its own; the job script's exit status when
+    the scheduler keeps no record."""
+    walltime = f'echo "{MARK} walltime exceeded"; exit 124'
+    memory = f'echo "{MARK} out of memory: job $id used more than it asked for"; exit 98'
+    ended = f'echo "{MARK} the scheduler ended job $id: $why"; exit 99'
+    no_record = [
+        f"if [ -s {JOB_RC} ]; then rc=$(cat {JOB_RC}); "
+        f'echo "{MARK} job $id: no scheduler record; its script exited $rc"; '
+        f'case "$rc" in ""|*[!0-9]*) rc=1;; esac; exit "$rc"; fi',
+        f'echo "{MARK} job $id outcome unknown: the scheduler keeps no record of it '
+        "(accounting or job history off) and its script wrote no exit status "
+        '(stopped, out of memory?)"; exit 99',
+    ]
+    if scheduler == "slurm":
+        return [
+            'ended=$(sacct -n -X -P -j "$id" -o State,ExitCode 2>/dev/null | head -1)',
+            f'echo "{MARK} job $id ended: ${{ended:-no accounting record}}"',
+            'state=$(echo "$ended" | cut -d"|" -f1); code=$(echo "$ended" | cut -d"|" -f2)',
+            'rc=${code%%:*}; sig=${code#*:}; case "$rc" in ""|*[!0-9]*) rc=1;; esac',
+            'case "$state" in',
+            '  COMPLETED*) exit "$rc";;',
+            f"  TIMEOUT*|DEADLINE*) {walltime};;",
+            f"  OUT_OF_MEMORY*) {memory};;",
+            f'  FAILED*) [ "$rc" -ne 0 ] && exit "$rc"; why="FAILED (signal $sig)"; {ended};;',
+            '  "") ;;',
+            f'  *) why="$state"; {ended};;',
+            "esac",
+            *no_record,
+        ]
+    return [
+        # PBS Pro keeps finished jobs with -x (job history); Torque in qstat -f a while.
+        'all=$(qstat -xf "$id" 2>/dev/null || qstat -f "$id" 2>/dev/null)',
+        'rc=$(echo "$all" | sed -n "s/^ *[Ee]xit_status = \\(-\\{0,1\\}[0-9]*\\).*/\\1/p" '
+        "| head -1)",
+        f'echo "{MARK} job $id ended: exit status ${{rc:-unknown}}"',
+        f'grep -q "job killed: walltime" {JOB_LOG} 2>/dev/null && {{ {walltime}; }}',
+        f'grep -qE "job killed: (mem|vmem)" {JOB_LOG} 2>/dev/null && {{ {memory}; }}',
+        'case "$rc" in',
+        f"  -29) {walltime};;",
+        f"  -27|-26) {memory};;",
+        f'  -*) why="PBS exit status $rc"; {ended};;',
+        "  '') ;;",
+        f'  *) [ "$rc" -ge 256 ] && {{ why="signal $((rc - 256))"; {ended}; }}; exit "$rc";;',
+        "esac",
+        *no_record,
+    ]
 
 
 _PROBED: dict[tuple, bool] = {}
@@ -392,6 +524,13 @@ def failure(log_tail: list[str], returncode: int | None, host: Host) -> PuzzleEr
         return PuzzleError(f"the job ran past its walltime on {host.name}; ask for more "
                            "(the study's Run on settings) or a coarser mesh",
                            code="walltime_exceeded", details={"host": host.name})  # fmt: skip
+    if "out of memory" in text:
+        return PuzzleError(f"the job ran out of memory on {host.name}; ask for more (the "
+                           "study's Run on settings) or a coarser mesh: " + text,
+                           code="out_of_memory", details={"host": host.name})  # fmt: skip
+    if "outcome unknown" in text or "the scheduler ended job" in text:
+        return PuzzleError(f"the job on {host.name} did not finish normally: {text}",
+                           code="job_lost", details={"host": host.name})  # fmt: skip
     return None
 
 

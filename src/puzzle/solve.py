@@ -420,7 +420,9 @@ def _run_sweep(
         words = sweep.labels(project, point)
         if on_output:
             on_output(f"--- {study.name}: point {i} of {len(keys)}: {sweep.title(words)}")
-        run = run_study(
+        # _run_study, not run_study: the host the sweep runs on (Study.remote or the
+        # caller's host=) is already set around it, and run_study would reset it.
+        run = _run_study(
             p,
             study.id,
             root,

@@ -5,7 +5,8 @@ adr: 0021
 ---
 Read this when the user wants a study run on a lab machine or a cluster, when a model
 is too big for this computer, or when a run failed with `host_unreachable`,
-`queue_rejected`, `walltime_exceeded` or `transfer_failed`.
+`queue_rejected`, `walltime_exceeded`, `out_of_memory`, `job_lost` or
+`transfer_failed`.
 
 Hosts are the user's, kept in `<user data dir>/hosts.toml`, never in a project. You
 can list and check them (`hosts_list`, `host_check`) but not add or change them: that
@@ -37,11 +38,15 @@ computed on a cluster is reused locally and the other way round.
 
 ## Units and limits
 
-- `walltime` is a text `HH:MM:SS`. `memory_gb` is in gigabytes (a host setting, not SI).
+- `walltime` is a text `HH:MM:SS` (Slurm also takes minutes and `D-HH:MM:SS`; PBS
+  not days). `partition` and `account` are names: letters, digits and `_ - . + @`, a
+  comma between partitions. Anything else is refused (`invalid`). `memory_gb` is in gigabytes (a host setting, not SI).
 - A remote run counts against an agent's budget at "act_in_budget" in core-hours as
   well as runs and seconds: cores × hours, from the host's cores (or processes ×
   threads). When `budget.core_hours` is spent, propose the run instead.
-- With a scheduler, the run waits in the queue first. The log says "submitted job N";
+- With a scheduler, the run waits in the queue first, and that wait counts in the
+  run's time and the budget's seconds and core-hours (the queue's walltime limits
+  only the running). The log says "submitted job N";
   the job id is kept in the run's folder (`puzzle-job.id`).
 
 ## When it fails
@@ -52,6 +57,12 @@ computed on a cluster is reused locally and the other way round.
   account, too many cores). The message carries the scheduler's words. Fix `remote`.
 - `walltime_exceeded`: the job ran out of time. Ask for a longer `walltime`, or make the
   model smaller.
+- `out_of_memory`: the scheduler stopped the job for using more memory than it asked
+  for. Ask for more `memory_gb`, fewer `processes`, or a coarser mesh.
+- `job_lost`: the scheduler ended the job itself (a node failed, it was preempted,
+  someone cancelled it outside Puzzle) or the outcome is unknown (no accounting record
+  and no exit status, or the scheduler stopped answering). Nothing was wrong with the
+  model as far as is known: tell the user, and run it again when they agree.
 - `transfer_failed`: the copy there or back failed (disk quota, permissions).
 - `solver_failed` with a log: the solver itself failed, as it would here.
 

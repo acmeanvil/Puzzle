@@ -62,9 +62,31 @@ def test_check_says_what_a_host_has(fakes):
 
 
 def test_programs_from_local_pixi_envs_become_the_hosts():
-    exe, args = _remote_program(["/Users/me/puzzle/.pixi/envs/fenicsx/bin/python", "study.py"])
-    assert exe == '"$ENVS/fenicsx/bin/python"' and args == ["study.py"]
-    assert _remote_program(["ccx", "-i", "job"]) == ("ccx", ["-i", "job"])
+    exe, name, env, args = _remote_program(["/Users/me/puzzle/.pixi/envs/fenicsx/bin/python",
+                                            "study.py"])  # fmt: skip
+    assert (exe, name, env, args) == ('"$ENVS"/fenicsx/bin/python', "python", "fenicsx",
+                                      ["study.py"])  # fmt: skip
+    assert _remote_program(["ccx", "-i", "job"]) == ("ccx", "ccx", "", ["-i", "job"])
+
+
+@needs_rsync
+def test_a_pixi_program_runs_from_an_envs_dir_with_a_space(tmp_path, fakes):
+    """FEniCSx's command is the local pixi Python: there it is the same environment's,
+    found and run even when the host's envs_dir has a space in it."""
+    bin_dir, _home = fakes
+    envs = tmp_path / "pixi envs"
+    for env in ("calculix", "fenicsx"):  # another env's python must not be the one run
+        (envs / env / "bin").mkdir(parents=True)
+        python = envs / env / "bin" / "python"
+        python.write_text(f'#!/bin/sh\necho "{env} python $* prefix=$CONDA_PREFIX"\n')
+        python.chmod(0o755)
+    case = _case(tmp_path)
+    rt = RemoteRuntime(remote_fakes.host(bin_dir, envs_dir=str(envs)), "fenicsx")
+    lines = []
+    job = run_job(["/Users/me/puzzle/.pixi/envs/fenicsx/bin/python", "study.py", "a b"], case,
+                  rt, on_output=lines.append)  # fmt: skip
+    assert job.ok, (case / "solver.log").read_text()
+    assert f"fenicsx python study.py a b prefix={envs / 'fenicsx'}" in lines
 
 
 def test_driver_and_job_scripts(tmp_path):
@@ -89,11 +111,42 @@ def test_driver_and_job_scripts(tmp_path):
     assert rt.remote_dir(a) != rt.remote_dir(b) and rt.remote_dir(a).startswith("puzzle-runs/")
 
 
+def test_queue_values_are_checked_before_they_reach_a_job_script():
+    """Partition, account and walltime go into #SBATCH/#PBS lines as they are, so a
+    newline or a ; there is refused where it is typed and where it is used."""
+    from pydantic import ValidationError
+
+    from puzzle.model import RemoteRun
+
+    for bad in ({"partition": "short\n#SBATCH --uid=0"}, {"account": "p1; rm -rf ~"},
+                {"walltime": "1h"}, {"walltime": "01:00:00 --x"}, {"cores": "8"}):  # fmt: skip
+        with pytest.raises(PuzzleError) as refused:
+            hosts.Host(name="hpc", address="hpc", scheduler="slurm", **bad)
+        assert refused.value.code == "invalid" and next(iter(bad)) in refused.value.message
+    with pytest.raises(PuzzleError, match="PBS takes HH:MM:SS"):
+        hosts.Host(name="p", address="p", scheduler="pbs", walltime="1-00:00:00")
+    for good in ("90", "30:00", "02:00:00", "2-12", "1-12:00:00"):
+        hosts.Host(name="hpc", address="hpc", scheduler="slurm", walltime=good)
+    hosts.Host(name="hpc", address="hpc", partition="short,long", account="proj-1.a")
+    with pytest.raises(ValidationError, match="partition"):
+        RemoteRun(host="hpc", partition="a b")
+    assert RemoteRun(host="hpc", walltime="00:30:00").walltime == "00:30:00"
+    # A Resources made in code is checked where the job script is written.
+    rt = RemoteRuntime(hosts.Host(name="hpc", address="hpc", scheduler="slurm"), "calculix",
+                       Resources(account="x\n#SBATCH --x"))  # fmt: skip
+    with pytest.raises(PuzzleError) as refused:
+        rt.job_script(["ccx", "-i", "job"])
+    assert refused.value.code == "invalid" and refused.value.details["field"] == "account"
+
+
 def test_failures_are_coded():
     h = hosts.Host(name="hpc", address="hpc")
     assert failure(["ssh: Connection reset"], 255, h).code == "host_unreachable"
     assert failure(["[puzzle] queue rejected: invalid partition"], 97, h).code == "queue_rejected"
     assert failure(["[puzzle] walltime exceeded"], 124, h).code == "walltime_exceeded"
+    assert failure(["[puzzle] out of memory: job 7 used more"], 98, h).code == "out_of_memory"
+    assert failure(["[puzzle] the scheduler ended job 7: NODE_FAIL"], 99, h).code == "job_lost"
+    assert failure(["[puzzle] job 7 outcome unknown: no record"], 99, h).code == "job_lost"
     assert failure(["*** ERROR in ccx"], 1, h) is None  # the solver's own: said as usual
 
 
@@ -163,6 +216,101 @@ def test_a_scheduler_job_is_submitted_followed_and_coded(tmp_path, fakes, schedu
     assert failure(tail, late.returncode, short).code == "walltime_exceeded"
 
 
+def _scheduler_run(tmp_path, bin_dir, scheduler, command, **host):
+    case = _case(tmp_path)
+    h = remote_fakes.host(bin_dir, scheduler=scheduler, walltime="00:00:30", **host)
+    job = run_job(command, case, RemoteRuntime(h, "calculix"))
+    tail = (case / "solver.log").read_text().splitlines()
+    return job, failure(tail, job.returncode, h), tail
+
+
+@needs_rsync
+@pytest.mark.parametrize(
+    ("ended", "code"),
+    [("OUT_OF_MEMORY|0:125", "out_of_memory"), ("NODE_FAIL|0:0", "job_lost"),
+     ("BOOT_FAIL|0:0", "job_lost"), ("PREEMPTED|0:0", "job_lost"),
+     ("CANCELLED by 123|0:15", "job_lost"), ("FAILED|0:9", "job_lost"),
+     ("DEADLINE|0:0", "walltime_exceeded")],
+)  # fmt: skip
+def test_how_a_slurm_job_ended_decides_its_outcome(tmp_path, fakes, monkeypatch, ended, code):
+    """A job the scheduler ended (memory, a node, preemption, someone's scancel) is a
+    coded failure, never exit 0 = success, whatever its ExitCode says."""
+    bin_dir, _home = fakes
+    monkeypatch.setenv("FAKE_SACCT_STATE", ended)
+    job, said, tail = _scheduler_run(tmp_path, bin_dir, "slurm", ["true"])
+    assert job.returncode != 0 and said is not None, tail
+    assert said.code == code
+
+
+@needs_rsync
+def test_without_accounting_the_job_scripts_exit_status_counts(tmp_path, fakes, monkeypatch):
+    bin_dir, _home = fakes
+    monkeypatch.setenv("FAKE_NO_ACCOUNTING", "1")
+    ok, said, tail = _scheduler_run(tmp_path / "a", bin_dir, "slurm", ["true"])
+    assert ok.ok and said is None, tail
+    assert any("no scheduler record" in x for x in tail)
+    bad, said, _ = _scheduler_run(tmp_path / "b", bin_dir, "slurm", ["sh", "-c", "exit 3"])
+    assert bad.returncode == 3 and said is None  # the solver's own failure
+    monkeypatch.setenv("FAKE_NO_HISTORY", "1")  # PBS without job history: the same
+    pbs, said, _ = _scheduler_run(tmp_path / "c", bin_dir, "pbs", ["sh", "-c", "exit 3"])
+    assert pbs.returncode == 3 and said is None
+
+
+@needs_rsync
+def test_pbs_memory_and_signal_endings_are_coded(tmp_path, fakes, monkeypatch):
+    bin_dir, _home = fakes
+    monkeypatch.setenv("FAKE_PBS_EXIT", "-27")
+    _job, said, tail = _scheduler_run(tmp_path / "a", bin_dir, "pbs", ["true"])
+    assert said is not None and said.code == "out_of_memory", tail
+    monkeypatch.setenv("FAKE_PBS_EXIT", "271")  # killed by SIGTERM (256 + 15)
+    _job, said, tail = _scheduler_run(tmp_path / "b", bin_dir, "pbs", ["true"])
+    assert said is not None and said.code == "job_lost" and "signal 15" in said.message, tail
+
+
+@needs_rsync
+def test_a_failed_queue_query_is_not_the_jobs_end(tmp_path, fakes, monkeypatch):
+    """squeue timing out a few times, or forgetting a finished job, doesn't end the
+    run early or wrongly; only when the scheduler never answers is the outcome unknown."""
+    bin_dir, _home = fakes
+    monkeypatch.setenv("FAKE_SQUEUE_FAILS", "3")
+    monkeypatch.setenv("FAKE_NO_ACCOUNTING", "1")  # no sacct to fall back on either
+    job, said, tail = _scheduler_run(tmp_path / "a", bin_dir, "slurm",
+                                     ["sh", "-c", "sleep 2; echo 7 > answer.txt"])  # fmt: skip
+    assert job.ok and said is None, tail
+    assert (tmp_path / "a" / "project" / "run" / "answer.txt").read_text().strip() == "7"
+    monkeypatch.delenv("FAKE_SQUEUE_FAILS")
+    monkeypatch.delenv("FAKE_NO_ACCOUNTING")
+    monkeypatch.setenv("FAKE_SQUEUE_FORGETS", "1")
+    job, said, tail = _scheduler_run(tmp_path / "b", bin_dir, "slurm", ["sh", "-c", "exit 3"])
+    assert job.returncode == 3 and said is None, tail
+    monkeypatch.setenv("FAKE_SQUEUE_FAILS", "1000")
+    monkeypatch.setenv("FAKE_NO_ACCOUNTING", "1")
+    monkeypatch.setenv("PUZZLE_REMOTE_RETRIES", "2")
+    job, said, tail = _scheduler_run(tmp_path / "c", bin_dir, "slurm", ["sh", "-c", "sleep 8"])
+    assert said is not None and said.code == "job_lost" and "outcome unknown" in said.message
+
+
+@needs_rsync
+def test_a_cancel_while_the_submit_runs_stops_the_job(tmp_path, fakes, monkeypatch):
+    """The cancel comes before sbatch has said the job's id: the driver stops the job
+    as soon as the id comes back, so it is not left running in the queue."""
+    bin_dir, home = fakes
+    monkeypatch.setenv("FAKE_SBATCH_DELAY", "3")
+    case = _case(tmp_path)
+    h = remote_fakes.host(bin_dir, scheduler="slurm", walltime="00:01:00", keep_case=True)
+    stop = threading.Event()
+    threading.Timer(1.0, stop.set).start()
+    job = run_job(["sh", "-c", "sleep 60"], case, RemoteRuntime(h, "calculix"), cancel=stop)
+    assert job.cancelled
+    jobs = home / ".fake-jobs"
+    for _ in range(50):  # the driver cancels once sbatch returns
+        if (jobs / "1000.cancelled").exists():
+            break
+        time.sleep(0.1)
+    assert (jobs / "1000.cancelled").exists()
+    assert (home / RemoteRuntime(h, "calculix").remote_dir(case) / "puzzle-job.id").exists()
+
+
 @needs_rsync
 def test_a_rejected_job_is_coded(tmp_path, fakes):
     bin_dir, _home = fakes
@@ -209,6 +357,51 @@ def test_a_study_runs_on_a_host_with_the_same_answer_and_run_key(tmp_path, fakes
     a, b = (r.results.last("displacement").values for r in (here, there))
     assert abs(b).max() == pytest.approx(abs(a).max(), rel=1e-9)
     assert any("fetched" in x for x in lines)
+
+
+def test_every_sweep_point_runs_on_the_studys_host(tmp_path, fakes, monkeypatch):
+    """A swept study sent to a host (by Study.remote or run_study's host=) runs each
+    point there, not here: the points see the host's runtime."""
+    from conftest_geometry import bar_project, write_bar_step
+
+    from puzzle import solve
+    from puzzle.jobs.runtime import runtime_for
+    from puzzle.model import (
+        ParameterSet,
+        Physics,
+        Quantity,
+        RemoteRun,
+        SolveStep,
+        Study,
+        SweepParameter,
+        SweepStep,
+    )
+
+    bin_dir, _home = fakes
+    hosts.add(remote_fakes.host(bin_dir))
+    step = write_bar_step(tmp_path / "bar.step")
+    project, comp = bar_project(step, [Physics(type="solid_mechanics")], mesh_size_mm=5)
+    project.add(ParameterSet(name="P", values={"load": Quantity(value=1, unit="N")}))
+    study = project.add(Study(name="S", component=comp.id, solver="calculix", steps=[
+        SweepStep(parameters=[SweepParameter(name="load", values=[
+            Quantity(value=v, unit="N") for v in (1, 2)])]),
+        SolveStep(type="stationary")]))  # fmt: skip
+    seen = []
+    real = solve._run_study
+
+    def point(project, study_id, root, workdir, **kwargs):
+        if kwargs.get("_point") is None:
+            return real(project, study_id, root, workdir, **kwargs)
+        rt = runtime_for("calculix")
+        seen.append(rt.host.name if isinstance(rt, RemoteRuntime) else "here")
+        return solve.StudyRun(mesh=None, results=None, run_key=kwargs["_point"][0])
+
+    monkeypatch.setattr(solve, "_run_study", point)
+    solve.run_study(project, study.id, tmp_path, tmp_path / "w", host="lab")
+    assert seen == ["lab", "lab"]
+    study.remote = RemoteRun(host="lab")
+    solve.run_study(project, study.id, tmp_path, tmp_path / "w2")
+    assert seen == ["lab"] * 4
 
 
 # --- GUI -------------------------------------------------------------------------------

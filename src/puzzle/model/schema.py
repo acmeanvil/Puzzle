@@ -1670,6 +1670,17 @@ class RemoteRun(BaseModel):
     partition: str = Field(default="", description="the scheduler's partition or queue")
     account: str = Field(default="", description="the scheduler's account")
 
+    @field_validator("walltime", "partition", "account")
+    @classmethod
+    def _fits_a_job_script(cls, v: str, info) -> str:
+        """Refused where it is typed: these go into #SBATCH/#PBS lines as they are."""
+        from puzzle.hosts import queue_value_problem
+
+        said = queue_value_problem(info.field_name, v)
+        if said is not None:
+            raise ValueError(said)
+        return v
+
     def resources(self):
         from puzzle.jobs.remote import Resources
 

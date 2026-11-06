@@ -16,6 +16,9 @@ CODES = {
     "host_unreachable": "ssh could not reach the remote host, or lost it (ADR 0021)",
     "queue_rejected": "the remote host's scheduler refused the job (ADR 0021)",
     "walltime_exceeded": "the job ran past its walltime on the remote host (ADR 0021)",
+    "out_of_memory": "the remote host's scheduler stopped the job for using too much memory",
+    "job_lost": "the scheduler ended the job itself (a node failure, preemption, a cancel "
+    "from outside Puzzle) or its outcome is unknown (ADR 0021)",
     "transfer_failed": "copying a case to or from the remote host failed (ADR 0021)",
     "untrusted": "the project is not trusted: its scripts and equations don't run (ADR 0062)",
     "script_failed": "a script operator raised an error, or left no result (ADR 0062)",

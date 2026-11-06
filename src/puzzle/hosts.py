@@ -18,6 +18,8 @@ same wherever it was computed, so a run key never changes with the host).
 
 from __future__ import annotations
 
+import math
+import re
 import shlex
 import shutil
 import subprocess
@@ -35,6 +37,11 @@ RUNTIMES = [
 ]
 SCHEDULERS = [("None: run at once", "none"), ("Slurm", "slurm"), ("PBS", "pbs")]
 CONNECT_TIMEOUT_S = 15
+# What may go into a #SBATCH or #PBS line: these are written into the job script, so
+# anything else (a space, a newline, a ;) could add directives or commands there.
+WALLTIME = re.compile(r"(\d+-)?\d+(:\d{1,2}){0,2}")  # minutes, MM:SS, HH:MM:SS, D-HH[:MM[:SS]]
+QUEUE = re.compile(r"[A-Za-z0-9_.+@-]+(,[A-Za-z0-9_.+@-]+)*")  # one, or a Slurm list
+ACCOUNT = re.compile(r"[A-Za-z0-9_.+@-]+")
 
 
 @dataclass
@@ -65,6 +72,14 @@ class Host:
         if self.scheduler not in {v for _, v in SCHEDULERS}:
             raise PuzzleError(f"host '{self.name}': scheduler is none, slurm or pbs, not "
                               f"'{self.scheduler}'", code="invalid")  # fmt: skip
+        for key, kind in (("port", int), ("cores", int), ("memory_gb", (int, float))):
+            value = getattr(self, key)
+            if isinstance(value, bool) or not isinstance(value, kind) or value < 0 or (
+                    isinstance(value, float) and not math.isfinite(value)):  # fmt: skip
+                raise PuzzleError(f"host '{self.name}': {key} is a number >= 0, not {value!r}",
+                                  code="invalid", path=f"{self.name}: {key}")  # fmt: skip
+        check_queue_values(f"host '{self.name}'", self.scheduler, walltime=self.walltime,
+                           partition=self.partition, account=self.account)  # fmt: skip
 
     @property
     def target(self) -> str:
@@ -89,6 +104,38 @@ class Host:
         except FileNotFoundError:
             raise PuzzleError(f"'{self.ssh[0]}' was not found: install OpenSSH to run on "
                               "remote hosts", code="host_unreachable") from None  # fmt: skip
+
+
+def queue_value_problem(key: str, value: str, scheduler: str = "") -> str | None:
+    """What is wrong with a walltime, partition or account for a job script; None if
+    it is fine (empty is: the scheduler's default)."""
+    if not value:
+        return None
+    if not isinstance(value, str):
+        return f"{key} is text, not {value!r}"
+    if key == "walltime":
+        if not WALLTIME.fullmatch(value):
+            return (f"walltime '{value}' is not a time limit: HH:MM:SS, minutes, MM:SS or "
+                    "D-HH:MM:SS")  # fmt: skip
+        if scheduler == "pbs" and "-" in value:
+            return f"walltime '{value}': PBS takes HH:MM:SS, not days"
+        return None
+    pattern = QUEUE if key == "partition" else ACCOUNT
+    if not pattern.fullmatch(value):
+        return f"{key} '{value}' may hold only letters, digits and _ - . + @" + (
+            " (a comma between partitions)" if key == "partition" else ""
+        )
+    return None
+
+
+def check_queue_values(where: str, scheduler: str = "", **values: str) -> None:
+    """Refuse a walltime, partition or account that a job script can't take as it is
+    (code `invalid`, naming the field)."""
+    for key, value in values.items():
+        said = queue_value_problem(key, value, scheduler)
+        if said is not None:
+            raise PuzzleError(f"{where}: {said}", code="invalid", path=f"{where}: {key}",
+                              details={"field": key})  # fmt: skip
 
 
 def hosts_path() -> Path:

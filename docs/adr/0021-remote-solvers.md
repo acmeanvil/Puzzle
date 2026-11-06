@@ -76,6 +76,14 @@ Users have three kinds of remote machines: a lab workstation reached by SSH; a c
   - PBS: `select=1:ncpus:mpiprocs:mem`, `walltime`, `-q`, `-A`.
 
   The driver submits the job, keeps its id in `puzzle-job.id`, follows its output until it leaves the queue, and exits with its exit code. It says what went wrong on `[puzzle]` lines, which `remote.failure` turns into the codes `queue_rejected`, `walltime_exceeded` and `host_unreachable`; `transfer_failed` comes from the copy.
+
+  Review fixes (2026-11-05):
+  - The exit code comes from how the scheduler says the job ended: Slurm's sacct State (COMPLETED gives the exit code; TIMEOUT and DEADLINE are `walltime_exceeded`; OUT_OF_MEMORY is `out_of_memory`; NODE_FAIL, BOOT_FAIL, PREEMPTED, CANCELLED from outside and FAILED by a signal are `job_lost`), PBS's Exit_status (-29 walltime, -27/-26 memory, other negatives and 256 + signal `job_lost`; `qstat -xf`, else Torque's `qstat -f`). Without a record (accounting off, no job history) the job script's own exit status (`puzzle-job.rc`, written beside the case) counts; without that too the outcome is unknown (`job_lost`), never success.
+  - A failed `squeue`/`qstat` is retried (`PUZZLE_REMOTE_RETRIES`, 12 polls), with sacct asked whether the job is still pending or running; only the scheduler saying the job is over or unknown (Slurm's "Invalid job id", PBS's "Unknown Job Id") ends the wait.
+  - Walltime, partition and account are checked before they reach a directive (`hosts.queue_value_problem`: `[D-]HH:MM:SS` or minutes, days refused on PBS; letters, digits and `_ - . + @`, commas between partitions), on `Host`, on `RemoteRun` and in `job_script`, code `invalid`.
+  - A cancel during the submit: the submit ignores the TERM, the driver traps it, writes the id atomically and cancels the job once the id is known.
+  - A pixi program there is run as `"$ENVS"/<env>/bin/<name>` (an `envs_dir` with spaces works; FEniCSx's Python was quoted into a literal before), with that environment as `CONDA_PREFIX`.
+  - Sweep points run on the sweep's host (they reset it to this machine when the host came from `host=`).
 - **Cancel.** Cancelling stops the far end first: `scancel`/`qdel` for a queued job, or the driver's whole process group (the driver records it when it starts). Then the local ssh stops. `run_job` calls it once.
 - **Studies.** `Study.remote` (`RemoteRun`: host, processes, threads, memory_gb, walltime, partition, account) is kept out of the content hashes, so a run key never depends on where it runs; a test checks this. `run_study(..., host=)` and `RunStudy.host` run a study there once. `run_study` sets the host for every runtime its adapters ask for, through a context variable (`jobs.runtime.on_host`), so Elmer's MPI check and Code_Aster's memory see the host. Studies it takes transfers from run where their own `remote` says. A stored run's runtime reads `lab (native)` or `cluster (slurm)`.
 - **Agents.** A remote run counts against the budget at act_in_budget in core-hours too (`Budget.core_hours`, default 2), from processes × threads or the host's cores. Agents list and check hosts (MCP `hosts_list`, `host_check`) but never add them.
@@ -86,6 +94,7 @@ Users have three kinds of remote machines: a lab workstation reached by SSH; a c
 - **Tests** (`tests/test_remote.py`). `tests/remote_fakes.py` stands in for ssh (a new session, as sshd starts one), rsync and Slurm/PBS (jobs in the background, walltime kills, rejected partitions) on this machine. The scripts, staging, streaming, fetching, cancelling and coded failures are therefore tested for real, and the cantilever runs on the fake host with CalculiX from its pixi envs, matching a local run.
 
 Not done yet:
+- The run's timeout and an agent's seconds and core-hours count the time in the queue too (`run_job` times the whole ssh; telling queue from running time needs the runner to hear the driver's start line).
 - Reattaching to a queued job after a GUI restart. The job id is kept in the run folder, but `run_study` waits for its job.
 - Code_Aster's MPI build check on a host. It assumes no MPI there, so it runs on one process.
 - A test against a real Slurm (a Slurm container in CI is the fallback).
