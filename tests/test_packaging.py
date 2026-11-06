@@ -160,5 +160,5 @@ def test_ci_builds_an_installer_for_every_platform():
     workflow = (ROOT / ".github" / "workflows" / "installers.yml").read_text()
     platforms = tomllib.loads((ROOT / "pixi.toml").read_text())["workspace"]["platforms"]
     for platform in platforms:
-        assert f"platform: {platform}" in workflow, platform
+        assert f'"platform": "{platform}"' in workflow, platform
     assert "smoke_installer.py" in workflow

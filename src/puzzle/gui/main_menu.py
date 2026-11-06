@@ -707,6 +707,8 @@ def _window(window, menu: QMenu, agent: QAction, messages: QAction) -> None:
     _add(menu, "Previous panel", lambda: window.focus_panel(-1),
          "Move the keyboard focus to the previous panel", "Shift+F6", free=True)  # fmt: skip
     menu.addSeparator()
+    _add(menu, "Refresh view", window.refresh_view,
+         "Draw the 3D view again from what is selected (F5 in the view)", free=True)  # fmt: skip
     _add(menu, "3D view background…", lambda: window.pick_view_background(),
          "A colour of your own behind the model (Settings > Interface for a gradient)")  # fmt: skip
     layouts = _sub(menu, "Layouts")  # ADR 0045: built-in and the user's own
@@ -765,6 +767,7 @@ def _help(window, menu: QMenu) -> None:
         menu.addAction(advisor)  # also in Window: what to do next (ADR 0040)
     _add(menu, "Keyboard shortcuts", lambda: _shortcuts(window), free=True)
     _add(menu, "Design decisions (ADRs)", lambda: _open_docs(window), free=True)
+    _add(menu, "Log", lambda: _log(window), free=True)
     menu.addSeparator()
     about = _add(menu, "About Puzzle", lambda: _about(window), free=True)
     about.setMenuRole(QAction.MenuRole.AboutRole)  # macOS: the application menu
@@ -785,6 +788,12 @@ STEPS = (
     "The Problems tab says what is missing before a run. The Agent panel can do any of "
     "this for you, with your approval."
 )
+
+
+def _log(window) -> None:
+    from puzzle.gui import log_viewer
+
+    window._log_viewer = log_viewer.show(window)  # kept, or it is collected at once
 
 
 def _getting_started(window) -> None:

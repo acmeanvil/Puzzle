@@ -455,3 +455,15 @@ def test_progress_tickers_go_with_their_job(app, window):
         spin(app, 0.05)
     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     assert seen == [1] and task.ticker is None and len(tickers()) == before
+
+
+def test_wizards_follow_the_theme():
+    """QWizard's default style on Windows (Aero) paints white pages over the palette,
+    so a wizard looked light in dark mode (I6); each sets ModernStyle."""
+    import re
+
+    gui = Path(__file__).parents[1] / "src" / "puzzle" / "gui"
+    for path in gui.rglob("*.py"):
+        text = path.read_text()
+        if re.search(r"class \w+\(QWizard\)", text):
+            assert "WizardStyle.ModernStyle" in text, path.name

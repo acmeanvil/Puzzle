@@ -14,6 +14,12 @@ name: Installers
 
 on:
   workflow_dispatch:
+    inputs:
+      platform:
+        description: Build for one platform only (all by default)
+        type: choice
+        default: all
+        options: [all, win-64, linux-64, linux-aarch64, osx-64, osx-arm64]
   release:
     types: [published]
   push:
@@ -48,17 +54,31 @@ jobs:
           path: output/noarch/puzzle-fem-*.conda
           if-no-files-found: error
 
+  # The platforms to build: all of them, or the one a manual run asks for.
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+    steps:
+      - id: pick
+        env:
+          WANTED: ${{ inputs.platform || 'all' }}
+        run: |
+          all='[
+            {"os": "ubuntu-latest", "platform": "linux-64", "kind": "sh"},
+            {"os": "ubuntu-24.04-arm", "platform": "linux-aarch64", "kind": "sh"},
+            {"os": "macos-15-intel", "platform": "osx-64", "kind": "pkg"},
+            {"os": "macos-latest", "platform": "osx-arm64", "kind": "pkg"},
+            {"os": "windows-latest", "platform": "win-64", "kind": "exe"}
+          ]'
+          echo "matrix=$(jq -c --arg w "$WANTED" \
+            '{include: [.[] | select($w == "all" or .platform == $w)]}' <<< "$all")" >> "$GITHUB_OUTPUT"
+
   installer:
-    needs: puzzle-fem
+    needs: [puzzle-fem, plan]
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - { os: ubuntu-latest, platform: linux-64, kind: sh }
-          - { os: ubuntu-24.04-arm, platform: linux-aarch64, kind: sh }
-          - { os: macos-15-intel, platform: osx-64, kind: pkg }
-          - { os: macos-latest, platform: osx-arm64, kind: pkg }
-          - { os: windows-latest, platform: win-64, kind: exe }
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     permissions:

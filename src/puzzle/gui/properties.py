@@ -348,27 +348,31 @@ class PropertiesPanel(QTreeWidget):
         """Show `data` (the object's JSON form) from `path` down; `names` maps ids to
         names; `choices(path)` gives a field's [(label, value)] or None (free text)."""
         self._filling = True
-        self.clear()
-        self.object_id = object_id
-        self.choices = choices or (lambda _path: None)
-        node: Any = data
-        for part in [p for p in path.split(".") if p]:
-            node = node[int(part)] if isinstance(node, list) else node[part]
-        self._fill(self.invisibleRootItem(), node, path, names)
-        self.expandToDepth(1)
-        from puzzle.gui.theme import colour_levels
+        try:  # a field that fails to show must not leave the panel deaf to edits (I5)
+            self.clear()
+            self.object_id = object_id
+            self.choices = choices or (lambda _path: None)
+            node: Any = data
+            for part in [p for p in path.split(".") if p]:
+                node = node[int(part)] if isinstance(node, list) else node[part]
+            self._fill(self.invisibleRootItem(), node, path, names)
+            self.expandToDepth(1)
+            from puzzle.gui.theme import colour_levels
 
-        colour_levels(self, depth_of_top=1)  # its groups as the tree's next levels
-        self._filling = False
+            colour_levels(self, depth_of_top=1)  # its groups as the tree's next levels
+        finally:
+            self._filling = False
 
     def show_text(self, rows: dict[str, Any]) -> None:
         """Read-only key/value rows (a run, a section)."""
         self._filling = True
-        self.clear()
-        self.object_id = ""
-        for key, value in rows.items():
-            QTreeWidgetItem(self.invisibleRootItem(), [key, format_value(value)])
-        self._filling = False
+        try:
+            self.clear()
+            self.object_id = ""
+            for key, value in rows.items():
+                QTreeWidgetItem(self.invisibleRootItem(), [key, format_value(value)])
+        finally:
+            self._filling = False
 
     def add_rows(self, title: str, rows: list[tuple[str, str]]) -> QTreeWidgetItem:
         """A read-only group under what is shown (an imported field's uses, a feature's
@@ -385,19 +389,21 @@ class PropertiesPanel(QTreeWidget):
         that takes a typed value ("200 MPa") has its own row under it while unwired.
         `rows` are (key, label, [(name, value)], current, typed text or None)."""
         self._filling = True
-        group = QTreeWidgetItem(self.invisibleRootItem(), ["Inputs", ""])
-        for key, title, options, current, typed in rows:
-            item = QTreeWidgetItem(group, [title, ""])
-            self._dropdown(item, f"inputs.{key}", current, options, self._wired)
-            if typed is not None:
-                row = QTreeWidgetItem(item, ["Typed value", typed])
-                row.setFlags(row.flags() | Qt.ItemFlag.ItemIsEditable)
-                row.setData(1, PATH, (f"inputs.{key}", TYPED))
-                row.setData(1, SHOWN, typed)
-                row.setToolTip(1, "Typed with its unit, e.g. 200 MPa")
-                item.setExpanded(True)
-        group.setExpanded(True)
-        self._filling = False
+        try:
+            group = QTreeWidgetItem(self.invisibleRootItem(), ["Inputs", ""])
+            for key, title, options, current, typed in rows:
+                item = QTreeWidgetItem(group, [title, ""])
+                self._dropdown(item, f"inputs.{key}", current, options, self._wired)
+                if typed is not None:
+                    row = QTreeWidgetItem(item, ["Typed value", typed])
+                    row.setFlags(row.flags() | Qt.ItemFlag.ItemIsEditable)
+                    row.setData(1, PATH, (f"inputs.{key}", TYPED))
+                    row.setData(1, SHOWN, typed)
+                    row.setToolTip(1, "Typed with its unit, e.g. 200 MPa")
+                    item.setExpanded(True)
+            group.setExpanded(True)
+        finally:
+            self._filling = False
         return group
 
     def add_slider(self, low: float, high: float, value: float, moved, released):

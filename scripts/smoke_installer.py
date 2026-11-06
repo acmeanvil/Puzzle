@@ -67,6 +67,13 @@ def install(installer: Path, prefix: Path, shortcuts: bool) -> Path:
     if done.returncode:
         for log in sorted(prefix.glob("*.log")) if prefix.is_dir() else []:
             print(f"--- {log}", log.read_text(errors="replace")[-5000:], sep="\n")
+        if kind == ".pkg":  # installer says only that a script failed; its log says which
+            log = Path("/var/log/install.log")
+            if log.exists():
+                tail = [ln for ln in log.read_text(errors="replace").splitlines()
+                        if "Puzzle" in ln or "install" in ln.lower()][-80:]  # fmt: skip
+                print("--- /var/log/install.log", *tail, sep="\n")
+        print(shutil.disk_usage(prefix.parent if prefix.parent.exists() else Path.home()))
         raise SystemExit(f"the installer failed ({done.returncode})")
     return prefix
 

@@ -397,6 +397,8 @@ class MainWindow(QMainWindow):
         self.viewport.construction_planes = self._construction_planes  # for section cuts
         self.viewport.hidden_parts = self._hidden_parts  # hidden or suppressed geometry
         self.viewport.beam_members = self._beam_members  # beams with their outline (ADR 0055)
+        if getattr(self.viewport, "view_bar", None) is not None:
+            self.viewport.view_bar.on_refresh = self.refresh_view
         self.results_bar = ResultsBar(self._redraw_result, self._axes_changed)
         self.results_bar.hide()
         # Which part of the work is on screen (ADR 0029): model, geometry, sketch or
@@ -628,7 +630,7 @@ class MainWindow(QMainWindow):
         self.properties.edited.connect(self._edit)
         self.problems.itemDoubleClicked.connect(self._problem_chosen)
         self.viewport.redraw_needed.connect(
-            lambda: self._redraw_result() if self.context == "results" else None
+            lambda: self._redraw_result() if self.context == "results" else self.refresh_view()
         )
         self._anim_factor = 1.0
         self._anim_timer = QTimer(self, interval=70)
@@ -1616,9 +1618,29 @@ class MainWindow(QMainWindow):
 
     # --- selection ---------------------------------------------------------------
 
+    def refresh_view(self) -> None:
+        """Draw the view again from what is selected (the view bar's Refresh view, F5;
+        Window → Refresh view), for when a change didn't show."""
+        plotter = self.viewport.plotter
+        camera = plotter.camera_position if plotter is not None else None
+        self._selected()
+        if camera is not None:
+            plotter.camera_position = camera  # a refresh doesn't move the view
+            self.viewport.view.refresh()
+
+    def _aside(self, what: str, work) -> None:
+        """Side work of a selection (the Advisor, marks): a failure is logged, never
+        left to stop Properties showing what was picked (I5)."""
+        try:
+            work()
+        except Exception:  # noqa: BLE001 - logged with its traceback (gui.errors)
+            import logging
+
+            logging.getLogger("puzzle.gui").exception("%s failed", what)
+
     def _selected(self) -> None:
         if getattr(self, "advisor_dock", None) is not None and self.advisor_dock.isVisible():
-            self.advisor.refresh()  # it speaks about what is selected
+            self._aside("the Advisor", self.advisor.refresh)  # about what is selected
         if self.left_tabs.currentWidget() is self.workbench:
             self.show_workbench_part()
             return
@@ -1641,7 +1663,7 @@ class MainWindow(QMainWindow):
             return
         obj = s.project.objects.get(_uuid(node.object)) if node.object else None
         if not isinstance(obj, ResultProbe):
-            self._drop_linearization()
+            self._aside("closing the linearization", self._drop_linearization)
         if node.kind == "group" and obj is not None:  # a folder: what it holds, by name
             self.properties.show_text(self._group_rows(obj))
             return
@@ -1652,7 +1674,7 @@ class MainWindow(QMainWindow):
         from puzzle.model.schema import Operator
 
         project = s.project
-        self._mark_problems(obj.name)
+        self._aside("marking problems", lambda: self._mark_problems(obj.name))
 
         def options(path):
             if isinstance(obj, Operator):  # ADR 0062: from the results it reads

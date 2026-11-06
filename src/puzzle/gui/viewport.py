@@ -442,6 +442,10 @@ class ViewBar(QWidget):
             self.actions_by_name[key] = action
 
         add("fit", "Fit all", viewport.fit, "F")
+        # Draw the scene again from the model: the window sets on_refresh (I3: a remesh
+        # that didn't show); alone it repaints.
+        self.on_refresh = None
+        add("refresh_view", "Refresh view", self.refresh_view, "F5")
         add("iso", "Isometric", lambda: viewport.look("iso"), "I")
         for direction, shortcut in self.VIEWS:
             add(
@@ -470,6 +474,12 @@ class ViewBar(QWidget):
         add("copy", "Copy image", self.copy_image)
         add("camera", "Save image…", self.save_image)
         self.adjustSize()
+
+    def refresh_view(self) -> None:
+        if self.on_refresh is not None:
+            self.on_refresh()
+        if self.viewport.plotter is not None:
+            self.viewport.view.refresh()
 
     def toggle_cut_bar(self, on: bool) -> None:
         """The section cut's controls under this bar; off removes the cut."""
@@ -804,7 +814,7 @@ class Viewport(QWidget):
         self._glyph_actors: list[str] = []
         # The shown result, for markers and probes (ADR 0032).
         self.result_state: dict | None = None
-        self.cut = None  # a section cut on results (post.cuts.Cut, ADR 0038)
+        self.cut = None  # a section cut on results and meshes (post.cuts.Cut, ADR 0038)
         from puzzle.post.legend import Legend
 
         self.legend = Legend.from_settings()  # the colour bar's look (Settings > Results)
@@ -848,6 +858,16 @@ class Viewport(QWidget):
             grid = to_grid(mesh)
         except ValueError:  # a surface-only preview of the geometry: nothing meshed yet
             grid = None
+        away = None
+        if grid is not None and self.cut is not None:  # the section cut on the mesh too (I4)
+            from puzzle.post.cuts import clip
+
+            bounds = grid.bounds
+            grid, away = clip(grid, self.cut, bounds)
+            origin, normal = self.cut.plane(bounds)
+            cut_shown = {"axis": self.cut.axis, "fraction": self.cut.fraction,
+                         "source": self.cut.source or "axis",
+                         "origin": origin.tolist(), "normal": normal.tolist()}  # fmt: skip
         cells = grid.n_cells if grid is not None else (self.surface.n_cells if self.surface else 0)
         members = self._beams(mesh) if grid is not None else []
         self.shown = {
@@ -858,10 +878,14 @@ class Viewport(QWidget):
             "highlighted": list(self.highlight_entities),
             "picked": list(self.picked),
         }
+        if away is not None:
+            self.shown["cut"] = cut_shown
         if self.plotter is None:
             return
         self.plotter.clear()
         dim = highlight is not None and highlight in mesh.groups and mesh.groups[highlight].dim == 3
+        if away is not None and self.cut.ghost and away.n_cells:
+            self.plotter.add_mesh(away, color=_t().faded, opacity=0.15, reset_camera=False)
         if grid is not None:
             self.plotter.add_mesh(
                 grid,
@@ -1459,7 +1483,7 @@ class Viewport(QWidget):
             self._glyph_actors.append(edge)
 
     def set_cut(self, cut) -> None:
-        """A section cut on results (`post.cuts.Cut`), or None; the result is redrawn."""
+        """A section cut (`post.cuts.Cut`), or None; the result or mesh shown is redrawn."""
         self.cut = cut
         self.redraw_needed.emit()
 

@@ -158,3 +158,25 @@ def test_saved_sections_recall_rename_delete_undo(bar_mesh, tmp_path):
     finally:
         w.close()
         app.processEvents()
+
+
+def test_a_cut_on_the_mesh_view_clips_it(bar_mesh):
+    """Turning the section cut on shows it on the mesh, not only on results (I4)."""
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    from puzzle.gui.viewport import Viewport
+
+    QApplication.instance() or QApplication([])
+    _, mesh = bar_mesh
+    view = Viewport()
+    view.show_mesh(mesh)
+    whole = view.shown["cells"]
+    assert "cut" not in view.shown
+    view.cut = Cut(axis="x", fraction=0.5)
+    view.show_mesh(mesh)
+    assert view.shown["cut"]["axis"] == "x"
+    assert 0 < view.shown["cells"] < whole
+    view.cut = None
+    view.show_mesh(mesh)
+    assert view.shown["cells"] == whole and "cut" not in view.shown

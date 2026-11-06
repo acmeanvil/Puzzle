@@ -49,7 +49,24 @@ def mac_app_name(name: str = NAME) -> bool:
     return True
 
 
+# What a launcher passes when it has no file to put in its placeholder: the Windows
+# Start-menu entry runs `puzzle gui %1` (so a double-clicked .puzzle file arrives) and,
+# started on its own, hands over the "%1" itself; Linux desktop entries use %f or %u.
+PLACEHOLDERS = {"%1", "%f", "%F", "%u", "%U", '"%1"', ""}
+
+
+def project_argument(project: Path | str | None) -> Path | None:
+    """The project or archive to open, or None for a launcher's empty placeholder."""
+    if project is None or str(project).strip() in PLACEHOLDERS:
+        return None
+    return Path(project)
+
+
 def main(project: Path | None = None) -> int:
+    from puzzle.gui import errors
+
+    errors.install()  # before anything can fail unseen
+    project = project_argument(project)
     mac_app_name()  # before the QApplication: the menu bar reads it once
     from PySide6.QtWidgets import QApplication
 
