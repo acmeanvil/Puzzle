@@ -32,7 +32,7 @@ import subprocess
 import sys
 import tomllib
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -94,12 +94,27 @@ def _name(url: str) -> str:
 class Lock:
     envs: dict[tuple[str, str], list[tuple[str, str]]]  # (env, platform) -> [(kind, url)]
     records: dict[str, dict]  # url -> {md5, sha256, depends}
-    virtual: dict[str, list[str]]  # platform -> its virtual packages
+    virtual: dict[str, list[str]]  # lock platform -> its virtual packages
+    # lock platform -> conda subdir: pixi names a platform with system requirements of
+    # its own apart (osx-64-macos-14-0 for osx-64 once macOS 14 is required, ADR 0070)
+    subdirs: dict[str, str] = field(default_factory=dict)
+
+    def variants(self, platform: str) -> list[str]:
+        """The lock's platforms for a conda subdir, strictest system first."""
+        names = [n for n in self.virtual if self.subdirs.get(n, n) == platform]
+        return sorted(names, key=lambda n: _osx(self.virtual[n]), reverse=True)
+
+    def virtual_for(self, platform: str) -> list[str]:
+        """The virtual packages an installer for `platform` needs: the strictest."""
+        names = self.variants(platform)
+        return self.virtual[names[0]] if names else []
 
     def packages(self, env: str, platform: str) -> tuple[list[Package], list[str]]:
-        """An environment's conda packages, and the PyPI ones it also has."""
+        """An environment's conda packages, and the PyPI ones it also has (from its
+        strictest variant of `platform` in the lock)."""
         conda, pypi = [], []
-        for kind, url in self.envs.get((env, platform), []):
+        found = next((n for n in self.variants(platform) if (env, n) in self.envs), platform)
+        for kind, url in self.envs.get((env, found), []):
             if kind == "pypi":
                 pypi.append(url)
                 continue
@@ -115,11 +130,14 @@ def read_lock(path: Path = LOCK) -> Lock:
     head, _, packages = text.partition("\npackages:\n")
     _, _, environments = head.partition("\nenvironments:\n")
     virtual: dict[str, list[str]] = {}
+    subdirs: dict[str, str] = {}
     name = None
     for line in head.partition("\nenvironments:\n")[0].splitlines():
         if m := re.match(r"^- name: (\S+)$", line):
             name = m.group(1)
             virtual[name] = []
+        elif (m := re.match(r"^  subdir: (\S+)$", line)) and name:
+            subdirs[name] = m.group(1)
         elif (m := re.match(r"^  - (__\S+)$", line)) and name:
             virtual[name].append(m.group(1))
     envs: dict[tuple[str, str], list[tuple[str, str]]] = {}
@@ -148,7 +166,14 @@ def read_lock(path: Path = LOCK) -> Lock:
             rec["depends"].append(m.group(1))
         elif re.match(r"^  \S", line):
             key = None
-    return Lock(envs, records, virtual)
+    return Lock(envs, records, virtual, subdirs)
+
+
+def _osx(virtual: list[str]) -> tuple[int, ...]:
+    for v in virtual:
+        if v.startswith("__osx="):
+            return tuple(int(p) for p in v.split("=")[1].split(".") if p.isdigit())
+    return ()
 
 
 # --- Puzzle's own packages ----------------------------------------------------------
@@ -297,7 +322,7 @@ def write(lock: Lock, platform: str, sources: list[str], out: Path, kind: str,
         "register_python": False,
         "keep_pkgs": False,
         # The systems the lock was solved for are the oldest its packages accept.
-        "virtual_specs": [_at_least(v) for v in lock.virtual.get(platform, []) if _bounded(v)],
+        "virtual_specs": [_at_least(v) for v in lock.virtual_for(platform) if _bounded(v)],
     }
     if platform.startswith("win"):
         info["default_prefix"] = "%LOCALAPPDATA%\\Puzzle"  # per user, no administrator

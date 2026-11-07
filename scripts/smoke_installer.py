@@ -128,6 +128,27 @@ Session(Path(sys.argv[1])).submit({"command": "edit", "object": "Tip load",
 """
 
 
+PARAVIEW = """
+import subprocess, sys
+from pathlib import Path
+import pyvista as pv
+from puzzle.post import paraview_link
+folder = Path(sys.argv[1])
+grid = pv.ImageData(dimensions=(5, 3, 3)).cast_to_unstructured_grid()
+grid.point_data["Temperature [K]"] = grid.points[:, 0]
+script = paraview_link.write(folder, grid, paraview_link.View(array="Temperature [K]"))
+exe = paraview_link.find()
+assert exe is not None, "no ParaView in the installation"
+batch = [p for p in exe.parent.glob("pvbatch*")]
+assert batch, f"no pvbatch beside {exe}"
+done = subprocess.run([str(batch[0]), str(script)], capture_output=True, text=True,
+                      encoding="utf-8", errors="replace", timeout=600)
+print(done.stdout[-1500:], done.stderr[-1500:])
+assert done.returncode == 0, done.returncode
+print("ParaView ran Puzzle's view:", exe)
+"""
+
+
 def example(dest: Path) -> Path:
     data = subprocess.run(["git", "archive", "HEAD", "examples/cantilever"], cwd=ROOT,
                           capture_output=True, check=True).stdout  # fmt: skip
@@ -165,6 +186,8 @@ def main(argv: list[str] | None = None) -> int:
         if "arm64" not in args.installer.name:  # no conda-forge hidapi there yet (ADR 0069)
             run([str(python), "-c", "import hid; print('3D mouse: hidapi lists',"
                  " len(hid.enumerate()), 'devices')"], env)  # fmt: skip
+        # ParaView (ADR 0070): a view written by the installed Puzzle, run off screen.
+        run([str(python), "-c", PARAVIEW, str(work / "paraview")], env)
         if args.shortcuts:
             menu = prefix / "Menu" / "puzzle-fem.json"
             assert menu.exists(), menu

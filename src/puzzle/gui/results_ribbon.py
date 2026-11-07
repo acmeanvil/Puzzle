@@ -60,8 +60,11 @@ class ResultsRibbon(Ribbon):
                     window.edit_legend,
                 ),
                 ("plots", "Plots", "Result tools against time, steps or distance", self.plots),
+                ("paraview", "Open in ParaView", "The result as shown here (colours, range, "
+                 "deformation, cut, camera) in ParaView, with every step and field to go "
+                 "further", self.paraview),
             ],
-        )
+        )  # fmt: skip
 
     def probe(self) -> None:
         w = self.window
@@ -74,6 +77,11 @@ class ResultsRibbon(Ribbon):
     def cut(self) -> None:
         action = self.window.viewport.view_bar.actions_by_name["section"]
         action.toggle()
+
+    def paraview(self) -> None:
+        from puzzle.gui.paraview_open import open_in_paraview
+
+        open_in_paraview(self.window)
 
     def animate(self) -> None:
         self.window.results_bar.play.toggle()

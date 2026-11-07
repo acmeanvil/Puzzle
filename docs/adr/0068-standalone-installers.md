@@ -268,6 +268,10 @@ Other constraints:
   limit. A preference (Settings > Solvers, "Memory for Puzzle's Linux environment") lets
   the user give it more or less; it applies the next time the machine starts.
 
+- **macOS 14 or later (2026-11-07):** ParaView 6.2 (ADR 0070) needs a Qt that
+  conda-forge builds for macOS 14+ only, so Puzzle's installers require macOS 14
+  (Sonoma); Macs that can't run it (Intel models from before about 2018) are left out.
+
 ## Open questions
 
 - Lima inside a notarized app (to be decided after further investigation): whether

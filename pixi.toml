@@ -16,7 +16,15 @@
 name = "puzzle"
 channels = ["conda-forge"]
 # osx-64 (Intel Macs) is supported for now; reassess as Apple ends Intel support.
-platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64", "win-64"]
+# macOS 14 (Sonoma) or later: ParaView 6.2 (ADR 0070) needs a Qt that conda-forge
+# builds for macOS 14 and later only (maintainer, 2026-11-07).
+platforms = [
+    "linux-64",
+    "linux-aarch64",
+    { name = "osx-64-macos14", platform = "osx-64", macos = "14.0" },
+    { name = "osx-arm64-macos14", platform = "osx-arm64", macos = "14.0" },
+    "win-64",
+]
 
 [dependencies]
 python = "3.12.*"
@@ -66,6 +74,10 @@ pyside6 = ">=6.7"
 pyvista = ">=0.44"
 anthropic = ">=0.40"  # the built-in agent's Claude provider
 keyring = ">=25"  # API keys in the OS keychain
+paraview = ">=6.2"  # Open in ParaView, and its filters (ADR 0070)
+# ParaView 6.2's VTK 9.7.0 builds link VTK's own CGNS module (libvtkcgns), which only
+# vtk-base 9.7.0's build 0 has (pvbatch failed to load with build 1); OCP holds 9.7.0.
+vtk-base = { version = "==9.7.0", build = "*_0" }
 
 # A 3D mouse read directly (ADR 0069). conda-forge builds hidapi everywhere but
 # osx-arm64 so far; there Puzzle runs without one (Settings > 3D mouse says why).
@@ -89,7 +101,7 @@ calculix = "2.23.*"
 # the same answers): `pixi run -e calculix-pardiso build-calculix` compiles it into this
 # environment, and Puzzle uses it before `calculix`. MKL: Intel Linux and Macs only here.
 [feature.calculix-pardiso]
-platforms = ["linux-64", "osx-64"]
+platforms = ["linux-64", "osx-64-macos14"]
 
 [feature.calculix-pardiso.dependencies]
 c-compiler = "*"
@@ -123,7 +135,7 @@ numpy = ">=1.26"
 # as Netgen's, run as a separate program (MMG is LGPL). conda-forge builds mmgpy for
 # these platforms only.
 [feature.mmg]
-platforms = ["linux-64", "osx-64", "win-64"]
+platforms = ["linux-64", "osx-64-macos14", "win-64"]
 
 [feature.mmg.dependencies]
 python = "3.12.*"

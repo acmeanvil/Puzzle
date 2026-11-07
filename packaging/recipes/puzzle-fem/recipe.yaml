@@ -58,6 +58,8 @@ requirements:
     - pyside6 >=6.7
     - anthropic >=0.40
     - keyring >=25
+    - paraview >=6.2
+    - vtk-base ==9.7.0 *_0  # the build ParaView 6.2's libraries link (ADR 0070)
 
 tests:
   - python:

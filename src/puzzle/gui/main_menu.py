@@ -649,6 +649,8 @@ def _results(window, menu: QMenu) -> None:
     _add(menu, "Add a skin-depth refinement", lambda: _skin(window),
          "Finer elements near each conductor's surface, for its skin depth")  # fmt: skip
     menu.addSeparator()
+    _add(menu, "Open in ParaView", lambda: _paraview(window),
+         "The result as shown, in ParaView: colours, range, deformation, cut, camera")  # fmt: skip
     _add(menu, "Export…", lambda: _export(window),
          "Results for other software: ParaView, point clouds, the deformed shape")  # fmt: skip
 
@@ -707,6 +709,12 @@ def _compare(window) -> None:
     study = current_study(window, "Compare")
     if study is not None:
         window.open_compare(str(study.id))
+
+
+def _paraview(window) -> None:
+    from puzzle.gui.paraview_open import open_in_paraview
+
+    open_in_paraview(window)
 
 
 def _export(window) -> None:

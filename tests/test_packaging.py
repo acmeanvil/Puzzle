@@ -36,7 +36,8 @@ def test_puzzles_package_needs_what_pixi_installs():
     run = _run_requirements(RECIPES / "puzzle-fem" / "recipe.yaml")
     assert set(run) == set(wanted), set(run) ^ set(wanted)
     for name, spec in wanted.items():
-        spec = spec if isinstance(spec, str) else ""
+        if isinstance(spec, dict):  # a table: a version and a build (vtk-base, ADR 0070)
+            spec = f"{spec.get('version', '')} {spec.get('build', '')}" if "version" in spec else ""
         assert run[name].replace(" ", "") == spec.replace(" ", ""), name
 
 
@@ -162,9 +163,9 @@ def test_notarizing_needs_the_installer_identity():
 
 def test_ci_builds_an_installer_for_every_platform():
     workflow = (ROOT / ".github" / "workflows" / "installers.yml").read_text(encoding="utf-8")
-    platforms = tomllib.loads((ROOT / "pixi.toml").read_text(encoding="utf-8"))["workspace"][
-        "platforms"
-    ]
+    listed = tomllib.loads((ROOT / "pixi.toml").read_text(encoding="utf-8"))["workspace"]
+    # an entry with a system requirement is a table naming its conda platform
+    platforms = [p if isinstance(p, str) else p["platform"] for p in listed["platforms"]]
     for platform in platforms:
         assert f'"platform": "{platform}"' in workflow, platform
     assert "smoke_installer.py" in workflow

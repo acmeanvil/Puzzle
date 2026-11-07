@@ -38,6 +38,7 @@ TABLER = {
     "messages": "message-2",
     "fit": "maximize",
     "refresh_view": "refresh",
+    "open_elsewhere": "arrow-bar-right",  # Open in ParaView (ADR 0070)
     "show": "eye",
     "hide": "eye-off",
     "colour": "palette",
@@ -153,7 +154,7 @@ TOOLS = {
     "boundary_layer": "loft", "mesh": "mesh", "seeds": "seeds", "gmsh_options": "settings",
     "probe": "probe", "reaction": "fixed", "selection": "pick", "path": "line",
     "linearized": "chart", "plane": "sheet", "cut": "section", "animate": "animate",
-    "legend": "legend", "plots": "chart",
+    "legend": "legend", "plots": "chart", "paraview": "open_elsewhere",
 }  # fmt: skip
 
 
