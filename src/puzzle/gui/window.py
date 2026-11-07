@@ -404,6 +404,10 @@ class MainWindow(QMainWindow):
         self.viewport.beam_members = self._beam_members  # beams with their outline (ADR 0055)
         if getattr(self.viewport, "view_bar", None) is not None:
             self.viewport.view_bar.on_refresh = self.refresh_view
+        from puzzle.gui.timing import StallWatch
+
+        self.stalls = StallWatch(self)  # the window held: how long, in what (Help → Log)
+        self.stalls.start()
         self.mouse3d = None  # a SpaceMouse or similar steering the view (ADR 0069)
         from puzzle.gui.spacemouse import hid as mouse_hid
 
@@ -1659,8 +1663,20 @@ class MainWindow(QMainWindow):
             logging.getLogger("puzzle.gui").exception("%s failed", what)
 
     def _selected(self) -> None:
+        """Show what the tree has selected: Properties, the view, its symbols. Timed, so
+        a slow one says in the log which part took the time (gui/timing.py)."""
+        from puzzle.gui import timing
+
+        node = self.tree.current()
+        with timing.action(f"showing {node.label if node is not None else 'nothing'}"):
+            self._show_selected()
+
+    def _show_selected(self) -> None:
+        from puzzle.gui.timing import step
+
         if getattr(self, "advisor_dock", None) is not None and self.advisor_dock.isVisible():
-            self._aside("the Advisor", self.advisor.refresh)  # about what is selected
+            with step("Advisor"):
+                self._aside("the Advisor", self.advisor.refresh)  # about what is selected
         if self.left_tabs.currentWidget() is self.workbench:
             self.show_workbench_part()
             return
@@ -1705,9 +1721,10 @@ class MainWindow(QMainWindow):
                     return found
             return choices(project, obj, path)
 
-        self.properties.show_object(
-            str(obj.id), obj.model_dump(mode="json"), node.path, names, options
-        )
+        with step("Properties"):
+            self.properties.show_object(
+                str(obj.id), obj.model_dump(mode="json"), node.path, names, options
+            )
         if isinstance(obj, Operator):
             from puzzle.gui import operators
 
@@ -1717,7 +1734,8 @@ class MainWindow(QMainWindow):
             return
         from puzzle.gui import field_view
 
-        field_view.show_properties(self, obj, node)  # ADR 0044: uses, and the chain
+        with step("Properties"):
+            field_view.show_properties(self, obj, node)  # ADR 0044: uses, and the chain
         if isinstance(obj, ResultDefinition):
             self.show_derived(obj)
             return
@@ -1736,7 +1754,8 @@ class MainWindow(QMainWindow):
             return
         mesh = self.meshes.get(str(comp.id))
         if mesh is None:
-            mesh = self._preview(comp)
+            with step("geometry preview"):
+                mesh = self._preview(comp)
         if mesh is None:
             return
         highlight = None
@@ -1756,7 +1775,8 @@ class MainWindow(QMainWindow):
         self.pick_bar.set_planar(comp.dimension != "3d")
         self.viewport.boundaries = self.mesh_boundaries.get(str(comp.id), {})
         self.viewport.vertices = self.mesh_vertices.get(str(comp.id), {})
-        self.viewport.show_mesh(mesh, highlight if highlight in mesh.groups else None, entities)
+        with step("view"):
+            self.viewport.show_mesh(mesh, highlight if highlight in mesh.groups else None, entities)
         if isinstance(built, CoordinateSystem):  # its triad (ADR 0049)
             import numpy as np
 
@@ -1775,10 +1795,13 @@ class MainWindow(QMainWindow):
                 whole = np.linalg.norm(np.ptp(mesh.coords, axis=0))
                 size = float(max(1.6 * across, 0.25 * whole))
             self.viewport.show_construction(built.type, a, b, size)
-        self._show_symbols(comp, mesh, node)
-        self._show_extras(mesh, obj)
+        with step("supports and loads"):
+            self._show_symbols(comp, mesh, node)
+        with step("shown always"):
+            self._show_extras(mesh, obj)
         if node.kind == "feature":  # a field-fed one: its mapped values (ADR 0044)
-            field_view.show_feature(self, comp, node, mesh)
+            with step("field values"):
+                field_view.show_feature(self, comp, node, mesh)
 
     # --- the Geometry tab (ADR 0017) --------------------------------------------------
 

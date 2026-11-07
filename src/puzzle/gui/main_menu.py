@@ -53,7 +53,10 @@ def build(window, agent: QAction, messages: QAction) -> dict[str, QMenu]:
 
 def _add(menu: QMenu, text: str, slot: Callable, tip: str = "", keys=None, free=False):
     action = menu.addAction(text)
-    action.triggered.connect(lambda _=False: slot())
+    from puzzle.gui.timing import named
+
+    run = named(f"{menu.title().replace('&', '')} → {text}", slot)  # stalls say which item
+    action.triggered.connect(lambda _=False: run())
     if tip:
         action.setToolTip(tip)
     if keys is not None:

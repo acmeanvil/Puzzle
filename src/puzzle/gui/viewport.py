@@ -879,8 +879,25 @@ class Viewport(QWidget):
             known = set(self.entities) | set(self.line_entities) | set(self.vertices)
             self.picked = [e for e in self.picked if e in known or e in self.boundaries]
         self.highlight, self.highlight_entities = highlight, list(entities or [])
+        dim = highlight is not None and highlight in mesh.groups and mesh.groups[highlight].dim == 3
+        # The model itself as last drawn: picking another item in the tree usually only
+        # moves the highlight, so the mesh, its colours and the cut are kept and only
+        # what is drawn over them is redrawn (the lag between tree items).
+        base = (id(mesh), tuple(sorted(colours.items())), repr(self.cut), bool(dim or ghost),
+                self.style.get("beams", True), id(_t()))  # fmt: skip
+        kept = getattr(self, "_base", None)
+        if (self.plotter is not None and kept is not None and kept[0] == base
+                and kept[1] <= set(self.plotter.renderer.actors)):  # fmt: skip
+            for name in [n for n in self.plotter.renderer.actors if n not in kept[1]]:
+                self.plotter.remove_actor(name, render=False)
+            self.shown = dict(kept[2], highlight=highlight, picked=list(self.picked),
+                              highlighted=list(self.highlight_entities))  # fmt: skip
+            self._draw_over(mesh, highlight)
+            self._frame(mesh)
+            return
+        self._base = None
         try:
-            grid = to_grid(mesh)
+            grid = self._grid_of(mesh)
         except ValueError:  # a surface-only preview of the geometry: nothing meshed yet
             grid = None
         if grid is not None and colours:  # each cell its body's colour, kept by a cut
@@ -913,7 +930,6 @@ class Viewport(QWidget):
         if self.plotter is None:
             return
         self.plotter.clear()
-        dim = highlight is not None and highlight in mesh.groups and mesh.groups[highlight].dim == 3
         if away is not None and self.cut.ghost and away.n_cells:
             self.plotter.add_mesh(away, color=_t().faded, opacity=0.15, reset_camera=False)
         if grid is not None:
@@ -948,6 +964,14 @@ class Viewport(QWidget):
                 30, boundary_edges=True, manifold_edges=False
             )
             self.plotter.add_mesh(edges, color=_t().mesh_edge, line_width=1.5)
+        shown = {k: v for k, v in self.shown.items() if k not in ("highlight", "highlighted",
+                                                                  "picked")}  # fmt: skip
+        self._base = (base, set(self.plotter.renderer.actors), shown)
+        self._draw_over(mesh, highlight)
+        self._frame(mesh)
+
+    def _draw_over(self, mesh, highlight) -> None:
+        """The highlighted selection and the picks, over the model."""
         if highlight is not None:
             surface = selection_surface(mesh, highlight)
             if surface is not None:
@@ -957,7 +981,16 @@ class Viewport(QWidget):
             (self.picked, _t().picked),
         ):
             self._draw_entities(group, colour)
-        self._frame(mesh)
+
+    def _grid_of(self, mesh):
+        """The mesh as a VTK grid, converted once per mesh (the cut and colours work on
+        it or on copies)."""
+        cached = getattr(self, "_grids", None)
+        if cached is not None and cached[0] is mesh:
+            return cached[1].copy(deep=False)
+        grid = to_grid(mesh)
+        self._grids = (mesh, grid)
+        return grid.copy(deep=False)
 
     def _draw_entities(self, group, colour: str) -> None:
         """Faces as an overlay, edges as thick lines, vertices as dots, bodies by their faces."""

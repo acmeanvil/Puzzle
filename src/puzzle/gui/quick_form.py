@@ -232,7 +232,10 @@ class QuickForm(QDialog):
 
 def ask_form(window, title: str, asks: list[Ask], intro: str = "", check=None) -> dict | None:
     """The values of a one-dialog form, or None if cancelled (or blocked by `check`)."""
-    dialog = QuickForm(title, asks, intro, check, window)
+    from puzzle.gui.timing import action
+
+    with action(f"opening {title}"):  # building it, not the time you spend in it
+        dialog = QuickForm(title, asks, intro, check, window)
     if not window.run_dialog(dialog):
         return None
     if check is not None and check(dialog.values()):
