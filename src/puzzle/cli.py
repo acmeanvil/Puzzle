@@ -40,7 +40,16 @@ class CliError(Exception):
     pass
 
 
+def _tolerant_output() -> None:
+    """A character the console's code page lacks (an en dash, ², →) is replaced, not
+    fatal: Windows' cp1252 console made a print raise and the command fail."""
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
+
+
 def main(argv: list[str] | None = None) -> int:
+    _tolerant_output()
     args = _parser().parse_args(argv)
     try:
         return args.handler(args)

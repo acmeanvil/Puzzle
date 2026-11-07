@@ -137,6 +137,8 @@ def example(dest: Path) -> Path:
 
 
 def main(argv: list[str] | None = None) -> int:
+    for stream in (sys.stdout, sys.stderr):  # the CI console's cp1252 can't print all of it
+        stream.reconfigure(errors="replace")
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("installer", type=Path)
     p.add_argument("--prefix", type=Path, help="where to install (default: a temp folder)")

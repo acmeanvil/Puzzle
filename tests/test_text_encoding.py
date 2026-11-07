@@ -101,3 +101,19 @@ def test_a_project_file_with_a_byte_order_mark_opens(tmp_path):
     header.write_bytes(b"\x00\x01garbage")
     with pytest.raises(PuzzleError, match="project.toml .* isn't a readable project file"):
         load_project(tmp_path)
+
+
+def test_a_console_without_a_character_gets_a_question_mark(monkeypatch):
+    """Windows' cp1252 console can't print → or ², and a print there raised; the CLI
+    replaces what the console lacks instead."""
+    import io
+    import sys
+
+    from puzzle import cli
+
+    console = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
+    monkeypatch.setattr(sys, "stdout", console)
+    cli._tolerant_output()
+    print("Zienkiewicz–Zhu → ²")
+    console.flush()
+    assert console.buffer.getvalue() == b"Zienkiewicz\x96Zhu ? \xb2\n"
