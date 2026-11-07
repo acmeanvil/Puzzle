@@ -111,7 +111,8 @@ def missing(code: str) -> list[str]:
         "[m for m in sys.argv[1:] if importlib.util.find_spec(m) is None]))"
     )
     done = subprocess.run([str(exe), "-c", probe, *wanted], capture_output=True, text=True,
-                          timeout=60, env=_environment())  # fmt: skip
+                          encoding="utf-8", errors="replace", timeout=60,
+                          env=_environment())  # fmt: skip
     return json.loads(done.stdout or "[]")
 
 
@@ -149,7 +150,8 @@ def run(code: str, inputs: dict[str, Any], *, timeout_s: float = 30.0,
         argv = _sandbox([str(exe), "-I", "runner.py"], project_root)
         try:
             done = subprocess.run(argv, cwd=folder, capture_output=True, text=True,
-                                  timeout=timeout_s, env=_environment())  # fmt: skip
+                                  encoding="utf-8", errors="replace", timeout=timeout_s,
+                                  env=_environment())  # fmt: skip
         except subprocess.TimeoutExpired:
             raise PuzzleError(f"the script ran past its {timeout_s:g} s limit and was stopped",
                               code="timeout") from None  # fmt: skip

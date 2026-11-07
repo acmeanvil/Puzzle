@@ -16,10 +16,9 @@ on:
   workflow_dispatch:
     inputs:
       platform:
-        description: Build for one platform only (all by default)
-        type: choice
+        description: "Platforms to build: all, or a list such as win-64, linux-64 (linux-64, linux-aarch64, osx-64, osx-arm64, win-64)"
+        type: string
         default: all
-        options: [all, win-64, linux-64, linux-aarch64, osx-64, osx-arm64]
   release:
     types: [published]
   push:
@@ -71,8 +70,11 @@ jobs:
             {"os": "macos-latest", "platform": "osx-arm64", "kind": "pkg"},
             {"os": "windows-latest", "platform": "win-64", "kind": "exe"}
           ]'
-          echo "matrix=$(jq -c --arg w "$WANTED" \
-            '{include: [.[] | select($w == "all" or .platform == $w)]}' <<< "$all")" >> "$GITHUB_OUTPUT"
+          matrix=$(jq -c --arg w "$WANTED" '($w | gsub(" "; "") | split(",")) as $want
+            | {include: [.[] | select($want == ["all"] or (.platform | IN($want[])))]}' <<< "$all")
+          echo "$matrix"
+          [ "$(jq '.include | length' <<< "$matrix")" -gt 0 ] || { echo "no platform matches '$WANTED'"; exit 1; }
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
   installer:
     needs: [puzzle-fem, plan]

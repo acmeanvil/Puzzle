@@ -385,7 +385,9 @@ def _pbs_status(executor):
 
 def _run(argv: list[str]) -> str | None:
     try:
-        done = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+        done = subprocess.run(
+            argv, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60
+        )
     except (OSError, subprocess.TimeoutExpired):
         return None
     return done.stdout if done.returncode == 0 else None

@@ -101,7 +101,9 @@ def clean_env() -> dict[str, str]:
 
 def run(argv: list[str], env: dict[str, str], cwd: Path | None = None) -> str:
     print("+", " ".join(argv), flush=True)
-    done = subprocess.run(argv, env=env, cwd=cwd, capture_output=True, text=True)
+    done = subprocess.run(
+        argv, env=env, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace"
+    )
     print(done.stdout[-3000:], done.stderr[-3000:], sep="\n", flush=True)
     if done.returncode:
         raise SystemExit(f"failed ({done.returncode}): {' '.join(argv)}")

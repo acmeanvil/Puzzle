@@ -298,7 +298,9 @@ def adapt_mesh(mesh: Mesh, values: np.ndarray, workdir: Path, *, target: float,
     cmd = [str(binary), str(workdir / "in.mesh"), "-sol", str(workdir / "in.sol"),
            "-out", str(workdir / "out.mesh"), "-hausd", f"{hausd or 1e-3 * size:.6g}",
            "-hgrad", "1.3", "-v", "1"]  # fmt: skip
-    done = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+    done = subprocess.run(
+        cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=3600
+    )
     (workdir / "mmg.log").write_text(done.stdout + done.stderr, encoding="utf-8")
     if done.returncode != 0 or not (workdir / "out.mesh").exists():
         tail = (done.stdout + done.stderr).strip().splitlines()[-5:]

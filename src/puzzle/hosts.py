@@ -98,7 +98,7 @@ class Host:
         """A short command there, its output captured (a check, a cancel, a probe)."""
         try:
             return subprocess.run(self.ssh_argv(command), capture_output=True, text=True,
-                                  timeout=timeout)  # fmt: skip
+                                  encoding="utf-8", errors="replace", timeout=timeout)  # fmt: skip
         except subprocess.TimeoutExpired:
             raise PuzzleError(f"host '{self.name}' did not answer in {timeout:g} s",
                               code="host_unreachable") from None  # fmt: skip

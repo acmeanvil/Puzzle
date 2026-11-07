@@ -348,7 +348,8 @@ def _engine_memory(engine: str) -> int | None:
         return None
     try:
         out = subprocess.run([exe, "info", "--format", "{{.MemTotal}}"], capture_output=True,
-                             text=True, timeout=20, check=True).stdout  # fmt: skip
+                             text=True, encoding="utf-8", errors="replace", timeout=20,
+                             check=True).stdout  # fmt: skip
         return int(out.strip()) or None
     except (OSError, ValueError, subprocess.SubprocessError):
         return None

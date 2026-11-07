@@ -15,7 +15,7 @@ camera (position, focal point, view up) over a time step:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 
@@ -43,12 +43,15 @@ class Camera:
     position: tuple[float, float, float]
     focal_point: tuple[float, float, float]
     up: tuple[float, float, float]
+    # An orthographic view's half height: there zoom scales the view, since moving the
+    # camera nearer shows nothing larger (the stutter seen zooming). None: perspective.
+    parallel_scale: float | None = None
 
     @classmethod
-    def of(cls, triple) -> Camera:
+    def of(cls, triple, parallel_scale: float | None = None) -> Camera:
         """From pyvista's camera_position: (position, focal point, view up)."""
         p, f, u = (tuple(float(v) for v in row) for row in triple)
-        return cls(p, f, u)
+        return cls(p, f, u, parallel_scale)
 
     def triple(self) -> list[tuple[float, float, float]]:
         return [self.position, self.focal_point, self.up]
@@ -109,10 +112,15 @@ def move(camera: Camera, values, dt: float, pivot=None, settings: Settings = DEF
     f = np.asarray(camera.focal_point, float)
     u = np.asarray(camera.up, float)
     # Pan in the view plane, and zoom: the cap toward you brings the model nearer.
-    shift = sign * PAN_RATE * dt * distance * (v[0] * right + v[1] * up)
+    ortho = camera.parallel_scale
+    span = 2.0 * ortho if ortho else distance  # what a full push pans across per second
+    shift = sign * PAN_RATE * dt * span * (v[0] * right + v[1] * up)
     p, f = p + shift, f + shift
     nearer = 1.0 - np.exp(-ZOOM_RATE * dt * v[2] * (-sign))  # object: toward you = nearer
-    p = p + (f - p) * nearer
+    if ortho:
+        ortho = ortho * (1.0 - nearer)  # a smaller half height shows the model larger
+    else:
+        p = p + (f - p) * nearer
     # Turn about the pivot: the cap's twist axis, in the view's frame, as a world axis.
     spin = v[3] * right + v[4] * up + v[5] * back
     angle = float(np.linalg.norm(spin)) * TURN_RATE * dt
@@ -123,4 +131,33 @@ def move(camera: Camera, values, dt: float, pivot=None, settings: Settings = DEF
         p = centre + _turn(p - centre, axis, angle)
         f = centre + _turn(f - centre, axis, angle)
         u = _turn(u, axis, angle)
-    return Camera(tuple(p), tuple(f), tuple(_unit(u)))
+    return Camera(tuple(p), tuple(f), tuple(_unit(u)), ortho)
+
+
+SMOOTH_S = 0.06  # readings eased over about this long: no jumps from an uneven report rate
+STOP_AT = 0.6  # of the dead zone: once moving, it stops only below this (no flicker at rest)
+
+
+class Filter:
+    """Eases raw counts toward each new reading, with a dead zone that is sticky: a cap
+    held near rest doesn't switch motion on and off many times a second."""
+
+    def __init__(self) -> None:
+        self.value = np.zeros(6)
+        self.moving = np.zeros(6, bool)
+
+    def __call__(self, counts, dt: float, settings: Settings = DEFAULT) -> np.ndarray:
+        target = np.clip(np.asarray(counts, float) / FULL_SCALE, -1.0, 1.0)
+        dz = settings.dead_zone
+        size = np.abs(target)
+        self.moving = np.where(self.moving, size > dz * STOP_AT, size > dz)
+        edge = np.where(self.moving, dz * STOP_AT, dz)  # past the zone, from 0 smoothly
+        target = np.where(self.moving, np.sign(target) * (size - edge) / (1.0 - edge), 0.0)
+        ease = min(1.0, max(dt, 0.0) / SMOOTH_S)
+        self.value = self.value + (target - self.value) * ease
+        self.value[np.abs(self.value) < 1e-4] = 0.0
+        # the curve, locks and inversion; the dead zone is done above
+        return shaped(self.value * FULL_SCALE, replace(settings, dead_zone=0.0))
+
+    def resting(self) -> bool:
+        return not self.value.any()

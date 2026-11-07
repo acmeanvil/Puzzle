@@ -24,7 +24,8 @@ def physical_cores() -> int:
     try:
         if sys.platform == "darwin":
             out = subprocess.run(["sysctl", "-n", "hw.physicalcpu"], capture_output=True,
-                                 text=True, timeout=5, check=True).stdout  # fmt: skip
+                                 text=True, encoding="utf-8", errors="replace", timeout=5,
+                                 check=True).stdout  # fmt: skip
             return max(1, int(out.strip()))
         if sys.platform.startswith("linux"):
             return _linux_cores() or logical_cores()
@@ -32,7 +33,8 @@ def physical_cores() -> int:
             out = subprocess.run(
                 ["powershell", "-NoProfile", "-Command",
                  "(Get-CimInstance Win32_Processor | Measure-Object NumberOfCores -Sum).Sum"],
-                capture_output=True, text=True, timeout=20, check=True,
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20,
+                check=True,
             ).stdout  # fmt: skip
             return max(1, int(out.strip()))
     except (OSError, ValueError, subprocess.SubprocessError):
@@ -67,7 +69,8 @@ def memory_bytes() -> int | None:
     try:
         if sys.platform == "darwin":
             out = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True,
-                                 text=True, timeout=5, check=True).stdout  # fmt: skip
+                                 text=True, encoding="utf-8", errors="replace", timeout=5,
+                                 check=True).stdout  # fmt: skip
             return int(out.strip())
         if hasattr(os, "sysconf") and "SC_PHYS_PAGES" in os.sysconf_names:
             return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")

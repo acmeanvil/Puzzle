@@ -91,6 +91,8 @@ def run_job(
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             bufsize=1,
         )
         lines: queue.Queue[str | None] = queue.Queue(maxsize=_QUEUE_LINES)

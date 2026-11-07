@@ -245,6 +245,12 @@ class SceneView(QWidget):
             QTimer.singleShot(0, self._draw)
 
     def _draw(self) -> None:
+        from puzzle.gui.timing import action
+
+        with action("drawing the 3D view"):  # VTK's render and the copy, timed (log)
+            self._draw_now()
+
+    def _draw_now(self) -> None:
         from PySide6.QtGui import QImage
 
         self._pending = False
@@ -254,10 +260,14 @@ class SceneView(QWidget):
         size = [max(1, round(self.width() * dpr)), max(1, round(self.height() * dpr))]
         if list(self.plotter.window_size) != size:
             self.plotter.window_size = size
-        self.plotter.render()  # screenshot() alone returns the previous frame once rendered
-        pixels = np.ascontiguousarray(self.plotter.screenshot(return_img=True))
-        h, w, _ = pixels.shape
-        image = QImage(pixels.data, w, h, 3 * w, QImage.Format.Format_RGB888).copy()
+        from puzzle.gui.timing import step
+
+        with step(f"render {size[0]}x{size[1]}"):
+            self.plotter.render()  # screenshot() alone returns the previous frame once rendered
+        with step("copy back"):  # the frame from the graphics card into a Qt image
+            pixels = np.ascontiguousarray(self.plotter.screenshot(return_img=True))
+            h, w, _ = pixels.shape
+            image = QImage(pixels.data, w, h, 3 * w, QImage.Format.Format_RGB888).copy()
         image.setDevicePixelRatio(dpr)
         self._image = image
         self.update()
@@ -873,9 +883,12 @@ class Viewport(QWidget):
             mesh = self._shown_mesh
         colours = dict(self.part_colours(mesh) or {}) if self.part_colours else {}
         if mesh is not self.mesh:
+            from puzzle.gui.timing import step
+
             self.mesh = mesh
-            self.surface, self.entities = entity_surface(mesh)
-            self.lines, self.line_entities = entity_lines(mesh)
+            with step("view surfaces"):  # once per mesh: its faces and edges to pick
+                self.surface, self.entities = entity_surface(mesh)
+                self.lines, self.line_entities = entity_lines(mesh)
             known = set(self.entities) | set(self.line_entities) | set(self.vertices)
             self.picked = [e for e in self.picked if e in known or e in self.boundaries]
         self.highlight, self.highlight_entities = highlight, list(entities or [])
@@ -2074,11 +2087,19 @@ class Viewport(QWidget):
         """The camera as (position, focal point, view up), or None without OpenGL."""
         return self.plotter.camera_position if self.plotter is not None else None
 
-    def set_camera(self, triple) -> None:
+    def parallel_scale(self) -> float | None:
+        """An orthographic view's half height, or None in perspective."""
+        if self.plotter is None or not self.plotter.camera.parallel_projection:
+            return None
+        return float(self.plotter.camera.parallel_scale)
+
+    def set_camera(self, triple, parallel_scale: float | None = None) -> None:
         """Put the camera there (a 3D mouse's move, ADR 0069): drawn on the next frame."""
         self.shown["camera"] = [tuple(map(float, row)) for row in triple]
         if self.plotter is not None:
             self.plotter.camera_position = triple
+            if parallel_scale is not None and self.plotter.camera.parallel_projection:
+                self.plotter.camera.parallel_scale = parallel_scale
             self.plotter.renderer.ResetCameraClippingRange()
             self._render()
 
@@ -2171,10 +2192,13 @@ class Viewport(QWidget):
     def _frame(self, mesh) -> None:
         """Fit the camera to a newly shown mesh; keep the user's view on redraws of the
         same one (picks, highlights, another field)."""
+        from puzzle.gui.timing import step
+
         if getattr(self, "_framed", None) is not mesh:
             if getattr(self, "_framed", None) is None:
                 self.plotter.view_isometric()
             self.plotter.reset_camera()
             self._framed = mesh
-        self._apply_style()
+        with step("view style"):
+            self._apply_style()
         self._render()

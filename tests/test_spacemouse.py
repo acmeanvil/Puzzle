@@ -120,7 +120,7 @@ class _View:
     def camera(self):
         return self.triple
 
-    def set_camera(self, triple):
+    def set_camera(self, triple, parallel_scale=None):
         self.triple = triple
 
     def pivot(self):
@@ -148,7 +148,11 @@ def test_a_push_moves_the_view_and_rest_stops_it(controller):
     controller._tick()
     assert controller.window.viewport.triple[1][0] < 0  # object mode: the model went right
     controller._got([0] * 6, 0)
-    controller._tick()
+    for _ in range(40):  # it eases to a stop over a few frames, then the timer stops
+        controller._last -= 0.02
+        controller._tick()
+        if not controller.timer.isActive():
+            break
     assert not controller.timer.isActive()
 
 
@@ -206,3 +210,24 @@ def test_the_reader_thread_reads_reports_until_unplugged(controller, monkeypatch
     QApplication.processEvents()
     assert got[0][0] == 100 and got[-1] == [0] * 6  # released when it went
     assert names == ["SpaceMouse Compact", ""]
+
+
+def test_orthographic_zoom_scales_the_view():
+    ortho = Camera((0, 0, 10.0), (0, 0, 0), (0, 1, 0), parallel_scale=2.0)
+    nearer = motion.move(ortho, [0, 0, 1, 0, 0, 0], 0.05)  # pulled toward you
+    assert nearer.parallel_scale < 2.0 and nearer.position == ortho.position
+    panned = motion.move(ortho, [1, 0, 0, 0, 0, 0], 0.05)
+    assert panned.focal_point[0] == pytest.approx(-motion.PAN_RATE * 0.05 * 4.0)
+
+
+def test_the_filter_eases_and_its_dead_zone_is_sticky():
+    f = motion.Filter()
+    first = f([300, 0, 0, 0, 0, 0], 0.016)[0]
+    later = [f([300, 0, 0, 0, 0, 0], 0.016)[0] for _ in range(10)][-1]
+    assert 0 < first < later  # eased in, no jump
+    zone = motion.DEFAULT.dead_zone * motion.FULL_SCALE
+    held = f([0.8 * zone, 0, 0, 0, 0, 0], 0.5)[0]  # dropped inside the zone while moving
+    assert held > 0  # still moving: it stops only below a lower threshold
+    assert f([0.4 * zone, 0, 0, 0, 0, 0], 0.5)[0] == 0 and f.resting()
+    fresh = motion.Filter()
+    assert fresh([0.8 * zone, 0, 0, 0, 0, 0], 0.5)[0] == 0  # from rest, the full zone

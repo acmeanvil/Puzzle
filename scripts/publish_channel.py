@@ -29,7 +29,9 @@ def channel_url(repo: str) -> str:
 
 
 def gh(*args: str, check: bool = True) -> subprocess.CompletedProcess:
-    return subprocess.run(["gh", *args], check=check, capture_output=True, text=True)
+    return subprocess.run(
+        ["gh", *args], check=check, capture_output=True, text=True, encoding="utf-8"
+    )
 
 
 def ensure_release(repo: str, platform: str) -> None:

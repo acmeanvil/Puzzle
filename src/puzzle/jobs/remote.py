@@ -323,7 +323,9 @@ class RemoteRuntime(Runtime):
             if self.host.port:
                 scp += ["-P", str(self.host.port)]
             argv = [*scp, f"{workdir}/.", far] if up else [*scp, f"{far}.", f"{workdir}/"]
-        done = subprocess.run(argv, capture_output=True, text=True)
+        done = subprocess.run(
+            argv, capture_output=True, text=True, encoding="utf-8", errors="replace"
+        )
         if done.returncode != 0:
             said = (done.stderr or done.stdout).strip().splitlines()[-3:]
             raise PuzzleError(

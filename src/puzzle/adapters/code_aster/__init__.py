@@ -348,7 +348,9 @@ def _image_label(engine: str, image: str) -> str | None:
         return None
     probe = [exe, "image", "inspect", "--format", '{{index .Config.Labels "puzzle.mpi"}}', image]
     try:
-        out = subprocess.run(probe, capture_output=True, text=True, timeout=30)
+        out = subprocess.run(
+            probe, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30
+        )
     except (OSError, subprocess.SubprocessError):
         return None
     return out.stdout.strip() or None if out.returncode == 0 else None

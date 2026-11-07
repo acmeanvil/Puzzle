@@ -1671,7 +1671,7 @@ def _scripts(args) -> int:
         return 1
     if args.action == "list":
         done = subprocess.run(["pixi", "list", "-e", ENVIRONMENT], capture_output=True,
-                              text=True)  # fmt: skip
+                              text=True, encoding="utf-8", errors="replace")  # fmt: skip
         print(done.stdout or done.stderr)
         return done.returncode
     if not args.package:

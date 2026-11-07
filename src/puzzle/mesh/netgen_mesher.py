@@ -113,6 +113,8 @@ def mesh_with_netgen(recipe, out_dir: Path, sizes: list[dict], layers: list[dict
         cwd=work,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         env=env,
     )
     (work / "netgen.log").write_text(run.stdout + run.stderr, encoding="utf-8")

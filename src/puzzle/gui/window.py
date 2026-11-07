@@ -1689,7 +1689,8 @@ class MainWindow(QMainWindow):
             return
         names = {str(o.id): o.name for o in s.project.objects.values()}
         if node.kind in ("run", "result", "result_group"):
-            self._select_run(node.object, node.path if node.kind == "result" else None)
+            with step("results"):
+                self._select_run(node.object, node.path if node.kind == "result" else None)
             return
         if node.kind in ("sweep", "compare"):
             runs = [r for r in self._store().runs() if r.study_id == node.object and r.point]
@@ -1710,7 +1711,8 @@ class MainWindow(QMainWindow):
         from puzzle.model.schema import Operator
 
         project = s.project
-        self._aside("marking problems", lambda: self._mark_problems(obj.name))
+        with step("problems"):
+            self._aside("marking problems", lambda: self._mark_problems(obj.name))
 
         def options(path):
             if isinstance(obj, Operator):  # ADR 0062: from the results it reads

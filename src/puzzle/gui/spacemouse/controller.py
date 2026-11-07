@@ -57,6 +57,7 @@ class Controller(QObject):
         self._thread: threading.Thread | None = None
         self._last = None
         self._pivot = None
+        self.filter = motion.Filter()  # smoothing and a sticky dead zone
         self.timer = QTimer(self, interval=FRAME_MS)
         self.timer.timeout.connect(self._tick)
         self.reading.connect(self._got)
@@ -140,15 +141,18 @@ class Controller(QObject):
 
     def _tick(self) -> None:
         settings, on, _ = settings_now()
-        values = motion.shaped(self.values, settings)
-        if not on or not values.any():
-            self.timer.stop()
-            return
         now = time.monotonic()
         dt, self._last = now - (self._last or now), now
+        values = self.filter(self.values, dt, settings) if on else None
+        if values is None or (not values.any() and self.filter.resting()):
+            self.timer.stop()
+            self.filter = motion.Filter()
+            return
         view = self.window.viewport
         triple = view.camera()
-        if triple is None:
+        if triple is None or not values.any():
             return
-        moved = motion.move(motion.Camera.of(triple), values, dt, self._pivot, settings)
-        view.set_camera(moved.triple())
+        scale = view.parallel_scale() if hasattr(view, "parallel_scale") else None
+        camera = motion.Camera.of(triple, scale)
+        moved = motion.move(camera, values, dt, self._pivot, settings)
+        view.set_camera(moved.triple(), moved.parallel_scale)
