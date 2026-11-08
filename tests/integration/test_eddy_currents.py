@@ -20,7 +20,7 @@ import gmsh
 import numpy as np
 import pytest
 from scipy.special import jv
-from solvers import over
+from solvers import needs_petsc, over
 
 from puzzle.geometry import gmsh_session, import_step
 from puzzle.materials import add_library_material
@@ -193,6 +193,9 @@ def _global(step, name, component):
 
 @solver
 def test_skin_effect_in_a_round_wire(tmp_path, solver):
+    # FEniCSx without PETSc (Windows) solves with SciPy's SuperLU: this failed on
+    # GitHub's Windows machine and ran past an hour and 7 GB here
+    needs_petsc(solver)
     hz = 20e3
     project, study = _project(
         tmp_path,

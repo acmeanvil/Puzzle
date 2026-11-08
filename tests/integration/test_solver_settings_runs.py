@@ -4,7 +4,7 @@ solver (Code_Aster's own log reports the keyword it was given)."""
 
 import pytest
 from conftest_geometry import bar_project, write_bar_step
-from solvers import over
+from solvers import needs_petsc, over
 
 from puzzle.model.schema import Feature, Physics, Quantity, SolveStep, Study
 from puzzle.solve import run_study
@@ -38,10 +38,13 @@ def _tip(tmp_path, solver, own, expert=None, shared=None):
 @over("calculix", "code_aster", "elmer", "fenicsx")
 def test_every_linear_solver_gives_the_same_answer(tmp_path, solver):
     pytest.importorskip("OCP")
+    needs_petsc(solver)  # the linear methods are PETSc's
     tips = [_tip(tmp_path / str(i), solver, own)[0] for i, own in enumerate(CASES[solver])]
     print(f"{solver}: tip deflection {', '.join(f'{t:.8g}' for t in tips)}")
     assert tips[1] == pytest.approx(tips[0], rel=1e-8)
-    assert tips[2] == pytest.approx(tips[0], rel=1e-5)  # iterative: to its tolerance
+    # iterative: to its tolerance (CalculiX's iterative Cholesky stopped 4.6e-5 away
+    # on GitHub's machines, 1e-6 on others)
+    assert tips[2] == pytest.approx(tips[0], rel=1e-4)
 
 
 @over("code_aster")
@@ -70,6 +73,7 @@ def test_fenicsx_petsc_options_reach_the_solve(tmp_path, solver):
     import json
 
     pytest.importorskip("OCP")
+    needs_petsc(solver)
     expert = {"ksp_type": "gmres", "pc_type": "gamg", "ksp_rtol": "1e-11"}
     tip, work = _tip(tmp_path, solver, {}, expert)
     case = json.loads(next(work.rglob("case.json")).read_text(encoding="utf-8"))

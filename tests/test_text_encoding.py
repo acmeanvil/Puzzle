@@ -111,7 +111,7 @@ def test_a_console_without_a_character_gets_a_question_mark(monkeypatch):
 
     from puzzle import cli
 
-    console = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
+    console = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", newline="\n")
     monkeypatch.setattr(sys, "stdout", console)
     cli._tolerant_output()
     print("Zienkiewicz–Zhu → ²")

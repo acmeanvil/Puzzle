@@ -4,6 +4,7 @@ reach the remote run; failures are coded. The fakes in remote_fakes.py stand in 
 ssh, rsync and the schedulers on this machine, so the solver is the real CalculiX."""
 
 import shutil
+import sys
 import threading
 import time
 from pathlib import Path
@@ -48,6 +49,7 @@ def test_hosts_are_the_users_and_round_trip(tmp_path):
         hosts.Host(name="x", address="y", runtime="kubernetes")
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="the fakes are shell scripts")
 def test_check_says_what_a_host_has(fakes):
     bin_dir, _home = fakes
     found = hosts.check(remote_fakes.host(bin_dir, scheduler="slurm"))
@@ -67,6 +69,8 @@ def test_programs_from_local_pixi_envs_become_the_hosts():
     assert (exe, name, env, args) == ('"$ENVS"/fenicsx/bin/python', "python", "fenicsx",
                                       ["study.py"])  # fmt: skip
     assert _remote_program(["ccx", "-i", "job"]) == ("ccx", "ccx", "", ["-i", "job"])
+    windows = _remote_program([r"C:\Puzzle\envs\fenicsx\python.exe", "study.py"])
+    assert windows[:3] == ('"$ENVS"/fenicsx/bin/python', "python", "fenicsx")
 
 
 @needs_rsync

@@ -12,7 +12,7 @@ import math
 import gmsh
 import numpy as np
 import pytest
-from solvers import over
+from solvers import needs_petsc, over
 
 from puzzle.geometry import gmsh_session, import_step
 from puzzle.materials import add_library_material
@@ -82,6 +82,9 @@ def _ring(tmp_path, solver, frequency=None):
 @over("elmer", "fenicsx")
 @pytest.mark.parametrize("frequency", [None, 50.0])
 def test_a_closed_ring_coil(tmp_path, solver, frequency):
+    # FEniCSx without PETSc (Windows) solves with SciPy's SuperLU, which ran out of
+    # memory on this ring's 244,000 equations
+    needs_petsc(solver)
     project, study = _ring(tmp_path, solver, frequency)
     run = run_study(project, study.id, tmp_path, tmp_path / "run", timeout_s=1800)
     (step,) = run.results.steps

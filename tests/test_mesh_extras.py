@@ -115,3 +115,32 @@ def test_method_detection(tmp_path):
     result = generate_mesh(p, comp.id, tmp_path, tmp_path / "b", preview=True)
     ((method, why),) = result.methods.values()
     assert method == "tetrahedra" and "faces" in why
+
+
+def test_folded_curved_elements_become_straight_sided(tmp_path, monkeypatch):
+    """A curved second-order element the optimiser can't untangle (a hole's wall on Apple
+    Silicon's Gmsh) gives straight sides there and a warning, not no mesh: every
+    midside node then sits halfway along its edge."""
+    from puzzle.mesh import generate
+
+    p, comp = _part([HistoryStep(kind="cylinder", name="S", args={"r": 0.01, "h": 0.02})])
+    p.objects[comp.mesh].element_order = 2
+    real, calls = generate._min_quality, []
+
+    def folded_first(dim=3):
+        calls.append(dim)
+        return -0.2 if len(calls) == 1 else real(dim)
+
+    def midsides_halfway(result):
+        block = next(b for b in result.mesh.blocks if b.connectivity.shape[1] == 10)
+        xyz = result.mesh.node_coords(block.connectivity.ravel()).reshape(-1, 10, 3)
+        corners, middles = xyz[:, :4], xyz[:, 4:]
+        pairs = [(0, 1), (1, 2), (2, 0), (0, 3), (2, 3), (1, 3)]  # Gmsh's tet10 edges
+        halfway = np.stack([(corners[:, a] + corners[:, b]) / 2 for a, b in pairs], axis=1)
+        return np.allclose(middles, halfway, atol=1e-9)
+
+    assert not midsides_halfway(generate_mesh(p, comp.id, tmp_path, tmp_path / "curved"))
+    monkeypatch.setattr(generate, "_min_quality", folded_first)
+    result = generate_mesh(p, comp.id, tmp_path, tmp_path / "m")
+    assert any("sides are straight" in w for w in result.warnings)
+    assert midsides_halfway(result)

@@ -265,6 +265,22 @@ def generate_mesh(
         gmsh.model.mesh.setOrder(recipe.element_order)
         dim = 2 if planar else 3
         min_quality = _min_quality(dim)
+        if min_quality <= 0 and recipe.element_order > 1:
+            # A curved element the optimiser couldn't untangle (a hole's wall on Apple
+            # Silicon's Gmsh): straight-sided second order instead of no mesh at all.
+            where = _where(mesh_quality(dim)[0])
+            gmsh.model.mesh.setOrder(1)
+            gmsh.option.setNumber("Mesh.SecondOrderLinear", 1)
+            try:
+                gmsh.model.mesh.setOrder(recipe.element_order)
+            finally:
+                gmsh.option.setNumber("Mesh.SecondOrderLinear", 0)
+            min_quality = _min_quality(dim)
+            if min_quality > 0:
+                warnings.append(
+                    f"curved second-order elements folded near {where}, so the elements' "
+                    "sides are straight; refine near curved faces to keep them curved"
+                )
         quality, element_quality = mesh_quality(dim)
         if min_quality <= 0:
             raise MeshError(
@@ -714,10 +730,12 @@ def _turned_box(control, project, root) -> int:
         shift = float(r[:, i] @ o) + middle[i]
         local = "+".join(f"({r[j, i]:.15g})*{v}" for j, v in enumerate("xyz"))
         terms.append(f"Fabs({local}-({shift:.15g}))-({half[i]:.15g})")
-    outside = f"Max(Max({terms[0]},{terms[1]}),{terms[2]})"
-    inside, far = control.size.to_si(), 1e22
+    outside = f"Max(Max({terms[0]},{terms[1]}),{terms[2]})"  # > 0 outside the box
+    # The size inside, growing by a metre per micrometre outside it: no Step, which
+    # left Windows' meshes unrefined (the formula evaluated as if outside everywhere).
+    inside = control.size.to_si()
     f = gmsh.model.mesh.field.add("MathEval")
-    gmsh.model.mesh.field.setString(f, "F", f"{inside:.15g}+{far - inside:.15g}*Step({outside})")
+    gmsh.model.mesh.field.setString(f, "F", f"{inside:.15g}+1e6*Max(0,{outside})")
     return f
 
 

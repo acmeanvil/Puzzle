@@ -97,6 +97,8 @@ def test_paraview_rebuilds_the_view(tmp_path):
                           text=True, encoding="utf-8", errors="replace", timeout=300,
                           env=paraview_link.environment(Path(_pvbatch())))  # fmt: skip
     line = next((ln for ln in done.stdout.splitlines() if ln.startswith("CHECK ")), None)
+    if line is None and "Failed to initialize OpenGL" in done.stdout + done.stderr:
+        pytest.skip("no OpenGL here (GitHub's Windows machines have no GPU or OSMesa)")
     assert line, done.stdout[-2000:] + done.stderr[-2000:]
     got = json.loads(line[6:])
     assert got["colour"] == "Equivalent stress [MPa]"

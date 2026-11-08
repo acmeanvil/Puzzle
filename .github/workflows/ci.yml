@@ -1,29 +1,59 @@
 name: CI
 
+# Which machines run (macOS minutes cost ten times Linux's):
+#   push to development: Linux and Windows
+#   push to main, pull requests into main: also both Macs
+#   by hand (Actions → CI → Run workflow): the machines asked for, and either the whole
+#     check or only the tests asked for, e.g. tests/test_morph.py -k thicker
 on:
   push:
     branches: [main, development]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      machines:
+        description: "Machines as a JSON list: ubuntu-latest, windows-latest, macos-latest (Apple Silicon), macos-15-intel"
+        type: string
+        default: '["ubuntu-latest", "windows-latest"]'
+      tests:
+        description: "pytest arguments to run instead of the whole check (empty: lint and every test)"
+        type: string
+        default: ""
+
+# A newer push to the same branch supersedes a run still going.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   platforms:
-    # Lint, unit tests and native CalculiX runs on every supported platform (ADR 0013).
+    # Lint, unit tests and native CalculiX and FEniCSx runs (ADR 0013).
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-15-intel, macos-latest, windows-latest]
+        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.machines || ((github.ref == 'refs/heads/main' || github.base_ref == 'main') && '["ubuntu-latest", "windows-latest", "macos-latest", "macos-15-intel"]' || '["ubuntu-latest", "windows-latest"]')) }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
       - uses: prefix-dev/setup-pixi@v0.8.1
         with:
           environments: dev calculix fenicsx
-      - run: pixi run -e dev check
+      - if: inputs.tests == ''
+        run: pixi run -e dev check
+      - if: inputs.tests != ''
+        shell: bash
+        env:
+          TESTS: ${{ inputs.tests }}
+        run: pixi run -e dev pytest -rs $TESTS
 
   pip:
-    # Plain pip installs keep working on the oldest and newest supported Pythons.
+    # Plain pip installs keep working on the oldest and newest supported Pythons; tests
+    # needing an extra that isn't installed are skipped (tests/conftest.py, OPTIONAL).
+    if: inputs.tests == ''
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.11", "3.13"]
     steps:

@@ -36,6 +36,11 @@ def beam(tmp_path_factory):
     return p, mesh
 
 
+# Apple Silicon's Gmsh meshes this beam with a flatter worst element, which the stretch
+# took to 0.036, under the default floor of 0.05; the stretch itself is what's tested.
+LOW_FLOOR = 0.02
+
+
 def volume(mesh, coords):
     vols, _ = _shape(mesh, coords)
     return float(np.abs(vols).sum())
@@ -48,7 +53,7 @@ def test_a_thicker_beam_by_morphing(beam):
     p.of_type(ParameterSet)[0].values["dt"] = Quantity(value=2, unit="mm")
     study = next(iter(p.of_type(Study))).model_copy(update={"morph": Morph(
         handles=[MorphHandle(selection="B/Top", distance="dt", direction=(0, 0, 1))],
-        fixed=["B/Bottom"])})  # fmt: skip
+        fixed=["B/Bottom"], quality_floor=LOW_FLOOR)})  # fmt: skip
     got = morphed(p, study, mesh)
     assert volume(mesh, got.coords) == pytest.approx(0.2 * 0.02 * 0.008, rel=1e-6)
     assert np.allclose(got.coords[:, :2], mesh.coords[:, :2])  # only z moves

@@ -130,4 +130,5 @@ def test_a_mesh_box_along_a_turned_system(tmp_path):
     local = (xyz - [0.05, 0.05, 0.0]) @ turned.orientation()  # in the turned axes
     inside = (np.abs(local[:, 0]) < 0.03) & (np.abs(local[:, 1]) < 0.004)
     beside = (np.abs(local[:, 0]) < 0.03) & (np.abs(local[:, 1] - 0.02) < 0.004)
+    print("inside", inside.sum(), "beside", beside.sum())
     assert inside.sum() > 10 * max(beside.sum(), 1)

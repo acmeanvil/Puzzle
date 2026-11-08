@@ -37,7 +37,7 @@ import shlex
 import subprocess
 import time
 from dataclasses import dataclass, field
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from puzzle.errors import PuzzleError
 from puzzle.hosts import Host, quote
@@ -356,13 +356,16 @@ def _remote_program(command: list[str]) -> tuple[str, str, str, list[str]]:
     pixi environment or "", the arguments). A local pixi environment's program becomes
     the same environment's there ("$ENVS"/<env>/bin/<name>, the rest quoted, so an
     envs_dir with spaces works); anything else is found by name on PATH."""
+    for flavour in (PurePosixPath, PureWindowsPath):  # a Windows machine's path too
+        first = flavour(command[0])
+        parts = first.parts
+        if first.is_absolute() and "envs" in parts:
+            i = len(parts) - 1 - parts[::-1].index("envs")
+            if i + 2 < len(parts):
+                env = parts[i + 1]
+                name = first.stem if first.suffix.lower() == ".exe" else first.name
+                return '"$ENVS"/' + shlex.quote(f"{env}/bin/{name}"), name, env, command[1:]
     first = Path(command[0])
-    parts = first.parts
-    if first.is_absolute() and "envs" in parts:
-        i = len(parts) - 1 - parts[::-1].index("envs")
-        if i + 2 < len(parts):
-            env, name = parts[i + 1], first.name
-            return '"$ENVS"/' + shlex.quote(f"{env}/bin/{name}"), name, env, command[1:]
     name = first.name if first.is_absolute() else command[0]
     return shlex.quote(name), name, "", command[1:]
 

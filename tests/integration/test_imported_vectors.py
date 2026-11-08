@@ -340,7 +340,9 @@ def test_a_coarse_lorentz_cloud_mapped_conservatively_keeps_its_total(tmp_path, 
     run, source = _lorentz(tmp_path, solver)
     reaction, expected = _reaction(run), _expected_reaction(run, source)
     print(f"{solver}: source total {source} N, root reaction {reaction} N ({expected} N)")
-    np.testing.assert_allclose(reaction, expected, rtol=1e-5, atol=1e-5 * np.abs(source).max())
+    # CalculiX prints each node's reaction to 6 digits; summed over the root they came
+    # within 0.8e-5 to 1.5e-5 of the largest component on different machines
+    np.testing.assert_allclose(reaction, expected, rtol=1e-5, atol=5e-5 * np.abs(source).max())
 
 
 @over("code_aster", "elmer", "fenicsx")
