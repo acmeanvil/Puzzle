@@ -72,6 +72,20 @@ names, units and no raw data on view.
 5. **Everything stays a command.** New operators, wires and edits go through the
    Session (undo, history, the agent through MCP), operators are evaluated on demand and
    never stored, and the GUI shows names and display units, never ids or raw columns.
+6. **The agent sees and does everything the schematic does** (the maintainer,
+   2026-11-07). Nothing here is GUI-only:
+   - the operator documentation of decision 1 is served by MCP (the operator types with
+     their purpose, ports, types, units and examples) and searchable in the knowledge
+     pack, so the agent knows what an operator does before using it;
+   - every operator kind, including Model value, the series operators and the later
+     field, ParaView and user operators, can be added, wired, edited and evaluated
+     through MCP tools, with the same refusals and reasons the GUI gives (a wire of the
+     wrong type, incompatible units, a cycle);
+   - values, series and verdicts are readable by the agent as summaries (a series as
+     its range, extremes and a few points, never a dump), and plots as their series;
+   - user-made blocks are listed and inserted by name through MCP, as clusters are;
+   - the `schematic-operators` skill is updated with each step, and tests drive each new
+     operator through MCP as well as the GUI.
 
 ## Plan
 
@@ -81,7 +95,8 @@ names, units and no raw data on view.
 3. The series type and its operators (decision 3), with the utilisation, normalised
    displacement and steps-against-a-step plots as tests against hand-computed answers.
 4. Then decision 4's steps, each its own entry in Built so far.
-5. The agent skill (`schematic-operators`) grows with each step.
+5. Each step is driven through MCP too (decision 6): its tools, its documentation
+   served, its tests, and the `schematic-operators` skill.
 
 ## Consequences
 
