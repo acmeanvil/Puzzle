@@ -168,3 +168,26 @@ names, units and no raw data on view.
 - `tests/test_operator_docs.py`: every operator documented, names unique and none
   another's search word, no jargon names, old names still found, the schematic's help,
   and the same help over MCP.
+
+**Step 2 (2026-11-07): the tree and the schematic build the same project (decision 8).**
+
+- **New** (the schematic's toolbar, and a right-click on the empty canvas) holds the
+  tree's own add menus, one per section (`menus.build_menu` for each heading), so
+  whatever the tree adds the schematic adds; the new node is placed where asked.
+- Coordinate systems, amplitudes, bolt types and construction geometry are nodes in the
+  Resources column, result tools in Results (they were chips), and every reference
+  between nodes is a use wire (operators, derived results, optimisations and mesh
+  studies keep their data wires).
+- `schematic/links.py`: `LINKS` (every reference the schematic wires: where, what feeds
+  it, its name, whether it's required), `choices` (what a wire from one object to
+  another can mean, named by part or load), `commands` (the tree's Edit), `existing` and
+  `clear_commands` (removing a wire: an optional reference cleared, a required one in a
+  list removes that item, a required single one refused).
+- Every wireable node has a "Use in…" socket to draw from; a wire or a node dropped on
+  another sets the reference (asked which when it could mean several; a geometry on a
+  component adds a part, as before); a use wire's right-click removes it.
+- MCP `link` and `unlink` do the same for agents, with the same choices and refusals.
+- `tests/test_schematic_parity.py`: the references set, refused and removed; every
+  reference field in the schema is wireable or listed with how it is wired instead
+  (`WIRED_ELSEWHERE`: an operator's sockets, a study-to-study transfer, a field's
+  sockets ...); the New menu holds every section's tree menu; the agent's link/unlink.

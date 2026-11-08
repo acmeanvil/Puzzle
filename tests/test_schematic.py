@@ -112,17 +112,21 @@ def test_upstream_and_downstream(bracket):
     assert {"Static", "Thermal", "bracket.step", "Al 6061-T6", "Tets"} <= up
 
 
-def test_small_references_are_chips_naming_their_other_users(bracket):
+def test_small_references_are_nodes_wired_to_their_users(bracket):
+    """Coordinate systems, amplitudes and the like were chips; they are nodes now, so they
+    can be wired (ADR 0071 decision 8), each with a socket to draw from."""
     amp = bracket.add(Amplitude(name="Ramp", points=[(0.0, 0.0), (1.0, 1.0)]))
     cs = bracket.add(CoordinateSystem(name="Flange"))
     comp = bracket.of_type(Component)[0]
     comp.physics[0].features[0].amplitude = amp.id
     comp.physics[0].features[0].axes = cs.id
     s = schematic.build(bracket)
-    node = s.node_of(str(comp.id))
-    assert {"Amplitude: Ramp", "CS: Flange"} <= set(node.chips)
-    assert node.tips["CS: Flange"] == "Used here only"
-    assert not any(n.label in ("Ramp", "Flange") for n in s.nodes.values())
+    for obj in (amp, cs):
+        node = s.nodes[str(obj.id)]
+        assert node.kind in ("amplitude", "axes") and node.port("use") is not None
+        assert any(w.kind == "use" and w.source == node.id and w.target == str(comp.id)
+                   for w in s.wires)  # fmt: skip
+    assert not s.node_of(str(comp.id)).chips
 
 
 def test_files_missing_from_the_project_folder_are_marked(bracket, tmp_path):

@@ -61,11 +61,11 @@ SHOWN = {
     "optimisation": "node",  # ADR 0063
     "mesh_study": "node",  # ADR 0066
     "transfer": "wire",
-    "axes": "chip",
-    "amplitude": "chip",
-    "bolt_type": "chip",
-    "construction": "chip",
-    "probe": "chip",
+    "axes": "node",  # ADR 0071: a node, so it can be wired
+    "amplitude": "node",  # ADR 0071: a node, so it can be wired
+    "bolt_type": "node",  # ADR 0071: a node, so it can be wired
+    "construction": "node",  # ADR 0071: a node, so it can be wired
+    "probe": "node",  # ADR 0071: a node, so it can be wired
     "group": "frame",
     "preset": "none",  # copied into studies when applied; nothing refers to one
     "labels": "none",  # the tree's own names for runs
@@ -94,6 +94,11 @@ KIND_WORDS = {
     "optimisation": "Optimisation",
     "mesh_study": "Mesh study",
     "group": "Group",
+    "axes": "Coordinate system",
+    "amplitude": "Amplitude",
+    "bolt_type": "Bolt type",
+    "construction": "Construction",
+    "probe": "Result tool",
 }
 # What flows along a data wire, for its colour (as Blender colours sockets by type).
 FLOWS = ("temperature", "displacement", "stress", "pressure", "velocity", "other")
@@ -398,8 +403,12 @@ def build(
             out.nodes[key] = node
 
     # Resources.
+    from puzzle.model.schema import Amplitude, BoltType, ConstructionGeometry, CoordinateSystem
+
     for kind, cls in (("geometry", Geometry), ("material", Material), ("mesh", MeshRecipe),
-                      ("parameters", ParameterSet)):  # fmt: skip
+                      ("parameters", ParameterSet), ("axes", CoordinateSystem),
+                      ("amplitude", Amplitude), ("bolt_type", BoltType),
+                      ("construction", ConstructionGeometry)):  # fmt: skip
         for obj in project.of_type(cls):
             sub = ""
             if isinstance(obj, Geometry):
@@ -493,10 +502,30 @@ def build(
                                       label=words(d.quantity or "") if getattr(d, "quantity", "")
                                       else "", carries=d.quantity or ""))  # fmt: skip
 
+    for p in project.of_type(ResultProbe):  # result tools: nodes beside what they read
+        add(Node(str(p.id), "probe", RESULTS, p.name, object=str(p.id),
+                 subtitle=words(p.type)))  # fmt: skip
     _operators(project, out, store, states)
     _optimisations(project, out, store)
     _mesh_studies(project, out, store)
+    # Every reference between two nodes is a use wire (ADR 0071 decision 8: each can be
+    # drawn and removed), whatever made it.
+    drawn = ("operator", "result", "optimisation", "mesh_study")  # their data wires are these
+    for obj in project.objects.values():
+        if str(obj.id) in out.nodes and obj.kind not in drawn:
+            for ref in obj.dependencies():
+                src = out.nodes.get(str(ref)) or out.nodes.get(f"runs:{ref}")
+                if src is not None:
+                    use(src.id, str(obj.id))
     _chips(project, out, names)
+    from puzzle.schematic.links import source_kinds
+
+    wireable = source_kinds()
+    for n in out.nodes.values():  # a socket to draw a reference from (ADR 0071 decision 8)
+        if n.kind in wireable and not n.outputs():
+            n.ports.append(Port("use", "Use in…", "out", help="Drag from here onto what uses "
+                                "it (a material onto a component, a coordinate system onto "
+                                "a component's load, a study onto a result tool)"))  # fmt: skip
     for n in out.nodes.values():
         n.used_by = len({w.target for w in out.wires if w.kind == "use" and w.source == n.id})
     _groups(project, out, folded)
@@ -806,12 +835,6 @@ def _chips(project: Project, out: Schematic, names: dict[str, str]) -> None:
             target = project.objects.get(ref)
             if target is not None and SHOWN.get(target.kind) == "chip":
                 users.setdefault(str(ref), []).append(node.id)
-    for p in project.of_type(ResultProbe):  # a result tool sits on what it reads
-        node = out.nodes.get(f"runs:{p.source}") or out.nodes.get(str(p.source))
-        if node is not None:
-            users.setdefault(str(p.id), []).append(node.id)
-            if p.construction is not None:
-                users.setdefault(str(p.construction), []).append(node.id)
     for ref, nodes in users.items():
         obj = project.objects.get(UUID(ref))
         if obj is None:

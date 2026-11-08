@@ -1363,6 +1363,84 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         return out
 
     @tool(
+        description="Wire one object into another (ADR 0071 decision 8), as drawing a wire "
+        "in the schematic does: a material onto a component (which part), a mesh recipe "
+        "onto a component, a component into a study, a coordinate system or amplitude "
+        "onto a component's load, a study onto a result tool or derived result, a "
+        "construction plane onto a result tool, a bolt type onto a bolt. Without `which`, "
+        "lists what the wire could mean (`choices`, each with its index and label) and "
+        "applies it when there is exactly one; with `which` (an index or a label), applies "
+        "that one. A wire that fits nowhere says what the target takes. One undoable "
+        "command."
+    )
+    @guarded
+    def link(source: str, target: str, which: str | int | None = None,
+             rationale: str = "") -> dict[str, Any]:  # fmt: skip
+        from puzzle.commands import resolve
+        from puzzle.schematic import links
+
+        s = session()
+        src, dst = resolve(s.project, source), resolve(s.project, target)
+        found = links.choices(s.project, src, dst)
+        if not found:
+            raise PuzzleError(links.why_not(s.project, src, dst), code="invalid")
+        listed = [{"index": i, "label": c.label} for i, c in enumerate(found)]
+        if which is None and len(found) > 1:
+            return {"status": "choose", "choices": listed}
+        pick = _pick(found, which)
+        if pick.op == "add_part":
+            name = next((n for n in (src.name, f"{src.name} 2") if all(
+                p.name != n for p in dst.parts)), f"{src.name} {len(dst.parts) + 1}")  # fmt: skip
+            cmd = {"command": "edit", "object": str(dst.id), "ops": [{"op": "append",
+                   "path": "parts", "value": {"name": name, "geometry": str(src.id)}}]}  # fmt: skip
+            return s.submit(cmd, actor, rationale=rationale).to_dict()
+        cmds = links.commands(pick, src, dst)
+        return s.submit(cmds[0], actor, rationale=rationale or pick.label).to_dict()
+
+    @tool(
+        description="Remove a reference between two objects (ADR 0071 decision 8), as "
+        "removing a wire in the schematic does. Without `which`, lists what joins them; "
+        "with `which` (an index or label), clears it. A reference an object can't be "
+        "without (a study's component) is refused: link another to replace it."
+    )
+    @guarded
+    def unlink(source: str, target: str, which: str | int | None = None,
+               rationale: str = "") -> dict[str, Any]:  # fmt: skip
+        from puzzle.commands import resolve
+        from puzzle.schematic import links
+
+        s = session()
+        src, dst = resolve(s.project, source), resolve(s.project, target)
+        made = links.existing(s.project, src.id, dst)
+        if not made:
+            raise PuzzleError(f"{dst.name} doesn't use {src.name}", code="not_found")
+        if which is None and len(made) > 1:
+            return {
+                "status": "choose",
+                "choices": [{"index": i, "label": c.label} for i, c in enumerate(made)],
+            }
+        pick = _pick(made, which)
+        cmds = links.clear_commands(pick, dst)
+        if not cmds:
+            raise PuzzleError(f"{dst.name} needs its {pick.link.name.lower()}: link another "
+                              "one in to replace it", code="invalid")  # fmt: skip
+        return s.submit(cmds[0], actor, rationale=rationale or f"remove {pick.label}").to_dict()
+
+    def _pick(found, which):
+        if which is None:
+            return found[0]
+        if isinstance(which, int) or str(which).isdigit():
+            i = int(which)
+            if not 0 <= i < len(found):
+                raise PuzzleError(f"no choice {i}", code="invalid")
+            return found[i]
+        match = [c for c in found if c.label.lower() == str(which).lower()]
+        if not match:
+            raise PuzzleError(f"no choice '{which}'", code="invalid",
+                              details={"choices": [c.label for c in found]})  # fmt: skip
+        return match[0]
+
+    @tool(
         description="What operators do (ADR 0071), before using one: with no arguments "
         "every operator kind (its type for operator_add, its name, group and purpose); "
         "with `type` (or an operator's name as shown) its full card: purpose, an example, "
