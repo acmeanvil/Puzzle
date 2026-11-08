@@ -109,7 +109,7 @@ def test_the_palette_makes_a_reduce_wired_from_the_selected_results(window):
     palette.search.setText("redu")  # Reduce by name (and Group and aggregate's help)
     assert palette.list.currentItem().data(Qt.ItemDataRole.UserRole) == "reduce"
     palette._make()
-    op = _op(w, "Reduce 1")
+    op = _op(w, "Result summary 1")
     assert op.inputs["result"].source == _study(w).id and op.inputs["result"].port == "result"
     node = w.schematic.items[str(op.id)].node
     assert node.value.endswith(" mm") and node.state == "up_to_date"  # the tip deflection
@@ -126,7 +126,7 @@ def test_a_check_with_a_typed_limit_turns_red_then_green(window):
     reduce_id = operators.new_operator(w, "reduce", str(_study(w).id), "result")
     check_id = operators.new_operator(w, "check", reduce_id, "out")
     check = w.session.project.objects[UUID(check_id)]
-    assert check.inputs["value"].source == _op(w, "Reduce 1").id
+    assert check.inputs["value"].source == _op(w, "Result summary 1").id
     assert "limit input is not wired" in w.schematic.items[check_id].node.reason
     w.select_in_tree(("object", check_id))
     row = _rows(w)["Typed value"]
@@ -137,7 +137,7 @@ def test_a_check_with_a_typed_limit_turns_red_then_green(window):
     _rows(w)["Typed value"].setText(1, "100 mm")
     assert w.schematic.items[check_id].node.verdict == "pass"
     _rows(w)["Typed value"].setText(1, "12 wibbles")  # not a unit: put back, nothing changed
-    assert _op(w, "Check 1").inputs["limit"].value.unit == "mm"
+    assert _op(w, "Check against limit 1").inputs["limit"].value.unit == "mm"
 
 
 def test_a_wire_drawn_onto_an_operator_wires_it(window):
@@ -147,7 +147,7 @@ def test_a_wire_drawn_onto_an_operator_wires_it(window):
     w.schematic.start_wire(runs, "stress")
     target = w.schematic.items[op_id]
     w.schematic.end_wire(target.sceneBoundingRect().center())
-    op = _op(w, "Reduce 1")
+    op = _op(w, "Result summary 1")
     assert op.inputs["result"].port == "stress"
     assert w.schematic.items[op_id].node.value.endswith(" MPa")  # von Mises, its first
     wires = [x for x in w.schematic.wires if x.b is w.schematic.items[op_id]]
@@ -155,7 +155,7 @@ def test_a_wire_drawn_onto_an_operator_wires_it(window):
     check_id = operators.new_operator(w, "check")
     w.schematic.start_wire(w.schematic.items[f"runs:{_study(w).id}"], "result")
     w.schematic.end_wire(w.schematic.items[check_id].sceneBoundingRect().center())
-    assert not _op(w, "Check 1").inputs  # a result fits no input of a check
+    assert not _op(w, "Check against limit 1").inputs  # a result fits no input of a check
     assert "takes no result" in w.statusBar().currentMessage()
 
 
@@ -185,7 +185,7 @@ def test_tab_opens_the_palette(window):
     palette = w.last_palette
     assert palette.isVisible() and palette.at is not None
     palette.choose("panel")
-    op = _op(w, "Panel 1")
+    op = _op(w, "Show value 1")
     assert w.schematic.view.positions[str(op.id)] == pytest.approx(palette.at, abs=0.1)
 
 
@@ -211,13 +211,15 @@ def test_the_toolbar_lists_every_operator_by_group(window):
     assert reduce.toolTip() == TYPES["reduce"].help
     reduce.trigger()
     op = next(o for o in w.session.project.objects.values()
-              if getattr(o, "type", None) == "reduce" and o.name.startswith("Reduce"))  # fmt: skip
+              if getattr(o, "type", None) == "reduce"
+              and o.name.startswith("Result summary"))  # fmt: skip
     assert op.inputs["result"].source == _study(w).id
     assert str(op.id) in w.schematic.view.positions
     w.schematic.chosen(runs.node)
     menu.aboutToShow.emit()  # with the run selected: what fits it comes first
     fits = next(a.menu() for a in menu.actions() if a.text() == "Fits the selection")
-    assert {"Reduce", "Result table", "Filter"} <= {a.text() for a in fits.actions()}
+    shown = {a.text() for a in fits.actions()}
+    assert {"Result summary", "Result table", "Keep result where"} <= shown
 
 
 def test_the_palette_finds_by_other_names_and_offers_what_fits(window):

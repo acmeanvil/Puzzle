@@ -114,7 +114,10 @@ class NodeItem(QGraphicsObject):
                                                             else "")  # fmt: skip
         for chip, text in node.tips.items():
             tip += f"\n{chip}: {text.lower()}"
+        if node.help:  # an operator: what it does, an example, its ports (ADR 0071)
+            tip += "\n\n" + node.help
         self.setToolTip(tip)
+        self._tip = tip
         self._pressed_at: QPointF | None = None
 
     def boundingRect(self) -> QRectF:  # noqa: N802 - Qt's name
@@ -192,6 +195,18 @@ class NodeItem(QGraphicsObject):
                     Qt.AlignmentFlag.AlignRight if r.kind == "out" else Qt.AlignmentFlag.AlignLeft
                 )
                 painter.drawText(band, align | Qt.AlignmentFlag.AlignVCenter, r.text)
+
+    def hoverMoveEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        """Over a socket, what that port takes or gives; elsewhere, the node's card."""
+        pos, tip = event.pos(), self._tip
+        for r in rows(self.node, self.unfolded):  # anywhere along a port's row
+            if r.kind in ("in", "out") and abs(pos.y() - r.middle) <= r.height / 2:
+                port = self.node.port(r.key)
+                tip = port.help if port is not None and port.help else self._tip
+                break
+        if tip != self.toolTip():
+            self.setToolTip(tip)
+        super().hoverMoveEvent(event)
 
     def port_at(self, pos: QPointF, side: str = "out"):
         """The port on `side` under `pos` (in the item's coordinates), if any."""

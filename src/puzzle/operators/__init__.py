@@ -671,7 +671,7 @@ GROUP_OF = {
 }
 # Grasshopper's, Excel's and SQL's names for each (ADR 0064A), so a search finds it.
 ALIASES = {
-    "script": ("python", "code", "ghpython", "custom", "formula"),
+    "script": ("python", "code", "ghpython", "custom"),
     "points": ("construct point", "point from xyz", "deconstruct point", "coordinates"),
     "grid": ("square grid", "populate", "point grid", "array of points"),
     "profile": ("polyline", "circle", "rectangle", "polygon", "outline", "curve"),
@@ -740,8 +740,118 @@ ALIASES = {
     "intersection": ("brep brep", "curve curve", "section", "weld line", "meet",
                      "brep plane"),
 }  # fmt: skip
-TYPES = {k: replace(t, group=GROUP_OF.get(k, t.group), aliases=ALIASES.get(k, ()))
-         for k, t in TYPES.items()}  # fmt: skip
+# Names a user looks for first (ADR 0071's naming rules): the result or the action in an
+# engineer's words, not a programmer's or a data scientist's; no word that means another
+# operator; the old name kept as an alias, so search still finds it. Keys never change:
+# projects store the key, so renaming is the label alone.
+LABELS = {
+    "divide": "Points along",  # it isn't arithmetic: points along a path or edge
+    "series": "Stepped list",  # "series" is a plot's data (ADR 0071)
+    "section": "Plane cut values",  # beside Section cut and beam sections
+    "filter": "Keep result where",
+    "filter_rows": "Keep rows where",
+    "reduce": "Result summary",
+    "nearest": "Values at points",
+    "expression": "Formula",
+    "pivot": "Rows to columns",
+    "unpivot": "Columns to rows",
+    "stack": "Append tables",
+    "join": "Match tables",
+    "distinct": "Remove duplicates",
+    "top_n": "Largest N rows",
+    "group": "Summarise by group",
+    "rolling": "Running totals and averages",
+    "to_number": "Pick one value",
+    "new_column": "Calculated column",
+    "columns": "Choose columns",
+    "lookup": "Read off a table",
+    "pairs": "Pair up lists",
+    "list": "List item or statistic",
+    "panel": "Show value",
+    "preview": "Mark points in view",
+    "project_table": "Model contents",
+    "file": "Read file",
+    "random": "Random samples",
+    "toggle": "On/off switch",
+    "profile": "Outline",
+    "check": "Check against limit",
+}
+TYPES = {
+    k: replace(
+        t,
+        label=LABELS.get(k, t.label),
+        group=GROUP_OF.get(k, t.group),
+        aliases=ALIASES.get(k, ()) + ((t.label.lower(),) if k in LABELS else ()),
+    )
+    for k, t in TYPES.items()
+}
+
+# A worked example for the help card (ADR 0071 decision 1): what to wire, what comes out.
+EXAMPLES = {
+    "reduce": "A run's von Mises on the Bracket → its maximum: 212 MPa.",
+    "check": "212 MPa against 250 MPa, at most → Pass, margin 0.18.",
+    "filter": "Von Mises kept above 200 MPa: where the part is highly stressed.",
+    "expression": "2 * x + 5 mm with x = 10 mm → 25 mm; a list in gives a list out.",
+    "lookup": "Yield against temperature, read at 150 °C → its value there.",
+    "measure": "The Bracket's volume and mass, from its geometry and material.",
+    "plot": "A probe's displacement against the steps, or a table's column against another.",
+    "number": "250 MPa, named Allowable: wire it into Check, or use it as a parameter.",
+    "slider": "Thickness from 2 to 10 mm in 0.5 mm steps, driving a geometry.",
+    "nearest": "Strain gauge positions from a CSV → the model's strain at each.",
+    "result_table": "A run's displacement and von Mises, one row per node per step.",
+    "to_number": "A table's von Mises column → its maximum, for a Check.",
+    "new_column": "margin = 250 MPa / von_mises - 1, worked out for every row.",
+    "group": "Rows by part → each part's largest von Mises.",
+    "join": "CalculiX and Code_Aster results matched by node, then their difference.",
+    "section": "A construction plane across a bolt → the force and moment it carries.",
+    "divide": "20 points along a weld edge, with their distance along it.",
+    "panel": "Wire any output in to see its value on the canvas.",
+    "export": "A table to CSV in the project's exports, or the view as a PNG.",
+}
+
+
+def port_doc(spec: PortSpec, side: str = "in") -> str:
+    """One line on a port: its name, what it takes (or gives) and whether it's needed."""
+    if spec.types == ANY:
+        kinds = "anything"
+    else:
+        kinds = "a " + " or ".join(TYPE_WORDS.get(t, t).lower() for t in spec.types)
+    if side == "out":
+        return f"{spec.label}: gives {kinds}"
+    need = "needed" if spec.required else "optional"
+    typed = ", or type one in" if spec.typed else ""
+    return f"{spec.label}: takes {kinds}{typed} ({need})"
+
+
+def operator_doc(key: str) -> dict:
+    """What an operator kind does, for people and agents alike (the help card, tooltips,
+    Properties, MCP's operator_help): its purpose, an example, its inputs and outputs."""
+    t = TYPES[key]
+    return {
+        "key": key,
+        "name": t.label,
+        "group": t.group,
+        "purpose": t.help,
+        "example": EXAMPLES.get(key, ""),
+        "inputs": [{"name": p.label, "port": p.key, "takes": list(p.types),
+                    "required": p.required, "typed": p.typed or None,
+                    "about": port_doc(p, "in")} for p in t.inputs],
+        "outputs": [{"name": p.label, "port": p.key, "gives": p.types[0],
+                     "about": port_doc(p, "out")} for p in t.outputs],
+        "also_called": list(t.aliases),
+    }  # fmt: skip
+
+
+def doc_text(key: str) -> str:
+    """The help card as plain text: purpose, example, inputs, outputs."""
+    d = operator_doc(key)
+    lines = [f"{d['name']}: {d['purpose']}"]
+    if d["example"]:
+        lines.append(f"Example: {d['example']}")
+    lines += [f"In  · {i['about']}" for i in d["inputs"]]
+    lines += [f"Out · {o['about']}" for o in d["outputs"]]
+    return "\n".join(lines)
+
 
 # Types that compute from data, before a solve: pre-solve when nothing they read is a
 # result (ADR 0062 item 3), and then parameters by their name.

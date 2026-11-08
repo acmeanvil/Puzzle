@@ -110,6 +110,7 @@ class Port:
     side: str  # "in" or "out"
     carries: str = ""  # the field it takes or gives ("temperature")
     type: str = ""  # an operator port's type (ADR 0062: number, field, ...), "" otherwise
+    help: str = ""  # what it takes or gives, in words (ADR 0071): its socket's tooltip
 
 
 @dataclass
@@ -132,6 +133,7 @@ class Node:
     value: str = ""  # an operator's value as shown (ADR 0062): "212 MPa", "Pass: ..."
     verdict: str = ""  # a check's "pass" or "fail"
     slider: tuple[float, float, float] | None = None  # a slider's (low, high, value), SI
+    help: str = ""  # an operator's help card as text (ADR 0071): purpose, example, ports
 
     def port(self, key: str) -> Port | None:
         return next((p for p in self.ports if p.key == key), None)
@@ -505,7 +507,7 @@ def _operators(project: Project, out: Schematic, store, states: dict) -> None:
     """Operators (ADR 0062) as nodes after what they read, a typed port per input and
     output, joined by data wires; with a `store`, each shows its value."""
     from puzzle.model.schema import Operator
-    from puzzle.operators import TYPES, is_pre
+    from puzzle.operators import TYPES, doc_text, is_pre, port_doc
 
     ops = project.of_type(Operator)
     pre = {op.id for op in ops if is_pre(project, op)}
@@ -513,12 +515,14 @@ def _operators(project: Project, out: Schematic, store, states: dict) -> None:
         t = TYPES[op.type]
         column = RESOURCES if op.id in pre else RESULTS  # beside what it feeds (item 8)
         node = Node(str(op.id), "operator", column, op.name, subtitle=t.label,
-                    object=str(op.id))  # fmt: skip
+                    object=str(op.id), help=doc_text(op.type))  # fmt: skip
         st = states.get(str(op.id))
         if st is not None:
             node.state, node.reason = st.state, st.reason
-        node.ports = [Port(p.key, p.label, "out", type=p.type) for p in t.outputs]
-        node.ports += [Port(p.key, p.label, "in", type=p.type) for p in t.inputs]
+        node.ports = [Port(p.key, p.label, "out", type=p.type, help=port_doc(p, "out"))
+                      for p in t.outputs]  # fmt: skip
+        node.ports += [Port(p.key, p.label, "in", type=p.type, help=port_doc(p, "in"))
+                       for p in t.inputs]  # fmt: skip
         out.nodes[node.id] = node
     for op in ops:
         node = out.nodes[str(op.id)]

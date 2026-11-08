@@ -44,12 +44,13 @@ names, units and no raw data on view.
    from (a study, step, path, probe). It is what Path, probe histories, Plot over line
    and sweep points give; nodes show it as a small plot and never as rows. Operators on
    series (and a series with a number):
-   - *Ratio*, *Difference*, *Normalise* (by a number, its own maximum or another
-     series), *Expression* (over `x`, `y` and wired numbers by name, in Puzzle's unit-
-     aware expression language);
-   - *Pick step*, *Relative to step* (each step against a reference step, as difference
-     or ratio), *Across steps* (one value's history);
-   - *Envelope*, *Resample* (onto another series' x), *Integrate*, *Derivative*;
+   - *Divide (A ÷ B)*, *Subtract (A − B)*, *Multiply*, *Add*, and the intent-level
+     *Utilisation* (value ÷ allowable), *Safety factor* and *Margin*; *Normalise* (by a
+     number, its own maximum or another series); *Formula* (over `x`, `y` and wired
+     numbers by name, in Puzzle's unit-aware expression language);
+   - *At step*, *Compare with step* (each step against a reference step, as a
+     difference or ratio), *Over the steps* (one value's history);
+   - *Envelope*, *Match x values* (onto another series' x), *Area under curve*, *Slope*;
    - *Plot* takes any number of series, plus *Limit line* (a number drawn across) and
      *Annotate*; axes, units and the legend come from the series.
    Units follow through each operator (stress ÷ stress is a pure number), and a wire
@@ -87,6 +88,18 @@ names, units and no raw data on view.
    - the `schematic-operators` skill is updated with each step, and tests drive each new
      operator through MCP as well as the GUI.
 
+7. **Names a user looks for first** (the maintainer, 2026-11-07). An operator's name says
+   what you get, or the action, in an engineer's words rather than a programmer's or a
+   data scientist's; maths operators show their symbol (Divide (A ÷ B)); no word means
+   two different operators; intent-level operators (Utilisation, Safety factor, Margin)
+   sit beside the generic ones. Renaming changes labels only: projects store the type,
+   which never changes, and the old name stays an alias so search finds it. The existing
+   operators were renamed so (Reduce → Result summary, Divide → Points along, Series →
+   Stepped list, Expression → Formula, Pivot → Rows to columns, and 25 more:
+   `operators.LABELS`), and ADR 0071's new ones follow the same rules (Divide and
+   Subtract rather than Ratio and Difference, Compare with step, Over the steps, At step,
+   Match x values, Area under curve, Slope).
+
 ## Plan
 
 1. `DOCS` for every existing operator kind; tooltips, the help card, socket and wire
@@ -115,3 +128,23 @@ names, units and no raw data on view.
   schematic and the agent, and isn't what the maintainer asked for.
 - **A separate plot editor outside the schematic.** Another place to look, and its plots
   wouldn't feed checks or reports.
+
+## Built so far
+
+**Step 1 (2026-11-07): operators explain themselves, by names a user looks for first.**
+
+- `operators.LABELS`: 30 operators renamed (decision 7), the old name kept as an alias;
+  keys unchanged, so projects are untouched. Python script lost the alias "formula",
+  now Formula's name.
+- `operators.operator_doc(key)` / `doc_text` / `port_doc`: purpose, an example
+  (`EXAMPLES`, for the common ones), each input (what it takes, needed or optional,
+  whether a value can be typed) and output.
+- The schematic: an operator node's tooltip is its card (`Node.help`), and hovering
+  along a port's row says what that port takes or gives (`Port.help`); Properties shows
+  "What it does" (purpose, example).
+- MCP `operator_help`: every type, a search over names, purposes and other names, or one
+  type's card by type or shown name; `operator_add` points to it; the
+  `schematic-operators` skill maps shown names to types.
+- `tests/test_operator_docs.py`: every operator documented, names unique and none
+  another's search word, no jargon names, old names still found, the schematic's help,
+  and the same help over MCP.

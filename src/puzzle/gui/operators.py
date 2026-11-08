@@ -117,6 +117,11 @@ def show(window, op) -> None:
     except PuzzleError as exc:
         text = exc.message
     panel.add_rows("Output", [("Shows", text)])
+    from puzzle.operators import operator_doc
+
+    doc = operator_doc(op.type)  # ADR 0071: what it is for, always at hand
+    panel.add_rows("What it does", [("Purpose", doc["purpose"])]
+                   + ([("Example", doc["example"])] if doc["example"] else []))  # fmt: skip
     if op.type == "preview":
         preview(window, op)
     if op.type == "filter":  # ADR 0062: the field it keeps, on the mesh it came from

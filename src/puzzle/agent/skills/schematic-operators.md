@@ -14,6 +14,36 @@ There are two sorts:
 wants a figure or a check kept in the project, such as "max von Mises on the bracket
 ≤ 200 MPa", or "tip deflection against thickness".
 
+## Finding the right operator (ADR 0071)
+
+Call `operator_help` before using a type you are unsure of: with no arguments it lists
+every type with its name and purpose; `search="maximum"` (or "divide", "pivot") finds
+the types whose name, purpose or other names match; `type="check"` gives the full card
+(purpose, an example, each input and output). The user sees an operator's *name*, and
+`operator_add` takes its *type*; speak to the user in names. Some names differ from the
+type (the type never changes, so old projects keep working):
+
+| Name shown | Type |
+| --- | --- |
+| Result summary | reduce |
+| Keep result where / Keep rows where | filter / filter_rows |
+| Check against limit | check |
+| Formula | expression |
+| Stepped list | series |
+| Points along | divide (points along an edge; not arithmetic) |
+| Plane cut values | section |
+| Values at points | nearest |
+| Read off a table | lookup |
+| Pick one value | to_number |
+| Calculated column, Choose columns | new_column, columns |
+| Rows to columns, Columns to rows | pivot, unpivot |
+| Append tables, Match tables | stack, join |
+| Remove duplicates, Largest N rows | distinct, top_n |
+| Summarise by group, Running totals and averages | group, rolling |
+| Show value, Mark points in view | panel, preview |
+| Model contents, Read file, Random samples | project_table, file, random |
+| On/off switch, Outline, Pair up lists, List item or statistic | toggle, profile, pairs, list |
+
 ## Types and their ports
 
 | Type | Inputs | Outputs | Its own settings |

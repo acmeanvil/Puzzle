@@ -1337,8 +1337,8 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         "{value: '200 MPa'}; `settings` its own fields (quantity, selection, reduction, "
         "step, keep, compare, against, file, format, low, high, increment, expression, "
         "text, operation, column, combination). A study's ports: result, or a field "
-        "(stress). Read the skill schematic-operators first. One undoable command; "
-        "returns its value."
+        "(stress). Read the skill schematic-operators first, and operator_help for what a "
+        "type does and its ports. One undoable command; returns its value."
     )
     @guarded
     def operator_add(
@@ -1361,6 +1361,34 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         if out.get("status") == "applied":
             out["value"] = _operator_values(s, data["name"])[0]
         return out
+
+    @tool(
+        description="What operators do (ADR 0071), before using one: with no arguments "
+        "every operator kind (its type for operator_add, its name, group and purpose); "
+        "with `type` (or an operator's name as shown) its full card: purpose, an example, "
+        "each input (what it takes, needed or not, whether a value can be typed) and "
+        "output; with `search`, the kinds whose name, purpose or other names match "
+        "(e.g. 'maximum', 'divide', 'pivot')."
+    )
+    @guarded
+    def operator_help(type: str | None = None, search: str | None = None) -> dict[str, Any]:  # noqa: A002
+        from puzzle.operators import TYPES, operator_doc
+
+        if type:
+            key = type if type in TYPES else next(
+                (k for k, t in TYPES.items() if t.label.lower() == type.lower()), None)  # fmt: skip
+            if key is None:
+                raise PuzzleError(f"no operator type '{type}'", code="not_found",
+                                  details={"types": sorted(TYPES)})  # fmt: skip
+            return operator_doc(key)
+        words = (search or "").lower().split()
+        found = []
+        for key, t in TYPES.items():
+            hay = " ".join([key, t.label, t.group, t.help, *t.aliases]).lower()
+            if all(w in hay for w in words):
+                found.append({"type": key, "name": t.label, "group": t.group,
+                              "purpose": t.help})  # fmt: skip
+        return {"operators": found}
 
     @tool(
         description="The project schematic (ADR 0058): every file, resource, component, "

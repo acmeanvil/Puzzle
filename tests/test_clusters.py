@@ -52,8 +52,10 @@ def test_every_recipe_goes_in(setup):
         binding = {port["name"]: (str(study.id), "result") for port in t["ports"]}
         s.submit_batch(clusters.commands(s.project, key, binding))
     names = {o.name for o in s.project.of_type(Operator)}
-    assert "Stress margin: Check" in names and "Peak per part: Plot" in names
-    margin = next(o for o in s.project.of_type(Operator) if o.name == "Stress margin: Check")
+    assert "Stress margin: Check against limit" in names and "Peak per part: Plot" in names
+    margin = next(
+        o for o in s.project.of_type(Operator) if o.name == "Stress margin: Check against limit"
+    )
     assert margin.inputs["limit"].value == Quantity(value=250, unit="MPa")
 
 
