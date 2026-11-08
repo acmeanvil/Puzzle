@@ -100,15 +100,35 @@ names, units and no raw data on view.
    Subtract rather than Ratio and Difference, Compare with step, Over the steps, At step,
    Match x values, Area under curve, Slope).
 
+8. **The tree and the schematic are equal ways to build a project** (the maintainer,
+   2026-11-07). The user builds in either, as they prefer:
+   - **Everything the tree can add, the schematic can add**: geometry, materials, mesh
+     recipes, components, physics and their features (loads, supports), contacts and
+     bolts, studies and their steps, transfers, imported fields, coordinate systems,
+     construction geometry, amplitudes, result tools, derived results, optimisations,
+     mesh studies, parameters and operators, from the same one-form dialogs
+     (`window.ask_form`), placed where asked.
+   - **Every reference between objects is a wire that can be drawn**: a material onto a
+     part, a mesh recipe onto a component, a component into a study, a selection onto a
+     feature, a coordinate system or amplitude onto what uses it, a study into a
+     transfer, a run into a derived result or a result tool; drawing one is the same
+     Edit command the tree's Properties dropdown makes, and a wire the target can't take
+     is refused with the reason. Deleting a wire clears the reference.
+   - A test lists every kind the tree's menus can create and every reference field in
+     the schema, and refuses one the schematic can't create or wire. The agent does the
+     same through MCP (decision 6).
+
 ## Plan
 
 1. `DOCS` for every existing operator kind; tooltips, the help card, socket and wire
    messages, Properties; the test.
-2. Model value.
-3. The series type and its operators (decision 3), with the utilisation, normalised
+2. Parity with the tree (decision 8): every creatable kind added from the schematic,
+   every reference a drawable wire, and the test that keeps it so.
+3. Model value.
+4. The series type and its operators (decision 3), with the utilisation, normalised
    displacement and steps-against-a-step plots as tests against hand-computed answers.
-4. Then decision 4's steps, each its own entry in Built so far.
-5. Each step is driven through MCP too (decision 6): its tools, its documentation
+5. Then decision 4's steps, each its own entry in Built so far.
+6. Each step is driven through MCP too (decision 6): its tools, its documentation
    served, its tests, and the `schematic-operators` skill.
 
 ## Consequences
