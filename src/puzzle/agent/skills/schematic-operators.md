@@ -1,6 +1,6 @@
 ---
 name: schematic-operators
-description: operators: results as numbers and verdicts (pass/fail, ASME checks); sliders and expressions as parameters; points, grids, profiles and patterns from data; Python scripts
+description: operators: results as numbers and verdicts; curves (paths, histories) as utilisation, normalised or against a step; parameters from sliders and formulas; geometry from data; scripts
 adr: 0062
 ---
 Operators are project objects that compute, wired together like Grasshopper's nodes.
@@ -43,6 +43,10 @@ type (the type never changes, so old projects keep working):
 | Show value, Mark points in view | panel, preview |
 | Model contents, Read file, Random samples | project_table, file, random |
 | On/off switch, Outline, Pair up lists, List item or statistic | toggle, profile, pairs, list |
+| Divide (A ÷ B), Subtract (A − B), Multiply (A × B), Add (A + B) | divide_by, subtract, multiply, add |
+| Utilisation, Safety factor, Margin of safety | utilisation, safety_factor, margin |
+| Curve formula, Curve from table, Over the steps, At step, Compare with step | curve_formula, curve_from_table, over_steps, at_step, compare_steps |
+| Envelope, Match x values, Area under curve, Slope, Limit line, Annotate | envelope, match_x, area_under, slope, limit_line, annotate |
 
 ## Model value: the model's own values (ADR 0071)
 
@@ -58,6 +62,49 @@ as a parameter by its name, and it follows the model when the material or load c
 For a utilisation check against yield: reduce (max von Mises) → check's value, and
 model_value (Yield strength) → check's limit.
 
+## Curves: paths, histories and what to make of them (ADR 0071)
+
+A curve (port type `series`) is x and y with their units: one curve, or one per step
+(a path in a transient run). Where curves come from:
+- a result tool along a path (or a linearization), port `along`: one curve per step,
+  distance against the value;
+- any result tool, port `history`: its value against the steps (time, frequency,
+  increment);
+- `over_steps` (Over the steps): any number (a Result summary) at every step, or with
+  `against="sweep"` at every sweep point;
+- `curve_from_table`, or a table wired straight into a curve input: its first two
+  number columns (or `by` = [x column], `column` = y column); a Model value against
+  temperature is such a table.
+
+What to do with them (units follow; a mismatch is refused with the reason):
+- `utilisation` (value ÷ allowable), `safety_factor` (allowable ÷ value), `margin`
+  (allowable ÷ value − 1), and `divide_by`, `subtract`, `multiply`, `add`: inputs `a`
+  and `b`, each a curve or a number (typed "250 MPa" or wired). Two numbers give a
+  number (so a safety factor can feed a Check); anything with a curve gives a curve.
+  Two curves must share their x values: put `match_x` (inputs `series`, `onto`) first.
+- `normalise` (input `series`, optional `by`: a number or curve; none: each curve by its
+  largest size), `curve_formula` (`expression` over x, y and wired a, b, c: "y / 250 MPa").
+- `at_step` (`step`, -1 = last) picks one step's curve; `compare_steps` (`step` = the
+  reference, `comparison` difference or ratio) gives every other step against it, or,
+  for a history, each step's value against the reference step's.
+- `envelope` (`reduction` max, min or mean over the curves wired in), `area_under`
+  (a number; one curve only), `slope` (dy/dx).
+- `limit_line` (a number, drawn dashed across) and `annotate` (marks the largest or
+  smallest point; `note` labels it) go into `plot`, whose inputs `value`, `b`, `c`, `d`
+  take up to four curves of one x and one y quantity. Its `curves` output is what the
+  Plots panel draws.
+
+`operator_value` gives a curve as a summary, never every point: its axes and units,
+`curve_count`, and per curve its `max`, `x_at_max`, `min`, `x_at_min`, a 5-point
+`sample` and its `step`.
+
+Example: von Mises along a wall against yield, plotted with the limit.
+1. `operator_add("at_step", "Wall at the end", {"series": {"source": "Wall path", "port": "along"}})`
+2. `operator_add("model_value", "Sy", settings={"target": "Steel", "property": "Yield strength"})`
+3. `operator_add("utilisation", "Wall use", {"a": {"source": "Wall at the end"}, "b": {"source": "Sy"}})`
+4. `operator_add("limit_line", "Yield", {"value": {"source": "Sy"}})`, then
+   `operator_add("plot", "Wall stress", {"value": {"source": "Wall at the end"}, "b": {"source": "Yield"}})`
+
 ## Types and their ports
 
 | Type | Inputs | Outputs | Its own settings |
@@ -66,14 +113,15 @@ model_value (Yield strength) → check's limit.
 | filter | result, limit (number, optional) | out (field) | quantity, selection, keep (all, above, below), step |
 | check | value (number or field), limit (number) | out (verdict), margin (number) | compare (at_most, at_least) |
 | panel | value (anything) | none | none |
-| plot | value (number) | out (table) | against (step, sweep) |
+| plot | value (number, table or curve), b, c, d (curves, optional) | out (table), curves (curve) | against (step, sweep), chart |
 | export | value (anything) | none | file (inside the project), format (csv, or a result export format) |
 
 What can be wired in:
 - A study, by its port `result` (the newest run), or by a field such as `stress`
   (that field's results only).
 - A derived result, by its port `result` (combinations and equations, ADR 0025).
-- A result tool, by its port `out` (its value).
+- A result tool, by its port `out` (its value), `along` (a path's curve per step) or
+  `history` (its value over the steps).
 - A parameter set, by a parameter's name (a number with its unit).
 - Another operator, by one of its output ports.
 
@@ -198,5 +246,9 @@ hasn't run says so in `error`.
   operator shows as missing input.
 - A check compares like with like. A stress against a length is an error, so type the
   limit with its unit ("200 MPa", not "200").
+- Arithmetic on two curves with different x values is refused: Match x values first.
+  Area under curve takes one curve: At step or Envelope first.
+- At step on a history (one value per step) is refused: it already is one value per
+  step; read one step with Result summary's `step`.
 - An integral needs values per node and a face or body. An integral of a stress over a
   body is in Pa·m³, and its unit isn't tracked.

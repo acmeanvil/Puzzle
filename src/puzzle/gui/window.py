@@ -3736,26 +3736,41 @@ class PlotsPanel(QWidget):
         self.show_path(op)
 
     def _operators(self, project, store, ops) -> None:
-        """Ticked plot operators: each table's first column against its second, in
-        display units."""
+        """Ticked plot operators: every curve wired in (ADR 0071), in display units;
+        limit lines dashed across the others' x, annotated points labelled."""
         import numpy as np
 
         from puzzle.gui.viewport import _display
         from puzzle.operators import evaluate as ev
 
         ctx = ev.Context(project, store)
+        self.dashed: set[int] = set()
+        self.notes: list[tuple[float, float, str]] = []
         for op in ops:
-            table = ev.value(ctx, op)
-            xs = [r[0] for r in table.rows]
-            if not all(isinstance(x, float) for x in xs):  # points by name: their order
-                xs = [float(i + 1) for i in range(len(xs))]
-            kinds = table.kinds or [None, None]
-            x_shown, x_unit = _display(np.array(xs, float), kinds[0])
-            y_shown, _ = _display(np.array([r[1] for r in table.rows], float), kinds[1])
-            pts = list(zip(map(float, x_shown), map(float, y_shown), strict=True))
-            self.charts[len(self.series)] = op.chart  # line, bars or points (ADR 0064)
-            self.series.append((op.name, pts))
-            self.curve.x_label = table.columns[0] + (f" ({x_unit})" if x_unit else "")
+            curves = ev.outputs(ctx, op)["curves"]
+            lines = curves.lines
+            xs_all = [float(v) for c in lines for v in c.x if np.isfinite(v)]
+            span = (min(xs_all), max(xs_all)) if xs_all else (0.0, 1.0)
+            one = len(curves.curves) == 1
+            for c in curves.curves:
+                if c.style == "limit":
+                    x, y = np.array(span, float), np.repeat(c.y[:1], 2)
+                    self.dashed.add(len(self.series))
+                else:
+                    x, y = c.x, c.y
+                    if x.size and not np.isfinite(x).any():  # points by name: their order
+                        x = np.arange(1.0, len(y) + 1)
+                x_shown, x_unit = _display(np.asarray(x, float), curves.x_kind)
+                y_shown, _ = _display(np.asarray(y, float), curves.y_kind)
+                pts = list(zip(map(float, x_shown), map(float, y_shown), strict=True))
+                self.charts[len(self.series)] = op.chart  # line, bars or points (ADR 0064)
+                self.series.append((op.name if one else c.label, pts))
+                if c.mark is not None:
+                    mx, _ = _display(np.array([c.mark[0]]), curves.x_kind)
+                    my, _ = _display(np.array([c.mark[1]]), curves.y_kind)
+                    self.notes.append((float(mx[0]), float(my[0]), c.note))
+            if lines or curves.curves:
+                self.curve.x_label = curves.x_label + (f" ({x_unit})" if x_unit else "")
 
     def show_path(self, probe) -> None:
         """A path's plot: ticked alone, the Plots tab opened (ADR 0042)."""
@@ -3821,7 +3836,8 @@ class PlotsPanel(QWidget):
                 self.window.report(exc)
             self.curve.set_series(
                 self.series, dots={i for i, c in self.charts.items() if c == "scatter"},
-                bars={i for i, c in self.charts.items() if c == "bar"})  # fmt: skip
+                bars={i for i, c in self.charts.items() if c == "bar"},
+                dashed=getattr(self, "dashed", ()), notes=getattr(self, "notes", ()))  # fmt: skip
             return
         paths = [p for p in ticked if p is not None and p.type in ("path", "linearized")]
         if paths:  # paths plot against the distance; steps don't mix with them

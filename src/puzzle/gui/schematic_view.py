@@ -184,6 +184,22 @@ class NodeItem(QGraphicsObject):
                 painter.setPen(QPen(QColor(t.sunken), 1.5))
                 painter.setBrush(QColor(t.accent))
                 painter.drawEllipse(QPointF(at, r.middle), 6, 6)
+            elif r.kind == "sketch":  # a curve's small plot (ADR 0071)
+                frame = QRectF(12, r.top + 4, self.w - 24, r.height - 8)
+                painter.setPen(QPen(QColor(t.border), 1))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRect(frame)
+                series = t.series
+                for k, line in enumerate(node.sketch):
+                    painter.setPen(QPen(QColor(series[k % len(series)]), 1.5))
+                    q = [
+                        QPointF(
+                            frame.left() + x * frame.width(), frame.bottom() - y * frame.height()
+                        )
+                        for x, y in line
+                    ]
+                    for a, b in zip(q, q[1:], strict=False):
+                        painter.drawLine(a, b)
             elif r.kind in ("subtitle", "badge", "used", "fold", "part"):
                 painter.setFont(small)
                 painter.setPen(QColor(t.muted))

@@ -338,6 +338,10 @@ def source(ctx: Context, oid: UUID, port: str):
         d = derived.evaluate(ctx.project, ctx.store, obj)
         return ResultValue(d.mesh, d.results, d.items, d.run_ids, obj.name)
     if isinstance(obj, ResultProbe):
+        if port in ("along", "history"):  # its curves (ADR 0071 decision 3)
+            from puzzle.operators.series import from_probe
+
+            return from_probe(ctx, obj, port)
         return _probe(ctx, obj)
     raise PuzzleError(f"'{obj.name}' has no outputs for an operator", code="invalid")
 
@@ -597,7 +601,30 @@ def _export(ctx: Context, op) -> dict[str, Any]:
 
 
 def _plot(ctx: Context, op) -> dict[str, Any]:
+    """The plot's table (its first curve, as before ADR 0071) and every curve wired in,
+    together (one x and one y quantity), for the Plots panel."""
+    from puzzle.operators import series as sr
+
     got = _input(ctx, op, "value")
+    if isinstance(got, sr.Series):
+        parts, table = [got], (got.table() if got.lines else None)
+    else:
+        table = _plot_table(ctx, op, got)
+        along = "sweep" if op.against == "sweep" else "steps"
+        first = sr.from_table(table, table.columns[0], table.columns[1], op.name,
+                              along="" if isinstance(got, Table) else along)  # fmt: skip
+        parts = [first]
+    for i, key in enumerate("bcd"):
+        more = _input(ctx, op, key)
+        if more is not None:
+            parts.append(sr.as_series(op, more, f"curve {i + 2}"))
+    curves = sr.together(op, parts)
+    if table is None:
+        table = curves.table()
+    return {"out": table, "curves": curves}
+
+
+def _plot_table(ctx: Context, op, got) -> Table:
     if isinstance(got, Table):  # a column against another (ADR 0064 phase 2)
         from puzzle.operators import frames
 
@@ -606,9 +633,16 @@ def _plot(ctx: Context, op) -> dict[str, Any]:
         frames._names(op, [x, y], got)
         kinds = dict(zip(got.columns, got.kinds, strict=False))
         rows = [list(r) for r in got.frame.select([x, y]).rows()]
-        return {"out": Table([x, y], rows, [kinds.get(x), kinds.get(y)])}
+        return Table([x, y], rows, [kinds.get(x), kinds.get(y)])
     if op.against == "sweep":
-        return {"out": _over_sweep(ctx, op)}
+        return _over_sweep(ctx, op)
+    return _steps_table(ctx, op)
+
+
+def _steps_table(ctx: Context, op) -> Table:
+    """The number wired into `value` at every step of the run it reads."""
+    from puzzle.operators.series import step_axis
+
     base = _upstream_result(ctx, op)
     rows, label, kind = [], "Value", None
     for i, step in enumerate(base.results.steps):
@@ -620,10 +654,8 @@ def _plot(ctx: Context, op) -> dict[str, Any]:
             raise
         label, kind = got.label or label, got.kind
         rows.append([float(step.value), got.value])
-    x, x_kind = {"modal": ("Frequency", None), "frequency_domain": ("Frequency", None),
-                 "transient": ("Time", "time"), "buckling": ("Load factor", None)}.get(
-        base.results.steps[0].kind if base.results.steps else "", ("Step", None))  # fmt: skip
-    return {"out": Table([x, label], rows, [x_kind, kind])}
+    x, x_kind = step_axis(base.results)
+    return Table([x, label], rows, [x_kind, kind])
 
 
 def _upstream_studies(ctx: Context, op, seen=()) -> list:
@@ -1297,11 +1329,19 @@ def _script(ctx: Context, op) -> dict[str, Any]:
     return {"out": scripts.decode(op, got)}
 
 
+def _curves() -> dict:
+    """The curve operators (ADR 0071 decision 3), in `operators.series`."""
+    from puzzle.operators import series
+
+    return series.evaluators()
+
+
 _EVALUATE = {"reduce": _reduce, "filter": _filter, "check": _check, "panel": _panel,
              "plot": _plot, "export": _export, "number": _number_op, "slider": _slider,
              "series": _series, "range": _range, "expression": _expression,
              "random": _random, **_tables(), **_geometric(),
-             "table": _table, "list": _list, "pairs": _pairs}  # fmt: skip
+             "table": _table, "list": _list, "pairs": _pairs,
+             **_curves()}  # fmt: skip
 
 
 # --- what a node shows, and exporting -------------------------------------------------
@@ -1405,6 +1445,8 @@ def _snapshot(ctx: Context, op, got: ResultValue, path: Path) -> Path:
 
 
 def as_csv(v) -> str:
+    if getattr(v, "type", "") == "series":
+        return v.table().csv()
     if isinstance(v, ListValue):
         rows = [[float(x)] if v.numeric else [x] for x in v.values]
         return Table([v.label or "value"], rows, [v.kind]).csv()
@@ -1469,6 +1511,10 @@ def _data(v) -> Any:
         return {"columns": [_heading(c, k) for c, k in zip(v.columns, v.kinds, strict=False)],
                 "row_count": v.frame.height, "rows": [list(r) for r in
                                                        v.frame.head(PREVIEW).rows()]}  # fmt: skip
+    if getattr(v, "type", "") == "series":  # a summary, never every point (ADR 0071)
+        from puzzle.operators.series import summary
+
+        return summary(v)
     if v is None:
         return None
     return {"text": v.text()}

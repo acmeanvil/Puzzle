@@ -87,6 +87,8 @@ class Curve(QWidget):
         self.log = log  # both axes logarithmic (S-N and strain-life curves)
         self.dots: set[int] = set()  # series drawn as points only
         self.bars: set[int] = set()  # series drawn as bars
+        self.dashed: set[int] = set()  # series drawn dashed (a limit line, ADR 0071)
+        self.notes: list[tuple[float, float, str]] = []  # labelled points (Annotate)
         self.setMinimumSize(220, 160)
 
     @property
@@ -96,9 +98,10 @@ class Curve(QWidget):
     def set_points(self, points, label: str = "") -> None:
         self.set_series([(label, points)] if points else [])
 
-    def set_series(self, series, dots=(), bars=()) -> None:
+    def set_series(self, series, dots=(), bars=(), dashed=(), notes=()) -> None:
         """Curves as (name, points); those whose index is in `dots` are drawn as points
-        only (a scatter), in `bars` as bars from zero, the others joined in order of x."""
+        only (a scatter), in `bars` as bars from zero, in `dashed` as dashed lines, the
+        others joined in order of x; `notes` (x, y, text) are marked and labelled."""
 
         def keep(x, y):
             return math.isfinite(x) and math.isfinite(y) and (not self.log or (x > 0 and y > 0))
@@ -106,6 +109,8 @@ class Curve(QWidget):
         self.series = [(name, [(x, y) for x, y in pts if keep(x, y)]) for name, pts in series]
         self.dots = set(dots)
         self.bars = set(bars)
+        self.dashed = set(dashed)
+        self.notes = [(x, y, text) for x, y, text in notes if keep(x, y)]
         self.update()
 
     def paintEvent(self, _event) -> None:  # noqa: N802 - Qt's name
@@ -154,7 +159,8 @@ class Curve(QWidget):
         for k, (name, pts) in enumerate(self.series):
             series = tokens().series
             colour = QColor(series[k % len(series)])
-            p.setPen(QPen(colour, 2))
+            style = Qt.PenStyle.DashLine if k in self.dashed else Qt.PenStyle.SolidLine
+            p.setPen(QPen(colour, 2, style))
             q = [at(x, y) for x, y in sorted(pts)]
             if k in self.bars:  # a bar per point, from zero, a little narrower than its gap
                 xs_ = sorted(x for x, _ in pts)
@@ -172,11 +178,17 @@ class Curve(QWidget):
             if k not in self.dots:
                 for a, b in zip(q, q[1:], strict=False):
                     p.drawLine(a, b)
-            if len(q) <= 40 or k in self.dots:
+            if (len(q) <= 40 or k in self.dots) and k not in self.dashed:
                 for c in q:
                     p.drawEllipse(c, 2.5, 2.5)
             if name:
                 p.drawText(left + 10, top + 16 + 16 * k, name)
+        p.setPen(QPen(QColor(t.canvas_text), 1.5))
+        for x, y, text in self.notes:
+            c = at(x, y)
+            p.drawEllipse(c, 4, 4)
+            p.drawText(QPointF(min(c.x() + 7, left + w - 7 * len(text)), max(c.y() - 7, top + 12)),
+                       text)  # fmt: skip
 
 
 class TableEditor(QDialog):

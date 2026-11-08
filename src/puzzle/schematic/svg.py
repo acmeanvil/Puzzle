@@ -125,6 +125,16 @@ def _node(node, lay: Layout, dx: float, dy: float) -> list[str]:
                        f'y2="{y + r.middle:.1f}" stroke="{BORDER}" stroke-width="3"/>'
                        f'<circle cx="{at:.1f}" cy="{y + r.middle:.1f}" r="5" '
                        f'fill="{TYPE_COLOURS["number"]}"/>')  # fmt: skip
+        elif r.kind == "sketch":  # a curve's small plot (ADR 0071)
+            fx, fy, fw, fh = x + 12, y + r.top + 4, w - 24, r.height - 8
+            out.append(f'<rect x="{fx:.1f}" y="{fy:.1f}" width="{fw:.1f}" height="{fh:.1f}" '
+                       f'fill="none" stroke="{BORDER}"/>')  # fmt: skip
+            for line in node.sketch:
+                pts = " ".join(f"{fx + a * fw:.1f},{fy + fh - b * fh:.1f}" for a, b in line)
+                out.append(
+                    f'<polyline points="{pts}" fill="none" '
+                    f'stroke="{TYPE_COLOURS["series"]}" stroke-width="1.5"/>'
+                )
         elif r.kind in ("subtitle", "badge", "used", "fold", "part"):
             out.append(f'<text x="{x + 10:.1f}" y="{base:.1f}" fill="{MUTED}">'
                        f"{escape(_cut(r.text, 36))}</text>")  # fmt: skip

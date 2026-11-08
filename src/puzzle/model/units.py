@@ -48,6 +48,12 @@ DIMENSIONS: dict[str, tuple[str, str]] = {
     "specific_heat": ("Specific heat", "J/(kg*K)"),
     "film": ("Heat transfer coefficient", "W/(m^2*K)"),
     "expansion": ("Thermal expansion", "1/K"),
+    # what curves give (ADR 0071): areas under them and their slopes
+    "force_per_length": ("Force per length", "N/m"),
+    "stress_gradient": ("Stress gradient", "Pa/m"),
+    "temperature_gradient": ("Temperature gradient", "K/m"),
+    "temperature_rate": ("Rate of temperature change", "K/s"),
+    "impulse": ("Impulse", "N*s"),
 }
 # Unit systems: kind -> unit (kinds left out show in SI).
 SYSTEMS: dict[str, tuple[str, dict[str, str]]] = {
@@ -60,6 +66,9 @@ SYSTEMS: dict[str, tuple[str, dict[str, str]]] = {
             "volume": "mm^3",
             "pressure": "MPa",
             "temperature": "degC",
+            "force_per_length": "N/mm",
+            "stress_gradient": "MPa/mm",
+            "temperature_gradient": "K/mm",
         },
     ),
     "consistent_mm": (
@@ -121,6 +130,11 @@ CHOICES: dict[str, list[str]] = {
     "specific_heat": ["J/(kg*K)", "kJ/(kg*K)", "mJ/(tonne*K)", "BTU/(lb*delta_degF)"],
     "film": ["W/(m^2*K)", "mW/(mm^2*K)", "BTU/(hour*ft^2*delta_degF)"],
     "expansion": ["1/K", "1/delta_degF"],
+    "force_per_length": ["N/m", "N/mm", "kN/m", "lbf/in"],
+    "stress_gradient": ["Pa/m", "MPa/mm", "MPa/m", "psi/in"],
+    "temperature_gradient": ["K/m", "K/mm", "delta_degF/in"],
+    "temperature_rate": ["K/s", "K/min", "K/hour"],
+    "impulse": ["N*s", "kN*s", "lbf*s"],
 }
 
 

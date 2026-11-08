@@ -31,6 +31,7 @@ PORT_TYPES = {
     "result": "a run, or a derived result",
     "verdict": "pass or fail, with the margin",
     "text": "words: a label or a line for a report",
+    "series": "a curve (or one per step): x and y with their units, as plotted",
 }
 TYPE_WORDS = {
     "number": "Number",
@@ -43,17 +44,19 @@ TYPE_WORDS = {
     "result": "Result",
     "verdict": "Verdict",
     "text": "Text",
+    "series": "Curve",
 }
 # Socket shapes, as Grasshopper and Blender tell types apart at a glance.
 SHAPES = {"number": "diamond", "list": "diamond", "table": "square", "points": "square",
           "profile": "square",
           "geometry": "square", "field": "circle", "result": "circle",
-          "verdict": "triangle", "text": "diamond"}  # fmt: skip
+          "verdict": "triangle", "text": "diamond", "series": "square"}  # fmt: skip
 # Their colours on a light ground (the SVG; the GUI draws the same).
 TYPE_COLOURS = {"number": "#2b8a3e", "list": "#5c940d", "table": "#e67700",
                 "points": "#c2255c", "profile": "#a61e4d", "geometry": "#495057",
                 "field": "#7048e8",
-                "result": "#1c7ed6", "verdict": "#d6336c", "text": "#868e96"}  # fmt: skip
+                "result": "#1c7ed6", "verdict": "#d6336c", "text": "#868e96",
+                "series": "#0c8599"}  # fmt: skip
 ANY = tuple(PORT_TYPES)
 
 
@@ -86,6 +89,217 @@ class OperatorType:
 
     def output(self, key: str) -> PortSpec | None:
         return next((p for p in self.outputs if p.key == key), None)
+
+
+# ADR 0071 decision 3: the series operators (`operators.series`). A and B take a curve or
+# a number; with two numbers the arithmetic gives a number (`first_type` with a project).
+_CN = ("series", "number")
+
+
+def _ab(a: str = "A", b: str = "B", b_typed: bool = True) -> tuple[PortSpec, ...]:
+    return (PortSpec("a", a, _CN, typed="number"),
+            PortSpec("b", b, _CN, typed="number" if b_typed else ""))  # fmt: skip
+
+
+_CURVE_IN = (PortSpec("series", "Curve", ("series",)),)
+_CURVE_OUT = (PortSpec("out", "Curve", ("series",)),)
+SERIES_TYPES = (
+    OperatorType(
+        "divide_by",
+        "Divide (A ÷ B)",
+        "Curves",
+        "A curve (or number) divided by another or by a number, point by point; units "
+        "follow (stress ÷ stress is a pure number).",
+        _ab(),
+        _CURVE_OUT,
+        (),
+    ),
+    OperatorType(
+        "subtract",
+        "Subtract (A − B)",
+        "Curves",
+        "A curve (or number) less another or a number, point by point; both in the same "
+        "kind of unit.",
+        _ab(),
+        _CURVE_OUT,
+        (),
+    ),
+    OperatorType(
+        "multiply",
+        "Multiply (A × B)",
+        "Curves",
+        "A curve (or number) times another or a number, point by point; units multiply "
+        "(force × length is a moment).",
+        _ab(),
+        _CURVE_OUT,
+        (),
+    ),
+    OperatorType(
+        "add",
+        "Add (A + B)",
+        "Curves",
+        "A curve (or number) plus another or a number, point by point; both in the same "
+        "kind of unit.",
+        _ab(),
+        _CURVE_OUT,
+        (),
+    ),
+    OperatorType(
+        "utilisation",
+        "Utilisation",
+        "Checks",
+        "How much of an allowable a value uses: value ÷ allowable, 1 at the limit (a "
+        "stress along a path against the material's yield strength).",
+        _ab("Value", "Allowable"),
+        _CURVE_OUT,
+        (),
+    ),
+    OperatorType(
+        "safety_factor",
+        "Safety factor",
+        "Checks",
+        "How many times a value fits in its allowable: allowable ÷ value, above 1 is safe.",
+        _ab("Value", "Allowable"),
+        _CURVE_OUT,
+        (),
+    ),
+    OperatorType(
+        "margin",
+        "Margin of safety",
+        "Checks",
+        "How far inside its allowable a value is: allowable ÷ value − 1, above 0 is safe.",
+        _ab("Value", "Allowable"),
+        _CURVE_OUT,
+        (),
+    ),
+    OperatorType(
+        "normalise",
+        "Normalise",
+        "Curves",
+        "A curve divided by a number, by another curve, or (nothing wired) by its own "
+        "largest size: a shape between −1 and 1 to compare with others.",
+        (*_CURVE_IN, PortSpec("by", "By", _CN, required=False, typed="number")),
+        _CURVE_OUT,
+        (),
+    ),
+    OperatorType(
+        "curve_formula",
+        "Curve formula",
+        "Curves",
+        "A new y worked out at every point from x, y and wired numbers a, b, c, units "
+        "checked: y / 250 MPa, y * x, abs(y).",
+        (*_CURVE_IN, *(PortSpec(k, k, ("number",), required=False, typed="number") for k in "abc")),
+        _CURVE_OUT,
+        ("expression",),
+    ),
+    OperatorType(
+        "curve_from_table",
+        "Curve from table",
+        "Curves",
+        "A table's column against another as a curve (the first two number columns if "
+        "none is chosen): a model value against temperature, a test's readings.",
+        (PortSpec("table", "Table", ("table",)),),
+        _CURVE_OUT,
+        ("by", "column"),
+    ),
+    OperatorType(
+        "over_steps",
+        "Over the steps",
+        "Curves",
+        "One value's history: a number (a result summary, a result tool) worked out at "
+        "every step of the run it reads (time, frequency, increment), or at every sweep "
+        "point, as a curve.",
+        (PortSpec("value", "Value", ("number",)),),
+        _CURVE_OUT,
+        ("against",),
+    ),
+    OperatorType(
+        "at_step",
+        "At step",
+        "Curves",
+        "One step's curve from a curve per step (a path in a transient run): the step "
+        "picked by its number, the last by default.",
+        _CURVE_IN,
+        _CURVE_OUT,
+        ("step",),
+    ),
+    OperatorType(
+        "compare_steps",
+        "Compare with step",
+        "Curves",
+        "Every step's curve against a reference step's, as a difference or a ratio; for "
+        "a history, every step's value against the reference step's.",
+        _CURVE_IN,
+        _CURVE_OUT,
+        ("step", "comparison"),
+    ),
+    OperatorType(
+        "envelope",
+        "Envelope",
+        "Curves",
+        "The largest (or smallest) value at each x over every curve wired in: the worst "
+        "over all steps, or over several paths.",
+        (
+            *_CURVE_IN,
+            PortSpec("b", "Curve 2", ("series",), required=False),
+            PortSpec("c", "Curve 3", ("series",), required=False),
+        ),
+        _CURVE_OUT,
+        ("reduction",),
+    ),
+    OperatorType(
+        "match_x",
+        "Match x values",
+        "Curves",
+        "A curve read at another curve's x values (linear between its points), so the "
+        "two can be divided or subtracted point by point.",
+        (*_CURVE_IN, PortSpec("onto", "Onto", ("series",))),
+        _CURVE_OUT,
+        (),
+    ),
+    OperatorType(
+        "area_under",
+        "Area under curve",
+        "Curves",
+        "The area under a curve (trapezoids), in y × x units: an impulse from a force "
+        "against time, a force from a pressure along a line.",
+        _CURVE_IN,
+        (PortSpec("out", "Area", ("number",)),),
+        (),
+    ),
+    OperatorType(
+        "slope",
+        "Slope",
+        "Curves",
+        "How fast y changes with x at each point (dy/dx), in y ÷ x units: a stress "
+        "gradient through a wall, a velocity from a displacement history.",
+        _CURVE_IN,
+        _CURVE_OUT,
+        (),
+    ),
+    OperatorType(
+        "limit_line",
+        "Limit line",
+        "Outputs",
+        "A number drawn across a plot as a dashed line: the allowable on a stress curve.",
+        (PortSpec("value", "Value", ("number",), typed="number"),),
+        _CURVE_OUT,
+        (),
+    ),
+    OperatorType(
+        "annotate",
+        "Annotate",
+        "Outputs",
+        "A curve with its largest (or smallest) point marked and labelled on the plot, "
+        "by a note or its value.",
+        _CURVE_IN,
+        _CURVE_OUT,
+        ("reduction", "note"),
+    ),
+)
+# The arithmetic: two numbers give a number, anything with a curve gives a curve.
+CURVE_OR_NUMBER = frozenset({"divide_by", "subtract", "multiply", "add", "utilisation",
+                             "safety_factor", "margin"})  # fmt: skip
 
 
 TYPES: dict[str, OperatorType] = {
@@ -129,10 +343,14 @@ TYPES: dict[str, OperatorType] = {
         OperatorType(
             "plot", "Plot", "Results",
             "A number against the steps (time, frequency, increment) or a sweep's points, "
-            "or a table's column against another, drawn in the Plots panel as a line, "
-            "bars or points.",
-            (PortSpec("value", "Value", ("number", "table")),),
-            (PortSpec("out", "Table", ("table",)),),
+            "a table's column against another, or up to four curves (a path, a history, "
+            "a limit line) together, drawn in the Plots panel as lines, bars or points; "
+            "axes, units and the legend come from what is wired in.",
+            (PortSpec("value", "Value", ("number", "table", "series")),
+             PortSpec("b", "Curve 2", ("series",), required=False),
+             PortSpec("c", "Curve 3", ("series",), required=False),
+             PortSpec("d", "Curve 4", ("series",), required=False)),
+            (PortSpec("out", "Table", ("table",)), PortSpec("curves", "Curves", ("series",))),
             ("against", "chart", "by", "column"),
         ),
         OperatorType(
@@ -605,6 +823,8 @@ TYPES: dict[str, OperatorType] = {
             (PortSpec("out", "Table", ("table",)),),
             ("target", "selection", "other"),
         ),
+        # ADR 0071 decision 3: curves (series) and the operators on them
+        *SERIES_TYPES,
         OperatorType(
             "pairs", "Pairs", "Data",
             "Two lists into a table: item by item, or every combination.",
@@ -617,7 +837,7 @@ TYPES: dict[str, OperatorType] = {
 
 # The seven groups, in the order work flows (ADR 0064 item 6): the toolbar's Add
 # operator menu, the palette, the outline and the skills all use them.
-GROUPS = ("Inputs", "Geometry", "Logic", "Results", "Tables", "Checks", "Outputs")
+GROUPS = ("Inputs", "Geometry", "Logic", "Results", "Curves", "Tables", "Checks", "Outputs")
 GROUP_OF = {
     "script": "Logic",
     "points": "Geometry",
@@ -753,6 +973,27 @@ ALIASES = {
     "thin_points": ("reduce point cloud", "downsample", "decimate"),
     "intersection": ("brep brep", "curve curve", "section", "weld line", "meet",
                      "brep plane"),
+    # ADR 0071 decision 3: the curve operators
+    "divide_by": ("ratio", "quotient", "division", "a / b"),
+    "subtract": ("difference", "minus", "delta", "a - b"),
+    "multiply": ("product", "times", "scale", "a * b"),
+    "add": ("sum", "plus", "offset", "a + b"),
+    "utilisation": ("utilization", "unity check", "usage", "stress ratio", "interaction ratio"),
+    "safety_factor": ("factor of safety", "fos", "reserve factor", "sf"),
+    "margin": ("margin", "ms", "reserve"),
+    "normalise": ("normalize", "non-dimensional", "scale to maximum", "unit maximum"),
+    "curve_formula": ("series expression", "map y", "transform curve"),
+    "curve_from_table": ("table to curve", "xy data", "columns to curve"),
+    "over_steps": ("history", "time history", "against time", "against frequency",
+                   "over time"),
+    "at_step": ("pick step", "time slice", "one step"),
+    "compare_steps": ("baseline", "relative to step", "against a step", "step difference"),
+    "envelope": ("worst case", "max over steps", "upper bound", "lower bound"),
+    "match_x": ("resample", "interpolate onto", "align curves", "common x"),
+    "area_under": ("integrate", "trapezoid", "impulse", "integral of curve"),
+    "slope": ("derivative", "gradient", "rate of change", "dy/dx"),
+    "limit_line": ("allowable line", "threshold line", "horizontal line", "reference line"),
+    "annotate": ("label maximum", "callout", "mark peak", "note"),
 }  # fmt: skip
 # Names a user looks for first (ADR 0071's naming rules): the result or the action in an
 # engineer's words, not a programmer's or a data scientist's; no word that means another
@@ -823,6 +1064,23 @@ EXAMPLES = {
     "divide": "20 points along a weld edge, with their distance along it.",
     "panel": "Wire any output in to see its value on the canvas.",
     "export": "A table to CSV in the project's exports, or the view as a PNG.",
+    "divide_by": "Von Mises along a path ÷ 250 MPa → the same curve as a pure number.",
+    "subtract": "CalculiX's path minus Code_Aster's (Match x values first if their points differ).",
+    "utilisation": "Von Mises along a path with Model value's yield strength as the "
+    "allowable → 0.85 at the worst point.",
+    "safety_factor": "A peak stress of 200 MPa against 250 MPa → 1.25.",
+    "margin": "A peak stress of 200 MPa against 250 MPa → 0.25.",
+    "normalise": "A deflected shape along a beam ÷ its largest deflection → 1 at the tip.",
+    "curve_formula": "y / 250 MPa, or y * a with a wired factor.",
+    "over_steps": "A result tool's displacement in a transient run → displacement against time.",
+    "at_step": "A path in a 20-step transient → the curve at step 20.",
+    "compare_steps": "Each step's path against step 1, as a ratio: how the load spreads.",
+    "envelope": "A path at every step → the largest stress at each point over all steps.",
+    "match_x": "A test's strain readings read at the model path's points.",
+    "area_under": "A pressure along a line → the force per unit width it carries.",
+    "slope": "Temperature through a wall → its gradient, for the heat flux.",
+    "limit_line": "The yield strength drawn across a stress plot.",
+    "annotate": 'A path\'s largest von Mises marked "peak 212 MPa".',
 }
 
 
@@ -878,19 +1136,37 @@ DATA = frozenset({"number", "slider", "series", "range", "expression", "table", 
                   "fill_missing",
                   "rolling", "project_table", "divide", "clearance", "text", "toggle",
                   "choice", "slider2d", "merge_points", "thin_points",
-                  "intersection", "points", "grid", "profile", "script"})  # fmt: skip
+                  "intersection", "points", "grid", "profile", "script",
+                  "divide_by", "subtract", "multiply", "add", "utilisation",
+                  "safety_factor", "margin", "normalise", "curve_formula",
+                  "curve_from_table", "match_x", "area_under", "slope", "limit_line",
+                  "annotate", "envelope"})  # fmt: skip
 # Table operators (ADR 0064): data operators that read tables, so pre-solve when their
 # table is (a file, a typed table) and post-solve when it comes from a run.
 
 
-def first_type(op) -> str:
-    """An operator's first output's type: a script's from its `returns`."""
+def first_type(op, project=None) -> str:
+    """An operator's first output's type: a script's from its `returns`; with the
+    project, the arithmetic's from what is wired in (two numbers make a number)."""
     if op.type == "script":
         return op.returns
+    if op.type in CURVE_OR_NUMBER and project is not None:
+        return "number" if _numbers_only(project, op) else "series"
     if op.type == "model_value" and op.property.startswith("tables."):
         return "table"  # a property against temperature
     outputs = TYPES[op.type].outputs
     return outputs[0].type if outputs else ""
+
+
+def _numbers_only(project, op, seen=()) -> bool:
+    """Whether every input of an arithmetic operator is a number (typed, or wired from a
+    number output)."""
+    for inp in op.inputs.values():
+        if inp.source is None or inp.source in seen:
+            continue
+        if output_type(project, inp.source, inp.port, (*seen, op.id)) != "number":
+            return False
+    return True
 
 
 def accepts(spec: PortSpec, given: str) -> bool:
@@ -899,8 +1175,9 @@ def accepts(spec: PortSpec, given: str) -> bool:
     return (
         given in spec.types
         or (given == "number" and "list" in spec.types)
-        or (given == "points" and "table" in spec.types)
-    )  # points are a table too
+        or (given == "points" and "table" in spec.types)  # points are a table too
+        or (given == "table" and "series" in spec.types)  # its first two number columns
+    )
 
 
 def outputs_of(project, obj) -> list[tuple[str, str, str]]:
@@ -914,12 +1191,15 @@ def outputs_of(project, obj) -> list[tuple[str, str, str]]:
     )
 
     if isinstance(obj, Operator):
-        return [(p.key, p.label, first_type(obj) if i == 0 else p.type)
+        return [(p.key, p.label, first_type(obj, project) if i == 0 else p.type)
                 for i, p in enumerate(TYPES[obj.type].outputs)]  # fmt: skip
     if isinstance(obj, ParameterSet):
         return [(k, k, "number") for k in obj.values]
-    if isinstance(obj, ResultProbe):
-        return [("out", "Value", "number")]
+    if isinstance(obj, ResultProbe):  # its value, and curves (ADR 0071 decision 3)
+        along = (
+            [("along", "Along the path", "series")] if obj.type in ("path", "linearized") else []
+        )
+        return [("out", "Value", "number"), *along, ("history", "Over the steps", "series")]
     if isinstance(obj, ResultDefinition):
         return [("result", "Result", "result")]
     if isinstance(obj, Study):
@@ -939,7 +1219,7 @@ def outputs_of(project, obj) -> list[tuple[str, str, str]]:
     return []
 
 
-def output_type(project, source: UUID, port: str) -> str | None:
+def output_type(project, source: UUID, port: str, seen=()) -> str | None:
     """The type of `source`'s output `port`, None if it has no such output. A study's
     field ports are results limited to that field."""
     from puzzle.model.schema import Study
@@ -949,6 +1229,10 @@ def output_type(project, source: UUID, port: str) -> str | None:
         return None
     if isinstance(obj, Study):  # any field: a run may hold more than the catalog lists
         return "table" if port == "points" else "result"
+    from puzzle.model.schema import Operator
+
+    if isinstance(obj, Operator) and obj.type in CURVE_OR_NUMBER and port == "out":
+        return "number" if _numbers_only(project, obj, seen) else "series"
     found = next((t for k, _, t in outputs_of(project, obj) if k == port), None)
     return found
 
@@ -1266,7 +1550,7 @@ def parameter_values(project, overrides: dict | None = None) -> dict[str, float]
 
     out = {k: q.to_si() for ps in project.of_type(ParameterSet) for k, q in ps.values.items()}
     numbers = [o for o in pre_solve(project) if TYPES[o.type].outputs
-               and first_type(o) == "number"
+               and first_type(o, project) == "number"
                and not reads_geometry(project, o)]  # fmt: skip
     if not numbers:
         return out

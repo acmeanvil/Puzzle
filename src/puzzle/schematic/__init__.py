@@ -141,6 +141,7 @@ class Node:
     slider: tuple[float, float, float] | None = None  # a slider's (low, high, value), SI
     help: str = ""  # an operator's help card as text (ADR 0071): purpose, example, ports
     path: str = ""  # a feature's place in its component ("physics.0.features.1")
+    sketch: list = field(default_factory=list)  # a curve's small plot: lines of (x, y) in 0..1
 
     def port(self, key: str) -> Port | None:
         return next((p for p in self.ports if p.key == key), None)
@@ -506,9 +507,14 @@ def build(
                                       label=words(d.quantity or "") if getattr(d, "quantity", "")
                                       else "", carries=d.quantity or ""))  # fmt: skip
 
+    from puzzle.operators import TYPE_WORDS, outputs_of
+
     for p in project.of_type(ResultProbe):  # result tools: nodes beside what they read
-        add(Node(str(p.id), "probe", RESULTS, p.name, object=str(p.id),
-                 subtitle=words(p.type)))  # fmt: skip
+        node = add(Node(str(p.id), "probe", RESULTS, p.name, object=str(p.id),
+                        subtitle=words(p.type)))  # fmt: skip
+        node.ports += [Port(k, label, "out", type=t,
+                            help=f"{label}: gives a {TYPE_WORDS[t].lower()}")
+                       for k, label, t in outputs_of(project, p)]  # fmt: skip
     _operators(project, out, store, states)
     _optimisations(project, out, store)
     _mesh_studies(project, out, store)
@@ -541,7 +547,7 @@ def _operators(project: Project, out: Schematic, store, states: dict) -> None:
     """Operators (ADR 0062) as nodes after what they read, a typed port per input and
     output, joined by data wires; with a `store`, each shows its value."""
     from puzzle.model.schema import Operator
-    from puzzle.operators import TYPES, doc_text, is_pre, port_doc
+    from puzzle.operators import TYPES, doc_text, first_type, is_pre, port_doc
 
     ops = project.of_type(Operator)
     pre = {op.id for op in ops if is_pre(project, op)}
@@ -553,8 +559,10 @@ def _operators(project: Project, out: Schematic, store, states: dict) -> None:
         st = states.get(str(op.id))
         if st is not None:
             node.state, node.reason = st.state, st.reason
-        node.ports = [Port(p.key, p.label, "out", type=p.type, help=port_doc(p, "out"))
-                      for p in t.outputs]  # fmt: skip
+        node.ports = [Port(p.key, p.label, "out",
+                           type=first_type(op, project) if i == 0 else p.type,
+                           help=port_doc(p, "out"))
+                      for i, p in enumerate(t.outputs)]  # fmt: skip
         node.ports += [Port(p.key, p.label, "in", type=p.type, help=port_doc(p, "in"))
                        for p in t.inputs]  # fmt: skip
         out.nodes[node.id] = node
@@ -585,6 +593,7 @@ def _operators(project: Project, out: Schematic, store, states: dict) -> None:
                 continue
             node = out.nodes[str(op.id)]
             node.value, node.verdict = ev.shown(ctx, op)
+            node.sketch = _sketch(ctx, op)
             if op.type == "slider":
                 node.slider = _slider_of(ctx, op)
 
@@ -677,6 +686,19 @@ def _optimisations(project: Project, out: Schematic, store) -> None:
                 best = ("best " + quantity_text(top.objective, top.kinds.get("objective"))
                         if top.objective is not None else "a feasible point")  # fmt: skip
                 node.value = f"{best} at {top.title}"
+
+
+def _sketch(ctx, op) -> list:
+    """A curve's small plot for its node (ADR 0071: a series is shown, never its rows)."""
+    from puzzle.errors import PuzzleError
+    from puzzle.operators import evaluate as ev
+
+    try:
+        got = ev.outputs(ctx, op)
+    except PuzzleError:
+        return []
+    curve = got.get("curves") if op.type == "plot" else got.get("out")
+    return curve.sketch() if getattr(curve, "type", "") == "series" else []
 
 
 def _slider_of(ctx, op) -> tuple[float, float, float] | None:
@@ -787,7 +809,10 @@ def _wire_end(project: Project, out: Schematic, source, port: str):
             return node, "", ""
         label = "" if port in ("result", "out") else words(port).lower()
         return node, port, label
-    if isinstance(obj, ResultProbe):
+    if isinstance(obj, ResultProbe):  # its own node (ADR 0071), by the port wired
+        node = out.nodes.get(str(obj.id))
+        if node is not None:
+            return node, port or "out", ""
         node = out.nodes.get(f"runs:{obj.source}") or out.nodes.get(str(obj.source))
         return node, "result", f"{CHIP_WORDS['probe'].lower()} {obj.name}"
     return out.nodes.get(str(obj.id)), port, ""

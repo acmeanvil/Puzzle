@@ -2235,6 +2235,12 @@ class Operator(ProjectObject):
     `convert_units` (`column`, `unit`), `round` (`decimals`, `significant`), `group`
     (`by`, `aggregations`) and `to_number` (`column`, `reduction`).
 
+    Curves (ADR 0071 decision 3, `operators.series`): arithmetic, utilisation, safety
+    factor and margin on curves or numbers, `normalise`, `curve_formula`,
+    `curve_from_table`, `over_steps`, `at_step` and `compare_steps` (`step`,
+    `comparison`), `envelope`, `match_x`, `area_under`, `slope`, `limit_line`,
+    `annotate` (`reduction`, `note`).
+
     Which inputs and settings each type takes is `puzzle.operators.TYPES`.
     """
 
@@ -2250,8 +2256,19 @@ class Operator(ProjectObject):
                   "contact_table", "bolt_table", "nearest", "section", "divide",
                   "clearance", "text", "preview", "toggle", "choice", "slider2d",
                   "merge_points", "thin_points", "intersection", "points", "grid",
-                  "profile", "script", "model_value"]  # fmt: skip
+                  "profile", "script", "model_value",
+                  # ADR 0071 decision 3: curves (operators.series)
+                  "divide_by", "subtract", "multiply", "add", "utilisation",
+                  "safety_factor", "margin", "normalise", "curve_formula",
+                  "curve_from_table", "over_steps", "at_step", "compare_steps",
+                  "envelope", "match_x", "area_under", "slope", "limit_line",
+                  "annotate"]  # fmt: skip
     inputs: dict[str, OperatorInput] = Field(default_factory=dict)
+    comparison: Literal["difference", "ratio"] = Field(
+        default="difference", description="compare with step: each step less the "
+        "reference step's, or divided by it")  # fmt: skip
+    note: str = Field(default="", description="annotate: the label at the marked point; "
+                      "none: its value")  # fmt: skip
     # ADR 0071 step 3: Model value reads `property` (a dotted path, operators.model_values)
     # from the object `target` names: a material's yield strength, a load's value ...
     property: str = Field(default="", description="model_value: the value read from "

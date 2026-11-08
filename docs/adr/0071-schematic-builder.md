@@ -219,3 +219,38 @@ names, units and no raw data on view.
   kind and table); `operator_add` takes a target by name and a property by label.
 - `tests/test_model_value.py`, and the skill's Model value section (a utilisation check:
   Result summary into Check's value, Model value's yield into its limit).
+
+**Step 4 (2026-11-08): curves (series) and their operators.**
+
+- A port type `series` (shown as Curve): x and y with their quantity kinds, one curve or
+  one per step (`operators/series.py`: `Series`, `Curve`; a limit line is a curve with
+  one value and no x). Nodes show a small plot (`Node.sketch`, drawn by the schematic
+  view and the SVG), agents a summary (`series.summary`: axes, units, curve count, each
+  curve's extremes, where they are and five points), never every row.
+- Where curves come from: a result tool's `along` (a path or linearization, a curve per
+  step) and `history` (its value over the steps) ports, now sockets on its own node;
+  Over the steps (any number at every step or sweep point); Curve from table; and any
+  table wired where a curve is wanted (its first two number columns), so a Model value
+  against temperature is a curve.
+- Operators: Divide (A ÷ B), Subtract (A − B), Multiply (A × B), Add (A + B),
+  Utilisation, Safety factor and Margin of safety (curves or numbers: two numbers give a
+  number, `first_type(op, project)`, so they also feed a Check or act as parameters);
+  Normalise (by a number, a curve, or each curve's largest size); Curve formula (over x,
+  y and wired a, b, c); At step; Compare with step (difference or ratio, or a history
+  against one step's value); Envelope (max, min or mean); Match x values; Area under
+  curve; Slope; Limit line; Annotate. Plot takes up to four curves (`value`, `b`, `c`,
+  `d`) of one x and one y quantity and gives them as `curves`; the Plots panel draws
+  limit lines dashed across and annotations labelled.
+- Units follow through Puzzle's expression language: stress ÷ stress is a pure number,
+  a stress plus a temperature is refused with the reason, curves with different x
+  values are refused with "Match x values first". New quantity kinds for what curves
+  give: force per length, stress gradient, temperature gradient, rate of temperature
+  change, impulse.
+- `tests/test_series.py` against hand-computed answers on test_operators' two tets
+  (σxx = 100·t·x MPa at t = 1, 2, 3 s): utilisation along a path against Model value's
+  yield (1.2 d), a safety factor and margin at the peak, normalised shapes, every step
+  against step 1 (ratios 2 and 3), a history against its first step, envelope, slope
+  (300 MPa/m), area (96 MPa·m), matching onto gauge positions, refusals, a parameter
+  from arithmetic on model values, the agent's summary and MCP; `tests/test_series_gui.py`
+  (the Plots panel's limit line and note in display units, the node's small plot,
+  settings in words). The skill's Curves section.
