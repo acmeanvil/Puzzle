@@ -44,6 +44,7 @@ TABLER = {
     "colour": "palette",
     "iso": "box",
     "edges": "border-all",
+    "display": "cube",  # the view toolbar's Display: shaded, with edges, with the mesh
     "projection": "perspective",
     "camera": "camera",
     "extremes": "arrows-vertical",

@@ -882,6 +882,9 @@ def _step(
         if comp.connectors and step.type not in ("modal", "buckling"):
             # Fastener forces and moments (ADR 0027): the helper nodes' reactions.
             outputs += [f"*NODE PRINT, NSET={FASTENER_ENDS}", "RF"]
+        if "U, RF" in outputs:  # each selection's reaction total, printed exactly
+            for name in total_sets(mesh):
+                outputs += [f"*NODE PRINT, NSET={name}, TOTALS=ONLY", "RF"]
     elif solved == {"heat_transfer"}:
         if step.type == "transient" and time_scheme(step)[0] != "backward_euler":
             raise InputError(
@@ -1481,6 +1484,38 @@ def fastener_info(project: Project, study: Study, mesh: Mesh) -> list[dict]:
     used = len(_pretension_nodes(comp, mesh)) + sum(len(c.doubles) for c in cuts.values())
     first = int(mesh.node_ids.max()) + 1 + 2 * len(_rigid_nodes(comp, mesh)) + used
     return _fasteners(project, comp, mesh, first)[3]
+
+
+def total_sets(mesh: Mesh) -> dict[str, str]:
+    """The node sets whose reaction total CalculiX prints (`TOTALS=ONLY`), by set name ->
+    selection: every face, edge and point selection of a 3D solid model. The .frd gives
+    each node's reaction to 6 digits only; summed over many nodes that nearly cancel, the
+    rounding reached 2e-5 of the total, where CalculiX's own total is exact. Beams,
+    shells and 2D models are expanded by CalculiX, so their sets aren't printed."""
+    if mesh.planar or mesh.structural_blocks():
+        return {}
+    return {set_name("N", g.name): g.name for g in mesh.groups.values() if g.dim < 3}
+
+
+def read_totals(dat_text: str) -> list[tuple[int, float, dict[str, np.ndarray]]]:
+    """(analysis step, time, {set name: total force}) for each printed increment."""
+    out: list[tuple[int, float, dict[str, np.ndarray]]] = []
+    step = 0
+    lines = dat_text.splitlines()
+    for i, line in enumerate(lines):
+        text = line.strip()
+        if text.startswith("S T E P"):
+            step = int(text.split()[-1])
+        elif text.startswith("total force (fx,fy,fz) for set"):
+            parts = text.split()
+            name, time = parts[5], float(parts[-1])
+            values = next((v.split() for v in lines[i + 1 : i + 4] if v.strip()), [])
+            if len(values) != 3:
+                continue
+            if not out or out[-1][:2] != (step, time):
+                out.append((step, time, {}))
+            out[-1][2][name] = np.array([float(v) for v in values])
+    return out
 
 
 def read_fastener_forces(dat_text: str, ends: list[dict]) -> list[tuple[int, float, np.ndarray]]:

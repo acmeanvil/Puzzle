@@ -304,9 +304,9 @@ def adapt_mesh(mesh: Mesh, values: np.ndarray, workdir: Path, *, target: float,
     (workdir / "mmg.log").write_text(done.stdout + done.stderr, encoding="utf-8")
     if done.returncode != 0 or not (workdir / "out.mesh").exists():
         tail = (done.stdout + done.stderr).strip().splitlines()[-5:]
-        raise PuzzleError("MMG failed: " + " ".join(tail), code="failed")
+        raise PuzzleError("MMG failed: " + " ".join(tail), code="mesh_failed")
     new = to_mesh(read_medit(workdir / "out.mesh"), mesh, order)
     q = quality(new)
     if q <= 0:
-        raise PuzzleError("MMG's mesh has an inverted element", code="failed")
+        raise PuzzleError("MMG's mesh has an inverted element", code="mesh_failed")
     return new

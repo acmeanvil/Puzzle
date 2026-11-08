@@ -344,6 +344,26 @@ class EquationDialog(QDialog):
         top.row("source_step", "Result step", self.step)
         top.row("expression", "Equation", self.expression)
         top.row("unit", "Unit of the value", self.unit, "SI")
+        # B, C, D: values from operators and result tools (the maintainer, 2026-11-08),
+        # beside A, the results above.
+        from puzzle.model.schema import Operator, ResultProbe
+
+        givers = [*project.of_type(Operator), *project.of_type(ResultProbe)]
+        held = {i.name: i for i in (definition.inputs if definition else [])}
+        values = self.form.section("Values from other operators (B, C, D)")
+        self.inputs: dict[str, QComboBox] = {}
+        for letter in ("B", "C", "D"):
+            box = QComboBox()
+            box.addItem("(none)", None)
+            for g in sorted(givers, key=lambda g: g.name.casefold()):
+                box.addItem(g.name, str(g.id))
+            if letter in held:
+                box.setCurrentIndex(max(0, box.findData(str(held[letter].source))))
+            box.currentIndexChanged.connect(self._fill_names)
+            box.currentIndexChanged.connect(self._update)
+            values.row(f"input_{letter}", letter, box)
+            self.inputs[letter] = box
+        self._ports = {n: i.port for n, i in held.items()}  # an edited input keeps its output
         names = self.form.section("Names you can use (double-click to insert)")
         self.names = QListWidget()
         self.names.setMinimumHeight(160)
@@ -405,6 +425,9 @@ class EquationDialog(QDialog):
             self.names.addItem(f"{derived.name_of(item)}  —  {item.label}")
         for name, value in derived.parameters(self.project).items():
             self.names.addItem(f"{name}  —  parameter, {value:g} (SI)")
+        for letter, box in getattr(self, "inputs", {}).items():
+            if box.currentData() is not None:
+                self.names.addItem(f"{letter}  —  the value of {box.currentText()}")
 
     def _insert(self, item) -> None:
         self.expression.insert(item.text().split("  —  ")[0])
@@ -421,6 +444,10 @@ class EquationDialog(QDialog):
         }
         if self._is_study() and self.point.currentData() is not None:
             out["source_point"] = self.point.currentData()
+        out["inputs"] = [
+            {"name": n, "source": box.currentData(), "port": self._ports.get(n, "out")}
+            for n, box in self.inputs.items() if box.currentData() is not None
+        ]  # fmt: skip
         return out
 
     def _update(self, *_) -> None:

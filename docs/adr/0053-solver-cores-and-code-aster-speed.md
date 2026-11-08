@@ -10,7 +10,7 @@ After ADR 0051 (PARDISO for CalculiX) the maintainer asked for the same care on 
 ## Decision
 
 1. **Settings > Solvers:**
-   - **Cores per run:** "Physical cores (n)" by default, or any number from 1 to the logical cores (`puzzle.machine`: `physical_cores`, `logical_cores`, `memory_bytes`, read from the operating system without new dependencies). Finite element assembly and sparse factoring gain little from a second thread per core.
+   - **Cores per run:** "Physical cores (n)" by default, or any number from 1 to the logical cores (`puzzle.machine`: `physical_cores`, `logical_cores`, `memory_bytes`, read from the operating system without new dependencies). Finite element assembly and sparse factoring gain little from a second thread per core. *Amended 2026-11-08 (the maintainer):* the default is "Automatic (n)", 4 cores on computers with more, one fewer than the physical cores on smaller ones (`machine.default_cores`), so the computer stays usable while it solves; the measurements below found little gain past 2-4 cores anyway.
    - **Parallel processes per run** (MPI), 1 by default, up to the physical cores. The cores are shared out: each process gets cores ÷ processes threads (`jobs.runtime.threads_per_process`), so a run never oversubscribes the machine.
    - Adapters say whether they can split (`Adapter.parallel_processes`, `processes()`); each run's timing line says what it used ("4 cores", "2 processes x 2 threads").
 2. **Code_Aster's export** comes from them (`code_aster.comm.resources`): `ncpus` = threads per process, `mpi_nbcpu` = processes, `memory_limit` = 75 % of the runtime's memory per process (Docker Desktop's VM, not the Mac, when run in a container: `Runtime.memory`), `time_limit` a week (Puzzle stops runs itself).

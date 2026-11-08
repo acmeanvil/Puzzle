@@ -192,6 +192,7 @@ class ElmerAdapter(SolverAdapter):
             f"ElmerGrid 2 2 {MESH_DIR} -metiskway {n} > partition.log 2>&1 || exit 1\n"
             f"exec mpirun --oversubscribe -np {n} ElmerSolver_mpi {input_file.name}\n",
             encoding="utf-8",
+            newline="\n",  # run by sh in a Linux container: CRLF breaks it
         )
         return ["sh", script.name]
 

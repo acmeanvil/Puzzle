@@ -259,12 +259,17 @@ class ModelTree(QTreeWidget):
         from puzzle.gui.theme import colour_levels
 
         colour_levels(self)  # headings by depth (ADR 0045)
+        chosen = None
         for item in self._items():
             node = item.data(0, ROLE)
             if self._key(item) in opened or node.kind in ("project", "section"):
                 item.setExpanded(True)
             if keep is not None and node == keep:
-                self.setCurrentItem(item)
+                chosen = item
+        # Selected after the loop: selecting fires the window's handlers, which can
+        # rebuild the tree and delete the items still to come ("already deleted").
+        if chosen is not None:
+            self.setCurrentItem(chosen)
 
     def _group(self, root: QTreeWidgetItem, project: Project) -> None:
         """Each section's groups as folders at its top, holding their members."""

@@ -76,6 +76,19 @@ class Controller(QObject):
     def stop(self) -> None:
         self._stop.set()
         self.timer.stop()
+        # Wait out the reader's current read (100 ms at most), so nothing is emitted
+        # into a window being closed ("Signal source has been deleted" in the log).
+        if self._thread is not None and self._thread is not threading.current_thread():
+            self._thread.join(timeout=1.0)
+
+    def _emit(self, signal, *args) -> None:
+        """Emit from the reader thread, unless stopping or the Qt side is gone."""
+        if self._stop.is_set():
+            return
+        try:
+            signal.emit(*args)
+        except RuntimeError:  # the window was deleted meanwhile
+            self._stop.set()
 
     def _run(self) -> None:
         while not self._stop.is_set():
@@ -91,7 +104,7 @@ class Controller(QObject):
                 self._stop.wait(LOOK_EVERY_S)
                 continue
             self.device = first.device
-            self.found.emit(first.device.name)
+            self._emit(self.found, first.device.name)
             dev = first.device
             log.warning("3D mouse found: %s (%04x:%04x)", dev.name, dev.vendor, dev.product)
             state, unknown = devices.Reading(), set()
@@ -99,7 +112,9 @@ class Controller(QObject):
                 while not self._stop.is_set():
                     report = reader.read()
                     if report and devices.parse(report, state):
-                        self.reading.emit(devices.to_view(first.device, state.axes), state.buttons)
+                        self._emit(
+                            self.reading, devices.to_view(first.device, state.axes), state.buttons
+                        )
                     elif report and len(unknown) < 32 and (report[0], len(report)) not in unknown:
                         # A report Puzzle doesn't read yet (the Enterprise's extra keys?):
                         # into the log once, so it can be mapped (Help > Log).
@@ -111,8 +126,8 @@ class Controller(QObject):
             finally:
                 reader.close()
                 self.device = None
-                self.found.emit("")
-                self.reading.emit([0] * 6, 0)
+                self._emit(self.found, "")
+                self._emit(self.reading, [0] * 6, 0)
 
     # --- the GUI thread -------------------------------------------------------------------
 

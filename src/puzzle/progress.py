@@ -556,6 +556,13 @@ TRANSLATIONS: list[tuple[str, str]] = [
         r"Ceci est une erreur fatale\. L'exécution du code est arrêtée",
         "This is a fatal error: the run stops",
     ),
+    (
+        r"La solution du système linéaire est trop imprécise",
+        "The linear system's solution is not accurate enough",
+    ),
+    (r"Erreur calculée", "Error reached"),
+    (r"Erreur acceptable", "Error allowed"),
+    (r"On peut augmenter la\s+valeur du mot clé", "You can raise the keyword"),
     (r"Le modèle contient", "The model contains"),
     (r"mailles", "elements"),
     (r"noeuds", "nodes"),
@@ -647,6 +654,14 @@ def diagnose(events: list[Event]) -> list[Diagnosis]:
         ))  # fmt: skip
     if (d := _not_converged(events)) is not None:
         out.append(d)
+    if any(isinstance(e, Message) and e.code == "FACTOR_57" for e in events):
+        out.append(Diagnosis(
+            "imprecise_solve",
+            "MUMPS's answer failed Code_Aster's accuracy check (RESI_RELA, 1e-6), common on "
+            "large models whose supports are Lagrange multipliers. Set the study's Solver "
+            "settings > MUMPS refinement to Always (Puzzle's default), or loosen RESI_RELA "
+            "through the expert settings (MECA_STATIQUE.SOLVEUR.RESI_RELA = 1e-5).",
+        ))  # fmt: skip
     refused = next((e for e in events if isinstance(e, Message) and e.level == "error"
                     and e.code in ("FOAM FATAL IO ERROR", "cs_parameters")), None)  # fmt: skip
     if refused is not None:

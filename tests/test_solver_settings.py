@@ -183,7 +183,13 @@ def test_mumps_options_are_placed_and_checked():
                                     factor_memory="IN_CORE"), step)  # fmt: skip
     assert out.count("ACCELERATION='LR'") == 2 and out.count("LOW_RANK_SEUIL=1e-09") == 2
     assert "RENUM='METIS'" in out and "GESTION_MEMOIRE='IN_CORE'" in out
-    assert with_settings(COMM, study(), step) == COMM  # nothing set: nothing written
+    # Nothing set: only MUMPS's iterative refinement, which Puzzle turns on (REFINEMENTS:
+    # a large model failed FACTOR_57 without it), on every solve that takes a SOLVEUR.
+    plain = with_settings(COMM, study(), step)
+    assert plain.count("POSTTRAITEMENTS='FORCE'") == 2
+    assert plain.replace(", SOLVEUR=_F(POSTTRAITEMENTS='FORCE')", "") == COMM
+    assert "POSTTRAITEMENTS='AUTO'" in with_settings(COMM, study(refinement="AUTO"), step)
+    assert "POSTTRAITEMENTS" not in with_settings(COMM, study(method="MULT_FRONT"), step)
     with pytest.raises(PuzzleError, match="MUMPS options"):
         with_settings(COMM, study(method="MULT_FRONT", acceleration="FR+"), step)
     with pytest.raises(PuzzleError, match="needs a low-rank"):

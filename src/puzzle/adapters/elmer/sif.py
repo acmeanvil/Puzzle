@@ -6,6 +6,8 @@ the surface), temperature T, heat_flux q (positive into the body), convection h 
 T_inf, electric_potential V, ground, surface_charge rho_s (C/m^2). Magnetostatics: a
 coil_current I (total, A) on a conductor body, entering through its coil_start face and
 leaving through coil_end; magnetic_insulation keeps the flux tangential. Everything is SI.
+Files are written with LF line endings even on Windows, where Elmer runs in a Linux
+container; its shell scripts need LF there.
 """
 
 from __future__ import annotations
@@ -126,10 +128,12 @@ def write_case(
                                                     workdir, write_mesh, _time_block)  # fmt: skip
         freqs = frequency_list(step) if harmonic else [1.0]
         (workdir / MESH_DIR / TIMES).write_text(
-            "\n".join(f"{t:.12g}" for t in freqs) + "\n", encoding="utf-8"
+            "\n".join(f"{t:.12g}" for t in freqs) + "\n", encoding="utf-8", newline="\n"
         )
         sif = workdir / f"{OUTPUT}.sif"
-        sif.write_text(with_settings("\n".join(lines) + "\n", study, step), encoding="utf-8")
+        sif.write_text(
+            with_settings("\n".join(lines) + "\n", study, step), encoding="utf-8", newline="\n"
+        )
         np.save(workdir / MESH_DIR / "puzzle-node-coords.npy", mesh.coords)
         return sif, emesh
     if solved == {"magnetic_fields"} and magnetics.needed(step, features):  # ADR 0047
@@ -138,10 +142,12 @@ def write_case(
         freqs = (frequency_list(step) if harmonic else magnetics.transient_times(step)
                  if transient else [1.0])  # fmt: skip
         (workdir / MESH_DIR / TIMES).write_text(
-            "\n".join(f"{t:.12g}" for t in freqs) + "\n", encoding="utf-8"
+            "\n".join(f"{t:.12g}" for t in freqs) + "\n", encoding="utf-8", newline="\n"
         )
         sif = workdir / f"{OUTPUT}.sif"
-        sif.write_text(with_settings("\n".join(lines) + "\n", study, step), encoding="utf-8")
+        sif.write_text(
+            with_settings("\n".join(lines) + "\n", study, step), encoding="utf-8", newline="\n"
+        )
         return sif, emesh
     # Coil currents act on bodies; every other feature is a boundary condition.
     coils = [f for f in features if f.type == "coil_current"]
@@ -250,6 +256,7 @@ def write_case(
                 zz.write_text(
                     json.dumps({"e_alpha": e_alpha, "reference": _reference(comp)}),
                     encoding="utf-8",
+                    newline="\n",
                 )
             out[-2:-2] = [  # inside the Material block, before its End
                 f"  Heat Expansion Coefficient = {coefficient:.10g}",
@@ -323,10 +330,12 @@ def write_case(
     else:
         times = [1.0]
     (workdir / MESH_DIR / TIMES).write_text(
-        "\n".join(f"{t:.12g}" for t in times) + "\n", encoding="utf-8"
+        "\n".join(f"{t:.12g}" for t in times) + "\n", encoding="utf-8", newline="\n"
     )
     sif = workdir / f"{OUTPUT}.sif"
-    sif.write_text(with_settings("\n".join(out) + "\n", study, step), encoding="utf-8")
+    sif.write_text(
+        with_settings("\n".join(out) + "\n", study, step), encoding="utf-8", newline="\n"
+    )
     return sif, emesh
 
 
@@ -767,7 +776,7 @@ def _write_restart(path: Path, variables: list[tuple[str, np.ndarray]], transien
             *(f"{i} {i}" for i in range(1, n + 1)),
             *(f"{v:.17g}" for v in values),
         ]
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
 
 
 # ADR 0023: Elmer's own settings, and the shared ones in its terms.

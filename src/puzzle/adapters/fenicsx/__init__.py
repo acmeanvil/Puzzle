@@ -138,6 +138,15 @@ class FenicsxAdapter(SolverAdapter):
         return FenicsxProgress(input_file, step, of)
 
     def command(self, input_file: Path) -> list[str]:
+        from puzzle.jobs.remote import RemoteRuntime
+        from puzzle.jobs.runtime import ContainerRuntime, runtime_for
+
+        runtime = runtime_for(self.name)
+        in_image = isinstance(runtime, ContainerRuntime) or (
+            isinstance(runtime, RemoteRuntime) and runtime.host.runtime != "native"
+        )
+        if in_image:
+            return ["python", input_file.name]  # the image's activated environment
         python = fenicsx_python()
         if python is None:
             raise InputError(

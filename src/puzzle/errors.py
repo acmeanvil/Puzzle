@@ -44,6 +44,7 @@ CODES = {
     "unsupported": "not implemented yet",
     "field_axis": "an imported field's axis (time or frequency) doesn't fit the step it is in",
     "incomplete_material": "a material lacks a property the study needs",
+    "missing_input": "an operator's input is not chosen or wired yet",
     # Results
     "stale_store": "the results store has an older format; delete it to rebuild",
     "export_failed": "a file could not be written",

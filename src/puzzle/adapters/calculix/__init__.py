@@ -134,6 +134,11 @@ class CalculixAdapter(SolverAdapter):
         ends = fastener_info(project, study, mesh)
         if ends:  # ADR 0027: the reader turns their helper nodes' reactions into forces
             path.with_suffix(".fasteners.json").write_text(json.dumps(ends), encoding="utf-8")
+        from puzzle.adapters.calculix.inp import total_sets
+
+        totals = total_sets(mesh)
+        if totals:  # each printed set's selection, for the exact reaction totals
+            path.with_suffix(".totals.json").write_text(json.dumps(totals), encoding="utf-8")
         return path
 
     def contact_summary(self, project, component, mesh=None) -> dict[str, str]:
@@ -204,6 +209,7 @@ class CalculixAdapter(SolverAdapter):
                         step.fields["strain"], step.fields["stress"], sets
                     )
         _fastener_fields(results, input_file)
+        _reaction_totals(results, input_file)  # by the deck's own step numbers, as above
         from puzzle.adapters.calculix.inp import step_owners
 
         owners = step_owners(input_file.read_text(encoding="utf-8")) if input_file.exists() else {}
@@ -285,6 +291,34 @@ def _fastener_fields(results, input_file: Path) -> None:
         if hit:
             ids = np.arange(1, len(ends) + 1)
             step.fields["fastener"] = Field("fastener", "global", FASTENER_COMPONENTS, ids, hit[-1])
+
+
+def _reaction_totals(results, input_file: Path) -> None:
+    """Each step's exact reaction totals per selection (CalculiX's TOTALS=ONLY prints) as
+    the whole-model field `reaction_total` (`results.query.exact_total` reads it)."""
+    marker = input_file.with_suffix(".totals.json")
+    dat = input_file.with_suffix(".dat")
+    if not marker.exists() or not dat.exists():
+        return
+    import numpy as np
+
+    from puzzle.adapters.calculix.inp import read_totals
+    from puzzle.results.model import Field
+    from puzzle.results.query import selection_id
+
+    groups = json.loads(marker.read_text(encoding="utf-8"))
+    blocks = read_totals(dat.read_text(encoding="utf-8", errors="replace"))
+    for step in results.steps:
+        hit = [t for n, time, t in blocks if n == step.index and abs(time - step.value) < 1e-9]
+        if not hit:
+            continue
+        printed = {groups[s]: v for s, v in hit[-1].items() if s in groups}
+        if printed:
+            names = sorted(printed)
+            ids = np.array([selection_id(n) for n in names], dtype=np.int64)
+            values = np.array([printed[n] for n in names], float)
+            step.fields["reaction_total"] = Field("reaction_total", "global", ["x", "y", "z"],
+                                                  ids, values)  # fmt: skip
 
 
 def _buckling_modes(steps, buckling: set[int]) -> list:

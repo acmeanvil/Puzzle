@@ -87,6 +87,32 @@ def test_runtime_selection(monkeypatch):
         runtime_for("calculix")
 
 
+def test_fenicsx_container_keeps_its_form_cache(monkeypatch, tmp_path):
+    monkeypatch.setenv("PUZZLE_FENICSX_RUNTIME", "docker")
+    runtime = runtime_for("fenicsx")
+    assert runtime.image == DEFAULT_IMAGES["fenicsx"]
+    argv = runtime.wrap(["python", "study.py"], tmp_path)
+    assert "puzzle-fenicsx-cache:/cache" in argv  # compiled forms outlive the --rm container
+    assert argv[-2:] == ["python", "study.py"]
+
+
+def test_container_first_where_the_image_beats_native(monkeypatch):
+    """FEniCSx on Windows: the image (PETSc) wins over a native dolfinx (SciPy only)."""
+    from puzzle.jobs import runtime
+
+    monkeypatch.delenv("PUZZLE_RUNTIME", raising=False)
+    monkeypatch.delenv("PUZZLE_FENICSX_RUNTIME", raising=False)
+    monkeypatch.setattr(runtime.sys, "platform", "win32")
+    monkeypatch.setattr(runtime.ContainerRuntime, "available", lambda self, exe: True)
+    chosen = runtime_for("fenicsx")
+    assert isinstance(chosen, ContainerRuntime) and chosen.image == DEFAULT_IMAGES["fenicsx"]
+    monkeypatch.setattr(runtime.ContainerRuntime, "available", lambda self, exe: False)
+    assert isinstance(runtime_for("fenicsx"), NativeRuntime)  # no image: native as before
+    monkeypatch.setattr(runtime.ContainerRuntime, "available", lambda self, exe: True)
+    monkeypatch.setattr(runtime.sys, "platform", "linux")
+    assert isinstance(runtime_for("fenicsx"), NativeRuntime)  # native has PETSc there
+
+
 def test_availability_checks(tmp_path):
     assert NativeRuntime(search_path=str(PY.parent)).available(PY.name)
     assert not NativeRuntime(search_path="").available("definitely-not-a-solver")
@@ -152,7 +178,9 @@ def test_pixi_solver_envs_are_found_without_activation(tmp_path, monkeypatch):
     calculix = envs / "calculix" / ("Library/bin" if os.name == "nt" else "bin")
     calculix.mkdir(parents=True)
     monkeypatch.setattr(runtime.sys, "prefix", str(envs / "dev"))
-    assert runtime.pixi_solver_dirs() == [calculix]
+    # On Windows an environment's own folder too: FEniCSx's python.exe sits there.
+    root = [envs / "calculix"] if os.name == "nt" else []
+    assert runtime.pixi_solver_dirs() == [calculix, *root]
     monkeypatch.setattr(runtime.sys, "prefix", str(tmp_path / "venv"))
     assert runtime.pixi_solver_dirs() == []
 
@@ -167,7 +195,8 @@ def test_installed_solver_envs_are_found_under_the_base(tmp_path, monkeypatch):
     for name in ("calculix", "mmg"):
         (base / "envs" / name / sub).mkdir(parents=True)
     monkeypatch.setattr(runtime.sys, "prefix", str(base))
-    assert runtime.pixi_solver_dirs() == [base / "envs" / "calculix" / sub]
+    root = [base / "envs" / "calculix"] if os.name == "nt" else []  # python.exe sits there
+    assert runtime.pixi_solver_dirs() == [base / "envs" / "calculix" / sub, *root]
     assert runtime.environment("mmg") == base / "envs" / "mmg"
     assert runtime.environment("netgen") is None
 

@@ -72,6 +72,17 @@ def fenicsx_python() -> Path | None:
     return None
 
 
+def fenicsx_available() -> bool:
+    """Whether FEniCSx runs here: in its container image when that is the runtime chosen
+    (on Windows, where only the image has PETSc), else a native dolfinx."""
+    from puzzle.jobs.runtime import ContainerRuntime, runtime_for
+
+    runtime = runtime_for("fenicsx")
+    if isinstance(runtime, ContainerRuntime):
+        return runtime.available("python")
+    return fenicsx_python() is not None
+
+
 def _has_dolfinx(python: Path) -> bool:
     prefix = python.parent if os.name == "nt" else python.parent.parent
     patterns = (

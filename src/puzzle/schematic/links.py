@@ -59,6 +59,8 @@ LINKS: tuple[Link, ...] = (
     Link("probe", "construction", ("construction",), "Path or plane"),
     Link("result", "source", ("study", "result"), "Results it reads"),
     Link("result", "cases[].study", ("study",), "Study of a case", required=True),
+    # An equation's values from operators and result tools (B, C...: EquationInput).
+    Link("result", "inputs[].source", ("operator", "probe"), "Value", required=True),
     Link("optimisation", "study", ("study",), "Study it runs", required=True),
     Link("mesh_study", "study", ("study",), "Study it refines", required=True),
     Link("construction", "axes", ("axes",), "Coordinate system"),
@@ -155,6 +157,12 @@ def choices(project, source, target, within: str = "") -> list[Choice]:
         for path, where in _items(data, link.path.split(".")):
             label = f"{link.name} of {where}" if where else link.name
             found.append(Choice(link, path, label))
+        if link.path == "inputs[].source" and getattr(target, "method", "") == "equation":
+            used = {i.name for i in target.inputs}  # a new value, by the next free letter
+            name = next(c for c in "BCDEFGHIJKLMNOPQRSTUVWXYZ" if c not in used)
+            value = {"name": name, "source": str(source.id), "port": "out"}
+            found.append(Choice(link, "inputs", f"Value {name} of the equation (new)",
+                                "append", value))  # fmt: skip
         if link.path == "materials[].material":  # a part without a material yet
             covered = {a.selection for a in target.materials}
             for part in target.parts:

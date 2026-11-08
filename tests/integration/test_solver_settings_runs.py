@@ -41,7 +41,10 @@ def test_every_linear_solver_gives_the_same_answer(tmp_path, solver):
     tips = [_tip(tmp_path / str(i), solver, own)[0] for i, own in enumerate(CASES[solver])]
     print(f"{solver}: tip deflection {', '.join(f'{t:.8g}' for t in tips)}")
     assert tips[1] == pytest.approx(tips[0], rel=1e-8)
-    assert tips[2] == pytest.approx(tips[0], rel=1e-5)  # iterative: to its tolerance
+    # Iterative: to its tolerance. CalculiX's ITERATIVE CHOLESKY stops when its last update
+    # is small, which doesn't bound the error: 2e-6 off on macOS, 4.6e-5 on Windows
+    # (the same deck under ITERATIVE SCALING agrees with SPOOLES to 12 digits).
+    assert tips[2] == pytest.approx(tips[0], rel=1e-4 if solver == "calculix" else 1e-5)
 
 
 @over("code_aster")

@@ -453,8 +453,9 @@ def _model(window, menu: QMenu) -> None:
     from puzzle.gui import menus
 
     _add(menu, "New component…", lambda: menus.new_component(window))
-    _add(menu, "Copy component…", _with_component(
-        window, lambda c: menus.copy_component(window, c)))  # fmt: skip
+    _add(menu, "Duplicate component…", _with_component(
+        window, lambda c: menus.copy_component(window, c)),
+        "A copy of the component, and of its studies if you choose")  # fmt: skip
     menu.addSeparator()
     physics = _sub(menu, "Add physics")
     features = _sub(menu, "Add feature")
@@ -500,6 +501,8 @@ def _model(window, menu: QMenu) -> None:
         "A thickness for a sheet body (a plate or thin wall)")  # fmt: skip
     menu.addSeparator()
     _add(menu, "New study…", lambda: menus.new_study(window))
+    _add(menu, "Duplicate study…", lambda: _duplicate_study(window),
+         "A copy of the study under a new name: steps, settings, sweeps, solver")  # fmt: skip
     _add(menu, "New transfer…", lambda: menus.new_transfer(window),
          "One study's result into another (a temperature into a structural study)")  # fmt: skip
     run = window.actions_by_name["run"]  # the toolbar's too: asks which study if none is selected
@@ -507,6 +510,11 @@ def _model(window, menu: QMenu) -> None:
     run.triggered.connect(lambda _=False: _run(window))
     run.setText("Run study")
     menu.addAction(run)
+    _add(menu, "Run all", lambda: window.run_studies(None),
+         "Every study, one after another; one that fails doesn't stop the rest")  # fmt: skip
+    _add(menu, "Run selected…", lambda: menus.run_selected_studies(window),
+         "Tick the studies to run, one after another")  # fmt: skip
+    _add(menu, "Stop all", window.stop_all, "Stop the running study and the ones waiting")
     _add(menu, "Solver settings…", lambda: _solver_settings(window),
          "How each solver solves the study: linear solver, tolerances, output")  # fmt: skip
     _add(menu, "Run on…", lambda: _run_on(window),
@@ -537,6 +545,14 @@ def _run_on(window) -> None:
     study = current_study(window, "Run on")
     if study is not None:
         run_on(window, study)
+
+
+def _duplicate_study(window) -> None:
+    from puzzle.gui import menus
+
+    study = current_study(window, "Duplicate study")
+    if study is not None:
+        menus.copy_study(window, study)
 
 
 def _solver_settings(window) -> None:

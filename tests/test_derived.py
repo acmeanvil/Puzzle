@@ -188,6 +188,47 @@ def test_definitions_evaluate_from_the_newest_run():
         derived.evaluate(p, store, lonely)
 
 
+def test_an_equation_reads_another_operators_value():
+    """A (the case) with B from another operator (the maintainer, 2026-11-08): von Mises
+    over an allowable a Number operator gives, in SI; a changed value is a new result."""
+    from puzzle.model.schema import EquationInput, Operator, OperatorInput
+
+    p = Project("p")
+    study = p.add(Study(name="Loads", component=uuid4(), solver="calculix", steps=[]))
+    store = FakeStore(study.id)
+    combo = p.add(ResultDefinition(name="A plus B", method="linear", cases=[
+        ResultCase(study=study.id, step=0), ResultCase(study=study.id, step=1)]))  # fmt: skip
+    allowable = p.add(Operator(name="Allowable", type="number", inputs={
+        "value": OperatorInput(value=Quantity(value=125, unit="MPa"))}))  # fmt: skip
+    usage = p.add(ResultDefinition(name="Usage", method="equation", source=combo.id,
+                                   expression="von_mises / B",
+                                   inputs=[EquationInput(source=allowable.id)]))  # fmt: skip
+    assert allowable.id in usage.dependencies()  # loops through it are refused
+    d = derived.evaluate(p, store, usage)
+    assert d.results.steps[0].fields["equation"].values[:, 0] == pytest.approx([0.8] * 3)
+    allowable.inputs["value"] = OperatorInput(value=Quantity(value=250, unit="MPa"))
+    d = derived.evaluate(p, store, usage)  # not the cached 0.8
+    assert d.results.steps[0].fields["equation"].values[:, 0] == pytest.approx([0.4] * 3)
+
+    table = p.add(Operator(name="Plates", type="table", text="t [mm]\n2\n"))
+    usage.inputs = [EquationInput(name="C", source=table.id)]
+    usage.expression = "von_mises / C"
+    with pytest.raises(PuzzleError, match="'C' must be one number"):
+        derived.evaluate(p, store, usage)
+    with pytest.raises(ValueError, match="not a name"):
+        EquationInput(name="2x", source=table.id)
+
+    # In the schematic, a wire from an operator onto the equation adds the next value.
+    from puzzle.schematic import links
+
+    new = [c for c in links.choices(p, allowable, usage) if c.op == "append"]
+    assert [c.label for c in new] == ["Value B of the equation (new)"]  # C is taken
+    assert links.commands(new[0], allowable, usage)[0]["ops"][0]["value"]["name"] == "B"
+    held = links.existing(p, table.id, usage)
+    assert links.clear_commands(held[0], usage)[0]["ops"][0] == {"op": "remove",
+                                                                "path": "inputs.0"}  # fmt: skip
+
+
 def test_a_definition_must_be_complete():
     with pytest.raises(ValueError, match="needs at least one case"):
         ResultDefinition(name="x", method="srss")

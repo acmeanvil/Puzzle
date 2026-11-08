@@ -3,7 +3,7 @@
 A provider turns the conversation plus the tool list into one model reply: text,
 tool calls, or both. The conversation is kept provider-neutral:
 
-    {"role": "user", "content": "..."}
+    {"role": "user", "content": "...", "attachments": [Attachment.block(), ...]}
     {"role": "assistant", "text": "...", "tool_calls": [ToolCall, ...]}
     {"role": "tool", "id": ..., "name": ..., "content": "...", "image": b"..." | None,
      "is_error": bool}
@@ -144,7 +144,7 @@ def to_anthropic(messages: list[dict]) -> list[dict]:
     out: list[dict] = []
     for m in messages:
         if m["role"] == "user":
-            out.append({"role": "user", "content": m["content"]})
+            out.append({"role": "user", "content": _anthropic_user(m)})
         elif m["role"] == "assistant":
             blocks: list[dict] = [{"type": "text", "text": m["text"]}] if m.get("text") else []
             blocks += [
@@ -173,6 +173,48 @@ def to_anthropic(messages: list[dict]) -> list[dict]:
             else:
                 out.append({"role": "user", "content": [block]})
     return out
+
+
+def _anthropic_user(m: dict):
+    """A user message: its text, after its attachments (ADR 0074) as image, document
+    and text blocks."""
+    from puzzle.agent.attachments import text_of
+
+    files = m.get("attachments") or []
+    if not files:
+        return m["content"]
+    blocks: list[dict] = []
+    for a in files:
+        if a["kind"] == "image":
+            blocks.append({"type": "image", "source": {
+                "type": "base64", "media_type": a["media_type"], "data": a["data"]}})  # fmt: skip
+        elif a["kind"] == "pdf":
+            blocks.append({"type": "document", "title": a["name"], "source": {
+                "type": "base64", "media_type": "application/pdf", "data": a["data"]}})  # fmt: skip
+        else:
+            blocks.append({"type": "text", "text": text_of(a)})
+    return [*blocks, {"type": "text", "text": m["content"] or "(see the attachments)"}]
+
+
+def _openai_user(m: dict):
+    """A user message for an OpenAI-compatible endpoint: images as image_url parts,
+    text files inline; a PDF is named, since these endpoints don't read documents."""
+    from puzzle.agent.attachments import text_of
+
+    files = m.get("attachments") or []
+    if not files:
+        return m["content"]
+    parts: list[dict] = []
+    for a in files:
+        if a["kind"] == "image":
+            url = f"data:{a['media_type']};base64,{a['data']}"
+            parts.append({"type": "image_url", "image_url": {"url": url}})
+        elif a["kind"] == "pdf":
+            parts.append({"type": "text", "text": f"(the PDF {a['name']} was attached; this "
+                          "model can't read documents)"})  # fmt: skip
+        else:
+            parts.append({"type": "text", "text": text_of(a)})
+    return [*parts, {"type": "text", "text": m["content"] or "(see the attachments)"}]
 
 
 class OpenAIProvider:
@@ -243,7 +285,7 @@ def to_openai(system: str, messages: list[dict]) -> list[dict]:
     out: list[dict] = [{"role": "system", "content": system}]
     for m in messages:
         if m["role"] == "user":
-            out.append({"role": "user", "content": m["content"]})
+            out.append({"role": "user", "content": _openai_user(m)})
         elif m["role"] == "assistant":
             entry: dict[str, Any] = {"role": "assistant", "content": m.get("text") or ""}
             if m.get("tool_calls"):

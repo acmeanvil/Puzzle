@@ -32,7 +32,7 @@ DATA = Path(__file__).parent / "data" / "progress"
 
 def _feed(parser, log: Path) -> list:
     events = []
-    with gzip.open(log, "rt", errors="replace") as f:
+    with gzip.open(log, "rt", encoding="utf-8", errors="replace") as f:
         for line in f:
             events += parser.safe_feed(line.rstrip("\n"))
     return events + parser.finish(True)
@@ -193,6 +193,15 @@ def test_the_diagnoses_of_the_friction_failure(tmp_path):
     assert codes == ["friction_singular", "cutbacks", "chattering"]
     assert progress.diagnose(_calculix("calculix_contact", tmp_path)) == []
     assert progress.diagnose(_aster("code_aster_plastic", tmp_path)) == []
+
+
+def test_an_imprecise_mumps_solve_is_explained(tmp_path):
+    """The 882,309-equation pressure vessel that looked hung on Windows (2026-11-08):
+    MUMPS's answer failed RESI_RELA (FACTOR_57); the run says so in English, with the fix."""
+    events = _aster("code_aster_imprecise", tmp_path)
+    errors = [e for e in events if isinstance(e, Message) and e.code == "FACTOR_57"]
+    assert errors and "not accurate enough" in errors[0].text
+    assert [d.code for d in progress.diagnose(events)] == ["imprecise_solve"]
 
 
 def test_pivots_on_held_and_free_dofs():

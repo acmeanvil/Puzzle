@@ -14,9 +14,9 @@ from puzzle.solve import run_study
 
 def _available(solver: str, executable: str | None) -> bool:
     if solver == "fenicsx":
-        from puzzle.adapters.fenicsx.case import fenicsx_python
+        from puzzle.adapters.fenicsx.case import fenicsx_available
 
-        return fenicsx_python() is not None
+        return fenicsx_available()
     return runtime_for(solver).available(executable)
 
 

@@ -230,7 +230,7 @@ def advise(
         return out
     from puzzle.adapters import check_study
 
-    trouble = [p.message for p in problems if p.path == study.name]
+    trouble = [p.message for p in problems if p.object == study.name]
     with contextlib.suppress(Exception):  # an adapter that can't load says nothing here
         trouble += [p for found in check_study(project, study).values() for p in found]
     if trouble:

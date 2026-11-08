@@ -1952,6 +1952,25 @@ class FatigueSettings(BaseModel):
         return self
 
 
+class EquationInput(BaseModel):
+    """A value an equation reads by name from elsewhere in the project: the number an
+    operator or result tool gives on its output `port` (the equation's case is its
+    source, A; these are B, C... or names of their own)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(default="B", description="the name the expression uses")
+    source: UUID = Field(description="an operator, a result tool or a parameter set")
+    port: str = Field(default="out", description="its output")
+
+    @field_validator("name")
+    @classmethod
+    def _identifier(cls, name: str) -> str:
+        if not name.isidentifier():
+            raise ValueError(f"'{name}' is not a name an equation can use (letters, digits, _)")
+        return name
+
+
 class ResultDefinition(ProjectObject):
     """A derived result (ADR 0025), evaluated from stored runs when shown, never stored.
 
@@ -1974,6 +1993,9 @@ class ResultDefinition(ProjectObject):
     source_step: int = -1
     expression: str | None = None
     unit: str | None = None
+    # An equation's values from elsewhere in the project (the maintainer, 2026-11-08): each
+    # an operator's or result tool's single number, by the name the expression uses (B).
+    inputs: list[EquationInput] = Field(default_factory=list)
     fatigue: FatigueSettings | None = None
     # ADR 0066 phase 2: the target error the refinement ratio is for (0.02 = 2 %)
     error_target: float = Field(default=0.02, gt=0, lt=1)
@@ -2000,7 +2022,7 @@ class ResultDefinition(ProjectObject):
         if self.fatigue is not None:
             for b in self.fatigue.blocks:
                 own += [b.combination] if b.combination else [b.case.study]
-        return own + [c.study for c in self.cases]
+        return own + [c.study for c in self.cases] + [i.source for i in self.inputs]
 
 
 class ConstructionGeometry(ProjectObject):
@@ -2831,6 +2853,26 @@ class Project:
                 local = geo.model_copy(deep=True, update={"id": uuid4(), "owner": copy.id})
                 part.geometry = self.add(local).id
         return self.add(copy)
+
+    def copy_study(self, study_id: UUID, name: str, component: UUID | None = None) -> Study:
+        """Duplicate a study: its steps, settings, sweeps and solver, under a new name,
+        on the same component or on `component` (a duplicated component's studies). Its
+        runs are not copied: they belong to the original's run key."""
+        original = self.get(study_id, Study)
+        update = {"id": uuid4(), "name": name}
+        if component is not None:
+            update["component"] = component
+        return self.add(original.model_copy(deep=True, update=update))
+
+    def unique_name(self, wanted: str) -> str:
+        """`wanted`, or `wanted 2`, `wanted 3`... when an object already has the name."""
+        taken = {o.name for o in self.objects.values()}
+        if wanted not in taken:
+            return wanted
+        n = 2
+        while f"{wanted} {n}" in taken:
+            n += 1
+        return f"{wanted} {n}"
 
     def validate(self) -> list[str]:
         """Return human-readable problems; an empty list means the project is consistent."""

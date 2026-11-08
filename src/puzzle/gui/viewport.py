@@ -21,6 +21,13 @@ from puzzle.results.model import Results
 
 # Surface element -> how many of its nodes are corners.
 CORNERS = {"tri3": 3, "tri6": 3, "quad4": 4, "quad8": 4, "quad9": 4}
+# How the model is drawn (the view toolbar's Display): its mesh's element outlines, its
+# geometric edges (face boundaries, as a CAD program's shaded with edges), or neither.
+DISPLAYS = (
+    ("mesh", "Shaded with mesh"),
+    ("edges", "Shaded with edges"),
+    ("shaded", "Shaded"),
+)
 
 
 def _t():
@@ -484,6 +491,7 @@ class ViewBar(QWidget):
                 shortcut,
                 label=direction.upper(),
             )
+        self._display_menu(viewport, row, icon)
         add("edges", "Element edges", lambda on: viewport.set_style(edges=on), checkable=True)
         add("wireframe", "Wireframe", lambda on: viewport.set_style(wireframe=on), checkable=True)
         add(
@@ -503,6 +511,28 @@ class ViewBar(QWidget):
         add("copy", "Copy image", self.copy_image)
         add("camera", "Save image…", self.save_image)
         self.adjustSize()
+
+    def _display_menu(self, viewport, row, icon) -> None:
+        """Display ▾: how the model is drawn (the maintainer, 2026-11-08: shaded with
+        edges reads a dense mesh far better than every element's outline)."""
+        from PySide6.QtGui import QAction, QActionGroup
+        from PySide6.QtWidgets import QMenu, QToolButton
+
+        menu, group = QMenu(self), QActionGroup(self)
+        for value, text in DISPLAYS:
+            action = QAction(text, self, checkable=True)
+            action.setChecked(value == viewport.style["display"])
+            action.triggered.connect(lambda _=False, v=value: viewport.set_style(display=v))
+            group.addAction(action)
+            menu.addAction(action)
+            self.actions_by_name[f"display_{value}"] = action
+        button = QToolButton()
+        button.setIcon(icon("display"))
+        button.setToolTip("Display: shaded with the mesh, with the model's edges, or plain")
+        button.setMenu(menu)
+        button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        button.setAutoRaise(True)
+        row.addWidget(button)
 
     def refresh_view(self) -> None:
         if self.on_refresh is not None:
@@ -835,6 +865,7 @@ class Viewport(QWidget):
             layout.addWidget(self.placeholder)
         # How the scene is drawn, whatever is shown (ADR 0031's view toolbar).
         self.style = {
+            "display": "mesh",  # DISPLAYS: the model shaded with its mesh, edges, or plain
             "edges": False,
             "wireframe": False,
             "parallel": False,
@@ -897,7 +928,7 @@ class Viewport(QWidget):
         # moves the highlight, so the mesh, its colours and the cut are kept and only
         # what is drawn over them is redrawn (the lag between tree items).
         base = (id(mesh), tuple(sorted(colours.items())), repr(self.cut), bool(dim or ghost),
-                self.style.get("beams", True), id(_t()))  # fmt: skip
+                self.style.get("beams", True), self.style["display"], id(_t()))  # fmt: skip
         kept = getattr(self, "_base", None)
         if (self.plotter is not None and kept is not None and kept[0] == base
                 and kept[1] <= set(self.plotter.renderer.actors)):  # fmt: skip
@@ -951,10 +982,12 @@ class Viewport(QWidget):
             self.plotter.add_mesh(
                 grid,
                 **painted,
-                show_edges=True,
+                show_edges=self.style["display"] == "mesh",
                 edge_color=_t().geometry_edge,
                 opacity=0.35 if dim or ghost else 1,
             )
+            if self.style["display"] == "edges":
+                self._draw_model_edges()
             from puzzle.post.vtk import beam_lines
 
             if members:
@@ -973,15 +1006,25 @@ class Viewport(QWidget):
             else:
                 paint = {"color": _t().geometry_face}
             self.plotter.add_mesh(self.surface, **paint, smooth_shading=False)
-            edges = self.surface.extract_feature_edges(
-                30, boundary_edges=True, manifold_edges=False
-            )
-            self.plotter.add_mesh(edges, color=_t().mesh_edge, line_width=1.5)
+            if self.style["display"] == "edges":
+                self._draw_model_edges()
+            elif self.style["display"] == "mesh":  # the preview has no mesh: sharp edges
+                edges = self.surface.extract_feature_edges(
+                    30, boundary_edges=True, manifold_edges=False
+                )
+                self.plotter.add_mesh(edges, color=_t().mesh_edge, line_width=1.5)
         shown = {k: v for k, v in self.shown.items() if k not in ("highlight", "highlighted",
                                                                   "picked")}  # fmt: skip
         self._base = (base, set(self.plotter.renderer.actors), shown)
         self._draw_over(mesh, highlight)
         self._frame(mesh)
+
+    def _draw_model_edges(self) -> None:
+        """The geometry's own edges (every face boundary, smooth ones too), over the
+        shaded model: Display > Shaded with edges."""
+        if self.lines is not None and self.lines.n_cells:
+            self.plotter.add_mesh(self.lines, color=_t().geometry_line, line_width=1.5,
+                                  reset_camera=False)  # fmt: skip
 
     def _draw_over(self, mesh, highlight) -> None:
         """The highlighted selection and the picks, over the model."""
@@ -2144,8 +2187,12 @@ class Viewport(QWidget):
 
     def set_style(self, **changes) -> None:
         """Edges on results and previews, wireframe, orthographic: kept across redraws."""
+        redraw = "display" in changes and changes["display"] != self.style["display"]
         self.style.update(changes)
         self._apply_style()
+        if redraw:  # the model is drawn again with its edges (or without)
+            self._base = None
+            self.view_bar.refresh_view()
         self._render()
 
     def _apply_style(self) -> None:

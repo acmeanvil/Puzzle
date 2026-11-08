@@ -116,4 +116,5 @@ def test_a_console_without_a_character_gets_a_question_mark(monkeypatch):
     cli._tolerant_output()
     print("Zienkiewicz–Zhu → ²")
     console.flush()
-    assert console.buffer.getvalue() == b"Zienkiewicz\x96Zhu ? \xb2\n"
+    # The console's own line ending (\r\n on Windows) is not what this is about.
+    assert console.buffer.getvalue().replace(b"\r\n", b"\n") == b"Zienkiewicz\x96Zhu ? \xb2\n"

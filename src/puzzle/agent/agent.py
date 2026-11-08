@@ -38,6 +38,10 @@ You are Puzzle's built-in assistant. The user sees the model tree, the 3D view a
 your replies side by side, and reviews your proposals in the agent panel. Answer
 briefly and concretely: name the objects, give values with units. When you propose
 changes, say what they do and why in the rationale. Do not invent results.
+Your replies are drawn as Markdown: use lists and tables where they help, write
+equations in TeX between $...$ (or $$...$$ on their own line), and put code in fenced
+blocks with its language (```python): a code block is shown folded, so explain what it
+does before it.
 
 Skills (read one with `skill_read` before a task in its area):
 """
@@ -49,11 +53,20 @@ Skills (read one with `skill_read` before a task in its area):
 SYSTEM = _system()
 
 
+def _doing(tool: str, arguments: dict) -> str:
+    """What a tool call is, in words, for the status line."""
+    if tool == "skill_read":
+        return f"Reading the skill {arguments.get('name', '')}".strip()
+    if tool == "knowledge":
+        return "Looking it up"
+    return f"Calling {tool}"
+
+
 @dataclass
 class Event:
     """Something the agent did, for the GUI or terminal to show as it happens."""
 
-    kind: str  # "text", "tool_call", "tool_result", "error", "usage"
+    kind: str  # "text", "tool_call", "tool_result", "error", "usage", "status", "note"
     text: str = ""
     data: dict[str, Any] = field(default_factory=dict)
 
@@ -80,15 +93,39 @@ class Agent:
         self.max_rounds = max_rounds
         self.messages: list[dict] = []
         self.tokens = {"input": 0, "output": 0}
+        self.timings = {"model": 0.0, "tools": 0.0, "total": 0.0}  # seconds, this chat
         self.tools = self._tool_specs()
 
-    def ask(self, text: str, on_event: Callable[[Event], None] | None = None) -> str:
-        """Answer one user message, calling tools as the model asks; return the reply."""
+    def ask(self, text: str, on_event: Callable[[Event], None] | None = None,
+            attachments=(), stop=None) -> str:  # fmt: skip
+        """Answer one user message, calling tools as the model asks; return the reply.
+
+        `attachments` (ADR 0074) go with the message: images and PDFs only where files
+        may go (a local model, or a remote one with `send_images`), text always. Status
+        events say what it is doing as it works; `stop` (a threading.Event) set ends
+        the turn after the current step."""
+        import time
+
         emit = on_event or (lambda e: None)
-        self.messages.append({"role": "user", "content": text})
+        sent = [a for a in attachments if self.images or not a.is_file]
+        held = [a.name for a in attachments if a not in sent]
+        if held:
+            emit(Event("note", f"Not sent to {self.provider.name} (files stay on this computer "
+                               f"unless send_images is on): {', '.join(held)}"))  # fmt: skip
+        message: dict[str, Any] = {"role": "user", "content": text}
+        if sent:
+            message["attachments"] = [a.block() for a in sent]
+        self.messages.append(message)
         answer = ""
+        started = time.perf_counter()
         for _ in range(self.max_rounds):
+            if stop is not None and stop.is_set():
+                emit(Event("note", "Stopped."))
+                return answer or "(stopped)"
+            emit(Event("status", "Thinking…"))
+            asked = time.perf_counter()
             reply = self.provider.complete(SYSTEM, self.messages, self.tools)
+            self.timings["model"] += time.perf_counter() - asked
             self.tokens["input"] += reply.input_tokens
             self.tokens["output"] += reply.output_tokens
             self.messages.append(
@@ -98,11 +135,21 @@ class Agent:
                 answer = reply.text
                 emit(Event("text", reply.text))
             if not reply.tool_calls:
-                emit(Event("usage", data=dict(self.tokens)))
+                self.timings["total"] = time.perf_counter() - started
+                emit(Event("usage", data=dict(self.tokens) | {"timings": dict(self.timings)}))
                 return answer
             for call in reply.tool_calls:
+                if stop is not None and stop.is_set():
+                    # Every call still gets a result, or the next message is refused.
+                    self.messages.append({"role": "tool", "id": call.id, "name": call.name,
+                                          "content": "(not run: the user stopped the turn)",
+                                          "is_error": True, "image": None})  # fmt: skip
+                    continue
+                emit(Event("status", _doing(call.name, call.arguments)))
                 emit(Event("tool_call", call.name, {"arguments": call.arguments}))
+                called = time.perf_counter()
                 result = self._call(call.name, call.arguments)
+                self.timings["tools"] += time.perf_counter() - called
                 self.messages.append({"role": "tool", "id": call.id, "name": call.name, **result})
                 emit(
                     Event(

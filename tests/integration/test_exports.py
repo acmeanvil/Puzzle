@@ -8,6 +8,8 @@
   metres; compensation moves the other way. Each export names its source in a .txt.
 """
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 from conftest_geometry import BAR, bar_project, write_bar_step
@@ -125,7 +127,9 @@ def test_cli_and_agents_export(solved, solver, capsys):
     asked = {"study": "Bend", "format": "deformed_stl", "path": "exports/shape"}
     result = asyncio.run(server.call_tool("export", asked))
     files = result.structured_content["files"]
-    assert files[0].endswith("exports/shape.stl") and (root / "exports" / "shape.stl").exists()
+    # The path as the system writes it (backslashes on Windows).
+    assert Path(files[0]).as_posix().endswith("exports/shape.stl")
+    assert (root / "exports" / "shape.stl").exists()
     with pytest.raises(Exception, match="exports go inside the project folder"):
         asyncio.run(server.call_tool("export", asked | {"path": str(tmp / "away")}))
 

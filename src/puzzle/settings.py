@@ -36,11 +36,11 @@ class Preference:
 
 
 def _core_choices() -> list[tuple[str, int]]:
-    """Cores per run: the physical cores (0, the default), or a number up to the logical
-    cores, from this computer (ADR 0053)."""
-    from puzzle.machine import logical_cores, physical_cores
+    """Cores per run: automatic (0, the default: `machine.default_cores`), or a number up
+    to the logical cores, from this computer (ADR 0053)."""
+    from puzzle.machine import default_cores, logical_cores
 
-    return [(f"Physical cores ({physical_cores()})", 0)] + [
+    return [(f"Automatic ({default_cores()})", 0)] + [
         (str(n), n) for n in range(1, logical_cores() + 1)
     ]
 
@@ -411,8 +411,10 @@ PREFERENCES: list[Preference] = [
         0,
         _core_choices(),
         "How many processor cores one solver run may use (threads, or threads times "
-        "processes). Physical cores is usually fastest: finite element solves gain little "
-        "from a second thread per core. Your own OMP_NUM_THREADS or CCX_NPROC_* win.",
+        "processes). Automatic is 4, or one fewer than the physical cores on a smaller "
+        "computer, so it stays usable while solving; finite element solves gain little past "
+        "that, and nothing from a second thread per core. Your own OMP_NUM_THREADS or "
+        "CCX_NPROC_* win.",
     ),
     Preference(
         "solvers.processes",

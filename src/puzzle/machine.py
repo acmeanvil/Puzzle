@@ -42,6 +42,17 @@ def physical_cores() -> int:
     return logical_cores()
 
 
+DEFAULT_CORES = 4
+
+
+def default_cores(physical: int | None = None) -> int:
+    """Cores per run when Settings > Solvers leaves it automatic (the maintainer,
+    2026-11-08): 4 where there are more, else one fewer than the physical cores, so the
+    computer stays usable while it solves (and ADR 0053 measured little gain past 2-4)."""
+    n = physical_cores() if physical is None else physical
+    return DEFAULT_CORES if n > DEFAULT_CORES else max(1, n - 1)
+
+
 def _linux_cores() -> int | None:
     """Distinct (physical id, core id) pairs in /proc/cpuinfo."""
     try:

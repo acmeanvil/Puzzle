@@ -698,7 +698,10 @@ def _sizes(recipe: MeshRecipe, comp: Component, found, warnings, project=None, r
 def _turned_box(control, project, root) -> int:
     """A box along a Cartesian system's axes, its corners in them: a MathEval field (Gmsh's
     Box follows the global axes), the size inside where every local coordinate is
-    within the box's half-widths."""
+    within the box's half-widths, growing by the distance outside it. A jump straight to
+    coarse went unseen when the box lay inside a face: Frontal-Delaunay reads the size
+    only at the points it has, and on Windows none fell in the box (76 nodes in it, 42
+    beside); a size growing from the box is seen from any point near it."""
     from puzzle.axes import absolute
     from puzzle.model.schema import CoordinateSystem
 
@@ -715,9 +718,9 @@ def _turned_box(control, project, root) -> int:
         local = "+".join(f"({r[j, i]:.15g})*{v}" for j, v in enumerate("xyz"))
         terms.append(f"Fabs({local}-({shift:.15g}))-({half[i]:.15g})")
     outside = f"Max(Max({terms[0]},{terms[1]}),{terms[2]})"
-    inside, far = control.size.to_si(), 1e22
+    inside = control.size.to_si()
     f = gmsh.model.mesh.field.add("MathEval")
-    gmsh.model.mesh.field.setString(f, "F", f"{inside:.15g}+{far - inside:.15g}*Step({outside})")
+    gmsh.model.mesh.field.setString(f, "F", f"{inside:.15g}+Max({outside},0)")
     return f
 
 

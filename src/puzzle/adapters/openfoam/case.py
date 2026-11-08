@@ -209,6 +209,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
         "simpleFoam > log.simpleFoam 2>&1\n"
         "postProcess -func writeCellCentres -latestTime > log.postProcess 2>&1\n",
         encoding="utf-8",
+        newline="\n",  # bash in a Linux container rejects CRLF (`set -e\r`)
     )
     (workdir / "density.txt").write_text(f"{rho:.17g}\n", encoding="utf-8")
     if layered is not None:

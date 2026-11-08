@@ -103,6 +103,35 @@ def test_view_toolbar_reaches_the_viewport(window):
     assert {k: window.viewport.style[k] for k in wanted} == wanted
     assert window.viewport.shown["style"]["parallel"]
     assert vb.actions_by_name["fit"].shortcut().toString() == "F"
+    # Display: shaded with the mesh by default, or with the model's edges, or plain.
+    assert window.viewport.style["display"] == "mesh"
+    assert vb.actions_by_name["display_mesh"].isChecked()
+    vb.actions_by_name["display_edges"].trigger()
+    assert window.viewport.shown["style"]["display"] == "edges"
+    assert not vb.actions_by_name["display_mesh"].isChecked()  # one at a time
+    vb.actions_by_name["display_shaded"].trigger()
+    assert window.viewport.style["display"] == "shaded"
+
+
+def test_a_closed_tool_panel_gives_its_height_back(window):
+    """The Legend panel, closed, held the Properties dock at its height, so the tree
+    above could no longer be dragged larger (the maintainer, 2026-11-08)."""
+    from PySide6.QtWidgets import QWidget
+
+    before = window.side.minimumSizeHint().height()
+    tall = QWidget()
+    tall.setMinimumHeight(before + 600)
+    window.show_tool(tall)
+    assert window.side.currentWidget() is tall
+    assert window.side.minimumSizeHint().height() >= before + 600
+    window.show_tool(None)
+    assert window.side.minimumSizeHint().height() == before  # sized to what it shows
+    window.show_tool(tall)  # and it opens again as it was, once
+    assert window.side.currentWidget() is tall and window.side.count() == 2
+    window.show_tool(None)
+    # The same for the 3D view's area: the start page, hidden, held it at 752 px wide.
+    centre, page = window.centralWidget(), window.centralWidget().currentWidget()
+    assert centre.minimumSizeHint() == page.minimumSizeHint().expandedTo(page.minimumSize())
 
 
 def test_layout_is_kept_and_reset_forgets_it(window):

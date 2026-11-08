@@ -26,6 +26,10 @@ failed or stopped solve keeps it too, in its run folder.
      with contact or plasticity take `increments`), or hold the model before contact.
    - `chattering`: contact opening and closing in turn; more increments, or a softer
      contact.
+   - `imprecise_solve` (Code_Aster `FACTOR_57`): MUMPS's answer failed the accuracy
+     check on a large model. Set the study's `solver_settings.code_aster.refinement` to
+     `FORCE` (Puzzle's default), or loosen it with the expert setting
+     `MECA_STATIQUE.SOLVEUR.RESI_RELA = 1e-5`.
    - `not_converged` (CFD, OpenFOAM and Code_Saturne): a steady flow solve used all its
      `iterations` with a residual above its criterion. If it says still falling, it
      estimates how many more iterations: raise the step's `iterations` past that; if
@@ -75,6 +79,12 @@ submit(command={"command": "create", "kind": "probe", "data": {"name": "Tip defl
   frequencies, counted k of n) and nonlinear iterations (Picard or Newton on FEniCSx,
   `ComputeChange` on Elmer, as a relative change against the tolerance).
 - A linear solve has one increment: nothing to follow while solving.
+
+## Several studies
+
+Run them one at a time (`run_study`, never in a batch), a study that another reads
+through a transfer first (ADR 0073: the GUI's Run all and `puzzle run --all` use the
+same order); if one fails, read its `run_progress`, then go on with the rest.
 
 ## Mistakes to avoid
 

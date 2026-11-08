@@ -1398,15 +1398,26 @@ MEMORY = (
     ("In memory (fastest)", "IN_CORE"),
     ("On disk (least memory)", "OUT_OF_CORE"),
 )
+# Iterative refinement after MUMPS's solve. Puzzle writes FORCE unless set otherwise:
+# with Code_Aster's own AUTO a 882,309-equation pressure vessel (quadratic tets, supports
+# as Lagrange multipliers) failed FACTOR_57, its residual 2.6e-6 against RESI_RELA 1e-6,
+# after 164 s; with FORCE it solved to 1e-6 in 172 s (2026-11-08, Windows 18.1.10).
+REFINEMENTS = (
+    ("Always (keeps the accuracy check; Puzzle's default)", "FORCE"),
+    ("Code_Aster's choice", "AUTO"),
+    ("Off", "SANS"),
+)
 MUMPS_ONLY = {"acceleration": "ACCELERATION", "low_rank_threshold": "LOW_RANK_SEUIL",
-              "ordering": "RENUM", "factor_memory": "GESTION_MEMOIRE"}  # fmt: skip
+              "ordering": "RENUM", "factor_memory": "GESTION_MEMOIRE",
+              "refinement": "POSTTRAITEMENTS"}  # fmt: skip
 
 
 def with_settings(comm: str, study, step) -> str:
     """The command file with the study's settings for Code_Aster placed (ADR 0023):
     its own, then the shared ones, then the expert pass-through over them all. A
     setting goes in every command of the file that takes it; only what was set is
-    written, so the defaults stay Code_Aster's own."""
+    written, so the defaults stay Code_Aster's own, except MUMPS's iterative refinement,
+    always on unless set (REFINEMENTS)."""
     from puzzle.adapters.code_aster import CodeAsterAdapter
     from puzzle.adapters.code_aster.expert import apply
 
@@ -1436,6 +1447,8 @@ def with_settings(comm: str, study, step) -> str:
         value = own[key]
         text = f"{float(value):.6g}" if key == "low_rank_threshold" else f"'{value}'"
         place(SOLVING, f"SOLVEUR.{MUMPS_ONLY[key]}", text)
+    if method in (None, "MUMPS") and "refinement" not in own:
+        place(SOLVING, "SOLVEUR.POSTTRAITEMENTS", "'FORCE'")  # see REFINEMENTS
     if "tolerance" in given:
         place(NONLINEAR, "CONVERGENCE.RESI_GLOB_RELA", f"{float(given['tolerance']):.6g}")
     if "max_iterations" in given:

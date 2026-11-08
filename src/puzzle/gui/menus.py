@@ -12,7 +12,7 @@ import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtWidgets import QMenu
+from PySide6.QtWidgets import QDialog, QLabel, QMenu
 
 from puzzle.commands.model import CopyComponent, Create, Edit, EditOp
 from puzzle.geometry.steps import STEPS
@@ -71,6 +71,11 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
             add("New component…", lambda: new_component(window))
         elif node.label == "Studies":
             add("New study…", lambda: new_study(window))
+            menu.addSeparator()  # several, one after another (ADR 0073)
+            add("Run all", lambda: window.run_studies(None))
+            add("Run selected…", lambda: run_selected_studies(window))
+            stop = add("Stop all", window.stop_all)
+            stop.setEnabled(window.queue_busy())
         elif node.label == "Amplitudes":
             add("New amplitude…", lambda: edit_amplitude(window))
         elif node.label == "Coordinate systems":
@@ -157,7 +162,7 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
             action.triggered.connect(lambda _=False, k=kind: add_physics(window, obj, k))
         add("Assign material…", lambda: assign_material(window, obj))
         add("Mesh", window.mesh_selected)
-        add("Copy…", lambda: copy_component(window, obj))
+        add("Duplicate…", lambda: copy_component(window, obj))
         menu.addSeparator()
         add("Delete", window.delete_selected)
     elif isinstance(obj, Component) and node.kind == "physics":
@@ -289,6 +294,7 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         add("Delete", window.delete_selected)
     elif isinstance(obj, Study) and node.kind == "object":
         add("Run", window.run_selected)
+        add("Duplicate…", lambda: copy_study(window, obj))
         from puzzle.gui.solver_settings import edit_solver_settings
 
         add("Solver settings…", lambda: edit_solver_settings(window, obj))  # ADR 0023
@@ -394,15 +400,21 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
 
 
 def _operator_menu(window, menu, source=None, port="out", title="New operator") -> None:
-    """A submenu of operator types (ADR 0062), wired from `source` when given."""
+    """A submenu of operator types (ADR 0062), wired from `source` when given: one
+    flyout per group, as the Results menu and the schematic's Add operator have, each
+    alphabetical (`operators.ordered`)."""
     from puzzle.gui import operators
-    from puzzle.operators import TYPES
 
     sub = QMenu(title, menu)  # parented, so Qt keeps it (as main_menu._sub)
     sub.setToolTipsVisible(True)
     menu.addMenu(sub)
-    for t in TYPES.values():
-        action = sub.addAction(t.label)
+    groups: dict[str, QMenu] = {}
+    for t in operators.ordered():
+        if t.group not in groups:
+            groups[t.group] = QMenu(t.group, sub)
+            groups[t.group].setToolTipsVisible(True)
+            sub.addMenu(groups[t.group])
+        action = groups[t.group].addAction(t.label)
         action.setToolTip(t.help)
         action.triggered.connect(lambda _=False, k=t.key: operators.new_operator(
             window, k, source, port))  # fmt: skip
@@ -475,9 +487,82 @@ def change_selection(window, comp: Component, node: Node):
 
 
 def copy_component(window, comp: Component):
-    name = window.ask_text("Copy component", "Name of the copy:", f"{comp.name} copy")
+    """Duplicate a component, and its studies too if asked (one dialog, one undo)."""
+    from puzzle.gui.quick_form import Ask
+
+    project = window.session.project
+    has_studies = any(s.component == comp.id for s in project.of_type(Study))
+    asks = [Ask("name", "Name of the copy", kind="text",
+                follow=lambda v: project.unique_name(f"{comp.name} copy"))]  # fmt: skip
+    if has_studies:
+        asks.append(Ask("studies", "Its studies", choices=[
+            ("Duplicate them too, on the copy", "yes"), ("Only the component", "no")]))  # fmt: skip
+    got = window.ask_form(f"Duplicate {comp.name}", asks)
+    if not got or not got.get("name"):
+        return None
+    studies = got.get("studies") == "yes"
+    return window.submit(CopyComponent(component=str(comp.id), name=got["name"], studies=studies))
+
+
+class StudyChecklist(QDialog):
+    """Run selected…: every study with a tick box (the last choice ticked again), run one
+    after another in order (ADR 0073)."""
+
+    def __init__(self, window, studies: list, ticked: set[str]) -> None:
+        super().__init__(window)
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QDialogButtonBox, QListWidget, QListWidgetItem, QVBoxLayout
+
+        self.setWindowTitle("Run selected studies")
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("They run one at a time; one that fails doesn't stop the rest."))
+        self.list = QListWidget()
+        for s in studies:
+            item = QListWidgetItem(s.name)
+            item.setData(Qt.ItemDataRole.UserRole, str(s.id))
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            on = str(s.id) in ticked
+            item.setCheckState(Qt.CheckState.Checked if on else Qt.CheckState.Unchecked)
+            self.list.addItem(item)
+        layout.addWidget(self.list)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
+                                   | QDialogButtonBox.StandardButton.Cancel)  # fmt: skip
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Run")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def chosen(self) -> list[str]:
+        from PySide6.QtCore import Qt
+
+        items = [self.list.item(i) for i in range(self.list.count())]
+        return [i.data(Qt.ItemDataRole.UserRole) for i in items
+                if i.checkState() == Qt.CheckState.Checked]  # fmt: skip
+
+
+def run_selected_studies(window):
+    """The studies to run, ticked in a list; then one after another."""
+    studies = window.session.project.of_type(Study)
+    if not studies:
+        window.statusBar().showMessage("No studies yet", 5000)
+        return None
+    dialog = StudyChecklist(window, studies, set(window.last_run_selection))
+    if not window.run_dialog(dialog) or not dialog.chosen():
+        return None
+    window.last_run_selection = dialog.chosen()
+    return window.run_studies(dialog.chosen())
+
+
+def copy_study(window, study: Study):
+    """Duplicate a study under a new name (its steps, settings, sweeps and solver)."""
+    from puzzle.commands.model import CopyStudy
+
+    name = window.ask_text(
+        f"Duplicate {study.name}", "Name of the copy:",
+        window.session.project.unique_name(f"{study.name} copy"),
+    )  # fmt: skip
     if name:
-        return window.submit(CopyComponent(component=str(comp.id), name=name))
+        return window.submit(CopyStudy(study=str(study.id), name=name))
     return None
 
 

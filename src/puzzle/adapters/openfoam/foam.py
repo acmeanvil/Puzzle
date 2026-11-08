@@ -46,7 +46,9 @@ def render(entries: dict, indent: int = 0) -> str:
 def write_dict(path: Path, entries: dict, cls: str = "dictionary") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        HEADER.format(cls=cls, name=path.name) + "\n" + render(entries), encoding="utf-8"
+        HEADER.format(cls=cls, name=path.name) + "\n" + render(entries),
+        encoding="utf-8",
+        newline="\n",  # read in a Linux container: no CRLF when written on Windows
     )
 
 

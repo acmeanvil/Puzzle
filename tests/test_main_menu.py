@@ -62,6 +62,51 @@ def texts(window) -> set[str]:
     return out
 
 
+def test_duplicate_a_component_with_its_studies_and_a_study(window):
+    """Duplicate in the tree and the menu bar (the maintainer, 2026-11-08)."""
+    from forms import fill
+
+    from puzzle.model.schema import Component, Study
+
+    project = window.session.project
+    comp = project.of_type(Component)[0]
+    before = len(project.of_type(Study))
+    fill(window, name="Heavy", studies="yes")
+    menus.copy_component(window, comp)
+    project = window.session.project
+    heavy = next(c for c in project.of_type(Component) if c.name == "Heavy")
+    assert [s for s in project.of_type(Study) if s.component == heavy.id]
+    study = project.of_type(Study)[0]
+    window.ask_text = lambda *a, **k: "Variant"
+    menus.copy_study(window, study)
+    names = {s.name for s in window.session.project.of_type(Study)}
+    assert "Variant" in names and len(names) == 2 * before + 1
+    assert "Duplicate study…" in texts(window) and "Duplicate component…" in texts(window)
+
+
+def _leaves(menu: QMenu) -> list[str]:
+    """A menu's entries at any depth (New operator > a group > its operators)."""
+    out = []
+    for a in menu.actions():
+        out += _leaves(a.menu()) if a.menu() else [a.text()]
+    return out
+
+
+def test_operator_menus_are_grouped_and_alphabetical(window):
+    """Every New operator menu (the tree's and the schematic's New, the Results menu)
+    has one flyout per group, each alphabetical (the maintainer, 2026-11-08)."""
+    from puzzle.operators import GROUPS
+
+    menu = QMenu()
+    menus._operator_menu(window, menu)
+    top = menu.actions()[0].menu()
+    titles = [a.text() for a in top.actions()]
+    assert titles == [g for g in GROUPS if g in titles]  # groups, in the order work flows
+    for a in top.actions():
+        labels = [b.text() for b in a.menu().actions()]
+        assert labels and labels == sorted(labels, key=str.casefold), a.text()
+
+
 def test_menu_titles(window):
     titles = [a.text().replace("&", "") for a in window.menuBar().actions()]
     assert titles == [
@@ -78,10 +123,7 @@ def test_every_ribbon_button_and_section_item_is_in_the_menus(window):
     assert not missing, missing
     for section in ("Geometry", "Parameters", "Materials", "Meshes", "Components",
                     "Studies", "Amplitudes", "Coordinate systems", "Results"):  # fmt: skip
-        menu = menus.build_menu(window, Node("section", label=section))
-        items = []
-        for a in menu.actions():
-            items += [s.text() for s in a.menu().actions()] if a.menu() else [a.text()]
+        items = _leaves(menus.build_menu(window, Node("section", label=section)))
         lost = {t for t in items if t and RENAMED.get(t, t) not in have}
         assert not lost, (section, lost)
     rows = main_menu.shortcut_rows(window)

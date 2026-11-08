@@ -468,10 +468,11 @@ def recent(window) -> list[str]:
 
 
 def ordered() -> list:
-    """Every type by group, in the order work flows (ADR 0064 item 6)."""
+    """Every type by group, groups in the order work flows (ADR 0064 item 6), each
+    group's types alphabetical by their label (the maintainer, 2026-11-08)."""
     from puzzle.operators import GROUPS
 
-    return sorted(TYPES.values(), key=lambda t: GROUPS.index(t.group))
+    return sorted(TYPES.values(), key=lambda t: (GROUPS.index(t.group), t.label.casefold()))
 
 
 class Palette(QDialog):

@@ -274,9 +274,10 @@ def test_agent_rejects_and_levels(app, tmp_path, monkeypatch):
 def test_agent_without_a_provider_says_how_to_set_one(app, window, monkeypatch):
     wait(app, lambda: not window.tasks, timeout=60)  # the preview shown on opening
     monkeypatch.setenv("PUZZLE_AGENT_PROVIDER", "nonsense")
-    window.agent.send("hello")
+    window.agent.send("hello")  # the agent is built off the GUI thread (ADR 0074)
+    wait(app, lambda: not window.tasks, timeout=60)
     assert "unknown agent provider" in window.agent.transcript.toPlainText()
-    assert not window.tasks
+    assert not window.agent.busy and not window.agent.stop_button.isVisibleTo(window)
 
 
 def test_picking_faces_makes_and_extends_selections(app, window):

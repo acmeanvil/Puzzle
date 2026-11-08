@@ -52,7 +52,7 @@ def solve_script(job: Job) -> str:
 def write_script(job: Job) -> Path:
     folder = Path(job.spec["dir"])
     path = folder / SCRIPT
-    path.write_text(solve_script(job), encoding="utf-8")
+    path.write_text(solve_script(job), encoding="utf-8", newline="\n")  # run by sh
     (folder / RC).unlink(missing_ok=True)
     return path
 

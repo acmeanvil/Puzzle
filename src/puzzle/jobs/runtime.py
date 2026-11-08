@@ -5,7 +5,8 @@ Selection (ADR 0013), per solver:
    "docker" or "podman".
 2. "auto" runs natively when the solver's executable is found, otherwise in its
    container image when an engine (podman, then docker) has that image locally,
-   otherwise natively (which reports the solver as missing).
+   otherwise natively (which reports the solver as missing). A solver listed in
+   `CONTAINER_FIRST` for this platform tries its image first (FEniCSx on Windows).
 3. For containers, `PUZZLE_<SOLVER>_IMAGE` overrides the default image.
 4. For native runs, `PUZZLE_SOLVER_PATH` (os.pathsep-separated) is searched before PATH,
    then the pixi solver environments beside the one Puzzle runs in (`pixi_solver_dirs`).
@@ -31,7 +32,23 @@ DEFAULT_IMAGES = {
     "code_aster": "ghcr.io/acmeanvil/puzzle-code-aster:18.1",
     "code_saturne": "ghcr.io/acmeanvil/puzzle-code-saturne:9.2",
     "openfoam": "ghcr.io/acmeanvil/puzzle-openfoam:2412",
+    "fenicsx": "ghcr.io/acmeanvil/puzzle-fenicsx:0.11",
 }
+
+# Named volumes mounted into a solver's container, kept between runs: FEniCSx's
+# compiled forms (the image sets XDG_CACHE_HOME=/cache), compiled once, not per solve.
+CONTAINER_CACHES = {"fenicsx": ("puzzle-fenicsx-cache", "/cache")}
+
+# Solvers whose container beats the native build on a platform, so "auto" tries the
+# container first there (and falls back to native without the image or an engine).
+# Measured on Windows 11 (2026-11-08, each solver's integration tests both ways):
+# - FEniCSx: conda-forge's win-64 dolfinx has no PETSc (single-threaded SuperLU
+#   instead): 3D eddy-current cases ran over 27 min natively, 34-49 s in the image.
+# - Elmer: the Windows build (26.2 installer) failed 19 of 31 (segfaults in 3D
+#   magnetics, transient dynamics, body loads); the image passed them all, MPI included.
+# - Code_Aster: both passed all 21; the image was 10-23 % faster on the larger runs.
+# CalculiX stays native: both passed, the image about 1.4x slower (start-up costs).
+CONTAINER_FIRST = {"win32": ("fenicsx", "elmer", "code_aster")}
 
 # The executable that proves a solver is installed natively.
 EXECUTABLES = {
@@ -97,6 +114,12 @@ THREAD_VARIABLES = (
     "CCX_NPROC_RESULTS",
 )
 
+# BLAS kept to one thread where the solver threads above it: conda-forge's Linux
+# FEniCSx environment links BLIS (pthreads), which also reads OMP_NUM_THREADS, so each
+# of MUMPS's OpenMP threads started its own BLIS threads. NAFEMS LE1 on 16 cores took
+# 8 s with this and never finished (> 5 min) without it.
+SERIAL_BLAS = {"BLIS_NUM_THREADS": "1"}
+
 
 def _setting(key: str, fallback: int) -> int:
     try:
@@ -108,11 +131,12 @@ def _setting(key: str, fallback: int) -> int:
 
 
 def thread_count() -> int:
-    """Settings > Solvers > Cores per run: 0 (the default) means the physical cores."""
-    from puzzle.machine import physical_cores
+    """Settings > Solvers > Cores per run: 0 (the default) means automatic,
+    `machine.default_cores` (4, or one fewer than the physical cores on smaller machines)."""
+    from puzzle.machine import default_cores
 
     wanted = _setting("solvers.threads", 0)
-    return wanted if wanted > 0 else physical_cores()
+    return wanted if wanted > 0 else default_cores()
 
 
 def process_count() -> int:
@@ -132,6 +156,8 @@ def thread_environment(base: dict[str, str] | None = None, processes: int = 1) -
     n = str(threads_per_process(processes))
     for name in THREAD_VARIABLES:
         env.setdefault(name, n)
+    for name, value in SERIAL_BLAS.items():
+        env.setdefault(name, value)
     return env
 
 
@@ -302,16 +328,19 @@ def find_engine(engine: str) -> str | None:
 class ContainerRuntime(Runtime):
     image: str
     engine: str = "docker"
+    caches: tuple[tuple[str, str], ...] = ()  # (named volume, mount point), kept between runs
 
     def wrap(self, command: list[str], workdir: Path) -> list[str]:
         exe = find_engine(self.engine) or self.engine
         argv = [exe, "run", "--rm", "-v", f"{workdir.resolve()}:{CONTAINER_WORKDIR}"]
+        for volume, mount in self.caches:
+            argv += ["-v", f"{volume}:{mount}"]
         argv += ["-w", CONTAINER_WORKDIR]
         if hasattr(os, "getuid"):  # keep output files owned by the user
             # That user has no home directory in the image; some solvers need one.
             argv += ["--user", f"{os.getuid()}:{os.getgid()}", "-e", "HOME=/tmp"]
         threads = thread_environment()
-        for name in THREAD_VARIABLES:  # the container sees none of Puzzle's environment
+        for name in (*THREAD_VARIABLES, *SERIAL_BLAS):  # it sees none of Puzzle's environment
             argv += ["-e", f"{name}={threads[name]}"]
         return [*argv, self.image, *command]
 
@@ -383,17 +412,22 @@ def runtime_for(solver: str) -> Runtime:
     if kind == "native":
         return native
     image = os.environ.get(f"PUZZLE_{key}_IMAGE") or DEFAULT_IMAGES.get(solver)
+    caches = (CONTAINER_CACHES[solver],) if solver in CONTAINER_CACHES else ()
     if kind in ENGINES:
         if image is None:
             raise SolverNotFound(f"no container image known for {solver}")
-        return ContainerRuntime(image=image, engine=kind)
+        return ContainerRuntime(image=image, engine=kind, caches=caches)
     if kind == "auto":
         executable = EXECUTABLES.get(solver)
+        containers = [ContainerRuntime(image=image, engine=e, caches=caches) for e in ENGINES]
+        if image and solver in CONTAINER_FIRST.get(sys.platform, ()):
+            for container in containers:
+                if container.available(executable or ""):
+                    return container
         if executable is None or native.available(executable):
             return native
-        for engine in ENGINES:
-            container = ContainerRuntime(image=image, engine=engine) if image else None
-            if container and container.available(executable):
+        for container in containers if image else []:
+            if container.available(executable):
                 return container
         return native
     raise ValueError(f"PUZZLE_RUNTIME must be auto, native, docker or podman, not '{kind}'")

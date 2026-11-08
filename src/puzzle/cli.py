@@ -161,7 +161,17 @@ def _parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("run", help="solve a study")
     p.add_argument("project", type=Path)
-    p.add_argument("--study", required=True, help="study name")
+    p.add_argument(
+        "--study",
+        action="append",
+        default=[],
+        help="study name; give it again for several, run one after another",
+    )
+    p.add_argument(
+        "--all",
+        action="store_true",
+        help="every study, one after another (sources of transfers first)",
+    )
     p.add_argument(
         "--no-reuse", action="store_true", help="solve even if an identical run is stored"
     )
@@ -603,10 +613,37 @@ def _studies(args) -> int:
 
 
 def _run(args) -> int:
+    """One study, or several one after another (ADR 0073): a failure goes on to the
+    next, and the exit status says whether any failed."""
+    from puzzle import run_queue
+
+    project = _load(args.project)
+    if not args.all and not args.study:
+        raise CliError("name a study with --study, or run them all with --all")
+    if args.all:
+        studies = run_queue.in_order(project)
+    else:
+        studies = run_queue.in_order(project, [_study(project, n).id for n in args.study])
+    if len(studies) == 1:
+        return _run_one(args, studies[0])
+
+    def one(study):
+        print()
+        print(f"== {study.name}")
+        return _run_one(args, study)
+
+    done = run_queue.run_all(None, studies, submit=one)
+    for o in done:
+        if not o.ok:
+            print(f"{o.study.name} failed: {o.error}")
+    print(run_queue.summary(done))
+    return 0 if all(o.ok for o in done) else 1
+
+
+def _run_one(args, study) -> int:
     from puzzle.commands import Session
     from puzzle.commands.model import RunStudy
 
-    study = _study(_load(args.project), args.study)
     print(f"Running '{study.name}' with {study.solver} ...")
     status = None if args.verbose else _LiveStatus()
     try:

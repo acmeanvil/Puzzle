@@ -145,7 +145,13 @@ class CodeAsterAdapter(SolverAdapter):
 
     def settings_schema(self) -> list:
         """Code_Aster's own settings (ADR 0023); the shared ones are on each step."""
-        from puzzle.adapters.code_aster.comm import ACCELERATIONS, MEMORY, METHODS, ORDERINGS
+        from puzzle.adapters.code_aster.comm import (
+            ACCELERATIONS,
+            MEMORY,
+            METHODS,
+            ORDERINGS,
+            REFINEMENTS,
+        )
         from puzzle.adapters.settings import SolverSetting
 
         return [
@@ -171,6 +177,13 @@ class CodeAsterAdapter(SolverAdapter):
                 power=True,
                 description="How the unknowns are numbered before factoring; it sets the "
                 "factors' size. METIS suits large 3D meshes.",
+            ),
+            SolverSetting(
+                "refinement", "MUMPS refinement", "SOLVEUR/POSTTRAITEMENTS", "choice",
+                "FORCE", REFINEMENTS, power=True,
+                description="Iterative refinement after the solve, so large models pass "
+                "Code_Aster's accuracy check (1e-6) instead of stopping with FACTOR_57; "
+                "it costs a few per cent of the solve.",
             ),
             SolverSetting(
                 "factor_memory", "MUMPS factors kept", "SOLVEUR/GESTION_MEMOIRE", "choice",

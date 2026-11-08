@@ -30,7 +30,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSpinBox,
-    QStackedWidget,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -41,6 +40,7 @@ from puzzle.commands.model import AddLibraryMaterial, Delete, Edit, EditOp, RunS
 from puzzle.errors import PuzzleError
 from puzzle.gui.agent_panel import AgentPanel
 from puzzle.gui.properties import PropertiesPanel
+from puzzle.gui.stack import ShownStack
 from puzzle.gui.tasks import Task, start
 from puzzle.gui.theme import role
 from puzzle.gui.tree import ROLE, ModelTree, Node
@@ -426,6 +426,13 @@ class MainWindow(QMainWindow):
         self.context = "model"
         self.states: dict = {}  # object id -> its state (ADR 0033)
         self.running: set[str] = set()  # study ids being run here
+        # Several studies one after another (ADR 0073): those still to start, the
+        # running one's cancel, and the outcomes so far for the summary.
+        self.run_queue: list[str] = []
+        self._queue_cancel = None
+        self._queue_study = None
+        self._queue_done: list = []
+        self.last_run_selection: list[str] = []  # Run selected…'s last ticks
         self.failed_studies: set[str] = set()  # study ids whose last run here failed
         self.pick_bar = PickBar(self)
         self.pick_bar.hide()
@@ -456,7 +463,7 @@ class MainWindow(QMainWindow):
         column.addWidget(self.probes_panel)
         self.viewport.probes_changed.connect(self.probes_panel.show_probes)
         # The centre is the 3D view, or the sketch canvas while sketching (ADR 0017).
-        self.centre = QStackedWidget()
+        self.centre = ShownStack()  # as large as the page shown (gui.stack)
         self.centre.addWidget(centre)
         from puzzle.gui.start_page import StartPage
 
@@ -496,7 +503,7 @@ class MainWindow(QMainWindow):
 
         self.docks = Docks(self)  # every panel, tab group and layout (ADR 0045)
         self.model_dock = self.docks.add("model", "Model", self.left_tabs, left)
-        self.side = QStackedWidget()  # the properties, or a tool's options
+        self.side = ShownStack()  # the properties, or a tool's options
         self.side.addWidget(self.properties)
         self.properties_dock = self.docks.add("properties", "Properties", self.side, left)
         self.docks.split("model", "properties")
@@ -1553,6 +1560,62 @@ class MainWindow(QMainWindow):
 
         return self.background(f"Meshing {comp.name}…", work, done, failed=failed)
 
+    def run_studies(self, ids: list[str] | None) -> None:
+        """Run studies one after another (ADR 0073): every study when `ids` is None,
+        sources of transfers first; one that fails goes on to the next."""
+        from puzzle import run_queue
+
+        if self.session is None:
+            return
+        busy = self.running | set(self.run_queue)
+        order = run_queue.in_order(self.session.project, ids)
+        self.run_queue += [str(s.id) for s in order if str(s.id) not in busy]
+        if self._queue_cancel is None:  # nothing of the queue running yet: start it
+            self._queue_done = []
+            self._run_next()
+
+    def queue_busy(self) -> bool:
+        return self._queue_cancel is not None or bool(self.run_queue)
+
+    def _run_next(self, ok: bool | None = None) -> None:
+        from uuid import UUID
+
+        from puzzle import run_queue
+
+        if ok is not None and self._queue_study is not None:
+            self._queue_done.append(run_queue.Outcome(
+                self._queue_study, error=None if ok else RuntimeError("failed")))  # fmt: skip
+        self._queue_cancel, self._queue_study = None, None
+        while self.run_queue:
+            study = self.session.project.objects.get(UUID(self.run_queue.pop(0)))
+            if not isinstance(study, Study):
+                continue  # deleted while it waited
+
+            def call(emit, event, cancel, s=self.session, sid=str(study.id)):
+                return s.submit(RunStudy(study=sid), on_output=emit, on_event=event,
+                                cancel=cancel)  # fmt: skip
+
+            # The queue holds the run's cancel from the start: Stop all before the solve's
+            # thread is up still stops it.
+            self._queue_study, self._queue_cancel = study, threading.Event()
+            self._start_run(study, call, then=self._run_next, cancel=self._queue_cancel)
+            return
+        if len(self._queue_done) > 1:
+            text = run_queue.summary(self._queue_done)
+            failed = any(not o.ok for o in self._queue_done)
+            self.toasts.show(text, state="error" if failed else "info")
+            self.statusBar().showMessage(text, 10000)
+        self._queue_done = []
+
+    def stop_all(self) -> None:
+        """Stop the running study of the queue and start no more (ADR 0073)."""
+        left = len(self.run_queue)
+        self.run_queue.clear()
+        if self._queue_cancel is not None:
+            self._queue_cancel.set()
+        if left:
+            self.statusBar().showMessage(f"Stopped; {left} studies not started", 8000)
+
     def run_selected(self) -> Task | None:
         node = self.tree.current()
         study = self._object(node)
@@ -1563,7 +1626,15 @@ class MainWindow(QMainWindow):
         return self._start_run(study, lambda emit, event, cancel: s.submit(
             RunStudy(study=sid), on_output=emit, on_event=event, cancel=cancel))  # fmt: skip
 
-    def _start_run(self, study: Study, call, *, verb: str = "Running", then=None) -> Task:
+    def _start_run(
+        self,
+        study: Study,
+        call,
+        *,
+        verb: str = "Running",
+        then=None,
+        cancel: threading.Event | None = None,
+    ) -> Task:
         """A run in the background, followed by the Solution panel and the Output log:
         `call(emit, emit_event, cancel)` runs it (a submit, or a resume, ADR 0067);
         `then(ok)` afterwards (the next job to pick up)."""
@@ -1573,7 +1644,7 @@ class MainWindow(QMainWindow):
         self.log.appendPlainText(f"--- {study.name}: {study.solver}")
         from puzzle.gui.choices import solver_label
 
-        cancel = threading.Event()
+        cancel = cancel if cancel is not None else threading.Event()
         self.solution.start(f"{study.name}: {solver_label(study.solver)}", cancel)
 
         sid = str(study.id)
@@ -1958,7 +2029,8 @@ class MainWindow(QMainWindow):
             self.side.setCurrentWidget(self.properties)
             self.properties_dock.setWindowTitle("Properties")
             return
-        self.side.addWidget(panel)
+        if self.side.indexOf(panel) < 0:
+            self.side.addWidget(panel)
         self.side.setCurrentWidget(panel)
         self.properties_dock.setWindowTitle("Tool")
         self.properties_dock.show()  # a tool's options live here: never open it unseen
@@ -3449,7 +3521,21 @@ class MainWindow(QMainWindow):
             node = node[int(part)] if isinstance(node, list) else getattr(node, part)
         return getattr(node, "selection", None)
 
+    def agent_turn(self, on: bool) -> None:
+        """The agent is working (ADR 0074): its changes reload the project once, when
+        its turn ends, not after each one (a reload redraws the view, seconds on a large
+        model, which kept the window busy for most of a turn)."""
+        self._agent_turn = on
+        if not on and getattr(self, "_reload_held", False):
+            self._reload_held = False
+            self.reload()
+
     def _reload_soon(self) -> None:
+        if getattr(self, "_agent_turn", False):
+            self._reload_held = True
+            if self.session is not None and not self.watcher.files():
+                self.watcher.addPath(str(self.session.root / HISTORY))
+            return
         self._reload_timer.start()
         # Some editors replace the file; keep watching the new one.
         if self.session is not None and not self.watcher.files():

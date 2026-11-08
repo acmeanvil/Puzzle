@@ -30,7 +30,7 @@ DATA = Path(__file__).parent / "data" / "progress"
 
 def _feed(parser, log: Path, ok: bool = True) -> list:
     events = []
-    with gzip.open(log, "rt", errors="replace") as f:
+    with gzip.open(log, "rt", encoding="utf-8", errors="replace") as f:
         for line in f:
             events += parser.safe_feed(line.rstrip("\n"))
     return events + parser.finish(ok)

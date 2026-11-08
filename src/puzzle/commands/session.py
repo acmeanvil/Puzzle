@@ -33,6 +33,7 @@ from uuid import UUID
 from puzzle.commands.model import (
     AddLibraryMaterial,
     CopyComponent,
+    CopyStudy,
     Create,
     Delete,
     Edit,
@@ -933,6 +934,16 @@ def _execute(project: Project, cmd: _Command) -> dict[str, Any]:
     if isinstance(cmd, CopyComponent):
         comp = resolve(project, cmd.component, Component)
         copy_ = project.copy_component(comp.id, cmd.name)
+        out = {"id": str(copy_.id), "name": copy_.name}
+        if cmd.studies:
+            studies = [s for s in project.of_type(Study) if s.component == comp.id]
+            made = [project.copy_study(s.id, project.unique_name(f"{s.name} ({copy_.name})"),
+                                       component=copy_.id) for s in studies]  # fmt: skip
+            out["studies"] = [{"id": str(s.id), "name": s.name} for s in made]
+        return out
+    if isinstance(cmd, CopyStudy):
+        study = resolve(project, cmd.study, Study)
+        copy_ = project.copy_study(study.id, cmd.name)
         return {"id": str(copy_.id), "name": copy_.name}
     raise PuzzleError(f"{cmd.command} is not applied here", code="unsupported")
 

@@ -139,7 +139,10 @@ def reaction(mesh: Mesh, step: StepResult, selection: str, about=None) -> dict:
     forces = np.asarray(f.values[keep], float)
     xyz = mesh.node_coords(f.ids[keep])
     centre = np.asarray(about, float) if about is not None else _centroid(mesh, group, xyz)
-    force = forces.sum(axis=0)
+    from puzzle.results.query import exact_total
+
+    exact = exact_total(step, selection)  # CalculiX's own total, where it printed one
+    force = exact if exact is not None else forces.sum(axis=0)
     moment = np.cross(xyz - centre, forces).sum(axis=0)
     return {
         "selection": selection,
