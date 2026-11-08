@@ -92,7 +92,8 @@ def test_wires_set_what_the_trees_properties_set():
 def test_a_wire_that_fits_nowhere_says_what_the_target_takes():
     p, o = _project()
     assert links.choices(p, o["mesh"], o["study"]) == []
-    assert links.why_not(p, o["mesh"], o["study"]) == "Static takes Component, not Mesh"
+    expected = "Static takes Component, Operator, Result tool, not Mesh recipe"
+    assert links.why_not(p, o["mesh"], o["study"]) == expected
 
 
 def test_removing_a_wire_clears_it_and_a_required_one_is_refused():

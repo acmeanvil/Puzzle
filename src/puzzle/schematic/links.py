@@ -40,6 +40,18 @@ LINKS: tuple[Link, ...] = (
     Link("component", "connectors[].material", ("material",), "Bolt material"),
     Link("component", "bolt_rules[].type", ("bolt_type",), "Bolt type of a rule"),
     Link("study", "component", ("component",), "Component", required=True),
+    Link(
+        "study",
+        "convergence.quantities[].source",
+        ("operator", "probe"),
+        "Quantity mesh convergence judges",
+    ),
+    Link(
+        "study",
+        "adapt.quantities[].source",
+        ("operator", "probe"),
+        "Quantity adaptive refinement follows",
+    ),
     Link("mesh", "controls[].axes", ("axes",), "Coordinate system of a control"),
     Link("mesh", "controls[].table", ("operator",), "Size table of a control"),
     Link("probe", "source", ("study", "result"), "Results it reads", required=True),
@@ -152,11 +164,16 @@ def _feature_choices(project, source, target, within: str) -> list[Choice]:
 
 def why_not(project, source, target) -> str:
     """Why a wire from `source` to `target` makes nothing: what the target takes."""
-    takes = sorted({k for link in LINKS if link.target == target.kind for k in link.sources})
+    from puzzle.schematic import KIND_WORDS  # the names the nodes show
+
+    def name(kind: str) -> str:
+        return KIND_WORDS.get(kind, _words(kind))
+
+    takes = sorted({name(k) for link in LINKS if link.target == target.kind
+                    for k in link.sources})  # fmt: skip
     if not takes:
         return f"Nothing can be wired into {target.name}"
-    words = ", ".join(_words(k) for k in takes)
-    return f"{target.name} takes {words}, not {_words(source.kind)}"
+    return f"{target.name} takes {', '.join(takes)}, not {name(source.kind)}"
 
 
 def commands(choice: Choice, source, target) -> list[dict]:
