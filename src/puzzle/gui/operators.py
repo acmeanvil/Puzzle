@@ -338,6 +338,8 @@ def choices(window, op, path: str):
     project = window.session.project
     if op.type == "measure":  # ADR 0064: what to measure, by name
         return _measure_choices(project, op, path)
+    if op.type == "model_value":  # ADR 0071: an object, then one of its values, by name
+        return model_value_choices(project, op, path)
     if path == "axes" and op.type == "points":  # ADR 0062 phase 3: by name, never an id
         from puzzle.model.schema import CoordinateSystem
 
@@ -707,3 +709,22 @@ def driven_components(project, op) -> list:
             if any(v in names for s in g.history for v in s.args.values()
                    if isinstance(v, str))}  # fmt: skip
     return [c for c in project.of_type(Component) if any(p.geometry in geos for p in c.parts)]
+
+
+def model_value_choices(project, op, path):
+    """Model value's object (anything holding a value: materials first) and the values it
+    holds, by their names (ADR 0071 step 3)."""
+    from puzzle.operators.model_values import readable
+
+    if path == "target":
+        order = {"material": 0, "parameters": 1, "component": 2, "mesh": 3, "study": 4}
+        found = [o for o in project.objects.values() if readable(project, o)]
+        found.sort(key=lambda o: (order.get(o.kind, 9), o.name))
+        from puzzle.schematic import KIND_WORDS
+
+        return [(f"{o.name} ({KIND_WORDS.get(o.kind, o.kind).lower()})", str(o.id))
+                for o in found]  # fmt: skip
+    if path == "property":
+        obj = project.objects.get(op.target) if op.target else None
+        return [(r.label, r.path) for r in readable(project, obj)] if obj is not None else []
+    return None

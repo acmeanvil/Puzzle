@@ -199,3 +199,23 @@ names, units and no raw data on view.
   its faces in the view); its wire's right-click removes the feature. `links.choices`
   and `existing` take `within` (the feature's path); MCP `link`/`unlink` take `feature`
   (its name as the schematic shows it, or its path).
+
+**Step 3 (2026-11-08): Model value.**
+
+- `operators/model_values.py`: `readable(project, obj)` walks any object for its
+  quantities and temperature tables, each with a dotted path and a label in the tree's
+  words (a material's "Yield strength", "Young's modulus against temperature"; a
+  component's "Pressure on Bracket/Inner: p"; a mesh's "Global size"; a parameter's
+  "t"), so a quantity added to the schema later is readable without a change;
+  `read` gives a Number (SI, its kind) or a two-column Table for a table.
+- The `model_value` operator (Inputs; `target` and the new `property`): before solving,
+  so a parameter by its name too; its output a number or, for a table, a table
+  (`first_type`); it follows the model (a material changed, every check moves).
+- Properties: the object (materials first, by name and kind) and its values by label
+  (`gui.operators.model_value_choices`); in the schematic, a wire from a material,
+  component, mesh recipe, parameter set, study and the like onto a Model value sets
+  what it reads (`Link.types` keeps Measure to geometry).
+- MCP: `model_values` (the objects holding values; one object's values with label, path,
+  kind and table); `operator_add` takes a target by name and a property by label.
+- `tests/test_model_value.py`, and the skill's Model value section (a utilisation check:
+  Result summary into Check's value, Model value's yield into its limit).

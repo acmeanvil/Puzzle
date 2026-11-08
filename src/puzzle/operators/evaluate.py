@@ -771,6 +771,7 @@ def _tables() -> dict:
             "new_column": frames.new_column, "convert_units": frames.convert_units,
             "round": frames.round_values, "group": frames.group,
             "to_number": frames.to_number, "lookup": _lookup, "measure": _measure,
+            "model_value": _model_value,
             "join": reshape.join, "stack": reshape.stack, "pivot": reshape.pivot,
             "unpivot": reshape.unpivot, "distinct": reshape.distinct,
             "fill_missing": reshape.fill_missing, "rolling": reshape.rolling,
@@ -973,6 +974,20 @@ def _lookup(ctx: Context, op) -> dict[str, Any]:
 
 MEASURED = {"length": ("length", "length"), "area": ("area", "area"),
             "volume": ("volume", "volume"), "radius": ("radius", "length")}  # fmt: skip
+
+
+def _model_value(ctx: Context, op) -> dict[str, Any]:
+    """A value the model holds (ADR 0071 step 3, `operators.model_values`)."""
+    from puzzle.operators.model_values import read
+
+    obj = ctx.project.objects.get(op.target) if op.target else None
+    if obj is None:
+        raise PuzzleError(f"'{op.name}': choose what to read (a material, a component, ...)",
+                          code="missing_input")  # fmt: skip
+    if not op.property:
+        raise PuzzleError(f"'{op.name}': choose which of {obj.name}'s values",
+                          code="missing_input")  # fmt: skip
+    return {"out": read(ctx.project, obj, op.property)}
 
 
 def _measure(ctx: Context, op) -> dict[str, Any]:

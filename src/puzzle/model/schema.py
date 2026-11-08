@@ -2250,8 +2250,12 @@ class Operator(ProjectObject):
                   "contact_table", "bolt_table", "nearest", "section", "divide",
                   "clearance", "text", "preview", "toggle", "choice", "slider2d",
                   "merge_points", "thin_points", "intersection", "points", "grid",
-                  "profile", "script"]  # fmt: skip
+                  "profile", "script", "model_value"]  # fmt: skip
     inputs: dict[str, OperatorInput] = Field(default_factory=dict)
+    # ADR 0071 step 3: Model value reads `property` (a dotted path, operators.model_values)
+    # from the object `target` names: a material's yield strength, a load's value ...
+    property: str = Field(default="", description="model_value: the value read from "
+                          "`target`, a dotted path such as properties.yield_strength")  # fmt: skip
     # ADR 0062 phase 4: a Python script, run apart in a trusted project
     code: str = Field(default="out = a", description="script: Python; inputs a, b, c, d "
                       "by name, it sets out")  # fmt: skip

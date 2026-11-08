@@ -44,6 +44,20 @@ type (the type never changes, so old projects keep working):
 | Model contents, Read file, Random samples | project_table, file, random |
 | On/off switch, Outline, Pair up lists, List item or statistic | toggle, profile, pairs, list |
 
+## Model value: the model's own values (ADR 0071)
+
+`model_value` reads a value the model holds, as it is now, with no solve: a material's
+yield or ultimate strength, Young's modulus, density (or the property against
+temperature, as a table), a load's or support's value, a section's thickness, a mesh
+size, a step's setting, a parameter. Call `model_values` to list the objects that hold
+values, and `model_values(object="Steel")` for what one holds (label, path, kind). Add
+one with `operator_add(type="model_value", settings={"target": "Steel", "property":
+"Yield strength"})` (a label or a path). Wire its `out` into `check`'s limit, a
+`expression`, or a plot. It is a before-solving operator: it can also drive the model
+as a parameter by its name, and it follows the model when the material or load changes.
+For a utilisation check against yield: reduce (max von Mises) → check's value, and
+model_value (Yield strength) → check's limit.
+
 ## Types and their ports
 
 | Type | Inputs | Outputs | Its own settings |

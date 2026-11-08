@@ -382,6 +382,16 @@ TYPES: dict[str, OperatorType] = {
             ("by", "column", "interpolation"),
         ),
         OperatorType(
+            "model_value", "Model value", "Inputs",
+            "A value the model holds, read as it is now: a material's yield or ultimate "
+            "strength, Young's modulus or density (or its table against temperature), a "
+            "load's or support's value, a section's thickness, a mesh size, a parameter. "
+            "Change the model and it follows.",
+            (),
+            (PortSpec("out", "Value", ("number", "table")),),
+            ("target", "property"),
+        ),
+        OperatorType(
             "measure", "Measure", "Geometry",
             "A part's or selection's length, area, volume, mass (with its material), "
             "centroid, size or radius, from the exact geometry: no solve needed.",
@@ -621,6 +631,7 @@ GROUP_OF = {
     "table": "Inputs",
     "file": "Inputs",
     "measure": "Geometry",
+    "model_value": "Inputs",
     "expression": "Logic",
     "list": "Logic",
     "pairs": "Logic",
@@ -683,6 +694,9 @@ ALIASES = {
     "table": ("csv", "typed table", "data"),
     "file": ("read file", "import coordinates", "data input", "query directory", "excel",
              "parquet", "csv file"),
+    "model_value": ("material property", "yield strength", "ultimate strength",
+                    "young's modulus", "density", "load value", "setup value", "read model",
+                    "property"),
     "measure": ("area", "volume", "length", "mass", "centroid", "bounding box",
                 "area moments", "volume moments", "dimensions"),
     "expression": ("evaluate", "formula", "smaller than", "larger than", "equality",
@@ -794,6 +808,8 @@ EXAMPLES = {
     "expression": "2 * x + 5 mm with x = 10 mm → 25 mm; a list in gives a list out.",
     "lookup": "Yield against temperature, read at 150 °C → its value there.",
     "measure": "The Bracket's volume and mass, from its geometry and material.",
+    "model_value": "Steel's yield strength → 250 MPa; wire it into Check against limit or "
+    "Divide, and change the material to see every check follow.",
     "plot": "A probe's displacement against the steps, or a table's column against another.",
     "number": "250 MPa, named Allowable: wire it into Check, or use it as a parameter.",
     "slider": "Thickness from 2 to 10 mm in 0.5 mm steps, driving a geometry.",
@@ -858,7 +874,8 @@ def doc_text(key: str) -> str:
 DATA = frozenset({"number", "slider", "series", "range", "expression", "table", "list",
                   "pairs", "random", "file", "columns", "filter_rows", "sort", "top_n",
                   "new_column", "convert_units", "round", "group", "to_number", "lookup",
-                  "measure", "join", "stack", "pivot", "unpivot", "distinct", "fill_missing",
+                  "measure", "model_value", "join", "stack", "pivot", "unpivot", "distinct",
+                  "fill_missing",
                   "rolling", "project_table", "divide", "clearance", "text", "toggle",
                   "choice", "slider2d", "merge_points", "thin_points",
                   "intersection", "points", "grid", "profile", "script"})  # fmt: skip
@@ -870,6 +887,8 @@ def first_type(op) -> str:
     """An operator's first output's type: a script's from its `returns`."""
     if op.type == "script":
         return op.returns
+    if op.type == "model_value" and op.property.startswith("tables."):
+        return "table"  # a property against temperature
     outputs = TYPES[op.type].outputs
     return outputs[0].type if outputs else ""
 

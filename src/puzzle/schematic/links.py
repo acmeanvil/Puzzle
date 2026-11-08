@@ -26,6 +26,7 @@ class Link:
     sources: tuple[str, ...]  # the kinds that can be wired in
     name: str  # what it is, read by the user: "Mesh recipe"
     required: bool = False  # a reference the object can't be without: replaced, not cleared
+    types: tuple[str, ...] = ()  # an operator's: only these types of it
 
 
 LINKS: tuple[Link, ...] = (
@@ -64,7 +65,25 @@ LINKS: tuple[Link, ...] = (
     Link("axes", "relative_to", ("axes",), "Relative to"),
     Link("bolt_type", "material", ("material",), "Grade material"),
     Link("field", "source", ("operator",), "Table it reads"),
-    Link("operator", "target", ("component", "geometry"), "What it measures"),
+    Link("operator", "target", ("component", "geometry"), "What it measures", types=("measure",)),
+    Link(
+        "operator",
+        "target",
+        (
+            "material",
+            "component",
+            "mesh",
+            "parameters",
+            "study",
+            "geometry",
+            "axes",
+            "amplitude",
+            "bolt_type",
+            "construction",
+        ),
+        "What it reads",
+        types=("model_value",),
+    ),
     Link("operator", "axes", ("axes",), "Coordinate system"),
 )
 
@@ -130,6 +149,8 @@ def choices(project, source, target, within: str = "") -> list[Choice]:
         found.append(Choice(link, "parts", f"New part from {source.name}", "add_part"))
     for link in LINKS:
         if link.target != target.kind or source.kind not in link.sources:
+            continue
+        if link.types and getattr(target, "type", None) not in link.types:
             continue
         for path, where in _items(data, link.path.split(".")):
             label = f"{link.name} of {where}" if where else link.name

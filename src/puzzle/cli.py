@@ -671,10 +671,11 @@ class _LiveStatus:
             if line != self.last and (now - self.shown > 0.2 or not isinstance(event, Message)):
                 print("\r" + line[:120].ljust(len(self.last[:120])), end="", flush=True)
                 self.last, self.shown = line, now
-        elif isinstance(event, (Step, Increment, Converged, Diverged, Stage)) and line != self.last:
-            if not isinstance(event, Stage) or event.state == "start":
-                print(f"  {line}")
-                self.last = line
+        elif (isinstance(event, (Step, Increment, Converged, Diverged, Stage))
+              and line != self.last
+              and (not isinstance(event, Stage) or event.state == "start")):  # fmt: skip
+            print(f"  {line}")
+            self.last = line
 
     def _end_line(self) -> None:
         if self.tty and self.last:

@@ -18,6 +18,7 @@ import json
 import tempfile
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 from mcp.server.mcpserver import Image, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
@@ -1354,8 +1355,9 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         if type not in TYPES:
             raise PuzzleError(f"no operator type '{type}'", code="invalid",
                               details={"types": sorted(TYPES)})  # fmt: skip
+        settings = _named_settings(s.project, type, dict(settings or {}))
         data = {"name": name or default_name(s.project, type), "type": type,
-                "inputs": inputs_from(s.project, inputs or {}), **(settings or {})}  # fmt: skip
+                "inputs": inputs_from(s.project, inputs or {}), **settings}  # fmt: skip
         out = s.submit({"command": "create", "kind": "operator", "data": data}, actor,
                        rationale=rationale).to_dict()  # fmt: skip
         if out.get("status") == "applied":
@@ -1486,6 +1488,51 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
                 found.append({"type": key, "name": t.label, "group": t.group,
                               "purpose": t.help})  # fmt: skip
         return {"operators": found}
+
+    def _named_settings(project, type_: str, settings: dict) -> dict:
+        """Names where the schema keeps ids: a Model value's or Measure's `target` by
+        name, a Model value's `property` by its label ("Yield strength") or path."""
+        from puzzle.commands import resolve
+        from puzzle.operators.model_values import readable
+
+        target = settings.get("target")
+        if isinstance(target, str) and target:
+            try:
+                UUID(target)
+            except ValueError:
+                settings["target"] = str(resolve(project, target).id)
+        if type_ == "model_value" and settings.get("property") and settings.get("target"):
+            obj = project.objects.get(UUID(settings["target"]))
+            wanted = settings["property"]
+            found = readable(project, obj)
+            match = next((r.path for r in found if wanted in (r.path, r.label)), None)
+            match = match or next((r.path for r in found if r.label.lower() == wanted.lower()),
+                                  None)  # fmt: skip
+            if match is None:
+                raise PuzzleError(f"{obj.name} holds no value '{wanted}'", code="not_found",
+                                  details={"readable": [r.label for r in found]})  # fmt: skip
+            settings["property"] = match
+        return settings
+
+    @tool(
+        description="What a Model value can read from an object (ADR 0071 step 3): every "
+        "value it holds, each with its label (pass it as the operator's `property`), path, "
+        "quantity kind and whether it's a table against temperature. Without `object`, "
+        "the objects that hold readable values."
+    )
+    @guarded
+    def model_values(object: str | None = None) -> dict[str, Any]:  # noqa: A002
+        from puzzle.commands import resolve
+        from puzzle.operators.model_values import readable
+
+        s = session()
+        if object is None:
+            found = [o for o in s.project.objects.values() if readable(s.project, o)]
+            return {"objects": [{"name": o.name, "kind": o.kind} for o in found]}
+        obj = resolve(s.project, object)
+        return {"object": obj.name, "values": [
+            {"label": r.label, "path": r.path, "kind": r.kind, "table": r.table}
+            for r in readable(s.project, obj)]}  # fmt: skip
 
     @tool(
         description="The project schematic (ADR 0058): every file, resource, component, "
