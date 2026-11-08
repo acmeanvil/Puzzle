@@ -94,7 +94,8 @@ def test_paraview_rebuilds_the_view(tmp_path):
     check = tmp_path / "check.py"
     check.write_text(CHECK, encoding="utf-8")
     done = subprocess.run([_pvbatch(), str(check), str(script)], capture_output=True,
-                          text=True, encoding="utf-8", errors="replace", timeout=300)  # fmt: skip
+                          text=True, encoding="utf-8", errors="replace", timeout=300,
+                          env=paraview_link.environment(Path(_pvbatch())))  # fmt: skip
     line = next((ln for ln in done.stdout.splitlines() if ln.startswith("CHECK ")), None)
     assert line, done.stdout[-2000:] + done.stderr[-2000:]
     got = json.loads(line[6:])

@@ -69,6 +69,14 @@ def find() -> Path | None:
     return Path(found) if found else None
 
 
+def environment(exe: Path) -> dict[str, str] | None:
+    """ParaView's environment activated, as solvers' are: on Windows its DLLs are found
+    only with the environment's folders on PATH (exit 0xC0000135 otherwise)."""
+    from puzzle.jobs.runtime import NativeRuntime
+
+    return NativeRuntime().environment([str(exe)])
+
+
 def why_not() -> str | None:
     return None if find() is not None else "ParaView isn't installed (the paraview package)"
 
@@ -108,7 +116,8 @@ def launch(script: Path) -> subprocess.Popen:
         raise FileNotFoundError(why_not())
     argv = [str(exe), f"--script={script}"]
     kwargs: dict = {"cwd": str(script.parent), "stdin": subprocess.DEVNULL,
-                    "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}  # fmt: skip
+                    "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL,
+                    "env": environment(exe)}  # fmt: skip
     if os.name == "nt":
         kwargs["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
     else:

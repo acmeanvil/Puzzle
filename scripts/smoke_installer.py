@@ -142,7 +142,8 @@ assert exe is not None, "no ParaView in the installation"
 batch = [p for p in exe.parent.glob("pvbatch*")]
 assert batch, f"no pvbatch beside {exe}"
 done = subprocess.run([str(batch[0]), str(script)], capture_output=True, text=True,
-                      encoding="utf-8", errors="replace", timeout=600)
+                      encoding="utf-8", errors="replace", timeout=600,
+                      env=paraview_link.environment(batch[0]))  # as Puzzle starts it
 print(done.stdout[-1500:], done.stderr[-1500:])
 assert done.returncode == 0, done.returncode
 print("ParaView ran Puzzle's view:", exe)
