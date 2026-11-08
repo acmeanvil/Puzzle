@@ -315,6 +315,12 @@ class NodeItem(QGraphicsObject):
         self.panel.menu_for(self.node, event.screenPos())
 
 
+def _uuid_of(text: str):
+    from uuid import UUID
+
+    return UUID(text)
+
+
 class WireItem(QGraphicsPathItem):
     def __init__(self, wire: sch.Wire, a: NodeItem, b: NodeItem) -> None:
         super().__init__()
@@ -1085,9 +1091,12 @@ class SchematicPanel(QWidget):
     def _linkable(self, a: sch.Node, b: sch.Node) -> bool:
         from puzzle.schematic import links
 
+        if a.kind == "feature":
+            return False
         source, target = self._objects(a, b)
+        within = b.path if b.kind == "feature" else ""
         return bool(source and target and links.choices(self.window.session.project,
-                                                        source, target))  # fmt: skip
+                                                        source, target, within))  # fmt: skip
 
     def link(self, a: sch.Node, b: sch.Node, pick: int | None = None):
         """A wire (or a node dropped) from `a` onto `b`: the reference it means set, as
@@ -1100,7 +1109,8 @@ class SchematicPanel(QWidget):
         if source is None or target is None:
             return None
         project = self.window.session.project
-        found = links.choices(project, source, target)
+        within = b.path if b.kind == "feature" else ""  # onto one load's own node
+        found = links.choices(project, source, target, within)
         if not found:
             self.window.statusBar().showMessage(links.why_not(project, source, target), 8000)
             return None
@@ -1124,11 +1134,21 @@ class SchematicPanel(QWidget):
         """A use wire's right-click: remove the reference it stands for."""
         from puzzle.schematic import links
 
+        menu = QMenu(self.canvas)
+        if a.kind == "feature":  # a load's wire into its component: the load itself
+            from puzzle.gui.menus import remove
+
+            comp = self.window.session.project.objects.get(_uuid_of(a.object))
+            action = menu.addAction(f"Remove {a.label}")
+            action.triggered.connect(lambda: remove(self.window, comp, a.path))
+            if at is not None:
+                menu.exec(at)
+            return menu
         source, target = self._objects(a, b)
         if source is None or target is None:
             return None
-        made = links.existing(self.window.session.project, source.id, target)
-        menu = QMenu(self.canvas)
+        within = b.path if b.kind == "feature" else ""
+        made = links.existing(self.window.session.project, source.id, target, within)
         for c in made:
             cmds = links.clear_commands(c, target)
             what = "Remove the part" if c.link.path.startswith("parts") else "Remove"
@@ -1196,6 +1216,8 @@ class SchematicPanel(QWidget):
             return ("run", node.object)
         if node.kind == "group":
             return ("group", node.object)
+        if node.kind == "feature":  # a load or support: its own item in the tree
+            return ("feature", node.object, node.path)
         return ("derived" if node.kind == "result" else "object", node.object)
 
     def open_node(self, node: sch.Node) -> None:

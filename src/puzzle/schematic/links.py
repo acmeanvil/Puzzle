@@ -105,9 +105,12 @@ def _items(data, parts: list[str], prefix: str = "", label: str = ""):
     yield f"{prefix}{head}", label
 
 
-def choices(project, source, target) -> list[Choice]:
+def choices(project, source, target, within: str = "") -> list[Choice]:
     """What a wire from `source` to `target` (project objects) can set, in the tree's
-    words; empty when it fits nowhere."""
+    words; empty when it fits nowhere. `within` (a feature's path in its component, as
+    "physics.0.features.1") keeps to that feature: a wire onto a load's own node."""
+    if within:
+        return _feature_choices(project, source, target, within)
     found: list[Choice] = []
     data = target.model_dump(mode="json")
     if source.kind == "geometry" and target.kind == "component":  # mostly: a new part
@@ -129,6 +132,24 @@ def choices(project, source, target) -> list[Choice]:
     return found
 
 
+def _feature(target, within: str):
+    i, j = int(within.split(".")[1]), int(within.split(".")[3])
+    return target.physics[i].features[j]
+
+
+def _feature_choices(project, source, target, within: str) -> list[Choice]:
+    """A wire onto one load or support: its coordinate system, amplitude, or (a
+    geometry) the selection it acts on."""
+    found = [c for c in choices(project, source, target) if c.path.startswith(within + ".")]
+    if source.kind == "geometry":  # where it acts: one of the geometry's selections
+        link = Link("component", "physics[].features[].selection", ("geometry",), "Where")
+        for part in (p for p in target.parts if p.geometry == source.id):
+            for sel in source.selections:
+                name = f"{part.name}/{sel.name}"
+                found.append(Choice(link, f"{within}.selection", f"Acts on {name}", "set", name))
+    return found
+
+
 def why_not(project, source, target) -> str:
     """Why a wire from `source` to `target` makes nothing: what the target takes."""
     takes = sorted({k for link in LINKS if link.target == target.kind for k in link.sources})
@@ -143,13 +164,18 @@ def commands(choice: Choice, source, target) -> list[dict]:
     if choice.op == "append":
         op = {"op": "append", "path": choice.path, "value": choice.value}
         return [{"command": "edit", "object": str(target.id), "ops": [op]}]
+    value = choice.value if choice.value is not None else str(source.id)  # a name, or the id
     return [{"command": "edit", "object": str(target.id),
-             "ops": [{"op": "set", "path": choice.path, "value": str(source.id)}]}]  # fmt: skip
+             "ops": [{"op": "set", "path": choice.path, "value": value}]}]  # fmt: skip
 
 
-def existing(project, source_id, target) -> list[Choice]:
+def existing(project, source_id, target, within: str = "") -> list[Choice]:
     """The references in `target` to `source_id`: what a drawn wire between them stands
-    for, to remove (a required one can only be replaced, never cleared)."""
+    for, to remove (a required one can only be replaced, never cleared); `within` keeps
+    to one feature's."""
+    if within:
+        return [c for c in existing(project, source_id, target)
+                if c.path.startswith(within + ".")]  # fmt: skip
     found: list[Choice] = []
     data = target.model_dump(mode="json")
     for link in LINKS:

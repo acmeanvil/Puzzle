@@ -191,3 +191,11 @@ names, units and no raw data on view.
   reference field in the schema is wireable or listed with how it is wired instead
   (`WIRED_ELSEWHERE`: an operator's sockets, a study-to-study transfer, a field's
   sockets ...); the New menu holds every section's tree menu; the agent's link/unlink.
+- **Loads, supports and every other feature are nodes** (`feature:<component>:<path>`,
+  kind `feature`, beside their component and wired into it): a feature's coordinate
+  system, amplitude and imported fields wire into its node, not the component's; a
+  geometry wired onto a feature offers that geometry's selections ("Acts on
+  Bracket/Outer") to set where it acts; a click selects the feature in the tree (and
+  its faces in the view); its wire's right-click removes the feature. `links.choices`
+  and `existing` take `within` (the feature's path); MCP `link`/`unlink` take `feature`
+  (its name as the schematic shows it, or its path).

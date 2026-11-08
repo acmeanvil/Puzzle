@@ -73,4 +73,8 @@ Bracket/Inner") to pass back as `which`. A wire that fits nowhere says what the 
 takes. `unlink` removes a reference; one an object can't be without (a study's
 component, a component's mesh recipe) is refused, so link another in to replace it.
 Coordinate systems, amplitudes, bolt types, construction geometry and result tools are
-nodes of their own now, wired to what uses them. Create objects with `submit` as usual.
+nodes of their own now, wired to what uses them, and so is every load and support
+("Pressure on Bracket/Inner", wired into its component). To wire onto one load, pass
+`feature` with its name as shown (or its path, physics.0.features.1): a coordinate
+system or amplitude goes onto that load, and a geometry sets where it acts ("Acts on
+Bracket/Outer"). Create objects with `submit` as usual.

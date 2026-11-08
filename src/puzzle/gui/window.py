@@ -900,13 +900,14 @@ class MainWindow(QMainWindow):
         source, port = self.schematic.palette_source()
         return operators.open_palette(self, at, source, port)
 
-    def select_in_tree(self, key: tuple[str, str]) -> bool:
+    def select_in_tree(self, key: tuple) -> bool:
         """Select the tree item of (kind, object), so Properties shows it (the schematic's
         click, ADR 0058). The tab stays as it is."""
-        kind, obj = key
+        kind, obj, path = (*key, "")[:3]  # a feature names its path in the component too
         for tree_item in self.tree._items():
             node = tree_item.data(0, ROLE)
-            if node is not None and node.kind == kind and node.object == obj:
+            if (node is not None and node.kind == kind and node.object == obj
+                    and (not path or node.path == path)):  # fmt: skip
                 self.tree.setCurrentItem(tree_item)
                 return True
         return False

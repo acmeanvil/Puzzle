@@ -35,7 +35,11 @@ def _project():
     )
 
     p = Project(name="p")
-    geo = p.add(Geometry(name="Bracket", source="bracket.step"))
+    from puzzle.model.schema import NamedSelection
+
+    geo = p.add(Geometry(name="Bracket", source="bracket.step", selections=[
+        NamedSelection(name="Inner", entity="face", members=["face-1"]),
+        NamedSelection(name="Outer", entity="face", members=["face-2"])]))  # fmt: skip
     steel = p.add(Material(name="Steel"))
     mesh = p.add(MeshRecipe(name="Fine", global_size=Quantity(value=2, unit="mm")))
     axes = p.add(CoordinateSystem(name="Pipe axis", type="cylindrical"))
@@ -229,3 +233,76 @@ def test_agents_wire_and_unwire_over_mcp(tmp_path):
     assert call("unlink", source="Pipe axis", target="Assembly")["status"] == "applied"
     with pytest.raises(Exception, match="Static needs its component"):  # replaced, not cleared
         asyncio.run(server.call_tool("unlink", {"source": "Assembly", "target": "Static"}))
+
+
+def test_loads_and_supports_are_nodes_wired_into_their_component():
+    from puzzle import schematic as sch
+
+    p, o = _project()
+    comp = p.objects[o["comp"].id]
+    comp.physics[0].features[0].axes = o["axes"].id
+    built = sch.build(p)
+    node = built.nodes[f"feature:{comp.id}:physics.0.features.0"]
+    assert node.kind == "feature" and node.label == "Pressure on Bracket/Inner"
+    assert node.path == "physics.0.features.0" and node.object == str(comp.id)
+    wires = {(w.source, w.target) for w in built.wires if w.kind == "use"}
+    assert (node.id, str(comp.id)) in wires  # into its component
+    assert (str(o["axes"].id), node.id) in wires  # its coordinate system into it ...
+    assert (str(o["axes"].id), str(comp.id)) not in wires  # ... not into the component
+
+
+def test_a_wire_onto_a_load_sets_that_load_and_a_geometry_where_it_acts():
+    p, o = _project()
+    comp, path = p.objects[o["comp"].id], "physics.0.features.0"
+    only = links.choices(p, o["axes"], comp, within=path)
+    assert [c.label for c in only] == ["Coordinate system of Pressure on Bracket/Inner"]
+    where = links.choices(p, o["geo"], comp, within=path)
+    assert [c.label for c in where] == ["Acts on Bracket/Inner", "Acts on Bracket/Outer"]
+    _apply(p, links.commands(where[1], o["geo"], comp))
+    assert p.objects[o["comp"].id].physics[0].features[0].selection == "Bracket/Outer"
+    _apply(p, links.commands(only[0], o["axes"], p.objects[o["comp"].id]))
+    made = links.existing(p, o["axes"].id, p.objects[o["comp"].id], within=path)
+    assert len(made) == 1 and made[0].path == f"{path}.axes"
+
+
+def test_clicking_a_load_selects_it_in_the_tree(tmp_path):
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    from puzzle.gui.window import MainWindow
+    from puzzle.project import save_project
+
+    QApplication.instance() or QApplication([])
+    p, o = _project()
+    save_project(p, tmp_path / "p")
+    w = MainWindow(tmp_path / "p")
+    w.schematic.refresh()
+    node = w.schematic.schematic.nodes[f"feature:{o['comp'].id}:physics.0.features.0"]
+    w.schematic.chosen(node)
+    current = w.tree.current()
+    assert current.kind == "feature" and current.path == "physics.0.features.0"
+    w.close()
+
+
+def test_agents_wire_onto_a_load(tmp_path):
+    pytest.importorskip("mcp")
+    from puzzle.agent.mcp import build_server
+    from puzzle.commands import Session
+    from puzzle.project import load_project, save_project
+
+    p, o = _project()
+    save_project(p, tmp_path / "p")
+    Session(tmp_path / "p").submit({"command": "set_autonomy", "level": "act_in_budget"})
+    server = build_server(tmp_path / "p", "test")
+
+    def call(tool, **arguments):
+        result = asyncio.run(server.call_tool(tool, arguments))
+        return result.structured_content.get("result", result.structured_content)
+
+    out = call("link", source="Pipe axis", target="Assembly", feature="Pressure on Bracket/Inner")
+    assert out["status"] == "applied"
+    out = call("link", source="Bracket", target="Assembly", feature="Bracket/Inner",
+               which="Acts on Bracket/Outer")  # fmt: skip
+    assert out["status"] == "applied"
+    load = load_project(tmp_path / "p").objects[o["comp"].id].physics[0].features[0]
+    assert load.axes == o["axes"].id and load.selection == "Bracket/Outer"

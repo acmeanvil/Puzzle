@@ -1367,7 +1367,10 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         "in the schematic does: a material onto a component (which part), a mesh recipe "
         "onto a component, a component into a study, a coordinate system or amplitude "
         "onto a component's load, a study onto a result tool or derived result, a "
-        "construction plane onto a result tool, a bolt type onto a bolt. Without `which`, "
+        "construction plane onto a result tool, a bolt type onto a bolt; with `feature` (a "
+        "component's load or support as the schematic names it, 'Pressure on Bracket/Inner'), "
+        "onto that load: its coordinate system, amplitude, or (a geometry) the selection it "
+        "acts on. Without `which`, "
         "lists what the wire could mean (`choices`, each with its index and label) and "
         "applies it when there is exactly one; with `which` (an index or a label), applies "
         "that one. A wire that fits nowhere says what the target takes. One undoable "
@@ -1375,13 +1378,14 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
     )
     @guarded
     def link(source: str, target: str, which: str | int | None = None,
-             rationale: str = "") -> dict[str, Any]:  # fmt: skip
+             feature: str | None = None, rationale: str = "") -> dict[str, Any]:  # fmt: skip
         from puzzle.commands import resolve
         from puzzle.schematic import links
 
         s = session()
         src, dst = resolve(s.project, source), resolve(s.project, target)
-        found = links.choices(s.project, src, dst)
+        within = _feature_path(dst, feature)
+        found = links.choices(s.project, src, dst, within)
         if not found:
             raise PuzzleError(links.why_not(s.project, src, dst), code="invalid")
         listed = [{"index": i, "label": c.label} for i, c in enumerate(found)]
@@ -1405,13 +1409,13 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
     )
     @guarded
     def unlink(source: str, target: str, which: str | int | None = None,
-               rationale: str = "") -> dict[str, Any]:  # fmt: skip
+               feature: str | None = None, rationale: str = "") -> dict[str, Any]:  # fmt: skip
         from puzzle.commands import resolve
         from puzzle.schematic import links
 
         s = session()
         src, dst = resolve(s.project, source), resolve(s.project, target)
-        made = links.existing(s.project, src.id, dst)
+        made = links.existing(s.project, src.id, dst, _feature_path(dst, feature))
         if not made:
             raise PuzzleError(f"{dst.name} doesn't use {src.name}", code="not_found")
         if which is None and len(made) > 1:
@@ -1425,6 +1429,21 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
             raise PuzzleError(f"{dst.name} needs its {pick.link.name.lower()}: link another "
                               "one in to replace it", code="invalid")  # fmt: skip
         return s.submit(cmds[0], actor, rationale=rationale or f"remove {pick.label}").to_dict()
+
+    def _feature_path(component, feature: str | None) -> str:
+        """A load or support of `component` by its name as the schematic shows it
+        ("Pressure on Bracket/Inner") or its path ("physics.0.features.1")."""
+        if not feature:
+            return ""
+        if feature.startswith("physics."):
+            return feature
+        for i, ph in enumerate(getattr(component, "physics", [])):
+            for j, f in enumerate(ph.features):
+                shown = f"{f.type.replace('_', ' ').capitalize()} on {f.selection}"
+                if feature.lower() in (shown.lower(), f.selection.lower()):
+                    return f"physics.{i}.features.{j}"
+        raise PuzzleError(f"{component.name} has no load or support '{feature}'",
+                          code="not_found")  # fmt: skip
 
     def _pick(found, which):
         if which is None:

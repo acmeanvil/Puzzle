@@ -95,7 +95,8 @@ def test_use_wires_show_sharing_with_a_count(bracket):
     assert users == {"Thermal", "Static", "Modal"}
     assert comp.used_by == 3
     into = [w for w in s.wires if w.kind == "use" and w.target == comp.id]
-    assert {s.nodes[w.source].kind for w in into} == {"geometry", "mesh", "material"}
+    # and its loads and supports, nodes of their own (ADR 0071 decision 8)
+    assert {s.nodes[w.source].kind for w in into} == {"geometry", "mesh", "material", "feature"}
     study_in = next(w for w in s.wires if w.kind == "use" and s.nodes[w.target].kind == "study")
     assert study_in.target_port == "component"
     assert any("used by Modal, Static, Thermal" in line for line in s.flow_lines())
@@ -121,11 +122,12 @@ def test_small_references_are_nodes_wired_to_their_users(bracket):
     comp.physics[0].features[0].amplitude = amp.id
     comp.physics[0].features[0].axes = cs.id
     s = schematic.build(bracket)
+    load = f"feature:{comp.id}:physics.0.features.0"
     for obj in (amp, cs):
         node = s.nodes[str(obj.id)]
         assert node.kind in ("amplitude", "axes") and node.port("use") is not None
-        assert any(w.kind == "use" and w.source == node.id and w.target == str(comp.id)
-                   for w in s.wires)  # fmt: skip
+        assert any(w.kind == "use" and w.source == node.id and w.target == load
+                   for w in s.wires)  # into the load that uses it  # fmt: skip
     assert not s.node_of(str(comp.id)).chips
 
 
@@ -188,7 +190,8 @@ def test_imported_fields_are_resources_wired_into_what_they_drive(bracket, tmp_p
     assert schematic.COLUMNS[node.column] == "Resources"
     assert any(w.source == "file:fields/p.csv" and w.target == node.id for w in s.wires)
     wire = next(w for w in s.wires if w.kind == "data" and w.source == node.id)
-    assert wire.target == str(comp.id) and wire.label == "p ×1.2"
+    # into the load it drives, a node of its own (ADR 0071 decision 8)
+    assert wire.target == f"feature:{comp.id}:physics.1.features.0" and wire.label == "p ×1.2"
     assert s.nodes[wire.target].port(wire.target_port).side == "in"
     hidden = schematic.build(bracket, fields=False)
     assert hidden.node_of(str(field.id)) is None and "file:fields/p.csv" not in hidden.nodes

@@ -78,6 +78,7 @@ CHIP_WORDS = {
     "bolt_type": "Bolt type",
     "construction": "Construction",
     "probe": "Result tool",
+    "feature": "Load or support",
 }
 KIND_WORDS = {
     "file": "File",
@@ -139,6 +140,7 @@ class Node:
     verdict: str = ""  # a check's "pass" or "fail"
     slider: tuple[float, float, float] | None = None  # a slider's (low, high, value), SI
     help: str = ""  # an operator's help card as text (ADR 0071): purpose, example, ports
+    path: str = ""  # a feature's place in its component ("physics.0.features.1")
 
     def port(self, key: str) -> Port | None:
         return next((p for p in self.ports if p.key == key), None)
@@ -440,8 +442,10 @@ def build(
             rows.append(f"{p.name}: {', '.join(dict.fromkeys(on)) or 'no material'}")
         node = add(Node(str(c.id), "component", MODELS, c.name, object=str(c.id),
                         subtitle=" · ".join(p.name for p in c.parts), rows=rows))  # fmt: skip
+        in_features = _feature_nodes(c, node, out, use)  # ADR 0071: loads and supports
         for ref in c.dependencies():
-            use(str(ref), str(c.id))
+            if ref not in in_features:  # a load's own references go to its node
+                use(str(ref), str(c.id))
         if fields:
             _field_ports(project, c, node, out)
 
@@ -510,7 +514,8 @@ def build(
     _mesh_studies(project, out, store)
     # Every reference between two nodes is a use wire (ADR 0071 decision 8: each can be
     # drawn and removed), whatever made it.
-    drawn = ("operator", "result", "optimisation", "mesh_study")  # their data wires are these
+    # their data wires are these; a component's are drawn with it (its loads' to theirs)
+    drawn = ("operator", "result", "optimisation", "mesh_study", "component")
     for obj in project.objects.values():
         if str(obj.id) in out.nodes and obj.kind not in drawn:
             for ref in obj.dependencies():
@@ -793,6 +798,52 @@ def _folder(path: str) -> str:
     return "" if parent == "." else parent
 
 
+def _feature_id(comp: Component, path: str) -> str:
+    return f"feature:{comp.id}:{path}"
+
+
+def _feature_nodes(comp: Component, node: Node, out: Schematic, use) -> set:
+    """Each load, support and other feature as a node of its own beside its component
+    (ADR 0071 decision 8), wired into it; its coordinate system and amplitude wire into
+    it rather than the component. Returns the references only features hold."""
+    from uuid import UUID
+
+    held: set = set()
+    elsewhere = comp.model_dump(mode="json", exclude={"physics"})
+    others = {v for v in _uuids(elsewhere)}
+    for i, ph in enumerate(comp.physics):
+        for j, f in enumerate(ph.features):
+            path = f"physics.{i}.features.{j}"
+            feat = Node(_feature_id(comp, path), "feature", MODELS,
+                        f"{words(f.type)} on {f.selection}", subtitle=words(ph.type),
+                        object=str(comp.id), path=path)  # fmt: skip
+            feat.state, feat.reason = node.state, ""
+            out.nodes[feat.id] = feat
+            out.wires.append(Wire(feat.id, node.id, "use"))
+            for ref in (f.axes, f.amplitude):
+                if ref is not None:
+                    use(str(ref), feat.id)
+                    held.add(ref)
+    return {UUID(r) if not isinstance(r, UUID) else r for r in held} - {UUID(o) for o in others}
+
+
+def _uuids(data) -> list[str]:
+    """Every id-looking string in an object's JSON form."""
+    import re
+
+    found = []
+    if isinstance(data, dict):
+        for v in data.values():
+            found += _uuids(v)
+    elif isinstance(data, list):
+        for v in data:
+            found += _uuids(v)
+    elif isinstance(data, str) and re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+                                                r"[0-9a-f]{4}-[0-9a-f]{12}", data):  # fmt: skip
+        found.append(data)
+    return found
+
+
 def _field_ports(project: Project, comp: Component, node: Node, out: Schematic) -> None:
     """Imported fields into the features, materials and sections they drive: an input
     port each, joined by a data wire from the field's column (ADR 0044, phase 3)."""
@@ -815,6 +866,16 @@ def _field_ports(project: Project, comp: Component, node: Node, out: Schematic) 
         if src is None:
             continue
         key = f"field:{path}"
+        if path.startswith("physics."):  # a load's field goes into the load's own node
+            feature = out.nodes.get(_feature_id(comp, path.rsplit(".fields.", 1)[0]))
+            if feature is not None:
+                feature.ports.append(Port(key, text.split(": ", 1)[-1], "in", u.column))
+                label = u.column + (f" ×{u.scale:g}" if u.scale != 1 else "")
+                if src.port(u.column) is None:
+                    src.ports.append(Port(u.column, words(u.column), "out", u.column))
+                out.wires.append(Wire(src.id, feature.id, "data", u.column, key, label,
+                                      u.column, str(u.field)))  # fmt: skip
+                continue
         node.ports.append(Port(key, text, "in", u.column))
         label = u.column + (f" ×{u.scale:g}" if u.scale != 1 else "")
         if src.port(u.column) is None:
