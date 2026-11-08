@@ -1,6 +1,6 @@
 # Puzzle
 
-Open-source (GPL-3.0-or-later) FEM/CFD pre- and post-processor: one solver-neutral model run on CalculiX, Elmer, Code_Aster, FEniCSx, Code_Saturne and OpenFOAM, aiming for Ansys/COMSOL usability. Decisions live in `docs/adr/` (read the index before changing architecture); the shareable design doc is a Claude Doc: https://claude.ai/code/artifact/7e7a31c7-a7a6-49b3-97ed-05307493943f. Keep both in sync when a decision changes.
+Open-source (GPL-3.0-or-later) FEM/CFD pre- and post-processor: one solver-neutral model run on CalculiX, Elmer, Code_Aster, FEniCSx, Code_Saturne and OpenFOAM, aiming for Ansys/COMSOL usability. An overarching principle: users can be abstracted from the mechanics if they want, so non-experts can rely on a built-in expert (the agent) to set up, check and explain, while experts keep every detail; so every feature has a plain, intent-level way in and is reachable and explainable by the agent (MCP, skills), never GUI-only. Decisions live in `docs/adr/` (read the index before changing architecture); the shareable design doc is a Claude Doc: https://claude.ai/code/artifact/7e7a31c7-a7a6-49b3-97ed-05307493943f. Keep both in sync when a decision changes.
 
 ## Workflow
 
