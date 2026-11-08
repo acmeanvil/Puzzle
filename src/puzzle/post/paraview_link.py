@@ -153,6 +153,11 @@ if VIEW["cut"]:
     if "Hide3DWidgets" in globals():  # the GUI's, not pvbatch's
         Hide3DWidgets(proxy=last.ClipType)
 
+if os.environ.get("PUZZLE_VIEW_NO_RENDER") == "1":  # checks without OpenGL (CI): data only
+    last.UpdatePipeline()
+    print("cells", last.GetDataInformation().GetNumberOfCells())
+    raise SystemExit(0)
+
 view = GetActiveViewOrCreate("RenderView")
 display = Show(last, view)
 where = "POINTS" if VIEW["points"] else "CELLS"

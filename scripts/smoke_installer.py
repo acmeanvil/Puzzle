@@ -96,6 +96,8 @@ def clean_env() -> dict[str, str]:
         ["C:\\Windows\\System32", "C:\\Windows"] if WINDOWS else ["/usr/bin", "/bin"]
     )
     env["PUZZLE_RUNNER"] = "off"  # one solve, here and now
+    if os.environ.get("PUZZLE_VIEW_NO_RENDER"):  # CI without OpenGL: ParaView's data only
+        env["PUZZLE_VIEW_NO_RENDER"] = os.environ["PUZZLE_VIEW_NO_RENDER"]
     return env
 
 
@@ -146,6 +148,7 @@ done = subprocess.run([str(batch[0]), str(script)], capture_output=True, text=Tr
                       env=paraview_link.environment(batch[0]))  # as Puzzle starts it
 print(done.stdout[-1500:], done.stderr[-1500:])
 assert done.returncode == 0, done.returncode
+assert "Traceback" not in done.stdout + done.stderr
 print("ParaView ran Puzzle's view:", exe)
 """
 

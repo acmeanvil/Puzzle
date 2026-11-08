@@ -186,6 +186,10 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update -q && sudo apt-get install -y -q xvfb libgl1 libegl1 libglu1-mesa
       - name: Smoke test (install, solve the cantilever, each solver environment)
+        env:
+          # Windows runners have no GPU and their display adapter no OpenGL for ParaView:
+          # its pipeline is built and run there, not drawn (desktops draw it).
+          PUZZLE_VIEW_NO_RENDER: ${{ runner.os == 'Windows' && '1' || '' }}
         run: >
           ${{ runner.os == 'Linux' && 'xvfb-run -a' || '' }}
           pixi run -e packaging python scripts/smoke_installer.py packaging/installer/Puzzle-*.${{ matrix.kind }}

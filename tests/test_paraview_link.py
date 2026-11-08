@@ -136,3 +136,19 @@ def test_the_results_view_is_read_for_paraview():
     assert view.bands == 6 and view.warp == "displacement" and view.scale == 40.0
     assert view.cut["normal"] == [1.0, 0.0, 0.0] and view.step == "step 1"
     assert view_of(SimpleNamespace(result_state=None)) is None
+
+
+@pytest.mark.skipif(_pvbatch() is None, reason="ParaView isn't installed here")
+def test_without_opengl_the_pipeline_still_runs(tmp_path, monkeypatch):
+    """CI's Windows runners have no OpenGL: the script then builds and runs the pipeline
+    (reader, warp, cut) without drawing, and says how many cells it made."""
+    import os
+
+    script = paraview_link.write(tmp_path, _beam(), VIEW)
+    env = dict(paraview_link.environment(Path(_pvbatch())) or os.environ)
+    env["PUZZLE_VIEW_NO_RENDER"] = "1"
+    done = subprocess.run([_pvbatch(), str(script)], capture_output=True, text=True,
+                          encoding="utf-8", errors="replace", timeout=300, env=env)  # fmt: skip
+    assert done.returncode == 0, done.stdout[-1500:] + done.stderr[-1500:]
+    cells = int(next(ln for ln in done.stdout.splitlines() if ln.startswith("cells")).split()[1])
+    assert 0 < cells < 20 * 3 * 3  # cut through the middle
