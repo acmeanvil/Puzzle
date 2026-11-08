@@ -78,7 +78,17 @@ print("CHECK " + json.dumps(out))
 """
 
 
+def _no_display() -> bool:
+    """Linux without a display can't render (no GPU, no OSMesa): pvbatch crashes."""
+    import os
+
+    return sys.platform.startswith("linux") and not (
+        os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
+    )
+
+
 @pytest.mark.skipif(_pvbatch() is None, reason="ParaView isn't installed here")
+@pytest.mark.skipif(_no_display(), reason="no display to render on")
 def test_paraview_rebuilds_the_view(tmp_path):
     script = paraview_link.write(tmp_path, _beam(), VIEW)
     check = tmp_path / "check.py"

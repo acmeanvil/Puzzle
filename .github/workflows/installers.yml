@@ -181,8 +181,14 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: Get-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem LongPathsEnabled
+      # ParaView renders: Linux runners have no display, GPU or OSMesa, so a virtual one.
+      - name: A virtual display (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -q && sudo apt-get install -y -q xvfb libgl1 libegl1 libglu1-mesa
       - name: Smoke test (install, solve the cantilever, each solver environment)
-        run: pixi run -e packaging python scripts/smoke_installer.py packaging/installer/Puzzle-*.${{ matrix.kind }}
+        run: >
+          ${{ runner.os == 'Linux' && 'xvfb-run -a' || '' }}
+          pixi run -e packaging python scripts/smoke_installer.py packaging/installer/Puzzle-*.${{ matrix.kind }}
       - name: Attach to the release
         if: github.event_name == 'release'
         env:
