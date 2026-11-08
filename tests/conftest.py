@@ -316,6 +316,11 @@ def pytest_runtest_makereport(item, call):
     import importlib.util
 
     name = (error.name or "").split(".")[0]
+    if not name:  # polars names it only in the message: "required package 'openpyxl' not found"
+        import re
+
+        found = re.search(r"package '([\w.]+)'", str(error))
+        name = found.group(1).split(".")[0] if found else ""
     if name in OPTIONAL and importlib.util.find_spec(name) is None:
         report.outcome = "skipped"
         report.longrepr = (str(item.path), item.location[1] or 0,

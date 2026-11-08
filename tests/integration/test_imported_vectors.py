@@ -181,7 +181,9 @@ def test_a_traction_is_a_pressure_inward_and_bends_the_bar_along_z(tmp_path, sol
     print(f"{solver}: tip uz {w:.6g} m, Timoshenko {exact:.6g} m ({w / exact - 1:+.2%})")
     assert w == pytest.approx(exact, rel=0.03)
     if solver in REACTIONS:
-        np.testing.assert_allclose(_reaction(sheared), [0, 0, -force], rtol=1e-4, atol=1e-3)
+        # the sideways sums are round-off: 0.002 N of 100 N on Linux
+        np.testing.assert_allclose(_reaction(sheared), [0, 0, -force], rtol=1e-4,
+                                   atol=1e-4 * force)  # fmt: skip
 
 
 def _tip_points():

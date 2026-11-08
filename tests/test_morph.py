@@ -76,3 +76,27 @@ def test_a_morph_too_far_is_refused(beam):
     with pytest.raises(PuzzleError, match="no parameter 'nope'"):
         morphed(p, study.model_copy(update={"morph": Morph(handles=[
             MorphHandle(selection="B/Top", distance="nope")])}), mesh)  # fmt: skip
+
+
+def test_an_element_the_mesher_left_poor_is_not_the_morphs(beam, monkeypatch):
+    """Below the floor already and kept about as it was: accepted; halved: refused."""
+    from puzzle.mesh import morph as morph_module
+
+    p, mesh = beam
+    shape = morph_module._shape
+
+    def with_a_sliver(m, coords, factor):
+        vols, quals = shape(m, coords)
+        quals = quals.copy()
+        moved = coords is not mesh.coords
+        quals[0] = 0.001 * (factor if moved else 1)  # the mesher's sliver, then the morph's
+        return vols, quals
+
+    study = next(iter(p.of_type(Study))).model_copy(update={"morph": Morph(
+        handles=[MorphHandle(selection="B/Top", distance=0.001, direction=(0, 0, 1))],
+        fixed=["B/Bottom"], quality_floor=LOW_FLOOR)})  # fmt: skip
+    monkeypatch.setattr(morph_module, "_shape", lambda m, c: with_a_sliver(m, c, 0.9))
+    morphed(p, study, mesh)  # 0.001 to 0.0009: the mesh's, not the morph's
+    monkeypatch.setattr(morph_module, "_shape", lambda m, c: with_a_sliver(m, c, 0.4))
+    with pytest.raises(PuzzleError, match=r"falls to 0\.000 \(it was 0\.001\)"):
+        morphed(p, study, mesh)
