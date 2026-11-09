@@ -215,6 +215,7 @@ def test_second_order_hexahedra_are_refused(tmp_path):
 
 def test_meshing_from_short_lived_threads(tmp_path):
     """Worker threads (MCP tools, GUI jobs) mesh, exit, and meshing still works."""
+    pytest.importorskip("OCP")  # the script below meshes a STEP file's bar
     import subprocess
     import sys
     import textwrap

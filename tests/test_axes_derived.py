@@ -130,4 +130,7 @@ def test_a_mesh_box_along_a_turned_system(tmp_path):
     local = (xyz - [0.05, 0.05, 0.0]) @ turned.orientation()  # in the turned axes
     inside = (np.abs(local[:, 0]) < 0.03) & (np.abs(local[:, 1]) < 0.004)
     beside = (np.abs(local[:, 0]) < 0.03) & (np.abs(local[:, 1] - 0.02) < 0.004)
+    top = inside & (np.abs(xyz[:, 2] - 0.005) < 1e-9)  # the face sees the box too
+    print("inside", inside.sum(), "beside", beside.sum(), "on the top face", top.sum())
     assert inside.sum() > 10 * max(beside.sum(), 1)
+    assert top.sum() > 0.5 * 0.06 * 0.008 / 0.0005**2  # about one node per 0.5 mm square

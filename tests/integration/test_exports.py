@@ -127,7 +127,6 @@ def test_cli_and_agents_export(solved, solver, capsys):
     asked = {"study": "Bend", "format": "deformed_stl", "path": "exports/shape"}
     result = asyncio.run(server.call_tool("export", asked))
     files = result.structured_content["files"]
-    # The path as the system writes it (backslashes on Windows).
     assert Path(files[0]).as_posix().endswith("exports/shape.stl")
     assert (root / "exports" / "shape.stl").exists()
     with pytest.raises(Exception, match="exports go inside the project folder"):

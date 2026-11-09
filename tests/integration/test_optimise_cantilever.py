@@ -114,8 +114,10 @@ def test_thickness_by_morphing_the_mesh(tmp_path):
         NamedSelection(name="Bottom", entity="face", rule={"plane": {"axis": "z", "at": 0.0}}),
     ]
     study = next(iter(p.of_type(Study)))
+    # a low quality floor: Apple Silicon's mesh starts flatter (see tests/test_morph.py)
     study.morph = Morph(handles=[MorphHandle(selection="B/Top", distance="dt",
-                                             direction=(0, 0, 1))], fixed=["B/Bottom"])  # fmt: skip
+                                             direction=(0, 0, 1))], fixed=["B/Bottom"],
+                        quality_floor=0.02)  # fmt: skip
     thick = next(o for o in p.of_type(Operator) if o.name == "Thickness")
     thick.expression = "t + dt"
     opt.variables[0] = opt.variables[0].model_copy(

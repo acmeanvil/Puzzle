@@ -375,6 +375,7 @@ def _remote_program(command: list[str]) -> tuple[str, str, str, list[str]]:
             env = parts[i + 1]
             return '"$ENVS"/' + shlex.quote(f"{env}/bin/{exe}"), exe, env, command[1:]
     name = exe if first.is_absolute() else raw
+
     return shlex.quote(name), name, "", command[1:]
 
 

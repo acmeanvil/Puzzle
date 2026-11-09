@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 
 import pytest
@@ -23,7 +24,8 @@ def test_a_slow_action_is_logged_with_its_parts(monkeypatch, caplog):
             pass
     lines = [r.getMessage() for r in caplog.records]
     assert len(lines) == 1 and lines[0].startswith("slow: showing Bracket took")
-    assert "Properties 3" in lines[0] and "view" not in lines[0]  # under 1 ms left out
+    # a sleep of 30 ms takes longer on a busy machine (51 and 190 ms on CI's Macs)
+    assert re.search(r"\(Properties \d+ ms\)", lines[0]) and "view" not in lines[0]
 
 
 def test_a_menu_item_waiting_in_its_dialog_is_not_slow(monkeypatch, caplog):

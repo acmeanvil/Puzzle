@@ -178,7 +178,8 @@ def test_pixi_solver_envs_are_found_without_activation(tmp_path, monkeypatch):
     calculix = envs / "calculix" / ("Library/bin" if os.name == "nt" else "bin")
     calculix.mkdir(parents=True)
     monkeypatch.setattr(runtime.sys, "prefix", str(envs / "dev"))
-    # On Windows an environment's own folder too: FEniCSx's python.exe sits there.
+    # Windows also gets the environment's root, where its python.exe is
+
     root = [envs / "calculix"] if os.name == "nt" else []
     assert runtime.pixi_solver_dirs() == [calculix, *root]
     monkeypatch.setattr(runtime.sys, "prefix", str(tmp_path / "venv"))
@@ -197,6 +198,7 @@ def test_installed_solver_envs_are_found_under_the_base(tmp_path, monkeypatch):
     monkeypatch.setattr(runtime.sys, "prefix", str(base))
     root = [base / "envs" / "calculix"] if os.name == "nt" else []  # python.exe sits there
     assert runtime.pixi_solver_dirs() == [base / "envs" / "calculix" / sub, *root]
+
     assert runtime.environment("mmg") == base / "envs" / "mmg"
     assert runtime.environment("netgen") is None
 

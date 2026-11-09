@@ -282,6 +282,22 @@ def generate_mesh(
         gmsh.model.mesh.setOrder(recipe.element_order)
         dim = 2 if planar else 3
         min_quality = _min_quality(dim)
+        if min_quality <= 0 and recipe.element_order > 1:
+            # A curved element the optimiser couldn't untangle (a hole's wall on Apple
+            # Silicon's Gmsh): straight-sided second order instead of no mesh at all.
+            where = _where(mesh_quality(dim)[0])
+            gmsh.model.mesh.setOrder(1)
+            gmsh.option.setNumber("Mesh.SecondOrderLinear", 1)
+            try:
+                gmsh.model.mesh.setOrder(recipe.element_order)
+            finally:
+                gmsh.option.setNumber("Mesh.SecondOrderLinear", 0)
+            min_quality = _min_quality(dim)
+            if min_quality > 0:
+                warnings.append(
+                    f"curved second-order elements folded near {where}, so the elements' "
+                    "sides are straight; refine near curved faces to keep them curved"
+                )
         quality, element_quality = mesh_quality(dim)
         if min_quality <= 0:
             raise MeshError(
@@ -526,6 +542,10 @@ def _physical_groups(comp, geometries, references, found, warnings) -> None:
 
 LISTS = {1: "CurvesList", 2: "SurfacesList", 3: "VolumesList"}  # Constant field lists
 DISTANCE_LISTS = {0: "PointsList", 1: "CurvesList", 2: "SurfacesList"}
+# How fast a box's or ball's size grows away from it (metres per metre). Gmsh reads a
+# size field only at the nodes it has: a size jumping at the box's side went unseen by
+# faces whose first nodes all lay outside, and by the volume too on Windows.
+GROWTH = 0.5
 ALGORITHM_2D = {
     "automatic": 2,
     "meshadapt": 1,
@@ -696,8 +716,10 @@ def _sizes(recipe: MeshRecipe, comp: Component, found, warnings, project=None, r
             fields.append(_turned_box(control, project, root))
         elif control.kind in ("box", "ball"):
             f = gmsh.model.mesh.field.add("Box" if control.kind == "box" else "Ball")
-            gmsh.model.mesh.field.setNumber(f, "VIn", control.size.to_si())
-            gmsh.model.mesh.field.setNumber(f, "VOut", 1e22)
+            inside = control.size.to_si()
+            gmsh.model.mesh.field.setNumber(f, "VIn", inside)
+            gmsh.model.mesh.field.setNumber(f, "VOut", max(coarse, inside))
+            gmsh.model.mesh.field.setNumber(f, "Thickness", max(coarse - inside, 0) / GROWTH)
             if control.kind == "box":
                 for axis, lo, hi in zip("XYZ", control.low, control.high, strict=True):
                     gmsh.model.mesh.field.setNumber(f, f"{axis}Min", lo)
@@ -728,10 +750,11 @@ def _sizes(recipe: MeshRecipe, comp: Component, found, warnings, project=None, r
 def _turned_box(control, project, root) -> int:
     """A box along a Cartesian system's axes, its corners in them: a MathEval field (Gmsh's
     Box follows the global axes), the size inside where every local coordinate is
-    within the box's half-widths, growing by the distance outside it. A jump straight to
-    coarse went unseen when the box lay inside a face: Frontal-Delaunay reads the size
-    only at the points it has, and on Windows none fell in the box (76 nodes in it, 42
-    beside); a size growing from the box is seen from any point near it."""
+    within the box's half-widths, growing by GROWTH with the distance outside it. A jump
+    straight to coarse went unseen when the box lay inside a face: Frontal-Delaunay reads
+    the size only at the points it has, and on Windows none fell in the box (76 nodes in
+    it, 42 beside); a size growing from the box is seen from any point near it."""
+
     from puzzle.axes import absolute
     from puzzle.model.schema import CoordinateSystem
 
@@ -747,10 +770,11 @@ def _turned_box(control, project, root) -> int:
         shift = float(r[:, i] @ o) + middle[i]
         local = "+".join(f"({r[j, i]:.15g})*{v}" for j, v in enumerate("xyz"))
         terms.append(f"Fabs({local}-({shift:.15g}))-({half[i]:.15g})")
-    outside = f"Max(Max({terms[0]},{terms[1]}),{terms[2]})"
+    outside = f"Max(Max({terms[0]},{terms[1]}),{terms[2]})"  # > 0 outside the box
     inside = control.size.to_si()
     f = gmsh.model.mesh.field.add("MathEval")
-    gmsh.model.mesh.field.setString(f, "F", f"{inside:.15g}+Max({outside},0)")
+    gmsh.model.mesh.field.setString(f, "F", f"{inside:.15g}+{GROWTH}*Max(0,{outside})")
+
     return f
 
 

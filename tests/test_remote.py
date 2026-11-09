@@ -49,7 +49,8 @@ def test_hosts_are_the_users_and_round_trip(tmp_path):
         hosts.Host(name="x", address="y", runtime="kubernetes")
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="the fake ssh is a shell script")
+@pytest.mark.skipif(sys.platform == "win32", reason="the fakes are shell scripts")
+
 def test_check_says_what_a_host_has(fakes):
     bin_dir, _home = fakes
     found = hosts.check(remote_fakes.host(bin_dir, scheduler="slurm"))
@@ -76,6 +77,7 @@ def test_programs_from_local_pixi_envs_become_the_hosts():
     ccx = r"C:\Puzzle\envs\calculix\Library\bin\ccx.exe"
     assert _remote_program([ccx, "-i", "job"])[:3] == ('"$ENVS"/calculix/bin/ccx', "ccx",
                                                        "calculix")  # fmt: skip
+
 
 
 @needs_rsync

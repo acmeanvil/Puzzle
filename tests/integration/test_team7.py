@@ -20,6 +20,7 @@ import numpy as np
 import pytest
 from solvers import over
 
+from puzzle import machine
 from puzzle.geometry import gmsh_session, import_step
 from puzzle.materials import add_library_material
 from puzzle.model import (
@@ -40,6 +41,13 @@ from puzzle.model import (
 from puzzle.solve import run_study
 
 pytest.importorskip("OCP")
+
+# FEniCSx peaked at 18.4 GB here (32 GB Mac); GitHub's 16 GB Linux and Windows machines
+# ran out (the Linux one was shut down mid-run, SciPy's SuperLU failed on Windows).
+_memory = machine.memory_bytes()
+pytestmark = pytest.mark.skipif(
+    _memory is not None and _memory < 24 * 2**30, reason="needs about 20 GB of memory"
+)
 
 X_MEASURED = np.arange(0, 289, 18) * 1e-3  # m
 BZ_50HZ = np.array([
