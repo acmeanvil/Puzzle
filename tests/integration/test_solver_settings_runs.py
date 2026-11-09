@@ -48,7 +48,6 @@ def test_every_linear_solver_gives_the_same_answer(tmp_path, solver):
     assert tips[2] == pytest.approx(tips[0], rel=1e-4 if solver == "calculix" else 1e-5)
 
 
-
 @over("code_aster")
 def test_code_aster_pass_through_reaches_the_solver(tmp_path, solver):
     pytest.importorskip("OCP")

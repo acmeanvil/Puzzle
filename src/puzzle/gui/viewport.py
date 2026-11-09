@@ -1807,7 +1807,8 @@ class Viewport(QWidget):
         number = int(numbers[j]) if numbers is not None else j
         at = where[j]
         unit = state.get("unit") or ""
-        text = f"{'Node' if on_points else 'Element'} {number}: {_number(value)}{' ' + unit if unit else ''}"
+        what = "Node" if on_points else "Element"
+        text = f"{what} {number}: {_number(value)}" + (f" {unit}" if unit else "")
         return {"node" if on_points else "element": number, "value": value, "unit": unit,
                 "at": np.asarray(at, float).tolist(), "text": text}  # fmt: skip
 
@@ -1829,8 +1830,9 @@ class Viewport(QWidget):
         if label is None:
             label = self._hover_label = QLabel(self.view)
             label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        label.setStyleSheet(f"QLabel {{ background: {_t().label_overlay}; color: "
-                            f"{_t().probe_text}; padding: 1px 4px; border-radius: 3px; }}")  # fmt: skip
+        t = _t()
+        label.setStyleSheet(f"QLabel {{ background: {t.label_overlay}; color: {t.probe_text};"
+                            " padding: 1px 4px; border-radius: 3px; }")  # fmt: skip
         label.setText(info["text"])
         label.adjustSize()
         if position is not None:
