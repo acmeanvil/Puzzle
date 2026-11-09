@@ -559,6 +559,21 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
 
         return [{"key": k, "name": library_material(k).name} for k in search_library(text)]
 
+    @tool(description="The user's material library as one file to share, written inside the "
+          "project folder (e.g. exports/materials.json). scope: yours (made in the builder), "
+          "user (imported and yours) or all (with Puzzle's generics). Agents never import "
+          "one: the user does, Materials -> Import material library... (ADR 0020).")  # fmt: skip
+    @guarded
+    def materials_export(path: str, scope: str = "user") -> dict[str, Any]:
+        from puzzle.materials import exchange
+
+        out = (Path(path) if Path(path).is_absolute() else root / path).resolve()
+        if not out.is_relative_to(Path(root).resolve()):  # agents write inside the project
+            raise PuzzleError(
+                f"exports go inside the project folder, not {path}", code="not_allowed"
+            )
+        return {"file": str(out), "materials": exchange.export(out, scope)}
+
     @tool(
         description="What a solver supports (physics -> step types, features, contacts). "
         "Lists planned capabilities too; use check_study for a real answer."

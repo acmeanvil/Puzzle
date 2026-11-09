@@ -35,11 +35,32 @@ GENERIC = {
     "ptfe",
     "air",
     "water",
+    "sea_water",
 } | BOLTING
+GASES = {  # molar mass, kg/mol
+    "helium": 4.0026e-3,
+    "nitrogen": 28.0134e-3,
+    "carbon_dioxide": 44.0095e-3,
+    "argon": 39.948e-3,
+    "neon": 20.1797e-3,
+    "hydrogen": 2.01588e-3,
+}
+GENERIC |= set(GASES)
 
 
 def test_generic_set_is_shipped():
     assert set(library_keys()) == GENERIC  # the test setup excludes any user library
+
+
+@pytest.mark.parametrize("key", sorted(GASES))
+def test_gas_densities_follow_the_ideal_gas_law(key):
+    """At 20 °C and 1 atm, rho = p M / (R T); CO2 sits 0.5 % above it (Z = 0.9946)."""
+    gas = library_material(key)
+    assert gas.info["group"] == "Gas"
+    ideal = 101325 * GASES[key] / (8.314462618 * 293.15)
+    assert gas.properties["density"].to_si() == pytest.approx(ideal, rel=6e-3)
+    for prop in ("dynamic_viscosity", "thermal_conductivity", "specific_heat"):
+        assert gas.properties[prop].to_si() > 0
 
 
 def test_every_value_converts_to_si():

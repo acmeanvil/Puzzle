@@ -767,9 +767,7 @@ class MainWindow(QMainWindow):
             self.schematic.refresh()
         if not self.schematic_dock.isHidden():
             self.schematic_panel.refresh()
-        self._selected()
-        if self.advisor_dock.isVisible():
-            self.advisor.refresh()
+        self._selected()  # refreshes the Advisor too, when it is shown
 
     def _show_units(self) -> None:
         """The status bar's unit button: the system in effect, and whose it is."""
@@ -3112,7 +3110,8 @@ class MainWindow(QMainWindow):
 
     def ask_open_path(self, title: str, filters: str) -> str | None:
         """A file to read (tests replace this)."""
-        chosen, _ = QFileDialog.getOpenFileName(self, title, str(self.session.root), filters)
+        start = str(self.session.root) if self.session is not None else str(Path.home())
+        chosen, _ = QFileDialog.getOpenFileName(self, title, start, filters)
         return chosen or None
 
     # --- sliders (ADR 0062 item 4): dragged values preview, never solve -------------
@@ -3223,12 +3222,16 @@ class MainWindow(QMainWindow):
         if menu.actions():
             menu.addSeparator()
         if item is not None and item.childCount():
-            menu.addAction("Expand all below").triggered.connect(
-                lambda: self.tree.expandRecursively(self.tree.indexFromItem(item))
-            )
+            below = item.data(0, ROLE)  # found again when asked: a rebuild deletes items
+            menu.addAction("Expand all below").triggered.connect(lambda: self._expand_below(below))
         menu.addAction("Expand all").triggered.connect(self.tree.expandAll)
         menu.addAction("Collapse all").triggered.connect(self._collapse_tree)
         menu.exec(self.tree.viewport().mapToGlobal(pos))
+
+    def _expand_below(self, node: Node) -> None:
+        item = self.tree.item_for(node)
+        if item is not None:
+            self.tree.expandRecursively(self.tree.indexFromItem(item))
 
     def _collapse_tree(self) -> None:
         """Everything folded but the project and its section headings, so the tree

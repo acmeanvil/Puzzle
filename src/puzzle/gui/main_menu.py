@@ -342,6 +342,13 @@ def _materials(window, menu: QMenu) -> None:
     _add(menu, "Assign material…", _with_component(
         window, lambda c: menus.assign_material(window, c)),
         "Give a component's bodies a material")  # fmt: skip
+    menu.addSeparator()
+    from puzzle.gui import material_files
+
+    _add(menu, "Import material library…", lambda: material_files.import_library(window),
+         "Materials from a library file into your library", free=True)  # fmt: skip
+    _add(menu, "Export material library…", lambda: material_files.export_library(window),
+         "Your materials as one file, for another Puzzle", free=True)  # fmt: skip
 
 
 def _geometry(window, menu: QMenu) -> None:

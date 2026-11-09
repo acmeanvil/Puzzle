@@ -175,11 +175,22 @@ class ModelTree(QTreeWidget):
         """Rebuild from the project, keeping what was selected and expanded; `catalogs`
         (run id -> its stored fields) lists each run's results under it; `states`
         (object id -> `project.status.State`) gives each item its state icon (ADR 0033)."""
-        from puzzle.project.status import run_state
 
         states = states if states is not None else {}
         keep = self.current()
         opened = {self._key(i) for i in self._items() if i.isExpanded()}
+        # Rebuilt quietly: the window shows the selection once after a refresh. Clearing
+        # and re-selecting used to show "nothing", then the item, then the item again
+        # (3.5 s on an operator), and the handlers could rebuild mid-loop.
+        quiet = self.blockSignals(True)
+        try:
+            self._populate(project, runs, catalogs, states, keep, opened)
+        finally:
+            self.blockSignals(quiet)
+
+    def _populate(self, project, runs, catalogs, states, keep, opened) -> None:
+        from puzzle.project.status import run_state
+
         self.clear()
         root = self._add(
             self.invisibleRootItem(), project.name, Node("project", label=project.name)

@@ -10,9 +10,14 @@ temperature-dependent properties.
 A project material is a copy. Adding one from the library copies it in; later library
 changes never reach it. Puzzle ships generic materials (structural steel with EN
 1993-1-2 temperature tables, stainless 304, aluminium 6061-T6, Ti-6Al-4V, copper,
-electrical steel, PTFE, air, water, and fastener grades in the group Fastener). The
+electrical steel, PTFE, air, helium, nitrogen, carbon dioxide, argon, neon and
+hydrogen (gases at 20 °C and 1 atm), water, sea water, and fastener grades in the group Fastener). The
 user may have their own library on top. Agents never write the library: the user does
-that in the Material builder (toolbar Material builder…).
+that in the Material builder (toolbar Material builder…). To share the user's library,
+`materials_export(path="exports/materials.json")` writes it inside the project (scope
+`yours`, `user` or `all`); importing one, removing library materials and Find
+duplicates… are the user's (Materials → Import material library…, the builder's Remove
+from library), so suggest them rather than doing them.
 
 A component uses a material through an assignment: a material and a selection, usually
 a part's body (`"Bar/Body"`).

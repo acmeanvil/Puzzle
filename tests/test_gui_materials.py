@@ -229,3 +229,70 @@ def test_fatigue_tab_holds_sn_curves_and_strain_life(app):
     e.ask_table = lambda *a: [(1e3, 400.0)]
     e.edit_sn_points()
     assert b.save() is None and "two points or more" in b.status.text()
+
+
+def _menu_item(window, text):
+    for top in window.menuBar().actions():
+        top.menu().aboutToShow.emit()
+        for a in top.menu().actions():
+            if a.text() == text:
+                return a
+    raise LookupError(text)
+
+
+def test_the_materials_menu_exports_and_imports_a_library(app, tmp_path):
+    from pathlib import Path
+
+    from forms import fill
+
+    from puzzle.gui.window import MainWindow
+
+    LibraryStore().save("my_steel", {"name": "My steel", "parent": "structural_steel",
+                                     "properties": {"density": {"value": 7800,
+                                                                "unit": "kg/m^3"}}})  # fmt: skip
+    w = MainWindow()  # no project: the library is the user's
+    out = tmp_path / "mine.json"
+    w.ask_save_path = lambda *a: str(out)
+    fill(w, scope="yours")
+    _menu_item(w, "Export material library…").trigger()
+    # The variant's family goes with it.
+    assert {"my_steel", "structural_steel"} <= set(__import__("json").loads(
+        out.read_text(encoding="utf-8"))["materials"])  # fmt: skip
+
+    LibraryStore().remove("my_steel")
+    assert "my_steel" not in library_keys()
+    w.ask_open_path = lambda *a: str(out)
+    fill(w, target="yours", conflicts="keep")
+    _menu_item(w, "Import material library…").trigger()
+    assert "my_steel" in library_keys() and "1 added" in w.statusBar().currentMessage()
+    assert Path(out).is_file()
+    w.close()
+
+
+def test_the_builder_removes_library_materials_and_finds_duplicates(app):
+    b = MaterialBuilder()
+    b.confirm = lambda text: True
+    choose(b, "copper")
+    for key in ("copper", "ptfe"):  # two picked in the tree
+        stack = [b.tree.invisibleRootItem()]
+        while stack:
+            item = stack.pop()
+            if item.data(0, 256) == key:
+                item.setSelected(True)
+            stack += [item.child(i) for i in range(item.childCount())]
+    assert b.remove_from_library() == ["copper", "ptfe"]
+    assert "copper" not in library_keys() and "Removed 2" in b.status.text()
+    b.undo()
+    assert "copper" in library_keys() and "ptfe" in library_keys()
+
+    # The generic fasteners include grades with the same minimum properties.
+    from puzzle.gui.material_builder import Duplicates
+
+    d = Duplicates(b)
+    groups = d.tree.topLevelItemCount()
+    assert groups >= 1 and d.ticked() == []
+    d.tick(["sae_j429_grade_5"])
+    b.duplicates_dialog = lambda: type("D", (), {"exec": lambda s: True,
+                                                 "ticked": lambda s: d.ticked()})()  # fmt: skip
+    b.find_duplicates()
+    assert "sae_j429_grade_5" not in library_keys()

@@ -130,6 +130,101 @@ specific_heat = { value = 4182, unit = "J/(kg*K)" }
 relative_permittivity = { value = 80.1 }
 relative_permeability = { value = 1.0 }
 
+# Gases at 20 °C and 1 atm (101.325 kPa), typical values from NIST's thermophysical
+# properties of fluids (Lemmon et al.); the density follows p/T, so set your own away
+# from these conditions.
+
+[helium]
+name = "Helium"
+type = "Fluid"
+group = "Gas"
+description = "Helium gas at 20 °C and 1 atm"
+density = { value = 0.1664, unit = "kg/m^3" }
+dynamic_viscosity = { value = 1.96e-5, unit = "Pa*s" }
+thermal_conductivity = { value = 0.153, unit = "W/(m*K)" }
+specific_heat = { value = 5193, unit = "J/(kg*K)" }
+electrical_conductivity = { value = 0, unit = "S/m" }
+relative_permittivity = { value = 1.000065 }
+relative_permeability = { value = 1.0 }
+
+[nitrogen]
+name = "Nitrogen"
+type = "Fluid"
+group = "Gas"
+description = "Nitrogen gas at 20 °C and 1 atm"
+density = { value = 1.165, unit = "kg/m^3" }
+dynamic_viscosity = { value = 1.76e-5, unit = "Pa*s" }
+thermal_conductivity = { value = 0.0258, unit = "W/(m*K)" }
+specific_heat = { value = 1041, unit = "J/(kg*K)" }
+electrical_conductivity = { value = 0, unit = "S/m" }
+relative_permittivity = { value = 1.00055 }
+relative_permeability = { value = 1.0 }
+
+[carbon_dioxide]
+name = "Carbon dioxide"
+type = "Fluid"
+group = "Gas"
+description = "Carbon dioxide gas at 20 °C and 1 atm"
+density = { value = 1.839, unit = "kg/m^3" }
+dynamic_viscosity = { value = 1.47e-5, unit = "Pa*s" }
+thermal_conductivity = { value = 0.0162, unit = "W/(m*K)" }
+specific_heat = { value = 846, unit = "J/(kg*K)" }
+electrical_conductivity = { value = 0, unit = "S/m" }
+relative_permittivity = { value = 1.00092 }
+relative_permeability = { value = 1.0 }
+
+[argon]
+name = "Argon"
+type = "Fluid"
+group = "Gas"
+description = "Argon gas at 20 °C and 1 atm"
+density = { value = 1.661, unit = "kg/m^3" }
+dynamic_viscosity = { value = 2.23e-5, unit = "Pa*s" }
+thermal_conductivity = { value = 0.0175, unit = "W/(m*K)" }
+specific_heat = { value = 521, unit = "J/(kg*K)" }
+electrical_conductivity = { value = 0, unit = "S/m" }
+relative_permittivity = { value = 1.00052 }
+relative_permeability = { value = 1.0 }
+
+[neon]
+name = "Neon"
+type = "Fluid"
+group = "Gas"
+description = "Neon gas at 20 °C and 1 atm"
+density = { value = 0.8387, unit = "kg/m^3" }
+dynamic_viscosity = { value = 3.13e-5, unit = "Pa*s" }
+thermal_conductivity = { value = 0.0486, unit = "W/(m*K)" }
+specific_heat = { value = 1030, unit = "J/(kg*K)" }
+electrical_conductivity = { value = 0, unit = "S/m" }
+relative_permittivity = { value = 1.00013 }
+relative_permeability = { value = 1.0 }
+
+[hydrogen]
+name = "Hydrogen"
+type = "Fluid"
+group = "Gas"
+description = "Hydrogen gas (normal: 3:1 ortho:para) at 20 °C and 1 atm"
+density = { value = 0.08376, unit = "kg/m^3" }
+dynamic_viscosity = { value = 8.80e-6, unit = "Pa*s" }
+thermal_conductivity = { value = 0.178, unit = "W/(m*K)" }
+specific_heat = { value = 14300, unit = "J/(kg*K)" }
+electrical_conductivity = { value = 0, unit = "S/m" }
+relative_permittivity = { value = 1.00025 }
+relative_permeability = { value = 1.0 }
+
+[sea_water]
+name = "Sea water"
+type = "Fluid"
+group = "Liquid"
+description = "Sea water of salinity 35 g/kg at 20 °C and 1 atm (TEOS-10; Sharqawy et al. 2010)"
+density = { value = 1024.8, unit = "kg/m^3" }
+dynamic_viscosity = { value = 1.08e-3, unit = "Pa*s" }
+thermal_conductivity = { value = 0.596, unit = "W/(m*K)" }
+specific_heat = { value = 3993, unit = "J/(kg*K)" }
+electrical_conductivity = { value = 4.8, unit = "S/m" }
+relative_permittivity = { value = 72 }
+relative_permeability = { value = 1.0 }
+
 [electrical_steel]
 name = "Electrical steel (linear)"
 type = "Metal"

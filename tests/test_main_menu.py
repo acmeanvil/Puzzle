@@ -159,3 +159,28 @@ def test_run_asks_which_study_when_none_is_selected(app, window):
     window.run_dialog = run
     window.actions_by_name["run"].trigger()
     assert asked and "Tip load" in asked[0]
+
+
+def test_a_refresh_shows_the_selection_once_and_menus_outlive_it(window):
+    """The tree is rebuilt after every change. It used to show the selection three times
+    a refresh (nothing, the item, the item), and a right-click menu held items that a
+    rebuild deleted (Rename... raised "already deleted")."""
+    from puzzle.gui import organise
+    from puzzle.gui.tree import Node
+    from puzzle.model.schema import Component
+
+    w = window
+    comp = w.session.project.of_type(Component)[0]
+    node = Node("object", str(comp.id))
+    w.tree.select(node)
+    shown = []
+    w._show_selected = lambda: shown.append(w.tree.current())
+    w.refresh()
+    assert len(shown) == 1 and shown[0].object == str(comp.id)
+
+    menu = QMenu()
+    organise.add_to_menu(w, menu, w.tree.current())
+    w.refresh()  # an edit lands while the menu is open
+    (rename,) = [a for a in menu.actions() if a.text().startswith("Rename")]
+    rename.trigger()
+    assert w.tree.current().object == str(comp.id)

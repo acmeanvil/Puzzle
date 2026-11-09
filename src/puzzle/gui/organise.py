@@ -136,6 +136,15 @@ def tree_role():
     return ROLE
 
 
+def edit_name(tree, node) -> None:
+    """Edit a tree item's name, the item found again when asked: the tree is rebuilt
+    after every change, so one held since the menu opened may be gone."""
+    item = tree.item_for(node)
+    if item is not None:
+        tree.setCurrentItem(item)
+        tree.editItem(item)
+
+
 def add_to_menu(window, menu, node) -> None:
     """Rename, and the group actions, for a tree item's right-click menu."""
     tree = window.tree
@@ -151,7 +160,7 @@ def add_to_menu(window, menu, node) -> None:
     if node.kind not in RENAMABLE:
         return
     menu.addSeparator()
-    menu.addAction("Rename…\tF2").triggered.connect(lambda: tree.editItem(item))
+    menu.addAction("Rename…\tF2").triggered.connect(lambda: edit_name(tree, node))
     if node.kind == "group":
         menu.addAction("Ungroup").triggered.connect(lambda: ungroup(window, node.object))
         if section == "Operators":  # ADR 0064: a chain kept to use again

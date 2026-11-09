@@ -528,6 +528,38 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true")
     p.set_defaults(handler=_field_check)
 
+    p = sub.add_parser("materials-export", help="your material library as one file to share")
+    p.add_argument("path", type=Path, help="the .json file to write")
+    p.add_argument("--scope", choices=["yours", "user", "all"], default="user",
+                   help="yours: the builder's; user (default): imported and yours; all: with "
+                   "the generics")  # fmt: skip
+    p.set_defaults(handler=_materials_export)
+
+    p = sub.add_parser("materials-import", help="materials from a library file into yours")
+    p.add_argument("path", type=Path, help="a file from materials-export, or a library.json")
+    p.add_argument(
+        "--into",
+        choices=["yours", "library"],
+        default="yours",
+        help="yours (default): added to your materials, checked, one undo; "
+        "library: replaces your imported library (the old one kept as .bak)",
+    )
+    p.add_argument(
+        "--replace",
+        action="store_true",
+        help="replace materials you already have (default: keep them)",
+    )
+    p.set_defaults(handler=_materials_import)
+
+    p = sub.add_parser("materials-remove", help="materials removed from your library (one undo)")
+    p.add_argument("keys", nargs="*", help="library keys (materials-duplicates lists some)")
+    p.add_argument("--restore", action="store_true", help="bring removed ones back instead")
+    p.add_argument("--list", action="store_true", help="the materials you removed")
+    p.set_defaults(handler=_materials_remove)
+
+    p = sub.add_parser("materials-duplicates", help="library materials with the same values")
+    p.set_defaults(handler=_materials_duplicates)
+
     p = sub.add_parser("settings", help="your preferences (ADR 0024): list them, or set one")
     p.add_argument("key", nargs="?", help="e.g. units.system")
     p.add_argument("value", nargs="?", help="e.g. engineering; omit to show the choices")
@@ -1731,6 +1763,56 @@ def _scripts(args) -> int:
         if done.returncode:
             return done.returncode
     print(f"{args.package} is in the scripts environment")
+    return 0
+
+
+def _materials_export(args) -> int:
+    from puzzle.materials import exchange
+
+    n = exchange.export(args.path, args.scope)
+    print(f"exported {n} materials to {args.path}")
+    return 0
+
+
+def _materials_import(args) -> int:
+    from puzzle.materials import exchange
+
+    done = exchange.import_file(args.path, args.into, "replace" if args.replace else "keep")
+    print(f"imported {args.path.name}: {done.summary()}")
+    for key, why in sorted(done.invalid.items()):
+        print(f"  {key}: {why}")
+    if done.backup:
+        print(f"the previous library is kept as {done.backup}")
+    return 0
+
+
+def _materials_remove(args) -> int:
+    from puzzle.materials.store import LibraryStore
+
+    store = LibraryStore()
+    if args.list or not args.keys:
+        for key in store.removed():
+            print(key)
+        return 0
+    if args.restore:
+        done = store.restore(args.keys)
+        print(f"restored {len(done)}: {', '.join(done)}" if done else "none of those was removed")
+        return 0
+    done = store.remove_from_library(args.keys)
+    print(f"removed {len(done)} from your library: {', '.join(done)}")
+    return 0
+
+
+def _materials_duplicates(args) -> int:
+    from puzzle.materials import _library, duplicates
+
+    lib = _library()
+    groups = duplicates()
+    for keys in groups:
+        print("same values:")
+        for key in keys:
+            print(f"  {key}  ({lib[key]['name']})")
+    print(f"{len(groups)} groups")
     return 0
 
 
