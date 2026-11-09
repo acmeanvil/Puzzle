@@ -266,7 +266,7 @@ which loses the thread effects.
 - VDI 2230's and Yamamoto's exact coefficients, to be read from the sources before
   building.
 
-This becomes its own ADR when the work starts.
+The decision and its implementation strategy are ADR 0076.
 
 ### 4. 2D models (0048, 0044)
 
