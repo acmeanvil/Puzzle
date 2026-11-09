@@ -143,6 +143,130 @@ Other items:
   rotary inertia, centrifugal loads, a body load's share within a segment (0055).
 - Contact: Hertz-type non-conforming curved contact on Code_Aster (refused now) (0056).
 - Fatigue: critical-plane multiaxial fatigue; rainflow counting (0026).
+- Threads without meshing them: see 3a.
+
+### 3a. Threaded connections as smooth cylinders (researched 2026-11-08)
+
+Goal: a threaded engagement (bolt in a nut or tapped hole) modelled on smooth cylinders.
+It should still give the per-thread load distribution, the radial wedge force and the
+lead's torque. It should work for any thread form: ISO/UNC 60°, ACME, trapezoidal,
+buttress, square and tapered pipe threads. Today's bolts (0050) bond the tapped thread,
+which loses the thread effects.
+
+**What others do (established):**
+
+- **Ansys:** the Bolt Thread geometry correction (`SECTYPE,,CONTACT,BOLT`;
+  `SECDATA, Dm, P, ALPHA, N, axis points`).
+  - Inputs: the pitch diameter, pitch, half-thread angle, starts, and the hand by the
+    angle's sign.
+  - Both sides are meshed at the major diameter. Only the contact normal and detection
+    change, not the geometry. Elements should be smaller than p/4.
+  - Modes: a "general" mode (both flanks) and a "unidirectional" one (one flank, the axis
+    tip→head).
+  - Limits: straight symmetric threads only (no buttress, no taper), small strain.
+  - Its M120 example: shank stress within 0.2 % of a meshed thread with 5-16× fewer
+    elements. Bonded MPCs lose the thread-region stresses.
+    [ansyshelp ctecgeomcor](https://ansyshelp.ansys.com/public/Views/Secured/corp/v252/en/ans_ctec/ctecgeomcor.html)
+- **COMSOL:** Bolt Thread Contact (3D and 2D axisymmetric).
+  - Inputs: half-angle, lead and hand, contact orientation Both/Up/Down, friction.
+  - Its default penalty is deliberately low (2 E/r) to stand in for the teeth bending: a
+    stiffer one crowds the load onto the first thread.
+  - [doc.comsol.com sme_ug_solid.07.141](https://doc.comsol.com/6.4/doc/com.comsol.help.sme/sme_ug_solid.07.141.html)
+- **Abaqus:** `*CLEARANCE, BOLT` on small-sliding pairs.
+  - Inputs: half-angle, pitch, major and mean diameter, axis.
+  - Single start only.
+- **The open-source solvers** have nothing for threads. CalculiX's `*CONTACT PAIR` normals
+  can't be overridden, and its `*CLEARANCE` was 3× off here (0056). Code_Aster's
+  `DEFI_CONTACT` has no thread option, nor does Elmer.
+- **Their usable building blocks:**
+  - CalculiX: `*EQUATION`, directional GAPUNI, SPRING2.
+  - Code_Aster: `LIAISON_DDL`, oriented `DIS_CHOC`/`DIS_T`.
+  - FEniCSx: a penalty or Nitsche term in the weak form.
+- **Published checks:**
+  - First engaged thread about 33 %, then 27, 20, 12, 8 % for a standard nut (Sopwith,
+    Yamamoto). Yamamoto's spring model gives the tooth compliance.
+  - Axisymmetric thread models match 3D helical ones for axial load sharing (Fukuoka; Acta
+    Polytechnica Hungarica 12(6) 2015).
+  - VDI 2230 gives the thread and nut compliance.
+
+**Design (proposed):**
+
+1. **A `ThreadForm`** (with a library of standard forms beside `bolts.SIZES`) holds:
+   - `pitch`, `starts` (lead = starts × pitch), `hand`;
+   - major, pitch and minor diameters;
+   - a `taper` (NPT 1:16);
+   - a half-angle **per flank**, measured from the radial plane:
+     ISO/UNC 30/30, ACME 14.5/14.5, trapezoidal 15/15, buttress 7/45 or 3/45, square 0/0.
+
+   Angles per flank and the taper are what make buttress and pipe threads possible where
+   the commercial features refuse them. A `BoltType`'s size picks its form, and a bolt
+   whose tapped end has a thread gets a thread engagement in place of a bond.
+2. **Kinematics** (pure Python, solver-neutral, `threads.py`): each node on the bolt's
+   thread face, in (r, θ, z) about the bolt axis, has a flank normal for flank k:
+
+       n_k = (e_z − (s L / 2π r) e_θ ∓ tan α_k e_r) / |…|
+
+   Each term carries one effect:
+   - the e_z term carries the axial load;
+   - the e_r term is the radial wedge (zero for square threads);
+   - the e_θ term is the lead (the loosening torque, and which way friction acts).
+
+   Pairing and areas:
+   - Nodes pair with the nut face at the same (θ, z) by the KD-tree pairing
+     `contact_check` already has.
+   - The areas are tributary (`common.surface_area`, so curved second-order faces are
+     right), each flank taking half × sec α_k.
+   - The phase z/L − sθ/2π matters only for clearances (backlash) and starts.
+3. **Which flank bears:** `bearing` = `auto` | `load` | `clearance`.
+   - `auto`: both flanks unilateral, each with its own clearance, so the solve finds the
+     bearing one, as Ansys's general mode does.
+   - `load` or `clearance`: one flank only, cheaper and linear. Buttress threads need the
+     steep flank facing the load, which `auto` finds and `load` checks.
+4. **Thread compliance:** each pair gets a normal stiffness per area from the tooth's
+   compliance: Yamamoto's bending, shear, root and radial terms over a pitch.
+   - Also available: `rigid`, or a value the user gives.
+   - Without the compliance, rigid flank ties over-load the first thread, which is why
+     COMSOL lowers its penalty.
+   - Tangentially: friction μ, stick or bonded.
+5. **Per solver:**
+   - **Linear, one flank:** CalculiX `*EQUATION` (u_nut − u_bolt)·n_k = 0, or SPRING2
+     with a compliance. Code_Aster `LIAISON_DDL` or `DIS_T` on a two-node element along
+     n_k.
+   - **Unilateral:** CalculiX GAPUNI along n_k in an NLGEOM step, as the compression-only
+     supports are. Code_Aster `DIS_CHOC` with its friction.
+   - **FEniCSx:** the exact penalty integral with `ufl.conditional` on the flank gap.
+   - **Elmer:** the bonded spring version only at first; the rest refused.
+   - Helper nodes and their removal from results reuse the bolt machinery (0037, 0050).
+   - **2D axisymmetric:** e_θ drops out. This is the cheapest benchmark and the first
+     stage.
+6. **Results:**
+   - flank force per pair;
+   - the load per thread (axial share summed per pitch), as a table and a Curve (0071);
+   - the wedge's total radial force;
+   - flank pressure.
+
+   A skill `thread-engagement` and MCP arguments on bolts follow ADR 0057.
+
+**Validation:**
+
+- **2D axisymmetric, M16 bolt in a nut:** the true sawtooth profile meshed (sketch,
+  0048) against the equivalent model, for each thread form.
+  - Compare the per-thread shares, shank stress, nut hoop stress and axial stiffness.
+  - A square thread must give no wedge.
+- **The shares' shape** against Sopwith/Yamamoto (first thread about 30-35 %).
+- **Compliance** against VDI 2230.
+- **One 3D helical case:** circumferential pressure nearly uniform, and the tightening
+  torque against T = F (d₂/2) tan(λ + ρ′) with ρ′ = atan(μ / cos α).
+
+**Not yet confirmed:**
+
+- how Ansys and Abaqus compute their internal gap from the helical phase;
+- whether CalculiX `*TRANSFORM` applies to `*EQUATION` dofs;
+- Code_Aster test V6.04.228;
+- VDI 2230's and Yamamoto's exact coefficients, to be read from the sources before
+  building.
+
+This becomes its own ADR when the work starts.
 
 ### 4. 2D models (0048, 0044)
 
