@@ -298,6 +298,41 @@ The decision and its implementation strategy are ADR 0076.
 - Partly: a faceted part must be its component's only part, unplaced, without heal or
   remove (0014).
 - Swept meshes; hex and tet together in one recipe; second-order hexahedra (0019).
+- **Hex meshes of bodies of revolution (maintainer, 2026-11-08).** The use is cylindrical
+  solids: idealised bolts (shank, head, nut), pins, shafts, tubes, bushings and rollers.
+  - **Today:** Gmsh hexes only block-like bodies (six four-sided faces,
+    `setTransfiniteAutomatic`), so a cylinder falls back to tetrahedra. 2D quadrilaterals
+    are all-quad as of 2026-11-08 (`MeshRecipe.quadrilaterals`).
+  - **Proposed, blocks cut at mesh time** (Ansys MultiZone's way), in the Gmsh model only,
+    never in the geometry:
+    - A solid cylinder gets a butterfly (O-grid): a square core of about 0.5 r and four
+      planes from its corners out to the rim. Every block is then six-sided and four-edged,
+      the hexes stay good on the axis, and there are no wedges there.
+    - A tube needs only the four sector planes.
+    - A stepped body (a bolt's head on its shank, a stepped shaft) is also cut by a coaxial
+      cylinder at each radius present and a plane at each step. The core is sized from the
+      smallest radius, so the blocks of the segments match.
+    - `setTransfiniteAutomatic` needs a corner angle above 135° there (the core's
+      corners).
+    - The faces the cuts split are re-found by their pieces, as joined bodies' faces
+      already are (`generate._pieces`).
+  - **Which bodies:** all faces planes normal to one axis, coaxial cylinders, or cones
+    (chamfers). Fillets (tori), threads and off-axis features fall back to tetrahedra,
+    with the reason in the mesh bench, as today's block test does (`_method`: "revolvable
+    about z").
+  - **Second choice, sweep by revolving:** the meridian section meshed with quadrilaterals
+    and turned about the axis in layers by Gmsh's extrude. Simpler, but it leaves wedges
+    on the axis and needs a geometry Gmsh extrudes itself. Kept for tubes and rings
+    (`hex_method: blocks | revolve`).
+  - **With it:** second-order hexahedra (C3D20R, HEXA20, and Elmer and FEniCSx's 20-node
+    bricks), since bolts and shafts in bending want them, and hex with tet in one recipe,
+    so a bracket's tets meet a bolt's hexes (conformal where faces share, tied otherwise).
+  - **Checks:**
+    - a cylinder in tension, exact;
+    - Lamé's thick tube under pressure within 0.5 % on 20-node hexes;
+    - a cantilevered shaft in bending against beam theory;
+    - element counts and the worst Jacobian against a tet mesh of the same size.
+  - **Where it's used:** ADR 0076 step 3 meshes its 3D threaded benchmarks this way.
 - Selections: the pick bar's "by size" filter; saving a "same as" pick as a rule (partly)
   (0034). Parts sharing faces after fragmenting reported as conformal in their own right (0039).
 - Measure: radius of curvature at a point; G1/G2 tangency breaks and planarity (partly);

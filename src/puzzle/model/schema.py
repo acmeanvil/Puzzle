@@ -595,7 +595,14 @@ class MeshRecipe(ProjectObject):
     element_order: Literal[1, 2] = 2
     element_shape: Literal["tetrahedra", "hexahedra"] = Field(
         default="tetrahedra",
-        description="hexahedra: structured (transfinite) hex mesh of block-like volumes",
+        description="hexahedra: structured (transfinite) hex mesh of block-like volumes; in a "
+        "2D model, quadrilaterals",
+    )
+    quadrilaterals: Literal["all", "mixed"] = Field(
+        default="all",
+        description="a 2D model's quadrilaterals: all (every element a quadrilateral: Gmsh "
+        "meshes at twice the size and splits each element, so sizes and edge counts hold) "
+        "or mixed (recombined where it can, some triangles left)",
     )
     global_size: Quantity | None = None
     controls: list[MeshControl] = Field(default_factory=list)

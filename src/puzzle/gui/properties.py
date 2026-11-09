@@ -89,6 +89,11 @@ APPLIES = {
         lambda d: d.get("dimension") == "2d_planar",
     ),  # fmt: skip
     "history": (_is_geometry, lambda d: d.get("source") is None),
+    # A 2D model's all or mixed quadrilaterals: only with that shape chosen.
+    "quadrilaterals": (
+        lambda d: "element_shape" in d and "mesher" in d,
+        lambda d: d.get("element_shape") == "hexahedra",
+    ),  # fmt: skip
     # A beam section's sizes (ADR 0027): only those its shape takes.
     "width": (_is_section, _shape("rectangle", "box")),
     "height": (_is_section, _shape("rectangle", "box")),

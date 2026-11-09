@@ -60,7 +60,10 @@ convection), a point is a point.
 5. Features as in 3D (skill `structural-loads`), on edges and regions. `fixed` holds x
    and y. An axisymmetric model needs no condition on the axis, but must be held in Y
    somewhere (`displacement` with only `y`).
-6. Mesh and run as usual. Quadrilaterals: the recipe's `element_shape: "hexahedra"`.
+6. Mesh and run as usual. Quadrilaterals: the recipe's `element_shape: "hexahedra"`
+   (shown as Quadrilaterals), all quadrilaterals by default (`quadrilaterals: "all"`:
+   meshed at twice the size and each element split, so sizes hold; a transfinite edge
+   count should be even). `"mixed"` recombines only and leaves some triangles.
    Read the hoop stress of an axisymmetric model as `result_stats(study, "stress",
    component="zz")`.
 

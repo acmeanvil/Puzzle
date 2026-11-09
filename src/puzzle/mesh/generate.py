@@ -218,7 +218,12 @@ def generate_mesh(
             )
         if seeds:  # the edges only, with the recipe's sizes: where their nodes will fall
             _sizes(recipe, comp, found, warnings, project, root)
+            if _all_quads(recipe, comp):  # as meshed: twice the size, each edge split
+                factor = gmsh.option.getNumber("Mesh.MeshSizeFactor")
+                gmsh.option.setNumber("Mesh.MeshSizeFactor", 2 * factor)
             gmsh.model.mesh.generate(1)
+            if _all_quads(recipe, comp):
+                gmsh.model.mesh.refine()
             _ids, coords, _ = gmsh.model.mesh.getNodes(1, -1, includeBoundary=True)
             return MeshResult(
                 mesh=Mesh(node_ids=np.zeros(0, dtype=np.int64), coords=np.zeros((0, 3))),
@@ -243,7 +248,19 @@ def generate_mesh(
             if recipe.element_shape == "hexahedra":
                 gmsh.option.setNumber("Mesh.RecombineAll", 1)
                 gmsh.option.setNumber("Mesh.SecondOrderIncomplete", 1)  # 8-node quads
+            if _all_quads(recipe, comp):
+                # Recombining alone left a quarter triangles on a thread profile; split
+                # every element into quadrilaterals after meshing at twice the size, which
+                # kept the worst quality (0.64 SICN) where Gmsh's quad algorithms lost it.
+                factor = gmsh.option.getNumber("Mesh.MeshSizeFactor")
+                gmsh.option.setNumber("Mesh.MeshSizeFactor", 2 * factor)
+                gmsh.option.setNumber("Mesh.SubdivisionAlgorithm", 1)
             gmsh.model.mesh.generate(2)
+            if _all_quads(recipe, comp):
+                types, _, _ = gmsh.model.mesh.getElements(2)
+                if any(gmsh.model.mesh.getElementProperties(t)[3] != 4 for t in types):
+                    raise MeshError("some faces could not be meshed with quadrilaterals only; "
+                                    "choose mixed quadrilaterals")  # fmt: skip
         else:
             _sizes(recipe, comp, found, warnings, project, root)
             if recipe.element_shape == "hexahedra":
@@ -551,6 +568,12 @@ def _method(faces) -> tuple[str, str]:
     return "tetrahedra", f"{odd} of its faces {'is' if odd == 1 else 'are'} not four-sided"
 
 
+def _all_quads(recipe: MeshRecipe, comp: Component) -> bool:
+    """A 2D model meshed with quadrilaterals only (ADR 0048: "hexahedra" is quads in 2D)."""
+    return (comp.dimension != "3d" and recipe.element_shape == "hexahedra"
+            and recipe.quadrilaterals == "all")  # fmt: skip
+
+
 def _options(recipe: MeshRecipe) -> None:
     """The recipe's typed settings, then its pass-through Gmsh options by name; a name
     Gmsh doesn't know is refused, never ignored (ADR 0019)."""
@@ -658,9 +681,16 @@ def _sizes(recipe: MeshRecipe, comp: Component, found, warnings, project=None, r
                     "edge selection",
                     code="invalid",
                 )
+            count = control.count
+            if _all_quads(recipe, comp):  # each segment is split in two after meshing
+                if count % 2:
+                    warnings.append(f"'{control.selection}': {count} elements become "
+                                    f"{count + 1}: all-quadrilateral meshes need an even "
+                                    "count")  # fmt: skip
+                count = (count + 1) // 2
             for e in entities:
                 gmsh.model.mesh.setTransfiniteCurve(
-                    e, control.count + 1, "Progression", control.progression
+                    e, count + 1, "Progression", control.progression
                 )
         elif control.kind == "box" and control.axes is not None:  # turned (ADR 0049)
             fields.append(_turned_box(control, project, root))

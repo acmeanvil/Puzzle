@@ -164,6 +164,14 @@ def choices(project: Project, obj, path: str) -> list[tuple[str, Any]] | None:
 
         return [("Always", None)] + [(n, n) for n in sorted(parameter_values(project))]
     out = _field(project, obj, owner, field, in_list)
+    if field == "element_shape" and isinstance(owner, MeshRecipe) and out is not None:
+        from puzzle.model.schema import Component
+
+        users = [c for c in project.of_type(Component) if c.mesh == owner.id]
+        if users and all(c.dimension != "3d" for c in users):  # a 2D model's shapes
+            out = [("Triangles", "tetrahedra"), ("Quadrilaterals", "hexahedra")]
+    if field == "quadrilaterals" and isinstance(owner, MeshRecipe):
+        out = [("Quadrilaterals only", "all"), ("Mostly quadrilaterals, some triangles", "mixed")]
     if field == "optimiser" and isinstance(owner, MeshRecipe) and out is not None:
         from puzzle.settings import current
 

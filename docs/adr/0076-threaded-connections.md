@@ -145,6 +145,8 @@ are the next build; steps 4-6 follow.
    - The 2D path first: e_θ drops out, the meshes are small and a meshed-thread reference
      is easy to draw (`geometry/planar.py` polygon, sides named).
    - CalculiX writes bonded (equations) and unilateral (GAPUNI) flanks on CAX elements.
+     Both models are meshed with quadrilaterals only (CAX8), which 2D models have had
+     since 2026-11-08.
    - Benchmark `tests/integration/test_threads.py`: an M16×2 cap screw in a steel boss,
      40 kN axial, the true sawtooth thread meshed as the reference, and the smooth model
      with `iso` and `compliance="teeth"`. Accept when:
@@ -168,6 +170,11 @@ are the next build; steps 4-6 follow.
      - CalculiX and Code_Aster agreeing within 2 %;
      - with friction μ = 0.15 on Code_Aster, the torque to turn the screw under preload
        within 5 % of T = F (d₂/2) tan(λ + ρ′), with ρ′ = atan(μ / cos α).
+   - Meshing: the screw and boss are bodies of revolution, so they are meshed with hexes
+     cut into blocks at mesh time (ADR 0072 section 5, built as part of this step). The
+     same blocks all the way round give the circumferential check a clean baseline, and
+     the 3D results line up node for node with the 2D section. Tets stay the fallback, and
+     the check is run on both.
    - The Contact tool shows thread pairs and flanks.
    - Results fields and the thread table.
 4. **Bolts.**
