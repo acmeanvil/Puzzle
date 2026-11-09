@@ -233,6 +233,13 @@ class SceneView(QWidget):
         self.plotter = pv.Plotter(off_screen=True, window_size=[400, 300])
         self.plotter.show(auto_close=False)  # sets up the render window once
         self.on_double_click = None
+        self.on_hover = None  # (point or None, widget position) as the mouse rests
+        self._hover_at = None
+        self._hover_timer = QTimer(self)
+        self._hover_timer.setSingleShot(True)
+        self._hover_timer.setInterval(30)  # at most one pick and frame per 30 ms
+        self._hover_timer.timeout.connect(self._hovered)
+        self.setMouseTracking(True)  # moves with no button pressed reach mouseMoveEvent
         self.on_click = None  # (point, modifiers) for a click that didn't drag
         self.on_box = None  # (QRect, modifiers) for a box dragged in box mode
         self.box_mode = False
@@ -305,7 +312,22 @@ class SceneView(QWidget):
 
     # mouse -------------------------------------------------------------------------------
 
+    def _hovered(self) -> None:
+        if self.on_hover is not None and self._hover_at is not None and self._last is None:
+            self.on_hover(self.pick_point(self._hover_at), self._hover_at)
+
+    def _end_hover(self) -> None:
+        self._hover_timer.stop()
+        self._hover_at = None
+        if self.on_hover is not None:
+            self.on_hover(None, None)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        self._end_hover()
+        super().leaveEvent(event)
+
     def mousePressEvent(self, event) -> None:  # noqa: N802
+        self._end_hover()  # a drag turns the view: the read-out would point elsewhere
         self._last = event.position()
         self._press = event.position()
         if self.box_mode and event.button() == Qt.MouseButton.LeftButton:
@@ -352,7 +374,10 @@ class SceneView(QWidget):
                 QRect(self._press.toPoint(), event.position().toPoint()).normalized()
             )
             return
-        if self._last is None:
+        if self._last is None:  # no button held: the mouse resting over the model
+            if self.on_hover is not None:
+                self._hover_at = event.position()
+                self._hover_timer.start()
             return
         pos = event.position()
         dx, dy = pos.x() - self._last.x(), pos.y() - self._last.y()
@@ -1154,8 +1179,12 @@ class Viewport(QWidget):
         elif self.result_state is not None:
             self.view.on_double_click = self._probe_click
             self.view.on_click = self.view.on_box = None
+            self.view.on_hover = self._hover
+            return
         else:
             self.view.on_double_click = self.view.on_click = self.view.on_box = None
+        self._hover(None, None)
+        self.view.on_hover = None
 
     def toggle_pick(self, entity: tuple[int, int]) -> None:
         mode = "remove" if entity in self.picked else "add"
@@ -1744,6 +1773,78 @@ class Viewport(QWidget):
         self._render()
         self.probes_changed.emit(list(self.probes))
         return probe
+
+    def hover_at(self, xyz) -> dict | None:
+        """The node nearest a point of the shown (deformed) result, with its value in
+        display units, for the read-out as the mouse rests (a per-element result: the
+        nearest element's). The search tree is built once per shown result."""
+        from scipy.spatial import cKDTree
+
+        state = self.result_state
+        if state is None or xyz is None:
+            return None
+        grid, name = state["grid"], state["name"]
+        on_points = name in grid.point_data
+        key = "_hover_tree"
+        if key not in state:
+            # The skin's nodes, so a resting mouse reads what it sees (with a section cut,
+            # every node: the cut face shows the inside). The skin carries the grid's
+            # arrays; its vtkOriginalPointIds came back in another order here.
+            source = grid if self.cut is not None else grid.extract_surface()
+            where = np.asarray(source.points if on_points else source.cell_centers().points)
+            data = source.point_data if on_points else source.cell_data
+            ids = "node_id" if on_points else "element_id"
+            arrays = (np.asarray(data[name], float),
+                      np.asarray(data[ids]) if ids in data else None)  # fmt: skip
+            state[key] = (cKDTree(where), where, *arrays) if len(where) else None
+        if state[key] is None:
+            return None
+        tree, where, values, numbers = state[key]
+        _d, j = tree.query(np.asarray(xyz, float))
+        j = int(j)
+        value = values[j]
+        value = float(np.linalg.norm(value)) if np.ndim(value) else float(value)
+        number = int(numbers[j]) if numbers is not None else j
+        at = where[j]
+        unit = state.get("unit") or ""
+        text = f"{'Node' if on_points else 'Element'} {number}: {_number(value)}{' ' + unit if unit else ''}"
+        return {"node" if on_points else "element": number, "value": value, "unit": unit,
+                "at": np.asarray(at, float).tolist(), "text": text}  # fmt: skip
+
+    def _hover(self, xyz, position) -> None:
+        """The resting mouse's read-out: a label by the cursor and a dot on the node."""
+        info = self.hover_at(xyz) if xyz is not None else None
+        self.shown["hover"] = info["text"] if info else None
+        label = getattr(self, "_hover_label", None)
+        if info is None:
+            if label is not None:
+                label.hide()
+            if getattr(self, "_hover_dot", False) and self.plotter is not None:
+                self.plotter.remove_actor("puzzle-hover")
+                self._hover_dot = False
+                self._render()
+            return
+        if getattr(self, "view", None) is None:  # no OpenGL (tests): recorded in shown only
+            return
+        if label is None:
+            label = self._hover_label = QLabel(self.view)
+            label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        label.setStyleSheet(f"QLabel {{ background: {_t().label_overlay}; color: "
+                            f"{_t().probe_text}; padding: 1px 4px; border-radius: 3px; }}")  # fmt: skip
+        label.setText(info["text"])
+        label.adjustSize()
+        if position is not None:
+            x = min(int(position.x()) + 14, max(self.view.width() - label.width() - 2, 0))
+            y = int(position.y()) - label.height() - 6
+            label.move(x, y if y >= 0 else int(position.y()) + 18)
+        label.show()
+        label.raise_()
+        if self.plotter is not None:
+            self.plotter.add_points(np.asarray(info["at"], float).reshape(1, 3),
+                                    color=_t().marked, point_size=9, name="puzzle-hover",
+                                    render_points_as_spheres=True, reset_camera=False)  # fmt: skip
+            self._hover_dot = True
+            self._render()
 
     def clear_probes(self) -> None:
         self.probes = []
