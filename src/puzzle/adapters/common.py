@@ -104,13 +104,24 @@ def time_settings(step) -> tuple[float, float, int]:
     return dt, end, max(1, round(end / dt))
 
 
-def check_contacts(component, implemented: set[str], solver: str) -> None:
+def check_contacts(component, implemented: set[str], solver: str, threads=frozenset()) -> None:
     """Refuse contacts this adapter doesn't write yet.
 
     Conformal bonded contacts need nothing from a solver (the parts share nodes), so
     they are always accepted. Anything else unwritten would leave the parts unconnected.
+    A threaded contact (ADR 0076) is written only where `threads` holds its type: never
+    as a plain tie or contact pair, which would drop the flanks.
     """
     for c in component.contacts:
+        if c.thread is not None:
+            if c.type not in threads:
+                raise InputError(
+                    f"the {solver} adapter does not write a threaded {c.type} contact "
+                    f"('{c.name}') yet",
+                    code="unsupported",
+                    path=c.name,
+                )
+            continue
         if c.capability != "bonded_conformal" and c.capability not in implemented:
             raise InputError(
                 f"the {solver} adapter does not write {c.capability} contact ('{c.name}') yet",

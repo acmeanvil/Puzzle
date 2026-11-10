@@ -89,4 +89,4 @@ Everything is SI: stresses in Pa, lengths in m, temperatures in K. Write `250e6`
 - A field that only some cases have is left out of the combination (a warning says so).
 - An equation referring to itself through another derived result: refused.
 
-In the GUI: Results → New combination… or New equation…, or right-click a study.
+In the GUI: Results → Combinations and fatigue → New combination… or New equation…, or right-click a study.

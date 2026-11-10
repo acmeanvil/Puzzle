@@ -94,5 +94,5 @@ unit (`{"value": 690, "unit": "MPa"}`); S-N and strain-life numbers are bare SI.
 - Non-proportional or variable-amplitude histories: the tool doesn't rainflow-count;
   give each cycle kind as a block with its count, and say the result is an estimate.
 
-In the GUI: Results → New fatigue tool…; S-N and strain-life data in the Material
+In the GUI: Results → Combinations and fatigue → New fatigue tool…; S-N and strain-life data in the Material
 builder's Fatigue tab.

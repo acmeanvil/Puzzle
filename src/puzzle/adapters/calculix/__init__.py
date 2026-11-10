@@ -24,6 +24,7 @@ from puzzle.adapters.base import (
 from puzzle.adapters.calculix import spring_beams
 from puzzle.adapters.calculix.frd import read_frd
 from puzzle.adapters.calculix.inp import (
+    THREADS,
     InputError,
     fastener_info,
     spring_beam_info,
@@ -102,6 +103,7 @@ class CalculixAdapter(SolverAdapter):
         contacts=frozenset(
             {"bonded_conformal", "bonded_nonconformal", "frictionless", "frictional"}
         ),
+        threads=THREADS,  # ADR 0076
         couplings=frozenset({"thermal_expansion"}),
         # *PLASTIC, stepped static steps, PEEQ out (tests/integration/test_plasticity.py).
         material_models=frozenset(  # ADR 0049 step 4: in a system's axes

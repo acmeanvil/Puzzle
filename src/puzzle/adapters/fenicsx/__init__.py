@@ -13,7 +13,8 @@ the adapter writes mesh.msh, case.json and a copy of the script, and reads back
 results.npz. Implemented so far: linear elasticity (static, modal, transient by
 Newmark/HHT, harmonic; ADR 0041), heat, electrostatics and magnetostatics.
 Nonconformal (mortar) interfaces are not part of dolfinx, so only conformally meshed
-bonded interfaces are supported.
+bonded interfaces are supported, and threaded contacts (ADR 0076), whose flank springs
+study.py adds to the assembled stiffness.
 """
 
 from __future__ import annotations
@@ -34,7 +35,7 @@ from puzzle.adapters.base import (
     SolverAdapter,
 )
 from puzzle.adapters.common import InputError
-from puzzle.adapters.fenicsx.case import fenicsx_python, read_results, write_case
+from puzzle.adapters.fenicsx.case import THREADS, fenicsx_python, read_results, write_case
 from puzzle.mesh.mesh import Mesh
 from puzzle.model.schema import Project, Study
 from puzzle.results.model import Results
@@ -77,6 +78,7 @@ class FenicsxAdapter(SolverAdapter):
             }
         ),  # ADR 0037: local axes
         contacts=frozenset({"bonded_conformal"}),
+        threads=THREADS,  # ADR 0076 step 5: flank springs, static steps
         couplings=frozenset({"joule_heating", "thermal_expansion"}),
         dimensions=frozenset({"3d", "2d_planar", "2d_axisymmetric"}),
         time_schemes=frozenset({"backward_euler", "crank_nicolson", "bdf2", "theta"}),

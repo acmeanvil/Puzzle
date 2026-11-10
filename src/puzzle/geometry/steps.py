@@ -289,6 +289,10 @@ STEPS: dict[str, list[StepField]] = {
     "heal": [StepField("tolerance", "length", 1e-6)],
     "remove": [StepField("rule", "rule", {"holes_below": 0.003}, "Faces")],
     "fragment": [],
+    "keep": [
+        StepField("bodies", "text", "", "Bodies to keep (names, comma-separated)"),
+        StepField("body", "text", "Body", "Name of what is kept"),
+    ],  # fmt: skip
 }
 
 

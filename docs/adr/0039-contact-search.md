@@ -35,6 +35,39 @@ An assembly needs a contact (or a bond) at every place two parts touch. Puzzle m
 - **Tests** (`tests/test_contact_search.py`): a cube on a plate (its base area found), a 0.2 mm gap found and a 5 mm one not, a cube against the plate's side (the 20 × 10 mm overlap), a cube turned 90° about x, the batch and its undo, the MCP tool and the dialog.
 - **Not yet:** imported assemblies whose parts share faces after fragmenting are not reported as conformal separately (they are found as touching, distance 0, and proposed bonded, which meshes conformally by default).
 
+## Amended (2026-11-09): bodies of one part, one part per body
+
+An imported STEP assembly is one part holding every body, so the search found nothing
+("add a second part") and the contact tool pointed to a Model → Add contact… that
+didn't exist. Now:
+
+- The search works between bodies of one part too (`contacts._face_owners`: each face's
+  body; `body_labels`: a body selection holding just that body names it). A face's
+  overlap is checked at its centre, or at a point on it when the centre is off it (an
+  annulus, a pin in its bore: those were missed between parts too).
+- Touching bodies of one part stay joined by Share faces; a frictionless, frictional or
+  tie contact between two of them is parted after meshing (`mesh.generate.
+  _part_contacts`: Gmsh's Crack plugin duplicates the shared face's nodes, its rim
+  opened where only those two bodies meet, the moved body's other faces following).
+  Fragmenting the bodies in separate groups was tried first: a body fragmented twice
+  loses its first join. The same pass parts parts joined by other parts' bonds (three
+  parts, two bonded, one sliding: all three used to be fragmented together, the
+  sliding pair joined too). With Share faces off, a bonded contact joins its bodies.
+  Code_Aster refuses a tie between two bodies of one part (its LIAISON_MAIL ties into
+  the target's whole part).
+- Model → Add contact… (two face selections in one form), Find contacts… on every
+  component with a part.
+- One part per body (`split_parts.plan`; a part's right-click, Model → One part per
+  body…, MCP `parts_split`, CLI `split-parts`): each body a geometry (the file
+  imported, then a new `keep` history step holding that body), references following
+  their bodies, those on a spanning selection repeated per part where they are lists
+  (materials, features, sections), bonded contacts where Share faces had joined them;
+  one batch, one undo.
+
+Benchmarks: `tests/test_contacts_in_a_part.py`, `tests/test_split_parts.py`,
+`tests/integration/test_contact_in_a_part.py` (a stack in one part carries p A = 2000 N
+through a frictionless contact on CalculiX).
+
 ## Consequences
 
 - Setting up an assembly's contacts becomes one review instead of many picks.

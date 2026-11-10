@@ -1,6 +1,7 @@
 """The menu bar reaches everything the ribbons and the tree's menus do.
 
-Project, Materials, Geometry, Mesh, Model, Results, Window and Help, in that order.
+Project, Geometry, Materials, Mesh, Model, Results, Window and Help, in that order (the
+tree's); Model and Results as fly-outs of like items.
 Every ribbon button (Geometry, Mesh, Results) and every item of the tree's section
 menus has a menu bar action of the same name; shortcuts don't clash. Actions that need
 a part or study take the selected one or ask in one form: a geometry tool from the menu
@@ -108,10 +109,35 @@ def test_operator_menus_are_grouped_and_alphabetical(window):
 
 
 def test_menu_titles(window):
+    """In the tree's order: Geometry, then Materials (the maintainer, 2026-11-09)."""
+    from puzzle.gui.tree import SECTIONS
+
     titles = [a.text().replace("&", "") for a in window.menuBar().actions()]
     assert titles == [
-        "Project", "Materials", "Geometry", "Mesh", "Model", "Results", "Window", "Help"
+        "Project", "Geometry", "Materials", "Mesh", "Model", "Results", "Window", "Help"
     ]  # fmt: skip
+    order = [t for t, _ in SECTIONS]
+    assert order.index("Geometry") < order.index("Materials") < order.index("Meshes")
+
+
+def test_model_and_results_are_fly_outs_of_like_items(window):
+    """Model and Results hold submenus, each item in one (the maintainer, 2026-11-09)."""
+
+    def subs(menu):
+        return {a.text(): a.menu() for a in menu.actions() if a.menu() is not None}
+
+    model = subs(window.menus["Model"])
+    assert list(model) == ["Components", "Physics and loads", "Contacts",
+                           "Bolts and fasteners", "Beams and shells", "Studies", "Run"]  # fmt: skip
+    assert not [a.text() for a in window.menus["Model"].actions()
+                if a.menu() is None and a.text()]  # fmt: skip
+    contacts = [a.text() for a in model["Contacts"].actions()]
+    assert contacts == ["Find contacts…", "Add contact…", "Thread on a contact…", "Contact tool"]
+    assert "Run study" in [a.text() for a in model["Run"].actions()]
+    results = subs(window.menus["Results"])
+    assert {"Result tools", "View", "Operators", "Export"} <= set(results)
+    assert not [a.text() for a in window.menus["Results"].actions()
+                if a.menu() is None and a.text()]  # fmt: skip
 
 
 def test_every_ribbon_button_and_section_item_is_in_the_menus(window):

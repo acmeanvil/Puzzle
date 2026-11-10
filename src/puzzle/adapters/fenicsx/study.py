@@ -556,6 +556,8 @@ def solve_solid(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
             add_load(rho * ufl.inner(b, v) * dx(tag(f["group"])), f)
 
     out["coords"] = V.tabulate_dof_coordinates()
+    if case.get("threads"):  # coincident nodes on the thread's faces: map by node
+        out["node_ids"] = dof_nodes(V)
     if case["step"]["type"] in ("transient", "frequency_domain"):
         rho = piecewise("density")
         stress = _stress_projector(msh, degree, dx, sigma, V)
@@ -572,7 +574,10 @@ def solve_solid(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
         out["modes"] = np.asarray([vectors[i].reshape(-1, 3) for i in order])
         return
 
-    uh = solve_linear(a, L, bcs, V, "u")
+    if case.get("threads"):  # ADR 0076: flank springs added to the assembled stiffness
+        uh = solve_threaded(case["threads"], a, L, bcs, V, facets, tag)
+    else:
+        uh = solve_linear(a, L, bcs, V, "u")
     out["displacement"] = uh.x.array.reshape(-1, 3)
 
     # Nodal stress: L2 projection of the stress components onto the displacement's nodes.
@@ -613,6 +618,136 @@ def _held(bcs, size: int) -> tuple[np.ndarray, np.ndarray]:
     held = np.unique(np.concatenate(dofs)) if dofs else np.zeros(0, dtype=np.int32)
     held = held[held < size]
     return held, values[held]
+
+
+# --- threaded contacts (ADR 0076) ----------------------------------------------------
+# The flanks are springs between node pairs of two faces meshed apart, k n n^T coupling
+# the screw's and nut's dofs, added to the matrix after assembly. The system is solved
+# with SciPy on either backend, the held dofs eliminated, as the dynamics are.
+
+
+def _face_dofs(V, facets, group: int, xyz) -> np.ndarray:
+    """The dof blocks (nodes) of V nearest each point among those on the facets tagged
+    `group`: the screw's and nut's faces coincide, so each is looked up on its own."""
+    from scipy.spatial import cKDTree
+
+    fdim = V.mesh.topology.dim - 1
+    blocks = fem.locate_dofs_topological(V, fdim, facets.find(group))
+    coords = V.tabulate_dof_coordinates()[blocks]
+    points = np.asarray(xyz, dtype=float)
+    distance, index = cKDTree(coords).query(points)
+    span = float(np.ptp(coords, axis=0).max()) or 1.0
+    if len(distance) and distance.max() > 1e-6 * span:
+        raise SystemExit(f"a thread's node is {distance.max():.3g} m from its face's dofs")
+    return np.asarray(blocks)[index]
+
+
+def dof_nodes(V) -> np.ndarray:
+    """Each dof block's mesh node id (mesh.msh's node tag), for a space of the mesh's
+    own degree: positions alone can't tell apart the coincident nodes of two faces
+    meshed apart. The reader checks them against the positions."""
+    msh = V.mesh
+    geometry = np.asarray(msh.geometry.dofmap)
+    blocks = np.asarray(V.dofmap.list)
+    if blocks.shape != geometry.shape:
+        return np.zeros(0, dtype=np.int64)
+    node = np.full(V.dofmap.index_map.size_local + V.dofmap.index_map.num_ghosts, -1)
+    node[blocks.ravel()] = geometry.ravel()
+    return np.asarray(msh.geometry.input_global_indices, dtype=np.int64)[node] + 1
+
+
+def _thread_springs(threads, V, facets, tag) -> list[dict]:
+    """Per contact and flank: the screw's and nut's dofs (pair x component), the
+    normals in the model's components, the stiffness, and for a unilateral flank its
+    clearance and tension slack."""
+    bs = V.dofmap.index_map_bs
+    out = []
+    for t in threads:
+        screw = _face_dofs(V, facets, tag(t["screw"]), t["screw_xyz"])
+        nut = _face_dofs(V, facets, tag(t["nut"]), t["nut_xyz"])
+        for fl in t["flanks"]:
+            out.append({
+                "s": screw[:, None] * bs + np.arange(bs), "t": nut[:, None] * bs + np.arange(bs),
+                "n": np.asarray(fl["normals"], dtype=float)[:, :bs],
+                "k": np.asarray(fl["stiffness"], dtype=float),
+                "unilateral": t["kind"] == "frictionless", "clearance": t["clearance"],
+                "slack": t["slack"], "name": t["name"],
+            })  # fmt: skip
+    return out
+
+
+def _spring_system(springs, active, size: int):
+    """The springs' matrix and right-hand side: k n n^T on (s, s) and (t, t), minus it
+    on (s, t) and (t, s); a closed unilateral flank pushes back from its clearance c
+    (k c n on the screw, -k c n on the nut), an open one keeps slack x k."""
+    from scipy.sparse import coo_matrix
+
+    rows, cols, vals, rhs = [], [], [], np.zeros(size)
+    for sp, on in zip(springs, active, strict=True):
+        k, n = sp["k"], sp["n"]
+        if sp["unilateral"]:
+            k = np.where(on, k, sp["slack"] * k)
+            push = np.where(on, sp["k"] * sp["clearance"], 0.0)[:, None] * n
+            np.add.at(rhs, sp["s"], push)
+            np.add.at(rhs, sp["t"], -push)
+        block = k[:, None, None] * n[:, :, None] * n[:, None, :]
+        for a, b, sign in ((sp["s"], sp["s"], 1), (sp["t"], sp["t"], 1),
+                           (sp["s"], sp["t"], -1), (sp["t"], sp["s"], -1)):  # fmt: skip
+            rows.append(np.broadcast_to(a[:, :, None], block.shape).ravel())
+            cols.append(np.broadcast_to(b[:, None, :], block.shape).ravel())
+            vals.append(sign * block.ravel())
+    if not rows:
+        return coo_matrix((size, size)).tocsr(), rhs
+    matrix = coo_matrix((np.concatenate(vals), (np.concatenate(rows), np.concatenate(cols))),
+                        shape=(size, size))  # fmt: skip
+    return matrix.tocsr(), rhs
+
+
+def solve_threaded(threads, a, L, bcs, V, facets, tag, limit: int = 50) -> fem.Function:
+    """A static solve with threaded flanks: K + the springs, held dofs eliminated.
+    Unilateral (frictionless) flanks by an active set: every pair closed first, then
+    a pair is closed where the screw has pushed past its clearance into the nut,
+    repeated until no pair changes."""
+    from scipy.sparse.linalg import spsolve
+
+    equations(V, "u")
+    bs = V.dofmap.index_map_bs
+    size = V.dofmap.index_map.size_local * bs
+    K, F = _scipy(a)[:size, :size], _vector(L, size)
+    held, prescribed = _held(bcs, size)
+    free = np.setdiff1d(np.arange(size), held)
+    springs = _thread_springs(threads, V, facets, tag)
+    active = [np.ones(len(sp["k"]), dtype=bool) for sp in springs]
+    u = np.zeros(size)
+    for iteration in range(1, limit + 1):
+        S, extra = _spring_system(springs, active, size)
+        A = (K + S).tocsr()
+        u = np.zeros(size)
+        u[held] = prescribed
+        rhs = F + extra - A[:, held] @ prescribed
+        u[free] = spsolve(A[free][:, free].tocsc(), rhs[free])
+        changed = 0
+        for i, sp in enumerate(springs):
+            if not sp["unilateral"]:
+                continue
+            push = np.einsum("ij,ij->i", sp["n"], u[sp["s"]] - u[sp["t"]])
+            closed = push > sp["clearance"]
+            changed += int(np.count_nonzero(closed != active[i]))
+            active[i] = closed
+        if not any(sp["unilateral"] for sp in springs):
+            break
+        closed = int(sum(np.count_nonzero(on) for on, sp in zip(active, springs, strict=True)
+                         if sp["unilateral"]))  # fmt: skip
+        emit("iteration", number=iteration, type="contact", contact=closed,
+             residuals={"pairs changed": float(changed)})  # fmt: skip
+        if not changed:
+            break
+    else:
+        raise SystemExit(f"the threads' contact status still changed after {limit} passes")
+    uh = fem.Function(V)
+    uh.x.array[:size] = u
+    uh.x.scatter_forward()
+    return uh
 
 
 def _stress_projector(msh, degree, dx, sigma, V, voigt_of=None):
@@ -864,6 +999,8 @@ def solve_solid_2d(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> No
         else:
             raise SystemExit(f"{f['type']} is not written for 2D models")
     out["coords"] = V.tabulate_dof_coordinates()
+    if case.get("threads"):  # coincident nodes on the thread's faces: map by node
+        out["node_ids"] = dof_nodes(V)
 
     def voigt_of(w):
         e, _hoop, s, s_hoop = parts(w)
@@ -895,7 +1032,10 @@ def solve_solid_2d(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> No
         out["frequencies"] = hz[order]
         out["modes"] = np.asarray([_xyz(vectors[i], 2) for i in order])
         return
-    uh = solve_linear(a, L, bcs, V, "u")
+    if case.get("threads"):  # ADR 0076: flank springs added to the assembled stiffness
+        uh = solve_threaded(case["threads"], a, L, bcs, V, facets, tag)
+    else:
+        uh = solve_linear(a, L, bcs, V, "u")
     out["displacement"] = _xyz(uh.x.array, 2)
     S = fem.functionspace(msh, ("Lagrange", degree, (6,)))
     p, q = ufl.TrialFunction(S), ufl.TestFunction(S)

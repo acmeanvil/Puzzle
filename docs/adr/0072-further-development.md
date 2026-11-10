@@ -433,11 +433,16 @@ The decision and its implementation strategy are ADR 0076.
 
 ### Found while collecting (fix soon, not deferrals)
 
-- Elmer's capability matrix claims `bonded_nonconformal`, but `elmer/sif.py` writes no
-  mortar tie and refuses it (it fails safe, with code `unsupported`). The claim, and
-  CLAUDE.md's "mortar tie", should go until a benchmark passes.
+- Elmer's capability matrix claimed `bonded_nonconformal`, but `elmer/sif.py` writes no
+  mortar tie and refuses it (it failed safe, with code `unsupported`). Fixed 2026-11-09:
+  the claim and CLAUDE.md's "mortar tie" are gone; the mortar tie stays in section 3
+  until a benchmark passes.
 - The ADR index had drifted: 0069 (steps 1-3 built) and 0071 (steps 1-4 built). Corrected
-  with this record.
+  with this record; 0068 (steps 1-3 built) corrected 2026-11-09.
+- `build-packages --skip-existing` reused an older puzzle-fem of the same version, so a
+  rebuilt installer could ship old code without a word (found 2026-11-09). Fixed: the
+  build compares the package's recorded commit with the checkout's and rebuilds when
+  they differ.
 
 ## Consequences
 

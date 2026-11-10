@@ -29,11 +29,17 @@ def feature_key(component, physics, feature) -> str:
     return f"{component.id}|{physics.type}|{feature.type}|{feature.selection}"
 
 
+def bolt_key(component, connector) -> str:
+    """A bolt (fastener) as the view state names it: by component and its name."""
+    return f"{component.id}|{connector.name}"
+
+
 @dataclass
 class Visibility:
     root: str
     shown: set[str] = field(default_factory=set)  # systems and construction drawn always
     hidden_features: set[str] = field(default_factory=set)
+    hidden_bolts: set[str] = field(default_factory=set)  # bolts not drawn (`bolt_key`)
 
     @classmethod
     def load(cls, root: Path) -> Visibility:
@@ -42,7 +48,8 @@ class Visibility:
             data = json.loads(store_path().read_text(encoding="utf-8")).get(key, {})
         except (OSError, ValueError, AttributeError):
             data = {}
-        return cls(key, set(data.get("shown", [])), set(data.get("hidden_features", [])))
+        return cls(key, set(data.get("shown", [])), set(data.get("hidden_features", [])),
+                   set(data.get("hidden_bolts", [])))  # fmt: skip
 
     def save(self) -> None:
         path = store_path()
@@ -53,7 +60,8 @@ class Visibility:
         except (OSError, ValueError):
             every = {}
         every[self.root] = {"shown": sorted(self.shown),
-                            "hidden_features": sorted(self.hidden_features)}  # fmt: skip
+                            "hidden_features": sorted(self.hidden_features),
+                            "hidden_bolts": sorted(self.hidden_bolts)}  # fmt: skip
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps(every, indent=1), encoding="utf-8")
@@ -71,6 +79,11 @@ class Visibility:
         keys = set(keys)
         self.hidden_features = self.hidden_features | keys if hidden else (
             self.hidden_features - keys)  # fmt: skip
+        self.save()
+
+    def hide_bolts(self, keys, hidden: bool = True) -> None:
+        keys = set(keys)
+        self.hidden_bolts = self.hidden_bolts | keys if hidden else self.hidden_bolts - keys
         self.save()
 
 
@@ -143,6 +156,7 @@ def show_everything(window) -> None:
         window.submit(edits[0]) if len(edits) == 1 else window.submit_batch(edits)
     v = window.visibility
     v.hidden_features = set()
+    v.hidden_bolts = set()
     v.shown = {str(o.id) for kind in _kinds() for o in _of_kind(window, kind)}
     v.save()
     _redraw(window)
@@ -228,6 +242,295 @@ def colour_picked_bodies(window, colour: str | None = "ask") -> object:
     return _geometry_edits(window, changes)
 
 
+def colour_bodies(window, geo, bodies, colour: str | None = "ask") -> object:
+    """A colour for some bodies of one geometry (a body selection's, from the tree);
+    None takes their own colour away, back to the geometry's."""
+    if colour == "ask":
+        colour = window.pick_colour(next((geo.body_colours[b] for b in bodies
+                                          if b in geo.body_colours), geo.colour))  # fmt: skip
+        if colour is None:
+            return None
+    own = dict(geo.body_colours)
+    for b in bodies:
+        if colour is None:
+            own.pop(b, None)
+        else:
+            own[b] = colour
+    return _geometry_edits(window, [(geo, "body_colours", own)])
+
+
+# --- hiding from the tree: bodies, bolts and groups ---------------------------------------
+# A Thing is what the view can leave out. Geometries and bodies are the model's (one
+# command or batch, so one undo); symbols, bolts and the systems drawn always are view
+# state. Groups hide what they hold, through the same Things.
+
+
+@dataclass(frozen=True)
+class Thing:
+    kind: str  # "geometry", "body", "feature", "bolt" or "extra"
+    ref: str  # a geometry's id (geometry, body), a feature's or bolt's key, an object's id
+    body: str = ""  # a body's name
+
+
+def bodies_of(window, geo) -> list[str]:
+    """A geometry's bodies by name: its body selections' members, and the bodies of any
+    mesh or preview made of it."""
+    from puzzle.model.schema import Component
+
+    names = {m for s in geo.selections if s.entity == "body" for m in s.members}
+    names |= set(geo.hidden_bodies)
+    comps = list(window.session.project.of_type(Component))
+    comps += [c for c, _ in getattr(window, "_standalones", {}).values()]
+    for c in comps:
+        parts = {p.name for p in c.parts if p.geometry == geo.id}
+        for e, (part, name) in window.mesh_names.get(str(c.id), {}).items() if parts else ():
+            if e[0] == 3 and part in parts:
+                names.add(name)
+    return sorted(names)
+
+
+def _object_things(window, obj) -> list[Thing]:
+    from puzzle.model.schema import Component, Geometry
+
+    project = window.session.project
+    if isinstance(obj, Geometry):
+        return [Thing("geometry", str(obj.id))]
+    if isinstance(obj, Component):  # a component shows as its parts' geometry
+        return [Thing("geometry", str(p.geometry)) for p in obj.parts
+                if isinstance(project.objects.get(p.geometry), Geometry)]  # fmt: skip
+    if isinstance(obj, _kinds()):
+        return [Thing("extra", str(obj.id))]
+    return []
+
+
+def key_things(window, scope: str, key: str, seen=()) -> list[Thing]:
+    """What a group's member `key` in `scope` (see `tree.container_key`) can hide."""
+    from puzzle.gui.menus import _uuid
+    from puzzle.model.schema import Component, Geometry, TreeGroup
+
+    project = window.session.project
+    obj = project.objects.get(_uuid(key))
+    if isinstance(obj, TreeGroup):
+        if key in seen:
+            return []
+        return [t for m in obj.members for t in key_things(window, obj.section, m, (*seen, key))]
+    if obj is not None:
+        return _object_things(window, obj)
+    kind, _, name = key.partition(":")
+    oid, _, physics = scope.partition("/")
+    owner = project.objects.get(_uuid(oid))
+    if isinstance(owner, Geometry) and kind == "selection":
+        sel = next((s for s in owner.selections if s.name == name), None)
+        if sel is not None and sel.entity == "body":
+            return [Thing("body", str(owner.id), b) for b in sel.members]
+    elif isinstance(owner, Component) and kind == "part":
+        part = next((p for p in owner.parts if p.name == name), None)
+        if part is not None and isinstance(project.objects.get(part.geometry), Geometry):
+            return [Thing("geometry", str(part.geometry))]
+    elif isinstance(owner, Component) and kind == "connector":
+        found = next((c for c in owner.connectors if c.name == name), None)
+        return [Thing("bolt", bolt_key(owner, found))] if found is not None else []
+    elif isinstance(owner, Component) and kind == "feature" and physics:
+        ftype, _, selection = name.partition(":")
+        return [Thing("feature", feature_key(owner, ph, f)) for ph in owner.physics
+                if ph.type == physics for f in ph.features
+                if f.type == ftype and f.selection == selection]  # fmt: skip
+    return []
+
+
+def scope_keys(window, scope: str) -> list[str]:
+    """Every member key a scope holds (what "others" means for a group)."""
+    from puzzle.gui.menus import _uuid
+    from puzzle.gui.tree import SECTIONS
+    from puzzle.model.schema import Component, Geometry
+
+    project = window.session.project
+    cls = dict(SECTIONS).get(scope)
+    if cls is not None:
+        return [str(o.id) for o in project.of_type(cls)]
+    oid, _, physics = scope.partition("/")
+    owner = project.objects.get(_uuid(oid))
+    if isinstance(owner, Geometry):
+        return [f"selection:{s.name}" for s in owner.selections]
+    if isinstance(owner, Component) and physics:
+        return [f"feature:{f.type}:{f.selection}" for ph in owner.physics if ph.type == physics
+                for f in ph.features]  # fmt: skip
+    if isinstance(owner, Component):
+        return [f"part:{p.name}" for p in owner.parts] + [
+            f"connector:{c.name}" for c in owner.connectors]  # fmt: skip
+    return []
+
+
+def is_hidden(window, thing: Thing) -> bool:
+    from puzzle.gui.menus import _uuid
+
+    v = window.visibility
+    if thing.kind in ("geometry", "body"):
+        geo = window.session.project.objects.get(_uuid(thing.ref))
+        if geo is None:
+            return False
+        return geo.hidden or (thing.kind == "body" and thing.body in geo.hidden_bodies)
+    if thing.kind == "feature":
+        return thing.ref in v.hidden_features
+    if thing.kind == "bolt":
+        return thing.ref in v.hidden_bolts
+    return thing.ref not in v.shown  # a system or construction object drawn only selected
+
+
+def set_hidden(window, hide=(), show=()) -> object:
+    """Hide some Things and show others: geometries and bodies as one command (or one
+    batch), the view state after; then the tree and the view again."""
+    from puzzle.gui.menus import _uuid
+
+    project = window.session.project
+    flags: dict = {}  # geometry id -> [hidden, hidden bodies]
+    v = window.visibility
+
+    def state(ref):
+        if ref not in flags:
+            geo = project.objects.get(_uuid(ref))
+            if geo is None:
+                return None
+            flags[ref] = [geo.hidden, set(geo.hidden_bodies)]
+        return flags[ref]
+
+    for on, things in ((True, hide), (False, show)):
+        for t in things:
+            if t.kind == "geometry" and (s := state(t.ref)) is not None:
+                s[0] = on
+                if not on:
+                    s[1].clear()  # shown: all of it
+            elif t.kind == "body" and (s := state(t.ref)) is not None:
+                if on:
+                    s[1].add(t.body)
+                else:
+                    s[1].discard(t.body)
+                    if s[0]:  # a body of a hidden geometry: it alone is shown
+                        geo = project.objects.get(_uuid(t.ref))
+                        others = set(bodies_of(window, geo)) - {
+                            x.body for x in show if x.kind == "body" and x.ref == t.ref
+                        }
+                        s[0], s[1] = False, s[1] | others
+            elif t.kind == "feature":
+                v.hidden_features = v.hidden_features | {t.ref} if on else (
+                    v.hidden_features - {t.ref})  # fmt: skip
+            elif t.kind == "bolt":
+                v.hidden_bolts = v.hidden_bolts | {t.ref} if on else v.hidden_bolts - {t.ref}
+            elif t.kind == "extra":
+                v.shown = v.shown - {t.ref} if on else v.shown | {t.ref}
+    v.save()
+    changes = []
+    for ref, (hidden, bodies) in flags.items():
+        geo = project.objects[_uuid(ref)]
+        changes += [(geo, "hidden", hidden), (geo, "hidden_bodies", sorted(bodies))]
+    out = _geometry_edits_batch(window, changes)
+    _redraw(window)
+    return out
+
+
+def _geometry_edits_batch(window, changes) -> object:
+    """As `_geometry_edits`, with a geometry's several fields in one Edit."""
+    from puzzle.commands.model import Edit, EditOp
+
+    by: dict = {}
+    for g, path, value in changes:
+        if getattr(g, path) != value:
+            by.setdefault(str(g.id), []).append(EditOp(op="set", path=path, value=value))
+    edits = [Edit(object=gid, ops=ops) for gid, ops in by.items()]
+    if not edits:
+        return None
+    return window.submit(edits[0]) if len(edits) == 1 else window.submit_batch(edits)
+
+
+def all_geometry_things(window) -> list[Thing]:
+    """Every geometry and every body: "everything drawn", as Hide all others sees it."""
+    from puzzle.model.schema import Geometry
+
+    out = []
+    for g in _of_kind(window, Geometry):
+        out.append(Thing("geometry", str(g.id)))
+        out += [Thing("body", str(g.id), b) for b in bodies_of(window, g)]
+    return out
+
+
+def node_things(window, node) -> list[Thing]:
+    """What a tree item can hide: a geometry, a body selection's bodies, a part, a bolt,
+    a load's symbol, a system, or everything a group holds."""
+    from puzzle.gui.menus import _uuid
+    from puzzle.gui.tree import member_key
+
+    project = window.session.project
+    obj = project.objects.get(_uuid(node.object)) if node.object else None
+    if node.kind == "group":
+        return key_things(window, "", node.object)
+    if node.kind == "object":
+        return _object_things(window, obj) if obj is not None else []
+    item = window.tree.item_for(node)
+    scope = window.tree.scope_of(item) if item is not None else None
+    key = member_key(node)
+    return key_things(window, scope, key) if scope and key else []
+
+
+def hide_others(window, node) -> object:
+    """Everything like this item (bolts for a bolt, symbols for a symbol) hidden but it;
+    for a body or geometry, every other geometry and body."""
+    mine = node_things(window, node)
+    if not mine:
+        return None
+    kinds = {t.kind for t in mine}
+    holding = {t.ref for t in mine if t.kind == "body"}  # geometries a shown body is in
+    allowed = kinds | ({"geometry"} if holding else set())
+    keep = set(mine)
+
+    def other(t) -> bool:
+        if t in keep or t.kind not in allowed:
+            return False
+        if t.kind == "geometry":
+            return t.ref not in holding
+        return t.kind != "body" or t.ref in holding  # other geometries hide whole
+
+    return set_hidden(window, [t for t in _pool(window, node, kinds) if other(t)], mine)
+
+
+def _pool(window, node, kinds) -> list[Thing]:
+    """The things "others" and "all" range over: the item's scope, and every geometry
+    and body when it holds geometry."""
+    pool = _scope_pool(window, node)
+    if kinds & {"geometry", "body"}:
+        pool += all_geometry_things(window)
+    return list(dict.fromkeys(pool))
+
+
+def _scope_pool(window, node) -> list[Thing]:
+    from puzzle.gui.menus import _uuid
+    from puzzle.model.schema import TreeGroup
+
+    item = window.tree.item_for(node)
+    if node.kind == "group":
+        group = window.session.project.objects.get(_uuid(node.object))
+        scope = group.section if isinstance(group, TreeGroup) else None
+    else:
+        scope = window.tree.scope_of(item) if item is not None else None
+    if scope is None:
+        return []
+    return [t for k in scope_keys(window, scope) for t in key_things(window, scope, k)]
+
+
+def show_all_like(window, node) -> object:
+    """Everything like this item shown: every geometry and body for a body or geometry,
+    else everything of its kinds in its scope."""
+    mine = node_things(window, node)
+    kinds = {t.kind for t in mine}
+    allowed = kinds | ({"geometry"} if "body" in kinds else set())
+    pool = _pool(window, node, kinds) + mine
+    return set_hidden(window, (), list(dict.fromkeys(t for t in pool if t.kind in allowed)))
+
+
+def hide_bolts(window, comp, connectors, hidden: bool = True) -> None:
+    window.visibility.hide_bolts([bolt_key(comp, c) for c in connectors], hidden)
+    _redraw(window)
+
+
 def toggle_selected(window) -> None:
     """Show or hide what the tree has selected (the menu bar's way to the right-click)."""
     from puzzle.gui import menus
@@ -238,6 +541,12 @@ def toggle_selected(window) -> None:
         return
     project = window.session.project
     obj = project.objects.get(menus._uuid(node.object)) if node.object else None
+    if node.kind in ("selection", "connector", "group"):
+        things = node_things(window, node)
+        if things:
+            hidden = all(is_hidden(window, t) for t in things)
+            set_hidden(window, () if hidden else things, things if hidden else ())
+            return
     if isinstance(obj, _kinds()) and node.kind == "object":
         show_objects(window, [obj], str(obj.id) not in window.visibility.shown)
     elif isinstance(obj, Geometry):
@@ -298,6 +607,48 @@ def add_to_menu(window, menu, node, obj) -> None:
                         ("Colour…", lambda: colour_geometry(window, [geo]))]  # fmt: skip
             if geo.colour or geo.body_colours:
                 entries.append(("Reset colour", lambda: colour_geometry(window, [geo], None)))
+    elif isinstance(obj, Geometry) and node.kind == "selection":
+        sel = obj.selections[int(node.path.split(".")[1])]
+        if sel.entity == "body" and sel.members:  # a body of an assembly, from the tree
+            things = node_things(window, node)
+            hidden = all(is_hidden(window, t) for t in things)
+            entries += [
+                ("Show" if hidden else "Hide",
+                 lambda: set_hidden(window, () if hidden else things, things if hidden else ())),
+                ("Hide all others", lambda: hide_others(window, node)),
+                ("Show all", lambda: show_all_like(window, node)),
+                ("Colour…", lambda: colour_bodies(window, obj, sel.members)),
+            ]  # fmt: skip
+            if any(b in obj.body_colours for b in sel.members):
+                entries.append(("Reset colour",
+                                lambda: colour_bodies(window, obj, sel.members, None)))  # fmt: skip
+    elif isinstance(obj, Component) and node.kind == "connector":
+        c = obj.connectors[int(node.path.split(".")[1])]
+        hidden = bolt_key(obj, c) in window.visibility.hidden_bolts
+        entries += [("Show bolt" if hidden else "Hide bolt",
+                     lambda: hide_bolts(window, obj, [c], not hidden)),
+                    ("Hide all other bolts", lambda: hide_others(window, node)),
+                    ("Show all bolts",
+                     lambda: hide_bolts(window, obj, obj.connectors, False))]  # fmt: skip
+        if c.group:
+            same = [b for b in obj.connectors if b.group == c.group]
+            entries += [(f"Hide bolt group {c.group}", lambda: hide_bolts(window, obj, same)),
+                        (f"Show bolt group {c.group}",
+                         lambda: hide_bolts(window, obj, same, False))]  # fmt: skip
+    elif isinstance(obj, Component) and node.kind == "object" and obj.connectors:
+        entries += [("Hide all bolts", lambda: hide_bolts(window, obj, obj.connectors)),
+                    ("Show all bolts",
+                     lambda: hide_bolts(window, obj, obj.connectors, False))]  # fmt: skip
+    elif node.kind == "group":
+        things = node_things(window, node)
+        if things:
+            hidden = all(is_hidden(window, t) for t in things)
+            entries += [
+                ("Show what it holds" if hidden else "Hide what it holds",
+                 lambda: set_hidden(window, () if hidden else things, things if hidden else ())),
+                ("Hide all others", lambda: hide_others(window, node)),
+                ("Show all", lambda: show_all_like(window, node)),
+            ]  # fmt: skip
     elif isinstance(obj, Component) and node.kind == "physics":
         ph = obj.physics[int(node.path.split(".")[1])]
         pairs = [(ph, f) for f in ph.features]

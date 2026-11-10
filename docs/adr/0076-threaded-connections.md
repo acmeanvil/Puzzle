@@ -1,6 +1,6 @@
 # 0076. Model threads as a correction on a contact between smooth cylinders
 
-- Status: Proposed
+- Status: Accepted; steps 0-3, 5 and 6 built; step 4 (bolts) in progress (2026-11-09)
 - Date: 2026-11-08
 
 ## Context
@@ -147,7 +147,7 @@ are the next build; steps 4-6 follow.
    - CalculiX writes bonded (equations) and unilateral (GAPUNI) flanks on CAX elements.
      Both models are meshed with quadrilaterals only (CAX8), which 2D models have had
      since 2026-11-08.
-   - Benchmark `tests/integration/test_threads.py`: an M16×2 cap screw in a steel boss,
+   - Benchmark `tests/integration/test_thread_benchmark.py`: an M16×2 cap screw in a steel boss,
      40 kN axial, the true sawtooth thread meshed as the reference, and the smooth model
      with `iso` and `compliance="teeth"`. Accept when:
      - the shank stress is within 1 %;
@@ -204,6 +204,101 @@ are the next build; steps 4-6 follow.
      schematic-parity row.
    - The design doc and CLAUDE.md lines, and this ADR's status to Accepted with the
      measured results.
+
+### Progress (2026-11-09)
+
+- **Step 0, settled.** VDI 2230-1:2015, p. 40, Eqs. 20-27 (the maintainer's copy):
+  δ_G = l_G / (E_S A_d3), l_G = 0.5 d; δ_M = l_M / (E_M A_N), A_N = π d²/4, l_M = 0.4 d
+  (a nut) or 0.33 d (a tapped thread joint), as `threads.vdi_compliance` has them.
+  Yamamoto's tooth terms (1980) as restated by Liu et al., Engineering Structures 315
+  (2024) 118486, Eqs. 5-12: δ1 bending, δ2 shear, δ3 root inclination, δ4 root shear,
+  δ5 radial; the general forms rebuilt from Eq. 5 reproduce Liu et al.'s ISO
+  coefficients (screw 0.015, 0.84, 0.106, 1.246; nut 0.067, 1.164, 0.293, 1.142).
+  `teeth` is δ1-δ4 of both sides in series (δ5 is the continuum's own radial give).
+- **Step 1, built.** `Thread` and `Contact.thread` (a threaded contact is always meshed
+  apart), `puzzle/threads.py` (forms with their basic profiles, `spec`, frames and the
+  axis fit, normals, pairs, areas, stiffness, per-thread binning, VDI compliance), and
+  `adapters/thread_pairs.py` (pairs, flank normals, areas and stiffness on a mesh; the
+  bearing flank faces the way the screw goes on past the engagement; `thread_radii`
+  refused). `check_contacts` refuses a thread unless the adapter lists its type, so no
+  adapter writes it as a plain tie. Tests: `tests/test_threads.py`, 15, against hand
+  values and the standards' basic profiles.
+- **Step 2, built.** CalculiX writes threads in 3D and axisymmetric 2D (`inp._threads`):
+  - bonded and no_separation: a SPRINGA from the screw node to a helper half a pitch
+    out along n, the helper tied to the nut node, or `*EQUATION` when rigid;
+  - frictionless: the same spring with a nonlinear law (k in compression past the
+    clearance, 1e-4 k in tension), in an NLGEOM step. GAPUNI on a 2D model's nodes,
+    and the contact output CalculiX writes for contact pairs, crashed it.
+  - An axisymmetric model is a 2° slice to CalculiX, so springs are written × 2/360
+    (the first runs had them 180 times too stiff, the teeth as good as rigid).
+
+  The M16×2 benchmark (`tests/integration/test_thread_benchmark.py`, axisymmetric CAX8;
+  the meshed reference converged: 0.25 and 0.12 mm elements give 50.0 and 50.1 %, 1.167
+  and 1.166 kN/µm). The reference glues its bearing flanks, so the smooth thread ties
+  both flanks (no_separation) to compare like with like, the cylinders at d3/2:
+
+  | Smooth model | First thread | Threads 2-8 | Stiffness |
+  | --- | --- | --- | --- |
+  | Yamamoto's teeth as published | 36.8 % | | 1.107 kN/µm |
+  | × 0.25 (`TEETH_FACTOR`, the tuning) | 47.6 % (50.0) | within 4.7 points | 1.197 (+2.6 %) |
+
+  The tuning is stated: Yamamoto's cantilever teeth are softer than teeth in a
+  continuum; one factor, 0.25, meets the gate. A bonded thread (the bearing flank's
+  normal tied, the flank free to slide, as real threads) gives 38.1 % and 0.993 kN/µm:
+  softer than the glued reference, as it should be. Wedges are F tan α to four digits
+  (iso 23094 N, acme 10345, trapezoidal 10718, buttress 4911 on its 7° flank and 40000
+  on its 45° one, square 0); unilateral flanks bear as the bonded tie under a pull.
+  CalculiX's frictionless thread_load sums to 103 % (its nonlinear spring under NLGEOM
+  carries about 4 % less than k times the push); bonded and no_separation sum exactly.
+  VDI's whole-engagement compliance isn't compared yet.
+- **Step 3, CalculiX built.** 3D on second-order tets, the same springs plus a "turn"
+  spring per pair: tied along the flanks only, the screw unscrewed under a pull (the
+  helix holds it by L / 2πr), the per-thread forces swinging hundreds of percent; a
+  circumferential spring stands in for the friction that holds a thread. Every node of
+  a six-node face takes a share (corners 1/12, mid-edge 1/4): the consistent shares
+  leave the corners without springs. The revolved model matches the 2D shares within
+  1.3 points, the wedge within 0.2 % (23056 against 23094 N), the flank
+  pressure around the first thread within 8.6 % (eight sectors). Hex blocks of
+  revolution (ADR 0072 section 5) are not built: tets passed the check.
+- **Step 3, Code_Aster built** (`code_aster/thread_springs.py`): a helper node per pair
+  and flank whose DX = √(k/k0) n·(u_nut − u_screw) by LIAISON_DDL, a `K_T_D_N` point
+  spring k0 on it (one group per flank); rigid as LIAISON_DDL; frictionless as DIS_CHOC
+  (the clearance as COEF_IMPO: `DIST_1` narrowed the gap), 1e-4 k in tension; AXIS per
+  radian (the ring's stiffness / 2π). It matches CalculiX to four digits where both are
+  linear (2D bonded 38.05/38.07 %, no_separation 47.56/47.62 %, rigid, and 3D bonded
+  40.06 %, 0.9800 kN/µm, 23056 N on both). Frictionless, Code_Aster's wedge is F tan 30°
+  within 2 %, and with a 0.01 mm clearance its stiffness is the hand value (0.7722 kN/µm
+  against 0.772); CalculiX's NLGEOM springs are 3 % off (10 % with the clearance), so
+  CalculiX's frictionless threads are the less accurate. 3D threads are slow on
+  Code_Aster (about 6 minutes for 2300 pairs: a one-node group per node for
+  LIAISON_DDL); the solve itself is seconds.
+- **Step 4, beam bolts built on CalculiX.** `BoltType.thread_form` (iso for ISO sizes, un
+  for UNC/UNF, none) and `BeamFastener.thread` (over the type's; `bolts.type_thread`,
+  filled by `bolts.resolve`). A beam bolt's tapped end (`joint` tapped or stud_tapped)
+  is a thread, not a spider on the wall (`inp._thread_end`): the engaged core moves
+  level by level rigidly with the end's spider but for an axial slide per level, the
+  slides joined by springs E A_d3 / Δz; each wall node bears on its level through a
+  flank spring to a helper following that motion (tying helpers to core nodes that
+  were themselves dependent left CalculiX decascading for 20 minutes); the RBE3's twist
+  row holds the bolt's turning. Benchmark: an M16 8.8 cap screw through a plate into
+  the boss shares its thread as the solid smooth screw, measured from the boss's side
+  alike, within 2 points per thread (30.8 against 29.6 % on the first). Not done yet:
+  threaded ends on Code_Aster and FEniCSx bolts, solid bolts (`formulation="solid"`),
+  per-thread loads in the bolt table and `bolt_results` (the core's helpers are dropped
+  from results), and the bracket assembly with tapped bolts.
+- **Step 5.** FEniCSx writes bonded, no_separation and frictionless threads in 2D
+  axisymmetric static steps (`case._threads`, `study.solve_threaded`: k n nᵀ springs
+  added to K, an active set for unilateral flanks, rigid as 1e3 × the teeth), matching
+  CalculiX to four digits (bonded 38.07/38.08 %, no_separation 47.58/47.61 %); 3D
+  refused until benchmarked. Elmer refused: its SIF has no node-pair springs or
+  directional constraints (listed in ADR 0072). dolfinx reads no 8-node quadrilaterals,
+  so FEniCSx refuses second-order 2D quadrilateral meshes.
+- **Step 6, built.** MCP `thread_forms`, `contact_thread` (a command to submit),
+  `thread_results`; skill `thread-engagement`; the contact's Thread group in Properties,
+  Make it a thread… / Remove the thread, Model → Contacts → Thread on a contact…; Find
+  contacts' Thread column for coaxial cylinders; the Advisor's note; schematic wires
+  for `contacts[].thread.cs` and `connectors[].thread.cs` (`puzzle/thread_setup.py`).
+  The profile drawing in Properties isn't done.
 
 Run keys: `Contact.thread` is in the contact's hash. Changing a form reruns, but naming a
 group does not.

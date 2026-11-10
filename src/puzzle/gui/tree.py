@@ -56,13 +56,16 @@ class Node:
 
     kind: "section", "object", "selection", "part", "physics", "feature", "step" or
     "run". `object` is the project object's id (or the run id for runs); `path` is the
-    dotted field path inside it, as Edit commands take it.
+    dotted field path inside it, as Edit commands take it. `key` is how a group inside
+    an object names an item of it (a selection, contact, bolt or feature: by name, not
+    by its index, which shifts when another is removed).
     """
 
     kind: str
     object: str = ""
     path: str = ""
     label: str = ""
+    key: str = ""
 
 
 SECTIONS = [
@@ -125,7 +128,33 @@ def member_key(node: Node) -> str | None:
         return node.object
     if node.kind in ("run", "sweep"):
         return f"{node.kind}:{node.object}"
+    return node.key or None  # an item inside an object (a selection, a contact, ...)
+
+
+def container_key(node: Node | None) -> str | None:
+    """The scope a tree item opens for groups of what it holds: a heading's title, a
+    geometry's or component's id (its selections; its parts, contacts, bolts...), or
+    "<component id>/<physics>" (its loads and supports). None: it holds no groups."""
+    if node is None:
+        return None
+    if node.kind == "section":
+        return node.label
+    if node.kind == "object" and node.path == "" and node.key == "":
+        return node.object
+    if node.kind == "physics":
+        return f"{node.object}/{node.label}"
     return None
+
+
+def scope_name(project: Project, scope: str) -> str:
+    """A group's scope in words: a heading, or the object (and physics) it sits in."""
+    from puzzle.gui.choices import label as words
+
+    oid, _, physics = scope.partition("/")
+    obj = project.objects.get(_uuid(oid))
+    if obj is None:
+        return scope
+    return f"{obj.name}: {words(physics)}" if physics else obj.name
 
 
 class NameDelegate(QStyledItemDelegate):
@@ -283,36 +312,49 @@ class ModelTree(QTreeWidget):
             self.setCurrentItem(chosen)
 
     def _group(self, root: QTreeWidgetItem, project: Project) -> None:
-        """Each section's groups as folders at its top, holding their members."""
+        """Each scope's groups as folders holding their members: a section's at its top,
+        an object's or a physics' before the first item they can hold."""
         groups = project.of_type(TreeGroup)
         if not groups:
             return
-        for i in range(root.childCount()):
-            section = root.child(i)
-            title = section.data(0, ROLE).label
-            mine = [g for g in groups if g.section == title]
-            if not mine:
-                continue
+        scopes = {g.section for g in groups}
+        containers = [i for i in self._items() if container_key(i.data(0, ROLE)) in scopes]
+        for container in containers:
+            scope = container_key(container.data(0, ROLE))
+            mine = [g for g in groups if g.section == scope]
             ids = {str(g.id) for g in mine}
             nested = {m for g in mine for m in g.members if m in ids}
             folders = {str(g.id): QTreeWidgetItem([g.name]) for g in mine}
             for g in mine:
                 folders[str(g.id)].setData(0, ROLE, Node("group", str(g.id), "", g.name))
             owner = {m: str(g.id) for g in mine for m in g.members}
-            items = [section.child(j) for j in range(section.childCount())]
+            items = [container.child(j) for j in range(container.childCount())]
+            first = next((j for j, item in enumerate(items)
+                          if member_key(item.data(0, ROLE)) is not None), len(items))  # fmt: skip
             for item in items:  # members into their folders
                 key = member_key(item.data(0, ROLE))
                 if key in owner:
-                    section.removeChild(item)
+                    container.removeChild(item)
                     folders[owner[key]].addChild(item)
             for n, g in enumerate(g for g in mine if str(g.id) not in nested):
-                section.insertChild(n, folders[str(g.id)])
+                container.insertChild(first + n, folders[str(g.id)])
             for g in mine:  # groups inside groups, first in their folder
                 for m in reversed(g.members):
                     if m in folders and m != str(g.id):
                         folders[str(g.id)].insertChild(0, folders[m])
             for folder in folders.values():
                 self._flags(folder)
+
+    def scope_of(self, item: QTreeWidgetItem) -> str | None:
+        """The scope an item is grouped in: the heading it sits under, or the object (or
+        physics) holding it (`container_key`), past any groups."""
+        parent = item.parent() if item is not None else None
+        while parent is not None:
+            key = container_key(parent.data(0, ROLE))
+            if key is not None:
+                return key
+            parent = parent.parent()
+        return None
 
     def section_of(self, item: QTreeWidgetItem) -> str | None:
         """The heading an item sits under ("Studies", "Results", ...)."""
@@ -331,11 +373,12 @@ class ModelTree(QTreeWidget):
         return None
 
     def groupable(self, item: QTreeWidgetItem) -> bool:
-        """Directly under a section or a group: a top-level thing that can be moved."""
+        """Directly under a scope (a section, an object, a physics) or a group: a thing
+        that can be moved into a group there."""
         parent = item.parent()
         up = parent.data(0, ROLE) if parent is not None else None
         node = item.data(0, ROLE)
-        return (up is not None and up.kind in ("section", "group")
+        return (up is not None and (up.kind == "group" or container_key(up) is not None)
                 and member_key(node) is not None)  # fmt: skip
 
     def _flags(self, item: QTreeWidgetItem) -> None:
@@ -343,7 +386,8 @@ class ModelTree(QTreeWidget):
         flags = item.flags() & ~Qt.ItemFlag.ItemIsDragEnabled & ~Qt.ItemFlag.ItemIsDropEnabled
         if node.kind in RENAMABLE:
             flags |= Qt.ItemFlag.ItemIsEditable
-        if node.kind in ("section", "group") or member_key(node) is not None:
+        if (node.kind == "group" or container_key(node) is not None
+                or member_key(node) is not None):  # fmt: skip
             flags |= Qt.ItemFlag.ItemIsDropEnabled
         if member_key(node) is not None:
             flags |= Qt.ItemFlag.ItemIsDragEnabled
@@ -358,14 +402,18 @@ class ModelTree(QTreeWidget):
         event.ignore()
         if target is None:
             return
-        section = self.section_of(target)
-        dragged = [i for i in self.selectedItems() if self.groupable(i)
-                   and self.section_of(i) == section]  # fmt: skip
+        node = target.data(0, ROLE)
+        own = container_key(node)  # dropped on the scope itself: out of every group
+        candidates = [i for i in self.selectedItems() if self.groupable(i)]
+        section = next((self.scope_of(i) for i in candidates if self.scope_of(i) == own), None)
+        section = section or self.scope_of(target)
+        dragged = [i for i in candidates if self.scope_of(i) == section]
         if not dragged or section is None:
             return
-        node = target.data(0, ROLE)
         if node.kind == "group":
             group = node.object
+        elif own is not None and own == section:
+            group = None
         else:
             parent = target.parent()
             up = parent.data(0, ROLE) if parent is not None else None
@@ -430,11 +478,18 @@ class ModelTree(QTreeWidget):
                 self._add(item, text, Node("operation", oid, f"history.{i}", step.name))
             for i, s in enumerate(obj.selections):
                 text = f"{s.name}  ({_count(len(s.members), s.entity)})"
-                self._add(item, text, Node("selection", oid, f"selections.{i}", s.name))
+                s_item = self._add(item, text, Node("selection", oid, f"selections.{i}", s.name,
+                                                    f"selection:{s.name}"))  # fmt: skip
+                hidden = set(obj.hidden_bodies)
+                if s.entity == "body" and s.members and set(s.members) <= hidden:
+                    from puzzle.gui.visibility import mark
+
+                    mark(s_item, True, "its bodies are hidden in the view")
         elif isinstance(obj, Component):
             for i, p in enumerate(obj.parts):
                 text = f"Part {p.name}: {names.get(str(p.geometry), '?')}"
-                part_item = self._add(item, text, Node("part", oid, f"parts.{i}", p.name))
+                part_item = self._add(item, text, Node("part", oid, f"parts.{i}", p.name,
+                                                       f"part:{p.name}"))  # fmt: skip
                 geo = project.objects.get(p.geometry)
                 if isinstance(geo, Geometry) and geo.hidden:
                     from puzzle.gui.visibility import mark
@@ -442,24 +497,33 @@ class ModelTree(QTreeWidget):
                     mark(part_item, True, "its geometry is hidden")
             for i, a in enumerate(obj.materials):
                 text = f"{names.get(str(a.material), '?')} → {a.selection}"
-                self._add(item, text, Node("assignment", oid, f"materials.{i}", a.selection))
+                self._add(item, text, Node("assignment", oid, f"materials.{i}", a.selection,
+                                           f"assignment:{a.selection}"))  # fmt: skip
             for i, k in enumerate(obj.contacts):
                 text = f"Contact {k.name} ({label(k.type).lower()})"
-                self._add(item, text, Node("contact", oid, f"contacts.{i}", k.name))
+                self._add(item, text, Node("contact", oid, f"contacts.{i}", k.name,
+                                           f"contact:{k.name}"))  # fmt: skip
+            v = self.visibility
             for i, c in enumerate(obj.connectors):  # ADR 0027; a bolt type's (ADR 0050)
                 kind = names.get(str(c.type)) if c.type is not None else None
                 d = c.diameter
                 size = kind or (f"Ø {d.value:g} {d.unit}" if d is not None else "?")
                 text = f"Fastener {c.name} ({size}): {c.source} → {c.target or 'ground'}"
-                self._add(item, text, Node("connector", oid, f"connectors.{i}", c.name))
+                c_item = self._add(item, text, Node("connector", oid, f"connectors.{i}", c.name,
+                                                    f"connector:{c.name}"))  # fmt: skip
+                if v is not None and v.hidden_bolts:
+                    from puzzle.gui.visibility import bolt_key, mark
+
+                    if bolt_key(obj, c) in v.hidden_bolts:
+                        mark(c_item, True, "hidden in the view")
             for i, s in enumerate(obj.shell_sections):  # ADR 0027 shells
                 text = f"Shell on {s.selection}: {s.describe()}"
-                self._add(
-                    item, text, Node("shell_section", oid, f"shell_sections.{i}", s.selection)
-                )
+                self._add(item, text, Node("shell_section", oid, f"shell_sections.{i}",
+                                           s.selection, f"shell:{s.selection}"))  # fmt: skip
             for i, b in enumerate(obj.beam_sections):  # ADR 0027 beams
                 text = f"Beam section on {b.selection}: {b.describe()}"
-                self._add(item, text, Node("beam_section", oid, f"beam_sections.{i}", b.selection))
+                self._add(item, text, Node("beam_section", oid, f"beam_sections.{i}",
+                                           b.selection, f"beam:{b.selection}"))  # fmt: skip
             for i, ph in enumerate(obj.physics):
                 p_item = self._add(
                     item, label(ph.type), Node("physics", oid, f"physics.{i}", ph.type)
@@ -472,7 +536,8 @@ class ModelTree(QTreeWidget):
                         scale = f" ×{use.scale:g}" if use.scale != 1 else ""
                         text += f" ← {getattr(source, 'name', 'a missing field')}{scale}"
                     path = f"physics.{i}.features.{j}"
-                    f_item = self._add(p_item, text, Node("feature", oid, path, f.selection))
+                    key = f"feature:{f.type}:{f.selection}"
+                    f_item = self._add(p_item, text, Node("feature", oid, path, f.selection, key))
                     _feature_icon(f_item, f.type)
                     v = self.visibility
                     if v is not None and v.hidden_features:

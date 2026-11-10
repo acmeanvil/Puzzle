@@ -404,6 +404,17 @@ def _parser() -> argparse.ArgumentParser:
     p.set_defaults(handler=_contacts)
 
     p = sub.add_parser(
+        "split-parts", help="one part per body of a part holding several (an imported assembly)"
+    )
+    p.add_argument("project", type=Path)
+    p.add_argument("component", help="the component's name")
+    p.add_argument("part", help="the part to split")
+    p.add_argument("--no-bond", action="store_true",
+                   help="don't add bonded contacts where the bodies touch")  # fmt: skip
+    p.add_argument("--dry-run", action="store_true", help="say what it would make, change nothing")
+    p.set_defaults(handler=_split_parts)
+
+    p = sub.add_parser(
         "schematic", help="the project as nodes and wires: what feeds and shares what (ADR 0058)"
     )
     p.add_argument("project", type=Path)
@@ -1474,6 +1485,26 @@ def _schematic(args) -> int:
     if flow:
         print("Flow:")
         print("\n".join(f"  {line}" for line in flow))
+    return 0
+
+
+def _split_parts(args) -> int:
+    """One part per body (ADR 0039), as one batch: one undo."""
+    from puzzle.commands import resolve
+    from puzzle.commands.session import Session
+    from puzzle.model.schema import Component
+    from puzzle.split_parts import plan
+
+    session = Session(args.project)
+    comp = resolve(session.project, args.component, Component)
+    made = plan(session.project, comp, args.part, args.project, bond=not args.no_bond)
+    print(made.summary())
+    for note in made.notes:
+        print(f"  note: {note}")
+    if args.dry_run:
+        return 0
+    session.submit_batch(made.commands)
+    print("done (puzzle undo takes it back)")
     return 0
 
 

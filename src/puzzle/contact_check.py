@@ -456,7 +456,7 @@ def nonconforming(contact, mesh: Mesh, s: ContactState | None = None) -> dict | 
     target's element size. A press fit (one curve inside a like one) and flat faces
     don't count. Code_Aster's continuous contact fails to pair such faces before its
     first increment (tests/integration/test_hertz.py), so it refuses them."""
-    if contact.type not in ("frictionless", "frictional"):
+    if contact.type not in ("frictionless", "frictional") or contact.thread is not None:
         return None
     s = s if s is not None else state(contact, mesh)
     source, target = surface(mesh, contact.source), surface(mesh, contact.target)

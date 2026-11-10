@@ -108,6 +108,7 @@ class HistoryStep(BaseModel):
         "heal",
         "remove",
         "fragment",
+        "keep",
         "box",
         "cylinder",
         "cone",
@@ -669,6 +670,50 @@ class PartInstance(BaseModel):
     )
 
 
+class Thread(BaseModel):
+    """A thread on a contact between two coaxial cylinders (ADR 0076): the faces stay
+    smooth and the contact acts along the flanks (`puzzle.threads`). Unset numbers come
+    from the form and the size (`threads.spec`)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    form: Literal["iso", "un", "acme", "stub_acme", "trapezoidal", "buttress",
+                  "buttress_din", "square", "npt", "bspt", "custom"] = "iso"  # fmt: skip
+    size: str | None = Field(default=None, description="a standard size, e.g. M16 or 1/2-13 UNC")
+    pitch: Quantity | None = None
+    starts: int = Field(default=1, ge=1)
+    hand: Literal["right", "left"] = "right"
+    major: Quantity | None = None
+    pitch_diameter: Quantity | None = None
+    minor: Quantity | None = None
+    taper: float | None = Field(default=None, ge=0, description="diameter per length (NPT 1/16)")
+    flank_angles: tuple[float, float] | None = Field(
+        default=None, description="(load, other) in degrees from the radial plane"
+    )
+    axis: tuple[float, float, float] | None = Field(
+        default=None, description="the axis' direction; empty: fitted to the faces"
+    )
+    cs: UUID | None = Field(default=None, description="a coordinate system whose z is the axis")
+    bearing: Literal["auto", "load", "other"] = "auto"
+    compliance: Literal["teeth", "rigid"] | float = Field(
+        default="teeth", description="the flanks' give: the teeth's, rigid, or N/m³"
+    )
+    clearance: Quantity | None = Field(default=None, description="backlash along the flanks")
+    engaged_length: Quantity | None = Field(default=None, description="empty: the overlap")
+
+    @model_validator(mode="after")
+    def _check(self) -> Thread:
+        if self.form == "custom" and (self.size is None and (self.major is None
+                                                             or self.pitch is None)):  # fmt: skip
+            raise ValueError("a custom thread needs a size, or a major diameter and a pitch")
+        if self.form == "custom" and self.flank_angles is None:
+            raise ValueError("a custom thread needs its flank angles")
+        if self.form != "custom" and self.size is None and (self.major is None
+                                                            or self.pitch is None):  # fmt: skip
+            raise ValueError("give the thread's size, or its major diameter and pitch")
+        return self
+
+
 class Contact(BaseModel):
     """A contact constraint between two selections, usually on different parts.
 
@@ -706,10 +751,17 @@ class Contact(BaseModel):
     offset: Quantity | None = Field(
         default=None, description="the initial clearance (+) or interference (−), for offset"
     )
+    thread: Thread | None = Field(
+        default=None,
+        description="a thread between two coaxial cylinders: the contact acts along the "
+        "flanks (ADR 0076); always meshed apart",
+    )
     extensions: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _check(self) -> Contact:
+        if self.thread is not None and self.meshing == "conformal":
+            raise ValueError("a threaded contact is meshed apart (its flanks need two sides)")
         if (self.interface == "offset") != (self.offset is not None):
             raise ValueError("an offset is given for, and only for, the offset interface")
         if self.interface != "as_is" and self.type in ("bonded", "no_separation"):
@@ -724,7 +776,7 @@ class Contact(BaseModel):
     def effective_meshing(self) -> Literal["conformal", "nonconformal"]:
         if self.meshing:
             return self.meshing
-        return "conformal" if self.type == "bonded" else "nonconformal"
+        return "conformal" if self.type == "bonded" and self.thread is None else "nonconformal"
 
     @property
     def capability(self) -> str:
@@ -1326,6 +1378,10 @@ class BeamFastener(BaseModel):
     )
     group: str | None = Field(default=None, description="a group the bolt is listed under")
     rule: str | None = Field(default=None, description="the bolt rule that made it (ADR 0050)")
+    thread: Thread | None = Field(
+        default=None,
+        description="its tapped end's thread (ADR 0076), over its type's thread form",
+    )
     through: list[str] = Field(
         default_factory=list,
         description="the holes of a stack's middle plates it passes (clearance holes: they "
@@ -1395,7 +1451,7 @@ class BoltRule(BaseModel):
     names: str = Field(default="Bolt {n}", description="{n} counts up; {rule} is this name")
     group: str | None = Field(default=None, description="the group the bolts are listed under")
     same_part: bool = Field(
-        default=False, description="also join two holes of one part (a split clamp)"
+        default=False, description="also join two holes of one body (a split clamp)"
     )
     ground_unpaired: bool = Field(
         default=False, description="a hole with no partner gets a bolt to ground (an anchor)"
@@ -1447,6 +1503,11 @@ class BoltType(ProjectObject):
     )
     engagement: Quantity | None = Field(
         default=None, description="a tapped hole's engaged thread length (default 1.5 d)"
+    )
+    thread_form: Literal["iso", "un", "none"] | None = Field(
+        default=None,
+        description="a tapped end's thread (ADR 0076): iso, un, or none (the engaged wall "
+        "follows the bolt on average); empty: iso for ISO sizes, un for UNC/UNF",
     )
 
     def dependencies(self) -> list[UUID]:
@@ -2667,11 +2728,18 @@ class TreeGroup(ProjectObject):
     """A folder in the model tree, under one section's heading ("Studies", "Results",
     ...): only how the tree is organised, never an input to a solve. `members` are the
     keys of what it holds: object ids, "run:<run id>", "sweep:<study id>", or other
-    groups' ids (a group inside a group)."""
+    groups' ids (a group inside a group). A group may also sit inside an object: then
+    `section` is a geometry's or component's id, or "<component id>/<physics type>", and
+    its members are "selection:<name>", "part:<name>", "contact:<name>",
+    "connector:<name>", "assignment:<selection>", "beam:<selection>",
+    "shell:<selection>" or "feature:<type>:<selection>"."""
 
     kind: ClassVar[str] = "group"
 
-    section: str = Field(description="the tree section's heading it sits under")
+    section: str = Field(
+        description="the tree section's heading it sits under, or the object (an id, or "
+        "'<component id>/<physics type>') whose items it holds"
+    )
     members: list[str] = Field(default_factory=list)
 
 

@@ -54,7 +54,10 @@ def test_code_aster_pass_through_reaches_the_solver(tmp_path, solver):
     tip, work = _tip(tmp_path, solver, {}, {"MECA_STATIQUE.SOLVEUR.RENUM": "'METIS'"},
                      {"linear_solver": "direct"})  # fmt: skip
     comm = next(work.rglob("job.comm")).read_text(encoding="utf-8")
-    assert "SOLVEUR=_F(RENUM='METIS')" in comm and tip < 0
+    import re
+
+    # The SOLVEUR block may hold the adapter's own keywords too (POSTTRAITEMENTS, 2026-11-08).
+    assert re.search(r"SOLVEUR=_F\([^)]*RENUM='METIS'", comm) and tip < 0
 
 
 @over("elmer")

@@ -142,8 +142,9 @@ class SetupTab(QWidget):
         self.table.setItemDelegate(_Delegate(self))
         self.table.itemSelectionChanged.connect(self._selected)
         layout.addWidget(self.table, 1)
-        self.empty = role(QLabel("No contacts yet: a component's Find contacts…, or Model → "
-                                 "Add contact…"), "muted")  # fmt: skip
+        self.empty = role(QLabel("No contacts yet: Model → Contacts → Find contacts… "
+                                 "(where parts or bodies touch), or Add contact… (two "
+                                 "face selections)"), "muted")  # fmt: skip
         layout.addWidget(self.empty)
 
     def _solvers(self, project) -> None:

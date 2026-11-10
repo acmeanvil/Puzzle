@@ -2,8 +2,8 @@
 
 Add fastener…: two face selections of the component (a hole on each side), the
 diameter in the display unit, a material and the ends (rigid or distributing).
-Fasteners from holes…: the coaxial holes of different parts, one row each, to tick;
-OK makes their face selections and fasteners in one batch (one undo).
+Fasteners from holes…: each stack of coaxial holes in different parts or bodies, one
+row each, to tick; OK makes their face selections and fasteners in one batch (one undo).
 """
 
 from __future__ import annotations
@@ -38,6 +38,7 @@ def face_selections(project, comp) -> list[str]:
     return out
 
 
+LARGEST_BOLT_HOLE = 0.042  # m: an M39's clearance hole; larger bores start unticked
 MORE = "library:?"  # "More from the library…": the material picker
 
 
@@ -212,8 +213,9 @@ class FastenersFromHoles(QDialog):
         self.pairs = find_hole_pairs(project, comp, root)
         layout = QVBoxLayout(self)
         intro = QLabel(
-            "Coaxial holes in different parts: tick the ones to join with a fastener. Each "
-            "takes the smaller hole's diameter; nothing is made until OK."
+            "Coaxial holes in different parts or bodies, one fastener per stack from its "
+            "first hole to its last, through the holes between: tick the ones to make. Each "
+            "takes the smallest hole's diameter; nothing is made until OK."
         )
         intro.setWordWrap(True)
         layout.addWidget(intro)
@@ -222,12 +224,19 @@ class FastenersFromHoles(QDialog):
         self.table.verticalHeader().hide()
         for r, p in enumerate(self.pairs):
             make = QTableWidgetItem()
-            make.setCheckState(Qt.CheckState.Checked)
+            bolt_sized = p.diameter <= LARGEST_BOLT_HOLE
+            make.setCheckState(Qt.CheckState.Checked if bolt_sized else Qt.CheckState.Unchecked)
+            if not bolt_sized:  # a pipe's bore or a spigot, more likely than a bolt
+                make.setToolTip("Larger than any standard bolt's hole: left unticked")
             self.table.setItem(r, 0, make)
             for c, text in enumerate(
                 [
-                    f"{p.source_part} → {p.target_part}",
-                    f"{p.source_face} ↔ {p.target_face}",
+                    " → ".join(
+                        dict.fromkeys(
+                            [p.source_part, *(part for part, _ in p.through), p.target_part]
+                        )
+                    ),
+                    " ↔ ".join([p.source_face, *(face for _, face in p.through), p.target_face]),
                     f"{p.diameter * per_metre:.4g}",
                 ],
                 start=1,
@@ -245,7 +254,7 @@ class FastenersFromHoles(QDialog):
         form.addRow("Ends", self.ends)
         layout.addLayout(form)
         layout.addWidget(
-            QLabel(f"{len(self.pairs)} pair{'s' if len(self.pairs) != 1 else ''} of holes found.")
+            QLabel(f"{len(self.pairs)} stack{'s' if len(self.pairs) != 1 else ''} of holes found.")
         )
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel

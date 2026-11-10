@@ -23,6 +23,10 @@ BOLTING = {
     "sae_j429_grade_5_2", "sae_j429_grade_7", "sae_j429_grade_8_2", "astm_f3125_a325_large",
     "astm_a354_bc", "iso_898_1_class_4_8", "iso_898_1_class_5_8", "iso_898_1_class_8_8_large",
     "iso_898_1_class_9_8",
+    # from Lacewing Lab's bolt grades (Portland Bolt's ASTM summaries, ASME II-D)
+    "astm_f3125_144", "astm_f1554_36", "astm_f1554_55", "astm_f1554_105", "astm_a193_b7m",
+    "astm_a193_b8m_cl1", "astm_a193_b8_cl2", "astm_a320_l43", "astm_f593_group1_cw1",
+    "astm_f593_group1_cw2", "astm_f593_group2_cw1", "astm_f593_group2_cw2",
 }  # fmt: skip
 
 GENERIC = {

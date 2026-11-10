@@ -70,7 +70,8 @@ def _at(field: Field, ids: np.ndarray) -> np.ndarray:
 
 def finish(results, project, component, mesh: Mesh) -> None:
     """Turn each step's raw contact output into the neutral fields, in place."""
-    touching = [c for c in component.contacts if c.type in ("frictionless", "frictional")]
+    touching = [c for c in component.contacts  # threads: post/thread_fields.py
+                if c.type in ("frictionless", "frictional") and c.thread is None]  # fmt: skip
     if not touching:
         return
     slaves = {c.name: np.asarray(mesh.groups[c.source].node_ids) for c in touching
@@ -207,7 +208,8 @@ def contact_results(step, component, mesh: Mesh) -> list[ContactResult]:
         return []
     out = []
     for c in component.contacts:
-        if c.type not in ("frictionless", "frictional") or c.source not in mesh.groups:
+        if (c.type not in ("frictionless", "frictional") or c.thread is not None
+                or c.source not in mesh.groups):  # fmt: skip
             continue
         group = mesh.groups[c.source]
         ids = np.asarray(group.node_ids)

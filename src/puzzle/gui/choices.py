@@ -108,6 +108,8 @@ VALUES = {
     "tapped": "Cap screw in a tapped hole (head annulus, thread)",
     "stud_nuts": "Stud with two nuts (nut annuli)",
     "stud_tapped": "Stud in a tapped hole, with a nut (thread, nut annulus)",
+    # A thread's axis from a coordinate system (ADR 0076: Thread.cs)
+    "cs": "Axis from a coordinate system",
     # An optimisation's method and surface (ADR 0063)
     "sobol": "Sobol sequence",
     "cobyla": "COBYLA",
@@ -305,6 +307,10 @@ def _field(project, obj, owner, field, in_list):
         if field == "reference":
             entity = "face" if owner.orient == "normal" else "edge"
             return [(NONE, None)] + [(n, n) for n in _selections(project, component, entity)]
+    if type(owner).__name__ == "Thread" and not in_list:  # ADR 0076
+        thread = _thread_field(project, owner, field)
+        if thread is not None:
+            return thread
     if field == "size" and type(owner).__name__ == "BoltType" and not in_list:
         from puzzle.bolts import sizes
 
@@ -316,6 +322,26 @@ def _field(project, obj, owner, field, in_list):
         specs = CATALOG.get(physics, [])
         return [(s.label, s.type) for s in specs] or None
     return _literal(owner, field, in_list)
+
+
+def _thread_field(project, owner, field):
+    """A contact's thread (ADR 0076): forms and sizes by name, the bearing flank and
+    compliance in words, a coordinate system for the axis."""
+    from puzzle import thread_setup as ts
+
+    if field == "form":
+        return ts.form_choices()
+    if field == "size":
+        names = ts.sizes_for(owner.form)
+        return [(NONE, None)] + [(n, n) for n in names] if names else None
+    if field == "bearing":
+        return [(text, key) for key, text in ts.BEARING_NAMES.items()]
+    if field == "compliance":
+        return [(text, key) for key, text in ts.COMPLIANCE_NAMES.items()]
+    if field == "cs":
+        found = sorted(project.of_type(CoordinateSystem), key=lambda o: o.name)
+        return [("Fitted to the faces", None)] + [(o.name, str(o.id)) for o in found]
+    return None
 
 
 def _dict_entry(project, obj, owner, field, key, keys):

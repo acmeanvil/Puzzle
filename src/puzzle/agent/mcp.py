@@ -183,24 +183,37 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         return {"selections": [r.to_dict() for r in done.reports], "accept_all": command}
 
     @tool(
-        description="Find where the parts of a component touch (ADR 0039): one proposal per "
-        "pair of parts with the faces on each side, the gap (m) and the overlap (m^2). "
+        description="Find where the parts of a component touch (ADR 0039), and the bodies of "
+        "a part with several (an imported STEP assembly is often one part): one proposal per "
+        "pair of parts or bodies with the faces on each side, the gap (m) and the overlap "
+        "(m^2); `source_body`/`target_body` name the bodies (null between whole parts). "
+        "Bodies of one part share their nodes where they touch (Share faces): a bonded "
+        "contact between them records that, a frictionless or frictional one parts them. "
         "`tolerance` is the largest gap in m (default 0.5 % of the model's size), `angle` how "
         "far from face to face, in degrees. `make_bonded` is the batch that makes every "
         "proposal as a bonded contact (face selections first); change a contact's type "
-        "or drop proposals, then pass the list to submit. Nothing is made here."
+        "or drop proposals, then pass the list to submit. Nothing is made here. `thread`, "
+        "when set, says the two sides are coaxial cylinders of near-equal radius (a tapped "
+        "hole or a screw in a nut?) with a likely ISO size: make the contact, then "
+        "`contact_thread` (ADR 0076)."
     )
     @guarded
     def contacts_find(
         component: str, tolerance: float | None = None, angle: float = 10.0
     ) -> dict[str, Any]:
         from puzzle.commands import resolve
-        from puzzle.geometry.contacts import contact_commands, find_contacts, proposals
+        from puzzle.geometry.contacts import (
+            body_labels,
+            contact_commands,
+            find_contacts,
+            proposals,
+        )
         from puzzle.model.schema import Component
 
         s = session()
         comp = resolve(s.project, component, Component)
-        found = proposals(find_contacts(s.project, comp, root, tolerance=tolerance, angle=angle))
+        pairs = find_contacts(s.project, comp, root, tolerance=tolerance, angle=angle)
+        found = proposals(pairs, body_labels(s.project, comp))
         batch = [c.model_dump(mode="json") for c in contact_commands(s.project, comp, found)]
         return {
             "proposals": [
@@ -210,12 +223,42 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
                     "source_faces": p.source_faces,
                     "target_part": p.target_part,
                     "target_faces": p.target_faces,
+                    "source_body": p.labels[0] if p.labels and p.source_body else None,
+                    "target_body": p.labels[1] if p.labels and p.target_body else None,
                     "gap_m": p.distance,
                     "overlap_m2": p.area,
+                    "thread": p.thread,  # ADR 0076: coaxial cylinders, a likely size
                 }
                 for p in found
             ],
             "make_bonded": batch,
+        }
+
+    @tool(
+        description="Split a part holding several bodies (an imported STEP assembly) into one "
+        "part per body (ADR 0039): each body a geometry of its own (the file imported, then "
+        "that body kept), named by the body's selection; every reference follows its body "
+        "(materials, loads, supports, contacts, bolts, mesh sizes, result tools), and one "
+        "on a selection spanning bodies is repeated per part where it can be (materials, "
+        "features, sections) or reported in `notes`. `bond` (default true) adds bonded "
+        "contacts where the bodies touch, as the part's Share faces joined them. Returns "
+        "the plan; `batch` is the list to pass to submit (one undo). Nothing is made here."
+    )
+    @guarded
+    def parts_split(component: str, part: str, bond: bool = True) -> dict[str, Any]:
+        from puzzle.commands import resolve
+        from puzzle.model.schema import Component
+        from puzzle.split_parts import plan
+
+        s = session()
+        comp = resolve(s.project, component, Component)
+        made = plan(s.project, comp, part, root, bond=bond)
+        return {
+            "summary": made.summary(),
+            "parts": [{"name": n, "body": b} for n, b in made.parts],
+            "bonded_contacts": made.bonds,
+            "notes": made.notes,
+            "batch": [c.model_dump(mode="json") for c in made.commands],
         }
 
     @tool(
@@ -353,7 +396,9 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
 
     @tool(
         description="Propose bolts for a component's holes (ADR 0050). Holes are the "
-        "parts' cylindrical faces; a bolt joins two holes of different parts on one axis. "
+        "parts' cylindrical faces; a bolt joins a stack of holes on one axis in different "
+        "bodies (of different parts, or several bodies of one part), any number of layers: "
+        "from the first hole to the last, the ones between in `through`. "
         "With a rule (`rule` names it): hole diameters `min_diameter`/`max_diameter` (m), "
         "`parts`, an `axis` [x, y, z] (within 5 degrees), lengths between the holes' "
         "centres `min_length`/`max_length` (m); or `first` and `second`, two face "
@@ -422,6 +467,7 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
                     "name": p.name,
                     "holes": [f"{p.pair.source_part}/{p.pair.source_face}",
                               f"{p.pair.target_part}/{p.pair.target_face}"],
+                    "through": [f"{part}/{face}" for part, face in p.pair.through],
                     "hole_diameter_m": p.pair.diameter,
                     "length_m": p.length,
                     "bolt_type": p.type_name,
@@ -1676,6 +1722,99 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         }
 
     @tool(
+        description="Thread forms (ADR 0076) for `contact_thread`: each form's key, name, "
+        "standard, flank angles (load, other; degrees from the radial plane), taper "
+        "(diameter per length) and how its size is given; with `form` iso or un, its "
+        "standard sizes by name (M16, M16x1.5, 1/2-13 UNC)."
+    )
+    @guarded
+    def thread_forms(form: str | None = None) -> dict[str, Any]:
+        from puzzle import thread_setup as ts
+
+        out: dict[str, Any] = {"forms": ts.forms_info()}
+        if form is not None:
+            out["sizes"] = ts.sizes_for(form)
+        return out
+
+    @tool(
+        description="Make a contact a thread (ADR 0076): the two smooth coaxial cylinders "
+        "stay smooth and the contact acts along the flanks, giving each thread's load, "
+        "the nut's wedge and the engagement's stiffness. `form` iso, un, acme, stub_acme, "
+        "trapezoidal, buttress, buttress_din, square, npt, bspt or custom (`thread_forms`); "
+        "`size` a standard size for iso/un (M16, M16x1.5, 1/2-13 UNC), else `major` and "
+        '`pitch` as quantities ({"value": 20, "unit": "mm"}); custom needs '
+        "`flank_angles` [load, other] degrees. `starts`, `hand` right/left, `bearing` auto "
+        "(the pull decides the side)/load/other, `compliance` teeth/rigid or N/m^3, "
+        "`clearance` (backlash), `engaged_length`, `cs` a coordinate system's name whose z "
+        "is the axis. `type` changes the contact's type: bonded (ties the bearing flank), "
+        "no_separation (both flanks), frictionless (unilateral: nonlinear). `remove` "
+        "clears the thread. Returns the resolved numbers (m), notes, and `command`: pass "
+        "it to submit. Nothing is changed here."
+    )
+    @guarded
+    def contact_thread(
+        component: str,
+        contact: str,
+        form: str = "iso",
+        size: str | None = None,
+        pitch: dict | None = None,
+        major: dict | None = None,
+        starts: int = 1,
+        hand: str = "right",
+        flank_angles: list[float] | None = None,
+        bearing: str = "auto",
+        compliance: str | float = "teeth",
+        clearance: dict | None = None,
+        engaged_length: dict | None = None,
+        cs: str | None = None,
+        type: str | None = None,
+        remove: bool = False,
+    ) -> dict[str, Any]:
+        from puzzle import thread_setup as ts
+        from puzzle.commands import resolve
+        from puzzle.model.schema import Component, CoordinateSystem
+
+        s = session()
+        comp = resolve(s.project, component, Component)
+        index = ts.contact_index(comp, contact)
+        if remove:
+            command = ts.thread_command(comp, contact, None)
+            return {"command": command.model_dump(mode="json"), "notes": []}
+        axes = str(resolve(s.project, cs, CoordinateSystem).id) if cs else None
+        thread = ts.make_thread(
+            form=form, size=size, pitch=pitch, major=major, starts=starts, hand=hand,
+            flank_angles=tuple(flank_angles) if flank_angles else None, bearing=bearing,
+            compliance=compliance, clearance=clearance, engaged_length=engaged_length,
+            cs=axes,
+        )  # fmt: skip
+        kind = type or comp.contacts[index].type
+        command = ts.thread_command(comp, contact, thread, type)
+        return {
+            "thread": ts.describe(thread),
+            "type": kind,
+            "written_by": ts.writers(s.project, comp, kind),
+            "notes": ts.notes(s.project, comp, thread, kind),
+            "command": command.model_dump(mode="json"),
+        }
+
+    @tool(
+        description="Threaded contacts' results in a study's latest run (ADR 0076): per "
+        "thread contact the axial load (N), each engaged thread's axial load and share "
+        "(the first engaged, at the mouth, first), the wedge (total radial force, N: the "
+        "nut's opening) and the peak flank pressure (Pa). `contact` one of them; `step` "
+        "1-based among the steps with thread results (default the last). The nodal fields "
+        "thread_force (normal, axial, radial) and thread_pressure are read with result_*."
+    )
+    @guarded
+    def thread_results(study: str, contact: str | None = None,
+                       step: int | None = None) -> dict[str, Any]:  # fmt: skip
+        from puzzle import thread_setup as ts
+
+        record, mesh, res = latest(study)
+        return {"run_id": record.run_id,
+                **ts.results(session().project, mesh, res, contact, step)}  # fmt: skip
+
+    @tool(
         description="How a study's last solve went or is going (ADR 0054): steps, increments, "
         "cut-backs, iterations, last residuals against their criteria, equations, memory, "
         "tracked probes' last values, the solver's warnings and errors in English, and "
@@ -1744,6 +1883,78 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
                         "J_m4": sec.J, "mass_kg_m": sec.mass,
                         "beams_take_it": sec.shape in sections.SUPPORTED})  # fmt: skip
         return {"sections": out[:60], "more": max(0, len(out) - 60)}
+
+    @tool(
+        description="Standard bolt sizes (ADR 0050) for bolt types: `standard` iso_coarse, "
+        "iso_fine (M3-M64), unc (to 4 in) or unf; `contains` filters the names. Each with "
+        "diameter, pitch, stress area, the bearing diameter joint styles use, the ISO 273 "
+        "medium clearance hole, and the `head` and `nut` style's bearing diameter and "
+        "height from the standard part tables (head hex, hex_cap, heavy_hex, structural, "
+        "socket, button, flat, low_head; nut hex, heavy_hex, thin). All m, m^2."
+    )
+    @guarded
+    def bolt_sizes(standard: str = "iso_coarse", contains: str | None = None,
+                   head: str = "hex", nut: str = "hex") -> dict[str, Any]:  # fmt: skip
+        from puzzle import bolts, fasteners
+
+        if standard not in bolts.STANDARDS or standard == "custom":
+            raise PuzzleError(f"no bolt standard '{standard}': iso_coarse, iso_fine, unc or unf",
+                              code="invalid")  # fmt: skip
+        if head not in fasteners.HEADS or nut not in fasteners.NUTS:
+            raise PuzzleError(f"head one of {', '.join(fasteners.HEADS)}; nut one of "
+                              f"{', '.join(fasteners.NUTS)}", code="invalid")  # fmt: skip
+        found = [s for s in bolts.sizes(standard)
+                 if not contains or contains.lower() in s.name.lower()]  # fmt: skip
+        return {"sizes": [fasteners.size_info(s, head, nut) for s in found]}
+
+    @tool(
+        description="Standard fastener tables (ADR 0050): screws, nuts and washers as ISO, "
+        "DIN, ASME and ASTM tabulate them (from Lacewing Lab's tables). No `table`: each "
+        "table's id, title, standard, kind and sizes. With `table` (e.g. iso.hexBolt, "
+        "asme.hexNut, iso.washerNormal): its reference, notes, columns and rows (one `size` "
+        "as the table names it: M10, 1/2, #10); lengths in m, threads per inch as counts."
+    )
+    @guarded
+    def fastener_tables(table: str | None = None, size: str | None = None) -> dict[str, Any]:
+        from puzzle import fasteners
+
+        try:
+            return fasteners.table_info(table, size)
+        except KeyError as exc:
+            raise PuzzleError(str(exc.args[0]), code="not_found") from None
+
+    @tool(
+        description="A single-bolt joint by VDI 2230-1:2015 (concentric): bolt and parts' "
+        "resiliences (head 0.5 d hex / 0.4 d socket, engaged thread 0.5 d, nut 0.4 d or "
+        "tapped 0.33 d, cone and sleeve), load factor Phi (n by `n`, Table 2), assembly "
+        "preload FMzul (90 % of Rp0.2 at `mu_thread`), its tightening torque and nut factor "
+        "K, embedding loss; with `axial_load` (N) the bolt's extra load, equivalent stress "
+        "and fatigue safety; with `tightening_factor` (alpha_A, Table A8) the least preload "
+        "and residual clamp load. `size` a bolt_sizes name; `grade` 8.8, 10.9, 12.9 or "
+        "`rp02` (Pa); `clamp_length`, `shank_length`, `bearing`, `hole`, `outer_diameter`, "
+        "`rz` in m; moduli in Pa; `head` hex or socket; `tapped` true for a cap screw in a "
+        "tapped hole. Defaults are listed in `notes`. Nothing is changed."
+    )
+    @guarded
+    def bolt_vdi2230(size: str, clamp_length: float, grade: str | None = "10.9",
+                     head: str = "hex", tapped: bool = False, shank_length: float = 0.0,
+                     e_bolt: float = 205e9, e_plate: float = 205e9,
+                     e_nut: float | None = None, rp02: float | None = None,
+                     bearing: float | None = None, hole: float | None = None,
+                     outer_diameter: float | None = None, mu_thread: float = 0.12,
+                     mu_head: float = 0.12, n: float = 1.0, axial_load: float | None = None,
+                     rz: float = 16e-6, interfaces: int = 1,
+                     tightening_factor: float | None = None) -> dict[str, Any]:  # fmt: skip
+        from puzzle import vdi2230
+
+        try:
+            return vdi2230.check(
+                size, clamp_length, grade, head, tapped, shank_length, e_bolt, e_plate, e_nut,
+                rp02, bearing, hole, outer_diameter, mu_thread, mu_head, n, axial_load, rz,
+                interfaces, tightening_factor,
+            )  # fmt: skip
+        except ValueError as exc:
+            raise PuzzleError(str(exc), code="invalid") from None
 
     @tool(description="Every step and field of a study's latest run, in a few numbers.")
     @guarded

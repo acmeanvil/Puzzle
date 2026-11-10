@@ -1,9 +1,11 @@
 """The menu bar: every ribbon tool and right-click action, in one place.
 
-Project, Materials, Geometry, Mesh, Model, Results, Window and Help. The ribbons and
-the tree's menus stay; these menus reach the same functions, so nothing is only a
-right-click away. An action that needs a part, component or study takes the one
-selected in the tree (or open in its tab), else the only one, else asks with one form.
+Project, Geometry, Materials, Mesh, Model, Results, Window and Help: the tree's order
+(Geometry before Materials). Model and Results hold fly-outs of like items (Components,
+Contacts, Bolts and fasteners, Run...). The ribbons and the tree's menus stay; these
+menus reach the same functions, so nothing is only a right-click away. An action that
+needs a part, component or study takes the one selected in the tree (or open in its
+tab), else the only one, else asks with one form.
 Geometry and mesh tools open their tab first. Submenus that depend on the project (a
 component's physics and features) are rebuilt each time the menu opens.
 """
@@ -27,8 +29,8 @@ def build(window, agent: QAction, messages: QAction) -> dict[str, QMenu]:
     menus: dict[str, QMenu] = {}
     for title, fill in (
         ("Project", _project),
+        ("Geometry", _geometry),  # the tree's order: Geometry, then Materials
         ("Materials", _materials),
-        ("Geometry", _geometry),
         ("Mesh", _mesh),
         ("Model", _model),
         ("Results", _results),
@@ -109,7 +111,8 @@ def current_component(window, title: str = "Component") -> Component | None:
         return comp
     comps = window.session.project.of_type(Component)
     if not comps:
-        window.statusBar().showMessage("Make a component first: Model → New component…", 8000)
+        window.statusBar().showMessage(
+            "Make a component first: Model → Components → New component…", 8000)  # fmt: skip
         return None
     return _choose(window, title, comps, "Component")
 
@@ -142,7 +145,7 @@ def current_study(window, title: str = "Study") -> Study | None:
     if found is not None:
         return found
     if not studies:
-        window.statusBar().showMessage("Make a study first: Model → New study…", 8000)
+        window.statusBar().showMessage("Make a study first: Model → Studies → New study…", 8000)
         return None
     return _choose(window, title, studies, "Study")
 
@@ -390,7 +393,8 @@ def _geometry(window, menu: QMenu) -> None:
     shown.addSeparator()
     _add(shown, "Show or hide the selected item", lambda: vis.toggle_selected(window),
          "A coordinate system or construction object drawn always, a load's or support's "
-         "symbol, or a part's geometry")  # fmt: skip
+         "symbol, a part's geometry, a body selection's bodies, a bolt, or what a group "
+         "holds")  # fmt: skip
     _add(shown, "Hide picked bodies", lambda: vis.hide_picked_bodies(window),
          "Pick with the Bodies filter, then hide those bodies (still solved)")  # fmt: skip
     _add(shown, "Show hidden bodies", lambda: vis.show_all_bodies(window))
@@ -457,74 +461,102 @@ def _mesh(window, menu: QMenu) -> None:
 
 
 def _model(window, menu: QMenu) -> None:
+    """Fly-outs of like items, in the order a model is built."""
     from puzzle.gui import menus
 
-    _add(menu, "New component…", lambda: menus.new_component(window))
-    _add(menu, "Duplicate component…", _with_component(
+    comps = _sub(menu, "Components")
+    _add(comps, "New component…", lambda: menus.new_component(window))
+    _add(comps, "Duplicate component…", _with_component(
         window, lambda c: menus.copy_component(window, c)),
         "A copy of the component, and of its studies if you choose")  # fmt: skip
-    menu.addSeparator()
-    physics = _sub(menu, "Add physics")
-    features = _sub(menu, "Add feature")
+    from puzzle.gui.split_dialog import split_part
+
+    _add(comps, "One part per body…", _with_component(window, lambda c: split_part(window, c)),
+         "A part holding several bodies (an imported assembly) as a part per body")  # fmt: skip
+
+    loads = _sub(menu, "Physics and loads")
+    physics = _sub(loads, "Add physics")
+    features = _sub(loads, "Add feature")
     physics.aboutToShow.connect(lambda: _fill_physics(window, physics))
     features.aboutToShow.connect(lambda: _fill_features(window, features))
-    menu.addSeparator()
-    from puzzle.gui.beam_dialog import add_beam_section
-    from puzzle.gui.contact_search import find_contacts_dialog
+
+    from puzzle.gui.contact_search import add_contact, find_contacts_dialog
+
+    contacts = _sub(menu, "Contacts")
+    _add(contacts, "Find contacts…", _with_component(
+        window, lambda c: find_contacts_dialog(window, c)),
+        "Where the parts, or the bodies of a part, touch: contacts to review and make")  # fmt: skip
+    _add(contacts, "Add contact…", _with_component(window, lambda c: add_contact(window, c)),
+         "One contact between two face selections")  # fmt: skip
+    from puzzle.gui.thread_dialog import thread_contact
+
+    _add(contacts, "Thread on a contact…", _with_component(
+        window, lambda c: thread_contact(window, c)),
+        "A contact between two coaxial cylinders acting along a thread's flanks "
+        "(ADR 0076): each thread's load and the nut's wedge")  # fmt: skip
+    _add(contacts, "Contact tool", lambda: window.open_contacts(),
+         "Every contact's setup, what the solver is given, and its initial state")  # fmt: skip
+
+    from puzzle.gui.bolt_generator_panel import generate_bolts
+    from puzzle.gui.bolt_types import new_bolt_type
     from puzzle.gui.fastener_dialog import add_fastener, fasteners_from_holes
 
-    _add(menu, "Find contacts…", _with_component(
-        window, lambda c: find_contacts_dialog(window, c)),
-        "Where the parts touch: proposals to make bonded contacts")  # fmt: skip
-    _add(menu, "Contact tool", lambda: window.open_contacts(),
-         "Every contact's setup, what the solver is given, and its initial state")  # fmt: skip
-    from puzzle.gui.bolt_types import new_bolt_type
-
-    _add(menu, "New bolt type…", lambda: new_bolt_type(window),
+    bolts = _sub(menu, "Bolts and fasteners")
+    _add(bolts, "New bolt type…", lambda: new_bolt_type(window),
          "A bolt's size, grade and preload, given once for every bolt of that kind")  # fmt: skip
-    from puzzle.gui.bolt_generator_panel import generate_bolts
-
-    _add(menu, "Generate bolts…", _with_component(window, lambda c: generate_bolts(window, c)),
+    _add(bolts, "Generate bolts…", _with_component(window, lambda c: generate_bolts(window, c)),
          "Bolts for the holes a rule, two selections or picks find, previewed first")  # fmt: skip
-    _add(menu, "Bolt table", lambda: window.open_bolts(),
-         "Every bolt's properties and results, in a docked table")  # fmt: skip
-    _add(menu, "Add fastener…", _with_component(window, lambda c: add_fastener(window, c)))
-    _add(menu, "Fasteners from holes…", _with_component(
+    _add(bolts, "Add fastener…", _with_component(window, lambda c: add_fastener(window, c)))
+    _add(bolts, "Fasteners from holes…", _with_component(
         window, lambda c: fasteners_from_holes(window, c)),
-        "Coaxial holes in different parts, one fastener each")  # fmt: skip
-    _add(menu, "Add beam section…", _with_component(
+        "Coaxial holes in different parts or bodies, one fastener per stack")  # fmt: skip
+    _add(bolts, "Bolt table", lambda: window.open_bolts(),
+         "Every bolt's properties and results, in a docked table")  # fmt: skip
+    bolts.addSeparator()
+    from puzzle.gui import visibility as vis
+
+    _add(bolts, "Hide all bolts", _with_component(
+        window, lambda c: vis.hide_bolts(window, c, c.connectors)),
+        "Leave the component's bolts out of the view (the view's, not the model's)")  # fmt: skip
+    _add(bolts, "Show all bolts", _with_component(
+        window, lambda c: vis.hide_bolts(window, c, c.connectors, False)))  # fmt: skip
+
+    from puzzle.gui.beam_dialog import add_beam_section, add_shell_thickness, orient_from_menu
+
+    beams = _sub(menu, "Beams and shells")
+    _add(beams, "Add beam section…", _with_component(
         window, lambda c: add_beam_section(window, c)),
         "A cross-section for a line body (a frame)")  # fmt: skip
-    from puzzle.gui.beam_dialog import orient_from_menu
-
-    _add(menu, "Orient a beam section by a pick…", _with_component(
+    _add(beams, "Orient a beam section by a pick…", _with_component(
         window, lambda c: orient_from_menu(window, c)),
         "A beam section's first axis along a face's normal or an edge picked in the view",
     )  # fmt: skip
-    from puzzle.gui.beam_dialog import add_shell_thickness
-
-    _add(menu, "Add shell thickness…", _with_component(
+    _add(beams, "Add shell thickness…", _with_component(
         window, lambda c: add_shell_thickness(window, c)),
         "A thickness for a sheet body (a plate or thin wall)")  # fmt: skip
+
     menu.addSeparator()
-    _add(menu, "New study…", lambda: menus.new_study(window))
-    _add(menu, "Duplicate study…", lambda: _duplicate_study(window),
+    studies = _sub(menu, "Studies")
+    _add(studies, "New study…", lambda: menus.new_study(window))
+    _add(studies, "Duplicate study…", lambda: _duplicate_study(window),
          "A copy of the study under a new name: steps, settings, sweeps, solver")  # fmt: skip
-    _add(menu, "New transfer…", lambda: menus.new_transfer(window),
+    _add(studies, "New transfer…", lambda: menus.new_transfer(window),
          "One study's result into another (a temperature into a structural study)")  # fmt: skip
+    _add(studies, "Solver settings…", lambda: _solver_settings(window),
+         "How each solver solves the study: linear solver, tolerances, output")  # fmt: skip
+
+    runs = _sub(menu, "Run")
     run = window.actions_by_name["run"]  # the toolbar's too: asks which study if none is selected
     run.triggered.disconnect()
     run.triggered.connect(lambda _=False: _run(window))
     run.setText("Run study")
-    menu.addAction(run)
-    _add(menu, "Run all", lambda: window.run_studies(None),
+    runs.addAction(run)
+    _add(runs, "Run all", lambda: window.run_studies(None),
          "Every study, one after another; one that fails doesn't stop the rest")  # fmt: skip
-    _add(menu, "Run selected…", lambda: menus.run_selected_studies(window),
+    _add(runs, "Run selected…", lambda: menus.run_selected_studies(window),
          "Tick the studies to run, one after another")  # fmt: skip
-    _add(menu, "Stop all", window.stop_all, "Stop the running study and the ones waiting")
-    _add(menu, "Solver settings…", lambda: _solver_settings(window),
-         "How each solver solves the study: linear solver, tolerances, output")  # fmt: skip
-    _add(menu, "Run on…", lambda: _run_on(window),
+    _add(runs, "Stop all", window.stop_all, "Stop the running study and the ones waiting")
+    _add(runs, "Run on…", lambda: _run_on(window),
          "Here, or a remote host reached by SSH (ADR 0021)")  # fmt: skip
 
 
@@ -606,7 +638,7 @@ def _fill_features(window, menu: QMenu) -> None:
         hint.setEnabled(False)
         return
     if not comp.physics:
-        hint = menu.addAction(f"{comp.name} has no physics yet: Model → Add physics")
+        hint = menu.addAction(f"{comp.name} has no physics yet: Physics and loads → Add physics")
         hint.setEnabled(False)
         return
     for i, ph in enumerate(comp.physics):
@@ -619,62 +651,64 @@ def _results(window, menu: QMenu) -> None:
     from puzzle.gui import result_tools as tools
 
     ribbon = window.results_ribbon
-    _add(menu, "Probe", ribbon.probe, "Read a value: double-click the part")
-    _add(menu, "Reaction…", lambda: tools.add_reaction(window),
+    probes = _sub(menu, "Result tools")
+    _add(probes, "Probe", ribbon.probe, "Read a value: double-click the part")
+    _add(probes, "Reaction…", lambda: tools.add_reaction(window),
          "The force and moment a support takes")  # fmt: skip
-    _add(menu, "Result on a selection…", lambda: tools.add_selection_result(window),
+    _add(probes, "Result on a selection…", lambda: tools.add_selection_result(window),
          "Maximum, minimum, average or integral over a selection")  # fmt: skip
-    _add(menu, "Path…", lambda: tools.add_path(window), "A result along a straight line")
+    _add(probes, "Path…", lambda: tools.add_path(window), "A result along a straight line")
     _add(
-        menu,
+        probes,
         "Linearized stress…",
         lambda: tools.add_linearized(window),
         "Membrane, bending and peak stress through a wall (ASME VIII-2)",
     )
-    _add(menu, "Result on a plane…", lambda: tools.add_plane_result(window),
+    _add(probes, "Result on a plane…", lambda: tools.add_plane_result(window),
          "A result's maximum, minimum, average or integral over a plane's cut")  # fmt: skip
-    _add(menu, "Section force…", lambda: tools.add_section_force(window),
+    _add(probes, "Section force…", lambda: tools.add_section_force(window),
          "The force and moment carried across a plane")  # fmt: skip
-    menu.addSeparator()
-    _add(menu, "Section cut", ribbon.cut, "Cut the model by a plane to see inside")
-    _add(menu, "Animate", ribbon.animate, "Play the deformation, or the steps")
-    _add(menu, "Plots", ribbon.plots, "Result tools against time, steps or distance")
-    _add(menu, "Legend…", window.edit_legend, "The colour bar: its range, colours, size and place")
-    menu.addSeparator()
-    _add(menu, "New combination…", lambda: window.new_derived("linear"),
+    view = _sub(menu, "View")
+    _add(view, "Section cut", ribbon.cut, "Cut the model by a plane to see inside")
+    _add(view, "Animate", ribbon.animate, "Play the deformation, or the steps")
+    _add(view, "Plots", ribbon.plots, "Result tools against time, steps or distance")
+    _add(view, "Legend…", window.edit_legend, "The colour bar: its range, colours, size and place")
+    derived = _sub(menu, "Combinations and fatigue")
+    _add(derived, "New combination…", lambda: window.new_derived("linear"),
          "Load cases added, enveloped or ranged")  # fmt: skip
-    _add(menu, "New equation…", lambda: window.new_derived("equation"),
+    _add(derived, "New equation…", lambda: window.new_derived("equation"),
          "A result computed from others by a formula")  # fmt: skip
-    _add(menu, "New fatigue tool…", lambda: window.new_derived("fatigue"),
+    _add(derived, "New fatigue tool…", lambda: window.new_derived("fatigue"),
          "Life, damage and safety factor from a duty")  # fmt: skip
-    _add(menu, "Compare sweep points…", lambda: _compare(window),
+    _add(derived, "Compare sweep points…", lambda: _compare(window),
          "A swept study's points side by side")  # fmt: skip
-    menu.addSeparator()
     from puzzle.gui import operators
 
-    sub = _sub(menu, "New operator")  # ADR 0062, by group in the order work flows (0064)
+    ops = _sub(menu, "Operators")
+    sub = _sub(ops, "New operator")  # ADR 0062, by group in the order work flows (0064)
     groups = {}
     for t in operators.ordered():
         if t.group not in groups:
             groups[t.group] = _sub(sub, t.group)
         _add(groups[t.group], t.label, lambda k=t.key: operators.new_operator(window, k),
              t.help)  # fmt: skip
-    _add(menu, "Find an operator…", lambda: window.open_operator_palette(),
+    _add(ops, "Find an operator…", lambda: window.open_operator_palette(),
          "Search the operators by name (Tab in the schematic)")  # fmt: skip
     from puzzle.gui.optimisation_panel import new_optimisation
 
-    _add(menu, "New optimisation…", lambda: new_optimisation(window),
+    design = _sub(menu, "Optimise and check the mesh")
+    _add(design, "New optimisation…", lambda: new_optimisation(window),
          "Run a study once per point of a plan: design of experiments, the best point")  # fmt: skip
-    _add(menu, "Check mesh convergence…", lambda: _convergence(window),
+    _add(design, "Check mesh convergence…", lambda: _convergence(window),
          "The study on finer and finer meshes: is the mesh fine enough?")  # fmt: skip
-    _add(menu, "Adapt the mesh…", lambda: _adapt(window),
+    _add(design, "Adapt the mesh…", lambda: _adapt(window),
          "Mesh again where the error is, pass after pass, until it is at a target")  # fmt: skip
-    _add(menu, "Add a skin-depth refinement", lambda: _skin(window),
+    _add(design, "Add a skin-depth refinement", lambda: _skin(window),
          "Finer elements near each conductor's surface, for its skin depth")  # fmt: skip
-    menu.addSeparator()
-    _add(menu, "Open in ParaView", lambda: _paraview(window),
+    out = _sub(menu, "Export")
+    _add(out, "Open in ParaView", lambda: _paraview(window),
          "The result as shown, in ParaView: colours, range, deformation, cut, camera")  # fmt: skip
-    _add(menu, "Export…", lambda: _export(window),
+    _add(out, "Export…", lambda: _export(window),
          "Results for other software: ParaView, point clouds, the deformed shape")  # fmt: skip
 
 
@@ -867,10 +901,12 @@ STEPS = (
     "<li><b>Geometry:</b> Geometry → New part… or Import geometry…; name faces as "
     "selections (Pick, double-click, Selections → New from picks…).</li>"
     "<li><b>Materials:</b> Materials → Add from library…</li>"
-    "<li><b>Mesh:</b> Mesh → New mesh recipe, then Model → New component… to put the "
-    "part, its material and the recipe together; Mesh → Mesh (⌘M) to see it.</li>"
-    "<li><b>Model:</b> Model → Add physics, then Add feature for supports and loads.</li>"
-    "<li><b>Study:</b> Model → New study…, then Run study (⌘R).</li>"
+    "<li><b>Mesh:</b> Mesh → New mesh recipe, then Model → Components → New component… to "
+    "put the part, its material and the recipe together; Mesh → Mesh (⌘M) to see it.</li>"
+    "<li><b>Model:</b> Model → Physics and loads → Add physics, then Add feature for "
+    "supports and loads.</li>"
+    "<li><b>Study:</b> Model → Studies → New study…, then Model → Run → Run study "
+    "(⌘R).</li>"
     "<li><b>Results:</b> the Results ribbon above the view, or the Results menu: probes, "
     "reactions, paths, cuts, animation and plots.</li>"
     "</ol>"

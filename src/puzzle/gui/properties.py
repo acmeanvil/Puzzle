@@ -22,7 +22,8 @@ PATH = Qt.ItemDataRole.UserRole
 READ_ONLY = {"kind"}
 HIDDEN = {"id", "file_hash"}  # internal: never shown
 # Plain numbers stored in a fixed unit: the unit goes with the name.
-UNITS = {"translation": " (m)", "rotation": " (degrees)", "facet_angle": " (degrees)"}
+UNITS = {"translation": " (m)", "rotation": " (degrees)", "facet_angle": " (degrees)",
+         "flank_angles": " (degrees)"}  # fmt: skip
 # What an unset optional value says (ADR 0029: never "null").
 UNSET = {
     "source_unit": "From the file",
@@ -110,6 +111,11 @@ APPLIES = {
     "reference": (_is_section, lambda d: d.get("orient") in ("normal", "edge")),
     "mirror": (_is_section, lambda d: _is_angle(d)),  # a single angle's other leg
     "principal": (_is_section, lambda d: False),  # set while solving only
+    # ADR 0076: a contact's thread, once it has one (Make it a thread… adds it).
+    "thread": (
+        lambda d: {"source", "target", "interface"} <= set(d),
+        lambda d: d.get("thread") is not None,
+    ),  # fmt: skip
     # ADR 0054: probes followed while solving are points, selections and reactions.
     "track": (
         lambda d: {"quantity", "reduction", "samples"} <= set(d),
@@ -176,6 +182,31 @@ def _bolt_type_field(key: str, d) -> bool:
     }.get(key, True)
 
 
+def _is_thread(d) -> bool:
+    return {"form", "starts", "hand", "bearing", "compliance", "flank_angles"} <= set(d)
+
+
+def _thread_field(key: str, d) -> bool:
+    """A thread (ADR 0076) shows what its form needs: a size for ISO and UN, a major
+    diameter and pitch for the others, flank angles for a custom one; the numbers its
+    form and size give only once set."""
+    from puzzle.thread_setup import SIZED
+
+    sized = d.get("form") in SIZED
+    custom = d.get("form") == "custom"
+    return {
+        "size": sized or d.get("size") is not None,
+        "major": not sized or d.get("major") is not None,
+        "pitch": not sized or d.get("pitch") is not None,
+        "flank_angles": custom or d.get("flank_angles") is not None,
+        "pitch_diameter": d.get("pitch_diameter") is not None,
+        "minor": d.get("minor") is not None,
+        "taper": d.get("taper") is not None,
+        "axis": d.get("axis") is not None,
+        "engaged_length": d.get("engaged_length") is not None,
+    }.get(key, True)
+
+
 def _is_operator(d) -> bool:
     return {"inputs", "reduction", "against", "compare"} <= set(d)
 
@@ -203,6 +234,8 @@ def applies(owner: Any, key: Any) -> bool:
         return _operator_field(key, owner)
     if isinstance(owner, dict) and _is_bolt_type(owner):
         return _bolt_type_field(key, owner)
+    if isinstance(owner, dict) and _is_thread(owner):
+        return _thread_field(key, owner)
     if isinstance(owner, dict) and key in BUILT and _is_construction(owner):
         return BUILT[key](owner)
     if isinstance(owner, dict) and _is_axes(owner):

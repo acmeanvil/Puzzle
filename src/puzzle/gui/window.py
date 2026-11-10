@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (
 )
 
 from puzzle.commands import Session
-from puzzle.commands.model import AddLibraryMaterial, Delete, Edit, EditOp, RunStudy
+from puzzle.commands.model import AddLibraryMaterial, Edit, EditOp, RunStudy
 from puzzle.errors import PuzzleError
 from puzzle.gui.agent_panel import AgentPanel
 from puzzle.gui.properties import PropertiesPanel
@@ -1451,13 +1451,37 @@ class MainWindow(QMainWindow):
         self.refresh()
 
     def delete_selected(self) -> None:
+        """Delete what the tree has selected: one item as before (results asked first),
+        several as one batch, so one undo, after one question naming them."""
+        from puzzle.gui import deleting
+        from puzzle.gui.tree import ROLE as TREE_ROLE
+
+        if self.session is None:
+            return
+        nodes = [i.data(0, TREE_ROLE) for i in self.tree.selectedItems()]
         node = self.tree.current()
-        if node is not None and node.kind == "run":
-            self.delete_run(node.object)
+        if node is not None and node not in nodes:
+            nodes = [node]
+        runs = self._store().runs() if any(n.kind == "run" for n in nodes) else []
+        names = {r.run_id: f"the results of {r.study_name} ({r.started_at:%Y-%m-%d %H:%M})"
+                 for r in runs}  # fmt: skip
+        plan = deleting.plan(self.session.project, nodes, lambda r: names.get(r, "results"))
+        if not plan:
             return
-        if node is None or node.kind not in ("object", "derived", "probe"):
+        if len(plan.names) == 1 and plan.runs:  # one run: its own question
+            self.delete_run(plan.runs[0])
             return
-        self.submit(Delete(object=node.object))
+        if len(plan.names) > 1 and not self.ask_yes("Delete", deleting.question(plan)):
+            return
+        if plan.commands:
+            done = (self.submit(plan.commands[0]) if len(plan.commands) == 1
+                    else self.submit_batch(plan.commands))  # fmt: skip
+            if done is None:  # refused (say, a part still used): nothing deleted
+                return
+        for run_id in plan.runs:
+            self.delete_run(run_id, confirm=False)
+        if len(plan.names) > 1:
+            self.statusBar().showMessage(f"Deleted {len(plan.names)} items", 8000)
 
     def delete_run(self, run_id: str, confirm: bool = True) -> bool:
         """Delete a stored result set (asked first): results are a cache, so the study
@@ -2317,6 +2341,7 @@ class MainWindow(QMainWindow):
         if comp is None or field is None or not getattr(comp, "connectors", None):
             return
         unit = current().display_units()["force"]
+        hidden = self._hidden_bolt_names(comp)
         axial = field.values[:, field.components.index("axial")]
         tubes = []
         for g, c, value in zip(
@@ -2326,6 +2351,8 @@ class MainWindow(QMainWindow):
             axial,
             strict=False,
         ):
+            if c.name in hidden:  # hidden in the view (its tube is still counted above)
+                continue
             shown = convert(float(value), "N", unit)
             kind = "tension" if value >= 0 else "compression"
             tubes.append((g, f"{c.name}: {shown:.4g} {pretty(unit)} {kind}", value >= 0))
@@ -2507,7 +2534,9 @@ class MainWindow(QMainWindow):
             up = parent.data(0, ROLE) if parent is not None else None
             if up is not None and up.kind == "group" and up.object == str(group.id):
                 held.append(item.text(0))
-        rows = {"Group": group.name, "Under": group.section}
+        from puzzle.gui.tree import scope_name
+
+        rows = {"Group": group.name, "Under": scope_name(self.session.project, group.section)}
         rows["Holds"] = ", ".join(held) if held else "nothing yet: drag items here"
         rows["Tip"] = "Drag items in or out, or right-click → Move to group; F2 renames"
         return rows
@@ -2970,6 +2999,7 @@ class MainWindow(QMainWindow):
 
         keys = [feature_key(comp, ph, f) for ph in comp.physics for f in ph.features]
         skip = {n for n, k in enumerate(keys) if k in self.visibility.hidden_features}
+        bolts = self._hidden_bolt_names(comp)
         try:
             glyphs = symbols(
                 comp,
@@ -2978,11 +3008,20 @@ class MainWindow(QMainWindow):
                 only,
                 project=self.session.project,
                 skip=skip,
+                skip_bolts=bolts,
             )
         except (KeyError, ValueError):  # a selection not on this mesh yet: no symbol
             return
         self.viewport.show_symbols(glyphs)
         self.viewport.shown["hidden_symbols"] = len(skip) if only is None else 0
+        self.viewport.shown["hidden_bolts"] = sorted(bolts) if only is None else []
+
+    def _hidden_bolt_names(self, comp) -> set[str]:
+        """The component's bolts hidden in the view (view state, `visibility.bolt_key`)."""
+        from puzzle.gui.visibility import bolt_key
+
+        hidden = self.visibility.hidden_bolts
+        return {c.name for c in getattr(comp, "connectors", []) if bolt_key(comp, c) in hidden}
 
     def _entities_of(self, comp, selection: str) -> list[tuple[int, int]]:
         """A selection's face entities in the shown mesh, through the names it was made with."""

@@ -1,9 +1,10 @@
 ---
 name: contacts
-description: finding where the parts of an assembly touch and making contacts or bonds there in one batch; contact types, source and target, which solvers write which
+description: where the parts of an assembly, or the bodies of one imported part, touch; contacts or bonds there in one batch; one part per body; contact types and which solvers write them
 adr: 0039
 ---
-Read this when a component has two or more parts and they need joining, when the user
+Read this when a component has two or more parts, or one part holding several bodies
+(an imported STEP assembly is usually one part), and they need joining, when the user
 asks to "find contacts", "bond the parts" or "set up the assembly", or when
 `next_steps` says a component has several parts and no contacts. To check contacts that already
 exist (gaps, overhangs, warnings, results), read the `contact-tool` skill instead.
@@ -19,18 +20,44 @@ against every face of every other part. A pair counts when the faces are within
 (outward normals opposite within `angle`). Pairs are grouped per pair of parts: one
 proposal per pair ("Plate to Bracket"), which may hold several faces on each side.
 
+## Bodies of one part (an imported assembly)
+
+A STEP file with several bodies imports as **one part**. The search works body by body
+there too: a proposal between two bodies has `source_part == target_part`, and
+`source_body`/`target_body` name the bodies (by a body selection holding just that
+body, such as "Pipe and Flange", else `body-N`).
+
+- Touching bodies of one part already share their nodes (the geometry's Share faces,
+  on by default). A **bonded** contact between them records that and writes nothing.
+- A **frictionless** or **frictional** contact (or a tie, `meshing: nonconformal`)
+  between them parts those two faces after meshing: the mesher gives one side its
+  own nodes there (Gmsh's Crack plugin), and every other join stays. Only a line
+  where a third body meets both stays joined.
+- With Share faces off, each body is meshed apart; a bonded contact joins its two
+  bodies.
+- Code_Aster can't tie (`bonded` + `nonconformal`) two bodies of one part: refused.
+
+To work part by part instead, split the part: `parts_split(component, part, bond)`
+returns a plan and a `batch` for `submit` (one undo). Each body becomes a part of its
+own (named by its body selection), every reference follows its body, and with `bond`
+(default true) bonded contacts join the bodies that touched, as Share faces did. Read
+its `notes` to the user: references on a selection spanning bodies that couldn't be
+repeated per part. Materials, loads, supports and sections on such a selection are
+repeated per part.
+
 ## Contact types
 
 | `type` | What it does | Written by |
 | --- | --- | --- |
-| `bonded` | glued: no gap, no sliding | CalculiX, Code_Aster, Elmer; FEniCSx only when conformal |
+| `bonded` | glued: no gap, no sliding | CalculiX, Code_Aster; Elmer and FEniCSx only when conformal |
 | `frictionless` | may open and slide, no friction | CalculiX, Code_Aster |
 | `frictional` | may open; slides past `friction` (μ, required) | CalculiX, Code_Aster |
 | `no_separation`, `rough` | in the schema | no solver writes them yet |
 
 - A bonded contact is meshed conformally by default: the parts share nodes and no
   constraint is written. `"meshing": "nonconformal"` meshes the parts apart and ties
-  them (CalculiX `*TIE`, Code_Aster `LIAISON_MAIL`, Elmer mortar tie).
+  them (CalculiX `*TIE`, Code_Aster `LIAISON_MAIL`; Elmer's mortar tie isn't written,
+  so Elmer refuses it).
 - Every other type is always nonconformal.
 - Elmer, FEniCSx and the CFD solvers write no frictionless or frictional contact. A
   study on them with such a contact is refused (code `unsupported`).
@@ -46,7 +73,8 @@ proposal per pair ("Plate to Bracket"), which may hold several faces on each sid
      A 0.2 mm gap is `0.0002`.
    - `angle`: how far from face to face, in degrees (default 10).
    - It returns `proposals` (each with `name`, `source_part`, `source_faces`,
-     `target_part`, `target_faces`, `gap_m`, `overlap_m2`) and `make_bonded`.
+     `target_part`, `target_faces`, `source_body`, `target_body`, `gap_m`,
+     `overlap_m2`) and `make_bonded`.
      Nothing is made yet.
 3. Read the proposals to the user: the parts, the gap in mm, the overlap in mm².
    Ask which to keep and which type each should be, unless they already said.
@@ -113,3 +141,8 @@ plain number (μ). A contact's `search_distance` and `offset` are quantities, e.
   near-misses; the gap column is the guard.
 - In the GUI the same search is the component's right-click Find contacts… (a review
   table with type and friction per row).
+- Telling the user an imported assembly "has no contacts to find" because it is one
+  part: its bodies are searched too. Splitting it (`parts_split`) is a choice, not a
+  need.
+- Splitting a part to get a sliding contact: not needed; a frictionless or frictional
+  contact between two bodies of one part already parts their faces.

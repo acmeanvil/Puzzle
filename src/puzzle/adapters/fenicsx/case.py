@@ -49,6 +49,11 @@ from puzzle.results.model import Field, Results, StepResult
 
 SCRIPT = Path(__file__).with_name("study.py")
 RESULTS = "results.npz"
+# ADR 0076 step 5: threaded contacts written as flank springs (tests/integration/
+# test_thread_benchmark.py); frictional ones not yet.
+THREADS = frozenset({"bonded", "no_separation", "frictionless"})
+SLACK = 1e-4  # a unilateral flank's stiffness in tension, a fraction of k (as CalculiX's)
+RIGID_PENALTY = 1e3  # rigid flanks: a penalty of this times the teeth's stiffness
 
 
 def fenicsx_python() -> Path | None:
@@ -127,7 +132,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     comp = project.get(study.component, Component)
     refuse_inputs(inputs, "FEniCSx", {("load", "temperature"), ("feature", "*")})
     thermal_load = next((i.field for i in inputs if i.field.name == "temperature"), None)
-    check_contacts(comp, set(), "FEniCSx")
+    check_contacts(comp, set(), "FEniCSx", THREADS)
     refuse_line_bodies(mesh, "FEniCSx")
     refuse_large_deflection(study.solve_steps(), "FEniCSx")
     steps = study.solve_steps()
@@ -182,6 +187,9 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         if g not in mesh.groups:
             raise InputError(f"no selection '{g}' in the mesh")
     as_planar(mesh, comp)
+    if "quad8" in mesh.element_counts():  # dolfinx reads 9-node quadrilaterals only
+        raise InputError("FEniCSx doesn't read 8-node quadrilaterals: mesh this 2D model "
+                         "with triangles, or first order", code="unsupported")  # fmt: skip
     if mesh.planar:
         _check_2d(comp, physics, step, features, thermal_load)
 
@@ -273,6 +281,11 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             "reference": _reference_temperature(comp),
         }
     _field_files(features, case["features"], inputs, mesh, workdir)
+    threaded = [c for c in comp.contacts if c.thread is not None]
+    if threaded:
+        case["threads"] = _threads(project, comp, mesh, step, physics, threaded)
+        groups = list(dict.fromkeys(groups + [g for t in case["threads"]
+                                              for g in (t["screw"], t["nut"])]))  # fmt: skip
     if magnetics:
         case["magnetics"] = _magnetics(project, comp, step, features, mesh, workdir)
     write_med(mesh, workdir / "mesh.msh", {g: g for g in groups})
@@ -283,6 +296,46 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     np.savetxt(workdir / "node-ids.txt", mesh.node_ids, fmt="%d")
     np.save(workdir / "node-coords.npy", mesh.coords)
     return target
+
+
+def _threads(project, comp, mesh: Mesh, step, physics: str, contacts) -> list[dict]:
+    """Threaded contacts (ADR 0076) for study.py: per contact the screw's and nut's face
+    selections, each pair's node positions on both (study.py finds their dofs among
+    each face's own, since the faces coincide), and per flank the normals (the screw's
+    outward) and stiffness (N/m; a 2D axisymmetric model's whole ring's, as its forms
+    are weighted by 2 pi r). Bonded and no_separation are linear springs along n,
+    frictionless ones springs only in compression (an active-set loop); rigid flanks a
+    penalty of RIGID_PENALTY times the teeth's stiffness."""
+    from puzzle import threads
+    from puzzle.adapters.thread_pairs import modulus, thread_pairs
+
+    names = ", ".join(c.name for c in contacts)
+    if physics != "solid_mechanics" or step.type != "stationary":
+        raise InputError(f"threaded contacts ({names}) are written in static structural steps "
+                         "on FEniCSx so far", code="unsupported")  # fmt: skip
+    if not mesh.axisymmetric:  # benchmarked in 2D axisymmetric only (ADR 0076 step 5)
+        raise InputError(f"threaded contacts ({names}) are written in 2D axisymmetric models "
+                         "on FEniCSx so far", code="unsupported")  # fmt: skip
+    out = []
+    for c in contacts:
+        tp = thread_pairs(project, comp, mesh, c)
+        screw, nut = (tp.source, tp.target) if tp.screw_is_source else (tp.target, tp.source)
+        screw_side, nut_side = (c.source, c.target) if tp.screw_is_source else (c.target, c.source)
+        flanks = []
+        for flank in tp.flanks:
+            k = tp.stiffness[flank]
+            if c.thread.compliance == "rigid":
+                k = RIGID_PENALTY * threads.stiffness(
+                    tp.areas[flank], threads.spec(c.thread), modulus(project, comp, screw_side),
+                    modulus(project, comp, nut_side), "teeth")  # fmt: skip
+            flanks.append({"normals": tp.normals[flank].tolist(), "stiffness": k.tolist()})
+        out.append({
+            "name": c.name, "kind": c.type, "clearance": float(tp.clearance), "slack": SLACK,
+            "screw": screw_side, "nut": nut_side,
+            "screw_xyz": mesh.node_coords(screw).tolist(),
+            "nut_xyz": mesh.node_coords(nut).tolist(), "flanks": flanks,
+        })  # fmt: skip
+    return out
 
 
 def _magnetics(project, comp, step, features, mesh, workdir: Path) -> dict:
@@ -384,13 +437,28 @@ def _read_magnetics(workdir: Path, data, node_ids, ids) -> Results:
     return results
 
 
+def _node_ids(data, coords: np.ndarray, node_ids: np.ndarray) -> np.ndarray:
+    """Each result point's node id: study.py's own node ids where it wrote them (a
+    thread's faces have coincident nodes, ADR 0076) and they sit at their points, else
+    matched by position."""
+    given = np.asarray(data["node_ids"]) if "node_ids" in data else np.zeros(0)
+    if len(given) == len(data["coords"]) and len(given):
+        at = {int(n): i for i, n in enumerate(node_ids)}
+        rows = np.array([at.get(int(n), -1) for n in given])
+        if np.all(rows >= 0):
+            size = float(np.ptp(coords, axis=0).max()) or 1.0
+            if np.abs(coords[rows] - data["coords"]).max() <= 1e-6 * size:
+                return node_ids[rows]
+    return match_points(data["coords"], coords, node_ids)
+
+
 def read_results(workdir: Path) -> Results:
     path = workdir / RESULTS
     if not path.exists():
         raise FileNotFoundError(f"FEniCSx wrote no {RESULTS}; see the solver log")
     data = np.load(path)
     node_ids = np.loadtxt(workdir / "node-ids.txt", dtype=np.int64, ndmin=1)
-    ids = match_points(data["coords"], np.load(workdir / "node-coords.npy"), node_ids)
+    ids = _node_ids(data, np.load(workdir / "node-coords.npy"), node_ids)
     if "magnetic_frequencies" in data or "magnetic_times" in data:  # ADR 0047
         return _read_magnetics(workdir, data, node_ids, ids)
     order = np.argsort(ids)

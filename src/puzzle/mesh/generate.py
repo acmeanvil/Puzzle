@@ -141,6 +141,7 @@ def generate_mesh(
                 f"face-{i}": [(2, t) for t in tags] for i, tags in groups.items()
             }
         volumes: dict[str, list[tuple[int, int]]] = {}
+        sides: dict[str, set[str]] = {}  # "part/selection" -> its bodies, in many-body parts
         for part in comp.parts if not faceted else []:
             before = set(gmsh.model.getEntities())
             load_shapes(paths[part.name])
@@ -154,8 +155,13 @@ def generate_mesh(
                     + ("solids" if top == 3 else "lines")
                 )
             joined = top == 3 or planar  # 2D regions share their edges, as bodies faces
-            if joined and len(volumes[part.name]) > 1 and geometries[part.name].share_faces:
-                volumes[part.name] = _share_faces(part.name, volumes[part.name], top)
+            if joined and len(volumes[part.name]) > 1:
+                geo, ref = geometries[part.name], references[part.name]
+                sides.update(_contact_bodies(comp, part.name, geo, ref, volumes[part.name]))
+                if geometries[part.name].share_faces:
+                    volumes[part.name] = _share_faces(part.name, volumes[part.name], top)
+                else:  # meshed apart, but bodies a bonded contact joins share their faces
+                    _join_bonded(comp, part.name, volumes[part.name], sides, top)
             place(volumes[part.name], part.translation, part.rotation)
         if not faceted:
             gmsh.model.occ.synchronize()
@@ -180,7 +186,8 @@ def generate_mesh(
             # parts can have identical faces in the same place (two halves touching).
             closure = _closure(list(bodies.values()))
             found[part.name] = match(ref.entities, closure, **placement)
-            _pieces(ref.entities, closure, found[part.name], **placement)
+            _pieces(ref.entities, closure, found[part.name], volumes=list(bodies.values()),
+                    **placement)  # fmt: skip
 
         _physical_groups(comp, geometries, references, found, warnings)
         names = {
@@ -313,6 +320,7 @@ def generate_mesh(
                 code="invalid",
             )
 
+        _part_contacts(comp, found, sides, 1 if planar else 2, warnings)
         path = out_dir / MESH_FILE
         (out_dir / "quality.json").write_text(json.dumps(quality), encoding="utf-8")
         if planar:
@@ -399,23 +407,213 @@ def _closure(volumes: list[tuple[int, int]]) -> list[tuple[int, int]]:
 def _share_faces(part: str, volumes: list[tuple[int, int]], dim: int = 3) -> list[tuple[int, int]]:
     """Fragment one part's bodies (or a 2D part's regions) by each other, so those that
     touch share the faces (edges) between them, and so their nodes. Overlaps are
-    refused: fragmenting would cut the overlap out as a body of its own."""
-    out, _ = gmsh.model.occ.fragment(volumes, [])
+    refused: fragmenting would cut the overlap out as a body of its own. A sliding
+    contact between two of them is parted after meshing (`_part_contacts`)."""
+    current = list(volumes)
+    _fragment(part, current, list(range(len(current))), dim)
+    return current
+
+
+def _fragment(part: str, current: list[tuple[int, int]], group: list[int], dim: int) -> None:
+    """Fragment the bodies `group` (indices into `current`) by each other, in place."""
+    out, children = gmsh.model.occ.fragment([current[i] for i in group], [])
     gmsh.model.occ.synchronize()
-    joined = [e for e in out if e[0] == dim]
-    if len(joined) != len(volumes):
+    made = [[e for e in c if e[0] == dim] for c in children]
+    if len([e for e in out if e[0] == dim]) != len(group) or any(len(m) != 1 for m in made):
         raise MeshError(
-            f"part '{part}': its bodies overlap ({len(volumes)} bodies became "
-            f"{len(joined)} when joined); remove the overlap, or turn off Share faces "
-            "on its geometry"
+            f"part '{part}': its bodies overlap ({len(group)} bodies became "
+            f"{len([e for e in out if e[0] == dim])} when joined); remove the "
+            "overlap, or turn off Share faces on its geometry"
         )
-    return joined
+    for i, m in zip(group, made, strict=True):
+        current[i] = m[0]
 
 
-def _pieces(reference, candidates, found: dict, *, translation, rotation, tol: float) -> None:
+def _contact_bodies(comp, part: str, geometry, reference, volumes) -> dict[str, set[str]]:
+    """For each contact side on this part ("part/selection"), the names of the bodies
+    holding its faces, and under the key "" each volume's body name in order: two
+    bodies of one part share a face once joined, so which side is which is known only
+    before."""
+    used = {sel for c in comp.contacts for sel in (c.source, c.target or "")
+            if sel.split("/", 1)[0] == part}  # fmt: skip
+    if not used:
+        return {}
+    names = match(reference.entities, _closure(volumes), tol=1e-5 * reference.size)
+    body_of = {dt: n for n, dt in names.items() if dt[0] == volumes[0][0]}
+    owner: dict = {}
+    for v in volumes:
+        for f in gmsh.model.getBoundary([v], combined=False, oriented=False):
+            owner.setdefault(f, body_of.get(v))
+    by_name = {s.name: s for s in geometry.selections}
+    out: dict = {}
+    for sel in used:
+        found = by_name.get(sel.split("/", 1)[1])
+        hits = [names.get(m) for m in (found.members if found else [])]
+        out[sel] = {owner.get(h) or body_of.get(h) for h in hits if h is not None} - {None}
+    out[part] = [body_of.get(v) for v in volumes]  # each volume's body, in order
+    return out
+
+
+def _join_bonded(comp, part: str, volumes, sides, dim: int) -> None:
+    """Share faces off: the bodies a bonded (conformal) contact joins are fragmented,
+    each connected set in one go (a body fragmented twice loses its first join)."""
+    group_of: dict[str, set[str]] = {}
+    for c in comp.contacts:
+        if c.effective_meshing != "conformal":
+            continue
+        ends = sides.get(c.source, set()) | sides.get(c.target or "", set())
+        if c.source.split("/", 1)[0] != part or len(ends) < 2:
+            continue
+        joined = set(ends).union(*(group_of.get(b, set()) for b in ends))
+        for b in joined:
+            group_of[b] = joined
+    order = sides.get(part, [])
+    for group in {frozenset(g) for g in group_of.values()}:
+        members = [i for i, n in enumerate(order) if n in group]
+        if len(members) > 1:
+            _fragment(part, volumes, members, dim)
+
+
+def _part_contacts(comp, found, sides, dim: int, warnings: list[str]) -> None:
+    """Part the faces two joined bodies share where a sliding contact (or a tie) sits
+    between them: Gmsh's Crack plugin gives one side its own nodes there, after
+    meshing, so every other join of those bodies stays. The rim stays joined only where
+    a third body meets it. The contact side whose body took the new nodes gets the new
+    entity in its group."""
+    for c in comp.contacts:
+        if c.effective_meshing != "nonconformal" or not c.target:
+            continue
+        src, tgt = _entities_of(c.source, dim), _entities_of(c.target, dim)
+        common = sorted(set(src) & set(tgt))
+        if not common:
+            continue  # meshed apart already
+        moved: dict[str, list[int]] = {c.source: [], c.target: []}
+        for entity in common:
+            near = gmsh.model.getAdjacencies(dim, entity)[0]
+            if len(near) != 2:
+                continue
+            side = _side_volumes(c.source, found, sides, dim + 1)
+            new = _crack(dim, entity, near)
+            if new is None:
+                warnings.append(f"contact '{c.name}': could not part its faces")
+                continue
+            taker = _taker(dim, new, near)
+            _follow(dim, entity, new, taker)
+            moved[c.source if taker in side else c.target].append((entity, new))
+        for name, pairs in moved.items():
+            if pairs:
+                _swap(name, dim, dict(pairs))
+
+
+def _entities_of(name: str, dim: int) -> list[int]:
+    """The entities of the physical group called `name`, of dimension `dim`."""
+    for d, tag in gmsh.model.getPhysicalGroups(dim):
+        if gmsh.model.getPhysicalName(d, tag) == name:
+            return [int(t) for t in gmsh.model.getEntitiesForPhysicalGroup(d, tag)]
+    return []
+
+
+def _side_volumes(selection: str, found, sides, dim: int) -> set[int]:
+    """The volumes (tags) a contact side's faces belong to: its part's, or in a part of
+    several bodies the bodies holding the selection's faces."""
+    part = selection.split("/", 1)[0]
+    entities = found.get(part, {})
+    bodies = sides.get(selection)
+    out = set()
+    for name, hit in entities.items():
+        if bodies and name not in bodies:
+            continue
+        for d, t in hit if isinstance(hit, list) else [hit]:
+            if d == dim:
+                out.add(t)
+    return out
+
+
+def _crack(dim: int, entity: int, near) -> int | None:
+    """Duplicate the nodes of one shared entity (Gmsh's Crack plugin), its rim opened
+    where only these two volumes meet; returns the new entity's tag."""
+    rim = gmsh.model.getBoundary([(dim, entity)], combined=False, oriented=False)
+    open_rim = [abs(t) for d, t in rim if _volumes_at(d, abs(t), dim + 1) <= set(near)]
+    crack = gmsh.model.addPhysicalGroup(dim, [entity])
+    opened = gmsh.model.addPhysicalGroup(dim - 1, open_rim) if open_rim else 0
+    before = set(gmsh.model.getEntities(dim))
+    try:
+        gmsh.plugin.setNumber("Crack", "Dimension", dim)
+        gmsh.plugin.setNumber("Crack", "PhysicalGroup", crack)
+        gmsh.plugin.setNumber("Crack", "OpenBoundaryPhysicalGroup", opened)
+        gmsh.plugin.run("Crack")
+    finally:
+        gmsh.model.removePhysicalGroups([(dim, crack)] + ([(dim - 1, opened)] if opened else []))
+    new = sorted(set(gmsh.model.getEntities(dim)) - before)
+    return new[0][1] if new else None
+
+
+def _follow(dim: int, old: int, new: int, taker: int | None) -> None:
+    """The faces of the body that took the new nodes use them too: the plugin moves the
+    volume's elements onto the opened rim's new nodes, not its neighbouring faces'."""
+    if taker is None:
+        return
+    _, _, before = gmsh.model.mesh.getElements(dim, old)
+    _, _, after = gmsh.model.mesh.getElements(dim, new)
+    renamed = {}
+    for a, b in zip(before, after, strict=False):
+        for x, y in zip(np.asarray(a).tolist(), np.asarray(b).tolist(), strict=False):
+            if x != y:
+                renamed[x] = y
+    if not renamed:
+        return
+    for d, t in gmsh.model.getBoundary([(dim + 1, taker)], combined=False, oriented=False):
+        t = abs(t)
+        if t in (old, new):
+            continue
+        types, tags, nodes = gmsh.model.mesh.getElements(d, t)
+        changed = [np.array([renamed.get(int(n), int(n)) for n in ns]) for ns in nodes]
+        if any(not np.array_equal(a, b) for a, b in zip(nodes, changed, strict=True)):
+            gmsh.model.mesh.removeElements(d, t)
+            gmsh.model.mesh.addElements(d, t, list(types), [list(x) for x in tags],
+                                        [list(x) for x in changed])  # fmt: skip
+
+
+def _volumes_at(dim: int, tag: int, top: int) -> set[int]:
+    """The `top`-dimensional entities around an entity of dimension `dim`."""
+    level = {(dim, tag)}
+    for d in range(dim, top):
+        level = {(d + 1, t) for _, x in level for t in gmsh.model.getAdjacencies(d, x)[0]}
+    return {t for _, t in level}
+
+
+def _taker(dim: int, new: int, near) -> int | None:
+    """Which of the two volumes uses the new entity's nodes."""
+    _, _, nodes = gmsh.model.mesh.getElements(dim, new)
+    mine = set(np.concatenate(nodes).tolist()) if len(nodes) else set()
+    for v in near:
+        _, _, vn = gmsh.model.mesh.getElements(dim + 1, v)
+        if mine & set(np.concatenate(vn).tolist()):
+            return v
+    return None
+
+
+def _swap(name: str, dim: int, replace: dict[int, int]) -> None:
+    """Point a physical group at the new entities in place of the shared ones."""
+    for d, tag in gmsh.model.getPhysicalGroups(dim):
+        if gmsh.model.getPhysicalName(d, tag) == name:
+            held = gmsh.model.getEntitiesForPhysicalGroup(d, tag)
+            entities = [replace.get(int(t), int(t)) for t in held]
+            gmsh.model.removePhysicalGroups([(d, tag)])
+            gmsh.model.addPhysicalGroup(d, entities, tag, name=name)
+            return
+
+
+def _pieces(
+    reference, candidates, found: dict, *, translation, rotation, tol: float, volumes=()
+) -> None:
     """Re-find faces and edges a fragment split: an unmatched entity is the set of
     candidates of its kind lying in its placed bounding box whose measures add up to
-    its own. Found sets go into `found` as lists; others stay unmatched (and warned of)."""
+    its own. Found sets go into `found` as lists; others stay unmatched (and warned of).
+
+    With `volumes` (the part's bodies), the pieces are looked for on one body's boundary
+    at a time: a face's pieces all bound its own body, and another body's face on the
+    same plane (a second block on a plate, meshed apart) must not count."""
     missing = [e for e in reference if e.name not in found and e.dim in (1, 2)]
     if not missing:
         return
@@ -423,23 +621,29 @@ def _pieces(reference, candidates, found: dict, *, translation, rotation, tol: f
     shift = np.asarray(translation, dtype=float)
     pool = sorted((dt for dt in candidates if dt[0] in (1, 2)), key=lambda dt: (-dt[0], dt[1]))
     described = list(zip(describe(pool), pool, strict=True))
+    groups = [described]
+    if len(volumes) > 1:
+        groups = [[(e, dt) for e, dt in described if dt in own]
+                  for own in (set(_closure([v])) for v in volumes)]  # fmt: skip
     for ref in missing:
         lo, hi = np.asarray(ref.bbox[:3]), np.asarray(ref.bbox[3:])
         corners = np.array([[(lo, hi)[i >> k & 1][k] for k in range(3)] for i in range(8)])
         placed = corners @ r.T + shift
         pad = tol + 1e-6  # OCC pads bounding boxes by ~1e-7 m
         box_lo, box_hi = placed.min(axis=0) - pad, placed.max(axis=0) + pad
-        inside = [
-            (e, dt)
-            for e, dt in described
-            if e.dim == ref.dim
-            and e.kind == ref.kind
-            and np.all(np.asarray(e.bbox[:3]) >= box_lo)
-            and np.all(np.asarray(e.bbox[3:]) <= box_hi)
-        ]
-        total = sum(e.measure for e, _ in inside)
-        if len(inside) > 1 and abs(total - ref.measure) <= 1e-5 * max(ref.measure, 1e-30):
-            found[ref.name] = [dt for _, dt in inside]
+        for group in groups:
+            inside = [
+                (e, dt)
+                for e, dt in group
+                if e.dim == ref.dim
+                and e.kind == ref.kind
+                and np.all(np.asarray(e.bbox[:3]) >= box_lo)
+                and np.all(np.asarray(e.bbox[3:]) <= box_hi)
+            ]
+            total = sum(e.measure for e, _ in inside)
+            if len(inside) > 1 and abs(total - ref.measure) <= 1e-5 * max(ref.measure, 1e-30):
+                found[ref.name] = [dt for _, dt in inside]
+                break
 
 
 def _counter_clockwise() -> None:

@@ -7,8 +7,10 @@ filled in, and `resolved(project)` a copy of the project whose bolts are all res
 which is what the solvers, the view and the outline read, so none of them needs to
 know about types.
 
-Sizes are the published ones: ISO metric coarse and fine pitch (ISO 261/262), UNC
-and UNF (ASME B1.1). Tensile stress areas follow each standard's formula,
+Sizes are the published ones: ISO metric coarse and fine pitch (ISO 261/262) M3 to
+M64, UNC to 4 in and UNF to 1 1/2 in (ASME B1.1). Heads, nuts, washers and clearance
+holes of the standard parts are in `puzzle.fasteners`; VDI 2230's bolt and joint
+calculations in `puzzle.vdi2230`. Tensile stress areas follow each standard's formula,
 As = π/4 (d − 0.9382 P)² for ISO and As = π/4 (d − 0.9743/n)² for UN (both in their
 own units), which reproduce the tabulated areas (M10: 58.0 mm²; 1/2-13: 0.1419 in²).
 The bearing diameter, the face under a head or nut, is ISO 4017/4032's minimum dw
@@ -43,10 +45,11 @@ def _iso(standard: str, d_mm: float, p_mm: float, dw_mm: float, fine: bool) -> S
     return Size(standard, name, d_mm * 1e-3, p_mm * 1e-3, dw_mm * 1e-3, area)
 
 
-def _un(standard: str, label: str, d_in: float, tpi: int, af_in: float) -> Size:
+def _un(standard: str, label: str, d_in: float, tpi: float, af_in: float) -> Size:
     series = "UNC" if standard == "unc" else "UNF"
     area = math.pi / 4 * (d_in - 0.9743 / tpi) ** 2 * INCH**2
-    return Size(standard, f"{label}-{tpi} {series}", d_in * INCH, INCH / tpi, af_in * INCH, area)
+    n = f"{int(tpi)} 1/2" if tpi % 1 else f"{int(tpi)}"  # 4.5 threads per inch: "2-4 1/2 UNC"
+    return Size(standard, f"{label}-{n} {series}", d_in * INCH, INCH / tpi, af_in * INCH, area)
 
 
 # d, coarse pitch, fine pitch, dw min (ISO 4017/4032), all mm.
@@ -69,11 +72,40 @@ _INCH = [
     ("1-1/4", 1.25, 7, 12, 1.875), ("1-3/8", 1.375, 6, 12, 2.0625), ("1-1/2", 1.5, 6, 12, 2.25),
 ]  # fmt: skip
 
-SIZES: list[Size] = (
+# Sizes from Lacewing Lab's fastener tables (`puzzle.fasteners`, checked against them in
+# tests/test_fasteners.py). M39-M64 with ISO 4032's coarse and fine pitches; their dw is
+# ISO 4014's product grade B dw min = 0.95 s min (s min from the ISO 4014/4017 table),
+# the rule the M27-M36 values above already follow.
+_METRIC_LARGE = [
+    (39, 4.0, 3.0, 55.86), (42, 4.5, 3.0, 59.95), (45, 4.5, 3.0, 64.70), (48, 5.0, 3.0, 69.45),
+    (52, 5.0, 3.0, 74.20), (56, 5.5, 4.0, 78.66), (60, 5.5, 4.0, 83.41), (64, 6.0, 4.0, 88.16),
+]  # fmt: skip
+# Further ISO 262 fine pitches (ISO 4032's fine column and its note's extra-fine ones):
+# d, pitch, the size's dw as above.
+_METRIC_FINE_MORE = [(10, 1.0, 14.63), (12, 1.25, 16.63), (18, 2.0, 25.34), (20, 2.0, 28.19),
+                     (22, 2.0, 31.71)]  # fmt: skip
+# UNC over 1 1/2 in (ASME B1.1 as ASME B18.2.1 Table 2's hex bolts list them, with their
+# width across flats F): label, d (in), threads per inch, F (in). UNF stops at 1 1/2 in.
+_INCH_LARGE = [
+    ("1-3/4", 1.75, 5, 2.625), ("2", 2.0, 4.5, 3.0), ("2-1/4", 2.25, 4.5, 3.375),
+    ("2-1/2", 2.5, 4, 3.75), ("2-3/4", 2.75, 4, 4.125), ("3", 3.0, 4, 4.5),
+    ("3-1/4", 3.25, 4, 4.875), ("3-1/2", 3.5, 4, 5.25), ("3-3/4", 3.75, 4, 5.625),
+    ("4", 4.0, 4, 6.0),
+]  # fmt: skip
+
+_ORDER = ("iso_coarse", "iso_fine", "unc", "unf")
+# Each standard's sizes by diameter; the sizes listed first above stay first among sizes
+# of one diameter (a stable sort), so a bolt type's nearest size is unchanged.
+SIZES: list[Size] = sorted(
     [_iso("iso_coarse", d, pc, dw, False) for d, pc, _pf, dw in _METRIC]
     + [_iso("iso_fine", d, pf, dw, True) for d, _pc, pf, dw in _METRIC]
     + [_un("unc", label, d, nc, af) for label, d, nc, _nf, af in _INCH]
     + [_un("unf", label, d, nf, af) for label, d, _nc, nf, af in _INCH]
+    + [_iso("iso_coarse", d, pc, dw, False) for d, pc, _pf, dw in _METRIC_LARGE]
+    + [_iso("iso_fine", d, pf, dw, True) for d, _pc, pf, dw in _METRIC_LARGE]
+    + [_iso("iso_fine", d, p, dw, True) for d, p, dw in _METRIC_FINE_MORE]
+    + [_un("unc", label, d, n, af) for label, d, n, af in _INCH_LARGE],
+    key=lambda s: (_ORDER.index(s.standard), s.diameter),
 )
 
 STANDARDS = {
@@ -176,7 +208,24 @@ def resolve(project, fastener):
         update["joint"] = btype.joint
     if fastener.pretension is None and values["preload"] is not None:
         update["pretension"] = Quantity(value=round(values["preload"], 6), unit="N")
+    if fastener.thread is None:
+        update["thread"] = type_thread(btype)
     return fastener.model_copy(update=update)
+
+
+def type_thread(btype):
+    """A bolt type's tapped-end thread (ADR 0076): its `thread_form`, else iso for ISO
+    sizes and un for UNC/UNF; none for "none" or a custom size without a pitch."""
+    from puzzle.model.schema import Thread
+
+    form = btype.thread_form or ("un" if btype.standard in ("unc", "unf") else "iso")
+    if form == "none":
+        return None
+    if btype.standard != "custom" and btype.size:
+        return Thread(form=form, size=btype.size)
+    if btype.diameter is None or btype.pitch is None:
+        return None
+    return Thread(form=form, major=btype.diameter, pitch=btype.pitch)
 
 
 def resolved(project):

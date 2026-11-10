@@ -764,3 +764,198 @@ specific_heat = { value = 486, unit = "J/(kg*K)" }
 thermal_expansion = { value = 1.17e-05, unit = "1/K" }
 electrical_conductivity = { value = 5900000.0, unit = "S/m" }
 
+
+# More bolting grades from Lacewing Lab's bolt grades (specified minimums, ksi converted;
+# none of these specifications sets a proof load, so bolt checks use yield).
+
+[astm_f3125_144]
+name = "ASTM F3125 Grade 144"
+type = "Metal"
+group = "Fastener"
+description = "Heavy hex or twist-off structural bolts, medium carbon or alloy steel, quenched and tempered; 1/2 to 1 1/2 in; no proof load specified"
+sources = ["ASTM F3125/F3125M grade 144: Portland Bolt's ASTM F3125 specification summary, via Lacewing Lab"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 205, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+yield_strength = { value = 793, unit = "MPa" }
+tensile_strength = { value = 993, unit = "MPa" }
+thermal_conductivity = { value = 42.6, unit = "W/(m*K)" }
+specific_heat = { value = 473, unit = "J/(kg*K)" }
+thermal_expansion = { value = 1.23e-05, unit = "1/K" }
+electrical_conductivity = { value = 4500000.0, unit = "S/m" }
+
+[astm_f1554_36]
+name = "ASTM F1554 Grade 36"
+type = "Metal"
+group = "Fastener"
+description = "Anchor rods, low carbon steel (end painted blue); 1/2 to 4 in; tensile 58-80 ksi; no proof load specified"
+sources = ["ASTM F1554 grade 36: Portland Bolt's ASTM F1554 specification summary, via Lacewing Lab"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 205, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+yield_strength = { value = 248, unit = "MPa" }
+tensile_strength = { value = 400, unit = "MPa" }
+thermal_conductivity = { value = 51.9, unit = "W/(m*K)" }
+specific_heat = { value = 486, unit = "J/(kg*K)" }
+thermal_expansion = { value = 1.17e-05, unit = "1/K" }
+electrical_conductivity = { value = 5900000.0, unit = "S/m" }
+
+[astm_f1554_55]
+name = "ASTM F1554 Grade 55"
+type = "Metal"
+group = "Fastener"
+description = "Anchor rods, high strength low alloy steel (end painted yellow); 1/2 to 4 in; tensile 75-95 ksi; no proof load specified"
+sources = ["ASTM F1554 grade 55: Portland Bolt's ASTM F1554 specification summary, via Lacewing Lab"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 205, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+yield_strength = { value = 379, unit = "MPa" }
+tensile_strength = { value = 517, unit = "MPa" }
+thermal_conductivity = { value = 51.9, unit = "W/(m*K)" }
+specific_heat = { value = 486, unit = "J/(kg*K)" }
+thermal_expansion = { value = 1.17e-05, unit = "1/K" }
+electrical_conductivity = { value = 5900000.0, unit = "S/m" }
+
+[astm_f1554_105]
+name = "ASTM F1554 Grade 105"
+type = "Metal"
+group = "Fastener"
+description = "Anchor rods, alloy steel, quenched and tempered (end painted red); 1/2 to 3 in; tensile 125-150 ksi; no proof load specified"
+sources = ["ASTM F1554 grade 105: Portland Bolt's ASTM F1554 specification summary, via Lacewing Lab"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 205, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+yield_strength = { value = 724, unit = "MPa" }
+tensile_strength = { value = 862, unit = "MPa" }
+thermal_conductivity = { value = 42.6, unit = "W/(m*K)" }
+specific_heat = { value = 473, unit = "J/(kg*K)" }
+thermal_expansion = { value = 1.23e-05, unit = "1/K" }
+electrical_conductivity = { value = 4500000.0, unit = "S/m" }
+
+[astm_a193_b7m]
+name = "ASTM A193 B7M"
+type = "Metal"
+group = "Fastener"
+description = "Cr-Mo (AISI 4140) alloy steel bolting, quenched and tempered with limited hardness (sour service); up to 2 1/2 in"
+sources = ["ASME BPVC II-D (2023) Tables Y-1 and U: SA-193 B7M, up to 2.5 in, via Lacewing Lab"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 205, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+yield_strength = { value = 552, unit = "MPa" }
+tensile_strength = { value = 689, unit = "MPa" }
+thermal_conductivity = { value = 42.6, unit = "W/(m*K)" }
+specific_heat = { value = 473, unit = "J/(kg*K)" }
+thermal_expansion = { value = 1.23e-05, unit = "1/K" }
+electrical_conductivity = { value = 4500000.0, unit = "S/m" }
+
+[astm_a193_b8m_cl1]
+name = "ASTM A193 B8M Class 1"
+type = "Metal"
+group = "Fastener"
+description = "Type 316 stainless steel bolting and studs, carbide solution treated"
+sources = ["ASTM A193 grade B8M class 1: Portland Bolt's ASTM A193 specification summary, via Lacewing Lab"]
+density = { value = 8000, unit = "kg/m^3" }
+youngs_modulus = { value = 193, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+yield_strength = { value = 207, unit = "MPa" }
+tensile_strength = { value = 517, unit = "MPa" }
+thermal_conductivity = { value = 16.2, unit = "W/(m*K)" }
+specific_heat = { value = 500, unit = "J/(kg*K)" }
+thermal_expansion = { value = 1.73e-05, unit = "1/K" }
+electrical_conductivity = { value = 1390000.0, unit = "S/m" }
+
+[astm_a193_b8_cl2]
+name = "ASTM A193 B8 Class 2"
+type = "Metal"
+group = "Fastener"
+description = "Type 304 stainless steel bolting and studs, carbide solution treated and strain hardened; values up to 3/4 in (they fall for larger sizes)"
+sources = ["ASTM A193 grade B8 class 2, to 3/4 in: Portland Bolt's ASTM A193 specification summary, via Lacewing Lab"]
+density = { value = 8000, unit = "kg/m^3" }
+youngs_modulus = { value = 193, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+yield_strength = { value = 689, unit = "MPa" }
+tensile_strength = { value = 862, unit = "MPa" }
+thermal_conductivity = { value = 16.2, unit = "W/(m*K)" }
+specific_heat = { value = 500, unit = "J/(kg*K)" }
+thermal_expansion = { value = 1.73e-05, unit = "1/K" }
+electrical_conductivity = { value = 1390000.0, unit = "S/m" }
+
+[astm_a320_l43]
+name = "ASTM A320 L43"
+type = "Metal"
+group = "Fastener"
+description = "Ni-Cr-Mo (AISI 4340) alloy steel bolting for low-temperature service, quenched and tempered (Charpy 20 ft-lbf at -150 F); 1/4 to 4 in"
+sources = ["ASTM A320 grade L43: Portland Bolt's ASTM A320 specification summary, via Lacewing Lab"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 205, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+yield_strength = { value = 724, unit = "MPa" }
+tensile_strength = { value = 862, unit = "MPa" }
+thermal_conductivity = { value = 42.6, unit = "W/(m*K)" }
+specific_heat = { value = 473, unit = "J/(kg*K)" }
+thermal_expansion = { value = 1.23e-05, unit = "1/K" }
+electrical_conductivity = { value = 4500000.0, unit = "S/m" }
+
+[astm_f593_group1_cw1]
+name = "ASTM F593 Group 1 (304) Condition CW1"
+type = "Metal"
+group = "Fastener"
+description = "Type 304 stainless steel bolts and screws, cold worked (F593C); 1/4 to 5/8 in; tensile 100-150 ksi"
+sources = ["ASTM F593 group 1 condition CW1: Portland Bolt's ASTM F593 specification summary, via Lacewing Lab"]
+density = { value = 8000, unit = "kg/m^3" }
+youngs_modulus = { value = 193, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+yield_strength = { value = 448, unit = "MPa" }
+tensile_strength = { value = 689, unit = "MPa" }
+thermal_conductivity = { value = 16.2, unit = "W/(m*K)" }
+specific_heat = { value = 500, unit = "J/(kg*K)" }
+thermal_expansion = { value = 1.73e-05, unit = "1/K" }
+electrical_conductivity = { value = 1390000.0, unit = "S/m" }
+
+[astm_f593_group1_cw2]
+name = "ASTM F593 Group 1 (304) Condition CW2"
+type = "Metal"
+group = "Fastener"
+description = "Type 304 stainless steel bolts and screws, cold worked (F593D); 3/4 to 1 1/2 in; tensile 85-140 ksi"
+sources = ["ASTM F593 group 1 condition CW2: Portland Bolt's ASTM F593 specification summary, via Lacewing Lab"]
+density = { value = 8000, unit = "kg/m^3" }
+youngs_modulus = { value = 193, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+yield_strength = { value = 310, unit = "MPa" }
+tensile_strength = { value = 586, unit = "MPa" }
+thermal_conductivity = { value = 16.2, unit = "W/(m*K)" }
+specific_heat = { value = 500, unit = "J/(kg*K)" }
+thermal_expansion = { value = 1.73e-05, unit = "1/K" }
+electrical_conductivity = { value = 1390000.0, unit = "S/m" }
+
+[astm_f593_group2_cw1]
+name = "ASTM F593 Group 2 (316) Condition CW1"
+type = "Metal"
+group = "Fastener"
+description = "Type 316 stainless steel bolts and screws, cold worked (F593G); 1/4 to 5/8 in; tensile 100-150 ksi"
+sources = ["ASTM F593 group 2 condition CW1: Portland Bolt's ASTM F593 specification summary, via Lacewing Lab"]
+density = { value = 8000, unit = "kg/m^3" }
+youngs_modulus = { value = 193, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+yield_strength = { value = 448, unit = "MPa" }
+tensile_strength = { value = 689, unit = "MPa" }
+thermal_conductivity = { value = 16.2, unit = "W/(m*K)" }
+specific_heat = { value = 500, unit = "J/(kg*K)" }
+thermal_expansion = { value = 1.73e-05, unit = "1/K" }
+electrical_conductivity = { value = 1390000.0, unit = "S/m" }
+
+[astm_f593_group2_cw2]
+name = "ASTM F593 Group 2 (316) Condition CW2"
+type = "Metal"
+group = "Fastener"
+description = "Type 316 stainless steel bolts and screws, cold worked (F593H); 3/4 to 1 1/2 in; tensile 85-140 ksi"
+sources = ["ASTM F593 group 2 condition CW2: Portland Bolt's ASTM F593 specification summary, via Lacewing Lab"]
+density = { value = 8000, unit = "kg/m^3" }
+youngs_modulus = { value = 193, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+yield_strength = { value = 310, unit = "MPa" }
+tensile_strength = { value = 586, unit = "MPa" }
+thermal_conductivity = { value = 16.2, unit = "W/(m*K)" }
+specific_heat = { value = 500, unit = "J/(kg*K)" }
+thermal_expansion = { value = 1.73e-05, unit = "1/K" }
+electrical_conductivity = { value = 1390000.0, unit = "S/m" }

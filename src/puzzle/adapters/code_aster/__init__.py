@@ -34,6 +34,7 @@ from puzzle.adapters.base import (
 )
 from puzzle.adapters.code_aster.comm import JOB, write_case
 from puzzle.adapters.code_aster.tables import read_results as read_tables
+from puzzle.adapters.code_aster.thread_springs import THREADS
 from puzzle.adapters.common import drop_helper_nodes, mark_mesh_nodes
 from puzzle.mesh.mesh import Mesh
 from puzzle.model.schema import Project, Study
@@ -83,6 +84,7 @@ class CodeAsterAdapter(SolverAdapter):
             {"bonded_conformal", "bonded_nonconformal", "frictionless", "frictional"}
         ),
         couplings=frozenset({"thermal_expansion"}),
+        threads=THREADS,  # ADR 0076: tests/integration/test_thread_benchmark.py
         # VMIS_ISOT_TRAC in STAT_NON_LINE, p and EPSP out (tests/integration/test_plasticity.py);
         # ELAS_ORTH and THER_ORTH in MASSIF axes (tests/integration/test_orthotropic.py).
         material_models=frozenset(

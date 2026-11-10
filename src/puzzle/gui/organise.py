@@ -5,7 +5,11 @@ Everything here is a command (one undo each):
   run or a swept study's group of runs by a name in `TreeLabels` (the runs themselves
   are a cache, so their names live in the project);
 - **groups** (`TreeGroup`): New group… under a heading (with what is selected in it),
-  Move to group, Out of group, Ungroup. A group can hold groups.
+  Move to group, Out of group, Ungroup. A group can hold groups. Groups also sit inside
+  an object (New group inside…): a geometry's selections, a component's parts, contacts,
+  bolts, materials and sections, a physics' loads and supports; there `section` is the
+  object's id (or "<component id>/<physics>") and members are keys by name
+  (`Node.key`). Hiding a group hides what it holds (`visibility.node_things`).
 """
 
 from __future__ import annotations
@@ -13,7 +17,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from puzzle.commands.model import Create, Delete, Edit, EditOp
-from puzzle.gui.tree import RENAMABLE, member_key
+from puzzle.gui.tree import RENAMABLE, container_key, member_key, scope_name
 from puzzle.model.schema import TreeGroup, TreeLabels
 
 
@@ -88,8 +92,8 @@ def new_group(window, section: str, keys: list[str] | None = None, name: str | N
         got = window.ask_form(
             "New group",
             [Ask("name", "Name", kind="text", default=f"Group {n}")],
-            intro=f"A folder under {section} to keep the tree tidy; drag items into it, or "
-            "right-click them → Move to group.",
+            intro=f"A folder under {scope_name(window.session.project, section)} to keep the "
+            "tree tidy; drag items into it, or right-click them → Move to group.",
             check=lambda v: None if v.get("name", "").strip() else "Give it a name",
         )
         if got is None:
@@ -124,10 +128,11 @@ def ungroup(window, group_id: str):
 
 
 def selected_keys(window, section: str) -> list[str]:
-    """The groupable items selected in the tree, in `section`."""
+    """The groupable items selected in the tree, in `section` (a heading, or the object
+    or physics holding them: `tree.container_key`)."""
     tree = window.tree
     return [member_key(i.data(0, tree_role())) for i in tree.selectedItems()
-            if tree.groupable(i) and tree.section_of(i) == section]  # fmt: skip
+            if tree.groupable(i) and tree.scope_of(i) == section]  # fmt: skip
 
 
 def tree_role():
@@ -151,16 +156,22 @@ def add_to_menu(window, menu, node) -> None:
     item = tree.item_for(node)
     if item is None:
         return
-    section = tree.section_of(item)
+    section = tree.scope_of(item)
     if node.kind == "section":
         if section is not None:
             menu.addSeparator()
             menu.addAction("New group…").triggered.connect(lambda: new_group(window, section))
         return
-    if node.kind not in RENAMABLE:
+    inside = container_key(node) if _holds_groups(item) else None
+    if inside is not None:  # a geometry's selections, a component's items, a physics' loads
+        menu.addSeparator()
+        menu.addAction("New group inside…").triggered.connect(
+            lambda: new_group(window, inside, selected_keys(window, inside)))  # fmt: skip
+    if node.kind not in RENAMABLE and member_key(node) is None:
         return
     menu.addSeparator()
-    menu.addAction("Rename…\tF2").triggered.connect(lambda: edit_name(tree, node))
+    if node.kind in RENAMABLE:
+        menu.addAction("Rename…\tF2").triggered.connect(lambda: edit_name(tree, node))
     if node.kind == "group":
         menu.addAction("Ungroup").triggered.connect(lambda: ungroup(window, node.object))
         if section == "Operators":  # ADR 0064: a chain kept to use again
@@ -183,3 +194,21 @@ def add_to_menu(window, menu, node) -> None:
     parent = item.parent().data(0, tree_role())
     if parent.kind == "group":
         menu.addAction("Out of group").triggered.connect(lambda: move(window, keys, None, section))
+
+
+def _holds_groups(item) -> bool:
+    """A geometry, component or physics item with something that can go in a group."""
+    from puzzle.gui.tree import ROLE
+
+    node = item.data(0, ROLE)
+    if node.kind not in ("object", "physics"):
+        return False
+    stack = [item.child(i) for i in range(item.childCount())]
+    while stack:  # through groups already there
+        child = stack.pop()
+        found = child.data(0, ROLE)
+        if found.kind == "group":
+            stack += [child.child(i) for i in range(child.childCount())]
+        elif found.key:
+            return True
+    return False

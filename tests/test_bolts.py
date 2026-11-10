@@ -46,8 +46,19 @@ def test_stress_areas_match_the_standards(standard, name, area):
 
 def test_every_series_is_listed():
     assert [s.name for s in bolts.sizes("iso_coarse")][:3] == ["M3", "M4", "M5"]
-    assert len(bolts.sizes("iso_coarse")) == len(bolts.sizes("iso_fine")) == 17
-    assert len(bolts.sizes("unc")) == len(bolts.sizes("unf")) == 18
+    # M3-M64 (M39 and up from Lacewing Lab's tables); five more ISO 262 fine pitches;
+    # UNC to 4 in, UNF to 1 1/2 in.
+    assert len(bolts.sizes("iso_coarse")) == 25
+    assert len(bolts.sizes("iso_fine")) == 25 + 5
+    assert len(bolts.sizes("unc")) == 28 and len(bolts.sizes("unf")) == 18
+    assert len({s.name for s in bolts.SIZES}) == len(bolts.SIZES)  # names are unique
+    for standard in ("iso_coarse", "iso_fine", "unc", "unf"):
+        ds = [s.diameter for s in bolts.sizes(standard)]
+        assert ds == sorted(ds), standard
+    # The first size of a diameter is the one listed before the additions.
+    assert [s.name for s in bolts.sizes("iso_fine") if s.diameter == 0.012] == [
+        "M12x1.5", "M12x1.25"]  # fmt: skip
+    assert bolts.size("unc", "2-4 1/2 UNC").pitch == pytest.approx(0.0254 / 4.5)
     assert bolts.size("unc", "#10-24 UNC").diameter == pytest.approx(0.190 * 0.0254)
 
 

@@ -16,10 +16,11 @@ environment, so the adapter must set ELMER_HOME to that environment's prefix (th
 parent of the directory holding ElmerSolver). The conda package's binaries can't
 find their keyword files from the compiled-in path once relocated.
 
-Bonded contact is Elmer's production-ready contact: conformal meshes share nodes, and
-nonconformal interfaces are tied with mortar boundary conditions ("Mortar BC" pointing at
-the target boundary, "Contact Type" = tie). Mortar ties also carry heat transfer and
-magnetodynamics across nonconformal interfaces.
+Bonded contact is Elmer's production-ready contact: conformal meshes share nodes. A
+nonconformal interface would be tied with mortar boundary conditions ("Mortar BC"
+pointing at the target boundary, "Contact Type" = tie), which also carry heat transfer
+and magnetodynamics; that tie isn't written yet, so a nonconformal bond is refused and
+not claimed (ADR 0072: claimed only once a benchmark passes).
 
 Elmer's source also has slide, friction and stick contact types for ElasticSolve, but they
 are documented only through test cases (fem/tests/Contact*) and need a hand-tuned
@@ -92,7 +93,7 @@ class ElmerAdapter(SolverAdapter):
                 "force:cartesian",
             }
         ),  # ADR 0037: local axes
-        contacts=frozenset({"bonded_conformal", "bonded_nonconformal"}),
+        contacts=frozenset({"bonded_conformal"}),  # a mortar tie isn't written yet
         experimental=frozenset({"frictionless", "frictional", "rough"}),
         couplings=frozenset({"thermal_expansion", "joule_heating"}),
         dimensions=frozenset({"3d", "2d_planar", "2d_axisymmetric"}),

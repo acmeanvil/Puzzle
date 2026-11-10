@@ -80,7 +80,7 @@ class GenerateBolts(QDialog):
         rf.addRow("Axis", self.axis)
         rf.addRow(f"Length from ({self.unit})", self.min_l)
         rf.addRow(f"to ({self.unit})", self.max_l)
-        self.same_part = QCheckBox("Also join two holes of one part (a split clamp)")
+        self.same_part = QCheckBox("Also join two holes of one body (a split clamp)")
         self.to_ground = QCheckBox("A hole with no partner: a bolt to ground (an anchor)")
         self.ground_length = QLineEdit()
         self.ground_length.setPlaceholderText("2 × the diameter")

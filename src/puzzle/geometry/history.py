@@ -50,6 +50,7 @@ the part, the first one starts it):
 | split_face | profile (sketch), faces (default: on its plane), direction | region; others kept |
 | enclosure | margin, or factor of the part size | +x ... of the box; body `<name>` |
 | import, heal, remove, fragment | see puzzle.geometry.prep (import `flat`: faces onto XY) | G2 |
+| keep | solids (1-based, file order) or bodies (names); body (the kept ones' name) | (names kept) |
 | sketch | sketch, plane and offset, or face (a planar face, axis-aligned) | (no faces: a profile) |
 
 A sketch step (ADR 0017) adds no solid: extrude and revolve take it by name as their
@@ -1073,6 +1074,50 @@ def _remove(state, op, a):
     state.shape = algo.Shape()
 
 
+def _keep(state, op, a):
+    """Keep some bodies, drop the rest (one part per body of an imported assembly):
+    `solids`, 1-based in the shape's order (the plain import's body-N), or `bodies` by
+    name; the kept ones become the body `body` (default "Body"). Face names are kept."""
+    from OCP.BRep import BRep_Builder
+    from OCP.TopoDS import TopoDS_Compound
+
+    from puzzle.geometry.naming import _Index
+
+    solids = _subshapes(state.shape, TopAbs_SOLID)
+    if a.get("solids"):
+        try:
+            chosen = [solids[int(i) - 1] for i in a["solids"]]
+        except (IndexError, ValueError) as exc:
+            raise GeometryError(
+                f"keep '{op.name}': no solid {a['solids']} ({len(solids)} here)"
+            ) from exc
+    else:
+        wanted = a.get("bodies") or []
+        if isinstance(wanted, str):  # typed in the step's form
+            wanted = [b.strip() for b in wanted.split(",") if b.strip()]
+        missing = [b for b in wanted if b not in state.bodies]
+        if missing or not wanted:
+            raise GeometryError(f"keep '{op.name}': no body {missing or wanted}")
+        chosen = [s for b in wanted for s in state.bodies[b]]
+    if not chosen:
+        raise GeometryError(f"keep '{op.name}': nothing to keep")
+    held = _Index()
+    for solid in chosen:
+        for f in _subshapes(solid, TopAbs_FACE):
+            held.get(f).append(True)
+    names = {n: [f for f in fs if held.get(f)] for n, fs in state.names.items()}
+    if len(chosen) == 1:
+        shape = chosen[0]
+    else:
+        builder, shape = BRep_Builder(), TopoDS_Compound()
+        builder.MakeCompound(shape)
+        for solid in chosen:
+            builder.Add(shape, solid)
+    state.shape = shape
+    state.names = {n: fs for n, fs in names.items() if fs}
+    state.bodies = {a.get("body", "Body"): chosen}
+
+
 def _fragment(state, op, a):
     from puzzle.geometry.prep import fragment
 
@@ -1085,6 +1130,7 @@ MODIFIERS = {
     "heal": _heal,
     "remove": _remove,
     "fragment": _fragment,
+    "keep": _keep,
     "fillet": _fillet,
     "chamfer": _chamfer,
     "move": _move,

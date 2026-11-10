@@ -15,6 +15,8 @@ from pathlib import Path
 
 import numpy as np
 
+from puzzle.adapters.code_aster import thread_springs
+from puzzle.adapters.code_aster.thread_springs import THREADS
 from puzzle.adapters.common import (
     BODY_LOADS,
     HEAT_SOURCES,
@@ -168,6 +170,8 @@ def _refuse_in_2d(comp: Component) -> None:
     if comp.connectors or comp.beam_sections:
         raise InputError("fasteners and beams are not written in 2D models", code="unsupported")
     for c in comp.contacts:
+        if c.thread is not None and comp.dimension == "2d_axisymmetric":  # ADR 0076
+            continue
         if c.capability != "bonded_conformal":
             raise InputError(
                 f"contact '{c.name}' ({c.capability}) is not written in 2D models yet",
@@ -205,7 +209,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         _refuse_in_2d(comp)
         _whole_part_marker(mesh, comp, workdir)
     thermal_load = next((i.field for i in inputs if i.field.name == "temperature"), None)
-    check_contacts(comp, CONTACTS, "Code_Aster")
+    check_contacts(comp, CONTACTS, "Code_Aster", THREADS)
     steps = study.solve_steps()
     # A preloaded buckling step comes with its static step (run_study joins them).
     preloaded = (
@@ -271,13 +275,30 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             features = [f for f in features if f.active(2)]
     if not comp.materials:
         raise InputError(f"component '{comp.name}' has no material assignments")
-    ties = [c for c in comp.contacts if c.capability == "bonded_nonconformal"]
+    # Threaded contacts (ADR 0076) are springs and relations of their own (thread_springs).
+    threaded = [c for c in comp.contacts if c.thread is not None]
+    if threaded and (thermal or step.type != "stationary"):
+        raise InputError(
+            "Code_Aster writes threaded contacts in static structural steps only so far",
+            code="unsupported",
+        )
+    ties = [c for c in comp.contacts
+            if c.capability == "bonded_nonconformal" and c.thread is None]  # fmt: skip
     if ties and thermal:
         raise InputError(
             "Code_Aster ties nonconformal parts in structural studies only so far",
             code="unsupported",
         )
-    touching = [c for c in comp.contacts if c.type in ("frictionless", "frictional")]
+    for c in ties:  # LIAISON_MAIL ties into the target's whole part, the source's body too
+        if c.source.split("/", 1)[0] == c.target.split("/", 1)[0]:
+            raise InputError(
+                f"contact '{c.name}': Code_Aster ties a face into another part's volume, so "
+                "it can't tie two bodies of one part; mesh them conformally (Share faces) "
+                "or use CalculiX",
+                code="unsupported",
+            )
+    touching = [c for c in comp.contacts
+                if c.type in ("frictionless", "frictional") and c.thread is None]  # fmt: skip
     if touching and (thermal or step.type != "stationary"):
         raise InputError(
             "Code_Aster contact is written for static structural steps only so far",
@@ -343,6 +364,9 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     if step.type != "modal":  # a tightened fastener: a pretension on its bolt's mid-plane
         bolts += [f for f, _cut in tight]
         cuts += [c for _f, c in tight]
+    thread_sets = []
+    if threaded:  # a helper node per pair and flank, past the mesh's nodes
+        base, thread_sets = thread_springs.helpers(project, comp, mesh, base)
     if fastener_ends:  # the reader sums the bolt end faces' reactions (ADR 0027)
         (workdir / f"{JOB}.fasteners.json").write_text(json.dumps(fastener_ends), encoding="utf-8")
     # Beams (ADR 0027): line bodies as POU_D_T, which takes two-node lines only.
@@ -421,6 +445,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         for i, (node, twin) in enumerate(cut.doubles.items(), start=1):
             points.add(f"P{k}A{i}", node)
             points.add(f"P{k}B{i}", twin)
+    threads = thread_springs.register(points, thread_sets, mesh.planar) if threaded else None
     # ADR 0044: a pressure from an imported field, as consistent nodal forces at the
     # face's nodes (Code_Aster's PRES_REP takes one value per group).
     given = {i.source: i.field for i in inputs if i.role == "feature"}
@@ -531,6 +556,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         - {names[g] for g in point_groups}
     )
     massif = _material_axes(project, comp, names, thermal)
+    discrete = "2D_DIS_T" if mesh.planar else "DIS_T"
     out = [
         "DEBUT(LANG='EN')",
         "mesh = LIRE_MAILLAGE(FORMAT='MED', UNITE=20)",
@@ -612,6 +638,16 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             if any(c.ends == "distributing" or c.formulation == "beam" for c in fasteners)
             else []
         ),  # fmt: skip
+        # Thread relations name single nodes: their point groups as node groups.
+        *(
+            [
+                "mesh = DEFI_GROUP(reuse=mesh, MAILLAGE=mesh, CREA_GROUP_NO=_F(GROUP_MA=("
+                + ", ".join(f"'{g}'" for g in threads.node_groups)
+                + ",)))"
+            ]
+            if threads and threads.node_groups
+            else []
+        ),
         "model = AFFE_MODELE(MAILLAGE=mesh, "
         f"AFFE=(_F(TOUT='OUI', PHENOMENE='{phenomenon}', MODELISATION='{model}'),"
         + "".join(
@@ -629,7 +665,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         )
         + "".join(
             f" _F(GROUP_MA='{g}', PHENOMENE='MECANIQUE', "
-            f"MODELISATION='{'DIS_TR' if g == 'MASTERS' else 'DIS_T'}'),"
+            f"MODELISATION='{'DIS_TR' if g == 'MASTERS' else discrete}'),"
             for g in points.sets
         )
         + "))",
@@ -642,6 +678,8 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             beams,
             shells,
             massif,
+            threads.cara if threads else (),
+            mesh.planar,
         ),
     ]
     cara = "CARA_ELEM=cara, " if points.sets or beams or shells or massif else ""
@@ -690,6 +728,9 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     for i, (_node, kn, _kt, _n) in enumerate(gaps, start=1):
         out.append(f"gap{i} = DEFI_MATERIAU(DIS_CONTACT=_F(RIGI_NOR={kn:.10e}))")
         assignments.append(f"_F(GROUP_MA='C{i}', MATER=gap{i})")
+    for i, (group, k) in enumerate(threads.gaps if threads else [], start=1):  # ADR 0076
+        out.append(f"thgap{i} = DEFI_MATERIAU(DIS_CONTACT=_F(RIGI_NOR={k:.10e}))")
+        assignments.append(f"_F(GROUP_MA='{group}', MATER=thgap{i})")
     varc = ""
     if thermal_load is not None:
         if thermal or step.type == "modal":
@@ -728,6 +769,17 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         if remote:
             out += remote
             charges.append("loadf")
+        if threads:  # ADR 0076: the threads' relations, never ramped (a clearance's offset)
+            out.append(
+                "thload = AFFE_CHAR_MECA(MODELE=model"
+                + "".join(
+                    f", {key}=({', '.join(items)},)"
+                    for key, items in threads.loads.items()
+                    if items
+                )  # fmt: skip
+                + ")"
+            )
+            charges.append("thload")
 
     if thermal:
         out += [
@@ -829,7 +881,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             f"IMPR_TABLE(TABLE=RECU_TABLE(CO=res, NOM_PARA='FREQ'), UNITE={TABLES['frequency']}, "
             f"FORMAT='TABLEAU', SEPARATEUR=',', FORMAT_R='{FORMAT_R}')",
         ]
-    elif touching or nlgeom or plastic or gaps or initial:
+    elif touching or nlgeom or plastic or gaps or initial or (threads and threads.gaps):
         # Green-Lagrange strain: large rotations, as CalculiX's NLGEOM (GROT_GDEP refuses tet10);
         # with plasticity, logarithmic strains (true stress against true strain).
         strains = ", DEFORMATION='GREEN_LAGRANGE'" if nlgeom else ""
@@ -847,6 +899,9 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
                 parts.append(f"_F(GROUP_MA=({elastic},), RELATION='ELAS'{strains})")
         if gaps:  # the compression-only discretes
             parts.append("_F(GROUP_MA='GAPS', RELATION='DIS_CHOC')")
+        if threads and threads.gaps:  # a frictionless thread's flanks (ADR 0076)
+            unilateral = ", ".join(f"'{g}'" for g, _k in threads.gaps)
+            parts.append(f"_F(GROUP_MA=({unilateral},), RELATION='DIS_CHOC')")
         behaviour = f"COMPORTEMENT=({', '.join(parts)},), "
         out += [
             *([_defi_contact(touching, names, excluded)] if touching else []),
@@ -861,7 +916,9 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             "SUBD_PAS=4, SUBD_NIVEAU=5))",
             f"res = STAT_NON_LINE(MODELE=model, CHAM_MATER=mater, {cara}"
             "EXCIT=("
-            + ", ".join(f"_F(CHARGE={c}, FONC_MULT=ramp)" for c in charges)
+            + ", ".join(
+                f"_F(CHARGE={c}{'' if c == 'thload' else ', FONC_MULT=ramp'})" for c in charges
+            )  # fmt: skip
             + ",), "
             + ("CONTACT=contact, " if touching else "")
             + ("ETAT_INIT=_F(SIGM=sig0), " if initial else "")
@@ -1274,14 +1331,16 @@ def _discrete_cara(
     beams=(),
     shells=(),
     massif=(),
+    threads=(),
+    planar: bool = False,
 ) -> list[str]:
     """Each spring's stiffness in its own axes (REPERE='LOCAL'; global is the default):
     x along the face normal (kn), y and z along the face (kt). A pretension reference
     node carries a negligible stiffness (`tiny`) along its first dof, only to have
     dofs; its other two are held."""
-    if not (supports or references or gaps or masters or beams or shells or massif):
+    if not (supports or references or gaps or masters or beams or shells or massif or threads):
         return []
-    stiff, axes = [], []
+    stiff, axes = list(threads), []  # a thread's helpers (ADR 0076): global x only
     nodes = [("S", i, s) for i, s in enumerate(supports, start=1)]
     nodes += [("C", i, g) for i, g in enumerate(gaps, start=1)]
     for prefix, i, (_node, kn, kt, n) in nodes:
@@ -1349,7 +1408,7 @@ def _discrete_cara(
         offset = f", EXCENTREMENT={s.offset * t:.10g}, INER_ROTA='OUI'" if s.offset else ""
         plates.append(f"_F(GROUP_MA='{group}', EPAIS={t:.10g}{offset})")
     blocks = [
-        ("DISCRET", stiff),
+        ("DISCRET_2D" if planar else "DISCRET", stiff),  # 2D: threads only (ADR 0076)
         ("POUTRE", sections),
         ("COQUE", plates),
         ("ORIENTATION", axes),
@@ -1820,7 +1879,8 @@ def contact_summary(project, comp, mesh: Mesh | None = None) -> dict[str, str]:
     from puzzle.bolts import resolved
 
     out = {}
-    touching = [c for c in comp.contacts if c.type in ("frictionless", "frictional")]
+    touching = [c for c in comp.contacts
+                if c.type in ("frictionless", "frictional") and c.thread is None]  # fmt: skip
     friction = any(c.type == "frictional" for c in touching)
     quadratic = mesh is not None and any(
         b.element in ("tet10", "hex20", "wedge15", "pyramid13") for b in mesh.blocks
@@ -1840,7 +1900,10 @@ def contact_summary(project, comp, mesh: Mesh | None = None) -> dict[str, str]:
             nodes = np.unique(np.concatenate([mesh.groups[g].node_ids for g in groups]))
             excluded[name] = (groups, int(np.intersect1d(slave, nodes).size))
     for c in comp.contacts:
-        if c.capability == "bonded_conformal":
+        if c.thread is not None:  # ADR 0076
+            refused = f"Not written: Code_Aster refuses a threaded {c.type} contact"
+            out[c.name] = thread_springs.summary(c) if c.type in THREADS else refused
+        elif c.capability == "bonded_conformal":
             out[c.name] = "Shared nodes (meshed conformally): nothing to write"
         elif c.capability not in CONTACTS:
             out[c.name] = f"Not written: Code_Aster refuses {c.capability.replace('_', ' ')}"

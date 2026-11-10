@@ -134,11 +134,12 @@ def symbols(
     per_face: int = 10,
     project=None,
     skip=frozenset(),
+    skip_bolts=frozenset(),
 ):
     """Glyph sets for the component's features (`only`: the n-th feature over all its
-    physics; `skip`: those numbers left out, hidden in the view). `entities_of(selection)`
-    gives a selection's (dim, tag) faces; `project` resolves features given in local axes
-    (ADR 0037), drawn along those axes."""
+    physics; `skip`: those numbers left out, hidden in the view; `skip_bolts`: bolts left
+    out, by name). `entities_of(selection)` gives a selection's (dim, tag) faces;
+    `project` resolves features given in local axes (ADR 0037), drawn along those axes."""
     from puzzle.gui.choices import label
 
     out: list[Glyphs] = []
@@ -200,11 +201,11 @@ def symbols(
             else:
                 out.append(Glyphs(name, "tint", TINTS.get(f.type, GREY), faces=faces))
     if only is None:
-        out += _fastener_symbols(component, mesh, project)
+        out += _fastener_symbols(component, mesh, project, skip_bolts)
     return out
 
 
-def _fastener_symbols(component, mesh: Mesh, project=None) -> list[Glyphs]:
+def _fastener_symbols(component, mesh: Mesh, project=None, skip=frozenset()) -> list[Glyphs]:
     """Each fastener (ADR 0027) as a tube of its diameter between its ends' centres, in
     the bolts' own colour; a bolt of a type (ADR 0050) takes the type's diameter when the
     project is given, and is drawn with its head and nut (hex prisms on the plates'
@@ -215,6 +216,8 @@ def _fastener_symbols(component, mesh: Mesh, project=None) -> list[Glyphs]:
 
     out = []
     for c in getattr(component, "connectors", []):
+        if c.name in skip:  # hidden in the view
+            continue
         if project is not None:
             c = resolve(project, c)
         try:

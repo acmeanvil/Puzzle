@@ -134,10 +134,11 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         add("New component…", lambda: new_component(window))
         add("New study…", lambda: new_study(window))
     elif isinstance(obj, Component) and node.kind == "object":
-        if len(obj.parts) > 1:
-            from puzzle.gui.contact_search import find_contacts_dialog
+        if obj.parts:  # between parts, or the bodies of one (an imported assembly)
+            from puzzle.gui.contact_search import add_contact, find_contacts_dialog
 
             add("Find contacts…", lambda: find_contacts_dialog(window, obj))
+            add("Add contact…", lambda: add_contact(window, obj))
         if obj.contacts:
             add("Contact tool", lambda: window.open_contacts())
         from puzzle.gui.fastener_dialog import add_fastener, fasteners_from_holes
@@ -149,7 +150,7 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         from puzzle.gui.beam_dialog import add_shell_thickness
 
         add("Add shell thickness…", lambda: add_shell_thickness(window, obj))
-        if len(obj.parts) > 1:
+        if obj.parts:  # holes in different parts, or in the bodies of one
             add("Fasteners from holes…", lambda: fasteners_from_holes(window, obj))
             from puzzle.gui.bolt_generator_panel import generate_bolts
 
@@ -201,6 +202,20 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
                         window, selection=feature.selection, source=tools.study_of(window, obj)
                     ),
                 )
+        if node.kind == "contact":  # ADR 0076: a thread between coaxial cylinders
+            from puzzle.gui.thread_dialog import remove_thread, thread_contact
+
+            k = int(node.path.split(".")[1])
+            threaded = obj.contacts[k].thread is not None
+            add("Edit the thread…" if threaded else "Make it a thread…",
+                lambda: thread_contact(window, obj, k))  # fmt: skip
+            if threaded:
+                add("Remove the thread", lambda: remove_thread(window, obj, k))
+        if node.kind == "part":  # ADR 0039: an imported assembly's bodies as parts
+            from puzzle.gui.split_dialog import split_part
+
+            part = obj.parts[int(node.path.split(".")[1])].name
+            add("One part per body…", lambda: split_part(window, obj, part))
         if node.kind == "beam_section":  # ADR 0055: its first axis from a pick
             from puzzle.gui.beam_dialog import orient_by_pick
 
@@ -223,6 +238,8 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         menu.addSeparator()
         if sel.entity == "face":
             add("New cylindrical axes from this face", lambda: axes_from_face(window, obj, sel))
+        if sel.entity == "body":
+            add("Assign material…", lambda: assign_material_to_bodies(window, obj, sel.name))
         add("Remove selection", lambda: remove(window, obj, node.path))
     elif isinstance(obj, Geometry) and node.kind == "object":
         steps = menu.addMenu("Add step")
@@ -234,6 +251,8 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
                 "Edit as history (keep the file as its first step)", lambda: to_history(window, obj)
             )
         add("Check geometry", lambda: check_geometry_of(window, obj))
+        if any(s.entity == "body" for s in obj.selections):
+            add("Assign material…", lambda: assign_material_to_bodies(window, obj))
         from puzzle.geometry.meshfile import is_mesh_file
 
         if obj.source and is_mesh_file(obj.source):  # ADR 0065: STL, OBJ, 3MF booleans
@@ -392,6 +411,10 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         add("Delete", window.delete_selected)
     elif node.kind in ("sweep", "compare"):
         add("Compare…", lambda: window.open_compare(node.object))
+    selected = window.tree.selectedItems()
+    if len(selected) > 1 and window.tree.item_for(node) in selected:  # one batch, one undo
+        menu.addSeparator()
+        add(f"Delete the {len(selected)} selected…", window.delete_selected)
     from puzzle.gui import organise, visibility
 
     visibility.add_to_menu(window, menu, node, obj)  # show, hide, colour (D2, D4)
@@ -472,6 +495,51 @@ def assign_material(window, comp: Component):
     return window.submit(
         Edit(object=str(comp.id), ops=[EditOp(op="append", path="materials", value=value)])
     )
+
+
+def assign_material_to_bodies(window, geo: Geometry, selection: str | None = None):
+    """Geometry's Assign material…: a material for a body selection of this geometry, in
+    the component (and part) using it, asked in one form when there is a choice. An
+    assignment already on that selection takes the new material (no second one)."""
+    from puzzle.gui.quick_form import Ask
+
+    project = window.session.project
+    materials = {m.name: m for m in project.of_type(Material)}
+    if not materials:
+        window.statusBar().showMessage("Add a material first (Materials → Add from library)", 8000)
+        return None
+    uses = [(c, p) for c in project.of_type(Component) for p in c.parts if p.geometry == geo.id]
+    if not uses:
+        window.statusBar().showMessage(
+            f"No component uses {geo.name} yet: Model → Components → New component…", 8000
+        )
+        return None
+    bodies = [s.name for s in geo.selections if s.entity == "body"]
+    if selection is None and not bodies:
+        window.statusBar().showMessage(f"{geo.name} has no body selection to assign to", 8000)
+        return None
+    asks = []
+    if len(uses) > 1:
+        asks.append(Ask("use", "In", choices=[
+            (f"{c.name}, part {p.name}" if len(c.parts) > 1 else c.name, str(n))
+            for n, (c, p) in enumerate(uses)]))  # fmt: skip
+    asks.append(Ask("material", "Material", choices=[(n, n) for n in sorted(materials)]))
+    if selection is None:
+        asks.append(Ask("selection", "To the bodies", choices=[(b, b) for b in bodies]))
+    title = f"Assign material to {selection}" if selection else f"Assign material on {geo.name}"
+    got = window.ask_form(title, asks)
+    if got is None:
+        return None
+    comp, part = uses[int(got.get("use", 0))]
+    target = f"{part.name}/{selection or got['selection']}"
+    material = str(materials[got["material"]].id)
+    at = next((i for i, a in enumerate(comp.materials) if a.selection == target), None)
+    if at is not None:
+        op = EditOp(op="set", path=f"materials.{at}.material", value=material)
+    else:
+        op = EditOp(op="append", path="materials", value={"material": material,
+                                                           "selection": target})  # fmt: skip
+    return window.submit(Edit(object=str(comp.id), ops=[op]))
 
 
 def change_selection(window, comp: Component, node: Node):

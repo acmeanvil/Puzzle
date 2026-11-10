@@ -375,6 +375,10 @@ def _run_study(
 
         # ADR 0056: contact pressure, status, gap and sliding on the slave nodes.
         contact_fields(part_results, seen, seen.objects[study.component], written)
+        from puzzle.post.thread_fields import finish as thread_fields
+
+        # ADR 0076: each threaded contact's flank forces, per-thread load and wedge.
+        thread_fields(part_results, seen, seen.objects[study.component], written)
         lap("read")
         if len(parts) > 1:
             for step in part_results.steps:
