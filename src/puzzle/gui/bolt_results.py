@@ -6,7 +6,8 @@ and that stress over its grade's proof and yield strengths. Rows are sorted wors
 first and the worst is marked. A selected bolt's loads along its length are plotted
 (forces, then moments), from its first end to its second: a beam bolt carries no load
 between its ends, so N, V and T are constant and M linear (`puzzle.bolts.along`).
-The table exports to CSV.
+A modelled bolt (ADR 0077) reads its loads from a section across its shank: one
+point, at the section's distance from its bearing face. The table exports to CSV.
 """
 
 from __future__ import annotations
@@ -34,12 +35,22 @@ from puzzle.gui.theme import role
 
 ROLE = Qt.ItemDataRole.UserRole
 HEADERS = ["Bolt", "Axial", "Shear", "Torsion", "Bending, first end", "Bending, second end",
-           "Largest bending", "Stress", "Of proof", "Of yield"]  # fmt: skip
+           "Largest bending", "Stress", "Of proof", "Of yield", "First thread"]  # fmt: skip
 
 
 CSV_HEADERS = ["Bolt", "Component", "Axial (N)", "Shear (N)", "Torsion (N·m)",
                "Bending first end (N·m)", "Bending second end (N·m)", "Largest bending (N·m)",
-               "Stress (Pa)", "Of proof", "Of yield"]  # fmt: skip
+               "Stress (Pa)", "Of proof", "Of yield", "First thread share"]  # fmt: skip
+
+
+def _modelled(project, record) -> bool:
+    """Whether the run's study's component has a modelled bolt (ADR 0077)."""
+    from puzzle.model.schema import Component, Study
+
+    study = next((o for o in project.of_type(Study) if str(o.id) == record.study_id), None)
+    comp = project.objects.get(study.component) if study is not None else None
+    return isinstance(comp, Component) and any(
+        c.formulation == "modelled" for c in comp.connectors)  # fmt: skip
 
 
 class ResultsTab(QWidget):
@@ -117,7 +128,7 @@ class ResultsTab(QWidget):
                 names = {f for f, _loc, _c in store.field_catalog(r.run_id)}
             except Exception:
                 continue
-            if "fastener" in names:
+            if "fastener" in names or ("stress" in names and _modelled(session.project, r)):
                 when = r.recorded_at.strftime("%Y-%m-%d %H:%M")
                 self.run.addItem(f"{r.study_name} ({r.solver}, {when})", r.run_id)
         found = self.run.findData(chosen)
@@ -131,7 +142,9 @@ class ResultsTab(QWidget):
         self.step.clear()
         if run_id is not None:
             results = self.window._store().read_results(run_id)
-            steps = [s for s in results.steps if "fastener" in s.fields]
+            steps = [s for s in results.steps if "fastener" in s.fields] or [
+                s for s in results.steps if "stress" in s.fields
+            ]  # only modelled bolts
             for i, s in enumerate(steps):
                 self.step.addItem(f"Step {i + 1}: {s.label()}", i)
             self.step.setCurrentIndex(len(steps) - 1)
@@ -173,6 +186,7 @@ class ResultsTab(QWidget):
                 f"{convert(b.stress, 'Pa', stress):.4g} {pretty(stress)}",
                 f"{b.proof:.0%}" if b.proof is not None else "no proof strength",
                 f"{b.yielding:.0%}" if b.yielding is not None else "no yield strength",
+                f"{b.first_thread:.0%}" if b.first_thread is not None else "",
             ]
             for c, text in enumerate(cells):
                 item = QTableWidgetItem(text)
@@ -199,7 +213,9 @@ class ResultsTab(QWidget):
             return
         b = self.found[next(iter(rows))]
         s_mm = [x * 1e3 for x in b.loads.s]
-        self.plot_title.setText(f"{b.name}: along its length (mm), first end at 0")
+        self.plot_title.setText(
+            f"{b.name}: at its section, from under the head (mm)" if b.modelled
+            else f"{b.name}: along its length (mm), first end at 0")  # fmt: skip
         self.forces.set_series([
             ("Axial (N)", list(zip(s_mm, b.loads.axial, strict=True))),
             ("Shear (N)", list(zip(s_mm, b.loads.shear, strict=True))),
@@ -220,5 +236,6 @@ class ResultsTab(QWidget):
             for b in self.found:
                 out.writerow([b.name, b.component, b.loads.axial[0], b.loads.shear[0],
                               b.loads.torsion[0], b.loads.bending[0], b.loads.bending[-1],
-                              b.loads.largest_bending, b.stress, b.proof, b.yielding])  # fmt: skip
+                              b.loads.largest_bending, b.stress, b.proof, b.yielding,
+                              b.first_thread])  # fmt: skip
         return path

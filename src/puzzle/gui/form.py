@@ -65,7 +65,8 @@ DESCRIPTIONS = {
     "notch_from": "The fatigue stress-concentration factor, given, or Kf = 1 + q(Kt − 1) with "
     "Neuber's notch sensitivity q (Shigley Eqs. 6-32 to 6-35, steels). Leave it at 1 where the "
     "mesh resolves the notch: its stresses already include Kt.",
-    "notch_factor": "Kf, multiplying the alternating stress.",
+    "notch_factor": "Kf, multiplying the alternating stress. A modelled bolt's thread "
+    "takes its own, the bolt's thread Kf (ADR 0077).",
     "notch_kt": "The theoretical stress-concentration factor Kt, from charts or a fine model.",
     "notch_radius": "The notch root radius r, for Neuber's √a/√r.",
     "notch_shear": "Neuber's constant for torsion rather than bending and axial loads.",

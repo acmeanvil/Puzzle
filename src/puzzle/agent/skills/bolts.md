@@ -1,6 +1,6 @@
 ---
 name: bolts
-description: adding, generating, editing or checking bolts (fasteners): bolt types, sizes, preload, joint styles, anchors to ground, bolt results
+description: adding, generating, editing or checking bolts (fasteners): bolt types, sizes, preload, joint styles, anchors to ground, modelled (solid) bolts from the tables, bolt results
 adr: 0050
 ---
 Bolts are `connectors` on a component: each joins two face selections (usually hole
@@ -59,6 +59,11 @@ itself wins.
    stresses in Pa, loads in N; `tapped=true` for a cap screw in a tapped hole, `head`
    socket for ISO 4762. Friction μ: 0.10-0.16 oiled steel (Table A5 class B), 0.12 if
    unknown. Standard heads, nuts and washers by table: `fastener_tables(table, size)`.
+
+## Modelled bolts
+
+A bolt can be drawn as it is made (a solid from the fastener tables) instead of a beam:
+the `modelled-bolts` skill (`skill_read("modelled-bolts")`).
 
 ## Watch for
 

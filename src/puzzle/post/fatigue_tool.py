@@ -290,7 +290,8 @@ def evaluate_fatigue(project, store, definition, evaluate, run_for):
         run_ids += ids
     mats, which, notes = _materials(project, base_mesh, study, s)
     warnings += notes
-    kf = np.array([m.kf for m in mats])[which]  # per node
+    kf = np.array([m.kf for m in mats], float)[which]  # per node
+    warnings += _bolt_threads(project, base_mesh, study, kf)
     kf_mean = kf if s.notch_on_mean else np.ones_like(kf)
     if s.notch_from == "neuber":
         for m in mats:
@@ -396,6 +397,35 @@ def evaluate_fatigue(project, store, definition, evaluate, run_for):
         warnings.append("strain life here takes no mean-stress correction")
     results = Results("derived", [StepResult(1, "fatigue", 0.0, fields=fields)])
     return base_mesh, results, items, run_ids, warnings
+
+
+def _bolt_threads(project, mesh, study_id, kf: np.ndarray) -> list[str]:
+    """ADR 0077: a modelled bolt's thread is a smooth cylinder at the core (d3/2), so
+    its root's notch is a factor, not meshed: the nodes of each modelled bolt's
+    `<part>/Thread` face take Kf = the bolt's `thread_kf` (its type's, 3 by default) in
+    place of the settings' Kf. The basic stresses peak at the first engaged thread, so
+    that is where the factored life is least. A thread_kf of 1 leaves the thread as
+    meshed. Sets `kf` in place; returns notes for the result's warnings."""
+    from puzzle.bolts import bolt_kf
+    from puzzle.model.schema import Component, Study
+
+    study = project.objects.get(study_id)
+    comp = project.objects.get(study.component) if isinstance(study, Study) else None
+    if not isinstance(comp, Component):
+        return []
+    order = np.argsort(mesh.node_ids)
+    notes = []
+    for bolt in comp.connectors:
+        if bolt.formulation != "modelled" or not bolt.parts:
+            continue
+        group = mesh.groups.get(f"{bolt.parts[0]}/Thread")
+        value = bolt_kf(project, comp, bolt.parts[0])
+        if group is None or value is None or not len(group.node_ids):
+            continue
+        kf[order[np.searchsorted(mesh.node_ids, group.node_ids, sorter=order)]] = value
+        notes.append(f"{bolt.name}: Kf = {value:g} at its thread's core (the bolt's thread "
+                     "root notch factor, ADR 0077)")  # fmt: skip
+    return notes
 
 
 def _identity_mesh(project, store, block, evaluate, run_for):

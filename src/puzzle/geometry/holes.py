@@ -88,6 +88,23 @@ def _cylinders(faces: dict[str, dict[str, list]], owners: dict | None = None) ->
     return out
 
 
+def _is_bore(face, hole) -> bool:
+    """A cylindrical face whose outward normal points toward its axis: a hole."""
+    from OCP.BRepTools import BRepTools
+
+    from puzzle.geometry.contacts import _normal
+    from puzzle.geometry.history import _static
+
+    u0, u1, v0, v1 = _static(BRepTools, "UVBounds")(face)
+    u, v = (u0 + u1) / 2, (v0 + v1) / 2
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+
+    at = BRepAdaptor_Surface(face).Value(u, v)
+    point = np.array([at.X(), at.Y(), at.Z()]) - hole.point
+    radial = point - (point @ hole.axis) * hole.axis
+    return float(_normal(face, u, v) @ radial) < 0
+
+
 def find_holes(project, comp, root) -> tuple[list[Hole], float]:
     """Every cylindrical face of the component's parts, and the model's size (m)."""
     from puzzle.geometry.contacts import _placed_faces, model_size
@@ -96,7 +113,9 @@ def find_holes(project, comp, root) -> tuple[list[Hole], float]:
     with occ_lock:
         faces = _placed_faces(project, comp, root, owners)
         size = model_size(faces) or 1.0
-        found = _cylinders(faces, owners)
+        # Holes only: a hole's wall faces its axis, a shaft's or a part's outside faces
+        # away (the bolt generator took a boss's outer wall for a hole).
+        found = [h for h in _cylinders(faces, owners) if _is_bore(faces[h.part][h.face][0], h)]
     return found, size
 
 

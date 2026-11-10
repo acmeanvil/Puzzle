@@ -61,6 +61,17 @@ def modulus(project, comp, selection: str) -> float:
     raise InputError(f"a thread on '{selection}' needs a youngs_modulus on its part's material")
 
 
+# Each node's share of a face element's area. Second order: every node takes a share
+# (`face_shares`); an eight-node quadrilateral's are its diagonal mass scaled to the
+# area (Hinton, Rock and Zienkiewicz), corners 3/76, mid-edge nodes 16/76.
+SHARES = {
+    "tri3": [1 / 3] * 3,
+    "tri6": [1 / 12] * 3 + [1 / 4] * 3,
+    "quad4": [1 / 4] * 4,
+    "quad8": [3 / 76] * 4 + [16 / 76] * 4,
+}
+
+
 def face_shares(group, mesh: Mesh):
     """A face selection's nodes, each one's share of the area (m²) and its normal. Every
     node takes a share (six-node triangles: corners 1/12, mid-edge nodes 1/4): the
@@ -70,16 +81,21 @@ def face_shares(group, mesh: Mesh):
     normal: dict[int, np.ndarray] = {}
     centre = mesh.coords.mean(axis=0)
     for b in group.blocks(mesh):
-        if b.element not in ("tri3", "tri6"):
+        if b.element not in SHARES:
             continue
         conn = b.connectivity
-        c = mesh.node_coords(conn[:, :3].ravel()).reshape(-1, 3, 3)
-        cross = np.cross(c[:, 1] - c[:, 0], c[:, 2] - c[:, 0])
-        area = 0.5 * np.linalg.norm(cross, axis=1)
+        corners = 4 if b.element.startswith("quad") else 3
+        c = mesh.node_coords(conn[:, :corners].ravel()).reshape(-1, corners, 3)
+        if corners == 4:  # a revolved bolt's quadrilaterals (ADR 0077): half the diagonals' cross
+            cross = 0.5 * np.cross(c[:, 2] - c[:, 0], c[:, 3] - c[:, 1])
+            area = np.linalg.norm(cross, axis=1)
+        else:
+            cross = np.cross(c[:, 1] - c[:, 0], c[:, 2] - c[:, 0])
+            area = 0.5 * np.linalg.norm(cross, axis=1)
         unit = cross / np.maximum(np.linalg.norm(cross, axis=1, keepdims=True), 1e-300)
         flip = np.einsum("ij,ij->i", unit, c.mean(axis=1) - centre) < 0
         unit[flip] *= -1
-        weights = [1 / 12] * 3 + [1 / 4] * 3 if conn.shape[1] == 6 else [1 / 3] * 3
+        weights = SHARES[b.element]
         for k, w in enumerate(weights):
             for nid, a, d in zip(conn[:, k], area, unit, strict=True):
                 share[int(nid)] = share.get(int(nid), 0.0) + w * a

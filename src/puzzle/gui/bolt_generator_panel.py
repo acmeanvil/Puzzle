@@ -135,6 +135,13 @@ class GenerateBolts(QDialog):
         common.addRow("Ends", self.ends)
         common.addRow("Names ({n} counts up)", self.names)
         common.addRow("Group", self.group)
+        self.modelled = QCheckBox("Model the bolts (solid, from the tables)")
+        self.modelled.setToolTip(
+            "Draw each bolt as parts of its own (ADR 0077): the standard bolt by its "
+            "type's head and size, its head's contact, its thread and its preload "
+            "section (bolt types with a bolt-and-nut or cap-screw joint)"
+        )
+        common.addRow("", self.modelled)
         layout.addLayout(common)
 
         row = QHBoxLayout()
@@ -327,9 +334,26 @@ class GenerateBolts(QDialog):
         if not batch:
             return None
         out = self.window.submit_batch([*first, *batch])
+        if out is not None and self.modelled.isChecked():
+            self._model([p.name for p in self.chosen().add])
         self.comp = self.window.session.project.objects[self.comp.id]
         self.find()
         return out
+
+    def _model(self, names: list[str]):
+        """The bolts just made, drawn as parts (ADR 0077): a second batch, since they
+        are drawn on the project the first one made."""
+        from puzzle.bolts import model_commands
+
+        session = self.window.session
+        comp = session.project.objects[self.comp.id]
+        indices = [i for i, c in enumerate(comp.connectors) if c.name in names]
+        try:
+            batch = model_commands(session.project, comp, indices, session.root)
+        except ValueError as exc:
+            self.summary.setText(f"The bolts are made as beams: {exc}")
+            return None
+        return self.window.submit_batch(batch) if batch else None
 
 
 def _names(rule, comp, count: int) -> list[str]:

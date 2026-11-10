@@ -54,6 +54,15 @@ For a question about a solver, an error message or what Puzzle supports, search
 """
 
 
+def _bolt_index(comp, name: str) -> int:
+    """The position of the bolt named `name` among the component's connectors."""
+    for i, c in enumerate(comp.connectors):
+        if c.name == name:
+            return i
+    raise PuzzleError(f"no bolt '{name}' in '{comp.name}'", code="not_found",
+                      details={"bolts": [c.name for c in comp.connectors]})  # fmt: skip
+
+
 def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True,
                  model: str = "", suite: str = "") -> MCPServer:  # fmt: skip
     """The tools, for an outside agent (`outside`, refused when the project's MCP access
@@ -479,6 +488,55 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
             "stale": planned.stale,
             "make_bolts": [c.model_dump(mode="json") for c in batch],
         }  # fmt: skip
+
+    @tool(
+        description="Model bolts as solids drawn from the fastener tables (ADR 0077): each "
+        "named bolt (`bolt`: a name or a list) becomes a part of its own, the standard bolt "
+        "by its type's head (hex or socket) and size, placed on its holes' axis, its grade "
+        "as its material, its head (and nut) on the plates by a frictional contact (the "
+        "type's head_friction; `bonded_heads` bonds them), its thread into the tapped hole "
+        "or nut by a threaded contact, its preload on a section across the shank, and finer "
+        "elements at the fillet and thread. Needs a tapped or bolt-and-nut joint. Its "
+        "loads then come from that section (bolt_results), and the fatigue tool takes the "
+        "bolt's thread_kf as Kf at its thread. Returns `batch` to pass to submit (one "
+        "undo); nothing is made here."
+    )
+    @guarded
+    def bolt_make_modelled(component: str, bolt: str | list[str],
+                           bonded_heads: bool = False) -> dict[str, Any]:  # fmt: skip
+        from puzzle.bolts import model_commands
+        from puzzle.commands import resolve
+        from puzzle.model.schema import Component
+
+        s = session()
+        comp = resolve(s.project, component, Component)
+        names = [bolt] if isinstance(bolt, str) else list(bolt)
+        indices = [_bolt_index(comp, n) for n in names]
+        try:
+            batch = model_commands(s.project, comp, indices, root, bonded_heads=bonded_heads)
+        except ValueError as exc:
+            raise PuzzleError(str(exc), code="invalid") from None
+        return {"bolts": names, "batch": [c.model_dump(mode="json") for c in batch]}
+
+    @tool(
+        description="Turn a modelled bolt (ADR 0077) back into a beam bolt: its parts, "
+        "geometries, materials, contacts, the plates' selections made for them, its "
+        "pretension feature and mesh sizes removed; its name, type and preload kept. "
+        "Returns `batch` to pass to submit (one undo); nothing is made here."
+    )
+    @guarded
+    def bolt_make_beam(component: str, bolt: str) -> dict[str, Any]:
+        from puzzle.commands import resolve
+        from puzzle.model.schema import Component
+        from puzzle.solid_bolts import beam_commands
+
+        s = session()
+        comp = resolve(s.project, component, Component)
+        index = _bolt_index(comp, bolt)
+        if comp.connectors[index].formulation != "modelled":
+            raise PuzzleError(f"bolt '{bolt}' is not a modelled bolt", code="invalid")
+        batch = beam_commands(s.project, comp, index)
+        return {"bolts": [bolt], "batch": [c.model_dump(mode="json") for c in batch]}
 
     @tool(
         description="Mesh a component with its recipe and report the mesh (ADR 0019): node "
@@ -1691,7 +1749,9 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
             {"name": b.name, "axial_N": b.loads.axial[0], "shear_N": b.loads.shear[0],
              "torsion_Nm": b.loads.torsion[0], "bending_first_end_Nm": b.loads.bending[0],
              "bending_second_end_Nm": b.loads.bending[-1], "stress_Pa": b.stress,
-             "of_proof": b.proof, "of_yield": b.yielding}
+             "of_proof": b.proof, "of_yield": b.yielding,
+             "thread_loads_N": b.threads, "first_thread_share": b.first_thread,
+             "modelled": b.modelled}
             for b in rows
         ]}  # fmt: skip
 

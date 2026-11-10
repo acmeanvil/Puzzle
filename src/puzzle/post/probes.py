@@ -324,7 +324,15 @@ def section_force(mesh: Mesh, step: StepResult, origin, normal, depth=None) -> d
     forces = traction[faces].mean(axis=1) * areas[:, None]
     centroid = (centres * areas[:, None]).sum(axis=0) / areas.sum()
     force = forces.sum(axis=0)
-    moment = np.cross(centres - centroid, forces).sum(axis=0)
+    if faces.shape[1] == 3:  # r x t is quadratic over a triangle: the edges' midpoints
+        xyz = np.asarray(cut.points, float)  # integrate it exactly (a bolt's bending)
+        moment = np.zeros(3)
+        for i, j in ((0, 1), (1, 2), (2, 0)):
+            mid = (xyz[faces[:, i]] + xyz[faces[:, j]]) / 2 - centroid
+            t = (traction[faces[:, i]] + traction[faces[:, j]]) / 2
+            moment += np.cross(mid, t * areas[:, None] / 3).sum(axis=0)
+    else:
+        moment = np.cross(centres - centroid, forces).sum(axis=0)
     normal_force = float(force @ n)
     return {
         "value": float(np.linalg.norm(force)),

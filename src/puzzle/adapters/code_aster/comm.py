@@ -367,6 +367,11 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     thread_sets = []
     if threaded:  # a helper node per pair and flank, past the mesh's nodes
         base, thread_sets = thread_springs.helpers(project, comp, mesh, base)
+    # ADR 0076 step 4: a beam bolt's tapped end as a thread, in place of its spider.
+    bolt_threads = thread_springs.bolt_threads(project, comp, mesh, fasteners)
+    base = thread_springs.bolt_helpers(base, bolt_threads)
+    for bt in bolt_threads:
+        fastener_ends[bt.index - 1].setdefault("threaded", []).append(bt.label)
     if fastener_ends:  # the reader sums the bolt end faces' reactions (ADR 0027)
         (workdir / f"{JOB}.fasteners.json").write_text(json.dumps(fastener_ends), encoding="utf-8")
     # Beams (ADR 0027): line bodies as POU_D_T, which takes two-node lines only.
@@ -445,7 +450,10 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         for i, (node, twin) in enumerate(cut.doubles.items(), start=1):
             points.add(f"P{k}A{i}", node)
             points.add(f"P{k}B{i}", twin)
-    threads = thread_springs.register(points, thread_sets, mesh.planar) if threaded else None
+    threads = None
+    if threaded or bolt_threads:
+        threads = thread_springs.register(points, thread_sets, mesh.planar)
+        thread_springs.register_bolts(points, bolt_threads, threads)
     # ADR 0044: a pressure from an imported field, as consistent nodal forces at the
     # face's nodes (Code_Aster's PRES_REP takes one value per group).
     given = {i.source: i.field for i in inputs if i.role == "feature"}
@@ -966,7 +974,8 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         ]
     out.append("FIN()")
     comm = workdir / f"{JOB}.comm"
-    comm.write_text(with_settings("\n".join(out) + "\n", study, step), encoding="utf-8")
+    text = with_settings("\n".join(out) + "\n", study, step, pivots=not bolt_threads)
+    comm.write_text(text, encoding="utf-8")
 
     used = (
         {"temperature"}
@@ -1249,6 +1258,8 @@ def _fastener_loads(ends: list[dict], fasteners, names: dict) -> dict[str, list[
         if end.get("beam"):  # the beam's end node is the spider's master
             for label, sel in (("A", f.source), ("B", f.target)):
                 master = f"E{i}{label}"
+                if label in end.get("threaded", ()):  # a tapped end (thread_springs)
+                    continue
                 if sel is None:  # a bolt to ground (ADR 0050): its far end held
                     out.setdefault("DDL_IMPO", []).append(
                         f"_F(GROUP_NO='{master}', DX=0.0, DY=0.0, DZ=0.0, DRX=0.0, DRY=0.0, "
@@ -1471,12 +1482,15 @@ MUMPS_ONLY = {"acceleration": "ACCELERATION", "low_rank_threshold": "LOW_RANK_SE
               "refinement": "POSTTRAITEMENTS"}  # fmt: skip
 
 
-def with_settings(comm: str, study, step) -> str:
+def with_settings(comm: str, study, step, pivots: bool = True) -> str:
     """The command file with the study's settings for Code_Aster placed (ADR 0023):
     its own, then the shared ones, then the expert pass-through over them all. A
     setting goes in every command of the file that takes it; only what was set is
     written, so the defaults stay Code_Aster's own, except MUMPS's iterative refinement,
-    always on unless set (REFINEMENTS)."""
+    always on unless set (REFINEMENTS). `pivots` False turns MUMPS's singularity
+    check off (NPREC=-1): a beam bolt's tapped end (ADR 0076) ties one node to every
+    thread node, and MUMPS called that matrix singular though it solved it (the residual
+    check, RESI_RELA, still holds the answer to 1e-6)."""
     from puzzle.adapters.code_aster import CodeAsterAdapter
     from puzzle.adapters.code_aster.expert import apply
 
@@ -1508,6 +1522,8 @@ def with_settings(comm: str, study, step) -> str:
         place(SOLVING, f"SOLVEUR.{MUMPS_ONLY[key]}", text)
     if method in (None, "MUMPS") and "refinement" not in own:
         place(SOLVING, "SOLVEUR.POSTTRAITEMENTS", "'FORCE'")  # see REFINEMENTS
+    if method in (None, "MUMPS") and not pivots:
+        place(SOLVING, "SOLVEUR.NPREC", "-1")
     if "tolerance" in given:
         place(NONLINEAR, "CONVERGENCE.RESI_GLOB_RELA", f"{float(given['tolerance']):.6g}")
     if "max_iterations" in given:

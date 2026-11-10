@@ -1,6 +1,6 @@
 # 0076. Model threads as a correction on a contact between smooth cylinders
 
-- Status: Accepted; steps 0-3, 5 and 6 built; step 4 (bolts) in progress (2026-11-09)
+- Status: Accepted; built (2026-11-09; solid bolts in ADR 0077)
 - Date: 2026-11-08
 
 ## Context
@@ -224,11 +224,16 @@ are the next build; steps 4-6 follow.
   adapter writes it as a plain tie. Tests: `tests/test_threads.py`, 15, against hand
   values and the standards' basic profiles.
 - **Step 2, built.** CalculiX writes threads in 3D and axisymmetric 2D (`inp._threads`):
-  - bonded and no_separation: a SPRINGA from the screw node to a helper half a pitch
-    out along n, the helper tied to the nut node, or `*EQUATION` when rigid;
-  - frictionless: the same spring with a nonlinear law (k in compression past the
-    clearance, 1e-4 k in tension), in an NLGEOM step. GAPUNI on a 2D model's nodes,
-    and the contact output CalculiX writes for contact pairs, crashed it.
+  - bonded and no_separation: a SPRING2 from the screw node to the nut node in an
+    orientation whose x is n, or `*EQUATION` when rigid;
+  - frictionless: a GAPUNI along n, in an NLGEOM step.
+
+  Tried first: a SPRINGA to a helper tied to the nut node carried 3.4 % short under
+  NLGEOM (bonded threads summed to 1.035 of the load there, 1.000 in a linear step);
+  a nonlinear SPRING2 law converged a few percent an iteration. GAPUNI's crash came from
+  the contact-pair output written with no contact pair, which is gone: with it the
+  frictionless thread sums to 1.000, first thread 38.04 % (Code_Aster 38.05, FEniCSx
+  38.07), wedge 23536 N (23514, 23516).
   - An axisymmetric model is a 2° slice to CalculiX, so springs are written × 2/360
     (the first runs had them 180 times too stiff, the teeth as good as rigid).
 
@@ -248,8 +253,7 @@ are the next build; steps 4-6 follow.
   softer than the glued reference, as it should be. Wedges are F tan α to four digits
   (iso 23094 N, acme 10345, trapezoidal 10718, buttress 4911 on its 7° flank and 40000
   on its 45° one, square 0); unilateral flanks bear as the bonded tie under a pull.
-  CalculiX's frictionless thread_load sums to 103 % (its nonlinear spring under NLGEOM
-  carries about 4 % less than k times the push); bonded and no_separation sum exactly.
+  Every kind's thread_load sums to the load.
   VDI's whole-engagement compliance isn't compared yet.
 - **Step 3, CalculiX built.** 3D on second-order tets, the same springs plus a "turn"
   spring per pair: tied along the flanks only, the screw unscrewed under a pull (the
@@ -268,8 +272,8 @@ are the next build; steps 4-6 follow.
   linear (2D bonded 38.05/38.07 %, no_separation 47.56/47.62 %, rigid, and 3D bonded
   40.06 %, 0.9800 kN/µm, 23056 N on both). Frictionless, Code_Aster's wedge is F tan 30°
   within 2 %, and with a 0.01 mm clearance its stiffness is the hand value (0.7722 kN/µm
-  against 0.772); CalculiX's NLGEOM springs are 3 % off (10 % with the clearance), so
-  CalculiX's frictionless threads are the less accurate. 3D threads are slow on
+  against 0.772); CalculiX's agree since its unilateral flanks are GAPUNI (they were
+  nonlinear SPRINGAs, 3 % off under NLGEOM). 3D threads are slow on
   Code_Aster (about 6 minutes for 2300 pairs: a one-node group per node for
   LIAISON_DDL); the solve itself is seconds.
 - **Step 4, beam bolts built on CalculiX.** `BoltType.thread_form` (iso for ISO sizes, un
@@ -280,12 +284,26 @@ are the next build; steps 4-6 follow.
   slides joined by springs E A_d3 / Δz; each wall node bears on its level through a
   flank spring to a helper following that motion (tying helpers to core nodes that
   were themselves dependent left CalculiX decascading for 20 minutes); the RBE3's twist
-  row holds the bolt's turning. Benchmark: an M16 8.8 cap screw through a plate into
-  the boss shares its thread as the solid smooth screw, measured from the boss's side
-  alike, within 2 points per thread (30.8 against 29.6 % on the first). Not done yet:
-  threaded ends on Code_Aster and FEniCSx bolts, solid bolts (`formulation="solid"`),
-  per-thread loads in the bolt table and `bolt_results` (the core's helpers are dropped
-  from results), and the bracket assembly with tapped bolts.
+  row holds the bolt's turning. Its core is rigid across its axis, so the screw's radial
+  contraction, which a solid screw's continuum gives, goes into the flank springs as
+  Yamamoto's δ5 of the screw (`threads.stiffness(rigid_core=True)`, untuned): without it
+  the first thread took 47.4 % against the solid screw's 40.1 %, with it 41.5 %.
+  Benchmark: an M16 8.8 cap screw through a plate into the boss shares its thread as
+  the solid smooth screw within 1.4 points per thread, each from its own springs (the
+  boss's section, first used, under-read the first thread: 28 % where the springs said
+  40 %). The flank springs are
+  SPRING2 in an orientation along n (NLGEOM-safe, as `_threads`). Each threaded end's
+  per-thread loads come back as `bolt_thread_load` (the reader takes them from the flank
+  springs before the helpers are dropped), the bolt table's First thread column,
+  `bolts.BoltResult.threads`/`first_thread` and MCP `bolt_results`. Code_Aster writes
+  the same ends (`thread_springs.bolt_threads`/`register_bolts`: relations on the POU_D_T
+  end node, its spider left out, SOLVEUR NPREC=-1 since MUMPS called the system singular
+  though it solves), matching CalculiX within 0.12 points per thread and its bolt force
+  to five digits. A beam bolt with a tapped thread end is refused where an adapter
+  doesn't list `beam_fastener:thread`. Cross-solver shares compare from displacements:
+  the two solvers' nodal stresses differ by 30 % at the bore's corners where their
+  displacements agree to 1e-6. FEniCSx and Elmer write no fasteners. Solid bolts
+  are ADR 0077 (generated from the fastener tables, with the thread contact).
 - **Step 5.** FEniCSx writes bonded, no_separation and frictionless threads in 2D
   axisymmetric static steps (`case._threads`, `study.solve_threaded`: k n nᵀ springs
   added to K, an active set for unilateral flanks, rigid as 1e3 × the teeth), matching

@@ -173,6 +173,19 @@ def _time_field_problems(solver: str, project, study, physics, caps) -> list[str
     return out
 
 
+def _tapped_beam(project, fastener) -> bool:
+    """A beam bolt with a thread into a tapped end (ADR 0076 step 4), as resolved from
+    its type: an adapter writes that end as a thread or refuses the bolt."""
+    from puzzle.bolts import JOINTS, resolve
+
+    try:
+        f = resolve(project, fastener)
+    except Exception:  # noqa: BLE001 - an unresolvable bolt is reported where it's solved
+        return False
+    joint = JOINTS.get(f.joint or "", ())
+    return f.thread is not None and (f.formulation or "beam") == "beam" and "thread" in joint
+
+
 def refuse_inputs(inputs: Sequence, solver: str, accepted: set[tuple[str, str]] = frozenset()):
     """Raise for transferred fields this adapter doesn't apply: (role, field) pairs."""
     from puzzle.adapters.common import InputError
@@ -356,6 +369,10 @@ class SolverAdapter(ABC):
             if f"{c.kind}:{c.ends}" not in caps.connectors:
                 problems.append(
                     f"{self.name} does not write {c.ends} beam fasteners yet ({c.name})"
+                )
+            if "beam_fastener:thread" not in caps.connectors and _tapped_beam(project, c):
+                problems.append(  # ADR 0076 step 4: never a plain spider on the thread
+                    f"{self.name} does not write a beam bolt's tapped thread yet ({c.name})"
                 )
         if component.beam_sections and not caps.beams:
             problems.append(f"{self.name} does not write beams (line bodies) yet")

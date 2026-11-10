@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import dataclasses
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 INCH = 0.0254
 
@@ -203,13 +203,20 @@ def resolve(project, fastener):
     if fastener.ends is None:
         update["ends"] = values["ends"]
     if fastener.formulation is None:
-        update["formulation"] = values["formulation"]
+        # A type's "modelled" makes a beam until the bolt is drawn (`solid_bolts`): a
+        # bolt marked modelled with no parts would reach the solvers as nothing.
+        formulation = values["formulation"]
+        update["formulation"] = "beam" if formulation == "modelled" else formulation
     if fastener.joint is None:
         update["joint"] = btype.joint
     if fastener.pretension is None and values["preload"] is not None:
         update["pretension"] = Quantity(value=round(values["preload"], 6), unit="N")
     if fastener.thread is None:
         update["thread"] = type_thread(btype)
+    if fastener.head is None:
+        update["head"] = btype.head
+    if fastener.thread_kf is None:
+        update["thread_kf"] = btype.thread_kf
     return fastener.model_copy(update=update)
 
 
@@ -229,17 +236,18 @@ def type_thread(btype):
 
 
 def resolved(project):
-    """A copy of the project whose every bolt is resolved (what solvers read)."""
+    """A copy of the project whose every bolt is resolved (what solvers read). A
+    modelled bolt (ADR 0077) is left out: its parts, contacts and pretension carry it."""
     from puzzle.model.schema import Component
 
     comps = [o for o in project.objects.values() if isinstance(o, Component) and o.connectors]
-    if not comps or not any(c.type is not None for comp in comps for c in comp.connectors):
+    if not comps or not any(c.type is not None or c.formulation == "modelled"
+                            for comp in comps for c in comp.connectors):  # fmt: skip
         return project
     objects = dict(project.objects)
     for comp in comps:
-        objects[comp.id] = comp.model_copy(
-            update={"connectors": [resolve(project, c) for c in comp.connectors]}
-        )
+        kept = [resolve(project, c) for c in comp.connectors if c.formulation != "modelled"]
+        objects[comp.id] = comp.model_copy(update={"connectors": kept})
     return dataclasses.replace(project, objects=objects)
 
 
@@ -513,12 +521,99 @@ class BoltResult:
     stress: float
     proof: float | None
     yielding: float | None
+    threads: list[float] = field(default_factory=list)  # N per thread, the first engaged first
+    # A modelled bolt (ADR 0077): its loads are one section's, across its shank.
+    modelled: bool = False
+
+    @property
+    def first_thread(self) -> float | None:
+        """The first engaged thread's share of the threaded end's load (ADR 0076)."""
+        total = sum(self.threads)
+        return self.threads[0] / total if self.threads and total > 0 else None
+
+
+def section_loads(mesh, stress, part: str) -> Along | None:
+    """A modelled bolt's loads (ADR 0077) from its section across the shank: the stress
+    traction integrated over the bolt part's own elements cut by the plane of its
+    `<part>/Section` face (ADR 0042's section tool, `probes.section_force`), so the
+    plates around it don't count. The plane is moved a fiftieth of the section's width
+    toward the head, off the face the elements meet on. `s` is the section's distance
+    from the bearing face. None when the part or its section isn't in the mesh."""
+    import numpy as np
+
+    from puzzle.mesh import Mesh
+    from puzzle.post.probes import section_force
+    from puzzle.results.model import StepResult
+
+    body, cut = mesh.groups.get(part), mesh.groups.get(f"{part}/Section")
+    if body is None or cut is None or not len(cut.node_ids):
+        return None
+    blocks = [b for b in body.blocks(mesh) if b.dim == 3]
+    if not blocks:
+        return None
+    xyz = mesh.node_coords(np.asarray(cut.node_ids))
+    centre = xyz.mean(axis=0)
+    normal = np.linalg.svd(xyz - centre)[2][-1]  # the plane's normal: least spread
+    bearing = mesh.groups.get(f"{part}/Bearing")
+    head = mesh.node_coords(np.asarray(bearing.node_ids)).mean(axis=0) if (
+        bearing is not None and len(bearing.node_ids)) else None  # fmt: skip
+    if head is not None and float((centre - head) @ normal) < 0:
+        normal = -normal  # from the head toward the bolt's end
+    width = float(np.ptp(xyz, axis=0).max())
+    origin = centre - normal * width / 50
+    own = Mesh(mesh.node_ids, mesh.coords, blocks, {part: body})
+    step = StepResult(0, "stationary", 0.0, None, {"stress": stress})
+    found = section_force(own, step, origin, normal)
+    force = np.array([found["components"][k] for k in "xyz"])
+    moment = np.array([found["moment"][k] for k in "xyz"])
+    axial = float(force @ normal)
+    twist = float(moment @ normal)
+    s = float((origin - head) @ normal) if head is not None else 0.0
+    return Along([s], [axial], [float(np.linalg.norm(force - axial * normal))], [twist],
+                 [float(np.linalg.norm(moment - twist * normal))])  # fmt: skip
+
+
+def bolt_kf(project, comp, part: str) -> float | None:
+    """The thread-root notch factor (ADR 0077) of the modelled bolt drawn as `part`, or
+    None when no modelled bolt of `comp` is."""
+    for bolt in comp.connectors:
+        if bolt.formulation == "modelled" and bolt.parts and bolt.parts[0] == part:
+            return resolve(project, bolt).thread_kf or 3.0
+    return None
+
+
+def modelled_threads(comp, bolt) -> list[str]:
+    """The threaded contacts on a modelled bolt's thread (into the tapped hole or nut)."""
+    if not bolt.parts:
+        return []
+    face = f"{bolt.parts[0]}/Thread"
+    return [c.name for c in comp.contacts if c.thread is not None and face in (c.source, c.target)]
+
+
+def _read(store, run_id: str, name: str, step):
+    try:
+        return store.read_field(run_id, name, step)
+    except (KeyError, IndexError):  # not in this run (or not at this step)
+        return None
+
+
+def _per_thread(field, split) -> dict[str, list[float]]:
+    out: dict[str, list[float]] = {}
+    if field is not None:
+        for name, value in zip(field.components, field.values[0], strict=True):
+            out.setdefault(split(name), []).append(float(value))
+    return out
 
 
 def bolt_results(project, store, run_id: str, step: int | None = None) -> list[BoltResult]:
-    """Each bolt's loads and use for one run's step (the last by default), worst first."""
+    """Each bolt's loads and use for one run's step (the last by default), worst first.
+
+    Beam and solid bolts read the solvers' `fastener` field, one row per bolt in order
+    with the modelled ones left out (as `resolved` leaves them out of the solve); a
+    modelled bolt (ADR 0077) reads the stress across its shank (`section_loads`) and
+    its threaded contact's `thread_load`. Stress and use are the beam's: |N|/As + M/Z
+    on the type's stress area, so the two kinds compare like with like."""
     from puzzle.adapters.common import fastener_ends
-    from puzzle.bolts import along, bolt_area, grade_strengths, resolve, use
     from puzzle.model.schema import Component
 
     record = store.get_run(run_id)
@@ -526,19 +621,58 @@ def bolt_results(project, store, run_id: str, step: int | None = None) -> list[B
     comp = project.objects.get(study.component) if study is not None else None
     if not isinstance(comp, Component) or not comp.connectors:
         return []
-    field = store.read_field(run_id, "fastener", step)
+    beams = _read(store, run_id, "fastener", step)
+    rows = iter(beams.values if beams is not None else ())
+    modelled = any(b.formulation == "modelled" for b in comp.connectors)
+    stress = _read(store, run_id, "stress", step) if modelled else None
+    if stress is not None and stress.location != "node":
+        stress = None
+    if beams is None and stress is None:
+        raise KeyError(f"run {run_id} has no bolt results (no 'fastener' or 'stress' field)")
     mesh = store.read_mesh(record.mesh_id)
+    # ADR 0076: a beam bolt's threaded end's per-thread loads, "<bolt> <end>: <k>"; a
+    # threaded contact's, "<contact>: <k>".
+    thread_loads = _per_thread(_read(store, run_id, "bolt_thread_load", step),
+                               lambda n: n.rsplit(" ", 2)[0])  # fmt: skip
+    contact_loads = _per_thread(_read(store, run_id, "thread_load", step),
+                                lambda n: n.rsplit(": ", 1)[0]) if modelled else {}  # fmt: skip
     out = []
-    for bolt, values in zip(comp.connectors, field.values, strict=False):
+    for bolt in comp.connectors:
         solved = resolve(project, bolt)
-        a, b = (e.centre for e in fastener_ends(solved, mesh))
-        loads = along(values, a, b)
+        if bolt.formulation == "modelled":
+            loads = section_loads(mesh, stress, bolt.parts[0]) if (
+                stress is not None and bolt.parts) else None  # fmt: skip
+            if loads is None:
+                continue
+            threads = [v for c in modelled_threads(comp, bolt) for v in contact_loads.get(c, [])]
+        else:
+            values = next(rows, None)
+            if values is None:
+                continue
+            a, b = (e.centre for e in fastener_ends(solved, mesh))
+            loads = along(values, a, b)
+            threads = thread_loads.get(bolt.name, [])
         proof, sy = grade_strengths(project, solved)
         u = use(loads.axial[0], loads.largest_bending, bolt_area(project, bolt), proof, sy)
-        out.append(BoltResult(bolt.name, comp.name, loads, u.stress, u.proof, u.yielding))
+        out.append(BoltResult(bolt.name, comp.name, loads, u.stress, u.proof, u.yielding,
+                              threads, bolt.formulation == "modelled"))  # fmt: skip
 
     def worst(r: BoltResult):  # by its share of proof (or yield); unknown ones last
         ratio = r.proof if r.proof is not None else r.yielding
         return (ratio is None, -(ratio or 0.0), -r.stress)
 
     return sorted(out, key=worst)
+
+
+def model_commands(project, comp, indices, root, *, bonded_heads: bool = False) -> list:
+    """One batch modelling several bolts of `comp` (ADR 0077; `solid_bolts.make_commands`
+    for each, from the same project: their edits append, so they compose). Bolts already
+    modelled are skipped."""
+    from puzzle.solid_bolts import make_commands
+
+    out: list = []
+    for i in indices:
+        if comp.connectors[i].formulation == "modelled":
+            continue
+        out += make_commands(project, comp, i, root, bonded_heads=bonded_heads)
+    return out

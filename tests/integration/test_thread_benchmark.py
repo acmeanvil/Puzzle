@@ -503,15 +503,95 @@ def _beam_bolt_model(solver):
 @over("calculix")
 def test_a_beam_bolt_shares_its_thread_as_a_solid_screw(tmp_path, solver):
     """ADR 0076 step 4: a beam bolt's tapped end as a thread (a core line with flank
-    springs) shares its load along the thread within 5 points of the solid smooth screw,
-    measured from the boss's side alike."""
+    springs, the core's radial give added) shares its load along the thread within 5
+    points of the solid smooth screw, each from its own springs: the contact's
+    `thread_load` and the bolt's `bolt_thread_load`. (The boss's section, sampled by the
+    bore, under-read the first thread: 28 % where the springs said 40 %.)"""
     p, study = _model_3d(solver)
-    solid = _boss_shares(run_study(p, study.id, tmp_path, tmp_path / "solid", timeout_s=3600))
+    solid_run = run_study(p, study.id, tmp_path, tmp_path / "solid", timeout_s=3600)
+    solid = solid_run.results.steps[-1].fields["thread_load"].values[0][:8]
     p, study = _beam_bolt_model(solver)
     run = run_study(p, study.id, tmp_path, tmp_path / "beam", timeout_s=3600)
-    beam = _boss_shares(run)
-    print("solid", np.round(solid * 100, 1), "beam", np.round(beam * 100, 1))
-    # The boss's section, sampled on a grid by the bore, recovers ~90 % of the load in
-    # both (the first run: 0.902 and 0.90); the shares compare as fractions of their sum.
-    assert 0.85 < solid.sum() < 1.05 and 0.85 < beam.sum() < 1.05
-    assert np.all(np.abs(beam / beam.sum() - solid / solid.sum()) < 0.05)
+    own = run.results.steps[-1].fields["bolt_thread_load"].values[0][:8]
+    print(
+        "solid", np.round(solid / solid.sum() * 100, 1), "beam", np.round(own / own.sum() * 100, 1)
+    )
+    assert own.sum() / LOAD == pytest.approx(1.0, abs=0.03)
+    assert solid.sum() / LOAD == pytest.approx(1.0, abs=0.03)
+    assert np.all(np.abs(own / own.sum() - solid / solid.sum()) < 0.05)
+
+
+def _boss_shares_from_u(run, project):
+    """`_boss_shares` from the displacements alone, so two solvers compare on their
+    solutions, not their stress recovery: σ_zz per tet10 at its centroid (where the
+    corner shape functions' gradients vanish, the edge nodes' are ∇L_i + ∇L_j on the
+    corners' tet), sampled as `_boss_shares` samples nodal stress. The solid screw's
+    nodal stresses differed by 30 % L2 at the bore's corners between Code_Aster and
+    CalculiX with their displacements equal to 1e-6, and the nodal shares by 4.7 points."""
+    from scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator
+
+    from puzzle.model.schema import Material
+
+    steel = next(o for o in project.objects.values() if isinstance(o, Material))
+    e = steel.properties["youngs_modulus"].to_si()
+    nu = steel.properties["poissons_ratio"].to_si()
+    lam, mu = e * nu / ((1 + nu) * (1 - 2 * nu)), e / (2 * (1 + nu))
+    u = run.results.last("displacement")
+    mesh = run.mesh
+    centres, szz = [], []
+    edges = [(0, 1), (1, 2), (0, 2), (0, 3), (2, 3), (1, 3)]  # Gmsh tet10's edge nodes
+    for b in mesh.groups["Boss"].blocks(mesh):
+        if b.element != "tet10":
+            continue
+        x = mesh.node_coords(b.connectivity.ravel()).reshape(len(b.connectivity), 10, 3)
+        d = u.at(b.connectivity.ravel())[:, :3].reshape(len(b.connectivity), 10, 3)
+        jac = np.stack([x[:, k] - x[:, 0] for k in (1, 2, 3)], axis=1)  # rows: edges
+        inv = np.linalg.inv(jac)  # ∇L_k (k = 1..3) are its columns; ∇L_0 = -their sum
+        grad_l = np.concatenate([-inv.sum(axis=2, keepdims=True), inv], axis=2)
+        grad = np.zeros((len(x), 3, 3))  # du_i/dx_j
+        for e_i, (p, q) in enumerate(edges):
+            g = grad_l[:, :, p] + grad_l[:, :, q]  # (n, 3)
+            grad += np.einsum("ni,nj->nij", d[:, 4 + e_i], g)
+        tr = np.trace(grad, axis1=1, axis2=2)
+        szz.append(lam * tr + 2 * mu * grad[:, 2, 2])
+        centres.append(x[:, :4].mean(axis=1))
+    xyz, s = np.vstack(centres), np.concatenate(szz)
+    f, near = LinearNDInterpolator(xyz, s), NearestNDInterpolator(xyz, s)
+    r = np.linspace(R_PITCH * MM * 1.01, R_BOSS * MM * 0.995, 40)
+    t = np.linspace(0, 2 * np.pi, 72, endpoint=False)
+    rr, tt = np.meshgrid(r, t)
+
+    def force(z):
+        pts = np.column_stack([(rr * np.cos(tt)).ravel(), (rr * np.sin(tt)).ravel(),
+                               np.full(rr.size, z)])  # fmt: skip
+        v = f(pts)
+        v = np.where(np.isnan(v), near(pts), v).reshape(rr.shape)
+        return float(np.trapezoid(np.trapezoid(v * rr, r, axis=1), t))
+
+    cuts = [k * P * MM for k in range(int(ENGAGED / P) + 1)]
+    cuts[0], cuts[-1] = 0.05 * MM, (ENGAGED - 0.05) * MM
+    forces = np.array([force(z) for z in cuts])
+    return -np.diff(forces)[::-1] / LOAD
+
+
+@over("code_aster")
+def test_code_aster_beam_bolt_threads_match_calculix(tmp_path, solver):
+    """ADR 0076 step 4 on Code_Aster: a beam bolt's tapped end (the core's levels, flank
+    springs and the twist row, `code_aster/thread_springs.py`) against CalculiX's on one
+    mesh: each thread's share (from the displacements) within 2 points, the bolt's axial
+    force within 1 %."""
+    if not available("calculix"):
+        pytest.skip("calculix not available")
+    got = {}
+    for name in (solver, "calculix"):
+        p, study = _beam_bolt_model(name)
+        run = run_study(p, study.id, tmp_path, tmp_path / name, timeout_s=3600)
+        shares = _boss_shares_from_u(run, p)
+        bolt = run.results.steps[-1].fields["fastener"].values[0]
+        got[name] = (shares / shares.sum(), bolt)
+        print(name, "shares", np.round(shares / shares.sum() * 100, 2), "sum",
+              round(float(shares.sum()), 3), "bolt", np.round(bolt[:4], 1))  # fmt: skip
+    (a_shares, a_bolt), (c_shares, c_bolt) = got[solver], got["calculix"]
+    assert np.all(np.abs(a_shares - c_shares) < 0.02)
+    assert a_bolt[0] == pytest.approx(c_bolt[0], rel=0.01)
+    assert a_bolt[0] == pytest.approx(LOAD, rel=0.01)

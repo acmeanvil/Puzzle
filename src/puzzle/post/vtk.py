@@ -17,6 +17,9 @@ VTK_CELLS = {
     "tet10": (24, [0, 1, 2, 3, 4, 5, 6, 7, 9, 8]),
     "hex8": (12, None),
     "wedge6": (13, None),
+    # Revolved bolts (ADR 0077): VTK orders the edges as CalculiX does.
+    "hex20": (25, [0, 1, 2, 3, 4, 5, 6, 7, 8, 11, 13, 9, 16, 18, 19, 17, 10, 12, 14, 15]),
+    "wedge15": (26, [0, 1, 2, 3, 4, 5, 6, 9, 7, 12, 14, 13, 8, 10, 11]),
     "pyramid5": (14, None),
     "line2": (3, None),  # beams (ADR 0027); Gmsh and VTK both put the mid node last
     "line3": (21, None),

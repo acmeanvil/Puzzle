@@ -109,6 +109,8 @@ class HistoryStep(BaseModel):
         "remove",
         "fragment",
         "keep",
+        "bolt",
+        "nut",
         "box",
         "cylinder",
         "cone",
@@ -636,6 +638,16 @@ class MeshRecipe(ProjectObject):
         default_factory=dict,
         description="Netgen's own settings: grading, curvaturesafety, segmentsperedge, "
         "quad_dominated",
+    )
+    revolved_bolts: bool = Field(
+        default=True,
+        description="modelled bolts and nuts (ADR 0077) meshed by revolving their profile: "
+        "hexahedra, prisms on the axis; off: tetrahedra like the rest",
+    )
+    bolt_sectors: int = Field(
+        default=24,
+        ge=4,
+        description="elements round a revolved bolt or nut (a multiple of 4, rounded up)",
     )
 
     @model_validator(mode="before")
@@ -1371,10 +1383,23 @@ class BeamFastener(BaseModel):
     pretension: Quantity | None = Field(
         default=None, description="a force applied in the first step, then locked"
     )
-    formulation: Literal["beam", "solid"] | None = Field(
+    formulation: Literal["beam", "solid", "modelled"] | None = Field(
         default=None,
         description="beam: a two-node Timoshenko beam between the ends, no mesh (Nastran "
-        "CBAR with RBE2/RBE3 spiders); solid: a small meshed bolt",
+        "CBAR with RBE2/RBE3 spiders); solid: a small meshed bar with spiders; modelled: "
+        "the standard bolt drawn from the fastener tables as parts of its own, joined by "
+        "contacts and its thread (ADR 0077)",
+    )
+    head: Literal["hex", "socket"] | None = Field(
+        default=None, description="a modelled bolt's head (ADR 0077); empty: its type's"
+    )
+    thread_kf: float | None = Field(
+        default=None, ge=1.0,
+        description="a modelled bolt's thread-root fatigue notch factor; empty: its type's",
+    )  # fmt: skip
+    parts: list[str] = Field(
+        default_factory=list,
+        description="the parts a modelled bolt was drawn as (its bolt, nut, washers)",
     )
     group: str | None = Field(default=None, description="a group the bolt is listed under")
     rule: str | None = Field(default=None, description="the bolt rule that made it (ADR 0050)")
@@ -1493,7 +1518,16 @@ class BoltType(ProjectObject):
     preload_force: Quantity | None = None
     torque: Quantity | None = None
     nut_factor: float = Field(default=0.2, gt=0, description="K in F = T / (K d)")
-    formulation: Literal["beam", "solid"] = "beam"
+    formulation: Literal["beam", "solid", "modelled"] = "beam"
+    head: Literal["hex", "socket"] = Field(default="hex", description="a modelled bolt's head")
+    thread_kf: float = Field(
+        default=3.0, ge=1.0,
+        description="the thread root's fatigue notch factor on a modelled bolt's basic "
+        "stresses (ADR 0077; 3 to 4 is usual)",
+    )  # fmt: skip
+    head_friction: float = Field(
+        default=0.15, ge=0.0, description="μ under a modelled bolt's head and nut"
+    )
     ends: Literal["rigid", "distributing"] = "distributing"
     joint: Literal["hole_walls", "through_nut", "tapped", "stud_nuts", "stud_tapped"] = Field(
         default="hole_walls",

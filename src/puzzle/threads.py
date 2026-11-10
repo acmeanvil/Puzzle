@@ -352,21 +352,29 @@ def yamamoto(alpha: float, pitch: float, nu: float, nut: bool, d2: float | None 
 
 def stiffness(areas: np.ndarray, thread: Spec, e_screw: float, e_nut: float,
               compliance="teeth", size: float | None = None, nu_screw: float = 0.3,
-              nu_nut: float = 0.3) -> np.ndarray:  # fmt: skip
+              nu_nut: float = 0.3, rigid_core: bool = False) -> np.ndarray:  # fmt: skip
     """Each pair's flank stiffness (N/m) along its normal for flank `areas` (m²):
     `teeth`, Yamamoto's teeth of both sides in series (module docstring) as a spring
     along n: a patch of cylinder area A_c (one pitch high) has axial stiffness
     A_c / (P (K_s/E_s + K_n/E_n)), and along n that is k = A_flank / (P ΣK/E cos α);
     `rigid`, a penalty of 50 E* A / h (h the thread's depth); or a stiffness per area
-    (N/m³) given as a number."""
+    (N/m³) given as a number. `rigid_core`: the screw is a beam bolt's core, rigid
+    across its axis, so its radial contraction (Yamamoto's δ5 of the screw, which a
+    solid screw's continuum gives) is added to the give, untuned."""
     a = np.asarray(areas, dtype=float)
     e_star = 1.0 / (1.0 / e_screw + 1.0 / e_nut)
     if compliance == "teeth":
         alpha = thread.angles[0]
         give = (yamamoto(alpha, thread.pitch, nu_screw, False) / e_screw
                 + yamamoto(alpha, thread.pitch, nu_nut, True) / e_nut)  # fmt: skip
+        give *= TEETH_FACTOR
+        if rigid_core:
+            d2 = thread.pitch_diameter
+            with_radial = yamamoto(alpha, thread.pitch, nu_screw, False, d2=d2, radial=True)
+            radial = with_radial - yamamoto(alpha, thread.pitch, nu_screw, False)
+            give += radial / e_screw
         cos = math.cos(math.radians(alpha))
-        return a / (TEETH_FACTOR * thread.pitch * give * cos)
+        return a / (thread.pitch * give * cos)
     if compliance == "rigid":
         h = size or (thread.major - thread.minor) / 2 or thread.pitch
         return RIGID_FACTOR * e_star * a / h

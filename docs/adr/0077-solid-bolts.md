@@ -1,6 +1,6 @@
 # 0077. Generate solid bolts from the fastener tables, meshed as bodies of revolution
 
-- Status: Proposed
+- Status: Accepted; built on CalculiX (2026-11-10)
 - Date: 2026-11-09
 
 ## Context
@@ -102,3 +102,42 @@ node rings lining up with the thread's pairs (ADR 0076). Netgen has no swept mes
 - **Netgen:** no swept meshes; tets would lose the ring structure the thread pairs use.
 - **The user's own CAD bolt:** works today with a threaded contact (ADR 0076), and stays
   the route for special bolts; generated bolts cover the standard ones without CAD.
+
+## Progress (2026-11-10)
+
+- The formulation is `modelled` (`solid` stays the deck's bar with spiders, so old
+  projects keep their meaning); a type's `modelled` stays a beam until the bolt is drawn.
+- Built: the `bolt` and `nut` history steps and `solid_bolts.dimensions` (an M16 hex
+  bolt's bearing face is π(11.25² − 8.6²) mm² exactly), `make_commands` (head point
+  on the source hole's outer mouth, the plate's face found under the head, grip and
+  length rounded up to 5 mm, a through bolt's nut), `beam_commands`, results at the
+  section (`bolts.section_loads`), the Kf input (bolt type, bolt table, fatigue tool at
+  the thread's nodes, default 3), MCP, the bolt table and generator, the skill
+  `modelled-bolts`.
+- The revolved mesh (decision 3, `mesh/revolved.py`): the profile meshed in 2D and
+  revolved in four quarter turns with layers (OCC can't revolve a whole turn and keep
+  them), fragmented into one conformal mesh, serendipity second order: hex20, wedge15
+  on the axis (CalculiX C3D20/C3D15, Code_Aster through MED). Its volume is the solid's
+  within 0.5 %; pulled, it gives the same core stress as tetrahedra within 0.04 % and
+  F / A within 1 % on CalculiX and Code_Aster (`tests/integration/test_revolved_bolts.py`).
+- Measured:
+  - Preload (`test_solid_bolts.py`, M16 8.8 into a tapped boss, 40 kN): the section
+    carries 39.79 kN (−0.5 %). A node mean of σzz near the axis 3 mm from the cut read
+    18 % low: the stress there isn't uniform across, so results read the section.
+  - The under-head fillet (M16, ISO 885 minimum r = 0.6 mm, D/d = 1.41): peak principal
+    stress over the shank's nominal 2.80 at r/3 elements (2.86 at r/6; a head four times
+    as tall 2.94), against Tipton, Sorem and Rolovic's fit (Peterson 3rd ed. Eq. 3.5)
+    2.82: −0.9 %. Peterson's Chart 3.4 gives 2.40; its own text says it can be 40 % low
+    for sharp fillets, so the benchmark is Eq. 3.5.
+  - The bracket assembly (two M8 8.8 through bolts with nuts, 5 kN, frictional seat
+    μ 0.2, the base held at its ends so the nuts bear on a free face): modelled against
+    beam bolts, the deflection 0.2405 against 0.2440 mm (−1.4 %), axial forces 4942 and
+    4964 N against 5000 N (−1.2 %, −0.7 %; the beam's is the pretension itself). Shear
+    differs by the ends: the beam's ends are tied to the head and nut annuli, so it
+    carries 104 and 31 N as a dowel; the modelled bolt's heads only rub and the seat
+    doesn't slip, so its shank carries 2-3 N. The beam's shear is the artefact. The
+    modelled solve took 8089 s against 271 s (four frictional head and nut contacts on
+    SPOOLES, Windows): model the bolts whose stresses matter.
+- Not done: Code_Aster's modelled bolts (decision 5 put CalculiX first; Code_Aster's
+  frictional contacts need first-order meshes, ADR 0053), washers.
+

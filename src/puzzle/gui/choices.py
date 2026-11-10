@@ -286,7 +286,7 @@ def _field(project, obj, owner, field, in_list):
         if field in ("source", "target"):
             names = _selections(project, component, entity="face")
             return [(n, n) for n in names] if names else None
-        if field in ("ends", "formulation", "joint") and owner.type is not None:
+        if field in ("ends", "formulation", "joint", "head") and owner.type is not None:
             return [(FROM_TYPE, None)] + [(label(v), v) for v in _literal_values(
                 type(owner).model_fields[field].annotation)[0]]  # fmt: skip
     if type(owner).__name__ == "BeamSection" and not in_list:  # ADR 0055

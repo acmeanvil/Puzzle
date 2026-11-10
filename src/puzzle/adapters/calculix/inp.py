@@ -72,6 +72,12 @@ ELEMENTS = {
     "tet4": ("C3D4", None),
     "tet10": ("C3D10", [0, 1, 2, 3, 4, 5, 6, 7, 9, 8]),
     "hex8": ("C3D8", None),
+    # Revolved bolts (ADR 0077): Gmsh lists a 20-node hexahedron's edges 0-1, 0-3, 0-4,
+    # 1-2, 1-5, 2-3, 2-6, 3-7, 4-5, 4-7, 5-6, 6-7; CalculiX the bottom ring, the top
+    # ring, then the uprights. Likewise the 15-node prism.
+    "hex20": ("C3D20", [0, 1, 2, 3, 4, 5, 6, 7, 8, 11, 13, 9, 16, 18, 19, 17, 10, 12, 14, 15]),
+    "wedge6": ("C3D6", None),
+    "wedge15": ("C3D15", [0, 1, 2, 3, 4, 5, 6, 9, 7, 12, 14, 13, 8, 10, 11]),
     # Beams (ADR 0027): Gmsh's line3 lists its ends then its middle; B32 runs end-mid-end.
     "line2": ("B31", None),
     "line3": ("B32", [0, 2, 1]),
@@ -108,6 +114,7 @@ NODE_SHARES = {
     "tri3": [1 / 3] * 3,
     "tri6": [0, 0, 0, 1 / 3, 1 / 3, 1 / 3],
     "quad4": [1 / 4] * 4,
+    "quad8": [-1 / 12] * 4 + [1 / 3] * 4,  # exact on a parallelogram
 }
 
 
@@ -1359,6 +1366,7 @@ def _beam_bolt(project, f, i: int, a, b, axis, side, node: int, elem: int, held,
     out: list[str] = []
     rows: list[str] = []
     spiders = {}
+    threaded: dict[str, dict] = {}  # end -> its thread's pairs, for the reader
     for name, end in (("A", a), ("B", b)):
         move, turn = node, node + 1  # at the middle: the spider's translation and rotation
         node += 2
@@ -1371,9 +1379,10 @@ def _beam_bolt(project, f, i: int, a, b, axis, side, node: int, elem: int, held,
         if f.thread is not None and selection and selection.endswith(" (thread)"):
             # ADR 0076 step 4: a tapped end as a thread, not a spider on the wall.
             other = b if name == "A" else a
-            lines, node, elem = _thread_end(project, comp, f, selection, end, other, move,
-                                            turn, middle, node, elem, held, mesh)  # fmt: skip
+            args = (selection, end, other, move, turn, middle, node, elem, held, mesh)
+            lines, node, elem, pairs = _thread_end(project, comp, f, *args)
             out += lines
+            threaded[name] = pairs
         elif f.ends == "rigid":
             out += [
                 f"*NSET, NSET=N_FB{i}{name}",
@@ -1420,6 +1429,7 @@ def _beam_bolt(project, f, i: int, a, b, axis, side, node: int, elem: int, held,
     info = {
         "name": f.name,
         "axis": [float(c) for c in axis],
+        "threads": threaded,
         "pretension": None if ref is None else [ref, f.pretension.to_si()],
         "a": {
             "centre": [float(c) for c in a.centre],
@@ -1441,7 +1451,8 @@ def _thread_end(project, comp, f, selection: str, end, other, move: int, turn: i
     on its level through a flank spring along the flank's normal to a helper that
     follows that motion (Yamamoto's teeth, as `_threads`), and the RBE3's twist row holds
     the spider's rotation about the axis to the wall. The core turns with the bolt: the
-    helix's torque on the wall isn't carried. -> (lines, next node, next element)"""
+    helix's torque on the wall isn't carried. -> (lines, next node, next element, the
+    pairs for the reader: wall and helper nodes, stiffness, normals, levels)"""
     from puzzle import threads
     from puzzle.adapters.common import rbe3_rows
     from puzzle.adapters.thread_pairs import face_shares, modulus, normals
@@ -1460,7 +1471,9 @@ def _thread_end(project, comp, f, selection: str, end, other, move: int, turn: i
     alpha = np.radians(threads.flank_angle(spec, flank, load_up))
     e_bolt = project.get(f.material, Material).properties["youngs_modulus"].to_si()
     e_wall = modulus(project, comp, selection)
-    k = threads.stiffness(areas / np.cos(alpha), spec, e_bolt, e_wall, f.thread.compliance)
+    k = threads.stiffness(
+        areas / np.cos(alpha), spec, e_bolt, e_wall, f.thread.compliance, rigid_core=True
+    )  # the core can't contract: δ5 in the spring
     step = spec.pitch / 20  # levels closer than this share a core node
     levels = np.unique(np.round(s / step) * step)
     level_of = np.searchsorted(levels, np.round(s / step) * step)
@@ -1507,15 +1520,33 @@ def _thread_end(project, comp, f, selection: str, end, other, move: int, turn: i
             eq += [", ".join(f"{a}, {b}, {c:.13g}" for a, b, c in terms[t:t + 4])
                    for t in range(0, len(terms), 4)]  # fmt: skip
     out += eq
-    # Flank springs: wall node -> helper, along n.
-    bins: dict[float, list[str]] = {}
-    for i, (w, kk) in enumerate(zip(ids, k, strict=True)):
-        bins.setdefault(float(f"{kk:.9g}"), []).append(f"{elem}, {int(w)}, {helper0 + i}")
+    # Flank springs: wall node -> helper along n, as SPRING2 in an orientation whose x
+    # is n (a SPRINGA carried 3.4 % short under NLGEOM, ADR 0076).
+    bins: dict[tuple, list[str]] = {}
+    for i, (w, kk, d) in enumerate(zip(ids, k, n, strict=True)):
+        key = (float(f"{kk:.9g}"), *(round(float(x), 7) for x in d))
+        bins.setdefault(key, []).append(f"{elem}, {int(w)}, {helper0 + i}")
         elem += 1
-    for b_i, (kk, rows_) in enumerate(sorted(bins.items()), start=1):
+    for b_i, ((kk, *d), rows_) in enumerate(sorted(bins.items()), start=1):
         name = set_name("TB", f"{f.name}{b_i}")
-        out += [f"*ELEMENT, TYPE=SPRINGA, ELSET={name}", *rows_,
-                f"*SPRING, ELSET={name}", "", f"{kk:.10e}"]  # fmt: skip
+        orient = set_name("TBO", f"{f.name}{b_i}")
+        a_ = np.asarray(d, dtype=float)
+        ref_ = np.array([0.0, 0.0, 1.0]) if abs(a_[2]) < 0.9 else np.array([1.0, 0.0, 0.0])
+        side = np.cross(ref_, a_)
+        side /= np.linalg.norm(side)
+        out += [f"*ORIENTATION, NAME={orient}", ", ".join(f"{c_:.13g}" for c_ in (*a_, *side)),
+                f"*ELEMENT, TYPE=SPRING2, ELSET={name}", *rows_,
+                f"*SPRING, ELSET={name}, ORIENTATION={orient}", "1, 1", f"{kk:.10e}"]  # fmt: skip
+    pairs = {
+        "wall": [int(x) for x in ids],
+        "helper": list(range(helper0, helper0 + len(ids))),
+        "k": [float(x) for x in k],
+        "n": n.tolist(),
+        "s": [float(x) for x in s],  # along the axis, from the end's centre, away from the joint
+        "axis": [float(x) for x in axis],
+        "pitch": float(spec.pitch),
+        "mouth": float(levels[0]),
+    }
     # The twist about the axis: the RBE3's rotation row along the axis.
     six = rbe3_rows(end, mesh, middle)
     twist: dict[tuple[int, int], float] = {}
@@ -1532,7 +1563,7 @@ def _thread_end(project, comp, f, selection: str, end, other, move: int, turn: i
         out.append(str(len(terms)))
         out += [", ".join(f"{a}, {b}, {c:.13g}" for a, b, c in terms[t:t + 4])
                 for t in range(0, len(terms), 4)]  # fmt: skip
-    return out, node, elem
+    return out, node, elem, pairs
 
 
 def _node_row(n: int, p) -> str:
@@ -1737,15 +1768,13 @@ def _threads(project: Project, comp: Component, mesh: Mesh, node: int, elem: int
     """Threaded contacts (ADR 0076), from `adapters.thread_pairs`: per node pair and
     flank, along the flank's normal n (the screw's outward one),
     - bonded and no_separation with the teeth's give (or a stiffness per area): a
-      SPRINGA from the screw node to a helper half a pitch out along n, the helper tied
-      to the nut node by *EQUATION (so the spring acts along n whatever the nodes'
-      places: they coincide);
+      SPRING2 from the screw node to the nut node in an orientation whose x is n (the
+      nodes may coincide);
     - bonded and no_separation `rigid`: *EQUATION n · (u_screw - u_nut) = 0;
     - frictionless: the same spring, nonlinear: k once the screw has moved the
       clearance into the nut, nothing in tension (a nonlinear step, as lift-off).
     -> (lines, the next free node id, the next free element id)"""
     from puzzle.adapters.thread_pairs import thread_pairs
-    from puzzle.threads import spec
 
     out: list[str] = []
     dofs = (1, 2) if mesh.planar else (1, 2, 3)
@@ -1754,8 +1783,6 @@ def _threads(project: Project, comp: Component, mesh: Mesh, node: int, elem: int
             continue
         tp = thread_pairs(project, comp, mesh, c)
         screw, nut = (tp.source, tp.target) if tp.screw_is_source else (tp.target, tp.source)
-        xyz = mesh.node_coords(screw)
-        pitch = spec(c.thread).pitch
         tag = set_name("TH", c.name)
         # CalculiX models an axisymmetric part as a 2° slice: a spring on its nodes acts
         # on that slice, so the whole ring's stiffness is written times 2/360 (the pair
@@ -1776,41 +1803,36 @@ def _threads(project: Project, comp: Component, mesh: Mesh, node: int, elem: int
                     out += [", ".join(f"{a}, {b}, {v:.12g}" for a, b, v in terms[i: i + 4])
                             for i in range(0, len(terms), 4)]  # fmt: skip
                 continue
-            helpers = []
-            for p, d in zip(xyz, n, strict=True):
-                helpers.append(f"{node}, " + ", ".join(f"{x:.13g}" for x in p + 0.5 * pitch * d))
-                node += 1
-            first = node - len(helpers)
-            out += ["*NODE", *helpers]
-            springs: dict[float, list[str]] = {}  # one set per stiffness
-            for i, (s_id, kk) in enumerate(zip(screw, k, strict=True)):
-                springs.setdefault(float(f"{kk:.9g}"), []).append(
-                    f"{elem}, {int(s_id)}, {first + i}"
-                )
+            # SPRING2 from the screw node to the nut node along n: an orientation whose
+            # local x is n, its dof 1 to dof 1. (A SPRINGA to a helper tied to the nut
+            # node carried 3.4 % less than k times the push under NLGEOM, which the
+            # unilateral flanks need.) One set per stiffness and direction.
+            bins: dict[tuple, list[str]] = {}
+            for s_id, t_id, d, kk in zip(screw, nut, n, k, strict=True):
+                key = (float(f"{kk:.9g}"), *(round(float(x), 7) for x in d))
+                bins.setdefault(key, []).append(f"{elem}, {int(s_id)}, {int(t_id)}")
                 elem += 1
-            reach = pitch  # the nonlinear law's range of elongation (m)
-            for b, (kk, rows) in enumerate(sorted(springs.items()), start=1):
+            for b, ((kk, *d), rows) in enumerate(sorted(bins.items()), start=1):
                 name = f"{tag}S{f_i}_{b}"
-                out += [f"*ELEMENT, TYPE=SPRINGA, ELSET={name}", *rows]
+                orient = f"{tag}O{f_i}_{b}"
+                a = np.asarray(d, dtype=float)
+                helper = np.array([0.0, 0.0, 1.0]) if abs(a[2]) < 0.9 else np.array([1.0, 0, 0])
+                side = np.cross(helper, a)
+                side /= np.linalg.norm(side)
+                out += [f"*ORIENTATION, NAME={orient}",
+                        ", ".join(f"{c_:.13g}" for c_ in (*a, *side)),
+                        f"*ELEMENT, TYPE=SPRING2, ELSET={name}", *rows]  # fmt: skip
                 if c.type != "frictionless" or flank == "turn":  # turning: always linear
-                    out += [f"*SPRING, ELSET={name}", "", f"{kk:.10e}"]
+                    out += [f"*SPRING, ELSET={name}, ORIENTATION={orient}", "1, 1",
+                            f"{kk:.10e}"]  # fmt: skip
                     continue
-                # A unilateral flank: the spring s -> h (along n) shortens as the screw
-                # pushes into the nut; it pushes back by k once the clearance is closed,
-                # and holds nothing in tension. (GAPUNI on a 2D model's nodes crashed
-                # CalculiX after its first increment.)
-                # 1e-4 k in tension: a flank exactly closed at the start (no clearance)
-                # sat on the law's corner with nothing holding the screw, and diverged.
-                gap = tp.clearance
-                out += [f"*SPRING, ELSET={name}, NONLINEAR", "",
-                        f"{-kk * (reach - gap):.10e}, {-reach:.10e}", f"0., {-gap:.10e}",
-                        f"{SLACK * kk * (reach + gap):.10e}, {reach:.10e}"]  # fmt: skip
-            out.append("*EQUATION")
-            for i, t_id in enumerate(nut):
-                for dof in dofs:
-                    out += ["2", f"{first + i}, {dof}, 1., {int(t_id)}, {dof}, -1."]
-            if mesh.planar:  # the helpers have a z dof the 2D model doesn't: hold it
-                out += ["*BOUNDARY", *(f"{first + i}, 3, 3, 0." for i in range(len(nut)))]
+                # A unilateral flank: a GAPUNI from the screw node to the nut node along
+                # n, closed once the screw has moved the clearance into the nut (its own
+                # tangent: a nonlinear SPRING2 law converged a few percent an iteration,
+                # and a SPRINGA to a helper carried 3.4 % short under NLGEOM).
+                out[-len(rows) - 1] = f"*ELEMENT, TYPE=GAPUNI, ELSET={name}"
+                direction = f"{d[0]:.9g}, {d[1]:.9g}, {d[2]:.9g}"
+                out += [f"*GAP, ELSET={name}", f"{tp.clearance:.10e}, {direction}, , {kk:.10e}"]
     return out, node, elem
 
 
@@ -2252,7 +2274,7 @@ def _nodal_forces(group, mesh: Mesh, total: list[float]) -> list[str]:
             raise InputError(f"force on {b.element} faces is not supported yet")
         xyz = mesh.node_coords(b.connectivity[:, :3].ravel()).reshape(-1, 3, 3)
         areas = 0.5 * np.linalg.norm(np.cross(xyz[:, 1] - xyz[:, 0], xyz[:, 2] - xyz[:, 0]), axis=1)
-        if b.element == "quad4":
+        if b.element in ("quad4", "quad8"):
             q = mesh.node_coords(b.connectivity[:, [0, 2, 3]].ravel()).reshape(-1, 3, 3)
             areas = areas + 0.5 * np.linalg.norm(
                 np.cross(q[:, 1] - q[:, 0], q[:, 2] - q[:, 0]), axis=1

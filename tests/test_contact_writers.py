@@ -144,3 +144,22 @@ def test_code_aster_leaves_bolt_tied_nodes_out_of_contact():
     excluded = _contact_exclusions([contact], [bolt], NS(groups=groups), names)
     assert excluded == {"Seat": ["G2"]}  # the base's hole touches only the master side
     assert "SANS_GROUP_NO=('G2',)" in _defi_contact([contact], names, excluded)
+
+
+@pytest.mark.parametrize(("form", "tapped"), [(None, True), ("none", False)])
+def test_a_tapped_beam_bolt_is_written_as_a_thread_or_refused(form, tapped):
+    """ADR 0076 step 4: a beam bolt of a tapped type has a thread end, which an adapter
+    writes (connector "beam_fastener:thread": CalculiX, Code_Aster) or refuses."""
+    from puzzle.adapters.base import _tapped_beam
+    from puzzle.materials import add_library_material
+    from puzzle.model.schema import BeamFastener, BoltType, Project
+
+    p = Project(name="bolt")
+    grade = add_library_material(p, "iso_898_1_class_8_8")
+    m16 = p.add(BoltType(name="M16", size="M16", material=grade.id, preload="none",
+                         joint="tapped", formulation="beam", thread_form=form))  # fmt: skip
+    bolt = BeamFastener(name="B", source="Plate/Hole", target="Boss/Bore", type=m16.id)
+    assert _tapped_beam(p, bolt) is tapped
+    for adapter in (CodeAsterAdapter, ElmerAdapter):
+        written = "beam_fastener:thread" in adapter.capabilities.connectors
+        assert written is (adapter is CodeAsterAdapter)

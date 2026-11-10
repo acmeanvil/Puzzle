@@ -58,7 +58,9 @@ class CalculixAdapter(SolverAdapter):
         | VECTOR_LOAD_FEATURES
         | INITIAL_STRESS_FEATURES,  # ADR 0044 stage 3
         feature_steps=True,
-        connectors=frozenset({"beam_fastener:rigid", "beam_fastener:distributing"}),
+        connectors=frozenset(
+            {"beam_fastener:rigid", "beam_fastener:distributing", "beam_fastener:thread"}
+        ),  # ADR 0076 step 4: tapped ends
         # ADR 0027, tests/integration/test_beams.py; open table sections as exact
         # springs (ADR 0055, tests/integration/test_beam_sections.py)
         beams=True,
@@ -201,6 +203,7 @@ class CalculixAdapter(SolverAdapter):
             raise FileNotFoundError(f"CalculiX wrote no results ({frd.name}); see the solver log")
         results = read_frd(frd)
         _spring_beam_forces(results, input_file)  # before the rotation nodes go
+        _bolt_thread_loads(results, input_file)  # before the thread ends' helpers go
         drop_helper_nodes(results, input_file)  # rigid-body nodes, grounds, twins
         elastic = input_file.with_suffix(".elastic.json")
         if elastic.exists():  # CalculiX writes PEEQ only: the tensor comes from S and E
@@ -271,6 +274,43 @@ def _spring_beam_forces(results, input_file: Path) -> None:
             if node in row:
                 values[row[node], :3] = force
         step.fields["reaction_force"] = Field(rf.name, rf.location, rf.components, rf.ids, values)
+
+
+def _bolt_thread_loads(results, input_file: Path) -> None:
+    """Each threaded bolt end's load per thread (ADR 0076 step 4), the first engaged
+    (at the mouth) first: the flank springs' force k n · (u_helper - u_wall) along the
+    bolt's axis, binned by pitch. A whole-model field `bolt_thread_load`, components
+    "<bolt> <end>: <k>"."""
+    marker = input_file.with_suffix(".fasteners.json")
+    if not marker.exists():
+        return
+    import numpy as np
+
+    from puzzle import threads
+    from puzzle.results.model import Field
+
+    ends = [e for e in json.loads(marker.read_text(encoding="utf-8")) if e.get("threads")]
+    if not ends:
+        return
+    for step in results.steps:
+        u = step.fields.get("displacement")
+        if u is None:
+            continue
+        names, loads = [], []
+        for e in ends:
+            for end, t in e["threads"].items():
+                wall, helper = np.asarray(t["wall"]), np.asarray(t["helper"])
+                dw, dh = u.at(wall)[:, :3], u.at(helper)[:, :3]
+                n, axis = np.asarray(t["n"]), np.asarray(t["axis"])
+                force = np.asarray(t["k"]) * np.einsum("ij,ij->i", n, dh - dw)
+                axial = np.abs(force * (n @ axis))
+                per = threads.per_thread(np.asarray(t["s"]), axial, t["pitch"], t["mouth"])
+                names += [f"{e['name']} {end}: {k + 1}" for k in range(len(per))]
+                loads += per
+        if names:
+            step.fields["bolt_thread_load"] = Field(
+                "bolt_thread_load", "global", names, np.array([0]), np.array([loads])
+            )
 
 
 def _fastener_fields(results, input_file: Path) -> None:

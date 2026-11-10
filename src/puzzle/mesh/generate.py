@@ -35,6 +35,7 @@ from puzzle.geometry.model import (
     rotation_matrix,
 )
 from puzzle.geometry.session import gmsh_session
+from puzzle.mesh import revolved
 from puzzle.mesh.mesh import ELEMENT_NAMES, CellBlock, Group, Mesh
 from puzzle.model.schema import (
     Component,
@@ -142,7 +143,19 @@ def generate_mesh(
             }
         volumes: dict[str, list[tuple[int, int]]] = {}
         sides: dict[str, set[str]] = {}  # "part/selection" -> its bodies, in many-body parts
+        # ADR 0077: modelled bolts and nuts as bodies of revolution, part -> its profile
+        swept = _revolved_parts(project, comp, recipe, planar, warnings)
+        profiles: dict[str, tuple] = {}  # part -> (core radius, placement)
         for part in comp.parts if not faceted else []:
+            if part.name in swept:  # built from its step's arguments, named locally
+                kind, args = swept[part.name]
+                at = {"translation": part.translation, "rotation": part.rotation}
+                volumes[part.name] = revolved.build(kind, args, recipe.bolt_sectors, **at)
+                core = revolved.core_radius(kind, args)
+                profiles[part.name] = (core, at)
+                found[part.name] = revolved.names(references[part.name], volumes[part.name],
+                                                  core, **at)  # fmt: skip
+                continue
             before = set(gmsh.model.getEntities())
             load_shapes(paths[part.name])
             new = sorted(set(gmsh.model.getEntities()) - before)
@@ -170,6 +183,13 @@ def generate_mesh(
             _check_plane(comp)
 
         for part in comp.parts if not faceted else []:
+            if part.name in swept:
+                ref = references[part.name]
+                missing = [e.name for e in ref.of_dim(3) if e.name not in found[part.name]]
+                if missing:
+                    raise MeshError(f"part '{part.name}': bodies {missing} were lost while "
+                                    "revolving it")  # fmt: skip
+                continue
             ref = references[part.name]
             top = _top_dim(ref)
             all_volumes = gmsh.model.getEntities(top)
@@ -209,6 +229,7 @@ def generate_mesh(
             size = max(r.size for r in references.values()) / 40
             gmsh.option.setNumber("Mesh.MeshSizeMax", size)
             gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 8)
+            _sweep_profiles(profiles, volumes)
             gmsh.model.mesh.generate(2)
             mesh = _extract()
             return MeshResult(
@@ -270,6 +291,7 @@ def generate_mesh(
                                     "choose mixed quadrilaterals")  # fmt: skip
         else:
             _sizes(recipe, comp, found, warnings, project, root)
+            _sweep_profiles(profiles, volumes)
             if recipe.element_shape == "hexahedra":
                 # Structured hexes: every block-like volume gets a transfinite mesh, recombined.
                 gmsh.model.mesh.setTransfiniteAutomatic()
@@ -286,6 +308,8 @@ def generate_mesh(
             # Curved second-order elements can fold where midside nodes snap onto tight
             # curves (fillets, small holes); Gmsh's optimiser untangles them.
             gmsh.option.setNumber("Mesh.HighOrderOptimize", HIGH_ORDER[recipe.high_order_optimise])
+        if profiles:  # 20-node hexahedra and 15-node prisms (CalculiX's C3D20, C3D15)
+            gmsh.option.setNumber("Mesh.SecondOrderIncomplete", 1)
         gmsh.model.mesh.setOrder(recipe.element_order)
         dim = 2 if planar else 3
         min_quality = _min_quality(dim)
@@ -393,6 +417,36 @@ def _source(project: Project, geo: Geometry, root: Path, out_dir: Path, warnings
         selections.append(sel.model_copy(update={"members": members}))
     geo = geo.model_copy(update={"selections": selections})
     return geo, done.path, done.back, done.reports
+
+
+def _revolved_parts(project, comp, recipe, planar: bool, warnings) -> dict[str, tuple]:
+    """The parts meshed as bodies of revolution (ADR 0077, `mesh.revolved`): one bolt or
+    nut step each, unless the recipe turns it off, meshes with Netgen or hexahedra, or
+    the model is 2D. A part in a conformal (shared-node) contact keeps its tetrahedra:
+    its swept faces could not share nodes with a tetrahedral neighbour."""
+    if not recipe.revolved_bolts or planar or recipe.mesher != "gmsh":
+        return {}
+    if recipe.element_shape != "tetrahedra":
+        return {}
+    joined = {sel.split("/", 1)[0] for c in comp.contacts if c.effective_meshing == "conformal"
+              for sel in (c.source, c.target or "")}  # fmt: skip
+    out = {}
+    for part in comp.parts:
+        spec = revolved.step_of(project, project.get(part.geometry, Geometry))
+        if spec is None:
+            continue
+        if part.name in joined:
+            warnings.append(f"part '{part.name}': a conformal contact joins it, so it is "
+                            "meshed with tetrahedra, not revolved")  # fmt: skip
+            continue
+        out[part.name] = spec
+    return out
+
+
+def _sweep_profiles(profiles: dict[str, tuple], volumes) -> None:
+    """The revolved parts' profiles: recombined, a bolt's core strip structured."""
+    for part, (core, at) in profiles.items():
+        revolved.prepare(volumes[part], core, **at)
 
 
 def _closure(volumes: list[tuple[int, int]]) -> list[tuple[int, int]]:

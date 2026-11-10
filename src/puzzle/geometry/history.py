@@ -51,6 +51,7 @@ the part, the first one starts it):
 | enclosure | margin, or factor of the part size | +x ... of the box; body `<name>` |
 | import, heal, remove, fragment | see puzzle.geometry.prep (import `flat`: faces onto XY) | G2 |
 | keep | solids (1-based, file order) or bodies (names); body (the kept ones' name) | (names kept) |
+| bolt | `puzzle.solid_bolts` dimensions (ADR 0077) | bearing, fillet, shank, thread, section |
 | sketch | sketch, plane and offset, or face (a planar face, axis-aligned) | (no faces: a profile) |
 
 A sketch step (ADR 0017) adds no solid: extrude and revolve take it by name as their
@@ -630,7 +631,23 @@ TOOLS = {
     "extrude": _extrude,
     "revolve": _revolve,
     "hole": _hole,
+    "bolt": lambda state, a: _bolt(state, a),
+    "nut": lambda state, a: _nut(state, a),
 }
+
+
+def _nut(state, a):
+    """A nut for a modelled bolt (ADR 0077, `puzzle.solid_bolts`)."""
+    from puzzle.solid_bolts import nut_tool
+
+    return nut_tool(state, a)
+
+
+def _bolt(state, a):
+    """A standard bolt from the fastener tables (ADR 0077, `puzzle.solid_bolts`)."""
+    from puzzle.solid_bolts import bolt_tool
+
+    return bolt_tool(state, a)
 
 
 def _join(state, op, tool, tool_names: Names, mode: str, tool_bodies=None) -> None:

@@ -61,7 +61,9 @@ class CodeAsterAdapter(SolverAdapter):
         | LIFTING_FEATURES
         | VECTOR_LOAD_FEATURES
         | INITIAL_STRESS_FEATURES,  # ADR 0044 stage 3
-        connectors=frozenset({"beam_fastener:rigid", "beam_fastener:distributing"}),
+        connectors=frozenset(
+            {"beam_fastener:rigid", "beam_fastener:distributing", "beam_fastener:thread"}
+        ),  # ADR 0076 step 4: tapped ends
         beams=True,  # ADR 0027, tests/integration/test_beams.py
         shared_settings=frozenset(  # ADR 0023
             {"linear_solver", "tolerance", "max_iterations", "output_every"}
