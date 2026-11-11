@@ -2176,6 +2176,8 @@ class MainWindow(QMainWindow):
             "Study": record.study_name,
             "Solver": solver_label(record.solver),
             "Ran": "natively" if record.runtime == "native" else f"in {record.runtime}",
+            **({"Solver version": record.solver_version} if record.solver_version else {}),
+            **({"Image": record.image_digest[:19]} if record.image_digest else {}),
             "Started": f"{record.started_at:%Y-%m-%d %H:%M:%S}",
             "Duration (s)": round(record.duration_s, 2),
             "Result steps": record.steps,

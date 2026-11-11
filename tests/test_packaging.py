@@ -80,7 +80,9 @@ def _channel(root: Path, platform: str, depends: list[str]) -> Path:
     """A local channel holding Puzzle's three packages, as build-packages leaves it."""
     import json
 
-    for subdir, names in ((platform, ["py-slvs", "manifold3d"]), ("noarch", ["puzzle-fem"])):
+    # hidapi is Puzzle's own build on Apple silicon only (ADR 0069).
+    native = ["py-slvs", "manifold3d"] + (["hidapi"] if platform == "osx-arm64" else [])
+    for subdir, names in ((platform, native), ("noarch", ["puzzle-fem"])):
         (root / subdir).mkdir(parents=True)
         pkgs = {f"{n}-1.0-0.conda": {"name": n, "version": "1.0", "build_number": 0,
                                      "md5": "0" * 32, "depends": depends}
@@ -97,7 +99,8 @@ def test_the_installer_is_exactly_the_lock(tmp_path):
     base, pypi = lock.packages(make_installer.BASE, platform)
     assert base, "pixi lock: the app environment is missing"
     # Only Puzzle's own pieces come from PyPI, and the channel has conda packages of them.
-    assert {make_installer._pypi_name(u) for u in pypi} == set(make_installer.OURS)
+    # hidapi comes from PyPI on osx-arm64 only (ADR 0069); the rest everywhere.
+    assert {make_installer._pypi_name(u) for u in pypi} == set(make_installer.OURS) - {"hidapi"}
     channel = _channel(tmp_path / "ch", platform, ["python >=3.12", "numpy"])
     folder = make_installer.write(lock, platform, [str(channel)], tmp_path / "out", "sh")
     lines = (folder / "base.txt").read_text(encoding="utf-8").splitlines()

@@ -172,7 +172,9 @@ def test_tree_groups_are_frames_and_fold_into_one_node(bracket):
     node = folded.nodes[f"group:{group.id}"]
     assert node.label == "Structural"
     heat = next(w for w in folded.wires if w.kind == "data")
-    assert heat.target == node.id and heat.target_port == "in"  # the transfer, rerouted
+    # The transfer, rerouted to the study's own socket on the folded node (ADR 0071).
+    assert heat.target == node.id and heat.target_port.split("::")[0] in studies
+    assert node.port(heat.target_port) is not None
     assert not any(w.source == w.target for w in folded.wires)
 
 
@@ -298,3 +300,45 @@ def test_the_cli_and_the_agent_read_the_same_schematic(bracket, tmp_path, capsys
     carried = {w["carries"] for w in data["wires"] if w["kind"] == "data"}
     assert "temperature, last step, interpolate" in carried
     assert {n["column"] for n in data["nodes"]} == {"Inputs", "Resources", "Models", "Studies"}
+
+
+def test_a_folded_cluster_shows_its_own_ports(tmp_path):
+    """ADR 0071, user operators: a group of Reduce feeding Check folds into one node
+    whose sockets are the cluster's: Reduce's result (wired from the study), Check's open
+    limit, Check's verdict and margin; Reduce's value, used only inside, is hidden."""
+    from uuid import uuid4
+
+    from puzzle.model.schema import Operator, OperatorInput, Project, Study
+
+    p = Project(name="p")
+    study = p.add(Study(name="Load", component=uuid4(), solver="calculix", steps=[]))
+    peak = p.add(
+        Operator(
+            name="Peak",
+            type="reduce",
+            quantity="stress:von_mises",
+            inputs={"result": OperatorInput(source=study.id, port="result")},
+        )
+    )
+    check = p.add(
+        Operator(
+            name="Strength",
+            type="check",
+            inputs={"value": OperatorInput(source=peak.id, port="out")},
+        )
+    )
+    group = p.add(TreeGroup(name="Stress check", section="Operators",
+                            members=[str(peak.id), str(check.id)]))  # fmt: skip
+    folded = schematic.build(p, folded=frozenset({str(group.id)}))
+    node = folded.nodes[f"group:{group.id}"]
+    labels = {(q.side, q.label) for q in node.ports}
+    assert ("in", "Peak: Result") in labels and ("in", "Strength: Limit") in labels
+    assert ("out", "Strength: Verdict") in labels and ("out", "Strength: Margin") in labels
+    assert ("out", "Peak: Value") not in labels and ("in", "Strength: Value") not in labels
+    wire = next(w for w in folded.wires if w.target == node.id and w.kind == "data")
+    assert wire.target_port == f"{peak.id}::result"
+    assert {n.id for n in node.inside} == {str(peak.id), str(check.id)}
+    from puzzle.gui.schematic_view import unfold
+
+    member, port = unfold(node, f"{check.id}::limit")
+    assert member.id == str(check.id) and port == "limit"

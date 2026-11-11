@@ -406,3 +406,33 @@ def test_selecting_a_filter_previews_its_field(window):
     shown = w.viewport.shown["field_values"]
     assert shown["title"].startswith("High stress") and shown["nodes"] > 0
     assert 0 < shown["extrapolated"] < shown["nodes"]  # some values left out, muted
+
+
+def test_a_slice_draws_its_points_in_the_view(window):
+    """ADR 0070 level 2: a Slice's points coloured in the view (here the cantilever's
+    von Mises on a plane across it, half way)."""
+    from puzzle.commands.model import Create
+    from puzzle.gui import operators as gui_ops
+    from puzzle.model.schema import ConstructionGeometry
+
+    w = window
+    study = _study(w)
+    plane = ConstructionGeometry(name="Across", type="plane", origin=(0.05, 0.0, 0.0),
+                                 normal=(1.0, 0.0, 0.0))  # fmt: skip
+    w.submit(Create(kind="construction", data=plane.model_dump(mode="json")))
+    vm = {
+        "name": "VM",
+        "type": "filter",
+        "quantity": "stress:von_mises",
+        "inputs": {"result": {"source": str(study.id), "port": "result"}},
+    }
+    w.submit(Create(kind="operator", data=vm))
+    cut = {
+        "name": "Cut",
+        "type": "slice",
+        "target": str(plane.id),
+        "inputs": {"field": {"source": str(_op(w, "VM").id), "port": "out"}},
+    }
+    w.submit(Create(kind="operator", data=cut))
+    assert gui_ops.preview_points(w, _op(w, "Cut")) > 0
+    assert w.viewport.shown["field_points"] > 0

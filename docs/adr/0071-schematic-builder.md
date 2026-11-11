@@ -1,6 +1,6 @@
 # 0071. The schematic as the primary builder: model values, series and plots, help
 
-- Status: Accepted (2026-11-07)
+- Status: Accepted; built (steps 1-5, 2026-11-10)
 - Date: 2026-11-07
 
 ## Context
@@ -303,5 +303,15 @@ names, units and no raw data on view.
   its elements) before they combine; per-element fields on different meshes refused.
 - Derived results (ADR 0025) were field sources already: their `result` port feeds a
   Filter, whose field the field operators take.
-- Not yet (step 5): a folded cluster's node showing the cluster's own ports.
+- A folded group (a cluster put in, or any tree group) shows its own sockets in place
+  of one In and one Out (`schematic._folded_ports`): every member input wired from
+  outside or left open, every member output wired outside or used by nothing, named
+  "<member>: <port>"; what is wired only inside is hidden. Wires keep their member's
+  port (keyed "<member id>::<port>"), and a wire drawn to or from the folded node goes
+  to that member (`schematic_view.unfold`, the members kept on the node as `inside`).
+  `tests/test_schematic.py`.
+- Step 5 is built: field operators, ParaView's filters (ADR 0070 level 2), user
+  operators (clusters shared as blocks, folded with their own ports), building the model
+  from the schematic (values wired to parameters), live nodes (values, verdicts, small
+  plots, stale states from ADR 0033, the Report).
 

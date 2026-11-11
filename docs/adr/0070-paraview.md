@@ -1,6 +1,6 @@
 # 0070. ParaView beside Puzzle, and its filters inside
 
-- Status: Accepted (2026-11-07); level 1 built, with the command line (2026-11-10)
+- Status: Accepted (2026-11-07); levels 1 and 2 built (2026-11-10)
 - Date: 2026-11-07
 
 ## Context
@@ -145,6 +145,11 @@ Found:
   Calculator (Field formula), Integrate Variables (Reduce's integral), Plot Over Line (a
   Path result tool). This amends decision 4's "form generated from ParaView's own
   property descriptions": no ParaView process, so they work without ParaView (macOS
-  before 14) and in agents' and scripts' runs. Not yet: Stream Tracer and Glyph (they
-  need a vector field port), a surface (not only points) out of Slice and Contour for the
-  view.
+  before 14) and in agents' and scripts' runs. Then (2026-11-10): Stream Tracer
+  (streamlines of a vector result from seeds along a construction path, a table of
+  points with the line and speed; steps 1/200 of the model, VTK's half-cell default
+  stopping at the seed) and Glyph (a vector result's arrows at evenly spread nodes),
+  both taking the study's result and a vector `quantity`; Slice's, Contour's, Stream
+  tracer's and Glyph's points drawn coloured in the view when selected
+  (`gui/operators.preview_points`). Level 2 is built with these; ParaView's other
+  filters (Resample, Warp, Cell to Point, Temporal statistics) are not.

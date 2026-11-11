@@ -1729,6 +1729,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-ng-2.3.3-h31dac16_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hf451053_7.conda
       - pypi: ./
+      - pypi: https://files.pythonhosted.org/packages/4e/9c/9335957cb7e1ca1be997e97afe850f62a9ff0708015048b3871b553eed5c/hidapi-0.15.0-cp312-cp312-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/66/28/6ec4f751be1b5868964eb92925da789c985efdaff5f0a5f85b47cbd87428/manifold3d-3.5.4-cp312-cp312-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/66/46/748381fa23c5fc4020f4bc582e20f2483fae32b05e3b39544495129c943e/py_slvs-1.0.6-cp312-cp312-macosx_11_0_arm64.whl
       win-64:
@@ -5793,6 +5794,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-ng-2.3.3-h31dac16_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hf451053_7.conda
       - pypi: ./
+      - pypi: https://files.pythonhosted.org/packages/4e/9c/9335957cb7e1ca1be997e97afe850f62a9ff0708015048b3871b553eed5c/hidapi-0.15.0-cp312-cp312-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/66/28/6ec4f751be1b5868964eb92925da789c985efdaff5f0a5f85b47cbd87428/manifold3d-3.5.4-cp312-cp312-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/66/46/748381fa23c5fc4020f4bc582e20f2483fae32b05e3b39544495129c943e/py_slvs-1.0.6-cp312-cp312-macosx_11_0_arm64.whl
       win-64:
@@ -9151,6 +9153,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-ng-2.3.3-h31dac16_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hf451053_7.conda
       - pypi: ./
+      - pypi: https://files.pythonhosted.org/packages/4e/9c/9335957cb7e1ca1be997e97afe850f62a9ff0708015048b3871b553eed5c/hidapi-0.15.0-cp312-cp312-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/66/28/6ec4f751be1b5868964eb92925da789c985efdaff5f0a5f85b47cbd87428/manifold3d-3.5.4-cp312-cp312-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/66/46/748381fa23c5fc4020f4bc582e20f2483fae32b05e3b39544495129c943e/py_slvs-1.0.6-cp312-cp312-macosx_11_0_arm64.whl
       win-64:
@@ -51985,6 +51988,10 @@ packages:
   name: py-slvs
   version: 1.0.6
   sha256: 94a6eef93bf51507eaca443a6ec152a0170dbc296717c913c6daf9877fbd2751
+- pypi: https://files.pythonhosted.org/packages/4e/9c/9335957cb7e1ca1be997e97afe850f62a9ff0708015048b3871b553eed5c/hidapi-0.15.0-cp312-cp312-macosx_11_0_arm64.whl
+  name: hidapi
+  version: 0.15.0
+  sha256: 27933e7f3da7007e5e8d0b25bcf48a79a74e802555e496bba2c7d87f8a77cd61
 - pypi: https://files.pythonhosted.org/packages/5f/85/afc20196fea3b0264c6cf61ffcc69386cca26643efb115dcbb45d402a0fd/py_slvs-1.0.6-cp312-cp312-win_amd64.whl
   name: py-slvs
   version: 1.0.6

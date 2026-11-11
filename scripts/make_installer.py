@@ -53,7 +53,8 @@ EXTRA = (
     "scripts",
     "runner",
 )
-OURS = ("puzzle-fem", "py-slvs", "manifold3d")  # Puzzle's channel, for the lock's PyPI ones
+# Puzzle's channel, for the lock's PyPI ones (hidapi on osx-arm64 only, ADR 0069).
+OURS = ("puzzle-fem", "py-slvs", "manifold3d", "hidapi")
 TYPES = {"linux": "sh", "osx": "pkg", "win": "exe"}
 # Signing (step 3) is on only when these are set, as CI does from its secrets once the
 # certificates exist; until then installers are unsigned test builds.
@@ -208,11 +209,11 @@ def _key(rec: dict) -> tuple:
     )
 
 
-def ours(sources: list[str], platform: str) -> list[Package]:
-    """The newest of each of Puzzle's packages in the first channel (a folder or a URL)
-    that has it: a local build first, then the published channel."""
+def ours(sources: list[str], platform: str, names=OURS) -> list[Package]:
+    """The newest of each of Puzzle's packages `names` in the first channel (a folder or
+    a URL) that has it: a local build first, then the published channel."""
     out = []
-    for name in OURS:
+    for name in names:
         for source in sources:
             best = None
             for subdir in (platform, "noarch"):
@@ -301,7 +302,10 @@ def write(lock: Lock, platform: str, sources: list[str], out: Path, kind: str,
     unknown = [u for u in pypi if not any(_pypi_name(u) == n for n in OURS)]
     if unknown:
         raise SystemExit(f"'{BASE}' has PyPI packages with no conda package: {unknown}")
-    added = ours(sources, platform)
+    # Puzzle's own packages for what the lock has from PyPI on this platform (hidapi only
+    # on osx-arm64), and Puzzle itself always.
+    wanted = [n for n in OURS if n == "puzzle-fem" or any(_pypi_name(u) == n for u in pypi)]
+    added = ours(sources, platform, wanted)
     if missing := unmet(added, base):
         raise SystemExit("Puzzle's packages need what the lock lacks:\n  " + "\n  ".join(missing))
     folder = out / platform

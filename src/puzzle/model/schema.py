@@ -2419,7 +2419,7 @@ class Operator(ProjectObject):
                   # ADR 0071 decision 3: curves (operators.series)
                   "divide_by", "subtract", "multiply", "add", "utilisation",
                   "safety_factor", "margin", "normalise", "curve_formula", "field_formula",
-                  "slice", "clip",
+                  "slice", "clip", "stream", "glyph",
                   "contour",
                   "curve_from_table", "over_steps", "at_step", "compare_steps",
                   "envelope", "match_x", "area_under", "slope", "limit_line",

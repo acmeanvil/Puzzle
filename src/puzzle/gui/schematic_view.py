@@ -516,6 +516,16 @@ class Minimap(QGraphicsView):
         self.main.centerOn(self.mapToScene(event.position().toPoint()))
 
 
+def unfold(node, port: str | None):
+    """The member node and port a folded group's port stands for (ADR 0071: a cluster's
+    ports are its members', keyed "<member id>::<port>"); anything else as given."""
+    if node.kind != "group" or not port or "::" not in port:
+        return node, port
+    member, _, key = port.partition("::")
+    inner = next((n for n in getattr(node, "inside", []) if n.id == member), None)
+    return (inner, key) if inner is not None else (node, port)
+
+
 class SchematicPanel(QWidget):
     """The schematic with its bar: add operator, search, state filter, use wires, what
     a change reaches, fit, tidy, export."""
@@ -921,19 +931,21 @@ class SchematicPanel(QWidget):
         target = self._node_under(point, not_item=item)
         if target is None:
             return
-        if target.node.kind == "operator":  # ADR 0062: into one of its inputs
-            self.wire_operator(item.node, port, target.node, target.input_near(point))
+        source, port = unfold(item.node, port)  # a folded cluster: its member's port
+        into, key = unfold(target.node, target.input_near(point))
+        if into.kind == "operator":  # ADR 0062: into one of its inputs
+            self.wire_operator(source, port, into, key)
             return
-        if item.node.kind in ("operator", "parameters") and target.node.kind == "geometry":
-            self.drive_geometry(item.node, port, target.node)  # a history argument
+        if source.kind in ("operator", "parameters") and into.kind == "geometry":
+            self.drive_geometry(source, port, into)  # a history argument
             return
-        if item.node.kind == "operator" and target.node.kind == "study":
-            self.sweep_study(item.node, port, target.node)  # a sweep over it
+        if source.kind == "operator" and into.kind == "study":
+            self.sweep_study(source, port, into)  # a sweep over it
             return
-        if target.node.kind == "study" and item.node.kind == "study":
-            self.make_transfer(item.node, port, target.node)
+        if into.kind == "study" and source.kind == "study":
+            self.make_transfer(source, port, into)
             return
-        self.link(item.node, target.node)  # any other reference (ADR 0071 decision 8)
+        self.link(source, into)  # any other reference (ADR 0071 decision 8)
 
     def source_of(self, node: sch.Node, port: str) -> tuple[str | None, str]:
         """(object id, port) an operator reads for a node's output: a results node's

@@ -135,5 +135,101 @@ def contour_op(ctx, op) -> dict[str, Any]:
     return {"out": _points_table(surface.points, values, fv.item.unit, name)}
 
 
+# --- vectors: Stream Tracer and Glyph -------------------------------------------------
+
+
+def _vectors(ctx, op):
+    """The vector field `op.quantity` names (its field: "velocity", "displacement"), at
+    the step picked, as a VTK grid with point vectors "vectors"; its name and kind."""
+    from puzzle.operators.evaluate import ResultValue, _input
+    from puzzle.post.vtk import to_grid
+
+    got = _input(ctx, op, "result")
+    if not isinstance(got, ResultValue):
+        raise PuzzleError(f"'{op.name}': wire a study's result into it", code="missing_input")
+    name = (op.quantity or "velocity").split(":", 1)[0]
+    steps = [s for s in got.results.steps if name in s.fields]
+    if not steps:
+        raise PuzzleError(f"'{op.name}': {got.label} has no {name}", code="not_found")
+    step = steps[min(op.step, len(steps) - 1)] if op.step >= 0 else steps[op.step]
+    field = step.fields[name]
+    if field.values.ndim != 2 or field.values.shape[1] != 3:
+        raise PuzzleError(f"'{op.name}': {name} isn't a vector", code="invalid")
+    grid = to_grid(got.mesh, step)
+    if name in grid.cell_data and name not in grid.point_data:  # CFD: per cell
+        grid = grid.cell_data_to_point_data()
+    if name not in grid.point_data:
+        raise PuzzleError(f"'{op.name}': {name} isn't on the mesh's nodes", code="invalid")
+    grid.point_data["vectors"] = np.asarray(grid.point_data[name], float)
+    item = next((i for i in got.items if i.field == name), None)
+    return grid, name, getattr(item, "unit", None)
+
+
+def _count(ctx, op, default: int) -> int:
+    from puzzle.operators.evaluate import _input, _number
+
+    got = _number(op, _input(ctx, op, "seeds"), "seeds")
+    return max(1, int(round(got.value))) if got is not None else default
+
+
+def stream_op(ctx, op) -> dict[str, Any]:
+    """Stream Tracer: streamlines of a vector field from seeds along a construction path
+    (`target`), as a table of their points: x, y, z, the line, its speed there."""
+    import pyvista as pv
+
+    from puzzle.model.schema import ConstructionGeometry
+    from puzzle.operators.evaluate import Table
+
+    grid, name, kind = _vectors(ctx, op)
+    c = ctx.project.objects.get(op.target) if op.target else None
+    if not isinstance(c, ConstructionGeometry) or c.type != "path":
+        raise PuzzleError(f"'{op.name}': pick the line its seeds lie on (a construction "
+                          "path)", code="missing_input")  # fmt: skip
+    start, end = (np.asarray(v, float) for v in c.frame(ctx.project))
+    seeds = pv.Line(start, end, resolution=max(1, _count(ctx, op, 10) - 1))
+    # Steps in length, 1/200 of the model, its bounds around it: VTK's default (half a
+    # cell) stopped at the seed on coarse meshes, and pyvista's minimum step (0.01 in
+    # the unit) over the initial one stops it at once.
+    h = grid.length / 200
+    lines = grid.streamlines_from_source(seeds, vectors="vectors",
+                                         integration_direction="both",
+                                         max_length=4 * grid.length, step_unit="l",
+                                         initial_step_length=h, min_step_length=h / 10,
+                                         max_step_length=10 * h, max_steps=20000)  # fmt: skip
+    if lines.n_points == 0:
+        raise PuzzleError(f"'{op.name}': no streamline starts on its line (outside the "
+                          "flow, or the field is zero there)", code="invalid")  # fmt: skip
+    speed = np.linalg.norm(np.asarray(lines.point_data["vectors"]), axis=1)
+    ids = (np.asarray(lines.point_data["SeedIds"]) if "SeedIds" in lines.point_data
+           else np.zeros(lines.n_points, int))  # fmt: skip
+    rows = [[*pt, int(i), float(v)] for pt, i, v in
+            zip(np.asarray(lines.points).tolist(), ids.tolist(), speed, strict=True)]  # fmt: skip
+    return {"out": Table(["x", "y", "z", "line", f"{name} magnitude"], rows,
+                         ["length", "length", "length", None, kind])}  # fmt: skip
+
+
+def glyph_op(ctx, op) -> dict[str, Any]:
+    """Glyph: a vector field's arrows as a table (at most `seeds` of the nodes, evenly
+    spread): x, y, z, the vector's components and its size, for plots and the view's
+    pins."""
+    from puzzle.operators.evaluate import Table
+
+    grid, name, kind = _vectors(ctx, op)
+    every = max(1, grid.n_points // _count(ctx, op, 200))
+    pts = np.asarray(grid.points)[::every]
+    vec = np.asarray(grid.point_data["vectors"])[::every]
+    size = np.linalg.norm(vec, axis=1)
+    rows = [[*pt, *v, float(m)] for pt, v, m in zip(pts.tolist(), vec.tolist(), size,
+                                                     strict=True)]  # fmt: skip
+    columns = ["x", "y", "z", f"{name}_x", f"{name}_y", f"{name}_z", f"{name} magnitude"]
+    return {"out": Table(columns, rows, ["length"] * 3 + [kind] * 4)}
+
+
 def evaluators() -> dict:
-    return {"slice": slice_op, "clip": clip_op, "contour": contour_op}
+    return {
+        "slice": slice_op,
+        "clip": clip_op,
+        "contour": contour_op,
+        "stream": stream_op,
+        "glyph": glyph_op,
+    }

@@ -187,9 +187,9 @@ def main(argv: list[str] | None = None) -> int:
         run([str(puzzle), "--help"], env)
         run([str(python), "-c", "import puzzle.gui.theme, py_slvs.slvs, manifold3d, OCP, gmsh;"
              " print('imports ok')"], env)  # fmt: skip
-        if "arm64" not in args.installer.name:  # no conda-forge hidapi there yet (ADR 0069)
-            run([str(python), "-c", "import hid; print('3D mouse: hidapi lists',"
-                 " len(hid.enumerate()), 'devices')"], env)  # fmt: skip
+        # hidapi on every platform: Puzzle's own build of it on Apple silicon (ADR 0069).
+        run([str(python), "-c", "import hid; print('3D mouse: hidapi lists',"
+             " len(hid.enumerate()), 'devices')"], env)  # fmt: skip
         # ParaView (ADR 0070): a view written by the installed Puzzle, run off screen.
         run([str(python), "-c", PARAVIEW, str(work / "paraview")], env)
         if args.shortcuts:

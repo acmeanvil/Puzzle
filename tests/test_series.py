@@ -403,3 +403,40 @@ def test_a_field_from_another_mesh_is_mapped_first():
     inside = np.isfinite(got.values)
     assert inside.any()
     assert got.values[inside] == pytest.approx(0.0, abs=1e-3 * MPA)
+
+
+def test_stream_tracer_and_glyph_on_a_vector_field(setup):
+    """Stream tracer and Glyph (ADR 0070 level 2) on a uniform velocity of 2 m/s along x
+    over test_operators' two tets: the streamlines from a seed line inside run along x
+    at 2 m/s; the glyphs' arrows are the field at the nodes."""
+    from test_operators import IDS
+
+    from puzzle.model.schema import ConstructionGeometry
+    from puzzle.results.model import Field
+
+    p, study, steel, path, store = setup
+    ev._READ.clear()  # runs are cached by id: this one gains a field
+    for results in store.results.values():
+        for s in results.steps:
+            s.fields["velocity"] = Field("velocity", "node", ["x", "y", "z"], IDS,
+                                         np.tile([2.0, 0.0, 0.0], (len(IDS), 1)))  # fmt: skip
+    line = p.add(ConstructionGeometry(name="Seeds", type="path", start=(0.2, 0.1, 0.1),
+                                      end=(0.2, 0.15, 0.1)))  # fmt: skip
+    trace = p.add(Operator(name="Flow", type="stream", quantity="velocity", target=line.id,
+                           inputs={"result": wire(study, "result"),
+                                   "seeds": OperatorInput(value=Quantity(value=3))}))  # fmt: skip
+    got = value(p, store, trace)
+    frame = got.frame
+    assert frame.height > 3
+    speed = frame[frame.columns[-1]].to_numpy()
+    assert speed == pytest.approx(2.0, rel=1e-6)
+    assert np.ptp(frame["x"].to_numpy()) > 0.1  # it travelled along x
+    assert np.ptp(frame["z"].to_numpy()) == pytest.approx(0.0, abs=1e-9)
+    arrows = value(p, store, p.add(Operator(name="Arrows", type="glyph", quantity="velocity",
+                                            inputs={"result": wire(study, "result")})))  # fmt: skip
+    assert arrows.frame["velocity_x"].to_numpy() == pytest.approx(2.0)
+    no_line = p.add(Operator(name="Lost", type="stream", quantity="velocity",
+                             inputs={"result": wire(study, "result")}))  # fmt: skip
+    with pytest.raises(PuzzleError, match="construction path"):
+        value(p, store, no_line)
+    ev._READ.clear()

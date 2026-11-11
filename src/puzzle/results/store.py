@@ -64,6 +64,10 @@ SCHEMAS = {
             # The sweep point as JSON (ADR 0018), e.g. {"Bar/Body": "Copper"}; added to
             # older stores by schema merge, where earlier runs read it as null.
             ("point", pa.string()),
+            # Which solver ran (ADR 0072): its version, and a container's image id;
+            # null for runs stored before, or a solver that couldn't be named.
+            ("solver_version", pa.string()),
+            ("image_digest", pa.string()),
         ]
     ),
     "meshes": pa.schema(
@@ -145,6 +149,8 @@ class RunRecord:
     steps: int
     recorded_at: datetime
     point: str | None = None  # the sweep point as JSON (ADR 0018), labels as people read them
+    solver_version: str | None = None  # ADR 0072: the solver that ran, as it names itself
+    image_digest: str | None = None  # a container run's image id
 
     def point_labels(self) -> dict[str, str]:
         import json
@@ -187,9 +193,12 @@ class ResultStore:
         started_at: datetime,
         duration_s: float,
         point: dict[str, str] | None = None,
+        solver_version: str | None = None,
+        image_digest: str | None = None,
     ) -> str:
         """Store a completed run and its mesh; return the new run id. `point`: the sweep
-        point it ran (readable labels), if any."""
+        point it ran (readable labels), if any; the solver's version and image id when
+        known."""
         run_id = uuid.uuid4().hex
         self._check_format(create=True)
         mid = self.write_mesh(mesh)
@@ -210,6 +219,8 @@ class ResultStore:
             "steps": len(results.steps),
             "recorded_at": _now(),
             "point": json.dumps(point) if point else None,
+            "solver_version": solver_version,
+            "image_digest": image_digest,
         }
         self._append("runs", pa.Table.from_pylist([record], schema=SCHEMAS["runs"]))
         return run_id

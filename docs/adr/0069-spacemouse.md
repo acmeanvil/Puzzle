@@ -179,5 +179,11 @@ Found:
   its Fit, Top, Right and Front keys don't yet make those views: each numbered key's
   first press is written to the log ("3D mouse: SpaceMouse Enterprise key 12
   pressed"), and one press of each maps them.
-- Not yet: the Enterprise's key names (from that log), an Apple-silicon hidapi (Puzzle's
-  channel), the axis signs checked on spacenavd.
+- Apple silicon (2026-11-10): hidapi from PyPI's arm64 wheel in the lock
+  (`feature.gui.target.osx-arm64.pypi-dependencies`), and Puzzle's own conda package of
+  it for the installer (`packaging/recipes/hidapi`, cython-hidapi's sdist, built on
+  osx-arm64 only; `make_installer` adds Puzzle's packages per platform from what the
+  lock has from PyPI there); the smoke test imports it on every platform. Not built
+  here (Windows): the Packages workflow builds and the Installers workflow checks it.
+- Not yet: the Enterprise's key names (from that log), the axis signs checked on
+  spacenavd.

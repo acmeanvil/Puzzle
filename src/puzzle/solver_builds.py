@@ -424,7 +424,8 @@ def as_dict(s: Status) -> dict:
 @dataclass
 class SolverRow:
     """One solver as the Solvers page shows it: `how` is native, container or missing;
-    `where` the program, image or reason; `note` anything else (PARDISO's state)."""
+    `where` the program, image or reason; `note` anything else (PARDISO's state). `how`
+    may also be machine: Puzzle's Linux machine (ADR 0068 step 5)."""
 
     solver: str
     name: str
@@ -445,6 +446,11 @@ def solvers() -> list[SolverRow]:
             runtime = runtime_for(solver)
         except (SolverNotFound, ValueError) as exc:
             rows.append(SolverRow(solver, name, "missing", str(exc)))
+            continue
+        from puzzle.jobs.machine import WslRuntime
+
+        if isinstance(runtime, WslRuntime):  # ADR 0068 step 5
+            rows.append(SolverRow(solver, name, "machine", f"WSL distribution {runtime.distro}"))
             continue
         if isinstance(runtime, ContainerRuntime):
             rows.append(SolverRow(solver, name, "container",

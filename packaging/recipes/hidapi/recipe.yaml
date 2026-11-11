@@ -1,0 +1,47 @@
+# hidapi's Python binding (the 3D mouse, ADR 0069) for Apple silicon, where conda-forge
+# has none yet; elsewhere conda-forge's hidapi is used. Built from cython-hidapi's sdist,
+# which bundles hidapi's C library (IOKit on macOS, no libusb).
+context:
+  name: hidapi
+  version: "0.15.0"
+
+package:
+  name: ${{ name }}
+  version: ${{ version }}
+
+source:
+  url: https://files.pythonhosted.org/packages/source/h/hidapi/hidapi-${{ version }}.tar.gz
+  sha256: ecbc265cbe8b7b88755f421e0ba25f084091ec550c2b90ff9e8ddd4fcd540311
+
+build:
+  number: 0
+  skip:
+    - not (osx and arm64)
+  script:
+    - ${{ PYTHON }} -m pip install . -vv --no-deps --no-build-isolation
+
+requirements:
+  build:
+    - ${{ compiler('c') }}
+    - ${{ stdlib('c') }}
+  host:
+    - python
+    - pip
+    - setuptools
+    - wheel
+    - cython
+  run:
+    - python
+
+tests:
+  - python:
+      imports:
+        - hid
+      pip_check: false
+  - script:
+      - python -c "import hid; print('devices', len(hid.enumerate()))"
+
+about:
+  homepage: https://github.com/trezor/cython-hidapi
+  license: GPL-3.0-or-later OR BSD-3-Clause
+  summary: A Cython interface to the hidapi library (USB HID devices)

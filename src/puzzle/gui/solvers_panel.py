@@ -18,7 +18,12 @@ from PySide6.QtWidgets import QFormLayout, QHBoxLayout, QLabel, QPushButton, QVB
 
 from puzzle.gui.theme import role
 
-HOW = {"native": "Native", "container": "In a container", "missing": "Not available"}
+HOW = {
+    "native": "Native",
+    "container": "In a container",
+    "missing": "Not available",
+    "machine": "In Puzzle's Linux machine",
+}
 STATE = {
     "built": "Built: solves use it",
     "building": "Being built",
@@ -77,8 +82,13 @@ class SolversPanel(QWidget):
         self.build.setToolTip("Compile CalculiX with Intel MKL's PARDISO on this computer "
                               "(a few minutes, in the background)")  # fmt: skip
         self.build.clicked.connect(self._build)
+        self.repair = QPushButton("Repair a solver environment…")
+        self.repair.setToolTip("Reinstall one of the installed app's solver environments "
+                               "from its package list (downloads its packages again)")  # fmt: skip
+        self.repair.clicked.connect(self._repair)
         row = QHBoxLayout()
         row.addWidget(self.build)
+        row.addWidget(self.repair)
         row.addStretch()
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 8, 0, 0)
@@ -125,6 +135,39 @@ class SolversPanel(QWidget):
 
         threading.Thread(target=work, name="solvers-look", daemon=True).start()
 
+    def _repair(self, name: str | None = None) -> bool:
+        """Pick an environment and reinstall it on a thread (ADR 0068 decision 6)."""
+        from puzzle import solver_repair
+
+        why = solver_repair.why_not()
+        if why:
+            _STATE["line"] = f"Repair: {why}"
+            self._show()
+            return False
+        if name is None:
+            from PySide6.QtWidgets import QInputDialog
+
+            names = [e.name for e in solver_repair.environments()]
+            name, ok = QInputDialog.getItem(self, "Repair a solver environment",
+                                            "Environment", names, 0, False)  # fmt: skip
+            if not ok:
+                return False
+
+        def work() -> None:
+            def say(line: str) -> None:
+                _STATE["line"] = line
+
+            try:
+                solver_repair.repair(name, say=say)
+            except solver_repair.RepairError as exc:
+                _STATE["line"] = str(exc)
+            _STATE["rows"] = None
+
+        threading.Thread(target=work, name="solver-repair", daemon=True).start()
+        _STATE["line"] = f"repairing {name}…"
+        self._show()
+        return True
+
     def _build(self) -> None:
         if start_build():
             _STATE["line"] = "starting the build"
@@ -152,7 +195,9 @@ class SolversPanel(QWidget):
         state = "building" if building() else (status.state if status else "ready")
         detail = "" if building() or status is None else status.detail
         self.pardiso.setText(STATE[state] + (f": {detail}" if detail and state != "built" else ""))
-        self.line.setText(_STATE["line"] if building() or state == "failed" else "")
+        line = _STATE["line"]
+        self.line.setText(line if building() or state == "failed" or "repair" in line.lower()
+                          or "reinstall" in line else "")  # fmt: skip
         self.build.setEnabled(state in ("ready", "failed", "built"))
         self.build.setText("Build it again" if state == "built" else
                            "Build CalculiX with PARDISO now")  # fmt: skip

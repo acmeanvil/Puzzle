@@ -288,6 +288,35 @@ platform or a list on demand; signing and notarization ready to switch on.
   no quotes (CalculiX.h compares it to pick FORTRAN()'s name mangling), and 2.23's
   Makefile.inc lists mafillmm as .c beside its .f with only the .f there.
 
+**Step 5, begun (2026-11-10): Puzzle's Linux machine on Windows, and Repair.**
+
+- `jobs/machine.py`: each solver's Linux environment a WSL 2 distribution of Puzzle's
+  own, `puzzle-<solver>`, imported (`wsl --import`) into Puzzle's user folder from a root
+  file system: one exported once from the solver's image (`install_from_image`: Docker
+  or Podman needed for that only) or a shipped tarball (`install_from_tarball`). The
+  image's entrypoint and ENV are kept beside it (`machine.json`, since `wsl --exec`
+  applies no ENV), so a solve runs as in its container: `wsl -d puzzle-<solver> --cd
+  /mnt/c/... --exec env VARS... <entrypoint> <command>`, the run folder through /mnt
+  (no staging yet), the thread variables per run. `runtime_for` takes it on Windows
+  when a solver's container can't run (no engine, or it is off) and before a native
+  fallback, or always with `PUZZLE_<SOLVER>_RUNTIME=wsl`; WSL is asked nothing unless
+  Puzzle has made a distribution. CLI `puzzle machine list|install|remove`; the Solvers
+  page says "In Puzzle's Linux machine". `tests/test_machine.py` (without WSL);
+  `tests/integration/test_machine_solve.py` (`PUZZLE_MACHINE_TESTS=1`: Elmer's image
+  imported, the cantilever solved there against the container) passed on 2026-11-11:
+  the tip deflection 1.520732900e-03 m in both, every printed digit, 18 s in all.
+- Repair (decision 6, `solver_repair.py`): the installed app keeps each environment's
+  exact package list (`conda-meta/initial-state.explicit.txt`) and conda; Repair moves
+  the environment aside, rebuilds it from that list (`conda create --file`, the same
+  packages downloaded again: the installer clears its cache) and puts the old one back
+  if conda fails. Settings > Solvers' Repair a solver environment…, CLI `puzzle solvers
+  --repair ENV`; in a pixi checkout it says `pixi install -e <name>`.
+  `tests/test_solver_repair.py` (a stand-in conda).
+- Not yet: the installer shipping the solvers' root file systems (so nothing needs
+  Docker even once) and installing them in its background step; staging the case into
+  the distribution's own disk through the job runner, as decision 4 says (/mnt is
+  slower for many small files); WSL turned on by the installer; Lima on macOS.
+
 ## Decided (2026-11-05, maintainer)
 
 - **Signing:** certificates are in the works (an Apple Developer ID and Windows code

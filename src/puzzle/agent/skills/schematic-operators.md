@@ -122,7 +122,10 @@ field into a number (its maximum, where it is).
 ParaView's filters, run on VTK in Puzzle (no ParaView needed): Slice (a field on a
 construction plane, `target`, as a table of points x, y, z and the value), Clip (a field
 kept on one side of the plane, `keep` above = the side the normal faces; still a field),
-Contour (where a field takes a wired `level`, as a table of points). By ParaView's other
+Contour (where a field takes a wired `level`, as a table of points), Stream tracer
+(a study's `result` wired in, a vector `quantity` such as "velocity", seeds along a
+construction path `target`, their count wired as `seeds`: the streamlines' points with
+speed) and Glyph (a vector result's arrows at up to `seeds` nodes). By ParaView's other
 names: Threshold is Filter, Calculator is Field formula, Integrate Variables is Reduce's
 integral, Plot Over Line is a Path result tool.
 

@@ -397,6 +397,9 @@ def _run_study(
     run_id = None
     if store is not None:
         begin("store")
+        from puzzle.jobs.versions import identify
+
+        version, digest = identify(study.solver)  # ADR 0072: which solver ran
         run_id = store.write_run(
             run_key=run_key,
             study_id=str(study.id),
@@ -408,6 +411,8 @@ def _run_study(
             started_at=started,
             duration_s=(datetime.now(UTC) - started).total_seconds(),
             point=_point[1] if _point else None,
+            solver_version=version,
+            image_digest=digest,
         )
         lap("store")
         store.write_progress(run_id, record.events)

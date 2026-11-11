@@ -66,7 +66,8 @@ Other items:
   882,309-equation model). The container streams; for the native fallback, follow
   `fort.6` in run_aster's temporary folder, or run Code_Aster's Python directly (new).
   **Built (2026-11-10):** natively on Windows, `CodeAsterProgress.poll` follows the
-  fort.6 of the newest `%TEMP%un_aster__*` folder made since its job started (claimed,
+  fort.6 of the newest `%TEMP%
+un_aster__*` folder made since its job started (claimed,
   so two jobs in one Puzzle don't share one) and ignores stdout while it does, so no
   line counts twice. A plastic bar natively: its increments and iterations reach
   progress.jsonl during the solve (2.1-2.8 s into a 3.5 s solve), not at its end.
@@ -81,6 +82,7 @@ Other items:
 - Publish the images (ghcr.io); none are published yet (0007, 0013).
 - Record the solver version and image digest with each run; images write
   `puzzle-solver-version` but the store keeps neither (0007).
+  **Built (2026-11-10):** `jobs/versions.py` names the solver each run used (a container's image id and the version its image writes; a native run's package version from conda-meta; a PARDISO build as built here; the machine's source image), kept in the runs table (`solver_version`, `image_digest`, merged into older stores) and shown in the run's Properties and `puzzle runs`.
 - A Code_Aster image for arm64 (needs a source build) (0013).
 - A CalculiX image with PARDISO (0051); PARDISO or PaStiX on Apple silicon and Windows (0051).
 - The job runner on Windows: it runs solves in-process when the OS isn't POSIX
@@ -108,9 +110,12 @@ Other items:
 - Puzzle's own Linux machine (WSL2 import on Windows, Lima on macOS) with the non-native
   solvers, through the runner, started on demand and stopped when idle; a one-prompt WSL
   enablement on Windows (0068, 0013).
+  **Begun (2026-11-10):** Windows' WSL 2 machine and its runtime (ADR 0068 step 5); the shipped root file systems, staging and Lima are still to do.
 - CalculiX PARDISO built on the user's machine after install (0068 step 4, 0051).
+  **Built (2026-11-10)** (ADR 0068 step 4).
 - A Solvers page in Settings with Repair (0068). Side-by-side releases, a launcher, a
   release-feed check (0068). Licences in `licenses/`, Help > Licences, the GPL source offer (0068).
+  **Built (2026-11-10):** the Solvers page and Repair (ADR 0068); side-by-side releases and the launcher still to do.
 - Partly: signed and notarized installers; the workflow is in place, certificates pending (0068).
 - The same solver environments on remote hosts via pixi (0068). A web installer, AppImage
   (0068). Faster installs (13 min on an Intel Mac) (0068).
@@ -392,6 +397,7 @@ The decision and its implementation strategy are ADR 0076.
   forces on coarse meshes (0046).
 - ParaView: `puzzle paraview`; Open in ParaView from a run's right-click; level 2,
   ParaView filters as Puzzle objects; client-server mode for large results (0070).
+  **Built (2026-11-10)** (ADR 0070).
 
 ### 8. Schematic and operators
 
@@ -410,6 +416,7 @@ The decision and its implementation strategy are ADR 0076.
   the schematic (numbers wired into a feature's value, a study dragged out of a component);
   partly, live nodes ("evaluate up to here", a Report node); Plot of any number of series
   (four now) (0071).
+  **Built (2026-11-10)** (ADR 0071 step 5).
 
 ### 9. Agent and MCP
 

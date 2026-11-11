@@ -142,6 +142,9 @@ class Node:
     help: str = ""  # an operator's help card as text (ADR 0071): purpose, example, ports
     path: str = ""  # a feature's place in its component ("physics.0.features.1")
     sketch: list = field(default_factory=list)  # a curve's small plot: lines of (x, y) in 0..1
+    # A folded group's nodes (ADR 0071: a cluster's ports are theirs, keyed
+    # "<member id>::<port>"), for the view to wire to the member a port belongs to.
+    inside: list = field(default_factory=list)
 
     def port(self, key: str) -> Port | None:
         return next((p for p in self.ports if p.key == key), None)
@@ -842,6 +845,38 @@ def _folder(path: str) -> str:
     return "" if parent == "." else parent
 
 
+def _folded_ports(inside, wires, held: set) -> list:
+    """A folded group's sockets (ADR 0071: a cluster as one block): every member input
+    wired from outside or left open, every member output wired outside or used by
+    nothing, named "<member>: <port>" (the port's own name when one member). Inputs and
+    outputs wired only within the group are hidden."""
+    into = {(w.target, w.target_port): w.source in held for w in wires if w.kind == "data"
+            and w.target in held}  # fmt: skip
+    outside_in = {(w.target, w.target_port) for w in wires if w.kind == "data"
+                  and w.target in held and w.source not in held}  # fmt: skip
+    used = {(w.source, w.source_port) for w in wires if w.kind == "data" and w.source in held}
+    used_out = {(w.source, w.source_port) for w in wires if w.kind == "data"
+                and w.source in held and w.target not in held}  # fmt: skip
+    one = len(inside) == 1
+    ports = []
+    for n in inside:
+        for port in n.ports:
+            key = (n.id, port.key)
+            if port.side == "in":
+                show = key in outside_in or key not in into
+            else:
+                show = key in used_out or key not in used
+            if show:
+                label = port.label if one else f"{n.label}: {port.label}"
+                ports.append(Port(f"{n.id}::{port.key}", label, port.side, port.carries,
+                                  port.type, port.help))  # fmt: skip
+    if not any(p.side == "in" for p in ports):
+        ports.insert(0, Port("in", "In", "in"))  # still something to draw a use wire to
+    if not any(p.side == "out" for p in ports):
+        ports.append(Port("out", "Out", "out"))
+    return ports
+
+
 def _feature_id(comp: Component, path: str) -> str:
     return f"feature:{comp.id}:{path}"
 
@@ -988,13 +1023,19 @@ def _groups(project: Project, out: Schematic, folded: frozenset[str]) -> None:
         node = Node(f"group:{gid}", "group", min(n.column for n in inside), g.name,
                     subtitle=f"{len(inside)} items", object=gid,
                     state=worst(n.state for n in inside))  # fmt: skip
-        node.ports = [Port("in", "In", "in"), Port("out", "Out", "out")]
+        node.ports = _folded_ports(inside, out.wires, set(held))
+        node.inside = inside
         for w in out.wires:
+            if w.source in held and w.target in held:
+                continue  # inside the fold: dropped below
             if w.source in held:
-                w.source, w.source_port = node.id, "out" if w.kind == "data" else ""
+                w.source, w.source_port = node.id, (f"{w.source}::{w.source_port}"
+                                                    if w.kind == "data" else "")  # fmt: skip
             if w.target in held:
-                w.target, w.target_port = node.id, "in" if w.kind == "data" else ""
-        out.wires = [w for w in out.wires if w.source != w.target]
+                w.target, w.target_port = node.id, (f"{w.target}::{w.target_port}"
+                                                    if w.kind == "data" else "")  # fmt: skip
+        out.wires = [w for w in out.wires if not (w.source in held or w.target in held)
+                     and w.source != w.target]  # fmt: skip
         for m in held:
             del out.nodes[m]
         out.nodes[node.id] = node

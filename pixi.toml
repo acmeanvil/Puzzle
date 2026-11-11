@@ -82,7 +82,8 @@ paraview = ">=6.2"  # Open in ParaView, and its filters (ADR 0070)
 vtk-base = { version = "==9.7.0", build = "*_0" }
 
 # A 3D mouse read directly (ADR 0069). conda-forge builds hidapi everywhere but
-# osx-arm64 so far; there Puzzle runs without one (Settings > 3D mouse says why).
+# osx-arm64 so far; there PyPI's wheel, and Puzzle's own conda package of it in the
+# installer (packaging/recipes/hidapi).
 [feature.gui.target.linux-64.dependencies]
 hidapi = ">=0.14"
 
@@ -93,6 +94,9 @@ hidapi = ">=0.14"
 hidapi = ">=0.14"
 
 [feature.gui.target.win-64.dependencies]
+hidapi = ">=0.14"
+
+[feature.gui.target.osx-arm64.pypi-dependencies]
 hidapi = ">=0.14"
 
 # One feature per native solver.

@@ -234,6 +234,32 @@ SERIES_TYPES = (
         ("target", "keep"),
     ),
     OperatorType(
+        "stream",
+        "Stream tracer",
+        "Results",
+        "Streamlines of a vector result (velocity) from seeds along a construction path, "
+        "as a table of their points with the speed, as ParaView's Stream Tracer.",
+        (
+            PortSpec("result", "Result", ("result",)),
+            PortSpec("seeds", "Seeds", ("number",), required=False, typed="number"),
+        ),
+        (PortSpec("out", "Points", ("table",)),),
+        ("quantity", "target", "step"),
+    ),
+    OperatorType(
+        "glyph",
+        "Glyph",
+        "Results",
+        "A vector result's arrows (at most Arrows of the nodes, evenly spread) as a table "
+        "of points, components and sizes, as ParaView's Glyph.",
+        (
+            PortSpec("result", "Result", ("result",)),
+            PortSpec("seeds", "Arrows", ("number",), required=False, typed="number"),
+        ),
+        (PortSpec("out", "Points", ("table",)),),
+        ("quantity", "step"),
+    ),
+    OperatorType(
         "contour",
         "Contour",
         "Results",
@@ -1053,6 +1079,8 @@ ALIASES = {
     "slice": ("cut plane", "section plane", "paraview slice"),
     "clip": ("half model", "cut away", "paraview clip"),
     "report": ("summary", "document", "write up", "calculation report", "html"),
+    "stream": ("streamlines", "stream tracer", "pathlines", "flow lines", "paraview stream"),
+    "glyph": ("arrows", "vector plot", "quiver", "paraview glyph"),
     "contour": ("iso-surface", "isosurface", "isoline", "level set", "paraview contour"),
     "field_formula": ("field expression", "result calculator", "calculator", "field math",
                       "derived field", "user defined result"),
@@ -1150,6 +1178,8 @@ EXAMPLES = {
     "slice": "Von Mises on a construction plane across a nozzle's wall → its points' values.",
     "clip": "Temperature kept above a plane at the weld → its largest value there (Reduce).",
     "contour": "Von Mises at 250 MPa → the points where the plate yields.",
+    "stream": "Velocity in a channel from ten seeds across its inlet → the lines the flow takes.",
+    "glyph": "Velocity at 200 nodes → arrows to plot, or pin in the view.",
     "field_formula": "Von Mises at the last step minus the first (f - g), or f / 250 MPa: "
     "the change, or the utilisation, shown on the model.",
     "over_steps": "A result tool's displacement in a transient run → displacement against time.",

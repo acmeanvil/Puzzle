@@ -130,6 +130,8 @@ def show(window, op) -> None:
     # ADR 0062: a Filter's field, and ADR 0071 step 5: a field operator's, on its mesh.
     if op.type == "filter" or first_type(op, window.session.project) == "field":
         preview_field(window, op)
+    if op.type in POINT_OPERATORS:  # ADR 0070 level 2: their points coloured in the view
+        preview_points(window, op)
     if op.type == "script":  # ADR 0062 phase 4: its code in a box of its own
         from puzzle.operators.scripts import imports, missing
 
@@ -361,6 +363,34 @@ def preview_field(window, op) -> bool:
     return True
 
 
+# Operators whose table is points with a value (ParaView's filters, ADR 0070 level 2).
+POINT_OPERATORS = ("slice", "contour", "stream", "glyph")
+
+
+def preview_points(window, op) -> int:
+    """Slice's, Contour's, Stream tracer's or Glyph's points drawn in the 3D view,
+    coloured by their last column (in display units, with the legend). Returns how
+    many."""
+    from puzzle.model.units import DIMENSIONS
+    from puzzle.operators import evaluate as ev
+
+    try:
+        ctx = ev.Context(window.session.project, window._store(), root=window.session.root)
+        got = ev.value(ctx, op)
+    except PuzzleError as exc:
+        window.statusBar().showMessage(exc.message, 8000)
+        return 0
+    if not isinstance(got, ev.Table) or not {"x", "y", "z"} <= set(got.columns):
+        return 0
+    last = got.columns[-1]
+    kind = dict(zip(got.columns, got.kinds, strict=False)).get(last)
+    points = got.frame.select(["x", "y", "z"]).to_numpy()
+    values = got.frame[last].to_numpy() if got.frame[last].dtype.is_numeric() else None
+    unit = DIMENSIONS[kind][1] if kind in DIMENSIONS else ""
+    window.viewport.show_field_points(points, values, unit=unit, bar=values is not None)
+    return len(points)
+
+
 def preview(window, op) -> int:
     """A Preview operator's table drawn in the 3D view (ADR 0064A row I1): each row's
     x, y, z pinned with its `column`'s value as the label (in display units), at most
@@ -399,6 +429,12 @@ def choices(window, op, path: str):
         from puzzle.model.schema import CoordinateSystem
 
         return [("Global", None)] + [(c.name, str(c.id)) for c in project.of_type(CoordinateSystem)]
+    if path == "target" and op.type == "stream":  # its seeds' line: a construction path
+        from puzzle.model.schema import ConstructionGeometry
+
+        paths = [(c.name, str(c.id)) for c in project.of_type(ConstructionGeometry)
+                 if c.type == "path"]  # fmt: skip
+        return paths or [("No construction path yet: make one (Model > Construction)", None)]
     if path == "target" and op.type in ("grid", "slice", "clip"):
         from puzzle.model.schema import ConstructionGeometry
 

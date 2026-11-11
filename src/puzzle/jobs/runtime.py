@@ -420,6 +420,14 @@ def _runtime_for(solver: str) -> Runtime:
     native = NativeRuntime(search_path=os.environ.get("PUZZLE_SOLVER_PATH"))
     if kind == "native":
         return native
+    if kind == "wsl":  # Puzzle's Linux machine (ADR 0068 step 5)
+        from puzzle.jobs import machine
+
+        found = machine.runtime(solver)
+        if found is None:
+            raise SolverNotFound(f"no Linux machine for {solver}: `puzzle machine install "
+                                 f"{solver}` makes one")  # fmt: skip
+        return found
     image = os.environ.get(f"PUZZLE_{key}_IMAGE") or DEFAULT_IMAGES.get(solver)
     caches = (CONTAINER_CACHES[solver],) if solver in CONTAINER_CACHES else ()
     if kind in ENGINES:
@@ -433,10 +441,21 @@ def _runtime_for(solver: str) -> Runtime:
             for container in containers:
                 if container.available(executable or ""):
                     return container
+            if (vm := _machine(solver)) is not None:  # no engine running: the machine
+                return vm
         if executable is None or native.available(executable):
             return native
         for container in containers if image else []:
             if container.available(executable):
                 return container
-        return native
-    raise ValueError(f"PUZZLE_RUNTIME must be auto, native, docker or podman, not '{kind}'")
+        return _machine(solver) or native
+    raise ValueError(f"PUZZLE_RUNTIME must be auto, native, docker, podman or wsl, not '{kind}'")
+
+
+def _machine(solver: str):
+    """Puzzle's Linux machine for `solver` on Windows, when installed (ADR 0068)."""
+    if sys.platform != "win32":
+        return None
+    from puzzle.jobs import machine
+
+    return machine.runtime(solver)

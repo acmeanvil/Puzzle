@@ -590,6 +590,14 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("value", nargs="?", help="e.g. engineering; omit to show the choices")
     p.set_defaults(handler=_settings)
 
+    p = sub.add_parser("machine", help="Puzzle's Linux machine on Windows: WSL 2 solvers "
+                       "(ADR 0068 step 5)")  # fmt: skip
+    p.add_argument("action", choices=["list", "install", "remove"])
+    p.add_argument("solver", nargs="?", help="install/remove: elmer, openfoam, code_saturne, ...")
+    p.add_argument("--image", help="install: the image to export (default: the solver's)")
+    p.add_argument("--tarball", type=Path, help="install: a root file system to import instead")
+    p.set_defaults(handler=_machine)
+
     p = sub.add_parser("clusters", help="your operator clusters and blocks to share (ADR 0071)")
     p.add_argument("action", choices=["list", "export", "import", "remove"])
     p.add_argument("name", nargs="?", help="export/remove: the cluster's name or key")
@@ -602,6 +610,9 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="build CalculiX with PARDISO on this computer now (ADR 0051)",
     )
+    p.add_argument("--repair", metavar="ENV",
+                   help="reinstall a solver environment of the installed app from its "
+                   "package list (calculix, fenicsx, ...)")  # fmt: skip
     p.add_argument("--json", action="store_true")
     p.set_defaults(handler=_solvers)
 
@@ -850,7 +861,8 @@ def _runs(args) -> int:
     for r in runs:
         when = r.started_at.astimezone().strftime("%Y-%m-%d %H:%M")
         where = f"[{r.solver}, {r.runtime}]"
-        print(f"{r.run_id[:8]}  {when}  {r.study_name}  {where}  {r.duration_s:.1f} s")
+        version = f"  {r.solver_version}" if r.solver_version else ""
+        print(f"{r.run_id[:8]}  {when}  {r.study_name}  {where}{version}  {r.duration_s:.1f} s")
     return 0
 
 
@@ -1903,6 +1915,36 @@ def _materials_duplicates(args) -> int:
     return 0
 
 
+def _machine(args) -> int:
+    from puzzle.jobs import machine
+
+    if args.action == "list":
+        found = machine.installed()
+        if machine.wsl() is None:
+            print("WSL isn't here (Windows only; `wsl --install` in an administrator terminal)")
+        for solver, data in found.items():
+            print(f"{solver:13} {data['distro']}  from {data.get('from', '?')}")
+        if not found:
+            print("no solvers in Puzzle's Linux machine yet: `puzzle machine install SOLVER`")
+        return 0
+    if not args.solver:
+        raise CliError(f"{args.action} needs the solver")
+    try:
+        if args.action == "remove":
+            machine.remove(args.solver)
+            print(f"removed {machine.distro_for(args.solver)}")
+            return 0
+        if args.tarball:
+            data = machine.install_from_tarball(args.solver, args.tarball)
+        else:
+            data = machine.install_from_image(args.solver, args.image,
+                                              say=lambda line: print(line, flush=True))  # fmt: skip
+    except machine.MachineError as exc:
+        raise CliError(str(exc)) from None
+    print(f"{args.solver} runs in {data['distro']} now")
+    return 0
+
+
 def _clusters(args) -> int:
     from puzzle.operators import clusters
 
@@ -1946,6 +1988,14 @@ def _solvers(args) -> int:
 
     from puzzle import solver_builds
 
+    if args.repair:
+        from puzzle import solver_repair
+
+        try:
+            solver_repair.repair(args.repair, say=lambda line: print(line, flush=True))
+        except solver_repair.RepairError as exc:
+            raise CliError(str(exc)) from None
+        return 0
     if args.build:
         done = solver_builds.build(say=lambda line: print(line, flush=True))
         print(f"PARDISO: {done.state}: {done.detail}")
@@ -1956,7 +2006,12 @@ def _solvers(args) -> int:
         print(json.dumps({"solvers": [asdict(r) for r in rows],
                           "pardiso": asdict(pardiso)}, indent=1))  # fmt: skip
         return 0
-    words = {"native": "native", "container": "in a container", "missing": "not available"}
+    words = {
+        "native": "native",
+        "container": "in a container",
+        "missing": "not available",
+        "machine": "Linux machine",
+    }
     for r in rows:
         note = f"  [{r.note}]" if r.note else ""
         print(f"{r.name:13} {words[r.how]:15} {r.where}{note}")
