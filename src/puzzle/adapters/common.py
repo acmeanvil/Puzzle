@@ -1244,6 +1244,9 @@ def drop_helper_nodes(results, input_file):
         for name, f in list(step.fields.items()):
             if f.location == "node" and f.ids.size and f.ids.max() > top:
                 keep = f.ids <= top
+                if not keep.any():  # only on helpers (a beam bolt's beam forces): gone
+                    del step.fields[name]
+                    continue
                 step.fields[name] = type(f)(
                     f.name, f.location, f.components, f.ids[keep], f.values[keep]
                 )

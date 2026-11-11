@@ -84,6 +84,8 @@ def to_grid(mesh: Mesh, step: StepResult | None = None):
     grid.cell_data["element_id"] = np.concatenate([b.ids for b in shown])
     if step is not None:
         for f in step.fields.values():
+            if not len(f.ids):  # nothing stored there (older runs kept empty fields)
+                continue
             if f.location == "node":
                 _add(grid, mesh, f)
             elif f.location == "element":
