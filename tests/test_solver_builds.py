@@ -48,6 +48,17 @@ def test_the_states(env):
     assert sb.status().state == "building"
     sb._write_state(state="building", started=time.time() - sb.STALE_S - 1)  # it died
     assert sb.status().state == "ready"
+    # A build whose process has gone (Puzzle closed, 2026-11-10) is over at once.
+    import os
+    import subprocess
+    import sys
+
+    gone = subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"],
+                          capture_output=True, text=True, check=True)  # fmt: skip
+    sb._write_state(state="building", started=time.time(), pid=int(gone.stdout))
+    assert sb.status().state == "ready"
+    sb._write_state(state="building", started=time.time(), pid=os.getpid())
+    assert sb.status().state == "building"
     sb._write_state(state="failed", finished=time.time(), error="no gfortran")
     assert sb.status() == sb.Status("failed", "no gfortran")
     sb.program(env).write_bytes(b"")

@@ -188,7 +188,7 @@ New features in `model/catalog.py` (structural physics), each typed with readabl
   | Pretension F = 10 kN | −0.01 % | −0.01 % | F |
   | Adjustment d | +0.38 % | +0.38 % | d k_b/2 |
 
-- **Locking across steps** needs one deck: a solver that runs each step as its own analysis refuses a pretension in a study with more than one structural step.
+- **Locking across steps** needs one deck: a solver that runs each step as its own analysis refuses a pretension in a study with more than one structural step. (Amended 2026-11-11: Code_Aster chains static steps instead; see below.)
 - **Refused:** pretension on Elmer and FEniCSx (no benchmark yet; neither has a linear relation to a reference dof written here).
 - **Axes from a face:** a face selection's menu has "New cylindrical axes from this face". `mesh.adjacency.cylinder_axis` fits the axis to the face's mesh (the component's mesh, else its preview): the normals reject planes and other shapes, a quadric through the nodes gives the axis exactly (flat triangles tilt their normals by ~2e-5), and a circle fit gives the centre and radius (`tests/test_cylinder_axis.py`).
 - **Compression-only support** (`compression_only_support`, kn per area): a foundation that pushes back but never pulls, so a face may lift off.
@@ -204,6 +204,47 @@ New features in `model/catalog.py` (structural physics), each typed with readabl
 
     CalculiX's small difference is NLGEOM's large-rotation terms (the block turns 0.4 % of a radian).
 - **Not yet:** amplitudes on structural loads, which come with ADR 0041 (dynamics).
+
+## Amended: the preload step, and Code_Aster's lock (2026-11-11)
+
+A joint tightened and loaded in one step leaves the solver to find the clamp and the service load's share of it together. With contact between the clamped parts that is the hardest form of the problem. The maintainer's pressure vessel assembly (ten M6 beam bolts at 2 kN, frictional contacts at μ 0.2, internal pressure) chattered for 21 contact iterations on CalculiX: the contact elements went 4104, 3116, 2371, 1821. It stopped at the 10-minute limit. Tightening first and then loading with the bolts locked is how a joint is assembled, and how VDI 2230 reads it.
+
+- **`puzzle.preload`:** `applied(project, study)` puts a preload-only step in front of the study's first static structural step. It does so when bolts are tightened there (a fastener's `pretension`, or a `bolt_pretension`/`bolt_adjustment`) and that step also carries loads.
+  - The preload step is a copy of the step, its settings too.
+  - Supports and pretensions stay in it.
+  - The loads move to the steps after.
+  - A prescribed displacement that isn't zero is held at zero while preloading.
+  - It is solver-neutral and idempotent, and runs in `run_study` after the bolts resolve.
+  - The preload step's results are kind `preload`, labelled "Preload".
+- **`Study.preload_step`:** "auto" (the default) puts the step in on CalculiX and Code_Aster, the solvers that lock a pretension into later steps. "always" puts it in on any solver; "never" tightens with the loads, as before. The setting is left out of content hashes at "auto". A run key carries the preload step's index when one is put in, so affected studies rerun once.
+- **Code_Aster chains static steps (`comm.chained`):** a study whose two or more steps are all static solid mechanics, in a component that tightens bolts, runs as one job instead of one job per step.
+  - It is one `STAT_NON_LINE` result, one call per step: t from k − 1 to k, each later call `reuse=res, ETAT_INIT=_F(EVOL_NOLI=res)`.
+  - Features on in every step ramp in once.
+  - Features on in some steps are a charge per set of steps, multiplied by a function that is 1 at the end of each of its steps and 0 otherwise. A load ramps off in the step after its last, as CalculiX's static steps do. A kinematic charge is left out of the steps it is off in.
+  - The pretension is parted:
+    - ties and sideways holds, always;
+    - its drive (the force, or the shortening) in its step;
+    - the lock, `DDL_IMPO DX=0` with `TYPE_CHARGE='DIDI'` (held at its value at the call's start), in the steps after.
+  - Tables keep each step's end; `job.chain.json` tells the reader to number steps by time.
+  - Other multi-step studies stay independent jobs.
+
+| Two steps: F, then locked and pulled by P | CalculiX | Code_Aster | Theory |
+| --- | --- | --- | --- |
+| Section pretension, step 1 | 9998.97 N | 9999.07 N | F = 10 kN |
+| Section pretension, step 2 | 12004.2 N | 12002.5 N | F + P/2 = 12 kN |
+| Beam fastener, step 2 | 5985.1 N | 5985.1 N | F + P/2 = 6 kN (the plates' give) |
+| One step, preload step put in front | 9998.97 / 12004.2 N | 9999.07 / 12002.5 N | as above |
+
+Benchmarks: `tests/integration/test_pretension.py` (`test_preload_step_put_in_front`) and `test_fasteners.py` on both solvers; `tests/test_preload.py`.
+
+The pressure vessel assembly (a copy; frictional contacts μ 0.2, ten M6 beam bolts at 2 kN, CalculiX with PARDISO), measured 2026-11-11:
+
+| | Tightened with the pressure | Preload step first |
+| --- | --- | --- |
+| Solve | 778 s, 55 contact iterations, one divergence | 400 s: 10 iterations to preload, 13 for the pressure |
+| Bolt force under pressure | 2000 N each: the force-controlled pretension can't pick up a share | 3374–3442 N: preload plus the pressure's share, bolts locked |
+
+So the one-step setup was slower and also wrong for a joint: a pretension held as a force keeps the bolt at its preload whatever the joint carries.
 
 ## Consequences
 

@@ -232,7 +232,10 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         and steps[1].type == "buckling"
         and bool(steps[1].settings.get("preload", False))
     )
-    if len(steps) != 1 and not preloaded:
+    # Static structural steps that tighten bolts run as one result, step after step, so
+    # each pretension locks into the steps after it (puzzle.preload; `chained`).
+    chain = len(steps) > 1 and chained(project, study)
+    if len(steps) != 1 and not preloaded and not chain:
         raise InputError("the Code_Aster adapter runs studies with exactly one solve step for now")
     step = steps[-1]
     solved = set(step.physics) or {p.type for p in comp.physics}
@@ -767,7 +770,10 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     if thermal:  # loads following an amplitude get their own charge (ADR 0037)
         out += _thermal_loads(project, features, names, mesh, comp, given)
     else:
-        extra = _pretension_loads(bolts, cuts)
+        if chain:  # the pretensions' ties held always; their drive in its step, then locked
+            extra, drive, lock, tighten_at = _pretension_chain(bolts, cuts, len(steps))
+        else:
+            extra = _pretension_loads(bolts, cuts)
         if field_forces:
             extra["FORCE_NODALE"] = extra.get("FORCE_NODALE", []) + field_forces
         if field_imposed:  # ADR 0044 stage 2: a displacement from a field, per node
@@ -780,6 +786,20 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         if timed:
             features = [f for f in features if not f.amplitude]
             out += _timed_loads(project, timed, names, mesh, comp)
+        windowed = []  # (charge, the steps it is on in, kinematic) when chained
+        if chain:
+            lasting = [f for f in features if not f.steps]
+            windowed, more = _windowed_loads(
+                [f for f in features if f.steps], names, mesh, comp, project
+            )
+            out += more
+            if any(drive.values()):
+                out.append("pdrive = AFFE_CHAR_MECA(MODELE=model" + "".join(
+                    f", {key}=({', '.join(items)},)" for key, items in drive.items() if items
+                ) + ")")  # fmt: skip
+            if lock:
+                out.append(f"plock = AFFE_CHAR_MECA(MODELE=model, DDL_IMPO=({', '.join(lock)},))")
+            features = lasting
         plain = _loads(features, names, mesh, thermal, ties, extra, comp)
         if plain.endswith("(MODELE=model)"):  # everything is in loadf: no empty charge
             charges = []
@@ -901,13 +921,16 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             f"IMPR_TABLE(TABLE=RECU_TABLE(CO=res, NOM_PARA='FREQ'), UNITE={TABLES['frequency']}, "
             f"FORMAT='TABLEAU', SEPARATEUR=',', FORMAT_R='{FORMAT_R}')",
         ]
-    elif touching or nlgeom or plastic or gaps or initial or (threads and threads.gaps):
+    elif touching or nlgeom or plastic or gaps or initial or (threads and threads.gaps) or chain:
         # Green-Lagrange strain: large rotations, as CalculiX's NLGEOM (GROT_GDEP refuses tet10);
         # with plasticity, logarithmic strains (true stress against true strain).
         strains = ", DEFORMATION='GREEN_LAGRANGE'" if nlgeom else ""
         # Every increment is kept when the deflection is large or the material yields
         # (load-deflection and stress-strain histories).
         which = "" if nlgeom or plastic else "INST=1.0"
+        n = len(steps) if chain else 1
+        if chain and which:  # each step's end
+            which = "INST=(" + ", ".join(f"{k:.1f}" for k in range(1, n + 1)) + ",)"
         parts = [f"_F(TOUT='OUI', RELATION='ELAS'{strains})"]
         if plastic:
             yielding = ", ".join(f"'{names[a.selection]}'" for a in plastic)
@@ -923,32 +946,63 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             unilateral = ", ".join(f"'{g}'" for g, _k in threads.gaps)
             parts.append(f"_F(GROUP_MA=({unilateral},), RELATION='DIS_CHOC')")
         behaviour = f"COMPORTEMENT=({', '.join(parts)},), "
+        criterion = _criterion(project, comp, features, mesh, touching)
+
+        def call(k: int) -> str:
+            """Step k's STAT_NON_LINE (one call when not chained): from t = k - 1 to k,
+            continuing from the step before."""
+            excit = [
+                f"_F(CHARGE={c}{'' if c == 'thload' else ', FONC_MULT=ramp'})" for c in charges
+            ]  # fmt: skip
+            for c, on, kinematic in windowed:  # a load ramps off in the step after its last
+                if k in on or (not kinematic and k - 1 in on):
+                    excit.append(f"_F(CHARGE={c}, FONC_MULT=f{c})")
+            if chain and any(drive.values()) and k == tighten_at:
+                excit.append("_F(CHARGE=pdrive, FONC_MULT=fpdrive)")
+            if chain and lock and k > tighten_at:  # held at its tightened length
+                excit.append("_F(CHARGE=plock, TYPE_CHARGE='DIDI')")
+            start = "reuse=res, ETAT_INIT=_F(EVOL_NOLI=res), " if k > 1 else (
+                "ETAT_INIT=_F(SIGM=sig0), " if initial else "")  # fmt: skip
+            span = f", INST_INIT={k - 1:.1f}, INST_FIN={k:.1f}" if chain else ""
+            return (
+                f"res = STAT_NON_LINE({start}MODELE=model, CHAM_MATER=mater, {cara}"
+                f"EXCIT=({', '.join(excit)},), "
+                + ("CONTACT=contact, " if touching else "")
+                + behaviour
+                # As Code_Aster's 3D contact validation (ssnv128): tangent every iteration.
+                + "NEWTON=_F(REAC_ITER=1), CONVERGENCE=_F(ITER_GLOB_MAXI=200, "
+                + criterion
+                + "), "
+                + _suivi(tracked, names)
+                + f"INCREMENT=_F(LIST_INST=times{span}))"
+            )
+
+        functions = []
+        if chain:  # each windowed load's multiplier: 1 at the end of its steps, else 0
+            for c, on, _kinematic in windowed:
+                vale = ", ".join(f"{t:.1f}, {1.0 if t in on else 0.0:.1f}" for t in range(n + 1))
+                functions.append(f"f{c} = DEFI_FONCTION(NOM_PARA='INST', VALE=({vale}), "
+                                 "PROL_GAUCHE='CONSTANT', PROL_DROITE='CONSTANT')")  # fmt: skip
+            if any(drive.values()):
+                functions.append(
+                    f"fpdrive = DEFI_FONCTION(NOM_PARA='INST', VALE=({tighten_at - 1:.1f}, 0.0, "
+                    f"{tighten_at:.1f}, 1.0), PROL_GAUCHE='CONSTANT', PROL_DROITE='CONSTANT')"
+                )
+            (workdir / f"{JOB}.chain.json").write_text(json.dumps({"steps": n}), encoding="utf-8")
         out += [
             *([_defi_contact(touching, names, excluded)] if touching else []),
             *_initial_stress_field(initial, mesh, given, names, workdir),  # ADR 0044 stage 3
             # Ramp the loads: friction and large deflection depend on the loading path.
-            "ramp = DEFI_FONCTION(NOM_PARA='INST', VALE=(0.0, 0.0, 1.0, 1.0))",
+            "ramp = DEFI_FONCTION(NOM_PARA='INST', VALE=(0.0, 0.0, 1.0, 1.0)"
+            + (", PROL_DROITE='CONSTANT')" if chain else ")"),
+            *functions,
             # A failed increment is cut in four, up to five times (1/1024 of a step),
             # rather than ending the run.
             "times = DEFI_LIST_INST(DEFI_LIST=_F(LIST_INST=DEFI_LIST_REEL(DEBUT=0.0, "
-            f"INTERVALLE=_F(JUSQU_A=1.0, NOMBRE={increments}))), "
+            f"INTERVALLE=_F(JUSQU_A={float(n):.1f}, NOMBRE={increments * n}))), "
             "ECHEC=_F(EVENEMENT='ERREUR', ACTION='DECOUPE', SUBD_METHODE='MANUEL', "
             "SUBD_PAS=4, SUBD_NIVEAU=5))",
-            f"res = STAT_NON_LINE(MODELE=model, CHAM_MATER=mater, {cara}"
-            "EXCIT=("
-            + ", ".join(
-                f"_F(CHARGE={c}{'' if c == 'thload' else ', FONC_MULT=ramp'})" for c in charges
-            )  # fmt: skip
-            + ",), "
-            + ("CONTACT=contact, " if touching else "")
-            + ("ETAT_INIT=_F(SIGM=sig0), " if initial else "")
-            + behaviour
-            # As Code_Aster's 3D contact validation (ssnv128): tangent every iteration.
-            + "NEWTON=_F(REAC_ITER=1), CONVERGENCE=_F(ITER_GLOB_MAXI=200, "
-            + _criterion(project, comp, features, mesh, touching)
-            + "), "
-            + _suivi(tracked, names)
-            + "INCREMENT=_F(LIST_INST=times))",
+            *[call(k) for k in range(1, n + 1)],
             "res = CALC_CHAMP(reuse=res, RESULTAT=res, CONTRAINTE=('SIGM_NOEU',"
             + (" 'EFGE_NOEU'," if bolt_beams else "")
             + "), FORCE=('REAC_NODA',)"
@@ -1335,6 +1389,75 @@ def _pretension_loads(bolts, cuts) -> dict[str, list[str]]:
                     f"COEF_MULT=({', '.join(f'{x:.12g}' for x in coefs)},), COEF_IMPO=0.0)"
                 )
     return out
+
+
+def chained(project: Project, study: Study) -> bool:
+    """Whether the study's solve steps run as one chained STAT_NON_LINE result: two or
+    more static steps of solid mechanics alone, in a component that tightens bolts (so
+    a pretension locks into the steps after its own, puzzle.preload). Other multi-step
+    studies stay independent jobs, one per step."""
+    steps = study.solve_steps()
+    comp = project.objects.get(study.component)
+    if len(steps) < 2 or not isinstance(comp, Component):
+        return False
+    every = {p.type for p in comp.physics}
+    if any(s.type != "stationary" or (set(s.physics) or every) != {"solid_mechanics"}
+           for s in steps):  # fmt: skip
+        return False
+    return any(c.pretension is not None for c in comp.connectors) or any(
+        f.type in PRETENSION for ph in comp.physics for f in ph.features
+    )
+
+
+def _pretension_chain(bolts, cuts, n: int):
+    """`_pretension_loads` parted for a chained study: the sections' ties and the
+    reference nodes' sideways holds (always), the drive (each pretension's force or
+    shortening, in its step), and the lock (the opening held, TYPE_CHARGE='DIDI', in the
+    steps after), with the step the bolts are tightened in. Every bolt tightens in one
+    step: the first it is active in."""
+    whole = _pretension_loads(bolts, cuts)
+    ties = {"DDL_IMPO": [], "LIAISON_DDL": whole["LIAISON_DDL"]}
+    drive: dict[str, list[str]] = {"DDL_IMPO": [], "FORCE_NODALE": whole["FORCE_NODALE"]}
+    lock = []
+    for k, f in enumerate(bolts, start=1):
+        ref = f"PR{k}"
+        ties["DDL_IMPO"].append(f"_F(GROUP_NO='{ref}', DY=0.0, DZ=0.0)")
+        if f.type != "bolt_pretension":  # an adjustment: the shortening imposed
+            d = -f.values["d"].to_si()
+            drive["DDL_IMPO"].append(f"_F(GROUP_NO='{ref}', DX={d:.12g})")
+        lock.append(f"_F(GROUP_NO='{ref}', DX=0.0)")
+    at = {next((i for i in range(1, n + 1) if f.active(i)), 1) for f in bolts}
+    if len(at) > 1:
+        raise InputError(
+            "Code_Aster tightens every bolt of a chained study in one step; these are "
+            f"tightened in steps {sorted(at)}",
+            code="unsupported",
+        )
+    return ties, drive, lock, (at.pop() if at else 1)
+
+
+def _windowed_loads(features, names, mesh: Mesh, comp, project):
+    """Features on in some steps only, as one charge per set of steps (`load<j>`), for a
+    chained study: [(charge, steps, kinematic)] and the lines that make them. A
+    kinematic charge (imposed values) is left out of the steps it is off in; a load
+    ramps from its value to the next step's, as CalculiX's static steps do."""
+    groups: dict[tuple[int, ...], list] = {}
+    for f in features:
+        groups.setdefault(tuple(sorted(f.steps)), []).append(f)
+    out, lines = [], []
+    for j, (on, group) in enumerate(groups.items(), start=1):
+        if _remote_loads(group, names, mesh, project):
+            raise InputError(
+                "Code_Aster takes remote loads and displacements in local axes in every "
+                "step of a chained study only, not in some steps",
+                code="unsupported",
+            )
+        text = _loads(group, names, mesh, False, [], {}, comp)
+        if text.endswith("(MODELE=model)"):
+            continue
+        lines.append(f"load{j} = " + text.split(" = ", 1)[1])
+        out.append((f"load{j}", set(on), any(k in text for k in ("DDL_IMPO", "LIAISON"))))
+    return out, lines
 
 
 def _negligible(project, comp, mesh: Mesh) -> float:

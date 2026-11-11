@@ -49,6 +49,7 @@ TABLER = {
     "camera": "camera",
     "extremes": "arrows-vertical",
     "symbols": "arrow-down-bar",
+    "bolt_labels": "bolt",  # the bolts' force labels over a result
     "section": "slice",
     "clear": "x",
     "copy": "copy",

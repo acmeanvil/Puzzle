@@ -127,6 +127,53 @@ def _read_state() -> dict:
         return {}
 
 
+def _running(state: dict) -> bool:
+    """Whether a build marked running still is: its process alive (a build whose
+    Puzzle was closed or crashed is over at once, not after STALE_S), and not older."""
+    from puzzle.jobs.pending import alive
+
+    if time.time() - state.get("started", 0) >= STALE_S:
+        return False
+    pid = state.get("pid")
+    return alive(int(pid)) if pid else True
+
+
+def last_line() -> str:
+    """The detached build's latest progress line (`start`), for the Solvers page."""
+    try:
+        lines = (_work_dir() / "progress.txt").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ""
+    return lines[-1] if lines else ""
+
+
+def start() -> bool:
+    """Build in a process of its own, detached, so closing Puzzle doesn't stop it (a
+    build on Puzzle's thread died with the window, two minutes in); its progress lines
+    go to `progress.txt`. -> started (False when one is running already)."""
+    import subprocess
+
+    if status().state == "building":
+        return False
+    work = _work_dir()
+    work.mkdir(parents=True, exist_ok=True)
+    python = Path(sys.executable)
+    if os.name == "nt" and python.name.lower() == "pythonw.exe":
+        python = python.with_name("python.exe")  # the same interpreter, with a console
+    flags = {}
+    if os.name == "nt":
+        flags["creationflags"] = (subprocess.DETACHED_PROCESS
+                                  | subprocess.CREATE_NEW_PROCESS_GROUP
+                                  | subprocess.CREATE_NO_WINDOW)  # fmt: skip
+    else:
+        flags["start_new_session"] = True
+    with open(work / "progress.txt", "w", encoding="utf-8") as out:
+        subprocess.Popen([str(python), "-m", "puzzle.solver_builds"], stdout=out,
+                         stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                         cwd=str(work), **flags)  # fmt: skip
+    return True
+
+
 def _write_state(**values) -> None:
     path = _state_file()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -144,7 +191,7 @@ def status() -> Status:
         return Status("unavailable", why)
     exe = program(env)
     state = _read_state()
-    if state.get("state") == "building" and time.time() - state.get("started", 0) < STALE_S:
+    if state.get("state") == "building" and _running(state):
         return Status("building", f"started {time.ctime(state['started'])}")
     if exe.is_file():
         again = " (the latest rebuild failed; this one is kept)" if state.get(
@@ -479,7 +526,7 @@ def solvers() -> list[SolverRow]:
     return rows
 
 
-if __name__ == "__main__":  # python -m puzzle.solver_builds
-    result = build()
+if __name__ == "__main__":  # python -m puzzle.solver_builds (`start`)
+    result = build(say=lambda line: print(line, flush=True))
     print(result.state, "-", result.detail)
     sys.exit(0 if result.state == "built" else 1)

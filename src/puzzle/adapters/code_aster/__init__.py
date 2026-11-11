@@ -229,6 +229,11 @@ class CodeAsterAdapter(SolverAdapter):
                 problems.append(f"{self.name}: {exc}")
         return problems
 
+    def chains(self, project, study) -> bool:
+        from puzzle.adapters.code_aster.comm import chained
+
+        return chained(project, study)
+
     def read_results(self, input_file: Path) -> Results:
         workdir = input_file.parent
         if not list(workdir.glob("*.csv")):
@@ -236,10 +241,22 @@ class CodeAsterAdapter(SolverAdapter):
                 f"Code_Aster wrote no result tables; see {JOB}.mess and the solver log"
             )
         results = read_tables(workdir)
+        _chained(results, input_file)
         _harmonic(results)
         _whole_part(results, input_file)
         _fastener_fields(results, input_file)  # before the bolts' nodes are dropped
         return drop_helper_nodes(results, input_file)
+
+
+def _chained(results, input_file: Path) -> None:
+    """A chained static study's instants (comm.chained) back to their solve steps:
+    step k ends at t = k, its increments before."""
+    import math
+
+    if not input_file.with_name(f"{JOB}.chain.json").exists():
+        return
+    for step in results.steps:
+        step.index = max(1, math.ceil(step.value - 1e-9))
 
 
 def _harmonic(results) -> None:

@@ -47,6 +47,9 @@ itself wins.
    `diameter` and `material`. A bolt to ground: `"ground": true`, no `target`,
    `ground_length` (default 2 d) along the hole's axis toward `ground_direction`
    (default down).
+   Tightened bolts go in before the loads: Puzzle puts a preload step in front of the
+   first static step when it also loads (the study's `preload_step`, skill
+   `structural-loads`), so results have a Preload step and the bolts are locked after.
 5. After a run: `bolt_results(study)`: each bolt's axial, shear, torsion, bending at
    both ends, stress and its share of proof and yield, worst first.
 

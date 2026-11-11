@@ -43,6 +43,8 @@ def _own(obj: ProjectObject, *, drop: frozenset[str] = frozenset()) -> dict:
         data.pop("convergence", None)
         data.pop("adapt", None)  # each pass's own recipe is in its run key
         data.pop("remote", None)  # ADR 0021: the same result wherever it is computed
+        if data.get("preload_step") == "auto":  # the default: older hashes kept
+            data.pop("preload_step")
     if obj.kind == "result" and data.get("error_target") == 0.02:  # ADR 0066's default
         data.pop("error_target")
     for key in ("hidden", "hidden_bodies", "colour", "body_colours"):
@@ -142,12 +144,17 @@ def run_hashes(project: Project) -> dict[UUID, dict[str, list[str]]]:
         # The point's own values identify a run; the rest of the sweep definition doesn't.
         own["steps"] = [s for s in own["steps"] if s["type"] != "parametric_sweep"]
         setup = _digest({"own": own, "inputs": inputs})
+        from puzzle.preload import needed
+
+        # A preload step put in front (puzzle.preload) changes the solve on that solver.
+        preloads = {s: needed(project, study, s) for s in study.all_solvers()}
         runs[study.id] = {
             solver: [
                 _digest(
                     {
                         "setup": setup,
                         "solver": solver,
+                        **({"preload": preloads[solver]} if preloads[solver] else {}),
                         **(
                             {
                                 "settings": study.solver_settings.get(solver, {}),

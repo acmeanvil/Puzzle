@@ -37,32 +37,28 @@ _LOCK = threading.Lock()
 
 
 def start_build() -> bool:
-    """Build CalculiX with PARDISO on a thread, unless one is going. -> started"""
+    """Build CalculiX with PARDISO in a process of its own (`solver_builds.start`: it
+    goes on when Puzzle closes), unless one is going. -> started"""
     from puzzle import solver_builds
 
     with _LOCK:
-        if _STATE["building"]:
-            return False
+        started = solver_builds.start()
+    if started:
         _STATE["building"] = True
-
-    def say(line: str) -> None:
-        _STATE["line"] = line
-
-    def work() -> None:
-        try:
-            solver_builds.build(say=say)
-        except Exception as exc:  # kept by solver_builds; shown here
-            _STATE["line"] = f"the build failed: {exc}"
-        finally:
-            _STATE["building"] = False
-            _STATE["rows"] = None  # look again: CalculiX's program changed
-
-    threading.Thread(target=work, name="pardiso-build", daemon=True).start()
-    return True
+    return started
 
 
 def building() -> bool:
-    return bool(_STATE["building"])
+    """Whether the build is going: its state file says so and its process lives."""
+    from puzzle import solver_builds
+
+    going = solver_builds.status().state == "building"
+    if _STATE["building"] and not going:
+        _STATE["rows"] = None  # look again: CalculiX's program changed
+    _STATE["building"] = going
+    if going:
+        _STATE["line"] = solver_builds.last_line() or _STATE["line"]
+    return going
 
 
 class SolversPanel(QWidget):

@@ -532,6 +532,8 @@ class ViewBar(QWidget):
         self.actions_by_name["symbols"].setChecked(True)
         add("beams", "Beams drawn with their sections", viewport.set_beams_shown, checkable=True)
         self.actions_by_name["beams"].setChecked(True)
+        add("bolt_labels", "Bolt force labels", viewport.set_bolt_labels_shown, checkable=True)
+        self.actions_by_name["bolt_labels"].setChecked(True)
         add("clear", "Clear probes", viewport.clear_probes, "Esc")
         add("copy", "Copy image", self.copy_image)
         add("camera", "Save image…", self.save_image)
@@ -918,6 +920,7 @@ class Viewport(QWidget):
             "extremes": True,
             "symbols": True,
             "beams": True,  # beams as their sections' outlines, else as lines
+            "bolt_labels": True,  # each bolt's force over a result, as a label
         }
         self.glyphs: list = []  # the supports' and loads' symbols (ADR 0035)
         self._glyph_actors: list[str] = []
@@ -947,6 +950,7 @@ class Viewport(QWidget):
         its face `entities` when it was made after meshing) and picked faces marked."""
         self.result_state, self.probes, self._mark_actors = None, [], []
         self.glyphs, self._glyph_actors, self.pins = [], [], []
+        self._bolt_marks = []
         self._clear_labels()
         self._update_click()
         hidden = sorted(self.hidden_parts(mesh)) if self.hidden_parts else []
@@ -1399,6 +1403,7 @@ class Viewport(QWidget):
         `post.quantities.catalog`) chooses one of the results the field gives; `clim`
         fixes the colour scale (SI), so several views can share one."""
         self.pins = []  # labels belong to the scene they were made for
+        self._bolt_marks = []
         steps = [s for s in results.steps if field in s.fields]
         step = steps[step_index] if steps else pick_step(results, field)
         grid = to_grid(mesh, step)
@@ -1936,8 +1941,8 @@ class Viewport(QWidget):
 
     def show_fasteners(self, tubes) -> None:
         """Fasteners over a result: (glyph, label, in tension) each; the label pinned at
-        the tube's middle (ADR 0027)."""
-        self.pins = [
+        the tube's middle (ADR 0027), unless the view bar's Bolt force labels is off."""
+        self._bolt_marks = [
             (
                 np.asarray(g.points, float).mean(axis=0),
                 text,
@@ -1947,6 +1952,7 @@ class Viewport(QWidget):
         ]
         self.shown["fasteners"] = [text for _g, text, _p in tubes]
         if self.plotter is None:
+            self._draw_marks()  # recorded in `shown` without OpenGL too
             return
         import pyvista as pv
 
@@ -2183,6 +2189,8 @@ class Viewport(QWidget):
     def _marks(self) -> list[tuple]:
         marks = list(self._extremes) if self.style["extremes"] and self.result_state else []
         marks += getattr(self, "pins", [])
+        if self.style.get("bolt_labels", True):
+            marks += getattr(self, "_bolt_marks", [])
         unit = lambda p: f" {p['unit']}" if p["unit"] else ""  # noqa: E731
         marks += [
             (np.asarray(p["at"]), f"{_number(p['shown'])}{unit(p)}", _t().probe_text)
@@ -2235,6 +2243,13 @@ class Viewport(QWidget):
             if at is not None:
                 label.move(int(at[0]) + 8, int(at[1]) - label.height() - 4)
                 label.raise_()
+
+    def set_bolt_labels_shown(self, on: bool) -> None:
+        """Each bolt's force label over a result, on or off; the tubes stay."""
+        self.style["bolt_labels"] = on
+        self._draw_marks()
+        if self.plotter is not None:
+            self.view.refresh()
 
     def show_extremes(self, on: bool) -> None:
         self.style["extremes"] = on

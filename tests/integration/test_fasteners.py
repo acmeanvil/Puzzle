@@ -174,7 +174,7 @@ def test_fastener_in_shear(tmp_path, solver, ends):
     assert loads.shear[0] == pytest.approx(P, rel=1e-4)
 
 
-@over("calculix")
+@over("calculix", "code_aster")
 def test_fastener_pretension(tmp_path, solver):
     """The block hangs from the fixed plate on a fastener tightened to F = 5 kN, its
     bottom on a support as stiff as the bolt (k_s = k_b = E A / L). Step 1: the bolt

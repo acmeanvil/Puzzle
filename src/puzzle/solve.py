@@ -159,11 +159,16 @@ def _run_study(
             trust.require(project, "custom PDE equation")
         except PuzzleError as exc:
             raise StudyError(exc.message, code=exc.code, path=study.name) from None
+    keyed = project  # run keys come from the study as the user set it up
+    from puzzle import preload
+
+    # Bolts tightened in a step of their own before the loads, then locked (ADR 0037).
+    project, study, preload_at = preload.applied(project, study)
     problems = project.validate() + adapter.check(project, study)
     if problems:
         raise StudyError("; ".join(problems), path=study.name, details={"problems": problems})
 
-    run_key = _point[0] if _point else run_hashes(project)[study.id][study.solver][0]
+    run_key = _point[0] if _point else run_hashes(keyed)[study.id][study.solver][0]
     if store is not None and reuse:
         hit = store.find_run(run_key)
         if hit is not None:
@@ -277,7 +282,8 @@ def _run_study(
     # at a time on the same mesh; the steps are independent analyses.
     steps = study.solve_steps()
     limit = getattr(adapter, "max_solve_steps", None)
-    if limit is None or len(steps) <= limit:
+    chained = limit is not None and len(steps) > limit and adapter.chains(project, study)
+    if limit is None or len(steps) <= limit or chained:  # chained: static steps, one job
         parts = [(study, workdir)]
     else:
         sweeps = study.sweeps()
@@ -301,7 +307,8 @@ def _run_study(
         # apply in its step (Feature.steps, ADR 0037). One deck for all steps (CalculiX)
         # sorts them out itself.
         indices = [n - 1, n] if limit is not None and _preloaded(steps, n) else [n]
-        seen = _in_step(project, study.component, indices) if limit is not None else project
+        split = limit is not None and not chained
+        seen = _in_step(project, study.component, indices) if split else project
         begin("write")
         from puzzle.jobs import pending
 
@@ -393,6 +400,8 @@ def _run_study(
     for step in results.steps:
         if 1 <= step.index <= len(kinds):
             step.kind = kinds[step.index - 1]
+        if step.index == preload_at:  # shown as "Preload" (StepResult.label)
+            step.kind = preload.KIND
 
     run_id = None
     if store is not None:

@@ -204,6 +204,13 @@ class SolverAdapter(ABC):
     capabilities: ClassVar[Capabilities]
     # Solve steps one input file can hold; run_study splits longer studies (None: any).
     max_solve_steps: ClassVar[int | None] = None
+
+    def chains(self, project, study) -> bool:
+        """Whether this adapter, which runs one solve step per job, writes `study`'s
+        steps as one job instead (Code_Aster's static steps chained in one result, so a
+        pretension locks into the steps after it)."""
+        return False
+
     # Whether it can split a run across processes (MPI, Settings > Solvers > Parallel
     # processes per run, ADR 0053); the others run one process with every core's threads.
     parallel_processes: ClassVar[bool] = False
@@ -296,7 +303,8 @@ class SolverAdapter(ABC):
             loaded = [
                 s for s in study.solve_steps() if s.solves(physics.type) and s.type != "modal"
             ]
-            if self.max_solve_steps is not None and len(loaded) > 1:
+            chained = self.chains(project, study)
+            if self.max_solve_steps is not None and len(loaded) > 1 and not chained:
                 problems += [
                     f"{self.name} runs each step as its own analysis, so the pretension on "
                     f"{f.selection} can't be locked into a later step; use one step, or "

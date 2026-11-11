@@ -1953,6 +1953,10 @@ class Study(ProjectObject):
     # settings_schema) and expert pass-through ({solver: {path: value}}).
     solver_settings: dict[str, dict[str, float | int | str | bool]] = Field(default_factory=dict)
     expert_settings: dict[str, dict[str, str]] = Field(default_factory=dict)
+    preload_step: Literal["auto", "always", "never"] = Field(
+        default="auto", description="tighten the bolts in a step of their own before the "
+        "loads (puzzle.preload): auto when bolts are tightened and the first static step "
+        "also loads, on CalculiX and Code_Aster; always; never (with the loads)")  # fmt: skip
 
     def all_solvers(self) -> list[str]:
         return [self.solver, *(self.shootout.solvers if self.shootout else [])]
