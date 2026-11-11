@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 from puzzle.gui.theme import role
 from puzzle.settings import PREFERENCES, WAITING, Settings
 
+ADVANCED = "Advanced"  # resets made by hand (the PARDISO build's wait)
 AGENT = "Agent"
 PROVIDERS = [
     ("Claude (Anthropic)", "anthropic"),
@@ -47,13 +48,19 @@ class SettingsDialog(QDialog):
         self.agent_path = agent_path
         self.agent = load_settings(agent_path)
         self.boxes: dict[str, QComboBox] = {}
-        groups = list(dict.fromkeys(p.group for p in PREFERENCES)) + [AGENT]
+        groups = list(dict.fromkeys(p.group for p in PREFERENCES)) + [AGENT, ADVANCED]
         self.groups = QListWidget()
         self.groups.addItems(groups)
         self.groups.setFixedWidth(150)
         self.pages = QStackedWidget()
         for g in groups:
-            self.pages.addWidget(self._agent_page() if g == AGENT else self._page(g))
+            self.pages.addWidget(
+                self._agent_page()
+                if g == AGENT
+                else self._advanced_page()
+                if g == ADVANCED
+                else self._page(g)
+            )
         self.groups.currentRowChanged.connect(self.pages.setCurrentIndex)
         self.groups.setCurrentRow(0)
 
@@ -130,6 +137,60 @@ class SettingsDialog(QDialog):
             scroll.setWidget(page)
             return scroll
         return page
+
+    def _advanced_page(self) -> QWidget:
+        """Resets the user makes by hand: the PARDISO build's day-long wait after a
+        failure (`solver_builds.clear_wait`)."""
+        from PySide6.QtWidgets import QPushButton
+
+        page = QWidget()
+        column = QVBoxLayout(page)
+        heading = QLabel("CalculiX with PARDISO")
+        role(heading, "strong")
+        column.addWidget(heading)
+        self.retry_note = QLabel()
+        self.retry_note.setWordWrap(True)
+        role(self.retry_note, "muted")
+        column.addWidget(self.retry_note)
+        self.clear_retry = QPushButton("Clear the 24-hour wait")
+        self.clear_retry.setToolTip("Try the build again the next time Puzzle opens, rather "
+                                    "than a day after it failed")  # fmt: skip
+        self.clear_retry.clicked.connect(self._clear_retry)
+        row = QHBoxLayout()
+        row.addWidget(self.clear_retry)
+        row.addStretch()
+        column.addLayout(row)
+        column.addStretch()
+        self._show_retry()
+        return page
+
+    def _show_retry(self, said: str = "") -> None:
+        import time as _time
+
+        from puzzle import solver_builds
+
+        when = solver_builds.retry_at()
+        if said:
+            text = said
+        elif when is None:
+            text = "No wait: the build isn't waiting after a failure."
+        else:
+            status = solver_builds.status()
+            text = (
+                f"The last build failed ({status.detail}). Puzzle tries again by itself "
+                f"after {_time.strftime('%Y-%m-%d %H:%M', _time.localtime(when))}."
+            )
+        self.retry_note.setText(text)
+        self.clear_retry.setEnabled(when is not None)
+
+    def _clear_retry(self) -> None:
+        from puzzle import solver_builds
+
+        if solver_builds.clear_wait():
+            self._show_retry("Cleared: the build starts the next time Puzzle opens (or now, "
+                             "from the Solvers page's Build button).")  # fmt: skip
+        else:
+            self._show_retry()
 
     def _custom_units(self) -> None:
         own = self.boxes["units.system"].currentData() == "custom"

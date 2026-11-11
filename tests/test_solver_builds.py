@@ -172,3 +172,39 @@ def test_mcp_lists_the_solvers(tmp_path, monkeypatch):
     assert out["pardiso"]["state"] == "unavailable"
     started = asyncio.run(server.call_tool("pardiso_build", {})).structured_content
     assert started["started"] is False  # nothing to build with here
+
+
+def test_the_user_clears_the_wait_after_a_failure(env, monkeypatch):
+    """Settings > Advanced (and `puzzle solvers --clear-wait`): a failed build waits a
+    day before it is tried again by itself, unless the user clears the wait."""
+    from puzzle.settings import current
+
+    monkeypatch.setattr(current(), "get", lambda key, *a: True if key ==
+                        "solvers.build_pardiso" else None)  # fmt: skip
+    assert not sb.clear_wait() and sb.retry_at() is None  # nothing waiting
+    sb._write_state(state="failed", finished=time.time(), error="no gfortran")
+    assert not sb.should_build() and sb.retry_at() > time.time()
+    assert sb.clear_wait()
+    assert sb.retry_at() is None and sb.status().state == "ready" and sb.should_build()
+
+
+def test_the_advanced_page_clears_the_wait(env):
+    """Settings > Advanced shows when a failed build is tried again, and its button
+    clears the wait (the maintainer, 2026-11-11)."""
+    import os
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    from puzzle.gui.settings_dialog import ADVANCED, SettingsDialog
+
+    sb._write_state(state="failed", finished=time.time(), error="no gfortran")
+    dialog = SettingsDialog()
+    names = [dialog.groups.item(i).text() for i in range(dialog.groups.count())]
+    assert ADVANCED in names
+    assert dialog.clear_retry.isEnabled() and "tries again" in dialog.retry_note.text()
+    dialog.clear_retry.click()
+    assert sb.retry_at() is None and not dialog.clear_retry.isEnabled()
+    assert dialog.retry_note.text().startswith("Cleared")
+    dialog.close()

@@ -613,6 +613,9 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--repair", metavar="ENV",
                    help="reinstall a solver environment of the installed app from its "
                    "package list (calculix, fenicsx, ...)")  # fmt: skip
+    p.add_argument("--clear-wait", action="store_true",
+                   help="clear the PARDISO build's 24-hour wait after a failure, so it is "
+                   "tried the next time Puzzle opens (Settings > Advanced)")  # fmt: skip
     p.add_argument("--json", action="store_true")
     p.set_defaults(handler=_solvers)
 
@@ -1995,6 +1998,11 @@ def _solvers(args) -> int:
             solver_repair.repair(args.repair, say=lambda line: print(line, flush=True))
         except solver_repair.RepairError as exc:
             raise CliError(str(exc)) from None
+        return 0
+    if args.clear_wait:
+        cleared = solver_builds.clear_wait()
+        print("Cleared: the build is tried the next time Puzzle opens" if cleared
+              else "No wait to clear: the build hasn't failed")  # fmt: skip
         return 0
     if args.build:
         done = solver_builds.build(say=lambda line: print(line, flush=True))

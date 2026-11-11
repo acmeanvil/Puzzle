@@ -449,6 +449,26 @@ def build(say=print, jobs: int | None = None) -> Status:
     return status()
 
 
+RETRY_S = 24 * 3600  # a failed build is tried again a day later (a download may work then)
+
+
+def retry_at() -> float | None:
+    """When a failed build will be tried again by itself (a time), or None."""
+    state = _read_state()
+    if state.get("state") != "failed":
+        return None
+    return float(state.get("finished", 0)) + RETRY_S
+
+
+def clear_wait() -> bool:
+    """The user's reset (Settings > Advanced, `puzzle solvers --clear-wait`): forget a
+    failed build, so it is tried the next time Puzzle opens. -> whether one was waiting."""
+    if _read_state().get("state") != "failed":
+        return False
+    _write_state(state="cleared", cleared=time.time())
+    return True
+
+
 def should_build() -> bool:
     """Whether to build in the background now: the environment is there, nothing is
     built or building, an earlier failure is a day old (a download may work now), and
@@ -461,7 +481,7 @@ def should_build() -> bool:
     if s.state == "ready":
         return True
     if s.state == "failed":
-        return time.time() - _read_state().get("finished", 0) > 24 * 3600
+        return time.time() - _read_state().get("finished", 0) > RETRY_S
     return False
 
 
