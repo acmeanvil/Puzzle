@@ -43,6 +43,10 @@ STEPS: dict[str, list[StepField]] = {
             "points", "points", [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], "Points (mm): x, y, z; …"
         ),
     ],
+    "frame": [  # ADR 0079: members by name come through commands; a DXF's lines here
+        StepField("dxf", "file", "", "DXF drawing (its lines become members)"),
+        StepField("layer", "text", "", "Only this layer (empty: every layer)"),
+    ],
     # ADR 0065: curves, sweeps and lofts, mirror and scale.
     "spline": [
         StepField(

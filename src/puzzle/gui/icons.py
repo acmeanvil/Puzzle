@@ -115,6 +115,7 @@ FEATURES = {
     "fixed": "fixed", "displacement": "displacement", "remote_displacement": "displacement",
     "elastic_support": "spring", "compression_only_support": "support",
     "force": "force", "traction": "force", "pressure": "pressure",
+    "line_load": "pressure", "node_spring": "spring",  # frames (ADR 0079)
     "remote_force": "remote_force", "remote_force_rigid": "remote_force",
     "gravity": "gravity", "acceleration": "acceleration", "body_force": "acceleration",
     "rotation": "revolve", "initial_stress": "scale",

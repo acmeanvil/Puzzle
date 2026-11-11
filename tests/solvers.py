@@ -15,6 +15,7 @@ EXECUTABLES = {
     "code_saturne": "code_saturne",
     "openfoam": "simpleFoam",
     "fenicsx": None,
+    "pynite": None,
 }
 
 
@@ -23,6 +24,10 @@ def available(solver: str) -> bool:
         from puzzle.adapters.fenicsx.case import fenicsx_available
 
         return fenicsx_available()
+    if solver == "pynite":  # ADR 0079: a Python with PyNite (pixi `pynite` env)
+        from puzzle.adapters.pynite import available as pynite_available
+
+        return pynite_available()
     return runtime_for(solver).available(EXECUTABLES[solver])
 
 

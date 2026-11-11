@@ -159,6 +159,16 @@ python = "3.12.*"
 mmgpy = ">=0.18"
 numpy = ">=1.26"
 
+# PyNite (MIT), the frame solver (ADR 0079): its own environment, run as a solver by
+# adapters/pynite/frame.py (which must not import Puzzle).
+[feature.pynite.dependencies]
+python = "3.12.*"
+numpy = ">=1.26"
+scipy = ">=1.11"
+
+[feature.pynite.pypi-dependencies]
+PyNiteFEA = ">=3.2"
+
 # ADR 0062 phase 4: the Python environment script operators run in, apart from Puzzle's
 # own (a package a script needs can't break Puzzle); `puzzle scripts add PACKAGE` adds to it.
 [feature.scripts.dependencies]
@@ -210,5 +220,6 @@ code-aster = { features = ["code-aster"], no-default-feature = true }
 netgen = { features = ["netgen"], no-default-feature = true }
 scripts = { features = ["scripts"], no-default-feature = true }
 mmg = { features = ["mmg"], no-default-feature = true }
+pynite = { features = ["pynite"], no-default-feature = true }
 runner = { features = ["runner"], no-default-feature = true }
 packaging = { features = ["packaging"], no-default-feature = true }

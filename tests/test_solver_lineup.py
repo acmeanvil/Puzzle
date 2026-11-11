@@ -38,8 +38,9 @@ def _component_study(project, name, physics, steps, solver, **component):
     return project.add(Study(name=name, component=comp.id, solver=solver, steps=steps))
 
 
-def test_all_six_solvers_are_registered():
+def test_all_seven_solvers_are_registered():
     assert set(available_adapters()) == {
+        "pynite",  # ADR 0079: frames
         "calculix",
         "elmer",
         "code_aster",

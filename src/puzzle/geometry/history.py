@@ -20,6 +20,7 @@ the part, the first one starts it):
 | box | dx, dy, dz, x0, y0, z0 | -x, +x, -y, +y, -z, +z |
 | cylinder | r, h, x, y, z, axis | wall, start, end |
 | polyline | points (a line body, for beams) | none: edge-N, vertex-N by position |
+| frame | nodes, members, or dxf, layer, scale (ADR 0079) | edges: members, groups |
 | sheet | points (a flat polygon: a sheet body, for shells) | face |
 | face | profile (sketch), plane, offset (a flat region: 2D, shells) | face; edges by side |
 | section | part (a geometry), plane, offset, half (ADR 0048) | face; edges by 3D face |
@@ -211,6 +212,8 @@ WORDS = {
     "frame",  # a sweep's frame along its path
     "kind",  # a deform's kind: twist, taper, bend or box
     "toward",  # a bend's direction
+    "nodes",  # a frame's nodes and members, by name (ADR 0079)
+    "members",
 }
 
 
@@ -503,6 +506,35 @@ def _polyline(state, a):
     return poly.Wire(), {}
 
 
+def _frame(state, a):
+    """A frame of line members (ADR 0079, `frames.lines`): an edge per member between
+    its nodes, members at a node sharing its vertex (joined there); each member's edge
+    named by the member, each group's edges by the group (a DXF's layer)."""
+    from OCP.BRep import BRep_Builder
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeVertex
+    from OCP.TopoDS import TopoDS_Compound
+
+    from puzzle.frames.lines import FrameError, from_args
+
+    try:
+        lines = from_args(a, state.root)
+    except FrameError as exc:
+        raise GeometryError(str(exc)) from None
+    vertices = {
+        n: BRepBuilderAPI_MakeVertex(gp_Pnt(*xyz)).Vertex() for n, xyz in lines.nodes.items()
+    }
+    compound, builder = TopoDS_Compound(), BRep_Builder()
+    builder.MakeCompound(compound)
+    names: Names = {}
+    for m in lines.members:
+        edge = BRepBuilderAPI_MakeEdge(vertices[m.i], vertices[m.j]).Edge()
+        builder.Add(compound, edge)
+        names[m.name] = [edge]
+        if m.group:
+            names.setdefault(m.group, []).append(edge)
+    return compound, names
+
+
 def _sheet(state, a):
     """A flat sheet body (ADR 0027 shells): the polygon through the points (m), closed.
     It has one face, "face"; its edges are named by that face (face, face#2, ...)."""
@@ -619,6 +651,7 @@ def _curved_sheet(state, a):
 
 TOOLS = {
     "polyline": _polyline,
+    "frame": _frame,
     "sheet": _sheet,
     "face": _face,
     "section": _section,

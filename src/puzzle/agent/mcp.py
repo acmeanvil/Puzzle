@@ -540,6 +540,54 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         return {"bolts": [bolt], "batch": [c.model_dump(mode="json") for c in batch]}
 
     @tool(
+        description="A frame's geometry (ADR 0079): line members between named nodes, or a "
+        "DXF's LINE/LWPOLYLINE/POLYLINE entities (layers become member groups). `nodes` "
+        "{name: [x, y, z]} in metres, `members` [[name, i, j], or [name, i, j, group]]; or "
+        "`dxf` (a file in the project), `layer`, `scale` (m per drawing unit; default from "
+        "$INSUNITS, mm when unset). Gives edge selections per member and group and point "
+        "selections per node. Returns `command` (a create) to pass to submit; nothing is "
+        "made here. Then a component with the geometry as a part, a beam section on it "
+        "(or per group), a material, supports and loads at nodes (skill `frames`)."
+    )
+    @guarded
+    def frame_geometry(name: str, nodes: dict | None = None, members: list | None = None,
+                       dxf: str | None = None, layer: str | None = None,
+                       scale: float | None = None) -> dict[str, Any]:  # fmt: skip
+        from puzzle import frames
+        from puzzle.commands.model import Create
+
+        try:
+            geo = frames.geometry(name, nodes, members, dxf=dxf, layer=layer, scale=scale,
+                                  root=root)  # fmt: skip
+        except frames.FrameError as exc:
+            raise PuzzleError(str(exc), code="invalid") from None
+        data = geo.model_dump(mode="json")
+        groups = sorted({m[3] for m in (members or []) if not isinstance(m, dict) and len(m) > 3})
+        return {
+            "command": Create(kind="geometry", data=data).model_dump(mode="json"),
+            "members": [sel["name"] for sel in data["selections"] if sel["entity"] == "edge"],
+            "nodes": [sel["name"] for sel in data["selections"] if sel["entity"] == "vertex"],
+            "groups": groups,
+        }
+
+    @tool(
+        description="A frame component's members (ADR 0079): each member's ends, length "
+        "(m), group and section (or none), the nodes, member end releases and rigid "
+        "offsets, and the supports and loads. Frames solve on PyNite (releases, offsets, "
+        "line loads, node springs, self weight) and on CalculiX and Code_Aster beams "
+        "(no releases yet)."
+    )
+    @guarded
+    def frame_members(component: str) -> dict[str, Any]:
+        from puzzle import frames
+        from puzzle.commands import resolve
+        from puzzle.model.schema import Component
+
+        s = session()
+        comp = resolve(s.project, component, Component)
+        return frames.summary(s.project, comp)
+
+    @tool(
         description="Mesh a component with its recipe and report the mesh (ADR 0019): node "
         "and element counts, each quality measure's min, mean and histogram (shape and "
         "scaled Jacobian 0..1, 1 ideal; edge aspect ratio from 1), the worst-shaped elements "

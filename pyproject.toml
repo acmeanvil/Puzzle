@@ -52,6 +52,7 @@ code_aster = "puzzle.adapters.code_aster:CodeAsterAdapter"
 fenicsx = "puzzle.adapters.fenicsx:FenicsxAdapter"
 code_saturne = "puzzle.adapters.code_saturne:CodeSaturneAdapter"
 openfoam = "puzzle.adapters.openfoam:OpenFoamAdapter"
+pynite = "puzzle.adapters.pynite:PyNiteAdapter"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/puzzle"]

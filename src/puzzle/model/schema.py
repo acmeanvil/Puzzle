@@ -150,6 +150,7 @@ class HistoryStep(BaseModel):
         "split_face",
         "enclosure",
         "polyline",
+        "frame",  # ADR 0079: a frame's members between named nodes, or a DXF's lines
         "sheet",
         "face",
         "section",
@@ -1255,6 +1256,35 @@ class ShellSection(BaseModel):
         return f"{t.value:g} {t.unit} thick{where}"
 
 
+class MemberRelease(BaseModel):
+    """A frame member's end freed (ADR 0079): the members of `selection` (a member, a
+    group or a line part) where they meet the node `at` (a point selection) carry no
+    force along the released dofs (in each member's axes: x along it, y the section's
+    first axis), or only a spring's (`springs`, N/m or N·m/rad). A pin: rz and ry."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    selection: str = Field(description="the members: Part/Member, Part/Group or the part")
+    at: str = Field(description="the node: Part/Node (a point selection)")
+    released: list[Literal["ux", "uy", "uz", "rx", "ry", "rz"]] = Field(
+        default_factory=lambda: ["ry", "rz"], description="dofs freed (default: a pin)"
+    )
+    springs: dict[str, Quantity] = Field(
+        default_factory=dict, description="partial fixity: a released dof held by a spring"
+    )
+
+
+class MemberOffset(BaseModel):
+    """A rigid length at a member's end (ADR 0079): a joint's panel zone. The members of
+    `selection` are rigid for `length` from the node `at`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    selection: str
+    at: str
+    length: Quantity
+
+
 class BeamSection(BaseModel):
     """A line body's cross-section (ADR 0027 beams): on a selection of its edges (or the
     whole part), a shape and its sizes. The section's first axis is `orientation`
@@ -1655,6 +1685,12 @@ class Component(ProjectObject):
     )
     bolt_rules: list[BoltRule] = Field(
         default_factory=list, description="which holes get bolts, to run again (ADR 0050)"
+    )
+    member_releases: list[MemberRelease] = Field(
+        default_factory=list, description="frame members' ends freed or sprung (ADR 0079)"
+    )
+    member_offsets: list[MemberOffset] = Field(
+        default_factory=list, description="rigid lengths at frame members' ends (ADR 0079)"
     )
 
     def dependencies(self) -> list[UUID]:
@@ -3064,6 +3100,7 @@ class Project:
             "remote_displacement",
             "elastic_support",
             "compression_only_support",
+            "node_spring",  # a frame's spring support (ADR 0079)
         )
         held = any(f.type in holding for p in solid for f in p.features)
         held = held or any(c.ground for c in comp.connectors)  # bolts to ground (ADR 0050)
