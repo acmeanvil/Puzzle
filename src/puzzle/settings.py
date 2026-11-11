@@ -455,6 +455,17 @@ PREFERENCES: list[Preference] = [
         "drops, and is picked up again when the project is opened. Off, solves run inside "
         "Puzzle as before.",
     ),
+    Preference(
+        "solvers.build_pardiso",
+        "Solvers",
+        "Build CalculiX with PARDISO",
+        True,
+        [("On: built once in the background", True), ("Off: the plain CalculiX only", False)],
+        "On, Puzzle builds CalculiX with Intel MKL's PARDISO on this computer once, in the "
+        "background (ADR 0068, 0051): contact and other large solves factor 2 to 4 times "
+        "faster, with the same answers. The plain CalculiX is used until it is done, and "
+        "if the build fails. Settings > Solvers shows how it stands.",
+    ),
     *_connection_preferences(),
     Preference(
         "schematic.uses",

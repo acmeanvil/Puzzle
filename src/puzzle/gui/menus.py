@@ -394,6 +394,7 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
 
         study_id = window._store().get_run(node.object).study_id
         add("Export…", lambda: export_results(window, study_id))
+        add("Open in ParaView", lambda: open_run_in_paraview(window, node.object))
         study = window._store().get_run(node.object).study_id
         menu.addSeparator()
         add("New combination…", lambda: window.new_derived("linear", study))
@@ -1498,3 +1499,12 @@ def combine_faceted(window, geo):
     meshfile.write_stl(out, root / rel)
     return window.submit(Create(kind="geometry", data={"name": got["name"], "source": rel,
                                                        "source_unit": "m"}))  # fmt: skip
+
+
+def open_run_in_paraview(window, run_id: str) -> bool:
+    """A run's right-click Open in ParaView (ADR 0070): its results shown here first, as
+    the Results ribbon's button opens what is shown."""
+    from puzzle.gui.paraview_open import open_in_paraview
+
+    window._select_run(run_id)
+    return open_in_paraview(window)

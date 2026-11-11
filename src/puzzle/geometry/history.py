@@ -633,6 +633,7 @@ TOOLS = {
     "hole": _hole,
     "bolt": lambda state, a: _bolt(state, a),
     "nut": lambda state, a: _nut(state, a),
+    "washer": lambda state, a: _washer(state, a),
 }
 
 
@@ -641,6 +642,13 @@ def _nut(state, a):
     from puzzle.solid_bolts import nut_tool
 
     return nut_tool(state, a)
+
+
+def _washer(state, a):
+    """A plain washer for a modelled bolt (ADR 0077, `puzzle.solid_bolts`)."""
+    from puzzle.solid_bolts import washer_tool
+
+    return washer_tool(state, a)
 
 
 def _bolt(state, a):

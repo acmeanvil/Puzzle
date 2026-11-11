@@ -105,6 +105,27 @@ Example: von Mises along a wall against yield, plotted with the limit.
 4. `operator_add("limit_line", "Yield", {"value": {"source": "Sy"}})`, then
    `operator_add("plot", "Wall stress", {"value": {"source": "Wall at the end"}, "b": {"source": "Yield"}})`
 
+## Fields: results worked on at every node (ADR 0071)
+
+A Filter gives a field: one result (`quantity`, e.g. "stress:von_mises") at one step
+(`step`, -1 the last, 0 the first), on a selection or the whole model. Wire fields into
+the arithmetic (Divide, Subtract, Multiply, Add, Utilisation, Safety factor, Margin of
+safety), Normalise or Field formula (`expression` over `f`, `g`, numbers `a`, `b`, `c`
+and parameters: "f - g", "f / 250 MPa", "abs(f)") and the output is a field too
+(`first_type` says "field"); selecting it in the GUI draws it on the model. Use them for:
+the change between two steps (two Filters at different steps, Subtract), utilisation
+on the model (a Filter, a Model value's yield, Utilisation), a shape (Normalise). Two
+fields must be on the same mesh (the same run's, or runs on one mesh); units follow
+(stress ÷ stress is a pure number, stress + temperature is refused). Reduce turns a
+field into a number (its maximum, where it is).
+
+ParaView's filters, run on VTK in Puzzle (no ParaView needed): Slice (a field on a
+construction plane, `target`, as a table of points x, y, z and the value), Clip (a field
+kept on one side of the plane, `keep` above = the side the normal faces; still a field),
+Contour (where a field takes a wired `level`, as a table of points). By ParaView's other
+names: Threshold is Filter, Calculator is Field formula, Integrate Variables is Reduce's
+integral, Plot Over Line is a Path result tool.
+
 ## Types and their ports
 
 | Type | Inputs | Outputs | Its own settings |

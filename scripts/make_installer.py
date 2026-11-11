@@ -39,9 +39,20 @@ ROOT = Path(__file__).resolve().parents[1]
 LOCK = ROOT / "pixi.lock"
 CHANNEL = "https://github.com/acmeanvil/Puzzle/releases/download"
 BASE = "app"
-# Solver and helper environments shipped beside Puzzle, by their pixi names. Not
-# calculix-pardiso: CalculiX with PARDISO is built on the user's machine (step 4).
-EXTRA = ("calculix", "fenicsx", "code-aster", "netgen", "mmg", "scripts", "runner")
+# Solver and helper environments shipped beside Puzzle, by their pixi names.
+# calculix-pardiso holds the compilers, MKL and libraries only: CalculiX with PARDISO is
+# built from them on the user's machine (step 4, `puzzle.solver_builds`), never shipped
+# linked. The lock has none for Apple silicon (no MKL), so it is left out there.
+EXTRA = (
+    "calculix",
+    "calculix-pardiso",
+    "fenicsx",
+    "code-aster",
+    "netgen",
+    "mmg",
+    "scripts",
+    "runner",
+)
 OURS = ("puzzle-fem", "py-slvs", "manifold3d")  # Puzzle's channel, for the lock's PyPI ones
 TYPES = {"linux": "sh", "osx": "pkg", "win": "exe"}
 # Signing (step 3) is on only when these are set, as CI does from its secrets once the

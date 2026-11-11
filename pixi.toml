@@ -62,12 +62,14 @@ lint = "ruff check . && ruff format --check ."
 install-solvers = "pixi install -e calculix && pixi install -e fenicsx && pixi install -e netgen"
 check = { cmd = "pytest", depends-on = ["lint", "install-solvers"] }
 import-materials = "python scripts/import_materials.py"
+# CalculiX with PARDISO into the calculix-pardiso environment (ADR 0051, 0068 step 4)
+build-calculix = "pixi install -e calculix-pardiso && puzzle solvers --build"
 
 [feature.dev.target.unix.activation.env]
 PUZZLE_SOLVER_PATH = "$PIXI_PROJECT_ROOT/.pixi/envs/calculix-pardiso/bin:$PIXI_PROJECT_ROOT/.pixi/envs/calculix/bin:$PIXI_PROJECT_ROOT/.pixi/envs/fenicsx/bin:$PIXI_PROJECT_ROOT/.pixi/envs/code-aster/bin:$PIXI_PROJECT_ROOT/.pixi/envs/netgen/bin"
 
 [feature.dev.target.win.activation.env]
-PUZZLE_SOLVER_PATH = "%PIXI_PROJECT_ROOT%\\.pixi\\envs\\calculix\\Library\\bin;%PIXI_PROJECT_ROOT%\\.pixi\\envs\\fenicsx;%PIXI_PROJECT_ROOT%\\.pixi\\envs\\code-aster\\Library\\bin;%PIXI_PROJECT_ROOT%\\.pixi\\envs\\netgen"
+PUZZLE_SOLVER_PATH = "%PIXI_PROJECT_ROOT%\\.pixi\\envs\\calculix-pardiso\\Library\\bin;%PIXI_PROJECT_ROOT%\\.pixi\\envs\\calculix\\Library\\bin;%PIXI_PROJECT_ROOT%\\.pixi\\envs\\fenicsx;%PIXI_PROJECT_ROOT%\\.pixi\\envs\\code-aster\\Library\\bin;%PIXI_PROJECT_ROOT%\\.pixi\\envs\\netgen"
 
 [feature.gui.dependencies]
 pyside6 = ">=6.7"
@@ -98,14 +100,14 @@ hidapi = ">=0.14"
 calculix = "2.23.*"
 
 # CalculiX built with MKL's PARDISO (2-4x faster factoring than conda-forge's SPOOLES,
-# the same answers): `pixi run -e calculix-pardiso build-calculix` compiles it into this
-# environment, and Puzzle uses it before `calculix`. MKL: Intel Linux and Macs only here.
+# the same answers): `pixi run -e dev build-calculix` (`puzzle.solver_builds`, which the
+# installed app runs by itself) compiles it into this environment, and Puzzle uses it
+# before `calculix`. MKL: Intel Linux and Macs, and
+# Windows with conda-forge's MinGW gcc and gfortran.
 [feature.calculix-pardiso]
-platforms = ["linux-64", "osx-64-macos14"]
+platforms = ["linux-64", "osx-64-macos14", "win-64"]
 
 [feature.calculix-pardiso.dependencies]
-c-compiler = "*"
-fortran-compiler = "*"
 make = "*"
 mkl = "2023.*"
 mkl-devel = "2023.*"
@@ -113,10 +115,16 @@ arpack = "*"
 spooles = "*"
 libblas = "*"
 liblapack = "*"
+
+[feature.calculix-pardiso.target.unix.dependencies]
+c-compiler = "*"
+fortran-compiler = "*"
 llvm-openmp = "*"
 
-[feature.calculix-pardiso.tasks]
-build-calculix = "bash scripts/build_calculix_pardiso.sh"
+[feature.calculix-pardiso.target.win-64.dependencies]
+gcc = "*"
+gfortran = "*"
+
 
 [feature.fenicsx.dependencies]
 python = "3.12.*"

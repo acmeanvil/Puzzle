@@ -1,6 +1,6 @@
 # 0068. Ship Puzzle as one installer per system, with every solver inside
 
-- Status: Accepted (2026-11-05); steps 1 and 2 of 5 built
+- Status: Accepted (2026-11-05); steps 1 to 4 of 5 built (step 4 on 2026-11-10)
 - Date: 2026-11-05
 
 ## Context
@@ -252,6 +252,41 @@ Other constraints:
 - `tests/test_packaging.py`: the explicit lists match the lock package for package, the
   extra environments, Code_Aster left out where the lock has none, and a missing
   dependency refused.
+
+**Step 3 (2026-11-07 to 11-08):** installers for every platform built and smoke-tested in
+CI (install, CalculiX and FEniCSx solves, every solver environment, ParaView), one
+platform or a list on demand; signing and notarization ready to switch on.
+
+**Step 4 (2026-11-10): CalculiX with PARDISO built at home, and the Solvers page
+(decisions 5 and 6).**
+
+- The installer ships the `calculix-pardiso` environment (compilers, MKL, ARPACK,
+  SPOOLES; never CalculiX linked with MKL) on linux-64, osx-64 and win-64; the lock has
+  none for Apple silicon (no MKL), so it is left out there.
+- `puzzle.solver_builds` builds it (ADR 0051's build, moved from a shell script to Python
+  so that the installed app needs no bash or make): CalculiX's source fetched and checked
+  by its SHA-256, the files Makefile.inc lists compiled in parallel, archived and linked,
+  then a one-element deck solved with the new program must say PARDISO before it is put
+  in place (the old one renamed aside, since Windows won't overwrite a running program).
+  Its state is kept in `<user data dir>/solver-builds/`: ready, building, failed (with the
+  reason), built. On Windows it builds with conda-forge's MinGW gcc and gfortran 16.
+- The GUI starts it once, 8 s after opening, with a toast, and says when it ends (built,
+  or failed with the reason; the plain CalculiX is used meanwhile and after a failure).
+  A failed build (offline, say) is tried again a day later. Preference
+  `solvers.build_pardiso` (Settings > Solvers, on by default).
+- Decision 3 said nothing is downloaded at first launch: the CalculiX source is (7 MB,
+  from dhondt.de) when the build runs, since shipping it in a package is more machinery
+  for no gain; without a network the plain CalculiX keeps working and the build waits.
+- The Solvers page: Settings > Solvers lists each solver and how a solve runs it here
+  (native with its program, in a container with its image, or not available with why),
+  CalculiX's note (PARDISO, or SPOOLES and PARDISO's state), and Build CalculiX with
+  PARDISO now. `puzzle solvers [--build] [--json]` says the same. Repair (reinstalling an
+  environment from the installer's packages) is not built yet.
+- Measured on Windows 11: the Python build compiles CalculiX's 1170 files with MinGW gcc and
+  gfortran 16, links against mkl_rt, passes its PARDISO check and installs; the CalculiX
+  benchmarks pass on it. Found on the way: no shell runs the compiler, so ARCH=Linux takes
+  no quotes (CalculiX.h compares it to pick FORTRAN()'s name mangling), and 2.23's
+  Makefile.inc lists mafillmm as .c beside its .f with only the .f there.
 
 ## Decided (2026-11-05, maintainer)
 

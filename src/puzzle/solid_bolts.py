@@ -28,6 +28,9 @@ FILLET_MIN = {
     0.048: 0.0016, 0.052: 0.0016, 0.056: 0.002, 0.060: 0.002, 0.064: 0.002,
 }  # fmt: skip
 HEADS = {"hex": "hex", "socket": "socket"}  # head style -> fasteners' style
+# A modelled bolt's bonds are ties between separate meshes: a conformal (shared-node) bond
+# would fragment the bolt with its neighbour and mesh it as tetrahedra, not revolved.
+TIED = "nonconformal"
 
 
 def fillet_radius(d: float) -> float:
@@ -252,7 +255,7 @@ def placement(head_point, direction) -> tuple[tuple, tuple]:
     return tuple(float(x) for x in head_point), (a, b, 0.0)
 
 
-def nut_tool(state, a):
+def nut_tool(state, a, bore: str = "thread"):
     """The `nut` history step: a nut as a ring about z (its flats idealised as its
     bearing circle), the bearing face at z = 0, the nut up to z = height; faces
     `bearing`, `top`, `side`, `thread` (the bore, at the bolt's minor radius)."""
@@ -269,13 +272,20 @@ def nut_tool(state, a):
     axis = gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1))
     outer = BRepPrimAPI_MakeCylinder(axis, ro, h).Shape()
     ring = BRepAlgoAPI_Cut(outer, BRepPrimAPI_MakeCylinder(axis, ri, h).Shape()).Shape()
-    names: dict[str, list] = {"bearing": [], "top": [], "side": [], "thread": []}
+    names: dict[str, list] = {"bearing": [], "top": [], "side": [], bore: []}
     for f in _subshapes(ring, TopAbs_FACE):
         if _is_flat_across(f):
             names["bearing" if abs(_centre_z(f)) < 1e-9 else "top"].append(f)
         else:
-            names["thread" if _radius(f) < (ri + ro) / 2 else "side"].append(f)
+            names[bore if _radius(f) < (ri + ro) / 2 else "side"].append(f)
     return ring, {k: v for k, v in names.items() if v}
+
+
+def washer_tool(state, a):
+    """The `washer` history step: a plain washer as a ring about z, its face on the
+    plate (`bearing`) at z = 0 and the head's or nut's (`top`) at z = thickness; its
+    bore (`bore`) clears the bolt, so nothing touches it."""
+    return nut_tool(state, a, bore="bore")
 
 
 def _radius(face) -> float:
@@ -377,7 +387,12 @@ def make_commands(project, comp, index: int, root, *, bonded_heads: bool = False
     grade as its material, the head's (and nut's) frictional contact on the plates
     (bonded with `bonded_heads`), its thread into a tapped hole (or the nut) as a
     threaded contact, its preload on a section across the shank, finer elements at
-    the fillet and the thread, and the bolt marked `modelled`. One batch: one undo."""
+    the fillet and the thread, and the bolt marked `modelled`. One batch: one undo.
+
+    Washers (the bolt's `washers`, its type's series) are parts of their own between
+    the head or nut and the plate: bonded to the head or nut, which don't slip on them,
+    and in the bearing contact with the plate; the grip and length grow by their
+    thickness."""
     import numpy as np
 
     from puzzle import bolts, fasteners
@@ -408,9 +423,22 @@ def make_commands(project, comp, index: int, root, *, bonded_heads: bool = False
     a_mid = np.asarray(a_hole.point) + a_hole.axis * np.mean(a_hole.span)
     b_mid = np.asarray(b_hole.point) + b_hole.axis * np.mean(b_hole.span)
     axis = (b_mid - a_mid) / np.linalg.norm(b_mid - a_mid)
-    head_point = a_hole.mouths(axis)[0]  # the source's outer mouth: where the head bears
     d = solved.diameter.to_si()
     metric = size.startswith("M")
+    washers = solved.washers or "none"
+    w_style = getattr(btype, "washer", "normal")
+    w_part = None
+    if washers != "none":
+        w_part = fasteners.washer(w_style, d, metric)
+        if w_part is None:
+            raise ValueError(f"bolt '{bolt.name}': no {w_style.replace('_', ' ')} washer in "
+                             f"the tables for {size}")  # fmt: skip
+    head_washer = w_part is not None and washers in ("head", "both")
+    nut_washer = w_part is not None and washers in ("nut", "both") and joint == "through_nut"
+    t_head = w_part.height if head_washer else 0.0
+    t_nut = w_part.height if nut_washer else 0.0
+    plate_head = a_hole.mouths(axis)[0]  # the source's outer mouth: where the head bears
+    head_point = plate_head - axis * t_head
     nut_part = None
     if joint == "tapped":
         mouth, bottom = b_hole.mouths(axis)
@@ -419,7 +447,7 @@ def make_commands(project, comp, index: int, root, *, bonded_heads: bool = False
         length = grip + min(engaged, float((bottom - mouth) @ axis))
     else:
         far = b_hole.mouths(axis)[1]
-        grip = float((far - head_point) @ axis)
+        grip = float((far - head_point) @ axis) + t_nut
         nut_part = fasteners.nut("hex", d, metric)
         length = grip + (nut_part.height if nut_part else 0.8 * d) + 3 * _pitch(size)
     length = math.ceil(length / 0.005 - 1e-9) * 0.005
@@ -467,10 +495,40 @@ def make_commands(project, comp, index: int, root, *, bonded_heads: bool = False
         kind = "bonded" if bonded_heads else "frictional"
         contacts.append(Contact(name=f"{name} {label}", type=kind, source=source,
                                 target=f"{face_part}/{selection.name}",
-                                friction=None if bonded_heads else friction))  # fmt: skip
+                                friction=None if bonded_heads else friction,
+                                meshing=TIED if bonded_heads else None))  # fmt: skip
 
-    bearing_contact(f"{part_name}/Bearing", solved.source.split("/")[0], head_point, "head",
-                    a_hole, dim.head_radius)  # fmt: skip
+    def washer(label: str, plate_point, toward) -> str:
+        """A washer on the plate at `plate_point`, its top facing `toward` (the head or
+        nut); its part's name."""
+        w_args = {"outer_radius": w_part.bearing / 2, "inner_radius": w_part.inner / 2,
+                  "height": w_part.height}  # fmt: skip
+        w_geo = Geometry(
+            name=f"{name} ({label} washer)",
+            history=[HistoryStep(kind="washer", name="W", args=w_args)],
+            selections=[
+                NamedSelection(name=n, entity="face", members=[f"W/{f}"])
+                for n, f in (("Bearing", "bearing"), ("Top", "top"))
+            ],  # fmt: skip
+        )
+        commands.append(Create(kind="geometry", data=w_geo.model_dump(mode="json")))
+        w_name = f"{name} {label} washer"
+        w_translation, w_rotation = placement(plate_point, -np.asarray(toward))
+        parts.append(PartInstance(name=w_name, geometry=w_geo.id, translation=w_translation,
+                                  rotation=w_rotation))  # fmt: skip
+        materials.append(MaterialAssignment(material=solved.material, selection=w_name))
+        return w_name
+
+    plate_a = solved.source.split("/")[0]
+    if head_washer:
+        w_name = washer("head", plate_head, -axis)
+        contacts.append(Contact(name=f"{name} head on washer", type="bonded", meshing=TIED,
+                                source=f"{part_name}/Bearing", target=f"{w_name}/Top"))  # fmt: skip
+        bearing_contact(f"{w_name}/Bearing", plate_a, plate_head, "head washer", a_hole,
+                        w_part.bearing / 2)  # fmt: skip
+    else:
+        bearing_contact(f"{part_name}/Bearing", plate_a, head_point, "head", a_hole,
+                        dim.head_radius)  # fmt: skip
     thread = solved.thread or Thread(form="iso", size=size)
     if joint == "tapped":
         contacts.append(Contact(name=f"{name} thread", type="bonded",
@@ -491,12 +549,22 @@ def make_commands(project, comp, index: int, root, *, bonded_heads: bool = False
         commands.append(Create(kind="geometry", data=nut_geo.model_dump(mode="json")))
         far = b_hole.mouths(axis)[1]
         nut_name = f"{name} nut"
-        n_translation, n_rotation = placement(far, -axis)  # it faces back up the bolt
+        # It faces back up the bolt, on its washer when it has one.
+        n_translation, n_rotation = placement(far + axis * t_nut, -axis)
         parts.append(PartInstance(name=nut_name, geometry=nut_geo.id,
                                   translation=n_translation, rotation=n_rotation))  # fmt: skip
         materials.append(MaterialAssignment(material=solved.material, selection=nut_name))
-        bearing_contact(f"{nut_name}/Bearing", solved.target.split("/")[0], far, "nut",
-                        b_hole, nut_args["outer_radius"])  # fmt: skip
+        plate_b = solved.target.split("/")[0]
+        if nut_washer:
+            w_name = washer("nut", far, axis)
+            contacts.append(Contact(name=f"{name} nut on washer", type="bonded", meshing=TIED,
+                                    source=f"{nut_name}/Bearing",
+                                    target=f"{w_name}/Top"))  # fmt: skip
+            bearing_contact(f"{w_name}/Bearing", plate_b, far, "nut washer", b_hole,
+                            w_part.bearing / 2)  # fmt: skip
+        else:
+            bearing_contact(f"{nut_name}/Bearing", plate_b, far, "nut", b_hole,
+                            nut_args["outer_radius"])  # fmt: skip
         contacts.append(Contact(name=f"{name} nut thread", type="bonded",
                                 source=f"{part_name}/Thread", target=f"{nut_name}/Thread",
                                 thread=thread))  # fmt: skip
@@ -520,6 +588,9 @@ def make_commands(project, comp, index: int, root, *, bonded_heads: bool = False
     if recipe is not None:
         sizes = [(f"{part_name}/Fillet", max(dim.fillet / 3, dim.d / 200)),
                  (f"{part_name}/Thread", dim.pitch / 4)]  # fmt: skip
+        # Two elements through a washer's thickness.
+        sizes += [(f"{p.name}/Top", w_part.height / 2) for p in parts
+                  if p.name.endswith(" washer")]  # fmt: skip
         controls = [
             {"kind": "size", "selection": sel, "size": {"value": round(v * 1e3, 4), "unit": "mm"}}
             for sel, v in sizes

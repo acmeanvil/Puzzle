@@ -66,6 +66,7 @@ COLUMNS = [
     Column("Ends", "ends", "choice"),
     Column("Joint", "joint", "choice"),
     Column("Head", "head", "choice"),
+    Column("Washers", "washers", "choice"),
     Column("Thread Kf", "thread_kf", "number"),
     Column("Group", "group"),
 ]
@@ -228,7 +229,7 @@ class PropertiesTab(QWidget):
         value = getattr(solved, column.field)
         if column.kind == "number":
             return ("" if value is None else f"{value:g}"), typed
-        if column.field in ("formulation", "ends", "joint", "head"):
+        if column.field in ("formulation", "ends", "joint", "head", "washers"):
             return (label(value) if value is not None else ""), typed
         return ("" if value is None else str(value)), typed
 

@@ -94,11 +94,14 @@ class OperatorType:
 # ADR 0071 decision 3: the series operators (`operators.series`). A and B take a curve or
 # a number; with two numbers the arithmetic gives a number (`first_type` with a project).
 _CN = ("series", "number")
+# ADR 0071 step 5: the arithmetic and Normalise take result fields too (a Filter's, or
+# another field operator's), giving a field drawn in the view.
+_CNF = ("series", "number", "field")
 
 
 def _ab(a: str = "A", b: str = "B", b_typed: bool = True) -> tuple[PortSpec, ...]:
-    return (PortSpec("a", a, _CN, typed="number"),
-            PortSpec("b", b, _CN, typed="number" if b_typed else ""))  # fmt: skip
+    return (PortSpec("a", a, _CNF, typed="number"),
+            PortSpec("b", b, _CNF, typed="number" if b_typed else ""))  # fmt: skip
 
 
 _CURVE_IN = (PortSpec("series", "Curve", ("series",)),)
@@ -178,7 +181,10 @@ SERIES_TYPES = (
         "Curves",
         "A curve divided by a number, by another curve, or (nothing wired) by its own "
         "largest size: a shape between −1 and 1 to compare with others.",
-        (*_CURVE_IN, PortSpec("by", "By", _CN, required=False, typed="number")),
+        (
+            PortSpec("series", "Curve or field", ("series", "field")),
+            PortSpec("by", "By", _CNF, required=False, typed="number"),
+        ),
         _CURVE_OUT,
         (),
     ),
@@ -191,6 +197,54 @@ SERIES_TYPES = (
         (*_CURVE_IN, *(PortSpec(k, k, ("number",), required=False, typed="number") for k in "abc")),
         _CURVE_OUT,
         ("expression",),
+    ),
+    OperatorType(
+        "field_formula",
+        "Field formula",
+        "Results",
+        "A new result worked out at every node from one field f (and another, g), wired "
+        "numbers a, b, c and parameters, units checked: f / 250 MPa, f - g, abs(f), drawn in "
+        "the view.",
+        (
+            PortSpec("f", "Field f", ("field",)),
+            PortSpec("g", "Field g", ("field",), required=False),
+            *(PortSpec(k, k, ("number",), required=False, typed="number") for k in "abc"),
+        ),
+        (PortSpec("out", "Field", ("field",)),),
+        ("expression",),
+    ),
+    OperatorType(
+        "slice",
+        "Slice",
+        "Results",
+        "A field on a plane (a construction plane) as a table of the cut's points and "
+        "values, as ParaView's Slice: what the stress is across a wall.",
+        (PortSpec("field", "Field", ("field",)),),
+        (PortSpec("out", "Points", ("table",)),),
+        ("target",),
+    ),
+    OperatorType(
+        "clip",
+        "Clip",
+        "Results",
+        "A field kept on one side of a plane (above: the side its normal faces), as "
+        "ParaView's Clip: the rest left out, still on the mesh.",
+        (PortSpec("field", "Field", ("field",)),),
+        (PortSpec("out", "Field", ("field",)),),
+        ("target", "keep"),
+    ),
+    OperatorType(
+        "contour",
+        "Contour",
+        "Results",
+        "Where a field takes a value (an iso-surface), as a table of points, as ParaView's "
+        "Contour: the 250 MPa surface, the 100 °C front.",
+        (
+            PortSpec("field", "Field", ("field",)),
+            PortSpec("level", "Value", ("number",), typed="number"),
+        ),
+        (PortSpec("out", "Points", ("table",)),),
+        (),
     ),
     OperatorType(
         "curve_from_table",
@@ -300,6 +354,8 @@ SERIES_TYPES = (
 # The arithmetic: two numbers give a number, anything with a curve gives a curve.
 CURVE_OR_NUMBER = frozenset({"divide_by", "subtract", "multiply", "add", "utilisation",
                              "safety_factor", "margin"})  # fmt: skip
+# Whose output's type follows what is wired in (a field in gives a field out).
+FOLLOWS_INPUTS = CURVE_OR_NUMBER | {"normalise"}
 
 
 TYPES: dict[str, OperatorType] = {
@@ -928,7 +984,8 @@ ALIASES = {
     "lookup": ("graph mapper", "vlookup", "interpolate", "lookup table"),
     "result_table": ("deconstruct mesh", "results to table", "export results"),
     "points_table": ("sweep points", "design points", "gene pool"),
-    "reduce": ("maximum", "minimum", "extremes", "bounds", "integral", "mean"),
+    "reduce": ("maximum", "minimum", "extremes", "bounds", "integral", "mean",
+               "integrate variables"),
     "filter": ("threshold", "mask", "cull"),
     "columns": ("select columns", "rename", "drop columns", "pick columns"),
     "filter_rows": ("cull pattern", "cull index", "dispatch", "where", "filter content",
@@ -983,6 +1040,11 @@ ALIASES = {
     "margin": ("margin", "ms", "reserve"),
     "normalise": ("normalize", "non-dimensional", "scale to maximum", "unit maximum"),
     "curve_formula": ("series expression", "map y", "transform curve"),
+    "slice": ("cut plane", "section plane", "paraview slice"),
+    "clip": ("half model", "cut away", "paraview clip"),
+    "contour": ("iso-surface", "isosurface", "isoline", "level set", "paraview contour"),
+    "field_formula": ("field expression", "result calculator", "calculator", "field math",
+                      "derived field", "user defined result"),
     "curve_from_table": ("table to curve", "xy data", "columns to curve"),
     "over_steps": ("history", "time history", "against time", "against frequency",
                    "over time"),
@@ -1072,6 +1134,11 @@ EXAMPLES = {
     "margin": "A peak stress of 200 MPa against 250 MPa → 0.25.",
     "normalise": "A deflected shape along a beam ÷ its largest deflection → 1 at the tip.",
     "curve_formula": "y / 250 MPa, or y * a with a wired factor.",
+    "slice": "Von Mises on a construction plane across a nozzle's wall → its points' values.",
+    "clip": "Temperature kept above a plane at the weld → its largest value there (Reduce).",
+    "contour": "Von Mises at 250 MPa → the points where the plate yields.",
+    "field_formula": "Von Mises at the last step minus the first (f - g), or f / 250 MPa: "
+    "the change, or the utilisation, shown on the model.",
     "over_steps": "A result tool's displacement in a transient run → displacement against time.",
     "at_step": "A path in a 20-step transient → the curve at step 20.",
     "compare_steps": "Each step's path against step 1, as a ratio: how the load spreads.",
@@ -1150,12 +1217,27 @@ def first_type(op, project=None) -> str:
     project, the arithmetic's from what is wired in (two numbers make a number)."""
     if op.type == "script":
         return op.returns
-    if op.type in CURVE_OR_NUMBER and project is not None:
-        return "number" if _numbers_only(project, op) else "series"
+    if op.type in FOLLOWS_INPUTS and project is not None:
+        return arithmetic_type(project, op)
     if op.type == "model_value" and op.property.startswith("tables."):
         return "table"  # a property against temperature
     outputs = TYPES[op.type].outputs
     return outputs[0].type if outputs else ""
+
+
+def arithmetic_type(project, op, seen=()) -> str:
+    """What an arithmetic operator (or Normalise) gives, from what is wired in: a field
+    if any input is a field, else a number if every input is a number, else a curve."""
+    types = set()
+    for inp in op.inputs.values():
+        if inp.source is None or inp.source in seen:
+            continue
+        types.add(output_type(project, inp.source, inp.port, (*seen, op.id)))
+    if "field" in types:
+        return "field"
+    if op.type == "normalise":
+        return "series"
+    return "number" if types <= {"number"} else "series"
 
 
 def _numbers_only(project, op, seen=()) -> bool:
@@ -1231,8 +1313,8 @@ def output_type(project, source: UUID, port: str, seen=()) -> str | None:
         return "table" if port == "points" else "result"
     from puzzle.model.schema import Operator
 
-    if isinstance(obj, Operator) and obj.type in CURVE_OR_NUMBER and port == "out":
-        return "number" if _numbers_only(project, obj, seen) else "series"
+    if isinstance(obj, Operator) and obj.type in FOLLOWS_INPUTS and port == "out":
+        return arithmetic_type(project, obj, seen)
     found = next((t for k, _, t in outputs_of(project, obj) if k == port), None)
     return found
 

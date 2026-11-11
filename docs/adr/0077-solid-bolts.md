@@ -1,6 +1,6 @@
 # 0077. Generate solid bolts from the fastener tables, meshed as bodies of revolution
 
-- Status: Accepted; built on CalculiX (2026-11-10)
+- Status: Accepted; built on CalculiX and Code_Aster (2026-11-10)
 - Date: 2026-11-09
 
 ## Context
@@ -137,7 +137,25 @@ node rings lining up with the thread's pairs (ADR 0076). Netgen has no swept mes
     carries 104 and 31 N as a dowel; the modelled bolt's heads only rub and the seat
     doesn't slip, so its shank carries 2-3 N. The beam's shear is the artefact. The
     modelled solve took 8089 s against 271 s (four frictional head and nut contacts on
-    SPOOLES, Windows): model the bolts whose stresses matter.
-- Not done: Code_Aster's modelled bolts (decision 5 put CalculiX first; Code_Aster's
-  frictional contacts need first-order meshes, ADR 0053), washers.
+    SPOOLES, Windows), and 2521 s against 161 s with PARDISO (ADR 0051, the same
+    answers): model the bolts whose stresses matter.
+- Washers (2026-11-10): `BoltType.washers` (none, head, nut, both; a bolt's own
+  `washers` over it) and `washer` (the series: normal, small, large, extra large,
+  structural; ISO 7089-7094, ASME B18.21.1, ASTM F436) draw plain washers from the
+  tables (the `washer` history step, a ring meshed as a body of revolution). Each is
+  bonded to its head or nut and in the frictional bearing contact with the plate: one
+  frictional contact per bearing stack, as without a washer, since the head doesn't
+  slip on its washer once tight. The bolt's grip and length grow by the thickness
+  (M16 normal: 3.3 mm). Every bond a modelled bolt makes (head on washer, bonded heads)
+  is a tie between separate meshes (`meshing` nonconformal): a conformal bond had the
+  mesher fragment the bolt with its neighbour and mesh it as tetrahedra. Measured: the
+  M16 joint with a washer under the head carries 39.81 kN at the section (−0.5 %), as
+  without one (39.79).
+- Code_Aster (2026-11-10): the same joint on a first-order mesh (Code_Aster's frictional
+  contacts need one: the revolved bolt in hex8 and wedge6, the plates in tet4) carries
+  40.31 kN at the section (+0.8 %), in 95 s with the meshing. On a second-order mesh it
+  refuses the frictional heads with that reason; `bonded_heads` keeps second order. The
+  revolved mesh's quadrilateral faces needed face integration over quad4, quad8 and
+  quad9 (`common._quad_shape`, 3 × 3 Gauss; `tests/test_face_quadrature.py`), which
+  contact results and remote loads use.
 

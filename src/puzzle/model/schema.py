@@ -111,6 +111,7 @@ class HistoryStep(BaseModel):
         "keep",
         "bolt",
         "nut",
+        "washer",
         "box",
         "cylinder",
         "cone",
@@ -1393,6 +1394,9 @@ class BeamFastener(BaseModel):
     head: Literal["hex", "socket"] | None = Field(
         default=None, description="a modelled bolt's head (ADR 0077); empty: its type's"
     )
+    washers: Literal["none", "head", "nut", "both"] | None = Field(
+        default=None, description="a modelled bolt's plain washers; empty: its type's"
+    )
     thread_kf: float | None = Field(
         default=None, ge=1.0,
         description="a modelled bolt's thread-root fatigue notch factor; empty: its type's",
@@ -1520,6 +1524,15 @@ class BoltType(ProjectObject):
     nut_factor: float = Field(default=0.2, gt=0, description="K in F = T / (K d)")
     formulation: Literal["beam", "solid", "modelled"] = "beam"
     head: Literal["hex", "socket"] = Field(default="hex", description="a modelled bolt's head")
+    washers: Literal["none", "head", "nut", "both"] = Field(
+        default="none",
+        description="a modelled bolt's plain washers: under the head, the nut, or both",
+    )
+    washer: Literal["normal", "small", "large", "extra_large", "structural"] = Field(
+        default="normal",
+        description="the washers' series: ISO 7089/7092/7093/7094 or ASME B18.21.1 "
+        "(structural: ASTM F436, inch sizes)",
+    )
     thread_kf: float = Field(
         default=3.0, ge=1.0,
         description="the thread root's fatigue notch factor on a modelled bolt's basic "
@@ -2383,7 +2396,9 @@ class Operator(ProjectObject):
                   "profile", "script", "model_value",
                   # ADR 0071 decision 3: curves (operators.series)
                   "divide_by", "subtract", "multiply", "add", "utilisation",
-                  "safety_factor", "margin", "normalise", "curve_formula",
+                  "safety_factor", "margin", "normalise", "curve_formula", "field_formula",
+                  "slice", "clip",
+                  "contour",
                   "curve_from_table", "over_steps", "at_step", "compare_steps",
                   "envelope", "match_x", "area_under", "slope", "limit_line",
                   "annotate"]  # fmt: skip

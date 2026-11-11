@@ -109,6 +109,46 @@ def write(folder: Path, shown, view: View, mesh=None, results=None) -> Path:
     return script
 
 
+def from_run(
+    mesh,
+    results,
+    *,
+    field: str = "displacement",
+    scalar: str | None = None,
+    step: int | None = None,
+    mode: int | None = None,
+    deform="auto",
+    clim: tuple[float, float] | None = None,
+):
+    """What `write` needs for a stored run without the GUI (`puzzle paraview`): the grid
+    of the step picked and View with the array named as `puzzle show` would colour it
+    (in the array's own units), the legend from Settings > Results, the warp scale."""
+    import numpy as np
+
+    from puzzle.post.legend import Legend
+    from puzzle.post.view import DEFAULT_SCALAR
+    from puzzle.post.vtk import pick_step, to_grid
+
+    picked = pick_step(results, field, step=step, mode=mode)
+    grid = to_grid(mesh, picked)
+    name = scalar or DEFAULT_SCALAR.get(field, field)
+    if name not in grid.point_data and name not in grid.cell_data:
+        available = sorted(set(grid.point_data) | set(grid.cell_data))
+        raise KeyError(f"no '{name}' to show; available: {available}")
+    scale = 0.0
+    if deform is not None and "displacement" in grid.point_data:
+        u = np.nan_to_num(grid.point_data["displacement"])
+        umax = float(np.linalg.norm(u, axis=1).max())
+        scale = (0.1 * grid.length / umax if umax > 0 else 0.0) if deform == "auto" else float(
+            deform)  # fmt: skip
+    legend = Legend.from_settings()
+    label = picked.label() if picked.mode else f"step {picked.index}"
+    view = View(array=name, points=name in grid.point_data, title=name, clim=clim,
+                colormap=legend.colormap, invert=legend.invert, bands=legend.bands,
+                warp="displacement" if scale else None, scale=scale, step=label)  # fmt: skip
+    return grid, view
+
+
 def launch(script: Path) -> subprocess.Popen:
     """ParaView on `script`, detached: closing Puzzle leaves it open, and the reverse."""
     exe = find()

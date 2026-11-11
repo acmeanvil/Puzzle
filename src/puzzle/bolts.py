@@ -215,6 +215,8 @@ def resolve(project, fastener):
         update["thread"] = type_thread(btype)
     if fastener.head is None:
         update["head"] = btype.head
+    if fastener.washers is None:
+        update["washers"] = btype.washers
     if fastener.thread_kf is None:
         update["thread_kf"] = btype.thread_kf
     return fastener.model_copy(update=update)

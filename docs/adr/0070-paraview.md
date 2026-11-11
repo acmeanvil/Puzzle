@@ -1,6 +1,6 @@
 # 0070. ParaView beside Puzzle, and its filters inside
 
-- Status: Accepted (2026-11-07)
+- Status: Accepted (2026-11-07); level 1 built, with the command line (2026-11-10)
 - Date: 2026-11-07
 
 ## Context
@@ -129,5 +129,22 @@ Found:
   VTK's own CGNS module (`libvtkcgns`), which vtk-base 9.7.0 has in its build 0 and not
   in build 1, so pvbatch failed to load with build 1. OCP holds VTK at 9.7.0, so
   `vtk-base ==9.7.0 *_0` is pinned (pixi.toml and the recipe) until both move on.
-- Not yet: `puzzle paraview` on the command line (it needs the results view's
-  quantities computed outside the GUI), and level 2.
+- `puzzle paraview PROJECT --study NAME|--run ID [--scalar S] [--field F] [--step N]
+  [--mode N] [--deform auto|none|k] [--range lo,hi] [--no-launch]` (2026-11-10,
+  `paraview_link.from_run`): the step and array as `puzzle show` picks them (the array's
+  own units, not the display units the GUI's view uses), the legend from Settings >
+  Results, the run's series and view.py, then ParaView; `tests/integration/
+  test_cli_runs.py`.
+- A run's right-click Open in ParaView (2026-11-10, `menus.open_run_in_paraview`): the run
+  shown, then opened as the ribbon's button opens what is shown.
+- Level 2, begun (2026-11-10, `operators/vtk_filters.py`): ParaView's filters are VTK's,
+  and Puzzle holds VTK, so they run in Puzzle's process, not in ParaView: Slice (a field
+  on a construction plane as a table of points), Clip (a field kept on one side, still a
+  field) and Contour (an iso-value's points). Those ParaView names otherwise are Puzzle
+  operators already and are found by ParaView's names in the palette: Threshold (Filter),
+  Calculator (Field formula), Integrate Variables (Reduce's integral), Plot Over Line (a
+  Path result tool). This amends decision 4's "form generated from ParaView's own
+  property descriptions": no ParaView process, so they work without ParaView (macOS
+  before 14) and in agents' and scripts' runs. Not yet: Stream Tracer and Glyph (they
+  need a vector field port), a surface (not only points) out of Slice and Contour for the
+  view.

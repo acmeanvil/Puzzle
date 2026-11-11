@@ -254,3 +254,26 @@ names, units and no raw data on view.
   from arithmetic on model values, the agent's summary and MCP; `tests/test_series_gui.py`
   (the Plots panel's limit line and note in display units, the node's small plot,
   settings in words). The skill's Curves section.
+
+**Step 5, field operators (2026-11-10).**
+
+- The arithmetic (Divide, Subtract, Multiply, Add, Utilisation, Safety factor, Margin of
+  safety) and Normalise take fields (`_CNF` ports): a field in gives a field out
+  (`arithmetic_type`, through `first_type`/`output_type`, so the schematic types the
+  wire), worked out at the fields' common nodes with units followed through
+  (`series.field_formula`); two fields must be on one mesh and the same location, a
+  node either leaves out stays out. Normalise without a divisor divides by the field's
+  largest size.
+- Field formula: an expression over fields `f` and `g`, numbers `a`, `b`, `c` and the
+  parameters ("f - g", "f / 250 MPa", "abs(f)").
+- A field operator selected in the GUI draws its field on the model, as a Filter's
+  (`gui/operators.preview_field`), with the legend and probes.
+- `tests/test_series.py`: two steps' von Mises subtracted (200·x MPa), divided by the
+  yield (1.2), normalised (x), a field formula, a stress plus a temperature refused. The
+  skill's Fields section.
+- ParaView operators, begun: Slice, Clip and Contour on VTK (ADR 0070 level 2,
+  `operators/vtk_filters.py`), the plane a construction plane (`target`, wired in the
+  schematic as "Plane it cuts on"); ParaView's names found in the palette.
+- Not yet (step 5): fields across studies on different meshes (a transfer's mapping),
+  and the derived results (ADR 0025) offered as field sources.
+

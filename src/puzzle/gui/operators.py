@@ -124,7 +124,10 @@ def show(window, op) -> None:
                    + ([("Example", doc["example"])] if doc["example"] else []))  # fmt: skip
     if op.type == "preview":
         preview(window, op)
-    if op.type == "filter":  # ADR 0062: the field it keeps, on the mesh it came from
+    from puzzle.operators import first_type
+
+    # ADR 0062: a Filter's field, and ADR 0071 step 5: a field operator's, on its mesh.
+    if op.type == "filter" or first_type(op, window.session.project) == "field":
         preview_field(window, op)
     if op.type == "script":  # ADR 0062 phase 4: its code in a box of its own
         from puzzle.operators.scripts import imports, missing
@@ -268,8 +271,9 @@ def edit_code(window, op):
 
 
 def preview_field(window, op) -> bool:
-    """A Filter's field drawn in the 3D view: its kept values on its selection (or the
-    whole model), the values it leaves out in the muted colour. Returns whether drawn."""
+    """A Filter's (or a field operator's) field drawn in the 3D view: its kept values on
+    its selection (or the whole model), the values it leaves out in the muted colour.
+    Returns whether drawn."""
     import numpy as np
 
     from puzzle.gui import theme
@@ -344,11 +348,15 @@ def choices(window, op, path: str):
         from puzzle.model.schema import CoordinateSystem
 
         return [("Global", None)] + [(c.name, str(c.id)) for c in project.of_type(CoordinateSystem)]
-    if path == "target" and op.type == "grid":
+    if path == "target" and op.type in ("grid", "slice", "clip"):
         from puzzle.model.schema import ConstructionGeometry
 
         planes = [c for c in project.of_type(ConstructionGeometry) if c.type == "plane"]
-        return [("An axis plane at the origin", None)] + [(c.name, str(c.id)) for c in planes]
+        named = [(c.name, str(c.id)) for c in planes]
+        if op.type != "grid":  # ADR 0070 level 2: the plane it cuts on, a construction one
+            return named or [("No construction plane yet: make one (Model > Construction)",
+                              None)]  # fmt: skip
+        return [("An axis plane at the origin", None)] + named
     if path == "column" and op.type != "list":  # a table's columns, as it is now
         columns = table_columns(window, op)
         if columns:

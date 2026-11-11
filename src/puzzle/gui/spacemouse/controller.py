@@ -11,6 +11,7 @@ puts it in the view (`Viewport.set_camera`). Buttons run the window's actions by
 from __future__ import annotations
 
 import logging
+import sys
 import threading
 import time
 
@@ -43,6 +44,31 @@ def settings_now() -> tuple[motion.Settings, bool, list[str]]:
                                                     s.get("mouse3d.button_2")]  # fmt: skip
 
 
+# What the Settings dialog says about the device (ADR 0069): the one being read, and
+# whether a reader runs in this process at all.
+STATE = {"running": False, "name": ""}
+
+
+def describe() -> str:
+    """The 3D mouse in words, for Settings > 3D mouse: the device read, or why none."""
+    from puzzle.gui.spacemouse import hid
+
+    why = hid.why_not()
+    if why:
+        return f"No 3D mouse can be read here: {why}."
+    _, on, _ = settings_now()
+    if not on:
+        return "Off: turn it on above to use a 3D mouse."
+    if not STATE["running"]:
+        return "Not read in this window (it has no 3D view)."
+    if STATE["name"]:
+        return f"Connected: {STATE['name']}."
+    return (
+        f"None found: plug one in (Puzzle looks again every {LOOK_EVERY_S:g} s). On "
+        "Linux, run spacenavd, or give /dev/hidraw a udev rule."
+    )
+
+
 class Controller(QObject):
     reading = Signal(object, int)  # view-frame counts, buttons
     found = Signal(str)  # the device's name, or "" when it went away
@@ -57,6 +83,7 @@ class Controller(QObject):
         self._thread: threading.Thread | None = None
         self._last = None
         self._pivot = None
+        self._logged: set[int] = set()  # keys known by number whose press was logged
         self.filter = motion.Filter()  # smoothing and a sticky dead zone
         self.timer = QTimer(self, interval=FRAME_MS)
         self.timer.timeout.connect(self._tick)
@@ -71,10 +98,12 @@ class Controller(QObject):
         self._stop.clear()
         self._thread = threading.Thread(target=self._run, name="puzzle-3d-mouse", daemon=True)
         self._thread.start()
+        STATE["running"] = True
         return True
 
     def stop(self) -> None:
         self._stop.set()
+        STATE.update(running=False, name="")
         self.timer.stop()
         # Wait out the reader's current read (100 ms at most), so nothing is emitted
         # into a window being closed ("Signal source has been deleted" in the log).
@@ -91,8 +120,13 @@ class Controller(QObject):
             self._stop.set()
 
     def _run(self) -> None:
+        from puzzle.gui.spacemouse import spacenav
+
         while not self._stop.is_set():
             _, on, _ = settings_now()
+            if on and sys.platform.startswith("linux") and spacenav.available():
+                self._run_spacenav()  # its permissions are in place; hidraw's may not be
+                continue
             found = hid.find() if on else []
             if not found:
                 self._stop.wait(LOOK_EVERY_S)
@@ -104,6 +138,7 @@ class Controller(QObject):
                 self._stop.wait(LOOK_EVERY_S)
                 continue
             self.device = first.device
+            STATE["name"] = first.device.name
             self._emit(self.found, first.device.name)
             dev = first.device
             log.warning("3D mouse found: %s (%04x:%04x)", dev.name, dev.vendor, dev.product)
@@ -126,8 +161,44 @@ class Controller(QObject):
             finally:
                 reader.close()
                 self.device = None
+                STATE["name"] = ""
                 self._emit(self.found, "")
                 self._emit(self.reading, [0] * 6, 0)
+
+    def _run_spacenav(self) -> None:
+        """Read spacenavd's events until it goes away or the controller stops."""
+        from puzzle.gui.spacemouse import spacenav
+
+        try:
+            reader = spacenav.Reader()
+        except OSError:
+            self._stop.wait(LOOK_EVERY_S)
+            return
+        self.device = devices.Device(0, 0, spacenav.NAME)
+        STATE["name"] = spacenav.NAME
+        self._emit(self.found, spacenav.NAME)
+        log.warning("3D mouse found: %s at %s", spacenav.NAME, spacenav.socket_path())
+        axes, buttons = [0] * 6, 0
+        try:
+            while not self._stop.is_set():
+                event = reader.read()
+                if event is None:
+                    continue
+                if event.kind == "motion":
+                    axes = event.axes
+                elif event.down:
+                    buttons |= 1 << event.button
+                else:
+                    buttons &= ~(1 << event.button)
+                self._emit(self.reading, axes, buttons)
+        except OSError:  # the daemon stopped
+            pass
+        finally:
+            reader.close()
+            self.device = None
+            STATE["name"] = ""
+            self._emit(self.found, "")
+            self._emit(self.reading, [0] * 6, 0)
 
     # --- the GUI thread -------------------------------------------------------------------
 
@@ -149,7 +220,13 @@ class Controller(QObject):
         name = actions[button] if button < len(actions) else ""
         if self.device is not None and button < len(self.device.buttons):
             named = {"Fit": "fit", "Top": "+z", "Right": "+x", "Front": "-y"}
-            name = named.get(self.device.buttons[button], name) if button >= 2 else name
+            key = self.device.buttons[button]
+            name = named.get(key, name) if button >= 2 else name
+            if key.startswith("Button ") and button not in self._logged:
+                # Keys known only by number (the Enterprise's): each one's number into
+                # the log once, so a press of each maps them (Help > Log).
+                self._logged.add(button)
+                log.warning("3D mouse: %s key %d pressed", self.device.name, button)
         action = self.window.viewport.view_bar.actions_by_name.get(name) if name else None
         if action is not None:
             action.trigger()

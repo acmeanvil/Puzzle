@@ -306,6 +306,11 @@ STEPS: dict[str, list[StepField]] = {
         StepField("inner_radius", "length", 0.0068, "Bore radius (minor)"),
         StepField("height", "length", 0.0148, "Height"),
     ],  # fmt: skip
+    "washer": [
+        StepField("outer_radius", "length", 0.01474, "Outer radius"),
+        StepField("inner_radius", "length", 0.0085, "Bore radius"),
+        StepField("height", "length", 0.0033, "Thickness"),
+    ],  # fmt: skip
     "keep": [
         StepField("bodies", "text", "", "Bodies to keep (names, comma-separated)"),
         StepField("body", "text", "Body", "Name of what is kept"),

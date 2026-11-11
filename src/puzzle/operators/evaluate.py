@@ -1336,12 +1336,18 @@ def _curves() -> dict:
     return series.evaluators()
 
 
+def _vtk_filters() -> dict:
+    from puzzle.operators import vtk_filters
+
+    return vtk_filters.evaluators()
+
+
 _EVALUATE = {"reduce": _reduce, "filter": _filter, "check": _check, "panel": _panel,
              "plot": _plot, "export": _export, "number": _number_op, "slider": _slider,
              "series": _series, "range": _range, "expression": _expression,
              "random": _random, **_tables(), **_geometric(),
              "table": _table, "list": _list, "pairs": _pairs,
-             **_curves()}  # fmt: skip
+             **_curves(), **_vtk_filters()}  # fmt: skip
 
 
 # --- what a node shows, and exporting -------------------------------------------------

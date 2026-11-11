@@ -70,6 +70,7 @@ LINKS: tuple[Link, ...] = (
     Link("bolt_type", "material", ("material",), "Grade material"),
     Link("field", "source", ("operator",), "Table it reads"),
     Link("operator", "target", ("component", "geometry"), "What it measures", types=("measure",)),
+    Link("operator", "target", ("construction",), "Plane it cuts on", types=("slice", "clip")),
     Link(
         "operator",
         "target",

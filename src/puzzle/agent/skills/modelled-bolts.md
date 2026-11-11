@@ -23,6 +23,13 @@ must be `tapped` (cap screw) or `through_nut` (bolt and nut).
    thread into the tapped hole or nut as a threaded contact, its preload as a
    `bolt_pretension` feature on "<part>/Section", finer mesh at "<part>/Fillet" and
    "<part>/Thread". `formulation` reads `modelled`.
+   Washers: the bolt's `washers` (none, head, nut, both; over its type's) and the type's
+   `washer` series (normal ISO 7089 / ASME type A narrow, small, large, extra_large,
+   structural ASTM F436) draw plain washers from the tables as parts of their own
+   ("<bolt> head washer", "<bolt> nut washer"): bonded to the head or nut, which don't
+   slip on them, frictional on the plate (bonded with `bonded_heads`); the bolt is that
+   much longer. A tapped joint has no nut washer. Set `washers` before making it (an
+   edit of `connectors.<i>.washers`, or the type), or make it again.
 2. Back to a beam: `bolt_make_beam(component, bolt)`, then `submit` its `batch`.
 3. After a run, `bolt_results(study)` lists it with the beam bolts (`modelled`: true):
    axial, shear, torsion and bending from the stress across its section (the bending
@@ -51,6 +58,10 @@ Chart 3.4 is up to 40 % low for fillets this sharp, so don't check against it.
 
 - The frictional head and nut contacts make the solve nonlinear (slower): many bolts
   stay beams; model the ones whose stresses matter. `bonded_heads` keeps it linear.
+- Solvers: CalculiX, and Code_Aster on a first-order mesh (`element_order` 1 on the
+  component's recipe) when the heads are frictional: Code_Aster refuses friction on a
+  second-order mesh; `bonded_heads` keeps second order. Not FEniCSx or Elmer yet (no
+  frictional contacts; FEniCSx's threads are 2D only).
 - Don't set `formulation` to `modelled` by an edit: only `bolt_make_modelled` draws the
   parts. A bolt type's `modelled` stays a beam until the bolt is drawn.
 - Stresses near the pretension section are not uniform across it: read the bolt's

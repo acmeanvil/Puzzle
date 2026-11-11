@@ -844,6 +844,26 @@ class CutBar(QWidget):
         self.viewport.set_cut(cut)
 
 
+def point_under(surface, camera):
+    """The first point of `surface` on the line of sight through the view's centre (the
+    camera's position through its focal point, which is the centre in perspective and
+    orthographic views alike), or None: nothing drawn, no camera, or the model off
+    centre. A 3D mouse turns about it, as about what one looks at (ADR 0069)."""
+    if surface is None or camera is None or not getattr(surface, "n_cells", 0):
+        return None
+    position, focal = np.asarray(camera[0], float), np.asarray(camera[1], float)
+    ahead = focal - position
+    if not np.linalg.norm(ahead):
+        return None
+    ahead /= np.linalg.norm(ahead)
+    size = float(np.linalg.norm(np.ptp(np.asarray(surface.points), axis=0))) or 1.0
+    reach = float(np.linalg.norm(focal - position)) + 2 * size
+    poly = surface if hasattr(surface, "ray_trace") else surface.extract_surface()
+    points, _ = poly.ray_trace(position, position + ahead * reach, first_point=True)
+    points = np.asarray(points, float).reshape(-1, 3)
+    return points[0] if len(points) else None
+
+
 class Viewport(QWidget):
     picked_changed = Signal(list)  # the picked entities, [(dim, tag), ...]
     probes_changed = Signal(list)  # the view's probes (ADR 0032)
@@ -2250,8 +2270,9 @@ class Viewport(QWidget):
             self._render()
 
     def pivot(self):
-        """What a 3D mouse turns the view about: the centre of the picked or highlighted
-        faces, edges and points, else the shown model's centre, else None."""
+        """What a 3D mouse turns the view about (ADR 0069): the centre of the picked or
+        highlighted faces, edges and points, else the model point under the view's
+        centre (`point_under`), else the shown model's centre, else None."""
         group = list(self.picked) or list(self.highlight_entities)
         if group:
             points = [np.asarray(self.vertices[e], float) for e in group if e in self.vertices]
@@ -2267,6 +2288,9 @@ class Viewport(QWidget):
                 points.append(np.asarray(self.lines.extract_cells(np.flatnonzero(mask)).center))
             if points:
                 return np.mean(points, axis=0)
+        hit = point_under(self.surface, self.camera())
+        if hit is not None:
+            return hit
         mesh = self.mesh
         coords = getattr(mesh, "coords", None)
         if coords is not None and len(coords):

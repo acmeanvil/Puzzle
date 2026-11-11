@@ -496,7 +496,8 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         "as its material, its head (and nut) on the plates by a frictional contact (the "
         "type's head_friction; `bonded_heads` bonds them), its thread into the tapped hole "
         "or nut by a threaded contact, its preload on a section across the shank, and finer "
-        "elements at the fillet and thread. Needs a tapped or bolt-and-nut joint. Its "
+        "elements at the fillet and thread; plain washers too when the bolt's `washers` "
+        "(or its type's) says head, nut or both. Needs a tapped or bolt-and-nut joint. Its "
         "loads then come from that section (bolt_results), and the fatigue tool takes the "
         "bolt's thread_kf as Kf at its thread. Returns `batch` to pass to submit (one "
         "undo); nothing is made here."
@@ -796,6 +797,40 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         s = load_settings()
         embed = pack.ollama_embedder(s.base_url, s.embed_model) if s.embed_model else None
         return {"hits": pack.search(query, limit, embed=embed)}
+
+    # --- the solvers here (ADR 0068 step 4) -------------------------------------------
+
+    @tool(description="The solvers on this computer and how a solve runs each now: "
+          "native (its program), in a container (its image) or missing (why); CalculiX's "
+          "note says PARDISO or SPOOLES, and `pardiso` the state of CalculiX with PARDISO "
+          "built here (built, building, failed with the reason, ready, unavailable).")  # fmt: skip
+    @guarded
+    def solvers_list() -> dict[str, Any]:
+        from dataclasses import asdict
+
+        from puzzle import solver_builds
+
+        return {"solvers": [asdict(r) for r in solver_builds.solvers()],
+                "pardiso": asdict(solver_builds.status())}  # fmt: skip
+
+    @tool(description="Start building CalculiX with Intel MKL's PARDISO on this computer, "
+          "in the background (minutes; contact and large solves then factor 2-4x faster "
+          "with the same answers). Returns at once; follow it with solvers_list. Only when "
+          "the user asks: the GUI already builds it once by itself.")  # fmt: skip
+    @guarded
+    def pardiso_build() -> dict[str, Any]:
+        from dataclasses import asdict
+
+        from puzzle import solver_builds
+
+        state = solver_builds.status()
+        if state.state in ("unavailable", "building"):
+            return {"started": False, "pardiso": asdict(state)}
+        import threading
+
+        threading.Thread(target=lambda: solver_builds.build(say=lambda _: None),
+                         name="pardiso-build", daemon=True).start()  # fmt: skip
+        return {"started": True, "pardiso": asdict(state)}
 
     # --- remote hosts (ADR 0021) -----------------------------------------------------
 

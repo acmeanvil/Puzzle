@@ -5,7 +5,9 @@ An M16 8.8 cap screw (ISO 4014 hex head) through a 10 mm plate into a steel boss
 a tapped hole (the bore at D1/2 = 6.9175 mm), the plate bonded on the boss, preloaded
 to 40 kN. Made by one command, it lands with its head on the plate, its pretension
 section carries the preload, and the shank's axial stress is F / A within 2 % away
-from its ends. Undo takes it all back.
+from its ends. Undo takes it all back. With an ISO 7089 washer under the head, the
+head sits a washer higher, the bolt is that much longer, and the preload still passes
+through the washer into the plate.
 """
 
 import pytest
@@ -35,7 +37,7 @@ MM = 1e-3
 PRELOAD = 40e3
 
 
-def _joint(root, solver="calculix"):
+def _joint(root, solver="calculix", washers="none"):
     from puzzle.project import save_project
 
     p = Project(name="joint")
@@ -57,7 +59,7 @@ def _joint(root, solver="calculix"):
         NamedSelection(name="Under", entity="face", members=["P/start"])]  # fmt: skip
     m16 = p.add(BoltType(name="M16 8.8", size="M16", material=grade.id, preload="force",
                          preload_force=Quantity(value=PRELOAD / 1e3, unit="kN"),
-                         joint="tapped"))  # fmt: skip
+                         joint="tapped", washers=washers))  # fmt: skip
     mesh = p.add(MeshRecipe(name="Tets", element_order=2,
                             global_size=Quantity(value=3, unit="mm")))  # fmt: skip
     comp = p.add(Component(
@@ -124,13 +126,46 @@ def test_back_to_a_beam(tmp_path):
     assert not [x for x in plate.selections if x.name.startswith("Under Screw")]
 
 
+def test_a_washer_goes_under_the_head(tmp_path):
+    from puzzle.commands.session import Session
+    from puzzle.solid_bolts import beam_commands, make_commands
+
+    _joint(tmp_path, washers="both")  # a tapped joint: no nut, so the head's only
+    s = Session(tmp_path)
+    s.submit_batch(make_commands(s.project, s.project.of_type(Component)[0], 0, tmp_path))
+    comp = s.project.of_type(Component)[0]
+    assert comp.connectors[0].parts == ["Screw", "Screw head washer"]
+    t = 3.3 * MM  # ISO 7089 M16: 17 / 30 mm, 3 mm (3.3 max)
+    screw = next(x for x in comp.parts if x.name == "Screw")
+    washer = next(x for x in comp.parts if x.name == "Screw head washer")
+    assert screw.translation == pytest.approx((0.0, 0.0, 0.04 + t), abs=1e-9)
+    assert washer.translation == pytest.approx((0.0, 0.0, 0.04), abs=1e-9)
+    assert washer.rotation == pytest.approx((0.0, 0.0, 0.0))  # its top up, toward the head
+    kinds = {c.name: (c.type, c.source, c.target) for c in comp.contacts}
+    assert kinds["Screw head on washer"] == ("bonded", "Screw/Bearing", "Screw head washer/Top")
+    tie = next(c for c in comp.contacts if c.name == "Screw head on washer")
+    assert tie.effective_meshing == "nonconformal"  # a tie: the bolt stays revolved
+    assert kinds["Screw head washer"][:2] == ("frictional", "Screw head washer/Bearing")
+    geo = next(g for g in s.project.of_type(Geometry) if g.name == "Screw (head washer)")
+    args = geo.history[0].args
+    assert (args["outer_radius"], args["inner_radius"], args["height"]) == pytest.approx(
+        (14.74 * MM, 8.5 * MM, t))  # fmt: skip
+    bolt = next(g for g in s.project.of_type(Geometry) if g.name == "Screw (bolt)")
+    assert bolt.history[0].args["length"] == pytest.approx(0.04)  # 13.3 + 24 mm, up to 5
+    s.submit_batch(beam_commands(s.project, s.project.of_type(Component)[0], 0))
+    comp = s.project.of_type(Component)[0]
+    assert [x.name for x in comp.parts] == ["Boss", "Plate"]
+    assert not [g for g in s.project.of_type(Geometry) if "washer" in g.name]
+
+
 @over("calculix")
-def test_the_preloaded_shank_carries_its_preload(tmp_path, solver):
+@pytest.mark.parametrize("washers", ["none", "head"])
+def test_the_preloaded_shank_carries_its_preload(tmp_path, solver, washers):
     from puzzle.commands.session import Session
     from puzzle.solid_bolts import make_commands
     from puzzle.solve import run_study
 
-    _joint(tmp_path, solver)
+    _joint(tmp_path, solver, washers)
     s = Session(tmp_path)
     s.submit_batch(make_commands(s.project, s.project.of_type(Component)[0], 0, tmp_path))
     p = s.project
@@ -140,6 +175,33 @@ def test_the_preloaded_shank_carries_its_preload(tmp_path, solver):
 
     # The force across the bolt's section, as the bolt table reads it (the stress near
     # the pretension cut isn't uniform across: its node mean by the axis read 18 % low).
+    loads = section_loads(run.mesh, run.results.last("stress"), "Screw")
+    print(f"axial force at the section {loads.axial[0] / 1e3:.2f} kN")
+    assert loads.axial[0] == pytest.approx(PRELOAD, rel=0.02)
+
+
+@over("code_aster")
+def test_code_aster_preloads_a_modelled_bolt_on_a_first_order_mesh(tmp_path, solver):
+    """Code_Aster's frictional contacts need first-order meshes (ADR 0053), so the joint
+    is meshed first order there: the revolved bolt in hex8 and wedge6, the plates in
+    tet4. Its section carries the preload as CalculiX's does."""
+    from puzzle.commands.session import Session
+    from puzzle.solid_bolts import make_commands
+    from puzzle.solve import run_study
+
+    p = _joint(tmp_path, solver)
+    from puzzle.project import save_project
+
+    recipe = p.of_type(MeshRecipe)[0]
+    recipe.element_order = 1
+    recipe.global_size = Quantity(value=2, unit="mm")
+    save_project(p, tmp_path)
+    s = Session(tmp_path)
+    s.submit_batch(make_commands(s.project, s.project.of_type(Component)[0], 0, tmp_path))
+    run = run_study(s.project, s.project.of_type(Study)[0].id, tmp_path, tmp_path / "run",
+                    timeout_s=3600)  # fmt: skip
+    from puzzle.bolts import section_loads
+
     loads = section_loads(run.mesh, run.results.last("stress"), "Screw")
     print(f"axial force at the section {loads.axial[0] / 1e3:.2f} kN")
     assert loads.axial[0] == pytest.approx(PRELOAD, rel=0.02)

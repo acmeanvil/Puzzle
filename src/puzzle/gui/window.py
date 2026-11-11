@@ -669,8 +669,44 @@ class MainWindow(QMainWindow):
         self.watcher.fileChanged.connect(lambda _: self._reload_soon())
         self._reload_timer = QTimer(self, singleShot=True, interval=300)
         self._reload_timer.timeout.connect(self.reload)
+        # CalculiX with PARDISO, built here once in the background (ADR 0068 decision 5),
+        # a little after start so the window is up first.
+        QTimer.singleShot(8000, self._build_solvers)
         if root is not None:
             self.open(root)
+
+    def _build_solvers(self) -> None:
+        """Start the PARDISO build if it is due (`solver_builds.should_build`), and say
+        when it ends. Not on Qt's offscreen platform (tests, scripts)."""
+        from PySide6.QtGui import QGuiApplication
+
+        from puzzle import solver_builds
+        from puzzle.gui import solvers_panel
+
+        if QGuiApplication.platformName() == "offscreen" or not solver_builds.should_build():
+            return
+        if not solvers_panel.start_build():
+            return
+        words = (
+            "Building CalculiX with PARDISO in the background (faster contact solves); "
+            "the plain CalculiX is used until it's done"
+        )
+        self.toasts.show(words, state="info")
+        timer = QTimer(self, interval=10000)
+
+        def check() -> None:
+            if solvers_panel.building():
+                return
+            timer.stop()
+            s = solver_builds.status()
+            if s.state == "built":
+                self.toasts.show("CalculiX with PARDISO is built: solves use it from now on")
+            else:
+                self.toasts.show(f"Building CalculiX with PARDISO failed: {s.detail}. The "
+                                 "plain CalculiX stays in use.", state="error")  # fmt: skip
+
+        timer.timeout.connect(check)
+        timer.start()
 
     # --- project -----------------------------------------------------------------
 

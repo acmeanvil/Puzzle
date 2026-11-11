@@ -110,7 +110,16 @@ def test_the_installer_is_exactly_the_lock(tmp_path):
     assert 'menu_packages:\n  - "puzzle-fem"' in construct
     assert "initialize_conda: false" in construct
     assert '"__glibc>=2.28"' in construct
-    for name in ("calculix", "fenicsx", "code-aster", "netgen", "mmg", "scripts", "runner"):
+    for name in (
+        "calculix",
+        "calculix-pardiso",
+        "fenicsx",
+        "code-aster",
+        "netgen",
+        "mmg",
+        "scripts",
+        "runner",
+    ):
         assert (folder / "envs" / f"{name}.txt").exists(), name
         assert f'environment_file: "envs/{name}.txt"' in construct
 
@@ -120,6 +129,7 @@ def test_code_aster_is_left_out_where_the_lock_has_none(tmp_path):
     channel = _channel(tmp_path / "ch", "osx-arm64", [])
     folder = make_installer.write(lock, "osx-arm64", [str(channel)], tmp_path / "out", "pkg")
     assert not (folder / "envs" / "code-aster.txt").exists()
+    assert not (folder / "envs" / "calculix-pardiso.txt").exists()  # no MKL there
     assert (folder / "envs" / "calculix.txt").exists()
 
 

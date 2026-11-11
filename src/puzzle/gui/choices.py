@@ -108,6 +108,9 @@ VALUES = {
     "tapped": "Cap screw in a tapped hole (head annulus, thread)",
     "stud_nuts": "Stud with two nuts (nut annuli)",
     "stud_tapped": "Stud in a tapped hole, with a nut (thread, nut annulus)",
+    # A modelled bolt's washers (ADR 0077)
+    "both": "Under the head and the nut",
+    "extra_large": "Extra large",
     # A thread's axis from a coordinate system (ADR 0076: Thread.cs)
     "cs": "Axis from a coordinate system",
     # An optimisation's method and surface (ADR 0063)
@@ -286,7 +289,9 @@ def _field(project, obj, owner, field, in_list):
         if field in ("source", "target"):
             names = _selections(project, component, entity="face")
             return [(n, n) for n in names] if names else None
-        if field in ("ends", "formulation", "joint", "head") and owner.type is not None:
+        if field in ("ends", "formulation", "joint", "head", "washers") and (
+            owner.type is not None
+        ):
             return [(FROM_TYPE, None)] + [(label(v), v) for v in _literal_values(
                 type(owner).model_fields[field].annotation)[0]]  # fmt: skip
     if type(owner).__name__ == "BeamSection" and not in_list:  # ADR 0055

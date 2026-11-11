@@ -154,3 +154,20 @@ def test_without_opengl_the_pipeline_still_runs(tmp_path, monkeypatch):
     assert done.returncode == 0, done.stdout[-1500:] + done.stderr[-1500:]
     cells = int(next(ln for ln in done.stdout.splitlines() if ln.startswith("cells")).split()[1])
     assert 0 < cells < 20 * 3 * 3  # cut through the middle
+
+
+def test_a_run_opens_in_paraview_from_its_menu(monkeypatch):
+    """A run's right-click Open in ParaView shows that run, then opens what is shown."""
+    pytest.importorskip("PySide6")
+    from puzzle.gui import menus, paraview_open
+
+    calls = []
+
+    class Window:
+        def _select_run(self, run_id):
+            calls.append(("show", run_id))
+
+    monkeypatch.setattr(paraview_open, "open_in_paraview",
+                        lambda w: calls.append(("open",)) or True)  # fmt: skip
+    assert menus.open_run_in_paraview(Window(), "abc") is True
+    assert calls == [("show", "abc"), ("open",)]

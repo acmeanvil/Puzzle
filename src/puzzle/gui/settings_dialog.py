@@ -107,9 +107,28 @@ class SettingsDialog(QDialog):
                 role(hint, "muted")
                 form.addRow("", hint)
         column.addLayout(form)
+        if group == "3D mouse":  # ADR 0069: the device read, or why none
+            from puzzle.gui.spacemouse.controller import describe
+
+            self.mouse3d = QLabel(describe())
+            self.mouse3d.setWordWrap(True)
+            self.mouse3d.setContentsMargins(0, 8, 0, 0)
+            column.addWidget(self.mouse3d)
+        if group == "Solvers":  # ADR 0068 decision 6: what is here and how it runs
+            from puzzle.gui.solvers_panel import SolversPanel
+
+            self.solvers = SolversPanel()
+            column.addWidget(self.solvers)
         column.addStretch()
         if group == "Units":
             self.boxes["units.system"].currentIndexChanged.connect(lambda _: self._custom_units())
+        if group == "Solvers":  # the longest page: it scrolls
+            from PySide6.QtWidgets import QScrollArea
+
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setWidget(page)
+            return scroll
         return page
 
     def _custom_units(self) -> None:

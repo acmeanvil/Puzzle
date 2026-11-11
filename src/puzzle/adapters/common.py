@@ -587,9 +587,67 @@ _TRI_RULE = [
 ]
 
 
+# 3 x 3 Gauss points on the reference square [-1, 1]², exact to degree 5.
+_G = (-0.774596669241483, 0.0, 0.774596669241483)
+_GW = (5 / 9, 8 / 9, 5 / 9)
+_QUAD_RULE = [(a, b, wa * wb) for a, wa in zip(_G, _GW, strict=True)
+              for b, wb in zip(_G, _GW, strict=True)]  # fmt: skip
+FACE_ELEMENTS = ("tri3", "tri6", "quad4", "quad8", "quad9")
+
+
+def _face_rule(element: str):
+    """(xi, eta, weight) with the reference area folded into the weight: triangles'
+    half, the square's whole."""
+    if element.startswith("quad"):
+        return _QUAD_RULE
+    return [(x, e, 0.5 * w) for x, e, w in _TRI_RULE]
+
+
+def _quad_shape(element: str, xi: float, eta: float):
+    """Gmsh-ordered quadrilateral shape functions on [-1, 1]²: quad4 (corners), quad8
+    (serendipity: corners, then mid-edges 0-1, 1-2, 2-3, 3-0) or quad9 (and the
+    centre), with their derivatives in xi and eta."""
+    cx = np.array([-1.0, 1.0, 1.0, -1.0])
+    cy = np.array([-1.0, -1.0, 1.0, 1.0])
+    if element == "quad4":
+        n = 0.25 * (1 + cx * xi) * (1 + cy * eta)
+        return n, 0.25 * cx * (1 + cy * eta), 0.25 * cy * (1 + cx * xi)
+    if element == "quad8":
+        n_c = 0.25 * (1 + cx * xi) * (1 + cy * eta) * (cx * xi + cy * eta - 1)
+        dx_c = 0.25 * cx * (1 + cy * eta) * (2 * cx * xi + cy * eta)
+        dy_c = 0.25 * cy * (1 + cx * xi) * (cx * xi + 2 * cy * eta)
+        # Mid-edges: (0, -1), (1, 0), (0, 1), (-1, 0).
+        n_m = np.array(
+            [
+                0.5 * (1 - xi**2) * (1 - eta),
+                0.5 * (1 + xi) * (1 - eta**2),
+                0.5 * (1 - xi**2) * (1 + eta),
+                0.5 * (1 - xi) * (1 - eta**2),
+            ]
+        )
+        dx_m = np.array([-xi * (1 - eta), 0.5 * (1 - eta**2), -xi * (1 + eta), -0.5 * (1 - eta**2)])
+        dy_m = np.array([-0.5 * (1 - xi**2), -eta * (1 + xi), 0.5 * (1 - xi**2),
+                         -eta * (1 - xi)])  # fmt: skip
+        return (np.concatenate([n_c, n_m]), np.concatenate([dx_c, dx_m]),
+                np.concatenate([dy_c, dy_m]))  # fmt: skip
+
+    def lagrange(t):  # 1D quadratic at -1, 1, 0 and their derivatives
+        return (np.array([0.5 * t * (t - 1), 0.5 * t * (t + 1), 1 - t * t]),
+                np.array([t - 0.5, t + 0.5, -2 * t]))  # fmt: skip
+
+    (lx, dlx), (ly, dly) = lagrange(xi), lagrange(eta)
+    # Gmsh's quad9: corners, mid-edges as quad8's, then the centre, as (i, j) in 1D index.
+    ij = [(0, 0), (1, 0), (1, 1), (0, 1), (2, 0), (1, 2), (2, 1), (0, 2), (2, 2)]
+    return (np.array([lx[i] * ly[j] for i, j in ij]), np.array([dlx[i] * ly[j] for i, j in ij]),
+            np.array([lx[i] * dly[j] for i, j in ij]))  # fmt: skip
+
+
 def _shape(element: str, xi: float, eta: float):
-    """Gmsh-ordered shape functions of a triangle face and their derivatives in xi and
-    eta: (N, dN/dxi, dN/deta), tri3 or tri6 (corners, then mid-edges)."""
+    """Gmsh-ordered shape functions of a face and their derivatives in xi and eta:
+    (N, dN/dxi, dN/deta); tri3 or tri6 (corners, then mid-edges), or a quadrilateral
+    (`_quad_shape`)."""
+    if element.startswith("quad"):
+        return _quad_shape(element, xi, eta)
     z = 1.0 - xi - eta
     if element == "tri3":
         return np.array([z, xi, eta]), np.array([-1.0, 1, 0]), np.array([-1.0, 0, 1])
@@ -609,14 +667,14 @@ def _quadrature(group, mesh: Mesh):
     if not blocks:
         raise InputError("a remote load needs a face selection")
     for b in blocks:
-        if b.element not in ("tri3", "tri6"):
+        if b.element not in FACE_ELEMENTS:
             raise InputError(f"a remote load on {b.element} faces is not supported yet")
         nodes = mesh.node_coords(b.connectivity.ravel()).reshape(len(b.connectivity), -1, 3)
-        for xi, eta, w in _TRI_RULE:
+        for xi, eta, w in _face_rule(b.element):
             n, dxi, deta = _shape(b.element, xi, eta)
             x = np.einsum("k,eki->ei", n, nodes)
             jac = np.cross(np.einsum("k,eki->ei", dxi, nodes), np.einsum("k,eki->ei", deta, nodes))
-            yield b.connectivity, n, x, 0.5 * w * np.linalg.norm(jac, axis=1)
+            yield b.connectivity, n, x, w * np.linalg.norm(jac, axis=1)
 
 
 def _face_properties(group, mesh: Mesh):

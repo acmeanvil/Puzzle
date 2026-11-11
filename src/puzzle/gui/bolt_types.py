@@ -29,6 +29,13 @@ FORMULATIONS = [
 ]
 HEADS = [("Hex head (ISO 4014/4017, ASME B18.2.1)", "hex"),
          ("Socket head (ISO 4762)", "socket")]  # fmt: skip
+WASHERS = [("None", "none"), ("Under the head", "head"), ("Under the nut", "nut"),
+           ("Under the head and the nut", "both")]  # fmt: skip
+WASHER_SERIES = [("Normal (ISO 7089, ASME type A narrow)", "normal"),
+                 ("Small (ISO 7092, ASME type B narrow)", "small"),
+                 ("Large (ISO 7093, ASME type A wide)", "large"),
+                 ("Extra large (ISO 7094, ASME type B wide)", "extra_large"),
+                 ("Structural (ASTM F436, inch sizes)", "structural")]  # fmt: skip
 ENDS = [("Distributing (spreads the load, like RBE3)", "distributing"),
         ("Rigid (stiffens the hole, like RBE2)", "rigid")]  # fmt: skip
 
@@ -84,6 +91,11 @@ def asks(project) -> list[Ask]:
         Ask("formulation", "Formulation", choices=FORMULATIONS, default="beam"),
         Ask("head", "Head", choices=HEADS, default="hex",
             shown=lambda v: v["formulation"] == "modelled"),
+        Ask("washers", "Washers", choices=WASHERS, default="none",
+            shown=lambda v: v["formulation"] == "modelled",
+            help="plain washers drawn with a modelled bolt, from the washer tables"),
+        Ask("washer", "Washer series", choices=WASHER_SERIES, default="normal",
+            shown=lambda v: v["formulation"] == "modelled" and v.get("washers") != "none"),
         Ask("thread_kf", "Thread root Kf", kind="text", default="3",
             help="a modelled bolt's thread-root fatigue notch factor on its basic stresses "
             "(ADR 0077): the fatigue tool's Kf at its thread; 3 to 4 is usual, 1 or more"),
@@ -128,7 +140,9 @@ def commands(values: dict, check_only: bool = False) -> list:
                   "standard": values["standard"], "preload": values["preload"],
                   "formulation": values["formulation"], "ends": values["ends"],
                   "joint": values.get("joint", "hole_walls"),
-                  "head": values.get("head") or "hex"}  # fmt: skip
+                  "head": values.get("head") or "hex",
+                  "washers": values.get("washers") or "none",
+                  "washer": values.get("washer") or "normal"}  # fmt: skip
     kf = _number(values.get("thread_kf") or "3", "thread root Kf")
     if kf < 1:
         raise ValueError("the thread root Kf is 1 or more (3 to 4 is usual)")

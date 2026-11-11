@@ -294,12 +294,13 @@ def together(op, parts: list[Series]) -> Series:
 
 
 def _operand(op, got, key: str):
-    """A number (value, kind, label) or a series, from what is wired into `key`."""
-    from puzzle.operators.evaluate import ListValue, Number, Table
+    """A number (value, kind, label), a series or a field, from what is wired into
+    `key`."""
+    from puzzle.operators.evaluate import FieldValue, ListValue, Number, Table
 
     if got is None:
         return None
-    if isinstance(got, Number):
+    if isinstance(got, Number | FieldValue):
         return got
     if isinstance(got, ListValue) and got.numeric and len(got.values) == 1:
         return Number(float(got.values[0]), got.kind, got.label)
@@ -309,8 +310,8 @@ def _operand(op, got, key: str):
         return got
     if isinstance(got, Table):
         return from_table(got, label=key)
-    raise PuzzleError(f"'{op.name}': its {key} input must be a curve or a number, not "
-                      f"{_word(got)}", code="invalid")  # fmt: skip
+    raise PuzzleError(f"'{op.name}': its {key} input must be a curve, a field or a number, "
+                      f"not {_word(got)}", code="invalid")  # fmt: skip
 
 
 def _formula(op, text: str, values: dict) -> tuple[Any, str | None]:
@@ -359,8 +360,8 @@ def arithmetic(ctx, op) -> dict[str, Any]:
 
 
 def combine(op, how: str, a, b):
-    """A and B (each a Number or a Series) by `how` (a FORMULAS key)."""
-    from puzzle.operators.evaluate import Number
+    """A and B (each a Number, a Series or a FieldValue) by `how` (a FORMULAS key)."""
+    from puzzle.operators.evaluate import FieldValue, Number
 
     text, title = FORMULAS[how]
     names = {"a": getattr(a, "label", "") or "A", "b": getattr(b, "label", "") or "B"}
@@ -368,6 +369,8 @@ def combine(op, how: str, a, b):
     if isinstance(a, Number) and isinstance(b, Number):
         value, kind = _formula(op, text, {"a": (a.value, a.kind), "b": (b.value, b.kind)})
         return Number(float(value), kind, label)
+    if isinstance(a, FieldValue) or isinstance(b, FieldValue):
+        return field_formula(op, text, {"a": a, "b": b}, label)
     base = a if isinstance(a, Series) else b
     if isinstance(a, Series) and isinstance(b, Series):
         _same_x(op, a, b, "B")
@@ -403,6 +406,57 @@ def combine(op, how: str, a, b):
     return replace(base, curves=curves, y_kind=kind, label=label)
 
 
+def _as_field(base, values, kind: str | None, label: str):
+    """`base` (a FieldValue) with new values, of quantity kind `kind`, named `label`."""
+    from dataclasses import replace as copy
+
+    item = copy(base.item, key=f"operator:{label}", label=label, unit=kind)
+    return copy(base, values=np.asarray(values, float), item=item, label=label)
+
+
+def field_formula(op, text: str, values: dict, label: str):
+    """A formula over fields and numbers at every node (or element), units checked:
+    fields must be on the same mesh and kind of location; their common nodes are kept,
+    a node one of them leaves out (NaN) stays out."""
+    from puzzle.operators.evaluate import FieldValue, Number
+
+    fields = {k: v for k, v in values.items() if isinstance(v, FieldValue)}
+    base = next(iter(fields.values()))
+    ids = base.ids
+    for k, f in fields.items():
+        if f.location != base.location:
+            raise PuzzleError(f"'{op.name}': {k.upper()} is per {f.location} and the other "
+                              f"per {base.location}", code="invalid")  # fmt: skip
+        if f.mesh is not base.mesh and not (
+            len(f.mesh.node_ids) == len(base.mesh.node_ids)
+            and np.array_equal(f.mesh.node_ids, base.mesh.node_ids)
+        ):
+            raise PuzzleError(f"'{op.name}': the fields are on different meshes; map one "
+                              "onto the other first (a transfer)", code="invalid")  # fmt: skip
+        ids = np.intersect1d(ids, f.ids)
+    args = {}
+    for k, v in values.items():
+        if v is None:
+            continue
+        if isinstance(v, FieldValue):
+            order = np.argsort(v.ids)
+            where = order[np.searchsorted(v.ids[order], ids)]
+            args[k] = (np.asarray(v.values, float)[where], v.item.unit)
+        elif isinstance(v, Number):
+            args[k] = (v.value, v.kind)
+        else:
+            raise PuzzleError(f"'{op.name}': a field can be combined with a field or a "
+                              f"number, not {_word(v)}", code="invalid")  # fmt: skip
+    with np.errstate(invalid="ignore", divide="ignore"):
+        out, kind = _formula(op, text, args)
+    out = np.broadcast_to(np.asarray(out, float), ids.shape).astype(float)
+    out[~np.isfinite(out)] = np.nan
+    from dataclasses import replace as copy
+
+    base = copy(base, ids=ids)
+    return _as_field(base, out, kind, label)
+
+
 def _name(op, curve: str, label: str) -> str:
     """A curve's name after an operator: the step it is at kept ("Utilisation at 2 s")."""
     _, sep, when = curve.partition(" at ")
@@ -410,10 +464,20 @@ def _name(op, curve: str, label: str) -> str:
 
 
 def normalise(ctx, op) -> dict[str, Any]:
-    from puzzle.operators.evaluate import _input
+    from puzzle.operators.evaluate import FieldValue, _input
 
-    s = as_series(op, _input(ctx, op, "series"))
+    got = _input(ctx, op, "series")
     by = _operand(op, _input(ctx, op, "by"), "by")
+    if isinstance(got, FieldValue):
+        label = f"{got.label or got.item.label} (normalised)"
+        if by is None:
+            finite = got.values[np.isfinite(got.values)]
+            size = float(np.abs(finite).max()) if finite.size else 0.0
+            if not size:
+                raise PuzzleError(f"'{op.name}': the field is zero everywhere", code="invalid")
+            return {"out": _as_field(got, got.values / size, None, label)}
+        return {"out": field_formula(op, "a / b", {"a": got, "b": by}, label)}
+    s = as_series(op, got)
     label = f"{s.label} (normalised)"
     if by is None:
         curves = []
@@ -453,6 +517,37 @@ def curve_formula(ctx, op) -> dict[str, Any]:
         curves.append(replace(c, y=np.broadcast_to(np.asarray(y, float), c.y.shape).copy(),
                               label=_name(op, c.label, op.name)))  # fmt: skip
     return {"out": replace(s, curves=curves, y_kind=kind, label=op.name)}
+
+
+def field_formula_op(ctx, op) -> dict[str, Any]:
+    """Field formula (ADR 0071 step 5): an expression over fields f and g, numbers a, b,
+    c and the project's parameters, at every node or element."""
+    from puzzle.model.schema import ParameterSet
+    from puzzle.model.units import kind_of
+    from puzzle.operators.evaluate import FieldValue, Number, _input, _number
+
+    if not op.expression.strip():
+        raise PuzzleError(f"'{op.name}': write its formula, over f (and g): f / 250 MPa",
+                          code="missing_input")  # fmt: skip
+    values: dict[str, Any] = {}
+    for ps in ctx.project.of_type(ParameterSet):
+        for k, q in ps.values.items():
+            unit = q.unit if q.unit != "dimensionless" else ""
+            values.setdefault(k, Number(q.to_si(), kind_of(unit) if unit else None, k))
+    for key in "abc":
+        got = _number(op, _input(ctx, op, key), key)
+        if got is not None:
+            values[key] = got
+    for key in "fg":
+        got = _input(ctx, op, key)
+        if got is not None and not isinstance(got, FieldValue):
+            raise PuzzleError(f"'{op.name}': {key} must be a field (a Filter's, or another "
+                              f"field operator's), not {_word(got)}", code="invalid")  # fmt: skip
+        if got is not None:
+            values[key] = got
+    if "f" not in values:
+        raise PuzzleError(f"'{op.name}': wire a field into f", code="missing_input")
+    return {"out": field_formula(op, op.expression, values, op.name)}
 
 
 def curve_from_table(ctx, op) -> dict[str, Any]:
@@ -658,6 +753,7 @@ def annotate(ctx, op) -> dict[str, Any]:
 def evaluators() -> dict:
     ops = {k: arithmetic for k in FORMULAS}
     return ops | {"normalise": normalise, "curve_formula": curve_formula,
+                  "field_formula": field_formula_op,
                   "curve_from_table": curve_from_table, "over_steps": over_steps,
                   "at_step": at_step, "compare_steps": compare_steps, "envelope": envelope,
                   "match_x": match_x, "area_under": area_under, "slope": slope,

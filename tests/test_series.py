@@ -249,3 +249,88 @@ def test_curve_operators_over_mcp(tmp_path):
     assert got["curves"][0]["max"] == pytest.approx(0.8)
     assert call("operator_help", type="Utilisation")["key"] == "utilisation"
     assert np.isfinite(got["curves"][0]["x_at_max"])
+
+
+# --- field operators (ADR 0071 step 5) ---------------------------------------------------
+
+
+def test_fields_divide_subtract_and_normalise(setup):
+    """The arithmetic on result fields: σvM = 100·t·x MPa at the nodes x = 0, 1, 0, 0, 1.
+    Step 3 ÷ the yield (250 MPa) is 1.2 at x = 1; step 3 − step 1 is 200·x MPa; step 3
+    normalised is x. Each gives a field (drawn in the view), units followed through, and
+    a field plus a temperature is refused."""
+    p, study, steel, path, store = setup
+    last = p.add(Operator(name="Last", type="filter", quantity="stress:von_mises",
+                          inputs={"result": wire(study, "result")}))  # fmt: skip
+    first = p.add(Operator(name="First", type="filter", quantity="stress:von_mises", step=0,
+                           inputs={"result": wire(study, "result")}))  # fmt: skip
+    model = p.add(
+        Operator(
+            name="Sy", type="model_value", target=steel.id, property="properties.yield_strength"
+        )
+    )
+    use = op(p, "utilisation", a=wire(last), b=wire(model))
+    assert first_type(use, p) == "field" and output_type(p, use.id, "out") == "field"
+    got = value(p, store, use)
+    assert isinstance(got, ev.FieldValue) and got.item.unit is None
+    assert dict(zip(got.ids.tolist(), got.values.tolist(), strict=True)) == pytest.approx(
+        {1: 0.0, 2: 1.2, 3: 0.0, 4: 0.0, 5: 1.2})  # fmt: skip
+    grown = value(p, store, op(p, "subtract", a=wire(last), b=wire(first)))
+    assert grown.item.unit == "pressure"
+    assert grown.values == pytest.approx(200 * np.array([0, 1, 0, 0, 1]) * MPA)
+    shape = value(p, store, op(p, "normalise", series=wire(last)))
+    assert shape.values == pytest.approx([0, 1, 0, 0, 1])
+    hot = p.add(Operator(name="Hot", type="filter", quantity="temperature",
+                         inputs={"result": wire(study, "result")}))  # fmt: skip
+    with pytest.raises(PuzzleError):
+        value(p, store, op(p, "add", a=wire(last), b=wire(hot)))
+
+
+def test_a_field_formula(setup):
+    """Field formula: f − g over two steps' von Mises, and f / a with a wired 300 MPa."""
+    p, study, steel, path, store = setup
+    last = p.add(Operator(name="Last", type="filter", quantity="stress:von_mises",
+                          inputs={"result": wire(study, "result")}))  # fmt: skip
+    first = p.add(Operator(name="First", type="filter", quantity="stress:von_mises", step=0,
+                           inputs={"result": wire(study, "result")}))  # fmt: skip
+    change = p.add(Operator(name="Change", type="field_formula", expression="f - g",
+                            inputs={"f": wire(last), "g": wire(first)}))  # fmt: skip
+    got = value(p, store, change)
+    assert got.values == pytest.approx(200 * np.array([0, 1, 0, 0, 1]) * MPA)
+    assert got.label == "Change" and got.item.unit == "pressure"
+    ratio = p.add(Operator(name="Ratio", type="field_formula", expression="f / a", inputs={
+        "f": wire(last), "a": OperatorInput(value=Quantity(value=300, unit="MPa"))}))  # fmt: skip
+    assert value(p, store, ratio).values == pytest.approx([0, 1, 0, 0, 1])
+    bare = p.add(Operator(name="Bare", type="field_formula", expression="f * 2"))
+    with pytest.raises(PuzzleError, match="field f input is not wired"):
+        value(p, store, bare)
+
+
+def test_slice_clip_and_contour_on_a_field(setup):
+    """ParaView's filters on VTK (ADR 0070 level 2): σvM = 300·x MPa at the last step on
+    test_operators' two tets. A plane x = 0.5 slices it at 150 MPa; a clip above it keeps
+    the nodes at x = 1 (300 MPa); the 150 MPa contour lies on x = 0.5."""
+    from puzzle.model.schema import ConstructionGeometry
+
+    p, study, steel, path, store = setup
+    vm = p.add(Operator(name="VM", type="filter", quantity="stress:von_mises",
+                        inputs={"result": wire(study, "result")}))  # fmt: skip
+    plane = p.add(ConstructionGeometry(name="Mid", type="plane", origin=(0.5, 0, 0),
+                                       normal=(1, 0, 0)))  # fmt: skip
+    cut = value(p, store, p.add(Operator(name="Cut", type="slice", target=plane.id,
+                                         inputs={"field": wire(vm)})))  # fmt: skip
+    frame = cut.frame
+    assert frame.height > 0 and np.allclose(frame["x"].to_numpy(), 0.5)
+    assert frame[frame.columns[-1]].to_numpy() == pytest.approx(150 * MPA, rel=1e-6)
+    kept = value(p, store, p.add(Operator(name="Clip", type="clip", target=plane.id,
+                                          keep="above", inputs={"field": wire(vm)})))  # fmt: skip
+    assert isinstance(kept, ev.FieldValue)
+    assert np.nanmax(kept.values) == pytest.approx(300 * MPA)
+    assert int(np.isfinite(kept.values).sum()) == 2  # x = 1 at nodes 2 and 5
+    level = OperatorInput(value=Quantity(value=150, unit="MPa"))
+    iso = value(p, store, p.add(Operator(name="Iso", type="contour",
+                                         inputs={"field": wire(vm), "level": level})))  # fmt: skip
+    assert np.allclose(iso.frame["x"].to_numpy(), 0.5, atol=1e-9)
+    nowhere = p.add(Operator(name="None", type="slice", inputs={"field": wire(vm)}))
+    with pytest.raises(PuzzleError, match="pick its plane"):
+        value(p, store, nowhere)

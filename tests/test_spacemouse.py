@@ -231,3 +231,88 @@ def test_the_filter_eases_and_its_dead_zone_is_sticky():
     assert f([0.4 * zone, 0, 0, 0, 0, 0], 0.5)[0] == 0 and f.resting()
     fresh = motion.Filter()
     assert fresh([0.8 * zone, 0, 0, 0, 0, 0], 0.5)[0] == 0  # from rest, the full zone
+
+
+def test_the_pivot_is_the_model_point_under_the_view_centre():
+    """With nothing picked, the 3D mouse turns about what is under the view's centre (the
+    near face of a box seen along -z), not the box's centre; off the model, nothing."""
+    pv = pytest.importorskip("pyvista")
+    from puzzle.gui.viewport import point_under
+
+    box = pv.Box(bounds=(-1, 1, -1, 1, -1, 1)).triangulate()
+    camera = ((0.2, 0.3, 10.0), (0.2, 0.3, 0.0), (0, 1, 0))
+    assert point_under(box, camera) == pytest.approx((0.2, 0.3, 1.0), abs=1e-6)
+    away = ((5.0, 5.0, 10.0), (5.0, 5.0, 0.0), (0, 1, 0))
+    assert point_under(box, away) is None
+    assert point_under(None, camera) is None and point_under(box, None) is None
+
+
+def test_settings_say_which_device_or_why_none(monkeypatch):
+    """Settings > 3D mouse names the device read, or why none is."""
+    from puzzle.gui.spacemouse import controller, hid
+
+    monkeypatch.setattr(hid, "why_not", lambda: None)
+    monkeypatch.setitem(controller.STATE, "running", True)
+    monkeypatch.setitem(controller.STATE, "name", "SpaceMouse Enterprise")
+    assert controller.describe() == "Connected: SpaceMouse Enterprise."
+    monkeypatch.setitem(controller.STATE, "name", "")
+    assert controller.describe().startswith("None found")
+    monkeypatch.setitem(controller.STATE, "running", False)
+    assert "no 3D view" in controller.describe()
+    monkeypatch.setattr(hid, "why_not", lambda: "hidapi isn't installed (the hidapi package)")
+    assert "hidapi isn't installed" in controller.describe()
+
+
+def test_spacenavd_events_come_in_the_view_frame():
+    """spacenavd's motion (x right, y up, z into the screen) in the view's frame (z out),
+    and its button presses and releases."""
+    from puzzle.gui.spacemouse import spacenav
+
+    motion = spacenav.to_event((0, 10, 20, 30, 1, 2, 3, 16))
+    assert motion.kind == "motion" and motion.axes == [10, 20, -30, 1, 2, -3]
+    press = spacenav.to_event((1, 4, 0, 0, 0, 0, 0, 0))
+    assert (press.kind, press.button, press.down) == ("button", 4, True)
+    assert spacenav.to_event((2, 4, 0, 0, 0, 0, 0, 0)).down is False
+    assert spacenav.to_event((9, 0, 0, 0, 0, 0, 0, 0)) is None
+
+
+def test_spacenavd_is_read_from_its_socket(tmp_path):
+    """A fake spacenavd: events written in pieces are read whole; none waiting is None;
+    the daemon going away is an OSError (the controller then looks again)."""
+    import socket
+    import threading
+
+    if not hasattr(socket, "AF_UNIX"):
+        pytest.skip("Unix sockets only (spacenavd is Linux's)")
+    from puzzle.gui.spacemouse import spacenav
+
+    path = str(tmp_path / "spnav.sock")
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(path)
+    server.listen(1)
+    ready = threading.Event()
+
+    def serve():
+        conn, _ = server.accept()
+        data = spacenav.EVENT.pack(0, 5, 6, 7, 8, 9, 10, 16) + spacenav.EVENT.pack(
+            1, 0, 0, 0, 0, 0, 0, 0
+        )
+        conn.sendall(data[:13])
+        conn.sendall(data[13:])
+        ready.wait(5)
+        conn.close()
+        server.close()
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    reader = spacenav.Reader(path, timeout_s=2.0)
+    assert reader.read().axes == [5, 6, -7, 8, 9, -10]
+    assert reader.read().down is True
+    reader._sock.settimeout(0.05)
+    assert reader.read() is None  # nothing waiting
+    ready.set()
+    thread.join(5)
+    reader._sock.settimeout(2.0)
+    with pytest.raises(OSError):
+        reader.read()
+    reader.close()

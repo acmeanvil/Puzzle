@@ -1,6 +1,6 @@
 """Modelled bolts and nuts meshed as bodies of revolution (ADR 0077 decision 3).
 
-A part whose geometry history is one `bolt` or `nut` step (`puzzle.solid_bolts`) is
+A part whose geometry history is one `bolt`, `nut` or `washer` step (`puzzle.solid_bolts`) is
 rebuilt here in Gmsh's own OpenCASCADE geometry from the step's arguments: its meridian
 profile (r, z) in the local xz half-plane, cut at the pretension section when it has
 one, revolved about the local z axis in four quarter turns (OCC can't revolve a face a
@@ -26,13 +26,14 @@ import math
 import gmsh
 import numpy as np
 
-KINDS = ("bolt", "nut")
+KINDS = ("bolt", "nut", "washer")
 QUARTERS = 4
 CORE = 0.25  # a bolt's core strip about the axis, as a share of its minor radius
 
 
 def step_of(project, geometry) -> tuple[str, dict] | None:
-    """(kind, arguments in metres) when the geometry is one bolt or nut step, else None."""
+    """(kind, arguments in metres) when the geometry is one bolt, nut or washer step,
+    else None."""
     steps = [s for s in geometry.history if not s.suppressed]
     if len(steps) != 1 or steps[0].kind not in KINDS:
         return None
@@ -95,7 +96,8 @@ def _local(points, translation, rotation) -> np.ndarray:
 
 
 def core_radius(kind: str, args: dict) -> float | None:
-    """The radius of a bolt's core strip (`prepare`); a nut has no axis to keep off."""
+    """The radius of a bolt's core strip (`prepare`); a nut or washer has no axis to keep
+    off."""
     return CORE * args["minor_radius"] if kind == "bolt" else None
 
 

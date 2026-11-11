@@ -238,6 +238,7 @@ def _parser() -> argparse.ArgumentParser:
 
     for name, handler, helptext in (
         ("show", _show, "view a result"),
+        ("paraview", _paraview, "open a result in ParaView, its view rebuilt (ADR 0070)"),
         ("export", _export, "results for other software: ParaView, point clouds, CAD"),
         ("progress", _progress, "how a run converged: steps, increments, cut-backs, messages"),
     ):
@@ -252,6 +253,18 @@ def _parser() -> argparse.ArgumentParser:
             )
             p.add_argument("--plot", type=Path, help="save the convergence plot as a PNG")
             p.add_argument("--json", action="store_true", help="the summary as JSON")
+        elif name == "paraview":
+            p.add_argument("--field", default="displacement")
+            p.add_argument("--scalar", help="array to colour by, e.g. von_mises")
+            p.add_argument("--mode", type=int)
+            p.add_argument("--step", type=int)
+            p.add_argument("--deform", default="auto", help="scale factor, 'auto' or 'none'")
+            p.add_argument("--range", help="a custom colour range: bottom,top (the array's units)")
+            p.add_argument(
+                "--no-launch",
+                action="store_true",
+                help="write the files and view.py only, don't start ParaView",
+            )
         elif name == "show":
             p.add_argument("--field", default="displacement")
             p.add_argument(
@@ -576,6 +589,15 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("value", nargs="?", help="e.g. engineering; omit to show the choices")
     p.set_defaults(handler=_settings)
 
+    p = sub.add_parser("solvers", help="the solvers here and how each runs (ADR 0068)")
+    p.add_argument(
+        "--build",
+        action="store_true",
+        help="build CalculiX with PARDISO on this computer now (ADR 0051)",
+    )
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(handler=_solvers)
+
     p = sub.add_parser("trust", help="let a project's scripts and equations run (ADR 0062)")
     p.add_argument("project", type=Path)
     p.add_argument("--revoke", action="store_true", help="stop trusting it")
@@ -867,6 +889,32 @@ def _show(args) -> int:
         print(f"Saved {args.screenshot}")
     if args.animate:
         print(f"Saved {args.animate}")
+    return 0
+
+
+def _paraview(args) -> int:
+    from puzzle.post import paraview_link
+
+    store, record = _target(args)
+    mesh, results = store.read_mesh(record.mesh_id), store.read_results(record.run_id)
+    deform = None if args.deform == "none" else (
+        args.deform if args.deform == "auto" else float(args.deform))  # fmt: skip
+    clim = tuple(float(v) for v in args.range.split(",")) if args.range else None
+    try:
+        shown, view = paraview_link.from_run(mesh, results, field=args.field,
+                                             scalar=args.scalar, step=args.step,
+                                             mode=args.mode, deform=deform, clim=clim)  # fmt: skip
+    except KeyError as exc:
+        raise CliError(exc.args[0]) from exc
+    folder = paraview_link.folder_for(Path(args.project), record.run_id)
+    script = paraview_link.write(folder, shown, view, mesh, results)
+    print(f"Wrote {script.parent}")
+    if args.no_launch:
+        return 0
+    if (why := paraview_link.why_not()) is not None:
+        raise CliError(why)
+    paraview_link.launch(script)
+    print(f"Opened in ParaView: {view.title} ({view.step})")
     return 0
 
 
@@ -1844,6 +1892,30 @@ def _materials_duplicates(args) -> int:
         for key in keys:
             print(f"  {key}  ({lib[key]['name']})")
     print(f"{len(groups)} groups")
+    return 0
+
+
+def _solvers(args) -> int:
+    import json
+    from dataclasses import asdict
+
+    from puzzle import solver_builds
+
+    if args.build:
+        done = solver_builds.build(say=lambda line: print(line, flush=True))
+        print(f"PARDISO: {done.state}: {done.detail}")
+        return 0 if done.state == "built" else 1
+    rows = solver_builds.solvers()
+    pardiso = solver_builds.status()
+    if args.json:
+        print(json.dumps({"solvers": [asdict(r) for r in rows],
+                          "pardiso": asdict(pardiso)}, indent=1))  # fmt: skip
+        return 0
+    words = {"native": "native", "container": "in a container", "missing": "not available"}
+    for r in rows:
+        note = f"  [{r.note}]" if r.note else ""
+        print(f"{r.name:13} {words[r.how]:15} {r.where}{note}")
+    print(f"CalculiX with PARDISO: {pardiso.state}: {pardiso.detail}")
     return 0
 
 

@@ -1,6 +1,6 @@
 # 0069. Read 6-DOF navigation devices directly, with open code only
 
-- Status: Accepted (2026-11-06)
+- Status: Accepted (2026-11-06); steps 1-4 built (spacenavd untried on hardware)
 - Date: 2026-11-06
 
 ## Context
@@ -159,7 +159,25 @@ Found:
 - **conda-forge has no osx-arm64 hidapi** yet. Puzzle runs without a 3D mouse there;
   building one with the other packages of Puzzle's channel (ADR 0068) is to do, and
   the noarch `puzzle-fem` can't require it, so it stays an environment dependency.
-- The pivot under the view's centre (VTK's picker) isn't done yet: with nothing picked
-  the model's centre is used.
-- Not yet: spacenavd on Linux (step 4), the device's name and the reason when there is
-  none on the Settings page, and the axis signs checked on hardware.
+- Tried on a SpaceMouse Enterprise (256f:c633) on Windows 11, 2026-11-08 to 11-10: found
+  and read on every start, no report left unread in the log.
+
+**2026-11-10:**
+
+- The pivot under the view's centre: with nothing picked, the model point on the line of
+  sight through the view's centre (`viewport.point_under`: the camera's position through
+  its focal point, ray-traced on the shown surface), else the model's centre.
+- Settings > 3D mouse names the device read ("Connected: SpaceMouse Enterprise."), or
+  why none: hidapi missing, off, no 3D view in the window, none plugged in (and on
+  Linux, spacenavd or a udev rule).
+- spacenavd on Linux (step 4, `gui/spacemouse/spacenav.py`): its socket
+  (`/var/run/spnav.sock`, `SPNAV_SOCKET`), libspnav's eight-integer events (motion; a
+  button pressed or released), its z and rz negated into the view's frame; the
+  controller reads it in place of hidapi where it runs. Tested against a fake daemon on
+  Linux (CI); not yet on a real one.
+- The Enterprise's keys are numbered only (31 of them, "Button 1" to "Button 31"), so
+  its Fit, Top, Right and Front keys don't yet make those views: each numbered key's
+  first press is written to the log ("3D mouse: SpaceMouse Enterprise key 12
+  pressed"), and one press of each maps them.
+- Not yet: the Enterprise's key names (from that log), an Apple-silicon hidapi (Puzzle's
+  channel), the axis signs checked on spacenavd.
