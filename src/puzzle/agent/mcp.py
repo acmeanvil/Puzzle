@@ -1933,6 +1933,57 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
                 **ts.results(session().project, mesh, res, contact, step)}  # fmt: skip
 
     @tool(
+        description="Plan a weld between two parts (ADR 0078): `part` and the `edges` it runs "
+        "along, by name (an edge is named by its two faces, 'B/-x|B/-z'; selections_check "
+        "lists them). Of each edge's faces the one lying on another part is the seat; the "
+        "other carries the first leg, and the other part's touching face the second. `leg` "
+        "a quantity (a fillet's leg, a groove's depth), `leg2` an unequal fillet's other "
+        "leg; `type` fillet or groove (`groove` cjp or pjp); `pattern` continuous or "
+        "intermittent (`segment`, `pitch`). A light weld (springs across the joint, line "
+        "force at stations; CalculiX for now). Returns `batch` to pass to submit (one undo)."
+    )
+    @guarded
+    def weld_add(component: str, part: str, edges: list[str], leg: dict, name: str = "Weld",
+                 leg2: dict | None = None, type: str = "fillet", groove: str | None = None,
+                 pattern: str = "continuous", segment: dict | None = None,
+                 pitch: dict | None = None) -> dict[str, Any]:  # fmt: skip
+        from puzzle import weld_generator
+        from puzzle.commands import resolve
+        from puzzle.model.schema import Component, Quantity
+
+        s = session()
+        comp = resolve(s.project, component, Component)
+        planned = weld_generator.plan(s.project, comp, root, part, edges)
+        q = lambda v: Quantity(**v) if v is not None else None  # noqa: E731
+        batch = weld_generator.commands(
+            s.project, comp, planned, name=name, leg=q(leg), leg2=q(leg2), type=type,
+            groove=groove, pattern=pattern, segment=q(segment), pitch=q(pitch),
+        )  # fmt: skip
+        return {"joins": [planned.part, planned.other], "leg_faces": planned.leg_faces,
+                "base_faces": planned.base_faces,
+                "batch": [c.model_dump(mode="json") for c in batch]}  # fmt: skip
+
+    @tool(
+        description="Light welds' results in a study's latest run (ADR 0078): per weld its "
+        "total force (N), largest line force (N/m) and where, mean line force, welded "
+        "length, and each station's line force in the weld's frame (along, throat_normal, "
+        "throat_shear, magnitude, x, y, z; twist N·m/m about the path). `weld` one of "
+        "them; `step` 1-based among the steps with weld results (default the last)."
+    )
+    @guarded
+    def weld_results(study: str, weld: str | None = None,
+                     step: int | None = None) -> dict[str, Any]:  # fmt: skip
+        from puzzle.commands import resolve
+        from puzzle.model.schema import Component, Study
+        from puzzle.post.weld_fields import results
+
+        found = resolve(session().project, study, Study)
+        record, mesh, res = latest(study)
+        comp = session().project.get(found.component, Component)
+        return {"run_id": record.run_id,
+                **results(session().project, comp, mesh, res, weld, step)}  # fmt: skip
+
+    @tool(
         description="How a study's last solve went or is going (ADR 0054): steps, increments, "
         "cut-backs, iterations, last residuals against their criteria, equations, memory, "
         "tracked probes' last values, the solver's warnings and errors in English, and "

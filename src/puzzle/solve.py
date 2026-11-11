@@ -387,6 +387,10 @@ def _run_study(
 
         # ADR 0076: each threaded contact's flank forces, per-thread load and wedge.
         thread_fields(part_results, seen, seen.objects[study.component], written)
+        from puzzle.post.weld_fields import finish as weld_fields
+
+        # ADR 0078: each light weld's line force at its stations.
+        weld_fields(part_results, seen, seen.objects[study.component], written)
         lap("read")
         if len(parts) > 1:
             for step in part_results.steps:

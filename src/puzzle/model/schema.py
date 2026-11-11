@@ -1371,6 +1371,56 @@ class BeamSection(BaseModel):
         }
 
 
+class Weld(BaseModel):
+    """A weld between two parts along a path (ADR 0078): its AWS A2.4 type and size,
+    the edge it runs along and the two faces its legs lie on, continuous or
+    intermittent; a light weld (`line`: springs across the joint, the line force read
+    at stations) unless modelled."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    type: Literal["fillet", "groove"] = "fillet"
+    groove: Literal["cjp", "pjp"] | None = Field(
+        default=None, description="a groove weld's penetration: complete or partial joint"
+    )
+    sides: Literal["arrow", "other", "both"] = Field(
+        default="arrow", description="AWS A2.4's arrow side, other side, or both"
+    )
+    leg: Quantity = Field(description="a fillet's leg on the path's part (or both legs); "
+                          "a groove's depth of groove")  # fmt: skip
+    leg2: Quantity | None = Field(
+        default=None, description="an unequal fillet's leg on the other part"
+    )
+    path: str = Field(description="the edge selection it runs along, Part/Name, on the "
+                      "joint between the two parts")  # fmt: skip
+    faces: list[str] = Field(
+        min_length=2,
+        max_length=2,
+        description="the faces its legs lie on: the path's part's, then the other part's",
+    )
+    pattern: Literal["continuous", "intermittent"] = "continuous"
+    segment: Quantity | None = Field(default=None, description="intermittent: each length")
+    pitch: Quantity | None = Field(
+        default=None, description="intermittent: start to start of the segments"
+    )
+    filler: UUID | None = Field(
+        default=None, description="the filler metal; empty: the base metal's matching one"
+    )
+    formulation: Literal["line", "modelled"] = Field(
+        default="line", description="line: springs across the joint, no bead meshed (the "
+        "default); modelled: the bead as a solid (ADR 0078 step 4)")  # fmt: skip
+
+    @model_validator(mode="after")
+    def _pattern(self) -> Weld:
+        if self.pattern == "intermittent" and (self.segment is None or self.pitch is None):
+            raise ValueError(f"weld '{self.name}': an intermittent weld needs its segment "
+                             "length and pitch")  # fmt: skip
+        if self.type == "groove" and self.groove is None:
+            raise ValueError(f"weld '{self.name}': a groove weld is CJP or PJP")
+        return self
+
+
 class BeamFastener(BaseModel):
     """A bolt, pin or rivet as a beam between two selections, with no geometry (ADR 0027).
 
@@ -1652,6 +1702,9 @@ class Component(ProjectObject):
     )
     connectors: list[BeamFastener] = Field(
         default_factory=list, description="fasteners between parts, without geometry (ADR 0027)"
+    )
+    welds: list[Weld] = Field(
+        default_factory=list, description="welds between parts along paths (ADR 0078)"
     )
     bolt_rules: list[BoltRule] = Field(
         default_factory=list, description="which holes get bolts, to run again (ADR 0050)"

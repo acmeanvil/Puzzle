@@ -1,6 +1,6 @@
 # 0078. Generate welds along a path, light by default and modelled on request, checked by AISC 360 and 370
 
-- Status: Proposed
+- Status: Accepted; step 1 built (2026-11-11)
 - Date: 2026-11-10
 
 ## Context
@@ -151,6 +151,52 @@ VIII-1/VIII-2 2023 and IX 2023.
   interpreting; the light weld is what most checks need.
 - **ASME first.** The maintainer chose AISC first; VIII-2's structural-stress fatigue
   comes with decision 6.
+
+## Built: step 1 (2026-11-11)
+
+- **`Weld`** (`Component.welds`; left out of content hashes when empty): `type` fillet or
+  groove (`groove` cjp/pjp), `sides`, `leg` and `leg2`, `path` (an edge selection),
+  `faces` (the path's part's leg face, then the other part's), `pattern` continuous or
+  intermittent (`segment`, `pitch`), `filler`, `formulation` line or modelled.
+- **The light weld** (`adapters/weld_pairs.py`):
+  - Stations are the path's mesh nodes in order along it (an open chain, or a loop for a
+    weld all round).
+  - Each face's footprint is its nodes within its leg of the path, placed by (s, d).
+  - The other part's footprint keeps only nodes outside the path's part. A node there
+    with a node of the path's part about on it is the seat under a lap, or a bracket's
+    foot, not weld.
+  - Each footprint node is paired with the other footprint's node nearest the same
+    place across the weld, both ways, so the pairs fill the fillet's triangle.
+  - Each pair is a spring in x, y and z, E × length / pairs (CalculiX `SPRING2` node to
+    node, `inp._welds`).
+  - This realises decision 2's "spread to each footprint" with node pairs rather than
+    RBE3 equations: no helper nodes, and the pairs across the legs also carry the
+    weld's moment about its own line.
+- **Results** (`post/weld_fields.py`, after every solve, solver-neutral, from the
+  displacements):
+  - `weld_line_force` at the stations: along, throat_normal, throat_shear, magnitude,
+    x, y, z, and twist (N·m/m about the path).
+  - `weld` per weld: the total force, the peak line force, and the moment about the
+    origin.
+  - `results()` summarises them for MCP `weld_results`.
+- **The generator** (`weld_generator.py`):
+  - From edges of one part: of each edge's two faces, the one touching another part
+    (`geometry.contacts.find_contacts`) is the seat, the other carries the first leg, and
+    the touching face carries the second.
+  - `commands` is one batch: the selections (existing ones holding just those faces
+    reused) and the weld. MCP `weld_add`.
+- **Refused:** every solver but CalculiX (`Capabilities.welds`), and 2D models.
+- **Skill** `welds`.
+
+| Benchmark (CalculiX, 3 mm tets) | Puzzle | Hand |
+| --- | --- | --- |
+| Lap joint, the weld's total force | 10000 N, y 0.0008 N | P = 10 kN |
+| Lap joint, mean line force | 207.8 N/mm | P/L = 200 N/mm (+3.9 %: the peel's z share) |
+| Bracket all round, shear carried | 10000 N | P |
+| Bracket, moment about x | 600.0 N·m | P h = 600 N·m |
+| Bracket, normal line force on the ±y sides | 419.6 N/mm | elastic method M (d/2)/I = 450 N/mm (−6.8 %) |
+
+The bracket's moment balances exactly only with the twist: about 7 % of it is the fillets' resistance to turning about their own lines (on the ±y sides, which run along x), which the elastic method leaves out. Tests: `tests/integration/test_welds.py`, `tests/test_welds.py`.
 
 ## Plan
 

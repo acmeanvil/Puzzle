@@ -88,6 +88,8 @@ class Capabilities:
     contacts: frozenset[str] = frozenset()
     threads: frozenset[str] = frozenset()
     """Contact types a threaded contact (ADR 0076) may have here: bonded, no_separation..."""
+    welds: frozenset[str] = frozenset()
+    """Weld formulations written here (ADR 0078): line (the light weld), modelled."""
     couplings: frozenset[str] = frozenset()
     dimensions: frozenset[str] = field(default_factory=lambda: frozenset({"3d"}))
     time_schemes: frozenset[str] = frozenset({"backward_euler"})
@@ -345,6 +347,12 @@ class SolverAdapter(ABC):
             f"{self.name} does not support {c.capability} contact ('{c.name}')"
             for c in component.contacts
             if c.thread is None and c.capability not in caps.contacts | allowed
+        ]
+        problems += [  # ADR 0078: welds this solver doesn't write are refused
+            f"{self.name} does not write a {w.formulation} weld ('{w.name}')"
+            + (" in a 2D model" if component.dimension != "3d" else "")
+            for w in getattr(component, "welds", [])
+            if w.formulation not in caps.welds or component.dimension != "3d"
         ]
         problems += [  # ADR 0076: a thread's own list, never a plain tie or contact pair
             f"{self.name} does not support a threaded {c.type} contact ('{c.name}')"

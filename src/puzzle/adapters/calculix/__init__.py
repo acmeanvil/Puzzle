@@ -113,6 +113,7 @@ class CalculixAdapter(SolverAdapter):
             }
         ),
         threads=THREADS,  # ADR 0076
+        welds=frozenset({"line"}),  # ADR 0078: the light weld's springs
         couplings=frozenset({"thermal_expansion"}),
         # *PLASTIC, stepped static steps, PEEQ out (tests/integration/test_plasticity.py).
         material_models=frozenset(  # ADR 0049 step 4: in a system's axes

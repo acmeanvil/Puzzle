@@ -39,6 +39,7 @@ LINKS: tuple[Link, ...] = (
     Link("component", "beam_sections[].axes", ("axes",), "Beam orientation"),
     Link("component", "connectors[].type", ("bolt_type",), "Bolt type"),
     Link("component", "connectors[].material", ("material",), "Bolt material"),
+    Link("component", "welds[].filler", ("material",), "Weld filler metal"),
     Link("component", "bolt_rules[].type", ("bolt_type",), "Bolt type of a rule"),
     Link("component", "contacts[].thread.cs", ("axes",), "Thread axis"),  # ADR 0076
     Link("component", "connectors[].thread.cs", ("axes",), "Thread axis of a bolt"),

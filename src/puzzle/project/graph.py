@@ -83,6 +83,8 @@ def _own(obj: ProjectObject, *, drop: frozenset[str] = frozenset()) -> dict:
         data.pop("planar_model")  # the default: older projects keep their hashes
     if isinstance(obj, Component):  # how bolts are listed and made never changes a solve
         data.pop("bolt_rules", None)
+        if not data.get("welds"):  # ADR 0078: no welds, as before them
+            data.pop("welds", None)
         for assignment in data.get("materials", []):  # ADR 0049: no axes, as before them
             if assignment.get("axes") is None:
                 assignment.pop("axes", None)

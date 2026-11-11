@@ -297,6 +297,8 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
     out += lines
     lines, next_node, next_elem = _threads(project, comp, mesh, next_node, next_elem)
     out += lines
+    lines, next_elem = _welds(project, comp, mesh, next_elem)
+    out += lines
     if springy is not None:  # their helper nodes and elements come last
         spring_beams.number(springy, mesh, next_node, next_elem)
         out += spring_beams.lines(springy, mesh)
@@ -1830,6 +1832,25 @@ def _threads(project: Project, comp: Component, mesh: Mesh, node: int, elem: int
                 direction = f"{d[0]:.9g}, {d[1]:.9g}, {d[2]:.9g}"
                 out += [f"*GAP, ELSET={name}", f"{tp.clearance:.10e}, {direction}, , {kk:.10e}"]
     return out, node, elem
+
+
+def _welds(project: Project, comp: Component, mesh: Mesh, elem: int):
+    """Light welds (ADR 0078), from `adapters.weld_pairs`: a SPRING2 per node pair and
+    global direction, from the path's part's node to the other part's, all of one
+    weld's pairs equally stiff. -> (lines, the next free element id)"""
+    from puzzle.adapters.weld_pairs import all_pairs
+
+    out: list[str] = []
+    for name, wp in all_pairs(project, comp, mesh).items():
+        tag = set_name("WE", name)
+        for dof in (1, 2, 3):
+            rows = []
+            for a, b in zip(wp.a, wp.b, strict=True):
+                rows.append(f"{elem}, {int(a)}, {int(b)}")
+                elem += 1
+            out += [f"*ELEMENT, TYPE=SPRING2, ELSET={tag}{dof}", *rows,
+                    f"*SPRING, ELSET={tag}{dof}", f"{dof}, {dof}", f"{wp.k:.10e}"]  # fmt: skip
+    return out, elem
 
 
 def _transforms(project: Project, comp: Component, mesh: Mesh) -> list[str]:
