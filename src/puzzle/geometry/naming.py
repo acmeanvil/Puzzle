@@ -121,6 +121,8 @@ def name_all(named: NamedShape) -> Named:
             of[entity] = {
                 f"{entity}-{i}": [s] for i, s in enumerate(_subshapes(named.shape, kind), start=1)
             }
+        # ...and by the names its history gave them (a frame's members and groups, ADR 0079)
+        of["edge"].update({n: list(es) for n, es in named.edges.items()})
         return Named(named.shape, of, max(_size(named.shape), 1e-12))
     given = _Index()  # edges an operation named (a 2D face's sides): those names first
     for name, edges in sorted(named.edges.items()):

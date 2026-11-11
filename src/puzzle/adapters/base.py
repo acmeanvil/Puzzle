@@ -107,6 +107,8 @@ class Capabilities:
     rest are refused."""
     beams: bool = False
     """Line bodies with beam sections (ADR 0027); refused where False."""
+    member_ends: bool = False
+    """Frame members' end releases and rigid offsets (ADR 0079); refused where False."""
     shared_settings: frozenset[str] = frozenset()
     """Shared solver settings (ADR 0023: linear_solver, tolerance, max_iterations,
     output_every) this adapter translates; a study setting another is refused. A
@@ -392,6 +394,11 @@ class SolverAdapter(ABC):
                 )
         if component.beam_sections and not caps.beams:
             problems.append(f"{self.name} does not write beams (line bodies) yet")
+        if (component.member_releases or component.member_offsets) and not caps.member_ends:
+            problems.append(  # ADR 0079: refused, never ignored
+                f"{self.name} doesn't write frame members' end releases or offsets yet; "
+                "run the frame on PyNite"
+            )
         # In a 2D model thickness sections are plane-stress thicknesses, not shells.
         if component.shell_sections and not caps.shells and component.dimension == "3d":
             problems.append(f"{self.name} does not write shells (sheet bodies) yet")

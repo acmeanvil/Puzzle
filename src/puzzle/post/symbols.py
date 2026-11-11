@@ -71,6 +71,7 @@ TINTS = {
     "stranded_coil": PURPLE,
     "dirichlet": GREY,
     "elastic_support": BLUE,
+    "node_spring": BLUE,  # frames (ADR 0079)
     "compression_only_support": BLUE,
     "bolt_pretension": RED,
     "bolt_adjustment": RED,

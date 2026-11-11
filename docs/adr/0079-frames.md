@@ -1,6 +1,6 @@
 # 0079. Model and check frames of line members, as SAP2000 and RISA do, by AISC 360 and 370 and the Aluminum Design Manual
 
-- Status: Proposed
+- Status: Accepted; step 1 built (2026-11-11)
 - Date: 2026-11-10
 
 ## Context
@@ -128,6 +128,60 @@ before relying on 2015's numbers); ASCE 7-16 (and 7-10, 7-05); the shapes databa
   commercial use; not shippable in a GPL release without clearance.
 - **Write Puzzle's own frame solver.** PyNite is that, tested and MIT-licensed; Puzzle
   contributes fixes upstream.
+
+## Built: step 1 (2026-11-11)
+
+A frame is a 3D component whose parts are line bodies, not a new `Component.dimension`
+(the smallest change: the beams' sections, orientations, line meshes, point supports and
+CalculiX/Code_Aster solves of ADR 0027 and 0055 all carry over).
+
+- **Geometry:** the `frame` history step (`frames/lines.py`, `geometry/history.py`).
+  - Members are edges between named nodes. Members at a node share its vertex, so they are joined there.
+  - It takes `nodes` {name: [x, y, z]} and `members` [[name, i, j, group]], or a DXF's LINE, LWPOLYLINE and POLYLINE entities. Coincident ends become one node, layers become groups, and the units come from $INSUNITS (mm when unset).
+  - Each member's and group's edges carry its name. Line bodies now keep their history's edge names beside `edge-N` (`naming.name_all`).
+  - `frames.geometry` adds edge selections per member and group, and a point selection per node (`near` its point).
+- **Model:**
+  - `Component.member_releases` (`MemberRelease`: a member, group or part, the node `at`, the dofs `released` in the member's axes; a pin by default; `springs` refused so far).
+  - `Component.member_offsets` (`MemberOffset`: rigid for a length from the node; a mesh node must fall there).
+  - Both are left out of content hashes when empty.
+  - Features: `line_load` (N/m, global x, y, z, on members), `node_spring` (kx..krz at a node), and `gravity` as self weight (ρ A g per length).
+  - Pinned and rollers are `displacement` with the held components at zero.
+  - `Capabilities.member_ends` gates releases and offsets: CalculiX and Code_Aster refuse them.
+- **The PyNite adapter** (`adapters/pynite`, MIT PyNiteFEA 3.2; the pixi `pynite` env, or `PUZZLE_PYNITE_PYTHON`):
+  - Each line element is a PyNite member, so stations are the mesh's nodes. A three-node element becomes two members.
+  - Members are rolled so their local y is the section's first axis, with Iy = I1, as Code_Aster's POU_D_T.
+  - `frame.py` runs in PyNite's environment without Puzzle, reading `case.json` and writing `results.json`.
+  - Results:
+    - `displacement` and `rotation`;
+    - `reaction_force` and `reaction_moment`;
+    - `beam_forces` per node (N, Vy, Vz, T, My, Mz, averaged where members meet, as EFGE_NOEU);
+    - `member_forces` per element (both ends).
+  - PyNite gives N, Vy, Vz, T and Mz the opposite sign to Code_Aster's EFGE and CalculiX's springs. The reader flips them, so `beam_forces` means the same on every solver (`test_member_force_signs`).
+- **Agent:** MCP `frame_geometry` (returns a create command) and `frame_members`; skill `frames`.
+
+Benchmarks (`tests/integration/test_frames.py`; a W12X26 in steel, spans of 8 m):
+
+| Case | Closed form | PyNite | CalculiX | Code_Aster |
+| --- | --- | --- | --- | --- |
+| Propped cantilever, P at midspan: M_A | 3PL/16 = 30000 N·m | 30000 | 29829.5 (−0.57 %) | 29829.5 (−0.57 %) |
+| ... R_B | 5P/16 = 6250 N | 6250 | 6271.31 | 6271.31 |
+| Propped cantilever, uniform w: M_A, R_B | wL²/8, 3wL/8 | exact | refused (line load) | refused |
+| Two-span continuous beam: M_B | 3PL/16 | exact | not run (twist needs a node spring) | not run |
+| Fixed-feet portal, H at the beam: base moments | 12500 N·m | 12583, 12429 (mean +0.05 %) | 12622.9, 12474.3 | 12622.9, 12474.3 |
+| Hinge (released joint): M_A, R_C | PL/2, P/2 | exact, 0 at the hinge | refused | refused |
+| Self weight: root moment | ρAgL²/2 | exact | — | — |
+| Signs: a pulled, twisted cantilever | N +P, T −P a, My +P L | as Code_Aster | the same | the same |
+
+- PyNite's members are Euler-Bernoulli, so it matches the closed forms exactly.
+- CalculiX's and Code_Aster's beams are Timoshenko: their shear deflection moves the indeterminate moments by 0.6 %. They agree with each other to every printed digit.
+- The portal's closed form neglects the beam's axial shortening, which parts its two base moments by ±0.6 % on every solver.
+
+Not in step 1:
+- partially fixed releases (springs at a member's end);
+- releases, offsets, line loads and node springs on CalculiX and Code_Aster;
+- member point loads between nodes (put a node there);
+- the pixi `pynite` env's lock (`pixi lock` in the main checkout);
+- drawing diagrams beside members in the view (the fields are stored per node and per element; the GUI's diagram drawing is a later step).
 
 ## Plan
 

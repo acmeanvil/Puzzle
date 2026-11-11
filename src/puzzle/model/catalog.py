@@ -38,6 +38,21 @@ CATALOG: dict[str, list[FeatureSpec]] = {
         FeatureSpec("displacement", "Prescribed displacement", values=XYZ_DISP),
         FeatureSpec("force", "Force (total over the face)", values=XYZ_FORCE),
         FeatureSpec("pressure", "Pressure", values={"p": (0.0, "MPa")}),
+        # Frames (ADR 0079): a load per length along line members (global x, y, z), and a
+        # node held by springs (translations N/m, rotations N·m/rad).
+        FeatureSpec(
+            "line_load",
+            "Line load (per length, on members)",
+            values={"x": (0.0, "kN/m"), "y": (0.0, "kN/m"), "z": (0.0, "kN/m")},
+        ),
+        FeatureSpec(
+            "node_spring",
+            "Spring support (at a node)",
+            values={
+                **{f"k{a}": (0.0, "kN/mm") for a in "xyz"},
+                **{f"kr{a}": (0.0, "kN*m/rad") for a in "xyz"},
+            },
+        ),
         # Remote loads (ADR 0037): a force and moment at a point (default: the face's
         # centroid; add px, py, pz to move it), carried to the face deformably (RBE3)
         # or by a rigid face; a remote displacement moves the face rigidly.

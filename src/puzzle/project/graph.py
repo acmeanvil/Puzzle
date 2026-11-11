@@ -85,6 +85,9 @@ def _own(obj: ProjectObject, *, drop: frozenset[str] = frozenset()) -> dict:
         data.pop("bolt_rules", None)
         if not data.get("welds"):  # ADR 0078: no welds, as before them
             data.pop("welds", None)
+        for key in ("member_releases", "member_offsets"):  # ADR 0079: none, as before
+            if not data.get(key):
+                data.pop(key, None)
         for assignment in data.get("materials", []):  # ADR 0049: no axes, as before them
             if assignment.get("axes") is None:
                 assignment.pop("axes", None)
