@@ -52,9 +52,10 @@ EXTRA = (
     "mmg",
     "scripts",
     "runner",
+    "pynite",  # ADR 0079: frames
 )
 # Puzzle's channel, for the lock's PyPI ones (hidapi on osx-arm64 only, ADR 0069).
-OURS = ("puzzle-fem", "py-slvs", "manifold3d", "hidapi")
+OURS = ("puzzle-fem", "py-slvs", "manifold3d", "hidapi", "pynitefea")
 TYPES = {"linux": "sh", "osx": "pkg", "win": "exe"}
 # Signing (step 3) is on only when these are set, as CI does from its secrets once the
 # certificates exist; until then installers are unsigned test builds.
@@ -316,8 +317,16 @@ def write(lock: Lock, platform: str, sources: list[str], out: Path, kind: str,
         packages, pypi = lock.packages(name, platform)
         if not packages:
             continue
-        if pypi:
-            raise SystemExit(f"'{name}' has PyPI packages, which an installer can't carry")
+        if pypi:  # each must be one of Puzzle's own packages (PyNite in `pynite`)
+            unknown = [u for u in pypi if not any(_pypi_name(u) == n for n in OURS)]
+            if unknown:
+                raise SystemExit(f"'{name}' has PyPI packages with no conda package: {unknown}")
+            own = ours(sources, platform,
+                       [n for n in OURS if any(_pypi_name(u) == n for u in pypi)])  # fmt: skip
+            if missing := unmet(own, packages):
+                raise SystemExit(f"'{name}': Puzzle's packages need what the lock lacks: "
+                                 + ", ".join(missing))  # fmt: skip
+            packages = packages + own
         (folder / "envs" / f"{name}.txt").write_text(_explicit(packages), encoding="utf-8")
         extra[name] = {"environment_file": f"envs/{name}.txt", "menu_packages": []}
     (folder / "LICENSE.txt").write_text(

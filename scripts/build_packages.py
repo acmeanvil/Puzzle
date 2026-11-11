@@ -26,8 +26,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 RECIPES = ROOT / "packaging" / "recipes"
-ORDER = ("py-slvs", "manifold3d", "hidapi", "puzzle-fem")
-NOARCH = {"puzzle-fem"}
+ORDER = ("py-slvs", "manifold3d", "hidapi", "pynitefea", "puzzle-fem")
+NOARCH = {"puzzle-fem", "pynitefea"}
 FROM_CHECKOUT = {"puzzle-fem"}  # built from this working tree: never reused
 # Puzzle's published channel, after the local one: `--only puzzle-fem` then needs no
 # local build of the others.

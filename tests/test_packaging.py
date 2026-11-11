@@ -82,7 +82,7 @@ def _channel(root: Path, platform: str, depends: list[str]) -> Path:
 
     # hidapi is Puzzle's own build on Apple silicon only (ADR 0069).
     native = ["py-slvs", "manifold3d"] + (["hidapi"] if platform == "osx-arm64" else [])
-    for subdir, names in ((platform, native), ("noarch", ["puzzle-fem"])):
+    for subdir, names in ((platform, native), ("noarch", ["puzzle-fem", "pynitefea"])):
         (root / subdir).mkdir(parents=True)
         pkgs = {f"{n}-1.0-0.conda": {"name": n, "version": "1.0", "build_number": 0,
                                      "md5": "0" * 32, "depends": depends}
@@ -100,7 +100,10 @@ def test_the_installer_is_exactly_the_lock(tmp_path):
     assert base, "pixi lock: the app environment is missing"
     # Only Puzzle's own pieces come from PyPI, and the channel has conda packages of them.
     # hidapi comes from PyPI on osx-arm64 only (ADR 0069); the rest everywhere.
-    assert {make_installer._pypi_name(u) for u in pypi} == set(make_installer.OURS) - {"hidapi"}
+    # PyNite (ADR 0079) is in the frames' own environment, not the app's.
+    assert {make_installer._pypi_name(u) for u in pypi} == (
+        set(make_installer.OURS) - {"hidapi", "pynitefea"}
+    )
     channel = _channel(tmp_path / "ch", platform, ["python >=3.12", "numpy"])
     folder = make_installer.write(lock, platform, [str(channel)], tmp_path / "out", "sh")
     lines = (folder / "base.txt").read_text(encoding="utf-8").splitlines()
@@ -108,6 +111,8 @@ def test_the_installer_is_exactly_the_lock(tmp_path):
     assert len(lines) == 1 + len(base) + 3  # every locked package, by URL and md5, plus ours
     assert all("#" in line and len(line.rsplit("#", 1)[1]) == 32 for line in lines[1:])
     assert not any("pypi.org" in line or "pythonhosted" in line for line in lines)
+    frames = (folder / "envs" / "pynite.txt").read_text(encoding="utf-8")
+    assert "pynitefea-1.0-0.conda" in frames and "pythonhosted" not in frames
     construct = (folder / "construct.yaml").read_text(encoding="utf-8")
     assert 'environment_file: "base.txt"' in construct and "\nspecs:" not in construct
     assert 'menu_packages:\n  - "puzzle-fem"' in construct
