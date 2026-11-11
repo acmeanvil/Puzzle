@@ -1053,6 +1053,9 @@ class SchematicPanel(QWidget):
                         found[k]["name"],
                         lambda k=k: ops.insert_template(self.window, k, source, port),
                     ).setToolTip(found[k].get("help", ""))
+        blocks = submenu("Share blocks")  # ADR 0071: user operators, shared as files
+        blocks.addAction("Import a block…", lambda: ops.import_block(self.window))
+        blocks.addAction("Export one of my clusters…", lambda: ops.export_block(self.window))
         menu.addSeparator()
         groups: dict[str, QMenu] = {}
         for t in ops.ordered():

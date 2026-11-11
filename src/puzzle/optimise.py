@@ -32,6 +32,7 @@ from typing import Any
 import numpy as np
 
 from puzzle.errors import PuzzleError
+from puzzle.jobs.warm import batched as _batched  # ADR 0072: warm containers
 from puzzle.model.schema import DesignOutput, Optimisation, Project, Quantity, Study
 
 METHODS = {
@@ -1160,6 +1161,7 @@ def points(project: Project, store, opt: Optimisation) -> Points:
     return r.points
 
 
+@_batched
 def run(
     project: Project,
     opt: Optimisation,

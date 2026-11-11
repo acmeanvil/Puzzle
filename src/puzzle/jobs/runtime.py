@@ -400,6 +400,15 @@ def on_host(host, resources=None):
 
 
 def runtime_for(solver: str) -> Runtime:
+    """How `solver` runs now: on the remote host a run is on, else in its container or
+    natively (PUZZLE_RUNTIME, CONTAINER_FIRST); inside a batch (`jobs.warm.batch`), a
+    container run is exec'd into the batch's warm container (ADR 0072)."""
+    from puzzle.jobs.warm import warm
+
+    return warm(_runtime_for(solver))
+
+
+def _runtime_for(solver: str) -> Runtime:
     remote = _REMOTE.get()
     if remote is not None:
         from puzzle.jobs.remote import RemoteRuntime, Resources

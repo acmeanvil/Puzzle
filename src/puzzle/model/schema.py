@@ -17,7 +17,14 @@ from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, TypeVar
 from uuid import UUID, uuid4
 
 import numpy as np
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 if TYPE_CHECKING:
     from puzzle.errors import Problem
@@ -26,12 +33,26 @@ SCHEMA_VERSION = 1
 
 
 class Quantity(BaseModel):
-    """A value with a unit. Converted to SI only when an adapter exports it."""
+    """A value with a unit. Converted to SI only when an adapter exports it.
+
+    `parameter` (ADR 0071: numbers wired into the model) names a parameter (a parameter
+    set's value, or a pre-solve Number, Slider or Expression by its name): the value
+    follows it, put in before solving and at every sweep point
+    (`operators.with_parameters`); `value` keeps the last one for showing. Left out of
+    the dump when unset, so quantities without one hash and save as before."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     value: float
     unit: str = "dimensionless"
+    parameter: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _without_unset_parameter(self, handler):
+        data = handler(self)
+        if isinstance(data, dict) and data.get("parameter") is None:
+            data.pop("parameter", None)
+        return data
 
     @field_validator("unit")
     @classmethod
@@ -2383,7 +2404,8 @@ class Operator(ProjectObject):
 
     kind: ClassVar[str] = "operator"
 
-    type: Literal["reduce", "filter", "check", "panel", "plot", "export", "number", "slider",
+    type: Literal["reduce", "filter", "check", "panel", "plot", "export", "report", "number",
+                  "slider",
                   "series", "range", "expression", "table", "list", "pairs",
                   "random", "result_table", "points_table", "file", "columns",
                   "filter_rows", "sort", "top_n", "new_column", "convert_units", "round",

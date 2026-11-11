@@ -27,7 +27,8 @@ solved it).
 
 Linear algebra: PETSc (MUMPS, SLEPc) where dolfinx was built with it; otherwise SciPy
 (SuperLU, ARPACK), e.g. conda-forge's Windows dolfinx, which has no PETSc.
-PUZZLE_FENICSX_BACKEND=scipy forces the SciPy path.
+PUZZLE_FENICSX_BACKEND=scipy forces the SciPy path; there, MKL PARDISO factors when
+pypardiso is installed (Windows), and PUZZLE_FENICSX_LU=superlu forces SuperLU.
 """
 
 from __future__ import annotations
@@ -54,6 +55,47 @@ try:
 except ImportError:
     BACKEND = "scipy"
     LU_PACKAGE = "superlu"
+
+# MKL PARDISO for the SciPy path where conda-forge has pypardiso (win-64 with no PETSc:
+# SuperLU is single-threaded and stalled 3D cases; ADR 0072). Complex systems stay on
+# SuperLU, which pypardiso doesn't take.
+try:
+    if os.environ.get("PUZZLE_FENICSX_LU") == "superlu":  # for comparing, and testing
+        raise ImportError("SuperLU requested")
+    import pypardiso
+except ImportError:
+    pypardiso = None
+if BACKEND == "scipy" and pypardiso is not None:
+    LU_PACKAGE = "pardiso"
+
+
+def _spsolve(A, b):
+    """A x = b for a real sparse A: PARDISO when there, else SuperLU."""
+    if pypardiso is not None:
+        return pypardiso.spsolve(A.tocsr(), np.asarray(b, dtype=float))
+    from scipy.sparse.linalg import spsolve
+
+    return spsolve(A.tocsc(), b)
+
+
+class _Factor:
+    """A real sparse matrix factored once, solved many times (SuperLU's splu shape)."""
+
+    def __init__(self, A):
+        if pypardiso is not None:
+            self.A = A.tocsr()
+            self.pardiso = pypardiso.PyPardisoSolver()
+            self.pardiso.factorize(self.A)
+            self.lu = None
+        else:
+            from scipy.sparse.linalg import splu
+
+            self.lu, self.pardiso = splu(A.tocsc()), None
+
+    def solve(self, b):
+        if self.pardiso is not None:
+            return self.pardiso.solve(self.A, np.asarray(b, dtype=float))
+        return self.lu.solve(b)
 
 
 def main() -> None:
@@ -121,7 +163,8 @@ def main() -> None:
         if transient
         else None,
     )
-    out: dict[str, np.ndarray] = {"backend": np.array(BACKEND)}
+    out: dict[str, np.ndarray] = {"backend": np.array(BACKEND), "lu": np.array(LU_PACKAGE)}
+    print(f"puzzle: linear solver {BACKEND} ({LU_PACKAGE})", flush=True)
     solve = {
         "solid_mechanics": solve_solid,
         "heat_transfer": solve_heat,
@@ -250,8 +293,6 @@ def solve_linear(a, L, bcs, V, name: str, *, mass_matrix: bool = False) -> fem.F
         )
         return problem.solve()
 
-    from scipy.sparse.linalg import spsolve
-
     a_form, L_form = fem.form(a), fem.form(L)
     A = fem.assemble_matrix(a_form, bcs=bcs)
     A.scatter_reverse()
@@ -274,7 +315,7 @@ def solve_linear(a, L, bcs, V, name: str, *, mass_matrix: bool = False) -> fem.F
             raise SystemExit(f"projection did not converge (cg info {info})")
         uh.x.array[:n] = solution
     else:
-        uh.x.array[:n] = spsolve(matrix.tocsc(), b.array[:n])
+        uh.x.array[:n] = _spsolve(matrix, b.array[:n])
     uh.x.scatter_forward()
     return uh
 
@@ -305,11 +346,9 @@ class Factored:
             ksp.getPC().setFactorSolverType(LU_PACKAGE)
             self.solver, self.matrix = ksp, A
         else:
-            from scipy.sparse.linalg import splu
-
             A = fem.assemble_matrix(self.a, bcs=self.bcs)
             A.scatter_reverse()
-            self.solver = splu(A.to_scipy().tocsc())
+            self.solver = _Factor(A.to_scipy())
 
     def solve(self, L=None) -> fem.Function:
         """With the matrix factored once; `L` another right-hand side (a compiled form)."""
@@ -708,8 +747,6 @@ def solve_threaded(threads, a, L, bcs, V, facets, tag, limit: int = 50) -> fem.F
     Unilateral (frictionless) flanks by an active set: every pair closed first, then
     a pair is closed where the screw has pushed past its clearance into the nut,
     repeated until no pair changes."""
-    from scipy.sparse.linalg import spsolve
-
     equations(V, "u")
     bs = V.dofmap.index_map_bs
     size = V.dofmap.index_map.size_local * bs
@@ -725,7 +762,7 @@ def solve_threaded(threads, a, L, bcs, V, facets, tag, limit: int = 50) -> fem.F
         u = np.zeros(size)
         u[held] = prescribed
         rhs = F + extra - A[:, held] @ prescribed
-        u[free] = spsolve(A[free][:, free].tocsc(), rhs[free])
+        u[free] = _spsolve(A[free][:, free], rhs[free])
         changed = 0
         for i, sp in enumerate(springs):
             if not sp["unilateral"]:
@@ -754,11 +791,9 @@ def _stress_projector(msh, degree, dx, sigma, V, voigt_of=None):
     """A function from a displacement array to nodal stress (xx, yy, zz, xy, yz, zx):
     the L2 projection, its mass matrix factored once. `voigt_of` (a 2D model's) gives
     the six components of a displacement directly."""
-    from scipy.sparse.linalg import splu
-
     S = fem.functionspace(msh, ("Lagrange", degree, (6,)))
     p, q = ufl.TrialFunction(S), ufl.TestFunction(S)
-    mass = splu(_scipy(ufl.inner(p, q) * dx).tocsc())
+    mass = _Factor(_scipy(ufl.inner(p, q) * dx))
     uh = fem.Function(V)
     if voigt_of is not None:
         voigt = voigt_of(uh)
@@ -822,8 +857,6 @@ def solve_transient(step, a, m, loads, bcs, V, stress, out) -> None:
     """Newmark's average acceleration (beta 1/4, gamma 1/2) or HHT-alpha (alpha in
     [-1/3, 0], beta = (1 - alpha)^2 / 4, gamma = 1/2 - alpha), with Rayleigh damping
     C = alpha_M M + beta_K K; from rest, the loads at their t = 0 values (a sudden load)."""
-    from scipy.sparse.linalg import splu
-
     bs = V.dofmap.index_map_bs  # 3, or 2 in a 2D model (ADR 0048)
     size = V.dofmap.index_map.size_local * bs
     K, M = _scipy(a)[:size, :size], _scipy(m)[:size, :size]
@@ -839,9 +872,9 @@ def solve_transient(step, a, m, loads, bcs, V, stress, out) -> None:
     u[held] = prescribed
     acc = np.zeros(size)
     Mff = M[free][:, free]
-    acc[free] = splu(Mff.tocsc()).solve((force(0.0) - K @ u - C @ vel)[free])
+    acc[free] = _Factor(Mff).solve((force(0.0) - K @ u - C @ vel)[free])
     A = (M + (1 + alpha) * (gamma * dt * C + beta * dt * dt * K))[free][:, free]
-    factor = splu(A.tocsc())
+    factor = _Factor(A)
     every = int(setting("output_every", 1))
     coords = V.tabulate_dof_coordinates()
     times, series, stresses = [], [], []

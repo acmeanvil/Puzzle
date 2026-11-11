@@ -185,12 +185,43 @@ def _feature_choices(project, source, target, within: str) -> list[Choice]:
     """A wire onto one load or support: its coordinate system, amplitude, or (a
     geometry) the selection it acts on."""
     found = [c for c in choices(project, source, target) if c.path.startswith(within + ".")]
+    found += _value_choices(project, source, _feature(target, within), within)
     if source.kind == "geometry":  # where it acts: one of the geometry's selections
         link = Link("component", "physics[].features[].selection", ("geometry",), "Where")
         for part in (p for p in target.parts if p.geometry == source.id):
             for sel in source.selections:
                 name = f"{part.name}/{sel.name}"
                 found.append(Choice(link, f"{within}.selection", f"Acts on {name}", "set", name))
+    return found
+
+
+VALUE_LINK = Link("component", "physics[].features[].values", ("operator", "parameters"), "Value")
+
+
+def _parameter_names(project, source) -> list[str]:
+    """The parameters `source` gives the model by name: a parameter set's values, a
+    pre-solve Number, Slider or Expression's own name (ADR 0062)."""
+    if source.kind == "parameters":
+        return list(source.values)
+    if source.kind == "operator":
+        from puzzle.operators import first_type, pre_solve
+
+        if any(o.id == source.id for o in pre_solve(project)) and (
+            first_type(source, project) == "number"
+        ):
+            return [source.name]
+    return []
+
+
+def _value_choices(project, source, feature, within: str) -> list[Choice]:
+    """A number wired onto a load's node (ADR 0071): each of its values made to follow
+    that parameter ("Sets p, following t")."""
+    found = []
+    for name in _parameter_names(project, source):
+        for key, q in feature.values.items():
+            value = {"value": q.value, "unit": q.unit, "parameter": name}
+            found.append(Choice(VALUE_LINK, f"{within}.values.{key}",
+                                f"Sets {key}, following {name}", "set", value))  # fmt: skip
     return found
 
 
@@ -223,8 +254,16 @@ def existing(project, source_id, target, within: str = "") -> list[Choice]:
     for, to remove (a required one can only be replaced, never cleared); `within` keeps
     to one feature's."""
     if within:
-        return [c for c in existing(project, source_id, target)
-                if c.path.startswith(within + ".")]  # fmt: skip
+        found = [c for c in existing(project, source_id, target)
+                 if c.path.startswith(within + ".")]  # fmt: skip
+        source = project.objects.get(source_id)
+        names = set(_parameter_names(project, source)) if source is not None else set()
+        for key, q in _feature(target, within).values.items():
+            if q.parameter and q.parameter in names:  # a value bound to it: unbound
+                found.append(Choice(VALUE_LINK, f"{within}.values.{key}",
+                                    f"{key} follows {q.parameter}", "unbind",
+                                    {"value": q.value, "unit": q.unit}))  # fmt: skip
+        return found
     found: list[Choice] = []
     data = target.model_dump(mode="json")
     for link in LINKS:
@@ -243,6 +282,9 @@ def existing(project, source_id, target, within: str = "") -> list[Choice]:
 def clear_commands(choice: Choice, target) -> list[dict]:
     """Removing a wire: an optional reference cleared; a required one in a list item (a
     material assignment) removes that item; a required single one can't be removed."""
+    if choice.op == "unbind":  # the value stays as it is now, following nothing
+        return [{"command": "edit", "object": str(target.id),
+                 "ops": [{"op": "set", "path": choice.path, "value": choice.value}]}]  # fmt: skip
     if not choice.link.required:
         return [{"command": "edit", "object": str(target.id),
                  "ops": [{"op": "set", "path": choice.path, "value": None}]}]  # fmt: skip

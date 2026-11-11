@@ -355,6 +355,7 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--level", choices=["advise", "propose", "act_in_budget", "act"])
     p.add_argument("--runs", type=int, help="budget: fresh solver runs")
     p.add_argument("--solver-seconds", type=float, help="budget: solver wall time")
+    p.add_argument("--core-hours", type=float, help="budget: cores × hours on remote hosts")
     p.add_argument("--mcp", choices=["off", "local", "network"])
     p.add_argument("--confirm", help="the token from the first request (level act)")
     p.set_defaults(handler=_autonomy)
@@ -588,6 +589,12 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("key", nargs="?", help="e.g. units.system")
     p.add_argument("value", nargs="?", help="e.g. engineering; omit to show the choices")
     p.set_defaults(handler=_settings)
+
+    p = sub.add_parser("clusters", help="your operator clusters and blocks to share (ADR 0071)")
+    p.add_argument("action", choices=["list", "export", "import", "remove"])
+    p.add_argument("name", nargs="?", help="export/remove: the cluster's name or key")
+    p.add_argument("file", nargs="?", type=Path, help="export: where; import: the block file")
+    p.set_defaults(handler=_clusters)
 
     p = sub.add_parser("solvers", help="the solvers here and how each runs (ADR 0068)")
     p.add_argument(
@@ -1071,13 +1078,14 @@ def _autonomy(args) -> int:
 
     project = _load(args.project)
     budget = None
-    if args.runs is not None or args.solver_seconds is not None:
-        current = project.agent.budget
+    if args.runs is not None or args.solver_seconds is not None or args.core_hours is not None:
+        current = project.agent.budget  # what isn't given stays as it is
         budget = {
             "runs": current.runs if args.runs is None else args.runs,
             "solver_seconds": (
                 current.solver_seconds if args.solver_seconds is None else args.solver_seconds
             ),
+            "core_hours": current.core_hours if args.core_hours is None else args.core_hours,
         }
     command = {
         "command": "set_autonomy",
@@ -1442,7 +1450,7 @@ def _operators(args) -> int:
     ctx = ev.Context(project, _store(args.project))
     if args.export:
         for op in ops:
-            if op.type == "export":
+            if op.type in ("export", "report"):
                 for path in ev.export(ctx, op, args.project):
                     print(f"wrote {path}")
         return 0
@@ -1892,6 +1900,43 @@ def _materials_duplicates(args) -> int:
         for key in keys:
             print(f"  {key}  ({lib[key]['name']})")
     print(f"{len(groups)} groups")
+    return 0
+
+
+def _clusters(args) -> int:
+    from puzzle.operators import clusters
+
+    found = clusters.templates()
+
+    def key_of(name):
+        if name in found:
+            return name
+        hits = [k for k, t in found.items() if t["name"] == name]
+        if len(hits) != 1:
+            raise CliError(f"no single cluster named '{name}'")
+        return hits[0]
+
+    if args.action == "list":
+        for k, t in found.items():
+            mine = "yours " if k.startswith("mine:") else "recipe"
+            ports = ", ".join(f"{p['name']} ({p['type']})" for p in t.get("ports", []))
+            print(f"{mine}  {t['name']}  [{k}]" + (f"  ports: {ports}" if ports else ""))
+        return 0
+    if args.action == "import":
+        target = args.file or (Path(args.name) if args.name else None)
+        if target is None:
+            raise CliError("import needs the block file")
+        key = clusters.import_file(target)
+        print(f"imported {clusters.templates()[key]['name']} as {key}")
+        return 0
+    if not args.name:
+        raise CliError(f"{args.action} needs the cluster's name")
+    key = key_of(args.name)
+    if args.action == "remove":
+        clusters.remove(key)
+        print(f"removed {args.name}")
+        return 0
+    print(f"wrote {clusters.export(key, args.file or Path.cwd())}")
     return 0
 
 

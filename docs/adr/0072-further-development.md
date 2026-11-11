@@ -43,6 +43,16 @@ Maintainer's priority, first:
   exec, cancel by killing the exec'd process, the container stopped when the batch ends or
   goes idle, and the FEniCSx form cache kept as now. Measure CalculiX again with it: if the
   overhead goes, CalculiX's image may beat native on Windows too.
+  **Built (2026-11-10), `jobs/warm.py`:** inside `warm.batch(root)` (every sweep,
+  optimisation, convergence and adaptivity run) a container solve is `docker exec`'d
+  into one running container per image, `root` mounted at /batch, in its own folder,
+  with its thread variables and the image's entrypoint in front; the container stops
+  itself after 300 s untouched and is removed at the batch's end; a cancel kills the
+  exec'd solve inside it by its pid (the job runner's cancel calls it too). Measured on
+  Windows 11 (Docker Desktop, Code_Aster's image): the cantilever over four materials
+  took 14.7 s warm against 15.3 s cold, the same answers to every digit: about 0.15 s a
+  point, less than the 0.5 s guessed, since Code_Aster's own start-up inside the
+  container dominates. `tests/integration/test_warm_containers.py`.
 - Then measure where the rest of CalculiX's container penalty goes (files over the
   Windows mount vs start-up); copying a case into the container's own file system may help.
 
@@ -55,8 +65,19 @@ Other items:
   stays empty for minutes and a long solve looks hung (found 2026-11-08 on an
   882,309-equation model). The container streams; for the native fallback, follow
   `fort.6` in run_aster's temporary folder, or run Code_Aster's Python directly (new).
+  **Built (2026-11-10):** natively on Windows, `CodeAsterProgress.poll` follows the
+  fort.6 of the newest `%TEMP%un_aster__*` folder made since its job started (claimed,
+  so two jobs in one Puzzle don't share one) and ignores stdout while it does, so no
+  line counts twice. A plastic bar natively: its increments and iterations reach
+  progress.jsonl during the solve (2.1-2.8 s into a 3.5 s solve), not at its end.
 - Native Windows FEniCSx without Docker: use `pypardiso` (MKL PARDISO, on conda-forge
   win-64) in `study.py`'s SciPy path instead of SuperLU (new; the fallback when Docker is off).
+  **Built (2026-11-10):** `study.py`'s `_spsolve` and `_Factor` use pypardiso where it is
+  installed (the fenicsx environment on win-64), SuperLU otherwise and for complex
+  systems; `PUZZLE_FENICSX_LU=superlu` forces SuperLU; the solve prints its linear
+  solver. NAFEMS LE1 natively on Windows 11: 9.8 s against 30.8 s on SuperLU, the same
+  answer. FEniCSx still runs in its image first on Windows (`CONTAINER_FIRST`): whether
+  native now beats it needs the 3D magnetics cases timed both ways.
 - Publish the images (ghcr.io); none are published yet (0007, 0013).
 - Record the solver version and image digest with each run; images write
   `puzzle-solver-version` but the store keeps neither (0007).

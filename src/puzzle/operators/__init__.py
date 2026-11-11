@@ -418,6 +418,15 @@ TYPES: dict[str, OperatorType] = {
             (),
             ("file", "format", "quantity", "step"),
         ),
+        OperatorType(
+            "report", "Report", "Display",
+            "What the schematic worked out, gathered into one HTML file to send: checks "
+            "(pass or fail), numbers, curves drawn, tables, fields' ranges, each headed by "
+            "the node it comes from. Written with Export now.",
+            tuple(PortSpec(k, f"Item {k.upper()}", ANY, required=k == "a") for k in "abcdefgh"),
+            (),
+            ("file",),
+        ),
         # Data operators (phase 2): they compute before a solve.
         OperatorType(
             "number", "Number", "Data",
@@ -955,6 +964,7 @@ GROUP_OF = {
     "panel": "Outputs",
     "plot": "Outputs",
     "export": "Outputs",
+    "report": "Outputs",
 }
 # Grasshopper's, Excel's and SQL's names for each (ADR 0064A), so a search finds it.
 ALIASES = {
@@ -1018,7 +1028,7 @@ ALIASES = {
     "contact_table": ("contact forces", "contact pressure"),
     "bolt_table": ("fastener forces", "bolt forces"),
     "nearest": ("closest point", "pull point", "proximity", "mesh closest point", "gauges"),
-    "section": ("brep plane", "mesh plane", "contour", "cut", "section force"),
+    "section": ("brep plane", "mesh plane", "contour curves", "cut", "section force"),
     "divide": ("divide curve", "divide length", "curve frames", "points along"),
     "clearance": ("collision", "clash", "minimum distance", "interference"),
     "text": ("format", "concatenate", "text join", "label"),
@@ -1042,6 +1052,7 @@ ALIASES = {
     "curve_formula": ("series expression", "map y", "transform curve"),
     "slice": ("cut plane", "section plane", "paraview slice"),
     "clip": ("half model", "cut away", "paraview clip"),
+    "report": ("summary", "document", "write up", "calculation report", "html"),
     "contour": ("iso-surface", "isosurface", "isoline", "level set", "paraview contour"),
     "field_formula": ("field expression", "result calculator", "calculator", "field math",
                       "derived field", "user defined result"),
@@ -1134,6 +1145,8 @@ EXAMPLES = {
     "margin": "A peak stress of 200 MPa against 250 MPa → 0.25.",
     "normalise": "A deflected shape along a beam ÷ its largest deflection → 1 at the tip.",
     "curve_formula": "y / 250 MPa, or y * a with a wired factor.",
+    "report": "Three checks, a utilisation plot and a reactions table → exports/Report.html, "
+    "'2 of 3 checks pass' at the top.",
     "slice": "Von Mises on a construction plane across a nozzle's wall → its points' values.",
     "clip": "Temperature kept above a plane at the weld → its largest value there (Reduce).",
     "contour": "Von Mises at 250 MPa → the points where the plate yields.",
@@ -1419,6 +1432,17 @@ def problems(project) -> list[Problem]:
             refuse(project, op)
         except PuzzleError as exc:
             out.append(Problem("operator_input", op.name, exc.message, {}))
+    # ADR 0071: a value following a parameter that isn't one (renamed, or deleted).
+    bound = [(obj, path, q) for obj in project.objects.values()
+             for path, q in bound_quantities(obj)]  # fmt: skip
+    if bound:
+        names = set(parameter_values(project))
+        for obj, path, q in bound:
+            if q.parameter not in names:
+                out.append(Problem(
+                    "operator_input", obj.name,
+                    f"{obj.kind} '{obj.name}': {path} follows parameter '{q.parameter}', "
+                    "which doesn't exist", {"path": path}))  # fmt: skip
     return out
 
 
@@ -1682,6 +1706,78 @@ def resolved(project):
         values = ev.as_list(got)
         unit = DIMENSIONS[values.kind][1] if values.kind in DIMENSIONS else "dimensionless"
         param.values = [Quantity(value=float(v), unit=unit) for v in values.values]
+    return out
+
+
+def bound_quantities(obj, path: str = ""):
+    """(dotted path, Quantity) for every quantity in `obj` that names a parameter."""
+    from pydantic import BaseModel
+
+    from puzzle.model.schema import Quantity
+
+    if isinstance(obj, Quantity):
+        if obj.parameter:
+            yield path, obj
+        return
+    if isinstance(obj, BaseModel):
+        for name in type(obj).model_fields:
+            yield from bound_quantities(getattr(obj, name), f"{path}.{name}" if path else name)
+    elif isinstance(obj, dict):
+        for k, v in obj.items():
+            yield from bound_quantities(v, f"{path}.{k}" if path else str(k))
+    elif isinstance(obj, list | tuple):
+        for i, v in enumerate(obj):
+            yield from bound_quantities(v, f"{path}.{i}" if path else str(i))
+
+
+def _with_values(obj, values: dict, owner: str):
+    """`obj` with every parameter-bound quantity's value put in (SI, in its own unit)."""
+    from pydantic import BaseModel
+
+    from puzzle.model.schema import Quantity
+    from puzzle.model.units import to_si
+
+    if isinstance(obj, Quantity):
+        if not obj.parameter:
+            return obj
+        if obj.parameter not in values:
+            raise PuzzleError(f"{owner}: a value follows parameter '{obj.parameter}', which "
+                              "doesn't exist (a parameter set's value, or a Number, Slider "
+                              "or Expression by its name)", code="inconsistent")  # fmt: skip
+        per_unit = to_si(1.0, obj.unit) if obj.unit != "dimensionless" else 1.0
+        return obj.model_copy(update={"value": values[obj.parameter] / per_unit})
+    if isinstance(obj, BaseModel):
+        changed = {}
+        for name in type(obj).model_fields:
+            old = getattr(obj, name)
+            new = _with_values(old, values, owner)
+            if new is not old:
+                changed[name] = new
+        return obj.model_copy(update=changed) if changed else obj
+    if isinstance(obj, dict):
+        out = {k: _with_values(v, values, owner) for k, v in obj.items()}
+        return out if any(out[k] is not obj[k] for k in obj) else obj
+    if isinstance(obj, list):
+        out = [_with_values(v, values, owner) for v in obj]
+        return out if any(a is not b for a, b in zip(out, obj, strict=True)) else obj
+    return obj
+
+
+def with_parameters(project):
+    """The project with every quantity that names a parameter given that parameter's
+    value now (ADR 0071: numbers wired into loads, supports, mesh sizes, settings); the
+    project passed in is never changed. A name that isn't a parameter is refused."""
+    bound = [(oid, obj) for oid, obj in project.objects.items()
+             if next(bound_quantities(obj), None) is not None]  # fmt: skip
+    if not bound:
+        return project
+    import copy
+
+    values = parameter_values(project)
+    out = copy.copy(project)
+    out.objects = dict(project.objects)
+    for oid, obj in bound:
+        out.objects[oid] = _with_values(obj, values, f"{obj.kind} '{obj.name}'")
     return out
 
 

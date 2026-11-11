@@ -371,7 +371,7 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
     elif obj is not None and obj.kind == "operator" and node.kind == "object":
         from puzzle.gui import operators
 
-        if obj.type == "export":
+        if obj.type in ("export", "report"):
             add("Export now", lambda: operators.export_now(window, obj))
         if obj.type == "plot":
             add("Show in Plots", lambda: operators.show_plot(window, obj))

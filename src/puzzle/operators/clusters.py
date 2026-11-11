@@ -226,3 +226,83 @@ def summary() -> list[dict[str, Any]]:
     return [{"key": k, "name": t["name"], "help": t.get("help", ""),
              "ports": [{"name": p["name"], "type": p["type"]} for p in t.get("ports", [])],
              "mine": k.startswith("mine:")} for k, t in templates().items()]  # fmt: skip
+
+
+# --- sharing them (ADR 0071: user operators, kept and shared) ---------------------------
+
+SUFFIX = ".puzzle-block.json"
+
+
+def export(key: str, dest: Path) -> Path:
+    """The user's cluster (or a recipe) as a file to give someone: the template as
+    saved, with Puzzle's format marked. `dest` a folder or a file name."""
+    found = templates().get(key)
+    if found is None:
+        raise PuzzleError(f"no recipe or cluster '{key}'", code="not_found")
+    dest = Path(dest)
+    if dest.is_dir():
+        dest = dest / f"{_slug(found['name'])}{SUFFIX}"
+    dest.write_text(json.dumps({"puzzle_block": 1, **found}, indent=1), encoding="utf-8")
+    return dest
+
+
+def check(template: dict) -> list[str]:
+    """What is wrong with a block file (empty when it can be used): its name, operator
+    types this Puzzle has, wires that point at its own operators, ports that do."""
+    from puzzle.operators import TYPES
+
+    wrong = []
+    if not isinstance(template.get("name"), str) or not template["name"].strip():
+        wrong.append("it has no name")
+    ops = template.get("operators")
+    if not isinstance(ops, list) or not ops:
+        return wrong + ["it has no operators"]
+    keys = {o.get("key") for o in ops if isinstance(o, dict)}
+    for o in ops:
+        if not isinstance(o, dict) or o.get("type") not in TYPES:
+            wrong.append(f"an operator of a type this Puzzle lacks: {o.get('type')!r}")
+            continue
+        for k, v in (o.get("inputs") or {}).items():
+            if isinstance(v, dict) and "from" in v and v["from"] not in keys:
+                wrong.append(f"{o.get('key')}'s {k} is wired from {v['from']!r}, not in it")
+    for p in template.get("ports", []):
+        for target, _ in p.get("into", []):
+            if target not in keys:
+                wrong.append(f"port {p.get('name')!r} leads to {target!r}, not in it")
+    return wrong
+
+
+def import_file(path: Path) -> str:
+    """A block file into the user's clusters, checked first; its key (`mine:<slug>`). A
+    cluster of the same name already there is kept, the new one numbered."""
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise PuzzleError(f"'{Path(path).name}' isn't a block file: {exc}",
+                          code="invalid") from None  # fmt: skip
+    if not isinstance(data, dict):
+        raise PuzzleError(f"'{Path(path).name}' isn't a block file", code="invalid")
+    data.pop("puzzle_block", None)
+    wrong = check(data)
+    if wrong:
+        raise PuzzleError(f"'{Path(path).name}' can't be used: " + "; ".join(wrong[:5]),
+                          code="invalid", details={"problems": wrong})  # fmt: skip
+    folder = library_dir()
+    folder.mkdir(parents=True, exist_ok=True)
+    slug, n = _slug(data["name"]), 1
+    target = folder / f"{slug}.json"
+    while target.exists():
+        n += 1
+        target = folder / f"{slug}_{n}.json"
+    target.write_text(json.dumps(data, indent=1), encoding="utf-8")
+    return f"mine:{target.stem}"
+
+
+def remove(key: str) -> None:
+    """One of the user's clusters deleted (recipes can't be)."""
+    if not key.startswith("mine:"):
+        raise PuzzleError("only your own clusters can be removed", code="invalid")
+    path = library_dir() / f"{key.removeprefix('mine:')}.json"
+    if not path.exists():
+        raise PuzzleError(f"no cluster '{key}'", code="not_found")
+    path.unlink()

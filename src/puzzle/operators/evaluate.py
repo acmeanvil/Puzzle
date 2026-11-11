@@ -1343,7 +1343,8 @@ def _vtk_filters() -> dict:
 
 
 _EVALUATE = {"reduce": _reduce, "filter": _filter, "check": _check, "panel": _panel,
-             "plot": _plot, "export": _export, "number": _number_op, "slider": _slider,
+             "plot": _plot, "export": _export, "report": _export, "number": _number_op,
+             "slider": _slider,
              "series": _series, "range": _range, "expression": _expression,
              "random": _random, **_tables(), **_geometric(),
              "table": _table, "list": _list, "pairs": _pairs,
@@ -1357,6 +1358,10 @@ def shown(ctx: Context, op) -> tuple[str, str]:
     """What the node shows on the canvas, and its verdict ("pass", "fail" or ""). Errors
     are shown as their message, never raised: the schematic always draws."""
     try:
+        if op.type == "report":
+            from puzzle.operators.report import path_of
+
+            return f"to {path_of(op)}", ""
         if op.type in ("panel", "export"):
             got = _input(ctx, op, "value")
             if op.type == "export":
@@ -1400,6 +1405,10 @@ def export_path(op) -> str:
 def export(ctx: Context, op, root: Path) -> list[Path]:
     """Write an export operator's input to its file in the project folder: CSV for a
     number, verdict, table or field; a result in its `format` (ADR 0043)."""
+    if op.type == "report":  # ADR 0071: everything wired in, in one HTML file
+        from puzzle.operators import report
+
+        return report.write(ctx, op, root)
     rel = Path(export_path(op))
     if rel.is_absolute() or ".." in rel.parts:
         raise PuzzleError(f"'{op.name}': the file must be inside the project folder",
@@ -1485,6 +1494,10 @@ def summary(ctx: Context, op) -> dict[str, Any]:
     out: dict[str, Any] = {"name": op.name, "type": op.type}
     try:
         got = outputs(ctx, op)
+        if op.type == "report":
+            from puzzle.operators.report import path_of
+
+            return f"to {path_of(op)}", ""
         if op.type in ("panel", "export"):
             got = {"value": _input(ctx, op, "value")}
         out["outputs"] = {k: _data(v) for k, v in got.items()}

@@ -7391,6 +7391,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/nanobind-abi-19-hd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/packaging-26.3-pyhc364b38_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pycparser-3.11-pyh5ded981_0.conda
+      - conda: https://conda.anaconda.org/conda-forge/noarch/pypardiso-0.4.7-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pyparsing-3.3.3-pyh5ded981_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/python-dateutil-2.9.0.post0-pyhe01879c_2.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/python-gil-3.12.15-hd8ed1ab_2.conda
@@ -30708,6 +30709,19 @@ packages:
   run_exports: {}
   size: 35770
   timestamp: 1790640138515
+- conda: https://conda.anaconda.org/conda-forge/noarch/pypardiso-0.4.7-pyhd8ed1ab_0.conda
+  sha256: 32708642cca07999c4ea2f34661545a9cc58caab7122154c48035eae1614ab94
+  md5: e37295e075bdcf4f912e9a1eb3bd5ab1
+  depends:
+  - mkl !=2024.0
+  - numpy
+  - python >=3.10
+  - scipy
+  license: BSD-3-Clause
+  license_family: BSD
+  run_exports: {}
+  size: 15755
+  timestamp: 1762158940552
 - conda: https://conda.anaconda.org/conda-forge/noarch/pyparsing-3.3.3-pyh5ded981_0.conda
   sha256: dc10d64d4b9a1310083b2f563416ab45560ee2a04fd6baab40f223f2b1ab37bc
   md5: 8bf43ae1312e9b966063459e04c20fa7

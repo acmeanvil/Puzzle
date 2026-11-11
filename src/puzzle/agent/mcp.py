@@ -1471,6 +1471,29 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
     def operator_value(name: str | None = None) -> dict[str, Any]:
         return {"operators": _operator_values(session(), name)}
 
+    @tool(
+        description="Write an Export or Report operator's file now (Export now): an export's "
+        "value as CSV, Parquet, Excel, a result format or a PNG; a report's checks, numbers, "
+        "curves and tables as one HTML file. Always inside the project folder. Returns the "
+        "files written, relative to the project."
+    )
+    @guarded
+    def operator_export(name: str) -> dict[str, Any]:
+        from puzzle.commands import resolve
+        from puzzle.model.schema import Operator
+        from puzzle.operators import evaluate as ev
+        from puzzle.project.layout import RESULTS_DIR
+        from puzzle.results.store import ResultStore
+
+        s = session()
+        op = resolve(s.project, name, Operator)
+        if op.type not in ("export", "report"):
+            raise PuzzleError(f"'{op.name}' is a {op.type}, not an Export or Report",
+                              code="invalid")  # fmt: skip
+        ctx = ev.Context(s.project, ResultStore(root / RESULTS_DIR))
+        written = ev.export(ctx, op, root)
+        return {"written": [str(Path(p).relative_to(root)) for p in written]}
+
     def _operator_values(s: Session, name: str | None) -> list[dict[str, Any]]:
         from puzzle.commands import resolve
         from puzzle.model.schema import Operator

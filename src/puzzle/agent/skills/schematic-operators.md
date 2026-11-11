@@ -188,6 +188,15 @@ Inputs can also be set with `submit`: `{"command": "edit", "object": "Strength",
   a parameter set's parameter does: `{"command": "edit", "object": "Plate", "ops":
   [{"op": "set", "path": "history.0.args.dx", "value": "width"}]}`. Sweeps can sweep it
   by name, and equations can use it.
+- A load's, support's or any other quantity's value can follow a parameter too (ADR
+  0071): a quantity with `parameter` set, `{"value": 2, "unit": "MPa", "parameter": "p"}`,
+  takes p's value before every solve and at every sweep point (`value` keeps the last,
+  in its own unit): `{"command": "edit", "object": "Plate", "ops": [{"op": "set",
+  "path": "physics.0.features.1.values.p", "value": {"value": 2, "unit": "MPa",
+  "parameter": "p"}}]}`, or MCP `link` from the parameter set (or the Number) onto the
+  feature ("Sets p, following p"). Set the value without `parameter` to unbind it. A
+  name that isn't a parameter is a problem (`operator_input`) and refuses the solve.
+  In Properties, type "= p" in the value.
 - A list (Series, Range, List) gives a sweep's points:
   `{"name": "t", "source": "<operator id>", "port": "out"}` as a sweep parameter, in
   place of `values`. One run is made per item, and each run is stored with its point,
@@ -256,6 +265,12 @@ hasn't run says so in `error`.
 - An export writes its file when asked: in the GUI, Export now; on the command line,
   `puzzle operators PROJECT NAME --export`. A result goes out in a result format (`vtu`,
   `exodus`, ...); everything else as CSV.
+
+- **Report** gathers up to eight items (`a` to `h`: checks, numbers, curves, tables,
+  fields) into one self-contained HTML file in the project (`file`, default
+  exports/<name>.html): each headed by its node's name, curves drawn, "2 of 3 checks
+  pass" at the top. Write it with MCP `operator_export(name)` (also writes an Export),
+  the GUI's Export now, or `puzzle operators PROJECT --export`.
 
 ## Mistakes
 

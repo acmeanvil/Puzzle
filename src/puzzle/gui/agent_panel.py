@@ -186,11 +186,20 @@ class AgentPanel(QWidget):
         for key, text in LEVELS.items():
             self.level.addItem(text, key)
         self.level.activated.connect(lambda _: self._set_level(self.level.currentData()))
+        # What "act within the budget" may spend (ADR 0015), shown with what is used.
+        self.budget_button = QToolButton(text="Budget…")
+        self.budget_button.setToolTip("How many runs, how much solver time and remote "
+                                      "core-hours agents may use before they must ask")  # fmt: skip
+        self.budget_button.clicked.connect(lambda: self.edit_budget())
+        self.budget_used = QLabel("")
+        role(self.budget_used, "muted")
         new_chat = QPushButton("New chat")
         new_chat.clicked.connect(self.new_chat)
         top = QHBoxLayout()
         top.addWidget(QLabel("Agents may"))
         top.addWidget(self.level)
+        top.addWidget(self.budget_button)
+        top.addWidget(self.budget_used)
         top.addStretch()
         top.addWidget(new_chat)
 
@@ -280,6 +289,7 @@ class AgentPanel(QWidget):
         if s is None:
             return
         self.level.setCurrentIndex(self.level.findData(s.project.agent.level))
+        self._show_budget()
         self.proposals.clear()
         for p in s.proposals():
             names = {str(o.id): o.name for o in s.project.objects.values()}
@@ -572,6 +582,71 @@ class AgentPanel(QWidget):
                 self.window.report(exc)
         self.window.refresh()
 
+    def _show_budget(self) -> None:
+        """The budget's button and what is used of it, shown only at act within budget."""
+        s = self.window.session
+        on = s is not None and s.project.agent.level == "act_in_budget"
+        self.budget_button.setVisible(on)
+        self.budget_used.setVisible(on)
+        if not on:
+            return
+        b, used = s.project.agent.budget, s.budget_used()
+        text = (f"{used['runs']} of {b.runs} runs, {_minutes(used['solver_seconds'])} of "
+                f"{_minutes(b.solver_seconds)} used")  # fmt: skip
+        if used["core_hours"] or b.core_hours != 2.0:
+            text += f", {used['core_hours']:.3g} of {b.core_hours:g} core-hours"
+        self.budget_used.setText(text)
+
+    def edit_budget(self, values: dict | None = None) -> bool:
+        """Set the agents' budget in one form (`values` fills it, for tests). Saving
+        starts the count of what they have used again, as any autonomy change does."""
+        from puzzle.gui.quick_form import Ask
+
+        s = self.window.session
+        if s is None:
+            return False
+        b = s.project.agent.budget
+        asks = [
+            Ask("runs", "Fresh solver runs", kind="text", default=str(b.runs),
+                help="runs reused from earlier ones don't count"),
+            Ask("minutes", "Solver time (minutes)", kind="text",
+                default=f"{b.solver_seconds / 60:g}",
+                help="the total wall time of their runs; each run gets what is left"),
+            Ask("core_hours", "Remote core-hours", kind="text", default=f"{b.core_hours:g}",
+                help="cores × hours on remote hosts (ADR 0021), which can cost money"),
+        ]  # fmt: skip
+
+        def check(v):
+            try:
+                _budget(v)
+            except ValueError as exc:
+                return str(exc)
+            return None
+
+        intro = (
+            'What agents may use at "act within the budget" before they must ask. '
+            "Saving starts the count of what they have used again."
+        )
+        got = (
+            values
+            if values is not None
+            else self.window.ask_form("Agents' budget", asks, intro, check)
+        )
+        if not got:
+            return False
+        try:
+            budget = _budget(got)
+        except ValueError as exc:
+            self.window.statusBar().showMessage(str(exc), 8000)
+            return False
+        try:
+            s.submit(SetAutonomy(budget=budget))
+        except PuzzleError as exc:
+            self.window.report(exc)
+            return False
+        self.window.refresh()
+        return True
+
     def _confirm_act(self) -> bool:
         first = QMessageBox.question(
             self,
@@ -583,6 +658,25 @@ class AgentPanel(QWidget):
             return False
         typed, ok = QInputDialog.getText(self, "Second confirmation", 'Type "act" to confirm:')
         return ok and typed.strip() == "act"
+
+
+def _minutes(seconds: float) -> str:
+    return f"{seconds / 60:.3g} min" if seconds >= 60 or not seconds else f"{seconds:.0f} s"
+
+
+def _budget(values: dict):
+    """A Budget from the form's text: whole runs, minutes, core-hours, none negative."""
+    from puzzle.model.schema import Budget
+
+    try:
+        runs = int(str(values["runs"]).strip())
+        minutes = float(str(values["minutes"]).strip())
+        hours = float(str(values["core_hours"]).strip())
+    except (KeyError, ValueError):
+        raise ValueError("type whole runs, and minutes and core-hours as numbers") from None
+    if runs < 0 or minutes < 0 or hours < 0:
+        raise ValueError("a budget can't be negative")
+    return Budget(runs=runs, solver_seconds=minutes * 60, core_hours=hours)
 
 
 def _brief(text: str, limit: int = 160) -> str:

@@ -223,10 +223,12 @@ def _through_runner(service, command, workdir, runtime, *, on_output, cancel, ti
             if cancel is not None and cancel.is_set() and not cancelled:
                 cancelled = True
                 service.cancel(job)
+                _inside(runtime, workdir)
             running = state.get("elapsed") or 0.0
             if timeout_s is not None and running > timeout_s and not (timed_out or cancelled):
                 timed_out = True
                 service.cancel(job)
+                _inside(runtime, workdir)
             if not text:
                 if parser is not None:
                     emit(parser.safe(parser.poll))
@@ -287,3 +289,15 @@ def _stop(proc: subprocess.Popen[str]) -> None:
         proc.wait(timeout=_TERMINATE_GRACE_S)
     except subprocess.TimeoutExpired:
         proc.kill()
+
+
+def _inside(runtime, workdir) -> None:
+    """A warm container's solve stopped inside it (ADR 0072): the runner stops the local
+    `docker exec`, which leaves the process it started running."""
+    from puzzle.jobs.warm import WarmRuntime
+
+    if isinstance(runtime, WarmRuntime):
+        import contextlib
+
+        with contextlib.suppress(Exception):  # a cancel never fails the run's own handling
+            runtime.cancel(workdir)

@@ -334,3 +334,72 @@ def test_slice_clip_and_contour_on_a_field(setup):
     nowhere = p.add(Operator(name="None", type="slice", inputs={"field": wire(vm)}))
     with pytest.raises(PuzzleError, match="pick its plane"):
         value(p, store, nowhere)
+
+
+def test_a_report_gathers_checks_numbers_and_curves(setup, tmp_path):
+    """Report (ADR 0071): two checks (one passing), a number and a curve into one HTML
+    file in the project, the curve drawn, '1 of 2 checks pass' at the top."""
+    p, study, steel, path, store = setup
+    vm = p.add(Operator(name="Peak", type="reduce", quantity="stress:von_mises",
+                        inputs={"result": wire(study, "result")}))  # fmt: skip
+    lax = p.add(
+        Operator(
+            name="Lax",
+            type="check",
+            inputs={
+                "value": wire(vm),
+                "limit": OperatorInput(value=Quantity(value=400, unit="MPa")),
+            },
+        )
+    )
+    tight = p.add(
+        Operator(
+            name="Tight",
+            type="check",
+            inputs={
+                "value": wire(vm),
+                "limit": OperatorInput(value=Quantity(value=250, unit="MPa")),
+            },
+        )
+    )
+    sy = p.add(Operator(name="Sy", type="model_value", target=steel.id,
+                        property="properties.yield_strength"))  # fmt: skip
+    use = op(p, "utilisation", "Use", a=wire(path, "along"), b=wire(sy))
+    report = p.add(Operator(name="Bracket checks", type="report", inputs={
+        "a": wire(lax), "b": wire(tight), "c": wire(vm), "d": wire(use)}))  # fmt: skip
+    written = ev.export(ev.Context(p, store), report, tmp_path)
+    assert [w.relative_to(tmp_path).as_posix() for w in written] == [
+        "exports/Bracket_checks.html"]  # fmt: skip
+    page = written[0].read_text(encoding="utf-8")
+    assert "1 of 2 checks pass" in page and "<h2>Lax</h2>" in page and "<h2>Peak</h2>" in page
+    assert "class=pass" in page and "class=fail" in page
+    assert "data:image/png;base64," in page or "<table>" in page  # the curve
+    assert ev.shown(ev.Context(p, store), report)[0] == "to exports/Bracket_checks.html"
+
+
+def test_a_field_from_another_mesh_is_mapped_first():
+    """Two studies on different meshes (the second twice the size about the first's
+    centre, so it holds the first): its field is interpolated onto the first's nodes
+    before they are subtracted. σvM is
+    linear in x (300·x MPa), so the mapped field is exact: the difference is zero."""
+    from dataclasses import replace
+
+    from test_operators import mesh, step
+
+    from puzzle.post.quantities import Item
+
+    first = mesh()
+    item = Item("stress:von_mises", "Von Mises", "stress", "von_mises", "Stress", "pressure")
+    a_values = 300 * first.coords[:, 0] * MPA
+    a = ev.FieldValue(first, step(3), item, first.node_ids, a_values, "node", label="A")
+    centre = first.coords.mean(axis=0)  # twice the size about its centre: it holds the first
+    moved = replace(first, coords=(first.coords - centre) * 2.0 + centre)
+    b_values = 300 * moved.coords[:, 0] * MPA
+    b = ev.FieldValue(moved, step(3), item, moved.node_ids, b_values, "node", label="B")
+    from puzzle.operators.series import field_formula
+
+    got = field_formula(Operator(name="Diff", type="subtract"), "a - b", {"a": a, "b": b},
+                        "Diff")  # fmt: skip
+    inside = np.isfinite(got.values)
+    assert inside.any()
+    assert got.values[inside] == pytest.approx(0.0, abs=1e-3 * MPA)

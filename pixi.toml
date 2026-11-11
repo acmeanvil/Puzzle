@@ -132,6 +132,11 @@ fenics-dolfinx = "0.11.*"
 python-gmsh = ">=4.13"  # dolfinx reads Gmsh meshes through it
 scipy = ">=1.11"  # solver backend where PETSc is missing (Windows)
 
+# MKL PARDISO for that SciPy path (study.py's _spsolve/_Factor): SuperLU is one thread
+# and stalled 3D cases natively on Windows (ADR 0072). conda-forge has it for win-64.
+[feature.fenicsx.target.win-64.dependencies]
+pypardiso = "*"
+
 # Netgen, the second mesher (ADR 0019): its own OpenCASCADE bindings clash with OCP's in
 # one process, so it runs in its own environment, as a solver does.
 [feature.netgen.dependencies]

@@ -245,7 +245,8 @@ def applies(owner: Any, key: Any) -> bool:
 
 
 def is_quantity(value: Any) -> bool:
-    return isinstance(value, dict) and set(value) == {"value", "unit"}
+    return isinstance(value, dict) and {"value", "unit"} <= set(value) <= {
+        "value", "unit", "parameter"}  # fmt: skip
 
 
 def format_value(value: Any) -> str:
@@ -254,10 +255,11 @@ def format_value(value: Any) -> str:
         from puzzle.settings import current
 
         unit = value["unit"]
+        bound = f"= {value['parameter']}: " if value.get("parameter") else ""  # ADR 0071
         if unit == "dimensionless":
-            return f"{value['value']:g}"
+            return f"{bound}{value['value']:g}"
         v, u = shown(value["value"], unit, current().display_units())  # ADR 0024
-        return f"{v:.6g} {pretty(u)}"
+        return f"{bound}{v:.6g} {pretty(u)}"
     if value is None:
         return NONE_TEXT
     if isinstance(value, bool):
@@ -347,6 +349,11 @@ def parse_value(text: str, old: Any) -> Any:
         from puzzle.model.units import plain, shown
         from puzzle.settings import current
 
+        if text.startswith("="):  # "= t": the value follows parameter t (ADR 0071)
+            name = text[1:].split(":", 1)[0].strip()
+            if not name:
+                raise ValueError("type a parameter's name after =, e.g. = t")
+            return {"value": old["value"], "unit": old["unit"], "parameter": name}
         number, _, unit = text.partition(" ")
         if not unit.strip():  # a bare number is in the unit shown
             unit = shown(old["value"], old["unit"], current().display_units())[1]

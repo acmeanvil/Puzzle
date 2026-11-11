@@ -8,6 +8,7 @@ Every change is an ordinary command (`Create`, `Edit`), so it is undoable and lo
 
 from __future__ import annotations
 
+from pathlib import Path
 from uuid import UUID
 
 from PySide6.QtCore import Qt
@@ -206,6 +207,56 @@ def save_cluster(window, group_id: str) -> str | None:
     window.statusBar().showMessage(f"Saved the cluster {got['name']}: it is under Add "
                                    "operator → My clusters in every project", 10000)  # fmt: skip
     return str(path)
+
+
+def import_block(window, path: str | None = None) -> str | None:
+    """A block file (someone's cluster) into My clusters, checked first (ADR 0071)."""
+    from puzzle.operators import clusters
+
+    if path is None:
+        from PySide6.QtWidgets import QFileDialog
+
+        path, _ = QFileDialog.getOpenFileName(window, "Import a block", "",
+                                              "Puzzle blocks (*.json)")  # fmt: skip
+        if not path:
+            return None
+    try:
+        key = clusters.import_file(Path(path))
+    except PuzzleError as exc:
+        window.report(exc)
+        return None
+    name = clusters.templates()[key]["name"]
+    window.statusBar().showMessage(f"Imported the block {name}: it is under Add operator → "
+                                   "My clusters", 10000)  # fmt: skip
+    return key
+
+
+def export_block(window, key: str | None = None, path: str | None = None) -> str | None:
+    """One of My clusters as a file to give someone (ADR 0071)."""
+    from puzzle.operators import clusters
+
+    found = clusters.templates()
+    if key is None:
+        mine = [(t["name"], k) for k, t in found.items() if k.startswith("mine:")]
+        if not mine:
+            words = "No clusters of your own yet: a group of operators' Save as cluster… makes one"
+            window.statusBar().showMessage(words, 8000)
+            return None
+        key = window.choose("Export a block", "Cluster", mine)
+        if key is None:
+            return None
+    if path is None:
+        from PySide6.QtWidgets import QFileDialog
+
+        stem = clusters._slug(found[key]["name"])
+        path, _ = QFileDialog.getSaveFileName(window, "Export a block",
+                                              f"{stem}{clusters.SUFFIX}",
+                                              "Puzzle blocks (*.json)")  # fmt: skip
+        if not path:
+            return None
+    written = clusters.export(key, Path(path))
+    window.statusBar().showMessage(f"Wrote {written}", 8000)
+    return str(written)
 
 
 def _is_uuid(text: str) -> bool:

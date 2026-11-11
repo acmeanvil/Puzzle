@@ -414,10 +414,32 @@ def _as_field(base, values, kind: str | None, label: str):
     return copy(base, values=np.asarray(values, float), item=item, label=label)
 
 
+def _mapped(op, f, base):
+    """Field `f` on `base`'s mesh (another study's, another mesh): interpolated in `f`'s
+    elements at `base`'s nodes (`transfer.map_field`, nearest outside them). Per-element
+    fields don't map: refused."""
+    from dataclasses import replace as copy
+
+    from puzzle.results.model import Field
+    from puzzle.transfer import map_field
+
+    if f.location != "node" or base.location != "node":
+        raise PuzzleError(f"'{op.name}': fields on different meshes are combined per node; "
+                          "these are per element", code="unsupported")  # fmt: skip
+    every = np.full(len(f.mesh.node_ids), np.nan)  # nodes it leaves out stay out
+    order = np.argsort(f.mesh.node_ids)
+    pos = np.searchsorted(f.mesh.node_ids, f.ids, sorter=order)
+    every[order[pos]] = np.asarray(f.values, float)
+    whole = Field("value", "node", [""], f.mesh.node_ids.copy(), every[:, None])
+    got = map_field(whole, f.mesh, base.mesh)
+    return copy(f, mesh=base.mesh, ids=got.ids, values=got.values[:, 0])
+
+
 def field_formula(op, text: str, values: dict, label: str):
     """A formula over fields and numbers at every node (or element), units checked:
-    fields must be on the same mesh and kind of location; their common nodes are kept,
-    a node one of them leaves out (NaN) stays out."""
+    fields of the same kind of location; one on another mesh (another study's) mapped
+    onto the first's nodes; their common nodes are kept, a node one of them leaves out
+    (NaN) stays out."""
     from puzzle.operators.evaluate import FieldValue, Number
 
     fields = {k: v for k, v in values.items() if isinstance(v, FieldValue)}
@@ -430,9 +452,10 @@ def field_formula(op, text: str, values: dict, label: str):
         if f.mesh is not base.mesh and not (
             len(f.mesh.node_ids) == len(base.mesh.node_ids)
             and np.array_equal(f.mesh.node_ids, base.mesh.node_ids)
+            and np.allclose(f.mesh.coords, base.mesh.coords)
         ):
-            raise PuzzleError(f"'{op.name}': the fields are on different meshes; map one "
-                              "onto the other first (a transfer)", code="invalid")  # fmt: skip
+            fields[k] = f = _mapped(op, f, base)  # another mesh: onto the first's nodes
+            values[k] = f
         ids = np.intersect1d(ids, f.ids)
     args = {}
     for k, v in values.items():

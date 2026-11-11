@@ -274,6 +274,34 @@ names, units and no raw data on view.
 - ParaView operators, begun: Slice, Clip and Contour on VTK (ADR 0070 level 2,
   `operators/vtk_filters.py`), the plane a construction plane (`target`, wired in the
   schematic as "Plane it cuts on"); ParaView's names found in the palette.
-- Not yet (step 5): fields across studies on different meshes (a transfer's mapping),
-  and the derived results (ADR 0025) offered as field sources.
+- Numbers wired into the model (2026-11-10): `Quantity.parameter` names a parameter (a
+  parameter set's value, or a pre-solve Number, Slider or Expression by its name), and
+  the value follows it: `operators.with_parameters` before every solve (`run_study`)
+  and at every sweep point (`sweep.apply`), in the quantity's own unit; left out of the
+  dump when unset, so existing projects hash and save as before, and the study's run
+  key follows the parameter (studies hash every parameter). A wire from a parameter set
+  or a Number onto a load's node offers "Sets p, following t" (`links._value_choices`),
+  the schematic draws it as a data wire into a port on the load's node, and removing it
+  leaves the value as it was. Properties shows "= t: 2 MPa" and takes "= t" typed. A
+  name that is no parameter is a problem and refuses the solve. MCP `link` does it for
+  agents. `tests/test_bound_quantities.py`.
+- Report (live nodes): up to eight inputs of any type into one self-contained HTML file
+  in the project (`operators/report.py`): checks pass or fail with a count at the top,
+  numbers with units, curves drawn (matplotlib, embedded; a table of points without
+  it), tables' first 50 rows in shown units, fields' ranges, each headed by its node.
+  Export now writes it (GUI, `puzzle operators --export`, MCP `operator_export`, new,
+  which writes Exports too).
+- User operators shared: ADR 0064's clusters (a group's operators saved with the inputs
+  wired from outside as ports, put into any project as copies, folded as one node) are
+  shared as block files (`clusters.export`, `import_file` checked first: a name, operator
+  types this Puzzle has, wires and ports that point inside it; one of the same name
+  kept, the new one numbered; `remove`): the schematic's palette → Share blocks, CLI
+  `puzzle clusters list|export|import|remove`. Agents list and insert them (MCP
+  `recipes`, `recipe_insert`) but don't write the user's library.
+- Fields on different meshes (another study's): mapped onto the first field's nodes by
+  the transfer's interpolation (`series._mapped`, `transfer.map_field`, nearest outside
+  its elements) before they combine; per-element fields on different meshes refused.
+- Derived results (ADR 0025) were field sources already: their `result` port feeds a
+  Filter, whose field the field operators take.
+- Not yet (step 5): a folded cluster's node showing the cluster's own ports.
 

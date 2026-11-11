@@ -115,6 +115,7 @@ def _run_study(
     from puzzle import operators
 
     project = operators.resolved(project)  # sweeps take their lists' values (ADR 0062)
+    project = operators.with_parameters(project)  # values wired to parameters (ADR 0071)
     from puzzle.suppress import applied
 
     project = applied(project)  # suppressed geometry is left out of meshing and solving
@@ -428,12 +429,21 @@ def _run_study(
     )
 
 
-def _run_sweep(
+def _run_sweep(project, study, root, workdir, **kwargs):
+    """Each point of the sweep as its own run (cached by the point's run key). A sweep
+    of materials only meshes once: the geometry is the same at every point. Container
+    solves share one running container per image (ADR 0072, `jobs.warm`)."""
+    from puzzle.jobs.warm import batch
+
+    with batch(workdir):
+        return _sweep_points(project, study, root, workdir, **kwargs)
+
+
+def _sweep_points(
     project, study, root, workdir, *, store, reuse, on_output, timeout_s, solver,
     on_event=None, cancel=None,
 ):  # fmt: skip
-    """Each point of the sweep as its own run (cached by the point's run key). A sweep
-    of materials only meshes once: the geometry is the same at every point."""
+    """`_run_sweep`'s points."""
     from puzzle import sweep
 
     keys = run_hashes(project)[study.id][solver]

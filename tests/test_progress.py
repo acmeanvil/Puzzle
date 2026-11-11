@@ -535,3 +535,38 @@ def test_a_flat_residual_at_the_limit_has_stalled():
     [d] = progress.diagnose(events)
     assert d.code == "not_converged" and "stalled" in d.text and "mesh quality" in d.text
     assert progress.diagnose(events[:-1]) == []  # short of its limit: still running
+
+
+def test_native_code_aster_on_windows_is_followed_in_fort6(tmp_path, monkeypatch):
+    """ADR 0072: run_aster.bat writes the run to fort.6 in its temporary folder and
+    stdout says nothing, so the parser follows that file (the newest run_aster folder
+    made since the job started) and ignores stdout meanwhile: the plastic case's ten
+    increments come from fort.6 alone."""
+    import tempfile
+
+    from puzzle.adapters.code_aster import progress as cp
+
+    where = tmp_path / "case"
+    where.mkdir()
+    shutil.copy(DATA / "code_aster_plastic" / "job.comm", where / "job.comm")
+    temp = tmp_path / "temp"
+    temp.mkdir()
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(temp))
+    parser = CodeAsterProgress(where / "job.export")
+    parser.native_windows = True
+    assert parser.poll() == []  # no run_aster folder yet
+    run = temp / "run_aster__abc123"
+    run.mkdir()
+    with gzip.open(DATA / "code_aster_plastic" / "solver.log.gz", "rt", encoding="utf-8",
+                   errors="replace") as f:  # fmt: skip
+        text = f.read()
+    half = len(text) // 2
+    (run / "fort.6").write_text(text[:half], encoding="utf-8")
+    events = parser.poll()
+    with (run / "fort.6").open("a", encoding="utf-8") as f:
+        f.write(text[half:] + "\n")
+    events += parser.poll()
+    events += parser.safe_feed("Instant de calcul:  9.0e-01 - Niveau de découpe: 1")  # stdout
+    events += parser.finish(True)
+    assert len(_of(events, Increment)) == 10  # the stdout line didn't count twice
+    cp._CLAIMED.discard(str(run))

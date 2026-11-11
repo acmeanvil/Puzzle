@@ -199,7 +199,7 @@ def test_the_toolbar_lists_every_operator_by_group(window):
     assert actions[0].text().startswith("Find an operator")
     groups = {a.text(): a.menu() for a in actions if a.menu() is not None
               and a.text() not in ("Fits the selection", "Recently used", "Recipes",
-                                   "My clusters")}  # fmt: skip
+                                   "My clusters", "Share blocks")}  # fmt: skip
     from puzzle.operators import GROUPS
 
     assert list(groups) == [g for g in GROUPS if any(t.group == g for t in TYPES.values())]

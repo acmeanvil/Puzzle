@@ -756,6 +756,25 @@ def _model_wires(project: Project, out: Schematic, pre: set) -> None:
                 node.ports.append(Port(pkey, f"{step.name}: {key}", "in", type=kind))
                 out.wires.append(Wire(src, node.id, "data", port, pkey, value, "",
                                       str(g.id), kind))  # fmt: skip
+    # ADR 0071: a load's (or support's) value bound to a parameter, a port on its node.
+    from puzzle.operators import bound_quantities
+
+    for comp in project.of_type(Component):
+        for i, ph in enumerate(comp.physics):
+            for j, f in enumerate(ph.features):
+                node = out.nodes.get(_feature_id(comp, f"physics.{i}.features.{j}"))
+                if node is None:
+                    continue
+                for path, q in bound_quantities(f.values):
+                    if q.parameter not in by_name:
+                        continue
+                    src, port = by_name[q.parameter]
+                    if src not in out.nodes:
+                        continue
+                    pkey = f"value:{path}"
+                    node.ports.append(Port(pkey, f"Value {path}", "in", type="number"))
+                    out.wires.append(Wire(src, node.id, "data", port, pkey, q.parameter, "",
+                                          str(comp.id), "number"))  # fmt: skip
     for st in project.of_type(Study):
         node = out.nodes.get(str(st.id))
         if node is None:
