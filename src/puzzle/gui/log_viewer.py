@@ -1,4 +1,4 @@
-"""Help → Log: the GUI's log (`gui.errors`) in a window, to read, copy or send.
+"""Help → Log: the GUI's log (`gui.errors`) in the log window (`gui.text_viewer`).
 
 The log holds every uncaught error with its traceback, Python's warnings and Puzzle's
 own log messages, and a crash's native stack. Errors only narrows it to the errors.
@@ -6,20 +6,10 @@ own log messages, and a crash's native stack. Errors only narrows it to the erro
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QDesktopServices, QFontDatabase, QGuiApplication, QTextCursor
-from PySide6.QtWidgets import (
-    QCheckBox,
-    QDialog,
-    QDialogButtonBox,
-    QHBoxLayout,
-    QLabel,
-    QPlainTextEdit,
-    QPushButton,
-    QVBoxLayout,
-)
+from PySide6.QtWidgets import QCheckBox
 
-from puzzle.gui import errors, theme
+from puzzle.gui import errors
+from puzzle.gui.text_viewer import TextViewer
 
 SHOWN_BYTES = 400_000  # the end of the log; older lines stay in the file
 
@@ -46,44 +36,16 @@ def read(errors_only: bool = False, path=None) -> str:
     return "\n".join(blocks)
 
 
-class LogViewer(QDialog):
+class LogViewer(TextViewer):
+    """The log in the shared log window (search, colours, problems); Errors only
+    narrows it to the errors."""
+
     def __init__(self, parent=None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("Log")
-        self.resize(900, 560)
-        self.text = QPlainTextEdit(readOnly=True)
-        self.text.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
-        self.text.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         self.only_errors = QCheckBox("Errors only")
-        self.only_errors.toggled.connect(self.fill)
-        where = theme.role(QLabel(str(errors.log_path())), "muted")
-        where.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        top = QHBoxLayout()
-        top.addWidget(where, 1)
-        top.addWidget(self.only_errors)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-        buttons.rejected.connect(self.reject)
-        for label, slot in (("Refresh", self.fill), ("Copy all", self.copy),
-                            ("Open folder", self.open_folder)):  # fmt: skip
-            button = QPushButton(label)
-            button.clicked.connect(slot)
-            buttons.addButton(button, QDialogButtonBox.ButtonRole.ActionRole)
-        layout = QVBoxLayout(self)
-        layout.addLayout(top)
-        layout.addWidget(self.text, 1)
-        layout.addWidget(buttons)
-        self.fill()
-
-    def fill(self) -> None:
-        text = read(self.only_errors.isChecked())
-        self.text.setPlainText(text or "Nothing logged yet.")
-        self.text.moveCursor(QTextCursor.MoveOperation.End)
-
-    def copy(self) -> None:
-        QGuiApplication.clipboard().setText(self.text.toPlainText())
-
-    def open_folder(self) -> None:
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(errors.log_path().parent)))
+        super().__init__(parent, title="Log", load=lambda: read(self.only_errors.isChecked()),
+                         folder=errors.log_path().parent, note=str(errors.log_path()))  # fmt: skip
+        self.only_errors.toggled.connect(lambda _on: self.refresh())
+        self.layout().itemAt(0).layout().addWidget(self.only_errors)
 
 
 def show(window) -> LogViewer:

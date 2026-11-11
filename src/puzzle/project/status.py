@@ -124,6 +124,14 @@ def _operators(project: Project, out: dict[str, State]) -> None:
         of(op)
 
 
+def still_failed(failed: dict, runs) -> dict:
+    """The failures (study id -> when, UTC) no completed run has been stored after: a
+    study that failed in the GUI and then solved from the agent or the CLI is not failed."""
+    later = {r.study_id for r in runs for when in [failed.get(r.study_id)]
+             if when is not None and r.status == "completed" and r.recorded_at > when}  # fmt: skip
+    return {sid: when for sid, when in failed.items() if sid not in later}
+
+
 def _study(study: Study, keys: dict[str, list[str]], runs, running, failed) -> State:
     if str(study.id) in running:
         return State("running")

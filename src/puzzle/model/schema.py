@@ -2905,6 +2905,12 @@ class TreeGroup(ProjectObject):
         "'<component id>/<physics type>') whose items it holds"
     )
     members: list[str] = Field(default_factory=list)
+    folder: str | None = Field(
+        default=None,
+        description="inside an object: the default folder it was made in (a component's "
+        "geometry, materials or fasteners; a physics' contacts or loads; a geometry's bodies "
+        "or selections). Unset: the folder its members are in.",
+    )
 
 
 class TreeLabels(ProjectObject):

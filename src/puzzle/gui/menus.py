@@ -49,6 +49,62 @@ def selections_of(project: Project, comp: Component, entity: str | None = None) 
     return out
 
 
+def _folder_menu(window, add, menu, obj, node: Node) -> None:
+    """A default folder's menu: adding what it holds (each lands in the folder)."""
+    if isinstance(obj, Geometry):
+        if node.key == "bodies" and any(s.entity == "body" for s in obj.selections):
+            add("Assign material…", lambda: assign_material_to_bodies(window, obj))
+        elif node.key == "history":
+            steps = menu.addMenu("Add step")
+            for kind in STEPS:
+                action = steps.addAction(label(kind))
+                action.triggered.connect(lambda _=False, k=kind: add_step_to(window, obj, k))
+        if node.key in ("bodies", "selections") and obj.selections:
+            add("Reattach selections…", lambda: reattach_selections(window, obj))
+        return
+    if not isinstance(obj, Component):
+        return
+    if node.key == "geometry":
+        geos = window.session.project.of_type(Geometry)
+        if geos:
+            sub = menu.addMenu("Add part")
+            for g in geos:
+                sub.addAction(g.name).triggered.connect(
+                    lambda _=False, gid=str(g.id): add_part(window, gid, str(obj.id)))  # fmt: skip
+        if obj.parts:
+            from puzzle.gui.beam_dialog import add_beam_section, add_shell_thickness
+
+            add("Add beam section…", lambda: add_beam_section(window, obj))
+            add("Add shell thickness…", lambda: add_shell_thickness(window, obj))
+    elif node.key == "materials":
+        add("Assign material…", lambda: assign_material(window, obj))
+    elif node.key == "fasteners":
+        from puzzle.gui.fastener_dialog import add_fastener, fasteners_from_holes
+
+        add("Add fastener…", lambda: add_fastener(window, obj))
+        if obj.parts:
+            from puzzle.gui.bolt_generator_panel import generate_bolts
+
+            add("Fasteners from holes…", lambda: fasteners_from_holes(window, obj))
+            add("Generate bolts…", lambda: generate_bolts(window, obj))
+    elif node.key == "contacts":
+        if obj.parts:
+            from puzzle.gui.contact_search import add_contact, find_contacts_dialog
+
+            add("Find contacts…", lambda: find_contacts_dialog(window, obj))
+            add("Add contact…", lambda: add_contact(window, obj))
+        if obj.contacts:
+            add("Contact tool", lambda: window.open_contacts())
+    elif node.key == "loads":
+        physics = node.path.partition("/")[2]
+        index = next((i for i, p in enumerate(obj.physics) if p.type == physics), None)
+        if index is not None:
+            sub = menu.addMenu("Add feature")
+            for s in specs(physics):
+                action = sub.addAction(s.label)
+                action.triggered.connect(lambda _=False, sp=s: add_feature(window, obj, index, sp))
+
+
 def build_menu(window: MainWindow, node: Node) -> QMenu | None:
     """The menu for a tree item, or None when it has nothing to offer."""
     menu = QMenu(window)
@@ -133,6 +189,8 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         add("New mesh recipe", lambda: new_mesh(window))
         add("New component…", lambda: new_component(window))
         add("New study…", lambda: new_study(window))
+    elif node.kind == "folder":  # a default folder: what goes in it (gui.tree)
+        _folder_menu(window, add, menu, obj, node)
     elif isinstance(obj, Component) and node.kind == "object":
         if obj.parts:  # between parts, or the bodies of one (an imported assembly)
             from puzzle.gui.contact_search import add_contact, find_contacts_dialog
@@ -395,6 +453,9 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         study_id = window._store().get_run(node.object).study_id
         add("Export…", lambda: export_results(window, study_id))
         add("Open in ParaView", lambda: open_run_in_paraview(window, node.object))
+        from puzzle.gui.text_viewer import solver_output
+
+        add("Solver output…", lambda: solver_output(window, node.object))
         study = window._store().get_run(node.object).study_id
         menu.addSeparator()
         add("New combination…", lambda: window.new_derived("linear", study))

@@ -673,6 +673,8 @@ def _results(window, menu: QMenu) -> None:
     _add(view, "Animate", ribbon.animate, "Play the deformation, or the steps")
     _add(view, "Plots", ribbon.plots, "Result tools against time, steps or distance")
     _add(view, "Legend…", window.edit_legend, "The colour bar: its range, colours, size and place")
+    _add(view, "Solver output…", lambda: _solver_output(window),
+         "The run's whole solver logs: search, errors and warnings coloured")  # fmt: skip
     derived = _sub(menu, "Combinations and fatigue")
     _add(derived, "New combination…", lambda: window.new_derived("linear"),
          "Load cases added, enveloped or ranged")  # fmt: skip
@@ -768,6 +770,18 @@ def _compare(window) -> None:
         window.open_compare(str(study.id))
 
 
+def _solver_output(window) -> None:
+    from puzzle.gui.text_viewer import solver_output
+
+    solver_output(window)
+
+
+def _output_window(window) -> None:
+    from puzzle.gui.text_viewer import output_window
+
+    output_window(window)
+
+
 def _paraview(window) -> None:
     from puzzle.gui.paraview_open import open_in_paraview
 
@@ -822,6 +836,8 @@ def _window(window, menu: QMenu, agent: QAction, messages: QAction) -> None:
     solution.triggered.connect(lambda: window.open_solution())
     window.actions_by_name["solution"] = solution
     menu.addAction(solution)
+    _add(menu, "Output in a window", lambda: _output_window(window),
+         "The Output tab in a window of its own, with search and colours", free=True)  # fmt: skip
     menu.addSeparator()
     # Keyboard paths between the panels (ADR 0045 decision 9): F6 forward, Shift+F6 back.
     _add(menu, "Next panel", lambda: window.focus_panel(1),

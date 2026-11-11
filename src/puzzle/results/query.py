@@ -32,6 +32,8 @@ def summary(results: Results) -> list[dict[str, Any]]:
             entry["time_s"] = step.value
         entry["fields"] = {}
         for name, f in step.fields.items():
+            if f.values.size == 0:  # stored before helper-only fields were dropped
+                continue
             if f.location == "global":
                 if len(f.components) > 1 and f.values.shape[0] == 1:  # named entries
                     entry["fields"][name] = dict(zip(f.components, map(float, f.values[0]),

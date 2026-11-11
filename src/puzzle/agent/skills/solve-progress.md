@@ -80,6 +80,25 @@ submit(command={"command": "create", "kind": "probe", "data": {"name": "Tip defl
   `ComputeChange` on Elmer, as a relative change against the tolerance).
 - A linear solve has one increment: nothing to follow while solving.
 
+## The solver's own words
+
+When `run_progress` doesn't explain it (no diagnosis, or the user asks what the solver
+said), read the logs with `run_log`:
+
+- `run_log(study=..., problems=true)`: the error and warning lines of the newest
+  attempt, by each solver's markers (CalculiX `*ERROR`/`*WARNING`, Code_Aster's message
+  codes `<F>`, `<E>`, `<S>` and alarms `<A>`, Elmer `ERROR::`, OpenFOAM `FOAM FATAL`),
+  with `counts` over all of them.
+- `pattern` (a regular expression, any case) with `context` lines around, e.g.
+  `pattern="MODELISA8_14", context=8` for a Code_Aster message's whole box.
+- `run=<id prefix>` reads a stored run's folder instead.
+- No logs: the run folder was cleared, or the run was reused from an identical one.
+
+The user reads the same logs in a window: a run's right-click Solver output…, Results →
+View → Solver output…, or Open in window beside the message tabs (the Output tab as it
+grows, or on the Solution tab the run's logs); search, errors and warnings coloured,
+Next problem. In a terminal: `puzzle log PROJECT --study S --problems`.
+
 ## Several studies
 
 Run them one at a time (`run_study`, never in a batch), a study that another reads
@@ -88,8 +107,8 @@ same order); if one fails, read its `run_progress`, then go on with the rest.
 
 ## Mistakes to avoid
 
-- Don't read the solver log to find out why a run failed: `run_progress` has it in
-  English, with the diagnosis.
+- Don't start with the solver log to find out why a run failed: `run_progress` has it
+  in English, with the diagnosis; `run_log` is the next step, not the first.
 - A stall (no progress for minutes) is not a failure: a big factorisation can be quiet.
   Check `now` again before suggesting a stop; only the user stops a run (the Solution
   panel's Stop).

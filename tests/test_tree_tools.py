@@ -179,7 +179,9 @@ def test_groups_inside_a_component_and_a_physics(plates):
     keys = ["feature:fixed:Lower/Bottom", "feature:force:Upper/Top"]
     organise.new_group(w, scope, keys, name="Loads and supports")
     folder = _item(w, "group", "Loads and supports")
-    assert folder.parent().data(0, ROLE).kind == "physics"
+    # In the physics' default folder (the maintainer, 2026-11-11).
+    assert folder.parent().data(0, ROLE).label == "Loads and boundary conditions"
+    assert folder.parent().parent().data(0, ROLE).kind == "physics"
     assert {folder.child(i).data(0, ROLE).label for i in range(folder.childCount())} == {
         "Lower/Bottom", "Upper/Top"}  # fmt: skip
     assert w.tree.scope_of(folder.child(0)) == scope
@@ -195,16 +197,20 @@ def test_groups_inside_a_component_and_a_physics(plates):
     assert rows["Under"] == "Joint: Solid mechanics"
     # A component's own items: its bolt and contact in a group, out again.
     organise.new_group(w, str(comp.id), ["connector:Bolt", "contact:Seat"], name="Joints")
-    joints = _item(w, "group", "Joints")
-    assert joints.parent().data(0, ROLE).kind == "object"
+    # A group of a bolt and a contact shows in both folders, each with its own.
+    shown = [i for i in w.tree._items() if i.data(0, ROLE).kind == "group"
+             and i.data(0, ROLE).label == "Joints"]  # fmt: skip
+    assert sorted(i.parent().data(0, ROLE).label for i in shown) == ["Contacts", "Fasteners"]
     bolt = _item(w, "connector", "Bolt")
     assert w.tree.groupable(bolt) and bolt.parent().data(0, ROLE).label == "Joints"
     organise.move(w, ["connector:Bolt"], None, str(comp.id))
-    assert _item(w, "connector", "Bolt").parent().data(0, ROLE).kind == "object"
+    assert _item(w, "connector", "Bolt").parent().data(0, ROLE).label == "Fasteners"
     # A geometry's selections.
     upper = _geo(w, "Upper plate")
     organise.new_group(w, str(upper.id), ["selection:Top", "selection:Bottom"], name="Faces")
-    assert _item(w, "group", "Faces").parent().data(0, ROLE).label == "Upper plate"
+    faces = _item(w, "group", "Faces")
+    assert faces.parent().data(0, ROLE).label == "Selections"
+    assert faces.parent().parent().data(0, ROLE).label == "Upper plate"
 
 
 def test_bolts_hidden_one_by_group_and_all_kept_out_of_the_project(plates):
@@ -236,3 +242,41 @@ def test_hidden_bolts_are_not_drawn():
         connectors = [Bolt()]
 
     assert _fastener_symbols(Comp(), None, None, {"Bolt"}) == []
+
+
+def test_default_folders_sort_what_is_added(plates):
+    """A component's Geometry, Material assignments and Fasteners, a physics' Contacts and
+    Loads and boundary conditions, a geometry's Bodies and Selections; Bolt types before
+    Studies; a group made in a folder stays there (the maintainer, 2026-11-11)."""
+    from puzzle.gui import organise
+
+    w = plates
+
+    def under(kind, label):
+        return [i.data(0, ROLE).label for p in [_item(w, kind, label).parent()]
+                for i in [p, p.parent()]]  # fmt: skip
+
+    comp = _comp(w)
+    assert under("part", "Upper")[0] == "Geometry"
+    assert under("connector", "Bolt") == ["Fasteners", "Joint"]
+    assert under("contact", "Seat")[0] == "Contacts"
+    assert under("feature", "Lower/Bottom")[0] == "Loads and boundary conditions"
+    assert under("selection", "Top")[0] == "Selections"
+    folders = [i.data(0, ROLE) for i in w.tree._items() if i.data(0, ROLE).kind == "folder"]
+    held = {n.label for n in folders if n.object == str(comp.id)}
+    assert {"Geometry", "Material assignments", "Fasteners", "Contacts",
+            "Loads and boundary conditions"} <= held  # fmt: skip
+    titles = [w.tree.topLevelItem(0).child(i).data(0, ROLE).label
+              for i in range(w.tree.topLevelItem(0).childCount())]  # fmt: skip
+    if "Bolt types" in titles:
+        assert titles.index("Bolt types") < titles.index("Studies")
+    # An empty group made on the Fasteners folder stays in it.
+    organise.new_group(w, str(comp.id), [], name="Flange bolts", folder="fasteners")
+    assert _item(w, "group", "Flange bolts").parent().data(0, ROLE).label == "Fasteners"
+    # A selected folder is never its component (Delete there deletes nothing).
+    item = next(i for i in w.tree._items() if i.data(0, ROLE).label == "Fasteners")
+    assert w._object(item.data(0, ROLE)) is None
+    # Selecting a folder again after a refresh finds that folder, not its neighbour.
+    w.tree.setCurrentItem(item)
+    w.refresh()
+    assert w.tree.current().label == "Fasteners"

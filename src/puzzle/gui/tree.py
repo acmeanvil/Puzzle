@@ -4,7 +4,14 @@ Anything under a section's heading can be renamed (F2, or right-click → Rename
 project object, a result tool, a stored run, a swept study's group of runs, a group.
 Groups (`TreeGroup`) are folders under one heading; items are dragged into and out of
 them, or moved with right-click → Move to group. Both are edits of the project, so they
-undo; neither changes a result."""
+undo; neither changes a result.
+
+Components, physics and geometries show default folders (the maintainer, 2026-11-11):
+a component's Geometry, Material assignments and Fasteners, each physics' Contacts and
+Loads and boundary conditions, a geometry's History, Bodies and Selections. They are
+only how items are shown: each item sorts into its folder by its kind, so whatever is
+added lands there, and a group shows in the folder its members are in (or the one it
+was made in, `TreeGroup.folder`)."""
 
 from __future__ import annotations
 
@@ -74,6 +81,7 @@ SECTIONS = [
     ("Materials", Material),
     ("Meshes", MeshRecipe),
     ("Components", Component),
+    ("Bolt types", BoltType),  # before the studies that use them (the maintainer, 2026-11-11)
     ("Studies", Study),
     ("Transfers", Transfer),
     ("Imported fields", ImportedField),  # ADR 0044
@@ -83,7 +91,6 @@ SECTIONS = [
     ("Operators", Operator),  # ADR 0062
     ("Optimisations", Optimisation),  # ADR 0063
     ("Mesh studies", MeshStudy),  # ADR 0066
-    ("Bolt types", BoltType),
     ("Solver presets", SettingsPreset),
 ]
 
@@ -124,6 +131,8 @@ RENAMABLE = ("object", "probe", "derived", "run", "sweep", "group")
 
 def member_key(node: Node) -> str | None:
     """How a group names an item it holds; None for what can't be grouped."""
+    if node.kind == "folder":
+        return None
     if node.kind in ("object", "probe", "derived", "group"):
         return node.object
     if node.kind in ("run", "sweep"):
@@ -139,6 +148,8 @@ def container_key(node: Node | None) -> str | None:
         return None
     if node.kind == "section":
         return node.label
+    if node.kind == "folder":  # a default folder: its object's (or physics') scope
+        return node.path
     if node.kind == "object" and node.path == "" and node.key == "":
         return node.object
     if node.kind == "physics":
@@ -155,6 +166,64 @@ def scope_name(project: Project, scope: str) -> str:
     if obj is None:
         return scope
     return f"{obj.name}: {words(physics)}" if physics else obj.name
+
+
+# Default folders: (key, title, the member-key kinds it holds).
+COMPONENT_FOLDERS = (
+    ("geometry", "Geometry", ("part", "shell", "beam")),
+    ("materials", "Material assignments", ("assignment",)),
+    ("fasteners", "Fasteners", ("connector", "weld")),
+)
+PHYSICS_FOLDERS = (
+    ("contacts", "Contacts", ("contact",)),
+    ("loads", "Loads and boundary conditions", ("feature",)),
+)
+GEOMETRY_FOLDERS = (("history", "History"), ("bodies", "Bodies"), ("selections", "Selections"))
+FOLDER_TITLES = {k: t for k, t, *_ in (*COMPONENT_FOLDERS, *PHYSICS_FOLDERS, *GEOMETRY_FOLDERS)}
+
+
+def key_folder(project: Project, scope: str, key: str) -> str | None:
+    """The default folder an item (by its member key) sits in, inside `scope`."""
+    kind, _, name = key.partition(":")
+    owner = project.objects.get(_uuid(scope.partition("/")[0]))
+    if isinstance(owner, Geometry):
+        if kind != "selection":
+            return None
+        sel = next((x for x in owner.selections if x.name == name), None)
+        return "bodies" if sel is not None and sel.entity == "body" else "selections"
+    if isinstance(owner, Component):
+        for folder, _, kinds in (*COMPONENT_FOLDERS, *PHYSICS_FOLDERS):
+            if kind in kinds:
+                return folder
+    return None
+
+
+def group_folders(project: Project, group: TreeGroup, seen=()) -> set[str]:
+    """The default folders a group shows in: the one it was made in, else those its
+    members (through groups inside it) are in; empty for a heading's groups."""
+    if group.folder:
+        return {group.folder}
+    out: set[str] = set()
+    for m in group.members:
+        inner = project.objects.get(_uuid(m))
+        if isinstance(inner, TreeGroup):
+            if m not in seen:
+                out |= group_folders(project, inner, (*seen, str(group.id)))
+        elif (found := key_folder(project, group.section, m)) is not None:
+            out.add(found)
+    return out
+
+
+def folder_of(item) -> str | None:
+    """The default folder a tree item sits in (or is), past any groups."""
+    while item is not None:
+        node = item.data(0, ROLE)
+        if node is not None and node.kind == "folder":
+            return node.key
+        if node is not None and container_key(node) is not None:
+            return None
+        item = item.parent()
+    return None
 
 
 class NameDelegate(QStyledItemDelegate):
@@ -320,8 +389,17 @@ class ModelTree(QTreeWidget):
         scopes = {g.section for g in groups}
         containers = [i for i in self._items() if container_key(i.data(0, ROLE)) in scopes]
         for container in containers:
-            scope = container_key(container.data(0, ROLE))
-            mine = [g for g in groups if g.section == scope]
+            node = container.data(0, ROLE)
+            scope = container_key(node)
+            here = node.key if node.kind == "folder" else None
+
+            def placed(g, here=here) -> bool:  # in this folder, or in none (a heading's)
+                spans = group_folders(project, g)
+                return here in spans if here is not None else not spans
+
+            mine = [g for g in groups if g.section == scope and placed(g)]
+            if not mine:
+                continue
             ids = {str(g.id) for g in mine}
             nested = {m for g in mine for m in g.members if m in ids}
             folders = {str(g.id): QTreeWidgetItem([g.name]) for g in mine}
@@ -368,7 +446,7 @@ class ModelTree(QTreeWidget):
     def item_for(self, node: Node) -> QTreeWidgetItem | None:
         for item in self._items():
             found = item.data(0, ROLE)
-            if (found.kind, found.object, found.path) == (node.kind, node.object, node.path):
+            if _same(found, node):
                 return item
         return None
 
@@ -418,6 +496,9 @@ class ModelTree(QTreeWidget):
             parent = target.parent()
             up = parent.data(0, ROLE) if parent is not None else None
             group = up.object if up is not None and up.kind == "group" else None
+        here = folder_of(target)  # a part stays in Geometry, a load in its loads
+        if here is not None and any(folder_of(i) != here for i in dragged):
+            return
         keys = [member_key(i.data(0, ROLE)) for i in dragged]
         if group is not None and group in keys:
             return  # a group into itself
@@ -443,7 +524,7 @@ class ModelTree(QTreeWidget):
         found = [self._roll_up(item.child(i)) for i in range(item.childCount())]
         own = item.data(0, STATE) if item is not self.invisibleRootItem() else None
         node = item.data(0, ROLE) if item is not self.invisibleRootItem() else None
-        if node is not None and node.kind in ("project", "section", "sweep", "group"):
+        if node is not None and node.kind in ("project", "section", "sweep", "group", "folder"):
             below = [s for s in found if s]
             if below:
                 state = worst(below)
@@ -462,7 +543,7 @@ class ModelTree(QTreeWidget):
         """Select the item for the same thing (kind, object and path; labels may differ)."""
         for item in self._items():
             found = item.data(0, ROLE)
-            if (found.kind, found.object, found.path) == (node.kind, node.object, node.path):
+            if _same(found, node):
                 self.setCurrentItem(item)
                 return
 
@@ -472,62 +553,79 @@ class ModelTree(QTreeWidget):
         oid = str(obj.id)
         names = {str(o.id): o.name for o in project.objects.values()}
         if isinstance(obj, Geometry):
+            folders = {k: self._folder(item, oid, oid, k) for k, _ in GEOMETRY_FOLDERS
+                       if k != "history" or obj.history}  # fmt: skip
             for i, step in enumerate(obj.history):
                 off = "  (off)" if step.suppressed else ""
                 text = f"{i + 1}. {label(step.kind)} {step.name}{off}"
-                self._add(item, text, Node("operation", oid, f"history.{i}", step.name))
+                self._add(folders["history"], text,
+                          Node("operation", oid, f"history.{i}", step.name))  # fmt: skip
             for i, s in enumerate(obj.selections):
                 text = f"{s.name}  ({_count(len(s.members), s.entity)})"
-                s_item = self._add(item, text, Node("selection", oid, f"selections.{i}", s.name,
-                                                    f"selection:{s.name}"))  # fmt: skip
+                where = folders["bodies" if s.entity == "body" else "selections"]
+                s_item = self._add(where, text, Node("selection", oid, f"selections.{i}", s.name,
+                                                     f"selection:{s.name}"))  # fmt: skip
                 hidden = set(obj.hidden_bodies)
                 if s.entity == "body" and s.members and set(s.members) <= hidden:
                     from puzzle.gui.visibility import mark
 
                     mark(s_item, True, "its bodies are hidden in the view")
         elif isinstance(obj, Component):
+            folders = {k: self._folder(item, oid, oid, k) for k, *_ in COMPONENT_FOLDERS}
             for i, p in enumerate(obj.parts):
                 text = f"Part {p.name}: {names.get(str(p.geometry), '?')}"
-                part_item = self._add(item, text, Node("part", oid, f"parts.{i}", p.name,
-                                                       f"part:{p.name}"))  # fmt: skip
+                part_item = self._add(folders["geometry"], text,
+                                      Node("part", oid, f"parts.{i}", p.name,
+                                           f"part:{p.name}"))  # fmt: skip
                 geo = project.objects.get(p.geometry)
                 if isinstance(geo, Geometry) and geo.hidden:
                     from puzzle.gui.visibility import mark
 
                     mark(part_item, True, "its geometry is hidden")
+            for i, s in enumerate(obj.shell_sections):  # ADR 0027 shells
+                text = f"Shell on {s.selection}: {s.describe()}"
+                self._add(folders["geometry"], text, Node("shell_section", oid,
+                          f"shell_sections.{i}", s.selection, f"shell:{s.selection}"))  # fmt: skip
+            for i, b in enumerate(obj.beam_sections):  # ADR 0027 beams
+                text = f"Beam section on {b.selection}: {b.describe()}"
+                self._add(folders["geometry"], text, Node("beam_section", oid,
+                          f"beam_sections.{i}", b.selection, f"beam:{b.selection}"))  # fmt: skip
             for i, a in enumerate(obj.materials):
                 text = f"{names.get(str(a.material), '?')} → {a.selection}"
-                self._add(item, text, Node("assignment", oid, f"materials.{i}", a.selection,
-                                           f"assignment:{a.selection}"))  # fmt: skip
-            for i, k in enumerate(obj.contacts):
-                text = f"Contact {k.name} ({label(k.type).lower()})"
-                self._add(item, text, Node("contact", oid, f"contacts.{i}", k.name,
-                                           f"contact:{k.name}"))  # fmt: skip
+                self._add(folders["materials"], text, Node("assignment", oid, f"materials.{i}",
+                          a.selection, f"assignment:{a.selection}"))  # fmt: skip
             v = self.visibility
             for i, c in enumerate(obj.connectors):  # ADR 0027; a bolt type's (ADR 0050)
                 kind = names.get(str(c.type)) if c.type is not None else None
                 d = c.diameter
                 size = kind or (f"Ø {d.value:g} {d.unit}" if d is not None else "?")
                 text = f"Fastener {c.name} ({size}): {c.source} → {c.target or 'ground'}"
-                c_item = self._add(item, text, Node("connector", oid, f"connectors.{i}", c.name,
-                                                    f"connector:{c.name}"))  # fmt: skip
+                c_item = self._add(folders["fasteners"], text, Node("connector", oid,
+                                   f"connectors.{i}", c.name, f"connector:{c.name}"))  # fmt: skip
                 if v is not None and v.hidden_bolts:
                     from puzzle.gui.visibility import bolt_key, mark
 
                     if bolt_key(obj, c) in v.hidden_bolts:
                         mark(c_item, True, "hidden in the view")
-            for i, s in enumerate(obj.shell_sections):  # ADR 0027 shells
-                text = f"Shell on {s.selection}: {s.describe()}"
-                self._add(item, text, Node("shell_section", oid, f"shell_sections.{i}",
-                                           s.selection, f"shell:{s.selection}"))  # fmt: skip
-            for i, b in enumerate(obj.beam_sections):  # ADR 0027 beams
-                text = f"Beam section on {b.selection}: {b.describe()}"
-                self._add(item, text, Node("beam_section", oid, f"beam_sections.{i}",
-                                           b.selection, f"beam:{b.selection}"))  # fmt: skip
+            for i, w in enumerate(obj.welds):  # ADR 0078
+                text = f"Weld {w.name} ({label(w.type).lower()}): {w.path}"
+                self._add(folders["fasteners"], text,
+                          Node("weld", oid, f"welds.{i}", w.name, f"weld:{w.name}"))  # fmt: skip
+
+            def contacts(parent) -> None:  # a component's contacts, in each physics
+                for i, k in enumerate(obj.contacts):
+                    text = f"Contact {k.name} ({label(k.type).lower()})"
+                    self._add(parent, text, Node("contact", oid, f"contacts.{i}", k.name,
+                                                 f"contact:{k.name}"))  # fmt: skip
+
+            if not obj.physics:
+                contacts(self._folder(item, oid, oid, "contacts"))
             for i, ph in enumerate(obj.physics):
                 p_item = self._add(
                     item, label(ph.type), Node("physics", oid, f"physics.{i}", ph.type)
                 )
+                contacts(self._folder(p_item, oid, oid, "contacts"))
+                loads = self._folder(p_item, oid, f"{oid}/{ph.type}", "loads")
                 for j, f in enumerate(ph.features):
                     text = f"{_feature_label(ph.type, f.type)} on {f.selection}"
                     sources = f.fields.values() if _connections_shown() else ()
@@ -537,7 +635,7 @@ class ModelTree(QTreeWidget):
                         text += f" ← {getattr(source, 'name', 'a missing field')}{scale}"
                     path = f"physics.{i}.features.{j}"
                     key = f"feature:{f.type}:{f.selection}"
-                    f_item = self._add(p_item, text, Node("feature", oid, path, f.selection, key))
+                    f_item = self._add(loads, text, Node("feature", oid, path, f.selection, key))
                     _feature_icon(f_item, f.type)
                     v = self.visibility
                     if v is not None and v.hidden_features:
@@ -555,6 +653,15 @@ class ModelTree(QTreeWidget):
                     what = ", ".join(label(p).lower() for p in step.physics)
                     text = label(step.type) + (f" · {what}" if what else "")
                 self._add(item, text, Node("step", oid, f"steps.{i}", text))
+
+    def _folder(self, parent, oid: str, scope: str, key: str) -> QTreeWidgetItem:
+        """A default folder: `path` is the scope its items are grouped in, `key` which."""
+        title = FOLDER_TITLES[key]
+        item = self._add(parent, title, Node("folder", oid, scope, title, key))
+        from puzzle.gui.icons import icon
+
+        item.setIcon(0, icon("project"))  # Tabler's folder
+        return item
 
     def _add(self, parent, text: str, node: Node) -> QTreeWidgetItem:
         item = QTreeWidgetItem(parent, [text])
@@ -620,6 +727,13 @@ def _feature_label(physics: str, kind: str) -> str:
 
     spec = next((s for s in CATALOG.get(physics, []) if s.type == kind), None)
     return spec.label if spec else label(kind)
+
+
+def _same(a: Node, b: Node) -> bool:
+    """The same thing (labels may differ); default folders also by which folder."""
+    return (a.kind, a.object, a.path) == (b.kind, b.object, b.path) and (
+        a.kind != "folder" or a.key == b.key
+    )
 
 
 def _uuid(text: str):

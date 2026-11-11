@@ -17,7 +17,15 @@ from __future__ import annotations
 from uuid import UUID
 
 from puzzle.commands.model import Create, Delete, Edit, EditOp
-from puzzle.gui.tree import RENAMABLE, container_key, member_key, scope_name
+from puzzle.gui.tree import (
+    FOLDER_TITLES,
+    RENAMABLE,
+    container_key,
+    folder_of,
+    group_folders,
+    member_key,
+    scope_name,
+)
 from puzzle.model.schema import TreeGroup, TreeLabels
 
 
@@ -80,8 +88,10 @@ def move(window, keys: list[str], group: str | None, section: str):
     return window.submit_batch(commands) if len(commands) > 1 else window.submit(commands[0])
 
 
-def new_group(window, section: str, keys: list[str] | None = None, name: str | None = None):
-    """A group under `section`, holding `keys` (taken out of any other group)."""
+def new_group(window, section: str, keys: list[str] | None = None, name: str | None = None,
+              folder: str | None = None):  # fmt: skip
+    """A group under `section`, holding `keys` (taken out of any other group); `folder`
+    the default folder it is made in (a component's Fasteners, a physics' loads...)."""
     from puzzle.gui.quick_form import Ask
 
     if name is None:
@@ -92,7 +102,7 @@ def new_group(window, section: str, keys: list[str] | None = None, name: str | N
         got = window.ask_form(
             "New group",
             [Ask("name", "Name", kind="text", default=f"Group {n}")],
-            intro=f"A folder under {scope_name(window.session.project, section)} to keep the "
+            intro=f"A folder under {_where(window, section, folder)} to keep the "
             "tree tidy; drag items into it, or right-click them → Move to group.",
             check=lambda v: None if v.get("name", "").strip() else "Give it a name",
         )
@@ -100,7 +110,7 @@ def new_group(window, section: str, keys: list[str] | None = None, name: str | N
             return None
         name = got["name"].strip()
     keys = list(keys or [])
-    group = TreeGroup(name=name, section=section, members=keys)
+    group = TreeGroup(name=name, section=section, members=keys, folder=folder)
     commands = [Create(kind="group", data=group.model_dump(mode="json"))]
     for g in groups_in(window, section):  # each item sits in one group at a time
         members = [m for m in g.members if m not in keys]
@@ -127,12 +137,29 @@ def ungroup(window, group_id: str):
     return window.submit_batch(commands) if len(commands) > 1 else window.submit(commands[0])
 
 
-def selected_keys(window, section: str) -> list[str]:
+def _where(window, section: str, folder: str | None) -> str:
+    where = scope_name(window.session.project, section)
+    return f"{where}: {FOLDER_TITLES[folder]}" if folder in FOLDER_TITLES else where
+
+
+def fitting(window, section: str, folder: str | None) -> list[TreeGroup]:
+    """The groups an item in `folder` can go into: those shown in that folder."""
+    project = window.session.project
+    out = []
+    for g in groups_in(window, section):
+        spans = group_folders(project, g)
+        if (folder in spans) if folder is not None else not spans:
+            out.append(g)
+    return out
+
+
+def selected_keys(window, section: str, folder: str | None = None) -> list[str]:
     """The groupable items selected in the tree, in `section` (a heading, or the object
-    or physics holding them: `tree.container_key`)."""
+    or physics holding them: `tree.container_key`), and in `folder` when given."""
     tree = window.tree
     return [member_key(i.data(0, tree_role())) for i in tree.selectedItems()
-            if tree.groupable(i) and tree.scope_of(i) == section]  # fmt: skip
+            if tree.groupable(i) and tree.scope_of(i) == section
+            and (folder is None or folder_of(i) == folder)]  # fmt: skip
 
 
 def tree_role():
@@ -164,9 +191,11 @@ def add_to_menu(window, menu, node) -> None:
         return
     inside = container_key(node) if _holds_groups(item) else None
     if inside is not None:  # a geometry's selections, a component's items, a physics' loads
+        folder = node.key if node.kind == "folder" else None
         menu.addSeparator()
         menu.addAction("New group inside…").triggered.connect(
-            lambda: new_group(window, inside, selected_keys(window, inside)))  # fmt: skip
+            lambda: new_group(window, inside, selected_keys(window, inside, folder),
+                              folder=folder))  # fmt: skip
     if node.kind not in RENAMABLE and member_key(node) is None:
         return
     menu.addSeparator()
@@ -182,15 +211,17 @@ def add_to_menu(window, menu, node) -> None:
     if not tree.groupable(item) or section is None:
         return
     keys = selected_keys(window, section) or [member_key(node)]
+    here = folder_of(item)
     sub = menu.addMenu("Move to group")
-    for g in groups_in(window, section):
+    for g in fitting(window, section, here):
         if str(g.id) in keys:
             continue
         action = sub.addAction(g.name)
         action.triggered.connect(lambda _=False, gid=str(g.id): move(window, keys, gid, section))
-    if groups_in(window, section):
+    if fitting(window, section, here):
         sub.addSeparator()
-    sub.addAction("New group…").triggered.connect(lambda: new_group(window, section, keys))
+    sub.addAction("New group…").triggered.connect(
+        lambda: new_group(window, section, keys, folder=here))  # fmt: skip
     parent = item.parent().data(0, tree_role())
     if parent.kind == "group":
         menu.addAction("Out of group").triggered.connect(lambda: move(window, keys, None, section))
@@ -201,6 +232,8 @@ def _holds_groups(item) -> bool:
     from puzzle.gui.tree import ROLE
 
     node = item.data(0, ROLE)
+    if node.kind == "folder":  # always: a group made there waits for what goes in it
+        return True
     if node.kind not in ("object", "physics"):
         return False
     stack = [item.child(i) for i in range(item.childCount())]

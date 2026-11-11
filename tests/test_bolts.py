@@ -153,3 +153,16 @@ def test_the_outline_names_types():
     text = outline(p)
     assert "Bolt type M10 8.8: M10 (iso_coarse), ISO 898-1 Class 8.8, preload 70 % of yield" in text
     assert "(type M10 8.8)" in text and "diameter 10 mm" in text
+
+
+def test_runs_are_keyed_as_solved():
+    """run_study keys a run after bolts take their types' values; the tree's status must
+    key it the same way (the maintainer, 2026-11-11: every run of a vessel with typed
+    bolts showed out of date)."""
+    from puzzle.model.schema import SolveStep, Study
+    from puzzle.project.graph import run_hashes
+
+    p, btype, comp, *_ = _project()
+    study = p.add(Study(name="S", component=comp.id, solver="calculix",
+                        steps=[SolveStep(type="stationary")]))  # fmt: skip
+    assert run_hashes(p)[study.id] == run_hashes(bolts.resolved(p))[study.id]

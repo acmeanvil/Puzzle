@@ -2032,6 +2032,40 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
                 **results(session().project, comp, mesh, res, weld, step)}  # fmt: skip
 
     @tool(
+        description="A solve's own logs, read whole from its run folder (solver.log, "
+        "Code_Aster's .mess, CalculiX's .sta/.cvg, OpenFOAM's log.*): `problems` the "
+        "error and warning lines by each solver's markers, `pattern` lines matching a "
+        "regular expression (any case), with `context` lines around; else each file's last "
+        "`tail` lines. `study` reads its newest attempt (failed or stopped too), `run` a "
+        "stored run. Use run_progress first for a summary; this is for the solver's words."
+    )
+    @guarded
+    def run_log(study: str | None = None, run: str | None = None, problems: bool = False,
+                pattern: str | None = None, context: int = 0, tail: int = 40,
+                limit: int = 200) -> dict[str, Any]:  # fmt: skip
+        from puzzle import solver_logs
+
+        if study is None and run is None:
+            raise PuzzleError("give a study or a run", code="invalid")
+        folder = solver_logs.find(root, study=study, run=run)
+        found = solver_logs.lines(folder, pattern=pattern, problems=problems,
+                                  context=context, tail=tail, limit=min(limit, 1000))  # fmt: skip
+        return {
+            "folder": str(folder.relative_to(root)),
+            "files": [str(p.relative_to(folder)) for p in solver_logs.logs(folder)],
+            "counts": solver_logs.counts(folder),
+            "lines": [
+                {
+                    "file": x.file,
+                    "line": x.number,
+                    "text": x.text.rstrip()[:400],
+                    **({"kind": x.kind} if x.kind else {}),
+                }
+                for x in found
+            ],  # fmt: skip
+        }
+
+    @tool(
         description="How a study's last solve went or is going (ADR 0054): steps, increments, "
         "cut-backs, iterations, last residuals against their criteria, equations, memory, "
         "tracked probes' last values, the solver's warnings and errors in English, and "

@@ -137,9 +137,12 @@ def run_hashes(project: Project) -> dict[UUID, dict[str, list[str]]]:
     point. So a point already computed is a cache hit when other points are added,
     and a shoot-out solver's runs survive a change of primary solver.
     """
+    from puzzle.bolts import resolved as bolts_resolved
     from puzzle.operators import resolved
 
-    project = resolved(project)  # sweeps over a list: its values are the points
+    # Keyed as solved: run_study keys its runs after bolts take their types' values, so
+    # the tree's check must do the same, or every run with typed bolts is out of date.
+    project = resolved(bolts_resolved(project))  # sweeps over a list: its values are the points
     hashes = content_hashes(project)
     runs: dict[UUID, dict[str, list[str]]] = {}
     for study in project.of_type(Study):

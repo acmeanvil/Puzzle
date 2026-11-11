@@ -8,6 +8,7 @@ history.jsonl, so changes another client makes (an agent over MCP, the CLI) show
 from __future__ import annotations
 
 import copy
+import datetime
 import json
 import threading
 from pathlib import Path
@@ -433,7 +434,8 @@ class MainWindow(QMainWindow):
         self._queue_study = None
         self._queue_done: list = []
         self.last_run_selection: list[str] = []  # Run selected…'s last ticks
-        self.failed_studies: set[str] = set()  # study ids whose last run here failed
+        # Study id -> when its last run here failed (UTC); cleared by a newer stored run.
+        self.failed_studies: dict[str, datetime.datetime] = {}
         self.pick_bar = PickBar(self)
         self.pick_bar.hide()
         box = QAction("Box select", self)
@@ -528,6 +530,24 @@ class MainWindow(QMainWindow):
         self.table_view = TableViewer(self)  # ADR 0064: a table operator's rows
         tabs.addTab(self.table_view, "Table")
         self.output_tabs = tabs
+        from PySide6.QtWidgets import QToolButton
+
+        from puzzle.gui import text_viewer
+
+        # The output in a larger window with search and colours (the Solution tab: the
+        # run's whole solver logs).
+        bigger = QToolButton(text="Open in window", autoRaise=True)
+        bigger.setToolTip("The Output in a window of its own, with search and colours; "
+                          "on the Solution tab, the run's whole solver logs")  # fmt: skip
+        bigger.clicked.connect(
+            lambda: (
+                text_viewer.solver_output(self)
+                if tabs.currentWidget() is self.solution
+                else text_viewer.output_window(self)
+            )
+        )
+        tabs.setCornerWidget(bigger, Qt.Corner.TopRightCorner)
+        self.output_window_button = bigger
         # Its pages' minimum (the plots') would hold the dock open even when folded.
         tabs.setMinimumHeight(tabs.tabBar().sizeHint().height())
         self.messages_dock = self.docks.add(
@@ -773,7 +793,11 @@ class MainWindow(QMainWindow):
 
         # A study whose solve is with a job runner shows running (ADR 0067), here or not.
         running = self.running | self._pending_studies()
-        self.states = status(s.project, runs, running, self.failed_studies)
+        from puzzle.project.status import still_failed
+
+        # A run that finished after a failure here (the agent's, the CLI's) clears it.
+        self.failed_studies = still_failed(self.failed_studies, runs)
+        self.states = status(s.project, runs, running, set(self.failed_studies))
         self.tree.visibility = self.visibility  # shown and hidden marks (D2)
         self.tree.populate(s.project, runs, self._field_catalogs(runs), self.states)
         self.history.clear()
@@ -1736,7 +1760,7 @@ class MainWindow(QMainWindow):
 
     def _after_run(self, outcome, study: Study, sid: str) -> None:
         self.running.discard(sid)
-        self.failed_studies.discard(sid)
+        self.failed_studies.pop(sid, None)
         self.refresh()
         run = outcome.run
         cached = " (reused an identical run)" if run is not None and run.cached else ""
@@ -1756,7 +1780,7 @@ class MainWindow(QMainWindow):
 
     def _run_failed(self, exc, study: Study, sid: str) -> None:
         self.running.discard(sid)
-        self.failed_studies.add(sid)
+        self.failed_studies[sid] = datetime.datetime.now(datetime.UTC)
         stopped = getattr(exc, "code", "") == "stopped"
         self.solution.finish(
             False, "Stopped" if stopped else "Failed: see the messages and the Output log"
@@ -1833,6 +1857,15 @@ class MainWindow(QMainWindow):
             self._aside("closing the linearization", self._drop_linearization)
         if node.kind == "group" and obj is not None:  # a folder: what it holds, by name
             self.properties.show_text(self._group_rows(obj))
+            return
+        if node.kind == "folder":  # a default folder (gui.tree): what it holds
+            item = self.tree.item_for(node)
+            held = [] if item is None else [item.child(i).text(0)
+                                            for i in range(item.childCount())]  # fmt: skip
+            owner = obj.name if obj is not None else ""
+            self.properties.show_text({"Folder": node.label, "In": owner,
+                                       "Holds": ", ".join(held) or "nothing yet "
+                                       "(right-click to add)"})  # fmt: skip
             return
         if obj is None:
             self.properties.show_text({"project": s.project.name} if node.kind == "project" else {})
@@ -3415,6 +3448,7 @@ class MainWindow(QMainWindow):
                 "result_group",
                 "sweep",
                 "compare",
+                "folder",
             )
         ):
             return None

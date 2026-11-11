@@ -35,3 +35,15 @@ def test_fields_only_on_helper_nodes_are_dropped(tmp_path: Path):
     out = drop_helper_nodes(res, tmp_path / "job.comm")
     assert "beam_forces" not in out.steps[0].fields
     assert out.steps[0].fields["displacement"].ids.tolist() == [1]
+
+
+def test_the_run_summary_skips_an_empty_field():
+    """The summary after a run raised on an empty field, after the run was stored, so
+    the GUI showed the run failed and the agent's run calls returned an error."""
+    from puzzle.results.query import summary
+
+    empty = Field("beam_forces", "node", ["N"], np.zeros(0, np.int64), np.zeros((0, 1)))
+    u = Field("displacement", "node", ["x"], np.array([1]), np.ones((1, 1)))
+    fields = {"beam_forces": empty, "displacement": u}
+    res = Results("code_aster", [StepResult(1, "stationary", 1.0, fields=fields)])
+    assert list(summary(res)[0]["fields"]) == ["displacement"]

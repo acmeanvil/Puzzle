@@ -236,6 +236,18 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("project", type=Path)
     p.set_defaults(handler=_runs)
 
+    p = sub.add_parser("log", help="a run's whole solver logs: search them, or the problems")
+    p.add_argument("project", type=Path)
+    target = p.add_mutually_exclusive_group(required=True)
+    target.add_argument("--study", help="the study's newest attempt (a failed one too)")
+    target.add_argument("--run", help="a stored run id (from `puzzle runs`)")
+    p.add_argument("--grep", help="lines matching this regular expression (any case)")
+    p.add_argument("--problems", action="store_true", help="errors and warnings only")
+    p.add_argument("--context", type=int, default=0, help="lines around each match")
+    p.add_argument("--tail", type=int, default=60, help="without a filter: each file's last N")
+    p.add_argument("--files", action="store_true", help="list the log files and counts only")
+    p.set_defaults(handler=_log)
+
     for name, handler, helptext in (
         ("show", _show, "view a result"),
         ("paraview", _paraview, "open a result in ParaView, its view rebuilt (ADR 0070)"),
@@ -807,6 +819,29 @@ class _LiveStatus:
 
     def close(self) -> None:
         self._end_line()
+
+
+def _log(args) -> int:
+    from puzzle import solver_logs
+
+    try:
+        folder = solver_logs.find(args.project, study=args.study, run=args.run)
+    except PuzzleError as exc:
+        print(f"error: [{exc.code}] {exc.message}", file=sys.stderr)
+        return 1
+    if args.files:
+        for path in solver_logs.logs(folder):
+            print(f"{path.relative_to(folder)}  {path.stat().st_size:,} bytes")
+        print(solver_logs.counts(folder))
+        return 0
+    last = None
+    for line in solver_logs.lines(folder, pattern=args.grep, problems=args.problems,
+                                  context=args.context, tail=args.tail, limit=10_000):  # fmt: skip
+        if line.file != last:
+            print(f"== {line.file}")
+            last = line.file
+        print(f"{line.number:>7}: {line.text}")
+    return 0
 
 
 def _progress(args) -> int:
