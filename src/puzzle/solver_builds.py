@@ -37,6 +37,8 @@ ENV = "calculix-pardiso"
 VERSION = "2.23"
 SHA256 = "9c88385c10fb04f5dc6c4e98027a51bebdd8aee3920e05190d6c1dd08357d6e7"
 URL = f"https://www.dhondt.de/ccx_{VERSION}.src.tar.bz2"
+# Every program the build runs opens no window (Windows; 0 elsewhere).
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 STALE_S = 3 * 3600  # a build marked running for longer than this has died
 # CalculiX is old C: newer compilers turn these warnings into errors (clang's
 # -Wincompatible-function-pointer-types is unknown to gcc 16, which refuses it).
@@ -162,9 +164,10 @@ def start() -> bool:
         python = python.with_name("python.exe")  # the same interpreter, with a console
     flags = {}
     if os.name == "nt":
-        flags["creationflags"] = (subprocess.DETACHED_PROCESS
-                                  | subprocess.CREATE_NEW_PROCESS_GROUP
-                                  | subprocess.CREATE_NO_WINDOW)  # fmt: skip
+        # A console of its own that is never shown (CREATE_NO_WINDOW), which the
+        # compilers inherit. Not DETACHED_PROCESS: with no console at all, Windows
+        # opened a new window for every gcc and gfortran it ran (hundreds, 2026-11-11).
+        flags["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | NO_WINDOW
     else:
         flags["start_new_session"] = True
     with open(work / "progress.txt", "w", encoding="utf-8") as out:
@@ -346,7 +349,7 @@ def _env(tools: Toolchain) -> dict[str, str]:
 
 def _run(argv: list[str], cwd: Path, env: dict, log) -> None:
     done = subprocess.run(argv, cwd=cwd, env=env, capture_output=True, text=True,
-                          errors="replace")  # fmt: skip
+                          errors="replace", creationflags=NO_WINDOW)  # fmt: skip
     log.write(" ".join(argv) + "\n" + done.stdout + done.stderr)
     if done.returncode != 0:
         tail = (done.stderr or done.stdout).strip().splitlines()[-6:]
@@ -392,7 +395,8 @@ def check(exe: Path, tools: Toolchain | None = None, workdir: Path | None = None
         env = _env(tools) if tools else dict(os.environ)
         env["OMP_NUM_THREADS"] = "1"
         done = subprocess.run([str(exe), "cube"], cwd=folder, env=env, capture_output=True,
-                              text=True, errors="replace", timeout=300)  # fmt: skip
+                              text=True, errors="replace", timeout=300,
+                              creationflags=NO_WINDOW)  # fmt: skip
         text = done.stdout + done.stderr
     if done.returncode != 0 or "pardiso" not in text.lower():
         tail = " | ".join(text.strip().splitlines()[-4:])
