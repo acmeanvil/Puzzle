@@ -81,7 +81,7 @@ def finish(results, project, component, mesh: Mesh) -> None:
     nodes = np.unique(np.concatenate(list(slaves.values())))
     mu = np.zeros(len(nodes))
     for c in touching:
-        if c.name in slaves and c.type == "frictional":
+        if c.name in slaves and c.type in ("frictional", "rough"):
             mu[np.isin(nodes, slaves[c.name])] = c.friction
     matrix = None
     for step in results.steps:
@@ -118,7 +118,7 @@ def finish(results, project, component, mesh: Mesh) -> None:
             size = np.linalg.norm(np.nan_to_num(_at(lags_f, ids)), axis=1)
             mu_here = np.zeros(len(ids))
             for c in touching:
-                if c.name in slaves and c.type == "frictional":
+                if c.name in slaves and c.type in ("frictional", "rough"):
                     mu_here[np.isin(ids, slaves[c.name])] = c.friction
             shear = mu_here * np.maximum(pressure, 0.0) * np.minimum(size, 1.0)
         elif total is not None:

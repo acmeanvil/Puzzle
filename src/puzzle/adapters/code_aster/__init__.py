@@ -83,7 +83,14 @@ class CodeAsterAdapter(SolverAdapter):
             }
         ),  # ADR 0037: local axes
         contacts=frozenset(
-            {"bonded_conformal", "bonded_nonconformal", "frictionless", "frictional"}
+            {
+                "bonded_conformal",
+                "bonded_nonconformal",
+                "frictionless",
+                "frictional",
+                "no_separation",
+                "rough",
+            }
         ),
         couplings=frozenset({"thermal_expansion"}),
         threads=THREADS,  # ADR 0076: tests/integration/test_thread_benchmark.py

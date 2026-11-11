@@ -52,17 +52,25 @@ repeated per part.
 | `bonded` | glued: no gap, no sliding | CalculiX, Code_Aster; Elmer and FEniCSx only when conformal |
 | `frictionless` | may open and slide, no friction | CalculiX, Code_Aster |
 | `frictional` | may open; slides past `friction` (μ, required) | CalculiX, Code_Aster |
-| `no_separation`, `rough` | in the schema | no solver writes them yet |
+| `no_separation` | never opens, slides freely (linear: one solve) | CalculiX (tied pair), Code_Aster (`LIAISON_MAIL` DNOR) |
+| `rough` | may open; never slides while closed (friction without slip) | CalculiX, Code_Aster (first-order mesh, as friction) |
 
 - A bonded contact is meshed conformally by default: the parts share nodes and no
   constraint is written. `"meshing": "nonconformal"` meshes the parts apart and ties
   them (CalculiX `*TIE`, Code_Aster `LIAISON_MAIL`; Elmer's mortar tie isn't written,
   so Elmer refuses it).
 - Every other type is always nonconformal.
-- Elmer, FEniCSx and the CFD solvers write no frictionless or frictional contact. A
-  study on them with such a contact is refused (code `unsupported`).
+- Elmer, FEniCSx and the CFD solvers write no frictionless, frictional, no-separation
+  or rough contact. A study on them with such a contact is refused (code `unsupported`).
 - `capabilities(solver)` lists what a solver writes under `contacts`:
-  `bonded_conformal`, `bonded_nonconformal`, `frictionless`, `frictional`.
+  `bonded_conformal`, `bonded_nonconformal`, `frictionless`, `frictional`,
+  `no_separation`, `rough`.
+- No separation suits faces that stay together but may slide (a shrink-fitted sleeve
+  allowed to creep, a plate on a greased seat); it is linear, so it solves as fast as a
+  bond. Rough suits faces pressed together that can lift off but not slip (a clamped
+  flange in bending); it is nonlinear, as friction is. On Code_Aster, rough needs a
+  first-order mesh and no displacement condition on its source nodes, as frictional
+  does.
 
 ## Steps
 

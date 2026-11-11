@@ -243,10 +243,14 @@ def _stack(tmp_path, solver, contact, features=None, *, overhang=0.0, order=2):
 
 
 @over("calculix", "code_aster")
-def test_frictionless_stack_is_uniaxial(tmp_path, solver):
+@pytest.mark.parametrize("kind", ["frictionless", "no_separation"])
+def test_frictionless_stack_is_uniaxial(tmp_path, solver, kind):
+    """Pressed: frictionless and no-separation interfaces both let each block grow
+    sideways by its own Poisson strain (no shear across), the stack shortening as two
+    springs in series."""
     # Accurate: the stack is loaded through the interface, where a penalty's give adds to
     # the blocks' own (balanced, the default, is 0.8 % over here; see PENALTY_FACTORS).
-    contact = Contact(name="Interface", type="frictionless", source="Cap/Bottom",
+    contact = Contact(name="Interface", type=kind, source="Cap/Bottom",
                       target="Base/Top", stiffness="accurate")  # fmt: skip
     project, study = _stack(tmp_path, solver, contact)
     run = run_study(project, study.id, tmp_path, tmp_path / "run", timeout_s=900)
@@ -282,9 +286,14 @@ def test_frictionless_stack_is_uniaxial(tmp_path, solver):
         f"{szz[near].max():.1e} max near; |sxx|/p {sxx[~near].max():.1e} away, "
         f"{sxx[near].max():.1e} near"
     )
-    # Uniaxial away from the interface; contact disturbs nodal stress next to it.
-    assert szz[~near].max() < 0.01 and sxx[~near].max() < 0.01
-    assert szz[near].mean() < 0.02 and szz[near].max() < 0.1 and sxx[near].max() < 0.05
+    # Uniaxial away from the interface; contact disturbs nodal stress next to it. Code_Aster's
+    # no separation is a kinematic relation (LIAISON_MAIL DNOR) interpolating the master
+    # face's quadratic field, whose nodal stresses are noisier there (measured 1.2 % away,
+    # 33 % at a node next to it) while its displacements stay within 0.3 % of exact.
+    loose = kind == "no_separation" and solver == "code_aster"
+    away, near_max, sxx_near = (0.015, 0.4, 0.15) if loose else (0.01, 0.1, 0.05)
+    assert szz[~near].max() < away and sxx[~near].max() < away
+    assert szz[near].mean() < 0.02 and szz[near].max() < near_max and sxx[near].max() < sxx_near
 
 
 @over("calculix", "code_aster")
@@ -326,3 +335,101 @@ def test_sliding_friction_obeys_coulomb(tmp_path, solver):
     print(f"{solver}: normal {tz:.4g} N, tangential {tx:.4g} N, ratio {abs(tx / tz):.4f}")
     assert abs(tz) > 50  # really pressed
     assert abs(tx / tz) == pytest.approx(mu, rel=0.01)
+
+
+# --- no separation and rough (ADR 0039's two other types) ---------------------------------
+
+DELTA = 1e-6  # m, the cap's top pulled up
+
+
+def _pulled(contact, *, symmetric: bool):
+    """The cap's top pulled up by DELTA. Symmetric: the default stack's symmetry planes
+    (each block free to shrink sideways, so a closed interface is uniaxial); else the
+    base's bottom fixed and the cap held at its top only (Code_Aster's rough contact
+    takes no condition on its slave nodes)."""
+    zero = Quantity(value=0, unit="m")
+    up = Quantity(value=DELTA, unit="m")
+    if symmetric:
+        return [
+            *(Feature(type="displacement", selection=f"{part}/{face}", values={axis: zero})
+              for part in ("Base", "Cap") for face, axis in (("SymX", "x"), ("SymY", "y"))),
+            Feature(type="displacement", selection="Base/Bottom", values={"z": zero}),
+            Feature(type="displacement", selection="Cap/Top", values={"z": up}),
+        ]  # fmt: skip
+    return [Feature(type="fixed", selection="Base/Bottom"),
+            Feature(type="displacement", selection="Cap/Top",
+                    values={"x": zero, "y": zero, "z": up})]  # fmt: skip
+
+
+def _springs() -> float:
+    """The stack's pull for DELTA, its blocks in series (uniaxial: free sideways)."""
+    e_s = library_material("structural_steel").properties["youngs_modulus"].to_si()
+    e_a = library_material("aluminium_6061_t6").properties["youngs_modulus"].to_si()
+    return DELTA * SIDE * SIDE / (SIDE / e_s + SIDE / e_a)
+
+
+@over("calculix", "code_aster")
+def test_no_separation_holds_a_pull(tmp_path, solver):
+    """No separation: pulled apart, the interface holds, so the stack carries its
+    uniaxial pull, F = delta A / (L/E_steel + L/E_aluminium); frictionless would open."""
+    from puzzle.results.query import total
+
+    contact = Contact(name="Interface", type="no_separation", source="Cap/Bottom",
+                      target="Base/Top", stiffness="accurate")  # fmt: skip
+    project, study = _stack(tmp_path, solver, contact, _pulled(contact, symmetric=True))
+    run = run_study(project, study.id, tmp_path, tmp_path / "run", timeout_s=900)
+    fz = total(run.results, run.mesh, "reaction_force", "Cap/Top")["total"][2]
+    print(f"{solver}: pull {fz:.6g} N (series springs {_springs():.6g} N)")
+    assert fz == pytest.approx(_springs(), rel=5e-3)
+
+
+@over("calculix", "code_aster")
+@pytest.mark.parametrize("kind", ["rough", "frictionless"])
+def test_rough_opens_under_a_pull(tmp_path, solver, kind):
+    """Rough (and frictionless): pulled apart, the interface opens, so the cap carries
+    next to nothing (a penalty's or a multiplier's remainder) against no separation's
+    pull."""
+    from puzzle.results.query import total
+
+    contact = Contact(name="Interface", type=kind, source="Cap/Bottom", target="Base/Top")
+    order = 1 if solver == "code_aster" else 2
+    overhang = 0.002 if solver == "code_aster" else 0.0
+    project, study = _stack(tmp_path, solver, contact, _pulled(contact, symmetric=False),
+                            overhang=overhang, order=order)  # fmt: skip
+    run = run_study(project, study.id, tmp_path, tmp_path / "run", timeout_s=900)
+    fz = total(run.results, run.mesh, "reaction_force", "Cap/Top")["total"][2]
+    print(f"{solver}: rough pull {fz:.4g} N (a closed interface would carry ~{_springs():.4g})")
+    assert abs(fz) < 1e-3 * _springs()
+
+
+@over("calculix", "code_aster")
+def test_rough_sticks_as_a_bond_when_pressed(tmp_path, solver):
+    """Rough: pressed 1 um and dragged 0.3 um sideways, no point slips, so the cap pulls
+    the base along as a bonded interface does: the same tangential and normal reactions
+    (within 2 %)."""
+    from puzzle.results.query import total
+
+    zero = Quantity(value=0, unit="m")
+    features = [
+        Feature(type="fixed", selection="Base/Bottom"),
+        Feature(type="displacement", selection="Base/SymY", values={"y": zero}),
+        Feature(type="displacement", selection="Cap/Top", values={
+            "x": Quantity(value=0.3, unit="um"), "y": zero,
+            "z": Quantity(value=-1, unit="um")}),
+    ]  # fmt: skip
+    order = 1 if solver == "code_aster" else 2
+    overhang = 0.002 if solver == "code_aster" else 0.0
+    got = {}
+    for kind in ("rough", "bonded"):
+        contact = Contact(name="Interface", type=kind, source="Cap/Bottom", target="Base/Top",
+                          meshing="nonconformal" if kind == "bonded" else None)  # fmt: skip
+        (tmp_path / kind).mkdir()
+        project, study = _stack(tmp_path / kind, solver, contact, features,
+                                overhang=overhang, order=order)  # fmt: skip
+        run = run_study(project, study.id, tmp_path / kind, tmp_path / kind / "run",
+                        timeout_s=900)  # fmt: skip
+        got[kind] = total(run.results, run.mesh, "reaction_force", "Cap/Top")["total"]
+    (rx, _, rz), (bx, _, bz) = got["rough"], got["bonded"]
+    print(f"{solver}: rough {rx:.4g}/{rz:.4g} N, bonded {bx:.4g}/{bz:.4g} N")
+    assert rx == pytest.approx(bx, rel=0.02) and rz == pytest.approx(bz, rel=0.02)
+    assert abs(rx) > 0.02 * abs(rz)  # really dragged

@@ -199,7 +199,7 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
     thermal_load = temperatures.get(None, next(iter(temperatures.values()), None))
     check_contacts(comp, CONTACTS, "CalculiX", THREADS)
     touching = [c for c in comp.contacts
-                if c.type in ("frictionless", "frictional") and c.thread is None]  # fmt: skip
+                if c.type in PAIRS and c.thread is None]  # fmt: skip
     if touching and any(
         s.type != "stationary" or not s.solves("solid_mechanics") or len(set(s.physics)) > 1
         for s in study.solve_steps()
@@ -818,9 +818,7 @@ def _step(
     # A thread's unilateral flanks are nonlinear springs: iterated, as lift-off.
     lifting = lifting or any(c.thread is not None and c.type == "frictionless"
                              for c in comp.contacts)  # fmt: skip
-    contact = any(
-        c.type in ("frictionless", "frictional") and c.thread is None for c in comp.contacts
-    ) or (  # fmt: skip
+    contact = any(c.type in PAIRS and c.thread is None for c in comp.contacts) or (
         (yields or lifting) and step.type == "stationary" and "solid_mechanics" in solved
     )
     nlgeom = bool(step.settings.get("geometric_nonlinearity", False))
@@ -892,9 +890,7 @@ def _step(
                 for line in outputs
             ]
         if (
-            any(
-                c.type in ("frictionless", "frictional") and c.thread is None for c in comp.contacts
-            )
+            any(c.type in PAIRS and c.thread is None for c in comp.contacts)
             and step.type == "stationary"
         ):  # ADR 0056: contact opening and slips, pressure and shears, on slave nodes
             outputs += ["*CONTACT FILE", "CDIS, CSTR"]
@@ -2058,7 +2054,15 @@ def _feature_rows(f: Feature, mesh: Mesh, faces: FaceLookup, rigid=None) -> dict
     }
 
 
-CONTACTS = {"bonded_nonconformal", "frictionless", "frictional"}
+CONTACTS = {"bonded_nonconformal", "frictionless", "frictional", "no_separation", "rough"}
+# Contacts written as surface-to-surface *CONTACT PAIRs (the rest are ties or shared nodes).
+PAIRS = frozenset({"frictionless", "frictional", "no_separation", "rough"})
+# A rough contact is friction without slip (Ansys's Rough): Coulomb with a coefficient no
+# real interface reaches, so a closed point sticks; it still opens under tension.
+ROUGH_MU = 1.0e3
+# No separation on CalculiX: PRESSURE-OVERCLOSURE=TIED takes a stick slope (*FRICTION);
+# this fraction of the normal penalty leaves the faces free to slide in effect.
+SLIDE = 1.0e-6
 SLACK = 1e-4  # a unilateral thread flank's stiffness in tension, a fraction of k
 AXISYMMETRIC_SECTOR = 2.0 / 360.0  # the slice CalculiX expands an axisymmetric model to
 THREADS = frozenset({"bonded", "no_separation", "frictionless"})  # ADR 0076; not friction yet
@@ -2080,6 +2084,11 @@ def _contacts(project: Project, comp: Component, mesh: Mesh, faces: FaceLookup) 
       linear penalty: K = factor × E / h (the softer material, the slave face size;
       `PENALTY_FACTOR`, as Ansys's FKN), so the overclosure stays a small fraction of
       an element. Friction adds *FRICTION with a stick slope of the same order.
+    - No separation is the same pair with PRESSURE-OVERCLOSURE=TIED (the penalty acts in
+      tension as in compression) and a stick slope SLIDE × K, which TIED requires but
+      which holds nothing: closed in the normal, free to slide.
+    - Rough is the linear pair with *FRICTION at μ = ROUGH_MU: no slip while closed, and
+      it opens.
     """
     out: list[str] = []
     for i, c in enumerate(comp.contacts, start=1):
@@ -2107,11 +2116,15 @@ def _contacts(project: Project, comp: Component, mesh: Mesh, faces: FaceLookup) 
             f"*CONTACT PAIR, INTERACTION={interaction}, TYPE=SURFACE TO SURFACE",
             ", ".join(names),
             f"*SURFACE INTERACTION, NAME={interaction}",
-            "*SURFACE BEHAVIOR, PRESSURE-OVERCLOSURE=LINEAR",
+            "*SURFACE BEHAVIOR, PRESSURE-OVERCLOSURE="
+            + ("TIED" if c.type == "no_separation" else "LINEAR"),
             f"{stiffness:.6g}",
         ]
-        if c.type == "frictional":
-            out += ["*FRICTION", f"{c.friction:.10g}, {stiffness:.6g}"]
+        if c.type in ("frictional", "rough"):
+            mu = c.friction if c.type == "frictional" else ROUGH_MU
+            out += ["*FRICTION", f"{mu:.10g}, {stiffness:.6g}"]
+        elif c.type == "no_separation":  # TIED needs a stick slope: one too small to hold
+            out += ["*FRICTION", f"{SLIDE:.6g}, {stiffness * SLIDE:.6g}"]  # μ > 0: required
     return out
 
 
@@ -2149,7 +2162,8 @@ def contact_summary(project: Project, comp: Component, mesh: Mesh | None = None)
             continue
         factor = float(c.extensions.get("calculix", {}).get(
             "penalty_factor", PENALTY_FACTORS[c.stiffness]))  # fmt: skip
-        text = (f"*CONTACT PAIR, surface to surface, slave {c.source}; linear penalty "
+        law = "tied (no separation, free to slide)" if c.type == "no_separation" else "linear"
+        text = (f"*CONTACT PAIR, surface to surface, slave {c.source}; {law} penalty "
                 f"K = {factor:g} E/h")  # fmt: skip
         group = mesh.groups.get(c.source) if mesh is not None else None
         if group is not None:
@@ -2163,6 +2177,8 @@ def contact_summary(project: Project, comp: Component, mesh: Mesh | None = None)
             text += " (h from the mesh)"
         if c.type == "frictional":
             text += f"; *FRICTION μ = {c.friction:g}, stick slope K"
+        elif c.type == "rough":
+            text += f"; *FRICTION μ = {ROUGH_MU:g} (rough: no slip while closed), stick slope K"
         text += moved_words(c)
         text += "; static steps start at a tenth of the load"
         out[c.name] = text

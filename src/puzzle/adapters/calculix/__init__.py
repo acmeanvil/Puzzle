@@ -103,7 +103,14 @@ class CalculixAdapter(SolverAdapter):
         ),  # ADR 0037: local axes
         # Nonconformal bonded maps to *TIE; the others to *CONTACT PAIR (+ *FRICTION).
         contacts=frozenset(
-            {"bonded_conformal", "bonded_nonconformal", "frictionless", "frictional"}
+            {
+                "bonded_conformal",
+                "bonded_nonconformal",
+                "frictionless",
+                "frictional",
+                "no_separation",
+                "rough",
+            }
         ),
         threads=THREADS,  # ADR 0076
         couplings=frozenset({"thermal_expansion"}),

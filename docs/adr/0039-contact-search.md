@@ -68,6 +68,29 @@ Benchmarks: `tests/test_contacts_in_a_part.py`, `tests/test_split_parts.py`,
 `tests/integration/test_contact_in_a_part.py` (a stack in one part carries p A = 2000 N
 through a frictionless contact on CalculiX).
 
+## Amended (2026-11-10): no separation and rough, on CalculiX and Code_Aster
+
+The schema always had five types; only bonded, frictionless and frictional were written,
+and the other two were refused. Both now are, benchmarked on the stacked cubes
+(`tests/integration/test_contact.py`, steel under aluminium):
+
+- **No separation** (never opens, free to slide, linear). CalculiX: a surface-to-surface
+  pair with `PRESSURE-OVERCLOSURE=TIED`, which requires a `*FRICTION` stick slope, set
+  to 1e-6 of the penalty (and μ 1e-6: CalculiX refuses 0) so it holds nothing.
+  Code_Aster: `LIAISON_MAIL` with `DDL='DNOR'`, the normal displacement tied only.
+  Pulled apart by 1 µm, the stack carries 517.97 N (CalculiX) and 518.56 N
+  (Code_Aster) against 518.79 N for its two blocks in series; pressed, each block grows
+  sideways by its own Poisson strain (CalculiX exact, Code_Aster within 0.3 %).
+- **Rough** (opens, never slips while closed). Coulomb with a coefficient no interface
+  reaches: CalculiX μ 1e3, Code_Aster μ 10 (1e3 stopped Newton once the interface
+  opened). Pulled apart it carries 1e-13 N; pressed 1 µm and dragged 0.3 µm it gives the
+  bonded interface's reactions (CalculiX within 0.2 % tangentially and 0.8 % normally,
+  Code_Aster identical). On Code_Aster it needs a first-order mesh, as friction does.
+- Found on the way: Code_Aster could not converge a contact that opens everywhere under
+  imposed displacements alone (frictionless too): its relative residual divides by the
+  forces through the model, then about zero (1e-13 N absolute, 3 relative). Such a study
+  now takes an absolute `RESI_GLOB_MAXI` of 1e-6 E L u (`comm._criterion`).
+
 ## Consequences
 
 - Setting up an assembly's contacts becomes one review instead of many picks.

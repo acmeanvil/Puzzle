@@ -77,7 +77,21 @@ TABLES = {
 FORMAT_R = "1PE18.10"
 
 
-CONTACTS = {"bonded_nonconformal", "frictionless", "frictional"}
+CONTACTS = {"bonded_nonconformal", "frictionless", "frictional", "no_separation", "rough"}
+# DEFI_CONTACT zones (the rest are LIAISON_MAIL ties or shared nodes).
+PAIRS = frozenset({"frictionless", "frictional", "rough"})
+# Rough (Ansys's): Coulomb with a coefficient no interface reaches, so closed points stick.
+ROUGH_MU = 10.0  # 1e3 stopped Newton converging once the interface opened
+
+
+def _tied(c) -> bool:
+    """A LIAISON_MAIL: a nonconformal bond, or no separation (its normal only, DNOR)."""
+    return c.thread is None and (c.capability == "bonded_nonconformal"
+                                 or c.type == "no_separation")  # fmt: skip
+
+
+def _mu(c) -> float:
+    return c.friction if c.type == "frictional" else ROUGH_MU if c.type == "rough" else 0.0
 
 
 TEMPERATURE_UNIT = 90  # the transferred temperature table
@@ -282,8 +296,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             "Code_Aster writes threaded contacts in static structural steps only so far",
             code="unsupported",
         )
-    ties = [c for c in comp.contacts
-            if c.capability == "bonded_nonconformal" and c.thread is None]  # fmt: skip
+    ties = [c for c in comp.contacts if _tied(c)]
     if ties and thermal:
         raise InputError(
             "Code_Aster ties nonconformal parts in structural studies only so far",
@@ -297,8 +310,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
                 "or use CalculiX",
                 code="unsupported",
             )
-    touching = [c for c in comp.contacts
-                if c.type in ("frictionless", "frictional") and c.thread is None]  # fmt: skip
+    touching = [c for c in comp.contacts if c.type in PAIRS and c.thread is None]
     if touching and (thermal or step.type != "stationary"):
         raise InputError(
             "Code_Aster contact is written for static structural steps only so far",
@@ -932,7 +944,9 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             + ("ETAT_INIT=_F(SIGM=sig0), " if initial else "")
             + behaviour
             # As Code_Aster's 3D contact validation (ssnv128): tangent every iteration.
-            + "NEWTON=_F(REAC_ITER=1), CONVERGENCE=_F(ITER_GLOB_MAXI=200, RESI_GLOB_RELA=1e-6), "
+            + "NEWTON=_F(REAC_ITER=1), CONVERGENCE=_F(ITER_GLOB_MAXI=200, "
+            + _criterion(project, comp, features, mesh, touching)
+            + "), "
             + _suivi(tracked, names)
             + "INCREMENT=_F(LIST_INST=times))",
             "res = CALC_CHAMP(reuse=res, RESULTAT=res, CONTRAINTE=('SIGM_NOEU',"
@@ -1818,6 +1832,31 @@ def _material(
     return f"ELAS=_F(E={e:.12g}, NU={nu:.12g}{rho}{alpha}{amor})"
 
 
+def _criterion(project, comp, features, mesh: Mesh, touching) -> str:
+    """STAT_NON_LINE's convergence criterion. Relative (RESI_GLOB_RELA 1e-6, the residual
+    over the forces through the model) unless a contact study's only loads are imposed
+    displacements: when its interface then opens everywhere those forces are next to
+    nothing, the ratio never settles (a cap pulled off its base: 1e-13 N absolute, 3
+    relative, 200 iterations), so the absolute RESI_GLOB_MAXI is used, 1e-6 of the force
+    the largest imposed displacement would take through the model (E L u)."""
+    relative = "RESI_GLOB_RELA=1e-6"
+    if not touching:
+        return relative
+    loads = [f for f in features if f.type not in ("fixed", "displacement")]
+    moved = [abs(q.to_si()) for f in features if f.type == "displacement"
+             for q in f.values.values()]  # fmt: skip
+    if loads or not moved or max(moved) == 0.0:
+        return relative
+    moduli = [m.properties["youngs_modulus"].to_si() for m in
+              (project.objects.get(a.material) for a in comp.materials)
+              if m is not None and "youngs_modulus" in m.properties]  # fmt: skip
+    if not moduli:
+        return relative
+    lo, hi = mesh.coords.min(axis=0), mesh.coords.max(axis=0)
+    size = float(np.linalg.norm(hi - lo))
+    return f"RESI_GLOB_MAXI={1e-6 * max(moduli) * size * max(moved):.6g}"
+
+
 def _check_friction(contacts, features, mesh: Mesh) -> None:
     """Code_Aster's continuous Coulomb friction, where it works (see CLAUDE.md):
 
@@ -1826,7 +1865,7 @@ def _check_friction(contacts, features, mesh: Mesh) -> None:
       27-node hexahedra only;
     - no displacement condition on slave (source) nodes: it duplicates a multiplier.
     """
-    frictional = [c for c in contacts if c.type == "frictional"]
+    frictional = [c for c in contacts if c.type in ("frictional", "rough")]
     if not frictional:
         return
     if any(b.element in ("tet10", "hex20", "wedge15", "pyramid13") for b in mesh.blocks):
@@ -1895,9 +1934,8 @@ def contact_summary(project, comp, mesh: Mesh | None = None) -> dict[str, str]:
     from puzzle.bolts import resolved
 
     out = {}
-    touching = [c for c in comp.contacts
-                if c.type in ("frictionless", "frictional") and c.thread is None]  # fmt: skip
-    friction = any(c.type == "frictional" for c in touching)
+    touching = [c for c in comp.contacts if c.type in PAIRS and c.thread is None]
+    friction = any(c.type in ("frictional", "rough") for c in touching)
     quadratic = mesh is not None and any(
         b.element in ("tet10", "hex20", "wedge15", "pyramid13") for b in mesh.blocks
     )
@@ -1926,8 +1964,14 @@ def contact_summary(project, comp, mesh: Mesh | None = None) -> dict[str, str]:
         elif c.capability == "bonded_nonconformal":
             out[c.name] = (f"LIAISON_MAIL: the nodes of {c.source} tied into the volume of "
                            f"{c.target.split('/', 1)[0]} (structural studies only)")  # fmt: skip
+        elif c.type == "no_separation":
+            out[c.name] = (f"LIAISON_MAIL, DDL='DNOR': the nodes of {c.source} held to "
+                           f"{c.target.split('/', 1)[0]} along the face's normal only, free to "
+                           "slide (linear; structural studies only)")  # fmt: skip
         else:
             law = (f"Coulomb μ = {c.friction:g}" if c.type == "frictional"
+                   else f"rough (Coulomb μ = {ROUGH_MU:g}: no slip while closed)"
+                   if c.type == "rough"
                    else "frictionless" + (" (COULOMB = 0 beside a frictional zone)"
                                           if friction else ""))  # fmt: skip
             text = (
@@ -1943,7 +1987,7 @@ def contact_summary(project, comp, mesh: Mesh | None = None) -> dict[str, str]:
             if c.name in excluded:
                 groups, count = excluded[c.name]
                 text += f"; SANS_GROUP_NO: {count} nodes on bolt ends ({', '.join(groups)})"
-            if c.type == "frictional" and quadratic:
+            if c.type in ("frictional", "rough") and quadratic:
                 text += "; refused on this quadratic mesh (friction needs element_order 1)"
             out[c.name] = text
     return out
@@ -1957,7 +2001,7 @@ def _defi_contact(contacts, names: dict[str, str], excluded=None) -> str:
     needed when a body is held only by contacts that touch along an edge, where no
     point starts interpenetrated and the first matrix is singular.
     """
-    friction = any(c.type == "frictional" for c in contacts)
+    friction = any(c.type in ("frictional", "rough") for c in contacts)
     zones = []
     for c in contacts:
         zone = f"_F(GROUP_MA_MAIT='{names[c.target]}', GROUP_MA_ESCL='{names[c.source]}'"
@@ -1966,7 +2010,7 @@ def _defi_contact(contacts, names: dict[str, str], excluded=None) -> str:
         init = c.extensions.get("code_aster", {}).get("contact_init")
         if init:
             zone += f", CONTACT_INIT='{init}'"
-        zones.append(zone + (f", COULOMB={c.friction or 0.0:.10g})" if friction else ")"))
+        zones.append(zone + (f", COULOMB={_mu(c):.10g})" if friction else ")"))
     return (
         "contact = DEFI_CONTACT(MODELE=model, FORMULATION='CONTINUE', "
         f"FROTTEMENT='{'COULOMB' if friction else 'SANS'}', ZONE=({', '.join(zones)},))"
@@ -2424,7 +2468,8 @@ def _loads(
     internal: list[str] = []  # forces per volume (ADR 0044 stage 2)
     tied = [
         f"_F(GROUP_MA_MAIT='{names[c.target.split('/', 1)[0]]}', "
-        f"GROUP_MA_ESCL='{names[c.source]}', TYPE_RACCORD='MASSIF')"
+        f"GROUP_MA_ESCL='{names[c.source]}', TYPE_RACCORD='MASSIF'"
+        + (", DDL='DNOR')" if c.type == "no_separation" else ")")
         for c in ties
     ]
     for f in features:
