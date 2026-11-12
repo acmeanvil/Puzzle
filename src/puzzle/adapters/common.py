@@ -1041,7 +1041,12 @@ def support_nodes(group, mesh: Mesh):
     """Each face node's share of the area and its normal, for springs to ground. Shares
     are ∫N dA, as consistent loads are, so a uniform state is exact (on tri6 faces that
     puts them on the mid-edge nodes; corners have none). Normals are area-weighted and
-    point away from the model's centre. -> (node ids, areas, unit normals (n, 3))"""
+    point away from the model's centre. -> (node ids, areas, unit normals (n, 3))
+
+    A group of points (weak springs, ADR 0080) is per node: each counts 1 m², along x."""
+    if group.dim == 0:
+        ids = np.asarray(group.node_ids, dtype=np.int64)
+        return ids, np.ones(len(ids)), np.tile([1.0, 0.0, 0.0], (len(ids), 1))
     centre = mesh.coords.mean(axis=0)
     share: dict[int, float] = {}
     normal: dict[int, np.ndarray] = {}

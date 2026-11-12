@@ -25,6 +25,7 @@ from puzzle.adapters.base import (
     STAGE3_FIELDS,
     STRUCTURAL_FEATURES,
     SUPPORT_FEATURES,
+    SYMMETRY_FEATURES,
     THERMAL_FEATURES,
     VECTOR_FIELD_FEATURES,
     VECTOR_LOAD_FEATURES,
@@ -52,6 +53,7 @@ class CodeAsterAdapter(SolverAdapter):
             "heat_transfer": frozenset({"stationary", "transient"}),
         },
         features=STRUCTURAL_FEATURES
+        | SYMMETRY_FEATURES  # ADR 0081
         | THERMAL_FEATURES
         | HEAT_SOURCE_FEATURES  # ADR 0047
         | REMOTE_FEATURES
@@ -66,9 +68,18 @@ class CodeAsterAdapter(SolverAdapter):
         ),  # ADR 0076 step 4: tapped ends
         beams=True,  # ADR 0027, tests/integration/test_beams.py
         shared_settings=frozenset(  # ADR 0023
-            {"linear_solver", "tolerance", "max_iterations", "output_every"}
+            {
+                "linear_solver",
+                "tolerance",
+                "max_iterations",
+                "output_every",
+                "increments",
+                "min_increment",
+                "fixed_increments",
+            }
         ),
         shells=True,  # ADR 0027, tests/integration/test_shells.py
+        cyclic=frozenset({"solid_mechanics"}),  # ADR 0081 step 3: LIAISON_DDL per pair
         # ADR 0037 (heat flux) and 0041 (structural loads in dynamics), benchmarked
         amplitude_features=frozenset({"heat_flux", "force", "pressure"}),
         axes_features=frozenset(
@@ -78,6 +89,7 @@ class CodeAsterAdapter(SolverAdapter):
                 "rotation:cartesian",
                 "rotation:cylindrical",
                 "displacement:cartesian",
+                "displacement:cartesian:partial",  # LIAISON_OBLIQUE (ADR 0081)
                 "displacement:cylindrical",
                 "force:cartesian",
             }
@@ -158,9 +170,12 @@ class CodeAsterAdapter(SolverAdapter):
         """Code_Aster's own settings (ADR 0023); the shared ones are on each step."""
         from puzzle.adapters.code_aster.comm import (
             ACCELERATIONS,
+            LINE_SEARCHES,
+            MATRICES,
             MEMORY,
             METHODS,
             ORDERINGS,
+            PREDICTIONS,
             REFINEMENTS,
         )
         from puzzle.adapters.settings import SolverSetting
@@ -207,6 +222,54 @@ class CodeAsterAdapter(SolverAdapter):
                 unit="iterations", power=True,
                 description="How often a nonlinear solve rebuilds its tangent matrix: 1 every "
                 "iteration (robust), more to save time when it converges easily.",
+            ),
+            # Convergence of nonlinear solves (STAT_NON_LINE, DYNA_NON_LINE).
+            SolverSetting(
+                "line_search", "Line search", "RECH_LINEAIRE/METHODE", "choice", "none",
+                LINE_SEARCHES,
+                description="Scales each Newton correction to lower the residual: helps "
+                "contact, plasticity and large deflection that overshoot or oscillate.",
+            ),
+            SolverSetting(
+                "line_search_iterations", "Line search iterations",
+                "RECH_LINEAIRE/ITER_LINE_MAXI", "integer", 3, power=True,
+                description="Trials per line search; more for a residual that is hard to "
+                "lower.",
+            ),
+            SolverSetting(
+                "prediction", "Prediction", "NEWTON/PREDICTION", "choice", "default",
+                PREDICTIONS,
+                description="How each increment's first guess is made; elastic is the most "
+                "robust start for plasticity and contact.",
+            ),
+            SolverSetting(
+                "matrix", "Newton matrix", "NEWTON/MATRICE", "choice", "default", MATRICES,
+                description="Tangent converges in few iterations; elastic is cheaper per "
+                "iteration and steadier when the tangent misleads (softening).",
+            ),
+            SolverSetting(
+                "reac_incr", "Tangent matrix at increments", "NEWTON/REAC_INCR", "integer", 1,
+                unit="increments", power=True,
+                description="At an increment's start the matrix is rebuilt every n-th "
+                "increment.",
+            ),
+            SolverSetting(
+                "cutback_parts", "Cut-back into", "ECHEC/SUBD_PAS", "integer", 4,
+                unit="parts",
+                description="A failed increment is cut into this many smaller ones.",
+            ),
+            SolverSetting(
+                "cutback_levels", "Cut-backs per increment", "ECHEC/SUBD_NIVEAU", "integer",
+                5,
+                description="How many times an increment may be cut in turn before the "
+                "solve stops (5 cuts in 4 = 1/1024 of an increment).",
+            ),
+            SolverSetting(
+                "absolute_tolerance", "Absolute residual", "CONVERGENCE/RESI_GLOB_MAXI",
+                "number", None, unit="N", power=True,
+                description="Converged when the largest residual force is below this, in "
+                "place of the relative tolerance: for loads that are all imposed "
+                "displacements, or an interface that opens everywhere.",
             ),
         ]  # fmt: skip
 

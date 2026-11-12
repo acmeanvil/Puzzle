@@ -28,6 +28,7 @@ from puzzle.adapters.base import (
     REMOTE_FEATURES,
     STRUCTURAL_FEATURES,
     SUPPORT_FEATURES,
+    SYMMETRY_FEATURES,
     THERMAL_FEATURES,
     VECTOR_FIELD_FEATURES,
     VECTOR_LOAD_FEATURES,
@@ -55,6 +56,7 @@ class FenicsxAdapter(SolverAdapter):
             "solid_mechanics": frozenset({"stationary", "modal", "transient", "frequency_domain"}),
         },
         features=ELECTROMAGNETIC_FEATURES
+        | SYMMETRY_FEATURES  # ADR 0081
         | THERMAL_FEATURES
         | HEAT_SOURCE_FEATURES  # ADR 0047
         | STRUCTURAL_FEATURES

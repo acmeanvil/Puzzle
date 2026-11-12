@@ -189,6 +189,11 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         add("New mesh recipe", lambda: new_mesh(window))
         add("New component…", lambda: new_component(window))
         add("New study…", lambda: new_study(window))
+        from puzzle.gui.field_wizard import import_field
+
+        # Sections show once they hold something, so their own menus can't make the first.
+        add("Import field…", lambda: import_field(window))
+        _operator_menu(window, menu)
     elif node.kind == "folder":  # a default folder: what goes in it (gui.tree)
         _folder_menu(window, add, menu, obj, node)
     elif isinstance(obj, Component) and node.kind == "object":

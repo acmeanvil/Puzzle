@@ -469,6 +469,13 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     if threaded or bolt_threads:
         threads = thread_springs.register(points, thread_sets, mesh.planar)
         thread_springs.register_bolts(points, bolt_threads, threads)
+    cyclic_rows = []
+    if comp.repeats() and not thermal:  # ADR 0081 steps 3 and 4: a group per node
+        from puzzle.cyclic import rows as cyclic_rows_of
+
+        cyclic_rows = cyclic_rows_of(comp, mesh, {"solid_mechanics"}, mesh.planar)
+        for node in sorted({n for row in cyclic_rows for n, _d, _c in row}):
+            points.add(f"Y{node}", node)
     # ADR 0044: a pressure from an imported field, as consistent nodal forces at the
     # face's nodes (Code_Aster's PRES_REP takes one value per group).
     given = {i.source: i.field for i in inputs if i.role == "feature"}
@@ -622,6 +629,16 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
                 + ",)))"
             ]
             if field_forces or field_imposed or spectral
+            else []
+        ),
+        # Cyclic symmetry's relations name single nodes too (ADR 0081 step 3).
+        *(
+            [
+                "mesh = DEFI_GROUP(reuse=mesh, MAILLAGE=mesh, CREA_GROUP_NO=_F(GROUP_MA=("
+                + ", ".join(f"'{g}'" for g in points.names if g[0] == "Y")
+                + ",)))"
+            ]
+            if cyclic_rows
             else []
         ),
         # Pretension relations name single nodes: their point groups as node groups.
@@ -780,6 +797,12 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             extra["DDL_IMPO"] = extra.get("DDL_IMPO", []) + field_imposed
         for key, items in _fastener_loads(fastener_ends, fasteners, names).items():
             extra[key] = extra.get(key, []) + items  # both write LIAISON_DDL
+        for row in cyclic_rows:  # each target node follows its source node, turned
+            extra.setdefault("LIAISON_DDL", []).append(
+                f"_F(GROUP_NO=({', '.join(repr(f'Y{n}') for n, _d, _c in row)},), "
+                f"DDL=({', '.join(repr('D' + 'XYZ'[d - 1]) for _n, d, _c in row)},), "
+                f"COEF_MULT=({', '.join(f'{c:.13g}' for *_x, c in row)},), COEF_IMPO=0.0)"
+            )
         # In a transient step, loads following an amplitude get their own charge,
         # multiplied by it (ADR 0041); the rest act from t = 0 at full value.
         timed = [f for f in features if f.amplitude] if step.type == "transient" else []
@@ -800,6 +823,9 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             if lock:
                 out.append(f"plock = AFFE_CHAR_MECA(MODELE=model, DDL_IMPO=({', '.join(lock)},))")
             features = lasting
+        oblique = _oblique(project, features, names, mesh)
+        if oblique:  # components held in local Cartesian axes (symmetry planes, ADR 0081)
+            extra["LIAISON_OBLIQUE"] = extra.get("LIAISON_OBLIQUE", []) + oblique
         plain = _loads(features, names, mesh, thermal, ties, extra, comp)
         if plain.endswith("(MODELE=model)"):  # everything is in loadf: no empty charge
             charges = []
@@ -996,12 +1022,10 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             "ramp = DEFI_FONCTION(NOM_PARA='INST', VALE=(0.0, 0.0, 1.0, 1.0)"
             + (", PROL_DROITE='CONSTANT')" if chain else ")"),
             *functions,
-            # A failed increment is cut in four, up to five times (1/1024 of a step),
-            # rather than ending the run.
             "times = DEFI_LIST_INST(DEFI_LIST=_F(LIST_INST=DEFI_LIST_REEL(DEBUT=0.0, "
             f"INTERVALLE=_F(JUSQU_A={float(n):.1f}, NOMBRE={increments * n}))), "
-            "ECHEC=_F(EVENEMENT='ERREUR', ACTION='DECOUPE', SUBD_METHODE='MANUEL', "
-            "SUBD_PAS=4, SUBD_NIVEAU=5))",
+            + _failure(step)
+            + ")",
             *[call(k) for k in range(1, n + 1)],
             "res = CALC_CHAMP(reuse=res, RESULTAT=res, CONTRAINTE=('SIGM_NOEU',"
             + (" 'EFGE_NOEU'," if bolt_beams else "")
@@ -1614,9 +1638,38 @@ REFINEMENTS = (
     ("Code_Aster's choice", "AUTO"),
     ("Off", "SANS"),
 )
+LINE_SEARCHES = (
+    ("None (Code_Aster's default)", "none"),
+    ("Secant (CORDE)", "CORDE"),
+    ("Mixed: bracketing, then secant (MIXTE)", "MIXTE"),
+)
+PREDICTIONS = (
+    ("Code_Aster's choice (tangent)", "default"),
+    ("Tangent", "TANGENTE"),
+    ("Elastic", "ELASTIQUE"),
+    ("Extrapolated from the last increment", "EXTRAPOLE"),
+)
+MATRICES = (
+    ("Code_Aster's choice (tangent)", "default"),
+    ("Tangent", "TANGENTE"),
+    ("Elastic", "ELASTIQUE"),
+)
 MUMPS_ONLY = {"acceleration": "ACCELERATION", "low_rank_threshold": "LOW_RANK_SEUIL",
               "ordering": "RENUM", "factor_memory": "GESTION_MEMOIRE",
               "refinement": "POSTTRAITEMENTS"}  # fmt: skip
+
+
+def _failure(step) -> str:
+    """DEFI_LIST_INST's ECHEC: a failed increment is cut in four, up to five times (1/1024
+    of an increment), rather than ending the run; the step's shared settings (ADR 0023)
+    stop it at the smallest increment, or never cut (fixed increments)."""
+    if step.settings.get("fixed_increments"):
+        return "ECHEC=_F(EVENEMENT='ERREUR', ACTION='ARRET')"
+    smallest = step.settings.get("min_increment")
+    return ("ECHEC=_F(EVENEMENT='ERREUR', ACTION='DECOUPE', SUBD_METHODE='MANUEL', "
+            "SUBD_PAS=4, SUBD_NIVEAU=5"
+            + (f", SUBD_PAS_MINI={float(smallest):.6g}" if smallest is not None else "")
+            + ")")  # fmt: skip
 
 
 def with_settings(comm: str, study, step, pivots: bool = True) -> str:
@@ -1669,6 +1722,28 @@ def with_settings(comm: str, study, step, pivots: bool = True) -> str:
         place(STEPPING, "ARCHIVAGE.PAS_ARCH", str(int(given["output_every"])))
     if "reac_iter" in own:
         place(NONLINEAR[:2], "NEWTON.REAC_ITER", str(int(own["reac_iter"])))
+    if "reac_incr" in own:
+        place(NONLINEAR[:2], "NEWTON.REAC_INCR", str(int(own["reac_incr"])))
+    for key, path in (("prediction", "NEWTON.PREDICTION"), ("matrix", "NEWTON.MATRICE")):
+        if own.get(key, "default") != "default":
+            place(NONLINEAR[:2], path, f"'{own[key]}'")
+    if own.get("line_search", "none") != "none":
+        place(NONLINEAR[:2], "RECH_LINEAIRE.METHODE", f"'{own['line_search']}'")
+        if "line_search_iterations" in own:
+            place(NONLINEAR[:2], "RECH_LINEAIRE.ITER_LINE_MAXI",
+                  str(int(own["line_search_iterations"])))  # fmt: skip
+    elif "line_search_iterations" in own:
+        raise InputError("Code_Aster: line search iterations need a line search",
+                         code="invalid")  # fmt: skip
+    if "absolute_tolerance" in own:
+        place(NONLINEAR, "CONVERGENCE.RESI_GLOB_MAXI", f"{float(own['absolute_tolerance']):.6g}")
+    cut = [k for k in ("cutback_parts", "cutback_levels") if k in own]
+    if cut and given.get("fixed_increments"):
+        raise InputError("Code_Aster: fixed increments are never cut back, so cut-back "
+                         "settings don't apply", code="invalid")  # fmt: skip
+    for key, word in (("cutback_parts", "SUBD_PAS"), ("cutback_levels", "SUBD_NIVEAU")):
+        if key in cut:
+            place(("DEFI_LIST_INST",), f"ECHEC.{word}", str(int(own[key])))
     overrides.update(study.expert_settings.get("code_aster", {}))
     return apply(comm, overrides) if overrides else comm
 
@@ -2224,6 +2299,29 @@ def _cross_formulas(name: str, base, axis, origin) -> tuple[list[str], list[str]
     return lines, [f"{name}{i}" for i in range(3)]
 
 
+def _cylindrical(project, f) -> bool:
+    axes = local_axes(project, f) if f.axes is not None else None
+    return axes is not None and axes.type != "cartesian"
+
+
+def _oblique(project, features, names, mesh) -> list[str]:
+    """LIAISON_OBLIQUE items: displacements prescribing some components in a Cartesian
+    system (what `common.globalize` leaves: a symmetry plane across no global axis, ADR
+    0081), held in that system's frame given by its nautical angles."""
+    out = []
+    for f in features:
+        if f.type != "displacement" or f.axes is None or _cylindrical(project, f):
+            continue
+        r = local_axes(project, f).rotation()
+        alpha, beta, gamma = _nautical(r)
+        held = [a for a in ("xy" if mesh.planar else "xyz") if a in f.values]
+        dofs = ", ".join(f"D{a.upper()}={f.values[a].to_si():.12g}" for a in held)
+        angles = (f"{alpha:.12g}," if mesh.planar
+                  else f"{alpha:.12g}, {beta:.12g}, {gamma:.12g}")  # fmt: skip
+        out.append(f"_F(GROUP_MA='{names[f.selection]}', ANGL_NAUT=({angles}), {dofs})")
+    return out
+
+
 def _remote_loads(features, names, mesh, project=None) -> list[str]:
     """`loadf`: remote forces as their RBE3-equivalent traction (FORCE_FACE of x, y, z)
     and remote displacements as a rigid motion (DDL_IMPO of x, y, z), ADR 0037."""
@@ -2235,7 +2333,7 @@ def _remote_loads(features, names, mesh, project=None) -> list[str]:
             more, (fx, fy, fz) = _cross_formulas(f"rt{k}_", load.uniform, load.twist, load.centroid)
             lines += more
             faces.append(f"_F(GROUP_MA='{g}', FX={fx}, FY={fy}, FZ={fz})")
-        elif f.type == "displacement" and f.axes is not None:  # cylindrical, all three
+        elif f.type == "displacement" and _cylindrical(project, f):  # all three
             axes = local_axes(project, f)
             local = [f.values[a].to_si() for a in "xyz"]
             exprs = cylindrical_expressions(axes, local, ("X", "Y", "Z"))
@@ -2600,7 +2698,7 @@ def _loads(
         v = {k: q.to_si() for k, q in f.values.items()}
         if f.type == "fixed" and mesh.planar:  # a 2D model's nodes move in its plane
             imposed.append(f"_F(GROUP_MA='{g}', DX=0.0, DY=0.0)")
-        elif f.type == "displacement" and mesh.planar:
+        elif f.type == "displacement" and mesh.planar and f.axes is None:
             dofs = ", ".join(f"D{a.upper()}={v[a]:.12g}" for a in "xy" if a in v)
             if dofs:
                 imposed.append(f"_F(GROUP_MA='{g}', {dofs})")
@@ -2683,6 +2781,7 @@ def _loads(
         + kw("DDL_IMPO", imposed + extra.get("DDL_IMPO", []))
         + kw("FORCE_NODALE", nodal + extra.get("FORCE_NODALE", []))
         + kw("LIAISON_DDL", extra.get("LIAISON_DDL", []))
+        + kw("LIAISON_OBLIQUE", extra.get("LIAISON_OBLIQUE", []))
         + kw("FORCE_FACE", face_force)
         + kw("FORCE_CONTOUR", contour)
         + kw("PRES_REP", pressure)

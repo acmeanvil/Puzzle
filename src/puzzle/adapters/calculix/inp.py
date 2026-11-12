@@ -61,6 +61,7 @@ from puzzle.adapters.common import (
     time_scheme,
     traction_forces,
 )
+from puzzle.adapters.settings import STEPPING
 from puzzle.mesh.mesh import Mesh
 from puzzle.model.schema import Component, Feature, Material, Project, SolveStep, Study
 
@@ -279,6 +280,8 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
     )
     out += _amplitudes(project, comp)
     out += _transforms(project, comp, mesh)
+    out += _plane_equations(project, comp, mesh)
+    out += _cyclic_equations(comp, mesh, {p.type for p in comp.physics})
     rigid = _rigid_nodes(comp, mesh)
     out += _rigid_bodies(rigid)
     pretension = _pretension_nodes(comp, mesh)
@@ -398,6 +401,10 @@ SOLVERS = (
 PROCEDURES = ("*STATIC", "*FREQUENCY", "*BUCKLE", "*DYNAMIC", "*HEAT TRANSFER")
 # *CONTROLS, PARAMETERS=TIME INCREMENTATION: I_0, I_R, I_P, I_C (iterations allowed), ...
 INCREMENTATION = [4, 8, 9, 16, 10, 4, 0, 5, 0, 0]
+# Its second line: D_f (cut-back factor), D_C, D_B, D_A, D_S, D_H, D_D (growth), W_G.
+INCREMENT_FACTORS = [0.25, 0.5, 0.75, 0.85, 0.0, 0.0, 1.5, 0.0]
+TIME_CONTROLS = ("cutbacks", "cutback_factor", "increase_factor", "reduce_after",
+                 "divergence_check_after")  # fmt: skip
 
 
 def with_settings(lines: list[str], study: Study, step: SolveStep, index: int) -> list[str]:
@@ -421,10 +428,20 @@ def with_settings(lines: list[str], study: Study, step: SolveStep, index: int) -
         tol = float(given["tolerance"])
         out = _without_card(out, "*CONTROLS, PARAMETERS=FIELD")
         cards += ["*CONTROLS, PARAMETERS=FIELD", f"{tol:.6g}, {tol:.6g}"]
-    if "max_iterations" in given:
+    set_here = study.solver_settings.get("calculix", {})
+    if "max_iterations" in given or any(k in set_here for k in TIME_CONTROLS):
         values = list(INCREMENTATION)
-        values[3] = int(given["max_iterations"])
+        if "max_iterations" in given:
+            values[3] = int(given["max_iterations"])
+        for key, at_ in (("divergence_check_after", 0), ("reduce_after", 4), ("cutbacks", 7)):
+            if key in set_here:
+                values[at_] = int(own[key])
         cards += ["*CONTROLS, PARAMETERS=TIME INCREMENTATION", ", ".join(map(str, values))]
+        if "cutback_factor" in set_here or "increase_factor" in set_here:
+            factors = list(INCREMENT_FACTORS)
+            factors[0] = float(own["cutback_factor"])
+            factors[6] = float(own["increase_factor"])
+            cards.append(", ".join(f"{v:g}" for v in factors))
     expert = study.expert_settings.get("calculix", {})
     for key in ("after_procedure", f"after_procedure:{index}"):
         if key in expert:
@@ -836,6 +853,7 @@ def _step(
                         and "solid_mechanics" in solved)  # fmt: skip
     increments = int(step.settings.get("increments", 10 if ramped else 1))
     first = float(step.settings.get("initial_increment", 1 / increments))  # fraction of load
+    smallest = float(step.settings.get("min_increment", 1e-4 / increments))
     op = ", OP=NEW" if number > 1 else ""
     settings = step.settings
 
@@ -848,12 +866,14 @@ def _step(
     if solved == {"solid_mechanics"}:
         procedure = {
             # Contact is nonlinear: start with a tenth of the load, then let CalculiX step.
+            # Load stepping set on the step (ADR 0023: increments, first, smallest,
+            # fixed) writes the data line even for a linear step.
             "stationary": (
                 [
-                    "*STATIC",
-                    f"{first:.6g}, 1.0, {1e-4 / increments:.3g}, {1 / increments:.6g}",
+                    "*STATIC, DIRECT" if settings.get("fixed_increments") else "*STATIC",
+                    f"{first:.6g}, 1.0, {smallest:.3g}, {1 / increments:.6g}",
                 ]
-                if contact or nlgeom
+                if contact or nlgeom or any(k in settings for k in STEPPING)
                 else ["*STATIC"]
             ),
             "modal": ["*FREQUENCY", str(int(settings.get("modes", 10)))],
@@ -1859,7 +1879,7 @@ def _transforms(project: Project, comp: Component, mesh: Mesh) -> list[str]:
     other load: CalculiX would read that load in the local axes too."""
     from puzzle.adapters.common import local_axes
 
-    features = [f for ph in comp.physics for f in ph.features]
+    features = [f for ph in comp.physics for f in ph.features if not _by_equations(f)]
     local = [f for f in globalize(project, features) if f.axes is not None]
     out, transformed = [], set()
     for f in local:
@@ -1891,6 +1911,110 @@ def _transforms(project: Project, comp: Component, mesh: Mesh) -> list[str]:
                 "axes; CalculiX would read it in those axes",
                 code="unsupported",
             )
+    return out
+
+
+def _by_equations(f) -> bool:
+    """A symmetry plane across no axis (ADR 0081), written as n · u = 0 equations."""
+    return bool(f.extensions.get("calculix", {}).get("equations"))
+
+
+def _plane_equations(project: Project, comp: Component, mesh: Mesh) -> list[str]:
+    """*EQUATION for symmetry planes across no global axis (ADR 0081): at each node every
+    plane's held directions together, the components held by plain supports dropped
+    (they are zero), reduced so each dependent dof is in one equation only (CalculiX's
+    rule). Unlike *TRANSFORM, this combines with other supports and planes at shared
+    edges and corners."""
+    from puzzle.adapters.common import local_axes
+
+    features = [f for ph in comp.physics for f in ph.features]
+    planes = [f for f in features if f.type == "displacement" and _by_equations(f)]
+    if not planes:
+        return []
+    dofs = 2 if mesh.planar else 3
+    held: dict[int, set[int]] = {}  # node -> dofs held at zero by plain supports
+    for f in features:
+        if f in planes or f.type not in ("fixed", "displacement") or f.selection not in mesh.groups:
+            continue
+        nodes = mesh.groups[f.selection].node_ids.tolist()
+        if f.steps or f.axes is not None or f.fields:
+            if any(set(nodes) & set(mesh.groups[p.selection].node_ids.tolist()) for p in planes):
+                raise InputError(
+                    f"'{f.selection}' shares nodes with a symmetry plane across no axis, and "
+                    "holds them in some steps or in local axes only; CalculiX can't combine "
+                    "those yet",
+                    code="unsupported",
+                )
+            continue
+        values = {a: f.values[a].to_si() for a in "xyz" if a in f.values}
+        comps = range(dofs) if f.type == "fixed" else ["xyz".index(a) for a in values]
+        if any(abs(v) > 0 for v in values.values()) and any(
+            set(nodes) & set(mesh.groups[p.selection].node_ids.tolist()) for p in planes
+        ):
+            raise InputError(f"'{f.selection}' prescribes a nonzero displacement on nodes of a "
+                             "symmetry plane", code="unsupported")  # fmt: skip
+        for n in nodes:
+            held.setdefault(n, set()).update(comps)
+    rows: dict[int, list[np.ndarray]] = {}
+    for f in planes:
+        if f.steps:
+            raise InputError("a symmetry plane across no axis applies in every step on "
+                             "CalculiX", code="unsupported")  # fmt: skip
+        r = local_axes(project, f).rotation()
+        directions = [r[:dofs, "xyz".index(a)] for a in f.values]
+        for n in mesh.groups[f.selection].node_ids.tolist():
+            rows.setdefault(n, []).extend(directions)
+    out = []
+    for n in sorted(rows):
+        free = [d for d in range(dofs) if d not in held.get(n, set())]
+        a = np.array([[row[d] for d in free] for row in rows[n]])
+        for terms in _reduced(a, free):
+            out += ["*EQUATION", str(len(terms))]
+            out.append(", ".join(f"{n}, {d + 1}, {c:.13g}" for d, c in terms))
+    return out
+
+
+def _cyclic_equations(comp: Component, mesh: Mesh, physics_types) -> list[str]:
+    """*EQUATION for a cyclic sector (ADR 0081 step 3): each target node follows its
+    source node, turned (`puzzle.cyclic.rows`)."""
+    if not comp.repeats():
+        return []
+    from puzzle.cyclic import rows
+
+    out = []
+    for terms in rows(comp, mesh, set(physics_types), mesh.planar):
+        out += ["*EQUATION", str(len(terms))]
+        out += [", ".join(f"{n}, {d}, {c:.13g}" for n, d, c in terms[i : i + 4])
+                for i in range(0, len(terms), 4)]  # fmt: skip
+    return out
+
+
+def _reduced(a: np.ndarray, columns: list[int], tol: float = 1e-9) -> list[list[tuple]]:
+    """Rows of a (constraints a · u = 0 over `columns`) in reduced row echelon form, each
+    as [(dof, coefficient), ...] with its pivot first: each pivot is in no other row."""
+    a = np.array(a, float)
+    if a.size == 0:
+        return []
+    m, k = a.shape
+    pivots, r = [], 0
+    for c in range(k):
+        if r == m:
+            break
+        p = r + int(np.argmax(np.abs(a[r:, c])))
+        if abs(a[p, c]) < tol:
+            continue
+        a[[r, p]] = a[[p, r]]
+        a[r] /= a[r, c]
+        for i in range(m):
+            if i != r:
+                a[i] -= a[i, c] * a[r]
+        pivots.append(c)
+        r += 1
+    out = []
+    for i, c in enumerate(pivots):
+        terms = [(columns[c], 1.0)] + [(columns[j], float(a[i, j])) for j in range(k)
+                                       if j != c and abs(a[i, j]) > tol]  # fmt: skip
+        out.append(terms)
     return out
 
 
@@ -1974,6 +2098,8 @@ def _feature_rows(f: Feature, mesh: Mesh, faces: FaceLookup, rigid=None) -> dict
         dofs = (0, 1) if mesh.planar else range(3)  # z is out of a 2D model's plane
         for node, force in sorted(forces.items()):
             cload += [f"{node}, {d + 1}, {force[d]:.10g}" for d in dofs if force[d]]
+    elif f.type == "displacement" and _by_equations(f):
+        pass  # written once, as *EQUATION before the steps (_plane_equations)
     elif f.type == "displacement":
         boundary += [
             f"{nset}, {d}, {d}, {v[axis]:.10g}"

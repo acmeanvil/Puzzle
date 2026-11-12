@@ -309,6 +309,7 @@ def write_case(
     amplitudes = {
         f.amplitude: project.get(f.amplitude, Amplitude).points for f in features if f.amplitude
     }
+    _oblique_planes_apart(features, mesh)
     for name in boundary_names:
         out += _boundary(
             emesh.boundaries[name],
@@ -543,6 +544,26 @@ def _solvers(step, solved: set[str], coils: list[Feature], dofs: int = 3) -> lis
     ]
 
 
+def _oblique_planes_apart(features, mesh) -> None:
+    """Elmer averages its normals at nodes two Normal-Tangential boundaries share, so two
+    symmetry planes across no axis meeting at an edge are each held along neither (0.07 %
+    off on a turned bar): refused until written another way (ADR 0081)."""
+    planes = [f for f in features
+              if f.extensions.get("elmer", {}).get("normal_tangential")]  # fmt: skip
+    for i, a in enumerate(planes):
+        for b in planes[i + 1 :]:
+            if set(mesh.groups[a.selection].node_ids.tolist()) & set(
+                mesh.groups[b.selection].node_ids.tolist()
+            ):
+                raise InputError(
+                    f"symmetry planes '{a.selection}' and '{b.selection}' are both across no "
+                    "global axis and meet at an edge, where Elmer averages their normals; "
+                    "turn the model so one is across x, y or z, or run it on CalculiX or "
+                    "Code_Aster",
+                    code="unsupported",
+                )
+
+
 def _boundary(
     index: int,
     name: str,
@@ -567,6 +588,12 @@ def _boundary(
             continue
         if f.type == "fixed":
             out += [f"  Displacement {d} = 0" for d in dims]
+        elif f.type == "displacement" and f.extensions.get("elmer", {}).get("normal_tangential"):
+            # A symmetry plane across no axis (ADR 0081): x along the face's normal, as
+            # Elmer's own normal; y and z its tangents (held together, at zero).
+            out.append("  Normal-Tangential Displacement = Logical True")
+            out += [f"  Displacement {d} = {v[a]:.10g}"
+                    for d, a in ((1, "x"), (2, "y"), (3, "z")) if a in v and d in dims]  # fmt: skip
         elif f.type == "displacement" and f.axes is not None:  # cylindrical, all three
             exprs = cylindrical_expressions(
                 axes_of[f.selection], [v[a] for a in "xyz"], ("tx(0)", "tx(1)", "tx(2)")
@@ -836,6 +863,17 @@ def with_settings(sif: str, study: Study, step) -> str:
         overrides["Solver */Nonlinear System Max Iterations"] = str(int(given["max_iterations"]))
     if "output_every" in given:
         overrides["Simulation/Output Intervals(1)"] = str(int(given["output_every"]))
+    set_here = study.solver_settings.get("elmer", {})
+    for key, word in (
+        ("relaxation", "Nonlinear System Relaxation Factor"),
+        ("newton_after_iterations", "Nonlinear System Newton After Iterations"),
+        ("newton_after_tolerance", "Nonlinear System Newton After Tolerance"),
+    ):
+        if key in set_here:
+            value = own[key]
+            overrides[f"Solver */{word}"] = (
+                str(int(value)) if key == "newton_after_iterations" else f"{float(value):.6g}"
+            )
     expert = study.expert_settings.get("elmer", {})
     sif = apply(sif, overrides, skip=_magnetic) if overrides else sif
     return apply(sif, expert) if expert else sif
@@ -867,7 +905,11 @@ def _refuse_in_2d(comp: Component) -> None:
     for ph in comp.physics:
         for f in ph.features:
             if f.type in ("remote_force", "remote_force_rigid", "remote_displacement") or (
-                f.type in ("bolt_pretension", "bolt_adjustment") or f.axes is not None
+                f.type in ("bolt_pretension", "bolt_adjustment")
+                or (
+                    f.axes is not None
+                    and not f.extensions.get("elmer", {}).get("normal_tangential")
+                )
             ):
                 raise InputError(f"{f.type} is not written in 2D models yet", code="unsupported")
             if f.type in ("body_force", "traction", "displacement") and f.fields:

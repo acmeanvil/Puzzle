@@ -144,7 +144,7 @@ def test_agents_read_the_settings(tmp_path):
     result = asyncio.run(build_server(root, "test").call_tool("solver_settings", {"study": "S"}))
     data = result.structured_content
     assert [r["key"] for r in data["shared"]][:2] == ["linear_solver", "tolerance"]
-    (solver,) = data["solvers"]["calculix"]["settings"]
+    solver = data["solvers"]["calculix"]["settings"][0]
     assert solver["native"] == "SOLVER=" and solver["current"] == "SPOOLES"
     assert "after_procedure" in data["solvers"]["calculix"]["expert_help"]
 
@@ -226,3 +226,115 @@ def test_code_aster_low_rank_runs_on_one_thread():
     assert not comm._low_rank("SOLVEUR=_F(ACCELERATION='FR+')")
     assert "P ncpus 1" in comm.resources(low_rank=True)
     assert "P ncpus 2" in comm.resources()
+
+
+def test_load_stepping_and_cutbacks_reach_the_calculix_deck(tmp_path):
+    """Convergence controls (ADR 0023): the step's load stepping on *STATIC's data line,
+    even for a linear step, and CalculiX's cut-backs in TIME INCREMENTATION."""
+    pytest.importorskip("OCP")
+    from puzzle.adapters.calculix.inp import write_inp
+    from puzzle.mesh import generate_mesh
+
+    project, study = _project(tmp_path)
+    mesh = generate_mesh(project, study.component, tmp_path, tmp_path / "m").mesh
+    assert "TIME INCREMENTATION" not in write_inp(project, study, mesh)
+    study.steps[0].settings.update({"increments": 20, "initial_increment": 0.02,
+                                    "min_increment": 1e-6, "fixed_increments": True})  # fmt: skip
+    study.solver_settings = {"calculix": {"cutbacks": 8, "cutback_factor": 0.5,
+                                          "divergence_check_after": 6}}  # fmt: skip
+    deck = write_inp(project, study, mesh)
+    assert "*STATIC, DIRECT\n0.02, 1.0, 1e-06, 0.05\n" in deck
+    assert "6, 8, 9, 16, 10, 4, 0, 8, 0, 0\n0.5, 0.5, 0.75, 0.85, 0, 0, 1.5, 0" in deck
+
+
+def _nonlinear_comm():
+    return (
+        "times = DEFI_LIST_INST(DEFI_LIST=_F(LIST_INST=DEFI_LIST_REEL(DEBUT=0.0, "
+        "INTERVALLE=_F(JUSQU_A=1.0, NOMBRE=1))), ECHEC=_F(EVENEMENT='ERREUR', "
+        "ACTION='DECOUPE', SUBD_METHODE='MANUEL', SUBD_PAS=4, SUBD_NIVEAU=5))\n"
+        "res = STAT_NON_LINE(MODELE=model, NEWTON=_F(REAC_ITER=1), "
+        "CONVERGENCE=_F(ITER_GLOB_MAXI=200), INCREMENT=_F(LIST_INST=times))\n"
+    )
+
+
+def test_convergence_settings_reach_the_code_aster_command_file():
+    from puzzle.adapters.code_aster.comm import _failure, with_settings
+    from puzzle.model.schema import SolveStep, Study
+
+    study = Study(name="S", component="00000000-0000-0000-0000-000000000000",
+                  solver="code_aster", steps=[SolveStep(type="stationary")])  # fmt: skip
+    step = study.steps[0]
+    assert "RECH_LINEAIRE" not in with_settings(_nonlinear_comm(), study, step)  # as before
+    study.solver_settings = {"code_aster": {
+        "line_search": "MIXTE", "line_search_iterations": 5, "prediction": "ELASTIQUE",
+        "matrix": "TANGENTE", "cutback_parts": 10, "cutback_levels": 3,
+        "absolute_tolerance": 1e-4}}  # fmt: skip
+    out = with_settings(_nonlinear_comm(), study, step)
+    assert "RECH_LINEAIRE=_F(METHODE='MIXTE', ITER_LINE_MAXI=5)" in out
+    assert "PREDICTION='ELASTIQUE'" in out and "MATRICE='TANGENTE'" in out
+    assert "SUBD_PAS=10, SUBD_NIVEAU=3" in out and "RESI_GLOB_MAXI=0.0001" in out
+    assert "SUBD_PAS_MINI" not in _failure(step)
+    step.settings["min_increment"] = 1e-5
+    assert "SUBD_PAS_MINI=1e-05" in _failure(step)
+    step.settings["fixed_increments"] = True
+    assert _failure(step) == "ECHEC=_F(EVENEMENT='ERREUR', ACTION='ARRET')"
+    with pytest.raises(PuzzleError, match="never cut back"):
+        with_settings(_nonlinear_comm(), study, step)
+    study.solver_settings = {"code_aster": {"line_search_iterations": 5}}
+    with pytest.raises(PuzzleError, match="need a line search"):
+        with_settings(_nonlinear_comm(), study, SolveStep(type="stationary"))
+
+
+def test_relaxation_and_newton_reach_the_elmer_input():
+    from puzzle.adapters.elmer.sif import with_settings
+    from puzzle.model.schema import SolveStep, Study
+
+    sif = "Simulation\n  Max Output Level = 3\nEnd\n\nSolver 1\n  Equation = Heat\nEnd\n"
+    study = Study(name="S", component="00000000-0000-0000-0000-000000000000", solver="elmer",
+                  steps=[SolveStep(type="stationary")],
+                  solver_settings={"elmer": {"relaxation": 0.7,
+                                             "newton_after_iterations": 3}})  # fmt: skip
+    out = with_settings(sif, study, study.steps[0])
+    assert "Nonlinear System Relaxation Factor = 0.7" in out
+    assert "Nonlinear System Newton After Iterations = 3" in out
+    study.solver_settings = {"elmer": {"relaxation": 1.5}}
+    with pytest.raises(PuzzleError, match="at most 1"):
+        with_settings(sif, study, study.steps[0])
+
+
+def test_load_stepping_is_refused_where_a_solver_does_not_take_it(tmp_path):
+    pytest.importorskip("OCP")
+    from puzzle.adapters.elmer import ElmerAdapter
+
+    project, study = _project(tmp_path)
+    study.solver = "elmer"
+    study.steps[0].settings["increments"] = 10
+    assert "elmer does not translate the setting increments" in ElmerAdapter().check(project, study)
+
+
+def test_agents_change_settings_in_one_edit(tmp_path):
+    pytest.importorskip("OCP")
+    import asyncio
+
+    from puzzle.agent.mcp import build_server
+    from puzzle.commands import Session
+    from puzzle.project import load_project, save_project
+
+    project, study = _project(tmp_path)
+    study.solver_settings = {"calculix": {"solver": "SPOOLES"}}
+    study.steps[0].settings["tolerance"] = 1e-8
+    root = tmp_path / "p"
+    save_project(project, root)
+    (root / "bar.step").write_bytes((tmp_path / "bar.step").read_bytes())
+    Session(root).submit({"command": "set_autonomy", "level": "act_in_budget"})
+    server = build_server(root, "test")
+    result = asyncio.run(server.call_tool("solver_settings_set", {
+        "study": "S", "shared": {"increments": 20, "tolerance": None},
+        "solvers": {"calculix": {"cutbacks": 8, "solver": None}}}))  # fmt: skip
+    assert not result.is_error, result.structured_content
+    saved = next(o for o in load_project(root).objects.values() if o.name == "S")
+    assert saved.steps[0].settings == {"increments": 20}
+    assert saved.solver_settings == {"calculix": {"cutbacks": 8}}
+    with pytest.raises(Exception, match="above zero"):  # refused, nothing changed
+        asyncio.run(server.call_tool("solver_settings_set", {
+            "study": "S", "solvers": {"calculix": {"cutbacks": -1}}}))  # fmt: skip

@@ -126,3 +126,35 @@ def test_cfd_settings_keep_poiseuille(tmp_path, solver):
     u = run.results.last("velocity").values[:, 0]
     print(f"{solver}: peak velocity {u.max() / channel.U:.4f} of the mean (Poiseuille 1.5)")
     assert u.max() / channel.U == pytest.approx(1.5, rel=0.01)
+
+
+CONVERGENCE = {
+    "calculix": ({"cutbacks": 8, "cutback_factor": 0.5, "increase_factor": 2.0},
+                 {"increments": 4, "initial_increment": 0.25, "min_increment": 1e-5}),
+    "code_aster": ({"line_search": "MIXTE", "prediction": "ELASTIQUE", "cutback_parts": 2,
+                    "cutback_levels": 3},
+                   {"increments": 3, "min_increment": 1e-3}),
+}  # fmt: skip
+
+
+@over("calculix", "code_aster")
+def test_convergence_settings_keep_the_answer(tmp_path, solver):
+    """Load stepping, cut-backs and line search (ADR 0023) change how a large-deflection
+    solve gets there, not where: the tip agrees with the defaults' to the tolerance, and
+    the controls reach the input."""
+    pytest.importorskip("OCP")
+    own, stepping = CONVERGENCE[solver]
+    nl = {"geometric_nonlinearity": True}
+    plain, _ = _tip(tmp_path / "plain", solver, {}, None, nl)
+    tip, work = _tip(tmp_path / "set", solver, own, None, nl | stepping)
+    print(f"{solver}: tip {plain:.8g} by default, {tip:.8g} with the controls")
+    assert tip == pytest.approx(plain, rel=1e-5)
+    fixed, _ = _tip(tmp_path / "fixed", solver, {}, None,
+                    nl | {"increments": 2, "fixed_increments": True})  # fmt: skip
+    assert fixed == pytest.approx(plain, rel=1e-5)
+    if solver == "calculix":
+        deck = next(work.rglob("*.inp")).read_text(encoding="utf-8")
+        assert "0.25, 1.0, 1e-05, 0.25" in deck and ", 8, 0, 0\n0.5," in deck
+    else:
+        comm = next(work.rglob("job.comm")).read_text(encoding="utf-8")
+        assert "RECH_LINEAIRE=_F(METHODE='MIXTE')" in comm and "SUBD_PAS=2" in comm

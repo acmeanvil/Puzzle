@@ -45,6 +45,13 @@ def _own(obj: ProjectObject, *, drop: frozenset[str] = frozenset()) -> dict:
         data.pop("remote", None)  # ADR 0021: the same result wherever it is computed
         if data.get("preload_step") == "auto":  # the default: older hashes kept
             data.pop("preload_step")
+        for key, default in (
+            ("weak_springs", "auto"),
+            ("weak_spring_factor", 1e-6),
+            ("weak_spring_limit", 1e-3),
+        ):  # ADR 0080: older hashes kept
+            if data.get(key) == default:
+                data.pop(key)
     if obj.kind == "result" and data.get("error_target") == 0.02:  # ADR 0066's default
         data.pop("error_target")
     for key in ("hidden", "hidden_bodies", "colour", "body_colours"):
@@ -87,6 +94,9 @@ def _own(obj: ProjectObject, *, drop: frozenset[str] = frozenset()) -> dict:
             data.pop("welds", None)
         for key in ("member_releases", "member_offsets"):  # ADR 0079: none, as before
             if not data.get(key):
+                data.pop(key, None)
+        for key in ("cyclic", "periodic"):  # ADR 0081: none, as before
+            if data.get(key) is None:
                 data.pop(key, None)
         for assignment in data.get("materials", []):  # ADR 0049: no axes, as before them
             if assignment.get("axes") is None:

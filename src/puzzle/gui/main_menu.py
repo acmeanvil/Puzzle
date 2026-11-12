@@ -480,6 +480,36 @@ def _model(window, menu: QMenu) -> None:
     physics.aboutToShow.connect(lambda: _fill_physics(window, physics))
     features.aboutToShow.connect(lambda: _fill_features(window, features))
 
+    from puzzle.gui.symmetry_dialog import (
+        add_plane,
+        clear_repeats,
+        set_cyclic,
+        set_model_type,
+        set_periodic,
+    )
+
+    symmetry = _sub(menu, "Symmetry")
+    _add(symmetry, "Symmetry plane…", _with_component(window, lambda c: add_plane(window, c)),
+         "Model half (or a quarter): the cut face is a mirror, nothing moves through it "
+         "(heat, fields and flow: nothing crosses it)")  # fmt: skip
+    _add(symmetry, "Antisymmetry plane…", _with_component(
+        window, lambda c: add_plane(window, c, "antisymmetry")),
+        "The mirrored half carries the opposite load: nothing moves along the cut")  # fmt: skip
+    _add(
+        symmetry,
+        "Cyclic symmetry…",
+        _with_component(window, lambda c: set_cyclic(window, c)),
+        "Model one sector of a disc, wheel or flange: its two cut faces joined, turned",
+    )
+    _add(symmetry, "Periodic symmetry…", _with_component(
+        window, lambda c: set_periodic(window, c)),
+        "Model one slice of something that repeats along a line: its cut faces joined")  # fmt: skip
+    _add(symmetry, "Remove cyclic or periodic symmetry", _with_component(
+        window, lambda c: clear_repeats(window, c)))  # fmt: skip
+    _add(symmetry, "Model type (3D, 2D planar, axisymmetric)…", _with_component(
+        window, lambda c: set_model_type(window, c)),
+        "Plane stress, plane strain or axisymmetric models of faces at z = 0")  # fmt: skip
+
     from puzzle.gui.contact_search import add_contact, find_contacts_dialog
 
     contacts = _sub(menu, "Contacts")

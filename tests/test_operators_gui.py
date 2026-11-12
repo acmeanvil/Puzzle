@@ -155,8 +155,9 @@ def test_a_wire_drawn_onto_an_operator_wires_it(window):
     check_id = operators.new_operator(w, "check")
     w.schematic.start_wire(w.schematic.items[f"runs:{_study(w).id}"], "result")
     w.schematic.end_wire(w.schematic.items[check_id].sceneBoundingRect().center())
-    assert not _op(w, "Check against limit 1").inputs  # a result fits no input of a check
-    assert "takes no result" in w.statusBar().currentMessage()
+    # A study's result now fits a check's value as a field (its extreme, ADR 0071): the
+    # maintainer couldn't wire studies into field ports (2026-11-11).
+    assert _op(w, "Check against limit 1").inputs["value"].port == "result"
 
 
 def test_plot_shows_in_the_plots_panel_and_export_writes(window):

@@ -1407,6 +1407,11 @@ class Viewport(QWidget):
         steps = [s for s in results.steps if field in s.fields]
         step = steps[step_index] if steps else pick_step(results, field)
         grid = to_grid(mesh, step)
+        from puzzle.post.expand import expand, shown_whole
+
+        whole = shown_whole(mesh)  # ADR 0081: the part modelled drawn as the whole
+        if whole:
+            grid = expand(grid, whole)
         unit = None
         if item is not None:  # a listed result (post.quantities), in the display units
             f = step.fields[field]
@@ -1473,6 +1478,7 @@ class Viewport(QWidget):
         self.shown = {
             "kind": "result",
             "revolved": revolved,
+            "copies": len(whole) if whole else 1,
             "field": field,
             "scalar": name,
             "step": label,

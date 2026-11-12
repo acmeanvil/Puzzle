@@ -91,3 +91,8 @@ offset. Benchmarked against Lamé on both solvers (pressure within 0.3 %).
 - Contacts on curved faces meshed differently start with small gaps or penetrations
   (a few % of an element): that is meshing, and counts as closed.
 - No contact types other than bonds are written by Elmer, FEniCSx or the CFD solvers.
+
+## Weak springs
+
+A body held only by sliding contact is held by weak springs while solving: read the
+`weak-springs` skill.

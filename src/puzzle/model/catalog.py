@@ -36,6 +36,10 @@ CATALOG: dict[str, list[FeatureSpec]] = {
     "solid_mechanics": [
         FeatureSpec("fixed", "Fixed support"),
         FeatureSpec("displacement", "Prescribed displacement", values=XYZ_DISP),
+        # ADR 0081: the model continues mirrored across a flat face (a straight edge in
+        # 2D): no motion through it; antisymmetry: no motion along it.
+        FeatureSpec("symmetry", "Symmetry plane"),
+        FeatureSpec("antisymmetry", "Antisymmetry plane"),
         FeatureSpec("force", "Force (total over the face)", values=XYZ_FORCE),
         FeatureSpec("pressure", "Pressure", values={"p": (0.0, "MPa")}),
         # Frames (ADR 0079): a load per length along line members (global x, y, z), and a
@@ -143,6 +147,7 @@ CATALOG: dict[str, list[FeatureSpec]] = {
     ],
     "heat_transfer": [
         FeatureSpec("temperature", "Temperature", values={"T": (20.0, "degC")}),
+        FeatureSpec("symmetry", "Symmetry plane (no heat across it)"),  # ADR 0081
         FeatureSpec("heat_flux", "Heat flux (into the body)", values={"q": (0.0, "W/m^2")}),
         FeatureSpec(
             "convection",
@@ -160,6 +165,7 @@ CATALOG: dict[str, list[FeatureSpec]] = {
     "electrostatics": [
         FeatureSpec("electric_potential", "Electric potential", values={"V": (0.0, "V")}),
         FeatureSpec("ground", "Ground"),
+        FeatureSpec("symmetry", "Symmetry plane (no field across it)"),  # ADR 0081
         FeatureSpec("surface_charge", "Surface charge", values={"rho_s": (0.0, "C/m^2")}),
     ],
     "magnetic_fields": [

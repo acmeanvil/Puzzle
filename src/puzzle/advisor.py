@@ -67,8 +67,8 @@ TEXT = {
 NEEDS = {
     "solid_mechanics": [
         ("a support", ("fixed", "displacement", "remote_displacement", "elastic_support",
-                       "compression_only_support"), "fixed", ("stationary", "transient",
-                                                              "frequency_domain", "buckling")),
+                       "compression_only_support", "symmetry", "antisymmetry"), "fixed",
+         ("stationary", "transient", "frequency_domain", "buckling")),
         ("a load", ("force", "pressure", "remote_force", "remote_force_rigid", "gravity",
                     "acceleration", "rotation", "bolt_pretension", "bolt_adjustment",
                     "displacement"), "force", ("stationary", "transient", "frequency_domain",

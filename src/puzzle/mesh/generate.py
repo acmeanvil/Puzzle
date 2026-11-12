@@ -261,6 +261,9 @@ def generate_mesh(
                 names=names,
                 seeds=np.unique(np.asarray(coords).reshape(-1, 3), axis=0),
             )
+        if recipe.mesher == "netgen" and comp.repeats():
+            raise MeshError("cyclic and periodic symmetry need matching meshes on their cut "
+                            "faces: mesh it with Gmsh")  # fmt: skip
         if recipe.mesher == "netgen":  # Netgen meshes; Gmsh raises the order after
             from puzzle.mesh.netgen_mesher import mesh_with_netgen
 
@@ -283,6 +286,7 @@ def generate_mesh(
                 factor = gmsh.option.getNumber("Mesh.MeshSizeFactor")
                 gmsh.option.setNumber("Mesh.MeshSizeFactor", 2 * factor)
                 gmsh.option.setNumber("Mesh.SubdivisionAlgorithm", 1)
+            _periodic(comp)
             gmsh.model.mesh.generate(2)
             if _all_quads(recipe, comp):
                 types, _, _ = gmsh.model.mesh.getElements(2)
@@ -297,6 +301,7 @@ def generate_mesh(
                 gmsh.model.mesh.setTransfiniteAutomatic()
                 gmsh.option.setNumber("Mesh.RecombineAll", 1)
                 gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 0)
+            _periodic(comp)
             gmsh.model.mesh.generate(3)
             if recipe.element_shape == "hexahedra":
                 types, _, _ = gmsh.model.mesh.getElements(3)
@@ -879,6 +884,37 @@ def set_gmsh_option(name: str, value) -> None:
             f"Gmsh has no {'text' if isinstance(value, str) else 'number'} option '{name}'",
             code="invalid",
         ) from exc
+
+
+def _periodic(comp: Component) -> None:
+    """ADR 0081: a cyclic sector's or periodic slice's target faces meshed as its source
+    faces turned about the axis or moved along the line (Gmsh's periodic meshing), so
+    every target node has a source node to follow. Each source face is paired with the
+    target face its centre lands on."""
+    for c in comp.repeats():
+        found = {name: _group_entities(name) for name in (c.source, c.target)}
+        missing = [n for n, g in found.items() if g is None]
+        if missing:
+            raise MeshError(f"symmetry: no selection {', '.join(missing)} in the mesh")
+        (dim, sources), (dim_t, targets) = found[c.source], found[c.target]
+        if dim != dim_t or len(sources) != len(targets):
+            raise MeshError(f"symmetry: '{c.source}' and '{c.target}' must be alike "
+                            "(the same number of faces)")  # fmt: skip
+        r, move = c.rotation(), c.shift()
+        affine = [*r[0], move[0], *r[1], move[1], *r[2], move[2], 0.0, 0.0, 0.0, 1.0]
+        centres = {t: np.asarray(gmsh.model.occ.getCenterOfMass(dim, t)) for t in targets}
+        size = _model_size()
+        pairs = []
+        for s in sources:
+            landed = r @ np.asarray(gmsh.model.occ.getCenterOfMass(dim, s)) + move
+            t = min(centres, key=lambda k: np.linalg.norm(centres[k] - landed))
+            if np.linalg.norm(centres[t] - landed) > 1e-6 * size + 1e-9:
+                how = (f"turned by {360 / c.sectors:g}° about the axis (right-handed); check "
+                       "the sectors, the axis and its direction" if hasattr(c, "sectors")
+                       else "moved by the translation; check it")  # fmt: skip
+                raise MeshError(f"symmetry: '{c.target}' is not '{c.source}' {how}")
+            pairs.append((t, s))
+        gmsh.model.mesh.setPeriodic(dim, [t for t, _ in pairs], [s for _, s in pairs], affine)
 
 
 def _group_entities(name: str) -> tuple[int, list[int]] | None:

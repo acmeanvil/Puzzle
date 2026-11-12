@@ -363,6 +363,13 @@ def _input(ctx: Context, op, key: str):
             and ("points" not in spec.types and "table" in spec.types)
         ):
             return got.table()  # points are a table of x, y, z too (ADR 0062 phase 3)
+        if (
+            isinstance(got, ResultValue)
+            and spec is not None
+            and "field" in spec.types
+            and "result" not in spec.types
+        ):
+            return _as_field(ctx, op, got)  # a study's result as a field, as a Filter reads it
         return got
     return typed(inp.value)
 
@@ -465,6 +472,18 @@ def _field(ctx: Context, op, given) -> FieldValue:
     f = step.fields[item.field]
     values = np.asarray(compute(item, f.values, f.components), float)
     return FieldValue(given.mesh, step, item, f.ids, values, f.location, label=item.label)
+
+
+def _as_field(ctx: Context, op, given: ResultValue) -> FieldValue:
+    """A result wired into a field port: the operator's quantity where the result has it
+    (else the result's own first listed quantity: von Mises for stress), at its step."""
+    from types import SimpleNamespace
+
+    quantity = getattr(op, "quantity", None) or ""
+    if quantity and not any(i.key == quantity for i in given.items):
+        quantity = ""  # the other port's quantity (f's in a Field formula of two results)
+    reader = SimpleNamespace(name=op.name, quantity=quantity, step=getattr(op, "step", -1))
+    return _field(ctx, reader, given)
 
 
 def _restrict(fv: FieldValue, selection: str | None) -> FieldValue:

@@ -2230,6 +2230,9 @@ class MainWindow(QMainWindow):
         from puzzle.post.revolve import mark_dimension  # the store keeps no dimension
 
         mark_dimension(self.result[0], self.session.project.objects.get(self._result_component))
+        from puzzle.post.expand import mark as mark_copies  # ADR 0081: drawn whole
+
+        mark_copies(self.result[0], self.session.project.objects.get(self._result_component))
         # A result shown afresh starts in global axes (ADR 0049), or the plot's own.
         self.results_bar.set_systems(self.session.project, getattr(self, "_plot_axes", None))
         self._plot_axes = None

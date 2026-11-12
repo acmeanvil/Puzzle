@@ -1230,7 +1230,8 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         "step's settings: linear_solver, tolerance, max_iterations, output_every) and each "
         "of its solvers' own (Study.solver_settings[solver]), with labels, the solver's own "
         "name, choices, defaults and current values, and how that solver's expert "
-        "pass-through (Study.expert_settings[solver]) is written. Change them with an edit."
+        "pass-through (Study.expert_settings[solver]) is written. Change them with "
+        "solver_settings_set."
     )
     @guarded
     def solver_settings(study: str) -> dict[str, Any]:
@@ -1266,6 +1267,149 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
                 if name in adapters
             },
         }
+
+    @tool(
+        description="Change a study's solver settings (ADR 0023) in one edit, one undo: "
+        "`shared` = {key: value} on every solve step it applies to (linear_solver, "
+        "tolerance, max_iterations, output_every; load stepping: increments, "
+        "initial_increment, min_increment, fixed_increments); `solvers` = {solver: {key: "
+        "value}} for each solver's own (convergence: CalculiX cutbacks, cutback_factor, "
+        "increase_factor; Code_Aster line_search, prediction, matrix, cutback_parts, "
+        "cutback_levels, absolute_tolerance; Elmer relaxation, newton_after_iterations); "
+        "`expert` = {solver: {path: value}} replacing that solver's pass-through. A value "
+        "of null removes a setting. Keys, choices and units: solver_settings. At "
+        "'propose' a proposal."
+    )
+    @guarded
+    def solver_settings_set(study: str, shared: dict[str, Any] | None = None,
+                            solvers: dict[str, dict[str, Any]] | None = None,
+                            expert: dict[str, dict[str, str]] | None = None,
+                            rationale: str = "") -> dict[str, Any]:  # fmt: skip
+        from puzzle.adapters.settings import edit_ops
+        from puzzle.commands import resolve
+        from puzzle.model.schema import Study
+
+        s = session()
+        target = resolve(s.project, study, Study)
+        ops = edit_ops(target, shared, solvers, expert)
+        if not ops:
+            return {"changed": False, "note": "nothing to change"}
+        command = {"command": "edit", "object": str(target.id),
+                   "ops": [op.model_dump() for op in ops]}  # fmt: skip
+        return s.submit(command, actor, rationale=rationale).to_dict()
+
+    @tool(
+        description="Put a symmetry or antisymmetry plane on a component (ADR 0081): "
+        "`selection` a flat face (a straight edge in 2D), 'Part/Name'; `kind` "
+        "'symmetry' (nothing moves through it; on every physics that has one: solid, heat "
+        "and electrostatic symmetry, fluid symmetry, magnetic symmetry) or 'antisymmetry' "
+        "(solid mechanics: nothing moves along it). One edit, one undo; at 'propose' a "
+        "proposal. A 2D or axisymmetric model is the component's `dimension` (an edit)."
+    )
+    @guarded
+    def symmetry_plane(component: str, selection: str, kind: str = "symmetry",
+                       rationale: str = "") -> dict[str, Any]:  # fmt: skip
+        from puzzle.commands import resolve
+        from puzzle.model.schema import Component
+        from puzzle.symmetry import plane_ops
+
+        if kind not in ("symmetry", "antisymmetry"):
+            raise PuzzleError(f"kind is symmetry or antisymmetry, not {kind!r}", code="invalid")
+        s = session()
+        comp = resolve(s.project, component, Component)
+        ops = plane_ops(comp, kind, selection)
+        if not ops:
+            raise PuzzleError(f"{comp.name} has no physics that takes a {kind} plane",
+                              code="invalid")  # fmt: skip
+        command = {"command": "edit", "object": str(comp.id),
+                   "ops": [op.model_dump() for op in ops]}  # fmt: skip
+        return s.submit(command, actor, rationale=rationale).to_dict()
+
+    @tool(
+        description="Make a component one sector or slice of a repeating whole (ADR 0081): "
+        "`kind` 'cyclic' (the `target` face is the `source` face turned 360/`sectors` "
+        "degrees about `axis` through `origin`, right-handed; static, transient and heat "
+        "studies on CalculiX, solid mechanics on Code_Aster) or 'periodic' (the target is "
+        "the source moved by `translation`, metres). Selections 'Part/Name'; each node on "
+        "the target moves as its twin on the source. Loads are the sector's own. "
+        "`kind` 'none' removes both. One edit; at 'propose' a proposal."
+    )
+    @guarded
+    def symmetry_repeat(component: str, kind: str, source: str = "", target: str = "",
+                        sectors: int = 0, axis: list[float] | None = None,
+                        origin: list[float] | None = None,
+                        translation: list[float] | None = None,
+                        rationale: str = "") -> dict[str, Any]:  # fmt: skip
+        from puzzle.commands import resolve
+        from puzzle.model.schema import Component, CyclicSymmetry, LinearPeriodicity
+
+        s = session()
+        comp = resolve(s.project, component, Component)
+        if kind == "none":
+            ops = [{"op": "set", "path": k, "value": None} for k in ("cyclic", "periodic")]
+        elif kind == "cyclic":
+            value = CyclicSymmetry(source=source, target=target, sectors=sectors,
+                                   axis=tuple(axis or (0, 0, 1)),
+                                   origin=tuple(origin or (0, 0, 0)))  # fmt: skip
+            ops = [{"op": "set", "path": "cyclic", "value": value.model_dump(mode="json")}]
+        elif kind == "periodic":
+            value = LinearPeriodicity(source=source, target=target,
+                                      translation=tuple(translation or ()))  # fmt: skip
+            ops = [{"op": "set", "path": "periodic", "value": value.model_dump(mode="json")}]
+        else:
+            raise PuzzleError(f"kind is cyclic, periodic or none, not {kind!r}", code="invalid")
+        command = {"command": "edit", "object": str(comp.id), "ops": ops}
+        return s.submit(command, actor, rationale=rationale).to_dict()
+
+    @tool(
+        description="A study's weak springs (ADR 0080): which bodies get them (held only by "
+        "frictionless or frictional contact; with weak_springs 'always' also bodies held by "
+        "nothing), the study's mode, factor and limit, and, for its latest stored run, the "
+        "force they carried per step and any weak_springs_carry warning (the body never "
+        "seated). Change the mode with an edit of the study's weak_springs (auto, always, "
+        "never), weak_spring_factor or weak_spring_limit."
+    )
+    @guarded
+    def weak_springs(study: str) -> dict[str, Any]:
+        from puzzle import weak_springs as ws
+        from puzzle.commands import resolve
+        from puzzle.model.schema import Study
+        from puzzle.project.layout import RESULTS_DIR
+        from puzzle.results.store import ResultStore
+
+        s = session()
+        target = resolve(s.project, study, Study)
+        comp = s.project.objects.get(target.component)
+        out: dict[str, Any] = {
+            "mode": target.weak_springs,
+            "factor": target.weak_spring_factor,
+            "limit": target.weak_spring_limit,
+            "bodies": []
+            if target.weak_springs == "never"
+            else ws.bodies(s.project, comp, target.weak_springs),
+        }
+        store = ResultStore(root / RESULTS_DIR)
+        try:
+            runs = [r for r in store.runs() if r.study_id == str(target.id)]
+        except Exception:  # noqa: BLE001 - no results yet
+            runs = []
+        if runs:
+            latest = max(runs, key=lambda r: r.recorded_at)
+            results = store.read_results(latest.run_id)
+            out["latest_run"] = {
+                "run": latest.run_id,
+                "carried_N": [
+                    {
+                        "step": step.label(),
+                        "force": float(
+                            abs(step.fields["weak_spring_force"].values.sum(axis=0)).max()
+                        ),
+                    }
+                    for step in results.steps
+                    if "weak_spring_force" in step.fields
+                ],
+            }
+        return out
 
     @tool(
         description="What the project needs next (ADR 0040, the Advisor): the workflow's "

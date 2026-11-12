@@ -59,14 +59,16 @@ def _field(setting, key: str, label: str, current) -> Ask:
         return Ask(key, label, choices=choices, default=current if current is not None else UNSET,
                    help=setting.description)  # fmt: skip
     unit = f" ({setting.unit})" if setting.unit else ""
+    blank = ("the solver's own choice" if setting.default is None
+             else f"the default, {setting.default:g}")  # fmt: skip
     return Ask(key, f"{label}{unit}", kind="text", default="" if current is None else current,
-               help=f"{setting.description} Blank: the default, {setting.default:g}.")  # fmt: skip
+               help=f"{setting.description} Blank: {blank}.")  # fmt: skip
 
 
 def edit_solver_settings(window, study):
     from puzzle.adapters import available_adapters
     from puzzle.adapters.common import InputError
-    from puzzle.commands.model import Edit, EditOp
+    from puzzle.commands.model import Edit
     from puzzle.gui.choices import solver_label
     from puzzle.settings import current
 
@@ -121,34 +123,25 @@ def edit_solver_settings(window, study):
     got = window.ask_form(f"Solver settings: {study.name}", asks, intro=intro, check=check)
     if got is None:
         return None
-    ops = []
-    solver_settings = {s: dict(study.solver_settings.get(s, {})) for s in solvers}
-    expert = {s: dict(study.expert_settings.get(s, {})) for s in solvers}
+    from puzzle.adapters.settings import edit_ops
+
+    shared_values: dict = {}
+    own: dict = {s: {} for s in solvers}
+    expert: dict = {}
     for key, text in got.items():
         where, name = key.split(":", 1)
         if where == "expert":
             expert[name] = parse_expert(text)
         elif where == "shared":
-            chosen = value(key, text)
-            for i, step in enumerate(study.steps):
-                if step not in steps:
-                    continue
-                if chosen is None:
-                    if name in step.settings:
-                        ops.append(EditOp(op="remove", path=f"steps.{i}.settings.{name}"))
-                else:
-                    ops.append(EditOp(op="set", path=f"steps.{i}.settings.{name}", value=chosen))
+            shared_values[name] = value(key, text)
         else:
-            chosen = value(key, text)
-            if chosen is None:
-                solver_settings[where].pop(name, None)
-            else:
-                solver_settings[where][name] = chosen
-    ops.append(EditOp(op="set", path="solver_settings",
-                      value={k: v for k, v in solver_settings.items() if v}))  # fmt: skip
-    ops.append(EditOp(op="set", path="expert_settings",
-                      value={k: v for k, v in expert.items() if v}))  # fmt: skip
-    return window.submit(Edit(object=str(study.id), ops=ops))
+            own[where][name] = value(key, text)
+    # The form shows every setting of these solvers: unset ones go back to defaults.
+    for solver in solvers:
+        for k in study.solver_settings.get(solver, {}):
+            own[solver].setdefault(k, None)
+    ops = edit_ops(study, shared_values, own, expert or None)
+    return window.submit(Edit(object=str(study.id), ops=ops)) if ops else None
 
 
 # --- presets -------------------------------------------------------------------------

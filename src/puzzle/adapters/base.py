@@ -48,6 +48,10 @@ FLUID_FEATURES = frozenset(
     {"velocity_inlet", "mass_flow_inlet", "pressure_outlet", "wall", "symmetry"}
 )
 PDE_FEATURES = frozenset({"dirichlet", "neumann"})
+# ADR 0081: symmetry and antisymmetry planes, made displacement supports on the face's
+# normal by puzzle.symmetry before writing (heat and electrostatic symmetry is the
+# natural condition, dropped), so every FE solver that holds components takes them.
+SYMMETRY_FEATURES = frozenset({"symmetry", "antisymmetry"})
 # Remote loads (ADR 0037): the deformable force and the rigid displacement are tractions
 # and prescribed fields every solver takes; a rigid force needs constraint equations.
 REMOTE_FEATURES = frozenset({"remote_force", "remote_displacement"})
@@ -91,6 +95,8 @@ class Capabilities:
     welds: frozenset[str] = frozenset()
     """Weld formulations written here (ADR 0078): line (the light weld), modelled."""
     couplings: frozenset[str] = frozenset()
+    cyclic: frozenset[str] = frozenset()
+    """Physics whose cyclic symmetry (ADR 0081 step 3) is written: pairs as equations."""
     dimensions: frozenset[str] = field(default_factory=lambda: frozenset({"3d"}))
     time_schemes: frozenset[str] = frozenset({"backward_euler"})
     """Time schemes for transient heat transfer (see adapters.common.time_scheme)."""
@@ -419,6 +425,9 @@ class SolverAdapter(ABC):
         except InputError as exc:
             problems.append(f"{self.name}: {exc}")
         problems += self.check_expert(study.expert_settings.get(self.name, {}))
+        from puzzle.cyclic import check as cyclic_check
+
+        problems += [f"{self.name}: {p}" for p in cyclic_check(project, study, component, caps)]
         return problems
 
     def _material_problems(

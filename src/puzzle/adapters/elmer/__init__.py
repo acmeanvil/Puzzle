@@ -42,6 +42,7 @@ from puzzle.adapters.base import (
     REMOTE_FEATURES,
     STRUCTURAL_FEATURES,
     SUPPORT_FEATURES,
+    SYMMETRY_FEATURES,
     THERMAL_FEATURES,
     VECTOR_FIELD_FEATURES,
     VECTOR_LOAD_FEATURES,
@@ -72,6 +73,7 @@ class ElmerAdapter(SolverAdapter):
             "electromagnetic_waves": frozenset({"frequency_domain"}),
         },
         features=STRUCTURAL_FEATURES
+        | SYMMETRY_FEATURES  # ADR 0081
         | THERMAL_FEATURES
         | HEAT_SOURCE_FEATURES  # ADR 0047
         | ELECTROMAGNETIC_FEATURES
@@ -89,6 +91,7 @@ class ElmerAdapter(SolverAdapter):
                 "rotation:cartesian",
                 "rotation:cylindrical",
                 "displacement:cartesian",
+                "symmetry:oblique",  # Normal-Tangential Displacement (ADR 0081)
                 "displacement:cylindrical",
                 "force:cartesian",
             }
@@ -128,6 +131,25 @@ class ElmerAdapter(SolverAdapter):
                 "preconditioner", "Preconditioner", "Linear System Preconditioning", "choice",
                 "default", PRECONDITIONERS, power=True,
                 description="For iterative methods: ILU levels trade memory for iterations.",
+            ),
+            # Convergence of nonlinear solves (temperature tables, nonlinear magnetics).
+            SolverSetting(
+                "relaxation", "Relaxation factor", "Nonlinear System Relaxation Factor",
+                "number", 1.0, maximum=1.0,
+                description="Each nonlinear iteration moves this fraction of the way to its "
+                "new solution: below 1 steadies an iteration that oscillates.",
+            ),
+            SolverSetting(
+                "newton_after_iterations", "Newton after", "Nonlinear System Newton After "
+                "Iterations", "integer", None, unit="iterations",
+                description="Switch from fixed-point (Picard) iterations to Newton after "
+                "this many: Picard is robust far from the answer, Newton fast near it.",
+            ),
+            SolverSetting(
+                "newton_after_tolerance", "Newton below", "Nonlinear System Newton After "
+                "Tolerance", "number", None, power=True,
+                description="Switch to Newton once the change between iterations is below "
+                "this.",
             ),
         ]  # fmt: skip
 

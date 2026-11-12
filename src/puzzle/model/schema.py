@@ -1401,6 +1401,62 @@ class BeamSection(BaseModel):
         }
 
 
+class CyclicSymmetry(BaseModel):
+    """One sector of `sectors` identical ones about an axis (ADR 0081 step 3): the
+    `target` face is the `source` face turned 360/`sectors` degrees about the axis
+    (right-handed), meshed to match, and each target node moves as its source node,
+    turned (u_t = R u_s; temperatures equal). Loads and supports are the sector's: the
+    whole model carries `sectors` times them."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: str = Field(description="the sector's first cut face (a face selection)")
+    target: str = Field(description="its other cut face: the source turned about the axis")
+    sectors: int = Field(ge=2, description="how many sectors make the whole")
+    origin: tuple[float, float, float] = Field(default=(0.0, 0.0, 0.0),
+                                               description="a point on the axis (m)")  # fmt: skip
+    axis: tuple[float, float, float] = (0.0, 0.0, 1.0)
+
+    def rotation(self):
+        """The 3 x 3 rotation taking the source to the target."""
+        import numpy as np
+
+        k = np.asarray(self.axis, float)
+        k = k / np.linalg.norm(k)
+        t = 2 * np.pi / self.sectors
+        kx = np.array([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]])
+        return np.eye(3) + np.sin(t) * kx + (1 - np.cos(t)) * kx @ kx
+
+    def shift(self):
+        """The translation that follows the rotation: x_t = R x_s + shift."""
+        import numpy as np
+
+        o = np.asarray(self.origin, float)
+        return o - self.rotation() @ o
+
+
+class LinearPeriodicity(BaseModel):
+    """A slice of a whole that repeats along a line (ADR 0081 step 4): the `target` face
+    is the `source` face moved by `translation`, meshed to match, and each target node
+    moves as its source node (u_t = u_s; temperatures equal): no mean strain along it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: str = Field(description="the slice's first cut face (a face selection)")
+    target: str = Field(description="its other cut face: the source moved by `translation`")
+    translation: tuple[float, float, float] = Field(description="from source to target (m)")
+
+    def rotation(self):
+        import numpy as np
+
+        return np.eye(3)
+
+    def shift(self):
+        import numpy as np
+
+        return np.asarray(self.translation, float)
+
+
 class Weld(BaseModel):
     """A weld between two parts along a path (ADR 0078): its AWS A2.4 type and size,
     the edge it runs along and the two faces its legs lie on, continuous or
@@ -1745,6 +1801,16 @@ class Component(ProjectObject):
     member_offsets: list[MemberOffset] = Field(
         default_factory=list, description="rigid lengths at frame members' ends (ADR 0079)"
     )
+    cyclic: CyclicSymmetry | None = Field(
+        default=None, description="one sector of a cyclically symmetric whole (ADR 0081)"
+    )
+    periodic: LinearPeriodicity | None = Field(
+        default=None, description="one slice of a whole repeating along a line (ADR 0081)"
+    )
+
+    def repeats(self) -> list:
+        """Its cyclic symmetry and linear periodicity, those it has (ADR 0081)."""
+        return [r for r in (self.cyclic, self.periodic) if r is not None]
 
     def dependencies(self) -> list[UUID]:
         amplitudes = [
@@ -2042,6 +2108,15 @@ class Study(ProjectObject):
     # settings_schema) and expert pass-through ({solver: {path: value}}).
     solver_settings: dict[str, dict[str, float | int | str | bool]] = Field(default_factory=dict)
     expert_settings: dict[str, dict[str, str]] = Field(default_factory=dict)
+    weak_springs: Literal["auto", "always", "never"] = Field(
+        default="auto", description="small springs to ground on bodies held only by sliding "
+        "contact (ADR 0080): auto those, always bodies held by nothing too, never")  # fmt: skip
+    weak_spring_factor: float = Field(
+        default=1e-6, gt=0, description="each weak spring's stiffness: this times E times the "
+        "body's size")  # fmt: skip
+    weak_spring_limit: float = Field(
+        default=1e-3, gt=0, description="the share of the load the springs may carry before "
+        "the run warns that the body never seated")  # fmt: skip
     preload_step: Literal["auto", "always", "never"] = Field(
         default="auto", description="tighten the bolts in a step of their own before the "
         "loads (puzzle.preload): auto when bolts are tightened and the first static step "
@@ -3160,6 +3235,8 @@ class Project:
             "elastic_support",
             "compression_only_support",
             "node_spring",  # a frame's spring support (ADR 0079)
+            "symmetry",  # ADR 0081: holds the plane's normal
+            "antisymmetry",
         )
         held = any(f.type in holding for p in solid for f in p.features)
         held = held or any(c.ground for c in comp.connectors)  # bolts to ground (ADR 0050)

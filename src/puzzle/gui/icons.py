@@ -125,7 +125,8 @@ FEATURES = {
     "electric_potential": "voltage", "surface_charge": "voltage", "ground": "ground",
     "coil_current": "coil", "stranded_coil": "coil", "coil_start": "coil",
     "coil_end": "coil", "magnetic_insulation": "magnet", "magnetic_symmetry": "magnet",
-    "symmetry": "mirror", "velocity_inlet": "inlet", "mass_flow_inlet": "inlet",
+    "symmetry": "mirror", "antisymmetry": "mirror", "velocity_inlet": "inlet",
+    "mass_flow_inlet": "inlet",
     "pressure_outlet": "outlet", "wall": "wall", "dirichlet": "equation",
     "neumann": "equation",
 }  # fmt: skip

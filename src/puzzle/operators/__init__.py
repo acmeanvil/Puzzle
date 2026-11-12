@@ -211,7 +211,7 @@ SERIES_TYPES = (
             *(PortSpec(k, k, ("number",), required=False, typed="number") for k in "abc"),
         ),
         (PortSpec("out", "Field", ("field",)),),
-        ("expression",),
+        ("expression", "quantity", "step"),  # which result and step a wired study gives
     ),
     OperatorType(
         "slice",
@@ -221,7 +221,7 @@ SERIES_TYPES = (
         "values, as ParaView's Slice: what the stress is across a wall.",
         (PortSpec("field", "Field", ("field",)),),
         (PortSpec("out", "Points", ("table",)),),
-        ("target",),
+        ("target", "quantity", "step"),
     ),
     OperatorType(
         "clip",
@@ -231,7 +231,7 @@ SERIES_TYPES = (
         "ParaView's Clip: the rest left out, still on the mesh.",
         (PortSpec("field", "Field", ("field",)),),
         (PortSpec("out", "Field", ("field",)),),
-        ("target", "keep"),
+        ("target", "keep", "quantity", "step"),
     ),
     OperatorType(
         "stream",
@@ -270,7 +270,7 @@ SERIES_TYPES = (
             PortSpec("level", "Value", ("number",), typed="number"),
         ),
         (PortSpec("out", "Points", ("table",)),),
-        (),
+        ("quantity", "step"),
     ),
     OperatorType(
         "curve_from_table",
@@ -1302,6 +1302,9 @@ def accepts(spec: PortSpec, given: str) -> bool:
         or (given == "number" and "list" in spec.types)
         or (given == "points" and "table" in spec.types)  # points are a table too
         or (given == "table" and "series" in spec.types)  # its first two number columns
+        # A study's result where a field is wanted: read as its quantity at its step
+        # (evaluate._input), so Field formula, Slice and the rest take a study directly.
+        or (given == "result" and "field" in spec.types)
     )
 
 

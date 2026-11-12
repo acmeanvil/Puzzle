@@ -61,6 +61,7 @@ TINTS = {
     "convection": ORANGE,
     "wall": GREY,
     "symmetry": GREY,
+    "antisymmetry": GREY,  # ADR 0081
     "electric_potential": PURPLE,
     "ground": PURPLE,
     "surface_charge": PURPLE,

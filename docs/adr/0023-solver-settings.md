@@ -91,6 +91,16 @@ Shoot-outs (ADR 0011) need settings to be comparable, and run keys need to chang
 - **Checks** (`tests/integration/test_solver_settings_runs.py`): the cantilever's tip with every Elmer and FEniCSx linear method, identical to the printed digits; Elmer's pass-through and shared iterative setting in its SIF; FEniCSx's PETSc options in its case; the laminar channel with other solvers, a convection scheme and a pass-through on Code_Saturne and OpenFOAM, the peak velocity still 1.5 times the mean within 1 % (1.4976, 1.4969), the settings found in setup.xml and fvSolution. Refusals in `tests/test_solver_settings.py`, presets in `tests/test_gui_solver_settings.py`.
 - **Not yet:** links to each solver's manual from the form; marking results from a hand-edited case (point 4).
 
+## Built: convergence controls (2026-11-11)
+
+- **Load stepping as shared settings** (static steps only, `SolverSetting.steps`): `increments`, `initial_increment`, `min_increment`, `fixed_increments`. CalculiX writes them on `*STATIC`'s data line (and `*STATIC, DIRECT` when fixed), even for a linear step; Code_Aster as the list of instants and `DEFI_LIST_INST`'s `ECHEC` (`SUBD_PAS_MINI`, or `ACTION='ARRET'` when fixed; `initial_increment` is refused there); the others refuse them. Unset, nothing moves: contact alone takes the full load at once, plasticity, lift-off and large deflection ten increments.
+- **CalculiX's own:** `cutbacks` (I_A), `cutback_factor` (D_f), `increase_factor` (D_D), and for power users `reduce_after` (I_L) and `divergence_check_after` (I_0), as `*CONTROLS, PARAMETERS=TIME INCREMENTATION` (both lines; written only when one is set).
+- **Code_Aster's own:** `line_search` (`RECH_LINEAIRE` CORDE or MIXTE) and `line_search_iterations`, `prediction` and `matrix` (`NEWTON`), `reac_incr`, `cutback_parts` and `cutback_levels` (`ECHEC`), `absolute_tolerance` (`RESI_GLOB_MAXI`); clashes refused (cut-backs with fixed increments, iterations without a line search).
+- **Elmer's own:** `relaxation` (Nonlinear System Relaxation Factor), `newton_after_iterations`, `newton_after_tolerance`.
+- **Setting them:** the Solver settings form shows them; `adapters.settings.edit_ops` makes the one Edit for the form and for MCP `solver_settings_set` (shared, solvers' own and pass-through in one call, values checked first, null removes); the `solver-settings` skill says what to try when a solve won't converge.
+- **Checks:** `tests/test_solver_settings.py` (each control in the deck, command file and SIF; refusals; the MCP edit); `tests/integration/test_solver_settings_runs.py::test_convergence_settings_keep_the_answer`: a large-deflection cantilever on CalculiX and Code_Aster with the controls, and with fixed increments, gives the defaults' tip to eight digits.
+- **Not yet:** Code_Aster's arc-length control (`PILOTAGE`, which needs a chosen degree of freedom) and automatic step growth (`DEFI_LIST_INST` `METHODE='AUTO'`); FEniCSx Newton relaxation.
+
 ## Alternatives considered
 
 - Pass-through only: complete on day one, but unreadable, and gives no validation or GUI.

@@ -440,3 +440,33 @@ def test_stream_tracer_and_glyph_on_a_vector_field(setup):
     with pytest.raises(PuzzleError, match="construction path"):
         value(p, store, no_line)
     ev._READ.clear()
+
+
+def test_a_study_wires_straight_into_field_ports(setup):
+    """A study's result where a field is wanted (Field formula's f and g, Slice, the
+    arithmetic): read as the operator's quantity at its step, as a Filter would, so no
+    Filter is needed between. The maintainer couldn't wire a study into f (2026-11-11)."""
+    from puzzle.operators import TYPES, accepts
+
+    p, study, steel, path, store = setup
+    assert accepts(TYPES["field_formula"].input("f"), "result")
+    direct = p.add(
+        Operator(
+            name="Direct",
+            type="field_formula",
+            expression="f / a",
+            quantity="stress:von_mises",
+            inputs={
+                "f": wire(study, "result"),
+                "a": OperatorInput(value=Quantity(value=300, unit="MPa")),
+            },
+        )
+    )
+    assert value(p, store, direct).values == pytest.approx([0, 1, 0, 0, 1])
+    # Two steps of one study, f the last and g the first: the step is the operator's.
+    first = p.add(Operator(name="First", type="filter", quantity="stress:von_mises", step=0,
+                           inputs={"result": wire(study, "result")}))  # fmt: skip
+    change = p.add(Operator(name="Grown", type="field_formula", expression="f - g",
+                            quantity="stress:von_mises",
+                            inputs={"f": wire(study, "result"), "g": wire(first)}))  # fmt: skip
+    assert value(p, store, change).values == pytest.approx(200 * np.array([0, 1, 0, 0, 1]) * MPA)

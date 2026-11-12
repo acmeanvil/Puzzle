@@ -275,6 +275,16 @@ def _run_study(
 
     # ADR 0055: beams oriented by a system, a point, a face or an edge, as vectors.
     written, project = with_orientations(project, study.component, written)
+    from puzzle.symmetry import applied as with_symmetry
+
+    # ADR 0081: symmetry planes as supports on each face's normal.
+    project = with_symmetry(project, study.component, written, adapter.capabilities)
+    from puzzle import weak_springs
+
+    # ADR 0080: bodies held only by sliding contact get weak springs until it closes.
+    written, project, springs = weak_springs.applied(
+        project, study, written, adapter.capabilities, record
+    )
     written = _adjust_contacts(project, study, written, record)
     _contact_warnings(project, study, written, record)
     _magnetic_warnings(project, study, written, record)
@@ -391,6 +401,8 @@ def _run_study(
 
         # ADR 0078: each light weld's line force at its stations.
         weld_fields(part_results, seen, seen.objects[study.component], written)
+        # ADR 0080: the force the weak springs carry, and a warning where it is the load.
+        weak_springs.finish(part_results, springs, study.weak_spring_limit, record)
         lap("read")
         if len(parts) > 1:
             for step in part_results.steps:

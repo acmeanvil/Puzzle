@@ -77,6 +77,11 @@ def _legend_preferences() -> list[Preference]:
         Preference("results.sweep_angle", "Results", "Revolved through", 270.0,
                    [("90°", 90.0), ("180°", 180.0), ("270°", 270.0), ("360°", 360.0)],
                    "How far an axisymmetric result is turned about its axis."),
+        Preference("results.symmetric_view", "Results", "Symmetric models", "whole",
+                   [("Drawn whole (mirrored, turned, repeated)", "whole"),
+                    ("The part modelled", "part")],
+                   "How a model cut by symmetry planes, a cyclic sector or a periodic slice "
+                   "is drawn (ADR 0081); probes read the part modelled."),
     ]  # fmt: skip
 
 

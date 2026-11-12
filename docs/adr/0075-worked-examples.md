@@ -1,6 +1,6 @@
 # 0075. Worked examples for every physics and solver
 
-- Status: Proposed (planned: built once the design is stable and on `main`)
+- Status: Superseded by 0083 (its plan kept there as the help system's tutorials)
 - Date: 2026-11-08
 
 ## Context

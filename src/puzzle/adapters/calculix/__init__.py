@@ -15,6 +15,7 @@ from puzzle.adapters.base import (
     STAGE3_FIELDS,
     STRUCTURAL_FEATURES,
     SUPPORT_FEATURES,
+    SYMMETRY_FEATURES,
     THERMAL_FEATURES,
     VECTOR_FIELD_FEATURES,
     VECTOR_LOAD_FEATURES,
@@ -48,6 +49,7 @@ class CalculixAdapter(SolverAdapter):
             "heat_transfer": frozenset({"stationary", "transient"}),
         },
         features=STRUCTURAL_FEATURES
+        | SYMMETRY_FEATURES  # ADR 0081
         | THERMAL_FEATURES
         | HEAT_SOURCE_FEATURES  # ADR 0047
         | REMOTE_FEATURES
@@ -65,9 +67,20 @@ class CalculixAdapter(SolverAdapter):
         # springs (ADR 0055, tests/integration/test_beam_sections.py)
         beams=True,
         shared_settings=frozenset(  # ADR 0023
-            {"linear_solver", "tolerance", "max_iterations", "output_every"}
+            {
+                "linear_solver",
+                "tolerance",
+                "max_iterations",
+                "output_every",
+                "increments",
+                "initial_increment",
+                "min_increment",
+                "fixed_increments",
+            }
         ),
         shells=True,  # ADR 0027, tests/integration/test_shells.py
+        # ADR 0081 step 3: *EQUATION per node pair (test_symmetry.py)
+        cyclic=frozenset({"solid_mechanics", "heat_transfer"}),
         dimensions=frozenset({"3d", "2d_planar", "2d_axisymmetric"}),  # ADR 0048
         # ADR 0044: values from imported fields (tests/integration/test_imported_fields.py)
         field_features=frozenset(
@@ -177,6 +190,38 @@ class CalculixAdapter(SolverAdapter):
                 "solver", "Linear solver", "SOLVER=", "choice", "default", SOLVERS,
                 description="The equation solver on each step's procedure card; iterative "
                 "ones suit large static models.",
+            ),
+            # Convergence of nonlinear static steps: *CONTROLS, PARAMETERS=TIME
+            # INCREMENTATION (CalculiX's defaults, so unset changes nothing).
+            SolverSetting(
+                "cutbacks", "Cut-backs per increment", "*CONTROLS I_A", "integer", 5,
+                steps=frozenset({"stationary"}),
+                description="How many times an increment that does not converge is cut "
+                "back and tried again before the solve stops.",
+            ),
+            SolverSetting(
+                "cutback_factor", "Cut-back factor", "*CONTROLS D_f", "number", 0.25,
+                maximum=0.99, steps=frozenset({"stationary"}),
+                description="A failed increment is retried at this fraction of its size.",
+            ),
+            SolverSetting(
+                "increase_factor", "Growth factor", "*CONTROLS D_D", "number", 1.5,
+                steps=frozenset({"stationary"}),
+                description="An increment that converges easily is followed by one this "
+                "much larger (up to the largest increment).",
+            ),
+            SolverSetting(
+                "reduce_after", "Shrink after", "*CONTROLS I_L", "integer", 10,
+                unit="iterations", power=True, steps=frozenset({"stationary"}),
+                description="An increment taking more iterations than this is converged, "
+                "but the next one is made smaller.",
+            ),
+            SolverSetting(
+                "divergence_check_after", "Divergence check after", "*CONTROLS I_0",
+                "integer", 4, unit="iterations", power=True,
+                steps=frozenset({"stationary"}),
+                description="From this iteration on, residuals growing in two iterations "
+                "running cut the increment back; larger is more patient with contact.",
             ),
         ]  # fmt: skip
 

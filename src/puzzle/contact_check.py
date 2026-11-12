@@ -37,7 +37,7 @@ NEAR_SHARE = 0.1  # near: a gap within a tenth of the search distance
 TOUCH = 0.02  # closed: a gap within 2 % of the target's element size
 LATERAL = 0.1  # overhanging: the nearest target point off to the side by 10 % of h
 HOLDING = ("fixed", "displacement", "remote_displacement", "elastic_support",
-           "compression_only_support")  # fmt: skip
+           "compression_only_support", "symmetry", "antisymmetry")  # fmt: skip
 SLIDING = ("frictionless", "frictional", "rough")  # hold normally only, if at all
 
 _FACES = {  # corner indices of each volume element's faces (outward normals)
@@ -598,8 +598,8 @@ def held_by_contact_only(project, component) -> list[Problem]:
                 "contact_only_hold", name,
                 f"body '{name}' is held only through frictionless or frictional contact: "
                 "until the contact closes and is pressed it is free, and the first solve "
-                "is singular. Add a weak support, a bond, or a bolt; or start the contact "
-                "closed (Code_Aster's contact_init)",
+                "is singular. The solve adds weak springs to hold it until then (the "
+                "study's Weak springs; ADR 0080), or add a support, a bond or a bolt",
                 {"component": component.name},
             ))  # fmt: skip
         else:

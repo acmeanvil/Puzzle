@@ -127,8 +127,16 @@ def test_model_and_results_are_fly_outs_of_like_items(window):
         return {a.text(): a.menu() for a in menu.actions() if a.menu() is not None}
 
     model = subs(window.menus["Model"])
-    assert list(model) == ["Components", "Physics and loads", "Contacts",
+    assert list(model) == ["Components", "Physics and loads", "Symmetry", "Contacts",
                            "Bolts and fasteners", "Beams and shells", "Studies", "Run"]  # fmt: skip
+    assert [a.text() for a in model["Symmetry"].actions()] == [
+        "Symmetry plane…",
+        "Antisymmetry plane…",
+        "Cyclic symmetry…",
+        "Periodic symmetry…",
+        "Remove cyclic or periodic symmetry",
+        "Model type (3D, 2D planar, axisymmetric)…",
+    ]
     assert not [a.text() for a in window.menus["Model"].actions()
                 if a.menu() is None and a.text()]  # fmt: skip
     contacts = [a.text() for a in model["Contacts"].actions()]
