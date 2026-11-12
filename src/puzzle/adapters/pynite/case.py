@@ -195,9 +195,36 @@ def _case_of(f, combos) -> str:
 
 
 VERTICAL = "Z"  # gravity acts along -z in a frame (ADR 0079)
+SELF = "#self"  # a case's self weight, apart in a modal run
+SEISMIC = {"Ex", "Ey"}  # the spectrum's cases (ADR 0079 step 4)
 
 
-def _notional(case: dict, settings: dict) -> None:
+def _modal(case: dict, project, comp, study, mesh, settings: dict, spectrum: bool) -> None:
+    """A modal step's block: modes, the mass (members' density, consistent, plus the
+    seismic design's mass cases as lumped masses from their gravity loads), and with a
+    response spectrum its parameters and the levels for scaling and drift."""
+    from puzzle.frames.seismic import G
+
+    design = study.seismic
+    block: dict = {"modes": int(settings.get("modes", 12)), "gravity": G,
+                   "mass_cases": dict(design.mass_cases) if design else {}}  # fmt: skip
+    if spectrum:
+        from puzzle.frames.seismic_frame import mesh_levels
+
+        directions = str(settings.get("spectrum_directions", "x,y"))
+        block["spectrum"] = {
+            "sds": design.sds, "sd1": design.sd1, "tl": design.tl, "r": design.r,
+            "ie": design.ie,
+            "directions": [d.strip() for d in directions.split(",") if d.strip()],
+        }  # fmt: skip
+        if any(d not in ("x", "y") for d in block["spectrum"]["directions"]):
+            raise InputError(f"spectrum directions are x and y, not {directions!r}")
+        case["seismic"] = {"design": design.model_dump(mode="json"),
+                           "levels": mesh_levels(project, comp, design, mesh)}  # fmt: skip
+    case["modal"] = block
+
+
+def _notional(case: dict, settings: dict, fraction: float = 0.002) -> None:
     """AISC 360 C2.2b, the Direct Analysis Method's notional loads: in each combination,
     0.002 times the factored gravity load at each node, laterally, in each direction the
     step names (`notional_directions`, default "x,y": both senses of each), each a
@@ -231,7 +258,7 @@ def _notional(case: dict, settings: dict) -> None:
         for name, factor in c["factors"].items():
             for n, y in by_case.get(name, {}).items():
                 gravity[n] = gravity.get(n, 0.0) + factor * y
-        loads = notional(gravity)
+        loads = notional(gravity, fraction)
         for d in directions:
             axis = d.lstrip("+-")
             for sense in [d[0]] if d[0] in "+-" else ["+", "-"]:
@@ -250,8 +277,14 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
 
     refuse_inputs(inputs, "PyNite")
     steps = study.solve_steps()
-    if len(steps) != 1 or steps[0].type != "stationary":
-        raise InputError("PyNite runs one static step here so far", code="unsupported")
+    if len(steps) != 1 or steps[0].type not in ("stationary", "modal"):
+        raise InputError("PyNite runs one static or modal step here so far",
+                         code="unsupported")  # fmt: skip
+    modal = steps[0].type == "modal"
+    spectrum = modal and bool(steps[0].settings.get("response_spectrum"))
+    if spectrum and study.seismic is None:
+        raise InputError("a response spectrum needs the study's seismic parameters "
+                         "(seismic_design)", code="invalid")  # fmt: skip
     comp = project.get(study.component, Component)
     if not mesh.beam_blocks():
         raise InputError("a PyNite study needs a frame: line bodies with beam sections")
@@ -284,9 +317,20 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     combos = study.combinations
     settings = steps[0].settings
     dam = bool(settings.get("direct_analysis"))
-    if dam:  # AISC 360 C2.3: 0.8 of the stiffness (tau_b = 1)
+    stainless = False
+    if dam:  # AISC 360 C2.3: 0.8 of the stiffness (tau_b = 1); AISC 370 C2.3: 0.70
+        from uuid import UUID
+
         for key, (e, g, nu, rho) in list(materials.items()):
-            materials[key] = [0.8 * e, 0.8 * g, nu, rho]
+            m = project.objects.get(UUID(key))
+            steel = (getattr(m, "info", None) or {}).get("group") == "Stainless Steel"
+            stainless |= steel
+            tau = 0.70 if steel else 0.8
+            materials[key] = [tau * e, tau * g, nu, rho]
+    if spectrum:  # the spectrum is the seismic load: generated ELF loads stay out
+        from puzzle.frames.seismic_frame import GENERATED
+
+        features = [f for f in features if f.extensions != GENERATED]
     for f in globalize(project, features):
         load_case = _case_of(f, combos)
         if f.type not in FEATURES:
@@ -341,20 +385,28 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
                 if not rho:
                     raise InputError("self weight needs a density in every member's material",
                                      code="incomplete_material")  # fmt: skip
+                # in a modal run self weight is its own case, so the mass (from the
+                # density) doesn't count it twice; combinations take it with its case
+                own = f"{load_case}{SELF}" if modal else load_case
                 case["line_loads"] += [{"member": name, "direction": f"F{a.upper()}",
-                                        "w": rho * area * float(c), "case": load_case}
+                                        "w": rho * area * float(c), "case": own}
                                        for a, c in zip("xyz", g, strict=True) if c]  # fmt: skip
     if not case["supports"] and not case["springs"]:
         raise InputError("the frame has no support", code="invalid")
     case["combos"] = [{"name": c.name, "factors": dict(c.factors)} for c in combos]
-    used = {load["case"] for load in case["point_loads"] + case["line_loads"]}
+    if modal:
+        for c in case["combos"]:
+            c["factors"].update({f"{k}{SELF}": v for k, v in list(c["factors"].items())})
+        _modal(case, project, comp, study, mesh, steps[0].settings, spectrum)
+    used = {load["case"].removesuffix(SELF) for load in case["point_loads"] + case["line_loads"]}
+    used |= SEISMIC if spectrum else set()
     for c in combos:
         if not set(c.factors) & used:
             raise InputError(f"combination '{c.name}' factors no load case the frame has "
                              f"({', '.join(sorted(used)) or 'none'})", code="invalid")  # fmt: skip
     case["pdelta"] = bool(settings.get("second_order")) or dam
-    if dam:
-        _notional(case, settings)
+    if dam:  # 370 C2.3(c): τ_b = 1 with a further 0.002 Y_i, so 0.004 in all
+        _notional(case, settings, 0.004 if stainless else 0.002)
     workdir.mkdir(parents=True, exist_ok=True)
     (workdir / CASE).write_text(json.dumps(case), encoding="utf-8")
     shutil.copyfile(RUNNER, workdir / RUNNER.name)
@@ -365,14 +417,17 @@ def read_results(workdir: Path):
     """results.json onto the mesh: displacement and rotation (node, global), reaction
     force and moment at held nodes, `beam_forces` (node: N, Vy, Vz, T, My, Mz in each
     member's axes, averaged over the members meeting there, as Code_Aster's EFGE_NOEU,
-    with its signs), and `member_forces` (element: those six at its start, then at its
-    end)."""
+    with its signs), `member_forces` (element: those six at its start, then at its
+    end) and `member_stations` (element: the six at STATIONS points evenly along it,
+    component `<force>_<k>`, for the member checks' diagrams)."""
     from puzzle.results.model import Field, Results, StepResult
 
     data = json.loads((workdir / RESULTS).read_text(encoding="utf-8"))
     case = json.loads((workdir / CASE).read_text(encoding="utf-8"))
     out = Results(solver="pynite")
     combos = data.get("combos")
+    if "modal" in data:
+        return _modal_results(out, data, case)
     if combos is None:  # no combinations: the one load case as a static step
         out.steps.append(StepResult(1, "stationary", 1.0, fields=_fields(data, case)))
         return out
@@ -403,8 +458,12 @@ def _fields(data: dict, case: dict) -> dict:
     sums: dict[int, np.ndarray] = {}
     counts: dict[int, int] = {}
     elements: dict[int, list] = {}
+    pieces: dict[int, list] = {}
     for m in case["members"]:
         ends = np.asarray(data["members"][m["name"]], float) * SIGNS  # (2, 6)
+        if "stations" in data:
+            pieces.setdefault(int(m["name"][1:].rstrip("abc")), []).append(
+                np.asarray(data["stations"][m["name"]], float) * SIGNS)  # fmt: skip
         for node, row in ((int(m["i"]), ends[0]), (int(m["j"]), ends[1])):
             sums[node] = sums.get(node, np.zeros(6)) + row
             counts[node] = counts.get(node, 0) + 1
@@ -423,4 +482,151 @@ def _fields(data: dict, case: dict) -> dict:
         eids,
         np.array(rows),
     )
+    if pieces:
+        fields["member_stations"] = _stations(eids, pieces, names)
     return fields
+
+
+STATIONS = 9  # frame.py's
+# the fields a spectrum combines and adds to combinations (forces scaled to the ELF shear)
+FORCES = ("reaction_force", "reaction_moment", "beam_forces", "member_forces", "member_stations")
+MOTIONS = ("displacement", "rotation")
+
+
+def _global(name, components, values):
+    from puzzle.results.model import Field
+
+    return Field(name, "global", list(components), np.array([0]),
+                 np.array([list(map(float, values))]))  # fmt: skip
+
+
+def _modal_results(out, data, case):
+    """A modal step: one step per mode (its shape and participation), with a response
+    spectrum a step per direction (CQC of the modes, forces scaled up to the ELF base
+    shear, 12.9.1.4) and each combination with Ex or Ey as two steps, ± the spectrum."""
+    from puzzle.results.model import StepResult
+
+    modal = data["modal"]
+    total = modal["mass"]
+    for i, m in enumerate(modal["modes"], start=1):
+        ids = np.array([int(n) for n in m["nodes"]])
+        values = np.array(list(m["nodes"].values()), float)
+        from puzzle.results.model import Field
+
+        fields = {
+            "displacement": Field("displacement", "node", ["x", "y", "z"], ids, values[:, :3]),
+            "rotation": Field("rotation", "node", ["x", "y", "z"], ids, values[:, 3:]),
+            "participation_factor": _global("participation_factor", "xyz", m["gamma"]),
+            "effective_mass": _global("effective_mass", "xyz", m["meff"]),
+            "mass_fraction": _global("mass_fraction", "xyz",
+                                     [e / t if t else 0.0 for e, t in zip(m["meff"], total,
+                                                                          strict=True)]),
+        }  # fmt: skip
+        out.steps.append(StepResult(1, "modal", float(m["frequency"]), mode=i, fields=fields))
+    envelopes = {}
+    if "spectrum" in modal:
+        envelopes = _spectra(out, modal, case)
+    for k, (name, part) in enumerate((data.get("combos") or {}).items(), start=1):
+        factors = next(c["factors"] for c in case["combos"] if c["name"] == name)
+        seismic = {d: f for d, f in factors.items() if d in SEISMIC and d[-1] in envelopes}
+        if seismic and all(f < 0 for f in seismic.values()):
+            continue  # the spectrum acts both ways: its "+E" twin gives both senses
+        static = _fields(part, case)
+        if not seismic:
+            static["combination"] = _global("combination", [name], [k])
+            out.steps.append(StepResult(1, "combination", float(k), fields=static))
+            continue
+        for sense in (1.0, -1.0):
+            fields = {}
+            for key, f in static.items():
+                add = np.zeros_like(f.values)
+                for d, factor in seismic.items():
+                    env = envelopes[d[-1]].get(key)
+                    if env is not None:
+                        add = add + abs(factor) * _aligned(env, f)
+                fields[key] = type(f)(f.name, f.location, f.components, f.ids,
+                                      f.values + sense * add)  # fmt: skip
+            label = f"{name} ({'+' if sense > 0 else '−'}E)"
+            fields["combination"] = _global("combination", [label], [k])
+            out.steps.append(StepResult(1, "combination", float(k), fields=fields))
+    return out
+
+
+def _aligned(env, f):
+    """An envelope field's values on another field's ids (zero where it has none)."""
+    order = np.argsort(env.ids)
+    at = np.searchsorted(env.ids, f.ids, sorter=order)
+    at = np.clip(at, 0, len(order) - 1)
+    hit = env.ids[order[at]] == f.ids
+    values = np.zeros_like(f.values)
+    values[hit] = env.values[order[at[hit]]]
+    return values
+
+
+def _spectra(out, modal, case) -> dict:
+    """Each direction's CQC response (12.9.1.3), its base shear V_t against the ELF base
+    shear V at the modal period capped at C_u T_a (12.9.1.4.1: forces × scale V / V_t
+    where V_t is less), the drift scale of 12.9.1.4.2. Returns {direction: {field:
+    envelope}} for the combinations."""
+    from puzzle.frames import seismic
+    from puzzle.model.schema import SeismicDesign
+    from puzzle.results.model import StepResult
+
+    design = SeismicDesign.model_validate(case["seismic"]["design"])
+    levels = case["seismic"]["levels"]
+    height = max(lv["height"] for lv in levels)
+    omegas = [2 * np.pi * m["frequency"] for m in modal["modes"]]
+    total = modal["mass"]
+    envelopes = {}
+    for direction, per_mode in modal["spectrum"].items():
+        axis = "xyz".index(direction)
+        fields = [_fields(p, case) for p in per_mode]
+        shears = [float(np.sum(f["reaction_force"].values[:, axis])) if "reaction_force" in f
+                  else 0.0 for f in fields]  # fmt: skip
+        vt = float(seismic.cqc(np.array(shears), omegas, design.damping))
+        fractions = [m["meff"][axis] / total[axis] if total[axis] else 0 for m in modal["modes"]]
+        fundamental = 1.0 / modal["modes"][int(np.argmax(fractions))]["frequency"]
+        elf_levels = [{"height": lv["height"], "weight": lv["weight"]} for lv in levels]
+        elf = seismic.elf(design, elf_levels, height, fundamental)
+        scale = max(1.0, design.scale_to_elf * elf.base_shear / vt) if vt else 1.0
+        drift_scale = 1.0
+        if elf.cs_clause == "12.8-6" and vt < elf.cs * elf.weight:
+            drift_scale = elf.cs * elf.weight / vt
+        combined = {}
+        for key in fields[0]:
+            stack = np.array([f[key].values for f in fields])
+            env = seismic.cqc(stack, omegas, design.damping)
+            if key in FORCES:
+                env = env * scale
+            f0 = fields[0][key]
+            combined[key] = type(f0)(f0.name, f0.location, f0.components, f0.ids, env)
+        envelopes[direction] = combined
+        label = f"E{direction} response spectrum (CQC)"
+        step_fields = dict(combined)
+        step_fields["combination"] = _global("combination", [label], [0])
+        step_fields["spectrum_base_shear"] = _global(
+            "spectrum_base_shear",
+            ["modal_V", "elf_V", "scale", "period", "cs", "drift_scale", "mass_participation"],
+            [vt, elf.base_shear, scale, elf.period, elf.cs, drift_scale, sum(fractions)],
+        )
+        out.steps.append(StepResult(1, "spectrum", float(axis), fields=step_fields))
+    return envelopes
+
+
+def _stations(eids, pieces, names):
+    """Each element's forces at STATIONS points evenly along it: a quadratic element is
+    two PyNite members, each sampled at STATIONS points, so every other one of each."""
+    from puzzle.results.model import Field
+
+    rows = []
+    for e in eids:
+        parts = pieces[e]
+        if len(parts) == 1:
+            rows.append(parts[0])
+        else:
+            half = (STATIONS + 1) // 2
+            take = np.linspace(0, STATIONS - 1, half).round().astype(int)
+            rows.append(np.vstack([parts[0][take], parts[1][take][1:]]))
+    values = np.array([r.reshape(-1) for r in rows])  # station-major: k's six together
+    comps = [f"{c}_{k}" for k in range(STATIONS) for c in names]
+    return Field("member_stations", "element", comps, np.asarray(eids), values)

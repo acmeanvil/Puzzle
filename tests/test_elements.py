@@ -24,13 +24,14 @@ def test_rows_keep_to_the_vocabularies():
 
 # Written through an element choice (ADR 0082 step 3): the library names them, the
 # adapter writes what it is handed; each has its benchmark in test_element_choice.py.
-CHOSEN = {"C3D8I", "3D_INCO_UPG", "POU_D_E", "3D_DIAG", "C3D20R", "3D_SI"}
+CHOSEN = {"C3D8I", "3D_INCO_UPG", "POU_D_E", "3D_DIAG", "C3D20R", "3D_SI", "DST"}
 
 
 def test_chosen_elements_have_their_benchmark():
     here = Path(__file__).parent / "integration"
     bench = "".join((here / name).read_text(encoding="utf-8")
-                    for name in ("test_element_choice.py", "test_quadratic_bricks.py"))  # fmt: skip
+                    for name in ("test_element_choice.py", "test_quadratic_bricks.py",
+                                 "test_thick_shells.py"))  # fmt: skip
     assert all(name in bench for name in CHOSEN)
 
 

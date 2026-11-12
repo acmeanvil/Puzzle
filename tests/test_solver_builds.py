@@ -208,3 +208,15 @@ def test_the_advanced_page_clears_the_wait(env):
     assert sb.retry_at() is None and not dialog.clear_retry.isEnabled()
     assert dialog.retry_note.text().startswith("Cleared")
     dialog.close()
+
+
+def test_pynite_is_listed_by_its_environments_python(monkeypatch, tmp_path):
+    """PyNite has no program of its own: the listing asks for its Python, as a solve does."""
+    python = tmp_path / "python.exe"
+    python.write_text("", encoding="utf-8")
+    monkeypatch.setenv("PUZZLE_PYNITE_PYTHON", str(python))
+    rows = {r.solver: r for r in sb.solvers()}
+    if "pynite" not in rows:
+        pytest.skip("no PyNite adapter installed")
+    assert rows["pynite"].how == "native"
+    assert rows["pynite"].where == str(python)

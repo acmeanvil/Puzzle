@@ -362,6 +362,14 @@ def _geometry(window, menu: QMenu) -> None:
          "A new part, starting with a sketch")  # fmt: skip
     _add(menu, "Import geometry…", lambda: menus.import_step_file(window),
          "STEP, IGES, BREP, STL, OBJ or 3MF")  # fmt: skip
+    from puzzle.gui.frame_editor import new_frame
+
+    _add(
+        menu,
+        "New frame from a grid…",
+        lambda: new_frame(window),
+        "A frame of line members: bays, stories, columns, beams, bracing (ADR 0079)",
+    )
     menu.addSeparator()
     wb = window.workbench
     _add(menu, "New sketch…", lambda: _in_geometry_tab(window, wb.new_sketch),
@@ -569,6 +577,14 @@ def _model(window, menu: QMenu) -> None:
     _add(beams, "Add shell thickness…", _with_component(
         window, lambda c: add_shell_thickness(window, c)),
         "A thickness for a sheet body (a plate or thin wall)")  # fmt: skip
+    from puzzle.gui.member_design import edit_design
+
+    _add(
+        beams,
+        "Member design…",
+        _with_component(window, lambda c: edit_design(window, c)),
+        "How a frame's members are checked: LRFD or ASD, unbraced lengths, K, deflection",
+    )
 
     menu.addSeparator()
     studies = _sub(menu, "Studies")
@@ -581,6 +597,10 @@ def _model(window, menu: QMenu) -> None:
          "How each solver solves the study: linear solver, tolerances, output")  # fmt: skip
     _add(studies, "Load combinations…", lambda: _combinations(window),
          "A frame's load cases combined by ASCE 7 (LRFD or ASD), each a result")  # fmt: skip
+    _add(studies, "Seismic design…", lambda: _seismic(window, "design"),
+         "ASCE 7 seismic parameters of a frame study: spectrum, R, C_d, I_e")  # fmt: skip
+    _add(studies, "ELF loads…", lambda: _seismic(window, "elf"),
+         "ASCE 7's equivalent lateral forces written as story loads (Ex or Ey)")  # fmt: skip
 
     runs = _sub(menu, "Run")
     run = window.actions_by_name["run"]  # the toolbar's too: asks which study if none is selected
@@ -629,6 +649,14 @@ def _combinations(window) -> None:
     study = current_study(window, "Load combinations")
     if study is not None:
         edit_combinations(window, study)
+
+
+def _seismic(window, which: str) -> None:
+    from puzzle.gui.seismic_dialog import edit_seismic, write_elf
+
+    study = current_study(window, "Seismic design" if which == "design" else "ELF loads")
+    if study is not None:
+        (edit_seismic if which == "design" else write_elf)(window, study)
 
 
 def _duplicate_study(window) -> None:
@@ -713,6 +741,10 @@ def _results(window, menu: QMenu) -> None:
          "A result's maximum, minimum, average or integral over a plane's cut")  # fmt: skip
     _add(probes, "Section force…", lambda: tools.add_section_force(window),
          "The force and moment carried across a plane")  # fmt: skip
+    _add(probes, "Member checks", lambda: window.docks.show("members"),
+         "A frame's members checked by their code: the governing ratio per member")  # fmt: skip
+    _add(probes, "Weld results", lambda: window.docks.show("welds"),
+         "Light welds' line forces, AISC 360 J2 and the instantaneous centre")  # fmt: skip
     view = _sub(menu, "View")
     _add(view, "Section cut", ribbon.cut, "Cut the model by a plane to see inside")
     _add(view, "Animate", ribbon.animate, "Play the deformation, or the steps")
@@ -858,6 +890,8 @@ def _window(window, menu: QMenu, agent: QAction, messages: QAction) -> None:
         (window.optimisation_dock, "Optimisation", "Ctrl+0"),
         (window.convergence_dock, "Convergence", "Ctrl+Shift+0"),
         (window.jobs_dock, "Jobs", "Ctrl+Shift+J"),
+        (window.members_dock, "Members", "Ctrl+Shift+K"),
+        (window.welds_dock, "Welds", "Ctrl+Shift+L"),
     ):
         # Not the dock's own toggle action: Qt renames that with the dock's title
         # (Properties reads "Tool" while a tool is open).

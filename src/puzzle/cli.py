@@ -441,6 +441,16 @@ def _parser() -> argparse.ArgumentParser:
     p.set_defaults(handler=_contacts)
 
     p = sub.add_parser(
+        "members", help="a frame's members checked by AISC 360 from a study's newest run"
+    )
+    p.add_argument("project", type=Path)
+    p.add_argument("study", help="the study's name")
+    p.add_argument("--member", help="one member (default: all)")
+    p.add_argument("--details", action="store_true", help="every check, not just the governing")
+    p.add_argument("--json", action="store_true", help="the checks as JSON")
+    p.set_defaults(handler=_members)
+
+    p = sub.add_parser(
         "split-parts", help="one part per body of a part holding several (an imported assembly)"
     )
     p.add_argument("project", type=Path)
@@ -1411,6 +1421,40 @@ def _adapt(args) -> int:
     else:
         print("\n".join(adapt.lines(out)))
     return 0 if out.converged else 1
+
+
+def _members(args) -> int:
+    """ADR 0079 step 3: each frame member's governing check; exit 1 when one fails."""
+    import json
+
+    from puzzle.commands import Session, resolve
+    from puzzle.frames.design import member_checks
+    from puzzle.model.schema import Component, Study
+    from puzzle.post.derived import run_for
+
+    s = Session(args.project)
+    store = _store(args.project)
+    study = resolve(s.project, args.study, Study)
+    record = run_for(s.project, store, study.id)
+    comp = s.project.get(study.component, Component)
+    out = member_checks(s.project, comp, store.read_mesh(record.mesh_id),
+                        store.read_results(record.run_id), args.member)  # fmt: skip
+    if args.json:
+        print(json.dumps(out, indent=1))
+        return 0 if all(m["passes"] for m in out["members"]) else 1
+    for m in out["members"]:
+        g = m["governing"]
+        mark = "ok  " if m["passes"] else "FAIL"
+        print(f"{mark} {m['member']:<12} {m['section']:<16} ratio {m['ratio']:.3f}  "
+              f"{g['check']} ({g['clause']}), {g['label']}")  # fmt: skip
+        if args.details:
+            for st in m["steps"]:
+                print(f"       {st['label']}:")
+                for c in st["checks"]:
+                    print(f"         {c['check']:<34} {c['ratio']:.3f}  {c['clause']}")
+    for m in out["not_checked"]:
+        print(f"--   {m['member']:<12} not checked: {m['reason']}")
+    return 0 if all(m["passes"] for m in out["members"]) else 1
 
 
 def _error_estimate(args) -> int:

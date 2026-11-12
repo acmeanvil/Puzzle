@@ -625,6 +625,23 @@ class MainWindow(QMainWindow):
             "jobs", "Jobs", self.jobs, Qt.DockWidgetArea.BottomDockWidgetArea)  # fmt: skip
         self.docks.tab("messages", "jobs")
         self.jobs_dock.hide()  # Window → Jobs, or the note when a project opens with some
+        from puzzle.gui.member_design import MemberTable  # ADR 0079 step 3
+
+        self.members = MemberTable(self)
+        self.members_dock = self.docks.add(
+            "members", "Members", self.members, Qt.DockWidgetArea.BottomDockWidgetArea)  # fmt: skip
+        self.docks.tab("messages", "members")
+        self.members_dock.visibilityChanged.connect(
+            lambda shown: shown and self.members.refresh())  # fmt: skip
+        self.members_dock.hide()  # Window → Members, or Results → Result tools → Member checks
+        from puzzle.gui.weld_table import WeldTable  # ADR 0078
+
+        self.welds = WeldTable(self)
+        self.welds_dock = self.docks.add(
+            "welds", "Welds", self.welds, Qt.DockWidgetArea.BottomDockWidgetArea)  # fmt: skip
+        self.docks.tab("messages", "welds")
+        self.welds_dock.visibilityChanged.connect(lambda shown: shown and self.welds.refresh())
+        self.welds_dock.hide()  # Window → Welds, or Results → Result tools → Weld results
         self.schematic_panel = SchematicPanel(self)  # beside the 3D view (ADR 0058)
         self.schematic_dock = self.docks.add(
             "schematic", "Schematic", self.schematic_panel, Qt.DockWidgetArea.BottomDockWidgetArea

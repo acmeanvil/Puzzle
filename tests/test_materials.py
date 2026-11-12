@@ -53,8 +53,24 @@ GENERIC |= set(GASES)
 # Filler metals (ADR 0078 step 2): AWS classifications' minimum strengths.
 FILLERS = {"filler_e60xx": 413.7, "filler_e70xx": 482.6, "filler_e80xx": 551.6,
            "filler_er70s_6": 482.6, "filler_e71t_1": 482.6, "filler_e308l": 517.1,
-           "filler_e309l": 517.1, "filler_e316l": 482.6, "filler_e2209": 689.5}  # fmt: skip
+           "filler_e309l": 517.1, "filler_e316l": 482.6, "filler_e2209": 689.5,
+           "filler_er4043": 165.0, "filler_er5356": 240.0}  # fmt: skip
 GENERIC |= set(FILLERS)
+# Structural grades for member checks (ADR 0079 steps 3 and 5): (F_y, F_u) in MPa.
+STRUCTURAL = {"astm_a992": (344.7, 448.2), "astm_a36": (248.2, 399.9),
+              "astm_a572_gr50": (344.7, 448.2), "astm_a500_gr_c_rect": (344.7, 427.5),
+              "astm_a500_gr_c_round": (317.2, 427.5), "astm_a53_gr_b": (241.3, 413.7),
+              "duplex_2205": (450, 655), "lean_duplex_2101": (450, 650)}  # fmt: skip
+GENERIC |= set(STRUCTURAL)
+
+
+def test_structural_grades_have_their_strengths():
+    from puzzle.materials import library_material
+
+    for key, (fy, fu) in STRUCTURAL.items():
+        m = library_material(key)
+        assert m.properties["yield_strength"].to_si() / 1e6 == pytest.approx(fy, abs=0.2), key
+        assert m.properties["tensile_strength"].to_si() / 1e6 == pytest.approx(fu, abs=0.2), key
 
 
 def test_generic_set_is_shipped():
@@ -169,11 +185,9 @@ def test_default_user_library_location(monkeypatch):
 
 
 def test_search():
-    assert search_library("steel") == [
-        "electrical_steel",
-        "stainless_steel_304",
-        "structural_steel",
-    ]
+    assert search_library("steel") == sorted(
+        ["electrical_steel", "stainless_steel_304", "structural_steel", "duplex_2205",
+         "lean_duplex_2101", *(k for k in STRUCTURAL if k.startswith("astm"))])  # fmt: skip
     assert search_library("fastener") == sorted(BOLTING)  # by their group, "Fastener"
 
 

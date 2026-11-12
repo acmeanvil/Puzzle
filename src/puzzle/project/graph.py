@@ -47,6 +47,8 @@ def _own(obj: ProjectObject, *, drop: frozenset[str] = frozenset()) -> dict:
             data.pop("preload_step")
         if not data.get("combinations"):  # ADR 0079 step 2: none, as before
             data.pop("combinations", None)
+        if data.get("seismic") is None:  # ADR 0079 step 4: none, as before
+            data.pop("seismic", None)
         for key, default in (
             ("weak_springs", "auto"),
             ("weak_spring_factor", 1e-6),
@@ -96,6 +98,7 @@ def _own(obj: ProjectObject, *, drop: frozenset[str] = frozenset()) -> dict:
         data.pop("planar_model")  # the default: older projects keep their hashes
     if isinstance(obj, Component):  # how bolts are listed and made never changes a solve
         data.pop("bolt_rules", None)
+        data.pop("member_design", None)  # ADR 0079: how members are checked, after the solve
         if not data.get("welds"):  # ADR 0078: no welds, as before them
             data.pop("welds", None)
         for key in ("member_releases", "member_offsets"):  # ADR 0079: none, as before

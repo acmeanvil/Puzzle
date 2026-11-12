@@ -2,8 +2,10 @@
 frame has, and AISC 360's notional loads for the Direct Analysis Method.
 
 Cases are named by ASCE 7's symbols: D dead, L live, Lr roof live, S snow, R rain, W wind,
-E seismic (load effects as given; their reverse sign is a combination of its own), plus
-any name of your own, which no generated combination uses. "Lr or S or R" makes one
+E seismic (load effects as given; their reverse sign is a combination of its own; Ex and
+Ey, each direction's, made by the ELF procedure or the response spectrum, ADR 0079 step 4,
+each in combinations of its own, ASCE 7 12.5's directions taken one at a time), plus any
+name of your own, which no generated combination uses. "Lr or S or R" makes one
 combination per case the frame has; a combination none of whose variable cases the frame
 has is left out (1.4D always stays).
 """
@@ -13,7 +15,8 @@ from __future__ import annotations
 import itertools
 
 ROOF = ("Lr", "S", "R")
-SYMBOLS = ("D", "L", "Lr", "S", "R", "W", "E")
+QUAKE = ("E", "Ex", "Ey")  # "E" in a template stands for each of these the frame has
+SYMBOLS = ("D", "L", "Lr", "S", "R", "W", "E", "Ex", "Ey")
 
 # (name, {case: factor}) templates: "roof" stands for each of Lr, S, R in turn.
 LRFD = [  # ASCE 7-16 2.3.1
@@ -38,7 +41,7 @@ ASD = [  # ASCE 7-16 2.4.1
     ("0.6D + 0.6W", {"D": 0.6, "W": 0.6}),
     ("0.6D + 0.7E", {"D": 0.6, "E": 0.7}),
 ]
-REVERSIBLE = ("W", "E")  # their effects act either way
+REVERSIBLE = ("W", "E", "Ex", "Ey")  # their effects act either way
 
 
 def asce7(cases, method: str = "LRFD") -> list[tuple[str, dict[str, float]]]:
@@ -50,7 +53,15 @@ def asce7(cases, method: str = "LRFD") -> list[tuple[str, dict[str, float]]]:
     templates = {"LRFD": LRFD, "ASD": ASD}[method.upper()]
     out: list[tuple[str, dict[str, float]]] = []
     seen: set[tuple] = set()
-    for _name, factors in templates:
+    quakes = [q for q in QUAKE if q in have]
+    expanded = []
+    for name, factors in templates:  # each seismic case in combinations of its own
+        if "E" in factors:
+            expanded += [(name, {(q if c == "E" else c): f for c, f in factors.items()})
+                         for q in quakes] or [(name, factors)]  # fmt: skip
+        else:
+            expanded.append((name, factors))
+    for _name, factors in expanded:
         if any(c in factors and c not in have for c in REVERSIBLE):
             continue  # a wind or seismic combination without that load is no combination
         if factors.get("roof", 0) >= 1.0 and not any(r in have for r in ROOF):

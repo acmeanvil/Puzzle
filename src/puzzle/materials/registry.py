@@ -49,6 +49,22 @@ PROPERTIES: list[PropertyDef] = [
         help="Engineering ultimate; the curve builder and fatigue use it",
     ),
     PropertyDef(
+        "welded_tensile_strength",
+        "Welded tensile strength",
+        "Pa",
+        "pressure",
+        "Structural",
+        help="F_tuw, an aluminium's ultimate in the weld-affected zone (ADM Table A.3.3)",
+    ),
+    PropertyDef(
+        "compressive_yield_strength",
+        "Compressive yield strength",
+        "Pa",
+        "pressure",
+        "Structural",
+        help="F_cy, the Aluminum Design Manual's (Table A.3.4); unset: the yield strength",
+    ),
+    PropertyDef(
         "proof_strength",
         "Proof strength",
         "Pa",

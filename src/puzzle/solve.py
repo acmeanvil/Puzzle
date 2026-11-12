@@ -415,7 +415,7 @@ def _run_study(
 
     kinds = [s.type for s in study.solve_steps()]
     for step in results.steps:
-        if 1 <= step.index <= len(kinds) and step.kind != "combination":  # ADR 0079
+        if 1 <= step.index <= len(kinds) and step.kind not in ("combination", "spectrum"):
             step.kind = kinds[step.index - 1]
         if step.index == preload_at:  # shown as "Preload" (StepResult.label)
             step.kind = preload.KIND

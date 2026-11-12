@@ -49,28 +49,157 @@ reference_temperature = 293.15
 points = [[293.15, 12.16e-6], [373.15, 12.48e-6], [473.15, 12.88e-6], [573.15, 13.28e-6],
           [673.15, 13.68e-6], [773.15, 14.08e-6], [873.15, 14.48e-6], [973.15, 14.88e-6]]
 
+# US structural steels (ADR 0079 step 3: AISC 360 member checks), E = 29,000 ksi as AISC 360 takes it.
+[astm_a992]
+name = "ASTM A992"
+type = "Metal"
+group = "Carbon Steel"
+description = "Structural steel for wide-flange shapes (W), the usual US beam and column grade"
+sources = ["ASTM A992/A992M: Fy 50 ksi, Fu 65 ksi minimum", "AISC 360-16 Table A3.1 lists the grade; E = 29,000 ksi and G = 11,200 ksi from its Section A3"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 29000, unit = "ksi" }
+poissons_ratio = { value = 0.30 }
+yield_strength = { value = 50, unit = "ksi" }
+tensile_strength = { value = 65, unit = "ksi" }
+thermal_conductivity = { value = 51.9, unit = "W/(m*K)" }
+specific_heat = { value = 486, unit = "J/(kg*K)" }
+thermal_expansion = { value = 11.7e-6, unit = "1/K" }
+
+[astm_a36]
+name = "ASTM A36"
+type = "Metal"
+group = "Carbon Steel"
+description = "Carbon structural steel for plates, bars, angles and channels"
+sources = ["ASTM A36/A36M: Fy 36 ksi, Fu 58 ksi minimum", "AISC 360-16 Table A3.1 lists the grade; E = 29,000 ksi and G = 11,200 ksi from its Section A3"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 29000, unit = "ksi" }
+poissons_ratio = { value = 0.30 }
+yield_strength = { value = 36, unit = "ksi" }
+tensile_strength = { value = 58, unit = "ksi" }
+thermal_conductivity = { value = 51.9, unit = "W/(m*K)" }
+specific_heat = { value = 486, unit = "J/(kg*K)" }
+thermal_expansion = { value = 11.7e-6, unit = "1/K" }
+
+[astm_a572_gr50]
+name = "ASTM A572 Gr. 50"
+type = "Metal"
+group = "Carbon Steel"
+description = "High-strength low-alloy columbium-vanadium structural steel, grade 50"
+sources = ["ASTM A572/A572M grade 50: Fy 50 ksi, Fu 65 ksi minimum", "AISC 360-16 Table A3.1 lists the grade; E = 29,000 ksi and G = 11,200 ksi from its Section A3"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 29000, unit = "ksi" }
+poissons_ratio = { value = 0.30 }
+yield_strength = { value = 50, unit = "ksi" }
+tensile_strength = { value = 65, unit = "ksi" }
+thermal_conductivity = { value = 51.9, unit = "W/(m*K)" }
+specific_heat = { value = 486, unit = "J/(kg*K)" }
+thermal_expansion = { value = 11.7e-6, unit = "1/K" }
+
+[astm_a500_gr_c_rect]
+name = "ASTM A500 Gr. C (rectangular HSS)"
+type = "Metal"
+group = "Carbon Steel"
+description = "Cold-formed structural tubing, square and rectangular"
+sources = ["ASTM A500/A500M grade C, shaped structural tubing: Fy 50 ksi, Fu 62 ksi minimum", "AISC 360-16 Table A3.1 lists the grade; E = 29,000 ksi and G = 11,200 ksi from its Section A3"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 29000, unit = "ksi" }
+poissons_ratio = { value = 0.30 }
+yield_strength = { value = 50, unit = "ksi" }
+tensile_strength = { value = 62, unit = "ksi" }
+thermal_conductivity = { value = 51.9, unit = "W/(m*K)" }
+specific_heat = { value = 486, unit = "J/(kg*K)" }
+thermal_expansion = { value = 11.7e-6, unit = "1/K" }
+
+[astm_a500_gr_c_round]
+name = "ASTM A500 Gr. C (round HSS)"
+type = "Metal"
+group = "Carbon Steel"
+description = "Cold-formed structural tubing, round"
+sources = ["ASTM A500/A500M grade C, round structural tubing: Fy 46 ksi, Fu 62 ksi minimum", "AISC 360-16 Table A3.1 lists the grade; E = 29,000 ksi and G = 11,200 ksi from its Section A3"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 29000, unit = "ksi" }
+poissons_ratio = { value = 0.30 }
+yield_strength = { value = 46, unit = "ksi" }
+tensile_strength = { value = 62, unit = "ksi" }
+thermal_conductivity = { value = 51.9, unit = "W/(m*K)" }
+specific_heat = { value = 486, unit = "J/(kg*K)" }
+thermal_expansion = { value = 11.7e-6, unit = "1/K" }
+
+[astm_a53_gr_b]
+name = "ASTM A53 Gr. B (pipe)"
+type = "Metal"
+group = "Carbon Steel"
+description = "Welded and seamless steel pipe used as structural pipe"
+sources = ["ASTM A53/A53M grade B: Fy 35 ksi, Fu 60 ksi minimum", "AISC 360-16 Table A3.1 lists the grade; E = 29,000 ksi and G = 11,200 ksi from its Section A3"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 29000, unit = "ksi" }
+poissons_ratio = { value = 0.30 }
+yield_strength = { value = 35, unit = "ksi" }
+tensile_strength = { value = 60, unit = "ksi" }
+thermal_conductivity = { value = 51.9, unit = "W/(m*K)" }
+specific_heat = { value = 486, unit = "J/(kg*K)" }
+thermal_expansion = { value = 11.7e-6, unit = "1/K" }
+
 [stainless_steel_304]
 name = "Stainless steel 304"
 type = "Metal"
 group = "Stainless Steel"
-description = "Austenitic stainless steel, annealed"
+description = "Austenitic stainless steel (S30400), annealed"
+sources = ["ASTM A240/A240M type 304: Fy 30 ksi (205 MPa), Fu 75 ksi (515 MPa) minimum", "AISC 370-21 Section A3.1: E = 28,000 ksi (193 000 MPa) for austenitic stainless steel"]
 density = { value = 8000, unit = "kg/m^3" }
 youngs_modulus = { value = 193, unit = "GPa" }
 poissons_ratio = { value = 0.29 }
+yield_strength = { value = 205, unit = "MPa" }
+tensile_strength = { value = 515, unit = "MPa" }
 thermal_conductivity = { value = 16.2, unit = "W/(m*K)" }
 specific_heat = { value = 500, unit = "J/(kg*K)" }
 thermal_expansion = { value = 17.3e-6, unit = "1/K" }
 electrical_conductivity = { value = 1.39e6, unit = "S/m" }
 relative_permeability = { value = 1.0 }
 
+[duplex_2205]
+name = "Duplex stainless steel 2205"
+type = "Metal"
+group = "Stainless Steel"
+description = "Duplex stainless steel (S32205), annealed"
+sources = ["ASTM A240/A240M S32205: Fy 65 ksi (450 MPa), Fu 95 ksi (655 MPa) minimum", "AISC 370-21 Section A3.1: E = 29,000 ksi (200 000 MPa) for duplex stainless steel"]
+density = { value = 7800, unit = "kg/m^3" }
+youngs_modulus = { value = 200, unit = "GPa" }
+poissons_ratio = { value = 0.30 }
+yield_strength = { value = 450, unit = "MPa" }
+tensile_strength = { value = 655, unit = "MPa" }
+thermal_conductivity = { value = 19.0, unit = "W/(m*K)" }
+specific_heat = { value = 500, unit = "J/(kg*K)" }
+thermal_expansion = { value = 13.0e-6, unit = "1/K" }
+
+[lean_duplex_2101]
+name = "Lean duplex stainless steel 2101"
+type = "Metal"
+group = "Stainless Steel"
+description = "Lean duplex stainless steel (S32101), annealed plate"
+sources = ["ASTM A240/A240M S32101 over 0.187 in.: Fy 65 ksi (450 MPa), Fu 94 ksi (650 MPa) minimum", "AISC 370-21 Section A3.1: E = 29,000 ksi (200 000 MPa) for duplex stainless steel"]
+density = { value = 7800, unit = "kg/m^3" }
+youngs_modulus = { value = 200, unit = "GPa" }
+poissons_ratio = { value = 0.30 }
+yield_strength = { value = 450, unit = "MPa" }
+tensile_strength = { value = 650, unit = "MPa" }
+thermal_conductivity = { value = 15.0, unit = "W/(m*K)" }
+specific_heat = { value = 500, unit = "J/(kg*K)" }
+thermal_expansion = { value = 13.0e-6, unit = "1/K" }
+
 [aluminium_6061_t6]
 name = "Aluminium 6061-T6"
 type = "Metal"
 group = "Aluminum"
 description = "Precipitation-hardened aluminium alloy"
+sources = ["Aluminum Design Manual 2015, Table A.3.4, 6061-T6 extrusions: Ftu 38 ksi (262 MPa), Fty 35 ksi (241 MPa), Fcy 35 ksi (241 MPa)"]
 density = { value = 2700, unit = "kg/m^3" }
 youngs_modulus = { value = 68.9, unit = "GPa" }
 poissons_ratio = { value = 0.33 }
+yield_strength = { value = 241, unit = "MPa" }
+tensile_strength = { value = 262, unit = "MPa" }
+compressive_yield_strength = { value = 241, unit = "MPa" }
+welded_tensile_strength = { value = 165, unit = "MPa" }  # ADM Table A.3.3: 24 ksi
 thermal_conductivity = { value = 167, unit = "W/(m*K)" }
 specific_heat = { value = 896, unit = "J/(kg*K)" }
 thermal_expansion = { value = 23.6e-6, unit = "1/K" }
@@ -1067,3 +1196,25 @@ density = { value = 8000, unit = "kg/m^3" }
 youngs_modulus = { value = 193, unit = "GPa" }
 poissons_ratio = { value = 0.29 }
 tensile_strength = { value = 689.5, unit = "MPa" }
+
+[filler_er4043]
+name = "ER4043"
+type = "Metal"
+group = "Filler metal"
+description = "AWS A5.10 aluminium-silicon filler, the common one for 6061 and 6063"
+sources = ["Aluminum Design Manual 2015, Table A.3.6: 4043 filler F_tuw 24 ksi (165 MPa)"]
+density = { value = 2680, unit = "kg/m^3" }
+youngs_modulus = { value = 69, unit = "GPa" }
+poissons_ratio = { value = 0.33 }
+tensile_strength = { value = 165, unit = "MPa" }
+
+[filler_er5356]
+name = "ER5356"
+type = "Metal"
+group = "Filler metal"
+description = "AWS A5.10 aluminium-magnesium filler, stronger than 4043"
+sources = ["Aluminum Design Manual 2015, Table A.3.6: 5356 filler F_tuw 35 ksi (240 MPa)"]
+density = { value = 2640, unit = "kg/m^3" }
+youngs_modulus = { value = 71, unit = "GPa" }
+poissons_ratio = { value = 0.33 }
+tensile_strength = { value = 240, unit = "MPa" }

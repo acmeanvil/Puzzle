@@ -33,6 +33,8 @@ part. The formulations written so far:
   temperature.
 - `reduced`: CalculiX C3D20R and Code_Aster 3D_SI on 20-node bricks (0.9957 of
   Timoshenko's cantilever on both).
+- `thick_shell`: Code_Aster DST (Mindlin-Reissner) for thick plates and shells
+  (span/thickness below about 20): it takes the shear deflection DKT leaves out.
 - `full`, `timoshenko`, `thin_shell`: the defaults (C3D10, 3D, POU_D_T, DKT...).
 
 `formulation="none"` removes the choice. `solver_types={"calculix": "C3D20R"}` names a
@@ -53,8 +55,9 @@ solver's own type outright (expert use: it is written as given).
   as a follower load (TYPE_CHARGE='SUIV').
 - The two agree to five digits on a pressed cantilever, and both match the elastica
   within 1 %.
-- On Code_Aster, beams, beam bolts and shells are refused under large deflection so far:
-  run those on CalculiX.
+- On Code_Aster, beams become POU_D_T_GD (geometrically exact) under large deflection:
+  the elastica to four digits; their section forces aren't read yet. Beam bolts and
+  shells are refused there so far: run those on CalculiX.
 - A run warning `large_strain` means strains passed 5 % on an elastic material: the
   answer needs a hyperelastic model.
 - Transient large deflection is refused on both solvers so far.
@@ -67,6 +70,6 @@ solver's own type outright (expert use: it is written as given).
   `element_order` 2, and `hexahedron_nodes` 20 (CalculiX, Code_Aster, Elmer) or 27
   (Code_Aster, Elmer, FEniCSx). CalculiX refuses 27-node bricks and FEniCSx 20-node
   ones. Reduced integration (C3D20R, 3D_SI) needs the 20-node ones.
-- Thick shells (DST, S8R) and C3D8R: listed, not written yet.
+- S8R, Q4G, COQUE_3D (quadrilateral shells) and C3D8R: listed, not written yet.
 - Choosing per body on PyNite, Elmer or FEniCSx: nothing to choose yet; they refuse
   it.

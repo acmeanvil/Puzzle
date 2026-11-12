@@ -288,6 +288,15 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             "reference": _reference_temperature(comp),
         }
     _field_files(features, case["features"], inputs, mesh, workdir)
+    if any(w.formulation == "line" for w in comp.welds):  # ADR 0078 step 3: light welds
+        if physics != "solid_mechanics" or step.type != "stationary":
+            raise InputError("light welds are written in static structural steps on FEniCSx "
+                             "so far", code="unsupported")  # fmt: skip
+        from puzzle.adapters.weld_pairs import all_pairs
+
+        case["welds"] = [{"name": name, "a": [int(n) for n in wp.a],
+                          "b": [int(n) for n in wp.b], "k": float(wp.k)}
+                         for name, wp in all_pairs(project, comp, mesh).items()]  # fmt: skip
     threaded = [c for c in comp.contacts if c.thread is not None]
     if threaded:
         case["threads"] = _threads(project, comp, mesh, step, physics, threaded)

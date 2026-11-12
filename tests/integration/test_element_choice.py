@@ -217,3 +217,58 @@ def test_the_elastica(tmp_path, solver):
     print(f"{solver} elastica: down {down:.4f} L (0.3017), in {drawn:.4f} L (0.0566)")
     assert down == pytest.approx(0.3017, rel=0.02)
     assert drawn == pytest.approx(0.0566, rel=0.04)
+
+
+@over("code_aster", "calculix")
+def test_the_elastica_on_beams(tmp_path, solver):
+    """The elastica again, on line elements (ADR 0082 decision 6): a 1 m frame cantilever,
+    a 10 × 2 mm rectangle (thin about its bending axis), PL²/EI = 1 at its tip, large
+    deflection. Code_Aster writes POU_D_T_GD with GROT_GDEP, CalculiX its beams under
+    NLGEOM: the tip 0.3017 L down and 0.0566 L in (Bisshopp & Drucker)."""
+    pytest.importorskip("OCP")
+    from puzzle import frames
+    from puzzle.model.schema import (
+        BeamSection,
+        Component,
+        MaterialAssignment,
+        MeshRecipe,
+        PartInstance,
+        Project,
+    )
+    from puzzle.project import save_project
+
+    length, width, depth = 1.0, 0.01, 0.002
+    p = Project(name="elastica")
+    geo = p.add(frames.geometry("Frame", {"A": [0, 0, 0], "B": [length, 0, 0]},
+                                [["AB", "A", "B"]]))  # fmt: skip
+    steel = p.add(Material(name="Steel", properties={
+        "youngs_modulus": q(E, "Pa"), "poissons_ratio": q(0.3, "dimensionless"),
+        "density": q(7850, "kg/m^3")}))  # fmt: skip
+    mesh = p.add(MeshRecipe(name="M", global_size=q(length / 40, "m"),
+                            element_order=1 if solver == "code_aster" else 2))  # fmt: skip
+    inertia = width * depth**3 / 12  # about the first axis (y): the height across it, z
+    force = E * inertia / length**2
+    section = BeamSection(selection="F", orientation=(0.0, 1.0, 0.0), shape="rectangle",
+                          width=q(width * 1e3, "mm"), height=q(depth * 1e3, "mm"))  # fmt: skip
+    comp = p.add(Component(
+        name="Frame", parts=[PartInstance(name="F", geometry=geo.id)], mesh=mesh.id,
+        materials=[MaterialAssignment(material=steel.id, selection="F")],
+        beam_sections=[section],
+        physics=[Physics(type="solid_mechanics",
+                         settings={"temperature_dependent_materials": False},
+                         features=[Feature(type="fixed", selection="F/A"),
+                                   Feature(type="force", selection="F/B",
+                                           values={"z": q(-force, "N")})])]))  # fmt: skip
+    study = p.add(Study(name="S", component=comp.id, solver=solver, steps=[
+        SolveStep(type="stationary", settings={"geometric_nonlinearity": True,
+                                               "increments": 20})]))  # fmt: skip
+    root = tmp_path / "frame"
+    save_project(p, root)
+    run = run_study(p, study.id, root, tmp_path / "w", timeout_s=1800)
+    u = run.results.last("displacement")
+    xyz = run.mesh.node_coords(u.ids)
+    k = int(np.argmin(np.linalg.norm(xyz - [length, 0, 0], axis=1)))
+    down, drawn = -u.values[k, 2] / length, -u.values[k, 0] / length
+    print(f"{solver} beam elastica: down {down:.4f} L (0.3017), in {drawn:.4f} L (0.0566)")
+    assert down == pytest.approx(0.3017, rel=0.01)
+    assert drawn == pytest.approx(0.0566, rel=0.03)

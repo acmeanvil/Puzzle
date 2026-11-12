@@ -389,6 +389,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     # ADR 0076 step 4: a beam bolt's tapped end as a thread, in place of its spider.
     bolt_threads = thread_springs.bolt_threads(project, comp, mesh, fasteners)
     base = thread_springs.bolt_helpers(base, bolt_threads)
+    base, welds = _with_welds(project, comp, mesh, base, names)  # ADR 0078 step 3
     for bt in bolt_threads:
         fastener_ends[bt.index - 1].setdefault("threaded", []).append(bt.label)
     if fastener_ends:  # the reader sums the bolt end faces' reactions (ADR 0027)
@@ -427,13 +428,16 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         for p in comp.parts
         if mesh.groups.get(p.name) and mesh.groups[p.name].dim == 2 and not mesh.planar
     ]
-    if nlgeom and (beam_parts or shell_parts or any(c.formulation == "beam"
-                                                    for c in comp.connectors)):  # fmt: skip
-        raise InputError(  # ADR 0082 decision 6: they need POU_D_TGM and COQUE_3D
-            "large deflection of beams, beam bolts and shells isn't written on Code_Aster yet "
-            "(it needs POU_D_TGM and COQUE_3D with GROT_GDEP); CalculiX takes it",
+    if nlgeom and (shell_parts or any(c.formulation == "beam" for c in comp.connectors)):
+        raise InputError(  # ADR 0082 decision 6: shells want DKT/COQUE_3D with GROT_GDEP
+            "large deflection of shells and beam bolts isn't written on Code_Aster yet; "
+            "CalculiX takes it",
             code="unsupported",
         )
+    if nlgeom and beam_parts and any(c.selection.split("/", 1)[0] in beam_parts
+                                     for c in comp.elements):  # fmt: skip
+        raise InputError("a chosen beam element under large deflection: Code_Aster writes "
+                         "POU_D_T_GD there", code="unsupported")  # fmt: skip
     if any(b.element in ("tri6", "quad8", "quad9") for b in mesh.shell_blocks()) and not thermal:
         raise InputError(
             "Code_Aster's shells (DKT) are three- and four-node faces: set the mesh recipe's "
@@ -702,7 +706,9 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         "model = AFFE_MODELE(MAILLAGE=mesh, "
         f"AFFE=(_F(TOUT='OUI', PHENOMENE='{phenomenon}', MODELISATION='{model}'),"
         + "".join(
-            f" _F(GROUP_MA='{names[p]}', PHENOMENE='MECANIQUE', MODELISATION='POU_D_T'),"
+            # ADR 0082 decision 6: large rotations of beams on POU_D_T_GD (GROT_GDEP)
+            f" _F(GROUP_MA='{names[p]}', PHENOMENE='MECANIQUE', "
+            f"MODELISATION='{'POU_D_T_GD' if nlgeom else 'POU_D_T'}'),"
             for p in beam_parts
         )
         + "".join(
@@ -719,6 +725,9 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             f"MODELISATION='{'DIS_TR' if g == 'MASTERS' else discrete}'),"
             for g in points.sets
         )
+        + "".join(  # ADR 0078: light welds' node pairs, springs in global axes
+            f" _F(GROUP_MA='{g}', PHENOMENE='MECANIQUE', MODELISATION='DIS_T')," for g, _k in welds
+        )
         + "".join(  # ADR 0082: each body's chosen element, last, so it overrides
             f" _F(GROUP_MA='{names[sel]}', PHENOMENE='{phenomenon}', MODELISATION='{m}'),"
             for sel, m in _chosen(comp, mesh, thermal)
@@ -733,11 +742,17 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             beams,
             shells,
             massif,
-            threads.cara if threads else (),
+            [
+                *(threads.cara if threads else ()),
+                *(
+                    f"_F(GROUP_MA='{g}', CARA='K_T_D_L', VALE=({k:.10e}, {k:.10e}, {k:.10e}))"
+                    for g, k in welds
+                ),
+            ],
             mesh.planar,
         ),
     ]
-    cara = "CARA_ELEM=cara, " if points.sets or beams or shells or massif else ""
+    cara = "CARA_ELEM=cara, " if points.sets or beams or shells or massif or welds else ""
     assignments = []
     materials = [project.get(a.material, Material) for a in comp.materials]
     tables = [thermal_tables(m, comp) if thermal else {} for m in materials]
@@ -971,6 +986,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         ]
     elif (touching or nlgeom or plastic or gaps or initial or (threads and threads.gaps)
           or chain or mixed):  # fmt: skip
+        solids = mesh.planar or any(b.dim == 3 for b in mesh.blocks)
         # Green-Lagrange strain: large rotations, as CalculiX's NLGEOM (GROT_GDEP refuses tet10);
         # with plasticity, logarithmic strains (true stress against true strain).
         strains = ", DEFORMATION='GREEN_LAGRANGE'" if nlgeom else ""
@@ -981,6 +997,16 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         if chain and which:  # each step's end
             which = "INST=(" + ", ".join(f"{k:.1f}" for k in range(1, n + 1)) + ",)"
         parts = [f"_F(TOUT='OUI', RELATION='ELAS'{strains})"]
+        if nlgeom and beam_parts:  # ADR 0082 decision 6: beams' large rotations
+            groups = ", ".join(f"'{names[b]}'" for b in beam_parts)
+            others = [names[pt.name] for pt in comp.parts if pt.name not in beam_parts
+                      and pt.name in names]  # fmt: skip
+            # POU_D_T_GD takes GROT_GDEP only: Green-Lagrange goes on the other parts alone
+            parts = ([f"_F(GROUP_MA=({', '.join(repr(o) for o in others)},), RELATION='ELAS'"
+                      f"{strains})"] if others else [])  # fmt: skip
+            parts.append(
+                f"_F(GROUP_MA=({groups},), RELATION='ELAS_POUTRE_GR', DEFORMATION='GROT_GDEP')"
+            )  # POU_D_T_GD's own elasticity
         if nlgeom and points.sets:  # springs, pretension, gaps: point elements, small strain
             groups = ", ".join(f"'{g}'" for g in points.sets)
             parts.append(f"_F(GROUP_MA=({groups},), RELATION='ELAS', DEFORMATION='PETIT')")
@@ -1055,14 +1081,21 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             + _failure(step)
             + ")",
             *[call(k) for k in range(1, n + 1)],
-            "res = CALC_CHAMP(reuse=res, RESULTAT=res, CONTRAINTE=('SIGM_NOEU',"
-            + (" 'EFGE_NOEU'," if bolt_beams else "")
-            + "), FORCE=('REAC_NODA',)"
+            "res = CALC_CHAMP(reuse=res, RESULTAT=res, "
+            + (
+                "CONTRAINTE=("
+                + ("'SIGM_NOEU'," if solids else "")
+                + (" 'EFGE_NOEU'," if bolt_beams else "")
+                + "), "
+                if solids or bolt_beams
+                else ""
+            )  # a frame of POU_D_T_GD alone has neither
+            + "FORCE=('REAC_NODA',)"
             # V1 of VMIS_ISOT_TRAC is the cumulated (equivalent) plastic strain p.
             + (", VARI_INTERNE=('VARI_NOEU',), DEFORMATION=('EPSP_NOEU',)" if plastic else "")
             + ")",
             _table("res", "DEPL", "displacement", which),
-            _table("res", "SIGM_NOEU", "stress", which),
+            *([_table("res", "SIGM_NOEU", "stress", which)] if solids else []),
             _table("res", "REAC_NODA", "reaction_force", which),
             *([_table("res", "CONT_NOEU", "contact", which)] if touching else []),
             *([_table("res", "EFGE_NOEU", "beam_forces", which)] if bolt_beams else []),
@@ -1520,6 +1553,34 @@ def _negligible(project, comp, mesh: Mesh) -> float:
     ]
     E = max((m.to_si() for m in moduli if m is not None), default=1.0)
     return 1e-9 * E * float(np.linalg.norm(np.ptp(mesh.coords, axis=0)))
+
+
+WELD_TAG = 950_000  # Gmsh line entities for light welds' springs
+
+
+def _with_welds(project, comp, mesh: Mesh, base: Mesh, names: dict):
+    """Light welds (ADR 0078, as CalculiX's SPRING2s): a SEG2 between each node pair of
+    `weld_pairs` (the pairs lie across the fillet, never coincident), in a group per weld
+    written WE<k>, for DIS_T elements of K_T_D_L = the weld's k along x, y and z (global
+    axes). -> (mesh, [(group, k)])."""
+    if not any(w.formulation == "line" for w in comp.welds):
+        return base, []
+    from puzzle.adapters.weld_pairs import all_pairs
+
+    blocks, groups = list(base.blocks), dict(base.groups)
+    elem = int(max(b.ids.max() for b in blocks)) + 1
+    out = []
+    for k, (_name, wp) in enumerate(all_pairs(project, comp, mesh).items(), start=1):
+        conn = np.column_stack([wp.a, wp.b]).astype(np.int64)
+        if len(conn) == 0:
+            continue
+        entity = (1, WELD_TAG + k)
+        blocks.append(CellBlock("line2", 1, entity, np.arange(elem, elem + len(conn)), conn))
+        elem += len(conn)
+        groups[f"__weld{k}"] = Group(f"__weld{k}", 1, [entity], np.unique(conn))
+        names[f"__weld{k}"] = f"WE{k}"
+        out.append((f"WE{k}", float(wp.k)))
+    return Mesh(base.node_ids, base.coords, blocks, groups), out
 
 
 def _discrete_cara(

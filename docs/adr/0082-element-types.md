@@ -1,6 +1,6 @@
 # 0082. Element types: a solver-neutral choice per body, each solver's own types, and a library of them
 
-- Status: Accepted; steps 1 to 3 built in part (2026-11-11): the element library, its listing, and the choice per body for four formulations
+- Status: Accepted; steps 1 to 3 built in part (2026-11-12): the element library, its listing, the choice per body (C3D8I, 3D_INCO_UPG, POU_D_E, 3D_DIAG, C3D20R, 3D_SI, DST), 20- and 27-node bricks, large deflection on Code_Aster for solids and beams
 - Date: 2026-11-11
 
 ## Context
@@ -226,6 +226,43 @@ The maintainer asked (2026-11-11) for:
 - **Not yet:** transient large deflection (DYNA_NON_LINE; CalculiX refuses it too), a
   preloaded buckling step from a large-deflection state, and plasticity with large
   deflection benchmarked on both solvers.
+
+## Built: thick shells and large rotations of beams (2026-11-12)
+
+- **DST** (Mindlin-Reissner, Code_Aster) is written: a shell body's `thick_shell` choice
+  is a last AFFE_MODELE occurrence over DKT.
+
+  Benchmark (`tests/integration/test_thick_shells.py`): a 300 × 100 mm strip, 100 mm
+  thick (L/h = 3), ν = 0 (so exactly a Timoshenko beam in Mindlin's theory), clamped,
+  under uniform pressure. DKT gives 60.774 µm against Kirchhoff's wL⁴/8EI = 60.750
+  (+0.04 %); DST gives 66.275 µm against Mindlin's + wL²/2κGA = 66.150 (+0.19 %). The
+  shear part is 8.9 %, so each element is told apart by its own theory.
+- **Beams under large deflection on Code_Aster** (decision 6). Beam parts become
+  POU_D_T_GD, the geometrically exact Timoshenko beam, with RELATION='ELAS_POUTRE_GR',
+  DEFORMATION='GROT_GDEP'. Green-Lagrange goes on the other parts only (POU_D_T_GD takes
+  GROT_GDEP alone), and an all-beam frame writes no SIGM_NOEU.
+
+  Benchmark (`test_element_choice.py`, the elastica on line elements, PL²/EI = 1):
+  - Code_Aster 0.3017 L down (Bisshopp & Drucker 0.3017) and 0.0564 L in (0.0566);
+  - CalculiX's beams under NLGEOM 0.2996 L and 0.0558 L.
+
+  Section forces of POU_D_T_GD are not read yet. A chosen beam element under large
+  deflection is refused, and so are shells and beam bolts there (CalculiX takes them).
+- **The library** adds POU_D_T_GD (written) and marks DST written; `docs/elements.md`
+  regenerated. CalculiX has no hybrid (u-p) elements to write, so its mixed u-p row stays
+  empty; Code_Aster's 3D_INCO_UPG is the u-p element.
+- **Not yet:**
+  - FEniCSx mixed u-p (Taylor-Hood): the static path's boundary conditions on a mixed
+    space;
+  - Elmer p-elements;
+  - quadrilateral shells (S4R, S8R, Q4G, COQUE_3D: Puzzle's shells mesh as triangles);
+  - B31R/B32R as a choice;
+  - PyNite plates;
+  - large deflection in transient steps, preloaded buckling from a large-deflection state,
+    plasticity with large deflection benchmarked on both solvers;
+  - shells under large deflection on Code_Aster;
+  - decision 7's Properties dropdown and the mesh view's element legend: the choice is
+    Model → Components → Element formulation… and MCP `element_choose` so far.
 
 ## Consequences
 

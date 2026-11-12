@@ -1,6 +1,6 @@
 # 0078. Generate welds along a path, light by default and modelled on request, checked by AISC 360 and 370
 
-- Status: Accepted; step 1 built, step 2 in part (2026-11-11)
+- Status: Accepted; steps 1-3 built, steps 5 and 6 in part (2026-11-12)
 - Date: 2026-11-10
 
 ## Context
@@ -231,6 +231,81 @@ The bracket's moment balances exactly only with the twist: about 7 % of it is th
   instantaneous-centre example. It waits for a readable table or worked example to
   check it against.
 - **Also left:** the weld table in the GUI.
+
+## Built: step 2 completed, step 3 (2026-11-12)
+
+- **The instantaneous centre of rotation** (`weld_strength.ic_capacity`,
+  `ic_moment_capacity`). AISC 360-16 keeps the method in J2.4's user note and the
+  Manual's Part 8, so it is written from 360-10's J2.4(b), J2-6 to J2-9: Δ_m and Δ_u per
+  element by its angle, Δ_i proportioned from the critical element, f(p), and F_nwi with
+  the directional increase.
+  - The IC is found first along the line through the centroid normal to the load, on the
+    far side from the load's line (the nearest root; far out the group looks concentric,
+    a false root at infinity), then refined in 2D for unsymmetric groups (MINPACK's
+    Levenberg-Marquardt: SciPy's SVD fails to load on some Windows environments).
+  - A load through the centroid, or an IC past a thousand times the group's size, is the
+    concentric case: every element at the least Δ_u.
+  - `weld_fields._ic` fits the weld's plane to its stations, takes its in-plane force and
+    moment about the centroid from the solved line forces, and gives P_n, the eccentricity
+    and the LRFD and ASD utilisations under the weld's `strength`. Out-of-plane bending is
+    reported and noted as not covered (the stations' J2 check covers it).
+- **Benchmarks** (`tests/test_weld_strength.py`):
+  - two lines loaded concentrically give the Manual's C = 3.71 (2 × 0.60 × 70 × 0.707/16);
+  - a line in pure moment matches its integral, worked independently by quadrature, to
+    0.1 %;
+  - P_n e tends to M_n as e grows;
+  - eccentricity lowers the strength;
+  - an L-shaped group balances (residual nil).
+
+  On the bracket welded all round, the concentric strength in the base's plane is
+  153.9 kN against 155.1 kN by hand (transverse sides at Δ_u(90°), longitudinal ones at
+  p = Δ_u(90°)/Δ_m(0°)).
+- **The weld table** (`gui/weld_table.py`, Window → Welds, Results → Result tools → Weld
+  results): per weld its length, total and largest line force, J2 LRFD and ASD, the IC's
+  in-plane utilisation and the filler, worst first; the stations below; CSV export.
+- **Code_Aster and FEniCSx light welds** (step 3):
+  - Code_Aster: a SEG2 `DIS_T` element per node pair (`comm._with_welds`, groups WE<k>,
+    `K_T_D_L` = k in global axes).
+  - FEniCSx: the pairs' k I as springs along x, y and z added to K (`study._weld_springs`,
+    the threads' spring path, dofs by mesh node id).
+  - Both claim `welds={"line"}`. The lap joint and the bracket match CalculiX to four
+    digits on both (207.8 N/mm, utilisation 0.412, the bracket's 419.6 N/mm and its
+    moments). Elmer stays refused: it has no node-pair springs.
+- **AISC 370-21 J2 for stainless welds.** The same F_nw = 0.60 F_EXX, φ 0.75, Ω 2.00 and
+  J2-5, with F_EXX from AWS A5.4/A5.9. The matching filler follows the base metal: E308L
+  for 304, E316L for 316, E2209 for the duplexes (Design Guide 27 Table 10-1). Benchmark:
+  Design Guide 27 Example 9's end plate, F_nw 45.0 ksi, R_n 183 kips, φR_n 137, R_n/Ω 91.5.
+
+## Built: steps 5 and 6 in part (2026-11-12)
+
+- **Fatigue by AISC 360-16 Appendix 3** (`weld_strength.allowable_range`,
+  `weld_fields.fatigue`, MCP `weld_fatigue`):
+  - Table A-3.1's C_f and F_TH for categories A to E′ (Eq. A-3-1M) and F (A-3-2M);
+  - the stress range between two steps, or from zero;
+  - category F on the throat from the line forces' range over t_e;
+  - A to E′ at the toe from the largest principal stress range at the weld's footprint
+    nodes (mesh-dependent).
+
+  AWS D1.1's nontubular categories are the same. Benchmarks: F_SR at 2 million cycles
+  (B 18.2 ksi, F 9.5 ksi, A at its 24 ksi threshold); the lap joint cycled from zero, its
+  throat range 89.48 MPa against the peak line force over the throat, F_SR 65.46 MPa.
+- **Aluminium welds by the Aluminum Design Manual 2015, J.2**
+  (`weld_strength.check_aluminium`):
+  - fillets checked for the lesser of the weld metal's 0.6 (0.85 F_tuw,filler) on the
+    throat (× 1.36 for transverse loading with `directional`) and the base metal's
+    0.6 F_tuw,base on the leg; φ 0.75, Ω 1.95;
+  - fillers from Table A.3.6 (4043 by default; ER4043 and ER5356 in the library); the
+    base metal's welded F_tuw is the new property `welded_tensile_strength` (6061-T6:
+    24 ksi, Table A.3.3).
+
+  Benchmark: ADM Part VII Example 27, 3/8 in. fillets, 16 in.: base metal 86.4 k, weld
+  metal 51.9 k (51.7 with the example's rounded F_nw), P = R_n/Ω 26.5 k.
+- **Not yet:**
+  - step 4, the modelled weld (the bead swept as a solid, fused, the root parted);
+  - ASME VIII-2's structural-stress fatigue (5.5.5), which wants the through-thickness
+    nodal forces at a modelled weld's toe;
+  - shell edges (welds along shells' edges, step 6);
+  - the ADM's heat-affected zones in member checks (ADR 0079).
 
 ## Plan
 

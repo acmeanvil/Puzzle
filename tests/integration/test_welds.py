@@ -91,7 +91,7 @@ def _line(run):
     return f, c, run.mesh.node_coords(f.ids)
 
 
-@over("calculix")
+@over("calculix", "code_aster", "fenicsx")
 def test_lap_joint_carries_the_pull(tmp_path, solver):
     pytest.importorskip("OCP")
     length = 0.05
@@ -135,7 +135,7 @@ def test_lap_joint_carries_the_pull(tmp_path, solver):
     )
 
 
-@over("calculix")
+@over("calculix", "code_aster", "fenicsx")
 def test_bracket_welded_all_round(tmp_path, solver):
     pytest.importorskip("OCP")
     b, d, h = 0.02, 0.04, 0.06
@@ -177,6 +177,30 @@ def test_bracket_welded_all_round(tmp_path, solver):
     assert total[1] == pytest.approx(P, rel=1e-4)
     assert abs(moment[0]) == pytest.approx(P * h, rel=1e-4)
     assert normal == pytest.approx(elastic, rel=0.10)
+    # The instantaneous centre (in the base's plane): the shear passes over the centroid,
+    # so the group is concentric there; by hand, the transverse sides (±y, along x, b
+    # long) at their rupture Δ_u(90°), the longitudinal ones at p = Δ_u(90°)/Δ_m(0°).
+    from puzzle.model.schema import Component
+    from puzzle.post.weld_fields import results
+    from puzzle.weld_strength import _fp
+
+    ic = results(p, p.get(study.component, Component), run.mesh,
+                 run.results)["welds"][0]["strength"]["instantaneous_centre"]  # fmt: skip
+    w, fexx = 0.006, 482.6e6
+    te = 0.707 * w
+    du90 = min(1.087 * 96**-0.65, 0.17) * w
+    longitudinal = 0.6 * fexx * te * 2 * d * float(_fp(du90 / (0.209 * 2**-0.32 * w)))
+    transverse = 0.6 * fexx * 1.5 * te * 2 * b * float(_fp(du90 / (0.209 * 92**-0.32 * w)))
+    assert ic["checked"], ic
+    print(
+        f"instantaneous centre: P_n {ic['Pn_N'] / 1e3:.4g} kN ({ic['method']}), by hand "
+        f"{(longitudinal + transverse) / 1e3:.4g} kN; out of plane "
+        f"{ic['out_of_plane_moment_N_m']:.4g} N m"
+    )
+    assert ic["method"].startswith("concentric")
+    assert ic["Pn_N"] == pytest.approx(longitudinal + transverse, rel=0.03)
+    # the line forces' share of P h: the rest is the fillets' twist about their lines (~7 %)
+    assert ic["out_of_plane_moment_N_m"] == pytest.approx(P * h, rel=0.1) and "note" in ic
 
 
 def test_the_generator_finds_the_joint(tmp_path):
@@ -205,3 +229,78 @@ def test_the_generator_finds_the_joint(tmp_path):
     made = session.project.get(comp.id, Component).welds[0]
     assert made.path == "Upper/End fillet path"
     assert made.faces == ["Upper/-x", "Lower/+z"]  # the existing face selections reused
+
+
+@over("calculix")
+def test_the_welds_panel(tmp_path, solver):
+    """Window → Welds lists a stored run's welds with their J2 and IC utilisations, and a
+    selected weld's stations."""
+    import os
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    pytest.importorskip("PySide6")
+    pytest.importorskip("OCP")
+    from PySide6.QtWidgets import QApplication
+
+    from puzzle.gui.window import MainWindow
+    from puzzle.project.layout import RESULTS_DIR
+    from puzzle.results.store import ResultStore
+
+    QApplication.instance() or QApplication([])
+    parts = {
+        "Lower": ((0.1, 0.05, 0.01), (0.0, 0.0, 0.0), ()),
+        "Upper": ((0.1, 0.05, 0.01), (0.06, 0.0, 0.01), (("Foot", "edge", ["B/-x|B/-z"]),)),
+    }
+    features = [Feature(type="fixed", selection="Lower/-x"),
+                Feature(type="force", selection="Upper/+x", values={"x": q(P, "N")})]  # fmt: skip
+    weld = Weld(name="End fillet", leg=q(6, "mm"), path="Upper/Foot",
+                faces=["Upper/-x", "Lower/+z"])  # fmt: skip
+    p, study = _project(solver, parts, features, weld, mesh_mm=3.0)
+    root = tmp_path / "welds"
+    save_project(p, root)
+    run_study(p, study.id, root, tmp_path / "w", store=ResultStore(root / RESULTS_DIR))
+    window = MainWindow(root)
+    try:
+        window.docks.show("welds")
+        window.welds.refresh()
+        table = window.welds.table
+        assert table.rowCount() == 1, window.welds.note.text()
+        assert table.item(0, 0).text() == "End fillet" and table.item(0, 7).text() == "E70XX"
+        assert float(table.item(0, 4).text()) == pytest.approx(0.412, abs=0.01)
+        assert window.welds.stations.rowCount() > 5
+        out = window.welds.export(str(tmp_path / "w.csv"))
+        with open(out, encoding="utf-8") as f:
+            assert "End fillet" in f.read()
+    finally:
+        window.close()
+
+
+@over("calculix")
+def test_weld_fatigue_on_the_lap_joint(tmp_path, solver):
+    """AISC 360 Appendix 3 on the lap joint cycled from zero to P: category F's range is
+    the largest line force over the throat (379.7 N/mm / (0.707 × 6 mm) = 89.5 MPa),
+    against 690 (1.5/n)^0.167 MPa; a toe category reads the plates' stress range."""
+    from puzzle.model.schema import Component
+    from puzzle.post.weld_fields import fatigue
+
+    parts = {
+        "Lower": ((0.1, 0.05, 0.01), (0.0, 0.0, 0.0), ()),
+        "Upper": ((0.1, 0.05, 0.01), (0.06, 0.0, 0.01), (("Foot", "edge", ["B/-x|B/-z"]),)),
+    }
+    features = [Feature(type="fixed", selection="Lower/-x"),
+                Feature(type="force", selection="Upper/+x", values={"x": q(P, "N")})]  # fmt: skip
+    weld = Weld(name="End fillet", leg=q(6, "mm"), path="Upper/Foot",
+                faces=["Upper/-x", "Lower/+z"])  # fmt: skip
+    p, study = _project(solver, parts, features, weld, mesh_mm=3.0)
+    run = _run(tmp_path, p, study)
+    comp = p.get(study.component, Component)
+    f, c, _xyz = _line(run)
+    peak = float(np.max(f.values[:, c["magnitude"]]))
+    out = fatigue(p, comp, run.mesh, run.results, "End fillet", "F", 2e6)
+    allowed = 690e6 * (1.5 / 2e6) ** 0.167
+    print(f"fatigue F: {out['stress_range_Pa'] / 1e6:.4g} MPa against "
+          f"{allowed / 1e6:.4g} MPa, ratio {out['ratio']:.3f}")  # fmt: skip
+    assert out["stress_range_Pa"] == pytest.approx(peak / (0.707 * 0.006), rel=2e-3)
+    assert out["allowable_range_Pa"] == pytest.approx(allowed)
+    toe = fatigue(p, comp, run.mesh, run.results, "End fillet", "C", 2e6)
+    assert toe["stress_range_Pa"] > 0 and "mesh-dependent" in toe["where"]

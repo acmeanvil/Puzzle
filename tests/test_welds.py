@@ -37,5 +37,6 @@ def test_other_solvers_refuse_a_weld():
 
     adapters = available_adapters()
     caps = {name: adapters[name]().capabilities.welds for name in adapters}
-    assert caps["calculix"] == {"line"}
-    assert all(not v for k, v in caps.items() if k != "calculix")
+    writers = {"calculix", "code_aster", "fenicsx"}  # ADR 0078 step 3
+    assert all(caps[k] == {"line"} for k in writers if k in caps)
+    assert all(not v for k, v in caps.items() if k not in writers)

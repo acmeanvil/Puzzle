@@ -1282,6 +1282,44 @@ class MemberRelease(BaseModel):
     )
 
 
+class MemberDesign(BaseModel):
+    """How the members of `selection` (a member, a group, a line part, or "" for every
+    member) are checked (ADR 0079 step 3): the code (`auto` by the material: AISC 360
+    for carbon and low-alloy steel), LRFD or ASD, and the lengths a check needs. Each
+    length left unset is the member's own; `unbraced_length` is the laterally unbraced
+    length for lateral-torsional buckling (and the default for y and z), `k_*` the
+    effective length factors (1 under Direct Analysis, C3). `cb` overrides the
+    moment-gradient factor computed from the moment diagram (F1-1). The most specific
+    entry for a member wins: a member's over its group's over its part's over "". Never
+    changes a solve, so it is left out of hashes."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    selection: str = Field(default="", description="Part/Member, Part/Group, the part, or "
+                           "'' for every member")  # fmt: skip
+    code: Literal["auto", "aisc360", "aisc370", "adm"] = Field(default="auto", description="design "
+                                                         "code")  # fmt: skip
+    method: Literal["LRFD", "ASD"] = Field(default="LRFD", description="load and resistance "
+                                           "factors, or allowable strength")  # fmt: skip
+    length_x: Quantity | None = Field(default=None, description="unbraced length for "
+                                      "buckling about the strong axis")  # fmt: skip
+    length_y: Quantity | None = Field(default=None, description="unbraced length for "
+                                      "buckling about the weak axis")  # fmt: skip
+    length_z: Quantity | None = Field(default=None, description="unbraced length for "
+                                      "torsional buckling")  # fmt: skip
+    unbraced_length: Quantity | None = Field(default=None, description="laterally unbraced "
+                                             "length of the compression flange (L_b)")  # fmt: skip
+    k_x: float = Field(default=1.0, gt=0, description="effective length factor, strong axis")
+    k_y: float = Field(default=1.0, gt=0, description="effective length factor, weak axis")
+    k_z: float = Field(default=1.0, gt=0, description="effective length factor, torsion")
+    cb: float | None = Field(default=None, gt=0, description="lateral-torsional buckling "
+                             "modification factor; unset: from the moment diagram")  # fmt: skip
+    net_area_ratio: float = Field(default=1.0, gt=0, le=1, description="A_e / A_g for "
+                                  "tensile rupture (D2b): net area and shear lag")  # fmt: skip
+    deflection_limit: float | None = Field(default=None, gt=0, description="L / δ allowed "
+                                           "(360 for L/360); unset: not checked")  # fmt: skip
+
+
 class MemberOffset(BaseModel):
     """A rigid length at a member's end (ADR 0079): a joint's panel zone. The members of
     `selection` are rigid for `length` from the node `at`."""
@@ -1303,7 +1341,7 @@ class BeamSection(BaseModel):
 
     selection: str = Field(description="the part, or Part/Selection of its edges")
     shape: Literal["rectangle", "circle", "tube", "box", "library"] = "rectangle"
-    standard: Literal["aisc", "en"] | None = Field(
+    standard: Literal["aisc", "en", "aa"] | None = Field(
         default=None, description="library: the section table (ADR 0055)"
     )
     designation: str | None = Field(default=None, description="library: W12X26, IPE 300, ...")
@@ -1837,6 +1875,9 @@ class Component(ProjectObject):
     member_offsets: list[MemberOffset] = Field(
         default_factory=list, description="rigid lengths at frame members' ends (ADR 0079)"
     )
+    member_design: list[MemberDesign] = Field(
+        default_factory=list, description="how frame members are checked: code, method, "
+        "unbraced lengths (ADR 0079 step 3)")  # fmt: skip
     cyclic: CyclicSymmetry | None = Field(
         default=None, description="one sector of a cyclically symmetric whole (ADR 0081)"
     )
@@ -2124,6 +2165,41 @@ class Morph(BaseModel):
     )
 
 
+class SeismicDesign(BaseModel):
+    """ASCE 7-16 seismic parameters for a frame study (ADR 0079 step 4): the design
+    spectrum's S_DS, S_D1 (g) and T_L (s), S1 (g) for 12.8-6, the system's R, C_d and the
+    importance factor I_e, the structure type for T_a (Table 12.8-2) and for the drift
+    limit (Table 12.12-1) with the risk category. `mass_cases` is the seismic weight W
+    beyond the members' own (cases' gravity loads, factored: D at 1, a storage live load
+    at 0.25). The ELF procedure writes story forces as loads (case Ex or Ey); a modal step
+    with `response_spectrum` adds the CQC-combined response, scaled to `scale_to_elf` of
+    the ELF base shear (12.9.1.4: 1.0 in 7-16), to each combination with Ex or Ey."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    sds: float = Field(gt=0, description="S_DS, design short-period acceleration (g)")
+    sd1: float = Field(gt=0, description="S_D1, design 1 s acceleration (g)")
+    s1: float = Field(default=0.0, ge=0, description="S_1, mapped MCE_R 1 s acceleration (g)")
+    tl: float = Field(default=8.0, gt=0, description="T_L, long-period transition (s)")
+    r: float = Field(gt=0, description="response modification coefficient R (Table 12.2-1)")
+    cd: float = Field(gt=0, description="deflection amplification factor C_d")
+    ie: float = Field(default=1.0, gt=0, description="importance factor I_e (Table 1.5-2)")
+    risk_category: Literal["I", "II", "III", "IV"] = "II"
+    structure: Literal["steel_moment_frame", "concrete_moment_frame",
+                       "steel_eccentrically_braced", "steel_buckling_restrained",
+                       "other"] = Field(default="other", description="for C_t and x")  # fmt: skip
+    drift_structure: Literal["low_rise_with_partitions", "masonry_cantilever_shear_wall",
+                             "other_masonry_shear_wall", "other"] = Field(
+        default="other", description="the row of Table 12.12-1")  # fmt: skip
+    period: float | None = Field(default=None, gt=0, description="the fundamental period "
+                                 "(s) to use; unset: the modal one, else T_a")  # fmt: skip
+    mass_cases: dict[str, float] = Field(default_factory=lambda: {"D": 1.0},
+                                         description="load cases in W, with factors")  # fmt: skip
+    scale_to_elf: float = Field(default=1.0, gt=0, description="modal base shear scaled up to "
+                                "this share of the ELF one (12.9.1.4.1)")  # fmt: skip
+    damping: float = Field(default=0.05, gt=0, lt=1, description="modal damping for CQC")
+
+
 class Study(ProjectObject):
     kind: ClassVar[str] = "study"
 
@@ -2150,6 +2226,9 @@ class Study(ProjectObject):
     combinations: list[LoadCombination] = Field(
         default_factory=list, description="load combinations solved, one result step each "
         "(ADR 0079 step 2; PyNite); empty: every load at its value")  # fmt: skip
+    seismic: SeismicDesign | None = Field(
+        default=None, description="ASCE 7 seismic parameters: ELF loads, the response "
+        "spectrum, drift (ADR 0079 step 4)")  # fmt: skip
     weak_springs: Literal["auto", "always", "never"] = Field(
         default="auto", description="small springs to ground on bodies held only by sliding "
         "contact (ADR 0080): auto those, always bodies held by nothing too, never")  # fmt: skip

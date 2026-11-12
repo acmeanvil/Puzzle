@@ -65,7 +65,7 @@ Every solver's elements, grouped by what they model. ★ marks the ones Puzzle w
 | --- | --- | --- | --- | --- | --- |
 | thick shell (Mindlin-Reissner) | quadratic | S6 ★, S8 ★, S8R | COQUE_3D | – | – |
 | thin shell (Kirchhoff) | linear | S3 | DKT ★ | – | – |
-| thick shell (Mindlin-Reissner) | linear | S4/S4R | DST, Q4G | – | Plate / Quad (MITC4) |
+| thick shell (Mindlin-Reissner) | linear | S4/S4R | DST ★, Q4G | – | Plate / Quad (MITC4) |
 | thick shell (Mindlin-Reissner) | linear and quadratic | – | – | ShellSolver | – |
 
 - **CalculiX S6**: The quadratic triangular shell, expanded to C3D15 internally. Studies: static, modal, buckling, structural dynamics, contact, plasticity. (CalculiX User's Manual, 6.2 Element Types)
@@ -88,7 +88,7 @@ Every solver's elements, grouped by what they model. ★ marks the ones Puzzle w
 | Timoshenko beam (shear deformation) | quadratic | B32 ★, B32R ★ | – | – | – |
 | Euler-Bernoulli beam | linear | – | POU_D_E ★ | – | Member ★ |
 | beam with warping (open sections in torsion) | linear | – | POU_D_TG | – | – |
-| large rotations | linear | – | POU_D_TGM | – | – |
+| large rotations | linear | – | POU_D_T_GD ★, POU_D_TGM | – | – |
 
 - **CalculiX B31**: The linear beam, expanded to bricks of its section (rectangle, circle). Not for: short or many-element members: B32 is more accurate. Studies: static, modal, structural dynamics. (CalculiX User's Manual, 6.2 Element Types)
 - **CalculiX B32**: The quadratic beam, expanded to bricks of its section. Studies: static, modal, buckling, structural dynamics. (CalculiX User's Manual, 6.2 Element Types)
@@ -97,6 +97,7 @@ Every solver's elements, grouped by what they model. ★ marks the ones Puzzle w
 - **Code_Aster POU_D_T**: The straight Timoshenko beam: Puzzle's beams and beam bolts. Not for: large rotations: POU_D_TGM. Studies: static, modal, buckling, structural dynamics, harmonic response. (Code_Aster U3 (modélisations))
 - **Code_Aster POU_D_E**: The slender Euler-Bernoulli beam. Not for: stocky members (shear deflection). Studies: static, modal, buckling, structural dynamics. (Code_Aster U3 (modélisations))
 - **Code_Aster POU_D_TG**: The Timoshenko beam with warping: open sections in torsion. Studies: static, modal, buckling. (Code_Aster U3 (modélisations))
+- **Code_Aster POU_D_T_GD**: The geometrically exact Timoshenko beam (ELAS_POUTRE_GR, GROT_GDEP): Puzzle writes it for beams under large deflection. Not for: plasticity, section forces in the results (not read yet). Studies: static, large deflection. (Code_Aster U3 (modélisations))
 - **Code_Aster POU_D_TGM**: The multi-fibre beam with warping: large rotations, plasticity in the section. Studies: static, structural dynamics, plasticity, large deflection. (Code_Aster U3 (modélisations))
 - **Elmer BeamSolver3D**: Elmer's 3D beams. Studies: static. (Elmer Models Manual, BeamSolver3D)
 - **PyNite Member**: The 12-dof frame member with end releases: Puzzle's frames (ADR 0079), P-Delta and the Direct Analysis Method. Not for: stocky members: no shear deflection. Studies: static, large deflection. (PyNite, FEModel3D.add_member)

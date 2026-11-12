@@ -613,8 +613,9 @@ def solve_solid(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
         out["modes"] = np.asarray([vectors[i].reshape(-1, 3) for i in order])
         return
 
-    if case.get("threads"):  # ADR 0076: flank springs added to the assembled stiffness
-        uh = solve_threaded(case["threads"], a, L, bcs, V, facets, tag)
+    if case.get("threads") or case.get("welds"):  # ADR 0076, 0078: springs added to K
+        uh = solve_threaded(case.get("threads", []), a, L, bcs, V, facets, tag,
+                            welds=case.get("welds", []))  # fmt: skip
     else:
         uh = solve_linear(a, L, bcs, V, "u")
     out["displacement"] = uh.x.array.reshape(-1, 3)
@@ -742,7 +743,31 @@ def _spring_system(springs, active, size: int):
     return matrix.tocsr(), rhs
 
 
-def solve_threaded(threads, a, L, bcs, V, facets, tag, limit: int = 50) -> fem.Function:
+def _weld_springs(welds, V) -> list[dict]:
+    """Light welds (ADR 0078): each node pair's k I as three springs along x, y and z,
+    the pairs' dofs found by mesh node id (two parts' nodes may coincide)."""
+    if not welds:
+        return []
+    bs = V.dofmap.index_map_bs
+    nodes = dof_nodes(V)
+    if not len(nodes):
+        raise SystemExit("light welds need the displacement space of the mesh's own degree")
+    block = {int(n): i for i, n in enumerate(nodes) if n > 0}
+    out = []
+    for w in welds:
+        s = np.array([block[int(n)] for n in w["a"]], dtype=np.int64)
+        t = np.array([block[int(n)] for n in w["b"]], dtype=np.int64)
+        for axis in range(bs):
+            n = np.zeros((len(s), bs))
+            n[:, axis] = 1.0
+            out.append({"s": s[:, None] * bs + np.arange(bs), "t": t[:, None] * bs + np.arange(bs),
+                        "n": n, "k": np.full(len(s), float(w["k"])), "unilateral": False,
+                        "clearance": 0.0, "slack": 0.0, "name": w["name"]})  # fmt: skip
+    return out
+
+
+def solve_threaded(threads, a, L, bcs, V, facets, tag, limit: int = 50,
+                   welds=()) -> fem.Function:  # fmt: skip
     """A static solve with threaded flanks: K + the springs, held dofs eliminated.
     Unilateral (frictionless) flanks by an active set: every pair closed first, then
     a pair is closed where the screw has pushed past its clearance into the nut,
@@ -753,7 +778,7 @@ def solve_threaded(threads, a, L, bcs, V, facets, tag, limit: int = 50) -> fem.F
     K, F = _scipy(a)[:size, :size], _vector(L, size)
     held, prescribed = _held(bcs, size)
     free = np.setdiff1d(np.arange(size), held)
-    springs = _thread_springs(threads, V, facets, tag)
+    springs = _thread_springs(threads, V, facets, tag) + _weld_springs(welds, V)
     active = [np.ones(len(sp["k"]), dtype=bool) for sp in springs]
     u = np.zeros(size)
     for iteration in range(1, limit + 1):

@@ -93,7 +93,7 @@ ELEMENTS = [
         ("static", "modal", "buckling", "transient"),
         "Thick plates (Mindlin-Reissner), linear cells.",
         "",
-        False,
+        True,
         U3,
     ),
     Element(
@@ -149,6 +149,18 @@ ELEMENTS = [
         "The Timoshenko beam with warping: open sections in torsion.",
         "",
         False,
+        U3,
+    ),
+    Element(
+        "POU_D_T_GD",
+        "beam",
+        ("line2",),
+        "large_rotation",
+        ("static", "large_deflection"),
+        "The geometrically exact Timoshenko beam (ELAS_POUTRE_GR, GROT_GDEP): Puzzle "
+        "writes it for beams under large deflection.",
+        "plasticity, section forces in the results (not read yet).",
+        True,
         U3,
     ),
     Element(

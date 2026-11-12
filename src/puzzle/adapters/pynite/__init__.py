@@ -23,7 +23,7 @@ class PyNiteAdapter(SolverAdapter):
     name = "pynite"
     max_solve_steps = 1
     capabilities = Capabilities(
-        physics={"solid_mechanics": frozenset({"stationary"})},
+        physics={"solid_mechanics": frozenset({"stationary", "modal"})},  # ADR 0079 step 4
         features=FEATURES,
         beams=True,
         member_ends=True,

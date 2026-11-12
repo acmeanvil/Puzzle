@@ -66,6 +66,7 @@ class CodeAsterAdapter(SolverAdapter):
         connectors=frozenset(
             {"beam_fastener:rigid", "beam_fastener:distributing", "beam_fastener:thread"}
         ),  # ADR 0076 step 4: tapped ends
+        welds=frozenset({"line"}),  # ADR 0078 step 3: SEG2 DIS_T springs, as CalculiX's
         beams=True,  # ADR 0027, tests/integration/test_beams.py
         shared_settings=frozenset(  # ADR 0023
             {

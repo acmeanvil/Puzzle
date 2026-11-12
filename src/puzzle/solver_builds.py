@@ -534,6 +534,13 @@ def solvers() -> list[SolverRow]:
             where = str(python) if python else "no Python with dolfinx found"
             rows.append(SolverRow(solver, name, "native" if python else "missing", where))
             continue
+        if solver == "pynite":  # a Python package, run by its environment's Python
+            from puzzle.adapters.pynite.case import pynite_python
+
+            python = pynite_python()
+            where = str(python) if python else "no Python with PyNite found"
+            rows.append(SolverRow(solver, name, "native" if python else "missing", where))
+            continue
         exe = EXECUTABLES.get(solver)
         found = shutil.which(exe, path=runtime._path()) if exe else None
         if found is None:
