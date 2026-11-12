@@ -9,11 +9,11 @@ Every solver's elements, grouped by what they model. ★ marks the ones Puzzle w
 | full integration | linear | C3D4 ★, C3D8 ★, C3D6 ★ | – | – | – |
 | full integration | quadratic | C3D10 ★, C3D20 ★, C3D15 ★ | – | – | – |
 | reduced integration | linear | C3D8R | – | – | – |
-| incompatible modes (bending without locking) | linear | C3D8I | – | – | – |
+| incompatible modes (bending without locking) | linear | C3D8I ★ | – | – | – |
 | reduced integration | quadratic | C3D20R | – | – | – |
 | full integration | linear and quadratic | – | 3D ★ | – | – |
 | reduced integration | linear and quadratic | – | 3D_SI | – | – |
-| mixed displacement-pressure (nearly incompressible) | quadratic | – | 3D_INCO_UPG, 3D_INCO_UP | – | Taylor-Hood P2-P1 |
+| mixed displacement-pressure (nearly incompressible) | quadratic | – | 3D_INCO_UPG ★, 3D_INCO_UP | – | Taylor-Hood P2-P1 |
 | Lagrange (nodal) unknowns | linear and quadratic | – | – | 504/510 ★, 808/820/827 ★, 706/715 ★ | – |
 | Lagrange (nodal) unknowns | linear | – | – | p-elements | Lagrange P1 ★, Lagrange P3+ |
 | Lagrange (nodal) unknowns | quadratic | – | – | – | Lagrange P2 ★ |
@@ -85,7 +85,7 @@ Every solver's elements, grouped by what they model. ★ marks the ones Puzzle w
 | --- | --- | --- | --- | --- | --- |
 | Timoshenko beam (shear deformation) | linear | B31 ★, U1 (general beam) | POU_D_T ★ | BeamSolver3D | – |
 | Timoshenko beam (shear deformation) | quadratic | B32 ★, B32R ★ | – | – | – |
-| Euler-Bernoulli beam | linear | – | POU_D_E | – | Member ★ |
+| Euler-Bernoulli beam | linear | – | POU_D_E ★ | – | Member ★ |
 | beam with warping (open sections in torsion) | linear | – | POU_D_TG | – | – |
 | large rotations | linear | – | POU_D_TGM | – | – |
 
@@ -133,7 +133,7 @@ Every solver's elements, grouped by what they model. ★ marks the ones Puzzle w
 | Formulation | Order | CalculiX | Code_Aster | FEniCSx |
 | --- | --- | --- | --- | --- |
 | full integration | linear and quadratic | DCAX3/DCAX6/DCAX4/DCAX8 ★ | 3D (THERMIQUE) ★, PLAN/AXIS (THERMIQUE) ★ | – |
-| lumped (diagonal) capacity or mass | linear and quadratic | – | 3D_DIAG | – |
+| lumped (diagonal) capacity or mass | linear and quadratic | – | 3D_DIAG ★ | – |
 | Lagrange (nodal) unknowns | linear | – | – | Raviart-Thomas, DG |
 
 - **CalculiX DCAX3/DCAX6/DCAX4/DCAX8**: Axisymmetric heat transfer. Studies: heat transfer. (CalculiX User's Manual, 6.2 Element Types)

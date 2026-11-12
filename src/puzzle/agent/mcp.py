@@ -1469,6 +1469,35 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         return {"elements": [{"solver": n, **asdict(e)} for n, e in rows]}
 
     @tool(
+        description="Choose the element a body is written with (ADR 0082 step 3): "
+        "`selection` a body selection ('Part/Body') or part, `formulation` in neutral "
+        "words (incompatible_modes: linear bricks bending without locking, CalculiX "
+        "C3D8I; mixed_up: nearly incompressible, Code_Aster 3D_INCO_UPG; euler_bernoulli: "
+        "slender beams, Code_Aster POU_D_E; lumped: heat capacity without undershoot, "
+        "Code_Aster 3D_DIAG; full, timoshenko, thin_shell: the defaults), `solver_types` "
+        "an expert's own {solver: type}. `formulation` 'none' removes the body's choice. "
+        "Each solver maps it from the element library (elements_list) or refuses it, "
+        "naming what it has. One edit; at 'propose' a proposal."
+    )
+    @guarded
+    def element_choose(component: str, selection: str, formulation: str,
+                       solver_types: dict[str, str] | None = None,
+                       rationale: str = "") -> dict[str, Any]:  # fmt: skip
+        from puzzle.commands import resolve
+        from puzzle.model.schema import Component, ElementChoice
+
+        s = session()
+        comp = resolve(s.project, component, Component)
+        kept = [c.model_dump(mode="json") for c in comp.elements if c.selection != selection]
+        if formulation != "none":
+            choice = ElementChoice(selection=selection, formulation=formulation,
+                                   solver_types=solver_types or {})  # fmt: skip
+            kept.append(choice.model_dump(mode="json"))
+        command = {"command": "edit", "object": str(comp.id),
+                   "ops": [{"op": "set", "path": "elements", "value": kept}]}  # fmt: skip
+        return s.submit(command, actor, rationale=rationale).to_dict()
+
+    @tool(
         description="What the project needs next (ADR 0040, the Advisor): the workflow's "
         "steps for a component and study (the first of each if not named) as done, needed "
         "or optional, each with its reason, and `next`, the first needed one. The same "

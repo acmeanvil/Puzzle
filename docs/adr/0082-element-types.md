@@ -1,6 +1,6 @@
 # 0082. Element types: a solver-neutral choice per body, each solver's own types, and a library of them
 
-- Status: Accepted; steps 1 and 2 built (2026-11-11): the element library and its listing
+- Status: Accepted; steps 1 to 3 built in part (2026-11-11): the element library, its listing, and the choice per body for four formulations
 - Date: 2026-11-11
 
 ## Context
@@ -147,6 +147,59 @@ The maintainer asked (2026-11-11) for:
 - **Next:** step 3, the choice per body on Code_Aster first (decision 3), then the rest
   of the order of work, and large deflection on Code_Aster (decision 6). The knowledge
   pack's index of `docs/elements.md` comes with ADR 0083's help pages.
+
+## Built: step 3 in part (2026-11-11)
+
+- **`Component.elements`** holds the choices (`ElementChoice`: a body selection or part,
+  a formulation, the expert's `solver_types`); it is left out of hashes when empty.
+- **`puzzle/element_choice.py`**:
+  - `native` and `lookup` map a choice to the solver's written element for the block's
+    family and cell, through the element library itself, so a ★ row is what gets
+    written;
+  - `check` refuses, in every adapter's `check`, a formulation the solver writes nothing
+    for.
+- **CalculiX** sets the block's `*ELEMENT` type from the choice.
+- **Code_Aster** puts an AFFE_MODELE occurrence last per chosen body (a later one
+  overrides), its group added to the MED. A body mixing cells that take different
+  modelisations is refused. Mixed u–p goes through STAT_NON_LINE, since MECA_STATIQUE's
+  results keep no behaviour for its reactions.
+- **Written and benchmarked** (`tests/integration/test_element_choice.py`):
+
+  | Element | Case | Result |
+  | --- | --- | --- |
+  | CalculiX C3D8I | a cantilever two linear bricks deep | 0.9934 of Timoshenko's deflection, against C3D8's 0.896 |
+  | Code_Aster 3D_INCO_UPG | ν = 0.4999 on quadratic tetrahedra | 0.988 |
+  | Code_Aster POU_D_E | Euler–Bernoulli cantilever | PL³/3EI to every digit |
+  | Code_Aster 3D_DIAG | 100 °C on a 20 °C bar | no node below 20 °C |
+- **Unmarked until they can be benchmarked:** C3D8R, C3D20R and 3D_SI wait for
+  second-order hexahedral meshes, which the mesher refuses ("second-order hexahedra are
+  not supported yet"). DST and S8R wait for a thick-plate benchmark.
+- **GUI and agent.** Model → Components → Element formulation… (one form), MCP
+  `element_choose`, skill `element-types`. `tests/test_elements.py` checks the lookups,
+  the refusals and the unchanged run keys.
+
+## Built: decision 6 in part, large deflection on Code_Aster (2026-11-11)
+
+- **Follower pressure.** Under `geometric_nonlinearity`, pressures go in a charge of
+  their own (`loadp`), excited with `TYPE_CHARGE='SUIV'`.
+- **Point elements at small strain.** Springs, pretension and gaps (the `_Points` sets)
+  take `DEFORMATION='PETIT'`, overriding the solids' Green–Lagrange.
+- **Beams, beam bolts and shells under large deflection are refused** up front
+  (POU_D_TGM and COQUE_3D with GROT_GDEP aren't written yet), naming CalculiX.
+- **The large-strain warning** (`solve._large_strain`, after every solve, any solver):
+  above 5 % principal strain with elastic materials and large deflection, a run warning
+  `large_strain` (the material wants a hyperelastic model).
+- **Benchmarks** (`tests/integration/test_element_choice.py`):
+  - the cantilever bar pressed on its top face to a tip deflection of L/7: CalculiX and
+    Code_Aster land on the same tip to five digits (−27.2247 and −27.2248 mm down,
+    −2.1355 mm in);
+  - the elastica (Bisshopp & Drucker 1945) at PL²/EI = 1 on a 2 mm strip: 0.3004 L
+    down (0.3017) and 0.0560 L in (0.0566) on both, within 0.5 % and 1.1 %.
+
+  `tests/test_elements.py` checks the warning.
+- **Not yet:** transient large deflection (DYNA_NON_LINE; CalculiX refuses it too), a
+  preloaded buckling step from a large-deflection state, and plasticity with large
+  deflection benchmarked on both solvers.
 
 ## Consequences
 

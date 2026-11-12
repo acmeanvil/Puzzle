@@ -44,7 +44,7 @@ ELEMENTS = [
         "Mixed displacement-pressure-swelling: nearly incompressible materials "
         "and large plastic strains.",
         "",
-        False,
+        True,
         U3,
     ),
     Element(
@@ -137,7 +137,7 @@ ELEMENTS = [
         ("static", "modal", "buckling", "transient"),
         "The slender Euler-Bernoulli beam.",
         "stocky members (shear deflection).",
-        False,
+        True,
         U3,
     ),
     Element(
@@ -226,7 +226,7 @@ ELEMENTS = [
         ("heat",),
         "Heat conduction with lumped capacity: no oscillation after a thermal shock.",
         "",
-        False,
+        True,
         U3,
         ("heat_transfer",),
     ),

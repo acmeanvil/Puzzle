@@ -350,6 +350,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             + [f.selection for f in features + preload + springs + lifting + bolts]
             + fastener_selections(fasteners)
             + tie_groups
+            + [c.selection for c in comp.elements if c.selection in mesh.groups]
         )
     )
     for g in groups:
@@ -363,6 +364,9 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     # plasticity, large deflection and compression-only gaps keep the 10-step ramp,
     # since their answer follows the loading path.
     ramped = nlgeom or bool(plastic) or bool(gaps)
+    # ADR 0082: mixed u-p elements keep their behaviour only in STAT_NON_LINE's results
+    # (MECA_STATIQUE's lack COMPOR, so their reactions can't be computed).
+    mixed = not thermal and any(c.formulation == "mixed_up" for c in comp.elements)
     increments = int(step.settings.get("increments", 10 if ramped else 1))
     top = int(mesh.node_ids.max())
     cuts = list(
@@ -423,6 +427,13 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         for p in comp.parts
         if mesh.groups.get(p.name) and mesh.groups[p.name].dim == 2 and not mesh.planar
     ]
+    if nlgeom and (beam_parts or shell_parts or any(c.formulation == "beam"
+                                                    for c in comp.connectors)):  # fmt: skip
+        raise InputError(  # ADR 0082 decision 6: they need POU_D_TGM and COQUE_3D
+            "large deflection of beams, beam bolts and shells isn't written on Code_Aster yet "
+            "(it needs POU_D_TGM and COQUE_3D with GROT_GDEP); CalculiX takes it",
+            code="unsupported",
+        )
     if any(b.element in ("tri6", "quad8", "quad9") for b in mesh.shell_blocks()) and not thermal:
         raise InputError(
             "Code_Aster's shells (DKT) are three- and four-node faces: set the mesh recipe's "
@@ -708,6 +719,10 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             f"MODELISATION='{'DIS_TR' if g == 'MASTERS' else discrete}'),"
             for g in points.sets
         )
+        + "".join(  # ADR 0082: each body's chosen element, last, so it overrides
+            f" _F(GROUP_MA='{names[sel]}', PHENOMENE='{phenomenon}', MODELISATION='{m}'),"
+            for sel, m in _chosen(comp, mesh, thermal)
+        )
         + "))",
         *_discrete_cara(
             supports,
@@ -826,11 +841,18 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         oblique = _oblique(project, features, names, mesh)
         if oblique:  # components held in local Cartesian axes (symmetry planes, ADR 0081)
             extra["LIAISON_OBLIQUE"] = extra.get("LIAISON_OBLIQUE", []) + oblique
+        following = []
+        if nlgeom:  # ADR 0082 decision 6: pressure follows the face, as CalculiX's does
+            following = [f for f in features if f.type == "pressure" and not f.fields]
+            features = [f for f in features if f not in following]
         plain = _loads(features, names, mesh, thermal, ties, extra, comp)
         if plain.endswith("(MODELE=model)"):  # everything is in loadf: no empty charge
             charges = []
         else:
             out.append(plain)
+        if following:
+            out.append("loadp" + _loads(following, names, mesh, thermal, (), {}, comp)[4:])
+            charges.append("loadp")
         remote = _remote_loads(features, names, mesh, project)  # ADR 0037: fields of x, y, z
         if remote:
             out += remote
@@ -947,7 +969,8 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             f"IMPR_TABLE(TABLE=RECU_TABLE(CO=res, NOM_PARA='FREQ'), UNITE={TABLES['frequency']}, "
             f"FORMAT='TABLEAU', SEPARATEUR=',', FORMAT_R='{FORMAT_R}')",
         ]
-    elif touching or nlgeom or plastic or gaps or initial or (threads and threads.gaps) or chain:
+    elif (touching or nlgeom or plastic or gaps or initial or (threads and threads.gaps)
+          or chain or mixed):  # fmt: skip
         # Green-Lagrange strain: large rotations, as CalculiX's NLGEOM (GROT_GDEP refuses tet10);
         # with plasticity, logarithmic strains (true stress against true strain).
         strains = ", DEFORMATION='GREEN_LAGRANGE'" if nlgeom else ""
@@ -958,6 +981,9 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         if chain and which:  # each step's end
             which = "INST=(" + ", ".join(f"{k:.1f}" for k in range(1, n + 1)) + ",)"
         parts = [f"_F(TOUT='OUI', RELATION='ELAS'{strains})"]
+        if nlgeom and points.sets:  # springs, pretension, gaps: point elements, small strain
+            groups = ", ".join(f"'{g}'" for g in points.sets)
+            parts.append(f"_F(GROUP_MA=({groups},), RELATION='ELAS', DEFORMATION='PETIT')")
         if plastic:
             yielding = ", ".join(f"'{names[a.selection]}'" for a in plastic)
             large = ", DEFORMATION='GDEF_LOG'" if nlgeom else ""
@@ -978,7 +1004,9 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             """Step k's STAT_NON_LINE (one call when not chained): from t = k - 1 to k,
             continuing from the step before."""
             excit = [
-                f"_F(CHARGE={c}{'' if c == 'thload' else ', FONC_MULT=ramp'})" for c in charges
+                f"_F(CHARGE={c}{'' if c == 'thload' else ', FONC_MULT=ramp'}"
+                + (", TYPE_CHARGE='SUIV')" if c == "loadp" else ")")
+                for c in charges
             ]  # fmt: skip
             for c, on, kinematic in windowed:  # a load ramps off in the step after its last
                 if k in on or (not kinematic and k - 1 in on):
@@ -2794,6 +2822,42 @@ def _loads(
         + kw("LIAISON_MAIL", tied)
         + ")"
     )
+
+
+def _chosen(comp: Component, mesh: Mesh, thermal: bool) -> list[tuple[str, str]]:
+    """(selection, modélisation) for each body with an element choice (ADR 0082), from
+    the element library; every cell of the body must take the same one."""
+    from puzzle.element_choice import lookup
+
+    out = []
+    for c in comp.elements:
+        group = mesh.groups.get(c.selection)
+        if group is None:
+            raise InputError(f"an element choice names '{c.selection}', which is not meshed")
+        if "code_aster" in c.solver_types:
+            out.append((c.selection, c.solver_types["code_aster"]))
+            continue
+        shells = {id(b) for b in mesh.shell_blocks()}
+        found = set()
+        for b in group.blocks(mesh):
+            if b.dim != group.dim:
+                continue
+            if thermal:
+                family = "thermal"
+            elif mesh.planar:
+                family = "solid_2d"
+            else:
+                family = {3: "solid_3d", 1: "beam"}.get(b.dim, "shell" if id(b) in shells
+                                                         else "solid_3d")  # fmt: skip
+            found.add(lookup("code_aster", family, c.formulation, b.element, c.selection))
+        if len(found) > 1:
+            raise InputError(
+                f"'{c.selection}' mixes cells that take different Code_Aster "
+                f"modelisations ({', '.join(sorted(found))})",
+                code="unsupported",
+            )
+        out += [(c.selection, m) for m in found]
+    return out
 
 
 def _modelisation(comp: Component, thermal: bool) -> str:

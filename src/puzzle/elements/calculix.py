@@ -64,7 +64,7 @@ ELEMENTS = [
         STRUCT[:-1],
         "The linear brick with incompatible modes: bending of thin parts in one layer.",
         "",
-        False,
+        True,
         REF,
     ),
     Element(

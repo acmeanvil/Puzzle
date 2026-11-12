@@ -97,6 +97,8 @@ def _own(obj: ProjectObject, *, drop: frozenset[str] = frozenset()) -> dict:
         for key in ("member_releases", "member_offsets"):  # ADR 0079: none, as before
             if not data.get(key):
                 data.pop(key, None)
+        if not data.get("elements"):  # ADR 0082: no element choice, as before
+            data.pop("elements", None)
         for key in ("cyclic", "periodic"):  # ADR 0081: none, as before
             if data.get(key) is None:
                 data.pop(key, None)

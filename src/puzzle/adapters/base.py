@@ -435,6 +435,9 @@ class SolverAdapter(ABC):
                     if s.settings.get(key):
                         problems.append(f"{self.name} doesn't take {key.replace('_', ' ')} "
                                         "yet (PyNite does)")  # fmt: skip
+        from puzzle.element_choice import check as element_check
+
+        problems += element_check(self.name, component)  # ADR 0082: per body
         from puzzle.cyclic import check as cyclic_check
 
         problems += [f"{self.name}: {p}" for p in cyclic_check(project, study, component, caps)]

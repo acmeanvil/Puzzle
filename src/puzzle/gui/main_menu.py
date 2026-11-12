@@ -469,8 +469,13 @@ def _model(window, menu: QMenu) -> None:
     _add(comps, "Duplicate component…", _with_component(
         window, lambda c: menus.copy_component(window, c)),
         "A copy of the component, and of its studies if you choose")  # fmt: skip
+    from puzzle.gui.element_choice_dialog import choose_element
     from puzzle.gui.split_dialog import split_part
 
+    _add(comps, "Element formulation…", _with_component(
+        window, lambda c: choose_element(window, c)),
+        "The element a body is written with: incompatible modes, mixed u-p, "
+        "Euler-Bernoulli, lumped (ADR 0082)")  # fmt: skip
     _add(comps, "One part per body…", _with_component(window, lambda c: split_part(window, c)),
          "A part holding several bodies (an imported assembly) as a part per body")  # fmt: skip
 

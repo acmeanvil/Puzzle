@@ -1405,6 +1405,24 @@ class BeamSection(BaseModel):
         }
 
 
+class ElementChoice(BaseModel):
+    """The element a body is written with (ADR 0082 step 3), in neutral words: each solver
+    maps the formulation to its own type for the body's cells (`puzzle.element_choice`,
+    from the element library) or refuses it with the alternatives it has."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    selection: str = Field(description="a body selection ('Part/Name') or a part's name")
+    formulation: Literal["full", "reduced", "incompatible_modes", "mixed_up", "thin_shell",
+                         "thick_shell", "euler_bernoulli", "timoshenko", "lumped"] = Field(
+        description="full or reduced integration, incompatible modes (bending without "
+        "locking), mixed u-p (nearly incompressible), thin or thick shell, Euler-Bernoulli "
+        "or Timoshenko beam, lumped heat capacity")  # fmt: skip
+    solver_types: dict[str, str] = Field(
+        default_factory=dict, description="an expert's own type per solver: "
+        "{'calculix': 'C3D20R'}")  # fmt: skip
+
+
 class LoadCombination(BaseModel):
     """Load cases factored and added (ADR 0079 step 2): {"D": 1.2, "L": 1.6}. ASCE 7's
     LRFD and ASD combinations come from `frames.combinations.asce7`."""
@@ -1818,6 +1836,9 @@ class Component(ProjectObject):
     cyclic: CyclicSymmetry | None = Field(
         default=None, description="one sector of a cyclically symmetric whole (ADR 0081)"
     )
+    elements: list[ElementChoice] = Field(
+        default_factory=list, description="element formulations per body (ADR 0082); "
+        "none: each solver's own default")  # fmt: skip
     periodic: LinearPeriodicity | None = Field(
         default=None, description="one slice of a whole repeating along a line (ADR 0081)"
     )

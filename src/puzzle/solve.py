@@ -403,6 +403,7 @@ def _run_study(
         weld_fields(part_results, seen, seen.objects[study.component], written)
         # ADR 0080: the force the weak springs carry, and a warning where it is the load.
         weak_springs.finish(part_results, springs, study.weak_spring_limit, record)
+        _large_strain(part_results, seen, part, record)  # ADR 0082 decision 6
         lap("read")
         if len(parts) > 1:
             for step in part_results.steps:
@@ -567,6 +568,45 @@ def _in_step(project: Project, component_id, indices: list[int]) -> Project:
     copy = replace(project, objects=dict(project.objects))
     copy.objects[component_id] = comp.model_copy(update={"physics": physics})
     return copy
+
+
+LARGE_STRAIN = 0.05
+
+
+def _large_strain(results, project, study, record) -> None:
+    """A large-deflection solve of elastic materials whose strains pass 5 %: Green-
+    Lagrange with plain elasticity is for large rotations and small strains, so the
+    material wants a hyperelastic model there (ADR 0082 decision 6). A warning."""
+    import numpy as np
+
+    from puzzle import progress
+    from puzzle.model.schema import Component, Material
+
+    if not any(s.settings.get("geometric_nonlinearity") for s in study.solve_steps()):
+        return
+    comp = project.objects.get(study.component)
+    if not isinstance(comp, Component):
+        return
+    for a in comp.materials:
+        m = project.objects.get(a.material)
+        if isinstance(m, Material) and (m.models.plasticity or m.models.hyperelasticity):
+            return  # the material says how it behaves at large strain
+    worst = 0.0
+    for step in results.steps:
+        e = step.fields.get("strain")
+        if e is None or e.values.shape[1] != 6:
+            continue
+        v = np.nan_to_num(e.values)
+        full = np.zeros((len(v), 3, 3))
+        for k, (i, j) in enumerate(((0, 0), (1, 1), (2, 2), (0, 1), (1, 2), (2, 0))):
+            full[:, i, j] = full[:, j, i] = v[:, k] / (1.0 if i == j else 2.0)  # engineering
+        worst = max(worst, float(np.abs(np.linalg.eigvalsh(full)).max(initial=0.0)))
+    if worst > LARGE_STRAIN:
+        record(progress.Message(
+            level="warning", code="large_strain",
+            text=f"strains reach {worst:.1%} under large deflection with elastic materials: "
+            "Green-Lagrange with plain elasticity is right for large rotations and small "
+            "strains; above about 5 % the material needs a hyperelastic model"))  # fmt: skip
 
 
 def _contact_warnings(project, study, mesh, record) -> None:

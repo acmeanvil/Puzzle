@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 CODES = {
+    "large_strain": "large-deflection strains past 5 % on an elastic material (ADR 0082)",
     "weak_springs_carry": "a body's weak springs carry its load: it never seated (ADR 0080)",
     "thread_radii": "a threaded contact's two cylinders are not one radius (ADR 0076)",
     "invalid_archive": "a project archive damaged, unsafe or from a newer Puzzle (ADR 0061)",

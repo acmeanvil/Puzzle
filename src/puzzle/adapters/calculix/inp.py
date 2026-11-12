@@ -244,6 +244,13 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
                 ccx_type, order = PLANAR_ELEMENTS[planar][b.element], None
             else:
                 ccx_type, order = ELEMENTS[b.element]
+            from puzzle.element_choice import native
+
+            family = ("solid_2d" if planar is not None else
+                      {3: "solid_3d", 2: "shell", 1: "beam"}[b.dim])  # fmt: skip
+            chosen = native("calculix", comp, mesh, b, family)  # ADR 0082: per body
+            if chosen is not None:
+                ccx_type = chosen  # same node order: the R and I variants share it
             if ccx_type == "B32" and _closed_sections(comp, part.name):
                 ccx_type = "B32R"  # CalculiX expands BOX and PIPE sections on B32R only
             conn = b.connectivity[:, order] if order else b.connectivity
