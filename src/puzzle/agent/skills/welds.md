@@ -47,3 +47,18 @@ Legs and lengths are quantities (mm is fine); line forces come back in N/m (1 N/
 - Expecting the elastic method's moment from the line forces alone: the fillet's own
   resistance to turning about its line (`twist`) carries some of a bending moment.
 - Elmer can't take a weld (no node-pair springs); 2D models are refused for now.
+
+## Strength (AISC 360 J2, ADR 0078 step 2)
+
+`weld_results(study)` gives each light weld's `strength` at its governing station:
+- the filler and F_EXX: the weld's `filler` (a material with a tensile strength, the
+  generic library's group "Filler metal": E70XX, ER70S-6, E308L...), else the base
+  metal's match (carbon steel: E70XX);
+- the effective throat, the design (LRFD, φ 0.75) and allowable (ASD, Ω 2.00) strength
+  per length, and the utilisations.
+
+Use the LRFD utilisation when the loads were factored for LRFD, the ASD one for service
+loads. Pass `directional=true` for Eq. J2-5's 1 + 0.5 sin^1.5 θ, allowed only for linear
+welds and groups loaded in plane through their centre. Stainless and aluminium welds say
+why they are not checked (AISC 370 and the ADM are not built). The base metal (J4) and
+the minimum size (Table J2.4) are yours to check.

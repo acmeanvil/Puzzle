@@ -1000,6 +1000,10 @@ class Feature(BaseModel):
         default_factory=list,
         description="the solve steps (1, 2, ...) it applies in; empty: every step (ADR 0037)",
     )
+    case: str | None = Field(
+        default=None, description="the load case a load belongs to (ADR 0079 step 2): D, "
+        "L, Lr, S, R, W, E or a name of your own; a study's combinations factor its "
+        "cases")  # fmt: skip
     fields: dict[str, FieldUse] = Field(
         default_factory=dict,
         description="values taken from imported fields in place of `values` (ADR 0044)",
@@ -1399,6 +1403,16 @@ class BeamSection(BaseModel):
             "i2": (h * b**3 - hi * bi**3) / 12,
             "j": j,
         }
+
+
+class LoadCombination(BaseModel):
+    """Load cases factored and added (ADR 0079 step 2): {"D": 1.2, "L": 1.6}. ASCE 7's
+    LRFD and ASD combinations come from `frames.combinations.asce7`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    factors: dict[str, float] = Field(description="load case -> factor")
 
 
 class CyclicSymmetry(BaseModel):
@@ -2108,6 +2122,9 @@ class Study(ProjectObject):
     # settings_schema) and expert pass-through ({solver: {path: value}}).
     solver_settings: dict[str, dict[str, float | int | str | bool]] = Field(default_factory=dict)
     expert_settings: dict[str, dict[str, str]] = Field(default_factory=dict)
+    combinations: list[LoadCombination] = Field(
+        default_factory=list, description="load combinations solved, one result step each "
+        "(ADR 0079 step 2; PyNite); empty: every load at its value")  # fmt: skip
     weak_springs: Literal["auto", "always", "never"] = Field(
         default="auto", description="small springs to ground on bodies held only by sliding "
         "contact (ADR 0080): auto those, always bodies held by nothing too, never")  # fmt: skip

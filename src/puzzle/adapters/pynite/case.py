@@ -32,6 +32,7 @@ RIGID = 1e4  # a rigid offset: its member's section constants times this
 SIGNS = np.array([-1.0, -1.0, -1.0, -1.0, 1.0, -1.0])
 # The features a frame takes here (ADR 0079); the rest are refused by the capabilities.
 FEATURES = frozenset({"fixed", "displacement", "force", "line_load", "gravity", "node_spring"})
+DEFAULT_CASE = "Case 1"  # PyNite's, combined as "Combo 1" when the study has no combinations
 
 
 def pynite_python() -> Path | None:
@@ -177,6 +178,73 @@ def _rigid(comp: Component, mesh: Mesh, members) -> set[str]:
     return out
 
 
+def _case_of(f, combos) -> str:
+    """A load's case: its own where the study combines cases (every load needs one
+    then), else PyNite's one default case."""
+    if not combos:
+        return DEFAULT_CASE
+    if f.type in ("fixed", "displacement", "node_spring"):
+        return ""
+    if not f.case:
+        raise InputError(
+            f"the {f.type} on '{f.selection}' has no load case, and the study combines "
+            "cases: give each load one (D, L, W...)",
+            code="invalid",
+        )
+    return f.case
+
+
+VERTICAL = "Z"  # gravity acts along -z in a frame (ADR 0079)
+
+
+def _notional(case: dict, settings: dict) -> None:
+    """AISC 360 C2.2b, the Direct Analysis Method's notional loads: in each combination,
+    0.002 times the factored gravity load at each node, laterally, in each direction the
+    step names (`notional_directions`, default "x,y": both senses of each), each a
+    combination of its own, replacing the original ones."""
+    from puzzle.frames.combinations import notional
+
+    nodes = case["nodes"]
+    lengths = {
+        m["name"]: float(np.linalg.norm(np.subtract(nodes[m["j"]], nodes[m["i"]])))
+        for m in case["members"]
+    }
+    ends = {m["name"]: (m["i"], m["j"]) for m in case["members"]}
+    by_case: dict[str, dict[str, float]] = {}  # case -> node -> downward load (N)
+    for p in case["point_loads"]:
+        if p["direction"] == f"F{VERTICAL}":
+            node = by_case.setdefault(p["case"], {})
+            node[p["node"]] = node.get(p["node"], 0.0) - p["P"]
+    for w in case["line_loads"]:
+        if w["direction"] == f"F{VERTICAL}":
+            node = by_case.setdefault(w["case"], {})
+            for n in ends[w["member"]]:
+                node[n] = node.get(n, 0.0) - 0.5 * w["w"] * lengths[w["member"]]
+    combos = case["combos"] or [{"name": "Loads", "factors": {DEFAULT_CASE: 1.0}}]
+    wanted = str(settings.get("notional_directions", "x,y"))
+    directions = [d.strip().lower() for d in wanted.split(",") if d.strip()]
+    if not directions or any(d.lstrip("+-") not in ("x", "y") for d in directions):
+        raise InputError(f"notional loads go along x or y, not {wanted!r}", code="invalid")
+    out = []
+    for c in combos:
+        gravity: dict[str, float] = {}
+        for name, factor in c["factors"].items():
+            for n, y in by_case.get(name, {}).items():
+                gravity[n] = gravity.get(n, 0.0) + factor * y
+        loads = notional(gravity)
+        for d in directions:
+            axis = d.lstrip("+-")
+            for sense in [d[0]] if d[0] in "+-" else ["+", "-"]:
+                own = f"{c['name']} N{sense}{axis}"
+                sign = 1.0 if sense == "+" else -1.0
+                case["point_loads"] += [{"node": n, "direction": f"F{axis.upper()}",
+                                         "P": sign * value, "case": own}
+                                        for n, value in loads.items() if value]  # fmt: skip
+                out.append({"name": f"{c['name']}, notional {sense}{axis}",
+                            "factors": {**c["factors"], own: 1.0}})  # fmt: skip
+    case["combos"] = out
+
+
 def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs=()) -> Path:
     from puzzle.adapters.base import refuse_inputs
 
@@ -209,10 +277,18 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             for name, n1, n2, _eid, mat, sec, y in members
         ],
         "supports": {}, "springs": {}, "displacements": {}, "node_loads": {}, "line_loads": [],
+        "point_loads": [],
     }  # fmt: skip
     features = [f for ph in comp.physics if ph.type == "solid_mechanics" for f in ph.features
                 if f.active(1)]  # fmt: skip
+    combos = study.combinations
+    settings = steps[0].settings
+    dam = bool(settings.get("direct_analysis"))
+    if dam:  # AISC 360 C2.3: 0.8 of the stiffness (tau_b = 1)
+        for key, (e, g, nu, rho) in list(materials.items()):
+            materials[key] = [0.8 * e, 0.8 * g, nu, rho]
     for f in globalize(project, features):
+        load_case = _case_of(f, combos)
         if f.type not in FEATURES:
             raise InputError(f"PyNite doesn't take {f.type} yet", code="unsupported")
         if f.axes is not None and f.type != "gravity":
@@ -243,16 +319,18 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
                 raise InputError(f"a force on a frame goes on a node; on '{f.selection}' "
                                  "use a line load", code="unsupported")  # fmt: skip
             for n in nodes:
-                loads = case["node_loads"].setdefault(str(n), {})
                 for a in "xyz":
                     if v.get(a):
-                        loads[f"F{a.upper()}"] = loads.get(f"F{a.upper()}", 0.0) + v[a] / len(nodes)
+                        load = {"node": str(n), "direction": f"F{a.upper()}",
+                                "P": v[a] / len(nodes), "case": load_case}  # fmt: skip
+                        case["point_loads"].append(load)
         elif f.type == "line_load":
             within = set(_elements(mesh, f.selection))
             for name, _n1, _n2, eid, *_ in members:
                 if eid in within:
                     case["line_loads"] += [{"member": name, "direction": f"F{a.upper()}",
-                                            "w": v[a]} for a in "xyz" if v.get(a)]  # fmt: skip
+                                            "w": v[a], "case": load_case}
+                                           for a in "xyz" if v.get(a)]  # fmt: skip
         elif f.type == "gravity":  # self weight: ρ A g per length
             g = np.asarray(body_load(f).uniform or (0.0, 0.0, 0.0), float)
             within = set(_elements(mesh, f.selection)) if f.selection in mesh.groups else None
@@ -264,10 +342,19 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
                     raise InputError("self weight needs a density in every member's material",
                                      code="incomplete_material")  # fmt: skip
                 case["line_loads"] += [{"member": name, "direction": f"F{a.upper()}",
-                                        "w": rho * area * float(c)}
+                                        "w": rho * area * float(c), "case": load_case}
                                        for a, c in zip("xyz", g, strict=True) if c]  # fmt: skip
     if not case["supports"] and not case["springs"]:
         raise InputError("the frame has no support", code="invalid")
+    case["combos"] = [{"name": c.name, "factors": dict(c.factors)} for c in combos]
+    used = {load["case"] for load in case["point_loads"] + case["line_loads"]}
+    for c in combos:
+        if not set(c.factors) & used:
+            raise InputError(f"combination '{c.name}' factors no load case the frame has "
+                             f"({', '.join(sorted(used)) or 'none'})", code="invalid")  # fmt: skip
+    case["pdelta"] = bool(settings.get("second_order")) or dam
+    if dam:
+        _notional(case, settings)
     workdir.mkdir(parents=True, exist_ok=True)
     (workdir / CASE).write_text(json.dumps(case), encoding="utf-8")
     shutil.copyfile(RUNNER, workdir / RUNNER.name)
@@ -284,6 +371,23 @@ def read_results(workdir: Path):
 
     data = json.loads((workdir / RESULTS).read_text(encoding="utf-8"))
     case = json.loads((workdir / CASE).read_text(encoding="utf-8"))
+    out = Results(solver="pynite")
+    combos = data.get("combos")
+    if combos is None:  # no combinations: the one load case as a static step
+        out.steps.append(StepResult(1, "stationary", 1.0, fields=_fields(data, case)))
+        return out
+    for k, (name, part) in enumerate(combos.items(), start=1):
+        fields = _fields(part, case)
+        fields["combination"] = Field("combination", "global", [name], np.array([0]),
+                                      np.array([[float(k)]]))  # fmt: skip
+        out.steps.append(StepResult(1, "combination", float(k), fields=fields))
+    return out
+
+
+def _fields(data: dict, case: dict) -> dict:
+    """One combination's (or the single case's) results as fields."""
+    from puzzle.results.model import Field
+
     ids = np.array([int(n) for n in data["nodes"]])
     values = np.array(list(data["nodes"].values()), float)
     fields = {
@@ -319,6 +423,4 @@ def read_results(workdir: Path):
         eids,
         np.array(rows),
     )
-    out = Results(solver="pynite")
-    out.steps.append(StepResult(1, "stationary", 1.0, fields=fields))
-    return out
+    return fields

@@ -574,6 +574,8 @@ def _model(window, menu: QMenu) -> None:
          "One study's result into another (a temperature into a structural study)")  # fmt: skip
     _add(studies, "Solver settings…", lambda: _solver_settings(window),
          "How each solver solves the study: linear solver, tolerances, output")  # fmt: skip
+    _add(studies, "Load combinations…", lambda: _combinations(window),
+         "A frame's load cases combined by ASCE 7 (LRFD or ASD), each a result")  # fmt: skip
 
     runs = _sub(menu, "Run")
     run = window.actions_by_name["run"]  # the toolbar's too: asks which study if none is selected
@@ -614,6 +616,14 @@ def _run_on(window) -> None:
     study = current_study(window, "Run on")
     if study is not None:
         run_on(window, study)
+
+
+def _combinations(window) -> None:
+    from puzzle.gui.combinations_dialog import edit_combinations
+
+    study = current_study(window, "Load combinations")
+    if study is not None:
+        edit_combinations(window, study)
 
 
 def _duplicate_study(window) -> None:
@@ -936,6 +946,13 @@ def _help(window, menu: QMenu) -> None:
         menu.addAction(advisor)  # also in Window: what to do next (ADR 0040)
     _add(menu, "Keyboard shortcuts", lambda: _shortcuts(window), free=True)
     _add(menu, "Design decisions (ADRs)", lambda: _open_docs(window), free=True)
+    _add(
+        menu,
+        "Element library",
+        lambda: _element_library(window),
+        free=True,
+        tip="Every solver's elements, grouped, and the ones Puzzle writes (ADR 0082)",
+    )
     _add(menu, "Log", lambda: _log(window), free=True)
     menu.addSeparator()
     about = _add(menu, "About Puzzle", lambda: _about(window), free=True)
@@ -959,6 +976,12 @@ STEPS = (
     "The Problems tab says what is missing before a run. The Agent panel can do any of "
     "this for you, with your approval."
 )
+
+
+def _element_library(window) -> None:
+    from puzzle.gui.element_library import show_library
+
+    show_library(window)
 
 
 def _log(window) -> None:

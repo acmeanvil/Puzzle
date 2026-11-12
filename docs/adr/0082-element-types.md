@@ -1,6 +1,6 @@
 # 0082. Element types: a solver-neutral choice per body, each solver's own types, and a library of them
 
-- Status: Proposed
+- Status: Accepted; steps 1 and 2 built (2026-11-11): the element library and its listing
 - Date: 2026-11-11
 
 ## Context
@@ -116,6 +116,37 @@ The maintainer asked (2026-11-11) for:
 7. **What the GUI shows.** A body's Properties gain Element formulation (a dropdown of the
    neutral choices the study's solvers take), with "Solver types…" for the override. The
    mesh view's legend names the elements each solver will write.
+
+## Built: steps 1 and 2 (2026-11-11)
+
+- **The library** (`puzzle/elements/`): a module per solver with its rows (`Element`:
+  native, family, shapes, formulation, studies, use, avoid, written, reference,
+  physics). The counts:
+  - CalculiX: 27 (C3D4 to C3D20R, CPS/CPE/CAX/DCAX, S3/S4/S6/S8/S8R, B31/B32/B32R, U1,
+    T3D, springs, GAPUNI, MASS, DASHPOTA);
+  - Code_Aster: 23 modélisations (3D, 3D_SI, 3D_INCO_UP(G), C_PLAN, D_PLAN, AXIS,
+    AXIS_INCO_UPG, DKT, DST, Q4G, COQUE_3D, POU_D_T/E/TG/TGM, BARRE, CABLE,
+    DIS_T/DIS_TR, thermal 3D, 3D_DIAG, PLAN/AXIS);
+  - Elmer: 8, FEniCSx: 7, PyNite: 4, and the finite-volume cells of Code_Saturne and
+    OpenFOAM.
+
+  The vocabularies are `FAMILIES`, `FORMULATIONS`, `STUDIES` and `SHAPES`. References
+  name the manual's section, not sub-sections, where those weren't checked.
+- **The listing.** `listing(solver, family, study)` gives Markdown: per family, a table
+  of formulation and order (linear, quadratic) with each solver's element in its column,
+  ★ where Puzzle writes it, then each element's use, what not to use it for, its
+  studies and its reference. It is reached in several places:
+  - `docs/elements.md` (generated; a test fails when it is stale);
+  - Help → Element library (`gui/element_library.py`, filtered by solver, family and
+    study);
+  - `puzzle elements [--solver] [--family] [--study]`;
+  - MCP `elements_list`.
+- **Checks** (`tests/test_elements.py`): the vocabularies; every CalculiX ★ named by
+  `inp`/`spring_beams`; every Code_Aster ★ in `comm.py`, and no unmarked one there as a
+  MODELISATION; the listing's grouping and filters; the docs current; the MCP tool.
+- **Next:** step 3, the choice per body on Code_Aster first (decision 3), then the rest
+  of the order of work, and large deflection on Code_Aster (decision 6). The knowledge
+  pack's index of `docs/elements.md` comes with ADR 0083's help pages.
 
 ## Consequences
 

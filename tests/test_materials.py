@@ -50,6 +50,11 @@ GASES = {  # molar mass, kg/mol
     "hydrogen": 2.01588e-3,
 }
 GENERIC |= set(GASES)
+# Filler metals (ADR 0078 step 2): AWS classifications' minimum strengths.
+FILLERS = {"filler_e60xx": 413.7, "filler_e70xx": 482.6, "filler_e80xx": 551.6,
+           "filler_er70s_6": 482.6, "filler_e71t_1": 482.6, "filler_e308l": 517.1,
+           "filler_e309l": 517.1, "filler_e316l": 482.6, "filler_e2209": 689.5}  # fmt: skip
+GENERIC |= set(FILLERS)
 
 
 def test_generic_set_is_shipped():
@@ -197,3 +202,12 @@ def test_two_copies_are_separate_materials():
 def test_unknown_material():
     with pytest.raises(KeyError, match="unobtainium"):
         library_material("unobtainium")
+
+
+def test_filler_metals_carry_their_classification_strength():
+    from puzzle.materials import library_entry
+
+    for key, mpa in FILLERS.items():
+        entry = library_entry(key)
+        assert entry["info"]["group"] == "Filler metal"
+        assert entry["properties"]["tensile_strength"]["value"] == mpa

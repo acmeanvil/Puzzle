@@ -116,6 +116,23 @@ def test_lap_joint_carries_the_pull(tmp_path, solver):
     assert total[0] == pytest.approx(P, rel=1e-4)
     assert abs(total[1]) < 1e-3 * P
     assert mean == pytest.approx(P / length, rel=0.05)
+    # ADR 0078 step 2: AISC 360 J2 at the governing station, the structural steel's
+    # matching E70 filler: utilisation = peak line force / (0.75 x 0.60 x 70 ksi x 0.707 w).
+    from puzzle.model.schema import Component
+    from puzzle.post.weld_fields import results
+
+    comp = next(o for o in p.objects.values() if isinstance(o, Component))
+    (got,) = results(p, comp, run.mesh, run.results)["welds"]
+    strength = got["strength"]
+    design = 0.75 * 0.60 * 482.6e6 * 0.006 / np.sqrt(2)
+    print(f"AISC 360 J2: {strength['filler']}, utilisation {strength['utilisation_lrfd']:.4g} "
+          f"(peak {got['peak_line_force_N_per_m'] / 1e3:.4g} N/mm of "
+          f"{design / 1e3:.4g})")  # fmt: skip
+    assert strength["checked"] and strength["filler"] == "E70XX"
+    assert strength["design_strength_lrfd_N_per_m"] == pytest.approx(design, rel=1e-6)
+    assert strength["utilisation_lrfd"] == pytest.approx(
+        got["peak_line_force_N_per_m"] / design, rel=1e-6
+    )
 
 
 @over("calculix")

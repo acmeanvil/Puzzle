@@ -1,6 +1,6 @@
 # 0078. Generate welds along a path, light by default and modelled on request, checked by AISC 360 and 370
 
-- Status: Accepted; step 1 built (2026-11-11)
+- Status: Accepted; step 1 built, step 2 in part (2026-11-11)
 - Date: 2026-11-10
 
 ## Context
@@ -197,6 +197,40 @@ VIII-1/VIII-2 2023 and IX 2023.
 | Bracket, normal line force on the ±y sides | 419.6 N/mm | elastic method M (d/2)/I = 450 N/mm (−6.8 %) |
 
 The bracket's moment balances exactly only with the twist: about 7 % of it is the fillets' resistance to turning about their own lines (on the ±y sides, which run along x), which the elastic method leaves out. Tests: `tests/integration/test_welds.py`, `tests/test_welds.py`.
+
+## Built: step 2 in part (2026-11-11)
+
+- **Filler metals** in the generic library (group "Filler metal"), with AWS's minimum
+  all-weld-metal strengths:
+  - carbon and low-alloy steel: E60XX, E70XX and E80XX electrodes (A5.1, A5.5), ER70S-6
+    (A5.18) and E71T-1 (A5.20), with tensile and yield;
+  - stainless: E/ER308L, 309L, 316L and 2209 (A5.4, A5.9), tensile only.
+
+  Aluminium, titanium and copper fillers are not in yet. The base metal's matching filler
+  is by its group (`weld_strength.MATCHING`: carbon and low-alloy steel → E70XX, as AWS
+  D1.1 Table 5.4), not a `Material.filler` field.
+- **AISC 360-16 J2** (`weld_strength.py`) at each station of a light weld:
+  - the effective throat (0.707 w, or l1 l2 / √(l1² + l2²); a PJP's depth as given);
+  - F_nw = 0.60 F_EXX (Eq. J2-3), or with `directional` 1.0 + 0.50 sin^1.5 θ (Eq. J2-5);
+  - φ 0.75 and Ω 2.00, giving the LRFD and ASD utilisations and the governing station.
+  - CJP is its base metal's (J2.5).
+  - Stainless (AISC 370) and aluminium (ADM) are refused with the reason.
+  - The base metal (J4) and Table J2.4's minimum sizes are not checked: they need the
+    plates' thicknesses.
+  - It is in `weld_fields.results`' `strength`, so MCP `weld_results` (with
+    `directional`) gives it.
+- **Checks:**
+  - `tests/test_weld_strength.py`: the Manual's 1.392 kip/in per sixteenth (Eq. 8-2a,
+    E70) and 1.5 times it across the weld; throats; utilisations; the filler chosen.
+  - `tests/integration/test_welds.py`: the lap joint's E70XX check at its governing
+    station, 0.412 (379.7 N/mm against 921.4 N/mm).
+- **Not yet: the instantaneous-centre method.** The 15th Edition Manual's Table 8-4 on
+  the maintainer's drive is a low-resolution scan (only its first row, C = 3.71 at
+  a = 0, reads: the two lines' 2 × 0.60 × 70 × 0.707 / 16). The 14th Edition PDFs are
+  JBIG2-coded, which nothing here decodes, and Design Guide 21 (2nd edition) has no
+  instantaneous-centre example. It waits for a readable table or worked example to
+  check it against.
+- **Also left:** the weld table in the GUI.
 
 ## Plan
 

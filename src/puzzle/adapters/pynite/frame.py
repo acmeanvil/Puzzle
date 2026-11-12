@@ -48,6 +48,22 @@ def _roll(member, wanted) -> float:
     return math.degrees(math.atan2(_dot(_cross(y0, w), x), _dot(y0, w)))
 
 
+def _results(model, held, combo) -> dict:
+    """One combination's displacements, reactions and member end forces."""
+    nodes = {nid: [getattr(n, d)[combo] for d in DOFS] for nid, n in model.nodes.items()}
+    reactions = {
+        nid: [getattr(model.nodes[nid], f"Rxn{d}")[combo] for d in REACTIONS] for nid in held
+    }
+    members = {}
+    for name, member in model.members.items():
+        length = member.L()
+        members[name] = [[
+            member.axial(x, combo), member.shear("Fy", x, combo), member.shear("Fz", x, combo),
+            member.torque(x, combo), member.moment("My", x, combo), member.moment("Mz", x, combo),
+        ] for x in (0.0, length)]  # fmt: skip
+    return {"nodes": nodes, "reactions": reactions, "members": members}
+
+
 def main() -> int:
     from Pynite import FEModel3D
 
@@ -79,29 +95,26 @@ def main() -> int:
     for node, loads in case.get("node_loads", {}).items():
         for dof, value in loads.items():
             model.add_node_load(node, dof, value)
+    for load in case.get("point_loads", []):
+        model.add_node_load(load["node"], load["direction"], load["P"], case=load["case"])
     for load in case.get("line_loads", []):
         w = load["w"]
-        model.add_member_dist_load(load["member"], load["direction"], w, w)
+        model.add_member_dist_load(load["member"], load["direction"], w, w,
+                                   case=load.get("case", "Case 1"))  # fmt: skip
+    combos = case.get("combos") or []
+    for c in combos:
+        model.add_load_combo(c["name"], c["factors"])
     _event("stage", name="solve")
-    model.analyze_linear(check_statics=False)
-    nodes = {nid: [getattr(n, d)[COMBO] for d in DOFS] for nid, n in model.nodes.items()}
+    if case.get("pdelta"):  # second order (ADR 0079 step 2), each combination on its own
+        model.analyze_PDelta(check_stability=False)
+    else:
+        model.analyze_linear(check_statics=False)
     held = set(case["supports"]) | set(case.get("springs", {})) | set(case.get("displacements", {}))
-    reactions = {
-        nid: [getattr(model.nodes[nid], f"Rxn{d}")[COMBO] for d in REACTIONS] for nid in held
-    }
-    members = {}
-    for name, member in model.members.items():
-        length = member.L()
-        ends = []
-        for x in (0.0, length):
-            ends.append([
-                member.axial(x, COMBO), member.shear("Fy", x, COMBO), member.shear("Fz", x, COMBO),
-                member.torque(x, COMBO), member.moment("My", x, COMBO),
-                member.moment("Mz", x, COMBO),
-            ])  # fmt: skip
-        members[name] = ends
-    out = {"nodes": nodes, "reactions": reactions, "members": members,
-           "seconds": time.time() - start}  # fmt: skip
+    if combos:
+        out = {"combos": {c["name"]: _results(model, held, c["name"]) for c in combos}}
+    else:
+        out = _results(model, held, COMBO)
+    out["seconds"] = time.time() - start
     (here / "results.json").write_text(json.dumps(out), encoding="utf-8")
     _event("converged", step=1, increment=1, iterations=1, time=1.0)
     return 0

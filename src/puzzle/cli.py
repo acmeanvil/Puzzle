@@ -248,6 +248,17 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--files", action="store_true", help="list the log files and counts only")
     p.set_defaults(handler=_log)
 
+    p = sub.add_parser("elements", help="every solver's elements, grouped (ADR 0082)")
+    p.add_argument("--solver", help="calculix, code_aster, elmer, fenicsx, pynite...")
+    p.add_argument("--family", help="solid_3d, solid_2d, shell, beam, truss, discrete, "
+                   "thermal, electromagnetic, fluid")  # fmt: skip
+    p.add_argument(
+        "--study",
+        help="static, modal, buckling, transient, harmonic, contact, "
+        "plasticity, large_deflection, heat, electrostatics, magnetics, flow",
+    )
+    p.set_defaults(handler=_elements)
+
     for name, handler, helptext in (
         ("show", _show, "view a result"),
         ("paraview", _paraview, "open a result in ParaView, its view rebuilt (ADR 0070)"),
@@ -819,6 +830,14 @@ class _LiveStatus:
 
     def close(self) -> None:
         self._end_line()
+
+
+def _elements(args) -> int:
+    from puzzle import elements
+
+    sys.stdout.reconfigure(encoding="utf-8")
+    print(elements.listing(args.solver, args.family, args.study), end="")
+    return 0
 
 
 def _log(args) -> int:

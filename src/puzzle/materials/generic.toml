@@ -959,3 +959,111 @@ thermal_conductivity = { value = 16.2, unit = "W/(m*K)" }
 specific_heat = { value = 500, unit = "J/(kg*K)" }
 thermal_expansion = { value = 1.73e-05, unit = "1/K" }
 electrical_conductivity = { value = 1390000.0, unit = "S/m" }
+
+# Filler metals (ADR 0078 step 2): the AWS classification's minimum all-weld-metal
+# strengths, which welds' strength checks take as F_EXX. Elastic values are the base
+# metal's family's, for completeness only.
+
+[filler_e60xx]
+name = "E60XX electrode"
+type = "Metal"
+group = "Filler metal"
+description = "AWS A5.1 SMAW carbon steel electrodes (E6010, E6013...)"
+sources = ["AWS A5.1/A5.1M, Table 4: E60XX tensile 60 ksi, yield 48 ksi"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 200, unit = "GPa" }
+poissons_ratio = { value = 0.3 }
+yield_strength = { value = 331.0, unit = "MPa" }
+tensile_strength = { value = 413.7, unit = "MPa" }
+
+[filler_e70xx]
+name = "E70XX electrode"
+type = "Metal"
+group = "Filler metal"
+description = "AWS A5.1 SMAW carbon steel electrodes (E7018...), the matching filler of common structural steels (AWS D1.1 Table 5.4)"
+sources = ["AWS A5.1/A5.1M, Table 4: E70XX tensile 70 ksi, yield 58 ksi"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 200, unit = "GPa" }
+poissons_ratio = { value = 0.3 }
+yield_strength = { value = 399.9, unit = "MPa" }
+tensile_strength = { value = 482.6, unit = "MPa" }
+
+[filler_e80xx]
+name = "E80XX electrode"
+type = "Metal"
+group = "Filler metal"
+description = "AWS A5.5 SMAW low-alloy steel electrodes (E8018-C3...)"
+sources = ["AWS A5.5/A5.5M: E80XX tensile 80 ksi, yield 67 ksi"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 200, unit = "GPa" }
+poissons_ratio = { value = 0.3 }
+yield_strength = { value = 461.9, unit = "MPa" }
+tensile_strength = { value = 551.6, unit = "MPa" }
+
+[filler_er70s_6]
+name = "ER70S-6 wire"
+type = "Metal"
+group = "Filler metal"
+description = "AWS A5.18 GMAW carbon steel solid wire"
+sources = ["AWS A5.18/A5.18M, Table 3: ER70S tensile 70 ksi, yield 58 ksi"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 200, unit = "GPa" }
+poissons_ratio = { value = 0.3 }
+yield_strength = { value = 399.9, unit = "MPa" }
+tensile_strength = { value = 482.6, unit = "MPa" }
+
+[filler_e71t_1]
+name = "E71T-1 wire"
+type = "Metal"
+group = "Filler metal"
+description = "AWS A5.20 FCAW carbon steel flux-cored wire"
+sources = ["AWS A5.20/A5.20M, Table 2: E7XT tensile 70 ksi, yield 58 ksi"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 200, unit = "GPa" }
+poissons_ratio = { value = 0.3 }
+yield_strength = { value = 399.9, unit = "MPa" }
+tensile_strength = { value = 482.6, unit = "MPa" }
+
+[filler_e308l]
+name = "E308L / ER308L"
+type = "Metal"
+group = "Filler metal"
+description = "AWS A5.4 / A5.9 austenitic stainless filler for 304 and 304L"
+sources = ["AWS A5.4/A5.4M, Table 4: E308L tensile 75 ksi"]
+density = { value = 8000, unit = "kg/m^3" }
+youngs_modulus = { value = 193, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+tensile_strength = { value = 517.1, unit = "MPa" }
+
+[filler_e309l]
+name = "E309L / ER309L"
+type = "Metal"
+group = "Filler metal"
+description = "AWS A5.4 / A5.9 stainless filler for joining stainless to carbon steel"
+sources = ["AWS A5.4/A5.4M, Table 4: E309L tensile 75 ksi"]
+density = { value = 8000, unit = "kg/m^3" }
+youngs_modulus = { value = 193, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+tensile_strength = { value = 517.1, unit = "MPa" }
+
+[filler_e316l]
+name = "E316L / ER316L"
+type = "Metal"
+group = "Filler metal"
+description = "AWS A5.4 / A5.9 austenitic stainless filler for 316 and 316L"
+sources = ["AWS A5.4/A5.4M, Table 4: E316L tensile 70 ksi"]
+density = { value = 8000, unit = "kg/m^3" }
+youngs_modulus = { value = 193, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+tensile_strength = { value = 482.6, unit = "MPa" }
+
+[filler_e2209]
+name = "E2209 / ER2209"
+type = "Metal"
+group = "Filler metal"
+description = "AWS A5.4 / A5.9 duplex stainless filler for 2205"
+sources = ["AWS A5.4/A5.4M, Table 4: E2209 tensile 100 ksi"]
+density = { value = 8000, unit = "kg/m^3" }
+youngs_modulus = { value = 193, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+tensile_strength = { value = 689.5, unit = "MPa" }

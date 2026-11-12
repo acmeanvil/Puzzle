@@ -45,6 +45,8 @@ def _own(obj: ProjectObject, *, drop: frozenset[str] = frozenset()) -> dict:
         data.pop("remote", None)  # ADR 0021: the same result wherever it is computed
         if data.get("preload_step") == "auto":  # the default: older hashes kept
             data.pop("preload_step")
+        if not data.get("combinations"):  # ADR 0079 step 2: none, as before
+            data.pop("combinations", None)
         for key, default in (
             ("weak_springs", "auto"),
             ("weak_spring_factor", 1e-6),
@@ -112,6 +114,8 @@ def _own(obj: ProjectObject, *, drop: frozenset[str] = frozenset()) -> dict:
                     feature.pop("fields", None)
                 if feature.get("when") is None:  # ADR 0064A A3: no toggle, as before
                     feature.pop("when", None)
+                if feature.get("case") is None:  # ADR 0079 step 2: no load case
+                    feature.pop("case", None)
                 for use in (feature.get("fields") or {}).values():  # stage 2: no weight
                     if use.get("weight") is None:
                         use.pop("weight", None)

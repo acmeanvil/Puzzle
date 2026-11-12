@@ -1,6 +1,6 @@
 # 0079. Model and check frames of line members, as SAP2000 and RISA do, by AISC 360 and 370 and the Aluminum Design Manual
 
-- Status: Accepted; step 1 built (2026-11-11)
+- Status: Accepted; steps 1 and 2 built (2026-11-11)
 - Date: 2026-11-10
 
 ## Context
@@ -182,6 +182,49 @@ Not in step 1:
 - member point loads between nodes (put a node there);
 - the pixi `pynite` env's lock (`pixi lock` in the main checkout);
 - drawing diagrams beside members in the view (the fields are stored per node and per element; the GUI's diagram drawing is a later step).
+
+## Built: step 2 (2026-11-11)
+
+- **Load cases and combinations.** `Feature.case` gives each load its case, and
+  `Study.combinations` (`LoadCombination`: name, factors) lists the combinations; both are
+  left out of hashes when unset.
+  - `frames/combinations.asce7(cases, "LRFD" | "ASD")` gives ASCE 7-16 2.3.1 and 2.4.1
+    from the cases a frame has:
+    - one combination per roof load (Lr, S, R);
+    - wind and seismic both ways;
+    - wind, seismic and roof-led combinations left out where the frame has no such load;
+    - names written from the factors used (`1.2D + L + 0.5S - W`).
+  - E is the load effect as given. Ev = 0.2 SDS D and ρ are the user's to include for
+    now.
+- **PyNite solves the combinations.** PyNite's own load cases and `add_load_combo`; each
+  combination is a result step of kind `combination`, named by a global field
+  `combination` (`StepResult.label`). `run_study` keeps that kind.
+- **Second order and Direct Analysis**, as step settings:
+  - `second_order` runs P-Delta (`analyze_PDelta`, each combination on its own, P-δ from
+    the members the mesh makes);
+  - `direct_analysis` (AISC 360 C2) runs P-Delta with 0.8 E and 0.8 G (τb = 1), plus
+    notional loads N_i = 0.002 Y_i from each combination's factored gravity at each
+    node, in each `notional_directions` (default x,y, both senses). Each is a
+    combination of its own, `<combination>, notional ±x`.
+- **Refusals.** Other adapters refuse combinations, second order and direct analysis
+  (`Capabilities.frame_analysis`).
+- **GUI and agent.** Model → Studies → Load combinations… (one form: LRFD, ASD or none),
+  MCP `load_combinations`, and the skill `frames`.
+- **Benchmarks** (`tests/integration/test_frame_analysis.py`, all exact to the printed
+  digits):
+  - superposition of 1.4D and 1.2D + 1.6L on a cantilever: 56000 and 86400 N·m;
+  - P-Delta on a cantilever column at 0.3 of Euler's load: H tan(kh)/k = 27021.3 N·m,
+    against 20000 first order;
+  - Direct Analysis on the same column: (H ± 0.002 P) tan(k'h)/k' with k' = √(P/0.8EI),
+    39659.3 and 19979.7 N·m.
+
+  `tests/test_combinations.py` checks the generated combinations.
+- **Not yet:**
+  - τb below 1 when αPr/Py > 0.5;
+  - notional loads only in gravity-only combinations where Δ2/Δ1 ≤ 1.7 (C2.2b(4));
+    they go in every combination, which is conservative;
+  - combinations on CalculiX and Code_Aster;
+  - envelopes over combinations (operators' Envelope reads the steps meanwhile).
 
 ## Plan
 

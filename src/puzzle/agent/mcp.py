@@ -1412,6 +1412,63 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         return out
 
     @tool(
+        description="A frame study's load combinations (ADR 0079 step 2; PyNite solves "
+        "them, one result step each, named): `method` 'LRFD' or 'ASD' generates ASCE 7-16's "
+        "(2.3.1, 2.4.1) from the load cases its component's loads use (each load's `case`: "
+        "D, L, Lr, S, R, W, E; wind and seismic both ways); or `combinations` = [{name, "
+        "factors: {case: factor}}] sets your own; neither lists the cases and the current "
+        "ones. Second order (P-Delta) and AISC's Direct Analysis Method are the solve step's "
+        "settings second_order and direct_analysis (notional_directions, default 'x,y'). "
+        "One edit; at 'propose' a proposal."
+    )
+    @guarded
+    def load_combinations(study: str, method: str | None = None,
+                          combinations: list[dict[str, Any]] | None = None,
+                          rationale: str = "") -> dict[str, Any]:  # fmt: skip
+        from puzzle.commands import resolve
+        from puzzle.frames.combinations import asce7, cases_of, combination_ops
+        from puzzle.model.schema import Study
+
+        s = session()
+        target = resolve(s.project, study, Study)
+        comp = s.project.objects.get(target.component)
+        cases = cases_of(comp)
+        if method is None and combinations is None:
+            return {"cases": cases, "combinations": [c.model_dump() for c in target.combinations]}
+        try:
+            combos = (asce7(cases, method) if method is not None else
+                      [(c["name"], c["factors"]) for c in combinations or []])  # fmt: skip
+        except (ValueError, KeyError) as exc:
+            raise PuzzleError(str(exc), code="invalid") from None
+        ops = combination_ops(target, combos)
+        command = {"command": "edit", "object": str(target.id),
+                   "ops": [op.model_dump() for op in ops]}  # fmt: skip
+        out = s.submit(command, actor, rationale=rationale).to_dict()
+        return out | {"combinations": [{"name": n, "factors": f} for n, f in combos]}
+
+    @tool(
+        description="The element library (ADR 0082): every solver's elements with their "
+        "family, cells, formulation (full or reduced integration, incompatible modes, "
+        "mixed u-p, thick or thin shell, Euler-Bernoulli or Timoshenko...), the studies "
+        "they support, what each is for and not for, whether Puzzle writes it yet, and the "
+        "manual's section. Filter by `solver`, `family` (solid_3d, solid_2d, shell, beam, "
+        "truss, discrete, thermal, electromagnetic, fluid), `study` (static, modal, "
+        "buckling, transient, harmonic, contact, plasticity, large_deflection, heat, "
+        "electrostatics, magnetics, flow) or `written`. Choosing an element per body is "
+        "not built yet."
+    )
+    @guarded
+    def elements_list(solver: str | None = None, family: str | None = None,
+                      study: str | None = None,
+                      written: bool | None = None) -> dict[str, Any]:  # fmt: skip
+        from dataclasses import asdict
+
+        from puzzle import elements
+
+        rows = elements.query(solver, family, study, written)
+        return {"elements": [{"solver": n, **asdict(e)} for n, e in rows]}
+
+    @tool(
         description="What the project needs next (ADR 0040, the Advisor): the workflow's "
         "steps for a component and study (the first of each if not named) as done, needed "
         "or optional, each with its reason, and `next`, the first needed one. The same "
@@ -2159,12 +2216,16 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         description="Light welds' results in a study's latest run (ADR 0078): per weld its "
         "total force (N), largest line force (N/m) and where, mean line force, welded "
         "length, and each station's line force in the weld's frame (along, throat_normal, "
-        "throat_shear, magnitude, x, y, z; twist N·m/m about the path). `weld` one of "
-        "them; `step` 1-based among the steps with weld results (default the last)."
+        "throat_shear, magnitude, x, y, z; twist N·m/m about the path), and `strength`: "
+        "AISC 360-16 J2 at the governing station (filler and F_EXX, throat, design and "
+        "allowable strength per length, LRFD and ASD utilisations for loads factored that "
+        "way; `directional` takes Eq. J2-5's 1 + 0.5 sin^1.5 θ, allowed for linear welds "
+        "loaded in plane). `weld` one of them; `step` 1-based among the steps with weld "
+        "results (default the last)."
     )
     @guarded
-    def weld_results(study: str, weld: str | None = None,
-                     step: int | None = None) -> dict[str, Any]:  # fmt: skip
+    def weld_results(study: str, weld: str | None = None, step: int | None = None,
+                     directional: bool = False) -> dict[str, Any]:  # fmt: skip
         from puzzle.commands import resolve
         from puzzle.model.schema import Component, Study
         from puzzle.post.weld_fields import results
@@ -2173,7 +2234,7 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         record, mesh, res = latest(study)
         comp = session().project.get(found.component, Component)
         return {"run_id": record.run_id,
-                **results(session().project, comp, mesh, res, weld, step)}  # fmt: skip
+                **results(session().project, comp, mesh, res, weld, step, directional)}  # fmt: skip
 
     @tool(
         description="A solve's own logs, read whole from its run folder (solver.log, "

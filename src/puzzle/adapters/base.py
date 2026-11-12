@@ -95,6 +95,8 @@ class Capabilities:
     welds: frozenset[str] = frozenset()
     """Weld formulations written here (ADR 0078): line (the light weld), modelled."""
     couplings: frozenset[str] = frozenset()
+    frame_analysis: bool = False
+    """Load combinations, P-Delta and the Direct Analysis Method (ADR 0079 step 2)."""
     cyclic: frozenset[str] = frozenset()
     """Physics whose cyclic symmetry (ADR 0081 step 3) is written: pairs as equations."""
     dimensions: frozenset[str] = field(default_factory=lambda: frozenset({"3d"}))
@@ -425,6 +427,14 @@ class SolverAdapter(ABC):
         except InputError as exc:
             problems.append(f"{self.name}: {exc}")
         problems += self.check_expert(study.expert_settings.get(self.name, {}))
+        if not caps.frame_analysis:  # ADR 0079 step 2: PyNite's so far, never ignored
+            if study.combinations:
+                problems.append(f"{self.name} doesn't solve load combinations yet (PyNite does)")
+            for s in study.solve_steps():
+                for key in ("second_order", "direct_analysis"):
+                    if s.settings.get(key):
+                        problems.append(f"{self.name} doesn't take {key.replace('_', ' ')} "
+                                        "yet (PyNite does)")  # fmt: skip
         from puzzle.cyclic import check as cyclic_check
 
         problems += [f"{self.name}: {p}" for p in cyclic_check(project, study, component, caps)]

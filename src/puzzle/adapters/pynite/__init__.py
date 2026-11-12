@@ -27,6 +27,7 @@ class PyNiteAdapter(SolverAdapter):
         features=FEATURES,
         beams=True,
         member_ends=True,
+        frame_analysis=True,  # ADR 0079 step 2: combinations, P-Delta, Direct Analysis
         axes_features=frozenset(
             {"force:cartesian", "displacement:cartesian", "gravity:cartesian"}
         ),  # fmt: skip

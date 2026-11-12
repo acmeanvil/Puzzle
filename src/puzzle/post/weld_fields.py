@@ -102,6 +102,33 @@ def finish(results, project, comp, mesh) -> None:
         )
 
 
+def _strength(project, comp, w, rows, c, wp, directional) -> dict:
+    """The weld's AISC 360 J2 check at its stations, or why there is none."""
+    from puzzle import weld_strength
+
+    try:
+        name, fexx, code = weld_strength.filler(project, comp, w)
+    except ValueError as exc:
+        return {"checked": False, "why": str(exc)}
+    across = np.hypot(rows[:, c["throat_normal"]], rows[:, c["throat_shear"]])
+    got = weld_strength.check(w, fexx, rows[:, c["along"]], across, rows[:, c["magnitude"]],
+                              directional)  # fmt: skip
+    if not got["checked"]:
+        return got
+    at = got["governing"]
+    return {
+        "checked": True, "code": code, "clause": got["clause"], "filler": name,
+        "F_EXX_Pa": fexx, "throat_m": got["throat_m"],
+        "design_strength_lrfd_N_per_m": float(weld_strength.PHI * got["nominal_N_per_m"][at]),
+        "allowable_strength_asd_N_per_m": float(got["nominal_N_per_m"][at] / weld_strength.OMEGA),
+        "utilisation_lrfd": float(got["utilisation_lrfd"][at]),
+        "utilisation_asd": float(got["utilisation_asd"][at]),
+        "governing_at_m": [float(v) for v in wp.xyz[at]],
+        "not_checked": "the base metal along the weld (J4) and Table J2.4's minimum size: "
+        "they need the plates' thicknesses",
+    }  # fmt: skip
+
+
 def summary(results, comp, step=None) -> list[dict]:
     """Per light weld at a step (the last by default): its total force (N), its largest
     line force (N/m) and where along it, for tables and the agent."""
@@ -118,10 +145,12 @@ def summary(results, comp, step=None) -> list[dict]:
     ]  # fmt: skip
 
 
-def results(project, comp, mesh, res, weld: str | None = None, step: int | None = None) -> dict:
+def results(project, comp, mesh, res, weld: str | None = None, step: int | None = None,
+            directional: bool = False) -> dict:  # fmt: skip
     """Each light weld's forces in a run's step with weld results (the last by default,
     1-based among them): its total force (N), largest line force (N/m) and where, mean
-    line force, welded length, and its stations' line forces in its own frame."""
+    line force, welded length, its stations' line forces in its own frame, and its
+    strength by AISC 360 J2 (`weld_strength`; `directional` takes Eq. J2-5's increase)."""
     from puzzle.adapters.weld_pairs import weld_pairs
     from puzzle.errors import PuzzleError
 
@@ -156,6 +185,7 @@ def results(project, comp, mesh, res, weld: str | None = None, step: int | None 
             "peak_line_force_N_per_m": float(size[at]),
             "peak_at_m": [float(v) for v in wp.xyz[at]],
             "mean_line_force_N_per_m": float(np.average(size, weights=wp.widths)),
+            "strength": _strength(project, comp, w, rows, c, wp, directional),
             "stations": [
                 {"s_m": float(s), **{name: float(r[c[name]]) for name in LINE_COMPONENTS}}
                 for s, r in zip(wp.s, rows, strict=True)

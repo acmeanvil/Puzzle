@@ -45,6 +45,27 @@ a solid joint are other skills.
    supports and nodal forces (benchmarked against PyNite here), not releases, offsets,
    line loads or node springs yet.
 
+## Load cases, combinations and second order (ADR 0079 step 2, PyNite)
+
+1. Give each load its `case`: D (dead), L (live), Lr, S, R, W (wind), E (seismic), or a
+   name of your own. Supports have none.
+2. `load_combinations(study, method="LRFD")` (or "ASD") makes ASCE 7-16's combinations
+   from the cases the loads use. Wind and seismic act both ways; combinations led by a
+   load the frame hasn't are left out. Or pass `combinations=[{"name": "...",
+   "factors": {"D": 1.2, "L": 1.6}}]`. With neither argument it lists the cases and the
+   current combinations.
+3. Each combination is a result step of its own, named by the combination; probes and
+   operators read it like any step.
+4. Second order: the solve step's setting `second_order` true (P-Delta, each
+   combination solved on its own).
+5. AISC 360's Direct Analysis Method: `direct_analysis` true. It runs P-Delta with
+   0.8 EI and 0.8 EA (τb = 1), plus notional loads of 0.002 times each node's factored
+   gravity load. `notional_directions` is "x,y" by default (both senses of each, each a
+   combination of its own named "<combination>, notional +x"), or "+x", "x" and so on.
+   Gravity is along −z.
+6. CalculiX, Code_Aster and the others refuse combinations, `second_order` and
+   `direct_analysis` so far.
+
 ## Results
 
 - `beam_forces` (per node): N, Vy, Vz, T, My, Mz in each member's axes (x along it, y
@@ -63,3 +84,7 @@ a solid joint are other skills.
   Timoshenko, so stocky members differ by their shear deflection (W12X26 over 8 m:
   0.6 % in the indeterminate moments).
 - Torsion released at both ends of a member: refused (a mechanism).
+- Combinations with a load that has no case: refused. Every load needs one once the
+  study combines cases.
+- Direct Analysis assumes τb = 1: where a member's αPr/Py passes 0.5, its flexural
+  stiffness should be reduced further (AISC 360 C2.3(b)). Check the axial loads.
