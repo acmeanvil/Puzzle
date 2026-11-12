@@ -47,3 +47,31 @@ def test_the_run_summary_skips_an_empty_field():
     fields = {"beam_forces": empty, "displacement": u}
     res = Results("code_aster", [StepResult(1, "stationary", 1.0, fields=fields)])
     assert list(summary(res)[0]["fields"]) == ["displacement"]
+
+
+def test_lagrange_bricks_draw_by_their_serendipity_nodes():
+    """ADR 0082: a 27-node brick is drawn as VTK's 20-node one (its face and centre nodes
+    aren't in the cell); the field is still read at all 27."""
+    import numpy as np
+    import pytest
+
+    from puzzle.mesh.mesh import CellBlock, Mesh
+    from puzzle.post.vtk import to_grid
+    from puzzle.results.model import Field, StepResult
+
+    corners = np.array([[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0],
+                        [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]], float)  # fmt: skip
+    edges = [(0, 1), (0, 3), (0, 4), (1, 2), (1, 5), (2, 3), (2, 6), (3, 7), (4, 5), (4, 7),
+             (5, 6), (6, 7)]  # fmt: skip
+    faces = [(0, 1, 2, 3), (0, 1, 5, 4), (0, 3, 7, 4), (1, 2, 6, 5), (2, 3, 7, 6), (4, 5, 6, 7)]
+    mids = [corners[list(e)].mean(axis=0) for e in edges]
+    centres = [corners[list(f)].mean(axis=0) for f in faces]
+    pts = np.vstack([corners, mids, centres, [corners.mean(axis=0)]])
+    ids = np.arange(1, 28)
+    mesh = Mesh(node_ids=ids, coords=pts,
+                blocks=[CellBlock("hex27", 3, (3, 1), np.array([1]), ids[None, :])])  # fmt: skip
+    step = StepResult(1, "stationary", 1.0, fields={
+        "temperature": Field("temperature", "node", [""], ids, pts[:, :1])})  # fmt: skip
+    grid = to_grid(mesh, step)
+    assert grid.n_cells == 1 and int(grid.celltypes[0]) == 25
+    assert grid.volume == pytest.approx(1.0)

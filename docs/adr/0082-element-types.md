@@ -171,12 +171,38 @@ The maintainer asked (2026-11-11) for:
   | Code_Aster 3D_INCO_UPG | ν = 0.4999 on quadratic tetrahedra | 0.988 |
   | Code_Aster POU_D_E | Euler–Bernoulli cantilever | PL³/3EI to every digit |
   | Code_Aster 3D_DIAG | 100 °C on a 20 °C bar | no node below 20 °C |
-- **Unmarked until they can be benchmarked:** C3D8R, C3D20R and 3D_SI wait for
-  second-order hexahedral meshes, which the mesher refuses ("second-order hexahedra are
-  not supported yet"). DST and S8R wait for a thick-plate benchmark.
+- **Unmarked until they can be benchmarked:** C3D8R (hourglassing needs its own
+  check), DST and S8R (a thick-plate benchmark). C3D20R and 3D_SI came with second-order
+  bricks (below).
 - **GUI and agent.** Model → Components → Element formulation… (one form), MCP
   `element_choose`, skill `element-types`. `tests/test_elements.py` checks the lookups,
   the refusals and the unchanged run keys.
+
+## Built: second-order bricks, 20 and 27 nodes (2026-11-11)
+
+- **The mesher.** `MeshRecipe.hexahedron_nodes` (20 or 27; the default 20 is left out of
+  hashes) sets Gmsh's `Mesh.SecondOrderIncomplete` for a second-order hexahedral mesh:
+  serendipity bricks with quad8 faces, or Lagrange bricks with quad9 faces. The refusal
+  from the first hexahedral meshing (7f83b09) is gone.
+- **Each solver:**
+  - CalculiX: C3D20 (and C3D20R by a choice); it has no 27-node brick, so those are
+    refused.
+  - Code_Aster: HEXA20 and HEXA27 through Gmsh's MED export, and 3D_SI.
+  - Elmer: 820 and 827. Its node orders come from its own `elements.def`: the bottom
+    ring's mid-edges, then the uprights', then the top ring's; 827's faces y−, x+, y+,
+    x−, z−, z+, then the centre.
+  - FEniCSx: Q2 on 27 nodes; serendipity cells are refused, since DOLFINx has none.
+  - The view draws a 27-node brick by its 20 serendipity nodes (VTK 25), and quad9
+    faces as VTK 28.
+- **Benchmarks** (`tests/integration/test_quadratic_bricks.py`; Timoshenko's cantilever,
+  structured 5 mm bricks two deep):
+  - 20 nodes: 0.9951 on CalculiX, Code_Aster and Elmer alike;
+  - 27 nodes: 0.9956 on Code_Aster, Elmer and FEniCSx alike;
+  - reduced 20-node bricks: C3D20R and 3D_SI 0.9957;
+  - the two refusals.
+
+  So C3D20R and 3D_SI are written now. `tests/test_geometry_mesh.py` checks the bricks
+  and their faces; `tests/test_vtk_grid.py` the view of a 27-node brick.
 
 ## Built: decision 6 in part, large deflection on Code_Aster (2026-11-11)
 

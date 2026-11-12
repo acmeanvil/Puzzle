@@ -204,13 +204,19 @@ def test_hexahedral_mesh_of_a_block(tmp_path):
     assert np.allclose(mesh.node_coords(tip.node_ids)[:, 0], 0.2)
 
 
-def test_second_order_hexahedra_are_refused(tmp_path):
+@pytest.mark.parametrize("nodes, faces", [(20, "quad8"), (27, "quad9")])
+def test_second_order_hexahedra(tmp_path, nodes, faces):
+    """ADR 0082: serendipity (20) or Lagrange (27) bricks, by the recipe, with their
+    faces to match."""
     from conftest_geometry import bar_project, write_bar_step
 
     step = write_bar_step(tmp_path / "bar.step")
-    project, comp = bar_project(step, [], element_shape="hexahedra", element_order=2)
-    with pytest.raises(MeshError, match="second-order hexahedra"):
-        generate_mesh(project, comp.id, tmp_path, tmp_path / "m")
+    project, comp = bar_project(step, [], mesh_size_mm=5.0, element_shape="hexahedra",
+                                element_order=2, hexahedron_nodes=nodes)  # fmt: skip
+    mesh = generate_mesh(project, comp.id, tmp_path, tmp_path / "m").mesh
+    assert {b.element for b in mesh.blocks if b.dim == 3} == {f"hex{nodes}"}
+    tip = mesh.groups["Bar/Tip"]
+    assert {b.element for b in tip.blocks(mesh)} == {faces}
 
 
 def test_meshing_from_short_lived_threads(tmp_path):

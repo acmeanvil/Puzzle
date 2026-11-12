@@ -619,6 +619,10 @@ class MeshRecipe(ProjectObject):
 
     mesher: Literal["gmsh", "netgen"] = "gmsh"
     element_order: Literal[1, 2] = 2
+    hexahedron_nodes: Literal[20, 27] = Field(
+        default=20, description="second-order hexahedra: 20 nodes (serendipity: CalculiX "
+        "C3D20, Code_Aster HEXA20, Elmer 820) or 27 (Lagrange: Code_Aster HEXA27, Elmer "
+        "827, FEniCSx Q2); prisms follow, 15 or 18 nodes")  # fmt: skip
     element_shape: Literal["tetrahedra", "hexahedra"] = Field(
         default="tetrahedra",
         description="hexahedra: structured (transfinite) hex mesh of block-like volumes; in a "

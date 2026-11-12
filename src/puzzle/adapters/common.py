@@ -19,11 +19,15 @@ FACES = {
     "hex20": [(0, 1, 2, 3), (4, 7, 6, 5), (0, 4, 5, 1), (1, 5, 6, 2), (2, 6, 7, 3), (3, 7, 4, 0)],
     "wedge6": [(0, 1, 2), (3, 4, 5), (0, 1, 4, 3), (1, 2, 5, 4), (2, 0, 3, 5)],
     "wedge15": [(0, 1, 2), (3, 4, 5), (0, 1, 4, 3), (1, 2, 5, 4), (2, 0, 3, 5)],
+    # Lagrange bricks and prisms (27 and 18 nodes): their corners as the others'.
+    "hex27": [(0, 1, 2, 3), (4, 7, 6, 5), (0, 4, 5, 1), (1, 5, 6, 2), (2, 6, 7, 3), (3, 7, 4, 0)],
+    "wedge18": [(0, 1, 2), (3, 4, 5), (0, 1, 4, 3), (1, 2, 5, 4), (2, 0, 3, 5)],
     # 2D elements' faces are their edges (ADR 0048), numbered as CalculiX and Abaqus do.
     "tri3": [(0, 1), (1, 2), (2, 0)],
     "tri6": [(0, 1), (1, 2), (2, 0)],
     "quad4": [(0, 1), (1, 2), (2, 3), (3, 0)],
     "quad8": [(0, 1), (1, 2), (2, 3), (3, 0)],
+    "quad9": [(0, 1), (1, 2), (2, 3), (3, 0)],
 }
 
 BODY_LOADS = {"gravity", "acceleration", "rotation"}  # ADR 0037: on bodies, per volume

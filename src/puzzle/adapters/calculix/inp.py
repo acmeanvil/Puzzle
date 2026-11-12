@@ -243,6 +243,13 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
                     raise InputError(f"CalculiX has no 2D {b.element} element", code="unsupported")
                 ccx_type, order = PLANAR_ELEMENTS[planar][b.element], None
             else:
+                if b.element not in ELEMENTS:
+                    raise InputError(
+                        f"CalculiX has no {b.element} element: its second-order bricks and "
+                        "prisms have 20 and 15 nodes, so set the mesh recipe's hexahedron "
+                        "nodes to 20",
+                        code="unsupported",
+                    )
                 ccx_type, order = ELEMENTS[b.element]
             from puzzle.element_choice import native
 

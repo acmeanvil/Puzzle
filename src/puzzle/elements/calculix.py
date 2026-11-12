@@ -73,7 +73,8 @@ ELEMENTS = [
         ("hex20",),
         "full",
         STRUCT,
-        "The quadratic brick: the most accurate solid on hexahedral meshes (revolved bolts).",
+        "The quadratic (20-node) brick: the most accurate solid on hexahedral meshes; CalculiX "
+        "has no 27-node brick, so those are refused.",
         "",
         True,
         REF,
@@ -87,7 +88,7 @@ ELEMENTS = [
         STRUCT[:-1],
         "The quadratic brick with reduced integration: bending without locking, cheaper.",
         "one element through a thickness under contact.",
-        False,
+        True,
         REF,
     ),
     Element(

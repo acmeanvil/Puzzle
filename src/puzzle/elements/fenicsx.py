@@ -44,6 +44,18 @@ ELEMENTS = [
         ("solid_mechanics", "heat_transfer", "electrostatics", "magnetic_fields"),
     ),
     Element(
+        "Lagrange Q2 (27-node bricks)",
+        "solid_3d",
+        ("hex27",),
+        "lagrange",
+        ("static", "modal", "transient", "harmonic", "heat"),
+        "Quadratic Lagrange on 27-node hexahedra (the mesh recipe's hexahedron nodes 27).",
+        "20-node bricks: DOLFINx has no serendipity cells, so they are refused.",
+        True,
+        REF,
+        ("solid_mechanics", "heat_transfer"),
+    ),
+    Element(
         "Lagrange P3+",
         "solid_3d",
         ("tet4",),

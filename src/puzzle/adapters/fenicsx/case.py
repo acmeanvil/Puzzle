@@ -135,6 +135,13 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     check_contacts(comp, set(), "FEniCSx", THREADS)
     refuse_line_bodies(mesh, "FEniCSx")
     refuse_large_deflection(study.solve_steps(), "FEniCSx")
+    serendipity = {b.element for b in mesh.blocks} & {"hex20", "wedge15", "quad8", "pyramid13"}
+    if serendipity:  # ADR 0082: DOLFINx's cells are Lagrange
+        raise InputError(
+            f"FEniCSx has no serendipity cells ({', '.join(sorted(serendipity))}): set the "
+            "mesh recipe's hexahedron nodes to 27 for its second-order bricks",
+            code="unsupported",
+        )
     steps = study.solve_steps()
     if len(steps) != 1:
         raise InputError("the FEniCSx adapter runs studies with exactly one solve step for now")

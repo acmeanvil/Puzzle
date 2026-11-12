@@ -31,6 +31,8 @@ part. The formulations written so far:
   Exact PL³/3EI.
 - `lumped`: Code_Aster 3D_DIAG for transient heat. No node undershoots after a sudden
   temperature.
+- `reduced`: CalculiX C3D20R and Code_Aster 3D_SI on 20-node bricks (0.9957 of
+  Timoshenko's cantilever on both).
 - `full`, `timoshenko`, `thin_shell`: the defaults (C3D10, 3D, POU_D_T, DKT...).
 
 `formulation="none"` removes the choice. `solver_types={"calculix": "C3D20R"}` names a
@@ -61,7 +63,10 @@ solver's own type outright (expert use: it is written as given).
 
 - Incompatible modes on a tetrahedral mesh: set the mesh recipe's element_shape to
   hexahedra and element_order 1.
-- Reduced integration (C3D20R, 3D_SI), thick shells (DST, S8R): listed, not written
-  yet. Second-order hexahedra aren't meshed yet.
+- Second-order bricks: set the mesh recipe's `element_shape` to "hexahedra",
+  `element_order` 2, and `hexahedron_nodes` 20 (CalculiX, Code_Aster, Elmer) or 27
+  (Code_Aster, Elmer, FEniCSx). CalculiX refuses 27-node bricks and FEniCSx 20-node
+  ones. Reduced integration (C3D20R, 3D_SI) needs the 20-node ones.
+- Thick shells (DST, S8R) and C3D8R: listed, not written yet.
 - Choosing per body on PyNite, Elmer or FEniCSx: nothing to choose yet; they refuse
   it.

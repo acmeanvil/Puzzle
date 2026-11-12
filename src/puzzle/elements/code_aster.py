@@ -32,7 +32,7 @@ ELEMENTS = [
         STRUCT,
         "3D with under-integration: quadratic hexahedra and prisms without locking.",
         "",
-        False,
+        True,
         U3,
     ),
     Element(

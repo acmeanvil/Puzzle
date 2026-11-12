@@ -63,7 +63,11 @@ def _own(obj: ProjectObject, *, drop: frozenset[str] = frozenset()) -> dict:
     if data.get("share_faces") is True:  # the default: older projects keep their hashes
         data.pop("share_faces")
     if obj.kind == "mesh":  # ADR 0077's defaults: older recipes keep their hashes
-        for key, default in (("revolved_bolts", True), ("bolt_sectors", 24)):
+        for key, default in (
+            ("revolved_bolts", True),
+            ("bolt_sectors", 24),
+            ("hexahedron_nodes", 20),
+        ):
             if data.get(key) == default:
                 data.pop(key)
     if obj.kind == "mesh":  # a box in global axes, as before boxes took a system

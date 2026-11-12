@@ -108,8 +108,6 @@ def generate_mesh(
             "Netgen meshes tetrahedra (and boundary-layer prisms); use Gmsh for hexahedra"
         )
     hexes = recipe.element_shape == "hexahedra" and not planar  # 2D: quadrilaterals
-    if not preview and hexes and recipe.element_order != 1:
-        raise MeshError("second-order hexahedra are not supported yet; use element_order 1")
 
     geometries = {p.name: project.get(p.geometry, Geometry) for p in comp.parts}
     warnings: list[str] = []
@@ -315,6 +313,9 @@ def generate_mesh(
             gmsh.option.setNumber("Mesh.HighOrderOptimize", HIGH_ORDER[recipe.high_order_optimise])
         if profiles:  # 20-node hexahedra and 15-node prisms (CalculiX's C3D20, C3D15)
             gmsh.option.setNumber("Mesh.SecondOrderIncomplete", 1)
+        elif hexes and recipe.element_order > 1:  # serendipity (20) or Lagrange (27) bricks
+            gmsh.option.setNumber("Mesh.SecondOrderIncomplete",
+                                  1 if recipe.hexahedron_nodes == 20 else 0)  # fmt: skip
         gmsh.model.mesh.setOrder(recipe.element_order)
         dim = 2 if planar else 3
         min_quality = _min_quality(dim)

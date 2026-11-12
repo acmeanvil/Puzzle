@@ -10,20 +10,20 @@ Every solver's elements, grouped by what they model. ★ marks the ones Puzzle w
 | full integration | quadratic | C3D10 ★, C3D20 ★, C3D15 ★ | – | – | – |
 | reduced integration | linear | C3D8R | – | – | – |
 | incompatible modes (bending without locking) | linear | C3D8I ★ | – | – | – |
-| reduced integration | quadratic | C3D20R | – | – | – |
+| reduced integration | quadratic | C3D20R ★ | – | – | – |
 | full integration | linear and quadratic | – | 3D ★ | – | – |
-| reduced integration | linear and quadratic | – | 3D_SI | – | – |
+| reduced integration | linear and quadratic | – | 3D_SI ★ | – | – |
 | mixed displacement-pressure (nearly incompressible) | quadratic | – | 3D_INCO_UPG ★, 3D_INCO_UP | – | Taylor-Hood P2-P1 |
 | Lagrange (nodal) unknowns | linear and quadratic | – | – | 504/510 ★, 808/820/827 ★, 706/715 ★ | – |
 | Lagrange (nodal) unknowns | linear | – | – | p-elements | Lagrange P1 ★, Lagrange P3+ |
-| Lagrange (nodal) unknowns | quadratic | – | – | – | Lagrange P2 ★ |
+| Lagrange (nodal) unknowns | quadratic | – | – | – | Lagrange P2 ★, Lagrange Q2 (27-node bricks) ★ |
 
 - **CalculiX C3D4**: The linear tetrahedron: quick meshes, heat transfer. Not for: stress in bending: it locks, so use C3D10. Studies: static, modal, buckling, structural dynamics, harmonic response, contact, plasticity, large deflection, heat transfer. (CalculiX User's Manual, 6.2 Element Types)
 - **CalculiX C3D10**: The quadratic tetrahedron, Puzzle's default: any geometry, accurate stresses. Studies: static, modal, buckling, structural dynamics, harmonic response, contact, plasticity, large deflection, heat transfer. (CalculiX User's Manual, 6.2 Element Types)
 - **CalculiX C3D8**: The linear brick, for hexahedral meshes in heat or stocky solids. Not for: bending of thin parts: it shear-locks; C3D8I or C3D20 instead. Studies: static, modal, buckling, structural dynamics, harmonic response, contact, plasticity, large deflection, heat transfer. (CalculiX User's Manual, 6.2 Element Types)
 - **CalculiX C3D8R**: The linear brick with one integration point: cheap explicit-style meshes. Not for: coarse meshes: hourglassing. Studies: static, modal, buckling, structural dynamics, harmonic response, contact, plasticity, large deflection. (CalculiX User's Manual, 6.2 Element Types)
 - **CalculiX C3D8I**: The linear brick with incompatible modes: bending of thin parts in one layer. Studies: static, modal, buckling, structural dynamics, harmonic response, contact, plasticity, large deflection. (CalculiX User's Manual, 6.2 Element Types)
-- **CalculiX C3D20**: The quadratic brick: the most accurate solid on hexahedral meshes (revolved bolts). Studies: static, modal, buckling, structural dynamics, harmonic response, contact, plasticity, large deflection, heat transfer. (CalculiX User's Manual, 6.2 Element Types)
+- **CalculiX C3D20**: The quadratic (20-node) brick: the most accurate solid on hexahedral meshes; CalculiX has no 27-node brick, so those are refused. Studies: static, modal, buckling, structural dynamics, harmonic response, contact, plasticity, large deflection, heat transfer. (CalculiX User's Manual, 6.2 Element Types)
 - **CalculiX C3D20R**: The quadratic brick with reduced integration: bending without locking, cheaper. Not for: one element through a thickness under contact. Studies: static, modal, buckling, structural dynamics, harmonic response, contact, plasticity, large deflection. (CalculiX User's Manual, 6.2 Element Types)
 - **CalculiX C3D6**: The linear wedge, to fill swept meshes. Studies: static, modal, buckling, structural dynamics, harmonic response, contact, plasticity, large deflection, heat transfer. (CalculiX User's Manual, 6.2 Element Types)
 - **CalculiX C3D15**: The quadratic wedge, on revolved meshes' axes. Studies: static, modal, buckling, structural dynamics, harmonic response, contact, plasticity, large deflection, heat transfer. (CalculiX User's Manual, 6.2 Element Types)
@@ -37,6 +37,7 @@ Every solver's elements, grouped by what they model. ★ marks the ones Puzzle w
 - **Elmer p-elements**: Hierarchic higher-order bases (Element = "p:2"...). Studies: static, modal, structural dynamics, harmonic response. (Elmer Solver Manual, p-elements)
 - **FEniCSx Lagrange P2**: Quadratic Lagrange on tetrahedra: Puzzle's elasticity. Studies: static, modal, structural dynamics, harmonic response, heat transfer, electrostatics. (DOLFINx, basix.ufl.element)
 - **FEniCSx Lagrange P1**: Linear Lagrange on tetrahedra. Not for: bending: it locks. Studies: static, heat transfer, electrostatics. (DOLFINx, basix.ufl.element)
+- **FEniCSx Lagrange Q2 (27-node bricks)**: Quadratic Lagrange on 27-node hexahedra (the mesh recipe's hexahedron nodes 27). Not for: 20-node bricks: DOLFINx has no serendipity cells, so they are refused. Studies: static, modal, structural dynamics, harmonic response, heat transfer. (DOLFINx, basix.ufl.element)
 - **FEniCSx Lagrange P3+**: Higher degrees on the same cells. Studies: static, heat transfer. (DOLFINx, basix.ufl.element)
 - **FEniCSx Taylor-Hood P2-P1**: Mixed displacement-pressure for incompressible materials (or Stokes flow). Studies: static. (DOLFINx, basix.ufl.element)
 
