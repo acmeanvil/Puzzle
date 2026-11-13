@@ -46,8 +46,19 @@ def test_stress_areas_match_the_standards(standard, name, area):
 
 def test_every_series_is_listed():
     assert [s.name for s in bolts.sizes("iso_coarse")][:3] == ["M3", "M4", "M5"]
-    assert len(bolts.sizes("iso_coarse")) == len(bolts.sizes("iso_fine")) == 17
-    assert len(bolts.sizes("unc")) == len(bolts.sizes("unf")) == 18
+    # M3-M64 (M39 and up from Lacewing Lab's tables); five more ISO 262 fine pitches;
+    # UNC to 4 in, UNF to 1 1/2 in.
+    assert len(bolts.sizes("iso_coarse")) == 25
+    assert len(bolts.sizes("iso_fine")) == 25 + 5
+    assert len(bolts.sizes("unc")) == 28 and len(bolts.sizes("unf")) == 18
+    assert len({s.name for s in bolts.SIZES}) == len(bolts.SIZES)  # names are unique
+    for standard in ("iso_coarse", "iso_fine", "unc", "unf"):
+        ds = [s.diameter for s in bolts.sizes(standard)]
+        assert ds == sorted(ds), standard
+    # The first size of a diameter is the one listed before the additions.
+    assert [s.name for s in bolts.sizes("iso_fine") if s.diameter == 0.012] == [
+        "M12x1.5", "M12x1.25"]  # fmt: skip
+    assert bolts.size("unc", "2-4 1/2 UNC").pitch == pytest.approx(0.0254 / 4.5)
     assert bolts.size("unc", "#10-24 UNC").diameter == pytest.approx(0.190 * 0.0254)
 
 
@@ -142,3 +153,16 @@ def test_the_outline_names_types():
     text = outline(p)
     assert "Bolt type M10 8.8: M10 (iso_coarse), ISO 898-1 Class 8.8, preload 70 % of yield" in text
     assert "(type M10 8.8)" in text and "diameter 10 mm" in text
+
+
+def test_runs_are_keyed_as_solved():
+    """run_study keys a run after bolts take their types' values; the tree's status must
+    key it the same way (the maintainer, 2026-11-11: every run of a vessel with typed
+    bolts showed out of date)."""
+    from puzzle.model.schema import SolveStep, Study
+    from puzzle.project.graph import run_hashes
+
+    p, btype, comp, *_ = _project()
+    study = p.add(Study(name="S", component=comp.id, solver="calculix",
+                        steps=[SolveStep(type="stationary")]))  # fmt: skip
+    assert run_hashes(p)[study.id] == run_hashes(bolts.resolved(p))[study.id]

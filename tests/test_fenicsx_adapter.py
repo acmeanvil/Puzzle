@@ -30,7 +30,7 @@ def test_case_files(tmp_path):
     script, _ = _case(tmp_path, [fixed, force], SolveStep(type="stationary"))
     work = script.parent
     assert script.name == "study.py" and (work / "mesh.msh").exists()
-    case = json.loads((work / "case.json").read_text())
+    case = json.loads((work / "case.json").read_text(encoding="utf-8"))
     assert case["physics"] == "solid_mechanics" and case["step"]["type"] == "stationary"
     assert case["materials"][0]["group"] == "Bar/Body"
     assert case["materials"][0]["properties"]["poissons_ratio"] == pytest.approx(0.3)
@@ -43,7 +43,7 @@ def test_heat_case(tmp_path):
         type="temperature", selection="Bar/Root", values={"T": Quantity(value=100, unit="degC")}
     )
     script, _ = _case(tmp_path, [hot], SolveStep(type="stationary"), physics="heat_transfer")
-    case = json.loads((script.parent / "case.json").read_text())
+    case = json.loads((script.parent / "case.json").read_text(encoding="utf-8"))
     assert case["physics"] == "heat_transfer"
     assert case["features"][0]["values"]["T"] == pytest.approx(373.15)
     tables = case["materials"][0]["tables"]
@@ -95,7 +95,7 @@ def test_python_discovery(tmp_path, monkeypatch):
     bindir = env / ("Scripts" if os.name == "nt" else "bin")
     bindir.mkdir(parents=True)
     python = bindir / "python"
-    python.write_text("")
+    python.write_text("", encoding="utf-8")
     monkeypatch.setenv("PUZZLE_SOLVER_PATH", str(bindir))
     from puzzle.jobs import runtime
 
@@ -116,7 +116,7 @@ def test_electromagnetic_cases(tmp_path):
     script, _ = _case(
         tmp_path / "e", [live, ground], SolveStep(type="stationary"), physics="electrostatics"
     )
-    case = json.loads((script.parent / "case.json").read_text())
+    case = json.loads((script.parent / "case.json").read_text(encoding="utf-8"))
     assert case["physics"] == "electrostatics"
     assert {f["type"] for f in case["features"]} == {"electric_potential", "ground"}
 
@@ -128,7 +128,7 @@ def test_electromagnetic_cases(tmp_path):
         Feature(type="coil_end", selection="Bar/Tip"),
     ]
     script, _ = _case(tmp_path / "m", coil, SolveStep(type="stationary"), physics="magnetic_fields")
-    case = json.loads((script.parent / "case.json").read_text())
+    case = json.loads((script.parent / "case.json").read_text(encoding="utf-8"))
     current = next(f for f in case["features"] if f["type"] == "coil_current")
     assert current["group"] == "Bar/Body" and current["values"]["I"] == pytest.approx(1000)
 
@@ -189,7 +189,7 @@ def test_custom_pde_cases(tmp_path):
         ),
         tmp_path / "a",
     )
-    written = json.loads((script.parent / "case.json").read_text())
+    written = json.loads((script.parent / "case.json").read_text(encoding="utf-8"))
     assert written["equation"]["weak_form"] == "u * v_u * dx"
     assert written["equation"]["coefficients"] == {"k": 2000.0}
     assert written["features"][0]["type"] == "dirichlet"

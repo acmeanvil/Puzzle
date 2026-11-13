@@ -186,6 +186,12 @@ def test_fastener_forces_over_results(app, tmp_path):
     window._select_run(run.run_id)
     (label,) = window.viewport.shown["fasteners"]
     assert label.startswith("Bolt: -") and label.endswith("compression")  # it holds up the plate
+    assert label in window.viewport.shown["marks"]
+    # The view bar's Bolt force labels takes the labels off and puts them back.
+    window.viewport.view_bar.actions_by_name["bolt_labels"].trigger()
+    assert label not in window.viewport.shown["marks"]
+    window.viewport.view_bar.actions_by_name["bolt_labels"].trigger()
+    assert label in window.viewport.shown["marks"]
     window.close()
 
 
@@ -297,7 +303,7 @@ def test_the_bolt_table(app, tmp_path):
     table.filter.setText("pin")
     assert table.count.text() == "1 of 2 bolts"
     path = table.export(str(tmp_path / "bolts.csv"))
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         exported = list(csv.reader(f))
     assert exported[0][0] == "Name" and [r[0] for r in exported[1:]] == ["Pin"]
     table.filter.setText("")

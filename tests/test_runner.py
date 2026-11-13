@@ -55,7 +55,7 @@ def _stop(base: Path) -> None:
 def _case(tmp_path, name="run") -> Path:
     case = tmp_path / "project" / name
     case.mkdir(parents=True)
-    (case / "input.txt").write_text("21\n")
+    (case / "input.txt").write_text("21\n", encoding="utf-8")
     return case
 
 
@@ -87,7 +87,7 @@ def test_the_daemon_runs_a_job_and_outlives_its_client(tmp_path, runner_on):
             c.request("forget", job=job["id"], delete=True)
         c.request("forget", job=job["id"])
         assert c.request("status")["jobs"] == []
-    assert (case / "out.txt").read_text() == "42\n"  # forgetting keeps the folder
+    assert (case / "out.txt").read_text(encoding="utf-8") == "42\n"  # forgetting keeps the folder
 
 
 def test_jobs_wait_for_cores_and_a_queued_job_cancels_at_once(tmp_path, monkeypatch):
@@ -116,7 +116,7 @@ def test_a_cancel_stops_the_job_and_its_children(tmp_path, runner_on):
             time.sleep(0.05)
         c.request("cancel", job=job["id"])
         assert _wait(c, job["id"])["state"] == "cancelled"
-    child = int((case / "child.pid").read_text())
+    child = int((case / "child.pid").read_text(encoding="utf-8"))
     time.sleep(0.2)
     with pytest.raises(ProcessLookupError):
         os.kill(child, 0)
@@ -158,8 +158,8 @@ def test_run_job_goes_through_the_runner(tmp_path, runner_on):
                   case, NativeRuntime(), on_output=lines.append)  # fmt: skip
     assert job.ok and job.outcome == "completed" and "via the job runner" in job.runtime
     assert lines[:2] == ["one", "two"]
-    assert (case / "solver.log").read_text() == "one\ntwo\n"
-    assert (case / "out.txt").read_text() == "22\n"
+    assert (case / "solver.log").read_text(encoding="utf-8") == "one\ntwo\n"
+    assert (case / "out.txt").read_text(encoding="utf-8") == "22\n"
     with client.local(runner_on) as c:
         assert c.request("status")["jobs"] == []  # forgotten once home
 
@@ -203,7 +203,7 @@ def test_a_solve_outlives_puzzle_and_is_picked_up(tmp_path, runner_on):
     ctx = pending.RunContext(root, "study-id", case)
     with pending.running(ctx, {entry["folder"]: entry["job"]}):
         job = run_job(["never", "run"], case, NativeRuntime(), on_output=lines.append)
-    assert job.ok and (case / "out.txt").read_text() == "done\n"
+    assert job.ok and (case / "out.txt").read_text(encoding="utf-8") == "done\n"
     assert "finished" in lines and any("picked up" in x for x in lines)
     assert pending.entries(root) == []
 
@@ -247,7 +247,9 @@ def test_a_study_resumed_after_puzzle_stopped(tmp_path, runner_on, monkeypatch):
     deflection = out.data["summary"][0]["fields"]["displacement"]
     assert deflection["max"] > 0
     assert s.pending_jobs() == []
-    history = [json.loads(x) for x in (project / "history.jsonl").read_text().splitlines()]
+    history = [
+        json.loads(x) for x in (project / "history.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
     assert history[-1]["result"]["resumed"] == entry["job"]
 
 
@@ -270,10 +272,10 @@ def test_a_remote_job_runs_there_and_comes_home_whole(tmp_path, fakes, runner_on
     job = run_job(["sh", "-c", 'echo "threads $OMP_NUM_THREADS"; '
                    'echo $(( $(cat input.txt) * 2 )) > answer.txt; echo done'],
                   case, rt, on_output=lines.append)  # fmt: skip
-    assert job.ok, (case / "solver.log").read_text()
+    assert job.ok, (case / "solver.log").read_text(encoding="utf-8")
     assert "threads 3" in lines and "done" in lines
-    assert (case / "answer.txt").read_text().strip() == "42"
-    assert "done" in (case / "solver.log").read_text()  # the log as streamed
+    assert (case / "answer.txt").read_text(encoding="utf-8").strip() == "42"
+    assert "done" in (case / "solver.log").read_text(encoding="utf-8")  # the log as streamed
     assert not (home / rt.remote_dir(case)).exists()  # deleted there once home
     assert list(home.glob(".puzzle-runner/runner-*/main.py"))  # the runner was copied
     assert not list(tmp_path.glob("project/.fetch-*"))
@@ -290,14 +292,16 @@ def test_a_fetch_that_does_not_match_leaves_the_hosts_copy(tmp_path, fakes, runn
     def damaged(self, workdir, remote, up):  # the copy back loses a byte
         moved = real(self, workdir, remote, up)
         if not up:
-            (workdir / "answer.txt").write_text("4")
+            (workdir / "answer.txt").write_text("4", encoding="utf-8")
         return moved
 
     monkeypatch.setattr(RemoteRuntime, "_copy", damaged)
     with pytest.raises(PuzzleError) as err:
         run_job(["sh", "-c", "echo 42 > answer.txt"], case, rt)
     assert err.value.code == "transfer_failed"
-    assert (home / rt.remote_dir(case) / "answer.txt").read_text() == "42\n"  # kept there
+    assert (home / rt.remote_dir(case) / "answer.txt").read_text(
+        encoding="utf-8"
+    ) == "42\n"  # kept there
     assert not (case / "answer.txt").exists()  # nothing half-moved here
 
 
@@ -324,12 +328,12 @@ def _project_with_pending(tmp_path, follower=None) -> tuple[Path, str, str]:
     ctx = pending.RunContext(root, str(study.id), folder)
     pending.add(ctx, "20261105-000000-abcdef", "this computer", folder, {})
     if follower is not None:
-        data = json.loads((root / pending.FILE).read_text())
+        data = json.loads((root / pending.FILE).read_text(encoding="utf-8"))
         data["jobs"][0]["follower"] = {
             "pid": follower,
             "machine": socket.gethostname(),
         }
-        (root / pending.FILE).write_text(json.dumps(data))
+        (root / pending.FILE).write_text(json.dumps(data), encoding="utf-8")
     return root, str(study.id), "20261105-000000-abcdef"
 
 
@@ -362,3 +366,30 @@ def test_an_agents_resume_is_a_proposal_that_picks_the_job_up(tmp_path):
     (proposal,) = [p for p in s.proposals() if p["id"] == out.proposal]
     assert proposal["commands"][0]["resume"] == job  # accepting it picks this job up
     assert proposal["commands"][0]["study"] == study
+
+
+def test_no_module_imports_unix_only_modules_when_loaded():
+    """Puzzle on Windows loads the runner's modules (for RunnerError) without running
+    the runner, so a module-level `import fcntl` broke every solve there (ADR 0068)."""
+    import ast
+
+    unix = {"fcntl", "termios", "pwd", "grp", "resource", "pty", "tty"}
+    src = Path(__file__).parents[1] / "src" / "puzzle"
+    found = []
+    for path in src.rglob("*.py"):
+        for node in ast.parse(path.read_text(encoding="utf-8")).body:
+            names = []
+            if isinstance(node, ast.Import):
+                names = [a.name for a in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                names = [node.module]
+            found += [f"{path.relative_to(src)}: {n}" for n in names if n.split(".")[0] in unix]
+    assert not found, found
+
+
+def test_test_files_have_unique_names():
+    """tests/ has no __init__.py, so two test files of one name can't both be collected:
+    a second test_adapt.py stopped CI on every platform before any test ran."""
+    root = Path(__file__).parent
+    names = [p.name for p in root.rglob("test_*.py")]
+    assert len(names) == len(set(names)), sorted(n for n in names if names.count(n) > 1)

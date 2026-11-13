@@ -37,7 +37,7 @@ NEAR_SHARE = 0.1  # near: a gap within a tenth of the search distance
 TOUCH = 0.02  # closed: a gap within 2 % of the target's element size
 LATERAL = 0.1  # overhanging: the nearest target point off to the side by 10 % of h
 HOLDING = ("fixed", "displacement", "remote_displacement", "elastic_support",
-           "compression_only_support")  # fmt: skip
+           "compression_only_support", "symmetry", "antisymmetry")  # fmt: skip
 SLIDING = ("frictionless", "frictional", "rough")  # hold normally only, if at all
 
 _FACES = {  # corner indices of each volume element's faces (outward normals)
@@ -456,7 +456,7 @@ def nonconforming(contact, mesh: Mesh, s: ContactState | None = None) -> dict | 
     target's element size. A press fit (one curve inside a like one) and flat faces
     don't count. Code_Aster's continuous contact fails to pair such faces before its
     first increment (tests/integration/test_hertz.py), so it refuses them."""
-    if contact.type not in ("frictionless", "frictional"):
+    if contact.type not in ("frictionless", "frictional") or contact.thread is not None:
         return None
     s = s if s is not None else state(contact, mesh)
     source, target = surface(mesh, contact.source), surface(mesh, contact.target)
@@ -598,8 +598,8 @@ def held_by_contact_only(project, component) -> list[Problem]:
                 "contact_only_hold", name,
                 f"body '{name}' is held only through frictionless or frictional contact: "
                 "until the contact closes and is pressed it is free, and the first solve "
-                "is singular. Add a weak support, a bond, or a bolt; or start the contact "
-                "closed (Code_Aster's contact_init)",
+                "is singular. The solve adds weak springs to hold it until then (the "
+                "study's Weak springs; ADR 0080), or add a support, a bond or a bolt",
                 {"component": component.name},
             ))  # fmt: skip
         else:

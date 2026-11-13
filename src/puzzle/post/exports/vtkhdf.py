@@ -38,7 +38,7 @@ def write_vtkhdf(mesh, results, path: Path):
     if not writer.Write():
         from puzzle.errors import PuzzleError
 
-        raise PuzzleError(f"VTK could not write {path.name}", code="failed")
+        raise PuzzleError(f"VTK could not write {path.name}", code="export_failed")
     notes = {"time values": what, "units": "SI (m, Pa, K, ...)", "steps": str(len(steps))}
     if what.startswith("step number"):
         notes["steps"] = "; ".join(f"{i + 1}: {s.label()}" for i, s in enumerate(steps))

@@ -118,14 +118,19 @@ def morphed(project, study, mesh):
     new = mesh.coords + rbf(mesh.coords)
     rows = [index[i] for i in ids]
     new[rows] = mesh.coords[rows] + disp  # the control points exactly where they were sent
-    before, _ = _shape(mesh, mesh.coords)
+    before, was = _shape(mesh, mesh.coords)
     vols, quals = _shape(mesh, new)
     if len(vols):
         flipped = int(np.sum(np.sign(vols) != np.sign(before)))
         if flipped:
             raise PuzzleError(f"morph: it inverts {flipped} elements; move the handles less, "
                               "or hold fewer nodes near them", code="invalid")  # fmt: skip
-        if quals.min() < morph.quality_floor:
-            raise PuzzleError(f"morph: an element's quality falls to {quals.min():.3f}, below "
-                              f"{morph.quality_floor}", code="invalid")  # fmt: skip
+        # Crushed by the morph: below the floor and under half what it was. An element the
+        # mesher made poor (Linux's Gmsh left a sliver of 0.001 in a beam) is the mesh's.
+        crushed = (quals < morph.quality_floor) & (quals < 0.5 * was)
+        if crushed.any():
+            worst = int(np.argmin(np.where(crushed, quals, np.inf)))
+            raise PuzzleError(f"morph: an element's quality falls to {quals[worst]:.3f} (it was "
+                              f"{was[worst]:.3f}), below {morph.quality_floor}",
+                              code="invalid")  # fmt: skip
     return replace(mesh, coords=new)

@@ -262,5 +262,5 @@ def _sidecar(path: Path, record, notes: dict) -> Path:
         *(f"{k}: {v}" for k, v in notes.items()),
     ]
     out = path.with_suffix(".txt")
-    out.write_text("\n".join(lines) + "\n")
+    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return out

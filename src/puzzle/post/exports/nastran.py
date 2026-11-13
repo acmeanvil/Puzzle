@@ -60,7 +60,7 @@ def write(job):
         )
     bdf, sets, written = bulk(job.project, comp, job.mesh, study.name)
     path = job.path.with_suffix(".bdf")
-    path.write_text(bdf)
+    path.write_text(bdf, encoding="utf-8")
     pch = path.with_suffix(".pch")
     subcases = punch(job.results, job.mesh, written, pch, study.name, job.record.solver)
     return [path, pch], {
@@ -324,7 +324,7 @@ def punch(results, mesh, written: dict, path, title: str, solver: str) -> int:
                         add(f"{'-CONT-':<10}{int(grid):8d}{first}")
                         for j in range(3, 20, 3):
                             add(f"{'-CONT-':<18}" + "".join(_e(w) for w in words[j : j + 3]))
-    path.write_text("\n".join(lines) + "\n")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return subcases
 
 

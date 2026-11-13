@@ -14,3 +14,5 @@ htmlcov/
 .pixi/
 output/
 .claude/worktrees/
+packaging/output/
+packaging/installer/

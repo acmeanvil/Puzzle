@@ -20,6 +20,7 @@ the part, the first one starts it):
 | box | dx, dy, dz, x0, y0, z0 | -x, +x, -y, +y, -z, +z |
 | cylinder | r, h, x, y, z, axis | wall, start, end |
 | polyline | points (a line body, for beams) | none: edge-N, vertex-N by position |
+| frame | nodes, members, or dxf, layer, scale (ADR 0079) | edges: members, groups |
 | sheet | points (a flat polygon: a sheet body, for shells) | face |
 | face | profile (sketch), plane, offset (a flat region: 2D, shells) | face; edges by side |
 | section | part (a geometry), plane, offset, half (ADR 0048) | face; edges by 3D face |
@@ -50,6 +51,9 @@ the part, the first one starts it):
 | split_face | profile (sketch), faces (default: on its plane), direction | region; others kept |
 | enclosure | margin, or factor of the part size | +x ... of the box; body `<name>` |
 | import, heal, remove, fragment | see puzzle.geometry.prep (import `flat`: faces onto XY) | G2 |
+| keep | solids (1-based, file order) or bodies (names); body (the kept ones' name) | (names kept) |
+| bolt | `puzzle.solid_bolts` dimensions (ADR 0077) | bearing, fillet, shank, thread, section |
+| weld_bead | points, a, b (legs), closed, root (ADR 0078) | leg_a, leg_b, face, root, ... |
 | sketch | sketch, plane and offset, or face (a planar face, axis-aligned) | (no faces: a profile) |
 
 A sketch step (ADR 0017) adds no solid: extrude and revolve take it by name as their
@@ -209,6 +213,8 @@ WORDS = {
     "frame",  # a sweep's frame along its path
     "kind",  # a deform's kind: twist, taper, bend or box
     "toward",  # a bend's direction
+    "nodes",  # a frame's nodes and members, by name (ADR 0079)
+    "members",
 }
 
 
@@ -501,6 +507,35 @@ def _polyline(state, a):
     return poly.Wire(), {}
 
 
+def _frame(state, a):
+    """A frame of line members (ADR 0079, `frames.lines`): an edge per member between
+    its nodes, members at a node sharing its vertex (joined there); each member's edge
+    named by the member, each group's edges by the group (a DXF's layer)."""
+    from OCP.BRep import BRep_Builder
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeVertex
+    from OCP.TopoDS import TopoDS_Compound
+
+    from puzzle.frames.lines import FrameError, from_args
+
+    try:
+        lines = from_args(a, state.root)
+    except FrameError as exc:
+        raise GeometryError(str(exc)) from None
+    vertices = {
+        n: BRepBuilderAPI_MakeVertex(gp_Pnt(*xyz)).Vertex() for n, xyz in lines.nodes.items()
+    }
+    compound, builder = TopoDS_Compound(), BRep_Builder()
+    builder.MakeCompound(compound)
+    names: Names = {}
+    for m in lines.members:
+        edge = BRepBuilderAPI_MakeEdge(vertices[m.i], vertices[m.j]).Edge()
+        builder.Add(compound, edge)
+        names[m.name] = [edge]
+        if m.group:
+            names.setdefault(m.group, []).append(edge)
+    return compound, names
+
+
 def _sheet(state, a):
     """A flat sheet body (ADR 0027 shells): the polygon through the points (m), closed.
     It has one face, "face"; its edges are named by that face (face, face#2, ...)."""
@@ -617,6 +652,7 @@ def _curved_sheet(state, a):
 
 TOOLS = {
     "polyline": _polyline,
+    "frame": _frame,
     "sheet": _sheet,
     "face": _face,
     "section": _section,
@@ -629,7 +665,134 @@ TOOLS = {
     "extrude": _extrude,
     "revolve": _revolve,
     "hole": _hole,
+    "bolt": lambda state, a: _bolt(state, a),
+    "nut": lambda state, a: _nut(state, a),
+    "washer": lambda state, a: _washer(state, a),
+    "weld_bead": lambda state, a: _weld_bead(state, a),
 }
+
+
+def _weld_bead(state, a):
+    """A modelled fillet's bead (ADR 0078 step 4): its section (the root at the path,
+    the legs `a` and `b` as vectors from it, m) swept along the path `points`: two
+    points a prism, more a ruled loft through a section at each (`a` and `b` then one
+    vector each, or one for all), `closed` back to the first. With `root` (m, along each
+    leg from the path) the section's root corner is cut back to a small `root` face, so
+    the two legs share no edge: tied to the two parts, they would otherwise join them at
+    the root line, which a fillet's unfused root doesn't. Faces: `leg_a` (on the path's
+    part), `leg_b` (on the other part), `face` (the bead's exposed face), `root`, and
+    `start`, `end` on an open path."""
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakePolygon
+    from OCP.BRepOffsetAPI import BRepOffsetAPI_ThruSections
+
+    points = [list(map(float, p)) for p in (a.get("points") or [])]
+    closed = bool(a.get("closed", False))
+    if len(points) < 2 or (closed and len(points) < 3):
+        raise GeometryError("a weld bead runs along two points or more (three if closed)")
+
+    def per_point(key):
+        v = a[key]
+        rows = [list(map(float, x)) for x in v] if isinstance(v[0], (list, tuple)) else None
+        if rows is not None and len(rows) != len(points):
+            raise GeometryError(f"a weld bead's '{key}': one vector, or one per point")
+        return rows or [list(map(float, v))] * len(points)
+
+    va, vb = per_point("a"), per_point("b")
+    gap = float(a.get("root", 0.0))
+
+    def section(p, la, lb):
+        def at(v, share):
+            return gp_Pnt(*(p[c] + share * v[c] for c in range(3)))
+
+        na, nb = (math.sqrt(sum(c * c for c in v)) for v in (la, lb))
+        if gap >= 0.5 * min(na, nb):
+            raise GeometryError("a weld bead's root gap must be under half its legs")
+        if gap > 0:
+            return [at(la, gap / na), at(la, 1.0), at(lb, 1.0), at(lb, gap / nb)]
+        return [gp_Pnt(*p), at(la, 1.0), at(lb, 1.0)]
+
+    sides = ["leg_a", "face", "leg_b", "root"] if gap > 0 else ["leg_a", "face", "leg_b"]
+    corners = [section(p, la, lb) for p, la, lb in zip(points, va, vb, strict=True)]
+
+    def wire(cs):
+        poly = BRepBuilderAPI_MakePolygon()
+        for c in cs:
+            poly.Add(c)
+        poly.Close()
+        return poly.Wire()
+
+    names: Names = {}
+    if len(points) == 2 and not closed:
+        face = BRepBuilderAPI_MakeFace(wire(corners[0]), True)
+        if not face.IsDone():
+            raise GeometryError("a weld bead's legs must not be parallel")
+        mk = BRepPrimAPI_MakePrism(face.Face(), gp_Vec(gp_Pnt(*points[0]), gp_Pnt(*points[1])))
+        names["start"], names["end"] = [TopoDS.Face(mk.FirstShape())], [TopoDS.Face(mk.LastShape())]
+    else:
+        # A ruled solid per segment, fused (their shared faces go): one loft closed on
+        # itself kept its seam's two caps inside the solid, which Gmsh can't mesh.
+        rings = corners + ([corners[0]] if closed else [])
+        shape = None
+        for k in range(len(rings) - 1):
+            mk = BRepOffsetAPI_ThruSections(True, True)
+            mk.AddWire(wire(rings[k]))
+            mk.AddWire(wire(rings[k + 1]))
+            mk.Build()
+            if not mk.IsDone():
+                raise GeometryError("the weld bead's sections could not be lofted")
+            shape = mk.Shape() if shape is None else BRepAlgoAPI_Fuse(shape, mk.Shape()).Shape()
+        mk = None
+        names = {}
+    if mk is not None:
+        shape = mk.Shape()
+    # Each side of the section sweeps a face per segment: named by the side whose
+    # middle, averaged over the segment's two ends, is nearest the face's centre.
+    rings = corners + ([corners[0]] if closed else [])
+    mids = []
+    for k in range(len(rings) - 1):
+        for n, side in enumerate(sides):
+            m = [0.0, 0.0, 0.0]
+            for cs in (rings[k], rings[k + 1]):
+                p0, p1 = cs[n], cs[(n + 1) % len(sides)]
+                for c, get in enumerate((gp_Pnt.X, gp_Pnt.Y, gp_Pnt.Z)):
+                    m[c] += (get(p0) + get(p1)) / 4
+            mids.append((side, gp_Pnt(*m)))
+    if mk is None and not closed:  # the open path's two ends, by their sections' centres
+        for key, cs in (("start", corners[0]), ("end", corners[-1])):
+            m = [sum(get(c) for c in cs) / len(cs) for get in (gp_Pnt.X, gp_Pnt.Y, gp_Pnt.Z)]
+            mids.append((key, gp_Pnt(*m)))
+    for f in _faces(shape):
+        if any(f.IsSame(c) for k in ("start", "end") for c in names.get(k, [])):
+            continue
+        props = GProp_GProps()
+        _static(BRepGProp, "SurfaceProperties")(f, props)
+        centre = props.CentreOfMass()
+        side = min(mids, key=lambda sm: centre.Distance(sm[1]))[0]
+        names.setdefault(side, []).append(TopoDS.Face(f))
+    if not all(k in names for k in sides):
+        raise GeometryError("the weld bead's faces could not be named")
+    return shape, names
+
+
+def _nut(state, a):
+    """A nut for a modelled bolt (ADR 0077, `puzzle.solid_bolts`)."""
+    from puzzle.solid_bolts import nut_tool
+
+    return nut_tool(state, a)
+
+
+def _washer(state, a):
+    """A plain washer for a modelled bolt (ADR 0077, `puzzle.solid_bolts`)."""
+    from puzzle.solid_bolts import washer_tool
+
+    return washer_tool(state, a)
+
+
+def _bolt(state, a):
+    """A standard bolt from the fastener tables (ADR 0077, `puzzle.solid_bolts`)."""
+    from puzzle.solid_bolts import bolt_tool
+
+    return bolt_tool(state, a)
 
 
 def _join(state, op, tool, tool_names: Names, mode: str, tool_bodies=None) -> None:
@@ -1073,6 +1236,50 @@ def _remove(state, op, a):
     state.shape = algo.Shape()
 
 
+def _keep(state, op, a):
+    """Keep some bodies, drop the rest (one part per body of an imported assembly):
+    `solids`, 1-based in the shape's order (the plain import's body-N), or `bodies` by
+    name; the kept ones become the body `body` (default "Body"). Face names are kept."""
+    from OCP.BRep import BRep_Builder
+    from OCP.TopoDS import TopoDS_Compound
+
+    from puzzle.geometry.naming import _Index
+
+    solids = _subshapes(state.shape, TopAbs_SOLID)
+    if a.get("solids"):
+        try:
+            chosen = [solids[int(i) - 1] for i in a["solids"]]
+        except (IndexError, ValueError) as exc:
+            raise GeometryError(
+                f"keep '{op.name}': no solid {a['solids']} ({len(solids)} here)"
+            ) from exc
+    else:
+        wanted = a.get("bodies") or []
+        if isinstance(wanted, str):  # typed in the step's form
+            wanted = [b.strip() for b in wanted.split(",") if b.strip()]
+        missing = [b for b in wanted if b not in state.bodies]
+        if missing or not wanted:
+            raise GeometryError(f"keep '{op.name}': no body {missing or wanted}")
+        chosen = [s for b in wanted for s in state.bodies[b]]
+    if not chosen:
+        raise GeometryError(f"keep '{op.name}': nothing to keep")
+    held = _Index()
+    for solid in chosen:
+        for f in _subshapes(solid, TopAbs_FACE):
+            held.get(f).append(True)
+    names = {n: [f for f in fs if held.get(f)] for n, fs in state.names.items()}
+    if len(chosen) == 1:
+        shape = chosen[0]
+    else:
+        builder, shape = BRep_Builder(), TopoDS_Compound()
+        builder.MakeCompound(shape)
+        for solid in chosen:
+            builder.Add(shape, solid)
+    state.shape = shape
+    state.names = {n: fs for n, fs in names.items() if fs}
+    state.bodies = {a.get("body", "Body"): chosen}
+
+
 def _fragment(state, op, a):
     from puzzle.geometry.prep import fragment
 
@@ -1085,6 +1292,7 @@ MODIFIERS = {
     "heal": _heal,
     "remove": _remove,
     "fragment": _fragment,
+    "keep": _keep,
     "fillet": _fillet,
     "chamfer": _chamfer,
     "move": _move,

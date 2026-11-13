@@ -15,6 +15,8 @@ from pathlib import Path
 
 import numpy as np
 
+from puzzle.adapters.code_aster import thread_springs
+from puzzle.adapters.code_aster.thread_springs import THREADS
 from puzzle.adapters.common import (
     BODY_LOADS,
     HEAT_SOURCES,
@@ -75,7 +77,21 @@ TABLES = {
 FORMAT_R = "1PE18.10"
 
 
-CONTACTS = {"bonded_nonconformal", "frictionless", "frictional"}
+CONTACTS = {"bonded_nonconformal", "frictionless", "frictional", "no_separation", "rough"}
+# DEFI_CONTACT zones (the rest are LIAISON_MAIL ties or shared nodes).
+PAIRS = frozenset({"frictionless", "frictional", "rough"})
+# Rough (Ansys's): Coulomb with a coefficient no interface reaches, so closed points stick.
+ROUGH_MU = 10.0  # 1e3 stopped Newton converging once the interface opened
+
+
+def _tied(c) -> bool:
+    """A LIAISON_MAIL: a nonconformal bond, or no separation (its normal only, DNOR)."""
+    return c.thread is None and (c.capability == "bonded_nonconformal"
+                                 or c.type == "no_separation")  # fmt: skip
+
+
+def _mu(c) -> float:
+    return c.friction if c.type == "frictional" else ROUGH_MU if c.type == "rough" else 0.0
 
 
 TEMPERATURE_UNIT = 90  # the transferred temperature table
@@ -168,6 +184,8 @@ def _refuse_in_2d(comp: Component) -> None:
     if comp.connectors or comp.beam_sections:
         raise InputError("fasteners and beams are not written in 2D models", code="unsupported")
     for c in comp.contacts:
+        if c.thread is not None and comp.dimension == "2d_axisymmetric":  # ADR 0076
+            continue
         if c.capability != "bonded_conformal":
             raise InputError(
                 f"contact '{c.name}' ({c.capability}) is not written in 2D models yet",
@@ -195,7 +213,7 @@ def _whole_part_marker(mesh: Mesh, comp: Component, workdir: Path) -> None:
                             for g in parts]}  # fmt: skip
     else:
         return
-    (workdir / f"{JOB}.totals.json").write_text(json.dumps(marker))
+    (workdir / f"{JOB}.totals.json").write_text(json.dumps(marker), encoding="utf-8")
 
 
 def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs=()) -> Path:
@@ -205,7 +223,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         _refuse_in_2d(comp)
         _whole_part_marker(mesh, comp, workdir)
     thermal_load = next((i.field for i in inputs if i.field.name == "temperature"), None)
-    check_contacts(comp, CONTACTS, "Code_Aster")
+    check_contacts(comp, CONTACTS, "Code_Aster", THREADS)
     steps = study.solve_steps()
     # A preloaded buckling step comes with its static step (run_study joins them).
     preloaded = (
@@ -214,7 +232,10 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         and steps[1].type == "buckling"
         and bool(steps[1].settings.get("preload", False))
     )
-    if len(steps) != 1 and not preloaded:
+    # Static structural steps that tighten bolts run as one result, step after step, so
+    # each pretension locks into the steps after it (puzzle.preload; `chained`).
+    chain = len(steps) > 1 and chained(project, study)
+    if len(steps) != 1 and not preloaded and not chain:
         raise InputError("the Code_Aster adapter runs studies with exactly one solve step for now")
     step = steps[-1]
     solved = set(step.physics) or {p.type for p in comp.physics}
@@ -271,13 +292,28 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             features = [f for f in features if f.active(2)]
     if not comp.materials:
         raise InputError(f"component '{comp.name}' has no material assignments")
-    ties = [c for c in comp.contacts if c.capability == "bonded_nonconformal"]
+    # Threaded contacts (ADR 0076) are springs and relations of their own (thread_springs).
+    threaded = [c for c in comp.contacts if c.thread is not None]
+    if threaded and (thermal or step.type != "stationary"):
+        raise InputError(
+            "Code_Aster writes threaded contacts in static structural steps only so far",
+            code="unsupported",
+        )
+    ties = [c for c in comp.contacts if _tied(c)]
     if ties and thermal:
         raise InputError(
             "Code_Aster ties nonconformal parts in structural studies only so far",
             code="unsupported",
         )
-    touching = [c for c in comp.contacts if c.type in ("frictionless", "frictional")]
+    for c in ties:  # LIAISON_MAIL ties into the target's whole part, the source's body too
+        if c.source.split("/", 1)[0] == c.target.split("/", 1)[0]:
+            raise InputError(
+                f"contact '{c.name}': Code_Aster ties a face into another part's volume, so "
+                "it can't tie two bodies of one part; mesh them conformally (Share faces) "
+                "or use CalculiX",
+                code="unsupported",
+            )
+    touching = [c for c in comp.contacts if c.type in PAIRS and c.thread is None]
     if touching and (thermal or step.type != "stationary"):
         raise InputError(
             "Code_Aster contact is written for static structural steps only so far",
@@ -286,9 +322,10 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     _check_friction(touching, features, mesh)
     _check_curved(touching, mesh)
     nlgeom = bool(step.settings.get("geometric_nonlinearity", False))
-    if nlgeom and (thermal or step.type != "stationary"):
-        raise InputError(
-            "geometric_nonlinearity applies to static structural steps", code="unsupported"
+    if nlgeom and (thermal or step.type not in ("stationary", "transient")):
+        raise InputError(  # ADR 0082 decision 6: DYNA_NON_LINE takes it too
+            "geometric_nonlinearity applies to static and transient structural steps",
+            code="unsupported",
         )
     plastic = (
         [a for a in comp.materials if project.get(a.material, Material).models.plasticity]
@@ -314,6 +351,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             + [f.selection for f in features + preload + springs + lifting + bolts]
             + fastener_selections(fasteners)
             + tie_groups
+            + [c.selection for c in comp.elements if c.selection in mesh.groups]
         )
     )
     for g in groups:
@@ -327,6 +365,9 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     # plasticity, large deflection and compression-only gaps keep the 10-step ramp,
     # since their answer follows the loading path.
     ramped = nlgeom or bool(plastic) or bool(gaps)
+    # ADR 0082: mixed u-p elements keep their behaviour only in STAT_NON_LINE's results
+    # (MECA_STATIQUE's lack COMPOR, so their reactions can't be computed).
+    mixed = not thermal and any(c.formulation == "mixed_up" for c in comp.elements)
     increments = int(step.settings.get("increments", 10 if ramped else 1))
     top = int(mesh.node_ids.max())
     cuts = list(
@@ -343,8 +384,17 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     if step.type != "modal":  # a tightened fastener: a pretension on its bolt's mid-plane
         bolts += [f for f, _cut in tight]
         cuts += [c for _f, c in tight]
+    thread_sets = []
+    if threaded:  # a helper node per pair and flank, past the mesh's nodes
+        base, thread_sets = thread_springs.helpers(project, comp, mesh, base)
+    # ADR 0076 step 4: a beam bolt's tapped end as a thread, in place of its spider.
+    bolt_threads = thread_springs.bolt_threads(project, comp, mesh, fasteners)
+    base = thread_springs.bolt_helpers(base, bolt_threads)
+    base, welds = _with_welds(project, comp, mesh, base, names)  # ADR 0078 step 3
+    for bt in bolt_threads:
+        fastener_ends[bt.index - 1].setdefault("threaded", []).append(bt.label)
     if fastener_ends:  # the reader sums the bolt end faces' reactions (ADR 0027)
-        (workdir / f"{JOB}.fasteners.json").write_text(json.dumps(fastener_ends))
+        (workdir / f"{JOB}.fasteners.json").write_text(json.dumps(fastener_ends), encoding="utf-8")
     # Beams (ADR 0027): line bodies as POU_D_T, which takes two-node lines only.
     beam_parts = [
         p.name for p in comp.parts if mesh.groups.get(p.name) and mesh.groups[p.name].dim == 1
@@ -379,12 +429,25 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         for p in comp.parts
         if mesh.groups.get(p.name) and mesh.groups[p.name].dim == 2 and not mesh.planar
     ]
-    if any(b.element in ("tri6", "quad8", "quad9") for b in mesh.shell_blocks()) and not thermal:
-        raise InputError(
-            "Code_Aster's shells (DKT) are three- and four-node faces: set the mesh recipe's "
-            "element order to 1 for sheet bodies",
+    if nlgeom and any(c.formulation == "beam" for c in comp.connectors):
+        raise InputError(  # ADR 0082 decision 6
+            "large deflection of beam bolts isn't written on Code_Aster yet; CalculiX takes it",
             code="unsupported",
         )
+    if nlgeom and beam_parts and any(c.selection.split("/", 1)[0] in beam_parts
+                                     for c in comp.elements):  # fmt: skip
+        raise InputError("a chosen beam element under large deflection: Code_Aster writes "
+                         "POU_D_T_GD there", code="unsupported")  # fmt: skip
+    if any(b.element in ("tri6", "quad8") for b in mesh.shell_blocks()) and not thermal:
+        raise InputError(
+            "Code_Aster's shells are DKT on three- and four-node faces, or COQUE_3D on "
+            "nine-node quadrilaterals: set the mesh recipe's element order to 1, or mesh "
+            "the sheets with hexahedra and 27-node bricks (quadrilaterals of nine nodes)",
+            code="unsupported",
+        )
+    # ADR 0082: nine-node quadrilaterals are COQUE_3D, the curved thick shell.
+    curved = {p for p in shell_parts
+              if any(b.element == "quad9" for b in mesh.groups[p].blocks(mesh))}  # fmt: skip
     shells = []
     # A plane-stress part's thickness only spreads its loads (C_PLAN is per unit
     # thickness): no shell characteristics for it.
@@ -421,6 +484,17 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         for i, (node, twin) in enumerate(cut.doubles.items(), start=1):
             points.add(f"P{k}A{i}", node)
             points.add(f"P{k}B{i}", twin)
+    threads = None
+    if threaded or bolt_threads:
+        threads = thread_springs.register(points, thread_sets, mesh.planar)
+        thread_springs.register_bolts(points, bolt_threads, threads)
+    cyclic_rows = []
+    if comp.repeats() and not thermal:  # ADR 0081 steps 3 and 4: a group per node
+        from puzzle.cyclic import rows as cyclic_rows_of
+
+        cyclic_rows = cyclic_rows_of(comp, mesh, {"solid_mechanics"}, mesh.planar)
+        for node in sorted({n for row in cyclic_rows for n, _d, _c in row}):
+            points.add(f"Y{node}", node)
     # ADR 0044: a pressure from an imported field, as consistent nodal forces at the
     # face's nodes (Code_Aster's PRES_REP takes one value per group).
     given = {i.source: i.field for i in inputs if i.role == "feature"}
@@ -531,6 +605,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         - {names[g] for g in point_groups}
     )
     massif = _material_axes(project, comp, names, thermal)
+    discrete = "2D_DIS_T" if mesh.planar else "DIS_T"
     out = [
         "DEBUT(LANG='EN')",
         "mesh = LIRE_MAILLAGE(FORMAT='MED', UNITE=20)",
@@ -575,6 +650,16 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             if field_forces or field_imposed or spectral
             else []
         ),
+        # Cyclic symmetry's relations name single nodes too (ADR 0081 step 3).
+        *(
+            [
+                "mesh = DEFI_GROUP(reuse=mesh, MAILLAGE=mesh, CREA_GROUP_NO=_F(GROUP_MA=("
+                + ", ".join(f"'{g}'" for g in points.names if g[0] == "Y")
+                + ",)))"
+            ]
+            if cyclic_rows
+            else []
+        ),
         # Pretension relations name single nodes: their point groups as node groups.
         *(
             [
@@ -612,10 +697,22 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             if any(c.ends == "distributing" or c.formulation == "beam" for c in fasteners)
             else []
         ),  # fmt: skip
+        # Thread relations name single nodes: their point groups as node groups.
+        *(
+            [
+                "mesh = DEFI_GROUP(reuse=mesh, MAILLAGE=mesh, CREA_GROUP_NO=_F(GROUP_MA=("
+                + ", ".join(f"'{g}'" for g in threads.node_groups)
+                + ",)))"
+            ]
+            if threads and threads.node_groups
+            else []
+        ),
         "model = AFFE_MODELE(MAILLAGE=mesh, "
         f"AFFE=(_F(TOUT='OUI', PHENOMENE='{phenomenon}', MODELISATION='{model}'),"
         + "".join(
-            f" _F(GROUP_MA='{names[p]}', PHENOMENE='MECANIQUE', MODELISATION='POU_D_T'),"
+            # ADR 0082 decision 6: large rotations of beams on POU_D_T_GD (GROT_GDEP)
+            f" _F(GROUP_MA='{names[p]}', PHENOMENE='MECANIQUE', "
+            f"MODELISATION='{'POU_D_T_GD' if nlgeom else 'POU_D_T'}'),"
             for p in beam_parts
         )
         + "".join(
@@ -624,13 +721,21 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             if c.formulation == "beam"
         )
         + "".join(
-            f" _F(GROUP_MA='{names[p]}', PHENOMENE='MECANIQUE', MODELISATION='DKT'),"
+            f" _F(GROUP_MA='{names[p]}', PHENOMENE='MECANIQUE', "
+            f"MODELISATION='{'COQUE_3D' if p in curved else 'DKT'}'),"
             for p in shell_parts
         )
         + "".join(
             f" _F(GROUP_MA='{g}', PHENOMENE='MECANIQUE', "
-            f"MODELISATION='{'DIS_TR' if g == 'MASTERS' else 'DIS_T'}'),"
+            f"MODELISATION='{'DIS_TR' if g == 'MASTERS' else discrete}'),"
             for g in points.sets
+        )
+        + "".join(  # ADR 0078: light welds' node pairs, springs in global axes
+            f" _F(GROUP_MA='{g}', PHENOMENE='MECANIQUE', MODELISATION='DIS_T')," for g, _k in welds
+        )
+        + "".join(  # ADR 0082: each body's chosen element, last, so it overrides
+            f" _F(GROUP_MA='{names[sel]}', PHENOMENE='{phenomenon}', MODELISATION='{m}'),"
+            for sel, m in _chosen(comp, mesh, thermal)
         )
         + "))",
         *_discrete_cara(
@@ -642,9 +747,17 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             beams,
             shells,
             massif,
+            [
+                *(threads.cara if threads else ()),
+                *(
+                    f"_F(GROUP_MA='{g}', CARA='K_T_D_L', VALE=({k:.10e}, {k:.10e}, {k:.10e}))"
+                    for g, k in welds
+                ),
+            ],
+            mesh.planar,
         ),
     ]
-    cara = "CARA_ELEM=cara, " if points.sets or beams or shells or massif else ""
+    cara = "CARA_ELEM=cara, " if points.sets or beams or shells or massif or welds else ""
     assignments = []
     materials = [project.get(a.material, Material) for a in comp.materials]
     tables = [thermal_tables(m, comp) if thermal else {} for m in materials]
@@ -690,6 +803,9 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     for i, (_node, kn, _kt, _n) in enumerate(gaps, start=1):
         out.append(f"gap{i} = DEFI_MATERIAU(DIS_CONTACT=_F(RIGI_NOR={kn:.10e}))")
         assignments.append(f"_F(GROUP_MA='C{i}', MATER=gap{i})")
+    for i, (group, k) in enumerate(threads.gaps if threads else [], start=1):  # ADR 0076
+        out.append(f"thgap{i} = DEFI_MATERIAU(DIS_CONTACT=_F(RIGI_NOR={k:.10e}))")
+        assignments.append(f"_F(GROUP_MA='{group}', MATER=thgap{i})")
     varc = ""
     if thermal_load is not None:
         if thermal or step.type == "modal":
@@ -706,28 +822,72 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     if thermal:  # loads following an amplitude get their own charge (ADR 0037)
         out += _thermal_loads(project, features, names, mesh, comp, given)
     else:
-        extra = _pretension_loads(bolts, cuts)
+        if chain:  # the pretensions' ties held always; their drive in its step, then locked
+            extra, drive, lock, tighten_at = _pretension_chain(bolts, cuts, len(steps))
+        else:
+            extra = _pretension_loads(bolts, cuts)
         if field_forces:
             extra["FORCE_NODALE"] = extra.get("FORCE_NODALE", []) + field_forces
         if field_imposed:  # ADR 0044 stage 2: a displacement from a field, per node
             extra["DDL_IMPO"] = extra.get("DDL_IMPO", []) + field_imposed
         for key, items in _fastener_loads(fastener_ends, fasteners, names).items():
             extra[key] = extra.get(key, []) + items  # both write LIAISON_DDL
+        for row in cyclic_rows:  # each target node follows its source node, turned
+            extra.setdefault("LIAISON_DDL", []).append(
+                f"_F(GROUP_NO=({', '.join(repr(f'Y{n}') for n, _d, _c in row)},), "
+                f"DDL=({', '.join(repr('D' + 'XYZ'[d - 1]) for _n, d, _c in row)},), "
+                f"COEF_MULT=({', '.join(f'{c:.13g}' for *_x, c in row)},), COEF_IMPO=0.0)"
+            )
         # In a transient step, loads following an amplitude get their own charge,
         # multiplied by it (ADR 0041); the rest act from t = 0 at full value.
         timed = [f for f in features if f.amplitude] if step.type == "transient" else []
         if timed:
             features = [f for f in features if not f.amplitude]
             out += _timed_loads(project, timed, names, mesh, comp)
+        windowed = []  # (charge, the steps it is on in, kinematic) when chained
+        if chain:
+            lasting = [f for f in features if not f.steps]
+            windowed, more = _windowed_loads(
+                [f for f in features if f.steps], names, mesh, comp, project
+            )
+            out += more
+            if any(drive.values()):
+                out.append("pdrive = AFFE_CHAR_MECA(MODELE=model" + "".join(
+                    f", {key}=({', '.join(items)},)" for key, items in drive.items() if items
+                ) + ")")  # fmt: skip
+            if lock:
+                out.append(f"plock = AFFE_CHAR_MECA(MODELE=model, DDL_IMPO=({', '.join(lock)},))")
+            features = lasting
+        oblique = _oblique(project, features, names, mesh)
+        if oblique:  # components held in local Cartesian axes (symmetry planes, ADR 0081)
+            extra["LIAISON_OBLIQUE"] = extra.get("LIAISON_OBLIQUE", []) + oblique
+        following = []
+        if nlgeom:  # ADR 0082 decision 6: pressure follows the face, as CalculiX's does
+            following = [f for f in features if f.type == "pressure" and not f.fields]
+            features = [f for f in features if f not in following]
         plain = _loads(features, names, mesh, thermal, ties, extra, comp)
         if plain.endswith("(MODELE=model)"):  # everything is in loadf: no empty charge
             charges = []
         else:
             out.append(plain)
+        if following:
+            out.append("loadp" + _loads(following, names, mesh, thermal, (), {}, comp)[4:])
+            charges.append("loadp")
         remote = _remote_loads(features, names, mesh, project)  # ADR 0037: fields of x, y, z
         if remote:
             out += remote
             charges.append("loadf")
+        if threads:  # ADR 0076: the threads' relations, never ramped (a clearance's offset)
+            out.append(
+                "thload = AFFE_CHAR_MECA(MODELE=model"
+                + "".join(
+                    f", {key}=({', '.join(items)},)"
+                    for key, items in threads.loads.items()
+                    if items
+                )  # fmt: skip
+                + ")"
+            )
+            charges.append("thload")
 
     if thermal:
         out += [
@@ -737,7 +897,14 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             _table("res", "TEMP", "temperature"),
         ]
     elif step.type == "buckling":
-        out += _buckling(step, cara, charges, preload, names, mesh, ties)
+        large = preloaded and bool(steps[0].settings.get("geometric_nonlinearity", False))
+        if large and (beam_parts or shell_parts):
+            raise InputError(  # ADR 0082 decision 6: solids only so far
+                "Code_Aster takes a large-deflection preload before buckling on solids only "
+                "so far; run beams and shells on CalculiX",
+                code="unsupported",
+            )
+        out += _buckling(step, cara, charges, preload, names, mesh, ties, large=large)
     elif step.type == "frequency_domain":  # harmonic response, direct (ADR 0041)
         spectra = _spectral_loads(spectral)
         out += spectra["charges"]
@@ -793,21 +960,50 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             )
         check_dynamics(step, "Code_Aster", modal=False)
         dt, end, _ = time_settings(step)
-        scheme = (
-            f"SCHEMA='HHT', ALPHA={float(step.settings['hht_alpha']):.6g}"
-            if float(step.settings.get("hht_alpha", 0.0))
-            else "SCHEMA='NEWMARK'"  # average acceleration: no numerical damping
+        # Average acceleration (no numerical damping), except under large deflection,
+        # where HHT's alpha defaults to -0.05 as CalculiX's does: undamped Newmark lost
+        # Newton on a strip swinging into its elastica (ADR 0082).
+        alpha = float(step.settings.get("hht_alpha", -0.05 if nlgeom else 0.0))
+        scheme = f"SCHEMA='HHT', ALPHA={alpha:.6g}" if alpha else "SCHEMA='NEWMARK'"
+        # Large deflection (ADR 0082 decision 6): Green-Lagrange on solids; shells and
+        # beams are refused below, measured.
+        behaviour = (
+            "_F(RELATION='ELAS'" + (", DEFORMATION='GREEN_LAGRANGE'" if nlgeom else "") + ")"
         )
-        excit = [f"_F(CHARGE={c})" for c in charges] + [
+        if nlgeom and shell_parts:
+            raise InputError(
+                "Code_Aster has no shell for large rotations in time: COQUE_3D has no mass "
+                "matrix under GROT_GDEP (ELEMENTS3_91), and DKT's Newton converged linearly "
+                "(20 to 40 iterations an increment, a twenty-fifth of a strip's run in 23 "
+                "minutes); run shells' transient large deflection on CalculiX",
+                code="unsupported",
+            )
+        if nlgeom and beam_parts:
+            raise InputError(
+                "Code_Aster's beam for large rotations, POU_D_T_GD, can't build the "
+                "stiffness matrix (RIGI_MECA, CALCUL_37) DYNA_NON_LINE needs; run beams' "
+                "transient large deflection on CalculiX",
+                code="unsupported",
+            )
+        excit = [
+            f"_F(CHARGE={c}" + (", TYPE_CHARGE='SUIV')" if c == "loadp" else ")") for c in charges
+        ] + [  # fmt: skip
             f"_F(CHARGE=tload{k}, FONC_MULT=tamp{k})"
             for k in range(1, 1 + len({f.amplitude for f in timed}))
         ]
         solids = mesh.planar or any(b.dim == 3 for b in mesh.blocks)
         out += [
-            f"times = DEFI_LIST_REEL(DEBUT=0.0, INTERVALLE=_F(JUSQU_A={end:.12g}, PAS={dt:.12g}))",
+            (  # under large deflection a failed increment is cut back (`_failure`)
+                f"times = DEFI_LIST_INST(DEFI_LIST=_F(LIST_INST=DEFI_LIST_REEL(DEBUT=0.0, "
+                f"INTERVALLE=_F(JUSQU_A={end:.12g}, PAS={dt:.12g}))), {_failure(step)})"
+                if nlgeom
+                else f"times = DEFI_LIST_REEL(DEBUT=0.0, INTERVALLE=_F(JUSQU_A={end:.12g}, "
+                f"PAS={dt:.12g}))"
+            ),
             f"res = DYNA_NON_LINE(MODELE=model, CHAM_MATER=mater, {cara}"
-            f"EXCIT=({', '.join(excit)},), COMPORTEMENT=_F(RELATION='ELAS'), "
-            "INCREMENT=_F(LIST_INST=times), "
+            f"EXCIT=({', '.join(excit)},), COMPORTEMENT=({behaviour},), "
+            + ("NEWTON=_F(REAC_ITER=1), CONVERGENCE=_F(ITER_GLOB_MAXI=50), " if nlgeom else "")
+            + "INCREMENT=_F(LIST_INST=times), "
             f"SCHEMA_TEMPS=_F({scheme}, FORMULATION='DEPLACEMENT'))",
             "res = CALC_CHAMP(reuse=res, RESULTAT=res, "
             + ("CONTRAINTE=('SIGM_NOEU',), " if solids else "")
@@ -829,14 +1025,44 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             f"IMPR_TABLE(TABLE=RECU_TABLE(CO=res, NOM_PARA='FREQ'), UNITE={TABLES['frequency']}, "
             f"FORMAT='TABLEAU', SEPARATEUR=',', FORMAT_R='{FORMAT_R}')",
         ]
-    elif touching or nlgeom or plastic or gaps or initial:
+    elif (touching or nlgeom or plastic or gaps or initial or (threads and threads.gaps)
+          or chain or mixed):  # fmt: skip
+        solids = mesh.planar or any(b.dim == 3 for b in mesh.blocks)
         # Green-Lagrange strain: large rotations, as CalculiX's NLGEOM (GROT_GDEP refuses tet10);
         # with plasticity, logarithmic strains (true stress against true strain).
         strains = ", DEFORMATION='GREEN_LAGRANGE'" if nlgeom else ""
         # Every increment is kept when the deflection is large or the material yields
         # (load-deflection and stress-strain histories).
         which = "" if nlgeom or plastic else "INST=1.0"
+        n = len(steps) if chain else 1
+        if chain and which:  # each step's end
+            which = "INST=(" + ", ".join(f"{k:.1f}" for k in range(1, n + 1)) + ",)"
         parts = [f"_F(TOUT='OUI', RELATION='ELAS'{strains})"]
+        if nlgeom and shell_parts:  # ADR 0082 decision 6: DKT's large rotations
+            plates = ", ".join(f"'{names[s]}'" for s in shell_parts)
+            solid = [names[pt.name] for pt in comp.parts
+                     if pt.name not in shell_parts + beam_parts and pt.name in names]  # fmt: skip
+            parts = [p for p in parts if "TOUT='OUI'" not in p]
+            if solid:
+                parts.insert(0, f"_F(GROUP_MA=({', '.join(repr(o) for o in solid)},), "
+                                f"RELATION='ELAS'{strains})")  # fmt: skip
+            parts.append(f"_F(GROUP_MA=({plates},), RELATION='ELAS', DEFORMATION='GROT_GDEP')")
+        if nlgeom and beam_parts:  # ADR 0082 decision 6: beams' large rotations
+            groups = ", ".join(f"'{names[b]}'" for b in beam_parts)
+            others = [names[pt.name] for pt in comp.parts
+                      if pt.name not in beam_parts + shell_parts and pt.name in names]  # fmt: skip
+            # POU_D_T_GD takes GROT_GDEP only: Green-Lagrange goes on the other parts alone
+            if not shell_parts:  # (with shells, their branch has put the solids in)
+                parts = [p for p in parts if "TOUT='OUI'" not in p]
+                if others:
+                    parts.insert(0, f"_F(GROUP_MA=({', '.join(repr(o) for o in others)},), "
+                                    f"RELATION='ELAS'{strains})")  # fmt: skip
+            parts.append(
+                f"_F(GROUP_MA=({groups},), RELATION='ELAS_POUTRE_GR', DEFORMATION='GROT_GDEP')"
+            )  # POU_D_T_GD's own elasticity
+        if nlgeom and points.sets:  # springs, pretension, gaps: point elements, small strain
+            groups = ", ".join(f"'{g}'" for g in points.sets)
+            parts.append(f"_F(GROUP_MA=({groups},), RELATION='ELAS', DEFORMATION='PETIT')")
         if plastic:
             yielding = ", ".join(f"'{names[a.selection]}'" for a in plastic)
             large = ", DEFORMATION='GDEF_LOG'" if nlgeom else ""
@@ -847,43 +1073,90 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
                 parts.append(f"_F(GROUP_MA=({elastic},), RELATION='ELAS'{strains})")
         if gaps:  # the compression-only discretes
             parts.append("_F(GROUP_MA='GAPS', RELATION='DIS_CHOC')")
+        if threads and threads.gaps:  # a frictionless thread's flanks (ADR 0076)
+            unilateral = ", ".join(f"'{g}'" for g, _k in threads.gaps)
+            parts.append(f"_F(GROUP_MA=({unilateral},), RELATION='DIS_CHOC')")
         behaviour = f"COMPORTEMENT=({', '.join(parts)},), "
+        criterion = _criterion(project, comp, features, mesh, touching)
+
+        def call(k: int) -> str:
+            """Step k's STAT_NON_LINE (one call when not chained): from t = k - 1 to k,
+            continuing from the step before."""
+            excit = [
+                f"_F(CHARGE={c}{'' if c == 'thload' else ', FONC_MULT=ramp'}"
+                + (", TYPE_CHARGE='SUIV')" if c == "loadp" else ")")
+                for c in charges
+            ]  # fmt: skip
+            for c, on, kinematic in windowed:  # a load ramps off in the step after its last
+                if k in on or (not kinematic and k - 1 in on):
+                    excit.append(f"_F(CHARGE={c}, FONC_MULT=f{c})")
+            if chain and any(drive.values()) and k == tighten_at:
+                excit.append("_F(CHARGE=pdrive, FONC_MULT=fpdrive)")
+            if chain and lock and k > tighten_at:  # held at its tightened length
+                excit.append("_F(CHARGE=plock, TYPE_CHARGE='DIDI')")
+            start = "reuse=res, ETAT_INIT=_F(EVOL_NOLI=res), " if k > 1 else (
+                "ETAT_INIT=_F(SIGM=sig0), " if initial else "")  # fmt: skip
+            span = f", INST_INIT={k - 1:.1f}, INST_FIN={k:.1f}" if chain else ""
+            return (
+                f"res = STAT_NON_LINE({start}MODELE=model, CHAM_MATER=mater, {cara}"
+                f"EXCIT=({', '.join(excit)},), "
+                + ("CONTACT=contact, " if touching else "")
+                + behaviour
+                # As Code_Aster's 3D contact validation (ssnv128): tangent every iteration.
+                + "NEWTON=_F(REAC_ITER=1), CONVERGENCE=_F(ITER_GLOB_MAXI=200, "
+                + criterion
+                + "), "
+                + _suivi(tracked, names)
+                + f"INCREMENT=_F(LIST_INST=times{span}))"
+            )
+
+        functions = []
+        if chain:  # each windowed load's multiplier: 1 at the end of its steps, else 0
+            for c, on, _kinematic in windowed:
+                vale = ", ".join(f"{t:.1f}, {1.0 if t in on else 0.0:.1f}" for t in range(n + 1))
+                functions.append(f"f{c} = DEFI_FONCTION(NOM_PARA='INST', VALE=({vale}), "
+                                 "PROL_GAUCHE='CONSTANT', PROL_DROITE='CONSTANT')")  # fmt: skip
+            if any(drive.values()):
+                functions.append(
+                    f"fpdrive = DEFI_FONCTION(NOM_PARA='INST', VALE=({tighten_at - 1:.1f}, 0.0, "
+                    f"{tighten_at:.1f}, 1.0), PROL_GAUCHE='CONSTANT', PROL_DROITE='CONSTANT')"
+                )
+            (workdir / f"{JOB}.chain.json").write_text(json.dumps({"steps": n}), encoding="utf-8")
         out += [
             *([_defi_contact(touching, names, excluded)] if touching else []),
             *_initial_stress_field(initial, mesh, given, names, workdir),  # ADR 0044 stage 3
             # Ramp the loads: friction and large deflection depend on the loading path.
-            "ramp = DEFI_FONCTION(NOM_PARA='INST', VALE=(0.0, 0.0, 1.0, 1.0))",
-            # A failed increment is cut in four, up to five times (1/1024 of a step),
-            # rather than ending the run.
+            "ramp = DEFI_FONCTION(NOM_PARA='INST', VALE=(0.0, 0.0, 1.0, 1.0)"
+            + (", PROL_DROITE='CONSTANT')" if chain else ")"),
+            *functions,
             "times = DEFI_LIST_INST(DEFI_LIST=_F(LIST_INST=DEFI_LIST_REEL(DEBUT=0.0, "
-            f"INTERVALLE=_F(JUSQU_A=1.0, NOMBRE={increments}))), "
-            "ECHEC=_F(EVENEMENT='ERREUR', ACTION='DECOUPE', SUBD_METHODE='MANUEL', "
-            "SUBD_PAS=4, SUBD_NIVEAU=5))",
-            f"res = STAT_NON_LINE(MODELE=model, CHAM_MATER=mater, {cara}"
-            "EXCIT=("
-            + ", ".join(f"_F(CHARGE={c}, FONC_MULT=ramp)" for c in charges)
-            + ",), "
-            + ("CONTACT=contact, " if touching else "")
-            + ("ETAT_INIT=_F(SIGM=sig0), " if initial else "")
-            + behaviour
-            # As Code_Aster's 3D contact validation (ssnv128): tangent every iteration.
-            + "NEWTON=_F(REAC_ITER=1), CONVERGENCE=_F(ITER_GLOB_MAXI=200, RESI_GLOB_RELA=1e-6), "
-            + _suivi(tracked, names)
-            + "INCREMENT=_F(LIST_INST=times))",
-            "res = CALC_CHAMP(reuse=res, RESULTAT=res, CONTRAINTE=('SIGM_NOEU',"
-            + (" 'EFGE_NOEU'," if bolt_beams else "")
-            + "), FORCE=('REAC_NODA',)"
+            f"INTERVALLE=_F(JUSQU_A={float(n):.1f}, NOMBRE={increments * n}))), "
+            + _failure(step)
+            + ")",
+            *[call(k) for k in range(1, n + 1)],
+            "res = CALC_CHAMP(reuse=res, RESULTAT=res, "
+            + (
+                "CONTRAINTE=("
+                + ("'SIGM_NOEU'," if solids else "")
+                + (" 'EFGE_NOEU'," if bolt_beams else "")
+                + "), "
+                if solids or bolt_beams
+                else ""
+            )  # a frame of POU_D_T_GD alone has neither
+            + "FORCE=('REAC_NODA',)"
             # V1 of VMIS_ISOT_TRAC is the cumulated (equivalent) plastic strain p.
-            + (", VARI_INTERNE=('VARI_NOEU',), DEFORMATION=('EPSP_NOEU',)" if plastic else "")
+            # (mixed u-p elements compute no EPSP: their plastic strain is p alone)
+            + (", VARI_INTERNE=('VARI_NOEU',)" if plastic else "")
+            + (", DEFORMATION=('EPSP_NOEU',)" if plastic and not mixed else "")
             + ")",
             _table("res", "DEPL", "displacement", which),
-            _table("res", "SIGM_NOEU", "stress", which),
+            *([_table("res", "SIGM_NOEU", "stress", which)] if solids else []),
             _table("res", "REAC_NODA", "reaction_force", which),
             *([_table("res", "CONT_NOEU", "contact", which)] if touching else []),
             *([_table("res", "EFGE_NOEU", "beam_forces", which)] if bolt_beams else []),
             *(
                 [
-                    _table("res", "EPSP_NOEU", "plastic_strain", which),
+                    *([] if mixed else [_table("res", "EPSP_NOEU", "plastic_strain", which)]),
                     _table("res", "VARI_NOEU", "plastic_strain_equivalent", which),
                 ]
                 if plastic
@@ -909,7 +1182,8 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         ]
     out.append("FIN()")
     comm = workdir / f"{JOB}.comm"
-    comm.write_text(with_settings("\n".join(out) + "\n", study, step))
+    text = with_settings("\n".join(out) + "\n", study, step, pivots=not bolt_threads)
+    comm.write_text(text, encoding="utf-8")
 
     used = (
         {"temperature"}
@@ -933,7 +1207,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     export.write_text(
         "\n".join(
             [
-                *resources(processes, low_rank=_low_rank(comm.read_text())),
+                *resources(processes, low_rank=_low_rank(comm.read_text(encoding="utf-8"))),
                 f"F comm {JOB}.comm D 1",
                 f"F mmed {JOB}.med D 20",
                 f"F mess {JOB}.mess R 6",
@@ -948,7 +1222,8 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
                 ),
             ]
         )
-        + "\n"
+        + "\n",
+        encoding="utf-8",
     )
     return export
 
@@ -1191,6 +1466,8 @@ def _fastener_loads(ends: list[dict], fasteners, names: dict) -> dict[str, list[
         if end.get("beam"):  # the beam's end node is the spider's master
             for label, sel in (("A", f.source), ("B", f.target)):
                 master = f"E{i}{label}"
+                if label in end.get("threaded", ()):  # a tapped end (thread_springs)
+                    continue
                 if sel is None:  # a bolt to ground (ADR 0050): its far end held
                     out.setdefault("DDL_IMPO", []).append(
                         f"_F(GROUP_NO='{master}', DX=0.0, DY=0.0, DZ=0.0, DRX=0.0, DRY=0.0, "
@@ -1254,6 +1531,75 @@ def _pretension_loads(bolts, cuts) -> dict[str, list[str]]:
     return out
 
 
+def chained(project: Project, study: Study) -> bool:
+    """Whether the study's solve steps run as one chained STAT_NON_LINE result: two or
+    more static steps of solid mechanics alone, in a component that tightens bolts (so
+    a pretension locks into the steps after its own, puzzle.preload). Other multi-step
+    studies stay independent jobs, one per step."""
+    steps = study.solve_steps()
+    comp = project.objects.get(study.component)
+    if len(steps) < 2 or not isinstance(comp, Component):
+        return False
+    every = {p.type for p in comp.physics}
+    if any(s.type != "stationary" or (set(s.physics) or every) != {"solid_mechanics"}
+           for s in steps):  # fmt: skip
+        return False
+    return any(c.pretension is not None for c in comp.connectors) or any(
+        f.type in PRETENSION for ph in comp.physics for f in ph.features
+    )
+
+
+def _pretension_chain(bolts, cuts, n: int):
+    """`_pretension_loads` parted for a chained study: the sections' ties and the
+    reference nodes' sideways holds (always), the drive (each pretension's force or
+    shortening, in its step), and the lock (the opening held, TYPE_CHARGE='DIDI', in the
+    steps after), with the step the bolts are tightened in. Every bolt tightens in one
+    step: the first it is active in."""
+    whole = _pretension_loads(bolts, cuts)
+    ties = {"DDL_IMPO": [], "LIAISON_DDL": whole["LIAISON_DDL"]}
+    drive: dict[str, list[str]] = {"DDL_IMPO": [], "FORCE_NODALE": whole["FORCE_NODALE"]}
+    lock = []
+    for k, f in enumerate(bolts, start=1):
+        ref = f"PR{k}"
+        ties["DDL_IMPO"].append(f"_F(GROUP_NO='{ref}', DY=0.0, DZ=0.0)")
+        if f.type != "bolt_pretension":  # an adjustment: the shortening imposed
+            d = -f.values["d"].to_si()
+            drive["DDL_IMPO"].append(f"_F(GROUP_NO='{ref}', DX={d:.12g})")
+        lock.append(f"_F(GROUP_NO='{ref}', DX=0.0)")
+    at = {next((i for i in range(1, n + 1) if f.active(i)), 1) for f in bolts}
+    if len(at) > 1:
+        raise InputError(
+            "Code_Aster tightens every bolt of a chained study in one step; these are "
+            f"tightened in steps {sorted(at)}",
+            code="unsupported",
+        )
+    return ties, drive, lock, (at.pop() if at else 1)
+
+
+def _windowed_loads(features, names, mesh: Mesh, comp, project):
+    """Features on in some steps only, as one charge per set of steps (`load<j>`), for a
+    chained study: [(charge, steps, kinematic)] and the lines that make them. A
+    kinematic charge (imposed values) is left out of the steps it is off in; a load
+    ramps from its value to the next step's, as CalculiX's static steps do."""
+    groups: dict[tuple[int, ...], list] = {}
+    for f in features:
+        groups.setdefault(tuple(sorted(f.steps)), []).append(f)
+    out, lines = [], []
+    for j, (on, group) in enumerate(groups.items(), start=1):
+        if _remote_loads(group, names, mesh, project):
+            raise InputError(
+                "Code_Aster takes remote loads and displacements in local axes in every "
+                "step of a chained study only, not in some steps",
+                code="unsupported",
+            )
+        text = _loads(group, names, mesh, False, [], {}, comp)
+        if text.endswith("(MODELE=model)"):
+            continue
+        lines.append(f"load{j} = " + text.split(" = ", 1)[1])
+        out.append((f"load{j}", set(on), any(k in text for k in ("DDL_IMPO", "LIAISON"))))
+    return out, lines
+
+
 def _negligible(project, comp, mesh: Mesh) -> float:
     """A stiffness 1e-9 of the part's (E × size), for dofs held only by relations: a
     zero pivot stops Code_Aster's solver."""
@@ -1262,6 +1608,34 @@ def _negligible(project, comp, mesh: Mesh) -> float:
     ]
     E = max((m.to_si() for m in moduli if m is not None), default=1.0)
     return 1e-9 * E * float(np.linalg.norm(np.ptp(mesh.coords, axis=0)))
+
+
+WELD_TAG = 950_000  # Gmsh line entities for light welds' springs
+
+
+def _with_welds(project, comp, mesh: Mesh, base: Mesh, names: dict):
+    """Light welds (ADR 0078, as CalculiX's SPRING2s): a SEG2 between each node pair of
+    `weld_pairs` (the pairs lie across the fillet, never coincident), in a group per weld
+    written WE<k>, for DIS_T elements of K_T_D_L = the weld's k along x, y and z (global
+    axes). -> (mesh, [(group, k)])."""
+    if not any(w.formulation == "line" for w in comp.welds):
+        return base, []
+    from puzzle.adapters.weld_pairs import all_pairs
+
+    blocks, groups = list(base.blocks), dict(base.groups)
+    elem = int(max(b.ids.max() for b in blocks)) + 1
+    out = []
+    for k, (_name, wp) in enumerate(all_pairs(project, comp, mesh).items(), start=1):
+        conn = np.column_stack([wp.a, wp.b]).astype(np.int64)
+        if len(conn) == 0:
+            continue
+        entity = (1, WELD_TAG + k)
+        blocks.append(CellBlock("line2", 1, entity, np.arange(elem, elem + len(conn)), conn))
+        elem += len(conn)
+        groups[f"__weld{k}"] = Group(f"__weld{k}", 1, [entity], np.unique(conn))
+        names[f"__weld{k}"] = f"WE{k}"
+        out.append((f"WE{k}", float(wp.k)))
+    return Mesh(base.node_ids, base.coords, blocks, groups), out
 
 
 def _discrete_cara(
@@ -1273,14 +1647,16 @@ def _discrete_cara(
     beams=(),
     shells=(),
     massif=(),
+    threads=(),
+    planar: bool = False,
 ) -> list[str]:
     """Each spring's stiffness in its own axes (REPERE='LOCAL'; global is the default):
     x along the face normal (kn), y and z along the face (kt). A pretension reference
     node carries a negligible stiffness (`tiny`) along its first dof, only to have
     dofs; its other two are held."""
-    if not (supports or references or gaps or masters or beams or shells or massif):
+    if not (supports or references or gaps or masters or beams or shells or massif or threads):
         return []
-    stiff, axes = [], []
+    stiff, axes = list(threads), []  # a thread's helpers (ADR 0076): global x only
     nodes = [("S", i, s) for i, s in enumerate(supports, start=1)]
     nodes += [("C", i, g) for i, g in enumerate(gaps, start=1)]
     for prefix, i, (_node, kn, kt, n) in nodes:
@@ -1348,7 +1724,7 @@ def _discrete_cara(
         offset = f", EXCENTREMENT={s.offset * t:.10g}, INER_ROTA='OUI'" if s.offset else ""
         plates.append(f"_F(GROUP_MA='{group}', EPAIS={t:.10g}{offset})")
     blocks = [
-        ("DISCRET", stiff),
+        ("DISCRET_2D" if planar else "DISCRET", stiff),  # 2D: threads only (ADR 0076)
         ("POUTRE", sections),
         ("COQUE", plates),
         ("ORIENTATION", axes),
@@ -1397,15 +1773,58 @@ MEMORY = (
     ("In memory (fastest)", "IN_CORE"),
     ("On disk (least memory)", "OUT_OF_CORE"),
 )
+# Iterative refinement after MUMPS's solve. Puzzle writes FORCE unless set otherwise:
+# with Code_Aster's own AUTO a 882,309-equation pressure vessel (quadratic tets, supports
+# as Lagrange multipliers) failed FACTOR_57, its residual 2.6e-6 against RESI_RELA 1e-6,
+# after 164 s; with FORCE it solved to 1e-6 in 172 s (2026-11-08, Windows 18.1.10).
+REFINEMENTS = (
+    ("Always (keeps the accuracy check; Puzzle's default)", "FORCE"),
+    ("Code_Aster's choice", "AUTO"),
+    ("Off", "SANS"),
+)
+LINE_SEARCHES = (
+    ("None (Code_Aster's default)", "none"),
+    ("Secant (CORDE)", "CORDE"),
+    ("Mixed: bracketing, then secant (MIXTE)", "MIXTE"),
+)
+PREDICTIONS = (
+    ("Code_Aster's choice (tangent)", "default"),
+    ("Tangent", "TANGENTE"),
+    ("Elastic", "ELASTIQUE"),
+    ("Extrapolated from the last increment", "EXTRAPOLE"),
+)
+MATRICES = (
+    ("Code_Aster's choice (tangent)", "default"),
+    ("Tangent", "TANGENTE"),
+    ("Elastic", "ELASTIQUE"),
+)
 MUMPS_ONLY = {"acceleration": "ACCELERATION", "low_rank_threshold": "LOW_RANK_SEUIL",
-              "ordering": "RENUM", "factor_memory": "GESTION_MEMOIRE"}  # fmt: skip
+              "ordering": "RENUM", "factor_memory": "GESTION_MEMOIRE",
+              "refinement": "POSTTRAITEMENTS"}  # fmt: skip
 
 
-def with_settings(comm: str, study, step) -> str:
+def _failure(step) -> str:
+    """DEFI_LIST_INST's ECHEC: a failed increment is cut in four, up to five times (1/1024
+    of an increment), rather than ending the run; the step's shared settings (ADR 0023)
+    stop it at the smallest increment, or never cut (fixed increments)."""
+    if step.settings.get("fixed_increments"):
+        return "ECHEC=_F(EVENEMENT='ERREUR', ACTION='ARRET')"
+    smallest = step.settings.get("min_increment")
+    return ("ECHEC=_F(EVENEMENT='ERREUR', ACTION='DECOUPE', SUBD_METHODE='MANUEL', "
+            "SUBD_PAS=4, SUBD_NIVEAU=5"
+            + (f", SUBD_PAS_MINI={float(smallest):.6g}" if smallest is not None else "")
+            + ")")  # fmt: skip
+
+
+def with_settings(comm: str, study, step, pivots: bool = True) -> str:
     """The command file with the study's settings for Code_Aster placed (ADR 0023):
     its own, then the shared ones, then the expert pass-through over them all. A
     setting goes in every command of the file that takes it; only what was set is
-    written, so the defaults stay Code_Aster's own."""
+    written, so the defaults stay Code_Aster's own, except MUMPS's iterative refinement,
+    always on unless set (REFINEMENTS). `pivots` False turns MUMPS's singularity
+    check off (NPREC=-1): a beam bolt's tapped end (ADR 0076) ties one node to every
+    thread node, and MUMPS called that matrix singular though it solved it (the residual
+    check, RESI_RELA, still holds the answer to 1e-6)."""
     from puzzle.adapters.code_aster import CodeAsterAdapter
     from puzzle.adapters.code_aster.expert import apply
 
@@ -1435,6 +1854,10 @@ def with_settings(comm: str, study, step) -> str:
         value = own[key]
         text = f"{float(value):.6g}" if key == "low_rank_threshold" else f"'{value}'"
         place(SOLVING, f"SOLVEUR.{MUMPS_ONLY[key]}", text)
+    if method in (None, "MUMPS") and "refinement" not in own:
+        place(SOLVING, "SOLVEUR.POSTTRAITEMENTS", "'FORCE'")  # see REFINEMENTS
+    if method in (None, "MUMPS") and not pivots:
+        place(SOLVING, "SOLVEUR.NPREC", "-1")
     if "tolerance" in given:
         place(NONLINEAR, "CONVERGENCE.RESI_GLOB_RELA", f"{float(given['tolerance']):.6g}")
     if "max_iterations" in given:
@@ -1443,8 +1866,47 @@ def with_settings(comm: str, study, step) -> str:
         place(STEPPING, "ARCHIVAGE.PAS_ARCH", str(int(given["output_every"])))
     if "reac_iter" in own:
         place(NONLINEAR[:2], "NEWTON.REAC_ITER", str(int(own["reac_iter"])))
+    if "reac_incr" in own:
+        place(NONLINEAR[:2], "NEWTON.REAC_INCR", str(int(own["reac_incr"])))
+    for key, path in (("prediction", "NEWTON.PREDICTION"), ("matrix", "NEWTON.MATRICE")):
+        if own.get(key, "default") != "default":
+            place(NONLINEAR[:2], path, f"'{own[key]}'")
+    if own.get("line_search", "none") != "none":
+        place(NONLINEAR[:2], "RECH_LINEAIRE.METHODE", f"'{own['line_search']}'")
+        if "line_search_iterations" in own:
+            place(NONLINEAR[:2], "RECH_LINEAIRE.ITER_LINE_MAXI",
+                  str(int(own["line_search_iterations"])))  # fmt: skip
+    elif "line_search_iterations" in own:
+        raise InputError("Code_Aster: line search iterations need a line search",
+                         code="invalid")  # fmt: skip
+    if "absolute_tolerance" in own:
+        place(NONLINEAR, "CONVERGENCE.RESI_GLOB_MAXI", f"{float(own['absolute_tolerance']):.6g}")
+    cut = [k for k in ("cutback_parts", "cutback_levels") if k in own]
+    if cut and given.get("fixed_increments"):
+        raise InputError("Code_Aster: fixed increments are never cut back, so cut-back "
+                         "settings don't apply", code="invalid")  # fmt: skip
+    for key, word in (("cutback_parts", "SUBD_PAS"), ("cutback_levels", "SUBD_NIVEAU")):
+        if key in cut:
+            place(("DEFI_LIST_INST",), f"ECHEC.{word}", str(int(own[key])))
     overrides.update(study.expert_settings.get("code_aster", {}))
     return apply(comm, overrides) if overrides else comm
+
+
+def _on_shell_edge(mesh: Mesh, group) -> bool:
+    """An edge selection of a shell body: a force there spreads along it (FORCE_ARETE)."""
+    return group.dim == 1 and bool(mesh.shell_blocks()) and set(
+        int(n) for n in group.node_ids) <= mesh.shell_nodes()  # fmt: skip
+
+
+def _edge_length(group, mesh) -> float:
+    """An edge selection's length, along its elements' own (curved) geometry."""
+    total = 0.0
+    for b in group.blocks(mesh):
+        if b.dim != 1:
+            continue
+        xyz = mesh.node_coords(b.connectivity.ravel()).reshape(len(b.ids), -1, 3)
+        total += float(np.linalg.norm(xyz[:, 1] - xyz[:, 0], axis=1).sum())
+    return total
 
 
 def _on_shells(mesh: Mesh, group) -> bool:
@@ -1499,10 +1961,18 @@ def _spectral_loads(spectral) -> dict:
     return out
 
 
-def _buckling(step, cara: str, charges: list[str], preload, names, mesh, ties) -> list[str]:
+def _buckling(step, cara: str, charges: list[str], preload, names, mesh, ties,
+              large: bool = False) -> list[str]:  # fmt: skip
     """Linear buckling (ADR 0028): K + K_G(preload) against K_G of this step's loads,
     from the stresses of a static solve under each. Code_Aster's CHAR_CRIT is the load
-    factor (positive for a load that buckles as applied)."""
+    factor (positive for a load that buckles as applied).
+
+    With `large` (the static step under geometric_nonlinearity, ADR 0082 decision 6) the
+    preload is solved by STAT_NON_LINE in Green-Lagrange strains, ramped over ten
+    increments, and K_G is built from its final (second Piola-Kirchhoff) stresses, as
+    CalculiX's NLGEOM static step then *BUCKLE, PERTURBATION. K stays the undeformed
+    one: the initial-displacement matrix is left out, which matters only when the
+    preload deforms the structure appreciably before it buckles."""
     n = int(step.settings.get("modes", 4))
     excit = ", ".join(f"_F(CHARGE={c})" for c in charges)
     load_list = ", ".join(charges)
@@ -1520,9 +1990,28 @@ def _buckling(step, cara: str, charges: list[str], preload, names, mesh, ties) -
     if preload:
         out += [
             _loads(preload, names, mesh, False, ties).replace("load = ", "load0 = ", 1),
-            f"pre = MECA_STATIQUE(MODELE=model, CHAM_MATER=mater, {cara}EXCIT=(_F(CHARGE=load0),))",
-            "sig0 = CREA_CHAMP(TYPE_CHAM='ELGA_SIEF_R', OPERATION='EXTR', RESULTAT=pre, "
-            "NOM_CHAM='SIEF_ELGA', NUME_ORDRE=1)",
+            *(
+                [
+                    "ramp0 = DEFI_FONCTION(NOM_PARA='INST', VALE=(0.0, 0.0, 1.0, 1.0))",
+                    "times0 = DEFI_LIST_INST(DEFI_LIST=_F(LIST_INST=DEFI_LIST_REEL("
+                    "DEBUT=0.0, INTERVALLE=_F(JUSQU_A=1.0, NOMBRE=10))), "
+                    "ECHEC=_F(SUBD_METHODE='MANUEL', SUBD_PAS=4, SUBD_NIVEAU=5))",
+                    f"pre = STAT_NON_LINE(MODELE=model, CHAM_MATER=mater, {cara}"
+                    "EXCIT=(_F(CHARGE=load0, FONC_MULT=ramp0),), "
+                    "COMPORTEMENT=_F(TOUT='OUI', RELATION='ELAS', "
+                    "DEFORMATION='GREEN_LAGRANGE'), INCREMENT=_F(LIST_INST=times0), "
+                    "NEWTON=_F(REAC_ITER=1), CONVERGENCE=_F(ITER_GLOB_MAXI=50))",
+                    "sig0 = CREA_CHAMP(TYPE_CHAM='ELGA_SIEF_R', OPERATION='EXTR', "
+                    "RESULTAT=pre, NOM_CHAM='SIEF_ELGA', INST=1.0)",
+                ]
+                if large
+                else [
+                    f"pre = MECA_STATIQUE(MODELE=model, CHAM_MATER=mater, {cara}"
+                    "EXCIT=(_F(CHARGE=load0),))",
+                    "sig0 = CREA_CHAMP(TYPE_CHAM='ELGA_SIEF_R', OPERATION='EXTR', "
+                    "RESULTAT=pre, NOM_CHAM='SIEF_ELGA', NUME_ORDRE=1)",
+                ]
+            ),
             f"kge0 = CALC_MATR_ELEM(OPTION='RIGI_GEOM', MODELE=model, {cara}SIEF_ELGA=sig0)",
             "kg0 = ASSE_MATRICE(MATR_ELEM=kge0, NUME_DDL=nu)",
             "kk = COMB_MATR_ASSE(COMB_R=(_F(MATR_ASSE=kk, COEF_R=1.0), "
@@ -1729,6 +2218,31 @@ def _material(
     return f"ELAS=_F(E={e:.12g}, NU={nu:.12g}{rho}{alpha}{amor})"
 
 
+def _criterion(project, comp, features, mesh: Mesh, touching) -> str:
+    """STAT_NON_LINE's convergence criterion. Relative (RESI_GLOB_RELA 1e-6, the residual
+    over the forces through the model) unless a contact study's only loads are imposed
+    displacements: when its interface then opens everywhere those forces are next to
+    nothing, the ratio never settles (a cap pulled off its base: 1e-13 N absolute, 3
+    relative, 200 iterations), so the absolute RESI_GLOB_MAXI is used, 1e-6 of the force
+    the largest imposed displacement would take through the model (E L u)."""
+    relative = "RESI_GLOB_RELA=1e-6"
+    if not touching:
+        return relative
+    loads = [f for f in features if f.type not in ("fixed", "displacement")]
+    moved = [abs(q.to_si()) for f in features if f.type == "displacement"
+             for q in f.values.values()]  # fmt: skip
+    if loads or not moved or max(moved) == 0.0:
+        return relative
+    moduli = [m.properties["youngs_modulus"].to_si() for m in
+              (project.objects.get(a.material) for a in comp.materials)
+              if m is not None and "youngs_modulus" in m.properties]  # fmt: skip
+    if not moduli:
+        return relative
+    lo, hi = mesh.coords.min(axis=0), mesh.coords.max(axis=0)
+    size = float(np.linalg.norm(hi - lo))
+    return f"RESI_GLOB_MAXI={1e-6 * max(moduli) * size * max(moved):.6g}"
+
+
 def _check_friction(contacts, features, mesh: Mesh) -> None:
     """Code_Aster's continuous Coulomb friction, where it works (see CLAUDE.md):
 
@@ -1737,7 +2251,7 @@ def _check_friction(contacts, features, mesh: Mesh) -> None:
       27-node hexahedra only;
     - no displacement condition on slave (source) nodes: it duplicates a multiplier.
     """
-    frictional = [c for c in contacts if c.type == "frictional"]
+    frictional = [c for c in contacts if c.type in ("frictional", "rough")]
     if not frictional:
         return
     if any(b.element in ("tet10", "hex20", "wedge15", "pyramid13") for b in mesh.blocks):
@@ -1806,8 +2320,8 @@ def contact_summary(project, comp, mesh: Mesh | None = None) -> dict[str, str]:
     from puzzle.bolts import resolved
 
     out = {}
-    touching = [c for c in comp.contacts if c.type in ("frictionless", "frictional")]
-    friction = any(c.type == "frictional" for c in touching)
+    touching = [c for c in comp.contacts if c.type in PAIRS and c.thread is None]
+    friction = any(c.type in ("frictional", "rough") for c in touching)
     quadratic = mesh is not None and any(
         b.element in ("tet10", "hex20", "wedge15", "pyramid13") for b in mesh.blocks
     )
@@ -1826,15 +2340,24 @@ def contact_summary(project, comp, mesh: Mesh | None = None) -> dict[str, str]:
             nodes = np.unique(np.concatenate([mesh.groups[g].node_ids for g in groups]))
             excluded[name] = (groups, int(np.intersect1d(slave, nodes).size))
     for c in comp.contacts:
-        if c.capability == "bonded_conformal":
+        if c.thread is not None:  # ADR 0076
+            refused = f"Not written: Code_Aster refuses a threaded {c.type} contact"
+            out[c.name] = thread_springs.summary(c) if c.type in THREADS else refused
+        elif c.capability == "bonded_conformal":
             out[c.name] = "Shared nodes (meshed conformally): nothing to write"
         elif c.capability not in CONTACTS:
             out[c.name] = f"Not written: Code_Aster refuses {c.capability.replace('_', ' ')}"
         elif c.capability == "bonded_nonconformal":
             out[c.name] = (f"LIAISON_MAIL: the nodes of {c.source} tied into the volume of "
                            f"{c.target.split('/', 1)[0]} (structural studies only)")  # fmt: skip
+        elif c.type == "no_separation":
+            out[c.name] = (f"LIAISON_MAIL, DDL='DNOR': the nodes of {c.source} held to "
+                           f"{c.target.split('/', 1)[0]} along the face's normal only, free to "
+                           "slide (linear; structural studies only)")  # fmt: skip
         else:
             law = (f"Coulomb μ = {c.friction:g}" if c.type == "frictional"
+                   else f"rough (Coulomb μ = {ROUGH_MU:g}: no slip while closed)"
+                   if c.type == "rough"
                    else "frictionless" + (" (COULOMB = 0 beside a frictional zone)"
                                           if friction else ""))  # fmt: skip
             text = (
@@ -1850,7 +2373,7 @@ def contact_summary(project, comp, mesh: Mesh | None = None) -> dict[str, str]:
             if c.name in excluded:
                 groups, count = excluded[c.name]
                 text += f"; SANS_GROUP_NO: {count} nodes on bolt ends ({', '.join(groups)})"
-            if c.type == "frictional" and quadratic:
+            if c.type in ("frictional", "rough") and quadratic:
                 text += "; refused on this quadratic mesh (friction needs element_order 1)"
             out[c.name] = text
     return out
@@ -1864,7 +2387,7 @@ def _defi_contact(contacts, names: dict[str, str], excluded=None) -> str:
     needed when a body is held only by contacts that touch along an edge, where no
     point starts interpenetrated and the first matrix is singular.
     """
-    friction = any(c.type == "frictional" for c in contacts)
+    friction = any(c.type in ("frictional", "rough") for c in contacts)
     zones = []
     for c in contacts:
         zone = f"_F(GROUP_MA_MAIT='{names[c.target]}', GROUP_MA_ESCL='{names[c.source]}'"
@@ -1873,7 +2396,7 @@ def _defi_contact(contacts, names: dict[str, str], excluded=None) -> str:
         init = c.extensions.get("code_aster", {}).get("contact_init")
         if init:
             zone += f", CONTACT_INIT='{init}'"
-        zones.append(zone + (f", COULOMB={c.friction or 0.0:.10g})" if friction else ")"))
+        zones.append(zone + (f", COULOMB={_mu(c):.10g})" if friction else ")"))
     return (
         "contact = DEFI_CONTACT(MODELE=model, FORMULATION='CONTINUE', "
         f"FROTTEMENT='{'COULOMB' if friction else 'SANS'}', ZONE=({', '.join(zones)},))"
@@ -1964,6 +2487,29 @@ def _cross_formulas(name: str, base, axis, origin) -> tuple[list[str], list[str]
     return lines, [f"{name}{i}" for i in range(3)]
 
 
+def _cylindrical(project, f) -> bool:
+    axes = local_axes(project, f) if f.axes is not None else None
+    return axes is not None and axes.type != "cartesian"
+
+
+def _oblique(project, features, names, mesh) -> list[str]:
+    """LIAISON_OBLIQUE items: displacements prescribing some components in a Cartesian
+    system (what `common.globalize` leaves: a symmetry plane across no global axis, ADR
+    0081), held in that system's frame given by its nautical angles."""
+    out = []
+    for f in features:
+        if f.type != "displacement" or f.axes is None or _cylindrical(project, f):
+            continue
+        r = local_axes(project, f).rotation()
+        alpha, beta, gamma = _nautical(r)
+        held = [a for a in ("xy" if mesh.planar else "xyz") if a in f.values]
+        dofs = ", ".join(f"D{a.upper()}={f.values[a].to_si():.12g}" for a in held)
+        angles = (f"{alpha:.12g}," if mesh.planar
+                  else f"{alpha:.12g}, {beta:.12g}, {gamma:.12g}")  # fmt: skip
+        out.append(f"_F(GROUP_MA='{names[f.selection]}', ANGL_NAUT=({angles}), {dofs})")
+    return out
+
+
 def _remote_loads(features, names, mesh, project=None) -> list[str]:
     """`loadf`: remote forces as their RBE3-equivalent traction (FORCE_FACE of x, y, z)
     and remote displacements as a rigid motion (DDL_IMPO of x, y, z), ADR 0037."""
@@ -1975,7 +2521,7 @@ def _remote_loads(features, names, mesh, project=None) -> list[str]:
             more, (fx, fy, fz) = _cross_formulas(f"rt{k}_", load.uniform, load.twist, load.centroid)
             lines += more
             faces.append(f"_F(GROUP_MA='{g}', FX={fx}, FY={fy}, FZ={fz})")
-        elif f.type == "displacement" and f.axes is not None:  # cylindrical, all three
+        elif f.type == "displacement" and _cylindrical(project, f):  # all three
             axes = local_axes(project, f)
             local = [f.values[a].to_si() for a in "xyz"]
             exprs = cylindrical_expressions(axes, local, ("X", "Y", "Z"))
@@ -2326,12 +2872,14 @@ def _loads(
     imposed, face_force, pressure, temperature, flux, exchange = [], [], [], [], [], []
     source: list[str] = []  # heat per volume (ADR 0047)
     contour: list[str] = []  # forces on a 2D model's edges
+    edges: list[str] = []  # forces along shells' edges, per length (FORCE_ARETE)
     nodal: list[str] = []
     gravity, rotation, rigid, shell_pressure = [], [], [], []
     internal: list[str] = []  # forces per volume (ADR 0044 stage 2)
     tied = [
         f"_F(GROUP_MA_MAIT='{names[c.target.split('/', 1)[0]]}', "
-        f"GROUP_MA_ESCL='{names[c.source]}', TYPE_RACCORD='MASSIF')"
+        f"GROUP_MA_ESCL='{names[c.source]}', TYPE_RACCORD='MASSIF'"
+        + (", DDL='DNOR')" if c.type == "no_separation" else ")")
         for c in ties
     ]
     for f in features:
@@ -2339,7 +2887,7 @@ def _loads(
         v = {k: q.to_si() for k, q in f.values.items()}
         if f.type == "fixed" and mesh.planar:  # a 2D model's nodes move in its plane
             imposed.append(f"_F(GROUP_MA='{g}', DX=0.0, DY=0.0)")
-        elif f.type == "displacement" and mesh.planar:
+        elif f.type == "displacement" and mesh.planar and f.axes is None:
             dofs = ", ".join(f"D{a.upper()}={v[a]:.12g}" for a in "xy" if a in v)
             if dofs:
                 imposed.append(f"_F(GROUP_MA='{g}', {dofs})")
@@ -2355,6 +2903,10 @@ def _loads(
         elif f.type == "displacement" and f.axes is None:  # in local axes: loadf
             dofs = ", ".join(f"D{a.upper()}={v[a]:.12g}" for a in "xyz" if a in v)
             imposed.append(f"_F(GROUP_MA='{g}', {dofs})")
+        elif f.type == "force" and _on_shell_edge(mesh, mesh.groups[f.selection]):
+            length = _edge_length(mesh.groups[f.selection], mesh)
+            comps = ", ".join(f"F{a.upper()}={v[a] / length:.12g}" for a in "xyz" if v.get(a))
+            edges.append(f"_F(GROUP_MA='{g}', {comps})")
         elif f.type == "force" and mesh.groups[f.selection].dim == 0:  # on points (beams)
             share = len(mesh.groups[f.selection].node_ids)
             comps = ", ".join(f"F{a.upper()}={v[a] / share:.12g}" for a in "xyz" if v.get(a))
@@ -2422,8 +2974,10 @@ def _loads(
         + kw("DDL_IMPO", imposed + extra.get("DDL_IMPO", []))
         + kw("FORCE_NODALE", nodal + extra.get("FORCE_NODALE", []))
         + kw("LIAISON_DDL", extra.get("LIAISON_DDL", []))
+        + kw("LIAISON_OBLIQUE", extra.get("LIAISON_OBLIQUE", []))
         + kw("FORCE_FACE", face_force)
         + kw("FORCE_CONTOUR", contour)
+        + kw("FORCE_ARETE", edges)
         + kw("PRES_REP", pressure)
         + kw("FORCE_COQUE", shell_pressure)
         + kw("PESANTEUR", gravity)
@@ -2434,6 +2988,42 @@ def _loads(
         + kw("LIAISON_MAIL", tied)
         + ")"
     )
+
+
+def _chosen(comp: Component, mesh: Mesh, thermal: bool) -> list[tuple[str, str]]:
+    """(selection, modélisation) for each body with an element choice (ADR 0082), from
+    the element library; every cell of the body must take the same one."""
+    from puzzle.element_choice import lookup
+
+    out = []
+    for c in comp.elements:
+        group = mesh.groups.get(c.selection)
+        if group is None:
+            raise InputError(f"an element choice names '{c.selection}', which is not meshed")
+        if "code_aster" in c.solver_types:
+            out.append((c.selection, c.solver_types["code_aster"]))
+            continue
+        shells = {id(b) for b in mesh.shell_blocks()}
+        found = set()
+        for b in group.blocks(mesh):
+            if b.dim != group.dim:
+                continue
+            if thermal:
+                family = "thermal"
+            elif mesh.planar:
+                family = "solid_2d"
+            else:
+                family = {3: "solid_3d", 1: "beam"}.get(b.dim, "shell" if id(b) in shells
+                                                         else "solid_3d")  # fmt: skip
+            found.add(lookup("code_aster", family, c.formulation, b.element, c.selection))
+        if len(found) > 1:
+            raise InputError(
+                f"'{c.selection}' mixes cells that take different Code_Aster "
+                f"modelisations ({', '.join(sorted(found))})",
+                code="unsupported",
+            )
+        out += [(c.selection, m) for m in found]
+    return out
 
 
 def _modelisation(comp: Component, thermal: bool) -> str:

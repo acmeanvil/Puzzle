@@ -1,0 +1,66 @@
+# Booleans on faceted meshes (ADR 0065). PyPI only; built from its sdist with
+# conda-forge's compilers, TBB and nanobind (ADR 0068). Clipper2 is not on conda-forge:
+# manifold's CMake fetches it at the commit it pins.
+context:
+  name: manifold3d
+  version: "3.5.4"
+
+package:
+  name: ${{ name }}
+  version: ${{ version }}
+
+source:
+  url: https://files.pythonhosted.org/packages/source/m/manifold3d/manifold3d-${{ version }}.tar.gz
+  sha256: 5bd88c482c6fd7fc01aa7b715b3e31c2585ee98343d5559d286ba30db0d0b6f0
+
+build:
+  number: 0
+  script:
+    env:
+      # scikit-build-core gives `cmake -E capabilities` 5 s, or 20 s under CI; macOS
+      # checks a freshly installed binary on its first runs, which can take longer
+      CI: "1"
+    content:
+      # its own search misses the build environment's CMake: point it there, run once
+      - if: unix
+        then: export CMAKE_EXECUTABLE="$BUILD_PREFIX/bin/cmake" && "$CMAKE_EXECUTABLE" --version
+        else: set "CMAKE_EXECUTABLE=%BUILD_PREFIX%\Library\bin\cmake.exe"
+      # Clipper2 at manifold's pinned commit uses std::back_inserter without including
+      # <iterator>, which newer libc++ no longer pulls in by itself
+      - if: unix
+        then: export CXXFLAGS="$CXXFLAGS -include iterator"
+        else: set "CXXFLAGS=%CXXFLAGS% /FIiterator"
+      - ${{ PYTHON }} -m pip install . -vv --no-deps --no-build-isolation -Ccmake.define.MANIFOLD_USE_BUILTIN_CLIPPER2=ON -Ccmake.define.MANIFOLD_USE_BUILTIN_TBB=OFF -Ccmake.define.MANIFOLD_USE_BUILTIN_NANOBIND=OFF
+
+requirements:
+  build:
+    - ${{ compiler('c') }}
+    - ${{ stdlib('c') }}
+    - ${{ compiler('cxx') }}
+    - cmake
+    - ninja
+    - git
+  host:
+    - python
+    - pip
+    - scikit-build-core
+    - nanobind >=2.12,<3
+    - tbb-devel
+    - numpy
+  run:
+    - python
+    - numpy
+
+tests:
+  - python:
+      imports:
+        - manifold3d
+      pip_check: false
+  - script:
+      - python -c "import manifold3d as m; c = m.Manifold.cube([1, 1, 1]); print('volume', c.volume()); assert abs(c.volume() - 1) < 1e-12"
+
+about:
+  homepage: https://github.com/elalish/manifold
+  license: Apache-2.0
+  license_file: LICENSE
+  summary: Geometry library for topological robustness (Python bindings)

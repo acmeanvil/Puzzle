@@ -1,6 +1,6 @@
 ---
 name: schematic-operators
-description: operators: results as numbers and verdicts (pass/fail, ASME checks); sliders and expressions as parameters; points, grids, profiles and patterns from data; Python scripts
+description: operators: results as numbers and verdicts; curves (paths, histories) as utilisation, normalised or against a step; parameters from sliders and formulas; geometry from data; scripts
 adr: 0062
 ---
 Operators are project objects that compute, wired together like Grasshopper's nodes.
@@ -14,6 +14,121 @@ There are two sorts:
 wants a figure or a check kept in the project, such as "max von Mises on the bracket
 ≤ 200 MPa", or "tip deflection against thickness".
 
+## Finding the right operator (ADR 0071)
+
+Call `operator_help` before using a type you are unsure of: with no arguments it lists
+every type with its name and purpose; `search="maximum"` (or "divide", "pivot") finds
+the types whose name, purpose or other names match; `type="check"` gives the full card
+(purpose, an example, each input and output). The user sees an operator's *name*, and
+`operator_add` takes its *type*; speak to the user in names. Some names differ from the
+type (the type never changes, so old projects keep working):
+
+| Name shown | Type |
+| --- | --- |
+| Result summary | reduce |
+| Keep result where / Keep rows where | filter / filter_rows |
+| Check against limit | check |
+| Formula | expression |
+| Stepped list | series |
+| Points along | divide (points along an edge; not arithmetic) |
+| Plane cut values | section |
+| Values at points | nearest |
+| Read off a table | lookup |
+| Pick one value | to_number |
+| Calculated column, Choose columns | new_column, columns |
+| Rows to columns, Columns to rows | pivot, unpivot |
+| Append tables, Match tables | stack, join |
+| Remove duplicates, Largest N rows | distinct, top_n |
+| Summarise by group, Running totals and averages | group, rolling |
+| Show value, Mark points in view | panel, preview |
+| Model contents, Read file, Random samples | project_table, file, random |
+| On/off switch, Outline, Pair up lists, List item or statistic | toggle, profile, pairs, list |
+| Divide (A ÷ B), Subtract (A − B), Multiply (A × B), Add (A + B) | divide_by, subtract, multiply, add |
+| Utilisation, Safety factor, Margin of safety | utilisation, safety_factor, margin |
+| Curve formula, Curve from table, Over the steps, At step, Compare with step | curve_formula, curve_from_table, over_steps, at_step, compare_steps |
+| Envelope, Match x values, Area under curve, Slope, Limit line, Annotate | envelope, match_x, area_under, slope, limit_line, annotate |
+
+## Model value: the model's own values (ADR 0071)
+
+`model_value` reads a value the model holds, as it is now, with no solve: a material's
+yield or ultimate strength, Young's modulus, density (or the property against
+temperature, as a table), a load's or support's value, a section's thickness, a mesh
+size, a step's setting, a parameter. Call `model_values` to list the objects that hold
+values, and `model_values(object="Steel")` for what one holds (label, path, kind). Add
+one with `operator_add(type="model_value", settings={"target": "Steel", "property":
+"Yield strength"})` (a label or a path). Wire its `out` into `check`'s limit, a
+`expression`, or a plot. It is a before-solving operator: it can also drive the model
+as a parameter by its name, and it follows the model when the material or load changes.
+For a utilisation check against yield: reduce (max von Mises) → check's value, and
+model_value (Yield strength) → check's limit.
+
+## Curves: paths, histories and what to make of them (ADR 0071)
+
+A curve (port type `series`) is x and y with their units: one curve, or one per step
+(a path in a transient run). Where curves come from:
+- a result tool along a path (or a linearization), port `along`: one curve per step,
+  distance against the value;
+- any result tool, port `history`: its value against the steps (time, frequency,
+  increment);
+- `over_steps` (Over the steps): any number (a Result summary) at every step, or with
+  `against="sweep"` at every sweep point;
+- `curve_from_table`, or a table wired straight into a curve input: its first two
+  number columns (or `by` = [x column], `column` = y column); a Model value against
+  temperature is such a table.
+
+What to do with them (units follow; a mismatch is refused with the reason):
+- `utilisation` (value ÷ allowable), `safety_factor` (allowable ÷ value), `margin`
+  (allowable ÷ value − 1), and `divide_by`, `subtract`, `multiply`, `add`: inputs `a`
+  and `b`, each a curve or a number (typed "250 MPa" or wired). Two numbers give a
+  number (so a safety factor can feed a Check); anything with a curve gives a curve.
+  Two curves must share their x values: put `match_x` (inputs `series`, `onto`) first.
+- `normalise` (input `series`, optional `by`: a number or curve; none: each curve by its
+  largest size), `curve_formula` (`expression` over x, y and wired a, b, c: "y / 250 MPa").
+- `at_step` (`step`, -1 = last) picks one step's curve; `compare_steps` (`step` = the
+  reference, `comparison` difference or ratio) gives every other step against it, or,
+  for a history, each step's value against the reference step's.
+- `envelope` (`reduction` max, min or mean over the curves wired in), `area_under`
+  (a number; one curve only), `slope` (dy/dx).
+- `limit_line` (a number, drawn dashed across) and `annotate` (marks the largest or
+  smallest point; `note` labels it) go into `plot`, whose inputs `value`, `b`, `c`, `d`
+  take up to four curves of one x and one y quantity. Its `curves` output is what the
+  Plots panel draws.
+
+`operator_value` gives a curve as a summary, never every point: its axes and units,
+`curve_count`, and per curve its `max`, `x_at_max`, `min`, `x_at_min`, a 5-point
+`sample` and its `step`.
+
+Example: von Mises along a wall against yield, plotted with the limit.
+1. `operator_add("at_step", "Wall at the end", {"series": {"source": "Wall path", "port": "along"}})`
+2. `operator_add("model_value", "Sy", settings={"target": "Steel", "property": "Yield strength"})`
+3. `operator_add("utilisation", "Wall use", {"a": {"source": "Wall at the end"}, "b": {"source": "Sy"}})`
+4. `operator_add("limit_line", "Yield", {"value": {"source": "Sy"}})`, then
+   `operator_add("plot", "Wall stress", {"value": {"source": "Wall at the end"}, "b": {"source": "Yield"}})`
+
+## Fields: results worked on at every node (ADR 0071)
+
+A Filter gives a field: one result (`quantity`, e.g. "stress:von_mises") at one step
+(`step`, -1 the last, 0 the first), on a selection or the whole model. Wire fields into
+the arithmetic (Divide, Subtract, Multiply, Add, Utilisation, Safety factor, Margin of
+safety), Normalise or Field formula (`expression` over `f`, `g`, numbers `a`, `b`, `c`
+and parameters: "f - g", "f / 250 MPa", "abs(f)") and the output is a field too
+(`first_type` says "field"); selecting it in the GUI draws it on the model. Use them for:
+the change between two steps (two Filters at different steps, Subtract), utilisation
+on the model (a Filter, a Model value's yield, Utilisation), a shape (Normalise). Two
+fields must be on the same mesh (the same run's, or runs on one mesh); units follow
+(stress ÷ stress is a pure number, stress + temperature is refused). Reduce turns a
+field into a number (its maximum, where it is).
+
+ParaView's filters, run on VTK in Puzzle (no ParaView needed): Slice (a field on a
+construction plane, `target`, as a table of points x, y, z and the value), Clip (a field
+kept on one side of the plane, `keep` above = the side the normal faces; still a field),
+Contour (where a field takes a wired `level`, as a table of points), Stream tracer
+(a study's `result` wired in, a vector `quantity` such as "velocity", seeds along a
+construction path `target`, their count wired as `seeds`: the streamlines' points with
+speed) and Glyph (a vector result's arrows at up to `seeds` nodes). By ParaView's other
+names: Threshold is Filter, Calculator is Field formula, Integrate Variables is Reduce's
+integral, Plot Over Line is a Path result tool.
+
 ## Types and their ports
 
 | Type | Inputs | Outputs | Its own settings |
@@ -22,14 +137,15 @@ wants a figure or a check kept in the project, such as "max von Mises on the bra
 | filter | result, limit (number, optional) | out (field) | quantity, selection, keep (all, above, below), step |
 | check | value (number or field), limit (number) | out (verdict), margin (number) | compare (at_most, at_least) |
 | panel | value (anything) | none | none |
-| plot | value (number) | out (table) | against (step, sweep) |
+| plot | value (number, table or curve), b, c, d (curves, optional) | out (table), curves (curve) | against (step, sweep), chart |
 | export | value (anything) | none | file (inside the project), format (csv, or a result export format) |
 
 What can be wired in:
 - A study, by its port `result` (the newest run), or by a field such as `stress`
   (that field's results only).
 - A derived result, by its port `result` (combinations and equations, ADR 0025).
-- A result tool, by its port `out` (its value).
+- A result tool, by its port `out` (its value), `along` (a path's curve per step) or
+  `history` (its value over the steps).
 - A parameter set, by a parameter's name (a number with its unit).
 - Another operator, by one of its output ports.
 
@@ -75,6 +191,15 @@ Inputs can also be set with `submit`: `{"command": "edit", "object": "Strength",
   a parameter set's parameter does: `{"command": "edit", "object": "Plate", "ops":
   [{"op": "set", "path": "history.0.args.dx", "value": "width"}]}`. Sweeps can sweep it
   by name, and equations can use it.
+- A load's, support's or any other quantity's value can follow a parameter too (ADR
+  0071): a quantity with `parameter` set, `{"value": 2, "unit": "MPa", "parameter": "p"}`,
+  takes p's value before every solve and at every sweep point (`value` keeps the last,
+  in its own unit): `{"command": "edit", "object": "Plate", "ops": [{"op": "set",
+  "path": "physics.0.features.1.values.p", "value": {"value": 2, "unit": "MPa",
+  "parameter": "p"}}]}`, or MCP `link` from the parameter set (or the Number) onto the
+  feature ("Sets p, following p"). Set the value without `parameter` to unbind it. A
+  name that isn't a parameter is a problem (`operator_input`) and refuses the solve.
+  In Properties, type "= p" in the value.
 - A list (Series, Range, List) gives a sweep's points:
   `{"name": "t", "source": "<operator id>", "port": "out"}` as a sweep parameter, in
   place of `values`. One run is made per item, and each run is stored with its point,
@@ -144,6 +269,12 @@ hasn't run says so in `error`.
   `puzzle operators PROJECT NAME --export`. A result goes out in a result format (`vtu`,
   `exodus`, ...); everything else as CSV.
 
+- **Report** gathers up to eight items (`a` to `h`: checks, numbers, curves, tables,
+  fields) into one self-contained HTML file in the project (`file`, default
+  exports/<name>.html): each headed by its node's name, curves drawn, "2 of 3 checks
+  pass" at the top. Write it with MCP `operator_export(name)` (also writes an Export),
+  the GUI's Export now, or `puzzle operators PROJECT --export`.
+
 ## Mistakes
 
 - A wire that doesn't fit is refused, with code `invalid`: a result into a check's
@@ -154,5 +285,9 @@ hasn't run says so in `error`.
   operator shows as missing input.
 - A check compares like with like. A stress against a length is an error, so type the
   limit with its unit ("200 MPa", not "200").
+- Arithmetic on two curves with different x values is refused: Match x values first.
+  Area under curve takes one curve: At step or Envelope first.
+- At step on a history (one value per step) is refused: it already is one value per
+  step; read one step with Result summary's `step`.
 - An integral needs values per node and a face or body. An integral of a stress over a
   body is in Pa·m³, and its unit isn't tracked.

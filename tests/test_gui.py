@@ -274,9 +274,10 @@ def test_agent_rejects_and_levels(app, tmp_path, monkeypatch):
 def test_agent_without_a_provider_says_how_to_set_one(app, window, monkeypatch):
     wait(app, lambda: not window.tasks, timeout=60)  # the preview shown on opening
     monkeypatch.setenv("PUZZLE_AGENT_PROVIDER", "nonsense")
-    window.agent.send("hello")
+    window.agent.send("hello")  # the agent is built off the GUI thread (ADR 0074)
+    wait(app, lambda: not window.tasks, timeout=60)
     assert "unknown agent provider" in window.agent.transcript.toPlainText()
-    assert not window.tasks
+    assert not window.agent.busy and not window.agent.stop_button.isVisibleTo(window)
 
 
 def test_picking_faces_makes_and_extends_selections(app, window):
@@ -366,7 +367,7 @@ def test_an_old_results_store_does_not_stop_the_project_opening(app, tmp_path, m
         EXAMPLE, root, ignore=shutil.ignore_patterns("results*", ".puzzle", "history.jsonl")
     )
     (root / "results").mkdir()
-    (root / "results" / "store.json").write_text(json.dumps({"format": 1}))
+    (root / "results" / "store.json").write_text(json.dumps({"format": 1}), encoding="utf-8")
     w = MainWindow(root)
     try:
         assert "Bar" in [i.text(0) for i in w.tree._items()]
@@ -421,7 +422,7 @@ def test_an_old_results_store_can_be_moved_aside(app, tmp_path, monkeypatch):
         EXAMPLE, root, ignore=shutil.ignore_patterns("results*", ".puzzle", "history.jsonl")
     )
     (root / "results").mkdir()
-    (root / "results" / "store.json").write_text(json.dumps({"format": 1}))
+    (root / "results" / "store.json").write_text(json.dumps({"format": 1}), encoding="utf-8")
     w = MainWindow(root)
     try:
         assert len(asked) == 1 and "older version of Puzzle" in asked[0][1]
@@ -445,3 +446,19 @@ def test_save_as_new_project_opens_an_independent_copy(window, tmp_path):
     assert Session(before).project.name == name  # the original keeps its name
     stay = window.save_as(tmp_path / "second", "Another", open_copy=False)
     assert stay is not None and window.session.root == done.root
+
+
+def test_a_parts_properties_choose_its_element(window, app):
+    """ADR 0082 decision 7: a part's Properties hold Element formulation; choosing one is
+    one Edit of the component's elements, and the rows below name each solver's element."""
+    from puzzle.model.schema import Component
+
+    select(window, "part")
+    app.processEvents()
+    box = window.properties.element_box
+    assert box.currentData() == "none"
+    box.setCurrentIndex(box.findData("reduced"))
+    app.processEvents()
+    comp = next(o for o in window.session.project.objects.values() if isinstance(o, Component))
+    (choice,) = comp.elements
+    assert choice.formulation == "reduced" and choice.selection == comp.parts[0].name

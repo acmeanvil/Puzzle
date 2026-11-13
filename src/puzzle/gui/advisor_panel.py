@@ -193,6 +193,10 @@ class AdvisorPanel(QWidget):
             return None
         if comp is None:
             return None
+        if action.startswith("thread:"):  # ADR 0076: a bonded tapped hole as a thread
+            from puzzle.gui.thread_dialog import thread_contact
+
+            return thread_contact(w, comp, int(action.split(":", 1)[1]))
         if action == "assign_material":
             return menus.assign_material(w, comp)
         if action == "add_physics":

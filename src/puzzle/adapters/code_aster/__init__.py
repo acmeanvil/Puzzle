@@ -25,6 +25,7 @@ from puzzle.adapters.base import (
     STAGE3_FIELDS,
     STRUCTURAL_FEATURES,
     SUPPORT_FEATURES,
+    SYMMETRY_FEATURES,
     THERMAL_FEATURES,
     VECTOR_FIELD_FEATURES,
     VECTOR_LOAD_FEATURES,
@@ -34,6 +35,7 @@ from puzzle.adapters.base import (
 )
 from puzzle.adapters.code_aster.comm import JOB, write_case
 from puzzle.adapters.code_aster.tables import read_results as read_tables
+from puzzle.adapters.code_aster.thread_springs import THREADS
 from puzzle.adapters.common import drop_helper_nodes, mark_mesh_nodes
 from puzzle.mesh.mesh import Mesh
 from puzzle.model.schema import Project, Study
@@ -51,6 +53,7 @@ class CodeAsterAdapter(SolverAdapter):
             "heat_transfer": frozenset({"stationary", "transient"}),
         },
         features=STRUCTURAL_FEATURES
+        | SYMMETRY_FEATURES  # ADR 0081
         | THERMAL_FEATURES
         | HEAT_SOURCE_FEATURES  # ADR 0047
         | REMOTE_FEATURES
@@ -60,12 +63,24 @@ class CodeAsterAdapter(SolverAdapter):
         | LIFTING_FEATURES
         | VECTOR_LOAD_FEATURES
         | INITIAL_STRESS_FEATURES,  # ADR 0044 stage 3
-        connectors=frozenset({"beam_fastener:rigid", "beam_fastener:distributing"}),
+        connectors=frozenset(
+            {"beam_fastener:rigid", "beam_fastener:distributing", "beam_fastener:thread"}
+        ),  # ADR 0076 step 4: tapped ends
+        welds=frozenset({"line"}),  # ADR 0078 step 3: SEG2 DIS_T springs, as CalculiX's
         beams=True,  # ADR 0027, tests/integration/test_beams.py
         shared_settings=frozenset(  # ADR 0023
-            {"linear_solver", "tolerance", "max_iterations", "output_every"}
+            {
+                "linear_solver",
+                "tolerance",
+                "max_iterations",
+                "output_every",
+                "increments",
+                "min_increment",
+                "fixed_increments",
+            }
         ),
         shells=True,  # ADR 0027, tests/integration/test_shells.py
+        cyclic=frozenset({"solid_mechanics"}),  # ADR 0081 step 3: LIAISON_DDL per pair
         # ADR 0037 (heat flux) and 0041 (structural loads in dynamics), benchmarked
         amplitude_features=frozenset({"heat_flux", "force", "pressure"}),
         axes_features=frozenset(
@@ -75,14 +90,23 @@ class CodeAsterAdapter(SolverAdapter):
                 "rotation:cartesian",
                 "rotation:cylindrical",
                 "displacement:cartesian",
+                "displacement:cartesian:partial",  # LIAISON_OBLIQUE (ADR 0081)
                 "displacement:cylindrical",
                 "force:cartesian",
             }
         ),  # ADR 0037: local axes
         contacts=frozenset(
-            {"bonded_conformal", "bonded_nonconformal", "frictionless", "frictional"}
+            {
+                "bonded_conformal",
+                "bonded_nonconformal",
+                "frictionless",
+                "frictional",
+                "no_separation",
+                "rough",
+            }
         ),
         couplings=frozenset({"thermal_expansion"}),
+        threads=THREADS,  # ADR 0076: tests/integration/test_thread_benchmark.py
         # VMIS_ISOT_TRAC in STAT_NON_LINE, p and EPSP out (tests/integration/test_plasticity.py);
         # ELAS_ORTH and THER_ORTH in MASSIF axes (tests/integration/test_orthotropic.py).
         material_models=frozenset(
@@ -145,7 +169,16 @@ class CodeAsterAdapter(SolverAdapter):
 
     def settings_schema(self) -> list:
         """Code_Aster's own settings (ADR 0023); the shared ones are on each step."""
-        from puzzle.adapters.code_aster.comm import ACCELERATIONS, MEMORY, METHODS, ORDERINGS
+        from puzzle.adapters.code_aster.comm import (
+            ACCELERATIONS,
+            LINE_SEARCHES,
+            MATRICES,
+            MEMORY,
+            METHODS,
+            ORDERINGS,
+            PREDICTIONS,
+            REFINEMENTS,
+        )
         from puzzle.adapters.settings import SolverSetting
 
         return [
@@ -173,6 +206,13 @@ class CodeAsterAdapter(SolverAdapter):
                 "factors' size. METIS suits large 3D meshes.",
             ),
             SolverSetting(
+                "refinement", "MUMPS refinement", "SOLVEUR/POSTTRAITEMENTS", "choice",
+                "FORCE", REFINEMENTS, power=True,
+                description="Iterative refinement after the solve, so large models pass "
+                "Code_Aster's accuracy check (1e-6) instead of stopping with FACTOR_57; "
+                "it costs a few per cent of the solve.",
+            ),
+            SolverSetting(
                 "factor_memory", "MUMPS factors kept", "SOLVEUR/GESTION_MEMOIRE", "choice",
                 "AUTO", MEMORY, power=True,
                 description="In memory is fastest when they fit; on disk lets a large model "
@@ -183,6 +223,54 @@ class CodeAsterAdapter(SolverAdapter):
                 unit="iterations", power=True,
                 description="How often a nonlinear solve rebuilds its tangent matrix: 1 every "
                 "iteration (robust), more to save time when it converges easily.",
+            ),
+            # Convergence of nonlinear solves (STAT_NON_LINE, DYNA_NON_LINE).
+            SolverSetting(
+                "line_search", "Line search", "RECH_LINEAIRE/METHODE", "choice", "none",
+                LINE_SEARCHES,
+                description="Scales each Newton correction to lower the residual: helps "
+                "contact, plasticity and large deflection that overshoot or oscillate.",
+            ),
+            SolverSetting(
+                "line_search_iterations", "Line search iterations",
+                "RECH_LINEAIRE/ITER_LINE_MAXI", "integer", 3, power=True,
+                description="Trials per line search; more for a residual that is hard to "
+                "lower.",
+            ),
+            SolverSetting(
+                "prediction", "Prediction", "NEWTON/PREDICTION", "choice", "default",
+                PREDICTIONS,
+                description="How each increment's first guess is made; elastic is the most "
+                "robust start for plasticity and contact.",
+            ),
+            SolverSetting(
+                "matrix", "Newton matrix", "NEWTON/MATRICE", "choice", "default", MATRICES,
+                description="Tangent converges in few iterations; elastic is cheaper per "
+                "iteration and steadier when the tangent misleads (softening).",
+            ),
+            SolverSetting(
+                "reac_incr", "Tangent matrix at increments", "NEWTON/REAC_INCR", "integer", 1,
+                unit="increments", power=True,
+                description="At an increment's start the matrix is rebuilt every n-th "
+                "increment.",
+            ),
+            SolverSetting(
+                "cutback_parts", "Cut-back into", "ECHEC/SUBD_PAS", "integer", 4,
+                unit="parts",
+                description="A failed increment is cut into this many smaller ones.",
+            ),
+            SolverSetting(
+                "cutback_levels", "Cut-backs per increment", "ECHEC/SUBD_NIVEAU", "integer",
+                5,
+                description="How many times an increment may be cut in turn before the "
+                "solve stops (5 cuts in 4 = 1/1024 of an increment).",
+            ),
+            SolverSetting(
+                "absolute_tolerance", "Absolute residual", "CONVERGENCE/RESI_GLOB_MAXI",
+                "number", None, unit="N", power=True,
+                description="Converged when the largest residual force is below this, in "
+                "place of the relative tolerance: for loads that are all imposed "
+                "displacements, or an interface that opens everywhere.",
             ),
         ]  # fmt: skip
 
@@ -205,6 +293,11 @@ class CodeAsterAdapter(SolverAdapter):
                 problems.append(f"{self.name}: {exc}")
         return problems
 
+    def chains(self, project, study) -> bool:
+        from puzzle.adapters.code_aster.comm import chained
+
+        return chained(project, study)
+
     def read_results(self, input_file: Path) -> Results:
         workdir = input_file.parent
         if not list(workdir.glob("*.csv")):
@@ -212,10 +305,22 @@ class CodeAsterAdapter(SolverAdapter):
                 f"Code_Aster wrote no result tables; see {JOB}.mess and the solver log"
             )
         results = read_tables(workdir)
+        _chained(results, input_file)
         _harmonic(results)
         _whole_part(results, input_file)
         _fastener_fields(results, input_file)  # before the bolts' nodes are dropped
         return drop_helper_nodes(results, input_file)
+
+
+def _chained(results, input_file: Path) -> None:
+    """A chained static study's instants (comm.chained) back to their solve steps:
+    step k ends at t = k, its increments before."""
+    import math
+
+    if not input_file.with_name(f"{JOB}.chain.json").exists():
+        return
+    for step in results.steps:
+        step.index = max(1, math.ceil(step.value - 1e-9))
 
 
 def _harmonic(results) -> None:
@@ -247,7 +352,7 @@ def _whole_part(results, input_file: Path) -> None:
     marker = input_file.with_name(f"{JOB}.totals.json")
     if not marker.exists():
         return
-    spec = json.loads(marker.read_text())
+    spec = json.loads(marker.read_text(encoding="utf-8"))
     for step in results.steps:
         rf = step.fields.get("reaction_force")
         if rf is None:
@@ -276,7 +381,7 @@ def _fastener_fields(results, input_file: Path) -> None:
     marker = input_file.with_name(f"{JOB}.fasteners.json")
     if not marker.exists():
         return
-    ends = json.loads(marker.read_text())
+    ends = json.loads(marker.read_text(encoding="utf-8"))
     for step in results.steps:
         rf = step.fields.get("reaction_force")
         if rf is None:
@@ -348,7 +453,9 @@ def _image_label(engine: str, image: str) -> str | None:
         return None
     probe = [exe, "image", "inspect", "--format", '{{index .Config.Labels "puzzle.mpi"}}', image]
     try:
-        out = subprocess.run(probe, capture_output=True, text=True, timeout=30)
+        out = subprocess.run(
+            probe, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30
+        )
     except (OSError, subprocess.SubprocessError):
         return None
     return out.stdout.strip() or None if out.returncode == 0 else None

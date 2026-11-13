@@ -5,7 +5,8 @@ Selection (ADR 0013), per solver:
    "docker" or "podman".
 2. "auto" runs natively when the solver's executable is found, otherwise in its
    container image when an engine (podman, then docker) has that image locally,
-   otherwise natively (which reports the solver as missing).
+   otherwise natively (which reports the solver as missing). A solver listed in
+   `CONTAINER_FIRST` for this platform tries its image first (FEniCSx on Windows).
 3. For containers, `PUZZLE_<SOLVER>_IMAGE` overrides the default image.
 4. For native runs, `PUZZLE_SOLVER_PATH` (os.pathsep-separated) is searched before PATH,
    then the pixi solver environments beside the one Puzzle runs in (`pixi_solver_dirs`).
@@ -31,7 +32,23 @@ DEFAULT_IMAGES = {
     "code_aster": "ghcr.io/acmeanvil/puzzle-code-aster:18.1",
     "code_saturne": "ghcr.io/acmeanvil/puzzle-code-saturne:9.2",
     "openfoam": "ghcr.io/acmeanvil/puzzle-openfoam:2412",
+    "fenicsx": "ghcr.io/acmeanvil/puzzle-fenicsx:0.11",
 }
+
+# Named volumes mounted into a solver's container, kept between runs: FEniCSx's
+# compiled forms (the image sets XDG_CACHE_HOME=/cache), compiled once, not per solve.
+CONTAINER_CACHES = {"fenicsx": ("puzzle-fenicsx-cache", "/cache")}
+
+# Solvers whose container beats the native build on a platform, so "auto" tries the
+# container first there (and falls back to native without the image or an engine).
+# Measured on Windows 11 (2026-11-08, each solver's integration tests both ways):
+# - FEniCSx: conda-forge's win-64 dolfinx has no PETSc (single-threaded SuperLU
+#   instead): 3D eddy-current cases ran over 27 min natively, 34-49 s in the image.
+# - Elmer: the Windows build (26.2 installer) failed 19 of 31 (segfaults in 3D
+#   magnetics, transient dynamics, body loads); the image passed them all, MPI included.
+# - Code_Aster: both passed all 21; the image was 10-23 % faster on the larger runs.
+# CalculiX stays native: both passed, the image about 1.4x slower (start-up costs).
+CONTAINER_FIRST = {"win32": ("fenicsx", "elmer", "code_aster")}
 
 # The executable that proves a solver is installed natively.
 EXECUTABLES = {
@@ -97,6 +114,12 @@ THREAD_VARIABLES = (
     "CCX_NPROC_RESULTS",
 )
 
+# BLAS kept to one thread where the solver threads above it: conda-forge's Linux
+# FEniCSx environment links BLIS (pthreads), which also reads OMP_NUM_THREADS, so each
+# of MUMPS's OpenMP threads started its own BLIS threads. NAFEMS LE1 on 16 cores took
+# 8 s with this and never finished (> 5 min) without it.
+SERIAL_BLAS = {"BLIS_NUM_THREADS": "1"}
+
 
 def _setting(key: str, fallback: int) -> int:
     try:
@@ -108,11 +131,12 @@ def _setting(key: str, fallback: int) -> int:
 
 
 def thread_count() -> int:
-    """Settings > Solvers > Cores per run: 0 (the default) means the physical cores."""
-    from puzzle.machine import physical_cores
+    """Settings > Solvers > Cores per run: 0 (the default) means automatic,
+    `machine.default_cores` (4, or one fewer than the physical cores on smaller machines)."""
+    from puzzle.machine import default_cores
 
     wanted = _setting("solvers.threads", 0)
-    return wanted if wanted > 0 else physical_cores()
+    return wanted if wanted > 0 else default_cores()
 
 
 def process_count() -> int:
@@ -132,6 +156,8 @@ def thread_environment(base: dict[str, str] | None = None, processes: int = 1) -
     n = str(threads_per_process(processes))
     for name in THREAD_VARIABLES:
         env.setdefault(name, n)
+    for name, value in SERIAL_BLAS.items():
+        env.setdefault(name, value)
     return env
 
 
@@ -170,6 +196,7 @@ class NativeRuntime(Runtime):
         env = thread_environment()
         env["PATH"] = os.pathsep.join([*map(str, env_bin_dirs(prefix)), env.get("PATH", "")])
         env["CONDA_PREFIX"] = str(prefix)
+        env.update(activation_variables(prefix, env))
         if (prefix / "share" / "elmersolver").is_dir():
             # Relocated conda Elmer can't find its files from the compiled-in prefix.
             env["ELMER_HOME"] = str(prefix)
@@ -185,18 +212,31 @@ class NativeRuntime(Runtime):
 PIXI_SOLVER_ENVS = ("calculix-pardiso", "calculix", "fenicsx", "code-aster", "netgen")
 
 
+def environment(name: str) -> Path | None:
+    """Puzzle's own environment `name` (a solver's, netgen, mmg, scripts, runner), if
+    it is beside the one Puzzle runs in.
+
+    Two layouts: a pixi checkout's `.pixi/envs/<name>`, siblings of Puzzle's; and the
+    installer's (ADR 0068), where Puzzle is the base environment and the others are its
+    `envs/<name>`, as conda constructor lays them out. Anything else gives none.
+    """
+    here = Path(sys.prefix).resolve()
+    found = [here / "envs" / name]
+    if here.parent.name == "envs" and here.parent.parent.name == ".pixi":
+        found.append(here.parent / name)
+    return next((env for env in found if env.is_dir()), None)
+
+
 def pixi_solver_dirs() -> list[Path]:
-    """The solver environments beside the pixi environment Puzzle runs in.
+    """The solver environments' program folders beside the environment Puzzle runs in.
 
     `pixi run -e dev` puts them on PUZZLE_SOLVER_PATH, but Puzzle started any other way
-    (the dev env's own `puzzle`, an editor's Python, an MCP client) gets no activation,
-    and solvers went missing. Only a `.pixi/envs/<name>` layout counts; others give none.
+    (the dev env's own `puzzle`, an editor's Python, an MCP client, the installed app)
+    gets no activation, and solvers went missing (`environment` says where they are).
     """
-    envs = Path(sys.prefix).resolve().parent
-    if envs.name != "envs" or envs.parent.name != ".pixi":
-        return []
     subdirs = ["Library/bin", ""] if os.name == "nt" else ["bin"]
-    return [envs / e / d for e in PIXI_SOLVER_ENVS for d in subdirs if (envs / e / d).is_dir()]
+    envs = [env for e in PIXI_SOLVER_ENVS if (env := environment(e)) is not None]
+    return [env / d for env in envs for d in subdirs if (env / d).is_dir()]
 
 
 def conda_prefix(executable: Path) -> Path | None:
@@ -205,6 +245,54 @@ def conda_prefix(executable: Path) -> Path | None:
         if (parent / "conda-meta").is_dir():
             return parent
     return None
+
+
+def activation_variables(prefix: Path, env: dict[str, str]) -> dict[str, str]:
+    """What the environment's own activation scripts set, on Windows.
+
+    Some packages need theirs: Intel MPI's sets I_MPI_ROOT and its libfabric folders,
+    without which FEniCSx's MPI won't start (ADR 0068's Windows smoke test). `conda
+    activate` runs `etc/conda/activate.d/*.bat`; so does this, once per environment, in
+    cmd, keeping the variables they change. Elsewhere (no such scripts that solvers
+    need yet) and on any failure, nothing.
+    """
+    if os.name != "nt":
+        return {}
+    scripts = sorted((prefix / "etc" / "conda" / "activate.d").glob("*.bat"))
+    if not scripts:
+        return {}
+    return dict(_activated(str(prefix), tuple(map(str, scripts)), env.get("PATH", "")))
+
+
+@cache
+def _activated(prefix: str, scripts: tuple[str, ...], path: str) -> tuple[tuple[str, str], ...]:
+    import tempfile
+
+    lines = ["@echo off", f'set "CONDA_PREFIX={prefix}"', f'set "PATH={path}"']
+    lines += [f'call "{s}"' for s in scripts]
+    lines += ["echo ===puzzle-activated===", "set"]
+    before = {**os.environ, "CONDA_PREFIX": prefix, "PATH": path}
+    with tempfile.TemporaryDirectory() as tmp:
+        bat = Path(tmp) / "activate.bat"
+        bat.write_text("\r\n".join(lines) + "\r\n", newline="", encoding="utf-8")  # no \r\r\n
+        try:
+            out = subprocess.run(["cmd", "/d", "/c", str(bat)], capture_output=True, text=True,
+                                 errors="replace", timeout=60, env=before).stdout  # fmt: skip
+        except (OSError, subprocess.SubprocessError):
+            return ()
+    return tuple(_changed(before, out.split("===puzzle-activated===", 1)[-1]))
+
+
+def _changed(before: dict[str, str], listing: str) -> list[tuple[str, str]]:
+    """The variables in `set`'s listing that differ from `before` (names as Windows
+    compares them, ignoring case)."""
+    old = {k.upper(): v for k, v in before.items()}
+    out = []
+    for line in listing.splitlines():
+        name, eq, value = line.partition("=")
+        if eq and name and old.get(name.upper()) != value:
+            out.append((name, value))
+    return out
 
 
 def env_bin_dirs(prefix: Path) -> list[Path]:
@@ -240,16 +328,19 @@ def find_engine(engine: str) -> str | None:
 class ContainerRuntime(Runtime):
     image: str
     engine: str = "docker"
+    caches: tuple[tuple[str, str], ...] = ()  # (named volume, mount point), kept between runs
 
     def wrap(self, command: list[str], workdir: Path) -> list[str]:
         exe = find_engine(self.engine) or self.engine
         argv = [exe, "run", "--rm", "-v", f"{workdir.resolve()}:{CONTAINER_WORKDIR}"]
+        for volume, mount in self.caches:
+            argv += ["-v", f"{volume}:{mount}"]
         argv += ["-w", CONTAINER_WORKDIR]
         if hasattr(os, "getuid"):  # keep output files owned by the user
             # That user has no home directory in the image; some solvers need one.
             argv += ["--user", f"{os.getuid()}:{os.getgid()}", "-e", "HOME=/tmp"]
         threads = thread_environment()
-        for name in THREAD_VARIABLES:  # the container sees none of Puzzle's environment
+        for name in (*THREAD_VARIABLES, *SERIAL_BLAS):  # it sees none of Puzzle's environment
             argv += ["-e", f"{name}={threads[name]}"]
         return [*argv, self.image, *command]
 
@@ -286,7 +377,8 @@ def _engine_memory(engine: str) -> int | None:
         return None
     try:
         out = subprocess.run([exe, "info", "--format", "{{.MemTotal}}"], capture_output=True,
-                             text=True, timeout=20, check=True).stdout  # fmt: skip
+                             text=True, encoding="utf-8", errors="replace", timeout=20,
+                             check=True).stdout  # fmt: skip
         return int(out.strip()) or None
     except (OSError, ValueError, subprocess.SubprocessError):
         return None
@@ -308,6 +400,15 @@ def on_host(host, resources=None):
 
 
 def runtime_for(solver: str) -> Runtime:
+    """How `solver` runs now: on the remote host a run is on, else in its container or
+    natively (PUZZLE_RUNTIME, CONTAINER_FIRST); inside a batch (`jobs.warm.batch`), a
+    container run is exec'd into the batch's warm container (ADR 0072)."""
+    from puzzle.jobs.warm import warm
+
+    return warm(_runtime_for(solver))
+
+
+def _runtime_for(solver: str) -> Runtime:
     remote = _REMOTE.get()
     if remote is not None:
         from puzzle.jobs.remote import RemoteRuntime, Resources
@@ -319,18 +420,42 @@ def runtime_for(solver: str) -> Runtime:
     native = NativeRuntime(search_path=os.environ.get("PUZZLE_SOLVER_PATH"))
     if kind == "native":
         return native
+    if kind == "wsl":  # Puzzle's Linux machine (ADR 0068 step 5)
+        from puzzle.jobs import machine
+
+        found = machine.runtime(solver)
+        if found is None:
+            raise SolverNotFound(f"no Linux machine for {solver}: `puzzle machine install "
+                                 f"{solver}` makes one")  # fmt: skip
+        return found
     image = os.environ.get(f"PUZZLE_{key}_IMAGE") or DEFAULT_IMAGES.get(solver)
+    caches = (CONTAINER_CACHES[solver],) if solver in CONTAINER_CACHES else ()
     if kind in ENGINES:
         if image is None:
             raise SolverNotFound(f"no container image known for {solver}")
-        return ContainerRuntime(image=image, engine=kind)
+        return ContainerRuntime(image=image, engine=kind, caches=caches)
     if kind == "auto":
         executable = EXECUTABLES.get(solver)
+        containers = [ContainerRuntime(image=image, engine=e, caches=caches) for e in ENGINES]
+        if image and solver in CONTAINER_FIRST.get(sys.platform, ()):
+            for container in containers:
+                if container.available(executable or ""):
+                    return container
+            if (vm := _machine(solver)) is not None:  # no engine running: the machine
+                return vm
         if executable is None or native.available(executable):
             return native
-        for engine in ENGINES:
-            container = ContainerRuntime(image=image, engine=engine) if image else None
-            if container and container.available(executable):
+        for container in containers if image else []:
+            if container.available(executable):
                 return container
-        return native
-    raise ValueError(f"PUZZLE_RUNTIME must be auto, native, docker or podman, not '{kind}'")
+        return _machine(solver) or native
+    raise ValueError(f"PUZZLE_RUNTIME must be auto, native, docker, podman or wsl, not '{kind}'")
+
+
+def _machine(solver: str):
+    """Puzzle's Linux machine for `solver` on Windows, when installed (ADR 0068)."""
+    if sys.platform != "win32":
+        return None
+    from puzzle.jobs import machine
+
+    return machine.runtime(solver)

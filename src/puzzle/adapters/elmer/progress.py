@@ -46,7 +46,9 @@ class ElmerProgress(Parser):
         self.folder = input_file.parent / MESH_DIR
         self.pattern = f"{OUTPUT}*.vtu"
         self.times_file = self.folder / TIMES
-        sif = input_file.read_text(errors="replace") if input_file.exists() else ""
+        sif = (
+            input_file.read_text(errors="replace", encoding="utf-8") if input_file.exists() else ""
+        )
         self.transient = re.search(r"Simulation Type\s*=\s*Transient", sif, re.I) is not None
         sizes = re.search(r"Timestep Sizes\(\d+\)\s*=\s*" + _NUM, sif)
         counts = re.search(r"Timestep Intervals\(\d+\)\s*=\s*(\d+)", sif)
@@ -85,7 +87,7 @@ class ElmerProgress(Parser):
         ]
         header = self.folder / "mesh.header"
         if self.dofs and header.exists():
-            nodes = int(header.read_text().split()[0])
+            nodes = int(header.read_text(encoding="utf-8").split()[0])
             out.append(Resource(equations=nodes * self.dofs))
         out += [
             Message(

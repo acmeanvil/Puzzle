@@ -169,7 +169,7 @@ def _cloud(tmp_path, points, columns, header, length_unit="mm", name="in.csv", *
         for p, vals in zip(points, columns, strict=True)
     ]
     path = tmp_path / name
-    path.write_text("\n".join(rows) + "\n")
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
     rel, digest = import_file(tmp_path / "project", path)
     found = sniff(tmp_path / "project" / rel)
     return ImportedField(

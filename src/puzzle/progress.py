@@ -182,7 +182,7 @@ def loads(text: str) -> list[Event]:
 def read(path: Path) -> list[Event]:
     """A run's events from its folder (or the file itself); [] when there are none."""
     path = path / FILE if path.is_dir() else path
-    return loads(path.read_text()) if path.exists() else []
+    return loads(path.read_text(encoding="utf-8")) if path.exists() else []
 
 
 # --- parsers -----------------------------------------------------------------------
@@ -263,7 +263,7 @@ class Recorder:
     def write_to(self, folder: Path) -> None:
         folder.mkdir(parents=True, exist_ok=True)
         path = folder / FILE
-        path.write_text(dumps(self.events))
+        path.write_text(dumps(self.events), encoding="utf-8")
         self.files.append(path)
 
     def __call__(self, event: Event) -> None:
@@ -272,7 +272,7 @@ class Recorder:
         self.events.append(event)
         for path in self.files:
             try:
-                with path.open("a") as f:
+                with path.open("a", encoding="utf-8") as f:
                     f.write(dumps([event]))
             except OSError:
                 pass
@@ -556,6 +556,13 @@ TRANSLATIONS: list[tuple[str, str]] = [
         r"Ceci est une erreur fatale\. L'exécution du code est arrêtée",
         "This is a fatal error: the run stops",
     ),
+    (
+        r"La solution du système linéaire est trop imprécise",
+        "The linear system's solution is not accurate enough",
+    ),
+    (r"Erreur calculée", "Error reached"),
+    (r"Erreur acceptable", "Error allowed"),
+    (r"On peut augmenter la\s+valeur du mot clé", "You can raise the keyword"),
     (r"Le modèle contient", "The model contains"),
     (r"mailles", "elements"),
     (r"noeuds", "nodes"),
@@ -647,6 +654,14 @@ def diagnose(events: list[Event]) -> list[Diagnosis]:
         ))  # fmt: skip
     if (d := _not_converged(events)) is not None:
         out.append(d)
+    if any(isinstance(e, Message) and e.code == "FACTOR_57" for e in events):
+        out.append(Diagnosis(
+            "imprecise_solve",
+            "MUMPS's answer failed Code_Aster's accuracy check (RESI_RELA, 1e-6), common on "
+            "large models whose supports are Lagrange multipliers. Set the study's Solver "
+            "settings > MUMPS refinement to Always (Puzzle's default), or loosen RESI_RELA "
+            "through the expert settings (MECA_STATIQUE.SOLVEUR.RESI_RELA = 1e-5).",
+        ))  # fmt: skip
     refused = next((e for e in events if isinstance(e, Message) and e.level == "error"
                     and e.code in ("FOAM FATAL IO ERROR", "cs_parameters")), None)  # fmt: skip
     if refused is not None:

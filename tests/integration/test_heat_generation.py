@@ -74,7 +74,7 @@ def test_heat_generation_from_a_field(tmp_path, solver):
     rows = ["x,y,z,q [W/m^3]"]
     rows += [f"{x:.10g},{y:.10g},{z:.10g},{Q * x / L:.10g}" for x in xs for y, z in corners]
     path = tmp_path / "losses.csv"
-    path.write_text("\n".join(rows) + "\n")
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
     source = Feature(type="heat_generation", selection="Bar/Body", values={"q": qty(0, "W/m^3")})
     x, t = _bar(tmp_path, solver, source, path)
     exact = T0 + Q * x * (L**2 - x**2) / (6 * K * L)

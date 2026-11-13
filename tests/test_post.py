@@ -76,7 +76,7 @@ def test_pick_step(bar_mesh):
 def test_export_writes_a_paraview_series(bar_mesh, tmp_path):
     files = export(bar_mesh, _results(bar_mesh), tmp_path / "out" / "bar.pvd")
     assert [f.name for f in files] == ["bar.pvd", "bar_000.vtu", "bar_001.vtu"]
-    assert 'name="mode 1"' in files[0].read_text()
+    assert 'name="mode 1"' in files[0].read_text(encoding="utf-8")
     back = pv.read(files[1])
     assert "von_mises" in back.point_data
     assert back.volume == pytest.approx(BAR[0] * BAR[1] * BAR[2], rel=1e-9)

@@ -48,8 +48,10 @@ def test_contact_support_comes_from_the_capability_matrix(assembly):
 
     contact.type, contact.friction = "bonded", None
     assert ElmerAdapter().check(assembly, study) == []
-    contact.meshing = "nonconformal"
-    assert ElmerAdapter().check(assembly, study) == []
+    contact.meshing = "nonconformal"  # Elmer writes no mortar tie: refused, not claimed
+    assert ElmerAdapter().check(assembly, study) == [
+        "elmer does not support bonded_nonconformal contact ('Bracket on plate')"
+    ]
     assert CalculixAdapter().check(assembly, study) == []
 
 

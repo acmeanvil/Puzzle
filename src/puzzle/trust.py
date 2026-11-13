@@ -27,7 +27,7 @@ def _path() -> Path:
 
 def _load() -> list[str]:
     try:
-        return list(json.loads(_path().read_text()).get("projects", []))
+        return list(json.loads(_path().read_text(encoding="utf-8")).get("projects", []))
     except (OSError, ValueError):
         return []
 
@@ -46,13 +46,13 @@ def trust(root) -> None:
     if _key(root) not in found:
         found.append(_key(root))
         _path().parent.mkdir(parents=True, exist_ok=True)
-        _path().write_text(json.dumps({"projects": sorted(found)}, indent=1))
+        _path().write_text(json.dumps({"projects": sorted(found)}, indent=1), encoding="utf-8")
 
 
 def revoke(root) -> None:
     found = [p for p in _load() if p != _key(root)]
     _path().parent.mkdir(parents=True, exist_ok=True)
-    _path().write_text(json.dumps({"projects": found}, indent=1))
+    _path().write_text(json.dumps({"projects": found}, indent=1), encoding="utf-8")
 
 
 def holds_code(project) -> list[str]:

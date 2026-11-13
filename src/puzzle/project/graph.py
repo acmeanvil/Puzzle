@@ -43,12 +43,35 @@ def _own(obj: ProjectObject, *, drop: frozenset[str] = frozenset()) -> dict:
         data.pop("convergence", None)
         data.pop("adapt", None)  # each pass's own recipe is in its run key
         data.pop("remote", None)  # ADR 0021: the same result wherever it is computed
+        if data.get("preload_step") == "auto":  # the default: older hashes kept
+            data.pop("preload_step")
+        if not data.get("combinations"):  # ADR 0079 step 2: none, as before
+            data.pop("combinations", None)
+        if data.get("seismic") is None:  # ADR 0079 step 4: none, as before
+            data.pop("seismic", None)
+        for key, default in (
+            ("weak_springs", "auto"),
+            ("weak_spring_factor", 1e-6),
+            ("weak_spring_limit", 1e-3),
+        ):  # ADR 0080: older hashes kept
+            if data.get(key) == default:
+                data.pop(key)
     if obj.kind == "result" and data.get("error_target") == 0.02:  # ADR 0066's default
         data.pop("error_target")
-    data.pop("hidden", None)  # what the view shows never changes a solve
+    for key in ("hidden", "hidden_bodies", "colour", "body_colours"):
+        data.pop(key, None)  # what the view shows, and how, never changes a solve
     data.pop("tags", None)  # nor do the words it is found by (ADR 0064A J6)
+    data.pop("made_from", None)  # a construction's words for what it was placed on
     if data.get("share_faces") is True:  # the default: older projects keep their hashes
         data.pop("share_faces")
+    if obj.kind == "mesh":  # ADR 0077's defaults: older recipes keep their hashes
+        for key, default in (
+            ("revolved_bolts", True),
+            ("bolt_sectors", 24),
+            ("hexahedron_nodes", 20),
+        ):
+            if data.get(key) == default:
+                data.pop(key)
     if obj.kind == "mesh":  # a box in global axes, as before boxes took a system
         for control in data.get("controls", []):
             if control.get("kind") == "box" and control.get("axes") is None:
@@ -75,6 +98,17 @@ def _own(obj: ProjectObject, *, drop: frozenset[str] = frozenset()) -> dict:
         data.pop("planar_model")  # the default: older projects keep their hashes
     if isinstance(obj, Component):  # how bolts are listed and made never changes a solve
         data.pop("bolt_rules", None)
+        data.pop("member_design", None)  # ADR 0079: how members are checked, after the solve
+        if not data.get("welds"):  # ADR 0078: no welds, as before them
+            data.pop("welds", None)
+        for key in ("member_releases", "member_offsets"):  # ADR 0079: none, as before
+            if not data.get(key):
+                data.pop(key, None)
+        if not data.get("elements"):  # ADR 0082: no element choice, as before
+            data.pop("elements", None)
+        for key in ("cyclic", "periodic"):  # ADR 0081: none, as before
+            if data.get(key) is None:
+                data.pop(key, None)
         for assignment in data.get("materials", []):  # ADR 0049: no axes, as before them
             if assignment.get("axes") is None:
                 assignment.pop("axes", None)
@@ -89,6 +123,8 @@ def _own(obj: ProjectObject, *, drop: frozenset[str] = frozenset()) -> dict:
                     feature.pop("fields", None)
                 if feature.get("when") is None:  # ADR 0064A A3: no toggle, as before
                     feature.pop("when", None)
+                if feature.get("case") is None:  # ADR 0079 step 2: no load case
+                    feature.pop("case", None)
                 for use in (feature.get("fields") or {}).values():  # stage 2: no weight
                     if use.get("weight") is None:
                         use.pop("weight", None)
@@ -124,9 +160,12 @@ def run_hashes(project: Project) -> dict[UUID, dict[str, list[str]]]:
     point. So a point already computed is a cache hit when other points are added,
     and a shoot-out solver's runs survive a change of primary solver.
     """
+    from puzzle.bolts import resolved as bolts_resolved
     from puzzle.operators import resolved
 
-    project = resolved(project)  # sweeps over a list: its values are the points
+    # Keyed as solved: run_study keys its runs after bolts take their types' values, so
+    # the tree's check must do the same, or every run with typed bolts is out of date.
+    project = resolved(bolts_resolved(project))  # sweeps over a list: its values are the points
     hashes = content_hashes(project)
     runs: dict[UUID, dict[str, list[str]]] = {}
     for study in project.of_type(Study):
@@ -136,12 +175,17 @@ def run_hashes(project: Project) -> dict[UUID, dict[str, list[str]]]:
         # The point's own values identify a run; the rest of the sweep definition doesn't.
         own["steps"] = [s for s in own["steps"] if s["type"] != "parametric_sweep"]
         setup = _digest({"own": own, "inputs": inputs})
+        from puzzle.preload import needed
+
+        # A preload step put in front (puzzle.preload) changes the solve on that solver.
+        preloads = {s: needed(project, study, s) for s in study.all_solvers()}
         runs[study.id] = {
             solver: [
                 _digest(
                     {
                         "setup": setup,
                         "solver": solver,
+                        **({"preload": preloads[solver]} if preloads[solver] else {}),
                         **(
                             {
                                 "settings": study.solver_settings.get(solver, {}),

@@ -21,6 +21,13 @@ from puzzle.results.model import Results
 
 # Surface element -> how many of its nodes are corners.
 CORNERS = {"tri3": 3, "tri6": 3, "quad4": 4, "quad8": 4, "quad9": 4}
+# How the model is drawn (the view toolbar's Display): its mesh's element outlines, its
+# geometric edges (face boundaries, as a CAD program's shaded with edges), or neither.
+DISPLAYS = (
+    ("mesh", "Shaded with mesh"),
+    ("edges", "Shaded with edges"),
+    ("shaded", "Shaded"),
+)
 
 
 def _t():
@@ -30,17 +37,17 @@ def _t():
     return current()
 
 
-def without_parts(mesh: Mesh, parts, boundaries: dict | None = None) -> Mesh:
-    """The mesh with these parts' elements left out (hidden or suppressed geometry). A
-    block goes when it lies on one of those parts' volumes or faces (`boundaries`: a
-    volume's faces; a preview has faces only), or when all its nodes are theirs; a face
-    shared with a shown part stays."""
+def without_parts(mesh: Mesh, parts, boundaries: dict | None = None, bodies=()) -> Mesh:
+    """The mesh with these parts' elements left out (hidden or suppressed geometry), and
+    these `bodies` (volume entities, hidden one by one). A block goes when it lies on one
+    of those volumes or their faces (`boundaries`: a volume's faces; a preview has faces
+    only), or when all its nodes are the parts'; a face shared with a shown body stays."""
     import dataclasses
 
     groups = [mesh.groups[p] for p in parts if p in mesh.groups]
-    if not groups:
+    volumes = {e for g in groups for e in g.entities} | {tuple(b) for b in bodies}
+    if not volumes:
         return mesh
-    volumes = {e for g in groups for e in g.entities}
     faces = {f for v in volumes for f in (boundaries or {}).get(v, [])}
     shown = {f for v, fs in (boundaries or {}).items() if v not in volumes for f in fs}
     gone_entities = volumes | (faces - shown)
@@ -52,6 +59,25 @@ def without_parts(mesh: Mesh, parts, boundaries: dict | None = None) -> Mesh:
         if b.entity not in gone_entities and not np.isin(b.connectivity, gone).all()
     ]  # fmt: skip
     return dataclasses.replace(mesh, blocks=kept)
+
+
+def _colour_bytes(hexes) -> np.ndarray:
+    """(n, 3) bytes for colours given as "#rrggbb" (None: the theme's geometry colour)."""
+    plain = _t().geometry_face
+    out = np.empty((len(hexes), 3), np.uint8)
+    for i, h in enumerate(hexes):
+        h = (h or plain).lstrip("#")
+        out[i] = (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+    return out
+
+
+def _cell_colours(mesh: Mesh, colours: dict) -> np.ndarray:
+    """Each `to_grid` cell's colour, by the entity its block was meshed on."""
+    from puzzle.post.vtk import grid_blocks
+
+    blocks = grid_blocks(mesh)
+    rows = _colour_bytes([colours.get(tuple(b.entity)) for b in blocks])
+    return np.repeat(rows, [len(b.ids) for b in blocks], axis=0)
 
 
 def entity_surface(mesh: Mesh):
@@ -207,6 +233,13 @@ class SceneView(QWidget):
         self.plotter = pv.Plotter(off_screen=True, window_size=[400, 300])
         self.plotter.show(auto_close=False)  # sets up the render window once
         self.on_double_click = None
+        self.on_hover = None  # (point or None, widget position) as the mouse rests
+        self._hover_at = None
+        self._hover_timer = QTimer(self)
+        self._hover_timer.setSingleShot(True)
+        self._hover_timer.setInterval(30)  # at most one pick and frame per 30 ms
+        self._hover_timer.timeout.connect(self._hovered)
+        self.setMouseTracking(True)  # moves with no button pressed reach mouseMoveEvent
         self.on_click = None  # (point, modifiers) for a click that didn't drag
         self.on_box = None  # (QRect, modifiers) for a box dragged in box mode
         self.box_mode = False
@@ -226,6 +259,12 @@ class SceneView(QWidget):
             QTimer.singleShot(0, self._draw)
 
     def _draw(self) -> None:
+        from puzzle.gui.timing import action
+
+        with action("drawing the 3D view"):  # VTK's render and the copy, timed (log)
+            self._draw_now()
+
+    def _draw_now(self) -> None:
         from PySide6.QtGui import QImage
 
         self._pending = False
@@ -235,10 +274,14 @@ class SceneView(QWidget):
         size = [max(1, round(self.width() * dpr)), max(1, round(self.height() * dpr))]
         if list(self.plotter.window_size) != size:
             self.plotter.window_size = size
-        self.plotter.render()  # screenshot() alone returns the previous frame once rendered
-        pixels = np.ascontiguousarray(self.plotter.screenshot(return_img=True))
-        h, w, _ = pixels.shape
-        image = QImage(pixels.data, w, h, 3 * w, QImage.Format.Format_RGB888).copy()
+        from puzzle.gui.timing import step
+
+        with step(f"render {size[0]}x{size[1]}"):
+            self.plotter.render()  # screenshot() alone returns the previous frame once rendered
+        with step("copy back"):  # the frame from the graphics card into a Qt image
+            pixels = np.ascontiguousarray(self.plotter.screenshot(return_img=True))
+            h, w, _ = pixels.shape
+            image = QImage(pixels.data, w, h, 3 * w, QImage.Format.Format_RGB888).copy()
         image.setDevicePixelRatio(dpr)
         self._image = image
         self.update()
@@ -269,7 +312,22 @@ class SceneView(QWidget):
 
     # mouse -------------------------------------------------------------------------------
 
+    def _hovered(self) -> None:
+        if self.on_hover is not None and self._hover_at is not None and self._last is None:
+            self.on_hover(self.pick_point(self._hover_at), self._hover_at)
+
+    def _end_hover(self) -> None:
+        self._hover_timer.stop()
+        self._hover_at = None
+        if self.on_hover is not None:
+            self.on_hover(None, None)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        self._end_hover()
+        super().leaveEvent(event)
+
     def mousePressEvent(self, event) -> None:  # noqa: N802
+        self._end_hover()  # a drag turns the view: the read-out would point elsewhere
         self._last = event.position()
         self._press = event.position()
         if self.box_mode and event.button() == Qt.MouseButton.LeftButton:
@@ -316,7 +374,10 @@ class SceneView(QWidget):
                 QRect(self._press.toPoint(), event.position().toPoint()).normalized()
             )
             return
-        if self._last is None:
+        if self._last is None:  # no button held: the mouse resting over the model
+            if self.on_hover is not None:
+                self._hover_at = event.position()
+                self._hover_timer.start()
             return
         pos = event.position()
         dx, dy = pos.x() - self._last.x(), pos.y() - self._last.y()
@@ -442,6 +503,10 @@ class ViewBar(QWidget):
             self.actions_by_name[key] = action
 
         add("fit", "Fit all", viewport.fit, "F")
+        # Draw the scene again from the model: the window sets on_refresh (I3: a remesh
+        # that didn't show); alone it repaints.
+        self.on_refresh = None
+        add("refresh_view", "Refresh view", self.refresh_view, "F5")
         add("iso", "Isometric", lambda: viewport.look("iso"), "I")
         for direction, shortcut in self.VIEWS:
             add(
@@ -451,6 +516,7 @@ class ViewBar(QWidget):
                 shortcut,
                 label=direction.upper(),
             )
+        self._display_menu(viewport, row, icon)
         add("edges", "Element edges", lambda on: viewport.set_style(edges=on), checkable=True)
         add("wireframe", "Wireframe", lambda on: viewport.set_style(wireframe=on), checkable=True)
         add(
@@ -466,10 +532,40 @@ class ViewBar(QWidget):
         self.actions_by_name["symbols"].setChecked(True)
         add("beams", "Beams drawn with their sections", viewport.set_beams_shown, checkable=True)
         self.actions_by_name["beams"].setChecked(True)
+        add("bolt_labels", "Bolt force labels", viewport.set_bolt_labels_shown, checkable=True)
+        self.actions_by_name["bolt_labels"].setChecked(True)
         add("clear", "Clear probes", viewport.clear_probes, "Esc")
         add("copy", "Copy image", self.copy_image)
         add("camera", "Save image…", self.save_image)
         self.adjustSize()
+
+    def _display_menu(self, viewport, row, icon) -> None:
+        """Display ▾: how the model is drawn (the maintainer, 2026-11-08: shaded with
+        edges reads a dense mesh far better than every element's outline)."""
+        from PySide6.QtGui import QAction, QActionGroup
+        from PySide6.QtWidgets import QMenu, QToolButton
+
+        menu, group = QMenu(self), QActionGroup(self)
+        for value, text in DISPLAYS:
+            action = QAction(text, self, checkable=True)
+            action.setChecked(value == viewport.style["display"])
+            action.triggered.connect(lambda _=False, v=value: viewport.set_style(display=v))
+            group.addAction(action)
+            menu.addAction(action)
+            self.actions_by_name[f"display_{value}"] = action
+        button = QToolButton()
+        button.setIcon(icon("display"))
+        button.setToolTip("Display: shaded with the mesh, with the model's edges, or plain")
+        button.setMenu(menu)
+        button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        button.setAutoRaise(True)
+        row.addWidget(button)
+
+    def refresh_view(self) -> None:
+        if self.on_refresh is not None:
+            self.on_refresh()
+        if self.viewport.plotter is not None:
+            self.viewport.view.refresh()
 
     def toggle_cut_bar(self, on: bool) -> None:
         """The section cut's controls under this bar; off removes the cut."""
@@ -750,6 +846,26 @@ class CutBar(QWidget):
         self.viewport.set_cut(cut)
 
 
+def point_under(surface, camera):
+    """The first point of `surface` on the line of sight through the view's centre (the
+    camera's position through its focal point, which is the centre in perspective and
+    orthographic views alike), or None: nothing drawn, no camera, or the model off
+    centre. A 3D mouse turns about it, as about what one looks at (ADR 0069)."""
+    if surface is None or camera is None or not getattr(surface, "n_cells", 0):
+        return None
+    position, focal = np.asarray(camera[0], float), np.asarray(camera[1], float)
+    ahead = focal - position
+    if not np.linalg.norm(ahead):
+        return None
+    ahead /= np.linalg.norm(ahead)
+    size = float(np.linalg.norm(np.ptp(np.asarray(surface.points), axis=0))) or 1.0
+    reach = float(np.linalg.norm(focal - position)) + 2 * size
+    poly = surface if hasattr(surface, "ray_trace") else surface.extract_surface()
+    points, _ = poly.ray_trace(position, position + ahead * reach, first_point=True)
+    points = np.asarray(points, float).reshape(-1, 3)
+    return points[0] if len(points) else None
+
+
 class Viewport(QWidget):
     picked_changed = Signal(list)  # the picked entities, [(dim, tag), ...]
     probes_changed = Signal(list)  # the view's probes (ADR 0032)
@@ -760,8 +876,12 @@ class Viewport(QWidget):
         self.mesh: Mesh | None = None
         self.highlight: str | None = None
         self.highlight_entities: list[tuple[int, int]] = []
-        # Which of a mesh's parts not to draw (the window: hidden or suppressed geometry).
+        # Which of a mesh's parts not to draw (the window: hidden or suppressed geometry),
+        # which bodies (volume entities hidden one by one), and each entity's colour
+        # ((dim, tag) -> "#rrggbb", a body's and its faces'; the user's, in the model).
         self.hidden_parts = None
+        self.hidden_bodies = None
+        self.part_colours = None
         self.surface, self.entities = None, []
         self.picked: list[tuple[int, int]] = []
         self.pick_history: list[list[tuple[int, int]]] = []  # undo while picking
@@ -792,6 +912,7 @@ class Viewport(QWidget):
             layout.addWidget(self.placeholder)
         # How the scene is drawn, whatever is shown (ADR 0031's view toolbar).
         self.style = {
+            "display": "mesh",  # DISPLAYS: the model shaded with its mesh, edges, or plain
             "edges": False,
             "wireframe": False,
             "parallel": False,
@@ -799,12 +920,13 @@ class Viewport(QWidget):
             "extremes": True,
             "symbols": True,
             "beams": True,  # beams as their sections' outlines, else as lines
+            "bolt_labels": True,  # each bolt's force over a result, as a label
         }
         self.glyphs: list = []  # the supports' and loads' symbols (ADR 0035)
         self._glyph_actors: list[str] = []
         # The shown result, for markers and probes (ADR 0032).
         self.result_state: dict | None = None
-        self.cut = None  # a section cut on results (post.cuts.Cut, ADR 0038)
+        self.cut = None  # a section cut on results and meshes (post.cuts.Cut, ADR 0038)
         from puzzle.post.legend import Legend
 
         self.legend = Legend.from_settings()  # the colour bar's look (Settings > Results)
@@ -828,26 +950,61 @@ class Viewport(QWidget):
         its face `entities` when it was made after meshing) and picked faces marked."""
         self.result_state, self.probes, self._mark_actors = None, [], []
         self.glyphs, self._glyph_actors, self.pins = [], [], []
+        self._bolt_marks = []
         self._clear_labels()
         self._update_click()
         hidden = sorted(self.hidden_parts(mesh)) if self.hidden_parts else []
-        if hidden:  # hidden and suppressed geometry isn't drawn
-            key = (id(mesh), tuple(hidden))
+        bodies = sorted(self.hidden_bodies(mesh)) if self.hidden_bodies else []
+        if hidden or bodies:  # hidden and suppressed geometry isn't drawn
+            key = (id(mesh), tuple(hidden), tuple(bodies))
             if getattr(self, "_shown_key", None) != key:
                 self._shown_key = key
-                self._shown_mesh = without_parts(mesh, hidden, self.boundaries)
+                self._shown_mesh = without_parts(mesh, hidden, self.boundaries, bodies)
             mesh = self._shown_mesh
+        colours = dict(self.part_colours(mesh) or {}) if self.part_colours else {}
         if mesh is not self.mesh:
+            from puzzle.gui.timing import step
+
             self.mesh = mesh
-            self.surface, self.entities = entity_surface(mesh)
-            self.lines, self.line_entities = entity_lines(mesh)
+            with step("view surfaces"):  # once per mesh: its faces and edges to pick
+                self.surface, self.entities = entity_surface(mesh)
+                self.lines, self.line_entities = entity_lines(mesh)
             known = set(self.entities) | set(self.line_entities) | set(self.vertices)
             self.picked = [e for e in self.picked if e in known or e in self.boundaries]
         self.highlight, self.highlight_entities = highlight, list(entities or [])
+        dim = highlight is not None and highlight in mesh.groups and mesh.groups[highlight].dim == 3
+        # The model itself as last drawn: picking another item in the tree usually only
+        # moves the highlight, so the mesh, its colours and the cut are kept and only
+        # what is drawn over them is redrawn (the lag between tree items).
+        base = (id(mesh), tuple(sorted(colours.items())), repr(self.cut), bool(dim or ghost),
+                self.style.get("beams", True), self.style["display"], id(_t()))  # fmt: skip
+        kept = getattr(self, "_base", None)
+        if (self.plotter is not None and kept is not None and kept[0] == base
+                and kept[1] <= set(self.plotter.renderer.actors)):  # fmt: skip
+            for name in [n for n in self.plotter.renderer.actors if n not in kept[1]]:
+                self.plotter.remove_actor(name, render=False)
+            self.shown = dict(kept[2], highlight=highlight, picked=list(self.picked),
+                              highlighted=list(self.highlight_entities))  # fmt: skip
+            self._draw_over(mesh, highlight)
+            self._frame(mesh)
+            return
+        self._base = None
         try:
-            grid = to_grid(mesh)
+            grid = self._grid_of(mesh)
         except ValueError:  # a surface-only preview of the geometry: nothing meshed yet
             grid = None
+        if grid is not None and colours:  # each cell its body's colour, kept by a cut
+            grid.cell_data["puzzle_rgb"] = _cell_colours(mesh, colours)
+        away = None
+        if grid is not None and self.cut is not None:  # the section cut on the mesh too (I4)
+            from puzzle.post.cuts import clip
+
+            bounds = grid.bounds
+            grid, away = clip(grid, self.cut, bounds)
+            origin, normal = self.cut.plane(bounds)
+            cut_shown = {"axis": self.cut.axis, "fraction": self.cut.fraction,
+                         "source": self.cut.source or "axis",
+                         "origin": origin.tolist(), "normal": normal.tolist()}  # fmt: skip
         cells = grid.n_cells if grid is not None else (self.surface.n_cells if self.surface else 0)
         members = self._beams(mesh) if grid is not None else []
         self.shown = {
@@ -857,19 +1014,29 @@ class Viewport(QWidget):
             "highlight": highlight,
             "highlighted": list(self.highlight_entities),
             "picked": list(self.picked),
+            "hidden_parts": hidden,
+            "hidden_bodies": [tuple(b) for b in bodies],
+            "colours": colours,
         }
+        if away is not None:
+            self.shown["cut"] = cut_shown
         if self.plotter is None:
             return
         self.plotter.clear()
-        dim = highlight is not None and highlight in mesh.groups and mesh.groups[highlight].dim == 3
+        if away is not None and self.cut.ghost and away.n_cells:
+            self.plotter.add_mesh(away, color=_t().faded, opacity=0.15, reset_camera=False)
         if grid is not None:
+            painted = {"scalars": "puzzle_rgb", "rgb": True} if colours else {
+                "color": _t().geometry_face}  # fmt: skip
             self.plotter.add_mesh(
                 grid,
-                color=_t().geometry_face,
-                show_edges=True,
+                **painted,
+                show_edges=self.style["display"] == "mesh",
                 edge_color=_t().geometry_edge,
                 opacity=0.35 if dim or ghost else 1,
             )
+            if self.style["display"] == "edges":
+                self._draw_model_edges()
             from puzzle.post.vtk import beam_lines
 
             if members:
@@ -878,11 +1045,38 @@ class Viewport(QWidget):
             if (lines := beam_lines(grid, skip)) is not None:
                 self.plotter.add_mesh(lines, color=_t().geometry_line, line_width=5)
         elif self.surface is not None:
-            self.plotter.add_mesh(self.surface, color=_t().geometry_face, smooth_shading=False)
-            edges = self.surface.extract_feature_edges(
-                30, boundary_edges=True, manifold_edges=False
-            )
-            self.plotter.add_mesh(edges, color=_t().mesh_edge, line_width=1.5)
+            if colours:  # a face takes its body's colour (the window maps faces too)
+                index = np.asarray(self.surface.cell_data["entity"])
+                faces = [tuple(e) for e in self.entities]
+                self.surface.cell_data["puzzle_rgb"] = _colour_bytes(
+                    [colours.get(faces[i]) for i in index]
+                )
+                paint = {"scalars": "puzzle_rgb", "rgb": True}
+            else:
+                paint = {"color": _t().geometry_face}
+            self.plotter.add_mesh(self.surface, **paint, smooth_shading=False)
+            if self.style["display"] == "edges":
+                self._draw_model_edges()
+            elif self.style["display"] == "mesh":  # the preview has no mesh: sharp edges
+                edges = self.surface.extract_feature_edges(
+                    30, boundary_edges=True, manifold_edges=False
+                )
+                self.plotter.add_mesh(edges, color=_t().mesh_edge, line_width=1.5)
+        shown = {k: v for k, v in self.shown.items() if k not in ("highlight", "highlighted",
+                                                                  "picked")}  # fmt: skip
+        self._base = (base, set(self.plotter.renderer.actors), shown)
+        self._draw_over(mesh, highlight)
+        self._frame(mesh)
+
+    def _draw_model_edges(self) -> None:
+        """The geometry's own edges (every face boundary, smooth ones too), over the
+        shaded model: Display > Shaded with edges."""
+        if self.lines is not None and self.lines.n_cells:
+            self.plotter.add_mesh(self.lines, color=_t().geometry_line, line_width=1.5,
+                                  reset_camera=False)  # fmt: skip
+
+    def _draw_over(self, mesh, highlight) -> None:
+        """The highlighted selection and the picks, over the model."""
         if highlight is not None:
             surface = selection_surface(mesh, highlight)
             if surface is not None:
@@ -892,7 +1086,16 @@ class Viewport(QWidget):
             (self.picked, _t().picked),
         ):
             self._draw_entities(group, colour)
-        self._frame(mesh)
+
+    def _grid_of(self, mesh):
+        """The mesh as a VTK grid, converted once per mesh (the cut and colours work on
+        it or on copies)."""
+        cached = getattr(self, "_grids", None)
+        if cached is not None and cached[0] is mesh:
+            return cached[1].copy(deep=False)
+        grid = to_grid(mesh)
+        self._grids = (mesh, grid)
+        return grid.copy(deep=False)
 
     def _draw_entities(self, group, colour: str) -> None:
         """Faces as an overlay, edges as thick lines, vertices as dots, bodies by their faces."""
@@ -1000,8 +1203,12 @@ class Viewport(QWidget):
         elif self.result_state is not None:
             self.view.on_double_click = self._probe_click
             self.view.on_click = self.view.on_box = None
+            self.view.on_hover = self._hover
+            return
         else:
             self.view.on_double_click = self.view.on_click = self.view.on_box = None
+        self._hover(None, None)
+        self.view.on_hover = None
 
     def toggle_pick(self, entity: tuple[int, int]) -> None:
         mode = "remove" if entity in self.picked else "add"
@@ -1196,9 +1403,15 @@ class Viewport(QWidget):
         `post.quantities.catalog`) chooses one of the results the field gives; `clim`
         fixes the colour scale (SI), so several views can share one."""
         self.pins = []  # labels belong to the scene they were made for
+        self._bolt_marks = []
         steps = [s for s in results.steps if field in s.fields]
         step = steps[step_index] if steps else pick_step(results, field)
         grid = to_grid(mesh, step)
+        from puzzle.post.expand import expand, shown_whole
+
+        whole = shown_whole(mesh)  # ADR 0081: the part modelled drawn as the whole
+        if whole:
+            grid = expand(grid, whole)
         unit = None
         if item is not None:  # a listed result (post.quantities), in the display units
             f = step.fields[field]
@@ -1265,6 +1478,7 @@ class Viewport(QWidget):
         self.shown = {
             "kind": "result",
             "revolved": revolved,
+            "copies": len(whole) if whole else 1,
             "field": field,
             "scalar": name,
             "step": label,
@@ -1459,7 +1673,7 @@ class Viewport(QWidget):
             self._glyph_actors.append(edge)
 
     def set_cut(self, cut) -> None:
-        """A section cut on results (`post.cuts.Cut`), or None; the result is redrawn."""
+        """A section cut (`post.cuts.Cut`), or None; the result or mesh shown is redrawn."""
         self.cut = cut
         self.redraw_needed.emit()
 
@@ -1591,6 +1805,80 @@ class Viewport(QWidget):
         self.probes_changed.emit(list(self.probes))
         return probe
 
+    def hover_at(self, xyz) -> dict | None:
+        """The node nearest a point of the shown (deformed) result, with its value in
+        display units, for the read-out as the mouse rests (a per-element result: the
+        nearest element's). The search tree is built once per shown result."""
+        from scipy.spatial import cKDTree
+
+        state = self.result_state
+        if state is None or xyz is None:
+            return None
+        grid, name = state["grid"], state["name"]
+        on_points = name in grid.point_data
+        key = "_hover_tree"
+        if key not in state:
+            # The skin's nodes, so a resting mouse reads what it sees (with a section cut,
+            # every node: the cut face shows the inside). The skin carries the grid's
+            # arrays; its vtkOriginalPointIds came back in another order here.
+            source = grid if self.cut is not None else grid.extract_surface()
+            where = np.asarray(source.points if on_points else source.cell_centers().points)
+            data = source.point_data if on_points else source.cell_data
+            ids = "node_id" if on_points else "element_id"
+            arrays = (np.asarray(data[name], float),
+                      np.asarray(data[ids]) if ids in data else None)  # fmt: skip
+            state[key] = (cKDTree(where), where, *arrays) if len(where) else None
+        if state[key] is None:
+            return None
+        tree, where, values, numbers = state[key]
+        _d, j = tree.query(np.asarray(xyz, float))
+        j = int(j)
+        value = values[j]
+        value = float(np.linalg.norm(value)) if np.ndim(value) else float(value)
+        number = int(numbers[j]) if numbers is not None else j
+        at = where[j]
+        unit = state.get("unit") or ""
+        what = "Node" if on_points else "Element"
+        text = f"{what} {number}: {_number(value)}" + (f" {unit}" if unit else "")
+        return {"node" if on_points else "element": number, "value": value, "unit": unit,
+                "at": np.asarray(at, float).tolist(), "text": text}  # fmt: skip
+
+    def _hover(self, xyz, position) -> None:
+        """The resting mouse's read-out: a label by the cursor and a dot on the node."""
+        info = self.hover_at(xyz) if xyz is not None else None
+        self.shown["hover"] = info["text"] if info else None
+        label = getattr(self, "_hover_label", None)
+        if info is None:
+            if label is not None:
+                label.hide()
+            if getattr(self, "_hover_dot", False) and self.plotter is not None:
+                self.plotter.remove_actor("puzzle-hover")
+                self._hover_dot = False
+                self._render()
+            return
+        if getattr(self, "view", None) is None:  # no OpenGL (tests): recorded in shown only
+            return
+        if label is None:
+            label = self._hover_label = QLabel(self.view)
+            label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        t = _t()
+        label.setStyleSheet(f"QLabel {{ background: {t.label_overlay}; color: {t.probe_text};"
+                            " padding: 1px 4px; border-radius: 3px; }")  # fmt: skip
+        label.setText(info["text"])
+        label.adjustSize()
+        if position is not None:
+            x = min(int(position.x()) + 14, max(self.view.width() - label.width() - 2, 0))
+            y = int(position.y()) - label.height() - 6
+            label.move(x, y if y >= 0 else int(position.y()) + 18)
+        label.show()
+        label.raise_()
+        if self.plotter is not None:
+            self.plotter.add_points(np.asarray(info["at"], float).reshape(1, 3),
+                                    color=_t().marked, point_size=9, name="puzzle-hover",
+                                    render_points_as_spheres=True, reset_camera=False)  # fmt: skip
+            self._hover_dot = True
+            self._render()
+
     def clear_probes(self) -> None:
         self.probes = []
         self._draw_marks()
@@ -1659,8 +1947,8 @@ class Viewport(QWidget):
 
     def show_fasteners(self, tubes) -> None:
         """Fasteners over a result: (glyph, label, in tension) each; the label pinned at
-        the tube's middle (ADR 0027)."""
-        self.pins = [
+        the tube's middle (ADR 0027), unless the view bar's Bolt force labels is off."""
+        self._bolt_marks = [
             (
                 np.asarray(g.points, float).mean(axis=0),
                 text,
@@ -1670,6 +1958,7 @@ class Viewport(QWidget):
         ]
         self.shown["fasteners"] = [text for _g, text, _p in tubes]
         if self.plotter is None:
+            self._draw_marks()  # recorded in `shown` without OpenGL too
             return
         import pyvista as pv
 
@@ -1703,6 +1992,38 @@ class Viewport(QWidget):
         self._draw_marks()
         if self.plotter is not None:
             self.view.refresh()
+
+    def show_extras(self, items) -> None:
+        """Coordinate systems and construction paths and planes shown always (D2), over
+        the mesh just drawn: (name, kind, a, b, size) with kind "triad" (a: the system),
+        "path" (from a to b) or "plane" (through a, normal b). Drawn without the pins
+        the selected one gets, so the view doesn't fill with labels."""
+        items = list(items)
+        self.shown["extras"] = [(name, kind) for name, kind, *_ in items]
+        if self.plotter is None or not items:
+            return
+        import pyvista as pv
+
+        for k, (_name, kind, a, b, size) in enumerate(items):
+            tag = f"puzzle-extra-{k}"
+            if kind == "triad":
+                origin, axes = a.centre(), a.orientation()
+                for i, colour in enumerate(_t().axes):
+                    if a.type != "cartesian" and i == 1:
+                        continue
+                    arrow = pv.Arrow(start=origin, direction=axes[:, i], scale=size)
+                    self.plotter.add_mesh(arrow, color=colour, name=f"{tag}-{i}",
+                                          reset_camera=False)  # fmt: skip
+            elif kind == "path":
+                self.plotter.add_mesh(pv.Line(np.asarray(a, float), np.asarray(b, float)),
+                                      color=_t().path, line_width=3, name=tag,
+                                      reset_camera=False)  # fmt: skip
+            else:
+                shape = pv.Plane(center=np.asarray(a, float), direction=np.asarray(b, float),
+                                 i_size=size, j_size=size)  # fmt: skip
+                self.plotter.add_mesh(shape, color=_t().path, opacity=0.25, name=tag,
+                                      reset_camera=False)  # fmt: skip
+        self.view.refresh()
 
     def show_triad(self, system, size: float) -> None:
         """A coordinate system's x, y, z arrows (red, green, blue) at its origin; for a
@@ -1874,6 +2195,8 @@ class Viewport(QWidget):
     def _marks(self) -> list[tuple]:
         marks = list(self._extremes) if self.style["extremes"] and self.result_state else []
         marks += getattr(self, "pins", [])
+        if self.style.get("bolt_labels", True):
+            marks += getattr(self, "_bolt_marks", [])
         unit = lambda p: f" {p['unit']}" if p["unit"] else ""  # noqa: E731
         marks += [
             (np.asarray(p["at"]), f"{_number(p['shown'])}{unit(p)}", _t().probe_text)
@@ -1927,6 +2250,13 @@ class Viewport(QWidget):
                 label.move(int(at[0]) + 8, int(at[1]) - label.height() - 4)
                 label.raise_()
 
+    def set_bolt_labels_shown(self, on: bool) -> None:
+        """Each bolt's force label over a result, on or off; the tubes stay."""
+        self.style["bolt_labels"] = on
+        self._draw_marks()
+        if self.plotter is not None:
+            self.view.refresh()
+
     def show_extremes(self, on: bool) -> None:
         self.style["extremes"] = on
         if self.result_state is not None:
@@ -1939,6 +2269,54 @@ class Viewport(QWidget):
         if self.plotter is not None:
             self.plotter.reset_camera()
             self._render()
+
+    def camera(self):
+        """The camera as (position, focal point, view up), or None without OpenGL."""
+        return self.plotter.camera_position if self.plotter is not None else None
+
+    def parallel_scale(self) -> float | None:
+        """An orthographic view's half height, or None in perspective."""
+        if self.plotter is None or not self.plotter.camera.parallel_projection:
+            return None
+        return float(self.plotter.camera.parallel_scale)
+
+    def set_camera(self, triple, parallel_scale: float | None = None) -> None:
+        """Put the camera there (a 3D mouse's move, ADR 0069): drawn on the next frame."""
+        self.shown["camera"] = [tuple(map(float, row)) for row in triple]
+        if self.plotter is not None:
+            self.plotter.camera_position = triple
+            if parallel_scale is not None and self.plotter.camera.parallel_projection:
+                self.plotter.camera.parallel_scale = parallel_scale
+            self.plotter.renderer.ResetCameraClippingRange()
+            self._render()
+
+    def pivot(self):
+        """What a 3D mouse turns the view about (ADR 0069): the centre of the picked or
+        highlighted faces, edges and points, else the model point under the view's
+        centre (`point_under`), else the shown model's centre, else None."""
+        group = list(self.picked) or list(self.highlight_entities)
+        if group:
+            points = [np.asarray(self.vertices[e], float) for e in group if e in self.vertices]
+            faces = [e for e in group if e[0] == 2]
+            faces += [f for e in group if e[0] == 3 for f in self.boundaries.get(e, [])]
+            index = [self.entities.index(e) for e in faces if e in self.entities]
+            if index and self.surface is not None:
+                mask = np.isin(self.surface.cell_data["entity"], index)
+                points.append(np.asarray(self.surface.extract_cells(mask).center, float))
+            index = [self.line_entities.index(e) for e in group if e in self.line_entities]
+            if index and self.lines is not None:
+                mask = np.isin(self.lines.cell_data["entity"], index)
+                points.append(np.asarray(self.lines.extract_cells(np.flatnonzero(mask)).center))
+            if points:
+                return np.mean(points, axis=0)
+        hit = point_under(self.surface, self.camera())
+        if hit is not None:
+            return hit
+        mesh = self.mesh
+        coords = getattr(mesh, "coords", None)
+        if coords is not None and len(coords):
+            return (coords.min(axis=0) + coords.max(axis=0)) / 2
+        return None
 
     def look(self, direction: str) -> None:
         """A standard view: "iso", or from "+x", "-x", "+y", "-y", "+z", "-z"."""
@@ -1957,8 +2335,12 @@ class Viewport(QWidget):
 
     def set_style(self, **changes) -> None:
         """Edges on results and previews, wireframe, orthographic: kept across redraws."""
+        redraw = "display" in changes and changes["display"] != self.style["display"]
         self.style.update(changes)
         self._apply_style()
+        if redraw:  # the model is drawn again with its edges (or without)
+            self._base = None
+            self.view_bar.refresh_view()
         self._render()
 
     def _apply_style(self) -> None:
@@ -2005,10 +2387,13 @@ class Viewport(QWidget):
     def _frame(self, mesh) -> None:
         """Fit the camera to a newly shown mesh; keep the user's view on redraws of the
         same one (picks, highlights, another field)."""
+        from puzzle.gui.timing import step
+
         if getattr(self, "_framed", None) is not mesh:
             if getattr(self, "_framed", None) is None:
                 self.plotter.view_isometric()
             self.plotter.reset_camera()
             self._framed = mesh
-        self._apply_style()
+        with step("view style"):
+            self._apply_style()
         self._render()

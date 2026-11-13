@@ -45,7 +45,7 @@ def _number(name: str, prefix: str) -> int:
 
 
 def main(case_path: Path) -> None:
-    case = json.loads(case_path.read_text())
+    case = json.loads(case_path.read_text(encoding="utf-8"))
     here = case_path.parent
     geo = OCCGeometry(str(here / case["brep"]))
     shape = geo.shape
@@ -134,7 +134,8 @@ def main(case_path: Path) -> None:
         prism_solid=np.array(prism_solid, dtype=np.int64),
     )
     (here / "entities.json").write_text(
-        json.dumps({str(d): [_signature(s) for s in shapes] for d, shapes in lists.items()})
+        json.dumps({str(d): [_signature(s) for s in shapes] for d, shapes in lists.items()}),
+        encoding="utf-8",
     )
 
 

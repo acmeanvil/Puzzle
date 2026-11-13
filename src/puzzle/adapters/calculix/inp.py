@@ -61,6 +61,7 @@ from puzzle.adapters.common import (
     time_scheme,
     traction_forces,
 )
+from puzzle.adapters.settings import STEPPING
 from puzzle.mesh.mesh import Mesh
 from puzzle.model.schema import Component, Feature, Material, Project, SolveStep, Study
 
@@ -72,6 +73,12 @@ ELEMENTS = {
     "tet4": ("C3D4", None),
     "tet10": ("C3D10", [0, 1, 2, 3, 4, 5, 6, 7, 9, 8]),
     "hex8": ("C3D8", None),
+    # Revolved bolts (ADR 0077): Gmsh lists a 20-node hexahedron's edges 0-1, 0-3, 0-4,
+    # 1-2, 1-5, 2-3, 2-6, 3-7, 4-5, 4-7, 5-6, 6-7; CalculiX the bottom ring, the top
+    # ring, then the uprights. Likewise the 15-node prism.
+    "hex20": ("C3D20", [0, 1, 2, 3, 4, 5, 6, 7, 8, 11, 13, 9, 16, 18, 19, 17, 10, 12, 14, 15]),
+    "wedge6": ("C3D6", None),
+    "wedge15": ("C3D15", [0, 1, 2, 3, 4, 5, 6, 9, 7, 12, 14, 13, 8, 10, 11]),
     # Beams (ADR 0027): Gmsh's line3 lists its ends then its middle; B32 runs end-mid-end.
     "line2": ("B31", None),
     "line3": ("B32", [0, 2, 1]),
@@ -108,6 +115,7 @@ NODE_SHARES = {
     "tri3": [1 / 3] * 3,
     "tri6": [0, 0, 0, 1 / 3, 1 / 3, 1 / 3],
     "quad4": [1 / 4] * 4,
+    "quad8": [-1 / 12] * 4 + [1 / 3] * 4,  # exact on a parallelogram
 }
 
 
@@ -150,6 +158,8 @@ def _refuse_in_2d(comp: Component) -> None:
     if comp.connectors or comp.beam_sections:
         raise InputError("fasteners and beams are not written in 2D models", code="unsupported")
     for c in comp.contacts:  # no 2D benchmark yet: shared nodes (conformal bonds) only
+        if c.thread is not None and comp.dimension == "2d_axisymmetric":  # ADR 0076 step 2
+            continue
         if c.capability != "bonded_conformal":
             raise InputError(
                 f"contact '{c.name}' ({c.capability}) is not written in 2D models yet",
@@ -188,8 +198,9 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
     # body temperature varying in time gives each step its own (ADR 0044).
     temperatures = {i.step: i.field for i in inputs if i.field.name == "temperature"}
     thermal_load = temperatures.get(None, next(iter(temperatures.values()), None))
-    check_contacts(comp, CONTACTS, "CalculiX")
-    touching = [c for c in comp.contacts if c.type in ("frictionless", "frictional")]
+    check_contacts(comp, CONTACTS, "CalculiX", THREADS)
+    touching = [c for c in comp.contacts
+                if c.type in PAIRS and c.thread is None]  # fmt: skip
     if touching and any(
         s.type != "stationary" or not s.solves("solid_mechanics") or len(set(s.physics)) > 1
         for s in study.solve_steps()
@@ -226,13 +237,36 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
             if b.dim != own.dim:  # the part's own elements: solids, beams or shells
                 continue
             if part.name in sprung:  # written as springs below (ADR 0055)
+                from puzzle.element_choice import choice_for
+
+                if choice_for(comp, mesh, b) is not None:  # ADR 0082: never dropped
+                    raise InputError(
+                        f"'{part.name}' has an open table section, which CalculiX gets as "
+                        "exact Timoshenko springs, not beam elements: an element choice "
+                        "can't apply there",
+                        code="unsupported",
+                    )
                 continue
             if planar is not None:
                 if b.element not in PLANAR_ELEMENTS[planar]:
                     raise InputError(f"CalculiX has no 2D {b.element} element", code="unsupported")
                 ccx_type, order = PLANAR_ELEMENTS[planar][b.element], None
             else:
+                if b.element not in ELEMENTS:
+                    raise InputError(
+                        f"CalculiX has no {b.element} element: its second-order bricks and "
+                        "prisms have 20 and 15 nodes, so set the mesh recipe's hexahedron "
+                        "nodes to 20",
+                        code="unsupported",
+                    )
                 ccx_type, order = ELEMENTS[b.element]
+            from puzzle.element_choice import native
+
+            family = ("solid_2d" if planar is not None else
+                      {3: "solid_3d", 2: "shell", 1: "beam"}[b.dim])  # fmt: skip
+            chosen = native("calculix", comp, mesh, b, family)  # ADR 0082: per body
+            if chosen is not None:
+                ccx_type = chosen  # same node order: the R and I variants share it
             if ccx_type == "B32" and _closed_sections(comp, part.name):
                 ccx_type = "B32R"  # CalculiX expands BOX and PIPE sections on B32R only
             conn = b.connectivity[:, order] if order else b.connectivity
@@ -269,6 +303,8 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
     )
     out += _amplitudes(project, comp)
     out += _transforms(project, comp, mesh)
+    out += _plane_equations(project, comp, mesh)
+    out += _cyclic_equations(comp, mesh, {p.type for p in comp.physics})
     rigid = _rigid_nodes(comp, mesh)
     out += _rigid_bodies(rigid)
     pretension = _pretension_nodes(comp, mesh)
@@ -284,6 +320,10 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
         first + fastener_nodes,
         int(max(b.ids.max() for b in mesh.blocks)) + 1 + fastener_elems,
     )
+    out += lines
+    lines, next_node, next_elem = _threads(project, comp, mesh, next_node, next_elem)
+    out += lines
+    lines, next_elem = _welds(project, comp, mesh, next_elem)
     out += lines
     if springy is not None:  # their helper nodes and elements come last
         spring_beams.number(springy, mesh, next_node, next_elem)
@@ -384,6 +424,10 @@ SOLVERS = (
 PROCEDURES = ("*STATIC", "*FREQUENCY", "*BUCKLE", "*DYNAMIC", "*HEAT TRANSFER")
 # *CONTROLS, PARAMETERS=TIME INCREMENTATION: I_0, I_R, I_P, I_C (iterations allowed), ...
 INCREMENTATION = [4, 8, 9, 16, 10, 4, 0, 5, 0, 0]
+# Its second line: D_f (cut-back factor), D_C, D_B, D_A, D_S, D_H, D_D (growth), W_G.
+INCREMENT_FACTORS = [0.25, 0.5, 0.75, 0.85, 0.0, 0.0, 1.5, 0.0]
+TIME_CONTROLS = ("cutbacks", "cutback_factor", "increase_factor", "reduce_after",
+                 "divergence_check_after")  # fmt: skip
 
 
 def with_settings(lines: list[str], study: Study, step: SolveStep, index: int) -> list[str]:
@@ -407,10 +451,20 @@ def with_settings(lines: list[str], study: Study, step: SolveStep, index: int) -
         tol = float(given["tolerance"])
         out = _without_card(out, "*CONTROLS, PARAMETERS=FIELD")
         cards += ["*CONTROLS, PARAMETERS=FIELD", f"{tol:.6g}, {tol:.6g}"]
-    if "max_iterations" in given:
+    set_here = study.solver_settings.get("calculix", {})
+    if "max_iterations" in given or any(k in set_here for k in TIME_CONTROLS):
         values = list(INCREMENTATION)
-        values[3] = int(given["max_iterations"])
+        if "max_iterations" in given:
+            values[3] = int(given["max_iterations"])
+        for key, at_ in (("divergence_check_after", 0), ("reduce_after", 4), ("cutbacks", 7)):
+            if key in set_here:
+                values[at_] = int(own[key])
         cards += ["*CONTROLS, PARAMETERS=TIME INCREMENTATION", ", ".join(map(str, values))]
+        if "cutback_factor" in set_here or "increase_factor" in set_here:
+            factors = list(INCREMENT_FACTORS)
+            factors[0] = float(own["cutback_factor"])
+            factors[6] = float(own["increase_factor"])
+            cards.append(", ".join(f"{v:g}" for v in factors))
     expert = study.expert_settings.get("calculix", {})
     for key in ("after_procedure", f"after_procedure:{index}"):
         if key in expert:
@@ -610,6 +664,12 @@ def _shell_sections(comp: Component, mesh: Mesh, selection: str, material: str) 
     return out
 
 
+def _on_shell_edge(mesh: Mesh, group) -> bool:
+    """An edge selection of a shell body: a force there spreads along its length."""
+    return group.dim == 1 and bool(mesh.shell_blocks()) and set(
+        int(n) for n in group.node_ids) <= mesh.shell_nodes()  # fmt: skip
+
+
 def _on_shells(mesh: Mesh, group) -> bool:
     shells = {id(b) for b in mesh.shell_blocks()}
     return any(id(b) in shells for b in group.blocks(mesh) if b.dim == 2)
@@ -803,13 +863,17 @@ def _step(
     solved = set(step.physics) or physics_types
     # Plasticity is nonlinear like contact: the load goes in by increments, each kept.
     lifting = any(f.type == "compression_only_support" for ph in comp.physics for f in ph.features)
-    contact = any(c.type in ("frictionless", "frictional") for c in comp.contacts) or (
+    # A thread's unilateral flanks are nonlinear springs: iterated, as lift-off.
+    lifting = lifting or any(c.thread is not None and c.type == "frictionless"
+                             for c in comp.contacts)  # fmt: skip
+    contact = any(c.type in PAIRS and c.thread is None for c in comp.contacts) or (
         (yields or lifting) and step.type == "stationary" and "solid_mechanics" in solved
     )
     nlgeom = bool(step.settings.get("geometric_nonlinearity", False))
-    if nlgeom and (solved != {"solid_mechanics"} or step.type != "stationary"):
-        raise InputError(
-            "geometric_nonlinearity applies to static structural steps", code="unsupported"
+    if nlgeom and (solved != {"solid_mechanics"} or step.type not in ("stationary", "transient")):
+        raise InputError(  # ADR 0082 decision 6: transient large deflection too
+            "geometric_nonlinearity applies to static and transient structural steps",
+            code="unsupported",
         )
     # Plasticity, lift-off and large deflection go in at most 1/n of the load at a time
     # (their path matters; each increment's results are kept for a load-deflection
@@ -819,6 +883,7 @@ def _step(
                         and "solid_mechanics" in solved)  # fmt: skip
     increments = int(step.settings.get("increments", 10 if ramped else 1))
     first = float(step.settings.get("initial_increment", 1 / increments))  # fraction of load
+    smallest = float(step.settings.get("min_increment", 1e-4 / increments))
     op = ", OP=NEW" if number > 1 else ""
     settings = step.settings
 
@@ -831,20 +896,31 @@ def _step(
     if solved == {"solid_mechanics"}:
         procedure = {
             # Contact is nonlinear: start with a tenth of the load, then let CalculiX step.
+            # Load stepping set on the step (ADR 0023: increments, first, smallest,
+            # fixed) writes the data line even for a linear step.
             "stationary": (
                 [
-                    "*STATIC",
-                    f"{first:.6g}, 1.0, {1e-4 / increments:.3g}, {1 / increments:.6g}",
+                    "*STATIC, DIRECT" if settings.get("fixed_increments") else "*STATIC",
+                    f"{first:.6g}, 1.0, {smallest:.3g}, {1 / increments:.6g}",
                 ]
-                if contact or nlgeom
+                if contact or nlgeom or any(k in settings for k in STEPPING)
                 else ["*STATIC"]
             ),
             "modal": ["*FREQUENCY", str(int(settings.get("modes", 10)))],
             # ADR 0028: load factors on this step's loads, and their mode shapes.
             "buckling": ["*BUCKLE", str(int(settings.get("modes", 4)))],
             # ADR 0041: Newmark with the given increment (DIRECT); ALPHA 0 (CalculiX's
-            # default -0.05 damps numerically) unless an HHT alpha is asked for.
+            # default -0.05 damps numerically) unless an HHT alpha is asked for. Under
+            # NLGEOM the increment may be cut back, never past the one given, and HHT's
+            # alpha defaults to CalculiX's -0.05: undamped Newmark diverged, then crawled
+            # at 1e-3 of the step, as a strip swung into its elastica (ADR 0082).
             "transient": [
+                f"*DYNAMIC, ALPHA={float(settings.get('hht_alpha', -0.05)):.6g}",
+                f"{setting('time_step'):.10g}, {setting('end_time'):.10g}, "
+                f"{setting('time_step') / 1e4:.6g}, {setting('time_step'):.10g}",
+            ]
+            if step.type == "transient" and nlgeom
+            else [
                 f"*DYNAMIC, DIRECT, ALPHA={float(settings.get('hht_alpha', 0.0)):.6g}",
                 f"{setting('time_step'):.10g}, {setting('end_time'):.10g}",
             ]
@@ -875,13 +951,16 @@ def _step(
                 for line in outputs
             ]
         if (
-            any(c.type in ("frictionless", "frictional") for c in comp.contacts)
+            any(c.type in PAIRS and c.thread is None for c in comp.contacts)
             and step.type == "stationary"
         ):  # ADR 0056: contact opening and slips, pressure and shears, on slave nodes
             outputs += ["*CONTACT FILE", "CDIS, CSTR"]
         if comp.connectors and step.type not in ("modal", "buckling"):
             # Fastener forces and moments (ADR 0027): the helper nodes' reactions.
             outputs += [f"*NODE PRINT, NSET={FASTENER_ENDS}", "RF"]
+        if "U, RF" in outputs:  # each selection's reaction total, printed exactly
+            for name in total_sets(mesh):
+                outputs += [f"*NODE PRINT, NSET={name}, TOTALS=ONLY", "RF"]
     elif solved == {"heat_transfer"}:
         if step.type == "transient" and time_scheme(step)[0] != "backward_euler":
             raise InputError(
@@ -927,7 +1006,9 @@ def _step(
     # without NLGEOM CalculiX solved them once, closed both ways.
     gapped = lifting and step.type == "stationary" and "solid_mechanics" in solved
     head = "*STEP, NLGEOM, INC=10000" if nlgeom or gapped else "*STEP"
-    out = ["*STEP, INC=1000000" if step.type == "transient" else head] + procedure
+    if step.type == "transient":  # every time increment; NLGEOM for large deflection
+        head = "*STEP, NLGEOM, INC=1000000" if nlgeom else "*STEP, INC=1000000"
+    out = [head] + procedure
     if "heat_transfer" in solved:
         # Temperature tables make heat transfer nonlinear; CalculiX's default field
         # tolerances (0.5% residual, 1% correction) stop short. Linear cases converge at once.
@@ -1255,7 +1336,7 @@ def _fasteners(project: Project, comp: Component, mesh: Mesh, first_node: int):
         tight = f.pretension is not None
         if f.formulation == "beam":
             lines, node, elem, end = _beam_bolt(project, f, i, a, b, axis, side, node, elem,
-                                                held, mesh)  # fmt: skip
+                                                held, mesh, comp)  # fmt: skip
             out += lines
             printed += [end["a"]["nodes"][0], end["a"]["turn"]]
             ends.append(end)
@@ -1327,7 +1408,8 @@ def _fasteners(project: Project, comp: Component, mesh: Mesh, first_node: int):
     return out, node - first_node, elem - first_elem, ends
 
 
-def _beam_bolt(project, f, i: int, a, b, axis, side, node: int, elem: int, held, mesh):
+def _beam_bolt(project, f, i: int, a, b, axis, side, node: int, elem: int, held, mesh,
+               comp=None):  # fmt: skip
     """A fastener as a two-node Timoshenko beam (ADR 0027), exactly: each end's spider
     (rigid: the hole in a rigid body; distributing: RBE3 to a centre node, then a rigid
     arm) carries a node at the bolt's middle, and six springs join the two middle nodes
@@ -1343,6 +1425,7 @@ def _beam_bolt(project, f, i: int, a, b, axis, side, node: int, elem: int, held,
     out: list[str] = []
     rows: list[str] = []
     spiders = {}
+    threaded: dict[str, dict] = {}  # end -> its thread's pairs, for the reader
     for name, end in (("A", a), ("B", b)):
         move, turn = node, node + 1  # at the middle: the spider's translation and rotation
         node += 2
@@ -1351,7 +1434,15 @@ def _beam_bolt(project, f, i: int, a, b, axis, side, node: int, elem: int, held,
             out += ["*NSET, NSET=N_BOLT_GROUND", f"{move}, {turn}"]
             spiders[name] = (move, turn)
             continue
-        if f.ends == "rigid":
+        selection = f.source if name == "A" else f.target
+        if f.thread is not None and selection and selection.endswith(" (thread)"):
+            # ADR 0076 step 4: a tapped end as a thread, not a spider on the wall.
+            other = b if name == "A" else a
+            args = (selection, end, other, move, turn, middle, node, elem, held, mesh)
+            lines, node, elem, pairs = _thread_end(project, comp, f, *args)
+            out += lines
+            threaded[name] = pairs
+        elif f.ends == "rigid":
             out += [
                 f"*NSET, NSET=N_FB{i}{name}",
                 *_chunks(np.asarray(end.nodes)),
@@ -1397,6 +1488,7 @@ def _beam_bolt(project, f, i: int, a, b, axis, side, node: int, elem: int, held,
     info = {
         "name": f.name,
         "axis": [float(c) for c in axis],
+        "threads": threaded,
         "pretension": None if ref is None else [ref, f.pretension.to_si()],
         "a": {
             "centre": [float(c) for c in a.centre],
@@ -1406,6 +1498,131 @@ def _beam_bolt(project, f, i: int, a, b, axis, side, node: int, elem: int, held,
         },
     }
     return ["*NODE", *rows, *out], node, elem, info
+
+
+def _thread_end(project, comp, f, selection: str, end, other, move: int, turn: int,
+                middle, node: int, elem: int, held, mesh):  # fmt: skip
+    """A beam bolt's tapped end as a thread (ADR 0076 step 4). The bolt's core in the
+    engaged length moves, level by level of the thread face's nodes, rigidly with the
+    end's spider (u = u_move + θ × r) but for its own slide w along the axis (a helper
+    node's dof 1), the slides joined by axial springs of the core's stiffness
+    E A_d3 / Δz; the level at the mouth (toward the joint) has none. Each wall node bears
+    on its level through a flank spring along the flank's normal to a helper that
+    follows that motion (Yamamoto's teeth, as `_threads`), and the RBE3's twist row holds
+    the spider's rotation about the axis to the wall. The core turns with the bolt: the
+    helix's torque on the wall isn't carried. -> (lines, next node, next element, the
+    pairs for the reader: wall and helper nodes, stiffness, normals, levels)"""
+    from puzzle import threads
+    from puzzle.adapters.common import rbe3_rows
+    from puzzle.adapters.thread_pairs import face_shares, modulus, normals
+
+    spec = threads.spec(f.thread)
+    group = mesh.groups[selection]
+    ids, areas, _n = face_shares(group, mesh)
+    xyz = mesh.node_coords(ids)
+    axis = (end.centre - other.centre) / np.linalg.norm(end.centre - other.centre)
+    frame = threads.Frame(np.asarray(end.centre, dtype=float), axis)
+    _r, _t, s = frame.cylindrical(xyz)
+    # The bolt pulls this end back toward the other: -axis here, so the lower flank bears.
+    load_up = f.thread.bearing == "other"
+    flank = threads.bearing_flank(-1.0)
+    n = normals(xyz, frame, spec, flank, load_up, planar=False)
+    alpha = np.radians(threads.flank_angle(spec, flank, load_up))
+    e_bolt = project.get(f.material, Material).properties["youngs_modulus"].to_si()
+    e_wall = modulus(project, comp, selection)
+    k = threads.stiffness(
+        areas / np.cos(alpha), spec, e_bolt, e_wall, f.thread.compliance, rigid_core=True
+    )  # the core can't contract: δ5 in the spring
+    step = spec.pitch / 20  # levels closer than this share a core node
+    levels = np.unique(np.round(s / step) * step)
+    level_of = np.searchsorted(levels, np.round(s / step) * step)
+    d3 = spec.major - 1.226869 * spec.pitch if spec.form in ("iso", "un") else spec.minor
+    core_k = e_bolt * np.pi * d3**2 / 4
+    out, rows = [], []
+    slide = {j: node + j - 1 for j in range(1, len(levels))}  # no slide at the mouth
+    node += len(levels) - 1
+    helper0 = node
+    node += len(ids)
+    for j in slide:
+        rows.append(_node_row(slide[j], frame.origin + levels[j] * axis))
+    for i, (p, d) in enumerate(zip(xyz, n, strict=True)):
+        rows.append(_node_row(helper0 + i, p - 0.5 * spec.pitch * d))
+    out += ["*NODE", *rows]
+    # The core's axial springs, level to level, on the slides (the mouth's is zero: the
+    # first level's spring is grounded). A slide uses dof 1 only.
+    for j in range(1, len(levels)):
+        dz = max(float(levels[j] - levels[j - 1]), 1e-9)
+        name = set_name("TC", f"{f.name}{j}")
+        if j == 1:
+            out += [f"*ELEMENT, TYPE=SPRING1, ELSET={name}", f"{elem}, {slide[j]}",
+                    f"*SPRING, ELSET={name}", "1", f"{core_k / dz:.10e}"]  # fmt: skip
+        else:
+            out += [f"*ELEMENT, TYPE=SPRING2, ELSET={name}", f"{elem}, {slide[j - 1]}, {slide[j]}",
+                    f"*SPRING, ELSET={name}", "1, 1", f"{core_k / dz:.10e}"]  # fmt: skip
+        elem += 1
+    if slide:
+        out += ["*BOUNDARY", *(f"{n_}, 2, 3, 0." for n_ in slide.values())]
+    # Each helper follows its level of the core: rigid with the spider but for the
+    # level's slide, u_h - u_move - θ × r - w a = 0, r from the bolt's middle to the
+    # level (u_h dependent, in no other equation: no decascading).
+    eq = ["*EQUATION"]
+    for i, lv in enumerate(level_of):
+        lv = int(lv)
+        r = frame.origin + levels[lv] * axis - middle
+        for k_ in range(3):
+            rot = np.cross(r, np.eye(3)[k_])  # e · (θ × r) = θ · (r × e)
+            terms = [(helper0 + i, k_ + 1, 1.0), (move, k_ + 1, -1.0)]
+            terms += [(turn, m + 1, -rot[m]) for m in range(3) if abs(rot[m]) > 1e-14]
+            if lv in slide and abs(axis[k_]) > 1e-14:
+                terms.append((slide[lv], 1, -axis[k_]))
+            eq.append(str(len(terms)))
+            eq += [", ".join(f"{a}, {b}, {c:.13g}" for a, b, c in terms[t:t + 4])
+                   for t in range(0, len(terms), 4)]  # fmt: skip
+    out += eq
+    # Flank springs: wall node -> helper along n, as SPRING2 in an orientation whose x
+    # is n (a SPRINGA carried 3.4 % short under NLGEOM, ADR 0076).
+    bins: dict[tuple, list[str]] = {}
+    for i, (w, kk, d) in enumerate(zip(ids, k, n, strict=True)):
+        key = (float(f"{kk:.9g}"), *(round(float(x), 7) for x in d))
+        bins.setdefault(key, []).append(f"{elem}, {int(w)}, {helper0 + i}")
+        elem += 1
+    for b_i, ((kk, *d), rows_) in enumerate(sorted(bins.items()), start=1):
+        name = set_name("TB", f"{f.name}{b_i}")
+        orient = set_name("TBO", f"{f.name}{b_i}")
+        a_ = np.asarray(d, dtype=float)
+        ref_ = np.array([0.0, 0.0, 1.0]) if abs(a_[2]) < 0.9 else np.array([1.0, 0.0, 0.0])
+        side = np.cross(ref_, a_)
+        side /= np.linalg.norm(side)
+        out += [f"*ORIENTATION, NAME={orient}", ", ".join(f"{c_:.13g}" for c_ in (*a_, *side)),
+                f"*ELEMENT, TYPE=SPRING2, ELSET={name}", *rows_,
+                f"*SPRING, ELSET={name}, ORIENTATION={orient}", "1, 1", f"{kk:.10e}"]  # fmt: skip
+    pairs = {
+        "wall": [int(x) for x in ids],
+        "helper": list(range(helper0, helper0 + len(ids))),
+        "k": [float(x) for x in k],
+        "n": n.tolist(),
+        "s": [float(x) for x in s],  # along the axis, from the end's centre, away from the joint
+        "axis": [float(x) for x in axis],
+        "pitch": float(spec.pitch),
+        "mouth": float(levels[0]),
+    }
+    # The twist about the axis: the RBE3's rotation row along the axis.
+    six = rbe3_rows(end, mesh, middle)
+    twist: dict[tuple[int, int], float] = {}
+    for m in range(3):
+        for nid, dof, c in six[3 + m]:
+            twist[(nid, dof)] = twist.get((nid, dof), 0.0) + axis[m] * c
+    free = [(key, c) for key, c in twist.items() if key[0] not in held and abs(c) > 1e-14]
+    if free:
+        (dn, dd), dc = max(free, key=lambda kv: abs(kv[1]))
+        terms = [(dn, dd, 1.0)] + [(nid, dof, c / dc) for (nid, dof), c in twist.items()
+                                   if (nid, dof) != (dn, dd) and abs(c) > 1e-14]  # fmt: skip
+        terms += [(turn, m + 1, -axis[m] / dc) for m in range(3) if abs(axis[m]) > 1e-14]
+        out.append("*EQUATION")
+        out.append(str(len(terms)))
+        out += [", ".join(f"{a}, {b}, {c:.13g}" for a, b, c in terms[t:t + 4])
+                for t in range(0, len(terms), 4)]  # fmt: skip
+    return out, node, elem, pairs
 
 
 def _node_row(n: int, p) -> str:
@@ -1481,6 +1698,38 @@ def fastener_info(project: Project, study: Study, mesh: Mesh) -> list[dict]:
     used = len(_pretension_nodes(comp, mesh)) + sum(len(c.doubles) for c in cuts.values())
     first = int(mesh.node_ids.max()) + 1 + 2 * len(_rigid_nodes(comp, mesh)) + used
     return _fasteners(project, comp, mesh, first)[3]
+
+
+def total_sets(mesh: Mesh) -> dict[str, str]:
+    """The node sets whose reaction total CalculiX prints (`TOTALS=ONLY`), by set name ->
+    selection: every face, edge and point selection of a 3D solid model. The .frd gives
+    each node's reaction to 6 digits only; summed over many nodes that nearly cancel, the
+    rounding reached 2e-5 of the total, where CalculiX's own total is exact. Beams,
+    shells and 2D models are expanded by CalculiX, so their sets aren't printed."""
+    if mesh.planar or mesh.structural_blocks():
+        return {}
+    return {set_name("N", g.name): g.name for g in mesh.groups.values() if g.dim < 3}
+
+
+def read_totals(dat_text: str) -> list[tuple[int, float, dict[str, np.ndarray]]]:
+    """(analysis step, time, {set name: total force}) for each printed increment."""
+    out: list[tuple[int, float, dict[str, np.ndarray]]] = []
+    step = 0
+    lines = dat_text.splitlines()
+    for i, line in enumerate(lines):
+        text = line.strip()
+        if text.startswith("S T E P"):
+            step = int(text.split()[-1])
+        elif text.startswith("total force (fx,fy,fz) for set"):
+            parts = text.split()
+            name, time = parts[5], float(parts[-1])
+            values = next((v.split() for v in lines[i + 1 : i + 4] if v.strip()), [])
+            if len(values) != 3:
+                continue
+            if not out or out[-1][:2] != (step, time):
+                out.append((step, time, {}))
+            out[-1][2][name] = np.array([float(v) for v in values])
+    return out
 
 
 def read_fastener_forces(dat_text: str, ends: list[dict]) -> list[tuple[int, float, np.ndarray]]:
@@ -1574,13 +1823,104 @@ def _springs(
     return out, node, elem
 
 
+def _threads(project: Project, comp: Component, mesh: Mesh, node: int, elem: int):
+    """Threaded contacts (ADR 0076), from `adapters.thread_pairs`: per node pair and
+    flank, along the flank's normal n (the screw's outward one),
+    - bonded and no_separation with the teeth's give (or a stiffness per area): a
+      SPRING2 from the screw node to the nut node in an orientation whose x is n (the
+      nodes may coincide);
+    - bonded and no_separation `rigid`: *EQUATION n · (u_screw - u_nut) = 0;
+    - frictionless: the same spring, nonlinear: k once the screw has moved the
+      clearance into the nut, nothing in tension (a nonlinear step, as lift-off).
+    -> (lines, the next free node id, the next free element id)"""
+    from puzzle.adapters.thread_pairs import thread_pairs
+
+    out: list[str] = []
+    dofs = (1, 2) if mesh.planar else (1, 2, 3)
+    for c in comp.contacts:
+        if c.thread is None:
+            continue
+        tp = thread_pairs(project, comp, mesh, c)
+        screw, nut = (tp.source, tp.target) if tp.screw_is_source else (tp.target, tp.source)
+        tag = set_name("TH", c.name)
+        # CalculiX models an axisymmetric part as a 2° slice: a spring on its nodes acts
+        # on that slice, so the whole ring's stiffness is written times 2/360 (the pair
+        # forces came out 180 times too small, the springs as good as rigid).
+        sector = AXISYMMETRIC_SECTOR if mesh.axisymmetric else 1.0
+        for f_i, flank in enumerate(tp.flanks):
+            n, k = tp.normals[flank], tp.stiffness[flank] * sector
+            if c.thread.compliance == "rigid" and (c.type != "frictionless" or flank == "turn"):
+                out.append("*EQUATION")
+                for s_id, t_id, d in zip(screw, nut, n, strict=True):
+                    used = [dof for dof in dofs if abs(d[dof - 1]) > 1e-12]
+                    terms = sorted(((int(s_id), dof, d[dof - 1]) for dof in used),
+                                   key=lambda t: -abs(t[2]))  # fmt: skip
+                    terms += [(int(t_id), dof, -d[dof - 1]) for dof in used]
+                    if f_i == 1:  # the second flank's dependent term on the nut node
+                        terms = terms[len(terms) // 2 :] + terms[: len(terms) // 2]
+                    out.append(str(len(terms)))
+                    out += [", ".join(f"{a}, {b}, {v:.12g}" for a, b, v in terms[i: i + 4])
+                            for i in range(0, len(terms), 4)]  # fmt: skip
+                continue
+            # SPRING2 from the screw node to the nut node along n: an orientation whose
+            # local x is n, its dof 1 to dof 1. (A SPRINGA to a helper tied to the nut
+            # node carried 3.4 % less than k times the push under NLGEOM, which the
+            # unilateral flanks need.) One set per stiffness and direction.
+            bins: dict[tuple, list[str]] = {}
+            for s_id, t_id, d, kk in zip(screw, nut, n, k, strict=True):
+                key = (float(f"{kk:.9g}"), *(round(float(x), 7) for x in d))
+                bins.setdefault(key, []).append(f"{elem}, {int(s_id)}, {int(t_id)}")
+                elem += 1
+            for b, ((kk, *d), rows) in enumerate(sorted(bins.items()), start=1):
+                name = f"{tag}S{f_i}_{b}"
+                orient = f"{tag}O{f_i}_{b}"
+                a = np.asarray(d, dtype=float)
+                helper = np.array([0.0, 0.0, 1.0]) if abs(a[2]) < 0.9 else np.array([1.0, 0, 0])
+                side = np.cross(helper, a)
+                side /= np.linalg.norm(side)
+                out += [f"*ORIENTATION, NAME={orient}",
+                        ", ".join(f"{c_:.13g}" for c_ in (*a, *side)),
+                        f"*ELEMENT, TYPE=SPRING2, ELSET={name}", *rows]  # fmt: skip
+                if c.type != "frictionless" or flank == "turn":  # turning: always linear
+                    out += [f"*SPRING, ELSET={name}, ORIENTATION={orient}", "1, 1",
+                            f"{kk:.10e}"]  # fmt: skip
+                    continue
+                # A unilateral flank: a GAPUNI from the screw node to the nut node along
+                # n, closed once the screw has moved the clearance into the nut (its own
+                # tangent: a nonlinear SPRING2 law converged a few percent an iteration,
+                # and a SPRINGA to a helper carried 3.4 % short under NLGEOM).
+                out[-len(rows) - 1] = f"*ELEMENT, TYPE=GAPUNI, ELSET={name}"
+                direction = f"{d[0]:.9g}, {d[1]:.9g}, {d[2]:.9g}"
+                out += [f"*GAP, ELSET={name}", f"{tp.clearance:.10e}, {direction}, , {kk:.10e}"]
+    return out, node, elem
+
+
+def _welds(project: Project, comp: Component, mesh: Mesh, elem: int):
+    """Light welds (ADR 0078), from `adapters.weld_pairs`: a SPRING2 per node pair and
+    global direction, from the path's part's node to the other part's, all of one
+    weld's pairs equally stiff. -> (lines, the next free element id)"""
+    from puzzle.adapters.weld_pairs import all_pairs
+
+    out: list[str] = []
+    for name, wp in all_pairs(project, comp, mesh).items():
+        tag = set_name("WE", name)
+        for dof in (1, 2, 3):
+            rows = []
+            for a, b in zip(wp.a, wp.b, strict=True):
+                rows.append(f"{elem}, {int(a)}, {int(b)}")
+                elem += 1
+            out += [f"*ELEMENT, TYPE=SPRING2, ELSET={tag}{dof}", *rows,
+                    f"*SPRING, ELSET={tag}{dof}", f"{dof}, {dof}", f"{wp.k:.10e}"]  # fmt: skip
+    return out, elem
+
+
 def _transforms(project: Project, comp: Component, mesh: Mesh) -> list[str]:
     """*TRANSFORM for displacements still in local axes (cylindrical, or some components
     only), so their *BOUNDARY dofs are local (ADR 0037). A node in such a set takes no
     other load: CalculiX would read that load in the local axes too."""
     from puzzle.adapters.common import local_axes
 
-    features = [f for ph in comp.physics for f in ph.features]
+    features = [f for ph in comp.physics for f in ph.features if not _by_equations(f)]
     local = [f for f in globalize(project, features) if f.axes is not None]
     out, transformed = [], set()
     for f in local:
@@ -1612,6 +1952,110 @@ def _transforms(project: Project, comp: Component, mesh: Mesh) -> list[str]:
                 "axes; CalculiX would read it in those axes",
                 code="unsupported",
             )
+    return out
+
+
+def _by_equations(f) -> bool:
+    """A symmetry plane across no axis (ADR 0081), written as n · u = 0 equations."""
+    return bool(f.extensions.get("calculix", {}).get("equations"))
+
+
+def _plane_equations(project: Project, comp: Component, mesh: Mesh) -> list[str]:
+    """*EQUATION for symmetry planes across no global axis (ADR 0081): at each node every
+    plane's held directions together, the components held by plain supports dropped
+    (they are zero), reduced so each dependent dof is in one equation only (CalculiX's
+    rule). Unlike *TRANSFORM, this combines with other supports and planes at shared
+    edges and corners."""
+    from puzzle.adapters.common import local_axes
+
+    features = [f for ph in comp.physics for f in ph.features]
+    planes = [f for f in features if f.type == "displacement" and _by_equations(f)]
+    if not planes:
+        return []
+    dofs = 2 if mesh.planar else 3
+    held: dict[int, set[int]] = {}  # node -> dofs held at zero by plain supports
+    for f in features:
+        if f in planes or f.type not in ("fixed", "displacement") or f.selection not in mesh.groups:
+            continue
+        nodes = mesh.groups[f.selection].node_ids.tolist()
+        if f.steps or f.axes is not None or f.fields:
+            if any(set(nodes) & set(mesh.groups[p.selection].node_ids.tolist()) for p in planes):
+                raise InputError(
+                    f"'{f.selection}' shares nodes with a symmetry plane across no axis, and "
+                    "holds them in some steps or in local axes only; CalculiX can't combine "
+                    "those yet",
+                    code="unsupported",
+                )
+            continue
+        values = {a: f.values[a].to_si() for a in "xyz" if a in f.values}
+        comps = range(dofs) if f.type == "fixed" else ["xyz".index(a) for a in values]
+        if any(abs(v) > 0 for v in values.values()) and any(
+            set(nodes) & set(mesh.groups[p.selection].node_ids.tolist()) for p in planes
+        ):
+            raise InputError(f"'{f.selection}' prescribes a nonzero displacement on nodes of a "
+                             "symmetry plane", code="unsupported")  # fmt: skip
+        for n in nodes:
+            held.setdefault(n, set()).update(comps)
+    rows: dict[int, list[np.ndarray]] = {}
+    for f in planes:
+        if f.steps:
+            raise InputError("a symmetry plane across no axis applies in every step on "
+                             "CalculiX", code="unsupported")  # fmt: skip
+        r = local_axes(project, f).rotation()
+        directions = [r[:dofs, "xyz".index(a)] for a in f.values]
+        for n in mesh.groups[f.selection].node_ids.tolist():
+            rows.setdefault(n, []).extend(directions)
+    out = []
+    for n in sorted(rows):
+        free = [d for d in range(dofs) if d not in held.get(n, set())]
+        a = np.array([[row[d] for d in free] for row in rows[n]])
+        for terms in _reduced(a, free):
+            out += ["*EQUATION", str(len(terms))]
+            out.append(", ".join(f"{n}, {d + 1}, {c:.13g}" for d, c in terms))
+    return out
+
+
+def _cyclic_equations(comp: Component, mesh: Mesh, physics_types) -> list[str]:
+    """*EQUATION for a cyclic sector (ADR 0081 step 3): each target node follows its
+    source node, turned (`puzzle.cyclic.rows`)."""
+    if not comp.repeats():
+        return []
+    from puzzle.cyclic import rows
+
+    out = []
+    for terms in rows(comp, mesh, set(physics_types), mesh.planar):
+        out += ["*EQUATION", str(len(terms))]
+        out += [", ".join(f"{n}, {d}, {c:.13g}" for n, d, c in terms[i : i + 4])
+                for i in range(0, len(terms), 4)]  # fmt: skip
+    return out
+
+
+def _reduced(a: np.ndarray, columns: list[int], tol: float = 1e-9) -> list[list[tuple]]:
+    """Rows of a (constraints a · u = 0 over `columns`) in reduced row echelon form, each
+    as [(dof, coefficient), ...] with its pivot first: each pivot is in no other row."""
+    a = np.array(a, float)
+    if a.size == 0:
+        return []
+    m, k = a.shape
+    pivots, r = [], 0
+    for c in range(k):
+        if r == m:
+            break
+        p = r + int(np.argmax(np.abs(a[r:, c])))
+        if abs(a[p, c]) < tol:
+            continue
+        a[[r, p]] = a[[p, r]]
+        a[r] /= a[r, c]
+        for i in range(m):
+            if i != r:
+                a[i] -= a[i, c] * a[r]
+        pivots.append(c)
+        r += 1
+    out = []
+    for i, c in enumerate(pivots):
+        terms = [(columns[c], 1.0)] + [(columns[j], float(a[i, j])) for j in range(k)
+                                       if j != c and abs(a[i, j]) > tol]  # fmt: skip
+        out.append(terms)
     return out
 
 
@@ -1695,6 +2139,8 @@ def _feature_rows(f: Feature, mesh: Mesh, faces: FaceLookup, rigid=None) -> dict
         dofs = (0, 1) if mesh.planar else range(3)  # z is out of a 2D model's plane
         for node, force in sorted(forces.items()):
             cload += [f"{node}, {d + 1}, {force[d]:.10g}" for d in dofs if force[d]]
+    elif f.type == "displacement" and _by_equations(f):
+        pass  # written once, as *EQUATION before the steps (_plane_equations)
     elif f.type == "displacement":
         boundary += [
             f"{nset}, {d}, {d}, {v[axis]:.10g}"
@@ -1708,6 +2154,10 @@ def _feature_rows(f: Feature, mesh: Mesh, faces: FaceLookup, rigid=None) -> dict
         cload += [
             f"{n}, {d + 1}, {fn[d]:.10g}" for n, fn in forces.items() for d in (0, 1) if fn[d]
         ]
+    elif f.type == "force" and _on_shell_edge(mesh, group):  # along a shell's edge
+        forces = nodal_edge_forces(group, mesh, [v.get(a, 0.0) for a in "xyz"])
+        cload += [f"{n}, {d + 1}, {fn[d]:.10g}" for n, fn in forces.items() for d in range(3)
+                  if fn[d]]  # fmt: skip
     elif f.type == "force":
         cload += _nodal_forces(group, mesh, [v.get(a, 0.0) for a in "xyz"])
     elif f.type == "pressure" and group.dim == 2 and _on_shells(mesh, group):
@@ -1796,7 +2246,18 @@ def _feature_rows(f: Feature, mesh: Mesh, faces: FaceLookup, rigid=None) -> dict
     }
 
 
-CONTACTS = {"bonded_nonconformal", "frictionless", "frictional"}
+CONTACTS = {"bonded_nonconformal", "frictionless", "frictional", "no_separation", "rough"}
+# Contacts written as surface-to-surface *CONTACT PAIRs (the rest are ties or shared nodes).
+PAIRS = frozenset({"frictionless", "frictional", "no_separation", "rough"})
+# A rough contact is friction without slip (Ansys's Rough): Coulomb with a coefficient no
+# real interface reaches, so a closed point sticks; it still opens under tension.
+ROUGH_MU = 1.0e3
+# No separation on CalculiX: PRESSURE-OVERCLOSURE=TIED takes a stick slope (*FRICTION);
+# this fraction of the normal penalty leaves the faces free to slide in effect.
+SLIDE = 1.0e-6
+SLACK = 1e-4  # a unilateral thread flank's stiffness in tension, a fraction of k
+AXISYMMETRIC_SECTOR = 2.0 / 360.0  # the slice CalculiX expands an axisymmetric model to
+THREADS = frozenset({"bonded", "no_separation", "frictionless"})  # ADR 0076; not friction yet
 # Contact penalty K = factor × E / h, by the contact's stiffness. Measured on the
 # bolted bracket (from the full load, 8 cores) and on a stack loaded through its
 # interface (test_contact), where the interface's give shows most (~8 % / factor):
@@ -1815,10 +2276,15 @@ def _contacts(project: Project, comp: Component, mesh: Mesh, faces: FaceLookup) 
       linear penalty: K = factor × E / h (the softer material, the slave face size;
       `PENALTY_FACTOR`, as Ansys's FKN), so the overclosure stays a small fraction of
       an element. Friction adds *FRICTION with a stick slope of the same order.
+    - No separation is the same pair with PRESSURE-OVERCLOSURE=TIED (the penalty acts in
+      tension as in compression) and a stick slope SLIDE × K, which TIED requires but
+      which holds nothing: closed in the normal, free to slide.
+    - Rough is the linear pair with *FRICTION at μ = ROUGH_MU: no slip while closed, and
+      it opens.
     """
     out: list[str] = []
     for i, c in enumerate(comp.contacts, start=1):
-        if c.capability == "bonded_conformal":
+        if c.capability == "bonded_conformal" or c.thread is not None:  # threads: _threads
             continue
         names, slave_faces = [], []
         for role, selection in (("SLAVE", c.source), ("MASTER", c.target)):
@@ -1842,11 +2308,15 @@ def _contacts(project: Project, comp: Component, mesh: Mesh, faces: FaceLookup) 
             f"*CONTACT PAIR, INTERACTION={interaction}, TYPE=SURFACE TO SURFACE",
             ", ".join(names),
             f"*SURFACE INTERACTION, NAME={interaction}",
-            "*SURFACE BEHAVIOR, PRESSURE-OVERCLOSURE=LINEAR",
+            "*SURFACE BEHAVIOR, PRESSURE-OVERCLOSURE="
+            + ("TIED" if c.type == "no_separation" else "LINEAR"),
             f"{stiffness:.6g}",
         ]
-        if c.type == "frictional":
-            out += ["*FRICTION", f"{c.friction:.10g}, {stiffness:.6g}"]
+        if c.type in ("frictional", "rough"):
+            mu = c.friction if c.type == "frictional" else ROUGH_MU
+            out += ["*FRICTION", f"{mu:.10g}, {stiffness:.6g}"]
+        elif c.type == "no_separation":  # TIED needs a stick slope: one too small to hold
+            out += ["*FRICTION", f"{SLIDE:.6g}, {stiffness * SLIDE:.6g}"]  # μ > 0: required
     return out
 
 
@@ -1884,7 +2354,8 @@ def contact_summary(project: Project, comp: Component, mesh: Mesh | None = None)
             continue
         factor = float(c.extensions.get("calculix", {}).get(
             "penalty_factor", PENALTY_FACTORS[c.stiffness]))  # fmt: skip
-        text = (f"*CONTACT PAIR, surface to surface, slave {c.source}; linear penalty "
+        law = "tied (no separation, free to slide)" if c.type == "no_separation" else "linear"
+        text = (f"*CONTACT PAIR, surface to surface, slave {c.source}; {law} penalty "
                 f"K = {factor:g} E/h")  # fmt: skip
         group = mesh.groups.get(c.source) if mesh is not None else None
         if group is not None:
@@ -1898,6 +2369,8 @@ def contact_summary(project: Project, comp: Component, mesh: Mesh | None = None)
             text += " (h from the mesh)"
         if c.type == "frictional":
             text += f"; *FRICTION μ = {c.friction:g}, stick slope K"
+        elif c.type == "rough":
+            text += f"; *FRICTION μ = {ROUGH_MU:g} (rough: no slip while closed), stick slope K"
         text += moved_words(c)
         text += "; static steps start at a tenth of the load"
         out[c.name] = text
@@ -2009,7 +2482,7 @@ def _nodal_forces(group, mesh: Mesh, total: list[float]) -> list[str]:
             raise InputError(f"force on {b.element} faces is not supported yet")
         xyz = mesh.node_coords(b.connectivity[:, :3].ravel()).reshape(-1, 3, 3)
         areas = 0.5 * np.linalg.norm(np.cross(xyz[:, 1] - xyz[:, 0], xyz[:, 2] - xyz[:, 0]), axis=1)
-        if b.element == "quad4":
+        if b.element in ("quad4", "quad8"):
             q = mesh.node_coords(b.connectivity[:, [0, 2, 3]].ravel()).reshape(-1, 3, 3)
             areas = areas + 0.5 * np.linalg.norm(
                 np.cross(q[:, 1] - q[:, 0], q[:, 2] - q[:, 0]), axis=1

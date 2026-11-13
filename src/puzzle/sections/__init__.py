@@ -1,6 +1,8 @@
 """Standard structural sections for beams (ADR 0055): the AISC Shapes Database v16.0
 and the EN 10365 / EN 10056-1 tables, shipped as JSON in SI (made by
-`scripts/import_sections.py` from Lacewing Lab's tables; not edited by hand).
+`scripts/import_sections.py` from Lacewing Lab's tables; not edited by hand), and the
+Aluminum Association's standard I-beams, tubes and pipes from the Aluminum Design
+Manual 2015, Part V (`scripts/import_aluminum_sections.py`, ADR 0079 step 5).
 
 A `Section` gives what a beam element needs, in the section's own axes: its first axis
 lies across the flanges (the strong axis's direction: EN y-y, AISC x-x), so the web
@@ -25,7 +27,7 @@ from dataclasses import dataclass, field
 from functools import cache
 from importlib.resources import files
 
-STANDARDS = {"aisc": "AISC (US)", "en": "EN / ISO (Europe)"}
+STANDARDS = {"aisc": "AISC (US)", "en": "EN / ISO (Europe)", "aa": "Aluminum Association (US)"}
 # Shapes a beam takes: all the tables hold.
 SUPPORTED = {"I", "C", "T", "RHS", "CHS", "2L", "L"}
 
@@ -70,12 +72,14 @@ class Section:
 def _table(standard: str) -> dict[str, dict]:
     if standard not in STANDARDS:
         raise KeyError(f"no section standard '{standard}'")
-    data = json.loads(files(__package__).joinpath(f"{standard}.json").read_text())
+    data = json.loads(files(__package__).joinpath(f"{standard}.json").read_text(encoding="utf-8"))
     return {row["designation"]: row for row in data["sections"]}
 
 
 def source(standard: str) -> str:
-    return json.loads(files(__package__).joinpath(f"{standard}.json").read_text())["source"]
+    return json.loads(files(__package__).joinpath(f"{standard}.json").read_text(encoding="utf-8"))[
+        "source"
+    ]
 
 
 def families(standard: str) -> list[str]:

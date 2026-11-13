@@ -56,7 +56,12 @@ lists the feature types it takes.
    system turns about its z through its origin).
 5. **Some steps only**: `"steps": [2, 3]` applies a feature in those solve steps (1 is
    the first); empty means every step. A pretension acts in its first step and is held
-   at its length after.
+   at its length after. A study that tightens bolts and loads in its first static step
+   gets a preload step in front by itself (`preload_step` "auto", on CalculiX and
+   Code_Aster): the bolts tightened with the supports only, results labelled Preload,
+   then the loads with each bolt locked. "never" tightens with the loads; "always" on
+   any solver. Set it with `{"command": "edit", "object": "<study>", "ops": [{"op":
+   "set", "path": "preload_step", "value": "never"}]}`.
 6. **Over time**: `"amplitude": "<amplitude id>"` makes `force` or `pressure` follow a
    time table in transient steps (skill `dynamics`).
 7. Run with `submit(command={"command": "run_study", "study": "<name>"})`. Check
@@ -74,7 +79,12 @@ Bolts as beams between holes, with sizes and preloads: skill `bolts`.
   `pressure` for per area.
 - A pretension needs a section face: the geometry's `split` step makes one
   (`<split>/section`). Keep the section clear of other parts. Elmer and FEniCSx refuse
-  it, and so does a study with more than one structural step on Code_Aster.
+  it. Code_Aster runs a study's static steps as one chained result when it tightens
+  bolts (so the lock carries), and refuses a pretension with other kinds of steps.
+- Don't fight a hard preloaded contact solve by ramping the pretension with the loads:
+  the preload step is the fix (a joint tightened and loaded at once chattered and timed
+  out on CalculiX). Read the bolt forces at the Preload step against their preload,
+  and at the last step for the service load's share.
 - A compression-only support makes the step nonlinear (CalculiX adds NLGEOM).
 - Local `axes` are taken only for: `displacement` in Cartesian or cylindrical axes
   (some components only, e.g. just a radial one: CalculiX only), `force` in

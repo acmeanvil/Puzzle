@@ -1,6 +1,7 @@
 """The menu bar reaches everything the ribbons and the tree's menus do.
 
-Project, Materials, Geometry, Mesh, Model, Results, Window and Help, in that order.
+Project, Geometry, Materials, Mesh, Model, Results, Window and Help, in that order (the
+tree's); Model and Results as fly-outs of like items.
 Every ribbon button (Geometry, Mesh, Results) and every item of the tree's section
 menus has a menu bar action of the same name; shortcuts don't clash. Actions that need
 a part or study take the selected one or ask in one form: a geometry tool from the menu
@@ -62,11 +63,89 @@ def texts(window) -> set[str]:
     return out
 
 
+def test_duplicate_a_component_with_its_studies_and_a_study(window):
+    """Duplicate in the tree and the menu bar (the maintainer, 2026-11-08)."""
+    from forms import fill
+
+    from puzzle.model.schema import Component, Study
+
+    project = window.session.project
+    comp = project.of_type(Component)[0]
+    before = len(project.of_type(Study))
+    fill(window, name="Heavy", studies="yes")
+    menus.copy_component(window, comp)
+    project = window.session.project
+    heavy = next(c for c in project.of_type(Component) if c.name == "Heavy")
+    assert [s for s in project.of_type(Study) if s.component == heavy.id]
+    study = project.of_type(Study)[0]
+    window.ask_text = lambda *a, **k: "Variant"
+    menus.copy_study(window, study)
+    names = {s.name for s in window.session.project.of_type(Study)}
+    assert "Variant" in names and len(names) == 2 * before + 1
+    assert "Duplicate study…" in texts(window) and "Duplicate component…" in texts(window)
+
+
+def _leaves(menu: QMenu) -> list[str]:
+    """A menu's entries at any depth (New operator > a group > its operators)."""
+    out = []
+    for a in menu.actions():
+        out += _leaves(a.menu()) if a.menu() else [a.text()]
+    return out
+
+
+def test_operator_menus_are_grouped_and_alphabetical(window):
+    """Every New operator menu (the tree's and the schematic's New, the Results menu)
+    has one flyout per group, each alphabetical (the maintainer, 2026-11-08)."""
+    from puzzle.operators import GROUPS
+
+    menu = QMenu()
+    menus._operator_menu(window, menu)
+    top = menu.actions()[0].menu()
+    titles = [a.text() for a in top.actions()]
+    assert titles == [g for g in GROUPS if g in titles]  # groups, in the order work flows
+    for a in top.actions():
+        labels = [b.text() for b in a.menu().actions()]
+        assert labels and labels == sorted(labels, key=str.casefold), a.text()
+
+
 def test_menu_titles(window):
+    """In the tree's order: Geometry, then Materials (the maintainer, 2026-11-09)."""
+    from puzzle.gui.tree import SECTIONS
+
     titles = [a.text().replace("&", "") for a in window.menuBar().actions()]
     assert titles == [
-        "Project", "Materials", "Geometry", "Mesh", "Model", "Results", "Window", "Help"
+        "Project", "Geometry", "Materials", "Mesh", "Model", "Results", "Window", "Help"
     ]  # fmt: skip
+    order = [t for t, _ in SECTIONS]
+    assert order.index("Geometry") < order.index("Materials") < order.index("Meshes")
+
+
+def test_model_and_results_are_fly_outs_of_like_items(window):
+    """Model and Results hold submenus, each item in one (the maintainer, 2026-11-09)."""
+
+    def subs(menu):
+        return {a.text(): a.menu() for a in menu.actions() if a.menu() is not None}
+
+    model = subs(window.menus["Model"])
+    assert list(model) == ["Components", "Physics and loads", "Symmetry", "Contacts",
+                           "Bolts and fasteners", "Beams and shells", "Studies", "Run"]  # fmt: skip
+    assert [a.text() for a in model["Symmetry"].actions()] == [
+        "Symmetry plane…",
+        "Antisymmetry plane…",
+        "Cyclic symmetry…",
+        "Periodic symmetry…",
+        "Remove cyclic or periodic symmetry",
+        "Model type (3D, 2D planar, axisymmetric)…",
+    ]
+    assert not [a.text() for a in window.menus["Model"].actions()
+                if a.menu() is None and a.text()]  # fmt: skip
+    contacts = [a.text() for a in model["Contacts"].actions()]
+    assert contacts == ["Find contacts…", "Add contact…", "Thread on a contact…", "Contact tool"]
+    assert "Run study" in [a.text() for a in model["Run"].actions()]
+    results = subs(window.menus["Results"])
+    assert {"Result tools", "View", "Operators", "Export"} <= set(results)
+    assert not [a.text() for a in window.menus["Results"].actions()
+                if a.menu() is None and a.text()]  # fmt: skip
 
 
 def test_every_ribbon_button_and_section_item_is_in_the_menus(window):
@@ -78,10 +157,7 @@ def test_every_ribbon_button_and_section_item_is_in_the_menus(window):
     assert not missing, missing
     for section in ("Geometry", "Parameters", "Materials", "Meshes", "Components",
                     "Studies", "Amplitudes", "Coordinate systems", "Results"):  # fmt: skip
-        menu = menus.build_menu(window, Node("section", label=section))
-        items = []
-        for a in menu.actions():
-            items += [s.text() for s in a.menu().actions()] if a.menu() else [a.text()]
+        items = _leaves(menus.build_menu(window, Node("section", label=section)))
         lost = {t for t in items if t and RENAMED.get(t, t) not in have}
         assert not lost, (section, lost)
     rows = main_menu.shortcut_rows(window)
@@ -117,3 +193,28 @@ def test_run_asks_which_study_when_none_is_selected(app, window):
     window.run_dialog = run
     window.actions_by_name["run"].trigger()
     assert asked and "Tip load" in asked[0]
+
+
+def test_a_refresh_shows_the_selection_once_and_menus_outlive_it(window):
+    """The tree is rebuilt after every change. It used to show the selection three times
+    a refresh (nothing, the item, the item), and a right-click menu held items that a
+    rebuild deleted (Rename... raised "already deleted")."""
+    from puzzle.gui import organise
+    from puzzle.gui.tree import Node
+    from puzzle.model.schema import Component
+
+    w = window
+    comp = w.session.project.of_type(Component)[0]
+    node = Node("object", str(comp.id))
+    w.tree.select(node)
+    shown = []
+    w._show_selected = lambda: shown.append(w.tree.current())
+    w.refresh()
+    assert len(shown) == 1 and shown[0].object == str(comp.id)
+
+    menu = QMenu()
+    organise.add_to_menu(w, menu, w.tree.current())
+    w.refresh()  # an edit lands while the menu is open
+    (rename,) = [a for a in menu.actions() if a.text().startswith("Rename")]
+    rename.trigger()
+    assert w.tree.current().object == str(comp.id)

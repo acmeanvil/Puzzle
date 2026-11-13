@@ -75,7 +75,7 @@ def run_job(
     start = time.monotonic()
     cancelled = timed_out = False
 
-    with log_path.open("w") as log:
+    with log_path.open("w", encoding="utf-8") as log:
 
         def say(line: str) -> None:  # the runtime's own notes (a remote copy's size)
             log.write(line + "\n")
@@ -91,6 +91,8 @@ def run_job(
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             bufsize=1,
         )
         lines: queue.Queue[str | None] = queue.Queue(maxsize=_QUEUE_LINES)
@@ -158,7 +160,7 @@ def _through_runner(service, command, workdir, runtime, *, on_output, cancel, ti
     ctx = pending.CONTEXT.get()
     job = pending.attached(workdir)
     label = {"folder": workdir.name, "runtime": runtime.describe()}
-    log = None if service.log_is_local else log_path.open("w")
+    log = None if service.log_is_local else log_path.open("w", encoding="utf-8")
     written, truncated = 0, False
 
     def say(line: str) -> None:
@@ -221,10 +223,12 @@ def _through_runner(service, command, workdir, runtime, *, on_output, cancel, ti
             if cancel is not None and cancel.is_set() and not cancelled:
                 cancelled = True
                 service.cancel(job)
+                _inside(runtime, workdir)
             running = state.get("elapsed") or 0.0
             if timeout_s is not None and running > timeout_s and not (timed_out or cancelled):
                 timed_out = True
                 service.cancel(job)
+                _inside(runtime, workdir)
             if not text:
                 if parser is not None:
                     emit(parser.safe(parser.poll))
@@ -285,3 +289,15 @@ def _stop(proc: subprocess.Popen[str]) -> None:
         proc.wait(timeout=_TERMINATE_GRACE_S)
     except subprocess.TimeoutExpired:
         proc.kill()
+
+
+def _inside(runtime, workdir) -> None:
+    """A warm container's solve stopped inside it (ADR 0072): the runner stops the local
+    `docker exec`, which leaves the process it started running."""
+    from puzzle.jobs.warm import WarmRuntime
+
+    if isinstance(runtime, WarmRuntime):
+        import contextlib
+
+        with contextlib.suppress(Exception):  # a cancel never fails the run's own handling
+            runtime.cancel(workdir)

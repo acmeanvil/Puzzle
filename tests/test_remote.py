@@ -4,6 +4,7 @@ reach the remote run; failures are coded. The fakes in remote_fakes.py stand in 
 ssh, rsync and the schedulers on this machine, so the solver is the real CalculiX."""
 
 import shutil
+import sys
 import threading
 import time
 from pathlib import Path
@@ -34,7 +35,7 @@ def test_hosts_are_the_users_and_round_trip(tmp_path):
                    partition="short", cores=32, images={"elmer": "/scratch/elmer.sif"})  # fmt: skip
     path = hosts.add(h)
     assert path.name == "hosts.toml" and "projects" not in str(path)
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     assert "partition" in text and "envs_dir" not in text  # defaults left out
     back = hosts.get("cluster")
     assert back == h
@@ -48,6 +49,7 @@ def test_hosts_are_the_users_and_round_trip(tmp_path):
         hosts.Host(name="x", address="y", runtime="kubernetes")
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="the fakes are shell scripts")
 def test_check_says_what_a_host_has(fakes):
     bin_dir, _home = fakes
     found = hosts.check(remote_fakes.host(bin_dir, scheduler="slurm"))
@@ -67,6 +69,13 @@ def test_programs_from_local_pixi_envs_become_the_hosts():
     assert (exe, name, env, args) == ('"$ENVS"/fenicsx/bin/python', "python", "fenicsx",
                                       ["study.py"])  # fmt: skip
     assert _remote_program(["ccx", "-i", "job"]) == ("ccx", "ccx", "", ["-i", "job"])
+    # From Windows: the same environment's program on the (Unix) host, without .exe.
+    win = r"C:\Users\me\puzzle\.pixi\envs\fenicsx\python.exe"
+    assert _remote_program([win, "study.py"]) == ('"$ENVS"/fenicsx/bin/python', "python",
+                                                  "fenicsx", ["study.py"])  # fmt: skip
+    ccx = r"C:\Puzzle\envs\calculix\Library\bin\ccx.exe"
+    assert _remote_program([ccx, "-i", "job"])[:3] == ('"$ENVS"/calculix/bin/ccx', "ccx",
+                                                       "calculix")  # fmt: skip
 
 
 @needs_rsync
@@ -78,14 +87,16 @@ def test_a_pixi_program_runs_from_an_envs_dir_with_a_space(tmp_path, fakes):
     for env in ("calculix", "fenicsx"):  # another env's python must not be the one run
         (envs / env / "bin").mkdir(parents=True)
         python = envs / env / "bin" / "python"
-        python.write_text(f'#!/bin/sh\necho "{env} python $* prefix=$CONDA_PREFIX"\n')
+        python.write_text(
+            f'#!/bin/sh\necho "{env} python $* prefix=$CONDA_PREFIX"\n', encoding="utf-8"
+        )
         python.chmod(0o755)
     case = _case(tmp_path)
     rt = RemoteRuntime(remote_fakes.host(bin_dir, envs_dir=str(envs)), "fenicsx")
     lines = []
     job = run_job(["/Users/me/puzzle/.pixi/envs/fenicsx/bin/python", "study.py", "a b"], case,
                   rt, on_output=lines.append)  # fmt: skip
-    assert job.ok, (case / "solver.log").read_text()
+    assert job.ok, (case / "solver.log").read_text(encoding="utf-8")
     assert f"fenicsx python study.py a b prefix={envs / 'fenicsx'}" in lines
 
 
@@ -156,7 +167,7 @@ def test_failures_are_coded():
 def _case(tmp_path) -> Path:
     case = tmp_path / "project" / "run"
     case.mkdir(parents=True)
-    (case / "input.txt").write_text("21\n")
+    (case / "input.txt").write_text("21\n", encoding="utf-8")
     return case
 
 
@@ -169,9 +180,9 @@ def test_a_job_runs_there_and_comes_back(tmp_path, fakes):
     job = run_job(["sh", "-c", 'echo "threads $OMP_NUM_THREADS"; '
                    'echo $(( $(cat input.txt) * 2 )) > answer.txt; echo done'],
                   case, rt, on_output=lines.append)  # fmt: skip
-    assert job.ok, (case / "solver.log").read_text()
+    assert job.ok, (case / "solver.log").read_text(encoding="utf-8")
     assert "threads 3" in lines and "done" in lines  # streamed as it ran
-    assert (case / "answer.txt").read_text().strip() == "42"  # fetched back
+    assert (case / "answer.txt").read_text(encoding="utf-8").strip() == "42"  # fetched back
     assert any("sent" in x for x in lines) and any("fetched" in x for x in lines)
     assert not (home / rt.remote_dir(case)).exists()  # cleaned up there
     assert job.runtime == "lab (native)"
@@ -186,7 +197,7 @@ def test_a_cancel_stops_the_remote_run(tmp_path, fakes):
     threading.Timer(1.5, stop.set).start()
     job = run_job(["sh", "-c", "echo $$ > solver.pid; sleep 60"], case, rt, cancel=stop)
     assert job.cancelled
-    pid = int((home / rt.remote_dir(case) / "solver.pid").read_text())
+    pid = int((home / rt.remote_dir(case) / "solver.pid").read_text(encoding="utf-8"))
     time.sleep(0.5)
     import os
 
@@ -203,16 +214,16 @@ def test_a_scheduler_job_is_submitted_followed_and_coded(tmp_path, fakes, schedu
     lines = []
     ok = run_job(["sh", "-c", "echo solving; echo 7 > answer.txt"], case,
                  RemoteRuntime(h, "calculix"), on_output=lines.append)  # fmt: skip
-    assert ok.ok, (case / "solver.log").read_text()
+    assert ok.ok, (case / "solver.log").read_text(encoding="utf-8")
     assert any("submitted job" in x for x in lines) and "solving" in lines
-    assert (case / "answer.txt").read_text().strip() == "7"
+    assert (case / "answer.txt").read_text(encoding="utf-8").strip() == "7"
     assert (case / "puzzle-job.id").exists()  # kept with the run's files
     bad = run_job(["sh", "-c", "exit 3"], _case(tmp_path / "b"), RemoteRuntime(h, "calculix"))
     assert bad.returncode == 3
     short = remote_fakes.host(bin_dir, scheduler=scheduler, walltime="00:00:02")
     late_case = _case(tmp_path / "c")
     late = run_job(["sh", "-c", "sleep 20"], late_case, RemoteRuntime(short, "calculix"))
-    tail = (late_case / "solver.log").read_text().splitlines()
+    tail = (late_case / "solver.log").read_text(encoding="utf-8").splitlines()
     assert failure(tail, late.returncode, short).code == "walltime_exceeded"
 
 
@@ -220,7 +231,7 @@ def _scheduler_run(tmp_path, bin_dir, scheduler, command, **host):
     case = _case(tmp_path)
     h = remote_fakes.host(bin_dir, scheduler=scheduler, walltime="00:00:30", **host)
     job = run_job(command, case, RemoteRuntime(h, "calculix"))
-    tail = (case / "solver.log").read_text().splitlines()
+    tail = (case / "solver.log").read_text(encoding="utf-8").splitlines()
     return job, failure(tail, job.returncode, h), tail
 
 
@@ -277,7 +288,9 @@ def test_a_failed_queue_query_is_not_the_jobs_end(tmp_path, fakes, monkeypatch):
     job, said, tail = _scheduler_run(tmp_path / "a", bin_dir, "slurm",
                                      ["sh", "-c", "sleep 2; echo 7 > answer.txt"])  # fmt: skip
     assert job.ok and said is None, tail
-    assert (tmp_path / "a" / "project" / "run" / "answer.txt").read_text().strip() == "7"
+    assert (tmp_path / "a" / "project" / "run" / "answer.txt").read_text(
+        encoding="utf-8"
+    ).strip() == "7"
     monkeypatch.delenv("FAKE_SQUEUE_FAILS")
     monkeypatch.delenv("FAKE_NO_ACCOUNTING")
     monkeypatch.setenv("FAKE_SQUEUE_FORGETS", "1")
@@ -317,7 +330,7 @@ def test_a_rejected_job_is_coded(tmp_path, fakes):
     case = _case(tmp_path)
     h = remote_fakes.host(bin_dir, scheduler="slurm", partition="rejected")
     job = run_job(["true"], case, RemoteRuntime(h, "calculix"))
-    tail = (case / "solver.log").read_text().splitlines()
+    tail = (case / "solver.log").read_text(encoding="utf-8").splitlines()
     err = failure(tail, job.returncode, h)
     assert err.code == "queue_rejected" and "invalid partition" in err.message
 

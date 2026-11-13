@@ -52,8 +52,10 @@ def test_every_recipe_goes_in(setup):
         binding = {port["name"]: (str(study.id), "result") for port in t["ports"]}
         s.submit_batch(clusters.commands(s.project, key, binding))
     names = {o.name for o in s.project.of_type(Operator)}
-    assert "Stress margin: Check" in names and "Peak per part: Plot" in names
-    margin = next(o for o in s.project.of_type(Operator) if o.name == "Stress margin: Check")
+    assert "Stress margin: Check against limit" in names and "Peak per part: Plot" in names
+    margin = next(
+        o for o in s.project.of_type(Operator) if o.name == "Stress margin: Check against limit"
+    )
     assert margin.inputs["limit"].value == Quantity(value=250, unit="MPa")
 
 
@@ -90,3 +92,36 @@ def test_unknown_templates_are_refused(setup):
     s, _study, _store = setup
     with pytest.raises(PuzzleError, match="no recipe or cluster"):
         clusters.commands(s.project, "nope")
+
+
+def test_a_block_is_shared_as_a_file(setup, tmp_path):
+    """User operators shared (ADR 0071): a recipe exported as a block file, imported
+    (numbered beside one of the same name), listed, put in, removed; a file naming an
+    operator type this Puzzle lacks, or wired to an operator it doesn't hold, is refused
+    with the reasons."""
+    import json
+
+    from puzzle.cli import main
+    from puzzle.errors import PuzzleError
+
+    s, study, store = setup
+    block = clusters.export("peak_per_part", tmp_path)
+    assert block.name.endswith(clusters.SUFFIX)
+    assert json.loads(block.read_text(encoding="utf-8"))["puzzle_block"] == 1
+    first, second = clusters.import_file(block), clusters.import_file(block)
+    assert first != second and {first, second} <= set(clusters.templates())
+    s.submit_batch(clusters.commands(s.project, first, {"result": (str(study.id), "result")}))
+    assert any(o.name.startswith("Peak") for o in s.project.of_type(Operator))
+    clusters.remove(second)
+    assert second not in clusters.templates()
+    bad = tmp_path / "bad.json"
+    bad.write_text(json.dumps({"name": "Bad", "operators": [
+        {"key": "op1", "type": "warp_drive"},
+        {"key": "op2", "type": "panel", "inputs": {"value": {"from": "op9"}}}]}),
+        encoding="utf-8")  # fmt: skip
+    with pytest.raises(PuzzleError) as err:
+        clusters.import_file(bad)
+    assert "warp_drive" in err.value.message and "op9" in err.value.message
+    assert main(["clusters", "list"]) == 0
+    assert main(["clusters", "export", "peak_per_part", str(tmp_path / "x.json")]) == 0
+    clusters.remove(first)

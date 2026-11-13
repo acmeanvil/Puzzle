@@ -5,6 +5,7 @@ trackers are read wherever they sit), and the boxed alarms and errors, in Englis
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -64,7 +65,7 @@ class CodeAsterProgress(Parser):
     def __init__(self, input_file: Path, step: int = 1, of: int = 1) -> None:
         super().__init__(step, of)
         comm = next(iter(sorted(input_file.parent.glob("*.comm"))), None)
-        text = comm.read_text(errors="replace") if comm is not None else ""
+        text = comm.read_text(errors="replace", encoding="utf-8") if comm is not None else ""
         ends = _numbers(text, "JUSQU_A")
         self.end_time = max(ends) if ends else None
         nonlinear = any(k in text for k in ("STAT_NON_LINE", "DYNA_NON_LINE", "THER_NON_LINE"))
@@ -89,6 +90,14 @@ class CodeAsterProgress(Parser):
         self.box_line = 0
         self.gave_up = False  # a final Diverged is sent once
         self.last_box = ""
+        # Native Code_Aster on Windows (ADR 0072): run_aster.bat writes the run to fort.6
+        # in its temporary folder (`>>`, where Linux's run_aster uses tee), so stdout says
+        # nothing until the end; that file is followed instead, once found.
+        import time
+
+        self.began = time.time()
+        self.tail = None
+        self.native_windows = os.name == "nt" and not _in_container(input_file)
 
     # --- the Newton table ----------------------------------------------------------
 
@@ -165,6 +174,26 @@ class CodeAsterProgress(Parser):
     # --- lines -----------------------------------------------------------------------
 
     def feed(self, line: str) -> list[Event]:
+        if self.tail is not None:  # fort.6 is read instead (`poll`): no line twice
+            return []
+        return self._line(line)
+
+    def poll(self) -> list[Event]:
+        if not self.native_windows:
+            return []
+        if self.tail is None:
+            found = _fort6(self.began)
+            if found is None:
+                return []
+            from puzzle.progress import Tail
+
+            self.tail = Tail(found)
+        out: list[Event] = []
+        for line in self.tail.lines():
+            out += self._line(line)
+        return out
+
+    def _line(self, line: str) -> list[Event]:
         out: list[Event] = []
         if not self.started:
             self.started = True
@@ -287,3 +316,41 @@ class CodeAsterProgress(Parser):
                 )
             )
         return events
+
+
+_CLAIMED: set[str] = set()  # temporary folders a parser here follows already
+
+
+def _in_container(input_file: Path) -> bool:
+    """Whether this job runs in Code_Aster's image (its stdout streams)."""
+    try:
+        from puzzle.jobs.runtime import ContainerRuntime, runtime_for
+
+        return isinstance(runtime_for("code_aster"), ContainerRuntime)
+    except Exception:  # noqa: BLE001 - unsure: follow stdout and look for fort.6 too
+        return False
+
+
+def _fort6(since: float) -> Path | None:
+    """The fort.6 of the newest run_aster temporary folder made since `since` (with a
+    few seconds' slack) that no other job here follows."""
+    import tempfile
+
+    best = None
+    for folder in Path(tempfile.gettempdir()).glob("run_aster_*"):
+        try:
+            made = folder.stat().st_ctime
+        except OSError:
+            continue
+        log = folder / "fort.6"
+        if (
+            made >= since - 5
+            and str(folder) not in _CLAIMED
+            and log.exists()
+            and (best is None or made > best[0])
+        ):
+            best = (made, log)
+    if best is None:
+        return None
+    _CLAIMED.add(str(best[1].parent))
+    return best[1]

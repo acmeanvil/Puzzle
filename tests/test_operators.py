@@ -192,11 +192,14 @@ def test_panel_shows_and_export_writes(setup, tmp_path):
     panel = p.add(Operator(name="Show", type="panel", inputs={"value": wire(hot)}))
     assert ev.shown(ctx, panel) == ("3 K", "")
     empty = p.add(Operator(name="Empty", type="panel"))
-    assert ev.shown(ctx, empty)[0] == "panel 'Empty': its value input is not wired"
+    assert ev.shown(ctx, empty)[0] == "show value 'Empty': its value input is not wired"
     out = p.add(Operator(name="Max T", type="export", inputs={"value": wire(hot)}))
     written = ev.export(ctx, out, tmp_path)
     assert written == [tmp_path / "exports" / "Max_T.csv"]
-    assert written[0].read_text().splitlines() == ["name,value [K]", "Maximum temperature,3"]
+    assert written[0].read_text(encoding="utf-8").splitlines() == [
+        "name,value [K]",
+        "Maximum temperature,3",
+    ]
     out.file = "../outside.csv"
     with pytest.raises(PuzzleError, match="inside the project folder"):
         ev.export(ctx, out, tmp_path)
@@ -288,7 +291,8 @@ def test_the_schematic_draws_operators_with_typed_ports_and_values(setup):
     runs = list(ctx.store.runs())
     s = sch.build(p, runs, store=ctx.store)
     node = s.nodes[str(check.id)]
-    assert node.kind == "operator" and node.subtitle == "Check" and node.column == sch.RESULTS
+    assert node.kind == "operator" and node.subtitle == "Check against limit"
+    assert node.column == sch.RESULTS
     assert [(x.key, x.side, x.type) for x in node.ports] == [
         ("out", "out", "verdict"), ("margin", "out", "number"),
         ("value", "in", "number"), ("limit", "in", "number")]  # fmt: skip
@@ -317,7 +321,7 @@ def test_outline_cli_and_mcp(setup, tmp_path, capsys):
     p.add(Operator(name="Hot", type="reduce", quantity="temperature:value", selection="Bar/Left",
                    inputs={"result": wire(study, "result")}))  # fmt: skip
     text = outline(p)
-    assert ("Operator Hot: reduce max of temperature:value on Bar/Left; result <- Heat"
+    assert ("Operator Hot: result summary max of temperature:value on Bar/Left; result <- Heat"
             in text)  # fmt: skip
     root = tmp_path / "p"
     save_project(p, root)
@@ -340,7 +344,7 @@ def test_outline_cli_and_mcp(setup, tmp_path, capsys):
                inputs={"value": {"source": "Hot"}, "limit": {"value": "300 K"}})  # fmt: skip
     assert out["status"] == "applied"
     assert "no run yet" in out["value"]["error"]["message"]
-    assert out["value"]["wiring"] == "check at most; value <- Hot, limit = 300 K"
+    assert out["value"]["wiring"] == "check against limit at most; value <- Hot, limit = 300 K"
     (cool,) = [o for o in Session(root).project.of_type(Operator) if o.name == "Cool"]
     assert cool.inputs["limit"].value == Quantity(value=300, unit="K")
     listed = call("operator_value")["operators"]

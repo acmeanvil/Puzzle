@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from puzzle.errors import PuzzleError
+from puzzle.jobs.warm import batched as _batched  # ADR 0072: warm containers
 
 SAFETY = 1.25  # Roache's factor of safety for three or more meshes
 ORDER_RANGE = (0.5, 6.0)  # an observed order outside it: not in the asymptotic range
@@ -156,6 +157,7 @@ def _stored(store, study, key: str):
                  and r.status == "completed" and r.run_key == key), None)  # fmt: skip
 
 
+@_batched
 def run(project, study, root: Path, workdir: Path, *, store, count: int = 3,
         ratio: float = 1.5, outputs=(), solve=None, on_output=None, cancel=None,
         read_only: bool = False) -> list[Level]:  # fmt: skip

@@ -114,7 +114,9 @@ def test_passes_until_the_error_is_at_the_target(tmp_path):
     again = adapt.run(p, study, tmp_path, tmp_path / "w", store=store,
                       settings=Adapt(target=0.04, passes=5), read_only=True)  # fmt: skip
     assert [x.run for x in again.passes] == [x.run for x in out.passes]  # by run key
-    kept = json.loads((tmp_path / "results" / "adapt" / f"{study.id}.json").read_text())
+    kept = json.loads(
+        (tmp_path / "results" / "adapt" / f"{study.id}.json").read_text(encoding="utf-8")
+    )
     assert len(kept["passes"]) == 3 and kept["converged"]
     assert adapt.lines(out)[-1].startswith("converged: error 3.")
 

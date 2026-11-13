@@ -117,7 +117,7 @@ def test_channel_wall_quantities(channel):
     mu = project.of_type(Material)[0].properties["dynamic_viscosity"].to_si()
     files = export(project, store, run.run_id, "wall_cloud", tmp / "out" / "walls")
     csv = files[0]
-    header = csv.read_text().splitlines()[0].split(",")
+    header = csv.read_text(encoding="utf-8").splitlines()[0].split(",")
     table = np.loadtxt(csv, delimiter=",", skiprows=1)
     col = {h: table[:, i] for i, h in enumerate(header)}
     x = col["x [m]"]
@@ -132,7 +132,9 @@ def test_channel_wall_quantities(channel):
     slope = np.polyfit(x[developed], col["wall pressure [Pa]"][developed], 1)[0]
     print(f"{solver}: wall dp/dx {slope:.6g} Pa/m (exact {-12 * mu * ch.U / ch.H**2:.6g})")
     assert slope == pytest.approx(-12 * mu * ch.U / ch.H**2, rel=0.02)
-    assert "Heat transfer coefficient" in files[-1].read_text()  # said why not written
+    assert "Heat transfer coefficient" in files[-1].read_text(
+        encoding="utf-8"
+    )  # said why not written
 
 
 @over("code_saturne")
@@ -148,7 +150,7 @@ def test_heated_channel_heat_transfer_coefficient(tmp_path, solver):
     bulk = float((temp * speed).sum() / speed.sum())
     files = export(project, store, run.run_id, "wall_cloud", tmp_path / "walls",
                    reference_temperature=bulk)  # fmt: skip
-    header = files[0].read_text().splitlines()[0].split(",")
+    header = files[0].read_text(encoding="utf-8").splitlines()[0].split(",")
     table = np.loadtxt(files[0], delimiter=",", skiprows=1)
     col = {h: table[:, i] for i, h in enumerate(header)}
     near = np.abs(col["x [m]"] - 0.06) < 0.3e-3
@@ -169,7 +171,7 @@ def test_turbulent_wall_shear_balances_the_pressure_drop(tmp_path, solver):
     store = ResultStore(tmp_path / "results")
     run = run_study(project, study.id, tmp_path, tmp_path / "run", store=store, timeout_s=3600)
     files = export(project, store, run.run_id, "wall_cloud", tmp_path / "walls")
-    header = files[0].read_text().splitlines()[0].split(",")
+    header = files[0].read_text(encoding="utf-8").splitlines()[0].split(",")
     table = np.loadtxt(files[0], delimiter=",", skiprows=1)
     col = {h: table[:, i] for i, h in enumerate(header)}
     x = col["x [m]"]

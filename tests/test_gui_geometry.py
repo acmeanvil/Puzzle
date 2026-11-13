@@ -334,12 +334,15 @@ def test_a_long_pick_list_does_not_widen_the_view(app, window):
         app.processEvents()
         time.sleep(0.01)
     before = window.centralWidget().width()
+    window.pick_bar.label.setText("1 face picked: Bar/face-1")
+    window.pick_bar.show()
+    app.processEvents()
+    short = window.centralWidget().minimumSizeHint().width()  # 752 px on Windows' fonts
     window.pick_bar.label.setText(
         "40 faces picked: " + ", ".join(f"Bar/face-{i}" for i in range(40))
     )
-    window.pick_bar.show()
     app.processEvents()
-    assert window.centralWidget().minimumSizeHint().width() < 700
+    assert window.centralWidget().minimumSizeHint().width() == short
     assert window.centralWidget().width() == before
     assert "face-39" in window.pick_bar.label.toolTip()
 

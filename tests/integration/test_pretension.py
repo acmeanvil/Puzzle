@@ -8,6 +8,11 @@ EA/L), standing in for the clamped parts.
   stiffness, so the bolt carries F + P k_b/(k_b + k_s) = F + P/2.
 An adjustment d instead of a force: the bolt carries d k_b k_s/(k_b + k_s) = d k_b/2.
 Axial stress is uniform away from the ends: within 0.5 %.
+
+Code_Aster runs the two static steps as one chained result (comm.chained): the
+pretension's force in step 1, its opening held (DIDI) in step 2. A study that tightens
+and loads in one step gets a preload step put in front (puzzle.preload), with the same
+answers.
 """
 
 import numpy as np
@@ -110,7 +115,7 @@ def _tension(run, index: int) -> float:
     return float(s.values[mid, c["zz"]].mean()) * np.pi * R**2
 
 
-@over("calculix")
+@over("calculix", "code_aster")
 def test_pretension_force_then_locked(tmp_path, solver):
     pytest.importorskip("OCP")
     section = Feature(
@@ -127,7 +132,7 @@ def test_pretension_force_then_locked(tmp_path, solver):
     assert second == pytest.approx(F + P / 2, rel=5e-3)
 
 
-@over("calculix")
+@over("calculix", "code_aster")
 def test_pretension_adjustment(tmp_path, solver):
     pytest.importorskip("OCP")
     d = 1e-5
@@ -170,3 +175,29 @@ def test_pretension_one_step(tmp_path, solver, kind):
     print(f"{solver} one-step {kind}: {got:.6g} N, expected {expected:.6g} N, "
           f"{100 * (got / expected - 1):+.2f} %")  # fmt: skip
     assert got == pytest.approx(expected, rel=5e-3)
+
+
+@over("calculix", "code_aster")
+def test_preload_step_put_in_front(tmp_path, solver):
+    """One step that tightens and pulls at once: Puzzle tightens first (a preload step in
+    front, its results labelled Preload), then pulls with the bolt locked: F, then
+    F + P/2, as the two-step study."""
+    pytest.importorskip("OCP")
+    section = Feature(
+        type="bolt_pretension", selection="B/Section", values={"F": Quantity(value=F, unit="N")}
+    )
+    p, study, _ = _bolt(solver, section)
+    comp = next(o for o in p.objects.values() if o.kind == "component")
+    comp.physics[0].features[-1] = comp.physics[0].features[-1].model_copy(update={"steps": []})
+    study.steps = [SolveStep(type="stationary")]
+    root = tmp_path / "bolt"
+    save_project(p, root)
+    run = run_study(p, study.id, root, tmp_path / "w")
+    first, second = _tension(run, 1), _tension(run, 2)
+    kinds = {s.index: s.kind for s in run.results.steps}
+    print(f"{solver} preload step: {first:.6g} N (F {F:g}), then {second:.6g} N "
+          f"(F + P/2 {F + P / 2:g}); kinds {kinds}")  # fmt: skip
+    assert kinds == {1: "preload", 2: "stationary"}
+    assert run.results.steps[0].label() == "Preload"
+    assert first == pytest.approx(F, rel=5e-3)
+    assert second == pytest.approx(F + P / 2, rel=5e-3)

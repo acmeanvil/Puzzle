@@ -8,11 +8,12 @@ autonomy level is set here too; "act" asks twice, as the double sign-off require
 
 from __future__ import annotations
 
-import html
 import json
 import sys
+import threading
+import time
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -21,11 +22,12 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QSplitter,
-    QTextBrowser,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -35,7 +37,7 @@ from puzzle.agent.providers import ProviderError
 from puzzle.agent.settings import load_settings, settings_path
 from puzzle.commands.model import SetAutonomy
 from puzzle.errors import PuzzleError
-from puzzle.gui.theme import current as tokens
+from puzzle.gui.agent_view import Transcript
 from puzzle.gui.theme import role
 
 # Autonomy levels as people read them (ADR 0015).
@@ -115,43 +117,131 @@ class PromptBox(QPlainTextEdit):
         super().resizeEvent(event)
         self._fit()
 
+    # A pasted image, a dropped file or a long pasted text becomes an attachment
+    # (ADR 0074); a short text pastes as usual.
+    attached = Signal(object)  # an attachments.Attachment
+    LONG_PASTE = 30  # lines
+
+    def canInsertFromMimeData(self, source) -> bool:  # noqa: N802 - Qt's name
+        return source.hasImage() or source.hasUrls() or super().canInsertFromMimeData(source)
+
+    def insertFromMimeData(self, source) -> None:  # noqa: N802 - Qt's name
+        files = source.hasUrls() and any(u.isLocalFile() for u in source.urls())
+        if source.hasImage() or files:
+            for a in attachments_of(source):
+                self.attached.emit(a)
+            return
+        text = source.text()
+        if text.count("\n") >= self.LONG_PASTE:
+            from puzzle.agent.attachments import from_text
+
+            self.attached.emit(from_text(text))
+            return
+        super().insertFromMimeData(source)
+
+
+def attachments_of(source) -> list:
+    """The files in pasted or dropped data: an image as PNG, local files as theirs.
+    One that can't be read (too large, not text) is skipped."""
+    from PySide6.QtCore import QBuffer, QIODevice
+
+    from puzzle.agent import attachments
+
+    out = []
+    if source.hasImage():
+        image = source.imageData()
+        buf = QBuffer()
+        buf.open(QIODevice.OpenModeFlag.WriteOnly)
+        image.save(buf, "PNG")
+        out.append(attachments.from_image(bytes(buf.data())))
+    elif source.hasUrls():
+        for url in source.urls():
+            if url.isLocalFile():
+                try:
+                    out.append(attachments.from_path(url.toLocalFile()))
+                except (OSError, attachments.AttachmentError):
+                    continue
+    return out
+
 
 class AgentPanel(QWidget):
+    """The chat (ADR 0015, 0074): a transcript of rich replies, a status line while the
+    agent works, a composer with attachments and the model chip, the proposals below."""
+
     def __init__(self, window, provider_factory=None) -> None:
         super().__init__()
         self.window = window
         self.provider_factory = provider_factory  # tests pass a scripted provider
         self.agent: Agent | None = None
+        self.pending: list = []  # attachments for the next message
+        self.busy = False
+        self._stop: threading.Event | None = None
+        self._started = 0.0
+        self._doing = ""
+        self.models: list | None = None  # what the chip offers, read once off the GUI
+        self.model_notes: list[str] = []
+        self.setAcceptDrops(True)
 
         self.level = QComboBox()
         for key, text in LEVELS.items():
             self.level.addItem(text, key)
         self.level.activated.connect(lambda _: self._set_level(self.level.currentData()))
-        self.model_label = QLabel("")
-        role(self.model_label, "muted")
+        # What "act within the budget" may spend (ADR 0015), shown with what is used.
+        self.budget_button = QToolButton(text="Budget…")
+        self.budget_button.setToolTip("How many runs, how much solver time and remote "
+                                      "core-hours agents may use before they must ask")  # fmt: skip
+        self.budget_button.clicked.connect(lambda: self.edit_budget())
+        self.budget_used = QLabel("")
+        role(self.budget_used, "muted")
         new_chat = QPushButton("New chat")
         new_chat.clicked.connect(self.new_chat)
-        key = QPushButton("API key…")
-        key.setToolTip("Store the provider's API key in the system keychain")
-        key.clicked.connect(self._set_key)
         top = QHBoxLayout()
         top.addWidget(QLabel("Agents may"))
         top.addWidget(self.level)
+        top.addWidget(self.budget_button)
+        top.addWidget(self.budget_used)
         top.addStretch()
-        pick = QPushButton("Pick a local model…")
-        pick.setToolTip("Measure the local models this computer can run and pick the best "
-                        "small one (ADR 0022)")  # fmt: skip
-        pick.clicked.connect(self._pick_model)
-        top.addWidget(pick)
-        top.addWidget(key)
         top.addWidget(new_chat)
 
-        self.transcript = QTextBrowser()
-        self.transcript.setOpenExternalLinks(False)
+        self.transcript = Transcript()
+        self.status = QLabel("")
+        role(self.status, "muted")
+        self.stop_button = QToolButton(text="Stop")
+        self.stop_button.setToolTip("End the agent's turn after the step it is on")
+        self.stop_button.clicked.connect(self.stop)
+        self.stop_button.hide()
+        status_row = QHBoxLayout()
+        status_row.addWidget(self.status, 1)
+        status_row.addWidget(self.stop_button)
+        self._ticker = QTimer(self, interval=1000)
+        self._ticker.timeout.connect(self._show_doing)
+
+        self.chips_box = QWidget()
+        self.chips = QHBoxLayout(self.chips_box)
+        self.chips.setContentsMargins(0, 0, 0, 0)
+        self.chips.addStretch()
+        self.chips_box.hide()
         self.input = PromptBox()
         self.input.submitted.connect(self.send)
-        ask = QHBoxLayout()
-        ask.addWidget(self.input, 1)
+        self.input.attached.connect(self.attach)
+        attach = QToolButton(text="Attach…")
+        attach.setToolTip("Send a file with the next message: an image, a PDF or a text "
+                          "file (or paste or drop one here)")  # fmt: skip
+        attach.clicked.connect(self._choose_files)
+        self.model_chip = QToolButton()
+        self.model_chip.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.model_chip.setToolTip("The model the agent uses, and where it runs")
+        self.model_menu = QMenu(self.model_chip)
+        self.model_menu.aboutToShow.connect(self._fill_models)
+        self.model_chip.setMenu(self.model_menu)
+        send = QToolButton(text="Send")
+        send.clicked.connect(lambda: self.send())
+        bar = QHBoxLayout()
+        bar.addWidget(attach)
+        bar.addWidget(self.model_chip)
+        bar.addStretch()
+        bar.addWidget(send)
+        self._show_chip()
 
         self.proposals = QListWidget()
         self.proposals.setWordWrap(True)
@@ -173,7 +263,10 @@ class AgentPanel(QWidget):
         chat_layout = QVBoxLayout(chat)
         chat_layout.setContentsMargins(0, 0, 0, 0)
         chat_layout.addWidget(self.transcript, 1)
-        chat_layout.addLayout(ask)
+        chat_layout.addLayout(status_row)
+        chat_layout.addWidget(self.chips_box)
+        chat_layout.addWidget(self.input)
+        chat_layout.addLayout(bar)
         split = QSplitter(Qt.Orientation.Vertical)
         split.addWidget(chat)
         split.addWidget(lower)
@@ -182,12 +275,10 @@ class AgentPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.addLayout(top)
-        layout.addWidget(self.model_label)
         layout.addWidget(split, 1)
-        self.model_label.hide()  # shown once there is a model to name
         # macOS draws push buttons with wide margins of their own; lay them out by their
         # visible edges so the rows' spacing is what the layouts say.
-        for b in (key, new_chat, accept, reject):
+        for b in (new_chat, accept, reject):
             b.setAttribute(Qt.WidgetAttribute.WA_LayoutUsesWidgetRect)
 
     # --- project changes -------------------------------------------------------------
@@ -198,6 +289,7 @@ class AgentPanel(QWidget):
         if s is None:
             return
         self.level.setCurrentIndex(self.level.findData(s.project.agent.level))
+        self._show_budget()
         self.proposals.clear()
         for p in s.proposals():
             names = {str(o.id): o.name for o in s.project.objects.values()}
@@ -214,69 +306,209 @@ class AgentPanel(QWidget):
 
     def send(self, text: str | None = None):
         text = (text if isinstance(text, str) else self.input.text()).strip()
-        if not text or self.window.session is None:
-            return None
-        if self.agent is None and not self._start_agent():
+        if (not text and not self.pending) or self.window.session is None or self.busy:
             return None
         self.input.clear()
-        self._say("you", text)
-        self.input.setReadOnly(True)  # until the answer is in
-        agent = self.agent
+        files, self.pending = list(self.pending), []
+        self._show_attachments()
+        self.transcript.user(text, [a.label() for a in files])
+        stop = threading.Event()
+        self._begin(stop, "Starting the agent…" if self.agent is None else "Thinking…")
 
-        def work(emit):
-            return agent.ask(text, lambda e: emit(_event_html(e)))
+        def work(emit, emit_event):
+            if self.agent is None:  # built here, off the GUI thread (ADR 0074)
+                self.agent = self._build_agent()
+            return self.agent.ask(text, emit_event, attachments=files, stop=stop)
 
         def done(_answer) -> None:
-            self.input.setReadOnly(False)
-            self.window.refresh()
-            tokens = agent.tokens
-            self.model_label.show()
-            self.model_label.setText(
-                f"{self._model_text()} · {tokens['input']:,} in / {tokens['output']:,} out tokens"
-            )
+            self._end()
 
         def failed(exc) -> None:
-            self.input.setReadOnly(False)
-            self._say("error", str(exc))
+            self._end()
+            hint = (f" Choose a model with the model button, or configure the provider in "
+                    f"{settings_path()}." if isinstance(exc, ProviderError) else "")  # fmt: skip
+            self.transcript.note(f"{exc}{hint}", error=True)
 
         return self.window.background(
-            "The agent is working…",
-            work,
-            done,
-            failed=failed,
-            output=self.transcript.append,
+            "The agent is working…", work, done, failed=failed, on_event=self._event,
             lock=False,
-        )
+        )  # fmt: skip
+
+    def _build_agent(self) -> Agent:
+        if self.provider_factory is not None:
+            provider, images = self.provider_factory(), None
+        else:
+            settings = load_settings()
+            provider = settings.build()
+            images = settings.images_allowed(provider)
+        if sys.platform == "darwin":
+            images = False  # off-screen VTK must render on macOS's main thread
+        return Agent(self.window.session.root, provider, images=images)
+
+    def _begin(self, stop, doing: str) -> None:
+        self.busy, self._stop, self._started = True, stop, time.monotonic()
+        self._doing = doing
+        self.stop_button.show()
+        self._show_doing()
+        self._ticker.start()
+        self.window.agent_turn(True)
+
+    def _end(self) -> None:
+        self.busy = False
+        self._ticker.stop()
+        self.stop_button.hide()
+        seconds = time.monotonic() - self._started
+        if self.agent is not None:
+            t = self.agent.tokens
+            self.status.setText(f"{self._chip_text()} · {t['input']:,} in / {t['output']:,} "
+                                f"out tokens · {seconds:.0f} s")  # fmt: skip
+        else:
+            self.status.setText("")
+        self._show_chip()
+        self.window.agent_turn(False)
+
+    def stop(self) -> None:
+        if self._stop is not None:
+            self._stop.set()
+            self._doing = "Stopping after this step…"
+            self._show_doing()
+
+    def _show_doing(self) -> None:
+        if self.busy:
+            self.status.setText(f"{self._doing}  {time.monotonic() - self._started:.0f} s")
+
+    def _event(self, e: Event) -> None:
+        if e.kind == "status":
+            self._doing = e.text
+            self._show_doing()
+        elif e.kind == "text":
+            self.transcript.reply(e.text)
+        elif e.kind == "tool_call":
+            args = json.dumps(e.data.get("arguments", {}))
+            self.transcript.tool(f"→ {e.text} {args if len(args) <= 160 else args[:160] + '…'}")
+        elif e.kind == "tool_result":
+            self.transcript.tool(f"← {_brief(e.text)}")
+        elif e.kind == "error":
+            self.transcript.tool(f"✗ {e.text[:300]}", error=True)
+        elif e.kind == "note":
+            self.transcript.note(e.text)
 
     def new_chat(self) -> None:
         if self.agent is not None:
             self.agent.reset()
         self.transcript.clear()
 
-    def _start_agent(self) -> bool:
-        try:
-            if self.provider_factory is not None:
-                provider, images = self.provider_factory(), None
-            else:
-                settings = load_settings()
-                provider = settings.build()
-                images = settings.images_allowed(provider)
-            if sys.platform == "darwin":
-                images = False  # off-screen VTK must render on macOS's main thread
-            self.agent = Agent(self.window.session.root, provider, images=images)
-        except ProviderError as exc:
-            self._say(
-                "error",
-                f"{exc}. Configure the provider in {settings_path()} "
-                "(provider, model, base_url) or with PUZZLE_AGENT_PROVIDER/MODEL.",
-            )
-            return False
-        self.model_label.setText(self._model_text())
-        self.model_label.setVisible(bool(self.model_label.text()))
-        return True
+    # --- attachments (ADR 0074) ------------------------------------------------------
+
+    def attach(self, attachment) -> None:
+        self.pending.append(attachment)
+        self._show_attachments()
+
+    def _choose_files(self) -> None:
+        from PySide6.QtWidgets import QFileDialog
+
+        from puzzle.agent.attachments import AttachmentError, from_path
+
+        paths, _ = QFileDialog.getOpenFileNames(self, "Attach files")
+        for p in paths:
+            try:
+                self.attach(from_path(p))
+            except (OSError, AttachmentError) as exc:
+                self.transcript.note(str(exc), error=True)
+
+    def _show_attachments(self) -> None:
+        while self.chips.count() > 1:
+            item = self.chips.takeAt(0)
+            if item.widget() is not None:
+                item.widget().hide()
+                item.widget().deleteLater()
+        for i, a in enumerate(self.pending):
+            chip = QToolButton(text=f"📎 {a.label()}  ✕")
+            chip.setToolTip("Remove it from the message")
+            chip.clicked.connect(lambda _=False, i=i: self._drop(i))
+            self.chips.insertWidget(i, chip)
+        self.chips_box.setVisible(bool(self.pending))
+
+    def _drop(self, i: int) -> None:
+        del self.pending[i]
+        self._show_attachments()
+
+    def dragEnterEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        if event.mimeData().hasUrls() or event.mimeData().hasImage():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        for a in attachments_of(event.mimeData()):
+            self.attach(a)
+        event.acceptProposedAction()
+
+    # --- the model chip (ADR 0074) ---------------------------------------------------
+
+    def _chip_text(self) -> str:
+        if self.agent is not None:
+            p = self.agent.provider
+            where = "Anthropic" if p.name == "anthropic" else (
+                "a server" if p.remote else "this computer")  # fmt: skip
+            return f"{p.model} · {where}"
+        s = load_settings()
+        from puzzle.agent.settings import DEFAULT_MODELS
+
+        model = s.model or DEFAULT_MODELS.get(s.provider, s.provider)
+        return f"{model} · {'Anthropic' if s.provider == 'anthropic' else 'local'}"
+
+    def _show_chip(self) -> None:
+        self.model_chip.setText(f"{self._chip_text()} ▾")
+
+    def _fill_models(self) -> None:
+        menu = self.model_menu
+        menu.clear()
+        if self.models is None:
+            menu.addAction("Looking for models…").setEnabled(False)
+            self._read_models()
+        else:
+            current = (load_settings().provider, self._chip_text().split(" · ")[0])
+            heads = {}
+            for c in self.models:
+                where = c.where()
+                if where not in heads:
+                    heads[where] = menu.addAction(where)
+                    heads[where].setEnabled(False)
+                action = menu.addAction(f"   {c.model}")
+                action.setCheckable(True)
+                action.setChecked((c.provider, c.model) == current)
+                action.triggered.connect(lambda _=False, c=c: self.choose(c))
+            for note in self.model_notes:
+                menu.addAction(note).setEnabled(False)
+            menu.addAction("Look again", self._reread_models)
+        menu.addSeparator()
+        menu.addAction("Pick a local model…", self._pick_model)
+        menu.addAction("API key…", self._set_key)
+
+    def _read_models(self) -> None:
+        from puzzle.agent.settings import available_models
+
+        def done(found) -> None:
+            self.models, self.model_notes = found
+            if self.model_menu.isVisible():
+                self._fill_models()
+
+        self.window.background("Looking for models…", lambda _emit: available_models(),
+                               done, lock=False)  # fmt: skip
+
+    def _reread_models(self) -> None:
+        self.models = None
+        self._read_models()
+
+    def choose(self, choice) -> None:
+        """Use `choice` from the next message on: a user setting, a new chat."""
+        from puzzle.agent.settings import choose_model
+
+        choose_model(choice)
+        self.agent = None
+        self._show_chip()
+        self.transcript.note(f"Now using {choice.model} ({choice.where()}); a new chat starts.")
 
     def _set_key(self) -> None:
-
         from puzzle.agent.settings import store_key
 
         provider = load_settings().provider
@@ -291,25 +523,17 @@ class AgentPanel(QWidget):
         try:
             store_key(provider, key.strip())
         except ProviderError as exc:
-            self._say("error", str(exc))
+            self.transcript.note(str(exc), error=True)
             return
-        self.agent = None  # rebuilt with the new key on the next message
-        self._say("note", f"{provider} key stored in the keychain")
+        self.agent, self.models = None, None  # rebuilt with the new key, models re-read
+        self.transcript.note(f"{provider} key stored in the keychain")
 
     def _pick_model(self) -> None:
         from puzzle.gui.pick_dialog import PickDialog
 
         PickDialog(self.window).exec()
-
-    def _model_text(self) -> str:
-        p = self.agent.provider
-        where = "remote" if p.remote else "local"
-        return f"{p.name}: {p.model} ({where})"
-
-    def _say(self, who: str, text: str) -> None:
-        t = tokens()
-        colour = {"you": t.accent, "error": t.error}.get(who, t.text)
-        self.transcript.append(f'<p><b style="color:{colour}">{who}</b>: {html.escape(text)}</p>')
+        self.agent, self.models = None, None
+        self._show_chip()
 
     # --- review --------------------------------------------------------------------------
 
@@ -358,6 +582,71 @@ class AgentPanel(QWidget):
                 self.window.report(exc)
         self.window.refresh()
 
+    def _show_budget(self) -> None:
+        """The budget's button and what is used of it, shown only at act within budget."""
+        s = self.window.session
+        on = s is not None and s.project.agent.level == "act_in_budget"
+        self.budget_button.setVisible(on)
+        self.budget_used.setVisible(on)
+        if not on:
+            return
+        b, used = s.project.agent.budget, s.budget_used()
+        text = (f"{used['runs']} of {b.runs} runs, {_minutes(used['solver_seconds'])} of "
+                f"{_minutes(b.solver_seconds)} used")  # fmt: skip
+        if used["core_hours"] or b.core_hours != 2.0:
+            text += f", {used['core_hours']:.3g} of {b.core_hours:g} core-hours"
+        self.budget_used.setText(text)
+
+    def edit_budget(self, values: dict | None = None) -> bool:
+        """Set the agents' budget in one form (`values` fills it, for tests). Saving
+        starts the count of what they have used again, as any autonomy change does."""
+        from puzzle.gui.quick_form import Ask
+
+        s = self.window.session
+        if s is None:
+            return False
+        b = s.project.agent.budget
+        asks = [
+            Ask("runs", "Fresh solver runs", kind="text", default=str(b.runs),
+                help="runs reused from earlier ones don't count"),
+            Ask("minutes", "Solver time (minutes)", kind="text",
+                default=f"{b.solver_seconds / 60:g}",
+                help="the total wall time of their runs; each run gets what is left"),
+            Ask("core_hours", "Remote core-hours", kind="text", default=f"{b.core_hours:g}",
+                help="cores × hours on remote hosts (ADR 0021), which can cost money"),
+        ]  # fmt: skip
+
+        def check(v):
+            try:
+                _budget(v)
+            except ValueError as exc:
+                return str(exc)
+            return None
+
+        intro = (
+            'What agents may use at "act within the budget" before they must ask. '
+            "Saving starts the count of what they have used again."
+        )
+        got = (
+            values
+            if values is not None
+            else self.window.ask_form("Agents' budget", asks, intro, check)
+        )
+        if not got:
+            return False
+        try:
+            budget = _budget(got)
+        except ValueError as exc:
+            self.window.statusBar().showMessage(str(exc), 8000)
+            return False
+        try:
+            s.submit(SetAutonomy(budget=budget))
+        except PuzzleError as exc:
+            self.window.report(exc)
+            return False
+        self.window.refresh()
+        return True
+
     def _confirm_act(self) -> bool:
         first = QMessageBox.question(
             self,
@@ -371,18 +660,23 @@ class AgentPanel(QWidget):
         return ok and typed.strip() == "act"
 
 
-def _event_html(e: Event) -> str:
-    if e.kind == "text":
-        return f'<p><b style="color:{tokens().done}">agent</b>: {html.escape(e.text)}</p>'
-    if e.kind == "tool_call":
-        args = json.dumps(e.data.get("arguments", {}))
-        args = args if len(args) <= 160 else args[:160] + "…"
-        return f'<p style="color:{tokens().muted}">→ {html.escape(e.text)} {html.escape(args)}</p>'
-    if e.kind == "error":
-        return f'<p style="color:{tokens().error}">✗ {html.escape(e.text[:300])}</p>'
-    if e.kind == "tool_result":
-        return f'<p style="color:{tokens().muted}">← {html.escape(_brief(e.text))}</p>'
-    return ""
+def _minutes(seconds: float) -> str:
+    return f"{seconds / 60:.3g} min" if seconds >= 60 or not seconds else f"{seconds:.0f} s"
+
+
+def _budget(values: dict):
+    """A Budget from the form's text: whole runs, minutes, core-hours, none negative."""
+    from puzzle.model.schema import Budget
+
+    try:
+        runs = int(str(values["runs"]).strip())
+        minutes = float(str(values["minutes"]).strip())
+        hours = float(str(values["core_hours"]).strip())
+    except (KeyError, ValueError):
+        raise ValueError("type whole runs, and minutes and core-hours as numbers") from None
+    if runs < 0 or minutes < 0 or hours < 0:
+        raise ValueError("a budget can't be negative")
+    return Budget(runs=runs, solver_seconds=minutes * 60, core_hours=hours)
 
 
 def _brief(text: str, limit: int = 160) -> str:

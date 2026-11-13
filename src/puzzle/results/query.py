@@ -32,6 +32,8 @@ def summary(results: Results) -> list[dict[str, Any]]:
             entry["time_s"] = step.value
         entry["fields"] = {}
         for name, f in step.fields.items():
+            if f.values.size == 0:  # stored before helper-only fields were dropped
+                continue
             if f.location == "global":
                 if len(f.components) > 1 and f.values.shape[0] == 1:  # named entries
                     entry["fields"][name] = dict(zip(f.components, map(float, f.values[0]),
@@ -174,6 +176,9 @@ def total(
         )
     keep = np.isin(f.ids, group.node_ids)
     sums = f.values[keep].sum(axis=0)
+    exact = exact_total(chosen, selection) if field == "reaction_force" else None
+    if exact is not None:  # the solver's own total, not the sum of rounded nodal values
+        sums = np.asarray(exact, float)
     return {
         "field": field,
         "step": chosen.index,
@@ -182,6 +187,23 @@ def total(
         "components": f.components,
         "total": [float(v) for v in sums],
     }
+
+
+def selection_id(selection: str) -> int:
+    """A selection's row in a `reaction_total` field: a stable number from its name."""
+    import zlib
+
+    return zlib.crc32(selection.encode("utf-8"))
+
+
+def exact_total(step: StepResult, selection: str) -> np.ndarray | None:
+    """The solver's own reaction total of a selection at a step (CalculiX prints them,
+    `reaction_total`), else None: the nodal reactions are summed then."""
+    f = step.fields.get("reaction_total")
+    if f is None:
+        return None
+    hit = np.flatnonzero(np.asarray(f.ids) == selection_id(selection))
+    return np.asarray(f.values[hit[0]], float) if len(hit) else None
 
 
 def history(

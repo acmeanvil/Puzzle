@@ -22,6 +22,7 @@ WIDTH = 220.0
 TITLE = 24.0
 LINE = 18.0
 PAD = 6.0
+SKETCH = 44.0  # a curve's small plot
 GAP_X = 160.0  # room for a data wire's label
 GAP_Y = 22.0
 KIND_ORDER = ["file", "geometry", "field", "material", "mesh", "parameters", "component",
@@ -60,6 +61,8 @@ def rows(node: Node, unfolded: bool = False) -> list[Row]:
         put("value", node.verdict, node.value)
     if node.slider is not None:  # its knob, dragged along the row
         put("slider", "", "")
+    if node.sketch:  # a curve's small plot (ADR 0071)
+        put("sketch", "", "", SKETCH)
     for chip in node.chips:
         put("chip", chip, chip)
     for p in node.outputs():  # outputs first, as Blender lists them

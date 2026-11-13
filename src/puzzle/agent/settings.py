@@ -120,9 +120,63 @@ def settings_path() -> Path:
     return user_data_dir() / "agent.toml"
 
 
+@dataclass(frozen=True)
+class ModelChoice:
+    """A model the agent window's chip offers (ADR 0074)."""
+
+    provider: str  # "anthropic" or "openai"
+    model: str
+    remote: bool
+
+    def where(self) -> str:
+        return "Anthropic" if self.provider == "anthropic" else (
+            "a server" if self.remote else "this computer")  # fmt: skip
+
+
+def available_models(s: AgentSettings | None = None, timeout: float = 5.0):
+    """The models each configured provider offers: Anthropic's (with a key), the
+    OpenAI-compatible endpoint's (when it answers). Returns (choices, notes): a note
+    says why a provider offered none. Network calls: run it off the GUI thread."""
+    import json
+    import urllib.request
+
+    s = s or load_settings()
+    choices: list[ModelChoice] = []
+    notes: list[str] = []
+    key = os.environ.get("ANTHROPIC_API_KEY") or stored_key("anthropic")
+    if key:
+        try:
+            from puzzle.agent.providers import anthropic_client, key_auth
+
+            client = anthropic_client(key, stored_key("anthropic-auth") or key_auth(key))
+            for m in client.models.list(limit=50):
+                choices.append(ModelChoice("anthropic", m.id, True))
+        except Exception as exc:  # noqa: BLE001 - offline, a bad key: said, not raised
+            notes.append(f"Anthropic: {exc}")
+    else:
+        notes.append("Anthropic: no API key (API key… stores one)")
+    url = s.base_url.rstrip("/") + "/models"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            data = json.loads(response.read())
+        host = urllib.request.urlparse(s.base_url).hostname or ""
+        remote = host not in ("localhost", "127.0.0.1", "::1")
+        choices += [ModelChoice("openai", m["id"], remote) for m in data.get("data", [])]
+    except Exception:  # noqa: BLE001 - nothing listening is the usual case
+        notes.append(f"No local model server at {s.base_url}")
+    return choices, notes
+
+
+def choose_model(choice: ModelChoice, path: Path | None = None) -> Path:
+    """Make `choice` the agent's model (a user setting, never the project's)."""
+    s = load_settings(path)
+    s.provider, s.model = choice.provider, choice.model
+    return save_settings(s, path)
+
+
 def load_settings(path: Path | None = None) -> AgentSettings:
     path = path or settings_path()
-    data = tomllib.loads(path.read_text()) if path.exists() else {}
+    data = tomllib.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
     s = AgentSettings(**{k: v for k, v in data.items() if k in AgentSettings.__dataclass_fields__})
     s.provider = os.environ.get("PUZZLE_AGENT_PROVIDER", s.provider)
     s.model = os.environ.get("PUZZLE_AGENT_MODEL", s.model)
@@ -143,5 +197,5 @@ def save_settings(s: AgentSettings, path: Path | None = None) -> Path:
         if getattr(s, k) != getattr(defaults, k) and getattr(s, k) is not None
     }
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(tomli_w.dumps(data))
+    path.write_text(tomli_w.dumps(data), encoding="utf-8")
     return path

@@ -134,7 +134,7 @@ def write_tecplot(mesh, results, path: Path):
                 local = np.searchsorted(nodes, corners) + 1
                 body.append("\n".join(" ".join(map(str, row)) for row in local) + "\n")
             out.append("".join(body).rstrip("\n"))
-    path.write_text("\n".join(out) + "\n")
+    path.write_text("\n".join(out) + "\n", encoding="utf-8")
     notes = {
         "zones": f"{len(parts)} parts x {len(results.steps)} steps: "
         + ", ".join(p[0] for p in parts),

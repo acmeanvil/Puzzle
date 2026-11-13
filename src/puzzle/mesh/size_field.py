@@ -104,7 +104,7 @@ def netgen_file(sizes: Sizes, path: Path) -> Path:
     lines += [f"{x:.9g} {y:.9g} {z:.9g} {h:.9g}" for (x, y, z), h in
               zip(sizes.points, sizes.sizes, strict=True)]  # fmt: skip
     lines.append("0")
-    path.write_text("\n".join(lines) + "\n")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path
 
 

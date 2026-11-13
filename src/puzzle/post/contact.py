@@ -70,7 +70,8 @@ def _at(field: Field, ids: np.ndarray) -> np.ndarray:
 
 def finish(results, project, component, mesh: Mesh) -> None:
     """Turn each step's raw contact output into the neutral fields, in place."""
-    touching = [c for c in component.contacts if c.type in ("frictionless", "frictional")]
+    touching = [c for c in component.contacts  # threads: post/thread_fields.py
+                if c.type in ("frictionless", "frictional") and c.thread is None]  # fmt: skip
     if not touching:
         return
     slaves = {c.name: np.asarray(mesh.groups[c.source].node_ids) for c in touching
@@ -80,7 +81,7 @@ def finish(results, project, component, mesh: Mesh) -> None:
     nodes = np.unique(np.concatenate(list(slaves.values())))
     mu = np.zeros(len(nodes))
     for c in touching:
-        if c.name in slaves and c.type == "frictional":
+        if c.name in slaves and c.type in ("frictional", "rough"):
             mu[np.isin(nodes, slaves[c.name])] = c.friction
     matrix = None
     for step in results.steps:
@@ -117,7 +118,7 @@ def finish(results, project, component, mesh: Mesh) -> None:
             size = np.linalg.norm(np.nan_to_num(_at(lags_f, ids)), axis=1)
             mu_here = np.zeros(len(ids))
             for c in touching:
-                if c.name in slaves and c.type == "frictional":
+                if c.name in slaves and c.type in ("frictional", "rough"):
                     mu_here[np.isin(ids, slaves[c.name])] = c.friction
             shear = mu_here * np.maximum(pressure, 0.0) * np.minimum(size, 1.0)
         elif total is not None:
@@ -207,7 +208,8 @@ def contact_results(step, component, mesh: Mesh) -> list[ContactResult]:
         return []
     out = []
     for c in component.contacts:
-        if c.type not in ("frictionless", "frictional") or c.source not in mesh.groups:
+        if (c.type not in ("frictionless", "frictional") or c.thread is not None
+                or c.source not in mesh.groups):  # fmt: skip
             continue
         group = mesh.groups[c.source]
         ids = np.asarray(group.node_ids)

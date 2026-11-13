@@ -61,7 +61,7 @@ glue held it, and the bolts carry the moment.
   surface-to-surface contact makes about 108,000 contact elements for this seat, and
   friction makes the system unsymmetric, which conda-forge's SPOOLES factors slowly.
   Each contact iteration costs about 20 s. CalculiX built with PARDISO (ADR 0051,
-  `pixi run -e calculix-pardiso build-calculix`) solves it in 246 s, with the same
+  `pixi run -e dev build-calculix`) solves it in 246 s, with the same
   answer.
 - **What was tried** (the same bolted deck):
 

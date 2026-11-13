@@ -101,7 +101,7 @@ def test_window_jobs_and_the_empty_panel(app, root):
 
 def test_a_project_opened_with_pending_jobs(app, root):
     case = _pend(root)
-    (case / "solver.log").write_text("step 1\n increment 3 converged\n")
+    (case / "solver.log").write_text("step 1\n increment 3 converged\n", encoding="utf-8")
     _pend(root, "20261105-000001-abcdef", where="lab")
     w = MainWindow(root)
     try:

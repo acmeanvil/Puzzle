@@ -32,7 +32,7 @@ DATA = Path(__file__).parent / "data" / "progress"
 
 def _feed(parser, log: Path) -> list:
     events = []
-    with gzip.open(log, "rt", errors="replace") as f:
+    with gzip.open(log, "rt", encoding="utf-8", errors="replace") as f:
         for line in f:
             events += parser.safe_feed(line.rstrip("\n"))
     return events + parser.finish(True)
@@ -195,6 +195,15 @@ def test_the_diagnoses_of_the_friction_failure(tmp_path):
     assert progress.diagnose(_aster("code_aster_plastic", tmp_path)) == []
 
 
+def test_an_imprecise_mumps_solve_is_explained(tmp_path):
+    """The 882,309-equation pressure vessel that looked hung on Windows (2026-11-08):
+    MUMPS's answer failed RESI_RELA (FACTOR_57); the run says so in English, with the fix."""
+    events = _aster("code_aster_imprecise", tmp_path)
+    errors = [e for e in events if isinstance(e, Message) and e.code == "FACTOR_57"]
+    assert errors and "not accurate enough" in errors[0].text
+    assert [d.code for d in progress.diagnose(events)] == ["imprecise_solve"]
+
+
 def test_pivots_on_held_and_free_dofs():
     def on(component):
         return [d.code for d in progress.diagnose(
@@ -217,7 +226,7 @@ def _project_with_attempt(tmp_path, events):
     save_project(p, root)
     folder = root / WORK_DIR / "bolted-20261031-010101"
     folder.mkdir(parents=True)
-    (folder / progress.FILE).write_text(progress.dumps(events))
+    (folder / progress.FILE).write_text(progress.dumps(events), encoding="utf-8")
     return root, study
 
 
@@ -313,7 +322,9 @@ def _run(parser, case: Path, ok: bool = True) -> list:
     """The parser as the job runner drives it: stdout lines, polls, then the end."""
     events = []
     log = case / "solver.log"
-    for line in log.read_text(errors="replace").splitlines() if log.exists() else []:
+    for line in (
+        log.read_text(errors="replace", encoding="utf-8").splitlines() if log.exists() else []
+    ):
         events += parser.safe_feed(line)
         events += parser.safe(parser.poll)
     return events + parser.safe(parser.poll) + parser.finish(ok)
@@ -453,10 +464,13 @@ def test_code_saturne_short_of_three_decades_is_not_converged(tmp_path):
 
     case = _case("code_saturne_channel", tmp_path)
     listing = case / "CASE" / "RESU" / "puzzle" / "run_solver.log"
-    text = listing.read_text()
-    listing.write_text(text[: text.index("TIME STEP NUMBER              41")])
+    text = listing.read_text(encoding="utf-8")
+    listing.write_text(text[: text.index("TIME STEP NUMBER              41")], encoding="utf-8")
     (case / "case.json").write_text(
-        (case / "case.json").read_text().replace('"iterations": 500', '"iterations": 40')
+        (case / "case.json")
+        .read_text(encoding="utf-8")
+        .replace('"iterations": 500', '"iterations": 40'),
+        encoding="utf-8",
     )
     events = _run(CodeSaturneProgress(case / "case.json"), case)
     assert len(_of(events, Iteration)) == 40 and not _of(events, Converged)
@@ -521,3 +535,38 @@ def test_a_flat_residual_at_the_limit_has_stalled():
     [d] = progress.diagnose(events)
     assert d.code == "not_converged" and "stalled" in d.text and "mesh quality" in d.text
     assert progress.diagnose(events[:-1]) == []  # short of its limit: still running
+
+
+def test_native_code_aster_on_windows_is_followed_in_fort6(tmp_path, monkeypatch):
+    """ADR 0072: run_aster.bat writes the run to fort.6 in its temporary folder and
+    stdout says nothing, so the parser follows that file (the newest run_aster folder
+    made since the job started) and ignores stdout meanwhile: the plastic case's ten
+    increments come from fort.6 alone."""
+    import tempfile
+
+    from puzzle.adapters.code_aster import progress as cp
+
+    where = tmp_path / "case"
+    where.mkdir()
+    shutil.copy(DATA / "code_aster_plastic" / "job.comm", where / "job.comm")
+    temp = tmp_path / "temp"
+    temp.mkdir()
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(temp))
+    parser = CodeAsterProgress(where / "job.export")
+    parser.native_windows = True
+    assert parser.poll() == []  # no run_aster folder yet
+    run = temp / "run_aster__abc123"
+    run.mkdir()
+    with gzip.open(DATA / "code_aster_plastic" / "solver.log.gz", "rt", encoding="utf-8",
+                   errors="replace") as f:  # fmt: skip
+        text = f.read()
+    half = len(text) // 2
+    (run / "fort.6").write_text(text[:half], encoding="utf-8")
+    events = parser.poll()
+    with (run / "fort.6").open("a", encoding="utf-8") as f:
+        f.write(text[half:] + "\n")
+    events += parser.poll()
+    events += parser.safe_feed("Instant de calcul:  9.0e-01 - Niveau de découpe: 1")  # stdout
+    events += parser.finish(True)
+    assert len(_of(events, Increment)) == 10  # the stdout line didn't count twice
+    cp._CLAIMED.discard(str(run))

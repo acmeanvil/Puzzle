@@ -19,7 +19,7 @@ PY = Path(sys.executable)
 
 def _script(tmp_path: Path, body: str) -> list[str]:
     script = tmp_path / "fake_solver.py"
-    script.write_text(body)
+    script.write_text(body, encoding="utf-8")
     return [PY.name, str(script)]
 
 
@@ -34,7 +34,7 @@ def test_successful_run_streams_and_logs(tmp_path, native):
     result = run_job(cmd, tmp_path, native, on_output=seen.append)
     assert result.ok
     assert seen == ["step 1", "step 2"]
-    assert result.log.read_text() == "step 1\nstep 2\n"
+    assert result.log.read_text(encoding="utf-8") == "step 1\nstep 2\n"
     assert result.runtime == "native"
 
 
@@ -43,7 +43,7 @@ def test_failure_keeps_the_return_code(tmp_path, native):
     result = run_job(cmd, tmp_path, native)
     assert result.returncode == 3
     assert not result.ok
-    assert "diverged" in result.log.read_text()
+    assert "diverged" in result.log.read_text(encoding="utf-8")
 
 
 def test_cancel_stops_the_process(tmp_path, native):
@@ -87,6 +87,32 @@ def test_runtime_selection(monkeypatch):
         runtime_for("calculix")
 
 
+def test_fenicsx_container_keeps_its_form_cache(monkeypatch, tmp_path):
+    monkeypatch.setenv("PUZZLE_FENICSX_RUNTIME", "docker")
+    runtime = runtime_for("fenicsx")
+    assert runtime.image == DEFAULT_IMAGES["fenicsx"]
+    argv = runtime.wrap(["python", "study.py"], tmp_path)
+    assert "puzzle-fenicsx-cache:/cache" in argv  # compiled forms outlive the --rm container
+    assert argv[-2:] == ["python", "study.py"]
+
+
+def test_container_first_where_the_image_beats_native(monkeypatch):
+    """FEniCSx on Windows: the image (PETSc) wins over a native dolfinx (SciPy only)."""
+    from puzzle.jobs import runtime
+
+    monkeypatch.delenv("PUZZLE_RUNTIME", raising=False)
+    monkeypatch.delenv("PUZZLE_FENICSX_RUNTIME", raising=False)
+    monkeypatch.setattr(runtime.sys, "platform", "win32")
+    monkeypatch.setattr(runtime.ContainerRuntime, "available", lambda self, exe: True)
+    chosen = runtime_for("fenicsx")
+    assert isinstance(chosen, ContainerRuntime) and chosen.image == DEFAULT_IMAGES["fenicsx"]
+    monkeypatch.setattr(runtime.ContainerRuntime, "available", lambda self, exe: False)
+    assert isinstance(runtime_for("fenicsx"), NativeRuntime)  # no image: native as before
+    monkeypatch.setattr(runtime.ContainerRuntime, "available", lambda self, exe: True)
+    monkeypatch.setattr(runtime.sys, "platform", "linux")
+    assert isinstance(runtime_for("fenicsx"), NativeRuntime)  # native has PETSc there
+
+
 def test_availability_checks(tmp_path):
     assert NativeRuntime(search_path=str(PY.parent)).available(PY.name)
     assert not NativeRuntime(search_path="").available("definitely-not-a-solver")
@@ -98,7 +124,7 @@ def test_auto_prefers_native_then_falls_back(monkeypatch, tmp_path):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     ccx = fake_bin / "ccx"
-    ccx.write_text("#!/bin/sh\n")
+    ccx.write_text("#!/bin/sh\n", encoding="utf-8")
     ccx.chmod(0o755)
     monkeypatch.delenv("PUZZLE_RUNTIME", raising=False)
     monkeypatch.setenv("PUZZLE_SOLVER_PATH", str(fake_bin))
@@ -119,7 +145,7 @@ def test_native_runs_activate_the_solver_environment(tmp_path):
     bindir = prefix / ("Library/bin" if sys.platform == "win32" else "bin")
     bindir.mkdir(parents=True)
     exe = bindir / ("solver.exe" if sys.platform == "win32" else "solver")
-    exe.write_text("")
+    exe.write_text("", encoding="utf-8")
     env = NativeRuntime().environment([str(exe)])
     assert env["CONDA_PREFIX"] == str(prefix.resolve())
     assert env["PATH"].split(os.pathsep)[0].startswith(str(prefix.resolve()))
@@ -152,9 +178,29 @@ def test_pixi_solver_envs_are_found_without_activation(tmp_path, monkeypatch):
     calculix = envs / "calculix" / ("Library/bin" if os.name == "nt" else "bin")
     calculix.mkdir(parents=True)
     monkeypatch.setattr(runtime.sys, "prefix", str(envs / "dev"))
-    assert runtime.pixi_solver_dirs() == [calculix]
+    # Windows also gets the environment's root, where its python.exe is
+
+    root = [envs / "calculix"] if os.name == "nt" else []
+    assert runtime.pixi_solver_dirs() == [calculix, *root]
     monkeypatch.setattr(runtime.sys, "prefix", str(tmp_path / "venv"))
     assert runtime.pixi_solver_dirs() == []
+
+
+def test_installed_solver_envs_are_found_under_the_base(tmp_path, monkeypatch):
+    """ADR 0068: the installer makes Puzzle the base environment and each solver one of
+    its `envs/<name>`, as conda constructor lays them out."""
+    from puzzle.jobs import runtime
+
+    base = tmp_path / "Puzzle"
+    sub = "Library/bin" if os.name == "nt" else "bin"
+    for name in ("calculix", "mmg"):
+        (base / "envs" / name / sub).mkdir(parents=True)
+    monkeypatch.setattr(runtime.sys, "prefix", str(base))
+    root = [base / "envs" / "calculix"] if os.name == "nt" else []  # python.exe sits there
+    assert runtime.pixi_solver_dirs() == [base / "envs" / "calculix" / sub, *root]
+
+    assert runtime.environment("mmg") == base / "envs" / "mmg"
+    assert runtime.environment("netgen") is None
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="uses a shell-script stand-in")
@@ -165,7 +211,9 @@ def test_an_engine_off_path_is_found_and_put_on_its_path(monkeypatch, tmp_path):
     app = tmp_path / "Docker.app" / "bin"
     app.mkdir(parents=True)
     docker = app / "docker"
-    docker.write_text("#!/bin/sh\nexit 0\n")  # `image inspect` succeeds: the image is here
+    docker.write_text(
+        "#!/bin/sh\nexit 0\n", encoding="utf-8"
+    )  # `image inspect` succeeds: the image is here
     docker.chmod(0o755)
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))
     monkeypatch.setattr(runtime, "ENGINE_DIRS", [str(app)])
@@ -178,3 +226,31 @@ def test_an_engine_off_path_is_found_and_put_on_its_path(monkeypatch, tmp_path):
     assert runtime_for("code_aster") == ContainerRuntime(
         image=DEFAULT_IMAGES["code_aster"], engine="docker"
     )
+
+
+def test_activation_keeps_only_what_the_scripts_changed():
+    from puzzle.jobs.runtime import _changed
+
+    before = {"Path": "C:\\a", "HOME": "C:\\h"}
+    listing = "PATH=C:\\mpi;C:\\a\nHOME=C:\\h\nI_MPI_ROOT=C:\\env\\Library\nnot a variable\n"
+    assert _changed(before, listing) == [
+        ("PATH", "C:\\mpi;C:\\a"),
+        ("I_MPI_ROOT", "C:\\env\\Library"),
+    ]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="activation scripts are run on Windows")
+def test_a_solver_env_on_windows_gets_its_activation_scripts(tmp_path):
+    from puzzle.jobs.runtime import NativeRuntime
+
+    prefix = tmp_path / "envs" / "fenicsx"
+    (prefix / "conda-meta").mkdir(parents=True)
+    scripts = prefix / "etc" / "conda" / "activate.d"
+    scripts.mkdir(parents=True)
+    (scripts / "mpivars.bat").write_text(
+        '@echo off\r\nset "I_MPI_ROOT=%CONDA_PREFIX%\\Library"\r\n', encoding="utf-8"
+    )
+    (prefix / "python.exe").write_bytes(b"")
+    env = NativeRuntime().environment([str(prefix / "python.exe")])
+    assert env["I_MPI_ROOT"] == f"{prefix}\\Library"
+    assert env["CONDA_PREFIX"] == str(prefix)

@@ -116,7 +116,7 @@ def read_variable(path: Path, parts: list[Part], components: int) -> np.ndarray:
 
 def read_case(case_file: Path) -> tuple[list[Part], dict[str, tuple[str, int, Path]]]:
     """Geometry and the variables listed in a .case file: name -> (kind, components, file)."""
-    text = case_file.read_text()
+    text = case_file.read_text(encoding="utf-8")
     geo = re.search(r"model:\s*(?:\d+\s+)?(\S+)", text).group(1)
     variables = {}
     for kind, name, pattern in re.findall(

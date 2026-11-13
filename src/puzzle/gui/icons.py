@@ -37,12 +37,19 @@ TABLER = {
     "agent": "robot",
     "messages": "message-2",
     "fit": "maximize",
+    "refresh_view": "refresh",
+    "open_elsewhere": "arrow-bar-right",  # Open in ParaView (ADR 0070)
+    "show": "eye",
+    "hide": "eye-off",
+    "colour": "palette",
     "iso": "box",
     "edges": "border-all",
+    "display": "cube",  # the view toolbar's Display: shaded, with edges, with the mesh
     "projection": "perspective",
     "camera": "camera",
     "extremes": "arrows-vertical",
     "symbols": "arrow-down-bar",
+    "bolt_labels": "bolt",  # the bolts' force labels over a result
     "section": "slice",
     "clear": "x",
     "copy": "copy",
@@ -108,6 +115,7 @@ FEATURES = {
     "fixed": "fixed", "displacement": "displacement", "remote_displacement": "displacement",
     "elastic_support": "spring", "compression_only_support": "support",
     "force": "force", "traction": "force", "pressure": "pressure",
+    "line_load": "pressure", "node_spring": "spring",  # frames (ADR 0079)
     "remote_force": "remote_force", "remote_force_rigid": "remote_force",
     "gravity": "gravity", "acceleration": "acceleration", "body_force": "acceleration",
     "rotation": "revolve", "initial_stress": "scale",
@@ -117,7 +125,8 @@ FEATURES = {
     "electric_potential": "voltage", "surface_charge": "voltage", "ground": "ground",
     "coil_current": "coil", "stranded_coil": "coil", "coil_start": "coil",
     "coil_end": "coil", "magnetic_insulation": "magnet", "magnetic_symmetry": "magnet",
-    "symmetry": "mirror", "velocity_inlet": "inlet", "mass_flow_inlet": "inlet",
+    "symmetry": "mirror", "antisymmetry": "mirror", "velocity_inlet": "inlet",
+    "mass_flow_inlet": "inlet",
     "pressure_outlet": "outlet", "wall": "wall", "dirichlet": "equation",
     "neumann": "equation",
 }  # fmt: skip
@@ -149,7 +158,7 @@ TOOLS = {
     "boundary_layer": "loft", "mesh": "mesh", "seeds": "seeds", "gmsh_options": "settings",
     "probe": "probe", "reaction": "fixed", "selection": "pick", "path": "line",
     "linearized": "chart", "plane": "sheet", "cut": "section", "animate": "animate",
-    "legend": "legend", "plots": "chart",
+    "legend": "legend", "plots": "chart", "paraview": "open_elsewhere",
 }  # fmt: skip
 
 
@@ -171,7 +180,7 @@ def icon(name: str) -> QIcon:
 def _svg(name: str, colour: str) -> bytes | None:
     """The icon's SVG in `colour`: Tabler's file, else Puzzle's own drawing."""
     if name in TABLER:
-        text = (TABLER_DIR / f"{TABLER[name]}.svg").read_text()
+        text = (TABLER_DIR / f"{TABLER[name]}.svg").read_text(encoding="utf-8")
         text = text.replace("currentColor", colour).replace(
             'stroke-width="2"', f'stroke-width="{STROKE}"'
         )

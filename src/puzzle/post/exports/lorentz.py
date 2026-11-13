@@ -52,7 +52,8 @@ def write(job):
         columns.append(share)
     table = np.column_stack(columns)
     job.path.write_text(
-        header + "\n" + "\n".join(",".join(f"{v:.9g}" for v in row) for row in table) + "\n"
+        header + "\n" + "\n".join(",".join(f"{v:.9g}" for v in row) for row in table) + "\n",
+        encoding="utf-8",
     )
     return [job.path], {
         "result": "Lorentz force density J × B (body force per volume)",

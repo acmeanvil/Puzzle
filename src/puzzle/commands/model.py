@@ -61,10 +61,22 @@ class AddLibraryMaterial(_Command):
 
 
 class CopyComponent(_Command):
-    """Copy a component; its local geometry is copied with no link back (ADR 0009)."""
+    """Copy a component; its local geometry is copied with no link back (ADR 0009).
+    With `studies`, its studies are duplicated too, on the copy (as Ansys's Duplicate
+    of a system)."""
 
     command: Literal["copy_component"] = "copy_component"
     component: str
+    name: str
+    studies: bool = False
+
+
+class CopyStudy(_Command):
+    """Duplicate a study under a new name: its steps, settings, sweeps and solver (its
+    runs stay the original's)."""
+
+    command: Literal["copy_study"] = "copy_study"
+    study: str
     name: str
 
 
@@ -94,7 +106,14 @@ class SetAutonomy(_Command):
 
 
 Command = Annotated[
-    Create | Edit | Delete | AddLibraryMaterial | CopyComponent | RunStudy | SetAutonomy,
+    Create
+    | Edit
+    | Delete
+    | AddLibraryMaterial
+    | CopyComponent
+    | CopyStudy
+    | RunStudy
+    | SetAutonomy,
     Field(discriminator="command"),
 ]
 _ADAPTER: TypeAdapter[Command] = TypeAdapter(Command)

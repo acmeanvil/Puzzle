@@ -40,7 +40,16 @@ class CliError(Exception):
     pass
 
 
+def _tolerant_output() -> None:
+    """A character the console's code page lacks (an en dash, ², →) is replaced, not
+    fatal: Windows' cp1252 console made a print raise and the command fail."""
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
+
+
 def main(argv: list[str] | None = None) -> int:
+    _tolerant_output()
     args = _parser().parse_args(argv)
     try:
         return args.handler(args)
@@ -152,7 +161,17 @@ def _parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("run", help="solve a study")
     p.add_argument("project", type=Path)
-    p.add_argument("--study", required=True, help="study name")
+    p.add_argument(
+        "--study",
+        action="append",
+        default=[],
+        help="study name; give it again for several, run one after another",
+    )
+    p.add_argument(
+        "--all",
+        action="store_true",
+        help="every study, one after another (sources of transfers first)",
+    )
     p.add_argument(
         "--no-reuse", action="store_true", help="solve even if an identical run is stored"
     )
@@ -217,8 +236,32 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("project", type=Path)
     p.set_defaults(handler=_runs)
 
+    p = sub.add_parser("log", help="a run's whole solver logs: search them, or the problems")
+    p.add_argument("project", type=Path)
+    target = p.add_mutually_exclusive_group(required=True)
+    target.add_argument("--study", help="the study's newest attempt (a failed one too)")
+    target.add_argument("--run", help="a stored run id (from `puzzle runs`)")
+    p.add_argument("--grep", help="lines matching this regular expression (any case)")
+    p.add_argument("--problems", action="store_true", help="errors and warnings only")
+    p.add_argument("--context", type=int, default=0, help="lines around each match")
+    p.add_argument("--tail", type=int, default=60, help="without a filter: each file's last N")
+    p.add_argument("--files", action="store_true", help="list the log files and counts only")
+    p.set_defaults(handler=_log)
+
+    p = sub.add_parser("elements", help="every solver's elements, grouped (ADR 0082)")
+    p.add_argument("--solver", help="calculix, code_aster, elmer, fenicsx, pynite...")
+    p.add_argument("--family", help="solid_3d, solid_2d, shell, beam, truss, discrete, "
+                   "thermal, electromagnetic, fluid")  # fmt: skip
+    p.add_argument(
+        "--study",
+        help="static, modal, buckling, transient, harmonic, contact, "
+        "plasticity, large_deflection, heat, electrostatics, magnetics, flow",
+    )
+    p.set_defaults(handler=_elements)
+
     for name, handler, helptext in (
         ("show", _show, "view a result"),
+        ("paraview", _paraview, "open a result in ParaView, its view rebuilt (ADR 0070)"),
         ("export", _export, "results for other software: ParaView, point clouds, CAD"),
         ("progress", _progress, "how a run converged: steps, increments, cut-backs, messages"),
     ):
@@ -233,6 +276,18 @@ def _parser() -> argparse.ArgumentParser:
             )
             p.add_argument("--plot", type=Path, help="save the convergence plot as a PNG")
             p.add_argument("--json", action="store_true", help="the summary as JSON")
+        elif name == "paraview":
+            p.add_argument("--field", default="displacement")
+            p.add_argument("--scalar", help="array to colour by, e.g. von_mises")
+            p.add_argument("--mode", type=int)
+            p.add_argument("--step", type=int)
+            p.add_argument("--deform", default="auto", help="scale factor, 'auto' or 'none'")
+            p.add_argument("--range", help="a custom colour range: bottom,top (the array's units)")
+            p.add_argument(
+                "--no-launch",
+                action="store_true",
+                help="write the files and view.py only, don't start ParaView",
+            )
         elif name == "show":
             p.add_argument("--field", default="displacement")
             p.add_argument(
@@ -323,6 +378,7 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--level", choices=["advise", "propose", "act_in_budget", "act"])
     p.add_argument("--runs", type=int, help="budget: fresh solver runs")
     p.add_argument("--solver-seconds", type=float, help="budget: solver wall time")
+    p.add_argument("--core-hours", type=float, help="budget: cores × hours on remote hosts")
     p.add_argument("--mcp", choices=["off", "local", "network"])
     p.add_argument("--confirm", help="the token from the first request (level act)")
     p.set_defaults(handler=_autonomy)
@@ -383,6 +439,27 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--solver", help="one solver's view (default: the component's studies')")
     p.add_argument("--json", action="store_true", help="the report as JSON")
     p.set_defaults(handler=_contacts)
+
+    p = sub.add_parser(
+        "members", help="a frame's members checked by AISC 360 from a study's newest run"
+    )
+    p.add_argument("project", type=Path)
+    p.add_argument("study", help="the study's name")
+    p.add_argument("--member", help="one member (default: all)")
+    p.add_argument("--details", action="store_true", help="every check, not just the governing")
+    p.add_argument("--json", action="store_true", help="the checks as JSON")
+    p.set_defaults(handler=_members)
+
+    p = sub.add_parser(
+        "split-parts", help="one part per body of a part holding several (an imported assembly)"
+    )
+    p.add_argument("project", type=Path)
+    p.add_argument("component", help="the component's name")
+    p.add_argument("part", help="the part to split")
+    p.add_argument("--no-bond", action="store_true",
+                   help="don't add bonded contacts where the bodies touch")  # fmt: skip
+    p.add_argument("--dry-run", action="store_true", help="say what it would make, change nothing")
+    p.set_defaults(handler=_split_parts)
 
     p = sub.add_parser(
         "schematic", help="the project as nodes and wires: what feeds and shares what (ADR 0058)"
@@ -509,10 +586,71 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true")
     p.set_defaults(handler=_field_check)
 
+    p = sub.add_parser("materials-export", help="your material library as one file to share")
+    p.add_argument("path", type=Path, help="the .json file to write")
+    p.add_argument("--scope", choices=["yours", "user", "all"], default="user",
+                   help="yours: the builder's; user (default): imported and yours; all: with "
+                   "the generics")  # fmt: skip
+    p.set_defaults(handler=_materials_export)
+
+    p = sub.add_parser("materials-import", help="materials from a library file into yours")
+    p.add_argument("path", type=Path, help="a file from materials-export, or a library.json")
+    p.add_argument(
+        "--into",
+        choices=["yours", "library"],
+        default="yours",
+        help="yours (default): added to your materials, checked, one undo; "
+        "library: replaces your imported library (the old one kept as .bak)",
+    )
+    p.add_argument(
+        "--replace",
+        action="store_true",
+        help="replace materials you already have (default: keep them)",
+    )
+    p.set_defaults(handler=_materials_import)
+
+    p = sub.add_parser("materials-remove", help="materials removed from your library (one undo)")
+    p.add_argument("keys", nargs="*", help="library keys (materials-duplicates lists some)")
+    p.add_argument("--restore", action="store_true", help="bring removed ones back instead")
+    p.add_argument("--list", action="store_true", help="the materials you removed")
+    p.set_defaults(handler=_materials_remove)
+
+    p = sub.add_parser("materials-duplicates", help="library materials with the same values")
+    p.set_defaults(handler=_materials_duplicates)
+
     p = sub.add_parser("settings", help="your preferences (ADR 0024): list them, or set one")
     p.add_argument("key", nargs="?", help="e.g. units.system")
     p.add_argument("value", nargs="?", help="e.g. engineering; omit to show the choices")
     p.set_defaults(handler=_settings)
+
+    p = sub.add_parser("machine", help="Puzzle's Linux machine on Windows: WSL 2 solvers "
+                       "(ADR 0068 step 5)")  # fmt: skip
+    p.add_argument("action", choices=["list", "install", "remove"])
+    p.add_argument("solver", nargs="?", help="install/remove: elmer, openfoam, code_saturne, ...")
+    p.add_argument("--image", help="install: the image to export (default: the solver's)")
+    p.add_argument("--tarball", type=Path, help="install: a root file system to import instead")
+    p.set_defaults(handler=_machine)
+
+    p = sub.add_parser("clusters", help="your operator clusters and blocks to share (ADR 0071)")
+    p.add_argument("action", choices=["list", "export", "import", "remove"])
+    p.add_argument("name", nargs="?", help="export/remove: the cluster's name or key")
+    p.add_argument("file", nargs="?", type=Path, help="export: where; import: the block file")
+    p.set_defaults(handler=_clusters)
+
+    p = sub.add_parser("solvers", help="the solvers here and how each runs (ADR 0068)")
+    p.add_argument(
+        "--build",
+        action="store_true",
+        help="build CalculiX with PARDISO on this computer now (ADR 0051)",
+    )
+    p.add_argument("--repair", metavar="ENV",
+                   help="reinstall a solver environment of the installed app from its "
+                   "package list (calculix, fenicsx, ...)")  # fmt: skip
+    p.add_argument("--clear-wait", action="store_true",
+                   help="clear the PARDISO build's 24-hour wait after a failure, so it is "
+                   "tried the next time Puzzle opens (Settings > Advanced)")  # fmt: skip
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(handler=_solvers)
 
     p = sub.add_parser("trust", help="let a project's scripts and equations run (ADR 0062)")
     p.add_argument("project", type=Path)
@@ -594,10 +732,37 @@ def _studies(args) -> int:
 
 
 def _run(args) -> int:
+    """One study, or several one after another (ADR 0073): a failure goes on to the
+    next, and the exit status says whether any failed."""
+    from puzzle import run_queue
+
+    project = _load(args.project)
+    if not args.all and not args.study:
+        raise CliError("name a study with --study, or run them all with --all")
+    if args.all:
+        studies = run_queue.in_order(project)
+    else:
+        studies = run_queue.in_order(project, [_study(project, n).id for n in args.study])
+    if len(studies) == 1:
+        return _run_one(args, studies[0])
+
+    def one(study):
+        print()
+        print(f"== {study.name}")
+        return _run_one(args, study)
+
+    done = run_queue.run_all(None, studies, submit=one)
+    for o in done:
+        if not o.ok:
+            print(f"{o.study.name} failed: {o.error}")
+    print(run_queue.summary(done))
+    return 0 if all(o.ok for o in done) else 1
+
+
+def _run_one(args, study) -> int:
     from puzzle.commands import Session
     from puzzle.commands.model import RunStudy
 
-    study = _study(_load(args.project), args.study)
     print(f"Running '{study.name}' with {study.solver} ...")
     status = None if args.verbose else _LiveStatus()
     try:
@@ -662,10 +827,11 @@ class _LiveStatus:
             if line != self.last and (now - self.shown > 0.2 or not isinstance(event, Message)):
                 print("\r" + line[:120].ljust(len(self.last[:120])), end="", flush=True)
                 self.last, self.shown = line, now
-        elif isinstance(event, (Step, Increment, Converged, Diverged, Stage)) and line != self.last:
-            if not isinstance(event, Stage) or event.state == "start":
-                print(f"  {line}")
-                self.last = line
+        elif (isinstance(event, (Step, Increment, Converged, Diverged, Stage))
+              and line != self.last
+              and (not isinstance(event, Stage) or event.state == "start")):  # fmt: skip
+            print(f"  {line}")
+            self.last = line
 
     def _end_line(self) -> None:
         if self.tty and self.last:
@@ -674,6 +840,37 @@ class _LiveStatus:
 
     def close(self) -> None:
         self._end_line()
+
+
+def _elements(args) -> int:
+    from puzzle import elements
+
+    sys.stdout.reconfigure(encoding="utf-8")
+    print(elements.listing(args.solver, args.family, args.study), end="")
+    return 0
+
+
+def _log(args) -> int:
+    from puzzle import solver_logs
+
+    try:
+        folder = solver_logs.find(args.project, study=args.study, run=args.run)
+    except PuzzleError as exc:
+        print(f"error: [{exc.code}] {exc.message}", file=sys.stderr)
+        return 1
+    if args.files:
+        for path in solver_logs.logs(folder):
+            print(f"{path.relative_to(folder)}  {path.stat().st_size:,} bytes")
+        print(solver_logs.counts(folder))
+        return 0
+    last = None
+    for line in solver_logs.lines(folder, pattern=args.grep, problems=args.problems,
+                                  context=args.context, tail=args.tail, limit=10_000):  # fmt: skip
+        if line.file != last:
+            print(f"== {line.file}")
+            last = line.file
+        print(f"{line.number:>7}: {line.text}")
+    return 0
 
 
 def _progress(args) -> int:
@@ -731,7 +928,8 @@ def _runs(args) -> int:
     for r in runs:
         when = r.started_at.astimezone().strftime("%Y-%m-%d %H:%M")
         where = f"[{r.solver}, {r.runtime}]"
-        print(f"{r.run_id[:8]}  {when}  {r.study_name}  {where}  {r.duration_s:.1f} s")
+        version = f"  {r.solver_version}" if r.solver_version else ""
+        print(f"{r.run_id[:8]}  {when}  {r.study_name}  {where}{version}  {r.duration_s:.1f} s")
     return 0
 
 
@@ -777,6 +975,32 @@ def _show(args) -> int:
         print(f"Saved {args.screenshot}")
     if args.animate:
         print(f"Saved {args.animate}")
+    return 0
+
+
+def _paraview(args) -> int:
+    from puzzle.post import paraview_link
+
+    store, record = _target(args)
+    mesh, results = store.read_mesh(record.mesh_id), store.read_results(record.run_id)
+    deform = None if args.deform == "none" else (
+        args.deform if args.deform == "auto" else float(args.deform))  # fmt: skip
+    clim = tuple(float(v) for v in args.range.split(",")) if args.range else None
+    try:
+        shown, view = paraview_link.from_run(mesh, results, field=args.field,
+                                             scalar=args.scalar, step=args.step,
+                                             mode=args.mode, deform=deform, clim=clim)  # fmt: skip
+    except KeyError as exc:
+        raise CliError(exc.args[0]) from exc
+    folder = paraview_link.folder_for(Path(args.project), record.run_id)
+    script = paraview_link.write(folder, shown, view, mesh, results)
+    print(f"Wrote {script.parent}")
+    if args.no_launch:
+        return 0
+    if (why := paraview_link.why_not()) is not None:
+        raise CliError(why)
+    paraview_link.launch(script)
+    print(f"Opened in ParaView: {view.title} ({view.step})")
     return 0
 
 
@@ -933,13 +1157,14 @@ def _autonomy(args) -> int:
 
     project = _load(args.project)
     budget = None
-    if args.runs is not None or args.solver_seconds is not None:
-        current = project.agent.budget
+    if args.runs is not None or args.solver_seconds is not None or args.core_hours is not None:
+        current = project.agent.budget  # what isn't given stays as it is
         budget = {
             "runs": current.runs if args.runs is None else args.runs,
             "solver_seconds": (
                 current.solver_seconds if args.solver_seconds is None else args.solver_seconds
             ),
+            "core_hours": current.core_hours if args.core_hours is None else args.core_hours,
         }
     command = {
         "command": "set_autonomy",
@@ -1198,6 +1423,40 @@ def _adapt(args) -> int:
     return 0 if out.converged else 1
 
 
+def _members(args) -> int:
+    """ADR 0079 step 3: each frame member's governing check; exit 1 when one fails."""
+    import json
+
+    from puzzle.commands import Session, resolve
+    from puzzle.frames.design import member_checks
+    from puzzle.model.schema import Component, Study
+    from puzzle.post.derived import run_for
+
+    s = Session(args.project)
+    store = _store(args.project)
+    study = resolve(s.project, args.study, Study)
+    record = run_for(s.project, store, study.id)
+    comp = s.project.get(study.component, Component)
+    out = member_checks(s.project, comp, store.read_mesh(record.mesh_id),
+                        store.read_results(record.run_id), args.member)  # fmt: skip
+    if args.json:
+        print(json.dumps(out, indent=1))
+        return 0 if all(m["passes"] for m in out["members"]) else 1
+    for m in out["members"]:
+        g = m["governing"]
+        mark = "ok  " if m["passes"] else "FAIL"
+        print(f"{mark} {m['member']:<12} {m['section']:<16} ratio {m['ratio']:.3f}  "
+              f"{g['check']} ({g['clause']}), {g['label']}")  # fmt: skip
+        if args.details:
+            for st in m["steps"]:
+                print(f"       {st['label']}:")
+                for c in st["checks"]:
+                    print(f"         {c['check']:<34} {c['ratio']:.3f}  {c['clause']}")
+    for m in out["not_checked"]:
+        print(f"--   {m['member']:<12} not checked: {m['reason']}")
+    return 0 if all(m["passes"] for m in out["members"]) else 1
+
+
 def _error_estimate(args) -> int:
     """ADR 0066 phase 2: a study's newest run's error estimate, and where it is largest."""
     import json
@@ -1304,7 +1563,7 @@ def _operators(args) -> int:
     ctx = ev.Context(project, _store(args.project))
     if args.export:
         for op in ops:
-            if op.type == "export":
+            if op.type in ("export", "report"):
                 for path in ev.export(ctx, op, args.project):
                     print(f"wrote {path}")
         return 0
@@ -1370,7 +1629,9 @@ def _schematic(args) -> int:
 
         view = view_state.load(args.project)
         lay = layout(s, view.positions, frozenset(view.unfolded))
-        args.svg.write_text(to_svg(s, lay, "none" if args.no_uses else "all", project.name))
+        args.svg.write_text(
+            to_svg(s, lay, "none" if args.no_uses else "all", project.name), encoding="utf-8"
+        )
         print(f"saved {args.svg}")
     if args.json:
         print(json.dumps(s.to_dict(), indent=1))
@@ -1393,6 +1654,26 @@ def _schematic(args) -> int:
     if flow:
         print("Flow:")
         print("\n".join(f"  {line}" for line in flow))
+    return 0
+
+
+def _split_parts(args) -> int:
+    """One part per body (ADR 0039), as one batch: one undo."""
+    from puzzle.commands import resolve
+    from puzzle.commands.session import Session
+    from puzzle.model.schema import Component
+    from puzzle.split_parts import plan
+
+    session = Session(args.project)
+    comp = resolve(session.project, args.component, Component)
+    made = plan(session.project, comp, args.part, args.project, bond=not args.no_bond)
+    print(made.summary())
+    for note in made.notes:
+        print(f"  note: {note}")
+    if args.dry_run:
+        return 0
+    session.submit_batch(made.commands)
+    print("done (puzzle undo takes it back)")
     return 0
 
 
@@ -1669,7 +1950,7 @@ def _scripts(args) -> int:
         return 1
     if args.action == "list":
         done = subprocess.run(["pixi", "list", "-e", ENVIRONMENT], capture_output=True,
-                              text=True)  # fmt: skip
+                              text=True, encoding="utf-8", errors="replace")  # fmt: skip
         print(done.stdout or done.stderr)
         return done.returncode
     if not args.package:
@@ -1682,6 +1963,165 @@ def _scripts(args) -> int:
         if done.returncode:
             return done.returncode
     print(f"{args.package} is in the scripts environment")
+    return 0
+
+
+def _materials_export(args) -> int:
+    from puzzle.materials import exchange
+
+    n = exchange.export(args.path, args.scope)
+    print(f"exported {n} materials to {args.path}")
+    return 0
+
+
+def _materials_import(args) -> int:
+    from puzzle.materials import exchange
+
+    done = exchange.import_file(args.path, args.into, "replace" if args.replace else "keep")
+    print(f"imported {args.path.name}: {done.summary()}")
+    for key, why in sorted(done.invalid.items()):
+        print(f"  {key}: {why}")
+    if done.backup:
+        print(f"the previous library is kept as {done.backup}")
+    return 0
+
+
+def _materials_remove(args) -> int:
+    from puzzle.materials.store import LibraryStore
+
+    store = LibraryStore()
+    if args.list or not args.keys:
+        for key in store.removed():
+            print(key)
+        return 0
+    if args.restore:
+        done = store.restore(args.keys)
+        print(f"restored {len(done)}: {', '.join(done)}" if done else "none of those was removed")
+        return 0
+    done = store.remove_from_library(args.keys)
+    print(f"removed {len(done)} from your library: {', '.join(done)}")
+    return 0
+
+
+def _materials_duplicates(args) -> int:
+    from puzzle.materials import _library, duplicates
+
+    lib = _library()
+    groups = duplicates()
+    for keys in groups:
+        print("same values:")
+        for key in keys:
+            print(f"  {key}  ({lib[key]['name']})")
+    print(f"{len(groups)} groups")
+    return 0
+
+
+def _machine(args) -> int:
+    from puzzle.jobs import machine
+
+    if args.action == "list":
+        found = machine.installed()
+        if machine.wsl() is None:
+            print("WSL isn't here (Windows only; `wsl --install` in an administrator terminal)")
+        for solver, data in found.items():
+            print(f"{solver:13} {data['distro']}  from {data.get('from', '?')}")
+        if not found:
+            print("no solvers in Puzzle's Linux machine yet: `puzzle machine install SOLVER`")
+        return 0
+    if not args.solver:
+        raise CliError(f"{args.action} needs the solver")
+    try:
+        if args.action == "remove":
+            machine.remove(args.solver)
+            print(f"removed {machine.distro_for(args.solver)}")
+            return 0
+        if args.tarball:
+            data = machine.install_from_tarball(args.solver, args.tarball)
+        else:
+            data = machine.install_from_image(args.solver, args.image,
+                                              say=lambda line: print(line, flush=True))  # fmt: skip
+    except machine.MachineError as exc:
+        raise CliError(str(exc)) from None
+    print(f"{args.solver} runs in {data['distro']} now")
+    return 0
+
+
+def _clusters(args) -> int:
+    from puzzle.operators import clusters
+
+    found = clusters.templates()
+
+    def key_of(name):
+        if name in found:
+            return name
+        hits = [k for k, t in found.items() if t["name"] == name]
+        if len(hits) != 1:
+            raise CliError(f"no single cluster named '{name}'")
+        return hits[0]
+
+    if args.action == "list":
+        for k, t in found.items():
+            mine = "yours " if k.startswith("mine:") else "recipe"
+            ports = ", ".join(f"{p['name']} ({p['type']})" for p in t.get("ports", []))
+            print(f"{mine}  {t['name']}  [{k}]" + (f"  ports: {ports}" if ports else ""))
+        return 0
+    if args.action == "import":
+        target = args.file or (Path(args.name) if args.name else None)
+        if target is None:
+            raise CliError("import needs the block file")
+        key = clusters.import_file(target)
+        print(f"imported {clusters.templates()[key]['name']} as {key}")
+        return 0
+    if not args.name:
+        raise CliError(f"{args.action} needs the cluster's name")
+    key = key_of(args.name)
+    if args.action == "remove":
+        clusters.remove(key)
+        print(f"removed {args.name}")
+        return 0
+    print(f"wrote {clusters.export(key, args.file or Path.cwd())}")
+    return 0
+
+
+def _solvers(args) -> int:
+    import json
+    from dataclasses import asdict
+
+    from puzzle import solver_builds
+
+    if args.repair:
+        from puzzle import solver_repair
+
+        try:
+            solver_repair.repair(args.repair, say=lambda line: print(line, flush=True))
+        except solver_repair.RepairError as exc:
+            raise CliError(str(exc)) from None
+        return 0
+    if args.clear_wait:
+        cleared = solver_builds.clear_wait()
+        print("Cleared: the build is tried the next time Puzzle opens" if cleared
+              else "No wait to clear: the build hasn't failed")  # fmt: skip
+        return 0
+    if args.build:
+        done = solver_builds.build(say=lambda line: print(line, flush=True))
+        print(f"PARDISO: {done.state}: {done.detail}")
+        return 0 if done.state == "built" else 1
+    rows = solver_builds.solvers()
+    pardiso = solver_builds.status()
+    if args.json:
+        print(json.dumps({"solvers": [asdict(r) for r in rows],
+                          "pardiso": asdict(pardiso)}, indent=1))  # fmt: skip
+        return 0
+    words = {
+        "native": "native",
+        "container": "in a container",
+        "missing": "not available",
+        "machine": "Linux machine",
+    }
+    for r in rows:
+        note = f"  [{r.note}]" if r.note else ""
+        print(f"{r.name:13} {words[r.how]:15} {r.where}{note}")
+    print(f"CalculiX with PARDISO: {pardiso.state}: {pardiso.detail}")
     return 0
 
 

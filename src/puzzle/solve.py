@@ -115,6 +115,7 @@ def _run_study(
     from puzzle import operators
 
     project = operators.resolved(project)  # sweeps take their lists' values (ADR 0062)
+    project = operators.with_parameters(project)  # values wired to parameters (ADR 0071)
     from puzzle.suppress import applied
 
     project = applied(project)  # suppressed geometry is left out of meshing and solving
@@ -158,11 +159,16 @@ def _run_study(
             trust.require(project, "custom PDE equation")
         except PuzzleError as exc:
             raise StudyError(exc.message, code=exc.code, path=study.name) from None
+    keyed = project  # run keys come from the study as the user set it up
+    from puzzle import preload
+
+    # Bolts tightened in a step of their own before the loads, then locked (ADR 0037).
+    project, study, preload_at = preload.applied(project, study)
     problems = project.validate() + adapter.check(project, study)
     if problems:
         raise StudyError("; ".join(problems), path=study.name, details={"problems": problems})
 
-    run_key = _point[0] if _point else run_hashes(project)[study.id][study.solver][0]
+    run_key = _point[0] if _point else run_hashes(keyed)[study.id][study.solver][0]
     if store is not None and reuse:
         hit = store.find_run(run_key)
         if hit is not None:
@@ -265,10 +271,24 @@ def _run_study(
     # ADR 0050: bolts that bear on a head or nut annulus or a tapped thread get those
     # faces as mesh groups, and their ends point at them.
     written, project = with_joints(project, study.component, meshed.mesh)
+    from puzzle.weld_generator import with_grooves
+
+    # ADR 0078 step 4: modelled groove welds, their faces tied over the groove's depth.
+    written, project = with_grooves(project, study.component, written)
     from puzzle.beams import with_orientations
 
     # ADR 0055: beams oriented by a system, a point, a face or an edge, as vectors.
     written, project = with_orientations(project, study.component, written)
+    from puzzle.symmetry import applied as with_symmetry
+
+    # ADR 0081: symmetry planes as supports on each face's normal.
+    project = with_symmetry(project, study.component, written, adapter.capabilities)
+    from puzzle import weak_springs
+
+    # ADR 0080: bodies held only by sliding contact get weak springs until it closes.
+    written, project, springs = weak_springs.applied(
+        project, study, written, adapter.capabilities, record
+    )
     written = _adjust_contacts(project, study, written, record)
     _contact_warnings(project, study, written, record)
     _magnetic_warnings(project, study, written, record)
@@ -276,7 +296,8 @@ def _run_study(
     # at a time on the same mesh; the steps are independent analyses.
     steps = study.solve_steps()
     limit = getattr(adapter, "max_solve_steps", None)
-    if limit is None or len(steps) <= limit:
+    chained = limit is not None and len(steps) > limit and adapter.chains(project, study)
+    if limit is None or len(steps) <= limit or chained:  # chained: static steps, one job
         parts = [(study, workdir)]
     else:
         sweeps = study.sweeps()
@@ -300,7 +321,8 @@ def _run_study(
         # apply in its step (Feature.steps, ADR 0037). One deck for all steps (CalculiX)
         # sorts them out itself.
         indices = [n - 1, n] if limit is not None and _preloaded(steps, n) else [n]
-        seen = _in_step(project, study.component, indices) if limit is not None else project
+        split = limit is not None and not chained
+        seen = _in_step(project, study.component, indices) if split else project
         begin("write")
         from puzzle.jobs import pending
 
@@ -375,6 +397,17 @@ def _run_study(
 
         # ADR 0056: contact pressure, status, gap and sliding on the slave nodes.
         contact_fields(part_results, seen, seen.objects[study.component], written)
+        from puzzle.post.thread_fields import finish as thread_fields
+
+        # ADR 0076: each threaded contact's flank forces, per-thread load and wedge.
+        thread_fields(part_results, seen, seen.objects[study.component], written)
+        from puzzle.post.weld_fields import finish as weld_fields
+
+        # ADR 0078: each light weld's line force at its stations.
+        weld_fields(part_results, seen, seen.objects[study.component], written)
+        # ADR 0080: the force the weak springs carry, and a warning where it is the load.
+        weak_springs.finish(part_results, springs, study.weak_spring_limit, record)
+        _large_strain(part_results, seen, part, record)  # ADR 0082 decision 6
         lap("read")
         if len(parts) > 1:
             for step in part_results.steps:
@@ -386,12 +419,17 @@ def _run_study(
 
     kinds = [s.type for s in study.solve_steps()]
     for step in results.steps:
-        if 1 <= step.index <= len(kinds):
+        if 1 <= step.index <= len(kinds) and step.kind not in ("combination", "spectrum"):
             step.kind = kinds[step.index - 1]
+        if step.index == preload_at:  # shown as "Preload" (StepResult.label)
+            step.kind = preload.KIND
 
     run_id = None
     if store is not None:
         begin("store")
+        from puzzle.jobs.versions import identify
+
+        version, digest = identify(study.solver)  # ADR 0072: which solver ran
         run_id = store.write_run(
             run_key=run_key,
             study_id=str(study.id),
@@ -403,6 +441,8 @@ def _run_study(
             started_at=started,
             duration_s=(datetime.now(UTC) - started).total_seconds(),
             point=_point[1] if _point else None,
+            solver_version=version,
+            image_digest=digest,
         )
         lap("store")
         store.write_progress(run_id, record.events)
@@ -424,12 +464,21 @@ def _run_study(
     )
 
 
-def _run_sweep(
+def _run_sweep(project, study, root, workdir, **kwargs):
+    """Each point of the sweep as its own run (cached by the point's run key). A sweep
+    of materials only meshes once: the geometry is the same at every point. Container
+    solves share one running container per image (ADR 0072, `jobs.warm`)."""
+    from puzzle.jobs.warm import batch
+
+    with batch(workdir):
+        return _sweep_points(project, study, root, workdir, **kwargs)
+
+
+def _sweep_points(
     project, study, root, workdir, *, store, reuse, on_output, timeout_s, solver,
     on_event=None, cancel=None,
 ):  # fmt: skip
-    """Each point of the sweep as its own run (cached by the point's run key). A sweep
-    of materials only meshes once: the geometry is the same at every point."""
+    """`_run_sweep`'s points."""
     from puzzle import sweep
 
     keys = run_hashes(project)[study.id][solver]
@@ -523,6 +572,45 @@ def _in_step(project: Project, component_id, indices: list[int]) -> Project:
     copy = replace(project, objects=dict(project.objects))
     copy.objects[component_id] = comp.model_copy(update={"physics": physics})
     return copy
+
+
+LARGE_STRAIN = 0.05
+
+
+def _large_strain(results, project, study, record) -> None:
+    """A large-deflection solve of elastic materials whose strains pass 5 %: Green-
+    Lagrange with plain elasticity is for large rotations and small strains, so the
+    material wants a hyperelastic model there (ADR 0082 decision 6). A warning."""
+    import numpy as np
+
+    from puzzle import progress
+    from puzzle.model.schema import Component, Material
+
+    if not any(s.settings.get("geometric_nonlinearity") for s in study.solve_steps()):
+        return
+    comp = project.objects.get(study.component)
+    if not isinstance(comp, Component):
+        return
+    for a in comp.materials:
+        m = project.objects.get(a.material)
+        if isinstance(m, Material) and (m.models.plasticity or m.models.hyperelasticity):
+            return  # the material says how it behaves at large strain
+    worst = 0.0
+    for step in results.steps:
+        e = step.fields.get("strain")
+        if e is None or e.values.shape[1] != 6:
+            continue
+        v = np.nan_to_num(e.values)
+        full = np.zeros((len(v), 3, 3))
+        for k, (i, j) in enumerate(((0, 0), (1, 1), (2, 2), (0, 1), (1, 2), (2, 0))):
+            full[:, i, j] = full[:, j, i] = v[:, k] / (1.0 if i == j else 2.0)  # engineering
+        worst = max(worst, float(np.abs(np.linalg.eigvalsh(full)).max(initial=0.0)))
+    if worst > LARGE_STRAIN:
+        record(progress.Message(
+            level="warning", code="large_strain",
+            text=f"strains reach {worst:.1%} under large deflection with elastic materials: "
+            "Green-Lagrange with plain elasticity is right for large rotations and small "
+            "strains; above about 5 % the material needs a hyperelastic model"))  # fmt: skip
 
 
 def _contact_warnings(project, study, mesh, record) -> None:

@@ -1,0 +1,250 @@
+"""The 3D mouse in the window (ADR 0069): a reader thread, the view moved on the GUI's.
+
+`Controller.start()` looks for a device (and again every few seconds, so one plugged in
+later is found), reads it on a daemon thread and posts each reading to the GUI thread
+through a Qt signal. A timer there turns the latest reading into one camera move per
+frame (`motion.move`, scaled by the time since the last), about the view's pivot, and
+puts it in the view (`Viewport.set_camera`). Buttons run the window's actions by name
+(Settings > 3D mouse). Settings are read afresh on each move, so a change applies at once.
+"""
+
+from __future__ import annotations
+
+import logging
+import sys
+import threading
+import time
+
+from PySide6.QtCore import QObject, QTimer, Signal
+
+from puzzle.gui.spacemouse import devices, hid, motion
+
+log = logging.getLogger("puzzle.gui.spacemouse")
+FRAME_MS = 16  # about 60 moves a second while the cap is off centre
+LOOK_EVERY_S = 3.0  # for a device plugged in after Puzzle started
+
+
+def settings_now() -> tuple[motion.Settings, bool, list[str]]:
+    """The motion settings, whether the device is on, and the buttons' actions."""
+    from puzzle.settings import current
+
+    s = current()
+    how = s.get("mouse3d.motion")
+    invert = [False] * 6
+    invert[2] = bool(s.get("mouse3d.invert_zoom"))
+    found = motion.Settings(
+        speed=float(s.get("mouse3d.speed")),
+        mode=s.get("mouse3d.mode"),
+        translate=how != "rotate",
+        rotate=how != "translate",
+        dominant=bool(s.get("mouse3d.dominant")),
+        invert=tuple(invert),
+    )
+    return found, bool(s.get("mouse3d.enabled")), [s.get("mouse3d.button_1"),
+                                                    s.get("mouse3d.button_2")]  # fmt: skip
+
+
+# What the Settings dialog says about the device (ADR 0069): the one being read, and
+# whether a reader runs in this process at all.
+STATE = {"running": False, "name": ""}
+
+
+def describe() -> str:
+    """The 3D mouse in words, for Settings > 3D mouse: the device read, or why none."""
+    from puzzle.gui.spacemouse import hid
+
+    why = hid.why_not()
+    if why:
+        return f"No 3D mouse can be read here: {why}."
+    _, on, _ = settings_now()
+    if not on:
+        return "Off: turn it on above to use a 3D mouse."
+    if not STATE["running"]:
+        return "Not read in this window (it has no 3D view)."
+    if STATE["name"]:
+        return f"Connected: {STATE['name']}."
+    return (
+        f"None found: plug one in (Puzzle looks again every {LOOK_EVERY_S:g} s). On "
+        "Linux, run spacenavd, or give /dev/hidraw a udev rule."
+    )
+
+
+class Controller(QObject):
+    reading = Signal(object, int)  # view-frame counts, buttons
+    found = Signal(str)  # the device's name, or "" when it went away
+
+    def __init__(self, window) -> None:
+        super().__init__(window)
+        self.window = window
+        self.device: devices.Device | None = None
+        self.values = [0] * 6
+        self.buttons = 0
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._last = None
+        self._pivot = None
+        self._logged: set[int] = set()  # keys known by number whose press was logged
+        self.filter = motion.Filter()  # smoothing and a sticky dead zone
+        self.timer = QTimer(self, interval=FRAME_MS)
+        self.timer.timeout.connect(self._tick)
+        self.reading.connect(self._got)
+
+    # --- the device ---------------------------------------------------------------------
+
+    def start(self) -> bool:
+        """Read the first device found, looking again every few seconds meanwhile."""
+        if self._thread is not None and self._thread.is_alive():
+            return True
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._run, name="puzzle-3d-mouse", daemon=True)
+        self._thread.start()
+        STATE["running"] = True
+        return True
+
+    def stop(self) -> None:
+        self._stop.set()
+        STATE.update(running=False, name="")
+        self.timer.stop()
+        # Wait out the reader's current read (100 ms at most), so nothing is emitted
+        # into a window being closed ("Signal source has been deleted" in the log).
+        if self._thread is not None and self._thread is not threading.current_thread():
+            self._thread.join(timeout=1.0)
+
+    def _emit(self, signal, *args) -> None:
+        """Emit from the reader thread, unless stopping or the Qt side is gone."""
+        if self._stop.is_set():
+            return
+        try:
+            signal.emit(*args)
+        except RuntimeError:  # the window was deleted meanwhile
+            self._stop.set()
+
+    def _run(self) -> None:
+        from puzzle.gui.spacemouse import spacenav
+
+        while not self._stop.is_set():
+            _, on, _ = settings_now()
+            if on and sys.platform.startswith("linux") and spacenav.available():
+                self._run_spacenav()  # its permissions are in place; hidraw's may not be
+                continue
+            found = hid.find() if on else []
+            if not found:
+                self._stop.wait(LOOK_EVERY_S)
+                continue
+            first = found[0]
+            try:
+                reader = hid.Reader(first.path)
+            except OSError:
+                self._stop.wait(LOOK_EVERY_S)
+                continue
+            self.device = first.device
+            STATE["name"] = first.device.name
+            self._emit(self.found, first.device.name)
+            dev = first.device
+            log.warning("3D mouse found: %s (%04x:%04x)", dev.name, dev.vendor, dev.product)
+            state, unknown = devices.Reading(), set()
+            try:
+                while not self._stop.is_set():
+                    report = reader.read()
+                    if report and devices.parse(report, state):
+                        self._emit(
+                            self.reading, devices.to_view(first.device, state.axes), state.buttons
+                        )
+                    elif report and len(unknown) < 32 and (report[0], len(report)) not in unknown:
+                        # A report Puzzle doesn't read yet (the Enterprise's extra keys?):
+                        # into the log once, so it can be mapped (Help > Log).
+                        unknown.add((report[0], len(report)))
+                        log.warning("3D mouse: report %d not read (%d bytes): %s",
+                                    report[0], len(report), report.hex(" "))  # fmt: skip
+            except OSError:  # unplugged
+                pass
+            finally:
+                reader.close()
+                self.device = None
+                STATE["name"] = ""
+                self._emit(self.found, "")
+                self._emit(self.reading, [0] * 6, 0)
+
+    def _run_spacenav(self) -> None:
+        """Read spacenavd's events until it goes away or the controller stops."""
+        from puzzle.gui.spacemouse import spacenav
+
+        try:
+            reader = spacenav.Reader()
+        except OSError:
+            self._stop.wait(LOOK_EVERY_S)
+            return
+        self.device = devices.Device(0, 0, spacenav.NAME)
+        STATE["name"] = spacenav.NAME
+        self._emit(self.found, spacenav.NAME)
+        log.warning("3D mouse found: %s at %s", spacenav.NAME, spacenav.socket_path())
+        axes, buttons = [0] * 6, 0
+        try:
+            while not self._stop.is_set():
+                event = reader.read()
+                if event is None:
+                    continue
+                if event.kind == "motion":
+                    axes = event.axes
+                elif event.down:
+                    buttons |= 1 << event.button
+                else:
+                    buttons &= ~(1 << event.button)
+                self._emit(self.reading, axes, buttons)
+        except OSError:  # the daemon stopped
+            pass
+        finally:
+            reader.close()
+            self.device = None
+            STATE["name"] = ""
+            self._emit(self.found, "")
+            self._emit(self.reading, [0] * 6, 0)
+
+    # --- the GUI thread -------------------------------------------------------------------
+
+    def _got(self, values, buttons: int) -> None:
+        before, self.buttons = self.buttons, buttons
+        for button in devices.pressed(buttons, before):
+            self.press(button)
+        self.values = list(values)
+        if any(self.values) and not self.timer.isActive():
+            self._last = time.monotonic()
+            self._pivot = self.window.viewport.pivot()  # held while the cap moves
+            self.timer.start()
+
+    def press(self, button: int) -> None:
+        """A button went down: its action from Settings, or a Pro's named key."""
+        _, on, actions = settings_now()
+        if not on:
+            return
+        name = actions[button] if button < len(actions) else ""
+        if self.device is not None and button < len(self.device.buttons):
+            named = {"Fit": "fit", "Top": "+z", "Right": "+x", "Front": "-y"}
+            key = self.device.buttons[button]
+            name = named.get(key, name) if button >= 2 else name
+            if key.startswith("Button ") and button not in self._logged:
+                # Keys known only by number (the Enterprise's): each one's number into
+                # the log once, so a press of each maps them (Help > Log).
+                self._logged.add(button)
+                log.warning("3D mouse: %s key %d pressed", self.device.name, button)
+        action = self.window.viewport.view_bar.actions_by_name.get(name) if name else None
+        if action is not None:
+            action.trigger()
+
+    def _tick(self) -> None:
+        settings, on, _ = settings_now()
+        now = time.monotonic()
+        dt, self._last = now - (self._last or now), now
+        values = self.filter(self.values, dt, settings) if on else None
+        if values is None or (not values.any() and self.filter.resting()):
+            self.timer.stop()
+            self.filter = motion.Filter()
+            return
+        view = self.window.viewport
+        triple = view.camera()
+        if triple is None or not values.any():
+            return
+        scale = view.parallel_scale() if hasattr(view, "parallel_scale") else None
+        camera = motion.Camera.of(triple, scale)
+        moved = motion.move(camera, values, dt, self._pivot, settings)
+        view.set_camera(moved.triple(), moved.parallel_scale)

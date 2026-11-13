@@ -92,7 +92,7 @@ def ensure_daemon(base: Path, command: list[str] | None = None, *, cores: int = 
 
     def try_connect() -> socket.socket | None:
         try:
-            path = json.loads(info.read_text())["socket"]
+            path = json.loads(info.read_text(encoding="utf-8"))["socket"]
         except (OSError, ValueError, KeyError):
             return None
         return _connect_socket(path)
@@ -115,7 +115,7 @@ def ensure_daemon(base: Path, command: list[str] | None = None, *, cores: int = 
         if s is not None:
             return s
         time.sleep(0.05)
-    tail = (root / "daemon.log").read_text(errors="replace")[-2000:]
+    tail = (root / "daemon.log").read_text(errors="replace", encoding="utf-8")[-2000:]
     raise RunnerError("unsupported", f"the job runner did not start:\n{tail}")
 
 

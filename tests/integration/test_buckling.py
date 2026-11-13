@@ -126,6 +126,25 @@ def test_preloaded_column(tmp_path, solver):
     assert [s.kind for s in run.results.steps if s.index == 1] == ["stationary"]
 
 
+@over("calculix", "code_aster")
+def test_preloaded_column_under_large_deflection(tmp_path, solver):
+    """The preload solved with geometric nonlinearity (ADR 0082 decision 6): CalculiX's
+    NLGEOM static step, Code_Aster's STAT_NON_LINE in Green-Lagrange strains, K_G from
+    its final stresses. A straight column shortens by P0 L/EA = 0.1 mm before buckling,
+    so the factor stays P_cr − P0 to within the mesh's 1 %."""
+    pytest.importorskip("OCP")
+    steps = [
+        SolveStep(type="stationary", settings={"geometric_nonlinearity": True}),
+        SolveStep(type="buckling", settings={"modes": 2, "preload": True}),
+    ]
+    p, study, critical = _column(solver, steps, [_push(P0, [1]), _push(1.0, [2])])
+    run = _run(tmp_path, p, study)
+    factor = _factors(run, 2)[0]
+    print(f"{solver} preloaded column, large deflection: {factor:.6g} N, theory "
+          f"{critical - P0:.6g} N, {100 * (factor / (critical - P0) - 1):+.3f} %")  # fmt: skip
+    assert factor == pytest.approx(critical - P0, rel=1e-2)
+
+
 def test_solvers_agree(tmp_path):
     pytest.importorskip("OCP")
     from solvers import available

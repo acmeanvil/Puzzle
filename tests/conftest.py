@@ -286,3 +286,42 @@ def _close_windows_after_each_module():
         widget.deleteLater()
     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     app.processEvents()
+
+
+# Packages a plain `pip install -e ".[dev]"` leaves out (CI's pip job), with the extra
+# that brings each. A test that fails only because one isn't installed is skipped,
+# saying which; a package that is installed but fails to import still fails the test.
+OPTIONAL = {
+    "OCP": "geometry",
+    "ezdxf": "geometry",
+    "slvs": "geometry",
+    "manifold3d": "geometry",
+    "meshio": "mesh",
+    "PySide6": "gui",
+    "anthropic": "agent",
+    "keyring": "agent",
+    "openpyxl": "tools",
+    "h5py": "conda's h5py",
+    "psij": "the pixi runner env",
+}
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    report = outcome.get_result()
+    error = call.excinfo.value if call.excinfo is not None else None
+    if not isinstance(error, ModuleNotFoundError) or report.passed:
+        return
+    import importlib.util
+
+    name = (error.name or "").split(".")[0]
+    if not name:  # polars names it only in the message: "required package 'openpyxl' not found"
+        import re
+
+        found = re.search(r"package '([\w.]+)'", str(error))
+        name = found.group(1).split(".")[0] if found else ""
+    if name in OPTIONAL and importlib.util.find_spec(name) is None:
+        report.outcome = "skipped"
+        report.longrepr = (str(item.path), item.location[1] or 0,
+                           f"Skipped: needs {name} ({OPTIONAL[name]})")  # fmt: skip

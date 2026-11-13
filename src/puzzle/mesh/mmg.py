@@ -38,13 +38,13 @@ def mmg_binary() -> Path | None:
     """mmg3d: PUZZLE_MMG, the pixi `mmg` environment beside this one, or PATH."""
     if os.environ.get("PUZZLE_MMG"):
         return Path(os.environ["PUZZLE_MMG"])
-    from puzzle.jobs.runtime import pixi_solver_dirs
+    from puzzle.jobs.runtime import environment
 
-    for d in pixi_solver_dirs():
+    env = environment("mmg")
+    for where in [env / "bin", env / "Library" / "bin", env] if env else []:
         for name in ("mmg3d_O3", "mmg3d_O3.exe", "mmg3d", "mmg3d.exe"):
-            for where in (Path(d), Path(d).parent / "mmg" / "bin", Path(d).parent / "mmg"):
-                if (where / name).exists():
-                    return where / name
+            if (where / name).exists():
+                return where / name
     here = Path(__file__).resolve()
     for parent in here.parents:
         for sub in ("bin", "Library/bin", ""):
@@ -158,7 +158,7 @@ def write_medit(mesh: Mesh, path: Path) -> np.ndarray:
         for name in ("Corners", "RequiredVertices"):
             out += [name, str(len(corner_ids))] + [str(i) for i in corner_ids]
     out.append("End")
-    path.write_text("\n".join(out) + "\n")
+    path.write_text("\n".join(out) + "\n", encoding="utf-8")
     return used
 
 
@@ -167,12 +167,13 @@ def write_metric(m: np.ndarray, path: Path) -> None:
     rows = [f"{a[0, 0]:.9g} {a[0, 1]:.9g} {a[1, 1]:.9g} {a[0, 2]:.9g} {a[1, 2]:.9g} "
             f"{a[2, 2]:.9g}" for a in m]  # fmt: skip
     path.write_text("\n".join(["MeshVersionFormatted 2", "Dimension 3", "SolAtVertices",
-                               str(len(m)), "1 3", *rows, "End"]) + "\n")  # fmt: skip
+                               str(len(m)), "1 3", *rows, "End"]) + "\n",
+                    encoding="utf-8")  # fmt: skip
 
 
 def read_medit(path: Path) -> dict:
     """Vertices (with refs), and each element section's rows with their refs."""
-    words = path.read_text().split()
+    words = path.read_text(encoding="utf-8").split()
     out: dict = {}
     i = 0
     widths = {"Vertices": 4, "Tetrahedra": 5, "Triangles": 4, "Edges": 3}
@@ -297,13 +298,15 @@ def adapt_mesh(mesh: Mesh, values: np.ndarray, workdir: Path, *, target: float,
     cmd = [str(binary), str(workdir / "in.mesh"), "-sol", str(workdir / "in.sol"),
            "-out", str(workdir / "out.mesh"), "-hausd", f"{hausd or 1e-3 * size:.6g}",
            "-hgrad", "1.3", "-v", "1"]  # fmt: skip
-    done = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
-    (workdir / "mmg.log").write_text(done.stdout + done.stderr)
+    done = subprocess.run(
+        cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=3600
+    )
+    (workdir / "mmg.log").write_text(done.stdout + done.stderr, encoding="utf-8")
     if done.returncode != 0 or not (workdir / "out.mesh").exists():
         tail = (done.stdout + done.stderr).strip().splitlines()[-5:]
-        raise PuzzleError("MMG failed: " + " ".join(tail), code="failed")
+        raise PuzzleError("MMG failed: " + " ".join(tail), code="mesh_failed")
     new = to_mesh(read_medit(workdir / "out.mesh"), mesh, order)
     q = quality(new)
     if q <= 0:
-        raise PuzzleError("MMG's mesh has an inverted element", code="failed")
+        raise PuzzleError("MMG's mesh has an inverted element", code="mesh_failed")
     return new

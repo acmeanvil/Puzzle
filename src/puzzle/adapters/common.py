@@ -16,11 +16,18 @@ FACES = {
     "tet4": [(0, 1, 2), (0, 3, 1), (1, 3, 2), (2, 3, 0)],
     "tet10": [(0, 1, 2), (0, 3, 1), (1, 3, 2), (2, 3, 0)],
     "hex8": [(0, 1, 2, 3), (4, 7, 6, 5), (0, 4, 5, 1), (1, 5, 6, 2), (2, 6, 7, 3), (3, 7, 4, 0)],
+    "hex20": [(0, 1, 2, 3), (4, 7, 6, 5), (0, 4, 5, 1), (1, 5, 6, 2), (2, 6, 7, 3), (3, 7, 4, 0)],
+    "wedge6": [(0, 1, 2), (3, 4, 5), (0, 1, 4, 3), (1, 2, 5, 4), (2, 0, 3, 5)],
+    "wedge15": [(0, 1, 2), (3, 4, 5), (0, 1, 4, 3), (1, 2, 5, 4), (2, 0, 3, 5)],
+    # Lagrange bricks and prisms (27 and 18 nodes): their corners as the others'.
+    "hex27": [(0, 1, 2, 3), (4, 7, 6, 5), (0, 4, 5, 1), (1, 5, 6, 2), (2, 6, 7, 3), (3, 7, 4, 0)],
+    "wedge18": [(0, 1, 2), (3, 4, 5), (0, 1, 4, 3), (1, 2, 5, 4), (2, 0, 3, 5)],
     # 2D elements' faces are their edges (ADR 0048), numbered as CalculiX and Abaqus do.
     "tri3": [(0, 1), (1, 2), (2, 0)],
     "tri6": [(0, 1), (1, 2), (2, 0)],
     "quad4": [(0, 1), (1, 2), (2, 3), (3, 0)],
     "quad8": [(0, 1), (1, 2), (2, 3), (3, 0)],
+    "quad9": [(0, 1), (1, 2), (2, 3), (3, 0)],
 }
 
 BODY_LOADS = {"gravity", "acceleration", "rotation"}  # ADR 0037: on bodies, per volume
@@ -104,13 +111,24 @@ def time_settings(step) -> tuple[float, float, int]:
     return dt, end, max(1, round(end / dt))
 
 
-def check_contacts(component, implemented: set[str], solver: str) -> None:
+def check_contacts(component, implemented: set[str], solver: str, threads=frozenset()) -> None:
     """Refuse contacts this adapter doesn't write yet.
 
     Conformal bonded contacts need nothing from a solver (the parts share nodes), so
     they are always accepted. Anything else unwritten would leave the parts unconnected.
+    A threaded contact (ADR 0076) is written only where `threads` holds its type: never
+    as a plain tie or contact pair, which would drop the flanks.
     """
     for c in component.contacts:
+        if c.thread is not None:
+            if c.type not in threads:
+                raise InputError(
+                    f"the {solver} adapter does not write a threaded {c.type} contact "
+                    f"('{c.name}') yet",
+                    code="unsupported",
+                    path=c.name,
+                )
+            continue
         if c.capability != "bonded_conformal" and c.capability not in implemented:
             raise InputError(
                 f"the {solver} adapter does not write {c.capability} contact ('{c.name}') yet",
@@ -573,9 +591,67 @@ _TRI_RULE = [
 ]
 
 
+# 3 x 3 Gauss points on the reference square [-1, 1]², exact to degree 5.
+_G = (-0.774596669241483, 0.0, 0.774596669241483)
+_GW = (5 / 9, 8 / 9, 5 / 9)
+_QUAD_RULE = [(a, b, wa * wb) for a, wa in zip(_G, _GW, strict=True)
+              for b, wb in zip(_G, _GW, strict=True)]  # fmt: skip
+FACE_ELEMENTS = ("tri3", "tri6", "quad4", "quad8", "quad9")
+
+
+def _face_rule(element: str):
+    """(xi, eta, weight) with the reference area folded into the weight: triangles'
+    half, the square's whole."""
+    if element.startswith("quad"):
+        return _QUAD_RULE
+    return [(x, e, 0.5 * w) for x, e, w in _TRI_RULE]
+
+
+def _quad_shape(element: str, xi: float, eta: float):
+    """Gmsh-ordered quadrilateral shape functions on [-1, 1]²: quad4 (corners), quad8
+    (serendipity: corners, then mid-edges 0-1, 1-2, 2-3, 3-0) or quad9 (and the
+    centre), with their derivatives in xi and eta."""
+    cx = np.array([-1.0, 1.0, 1.0, -1.0])
+    cy = np.array([-1.0, -1.0, 1.0, 1.0])
+    if element == "quad4":
+        n = 0.25 * (1 + cx * xi) * (1 + cy * eta)
+        return n, 0.25 * cx * (1 + cy * eta), 0.25 * cy * (1 + cx * xi)
+    if element == "quad8":
+        n_c = 0.25 * (1 + cx * xi) * (1 + cy * eta) * (cx * xi + cy * eta - 1)
+        dx_c = 0.25 * cx * (1 + cy * eta) * (2 * cx * xi + cy * eta)
+        dy_c = 0.25 * cy * (1 + cx * xi) * (cx * xi + 2 * cy * eta)
+        # Mid-edges: (0, -1), (1, 0), (0, 1), (-1, 0).
+        n_m = np.array(
+            [
+                0.5 * (1 - xi**2) * (1 - eta),
+                0.5 * (1 + xi) * (1 - eta**2),
+                0.5 * (1 - xi**2) * (1 + eta),
+                0.5 * (1 - xi) * (1 - eta**2),
+            ]
+        )
+        dx_m = np.array([-xi * (1 - eta), 0.5 * (1 - eta**2), -xi * (1 + eta), -0.5 * (1 - eta**2)])
+        dy_m = np.array([-0.5 * (1 - xi**2), -eta * (1 + xi), 0.5 * (1 - xi**2),
+                         -eta * (1 - xi)])  # fmt: skip
+        return (np.concatenate([n_c, n_m]), np.concatenate([dx_c, dx_m]),
+                np.concatenate([dy_c, dy_m]))  # fmt: skip
+
+    def lagrange(t):  # 1D quadratic at -1, 1, 0 and their derivatives
+        return (np.array([0.5 * t * (t - 1), 0.5 * t * (t + 1), 1 - t * t]),
+                np.array([t - 0.5, t + 0.5, -2 * t]))  # fmt: skip
+
+    (lx, dlx), (ly, dly) = lagrange(xi), lagrange(eta)
+    # Gmsh's quad9: corners, mid-edges as quad8's, then the centre, as (i, j) in 1D index.
+    ij = [(0, 0), (1, 0), (1, 1), (0, 1), (2, 0), (1, 2), (2, 1), (0, 2), (2, 2)]
+    return (np.array([lx[i] * ly[j] for i, j in ij]), np.array([dlx[i] * ly[j] for i, j in ij]),
+            np.array([lx[i] * dly[j] for i, j in ij]))  # fmt: skip
+
+
 def _shape(element: str, xi: float, eta: float):
-    """Gmsh-ordered shape functions of a triangle face and their derivatives in xi and
-    eta: (N, dN/dxi, dN/deta), tri3 or tri6 (corners, then mid-edges)."""
+    """Gmsh-ordered shape functions of a face and their derivatives in xi and eta:
+    (N, dN/dxi, dN/deta); tri3 or tri6 (corners, then mid-edges), or a quadrilateral
+    (`_quad_shape`)."""
+    if element.startswith("quad"):
+        return _quad_shape(element, xi, eta)
     z = 1.0 - xi - eta
     if element == "tri3":
         return np.array([z, xi, eta]), np.array([-1.0, 1, 0]), np.array([-1.0, 0, 1])
@@ -595,14 +671,14 @@ def _quadrature(group, mesh: Mesh):
     if not blocks:
         raise InputError("a remote load needs a face selection")
     for b in blocks:
-        if b.element not in ("tri3", "tri6"):
+        if b.element not in FACE_ELEMENTS:
             raise InputError(f"a remote load on {b.element} faces is not supported yet")
         nodes = mesh.node_coords(b.connectivity.ravel()).reshape(len(b.connectivity), -1, 3)
-        for xi, eta, w in _TRI_RULE:
+        for xi, eta, w in _face_rule(b.element):
             n, dxi, deta = _shape(b.element, xi, eta)
             x = np.einsum("k,eki->ei", n, nodes)
             jac = np.cross(np.einsum("k,eki->ei", dxi, nodes), np.einsum("k,eki->ei", deta, nodes))
-            yield b.connectivity, n, x, 0.5 * w * np.linalg.norm(jac, axis=1)
+            yield b.connectivity, n, x, w * np.linalg.norm(jac, axis=1)
 
 
 def _face_properties(group, mesh: Mesh):
@@ -969,7 +1045,12 @@ def support_nodes(group, mesh: Mesh):
     """Each face node's share of the area and its normal, for springs to ground. Shares
     are ∫N dA, as consistent loads are, so a uniform state is exact (on tri6 faces that
     puts them on the mid-edge nodes; corners have none). Normals are area-weighted and
-    point away from the model's centre. -> (node ids, areas, unit normals (n, 3))"""
+    point away from the model's centre. -> (node ids, areas, unit normals (n, 3))
+
+    A group of points (weak springs, ADR 0080) is per node: each counts 1 m², along x."""
+    if group.dim == 0:
+        ids = np.asarray(group.node_ids, dtype=np.int64)
+        return ids, np.ones(len(ids)), np.tile([1.0, 0.0, 0.0], (len(ids), 1))
     centre = mesh.coords.mean(axis=0)
     share: dict[int, float] = {}
     normal: dict[int, np.ndarray] = {}
@@ -1159,7 +1240,7 @@ def section_normal(group, mesh: Mesh) -> np.ndarray:
 def mark_mesh_nodes(input_file, mesh: Mesh) -> None:
     """Leave the mesh's largest node id beside the input, so results at helper nodes
     added past it (rigid bodies, springs' grounds, pretension twins) can be dropped."""
-    input_file.with_suffix(".meshnodes").write_text(str(int(mesh.node_ids.max())))
+    input_file.with_suffix(".meshnodes").write_text(str(int(mesh.node_ids.max())), encoding="utf-8")
 
 
 def drop_helper_nodes(results, input_file):
@@ -1167,11 +1248,14 @@ def drop_helper_nodes(results, input_file):
     last = input_file.with_suffix(".meshnodes")
     if not last.exists():
         return results
-    top = int(last.read_text())
+    top = int(last.read_text(encoding="utf-8"))
     for step in results.steps:
         for name, f in list(step.fields.items()):
             if f.location == "node" and f.ids.size and f.ids.max() > top:
                 keep = f.ids <= top
+                if not keep.any():  # only on helpers (a beam bolt's beam forces): gone
+                    del step.fields[name]
+                    continue
                 step.fields[name] = type(f)(
                     f.name, f.location, f.components, f.ids[keep], f.values[keep]
                 )

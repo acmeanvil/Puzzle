@@ -61,11 +61,11 @@ SHOWN = {
     "optimisation": "node",  # ADR 0063
     "mesh_study": "node",  # ADR 0066
     "transfer": "wire",
-    "axes": "chip",
-    "amplitude": "chip",
-    "bolt_type": "chip",
-    "construction": "chip",
-    "probe": "chip",
+    "axes": "node",  # ADR 0071: a node, so it can be wired
+    "amplitude": "node",  # ADR 0071: a node, so it can be wired
+    "bolt_type": "node",  # ADR 0071: a node, so it can be wired
+    "construction": "node",  # ADR 0071: a node, so it can be wired
+    "probe": "node",  # ADR 0071: a node, so it can be wired
     "group": "frame",
     "preset": "none",  # copied into studies when applied; nothing refers to one
     "labels": "none",  # the tree's own names for runs
@@ -78,6 +78,7 @@ CHIP_WORDS = {
     "bolt_type": "Bolt type",
     "construction": "Construction",
     "probe": "Result tool",
+    "feature": "Load or support",
 }
 KIND_WORDS = {
     "file": "File",
@@ -94,6 +95,11 @@ KIND_WORDS = {
     "optimisation": "Optimisation",
     "mesh_study": "Mesh study",
     "group": "Group",
+    "axes": "Coordinate system",
+    "amplitude": "Amplitude",
+    "bolt_type": "Bolt type",
+    "construction": "Construction",
+    "probe": "Result tool",
 }
 # What flows along a data wire, for its colour (as Blender colours sockets by type).
 FLOWS = ("temperature", "displacement", "stress", "pressure", "velocity", "other")
@@ -110,6 +116,7 @@ class Port:
     side: str  # "in" or "out"
     carries: str = ""  # the field it takes or gives ("temperature")
     type: str = ""  # an operator port's type (ADR 0062: number, field, ...), "" otherwise
+    help: str = ""  # what it takes or gives, in words (ADR 0071): its socket's tooltip
 
 
 @dataclass
@@ -132,6 +139,12 @@ class Node:
     value: str = ""  # an operator's value as shown (ADR 0062): "212 MPa", "Pass: ..."
     verdict: str = ""  # a check's "pass" or "fail"
     slider: tuple[float, float, float] | None = None  # a slider's (low, high, value), SI
+    help: str = ""  # an operator's help card as text (ADR 0071): purpose, example, ports
+    path: str = ""  # a feature's place in its component ("physics.0.features.1")
+    sketch: list = field(default_factory=list)  # a curve's small plot: lines of (x, y) in 0..1
+    # A folded group's nodes (ADR 0071: a cluster's ports are theirs, keyed
+    # "<member id>::<port>"), for the view to wire to the member a port belongs to.
+    inside: list = field(default_factory=list)
 
     def port(self, key: str) -> Port | None:
         return next((p for p in self.ports if p.key == key), None)
@@ -396,8 +409,12 @@ def build(
             out.nodes[key] = node
 
     # Resources.
+    from puzzle.model.schema import Amplitude, BoltType, ConstructionGeometry, CoordinateSystem
+
     for kind, cls in (("geometry", Geometry), ("material", Material), ("mesh", MeshRecipe),
-                      ("parameters", ParameterSet)):  # fmt: skip
+                      ("parameters", ParameterSet), ("axes", CoordinateSystem),
+                      ("amplitude", Amplitude), ("bolt_type", BoltType),
+                      ("construction", ConstructionGeometry)):  # fmt: skip
         for obj in project.of_type(cls):
             sub = ""
             if isinstance(obj, Geometry):
@@ -429,8 +446,10 @@ def build(
             rows.append(f"{p.name}: {', '.join(dict.fromkeys(on)) or 'no material'}")
         node = add(Node(str(c.id), "component", MODELS, c.name, object=str(c.id),
                         subtitle=" · ".join(p.name for p in c.parts), rows=rows))  # fmt: skip
+        in_features = _feature_nodes(c, node, out, use)  # ADR 0071: loads and supports
         for ref in c.dependencies():
-            use(str(ref), str(c.id))
+            if ref not in in_features:  # a load's own references go to its node
+                use(str(ref), str(c.id))
         if fields:
             _field_ports(project, c, node, out)
 
@@ -491,10 +510,36 @@ def build(
                                       label=words(d.quantity or "") if getattr(d, "quantity", "")
                                       else "", carries=d.quantity or ""))  # fmt: skip
 
+    from puzzle.operators import TYPE_WORDS, outputs_of
+
+    for p in project.of_type(ResultProbe):  # result tools: nodes beside what they read
+        node = add(Node(str(p.id), "probe", RESULTS, p.name, object=str(p.id),
+                        subtitle=words(p.type)))  # fmt: skip
+        node.ports += [Port(k, label, "out", type=t,
+                            help=f"{label}: gives a {TYPE_WORDS[t].lower()}")
+                       for k, label, t in outputs_of(project, p)]  # fmt: skip
     _operators(project, out, store, states)
     _optimisations(project, out, store)
     _mesh_studies(project, out, store)
+    # Every reference between two nodes is a use wire (ADR 0071 decision 8: each can be
+    # drawn and removed), whatever made it.
+    # their data wires are these; a component's are drawn with it (its loads' to theirs)
+    drawn = ("operator", "result", "optimisation", "mesh_study", "component")
+    for obj in project.objects.values():
+        if str(obj.id) in out.nodes and obj.kind not in drawn:
+            for ref in obj.dependencies():
+                src = out.nodes.get(str(ref)) or out.nodes.get(f"runs:{ref}")
+                if src is not None:
+                    use(src.id, str(obj.id))
     _chips(project, out, names)
+    from puzzle.schematic.links import source_kinds
+
+    wireable = source_kinds()
+    for n in out.nodes.values():  # a socket to draw a reference from (ADR 0071 decision 8)
+        if n.kind in wireable and not n.outputs():
+            n.ports.append(Port("use", "Use in…", "out", help="Drag from here onto what uses "
+                                "it (a material onto a component, a coordinate system onto "
+                                "a component's load, a study onto a result tool)"))  # fmt: skip
     for n in out.nodes.values():
         n.used_by = len({w.target for w in out.wires if w.kind == "use" and w.source == n.id})
     _groups(project, out, folded)
@@ -505,7 +550,7 @@ def _operators(project: Project, out: Schematic, store, states: dict) -> None:
     """Operators (ADR 0062) as nodes after what they read, a typed port per input and
     output, joined by data wires; with a `store`, each shows its value."""
     from puzzle.model.schema import Operator
-    from puzzle.operators import TYPES, is_pre
+    from puzzle.operators import TYPES, doc_text, first_type, is_pre, port_doc
 
     ops = project.of_type(Operator)
     pre = {op.id for op in ops if is_pre(project, op)}
@@ -513,12 +558,16 @@ def _operators(project: Project, out: Schematic, store, states: dict) -> None:
         t = TYPES[op.type]
         column = RESOURCES if op.id in pre else RESULTS  # beside what it feeds (item 8)
         node = Node(str(op.id), "operator", column, op.name, subtitle=t.label,
-                    object=str(op.id))  # fmt: skip
+                    object=str(op.id), help=doc_text(op.type))  # fmt: skip
         st = states.get(str(op.id))
         if st is not None:
             node.state, node.reason = st.state, st.reason
-        node.ports = [Port(p.key, p.label, "out", type=p.type) for p in t.outputs]
-        node.ports += [Port(p.key, p.label, "in", type=p.type) for p in t.inputs]
+        node.ports = [Port(p.key, p.label, "out",
+                           type=first_type(op, project) if i == 0 else p.type,
+                           help=port_doc(p, "out"))
+                      for i, p in enumerate(t.outputs)]  # fmt: skip
+        node.ports += [Port(p.key, p.label, "in", type=p.type, help=port_doc(p, "in"))
+                       for p in t.inputs]  # fmt: skip
         out.nodes[node.id] = node
     for op in ops:
         node = out.nodes[str(op.id)]
@@ -547,6 +596,7 @@ def _operators(project: Project, out: Schematic, store, states: dict) -> None:
                 continue
             node = out.nodes[str(op.id)]
             node.value, node.verdict = ev.shown(ctx, op)
+            node.sketch = _sketch(ctx, op)
             if op.type == "slider":
                 node.slider = _slider_of(ctx, op)
 
@@ -641,6 +691,19 @@ def _optimisations(project: Project, out: Schematic, store) -> None:
                 node.value = f"{best} at {top.title}"
 
 
+def _sketch(ctx, op) -> list:
+    """A curve's small plot for its node (ADR 0071: a series is shown, never its rows)."""
+    from puzzle.errors import PuzzleError
+    from puzzle.operators import evaluate as ev
+
+    try:
+        got = ev.outputs(ctx, op)
+    except PuzzleError:
+        return []
+    curve = got.get("curves") if op.type == "plot" else got.get("out")
+    return curve.sketch() if getattr(curve, "type", "") == "series" else []
+
+
 def _slider_of(ctx, op) -> tuple[float, float, float] | None:
     """(low, high, value) in SI, for the knob drawn on a slider's node."""
     from puzzle.errors import PuzzleError
@@ -696,6 +759,25 @@ def _model_wires(project: Project, out: Schematic, pre: set) -> None:
                 node.ports.append(Port(pkey, f"{step.name}: {key}", "in", type=kind))
                 out.wires.append(Wire(src, node.id, "data", port, pkey, value, "",
                                       str(g.id), kind))  # fmt: skip
+    # ADR 0071: a load's (or support's) value bound to a parameter, a port on its node.
+    from puzzle.operators import bound_quantities
+
+    for comp in project.of_type(Component):
+        for i, ph in enumerate(comp.physics):
+            for j, f in enumerate(ph.features):
+                node = out.nodes.get(_feature_id(comp, f"physics.{i}.features.{j}"))
+                if node is None:
+                    continue
+                for path, q in bound_quantities(f.values):
+                    if q.parameter not in by_name:
+                        continue
+                    src, port = by_name[q.parameter]
+                    if src not in out.nodes:
+                        continue
+                    pkey = f"value:{path}"
+                    node.ports.append(Port(pkey, f"Value {path}", "in", type="number"))
+                    out.wires.append(Wire(src, node.id, "data", port, pkey, q.parameter, "",
+                                          str(comp.id), "number"))  # fmt: skip
     for st in project.of_type(Study):
         node = out.nodes.get(str(st.id))
         if node is None:
@@ -749,7 +831,10 @@ def _wire_end(project: Project, out: Schematic, source, port: str):
             return node, "", ""
         label = "" if port in ("result", "out") else words(port).lower()
         return node, port, label
-    if isinstance(obj, ResultProbe):
+    if isinstance(obj, ResultProbe):  # its own node (ADR 0071), by the port wired
+        node = out.nodes.get(str(obj.id))
+        if node is not None:
+            return node, port or "out", ""
         node = out.nodes.get(f"runs:{obj.source}") or out.nodes.get(str(obj.source))
         return node, "result", f"{CHIP_WORDS['probe'].lower()} {obj.name}"
     return out.nodes.get(str(obj.id)), port, ""
@@ -758,6 +843,84 @@ def _wire_end(project: Project, out: Schematic, source, port: str):
 def _folder(path: str) -> str:
     parent = str(Path(path).parent)
     return "" if parent == "." else parent
+
+
+def _folded_ports(inside, wires, held: set) -> list:
+    """A folded group's sockets (ADR 0071: a cluster as one block): every member input
+    wired from outside or left open, every member output wired outside or used by
+    nothing, named "<member>: <port>" (the port's own name when one member). Inputs and
+    outputs wired only within the group are hidden."""
+    into = {(w.target, w.target_port): w.source in held for w in wires if w.kind == "data"
+            and w.target in held}  # fmt: skip
+    outside_in = {(w.target, w.target_port) for w in wires if w.kind == "data"
+                  and w.target in held and w.source not in held}  # fmt: skip
+    used = {(w.source, w.source_port) for w in wires if w.kind == "data" and w.source in held}
+    used_out = {(w.source, w.source_port) for w in wires if w.kind == "data"
+                and w.source in held and w.target not in held}  # fmt: skip
+    one = len(inside) == 1
+    ports = []
+    for n in inside:
+        for port in n.ports:
+            key = (n.id, port.key)
+            if port.side == "in":
+                show = key in outside_in or key not in into
+            else:
+                show = key in used_out or key not in used
+            if show:
+                label = port.label if one else f"{n.label}: {port.label}"
+                ports.append(Port(f"{n.id}::{port.key}", label, port.side, port.carries,
+                                  port.type, port.help))  # fmt: skip
+    if not any(p.side == "in" for p in ports):
+        ports.insert(0, Port("in", "In", "in"))  # still something to draw a use wire to
+    if not any(p.side == "out" for p in ports):
+        ports.append(Port("out", "Out", "out"))
+    return ports
+
+
+def _feature_id(comp: Component, path: str) -> str:
+    return f"feature:{comp.id}:{path}"
+
+
+def _feature_nodes(comp: Component, node: Node, out: Schematic, use) -> set:
+    """Each load, support and other feature as a node of its own beside its component
+    (ADR 0071 decision 8), wired into it; its coordinate system and amplitude wire into
+    it rather than the component. Returns the references only features hold."""
+    from uuid import UUID
+
+    held: set = set()
+    elsewhere = comp.model_dump(mode="json", exclude={"physics"})
+    others = {v for v in _uuids(elsewhere)}
+    for i, ph in enumerate(comp.physics):
+        for j, f in enumerate(ph.features):
+            path = f"physics.{i}.features.{j}"
+            feat = Node(_feature_id(comp, path), "feature", MODELS,
+                        f"{words(f.type)} on {f.selection}", subtitle=words(ph.type),
+                        object=str(comp.id), path=path)  # fmt: skip
+            feat.state, feat.reason = node.state, ""
+            out.nodes[feat.id] = feat
+            out.wires.append(Wire(feat.id, node.id, "use"))
+            for ref in (f.axes, f.amplitude):
+                if ref is not None:
+                    use(str(ref), feat.id)
+                    held.add(ref)
+    return {UUID(r) if not isinstance(r, UUID) else r for r in held} - {UUID(o) for o in others}
+
+
+def _uuids(data) -> list[str]:
+    """Every id-looking string in an object's JSON form."""
+    import re
+
+    found = []
+    if isinstance(data, dict):
+        for v in data.values():
+            found += _uuids(v)
+    elif isinstance(data, list):
+        for v in data:
+            found += _uuids(v)
+    elif isinstance(data, str) and re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+                                                r"[0-9a-f]{4}-[0-9a-f]{12}", data):  # fmt: skip
+        found.append(data)
+    return found
 
 
 def _field_ports(project: Project, comp: Component, node: Node, out: Schematic) -> None:
@@ -782,6 +945,16 @@ def _field_ports(project: Project, comp: Component, node: Node, out: Schematic) 
         if src is None:
             continue
         key = f"field:{path}"
+        if path.startswith("physics."):  # a load's field goes into the load's own node
+            feature = out.nodes.get(_feature_id(comp, path.rsplit(".fields.", 1)[0]))
+            if feature is not None:
+                feature.ports.append(Port(key, text.split(": ", 1)[-1], "in", u.column))
+                label = u.column + (f" ×{u.scale:g}" if u.scale != 1 else "")
+                if src.port(u.column) is None:
+                    src.ports.append(Port(u.column, words(u.column), "out", u.column))
+                out.wires.append(Wire(src.id, feature.id, "data", u.column, key, label,
+                                      u.column, str(u.field)))  # fmt: skip
+                continue
         node.ports.append(Port(key, text, "in", u.column))
         label = u.column + (f" ×{u.scale:g}" if u.scale != 1 else "")
         if src.port(u.column) is None:
@@ -802,12 +975,6 @@ def _chips(project: Project, out: Schematic, names: dict[str, str]) -> None:
             target = project.objects.get(ref)
             if target is not None and SHOWN.get(target.kind) == "chip":
                 users.setdefault(str(ref), []).append(node.id)
-    for p in project.of_type(ResultProbe):  # a result tool sits on what it reads
-        node = out.nodes.get(f"runs:{p.source}") or out.nodes.get(str(p.source))
-        if node is not None:
-            users.setdefault(str(p.id), []).append(node.id)
-            if p.construction is not None:
-                users.setdefault(str(p.construction), []).append(node.id)
     for ref, nodes in users.items():
         obj = project.objects.get(UUID(ref))
         if obj is None:
@@ -856,13 +1023,19 @@ def _groups(project: Project, out: Schematic, folded: frozenset[str]) -> None:
         node = Node(f"group:{gid}", "group", min(n.column for n in inside), g.name,
                     subtitle=f"{len(inside)} items", object=gid,
                     state=worst(n.state for n in inside))  # fmt: skip
-        node.ports = [Port("in", "In", "in"), Port("out", "Out", "out")]
+        node.ports = _folded_ports(inside, out.wires, set(held))
+        node.inside = inside
         for w in out.wires:
+            if w.source in held and w.target in held:
+                continue  # inside the fold: dropped below
             if w.source in held:
-                w.source, w.source_port = node.id, "out" if w.kind == "data" else ""
+                w.source, w.source_port = node.id, (f"{w.source}::{w.source_port}"
+                                                    if w.kind == "data" else "")  # fmt: skip
             if w.target in held:
-                w.target, w.target_port = node.id, "in" if w.kind == "data" else ""
-        out.wires = [w for w in out.wires if w.source != w.target]
+                w.target, w.target_port = node.id, (f"{w.target}::{w.target_port}"
+                                                    if w.kind == "data" else "")  # fmt: skip
+        out.wires = [w for w in out.wires if not (w.source in held or w.target in held)
+                     and w.source != w.target]  # fmt: skip
         for m in held:
             del out.nodes[m]
         out.nodes[node.id] = node

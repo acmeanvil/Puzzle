@@ -33,11 +33,12 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import re
 import shlex
 import subprocess
 import time
 from dataclasses import dataclass, field
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from puzzle.errors import PuzzleError
 from puzzle.hosts import Host, quote
@@ -45,6 +46,7 @@ from puzzle.jobs.runtime import (
     DEFAULT_IMAGES,
     EXECUTABLES,
     PIXI_SOLVER_ENVS,
+    SERIAL_BLAS,
     THREAD_VARIABLES,
     Runtime,
 )
@@ -129,9 +131,12 @@ class RemoteRuntime(Runtime):
 
     def prepare(self, command: list[str], workdir: Path, say=None) -> None:
         """The driver (and job script) written, then the case copied there."""
-        (workdir / DRIVER).write_text(self.driver(command))
+        # Run by sh on a Unix host, so LF even when written on Windows.
+        (workdir / DRIVER).write_text(self.driver(command), encoding="utf-8", newline="\n")
         if self.host.scheduler != "none":
-            (workdir / JOB_SCRIPT).write_text(self.job_script(command))
+            (workdir / JOB_SCRIPT).write_text(
+                self.job_script(command), encoding="utf-8", newline="\n"
+            )
         remote = self.remote_dir(workdir)
         made = self.host.run(f"mkdir -p {quote(remote)}")
         if made.returncode != 0:
@@ -182,7 +187,8 @@ class RemoteRuntime(Runtime):
             p = max(1, self.resources.processes)
             lines = ["T=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)",
                      f"T=$((T / {p})); [ \"$T\" -ge 1 ] || T=1"]  # fmt: skip
-        return [*lines, *(f"export {name}=$T" for name in THREAD_VARIABLES)]
+        serial = [f"export {name}={value}" for name, value in SERIAL_BLAS.items()]
+        return [*lines, *(f"export {name}=$T" for name in THREAD_VARIABLES), *serial]
 
     def solve_lines(self, command: list[str]) -> list[str]:
         """The shell lines that run the solver in the case folder."""
@@ -213,7 +219,7 @@ class RemoteRuntime(Runtime):
         if image is None:
             raise PuzzleError(f"no container image for {self.solver} on {self.host.name}; "
                               "name one in the host's images", code="unsupported")  # fmt: skip
-        env = " ".join(f"-e {name}=${name}" for name in THREAD_VARIABLES)
+        env = " ".join(f"-e {name}=${name}" for name in (*THREAD_VARIABLES, *SERIAL_BLAS))
         argv = " ".join(map(shlex.quote, command))
         if runtime == "apptainer":
             where = image if image.endswith(".sif") or "://" in image else f"docker://{image}"
@@ -323,7 +329,9 @@ class RemoteRuntime(Runtime):
             if self.host.port:
                 scp += ["-P", str(self.host.port)]
             argv = [*scp, f"{workdir}/.", far] if up else [*scp, f"{far}.", f"{workdir}/"]
-        done = subprocess.run(argv, capture_output=True, text=True)
+        done = subprocess.run(
+            argv, capture_output=True, text=True, encoding="utf-8", errors="replace"
+        )
         if done.returncode != 0:
             said = (done.stderr or done.stdout).strip().splitlines()[-3:]
             raise PuzzleError(
@@ -354,14 +362,20 @@ def _remote_program(command: list[str]) -> tuple[str, str, str, list[str]]:
     pixi environment or "", the arguments). A local pixi environment's program becomes
     the same environment's there ("$ENVS"/<env>/bin/<name>, the rest quoted, so an
     envs_dir with spaces works); anything else is found by name on PATH."""
-    first = Path(command[0])
+    raw = command[0]
+    # Read as written, whatever this machine is: a Windows path (C:\...\envs\fenicsx\
+    # python.exe) names the host's fenicsx/bin/python as a POSIX one does.
+    windows = bool(re.match(r"^[A-Za-z]:[\\/]", raw)) or ("\\" in raw and "/" not in raw)
+    first = PureWindowsPath(raw) if windows else PurePosixPath(raw)
+    exe = first.stem if first.suffix.lower() == ".exe" else first.name
     parts = first.parts
     if first.is_absolute() and "envs" in parts:
         i = len(parts) - 1 - parts[::-1].index("envs")
         if i + 2 < len(parts):
-            env, name = parts[i + 1], first.name
-            return '"$ENVS"/' + shlex.quote(f"{env}/bin/{name}"), name, env, command[1:]
-    name = first.name if first.is_absolute() else command[0]
+            env = parts[i + 1]
+            return '"$ENVS"/' + shlex.quote(f"{env}/bin/{exe}"), exe, env, command[1:]
+    name = exe if first.is_absolute() else raw
+
     return shlex.quote(name), name, "", command[1:]
 
 

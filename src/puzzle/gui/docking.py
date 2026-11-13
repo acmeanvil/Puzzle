@@ -31,12 +31,60 @@ from PySide6.QtWidgets import (
     QDockWidget,
     QHBoxLayout,
     QLabel,
+    QScrollArea,
+    QTabWidget,
     QToolBar,
     QToolButton,
     QWidget,
 )
 
 STATE, AUTO = b"\n--state--\n", b"\n--auto--\n"
+
+
+class ScrollTabs(QTabWidget):
+    """Tabs whose pages scroll when the panel is shorter than they are.
+
+    A tab widget is as tall as its tallest page's minimum (the Mesh tab's ~350 px), so a
+    docked panel holding one could not shrink past it; on a short window Qt then laid the
+    panels below over it. Pages added with `scroll=True` sit in a scroll area, and the
+    tabs ask only for their bar. `currentWidget`, `widget` and `indexOf` still speak of
+    the pages themselves, not their scroll areas.
+    """
+
+    def addTab(self, page: QWidget, label: str, scroll: bool = True) -> int:  # noqa: N802
+        if not scroll:
+            return super().addTab(page, label)
+        area = QScrollArea()
+        area.setWidgetResizable(True)
+        area.setFrameShape(QScrollArea.Shape.NoFrame)
+        area.setWidget(page)
+        area.setProperty("wraps_page", True)  # ours, unlike a page that scrolls itself
+        return super().addTab(area, label)
+
+    def _page(self, w: QWidget | None) -> QWidget | None:
+        return w.widget() if w is not None and w.property("wraps_page") else w
+
+    def widget(self, index: int) -> QWidget | None:
+        return self._page(super().widget(index))
+
+    def currentWidget(self) -> QWidget | None:  # noqa: N802
+        return self._page(super().currentWidget())
+
+    def indexOf(self, page: QWidget) -> int:  # noqa: N802
+        for i in range(self.count()):
+            if self.widget(i) is page:
+                return i
+        return -1
+
+    def setCurrentWidget(self, page: QWidget) -> None:  # noqa: N802
+        i = self.indexOf(page)
+        if i >= 0:
+            self.setCurrentIndex(i)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        hint = super().minimumSizeHint()
+        bar = self.tabBar().sizeHint().height()
+        return QSize(hint.width(), min(hint.height(), bar + 90))
 
 
 def layouts_dir() -> Path:

@@ -74,20 +74,14 @@ with open("out.json", "w") as f:
 
 
 def python() -> Path | None:
-    """The scripts environment's Python, beside Puzzle's own pixi environments."""
-    from puzzle.jobs.runtime import pixi_solver_dirs
+    """The scripts environment's Python, beside Puzzle's own environments."""
+    from puzzle.jobs.runtime import environment
 
     if os.environ.get("PUZZLE_SCRIPTS_PYTHON"):
         return Path(os.environ["PUZZLE_SCRIPTS_PYTHON"])
-    for d in pixi_solver_dirs():
-        env = Path(d).parent
-        if env.name == ENVIRONMENT:
-            exe = env / ("python.exe" if os.name == "nt" else "bin/python")
-            if exe.exists():
-                return exe
-    here = Path(sys.prefix).parent / ENVIRONMENT  # .pixi/envs/<dev> → .pixi/envs/scripts
-    exe = here / ("python.exe" if os.name == "nt" else "bin/python")
-    return exe if exe.exists() else None
+    env = environment(ENVIRONMENT)
+    exe = env / ("python.exe" if os.name == "nt" else "bin/python") if env else None
+    return exe if exe is not None and exe.exists() else None
 
 
 def imports(code: str) -> list[str]:
@@ -117,7 +111,8 @@ def missing(code: str) -> list[str]:
         "[m for m in sys.argv[1:] if importlib.util.find_spec(m) is None]))"
     )
     done = subprocess.run([str(exe), "-c", probe, *wanted], capture_output=True, text=True,
-                          timeout=60, env=_environment())  # fmt: skip
+                          encoding="utf-8", errors="replace", timeout=60,
+                          env=_environment())  # fmt: skip
     return json.loads(done.stdout or "[]")
 
 
@@ -149,13 +144,14 @@ def run(code: str, inputs: dict[str, Any], *, timeout_s: float = 30.0,
                           code="unsupported")  # fmt: skip
     with tempfile.TemporaryDirectory(prefix="puzzle-script-") as work:
         folder = Path(work)
-        (folder / "inputs.json").write_text(json.dumps(inputs))
-        (folder / "script.py").write_text(code)
-        (folder / "runner.py").write_text(RUNNER)
+        (folder / "inputs.json").write_text(json.dumps(inputs), encoding="utf-8")
+        (folder / "script.py").write_text(code, encoding="utf-8")
+        (folder / "runner.py").write_text(RUNNER, encoding="utf-8")
         argv = _sandbox([str(exe), "-I", "runner.py"], project_root)
         try:
             done = subprocess.run(argv, cwd=folder, capture_output=True, text=True,
-                                  timeout=timeout_s, env=_environment())  # fmt: skip
+                                  encoding="utf-8", errors="replace", timeout=timeout_s,
+                                  env=_environment())  # fmt: skip
         except subprocess.TimeoutExpired:
             raise PuzzleError(f"the script ran past its {timeout_s:g} s limit and was stopped",
                               code="timeout") from None  # fmt: skip
@@ -164,7 +160,7 @@ def run(code: str, inputs: dict[str, Any], *, timeout_s: float = 30.0,
             tail = (done.stderr or done.stdout).strip().splitlines()[-3:]
             raise PuzzleError("the script stopped without a result: " + " / ".join(tail),
                               code="script_failed")  # fmt: skip
-        got = json.loads(result.read_text())
+        got = json.loads(result.read_text(encoding="utf-8"))
     if "error" in got:
         last = got["error"].strip().splitlines()[-1]
         raise PuzzleError(f"the script failed: {last}", code="script_failed",

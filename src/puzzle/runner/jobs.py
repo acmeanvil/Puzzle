@@ -89,7 +89,7 @@ class Store:
     def load(self, job_id: str) -> Job | None:
         path = self.dir / f"{_safe_id(job_id)}.json"
         try:
-            return Job(**json.loads(path.read_text()))
+            return Job(**json.loads(path.read_text(encoding="utf-8")))
         except (OSError, ValueError, TypeError):
             return None
 

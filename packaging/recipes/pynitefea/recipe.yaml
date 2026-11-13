@@ -1,0 +1,44 @@
+# PyNite, the 3D frame solver behind Puzzle's frames (ADR 0079; MIT licence). PyPI only;
+# pure Python, so one noarch package serves every platform. Its dependencies come from
+# conda-forge; the extras (VTK/pyvista views, reports) aren't needed.
+context:
+  name: pynitefea
+  version: "3.2.1"
+
+package:
+  name: ${{ name }}
+  version: ${{ version }}
+
+source:
+  url: https://files.pythonhosted.org/packages/source/p/pynitefea/pynitefea-${{ version }}.tar.gz
+  sha256: ed3200dfd04ce29fd1c03f0a9d5cc6a9ac58190e1742b0355efce4490f6241f1
+
+build:
+  number: 0
+  noarch: python
+  script: ${{ PYTHON }} -m pip install . -vv --no-deps --no-build-isolation
+
+requirements:
+  host:
+    - python >=3.10
+    - pip
+    - setuptools
+    - wheel
+  run:
+    - python >=3.10
+    - numpy >=2.4
+    - scipy
+    - matplotlib-base
+    - prettytable
+
+tests:
+  - python:
+      imports:
+        - Pynite
+      pip_check: false
+
+about:
+  homepage: https://github.com/JWock82/Pynite
+  license: MIT
+  license_file: LICENSE
+  summary: A 3D structural engineering finite element library for Python

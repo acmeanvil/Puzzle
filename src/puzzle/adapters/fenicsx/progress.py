@@ -46,7 +46,7 @@ class FenicsxProgress(Parser):
                 {"name": t.name, "field": t.field, "what": t.what, "reduce": t.reduce,
                  "unit": t.unit, "points": t.points.tolist()}
                 for t in followed
-            ]))  # fmt: skip
+            ]), encoding="utf-8")  # fmt: skip
         elif path.exists():
             path.unlink()
 

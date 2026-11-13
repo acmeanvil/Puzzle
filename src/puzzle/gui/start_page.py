@@ -30,7 +30,7 @@ def _recent_path() -> Path:
 def recent() -> list[Path]:
     """Projects opened lately, newest first, those still on disk only."""
     try:
-        paths = [Path(p) for p in json.loads(_recent_path().read_text())]
+        paths = [Path(p) for p in json.loads(_recent_path().read_text(encoding="utf-8"))]
     except (OSError, ValueError, TypeError):
         return []
     return [p for p in paths if p.is_dir()]
@@ -43,7 +43,7 @@ def remember(root: Path) -> None:
     path = _recent_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps([str(p) for p in paths], indent=1))
+        path.write_text(json.dumps([str(p) for p in paths], indent=1), encoding="utf-8")
     except OSError:  # a read-only home: the list is a convenience only
         pass
 

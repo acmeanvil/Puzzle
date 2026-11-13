@@ -120,7 +120,7 @@ def test_expressions_check_units():
                        inputs={"x": wire(t)}))  # fmt: skip
     got = val(p, e)
     assert got.value == pytest.approx(0.030) and got.kind == "length"
-    e.expression = "x * 200 MPa"  # a length times a stress: a force per length? no: N/m
+    e.expression = "x * x * x * x"  # m⁴ (a second moment of area): no kind Puzzle shows
     with pytest.raises(PuzzleError, match="not one Puzzle shows"):
         val(p, e)
     e.expression = "x * 200 MPa * 10 mm"

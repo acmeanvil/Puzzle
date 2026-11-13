@@ -85,7 +85,7 @@ def write_unv(mesh, results, path: Path, title: str = "Puzzle results"):
     _elements(out, mesh, found, parts)
     names = _groups(out, mesh, found)
     written, skipped = _results(out, mesh, found, results, title)
-    path.write_text("\n".join(out) + "\n")
+    path.write_text("\n".join(out) + "\n", encoding="utf-8")
     notes = {"units": "SI (dataset 164: m, N, K)", "groups": str(len(names)),
              "result datasets": str(written)}  # fmt: skip
     cut = [n for n in names if len(n) > 40]

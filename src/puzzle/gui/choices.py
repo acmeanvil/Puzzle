@@ -108,6 +108,11 @@ VALUES = {
     "tapped": "Cap screw in a tapped hole (head annulus, thread)",
     "stud_nuts": "Stud with two nuts (nut annuli)",
     "stud_tapped": "Stud in a tapped hole, with a nut (thread, nut annulus)",
+    # A modelled bolt's washers (ADR 0077)
+    "both": "Under the head and the nut",
+    "extra_large": "Extra large",
+    # A thread's axis from a coordinate system (ADR 0076: Thread.cs)
+    "cs": "Axis from a coordinate system",
     # An optimisation's method and surface (ADR 0063)
     "sobol": "Sobol sequence",
     "cobyla": "COBYLA",
@@ -164,6 +169,14 @@ def choices(project: Project, obj, path: str) -> list[tuple[str, Any]] | None:
 
         return [("Always", None)] + [(n, n) for n in sorted(parameter_values(project))]
     out = _field(project, obj, owner, field, in_list)
+    if field == "element_shape" and isinstance(owner, MeshRecipe) and out is not None:
+        from puzzle.model.schema import Component
+
+        users = [c for c in project.of_type(Component) if c.mesh == owner.id]
+        if users and all(c.dimension != "3d" for c in users):  # a 2D model's shapes
+            out = [("Triangles", "tetrahedra"), ("Quadrilaterals", "hexahedra")]
+    if field == "quadrilaterals" and isinstance(owner, MeshRecipe):
+        out = [("Quadrilaterals only", "all"), ("Mostly quadrilaterals, some triangles", "mixed")]
     if field == "optimiser" and isinstance(owner, MeshRecipe) and out is not None:
         from puzzle.settings import current
 
@@ -276,7 +289,9 @@ def _field(project, obj, owner, field, in_list):
         if field in ("source", "target"):
             names = _selections(project, component, entity="face")
             return [(n, n) for n in names] if names else None
-        if field in ("ends", "formulation", "joint") and owner.type is not None:
+        if field in ("ends", "formulation", "joint", "head", "washers") and (
+            owner.type is not None
+        ):
             return [(FROM_TYPE, None)] + [(label(v), v) for v in _literal_values(
                 type(owner).model_fields[field].annotation)[0]]  # fmt: skip
     if type(owner).__name__ == "BeamSection" and not in_list:  # ADR 0055
@@ -297,6 +312,10 @@ def _field(project, obj, owner, field, in_list):
         if field == "reference":
             entity = "face" if owner.orient == "normal" else "edge"
             return [(NONE, None)] + [(n, n) for n in _selections(project, component, entity)]
+    if type(owner).__name__ == "Thread" and not in_list:  # ADR 0076
+        thread = _thread_field(project, owner, field)
+        if thread is not None:
+            return thread
     if field == "size" and type(owner).__name__ == "BoltType" and not in_list:
         from puzzle.bolts import sizes
 
@@ -308,6 +327,26 @@ def _field(project, obj, owner, field, in_list):
         specs = CATALOG.get(physics, [])
         return [(s.label, s.type) for s in specs] or None
     return _literal(owner, field, in_list)
+
+
+def _thread_field(project, owner, field):
+    """A contact's thread (ADR 0076): forms and sizes by name, the bearing flank and
+    compliance in words, a coordinate system for the axis."""
+    from puzzle import thread_setup as ts
+
+    if field == "form":
+        return ts.form_choices()
+    if field == "size":
+        names = ts.sizes_for(owner.form)
+        return [(NONE, None)] + [(n, n) for n in names] if names else None
+    if field == "bearing":
+        return [(text, key) for key, text in ts.BEARING_NAMES.items()]
+    if field == "compliance":
+        return [(text, key) for key, text in ts.COMPLIANCE_NAMES.items()]
+    if field == "cs":
+        found = sorted(project.of_type(CoordinateSystem), key=lambda o: o.name)
+        return [("Fitted to the faces", None)] + [(o.name, str(o.id)) for o in found]
+    return None
 
 
 def _dict_entry(project, obj, owner, field, key, keys):

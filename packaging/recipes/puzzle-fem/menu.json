@@ -1,0 +1,36 @@
+{
+  "$schema": "https://schemas.conda.org/menuinst-1-1-3.schema.json",
+  "menu_name": "Puzzle",
+  "menu_items": [
+    {
+      "name": "Puzzle",
+      "description": "FEM and CFD pre- and post-processor",
+      "icon": "{{ MENU_DIR }}/Puzzle.{{ ICON_EXT }}",
+      "command": ["{{ BIN_DIR }}/puzzle", "gui"],
+      "activate": false,
+      "terminal": false,
+      "platforms": {
+        "linux": {
+          "command": ["{{ BIN_DIR }}/puzzle", "gui", "%f"],
+          "Categories": ["Science", "Engineering"],
+          "Keywords": ["FEM", "CFD", "simulation"],
+          "MimeType": ["application/x-puzzle-archive"],
+          "glob_patterns": {"application/x-puzzle-archive": "*.puzzle"},
+          "StartupWMClass": "Puzzle"
+        },
+        "osx": {
+          "CFBundleName": "Puzzle",
+          "CFBundleDisplayName": "Puzzle",
+          "CFBundleIdentifier": "io.github.acmeanvil.puzzle",
+          "LSApplicationCategoryType": "public.app-category.developer-tools"
+        },
+        "win": {
+          "command": ["{{ PYTHONW }}", "-m", "puzzle.cli", "gui", "%1"],
+          "desktop": true,
+          "file_extensions": [".puzzle"],
+          "app_user_model_id": "acmeanvil.Puzzle"
+        }
+      }
+    }
+  ]
+}

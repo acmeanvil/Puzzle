@@ -92,7 +92,7 @@ def _read_stl(path: Path) -> np.ndarray:
 
 def _read_obj(path: Path) -> np.ndarray:
     vertices, faces = [], []
-    for line in path.read_text(errors="replace").splitlines():
+    for line in path.read_text(errors="replace", encoding="utf-8").splitlines():
         parts = line.split()
         if not parts:
             continue

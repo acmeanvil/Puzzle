@@ -48,6 +48,10 @@ FLUID_FEATURES = frozenset(
     {"velocity_inlet", "mass_flow_inlet", "pressure_outlet", "wall", "symmetry"}
 )
 PDE_FEATURES = frozenset({"dirichlet", "neumann"})
+# ADR 0081: symmetry and antisymmetry planes, made displacement supports on the face's
+# normal by puzzle.symmetry before writing (heat and electrostatic symmetry is the
+# natural condition, dropped), so every FE solver that holds components takes them.
+SYMMETRY_FEATURES = frozenset({"symmetry", "antisymmetry"})
 # Remote loads (ADR 0037): the deformable force and the rigid displacement are tractions
 # and prescribed fields every solver takes; a rigid force needs constraint equations.
 REMOTE_FEATURES = frozenset({"remote_force", "remote_displacement"})
@@ -86,7 +90,15 @@ class Capabilities:
     physics: dict[str, frozenset[str]]
     features: frozenset[str]
     contacts: frozenset[str] = frozenset()
+    threads: frozenset[str] = frozenset()
+    """Contact types a threaded contact (ADR 0076) may have here: bonded, no_separation..."""
+    welds: frozenset[str] = frozenset()
+    """Weld formulations written here (ADR 0078): line (the light weld), modelled."""
     couplings: frozenset[str] = frozenset()
+    frame_analysis: bool = False
+    """Load combinations, P-Delta and the Direct Analysis Method (ADR 0079 step 2)."""
+    cyclic: frozenset[str] = frozenset()
+    """Physics whose cyclic symmetry (ADR 0081 step 3) is written: pairs as equations."""
     dimensions: frozenset[str] = field(default_factory=lambda: frozenset({"3d"}))
     time_schemes: frozenset[str] = frozenset({"backward_euler"})
     """Time schemes for transient heat transfer (see adapters.common.time_scheme)."""
@@ -103,6 +115,8 @@ class Capabilities:
     rest are refused."""
     beams: bool = False
     """Line bodies with beam sections (ADR 0027); refused where False."""
+    member_ends: bool = False
+    """Frame members' end releases and rigid offsets (ADR 0079); refused where False."""
     shared_settings: frozenset[str] = frozenset()
     """Shared solver settings (ADR 0023: linear_solver, tolerance, max_iterations,
     output_every) this adapter translates; a study setting another is refused. A
@@ -171,6 +185,19 @@ def _time_field_problems(solver: str, project, study, physics, caps) -> list[str
     return out
 
 
+def _tapped_beam(project, fastener) -> bool:
+    """A beam bolt with a thread into a tapped end (ADR 0076 step 4), as resolved from
+    its type: an adapter writes that end as a thread or refuses the bolt."""
+    from puzzle.bolts import JOINTS, resolve
+
+    try:
+        f = resolve(project, fastener)
+    except Exception:  # noqa: BLE001 - an unresolvable bolt is reported where it's solved
+        return False
+    joint = JOINTS.get(f.joint or "", ())
+    return f.thread is not None and (f.formulation or "beam") == "beam" and "thread" in joint
+
+
 def refuse_inputs(inputs: Sequence, solver: str, accepted: set[tuple[str, str]] = frozenset()):
     """Raise for transferred fields this adapter doesn't apply: (role, field) pairs."""
     from puzzle.adapters.common import InputError
@@ -189,6 +216,13 @@ class SolverAdapter(ABC):
     capabilities: ClassVar[Capabilities]
     # Solve steps one input file can hold; run_study splits longer studies (None: any).
     max_solve_steps: ClassVar[int | None] = None
+
+    def chains(self, project, study) -> bool:
+        """Whether this adapter, which runs one solve step per job, writes `study`'s
+        steps as one job instead (Code_Aster's static steps chained in one result, so a
+        pretension locks into the steps after it)."""
+        return False
+
     # Whether it can split a run across processes (MPI, Settings > Solvers > Parallel
     # processes per run, ADR 0053); the others run one process with every core's threads.
     parallel_processes: ClassVar[bool] = False
@@ -281,7 +315,8 @@ class SolverAdapter(ABC):
             loaded = [
                 s for s in study.solve_steps() if s.solves(physics.type) and s.type != "modal"
             ]
-            if self.max_solve_steps is not None and len(loaded) > 1:
+            chained = self.chains(project, study)
+            if self.max_solve_steps is not None and len(loaded) > 1 and not chained:
                 problems += [
                     f"{self.name} runs each step as its own analysis, so the pretension on "
                     f"{f.selection} can't be locked into a later step; use one step, or "
@@ -321,7 +356,20 @@ class SolverAdapter(ABC):
         problems += [
             f"{self.name} does not support {c.capability} contact ('{c.name}')"
             for c in component.contacts
-            if c.capability not in caps.contacts | allowed
+            if c.thread is None and c.capability not in caps.contacts | allowed
+        ]
+        problems += [  # ADR 0078: welds this solver doesn't write are refused
+            f"{self.name} does not write a {w.formulation} weld ('{w.name}')"
+            + (" in a 2D model" if component.dimension != "3d" else "")
+            for w in getattr(component, "welds", [])
+            # a modelled weld is a part tied on (its ties are checked as contacts)
+            if (w.formulation == "line" and w.formulation not in caps.welds)
+            or component.dimension != "3d"
+        ]
+        problems += [  # ADR 0076: a thread's own list, never a plain tie or contact pair
+            f"{self.name} does not support a threaded {c.type} contact ('{c.name}')"
+            for c in component.contacts
+            if c.thread is not None and c.type not in caps.threads
         ]
         problems += [
             f"{self.name} does not support {c} coupling"
@@ -350,8 +398,17 @@ class SolverAdapter(ABC):
                 problems.append(
                     f"{self.name} does not write {c.ends} beam fasteners yet ({c.name})"
                 )
+            if "beam_fastener:thread" not in caps.connectors and _tapped_beam(project, c):
+                problems.append(  # ADR 0076 step 4: never a plain spider on the thread
+                    f"{self.name} does not write a beam bolt's tapped thread yet ({c.name})"
+                )
         if component.beam_sections and not caps.beams:
             problems.append(f"{self.name} does not write beams (line bodies) yet")
+        if (component.member_releases or component.member_offsets) and not caps.member_ends:
+            problems.append(  # ADR 0079: refused, never ignored
+                f"{self.name} doesn't write frame members' end releases or offsets yet; "
+                "run the frame on PyNite"
+            )
         # In a 2D model thickness sections are plane-stress thicknesses, not shells.
         if component.shell_sections and not caps.shells and component.dimension == "3d":
             problems.append(f"{self.name} does not write shells (sheet bodies) yet")
@@ -372,6 +429,20 @@ class SolverAdapter(ABC):
         except InputError as exc:
             problems.append(f"{self.name}: {exc}")
         problems += self.check_expert(study.expert_settings.get(self.name, {}))
+        if not caps.frame_analysis:  # ADR 0079 step 2: PyNite's so far, never ignored
+            if study.combinations:
+                problems.append(f"{self.name} doesn't solve load combinations yet (PyNite does)")
+            for s in study.solve_steps():
+                for key in ("second_order", "direct_analysis"):
+                    if s.settings.get(key):
+                        problems.append(f"{self.name} doesn't take {key.replace('_', ' ')} "
+                                        "yet (PyNite does)")  # fmt: skip
+        from puzzle.element_choice import check as element_check
+
+        problems += element_check(self.name, component)  # ADR 0082: per body
+        from puzzle.cyclic import check as cyclic_check
+
+        problems += [f"{self.name}: {p}" for p in cyclic_check(project, study, component, caps)]
         return problems
 
     def _material_problems(

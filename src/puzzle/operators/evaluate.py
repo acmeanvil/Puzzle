@@ -338,6 +338,10 @@ def source(ctx: Context, oid: UUID, port: str):
         d = derived.evaluate(ctx.project, ctx.store, obj)
         return ResultValue(d.mesh, d.results, d.items, d.run_ids, obj.name)
     if isinstance(obj, ResultProbe):
+        if port in ("along", "history"):  # its curves (ADR 0071 decision 3)
+            from puzzle.operators.series import from_probe
+
+            return from_probe(ctx, obj, port)
         return _probe(ctx, obj)
     raise PuzzleError(f"'{obj.name}' has no outputs for an operator", code="invalid")
 
@@ -359,6 +363,13 @@ def _input(ctx: Context, op, key: str):
             and ("points" not in spec.types and "table" in spec.types)
         ):
             return got.table()  # points are a table of x, y, z too (ADR 0062 phase 3)
+        if (
+            isinstance(got, ResultValue)
+            and spec is not None
+            and "field" in spec.types
+            and "result" not in spec.types
+        ):
+            return _as_field(ctx, op, got)  # a study's result as a field, as a Filter reads it
         return got
     return typed(inp.value)
 
@@ -461,6 +472,18 @@ def _field(ctx: Context, op, given) -> FieldValue:
     f = step.fields[item.field]
     values = np.asarray(compute(item, f.values, f.components), float)
     return FieldValue(given.mesh, step, item, f.ids, values, f.location, label=item.label)
+
+
+def _as_field(ctx: Context, op, given: ResultValue) -> FieldValue:
+    """A result wired into a field port: the operator's quantity where the result has it
+    (else the result's own first listed quantity: von Mises for stress), at its step."""
+    from types import SimpleNamespace
+
+    quantity = getattr(op, "quantity", None) or ""
+    if quantity and not any(i.key == quantity for i in given.items):
+        quantity = ""  # the other port's quantity (f's in a Field formula of two results)
+    reader = SimpleNamespace(name=op.name, quantity=quantity, step=getattr(op, "step", -1))
+    return _field(ctx, reader, given)
 
 
 def _restrict(fv: FieldValue, selection: str | None) -> FieldValue:
@@ -597,7 +620,30 @@ def _export(ctx: Context, op) -> dict[str, Any]:
 
 
 def _plot(ctx: Context, op) -> dict[str, Any]:
+    """The plot's table (its first curve, as before ADR 0071) and every curve wired in,
+    together (one x and one y quantity), for the Plots panel."""
+    from puzzle.operators import series as sr
+
     got = _input(ctx, op, "value")
+    if isinstance(got, sr.Series):
+        parts, table = [got], (got.table() if got.lines else None)
+    else:
+        table = _plot_table(ctx, op, got)
+        along = "sweep" if op.against == "sweep" else "steps"
+        first = sr.from_table(table, table.columns[0], table.columns[1], op.name,
+                              along="" if isinstance(got, Table) else along)  # fmt: skip
+        parts = [first]
+    for i, key in enumerate("bcd"):
+        more = _input(ctx, op, key)
+        if more is not None:
+            parts.append(sr.as_series(op, more, f"curve {i + 2}"))
+    curves = sr.together(op, parts)
+    if table is None:
+        table = curves.table()
+    return {"out": table, "curves": curves}
+
+
+def _plot_table(ctx: Context, op, got) -> Table:
     if isinstance(got, Table):  # a column against another (ADR 0064 phase 2)
         from puzzle.operators import frames
 
@@ -606,9 +652,16 @@ def _plot(ctx: Context, op) -> dict[str, Any]:
         frames._names(op, [x, y], got)
         kinds = dict(zip(got.columns, got.kinds, strict=False))
         rows = [list(r) for r in got.frame.select([x, y]).rows()]
-        return {"out": Table([x, y], rows, [kinds.get(x), kinds.get(y)])}
+        return Table([x, y], rows, [kinds.get(x), kinds.get(y)])
     if op.against == "sweep":
-        return {"out": _over_sweep(ctx, op)}
+        return _over_sweep(ctx, op)
+    return _steps_table(ctx, op)
+
+
+def _steps_table(ctx: Context, op) -> Table:
+    """The number wired into `value` at every step of the run it reads."""
+    from puzzle.operators.series import step_axis
+
     base = _upstream_result(ctx, op)
     rows, label, kind = [], "Value", None
     for i, step in enumerate(base.results.steps):
@@ -620,10 +673,8 @@ def _plot(ctx: Context, op) -> dict[str, Any]:
             raise
         label, kind = got.label or label, got.kind
         rows.append([float(step.value), got.value])
-    x, x_kind = {"modal": ("Frequency", None), "frequency_domain": ("Frequency", None),
-                 "transient": ("Time", "time"), "buckling": ("Load factor", None)}.get(
-        base.results.steps[0].kind if base.results.steps else "", ("Step", None))  # fmt: skip
-    return {"out": Table([x, label], rows, [x_kind, kind])}
+    x, x_kind = step_axis(base.results)
+    return Table([x, label], rows, [x_kind, kind])
 
 
 def _upstream_studies(ctx: Context, op, seen=()) -> list:
@@ -771,6 +822,7 @@ def _tables() -> dict:
             "new_column": frames.new_column, "convert_units": frames.convert_units,
             "round": frames.round_values, "group": frames.group,
             "to_number": frames.to_number, "lookup": _lookup, "measure": _measure,
+            "model_value": _model_value,
             "join": reshape.join, "stack": reshape.stack, "pivot": reshape.pivot,
             "unpivot": reshape.unpivot, "distinct": reshape.distinct,
             "fill_missing": reshape.fill_missing, "rolling": reshape.rolling,
@@ -973,6 +1025,20 @@ def _lookup(ctx: Context, op) -> dict[str, Any]:
 
 MEASURED = {"length": ("length", "length"), "area": ("area", "area"),
             "volume": ("volume", "volume"), "radius": ("radius", "length")}  # fmt: skip
+
+
+def _model_value(ctx: Context, op) -> dict[str, Any]:
+    """A value the model holds (ADR 0071 step 3, `operators.model_values`)."""
+    from puzzle.operators.model_values import read
+
+    obj = ctx.project.objects.get(op.target) if op.target else None
+    if obj is None:
+        raise PuzzleError(f"'{op.name}': choose what to read (a material, a component, ...)",
+                          code="missing_input")  # fmt: skip
+    if not op.property:
+        raise PuzzleError(f"'{op.name}': choose which of {obj.name}'s values",
+                          code="missing_input")  # fmt: skip
+    return {"out": read(ctx.project, obj, op.property)}
 
 
 def _measure(ctx: Context, op) -> dict[str, Any]:
@@ -1282,11 +1348,26 @@ def _script(ctx: Context, op) -> dict[str, Any]:
     return {"out": scripts.decode(op, got)}
 
 
+def _curves() -> dict:
+    """The curve operators (ADR 0071 decision 3), in `operators.series`."""
+    from puzzle.operators import series
+
+    return series.evaluators()
+
+
+def _vtk_filters() -> dict:
+    from puzzle.operators import vtk_filters
+
+    return vtk_filters.evaluators()
+
+
 _EVALUATE = {"reduce": _reduce, "filter": _filter, "check": _check, "panel": _panel,
-             "plot": _plot, "export": _export, "number": _number_op, "slider": _slider,
+             "plot": _plot, "export": _export, "report": _export, "number": _number_op,
+             "slider": _slider,
              "series": _series, "range": _range, "expression": _expression,
              "random": _random, **_tables(), **_geometric(),
-             "table": _table, "list": _list, "pairs": _pairs}  # fmt: skip
+             "table": _table, "list": _list, "pairs": _pairs,
+             **_curves(), **_vtk_filters()}  # fmt: skip
 
 
 # --- what a node shows, and exporting -------------------------------------------------
@@ -1296,6 +1377,10 @@ def shown(ctx: Context, op) -> tuple[str, str]:
     """What the node shows on the canvas, and its verdict ("pass", "fail" or ""). Errors
     are shown as their message, never raised: the schematic always draws."""
     try:
+        if op.type == "report":
+            from puzzle.operators.report import path_of
+
+            return f"to {path_of(op)}", ""
         if op.type in ("panel", "export"):
             got = _input(ctx, op, "value")
             if op.type == "export":
@@ -1339,6 +1424,10 @@ def export_path(op) -> str:
 def export(ctx: Context, op, root: Path) -> list[Path]:
     """Write an export operator's input to its file in the project folder: CSV for a
     number, verdict, table or field; a result in its `format` (ADR 0043)."""
+    if op.type == "report":  # ADR 0071: everything wired in, in one HTML file
+        from puzzle.operators import report
+
+        return report.write(ctx, op, root)
     rel = Path(export_path(op))
     if rel.is_absolute() or ".." in rel.parts:
         raise PuzzleError(f"'{op.name}': the file must be inside the project folder",
@@ -1364,7 +1453,7 @@ def export(ctx: Context, op, root: Path) -> list[Path]:
         fmt = {".parquet": "parquet", ".xlsx": "xlsx"}.get(path.suffix.lower(), op.format)
         frames.write(got, path, fmt if fmt in ("parquet", "xlsx") else "csv")
         return [path]
-    path.write_text(as_csv(got))
+    path.write_text(as_csv(got), encoding="utf-8")
     return [path]
 
 
@@ -1390,6 +1479,8 @@ def _snapshot(ctx: Context, op, got: ResultValue, path: Path) -> Path:
 
 
 def as_csv(v) -> str:
+    if getattr(v, "type", "") == "series":
+        return v.table().csv()
     if isinstance(v, ListValue):
         rows = [[float(x)] if v.numeric else [x] for x in v.values]
         return Table([v.label or "value"], rows, [v.kind]).csv()
@@ -1422,6 +1513,10 @@ def summary(ctx: Context, op) -> dict[str, Any]:
     out: dict[str, Any] = {"name": op.name, "type": op.type}
     try:
         got = outputs(ctx, op)
+        if op.type == "report":
+            from puzzle.operators.report import path_of
+
+            return f"to {path_of(op)}", ""
         if op.type in ("panel", "export"):
             got = {"value": _input(ctx, op, "value")}
         out["outputs"] = {k: _data(v) for k, v in got.items()}
@@ -1454,6 +1549,10 @@ def _data(v) -> Any:
         return {"columns": [_heading(c, k) for c, k in zip(v.columns, v.kinds, strict=False)],
                 "row_count": v.frame.height, "rows": [list(r) for r in
                                                        v.frame.head(PREVIEW).rows()]}  # fmt: skip
+    if getattr(v, "type", "") == "series":  # a summary, never every point (ADR 0071)
+        from puzzle.operators.series import summary
+
+        return summary(v)
     if v is None:
         return None
     return {"text": v.text()}

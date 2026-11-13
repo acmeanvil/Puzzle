@@ -108,7 +108,7 @@ def _stress_field(tmp_path, sigma, placement=None):
     header = "x,y,z," + ",".join(f"{k} [MPa]" for k in STRESS)
     rows = [header] + [",".join(map(str, (*p, *sigma))) for p in points]
     path = tmp_path / "s.csv"
-    path.write_text("\n".join(rows) + "\n")
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
     root = tmp_path / "project"
     rel, digest = import_file(root, path)
     found = sniff(root / rel)

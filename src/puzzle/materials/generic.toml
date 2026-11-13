@@ -49,28 +49,157 @@ reference_temperature = 293.15
 points = [[293.15, 12.16e-6], [373.15, 12.48e-6], [473.15, 12.88e-6], [573.15, 13.28e-6],
           [673.15, 13.68e-6], [773.15, 14.08e-6], [873.15, 14.48e-6], [973.15, 14.88e-6]]
 
+# US structural steels (ADR 0079 step 3: AISC 360 member checks), E = 29,000 ksi as AISC 360 takes it.
+[astm_a992]
+name = "ASTM A992"
+type = "Metal"
+group = "Carbon Steel"
+description = "Structural steel for wide-flange shapes (W), the usual US beam and column grade"
+sources = ["ASTM A992/A992M: Fy 50 ksi, Fu 65 ksi minimum", "AISC 360-16 Table A3.1 lists the grade; E = 29,000 ksi and G = 11,200 ksi from its Section A3"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 29000, unit = "ksi" }
+poissons_ratio = { value = 0.30 }
+yield_strength = { value = 50, unit = "ksi" }
+tensile_strength = { value = 65, unit = "ksi" }
+thermal_conductivity = { value = 51.9, unit = "W/(m*K)" }
+specific_heat = { value = 486, unit = "J/(kg*K)" }
+thermal_expansion = { value = 11.7e-6, unit = "1/K" }
+
+[astm_a36]
+name = "ASTM A36"
+type = "Metal"
+group = "Carbon Steel"
+description = "Carbon structural steel for plates, bars, angles and channels"
+sources = ["ASTM A36/A36M: Fy 36 ksi, Fu 58 ksi minimum", "AISC 360-16 Table A3.1 lists the grade; E = 29,000 ksi and G = 11,200 ksi from its Section A3"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 29000, unit = "ksi" }
+poissons_ratio = { value = 0.30 }
+yield_strength = { value = 36, unit = "ksi" }
+tensile_strength = { value = 58, unit = "ksi" }
+thermal_conductivity = { value = 51.9, unit = "W/(m*K)" }
+specific_heat = { value = 486, unit = "J/(kg*K)" }
+thermal_expansion = { value = 11.7e-6, unit = "1/K" }
+
+[astm_a572_gr50]
+name = "ASTM A572 Gr. 50"
+type = "Metal"
+group = "Carbon Steel"
+description = "High-strength low-alloy columbium-vanadium structural steel, grade 50"
+sources = ["ASTM A572/A572M grade 50: Fy 50 ksi, Fu 65 ksi minimum", "AISC 360-16 Table A3.1 lists the grade; E = 29,000 ksi and G = 11,200 ksi from its Section A3"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 29000, unit = "ksi" }
+poissons_ratio = { value = 0.30 }
+yield_strength = { value = 50, unit = "ksi" }
+tensile_strength = { value = 65, unit = "ksi" }
+thermal_conductivity = { value = 51.9, unit = "W/(m*K)" }
+specific_heat = { value = 486, unit = "J/(kg*K)" }
+thermal_expansion = { value = 11.7e-6, unit = "1/K" }
+
+[astm_a500_gr_c_rect]
+name = "ASTM A500 Gr. C (rectangular HSS)"
+type = "Metal"
+group = "Carbon Steel"
+description = "Cold-formed structural tubing, square and rectangular"
+sources = ["ASTM A500/A500M grade C, shaped structural tubing: Fy 50 ksi, Fu 62 ksi minimum", "AISC 360-16 Table A3.1 lists the grade; E = 29,000 ksi and G = 11,200 ksi from its Section A3"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 29000, unit = "ksi" }
+poissons_ratio = { value = 0.30 }
+yield_strength = { value = 50, unit = "ksi" }
+tensile_strength = { value = 62, unit = "ksi" }
+thermal_conductivity = { value = 51.9, unit = "W/(m*K)" }
+specific_heat = { value = 486, unit = "J/(kg*K)" }
+thermal_expansion = { value = 11.7e-6, unit = "1/K" }
+
+[astm_a500_gr_c_round]
+name = "ASTM A500 Gr. C (round HSS)"
+type = "Metal"
+group = "Carbon Steel"
+description = "Cold-formed structural tubing, round"
+sources = ["ASTM A500/A500M grade C, round structural tubing: Fy 46 ksi, Fu 62 ksi minimum", "AISC 360-16 Table A3.1 lists the grade; E = 29,000 ksi and G = 11,200 ksi from its Section A3"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 29000, unit = "ksi" }
+poissons_ratio = { value = 0.30 }
+yield_strength = { value = 46, unit = "ksi" }
+tensile_strength = { value = 62, unit = "ksi" }
+thermal_conductivity = { value = 51.9, unit = "W/(m*K)" }
+specific_heat = { value = 486, unit = "J/(kg*K)" }
+thermal_expansion = { value = 11.7e-6, unit = "1/K" }
+
+[astm_a53_gr_b]
+name = "ASTM A53 Gr. B (pipe)"
+type = "Metal"
+group = "Carbon Steel"
+description = "Welded and seamless steel pipe used as structural pipe"
+sources = ["ASTM A53/A53M grade B: Fy 35 ksi, Fu 60 ksi minimum", "AISC 360-16 Table A3.1 lists the grade; E = 29,000 ksi and G = 11,200 ksi from its Section A3"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 29000, unit = "ksi" }
+poissons_ratio = { value = 0.30 }
+yield_strength = { value = 35, unit = "ksi" }
+tensile_strength = { value = 60, unit = "ksi" }
+thermal_conductivity = { value = 51.9, unit = "W/(m*K)" }
+specific_heat = { value = 486, unit = "J/(kg*K)" }
+thermal_expansion = { value = 11.7e-6, unit = "1/K" }
+
 [stainless_steel_304]
 name = "Stainless steel 304"
 type = "Metal"
 group = "Stainless Steel"
-description = "Austenitic stainless steel, annealed"
+description = "Austenitic stainless steel (S30400), annealed"
+sources = ["ASTM A240/A240M type 304: Fy 30 ksi (205 MPa), Fu 75 ksi (515 MPa) minimum", "AISC 370-21 Section A3.1: E = 28,000 ksi (193 000 MPa) for austenitic stainless steel"]
 density = { value = 8000, unit = "kg/m^3" }
 youngs_modulus = { value = 193, unit = "GPa" }
 poissons_ratio = { value = 0.29 }
+yield_strength = { value = 205, unit = "MPa" }
+tensile_strength = { value = 515, unit = "MPa" }
 thermal_conductivity = { value = 16.2, unit = "W/(m*K)" }
 specific_heat = { value = 500, unit = "J/(kg*K)" }
 thermal_expansion = { value = 17.3e-6, unit = "1/K" }
 electrical_conductivity = { value = 1.39e6, unit = "S/m" }
 relative_permeability = { value = 1.0 }
 
+[duplex_2205]
+name = "Duplex stainless steel 2205"
+type = "Metal"
+group = "Stainless Steel"
+description = "Duplex stainless steel (S32205), annealed"
+sources = ["ASTM A240/A240M S32205: Fy 65 ksi (450 MPa), Fu 95 ksi (655 MPa) minimum", "AISC 370-21 Section A3.1: E = 29,000 ksi (200 000 MPa) for duplex stainless steel"]
+density = { value = 7800, unit = "kg/m^3" }
+youngs_modulus = { value = 200, unit = "GPa" }
+poissons_ratio = { value = 0.30 }
+yield_strength = { value = 450, unit = "MPa" }
+tensile_strength = { value = 655, unit = "MPa" }
+thermal_conductivity = { value = 19.0, unit = "W/(m*K)" }
+specific_heat = { value = 500, unit = "J/(kg*K)" }
+thermal_expansion = { value = 13.0e-6, unit = "1/K" }
+
+[lean_duplex_2101]
+name = "Lean duplex stainless steel 2101"
+type = "Metal"
+group = "Stainless Steel"
+description = "Lean duplex stainless steel (S32101), annealed plate"
+sources = ["ASTM A240/A240M S32101 over 0.187 in.: Fy 65 ksi (450 MPa), Fu 94 ksi (650 MPa) minimum", "AISC 370-21 Section A3.1: E = 29,000 ksi (200 000 MPa) for duplex stainless steel"]
+density = { value = 7800, unit = "kg/m^3" }
+youngs_modulus = { value = 200, unit = "GPa" }
+poissons_ratio = { value = 0.30 }
+yield_strength = { value = 450, unit = "MPa" }
+tensile_strength = { value = 650, unit = "MPa" }
+thermal_conductivity = { value = 15.0, unit = "W/(m*K)" }
+specific_heat = { value = 500, unit = "J/(kg*K)" }
+thermal_expansion = { value = 13.0e-6, unit = "1/K" }
+
 [aluminium_6061_t6]
 name = "Aluminium 6061-T6"
 type = "Metal"
 group = "Aluminum"
 description = "Precipitation-hardened aluminium alloy"
+sources = ["Aluminum Design Manual 2015, Table A.3.4, 6061-T6 extrusions: Ftu 38 ksi (262 MPa), Fty 35 ksi (241 MPa), Fcy 35 ksi (241 MPa)"]
 density = { value = 2700, unit = "kg/m^3" }
 youngs_modulus = { value = 68.9, unit = "GPa" }
 poissons_ratio = { value = 0.33 }
+yield_strength = { value = 241, unit = "MPa" }
+tensile_strength = { value = 262, unit = "MPa" }
+compressive_yield_strength = { value = 241, unit = "MPa" }
+welded_tensile_strength = { value = 165, unit = "MPa" }  # ADM Table A.3.3: 24 ksi
 thermal_conductivity = { value = 167, unit = "W/(m*K)" }
 specific_heat = { value = 896, unit = "J/(kg*K)" }
 thermal_expansion = { value = 23.6e-6, unit = "1/K" }
@@ -128,6 +257,101 @@ dynamic_viscosity = { value = 1.002e-3, unit = "Pa*s" }
 thermal_conductivity = { value = 0.598, unit = "W/(m*K)" }
 specific_heat = { value = 4182, unit = "J/(kg*K)" }
 relative_permittivity = { value = 80.1 }
+relative_permeability = { value = 1.0 }
+
+# Gases at 20 °C and 1 atm (101.325 kPa), typical values from NIST's thermophysical
+# properties of fluids (Lemmon et al.); the density follows p/T, so set your own away
+# from these conditions.
+
+[helium]
+name = "Helium"
+type = "Fluid"
+group = "Gas"
+description = "Helium gas at 20 °C and 1 atm"
+density = { value = 0.1664, unit = "kg/m^3" }
+dynamic_viscosity = { value = 1.96e-5, unit = "Pa*s" }
+thermal_conductivity = { value = 0.153, unit = "W/(m*K)" }
+specific_heat = { value = 5193, unit = "J/(kg*K)" }
+electrical_conductivity = { value = 0, unit = "S/m" }
+relative_permittivity = { value = 1.000065 }
+relative_permeability = { value = 1.0 }
+
+[nitrogen]
+name = "Nitrogen"
+type = "Fluid"
+group = "Gas"
+description = "Nitrogen gas at 20 °C and 1 atm"
+density = { value = 1.165, unit = "kg/m^3" }
+dynamic_viscosity = { value = 1.76e-5, unit = "Pa*s" }
+thermal_conductivity = { value = 0.0258, unit = "W/(m*K)" }
+specific_heat = { value = 1041, unit = "J/(kg*K)" }
+electrical_conductivity = { value = 0, unit = "S/m" }
+relative_permittivity = { value = 1.00055 }
+relative_permeability = { value = 1.0 }
+
+[carbon_dioxide]
+name = "Carbon dioxide"
+type = "Fluid"
+group = "Gas"
+description = "Carbon dioxide gas at 20 °C and 1 atm"
+density = { value = 1.839, unit = "kg/m^3" }
+dynamic_viscosity = { value = 1.47e-5, unit = "Pa*s" }
+thermal_conductivity = { value = 0.0162, unit = "W/(m*K)" }
+specific_heat = { value = 846, unit = "J/(kg*K)" }
+electrical_conductivity = { value = 0, unit = "S/m" }
+relative_permittivity = { value = 1.00092 }
+relative_permeability = { value = 1.0 }
+
+[argon]
+name = "Argon"
+type = "Fluid"
+group = "Gas"
+description = "Argon gas at 20 °C and 1 atm"
+density = { value = 1.661, unit = "kg/m^3" }
+dynamic_viscosity = { value = 2.23e-5, unit = "Pa*s" }
+thermal_conductivity = { value = 0.0175, unit = "W/(m*K)" }
+specific_heat = { value = 521, unit = "J/(kg*K)" }
+electrical_conductivity = { value = 0, unit = "S/m" }
+relative_permittivity = { value = 1.00052 }
+relative_permeability = { value = 1.0 }
+
+[neon]
+name = "Neon"
+type = "Fluid"
+group = "Gas"
+description = "Neon gas at 20 °C and 1 atm"
+density = { value = 0.8387, unit = "kg/m^3" }
+dynamic_viscosity = { value = 3.13e-5, unit = "Pa*s" }
+thermal_conductivity = { value = 0.0486, unit = "W/(m*K)" }
+specific_heat = { value = 1030, unit = "J/(kg*K)" }
+electrical_conductivity = { value = 0, unit = "S/m" }
+relative_permittivity = { value = 1.00013 }
+relative_permeability = { value = 1.0 }
+
+[hydrogen]
+name = "Hydrogen"
+type = "Fluid"
+group = "Gas"
+description = "Hydrogen gas (normal: 3:1 ortho:para) at 20 °C and 1 atm"
+density = { value = 0.08376, unit = "kg/m^3" }
+dynamic_viscosity = { value = 8.80e-6, unit = "Pa*s" }
+thermal_conductivity = { value = 0.178, unit = "W/(m*K)" }
+specific_heat = { value = 14300, unit = "J/(kg*K)" }
+electrical_conductivity = { value = 0, unit = "S/m" }
+relative_permittivity = { value = 1.00025 }
+relative_permeability = { value = 1.0 }
+
+[sea_water]
+name = "Sea water"
+type = "Fluid"
+group = "Liquid"
+description = "Sea water of salinity 35 g/kg at 20 °C and 1 atm (TEOS-10; Sharqawy et al. 2010)"
+density = { value = 1024.8, unit = "kg/m^3" }
+dynamic_viscosity = { value = 1.08e-3, unit = "Pa*s" }
+thermal_conductivity = { value = 0.596, unit = "W/(m*K)" }
+specific_heat = { value = 3993, unit = "J/(kg*K)" }
+electrical_conductivity = { value = 4.8, unit = "S/m" }
+relative_permittivity = { value = 72 }
 relative_permeability = { value = 1.0 }
 
 [electrical_steel]
@@ -669,3 +893,328 @@ specific_heat = { value = 486, unit = "J/(kg*K)" }
 thermal_expansion = { value = 1.17e-05, unit = "1/K" }
 electrical_conductivity = { value = 5900000.0, unit = "S/m" }
 
+
+# More bolting grades from Lacewing Lab's bolt grades (specified minimums, ksi converted;
+# none of these specifications sets a proof load, so bolt checks use yield).
+
+[astm_f3125_144]
+name = "ASTM F3125 Grade 144"
+type = "Metal"
+group = "Fastener"
+description = "Heavy hex or twist-off structural bolts, medium carbon or alloy steel, quenched and tempered; 1/2 to 1 1/2 in; no proof load specified"
+sources = ["ASTM F3125/F3125M grade 144: Portland Bolt's ASTM F3125 specification summary, via Lacewing Lab"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 205, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+yield_strength = { value = 793, unit = "MPa" }
+tensile_strength = { value = 993, unit = "MPa" }
+thermal_conductivity = { value = 42.6, unit = "W/(m*K)" }
+specific_heat = { value = 473, unit = "J/(kg*K)" }
+thermal_expansion = { value = 1.23e-05, unit = "1/K" }
+electrical_conductivity = { value = 4500000.0, unit = "S/m" }
+
+[astm_f1554_36]
+name = "ASTM F1554 Grade 36"
+type = "Metal"
+group = "Fastener"
+description = "Anchor rods, low carbon steel (end painted blue); 1/2 to 4 in; tensile 58-80 ksi; no proof load specified"
+sources = ["ASTM F1554 grade 36: Portland Bolt's ASTM F1554 specification summary, via Lacewing Lab"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 205, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+yield_strength = { value = 248, unit = "MPa" }
+tensile_strength = { value = 400, unit = "MPa" }
+thermal_conductivity = { value = 51.9, unit = "W/(m*K)" }
+specific_heat = { value = 486, unit = "J/(kg*K)" }
+thermal_expansion = { value = 1.17e-05, unit = "1/K" }
+electrical_conductivity = { value = 5900000.0, unit = "S/m" }
+
+[astm_f1554_55]
+name = "ASTM F1554 Grade 55"
+type = "Metal"
+group = "Fastener"
+description = "Anchor rods, high strength low alloy steel (end painted yellow); 1/2 to 4 in; tensile 75-95 ksi; no proof load specified"
+sources = ["ASTM F1554 grade 55: Portland Bolt's ASTM F1554 specification summary, via Lacewing Lab"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 205, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+yield_strength = { value = 379, unit = "MPa" }
+tensile_strength = { value = 517, unit = "MPa" }
+thermal_conductivity = { value = 51.9, unit = "W/(m*K)" }
+specific_heat = { value = 486, unit = "J/(kg*K)" }
+thermal_expansion = { value = 1.17e-05, unit = "1/K" }
+electrical_conductivity = { value = 5900000.0, unit = "S/m" }
+
+[astm_f1554_105]
+name = "ASTM F1554 Grade 105"
+type = "Metal"
+group = "Fastener"
+description = "Anchor rods, alloy steel, quenched and tempered (end painted red); 1/2 to 3 in; tensile 125-150 ksi; no proof load specified"
+sources = ["ASTM F1554 grade 105: Portland Bolt's ASTM F1554 specification summary, via Lacewing Lab"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 205, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+yield_strength = { value = 724, unit = "MPa" }
+tensile_strength = { value = 862, unit = "MPa" }
+thermal_conductivity = { value = 42.6, unit = "W/(m*K)" }
+specific_heat = { value = 473, unit = "J/(kg*K)" }
+thermal_expansion = { value = 1.23e-05, unit = "1/K" }
+electrical_conductivity = { value = 4500000.0, unit = "S/m" }
+
+[astm_a193_b7m]
+name = "ASTM A193 B7M"
+type = "Metal"
+group = "Fastener"
+description = "Cr-Mo (AISI 4140) alloy steel bolting, quenched and tempered with limited hardness (sour service); up to 2 1/2 in"
+sources = ["ASME BPVC II-D (2023) Tables Y-1 and U: SA-193 B7M, up to 2.5 in, via Lacewing Lab"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 205, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+yield_strength = { value = 552, unit = "MPa" }
+tensile_strength = { value = 689, unit = "MPa" }
+thermal_conductivity = { value = 42.6, unit = "W/(m*K)" }
+specific_heat = { value = 473, unit = "J/(kg*K)" }
+thermal_expansion = { value = 1.23e-05, unit = "1/K" }
+electrical_conductivity = { value = 4500000.0, unit = "S/m" }
+
+[astm_a193_b8m_cl1]
+name = "ASTM A193 B8M Class 1"
+type = "Metal"
+group = "Fastener"
+description = "Type 316 stainless steel bolting and studs, carbide solution treated"
+sources = ["ASTM A193 grade B8M class 1: Portland Bolt's ASTM A193 specification summary, via Lacewing Lab"]
+density = { value = 8000, unit = "kg/m^3" }
+youngs_modulus = { value = 193, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+yield_strength = { value = 207, unit = "MPa" }
+tensile_strength = { value = 517, unit = "MPa" }
+thermal_conductivity = { value = 16.2, unit = "W/(m*K)" }
+specific_heat = { value = 500, unit = "J/(kg*K)" }
+thermal_expansion = { value = 1.73e-05, unit = "1/K" }
+electrical_conductivity = { value = 1390000.0, unit = "S/m" }
+
+[astm_a193_b8_cl2]
+name = "ASTM A193 B8 Class 2"
+type = "Metal"
+group = "Fastener"
+description = "Type 304 stainless steel bolting and studs, carbide solution treated and strain hardened; values up to 3/4 in (they fall for larger sizes)"
+sources = ["ASTM A193 grade B8 class 2, to 3/4 in: Portland Bolt's ASTM A193 specification summary, via Lacewing Lab"]
+density = { value = 8000, unit = "kg/m^3" }
+youngs_modulus = { value = 193, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+yield_strength = { value = 689, unit = "MPa" }
+tensile_strength = { value = 862, unit = "MPa" }
+thermal_conductivity = { value = 16.2, unit = "W/(m*K)" }
+specific_heat = { value = 500, unit = "J/(kg*K)" }
+thermal_expansion = { value = 1.73e-05, unit = "1/K" }
+electrical_conductivity = { value = 1390000.0, unit = "S/m" }
+
+[astm_a320_l43]
+name = "ASTM A320 L43"
+type = "Metal"
+group = "Fastener"
+description = "Ni-Cr-Mo (AISI 4340) alloy steel bolting for low-temperature service, quenched and tempered (Charpy 20 ft-lbf at -150 F); 1/4 to 4 in"
+sources = ["ASTM A320 grade L43: Portland Bolt's ASTM A320 specification summary, via Lacewing Lab"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 205, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+yield_strength = { value = 724, unit = "MPa" }
+tensile_strength = { value = 862, unit = "MPa" }
+thermal_conductivity = { value = 42.6, unit = "W/(m*K)" }
+specific_heat = { value = 473, unit = "J/(kg*K)" }
+thermal_expansion = { value = 1.23e-05, unit = "1/K" }
+electrical_conductivity = { value = 4500000.0, unit = "S/m" }
+
+[astm_f593_group1_cw1]
+name = "ASTM F593 Group 1 (304) Condition CW1"
+type = "Metal"
+group = "Fastener"
+description = "Type 304 stainless steel bolts and screws, cold worked (F593C); 1/4 to 5/8 in; tensile 100-150 ksi"
+sources = ["ASTM F593 group 1 condition CW1: Portland Bolt's ASTM F593 specification summary, via Lacewing Lab"]
+density = { value = 8000, unit = "kg/m^3" }
+youngs_modulus = { value = 193, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+yield_strength = { value = 448, unit = "MPa" }
+tensile_strength = { value = 689, unit = "MPa" }
+thermal_conductivity = { value = 16.2, unit = "W/(m*K)" }
+specific_heat = { value = 500, unit = "J/(kg*K)" }
+thermal_expansion = { value = 1.73e-05, unit = "1/K" }
+electrical_conductivity = { value = 1390000.0, unit = "S/m" }
+
+[astm_f593_group1_cw2]
+name = "ASTM F593 Group 1 (304) Condition CW2"
+type = "Metal"
+group = "Fastener"
+description = "Type 304 stainless steel bolts and screws, cold worked (F593D); 3/4 to 1 1/2 in; tensile 85-140 ksi"
+sources = ["ASTM F593 group 1 condition CW2: Portland Bolt's ASTM F593 specification summary, via Lacewing Lab"]
+density = { value = 8000, unit = "kg/m^3" }
+youngs_modulus = { value = 193, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+yield_strength = { value = 310, unit = "MPa" }
+tensile_strength = { value = 586, unit = "MPa" }
+thermal_conductivity = { value = 16.2, unit = "W/(m*K)" }
+specific_heat = { value = 500, unit = "J/(kg*K)" }
+thermal_expansion = { value = 1.73e-05, unit = "1/K" }
+electrical_conductivity = { value = 1390000.0, unit = "S/m" }
+
+[astm_f593_group2_cw1]
+name = "ASTM F593 Group 2 (316) Condition CW1"
+type = "Metal"
+group = "Fastener"
+description = "Type 316 stainless steel bolts and screws, cold worked (F593G); 1/4 to 5/8 in; tensile 100-150 ksi"
+sources = ["ASTM F593 group 2 condition CW1: Portland Bolt's ASTM F593 specification summary, via Lacewing Lab"]
+density = { value = 8000, unit = "kg/m^3" }
+youngs_modulus = { value = 193, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+yield_strength = { value = 448, unit = "MPa" }
+tensile_strength = { value = 689, unit = "MPa" }
+thermal_conductivity = { value = 16.2, unit = "W/(m*K)" }
+specific_heat = { value = 500, unit = "J/(kg*K)" }
+thermal_expansion = { value = 1.73e-05, unit = "1/K" }
+electrical_conductivity = { value = 1390000.0, unit = "S/m" }
+
+[astm_f593_group2_cw2]
+name = "ASTM F593 Group 2 (316) Condition CW2"
+type = "Metal"
+group = "Fastener"
+description = "Type 316 stainless steel bolts and screws, cold worked (F593H); 3/4 to 1 1/2 in; tensile 85-140 ksi"
+sources = ["ASTM F593 group 2 condition CW2: Portland Bolt's ASTM F593 specification summary, via Lacewing Lab"]
+density = { value = 8000, unit = "kg/m^3" }
+youngs_modulus = { value = 193, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+yield_strength = { value = 310, unit = "MPa" }
+tensile_strength = { value = 586, unit = "MPa" }
+thermal_conductivity = { value = 16.2, unit = "W/(m*K)" }
+specific_heat = { value = 500, unit = "J/(kg*K)" }
+thermal_expansion = { value = 1.73e-05, unit = "1/K" }
+electrical_conductivity = { value = 1390000.0, unit = "S/m" }
+
+# Filler metals (ADR 0078 step 2): the AWS classification's minimum all-weld-metal
+# strengths, which welds' strength checks take as F_EXX. Elastic values are the base
+# metal's family's, for completeness only.
+
+[filler_e60xx]
+name = "E60XX electrode"
+type = "Metal"
+group = "Filler metal"
+description = "AWS A5.1 SMAW carbon steel electrodes (E6010, E6013...)"
+sources = ["AWS A5.1/A5.1M, Table 4: E60XX tensile 60 ksi, yield 48 ksi"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 200, unit = "GPa" }
+poissons_ratio = { value = 0.3 }
+yield_strength = { value = 331.0, unit = "MPa" }
+tensile_strength = { value = 413.7, unit = "MPa" }
+
+[filler_e70xx]
+name = "E70XX electrode"
+type = "Metal"
+group = "Filler metal"
+description = "AWS A5.1 SMAW carbon steel electrodes (E7018...), the matching filler of common structural steels (AWS D1.1 Table 5.4)"
+sources = ["AWS A5.1/A5.1M, Table 4: E70XX tensile 70 ksi, yield 58 ksi"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 200, unit = "GPa" }
+poissons_ratio = { value = 0.3 }
+yield_strength = { value = 399.9, unit = "MPa" }
+tensile_strength = { value = 482.6, unit = "MPa" }
+
+[filler_e80xx]
+name = "E80XX electrode"
+type = "Metal"
+group = "Filler metal"
+description = "AWS A5.5 SMAW low-alloy steel electrodes (E8018-C3...)"
+sources = ["AWS A5.5/A5.5M: E80XX tensile 80 ksi, yield 67 ksi"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 200, unit = "GPa" }
+poissons_ratio = { value = 0.3 }
+yield_strength = { value = 461.9, unit = "MPa" }
+tensile_strength = { value = 551.6, unit = "MPa" }
+
+[filler_er70s_6]
+name = "ER70S-6 wire"
+type = "Metal"
+group = "Filler metal"
+description = "AWS A5.18 GMAW carbon steel solid wire"
+sources = ["AWS A5.18/A5.18M, Table 3: ER70S tensile 70 ksi, yield 58 ksi"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 200, unit = "GPa" }
+poissons_ratio = { value = 0.3 }
+yield_strength = { value = 399.9, unit = "MPa" }
+tensile_strength = { value = 482.6, unit = "MPa" }
+
+[filler_e71t_1]
+name = "E71T-1 wire"
+type = "Metal"
+group = "Filler metal"
+description = "AWS A5.20 FCAW carbon steel flux-cored wire"
+sources = ["AWS A5.20/A5.20M, Table 2: E7XT tensile 70 ksi, yield 58 ksi"]
+density = { value = 7850, unit = "kg/m^3" }
+youngs_modulus = { value = 200, unit = "GPa" }
+poissons_ratio = { value = 0.3 }
+yield_strength = { value = 399.9, unit = "MPa" }
+tensile_strength = { value = 482.6, unit = "MPa" }
+
+[filler_e308l]
+name = "E308L / ER308L"
+type = "Metal"
+group = "Filler metal"
+description = "AWS A5.4 / A5.9 austenitic stainless filler for 304 and 304L"
+sources = ["AWS A5.4/A5.4M, Table 4: E308L tensile 75 ksi"]
+density = { value = 8000, unit = "kg/m^3" }
+youngs_modulus = { value = 193, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+tensile_strength = { value = 517.1, unit = "MPa" }
+
+[filler_e309l]
+name = "E309L / ER309L"
+type = "Metal"
+group = "Filler metal"
+description = "AWS A5.4 / A5.9 stainless filler for joining stainless to carbon steel"
+sources = ["AWS A5.4/A5.4M, Table 4: E309L tensile 75 ksi"]
+density = { value = 8000, unit = "kg/m^3" }
+youngs_modulus = { value = 193, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+tensile_strength = { value = 517.1, unit = "MPa" }
+
+[filler_e316l]
+name = "E316L / ER316L"
+type = "Metal"
+group = "Filler metal"
+description = "AWS A5.4 / A5.9 austenitic stainless filler for 316 and 316L"
+sources = ["AWS A5.4/A5.4M, Table 4: E316L tensile 70 ksi"]
+density = { value = 8000, unit = "kg/m^3" }
+youngs_modulus = { value = 193, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+tensile_strength = { value = 482.6, unit = "MPa" }
+
+[filler_e2209]
+name = "E2209 / ER2209"
+type = "Metal"
+group = "Filler metal"
+description = "AWS A5.4 / A5.9 duplex stainless filler for 2205"
+sources = ["AWS A5.4/A5.4M, Table 4: E2209 tensile 100 ksi"]
+density = { value = 8000, unit = "kg/m^3" }
+youngs_modulus = { value = 193, unit = "GPa" }
+poissons_ratio = { value = 0.29 }
+tensile_strength = { value = 689.5, unit = "MPa" }
+
+[filler_er4043]
+name = "ER4043"
+type = "Metal"
+group = "Filler metal"
+description = "AWS A5.10 aluminium-silicon filler, the common one for 6061 and 6063"
+sources = ["Aluminum Design Manual 2015, Table A.3.6: 4043 filler F_tuw 24 ksi (165 MPa)"]
+density = { value = 2680, unit = "kg/m^3" }
+youngs_modulus = { value = 69, unit = "GPa" }
+poissons_ratio = { value = 0.33 }
+tensile_strength = { value = 165, unit = "MPa" }
+
+[filler_er5356]
+name = "ER5356"
+type = "Metal"
+group = "Filler metal"
+description = "AWS A5.10 aluminium-magnesium filler, stronger than 4043"
+sources = ["Aluminum Design Manual 2015, Table A.3.6: 5356 filler F_tuw 35 ksi (240 MPa)"]
+density = { value = 2640, unit = "kg/m^3" }
+youngs_modulus = { value = 71, unit = "GPa" }
+poissons_ratio = { value = 0.33 }
+tensile_strength = { value = 240, unit = "MPa" }

@@ -16,10 +16,11 @@ environment, so the adapter must set ELMER_HOME to that environment's prefix (th
 parent of the directory holding ElmerSolver). The conda package's binaries can't
 find their keyword files from the compiled-in path once relocated.
 
-Bonded contact is Elmer's production-ready contact: conformal meshes share nodes, and
-nonconformal interfaces are tied with mortar boundary conditions ("Mortar BC" pointing at
-the target boundary, "Contact Type" = tie). Mortar ties also carry heat transfer and
-magnetodynamics across nonconformal interfaces.
+Bonded contact is Elmer's production-ready contact: conformal meshes share nodes. A
+nonconformal interface would be tied with mortar boundary conditions ("Mortar BC"
+pointing at the target boundary, "Contact Type" = tie), which also carry heat transfer
+and magnetodynamics; that tie isn't written yet, so a nonconformal bond is refused and
+not claimed (ADR 0072: claimed only once a benchmark passes).
 
 Elmer's source also has slide, friction and stick contact types for ElasticSolve, but they
 are documented only through test cases (fem/tests/Contact*) and need a hand-tuned
@@ -41,6 +42,7 @@ from puzzle.adapters.base import (
     REMOTE_FEATURES,
     STRUCTURAL_FEATURES,
     SUPPORT_FEATURES,
+    SYMMETRY_FEATURES,
     THERMAL_FEATURES,
     VECTOR_FIELD_FEATURES,
     VECTOR_LOAD_FEATURES,
@@ -71,6 +73,7 @@ class ElmerAdapter(SolverAdapter):
             "electromagnetic_waves": frozenset({"frequency_domain"}),
         },
         features=STRUCTURAL_FEATURES
+        | SYMMETRY_FEATURES  # ADR 0081
         | THERMAL_FEATURES
         | HEAT_SOURCE_FEATURES  # ADR 0047
         | ELECTROMAGNETIC_FEATURES
@@ -88,11 +91,12 @@ class ElmerAdapter(SolverAdapter):
                 "rotation:cartesian",
                 "rotation:cylindrical",
                 "displacement:cartesian",
+                "symmetry:oblique",  # Normal-Tangential Displacement (ADR 0081)
                 "displacement:cylindrical",
                 "force:cartesian",
             }
         ),  # ADR 0037: local axes
-        contacts=frozenset({"bonded_conformal", "bonded_nonconformal"}),
+        contacts=frozenset({"bonded_conformal"}),  # a mortar tie isn't written yet
         experimental=frozenset({"frictionless", "frictional", "rough"}),
         couplings=frozenset({"thermal_expansion", "joule_heating"}),
         dimensions=frozenset({"3d", "2d_planar", "2d_axisymmetric"}),
@@ -127,6 +131,25 @@ class ElmerAdapter(SolverAdapter):
                 "preconditioner", "Preconditioner", "Linear System Preconditioning", "choice",
                 "default", PRECONDITIONERS, power=True,
                 description="For iterative methods: ILU levels trade memory for iterations.",
+            ),
+            # Convergence of nonlinear solves (temperature tables, nonlinear magnetics).
+            SolverSetting(
+                "relaxation", "Relaxation factor", "Nonlinear System Relaxation Factor",
+                "number", 1.0, maximum=1.0,
+                description="Each nonlinear iteration moves this fraction of the way to its "
+                "new solution: below 1 steadies an iteration that oscillates.",
+            ),
+            SolverSetting(
+                "newton_after_iterations", "Newton after", "Nonlinear System Newton After "
+                "Iterations", "integer", None, unit="iterations",
+                description="Switch from fixed-point (Picard) iterations to Newton after "
+                "this many: Picard is robust far from the answer, Newton fast near it.",
+            ),
+            SolverSetting(
+                "newton_after_tolerance", "Newton below", "Nonlinear System Newton After "
+                "Tolerance", "number", None, power=True,
+                description="Switch to Newton once the change between iterations is below "
+                "this.",
             ),
         ]  # fmt: skip
 
@@ -190,7 +213,9 @@ class ElmerAdapter(SolverAdapter):
         script = input_file.parent / "run-mpi.sh"
         script.write_text(
             f"ElmerGrid 2 2 {MESH_DIR} -metiskway {n} > partition.log 2>&1 || exit 1\n"
-            f"exec mpirun --oversubscribe -np {n} ElmerSolver_mpi {input_file.name}\n"
+            f"exec mpirun --oversubscribe -np {n} ElmerSolver_mpi {input_file.name}\n",
+            encoding="utf-8",
+            newline="\n",  # run by sh in a Linux container: CRLF breaks it
         )
         return ["sh", script.name]
 
@@ -212,9 +237,11 @@ class ElmerAdapter(SolverAdapter):
                 coords = np.load(mesh_dir / "puzzle-node-coords.npy")
                 return read_axisymmetric(vtus, mesh_dir, node_ids, coords)
             return read_magnetics(vtus, mesh_dir, node_ids)
-        results = read_series(vtus, times, node_ids, log.read_text() if log.exists() else "")
+        results = read_series(
+            vtus, times, node_ids, log.read_text(encoding="utf-8") if log.exists() else ""
+        )
         if (mesh_dir / THERMAL_ZZ).exists():
-            _thermal_zz(results, json.loads((mesh_dir / THERMAL_ZZ).read_text()))
+            _thermal_zz(results, json.loads((mesh_dir / THERMAL_ZZ).read_text(encoding="utf-8")))
         return results
 
 

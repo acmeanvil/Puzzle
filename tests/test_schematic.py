@@ -95,7 +95,8 @@ def test_use_wires_show_sharing_with_a_count(bracket):
     assert users == {"Thermal", "Static", "Modal"}
     assert comp.used_by == 3
     into = [w for w in s.wires if w.kind == "use" and w.target == comp.id]
-    assert {s.nodes[w.source].kind for w in into} == {"geometry", "mesh", "material"}
+    # and its loads and supports, nodes of their own (ADR 0071 decision 8)
+    assert {s.nodes[w.source].kind for w in into} == {"geometry", "mesh", "material", "feature"}
     study_in = next(w for w in s.wires if w.kind == "use" and s.nodes[w.target].kind == "study")
     assert study_in.target_port == "component"
     assert any("used by Modal, Static, Thermal" in line for line in s.flow_lines())
@@ -112,23 +113,28 @@ def test_upstream_and_downstream(bracket):
     assert {"Static", "Thermal", "bracket.step", "Al 6061-T6", "Tets"} <= up
 
 
-def test_small_references_are_chips_naming_their_other_users(bracket):
+def test_small_references_are_nodes_wired_to_their_users(bracket):
+    """Coordinate systems, amplitudes and the like were chips; they are nodes now, so they
+    can be wired (ADR 0071 decision 8), each with a socket to draw from."""
     amp = bracket.add(Amplitude(name="Ramp", points=[(0.0, 0.0), (1.0, 1.0)]))
     cs = bracket.add(CoordinateSystem(name="Flange"))
     comp = bracket.of_type(Component)[0]
     comp.physics[0].features[0].amplitude = amp.id
     comp.physics[0].features[0].axes = cs.id
     s = schematic.build(bracket)
-    node = s.node_of(str(comp.id))
-    assert {"Amplitude: Ramp", "CS: Flange"} <= set(node.chips)
-    assert node.tips["CS: Flange"] == "Used here only"
-    assert not any(n.label in ("Ramp", "Flange") for n in s.nodes.values())
+    load = f"feature:{comp.id}:physics.0.features.0"
+    for obj in (amp, cs):
+        node = s.nodes[str(obj.id)]
+        assert node.kind in ("amplitude", "axes") and node.port("use") is not None
+        assert any(w.kind == "use" and w.source == node.id and w.target == load
+                   for w in s.wires)  # into the load that uses it  # fmt: skip
+    assert not s.node_of(str(comp.id)).chips
 
 
 def test_files_missing_from_the_project_folder_are_marked(bracket, tmp_path):
     s = schematic.build(bracket, root=tmp_path)
     assert _by_label(s, "bracket.step").state == "missing"
-    (tmp_path / "bracket.step").write_text("")
+    (tmp_path / "bracket.step").write_text("", encoding="utf-8")
     assert _by_label(schematic.build(bracket, root=tmp_path), "bracket.step").state == "complete"
 
 
@@ -166,7 +172,9 @@ def test_tree_groups_are_frames_and_fold_into_one_node(bracket):
     node = folded.nodes[f"group:{group.id}"]
     assert node.label == "Structural"
     heat = next(w for w in folded.wires if w.kind == "data")
-    assert heat.target == node.id and heat.target_port == "in"  # the transfer, rerouted
+    # The transfer, rerouted to the study's own socket on the folded node (ADR 0071).
+    assert heat.target == node.id and heat.target_port.split("::")[0] in studies
+    assert node.port(heat.target_port) is not None
     assert not any(w.source == w.target for w in folded.wires)
 
 
@@ -184,7 +192,8 @@ def test_imported_fields_are_resources_wired_into_what_they_drive(bracket, tmp_p
     assert schematic.COLUMNS[node.column] == "Resources"
     assert any(w.source == "file:fields/p.csv" and w.target == node.id for w in s.wires)
     wire = next(w for w in s.wires if w.kind == "data" and w.source == node.id)
-    assert wire.target == str(comp.id) and wire.label == "p ×1.2"
+    # into the load it drives, a node of its own (ADR 0071 decision 8)
+    assert wire.target == f"feature:{comp.id}:physics.1.features.0" and wire.label == "p ×1.2"
     assert s.nodes[wire.target].port(wire.target_port).side == "in"
     hidden = schematic.build(bracket, fields=False)
     assert hidden.node_of(str(field.id)) is None and "file:fields/p.csv" not in hidden.nodes
@@ -291,3 +300,45 @@ def test_the_cli_and_the_agent_read_the_same_schematic(bracket, tmp_path, capsys
     carried = {w["carries"] for w in data["wires"] if w["kind"] == "data"}
     assert "temperature, last step, interpolate" in carried
     assert {n["column"] for n in data["nodes"]} == {"Inputs", "Resources", "Models", "Studies"}
+
+
+def test_a_folded_cluster_shows_its_own_ports(tmp_path):
+    """ADR 0071, user operators: a group of Reduce feeding Check folds into one node
+    whose sockets are the cluster's: Reduce's result (wired from the study), Check's open
+    limit, Check's verdict and margin; Reduce's value, used only inside, is hidden."""
+    from uuid import uuid4
+
+    from puzzle.model.schema import Operator, OperatorInput, Project, Study
+
+    p = Project(name="p")
+    study = p.add(Study(name="Load", component=uuid4(), solver="calculix", steps=[]))
+    peak = p.add(
+        Operator(
+            name="Peak",
+            type="reduce",
+            quantity="stress:von_mises",
+            inputs={"result": OperatorInput(source=study.id, port="result")},
+        )
+    )
+    check = p.add(
+        Operator(
+            name="Strength",
+            type="check",
+            inputs={"value": OperatorInput(source=peak.id, port="out")},
+        )
+    )
+    group = p.add(TreeGroup(name="Stress check", section="Operators",
+                            members=[str(peak.id), str(check.id)]))  # fmt: skip
+    folded = schematic.build(p, folded=frozenset({str(group.id)}))
+    node = folded.nodes[f"group:{group.id}"]
+    labels = {(q.side, q.label) for q in node.ports}
+    assert ("in", "Peak: Result") in labels and ("in", "Strength: Limit") in labels
+    assert ("out", "Strength: Verdict") in labels and ("out", "Strength: Margin") in labels
+    assert ("out", "Peak: Value") not in labels and ("in", "Strength: Value") not in labels
+    wire = next(w for w in folded.wires if w.target == node.id and w.kind == "data")
+    assert wire.target_port == f"{peak.id}::result"
+    assert {n.id for n in node.inside} == {str(peak.id), str(check.id)}
+    from puzzle.gui.schematic_view import unfold
+
+    member, port = unfold(node, f"{check.id}::limit")
+    assert member.id == str(check.id) and port == "limit"

@@ -76,6 +76,22 @@ def rows(w):
     }
 
 
+def test_the_resting_mouse_reads_the_nearest_node(app, window):
+    w = window
+    bar = w.results_bar
+    bar.field.setCurrentIndex(bar.field.findData("stress:von_mises"))
+    view = w.viewport
+    at_max = np.asarray(view._extremes[0][0])  # where the deformed view shows the maximum
+    near = view.hover_at(at_max + 1e-5)  # a little off the node: still that node
+    assert near["value"] == pytest.approx(view.shown["max"], rel=1e-9)
+    assert near["text"].startswith(f"Node {near['node']}: ") and near["text"].endswith(" MPa")
+    assert np.allclose(near["at"], at_max)
+    view._hover(at_max, None)
+    assert view.shown["hover"] == near["text"]
+    view._hover(None, None)
+    assert view.shown["hover"] is None
+
+
 def test_extremes_probe_and_kept_probe(app, window):
     w = window
     bar = w.results_bar

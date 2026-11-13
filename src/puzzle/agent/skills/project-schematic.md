@@ -59,3 +59,22 @@ One study's result into another, one `submit`:
   nodes: look for them in `chips`.
 - Operators (Reduce, Check, Plot, ...) are nodes of kind Operator in the Results column,
   their wires data wires; to make or read them, see the skill `schematic-operators`.
+
+
+## Building in the schematic (ADR 0071 decision 8)
+
+The schematic builds a project as the tree does. To wire one object into another (a
+material onto a component, a mesh recipe onto a component, a component into a study, a
+coordinate system or amplitude onto a component's load, a study onto a result tool, a
+construction plane onto a result tool, a bolt type onto a bolt), call `link` with the
+two names: it applies the one thing the wire can mean, or returns `choices` (index and
+label, such as "Material of Bracket (new)" or "Coordinate system of Pressure on
+Bracket/Inner") to pass back as `which`. A wire that fits nowhere says what the target
+takes. `unlink` removes a reference; one an object can't be without (a study's
+component, a component's mesh recipe) is refused, so link another in to replace it.
+Coordinate systems, amplitudes, bolt types, construction geometry and result tools are
+nodes of their own now, wired to what uses them, and so is every load and support
+("Pressure on Bracket/Inner", wired into its component). To wire onto one load, pass
+`feature` with its name as shown (or its path, physics.0.features.1): a coordinate
+system or amplitude goes onto that load, and a geometry sets where it acts ("Acts on
+Bracket/Outer"). Create objects with `submit` as usual.

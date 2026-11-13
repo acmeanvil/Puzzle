@@ -65,7 +65,7 @@ def test_no_colour_literals_outside_the_theme():
     for path in [*sorted(GUI.glob("*.py")), *TOKENED]:
         if path.name == "theme.py":
             continue
-        for n, line in enumerate(path.read_text().splitlines(), 1):
+        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             if LITERAL.search(line):
                 found.append(f"{path.name}:{n}: {line.strip()}")
     assert found == []
@@ -455,3 +455,15 @@ def test_progress_tickers_go_with_their_job(app, window):
         spin(app, 0.05)
     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     assert seen == [1] and task.ticker is None and len(tickers()) == before
+
+
+def test_wizards_follow_the_theme():
+    """QWizard's default style on Windows (Aero) paints white pages over the palette,
+    so a wizard looked light in dark mode (I6); each sets ModernStyle."""
+    import re
+
+    gui = Path(__file__).parents[1] / "src" / "puzzle" / "gui"
+    for path in gui.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        if re.search(r"class \w+\(QWizard\)", text):
+            assert "WizardStyle.ModernStyle" in text, path.name

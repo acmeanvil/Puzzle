@@ -44,6 +44,11 @@ mapped onto the first case's mesh. Fatigue (`fatigue`) and error estimates
      "250e6 / von_mises"}}`. `source_point` names a sweep point and `source_step` a
      step (−1 the last). `unit` is the unit kind of the value (`pressure`, `length`),
      left out for a ratio.
+   - An equation with a value from elsewhere: `"inputs": [{"name": "B", "source":
+     "<operator or result tool id>", "port": "out"}]` makes `B` usable in the
+     expression (`"von_mises / B"`): the one number that operator gives (a Model value's
+     yield strength, a Reduce over another run, a check's margin), in SI. A table, list
+     or field there is refused: reduce it to a number first.
 3. Before writing an expression: `equation_names(study)` gives the names a study's
    newest run offers (`von_mises`, `deformation`, `deformation_y`, `stress_xx`,
    `stress_p1`, `temperature`), the project parameters, and the functions.
@@ -84,4 +89,4 @@ Everything is SI: stresses in Pa, lengths in m, temperatures in K. Write `250e6`
 - A field that only some cases have is left out of the combination (a warning says so).
 - An equation referring to itself through another derived result: refused.
 
-In the GUI: Results → New combination… or New equation…, or right-click a study.
+In the GUI: Results → Combinations and fatigue → New combination… or New equation…, or right-click a study.

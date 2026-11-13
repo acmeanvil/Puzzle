@@ -34,7 +34,6 @@ from PySide6.QtWidgets import (
     QStyledItemDelegate,
     QTableWidget,
     QTableWidgetItem,
-    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -143,8 +142,9 @@ class SetupTab(QWidget):
         self.table.setItemDelegate(_Delegate(self))
         self.table.itemSelectionChanged.connect(self._selected)
         layout.addWidget(self.table, 1)
-        self.empty = role(QLabel("No contacts yet: a component's Find contacts…, or Model → "
-                                 "Add contact…"), "muted")  # fmt: skip
+        self.empty = role(QLabel("No contacts yet: Model → Contacts → Find contacts… "
+                                 "(where parts or bodies touch), or Add contact… (two "
+                                 "face selections)"), "muted")  # fmt: skip
         layout.addWidget(self.empty)
 
     def _solvers(self, project) -> None:
@@ -633,7 +633,9 @@ class ContactPanel(QWidget):
         self.window = window
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        self.tabs = QTabWidget()
+        from puzzle.gui.docking import ScrollTabs
+
+        self.tabs = ScrollTabs()  # its pages scroll rather than hold the window tall
         self.setup = SetupTab(window)
         self.initial = InitialTab(window)
         self.tabs.addTab(self.setup, "Setup")

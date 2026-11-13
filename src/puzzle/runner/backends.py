@@ -52,14 +52,14 @@ def solve_script(job: Job) -> str:
 def write_script(job: Job) -> Path:
     folder = Path(job.spec["dir"])
     path = folder / SCRIPT
-    path.write_text(solve_script(job))
+    path.write_text(solve_script(job), encoding="utf-8", newline="\n")  # run by sh
     (folder / RC).unlink(missing_ok=True)
     return path
 
 
 def read_rc(job: Job) -> int | None:
     try:
-        return int((Path(job.spec["dir"]) / RC).read_text().strip())
+        return int((Path(job.spec["dir"]) / RC).read_text(encoding="utf-8").strip())
     except (OSError, ValueError):
         return None
 
@@ -296,7 +296,7 @@ class PsijBackend:
         out = work / f"{job.native_id}.out"
         if job.exit_code is None and job.state != "cancelled" and not job.message:
             with contextlib.suppress(OSError):  # the job never got to our script: why
-                lines = [x for x in out.read_text(errors="replace").splitlines()
+                lines = [x for x in out.read_text(errors="replace", encoding="utf-8").splitlines()
                          if x.strip() and x != "_PSI_J_LAUNCHER_DONE"]  # fmt: skip
                 job.message = "; ".join(lines[-3:])
         keep = getattr(self.executor.config, "keep_files", False)  # PSIJ_BATCH_KEEP_FILES
@@ -385,7 +385,9 @@ def _pbs_status(executor):
 
 def _run(argv: list[str]) -> str | None:
     try:
-        done = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+        done = subprocess.run(
+            argv, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60
+        )
     except (OSError, subprocess.TimeoutExpired):
         return None
     return done.stdout if done.returncode == 0 else None

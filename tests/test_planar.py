@@ -62,6 +62,52 @@ def test_quadrilaterals_are_eight_noded(tmp_path):
     assert "quad8" in mesh.element_counts() and "quad9" not in mesh.element_counts()
 
 
+def _sawtooth(dimension="2d_axisymmetric", **recipe):
+    """A thread-like face (five 60Â° teeth), where recombining alone leaves triangles."""
+    pts = [[4e-3, 0.0]]
+    for k in range(5):
+        z = k * 2e-3
+        pts += [[8e-3, z + 0.25e-3], [9e-3, z + 0.8e-3], [9e-3, z + 1.2e-3], [8e-3, z + 1.75e-3]]
+    pts += [[8e-3, 10e-3], [4e-3, 10e-3]]
+    p = Project(name="teeth")
+    geo = p.add(
+        Geometry(
+            name="T",
+            history=[
+                HistoryStep(kind="face", name="T", args={"profile": {"points": pts}}),
+            ],
+            selections=[NamedSelection(name="Bore", entity="edge", members=["T/side-23"])],
+        )
+    )
+    mesh = p.add(MeshRecipe(name="Mesh", global_size=Quantity(value=0.4, unit="mm"),
+                            element_shape="hexahedra", element_order=1, **recipe))  # fmt: skip
+    c = p.add(Component(name="T", dimension=dimension, mesh=mesh.id,
+                        parts=[PartInstance(name="T", geometry=geo.id)]))  # fmt: skip
+    return p, c
+
+
+def _faces(mesh):
+    return {k: v for k, v in mesh.element_counts().items() if not k.startswith("line")}
+
+
+def test_quadrilaterals_are_all_quadrilaterals_by_default(tmp_path):
+    p, c = _sawtooth()
+    faces = _faces(generate_mesh(p, c.id, tmp_path, tmp_path / "m").mesh)
+    assert set(faces) == {"quad4"}
+    mixed_p, mixed_c = _sawtooth(quadrilaterals="mixed")
+    mixed = _faces(generate_mesh(mixed_p, mixed_c.id, tmp_path, tmp_path / "x").mesh)
+    assert mixed.get("tri3", 0) > 0  # what recombining alone leaves
+    # Meshed at twice the size and split: about the same number of elements.
+    assert 0.7 < faces["quad4"] / sum(mixed.values()) < 1.5
+
+
+def test_all_quadrilaterals_keep_a_transfinite_count(tmp_path):
+    p, c = _sawtooth(controls=[{"kind": "transfinite", "selection": "T/Bore", "count": 12}])
+    mesh = generate_mesh(p, c.id, tmp_path, tmp_path / "m").mesh
+    bore = mesh.node_coords(mesh.groups["T/Bore"].node_ids)
+    assert len(bore) == 13 and np.allclose(bore[:, 0], 4e-3)
+
+
 def test_faces_off_the_xy_plane_are_refused(tmp_path):
     p, c = _plate(z=0.01)
     with pytest.raises(MeshError, match="XY plane") as err:

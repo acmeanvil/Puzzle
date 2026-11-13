@@ -1,8 +1,8 @@
 """Draw Puzzle's app icon and start-page picture: jigsaw pieces meshed by Gmsh and
 coloured like results, so the mark says both "puzzle" and "finite elements".
 
-Writes into src/puzzle/gui/art/: icon.svg, icon.png (1024 px), Puzzle.icns (macOS,
-when iconutil is there) and start.svg. Run with the dev env's Python:
+Writes into src/puzzle/gui/art/: icon.svg, icon.png (1024 px), Puzzle.ico (Windows),
+Puzzle.icns (macOS, when iconutil is there) and start.svg. Run with the dev env's Python:
 
     pixi run -e dev python scripts/make_art.py
 """
@@ -243,15 +243,27 @@ def icns(svg: Path, dest: Path) -> None:
         subprocess.run(["iconutil", "-c", "icns", str(folder), "-o", str(dest)], check=True)
 
 
+def ico(svg: Path, dest: Path) -> None:
+    """Windows' icon (the installer's Start-menu entry, ADR 0068), from a 256 px render."""
+    from PIL import Image
+
+    with tempfile.TemporaryDirectory() as tmp:
+        png = Path(tmp) / "icon.png"
+        render_png(svg, png, 256)
+        sizes = [(px, px) for px in (16, 24, 32, 48, 64, 128, 256)]
+        Image.open(png).save(dest, format="ICO", sizes=sizes)
+
+
 def main() -> None:
     import os
 
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     ART.mkdir(parents=True, exist_ok=True)
-    (ART / "icon.svg").write_text(icon())
-    (ART / "start.svg").write_text(start())
+    (ART / "icon.svg").write_text(icon(), encoding="utf-8")
+    (ART / "start.svg").write_text(start(), encoding="utf-8")
     render_png(ART / "icon.svg", ART / "icon.png", 1024)
     icns(ART / "icon.svg", ART / "Puzzle.icns")
+    ico(ART / "icon.svg", ART / "Puzzle.ico")
 
 
 if __name__ == "__main__":

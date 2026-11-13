@@ -27,7 +27,8 @@ solved it).
 
 Linear algebra: PETSc (MUMPS, SLEPc) where dolfinx was built with it; otherwise SciPy
 (SuperLU, ARPACK), e.g. conda-forge's Windows dolfinx, which has no PETSc.
-PUZZLE_FENICSX_BACKEND=scipy forces the SciPy path.
+PUZZLE_FENICSX_BACKEND=scipy forces the SciPy path; there, MKL PARDISO factors when
+pypardiso is installed (Windows), and PUZZLE_FENICSX_LU=superlu forces SuperLU.
 """
 
 from __future__ import annotations
@@ -55,9 +56,50 @@ except ImportError:
     BACKEND = "scipy"
     LU_PACKAGE = "superlu"
 
+# MKL PARDISO for the SciPy path where conda-forge has pypardiso (win-64 with no PETSc:
+# SuperLU is single-threaded and stalled 3D cases; ADR 0072). Complex systems stay on
+# SuperLU, which pypardiso doesn't take.
+try:
+    if os.environ.get("PUZZLE_FENICSX_LU") == "superlu":  # for comparing, and testing
+        raise ImportError("SuperLU requested")
+    import pypardiso
+except ImportError:
+    pypardiso = None
+if BACKEND == "scipy" and pypardiso is not None:
+    LU_PACKAGE = "pardiso"
+
+
+def _spsolve(A, b):
+    """A x = b for a real sparse A: PARDISO when there, else SuperLU."""
+    if pypardiso is not None:
+        return pypardiso.spsolve(A.tocsr(), np.asarray(b, dtype=float))
+    from scipy.sparse.linalg import spsolve
+
+    return spsolve(A.tocsc(), b)
+
+
+class _Factor:
+    """A real sparse matrix factored once, solved many times (SuperLU's splu shape)."""
+
+    def __init__(self, A):
+        if pypardiso is not None:
+            self.A = A.tocsr()
+            self.pardiso = pypardiso.PyPardisoSolver()
+            self.pardiso.factorize(self.A)
+            self.lu = None
+        else:
+            from scipy.sparse.linalg import splu
+
+            self.lu, self.pardiso = splu(A.tocsc()), None
+
+    def solve(self, b):
+        if self.pardiso is not None:
+            return self.pardiso.solve(self.A, np.asarray(b, dtype=float))
+        return self.lu.solve(b)
+
 
 def main() -> None:
-    with open("case.json") as f:
+    with open("case.json", encoding="utf-8") as f:
         case = json.load(f)
     SETTINGS.update(case.get("settings", {}))
     planar = case.get("dimension", "3d") != "3d"  # ADR 0048: a 2D model in the XY plane
@@ -121,7 +163,8 @@ def main() -> None:
         if transient
         else None,
     )
-    out: dict[str, np.ndarray] = {"backend": np.array(BACKEND)}
+    out: dict[str, np.ndarray] = {"backend": np.array(BACKEND), "lu": np.array(LU_PACKAGE)}
+    print(f"puzzle: linear solver {BACKEND} ({LU_PACKAGE})", flush=True)
     solve = {
         "solid_mechanics": solve_solid,
         "heat_transfer": solve_heat,
@@ -140,6 +183,8 @@ def main() -> None:
         solve_solid_2d(case, msh, degree, dx, ds, facets, tag, piecewise, out)
     elif case["physics"] == "heat_transfer":
         solve_heat(case, msh, degree, dx, ds, facets, tag, of_temperature, out)
+    elif case.get("mixed_up"):  # ADR 0082: Taylor-Hood displacement and pressure
+        solve_solid_mixed(case, msh, degree, dx, ds, facets, tag, piecewise, out)
     else:
         solve(case, msh, degree, dx, ds, facets, tag, piecewise, out)
     if not transient and step["type"] != "frequency_domain":  # one solve: one increment
@@ -186,7 +231,7 @@ def emit(kind: str, **data) -> None:
 
 def load_trackers() -> None:
     if os.path.exists("trackers.json"):
-        with open("trackers.json") as f:
+        with open("trackers.json", encoding="utf-8") as f:
             TRACKERS[:] = json.load(f)
 
 
@@ -250,8 +295,6 @@ def solve_linear(a, L, bcs, V, name: str, *, mass_matrix: bool = False) -> fem.F
         )
         return problem.solve()
 
-    from scipy.sparse.linalg import spsolve
-
     a_form, L_form = fem.form(a), fem.form(L)
     A = fem.assemble_matrix(a_form, bcs=bcs)
     A.scatter_reverse()
@@ -274,7 +317,7 @@ def solve_linear(a, L, bcs, V, name: str, *, mass_matrix: bool = False) -> fem.F
             raise SystemExit(f"projection did not converge (cg info {info})")
         uh.x.array[:n] = solution
     else:
-        uh.x.array[:n] = spsolve(matrix.tocsc(), b.array[:n])
+        uh.x.array[:n] = _spsolve(matrix, b.array[:n])
     uh.x.scatter_forward()
     return uh
 
@@ -305,11 +348,9 @@ class Factored:
             ksp.getPC().setFactorSolverType(LU_PACKAGE)
             self.solver, self.matrix = ksp, A
         else:
-            from scipy.sparse.linalg import splu
-
             A = fem.assemble_matrix(self.a, bcs=self.bcs)
             A.scatter_reverse()
-            self.solver = splu(A.to_scipy().tocsc())
+            self.solver = _Factor(A.to_scipy())
 
     def solve(self, L=None) -> fem.Function:
         """With the matrix factored once; `L` another right-hand side (a compiled form)."""
@@ -556,6 +597,8 @@ def solve_solid(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
             add_load(rho * ufl.inner(b, v) * dx(tag(f["group"])), f)
 
     out["coords"] = V.tabulate_dof_coordinates()
+    if case.get("threads"):  # coincident nodes on the thread's faces: map by node
+        out["node_ids"] = dof_nodes(V)
     if case["step"]["type"] in ("transient", "frequency_domain"):
         rho = piecewise("density")
         stress = _stress_projector(msh, degree, dx, sigma, V)
@@ -572,7 +615,11 @@ def solve_solid(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
         out["modes"] = np.asarray([vectors[i].reshape(-1, 3) for i in order])
         return
 
-    uh = solve_linear(a, L, bcs, V, "u")
+    if case.get("threads") or case.get("welds"):  # ADR 0076, 0078: springs added to K
+        uh = solve_threaded(case.get("threads", []), a, L, bcs, V, facets, tag,
+                            welds=case.get("welds", []))  # fmt: skip
+    else:
+        uh = solve_linear(a, L, bcs, V, "u")
     out["displacement"] = uh.x.array.reshape(-1, 3)
 
     # Nodal stress: L2 projection of the stress components onto the displacement's nodes.
@@ -584,6 +631,88 @@ def solve_solid(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
     p, q = ufl.TrialFunction(S), ufl.TestFunction(S)
     mass, rhs = ufl.inner(p, q) * dx, ufl.inner(voigt, q) * dx
     out["stress"] = solve_linear(mass, rhs, [], S, "s", mass_matrix=True).x.array.reshape(-1, 6)
+
+
+def solve_solid_mixed(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
+    """Static elasticity in displacement and pressure (ADR 0082's mixed u-p): Taylor-Hood
+    P2 u and P1 p, p = -lambda div u, so
+        int 2 mu eps(u):eps(v) - p div v - q div u - p q / lambda dx = L(v),
+    which stays well posed as nu -> 0.5, where the displacement form locks. The stress
+    is 2 mu eps(u) - p I, projected onto the displacement's nodes."""
+    import basix.ufl
+
+    cell = msh.basix_cell()
+    Pu = basix.ufl.element("Lagrange", cell, 2, shape=(3,))
+    Pp = basix.ufl.element("Lagrange", cell, 1)
+    W = fem.functionspace(msh, basix.ufl.mixed_element([Pu, Pp]))
+    Vu, _ = W.sub(0).collapse()
+    E, nu = piecewise("youngs_modulus"), piecewise("poissons_ratio")
+    mu = E / (2 * (1 + nu))
+    lmbda = E * nu / ((1 + nu) * (1 - 2 * nu))
+
+    def eps(w):
+        return ufl.sym(ufl.grad(w))
+
+    u, p = ufl.TrialFunctions(W)
+    v, q = ufl.TestFunctions(W)
+    a = (2 * mu * ufl.inner(eps(u), eps(v)) - p * ufl.div(v) - q * ufl.div(u)
+         - p * q / lmbda) * dx  # fmt: skip
+    n = ufl.FacetNormal(msh)
+    L = ufl.inner(fem.Constant(msh, np.zeros(3)), v) * dx
+    bcs = []
+
+    def hold(value, where, i=None):
+        sub = W.sub(0) if i is None else W.sub(0).sub(i)
+        S, _ = sub.collapse()
+        target = fem.Function(S)
+        target.x.array[:] = value
+        dofs = fem.locate_dofs_topological((sub, S), 2, where)
+        bcs.append(fem.dirichletbc(target, dofs, sub))
+
+    for f in case["features"]:
+        where, vals = facets.find(tag(f["group"])), f.get("values", {})
+        if f["type"] == "fixed":
+            hold(0.0, where)
+        elif f["type"] == "displacement":
+            if "cylindrical" in f or any(isinstance(vals.get(c), fem.Function) for c in "xyz"):
+                raise SystemExit("mixed u-p takes constant Cartesian displacements only")
+            for i, axis in enumerate("xyz"):
+                if axis in vals:
+                    hold(float(vals[axis]), where, i)
+        elif f["type"] == "force":
+            traction = np.array([vals.get(c, 0.0) for c in "xyz"]) / f["area"]
+            L += ufl.inner(fem.Constant(msh, traction), v) * ds(tag(f["group"]))
+        elif f["type"] == "pressure":
+            L += -vals["p"] * ufl.inner(n, v) * ds(tag(f["group"]))
+        elif f["type"] == "traction":
+            t = vector_value(msh, [vals.get(c, 0.0) for c in ("tx", "ty", "tz")])
+            L += ufl.inner(t, v) * ds(tag(f["group"]))
+        elif f["type"] == "body_force":
+            b = vector_value(msh, [vals.get(c, 0.0) for c in ("fx", "fy", "fz")])
+            L += ufl.inner(b, v) * dx(tag(f["group"]))
+        elif f["type"] in ("gravity", "acceleration", "rotation"):
+            load, rho = f["load"], piecewise("density")
+            if load["uniform"] is not None:
+                b = fem.Constant(msh, np.asarray(load["uniform"], dtype=float))
+            else:
+                x = ufl.SpatialCoordinate(msh)
+                c, axis = ufl.as_vector(load["centre"]), ufl.as_vector(load["axis"])
+                d = x - c
+                b = load["omega"] ** 2 * (d - ufl.dot(d, axis) * axis)
+            L += rho * ufl.inner(b, v) * dx(tag(f["group"]))
+        else:
+            raise SystemExit(f"mixed u-p doesn't take {f['type']} features")
+
+    wh = solve_linear(a, L, bcs, W, "u")
+    uh, ph = wh.sub(0).collapse(), wh.sub(1).collapse()
+    out["coords"] = Vu.tabulate_dof_coordinates()
+    out["displacement"] = uh.x.array.reshape(-1, 3)
+    S = fem.functionspace(msh, ("Lagrange", degree, (6,)))
+    s = 2 * mu * eps(uh) - ph * ufl.Identity(3)
+    voigt = ufl.as_vector([s[0, 0], s[1, 1], s[2, 2], s[0, 1], s[1, 2], s[2, 0]])
+    trial, test = ufl.TrialFunction(S), ufl.TestFunction(S)
+    out["stress"] = solve_linear(ufl.inner(trial, test) * dx, ufl.inner(voigt, test) * dx, [],
+                                 S, "s", mass_matrix=True).x.array.reshape(-1, 6)  # fmt: skip
 
 
 # --- structural dynamics (ADR 0041) -----------------------------------------------------
@@ -615,15 +744,165 @@ def _held(bcs, size: int) -> tuple[np.ndarray, np.ndarray]:
     return held, values[held]
 
 
+# --- threaded contacts (ADR 0076) ----------------------------------------------------
+# The flanks are springs between node pairs of two faces meshed apart, k n n^T coupling
+# the screw's and nut's dofs, added to the matrix after assembly. The system is solved
+# with SciPy on either backend, the held dofs eliminated, as the dynamics are.
+
+
+def _face_dofs(V, facets, group: int, xyz) -> np.ndarray:
+    """The dof blocks (nodes) of V nearest each point among those on the facets tagged
+    `group`: the screw's and nut's faces coincide, so each is looked up on its own."""
+    from scipy.spatial import cKDTree
+
+    fdim = V.mesh.topology.dim - 1
+    blocks = fem.locate_dofs_topological(V, fdim, facets.find(group))
+    coords = V.tabulate_dof_coordinates()[blocks]
+    points = np.asarray(xyz, dtype=float)
+    distance, index = cKDTree(coords).query(points)
+    span = float(np.ptp(coords, axis=0).max()) or 1.0
+    if len(distance) and distance.max() > 1e-6 * span:
+        raise SystemExit(f"a thread's node is {distance.max():.3g} m from its face's dofs")
+    return np.asarray(blocks)[index]
+
+
+def dof_nodes(V) -> np.ndarray:
+    """Each dof block's mesh node id (mesh.msh's node tag), for a space of the mesh's
+    own degree: positions alone can't tell apart the coincident nodes of two faces
+    meshed apart. The reader checks them against the positions."""
+    msh = V.mesh
+    geometry = np.asarray(msh.geometry.dofmap)
+    blocks = np.asarray(V.dofmap.list)
+    if blocks.shape != geometry.shape:
+        return np.zeros(0, dtype=np.int64)
+    node = np.full(V.dofmap.index_map.size_local + V.dofmap.index_map.num_ghosts, -1)
+    node[blocks.ravel()] = geometry.ravel()
+    return np.asarray(msh.geometry.input_global_indices, dtype=np.int64)[node] + 1
+
+
+def _thread_springs(threads, V, facets, tag) -> list[dict]:
+    """Per contact and flank: the screw's and nut's dofs (pair x component), the
+    normals in the model's components, the stiffness, and for a unilateral flank its
+    clearance and tension slack."""
+    bs = V.dofmap.index_map_bs
+    out = []
+    for t in threads:
+        screw = _face_dofs(V, facets, tag(t["screw"]), t["screw_xyz"])
+        nut = _face_dofs(V, facets, tag(t["nut"]), t["nut_xyz"])
+        for fl in t["flanks"]:
+            out.append({
+                "s": screw[:, None] * bs + np.arange(bs), "t": nut[:, None] * bs + np.arange(bs),
+                "n": np.asarray(fl["normals"], dtype=float)[:, :bs],
+                "k": np.asarray(fl["stiffness"], dtype=float),
+                "unilateral": t["kind"] == "frictionless", "clearance": t["clearance"],
+                "slack": t["slack"], "name": t["name"],
+            })  # fmt: skip
+    return out
+
+
+def _spring_system(springs, active, size: int):
+    """The springs' matrix and right-hand side: k n n^T on (s, s) and (t, t), minus it
+    on (s, t) and (t, s); a closed unilateral flank pushes back from its clearance c
+    (k c n on the screw, -k c n on the nut), an open one keeps slack x k."""
+    from scipy.sparse import coo_matrix
+
+    rows, cols, vals, rhs = [], [], [], np.zeros(size)
+    for sp, on in zip(springs, active, strict=True):
+        k, n = sp["k"], sp["n"]
+        if sp["unilateral"]:
+            k = np.where(on, k, sp["slack"] * k)
+            push = np.where(on, sp["k"] * sp["clearance"], 0.0)[:, None] * n
+            np.add.at(rhs, sp["s"], push)
+            np.add.at(rhs, sp["t"], -push)
+        block = k[:, None, None] * n[:, :, None] * n[:, None, :]
+        for a, b, sign in ((sp["s"], sp["s"], 1), (sp["t"], sp["t"], 1),
+                           (sp["s"], sp["t"], -1), (sp["t"], sp["s"], -1)):  # fmt: skip
+            rows.append(np.broadcast_to(a[:, :, None], block.shape).ravel())
+            cols.append(np.broadcast_to(b[:, None, :], block.shape).ravel())
+            vals.append(sign * block.ravel())
+    if not rows:
+        return coo_matrix((size, size)).tocsr(), rhs
+    matrix = coo_matrix((np.concatenate(vals), (np.concatenate(rows), np.concatenate(cols))),
+                        shape=(size, size))  # fmt: skip
+    return matrix.tocsr(), rhs
+
+
+def _weld_springs(welds, V) -> list[dict]:
+    """Light welds (ADR 0078): each node pair's k I as three springs along x, y and z,
+    the pairs' dofs found by mesh node id (two parts' nodes may coincide)."""
+    if not welds:
+        return []
+    bs = V.dofmap.index_map_bs
+    nodes = dof_nodes(V)
+    if not len(nodes):
+        raise SystemExit("light welds need the displacement space of the mesh's own degree")
+    block = {int(n): i for i, n in enumerate(nodes) if n > 0}
+    out = []
+    for w in welds:
+        s = np.array([block[int(n)] for n in w["a"]], dtype=np.int64)
+        t = np.array([block[int(n)] for n in w["b"]], dtype=np.int64)
+        for axis in range(bs):
+            n = np.zeros((len(s), bs))
+            n[:, axis] = 1.0
+            out.append({"s": s[:, None] * bs + np.arange(bs), "t": t[:, None] * bs + np.arange(bs),
+                        "n": n, "k": np.full(len(s), float(w["k"])), "unilateral": False,
+                        "clearance": 0.0, "slack": 0.0, "name": w["name"]})  # fmt: skip
+    return out
+
+
+def solve_threaded(threads, a, L, bcs, V, facets, tag, limit: int = 50,
+                   welds=()) -> fem.Function:  # fmt: skip
+    """A static solve with threaded flanks: K + the springs, held dofs eliminated.
+    Unilateral (frictionless) flanks by an active set: every pair closed first, then
+    a pair is closed where the screw has pushed past its clearance into the nut,
+    repeated until no pair changes."""
+    equations(V, "u")
+    bs = V.dofmap.index_map_bs
+    size = V.dofmap.index_map.size_local * bs
+    K, F = _scipy(a)[:size, :size], _vector(L, size)
+    held, prescribed = _held(bcs, size)
+    free = np.setdiff1d(np.arange(size), held)
+    springs = _thread_springs(threads, V, facets, tag) + _weld_springs(welds, V)
+    active = [np.ones(len(sp["k"]), dtype=bool) for sp in springs]
+    u = np.zeros(size)
+    for iteration in range(1, limit + 1):
+        S, extra = _spring_system(springs, active, size)
+        A = (K + S).tocsr()
+        u = np.zeros(size)
+        u[held] = prescribed
+        rhs = F + extra - A[:, held] @ prescribed
+        u[free] = _spsolve(A[free][:, free], rhs[free])
+        changed = 0
+        for i, sp in enumerate(springs):
+            if not sp["unilateral"]:
+                continue
+            push = np.einsum("ij,ij->i", sp["n"], u[sp["s"]] - u[sp["t"]])
+            closed = push > sp["clearance"]
+            changed += int(np.count_nonzero(closed != active[i]))
+            active[i] = closed
+        if not any(sp["unilateral"] for sp in springs):
+            break
+        closed = int(sum(np.count_nonzero(on) for on, sp in zip(active, springs, strict=True)
+                         if sp["unilateral"]))  # fmt: skip
+        emit("iteration", number=iteration, type="contact", contact=closed,
+             residuals={"pairs changed": float(changed)})  # fmt: skip
+        if not changed:
+            break
+    else:
+        raise SystemExit(f"the threads' contact status still changed after {limit} passes")
+    uh = fem.Function(V)
+    uh.x.array[:size] = u
+    uh.x.scatter_forward()
+    return uh
+
+
 def _stress_projector(msh, degree, dx, sigma, V, voigt_of=None):
     """A function from a displacement array to nodal stress (xx, yy, zz, xy, yz, zx):
     the L2 projection, its mass matrix factored once. `voigt_of` (a 2D model's) gives
     the six components of a displacement directly."""
-    from scipy.sparse.linalg import splu
-
     S = fem.functionspace(msh, ("Lagrange", degree, (6,)))
     p, q = ufl.TrialFunction(S), ufl.TestFunction(S)
-    mass = splu(_scipy(ufl.inner(p, q) * dx).tocsc())
+    mass = _Factor(_scipy(ufl.inner(p, q) * dx))
     uh = fem.Function(V)
     if voigt_of is not None:
         voigt = voigt_of(uh)
@@ -687,8 +966,6 @@ def solve_transient(step, a, m, loads, bcs, V, stress, out) -> None:
     """Newmark's average acceleration (beta 1/4, gamma 1/2) or HHT-alpha (alpha in
     [-1/3, 0], beta = (1 - alpha)^2 / 4, gamma = 1/2 - alpha), with Rayleigh damping
     C = alpha_M M + beta_K K; from rest, the loads at their t = 0 values (a sudden load)."""
-    from scipy.sparse.linalg import splu
-
     bs = V.dofmap.index_map_bs  # 3, or 2 in a 2D model (ADR 0048)
     size = V.dofmap.index_map.size_local * bs
     K, M = _scipy(a)[:size, :size], _scipy(m)[:size, :size]
@@ -704,9 +981,9 @@ def solve_transient(step, a, m, loads, bcs, V, stress, out) -> None:
     u[held] = prescribed
     acc = np.zeros(size)
     Mff = M[free][:, free]
-    acc[free] = splu(Mff.tocsc()).solve((force(0.0) - K @ u - C @ vel)[free])
+    acc[free] = _Factor(Mff).solve((force(0.0) - K @ u - C @ vel)[free])
     A = (M + (1 + alpha) * (gamma * dt * C + beta * dt * dt * K))[free][:, free]
-    factor = splu(A.tocsc())
+    factor = _Factor(A)
     every = int(setting("output_every", 1))
     coords = V.tabulate_dof_coordinates()
     times, series, stresses = [], [], []
@@ -864,6 +1141,8 @@ def solve_solid_2d(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> No
         else:
             raise SystemExit(f"{f['type']} is not written for 2D models")
     out["coords"] = V.tabulate_dof_coordinates()
+    if case.get("threads"):  # coincident nodes on the thread's faces: map by node
+        out["node_ids"] = dof_nodes(V)
 
     def voigt_of(w):
         e, _hoop, s, s_hoop = parts(w)
@@ -895,7 +1174,10 @@ def solve_solid_2d(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> No
         out["frequencies"] = hz[order]
         out["modes"] = np.asarray([_xyz(vectors[i], 2) for i in order])
         return
-    uh = solve_linear(a, L, bcs, V, "u")
+    if case.get("threads"):  # ADR 0076: flank springs added to the assembled stiffness
+        uh = solve_threaded(case["threads"], a, L, bcs, V, facets, tag)
+    else:
+        uh = solve_linear(a, L, bcs, V, "u")
     out["displacement"] = _xyz(uh.x.array, 2)
     S = fem.functionspace(msh, ("Lagrange", degree, (6,)))
     p, q = ufl.TrialFunction(S), ufl.TestFunction(S)

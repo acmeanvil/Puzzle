@@ -109,7 +109,7 @@ def test_the_palette_makes_a_reduce_wired_from_the_selected_results(window):
     palette.search.setText("redu")  # Reduce by name (and Group and aggregate's help)
     assert palette.list.currentItem().data(Qt.ItemDataRole.UserRole) == "reduce"
     palette._make()
-    op = _op(w, "Reduce 1")
+    op = _op(w, "Result summary 1")
     assert op.inputs["result"].source == _study(w).id and op.inputs["result"].port == "result"
     node = w.schematic.items[str(op.id)].node
     assert node.value.endswith(" mm") and node.state == "up_to_date"  # the tip deflection
@@ -126,7 +126,7 @@ def test_a_check_with_a_typed_limit_turns_red_then_green(window):
     reduce_id = operators.new_operator(w, "reduce", str(_study(w).id), "result")
     check_id = operators.new_operator(w, "check", reduce_id, "out")
     check = w.session.project.objects[UUID(check_id)]
-    assert check.inputs["value"].source == _op(w, "Reduce 1").id
+    assert check.inputs["value"].source == _op(w, "Result summary 1").id
     assert "limit input is not wired" in w.schematic.items[check_id].node.reason
     w.select_in_tree(("object", check_id))
     row = _rows(w)["Typed value"]
@@ -137,7 +137,7 @@ def test_a_check_with_a_typed_limit_turns_red_then_green(window):
     _rows(w)["Typed value"].setText(1, "100 mm")
     assert w.schematic.items[check_id].node.verdict == "pass"
     _rows(w)["Typed value"].setText(1, "12 wibbles")  # not a unit: put back, nothing changed
-    assert _op(w, "Check 1").inputs["limit"].value.unit == "mm"
+    assert _op(w, "Check against limit 1").inputs["limit"].value.unit == "mm"
 
 
 def test_a_wire_drawn_onto_an_operator_wires_it(window):
@@ -147,7 +147,7 @@ def test_a_wire_drawn_onto_an_operator_wires_it(window):
     w.schematic.start_wire(runs, "stress")
     target = w.schematic.items[op_id]
     w.schematic.end_wire(target.sceneBoundingRect().center())
-    op = _op(w, "Reduce 1")
+    op = _op(w, "Result summary 1")
     assert op.inputs["result"].port == "stress"
     assert w.schematic.items[op_id].node.value.endswith(" MPa")  # von Mises, its first
     wires = [x for x in w.schematic.wires if x.b is w.schematic.items[op_id]]
@@ -155,8 +155,9 @@ def test_a_wire_drawn_onto_an_operator_wires_it(window):
     check_id = operators.new_operator(w, "check")
     w.schematic.start_wire(w.schematic.items[f"runs:{_study(w).id}"], "result")
     w.schematic.end_wire(w.schematic.items[check_id].sceneBoundingRect().center())
-    assert not _op(w, "Check 1").inputs  # a result fits no input of a check
-    assert "takes no result" in w.statusBar().currentMessage()
+    # A study's result now fits a check's value as a field (its extreme, ADR 0071): the
+    # maintainer couldn't wire studies into field ports (2026-11-11).
+    assert _op(w, "Check against limit 1").inputs["value"].port == "result"
 
 
 def test_plot_shows_in_the_plots_panel_and_export_writes(window):
@@ -170,7 +171,7 @@ def test_plot_shows_in_the_plots_panel_and_export_writes(window):
     export_id = operators.new_operator(w, "export", reduce_id, "out")
     operators.export_now(w, w.session.project.objects[UUID(export_id)])
     written = w.session.root / "exports" / "Export_1.csv"
-    assert written.read_text().startswith("name,value [m]")
+    assert written.read_text(encoding="utf-8").startswith("name,value [m]")
     w.session.undo()  # an export changes no model: the last command was its creation
     assert not any(o.type == "export" for o in w.session.project.of_type(Operator))
 
@@ -185,7 +186,7 @@ def test_tab_opens_the_palette(window):
     palette = w.last_palette
     assert palette.isVisible() and palette.at is not None
     palette.choose("panel")
-    op = _op(w, "Panel 1")
+    op = _op(w, "Show value 1")
     assert w.schematic.view.positions[str(op.id)] == pytest.approx(palette.at, abs=0.1)
 
 
@@ -199,7 +200,7 @@ def test_the_toolbar_lists_every_operator_by_group(window):
     assert actions[0].text().startswith("Find an operator")
     groups = {a.text(): a.menu() for a in actions if a.menu() is not None
               and a.text() not in ("Fits the selection", "Recently used", "Recipes",
-                                   "My clusters")}  # fmt: skip
+                                   "My clusters", "Share blocks")}  # fmt: skip
     from puzzle.operators import GROUPS
 
     assert list(groups) == [g for g in GROUPS if any(t.group == g for t in TYPES.values())]
@@ -211,13 +212,15 @@ def test_the_toolbar_lists_every_operator_by_group(window):
     assert reduce.toolTip() == TYPES["reduce"].help
     reduce.trigger()
     op = next(o for o in w.session.project.objects.values()
-              if getattr(o, "type", None) == "reduce" and o.name.startswith("Reduce"))  # fmt: skip
+              if getattr(o, "type", None) == "reduce"
+              and o.name.startswith("Result summary"))  # fmt: skip
     assert op.inputs["result"].source == _study(w).id
     assert str(op.id) in w.schematic.view.positions
     w.schematic.chosen(runs.node)
     menu.aboutToShow.emit()  # with the run selected: what fits it comes first
     fits = next(a.menu() for a in menu.actions() if a.text() == "Fits the selection")
-    assert {"Reduce", "Result table", "Filter"} <= {a.text() for a in fits.actions()}
+    shown = {a.text() for a in fits.actions()}
+    assert {"Result summary", "Result table", "Keep result where"} <= shown
 
 
 def test_the_palette_finds_by_other_names_and_offers_what_fits(window):
@@ -404,3 +407,33 @@ def test_selecting_a_filter_previews_its_field(window):
     shown = w.viewport.shown["field_values"]
     assert shown["title"].startswith("High stress") and shown["nodes"] > 0
     assert 0 < shown["extrapolated"] < shown["nodes"]  # some values left out, muted
+
+
+def test_a_slice_draws_its_points_in_the_view(window):
+    """ADR 0070 level 2: a Slice's points coloured in the view (here the cantilever's
+    von Mises on a plane across it, half way)."""
+    from puzzle.commands.model import Create
+    from puzzle.gui import operators as gui_ops
+    from puzzle.model.schema import ConstructionGeometry
+
+    w = window
+    study = _study(w)
+    plane = ConstructionGeometry(name="Across", type="plane", origin=(0.05, 0.0, 0.0),
+                                 normal=(1.0, 0.0, 0.0))  # fmt: skip
+    w.submit(Create(kind="construction", data=plane.model_dump(mode="json")))
+    vm = {
+        "name": "VM",
+        "type": "filter",
+        "quantity": "stress:von_mises",
+        "inputs": {"result": {"source": str(study.id), "port": "result"}},
+    }
+    w.submit(Create(kind="operator", data=vm))
+    cut = {
+        "name": "Cut",
+        "type": "slice",
+        "target": str(plane.id),
+        "inputs": {"field": {"source": str(_op(w, "VM").id), "port": "out"}},
+    }
+    w.submit(Create(kind="operator", data=cut))
+    assert gui_ops.preview_points(w, _op(w, "Cut")) > 0
+    assert w.viewport.shown["field_points"] > 0

@@ -22,12 +22,50 @@ ELEMENTS = {
     "tet4": (504, None),
     "tet10": (510, [0, 1, 2, 3, 4, 5, 6, 7, 9, 8]),
     "hex8": (808, None),
+    # Second-order bricks (ADR 0082): Elmer's 820 lists the bottom ring's mid-edges, then
+    # the uprights', then the top ring's (VTK and CalculiX put the top ring before the
+    # uprights); its 827 then the faces 1-2-3-4, 1-2-6-5, 2-3-7-6, 3-4-8-7, 4-1-5-8,
+    # 5-6-7-8 and the centre.
+    "hex20": (820, [0, 1, 2, 3, 4, 5, 6, 7, 8, 11, 13, 9, 10, 12, 14, 15, 16, 18, 19, 17]),
+    "hex27": (
+        827,
+        [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            11,
+            13,
+            9,
+            10,
+            12,
+            14,
+            15,
+            16,
+            18,
+            19,
+            17,
+            21,
+            23,
+            24,
+            22,
+            20,
+            25,
+            26,
+        ],
+    ),
     "tri3": (303, None),
     "tri6": (306, None),
     "quad4": (404, None),
     # 2D models (ADR 0048): Gmsh's corner-then-edge order, and line3's ends then middle,
     # are Elmer's.
     "quad8": (408, None),
+    "quad9": (409, None),
     "line2": (202, None),
     "line3": (203, None),
 }
@@ -93,18 +131,25 @@ def write_mesh(mesh: Mesh, directory: Path, bodies: list[str], boundaries: list[
                 next_id += 1
             counts[code] = counts.get(code, 0) + len(b.ids)
 
+    # LF even on Windows, as for every file a Linux container may read.
     (directory / "mesh.header").write_text(
         f"{len(mesh.node_ids)} {len(element_lines)} {len(boundary_lines)}\n{len(counts)}\n"
-        + "".join(f"{code} {n}\n" for code, n in sorted(counts.items()))
+        + "".join(f"{code} {n}\n" for code, n in sorted(counts.items())),
+        encoding="utf-8",
+        newline="\n",
     )
     (directory / "mesh.nodes").write_text(
         "".join(
             f"{i + 1} -1 {x:.15g} {y:.15g} {z:.15g}\n" for i, (x, y, z) in enumerate(mesh.coords)
-        )
+        ),
+        encoding="utf-8",
+        newline="\n",
     )
-    (directory / "mesh.elements").write_text("\n".join(element_lines) + "\n")
+    (directory / "mesh.elements").write_text(
+        "\n".join(element_lines) + "\n", encoding="utf-8", newline="\n"
+    )
     (directory / "mesh.boundary").write_text(
-        "\n".join(boundary_lines) + ("\n" if boundary_lines else "")
+        "\n".join(boundary_lines) + ("\n" if boundary_lines else ""), encoding="utf-8", newline="\n"
     )
     return ElmerMesh(
         node_ids=mesh.node_ids.copy(),

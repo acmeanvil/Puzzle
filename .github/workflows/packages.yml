@@ -1,0 +1,90 @@
+name: Packages
+
+# Puzzle's conda packages (ADR 0068): built and tested on every platform when their
+# recipes change, published to the GitHub channel on demand or on a release tag.
+# Channel: https://github.com/acmeanvil/Puzzle/releases/download (one release per
+# platform, tagged with its name).
+
+on:
+  push:
+    branches: [main, development]
+    paths:
+      - packaging/recipes/**
+      - scripts/build_packages.py
+      - scripts/publish_channel.py
+      - .github/workflows/packages.yml
+  pull_request:
+    paths:
+      - packaging/recipes/**
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the packages to the GitHub channel
+        type: boolean
+        default: false
+  release:
+    types: [published]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, platform: linux-64, noarch: true }
+          - { os: ubuntu-24.04-arm, platform: linux-aarch64, noarch: false }
+          - { os: macos-15-intel, platform: osx-64, noarch: false }
+          - { os: macos-latest, platform: osx-arm64, noarch: false }
+          - { os: windows-latest, platform: win-64, noarch: false }
+    runs-on: ${{ matrix.os }}
+    env:
+      PUZZLE_BUILD: ${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: prefix-dev/setup-pixi@v0.8.1
+        with:
+          environments: packaging
+      - name: Build and test
+        shell: bash
+        run: >
+          pixi run -e packaging build-packages --output output
+          ${{ !matrix.noarch && '--no-noarch' || '' }}
+      # `noarch && '' || x` was always x: an empty string is false in expressions.
+      - name: Check puzzle-fem was built
+        if: matrix.noarch
+        shell: bash
+        run: ls output/noarch/puzzle-fem-*.conda
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages-${{ matrix.platform }}
+          path: |
+            output/${{ matrix.platform }}/*.conda
+            output/noarch/*.conda
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: >
+      github.event_name == 'release' ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: prefix-dev/setup-pixi@v0.8.1
+        with:
+          environments: packaging
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Gather the channel
+        shell: bash
+        run: |
+          mkdir -p channel
+          for d in artifacts/packages-*; do cp -R "$d"/. channel/; done
+          find channel -name '*.conda' | sort
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: pixi run -e packaging python scripts/publish_channel.py channel --repo ${{ github.repository }}

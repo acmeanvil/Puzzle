@@ -8,6 +8,7 @@ history.jsonl, so changes another client makes (an agent over MCP, the CLI) show
 from __future__ import annotations
 
 import copy
+import datetime
 import json
 import threading
 from pathlib import Path
@@ -30,17 +31,17 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSpinBox,
-    QStackedWidget,
     QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from puzzle.commands import Session
-from puzzle.commands.model import AddLibraryMaterial, Delete, Edit, EditOp, RunStudy
+from puzzle.commands.model import AddLibraryMaterial, Edit, EditOp, RunStudy
 from puzzle.errors import PuzzleError
 from puzzle.gui.agent_panel import AgentPanel
 from puzzle.gui.properties import PropertiesPanel
+from puzzle.gui.stack import ShownStack
 from puzzle.gui.tasks import Task, start
 from puzzle.gui.theme import role
 from puzzle.gui.tree import ROLE, ModelTree, Node
@@ -396,7 +397,29 @@ class MainWindow(QMainWindow):
         self.viewport = Viewport()
         self.viewport.construction_planes = self._construction_planes  # for section cuts
         self.viewport.hidden_parts = self._hidden_parts  # hidden or suppressed geometry
+        self.viewport.hidden_bodies = self._hidden_bodies  # bodies hidden one by one (D2)
+        self.viewport.part_colours = self._part_colours  # the user's colours (D4)
+        from puzzle.gui.visibility import Visibility
+
+        self.visibility = Visibility("")  # what the view draws besides (D2), per project
         self.viewport.beam_members = self._beam_members  # beams with their outline (ADR 0055)
+        if getattr(self.viewport, "view_bar", None) is not None:
+            self.viewport.view_bar.on_refresh = self.refresh_view
+        from puzzle.gui.timing import StallWatch
+
+        self.stalls = StallWatch(self)  # the window held: how long, in what (Help → Log)
+        self.stalls.start()
+        self.mouse3d = None  # a SpaceMouse or similar steering the view (ADR 0069)
+        from puzzle.gui.spacemouse import hid as mouse_hid
+
+        if self.viewport.plotter is not None and mouse_hid.why_not() is None:
+            from puzzle.gui.spacemouse.controller import Controller
+
+            self.mouse3d = Controller(self)
+            self.mouse3d.found.connect(
+                lambda name: name and self.statusBar().showMessage(f"3D mouse: {name}", 5000)
+            )
+            self.mouse3d.start()
         self.results_bar = ResultsBar(self._redraw_result, self._axes_changed)
         self.results_bar.hide()
         # Which part of the work is on screen (ADR 0029): model, geometry, sketch or
@@ -404,7 +427,15 @@ class MainWindow(QMainWindow):
         self.context = "model"
         self.states: dict = {}  # object id -> its state (ADR 0033)
         self.running: set[str] = set()  # study ids being run here
-        self.failed_studies: set[str] = set()  # study ids whose last run here failed
+        # Several studies one after another (ADR 0073): those still to start, the
+        # running one's cancel, and the outcomes so far for the summary.
+        self.run_queue: list[str] = []
+        self._queue_cancel = None
+        self._queue_study = None
+        self._queue_done: list = []
+        self.last_run_selection: list[str] = []  # Run selected…'s last ticks
+        # Study id -> when its last run here failed (UTC); cleared by a newer stored run.
+        self.failed_studies: dict[str, datetime.datetime] = {}
         self.pick_bar = PickBar(self)
         self.pick_bar.hide()
         box = QAction("Box select", self)
@@ -434,7 +465,7 @@ class MainWindow(QMainWindow):
         column.addWidget(self.probes_panel)
         self.viewport.probes_changed.connect(self.probes_panel.show_probes)
         # The centre is the 3D view, or the sketch canvas while sketching (ADR 0017).
-        self.centre = QStackedWidget()
+        self.centre = ShownStack()  # as large as the page shown (gui.stack)
         self.centre.addWidget(centre)
         from puzzle.gui.start_page import StartPage
 
@@ -449,8 +480,10 @@ class MainWindow(QMainWindow):
         from puzzle.gui.workbench import Workbench
 
         self.workbench = Workbench(self)
-        self.left_tabs = QTabWidget()
-        self.left_tabs.addTab(self.tree, "Model")
+        from puzzle.gui.docking import ScrollTabs
+
+        self.left_tabs = ScrollTabs()  # pages scroll on a short window, never overlap
+        self.left_tabs.addTab(self.tree, "Model", scroll=False)  # a tree scrolls itself
         self.left_tabs.addTab(self.workbench, "Geometry")
         from puzzle.gui.mesh_bench import MeshBench
 
@@ -472,7 +505,7 @@ class MainWindow(QMainWindow):
 
         self.docks = Docks(self)  # every panel, tab group and layout (ADR 0045)
         self.model_dock = self.docks.add("model", "Model", self.left_tabs, left)
-        self.side = QStackedWidget()  # the properties, or a tool's options
+        self.side = ShownStack()  # the properties, or a tool's options
         self.side.addWidget(self.properties)
         self.properties_dock = self.docks.add("properties", "Properties", self.side, left)
         self.docks.split("model", "properties")
@@ -497,6 +530,24 @@ class MainWindow(QMainWindow):
         self.table_view = TableViewer(self)  # ADR 0064: a table operator's rows
         tabs.addTab(self.table_view, "Table")
         self.output_tabs = tabs
+        from PySide6.QtWidgets import QToolButton
+
+        from puzzle.gui import text_viewer
+
+        # The output in a larger window with search and colours (the Solution tab: the
+        # run's whole solver logs).
+        bigger = QToolButton(text="Open in window", autoRaise=True)
+        bigger.setToolTip("The Output in a window of its own, with search and colours; "
+                          "on the Solution tab, the run's whole solver logs")  # fmt: skip
+        bigger.clicked.connect(
+            lambda: (
+                text_viewer.solver_output(self)
+                if tabs.currentWidget() is self.solution
+                else text_viewer.output_window(self)
+            )
+        )
+        tabs.setCornerWidget(bigger, Qt.Corner.TopRightCorner)
+        self.output_window_button = bigger
         # Its pages' minimum (the plots') would hold the dock open even when folded.
         tabs.setMinimumHeight(tabs.tabBar().sizeHint().height())
         self.messages_dock = self.docks.add(
@@ -574,6 +625,23 @@ class MainWindow(QMainWindow):
             "jobs", "Jobs", self.jobs, Qt.DockWidgetArea.BottomDockWidgetArea)  # fmt: skip
         self.docks.tab("messages", "jobs")
         self.jobs_dock.hide()  # Window → Jobs, or the note when a project opens with some
+        from puzzle.gui.member_design import MemberTable  # ADR 0079 step 3
+
+        self.members = MemberTable(self)
+        self.members_dock = self.docks.add(
+            "members", "Members", self.members, Qt.DockWidgetArea.BottomDockWidgetArea)  # fmt: skip
+        self.docks.tab("messages", "members")
+        self.members_dock.visibilityChanged.connect(
+            lambda shown: shown and self.members.refresh())  # fmt: skip
+        self.members_dock.hide()  # Window → Members, or Results → Result tools → Member checks
+        from puzzle.gui.weld_table import WeldTable  # ADR 0078
+
+        self.welds = WeldTable(self)
+        self.welds_dock = self.docks.add(
+            "welds", "Welds", self.welds, Qt.DockWidgetArea.BottomDockWidgetArea)  # fmt: skip
+        self.docks.tab("messages", "welds")
+        self.welds_dock.visibilityChanged.connect(lambda shown: shown and self.welds.refresh())
+        self.welds_dock.hide()  # Window → Welds, or Results → Result tools → Weld results
         self.schematic_panel = SchematicPanel(self)  # beside the 3D view (ADR 0058)
         self.schematic_dock = self.docks.add(
             "schematic", "Schematic", self.schematic_panel, Qt.DockWidgetArea.BottomDockWidgetArea
@@ -626,7 +694,7 @@ class MainWindow(QMainWindow):
         self.properties.edited.connect(self._edit)
         self.problems.itemDoubleClicked.connect(self._problem_chosen)
         self.viewport.redraw_needed.connect(
-            lambda: self._redraw_result() if self.context == "results" else None
+            lambda: self._redraw_result() if self.context == "results" else self.refresh_view()
         )
         self._anim_factor = 1.0
         self._anim_timer = QTimer(self, interval=70)
@@ -638,8 +706,44 @@ class MainWindow(QMainWindow):
         self.watcher.fileChanged.connect(lambda _: self._reload_soon())
         self._reload_timer = QTimer(self, singleShot=True, interval=300)
         self._reload_timer.timeout.connect(self.reload)
+        # CalculiX with PARDISO, built here once in the background (ADR 0068 decision 5),
+        # a little after start so the window is up first.
+        QTimer.singleShot(8000, self._build_solvers)
         if root is not None:
             self.open(root)
+
+    def _build_solvers(self) -> None:
+        """Start the PARDISO build if it is due (`solver_builds.should_build`), and say
+        when it ends. Not on Qt's offscreen platform (tests, scripts)."""
+        from PySide6.QtGui import QGuiApplication
+
+        from puzzle import solver_builds
+        from puzzle.gui import solvers_panel
+
+        if QGuiApplication.platformName() == "offscreen" or not solver_builds.should_build():
+            return
+        if not solvers_panel.start_build():
+            return
+        words = (
+            "Building CalculiX with PARDISO in the background (faster contact solves); "
+            "the plain CalculiX is used until it's done"
+        )
+        self.toasts.show(words, state="info")
+        timer = QTimer(self, interval=10000)
+
+        def check() -> None:
+            if solvers_panel.building():
+                return
+            timer.stop()
+            s = solver_builds.status()
+            if s.state == "built":
+                self.toasts.show("CalculiX with PARDISO is built: solves use it from now on")
+            else:
+                self.toasts.show(f"Building CalculiX with PARDISO failed: {s.detail}. The "
+                                 "plain CalculiX stays in use.", state="error")  # fmt: skip
+
+        timer.timeout.connect(check)
+        timer.start()
 
     # --- project -----------------------------------------------------------------
 
@@ -668,6 +772,9 @@ class MainWindow(QMainWindow):
         self.start_page.fill()
         if self.centre.currentWidget() is self.start_page:
             self.centre.setCurrentIndex(0)  # the 3D view
+        from puzzle.gui.visibility import Visibility
+
+        self.visibility = Visibility.load(self.session.root)
         self.agent.project_opened()
         self.refresh()
         # Open on the model, not an empty view: select the first component.
@@ -703,7 +810,12 @@ class MainWindow(QMainWindow):
 
         # A study whose solve is with a job runner shows running (ADR 0067), here or not.
         running = self.running | self._pending_studies()
-        self.states = status(s.project, runs, running, self.failed_studies)
+        from puzzle.project.status import still_failed
+
+        # A run that finished after a failure here (the agent's, the CLI's) clears it.
+        self.failed_studies = still_failed(self.failed_studies, runs)
+        self.states = status(s.project, runs, running, set(self.failed_studies))
+        self.tree.visibility = self.visibility  # shown and hidden marks (D2)
         self.tree.populate(s.project, runs, self._field_catalogs(runs), self.states)
         self.history.clear()
         names = {str(o.id): o.name for o in s.project.objects.values()}
@@ -732,9 +844,7 @@ class MainWindow(QMainWindow):
             self.schematic.refresh()
         if not self.schematic_dock.isHidden():
             self.schematic_panel.refresh()
-        self._selected()
-        if self.advisor_dock.isVisible():
-            self.advisor.refresh()
+        self._selected()  # refreshes the Advisor too, when it is shown
 
     def _show_units(self) -> None:
         """The status bar's unit button: the system in effect, and whose it is."""
@@ -872,13 +982,14 @@ class MainWindow(QMainWindow):
         source, port = self.schematic.palette_source()
         return operators.open_palette(self, at, source, port)
 
-    def select_in_tree(self, key: tuple[str, str]) -> bool:
+    def select_in_tree(self, key: tuple) -> bool:
         """Select the tree item of (kind, object), so Properties shows it (the schematic's
         click, ADR 0058). The tab stays as it is."""
-        kind, obj = key
+        kind, obj, path = (*key, "")[:3]  # a feature names its path in the component too
         for tree_item in self.tree._items():
             node = tree_item.data(0, ROLE)
-            if node is not None and node.kind == kind and node.object == obj:
+            if (node is not None and node.kind == kind and node.object == obj
+                    and (not path or node.path == path)):  # fmt: skip
                 self.tree.setCurrentItem(tree_item)
                 return True
         return False
@@ -1417,13 +1528,37 @@ class MainWindow(QMainWindow):
         self.refresh()
 
     def delete_selected(self) -> None:
+        """Delete what the tree has selected: one item as before (results asked first),
+        several as one batch, so one undo, after one question naming them."""
+        from puzzle.gui import deleting
+        from puzzle.gui.tree import ROLE as TREE_ROLE
+
+        if self.session is None:
+            return
+        nodes = [i.data(0, TREE_ROLE) for i in self.tree.selectedItems()]
         node = self.tree.current()
-        if node is not None and node.kind == "run":
-            self.delete_run(node.object)
+        if node is not None and node not in nodes:
+            nodes = [node]
+        runs = self._store().runs() if any(n.kind == "run" for n in nodes) else []
+        names = {r.run_id: f"the results of {r.study_name} ({r.started_at:%Y-%m-%d %H:%M})"
+                 for r in runs}  # fmt: skip
+        plan = deleting.plan(self.session.project, nodes, lambda r: names.get(r, "results"))
+        if not plan:
             return
-        if node is None or node.kind not in ("object", "derived", "probe"):
+        if len(plan.names) == 1 and plan.runs:  # one run: its own question
+            self.delete_run(plan.runs[0])
             return
-        self.submit(Delete(object=node.object))
+        if len(plan.names) > 1 and not self.ask_yes("Delete", deleting.question(plan)):
+            return
+        if plan.commands:
+            done = (self.submit(plan.commands[0]) if len(plan.commands) == 1
+                    else self.submit_batch(plan.commands))  # fmt: skip
+            if done is None:  # refused (say, a part still used): nothing deleted
+                return
+        for run_id in plan.runs:
+            self.delete_run(run_id, confirm=False)
+        if len(plan.names) > 1:
+            self.statusBar().showMessage(f"Deleted {len(plan.names)} items", 8000)
 
     def delete_run(self, run_id: str, confirm: bool = True) -> bool:
         """Delete a stored result set (asked first): results are a cache, so the study
@@ -1524,6 +1659,62 @@ class MainWindow(QMainWindow):
 
         return self.background(f"Meshing {comp.name}…", work, done, failed=failed)
 
+    def run_studies(self, ids: list[str] | None) -> None:
+        """Run studies one after another (ADR 0073): every study when `ids` is None,
+        sources of transfers first; one that fails goes on to the next."""
+        from puzzle import run_queue
+
+        if self.session is None:
+            return
+        busy = self.running | set(self.run_queue)
+        order = run_queue.in_order(self.session.project, ids)
+        self.run_queue += [str(s.id) for s in order if str(s.id) not in busy]
+        if self._queue_cancel is None:  # nothing of the queue running yet: start it
+            self._queue_done = []
+            self._run_next()
+
+    def queue_busy(self) -> bool:
+        return self._queue_cancel is not None or bool(self.run_queue)
+
+    def _run_next(self, ok: bool | None = None) -> None:
+        from uuid import UUID
+
+        from puzzle import run_queue
+
+        if ok is not None and self._queue_study is not None:
+            self._queue_done.append(run_queue.Outcome(
+                self._queue_study, error=None if ok else RuntimeError("failed")))  # fmt: skip
+        self._queue_cancel, self._queue_study = None, None
+        while self.run_queue:
+            study = self.session.project.objects.get(UUID(self.run_queue.pop(0)))
+            if not isinstance(study, Study):
+                continue  # deleted while it waited
+
+            def call(emit, event, cancel, s=self.session, sid=str(study.id)):
+                return s.submit(RunStudy(study=sid), on_output=emit, on_event=event,
+                                cancel=cancel)  # fmt: skip
+
+            # The queue holds the run's cancel from the start: Stop all before the solve's
+            # thread is up still stops it.
+            self._queue_study, self._queue_cancel = study, threading.Event()
+            self._start_run(study, call, then=self._run_next, cancel=self._queue_cancel)
+            return
+        if len(self._queue_done) > 1:
+            text = run_queue.summary(self._queue_done)
+            failed = any(not o.ok for o in self._queue_done)
+            self.toasts.show(text, state="error" if failed else "info")
+            self.statusBar().showMessage(text, 10000)
+        self._queue_done = []
+
+    def stop_all(self) -> None:
+        """Stop the running study of the queue and start no more (ADR 0073)."""
+        left = len(self.run_queue)
+        self.run_queue.clear()
+        if self._queue_cancel is not None:
+            self._queue_cancel.set()
+        if left:
+            self.statusBar().showMessage(f"Stopped; {left} studies not started", 8000)
+
     def run_selected(self) -> Task | None:
         node = self.tree.current()
         study = self._object(node)
@@ -1534,7 +1725,15 @@ class MainWindow(QMainWindow):
         return self._start_run(study, lambda emit, event, cancel: s.submit(
             RunStudy(study=sid), on_output=emit, on_event=event, cancel=cancel))  # fmt: skip
 
-    def _start_run(self, study: Study, call, *, verb: str = "Running", then=None) -> Task:
+    def _start_run(
+        self,
+        study: Study,
+        call,
+        *,
+        verb: str = "Running",
+        then=None,
+        cancel: threading.Event | None = None,
+    ) -> Task:
         """A run in the background, followed by the Solution panel and the Output log:
         `call(emit, emit_event, cancel)` runs it (a submit, or a resume, ADR 0067);
         `then(ok)` afterwards (the next job to pick up)."""
@@ -1544,7 +1743,7 @@ class MainWindow(QMainWindow):
         self.log.appendPlainText(f"--- {study.name}: {study.solver}")
         from puzzle.gui.choices import solver_label
 
-        cancel = threading.Event()
+        cancel = cancel if cancel is not None else threading.Event()
         self.solution.start(f"{study.name}: {solver_label(study.solver)}", cancel)
 
         sid = str(study.id)
@@ -1578,7 +1777,7 @@ class MainWindow(QMainWindow):
 
     def _after_run(self, outcome, study: Study, sid: str) -> None:
         self.running.discard(sid)
-        self.failed_studies.discard(sid)
+        self.failed_studies.pop(sid, None)
         self.refresh()
         run = outcome.run
         cached = " (reused an identical run)" if run is not None and run.cached else ""
@@ -1598,7 +1797,7 @@ class MainWindow(QMainWindow):
 
     def _run_failed(self, exc, study: Study, sid: str) -> None:
         self.running.discard(sid)
-        self.failed_studies.add(sid)
+        self.failed_studies[sid] = datetime.datetime.now(datetime.UTC)
         stopped = getattr(exc, "code", "") == "stopped"
         self.solution.finish(
             False, "Stopped" if stopped else "Failed: see the messages and the Output log"
@@ -1614,9 +1813,41 @@ class MainWindow(QMainWindow):
 
     # --- selection ---------------------------------------------------------------
 
+    def refresh_view(self) -> None:
+        """Draw the view again from what is selected (the view bar's Refresh view, F5;
+        Window → Refresh view), for when a change didn't show."""
+        plotter = self.viewport.plotter
+        camera = plotter.camera_position if plotter is not None else None
+        self._selected()
+        if camera is not None:
+            plotter.camera_position = camera  # a refresh doesn't move the view
+            self.viewport.view.refresh()
+
+    def _aside(self, what: str, work) -> None:
+        """Side work of a selection (the Advisor, marks): a failure is logged, never
+        left to stop Properties showing what was picked (I5)."""
+        try:
+            work()
+        except Exception:  # noqa: BLE001 - logged with its traceback (gui.errors)
+            import logging
+
+            logging.getLogger("puzzle.gui").exception("%s failed", what)
+
     def _selected(self) -> None:
+        """Show what the tree has selected: Properties, the view, its symbols. Timed, so
+        a slow one says in the log which part took the time (gui/timing.py)."""
+        from puzzle.gui import timing
+
+        node = self.tree.current()
+        with timing.action(f"showing {node.label if node is not None else 'nothing'}"):
+            self._show_selected()
+
+    def _show_selected(self) -> None:
+        from puzzle.gui.timing import step
+
         if getattr(self, "advisor_dock", None) is not None and self.advisor_dock.isVisible():
-            self.advisor.refresh()  # it speaks about what is selected
+            with step("Advisor"):
+                self._aside("the Advisor", self.advisor.refresh)  # about what is selected
         if self.left_tabs.currentWidget() is self.workbench:
             self.show_workbench_part()
             return
@@ -1629,7 +1860,8 @@ class MainWindow(QMainWindow):
             return
         names = {str(o.id): o.name for o in s.project.objects.values()}
         if node.kind in ("run", "result", "result_group"):
-            self._select_run(node.object, node.path if node.kind == "result" else None)
+            with step("results"):
+                self._select_run(node.object, node.path if node.kind == "result" else None)
             return
         if node.kind in ("sweep", "compare"):
             runs = [r for r in self._store().runs() if r.study_id == node.object and r.point]
@@ -1639,9 +1871,18 @@ class MainWindow(QMainWindow):
             return
         obj = s.project.objects.get(_uuid(node.object)) if node.object else None
         if not isinstance(obj, ResultProbe):
-            self._drop_linearization()
+            self._aside("closing the linearization", self._drop_linearization)
         if node.kind == "group" and obj is not None:  # a folder: what it holds, by name
             self.properties.show_text(self._group_rows(obj))
+            return
+        if node.kind == "folder":  # a default folder (gui.tree): what it holds
+            item = self.tree.item_for(node)
+            held = [] if item is None else [item.child(i).text(0)
+                                            for i in range(item.childCount())]  # fmt: skip
+            owner = obj.name if obj is not None else ""
+            self.properties.show_text({"Folder": node.label, "In": owner,
+                                       "Holds": ", ".join(held) or "nothing yet "
+                                       "(right-click to add)"})  # fmt: skip
             return
         if obj is None:
             self.properties.show_text({"project": s.project.name} if node.kind == "project" else {})
@@ -1650,7 +1891,8 @@ class MainWindow(QMainWindow):
         from puzzle.model.schema import Operator
 
         project = s.project
-        self._mark_problems(obj.name)
+        with step("problems"):
+            self._aside("marking problems", lambda: self._mark_problems(obj.name))
 
         def options(path):
             if isinstance(obj, Operator):  # ADR 0062: from the results it reads
@@ -1661,9 +1903,10 @@ class MainWindow(QMainWindow):
                     return found
             return choices(project, obj, path)
 
-        self.properties.show_object(
-            str(obj.id), obj.model_dump(mode="json"), node.path, names, options
-        )
+        with step("Properties"):
+            self.properties.show_object(
+                str(obj.id), obj.model_dump(mode="json"), node.path, names, options
+            )
         if isinstance(obj, Operator):
             from puzzle.gui import operators
 
@@ -1673,7 +1916,13 @@ class MainWindow(QMainWindow):
             return
         from puzzle.gui import field_view
 
-        field_view.show_properties(self, obj, node)  # ADR 0044: uses, and the chain
+        with step("Properties"):
+            field_view.show_properties(self, obj, node)  # ADR 0044: uses, and the chain
+            parts = node.path.split(".")
+            if isinstance(obj, Component) and len(parts) == 2 and parts[0] == "parts":
+                from puzzle.gui.element_choice_dialog import add_to_properties
+
+                add_to_properties(self, obj, obj.parts[int(parts[1])].name)  # ADR 0082 7
         if isinstance(obj, ResultDefinition):
             self.show_derived(obj)
             return
@@ -1692,7 +1941,8 @@ class MainWindow(QMainWindow):
             return
         mesh = self.meshes.get(str(comp.id))
         if mesh is None:
-            mesh = self._preview(comp)
+            with step("geometry preview"):
+                mesh = self._preview(comp)
         if mesh is None:
             return
         highlight = None
@@ -1712,7 +1962,8 @@ class MainWindow(QMainWindow):
         self.pick_bar.set_planar(comp.dimension != "3d")
         self.viewport.boundaries = self.mesh_boundaries.get(str(comp.id), {})
         self.viewport.vertices = self.mesh_vertices.get(str(comp.id), {})
-        self.viewport.show_mesh(mesh, highlight if highlight in mesh.groups else None, entities)
+        with step("view"):
+            self.viewport.show_mesh(mesh, highlight if highlight in mesh.groups else None, entities)
         if isinstance(built, CoordinateSystem):  # its triad (ADR 0049)
             import numpy as np
 
@@ -1731,9 +1982,13 @@ class MainWindow(QMainWindow):
                 whole = np.linalg.norm(np.ptp(mesh.coords, axis=0))
                 size = float(max(1.6 * across, 0.25 * whole))
             self.viewport.show_construction(built.type, a, b, size)
-        self._show_symbols(comp, mesh, node)
+        with step("supports and loads"):
+            self._show_symbols(comp, mesh, node)
+        with step("shown always"):
+            self._show_extras(mesh, obj)
         if node.kind == "feature":  # a field-fed one: its mapped values (ADR 0044)
-            field_view.show_feature(self, comp, node, mesh)
+            with step("field values"):
+                field_view.show_feature(self, comp, node, mesh)
 
     # --- the Geometry tab (ADR 0017) --------------------------------------------------
 
@@ -1887,7 +2142,8 @@ class MainWindow(QMainWindow):
             self.side.setCurrentWidget(self.properties)
             self.properties_dock.setWindowTitle("Properties")
             return
-        self.side.addWidget(panel)
+        if self.side.indexOf(panel) < 0:
+            self.side.addWidget(panel)
         self.side.setCurrentWidget(panel)
         self.properties_dock.setWindowTitle("Tool")
         self.properties_dock.show()  # a tool's options live here: never open it unseen
@@ -1975,6 +2231,8 @@ class MainWindow(QMainWindow):
             "Study": record.study_name,
             "Solver": solver_label(record.solver),
             "Ran": "natively" if record.runtime == "native" else f"in {record.runtime}",
+            **({"Solver version": record.solver_version} if record.solver_version else {}),
+            **({"Image": record.image_digest[:19]} if record.image_digest else {}),
             "Started": f"{record.started_at:%Y-%m-%d %H:%M:%S}",
             "Duration (s)": round(record.duration_s, 2),
             "Result steps": record.steps,
@@ -1994,6 +2252,9 @@ class MainWindow(QMainWindow):
         from puzzle.post.revolve import mark_dimension  # the store keeps no dimension
 
         mark_dimension(self.result[0], self.session.project.objects.get(self._result_component))
+        from puzzle.post.expand import mark as mark_copies  # ADR 0081: drawn whole
+
+        mark_copies(self.result[0], self.session.project.objects.get(self._result_component))
         # A result shown afresh starts in global axes (ADR 0049), or the plot's own.
         self.results_bar.set_systems(self.session.project, getattr(self, "_plot_axes", None))
         self._plot_axes = None
@@ -2176,6 +2437,7 @@ class MainWindow(QMainWindow):
         if comp is None or field is None or not getattr(comp, "connectors", None):
             return
         unit = current().display_units()["force"]
+        hidden = self._hidden_bolt_names(comp)
         axial = field.values[:, field.components.index("axial")]
         tubes = []
         for g, c, value in zip(
@@ -2185,6 +2447,8 @@ class MainWindow(QMainWindow):
             axial,
             strict=False,
         ):
+            if c.name in hidden:  # hidden in the view (its tube is still counted above)
+                continue
             shown = convert(float(value), "N", unit)
             kind = "tension" if value >= 0 else "compression"
             tubes.append((g, f"{c.name}: {shown:.4g} {pretty(unit)} {kind}", value >= 0))
@@ -2366,7 +2630,9 @@ class MainWindow(QMainWindow):
             up = parent.data(0, ROLE) if parent is not None else None
             if up is not None and up.kind == "group" and up.object == str(group.id):
                 held.append(item.text(0))
-        rows = {"Group": group.name, "Under": group.section}
+        from puzzle.gui.tree import scope_name
+
+        rows = {"Group": group.name, "Under": scope_name(self.session.project, group.section)}
         rows["Holds"] = ", ".join(held) if held else "nothing yet: drag items here"
         rows["Tip"] = "Drag items in or out, or right-click → Move to group; F2 renames"
         return rows
@@ -2403,6 +2669,91 @@ class MainWindow(QMainWindow):
             self.bolts.results if tab == "results" else self.bolts.properties
         )
         self.bolts.refresh()
+
+    def _shown_component(self, mesh):
+        """The component (or a lone geometry's stand-in) whose mesh is drawn, and the
+        names its mesh gives entities."""
+        cid = next((c for c, m in self.meshes.items() if m is mesh), self.mesh_component)
+        if self.session is None or cid is None:
+            return None, {}
+        comp = self.session.project.objects.get(_uuid(cid))
+        if comp is None:
+            comp = next((c for c, _ in getattr(self, "_standalones", {}).values()
+                         if str(c.id) == cid), None)  # fmt: skip
+        return comp, self.mesh_names.get(cid, {})
+
+    def _part_geometries(self, comp) -> dict:
+        from puzzle.model.schema import Geometry
+
+        project = self.session.project
+        return {p.name: g for p in getattr(comp, "parts", [])
+                if isinstance(g := project.objects.get(p.geometry), Geometry)}  # fmt: skip
+
+    def _hidden_bodies(self, mesh) -> set[tuple[int, int]]:
+        """The shown mesh's bodies hidden one by one (`Geometry.hidden_bodies`)."""
+        comp, names = self._shown_component(mesh)
+        geos = self._part_geometries(comp)
+        if not any(g.hidden_bodies for g in geos.values()):
+            return set()
+        return {e for e, (part, name) in names.items() if e[0] == 3 and part in geos
+                and name in geos[part].hidden_bodies}  # fmt: skip
+
+    def _part_colours(self, mesh) -> dict:
+        """(dim, tag) -> "#rrggbb" for the shown mesh: a body's own colour, else its
+        geometry's, for the body and the faces that bound it (D4)."""
+        comp, names = self._shown_component(mesh)
+        geos = self._part_geometries(comp)
+        if not any(g.colour or g.body_colours for g in geos.values()):
+            return {}
+        boundaries = self.mesh_boundaries.get(str(comp.id), {}) if comp is not None else {}
+        out: dict = {}
+        for e, (part, name) in sorted(names.items(), key=lambda kv: -kv[0][0]):
+            g = geos.get(part)
+            if g is None or e[0] < 2:
+                continue
+            colour = (g.body_colours.get(name) if e[0] == 3 else None) or g.colour
+            if colour is None:
+                continue
+            out.setdefault(e, colour)
+            for face in boundaries.get(e, []):
+                out.setdefault(face, colour)
+        # Geometry with one colour: every face of its part, named or not.
+        for part, g in geos.items():
+            if g.colour and part in getattr(mesh, "groups", {}):
+                for e in mesh.groups[part].entities:
+                    out.setdefault(tuple(e), g.colour)
+                    for face in boundaries.get(tuple(e), []):
+                        out.setdefault(face, g.colour)
+        return out
+
+    def _show_extras(self, mesh, selected) -> None:
+        """Coordinate systems and construction geometry shown always (D2), but the
+        selected one, which is drawn already."""
+        import numpy as np
+
+        from puzzle.model.schema import ConstructionGeometry, CoordinateSystem
+
+        project = self.session.project
+        shown = [project.objects.get(_uuid(i)) for i in sorted(self.visibility.shown)]
+        shown = [o for o in shown if isinstance(o, CoordinateSystem | ConstructionGeometry)
+                 and o is not selected]  # fmt: skip
+        whole = float(np.linalg.norm(np.ptp(mesh.coords, axis=0))) if len(mesh.coords) else 1.0
+        items = []
+        for o in shown:
+            try:
+                if isinstance(o, CoordinateSystem):
+                    from puzzle.axes import absolute
+
+                    system = absolute(project, o, self.session.root)
+                    items.append((o.name, "triad", system, None, 0.2 * whole))
+                else:
+                    a, b = o.frame(project)
+                    items.append((o.name, o.type, a, b, 0.6 * whole))
+            except Exception:  # noqa: BLE001 - one that can't be placed isn't drawn
+                import logging
+
+                logging.getLogger("puzzle.gui").warning("can't draw %s", o.name)
+        self.viewport.show_extras(items)
 
     def _hidden_parts(self, mesh) -> set[str]:
         """The parts in this mesh made of hidden or suppressed geometry: not drawn."""
@@ -2740,6 +3091,11 @@ class MainWindow(QMainWindow):
             only = sum(len(p.features) for p in comp.physics[:i]) + j
         elif node.kind not in ("object", "physics"):
             return
+        from puzzle.gui.visibility import feature_key
+
+        keys = [feature_key(comp, ph, f) for ph in comp.physics for f in ph.features]
+        skip = {n for n, k in enumerate(keys) if k in self.visibility.hidden_features}
+        bolts = self._hidden_bolt_names(comp)
         try:
             glyphs = symbols(
                 comp,
@@ -2747,10 +3103,21 @@ class MainWindow(QMainWindow):
                 lambda sel: self._entities_of(comp, sel),
                 only,
                 project=self.session.project,
+                skip=skip,
+                skip_bolts=bolts,
             )
         except (KeyError, ValueError):  # a selection not on this mesh yet: no symbol
             return
         self.viewport.show_symbols(glyphs)
+        self.viewport.shown["hidden_symbols"] = len(skip) if only is None else 0
+        self.viewport.shown["hidden_bolts"] = sorted(bolts) if only is None else []
+
+    def _hidden_bolt_names(self, comp) -> set[str]:
+        """The component's bolts hidden in the view (view state, `visibility.bolt_key`)."""
+        from puzzle.gui.visibility import bolt_key
+
+        hidden = self.visibility.hidden_bolts
+        return {c.name for c in getattr(comp, "connectors", []) if bolt_key(comp, c) in hidden}
 
     def _entities_of(self, comp, selection: str) -> list[tuple[int, int]]:
         """A selection's face entities in the shown mesh, through the names it was made with."""
@@ -2768,6 +3135,16 @@ class MainWindow(QMainWindow):
         return [e for e in hits if e[0] < 3] + faces
 
     # --- questions (tests replace these) -----------------------------------------
+
+    def pick_colour(self, initial: str | None = None) -> str | None:
+        """A colour from Qt's colour dialog (its standard palette first), as #rrggbb;
+        None when cancelled (D4)."""
+        from PySide6.QtGui import QColor
+        from PySide6.QtWidgets import QColorDialog
+
+        start = QColor(initial) if initial else self.palette().color(self.backgroundRole())
+        chosen = QColorDialog.getColor(start, self, "Colour")
+        return chosen.name() if chosen.isValid() else None
 
     def choose(self, title: str, label: str, items: list):
         """One of `items`: plain strings, or (shown name, value) pairs so that people
@@ -2868,7 +3245,8 @@ class MainWindow(QMainWindow):
 
     def ask_open_path(self, title: str, filters: str) -> str | None:
         """A file to read (tests replace this)."""
-        chosen, _ = QFileDialog.getOpenFileName(self, title, str(self.session.root), filters)
+        start = str(self.session.root) if self.session is not None else str(Path.home())
+        chosen, _ = QFileDialog.getOpenFileName(self, title, start, filters)
         return chosen or None
 
     # --- sliders (ADR 0062 item 4): dragged values preview, never solve -------------
@@ -2943,13 +3321,22 @@ class MainWindow(QMainWindow):
         return text.strip() if ok and text.strip() else None
 
     def _open_item(self) -> None:
-        """A double-click on a history step edits it in its dialog."""
+        """A double-click on a history step edits it in its dialog; on a coordinate
+        system or construction geometry, in its panel (D1, D3)."""
         from puzzle.gui import menus
 
         node = self.tree.current()
         obj = self._object(node)
         if node is not None and node.kind == "operation" and isinstance(obj, Geometry):
             menus.edit_step(self, obj, int(node.path.split(".")[1]))
+        elif node is not None and node.kind == "object" and isinstance(obj, CoordinateSystem):
+            from puzzle.gui.axes_panel import edit_axes
+
+            edit_axes(self, obj)
+        elif node is not None and node.kind == "object" and isinstance(obj, ConstructionGeometry):
+            from puzzle.gui.construction import edit_construction
+
+            edit_construction(self, obj)
         elif node is not None and node.kind == "compare":
             self.open_compare(node.object)
 
@@ -2970,12 +3357,16 @@ class MainWindow(QMainWindow):
         if menu.actions():
             menu.addSeparator()
         if item is not None and item.childCount():
-            menu.addAction("Expand all below").triggered.connect(
-                lambda: self.tree.expandRecursively(self.tree.indexFromItem(item))
-            )
+            below = item.data(0, ROLE)  # found again when asked: a rebuild deletes items
+            menu.addAction("Expand all below").triggered.connect(lambda: self._expand_below(below))
         menu.addAction("Expand all").triggered.connect(self.tree.expandAll)
         menu.addAction("Collapse all").triggered.connect(self._collapse_tree)
         menu.exec(self.tree.viewport().mapToGlobal(pos))
+
+    def _expand_below(self, node: Node) -> None:
+        item = self.tree.item_for(node)
+        if item is not None:
+            self.tree.expandRecursively(self.tree.indexFromItem(item))
 
     def _collapse_tree(self) -> None:
         """Everything folded but the project and its section headings, so the tree
@@ -3082,6 +3473,7 @@ class MainWindow(QMainWindow):
                 "result_group",
                 "sweep",
                 "compare",
+                "folder",
             )
         ):
             return None
@@ -3268,7 +3660,21 @@ class MainWindow(QMainWindow):
             node = node[int(part)] if isinstance(node, list) else getattr(node, part)
         return getattr(node, "selection", None)
 
+    def agent_turn(self, on: bool) -> None:
+        """The agent is working (ADR 0074): its changes reload the project once, when
+        its turn ends, not after each one (a reload redraws the view, seconds on a large
+        model, which kept the window busy for most of a turn)."""
+        self._agent_turn = on
+        if not on and getattr(self, "_reload_held", False):
+            self._reload_held = False
+            self.reload()
+
     def _reload_soon(self) -> None:
+        if getattr(self, "_agent_turn", False):
+            self._reload_held = True
+            if self.session is not None and not self.watcher.files():
+                self.watcher.addPath(str(self.session.root / HISTORY))
+            return
         self._reload_timer.start()
         # Some editors replace the file; keep watching the new one.
         if self.session is not None and not self.watcher.files():
@@ -3456,6 +3862,8 @@ class MainWindow(QMainWindow):
             self.resizeDocks([self.advisor_dock], [320], horizontal)  # alone: narrow
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        if getattr(self, "mouse3d", None) is not None:
+            self.mouse3d.stop()
         if self._sized:  # only a window that was on screen has a layout to keep
             self.save_layout()
         self.viewport.close_plotter()
@@ -3553,26 +3961,41 @@ class PlotsPanel(QWidget):
         self.show_path(op)
 
     def _operators(self, project, store, ops) -> None:
-        """Ticked plot operators: each table's first column against its second, in
-        display units."""
+        """Ticked plot operators: every curve wired in (ADR 0071), in display units;
+        limit lines dashed across the others' x, annotated points labelled."""
         import numpy as np
 
         from puzzle.gui.viewport import _display
         from puzzle.operators import evaluate as ev
 
         ctx = ev.Context(project, store)
+        self.dashed: set[int] = set()
+        self.notes: list[tuple[float, float, str]] = []
         for op in ops:
-            table = ev.value(ctx, op)
-            xs = [r[0] for r in table.rows]
-            if not all(isinstance(x, float) for x in xs):  # points by name: their order
-                xs = [float(i + 1) for i in range(len(xs))]
-            kinds = table.kinds or [None, None]
-            x_shown, x_unit = _display(np.array(xs, float), kinds[0])
-            y_shown, _ = _display(np.array([r[1] for r in table.rows], float), kinds[1])
-            pts = list(zip(map(float, x_shown), map(float, y_shown), strict=True))
-            self.charts[len(self.series)] = op.chart  # line, bars or points (ADR 0064)
-            self.series.append((op.name, pts))
-            self.curve.x_label = table.columns[0] + (f" ({x_unit})" if x_unit else "")
+            curves = ev.outputs(ctx, op)["curves"]
+            lines = curves.lines
+            xs_all = [float(v) for c in lines for v in c.x if np.isfinite(v)]
+            span = (min(xs_all), max(xs_all)) if xs_all else (0.0, 1.0)
+            one = len(curves.curves) == 1
+            for c in curves.curves:
+                if c.style == "limit":
+                    x, y = np.array(span, float), np.repeat(c.y[:1], 2)
+                    self.dashed.add(len(self.series))
+                else:
+                    x, y = c.x, c.y
+                    if x.size and not np.isfinite(x).any():  # points by name: their order
+                        x = np.arange(1.0, len(y) + 1)
+                x_shown, x_unit = _display(np.asarray(x, float), curves.x_kind)
+                y_shown, _ = _display(np.asarray(y, float), curves.y_kind)
+                pts = list(zip(map(float, x_shown), map(float, y_shown), strict=True))
+                self.charts[len(self.series)] = op.chart  # line, bars or points (ADR 0064)
+                self.series.append((op.name if one else c.label, pts))
+                if c.mark is not None:
+                    mx, _ = _display(np.array([c.mark[0]]), curves.x_kind)
+                    my, _ = _display(np.array([c.mark[1]]), curves.y_kind)
+                    self.notes.append((float(mx[0]), float(my[0]), c.note))
+            if lines or curves.curves:
+                self.curve.x_label = curves.x_label + (f" ({x_unit})" if x_unit else "")
 
     def show_path(self, probe) -> None:
         """A path's plot: ticked alone, the Plots tab opened (ADR 0042)."""
@@ -3638,7 +4061,8 @@ class PlotsPanel(QWidget):
                 self.window.report(exc)
             self.curve.set_series(
                 self.series, dots={i for i, c in self.charts.items() if c == "scatter"},
-                bars={i for i, c in self.charts.items() if c == "bar"})  # fmt: skip
+                bars={i for i, c in self.charts.items() if c == "bar"},
+                dashed=getattr(self, "dashed", ()), notes=getattr(self, "notes", ()))  # fmt: skip
             return
         paths = [p for p in ticked if p is not None and p.type in ("path", "linearized")]
         if paths:  # paths plot against the distance; steps don't mix with them

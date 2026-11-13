@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from puzzle.errors import PuzzleError
+from puzzle.jobs.warm import batched as _batched  # ADR 0072: warm containers
 
 
 @dataclass
@@ -144,6 +145,7 @@ def _read(project, store, study, p: Pass, outputs) -> None:
         p.kinds[name] = None if isinstance(got, ev.Verdict) else got.kind
 
 
+@_batched
 def run(project, study, root: Path, workdir: Path, *, store, settings=None, solve=None,
         on_output=None, cancel=None, read_only: bool = False) -> Outcome:  # fmt: skip
     """Solve the passes not run yet (or, `read_only`, read back those that ran)."""
@@ -253,7 +255,7 @@ def _keep_table(root: Path, study, out: Outcome) -> None:
 
     folder = Path(root) / RESULTS_DIR / "adapt"
     folder.mkdir(parents=True, exist_ok=True)
-    (folder / f"{study.id}.json").write_text(json.dumps(out.to_dict(), indent=1))
+    (folder / f"{study.id}.json").write_text(json.dumps(out.to_dict(), indent=1), encoding="utf-8")
 
 
 def lines(out: Outcome) -> list[str]:

@@ -38,7 +38,7 @@ def _stl(path):
 def _obj(path):
     lines = [f"v {x} {y} {z}" for x, y, z in CORNERS]
     lines += ["f " + " ".join(str(i + 1) for i in q) for q in QUADS]  # quads: split on read
-    path.write_text("\n".join(lines) + "\n")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path
 
 

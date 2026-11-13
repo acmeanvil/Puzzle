@@ -36,11 +36,11 @@ class Preference:
 
 
 def _core_choices() -> list[tuple[str, int]]:
-    """Cores per run: the physical cores (0, the default), or a number up to the logical
-    cores, from this computer (ADR 0053)."""
-    from puzzle.machine import logical_cores, physical_cores
+    """Cores per run: automatic (0, the default: `machine.default_cores`), or a number up
+    to the logical cores, from this computer (ADR 0053)."""
+    from puzzle.machine import default_cores, logical_cores
 
-    return [(f"Physical cores ({physical_cores()})", 0)] + [
+    return [(f"Automatic ({default_cores()})", 0)] + [
         (str(n), n) for n in range(1, logical_cores() + 1)
     ]
 
@@ -77,6 +77,11 @@ def _legend_preferences() -> list[Preference]:
         Preference("results.sweep_angle", "Results", "Revolved through", 270.0,
                    [("90°", 90.0), ("180°", 180.0), ("270°", 270.0), ("360°", 360.0)],
                    "How far an axisymmetric result is turned about its axis."),
+        Preference("results.symmetric_view", "Results", "Symmetric models", "whole",
+                   [("Drawn whole (mirrored, turned, repeated)", "whole"),
+                    ("The part modelled", "part")],
+                   "How a model cut by symmetry planes, a cyclic sector or a periodic slice "
+                   "is drawn (ADR 0081); probes read the part modelled."),
     ]  # fmt: skip
 
 
@@ -209,6 +214,80 @@ PREFERENCES: list[Preference] = [
     Preference(
         "interface.view_colour_top", "Interface", "My gradient's top", "#6a7382", kind="colour"
     ),
+    # ADR 0069: a 6-DOF navigation device (3Dconnexion SpaceMouse and compatibles).
+    Preference(
+        "mouse3d.enabled",
+        "3D mouse",
+        "3D mouse",
+        True,
+        [("On when one is plugged in", True), ("Off", False)],
+        "A SpaceMouse or similar steers the 3D view: push, pull and twist the cap.",
+    ),
+    Preference(
+        "mouse3d.speed",
+        "3D mouse",
+        "Speed",
+        1.0,
+        [("Slow", 0.4), ("Normal", 1.0), ("Fast", 2.0), ("Fastest", 4.0)],
+    ),
+    Preference(
+        "mouse3d.mode",
+        "3D mouse",
+        "What moves",
+        "object",
+        [
+            ("The model (push the cap, the model goes that way)", "object"),
+            ("The camera (push the cap, the view goes that way)", "camera"),
+        ],
+    ),
+    Preference(
+        "mouse3d.motion",
+        "3D mouse",
+        "Motion",
+        "both",
+        [("Turn and move", "both"), ("Turn only", "rotate"), ("Move only", "translate")],
+    ),
+    Preference(
+        "mouse3d.dominant",
+        "3D mouse",
+        "One axis at a time",
+        False,
+        [("Off", False), ("On: only the strongest push or twist", True)],
+        "Steadier for exact moves: the cap's largest motion alone moves the view.",
+    ),
+    Preference(
+        "mouse3d.invert_zoom",
+        "3D mouse",
+        "Zoom",
+        False,
+        [("Pull up to bring the model nearer", False), ("Push down to bring it nearer", True)],
+    ),
+    Preference(
+        "mouse3d.button_1",
+        "3D mouse",
+        "Left button",
+        "fit",
+        [
+            ("Fit all", "fit"),
+            ("Isometric", "iso"),
+            ("Refresh view", "refresh_view"),
+            ("Section cut", "section"),
+            ("Nothing", ""),
+        ],
+    ),
+    Preference(
+        "mouse3d.button_2",
+        "3D mouse",
+        "Right button",
+        "iso",
+        [
+            ("Fit all", "fit"),
+            ("Isometric", "iso"),
+            ("Refresh view", "refresh_view"),
+            ("Section cut", "section"),
+            ("Nothing", ""),
+        ],
+    ),
     Preference(
         "geometry.preview",
         "Geometry",
@@ -337,8 +416,10 @@ PREFERENCES: list[Preference] = [
         0,
         _core_choices(),
         "How many processor cores one solver run may use (threads, or threads times "
-        "processes). Physical cores is usually fastest: finite element solves gain little "
-        "from a second thread per core. Your own OMP_NUM_THREADS or CCX_NPROC_* win.",
+        "processes). Automatic is 4, or one fewer than the physical cores on a smaller "
+        "computer, so it stays usable while solving; finite element solves gain little past "
+        "that, and nothing from a second thread per core. Your own OMP_NUM_THREADS or "
+        "CCX_NPROC_* win.",
     ),
     Preference(
         "solvers.processes",
@@ -379,6 +460,17 @@ PREFERENCES: list[Preference] = [
         "drops, and is picked up again when the project is opened. Off, solves run inside "
         "Puzzle as before.",
     ),
+    Preference(
+        "solvers.build_pardiso",
+        "Solvers",
+        "Build CalculiX with PARDISO",
+        True,
+        [("On: built once in the background", True), ("Off: the plain CalculiX only", False)],
+        "On, Puzzle builds CalculiX with Intel MKL's PARDISO on this computer once, in the "
+        "background (ADR 0068, 0051): contact and other large solves factor 2 to 4 times "
+        "faster, with the same answers. The plain CalculiX is used until it is done, and "
+        "if the build fails. Settings > Solvers shows how it stands.",
+    ),
     *_connection_preferences(),
     Preference(
         "schematic.uses",
@@ -415,7 +507,7 @@ class Settings:
         self.path = Path(path) if path else settings_path()
         self.data: dict[str, Any] = {}
         if self.path.exists():
-            self.data = _flatten(tomllib.loads(self.path.read_text()))
+            self.data = _flatten(tomllib.loads(self.path.read_text(encoding="utf-8")))
 
     def get(self, key: str) -> Any:
         pref = BY_KEY.get(key)
@@ -441,7 +533,7 @@ class Settings:
 
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".toml.tmp")
-        tmp.write_text(tomli_w.dumps(_nest(self.data)))
+        tmp.write_text(tomli_w.dumps(_nest(self.data)), encoding="utf-8")
         tmp.replace(self.path)  # never a half-written file
 
     # what the rest of Puzzle asks

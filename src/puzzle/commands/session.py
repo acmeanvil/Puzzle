@@ -33,6 +33,7 @@ from uuid import UUID
 from puzzle.commands.model import (
     AddLibraryMaterial,
     CopyComponent,
+    CopyStudy,
     Create,
     Delete,
     Edit,
@@ -528,7 +529,11 @@ class Session:
         path = self.root / HISTORY
         if not path.exists():
             return []
-        return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+        return [
+            json.loads(line)
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
 
     def history(self, limit: int = 20) -> list[dict[str, Any]]:
         """The latest entries, newest first, without the undo snapshots."""
@@ -826,7 +831,7 @@ class Session:
         entries = self.history_entries()
         seq = max((e.get("seq", 0) for e in entries), default=0) + 1
         entry = {"seq": seq, "time": datetime.now(UTC).isoformat(), **entry}
-        with path.open("a") as f:
+        with path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry, separators=(",", ":")) + "\n")
         return seq
 
@@ -929,6 +934,16 @@ def _execute(project: Project, cmd: _Command) -> dict[str, Any]:
     if isinstance(cmd, CopyComponent):
         comp = resolve(project, cmd.component, Component)
         copy_ = project.copy_component(comp.id, cmd.name)
+        out = {"id": str(copy_.id), "name": copy_.name}
+        if cmd.studies:
+            studies = [s for s in project.of_type(Study) if s.component == comp.id]
+            made = [project.copy_study(s.id, project.unique_name(f"{s.name} ({copy_.name})"),
+                                       component=copy_.id) for s in studies]  # fmt: skip
+            out["studies"] = [{"id": str(s.id), "name": s.name} for s in made]
+        return out
+    if isinstance(cmd, CopyStudy):
+        study = resolve(project, cmd.study, Study)
+        copy_ = project.copy_study(study.id, cmd.name)
         return {"id": str(copy_.id), "name": copy_.name}
     raise PuzzleError(f"{cmd.command} is not applied here", code="unsupported")
 

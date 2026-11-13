@@ -44,7 +44,7 @@ def _tip_csv(path, value, header):
     yy, zz = np.meshgrid(g, g)
     rows = [header] + [f"{L:.10g},{y:.10g},{z:.10g},{value:.10g}"
                        for y, z in zip(yy.ravel(), zz.ravel(), strict=True)]  # fmt: skip
-    path.write_text("\n".join(rows) + "\n")
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
     return path
 
 
@@ -113,7 +113,7 @@ def _transient(tmp_path, use_field):
 def test_a_transient_flux_follows_the_field_as_an_amplitude_would(tmp_path, solver):
     field = _transient(tmp_path / "field", True)
     amplitude = _transient(tmp_path / "amplitude", False)
-    deck = next((tmp_path / "field" / "run").rglob("*.inp")).read_text()
+    deck = next((tmp_path / "field" / "run").rglob("*.inp")).read_text(encoding="utf-8")
     assert "*AMPLITUDE, NAME=FIELD1" in deck and "AMPLITUDE=FIELD1" in deck
     print(f"tip at 5 s: {field[5.0]:.6f} K (amplitude {amplitude[5.0]:.6f} K), at 10 s: "
           f"{field[10.0]:.6f} K ({amplitude[10.0]:.6f} K)")  # fmt: skip

@@ -65,7 +65,7 @@ def residual_control(case: Path) -> dict[str, float]:
     """fvSolution's SIMPLE residualControl (keys as written: names or quoted regular
     expressions), with Allrun's foamDictionary overrides (ADR 0023) applied."""
     fv = case / "system" / "fvSolution"
-    text = fv.read_text(errors="replace") if fv.exists() else ""
+    text = fv.read_text(errors="replace", encoding="utf-8") if fv.exists() else ""
     body = _block(_block(text, "SIMPLE"), "residualControl")
     out = {k.strip('"'): float(v) for k, v in re.findall(r'("[^"]+"|\S+)\s+' + _NUM + ";", body)}
     prefix = "system/fvSolution/SIMPLE/residualControl/"
@@ -82,7 +82,7 @@ def _overrides(case: Path) -> dict[str, str]:
     out: dict[str, str] = {}
     if not allrun.exists():
         return out
-    for line in allrun.read_text(errors="replace").splitlines():
+    for line in allrun.read_text(errors="replace", encoding="utf-8").splitlines():
         if not line.startswith("foamDictionary ") or " -set " not in line:
             continue
         try:
@@ -97,7 +97,7 @@ def _overrides(case: Path) -> dict[str, str]:
 
 def end_time(case: Path) -> int | None:
     control = case / "system" / "controlDict"
-    text = control.read_text(errors="replace") if control.exists() else ""
+    text = control.read_text(errors="replace", encoding="utf-8") if control.exists() else ""
     value = _overrides(case).get("system/controlDict/endTime")
     if value is None and (m := re.search(r"^endTime\s+" + _NUM + r"\s*;", text, re.M)):
         value = m[1]

@@ -58,7 +58,8 @@ def _write_ensight(d, coords, hexa, velocity, pressure):
     (d / "R.case").write_text(
         "FORMAT\ntype: ensight gold\n\nGEOMETRY\nmodel: r.geo\n\nVARIABLE\n"
         "vector per element: 1 Velocity r.velocity.*****\n"
-        "scalar per element: 1 Pressure r.pressure.*****\n"
+        "scalar per element: 1 Pressure r.pressure.*****\n",
+        encoding="utf-8",
     )
 
 
@@ -142,11 +143,11 @@ def test_case_files(tmp_path):
     )
     outlet = Feature(type="pressure_outlet", selection="Duct/Out")
     spec_path = _channel(tmp_path, [inlet, outlet], settings={"iterations": 50})
-    spec = json.loads(spec_path.read_text())
+    spec = json.loads(spec_path.read_text(encoding="utf-8"))
     work = spec_path.parent
-    assert (work / "cs_setup.py").exists() and (work / "mesh.msh").read_text().startswith(
-        "$MeshFormat\n2.2"
-    )
+    assert (work / "cs_setup.py").exists() and (work / "mesh.msh").read_text(
+        encoding="utf-8"
+    ).startswith("$MeshFormat\n2.2")
     assert spec["density"] == pytest.approx(998.2) and spec["iterations"] == 50
     zones = {z["label"]: z for z in spec["zones"]}
     assert zones["Duct_In"]["nature"] == "inlet" and zones["Duct_In"]["velocity"] == pytest.approx(
@@ -229,7 +230,7 @@ def _duct(tmp_path, flow_settings=None, heat=None, inlet_values=None):
     )
     mesh_ = generate_mesh(p, comp.id, tmp_path, tmp_path / "m").mesh
     case = CodeSaturneAdapter().write_input(p, study, mesh_, tmp_path / "case")
-    return json.loads(case.read_text())
+    return json.loads(case.read_text(encoding="utf-8"))
 
 
 def test_heat_transfer_case(tmp_path):

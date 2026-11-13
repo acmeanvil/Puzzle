@@ -72,7 +72,7 @@ def test_a_failing_script_says_why():
 @needs_env
 @pytest.mark.skipif(sys.platform != "darwin", reason="the folder is denied by sandbox-exec")
 def test_a_script_cannot_read_the_project(tmp_path):
-    (tmp_path / "secret.txt").write_text("the project's own file")
+    (tmp_path / "secret.txt").write_text("the project's own file", encoding="utf-8")
     code = f"out = open({str(tmp_path / 'secret.txt')!r}).read()"
     with pytest.raises(PuzzleError) as exc:
         scripts.run(code, {}, project_root=tmp_path)

@@ -4,7 +4,7 @@ solver (Code_Aster's own log reports the keyword it was given)."""
 
 import pytest
 from conftest_geometry import bar_project, write_bar_step
-from solvers import over
+from solvers import needs_petsc, over
 
 from puzzle.model.schema import Feature, Physics, Quantity, SolveStep, Study
 from puzzle.solve import run_study
@@ -38,10 +38,14 @@ def _tip(tmp_path, solver, own, expert=None, shared=None):
 @over("calculix", "code_aster", "elmer", "fenicsx")
 def test_every_linear_solver_gives_the_same_answer(tmp_path, solver):
     pytest.importorskip("OCP")
+    needs_petsc(solver)  # the linear methods are PETSc's
     tips = [_tip(tmp_path / str(i), solver, own)[0] for i, own in enumerate(CASES[solver])]
     print(f"{solver}: tip deflection {', '.join(f'{t:.8g}' for t in tips)}")
     assert tips[1] == pytest.approx(tips[0], rel=1e-8)
-    assert tips[2] == pytest.approx(tips[0], rel=1e-5)  # iterative: to its tolerance
+    # Iterative: to its tolerance. CalculiX's ITERATIVE CHOLESKY stops when its last update
+    # is small, which doesn't bound the error: 2e-6 off on macOS, 4.6e-5 on Windows
+    # (the same deck under ITERATIVE SCALING agrees with SPOOLES to 12 digits).
+    assert tips[2] == pytest.approx(tips[0], rel=1e-4 if solver == "calculix" else 1e-5)
 
 
 @over("code_aster")
@@ -49,8 +53,11 @@ def test_code_aster_pass_through_reaches_the_solver(tmp_path, solver):
     pytest.importorskip("OCP")
     tip, work = _tip(tmp_path, solver, {}, {"MECA_STATIQUE.SOLVEUR.RENUM": "'METIS'"},
                      {"linear_solver": "direct"})  # fmt: skip
-    comm = next(work.rglob("job.comm")).read_text()
-    assert "SOLVEUR=_F(RENUM='METIS')" in comm and tip < 0
+    comm = next(work.rglob("job.comm")).read_text(encoding="utf-8")
+    import re
+
+    # The SOLVEUR block may hold the adapter's own keywords too (POSTTRAITEMENTS, 2026-11-08).
+    assert re.search(r"SOLVEUR=_F\([^)]*RENUM='METIS'", comm) and tip < 0
 
 
 @over("elmer")
@@ -59,7 +66,7 @@ def test_elmer_pass_through_and_shared_settings(tmp_path, solver):
     tip, work = _tip(tmp_path, solver, {}, {"Solver 1/Linear System Residual Output": "10",
                                             "Simulation/Max Output Level": "3"},
                      {"linear_solver": "iterative"})  # fmt: skip
-    sif = next(work.rglob("case.sif")).read_text()
+    sif = next(work.rglob("case.sif")).read_text(encoding="utf-8")
     assert "Linear System Iterative Method = BiCGStabL" in sif
     assert "Max Output Level = 3" in sif and "Max Output Level = 5" not in sif
     assert "Linear System Residual Output = 10" in sif and tip < 0
@@ -70,9 +77,10 @@ def test_fenicsx_petsc_options_reach_the_solve(tmp_path, solver):
     import json
 
     pytest.importorskip("OCP")
+    needs_petsc(solver)
     expert = {"ksp_type": "gmres", "pc_type": "gamg", "ksp_rtol": "1e-11"}
     tip, work = _tip(tmp_path, solver, {}, expert)
-    case = json.loads(next(work.rglob("case.json")).read_text())
+    case = json.loads(next(work.rglob("case.json")).read_text(encoding="utf-8"))
     assert case["settings"]["petsc_options"] == expert and tip < 0
 
 
@@ -112,9 +120,41 @@ def test_cfd_settings_keep_poiseuille(tmp_path, solver):
     study.solver_settings = {solver: own}
     study.expert_settings = {solver: expert}
     run = run_study(project, study.id, bench, tmp_path / "run", timeout_s=1800)
-    written = next((tmp_path / "run").rglob(name)).read_text()
+    written = next((tmp_path / "run").rglob(name)).read_text(encoding="utf-8")
     for text in expected:
         assert text in " ".join(written.split()), text
     u = run.results.last("velocity").values[:, 0]
     print(f"{solver}: peak velocity {u.max() / channel.U:.4f} of the mean (Poiseuille 1.5)")
     assert u.max() / channel.U == pytest.approx(1.5, rel=0.01)
+
+
+CONVERGENCE = {
+    "calculix": ({"cutbacks": 8, "cutback_factor": 0.5, "increase_factor": 2.0},
+                 {"increments": 4, "initial_increment": 0.25, "min_increment": 1e-5}),
+    "code_aster": ({"line_search": "MIXTE", "prediction": "ELASTIQUE", "cutback_parts": 2,
+                    "cutback_levels": 3},
+                   {"increments": 3, "min_increment": 1e-3}),
+}  # fmt: skip
+
+
+@over("calculix", "code_aster")
+def test_convergence_settings_keep_the_answer(tmp_path, solver):
+    """Load stepping, cut-backs and line search (ADR 0023) change how a large-deflection
+    solve gets there, not where: the tip agrees with the defaults' to the tolerance, and
+    the controls reach the input."""
+    pytest.importorskip("OCP")
+    own, stepping = CONVERGENCE[solver]
+    nl = {"geometric_nonlinearity": True}
+    plain, _ = _tip(tmp_path / "plain", solver, {}, None, nl)
+    tip, work = _tip(tmp_path / "set", solver, own, None, nl | stepping)
+    print(f"{solver}: tip {plain:.8g} by default, {tip:.8g} with the controls")
+    assert tip == pytest.approx(plain, rel=1e-5)
+    fixed, _ = _tip(tmp_path / "fixed", solver, {}, None,
+                    nl | {"increments": 2, "fixed_increments": True})  # fmt: skip
+    assert fixed == pytest.approx(plain, rel=1e-5)
+    if solver == "calculix":
+        deck = next(work.rglob("*.inp")).read_text(encoding="utf-8")
+        assert "0.25, 1.0, 1e-05, 0.25" in deck and ", 8, 0, 0\n0.5," in deck
+    else:
+        comm = next(work.rglob("job.comm")).read_text(encoding="utf-8")
+        assert "RECH_LINEAIRE=_F(METHODE='MIXTE')" in comm and "SUBD_PAS=2" in comm

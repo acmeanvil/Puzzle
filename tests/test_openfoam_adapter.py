@@ -100,21 +100,26 @@ def _duct(tmp_path, flow_settings=None, heat=None, inlet_values=None, order=1, e
 def test_case_files(tmp_path):
     allrun, _ = _duct(tmp_path)
     case = allrun.parent
-    script = allrun.read_text()
+    script = allrun.read_text(encoding="utf-8")
     assert script.index("gmshToFoam") < script.index("simpleFoam") < script.index("postProcess")
     assert "entry0/Duct_Walls/type -set wall" in script
     assert "entry0/Duct_Sides/type -set symmetry" in script
-    msh = (case / "mesh.msh").read_text()
+    msh = (case / "mesh.msh").read_text(encoding="utf-8")
     assert msh.startswith("$MeshFormat\n2.2") and '"Duct_Inlet"' in msh
     assert OpenFoamAdapter().command(allrun) == ["bash", "Allrun"]
 
-    u, p = (case / "0" / "U").read_text(), (case / "0" / "p").read_text()
+    u, p = (
+        (case / "0" / "U").read_text(encoding="utf-8"),
+        (case / "0" / "p").read_text(encoding="utf-8"),
+    )
     assert "surfaceNormalFixedValue" in u and "refValue uniform -1;" in u  # into the domain
     assert f"uniform {10 / RHO:.10g};" in p  # kinematic pressure
-    nu = (case / "constant" / "transportProperties").read_text()
+    nu = (case / "constant" / "transportProperties").read_text(encoding="utf-8")
     assert f"nu {MU / RHO:.10g};" in nu
-    assert "simulationType laminar;" in (case / "constant" / "turbulenceProperties").read_text()
-    control = (case / "system" / "controlDict").read_text()
+    assert "simulationType laminar;" in (case / "constant" / "turbulenceProperties").read_text(
+        encoding="utf-8"
+    )
+    control = (case / "system" / "controlDict").read_text(encoding="utf-8")
     assert "writeFormat ascii;" in control and "writeCompression off;" in control
 
 
@@ -131,15 +136,17 @@ def test_heat_transfer_case(tmp_path):
     ]
     allrun, _ = _duct(tmp_path, heat=heat)
     case = allrun.parent
-    t = (case / "0" / "T").read_text()
+    t = (case / "0" / "T").read_text(encoding="utf-8")
     walls = t[t.index("Duct_Walls") :]
     assert "fixedGradient" in walls[:200] and f"uniform {1000 / K:.10g};" in walls[:200]
     inlet = t[t.index("Duct_Inlet") :]
     assert "uniform 293.15;" in inlet[:200]
-    control = (case / "system" / "controlDict").read_text()
+    control = (case / "system" / "controlDict").read_text(encoding="utf-8")
     prandtl = MU * AIR["specific_heat"].to_si() / K
     assert "scalarTransport" in control and f"alphaD {1 / prandtl:.10g};" in control
-    assert "T 1e-08;" in (case / "system" / "fvSolution").read_text()  # T is in the stop test
+    assert "T 1e-08;" in (case / "system" / "fvSolution").read_text(
+        encoding="utf-8"
+    )  # T is in the stop test
 
 
 def test_turbulence_case(tmp_path):
@@ -149,8 +156,13 @@ def test_turbulence_case(tmp_path):
         inlet_values={"intensity": Quantity(value=0.04)},
     )
     case = allrun.parent
-    assert "RASModel kOmegaSST;" in (case / "constant" / "turbulenceProperties").read_text()
-    k, omega = (case / "0" / "k").read_text(), (case / "0" / "omega").read_text()
+    assert "RASModel kOmegaSST;" in (case / "constant" / "turbulenceProperties").read_text(
+        encoding="utf-8"
+    )
+    k, omega = (
+        (case / "0" / "k").read_text(encoding="utf-8"),
+        (case / "0" / "omega").read_text(encoding="utf-8"),
+    )
     assert "intensity 0.04;" in k and "kqRWallFunction" in k
     assert "omegaWallFunction" in omega
     assert "mixingLength 0.0007;" in omega  # 0.07 x 4A/P of the 10 mm square
@@ -184,13 +196,15 @@ def test_field_reader(tmp_path):
         "boundaryField\n{\n    inlet\n    {\n        type fixedValue;\n"
         "        value nonuniform List<vector> 1((0 0 0));\n    }\n}\n"
     )
-    (tmp_path / "U").write_text(vector)
+    (tmp_path / "U").write_text(vector, encoding="utf-8")
     assert read_internal_field(tmp_path / "U", 3).tolist() == [
         [1, 2, 3],
         [4, 5, 6],
         [-7, 0.008, 9],
     ]
-    (tmp_path / "p").write_text("dimensions [0 2 -2 0 0 0 0];\ninternalField uniform 2.5;\n")
+    (tmp_path / "p").write_text(
+        "dimensions [0 2 -2 0 0 0 0];\ninternalField uniform 2.5;\n", encoding="utf-8"
+    )
     assert read_internal_field(tmp_path / "p", 2).tolist() == [[2.5], [2.5]]
     with pytest.raises(ValueError, match="cells"):
         read_internal_field(tmp_path / "U", 4)
@@ -211,9 +225,11 @@ def test_results_map_back_to_elements(tmp_path):
     centres = np.load(case / "element-centroids.npy")[::-1]
     final = case / "170"
     final.mkdir()
-    (final / "C").write_text(_list(centres, "vector"))
-    (final / "U").write_text(_list(np.column_stack([centres[:, 0], 0 * centres[:, :2]]), "vector"))
-    (final / "p").write_text(_list(centres[:, :1] * 2.0, "scalar"))
+    (final / "C").write_text(_list(centres, "vector"), encoding="utf-8")
+    (final / "U").write_text(
+        _list(np.column_stack([centres[:, 0], 0 * centres[:, :2]]), "vector"), encoding="utf-8"
+    )
+    (final / "p").write_text(_list(centres[:, :1] * 2.0, "scalar"), encoding="utf-8")
     results = OpenFoamAdapter().read_results(allrun)
     velocity, pressure = results.last("velocity"), results.last("pressure")
     assert velocity.location == "element"

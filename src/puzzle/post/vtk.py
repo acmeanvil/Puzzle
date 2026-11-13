@@ -17,6 +17,13 @@ VTK_CELLS = {
     "tet10": (24, [0, 1, 2, 3, 4, 5, 6, 7, 9, 8]),
     "hex8": (12, None),
     "wedge6": (13, None),
+    # Revolved bolts (ADR 0077): VTK orders the edges as CalculiX does.
+    "hex20": (25, [0, 1, 2, 3, 4, 5, 6, 7, 8, 11, 13, 9, 16, 18, 19, 17, 10, 12, 14, 15]),
+    "wedge15": (26, [0, 1, 2, 3, 4, 5, 6, 9, 7, 12, 14, 13, 8, 10, 11]),
+    # Lagrange bricks and prisms drawn by their serendipity nodes (the face and centre
+    # nodes, which a flat-shaded view can't show, left out of the cells).
+    "hex27": (25, [0, 1, 2, 3, 4, 5, 6, 7, 8, 11, 13, 9, 16, 18, 19, 17, 10, 12, 14, 15]),
+    "wedge18": (26, [0, 1, 2, 3, 4, 5, 6, 9, 7, 12, 14, 13, 8, 10, 11]),
     "pyramid5": (14, None),
     "line2": (3, None),  # beams (ADR 0027); Gmsh and VTK both put the mid node last
     "line3": (21, None),
@@ -24,6 +31,7 @@ VTK_CELLS = {
     "tri6": (22, None),
     "quad4": (9, None),
     "quad8": (23, None),
+    "quad9": (28, None),  # corners, mid-edges, centre in both
 }
 
 
@@ -47,6 +55,13 @@ def von_mises(stress: np.ndarray) -> np.ndarray:
     )
 
 
+def grid_blocks(mesh: Mesh) -> list:
+    """The blocks `to_grid` makes cells of, in its order: volumes, beams and shells, and
+    a 2D model's regions (ADR 0048), which are its elements."""
+    return [b for b in mesh.blocks if b.dim == 3] + mesh.structural_blocks() + (
+        mesh.region_blocks())  # fmt: skip
+
+
 def to_grid(mesh: Mesh, step: StepResult | None = None):
     """A pyvista UnstructuredGrid of the volume, beam, shell and 2D region elements, with
     the step's nodal fields.
@@ -57,9 +72,7 @@ def to_grid(mesh: Mesh, step: StepResult | None = None):
 
     cells, types = [], []
     order = np.argsort(mesh.node_ids)
-    # Volumes, beams and shells; a 2D model's regions (ADR 0048) are its elements.
-    shown = [b for b in mesh.blocks if b.dim == 3] + mesh.structural_blocks()
-    shown += mesh.region_blocks()
+    shown = grid_blocks(mesh)
     for b in shown:
         if b.element not in VTK_CELLS:
             raise ValueError(f"viewing {b.element} elements is not supported yet")
@@ -76,6 +89,8 @@ def to_grid(mesh: Mesh, step: StepResult | None = None):
     grid.cell_data["element_id"] = np.concatenate([b.ids for b in shown])
     if step is not None:
         for f in step.fields.values():
+            if not len(f.ids):  # nothing stored there (older runs kept empty fields)
+                continue
             if f.location == "node":
                 _add(grid, mesh, f)
             elif f.location == "element":
@@ -146,6 +161,7 @@ def export(mesh: Mesh, results: Results, path: Path) -> list[Path]:
     pvd.write_text(
         '<?xml version="1.0"?>\n<VTKFile type="Collection" version="0.1">\n  <Collection>\n'
         + "\n".join(entries)
-        + "\n  </Collection>\n</VTKFile>\n"
+        + "\n  </Collection>\n</VTKFile>\n",
+        encoding="utf-8",
     )
     return [pvd, *files]

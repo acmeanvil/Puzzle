@@ -93,7 +93,7 @@ def _local_client(base: Path | None = None):
     if not info.exists():
         return None
     try:
-        path = json.loads(info.read_text())["socket"]
+        path = json.loads(info.read_text(encoding="utf-8"))["socket"]
     except (OSError, ValueError, KeyError):
         return None
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -140,7 +140,7 @@ def _on_disk(job: str, base: Path | None = None) -> dict | None:
     if not all(c.isalnum() or c in "-_" for c in job):
         return None
     try:
-        return Job(**json.loads(path.read_text())).public()
+        return Job(**json.loads(path.read_text(encoding="utf-8"))).public()
     except (OSError, ValueError, TypeError):
         return None
 

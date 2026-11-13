@@ -44,7 +44,7 @@ def _csv(path, points, columns: dict[str, np.ndarray], coordinates="x,y,z"):
     rows = [header]
     for i, p in enumerate(points):
         rows.append(",".join(f"{c:.12g}" for c in (*p, *(v[i] for v in columns.values()))))
-    path.write_text("\n".join(rows) + "\n")
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
     return path
 
 

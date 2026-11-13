@@ -43,6 +43,10 @@ STEPS: dict[str, list[StepField]] = {
             "points", "points", [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], "Points (mm): x, y, z; …"
         ),
     ],
+    "frame": [  # ADR 0079: members by name come through commands; a DXF's lines here
+        StepField("dxf", "file", "", "DXF drawing (its lines become members)"),
+        StepField("layer", "text", "", "Only this layer (empty: every layer)"),
+    ],
     # ADR 0065: curves, sweeps and lofts, mirror and scale.
     "spline": [
         StepField(
@@ -289,6 +293,32 @@ STEPS: dict[str, list[StepField]] = {
     "heal": [StepField("tolerance", "length", 1e-6)],
     "remove": [StepField("rule", "rule", {"holes_below": 0.003}, "Faces")],
     "fragment": [],
+    "bolt": [
+        StepField(k, "length", v, label)
+        for k, v, label in (
+            ("head_radius", 0.0112, "Head radius"),
+            ("head_height", 0.01, "Head height"),
+            ("fillet", 0.0006, "Under-head fillet"),
+            ("shank_radius", 0.008, "Shank radius"),
+            ("minor_radius", 0.0068, "Thread radius (minor)"),
+            ("length", 0.06, "Length"),
+            ("thread", 0.038, "Thread length"),
+        )
+    ],  # fmt: skip
+    "nut": [
+        StepField("outer_radius", "length", 0.012, "Outer radius"),
+        StepField("inner_radius", "length", 0.0068, "Bore radius (minor)"),
+        StepField("height", "length", 0.0148, "Height"),
+    ],  # fmt: skip
+    "washer": [
+        StepField("outer_radius", "length", 0.01474, "Outer radius"),
+        StepField("inner_radius", "length", 0.0085, "Bore radius"),
+        StepField("height", "length", 0.0033, "Thickness"),
+    ],  # fmt: skip
+    "keep": [
+        StepField("bodies", "text", "", "Bodies to keep (names, comma-separated)"),
+        StepField("body", "text", "Body", "Name of what is kept"),
+    ],  # fmt: skip
 }
 
 

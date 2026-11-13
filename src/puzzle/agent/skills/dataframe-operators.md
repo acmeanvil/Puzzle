@@ -130,7 +130,9 @@ in, each port bound to a source (`{"result": {"source": "<study id>", "port":
 limit, the measure's part) with `submit`. The recipes are: `worst_nodes`,
 `peak_per_part`, `solver_difference` (ports result and other), `stress_margin`,
 `reactions_kn` and `mass_from_geometry`. An Export of a result with `format: "png"`
-saves a picture of it.
+saves a picture of it. Users share clusters as block files (the schematic's Share
+blocks, `puzzle clusters import FILE`); those are the user's library, so suggest the
+command rather than writing it.
 
 ## Recipes by hand
 

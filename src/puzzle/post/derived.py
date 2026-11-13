@@ -479,14 +479,40 @@ def _error_estimate(project, store, definition) -> Derived:
                                   _items_of(results), [record.run_id], notes))  # fmt: skip
 
 
+def _inputs(project, store, definition) -> dict[str, float]:
+    """An equation's values from operators and result tools (`EquationInput`), SI, read
+    at its source's sweep point. Each must give one number; a check gives its margin."""
+    from puzzle.operators import evaluate as ev
+
+    if not definition.inputs:
+        return {}
+    ctx = ev.Context(project, store, point=definition.source_point)
+    out = {}
+    for i in definition.inputs:
+        got = ev.source(ctx, i.source, i.port)
+        if isinstance(got, ev.Verdict):
+            out[i.name] = float(got.margin)
+        elif isinstance(got, ev.Number):
+            out[i.name] = float(got.value)
+        else:
+            source = project.objects.get(i.source)
+            raise PuzzleError(
+                f"'{i.name}' must be one number; {getattr(source, 'name', i.source)}'s "
+                f"'{i.port}' gives {type(got).__name__.lower()}", code="invalid",
+            )  # fmt: skip
+    return out
+
+
 def _equation(project, store, definition, seen) -> Derived:
     mesh, results, items, run_ids = source_of(project, store, definition, seen)
-    key = _key(definition, run_ids)
+    inputs = _inputs(project, store, definition)
+    # The inputs' values are in the key: a value that changed is a new result.
+    key = _key(definition, [*run_ids, json.dumps(inputs, sort_keys=True)])
     if key in _CACHE:
         return _CACHE[key]
     step = _step(results, definition.source_step)
     by_name = names(items)
-    params = parameters(project)
+    params = {**parameters(project), **inputs}
     check(definition.expression, [*by_name, *params])
     used = used_names(definition.expression)
     wanted = [by_name[n] for n in sorted(used) if n in by_name]

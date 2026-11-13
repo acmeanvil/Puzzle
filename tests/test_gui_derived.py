@@ -117,6 +117,27 @@ def test_combination_and_equation_in_the_gui(window):
     assert window.viewport.shown["max"] == pytest.approx(1.5 * vm, rel=1e-6)
     assert window.results_bar.field.currentText() == "Von Mises in MPa"
 
+    # B from another operator (the maintainer, 2026-11-08): a Number of 1e6 here.
+    window.submit({"command": "create", "kind": "operator",
+                   "data": {"name": "Scale", "type": "number",
+                            "inputs": {"value": {"value": 1e6}}}})  # fmt: skip
+
+    def with_b(dialog):
+        dialog.name.setText("Von Mises over B")
+        dialog.source.setCurrentIndex(dialog.source.findData(str(combo.id)))
+        dialog.inputs["B"].setCurrentIndex(dialog.inputs["B"].findText("Scale"))
+        shown = [dialog.names.item(i).text() for i in range(dialog.names.count())]
+        assert "B  —  the value of Scale" in shown
+        dialog.expression.setText("von_mises / B")
+        assert dialog.status.text().startswith("From "), dialog.status.text()
+        return True
+
+    window.run_dialog = with_b
+    window.new_derived("equation")
+    over_b = derived_named(window, "Von Mises over B")
+    assert [i.name for i in over_b.inputs] == ["B"]
+    assert window.viewport.shown["max"] == pytest.approx(1.5 * vm, rel=1e-6)
+
     # Edit the combination: a third case is refused nothing, and one undo takes it back.
     def edit(dialog):
         dialog.add_case(study, None, -1, 1.0)

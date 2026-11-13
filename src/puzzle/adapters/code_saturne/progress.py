@@ -78,7 +78,7 @@ class CodeSaturneProgress(Parser):
     def __init__(self, input_file: Path, step: int = 1, of: int = 1) -> None:
         super().__init__(step, of)
         try:
-            case = json.loads(input_file.read_text())
+            case = json.loads(input_file.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             case = {}
         self.limit = _iterations(case)

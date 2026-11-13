@@ -319,7 +319,7 @@ def file_table(ctx, op):
     for path in paths:
         suffix = path.suffix.lower()
         if suffix in (".csv", ".txt", ".dat", ".tsv"):
-            table = ev.parse_table(path.read_text())
+            table = ev.parse_table(path.read_text(encoding="utf-8"))
             frame, k = table.frame, _kinds(table)
         elif suffix == ".parquet":
             frame, k = _with_units(pl.read_parquet(path), to_si)
@@ -690,7 +690,7 @@ def write(table, path: Path, fmt: str) -> Path:
     else:  # nine significant figures, as the Table operator's CSV
         import csv
 
-        with path.open("w", newline="") as f:
+        with path.open("w", newline="", encoding="utf-8") as f:
             w = csv.writer(f, lineterminator="\n")
             w.writerow(frame.columns)
             for r in frame.rows():

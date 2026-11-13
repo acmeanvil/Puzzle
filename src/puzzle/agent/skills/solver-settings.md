@@ -1,6 +1,6 @@
 ---
 name: solver-settings
-description: changing how a solver solves: linear solver, tolerance, iteration limit, output frequency, each solver's own settings, expert pass-through, presets
+description: changing how a solver solves: linear solver, tolerances, load stepping, cut-backs, line search and other convergence controls, each solver's own settings, pass-through, presets
 adr: 0023
 ---
 Read this when the user asks for a different linear solver, a tighter tolerance, more
@@ -15,8 +15,14 @@ solver's default, so no result moves until you set something.
    - `linear_solver`: "direct" (default) or "iterative";
    - `tolerance`: relative residual of a nonlinear solve (default 1e-6);
    - `max_iterations`: nonlinear iterations per increment (default 50);
-   - `output_every`: keep results every n-th increment or time step (default 1).
-   CalculiX, Code_Aster, Elmer and FEniCSx take all four. The CFD solvers take few:
+   - `output_every`: keep results every n-th increment or time step (default 1);
+   - load stepping of static steps (unset: the solver's own choice, the full load at
+     once for contact alone, ten increments for plasticity, lift-off and large
+     deflection): `increments` (at most 1/n of the load an increment),
+     `initial_increment` (fraction of the load, 0..1), `min_increment` (how far a cut
+     goes before the solve stops), `fixed_increments` (true: never cut back or grown).
+   CalculiX, Code_Aster, Elmer and FEniCSx take the first four. CalculiX takes all the
+   load stepping; Code_Aster all but `initial_increment`; the others none (refused). The CFD solvers take few:
    Code_Saturne only `linear_solver` = "iterative"; OpenFOAM `linear_solver` =
    "iterative" and `tolerance`. Any other shared setting set on a step (even
    `linear_solver` = "direct") is a problem there ("does not translate the setting")
@@ -66,8 +72,36 @@ shoot-out's Code_Aster runs up to date.
    - FEniCSx: PETSc options, `{"ksp_type": "gmres", "pc_type": "hypre"}`.
    - Code_Saturne: setup.xml paths, `path = value` or `path@attribute = value`.
    - OpenFOAM: `{"system/fvSolution/solvers/p/tolerance": "1e-8"}`.
+   Or all of steps 3-5 in one call, one undo, values checked first:
+   `solver_settings_set(study="<study>", shared={"increments": 20}, solvers={"code_aster":
+   {"line_search": "MIXTE"}})`. It sets the shared ones on every solve step they apply
+   to, merges each solver's block, and `null` removes a setting; `expert` replaces a
+   solver's pass-through block.
 6. `check_study(study)` before running: unknown keys, bad values, a shared setting the
    solver can't take, and pass-through it can't place all show up here.
+
+## When a nonlinear solve won't converge
+
+Read the run first (`run_progress`, `run_log` with `problems`): cut-backs, residuals
+that grow, a contact that chatters. Then, one change at a time:
+
+1. More, smaller increments: shared `increments` (20, 50) and a small
+   `initial_increment` (0.05) so contact settles before the full load.
+2. Let it cut further: CalculiX `cutbacks` (default 5) and `cutback_factor` (0.25; 0.5
+   cuts more gently); Code_Aster `cutback_levels` (5) and `cutback_parts` (4), or a
+   smaller shared `min_increment`.
+3. Code_Aster `line_search` "MIXTE" (or "CORDE") when residuals overshoot or oscillate;
+   `prediction` "ELASTIQUE" for plasticity and contact; `matrix` "ELASTIQUE" when the
+   tangent misleads (softening). CalculiX has no line search: smaller increments and
+   CalculiX's `divergence_check_after` (power, default 4; 6-8 is more patient with
+   contact) instead.
+4. Elmer: `relaxation` 0.5-0.8 for an oscillating nonlinear iteration;
+   `newton_after_iterations` 3-5 to switch from Picard to Newton.
+5. Contact stiffness itself is the contact's `stiffness` (accurate, balanced, fast), not
+   a solver setting.
+
+These change how the solver gets there, not the answer: the cantilever's tip is the
+same to eight digits with and without them (`test_solver_settings_runs.py`).
 
 ## Time schemes
 
@@ -102,6 +136,9 @@ Settings are plain numbers, with no unit: a tolerance is relative, `output_every
   set `solver_settings.calculix` as a whole object.
 - Changing the shared settings on one step only in a multi-step study: set them on every
   solve step unless the user wants otherwise.
+- Code_Aster cut-back settings with `fixed_increments`: refused (fixed never cuts).
+  `line_search_iterations` without a `line_search`: refused.
+- Load stepping on Elmer or FEniCSx: refused; they have no load increments.
 - Using pass-through for what a setting covers: the setting is checked and labelled,
   the pass-through only placed.
 - Pass-through `*STEP` or `*END STEP` cards on CalculiX: refused.

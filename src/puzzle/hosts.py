@@ -98,7 +98,7 @@ class Host:
         """A short command there, its output captured (a check, a cancel, a probe)."""
         try:
             return subprocess.run(self.ssh_argv(command), capture_output=True, text=True,
-                                  timeout=timeout)  # fmt: skip
+                                  encoding="utf-8", errors="replace", timeout=timeout)  # fmt: skip
         except subprocess.TimeoutExpired:
             raise PuzzleError(f"host '{self.name}' did not answer in {timeout:g} s",
                               code="host_unreachable") from None  # fmt: skip
@@ -150,7 +150,7 @@ def load() -> dict[str, Host]:
     path = hosts_path()
     if not path.exists():
         return {}
-    data = tomllib.loads(path.read_text())
+    data = tomllib.loads(path.read_text(encoding="utf-8"))
     known = {f.name for f in fields(Host)}
     out = {}
     for name, table in data.get("host", {}).items():
@@ -172,7 +172,7 @@ def save(hosts: dict[str, Host]) -> Path:
     path = hosts_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".toml.tmp")
-    tmp.write_text(tomli_w.dumps({"host": tables}))
+    tmp.write_text(tomli_w.dumps({"host": tables}), encoding="utf-8")
     tmp.replace(path)
     return path
 

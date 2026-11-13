@@ -8,6 +8,7 @@ Every change is an ordinary command (`Create`, `Edit`), so it is undoable and lo
 
 from __future__ import annotations
 
+from pathlib import Path
 from uuid import UUID
 
 from PySide6.QtCore import Qt
@@ -117,10 +118,20 @@ def show(window, op) -> None:
     except PuzzleError as exc:
         text = exc.message
     panel.add_rows("Output", [("Shows", text)])
+    from puzzle.operators import operator_doc
+
+    doc = operator_doc(op.type)  # ADR 0071: what it is for, always at hand
+    panel.add_rows("What it does", [("Purpose", doc["purpose"])]
+                   + ([("Example", doc["example"])] if doc["example"] else []))  # fmt: skip
     if op.type == "preview":
         preview(window, op)
-    if op.type == "filter":  # ADR 0062: the field it keeps, on the mesh it came from
+    from puzzle.operators import first_type
+
+    # ADR 0062: a Filter's field, and ADR 0071 step 5: a field operator's, on its mesh.
+    if op.type == "filter" or first_type(op, window.session.project) == "field":
         preview_field(window, op)
+    if op.type in POINT_OPERATORS:  # ADR 0070 level 2: their points coloured in the view
+        preview_points(window, op)
     if op.type == "script":  # ADR 0062 phase 4: its code in a box of its own
         from puzzle.operators.scripts import imports, missing
 
@@ -200,6 +211,56 @@ def save_cluster(window, group_id: str) -> str | None:
     return str(path)
 
 
+def import_block(window, path: str | None = None) -> str | None:
+    """A block file (someone's cluster) into My clusters, checked first (ADR 0071)."""
+    from puzzle.operators import clusters
+
+    if path is None:
+        from PySide6.QtWidgets import QFileDialog
+
+        path, _ = QFileDialog.getOpenFileName(window, "Import a block", "",
+                                              "Puzzle blocks (*.json)")  # fmt: skip
+        if not path:
+            return None
+    try:
+        key = clusters.import_file(Path(path))
+    except PuzzleError as exc:
+        window.report(exc)
+        return None
+    name = clusters.templates()[key]["name"]
+    window.statusBar().showMessage(f"Imported the block {name}: it is under Add operator → "
+                                   "My clusters", 10000)  # fmt: skip
+    return key
+
+
+def export_block(window, key: str | None = None, path: str | None = None) -> str | None:
+    """One of My clusters as a file to give someone (ADR 0071)."""
+    from puzzle.operators import clusters
+
+    found = clusters.templates()
+    if key is None:
+        mine = [(t["name"], k) for k, t in found.items() if k.startswith("mine:")]
+        if not mine:
+            words = "No clusters of your own yet: a group of operators' Save as cluster… makes one"
+            window.statusBar().showMessage(words, 8000)
+            return None
+        key = window.choose("Export a block", "Cluster", mine)
+        if key is None:
+            return None
+    if path is None:
+        from PySide6.QtWidgets import QFileDialog
+
+        stem = clusters._slug(found[key]["name"])
+        path, _ = QFileDialog.getSaveFileName(window, "Export a block",
+                                              f"{stem}{clusters.SUFFIX}",
+                                              "Puzzle blocks (*.json)")  # fmt: skip
+        if not path:
+            return None
+    written = clusters.export(key, Path(path))
+    window.statusBar().showMessage(f"Wrote {written}", 8000)
+    return str(written)
+
+
 def _is_uuid(text: str) -> bool:
     try:
         UUID(text)
@@ -263,8 +324,9 @@ def edit_code(window, op):
 
 
 def preview_field(window, op) -> bool:
-    """A Filter's field drawn in the 3D view: its kept values on its selection (or the
-    whole model), the values it leaves out in the muted colour. Returns whether drawn."""
+    """A Filter's (or a field operator's) field drawn in the 3D view: its kept values on
+    its selection (or the whole model), the values it leaves out in the muted colour.
+    Returns whether drawn."""
     import numpy as np
 
     from puzzle.gui import theme
@@ -301,6 +363,34 @@ def preview_field(window, op) -> bool:
     return True
 
 
+# Operators whose table is points with a value (ParaView's filters, ADR 0070 level 2).
+POINT_OPERATORS = ("slice", "contour", "stream", "glyph")
+
+
+def preview_points(window, op) -> int:
+    """Slice's, Contour's, Stream tracer's or Glyph's points drawn in the 3D view,
+    coloured by their last column (in display units, with the legend). Returns how
+    many."""
+    from puzzle.model.units import DIMENSIONS
+    from puzzle.operators import evaluate as ev
+
+    try:
+        ctx = ev.Context(window.session.project, window._store(), root=window.session.root)
+        got = ev.value(ctx, op)
+    except PuzzleError as exc:
+        window.statusBar().showMessage(exc.message, 8000)
+        return 0
+    if not isinstance(got, ev.Table) or not {"x", "y", "z"} <= set(got.columns):
+        return 0
+    last = got.columns[-1]
+    kind = dict(zip(got.columns, got.kinds, strict=False)).get(last)
+    points = got.frame.select(["x", "y", "z"]).to_numpy()
+    values = got.frame[last].to_numpy() if got.frame[last].dtype.is_numeric() else None
+    unit = DIMENSIONS[kind][1] if kind in DIMENSIONS else ""
+    window.viewport.show_field_points(points, values, unit=unit, bar=values is not None)
+    return len(points)
+
+
 def preview(window, op) -> int:
     """A Preview operator's table drawn in the 3D view (ADR 0064A row I1): each row's
     x, y, z pinned with its `column`'s value as the label (in display units), at most
@@ -333,15 +423,27 @@ def choices(window, op, path: str):
     project = window.session.project
     if op.type == "measure":  # ADR 0064: what to measure, by name
         return _measure_choices(project, op, path)
+    if op.type == "model_value":  # ADR 0071: an object, then one of its values, by name
+        return model_value_choices(project, op, path)
     if path == "axes" and op.type == "points":  # ADR 0062 phase 3: by name, never an id
         from puzzle.model.schema import CoordinateSystem
 
         return [("Global", None)] + [(c.name, str(c.id)) for c in project.of_type(CoordinateSystem)]
-    if path == "target" and op.type == "grid":
+    if path == "target" and op.type == "stream":  # its seeds' line: a construction path
+        from puzzle.model.schema import ConstructionGeometry
+
+        paths = [(c.name, str(c.id)) for c in project.of_type(ConstructionGeometry)
+                 if c.type == "path"]  # fmt: skip
+        return paths or [("No construction path yet: make one (Model > Construction)", None)]
+    if path == "target" and op.type in ("grid", "slice", "clip"):
         from puzzle.model.schema import ConstructionGeometry
 
         planes = [c for c in project.of_type(ConstructionGeometry) if c.type == "plane"]
-        return [("An axis plane at the origin", None)] + [(c.name, str(c.id)) for c in planes]
+        named = [(c.name, str(c.id)) for c in planes]
+        if op.type != "grid":  # ADR 0070 level 2: the plane it cuts on, a construction one
+            return named or [("No construction plane yet: make one (Model > Construction)",
+                              None)]  # fmt: skip
+        return [("An axis plane at the origin", None)] + named
     if path == "column" and op.type != "list":  # a table's columns, as it is now
         columns = table_columns(window, op)
         if columns:
@@ -461,10 +563,11 @@ def recent(window) -> list[str]:
 
 
 def ordered() -> list:
-    """Every type by group, in the order work flows (ADR 0064 item 6)."""
+    """Every type by group, groups in the order work flows (ADR 0064 item 6), each
+    group's types alphabetical by their label (the maintainer, 2026-11-08)."""
     from puzzle.operators import GROUPS
 
-    return sorted(TYPES.values(), key=lambda t: GROUPS.index(t.group))
+    return sorted(TYPES.values(), key=lambda t: (GROUPS.index(t.group), t.label.casefold()))
 
 
 class Palette(QDialog):
@@ -679,7 +782,7 @@ def read_csv(window, op, path: str | None = None):
             if hasattr(window, "ask_open_path") else None  # fmt: skip
     if not path:
         return None
-    text = Path(path).read_text()
+    text = Path(path).read_text(encoding="utf-8")
     from puzzle.operators.evaluate import parse_table
 
     try:
@@ -702,3 +805,22 @@ def driven_components(project, op) -> list:
             if any(v in names for s in g.history for v in s.args.values()
                    if isinstance(v, str))}  # fmt: skip
     return [c for c in project.of_type(Component) if any(p.geometry in geos for p in c.parts)]
+
+
+def model_value_choices(project, op, path):
+    """Model value's object (anything holding a value: materials first) and the values it
+    holds, by their names (ADR 0071 step 3)."""
+    from puzzle.operators.model_values import readable
+
+    if path == "target":
+        order = {"material": 0, "parameters": 1, "component": 2, "mesh": 3, "study": 4}
+        found = [o for o in project.objects.values() if readable(project, o)]
+        found.sort(key=lambda o: (order.get(o.kind, 9), o.name))
+        from puzzle.schematic import KIND_WORDS
+
+        return [(f"{o.name} ({KIND_WORDS.get(o.kind, o.kind).lower()})", str(o.id))
+                for o in found]  # fmt: skip
+    if path == "property":
+        obj = project.objects.get(op.target) if op.target else None
+        return [(r.label, r.path) for r in readable(project, obj)] if obj is not None else []
+    return None

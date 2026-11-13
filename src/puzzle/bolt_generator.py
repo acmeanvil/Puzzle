@@ -4,10 +4,11 @@ one command batch (one undo).
 Holes are the parts' cylindrical faces as placed (`geometry.holes`). Anchors come
 from a rule (`BoltRule`: diameters, parts, an axis direction, a coaxial tolerance,
 lengths), from two selection sets (each face of one paired with the coaxial face of
-the other), or from picked faces (paired among themselves). Each proposal is a pair of
-holes of different parts on one axis; the generator gives it a bolt type (the rule's,
-or the largest type that fits the hole), a name by the rule's pattern and its group,
-and tags it with the rule, so running the rule again says which bolts it would add and
+the other), or from picked faces (paired among themselves). Each proposal is a stack of
+holes on one axis in different bodies (of different parts, or of one part), from its
+first hole to its last (`geometry.holes.stacks`); the generator gives it a bolt type
+(the rule's, or the largest type that fits the hole), a name by the rule's pattern and
+its group, and tags it with the rule, so running the rule again says which bolts it would add and
 which no longer have holes.
 """
 
@@ -18,17 +19,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from puzzle.geometry.holes import HolePair
-
-
-@dataclass
-class Hole:
-    part: str
-    face: str
-    point: np.ndarray  # on the axis
-    axis: np.ndarray  # unit
-    diameter: float  # m
-    centre: np.ndarray  # the face's centre
+from puzzle.geometry.holes import Hole, HolePair, stacks
 
 
 @dataclass
@@ -53,77 +44,12 @@ class Plan:
 
 def holes(project, comp, root) -> tuple[list[Hole], float]:
     """Every cylindrical face of the component's parts, and the model's size (m)."""
-    from puzzle.geometry.contacts import _placed_faces, model_size
-    from puzzle.geometry.holes import _cylinders
-    from puzzle.geometry.session import occ_lock
+    from puzzle.geometry.holes import find_holes
 
-    with occ_lock:
-        faces = _placed_faces(project, comp, root)
-        size = model_size(faces) or 1.0
-        found = _cylinders(faces)
-    return [Hole(p, n, o, d / np.linalg.norm(d), 2 * r, c) for p, n, o, d, r, c in found], size
+    return find_holes(project, comp, root)
 
 
-def pair(found: list[Hole], tolerance: float, limit=None, *, same_part: bool = False,
-         ground: bool = False) -> list[HolePair]:  # fmt: skip
-    """Holes on one axis line (within `tolerance`, diameters within 25 %), in order along
-    it, become one bolt from the first to the last when they are of two parts or more:
-    a stack's middle holes are the bolt's `through`. A line breaks where consecutive
-    holes are more than 5 diameters apart (two joints on one axis), and where a hole
-    repeats the part before it (unless `same_part`: a clamp's two holes). With `ground`,
-    a hole on no line with another gets a bolt to ground. `limit(first, last)` may
-    refuse a bolt."""
-    parent = list(range(len(found)))
-
-    def root(i: int) -> int:
-        while parent[i] != i:
-            parent[i] = parent[parent[i]]
-            i = parent[i]
-        return i
-
-    for i, a in enumerate(found):
-        for j in range(i + 1, len(found)):
-            b = found[j]
-            if abs(abs(float(a.axis @ b.axis)) - 1) > 1e-6:
-                continue
-            offset = b.point - a.point
-            if np.linalg.norm(offset - (offset @ a.axis) * a.axis) > tolerance:
-                continue
-            if abs(a.diameter - b.diameter) > 0.25 * max(a.diameter, b.diameter):
-                continue
-            parent[root(j)] = root(i)
-    lines: dict[int, list[Hole]] = {}
-    for i, h in enumerate(found):
-        lines.setdefault(root(i), []).append(h)
-    out = []
-    for holes_ in lines.values():
-        axis = holes_[0].axis
-        holes_.sort(key=lambda h: float(h.centre @ axis))
-        chains, chain = [], [holes_[0]]
-        for h in holes_[1:]:
-            gap = float((h.centre - chain[-1].centre) @ axis)
-            repeat = h.part == chain[-1].part and not same_part
-            if gap > 5 * max(h.diameter, chain[-1].diameter) or repeat:
-                chains.append(chain)
-                chain = [h]
-            else:
-                chain.append(h)
-        chains.append(chain)
-        for c in chains:
-            if len(c) == 1 and ground:  # alone on its axis: anchored to the ground
-                h = c[0]
-                out.append(HolePair(h.part, h.face, None, None, h.diameter, 0.0))
-                continue
-            if len({h.part for h in c}) < 2 and not (same_part and len(c) >= 2):
-                continue
-            first, last = c[0], c[-1]
-            if limit is not None and not limit(first, last):
-                continue
-            out.append(HolePair(first.part, first.face, last.part, last.face,
-                                min(h.diameter for h in c),
-                                float(np.linalg.norm(last.centre - first.centre)),
-                                [(h.part, h.face) for h in c[1:-1]]))  # fmt: skip
-    return sorted(out, key=lambda p: (p.source_part, p.source_face))
+pair = stacks  # holes on one axis as bolts, one per stack (`geometry.holes.stacks`)
 
 
 def by_rule(project, comp, root, rule) -> list[HolePair]:
@@ -290,32 +216,6 @@ def _bearing_rings(project, comp, planned: Plan, commands_: list) -> list:
     return [*edits, *commands_]
 
 
-def _stack_selections(project, comp, planned: Plan) -> dict[tuple[str, str], str]:
-    """A face selection ("Part/Name") for each middle hole of the planned stacks: an
-    existing one holding exactly that face, else a new "Stack hole n"."""
-    from puzzle.model.schema import Geometry
-
-    out: dict[tuple[str, str], str] = {}
-    new_names: dict = {}
-    for proposal in planned.add:
-        for part, face in proposal.pair.through:
-            if (part, face) in out:
-                continue
-            geometry = project.objects[next(i.geometry for i in comp.parts if i.name == part)]
-            hit = next((s for s in geometry.selections
-                        if s.entity == "face" and s.members == [face]), None)  # fmt: skip
-            if isinstance(geometry, Geometry) and hit is not None:
-                out[part, face] = f"{part}/{hit.name}"
-                continue
-            taken = {s.name for s in geometry.selections} | new_names.setdefault(geometry.id, set())
-            n = 1
-            while f"Stack hole {n}" in taken:
-                n += 1
-            new_names[geometry.id].add(f"Stack hole {n}")
-            out[part, face] = f"{part}/Stack hole {n}"
-    return out
-
-
 def _ends_of(project, comp, p: HolePair) -> tuple[str, str] | tuple[()]:
     """The existing face selections holding exactly each hole, if both exist."""
     from puzzle.model.schema import Geometry
@@ -360,14 +260,11 @@ def commands(project, comp, planned: Plan, *, material=None, ends=None, rule=Non
         if pairs
         else []
     )
-    stack_selections = _stack_selections(project, comp, planned)
     if pairs:  # fastener_commands' last command appends the bolts: give them our values
         bolts = out[-1]
         for op, proposal in zip(bolts.ops, planned.add, strict=True):
             value = dict(op.value)
             value["name"] = proposal.name
-            if proposal.pair.through:
-                value["through"] = [stack_selections[h] for h in proposal.pair.through]
             if proposal.type is not None:
                 value["type"] = proposal.type
                 # Built untyped first, the bolt took the defaults: its type's win.
@@ -387,20 +284,6 @@ def commands(project, comp, planned: Plan, *, material=None, ends=None, rule=Non
             op.value = value
     if rule is not None and rule.bearing_faces and pairs:
         out = _bearing_rings(project, comp, planned, out)
-    if stack_selections:  # the middle holes' selections, before the bolts naming them
-        made: dict = {}
-        for (part, face), name in stack_selections.items():
-            geometry = project.objects[next(i.geometry for i in comp.parts if i.name == part)]
-            made.setdefault(geometry.id, {})[name.split("/", 1)[1]] = face
-        selections = [
-            Edit(object=str(gid), ops=[
-                EditOp(op="append", path="selections",
-                       value={"name": n, "entity": "face", "members": [f]})
-                for n, f in faces.items()
-            ])
-            for gid, faces in made.items()
-        ]  # fmt: skip
-        out = [*selections, *out]
     if rule is not None:
         known = [r.name for r in comp.bolt_rules]
         stored = rule.model_dump(mode="json")

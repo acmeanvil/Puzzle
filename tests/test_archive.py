@@ -56,9 +56,9 @@ def test_outside_geometry_comes_in_and_results_are_chosen(project, tmp_path):
     geo.source = str(outside)  # an absolute path on the sender's disk
     save_project(p, project)
     (project / "results").mkdir()
-    (project / "results" / "store.json").write_text("{}")
+    (project / "results" / "store.json").write_text("{}", encoding="utf-8")
     (project / ".puzzle" / "runs" / "ccx-1").mkdir(parents=True)
-    (project / ".puzzle" / "runs" / "ccx-1" / "job.inp").write_text("*NODE")
+    (project / ".puzzle" / "runs" / "ccx-1" / "job.inp").write_text("*NODE", encoding="utf-8")
     light = archive.write(project, tmp_path / "light.puzzle", Include(results="none",
                                                                      versions=False))  # fmt: skip
     names = set(archive.manifest(light.path)["members"])
@@ -118,7 +118,7 @@ def test_a_bad_archive_is_refused_before_anything_is_written(project, tmp_path):
 
 def test_names_windows_cant_make_are_refused(project, tmp_path):
     (project / "notes").mkdir()
-    (project / "notes" / "aux.txt").write_text("x")
+    (project / "notes" / "aux.txt").write_text("x", encoding="utf-8")
     with pytest.raises(PuzzleError, match="Windows"):
         archive.write(project, tmp_path / "x.puzzle")
 

@@ -6,11 +6,14 @@ the surface), temperature T, heat_flux q (positive into the body), convection h 
 T_inf, electric_potential V, ground, surface_charge rho_s (C/m^2). Magnetostatics: a
 coil_current I (total, A) on a conductor body, entering through its coil_start face and
 leaving through coil_end; magnetic_insulation keeps the flux tangential. Everything is SI.
+Files are written with LF line endings even on Windows, where Elmer runs in a Linux
+container; its shell scripts need LF there.
 """
 
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import numpy as np
@@ -125,9 +128,13 @@ def write_case(
         lines, emesh = magnetics.write_axisymmetric(project, comp, step, features, mesh,
                                                     workdir, write_mesh, _time_block)  # fmt: skip
         freqs = frequency_list(step) if harmonic else [1.0]
-        (workdir / MESH_DIR / TIMES).write_text("\n".join(f"{t:.12g}" for t in freqs) + "\n")
+        (workdir / MESH_DIR / TIMES).write_text(
+            "\n".join(f"{t:.12g}" for t in freqs) + "\n", encoding="utf-8", newline="\n"
+        )
         sif = workdir / f"{OUTPUT}.sif"
-        sif.write_text(with_settings("\n".join(lines) + "\n", study, step))
+        sif.write_text(
+            with_settings("\n".join(lines) + "\n", study, step), encoding="utf-8", newline="\n"
+        )
         np.save(workdir / MESH_DIR / "puzzle-node-coords.npy", mesh.coords)
         return sif, emesh
     if solved == {"magnetic_fields"} and magnetics.needed(step, features):  # ADR 0047
@@ -135,9 +142,13 @@ def write_case(
                                        write_mesh, _time_block)  # fmt: skip
         freqs = (frequency_list(step) if harmonic else magnetics.transient_times(step)
                  if transient else [1.0])  # fmt: skip
-        (workdir / MESH_DIR / TIMES).write_text("\n".join(f"{t:.12g}" for t in freqs) + "\n")
+        (workdir / MESH_DIR / TIMES).write_text(
+            "\n".join(f"{t:.12g}" for t in freqs) + "\n", encoding="utf-8", newline="\n"
+        )
         sif = workdir / f"{OUTPUT}.sif"
-        sif.write_text(with_settings("\n".join(lines) + "\n", study, step))
+        sif.write_text(
+            with_settings("\n".join(lines) + "\n", study, step), encoding="utf-8", newline="\n"
+        )
         return sif, emesh
     # Coil currents act on bodies; every other feature is a boundary condition.
     coils = [f for f in features if f.type == "coil_current"]
@@ -237,13 +248,17 @@ def write_case(
                 # off it (`elmer.THERMAL_ZZ`), one material's E α for the whole model.
                 e_alpha = material.properties["youngs_modulus"].to_si() * alpha.to_si()
                 zz = workdir / MESH_DIR / THERMAL_ZZ
-                if zz.exists() and json.loads(zz.read_text())["e_alpha"] != e_alpha:
+                if zz.exists() and json.loads(zz.read_text(encoding="utf-8"))["e_alpha"] != e_alpha:
                     raise InputError(
                         "a temperature load in plane strain on Elmer takes materials of one "
                         "E α so far",
                         code="unsupported",
                     )
-                zz.write_text(json.dumps({"e_alpha": e_alpha, "reference": _reference(comp)}))
+                zz.write_text(
+                    json.dumps({"e_alpha": e_alpha, "reference": _reference(comp)}),
+                    encoding="utf-8",
+                    newline="\n",
+                )
             out[-2:-2] = [  # inside the Material block, before its End
                 f"  Heat Expansion Coefficient = {coefficient:.10g}",
                 f"  Reference Temperature = {_reference(comp):.10g}",
@@ -258,6 +273,9 @@ def write_case(
         ]
 
     solvers = _solvers(step, solved, coils, dofs=2 if mesh.planar else 3)
+    degree = _p_element(comp, mesh, solved, step)  # ADR 0082: Element = "p:2"
+    if degree:
+        solvers[0].insert(3, f'  Element = "{degree}"')
     if solved == {"magnetic_fields"}:
         # Conductors also run the coil solver; everything else only the field solvers.
         out += ["Equation 1", "  Active Solvers(3) = 1 2 3", "End", ""]
@@ -295,6 +313,7 @@ def write_case(
     amplitudes = {
         f.amplitude: project.get(f.amplitude, Amplitude).points for f in features if f.amplitude
     }
+    _oblique_planes_apart(features, mesh)
     for name in boundary_names:
         out += _boundary(
             emesh.boundaries[name],
@@ -315,9 +334,13 @@ def write_case(
         times = frequency_list(step)
     else:
         times = [1.0]
-    (workdir / MESH_DIR / TIMES).write_text("\n".join(f"{t:.12g}" for t in times) + "\n")
+    (workdir / MESH_DIR / TIMES).write_text(
+        "\n".join(f"{t:.12g}" for t in times) + "\n", encoding="utf-8", newline="\n"
+    )
     sif = workdir / f"{OUTPUT}.sif"
-    sif.write_text(with_settings("\n".join(out) + "\n", study, step))
+    sif.write_text(
+        with_settings("\n".join(out) + "\n", study, step), encoding="utf-8", newline="\n"
+    )
     return sif, emesh
 
 
@@ -444,6 +467,31 @@ def _material(
     return out + ["End", ""]
 
 
+def _p_element(comp, mesh, solved: set[str], step) -> str | None:
+    """The elasticity solver's p-element degree ("p:2") when the bodies choose higher
+    order (ADR 0082); Elmer's Element keyword is the solver's, so all of them must."""
+    from puzzle.element_choice import choice_for
+
+    blocks = [b for b in mesh.blocks if b.dim == (2 if mesh.planar else 3)]
+    chosen = [choice_for(comp, mesh, b) for b in blocks]
+    ours = [c for c in chosen if c is not None and c.formulation == "higher_order"]
+    if not ours:
+        return None
+    degrees = {c.solver_types.get("elmer", "p:2") for c in ours}
+    why = None
+    if len(ours) != len(blocks):
+        why = "every body must choose it (the Element keyword is the solver's)"
+    elif len(degrees) != 1 or not re.fullmatch(r"p:[2-9]", next(iter(degrees))):
+        why = f"one degree p:2 to p:9 for the model, not {sorted(degrees)}"
+    elif solved != {"solid_mechanics"} or step.type not in ("stationary", "modal"):
+        why = "it is written for static and modal elasticity only"
+    elif any(b.element not in ("tet4", "hex8", "tri3", "quad4") for b in blocks):
+        why = "it goes on a first-order mesh (element order 1)"
+    if why:
+        raise InputError(f"Elmer's p-elements: {why}", code="unsupported")
+    return next(iter(degrees))
+
+
 def _solvers(step, solved: set[str], coils: list[Feature], dofs: int = 3) -> list[list[str]]:
     """The solver blocks, without their Solver/End lines, in solver order."""
     if solved == {"solid_mechanics"}:
@@ -525,6 +573,26 @@ def _solvers(step, solved: set[str], coils: list[Feature], dofs: int = 3) -> lis
     ]
 
 
+def _oblique_planes_apart(features, mesh) -> None:
+    """Elmer averages its normals at nodes two Normal-Tangential boundaries share, so two
+    symmetry planes across no axis meeting at an edge are each held along neither (0.07 %
+    off on a turned bar): refused until written another way (ADR 0081)."""
+    planes = [f for f in features
+              if f.extensions.get("elmer", {}).get("normal_tangential")]  # fmt: skip
+    for i, a in enumerate(planes):
+        for b in planes[i + 1 :]:
+            if set(mesh.groups[a.selection].node_ids.tolist()) & set(
+                mesh.groups[b.selection].node_ids.tolist()
+            ):
+                raise InputError(
+                    f"symmetry planes '{a.selection}' and '{b.selection}' are both across no "
+                    "global axis and meet at an edge, where Elmer averages their normals; "
+                    "turn the model so one is across x, y or z, or run it on CalculiX or "
+                    "Code_Aster",
+                    code="unsupported",
+                )
+
+
 def _boundary(
     index: int,
     name: str,
@@ -549,6 +617,12 @@ def _boundary(
             continue
         if f.type == "fixed":
             out += [f"  Displacement {d} = 0" for d in dims]
+        elif f.type == "displacement" and f.extensions.get("elmer", {}).get("normal_tangential"):
+            # A symmetry plane across no axis (ADR 0081): x along the face's normal, as
+            # Elmer's own normal; y and z its tangents (held together, at zero).
+            out.append("  Normal-Tangential Displacement = Logical True")
+            out += [f"  Displacement {d} = {v[a]:.10g}"
+                    for d, a in ((1, "x"), (2, "y"), (3, "z")) if a in v and d in dims]  # fmt: skip
         elif f.type == "displacement" and f.axes is not None:  # cylindrical, all three
             exprs = cylindrical_expressions(
                 axes_of[f.selection], [v[a] for a in "xyz"], ("tx(0)", "tx(1)", "tx(2)")
@@ -758,7 +832,7 @@ def _write_restart(path: Path, variables: list[tuple[str, np.ndarray]], transien
             *(f"{i} {i}" for i in range(1, n + 1)),
             *(f"{v:.17g}" for v in values),
         ]
-    path.write_text("\n".join(lines) + "\n")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
 
 
 # ADR 0023: Elmer's own settings, and the shared ones in its terms.
@@ -818,6 +892,17 @@ def with_settings(sif: str, study: Study, step) -> str:
         overrides["Solver */Nonlinear System Max Iterations"] = str(int(given["max_iterations"]))
     if "output_every" in given:
         overrides["Simulation/Output Intervals(1)"] = str(int(given["output_every"]))
+    set_here = study.solver_settings.get("elmer", {})
+    for key, word in (
+        ("relaxation", "Nonlinear System Relaxation Factor"),
+        ("newton_after_iterations", "Nonlinear System Newton After Iterations"),
+        ("newton_after_tolerance", "Nonlinear System Newton After Tolerance"),
+    ):
+        if key in set_here:
+            value = own[key]
+            overrides[f"Solver */{word}"] = (
+                str(int(value)) if key == "newton_after_iterations" else f"{float(value):.6g}"
+            )
     expert = study.expert_settings.get("elmer", {})
     sif = apply(sif, overrides, skip=_magnetic) if overrides else sif
     return apply(sif, expert) if expert else sif
@@ -849,7 +934,11 @@ def _refuse_in_2d(comp: Component) -> None:
     for ph in comp.physics:
         for f in ph.features:
             if f.type in ("remote_force", "remote_force_rigid", "remote_displacement") or (
-                f.type in ("bolt_pretension", "bolt_adjustment") or f.axes is not None
+                f.type in ("bolt_pretension", "bolt_adjustment")
+                or (
+                    f.axes is not None
+                    and not f.extensions.get("elmer", {}).get("normal_tangential")
+                )
             ):
                 raise InputError(f"{f.type} is not written in 2D models yet", code="unsupported")
             if f.type in ("body_force", "traction", "displacement") and f.fields:

@@ -34,11 +34,16 @@ class StepResult:
     def label(self) -> str:
         """What the step is, for titles and lists: a buckling mode by its load factor
         (ADR 0028), a vibration mode by its frequency, else the time."""
+        if self.kind in ("combination", "spectrum"):  # ADR 0079: named by a global field
+            named = self.fields.get("combination")
+            return named.components[0] if named is not None else f"Combination {self.value:g}"
         if self.kind == "buckling" and self.mode is not None:
             reversed_ = " (load reversed)" if self.value < 0 else ""
             return f"Buckling mode {self.mode}: load factor {self.value:.4g}{reversed_}"
         if self.mode is not None:
             return f"mode {self.mode}: {self.value:.4g} Hz"
+        if self.kind == "preload":  # the bolts tightened, before the loads (puzzle.preload)
+            return "Preload"
         if self.kind == "frequency_domain":  # a harmonic response (ADR 0041)
             return f"f = {self.value:.4g} Hz"
         return f"t = {self.value:g}"

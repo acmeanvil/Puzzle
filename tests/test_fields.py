@@ -24,7 +24,7 @@ def _write(path, points, values, header="x [mm],y [mm],z [mm],T [degC]", scale=1
     rows = [header] + [
         ",".join(f"{c:.9g}" for c in (*(p * scale), v)) for p, v in zip(points, values, strict=True)
     ]
-    path.write_text("# exported by a test\n" + "\n".join(rows) + "\n")
+    path.write_text("# exported by a test\n" + "\n".join(rows) + "\n", encoding="utf-8")
     return path
 
 
@@ -52,7 +52,7 @@ def test_a_puzzle_point_cloud_is_sniffed_with_its_units(tmp_path):
 
 def test_whitespace_tables_without_a_header(tmp_path):
     path = tmp_path / "plain.dat"
-    path.write_text("0 0 0 1.5\n1 0 0 2.5\n0 1 0 3.5\n")
+    path.write_text("0 0 0 1.5\n1 0 0 2.5\n0 1 0 3.5\n", encoding="utf-8")
     found = sniff(path)
     assert found["delimiter"] is None and not found["header"]
     assert [c["role"] for c in found["columns"]] == ["x", "y", "z", "value"]

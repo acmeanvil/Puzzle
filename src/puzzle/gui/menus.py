@@ -12,7 +12,7 @@ import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtWidgets import QMenu
+from PySide6.QtWidgets import QDialog, QLabel, QMenu
 
 from puzzle.commands.model import CopyComponent, Create, Edit, EditOp
 from puzzle.geometry.steps import STEPS
@@ -49,6 +49,62 @@ def selections_of(project: Project, comp: Component, entity: str | None = None) 
     return out
 
 
+def _folder_menu(window, add, menu, obj, node: Node) -> None:
+    """A default folder's menu: adding what it holds (each lands in the folder)."""
+    if isinstance(obj, Geometry):
+        if node.key == "bodies" and any(s.entity == "body" for s in obj.selections):
+            add("Assign material…", lambda: assign_material_to_bodies(window, obj))
+        elif node.key == "history":
+            steps = menu.addMenu("Add step")
+            for kind in STEPS:
+                action = steps.addAction(label(kind))
+                action.triggered.connect(lambda _=False, k=kind: add_step_to(window, obj, k))
+        if node.key in ("bodies", "selections") and obj.selections:
+            add("Reattach selections…", lambda: reattach_selections(window, obj))
+        return
+    if not isinstance(obj, Component):
+        return
+    if node.key == "geometry":
+        geos = window.session.project.of_type(Geometry)
+        if geos:
+            sub = menu.addMenu("Add part")
+            for g in geos:
+                sub.addAction(g.name).triggered.connect(
+                    lambda _=False, gid=str(g.id): add_part(window, gid, str(obj.id)))  # fmt: skip
+        if obj.parts:
+            from puzzle.gui.beam_dialog import add_beam_section, add_shell_thickness
+
+            add("Add beam section…", lambda: add_beam_section(window, obj))
+            add("Add shell thickness…", lambda: add_shell_thickness(window, obj))
+    elif node.key == "materials":
+        add("Assign material…", lambda: assign_material(window, obj))
+    elif node.key == "fasteners":
+        from puzzle.gui.fastener_dialog import add_fastener, fasteners_from_holes
+
+        add("Add fastener…", lambda: add_fastener(window, obj))
+        if obj.parts:
+            from puzzle.gui.bolt_generator_panel import generate_bolts
+
+            add("Fasteners from holes…", lambda: fasteners_from_holes(window, obj))
+            add("Generate bolts…", lambda: generate_bolts(window, obj))
+    elif node.key == "contacts":
+        if obj.parts:
+            from puzzle.gui.contact_search import add_contact, find_contacts_dialog
+
+            add("Find contacts…", lambda: find_contacts_dialog(window, obj))
+            add("Add contact…", lambda: add_contact(window, obj))
+        if obj.contacts:
+            add("Contact tool", lambda: window.open_contacts())
+    elif node.key == "loads":
+        physics = node.path.partition("/")[2]
+        index = next((i for i, p in enumerate(obj.physics) if p.type == physics), None)
+        if index is not None:
+            sub = menu.addMenu("Add feature")
+            for s in specs(physics):
+                action = sub.addAction(s.label)
+                action.triggered.connect(lambda _=False, sp=s: add_feature(window, obj, index, sp))
+
+
 def build_menu(window: MainWindow, node: Node) -> QMenu | None:
     """The menu for a tree item, or None when it has nothing to offer."""
     menu = QMenu(window)
@@ -71,6 +127,11 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
             add("New component…", lambda: new_component(window))
         elif node.label == "Studies":
             add("New study…", lambda: new_study(window))
+            menu.addSeparator()  # several, one after another (ADR 0073)
+            add("Run all", lambda: window.run_studies(None))
+            add("Run selected…", lambda: run_selected_studies(window))
+            stop = add("Stop all", window.stop_all)
+            stop.setEnabled(window.queue_busy())
         elif node.label == "Amplitudes":
             add("New amplitude…", lambda: edit_amplitude(window))
         elif node.label == "Coordinate systems":
@@ -128,11 +189,19 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         add("New mesh recipe", lambda: new_mesh(window))
         add("New component…", lambda: new_component(window))
         add("New study…", lambda: new_study(window))
+        from puzzle.gui.field_wizard import import_field
+
+        # Sections show once they hold something, so their own menus can't make the first.
+        add("Import field…", lambda: import_field(window))
+        _operator_menu(window, menu)
+    elif node.kind == "folder":  # a default folder: what goes in it (gui.tree)
+        _folder_menu(window, add, menu, obj, node)
     elif isinstance(obj, Component) and node.kind == "object":
-        if len(obj.parts) > 1:
-            from puzzle.gui.contact_search import find_contacts_dialog
+        if obj.parts:  # between parts, or the bodies of one (an imported assembly)
+            from puzzle.gui.contact_search import add_contact, find_contacts_dialog
 
             add("Find contacts…", lambda: find_contacts_dialog(window, obj))
+            add("Add contact…", lambda: add_contact(window, obj))
         if obj.contacts:
             add("Contact tool", lambda: window.open_contacts())
         from puzzle.gui.fastener_dialog import add_fastener, fasteners_from_holes
@@ -144,7 +213,7 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         from puzzle.gui.beam_dialog import add_shell_thickness
 
         add("Add shell thickness…", lambda: add_shell_thickness(window, obj))
-        if len(obj.parts) > 1:
+        if obj.parts:  # holes in different parts, or in the bodies of one
             add("Fasteners from holes…", lambda: fasteners_from_holes(window, obj))
             from puzzle.gui.bolt_generator_panel import generate_bolts
 
@@ -157,7 +226,7 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
             action.triggered.connect(lambda _=False, k=kind: add_physics(window, obj, k))
         add("Assign material…", lambda: assign_material(window, obj))
         add("Mesh", window.mesh_selected)
-        add("Copy…", lambda: copy_component(window, obj))
+        add("Duplicate…", lambda: copy_component(window, obj))
         menu.addSeparator()
         add("Delete", window.delete_selected)
     elif isinstance(obj, Component) and node.kind == "physics":
@@ -196,6 +265,20 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
                         window, selection=feature.selection, source=tools.study_of(window, obj)
                     ),
                 )
+        if node.kind == "contact":  # ADR 0076: a thread between coaxial cylinders
+            from puzzle.gui.thread_dialog import remove_thread, thread_contact
+
+            k = int(node.path.split(".")[1])
+            threaded = obj.contacts[k].thread is not None
+            add("Edit the thread…" if threaded else "Make it a thread…",
+                lambda: thread_contact(window, obj, k))  # fmt: skip
+            if threaded:
+                add("Remove the thread", lambda: remove_thread(window, obj, k))
+        if node.kind == "part":  # ADR 0039: an imported assembly's bodies as parts
+            from puzzle.gui.split_dialog import split_part
+
+            part = obj.parts[int(node.path.split(".")[1])].name
+            add("One part per body…", lambda: split_part(window, obj, part))
         if node.kind == "beam_section":  # ADR 0055: its first axis from a pick
             from puzzle.gui.beam_dialog import orient_by_pick
 
@@ -218,6 +301,8 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         menu.addSeparator()
         if sel.entity == "face":
             add("New cylindrical axes from this face", lambda: axes_from_face(window, obj, sel))
+        if sel.entity == "body":
+            add("Assign material…", lambda: assign_material_to_bodies(window, obj, sel.name))
         add("Remove selection", lambda: remove(window, obj, node.path))
     elif isinstance(obj, Geometry) and node.kind == "object":
         steps = menu.addMenu("Add step")
@@ -229,6 +314,8 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
                 "Edit as history (keep the file as its first step)", lambda: to_history(window, obj)
             )
         add("Check geometry", lambda: check_geometry_of(window, obj))
+        if any(s.entity == "body" for s in obj.selections):
+            add("Assign material…", lambda: assign_material_to_bodies(window, obj))
         from puzzle.geometry.meshfile import is_mesh_file
 
         if obj.source and is_mesh_file(obj.source):  # ADR 0065: STL, OBJ, 3MF booleans
@@ -265,6 +352,16 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         menu.addSeparator()
         add("Delete step", lambda: remove(window, obj, node.path))
     elif isinstance(obj, CoordinateSystem) and node.kind == "object":
+        from puzzle.gui.axes_panel import edit_axes
+
+        add("Edit…", lambda: edit_axes(window, obj))  # D1: every value redefinable
+        menu.addSeparator()
+        add("Delete", window.delete_selected)
+    elif obj is not None and obj.kind == "construction" and node.kind == "object":
+        from puzzle.gui.construction import edit_construction
+
+        add("Edit…", lambda: edit_construction(window, obj))  # D3
+        menu.addSeparator()
         add("Delete", window.delete_selected)
     elif isinstance(obj, Amplitude) and node.kind == "object":
         add("Edit points…", lambda: edit_amplitude(window, obj))
@@ -279,6 +376,7 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         add("Delete", window.delete_selected)
     elif isinstance(obj, Study) and node.kind == "object":
         add("Run", window.run_selected)
+        add("Duplicate…", lambda: copy_study(window, obj))
         from puzzle.gui.solver_settings import edit_solver_settings
 
         add("Solver settings…", lambda: edit_solver_settings(window, obj))  # ADR 0023
@@ -336,7 +434,7 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
     elif obj is not None and obj.kind == "operator" and node.kind == "object":
         from puzzle.gui import operators
 
-        if obj.type == "export":
+        if obj.type in ("export", "report"):
             add("Export now", lambda: operators.export_now(window, obj))
         if obj.type == "plot":
             add("Show in Plots", lambda: operators.show_plot(window, obj))
@@ -359,6 +457,10 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
 
         study_id = window._store().get_run(node.object).study_id
         add("Export…", lambda: export_results(window, study_id))
+        add("Open in ParaView", lambda: open_run_in_paraview(window, node.object))
+        from puzzle.gui.text_viewer import solver_output
+
+        add("Solver output…", lambda: solver_output(window, node.object))
         study = window._store().get_run(node.object).study_id
         menu.addSeparator()
         add("New combination…", lambda: window.new_derived("linear", study))
@@ -376,22 +478,33 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         add("Delete", window.delete_selected)
     elif node.kind in ("sweep", "compare"):
         add("Compare…", lambda: window.open_compare(node.object))
-    from puzzle.gui import organise
+    selected = window.tree.selectedItems()
+    if len(selected) > 1 and window.tree.item_for(node) in selected:  # one batch, one undo
+        menu.addSeparator()
+        add(f"Delete the {len(selected)} selected…", window.delete_selected)
+    from puzzle.gui import organise, visibility
 
+    visibility.add_to_menu(window, menu, node, obj)  # show, hide, colour (D2, D4)
     organise.add_to_menu(window, menu, node)  # Rename, groups (any heading's items)
     return menu if menu.actions() else None
 
 
 def _operator_menu(window, menu, source=None, port="out", title="New operator") -> None:
-    """A submenu of operator types (ADR 0062), wired from `source` when given."""
+    """A submenu of operator types (ADR 0062), wired from `source` when given: one
+    flyout per group, as the Results menu and the schematic's Add operator have, each
+    alphabetical (`operators.ordered`)."""
     from puzzle.gui import operators
-    from puzzle.operators import TYPES
 
     sub = QMenu(title, menu)  # parented, so Qt keeps it (as main_menu._sub)
     sub.setToolTipsVisible(True)
     menu.addMenu(sub)
-    for t in TYPES.values():
-        action = sub.addAction(t.label)
+    groups: dict[str, QMenu] = {}
+    for t in operators.ordered():
+        if t.group not in groups:
+            groups[t.group] = QMenu(t.group, sub)
+            groups[t.group].setToolTipsVisible(True)
+            sub.addMenu(groups[t.group])
+        action = groups[t.group].addAction(t.label)
         action.setToolTip(t.help)
         action.triggered.connect(lambda _=False, k=t.key: operators.new_operator(
             window, k, source, port))  # fmt: skip
@@ -451,6 +564,51 @@ def assign_material(window, comp: Component):
     )
 
 
+def assign_material_to_bodies(window, geo: Geometry, selection: str | None = None):
+    """Geometry's Assign material…: a material for a body selection of this geometry, in
+    the component (and part) using it, asked in one form when there is a choice. An
+    assignment already on that selection takes the new material (no second one)."""
+    from puzzle.gui.quick_form import Ask
+
+    project = window.session.project
+    materials = {m.name: m for m in project.of_type(Material)}
+    if not materials:
+        window.statusBar().showMessage("Add a material first (Materials → Add from library)", 8000)
+        return None
+    uses = [(c, p) for c in project.of_type(Component) for p in c.parts if p.geometry == geo.id]
+    if not uses:
+        window.statusBar().showMessage(
+            f"No component uses {geo.name} yet: Model → Components → New component…", 8000
+        )
+        return None
+    bodies = [s.name for s in geo.selections if s.entity == "body"]
+    if selection is None and not bodies:
+        window.statusBar().showMessage(f"{geo.name} has no body selection to assign to", 8000)
+        return None
+    asks = []
+    if len(uses) > 1:
+        asks.append(Ask("use", "In", choices=[
+            (f"{c.name}, part {p.name}" if len(c.parts) > 1 else c.name, str(n))
+            for n, (c, p) in enumerate(uses)]))  # fmt: skip
+    asks.append(Ask("material", "Material", choices=[(n, n) for n in sorted(materials)]))
+    if selection is None:
+        asks.append(Ask("selection", "To the bodies", choices=[(b, b) for b in bodies]))
+    title = f"Assign material to {selection}" if selection else f"Assign material on {geo.name}"
+    got = window.ask_form(title, asks)
+    if got is None:
+        return None
+    comp, part = uses[int(got.get("use", 0))]
+    target = f"{part.name}/{selection or got['selection']}"
+    material = str(materials[got["material"]].id)
+    at = next((i for i, a in enumerate(comp.materials) if a.selection == target), None)
+    if at is not None:
+        op = EditOp(op="set", path=f"materials.{at}.material", value=material)
+    else:
+        op = EditOp(op="append", path="materials", value={"material": material,
+                                                           "selection": target})  # fmt: skip
+    return window.submit(Edit(object=str(comp.id), ops=[op]))
+
+
 def change_selection(window, comp: Component, node: Node):
     entity = "body" if node.kind == "assignment" else "face"
     choices = selections_of(window.session.project, comp, entity) or selections_of(
@@ -464,9 +622,82 @@ def change_selection(window, comp: Component, node: Node):
 
 
 def copy_component(window, comp: Component):
-    name = window.ask_text("Copy component", "Name of the copy:", f"{comp.name} copy")
+    """Duplicate a component, and its studies too if asked (one dialog, one undo)."""
+    from puzzle.gui.quick_form import Ask
+
+    project = window.session.project
+    has_studies = any(s.component == comp.id for s in project.of_type(Study))
+    asks = [Ask("name", "Name of the copy", kind="text",
+                follow=lambda v: project.unique_name(f"{comp.name} copy"))]  # fmt: skip
+    if has_studies:
+        asks.append(Ask("studies", "Its studies", choices=[
+            ("Duplicate them too, on the copy", "yes"), ("Only the component", "no")]))  # fmt: skip
+    got = window.ask_form(f"Duplicate {comp.name}", asks)
+    if not got or not got.get("name"):
+        return None
+    studies = got.get("studies") == "yes"
+    return window.submit(CopyComponent(component=str(comp.id), name=got["name"], studies=studies))
+
+
+class StudyChecklist(QDialog):
+    """Run selected…: every study with a tick box (the last choice ticked again), run one
+    after another in order (ADR 0073)."""
+
+    def __init__(self, window, studies: list, ticked: set[str]) -> None:
+        super().__init__(window)
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QDialogButtonBox, QListWidget, QListWidgetItem, QVBoxLayout
+
+        self.setWindowTitle("Run selected studies")
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("They run one at a time; one that fails doesn't stop the rest."))
+        self.list = QListWidget()
+        for s in studies:
+            item = QListWidgetItem(s.name)
+            item.setData(Qt.ItemDataRole.UserRole, str(s.id))
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            on = str(s.id) in ticked
+            item.setCheckState(Qt.CheckState.Checked if on else Qt.CheckState.Unchecked)
+            self.list.addItem(item)
+        layout.addWidget(self.list)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
+                                   | QDialogButtonBox.StandardButton.Cancel)  # fmt: skip
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Run")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def chosen(self) -> list[str]:
+        from PySide6.QtCore import Qt
+
+        items = [self.list.item(i) for i in range(self.list.count())]
+        return [i.data(Qt.ItemDataRole.UserRole) for i in items
+                if i.checkState() == Qt.CheckState.Checked]  # fmt: skip
+
+
+def run_selected_studies(window):
+    """The studies to run, ticked in a list; then one after another."""
+    studies = window.session.project.of_type(Study)
+    if not studies:
+        window.statusBar().showMessage("No studies yet", 5000)
+        return None
+    dialog = StudyChecklist(window, studies, set(window.last_run_selection))
+    if not window.run_dialog(dialog) or not dialog.chosen():
+        return None
+    window.last_run_selection = dialog.chosen()
+    return window.run_studies(dialog.chosen())
+
+
+def copy_study(window, study: Study):
+    """Duplicate a study under a new name (its steps, settings, sweeps and solver)."""
+    from puzzle.commands.model import CopyStudy
+
+    name = window.ask_text(
+        f"Duplicate {study.name}", "Name of the copy:",
+        window.session.project.unique_name(f"{study.name} copy"),
+    )  # fmt: skip
     if name:
-        return window.submit(CopyComponent(component=str(comp.id), name=name))
+        return window.submit(CopyStudy(study=str(study.id), name=name))
     return None
 
 
@@ -1334,3 +1565,12 @@ def combine_faceted(window, geo):
     meshfile.write_stl(out, root / rel)
     return window.submit(Create(kind="geometry", data={"name": got["name"], "source": rel,
                                                        "source_unit": "m"}))  # fmt: skip
+
+
+def open_run_in_paraview(window, run_id: str) -> bool:
+    """A run's right-click Open in ParaView (ADR 0070): its results shown here first, as
+    the Results ribbon's button opens what is shown."""
+    from puzzle.gui.paraview_open import open_in_paraview
+
+    window._select_run(run_id)
+    return open_in_paraview(window)

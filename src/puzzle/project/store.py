@@ -35,7 +35,7 @@ def save_project(project: Project, root: Path) -> None:
         "schema_version": project.schema_version,
         "agent": project.agent.model_dump(mode="json"),
     }
-    (root / "project.toml").write_text(tomli_w.dumps(header))
+    (root / "project.toml").write_text(tomli_w.dumps(header), encoding="utf-8")
     if project.trusted:  # made (or trusted) here: its folder stays trusted (ADR 0062)
         from puzzle import trust
 
@@ -45,7 +45,9 @@ def save_project(project: Project, root: Path) -> None:
     for obj in project.objects.values():
         path = root / obj.kind / f"{obj.id}.toml"
         path.parent.mkdir(exist_ok=True)
-        path.write_text(tomli_w.dumps(obj.model_dump(mode="json", exclude_none=True)))
+        path.write_text(
+            tomli_w.dumps(obj.model_dump(mode="json", exclude_none=True)), encoding="utf-8"
+        )
         keep.add(path)
 
     for kind in _BY_KIND:
@@ -54,8 +56,27 @@ def save_project(project: Project, root: Path) -> None:
                 path.unlink()
 
 
+def _toml(path: Path) -> dict:
+    """A project file's contents. A byte-order mark (Windows editors and PowerShell add
+    one) is allowed; a file that still doesn't read says which it is and how it starts,
+    not just where the parser stopped."""
+    text = path.read_text(encoding="utf-8-sig")
+    try:
+        return tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        from puzzle.errors import PuzzleError
+
+        start = path.read_bytes()[:16]
+        raise PuzzleError(
+            f"{path.name} in {path.parent} isn't a readable project file ({exc}); it starts "
+            f"with {start!r}. Restore a version (Project → Versions…) or a copy.",
+            code="invalid",
+            path=str(path),
+        ) from exc
+
+
 def load_project(root: Path) -> Project:
-    header = tomllib.loads((root / "project.toml").read_text())
+    header = _toml(root / "project.toml")
     if header.get("schema_version", 0) > SCHEMA_VERSION:
         raise ValueError(
             f"project schema {header['schema_version']} is newer than this Puzzle "
@@ -68,7 +89,7 @@ def load_project(root: Path) -> Project:
     )
     for kind, cls in _BY_KIND.items():
         for path in sorted((root / kind).glob("*.toml")):
-            project.add(cls.model_validate(tomllib.loads(path.read_text())))
+            project.add(cls.model_validate(_toml(path)))
     from puzzle import trust
 
     project.trusted = trust.is_trusted(root)

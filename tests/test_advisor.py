@@ -54,6 +54,24 @@ def test_a_built_model_steps_along(tmp_path):
     assert next_step(advice).step == "run" and next_step(advice).action == "run"
 
 
+def test_a_study_with_problems_names_them(tmp_path):
+    """A project problem on the study is the study step's reason (it read `p.path`, which
+    `Problem` hasn't got, and the Advisor failed on every refresh)."""
+    pytest.importorskip("OCP")
+    from conftest_geometry import bar_project, write_bar_step
+
+    from puzzle.model.schema import Physics, SolveStep, Study
+
+    physics = Physics(type="solid_mechanics", features=[])
+    project, comp = bar_project(write_bar_step(tmp_path / "bar.step"), [physics])
+    study = Study(name="Static", component=comp.id, solver="calculix",
+                  steps=[SolveStep(type="stationary")])  # fmt: skip
+    project.add(study)
+    assert any(p.object == "Static" for p in project.problems())  # unconstrained
+    advice = {a.step: a for a in advise(project, component=comp, study=study)}
+    assert advice["study"].state == "needed" and "Static" in advice["study"].detail
+
+
 def test_the_panel_follows_and_its_buttons_go(tmp_path):
     pytest.importorskip("PySide6")
     pytest.importorskip("OCP")

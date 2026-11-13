@@ -65,7 +65,23 @@ def _state_colour(state: str) -> QColor:
 
 # What a wire may be drawn from: a study (into a study: a transfer), and anything with
 # an output an operator takes (ADR 0062).
-WIRES_FROM = ("study", "runs", "result", "operator", "parameters")
+WIRES_FROM = (
+    "study",
+    "runs",
+    "result",
+    "operator",
+    "parameters",
+    "geometry",
+    "material",
+    "mesh",
+    "component",
+    "axes",
+    "amplitude",
+    "bolt_type",
+    "construction",
+    "field",
+    "probe",
+)  # ADR 0071 decision 8: each can be wired into something
 
 
 def _socket(painter: QPainter, shape: str, at: QPointF) -> None:
@@ -114,7 +130,10 @@ class NodeItem(QGraphicsObject):
                                                             else "")  # fmt: skip
         for chip, text in node.tips.items():
             tip += f"\n{chip}: {text.lower()}"
+        if node.help:  # an operator: what it does, an example, its ports (ADR 0071)
+            tip += "\n\n" + node.help
         self.setToolTip(tip)
+        self._tip = tip
         self._pressed_at: QPointF | None = None
 
     def boundingRect(self) -> QRectF:  # noqa: N802 - Qt's name
@@ -165,6 +184,22 @@ class NodeItem(QGraphicsObject):
                 painter.setPen(QPen(QColor(t.sunken), 1.5))
                 painter.setBrush(QColor(t.accent))
                 painter.drawEllipse(QPointF(at, r.middle), 6, 6)
+            elif r.kind == "sketch":  # a curve's small plot (ADR 0071)
+                frame = QRectF(12, r.top + 4, self.w - 24, r.height - 8)
+                painter.setPen(QPen(QColor(t.border), 1))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRect(frame)
+                series = t.series
+                for k, line in enumerate(node.sketch):
+                    painter.setPen(QPen(QColor(series[k % len(series)]), 1.5))
+                    q = [
+                        QPointF(
+                            frame.left() + x * frame.width(), frame.bottom() - y * frame.height()
+                        )
+                        for x, y in line
+                    ]
+                    for a, b in zip(q, q[1:], strict=False):
+                        painter.drawLine(a, b)
             elif r.kind in ("subtitle", "badge", "used", "fold", "part"):
                 painter.setFont(small)
                 painter.setPen(QColor(t.muted))
@@ -192,6 +227,18 @@ class NodeItem(QGraphicsObject):
                     Qt.AlignmentFlag.AlignRight if r.kind == "out" else Qt.AlignmentFlag.AlignLeft
                 )
                 painter.drawText(band, align | Qt.AlignmentFlag.AlignVCenter, r.text)
+
+    def hoverMoveEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        """Over a socket, what that port takes or gives; elsewhere, the node's card."""
+        pos, tip = event.pos(), self._tip
+        for r in rows(self.node, self.unfolded):  # anywhere along a port's row
+            if r.kind in ("in", "out") and abs(pos.y() - r.middle) <= r.height / 2:
+                port = self.node.port(r.key)
+                tip = port.help if port is not None and port.help else self._tip
+                break
+        if tip != self.toolTip():
+            self.setToolTip(tip)
+        super().hoverMoveEvent(event)
 
     def port_at(self, pos: QPointF, side: str = "out"):
         """The port on `side` under `pos` (in the item's coordinates), if any."""
@@ -284,6 +331,12 @@ class NodeItem(QGraphicsObject):
         self.panel.menu_for(self.node, event.screenPos())
 
 
+def _uuid_of(text: str):
+    from uuid import UUID
+
+    return UUID(text)
+
+
 class WireItem(QGraphicsPathItem):
     def __init__(self, wire: sch.Wire, a: NodeItem, b: NodeItem) -> None:
         super().__init__()
@@ -300,6 +353,14 @@ class WireItem(QGraphicsPathItem):
             self.setPen(QPen(QColor(_colours().muted), 1))
         self.label = None
         self.update_path()
+
+    def contextMenuEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        """A use wire (a reference): Remove it (ADR 0071 decision 8)."""
+        if self.wire.kind == "use":
+            self.a.panel.unlink(self.a.node, self.b.node, event.screenPos())
+            event.accept()
+            return
+        super().contextMenuEvent(event)
 
     def update_path(self) -> None:
         p0 = self.a.anchor(self.wire.source_port, "out")
@@ -374,7 +435,19 @@ class SchematicScene(QGraphicsScene):
 
 
 class SchematicCanvas(QGraphicsView):
-    """Pan by dragging the background, zoom with the wheel."""
+    """Pan by dragging the background, zoom with the wheel; right-click the background
+    for New (what the tree can add), placed there."""
+
+    panel = None
+
+    def contextMenuEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        if self.itemAt(event.pos()) is None and self.panel is not None:
+            menu = QMenu(self)
+            menu.setToolTipsVisible(True)
+            self.panel.fill_new_menu(menu, self.mapToScene(event.pos()))
+            menu.exec(event.globalPos())
+            return
+        super().contextMenuEvent(event)
 
     def __init__(self, scene: QGraphicsScene) -> None:
         super().__init__(scene)
@@ -443,6 +516,16 @@ class Minimap(QGraphicsView):
         self.main.centerOn(self.mapToScene(event.position().toPoint()))
 
 
+def unfold(node, port: str | None):
+    """The member node and port a folded group's port stands for (ADR 0071: a cluster's
+    ports are its members', keyed "<member id>::<port>"); anything else as given."""
+    if node.kind != "group" or not port or "::" not in port:
+        return node, port
+    member, _, key = port.partition("::")
+    inner = next((n for n in getattr(node, "inside", []) if n.id == member), None)
+    return (inner, key) if inner is not None else (node, port)
+
+
 class SchematicPanel(QWidget):
     """The schematic with its bar: add operator, search, state filter, use wires, what
     a change reaches, fit, tidy, export."""
@@ -499,6 +582,17 @@ class SchematicPanel(QWidget):
         self.operators.setMenu(QMenu(self.operators))
         self.operators.menu().setToolTipsVisible(True)
         self.operators.menu().aboutToShow.connect(self._operator_menu)
+        self.new = QToolButton(text="New ▾")  # ADR 0071 decision 8: what the tree adds
+        self.new.setStyleSheet("QToolButton::menu-indicator { image: none; width: 0; }")
+        self.new.setToolTip(
+            "Add anything the model tree can add (geometry, materials, components, studies, "
+            "coordinate systems, result tools ...), placed in view; right-click the empty "
+            "canvas to place it there"
+        )
+        self.new.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.new.setMenu(QMenu(self.new))
+        self.new.menu().setToolTipsVisible(True)
+        self.new.menu().aboutToShow.connect(lambda: self.fill_new_menu(self.new.menu()))
         self.fit = QPushButton("Fit")
         self.fit.clicked.connect(self.fit_all)
         self.tidy = QPushButton("Tidy layout")
@@ -509,20 +603,22 @@ class SchematicPanel(QWidget):
         self.export.clicked.connect(lambda: self.export_picture())
         # Narrow windows squeeze the bar, never widen the window (the centre's minimum).
         self.search.setMinimumWidth(60)
-        for button in (self.operators, self.reach, self.fit, self.tidy, self.export):
+        for button in (self.new, self.operators, self.reach, self.fit, self.tidy, self.export):
             button.setMinimumWidth(36)  # its text clips rather than set the minimum
         for combo in (self.state_filter, self.uses):
             combo.setSizeAdjustPolicy(
                 QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
             )
             combo.setMinimumContentsLength(6)
-        for w in (self.operators, self.search, self.state_filter, self.uses, self.reach):
+        for w in (self.new, self.operators, self.search, self.state_filter, self.uses, self.reach):
             bar.addWidget(w)
         bar.addStretch(1)
         for w in (self.fit, self.tidy, self.export):
             bar.addWidget(w)
         self.scene = SchematicScene(self)
         self.canvas = SchematicCanvas(self.scene)
+        self.canvas.panel = self
+        self._place_next: tuple[float, float] | None = None  # where the next new node goes
         self.minimap = Minimap(self.scene, self.canvas)
         self.empty = QLabel("Open a project to see how it fits together.")
         self.empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -565,10 +661,17 @@ class SchematicPanel(QWidget):
             store = self.window._store()
         except Exception:  # noqa: BLE001 - no store: operators show no values
             store = None
+        before = set(self.schematic.nodes) if getattr(self, "schematic", None) else None
         self.schematic = sch.build(session.project, runs, states, root=session.root,
                                    folded=frozenset(self.view.folded),
                                    fields=bool(current().get("connections.schematic")),
                                    store=store)  # fmt: skip
+        if self._place_next is not None and before is not None:  # made from the New menu
+            made = [i for i in self.schematic.nodes if i not in before]
+            if made:
+                self.view.positions[made[0]] = self._place_next
+                self._place_next = None
+                view_state.save(session.root, self.view)
         self._draw()
         self.canvas.setVisible(bool(self.schematic.nodes))
         self.empty.setVisible(not self.schematic.nodes)
@@ -783,9 +886,9 @@ class SchematicPanel(QWidget):
         from puzzle.schematic import view_state
 
         target = self._node_under(item.sceneBoundingRect().center(), not_item=item)
-        if item.node.kind == "geometry" and target is not None and target.node.kind == "component":
-            item.setPos(start)
-            self.add_part(item.node, target.node)
+        if target is not None and self._linkable(item.node, target.node):
+            item.setPos(start)  # dropped on what it can be used by: wire it in
+            self.link(item.node, target.node)
             return
         pos = item.pos()
         self.view.positions[item.node.id] = (round(pos.x(), 1), round(pos.y(), 1))  # as saved
@@ -828,21 +931,21 @@ class SchematicPanel(QWidget):
         target = self._node_under(point, not_item=item)
         if target is None:
             return
-        if target.node.kind == "operator":  # ADR 0062: into one of its inputs
-            self.wire_operator(item.node, port, target.node, target.input_near(point))
+        source, port = unfold(item.node, port)  # a folded cluster: its member's port
+        into, key = unfold(target.node, target.input_near(point))
+        if into.kind == "operator":  # ADR 0062: into one of its inputs
+            self.wire_operator(source, port, into, key)
             return
-        if item.node.kind in ("operator", "parameters") and target.node.kind == "geometry":
-            self.drive_geometry(item.node, port, target.node)  # a history argument
+        if source.kind in ("operator", "parameters") and into.kind == "geometry":
+            self.drive_geometry(source, port, into)  # a history argument
             return
-        if item.node.kind == "operator" and target.node.kind == "study":
-            self.sweep_study(item.node, port, target.node)  # a sweep over it
+        if source.kind == "operator" and into.kind == "study":
+            self.sweep_study(source, port, into)  # a sweep over it
             return
-        if target.node.kind != "study" or item.node.kind != "study":
-            self.window.statusBar().showMessage(
-                "A study's result goes into another study, or any output into an "
-                "operator's input: drop the wire there", 8000)  # fmt: skip
+        if into.kind == "study" and source.kind == "study":
+            self.make_transfer(source, port, into)
             return
-        self.make_transfer(item.node, port, target.node)
+        self.link(source, into)  # any other reference (ADR 0071 decision 8)
 
     def source_of(self, node: sch.Node, port: str) -> tuple[str | None, str]:
         """(object id, port) an operator reads for a node's output: a results node's
@@ -962,6 +1065,9 @@ class SchematicPanel(QWidget):
                         found[k]["name"],
                         lambda k=k: ops.insert_template(self.window, k, source, port),
                     ).setToolTip(found[k].get("help", ""))
+        blocks = submenu("Share blocks")  # ADR 0071: user operators, shared as files
+        blocks.addAction("Import a block…", lambda: ops.import_block(self.window))
+        blocks.addAction("Export one of my clusters…", lambda: ops.export_block(self.window))
         menu.addSeparator()
         groups: dict[str, QMenu] = {}
         for t in ops.ordered():
@@ -998,6 +1104,126 @@ class SchematicPanel(QWidget):
 
         return add_part(self.window, geometry.object, component.object)
 
+    # --- references as wires (ADR 0071 decision 8) -----------------------------------
+
+    def _objects(self, a: sch.Node, b: sch.Node):
+        from uuid import UUID
+
+        project = self.window.session.project
+        ids = []
+        for node in (a, b):
+            oid = node.object or (node.id.removeprefix("runs:") if node.kind == "runs" else "")
+            try:
+                ids.append(project.objects.get(UUID(oid)) if oid else None)
+            except ValueError:
+                ids.append(None)
+        return ids
+
+    def _linkable(self, a: sch.Node, b: sch.Node) -> bool:
+        from puzzle.schematic import links
+
+        if a.kind == "feature":
+            return False
+        source, target = self._objects(a, b)
+        within = b.path if b.kind == "feature" else ""
+        return bool(source and target and links.choices(self.window.session.project,
+                                                        source, target, within))  # fmt: skip
+
+    def link(self, a: sch.Node, b: sch.Node, pick: int | None = None):
+        """A wire (or a node dropped) from `a` onto `b`: the reference it means set, as
+        the tree's Properties would; asked which when it could mean several (which
+        part, which load); refused, with what `b` takes, when it means none."""
+        from puzzle.gui.quick_form import Ask
+        from puzzle.schematic import links
+
+        source, target = self._objects(a, b)
+        if source is None or target is None:
+            return None
+        project = self.window.session.project
+        within = b.path if b.kind == "feature" else ""  # onto one load's own node
+        found = links.choices(project, source, target, within)
+        if not found:
+            self.window.statusBar().showMessage(links.why_not(project, source, target), 8000)
+            return None
+        if pick is None and found[0].op == "add_part":  # a geometry on a component: a part
+            return self.add_part(a, b)
+        if pick is None and len(found) > 1:
+            got = self.window.ask_form(
+                f"Use {source.name} in {target.name}",
+                [Ask("which", "As", choices=[(c.label, i) for i, c in enumerate(found)])],
+            )
+            if not got:
+                return None
+            pick = got["which"]
+        choice = found[pick or 0]
+        if choice.op == "add_part":
+            return self.add_part(a, b)
+        cmds = links.commands(choice, source, target)
+        return self.window.submit_batch(cmds) if len(cmds) > 1 else self.window.submit(cmds[0])
+
+    def unlink(self, a: sch.Node, b: sch.Node, at=None):
+        """A use wire's right-click: remove the reference it stands for."""
+        from puzzle.schematic import links
+
+        menu = QMenu(self.canvas)
+        if a.kind == "feature":  # a load's wire into its component: the load itself
+            from puzzle.gui.menus import remove
+
+            comp = self.window.session.project.objects.get(_uuid_of(a.object))
+            action = menu.addAction(f"Remove {a.label}")
+            action.triggered.connect(lambda: remove(self.window, comp, a.path))
+            if at is not None:
+                menu.exec(at)
+            return menu
+        source, target = self._objects(a, b)
+        if source is None or target is None:
+            return None
+        within = b.path if b.kind == "feature" else ""
+        made = links.existing(self.window.session.project, source.id, target, within)
+        for c in made:
+            cmds = links.clear_commands(c, target)
+            what = "Remove the part" if c.link.path.startswith("parts") else "Remove"
+            action = menu.addAction(f"{what}: {c.label}")
+            if cmds:
+                action.triggered.connect(lambda _=False, c=cmds: self.window.submit(c[0]))
+            else:
+                action.setEnabled(False)
+                action.setToolTip(f"{target.name} needs one: wire another in to replace it")
+        if not made:
+            menu.addAction("Nothing to remove here").setEnabled(False)
+        if at is not None:
+            menu.exec(at)
+        return menu
+
+    # --- New: what the tree can add ------------------------------------------------
+
+    def fill_new_menu(self, menu: QMenu, at: QPointF | None = None) -> QMenu:
+        """The tree's own add menus, one per section, so the schematic adds whatever the
+        tree adds; the new node goes where asked (`at`), else the view's middle."""
+        from puzzle.gui.menus import build_menu
+        from puzzle.gui.tree import SECTIONS
+        from puzzle.gui.tree import Node as TreeNode
+
+        menu.clear()
+        if self.window.session is None:
+            menu.addAction("Open a project first").setEnabled(False)
+            return menu
+        place = at if at is not None else self._centre()
+        for heading in [title for title, _cls in SECTIONS] + ["Results"]:
+            found = build_menu(self.window, TreeNode("section", label=heading))
+            if found is None or not found.actions():
+                continue
+            found.setTitle(heading)
+            found.setParent(menu, found.windowFlags())  # kept alive by the menu
+            found.aboutToShow.connect(
+                lambda p=place: setattr(self, "_place_next", (round(p.x(), 1), round(p.y(), 1)))
+            )
+            for action in found.actions():
+                action.triggered.connect(lambda _=False, p=place: setattr(
+                    self, "_place_next", (round(p.x(), 1), round(p.y(), 1))))  # fmt: skip
+            menu.addMenu(found)
+        return menu
+
     # --- the rest of the window ---------------------------------------------------
 
     def chosen(self, node: sch.Node | None) -> None:
@@ -1021,6 +1247,8 @@ class SchematicPanel(QWidget):
             return ("run", node.object)
         if node.kind == "group":
             return ("group", node.object)
+        if node.kind == "feature":  # a load or support: its own item in the tree
+            return ("feature", node.object, node.path)
         return ("derived" if node.kind == "result" else "object", node.object)
 
     def open_node(self, node: sch.Node) -> None:
@@ -1090,7 +1318,7 @@ class SchematicPanel(QWidget):
             lay = layout(self.schematic, positions, frozenset(self.view.unfolded))
             uses = "none" if self.uses.currentData() == "none" else "all"
             title = self.window.session.project.name if self.window.session else ""
-            Path(path).write_text(to_svg(self.schematic, lay, uses, title))
+            Path(path).write_text(to_svg(self.schematic, lay, uses, title), encoding="utf-8")
         self.window.statusBar().showMessage(f"Saved {path}", 8000)
         return path
 

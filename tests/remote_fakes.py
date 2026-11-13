@@ -329,7 +329,7 @@ def install(tmp: Path, monkeypatch) -> tuple[Path, Path]:
     home.mkdir(parents=True, exist_ok=True)
     for name, text in PROGRAMS.items():
         path = bin_dir / name
-        path.write_text(text)
+        path.write_text(text, encoding="utf-8")
         path.chmod(path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
     monkeypatch.setenv("FAKE_REMOTE_HOME", str(home))
     monkeypatch.setenv("FAKE_BIN", str(bin_dir))

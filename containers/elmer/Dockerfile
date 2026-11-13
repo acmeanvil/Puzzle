@@ -27,5 +27,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=build /opt/elmer /opt/elmer
 ENV PATH=/opt/elmer/bin:$PATH \
     LD_LIBRARY_PATH=/opt/elmer/lib/elmersolver
+# Docker on Windows runs the container as root (no uid to pass with --user); OpenMPI's
+# launcher refuses root unless told, which stopped MPI runs (run-mpi.sh) there.
+ENV OMPI_ALLOW_RUN_AS_ROOT=1 \
+    OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
 RUN echo "${ELMER_TAG}" > /etc/puzzle-solver-version
 WORKDIR /work

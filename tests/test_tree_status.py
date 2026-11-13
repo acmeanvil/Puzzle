@@ -10,7 +10,7 @@ follow (run for real with CalculiX).
 import os
 import shutil
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -144,3 +144,18 @@ def test_the_gui_tree_problems_and_results_bar(tmp_path):
         assert problem.isSelected()  # the selected object's problems are marked
     finally:
         w.close()
+
+
+def test_a_later_run_clears_a_failure(tmp_path):
+    from dataclasses import replace
+
+    from puzzle.project.status import still_failed
+
+    p = load_project(copy(tmp_path))
+    study = tip(p)
+    sid = str(study.id)
+    at = datetime(2026, 11, 11, 14, 0, tzinfo=UTC)
+    run = replace(record(study, "k"), recorded_at=datetime(2026, 11, 11, 13, tzinfo=UTC))
+    assert still_failed({sid: at}, [run]) == {sid: at}  # an older run doesn't clear it
+    run = replace(run, recorded_at=datetime(2026, 11, 11, 14, 31, tzinfo=UTC))
+    assert still_failed({sid: at}, [run]) == {}  # the agent's run after the failure does

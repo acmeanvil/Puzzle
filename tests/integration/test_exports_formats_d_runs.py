@@ -67,11 +67,11 @@ def heated(tmp_path_factory):
 
 def _ccx(folder, deck: str) -> dict[int, np.ndarray]:
     """Run CalculiX on `deck`; the printed displacements by node."""
-    (folder / "check.inp").write_text(deck)
+    (folder / "check.inp").write_text(deck, encoding="utf-8")
     result = run_job(["ccx", "-i", "check"], folder, runtime_for("calculix"), timeout_s=300)
-    assert result.ok, result.log.read_text()[-3000:]
+    assert result.ok, result.log.read_text(encoding="utf-8")[-3000:]
     rows = {}
-    for line in (folder / "check.dat").read_text().splitlines():
+    for line in (folder / "check.dat").read_text(encoding="utf-8").splitlines():
         parts = line.split()
         if len(parts) == 4 and parts[0].isdigit():
             rows[int(parts[0])] = np.array([float(p) for p in parts[1:]])
@@ -81,7 +81,7 @@ def _ccx(folder, deck: str) -> dict[int, np.ndarray]:
 def _loads(work) -> list[str]:
     """The *CLOAD block of the run's own deck (nodal forces on the tip)."""
     (deck,) = [p for p in work.rglob("*.inp")]
-    lines = deck.read_text().splitlines()
+    lines = deck.read_text(encoding="utf-8").splitlines()
     at = lines.index(next(line for line in lines if line.startswith("*CLOAD")))
     end = next(k for k in range(at + 1, len(lines)) if lines[k].startswith("*"))
     return lines[at:end]
@@ -93,7 +93,7 @@ def test_calculix_solves_the_exported_deck(bent, solver):
     out = tmp / "abaqus"
     files = export(project, store, run.run_id, "abaqus_inp", out / "bar")
     assert [f.name for f in files] == ["bar.inp", "bar.txt"]  # no temperatures in a bend
-    text = files[0].read_text()
+    text = files[0].read_text(encoding="utf-8")
     assert "*ELEMENT, TYPE=C3D10, ELSET=E_BAR" in text and "*NSET, NSET=N_BAR_TIP" in text
     tip_nodes = run.mesh.groups["Bar/Tip"].node_ids
     stored = run.results.last("displacement")
@@ -175,7 +175,7 @@ def test_nastran_round_trip(bent, solver):
     project, store, run, work, tmp = bent
     bdf, pch, note = export(project, store, run.run_id, "nastran", tmp / "nastran" / "bar")
     mesh, stored = run.mesh, run.results.last("displacement")
-    cards = _large_field(bdf.read_text())
+    cards = _large_field(bdf.read_text(encoding="utf-8"))
     grids = {int(f[0]): [float(v) if v else 0.0 for v in f[2:5]] for n, f in cards if n == "GRID"}
     assert len(grids) == len(mesh.node_ids)
     xyz = np.array([grids[int(n)] for n in mesh.node_ids])
@@ -183,14 +183,14 @@ def test_nastran_round_trip(bent, solver):
     tetras = [f for n, f in cards if n == "CTETRA"]
     assert len(tetras) == sum(len(b.ids) for b in mesh.blocks if b.dim == 3)
     assert all(len([v for v in f if v]) == 12 for f in tetras)  # id, property, 10 grids
-    lines = pch.read_text().splitlines()
+    lines = pch.read_text(encoding="utf-8").splitlines()
     at = lines.index("$DISPLACEMENTS".ljust(72) + f"{4:8d}")
     shown = {int(line[:10]): float(line[36:54]) for line in lines[at + 3 :]
              if line[10:18].strip() == "G"}  # fmt: skip
     tip_nodes = mesh.groups["Bar/Tip"].node_ids
     for n, uy in zip(tip_nodes, stored.at(tip_nodes)[:, 1], strict=True):
         assert shown[int(n)] == pytest.approx(uy, rel=5e-7)
-    assert "metres" in note.read_text()
+    assert "metres" in note.read_text(encoding="utf-8")
 
 
 @over("calculix")
@@ -215,7 +215,7 @@ def test_gltf_of_the_cantilever(bent, solver):
     lowest = min(read.GetPoint(k)[1] for k in range(read.GetNumberOfPoints()))
     tip = run.results.last("displacement").values[:, 1].min()
     assert lowest == pytest.approx(50 * tip, rel=1e-5)  # float32 positions
-    assert "x 50" in note.read_text()
+    assert "x 50" in note.read_text(encoding="utf-8")
 
 
 @over("elmer", "fenicsx")

@@ -27,13 +27,13 @@ def test_static_case_files(tmp_path):
     fixed = Feature(type="fixed", selection="Bar/Root")
     force = Feature(type="force", selection="Bar/Tip", values={"y": Quantity(value=-100, unit="N")})
     export = _case(tmp_path, [fixed, force], SolveStep(type="stationary"))
-    comm = (export.parent / "job.comm").read_text()
+    comm = (export.parent / "job.comm").read_text(encoding="utf-8")
     assert (export.parent / "job.med").stat().st_size > 0
     assert "MECA_STATIQUE" in comm and "SIGM_NOEU" in comm
     assert "DDL_IMPO=(_F(GROUP_MA='G2', DX=0.0, DY=0.0, DZ=0.0),)" in comm
     traction = float(comm.split("FY=")[1].split(")")[0])
     assert traction == pytest.approx(-100 / (0.01 * 0.01), rel=1e-9)
-    lines = export.read_text().splitlines()
+    lines = export.read_text(encoding="utf-8").splitlines()
     assert "F comm job.comm D 1" in lines and "F mmed job.med D 20" in lines
     assert "F libr displacement.csv R 81" in lines and "F libr stress.csv R 82" in lines
 
@@ -44,19 +44,19 @@ def test_modal_and_heat_cases(tmp_path):
         [Feature(type="fixed", selection="Bar/Root")],
         SolveStep(type="modal", settings={"modes": 3}),
     )
-    comm = (export.parent / "job.comm").read_text()
+    comm = (export.parent / "job.comm").read_text(encoding="utf-8")
     assert "CALC_MODES" in comm and "NMAX_FREQ=3" in comm and "NOM_PARA='FREQ'" in comm
     hot = Feature(
         type="temperature", selection="Bar/Root", values={"T": Quantity(value=100, unit="degC")}
     )
     constant = {"temperature_dependent_materials": False}
     export = _case(tmp_path / "b", [hot], SolveStep(type="stationary"), "heat_transfer", constant)
-    comm = (export.parent / "job.comm").read_text()
+    comm = (export.parent / "job.comm").read_text(encoding="utf-8")
     assert "THER_LINEAIRE" in comm and "TEMP=373.15" in comm and "LAMBDA=" in comm
 
     # Structural steel carries EN 1993-1-2 tables: by default they make it nonlinear.
     export = _case(tmp_path / "c", [hot], SolveStep(type="stationary"), "heat_transfer")
-    comm = (export.parent / "job.comm").read_text()
+    comm = (export.parent / "job.comm").read_text(encoding="utf-8")
     assert "THER_NON_LINE" in comm and "THER_NL=_F(LAMBDA=lam1, BETA=beta1)" in comm
     assert "ETAT_INIT=_F(STAT='OUI')" in comm and "573.15, 44.01" in comm
 
@@ -82,7 +82,9 @@ NUME_ORDRE,FREQ
 
 
 def test_table_reader_static(tmp_path):
-    (tmp_path / "displacement.csv").write_text(DISP.replace(" 2,7", " 1,9").replace(" 2,2", " 1,8"))
+    (tmp_path / "displacement.csv").write_text(
+        DISP.replace(" 2,7", " 1,9").replace(" 2,2", " 1,8"), encoding="utf-8"
+    )
     (step,) = read_results(tmp_path).steps
     disp = step.fields["displacement"]
     assert list(disp.ids) == [2, 7, 8, 9]
@@ -90,8 +92,8 @@ def test_table_reader_static(tmp_path):
 
 
 def test_table_reader_modes(tmp_path):
-    (tmp_path / "displacement.csv").write_text(DISP)
-    (tmp_path / "frequency.csv").write_text(FREQ)
+    (tmp_path / "displacement.csv").write_text(DISP, encoding="utf-8")
+    (tmp_path / "frequency.csv").write_text(FREQ, encoding="utf-8")
     modes = read_results(tmp_path).modes()
     assert [(m.mode, m.value) for m in modes] == [(1, 203.9528), (2, 203.957)]
     assert modes[1].fields["displacement"].at([2])[0, 2] == 2.0
@@ -109,7 +111,7 @@ def test_transient_heat_case(tmp_path):
         "heat_transfer",
         {"temperature_dependent_materials": False},
     )
-    comm = (export.parent / "job.comm").read_text()
+    comm = (export.parent / "job.comm").read_text(encoding="utf-8")
     assert "TYPE_CALCUL='TRAN'" in comm and "ETAT_INIT=_F(VALE=293.15)" in comm
     assert "JUSQU_A=30, PAS=5" in comm
     assert "PARM_THETA=1.0" in comm  # backward Euler, like every other solver
@@ -121,7 +123,7 @@ def test_transient_heat_case(tmp_path):
         "heat_transfer",
         {"temperature_dependent_materials": False},
     )
-    assert "PARM_THETA=0.5" in (export.parent / "job.comm").read_text()
+    assert "PARM_THETA=0.5" in (export.parent / "job.comm").read_text(encoding="utf-8")
     with pytest.raises(InputError) as err:
         _case(
             tmp_path / "bdf",
@@ -141,7 +143,7 @@ res ,TEMP , 10.0, 2,1 , 0.0, 0.0, 0.0, 310.0
 
 
 def test_table_reader_time_series(tmp_path):
-    (tmp_path / "temperature.csv").write_text(TRANSIENT)
+    (tmp_path / "temperature.csv").write_text(TRANSIENT, encoding="utf-8")
     steps = read_results(tmp_path).steps
     assert [s.value for s in steps] == [0.0, 5.0, 10.0]
     assert steps[-1].fields["temperature"].values[0, 0] == 310.0

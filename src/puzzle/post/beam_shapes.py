@@ -173,10 +173,12 @@ def library_outline(sec) -> list[Region]:
         right = _angle_loop(b, d, t, r, gap / 2)
         left = right[::-1] * np.array([-1.0, 1.0])  # mirrored, still counter-clockwise
         return _centred([(right, None), (left, None)])
-    if shape == "RHS":  # AISC's corners: 2t outside, t inside
+    if shape == "RHS":  # AISC's corners: 2t outside, t inside; the AA's tubes are sharp
         t = s.get("tdes") or s["t"]
         h, b = s.get("Ht") or s["d"], s.get("B") or s["bf"]
-        return [(_rect(b, h, 2 * t), _rect(b - 2 * t, h - 2 * t, t))]
+        sharp = getattr(sec, "standard", "") == "aa"
+        return [(_rect(b, h, 0.0 if sharp else 2 * t),
+                 _rect(b - 2 * t, h - 2 * t, 0.0 if sharp else t))]  # fmt: skip
     if shape == "CHS":
         od = s["OD"]
         t = s.get("tdes") or s.get("t") or (od - s["ID"]) / 2

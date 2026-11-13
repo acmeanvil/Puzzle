@@ -22,7 +22,8 @@ PATH = Qt.ItemDataRole.UserRole
 READ_ONLY = {"kind"}
 HIDDEN = {"id", "file_hash"}  # internal: never shown
 # Plain numbers stored in a fixed unit: the unit goes with the name.
-UNITS = {"translation": " (m)", "rotation": " (degrees)", "facet_angle": " (degrees)"}
+UNITS = {"translation": " (m)", "rotation": " (degrees)", "facet_angle": " (degrees)",
+         "flank_angles": " (degrees)"}  # fmt: skip
 # What an unset optional value says (ADR 0029: never "null").
 UNSET = {
     "source_unit": "From the file",
@@ -89,6 +90,11 @@ APPLIES = {
         lambda d: d.get("dimension") == "2d_planar",
     ),  # fmt: skip
     "history": (_is_geometry, lambda d: d.get("source") is None),
+    # A 2D model's all or mixed quadrilaterals: only with that shape chosen.
+    "quadrilaterals": (
+        lambda d: "element_shape" in d and "mesher" in d,
+        lambda d: d.get("element_shape") == "hexahedra",
+    ),  # fmt: skip
     # A beam section's sizes (ADR 0027): only those its shape takes.
     "width": (_is_section, _shape("rectangle", "box")),
     "height": (_is_section, _shape("rectangle", "box")),
@@ -105,6 +111,11 @@ APPLIES = {
     "reference": (_is_section, lambda d: d.get("orient") in ("normal", "edge")),
     "mirror": (_is_section, lambda d: _is_angle(d)),  # a single angle's other leg
     "principal": (_is_section, lambda d: False),  # set while solving only
+    # ADR 0076: a contact's thread, once it has one (Make it a thread… adds it).
+    "thread": (
+        lambda d: {"source", "target", "interface"} <= set(d),
+        lambda d: d.get("thread") is not None,
+    ),  # fmt: skip
     # ADR 0054: probes followed while solving are points, selections and reactions.
     "track": (
         lambda d: {"quantity", "reduction", "samples"} <= set(d),
@@ -171,6 +182,31 @@ def _bolt_type_field(key: str, d) -> bool:
     }.get(key, True)
 
 
+def _is_thread(d) -> bool:
+    return {"form", "starts", "hand", "bearing", "compliance", "flank_angles"} <= set(d)
+
+
+def _thread_field(key: str, d) -> bool:
+    """A thread (ADR 0076) shows what its form needs: a size for ISO and UN, a major
+    diameter and pitch for the others, flank angles for a custom one; the numbers its
+    form and size give only once set."""
+    from puzzle.thread_setup import SIZED
+
+    sized = d.get("form") in SIZED
+    custom = d.get("form") == "custom"
+    return {
+        "size": sized or d.get("size") is not None,
+        "major": not sized or d.get("major") is not None,
+        "pitch": not sized or d.get("pitch") is not None,
+        "flank_angles": custom or d.get("flank_angles") is not None,
+        "pitch_diameter": d.get("pitch_diameter") is not None,
+        "minor": d.get("minor") is not None,
+        "taper": d.get("taper") is not None,
+        "axis": d.get("axis") is not None,
+        "engaged_length": d.get("engaged_length") is not None,
+    }.get(key, True)
+
+
 def _is_operator(d) -> bool:
     return {"inputs", "reduction", "against", "compare"} <= set(d)
 
@@ -198,6 +234,8 @@ def applies(owner: Any, key: Any) -> bool:
         return _operator_field(key, owner)
     if isinstance(owner, dict) and _is_bolt_type(owner):
         return _bolt_type_field(key, owner)
+    if isinstance(owner, dict) and _is_thread(owner):
+        return _thread_field(key, owner)
     if isinstance(owner, dict) and key in BUILT and _is_construction(owner):
         return BUILT[key](owner)
     if isinstance(owner, dict) and _is_axes(owner):
@@ -207,7 +245,8 @@ def applies(owner: Any, key: Any) -> bool:
 
 
 def is_quantity(value: Any) -> bool:
-    return isinstance(value, dict) and set(value) == {"value", "unit"}
+    return isinstance(value, dict) and {"value", "unit"} <= set(value) <= {
+        "value", "unit", "parameter"}  # fmt: skip
 
 
 def format_value(value: Any) -> str:
@@ -216,10 +255,11 @@ def format_value(value: Any) -> str:
         from puzzle.settings import current
 
         unit = value["unit"]
+        bound = f"= {value['parameter']}: " if value.get("parameter") else ""  # ADR 0071
         if unit == "dimensionless":
-            return f"{value['value']:g}"
+            return f"{bound}{value['value']:g}"
         v, u = shown(value["value"], unit, current().display_units())  # ADR 0024
-        return f"{v:.6g} {pretty(u)}"
+        return f"{bound}{v:.6g} {pretty(u)}"
     if value is None:
         return NONE_TEXT
     if isinstance(value, bool):
@@ -309,6 +349,11 @@ def parse_value(text: str, old: Any) -> Any:
         from puzzle.model.units import plain, shown
         from puzzle.settings import current
 
+        if text.startswith("="):  # "= t": the value follows parameter t (ADR 0071)
+            name = text[1:].split(":", 1)[0].strip()
+            if not name:
+                raise ValueError("type a parameter's name after =, e.g. = t")
+            return {"value": old["value"], "unit": old["unit"], "parameter": name}
         number, _, unit = text.partition(" ")
         if not unit.strip():  # a bare number is in the unit shown
             unit = shown(old["value"], old["unit"], current().display_units())[1]
@@ -348,27 +393,31 @@ class PropertiesPanel(QTreeWidget):
         """Show `data` (the object's JSON form) from `path` down; `names` maps ids to
         names; `choices(path)` gives a field's [(label, value)] or None (free text)."""
         self._filling = True
-        self.clear()
-        self.object_id = object_id
-        self.choices = choices or (lambda _path: None)
-        node: Any = data
-        for part in [p for p in path.split(".") if p]:
-            node = node[int(part)] if isinstance(node, list) else node[part]
-        self._fill(self.invisibleRootItem(), node, path, names)
-        self.expandToDepth(1)
-        from puzzle.gui.theme import colour_levels
+        try:  # a field that fails to show must not leave the panel deaf to edits (I5)
+            self.clear()
+            self.object_id = object_id
+            self.choices = choices or (lambda _path: None)
+            node: Any = data
+            for part in [p for p in path.split(".") if p]:
+                node = node[int(part)] if isinstance(node, list) else node[part]
+            self._fill(self.invisibleRootItem(), node, path, names)
+            self.expandToDepth(1)
+            from puzzle.gui.theme import colour_levels
 
-        colour_levels(self, depth_of_top=1)  # its groups as the tree's next levels
-        self._filling = False
+            colour_levels(self, depth_of_top=1)  # its groups as the tree's next levels
+        finally:
+            self._filling = False
 
     def show_text(self, rows: dict[str, Any]) -> None:
         """Read-only key/value rows (a run, a section)."""
         self._filling = True
-        self.clear()
-        self.object_id = ""
-        for key, value in rows.items():
-            QTreeWidgetItem(self.invisibleRootItem(), [key, format_value(value)])
-        self._filling = False
+        try:
+            self.clear()
+            self.object_id = ""
+            for key, value in rows.items():
+                QTreeWidgetItem(self.invisibleRootItem(), [key, format_value(value)])
+        finally:
+            self._filling = False
 
     def add_rows(self, title: str, rows: list[tuple[str, str]]) -> QTreeWidgetItem:
         """A read-only group under what is shown (an imported field's uses, a feature's
@@ -385,19 +434,21 @@ class PropertiesPanel(QTreeWidget):
         that takes a typed value ("200 MPa") has its own row under it while unwired.
         `rows` are (key, label, [(name, value)], current, typed text or None)."""
         self._filling = True
-        group = QTreeWidgetItem(self.invisibleRootItem(), ["Inputs", ""])
-        for key, title, options, current, typed in rows:
-            item = QTreeWidgetItem(group, [title, ""])
-            self._dropdown(item, f"inputs.{key}", current, options, self._wired)
-            if typed is not None:
-                row = QTreeWidgetItem(item, ["Typed value", typed])
-                row.setFlags(row.flags() | Qt.ItemFlag.ItemIsEditable)
-                row.setData(1, PATH, (f"inputs.{key}", TYPED))
-                row.setData(1, SHOWN, typed)
-                row.setToolTip(1, "Typed with its unit, e.g. 200 MPa")
-                item.setExpanded(True)
-        group.setExpanded(True)
-        self._filling = False
+        try:
+            group = QTreeWidgetItem(self.invisibleRootItem(), ["Inputs", ""])
+            for key, title, options, current, typed in rows:
+                item = QTreeWidgetItem(group, [title, ""])
+                self._dropdown(item, f"inputs.{key}", current, options, self._wired)
+                if typed is not None:
+                    row = QTreeWidgetItem(item, ["Typed value", typed])
+                    row.setFlags(row.flags() | Qt.ItemFlag.ItemIsEditable)
+                    row.setData(1, PATH, (f"inputs.{key}", TYPED))
+                    row.setData(1, SHOWN, typed)
+                    row.setToolTip(1, "Typed with its unit, e.g. 200 MPa")
+                    item.setExpanded(True)
+            group.setExpanded(True)
+        finally:
+            self._filling = False
         return group
 
     def add_slider(self, low: float, high: float, value: float, moved, released):

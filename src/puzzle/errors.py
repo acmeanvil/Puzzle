@@ -11,6 +11,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 CODES = {
+    "large_strain": "large-deflection strains past 5 % on an elastic material (ADR 0082)",
+    "weak_springs_carry": "a body's weak springs carry its load: it never seated (ADR 0080)",
+    "thread_radii": "a threaded contact's two cylinders are not one radius (ADR 0076)",
     "invalid_archive": "a project archive damaged, unsafe or from a newer Puzzle (ADR 0061)",
     "unknown_host": "no remote host by that name in your hosts.toml (ADR 0021)",
     "host_unreachable": "ssh could not reach the remote host, or lost it (ADR 0021)",
@@ -44,6 +47,7 @@ CODES = {
     "unsupported": "not implemented yet",
     "field_axis": "an imported field's axis (time or frequency) doesn't fit the step it is in",
     "incomplete_material": "a material lacks a property the study needs",
+    "missing_input": "an operator's input is not chosen or wired yet",
     # Results
     "stale_store": "the results store has an older format; delete it to rebuild",
     "export_failed": "a file could not be written",

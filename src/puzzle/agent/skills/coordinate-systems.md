@@ -50,6 +50,12 @@ id; results start in global axes.
    (θθ), zz axial, the displacement's x radial. Von Mises, principal stresses and
    magnitudes don't change. The GUI's results bar has an In axes dropdown.
 5. Check a system with `get_object(name)`; a derived one is resolved at each run.
+6. To redefine one, edit it in one `submit`: set the fields of the new way and set the
+   old way's back to `null` (`angles`, `points`, `entity`/`entity_name`), e.g.
+   `{"command": "edit", "object": "Local", "ops": [{"op": "set", "path": "type",
+   "value": "cylindrical"}, {"op": "set", "path": "axis", "value": [1, 0, 0]},
+   {"op": "set", "path": "angles", "value": null}]}`. The GUI's Edit… (right-click,
+   double-click, Model → Edit coordinate system…) does this.
 
 ## Mistakes to avoid
 

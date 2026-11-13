@@ -126,7 +126,9 @@ def versions(root: Path) -> list[Version]:
     out = []
     for path in folder(root).glob("*.json"):
         if path.stem.isdigit():
-            out.append(Version(**check_manifest(json.loads(path.read_text()), path.name)))
+            out.append(
+                Version(**check_manifest(json.loads(path.read_text(encoding="utf-8")), path.name))
+            )
     return sorted(out, key=lambda v: v.number)
 
 
@@ -244,7 +246,7 @@ def hashes(root: Path) -> dict[str, str]:
     root = Path(root)
     cache_path = folder(root) / CACHE
     try:
-        cache = json.loads(cache_path.read_text())
+        cache = json.loads(cache_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         cache = {}
     out, fresh = {}, {}
@@ -260,7 +262,7 @@ def hashes(root: Path) -> dict[str, str]:
         out[key] = digest
         fresh[key] = [st.st_size, st.st_mtime_ns, digest]
     if fresh != cache and folder(root).exists():
-        cache_path.write_text(json.dumps(fresh))
+        cache_path.write_text(json.dumps(fresh), encoding="utf-8")
     return out
 
 
@@ -329,7 +331,7 @@ def save(
 def _write(root: Path, v: Version) -> None:
     path = folder(root) / f"{v.number}.json"
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(asdict(v), indent=1))
+    tmp.write_text(json.dumps(asdict(v), indent=1), encoding="utf-8")
     tmp.replace(path)
 
 
@@ -512,7 +514,7 @@ def _last_command(root: Path) -> str:
     path = Path(root) / HISTORY
     if not path.exists():
         return ""
-    for line in reversed(path.read_text().splitlines()):
+    for line in reversed(path.read_text(encoding="utf-8").splitlines()):
         try:
             e = json.loads(line)
         except ValueError:
@@ -583,7 +585,7 @@ def due(root: Path, every_edits: int, every_minutes: float) -> tuple[bool, int]:
     path = Path(root) / HISTORY
     seqs = []
     if path.exists():
-        for line in path.read_text().splitlines():
+        for line in path.read_text(encoding="utf-8").splitlines():
             try:
                 e = json.loads(line)
             except ValueError:

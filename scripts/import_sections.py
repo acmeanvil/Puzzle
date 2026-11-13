@@ -61,7 +61,7 @@ def _number(text: str) -> float | None:
 
 
 def aisc(folder: Path) -> list[dict]:
-    src = (folder / "aisc_shapes_data.dart").read_text()
+    src = (folder / "aisc_shapes_data.dart").read_text(encoding="utf-8")
     rows = re.findall(r"\('([^']+)', '([^']+)', \[([^\]]*)\]\)", src)
     out = []
     for family, label, values in rows:
@@ -81,7 +81,7 @@ def aisc(folder: Path) -> list[dict]:
 
 
 def en(folder: Path) -> list[dict]:
-    src = (folder / "en_shapes_data.dart").read_text()
+    src = (folder / "en_shapes_data.dart").read_text(encoding="utf-8")
     rows = re.findall(r"\('([^']+)', '([^']+)', '([^']+)', (\d+), \{([^}]*)\}\)", src)
     out = []
     for family, _table, designation, _page, values in rows:
@@ -107,7 +107,9 @@ def main() -> None:
         data = {"source": source, "units": "SI (m, m², m⁴, m⁶, kg/m; alpha in degrees)",
                 "generated_by": "scripts/import_sections.py from Lacewing Lab's tables",
                 "sections": rows}  # fmt: skip
-        (OUT / f"{name}.json").write_text(json.dumps(data, indent=0, ensure_ascii=False) + "\n")
+        (OUT / f"{name}.json").write_text(
+            json.dumps(data, indent=0, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
         print(f"{name}: {len(rows)} sections")
 
 

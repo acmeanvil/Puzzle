@@ -53,7 +53,9 @@ MULTIPLIERS = {
 def read_table(path: Path) -> list[dict[str, str]]:
     """Rows of an IMPR_TABLE file (comment lines start with #)."""
     lines = [
-        line for line in path.read_text().splitlines() if line.strip() and not line.startswith("#")
+        line
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.startswith("#")
     ]
     return [{k.strip(): (v or "").strip() for k, v in row.items()} for row in csv.DictReader(lines)]
 

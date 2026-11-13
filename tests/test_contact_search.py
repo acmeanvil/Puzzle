@@ -170,3 +170,21 @@ def test_the_dialog_reviews_and_makes(tmp_path):
     assert window.session.history(limit=1)[0]["command"]["command"] == "batch"
     window.close()
     assert app is not None
+
+
+def test_a_pin_in_a_history_built_bore(tmp_path):
+    """Named faces from a history may come back FORWARD whatever their solid says; the
+    search reads their orientation in the solid, so a pin in a bore faces its wall."""
+    p = Project(name="pin")
+    block = p.add(Geometry(name="Block", history=[
+        HistoryStep(kind="box", name="B", args={"dx": 0.04, "dy": 0.04, "dz": 0.02}),
+        HistoryStep(kind="hole", name="H", args={"r": 0.005, "x": 0.02, "y": 0.02})]))  # fmt: skip
+    pin = p.add(Geometry(name="Pin", history=[HistoryStep(kind="cylinder", name="P", args={
+        "r": 0.005, "h": 0.03, "x": 0.02, "y": 0.02, "z": -0.005})]))  # fmt: skip
+    mesh = p.add(MeshRecipe(name="M", global_size=Quantity(value=5, unit="mm")))
+    comp = p.add(Component(name="C", mesh=mesh.id, parts=[
+        PartInstance(name="Block", geometry=block.id),
+        PartInstance(name="Pin", geometry=pin.id)]))  # fmt: skip
+    (pair,) = find_contacts(p, comp, tmp_path)
+    assert (pair.source_face, pair.target_face) == ("H/wall", "P/wall")
+    assert pair.area == pytest.approx(2 * 3.141592653589793 * 0.005 * 0.02, rel=1e-4)

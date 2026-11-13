@@ -250,8 +250,12 @@ def test_a_binary_openfoam_field_is_refused_with_the_way_out(tmp_path):
 
     case = tmp_path / "case"
     shutil.copytree(DATA / "channel", case)
-    text = (case / "1" / "T").read_text().replace("format      ascii", "format      binary")
-    (case / "1" / "T").write_text(text)
+    text = (
+        (case / "1" / "T")
+        .read_text(encoding="utf-8")
+        .replace("format      ascii", "format      binary")
+    )
+    (case / "1" / "T").write_text(text, encoding="utf-8")
     p = Project(name="b")
     f = p.add(ImportedField(name="T", file="case", format="openfoam",
                             columns=[FieldColumn(name="T")]))  # fmt: skip
@@ -265,14 +269,15 @@ def test_a_binary_openfoam_field_is_refused_with_the_way_out(tmp_path):
 def test_ansys_mechanical_exports_name_their_node_numbers_and_locations(tmp_path):
     path = tmp_path / "mech.txt"
     path.write_text("Node Number\tX Location (mm)\tY Location (mm)\tZ Location (mm)\t"
-                    "Temperature (°C)\n1\t0.\t0.\t0.\t22.5\n2\t10.\t0.\t0.\t23.5\n")  # fmt: skip
+                    "Temperature (°C)\n1\t0.\t0.\t0.\t22.5\n2\t10.\t0.\t0.\t23.5\n",
+                    encoding="utf-8")  # fmt: skip
     found = sniff(path)
     assert found["delimiter"] == "\t" and found["length_unit"] == "mm"
     assert [(c["role"], c["unit"]) for c in found["columns"]] == [
         ("ignore", ""), ("x", ""), ("y", ""), ("z", ""), ("value", "°C")]  # fmt: skip
     fluent = tmp_path / "fluent.csv"
     fluent.write_text("nodenumber, x-coordinate, y-coordinate, z-coordinate, pressure\n"
-                      "1, 0, 0, 0, 5\n")  # fmt: skip
+                      "1, 0, 0, 0, 5\n", encoding="utf-8")  # fmt: skip
     assert [c["role"] for c in sniff(fluent)["columns"]] == ["ignore", "x", "y", "z", "value"]
 
 
@@ -284,7 +289,7 @@ def _linear_csv(path, t):
     x, y, z = (a.ravel() for a in np.meshgrid(g, g, g, indexing="ij"))
     rows = ["x,y,z,T [K]"] + [f"{a:.9g},{b:.9g},{c:.9g},{300 + 10 * t + 100 * a:.12g}"
                               for a, b, c in zip(x, y, z, strict=True)]  # fmt: skip
-    path.write_text("\n".join(rows) + "\n")
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
     return path
 
 
@@ -305,11 +310,11 @@ def test_a_field_over_two_files_is_exact_between_and_held_outside(tmp_path):
 
 
 def test_a_time_column_groups_the_rows(tmp_path):
-    a = _linear_csv(tmp_path / "a.csv", 0.0).read_text().splitlines()
-    b = _linear_csv(tmp_path / "b.csv", 30.0).read_text().splitlines()
+    a = _linear_csv(tmp_path / "a.csv", 0.0).read_text(encoding="utf-8").splitlines()
+    b = _linear_csv(tmp_path / "b.csv", 30.0).read_text(encoding="utf-8").splitlines()
     path = tmp_path / "series.csv"
     path.write_text("\n".join(["time [min]," + a[0]] + [f"0,{r}" for r in a[1:]]
-                              + [f"0.5,{r}" for r in b[1:]]) + "\n")  # fmt: skip
+                              + [f"0.5,{r}" for r in b[1:]]) + "\n", encoding="utf-8")  # fmt: skip
     found = sniff(path)
     assert found["columns"][0] == {"name": "time", "role": "time", "unit": "min"}
     root = tmp_path / "project"

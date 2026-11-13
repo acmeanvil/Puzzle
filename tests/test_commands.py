@@ -217,6 +217,34 @@ def test_a_batch_applies_together_and_undoes_as_one(root):
     assert {c.name for c in Session(root).project.of_type(Component)} == {"Cantilever"}
 
 
+def test_duplicating_a_study_and_a_component_with_its_studies(root):
+    """Duplicate (the maintainer, 2026-11-08): a study under a new name, and a component
+    with its studies on the copy, as Ansys's Duplicate of a system; each one undo."""
+    from puzzle.model.schema import Study
+
+    s = Session(root)
+    studies = {st.name: st for st in s.project.of_type(Study)}
+    first = next(iter(studies.values()))
+    out = s.submit({"command": "copy_study", "study": first.name, "name": "Variant"})
+    assert out.status == "applied"
+    made = {st.name: st for st in Session(root).project.of_type(Study)}
+    assert made["Variant"].component == first.component and made["Variant"].id != first.id
+    assert made["Variant"].steps == first.steps
+    s.undo()
+    assert "Variant" not in {st.name for st in Session(root).project.of_type(Study)}
+
+    out = s.submit({"command": "copy_component", "component": "Cantilever", "name": "Heavy",
+                    "studies": True})  # fmt: skip
+    project = Session(root).project
+    heavy = next(c for c in project.of_type(Component) if c.name == "Heavy")
+    on_heavy = [st for st in project.of_type(Study) if st.component == heavy.id]
+    assert len(on_heavy) == len([st for st in studies.values()
+                                 if st.component == first.component])  # fmt: skip
+    assert all(st.name.endswith("(Heavy)") for st in on_heavy)
+    s.undo()  # the component and its studies go together
+    assert not [st for st in Session(root).project.of_type(Study) if "(Heavy)" in st.name]
+
+
 def test_a_failing_batch_changes_nothing(root):
     s = Session(root)
     batch = [

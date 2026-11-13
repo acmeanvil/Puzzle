@@ -24,7 +24,8 @@ def physical_cores() -> int:
     try:
         if sys.platform == "darwin":
             out = subprocess.run(["sysctl", "-n", "hw.physicalcpu"], capture_output=True,
-                                 text=True, timeout=5, check=True).stdout  # fmt: skip
+                                 text=True, encoding="utf-8", errors="replace", timeout=5,
+                                 check=True).stdout  # fmt: skip
             return max(1, int(out.strip()))
         if sys.platform.startswith("linux"):
             return _linux_cores() or logical_cores()
@@ -32,7 +33,8 @@ def physical_cores() -> int:
             out = subprocess.run(
                 ["powershell", "-NoProfile", "-Command",
                  "(Get-CimInstance Win32_Processor | Measure-Object NumberOfCores -Sum).Sum"],
-                capture_output=True, text=True, timeout=20, check=True,
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20,
+                check=True,
             ).stdout  # fmt: skip
             return max(1, int(out.strip()))
     except (OSError, ValueError, subprocess.SubprocessError):
@@ -40,10 +42,21 @@ def physical_cores() -> int:
     return logical_cores()
 
 
+DEFAULT_CORES = 4
+
+
+def default_cores(physical: int | None = None) -> int:
+    """Cores per run when Settings > Solvers leaves it automatic (the maintainer,
+    2026-11-08): 4 where there are more, else one fewer than the physical cores, so the
+    computer stays usable while it solves (and ADR 0053 measured little gain past 2-4)."""
+    n = physical_cores() if physical is None else physical
+    return DEFAULT_CORES if n > DEFAULT_CORES else max(1, n - 1)
+
+
 def _linux_cores() -> int | None:
     """Distinct (physical id, core id) pairs in /proc/cpuinfo."""
     try:
-        text = open("/proc/cpuinfo").read()  # noqa: SIM115 - one read
+        text = open("/proc/cpuinfo", encoding="utf-8").read()  # noqa: SIM115 - one read
     except OSError:
         return None
     pairs, physical, core = set(), "0", None
@@ -67,7 +80,8 @@ def memory_bytes() -> int | None:
     try:
         if sys.platform == "darwin":
             out = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True,
-                                 text=True, timeout=5, check=True).stdout  # fmt: skip
+                                 text=True, encoding="utf-8", errors="replace", timeout=5,
+                                 check=True).stdout  # fmt: skip
             return int(out.strip())
         if hasattr(os, "sysconf") and "SC_PHYS_PAGES" in os.sysconf_names:
             return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")

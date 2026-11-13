@@ -234,4 +234,4 @@ def test_a_new_store_records_its_format(tmp_path):
     import json
 
     _transient(ResultStore(tmp_path / "r"), [[1, 2]])
-    assert json.loads((tmp_path / "r" / "store.json").read_text()) == {"format": 2}
+    assert json.loads((tmp_path / "r" / "store.json").read_text(encoding="utf-8")) == {"format": 2}

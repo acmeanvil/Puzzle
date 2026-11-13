@@ -141,7 +141,7 @@ def sniff(path: Path) -> dict:
     fmt = format_of(path)
     if fmt in READERS:
         return _sniff_reader(path, fmt)
-    lines = path.read_text(errors="replace").splitlines()
+    lines = path.read_text(errors="replace", encoding="utf-8").splitlines()
     skip = 0
     while skip < len(lines) and (
         not lines[skip].strip() or lines[skip].lstrip().startswith(COMMENTS)
@@ -378,7 +378,9 @@ def from_table(project, op_id, name: str | None = None) -> dict:
 def _read_csv(path: Path, f) -> tuple[np.ndarray, dict[str, np.ndarray], np.ndarray | None]:
     """A delimited file's points, value columns, and time (or frequency) column if it
     has one."""
-    lines = path.read_text(errors="replace").splitlines()[f.skip_rows + (1 if f.header else 0) :]
+    lines = path.read_text(errors="replace", encoding="utf-8").splitlines()[
+        f.skip_rows + (1 if f.header else 0) :
+    ]
     rows = []
     for ln in lines:
         if not ln.strip() or ln.lstrip().startswith(COMMENTS):

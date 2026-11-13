@@ -18,6 +18,7 @@ import json
 import tempfile
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 from mcp.server.mcpserver import Image, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
@@ -51,6 +52,15 @@ Before a task in an area that has a skill (bolts, beam sections, ...), read it w
 For a question about a solver, an error message or what Puzzle supports, search
 `knowledge` and cite the passages you use.
 """
+
+
+def _bolt_index(comp, name: str) -> int:
+    """The position of the bolt named `name` among the component's connectors."""
+    for i, c in enumerate(comp.connectors):
+        if c.name == name:
+            return i
+    raise PuzzleError(f"no bolt '{name}' in '{comp.name}'", code="not_found",
+                      details={"bolts": [c.name for c in comp.connectors]})  # fmt: skip
 
 
 def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True,
@@ -182,24 +192,37 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         return {"selections": [r.to_dict() for r in done.reports], "accept_all": command}
 
     @tool(
-        description="Find where the parts of a component touch (ADR 0039): one proposal per "
-        "pair of parts with the faces on each side, the gap (m) and the overlap (m^2). "
+        description="Find where the parts of a component touch (ADR 0039), and the bodies of "
+        "a part with several (an imported STEP assembly is often one part): one proposal per "
+        "pair of parts or bodies with the faces on each side, the gap (m) and the overlap "
+        "(m^2); `source_body`/`target_body` name the bodies (null between whole parts). "
+        "Bodies of one part share their nodes where they touch (Share faces): a bonded "
+        "contact between them records that, a frictionless or frictional one parts them. "
         "`tolerance` is the largest gap in m (default 0.5 % of the model's size), `angle` how "
         "far from face to face, in degrees. `make_bonded` is the batch that makes every "
         "proposal as a bonded contact (face selections first); change a contact's type "
-        "or drop proposals, then pass the list to submit. Nothing is made here."
+        "or drop proposals, then pass the list to submit. Nothing is made here. `thread`, "
+        "when set, says the two sides are coaxial cylinders of near-equal radius (a tapped "
+        "hole or a screw in a nut?) with a likely ISO size: make the contact, then "
+        "`contact_thread` (ADR 0076)."
     )
     @guarded
     def contacts_find(
         component: str, tolerance: float | None = None, angle: float = 10.0
     ) -> dict[str, Any]:
         from puzzle.commands import resolve
-        from puzzle.geometry.contacts import contact_commands, find_contacts, proposals
+        from puzzle.geometry.contacts import (
+            body_labels,
+            contact_commands,
+            find_contacts,
+            proposals,
+        )
         from puzzle.model.schema import Component
 
         s = session()
         comp = resolve(s.project, component, Component)
-        found = proposals(find_contacts(s.project, comp, root, tolerance=tolerance, angle=angle))
+        pairs = find_contacts(s.project, comp, root, tolerance=tolerance, angle=angle)
+        found = proposals(pairs, body_labels(s.project, comp))
         batch = [c.model_dump(mode="json") for c in contact_commands(s.project, comp, found)]
         return {
             "proposals": [
@@ -209,12 +232,42 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
                     "source_faces": p.source_faces,
                     "target_part": p.target_part,
                     "target_faces": p.target_faces,
+                    "source_body": p.labels[0] if p.labels and p.source_body else None,
+                    "target_body": p.labels[1] if p.labels and p.target_body else None,
                     "gap_m": p.distance,
                     "overlap_m2": p.area,
+                    "thread": p.thread,  # ADR 0076: coaxial cylinders, a likely size
                 }
                 for p in found
             ],
             "make_bonded": batch,
+        }
+
+    @tool(
+        description="Split a part holding several bodies (an imported STEP assembly) into one "
+        "part per body (ADR 0039): each body a geometry of its own (the file imported, then "
+        "that body kept), named by the body's selection; every reference follows its body "
+        "(materials, loads, supports, contacts, bolts, mesh sizes, result tools), and one "
+        "on a selection spanning bodies is repeated per part where it can be (materials, "
+        "features, sections) or reported in `notes`. `bond` (default true) adds bonded "
+        "contacts where the bodies touch, as the part's Share faces joined them. Returns "
+        "the plan; `batch` is the list to pass to submit (one undo). Nothing is made here."
+    )
+    @guarded
+    def parts_split(component: str, part: str, bond: bool = True) -> dict[str, Any]:
+        from puzzle.commands import resolve
+        from puzzle.model.schema import Component
+        from puzzle.split_parts import plan
+
+        s = session()
+        comp = resolve(s.project, component, Component)
+        made = plan(s.project, comp, part, root, bond=bond)
+        return {
+            "summary": made.summary(),
+            "parts": [{"name": n, "body": b} for n, b in made.parts],
+            "bonded_contacts": made.bonds,
+            "notes": made.notes,
+            "batch": [c.model_dump(mode="json") for c in made.commands],
         }
 
     @tool(
@@ -352,7 +405,9 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
 
     @tool(
         description="Propose bolts for a component's holes (ADR 0050). Holes are the "
-        "parts' cylindrical faces; a bolt joins two holes of different parts on one axis. "
+        "parts' cylindrical faces; a bolt joins a stack of holes on one axis in different "
+        "bodies (of different parts, or several bodies of one part), any number of layers: "
+        "from the first hole to the last, the ones between in `through`. "
         "With a rule (`rule` names it): hole diameters `min_diameter`/`max_diameter` (m), "
         "`parts`, an `axis` [x, y, z] (within 5 degrees), lengths between the holes' "
         "centres `min_length`/`max_length` (m); or `first` and `second`, two face "
@@ -421,6 +476,7 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
                     "name": p.name,
                     "holes": [f"{p.pair.source_part}/{p.pair.source_face}",
                               f"{p.pair.target_part}/{p.pair.target_face}"],
+                    "through": [f"{part}/{face}" for part, face in p.pair.through],
                     "hole_diameter_m": p.pair.diameter,
                     "length_m": p.length,
                     "bolt_type": p.type_name,
@@ -432,6 +488,330 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
             "stale": planned.stale,
             "make_bolts": [c.model_dump(mode="json") for c in batch],
         }  # fmt: skip
+
+    @tool(
+        description="Model bolts as solids drawn from the fastener tables (ADR 0077): each "
+        "named bolt (`bolt`: a name or a list) becomes a part of its own, the standard bolt "
+        "by its type's head (hex or socket) and size, placed on its holes' axis, its grade "
+        "as its material, its head (and nut) on the plates by a frictional contact (the "
+        "type's head_friction; `bonded_heads` bonds them), its thread into the tapped hole "
+        "or nut by a threaded contact, its preload on a section across the shank, and finer "
+        "elements at the fillet and thread; plain washers too when the bolt's `washers` "
+        "(or its type's) says head, nut or both. Needs a tapped or bolt-and-nut joint. Its "
+        "loads then come from that section (bolt_results), and the fatigue tool takes the "
+        "bolt's thread_kf as Kf at its thread. Returns `batch` to pass to submit (one "
+        "undo); nothing is made here."
+    )
+    @guarded
+    def bolt_make_modelled(component: str, bolt: str | list[str],
+                           bonded_heads: bool = False) -> dict[str, Any]:  # fmt: skip
+        from puzzle.bolts import model_commands
+        from puzzle.commands import resolve
+        from puzzle.model.schema import Component
+
+        s = session()
+        comp = resolve(s.project, component, Component)
+        names = [bolt] if isinstance(bolt, str) else list(bolt)
+        indices = [_bolt_index(comp, n) for n in names]
+        try:
+            batch = model_commands(s.project, comp, indices, root, bonded_heads=bonded_heads)
+        except ValueError as exc:
+            raise PuzzleError(str(exc), code="invalid") from None
+        return {"bolts": names, "batch": [c.model_dump(mode="json") for c in batch]}
+
+    @tool(
+        description="Turn a modelled bolt (ADR 0077) back into a beam bolt: its parts, "
+        "geometries, materials, contacts, the plates' selections made for them, its "
+        "pretension feature and mesh sizes removed; its name, type and preload kept. "
+        "Returns `batch` to pass to submit (one undo); nothing is made here."
+    )
+    @guarded
+    def bolt_make_beam(component: str, bolt: str) -> dict[str, Any]:
+        from puzzle.commands import resolve
+        from puzzle.model.schema import Component
+        from puzzle.solid_bolts import beam_commands
+
+        s = session()
+        comp = resolve(s.project, component, Component)
+        index = _bolt_index(comp, bolt)
+        if comp.connectors[index].formulation != "modelled":
+            raise PuzzleError(f"bolt '{bolt}' is not a modelled bolt", code="invalid")
+        batch = beam_commands(s.project, comp, index)
+        return {"bolts": [bolt], "batch": [c.model_dump(mode="json") for c in batch]}
+
+    @tool(
+        description="A frame's geometry (ADR 0079): line members between named nodes, or a "
+        "DXF's LINE/LWPOLYLINE/POLYLINE entities (layers become member groups). `nodes` "
+        "{name: [x, y, z]} in metres, `members` [[name, i, j], or [name, i, j, group]]; or "
+        "`dxf` (a file in the project), `layer`, `scale` (m per drawing unit; default from "
+        "$INSUNITS, mm when unset). Gives edge selections per member and group and point "
+        "selections per node. Returns `command` (a create) to pass to submit; nothing is "
+        "made here. Then a component with the geometry as a part, a beam section on it "
+        "(or per group), a material, supports and loads at nodes (skill `frames`)."
+    )
+    @guarded
+    def frame_geometry(name: str, nodes: dict | None = None, members: list | None = None,
+                       dxf: str | None = None, layer: str | None = None,
+                       scale: float | None = None) -> dict[str, Any]:  # fmt: skip
+        from puzzle import frames
+        from puzzle.commands.model import Create
+
+        try:
+            geo = frames.geometry(name, nodes, members, dxf=dxf, layer=layer, scale=scale,
+                                  root=root)  # fmt: skip
+        except frames.FrameError as exc:
+            raise PuzzleError(str(exc), code="invalid") from None
+        data = geo.model_dump(mode="json")
+        groups = sorted({m[3] for m in (members or []) if not isinstance(m, dict) and len(m) > 3})
+        return {
+            "command": Create(kind="geometry", data=data).model_dump(mode="json"),
+            "members": [sel["name"] for sel in data["selections"] if sel["entity"] == "edge"],
+            "nodes": [sel["name"] for sel in data["selections"] if sel["entity"] == "vertex"],
+            "groups": groups,
+        }
+
+    @tool(
+        description="A frame's geometry from a grid (ADR 0079 step 6), as SAP2000's and "
+        "RISA's templates: `bays_x` and `bays_y` (widths in m; bays_y empty for a plane "
+        "frame in x-z), `stories` (heights in m), `columns`, `beams`, `bracing` none, x or "
+        "chevron, `braced_bays` ends (the first and last bay of each outside frame line) or "
+        "all. Nodes are named by column line, row and level (A1-0 at the base, levels up "
+        "from 0); members are grouped Columns, Beams X, Beams Y, Braces. Returns `command` "
+        "(a create) for submit, as frame_geometry does, and the counts."
+    )
+    @guarded
+    def frame_grid(name: str, bays_x: list[float], stories: list[float],
+                   bays_y: list[float] | None = None, columns: bool = True,
+                   beams: bool = True, bracing: str = "none",
+                   braced_bays: str = "ends") -> dict[str, Any]:  # fmt: skip
+        from puzzle import frames
+        from puzzle.commands.model import Create
+        from puzzle.frames.grid import Grid, plan
+
+        try:
+            nodes, members = plan(Grid(list(bays_x), list(bays_y or []), list(stories), beams,
+                                       columns, bracing, braced_bays))  # fmt: skip
+            geo = frames.geometry(name, nodes, members)
+        except (ValueError, frames.FrameError) as exc:
+            raise PuzzleError(str(exc), code="invalid") from None
+        groups: dict[str, int] = {}
+        for m in members:
+            groups[m[3]] = groups.get(m[3], 0) + 1
+        return {"command": Create(kind="geometry", data=geo.model_dump(mode="json")).model_dump(
+            mode="json"), "nodes": len(nodes), "members": len(members), "groups": groups,
+            "base_nodes": sorted(n for n in nodes if n.endswith("-0"))}  # fmt: skip
+
+    @tool(
+        description="A frame component's members (ADR 0079): each member's ends, length "
+        "(m), group and section (or none), the nodes, member end releases and rigid "
+        "offsets, and the supports and loads. Frames solve on PyNite (releases, offsets, "
+        "line loads, node springs, self weight) and on CalculiX and Code_Aster beams "
+        "(no releases yet)."
+    )
+    @guarded
+    def frame_members(component: str) -> dict[str, Any]:
+        from puzzle import frames
+        from puzzle.commands import resolve
+        from puzzle.model.schema import Component
+
+        s = session()
+        comp = resolve(s.project, component, Component)
+        return frames.summary(s.project, comp)
+
+    @tool(
+        description="How a frame's members are checked (ADR 0079 step 3): sets or replaces "
+        "the entry for `selection` (Part/Member, Part/Group, the part, or '' for every "
+        "member; the most specific wins). `method` LRFD or ASD; lengths as quantities "
+        "(e.g. '10 ft'): `unbraced_length` L_b for lateral-torsional buckling (and the "
+        "default for y and z), `length_x`/`length_y`/`length_z` the buckling lengths, unset "
+        "the member's own; `k_x`, `k_y`, `k_z` effective length factors (1 under Direct "
+        "Analysis); `cb` overrides the computed C_b; `net_area_ratio` A_e/A_g for tensile "
+        "rupture; `deflection_limit` 360 for L/360. `remove` drops the entry. The code "
+        "follows the material: carbon and low-alloy steel by AISC 360-16, stainless by AISC "
+        "370-21, aluminium by the Aluminum Design Manual 2015. Never changes a solve. One "
+        "edit; at 'propose' a proposal."
+    )
+    @guarded
+    def member_design(component: str, selection: str = "", method: str | None = None,
+                      unbraced_length: str | None = None, length_x: str | None = None,
+                      length_y: str | None = None, length_z: str | None = None,
+                      k_x: float | None = None, k_y: float | None = None,
+                      k_z: float | None = None, cb: float | None = None,
+                      net_area_ratio: float | None = None,
+                      deflection_limit: float | None = None, remove: bool = False,
+                      rationale: str = "") -> dict[str, Any]:  # fmt: skip
+        from puzzle.commands import resolve
+        from puzzle.model.schema import Component, MemberDesign, Quantity
+
+        def parse_quantity(text: str) -> Quantity:  # "10 ft", "3.5 m"
+            number, _, unit = text.strip().partition(" ")
+            try:
+                return Quantity(value=float(number), unit=unit.strip() or "m")
+            except ValueError as exc:
+                raise PuzzleError(
+                    f"'{text}': give a number and a unit, e.g. '10 ft'", code="invalid"
+                ) from exc
+
+        s = session()
+        comp = resolve(s.project, component, Component)
+        entries = [d for d in comp.member_design if d.selection != selection]
+        if not remove:
+            old = next((d for d in comp.member_design if d.selection == selection), None)
+            values = old.model_dump(mode="json") if old else {"selection": selection}
+            given = {
+                "method": method,
+                "k_x": k_x,
+                "k_y": k_y,
+                "k_z": k_z,
+                "cb": cb,
+                "net_area_ratio": net_area_ratio,
+                "deflection_limit": deflection_limit,
+            }
+            values.update({k: v for k, v in given.items() if v is not None})
+            for key, text in (
+                ("unbraced_length", unbraced_length),
+                ("length_x", length_x),
+                ("length_y", length_y),
+                ("length_z", length_z),
+            ):
+                if text is not None:
+                    values[key] = parse_quantity(text).model_dump(mode="json") if text else None
+            try:
+                entries.append(MemberDesign.model_validate(values))
+            except ValueError as exc:
+                raise PuzzleError(str(exc), code="invalid") from None
+        command = {"command": "edit", "object": str(comp.id), "ops": [{
+            "op": "set", "path": "member_design",
+            "value": [d.model_dump(mode="json") for d in entries]}]}  # fmt: skip
+        return s.submit(command, actor, rationale=rationale).to_dict()
+
+    @tool(
+        description="A frame study's ASCE 7-16 seismic parameters (ADR 0079 step 4): sds, "
+        "sd1 (g; S_DS and S_D1 from 11.4.4), s1 (g, for 12.8-6), tl (s), r and cd (Table "
+        "12.2-1), ie (1.0, 1.25, 1.5), risk_category I-IV, structure for T_a (Table 12.8-2: "
+        "steel_moment_frame, concrete_moment_frame, steel_eccentrically_braced, "
+        "steel_buckling_restrained, other), drift_structure for Table 12.12-1 "
+        "(low_rise_with_partitions, masonry_cantilever_shear_wall, other_masonry_shear_wall, "
+        "other), period (s) to override the computed one, mass_cases {case: factor} in the "
+        "seismic weight beyond the members' own (default D at 1), scale_to_elf (1.0 in "
+        "7-16), damping (0.05). `clear` removes them. One edit; at 'propose' a proposal. "
+        "Then seismic_elf writes ELF story forces, or a modal step with response_spectrum "
+        "true runs modal response spectrum analysis."
+    )
+    @guarded
+    def seismic_design(study: str, sds: float | None = None, sd1: float | None = None,
+                       r: float | None = None, cd: float | None = None,
+                       s1: float | None = None, tl: float | None = None,
+                       ie: float | None = None, risk_category: str | None = None,
+                       structure: str | None = None, drift_structure: str | None = None,
+                       period: float | None = None,
+                       mass_cases: dict[str, float] | None = None,
+                       scale_to_elf: float | None = None, damping: float | None = None,
+                       clear: bool = False, rationale: str = "") -> dict[str, Any]:  # fmt: skip
+        from puzzle.commands import resolve
+        from puzzle.model.schema import SeismicDesign, Study
+
+        s = session()
+        target = resolve(s.project, study, Study)
+        value = None
+        if not clear:
+            values = target.seismic.model_dump(mode="json") if target.seismic else {}
+            given = {"sds": sds, "sd1": sd1, "r": r, "cd": cd, "s1": s1, "tl": tl, "ie": ie,
+                     "risk_category": risk_category, "structure": structure,
+                     "drift_structure": drift_structure, "period": period,
+                     "mass_cases": mass_cases, "scale_to_elf": scale_to_elf,
+                     "damping": damping}  # fmt: skip
+            values.update({k: v for k, v in given.items() if v is not None})
+            try:
+                value = SeismicDesign.model_validate(values).model_dump(mode="json")
+            except ValueError as exc:
+                raise PuzzleError(str(exc), code="invalid") from None
+        command = {"command": "edit", "object": str(target.id),
+                   "ops": [{"op": "set", "path": "seismic", "value": value}]}  # fmt: skip
+        return s.submit(command, actor, rationale=rationale).to_dict()
+
+    @tool(
+        description="ASCE 7-16's equivalent lateral force procedure on a frame study "
+        "(12.8): C_s (12.8-2 to 12.8-6, which governed), the period used (computed or "
+        "`period`, capped at C_u T_a; T_a from Table 12.8-2 without either), W from the "
+        "members' density and the seismic design's mass_cases, V = C_s W, k, and each "
+        "level's height, weight, C_vx, F_x and story shear. Writes the forces as loads on "
+        "the levels' nodes (case Ex or Ey by `direction`, replacing earlier ELF loads that "
+        "way) unless `write` is false. One edit; at 'propose' a proposal."
+    )
+    @guarded
+    def seismic_elf(study: str, direction: str = "x", period: float | None = None,
+                    write: bool = True, rationale: str = "") -> dict[str, Any]:  # fmt: skip
+        from puzzle.commands import resolve
+        from puzzle.frames.seismic_frame import _elf_dict, elf_commands
+        from puzzle.model.schema import Component, Study
+
+        s = session()
+        target = resolve(s.project, study, Study)
+        comp = s.project.get(target.component, Component)
+        edit, result, notes = elf_commands(s.project, comp, target, direction, period)
+        out = {**_elf_dict(result), "direction": direction, "case": f"E{direction}",
+               "notes": notes}  # fmt: skip
+        if write:
+            out["edit"] = s.submit(edit.model_dump(mode="json"), actor,
+                                   rationale=rationale).to_dict()  # fmt: skip
+        return out
+
+    @tool(
+        description="A frame study's seismic numbers (ADR 0079 step 4): ELF in x and y "
+        "(with the modal period where the latest run has modes), each mode's frequency, "
+        "period, participation factor, effective mass and mass fraction, the summed mass "
+        "participation (12.9.1.1 wants 90 % each way), each response spectrum's modal base "
+        "shear V_t, the ELF V, the force scale (12.9.1.4.1) and drift scale, and story "
+        "drifts (12.8.6: C_d δ / I_e at each level's centre of mass, against Table 12.12-1's "
+        "Δ_a, ratio ≤ 1 passes) of the spectrum steps or of combinations named Ex or Ey."
+    )
+    @guarded
+    def seismic_report(study: str) -> dict[str, Any]:
+        from puzzle.commands import resolve
+        from puzzle.frames.seismic_frame import report
+        from puzzle.model.schema import Component, Study
+
+        s = session()
+        target = resolve(s.project, study, Study)
+        comp = s.project.get(target.component, Component)
+        try:
+            record, mesh, res = latest(study)
+        except PuzzleError:
+            record, mesh, res = None, None, None
+        out = report(s.project, comp, target, mesh, res)
+        return {"run_id": record.run_id if record else None, **out}
+
+    @tool(
+        description="Frame members checked by their material's code (ADR 0079 steps 3 and "
+        "5): carbon steel by AISC 360-16, stainless by AISC 370-21, aluminium by the Aluminum "
+        "Design Manual 2015, from a study's "
+        "latest run: per member its section, code, method (LRFD or ASD, from member_design), "
+        "the governing check over the steps (check, limit state, clause, demand, available "
+        "strength, ratio, station along the member in m, the combination), passes, and each "
+        "step's checks: tension (D2), compression (E3, E4, E7), flexure about x per unbraced "
+        "segment with its C_b and about y (F2-F11), shear along each axis (G2-G6), HSS "
+        "torsion (H3), combined forces (H1-1), deflection when a limit is set. Members "
+        "sorted worst first; `not_checked` says why (channels, angles and tees not built "
+        "yet). Forces in N and N·m. `member` "
+        "one of them; `step` 1-based among the static steps; `summary` drops the per-step "
+        "lists."
+    )
+    @guarded
+    def member_checks(study: str, member: str | None = None, step: int | None = None,
+                      summary: bool = True) -> dict[str, Any]:  # fmt: skip
+        from puzzle.commands import resolve
+        from puzzle.frames.design import member_checks as checks
+        from puzzle.model.schema import Component, Study
+
+        found = resolve(session().project, study, Study)
+        record, mesh, res = latest(study)
+        comp = session().project.get(found.component, Component)
+        out = checks(session().project, comp, mesh, res, member, step)
+        if summary:
+            for row in out["members"]:
+                row.pop("steps", None)
+        return {"run_id": record.run_id, **out}
 
     @tool(
         description="Mesh a component with its recipe and report the mesh (ADR 0019): node "
@@ -558,6 +938,21 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
 
         return [{"key": k, "name": library_material(k).name} for k in search_library(text)]
 
+    @tool(description="The user's material library as one file to share, written inside the "
+          "project folder (e.g. exports/materials.json). scope: yours (made in the builder), "
+          "user (imported and yours) or all (with Puzzle's generics). Agents never import "
+          "one: the user does, Materials -> Import material library... (ADR 0020).")  # fmt: skip
+    @guarded
+    def materials_export(path: str, scope: str = "user") -> dict[str, Any]:
+        from puzzle.materials import exchange
+
+        out = (Path(path) if Path(path).is_absolute() else root / path).resolve()
+        if not out.is_relative_to(Path(root).resolve()):  # agents write inside the project
+            raise PuzzleError(
+                f"exports go inside the project folder, not {path}", code="not_allowed"
+            )
+        return {"file": str(out), "materials": exchange.export(out, scope)}
+
     @tool(
         description="What a solver supports (physics -> step types, features, contacts). "
         "Lists planned capabilities too; use check_study for a real answer."
@@ -676,6 +1071,40 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         s = load_settings()
         embed = pack.ollama_embedder(s.base_url, s.embed_model) if s.embed_model else None
         return {"hits": pack.search(query, limit, embed=embed)}
+
+    # --- the solvers here (ADR 0068 step 4) -------------------------------------------
+
+    @tool(description="The solvers on this computer and how a solve runs each now: "
+          "native (its program), in a container (its image) or missing (why); CalculiX's "
+          "note says PARDISO or SPOOLES, and `pardiso` the state of CalculiX with PARDISO "
+          "built here (built, building, failed with the reason, ready, unavailable).")  # fmt: skip
+    @guarded
+    def solvers_list() -> dict[str, Any]:
+        from dataclasses import asdict
+
+        from puzzle import solver_builds
+
+        return {"solvers": [asdict(r) for r in solver_builds.solvers()],
+                "pardiso": asdict(solver_builds.status())}  # fmt: skip
+
+    @tool(description="Start building CalculiX with Intel MKL's PARDISO on this computer, "
+          "in the background (minutes; contact and large solves then factor 2-4x faster "
+          "with the same answers). Returns at once; follow it with solvers_list. Only when "
+          "the user asks: the GUI already builds it once by itself.")  # fmt: skip
+    @guarded
+    def pardiso_build() -> dict[str, Any]:
+        from dataclasses import asdict
+
+        from puzzle import solver_builds
+
+        state = solver_builds.status()
+        if state.state in ("unavailable", "building"):
+            return {"started": False, "pardiso": asdict(state)}
+        import threading
+
+        threading.Thread(target=lambda: solver_builds.build(say=lambda _: None),
+                         name="pardiso-build", daemon=True).start()  # fmt: skip
+        return {"started": True, "pardiso": asdict(state)}
 
     # --- remote hosts (ADR 0021) -----------------------------------------------------
 
@@ -1027,7 +1456,8 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         "step's settings: linear_solver, tolerance, max_iterations, output_every) and each "
         "of its solvers' own (Study.solver_settings[solver]), with labels, the solver's own "
         "name, choices, defaults and current values, and how that solver's expert "
-        "pass-through (Study.expert_settings[solver]) is written. Change them with an edit."
+        "pass-through (Study.expert_settings[solver]) is written. Change them with "
+        "solver_settings_set."
     )
     @guarded
     def solver_settings(study: str) -> dict[str, Any]:
@@ -1063,6 +1493,235 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
                 if name in adapters
             },
         }
+
+    @tool(
+        description="Change a study's solver settings (ADR 0023) in one edit, one undo: "
+        "`shared` = {key: value} on every solve step it applies to (linear_solver, "
+        "tolerance, max_iterations, output_every; load stepping: increments, "
+        "initial_increment, min_increment, fixed_increments); `solvers` = {solver: {key: "
+        "value}} for each solver's own (convergence: CalculiX cutbacks, cutback_factor, "
+        "increase_factor; Code_Aster line_search, prediction, matrix, cutback_parts, "
+        "cutback_levels, absolute_tolerance; Elmer relaxation, newton_after_iterations); "
+        "`expert` = {solver: {path: value}} replacing that solver's pass-through. A value "
+        "of null removes a setting. Keys, choices and units: solver_settings. At "
+        "'propose' a proposal."
+    )
+    @guarded
+    def solver_settings_set(study: str, shared: dict[str, Any] | None = None,
+                            solvers: dict[str, dict[str, Any]] | None = None,
+                            expert: dict[str, dict[str, str]] | None = None,
+                            rationale: str = "") -> dict[str, Any]:  # fmt: skip
+        from puzzle.adapters.settings import edit_ops
+        from puzzle.commands import resolve
+        from puzzle.model.schema import Study
+
+        s = session()
+        target = resolve(s.project, study, Study)
+        ops = edit_ops(target, shared, solvers, expert)
+        if not ops:
+            return {"changed": False, "note": "nothing to change"}
+        command = {"command": "edit", "object": str(target.id),
+                   "ops": [op.model_dump() for op in ops]}  # fmt: skip
+        return s.submit(command, actor, rationale=rationale).to_dict()
+
+    @tool(
+        description="Put a symmetry or antisymmetry plane on a component (ADR 0081): "
+        "`selection` a flat face (a straight edge in 2D), 'Part/Name'; `kind` "
+        "'symmetry' (nothing moves through it; on every physics that has one: solid, heat "
+        "and electrostatic symmetry, fluid symmetry, magnetic symmetry) or 'antisymmetry' "
+        "(solid mechanics: nothing moves along it). One edit, one undo; at 'propose' a "
+        "proposal. A 2D or axisymmetric model is the component's `dimension` (an edit)."
+    )
+    @guarded
+    def symmetry_plane(component: str, selection: str, kind: str = "symmetry",
+                       rationale: str = "") -> dict[str, Any]:  # fmt: skip
+        from puzzle.commands import resolve
+        from puzzle.model.schema import Component
+        from puzzle.symmetry import plane_ops
+
+        if kind not in ("symmetry", "antisymmetry"):
+            raise PuzzleError(f"kind is symmetry or antisymmetry, not {kind!r}", code="invalid")
+        s = session()
+        comp = resolve(s.project, component, Component)
+        ops = plane_ops(comp, kind, selection)
+        if not ops:
+            raise PuzzleError(f"{comp.name} has no physics that takes a {kind} plane",
+                              code="invalid")  # fmt: skip
+        command = {"command": "edit", "object": str(comp.id),
+                   "ops": [op.model_dump() for op in ops]}  # fmt: skip
+        return s.submit(command, actor, rationale=rationale).to_dict()
+
+    @tool(
+        description="Make a component one sector or slice of a repeating whole (ADR 0081): "
+        "`kind` 'cyclic' (the `target` face is the `source` face turned 360/`sectors` "
+        "degrees about `axis` through `origin`, right-handed; static, transient and heat "
+        "studies on CalculiX, solid mechanics on Code_Aster) or 'periodic' (the target is "
+        "the source moved by `translation`, metres). Selections 'Part/Name'; each node on "
+        "the target moves as its twin on the source. Loads are the sector's own. "
+        "`kind` 'none' removes both. One edit; at 'propose' a proposal."
+    )
+    @guarded
+    def symmetry_repeat(component: str, kind: str, source: str = "", target: str = "",
+                        sectors: int = 0, axis: list[float] | None = None,
+                        origin: list[float] | None = None,
+                        translation: list[float] | None = None,
+                        rationale: str = "") -> dict[str, Any]:  # fmt: skip
+        from puzzle.commands import resolve
+        from puzzle.model.schema import Component, CyclicSymmetry, LinearPeriodicity
+
+        s = session()
+        comp = resolve(s.project, component, Component)
+        if kind == "none":
+            ops = [{"op": "set", "path": k, "value": None} for k in ("cyclic", "periodic")]
+        elif kind == "cyclic":
+            value = CyclicSymmetry(source=source, target=target, sectors=sectors,
+                                   axis=tuple(axis or (0, 0, 1)),
+                                   origin=tuple(origin or (0, 0, 0)))  # fmt: skip
+            ops = [{"op": "set", "path": "cyclic", "value": value.model_dump(mode="json")}]
+        elif kind == "periodic":
+            value = LinearPeriodicity(source=source, target=target,
+                                      translation=tuple(translation or ()))  # fmt: skip
+            ops = [{"op": "set", "path": "periodic", "value": value.model_dump(mode="json")}]
+        else:
+            raise PuzzleError(f"kind is cyclic, periodic or none, not {kind!r}", code="invalid")
+        command = {"command": "edit", "object": str(comp.id), "ops": ops}
+        return s.submit(command, actor, rationale=rationale).to_dict()
+
+    @tool(
+        description="A study's weak springs (ADR 0080): which bodies get them (held only by "
+        "frictionless or frictional contact; with weak_springs 'always' also bodies held by "
+        "nothing), the study's mode, factor and limit, and, for its latest stored run, the "
+        "force they carried per step and any weak_springs_carry warning (the body never "
+        "seated). Change the mode with an edit of the study's weak_springs (auto, always, "
+        "never), weak_spring_factor or weak_spring_limit."
+    )
+    @guarded
+    def weak_springs(study: str) -> dict[str, Any]:
+        from puzzle import weak_springs as ws
+        from puzzle.commands import resolve
+        from puzzle.model.schema import Study
+        from puzzle.project.layout import RESULTS_DIR
+        from puzzle.results.store import ResultStore
+
+        s = session()
+        target = resolve(s.project, study, Study)
+        comp = s.project.objects.get(target.component)
+        out: dict[str, Any] = {
+            "mode": target.weak_springs,
+            "factor": target.weak_spring_factor,
+            "limit": target.weak_spring_limit,
+            "bodies": []
+            if target.weak_springs == "never"
+            else ws.bodies(s.project, comp, target.weak_springs),
+        }
+        store = ResultStore(root / RESULTS_DIR)
+        try:
+            runs = [r for r in store.runs() if r.study_id == str(target.id)]
+        except Exception:  # noqa: BLE001 - no results yet
+            runs = []
+        if runs:
+            latest = max(runs, key=lambda r: r.recorded_at)
+            results = store.read_results(latest.run_id)
+            out["latest_run"] = {
+                "run": latest.run_id,
+                "carried_N": [
+                    {
+                        "step": step.label(),
+                        "force": float(
+                            abs(step.fields["weak_spring_force"].values.sum(axis=0)).max()
+                        ),
+                    }
+                    for step in results.steps
+                    if "weak_spring_force" in step.fields
+                ],
+            }
+        return out
+
+    @tool(
+        description="A frame study's load combinations (ADR 0079 step 2; PyNite solves "
+        "them, one result step each, named): `method` 'LRFD' or 'ASD' generates ASCE 7-16's "
+        "(2.3.1, 2.4.1) from the load cases its component's loads use (each load's `case`: "
+        "D, L, Lr, S, R, W, E; wind and seismic both ways); or `combinations` = [{name, "
+        "factors: {case: factor}}] sets your own; neither lists the cases and the current "
+        "ones. Second order (P-Delta) and AISC's Direct Analysis Method are the solve step's "
+        "settings second_order and direct_analysis (notional_directions, default 'x,y'). "
+        "One edit; at 'propose' a proposal."
+    )
+    @guarded
+    def load_combinations(study: str, method: str | None = None,
+                          combinations: list[dict[str, Any]] | None = None,
+                          rationale: str = "") -> dict[str, Any]:  # fmt: skip
+        from puzzle.commands import resolve
+        from puzzle.frames.combinations import asce7, cases_of, combination_ops
+        from puzzle.model.schema import Study
+
+        s = session()
+        target = resolve(s.project, study, Study)
+        comp = s.project.objects.get(target.component)
+        cases = cases_of(comp)
+        if method is None and combinations is None:
+            return {"cases": cases, "combinations": [c.model_dump() for c in target.combinations]}
+        try:
+            combos = (asce7(cases, method) if method is not None else
+                      [(c["name"], c["factors"]) for c in combinations or []])  # fmt: skip
+        except (ValueError, KeyError) as exc:
+            raise PuzzleError(str(exc), code="invalid") from None
+        ops = combination_ops(target, combos)
+        command = {"command": "edit", "object": str(target.id),
+                   "ops": [op.model_dump() for op in ops]}  # fmt: skip
+        out = s.submit(command, actor, rationale=rationale).to_dict()
+        return out | {"combinations": [{"name": n, "factors": f} for n, f in combos]}
+
+    @tool(
+        description="The element library (ADR 0082): every solver's elements with their "
+        "family, cells, formulation (full or reduced integration, incompatible modes, "
+        "mixed u-p, thick or thin shell, Euler-Bernoulli or Timoshenko...), the studies "
+        "they support, what each is for and not for, whether Puzzle writes it yet, and the "
+        "manual's section. Filter by `solver`, `family` (solid_3d, solid_2d, shell, beam, "
+        "truss, discrete, thermal, electromagnetic, fluid), `study` (static, modal, "
+        "buckling, transient, harmonic, contact, plasticity, large_deflection, heat, "
+        "electrostatics, magnetics, flow) or `written`. element_choose picks one for a "
+        "body."
+    )
+    @guarded
+    def elements_list(solver: str | None = None, family: str | None = None,
+                      study: str | None = None,
+                      written: bool | None = None) -> dict[str, Any]:  # fmt: skip
+        from dataclasses import asdict
+
+        from puzzle import elements
+
+        rows = elements.query(solver, family, study, written)
+        return {"elements": [{"solver": n, **asdict(e)} for n, e in rows]}
+
+    @tool(
+        description="Choose the element a body is written with (ADR 0082 step 3): "
+        "`selection` a body selection ('Part/Body') or part, `formulation` in neutral "
+        "words (incompatible_modes: linear bricks bending without locking, CalculiX "
+        "C3D8I; mixed_up: nearly incompressible, Code_Aster 3D_INCO_UPG; euler_bernoulli: "
+        "slender beams, Code_Aster POU_D_E; lumped: heat capacity without undershoot, "
+        "Code_Aster 3D_DIAG; full, timoshenko, thin_shell: the defaults), `solver_types` "
+        "an expert's own {solver: type}. `formulation` 'none' removes the body's choice. "
+        "Each solver maps it from the element library (elements_list) or refuses it, "
+        "naming what it has. One edit; at 'propose' a proposal."
+    )
+    @guarded
+    def element_choose(component: str, selection: str, formulation: str,
+                       solver_types: dict[str, str] | None = None,
+                       rationale: str = "") -> dict[str, Any]:  # fmt: skip
+        from puzzle.commands import resolve
+        from puzzle.model.schema import Component, ElementChoice
+
+        s = session()
+        comp = resolve(s.project, component, Component)
+        kept = [c.model_dump(mode="json") for c in comp.elements if c.selection != selection]
+        if formulation != "none":
+            choice = ElementChoice(selection=selection, formulation=formulation,
+                                   solver_types=solver_types or {})  # fmt: skip
+            kept.append(choice.model_dump(mode="json"))
+        command = {"command": "edit", "object": str(comp.id),
+                   "ops": [{"op": "set", "path": "elements", "value": kept}]}  # fmt: skip
+        return s.submit(command, actor, rationale=rationale).to_dict()
 
     @tool(
         description="What the project needs next (ADR 0040, the Advisor): the workflow's "
@@ -1316,6 +1975,29 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
     def operator_value(name: str | None = None) -> dict[str, Any]:
         return {"operators": _operator_values(session(), name)}
 
+    @tool(
+        description="Write an Export or Report operator's file now (Export now): an export's "
+        "value as CSV, Parquet, Excel, a result format or a PNG; a report's checks, numbers, "
+        "curves and tables as one HTML file. Always inside the project folder. Returns the "
+        "files written, relative to the project."
+    )
+    @guarded
+    def operator_export(name: str) -> dict[str, Any]:
+        from puzzle.commands import resolve
+        from puzzle.model.schema import Operator
+        from puzzle.operators import evaluate as ev
+        from puzzle.project.layout import RESULTS_DIR
+        from puzzle.results.store import ResultStore
+
+        s = session()
+        op = resolve(s.project, name, Operator)
+        if op.type not in ("export", "report"):
+            raise PuzzleError(f"'{op.name}' is a {op.type}, not an Export or Report",
+                              code="invalid")  # fmt: skip
+        ctx = ev.Context(s.project, ResultStore(root / RESULTS_DIR))
+        written = ev.export(ctx, op, root)
+        return {"written": [str(Path(p).relative_to(root)) for p in written]}
+
     def _operator_values(s: Session, name: str | None) -> list[dict[str, Any]]:
         from puzzle.commands import resolve
         from puzzle.model.schema import Operator
@@ -1337,8 +2019,8 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         "{value: '200 MPa'}; `settings` its own fields (quantity, selection, reduction, "
         "step, keep, compare, against, file, format, low, high, increment, expression, "
         "text, operation, column, combination). A study's ports: result, or a field "
-        "(stress). Read the skill schematic-operators first. One undoable command; "
-        "returns its value."
+        "(stress). Read the skill schematic-operators first, and operator_help for what a "
+        "type does and its ports. One undoable command; returns its value."
     )
     @guarded
     def operator_add(
@@ -1354,13 +2036,184 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         if type not in TYPES:
             raise PuzzleError(f"no operator type '{type}'", code="invalid",
                               details={"types": sorted(TYPES)})  # fmt: skip
+        settings = _named_settings(s.project, type, dict(settings or {}))
         data = {"name": name or default_name(s.project, type), "type": type,
-                "inputs": inputs_from(s.project, inputs or {}), **(settings or {})}  # fmt: skip
+                "inputs": inputs_from(s.project, inputs or {}), **settings}  # fmt: skip
         out = s.submit({"command": "create", "kind": "operator", "data": data}, actor,
                        rationale=rationale).to_dict()  # fmt: skip
         if out.get("status") == "applied":
             out["value"] = _operator_values(s, data["name"])[0]
         return out
+
+    @tool(
+        description="Wire one object into another (ADR 0071 decision 8), as drawing a wire "
+        "in the schematic does: a material onto a component (which part), a mesh recipe "
+        "onto a component, a component into a study, a coordinate system or amplitude "
+        "onto a component's load, a study onto a result tool or derived result, a "
+        "construction plane onto a result tool, a bolt type onto a bolt; with `feature` (a "
+        "component's load or support as the schematic names it, 'Pressure on Bracket/Inner'), "
+        "onto that load: its coordinate system, amplitude, or (a geometry) the selection it "
+        "acts on. Without `which`, "
+        "lists what the wire could mean (`choices`, each with its index and label) and "
+        "applies it when there is exactly one; with `which` (an index or a label), applies "
+        "that one. A wire that fits nowhere says what the target takes. One undoable "
+        "command."
+    )
+    @guarded
+    def link(source: str, target: str, which: str | int | None = None,
+             feature: str | None = None, rationale: str = "") -> dict[str, Any]:  # fmt: skip
+        from puzzle.commands import resolve
+        from puzzle.schematic import links
+
+        s = session()
+        src, dst = resolve(s.project, source), resolve(s.project, target)
+        within = _feature_path(dst, feature)
+        found = links.choices(s.project, src, dst, within)
+        if not found:
+            raise PuzzleError(links.why_not(s.project, src, dst), code="invalid")
+        listed = [{"index": i, "label": c.label} for i, c in enumerate(found)]
+        if which is None and len(found) > 1:
+            return {"status": "choose", "choices": listed}
+        pick = _pick(found, which)
+        if pick.op == "add_part":
+            name = next((n for n in (src.name, f"{src.name} 2") if all(
+                p.name != n for p in dst.parts)), f"{src.name} {len(dst.parts) + 1}")  # fmt: skip
+            cmd = {"command": "edit", "object": str(dst.id), "ops": [{"op": "append",
+                   "path": "parts", "value": {"name": name, "geometry": str(src.id)}}]}  # fmt: skip
+            return s.submit(cmd, actor, rationale=rationale).to_dict()
+        cmds = links.commands(pick, src, dst)
+        return s.submit(cmds[0], actor, rationale=rationale or pick.label).to_dict()
+
+    @tool(
+        description="Remove a reference between two objects (ADR 0071 decision 8), as "
+        "removing a wire in the schematic does. Without `which`, lists what joins them; "
+        "with `which` (an index or label), clears it. A reference an object can't be "
+        "without (a study's component) is refused: link another to replace it."
+    )
+    @guarded
+    def unlink(source: str, target: str, which: str | int | None = None,
+               feature: str | None = None, rationale: str = "") -> dict[str, Any]:  # fmt: skip
+        from puzzle.commands import resolve
+        from puzzle.schematic import links
+
+        s = session()
+        src, dst = resolve(s.project, source), resolve(s.project, target)
+        made = links.existing(s.project, src.id, dst, _feature_path(dst, feature))
+        if not made:
+            raise PuzzleError(f"{dst.name} doesn't use {src.name}", code="not_found")
+        if which is None and len(made) > 1:
+            return {
+                "status": "choose",
+                "choices": [{"index": i, "label": c.label} for i, c in enumerate(made)],
+            }
+        pick = _pick(made, which)
+        cmds = links.clear_commands(pick, dst)
+        if not cmds:
+            raise PuzzleError(f"{dst.name} needs its {pick.link.name.lower()}: link another "
+                              "one in to replace it", code="invalid")  # fmt: skip
+        return s.submit(cmds[0], actor, rationale=rationale or f"remove {pick.label}").to_dict()
+
+    def _feature_path(component, feature: str | None) -> str:
+        """A load or support of `component` by its name as the schematic shows it
+        ("Pressure on Bracket/Inner") or its path ("physics.0.features.1")."""
+        if not feature:
+            return ""
+        if feature.startswith("physics."):
+            return feature
+        for i, ph in enumerate(getattr(component, "physics", [])):
+            for j, f in enumerate(ph.features):
+                shown = f"{f.type.replace('_', ' ').capitalize()} on {f.selection}"
+                if feature.lower() in (shown.lower(), f.selection.lower()):
+                    return f"physics.{i}.features.{j}"
+        raise PuzzleError(f"{component.name} has no load or support '{feature}'",
+                          code="not_found")  # fmt: skip
+
+    def _pick(found, which):
+        if which is None:
+            return found[0]
+        if isinstance(which, int) or str(which).isdigit():
+            i = int(which)
+            if not 0 <= i < len(found):
+                raise PuzzleError(f"no choice {i}", code="invalid")
+            return found[i]
+        match = [c for c in found if c.label.lower() == str(which).lower()]
+        if not match:
+            raise PuzzleError(f"no choice '{which}'", code="invalid",
+                              details={"choices": [c.label for c in found]})  # fmt: skip
+        return match[0]
+
+    @tool(
+        description="What operators do (ADR 0071), before using one: with no arguments "
+        "every operator kind (its type for operator_add, its name, group and purpose); "
+        "with `type` (or an operator's name as shown) its full card: purpose, an example, "
+        "each input (what it takes, needed or not, whether a value can be typed) and "
+        "output; with `search`, the kinds whose name, purpose or other names match "
+        "(e.g. 'maximum', 'divide', 'pivot')."
+    )
+    @guarded
+    def operator_help(type: str | None = None, search: str | None = None) -> dict[str, Any]:  # noqa: A002
+        from puzzle.operators import TYPES, operator_doc
+
+        if type:
+            key = type if type in TYPES else next(
+                (k for k, t in TYPES.items() if t.label.lower() == type.lower()), None)  # fmt: skip
+            if key is None:
+                raise PuzzleError(f"no operator type '{type}'", code="not_found",
+                                  details={"types": sorted(TYPES)})  # fmt: skip
+            return operator_doc(key)
+        words = (search or "").lower().split()
+        found = []
+        for key, t in TYPES.items():
+            hay = " ".join([key, t.label, t.group, t.help, *t.aliases]).lower()
+            if all(w in hay for w in words):
+                found.append({"type": key, "name": t.label, "group": t.group,
+                              "purpose": t.help})  # fmt: skip
+        return {"operators": found}
+
+    def _named_settings(project, type_: str, settings: dict) -> dict:
+        """Names where the schema keeps ids: a Model value's or Measure's `target` by
+        name, a Model value's `property` by its label ("Yield strength") or path."""
+        from puzzle.commands import resolve
+        from puzzle.operators.model_values import readable
+
+        target = settings.get("target")
+        if isinstance(target, str) and target:
+            try:
+                UUID(target)
+            except ValueError:
+                settings["target"] = str(resolve(project, target).id)
+        if type_ == "model_value" and settings.get("property") and settings.get("target"):
+            obj = project.objects.get(UUID(settings["target"]))
+            wanted = settings["property"]
+            found = readable(project, obj)
+            match = next((r.path for r in found if wanted in (r.path, r.label)), None)
+            match = match or next((r.path for r in found if r.label.lower() == wanted.lower()),
+                                  None)  # fmt: skip
+            if match is None:
+                raise PuzzleError(f"{obj.name} holds no value '{wanted}'", code="not_found",
+                                  details={"readable": [r.label for r in found]})  # fmt: skip
+            settings["property"] = match
+        return settings
+
+    @tool(
+        description="What a Model value can read from an object (ADR 0071 step 3): every "
+        "value it holds, each with its label (pass it as the operator's `property`), path, "
+        "quantity kind and whether it's a table against temperature. Without `object`, "
+        "the objects that hold readable values."
+    )
+    @guarded
+    def model_values(object: str | None = None) -> dict[str, Any]:  # noqa: A002
+        from puzzle.commands import resolve
+        from puzzle.operators.model_values import readable
+
+        s = session()
+        if object is None:
+            found = [o for o in s.project.objects.values() if readable(s.project, o)]
+            return {"objects": [{"name": o.name, "kind": o.kind} for o in found]}
+        obj = resolve(s.project, object)
+        return {"object": obj.name, "values": [
+            {"label": r.label, "path": r.path, "kind": r.kind, "table": r.table}
+            for r in readable(s.project, obj)]}  # fmt: skip
 
     @tool(
         description="The project schematic (ADR 0058): every file, resource, component, "
@@ -1458,7 +2311,9 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
             {"name": b.name, "axial_N": b.loads.axial[0], "shear_N": b.loads.shear[0],
              "torsion_Nm": b.loads.torsion[0], "bending_first_end_Nm": b.loads.bending[0],
              "bending_second_end_Nm": b.loads.bending[-1], "stress_Pa": b.stress,
-             "of_proof": b.proof, "of_yield": b.yielding}
+             "of_proof": b.proof, "of_yield": b.yielding,
+             "thread_loads_N": b.threads, "first_thread_share": b.first_thread,
+             "modelled": b.modelled}
             for b in rows
         ]}  # fmt: skip
 
@@ -1486,6 +2341,279 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
             "step": chosen.label(),
             "steps": len(steps),
             "contacts": [r.to_dict() for r in found],
+        }
+
+    @tool(
+        description="Thread forms (ADR 0076) for `contact_thread`: each form's key, name, "
+        "standard, flank angles (load, other; degrees from the radial plane), taper "
+        "(diameter per length) and how its size is given; with `form` iso or un, its "
+        "standard sizes by name (M16, M16x1.5, 1/2-13 UNC)."
+    )
+    @guarded
+    def thread_forms(form: str | None = None) -> dict[str, Any]:
+        from puzzle import thread_setup as ts
+
+        out: dict[str, Any] = {"forms": ts.forms_info()}
+        if form is not None:
+            out["sizes"] = ts.sizes_for(form)
+        return out
+
+    @tool(
+        description="Make a contact a thread (ADR 0076): the two smooth coaxial cylinders "
+        "stay smooth and the contact acts along the flanks, giving each thread's load, "
+        "the nut's wedge and the engagement's stiffness. `form` iso, un, acme, stub_acme, "
+        "trapezoidal, buttress, buttress_din, square, npt, bspt or custom (`thread_forms`); "
+        "`size` a standard size for iso/un (M16, M16x1.5, 1/2-13 UNC), else `major` and "
+        '`pitch` as quantities ({"value": 20, "unit": "mm"}); custom needs '
+        "`flank_angles` [load, other] degrees. `starts`, `hand` right/left, `bearing` auto "
+        "(the pull decides the side)/load/other, `compliance` teeth/rigid or N/m^3, "
+        "`clearance` (backlash), `engaged_length`, `cs` a coordinate system's name whose z "
+        "is the axis. `type` changes the contact's type: bonded (ties the bearing flank), "
+        "no_separation (both flanks), frictionless (unilateral: nonlinear). `remove` "
+        "clears the thread. Returns the resolved numbers (m), notes, and `command`: pass "
+        "it to submit. Nothing is changed here."
+    )
+    @guarded
+    def contact_thread(
+        component: str,
+        contact: str,
+        form: str = "iso",
+        size: str | None = None,
+        pitch: dict | None = None,
+        major: dict | None = None,
+        starts: int = 1,
+        hand: str = "right",
+        flank_angles: list[float] | None = None,
+        bearing: str = "auto",
+        compliance: str | float = "teeth",
+        clearance: dict | None = None,
+        engaged_length: dict | None = None,
+        cs: str | None = None,
+        type: str | None = None,
+        remove: bool = False,
+    ) -> dict[str, Any]:
+        from puzzle import thread_setup as ts
+        from puzzle.commands import resolve
+        from puzzle.model.schema import Component, CoordinateSystem
+
+        s = session()
+        comp = resolve(s.project, component, Component)
+        index = ts.contact_index(comp, contact)
+        if remove:
+            command = ts.thread_command(comp, contact, None)
+            return {"command": command.model_dump(mode="json"), "notes": []}
+        axes = str(resolve(s.project, cs, CoordinateSystem).id) if cs else None
+        thread = ts.make_thread(
+            form=form, size=size, pitch=pitch, major=major, starts=starts, hand=hand,
+            flank_angles=tuple(flank_angles) if flank_angles else None, bearing=bearing,
+            compliance=compliance, clearance=clearance, engaged_length=engaged_length,
+            cs=axes,
+        )  # fmt: skip
+        kind = type or comp.contacts[index].type
+        command = ts.thread_command(comp, contact, thread, type)
+        return {
+            "thread": ts.describe(thread),
+            "type": kind,
+            "written_by": ts.writers(s.project, comp, kind),
+            "notes": ts.notes(s.project, comp, thread, kind),
+            "command": command.model_dump(mode="json"),
+        }
+
+    @tool(
+        description="Threaded contacts' results in a study's latest run (ADR 0076): per "
+        "thread contact the axial load (N), each engaged thread's axial load and share "
+        "(the first engaged, at the mouth, first), the wedge (total radial force, N: the "
+        "nut's opening) and the peak flank pressure (Pa). `contact` one of them; `step` "
+        "1-based among the steps with thread results (default the last). The nodal fields "
+        "thread_force (normal, axial, radial) and thread_pressure are read with result_*."
+    )
+    @guarded
+    def thread_results(study: str, contact: str | None = None,
+                       step: int | None = None) -> dict[str, Any]:  # fmt: skip
+        from puzzle import thread_setup as ts
+
+        record, mesh, res = latest(study)
+        return {"run_id": record.run_id,
+                **ts.results(session().project, mesh, res, contact, step)}  # fmt: skip
+
+    @tool(
+        description="Plan a weld between two parts (ADR 0078): `part` and the `edges` it runs "
+        "along, by name (an edge is named by its two faces, 'B/-x|B/-z'; selections_check "
+        "lists them). Of each edge's faces the one lying on another part is the seat; the "
+        "other carries the first leg, and the other part's touching face the second. `leg` "
+        "a quantity (a fillet's leg, a groove's depth), `leg2` an unequal fillet's other "
+        "leg; `type` fillet or groove (`groove` cjp or pjp); `pattern` continuous or "
+        "intermittent (`segment`, `pitch`). A light weld (springs across the joint, line "
+        "force at stations; CalculiX for now). Returns `batch` to pass to submit (one undo)."
+    )
+    @guarded
+    def weld_add(component: str, part: str, edges: list[str], leg: dict, name: str = "Weld",
+                 leg2: dict | None = None, type: str = "fillet", groove: str | None = None,
+                 pattern: str = "continuous", segment: dict | None = None,
+                 pitch: dict | None = None) -> dict[str, Any]:  # fmt: skip
+        from puzzle import weld_generator
+        from puzzle.commands import resolve
+        from puzzle.model.schema import Component, Quantity
+
+        s = session()
+        comp = resolve(s.project, component, Component)
+        planned = weld_generator.plan(s.project, comp, root, part, edges)
+        q = lambda v: Quantity(**v) if v is not None else None  # noqa: E731
+        batch = weld_generator.commands(
+            s.project, comp, planned, name=name, leg=q(leg), leg2=q(leg2), type=type,
+            groove=groove, pattern=pattern, segment=q(segment), pitch=q(pitch),
+        )  # fmt: skip
+        return {"joins": [planned.part, planned.other], "leg_faces": planned.leg_faces,
+                "base_faces": planned.base_faces,
+                "batch": [c.model_dump(mode="json") for c in batch]}  # fmt: skip
+
+    @tool(
+        description="Draw a light weld as a modelled bead (ADR 0078 step 4): a fillet "
+        "(straight, a polyline, a curve, all round, or intermittent: a bead per segment) "
+        "becomes a part of its own (`weld_bead` steps: its legs from "
+        "the weld's node pairs on the component's mesh, its root cut back a tenth of the "
+        "leg so the plates meet only through it), its filler (or the path's part's "
+        "material) as its material, its legs tied to the two faces, elements a sixth of "
+        "the leg in it. Its line forces then come from the section through its throat "
+        "(weld_results, the same checks; the section's force is mesh-dependent through "
+        "the root's notch, about 1 % at six elements). Meshes the component to find the "
+        "legs. A groove weld gets no bead: its faces are tied over its depth at the solve. "
+        "Returns `batch` to pass to submit (one undo); nothing is made here."
+    )
+    @guarded
+    def weld_make_modelled(component: str, weld: str) -> dict[str, Any]:
+        import tempfile
+        from pathlib import Path
+
+        from puzzle import weld_generator
+        from puzzle.commands import resolve
+        from puzzle.mesh.generate import generate_mesh
+        from puzzle.model.schema import Component
+
+        s = session()
+        comp = resolve(s.project, component, Component)
+        with tempfile.TemporaryDirectory() as scratch:
+            meshed = generate_mesh(s.project, comp.id, root, Path(scratch))
+            batch = weld_generator.modelled_commands(s.project, comp, meshed.mesh, weld)
+        return {"weld": weld, "batch": [c.model_dump(mode="json") for c in batch]}
+
+    @tool(
+        description="Turn a modelled weld (ADR 0078 step 4) back into a light weld: its "
+        "bead's part, geometry, material, ties and mesh size removed. Returns `batch` to "
+        "pass to submit (one undo); nothing is made here."
+    )
+    @guarded
+    def weld_make_line(component: str, weld: str) -> dict[str, Any]:
+        from puzzle import weld_generator
+        from puzzle.commands import resolve
+        from puzzle.model.schema import Component
+
+        s = session()
+        comp = resolve(s.project, component, Component)
+        batch = weld_generator.line_commands(s.project, comp, weld)
+        return {"weld": weld, "batch": [c.model_dump(mode="json") for c in batch]}
+
+    @tool(
+        description="Light welds' results in a study's latest run (ADR 0078): per weld its "
+        "total force (N), largest line force (N/m) and where, mean line force, welded "
+        "length, and each station's line force in the weld's frame (along, throat_normal, "
+        "throat_shear, magnitude, x, y, z; twist N·m/m about the path), and `strength`: "
+        "AISC 360-16 J2 at the governing station (filler and F_EXX, throat, design and "
+        "allowable strength per length, LRFD and ASD utilisations for loads factored that "
+        "way; `directional` takes Eq. J2-5's 1 + 0.5 sin^1.5 θ, allowed for linear welds "
+        "loaded in plane) and `instantaneous_centre`: the group's in-plane force and moment "
+        "about its centroid against its strength by the instantaneous centre of rotation "
+        "(AISC 360-10 J2.4(b), the Manual's Part 8 method; P_n, eccentricity, LRFD and ASD "
+        "utilisations; out-of-plane bending noted, not covered). `weld` one of them; `step` "
+        "1-based among the steps with weld "
+        "results (default the last)."
+    )
+    @guarded
+    def weld_results(study: str, weld: str | None = None, step: int | None = None,
+                     directional: bool = False) -> dict[str, Any]:  # fmt: skip
+        from puzzle.commands import resolve
+        from puzzle.model.schema import Component, Study
+        from puzzle.post.weld_fields import results
+
+        found = resolve(session().project, study, Study)
+        record, mesh, res = latest(study)
+        comp = session().project.get(found.component, Component)
+        return {"run_id": record.run_id,
+                **results(session().project, comp, mesh, res, weld, step, directional)}  # fmt: skip
+
+    @tool(
+        description="A light weld's fatigue by AISC 360-16 Appendix 3 (ADR 0078 step 5; AWS "
+        "D1.1's nontubular categories are the same): the stress range between `steps` (two "
+        "1-based steps with weld results, or one: from zero; default the last from zero) "
+        "against F_SR for `cycles` and the detail's `category` (Table A-3.1): 'F' (default) "
+        "shear on the fillet's throat from the line forces; A, B, B', C, D, E, E' the base "
+        "metal at the weld's toe (the largest principal stress range at its footprint "
+        "nodes, mesh-dependent). Returns the range, F_SR, the ratio (≤ 1 passes) and where. "
+        "`method='asme'`: ASME VIII-2 5.5.5's equivalent structural stress at the "
+        "attachment's toe (the path's part) from the weld's line forces and moments, "
+        "membrane f/t plus bending 6m/t², t `thickness_m` (a shell's own by default); "
+        "returns each station's permissible cycles on Table 3-F.2M's `basis` curve "
+        "(default -3sigma; `material` steel or aluminium) and, with `cycles`, the damage."
+    )
+    @guarded
+    def weld_fatigue(study: str, weld: str, category: str = "F", cycles: float = 2e6,
+                     steps: list[int] | None = None, method: str = "aisc",
+                     thickness_m: float | None = None, basis: str = "-3sigma",
+                     material: str = "steel") -> dict[str, Any]:  # fmt: skip
+        from puzzle.commands import resolve
+        from puzzle.model.schema import Component, Study
+        from puzzle.post.weld_fields import fatigue, structural_stress
+
+        found = resolve(session().project, study, Study)
+        record, mesh, res = latest(study)
+        comp = session().project.get(found.component, Component)
+        if method == "asme":
+            try:
+                out = structural_stress(session().project, comp, mesh, res, weld,
+                                        tuple(steps or ()), thickness_m, cycles,
+                                        basis=basis, material=material)  # fmt: skip
+            except ValueError as exc:
+                raise PuzzleError(str(exc), code="invalid") from None
+            out["stations"] = out["stations"][:50]
+            return {"run_id": record.run_id, **out}
+        if method != "aisc":
+            raise PuzzleError("method: aisc or asme", code="invalid")
+        out = fatigue(session().project, comp, mesh, res, weld, category, cycles,
+                      tuple(steps or ()))  # fmt: skip
+        return {"run_id": record.run_id, **out}
+
+    @tool(
+        description="A solve's own logs, read whole from its run folder (solver.log, "
+        "Code_Aster's .mess, CalculiX's .sta/.cvg, OpenFOAM's log.*): `problems` the "
+        "error and warning lines by each solver's markers, `pattern` lines matching a "
+        "regular expression (any case), with `context` lines around; else each file's last "
+        "`tail` lines. `study` reads its newest attempt (failed or stopped too), `run` a "
+        "stored run. Use run_progress first for a summary; this is for the solver's words."
+    )
+    @guarded
+    def run_log(study: str | None = None, run: str | None = None, problems: bool = False,
+                pattern: str | None = None, context: int = 0, tail: int = 40,
+                limit: int = 200) -> dict[str, Any]:  # fmt: skip
+        from puzzle import solver_logs
+
+        if study is None and run is None:
+            raise PuzzleError("give a study or a run", code="invalid")
+        folder = solver_logs.find(root, study=study, run=run)
+        found = solver_logs.lines(folder, pattern=pattern, problems=problems,
+                                  context=context, tail=tail, limit=min(limit, 1000))  # fmt: skip
+        return {
+            "folder": str(folder.relative_to(root)),
+            "files": [str(p.relative_to(folder)) for p in solver_logs.logs(folder)],
+            "counts": solver_logs.counts(folder),
+            "lines": [
+                {
+                    "file": x.file,
+                    "line": x.number,
+                    "text": x.text.rstrip()[:400],
+                    **({"kind": x.kind} if x.kind else {}),
+                }
+                for x in found
+            ],  # fmt: skip
         }
 
     @tool(
@@ -1557,6 +2685,78 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
                         "J_m4": sec.J, "mass_kg_m": sec.mass,
                         "beams_take_it": sec.shape in sections.SUPPORTED})  # fmt: skip
         return {"sections": out[:60], "more": max(0, len(out) - 60)}
+
+    @tool(
+        description="Standard bolt sizes (ADR 0050) for bolt types: `standard` iso_coarse, "
+        "iso_fine (M3-M64), unc (to 4 in) or unf; `contains` filters the names. Each with "
+        "diameter, pitch, stress area, the bearing diameter joint styles use, the ISO 273 "
+        "medium clearance hole, and the `head` and `nut` style's bearing diameter and "
+        "height from the standard part tables (head hex, hex_cap, heavy_hex, structural, "
+        "socket, button, flat, low_head; nut hex, heavy_hex, thin). All m, m^2."
+    )
+    @guarded
+    def bolt_sizes(standard: str = "iso_coarse", contains: str | None = None,
+                   head: str = "hex", nut: str = "hex") -> dict[str, Any]:  # fmt: skip
+        from puzzle import bolts, fasteners
+
+        if standard not in bolts.STANDARDS or standard == "custom":
+            raise PuzzleError(f"no bolt standard '{standard}': iso_coarse, iso_fine, unc or unf",
+                              code="invalid")  # fmt: skip
+        if head not in fasteners.HEADS or nut not in fasteners.NUTS:
+            raise PuzzleError(f"head one of {', '.join(fasteners.HEADS)}; nut one of "
+                              f"{', '.join(fasteners.NUTS)}", code="invalid")  # fmt: skip
+        found = [s for s in bolts.sizes(standard)
+                 if not contains or contains.lower() in s.name.lower()]  # fmt: skip
+        return {"sizes": [fasteners.size_info(s, head, nut) for s in found]}
+
+    @tool(
+        description="Standard fastener tables (ADR 0050): screws, nuts and washers as ISO, "
+        "DIN, ASME and ASTM tabulate them (from Lacewing Lab's tables). No `table`: each "
+        "table's id, title, standard, kind and sizes. With `table` (e.g. iso.hexBolt, "
+        "asme.hexNut, iso.washerNormal): its reference, notes, columns and rows (one `size` "
+        "as the table names it: M10, 1/2, #10); lengths in m, threads per inch as counts."
+    )
+    @guarded
+    def fastener_tables(table: str | None = None, size: str | None = None) -> dict[str, Any]:
+        from puzzle import fasteners
+
+        try:
+            return fasteners.table_info(table, size)
+        except KeyError as exc:
+            raise PuzzleError(str(exc.args[0]), code="not_found") from None
+
+    @tool(
+        description="A single-bolt joint by VDI 2230-1:2015 (concentric): bolt and parts' "
+        "resiliences (head 0.5 d hex / 0.4 d socket, engaged thread 0.5 d, nut 0.4 d or "
+        "tapped 0.33 d, cone and sleeve), load factor Phi (n by `n`, Table 2), assembly "
+        "preload FMzul (90 % of Rp0.2 at `mu_thread`), its tightening torque and nut factor "
+        "K, embedding loss; with `axial_load` (N) the bolt's extra load, equivalent stress "
+        "and fatigue safety; with `tightening_factor` (alpha_A, Table A8) the least preload "
+        "and residual clamp load. `size` a bolt_sizes name; `grade` 8.8, 10.9, 12.9 or "
+        "`rp02` (Pa); `clamp_length`, `shank_length`, `bearing`, `hole`, `outer_diameter`, "
+        "`rz` in m; moduli in Pa; `head` hex or socket; `tapped` true for a cap screw in a "
+        "tapped hole. Defaults are listed in `notes`. Nothing is changed."
+    )
+    @guarded
+    def bolt_vdi2230(size: str, clamp_length: float, grade: str | None = "10.9",
+                     head: str = "hex", tapped: bool = False, shank_length: float = 0.0,
+                     e_bolt: float = 205e9, e_plate: float = 205e9,
+                     e_nut: float | None = None, rp02: float | None = None,
+                     bearing: float | None = None, hole: float | None = None,
+                     outer_diameter: float | None = None, mu_thread: float = 0.12,
+                     mu_head: float = 0.12, n: float = 1.0, axial_load: float | None = None,
+                     rz: float = 16e-6, interfaces: int = 1,
+                     tightening_factor: float | None = None) -> dict[str, Any]:  # fmt: skip
+        from puzzle import vdi2230
+
+        try:
+            return vdi2230.check(
+                size, clamp_length, grade, head, tapped, shank_length, e_bolt, e_plate, e_nut,
+                rp02, bearing, hole, outer_diameter, mu_thread, mu_head, n, axial_load, rz,
+                interfaces, tightening_factor,
+            )  # fmt: skip
+        except ValueError as exc:
+            raise PuzzleError(str(exc), code="invalid") from None
 
     @tool(description="Every step and field of a study's latest run, in a few numbers.")
     @guarded

@@ -294,7 +294,7 @@ def write(library, xlsx, out: Path):
         lines.append(f"  {json.dumps(key)}: {json.dumps(m, ensure_ascii=False)}{comma}")
     lines += [" }", "}", ""]
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text("\n".join(lines))
+    out.write_text("\n".join(lines), encoding="utf-8")
 
 
 if __name__ == "__main__":

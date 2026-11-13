@@ -2,8 +2,9 @@
 
 One row per pair of parts that touch: the faces on each side, the gap and overlap in
 the display units, a type to make (bonded by default; a type no solver of the
-component's studies can write is greyed, its reason in the tooltip) and the friction
-for a frictional one. Choosing a row shows both sides' faces in the view. OK makes the
+component's studies can write is greyed, its reason in the tooltip), the friction for a
+frictional one, and for two coaxial cylinders of near-equal radius a Thread tick with the
+likely size (ADR 0076). Choosing a row shows both sides' faces in the view. OK makes the
 ticked rows' face selections and contacts in one batch, so one undo removes them all.
 """
 
@@ -25,7 +26,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from puzzle.geometry.contacts import Proposal, find_contacts, proposals
+from puzzle.geometry.contacts import Proposal, body_labels, find_contacts, proposals
 
 # (readable name, type, the solver capability key it needs)
 TYPES = [
@@ -33,7 +34,8 @@ TYPES = [
     ("Frictionless", "frictionless", "frictionless"),
     ("Frictional", "frictional", "frictional"),
 ]
-COLUMNS = ["Make", "Parts", "Faces", "Gap", "Overlap", "Type", "Friction"]
+COLUMNS = ["Make", "Parts", "Faces", "Gap", "Overlap", "Type", "Friction", "Thread"]
+THREAD = COLUMNS.index("Thread")  # ADR 0076: coaxial cylinders offered as a thread
 
 
 def writers(project, comp) -> dict[str, list[str]]:
@@ -68,7 +70,8 @@ class ContactSearch(QDialog):
         self.can_write = writers(project, comp)
         layout = QVBoxLayout(self)
         intro = QLabel(
-            "Faces of different parts that touch, or nearly. Tick the contacts to make; "
+            "Faces of different parts, or of different bodies of a part, that touch or "
+            "nearly. Tick the contacts to make; "
             "nothing is made until OK, and one undo removes them all."
         )
         intro.setWordWrap(True)
@@ -115,7 +118,7 @@ class ContactSearch(QDialog):
         pairs = find_contacts(
             self.project, self.comp, self.root, tolerance=tolerance, angle=self.angle.value()
         )
-        self.found = proposals(pairs)
+        self.found = proposals(pairs, body_labels(self.project, self.comp))
         self.table.setRowCount(len(self.found))
         for r, prop in enumerate(self.found):
             make = QTableWidgetItem()
@@ -132,12 +135,44 @@ class ContactSearch(QDialog):
             friction.setSingleStep(0.05)
             friction.setValue(0.2)
             self.table.setCellWidget(r, 6, friction)
+            self._thread(r, prop)
         self.table.resizeColumnsToContents()
-        self.note.setText(
-            f"{len(self.found)} pair{'s' if len(self.found) != 1 else ''} of parts touch."
-            if self.found
-            else "No parts touch within the gap and angle given."
-        )
+        if not self.found:
+            self.note.setText("No parts or bodies touch within the gap and angle given.")
+            return
+        text = f"{len(self.found)} pair{'s' if len(self.found) != 1 else ''} touch."
+        if any(p.within_part and self._shared(p) for p in self.found):
+            text += (" Bodies of one part are already joined where they touch (its "
+                     "geometry's Share faces): Bonded records that; Frictionless or "
+                     "Frictional meshes the two bodies apart there.")  # fmt: skip
+        if any(p.thread for p in self.found):
+            text += (" Coaxial cylinders of near-equal radius may be a thread (a tapped "
+                     "hole, a screw in a nut): tick Thread to make the contact act along "
+                     "its flanks, giving each thread's load (bonded, no separation or "
+                     "frictionless).")  # fmt: skip
+        self.note.setText(text)
+
+    def _thread(self, row: int, prop: Proposal) -> None:
+        """The Thread cell: a tick box with the likely size, for coaxial cylinders."""
+        item = QTableWidgetItem("")
+        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        if prop.thread and prop.thread.get("size"):
+            item.setText(prop.thread["size"])
+            item.setCheckState(Qt.CheckState.Unchecked)
+            item.setToolTip(f"Coaxial cylinders: a {prop.thread['size']} thread? (likely "
+                            "size from the inner cylinder; change it in the contact's "
+                            "Properties)")  # fmt: skip
+        elif prop.thread:
+            item.setText("Coaxial")
+            item.setToolTip("Coaxial cylinders of no standard size: make the contact, then "
+                            "Make it a thread… on it")  # fmt: skip
+        self.table.setItem(row, THREAD, item)
+
+    def _shared(self, prop: Proposal) -> bool:
+        from puzzle.model.schema import Geometry
+
+        part = next(p for p in self.comp.parts if p.name == prop.source_part)
+        return self.project.get(part.geometry, Geometry).share_faces
 
     def _text(self, row: int, column: int, text: str) -> None:
         item = QTableWidgetItem(text)
@@ -182,6 +217,10 @@ class ContactSearch(QDialog):
             prop.friction = (
                 self.table.cellWidget(r, 6).value() if prop.type == "frictional" else None
             )
+            thread = self.table.item(r, THREAD)
+            prop.use_thread = bool(prop.thread and prop.thread.get("size")) and (
+                thread is not None and thread.checkState() == Qt.CheckState.Checked
+            )
             out.append(prop)
         return out
 
@@ -190,8 +229,8 @@ def find_contacts_dialog(window, comp):
     """Component → Find contacts…: search, review, then one batch for the ticked rows."""
     from puzzle.geometry.contacts import contact_commands
 
-    if len(comp.parts) < 2:
-        window.statusBar().showMessage("Contacts are between parts: add a second part first", 8000)
+    if not comp.parts:
+        window.statusBar().showMessage("Contacts are between parts or bodies: add a part", 8000)
         return None
 
     def show_faces(faces):
@@ -206,3 +245,64 @@ def find_contacts_dialog(window, comp):
     if not chosen:
         return None
     return window.submit_batch(contact_commands(window.session.project, comp, chosen))
+
+
+def add_contact(window, comp):
+    """Model → Add contact…: one contact between two face selections, asked in one form
+    (the search above proposes them; this is for one the search can't see, or a gap)."""
+    from puzzle.commands.model import Edit, EditOp
+    from puzzle.gui.fastener_dialog import face_selections
+    from puzzle.gui.quick_form import Ask
+    from puzzle.model.schema import Contact
+
+    faces = face_selections(window.session.project, comp)
+    if len(faces) < 2:
+        window.statusBar().showMessage(
+            "A contact is between two face selections: make them first (Pick, Faces), "
+            "or use Find contacts…", 10000)  # fmt: skip
+        return None
+    can = writers(window.session.project, comp)
+    kinds = [(name if can.get(key) else f"{name} (no solver here writes it)", value)
+             for name, value, key in TYPES]  # fmt: skip
+    pairs = [(f, f) for f in faces]
+    taken = {c.name for c in comp.contacts}
+
+    def check(v):
+        if v.get("source") == v.get("target"):
+            return "Choose two different selections"
+        if not v.get("name", "").strip():
+            return "Give it a name"
+        if v["name"].strip() in taken:
+            return f"Another contact is already called '{v['name'].strip()}'"
+        if v.get("type") == "frictional":
+            try:
+                if float(v.get("friction", "")) < 0:
+                    raise ValueError
+            except ValueError:
+                return "Type the friction coefficient (0.2, say)"
+        return None
+
+    got = window.ask_form("Add contact", [
+        Ask("source", "Source faces", choices=pairs,
+            help="The contact (slave) side: usually the smaller or softer face"),
+        Ask("target", "Target faces", choices=pairs, default=faces[1],
+            help="The target (master) side"),
+        Ask("type", "Type", choices=kinds),
+        Ask("friction", "Friction coefficient", kind="text", default="0.2",
+            shown=lambda v: v.get("type") == "frictional"),
+        Ask("name", "Name", kind="text",
+            follow=lambda v: f"{v.get('source', '').split('/')[-1]} to "
+                             f"{v.get('target', '').split('/')[-1]}"),
+    ], intro="Two face selections that touch, or nearly, of different parts or of "
+             "different bodies of one part.", check=check)  # fmt: skip
+    if got is None:
+        return None
+    contact = Contact(
+        name=got["name"].strip(),
+        type=got["type"],
+        source=got["source"],
+        target=got["target"],
+        friction=float(got["friction"]) if got["type"] == "frictional" else None,
+    )
+    op = EditOp(op="append", path="contacts", value=contact.model_dump(mode="json"))
+    return window.submit(Edit(object=str(comp.id), ops=[op]))

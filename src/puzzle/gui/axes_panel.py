@@ -43,14 +43,22 @@ def _unique(window, base: str) -> str:
 
 class AxesPanel(_Panel):
     kind = "axes"
+    model = CoordinateSystem
+    owned = ("name", "type", "origin", "x_axis", "xy_direction", "axis", "angles", "points",
+             "relative_to", "component", "part", "geometry", "entity", "entity_name",
+             "along")  # fmt: skip
 
-    def __init__(self, window, type_: str = "cartesian") -> None:
+    def __init__(self, window, type_: str = "cartesian",
+                 editing: CoordinateSystem | None = None) -> None:  # fmt: skip
+        if editing is not None:
+            type_ = editing.type
         super().__init__(
             window,
-            "New coordinate system",
+            f"Edit {editing.name}" if editing is not None else "New coordinate system",
             "For loads and supports in local directions, and for results along its axes "
             "(normal stress along θ of a cylindrical system is the hoop stress). Pick, "
             "then double-click the model, to place points.",
+            editing,
         )
         box = bounds(window)
         centre = tuple((box[0] + box[1]) / 2) if box is not None else (0.0, 0.0, 0.0)
@@ -85,7 +93,8 @@ class AxesPanel(_Panel):
         self.relative = QComboBox()
         self.relative.addItem(NONE, None)
         for cs in project.of_type(CoordinateSystem):
-            self.relative.addItem(cs.name, str(cs.id))
+            if editing is None or cs.id != editing.id:  # not relative to itself
+                self.relative.addItem(cs.name, str(cs.id))
         self.attached = QComboBox()
         self.attached.addItem(NONE, None)
         for comp in project.of_type(Component):
@@ -108,7 +117,45 @@ class AxesPanel(_Panel):
         self.along.editingFinished.connect(self.changed)
         for line in (self.first, self.second, self.axis, self.angles):
             line.editingFinished.connect(self.changed)
+        if editing is not None:
+            self.fill(editing)
         self.changed()
+
+    def fill(self, cs: CoordinateSystem) -> None:
+        """The panel as `cs` was made: its type, how it is placed and every value (D1)."""
+        from puzzle.gui.construction import _shown
+
+        how = ("entity" if cs.entity is not None else "points" if cs.points is not None
+               else "angles" if cs.angles is not None else "directions")  # fmt: skip
+        self.how.setCurrentIndex(self.how.findData(how))
+        self.origin.text.setText(_shown(cs.origin, self.per_metre))
+        self.first.setText(", ".join(f"{v:.6g}" for v in cs.x_axis))
+        self.second.setText(", ".join(f"{v:.6g}" for v in cs.xy_direction))
+        self.axis.setText(", ".join(f"{v:.6g}" for v in cs.axis))
+        if cs.angles is not None:
+            self.angles.setText(", ".join(f"{v:.6g}" for v in cs.angles))
+        if cs.points is not None:
+            for row, xyz in zip((self.origin, self.on_x, self.on_xy), cs.points, strict=True):
+                row.text.setText(_shown(xyz, self.per_metre))
+        if cs.entity is not None:
+            for i in range(self.source.count()):
+                geometry, entity, name = self.source.itemData(i)
+                if (
+                    entity == cs.entity
+                    and name == cs.entity_name
+                    and (cs.geometry is None or geometry == str(cs.geometry))
+                ):
+                    self.source.setCurrentIndex(i)
+                    break
+            self.along.setText(f"{cs.along:.6g}")
+        if cs.relative_to is not None:
+            self.relative.setCurrentIndex(max(0, self.relative.findData(str(cs.relative_to))))
+        if cs.part is not None:  # Qt hands a stored tuple back as a list
+            for i in range(1, self.attached.count()):
+                if tuple(self.attached.itemData(i)) == (str(cs.component), cs.part):
+                    self.attached.setCurrentIndex(i)
+                    break
+        self.name.setText(cs.name)
 
     def _rows(self) -> None:
         how, kind = self.how.currentData(), self.type.currentData()
@@ -211,5 +258,12 @@ def _size(window) -> float:
 
 def new_axes(window, type_: str = "cartesian") -> AxesPanel:
     panel = AxesPanel(window, type_)
+    window.show_tool(panel)
+    return panel
+
+
+def edit_axes(window, cs: CoordinateSystem) -> AxesPanel:
+    """The panel again, filled from `cs`; Apply redefines it in one command (D1)."""
+    panel = AxesPanel(window, editing=cs)
     window.show_tool(panel)
     return panel

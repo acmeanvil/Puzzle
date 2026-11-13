@@ -70,7 +70,7 @@ The `result_*` tools read a study's newest run, which is only one point. For a p
 - `runs()` lists every stored run but not its point.
 
 The side-by-side views, the difference or ratio to a baseline point, and the summary
-bar chart are in the GUI only: Results → Compare sweep points… (or the study's
+bar chart are in the GUI only: Results → Combinations and fatigue → Compare sweep points… (or the study's
 "<study>: compare" heading in the tree). A study's Materials… (right-click) edits the
 material choices as a table.
 

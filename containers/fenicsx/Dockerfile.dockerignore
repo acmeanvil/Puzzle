@@ -1,0 +1,5 @@
+# The build context is the repository root; the image needs only the pixi files.
+*
+!pixi.toml
+!pixi.lock
+!pyproject.toml

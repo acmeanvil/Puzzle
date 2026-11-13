@@ -15,7 +15,6 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 import gmsh
@@ -31,8 +30,10 @@ def netgen_python() -> Path | None:
     if explicit:
         return Path(explicit)
     dirs = [Path(d) for d in os.environ.get("PUZZLE_SOLVER_PATH", "").split(os.pathsep) if d]
-    envs = Path(sys.prefix).parent
-    dirs += [envs / "netgen" / "bin", envs / "netgen"]
+    from puzzle.jobs.runtime import environment
+
+    env = environment("netgen")
+    dirs += [env / "bin", env] if env else []
     for d in dirs:
         for name in ("python", "python3", "python.exe"):
             exe = d / name
@@ -99,27 +100,29 @@ def mesh_with_netgen(recipe, out_dir: Path, sizes: list[dict], layers: list[dict
         "layers": layers,
         **({"size_file": size_file} if size_file else {}),  # ADR 0066: in `work`
     }
-    (work / "case.json").write_text(json.dumps(case))
+    (work / "case.json").write_text(json.dumps(case), encoding="utf-8")
     from puzzle.jobs.runtime import NativeRuntime
 
     env = NativeRuntime().environment([str(python)])
     # Run a copy beside the case: from its own folder, puzzle's modules would shadow
     # Netgen's packages.
     script = work / SCRIPT.name
-    script.write_text(SCRIPT.read_text())
+    script.write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
     run = subprocess.run(
         [str(python), str(script), str(work / "case.json")],
         cwd=work,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         env=env,
     )
-    (work / "netgen.log").write_text(run.stdout + run.stderr)
+    (work / "netgen.log").write_text(run.stdout + run.stderr, encoding="utf-8")
     if run.returncode != 0:
         tail = (run.stderr or run.stdout).strip().splitlines()[-5:]
         raise MeshError("Netgen failed: " + " / ".join(tail))
     data = np.load(work / "mesh.npz")
-    entities = json.loads((work / "entities.json").read_text())
+    entities = json.loads((work / "entities.json").read_text(encoding="utf-8"))
     _load(data, entities, size)
 
 

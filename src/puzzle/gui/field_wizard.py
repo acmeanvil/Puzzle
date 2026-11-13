@@ -369,6 +369,9 @@ class NamePage(QWizardPage):
 class FieldWizard(QWizard):
     def __init__(self, window) -> None:
         super().__init__(window)
+        # Windows' default Aero style paints its own white pages over the theme's
+        # palette (I6: light in dark mode); Modern follows the palette everywhere.
+        self.setWizardStyle(QWizard.WizardStyle.ModernStyle)
         self.window = window
         self.setWindowTitle("Import field")
         self.file = FilePage(self)

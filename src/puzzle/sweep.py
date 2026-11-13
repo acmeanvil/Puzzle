@@ -50,7 +50,9 @@ def apply(project: Project, study: Study, point: dict) -> Project:
             sets[0].values[key] = value
     s = p.get(study.id, Study)
     s.steps = s.solve_steps()
-    return p
+    from puzzle.operators import with_parameters
+
+    return with_parameters(p)  # values wired to the swept parameters follow (ADR 0071)
 
 
 def labels(project: Project, point: dict) -> dict[str, str]:

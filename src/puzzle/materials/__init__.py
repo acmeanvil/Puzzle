@@ -62,7 +62,7 @@ def library_paths() -> list[Path]:
 @cache
 def _load(paths: tuple[Path, ...]) -> dict[str, dict]:
     entries: dict[str, dict] = {}
-    generic = tomllib.loads(files(__package__).joinpath("generic.toml").read_text())
+    generic = tomllib.loads(files(__package__).joinpath("generic.toml").read_text(encoding="utf-8"))
     for key, entry in generic.items():
         entry = dict(entry)
         name, description = entry.pop("name"), entry.pop("description", "")
@@ -85,12 +85,32 @@ def _load(paths: tuple[Path, ...]) -> dict[str, dict]:
             "sources": sources,
         }
     for path in paths:
-        entries.update(json.loads(path.read_text())["materials"])
-    return entries
+        entries.update(json.loads(path.read_text(encoding="utf-8"))["materials"])
+    # A material you removed from the library (`LibraryStore.remove_from_library`) is a
+    # marker in your materials, so it stays removed when the library is imported again.
+    return {k: e for k, e in entries.items() if not e.get("removed")}
 
 
 def _library() -> dict[str, dict]:
     return _load(tuple(library_paths()))
+
+
+def duplicates() -> list[list[str]]:
+    """Materials whose values are all the same (properties, tables, models), in groups
+    of keys: often one grade filed under several standards, or the same row imported
+    twice. Variants are compared as resolved."""
+    groups: dict[str, list[str]] = {}
+    lib = _library()
+    for key in sorted(lib):
+        try:
+            e = resolve(lib, key)
+        except (KeyError, ValueError):
+            continue
+        same = json.dumps(
+            [e.get("properties"), e.get("tables"), e.get("models") or {}], sort_keys=True
+        )
+        groups.setdefault(same, []).append(key)
+    return [keys for keys in groups.values() if len(keys) > 1]
 
 
 def reload_library() -> None:

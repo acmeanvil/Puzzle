@@ -23,6 +23,10 @@ BOLTING = {
     "sae_j429_grade_5_2", "sae_j429_grade_7", "sae_j429_grade_8_2", "astm_f3125_a325_large",
     "astm_a354_bc", "iso_898_1_class_4_8", "iso_898_1_class_5_8", "iso_898_1_class_8_8_large",
     "iso_898_1_class_9_8",
+    # from Lacewing Lab's bolt grades (Portland Bolt's ASTM summaries, ASME II-D)
+    "astm_f3125_144", "astm_f1554_36", "astm_f1554_55", "astm_f1554_105", "astm_a193_b7m",
+    "astm_a193_b8m_cl1", "astm_a193_b8_cl2", "astm_a320_l43", "astm_f593_group1_cw1",
+    "astm_f593_group1_cw2", "astm_f593_group2_cw1", "astm_f593_group2_cw2",
 }  # fmt: skip
 
 GENERIC = {
@@ -35,11 +39,53 @@ GENERIC = {
     "ptfe",
     "air",
     "water",
+    "sea_water",
 } | BOLTING
+GASES = {  # molar mass, kg/mol
+    "helium": 4.0026e-3,
+    "nitrogen": 28.0134e-3,
+    "carbon_dioxide": 44.0095e-3,
+    "argon": 39.948e-3,
+    "neon": 20.1797e-3,
+    "hydrogen": 2.01588e-3,
+}
+GENERIC |= set(GASES)
+# Filler metals (ADR 0078 step 2): AWS classifications' minimum strengths.
+FILLERS = {"filler_e60xx": 413.7, "filler_e70xx": 482.6, "filler_e80xx": 551.6,
+           "filler_er70s_6": 482.6, "filler_e71t_1": 482.6, "filler_e308l": 517.1,
+           "filler_e309l": 517.1, "filler_e316l": 482.6, "filler_e2209": 689.5,
+           "filler_er4043": 165.0, "filler_er5356": 240.0}  # fmt: skip
+GENERIC |= set(FILLERS)
+# Structural grades for member checks (ADR 0079 steps 3 and 5): (F_y, F_u) in MPa.
+STRUCTURAL = {"astm_a992": (344.7, 448.2), "astm_a36": (248.2, 399.9),
+              "astm_a572_gr50": (344.7, 448.2), "astm_a500_gr_c_rect": (344.7, 427.5),
+              "astm_a500_gr_c_round": (317.2, 427.5), "astm_a53_gr_b": (241.3, 413.7),
+              "duplex_2205": (450, 655), "lean_duplex_2101": (450, 650)}  # fmt: skip
+GENERIC |= set(STRUCTURAL)
+
+
+def test_structural_grades_have_their_strengths():
+    from puzzle.materials import library_material
+
+    for key, (fy, fu) in STRUCTURAL.items():
+        m = library_material(key)
+        assert m.properties["yield_strength"].to_si() / 1e6 == pytest.approx(fy, abs=0.2), key
+        assert m.properties["tensile_strength"].to_si() / 1e6 == pytest.approx(fu, abs=0.2), key
 
 
 def test_generic_set_is_shipped():
     assert set(library_keys()) == GENERIC  # the test setup excludes any user library
+
+
+@pytest.mark.parametrize("key", sorted(GASES))
+def test_gas_densities_follow_the_ideal_gas_law(key):
+    """At 20 °C and 1 atm, rho = p M / (R T); CO2 sits 0.5 % above it (Z = 0.9946)."""
+    gas = library_material(key)
+    assert gas.info["group"] == "Gas"
+    ideal = 101325 * GASES[key] / (8.314462618 * 293.15)
+    assert gas.properties["density"].to_si() == pytest.approx(ideal, rel=6e-3)
+    for prop in ("dynamic_viscosity", "thermal_conductivity", "specific_heat"):
+        assert gas.properties[prop].to_si() > 0
 
 
 def test_every_value_converts_to_si():
@@ -122,7 +168,7 @@ def test_user_library_adds_and_overrides(tmp_path, monkeypatch):
         }
     }
     path = tmp_path / "library.json"
-    path.write_text(json.dumps(user))
+    path.write_text(json.dumps(user), encoding="utf-8")
     monkeypatch.setenv("PUZZLE_MATERIALS", str(path))
     assert library_paths() == [path]
     assert set(library_keys()) == GENERIC | {"special_alloy"}
@@ -139,11 +185,9 @@ def test_default_user_library_location(monkeypatch):
 
 
 def test_search():
-    assert search_library("steel") == [
-        "electrical_steel",
-        "stainless_steel_304",
-        "structural_steel",
-    ]
+    assert search_library("steel") == sorted(
+        ["electrical_steel", "stainless_steel_304", "structural_steel", "duplex_2205",
+         "lean_duplex_2101", *(k for k in STRUCTURAL if k.startswith("astm"))])  # fmt: skip
     assert search_library("fastener") == sorted(BOLTING)  # by their group, "Fastener"
 
 
@@ -172,3 +216,12 @@ def test_two_copies_are_separate_materials():
 def test_unknown_material():
     with pytest.raises(KeyError, match="unobtainium"):
         library_material("unobtainium")
+
+
+def test_filler_metals_carry_their_classification_strength():
+    from puzzle.materials import library_entry
+
+    for key, mpa in FILLERS.items():
+        entry = library_entry(key)
+        assert entry["info"]["group"] == "Filler metal"
+        assert entry["properties"]["tensile_strength"]["value"] == mpa

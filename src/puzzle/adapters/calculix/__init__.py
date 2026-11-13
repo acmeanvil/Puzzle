@@ -15,6 +15,7 @@ from puzzle.adapters.base import (
     STAGE3_FIELDS,
     STRUCTURAL_FEATURES,
     SUPPORT_FEATURES,
+    SYMMETRY_FEATURES,
     THERMAL_FEATURES,
     VECTOR_FIELD_FEATURES,
     VECTOR_LOAD_FEATURES,
@@ -24,6 +25,7 @@ from puzzle.adapters.base import (
 from puzzle.adapters.calculix import spring_beams
 from puzzle.adapters.calculix.frd import read_frd
 from puzzle.adapters.calculix.inp import (
+    THREADS,
     InputError,
     fastener_info,
     spring_beam_info,
@@ -47,6 +49,7 @@ class CalculixAdapter(SolverAdapter):
             "heat_transfer": frozenset({"stationary", "transient"}),
         },
         features=STRUCTURAL_FEATURES
+        | SYMMETRY_FEATURES  # ADR 0081
         | THERMAL_FEATURES
         | HEAT_SOURCE_FEATURES  # ADR 0047
         | REMOTE_FEATURES
@@ -57,14 +60,27 @@ class CalculixAdapter(SolverAdapter):
         | VECTOR_LOAD_FEATURES
         | INITIAL_STRESS_FEATURES,  # ADR 0044 stage 3
         feature_steps=True,
-        connectors=frozenset({"beam_fastener:rigid", "beam_fastener:distributing"}),
+        connectors=frozenset(
+            {"beam_fastener:rigid", "beam_fastener:distributing", "beam_fastener:thread"}
+        ),  # ADR 0076 step 4: tapped ends
         # ADR 0027, tests/integration/test_beams.py; open table sections as exact
         # springs (ADR 0055, tests/integration/test_beam_sections.py)
         beams=True,
         shared_settings=frozenset(  # ADR 0023
-            {"linear_solver", "tolerance", "max_iterations", "output_every"}
+            {
+                "linear_solver",
+                "tolerance",
+                "max_iterations",
+                "output_every",
+                "increments",
+                "initial_increment",
+                "min_increment",
+                "fixed_increments",
+            }
         ),
         shells=True,  # ADR 0027, tests/integration/test_shells.py
+        # ADR 0081 step 3: *EQUATION per node pair (test_symmetry.py)
+        cyclic=frozenset({"solid_mechanics", "heat_transfer"}),
         dimensions=frozenset({"3d", "2d_planar", "2d_axisymmetric"}),  # ADR 0048
         # ADR 0044: values from imported fields (tests/integration/test_imported_fields.py)
         field_features=frozenset(
@@ -100,8 +116,17 @@ class CalculixAdapter(SolverAdapter):
         ),  # ADR 0037: local axes
         # Nonconformal bonded maps to *TIE; the others to *CONTACT PAIR (+ *FRICTION).
         contacts=frozenset(
-            {"bonded_conformal", "bonded_nonconformal", "frictionless", "frictional"}
+            {
+                "bonded_conformal",
+                "bonded_nonconformal",
+                "frictionless",
+                "frictional",
+                "no_separation",
+                "rough",
+            }
         ),
+        threads=THREADS,  # ADR 0076
+        welds=frozenset({"line"}),  # ADR 0078: the light weld's springs
         couplings=frozenset({"thermal_expansion"}),
         # *PLASTIC, stepped static steps, PEEQ out (tests/integration/test_plasticity.py).
         material_models=frozenset(  # ADR 0049 step 4: in a system's axes
@@ -113,25 +138,32 @@ class CalculixAdapter(SolverAdapter):
         self, project: Project, study: Study, mesh: Mesh, workdir: Path, inputs=()
     ) -> Path:
         path = workdir / f"{JOB}.inp"
-        path.write_text(write_inp(project, study, mesh, inputs))
+        path.write_text(write_inp(project, study, mesh, inputs), encoding="utf-8")
         # Replayed prestress steps come first in the results; the reader skips them.
         # Elastic constants per material, for the plastic strain tensor (read_results).
         elastic = _elastic_sets(project, study, mesh)
         if elastic:
-            path.with_suffix(".elastic.json").write_text(json.dumps(elastic))
+            path.with_suffix(".elastic.json").write_text(json.dumps(elastic), encoding="utf-8")
         # Helper nodes (rigid bodies, spring grounds) come after the mesh's; the reader
         # leaves them out of the results.
         mark_mesh_nodes(path, mesh)
         # Buckling steps (ADR 0028), by the study's step number: the reader drops their
         # static block and numbers modes.
         buckling = [n for n, s in enumerate(study.solve_steps(), start=1) if s.type == "buckling"]
-        path.with_suffix(".buckling").write_text(json.dumps(buckling))
+        path.with_suffix(".buckling").write_text(json.dumps(buckling), encoding="utf-8")
         beams = spring_beam_info(project, study, mesh)
         if beams:  # ADR 0055: the reader turns the springs' stretch into section forces
-            path.with_name(path.stem + spring_beams.INFO_SUFFIX).write_text(json.dumps(beams))
+            path.with_name(path.stem + spring_beams.INFO_SUFFIX).write_text(
+                json.dumps(beams), encoding="utf-8"
+            )
         ends = fastener_info(project, study, mesh)
         if ends:  # ADR 0027: the reader turns their helper nodes' reactions into forces
-            path.with_suffix(".fasteners.json").write_text(json.dumps(ends))
+            path.with_suffix(".fasteners.json").write_text(json.dumps(ends), encoding="utf-8")
+        from puzzle.adapters.calculix.inp import total_sets
+
+        totals = total_sets(mesh)
+        if totals:  # each printed set's selection, for the exact reaction totals
+            path.with_suffix(".totals.json").write_text(json.dumps(totals), encoding="utf-8")
         return path
 
     def contact_summary(self, project, component, mesh=None) -> dict[str, str]:
@@ -158,6 +190,38 @@ class CalculixAdapter(SolverAdapter):
                 "solver", "Linear solver", "SOLVER=", "choice", "default", SOLVERS,
                 description="The equation solver on each step's procedure card; iterative "
                 "ones suit large static models.",
+            ),
+            # Convergence of nonlinear static steps: *CONTROLS, PARAMETERS=TIME
+            # INCREMENTATION (CalculiX's defaults, so unset changes nothing).
+            SolverSetting(
+                "cutbacks", "Cut-backs per increment", "*CONTROLS I_A", "integer", 5,
+                steps=frozenset({"stationary"}),
+                description="How many times an increment that does not converge is cut "
+                "back and tried again before the solve stops.",
+            ),
+            SolverSetting(
+                "cutback_factor", "Cut-back factor", "*CONTROLS D_f", "number", 0.25,
+                maximum=0.99, steps=frozenset({"stationary"}),
+                description="A failed increment is retried at this fraction of its size.",
+            ),
+            SolverSetting(
+                "increase_factor", "Growth factor", "*CONTROLS D_D", "number", 1.5,
+                steps=frozenset({"stationary"}),
+                description="An increment that converges easily is followed by one this "
+                "much larger (up to the largest increment).",
+            ),
+            SolverSetting(
+                "reduce_after", "Shrink after", "*CONTROLS I_L", "integer", 10,
+                unit="iterations", power=True, steps=frozenset({"stationary"}),
+                description="An increment taking more iterations than this is converged, "
+                "but the next one is made smaller.",
+            ),
+            SolverSetting(
+                "divergence_check_after", "Divergence check after", "*CONTROLS I_0",
+                "integer", 4, unit="iterations", power=True,
+                steps=frozenset({"stationary"}),
+                description="From this iteration on, residuals growing in two iterations "
+                "running cut the increment back; larger is more patient with contact.",
             ),
         ]  # fmt: skip
 
@@ -192,19 +256,21 @@ class CalculixAdapter(SolverAdapter):
             raise FileNotFoundError(f"CalculiX wrote no results ({frd.name}); see the solver log")
         results = read_frd(frd)
         _spring_beam_forces(results, input_file)  # before the rotation nodes go
+        _bolt_thread_loads(results, input_file)  # before the thread ends' helpers go
         drop_helper_nodes(results, input_file)  # rigid-body nodes, grounds, twins
         elastic = input_file.with_suffix(".elastic.json")
         if elastic.exists():  # CalculiX writes PEEQ only: the tensor comes from S and E
-            sets = json.loads(elastic.read_text())
+            sets = json.loads(elastic.read_text(encoding="utf-8"))
             for step in results.steps:
                 if "plastic_strain_equivalent" in step.fields and "strain" in step.fields:
                     step.fields["plastic_strain"] = plastic_strain_tensor(
                         step.fields["strain"], step.fields["stress"], sets
                     )
         _fastener_fields(results, input_file)
+        _reaction_totals(results, input_file)  # by the deck's own step numbers, as above
         from puzzle.adapters.calculix.inp import step_owners
 
-        owners = step_owners(input_file.read_text()) if input_file.exists() else {}
+        owners = step_owners(input_file.read_text(encoding="utf-8")) if input_file.exists() else {}
         # Each result to its study step (the deck's tags); helpers' results go: a
         # replayed prestress step, the modes a superposition reads (ADR 0041).
         results.steps = [s for s in results.steps if owners.get(s.index, 0) > 0]
@@ -212,7 +278,9 @@ class CalculixAdapter(SolverAdapter):
             s.index = owners[s.index]
         buckling = input_file.with_suffix(".buckling")
         if buckling.exists():
-            results.steps = _buckling_modes(results.steps, set(json.loads(buckling.read_text())))
+            results.steps = _buckling_modes(
+                results.steps, set(json.loads(buckling.read_text(encoding="utf-8")))
+            )
         _harmonic(results)
         return results
 
@@ -243,7 +311,7 @@ def _spring_beam_forces(results, input_file: Path) -> None:
         return
     from puzzle.results.model import Field
 
-    info = json.loads(marker.read_text())
+    info = json.loads(marker.read_text(encoding="utf-8"))
     for step in results.steps:
         rf = step.fields.get("reaction_force")
         if rf is None:  # modes and harmonic steps have no reactions
@@ -261,6 +329,43 @@ def _spring_beam_forces(results, input_file: Path) -> None:
         step.fields["reaction_force"] = Field(rf.name, rf.location, rf.components, rf.ids, values)
 
 
+def _bolt_thread_loads(results, input_file: Path) -> None:
+    """Each threaded bolt end's load per thread (ADR 0076 step 4), the first engaged
+    (at the mouth) first: the flank springs' force k n · (u_helper - u_wall) along the
+    bolt's axis, binned by pitch. A whole-model field `bolt_thread_load`, components
+    "<bolt> <end>: <k>"."""
+    marker = input_file.with_suffix(".fasteners.json")
+    if not marker.exists():
+        return
+    import numpy as np
+
+    from puzzle import threads
+    from puzzle.results.model import Field
+
+    ends = [e for e in json.loads(marker.read_text(encoding="utf-8")) if e.get("threads")]
+    if not ends:
+        return
+    for step in results.steps:
+        u = step.fields.get("displacement")
+        if u is None:
+            continue
+        names, loads = [], []
+        for e in ends:
+            for end, t in e["threads"].items():
+                wall, helper = np.asarray(t["wall"]), np.asarray(t["helper"])
+                dw, dh = u.at(wall)[:, :3], u.at(helper)[:, :3]
+                n, axis = np.asarray(t["n"]), np.asarray(t["axis"])
+                force = np.asarray(t["k"]) * np.einsum("ij,ij->i", n, dh - dw)
+                axial = np.abs(force * (n @ axis))
+                per = threads.per_thread(np.asarray(t["s"]), axial, t["pitch"], t["mouth"])
+                names += [f"{e['name']} {end}: {k + 1}" for k in range(len(per))]
+                loads += per
+        if names:
+            step.fields["bolt_thread_load"] = Field(
+                "bolt_thread_load", "global", names, np.array([0]), np.array([loads])
+            )
+
+
 def _fastener_fields(results, input_file: Path) -> None:
     """Each step's fastener forces (ADR 0027) as a whole-model field, one row per
     fastener (ids 1, 2, ... in the component's order)."""
@@ -274,13 +379,41 @@ def _fastener_fields(results, input_file: Path) -> None:
     from puzzle.adapters.common import FASTENER_COMPONENTS
     from puzzle.results.model import Field
 
-    ends = json.loads(marker.read_text())
-    blocks = read_fastener_forces(dat.read_text(), ends)
+    ends = json.loads(marker.read_text(encoding="utf-8"))
+    blocks = read_fastener_forces(dat.read_text(encoding="utf-8"), ends)
     for step in results.steps:
         hit = [v for n, t, v in blocks if n == step.index and abs(t - step.value) < 1e-9]
         if hit:
             ids = np.arange(1, len(ends) + 1)
             step.fields["fastener"] = Field("fastener", "global", FASTENER_COMPONENTS, ids, hit[-1])
+
+
+def _reaction_totals(results, input_file: Path) -> None:
+    """Each step's exact reaction totals per selection (CalculiX's TOTALS=ONLY prints) as
+    the whole-model field `reaction_total` (`results.query.exact_total` reads it)."""
+    marker = input_file.with_suffix(".totals.json")
+    dat = input_file.with_suffix(".dat")
+    if not marker.exists() or not dat.exists():
+        return
+    import numpy as np
+
+    from puzzle.adapters.calculix.inp import read_totals
+    from puzzle.results.model import Field
+    from puzzle.results.query import selection_id
+
+    groups = json.loads(marker.read_text(encoding="utf-8"))
+    blocks = read_totals(dat.read_text(encoding="utf-8", errors="replace"))
+    for step in results.steps:
+        hit = [t for n, time, t in blocks if n == step.index and abs(time - step.value) < 1e-9]
+        if not hit:
+            continue
+        printed = {groups[s]: v for s, v in hit[-1].items() if s in groups}
+        if printed:
+            names = sorted(printed)
+            ids = np.array([selection_id(n) for n in names], dtype=np.int64)
+            values = np.array([printed[n] for n in names], float)
+            step.fields["reaction_total"] = Field("reaction_total", "global", ["x", "y", "z"],
+                                                  ids, values)  # fmt: skip
 
 
 def _buckling_modes(steps, buckling: set[int]) -> list:

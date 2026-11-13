@@ -144,11 +144,12 @@ def write_meta(path: Path, bodies: list[dict], coils_: list[Coil], frequencies,
     path.write_text(json.dumps({"bodies": bodies, "coils": [asdict(c) for c in coils_],
                                 "frequencies": list(frequencies),
                                 "times": list(times) if times else None,
-                                "axisymmetric": axisymmetric, "planar": planar}))  # fmt: skip
+                                "axisymmetric": axisymmetric, "planar": planar}),
+                    encoding="utf-8")  # fmt: skip
 
 
 def read_meta(path: Path) -> dict:
-    meta = json.loads(path.read_text())
+    meta = json.loads(path.read_text(encoding="utf-8"))
     meta["coils"] = [Coil(**c) for c in meta["coils"]]
     return meta
 

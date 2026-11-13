@@ -7,6 +7,12 @@ it on the bolt, and clearing it gives the type's back. An edit made with several
 selected applies to each of them, as one command batch (one undo). Rows filter by text,
 sort by any column, export to CSV, and selecting one selects the bolt in the tree.
 
+Modelled bolts (ADR 0077): choosing "modelled" as the formulation, or right-click
+Model the bolt, draws the bolt from the tables as parts (`solid_bolts.make_commands`,
+one batch for the rows chosen); Back to a beam bolt takes each back (one batch each).
+The Head and Thread Kf columns are a modelled bolt's head style and thread-root notch
+factor (the fatigue tool's Kf at its thread), from its type unless set.
+
 Results: each bolt's forces for a chosen run and step, its use of its grade's proof
 and yield loads, and the moments along a selected bolt (`results_tab`).
 """
@@ -44,7 +50,7 @@ FROM_TYPE = "From its bolt type"
 class Column:
     title: str
     field: str | None  # the bolt's field it edits; None: shown only
-    kind: str = "text"  # text, choice, length, force
+    kind: str = "text"  # text, choice, length, force, number
 
 
 COLUMNS = [
@@ -59,6 +65,9 @@ COLUMNS = [
     Column("Formulation", "formulation", "choice"),
     Column("Ends", "ends", "choice"),
     Column("Joint", "joint", "choice"),
+    Column("Head", "head", "choice"),
+    Column("Washers", "washers", "choice"),
+    Column("Thread Kf", "thread_kf", "number"),
     Column("Group", "group"),
 ]
 
@@ -167,9 +176,11 @@ class PropertiesTab(QWidget):
         )
         self.table.setItemDelegate(_Delegate(self))
         self.table.itemSelectionChanged.connect(self._selected)
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._menu)
         layout.addWidget(self.table, 1)
-        self.empty = role(QLabel("No bolts yet: Model → Add fastener…, or Fasteners from "
-                                 "holes…"), "muted")  # fmt: skip
+        self.empty = role(QLabel("No bolts yet: Model → Bolts and fasteners → Add "
+                                 "fastener…, or Fasteners from holes…"), "muted")  # fmt: skip
         layout.addWidget(self.empty)
 
     # --- filling ---------------------------------------------------------------
@@ -216,8 +227,10 @@ class PropertiesTab(QWidget):
             q = getattr(solved, column.field)
             return (_shown_quantity(q, column.kind) or "none"), typed
         value = getattr(solved, column.field)
-        if column.field in ("formulation", "ends", "joint"):
-            return label(value), typed
+        if column.kind == "number":
+            return ("" if value is None else f"{value:g}"), typed
+        if column.field in ("formulation", "ends", "joint", "head", "washers"):
+            return (label(value) if value is not None else ""), typed
         return ("" if value is None else str(value)), typed
 
     def _filtered(self) -> None:
@@ -262,16 +275,24 @@ class PropertiesTab(QWidget):
 
         rows = {i.row() for i in self.table.selectedIndexes()}
         targets = sorted(rows) if r in rows and len(rows) > 1 else [r]
+        chosen = [x for x in (self.row_at(t) for t in targets) if x is not None]
+        if column.field == "formulation":  # ADR 0077: a modelled bolt is drawn, not set
+            if value == "modelled":
+                self.model_bolts(chosen)
+                return
+            modelled = [x for x in chosen if x.bolt.formulation == "modelled"]
+            chosen = [x for x in chosen if x.bolt.formulation != "modelled"]
+            if modelled:
+                self.beam_bolts(modelled, value)
+            if not chosen:
+                return
         try:
-            stored = self._value(column, value, [self.row_at(t) for t in targets])
+            stored = self._value(column, value, chosen)
         except ValueError as exc:
             self.window.statusBar().showMessage(str(exc), 8000)
             return
         by_component: dict[str, list] = {}
-        for t in targets:
-            row = self.row_at(t)
-            if row is None:
-                continue
+        for row in chosen:
             by_component.setdefault(str(row.component.id), []).append(
                 EditOp(op="set", path=f"connectors.{row.index}.{column.field}", value=stored)
             )
@@ -284,6 +305,81 @@ class PropertiesTab(QWidget):
             self.window.submit_batch(commands)
         self.refresh()
 
+    # --- modelled bolts (ADR 0077) -------------------------------------------------
+
+    def chosen_rows(self) -> list[Row]:
+        rows = sorted({i.row() for i in self.table.selectedIndexes()})
+        return [x for x in (self.row_at(r) for r in rows) if x is not None]
+
+    def model_bolts(self, rows: list[Row] | None = None, bonded_heads: bool = False):
+        """Draw the bolts as parts from the tables: one batch for every row (one undo)."""
+        from puzzle.bolts import model_commands
+
+        rows = self.chosen_rows() if rows is None else rows
+        session = self.window.session
+        batch: list = []
+        by_component: dict = {}
+        for row in rows:
+            if row.bolt.formulation != "modelled":
+                by_component.setdefault(row.component.id, []).append(row.index)
+        try:
+            for cid, indices in by_component.items():
+                comp = session.project.objects[cid]
+                batch += model_commands(session.project, comp, indices, session.root,
+                                        bonded_heads=bonded_heads)  # fmt: skip
+        except ValueError as exc:
+            self.window.statusBar().showMessage(str(exc), 8000)
+            return None
+        if not batch:
+            return None
+        out = self.window.submit_batch(batch)
+        self.refresh()
+        return out
+
+    def beam_bolts(self, rows: list[Row] | None = None, formulation: str | None = "beam"):
+        """Each modelled bolt back to a beam bolt (or `formulation`), one batch each: its
+        parts, contacts and pretension go."""
+        from puzzle.commands.model import Edit, EditOp
+        from puzzle.solid_bolts import beam_commands
+
+        rows = self.chosen_rows() if rows is None else rows
+        keys = [(x.component.id, x.index) for x in rows if x.bolt.formulation == "modelled"]
+        out = None
+        for cid, index in keys:
+            project = self.window.session.project
+            batch = beam_commands(project, project.objects[cid], index)
+            if formulation != "beam":
+                batch.append(
+                    Edit(
+                        object=str(cid),
+                        ops=[
+                            EditOp(
+                                op="set", path=f"connectors.{index}.formulation", value=formulation
+                            )
+                        ],
+                    )
+                )
+            if batch:
+                out = self.window.submit_batch(batch)
+        self.refresh()
+        return out
+
+    def _menu(self, pos) -> None:
+        from PySide6.QtWidgets import QMenu
+
+        rows = self.chosen_rows()
+        if not rows:
+            return
+        menu = QMenu(self.table)
+        if any(x.bolt.formulation != "modelled" for x in rows):
+            menu.addAction("Model the bolt", lambda: self.model_bolts(rows))
+            menu.addAction(
+                "Model the bolt, heads bonded", lambda: self.model_bolts(rows, bonded_heads=True)
+            )
+        if any(x.bolt.formulation == "modelled" for x in rows):
+            menu.addAction("Back to a beam bolt", lambda: self.beam_bolts(rows))
+        menu.exec(self.table.viewport().mapToGlobal(pos))
+
     def _value(self, column: Column, value, rows):
         from puzzle.model.units import known, plain
         from puzzle.settings import current
@@ -291,6 +387,16 @@ class PropertiesTab(QWidget):
         if column.kind == "choice":
             return value
         text = str(value).strip()
+        if column.kind == "number":
+            if not text or text.lower() in ("none", "from type"):
+                return None
+            try:
+                number = float(text)
+            except ValueError:
+                raise ValueError(f"'{text}' is not a number") from None
+            if number < 1:
+                raise ValueError("A thread's notch factor Kf is 1 or more (3 to 4 is usual)")
+            return number
         if column.kind in ("length", "force"):
             if not text or text.lower() in ("none", "from type"):
                 if column.field == "diameter" and any(r.bolt.type is None for r in rows):
@@ -330,7 +436,7 @@ class PropertiesTab(QWidget):
                                                  "CSV files (*.csv)")  # fmt: skip
         if not path:
             return None
-        with open(path, "w", newline="") as f:
+        with open(path, "w", newline="", encoding="utf-8") as f:
             out = csv.writer(f)
             out.writerow([c.title for c in COLUMNS])
             for r in range(self.table.rowCount()):

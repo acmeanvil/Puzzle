@@ -99,6 +99,13 @@ A section's force is what the side the normal points to passes to the other side
 construction `path` (`"type": "path"`, `start`, `end` in m) can feed a path or
 linearized tool the same way, in place of `point` and `end`.
 
+To place one on the model, measure first: a face's centre and normal, or an edge's
+two ends (`geometry_measure`), then create it with those numbers and, optionally,
+`"made_from": "face Tip (Bar)"` (words only, shown in the GUI). To move one later,
+`edit` it (`set` `origin`, `normal`, `start`, `end`, or `axes`/`plane`/`offset`); every
+result tool reading it follows. The GUI's Edit… reopens its panel, which also places a
+plane on a picked face or face selection and a path along a straight edge.
+
 To remove a tool: `{"command": "delete", "object": "<tool name>"}`.
 
 ## Reading them

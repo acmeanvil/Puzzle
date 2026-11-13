@@ -207,9 +207,11 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
         f"{retype}"
         f"{_expert_lines(study)}"
         "simpleFoam > log.simpleFoam 2>&1\n"
-        "postProcess -func writeCellCentres -latestTime > log.postProcess 2>&1\n"
+        "postProcess -func writeCellCentres -latestTime > log.postProcess 2>&1\n",
+        encoding="utf-8",
+        newline="\n",  # bash in a Linux container rejects CRLF (`set -e\r`)
     )
-    (workdir / "density.txt").write_text(f"{rho:.17g}\n")
+    (workdir / "density.txt").write_text(f"{rho:.17g}\n", encoding="utf-8")
     if layered is not None:
         layered.save(workdir)
 
@@ -239,7 +241,7 @@ def read_results(workdir: Path) -> Results:
         raise FileNotFoundError("OpenFOAM wrote no results; see log.simpleFoam in the case")
     ids_ref = np.loadtxt(workdir / "element-ids.txt", dtype=np.int64, ndmin=1)
     n = len(ids_ref)
-    rho = float((workdir / "density.txt").read_text())
+    rho = float((workdir / "density.txt").read_text(encoding="utf-8"))
     centres = read_internal_field(final / "C", n)
     # Node-average centres equal OpenFOAM's for tets and parallelepipeds; others are
     # close enough for the coordinate match's tolerance on fine meshes.

@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
@@ -87,6 +88,8 @@ class Curve(QWidget):
         self.log = log  # both axes logarithmic (S-N and strain-life curves)
         self.dots: set[int] = set()  # series drawn as points only
         self.bars: set[int] = set()  # series drawn as bars
+        self.dashed: set[int] = set()  # series drawn dashed (a limit line, ADR 0071)
+        self.notes: list[tuple[float, float, str]] = []  # labelled points (Annotate)
         self.setMinimumSize(220, 160)
 
     @property
@@ -96,9 +99,10 @@ class Curve(QWidget):
     def set_points(self, points, label: str = "") -> None:
         self.set_series([(label, points)] if points else [])
 
-    def set_series(self, series, dots=(), bars=()) -> None:
+    def set_series(self, series, dots=(), bars=(), dashed=(), notes=()) -> None:
         """Curves as (name, points); those whose index is in `dots` are drawn as points
-        only (a scatter), in `bars` as bars from zero, the others joined in order of x."""
+        only (a scatter), in `bars` as bars from zero, in `dashed` as dashed lines, the
+        others joined in order of x; `notes` (x, y, text) are marked and labelled."""
 
         def keep(x, y):
             return math.isfinite(x) and math.isfinite(y) and (not self.log or (x > 0 and y > 0))
@@ -106,6 +110,8 @@ class Curve(QWidget):
         self.series = [(name, [(x, y) for x, y in pts if keep(x, y)]) for name, pts in series]
         self.dots = set(dots)
         self.bars = set(bars)
+        self.dashed = set(dashed)
+        self.notes = [(x, y, text) for x, y, text in notes if keep(x, y)]
         self.update()
 
     def paintEvent(self, _event) -> None:  # noqa: N802 - Qt's name
@@ -154,7 +160,8 @@ class Curve(QWidget):
         for k, (name, pts) in enumerate(self.series):
             series = tokens().series
             colour = QColor(series[k % len(series)])
-            p.setPen(QPen(colour, 2))
+            style = Qt.PenStyle.DashLine if k in self.dashed else Qt.PenStyle.SolidLine
+            p.setPen(QPen(colour, 2, style))
             q = [at(x, y) for x, y in sorted(pts)]
             if k in self.bars:  # a bar per point, from zero, a little narrower than its gap
                 xs_ = sorted(x for x, _ in pts)
@@ -172,11 +179,17 @@ class Curve(QWidget):
             if k not in self.dots:
                 for a, b in zip(q, q[1:], strict=False):
                     p.drawLine(a, b)
-            if len(q) <= 40 or k in self.dots:
+            if (len(q) <= 40 or k in self.dots) and k not in self.dashed:
                 for c in q:
                     p.drawEllipse(c, 2.5, 2.5)
             if name:
                 p.drawText(left + 10, top + 16 + 16 * k, name)
+        p.setPen(QPen(QColor(t.canvas_text), 1.5))
+        for x, y, text in self.notes:
+            c = at(x, y)
+            p.drawEllipse(c, 4, 4)
+            p.drawText(QPointF(min(c.x() + 7, left + w - 7 * len(text)), max(c.y() - 7, top + 12)),
+                       text)  # fmt: skip
 
 
 class TableEditor(QDialog):
@@ -1128,23 +1141,34 @@ class MaterialBuilder(QDialog):
         self.search.textChanged.connect(lambda _: self.list())
         self.tree = QTreeWidget()
         self.tree.setHeaderHidden(True)
+        self.tree.setSelectionMode(QTreeWidget.SelectionMode.ExtendedSelection)
         self.tree.currentItemChanged.connect(lambda *_: self._chosen())
-        new, variant, delete, undo = (
+        new, variant, delete, drop, twins, undo = (
             QPushButton("New"),
             QPushButton("New variant"),
             QPushButton("Remove mine"),
+            QPushButton("Remove from library"),
+            QPushButton("Find duplicates…"),
             QPushButton("Undo"),
         )
         variant.setToolTip("A material that inherits everything from the chosen one")
+        delete.setToolTip("Your copy removed: the library's material shows again")
+        drop.setToolTip(
+            "The selected materials gone from your library (Ctrl- or Shift-click picks "
+            "several); they stay gone when the library is imported again"
+        )
+        twins.setToolTip("Materials whose values are all the same, to remove the extra ones")
         new.clicked.connect(self.new)
         variant.clicked.connect(self.new_variant)
         delete.clicked.connect(self.remove)
+        drop.clicked.connect(lambda: self.remove_from_library())
+        twins.clicked.connect(self.find_duplicates)
         undo.clicked.connect(self.undo)
         left = QVBoxLayout()
         left.addWidget(self.search)
         left.addWidget(self.tree, 1)
         buttons = QGridLayout()  # two by two: the labels stay whole
-        for i, b in enumerate((new, variant, delete, undo)):
+        for i, b in enumerate((new, variant, delete, drop, twins, undo)):
             buttons.addWidget(b, i // 2, i % 2)
         left.addLayout(buttons)
         self.editor = MaterialEditor(self._edited)
@@ -1181,7 +1205,7 @@ class MaterialBuilder(QDialog):
     # --- the library ---------------------------------------------------------------------
 
     def list(self, select: str | None = None) -> None:
-        fill_library(self.tree, self.search.text(), set(self.store.entries()), select)
+        fill_library(self.tree, self.search.text(), set(self.store.mine()), select)
 
     def _chosen(self) -> None:
         from puzzle.materials import _library, library_material
@@ -1254,12 +1278,60 @@ class MaterialBuilder(QDialog):
         return key
 
     def remove(self) -> None:
-        if self.key is None or self.key not in self.store.entries():
+        if self.key is None or self.key not in self.store.mine():
             self.status.setText("Only your own materials can be removed")
             return
         self.store.remove(self.key)
         self.status.setText("Removed (Undo brings it back)")
         self.list(select=self.key)
+
+    def selected_keys(self) -> list[str]:
+        """The materials picked in the tree (headings left out)."""
+        keys = {i.data(0, KEY) for i in self.tree.selectedItems()} - {None}
+        return sorted(keys) or ([self.key] if self.key else [])
+
+    def remove_from_library(self, keys: list[str] | None = None) -> list[str]:
+        """Materials gone from the library (imported, generic or yours), as one Undo."""
+        from puzzle.errors import PuzzleError
+        from puzzle.materials import _library
+        from puzzle.model.schema import Material
+
+        keys = keys if keys is not None else self.selected_keys()
+        if not keys:
+            self.status.setText("Choose the materials to remove")
+            return []
+        names = [_library()[k]["name"] for k in keys if k in _library()]
+        shown = ", ".join(names[:5]) + (f" and {len(names) - 5} more" if len(names) > 5 else "")
+        question = (
+            f"Remove {shown} from your material library?\n\n"
+            "Projects keep their own copies. Undo brings them back."
+        )
+        if not self.confirm(question):
+            return []
+        try:
+            done = self.store.remove_from_library(keys)
+        except PuzzleError as exc:
+            self.status.setText(exc.message)
+            return []
+        self.key = self.parent_key = None
+        self.editor.load(Material(name="New material"))
+        self.status.setText(f"Removed {len(done)} from the library (Undo brings them back)")
+        self.list()
+        return done
+
+    def confirm(self, text: str) -> bool:
+        """Asks before removing (tests replace this)."""
+        answer = QMessageBox.question(self, "Remove materials", text)
+        return answer == QMessageBox.StandardButton.Yes
+
+    def find_duplicates(self) -> None:
+        dialog = self.duplicates_dialog()
+        if dialog.exec() and dialog.ticked():
+            self.remove_from_library(dialog.ticked())
+
+    def duplicates_dialog(self):
+        """The dialog to show (tests replace this)."""
+        return Duplicates(self)
 
     def undo(self) -> None:
         key = self.store.undo()
@@ -1280,6 +1352,67 @@ class MaterialBuilder(QDialog):
         data = material.model_dump(mode="json", exclude={"id"})
         if self.window.submit(Create(kind="material", data=data)) is not None:
             self.status.setText(f"Added '{material.name}' to the project")
+
+
+class Duplicates(QDialog):
+    """Materials whose values are all the same, a group each (`materials.duplicates`):
+    tick the ones to remove; nothing is ticked to start with."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        from puzzle.materials import _library, duplicates
+
+        lib = _library()
+        self.setWindowTitle("Duplicate materials")
+        self.resize(640, 520)
+        self.tree = QTreeWidget()
+        self.tree.setHeaderHidden(True)
+        groups = duplicates()
+        for keys in groups:
+            head = QTreeWidgetItem(self.tree, [f"Same values ({len(keys)})"])
+            head.setData(0, KEY, None)
+            for key in keys:
+                source = lib[key].get("info", {}).get("source", "")
+                text = lib[key]["name"] + (f"   ({source})" if source else "")
+                item = QTreeWidgetItem(head, [text])
+                item.setData(0, KEY, key)
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item.setCheckState(0, Qt.CheckState.Unchecked)
+            head.setExpanded(True)
+        intro = QLabel(
+            f"{len(groups)} groups of materials have the same values. Often that is right "
+            "(one grade under several standards, alloys with the same minimum properties); "
+            "tick the ones you don't want, then Remove ticked. Undo in the builder brings "
+            "them back."
+            if groups
+            else "No two materials in your library have the same values."
+        )
+        intro.setWordWrap(True)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
+        self.remove = buttons.addButton("Remove ticked", QDialogButtonBox.ButtonRole.AcceptRole)
+        self.remove.setEnabled(bool(groups))
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout = QVBoxLayout(self)
+        layout.addWidget(intro)
+        layout.addWidget(self.tree, 1)
+        layout.addWidget(buttons)
+
+    def items(self) -> list[QTreeWidgetItem]:
+        root = self.tree.invisibleRootItem()
+        return [
+            root.child(g).child(i)
+            for g in range(root.childCount())
+            for i in range(root.child(g).childCount())
+        ]
+
+    def tick(self, keys) -> None:
+        for item in self.items():
+            if item.data(0, KEY) in keys:
+                item.setCheckState(0, Qt.CheckState.Checked)
+
+    def ticked(self) -> list[str]:
+        return [i.data(0, KEY) for i in self.items() if i.checkState(0) == Qt.CheckState.Checked]
 
 
 def fill_library(

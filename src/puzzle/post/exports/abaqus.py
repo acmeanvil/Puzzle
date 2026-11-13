@@ -66,7 +66,8 @@ def write(job):
                 *rows,
             ]
         )
-        + "\n"
+        + "\n",
+        encoding="utf-8",
     )
     return [*files, out], notes | {"temperatures": f"{out.name}: {len(rows)} nodes, K"}
 
@@ -97,7 +98,8 @@ def write_displacement(job):
                 *rows,
             ]
         )
-        + "\n"
+        + "\n",
+        encoding="utf-8",
     )
     return [*files, out], notes | {
         "displacements": f"{out.name}: {len(ids)} nodes on {job.selection or 'the whole model'}, m"
@@ -168,7 +170,7 @@ def _mesh_deck(job):
             except InputError as exc:
                 raise PuzzleError(str(exc), code="invalid") from None
     path = job.path.with_suffix(".inp")
-    path.write_text("\n".join(out) + "\n")
+    path.write_text("\n".join(out) + "\n", encoding="utf-8")
     return [path], {
         "deck": "mesh, sets, materials and sections; SI (m, kg, s, N, Pa, K)",
         "elements": ", ".join(sorted({p.element for p in parts})),

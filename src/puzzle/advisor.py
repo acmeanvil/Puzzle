@@ -67,8 +67,8 @@ TEXT = {
 NEEDS = {
     "solid_mechanics": [
         ("a support", ("fixed", "displacement", "remote_displacement", "elastic_support",
-                       "compression_only_support"), "fixed", ("stationary", "transient",
-                                                              "frequency_domain", "buckling")),
+                       "compression_only_support", "symmetry", "antisymmetry"), "fixed",
+         ("stationary", "transient", "frequency_domain", "buckling")),
         ("a load", ("force", "pressure", "remote_force", "remote_force_rigid", "gravity",
                     "acceleration", "rotation", "bolt_pretension", "bolt_adjustment",
                     "displacement"), "force", ("stationary", "transient", "frequency_domain",
@@ -224,13 +224,14 @@ def advise(
         count = sum(len(p.features) for p in component.physics)
         add("conditions", "done", f"{count} supports and loads.")
     _contacts(project, component, add)
+    _threads(project, component, root, add)
 
     if study is None:
         add("study", "needed", f"No study runs {component.name} yet.", "new_study", "New study…")
         return out
     from puzzle.adapters import check_study
 
-    trouble = [p.message for p in problems if p.path == study.name]
+    trouble = [p.message for p in problems if p.object == study.name]
     with contextlib.suppress(Exception):  # an adapter that can't load says nothing here
         trouble += [p for found in check_study(project, study).values() for p in found]
     if trouble:
@@ -387,6 +388,70 @@ def _contacts(project, component, add) -> None:
         n = len(component.contacts)
         add("contacts", "done", f"{n} contact{'s' * (n > 1)}; the Contact tool checks where "
             "they start.", "contact_tool", "Contact tool")  # fmt: skip
+
+
+# Coaxial-cylinder checks by the geometry they read: OCC is slow, the Advisor refreshes.
+_CYLINDERS: dict = {}
+
+
+def _threads(project, component, root, add) -> None:
+    """ADR 0076: a bonded tapped hole (a bolt ending in a tapped hole's wall, or a bond
+    between two coaxial cylinders) carries its load thread by thread, not evenly; a
+    thread on the contact says how. Notes only: nothing here is needed to solve."""
+    from puzzle.model.schema import BoltType
+
+    for f in component.connectors:
+        joint = f.joint
+        if joint is None and f.type is not None:
+            bolt_type = project.objects.get(f.type)
+            joint = bolt_type.joint if isinstance(bolt_type, BoltType) else None
+        if joint in ("tapped", "stud_tapped"):
+            add("contacts", "optional", f"Bolt {f.name} is bonded along its tapped hole's "
+                "wall: the first engaged thread carries the most, which a threaded contact "
+                "shows (a solid bolt's shank on a thread face; ADR 0076).")  # fmt: skip
+            break
+    if root is None:
+        return
+    for i, c in enumerate(component.contacts):
+        if c.type != "bonded" or c.thread is not None:
+            continue
+        if _coaxial(project, component, c, root):
+            add("contacts", "optional", f"{c.name} bonds two coaxial cylinders (a tapped "
+                "hole, a screw in a nut?): as a thread it carries the load along the "
+                "flanks, thread by thread, with the nut's wedge.", f"thread:{i}",
+                "Make it a thread…")  # fmt: skip
+
+
+def _coaxial(project, component, contact, root) -> bool:
+    import json
+    from pathlib import Path
+
+    parts = {p.name: p for p in component.parts}
+    try:
+        key_parts = []
+        for ref in (contact.source, contact.target):
+            part = parts.get(ref.split("/", 1)[0])
+            if part is None:
+                return False
+            geo = project.objects.get(part.geometry)
+            stamp = 0.0
+            if getattr(geo, "source", None):
+                with contextlib.suppress(OSError):
+                    stamp = (Path(root) / geo.source).stat().st_mtime
+            key_parts.append((geo.model_dump_json(), part.translation, part.rotation, stamp))
+        from puzzle.operators import parameter_values
+
+        key = (str(component.id), contact.source, contact.target, json.dumps(
+            [key_parts, parameter_values(project)], default=str))  # fmt: skip
+        if key not in _CYLINDERS:
+            from puzzle.geometry.contacts import contact_cylinders
+
+            if len(_CYLINDERS) > 256:
+                _CYLINDERS.clear()
+            _CYLINDERS[key] = contact_cylinders(project, component, contact, root) is not None
+        return _CYLINDERS[key]
+    except Exception:  # noqa: BLE001 - a note only: no OCC, an unreadable file
+        return False
 
 
 def _failed_attempt(root, study: Study) -> str:

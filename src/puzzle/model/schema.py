@@ -17,7 +17,14 @@ from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, TypeVar
 from uuid import UUID, uuid4
 
 import numpy as np
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 if TYPE_CHECKING:
     from puzzle.errors import Problem
@@ -26,12 +33,26 @@ SCHEMA_VERSION = 1
 
 
 class Quantity(BaseModel):
-    """A value with a unit. Converted to SI only when an adapter exports it."""
+    """A value with a unit. Converted to SI only when an adapter exports it.
+
+    `parameter` (ADR 0071: numbers wired into the model) names a parameter (a parameter
+    set's value, or a pre-solve Number, Slider or Expression by its name): the value
+    follows it, put in before solving and at every sweep point
+    (`operators.with_parameters`); `value` keeps the last one for showing. Left out of
+    the dump when unset, so quantities without one hash and save as before."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     value: float
     unit: str = "dimensionless"
+    parameter: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _without_unset_parameter(self, handler):
+        data = handler(self)
+        if isinstance(data, dict) and data.get("parameter") is None:
+            data.pop("parameter", None)
+        return data
 
     @field_validator("unit")
     @classmethod
@@ -108,6 +129,11 @@ class HistoryStep(BaseModel):
         "heal",
         "remove",
         "fragment",
+        "keep",
+        "bolt",
+        "nut",
+        "washer",
+        "weld_bead",
         "box",
         "cylinder",
         "cone",
@@ -125,6 +151,7 @@ class HistoryStep(BaseModel):
         "split_face",
         "enclosure",
         "polyline",
+        "frame",  # ADR 0079: a frame's members between named nodes, or a DXF's lines
         "sheet",
         "face",
         "section",
@@ -176,6 +203,16 @@ class Geometry(ProjectObject):
     owner: UUID | None = Field(default=None, description="Owning component, for local geometry")
     selections: list[NamedSelection] = Field(default_factory=list)
     hidden: bool = Field(default=False, description="not drawn in the view; still solved")
+    hidden_bodies: list[str] = Field(
+        default_factory=list, description="its bodies (by name) not drawn; still solved"
+    )
+    colour: str | None = Field(
+        default=None, pattern=r"^#[0-9a-fA-F]{6}$",
+        description="how its parts are drawn (#rrggbb); none: the theme's colour",
+    )  # fmt: skip
+    body_colours: dict[str, str] = Field(
+        default_factory=dict, description="a colour (#rrggbb) for some of its bodies, by name"
+    )
     share_faces: bool = Field(
         default=True,
         description="touching bodies are meshed joined, with shared faces and nodes; off "
@@ -195,6 +232,16 @@ class Geometry(ProjectObject):
             if len(part) == 36:  # a geometry's id
                 out.append(UUID(part))
         return out
+
+    @field_validator("body_colours")
+    @classmethod
+    def _body_colours(cls, value: dict[str, str]) -> dict[str, str]:
+        import re
+
+        bad = [c for c in value.values() if not re.fullmatch(r"#[0-9a-fA-F]{6}", c)]
+        if bad:
+            raise ValueError(f"colours are #rrggbb, not {bad[0]!r}")
+        return value
 
     @model_validator(mode="after")
     def _owner_matches_scope(self) -> Geometry:
@@ -573,9 +620,20 @@ class MeshRecipe(ProjectObject):
 
     mesher: Literal["gmsh", "netgen"] = "gmsh"
     element_order: Literal[1, 2] = 2
+    hexahedron_nodes: Literal[20, 27] = Field(
+        default=20, description="second-order hexahedra: 20 nodes (serendipity: CalculiX "
+        "C3D20, Code_Aster HEXA20, Elmer 820) or 27 (Lagrange: Code_Aster HEXA27, Elmer "
+        "827, FEniCSx Q2); prisms follow, 15 or 18 nodes")  # fmt: skip
     element_shape: Literal["tetrahedra", "hexahedra"] = Field(
         default="tetrahedra",
-        description="hexahedra: structured (transfinite) hex mesh of block-like volumes",
+        description="hexahedra: structured (transfinite) hex mesh of block-like volumes; in a "
+        "2D model, quadrilaterals",
+    )
+    quadrilaterals: Literal["all", "mixed"] = Field(
+        default="all",
+        description="a 2D model's quadrilaterals: all (every element a quadrilateral: Gmsh "
+        "meshes at twice the size and splits each element, so sizes and edge counts hold) "
+        "or mixed (recombined where it can, some triangles left)",
     )
     global_size: Quantity | None = None
     controls: list[MeshControl] = Field(default_factory=list)
@@ -609,6 +667,16 @@ class MeshRecipe(ProjectObject):
         description="Netgen's own settings: grading, curvaturesafety, segmentsperedge, "
         "quad_dominated",
     )
+    revolved_bolts: bool = Field(
+        default=True,
+        description="modelled bolts and nuts (ADR 0077) meshed by revolving their profile: "
+        "hexahedra, prisms on the axis; off: tetrahedra like the rest",
+    )
+    bolt_sectors: int = Field(
+        default=24,
+        ge=4,
+        description="elements round a revolved bolt or nut (a multiple of 4, rounded up)",
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -640,6 +708,50 @@ class PartInstance(BaseModel):
     rotation: tuple[float, float, float] = Field(
         default=(0.0, 0.0, 0.0), description="Euler angles XYZ, degrees"
     )
+
+
+class Thread(BaseModel):
+    """A thread on a contact between two coaxial cylinders (ADR 0076): the faces stay
+    smooth and the contact acts along the flanks (`puzzle.threads`). Unset numbers come
+    from the form and the size (`threads.spec`)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    form: Literal["iso", "un", "acme", "stub_acme", "trapezoidal", "buttress",
+                  "buttress_din", "square", "npt", "bspt", "custom"] = "iso"  # fmt: skip
+    size: str | None = Field(default=None, description="a standard size, e.g. M16 or 1/2-13 UNC")
+    pitch: Quantity | None = None
+    starts: int = Field(default=1, ge=1)
+    hand: Literal["right", "left"] = "right"
+    major: Quantity | None = None
+    pitch_diameter: Quantity | None = None
+    minor: Quantity | None = None
+    taper: float | None = Field(default=None, ge=0, description="diameter per length (NPT 1/16)")
+    flank_angles: tuple[float, float] | None = Field(
+        default=None, description="(load, other) in degrees from the radial plane"
+    )
+    axis: tuple[float, float, float] | None = Field(
+        default=None, description="the axis' direction; empty: fitted to the faces"
+    )
+    cs: UUID | None = Field(default=None, description="a coordinate system whose z is the axis")
+    bearing: Literal["auto", "load", "other"] = "auto"
+    compliance: Literal["teeth", "rigid"] | float = Field(
+        default="teeth", description="the flanks' give: the teeth's, rigid, or N/m³"
+    )
+    clearance: Quantity | None = Field(default=None, description="backlash along the flanks")
+    engaged_length: Quantity | None = Field(default=None, description="empty: the overlap")
+
+    @model_validator(mode="after")
+    def _check(self) -> Thread:
+        if self.form == "custom" and (self.size is None and (self.major is None
+                                                             or self.pitch is None)):  # fmt: skip
+            raise ValueError("a custom thread needs a size, or a major diameter and a pitch")
+        if self.form == "custom" and self.flank_angles is None:
+            raise ValueError("a custom thread needs its flank angles")
+        if self.form != "custom" and self.size is None and (self.major is None
+                                                            or self.pitch is None):  # fmt: skip
+            raise ValueError("give the thread's size, or its major diameter and pitch")
+        return self
 
 
 class Contact(BaseModel):
@@ -679,10 +791,17 @@ class Contact(BaseModel):
     offset: Quantity | None = Field(
         default=None, description="the initial clearance (+) or interference (−), for offset"
     )
+    thread: Thread | None = Field(
+        default=None,
+        description="a thread between two coaxial cylinders: the contact acts along the "
+        "flanks (ADR 0076); always meshed apart",
+    )
     extensions: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _check(self) -> Contact:
+        if self.thread is not None and self.meshing == "conformal":
+            raise ValueError("a threaded contact is meshed apart (its flanks need two sides)")
         if (self.interface == "offset") != (self.offset is not None):
             raise ValueError("an offset is given for, and only for, the offset interface")
         if self.interface != "as_is" and self.type in ("bonded", "no_separation"):
@@ -697,7 +816,7 @@ class Contact(BaseModel):
     def effective_meshing(self) -> Literal["conformal", "nonconformal"]:
         if self.meshing:
             return self.meshing
-        return "conformal" if self.type == "bonded" else "nonconformal"
+        return "conformal" if self.type == "bonded" and self.thread is None else "nonconformal"
 
     @property
     def capability(self) -> str:
@@ -886,6 +1005,10 @@ class Feature(BaseModel):
         default_factory=list,
         description="the solve steps (1, 2, ...) it applies in; empty: every step (ADR 0037)",
     )
+    case: str | None = Field(
+        default=None, description="the load case a load belongs to (ADR 0079 step 2): D, "
+        "L, Lr, S, R, W, E or a name of your own; a study's combinations factor its "
+        "cases")  # fmt: skip
     fields: dict[str, FieldUse] = Field(
         default_factory=dict,
         description="values taken from imported fields in place of `values` (ADR 0044)",
@@ -1142,6 +1265,73 @@ class ShellSection(BaseModel):
         return f"{t.value:g} {t.unit} thick{where}"
 
 
+class MemberRelease(BaseModel):
+    """A frame member's end freed (ADR 0079): the members of `selection` (a member, a
+    group or a line part) where they meet the node `at` (a point selection) carry no
+    force along the released dofs (in each member's axes: x along it, y the section's
+    first axis), or only a spring's (`springs`, N/m or N·m/rad). A pin: rz and ry."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    selection: str = Field(description="the members: Part/Member, Part/Group or the part")
+    at: str = Field(description="the node: Part/Node (a point selection)")
+    released: list[Literal["ux", "uy", "uz", "rx", "ry", "rz"]] = Field(
+        default_factory=lambda: ["ry", "rz"], description="dofs freed (default: a pin)"
+    )
+    springs: dict[str, Quantity] = Field(
+        default_factory=dict, description="partial fixity: a released dof held by a spring"
+    )
+
+
+class MemberDesign(BaseModel):
+    """How the members of `selection` (a member, a group, a line part, or "" for every
+    member) are checked (ADR 0079 step 3): the code (`auto` by the material: AISC 360
+    for carbon and low-alloy steel), LRFD or ASD, and the lengths a check needs. Each
+    length left unset is the member's own; `unbraced_length` is the laterally unbraced
+    length for lateral-torsional buckling (and the default for y and z), `k_*` the
+    effective length factors (1 under Direct Analysis, C3). `cb` overrides the
+    moment-gradient factor computed from the moment diagram (F1-1). The most specific
+    entry for a member wins: a member's over its group's over its part's over "". Never
+    changes a solve, so it is left out of hashes."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    selection: str = Field(default="", description="Part/Member, Part/Group, the part, or "
+                           "'' for every member")  # fmt: skip
+    code: Literal["auto", "aisc360", "aisc370", "adm"] = Field(default="auto", description="design "
+                                                         "code")  # fmt: skip
+    method: Literal["LRFD", "ASD"] = Field(default="LRFD", description="load and resistance "
+                                           "factors, or allowable strength")  # fmt: skip
+    length_x: Quantity | None = Field(default=None, description="unbraced length for "
+                                      "buckling about the strong axis")  # fmt: skip
+    length_y: Quantity | None = Field(default=None, description="unbraced length for "
+                                      "buckling about the weak axis")  # fmt: skip
+    length_z: Quantity | None = Field(default=None, description="unbraced length for "
+                                      "torsional buckling")  # fmt: skip
+    unbraced_length: Quantity | None = Field(default=None, description="laterally unbraced "
+                                             "length of the compression flange (L_b)")  # fmt: skip
+    k_x: float = Field(default=1.0, gt=0, description="effective length factor, strong axis")
+    k_y: float = Field(default=1.0, gt=0, description="effective length factor, weak axis")
+    k_z: float = Field(default=1.0, gt=0, description="effective length factor, torsion")
+    cb: float | None = Field(default=None, gt=0, description="lateral-torsional buckling "
+                             "modification factor; unset: from the moment diagram")  # fmt: skip
+    net_area_ratio: float = Field(default=1.0, gt=0, le=1, description="A_e / A_g for "
+                                  "tensile rupture (D2b): net area and shear lag")  # fmt: skip
+    deflection_limit: float | None = Field(default=None, gt=0, description="L / δ allowed "
+                                           "(360 for L/360); unset: not checked")  # fmt: skip
+
+
+class MemberOffset(BaseModel):
+    """A rigid length at a member's end (ADR 0079): a joint's panel zone. The members of
+    `selection` are rigid for `length` from the node `at`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    selection: str
+    at: str
+    length: Quantity
+
+
 class BeamSection(BaseModel):
     """A line body's cross-section (ADR 0027 beams): on a selection of its edges (or the
     whole part), a shape and its sizes. The section's first axis is `orientation`
@@ -1152,7 +1342,7 @@ class BeamSection(BaseModel):
 
     selection: str = Field(description="the part, or Part/Selection of its edges")
     shape: Literal["rectangle", "circle", "tube", "box", "library"] = "rectangle"
-    standard: Literal["aisc", "en"] | None = Field(
+    standard: Literal["aisc", "en", "aa"] | None = Field(
         default=None, description="library: the section table (ADR 0055)"
     )
     designation: str | None = Field(default=None, description="library: W12X26, IPE 300, ...")
@@ -1258,6 +1448,142 @@ class BeamSection(BaseModel):
         }
 
 
+class ElementChoice(BaseModel):
+    """The element a body is written with (ADR 0082 step 3), in neutral words: each solver
+    maps the formulation to its own type for the body's cells (`puzzle.element_choice`,
+    from the element library) or refuses it with the alternatives it has."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    selection: str = Field(description="a body selection ('Part/Name') or a part's name")
+    formulation: Literal["full", "reduced", "incompatible_modes", "mixed_up", "thin_shell",
+                         "thick_shell", "euler_bernoulli", "timoshenko", "lumped",
+                         "higher_order"] = Field(
+        description="full or reduced integration, incompatible modes (bending without "
+        "locking), mixed u-p (nearly incompressible), thin or thick shell, Euler-Bernoulli "
+        "or Timoshenko beam, lumped heat capacity, higher order on the same mesh "
+        "(p-elements; solver_types {'elmer': 'p:3'} for another degree)")  # fmt: skip
+    solver_types: dict[str, str] = Field(
+        default_factory=dict, description="an expert's own type per solver: "
+        "{'calculix': 'C3D20R'}")  # fmt: skip
+
+
+class LoadCombination(BaseModel):
+    """Load cases factored and added (ADR 0079 step 2): {"D": 1.2, "L": 1.6}. ASCE 7's
+    LRFD and ASD combinations come from `frames.combinations.asce7`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    factors: dict[str, float] = Field(description="load case -> factor")
+
+
+class CyclicSymmetry(BaseModel):
+    """One sector of `sectors` identical ones about an axis (ADR 0081 step 3): the
+    `target` face is the `source` face turned 360/`sectors` degrees about the axis
+    (right-handed), meshed to match, and each target node moves as its source node,
+    turned (u_t = R u_s; temperatures equal). Loads and supports are the sector's: the
+    whole model carries `sectors` times them."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: str = Field(description="the sector's first cut face (a face selection)")
+    target: str = Field(description="its other cut face: the source turned about the axis")
+    sectors: int = Field(ge=2, description="how many sectors make the whole")
+    origin: tuple[float, float, float] = Field(default=(0.0, 0.0, 0.0),
+                                               description="a point on the axis (m)")  # fmt: skip
+    axis: tuple[float, float, float] = (0.0, 0.0, 1.0)
+
+    def rotation(self):
+        """The 3 x 3 rotation taking the source to the target."""
+        import numpy as np
+
+        k = np.asarray(self.axis, float)
+        k = k / np.linalg.norm(k)
+        t = 2 * np.pi / self.sectors
+        kx = np.array([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]])
+        return np.eye(3) + np.sin(t) * kx + (1 - np.cos(t)) * kx @ kx
+
+    def shift(self):
+        """The translation that follows the rotation: x_t = R x_s + shift."""
+        import numpy as np
+
+        o = np.asarray(self.origin, float)
+        return o - self.rotation() @ o
+
+
+class LinearPeriodicity(BaseModel):
+    """A slice of a whole that repeats along a line (ADR 0081 step 4): the `target` face
+    is the `source` face moved by `translation`, meshed to match, and each target node
+    moves as its source node (u_t = u_s; temperatures equal): no mean strain along it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: str = Field(description="the slice's first cut face (a face selection)")
+    target: str = Field(description="its other cut face: the source moved by `translation`")
+    translation: tuple[float, float, float] = Field(description="from source to target (m)")
+
+    def rotation(self):
+        import numpy as np
+
+        return np.eye(3)
+
+    def shift(self):
+        import numpy as np
+
+        return np.asarray(self.translation, float)
+
+
+class Weld(BaseModel):
+    """A weld between two parts along a path (ADR 0078): its AWS A2.4 type and size,
+    the edge it runs along and the two faces its legs lie on, continuous or
+    intermittent; a light weld (`line`: springs across the joint, the line force read
+    at stations) unless modelled."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    type: Literal["fillet", "groove"] = "fillet"
+    groove: Literal["cjp", "pjp"] | None = Field(
+        default=None, description="a groove weld's penetration: complete or partial joint"
+    )
+    sides: Literal["arrow", "other", "both"] = Field(
+        default="arrow", description="AWS A2.4's arrow side, other side, or both"
+    )
+    leg: Quantity = Field(description="a fillet's leg on the path's part (or both legs); "
+                          "a groove's depth of groove")  # fmt: skip
+    leg2: Quantity | None = Field(
+        default=None, description="an unequal fillet's leg on the other part"
+    )
+    path: str = Field(description="the edge selection it runs along, Part/Name, on the "
+                      "joint between the two parts")  # fmt: skip
+    faces: list[str] = Field(
+        min_length=2,
+        max_length=2,
+        description="the faces its legs lie on: the path's part's, then the other part's",
+    )
+    pattern: Literal["continuous", "intermittent"] = "continuous"
+    segment: Quantity | None = Field(default=None, description="intermittent: each length")
+    pitch: Quantity | None = Field(
+        default=None, description="intermittent: start to start of the segments"
+    )
+    filler: UUID | None = Field(
+        default=None, description="the filler metal; empty: the base metal's matching one"
+    )
+    formulation: Literal["line", "modelled"] = Field(
+        default="line", description="line: springs across the joint, no bead meshed (the "
+        "default); modelled: the bead as a solid (ADR 0078 step 4)")  # fmt: skip
+
+    @model_validator(mode="after")
+    def _pattern(self) -> Weld:
+        if self.pattern == "intermittent" and (self.segment is None or self.pitch is None):
+            raise ValueError(f"weld '{self.name}': an intermittent weld needs its segment "
+                             "length and pitch")  # fmt: skip
+        if self.type == "groove" and self.groove is None:
+            raise ValueError(f"weld '{self.name}': a groove weld is CJP or PJP")
+        return self
+
+
 class BeamFastener(BaseModel):
     """A bolt, pin or rivet as a beam between two selections, with no geometry (ADR 0027).
 
@@ -1292,13 +1618,33 @@ class BeamFastener(BaseModel):
     pretension: Quantity | None = Field(
         default=None, description="a force applied in the first step, then locked"
     )
-    formulation: Literal["beam", "solid"] | None = Field(
+    formulation: Literal["beam", "solid", "modelled"] | None = Field(
         default=None,
         description="beam: a two-node Timoshenko beam between the ends, no mesh (Nastran "
-        "CBAR with RBE2/RBE3 spiders); solid: a small meshed bolt",
+        "CBAR with RBE2/RBE3 spiders); solid: a small meshed bar with spiders; modelled: "
+        "the standard bolt drawn from the fastener tables as parts of its own, joined by "
+        "contacts and its thread (ADR 0077)",
+    )
+    head: Literal["hex", "socket"] | None = Field(
+        default=None, description="a modelled bolt's head (ADR 0077); empty: its type's"
+    )
+    washers: Literal["none", "head", "nut", "both"] | None = Field(
+        default=None, description="a modelled bolt's plain washers; empty: its type's"
+    )
+    thread_kf: float | None = Field(
+        default=None, ge=1.0,
+        description="a modelled bolt's thread-root fatigue notch factor; empty: its type's",
+    )  # fmt: skip
+    parts: list[str] = Field(
+        default_factory=list,
+        description="the parts a modelled bolt was drawn as (its bolt, nut, washers)",
     )
     group: str | None = Field(default=None, description="a group the bolt is listed under")
     rule: str | None = Field(default=None, description="the bolt rule that made it (ADR 0050)")
+    thread: Thread | None = Field(
+        default=None,
+        description="its tapped end's thread (ADR 0076), over its type's thread form",
+    )
     through: list[str] = Field(
         default_factory=list,
         description="the holes of a stack's middle plates it passes (clearance holes: they "
@@ -1368,7 +1714,7 @@ class BoltRule(BaseModel):
     names: str = Field(default="Bolt {n}", description="{n} counts up; {rule} is this name")
     group: str | None = Field(default=None, description="the group the bolts are listed under")
     same_part: bool = Field(
-        default=False, description="also join two holes of one part (a split clamp)"
+        default=False, description="also join two holes of one body (a split clamp)"
     )
     ground_unpaired: bool = Field(
         default=False, description="a hole with no partner gets a bolt to ground (an anchor)"
@@ -1410,7 +1756,25 @@ class BoltType(ProjectObject):
     preload_force: Quantity | None = None
     torque: Quantity | None = None
     nut_factor: float = Field(default=0.2, gt=0, description="K in F = T / (K d)")
-    formulation: Literal["beam", "solid"] = "beam"
+    formulation: Literal["beam", "solid", "modelled"] = "beam"
+    head: Literal["hex", "socket"] = Field(default="hex", description="a modelled bolt's head")
+    washers: Literal["none", "head", "nut", "both"] = Field(
+        default="none",
+        description="a modelled bolt's plain washers: under the head, the nut, or both",
+    )
+    washer: Literal["normal", "small", "large", "extra_large", "structural"] = Field(
+        default="normal",
+        description="the washers' series: ISO 7089/7092/7093/7094 or ASME B18.21.1 "
+        "(structural: ASTM F436, inch sizes)",
+    )
+    thread_kf: float = Field(
+        default=3.0, ge=1.0,
+        description="the thread root's fatigue notch factor on a modelled bolt's basic "
+        "stresses (ADR 0077; 3 to 4 is usual)",
+    )  # fmt: skip
+    head_friction: float = Field(
+        default=0.15, ge=0.0, description="μ under a modelled bolt's head and nut"
+    )
     ends: Literal["rigid", "distributing"] = "distributing"
     joint: Literal["hole_walls", "through_nut", "tapped", "stud_nuts", "stud_tapped"] = Field(
         default="hole_walls",
@@ -1420,6 +1784,11 @@ class BoltType(ProjectObject):
     )
     engagement: Quantity | None = Field(
         default=None, description="a tapped hole's engaged thread length (default 1.5 d)"
+    )
+    thread_form: Literal["iso", "un", "none"] | None = Field(
+        default=None,
+        description="a tapped end's thread (ADR 0076): iso, un, or none (the engaged wall "
+        "follows the bolt on average); empty: iso for ISO sizes, un for UNC/UNF",
     )
 
     def dependencies(self) -> list[UUID]:
@@ -1497,9 +1866,34 @@ class Component(ProjectObject):
     connectors: list[BeamFastener] = Field(
         default_factory=list, description="fasteners between parts, without geometry (ADR 0027)"
     )
+    welds: list[Weld] = Field(
+        default_factory=list, description="welds between parts along paths (ADR 0078)"
+    )
     bolt_rules: list[BoltRule] = Field(
         default_factory=list, description="which holes get bolts, to run again (ADR 0050)"
     )
+    member_releases: list[MemberRelease] = Field(
+        default_factory=list, description="frame members' ends freed or sprung (ADR 0079)"
+    )
+    member_offsets: list[MemberOffset] = Field(
+        default_factory=list, description="rigid lengths at frame members' ends (ADR 0079)"
+    )
+    member_design: list[MemberDesign] = Field(
+        default_factory=list, description="how frame members are checked: code, method, "
+        "unbraced lengths (ADR 0079 step 3)")  # fmt: skip
+    cyclic: CyclicSymmetry | None = Field(
+        default=None, description="one sector of a cyclically symmetric whole (ADR 0081)"
+    )
+    elements: list[ElementChoice] = Field(
+        default_factory=list, description="element formulations per body (ADR 0082); "
+        "none: each solver's own default")  # fmt: skip
+    periodic: LinearPeriodicity | None = Field(
+        default=None, description="one slice of a whole repeating along a line (ADR 0081)"
+    )
+
+    def repeats(self) -> list:
+        """Its cyclic symmetry and linear periodicity, those it has (ADR 0081)."""
+        return [r for r in (self.cyclic, self.periodic) if r is not None]
 
     def dependencies(self) -> list[UUID]:
         amplitudes = [
@@ -1774,6 +2168,41 @@ class Morph(BaseModel):
     )
 
 
+class SeismicDesign(BaseModel):
+    """ASCE 7-16 seismic parameters for a frame study (ADR 0079 step 4): the design
+    spectrum's S_DS, S_D1 (g) and T_L (s), S1 (g) for 12.8-6, the system's R, C_d and the
+    importance factor I_e, the structure type for T_a (Table 12.8-2) and for the drift
+    limit (Table 12.12-1) with the risk category. `mass_cases` is the seismic weight W
+    beyond the members' own (cases' gravity loads, factored: D at 1, a storage live load
+    at 0.25). The ELF procedure writes story forces as loads (case Ex or Ey); a modal step
+    with `response_spectrum` adds the CQC-combined response, scaled to `scale_to_elf` of
+    the ELF base shear (12.9.1.4: 1.0 in 7-16), to each combination with Ex or Ey."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    sds: float = Field(gt=0, description="S_DS, design short-period acceleration (g)")
+    sd1: float = Field(gt=0, description="S_D1, design 1 s acceleration (g)")
+    s1: float = Field(default=0.0, ge=0, description="S_1, mapped MCE_R 1 s acceleration (g)")
+    tl: float = Field(default=8.0, gt=0, description="T_L, long-period transition (s)")
+    r: float = Field(gt=0, description="response modification coefficient R (Table 12.2-1)")
+    cd: float = Field(gt=0, description="deflection amplification factor C_d")
+    ie: float = Field(default=1.0, gt=0, description="importance factor I_e (Table 1.5-2)")
+    risk_category: Literal["I", "II", "III", "IV"] = "II"
+    structure: Literal["steel_moment_frame", "concrete_moment_frame",
+                       "steel_eccentrically_braced", "steel_buckling_restrained",
+                       "other"] = Field(default="other", description="for C_t and x")  # fmt: skip
+    drift_structure: Literal["low_rise_with_partitions", "masonry_cantilever_shear_wall",
+                             "other_masonry_shear_wall", "other"] = Field(
+        default="other", description="the row of Table 12.12-1")  # fmt: skip
+    period: float | None = Field(default=None, gt=0, description="the fundamental period "
+                                 "(s) to use; unset: the modal one, else T_a")  # fmt: skip
+    mass_cases: dict[str, float] = Field(default_factory=lambda: {"D": 1.0},
+                                         description="load cases in W, with factors")  # fmt: skip
+    scale_to_elf: float = Field(default=1.0, gt=0, description="modal base shear scaled up to "
+                                "this share of the ELF one (12.9.1.4.1)")  # fmt: skip
+    damping: float = Field(default=0.05, gt=0, lt=1, description="modal damping for CQC")
+
+
 class Study(ProjectObject):
     kind: ClassVar[str] = "study"
 
@@ -1797,6 +2226,25 @@ class Study(ProjectObject):
     # settings_schema) and expert pass-through ({solver: {path: value}}).
     solver_settings: dict[str, dict[str, float | int | str | bool]] = Field(default_factory=dict)
     expert_settings: dict[str, dict[str, str]] = Field(default_factory=dict)
+    combinations: list[LoadCombination] = Field(
+        default_factory=list, description="load combinations solved, one result step each "
+        "(ADR 0079 step 2; PyNite); empty: every load at its value")  # fmt: skip
+    seismic: SeismicDesign | None = Field(
+        default=None, description="ASCE 7 seismic parameters: ELF loads, the response "
+        "spectrum, drift (ADR 0079 step 4)")  # fmt: skip
+    weak_springs: Literal["auto", "always", "never"] = Field(
+        default="auto", description="small springs to ground on bodies held only by sliding "
+        "contact (ADR 0080): auto those, always bodies held by nothing too, never")  # fmt: skip
+    weak_spring_factor: float = Field(
+        default=1e-6, gt=0, description="each weak spring's stiffness: this times E times the "
+        "body's size")  # fmt: skip
+    weak_spring_limit: float = Field(
+        default=1e-3, gt=0, description="the share of the load the springs may carry before "
+        "the run warns that the body never seated")  # fmt: skip
+    preload_step: Literal["auto", "always", "never"] = Field(
+        default="auto", description="tighten the bolts in a step of their own before the "
+        "loads (puzzle.preload): auto when bolts are tightened and the first static step "
+        "also loads, on CalculiX and Code_Aster; always; never (with the loads)")  # fmt: skip
 
     def all_solvers(self) -> list[str]:
         return [self.solver, *(self.shootout.solvers if self.shootout else [])]
@@ -1932,6 +2380,25 @@ class FatigueSettings(BaseModel):
         return self
 
 
+class EquationInput(BaseModel):
+    """A value an equation reads by name from elsewhere in the project: the number an
+    operator or result tool gives on its output `port` (the equation's case is its
+    source, A; these are B, C... or names of their own)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(default="B", description="the name the expression uses")
+    source: UUID = Field(description="an operator, a result tool or a parameter set")
+    port: str = Field(default="out", description="its output")
+
+    @field_validator("name")
+    @classmethod
+    def _identifier(cls, name: str) -> str:
+        if not name.isidentifier():
+            raise ValueError(f"'{name}' is not a name an equation can use (letters, digits, _)")
+        return name
+
+
 class ResultDefinition(ProjectObject):
     """A derived result (ADR 0025), evaluated from stored runs when shown, never stored.
 
@@ -1954,6 +2421,9 @@ class ResultDefinition(ProjectObject):
     source_step: int = -1
     expression: str | None = None
     unit: str | None = None
+    # An equation's values from elsewhere in the project (the maintainer, 2026-11-08): each
+    # an operator's or result tool's single number, by the name the expression uses (B).
+    inputs: list[EquationInput] = Field(default_factory=list)
     fatigue: FatigueSettings | None = None
     # ADR 0066 phase 2: the target error the refinement ratio is for (0.02 = 2 %)
     error_target: float = Field(default=0.02, gt=0, lt=1)
@@ -1980,7 +2450,7 @@ class ResultDefinition(ProjectObject):
         if self.fatigue is not None:
             for b in self.fatigue.blocks:
                 own += [b.combination] if b.combination else [b.case.study]
-        return own + [c.study for c in self.cases]
+        return own + [c.study for c in self.cases] + [i.source for i in self.inputs]
 
 
 class ConstructionGeometry(ProjectObject):
@@ -2012,6 +2482,11 @@ class ConstructionGeometry(ProjectObject):
         default="yz", description="plane, with axes: which of the system's planes"
     )
     offset: float = Field(default=0.0, description="plane, with axes: along its normal (m)")
+    made_from: str | None = Field(
+        default=None,
+        description='what it was placed on, in words ("face Tip (Bar)"), shown only: the '
+        "numbers above are what it is",
+    )
     drives: dict[str, str] = Field(
         default_factory=dict,
         description="values a parameter sets (ADR 0062 phase 3, row D6): offset, or "
@@ -2210,12 +2685,19 @@ class Operator(ProjectObject):
     `convert_units` (`column`, `unit`), `round` (`decimals`, `significant`), `group`
     (`by`, `aggregations`) and `to_number` (`column`, `reduction`).
 
+    Curves (ADR 0071 decision 3, `operators.series`): arithmetic, utilisation, safety
+    factor and margin on curves or numbers, `normalise`, `curve_formula`,
+    `curve_from_table`, `over_steps`, `at_step` and `compare_steps` (`step`,
+    `comparison`), `envelope`, `match_x`, `area_under`, `slope`, `limit_line`,
+    `annotate` (`reduction`, `note`).
+
     Which inputs and settings each type takes is `puzzle.operators.TYPES`.
     """
 
     kind: ClassVar[str] = "operator"
 
-    type: Literal["reduce", "filter", "check", "panel", "plot", "export", "number", "slider",
+    type: Literal["reduce", "filter", "check", "panel", "plot", "export", "report", "number",
+                  "slider",
                   "series", "range", "expression", "table", "list", "pairs",
                   "random", "result_table", "points_table", "file", "columns",
                   "filter_rows", "sort", "top_n", "new_column", "convert_units", "round",
@@ -2225,8 +2707,25 @@ class Operator(ProjectObject):
                   "contact_table", "bolt_table", "nearest", "section", "divide",
                   "clearance", "text", "preview", "toggle", "choice", "slider2d",
                   "merge_points", "thin_points", "intersection", "points", "grid",
-                  "profile", "script"]  # fmt: skip
+                  "profile", "script", "model_value",
+                  # ADR 0071 decision 3: curves (operators.series)
+                  "divide_by", "subtract", "multiply", "add", "utilisation",
+                  "safety_factor", "margin", "normalise", "curve_formula", "field_formula",
+                  "slice", "clip", "stream", "glyph",
+                  "contour",
+                  "curve_from_table", "over_steps", "at_step", "compare_steps",
+                  "envelope", "match_x", "area_under", "slope", "limit_line",
+                  "annotate"]  # fmt: skip
     inputs: dict[str, OperatorInput] = Field(default_factory=dict)
+    comparison: Literal["difference", "ratio"] = Field(
+        default="difference", description="compare with step: each step less the "
+        "reference step's, or divided by it")  # fmt: skip
+    note: str = Field(default="", description="annotate: the label at the marked point; "
+                      "none: its value")  # fmt: skip
+    # ADR 0071 step 3: Model value reads `property` (a dotted path, operators.model_values)
+    # from the object `target` names: a material's yield strength, a load's value ...
+    property: str = Field(default="", description="model_value: the value read from "
+                          "`target`, a dotted path such as properties.yield_strength")  # fmt: skip
     # ADR 0062 phase 4: a Python script, run apart in a trusted project
     code: str = Field(default="out = a", description="script: Python; inputs a, b, c, d "
                       "by name, it sets out")  # fmt: skip
@@ -2592,12 +3091,25 @@ class TreeGroup(ProjectObject):
     """A folder in the model tree, under one section's heading ("Studies", "Results",
     ...): only how the tree is organised, never an input to a solve. `members` are the
     keys of what it holds: object ids, "run:<run id>", "sweep:<study id>", or other
-    groups' ids (a group inside a group)."""
+    groups' ids (a group inside a group). A group may also sit inside an object: then
+    `section` is a geometry's or component's id, or "<component id>/<physics type>", and
+    its members are "selection:<name>", "part:<name>", "contact:<name>",
+    "connector:<name>", "assignment:<selection>", "beam:<selection>",
+    "shell:<selection>" or "feature:<type>:<selection>"."""
 
     kind: ClassVar[str] = "group"
 
-    section: str = Field(description="the tree section's heading it sits under")
+    section: str = Field(
+        description="the tree section's heading it sits under, or the object (an id, or "
+        "'<component id>/<physics type>') whose items it holds"
+    )
     members: list[str] = Field(default_factory=list)
+    folder: str | None = Field(
+        default=None,
+        description="inside an object: the default folder it was made in (a component's "
+        "geometry, materials or fasteners; a physics' contacts or loads; a geometry's bodies "
+        "or selections). Unset: the folder its members are in.",
+    )
 
 
 class TreeLabels(ProjectObject):
@@ -2786,6 +3298,26 @@ class Project:
                 part.geometry = self.add(local).id
         return self.add(copy)
 
+    def copy_study(self, study_id: UUID, name: str, component: UUID | None = None) -> Study:
+        """Duplicate a study: its steps, settings, sweeps and solver, under a new name,
+        on the same component or on `component` (a duplicated component's studies). Its
+        runs are not copied: they belong to the original's run key."""
+        original = self.get(study_id, Study)
+        update = {"id": uuid4(), "name": name}
+        if component is not None:
+            update["component"] = component
+        return self.add(original.model_copy(deep=True, update=update))
+
+    def unique_name(self, wanted: str) -> str:
+        """`wanted`, or `wanted 2`, `wanted 3`... when an object already has the name."""
+        taken = {o.name for o in self.objects.values()}
+        if wanted not in taken:
+            return wanted
+        n = 2
+        while f"{wanted} {n}" in taken:
+            n += 1
+        return f"{wanted} {n}"
+
     def validate(self) -> list[str]:
         """Return human-readable problems; an empty list means the project is consistent."""
         return [p.message for p in self.problems()]
@@ -2826,6 +3358,9 @@ class Project:
             "remote_displacement",
             "elastic_support",
             "compression_only_support",
+            "node_spring",  # a frame's spring support (ADR 0079)
+            "symmetry",  # ADR 0081: holds the plane's normal
+            "antisymmetry",
         )
         held = any(f.type in holding for p in solid for f in p.features)
         held = held or any(c.ground for c in comp.connectors)  # bolts to ground (ADR 0050)

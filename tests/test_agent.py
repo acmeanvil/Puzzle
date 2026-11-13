@@ -232,7 +232,9 @@ def test_openai_compatible_endpoint(project):
 
 def test_settings_file_and_environment(tmp_path, monkeypatch):
     path = tmp_path / "agent.toml"
-    path.write_text('provider = "openai"\nmodel = "qwen3:8b"\nsend_images = true\n')
+    path.write_text(
+        'provider = "openai"\nmodel = "qwen3:8b"\nsend_images = true\n', encoding="utf-8"
+    )
     s = load_settings(path)
     assert (s.provider, s.model, s.send_images) == ("openai", "qwen3:8b", True)
     monkeypatch.setenv("PUZZLE_AGENT_MODEL", "llama3.2")
