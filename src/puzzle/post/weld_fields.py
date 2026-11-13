@@ -70,7 +70,8 @@ def in_frame(wp, line: np.ndarray, twist: np.ndarray | None = None) -> np.ndarra
 def finish(results, project, comp, mesh) -> None:
     """Add the weld fields to each step of `results` with a displacement."""
     welds = [w for w in getattr(comp, "welds", []) if w.formulation == "line"]
-    if not welds:
+    beads = [w for w in getattr(comp, "welds", []) if w.formulation == "modelled"]
+    if not welds and not beads:
         return
     from puzzle.adapters.weld_pairs import weld_pairs
 
@@ -80,7 +81,7 @@ def finish(results, project, comp, mesh) -> None:
             pairs.append(weld_pairs(project, comp, mesh, w))
         except Exception:  # noqa: BLE001 - results are extras: a run never fails on them
             continue
-    if not pairs:
+    if not pairs and not beads:
         return
     for step in results.steps:
         u = step.fields.get("displacement")
@@ -94,6 +95,23 @@ def finish(results, project, comp, mesh) -> None:
             f = pair_forces(wp, u)
             moment = np.cross(wp.xa, f).sum(axis=0)
             totals.append([*f.sum(axis=0), float(np.linalg.norm(line, axis=1).max()), *moment])
+        stress = step.fields.get("stress")
+        for w in beads:  # ADR 0078 step 4: from the section through the bead's throat
+            try:
+                got = None
+                if stress is not None:
+                    got = (groove(mesh, stress, w) if w.type == "groove"
+                           else modelled(project, mesh, stress, comp, w))  # fmt: skip
+            except Exception:  # noqa: BLE001 - as above
+                got = None
+            if got is None:
+                continue
+            root, line_rows, force, moment = got
+            ids.append(root)
+            rows.append(line_rows)
+            totals.append([*force, float(line_rows[:, 3].max()), *moment])
+        if not totals:
+            continue
         step.fields["weld_line_force"] = Field(
             "weld_line_force", "node", LINE_COMPONENTS, np.concatenate(ids), np.vstack(rows)
         )
@@ -215,6 +233,7 @@ def summary(results, comp, step=None) -> list[dict]:
     chosen = steps[-1] if step is None else steps[step]
     g = chosen.fields["weld"]
     welds = [w for w in comp.welds if w.formulation == "line"]
+    welds += [w for w in comp.welds if w.formulation == "modelled"]
     return [
         {"weld": w.name, "force": [float(v) for v in g.values[i, :3]],
          "peak_line_force": float(g.values[i, 3])}
@@ -243,19 +262,24 @@ def results(project, comp, mesh, res, weld: str | None = None, step: int | None 
     line = chosen.fields["weld_line_force"]
     c = {name: i for i, name in enumerate(line.components)}
     order = np.argsort(line.ids)
-    welds = [w for w in comp.welds if w.formulation == "line"]
+    welds = [w for w in comp.welds if w.formulation in ("line", "modelled")]
     if weld is not None:
         welds = [w for w in welds if w.name == weld]
         if not welds:
-            raise PuzzleError(f"no light weld '{weld}' in {comp.name}", code="not_found")
+            raise PuzzleError(f"no weld '{weld}' in {comp.name}", code="not_found")
     out = []
     for w in welds:
-        wp = weld_pairs(project, comp, mesh, w)
+        wp = (weld_pairs(project, comp, mesh, w) if w.formulation == "line"
+              else groove_stations(mesh, w) if w.type == "groove"
+              else bead_stations(project, comp, mesh, w))  # fmt: skip
+        if wp is None:
+            continue
         rows = line.values[order[np.searchsorted(line.ids, wp.stations, sorter=order)]]
         size = rows[:, c["magnitude"]]
         at = int(np.argmax(size))
         out.append({
             "weld": w.name,
+            "formulation": w.formulation,
             "length_m": wp.length,
             "force_N": [float(v) for v in (rows[:, [c["x"], c["y"], c["z"]]]
                                            * wp.widths[:, None]).sum(axis=0)],
@@ -341,3 +365,384 @@ def fatigue(project, comp, mesh, res, weld: str, category: str = "F", cycles: fl
                   "at_m": [float(v) for v in mesh.node_coords(nodes[[k]])[0]],
                   "where": "the base metal at the weld's footprint (the largest principal "
                   "stress range; mesh-dependent)"}  # fmt: skip
+
+
+def structural_stress(project, comp, mesh, res, weld: str, steps: tuple[int, ...] = (),
+                      thickness: float | None = None, cycles: float | None = None,
+                      **options) -> dict:  # fmt: skip
+    """A light weld's fatigue at the attachment's toe by ASME VIII-2 5.5.5 (ADR 0078 step
+    5): the structural stress normal to the crack plane through the path's part at the
+    weld, from the weld's own line forces (they are the nodal forces the attachment
+    hands the weld, so mesh-insensitive as the method wants): membrane f/t, f the line
+    force along the attachment (in its plane, normal to the path, + pulling away), and
+    bending 6 m/t², m the moment about the path (`twist`). Their ranges between two
+    steps (or from zero) at each station go through `weld_strength.asme_cycles`;
+    `thickness` is the attachment's (a shell's section by default). With `cycles`, the
+    damage n/N at the worst station."""
+    from puzzle import weld_strength
+    from puzzle.adapters.weld_pairs import weld_pairs
+    from puzzle.errors import PuzzleError
+
+    found = [s for s in res.steps if "weld_line_force" in s.fields]
+    if not found:
+        raise PuzzleError("this run has no weld results", code="not_found")
+    chosen = list(steps) or [len(found)]
+    if len(chosen) > 2 or any(not 1 <= k <= len(found) for k in chosen):
+        raise PuzzleError(f"steps: one or two of 1..{len(found)}", code="invalid")
+    w = next((x for x in comp.welds if x.name == weld), None)
+    if w is None:
+        raise PuzzleError(f"no weld '{weld}' in {comp.name}", code="not_found")
+    part = w.path.split("/", 1)[0]
+    if thickness is None:
+        section = next((s for s in comp.shell_sections
+                        if s.selection.split("/", 1)[0] == part), None)  # fmt: skip
+        if section is None:
+            raise PuzzleError(f"give the thickness of {part} at the toe (it is no shell)",
+                              code="invalid")  # fmt: skip
+        thickness = section.thickness.to_si()
+    if w.formulation == "modelled":  # a bead's leg A, or a groove's joint, into the part
+        wp = (groove_stations(mesh, w) if w.type == "groove"
+              else bead_stations(project, comp, mesh, w))  # fmt: skip
+        if wp is None:
+            raise PuzzleError(f"weld '{weld}' isn't in this run's mesh", code="not_found")
+        into = wp.da
+    else:
+        wp = weld_pairs(project, comp, mesh, w)
+        # Into the attachment: the pairs' arms on the path's part, square to the path.
+        arm = wp.xa - wp.xyz[wp.station_of]
+        into = np.zeros_like(wp.xyz)
+        np.add.at(into, wp.station_of, arm)
+        into -= np.einsum("ij,ij->i", into, wp.tangent)[:, None] * wp.tangent
+        into /= np.maximum(np.linalg.norm(into, axis=1, keepdims=True), 1e-300)
+
+    def at(k):
+        f = found[k - 1].fields["weld_line_force"]
+        c = {n: i for i, n in enumerate(f.components)}
+        order = np.argsort(f.ids)
+        rows = f.values[order[np.searchsorted(f.ids, wp.stations, sorter=order)]]
+        line = rows[:, [c["x"], c["y"], c["z"]]]
+        membrane = np.einsum("ij,ij->i", line, into) / thickness
+        twist = rows[:, c["twist"]]
+        if w.formulation == "modelled" and w.type == "groove":
+            # the path runs along the plate's surface: the moment about its mid-plane
+            # is the path's less the line force's across the half depth
+            twist = twist - np.einsum("ij,ij->i", np.cross(wp.depth_dir * w.leg.to_si() / 2,
+                                                           line), wp.tangent)  # fmt: skip
+        bending = 6 * twist / thickness**2
+        return membrane, bending
+
+    m1, b1 = at(chosen[0])
+    m2, b2 = at(chosen[1]) if len(chosen) == 2 else (np.zeros_like(m1), np.zeros_like(b1))
+    stations = []
+    for i in range(len(wp.stations)):
+        top = [m1[i] + abs(b1[i]), m2[i] + abs(b2[i])]
+        row = weld_strength.asme_cycles(m1[i] - m2[i], b1[i] - b2[i], thickness,
+                                        smax=max(top), smin=min(top), **options)  # fmt: skip
+        stations.append({"at_m": [float(v) for v in wp.xyz[i]],
+                         "membrane_range_Pa": float(m1[i] - m2[i]),
+                         "bending_range_Pa": float(b1[i] - b2[i]), **row})  # fmt: skip
+    worst = min(range(len(stations)), key=lambda i: stations[i]["cycles"])
+    out = {"weld": w.name, "steps": chosen, "thickness_m": float(thickness),
+           "where": f"the toe on {part}", "clause": weld_strength.ASME,
+           "worst": stations[worst], "stations": stations}  # fmt: skip
+    if cycles is not None:
+        out["cycles"] = float(cycles)
+        out["damage"] = float(cycles / stations[worst]["cycles"])
+    return out
+
+
+def _unit(v):
+    n = np.linalg.norm(v, axis=-1, keepdims=True)
+    return np.divide(v, n, out=np.zeros_like(v), where=n > 0)
+
+
+def _pieces(project, comp, weld) -> list[dict]:
+    """A modelled bead's `weld_bead` steps as pieces of its path: the polyline (closed
+    back to its start), its cumulative lengths, where it starts along the weld (`s0`),
+    the legs at each point and the root's cut-back."""
+    from puzzle.model.schema import Geometry
+
+    part = next((p for p in comp.parts if p.name == f"{weld.name} bead"), None)
+    geo = project.objects.get(part.geometry) if part is not None else None
+    if not isinstance(geo, Geometry):
+        return []
+    out = []
+    for op in geo.history:
+        if op.kind != "weld_bead":
+            continue
+        a = op.args
+        pts = np.asarray(a["points"], float)
+        n = len(pts)
+        va = np.asarray(a["a"], float).reshape(-1, 3)
+        vb = np.asarray(a["b"], float).reshape(-1, 3)
+        va, vb = (np.repeat(v, n, axis=0) if len(v) == 1 else v for v in (va, vb))
+        if a.get("closed"):
+            pts, va, vb = (np.vstack([x, x[:1]]) for x in (pts, va, vb))
+        cum = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(pts, axis=0), axis=1))])
+        out.append({"poly": pts, "cum": cum, "s0": float(a.get("s0", 0.0)), "a": va, "b": vb,
+                    "root": float(a.get("root", 0.0)),
+                    "closed": bool(a.get("closed"))})  # fmt: skip
+    return out
+
+
+def _clipped(a, b, points):
+    """Each point's nearest point on the segment a-b."""
+    ab = b - a
+    t = np.clip((points - a) @ ab / max(float(ab @ ab), 1e-300), 0.0, 1.0)
+    return a + np.outer(t, ab)
+
+
+def _legs_at(piece, k: int, f):
+    """The leg directions on segment k at fraction f along it, square to it."""
+    t = _unit(piece["poly"][k + 1] - piece["poly"][k])
+    a = (1 - f) * piece["a"][k] + f * piece["a"][k + 1]
+    b = (1 - f) * piece["b"][k] + f * piece["b"][k + 1]
+    da, db = _unit(a - (a @ t) * t), _unit(b - (b @ t) * t)
+    return t, da, db
+
+
+def bead_stations(project, comp, mesh, weld):
+    """A modelled weld's stations (ADR 0078 step 4): the bead's root nodes (on its root
+    face's edge along leg A, or where its legs meet) in order along its path, with what
+    the checks read off a light weld's pairs (xyz, s, widths, tangent, bisector, length)
+    and its pieces for the throat cuts; None when the bead isn't meshed."""
+    from types import SimpleNamespace
+
+    from puzzle.adapters.weld_pairs import _project
+
+    part = f"{weld.name} bead"
+    body, la, lb = (mesh.groups.get(n) for n in (part, f"{part}/Leg A", f"{part}/Leg B"))
+    pieces = _pieces(project, comp, weld)
+    if body is None or la is None or lb is None or not pieces:
+        return None
+    gap = mesh.groups.get(f"{part}/Root")
+    root = np.intersect1d(la.node_ids if gap is None else gap.node_ids,
+                          lb.node_ids if gap is None else la.node_ids).astype(np.int64)  # fmt: skip
+    if len(root) < 2:
+        return None
+    rx = mesh.node_coords(root)
+    fits = [_project(rx, pc["poly"], pc["cum"]) for pc in pieces]
+    which = np.argmin(np.stack([d for _s, d, _n in fits]), axis=0)
+    s = np.array([pieces[w]["s0"] + fits[w][0][i] for i, w in enumerate(which)])
+    order = np.argsort(s)
+    root, rx, s, which = root[order], rx[order], s[order], which[order]
+    n = len(root)
+    widths = np.zeros(n)
+    tangent, da, db = np.zeros((n, 3)), np.zeros((n, 3)), np.zeros((n, 3))
+    for w, pc in enumerate(pieces):
+        idx = np.flatnonzero(which == w)
+        if not len(idx):
+            continue
+        lo, hi = pc["s0"], pc["s0"] + pc["cum"][-1]
+        local = s[idx]
+        if pc["closed"]:  # the first and last stations share the seam
+            nxt, prv = np.roll(local, -1), np.roll(local, 1)
+            nxt[-1] += hi - lo
+            prv[0] -= hi - lo
+            widths[idx] = (nxt - prv) / 2
+        else:
+            edges = np.concatenate([[lo], (local[1:] + local[:-1]) / 2, [hi]])
+            widths[idx] = np.diff(edges)
+        for i in idx:
+            sl = s[i] - pc["s0"]
+            k = min(max(int(np.searchsorted(pc["cum"], sl, side="right")) - 1, 0),
+                    len(pc["cum"]) - 2)  # fmt: skip
+            f = (sl - pc["cum"][k]) / max(pc["cum"][k + 1] - pc["cum"][k], 1e-300)
+            tangent[i], da[i], db[i] = _legs_at(pc, k, min(max(f, 0.0), 1.0))
+    bisector = _unit(da + db)
+    return SimpleNamespace(stations=root, xyz=rx, s=s, widths=widths, tangent=tangent,
+                           bisector=bisector, da=da, db=db, which=which, pieces=pieces,
+                           length=float(sum(pc["cum"][-1] for pc in pieces)),
+                           closed=len(pieces) == 1 and pieces[0]["closed"])  # fmt: skip
+
+
+def modelled(project, mesh, stress, comp, weld):
+    """A modelled weld's line forces (ADR 0078 step 4) from sections through its throat:
+    per straight segment of its path, the plane holding the segment's root line and the
+    bisector between its legs, cut through the bead's own elements, the triangles kept
+    that lie on that segment. Each triangle's traction force (from the leg-A side onto
+    the leg-B side, the other part's: the force on the other part, as a light weld's)
+    and its moment about the root line go to the nearest station along the path.
+    Returns (station ids, rows of LINE_COMPONENTS, the total force, its moment about the
+    origin), or None when the bead isn't in this mesh."""
+    from puzzle.errors import PuzzleError
+    from puzzle.mesh import Mesh
+    from puzzle.post.probes import _cut
+    from puzzle.results.model import StepResult
+
+    frame = bead_stations(project, comp, mesh, weld)
+    if frame is None:
+        return None
+    part = f"{weld.name} bead"
+    body = mesh.groups[part]
+    blocks = [b for b in body.blocks(mesh) if b.dim == 3]
+    own = Mesh(mesh.node_ids, mesh.coords, blocks, {part: body})
+    step = StepResult(0, "stationary", 0.0, None, {"stress": stress})
+    names = ("xx", "yy", "zz", "xy", "yz", "zx")
+    n = len(frame.stations)
+    total, turning = np.zeros((n, 3)), np.zeros(n)
+    force, moment = np.zeros(3), np.zeros(3)
+    reach = 3 * max(np.linalg.norm(pc["a"], axis=1).max() for pc in frame.pieces)
+    for w, pc in enumerate(frame.pieces):
+        mine = np.flatnonzero(frame.which == w)
+        if not len(mine):
+            continue
+        for k in range(len(pc["cum"]) - 1):
+            t, da, db = _legs_at(pc, k, 0.5)
+            m = _unit(da + db)
+            q = _unit(np.cross(t, m))
+            if q @ da < 0:
+                q = -q
+            origin = (pc["poly"][k] + pc["poly"][k + 1]) / 2 + pc["root"] * (da + db) / 2
+            try:
+                cut, faces, areas, centres, nn = _cut(own, step, origin, q)
+            except PuzzleError:
+                continue
+            # The triangles on this segment: between the mitre planes at its two corners
+            # (normal to the sum of the tangents there: the two segments' throat planes,
+            # each the other's mirror in it, meet on it, so the cuts close up), or within
+            # an open piece's ends (the plane runs on to an intermittent weld's next
+            # pieces on its line); and near its root line.
+            along = (centres - pc["poly"][k]) @ t
+            span = pc["cum"][k + 1] - pc["cum"][k]
+            near = pc["poly"][k] + np.outer(np.clip(along, 0.0, span), t)
+            on = np.linalg.norm(centres - near, axis=1) < reach
+            count = len(pc["cum"]) - 1
+            for corner, other, before in ((k, k - 1, True), (k + 1, k + 1, False)):
+                if pc["closed"] or 0 < corner < count:
+                    tj = _unit(pc["poly"][other % count + 1] - pc["poly"][other % count])
+                    side = (centres - pc["poly"][corner % count]) @ (t + tj)
+                    on &= side >= 0 if before else side <= 0
+                else:
+                    on &= along >= -1e-9 * span if before else along <= span * (1 + 1e-9)
+            sl = pc["cum"][k] + np.clip(along, 0.0, span)
+            if not on.any():
+                continue
+            sv = np.asarray(cut.point_data["stress"], float).reshape(cut.n_points, -1)
+            xx, yy, zz, xy, yz, zx = (sv[:, stress.components.index(c)] for c in names)
+            traction = np.stack([xx * nn[0] + xy * nn[1] + zx * nn[2],
+                                 xy * nn[0] + yy * nn[1] + yz * nn[2],
+                                 zx * nn[0] + yz * nn[1] + zz * nn[2]], axis=1)  # fmt: skip
+            # sigma n, n toward leg A: the force on the leg-B side (the other part's)
+            f = (traction[faces].mean(axis=1) * areas[:, None])[on]
+            c = centres[on]
+            twist = np.einsum("ij,j->i", np.cross(c - near[on], f), t)
+            gs = pc["s0"] + sl[on]
+            nearest = mine[np.argmin(np.abs(gs[:, None] - frame.s[mine][None, :]), axis=1)]
+            np.add.at(total, nearest, f)
+            np.add.at(turning, nearest, twist)
+            force += f.sum(axis=0)
+            moment += np.cross(c, f).sum(axis=0)
+    width = np.maximum(frame.widths, 1e-300)
+    line = total / width[:, None]
+    q = np.cross(frame.tangent, frame.bisector)
+    rows = np.column_stack([
+        np.einsum("ij,ij->i", line, frame.tangent), np.einsum("ij,ij->i", line, q),
+        np.einsum("ij,ij->i", line, frame.bisector), np.linalg.norm(line, axis=1), line,
+        turning / width,
+    ])  # fmt: skip
+    return frame.stations, rows, force, moment
+
+
+def groove_stations(mesh, weld):
+    """A modelled groove weld's stations: its path's nodes in order along it, with the
+    joint's plane (fitted to the path's part's face) and `da` from the joint into the
+    path's part; None when its faces aren't meshed."""
+    from types import SimpleNamespace
+
+    from puzzle.adapters.weld_pairs import _chain, _project
+
+    path, face = mesh.groups.get(weld.path), mesh.groups.get(weld.faces[0])
+    other = mesh.groups.get(weld.faces[1].split("/", 1)[0])
+    if path is None or face is None or other is None:
+        return None
+    corners, closed = _chain(path, mesh)
+    poly = mesh.node_coords(corners)
+    if closed:
+        poly = np.vstack([poly, poly[:1]])
+    cum = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(poly, axis=0), axis=1))])
+    nodes = np.unique(path.node_ids.astype(np.int64))
+    xyz = mesh.node_coords(nodes)
+    s, _d, _near = _project(xyz, poly, cum)
+    order = np.argsort(s)
+    nodes, xyz, s = nodes[order], xyz[order], s[order]
+    if closed and len(s) > 1 and cum[-1] - s[-1] < 1e-9 * cum[-1]:
+        nodes, xyz, s = nodes[:-1], xyz[:-1], s[:-1]
+    fx = mesh.node_coords(face.node_ids)
+    centre = fx.mean(axis=0)
+    normal = np.linalg.svd(fx - centre)[2][-1]
+    toward = mesh.node_coords(other.node_ids).mean(axis=0) - centre
+    if normal @ toward < 0:
+        normal = -normal  # out of the path's part, toward the other
+    n = len(nodes)
+    tangent = np.zeros((n, 3))
+    for i in range(n):
+        k = min(max(int(np.searchsorted(cum, s[i], side="right")) - 1, 0), len(cum) - 2)
+        tangent[i] = _unit(poly[k + 1] - poly[k])
+    edges = (s[1:] + s[:-1]) / 2
+    widths = np.diff(np.concatenate([[0.0], edges, [cum[-1]]]))
+    if weld.pattern == "intermittent":
+        welded = sum(min(weld.segment.to_si(), cum[-1] - k * weld.pitch.to_si())
+                     for k in range(int(cum[-1] // weld.pitch.to_si()) + 1)
+                     if k * weld.pitch.to_si() < cum[-1])  # fmt: skip
+    else:
+        welded = float(cum[-1])
+    into = np.tile(-normal, (n, 1))
+    # down the joint from the path: in the joint's plane, square to the path, toward
+    # the middle of the path's part's face
+    down = np.cross(normal, tangent)
+    down *= np.sign(np.einsum("ij,j->i", down, centre - xyz.mean(axis=0)) + 1e-300)[:, None]
+    return SimpleNamespace(stations=nodes, xyz=xyz, s=s, widths=widths, tangent=tangent,
+                           depth_dir=down,
+                           bisector=_unit(np.cross(tangent, normal)), da=into, normal=normal,
+                           poly=poly, cum=cum, length=welded, closed=closed)  # fmt: skip
+
+
+def groove(mesh, stress, weld):
+    """A modelled groove weld's line forces: the section parallel to the joint a
+    twentieth of its depth inside the path's part, cut through that part's elements and
+    kept within the groove's depth of the path: the force each triangle passes on toward
+    the other part, and its moment about the path, at the nearest station. As
+    `modelled`'s return; `throat_normal` here is along the joint's normal."""
+    from puzzle.adapters.weld_pairs import _project
+    from puzzle.mesh import Mesh
+    from puzzle.post.probes import _cut
+    from puzzle.results.model import StepResult
+
+    frame = groove_stations(mesh, weld)
+    if frame is None:
+        return None
+    part = weld.path.split("/", 1)[0]
+    body = mesh.groups[part]
+    blocks = [b for b in body.blocks(mesh) if b.dim == 3]
+    own = Mesh(mesh.node_ids, mesh.coords, blocks, {part: body})
+    step = StepResult(0, "stationary", 0.0, None, {"stress": stress})
+    depth = weld.leg.to_si()
+    origin = frame.xyz[0] - frame.normal * depth / 20  # the path lies on the joint
+    cut, faces, areas, centres, nn = _cut(own, step, origin, frame.normal)
+    sl, dist, near = _project(centres, frame.poly, frame.cum)
+    on = dist <= depth * 1.05
+    sv = np.asarray(cut.point_data["stress"], float).reshape(cut.n_points, -1)
+    xx, yy, zz, xy, yz, zx = (sv[:, stress.components.index(c)]
+                              for c in ("xx", "yy", "zz", "xy", "yz", "zx"))  # fmt: skip
+    traction = np.stack([xx * nn[0] + xy * nn[1] + zx * nn[2], xy * nn[0] + yy * nn[1] + yz * nn[2],
+                         zx * nn[0] + yz * nn[1] + zz * nn[2]], axis=1)  # fmt: skip
+    # sigma n, n toward the other part, is the force on the path's part's side from it:
+    # its opposite is what the joint passes on to the other part
+    f = -(traction[faces].mean(axis=1) * areas[:, None])[on]
+    c = centres[on]
+    t = frame.tangent[0]
+    twist = np.einsum("ij,j->i", np.cross(c - near[on], f), t)
+    nearest = np.argmin(np.abs(sl[on][:, None] - frame.s[None, :]), axis=1)
+    n = len(frame.stations)
+    total, turning = np.zeros((n, 3)), np.zeros(n)
+    np.add.at(total, nearest, f)
+    np.add.at(turning, nearest, twist)
+    width = np.maximum(frame.widths, 1e-300)
+    line = total / width[:, None]
+    rows = np.column_stack([
+        np.einsum("ij,ij->i", line, frame.tangent), line @ frame.normal,
+        np.einsum("ij,ij->i", line, frame.bisector), np.linalg.norm(line, axis=1), line,
+        turning / width,
+    ])  # fmt: skip
+    return frame.stations, rows, f.sum(axis=0), np.cross(c, f).sum(axis=0)

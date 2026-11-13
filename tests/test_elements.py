@@ -24,7 +24,21 @@ def test_rows_keep_to_the_vocabularies():
 
 # Written through an element choice (ADR 0082 step 3): the library names them, the
 # adapter writes what it is handed; each has its benchmark in test_element_choice.py.
-CHOSEN = {"C3D8I", "3D_INCO_UPG", "POU_D_E", "3D_DIAG", "C3D20R", "3D_SI", "DST"}
+CHOSEN = {
+    "C3D8I",
+    "3D_INCO_UPG",
+    "POU_D_E",
+    "3D_DIAG",
+    "C3D20R",
+    "3D_SI",
+    "DST",
+    "S8R",
+    "B32R",
+    "C3D8R",
+    "Q4G",
+    "Taylor-Hood",
+    "p:2",
+}
 
 
 def test_chosen_elements_have_their_benchmark():

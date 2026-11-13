@@ -5,7 +5,8 @@ case.json (SI): nodes {id: [x, y, z]}; materials {key: [E, G, nu, rho]}; section
 [A, Iy, Iz, J]}; members [{name, i, j, material, section, y: the section's first axis,
 releases: 12 bools (i end's ux..rz, then j's)}]; supports {node: 6 bools}; springs
 {node: {dof: k}}; displacements {node: {dof: value}}; node_loads {node: {dof: value}};
-line_loads [{member, direction (FX, FY, FZ), w}].
+line_loads [{member, direction (FX, FY, FZ), w}]; quads [{name, nodes [i, j, m, n], t,
+material}] (MITC4 plates, ADR 0082); pressures [{quad, p, case}], PyNite's: along +z.
 
 results.json: nodes {id: [ux, uy, uz, rx, ry, rz]}; reactions {node: [6]}; members
 {name: [[N, Vy, Vz, T, My, Mz] at i, the same at j]} in the member's axes (x along it, y
@@ -88,6 +89,8 @@ def _build(case, loads: bool = True, weight_density: bool = False):
         member.rotation = _roll(member, m["y"])
         if any(m.get("releases", [])):
             model.def_releases(m["name"], *m["releases"])
+    for q in case.get("quads", []):
+        model.add_quad(q["name"], *q["nodes"], q["t"], q["material"])
     for node, held in case["supports"].items():
         model.def_support(node, *held)
     for node, springs in case.get("springs", {}).items():
@@ -103,6 +106,8 @@ def _build(case, loads: bool = True, weight_density: bool = False):
             model.add_node_load(node, dof, value)
     for load in case.get("point_loads", []):
         model.add_node_load(load["node"], load["direction"], load["P"], case=load["case"])
+    for load in case.get("pressures", []):
+        model.add_quad_surface_pressure(load["quad"], load["p"], case=load["case"])
     for load in case.get("line_loads", []):
         w = load["w"]
         model.add_member_dist_load(load["member"], load["direction"], w, w,

@@ -74,12 +74,42 @@ def test_incompatible_modes_unlock_linear_bricks(tmp_path, solver):
     assert unlocked == pytest.approx(exact, rel=0.02)
 
 
-@over("code_aster")
+@over("elmer")
+def test_p_elements_unlock_linear_tetrahedra(tmp_path, solver):
+    """Elmer's p:2 on the bar's linear tetrahedra: the same mesh's quadratic bases bend
+    where the linear ones lock."""
+    exact = _timoshenko(STEEL["poissons_ratio"].to_si())
+    plain, _run = _cantilever(tmp_path / "a", solver, element_order=1)
+    higher, run = _cantilever(tmp_path / "b", solver, "higher_order", element_order=1)
+    sif = next((tmp_path / "b" / "w").rglob("*.sif")).read_text(encoding="utf-8")
+    print(f"Elmer tet4 {plain / exact:.3f} of Timoshenko's, p:2 {higher / exact:.4f}")
+    assert 'Element = "p:2"' in sif
+    assert plain < 0.8 * exact  # linear tetrahedra lock
+    assert higher == pytest.approx(exact, rel=0.02)
+
+
+@over("calculix")
+def test_reduced_linear_bricks_converge_from_above(tmp_path, solver):
+    """CalculiX's C3D8R (one point, hourglass-controlled) against C3D8 on the bar's
+    cantilever: measured 1.035, 1.016, 1.003 of Timoshenko's at 2, 4 and 8 bricks through
+    the depth, where C3D8 locks from below (0.896, 0.966, 0.988)."""
+    exact = _timoshenko(STEEL["poissons_ratio"].to_si())
+    reduced, _run = _cantilever(tmp_path / "r", solver, "reduced", size=2.5,
+                                element_shape="hexahedra", element_order=1)  # fmt: skip
+    deck = next((tmp_path / "r" / "w").rglob("*.inp")).read_text(encoding="utf-8")
+    print(f"C3D8R at 4 through the depth: {reduced / exact:.4f} of Timoshenko's")
+    assert "TYPE=C3D8R" in deck
+    assert 1.0 < reduced / exact < 1.025
+
+
+@over("code_aster", "fenicsx")
 def test_mixed_elements_for_nearly_incompressible_bending(tmp_path, solver):
+    """Code_Aster's 3D_INCO_UPG and FEniCSx's Taylor-Hood P2-P1 at nu 0.4999 (plain P2
+    gave 0.983 on this mesh: the mixed form's gain is in the pressure, not the deflection)."""
     nu = 0.4999
     exact = _timoshenko(nu)
     got, run = _cantilever(tmp_path, solver, "mixed_up", nu=nu, size=2.5)
-    print(f"3D_INCO_UPG at nu {nu}: {got / exact:.4f} of Timoshenko's")
+    print(f"{solver} mixed u-p at nu {nu}: {got / exact:.4f} of Timoshenko's")
     assert got == pytest.approx(exact, rel=0.02)
 
 
@@ -127,6 +157,66 @@ def test_euler_bernoulli_beams(tmp_path, solver):
     got = -float(u.values[k, 2])
     print(f"POU_D_E tip {got:.8g} m against PL^3/3EI {exact:.8g}")
     assert got == pytest.approx(exact, rel=1e-6)
+
+
+@over("calculix")
+def test_reduced_integration_beams(tmp_path, solver):
+    """CalculiX's B32R chosen on a rectangular frame cantilever 1 m long, 50 × 100 mm, its
+    tip pushed across the 100 mm, ten elements: Timoshenko's PL³/3EI + PL/κGA, κ = 5/6,
+    as close as the default B32 (both expand into bricks of the section). B31R is refused:
+    its one-point bricks hourglass (6.3 times too soft)."""
+    from puzzle import frames
+    from puzzle.materials import add_library_material
+    from puzzle.model.schema import (
+        BeamSection,
+        Component,
+        MaterialAssignment,
+        MeshRecipe,
+        PartInstance,
+        Project,
+    )
+    from puzzle.project import save_project
+
+    pytest.importorskip("OCP")
+    length, force, b, h = 1.0, 1000.0, 0.05, 0.1
+    section = BeamSection(selection="F", shape="rectangle", width=q(b, "m"),
+                          height=q(h, "m"), orientation=(0.0, 1.0, 0.0))  # fmt: skip
+    p = Project(name="beam")
+    geo = p.add(frames.geometry("Frame", {"A": [0, 0, 0], "B": [length, 0, 0]},
+                                [["AB", "A", "B"]]))  # fmt: skip
+    steel = add_library_material(p, "structural_steel")
+    mesh = p.add(MeshRecipe(name="M", global_size=q(length / 10, "m"), element_order=2))
+    comp = p.add(Component(
+        name="Frame", parts=[PartInstance(name="F", geometry=geo.id)], mesh=mesh.id,
+        materials=[MaterialAssignment(material=steel.id, selection="F")],
+        beam_sections=[section], elements=[ElementChoice(selection="F", formulation="reduced")],
+        physics=[Physics(type="solid_mechanics",
+                         settings={"temperature_dependent_materials": False},
+                         features=[Feature(type="fixed", selection="F/A"),
+                                   Feature(type="force", selection="F/B",
+                                           values={"z": q(-force, "N")})])]))  # fmt: skip
+    study = p.add(Study(name="S", component=comp.id, solver="calculix",
+                        steps=[SolveStep(type="stationary")]))  # fmt: skip
+    tips = {}
+    for chosen in ("reduced", None):
+        comp.elements = [ElementChoice(selection="F", formulation=chosen)] if chosen else []
+        save_project(p, tmp_path / str(chosen))
+        run = run_study(p, study.id, tmp_path / str(chosen), tmp_path / f"w{chosen}")
+        deck = next((tmp_path / f"w{chosen}").rglob("*.inp")).read_text(encoding="utf-8")
+        assert ("TYPE=B32R" in deck) == (chosen == "reduced")
+        u = run.results.last("displacement")
+        k = int(np.argmax(run.mesh.node_coords(u.ids)[:, 0]))
+        tips[chosen] = -float(u.values[k, 2])
+    e = steel.properties["youngs_modulus"].to_si()
+    g = e / (2 * (1 + steel.properties["poissons_ratio"].to_si()))
+    exact = force * length**3 / (3 * e * b * h**3 / 12) + force * length / (5 / 6 * g * b * h)
+    got, plain = tips["reduced"], tips[None]
+    print(
+        f"B32R tip {got:.8g} m, B32 {plain:.8g}, Timoshenko {exact:.8g}: "
+        f"{100 * (got / exact - 1):+.3f} %, {100 * (plain / exact - 1):+.3f} %"
+    )
+    assert got == pytest.approx(exact, rel=0.015)
+    assert abs(got / exact - 1) <= abs(plain / exact - 1) + 1e-3
 
 
 @over("code_aster")
@@ -220,11 +310,14 @@ def test_the_elastica(tmp_path, solver):
 
 
 @over("code_aster", "calculix")
-def test_the_elastica_on_beams(tmp_path, solver):
+@pytest.mark.parametrize("dynamic", [False, True], ids=["static", "damped transient"])
+def test_the_elastica_on_beams(tmp_path, solver, dynamic):
     """The elastica again, on line elements (ADR 0082 decision 6): a 1 m frame cantilever,
     a 10 × 2 mm rectangle (thin about its bending axis), PL²/EI = 1 at its tip, large
     deflection. Code_Aster writes POU_D_T_GD with GROT_GDEP, CalculiX its beams under
-    NLGEOM: the tip 0.3017 L down and 0.0566 L in (Bisshopp & Drucker)."""
+    NLGEOM: the tip 0.3017 L down and 0.0566 L in (Bisshopp & Drucker). `dynamic`: the
+    load at once in a transient step, damped near 0.7 of critical in the first mode;
+    once still, the same shape."""
     pytest.importorskip("OCP")
     from puzzle import frames
     from puzzle.model.schema import (
@@ -259,16 +352,63 @@ def test_the_elastica_on_beams(tmp_path, solver):
                          features=[Feature(type="fixed", selection="F/A"),
                                    Feature(type="force", selection="F/B",
                                            values={"z": q(-force, "N")})])]))  # fmt: skip
-    study = p.add(Study(name="S", component=comp.id, solver=solver, steps=[
-        SolveStep(type="stationary", settings={"geometric_nonlinearity": True,
-                                               "increments": 20})]))  # fmt: skip
+    step = SolveStep(type="stationary", settings={"geometric_nonlinearity": True,
+                                                  "increments": 20})  # fmt: skip
+    if dynamic:
+        omega = 1.875**2 * np.sqrt(E * depth**2 / 12 / (7850.0 * length**4))
+        period = 2 * np.pi / omega
+        step = SolveStep(type="transient", settings={
+            "geometric_nonlinearity": True, "rayleigh_alpha": float(2 * 0.7 * omega),
+            "time_step": period / 40, "end_time": 6 * period})  # fmt: skip
+    study = p.add(Study(name="S", component=comp.id, solver=solver, steps=[step]))
     root = tmp_path / "frame"
     save_project(p, root)
+    if dynamic and solver == "code_aster":  # POU_D_T_GD has no RIGI_MECA for DYNA_NON_LINE
+        with pytest.raises(Exception, match="RIGI_MECA"):
+            run_study(p, study.id, root, tmp_path / "w")
+        return
     run = run_study(p, study.id, root, tmp_path / "w", timeout_s=1800)
-    u = run.results.last("displacement")
+    u = [s for s in run.results.steps if "displacement" in s.fields][-1].fields["displacement"]
     xyz = run.mesh.node_coords(u.ids)
     k = int(np.argmin(np.linalg.norm(xyz - [length, 0, 0], axis=1)))
     down, drawn = -u.values[k, 2] / length, -u.values[k, 0] / length
-    print(f"{solver} beam elastica: down {down:.4f} L (0.3017), in {drawn:.4f} L (0.0566)")
+    print(f"{solver} beam elastica{' (transient)' if dynamic else ''}: down {down:.4f} L "
+          f"(0.3017), in {drawn:.4f} L (0.0566)")  # fmt: skip
     assert down == pytest.approx(0.3017, rel=0.01)
     assert drawn == pytest.approx(0.0566, rel=0.03)
+
+
+@over("calculix", "code_aster")
+def test_a_damped_transient_settles_on_the_elastica(tmp_path, solver):
+    """Large deflection in a transient step (ADR 0082 decision 6): the elastica's strip
+    under its tip load applied at once, mass-proportional Rayleigh damping near 0.7 of
+    critical in its first mode (f1 = 0.5596 √(EI/ρAL⁴) = 41.8 Hz). Once still it must be
+    the static elastica, 0.3017 L down and 0.0566 L in."""
+    pytest.importorskip("OCP")
+    size = (0.2, 0.01, 0.002)
+    length, width, depth = size
+    step = write_bar_step(tmp_path / "strip.step", size)
+    inertia = width * depth**3 / 12
+    force = 1.0 * E * inertia / length**2
+    rho = STEEL["density"].to_si()
+    omega = 1.875**2 * np.sqrt(E * inertia / (rho * width * depth * length**4))
+    physics = Physics(type="solid_mechanics", settings={"temperature_dependent_materials": False},
+                      features=[Feature(type="fixed", selection="Bar/Root"),
+                                Feature(type="force", selection="Bar/Tip",
+                                        values={"z": q(-force, "N")})])  # fmt: skip
+    project, comp = bar_project(step, [physics], 2.0)
+    period = 2 * np.pi / omega
+    study = project.add(Study(
+        name="S", component=comp.id, solver=solver,
+        steps=[SolveStep(type="transient", settings={
+            "geometric_nonlinearity": True, "rayleigh_alpha": float(2 * 0.7 * omega),
+            "time_step": period / 40,
+            "end_time": 6 * period})]))  # fmt: skip
+    run = run_study(project, study.id, tmp_path, tmp_path / "w", timeout_s=3600)
+    tip = run.mesh.groups["Bar/Tip"].node_ids
+    last = [s for s in run.results.steps if "displacement" in s.fields][-1]
+    u = last.fields["displacement"].at(tip).mean(axis=0)
+    down, drawn = -u[2] / length, -u[0] / length
+    print(f"{solver} damped transient: down {down:.4f} L (0.3017), in {drawn:.4f} L (0.0566)")
+    assert down == pytest.approx(0.3017, rel=0.02)
+    assert drawn == pytest.approx(0.0566, rel=0.05)

@@ -53,7 +53,7 @@ ELEMENTS = [
         STRUCT[:-1],
         "The linear brick with one integration point: cheap explicit-style meshes.",
         "coarse meshes: hourglassing.",
-        False,
+        True,
         REF,
     ),
     Element(
@@ -185,11 +185,11 @@ ELEMENTS = [
         "S8R",
         "shell",
         ("quad8",),
-        "thick_shell",
+        "reduced",
         ("static", "modal", "buckling", "transient", "contact", "plasticity"),
-        "The quadratic quadrilateral shell with reduced integration.",
+        "The quadratic quadrilateral shell with reduced integration, expanded to C3D20R.",
         "",
-        False,
+        True,
         REF,
     ),
     Element(
@@ -204,13 +204,26 @@ ELEMENTS = [
         REF,
     ),
     Element(
-        "S4/S4R",
+        "S4",
         "shell",
         ("quad4",),
         "thick_shell",
-        ("static", "modal", "buckling"),
-        "The linear quadrilateral shells.",
+        ("static", "modal", "buckling", "transient"),
+        "The linear quadrilateral shell, expanded to C3D8I (incompatible modes): it bends "
+        "without locking. Sheets mesh into quadrilaterals with the recipe's hexahedra.",
         "",
+        True,
+        REF,
+    ),
+    Element(
+        "S4R",
+        "shell",
+        ("quad4",),
+        "reduced",
+        ("static", "modal", "buckling", "transient"),
+        "The linear quadrilateral shell with reduced integration, expanded to C3D8R.",
+        "anything: its one-point bricks hourglass (a thick strip came out 3.6 times too "
+        "soft). Use S4 or S8R.",
         False,
         REF,
     ),
@@ -240,12 +253,25 @@ ELEMENTS = [
         "B32R",
         "beam",
         ("line3",),
-        "timoshenko",
+        "reduced",
         ("static", "modal", "buckling", "transient"),
-        "The quadratic beam with reduced integration: the one taking box and pipe "
-        "sections. Puzzle writes it for those.",
+        "The quadratic beam with reduced integration, expanded to bricks of its section: "
+        "the one taking box and pipe sections, so Puzzle writes it for those; a choice "
+        "elsewhere.",
         "",
         True,
+        REF,
+    ),
+    Element(
+        "B31R",
+        "beam",
+        ("line2",),
+        "reduced",
+        ("static", "modal", "buckling", "transient"),
+        "The linear beam with reduced integration.",
+        "it expands to one-point bricks that hourglass: a cantilever came out 6.3 times "
+        "too soft on 40 elements. Use B31 or B32R.",
+        False,
         REF,
     ),
     Element(

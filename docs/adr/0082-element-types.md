@@ -1,6 +1,6 @@
 # 0082. Element types: a solver-neutral choice per body, each solver's own types, and a library of them
 
-- Status: Accepted; steps 1 to 3 built in part (2026-11-12): the element library, its listing, the choice per body (C3D8I, 3D_INCO_UPG, POU_D_E, 3D_DIAG, C3D20R, 3D_SI, DST), 20- and 27-node bricks, large deflection on Code_Aster for solids and beams
+- Status: Accepted; built (2026-11-12): the library and listing, the choice per body (decision 3) on CalculiX, Code_Aster, Elmer and FEniCSx, second-order bricks, quadrilateral shells, PyNite plates, large deflection (decision 6) static and transient, preloaded buckling and large-strain plasticity on both FE solvers; decision 7's per-solver rows in Properties
 - Date: 2026-11-11
 
 ## Context
@@ -263,6 +263,70 @@ The maintainer asked (2026-11-11) for:
   - shells under large deflection on Code_Aster;
   - decision 7's Properties dropdown and the mesh view's element legend: the choice is
     Model → Components → Element formulation… and MCP `element_choose` so far.
+
+## Built: the rest of steps 3 and 4 (2026-11-12)
+
+- **CalculiX B32R** (`reduced` on quadratic beams): −1.04 % of Timoshenko on a 1 m
+  rectangular cantilever, ten elements, as B32 (−1.05 %; both are expanded into
+  bricks). **B31R is refused**: its expansion into one-point bricks hourglassed, 6.3
+  times too soft on 40 elements. A choice on an open table section (which CalculiX gets
+  as exact springs) is refused, never dropped.
+- **FEniCSx mixed u-p**: Taylor-Hood P2 u, P1 p over the whole model (one space: every
+  body must choose it), static, the features `case.MIXED_FEATURES`
+  (`study.solve_solid_mixed`). At ν 0.4999 the bar's cantilever came to 0.988 of
+  Timoshenko's. Plain P2 gave 0.983 on that mesh, so the mixed form's gain is in the
+  pressure, not this deflection.
+- **Elmer p-elements** (formulation `higher_order`, new): `Element = "p:2"` on the
+  elasticity solver for a first-order mesh. Every body chooses it, and `solver_types`
+  names another degree. Linear tetrahedra that locked at 0.503 of Timoshenko's came to
+  0.995.
+- **Quadrilateral shells**: sheets mesh into quadrilaterals with the recipe's
+  hexahedra (quad4, quad8, quad9). On the thick strip (L/h 3):
+  - Code_Aster DKT/DST on QUAD4 (DKQ, DSQ): +0.03 % of Kirchhoff and of Mindlin;
+  - COQUE_3D on QUAD9: Mindlin to eight digits; written for 9-node quadrilaterals,
+    with 6- and 8-node faces refused;
+  - CalculiX S4 (C3D8I inside) and S8R: −1.4 % and −1.3 % of Mindlin, as its S6;
+  - S4R is refused: its one-point bricks hourglassed, 3.6 times too soft.
+  (`tests/integration/test_thick_shells.py::test_quadrilateral_shells`.)
+- **PyNite plates**: sheets meshed into 4-node quadrilaterals become PyNite's MITC4
+  quads, with pressure on them. PyNite pushes along the normal, so the adapter flips
+  it. Plates share nodes with members. Matched Mindlin to 0.03 %. Self weight on plates
+  and their stresses are not written.
+- **Large deflection, the rest of decision 6**:
+  - transient steps on both solvers. CalculiX's increment is cut back under NLGEOM
+    with HHT α −0.05 by default (undamped Newmark diverged, then crawled). The damped
+    strip settles on the elastica: 0.3004 L down, 0.0560 L in, on both (0.3017, 0.0566).
+  - Code_Aster's shells under static large deflection (DKT with GROT_GDEP).
+  - buckling preloaded by a large-deflection static step: Code_Aster's preload by
+    STAT_NON_LINE in Green–Lagrange, K_G from its final stresses, the
+    initial-displacement matrix left out, solids only. The column comes to
+    P_cr − P0 within 0.18 % on both.
+  - plasticity at large strain: a bar drawn to 1.3 of its length against the
+    log-strain closed form (380.2 MPa). CalculiX +0.19 %; Code_Aster −0.08 % on
+    3D_INCO_UPG with GDEF_LOG. Plain quadratic tetrahedra stalled at 1.21, so the
+    mixed element is the one to choose; mixed elements compute no EPSP, so they give
+    p alone.
+- **Decision 7**: the Properties panel's Element formulation dropdown on a part, with
+  a row per solver saying what it writes there. That row stands in for the mesh
+  view's legend.
+- **The last of them (2026-11-12, later)**:
+  - CalculiX C3D8R (`reduced` on 8-node bricks, hourglass-controlled): 1.035, 1.016 and
+    1.003 of Timoshenko's cantilever at 2, 4 and 8 bricks through the depth. It
+    converges from above, where C3D8 locks from below (0.896, 0.966, 0.988).
+  - Code_Aster Q4G (the expert's type `solver_types={"code_aster": "Q4G"}` with
+    `thick_shell`, DSQ being that formulation's default): the thick strip to Mindlin's
+    digits.
+  - Code_Aster's transients under large deflection use HHT α −0.05 by default, as
+    CalculiX's do, with a failed increment cut back (DEFI_LIST_INST).
+  - Code_Aster's shells and beams in transient large deflection are refused, measured:
+    - COQUE_3D has no mass matrix under GROT_GDEP (ELEMENTS3_91);
+    - DKT's Newton converged linearly, 20 to 40 iterations an increment, a 25th of the
+      strip's run in 23 minutes;
+    - POU_D_T_GD can't build the RIGI_MECA that DYNA_NON_LINE needs (CALCUL_37).
+
+    CalculiX takes both: its shell strip settles on the elastica at 0.3017 L / 0.0564
+    L, its beam at 0.2996 L / 0.0557 L.
+  - Not built: section forces of POU_D_T_GD.
 
 ## Consequences
 

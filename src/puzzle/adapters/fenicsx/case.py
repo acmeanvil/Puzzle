@@ -200,8 +200,10 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     if mesh.planar:
         _check_2d(comp, physics, step, features, thermal_load)
 
+    mixed = _mixed_up(comp, mesh, physics, step, features, thermal_load)
     case = {
         "physics": physics,
+        **({"mixed_up": True} if mixed else {}),  # ADR 0082: Taylor-Hood P2-P1
         "dimension": comp.dimension,  # ADR 0048
         "planar_model": comp.planar_model,
         "step": {
@@ -312,6 +314,43 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     np.savetxt(workdir / "node-ids.txt", mesh.node_ids, fmt="%d")
     np.save(workdir / "node-coords.npy", mesh.coords)
     return target
+
+
+# The loads and supports the mixed (u, p) solve writes (`study.solve_solid_mixed`).
+MIXED_FEATURES = {"fixed", "displacement", "force", "pressure", "traction", "body_force",
+                  "gravity", "acceleration", "rotation"}  # fmt: skip
+
+
+def _mixed_up(comp, mesh: Mesh, physics: str, step, features, thermal_load) -> bool:
+    """Whether the model is solved as Taylor-Hood P2-P1 displacement and pressure (ADR
+    0082: the element choice `mixed_up`). FEniCSx solves one space over the whole mesh,
+    so every body must choose it; static 3D quadratic-tetrahedron solid mechanics only."""
+    from puzzle.element_choice import choice_for
+
+    blocks = [b for b in mesh.blocks if b.dim == 3]
+    chosen = [choice_for(comp, mesh, b) for b in blocks]
+    mixed = [c is not None and c.formulation == "mixed_up" and "fenicsx" not in c.solver_types
+             for c in chosen]  # fmt: skip
+    if not any(mixed):
+        return False
+    why = None
+    if not all(mixed):
+        why = "every body must choose it (FEniCSx solves one space over the mesh)"
+    elif physics != "solid_mechanics" or step.type != "stationary" or comp.dimension != "3d":
+        why = "it is written for static 3D solid mechanics only"
+    elif any(b.element != "tet10" for b in blocks):
+        why = "it needs quadratic tetrahedra (element order 2)"
+    elif thermal_load is not None or comp.welds or any(c.thread for c in comp.contacts):
+        why = "temperature loads, welds and threads aren't written with it yet"
+    else:
+        other = sorted({f.type for f in features} - MIXED_FEATURES
+                       - {"symmetry", "antisymmetry"})  # fmt: skip
+        if other:
+            why = f"it doesn't take {', '.join(other)} yet"
+    if why:
+        raise InputError(f"FEniCSx's mixed u-p (Taylor-Hood) elements: {why}",
+                         code="unsupported")  # fmt: skip
+    return True
 
 
 def _threads(project, comp, mesh: Mesh, step, physics: str, contacts) -> list[dict]:

@@ -183,6 +183,8 @@ def main() -> None:
         solve_solid_2d(case, msh, degree, dx, ds, facets, tag, piecewise, out)
     elif case["physics"] == "heat_transfer":
         solve_heat(case, msh, degree, dx, ds, facets, tag, of_temperature, out)
+    elif case.get("mixed_up"):  # ADR 0082: Taylor-Hood displacement and pressure
+        solve_solid_mixed(case, msh, degree, dx, ds, facets, tag, piecewise, out)
     else:
         solve(case, msh, degree, dx, ds, facets, tag, piecewise, out)
     if not transient and step["type"] != "frequency_domain":  # one solve: one increment
@@ -629,6 +631,88 @@ def solve_solid(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
     p, q = ufl.TrialFunction(S), ufl.TestFunction(S)
     mass, rhs = ufl.inner(p, q) * dx, ufl.inner(voigt, q) * dx
     out["stress"] = solve_linear(mass, rhs, [], S, "s", mass_matrix=True).x.array.reshape(-1, 6)
+
+
+def solve_solid_mixed(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
+    """Static elasticity in displacement and pressure (ADR 0082's mixed u-p): Taylor-Hood
+    P2 u and P1 p, p = -lambda div u, so
+        int 2 mu eps(u):eps(v) - p div v - q div u - p q / lambda dx = L(v),
+    which stays well posed as nu -> 0.5, where the displacement form locks. The stress
+    is 2 mu eps(u) - p I, projected onto the displacement's nodes."""
+    import basix.ufl
+
+    cell = msh.basix_cell()
+    Pu = basix.ufl.element("Lagrange", cell, 2, shape=(3,))
+    Pp = basix.ufl.element("Lagrange", cell, 1)
+    W = fem.functionspace(msh, basix.ufl.mixed_element([Pu, Pp]))
+    Vu, _ = W.sub(0).collapse()
+    E, nu = piecewise("youngs_modulus"), piecewise("poissons_ratio")
+    mu = E / (2 * (1 + nu))
+    lmbda = E * nu / ((1 + nu) * (1 - 2 * nu))
+
+    def eps(w):
+        return ufl.sym(ufl.grad(w))
+
+    u, p = ufl.TrialFunctions(W)
+    v, q = ufl.TestFunctions(W)
+    a = (2 * mu * ufl.inner(eps(u), eps(v)) - p * ufl.div(v) - q * ufl.div(u)
+         - p * q / lmbda) * dx  # fmt: skip
+    n = ufl.FacetNormal(msh)
+    L = ufl.inner(fem.Constant(msh, np.zeros(3)), v) * dx
+    bcs = []
+
+    def hold(value, where, i=None):
+        sub = W.sub(0) if i is None else W.sub(0).sub(i)
+        S, _ = sub.collapse()
+        target = fem.Function(S)
+        target.x.array[:] = value
+        dofs = fem.locate_dofs_topological((sub, S), 2, where)
+        bcs.append(fem.dirichletbc(target, dofs, sub))
+
+    for f in case["features"]:
+        where, vals = facets.find(tag(f["group"])), f.get("values", {})
+        if f["type"] == "fixed":
+            hold(0.0, where)
+        elif f["type"] == "displacement":
+            if "cylindrical" in f or any(isinstance(vals.get(c), fem.Function) for c in "xyz"):
+                raise SystemExit("mixed u-p takes constant Cartesian displacements only")
+            for i, axis in enumerate("xyz"):
+                if axis in vals:
+                    hold(float(vals[axis]), where, i)
+        elif f["type"] == "force":
+            traction = np.array([vals.get(c, 0.0) for c in "xyz"]) / f["area"]
+            L += ufl.inner(fem.Constant(msh, traction), v) * ds(tag(f["group"]))
+        elif f["type"] == "pressure":
+            L += -vals["p"] * ufl.inner(n, v) * ds(tag(f["group"]))
+        elif f["type"] == "traction":
+            t = vector_value(msh, [vals.get(c, 0.0) for c in ("tx", "ty", "tz")])
+            L += ufl.inner(t, v) * ds(tag(f["group"]))
+        elif f["type"] == "body_force":
+            b = vector_value(msh, [vals.get(c, 0.0) for c in ("fx", "fy", "fz")])
+            L += ufl.inner(b, v) * dx(tag(f["group"]))
+        elif f["type"] in ("gravity", "acceleration", "rotation"):
+            load, rho = f["load"], piecewise("density")
+            if load["uniform"] is not None:
+                b = fem.Constant(msh, np.asarray(load["uniform"], dtype=float))
+            else:
+                x = ufl.SpatialCoordinate(msh)
+                c, axis = ufl.as_vector(load["centre"]), ufl.as_vector(load["axis"])
+                d = x - c
+                b = load["omega"] ** 2 * (d - ufl.dot(d, axis) * axis)
+            L += rho * ufl.inner(b, v) * dx(tag(f["group"]))
+        else:
+            raise SystemExit(f"mixed u-p doesn't take {f['type']} features")
+
+    wh = solve_linear(a, L, bcs, W, "u")
+    uh, ph = wh.sub(0).collapse(), wh.sub(1).collapse()
+    out["coords"] = Vu.tabulate_dof_coordinates()
+    out["displacement"] = uh.x.array.reshape(-1, 3)
+    S = fem.functionspace(msh, ("Lagrange", degree, (6,)))
+    s = 2 * mu * eps(uh) - ph * ufl.Identity(3)
+    voigt = ufl.as_vector([s[0, 0], s[1, 1], s[2, 2], s[0, 1], s[1, 2], s[2, 0]])
+    trial, test = ufl.TrialFunction(S), ufl.TestFunction(S)
+    out["stress"] = solve_linear(ufl.inner(trial, test) * dx, ufl.inner(voigt, test) * dx, [],
+                                 S, "s", mass_matrix=True).x.array.reshape(-1, 6)  # fmt: skip
 
 
 # --- structural dynamics (ADR 0041) -----------------------------------------------------

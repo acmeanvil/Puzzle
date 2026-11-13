@@ -37,6 +37,7 @@ FORMULATIONS = {
     "warping": "beam with warping (open sections in torsion)",
     "large_rotation": "large rotations",
     "lumped": "lumped (diagonal) capacity or mass",
+    "higher_order": "higher order on the same cells (p-elements)",
     "lagrange": "Lagrange (nodal) unknowns",
     "edge": "edge (Nédélec, Whitney) unknowns",
     "finite_volume": "finite-volume cell",

@@ -26,6 +26,7 @@ class PyNiteAdapter(SolverAdapter):
         physics={"solid_mechanics": frozenset({"stationary", "modal"})},  # ADR 0079 step 4
         features=FEATURES,
         beams=True,
+        shells=True,  # ADR 0082: plates as PyNite's MITC4 quadrilaterals
         member_ends=True,
         frame_analysis=True,  # ADR 0079 step 2: combinations, P-Delta, Direct Analysis
         axes_features=frozenset(

@@ -133,6 +133,7 @@ class HistoryStep(BaseModel):
         "bolt",
         "nut",
         "washer",
+        "weld_bead",
         "box",
         "cylinder",
         "cone",
@@ -1456,10 +1457,12 @@ class ElementChoice(BaseModel):
 
     selection: str = Field(description="a body selection ('Part/Name') or a part's name")
     formulation: Literal["full", "reduced", "incompatible_modes", "mixed_up", "thin_shell",
-                         "thick_shell", "euler_bernoulli", "timoshenko", "lumped"] = Field(
+                         "thick_shell", "euler_bernoulli", "timoshenko", "lumped",
+                         "higher_order"] = Field(
         description="full or reduced integration, incompatible modes (bending without "
         "locking), mixed u-p (nearly incompressible), thin or thick shell, Euler-Bernoulli "
-        "or Timoshenko beam, lumped heat capacity")  # fmt: skip
+        "or Timoshenko beam, lumped heat capacity, higher order on the same mesh "
+        "(p-elements; solver_types {'elmer': 'p:3'} for another degree)")  # fmt: skip
     solver_types: dict[str, str] = Field(
         default_factory=dict, description="an expert's own type per solver: "
         "{'calculix': 'C3D20R'}")  # fmt: skip

@@ -271,6 +271,10 @@ def _run_study(
     # ADR 0050: bolts that bear on a head or nut annulus or a tapped thread get those
     # faces as mesh groups, and their ends point at them.
     written, project = with_joints(project, study.component, meshed.mesh)
+    from puzzle.weld_generator import with_grooves
+
+    # ADR 0078 step 4: modelled groove welds, their faces tied over the groove's depth.
+    written, project = with_grooves(project, study.component, written)
     from puzzle.beams import with_orientations
 
     # ADR 0055: beams oriented by a system, a point, a face or an edge, as vectors.

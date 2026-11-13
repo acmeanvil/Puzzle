@@ -6,7 +6,7 @@ node has the closed-form answer of bilinear isotropic hardening:
 
     eps = s/E + ep,  s = sy + H ep   =>   ep = (eps - sy/E) / (1 + H/E)
 
-with E = 200 GPa, sy = 250 MPa, H = 500 MPa (300 MPa at ep = 0.1): ep = 8.7282e-3,
+with E = 200 GPa, sy = 250 MPa, H = 500 MPa (500 MPa at ep = 0.5): ep = 8.7282e-3,
 s = 254.36 MPa. Plastic flow keeps volume: ep_yy = ep_zz = -ep/2.
 """
 
@@ -35,7 +35,10 @@ EP = (STRAIN - SY / E) / (1 + H / E)
 STRESS = SY + H * EP
 
 
-def plastic_bar(solver: str = "calculix", increments: int = 10) -> Project:
+def plastic_bar(solver: str = "calculix", increments: int = 10, strain: float = STRAIN,
+                large: bool = False) -> Project:  # fmt: skip
+    """The bar pulled to `strain` (engineering) of its length; `large` solves it with
+    geometric nonlinearity (ADR 0082 decision 6)."""
     p = Project(name="Plastic bar")
     geo = p.add(
         Geometry(
@@ -59,7 +62,7 @@ def plastic_bar(solver: str = "calculix", increments: int = 10) -> Project:
                 "density": Quantity(value=7850, unit="kg/m^3"),
             },
             models=MaterialModels(
-                plasticity={"curves": [{"points": [(0.0, SY), (0.1, SY + H * 0.1)]}]}
+                plasticity={"curves": [{"points": [(0.0, SY), (0.5, SY + H * 0.5)]}]}
             ),
         )
     )
@@ -83,7 +86,7 @@ def plastic_bar(solver: str = "calculix", increments: int = 10) -> Project:
                         Feature(
                             type="displacement",
                             selection="Bar/Tip",
-                            values={"x": Quantity(value=STRAIN * L, unit="m")},
+                            values={"x": Quantity(value=strain * L, unit="m")},
                         ),
                     ],
                 )
@@ -95,7 +98,15 @@ def plastic_bar(solver: str = "calculix", increments: int = 10) -> Project:
             name="Pull",
             component=comp.id,
             solver=solver,
-            steps=[SolveStep(type="stationary", settings={"increments": increments})],
+            steps=[
+                SolveStep(
+                    type="stationary",
+                    settings={
+                        "increments": increments,
+                        **({"geometric_nonlinearity": True} if large else {}),
+                    },
+                )
+            ],
         )
     )
     return p

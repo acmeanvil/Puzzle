@@ -13,6 +13,7 @@ container; its shell scripts need LF there.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import numpy as np
@@ -272,6 +273,9 @@ def write_case(
         ]
 
     solvers = _solvers(step, solved, coils, dofs=2 if mesh.planar else 3)
+    degree = _p_element(comp, mesh, solved, step)  # ADR 0082: Element = "p:2"
+    if degree:
+        solvers[0].insert(3, f'  Element = "{degree}"')
     if solved == {"magnetic_fields"}:
         # Conductors also run the coil solver; everything else only the field solvers.
         out += ["Equation 1", "  Active Solvers(3) = 1 2 3", "End", ""]
@@ -461,6 +465,31 @@ def _material(
         out.append(f"  Relative Permeability = {mu_r:.10g}")
         out.append(f"  Electric Conductivity = {sigma:.10g}")
     return out + ["End", ""]
+
+
+def _p_element(comp, mesh, solved: set[str], step) -> str | None:
+    """The elasticity solver's p-element degree ("p:2") when the bodies choose higher
+    order (ADR 0082); Elmer's Element keyword is the solver's, so all of them must."""
+    from puzzle.element_choice import choice_for
+
+    blocks = [b for b in mesh.blocks if b.dim == (2 if mesh.planar else 3)]
+    chosen = [choice_for(comp, mesh, b) for b in blocks]
+    ours = [c for c in chosen if c is not None and c.formulation == "higher_order"]
+    if not ours:
+        return None
+    degrees = {c.solver_types.get("elmer", "p:2") for c in ours}
+    why = None
+    if len(ours) != len(blocks):
+        why = "every body must choose it (the Element keyword is the solver's)"
+    elif len(degrees) != 1 or not re.fullmatch(r"p:[2-9]", next(iter(degrees))):
+        why = f"one degree p:2 to p:9 for the model, not {sorted(degrees)}"
+    elif solved != {"solid_mechanics"} or step.type not in ("stationary", "modal"):
+        why = "it is written for static and modal elasticity only"
+    elif any(b.element not in ("tet4", "hex8", "tri3", "quad4") for b in blocks):
+        why = "it goes on a first-order mesh (element order 1)"
+    if why:
+        raise InputError(f"Elmer's p-elements: {why}", code="unsupported")
+    return next(iter(degrees))
 
 
 def _solvers(step, solved: set[str], coils: list[Feature], dofs: int = 3) -> list[list[str]]:

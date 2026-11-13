@@ -232,3 +232,56 @@ def test_an_aluminium_joint_takes_4043_by_the_adm():
     w = w.model_copy(update={"faces": ["P/a", "P/b"]})
     assert filler(p, comp, w) == ("ER4043", 165e6, ADM)
     assert welded_base_strength(p, comp, w) == pytest.approx(165e6)
+
+
+# AISC Steel Construction Manual, 14th ed., Table 8-4 (angle 0°): C for two vertical lines
+# l long, kl apart, a vertical load at a l from the centroid (E70, per sixteenth per inch).
+TABLE_8_4 = [  # (k, a, C)
+    (0.0, 0.10, 3.72), (0.0, 0.50, 2.30), (0.0, 1.00, 1.28), (0.0, 2.00, 0.655),
+    (0.6, 0.10, 3.67), (0.6, 0.50, 2.48), (0.6, 1.00, 1.56), (0.6, 2.00, 0.867),
+    (1.0, 0.50, 2.60), (1.0, 1.00, 1.77), (1.6, 1.00, 2.00), (2.0, 1.00, 2.10), (2.0, 3.00, 1.05),
+]  # fmt: skip
+
+
+@pytest.mark.parametrize(("k", "a", "c"), TABLE_8_4)
+def test_ic_against_the_manuals_table_8_4(k, a, c):
+    """The instantaneous centre against the Manual's own tabulation of it (14th ed.
+    Table 8-4), to its printed digits; k = 0 is one line taken twice."""
+    from puzzle import weld_strength as ws
+
+    length = 10 * IN_
+    (p1, a1, l1), (p2, a2, l2) = _line(-k * length / 2), _line(k * length / 2)
+    pts, axes, lens = np.vstack([p1, p2]), np.vstack([a1, a2]), np.concatenate([l1, l2])
+    w = IN_ / 16
+    out = ws.ic_capacity(pts, axes, lens, 70 * KSI_, 0.707 * w, w, [0, -1], [a * length, 0])
+    got = out["Pn_N"] / 4448.2216 / 10
+    assert got == pytest.approx(c, abs=0.006 if c < 1 else 0.012), (k, a, got)
+
+
+def test_asme_structural_stress_by_hand():
+    """ASME VIII-2 5.5.5 worked by hand: Δσm 100 MPa, Δσb 50 MPa, t 20 mm, steel, -3σ.
+    R_b = 1/3; I^(1/m) = (1.23 - 0.364/3 - 0.17/9) / (1.007 - 0.306/3 - 0.178/9)
+    = 1.08978 / 0.88522 = 1.23109; Eq. (5.58) 150 / (1 - 0.09) = 164.835 MPa;
+    t_ess^((2 - 3.6)/7.2) = 20^-0.22222 = 0.51390; ΔS_ess = 164.835 / (0.51390 × 1.23109)
+    = 260.55; N = (11577.9 / 260.55)^(1/0.3195) = 1.4365e5."""
+    from puzzle.weld_strength import asme_cycles, t_ess
+
+    got = asme_cycles(100e6, 50e6, 0.020)
+    assert got["I_factor"] == pytest.approx(1.23109, rel=2e-5)
+    assert got["structural_stress_range_Pa"] == pytest.approx(164.835e6, rel=1e-5)
+    assert got["equivalent_range"] == pytest.approx(260.55, rel=1e-4)
+    assert got["cycles"] == pytest.approx(1.4365e5, rel=1e-3)
+    assert (t_ess(10), t_ess(40), t_ess(200)) == (16.0, 40.0, 150.0)
+    # pure membrane, thin plate: I = 1.23/1.007, t_ess 16 mm
+    thin = asme_cycles(100e6, 0.0, 0.008)
+    expected = 100 / 0.91 / (16 ** (-1.6 / 7.2) * 1.23 / 1.007)
+    assert thin["equivalent_range"] == pytest.approx(expected, rel=1e-9)
+    # a stiff hysteresis curve (no plasticity) leaves Neuber's rule elastic
+    stiff = asme_cycles(100e6, 50e6, 0.020, k_css=1e15, n_css=0.1)
+    assert stiff["cycles"] == pytest.approx(got["cycles"], rel=1e-9)
+    # a mean stress over half the yield with R > 0: f_M = (1 - R)^(1/3.6)
+    mean = asme_cycles(100e6, 0.0, 0.020, smax=300e6, smin=200e6, sy=250e6)
+    assert mean["f_M"] == pytest.approx((1 - 2 / 3) ** (1 / 3.6))
+    # the mean curve gives more cycles than the design (-3σ) one, by (19930.2/11577.9)^(1/h)
+    ratio = asme_cycles(100e6, 50e6, 0.020, basis="mean")["cycles"] / got["cycles"]
+    assert ratio == pytest.approx((19930.2 / 11577.9) ** (1 / 0.3195), rel=1e-9)

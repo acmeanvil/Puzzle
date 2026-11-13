@@ -292,3 +292,75 @@ def check_aluminium(weld, filler_ftuw, base_ftuw, along, across, magnitude,
             "utilisation_lrfd": lrfd, "utilisation_asd": asd, "governing": at,
             "governed_by": "weld metal" if metal[at] <= base[at] else "base metal",
             "clause": "ADM 2015 J.2.2, Table J.2.2"}  # fmt: skip
+
+
+# ASME BPVC VIII-2 (2023) 5.5.5 and Annex 3-F.2: welded joints by the equivalent
+# structural stress range. Table 3-F.2M (SI: MPa and mm), C and h per statistical basis.
+ASME_CURVES = {
+    "steel": {"mean": 19930.2, "+1sigma": 23885.8, "-1sigma": 16629.7, "+2sigma": 28626.5,
+              "-2sigma": 13875.7, "+3sigma": 34308.1, "-3sigma": 11577.9},
+    "aluminium": {"mean": 3495.13, "+1sigma": 4293.19, "-1sigma": 2845.42, "+2sigma": 5273.48,
+                  "-2sigma": 2316.48, "+3sigma": 6477.60, "-3sigma": 1885.87},
+}  # fmt: skip
+ASME_H = {"steel": 0.31950, "aluminium": 0.27712}
+M_SS = 3.6  # Eq. (5.60)
+ASME = "ASME BPVC VIII-2 5.5.5, Annex 3-F.2"
+
+
+def t_ess(t_mm: float) -> float:
+    """Eqs. (5.61)-(5.63): the structural stress effective thickness (mm)."""
+    return min(max(t_mm, 16.0), 150.0)
+
+
+def i_factor(dsm: float, dsb: float) -> float:
+    """I^(1/m_ss), Eqs. (5.64) and (5.65), from the membrane and bending ranges."""
+    rb = abs(dsb) / (abs(dsm) + abs(dsb)) if abs(dsm) + abs(dsb) else 0.0
+    return (1.23 - 0.364 * rb - 0.17 * rb**2) / (1.007 - 0.306 * rb - 0.178 * rb**2)
+
+
+def asme_cycles(dsm: float, dsb: float, t: float, *, smax: float = 0.0, smin: float = 0.0,
+                sy: float | None = None, e: float = 200e9, nu: float = 0.3,
+                material: str = "steel", basis: str = "-3sigma", f_i: float = 1.0,
+                f_e: float = 1.0, f_mt: float = 1.0, k_css: float | None = None,
+                n_css: float | None = None) -> dict:  # fmt: skip
+    """The permissible cycles of one cycle's structural stress ranges (5.5.5.2 Steps 4 to
+    7), in SI (Pa, m): the membrane and bending ranges `dsm`, `dsb` normal to the crack
+    plane, the plate's thickness `t`, the cycle's largest and smallest structural stress
+    for the mean-stress factor (Eqs. 5.66-5.68, with the yield strength `sy`).
+
+    Step 5: Neuber's rule with the hysteresis curve Δε = Δσ/E + 2 (Δσ/2K)^(1/n) when
+    `k_css` and `n_css` (Annex 3-D) are given, else elastic (Δε = Δσᵉ/E); then Eq. (5.58),
+    Δσ = E/(1 - ν²) Δε. Step 6: ΔS_ess = Δσ / (t_ess^((2 - m)/2m) I^(1/m) f_M), MPa and mm.
+    Step 7: N = f_I/f_E (f_MT C / ΔS_ess)^(1/h), Table 3-F.2M; the lower 99 % interval
+    (-3σ) unless agreed otherwise (3-F.2.2(a))."""
+    from scipy.optimize import brentq
+
+    if material not in ASME_CURVES:
+        raise ValueError(f"material: {', '.join(ASME_CURVES)}, not {material!r}")
+    if basis not in ASME_CURVES[material]:
+        raise ValueError(f"basis: {', '.join(ASME_CURVES[material])}, not {basis!r}")
+    elastic = abs(dsm) + abs(dsb)  # Eq. (5.54), on the surface where they add
+    strain_e = elastic / e  # Eq. (5.55)
+    if elastic and k_css and n_css:  # Eqs. (5.56), (5.57)
+
+        def neuber(ds):
+            return ds * (ds / e + 2 * (ds / (2 * k_css)) ** (1 / n_css)) - elastic * strain_e
+
+        ds = brentq(neuber, 1e-12 * elastic, elastic)
+        strain = ds / e + 2 * (ds / (2 * k_css)) ** (1 / n_css)
+    else:
+        strain = strain_e
+    stress = e / (1 - nu**2) * strain  # Eq. (5.58)
+    f_m = 1.0
+    r = smin / smax if smax else 0.0
+    if sy is not None and (smax + smin) / 2 >= 0.5 * sy and r > 0 and elastic <= 2 * sy:
+        f_m = (1 - r) ** (1 / M_SS)  # Eq. (5.66)
+    te = t_ess(t * 1e3)
+    i = i_factor(dsm, dsb)
+    s_ess = stress / 1e6 / (te ** ((2 - M_SS) / (2 * M_SS)) * i * f_m)  # Eq. (5.59)
+    c, h = ASME_CURVES[material][basis], ASME_H[material]
+    n = f_i / f_e * (f_mt * c / s_ess) ** (1 / h) if s_ess > 0 else float("inf")
+    return {"structural_stress_range_Pa": float(stress), "elastic_range_Pa": float(elastic),
+            "t_ess_mm": te, "I_factor": float(i), "f_M": float(f_m),
+            "equivalent_range": float(s_ess), "cycles": float(n), "basis": basis,
+            "clause": ASME}  # fmt: skip

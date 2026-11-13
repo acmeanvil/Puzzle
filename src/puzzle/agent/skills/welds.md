@@ -46,8 +46,9 @@ Legs and lengths are quantities (mm is fine); line forces come back in N/m (1 N/
   corners gather force (the parts aren't rigid), as in the elastic method's corners.
 - Expecting the elastic method's moment from the line forces alone: the fillet's own
   resistance to turning about its line (`twist`) carries some of a bending moment.
-- Elmer can't take a weld (no node-pair springs); 2D models and shell edges are refused
-  for now.
+- Elmer can't take a weld (no node-pair springs); 2D models are refused. Shells work:
+  the path along one sheet's edge, its face and the other sheet's face as the legs'
+  faces (a T of two sheets carries its pull exactly on CalculiX and Code_Aster).
 
 ## Strength (AISC 360 J2, ADR 0078 step 2)
 
@@ -82,3 +83,45 @@ between two steps (or one step from zero) against F_SR(n). Category F (Table A-3
 8.2: shear on a fillet's throat) reads the line forces; A to E′ read the plates' largest
 principal stress range at the weld's footprint (mesh-dependent: refine there, and pick
 the category of the detail as Table A-3.1 draws it).
+
+### ASME VIII-2 5.5.5 (structural stress)
+
+`weld_fatigue(study, weld, method="asme", steps=[1, 2], cycles=N, thickness_m=t)`
+checks the toe on the attachment, the path's part. It uses:
+- the membrane stress f/t, with f the weld's line force along the attachment;
+- the bending stress 6m/t², with m the moment about the path (`twist`).
+
+The weld's own forces are the nodal forces the method asks for, so the result doesn't
+depend on the mesh. Each station's ranges then go through:
+- Eqs. 5.54–5.68: t_ess, I^(1/m_ss), and f_M from the cycle's mean stress;
+- Eq. 5.58's plane-strain 1/(1 − ν²);
+- Neuber's rule only when the hysteresis curve's K_css and n_css are passed
+  (`weld_strength.asme_cycles`).
+
+N comes from Table 3-F.2M's curve (`basis`, default −3σ, the design curve;
+`material` steel or aluminium). With `cycles`, the result also gives the damage
+n/N. A shell's thickness is taken from its section; give `thickness_m` for a solid.
+The flange-side toe (the plate the weld sits on) isn't covered.
+
+## Modelled welds (ADR 0078 step 4)
+
+`weld_make_modelled(component, weld)` draws a light fillet as a bead (straight, along
+a polyline or a curve, all round, or intermittent: a bead per segment): a part of its
+own (`weld_bead` history steps), with:
+- its legs taken from the weld's pairs on the mesh;
+- its root cut back by a tenth of the leg, so the plates meet only through the bead;
+- the filler as its material;
+- its legs tied to the two faces;
+- elements a sixth of the leg.
+
+`weld_results` then reads its line forces from the section through its throat, and
+the J2 and IC checks run on them as on a light weld. The section crosses the root's
+notch, so its force depends on the mesh: the lap joint's came to 98.8 % of P, with
+10 % of P across. Prefer light welds for the codes' line-force checks; use a modelled
+bead to see the stresses in and around it. `weld_make_line` takes it back.
+
+A groove weld modelled has no bead: at the solve its two faces are tied over the
+groove's depth from the path (the whole thickness for CJP, the depth for PJP), the rest
+left open. Its line force comes from a section just inside the path's part; it is the
+force on the other part. `weld_fatigue(method="asme")` takes modelled welds too: the
+moment about the path from the cuts, a groove's about the plate's mid-plane.

@@ -2468,6 +2468,52 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
                 "batch": [c.model_dump(mode="json") for c in batch]}  # fmt: skip
 
     @tool(
+        description="Draw a light weld as a modelled bead (ADR 0078 step 4): a fillet "
+        "(straight, a polyline, a curve, all round, or intermittent: a bead per segment) "
+        "becomes a part of its own (`weld_bead` steps: its legs from "
+        "the weld's node pairs on the component's mesh, its root cut back a tenth of the "
+        "leg so the plates meet only through it), its filler (or the path's part's "
+        "material) as its material, its legs tied to the two faces, elements a sixth of "
+        "the leg in it. Its line forces then come from the section through its throat "
+        "(weld_results, the same checks; the section's force is mesh-dependent through "
+        "the root's notch, about 1 % at six elements). Meshes the component to find the "
+        "legs. A groove weld gets no bead: its faces are tied over its depth at the solve. "
+        "Returns `batch` to pass to submit (one undo); nothing is made here."
+    )
+    @guarded
+    def weld_make_modelled(component: str, weld: str) -> dict[str, Any]:
+        import tempfile
+        from pathlib import Path
+
+        from puzzle import weld_generator
+        from puzzle.commands import resolve
+        from puzzle.mesh.generate import generate_mesh
+        from puzzle.model.schema import Component
+
+        s = session()
+        comp = resolve(s.project, component, Component)
+        with tempfile.TemporaryDirectory() as scratch:
+            meshed = generate_mesh(s.project, comp.id, root, Path(scratch))
+            batch = weld_generator.modelled_commands(s.project, comp, meshed.mesh, weld)
+        return {"weld": weld, "batch": [c.model_dump(mode="json") for c in batch]}
+
+    @tool(
+        description="Turn a modelled weld (ADR 0078 step 4) back into a light weld: its "
+        "bead's part, geometry, material, ties and mesh size removed. Returns `batch` to "
+        "pass to submit (one undo); nothing is made here."
+    )
+    @guarded
+    def weld_make_line(component: str, weld: str) -> dict[str, Any]:
+        from puzzle import weld_generator
+        from puzzle.commands import resolve
+        from puzzle.model.schema import Component
+
+        s = session()
+        comp = resolve(s.project, component, Component)
+        batch = weld_generator.line_commands(s.project, comp, weld)
+        return {"weld": weld, "batch": [c.model_dump(mode="json") for c in batch]}
+
+    @tool(
         description="Light welds' results in a study's latest run (ADR 0078): per weld its "
         "total force (N), largest line force (N/m) and where, mean line force, welded "
         "length, and each station's line force in the weld's frame (along, throat_normal, "
@@ -2502,18 +2548,36 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         "against F_SR for `cycles` and the detail's `category` (Table A-3.1): 'F' (default) "
         "shear on the fillet's throat from the line forces; A, B, B', C, D, E, E' the base "
         "metal at the weld's toe (the largest principal stress range at its footprint "
-        "nodes, mesh-dependent). Returns the range, F_SR, the ratio (≤ 1 passes) and where."
+        "nodes, mesh-dependent). Returns the range, F_SR, the ratio (≤ 1 passes) and where. "
+        "`method='asme'`: ASME VIII-2 5.5.5's equivalent structural stress at the "
+        "attachment's toe (the path's part) from the weld's line forces and moments, "
+        "membrane f/t plus bending 6m/t², t `thickness_m` (a shell's own by default); "
+        "returns each station's permissible cycles on Table 3-F.2M's `basis` curve "
+        "(default -3sigma; `material` steel or aluminium) and, with `cycles`, the damage."
     )
     @guarded
     def weld_fatigue(study: str, weld: str, category: str = "F", cycles: float = 2e6,
-                     steps: list[int] | None = None) -> dict[str, Any]:  # fmt: skip
+                     steps: list[int] | None = None, method: str = "aisc",
+                     thickness_m: float | None = None, basis: str = "-3sigma",
+                     material: str = "steel") -> dict[str, Any]:  # fmt: skip
         from puzzle.commands import resolve
         from puzzle.model.schema import Component, Study
-        from puzzle.post.weld_fields import fatigue
+        from puzzle.post.weld_fields import fatigue, structural_stress
 
         found = resolve(session().project, study, Study)
         record, mesh, res = latest(study)
         comp = session().project.get(found.component, Component)
+        if method == "asme":
+            try:
+                out = structural_stress(session().project, comp, mesh, res, weld,
+                                        tuple(steps or ()), thickness_m, cycles,
+                                        basis=basis, material=material)  # fmt: skip
+            except ValueError as exc:
+                raise PuzzleError(str(exc), code="invalid") from None
+            out["stations"] = out["stations"][:50]
+            return {"run_id": record.run_id, **out}
+        if method != "aisc":
+            raise PuzzleError("method: aisc or asme", code="invalid")
         out = fatigue(session().project, comp, mesh, res, weld, category, cycles,
                       tuple(steps or ()))  # fmt: skip
         return {"run_id": record.run_id, **out}

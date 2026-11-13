@@ -237,6 +237,15 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
             if b.dim != own.dim:  # the part's own elements: solids, beams or shells
                 continue
             if part.name in sprung:  # written as springs below (ADR 0055)
+                from puzzle.element_choice import choice_for
+
+                if choice_for(comp, mesh, b) is not None:  # ADR 0082: never dropped
+                    raise InputError(
+                        f"'{part.name}' has an open table section, which CalculiX gets as "
+                        "exact Timoshenko springs, not beam elements: an element choice "
+                        "can't apply there",
+                        code="unsupported",
+                    )
                 continue
             if planar is not None:
                 if b.element not in PLANAR_ELEMENTS[planar]:
@@ -655,6 +664,12 @@ def _shell_sections(comp: Component, mesh: Mesh, selection: str, material: str) 
     return out
 
 
+def _on_shell_edge(mesh: Mesh, group) -> bool:
+    """An edge selection of a shell body: a force there spreads along its length."""
+    return group.dim == 1 and bool(mesh.shell_blocks()) and set(
+        int(n) for n in group.node_ids) <= mesh.shell_nodes()  # fmt: skip
+
+
 def _on_shells(mesh: Mesh, group) -> bool:
     shells = {id(b) for b in mesh.shell_blocks()}
     return any(id(b) in shells for b in group.blocks(mesh) if b.dim == 2)
@@ -855,9 +870,10 @@ def _step(
         (yields or lifting) and step.type == "stationary" and "solid_mechanics" in solved
     )
     nlgeom = bool(step.settings.get("geometric_nonlinearity", False))
-    if nlgeom and (solved != {"solid_mechanics"} or step.type != "stationary"):
-        raise InputError(
-            "geometric_nonlinearity applies to static structural steps", code="unsupported"
+    if nlgeom and (solved != {"solid_mechanics"} or step.type not in ("stationary", "transient")):
+        raise InputError(  # ADR 0082 decision 6: transient large deflection too
+            "geometric_nonlinearity applies to static and transient structural steps",
+            code="unsupported",
         )
     # Plasticity, lift-off and large deflection go in at most 1/n of the load at a time
     # (their path matters; each increment's results are kept for a load-deflection
@@ -894,8 +910,17 @@ def _step(
             # ADR 0028: load factors on this step's loads, and their mode shapes.
             "buckling": ["*BUCKLE", str(int(settings.get("modes", 4)))],
             # ADR 0041: Newmark with the given increment (DIRECT); ALPHA 0 (CalculiX's
-            # default -0.05 damps numerically) unless an HHT alpha is asked for.
+            # default -0.05 damps numerically) unless an HHT alpha is asked for. Under
+            # NLGEOM the increment may be cut back, never past the one given, and HHT's
+            # alpha defaults to CalculiX's -0.05: undamped Newmark diverged, then crawled
+            # at 1e-3 of the step, as a strip swung into its elastica (ADR 0082).
             "transient": [
+                f"*DYNAMIC, ALPHA={float(settings.get('hht_alpha', -0.05)):.6g}",
+                f"{setting('time_step'):.10g}, {setting('end_time'):.10g}, "
+                f"{setting('time_step') / 1e4:.6g}, {setting('time_step'):.10g}",
+            ]
+            if step.type == "transient" and nlgeom
+            else [
                 f"*DYNAMIC, DIRECT, ALPHA={float(settings.get('hht_alpha', 0.0)):.6g}",
                 f"{setting('time_step'):.10g}, {setting('end_time'):.10g}",
             ]
@@ -981,7 +1006,9 @@ def _step(
     # without NLGEOM CalculiX solved them once, closed both ways.
     gapped = lifting and step.type == "stationary" and "solid_mechanics" in solved
     head = "*STEP, NLGEOM, INC=10000" if nlgeom or gapped else "*STEP"
-    out = ["*STEP, INC=1000000" if step.type == "transient" else head] + procedure
+    if step.type == "transient":  # every time increment; NLGEOM for large deflection
+        head = "*STEP, NLGEOM, INC=1000000" if nlgeom else "*STEP, INC=1000000"
+    out = [head] + procedure
     if "heat_transfer" in solved:
         # Temperature tables make heat transfer nonlinear; CalculiX's default field
         # tolerances (0.5% residual, 1% correction) stop short. Linear cases converge at once.
@@ -2127,6 +2154,10 @@ def _feature_rows(f: Feature, mesh: Mesh, faces: FaceLookup, rigid=None) -> dict
         cload += [
             f"{n}, {d + 1}, {fn[d]:.10g}" for n, fn in forces.items() for d in (0, 1) if fn[d]
         ]
+    elif f.type == "force" and _on_shell_edge(mesh, group):  # along a shell's edge
+        forces = nodal_edge_forces(group, mesh, [v.get(a, 0.0) for a in "xyz"])
+        cload += [f"{n}, {d + 1}, {fn[d]:.10g}" for n, fn in forces.items() for d in range(3)
+                  if fn[d]]  # fmt: skip
     elif f.type == "force":
         cload += _nodal_forces(group, mesh, [v.get(a, 0.0) for a in "xyz"])
     elif f.type == "pressure" and group.dim == 2 and _on_shells(mesh, group):

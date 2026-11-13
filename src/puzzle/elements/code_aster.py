@@ -102,20 +102,23 @@ ELEMENTS = [
         ("quad4",),
         "thick_shell",
         ("static", "modal"),
-        "Thick quadrilateral plates.",
+        "Thick quadrilateral plates (assumed shear strains): the thick strip to Mindlin's "
+        "digits. Chosen as the expert's type, solver_types {'code_aster': 'Q4G'} with "
+        "thick_shell (DST/DSQ is that formulation's default).",
         "",
-        False,
+        True,
         U3,
     ),
     Element(
         "COQUE_3D",
         "shell",
-        ("tri6", "quad8", "quad9"),
+        ("quad9",),
         "thick_shell",
         ("static", "modal", "buckling", "transient", "large_deflection"),
-        "Curved shells on quadratic cells, large rotations.",
-        "",
-        False,
+        "Curved thick shells on nine-node quadrilaterals (sheets meshed with hexahedra and "
+        "27-node bricks): Puzzle writes it for those.",
+        "seven-node triangles: Gmsh makes six-node ones, so quadratic triangles are refused.",
+        True,
         U3,
     ),
     Element(

@@ -322,9 +322,10 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     _check_friction(touching, features, mesh)
     _check_curved(touching, mesh)
     nlgeom = bool(step.settings.get("geometric_nonlinearity", False))
-    if nlgeom and (thermal or step.type != "stationary"):
-        raise InputError(
-            "geometric_nonlinearity applies to static structural steps", code="unsupported"
+    if nlgeom and (thermal or step.type not in ("stationary", "transient")):
+        raise InputError(  # ADR 0082 decision 6: DYNA_NON_LINE takes it too
+            "geometric_nonlinearity applies to static and transient structural steps",
+            code="unsupported",
         )
     plastic = (
         [a for a in comp.materials if project.get(a.material, Material).models.plasticity]
@@ -428,22 +429,25 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         for p in comp.parts
         if mesh.groups.get(p.name) and mesh.groups[p.name].dim == 2 and not mesh.planar
     ]
-    if nlgeom and (shell_parts or any(c.formulation == "beam" for c in comp.connectors)):
-        raise InputError(  # ADR 0082 decision 6: shells want DKT/COQUE_3D with GROT_GDEP
-            "large deflection of shells and beam bolts isn't written on Code_Aster yet; "
-            "CalculiX takes it",
+    if nlgeom and any(c.formulation == "beam" for c in comp.connectors):
+        raise InputError(  # ADR 0082 decision 6
+            "large deflection of beam bolts isn't written on Code_Aster yet; CalculiX takes it",
             code="unsupported",
         )
     if nlgeom and beam_parts and any(c.selection.split("/", 1)[0] in beam_parts
                                      for c in comp.elements):  # fmt: skip
         raise InputError("a chosen beam element under large deflection: Code_Aster writes "
                          "POU_D_T_GD there", code="unsupported")  # fmt: skip
-    if any(b.element in ("tri6", "quad8", "quad9") for b in mesh.shell_blocks()) and not thermal:
+    if any(b.element in ("tri6", "quad8") for b in mesh.shell_blocks()) and not thermal:
         raise InputError(
-            "Code_Aster's shells (DKT) are three- and four-node faces: set the mesh recipe's "
-            "element order to 1 for sheet bodies",
+            "Code_Aster's shells are DKT on three- and four-node faces, or COQUE_3D on "
+            "nine-node quadrilaterals: set the mesh recipe's element order to 1, or mesh "
+            "the sheets with hexahedra and 27-node bricks (quadrilaterals of nine nodes)",
             code="unsupported",
         )
+    # ADR 0082: nine-node quadrilaterals are COQUE_3D, the curved thick shell.
+    curved = {p for p in shell_parts
+              if any(b.element == "quad9" for b in mesh.groups[p].blocks(mesh))}  # fmt: skip
     shells = []
     # A plane-stress part's thickness only spreads its loads (C_PLAN is per unit
     # thickness): no shell characteristics for it.
@@ -717,7 +721,8 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             if c.formulation == "beam"
         )
         + "".join(
-            f" _F(GROUP_MA='{names[p]}', PHENOMENE='MECANIQUE', MODELISATION='DKT'),"
+            f" _F(GROUP_MA='{names[p]}', PHENOMENE='MECANIQUE', "
+            f"MODELISATION='{'COQUE_3D' if p in curved else 'DKT'}'),"
             for p in shell_parts
         )
         + "".join(
@@ -892,7 +897,14 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             _table("res", "TEMP", "temperature"),
         ]
     elif step.type == "buckling":
-        out += _buckling(step, cara, charges, preload, names, mesh, ties)
+        large = preloaded and bool(steps[0].settings.get("geometric_nonlinearity", False))
+        if large and (beam_parts or shell_parts):
+            raise InputError(  # ADR 0082 decision 6: solids only so far
+                "Code_Aster takes a large-deflection preload before buckling on solids only "
+                "so far; run beams and shells on CalculiX",
+                code="unsupported",
+            )
+        out += _buckling(step, cara, charges, preload, names, mesh, ties, large=large)
     elif step.type == "frequency_domain":  # harmonic response, direct (ADR 0041)
         spectra = _spectral_loads(spectral)
         out += spectra["charges"]
@@ -948,21 +960,50 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             )
         check_dynamics(step, "Code_Aster", modal=False)
         dt, end, _ = time_settings(step)
-        scheme = (
-            f"SCHEMA='HHT', ALPHA={float(step.settings['hht_alpha']):.6g}"
-            if float(step.settings.get("hht_alpha", 0.0))
-            else "SCHEMA='NEWMARK'"  # average acceleration: no numerical damping
+        # Average acceleration (no numerical damping), except under large deflection,
+        # where HHT's alpha defaults to -0.05 as CalculiX's does: undamped Newmark lost
+        # Newton on a strip swinging into its elastica (ADR 0082).
+        alpha = float(step.settings.get("hht_alpha", -0.05 if nlgeom else 0.0))
+        scheme = f"SCHEMA='HHT', ALPHA={alpha:.6g}" if alpha else "SCHEMA='NEWMARK'"
+        # Large deflection (ADR 0082 decision 6): Green-Lagrange on solids; shells and
+        # beams are refused below, measured.
+        behaviour = (
+            "_F(RELATION='ELAS'" + (", DEFORMATION='GREEN_LAGRANGE'" if nlgeom else "") + ")"
         )
-        excit = [f"_F(CHARGE={c})" for c in charges] + [
+        if nlgeom and shell_parts:
+            raise InputError(
+                "Code_Aster has no shell for large rotations in time: COQUE_3D has no mass "
+                "matrix under GROT_GDEP (ELEMENTS3_91), and DKT's Newton converged linearly "
+                "(20 to 40 iterations an increment, a twenty-fifth of a strip's run in 23 "
+                "minutes); run shells' transient large deflection on CalculiX",
+                code="unsupported",
+            )
+        if nlgeom and beam_parts:
+            raise InputError(
+                "Code_Aster's beam for large rotations, POU_D_T_GD, can't build the "
+                "stiffness matrix (RIGI_MECA, CALCUL_37) DYNA_NON_LINE needs; run beams' "
+                "transient large deflection on CalculiX",
+                code="unsupported",
+            )
+        excit = [
+            f"_F(CHARGE={c}" + (", TYPE_CHARGE='SUIV')" if c == "loadp" else ")") for c in charges
+        ] + [  # fmt: skip
             f"_F(CHARGE=tload{k}, FONC_MULT=tamp{k})"
             for k in range(1, 1 + len({f.amplitude for f in timed}))
         ]
         solids = mesh.planar or any(b.dim == 3 for b in mesh.blocks)
         out += [
-            f"times = DEFI_LIST_REEL(DEBUT=0.0, INTERVALLE=_F(JUSQU_A={end:.12g}, PAS={dt:.12g}))",
+            (  # under large deflection a failed increment is cut back (`_failure`)
+                f"times = DEFI_LIST_INST(DEFI_LIST=_F(LIST_INST=DEFI_LIST_REEL(DEBUT=0.0, "
+                f"INTERVALLE=_F(JUSQU_A={end:.12g}, PAS={dt:.12g}))), {_failure(step)})"
+                if nlgeom
+                else f"times = DEFI_LIST_REEL(DEBUT=0.0, INTERVALLE=_F(JUSQU_A={end:.12g}, "
+                f"PAS={dt:.12g}))"
+            ),
             f"res = DYNA_NON_LINE(MODELE=model, CHAM_MATER=mater, {cara}"
-            f"EXCIT=({', '.join(excit)},), COMPORTEMENT=_F(RELATION='ELAS'), "
-            "INCREMENT=_F(LIST_INST=times), "
+            f"EXCIT=({', '.join(excit)},), COMPORTEMENT=({behaviour},), "
+            + ("NEWTON=_F(REAC_ITER=1), CONVERGENCE=_F(ITER_GLOB_MAXI=50), " if nlgeom else "")
+            + "INCREMENT=_F(LIST_INST=times), "
             f"SCHEMA_TEMPS=_F({scheme}, FORMULATION='DEPLACEMENT'))",
             "res = CALC_CHAMP(reuse=res, RESULTAT=res, "
             + ("CONTRAINTE=('SIGM_NOEU',), " if solids else "")
@@ -997,13 +1038,25 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         if chain and which:  # each step's end
             which = "INST=(" + ", ".join(f"{k:.1f}" for k in range(1, n + 1)) + ",)"
         parts = [f"_F(TOUT='OUI', RELATION='ELAS'{strains})"]
+        if nlgeom and shell_parts:  # ADR 0082 decision 6: DKT's large rotations
+            plates = ", ".join(f"'{names[s]}'" for s in shell_parts)
+            solid = [names[pt.name] for pt in comp.parts
+                     if pt.name not in shell_parts + beam_parts and pt.name in names]  # fmt: skip
+            parts = [p for p in parts if "TOUT='OUI'" not in p]
+            if solid:
+                parts.insert(0, f"_F(GROUP_MA=({', '.join(repr(o) for o in solid)},), "
+                                f"RELATION='ELAS'{strains})")  # fmt: skip
+            parts.append(f"_F(GROUP_MA=({plates},), RELATION='ELAS', DEFORMATION='GROT_GDEP')")
         if nlgeom and beam_parts:  # ADR 0082 decision 6: beams' large rotations
             groups = ", ".join(f"'{names[b]}'" for b in beam_parts)
-            others = [names[pt.name] for pt in comp.parts if pt.name not in beam_parts
-                      and pt.name in names]  # fmt: skip
+            others = [names[pt.name] for pt in comp.parts
+                      if pt.name not in beam_parts + shell_parts and pt.name in names]  # fmt: skip
             # POU_D_T_GD takes GROT_GDEP only: Green-Lagrange goes on the other parts alone
-            parts = ([f"_F(GROUP_MA=({', '.join(repr(o) for o in others)},), RELATION='ELAS'"
-                      f"{strains})"] if others else [])  # fmt: skip
+            if not shell_parts:  # (with shells, their branch has put the solids in)
+                parts = [p for p in parts if "TOUT='OUI'" not in p]
+                if others:
+                    parts.insert(0, f"_F(GROUP_MA=({', '.join(repr(o) for o in others)},), "
+                                    f"RELATION='ELAS'{strains})")  # fmt: skip
             parts.append(
                 f"_F(GROUP_MA=({groups},), RELATION='ELAS_POUTRE_GR', DEFORMATION='GROT_GDEP')"
             )  # POU_D_T_GD's own elasticity
@@ -1092,7 +1145,9 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             )  # a frame of POU_D_T_GD alone has neither
             + "FORCE=('REAC_NODA',)"
             # V1 of VMIS_ISOT_TRAC is the cumulated (equivalent) plastic strain p.
-            + (", VARI_INTERNE=('VARI_NOEU',), DEFORMATION=('EPSP_NOEU',)" if plastic else "")
+            # (mixed u-p elements compute no EPSP: their plastic strain is p alone)
+            + (", VARI_INTERNE=('VARI_NOEU',)" if plastic else "")
+            + (", DEFORMATION=('EPSP_NOEU',)" if plastic and not mixed else "")
             + ")",
             _table("res", "DEPL", "displacement", which),
             *([_table("res", "SIGM_NOEU", "stress", which)] if solids else []),
@@ -1101,7 +1156,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             *([_table("res", "EFGE_NOEU", "beam_forces", which)] if bolt_beams else []),
             *(
                 [
-                    _table("res", "EPSP_NOEU", "plastic_strain", which),
+                    *([] if mixed else [_table("res", "EPSP_NOEU", "plastic_strain", which)]),
                     _table("res", "VARI_NOEU", "plastic_strain_equivalent", which),
                 ]
                 if plastic
@@ -1837,6 +1892,23 @@ def with_settings(comm: str, study, step, pivots: bool = True) -> str:
     return apply(comm, overrides) if overrides else comm
 
 
+def _on_shell_edge(mesh: Mesh, group) -> bool:
+    """An edge selection of a shell body: a force there spreads along it (FORCE_ARETE)."""
+    return group.dim == 1 and bool(mesh.shell_blocks()) and set(
+        int(n) for n in group.node_ids) <= mesh.shell_nodes()  # fmt: skip
+
+
+def _edge_length(group, mesh) -> float:
+    """An edge selection's length, along its elements' own (curved) geometry."""
+    total = 0.0
+    for b in group.blocks(mesh):
+        if b.dim != 1:
+            continue
+        xyz = mesh.node_coords(b.connectivity.ravel()).reshape(len(b.ids), -1, 3)
+        total += float(np.linalg.norm(xyz[:, 1] - xyz[:, 0], axis=1).sum())
+    return total
+
+
 def _on_shells(mesh: Mesh, group) -> bool:
     shells = {id(b) for b in mesh.shell_blocks()}
     return group.dim == 2 and any(id(b) in shells for b in group.blocks(mesh))
@@ -1889,10 +1961,18 @@ def _spectral_loads(spectral) -> dict:
     return out
 
 
-def _buckling(step, cara: str, charges: list[str], preload, names, mesh, ties) -> list[str]:
+def _buckling(step, cara: str, charges: list[str], preload, names, mesh, ties,
+              large: bool = False) -> list[str]:  # fmt: skip
     """Linear buckling (ADR 0028): K + K_G(preload) against K_G of this step's loads,
     from the stresses of a static solve under each. Code_Aster's CHAR_CRIT is the load
-    factor (positive for a load that buckles as applied)."""
+    factor (positive for a load that buckles as applied).
+
+    With `large` (the static step under geometric_nonlinearity, ADR 0082 decision 6) the
+    preload is solved by STAT_NON_LINE in Green-Lagrange strains, ramped over ten
+    increments, and K_G is built from its final (second Piola-Kirchhoff) stresses, as
+    CalculiX's NLGEOM static step then *BUCKLE, PERTURBATION. K stays the undeformed
+    one: the initial-displacement matrix is left out, which matters only when the
+    preload deforms the structure appreciably before it buckles."""
     n = int(step.settings.get("modes", 4))
     excit = ", ".join(f"_F(CHARGE={c})" for c in charges)
     load_list = ", ".join(charges)
@@ -1910,9 +1990,28 @@ def _buckling(step, cara: str, charges: list[str], preload, names, mesh, ties) -
     if preload:
         out += [
             _loads(preload, names, mesh, False, ties).replace("load = ", "load0 = ", 1),
-            f"pre = MECA_STATIQUE(MODELE=model, CHAM_MATER=mater, {cara}EXCIT=(_F(CHARGE=load0),))",
-            "sig0 = CREA_CHAMP(TYPE_CHAM='ELGA_SIEF_R', OPERATION='EXTR', RESULTAT=pre, "
-            "NOM_CHAM='SIEF_ELGA', NUME_ORDRE=1)",
+            *(
+                [
+                    "ramp0 = DEFI_FONCTION(NOM_PARA='INST', VALE=(0.0, 0.0, 1.0, 1.0))",
+                    "times0 = DEFI_LIST_INST(DEFI_LIST=_F(LIST_INST=DEFI_LIST_REEL("
+                    "DEBUT=0.0, INTERVALLE=_F(JUSQU_A=1.0, NOMBRE=10))), "
+                    "ECHEC=_F(SUBD_METHODE='MANUEL', SUBD_PAS=4, SUBD_NIVEAU=5))",
+                    f"pre = STAT_NON_LINE(MODELE=model, CHAM_MATER=mater, {cara}"
+                    "EXCIT=(_F(CHARGE=load0, FONC_MULT=ramp0),), "
+                    "COMPORTEMENT=_F(TOUT='OUI', RELATION='ELAS', "
+                    "DEFORMATION='GREEN_LAGRANGE'), INCREMENT=_F(LIST_INST=times0), "
+                    "NEWTON=_F(REAC_ITER=1), CONVERGENCE=_F(ITER_GLOB_MAXI=50))",
+                    "sig0 = CREA_CHAMP(TYPE_CHAM='ELGA_SIEF_R', OPERATION='EXTR', "
+                    "RESULTAT=pre, NOM_CHAM='SIEF_ELGA', INST=1.0)",
+                ]
+                if large
+                else [
+                    f"pre = MECA_STATIQUE(MODELE=model, CHAM_MATER=mater, {cara}"
+                    "EXCIT=(_F(CHARGE=load0),))",
+                    "sig0 = CREA_CHAMP(TYPE_CHAM='ELGA_SIEF_R', OPERATION='EXTR', "
+                    "RESULTAT=pre, NOM_CHAM='SIEF_ELGA', NUME_ORDRE=1)",
+                ]
+            ),
             f"kge0 = CALC_MATR_ELEM(OPTION='RIGI_GEOM', MODELE=model, {cara}SIEF_ELGA=sig0)",
             "kg0 = ASSE_MATRICE(MATR_ELEM=kge0, NUME_DDL=nu)",
             "kk = COMB_MATR_ASSE(COMB_R=(_F(MATR_ASSE=kk, COEF_R=1.0), "
@@ -2773,6 +2872,7 @@ def _loads(
     imposed, face_force, pressure, temperature, flux, exchange = [], [], [], [], [], []
     source: list[str] = []  # heat per volume (ADR 0047)
     contour: list[str] = []  # forces on a 2D model's edges
+    edges: list[str] = []  # forces along shells' edges, per length (FORCE_ARETE)
     nodal: list[str] = []
     gravity, rotation, rigid, shell_pressure = [], [], [], []
     internal: list[str] = []  # forces per volume (ADR 0044 stage 2)
@@ -2803,6 +2903,10 @@ def _loads(
         elif f.type == "displacement" and f.axes is None:  # in local axes: loadf
             dofs = ", ".join(f"D{a.upper()}={v[a]:.12g}" for a in "xyz" if a in v)
             imposed.append(f"_F(GROUP_MA='{g}', {dofs})")
+        elif f.type == "force" and _on_shell_edge(mesh, mesh.groups[f.selection]):
+            length = _edge_length(mesh.groups[f.selection], mesh)
+            comps = ", ".join(f"F{a.upper()}={v[a] / length:.12g}" for a in "xyz" if v.get(a))
+            edges.append(f"_F(GROUP_MA='{g}', {comps})")
         elif f.type == "force" and mesh.groups[f.selection].dim == 0:  # on points (beams)
             share = len(mesh.groups[f.selection].node_ids)
             comps = ", ".join(f"F{a.upper()}={v[a] / share:.12g}" for a in "xyz" if v.get(a))
@@ -2873,6 +2977,7 @@ def _loads(
         + kw("LIAISON_OBLIQUE", extra.get("LIAISON_OBLIQUE", []))
         + kw("FORCE_FACE", face_force)
         + kw("FORCE_CONTOUR", contour)
+        + kw("FORCE_ARETE", edges)
         + kw("PRES_REP", pressure)
         + kw("FORCE_COQUE", shell_pressure)
         + kw("PESANTEUR", gravity)

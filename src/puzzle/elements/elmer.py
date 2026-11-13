@@ -72,15 +72,18 @@ ELEMENTS = [
         ("magnetic_fields",),
     ),
     Element(
-        "p-elements",
+        "p:2",
         "solid_3d",
         ("tet4", "hex8"),
-        "lagrange",
-        STRUCT,
-        'Hierarchic higher-order bases (Element = "p:2"...).',
-        "",
-        False,
+        "higher_order",
+        ("static", "modal"),
+        'Hierarchic quadratic bases on a linear mesh (Element = "p:2"; "p:3" and up as '
+        "the expert's type): linear tetrahedra that bend without locking. The whole "
+        "elasticity solve takes it, so every body chooses it.",
+        "results are kept at the mesh's vertices only; curved faces stay faceted.",
+        True,
         "Elmer Solver Manual, p-elements",
+        ("solid_mechanics",),
     ),
     Element(
         "ShellSolver",

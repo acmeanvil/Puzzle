@@ -84,10 +84,12 @@ ELEMENTS = [
         ("tet10",),
         "mixed_up",
         ("static",),
-        "Mixed displacement-pressure for incompressible materials (or Stokes flow).",
-        "",
-        False,
+        "Mixed displacement-pressure for nearly incompressible materials: P2 u, P1 p, "
+        "over the whole model (every body chooses it).",
+        "temperature loads, welds, threads, springs: not written with it yet.",
+        True,
         REF,
+        ("solid_mechanics",),
     ),
     Element(
         "Raviart-Thomas, DG",

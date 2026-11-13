@@ -8,15 +8,16 @@ Every solver's elements, grouped by what they model. ★ marks the ones Puzzle w
 | --- | --- | --- | --- | --- | --- |
 | full integration | linear | C3D4 ★, C3D8 ★, C3D6 ★ | – | – | – |
 | full integration | quadratic | C3D10 ★, C3D20 ★, C3D15 ★ | – | – | – |
-| reduced integration | linear | C3D8R | – | – | – |
+| reduced integration | linear | C3D8R ★ | – | – | – |
 | incompatible modes (bending without locking) | linear | C3D8I ★ | – | – | – |
 | reduced integration | quadratic | C3D20R ★ | – | – | – |
 | full integration | linear and quadratic | – | 3D ★ | – | – |
 | reduced integration | linear and quadratic | – | 3D_SI ★ | – | – |
-| mixed displacement-pressure (nearly incompressible) | quadratic | – | 3D_INCO_UPG ★, 3D_INCO_UP | – | Taylor-Hood P2-P1 |
+| mixed displacement-pressure (nearly incompressible) | quadratic | – | 3D_INCO_UPG ★, 3D_INCO_UP | – | Taylor-Hood P2-P1 ★ |
 | Lagrange (nodal) unknowns | linear and quadratic | – | – | 504/510 ★, 808/820/827 ★, 706/715 ★ | – |
-| Lagrange (nodal) unknowns | linear | – | – | p-elements | Lagrange P1 ★, Lagrange P3+ |
+| higher order on the same cells (p-elements) | linear | – | – | p:2 ★ | – |
 | Lagrange (nodal) unknowns | quadratic | – | – | – | Lagrange P2 ★, Lagrange Q2 (27-node bricks) ★ |
+| Lagrange (nodal) unknowns | linear | – | – | – | Lagrange P1 ★, Lagrange P3+ |
 
 - **CalculiX C3D4**: The linear tetrahedron: quick meshes, heat transfer. Not for: stress in bending: it locks, so use C3D10. Studies: static, modal, buckling, structural dynamics, harmonic response, contact, plasticity, large deflection, heat transfer. (CalculiX User's Manual, 6.2 Element Types)
 - **CalculiX C3D10**: The quadratic tetrahedron, Puzzle's default: any geometry, accurate stresses. Studies: static, modal, buckling, structural dynamics, harmonic response, contact, plasticity, large deflection, heat transfer. (CalculiX User's Manual, 6.2 Element Types)
@@ -34,12 +35,12 @@ Every solver's elements, grouped by what they model. ★ marks the ones Puzzle w
 - **Elmer 504/510**: Tetrahedra for StressSolver, HeatSolver and StatElecSolver. Studies: static, modal, structural dynamics, harmonic response, heat transfer, electrostatics. (Elmer Solver Manual, Appendix D)
 - **Elmer 808/820/827**: Hexahedra. Studies: static, modal, structural dynamics, harmonic response, heat transfer. (Elmer Solver Manual, Appendix D)
 - **Elmer 706/715**: Wedges. Studies: static, modal, structural dynamics, harmonic response, heat transfer. (Elmer Solver Manual, Appendix D)
-- **Elmer p-elements**: Hierarchic higher-order bases (Element = "p:2"...). Studies: static, modal, structural dynamics, harmonic response. (Elmer Solver Manual, p-elements)
+- **Elmer p:2**: Hierarchic quadratic bases on a linear mesh (Element = "p:2"; "p:3" and up as the expert's type): linear tetrahedra that bend without locking. The whole elasticity solve takes it, so every body chooses it. Not for: results are kept at the mesh's vertices only; curved faces stay faceted. Studies: static, modal. (Elmer Solver Manual, p-elements)
 - **FEniCSx Lagrange P2**: Quadratic Lagrange on tetrahedra: Puzzle's elasticity. Studies: static, modal, structural dynamics, harmonic response, heat transfer, electrostatics. (DOLFINx, basix.ufl.element)
 - **FEniCSx Lagrange P1**: Linear Lagrange on tetrahedra. Not for: bending: it locks. Studies: static, heat transfer, electrostatics. (DOLFINx, basix.ufl.element)
 - **FEniCSx Lagrange Q2 (27-node bricks)**: Quadratic Lagrange on 27-node hexahedra (the mesh recipe's hexahedron nodes 27). Not for: 20-node bricks: DOLFINx has no serendipity cells, so they are refused. Studies: static, modal, structural dynamics, harmonic response, heat transfer. (DOLFINx, basix.ufl.element)
 - **FEniCSx Lagrange P3+**: Higher degrees on the same cells. Studies: static, heat transfer. (DOLFINx, basix.ufl.element)
-- **FEniCSx Taylor-Hood P2-P1**: Mixed displacement-pressure for incompressible materials (or Stokes flow). Studies: static. (DOLFINx, basix.ufl.element)
+- **FEniCSx Taylor-Hood P2-P1**: Mixed displacement-pressure for nearly incompressible materials: P2 u, P1 p, over the whole model (every body chooses it). Not for: temperature loads, welds, threads, springs: not written with it yet. Studies: static. (DOLFINx, basix.ufl.element)
 
 ## 2D solids (plane stress, plane strain, axisymmetric)
 
@@ -63,36 +64,43 @@ Every solver's elements, grouped by what they model. ★ marks the ones Puzzle w
 
 | Formulation | Order | CalculiX | Code_Aster | Elmer | PyNite |
 | --- | --- | --- | --- | --- | --- |
-| thick shell (Mindlin-Reissner) | quadratic | S6 ★, S8 ★, S8R | COQUE_3D | – | – |
-| thin shell (Kirchhoff) | linear | S3 | DKT ★ | – | – |
-| thick shell (Mindlin-Reissner) | linear | S4/S4R | DST ★, Q4G | – | Plate / Quad (MITC4) |
+| thick shell (Mindlin-Reissner) | quadratic | S6 ★, S8 ★ | COQUE_3D ★ | – | – |
+| reduced integration | quadratic | S8R ★ | – | – | – |
+| thin shell (Kirchhoff) | linear | S3 | DKT ★ | – | Plate (rectangular) |
+| thick shell (Mindlin-Reissner) | linear | S4 ★ | DST ★, Q4G ★ | – | Quad (MITC4) ★ |
+| reduced integration | linear | S4R | – | – | – |
 | thick shell (Mindlin-Reissner) | linear and quadratic | – | – | ShellSolver | – |
 
 - **CalculiX S6**: The quadratic triangular shell, expanded to C3D15 internally. Studies: static, modal, buckling, structural dynamics, contact, plasticity. (CalculiX User's Manual, 6.2 Element Types)
 - **CalculiX S8**: The quadratic quadrilateral shell, expanded to C3D20R. Studies: static, modal, buckling, structural dynamics, contact, plasticity. (CalculiX User's Manual, 6.2 Element Types)
-- **CalculiX S8R**: The quadratic quadrilateral shell with reduced integration. Studies: static, modal, buckling, structural dynamics, contact, plasticity. (CalculiX User's Manual, 6.2 Element Types)
+- **CalculiX S8R**: The quadratic quadrilateral shell with reduced integration, expanded to C3D20R. Studies: static, modal, buckling, structural dynamics, contact, plasticity. (CalculiX User's Manual, 6.2 Element Types)
 - **CalculiX S3**: The linear triangular shell. Not for: anything: it locks, so Puzzle refuses it. Studies: static. (CalculiX User's Manual, 6.2 Element Types)
-- **CalculiX S4/S4R**: The linear quadrilateral shells. Studies: static, modal, buckling. (CalculiX User's Manual, 6.2 Element Types)
+- **CalculiX S4**: The linear quadrilateral shell, expanded to C3D8I (incompatible modes): it bends without locking. Sheets mesh into quadrilaterals with the recipe's hexahedra. Studies: static, modal, buckling, structural dynamics. (CalculiX User's Manual, 6.2 Element Types)
+- **CalculiX S4R**: The linear quadrilateral shell with reduced integration, expanded to C3D8R. Not for: anything: its one-point bricks hourglass (a thick strip came out 3.6 times too soft). Use S4 or S8R. Studies: static, modal, buckling, structural dynamics. (CalculiX User's Manual, 6.2 Element Types)
 - **Code_Aster DKT**: Thin plates and shells (Kirchhoff), linear cells: Puzzle's shells. Not for: thick plates (span/thickness below ~20): DST. Studies: static, modal, buckling, structural dynamics, plasticity, large deflection. (Code_Aster U3 (modélisations))
 - **Code_Aster DST**: Thick plates (Mindlin-Reissner), linear cells. Studies: static, modal, buckling, structural dynamics. (Code_Aster U3 (modélisations))
-- **Code_Aster Q4G**: Thick quadrilateral plates. Studies: static, modal. (Code_Aster U3 (modélisations))
-- **Code_Aster COQUE_3D**: Curved shells on quadratic cells, large rotations. Studies: static, modal, buckling, structural dynamics, large deflection. (Code_Aster U3 (modélisations))
+- **Code_Aster Q4G**: Thick quadrilateral plates (assumed shear strains): the thick strip to Mindlin's digits. Chosen as the expert's type, solver_types {'code_aster': 'Q4G'} with thick_shell (DST/DSQ is that formulation's default). Studies: static, modal. (Code_Aster U3 (modélisations))
+- **Code_Aster COQUE_3D**: Curved thick shells on nine-node quadrilaterals (sheets meshed with hexahedra and 27-node bricks): Puzzle writes it for those. Not for: seven-node triangles: Gmsh makes six-node ones, so quadratic triangles are refused. Studies: static, modal, buckling, structural dynamics, large deflection. (Code_Aster U3 (modélisations))
 - **Elmer ShellSolver**: Elmer's Reissner-Mindlin shells. Studies: static, modal. (Elmer Models Manual, ShellSolver)
-- **PyNite Plate / Quad (MITC4)**: Rectangular plates and MITC4 quadrilaterals for walls and slabs. Studies: static. (PyNite, FEModel3D.add_plate, add_quad)
+- **PyNite Quad (MITC4)**: MITC4 quadrilaterals for walls and slabs, thick or thin: sheets meshed with the recipe's hexahedra, with pressure on them; frames and plates share nodes. Not for: self weight on plates and their stress results: not written yet. Studies: static. (PyNite, FEModel3D.add_quad)
+- **PyNite Plate (rectangular)**: Rectangular thin plates (12-term bending), better corner stresses. Not for: distorted or thick plates: the MITC4 quad. Studies: static. (PyNite, FEModel3D.add_plate)
 
 ## Beams
 
 | Formulation | Order | CalculiX | Code_Aster | Elmer | PyNite |
 | --- | --- | --- | --- | --- | --- |
 | Timoshenko beam (shear deformation) | linear | B31 ★, U1 (general beam) | POU_D_T ★ | BeamSolver3D | – |
-| Timoshenko beam (shear deformation) | quadratic | B32 ★, B32R ★ | – | – | – |
+| Timoshenko beam (shear deformation) | quadratic | B32 ★ | – | – | – |
+| reduced integration | quadratic | B32R ★ | – | – | – |
+| reduced integration | linear | B31R | – | – | – |
 | Euler-Bernoulli beam | linear | – | POU_D_E ★ | – | Member ★ |
 | beam with warping (open sections in torsion) | linear | – | POU_D_TG | – | – |
 | large rotations | linear | – | POU_D_T_GD ★, POU_D_TGM | – | – |
 
 - **CalculiX B31**: The linear beam, expanded to bricks of its section (rectangle, circle). Not for: short or many-element members: B32 is more accurate. Studies: static, modal, structural dynamics. (CalculiX User's Manual, 6.2 Element Types)
 - **CalculiX B32**: The quadratic beam, expanded to bricks of its section. Studies: static, modal, buckling, structural dynamics. (CalculiX User's Manual, 6.2 Element Types)
-- **CalculiX B32R**: The quadratic beam with reduced integration: the one taking box and pipe sections. Puzzle writes it for those. Studies: static, modal, buckling, structural dynamics. (CalculiX User's Manual, 6.2 Element Types)
+- **CalculiX B32R**: The quadratic beam with reduced integration, expanded to bricks of its section: the one taking box and pipe sections, so Puzzle writes it for those; a choice elsewhere. Studies: static, modal, buckling, structural dynamics. (CalculiX User's Manual, 6.2 Element Types)
+- **CalculiX B31R**: The linear beam with reduced integration. Not for: it expands to one-point bricks that hourglass: a cantilever came out 6.3 times too soft on 40 elements. Use B31 or B32R. Studies: static, modal, buckling, structural dynamics. (CalculiX User's Manual, 6.2 Element Types)
 - **CalculiX U1 (general beam)**: CalculiX's general-section beam. Not for: torsion: its stiffness is G(I11 + I22)/L, not G J, so Puzzle writes open sections as exact springs instead. Studies: static. (CalculiX User's Manual, 6.2 Element Types)
 - **Code_Aster POU_D_T**: The straight Timoshenko beam: Puzzle's beams and beam bolts. Not for: large rotations: POU_D_TGM. Studies: static, modal, buckling, structural dynamics, harmonic response. (Code_Aster U3 (modélisations))
 - **Code_Aster POU_D_E**: The slender Euler-Bernoulli beam. Not for: stocky members (shear deflection). Studies: static, modal, buckling, structural dynamics. (Code_Aster U3 (modélisations))

@@ -446,3 +446,19 @@ def test_save_as_new_project_opens_an_independent_copy(window, tmp_path):
     assert Session(before).project.name == name  # the original keeps its name
     stay = window.save_as(tmp_path / "second", "Another", open_copy=False)
     assert stay is not None and window.session.root == done.root
+
+
+def test_a_parts_properties_choose_its_element(window, app):
+    """ADR 0082 decision 7: a part's Properties hold Element formulation; choosing one is
+    one Edit of the component's elements, and the rows below name each solver's element."""
+    from puzzle.model.schema import Component
+
+    select(window, "part")
+    app.processEvents()
+    box = window.properties.element_box
+    assert box.currentData() == "none"
+    box.setCurrentIndex(box.findData("reduced"))
+    app.processEvents()
+    comp = next(o for o in window.session.project.objects.values() if isinstance(o, Component))
+    (choice,) = comp.elements
+    assert choice.formulation == "reduced" and choice.selection == comp.parts[0].name

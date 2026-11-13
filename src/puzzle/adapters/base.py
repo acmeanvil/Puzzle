@@ -362,7 +362,9 @@ class SolverAdapter(ABC):
             f"{self.name} does not write a {w.formulation} weld ('{w.name}')"
             + (" in a 2D model" if component.dimension != "3d" else "")
             for w in getattr(component, "welds", [])
-            if w.formulation not in caps.welds or component.dimension != "3d"
+            # a modelled weld is a part tied on (its ties are checked as contacts)
+            if (w.formulation == "line" and w.formulation not in caps.welds)
+            or component.dimension != "3d"
         ]
         problems += [  # ADR 0076: a thread's own list, never a plain tie or contact pair
             f"{self.name} does not support a threaded {c.type} contact ('{c.name}')"

@@ -1,6 +1,6 @@
 # 0078. Generate welds along a path, light by default and modelled on request, checked by AISC 360 and 370
 
-- Status: Accepted; steps 1-3 built, steps 5 and 6 in part (2026-11-12)
+- Status: Accepted; built (2026-11-12): light welds (solids and shells), AISC 360/370 and ADM strength, the instantaneous centre, AISC Appendix 3 and ASME VIII-2 5.5.5 fatigue, modelled beads
 - Date: 2026-11-10
 
 ## Context
@@ -255,7 +255,10 @@ The bracket's moment balances exactly only with the twist: about 7 % of it is th
     0.1 %;
   - P_n e tends to M_n as e grows;
   - eccentricity lowers the strength;
-  - an L-shaped group balances (residual nil).
+  - an L-shaped group balances (residual nil);
+  - the Manual's own tabulation, 14th edition Table 8-4 (angle 0°, two lines kl apart,
+    read through MuPDF, which decodes its JBIG2 pages): 13 entries over k 0 to 2 and a
+    0.1 to 3 match to the printed digits (k 0.6: 3.67, 2.48, 1.56, 0.867).
 
   On the bracket welded all round, the concentric strength in the base's plane is
   153.9 kN against 155.1 kN by hand (transverse sides at Δ_u(90°), longitudinal ones at
@@ -306,6 +309,67 @@ The bracket's moment balances exactly only with the twist: about 7 % of it is th
     nodal forces at a modelled weld's toe;
   - shell edges (welds along shells' edges, step 6);
   - the ADM's heat-affected zones in member checks (ADR 0079).
+
+## Built: steps 4 to 6 (2026-11-12)
+
+- **Modelled welds** (step 4, `weld_generator.modelled_commands`, MCP
+  `weld_make_modelled`/`weld_make_line`). A straight, continuous light fillet becomes:
+  - a `weld_bead` history step, its legs' directions from the weld's node pairs on the
+    mesh;
+  - a part with the filler as its material, its legs tied to the two faces
+    (nonconformal ties);
+  - elements a sixth of the leg.
+
+  This departs from decision 3. The bead is tied, not fused, and its root is cut back a
+  tenth of the leg into a small untied face. Fused or tied at the root line, the root
+  nodes joined the plates directly: the throat section then caught 69–81 % of the
+  pull, converging toward less than P.
+
+  The line forces come from the section through the throat (`weld_fields.modelled`),
+  binned at the root's nodes, and the J2 and IC checks read them as a light weld's.
+  On the lap joint the section's force was 88.7, 98.8 and 101.8 % of P at 3, 6 and 12
+  elements across the leg, the same on CalculiX and Code_Aster to five digits. The
+  section crosses the root's notch, so this is mesh-dependent, as decision 3 said peak
+  stresses would be.
+- **ASME VIII-2 5.5.5** (step 5, `weld_strength.asme_cycles`,
+  `weld_fields.structural_stress`, MCP `weld_fatigue(method="asme")`). The structural
+  stress at the attachment's toe is f/t + 6m/t², from the light weld's line forces and
+  moments, which are the nodal forces the method asks for. Then:
+  - Eqs. 5.54–5.68 (t_ess, I^(1/m_ss), f_M, the 1/(1 − ν²) of Eq. 5.58; Neuber's
+    rule with Annex 3-D's K_css and n_css when given);
+  - Eq. 3-F.22 with Table 3-F.2M (steel and aluminium, every statistical basis, −3σ
+    by default).
+
+  Checks: a worked example by hand to its digits; the shell tee's web toe, membrane
+  9.81 MPa against P/(L t) = 10.0. The plate-side toe is not covered: it needs the
+  plate's own nodal forces at the cut.
+- **Shell edges** (step 6): a light weld along a sheet's edge onto another sheet. The
+  pairing works on shell nodes as it does on solids. The tee's weld carries P to 5e-7
+  on CalculiX and exactly on Code_Aster, with a mean line force 1.9 % under P/L.
+- **The rest of step 4 (2026-11-12, later)**:
+  - Beads along any path: the path through the light weld's stations, kept at its
+    corners (a curve keeps every station). The legs at a corner are mitred
+    (leg / cos of half the turn). A segment is a ruled solid, and the segments are
+    fused; a loft closed on itself kept its seam's caps inside the solid, which Gmsh
+    can't mesh.
+  - Line forces from a throat cut per segment, keeping the triangles between the
+    mitre planes at its corners: the two segments' throat planes meet on the mitre,
+    each the other's mirror, so the cuts close up. The bracket welded all round, drawn
+    as a closed bead: 102.3 % of its shear P and 100.4 % of its moment P h.
+  - Intermittent beads: a `weld_bead` step per segment along its share of the path.
+    The lap joint's 10-in-20 mm stitch carries 99.3 % of P.
+  - Groove welds: no bead. The two faces are tied over the groove's depth from the
+    path at the solve (`weld_generator.with_grooves`: mesh face groups, a bonded
+    nonconformal tie), the rest left open. The line force comes from a section
+    parallel to the joint a 20th of the depth inside the path's part (`weld_fields.groove`).
+    A butt joint of 10 mm plates: CJP −P to 0.03 %, PJP (5 mm) to 0.8 %, on CalculiX
+    and Code_Aster.
+  - The ASME VIII-2 toe check on modelled welds: the bead's line forces and its
+    moment about the path (`twist`, now from the cuts too), into the attachment along
+    leg A; a groove's moment taken about the plate's mid-plane. The CJP butt's toe:
+    membrane 19.98 MPa against P/(L t) = 20.0, bending nil.
+- **Not built**: a modelled groove's reinforcement (its cap as a solid), and ASME's
+  toe on the plate side.
 
 ## Plan
 

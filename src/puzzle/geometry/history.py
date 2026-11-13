@@ -53,6 +53,7 @@ the part, the first one starts it):
 | import, heal, remove, fragment | see puzzle.geometry.prep (import `flat`: faces onto XY) | G2 |
 | keep | solids (1-based, file order) or bodies (names); body (the kept ones' name) | (names kept) |
 | bolt | `puzzle.solid_bolts` dimensions (ADR 0077) | bearing, fillet, shank, thread, section |
+| weld_bead | points, a, b (legs), closed, root (ADR 0078) | leg_a, leg_b, face, root, ... |
 | sketch | sketch, plane and offset, or face (a planar face, axis-aligned) | (no faces: a profile) |
 
 A sketch step (ADR 0017) adds no solid: extrude and revolve take it by name as their
@@ -667,7 +668,110 @@ TOOLS = {
     "bolt": lambda state, a: _bolt(state, a),
     "nut": lambda state, a: _nut(state, a),
     "washer": lambda state, a: _washer(state, a),
+    "weld_bead": lambda state, a: _weld_bead(state, a),
 }
+
+
+def _weld_bead(state, a):
+    """A modelled fillet's bead (ADR 0078 step 4): its section (the root at the path,
+    the legs `a` and `b` as vectors from it, m) swept along the path `points`: two
+    points a prism, more a ruled loft through a section at each (`a` and `b` then one
+    vector each, or one for all), `closed` back to the first. With `root` (m, along each
+    leg from the path) the section's root corner is cut back to a small `root` face, so
+    the two legs share no edge: tied to the two parts, they would otherwise join them at
+    the root line, which a fillet's unfused root doesn't. Faces: `leg_a` (on the path's
+    part), `leg_b` (on the other part), `face` (the bead's exposed face), `root`, and
+    `start`, `end` on an open path."""
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakePolygon
+    from OCP.BRepOffsetAPI import BRepOffsetAPI_ThruSections
+
+    points = [list(map(float, p)) for p in (a.get("points") or [])]
+    closed = bool(a.get("closed", False))
+    if len(points) < 2 or (closed and len(points) < 3):
+        raise GeometryError("a weld bead runs along two points or more (three if closed)")
+
+    def per_point(key):
+        v = a[key]
+        rows = [list(map(float, x)) for x in v] if isinstance(v[0], (list, tuple)) else None
+        if rows is not None and len(rows) != len(points):
+            raise GeometryError(f"a weld bead's '{key}': one vector, or one per point")
+        return rows or [list(map(float, v))] * len(points)
+
+    va, vb = per_point("a"), per_point("b")
+    gap = float(a.get("root", 0.0))
+
+    def section(p, la, lb):
+        def at(v, share):
+            return gp_Pnt(*(p[c] + share * v[c] for c in range(3)))
+
+        na, nb = (math.sqrt(sum(c * c for c in v)) for v in (la, lb))
+        if gap >= 0.5 * min(na, nb):
+            raise GeometryError("a weld bead's root gap must be under half its legs")
+        if gap > 0:
+            return [at(la, gap / na), at(la, 1.0), at(lb, 1.0), at(lb, gap / nb)]
+        return [gp_Pnt(*p), at(la, 1.0), at(lb, 1.0)]
+
+    sides = ["leg_a", "face", "leg_b", "root"] if gap > 0 else ["leg_a", "face", "leg_b"]
+    corners = [section(p, la, lb) for p, la, lb in zip(points, va, vb, strict=True)]
+
+    def wire(cs):
+        poly = BRepBuilderAPI_MakePolygon()
+        for c in cs:
+            poly.Add(c)
+        poly.Close()
+        return poly.Wire()
+
+    names: Names = {}
+    if len(points) == 2 and not closed:
+        face = BRepBuilderAPI_MakeFace(wire(corners[0]), True)
+        if not face.IsDone():
+            raise GeometryError("a weld bead's legs must not be parallel")
+        mk = BRepPrimAPI_MakePrism(face.Face(), gp_Vec(gp_Pnt(*points[0]), gp_Pnt(*points[1])))
+        names["start"], names["end"] = [TopoDS.Face(mk.FirstShape())], [TopoDS.Face(mk.LastShape())]
+    else:
+        # A ruled solid per segment, fused (their shared faces go): one loft closed on
+        # itself kept its seam's two caps inside the solid, which Gmsh can't mesh.
+        rings = corners + ([corners[0]] if closed else [])
+        shape = None
+        for k in range(len(rings) - 1):
+            mk = BRepOffsetAPI_ThruSections(True, True)
+            mk.AddWire(wire(rings[k]))
+            mk.AddWire(wire(rings[k + 1]))
+            mk.Build()
+            if not mk.IsDone():
+                raise GeometryError("the weld bead's sections could not be lofted")
+            shape = mk.Shape() if shape is None else BRepAlgoAPI_Fuse(shape, mk.Shape()).Shape()
+        mk = None
+        names = {}
+    if mk is not None:
+        shape = mk.Shape()
+    # Each side of the section sweeps a face per segment: named by the side whose
+    # middle, averaged over the segment's two ends, is nearest the face's centre.
+    rings = corners + ([corners[0]] if closed else [])
+    mids = []
+    for k in range(len(rings) - 1):
+        for n, side in enumerate(sides):
+            m = [0.0, 0.0, 0.0]
+            for cs in (rings[k], rings[k + 1]):
+                p0, p1 = cs[n], cs[(n + 1) % len(sides)]
+                for c, get in enumerate((gp_Pnt.X, gp_Pnt.Y, gp_Pnt.Z)):
+                    m[c] += (get(p0) + get(p1)) / 4
+            mids.append((side, gp_Pnt(*m)))
+    if mk is None and not closed:  # the open path's two ends, by their sections' centres
+        for key, cs in (("start", corners[0]), ("end", corners[-1])):
+            m = [sum(get(c) for c in cs) / len(cs) for get in (gp_Pnt.X, gp_Pnt.Y, gp_Pnt.Z)]
+            mids.append((key, gp_Pnt(*m)))
+    for f in _faces(shape):
+        if any(f.IsSame(c) for k in ("start", "end") for c in names.get(k, [])):
+            continue
+        props = GProp_GProps()
+        _static(BRepGProp, "SurfaceProperties")(f, props)
+        centre = props.CentreOfMass()
+        side = min(mids, key=lambda sm: centre.Distance(sm[1]))[0]
+        names.setdefault(side, []).append(TopoDS.Face(f))
+    if not all(k in names for k in sides):
+        raise GeometryError("the weld bead's faces could not be named")
+    return shape, names
 
 
 def _nut(state, a):

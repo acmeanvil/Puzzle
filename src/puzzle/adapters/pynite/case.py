@@ -31,7 +31,9 @@ RIGID = 1e4  # a rigid offset: its member's section constants times this
 # `test_member_force_signs`): PyNite gives N, Vy, Vz, T and Mz the other sign, My the same.
 SIGNS = np.array([-1.0, -1.0, -1.0, -1.0, 1.0, -1.0])
 # The features a frame takes here (ADR 0079); the rest are refused by the capabilities.
-FEATURES = frozenset({"fixed", "displacement", "force", "line_load", "gravity", "node_spring"})
+FEATURES = frozenset(
+    {"fixed", "displacement", "force", "line_load", "gravity", "node_spring", "pressure"}
+)  # pressure: on plates (ADR 0082)
 DEFAULT_CASE = "Case 1"  # PyNite's, combined as "Combo 1" when the study has no combinations
 
 
@@ -97,6 +99,50 @@ def _members(project: Project, comp: Component, mesh: Mesh):
     return members, materials, sections
 
 
+def _plates(project: Project, comp: Component, mesh: Mesh, materials: dict) -> list[dict]:
+    """Sheet bodies' quadrilaterals as PyNite quads (ADR 0082: MITC4 bending, isoparametric
+    membrane), [{name, nodes i j m n, t, material}]; Gmsh's corners run counter-clockwise
+    about the face's normal, which is PyNite's local z. Triangles are refused: PyNite has
+    none, so sheets are meshed with the recipe's hexahedra."""
+    out = []
+    for blk in mesh.shell_blocks():
+        if blk.element != "quad4":
+            raise InputError(
+                f"PyNite's plates are four-node quadrilaterals, not {blk.element}: mesh the "
+                "sheets with hexahedra (quadrilaterals) and element order 1",
+                code="unsupported")  # fmt: skip
+        for eid, conn in zip(blk.ids, blk.connectivity, strict=True):
+            nodes = [int(n) for n in conn]
+            part = next((p.name for p in comp.parts if p.name in mesh.groups
+                         and int(eid) in _element_set(mesh, p.name)), None)  # fmt: skip
+            section = next((s for s in comp.shell_sections
+                            if s.selection.split("/", 1)[0] == part), None)  # fmt: skip
+            if section is None:
+                raise InputError(f"the sheet body '{part}' has no thickness", code="invalid")
+            if section.offset or section.fields:
+                raise InputError("PyNite's plates take a uniform thickness, no offset",
+                                 code="unsupported")  # fmt: skip
+            m = _material(project, comp, part, mesh, nodes)
+            key = str(m.id)
+            if key not in materials:
+                props = {k: q.to_si() for k, q in m.properties.items()}
+                e, nu = props["youngs_modulus"], props["poissons_ratio"]
+                materials[key] = [e, e / (2 * (1 + nu)), nu, props.get("density", 0.0)]
+            out.append({"name": f"Q{int(eid)}", "eid": int(eid), "nodes": [str(n) for n in nodes],
+                        "t": float(section.thickness.to_si()), "material": key})  # fmt: skip
+    return out
+
+
+_ELEMENT_SETS: dict = {}
+
+
+def _element_set(mesh: Mesh, name: str) -> set[int]:
+    key = (id(mesh), name)
+    if key not in _ELEMENT_SETS:
+        _ELEMENT_SETS[key] = set(_elements(mesh, name, 2))
+    return _ELEMENT_SETS[key]
+
+
 def _material(project, comp, part, mesh, nodes) -> Material:
     mine = [a for a in comp.materials if a.selection.split("/", 1)[0] == part]
     for a in mine:
@@ -145,11 +191,11 @@ def _ends(comp: Component, mesh: Mesh, members) -> dict[str, list[bool]]:
     return out
 
 
-def _elements(mesh: Mesh, selection: str) -> list[int]:
+def _elements(mesh: Mesh, selection: str, dim: int = 1) -> list[int]:
     group = mesh.groups.get(selection)
     if group is None:
         raise InputError(f"no selection '{selection}' in the mesh")
-    return [int(e) for blk in group.blocks(mesh) if blk.dim == 1 for e in blk.ids]
+    return [int(e) for blk in group.blocks(mesh) if blk.dim == dim for e in blk.ids]
 
 
 def _rigid(comp: Component, mesh: Mesh, members) -> set[str]:
@@ -286,18 +332,21 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         raise InputError("a response spectrum needs the study's seismic parameters "
                          "(seismic_design)", code="invalid")  # fmt: skip
     comp = project.get(study.component, Component)
-    if not mesh.beam_blocks():
-        raise InputError("a PyNite study needs a frame: line bodies with beam sections")
-    if any(b.dim > 1 for b in mesh.blocks):
-        raise InputError("PyNite solves frames of line members only, not solids or shells",
+    if not mesh.beam_blocks() and not mesh.shell_blocks():
+        raise InputError("a PyNite study needs a frame or plates: line bodies with beam "
+                         "sections, or sheets meshed into quadrilaterals")  # fmt: skip
+    if any(b.dim > 2 for b in mesh.blocks) or mesh.planar:
+        raise InputError("PyNite solves frames and plates only, not solids or 2D models",
                          code="unsupported")  # fmt: skip
     members, materials, sections = _members(project, comp, mesh)
+    plates = _plates(project, comp, mesh, materials)
     releases = _ends(comp, mesh, members)
     rigid = _rigid(comp, mesh, members)
     for name in rigid:  # its own section, stiffened
         sec = next(m[5] for m in members if m[0] == name)
         sections.setdefault(f"{sec}R", [v * RIGID for v in sections[sec]])
-    used = sorted({n for m in members for n in (m[1], m[2])})
+    used = sorted({n for m in members for n in (m[1], m[2])}
+                  | {int(n) for q in plates for n in q["nodes"]})  # fmt: skip
     xyz = mesh.node_coords(np.array(used))
     case: dict = {
         "nodes": {str(n): [float(c) for c in p] for n, p in zip(used, xyz, strict=True)},
@@ -309,8 +358,9 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
              "releases": releases.get(name, [False] * 12)}  # fmt: skip
             for name, n1, n2, _eid, mat, sec, y in members
         ],
+        "quads": [{k: v for k, v in q.items() if k != "eid"} for q in plates],
         "supports": {}, "springs": {}, "displacements": {}, "node_loads": {}, "line_loads": [],
-        "point_loads": [],
+        "point_loads": [], "pressures": [],
     }  # fmt: skip
     features = [f for ph in comp.physics if ph.type == "solid_mechanics" for f in ph.features
                 if f.active(1)]  # fmt: skip
@@ -368,6 +418,17 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
                         load = {"node": str(n), "direction": f"F{a.upper()}",
                                 "P": v[a] / len(nodes), "case": load_case}  # fmt: skip
                         case["point_loads"].append(load)
+        elif f.type == "pressure":  # on plates; PyNite's pushes along the normal, Puzzle's against
+            within = set(_elements(mesh, f.selection, 2))
+            loaded = [q["name"] for q in plates if q["eid"] in within]
+            if not loaded:
+                raise InputError(f"a pressure on PyNite goes on plates; '{f.selection}' has "
+                                 "none", code="unsupported")  # fmt: skip
+            case["pressures"] += [{"quad": name, "p": -v["p"], "case": load_case}
+                                  for name in loaded]  # fmt: skip
+        elif f.type == "gravity" and plates:
+            raise InputError("self weight on PyNite's plates isn't written yet",
+                             code="unsupported")  # fmt: skip
         elif f.type == "line_load":
             within = set(_elements(mesh, f.selection))
             for name, _n1, _n2, eid, *_ in members:
@@ -398,7 +459,10 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         for c in case["combos"]:
             c["factors"].update({f"{k}{SELF}": v for k, v in list(c["factors"].items())})
         _modal(case, project, comp, study, mesh, steps[0].settings, spectrum)
-    used = {load["case"].removesuffix(SELF) for load in case["point_loads"] + case["line_loads"]}
+    used = {
+        load["case"].removesuffix(SELF)
+        for load in case["point_loads"] + case["line_loads"] + case["pressures"]
+    }
     used |= SEISMIC if spectrum else set()
     for c in combos:
         if not set(c.factors) & used:
@@ -455,6 +519,8 @@ def _fields(data: dict, case: dict) -> dict:
         fields["reaction_force"] = Field("reaction_force", "node", ["x", "y", "z"], held, r[:, :3])
         fields["reaction_moment"] = Field("reaction_moment", "node", ["x", "y", "z"], held,
                                           r[:, 3:])  # fmt: skip
+    if not case["members"]:  # plates only (ADR 0082)
+        return fields
     sums: dict[int, np.ndarray] = {}
     counts: dict[int, int] = {}
     elements: dict[int, list] = {}
