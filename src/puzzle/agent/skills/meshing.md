@@ -23,7 +23,11 @@ Recipe fields:
   domed end has its profile meshed and revolved (prisms along the axis); a prism (a
   plate with through holes, an extruded L: two matching flat ends, every other face
   along the length) is swept from one end in layers of the recipe's size (prisms where
-  a triangle was left). Revolved and swept bodies take 20-node hexahedra and 15-node
+  a triangle was left); a bend (an elbow, a bent tube: two flat ends, one the other
+  turned about an axis) has its end face revolved through the bend; a body that is
+  blocks once cut on its re-entrant faces (a bar stepped on four sides, a block with a
+  pocket) is cut so. A sweep along a free curve (a spline) gets tetrahedra.
+  Revolved and swept bodies take 20-node hexahedra and 15-node
   prisms at second order. Any other body gets tetrahedra (the warnings say which and why); where it
   touches a hexahedral body it would be joined to (bodies of one part, parts a conformal
   bond joins), the two are meshed apart and tied by a bonded nonconformal tie made at

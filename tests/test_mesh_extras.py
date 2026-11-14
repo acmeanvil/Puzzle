@@ -123,6 +123,27 @@ def test_method_detection(tmp_path):
     assert method == "tetrahedra" and "faces" in why
 
 
+def test_bends_and_reentrant_bodies_take_hexahedra(tmp_path):
+    """A tube bent round an arc is revolved from its end; a bar stepped on four sides
+    (no prism in any direction) is cut into blocks (ADR 0072 section 5)."""
+    bend = [HistoryStep(kind="revolve", name="E", args={
+        "profile": {"circle": [0.1, 0.0, 0.01], "holes": [{"circle": [0.1, 0.0, 0.007]}]},
+        "angle": 90.0, "axis": "v"})]  # fmt: skip
+    p, comp = _part(bend)
+    result = generate_mesh(p, comp.id, tmp_path, tmp_path / "a", preview=True)
+    ((method, why),) = result.methods.values()
+    assert method == "hexahedra" and "arc" in why
+    stepped = [HistoryStep(kind="box", name="B", args={"dx": 0.04, "dy": 0.04, "dz": 0.03}),
+               HistoryStep(kind="box", name="S", args={"dx": 0.02, "dy": 0.02, "dz": 0.03,
+                                                       "x0": 0.01, "y0": 0.01, "z0": 0.03,
+                                                       "mode": "add"})]  # fmt: skip
+    p, comp = _part(stepped)
+    p.objects[comp.mesh].element_shape = "hexahedra"
+    result = generate_mesh(p, comp.id, tmp_path, tmp_path / "b")
+    assert {b.element for b in result.mesh.blocks if b.dim == 3} == {"hex8"}
+    assert not any("tetrahedra" in w for w in result.warnings)
+
+
 def test_folded_curved_elements_become_straight_sided(tmp_path, monkeypatch):
     """A curved second-order element the optimiser can't untangle (a hole's wall on Apple
     Silicon's Gmsh) gives straight sides there and a warning, not no mesh: every

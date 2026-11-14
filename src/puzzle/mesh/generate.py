@@ -532,14 +532,20 @@ def _block_revolutions(comp, references, found, swept, warnings, recipe=None):
                 continue
             shared = any(len(gmsh.model.getAdjacencies(2, f)[0]) > 1 for _d2, f in faces)
             rev = blocks.revolution(tag)
-            general = prism = None
+            general = prism = arc = None
+            split = False
             if rev.why and not shared:
                 general = blocks.meridian(tag)
                 general = None if general.why else general
             if rev.why and not shared and general is None:  # a prism: swept (`blocks.sweep`)
                 prism = blocks.extrusion(tag)
                 prism = None if prism.why else prism
-            if (rev.why and general is None and prism is None) or shared:
+            if rev.why and not shared and general is None and prism is None:
+                arc = blocks.bend(tag)  # swept round an arc (`blocks.bend_sweep`)
+                arc = None if arc.why else arc
+                split = arc is None and not blocks.decomposes(tag)  # blocks once cut
+            if (rev.why and general is None and prism is None and arc is None
+                    and not split) or shared:  # fmt: skip
                 why = rev.why or "it shares a face with another body"
                 warnings.append(f"{part.name}/{name}: not cut into hexahedral blocks ({why})")
                 continue
@@ -571,12 +577,25 @@ def _block_revolutions(comp, references, found, swept, warnings, recipe=None):
                 blocks.prepare(profile, general)
                 new = [(3, v) for v in pieces]
                 revolved_out += new
-            elif prism is not None:
-                pieces, profile = blocks.sweep(tag, prism, size)
-                for f in profile:
+            elif prism is not None or arc is not None:
+                if prism is not None:
+                    pieces, profile = blocks.sweep(tag, prism, size)
+                else:
+                    pieces, profile = blocks.bend_sweep(tag, arc, size)
+                for f in profile:  # quadrilaterals: an even count on every edge, or
+                    # recombining leaves a triangle (a prism through the sweep)
                     gmsh.model.mesh.setRecombine(2, f)
+                    gmsh.model.mesh.setAlgorithm(2, f, 8)  # frontal-Delaunay for quads
+                    for _d1, c in gmsh.model.getBoundary([(2, f)], oriented=False):
+                        length = gmsh.model.occ.getMass(1, abs(c))
+                        step = size or length / 8
+                        n = max(2, 2 * math.ceil(length / step / 2))
+                        gmsh.model.mesh.setTransfiniteCurve(abs(c), n + 1)
                 new = [(3, v) for v in pieces]
                 revolved_out += new
+            elif split:
+                new = [(3, v) for v in blocks.decompose(tag)]
+                out += new
             else:
                 pieces = blocks.cut(tag, rev)
                 odd = blocks.odd_blocks(pieces)
@@ -1171,6 +1190,11 @@ def _method(faces, volume=None) -> tuple[str, str]:
                 "a prism: its cross-section swept along its length when "
                 "meshed (prisms where a triangle is left)"
             )
+        if not blocks.bend(volume[1]).why:
+            return "hexahedra", ("swept round an arc: its end face revolved through the "
+                                 "bend when meshed (prisms where a triangle is left)")  # fmt: skip
+        if not blocks.decomposes(volume[1]):
+            return "hexahedra", "blocks once cut on its re-entrant faces, when meshed"
     if len(faces) != 6:
         return "tetrahedra", f"{len(faces)} faces; a block has six"
     odd = sum(n != 4 for n in sides)

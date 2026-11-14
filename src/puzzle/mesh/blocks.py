@@ -158,6 +158,12 @@ def cut(volume: int, rev: Revolution) -> list[int]:
         disk = occ.addDisk(*(o + ax * s), reach, reach, zAxis=list(ax), xAxis=list(e1))
         tools.append(disk)
     occ.synchronize()
+    return _split(volume, tools)
+
+
+def _split(volume: int, tools: list[int]) -> list[int]:
+    """Fragment the volume by the tool faces, dropping their pieces outside it."""
+    occ = gmsh.model.occ
     out, _ = occ.fragment([(3, volume)], [(2, t) for t in tools])
     occ.synchronize()
     pieces = [t for d, t in out if d == 3]
@@ -443,3 +449,162 @@ def sweep(volume: int, ext: Extrusion, size: float | None) -> tuple[list[int], l
                       recombine=True)  # fmt: skip
     occ.synchronize()
     return [t for d, t in out if d == 3], [t for _d, t in face]
+
+
+# Bodies swept round an arc (an elbow, a bent tube or bar of any section): two flat end
+# faces, one the other turned about an axis that every other face is a surface of
+# revolution about (cylinders, cones, tori about it, planes square to it). The end face
+# is revolved through the angle in layers (`bend_sweep`), as `sweep` extrudes a prism's.
+# A sweep along a free curve (a spline) has no such axis and gets tetrahedra.
+
+
+@dataclass
+class Bend:
+    """A body swept from its `source` face by `angle` (rad) about `axis` at `origin`."""
+
+    origin: np.ndarray = field(default_factory=lambda: np.zeros(3))
+    axis: np.ndarray = field(default_factory=lambda: np.zeros(3))
+    angle: float = 0.0
+    radius: float = 0.0  # of the source face's centroid
+    source: int = 0
+    why: str = ""
+
+
+def bend(volume: int) -> Bend:
+    """The volume as a section swept round an arc (above), or one with `why` set."""
+    faces = [t for _d, t in gmsh.model.getBoundary([(3, volume)], oriented=False,
+                                                   combined=False)]  # fmt: skip
+    kinds = {t: gmsh.model.getType(2, t) for t in faces}
+    other = sorted({k for k in kinds.values() if k not in ROUND | {"Plane"}})
+    if other:
+        return Bend(why=f"its faces include {', '.join(k.lower() for k in other)}")
+    round_ = [t for t, k in kinds.items() if k in ROUND]
+    if not round_:
+        return Bend(why="it has no face of revolution")
+    box = np.asarray(gmsh.model.getBoundingBox(3, volume))
+    size = float(np.linalg.norm(box[3:] - box[:3]))
+    tol = 1e-6 * size + 2e-7
+    centre, axis, _p = _round_axis(round_[0])
+    for t in round_[1:]:
+        c, a, _p = _round_axis(t)
+        off = (c - centre) - ((c - centre) @ axis) * axis
+        if abs(abs(a @ axis) - 1) > 1e-6 or np.linalg.norm(off) > tol:
+            return Bend(why="its faces of revolution don't share one axis")
+    ends = []
+    for t in [t for t, k in kinds.items() if k == "Plane"]:
+        n = _unit(gmsh.model.getNormal(t, list(_samples(t)[0])))
+        c = np.asarray(gmsh.model.occ.getCenterOfMass(2, t))
+        if abs(abs(n @ axis) - 1) < 1e-6:
+            continue  # square to the axis: a side
+        if abs(n @ axis) > 1e-6 or abs((c - centre) @ n) > tol:
+            return Bend(why="a flat face neither holds the axis nor is square to it")
+        ends.append((t, c))
+    if len(ends) != 2:
+        return Bend(why=f"{len(ends)} flat faces hold the axis; a bend has two ends")
+    (a, ca), (b, cb) = ends
+    area = gmsh.model.occ.getMass(2, a)
+    if abs(area - gmsh.model.occ.getMass(2, b)) > 1e-6 * area:
+        return Bend(why="its two ends differ")
+    if abs((ca - cb) @ axis) > tol:
+        return Bend(why="its ends are at different heights along the axis (a helix)")
+    ra, rb = ((c - centre) - ((c - centre) @ axis) * axis for c in (ca, cb))
+    if abs(np.linalg.norm(ra) - np.linalg.norm(rb)) > tol or np.linalg.norm(ra) < tol:
+        return Bend(why="its two ends aren't one turned onto the other")
+    angle = math.atan2(float(axis @ np.cross(ra, rb)), float(ra @ rb))
+    # a point of the end face (its centroid may be in a bore), turned half way: in the
+    # body unless the bend goes the long way round
+    lo, hi = gmsh.model.getParametrizationBounds(2, a)
+    grid = [(u, v) for u in np.linspace(lo[0], hi[0], 9)[1:-1]
+            for v in np.linspace(lo[1], hi[1], 9)[1:-1]]  # fmt: skip
+    xyz = np.asarray(gmsh.model.getValue(2, a, [x for uv in grid for x in uv])).reshape(-1, 3)
+    on = next((x for x in xyz if gmsh.model.isInside(2, a, list(x))), ca)
+    halfway = centre + _turn(on - centre, axis, angle / 2)
+    if not gmsh.model.isInside(3, volume, list(halfway)):
+        angle -= math.copysign(2 * math.pi, angle)  # the long way round
+    return Bend(centre, axis, angle, float(np.linalg.norm(ra)), a)
+
+
+def _turn(v, axis, angle):
+    """v turned by `angle` about the unit `axis` (Rodrigues)."""
+    return (v * math.cos(angle) + np.cross(axis, v) * math.sin(angle)
+            + axis * (axis @ v) * (1 - math.cos(angle)))  # fmt: skip
+
+
+def bend_sweep(volume: int, b: Bend, size: float | None) -> tuple[list[int], list[int]]:
+    """Replace the volume by its source face revolved through the bend's angle, in
+    layers about `size` long along the centroid's arc, recombined. -> (its volumes,
+    the face meshed in 2D)."""
+    occ = gmsh.model.occ
+    arc = abs(b.angle) * b.radius
+    step = size or math.sqrt(occ.getMass(2, b.source)) / 5
+    layers = max(1, round(arc / step))
+    face = occ.copy([(2, b.source)])
+    occ.remove([(3, volume)], recursive=True)
+    out = occ.revolve(face, *b.origin, *b.axis, b.angle, numElements=[layers],
+                      recombine=True)  # fmt: skip
+    occ.synchronize()
+    return [t for d, t in out if d == 3], [t for _d, t in face]
+
+
+# Bodies that are blocks only once cut (a bar stepped in two directions, a block with
+# a pocket, a cross): cut on the planes of their re-entrant flat faces (a plane with
+# corners of the body on both sides), as Ansys's decomposition for MultiZone does.
+# When every piece is a block, they are meshed transfinite together (shared faces, so
+# conformal); otherwise the body gets tetrahedra.
+
+
+def _reentrant_planes(volume: int) -> list[tuple[np.ndarray, float]]:
+    """(normal, offset) of the planes of re-entrant flat faces, each once."""
+    faces = [t for _d, t in gmsh.model.getBoundary([(3, volume)], oriented=False,
+                                                   combined=False)]  # fmt: skip
+    corners = gmsh.model.getBoundary([(3, volume)], recursive=True)
+    points = np.array([gmsh.model.getValue(0, t, []) for _d, t in corners])
+    box = np.asarray(gmsh.model.getBoundingBox(3, volume))
+    tol = 1e-6 * float(np.linalg.norm(box[3:] - box[:3])) + 2e-7
+    planes: list[tuple[np.ndarray, float]] = []
+    for t in faces:
+        if gmsh.model.getType(2, t) != "Plane":
+            continue
+        n = _unit(gmsh.model.getNormal(t, list(_samples(t)[0])))
+        k = int(np.argmax(np.abs(n)))
+        n = n if n[k] > 0 else -n  # one sign per plane
+        d = float(n @ np.asarray(gmsh.model.occ.getCenterOfMass(2, t)))
+        side = points @ n - d
+        if side.max() < tol or side.min() > -tol:
+            continue  # the body on one side: convex there
+        if not any(np.allclose(n, m, atol=1e-9) and abs(d - e) < tol for m, e in planes):
+            planes.append((n, d))
+    return planes
+
+
+def decompose(volume: int) -> list[int]:
+    """Cut the volume on its re-entrant planes (above); its pieces' tags."""
+    occ = gmsh.model.occ
+    box = np.asarray(gmsh.model.getBoundingBox(3, volume))
+    middle, reach = (box[:3] + box[3:]) / 2, float(np.linalg.norm(box[3:] - box[:3]))
+    tools = []
+    for n, d in _reentrant_planes(volume):
+        at = middle - (middle @ n - d) * n
+        x = _unit(np.cross(n, [1.0, 0, 0] if abs(n[0]) < 0.9 else [0, 1.0, 0]))
+        tools.append(occ.addDisk(*at, reach, reach, zAxis=list(n), xAxis=list(x)))
+    occ.synchronize()
+    return _split(volume, tools)
+
+
+def decomposes(volume: int) -> str:
+    """Why cutting the volume on its re-entrant planes wouldn't leave only blocks, or
+    "" when it would (tried on a copy, removed after)."""
+    if not _reentrant_planes(volume):
+        return "it has no re-entrant flat face to cut on"
+    (copy,) = gmsh.model.occ.copy([(3, volume)])
+    gmsh.model.occ.synchronize()
+    pieces = [copy[1]]
+    try:
+        pieces = decompose(copy[1])
+        odd = odd_blocks(pieces)
+    finally:
+        gmsh.model.occ.remove([(3, v) for v in pieces], recursive=True)
+        gmsh.model.occ.synchronize()
+    if odd:
+        return f"cut on its re-entrant faces, {len(odd)} of {len(pieces)} pieces aren't blocks"
+    return ""
