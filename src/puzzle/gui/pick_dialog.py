@@ -38,7 +38,7 @@ class PickDialog(QDialog):
         layout.addWidget(intro)
         row = QHBoxLayout()
         row.addWidget(QLabel("Endpoint"))
-        self.base_url = QLineEdit(load_settings().base_url)
+        self.base_url = QLineEdit(load_settings().url("local"))
         row.addWidget(self.base_url, 1)
         self.start = QPushButton("Measure")
         self.start.setDefault(True)

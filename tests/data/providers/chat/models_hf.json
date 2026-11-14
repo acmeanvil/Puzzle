@@ -1,0 +1,31 @@
+{
+ "object": "list",
+ "data": [
+  {
+   "id": "Qwen/Qwen3-32B",
+   "providers": [
+    {
+     "provider": "groq",
+     "supports_tools": true
+    }
+   ]
+  },
+  {
+   "id": "some/base-model",
+   "providers": [
+    {
+     "provider": "x",
+     "supports_tools": false
+    }
+   ]
+  },
+  {
+   "id": "meta-llama/Llama-3.3-70B-Instruct",
+   "providers": [
+    {
+     "provider": "y"
+    }
+   ]
+  }
+ ]
+}

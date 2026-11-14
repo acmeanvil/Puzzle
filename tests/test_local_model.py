@@ -106,7 +106,7 @@ def test_the_choice_goes_in_agent_toml(monkeypatch):
 
     pick.choose("mid:8b", "http://localhost:11434/v1")
     s = load_settings()
-    assert (s.provider, s.model) == ("openai", "mid:8b")
+    assert (s.provider, s.model) == ("local", "mid:8b")
     assert s.picked.endswith(f"suite {evals.SUITE_VERSION}")
 
 

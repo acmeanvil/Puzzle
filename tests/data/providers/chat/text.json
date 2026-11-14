@@ -1,0 +1,16 @@
+{
+ "choices": [
+  {
+   "index": 0,
+   "message": {
+    "role": "assistant",
+    "content": "Three studies."
+   },
+   "finish_reason": "stop"
+  }
+ ],
+ "usage": {
+  "prompt_tokens": 40,
+  "completion_tokens": 3
+ }
+}

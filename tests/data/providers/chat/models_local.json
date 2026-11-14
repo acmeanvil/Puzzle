@@ -1,0 +1,11 @@
+{
+ "object": "list",
+ "data": [
+  {
+   "id": "qwen3:8b"
+  },
+  {
+   "id": "nomic-embed-text"
+  }
+ ]
+}

@@ -1,0 +1,25 @@
+{
+ "id": "resp_1",
+ "object": "response",
+ "status": "completed",
+ "output": [
+  {
+   "type": "reasoning",
+   "id": "rs_1",
+   "summary": [],
+   "encrypted_content": "gAAAAABpZ-encrypted-reasoning"
+  },
+  {
+   "type": "function_call",
+   "id": "fc_1",
+   "call_id": "call_1",
+   "name": "outline",
+   "arguments": "{}",
+   "status": "completed"
+  }
+ ],
+ "usage": {
+  "input_tokens": 70,
+  "output_tokens": 30
+ }
+}

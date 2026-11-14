@@ -1,0 +1,18 @@
+event: response.created
+data: {"type": "response.created", "response": {"id": "resp_3"}}
+
+event: response.output_item.added
+data: {"type": "response.output_item.added", "item": {"type": "reasoning", "id": "rs_1"}}
+
+event: response.reasoning_summary_text.delta
+data: {"type": "response.reasoning_summary_text.delta", "delta": "Counting."}
+
+event: response.output_text.delta
+data: {"type": "response.output_text.delta", "delta": "Three "}
+
+event: response.output_text.delta
+data: {"type": "response.output_text.delta", "delta": "studies."}
+
+event: response.completed
+data: {"type": "response.completed", "response": {"id": "resp_3", "object": "response", "status": "completed", "output": [{"type": "reasoning", "id": "rs_1", "summary": [], "encrypted_content": "gAAAAABpZ-encrypted-reasoning"}, {"type": "message", "id": "msg_2", "role": "assistant", "content": [{"type": "output_text", "text": "Three studies."}]}], "usage": {"input_tokens": 91, "output_tokens": 5}}}
+

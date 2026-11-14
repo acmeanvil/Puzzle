@@ -9,6 +9,7 @@ autonomy level is set here too; "act" asks twice, as the double sign-off require
 from __future__ import annotations
 
 import json
+import logging
 import sys
 import threading
 import time
@@ -325,9 +326,15 @@ class AgentPanel(QWidget):
 
         def failed(exc) -> None:
             self._end()
-            hint = (f" Choose a model with the model button, or configure the provider in "
-                    f"{settings_path()}." if isinstance(exc, ProviderError) else "")  # fmt: skip
-            self.transcript.note(f"{exc}{hint}", error=True)
+            if isinstance(exc, ProviderError):  # the plain sentence, the provider's words after
+                said = exc.plain() if exc.kind else (
+                    f"{exc} Choose a model with the model button, or configure the provider "
+                    f"in Settings > Agent ({settings_path()}).")  # fmt: skip
+                if exc.kind:
+                    logging.getLogger("puzzle.agent").warning("%s", exc)
+                self.transcript.note(said, error=True)
+            else:
+                self.transcript.note(str(exc), error=True)
 
         return self.window.background(
             "The agent is working…", work, done, failed=failed, on_event=self._event,
@@ -381,6 +388,8 @@ class AgentPanel(QWidget):
         if e.kind == "status":
             self._doing = e.text
             self._show_doing()
+        elif e.kind == "delta":
+            self.transcript.stream(e.text)
         elif e.kind == "text":
             self.transcript.reply(e.text)
         elif e.kind == "tool_call":
@@ -447,42 +456,71 @@ class AgentPanel(QWidget):
     def _chip_text(self) -> str:
         if self.agent is not None:
             p = self.agent.provider
-            where = "Anthropic" if p.name == "anthropic" else (
-                "a server" if p.remote else "this computer")  # fmt: skip
+            try:
+                where = load_settings().label(p.name)
+            except ProviderError:
+                where = "a server" if p.remote else "this computer"
             return f"{p.model} · {where}"
         s = load_settings()
-        from puzzle.agent.settings import DEFAULT_MODELS
+        try:
+            from puzzle.agent.catalog import entry
 
-        model = s.model or DEFAULT_MODELS.get(s.provider, s.provider)
-        return f"{model} · {'Anthropic' if s.provider == 'anthropic' else 'local'}"
+            model = s.model or entry(s.provider).default_model or "choose a model"
+            return f"{model} · {s.label()}"
+        except ProviderError:
+            return f"{s.model or 'choose a model'} · {s.provider}"
 
     def _show_chip(self) -> None:
         self.model_chip.setText(f"{self._chip_text()} ▾")
 
     def _fill_models(self) -> None:
+        """Every enabled provider's models, grouped by provider: favourites, those known
+        to call tools, then under "may not call tools" the rest (ADR 0084 decision 5);
+        a provider that lists none offers "Type a model…"."""
+        from puzzle.agent.catalog import entry
+
         menu = self.model_menu
         menu.clear()
+        s = load_settings()
         if self.models is None:
             menu.addAction("Looking for models…").setEnabled(False)
             self._read_models()
         else:
-            current = (load_settings().provider, self._chip_text().split(" · ")[0])
-            heads = {}
+            from puzzle.agent.pick import kept_score
+
+            current = (s.provider, s.model)
+            scores = {c.model: kept_score(c.model) for c in self.models}
+            groups: dict[str, list] = {}
             for c in self.models:
-                where = c.where()
-                if where not in heads:
-                    heads[where] = menu.addAction(where)
-                    heads[where].setEnabled(False)
-                action = menu.addAction(f"   {c.model}")
-                action.setCheckable(True)
-                action.setChecked((c.provider, c.model) == current)
-                action.triggered.connect(lambda _=False, c=c: self.choose(c))
+                groups.setdefault(c.provider, []).append(c)
+            for pid in [p for p in s.ids() if s.enabled(p)]:
+                choices = groups.get(pid, [])
+                typed = entry(pid).models == "typed" or pid.startswith("compatible:")
+                if not choices and not typed:
+                    continue
+                head = menu.addAction(s.label(pid))
+                head.setEnabled(False)
+                unsure = False
+                for c in choices:
+                    if c.tools is not True and not c.favourite and not unsure:
+                        unsure = True
+                        menu.addAction("      may not call tools").setEnabled(False)
+                    star = "★ " if c.favourite else ""
+                    score = scores.get(c.model, "")  # measured by the suite (ADR 0022)
+                    action = menu.addAction(f"   {star}{c.model}" + (f"   ({score})" if score
+                                                                      else ""))  # fmt: skip
+                    action.setCheckable(True)
+                    action.setChecked((c.provider, c.model) == current)
+                    action.triggered.connect(lambda _=False, c=c: self.choose(c))
+                if typed:
+                    menu.addAction("   Type a model…", lambda p=pid: self._type_model(p))
             for note in self.model_notes:
                 menu.addAction(note).setEnabled(False)
             menu.addAction("Look again", self._reread_models)
         menu.addSeparator()
         menu.addAction("Pick a local model…", self._pick_model)
         menu.addAction("API key…", self._set_key)
+        menu.addAction("Providers and keys…", self._open_settings)
 
     def _read_models(self) -> None:
         from puzzle.agent.settings import available_models
@@ -499,23 +537,56 @@ class AgentPanel(QWidget):
         self.models = None
         self._read_models()
 
+    def _type_model(self, pid: str) -> None:
+        from puzzle.agent.settings import ModelChoice
+
+        s = load_settings()
+        model, ok = QInputDialog.getText(self, "Model", f"{s.label(pid)} model (for Thinking "
+                                         "Machines, the checkpoint's tinker:// path):")  # fmt: skip
+        if ok and model.strip():
+            self.choose(ModelChoice(pid, model.strip(), True, None, False, s.label(pid)))
+
     def choose(self, choice) -> None:
-        """Use `choice` from the next message on: a user setting, a new chat."""
+        """Use `choice` from the next message on: a user setting, a new chat. A model
+        not known to call tools is asked once with a trivial tool (off the GUI thread)
+        and refused if it doesn't, naming its provider's models that do."""
+        from puzzle.agent import capabilities
         from puzzle.agent.settings import choose_model
 
-        choose_model(choice)
-        self.agent = None
-        self._show_chip()
-        self.transcript.note(f"Now using {choice.model} ({choice.where()}); a new chat starts.")
+        def switch(_=None) -> None:
+            choose_model(choice)
+            self.agent = None
+            self._show_chip()
+            self.transcript.note(f"Now using {choice.model} ({choice.where()}); a new chat "
+                                 "starts.")  # fmt: skip
+
+        if choice.tools is True or self.provider_factory is not None:
+            switch()
+            return
+        others = [c.model for c in self.models or []
+                  if c.provider == choice.provider and c.tools is True]  # fmt: skip
+
+        def check(_emit) -> None:
+            provider = load_settings().build(choice.provider, choice.model)
+            capabilities.check(provider, others)
+
+        def refused(exc) -> None:
+            said = exc.plain() if isinstance(exc, ProviderError) and exc.kind != "tools" else exc
+            self.transcript.note(f"Not switched to {choice.model}: {said}", error=True)
+
+        self.transcript.note(f"Checking that {choice.model} can call tools…")
+        self.window.background(f"Checking {choice.model}…", check, switch, failed=refused,
+                               lock=False)  # fmt: skip
 
     def _set_key(self) -> None:
-        from puzzle.agent.settings import store_key
+        from puzzle.agent.settings import paste_problem, store_key
 
-        provider = load_settings().provider
+        s = load_settings()
+        provider = s.provider
         key, ok = QInputDialog.getText(
             self,
             "API key",
-            f"{provider} API key (kept in the system keychain):",
+            f"{s.label(provider)} API key (kept in the system keychain):",
             QLineEdit.EchoMode.Password,
         )
         if not ok or not key.strip():
@@ -525,8 +596,17 @@ class AgentPanel(QWidget):
         except ProviderError as exc:
             self.transcript.note(str(exc), error=True)
             return
+        problem = paste_problem(provider, key.strip())
         self.agent, self.models = None, None  # rebuilt with the new key, models re-read
-        self.transcript.note(f"{provider} key stored in the keychain")
+        self.transcript.note(f"{s.label(provider)} key stored in the keychain"
+                             + (f" ({problem})" if problem else ""))  # fmt: skip
+
+    def _open_settings(self) -> None:
+        opener = getattr(self.window, "open_settings", None)
+        if opener is not None:
+            opener()
+        self.agent, self.models = None, None
+        self._show_chip()
 
     def _pick_model(self) -> None:
         from puzzle.gui.pick_dialog import PickDialog

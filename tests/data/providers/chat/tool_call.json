@@ -1,0 +1,26 @@
+{
+ "choices": [
+  {
+   "index": 0,
+   "message": {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+     {
+      "id": "call_1",
+      "type": "function",
+      "function": {
+       "name": "outline",
+       "arguments": "{}"
+      }
+     }
+    ]
+   },
+   "finish_reason": "tool_calls"
+  }
+ ],
+ "usage": {
+  "prompt_tokens": 50,
+  "completion_tokens": 5
+ }
+}

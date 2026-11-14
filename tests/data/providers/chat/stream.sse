@@ -1,0 +1,18 @@
+data: {"choices": [{"index": 0, "delta": {"role": "assistant", "reasoning_content": "Hm."}}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "Looking "}}]}
+
+data: {"choices": [{"index": 0, "delta": {"content": "it up."}}]}
+
+data: {"choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call_7", "type": "function", "function": {"name": "outline", "arguments": ""}}]}}]}
+
+data: {"choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "function": {"arguments": "{\"section\":"}}]}}]}
+
+data: {"choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "function": {"arguments": " \"studies\"}"}}]}}]}
+
+data: {"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]}
+
+data: {"choices": [], "usage": {"prompt_tokens": 61, "completion_tokens": 9}}
+
+data: [DONE]
+

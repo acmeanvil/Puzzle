@@ -1,0 +1,25 @@
+{
+ "id": "msg_1",
+ "type": "message",
+ "role": "assistant",
+ "model": "claude-test",
+ "content": [
+  {
+   "type": "thinking",
+   "thinking": "Read the outline first.",
+   "signature": "sig-abc"
+  },
+  {
+   "type": "tool_use",
+   "id": "toolu_1",
+   "name": "outline",
+   "input": {}
+  }
+ ],
+ "stop_reason": "tool_use",
+ "stop_sequence": null,
+ "usage": {
+  "input_tokens": 20,
+  "output_tokens": 8
+ }
+}

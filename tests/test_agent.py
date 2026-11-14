@@ -235,11 +235,11 @@ def test_settings_file_and_environment(tmp_path, monkeypatch):
     path.write_text(
         'provider = "openai"\nmodel = "qwen3:8b"\nsend_images = true\n', encoding="utf-8"
     )
-    s = load_settings(path)
-    assert (s.provider, s.model, s.send_images) == ("openai", "qwen3:8b", True)
+    s = load_settings(path)  # an old file: its "openai" was the local endpoint
+    assert (s.provider, s.model, s.send_images) == ("local", "qwen3:8b", True)
     monkeypatch.setenv("PUZZLE_AGENT_MODEL", "llama3.2")
     assert load_settings(path).model == "llama3.2"
-    assert isinstance(AgentSettings(provider="openai", model="m").build(), OpenAIProvider)
+    assert isinstance(AgentSettings(provider="local", model="m").build(), OpenAIProvider)
 
 
 @pytest.mark.skipif(

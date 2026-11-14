@@ -706,12 +706,23 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--model", action="append", help="only these models (repeatable)")
     p.add_argument("--again", action="store_true", help="measure again, ignoring kept results")
     p.add_argument("--use", action="store_true", help="save the recommendation in agent.toml")
+    p.add_argument("--remote", action="store_true",
+                   help="measure the enabled remote providers' tool-calling models instead "
+                        "(opt-in; needs --budget)")  # fmt: skip
+    p.add_argument("--budget", type=int, default=0,
+                   help="--remote: the most model requests in all")  # fmt: skip
     p.add_argument("--workdir", type=Path, help="where the task projects go (default: a temp)")
     p.set_defaults(handler=_agent_pick)
 
-    p = sub.add_parser("agent-key", help="store, check or remove the agent's API key")
-    p.add_argument("action", choices=["set", "status", "clear"])
-    p.add_argument("--provider", default="anthropic", choices=["anthropic", "openai"])
+    p = sub.add_parser("agent-key", help="store, check or remove a model provider's API key")
+    p.add_argument(
+        "action",
+        choices=["set", "check", "remove", "status", "clear"],
+        help="check: one cheap call with the key; status: where it comes from",
+    )
+    p.add_argument("--provider", default="anthropic",
+                   help="a provider id (anthropic, openai, google, huggingface, "
+                        "thinking_machines, meta, nvidia, local) or compatible:NAME")  # fmt: skip
     p.set_defaults(handler=_agent_key)
 
     p = sub.add_parser("gui", help="open the desktop GUI")
@@ -1246,7 +1257,8 @@ def _ask(args) -> int:
     try:
         print(agent.ask(args.question, show))
     except ProviderError as exc:
-        print(exc)
+        print(exc.plain(settings.label()))
+        print(f"  ({exc})")
         return 1
     print(
         f"({provider.name} {provider.model}: {agent.tokens['input']} in / "
@@ -1924,6 +1936,8 @@ def _agent_pick(args) -> int:
         print(f"  {model} / {outcome.task}: {'pass' if outcome.passed else 'FAIL'} "
               f"({outcome.seconds:.0f} s)", flush=True)  # fmt: skip
 
+    if args.remote:
+        return _agent_pick_remote(args, solvers, said)
     found = pick.pick(args.base_url, args.workdir, solvers=solvers, only=args.model,
                       again=args.again, on_task=said)  # fmt: skip
     for c in found.candidates:
@@ -2171,45 +2185,97 @@ def _settings(args) -> int:
     return 0
 
 
+def _agent_pick_remote(args, solvers, said) -> int:
+    """ADR 0084 decision 9: remote models measured only when asked, the requests said
+    first and bounded by --budget."""
+    from puzzle.agent import pick
+
+    if args.budget <= 0:
+        print("--remote needs --budget N: the most model requests to spend in all")
+        return 1
+    choices = pick.remote_models(only=args.model)
+    if not choices:
+        print("No enabled remote provider offers a model known to call tools "
+              "(set a key in Settings > Agent, or name models with --model).")  # fmt: skip
+        return 1
+    most = pick.planned_requests(len(choices), solvers)
+    print(f"{len(choices)} models, at most {most} requests; stopping at {args.budget}:")
+    for c in choices:
+        print(f"  {c.model} ({c.where()})")
+    found = pick.pick_remote(args.budget, args.workdir, solvers=solvers, again=args.again,
+                             on_task=said, choices=choices)  # fmt: skip
+    for m in found.ranked:
+        print(f"  {m.model}: {m.passed}/{m.total} tasks, core {m.core_passed}/{m.core_total}, "
+              f"{m.median_s:.0f} s a task")  # fmt: skip
+    print(f"Used {found.used} of {args.budget} requests. Best: {found.words}")
+    return 0 if found.ranked else 1
+
+
 def _agent_key(args) -> int:
-    """Keys go to the OS keychain from a hidden prompt: never a file, never argv."""
+    """Keys go to the OS keychain from a hidden prompt: never a file, never argv
+    (ADR 0084 decision 4)."""
     import getpass
 
-    from puzzle.agent.providers import ProviderError
-    from puzzle.agent.settings import AgentSettings, anthropic_key_problem, delete_key, store_key
+    from puzzle.agent.providers import ProviderError, check_anthropic_key
+    from puzzle.agent.settings import (
+        check_key,
+        delete_key,
+        load_settings,
+        paste_problem,
+        store_key,
+    )
 
-    if args.action == "set":
-        key = getpass.getpass(f"{args.provider} API key (input hidden): ").strip()
+    s = load_settings()
+    pid = args.provider
+    try:
+        label = s.label(pid)
+    except ProviderError as exc:
+        print(exc)
+        return 1
+    action = {"status": "status", "clear": "remove"}.get(args.action, args.action)
+    if action == "set":
+        key = getpass.getpass(f"{label} API key (input hidden): ").strip()
         if not key:
             print("nothing entered; no key stored")
             return 1
-        if args.provider == "anthropic":
-            from puzzle.agent.providers import check_anthropic_key
-
-            problem = anthropic_key_problem(key)
-            if problem:
-                print(f"not stored: {problem}")
-                return 1
-            try:
-                auth = check_anthropic_key(key)
-            except ProviderError as exc:
-                print(f"not stored: {exc}")
-                return 1
-            how = "x-api-key" if auth == "api_key" else "bearer token"
-            print(f"Anthropic accepts the key ({how})")
+        problem = paste_problem(pid, key)
+        if problem and pid == "anthropic":  # Anthropic's keys are known well
+            print(f"not stored: {problem}")
+            return 1
+        if problem:
+            print(f"note: {problem}")
         try:
-            store_key(args.provider, key)
-            if args.provider == "anthropic":
+            if pid == "anthropic":
+                auth = check_anthropic_key(key)
                 store_key("anthropic-auth", auth)
+                print("Anthropic accepts the key (" + ("x-api-key" if auth == "api_key"
+                                                       else "bearer token") + ")")  # fmt: skip
+            else:
+                print(check_key(pid, key, s))
+        except ProviderError as exc:
+            print(f"not stored: {exc.plain(label)} ({exc})")
+            return 1
+        try:
+            store_key(pid, key)
         except ProviderError as exc:
             print(exc)
             return 1
-        print(f"stored in the keychain (service 'puzzle', account '{args.provider}')")
-    elif args.action == "clear":
-        removed = delete_key(args.provider)
-        delete_key(f"{args.provider}-auth")
+        print(f"stored in the keychain (service 'puzzle', account '{pid}')")
+    elif action == "check":
+        key = s.api_key(pid)
+        if not key:
+            print(f"no {label} key (environment variable {s.key_env(pid) or '-'} or keychain)")
+            return 1
+        try:
+            print(check_key(pid, key, s))
+        except ProviderError as exc:
+            print(f"{exc.plain(label)} ({exc})")
+            return 1
+    elif action == "remove":
+        removed = delete_key(pid)
+        delete_key(f"{pid}-auth")
         print("removed from the keychain" if removed else "no key in the keychain")
-    print(f"{args.provider} key: {AgentSettings(provider=args.provider).key_source()}")
+    print(f"{label} key: {s.key_source(pid)}")
     return 0
 
 

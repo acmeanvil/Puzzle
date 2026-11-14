@@ -1,0 +1,6 @@
+{
+ "error": {
+  "message": "You exceeded your current quota",
+  "code": "insufficient_quota"
+ }
+}

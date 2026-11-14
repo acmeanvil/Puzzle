@@ -1,0 +1,18 @@
+{
+ "id": "msg_2",
+ "type": "message",
+ "role": "assistant",
+ "model": "claude-test",
+ "content": [
+  {
+   "type": "text",
+   "text": "Three studies."
+  }
+ ],
+ "stop_reason": "end_turn",
+ "stop_sequence": null,
+ "usage": {
+  "input_tokens": 30,
+  "output_tokens": 3
+ }
+}

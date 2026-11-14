@@ -1,0 +1,17 @@
+{
+ "models": [
+  {
+   "name": "models/gemini-3-pro",
+   "supportedGenerationMethods": [
+    "generateContent",
+    "countTokens"
+   ]
+  },
+  {
+   "name": "models/text-embedding-004",
+   "supportedGenerationMethods": [
+    "embedContent"
+   ]
+  }
+ ]
+}

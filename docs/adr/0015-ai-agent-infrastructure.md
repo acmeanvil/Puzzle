@@ -94,7 +94,7 @@ At every level the agent's changes are attributed in the log and can be undone.
   Before `submit` took a list, Haiku failed the new load case: it put the three related commands in `propose` (the only multi-command tool then), so they waited for review at "act_in_budget". A tool-design gap, not a modelling one; `submit` now applies a list of edits all or none (one history entry, one undo), and the instructions say to propose only what the user did not ask for.
 
   Also found by the suite: a static solve with no support ran in CalculiX and returned ~9,000 km of displacement. Such studies now report the problem `unconstrained` and are refused before running (free modal analysis is still allowed).
-- Still to do: local models, tasks that separate Haiku from smaller models, per-change acceptance in the GUI, streaming replies.
+- Still to do: local models, tasks that separate Haiku from smaller models, per-change acceptance in the GUI. Streaming replies built with ADR 0084 (2026-11-14).
 
 ## Consequences
 

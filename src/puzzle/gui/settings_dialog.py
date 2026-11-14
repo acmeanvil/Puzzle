@@ -26,15 +26,19 @@ from puzzle.settings import PREFERENCES, WAITING, Settings
 
 ADVANCED = "Advanced"  # resets made by hand (the PARDISO build's wait)
 AGENT = "Agent"
-PROVIDERS = [
-    ("Claude (Anthropic)", "anthropic"),
-    ("A local or other OpenAI-compatible model (Ollama, LM Studio, llama.cpp)", "openai"),
-]
 IMAGES = [
     ("Default: local models yes, remote models no", None),
-    ("Always send rendered images", True),
-    ("Never send rendered images", False),
+    ("Always send images and files", True),
+    ("Never send images and files", False),
 ]
+REASONING = [
+    ("The provider's default", ""),
+    ("None", "none"),
+    ("Low", "low"),
+    ("Medium", "medium"),
+    ("High", "high"),
+]
+KEY_STATES = {"none": "No key", "keychain": "Key in the keychain"}
 
 
 class SettingsDialog(QDialog):
@@ -199,62 +203,294 @@ class SettingsDialog(QDialog):
                 box.setEnabled(own)
 
     def _agent_page(self) -> QWidget:
+        """ADR 0084 decision 4: the model in use, then a row per provider (its key's
+        state, Set key…, Test, Remove, Options, its docs), then the options of the one
+        chosen. Keys go to the keychain from a hidden field, never a file."""
+        from PySide6.QtWidgets import QCheckBox, QGridLayout, QGroupBox, QScrollArea
+
         page = QWidget()
-        form = QFormLayout(page)
+        column = QVBoxLayout(page)
+        top = QFormLayout()
         self.provider = QComboBox()
-        for text, value in PROVIDERS:
-            self.provider.addItem(text, value)
-        self.provider.setCurrentIndex(max(self.provider.findData(self.agent.provider), 0))
         self.model = QLineEdit(self.agent.model)
-        self.base_url = QLineEdit(self.agent.base_url)
-        for line in (self.model, self.base_url):
-            line.setMinimumWidth(380)
+        self.model.setMinimumWidth(320)
         self.images = QComboBox()
         for text, value in IMAGES:
             self.images.addItem(text, value)
         self.images.setCurrentIndex(max(self.images.findData(self.agent.send_images), 0))
-        self.key_status = QLabel("")
-        key = QPushButton("Set API key…")
-        key.setToolTip("Kept in the system keychain, never in a file")
-        key.clicked.connect(self._set_key)
+        top.addRow("Model provider", self.provider)
+        top.addRow("Model", self.model)
+        top.addRow("Images and files (default)", self.images)
+        column.addLayout(top)
+        self.rows_box = QWidget()
+        self.rows = QGridLayout(self.rows_box)
+        self.rows.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(self.rows_box)
+        scroll.setMinimumHeight(190)
+        column.addWidget(scroll, 1)
+        add = QPushButton("Add endpoint…")
+        add.setToolTip("Any other Chat Completions endpoint: OpenRouter, Groq, a NIM of "
+                       "your own, Azure OpenAI")  # fmt: skip
+        add.clicked.connect(self._add_endpoint)
         row = QHBoxLayout()
+        self.key_status = QLabel("")
+        role(self.key_status, "muted")
+        self.key_status.setWordWrap(True)
         row.addWidget(self.key_status, 1)
-        row.addWidget(key)
-        form.addRow("Model provider", self.provider)
-        form.addRow("Model", self.model)
-        form.addRow("Endpoint (local models)", self.base_url)
-        form.addRow("Rendered images", self.images)
-        form.addRow("API key", row)
+        row.addWidget(add)
+        column.addLayout(row)
+        self.details = QGroupBox("")
+        form = QFormLayout(self.details)
+        self.base_url = QLineEdit()
+        self.key_env = QLineEdit()
+        self.enabled = QCheckBox("Offer its models in the model button")
+        self.send_files = QComboBox()
+        for text, value in IMAGES:
+            self.send_files.addItem(text.replace("Default: ", "Default (the page's): ")
+                                    if value is None else text, value)  # fmt: skip
+        self.reasoning = QComboBox()
+        for text, value in REASONING:
+            self.reasoning.addItem(text, value)
+        self.max_tokens = QLineEdit()
+        self.max_tokens.setPlaceholderText("the provider's default")
+        self.favourites = QLineEdit()
+        self.favourites.setPlaceholderText("models pinned to the top, separated by commas")
+        self.route = QLineEdit()
+        self.route.setPlaceholderText(":fastest, :cheapest or a host such as :groq")
+        form.addRow("Endpoint", self.base_url)
+        form.addRow("Key variable", self.key_env)
+        form.addRow("", self.enabled)
+        form.addRow("Images and files", self.send_files)
+        form.addRow("Reasoning", self.reasoning)
+        form.addRow("Most output tokens", self.max_tokens)
+        form.addRow("Favourites", self.favourites)
+        form.addRow("Host or policy", self.route)
+        self.route_label = form.labelForField(self.route)
+        column.addWidget(self.details)
+        self.editing = ""
+        self._fill_providers()
         self.provider.currentIndexChanged.connect(lambda _: self._agent_fields())
+        self._options(self.agent.provider if self.agent.provider in self.agent.ids()
+                      else "anthropic")  # fmt: skip
         self._agent_fields()
         return page
 
+    def _fill_providers(self) -> None:
+        """The provider dropdown and the rows, from the catalog and the user's entries."""
+        from PySide6.QtWidgets import QLabel as Label
+
+        current = self.provider.currentData() or self.agent.provider
+        self.provider.blockSignals(True)
+        self.provider.clear()
+        for pid in self.agent.ids():
+            self.provider.addItem(self.agent.label(pid), pid)
+        self.provider.setCurrentIndex(max(self.provider.findData(current), 0))
+        self.provider.blockSignals(False)
+        while self.rows.count():
+            item = self.rows.takeAt(0)
+            if item.widget() is not None:
+                item.widget().hide()
+                item.widget().deleteLater()
+        self.states: dict[str, QLabel] = {}
+        for r, pid in enumerate(self.agent.ids()):
+            from puzzle.agent.catalog import entry
+
+            e = entry(pid)
+            self.rows.addWidget(Label(self.agent.label(pid)), r, 0)
+            state = Label("")
+            role(state, "muted")
+            self.states[pid] = state
+            self.rows.addWidget(state, r, 1)
+            buttons = [("Set key…", lambda _=False, p=pid: self._set_key(p)),
+                       ("Test", lambda _=False, p=pid: self._test(p)),
+                       ("Remove", lambda _=False, p=pid: self._remove_key(p)),
+                       ("Options", lambda _=False, p=pid: self._options(p))]  # fmt: skip
+            for c, (text, slot) in enumerate(buttons, start=2):
+                b = QPushButton(text)
+                b.clicked.connect(slot)
+                if text != "Options" and not self.agent.needs_key(pid):
+                    b.setEnabled(text == "Test")  # local: Test lists its models
+                self.rows.addWidget(b, r, c)
+            links = [f'<a href="{e.docs}">docs</a>'] if e.docs else []
+            if e.data_terms:
+                links.append(f'<a href="{e.data_terms}">data terms</a>')
+            link = Label(" · ".join(links))
+            link.setOpenExternalLinks(True)
+            self.rows.addWidget(link, r, 6)
+            self._show_state(pid)
+
+    def _show_state(self, pid: str, said: str = "") -> None:
+        if pid not in self.states:
+            return
+        if said:
+            self.states[pid].setText(said)
+            return
+        if not self.agent.needs_key(pid):
+            self.states[pid].setText("No key needed")
+            return
+        source = self.agent.key_source(pid)
+        self.states[pid].setText(KEY_STATES.get(source, f"Key from the {source}"))
+
     def _agent_fields(self) -> None:
-        from puzzle.agent.settings import DEFAULT_MODELS, AgentSettings
+        pid = self.provider.currentData() or "anthropic"
+        from puzzle.agent.catalog import entry
 
-        provider = self.provider.currentData()
-        self.model.setPlaceholderText(f"default: {DEFAULT_MODELS.get(provider, '')}")
-        self.base_url.setEnabled(provider == "openai")
-        source = AgentSettings(provider=provider).key_source()
-        self.key_status.setText({"none": "No key stored"}.get(source, f"From the {source}"))
+        default = entry(pid).default_model
+        self.model.setPlaceholderText(f"default: {default}" if default
+                                      else "choose one in the model button")  # fmt: skip
 
-    def _set_key(self) -> None:
+    def _options(self, pid: str) -> None:
+        """Show one provider's options below the rows (what's typed is kept per
+        provider until Save)."""
+        from puzzle.agent.catalog import entry
+
+        self._keep_options()
+        self.editing = pid
+        e, cfg = entry(pid), self.agent.config(pid)
+        self.details.setTitle(f"{self.agent.label(pid)}: options")
+        self.base_url.setText(cfg.base_url)
+        self.base_url.setPlaceholderText(e.base_url or "https://…/v1")
+        self.key_env.setText(cfg.key_env)
+        self.key_env.setPlaceholderText(e.key_env or "none")
+        self.enabled.setChecked(self.agent.enabled(pid))
+        self.send_files.setCurrentIndex(max(self.send_files.findData(cfg.send_files), 0))
+        self.reasoning.setCurrentIndex(max(self.reasoning.findData(cfg.reasoning), 0))
+        self.reasoning.setEnabled(bool(e.reasoning) or e.wire == "chat")
+        self.max_tokens.setText(str(cfg.max_output_tokens) if cfg.max_output_tokens else "")
+        self.favourites.setText(", ".join(cfg.favourites))
+        self.route.setText(cfg.route)
+        hf = pid == "huggingface"
+        self.route.setVisible(hf)
+        if self.route_label is not None:
+            self.route_label.setVisible(hf)
+
+    def _keep_options(self) -> None:
+        if not self.editing:
+            return
+        cfg = self.agent.config(self.editing)
+        cfg.base_url = self.base_url.text().strip()
+        cfg.key_env = self.key_env.text().strip()
+        default_on = cfg.enabled is None and self.enabled.isChecked() == self.agent.enabled(
+            self.editing)  # fmt: skip
+        cfg.enabled = None if default_on else self.enabled.isChecked()
+        cfg.send_files = self.send_files.currentData()
+        cfg.reasoning = self.reasoning.currentData() or ""
+        text = self.max_tokens.text().strip()
+        cfg.max_output_tokens = int(text) if text.isdigit() else 0
+        cfg.favourites = [m.strip() for m in self.favourites.text().split(",") if m.strip()]
+        cfg.route = self.route.text().strip()
+
+    def _set_key(self, pid: str | None = None) -> None:
         from PySide6.QtWidgets import QInputDialog
 
         from puzzle.agent.providers import ProviderError
-        from puzzle.agent.settings import store_key
+        from puzzle.agent.settings import paste_problem, store_key
 
-        provider = self.provider.currentData()
+        pid = pid or self.provider.currentData()
         key, ok = QInputDialog.getText(
-            self, "API key", "API key (kept in the system keychain):", QLineEdit.EchoMode.Password
-        )
-        if ok and key.strip():
+            self, "API key", f"{self.agent.label(pid)} API key (kept in the system keychain):",
+            QLineEdit.EchoMode.Password,
+        )  # fmt: skip
+        if not ok or not key.strip():
+            return
+        problem = paste_problem(pid, key.strip())
+        try:
+            store_key(pid, key.strip())
+        except ProviderError as exc:
+            self.key_status.setText(str(exc))
+            return
+        stored = "Stored in the keychain. Test checks it with the provider."
+        self.key_status.setText(f"Stored; {problem}." if problem else stored)
+        self._show_state(pid)
+
+    def _remove_key(self, pid: str) -> None:
+        from puzzle.agent.settings import delete_key
+
+        removed = delete_key(pid)
+        delete_key(f"{pid}-auth")
+        self.key_status.setText("Removed from the keychain." if removed
+                                else "No key in the keychain to remove.")  # fmt: skip
+        self._show_state(pid)
+
+    def _test(self, pid: str) -> None:
+        """One cheap authenticated call, off the GUI thread; its answer in the row."""
+        import threading
+
+        from PySide6.QtCore import QTimer
+
+        from puzzle.agent.providers import ProviderError
+        from puzzle.agent.settings import available_models, check_key
+
+        self._keep_options()
+        key = self.agent.api_key(pid)
+        if self.agent.needs_key(pid) and not key:
+            self._show_state(pid, "No key to test")
+            return
+        self._show_state(pid, "Testing…")
+        result: list[str] = []
+
+        def work() -> None:
             try:
-                store_key(provider, key.strip())
+                if self.agent.needs_key(pid):
+                    result.append(check_key(pid, key, self.agent))
+                else:
+                    found, notes = available_models(_only(self.agent, pid))
+                    result.append(f"{len(found)} models answer" if found
+                                  else (notes[0] if notes else "no models"))  # fmt: skip
             except ProviderError as exc:
-                self.key_status.setText(str(exc))
-                return
-        self._agent_fields()
+                result.append(f"Refused: {exc.plain(self.agent.label(pid))}")
+            except Exception as exc:  # noqa: BLE001 - said in the row
+                result.append(f"Failed: {exc}")
+
+        thread = threading.Thread(target=work, daemon=True)
+        thread.start()
+        timer = QTimer(self)
+
+        def poll() -> None:
+            if result:
+                timer.stop()
+                self._show_state(pid, result[0])
+
+        timer.timeout.connect(poll)
+        timer.start(100)
+        self._test_thread = thread  # tests join it
+
+    def _add_endpoint(self) -> None:
+        """A compatible Chat Completions endpoint: its name, address and key variable in
+        one form."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Add endpoint")
+        form = QFormLayout(dialog)
+        name, url, env = QLineEdit(), QLineEdit(), QLineEdit()
+        name.setPlaceholderText("openrouter")
+        url.setPlaceholderText("https://openrouter.ai/api/v1")
+        env.setPlaceholderText("OPENROUTER_API_KEY (or leave empty and Set key…)")
+        form.addRow("Name", name)
+        form.addRow("Address", url)
+        form.addRow("Key variable", env)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
+                                   | QDialogButtonBox.StandardButton.Cancel)  # fmt: skip
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if not self.add_endpoint(dialog, name, url, env):
+            return
+
+    def add_endpoint(self, dialog, name, url, env) -> bool:
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return False
+        label = "".join(c for c in name.text().strip() if c.isalnum() or c in "-_.")
+        if not label or not url.text().strip().startswith(("http://", "https://")):
+            self.key_status.setText("An endpoint needs a name and an http(s) address.")
+            return False
+        self._keep_options()
+        cfg = self.agent.config(f"compatible:{label}")
+        cfg.name, cfg.base_url, cfg.key_env = label, url.text().strip(), env.text().strip()
+        self._fill_providers()
+        self._options(f"compatible:{label}")
+        return True
 
     # --- actions ----------------------------------------------------------------------
 
@@ -266,8 +502,11 @@ class SettingsDialog(QDialog):
             d = AgentSettings()
             self.provider.setCurrentIndex(self.provider.findData(d.provider))
             self.model.setText(d.model)
-            self.base_url.setText(d.base_url)
             self.images.setCurrentIndex(self.images.findData(d.send_images))
+            self.agent.providers = {p: c for p, c in self.agent.providers.items()
+                                    if p.startswith("compatible:")}  # fmt: skip
+            self.editing = ""
+            self._options(self.provider.currentData())
             return
         for pref in [p for p in PREFERENCES if p.group == group]:
             box = self.boxes[pref.key]
@@ -279,9 +518,9 @@ class SettingsDialog(QDialog):
         for key, box in self.boxes.items():
             self.settings.set(key, box.currentData())
         self.settings.save()
+        self._keep_options()
         self.agent.provider = self.provider.currentData()
         self.agent.model = self.model.text().strip()
-        self.agent.base_url = self.base_url.text().strip() or self.agent.base_url
         self.agent.send_images = self.images.currentData()
         save_settings(self.agent, self.agent_path)
         self.accept()
@@ -294,6 +533,16 @@ class SettingsDialog(QDialog):
         if self.layout() is not None:
             self.layout().activate()
         tab_in_order(self)
+
+
+def _only(s, pid: str):
+    """A copy of the agent settings offering one provider (Test on a keyless one)."""
+    import copy
+
+    one = copy.deepcopy(s)
+    for p in one.ids():
+        one.config(p).enabled = p == pid
+    return one
 
 
 class ColourButton(QPushButton):

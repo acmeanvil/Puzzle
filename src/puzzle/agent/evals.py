@@ -79,6 +79,10 @@ def endpoint_failed(exc: BaseException) -> bool:
     task. Refused connections, timeouts and 5xx answers are the endpoint's."""
     if not isinstance(exc, CONNECTION_ERRORS):
         return False
+    if isinstance(exc, ProviderError) and getattr(exc, "kind", ""):  # ADR 0084's kinds
+        return exc.kind not in ("context", "tools")  # the model's: a failed task
+    if isinstance(exc, ProviderError) and getattr(exc, "status", 0):
+        return exc.status >= 500  # another 4xx answer is the model's
     cause = exc if isinstance(exc, urllib.error.HTTPError) else exc.__cause__
     return not (isinstance(cause, urllib.error.HTTPError) and cause.code < 500)
 

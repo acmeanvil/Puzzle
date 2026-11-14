@@ -220,7 +220,7 @@ def _reuse(path: Path, names: list[str]) -> Measured | None:
 
 
 def measure(candidate: Candidate, base_url: str, workdir: Path, *, solvers=(),
-            again: bool = False, on_task=None, cancel=None) -> Measured:  # fmt: skip
+            again: bool = False, on_task=None, cancel=None, provider=None) -> Measured:  # fmt: skip
     """The suite on one model (or its kept results for this suite version, when they
     cover the tasks this machine runs).
 
@@ -238,7 +238,10 @@ def measure(candidate: Candidate, base_url: str, workdir: Path, *, solvers=(),
         kept = _reuse(path, [t.name for t in tasks])
         if kept is not None:
             return kept
-    provider = AgentSettings(provider="openai", model=candidate.name, base_url=base_url).build()
+    if provider is None:  # a local model on the endpoint
+        s = AgentSettings(provider="local", model=candidate.name)
+        s.config("local").base_url = base_url
+        provider = s.build()
     passed, seconds, details, complete = {}, {}, {}, True
     for task in tasks:
         if cancel is not None and cancel.is_set():
@@ -342,9 +345,107 @@ def choose(model: str, base_url: str) -> Path:
     """The pick into agent.toml: the provider, model and endpoint, with when and by
     which suite (ADR 0022 decision 1)."""
     from puzzle.agent import evals
-    from puzzle.agent.settings import load_settings, save_settings
+    from puzzle.agent.settings import LOCAL_URL, load_settings, save_settings
 
     s = load_settings()
-    s.provider, s.model, s.base_url = "openai", model, base_url
+    s.provider, s.model = "local", model
+    s.config("local").base_url = "" if base_url.rstrip("/") == LOCAL_URL else base_url
     s.picked = f"{datetime.now(UTC).date().isoformat()} suite {evals.SUITE_VERSION}"
     return save_settings(s)
+
+
+# --- remote models (ADR 0084 decision 9) ---------------------------------------------
+
+
+class _Counted:
+    """A provider that counts its requests and refuses past the budget (kind
+    "budget": the endpoint's, so the model's record isn't kept)."""
+
+    def __init__(self, inner, left: list[int]) -> None:
+        self.inner, self.left = inner, left
+        self.name, self.model, self.remote = inner.name, inner.model, inner.remote
+
+    def complete(self, system, messages, tools, on_delta=None):
+        from puzzle.agent.providers import ProviderError
+
+        if self.left[0] <= 0:
+            raise ProviderError("the request budget is spent", "budget", self.name)
+        self.left[0] -= 1
+        return self.inner.complete(system, messages, tools)
+
+
+@dataclass
+class RemotePick:
+    """What `pick_remote` measured, within its budget."""
+
+    models: list[str]
+    planned: int  # requests at most, before starting
+    used: int
+    ranked: list[Measured]
+    incomplete: list[Measured]
+    words: str
+
+
+def remote_models(settings=None, only: list[str] | None = None) -> list:
+    """The enabled remote providers' models known to call tools (`ModelChoice`s)."""
+    from puzzle.agent.settings import available_models
+
+    choices, _notes = available_models(settings)
+    return [c for c in choices if c.remote and c.tools is True
+            and (not only or c.model in only)]  # fmt: skip
+
+
+def planned_requests(models: int, solvers=()) -> int:
+    """The most requests measuring `models` models can take: every task's every round."""
+    from puzzle.agent.agent import MAX_ROUNDS
+
+    return models * len(planned(solvers)) * MAX_ROUNDS
+
+
+def pick_remote(budget: int, workdir: Path | None = None, *, solvers=(), only=None,
+                again: bool = False, on_task=None, cancel=None, settings=None,
+                choices=None) -> RemotePick:  # fmt: skip
+    """The suite on remote tool-calling models, opt-in and within `budget` requests in
+    all; scores kept beside the local ones in agent-evals/ by model name, so a model
+    measured once is known whichever provider serves it."""
+    import tempfile
+
+    from puzzle.agent.settings import load_settings
+
+    s = settings or load_settings()
+    choices = choices if choices is not None else remote_models(s, only)
+    work = workdir or Path(tempfile.mkdtemp(prefix="puzzle-pick-remote-"))
+    left = [budget]
+    measured = []
+    for c in choices:
+        if left[0] <= 0 or (cancel is not None and cancel.is_set()):
+            break
+        provider = _Counted(s.build(c.provider, c.model), left)
+        measured.append(measure(Candidate(c.model), "", work, solvers=solvers, again=again,
+                                on_task=on_task, cancel=cancel, provider=provider))  # fmt: skip
+    ranked = rank([m for m in measured if m.complete])
+    incomplete = [m for m in measured if not m.complete]
+    if ranked:
+        best = ranked[0]
+        words = (
+            f"{best.model}: {best.passed} of {best.total} tasks, core "
+            f"{best.core_passed} of {best.core_total}, {best.median_s:.0f} s a task"
+        )
+    else:
+        words = "No remote model was measured in full."
+    if incomplete:
+        words += " Not measured in full (budget, or the provider failed): " + ", ".join(
+            m.model for m in incomplete) + "."  # fmt: skip
+    return RemotePick([c.model for c in choices], planned_requests(len(choices), solvers),
+                      budget - left[0], ranked, incomplete, words)  # fmt: skip
+
+
+def kept_score(model: str) -> str:
+    """ "12/14" when the current suite measured the model in full, else ""."""
+    from puzzle.agent import evals
+
+    try:
+        kept = Measured(**json.loads(_kept(model, evals.SUITE_VERSION).read_text(encoding="utf-8")))
+    except (OSError, ValueError, TypeError):
+        return ""
+    return f"{kept.passed}/{kept.total}" if kept.complete else ""

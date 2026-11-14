@@ -21,11 +21,22 @@ from typing import Any
 from mcp.server.mcpserver.exceptions import ToolError
 
 from puzzle.agent.mcp import INSTRUCTIONS, build_server
-from puzzle.agent.providers import Provider, ToolSpec
+from puzzle.agent.providers import Provider, ProviderError, ToolSpec
 
 NAME = "built-in"
 MAX_ROUNDS = 16
 MAX_TOOL_CHARS = 8000  # longer tool output is cut, with a note, to keep context small
+CUT = "(cut to fit the model's context; call the tool again if it's needed)"
+
+
+def _takes_delta(provider) -> bool:
+    """Whether a provider's `complete` streams (an older or test provider may not)."""
+    import inspect
+
+    try:
+        return "on_delta" in inspect.signature(provider.complete).parameters
+    except (TypeError, ValueError):
+        return False
 
 
 def _system() -> str:
@@ -66,7 +77,8 @@ def _doing(tool: str, arguments: dict) -> str:
 class Event:
     """Something the agent did, for the GUI or terminal to show as it happens."""
 
-    kind: str  # "text", "tool_call", "tool_result", "error", "usage", "status", "note"
+    kind: str  # "delta" (reply text streaming), "text", "tool_call", "tool_result",
+    # "error", "usage", "status", "note"
     text: str = ""
     data: dict[str, Any] = field(default_factory=dict)
 
@@ -124,19 +136,23 @@ class Agent:
                 return answer or "(stopped)"
             emit(Event("status", "Thinking…"))
             asked = time.perf_counter()
-            reply = self.provider.complete(SYSTEM, self.messages, self.tools)
+            reply = self._complete(emit if on_event is not None else None)
             self.timings["model"] += time.perf_counter() - asked
             self.tokens["input"] += reply.input_tokens
             self.tokens["output"] += reply.output_tokens
-            self.messages.append(
-                {"role": "assistant", "text": reply.text, "tool_calls": reply.tool_calls}
-            )
+            turn: dict[str, Any] = {"role": "assistant", "text": reply.text,
+                                    "tool_calls": reply.tool_calls}  # fmt: skip
+            if reply.carry is not None:  # sent back to this provider only (ADR 0084)
+                turn["carry"] = {"provider": self.provider.name, "data": reply.carry}
+            self.messages.append(turn)
             if reply.text:
                 answer = reply.text
                 emit(Event("text", reply.text))
             if not reply.tool_calls:
                 self.timings["total"] = time.perf_counter() - started
-                emit(Event("usage", data=dict(self.tokens) | {"timings": dict(self.timings)}))
+                emit(Event("usage", data=dict(self.tokens) | {
+                    "timings": dict(self.timings), "provider": self.provider.name,
+                    "model": getattr(self.provider, "model", "")}))  # fmt: skip
                 return answer
             for call in reply.tool_calls:
                 if stop is not None and stop.is_set():
@@ -164,6 +180,49 @@ class Agent:
 
     def reset(self) -> None:
         self.messages.clear()
+
+    def _complete(self, emit):
+        """One model reply, streamed when someone is watching and the provider can
+        (ADR 0084 decision 6). A conversation too long for the model has its oldest tool
+        results cut, saying so, and is asked again."""
+        shown = {"status": ""}
+
+        def on_delta(kind: str, text: str) -> None:
+            if kind == "text" and text:
+                emit(Event("delta", text))
+                status = "Writing…"
+            elif kind == "thinking":
+                status = "Thinking…"
+            elif kind == "tool":
+                status = f"Preparing {text}" if text else "Preparing a tool call"
+            else:
+                return
+            if status != shown["status"]:
+                shown["status"] = status
+                emit(Event("status", status))
+
+        streams = emit is not None and _takes_delta(self.provider)
+        while True:
+            try:
+                if streams:
+                    return self.provider.complete(SYSTEM, self.messages, self.tools,
+                                                  on_delta=on_delta)  # fmt: skip
+                return self.provider.complete(SYSTEM, self.messages, self.tools)
+            except ProviderError as exc:
+                if exc.kind != "context" or not self._cut_oldest():
+                    raise
+                if emit is not None:
+                    emit(Event("note", "The conversation was too long for the model: the "
+                                       "oldest tool results were cut."))  # fmt: skip
+
+    def _cut_oldest(self, share: float = 0.5) -> bool:
+        """Cut the oldest half of the tool results still whole; False when none are."""
+        whole = [m for m in self.messages if m["role"] == "tool" and m.get("content") != CUT]
+        if not whole:
+            return False
+        for m in whole[: max(1, int(len(whole) * share))]:
+            m["content"], m["image"] = CUT, None
+        return True
 
     # --- tools -------------------------------------------------------------------
 

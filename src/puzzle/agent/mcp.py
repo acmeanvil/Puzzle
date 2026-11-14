@@ -124,7 +124,15 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
             runs = ResultStore(root / RESULTS_DIR).runs()
         except PuzzleError:  # an old store: the model still outlines
             runs = None
-        return outline(session().project, ids=ids, runs=runs)
+        text = outline(session().project, ids=ids, runs=runs)
+        if not outside and model:  # the built-in agent's model, provider named only (ADR 0084)
+            from puzzle.agent.settings import load_settings
+
+            try:
+                text += f"\nBuilt-in agent: {model} ({load_settings().label()})"
+            except Exception:  # noqa: BLE001 - an unknown provider name: the model alone
+                text += f"\nBuilt-in agent: {model}"
+        return text
 
     @tool(description="One object's full data (JSON), by name or id.")
     @guarded
@@ -1075,7 +1083,7 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         from puzzle.agent.settings import load_settings
 
         s = load_settings()
-        embed = pack.ollama_embedder(s.base_url, s.embed_model) if s.embed_model else None
+        embed = pack.ollama_embedder(s.url("local"), s.embed_model) if s.embed_model else None
         return {"hits": pack.search(query, limit, embed=embed)}
 
     # --- the solvers here (ADR 0068 step 4) -------------------------------------------

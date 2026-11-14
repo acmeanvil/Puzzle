@@ -1,0 +1,24 @@
+{
+ "id": "resp_2",
+ "object": "response",
+ "status": "completed",
+ "output": [
+  {
+   "type": "message",
+   "id": "msg_1",
+   "role": "assistant",
+   "status": "completed",
+   "content": [
+    {
+     "type": "output_text",
+     "text": "Three studies.",
+     "annotations": []
+    }
+   ]
+  }
+ ],
+ "usage": {
+  "input_tokens": 90,
+  "output_tokens": 4
+ }
+}

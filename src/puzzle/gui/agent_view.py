@@ -186,6 +186,9 @@ class Transcript(QScrollArea):
         self.texts: list[str] = []  # what was shown, as plain text (tests, copying)
         self._tools: QVBoxLayout | None = None  # the reply in progress's tool calls
         self._tool_fold: Fold | None = None
+        self._live: QWidget | None = None  # the reply as it streams, plain text
+        self._live_label: QLabel | None = None
+        self._live_text = ""
 
     def _add(self, widget: QWidget) -> None:
         self.column.insertWidget(self.column.count() - 1, widget)
@@ -215,8 +218,33 @@ class Transcript(QScrollArea):
         self._add(box)
         self.texts.append(f"you: {text}" + "".join(f"\n📎 {a}" for a in attachments))
 
+    def stream(self, piece: str) -> None:
+        """Reply text as it arrives (ADR 0084 decision 6), shown plain until `reply`
+        draws the whole reply in its place."""
+        if self._live is None:
+            self._live = QWidget()
+            col = QVBoxLayout(self._live)
+            col.setContentsMargins(0, 6, 0, 0)
+            col.addWidget(self._who("agent", tokens().done))
+            self._live_label = QLabel("")
+            self._live_label.setWordWrap(True)
+            self._live_label.setTextFormat(Qt.TextFormat.PlainText)
+            self._live_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            col.addWidget(self._live_label)
+            self._add(self._live)
+            self._live_text = ""
+        self._live_text += piece
+        self._live_label.setText(self._live_text)
+
+    def _end_live(self) -> None:
+        if self._live is not None:
+            self._live.hide()
+            self._live.deleteLater()
+        self._live, self._live_label, self._live_text = None, None, ""
+
     def reply(self, markdown: str) -> None:
         """A reply: its prose as Markdown, its code blocks folded."""
+        self._end_live()
         box = QWidget()
         col = QVBoxLayout(box)
         col.setContentsMargins(0, 6, 0, 0)
@@ -263,6 +291,7 @@ class Transcript(QScrollArea):
                 item.widget().deleteLater()
         self.texts.clear()
         self._end_tools()
+        self._live, self._live_label, self._live_text = None, None, ""
 
     def toPlainText(self) -> str:  # noqa: N802 - as QTextEdit's, for callers and tests
         return "\n".join(self.texts)

@@ -1,0 +1,28 @@
+{
+ "candidates": [
+  {
+   "content": {
+    "role": "model",
+    "parts": [
+     {
+      "text": "Planning.",
+      "thought": true
+     },
+     {
+      "functionCall": {
+       "name": "outline",
+       "args": {}
+      },
+      "thoughtSignature": "CiQBVKhc7signature"
+     }
+    ]
+   },
+   "finishReason": "STOP"
+  }
+ ],
+ "usageMetadata": {
+  "promptTokenCount": 80,
+  "candidatesTokenCount": 6,
+  "thoughtsTokenCount": 20
+ }
+}

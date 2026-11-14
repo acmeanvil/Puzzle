@@ -313,8 +313,24 @@ FEniCSx, threaded beam-bolt ends, and the modelled bolts of ADR 0077. Left:
   0.02 % (`test_hex_revolution.py`); a holed plate swept into hex20 alone, its stretch
   +0.18 % from tetrahedra (`test_hex_tet_mixed.py`). Partly (2026-11-10, ADR
   0077): modelled bolts, nuts and washers are swept by revolving and sit as hexahedra in a
-  tet recipe, joined by nonconformal ties. Left: sweeps along a curved path, and
-  bodies that are a block or prism only once cut (a T, a stepped plate). **Built (2026-11-11):** second-order hexahedra, 20 and 27 nodes (ADR 0082).
+  tet recipe, joined by nonconformal ties. **Built (2026-11-14), bends and cuts:** a
+  body swept round an arc (`blocks.bend`: two flat ends holding one axis, one the
+  other turned about it, every other face a surface of revolution about it or a plane
+  square to it; an elbow, a bent tube or bar) has its end face revolved through the
+  angle in layers (`blocks.bend_sweep`); a body that is blocks once cut
+  (`blocks.decompose`: cut on the planes of its re-entrant flat faces, those with
+  corners of the body on both sides; a bar stepped on four sides, a block with a
+  pocket, a cross) is meshed as its blocks together, transfinite and conformal, when
+  every piece is a block (tried on a copy first, `decomposes`). Swept and revolved
+  profiles get an even count on every edge and Gmsh's quad algorithm, so no triangle
+  is left to sweep into prisms. Benchmarks (`test_hex_bends_and_cuts.py`): a quarter
+  bend of tube pushed out of its plane against Castigliano's curved cantilever with
+  shear, +0.25 % at R = 20 r on CalculiX and Code_Aster alike (+1.08 % at R = 10 r:
+  the formula leaves out the section's curvature, (r / R)²), and the stepped square
+  bar's F / A in each segment within 0.05 %. Left by choice: sweeps
+  along a free curve (a spline path has no axis to revolve about) and bodies whose
+  cut pieces are prisms or revolutions rather than blocks; both get tetrahedra, saying
+  why. **Built (2026-11-11):** second-order hexahedra, 20 and 27 nodes (ADR 0082).
 - **Hex meshes of bodies of revolution (maintainer, 2026-11-08).** The use is cylindrical
   solids: idealised bolts (shank, head, nut), pins, shafts, tubes, bushings and rollers.
   - **Today:** Gmsh hexes only block-like bodies (six four-sided faces,
@@ -445,7 +461,7 @@ FEniCSx, threaded beam-bolt ends, and the modelled bolts of ADR 0077. Left:
 ### 9. Agent and MCP
 
 - MCP over the network with authentication; per-change acceptance in the GUI (partly)
-  (0015). Streaming replies: taken up by ADR 0084.
+  (0015). Streaming replies: built with ADR 0084 (2026-11-14).
 - Remote model providers beyond Anthropic and one OpenAI-compatible endpoint: ADR 0084
   (OpenAI, Google, Hugging Face, Thinking Machines, Meta, NVIDIA, any compatible
   endpoint). Left out of it: Vertex AI's and Bedrock's own authentication (OAuth, SigV4)
@@ -539,7 +555,7 @@ phase 6's items are done whenever what they wait on arrives.
    - pretension locked across mixed steps, partial local axes on the rest (3);
    - meshing (5) (done 2026-11-13: hex meshes of bodies of revolution by blocks;
      2026-11-14: hex and tet in one recipe, tied; cones and tori by revolved profiles;
-     prisms swept);
+     prisms swept; bends revolved and re-entrant bodies cut into blocks);
    - welds (3b) (done 2026-11-14: the light weld's lost couple, by per-station
      couplings, and the groove weld's cap as a solid; done 2026-11-13: spectra
      and ± E on CalculiX and Code_Aster, the plate-side ASME toe, combinations on the

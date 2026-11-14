@@ -1,6 +1,7 @@
 # 0084. The agent on any remote model: providers as data, four wire formats
 
-- Status: Proposed
+- Status: Accepted; built 2026-11-14 (steps 1-4), but for the live checks, which need
+  the maintainer's keys (Plan step 4)
 - Date: 2026-11-13
 
 ## Context
@@ -223,6 +224,47 @@ images only with the user's consent. Keys never go in a project.
 3. Streaming on all four wires; the error kinds with retries; tokens per turn.
 4. `agent pick --remote`; the skill; Help text; live checks run once per provider and
    their results written here.
+
+## Built (2026-11-14)
+
+- `agent/catalog.py`: `PROVIDERS` (the nine entries), `TOOL_PATTERNS` (names known to
+  call tools, or not: embedding, speech, image, moderation models), `calls_tools`,
+  `key_problem`; `agent/http.py`: JSON and server-sent events over urllib, the error
+  kinds (`classify`, `ProviderError.kind`/`plain`), Retry-After honoured three times, a
+  generic user agent, a reply that won't stream said once in the log.
+- `agent/providers.py`: `MessagesProvider` (thinking blocks as the carry, a reasoning
+  level as a thinking budget), `ResponsesProvider` (`store: false`, the output items with
+  `reasoning.encrypted_content` as the carry, replayed as input without `status`),
+  `GeminiProvider` (`parametersJsonSchema` for the tools' full JSON schemas, the model
+  turn's parts with their `thoughtSignature` as the carry, `thinkingLevel`), and
+  `ChatProvider` (streamed tool calls assembled by index, `reasoning_effort`); every
+  `complete` takes `on_delta`; `list_models` per wire (Gemini's generateContent models,
+  the Hugging Face router's per-host `supports_tools`).
+- `agent/agent.py`: each assistant turn keeps `carry` with its provider's id; streaming
+  when someone is watching (`delta` events; the status says Thinking…, Writing… or the
+  tool being prepared); a `context` error cuts the oldest half of the tool results and
+  asks again, saying so; usage events name the provider and model.
+- `agent/settings.py`: `ProviderConfig` per provider (`[providers.<id>]`), `[[compatible]]`
+  entries as `compatible:<name>`, `format = 2` (older files migrated: `provider =
+  "openai"` was the one endpoint), `enabled` defaulting to having a key, `files_allowed`
+  per provider with the old `send_images` as every provider's default, `check_key` (a
+  model list, or a one-token request for typed models), `available_models` over the
+  enabled providers in parallel; `agent/capabilities.py`: the probe with a trivial tool,
+  `<user data dir>/agent-models.json`, `check` refusing a model that can't call tools.
+- CLI `puzzle agent-key set|check|remove --provider ID` (status and clear kept),
+  `puzzle agent pick --remote --budget N`; Settings > Agent: a row per provider (state,
+  Set key…, Test off the GUI thread, Remove, Options, docs and data terms), the chosen
+  provider's options, Add endpoint…; the model chip grouped by provider (favourites,
+  known tool callers, "may not call tools", Type a model…, scores from the suite), a
+  probe before switching to a model not known to call tools; the transcript draws a
+  streaming reply as plain text until the whole reply replaces it.
+- Tests: `tests/test_agent_providers.py` against `tests/data/providers/<wire>/` on a
+  fake server (each wire's text, tool call, carry round-trip and stream; each error kind;
+  retries; migration; keys per provider; the chip's lists; the Settings page; the remote
+  pick's budget); live checks `test_live_tool_round_trip` with `PUZZLE_PROVIDER_TESTS=1`,
+  the keys in the environment and `PUZZLE_<ID>_MODEL`, still to be run by the maintainer.
+- Skill `agent-providers`; the built-in agent's outline ends with its model and
+  provider. Help text from `PROVIDERS` comes with ADR 0083's generated reference.
 
 ## Consequences
 
