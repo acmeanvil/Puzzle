@@ -35,21 +35,38 @@ def pair_forces(wp, u: Field) -> np.ndarray:
     return wp.k * (_vectors(u, wp.a) - _vectors(u, wp.b))
 
 
+def station_loads(wp, u: Field) -> tuple[np.ndarray, np.ndarray]:
+    """(stations, 3) each station's force on the other part (N) and its moment about the
+    station's own node on the path (N·m): from its coupling's springs
+    (`weld_pairs.Coupling`), or with node-pair springs their forces and moments."""
+    from puzzle.adapters.weld_pairs import stretches
+    from puzzle.post.thread_fields import _vectors
+
+    n = len(wp.stations)
+    force, moment = np.zeros((n, 3)), np.zeros((n, 3))
+    if wp.couplings is None:
+        f = pair_forces(wp, u)
+        np.add.at(force, wp.station_of, f)
+        np.add.at(moment, wp.station_of, np.cross(wp.xa - wp.xyz[wp.station_of], f))
+        return force, moment
+    for i, c in enumerate(wp.couplings):
+        if c is None:
+            continue
+        carried = -(c.k * stretches(c, _vectors(u, c.nodes)))[:, None] * c.dirs
+        force[i] = carried[:3].sum(axis=0)
+        moment[i] = carried[3:].sum(axis=0) + np.cross(c.point - wp.xyz[i], force[i])
+    return force, moment
+
+
 def line_forces(wp, u: Field) -> np.ndarray:
     """(stations, 3) the line force at each station (N/m, global axes)."""
-    total = np.zeros((len(wp.stations), 3))
-    np.add.at(total, wp.station_of, pair_forces(wp, u))
-    return total / np.maximum(wp.widths, 1e-300)[:, None]
+    return station_loads(wp, u)[0] / np.maximum(wp.widths, 1e-300)[:, None]
 
 
 def twists(wp, u: Field) -> np.ndarray:
     """(stations,) the moment per length about the path at each station (N·m/m)."""
-    f = pair_forces(wp, u)
-    arm = wp.xa - wp.xyz[wp.station_of]
-    about = np.einsum("ij,ij->i", np.cross(arm, f), wp.tangent[wp.station_of])
-    total = np.zeros(len(wp.stations))
-    np.add.at(total, wp.station_of, about)
-    return total / np.maximum(wp.widths, 1e-300)
+    moment = station_loads(wp, u)[1]
+    return np.einsum("ij,ij->i", moment, wp.tangent) / np.maximum(wp.widths, 1e-300)
 
 
 def in_frame(wp, line: np.ndarray, twist: np.ndarray | None = None) -> np.ndarray:
@@ -89,12 +106,15 @@ def finish(results, project, comp, mesh) -> None:
             continue
         ids, rows, totals = [], [], []
         for wp in pairs:
-            line = line_forces(wp, u)
+            force, moment = station_loads(wp, u)
+            width = np.maximum(wp.widths, 1e-300)
+            line = force / width[:, None]
+            twist = np.einsum("ij,ij->i", moment, wp.tangent) / width
             ids.append(wp.stations)
-            rows.append(in_frame(wp, line, twists(wp, u)))
-            f = pair_forces(wp, u)
-            moment = np.cross(wp.xa, f).sum(axis=0)
-            totals.append([*f.sum(axis=0), float(np.linalg.norm(line, axis=1).max()), *moment])
+            rows.append(in_frame(wp, line, twist))
+            about = (moment + np.cross(wp.xyz, force)).sum(axis=0)  # about the origin
+            totals.append([*force.sum(axis=0), float(np.linalg.norm(line, axis=1).max()),
+                           *about])  # fmt: skip
         stress = step.fields.get("stress")
         for w in beads:  # ADR 0078 step 4: from the section through the bead's throat
             try:
@@ -291,6 +311,7 @@ def results(project, comp, mesh, res, weld: str | None = None, step: int | None 
                 {"s_m": float(s), **{name: float(r[c[name]]) for name in LINE_COMPONENTS}}
                 for s, r in zip(wp.s, rows, strict=True)
             ][:200],
+            **({"notes": list(wp.notes)} if getattr(wp, "notes", None) else {}),
         })  # fmt: skip
     return {"step": k, "welds": out}
 
@@ -833,9 +854,14 @@ def groove(mesh, stress, weld):
     part = weld.path.split("/", 1)[0]
     body = mesh.groups[part]
     blocks = [b for b in body.blocks(mesh) if b.dim == 3]
+    # A cap (its reinforcement) carries some of the load across the joint above the
+    # plates: the section cuts it too.
+    cap = mesh.groups.get(f"{weld.name} cap")
+    if cap is not None:
+        blocks += [b for b in cap.blocks(mesh) if b.dim == 3]
     own = Mesh(mesh.node_ids, mesh.coords, blocks, {part: body})
     step = StepResult(0, "stationary", 0.0, None, {"stress": stress})
-    depth = weld.leg.to_si()
+    depth = weld.leg.to_si() + (weld.reinforcement.to_si() if cap is not None else 0.0)
     origin = frame.xyz[0] - frame.normal * depth / 20  # the path lies on the joint
     cut, faces, areas, centres, nn = _cut(own, step, origin, frame.normal)
     sl, dist, near = _project(centres, frame.poly, frame.cum)

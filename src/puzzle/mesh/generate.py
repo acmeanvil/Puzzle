@@ -144,6 +144,12 @@ def generate_mesh(
         # ADR 0077: modelled bolts and nuts as bodies of revolution, part -> its profile
         swept = _revolved_parts(project, comp, recipe, planar, warnings)
         profiles: dict[str, tuple] = {}  # part -> (core radius, placement)
+        # A hexahedral recipe's bodies that can't take hexahedra get tetrahedra; the two
+        # kinds never share a face (no face mesh is both), so they are joined apart and
+        # tied where they touch (`_mixed_ties`). (part, body) -> whether it takes hexes.
+        kind_of: dict[tuple[str, str], bool] = {}
+        hexable: set[tuple[int, int]] = set()  # the volumes that take them, as tagged now
+        joins: list[set[str]] = []  # parts whose bodies would have been joined
         for part in comp.parts if not faceted else []:
             if part.name in swept:  # built from its step's arguments, named locally
                 kind, args = swept[part.name]
@@ -166,17 +172,26 @@ def generate_mesh(
                     + ("solids" if top == 3 else "lines")
                 )
             joined = top == 3 or planar  # 2D regions share their edges, as bodies faces
+            kinds = None
+            if hexes and top == 3:
+                kinds = _kinds(part.name, references[part.name], volumes[part.name], kind_of)
             if joined and len(volumes[part.name]) > 1:
                 geo, ref = geometries[part.name], references[part.name]
                 sides.update(_contact_bodies(comp, part.name, geo, ref, volumes[part.name]))
                 if geometries[part.name].share_faces:
-                    volumes[part.name] = _share_faces(part.name, volumes[part.name], top)
+                    volumes[part.name] = _share_faces(part.name, volumes[part.name], top, kinds)
+                    if kinds and len(set(kinds)) > 1:
+                        joins.append({part.name})
                 else:  # meshed apart, but bodies a bonded contact joins share their faces
                     _join_bonded(comp, part.name, volumes[part.name], sides, top)
+            if kinds:
+                hexable |= {v for v, k in zip(volumes[part.name], kinds, strict=True) if k}
             place(volumes[part.name], part.translation, part.rotation)
         if not faceted:
             gmsh.model.occ.synchronize()
-            _fragment_conformal(comp, volumes)
+            mixed = _fragment_conformal(comp, volumes, hexable if hexes else None)
+            if mixed:
+                joins.append(mixed)
         if planar:
             _check_plane(comp)
 
@@ -211,6 +226,11 @@ def generate_mesh(
         if hexes and not faceted:
             blocked = _block_revolutions(comp, references, found, swept, warnings)
         _physical_groups(comp, geometries, references, found, warnings)
+        hex_volumes, tet_volumes = [], []
+        if hexes and not faceted and any(k is False for k in kind_of.values()):
+            hex_volumes, tet_volumes = _by_kind(found, kind_of)
+            size = max(r.size for r in references.values())
+            _mixed_ties(joins, found, kind_of, 1e-6 * size + 1e-9, warnings)
         names = {
             entity: (part, persistent[part].get(name, name))
             for part, entities in found.items()
@@ -297,7 +317,18 @@ def generate_mesh(
         else:
             _sizes(recipe, comp, found, warnings, project, root)
             _sweep_profiles(profiles, volumes)
-            if recipe.element_shape == "hexahedra":
+            if recipe.element_shape == "hexahedra" and tet_volumes:
+                # Mixed: the bodies that take hexes structured and recombined, the rest
+                # tetrahedra (their faces left triangles), tied where they touch.
+                plain = [v for v in hex_volumes if v not in set(blocked)]
+                if plain:
+                    gmsh.model.mesh.setTransfiniteAutomatic(plain)
+                if blocked:
+                    from puzzle.mesh import blocks
+
+                    gmsh.model.mesh.setTransfiniteAutomatic(blocked, cornerAngle=blocks.CORNER)
+                gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 0)
+            elif recipe.element_shape == "hexahedra":
                 # Structured hexes: every block-like volume gets a transfinite mesh, recombined.
                 gmsh.model.mesh.setTransfiniteAutomatic()
                 if blocked:  # the butterfly's 135° corners count as corners there
@@ -309,11 +340,12 @@ def generate_mesh(
             _periodic(comp)
             gmsh.model.mesh.generate(3)
             if recipe.element_shape == "hexahedra":
-                types, _, _ = gmsh.model.mesh.getElements(3)
-                if any(t != 5 for t in types):
-                    raise MeshError(
-                        "some volumes could not be meshed with hexahedra (not block-like)"
-                    )
+                for v in hex_volumes or [(3, -1)]:  # -1: every volume
+                    types, _, _ = gmsh.model.mesh.getElements(3, v[1])
+                    if any(t != 5 for t in types):
+                        raise MeshError(
+                            "some volumes could not be meshed with hexahedra (not block-like)"
+                        )
         if recipe.element_order > 1:
             # Curved second-order elements can fold where midside nodes snap onto tight
             # curves (fillets, small holes); Gmsh's optimiser untangles them.
@@ -580,14 +612,114 @@ def _closure(volumes: list[tuple[int, int]]) -> list[tuple[int, int]]:
     return sorted(set(out))
 
 
-def _share_faces(part: str, volumes: list[tuple[int, int]], dim: int = 3) -> list[tuple[int, int]]:
+def _share_faces(part: str, volumes: list[tuple[int, int]], dim: int = 3,
+                 kinds: list[bool] | None = None) -> list[tuple[int, int]]:  # fmt: skip
     """Fragment one part's bodies (or a 2D part's regions) by each other, so those that
     touch share the faces (edges) between them, and so their nodes. Overlaps are
     refused: fragmenting would cut the overlap out as a body of its own. A sliding
-    contact between two of them is parted after meshing (`_part_contacts`)."""
+    contact between two of them is parted after meshing (`_part_contacts`). With
+    `kinds` (a hexahedral recipe: whether each body takes hexahedra) of both sorts, each
+    sort is joined apart, to be tied where they touch (`_mixed_ties`)."""
     current = list(volumes)
+    if kinds and len(set(kinds)) > 1:
+        for want in (True, False):
+            group = [i for i, k in enumerate(kinds) if k == want]
+            if len(group) > 1:
+                _fragment(part, current, group, dim)
+        return current
     _fragment(part, current, list(range(len(current))), dim)
     return current
+
+
+def _kinds(part: str, reference, volumes, kind_of) -> list[bool]:
+    """Whether each of a part's volumes takes hexahedra (`_method`), noted by body name
+    in `kind_of` (the volumes not yet placed, so they match the reference as it is)."""
+    gmsh.model.occ.synchronize()
+    names = {dt: n for n, dt in match(reference.of_dim(3), volumes,
+                                      tol=1e-5 * reference.size).items()}  # fmt: skip
+    out = []
+    for v in volumes:
+        faces = gmsh.model.getBoundary([v], combined=False, oriented=False)
+        takes = _method(faces, v)[0] == "hexahedra"
+        out.append(takes)
+        if v in names:
+            kind_of[(part, names[v])] = takes
+    return out
+
+
+def _by_kind(found, kind_of) -> tuple[list, list]:
+    """The volumes (as tagged now, a blocked body's blocks too) that take hexahedra, and
+    those that don't."""
+    hexes, tets = [], []
+    for (part, name), takes in kind_of.items():
+        hit = found.get(part, {}).get(name)
+        for dt in hit if isinstance(hit, list) else [hit] if hit else []:
+            if dt[0] == 3:
+                (hexes if takes else tets).append(dt)
+    return hexes, tets
+
+
+TIE = "(mesh tie {k})"  # a mixed mesh's tie: the tetrahedra's faces, then the hexahedra's
+TIE_TARGET = "(mesh tie {k} target)"
+
+
+def with_mesh_ties(project, component_id, mesh):
+    """(the mesh, the project with a bonded nonconformal tie for each tie a mixed
+    hexahedral and tetrahedral mesh made, `_mixed_ties`): read from the mesh's group
+    names, so a stored mesh ties as a fresh one does."""
+    import dataclasses
+    import re
+
+    from puzzle.model.schema import Contact
+
+    comp = project.objects.get(component_id)
+    if not isinstance(comp, Component):
+        return mesh, project
+    pattern = re.compile(r"^(.+)/\(mesh tie (\d+)\)$")
+    sources = {int(m.group(2)): name for name in mesh.groups if (m := pattern.match(name))}
+    targets = {k: next((n for n in mesh.groups if n.endswith("/" + TIE_TARGET.format(k=k))), None)
+               for k in sources}  # fmt: skip
+    made = [Contact(name=TIE.format(k=k), type="bonded", meshing="nonconformal",
+                    source=sources[k], target=targets[k])
+            for k in sorted(sources) if targets[k] is not None]  # fmt: skip
+    if not made:
+        return mesh, project
+    objects = dict(project.objects)
+    objects[comp.id] = comp.model_copy(update={"contacts": [*comp.contacts, *made]})
+    return mesh, dataclasses.replace(project, objects=objects)
+
+
+def _mixed_ties(joins, found, kind_of, tol: float, warnings) -> None:
+    """Where a body meshed with tetrahedra touches one with hexahedra that it would have
+    been joined to (bodies of one part sharing faces, parts a conformal bond joins), the
+    faces of each lying on the other's as mesh groups `<part>/(mesh tie k)` (the
+    tetrahedra's) and `<part>/(mesh tie k target)`, tied at the solve (`with_mesh_ties`).
+    Hexahedra and tetrahedra would need pyramids to share a face, which CalculiX lacks."""
+    pairs: dict[tuple[str, str], tuple[set, set]] = {}
+    for parts in joins:
+        bodies = [(p, n, takes) for (p, n), takes in kind_of.items() if p in parts]
+        sides: dict[bool, list] = {True: [], False: []}
+        for p, n, takes in bodies:
+            hit = found.get(p, {}).get(n)
+            for v in hit if isinstance(hit, list) else [hit] if hit else []:
+                if v[0] == 3:
+                    sides[takes] += [(p, f) for f in gmsh.model.getBoundary(
+                        [v], combined=False, oriented=False)]  # fmt: skip
+        for tp, f in sides[False]:
+            fb = np.asarray(gmsh.model.getBoundingBox(*f))
+            for hp, g in sides[True]:
+                gb = np.asarray(gmsh.model.getBoundingBox(*g))
+                if np.any(fb[:3] > gb[3:] + tol + 2e-7) or np.any(gb[:3] > fb[3:] + tol + 2e-7):
+                    continue
+                if _lies_on(f, g, tol) or _lies_on(g, f, tol):
+                    src, dst = pairs.setdefault((tp, hp), (set(), set()))
+                    src.add(f[1])
+                    dst.add(g[1])
+    for k, ((tp, hp), (src, dst)) in enumerate(sorted(pairs.items()), start=1):
+        gmsh.model.addPhysicalGroup(2, sorted(src), name=f"{tp}/{TIE.format(k=k)}")
+        gmsh.model.addPhysicalGroup(2, sorted(dst), name=f"{hp}/{TIE_TARGET.format(k=k)}")
+        warnings.append(f"{tp}'s tetrahedra are tied to {hp}'s hexahedra where they touch "
+                        "(the two can't share a face's nodes)")  # fmt: skip
 
 
 def _fragment(part: str, current: list[tuple[int, int]], group: list[int], dim: int) -> None:
@@ -865,7 +997,12 @@ def _check_plane(comp: Component) -> None:
         )
 
 
-def _fragment_conformal(comp: Component, volumes: dict[str, list[tuple[int, int]]]) -> None:
+def _fragment_conformal(comp: Component, volumes: dict[str, list[tuple[int, int]]],
+                        hexable: set | None = None) -> set[str]:  # fmt: skip
+    """The parts conformal bonds join fragmented together, so they share nodes. With
+    `hexable` (a hexahedral recipe's volumes that take hexahedra) and both sorts among
+    them, each sort is fragmented apart and the parts are returned, to be tied where
+    they touch (`_mixed_ties`); else an empty set."""
     joined = {
         sel.split("/", 1)[0]
         for c in comp.contacts
@@ -873,9 +1010,18 @@ def _fragment_conformal(comp: Component, volumes: dict[str, list[tuple[int, int]
         for sel in (c.source, c.target)
     }
     tools = [dt for name in sorted(joined) for dt in volumes.get(name, [])]
-    if len(joined) > 1 and tools:
-        gmsh.model.occ.fragment(tools, [])
+    if len(joined) < 2 or not tools:
+        return set()
+    if hexable is not None and 0 < sum(dt in hexable for dt in tools) < len(tools):
+        for want in (True, False):
+            group = [dt for dt in tools if (dt in hexable) == want]
+            if len(group) > 1:
+                gmsh.model.occ.fragment(group, [])
         gmsh.model.occ.synchronize()
+        return joined
+    gmsh.model.occ.fragment(tools, [])
+    gmsh.model.occ.synchronize()
+    return set()
 
 
 def _resolve(

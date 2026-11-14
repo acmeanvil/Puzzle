@@ -134,6 +134,7 @@ class HistoryStep(BaseModel):
         "nut",
         "washer",
         "weld_bead",
+        "weld_cap",
         "box",
         "cylinder",
         "cone",
@@ -1573,6 +1574,15 @@ class Weld(BaseModel):
     formulation: Literal["line", "modelled"] = Field(
         default="line", description="line: springs across the joint, no bead meshed (the "
         "default); modelled: the bead as a solid (ADR 0078 step 4)")  # fmt: skip
+    reinforcement: Quantity | None = Field(
+        default=None, description="a groove weld's cap: its height over the plates, drawn "
+        "as a solid when the weld is modelled (empty: flush)")  # fmt: skip
+    reinforcement_width: Quantity | None = Field(
+        default=None, description="the cap's width across the joint (empty: the groove's "
+        "depth plus twice the height)")  # fmt: skip
+    cap_faces: list[str] | None = Field(
+        default=None, min_length=2, max_length=2, description="the faces the cap lies on, "
+        "the path's part's then the other's (empty: the face selections at the path)")  # fmt: skip
 
     @model_validator(mode="after")
     def _pattern(self) -> Weld:
@@ -1581,6 +1591,8 @@ class Weld(BaseModel):
                              "length and pitch")  # fmt: skip
         if self.type == "groove" and self.groove is None:
             raise ValueError(f"weld '{self.name}': a groove weld is CJP or PJP")
+        if self.type != "groove" and (self.reinforcement or self.cap_faces):
+            raise ValueError(f"weld '{self.name}': only a groove weld has a cap")
         return self
 
 

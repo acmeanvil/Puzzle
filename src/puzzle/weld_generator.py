@@ -127,6 +127,7 @@ def commands(project, comp, planned: WeldPlan, *, name: str, leg, leg2=None,
 # Elements across a modelled bead's shorter leg: the throat section's force came to
 # 88.7, 98.8 and 101.8 % of the lap joint's pull at 3, 6 and 12 (ADR 0078 step 4).
 BEAD_DIVISIONS = 6
+CAP_DIVISIONS = 2  # elements over a groove weld's cap height
 ROOT_GAP = 0.1  # of the shorter leg: the bead's root cut back, so the legs share no edge
 
 
@@ -273,11 +274,18 @@ def modelled_commands(project, comp, mesh, name: str) -> list:
     weld = comp.welds[index]
     if weld.formulation == "modelled":
         raise PuzzleError(f"weld '{name}' is modelled already", code="exists")
-    if weld.type == "groove":  # no bead: its two faces tied over its depth (`with_grooves`)
+    if weld.type == "groove" and weld.reinforcement is None:
+        # no bead: its two faces tied over its depth (`with_grooves`)
         return [Edit(object=str(comp.id), ops=[
             EditOp(op="set", path=f"welds.{index}.formulation", value="modelled")])]  # fmt: skip
-    geo = bead_geometry(project, comp, mesh, weld)
-    part = f"{name} bead"
+    if weld.type == "groove":  # and its cap, a solid on the plates' faces
+        geo, faces = cap_geometry(project, comp, mesh, weld)
+        part, legs = f"{name} cap", (("Base A", faces[0]), ("Base B", faces[1]))
+        size = weld.reinforcement.to_si() / CAP_DIVISIONS
+    else:
+        geo = bead_geometry(project, comp, mesh, weld)
+        part, legs = f"{name} bead", (("Leg A", weld.faces[0]), ("Leg B", weld.faces[1]))
+        size = min(weld.leg.to_si(), (weld.leg2 or weld.leg).to_si()) / BEAD_DIVISIONS
     if part in {p.name for p in comp.parts}:
         raise PuzzleError(f"{comp.name} has a part '{part}' already", code="exists")
     owner = weld.path.split("/", 1)[0]
@@ -294,14 +302,16 @@ def modelled_commands(project, comp, mesh, name: str) -> list:
         *(EditOp(op="append", path="contacts", value=Contact(
             name=f"{name} {leg}", type="bonded", meshing="nonconformal",
             source=f"{part}/{leg}", target=face).model_dump(mode="json"))
-          for leg, face in (("Leg A", weld.faces[0]), ("Leg B", weld.faces[1]))),
+          for leg, face in legs),
         EditOp(op="set", path=f"welds.{index}.formulation", value="modelled"),
     ]  # fmt: skip
+    if weld.type == "groove" and weld.cap_faces is None:  # the faces found, kept
+        ops.append(EditOp(op="set", path=f"welds.{index}.cap_faces",
+                          value=[legs[0][1], legs[1][1]]))  # fmt: skip
     out = [Create(kind="geometry", data=geo.model_dump(mode="json")),
            Edit(object=str(comp.id), ops=ops)]  # fmt: skip
     recipe = project.objects.get(comp.mesh)
     if recipe is not None:
-        size = min(weld.leg.to_si(), (weld.leg2 or weld.leg).to_si()) / BEAD_DIVISIONS
         control = {"kind": "size", "selection": f"{part}/Body",
                    "size": {"value": round(size * 1e3, 4), "unit": "mm"}}  # fmt: skip
         out.append(Edit(object=str(recipe.id),
@@ -318,10 +328,10 @@ def line_commands(project, comp, name: str) -> list:
     index = next((i for i, w in enumerate(comp.welds) if w.name == name), None)
     if index is None or comp.welds[index].formulation != "modelled":
         raise PuzzleError(f"no modelled weld '{name}' in {comp.name}", code="not_found")
-    if comp.welds[index].type == "groove":
+    part = f"{name} cap" if comp.welds[index].type == "groove" else f"{name} bead"
+    if part not in {p.name for p in comp.parts}:  # a groove without a cap: its ties only
         return [Edit(object=str(comp.id), ops=[
             EditOp(op="set", path=f"welds.{index}.formulation", value="line")])]  # fmt: skip
-    part = f"{name} bead"
     parts = [p.model_dump(mode="json") for p in comp.parts if p.name != part]
     gone = next((p for p in comp.parts if p.name == part), None)
     ops = [
@@ -345,6 +355,77 @@ def line_commands(project, comp, name: str) -> list:
             out.append(Edit(object=str(recipe.id),
                             ops=[EditOp(op="set", path="controls", value=kept)]))  # fmt: skip
     return out
+
+
+def cap_geometry(project, comp, mesh, weld):
+    """A groove weld's cap (ADR 0078) as a `weld_cap` step along its path through the
+    mesh's stations (kept at corners), across the joint from the path's part and out of
+    the plates (`weld_fields.groove_stations`' frame), and the two faces it lies on.
+    -> (Geometry, (face on the path's part, face on the other))"""
+    from puzzle.adapters.weld_pairs import _chain
+    from puzzle.model.schema import Geometry, HistoryStep, NamedSelection
+    from puzzle.post.weld_fields import groove_stations
+
+    if weld.pattern == "intermittent":
+        raise PuzzleError(f"weld '{weld.name}': an intermittent groove weld's cap isn't "
+                          "drawn yet", code="unsupported")  # fmt: skip
+    frame = groove_stations(mesh, weld)
+    if frame is None:
+        raise PuzzleError(f"weld '{weld.name}' isn't in the mesh", code="not_found")
+    _corners_ids, closed = _chain(mesh.groups[weld.path], mesh)
+    keep = _corners(frame.xyz, closed)
+    if len(keep) < 2:
+        raise PuzzleError(f"weld '{weld.name}': its path has no length", code="invalid")
+    up = -frame.depth_dir
+    height = weld.reinforcement.to_si()
+    width = (weld.reinforcement_width.to_si() if weld.reinforcement_width is not None
+             else weld.leg.to_si() + 2 * height)  # fmt: skip
+    faces = tuple(weld.cap_faces) if weld.cap_faces else _cap_faces(mesh, weld, frame, up)
+    step = HistoryStep(kind="weld_cap", name="Cap", args={
+        "points": [list(map(float, frame.xyz[i])) for i in keep],
+        "across": list(map(float, frame.normal)),
+        "up": [list(map(float, up[i])) for i in keep],
+        "width": float(width), "height": float(height), "closed": bool(closed)})  # fmt: skip
+    geo = Geometry(name=f"{weld.name} cap", history=[step], selections=[
+        NamedSelection(name="Body", entity="body", members=["Body"]),
+        NamedSelection(name="Base A", entity="face", members=["Cap/base_a"]),
+        NamedSelection(name="Base B", entity="face", members=["Cap/base_b"]),
+        NamedSelection(name="Face", entity="face", members=["Cap/face"])])  # fmt: skip
+    return geo, faces
+
+
+def _cap_faces(mesh, weld, frame, up) -> tuple[str, str]:
+    """The faces a groove weld's cap lies on: per part, a face selection other than the
+    groove's own whose plane is square to `up` and which reaches the path (half its
+    nodes or more within a thousandth of the depth of the selection's nodes)."""
+    import numpy as np
+    from scipy.spatial import cKDTree
+
+    path = mesh.node_coords(np.unique(mesh.groups[weld.path].node_ids))
+    tol = 1e-3 * weld.leg.to_si()
+    found = []
+    for part in (weld.path.split("/", 1)[0], weld.faces[1].split("/", 1)[0]):
+        best = None
+        for name, g in mesh.groups.items():
+            if g.dim != 2 or not name.startswith(f"{part}/") or name in weld.faces:
+                continue
+            xyz = mesh.node_coords(np.unique(g.node_ids))
+            if len(xyz) < 3:
+                continue
+            normal = np.linalg.svd(xyz - xyz.mean(axis=0))[2][-1]
+            if abs(normal @ up.mean(axis=0)) < 0.95:
+                continue
+            near = cKDTree(xyz).query(path)[0] < tol
+            if near.mean() < 0.5:
+                continue
+            if best is None or len(xyz) < best[0]:
+                best = (len(xyz), name)
+        if best is None:
+            raise PuzzleError(f"weld '{weld.name}': no face selection of {part} at the path "
+                              "for its cap to lie on; give the weld's cap_faces",
+                              code="missing_input")  # fmt: skip
+        found.append(best[1])
+    return found[0], found[1]
 
 
 def _groove_rows(mesh, weld, face: str):

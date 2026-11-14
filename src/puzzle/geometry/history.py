@@ -54,6 +54,7 @@ the part, the first one starts it):
 | keep | solids (1-based, file order) or bodies (names); body (the kept ones' name) | (names kept) |
 | bolt | `puzzle.solid_bolts` dimensions (ADR 0077) | bearing, fillet, shank, thread, section |
 | weld_bead | points, a, b (legs), closed, root (ADR 0078) | leg_a, leg_b, face, root, ... |
+| weld_cap | points, across, up, width, height, closed (ADR 0078) | base_a, base_b, face, root |
 | sketch | sketch, plane and offset, or face (a planar face, axis-aligned) | (no faces: a profile) |
 
 A sketch step (ADR 0017) adds no solid: extrude and revolve take it by name as their
@@ -669,6 +670,7 @@ TOOLS = {
     "nut": lambda state, a: _nut(state, a),
     "washer": lambda state, a: _washer(state, a),
     "weld_bead": lambda state, a: _weld_bead(state, a),
+    "weld_cap": lambda state, a: _weld_cap(state, a),
 }
 
 
@@ -682,9 +684,6 @@ def _weld_bead(state, a):
     the root line, which a fillet's unfused root doesn't. Faces: `leg_a` (on the path's
     part), `leg_b` (on the other part), `face` (the bead's exposed face), `root`, and
     `start`, `end` on an open path."""
-    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakePolygon
-    from OCP.BRepOffsetAPI import BRepOffsetAPI_ThruSections
-
     points = [list(map(float, p)) for p in (a.get("points") or [])]
     closed = bool(a.get("closed", False))
     if len(points) < 2 or (closed and len(points) < 3):
@@ -713,6 +712,64 @@ def _weld_bead(state, a):
 
     sides = ["leg_a", "face", "leg_b", "root"] if gap > 0 else ["leg_a", "face", "leg_b"]
     corners = [section(p, la, lb) for p, la, lb in zip(points, va, vb, strict=True)]
+    return _swept(points, corners, sides, closed, "weld bead")
+
+
+CAP_POINTS = 9  # across a groove weld's cap: its parabola's points, ends included
+CAP_ROOT = 0.25  # of its height: the notch at the path between the cap's two bases
+
+
+def _weld_cap(state, a):
+    """A modelled groove weld's cap, its reinforcement (ADR 0078): a parabola `height`
+    high and `width` wide across the joint (`across`, from the path's part to the
+    other's, and `up`, out of the plates: one vector each, or one per point), its base
+    on the plates' faces either side of the path `points`, swept along them as a bead
+    is. The toe meets the plate at atan(4 height / width). The base is notched at the
+    path (`CAP_ROOT` of the height each way), so the two bases share no edge: tied to
+    both plates along one line, its nodes were held twice (with the plates' own tie
+    there, Code_Aster's matrix was singular). Faces: `base_a` (on the path's part),
+    `base_b` (on the other), `face` (the cap's crown), `root` (the notch), `start`,
+    `end`."""
+    points = [list(map(float, p)) for p in (a.get("points") or [])]
+    closed = bool(a.get("closed", False))
+    if len(points) < 2 or (closed and len(points) < 3):
+        raise GeometryError("a weld cap runs along two points or more (three if closed)")
+    width, height = float(a["width"]), float(a["height"])
+    if width <= 0 or height <= 0:
+        raise GeometryError("a weld cap needs a width and a height")
+
+    def per_point(key):
+        v = a[key]
+        rows = [list(map(float, x)) for x in v] if isinstance(v[0], (list, tuple)) else None
+        if rows is not None and len(rows) != len(points):
+            raise GeometryError(f"a weld cap's '{key}': one vector, or one per point")
+        rows = rows or [list(map(float, v))] * len(points)
+        return [[c / math.sqrt(sum(x * x for x in r)) for c in r] for r in rows]
+
+    across, up = per_point("across"), per_point("up")
+
+    def section(p, n, u):
+        def at(x, y):
+            return gp_Pnt(*(p[c] + x * n[c] + y * u[c] for c in range(3)))
+
+        xs = [width * (k / (CAP_POINTS - 1) - 0.5) for k in range(CAP_POINTS)]
+        crown = [at(x, height * (1 - (2 * x / width) ** 2)) for x in xs[1:-1]]
+        g = CAP_ROOT * height
+        return [at(0.0, g), at(-g, 0.0), at(xs[0], 0.0), *crown, at(xs[-1], 0.0), at(g, 0.0)]
+
+    if CAP_ROOT * height >= 0.25 * width:
+        raise GeometryError("a weld cap is too narrow for its height")
+    sides = ["root", "base_a", *["face"] * (CAP_POINTS - 1), "base_b", "root"]
+    corners = [section(p, n, u) for p, n, u in zip(points, across, up, strict=True)]
+    return _swept(points, corners, sides, closed, "weld cap")
+
+
+def _swept(points, corners, sides, closed, what):
+    """A section (`corners` per point, a closed polygon whose edges are `sides`) swept
+    along `points`: two points a prism, more a ruled loft per segment, fused; faces
+    named by the side whose middle is nearest, and `start`, `end` on an open path."""
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakePolygon
+    from OCP.BRepOffsetAPI import BRepOffsetAPI_ThruSections
 
     def wire(cs):
         poly = BRepBuilderAPI_MakePolygon()
@@ -725,7 +782,7 @@ def _weld_bead(state, a):
     if len(points) == 2 and not closed:
         face = BRepBuilderAPI_MakeFace(wire(corners[0]), True)
         if not face.IsDone():
-            raise GeometryError("a weld bead's legs must not be parallel")
+            raise GeometryError(f"a {what}'s section is flat (its two directions parallel)")
         mk = BRepPrimAPI_MakePrism(face.Face(), gp_Vec(gp_Pnt(*points[0]), gp_Pnt(*points[1])))
         names["start"], names["end"] = [TopoDS.Face(mk.FirstShape())], [TopoDS.Face(mk.LastShape())]
     else:
@@ -739,7 +796,7 @@ def _weld_bead(state, a):
             mk.AddWire(wire(rings[k + 1]))
             mk.Build()
             if not mk.IsDone():
-                raise GeometryError("the weld bead's sections could not be lofted")
+                raise GeometryError(f"the {what}'s sections could not be lofted")
             shape = mk.Shape() if shape is None else BRepAlgoAPI_Fuse(shape, mk.Shape()).Shape()
         mk = None
         names = {}
@@ -770,7 +827,7 @@ def _weld_bead(state, a):
         side = min(mids, key=lambda sm: centre.Distance(sm[1]))[0]
         names.setdefault(side, []).append(TopoDS.Face(f))
     if not all(k in names for k in sides):
-        raise GeometryError("the weld bead's faces could not be named")
+        raise GeometryError(f"the {what}'s faces could not be named")
     return shape, names
 
 

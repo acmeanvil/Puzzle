@@ -2499,7 +2499,9 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         "the leg in it. Its line forces then come from the section through its throat "
         "(weld_results, the same checks; the section's force is mesh-dependent through "
         "the root's notch, about 1 % at six elements). Meshes the component to find the "
-        "legs. A groove weld gets no bead: its faces are tied over its depth at the solve. "
+        "legs. A groove weld gets no bead: its faces are tied over its depth at the solve, "
+        "and with `reinforcement` set its cap is drawn as a part `<weld> cap` tied to the "
+        "plates (`cap_faces`, found from the face selections at the path if unset). "
         "Returns `batch` to pass to submit (one undo); nothing is made here."
     )
     @guarded

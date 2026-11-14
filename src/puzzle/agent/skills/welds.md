@@ -108,10 +108,13 @@ weld's, so this reads the plate's own section through its thickness there (its
 thickness measured unless `thickness_m` is given): membrane and bending about its
 mid-plane. A plate pulled past an unloaded rib: 20.00 MPa membrane against 20.
 
-A light weld's springs act along x, y and z between nodes on the two legs, which
-don't coincide, so each pair loses the couple its forces' offset makes: forces are
-right, moments carried through the weld are not (a lap joint's plate passed 23.5 of
-the 100 N·m equilibrium asks). Where the weld itself carries bending, model the bead.
+A light weld passes force and moment (a lap joint's plate carries 98.99 of the 100
+N·m equilibrium asks): per station each leg is fitted by a rigid motion and six springs
+join the two fits at one point. Its line force varies station to station on a
+tetrahedral mesh (about ±13 % on the lap joint), so read the peak with that in mind or
+compare it with the mean. A weld whose leg is one line of nodes (a shell's edge) falls
+back to node-pair springs, which pass no couple across the weld; `weld_results` notes
+it. Model the bead where that matters.
 
 ## Modelled welds (ADR 0078 step 4)
 
@@ -133,5 +136,11 @@ bead to see the stresses in and around it. `weld_make_line` takes it back.
 A groove weld modelled has no bead: at the solve its two faces are tied over the
 groove's depth from the path (the whole thickness for CJP, the depth for PJP), the rest
 left open. Its line force comes from a section just inside the path's part; it is the
-force on the other part. `weld_fatigue(method="asme")` takes modelled welds too: the
+force on the other part. With `reinforcement` set (the cap's height; optional
+`reinforcement_width`, default the depth plus twice the height, and `cap_faces`, the
+two faces it sits on, found from the face selections at the path otherwise) the cap is
+drawn as a solid part `<weld> cap` (a parabola, its toe at atan(4 h / w)) tied to both
+plates; the section cuts it too. A cap shares the load through its ties, less than its
+area's share (6.9 % against 16.7 % on a 10 mm butt with a 2 mm cap). Intermittent grooves
+get no cap yet. `weld_fatigue(method="asme")` takes modelled welds too: the
 moment about the path from the cuts, a groove's about the plate's mid-plane.

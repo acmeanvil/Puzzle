@@ -136,21 +136,15 @@ def test_lap_joint_carries_the_pull(tmp_path, solver):
 
 
 @over("calculix", "code_aster", "fenicsx")
-@pytest.mark.xfail(
-    strict=True,
-    reason="ADR 0072: the light weld's x, y, z springs between "
-    "offset nodes drop their couples; to fix with distributing couplings",
-)
 def test_a_light_weld_passes_the_moment(tmp_path, solver):
     """ADR 0078 (found 2026-11-13): everything right of a cut through the lap joint's lower
     plate is loaded only by P on the upper plate's end, 10 mm above the lower plate's
-    mid-plane, so the cut carries P and the moment P × 10 mm. The light weld's springs
-    act in x, y and z between nodes on its two legs, which don't coincide, so each drops
-    its couple: the plate gets 23.5 of the 100 N·m. Springs along their pairs' lines
-    passed it (98.99) but shared the load unevenly (station line forces from −163 to 471
-    N/mm about 200 on a tetrahedral mesh), so the fix is per-station distributing
-    couplings onto coincident reference nodes joined by six springs, as beam bolts'
-    ends are."""
+    mid-plane, so the cut carries P and the moment P × 10 mm. The first light welds'
+    springs acted in x, y and z between nodes on its two legs, which don't coincide, so
+    each dropped its couple: the plate got 23.5 of the 100 N·m. Springs along their
+    pairs' lines passed it (98.99) but shared the load unevenly (station line forces from
+    −163 to 471 N/mm about 200). Per-station couplings (`weld_pairs.Coupling`, a rigid fit
+    of each leg and six springs at one point) pass it and keep the line force even."""
     pytest.importorskip("OCP")
     from puzzle.mesh import Mesh
     from puzzle.post.probes import _cut
@@ -180,6 +174,16 @@ def test_a_light_weld_passes_the_moment(tmp_path, solver):
               f"{moment:.2f} N·m (P × 10 mm = {P * 0.01:g})")  # fmt: skip
         assert force == pytest.approx(P, rel=0.01)
         assert abs(moment) == pytest.approx(P * 0.01, rel=0.03)
+    f, c, xyz = _line(run)
+    along = f.values[:, c["magnitude"]] / 1e3
+    inner = np.abs(xyz[:, 1] - 0.025) < 0.02  # away from the path's two ends
+    spread = float(np.std(along[inner]) / np.mean(along[inner]))
+    print(f"{solver}: line force {along[inner].min():.1f} to {along[inner].max():.1f} N/mm "
+          f"(P/L {P / 0.05 / 1e3:g}), spread {spread:.3f}")  # fmt: skip
+    # Stations are a tetrahedral mesh's corner and mid-edge nodes, which alternate by a
+    # few per cent; the node pairs' springs reached 1.9 P/L where a station got many pairs.
+    assert spread < 0.15
+    assert along[inner].min() > 0.5 * P / 0.05 / 1e3 and along[inner].max() < 1.4 * P / 0.05 / 1e3
 
 
 @over("calculix", "code_aster", "fenicsx")
@@ -244,7 +248,9 @@ def test_bracket_welded_all_round(tmp_path, solver):
         f"{(longitudinal + transverse) / 1e3:.4g} kN; out of plane "
         f"{ic['out_of_plane_moment_N_m']:.4g} N m"
     )
-    assert ic["method"].startswith("concentric")
+    # the shear passes over the centroid: concentric, or an IC as good as (the station
+    # forces aren't exactly symmetric on a tetrahedral mesh)
+    assert ic["method"].startswith("concentric") or ic["eccentricity_m"] < 0.05 * d
     assert ic["Pn_N"] == pytest.approx(longitudinal + transverse, rel=0.03)
     # the line forces' share of P h: the rest is the fillets' twist about their lines (~7 %)
     assert ic["out_of_plane_moment_N_m"] == pytest.approx(P * h, rel=0.1) and "note" in ic
@@ -313,7 +319,9 @@ def test_the_welds_panel(tmp_path, solver):
         table = window.welds.table
         assert table.rowCount() == 1, window.welds.note.text()
         assert table.item(0, 0).text() == "End fillet" and table.item(0, 7).text() == "E70XX"
-        assert float(table.item(0, 4).text()) == pytest.approx(0.412, abs=0.01)
+        # the peak station over 921.4 N/mm (0.412 with node-pair springs, whose peak was a
+        # station with many pairs)
+        assert float(table.item(0, 4).text()) == pytest.approx(0.284, abs=0.01)
         assert window.welds.stations.rowCount() > 5
         out = window.welds.export(str(tmp_path / "w.csv"))
         with open(out, encoding="utf-8") as f:
@@ -612,3 +620,57 @@ def test_a_modelled_groove_weld(tmp_path, solver, depth):
               f"{P / length / 0.01 / 1e6:.4f}), bending {bending / 1e6:.4f} MPa")  # fmt: skip
         assert membrane == pytest.approx(P / length / 0.01, rel=0.05)
         assert abs(bending) < 0.1 * membrane
+
+
+@over("calculix", "code_aster")
+def test_a_groove_welds_cap(tmp_path, solver):
+    """A CJP butt (`test_a_modelled_groove_weld`'s) with its reinforcement drawn (ADR 0078,
+    2026-11-14): a cap 2 mm high and 14 mm wide (`weld_cap`), its base tied to both
+    plates' tops (found from the face selections at the path). The section inside the
+    path's plate, through the cap too, still carries P; the cap's own section at the
+    joint carries a share below its area's, h / (t + h) = 17 %, since it is loaded
+    through its ties."""
+    pytest.importorskip("OCP")
+    from puzzle.commands import Session
+    from puzzle.mesh import Mesh
+    from puzzle.post.probes import _cut
+    from puzzle.weld_generator import line_commands, modelled_commands
+
+    length = 0.05
+    parts = {
+        "A": ((0.05, length, 0.01), (0.0, 0.0, 0.0), (("Top edge", "edge", ["B/+x|B/+z"]),)),
+        "B": ((0.05, length, 0.01), (0.05, 0.0, 0.0), ()),
+    }
+    features = [Feature(type="fixed", selection="A/-x"),
+                Feature(type="force", selection="B/+x", values={"x": q(P, "N")})]  # fmt: skip
+    weld = Weld(name="Butt", type="groove", groove="cjp", leg=q(10, "mm"), path="A/Top edge",
+                faces=["A/+x", "B/-x"], reinforcement=q(2, "mm"))  # fmt: skip
+    p, study = _project(solver, parts, features, weld, mesh_mm=2.0)
+    light = _run(tmp_path, p, study)
+    # the light groove weld first: its faces lie on each other, all of them welded (only
+    # the path's line was kept once, a hinge, and Code_Aster's matrix was singular)
+    assert abs(light.results.last("weld").values[0][0]) == pytest.approx(P, rel=1e-3)
+    s = Session(tmp_path / "joint")
+    comp = s.project.get(next(iter(s.project.of_type(Component))).id, Component)
+    s.submit_batch(modelled_commands(s.project, comp, light.mesh, "Butt"))
+    comp = s.project.get(comp.id, Component)
+    assert comp.welds[0].cap_faces == ["A/+z", "B/+z"]
+    assert {c.target for c in comp.contacts} == {"A/+z", "B/+z"}
+    run = run_study(s.project, study.id, tmp_path / "joint", tmp_path / "w-cap")
+    total = run.results.last("weld").values[0]
+    mesh = run.mesh
+    body = mesh.groups["Butt cap"]
+    cap = Mesh(mesh.node_ids, mesh.coords, [b for b in body.blocks(mesh) if b.dim == 3],
+               {"Butt cap": body})  # fmt: skip
+    step = [st for st in run.results.steps if "stress" in st.fields][-1]
+    xi = step.fields["stress"].components.index("xx")
+    cut, faces, areas, _c, _n = _cut(cap, step, (0.05, 0.025, 0.011), (1.0, 0.0, 0.0))
+    sv = np.asarray(cut.point_data["stress"], float).reshape(cut.n_points, -1)
+    share = float((sv[faces][:, :, xi].mean(axis=1) * areas).sum()) / P
+    print(f"{solver} capped groove: {total[:3]} N (P {P:g}); the cap carries "
+          f"{100 * share:.2f} % (its area's share 16.7 %)")  # fmt: skip
+    assert total[0] == pytest.approx(-P, rel=0.02)
+    assert 0.03 < share < 0.167
+    s.submit_batch(line_commands(s.project, comp, "Butt"))  # the cap taken out again
+    comp = s.project.get(comp.id, Component)
+    assert [x.name for x in comp.parts] == ["A", "B"] and not comp.contacts

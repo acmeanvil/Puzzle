@@ -296,9 +296,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
                              "so far", code="unsupported")  # fmt: skip
         from puzzle.adapters.weld_pairs import all_pairs
 
-        case["welds"] = [{"name": name, "a": [int(n) for n in wp.a],
-                          "b": [int(n) for n in wp.b], "k": float(wp.k)}
-                         for name, wp in all_pairs(project, comp, mesh).items()]  # fmt: skip
+        case["welds"] = [_weld(name, wp) for name, wp in all_pairs(project, comp, mesh).items()]
     threaded = [c for c in comp.contacts if c.thread is not None]
     if threaded:
         case["threads"] = _threads(project, comp, mesh, step, physics, threaded)
@@ -351,6 +349,18 @@ def _mixed_up(comp, mesh: Mesh, physics: str, step, features, thermal_load) -> b
         raise InputError(f"FEniCSx's mixed u-p (Taylor-Hood) elements: {why}",
                          code="unsupported")  # fmt: skip
     return True
+
+
+def _weld(name: str, wp) -> dict:
+    """A light weld for study.py: its stations' springs (`weld_pairs.Coupling`: nodes,
+    each spring's coefficients per node and stiffness), or, without couplings, its node
+    pairs and their k."""
+    if wp.couplings is None:
+        return {"name": name, "a": [int(n) for n in wp.a], "b": [int(n) for n in wp.b],
+                "k": float(wp.k)}  # fmt: skip
+    return {"name": name, "couplings": [
+        {"nodes": [int(n) for n in c.nodes], "k": [float(v) for v in c.k],
+         "coeffs": c.coeffs.tolist()} for c in wp.couplings if c is not None]}  # fmt: skip
 
 
 def _threads(project, comp, mesh: Mesh, step, physics: str, contacts) -> list[dict]:

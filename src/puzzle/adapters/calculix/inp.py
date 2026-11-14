@@ -323,7 +323,7 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
     out += lines
     lines, next_node, next_elem = _threads(project, comp, mesh, next_node, next_elem)
     out += lines
-    lines, next_elem = _welds(project, comp, mesh, next_elem)
+    lines, next_node, next_elem = _welds(project, comp, mesh, next_node, next_elem)
     out += lines
     if springy is not None:  # their helper nodes and elements come last
         spring_beams.number(springy, mesh, next_node, next_elem)
@@ -1897,15 +1897,43 @@ def _threads(project: Project, comp: Component, mesh: Mesh, node: int, elem: int
     return out, node, elem
 
 
-def _welds(project: Project, comp: Component, mesh: Mesh, elem: int):
-    """Light welds (ADR 0078), from `adapters.weld_pairs`: a SPRING2 per node pair and
-    global direction, from the path's part's node to the other part's, all of one
-    weld's pairs equally stiff. -> (lines, the next free element id)"""
+def _welds(project: Project, comp: Component, mesh: Mesh, node: int, elem: int):
+    """Light welds (ADR 0078), from `adapters.weld_pairs`: per station two helper nodes
+    at its coupling's point, each dof the stretch of one of its six springs
+    (`*EQUATION` u_h,j - Σ c u = 0, the helper dependent and in no other equation) and a
+    SPRING1 of that spring's stiffness on it. A weld without couplings (a shell's edge)
+    gets a SPRING2 per node pair and global direction. -> (lines, the next free node
+    id, the next free element id)"""
     from puzzle.adapters.weld_pairs import all_pairs
 
     out: list[str] = []
     for name, wp in all_pairs(project, comp, mesh).items():
         tag = set_name("WE", name)
+        if wp.couplings is not None:
+            nodes, eqs, springs = [], ["*EQUATION"], []
+            for i, c in enumerate(wp.couplings):
+                if c is None:
+                    continue
+                helpers = (node, node + 1)
+                node += 2
+                nodes += [_node_row(h, c.point) for h in helpers]
+                for j in range(6):
+                    h, dof = helpers[j // 3], j % 3 + 1
+                    big = float(np.abs(c.coeffs[j]).max()) or 1.0
+                    terms = [(h, dof, 1.0)] + [
+                        (int(n), d + 1, -float(c.coeffs[j, m, d]))
+                        for m, n in enumerate(c.nodes) for d in range(3)
+                        if abs(c.coeffs[j, m, d]) > 1e-12 * big
+                    ]  # fmt: skip
+                    eqs.append(str(len(terms)))
+                    for t in range(0, len(terms), 4):
+                        eqs.append(", ".join(f"{n}, {d}, {v:.12g}" for n, d, v in terms[t : t + 4]))
+                    elset = f"{tag}S{i + 1}J{j + 1}"
+                    springs += [f"*ELEMENT, TYPE=SPRING1, ELSET={elset}", f"{elem}, {h}",
+                                f"*SPRING, ELSET={elset}", str(dof), f"{c.k[j]:.10e}"]  # fmt: skip
+                    elem += 1
+            out += ["*NODE", *nodes, *eqs, *springs]
+            continue
         for dof in (1, 2, 3):
             rows = []
             for a, b in zip(wp.a, wp.b, strict=True):
@@ -1913,7 +1941,7 @@ def _welds(project: Project, comp: Component, mesh: Mesh, elem: int):
                 elem += 1
             out += [f"*ELEMENT, TYPE=SPRING2, ELSET={tag}{dof}", *rows,
                     f"*SPRING, ELSET={tag}{dof}", f"{dof}, {dof}", f"{wp.k:.10e}"]  # fmt: skip
-    return out, elem
+    return out, node, elem
 
 
 def _transforms(project: Project, comp: Component, mesh: Mesh) -> list[str]:

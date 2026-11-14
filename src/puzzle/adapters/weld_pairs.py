@@ -9,13 +9,27 @@ footprint node is paired with the other footprint's node nearest the same place 
 the weld (same s, the same share of its leg), both ways, so the pairs fill the fillet's
 triangle and carry moments about the path as well as forces.
 
-Each pair is a spring in x, y and z (CalculiX SPRING2 node to node), as stiff as the
-weld metal: E times the weld's length over the pairs, a stiffness per pair of E × ds,
-which with the pairs' spread makes the joint about as stiff as a solid bead. A pair's
-force (k (u_a - u_b), on the other part's node) is assigned to the station nearest its
-s; a station's line force is its pairs' forces over its share of the path
-(`post/weld_fields.py`). Stations are the path's mesh nodes, so a curved path is
-followed at two stations per element side on quadratic meshes.
+The pairs give the weld's stiffness, a pair k I as stiff as the weld metal: E times
+the weld's length over the pairs, which with the pairs' spread makes the joint about as
+stiff as a solid bead. Stations are the path's mesh nodes, so a curved path is followed
+at two stations per element side on quadratic meshes; each pair belongs to the station
+nearest its s.
+
+The springs written are per station (`Coupling`, 2026-11-14): each leg's nodes near
+the station (weighted by a hat in s over the neighbouring stations and by their shares
+of the face's area) are fitted by a rigid motion, as an RBE3 spreads a load, and six
+springs join the two fits' motions at one point P, the station's pairs' centroid:
+three along x, y and z of E times the station's share of the path (not by how many
+pairs it got, which on a tetrahedral mesh varies from station to station), and three of
+the pairs' spread about P, Σ k (|r|² I - r rᵀ), along its principal axes. Each
+spring is a stiffness on a linear combination of the legs' displacements (`coeffs`), so
+no element joins two nodes apart: a rigid motion stretches none, and the weld passes
+force and moment exactly. The x, y, z springs between pairs of nodes that don't
+coincide (the first light welds') dropped each pair's couple, and a lap joint's weld
+carried 23.5 of its 100 N·m (ADR 0078). A leg whose nodes near a station lie on one
+line (a shell's edge) has no fitted rotation; such a weld keeps those pair springs
+(`couplings` None, with a note). A station's force and moment come from the same
+combinations (`post/weld_fields.py`).
 """
 
 from __future__ import annotations
@@ -26,6 +40,20 @@ import numpy as np
 
 from puzzle.adapters.common import InputError
 from puzzle.mesh import Mesh
+
+
+@dataclass
+class Coupling:
+    """A station's six springs (module docstring): spring j's stretch is
+    g_j = Σ_n coeffs[j, n] · u_n over `nodes`, its energy ½ k_j g_j²; springs 0-2 are
+    the relative motion at `point` along `dirs` 0-2 (x, y, z), 3-5 the relative turn
+    about `dirs` 3-5. The other part's leg minus the path's part's."""
+
+    point: np.ndarray  # (3,)
+    nodes: np.ndarray  # (m,) node ids, both legs
+    coeffs: np.ndarray  # (6, m, 3)
+    k: np.ndarray  # (6,) N/m, then N·m/rad
+    dirs: np.ndarray  # (6, 3)
 
 
 @dataclass
@@ -45,6 +73,7 @@ class WeldPairs:
     xa: np.ndarray = None  # (pairs, 3) the path's part's node of each pair
     closed: bool = False
     notes: list[str] = field(default_factory=list)
+    couplings: list | None = None  # per station a Coupling (None: no pairs there)
 
 
 def _chain(group, mesh: Mesh) -> tuple[np.ndarray, bool]:
@@ -137,9 +166,10 @@ def weld_pairs(project, comp, mesh: Mesh, weld) -> WeldPairs:
     (ia, sa, da, va, _xa), (ib, sb, db, vb, xb) = sides
     # The other part's leg lies outside the path's part: its nodes under the path's
     # part (the seat of a lap, the footprint of a bracket) are no weld. Such a node has
-    # a node of the path's part about on it, nearer than its distance from the path.
+    # a node of the path's part about on it, nearer than its distance from the path. A
+    # groove's two faces lie on each other by design: all of them is the weld.
     part = weld.path.split("/", 1)[0]
-    if part in mesh.groups:
+    if part in mesh.groups and weld.type != "groove":
         from scipy.spatial import cKDTree as _Tree
 
         own = mesh.node_coords(np.unique(mesh.groups[part].node_ids.astype(np.int64)))
@@ -203,8 +233,122 @@ def weld_pairs(project, comp, mesh: Mesh, weld) -> WeldPairs:
     bisector = unit(bisector)
     k = _modulus(project, comp, weld.faces) * welded / len(pa)
     a_ids = ia[pa[:, 0]]
-    return WeldPairs(weld.name, a_ids, ib[pa[:, 1]], k, stations, sxyz, s_st, widths, tangent,
-                     bisector, station_of, welded, mesh.node_coords(a_ids), closed)  # fmt: skip
+    wp = WeldPairs(weld.name, a_ids, ib[pa[:, 1]], k, stations, sxyz, s_st, widths, tangent,
+                   bisector, station_of, welded, mesh.node_coords(a_ids), closed)  # fmt: skip
+    wp.couplings = _couplings(wp, mesh, weld.faces, (ia, sa, pa[:, 0]), (ib, sb, pa[:, 1]),
+                              total)  # fmt: skip
+    if wp.couplings is None:
+        wp.notes.append("a leg's nodes near a station lie on one line (a shell's edge?): "
+                        "node-pair springs, which pass no couple across the weld")  # fmt: skip
+    return wp
+
+
+def _skew(v: np.ndarray) -> np.ndarray:
+    """(n, 3, 3) the cross-product matrices: skew(a) @ b = a × b."""
+    out = np.zeros((len(v), 3, 3))
+    out[:, 0, 1], out[:, 0, 2], out[:, 1, 2] = -v[:, 2], v[:, 1], -v[:, 0]
+    out[:, 1, 0], out[:, 2, 0], out[:, 2, 1] = v[:, 2], -v[:, 1], v[:, 0]
+    return out
+
+
+def _hat(s: np.ndarray, s_st: np.ndarray, i: int, closed: bool, total: float) -> np.ndarray:
+    """Station i's weight of points at s: 1 at the station, 0 at its neighbours, linear
+    between; past an open path's end station, 1."""
+    n = len(s_st)
+    if n == 1:
+        return np.ones_like(s)
+    d = s - s_st[i]
+    if closed:
+        d = (d + total / 2) % total - total / 2
+        left = (s_st[i] - s_st[i - 1]) % total
+        right = (s_st[(i + 1) % n] - s_st[i]) % total
+    else:
+        left = s_st[i] - s_st[i - 1] if i > 0 else np.inf
+        right = s_st[i + 1] - s_st[i] if i < n - 1 else np.inf
+    w = np.where(d < 0, 1 + d / max(left, 1e-300), 1 - d / max(right, 1e-300))
+    return np.clip(w, 0.0, 1.0)
+
+
+def _fit(xyz: np.ndarray, w: np.ndarray, point: np.ndarray):
+    """A weighted rigid fit of nodes' motion (as RBE3): per node 3 × 3 blocks A_n, B_n
+    with the fit's motion at `point` Σ A_n u_n and its turn Σ B_n u_n. None when the
+    nodes lie on a line (no turn about it)."""
+    W = w / w.sum()
+    c = W @ xyz
+    r = xyz - c
+    J = (W * np.einsum("ij,ij->i", r, r)).sum() * np.eye(3) - np.einsum("i,ij,ik->jk", W, r, r)
+    lam = np.linalg.eigvalsh(J)
+    if lam[-1] <= 0 or lam[0] < 1e-6 * lam[-1]:
+        return None
+    B = W[:, None, None] * (np.linalg.inv(J)[None] @ _skew(r))
+    A = W[:, None, None] * np.eye(3)[None] - _skew((point - c)[None])[0][None] @ B
+    return A, B
+
+
+def _couplings(wp: WeldPairs, mesh: Mesh, faces, side_a, side_b, total: float):
+    """Each station's `Coupling` (module docstring); None if a leg can't be fitted. A
+    node's weight in its leg's fit is its share of the face's area (`face_shares`), so
+    the force a station spreads is a traction, whatever the nodes' spacing."""
+    from puzzle.adapters.thread_pairs import face_shares
+
+    xa_all, xb_all = mesh.node_coords(side_a[0]), mesh.node_coords(side_b[0])
+    mid = (xa_all[side_a[2]] + xb_all[side_b[2]]) / 2
+    legs = []
+    for face, (ids, s, used) in zip(faces, (side_a, side_b), strict=True):
+        keep = np.unique(used)
+        known, area, _n = face_shares(mesh.groups[face], mesh)
+        at = np.searchsorted(known, ids[keep])
+        at = np.clip(at, 0, max(len(known) - 1, 0))
+        found = (known[at] == ids[keep]) if len(known) else np.zeros(len(keep), bool)
+        area = np.where(found, area[at] if len(known) else 0.0, 0.0)
+        if not (area > 0).any():  # elements without shares (a shell's edge): alike
+            area = np.ones(len(keep))
+        legs.append((ids[keep], s[keep], mesh.node_coords(ids[keep]), area))
+    out: list = []
+    # Each station's stiffness by its share of the path, not by how many pairs it got (a
+    # tetrahedral mesh's footprint nodes fall unevenly): E times the welded length in all.
+    counts = np.bincount(wp.station_of, minlength=len(wp.stations))
+    shares = np.where(counts > 0, wp.widths, 0.0)
+    per_length = wp.k * len(wp.a) / max(float(shares.sum()), 1e-300)
+    for i in range(len(wp.stations)):
+        mine = wp.station_of == i
+        if not mine.any():
+            out.append(None)
+            continue
+        point = mid[mine].mean(axis=0)
+        r = mid[mine] - point
+        spread = wp.k * ((r * r).sum() * np.eye(3) - r.T @ r)
+        lam, vec = np.linalg.eigh(spread)
+        lam = np.maximum(lam, 1e-6 * max(lam[-1], 1e-300))
+        dirs = np.vstack([np.eye(3), vec.T])
+        kt = per_length * shares[i]
+        k = np.concatenate([np.full(3, kt), lam * kt / (wp.k * mine.sum())])
+        nodes, rows = [], []
+        for (ids, s, xyz, area), sign in zip(legs, (-1.0, 1.0), strict=True):
+            w = _hat(s, wp.s, i, wp.closed, total) * area
+            near = w > 1e-9
+            fit = _fit(xyz[near], w[near], point) if near.sum() >= 3 else None
+            if fit is None:
+                return None
+            A, B = fit
+            # spring j's coefficients per node: dir_j · (A_n or B_n), signed by leg
+            rows.append(sign * np.concatenate([np.einsum("jk,nkl->jnl", dirs[:3], A),
+                                               np.einsum("jk,nkl->jnl", dirs[3:], B)]))  # fmt: skip
+            nodes.append(ids[near])
+        ids = np.concatenate(nodes)
+        coeffs = np.concatenate(rows, axis=1)
+        unique, back = np.unique(ids, return_inverse=True)
+        if len(unique) < len(ids):  # a node on both legs: its terms added
+            merged = np.zeros((6, len(unique), 3))
+            np.add.at(merged, (slice(None), back), coeffs)
+            ids, coeffs = unique, merged
+        out.append(Coupling(point, ids.astype(np.int64), coeffs, k, dirs))
+    return out
+
+
+def stretches(c: Coupling, u: np.ndarray) -> np.ndarray:
+    """(6,) each spring's stretch g_j from (m, 3) displacements of `c.nodes`."""
+    return np.einsum("jnk,nk->j", c.coeffs, u)
 
 
 def all_pairs(project, comp, mesh: Mesh) -> dict[str, WeldPairs]:

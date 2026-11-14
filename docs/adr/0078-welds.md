@@ -368,7 +368,22 @@ The bracket's moment balances exactly only with the twist: about 7 % of it is th
     moment about the path (`twist`, now from the cuts too), into the attachment along
     leg A; a groove's moment taken about the plate's mid-plane. The CJP butt's toe:
     membrane 19.98 MPa against P/(L t) = 20.0, bending nil.
-- **Not built**: a modelled groove's reinforcement (its cap as a solid).
+- **Built (2026-11-14): a modelled groove's reinforcement**, its cap as a solid:
+  `Weld.reinforcement` (height), `reinforcement_width` (default the groove's depth plus
+  twice the height) and `cap_faces` (the faces it lies on, found from the face
+  selections at the path when not given, and kept). The `weld_cap` history step sweeps a
+  parabola across the joint (toe at atan(4 h / w)) along the path, its base notched at
+  the path a quarter of the height so its two bases share no edge (tied to both plates
+  along one line, with the plates' own tie there, Code_Aster's matrix was singular);
+  `weld_generator.cap_geometry`, the cap a part `<weld> cap` tied by its bases, elements
+  half its height; `line_commands` takes it out. The groove's section (`weld_fields.groove`)
+  cuts the cap too, so it still holds the joint's whole force. Benchmark
+  (`test_a_groove_welds_cap`): a 10 mm CJP butt with a 2 mm by 14 mm cap: the section
+  −10 002 N of P, the cap's own share 6.88 % on CalculiX and Code_Aster alike (below its
+  area's 16.7 %: it is loaded through its ties). Found with it: a light groove weld kept
+  only the other face's nodes on the path's line (the lap's rule that the other part's
+  leg lies outside the path's part), so its plates were hinged there; a groove's faces
+  lie on each other by design, and all of them are welded now.
 
 ## Built: ASME's plate-side toe (2026-11-13), and a gap found
 
@@ -392,11 +407,24 @@ The bracket's moment balances exactly only with the twist: about 7 % of it is th
   couple: the plate's cut then carried 98.99 N·m on all three solvers. But such springs
   share load by their directions, so on a tetrahedral mesh the stations' line forces
   ran from −163 to 471 N/mm about 200 (±15 % even averaged over a leg), and the
-  strength checks read the peak. The fix to build is a fastener's: per station, the
-  footprint nodes of each leg onto a reference node by a distributing coupling, the
-  two reference nodes coincident and joined by six springs (rotations too), as beam
-  bolts' ends are (ADR 0027); `test_a_light_weld_passes_the_moment` is a strict xfail
-  until then.
+  strength checks read the peak.
+- **Fixed (2026-11-14):** per station a coupling (`weld_pairs.Coupling`): each leg's
+  nodes near the station (a hat in s over the neighbouring stations, times each node's
+  share of the face's area) fitted by a rigid motion, as RBE3 spreads a load, and six
+  springs between the two fits' motions at one point (the station's pairs' centroid):
+  x, y, z of E times the station's share of the path, and turns of the pairs' spread
+  about it, Σ k (|r|² I − r rᵀ), on its principal axes. A spring is a stiffness on a
+  linear combination of the legs' displacements, so no element joins nodes apart and a
+  rigid motion stretches none. Written as a helper dof tied to the combination with a
+  grounded spring on it (CalculiX `*EQUATION` + SPRING1, two helpers per station;
+  Code_Aster LIAISON_DDL scaled by √(k/k0) and K_T_D_N point springs, as threads'
+  helpers; FEniCSx k c cᵀ added to K), and read back from the same combinations
+  (`weld_fields.station_loads`). The lap joint's plate carries 98.99 of the 100 N·m on
+  all three solvers (equal to four digits), the line force away from the ends 119 to
+  262 N/mm about 200 (spread 0.13; the node pairs' springs reached 380, so the panel's
+  utilisation went from 0.412 to 0.284), and the bracket's ±y normal line force is −6.3 %
+  against the elastic method (it was −6.8 %). A leg whose nodes near a station lie on
+  one line has no fitted turn: such a weld keeps the node-pair springs, with a note.
 
 ## Plan
 

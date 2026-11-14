@@ -282,6 +282,10 @@ def _run_study(
 
     # ADR 0078 step 4: modelled groove welds, their faces tied over the groove's depth.
     written, project = with_grooves(project, study.component, written)
+    from puzzle.mesh.generate import with_mesh_ties
+
+    # ADR 0019: a hexahedral recipe's tetrahedral bodies, tied where they touch hexahedra.
+    written, project = with_mesh_ties(project, study.component, written)
     from puzzle.beams import with_orientations
 
     # ADR 0055: beams oriented by a system, a point, a face or an edge, as vectors.

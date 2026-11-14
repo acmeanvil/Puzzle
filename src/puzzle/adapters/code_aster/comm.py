@@ -391,7 +391,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     # ADR 0076 step 4: a beam bolt's tapped end as a thread, in place of its spider.
     bolt_threads = thread_springs.bolt_threads(project, comp, mesh, fasteners)
     base = thread_springs.bolt_helpers(base, bolt_threads)
-    base, welds = _with_welds(project, comp, mesh, base, names)  # ADR 0078 step 3
+    base, welds, coupled = _with_welds(project, comp, mesh, base, names)  # ADR 0078
     for bt in bolt_threads:
         fastener_ends[bt.index - 1].setdefault("threaded", []).append(bt.label)
     if fastener_ends:  # the reader sums the bolt end faces' reactions (ADR 0027)
@@ -489,6 +489,10 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     if threaded or bolt_threads:
         threads = thread_springs.register(points, thread_sets, mesh.planar)
         thread_springs.register_bolts(points, bolt_threads, threads)
+    if coupled:  # light welds' station springs: helpers and relations, as threads' are
+        if threads is None:
+            threads = thread_springs.Written(loads={"LIAISON_DDL": [], "DDL_IMPO": []})
+        _register_welds(points, coupled, threads)
     cyclic_rows = []
     if comp.repeats() and not thermal:  # ADR 0081 steps 3 and 4: a group per node
         from puzzle.cyclic import rows as cyclic_rows_of
@@ -1646,18 +1650,31 @@ WELD_TAG = 950_000  # Gmsh line entities for light welds' springs
 
 
 def _with_welds(project, comp, mesh: Mesh, base: Mesh, names: dict):
-    """Light welds (ADR 0078, as CalculiX's SPRING2s): a SEG2 between each node pair of
-    `weld_pairs` (the pairs lie across the fillet, never coincident), in a group per weld
-    written WE<k>, for DIS_T elements of K_T_D_L = the weld's k along x, y and z (global
-    axes). -> (mesh, [(group, k)])."""
+    """Light welds (ADR 0078, as CalculiX's): per station two helper nodes past the
+    mesh's, at its coupling's point (`weld_pairs.Coupling`; written by `_register_welds`).
+    A weld without couplings (a shell's edge) gets a SEG2 between each node pair, in a
+    group per weld written WE<k>, for DIS_T elements of K_T_D_L = the weld's k along x, y
+    and z (global axes). -> (mesh, [(group, k)], [(k, weld pairs, helper ids)])."""
     if not any(w.formulation == "line" for w in comp.welds):
-        return base, []
+        return base, [], []
     from puzzle.adapters.weld_pairs import all_pairs
 
     blocks, groups = list(base.blocks), dict(base.groups)
     elem = int(max(b.ids.max() for b in blocks)) + 1
-    out = []
+    out, coupled = [], []
+    ids, xyz = [base.node_ids], [base.coords]
+    nxt = int(base.node_ids.max()) + 1
     for k, (_name, wp) in enumerate(all_pairs(project, comp, mesh).items(), start=1):
+        if wp.couplings is not None:
+            helpers = {}
+            for i, c in enumerate(wp.couplings):
+                if c is not None:
+                    helpers[i] = (nxt, nxt + 1)
+                    ids.append(np.array([nxt, nxt + 1]))
+                    xyz.append(np.vstack([c.point, c.point]))
+                    nxt += 2
+            coupled.append((k, wp, helpers))
+            continue
         conn = np.column_stack([wp.a, wp.b]).astype(np.int64)
         if len(conn) == 0:
             continue
@@ -1667,7 +1684,52 @@ def _with_welds(project, comp, mesh: Mesh, base: Mesh, names: dict):
         groups[f"__weld{k}"] = Group(f"__weld{k}", 1, [entity], np.unique(conn))
         names[f"__weld{k}"] = f"WE{k}"
         out.append((f"WE{k}", float(wp.k)))
-    return Mesh(base.node_ids, base.coords, blocks, groups), out
+    if len(ids) > 1:
+        return _sorted_mesh(np.concatenate(ids), np.vstack(xyz), blocks, groups), out, coupled
+    return Mesh(base.node_ids, base.coords, blocks, groups), out, coupled
+
+
+def _register_welds(points, coupled, out) -> None:
+    """Each station's six springs (`weld_pairs.Coupling`): helper dof = sqrt(k / k0) × the
+    spring's stretch (LIAISON_DDL over the legs' nodes, each in its own group), a point
+    spring K_T_D_N k0 on the helper, one k0 per weld for the moves (WK<k>T) and one for
+    the turns (WK<k>R): ½ k0 (s g)² = ½ k g²."""
+    from puzzle.adapters.code_aster.thread_springs import _relation
+
+    axes = ("DX", "DY", "DZ")
+    for k, wp, helpers in coupled:
+        group: dict[int, str] = {}
+
+        def named(node: int, k=k, group=group) -> str:
+            if node not in group:
+                group[node] = f"W{k}N{len(group) + 1}"
+                points.add(group[node], node)
+                out.node_groups.append(group[node])
+            return group[node]
+
+        used = [c for c in wp.couplings if c is not None]
+        k0 = (max(float(c.k[:3].max()) for c in used) or 1.0,
+              max(float(c.k[3:].max()) for c in used) or 1.0)  # fmt: skip
+        for i, c in enumerate(wp.couplings):
+            if c is None:
+                continue
+            for half, (letter, h) in enumerate((("T", helpers[i][0]), ("R", helpers[i][1]))):
+                name = f"W{k}{letter}{i + 1}"
+                points.add(name, h, f"WK{k}{letter}")
+                out.node_groups.append(name)
+                for d in range(3):
+                    j = 3 * half + d
+                    s = float(np.sqrt(c.k[j] / k0[half]))
+                    big = float(np.abs(c.coeffs[j]).max()) or 1.0
+                    out.loads["LIAISON_DDL"].append(_relation(
+                        [(name, axes[d], 1.0)]
+                        + [(named(int(n)), axes[e], -s * float(c.coeffs[j, m, e]))
+                           for m, n in enumerate(c.nodes) for e in range(3)
+                           if abs(c.coeffs[j, m, e]) > 1e-12 * big]))  # fmt: skip
+        for half, letter in enumerate("TR"):
+            v = f"{k0[half]:.10e}"
+            out.cara.append(f"_F(GROUP_MA='WK{k}{letter}', CARA='K_T_D_N', "
+                            f"VALE=({v}, {v}, {v}))")  # fmt: skip
 
 
 def _discrete_cara(

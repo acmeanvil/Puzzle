@@ -808,6 +808,12 @@ def _spring_system(springs, active, size: int):
 
     rows, cols, vals, rhs = [], [], [], np.zeros(size)
     for sp, on in zip(springs, active, strict=True):
+        if "dofs" in sp:  # a stiffness on a combination of dofs: k c c^T
+            d, c = sp["dofs"], sp["c"]
+            rows.append(np.repeat(d, len(d)))
+            cols.append(np.tile(d, len(d)))
+            vals.append(float(sp["k"][0]) * np.outer(c, c).ravel())
+            continue
         k, n = sp["k"], sp["n"]
         if sp["unilateral"]:
             k = np.where(on, k, sp["slack"] * k)
@@ -828,8 +834,10 @@ def _spring_system(springs, active, size: int):
 
 
 def _weld_springs(welds, V) -> list[dict]:
-    """Light welds (ADR 0078): each node pair's k I as three springs along x, y and z,
-    the pairs' dofs found by mesh node id (two parts' nodes may coincide)."""
+    """Light welds (ADR 0078): each station's six springs, a stiffness k on a
+    combination c of the legs' dofs (`weld_pairs.Coupling`), or without couplings each
+    node pair's k I as three springs along x, y and z; dofs found by mesh node id (two
+    parts' nodes may coincide)."""
     if not welds:
         return []
     bs = V.dofmap.index_map_bs
@@ -839,6 +847,15 @@ def _weld_springs(welds, V) -> list[dict]:
     block = {int(n): i for i, n in enumerate(nodes) if n > 0}
     out = []
     for w in welds:
+        for c in w.get("couplings", ()):
+            dofs = (np.array([block[int(n)] for n in c["nodes"]], dtype=np.int64)[:, None] * bs
+                    + np.arange(bs)).ravel()  # fmt: skip
+            coeffs = np.asarray(c["coeffs"], float)[:, :, :bs]
+            for j, k in enumerate(c["k"]):
+                out.append({"dofs": dofs, "c": coeffs[j].ravel(), "k": np.array([float(k)]),
+                            "unilateral": False, "name": w["name"]})  # fmt: skip
+        if "couplings" in w:
+            continue
         s = np.array([block[int(n)] for n in w["a"]], dtype=np.int64)
         t = np.array([block[int(n)] for n in w["b"]], dtype=np.int64)
         for axis in range(bs):

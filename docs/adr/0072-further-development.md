@@ -237,13 +237,7 @@ FEniCSx, threaded beam-bolt ends, and the modelled bolts of ADR 0077. Left:
 
 ### 3b. Welds and frames (0078, 0079)
 
-- Welds: the light weld's springs lose the couple their pairs' offsets make, so a
-  moment through the weld isn't passed (found 2026-11-13; the lap joint's plate got
-  23.5 of 100 N·m): pass it by per-station distributing couplings onto coincident
-  reference nodes joined by six springs (axial springs along the pairs passed it but
-  shared load unevenly; tried and reverted, ADR 0078), the lap joint's section moment
-  the benchmark (a strict xfail now); on FEniCSx a coupling needs writing first; a modelled groove
-  weld's reinforcement (its cap as a solid); a weld's own fatigue code with AWS D1.2,
+- Welds: a weld's own fatigue code with AWS D1.2,
   D1.6 and D1.9's curves (AWS D1.1 and AISC Appendix 3 share the categories built);
   weld fatigue through the fatigue tool's duty (0026); light welds on Elmer; welds in 2D
   (refused) (0078).
@@ -295,10 +289,17 @@ FEniCSx, threaded beam-bolt ends, and the modelled bolts of ADR 0077. Left:
   hex body conformal with a tet one wants pyramids at the shared face, which CalculiX
   hasn't (Code_Aster has PYRAM5/13), so the way is a hex body meshed apart and tied, as
   the modelled bolts are (ADR 0077): a tie made automatically when a blocked body shares
-  a face, still to build. Partly (2026-11-10, ADR
+  a face. **Built (2026-11-14):** a hexahedral recipe meshes the bodies that can't take
+  hexahedra with tetrahedra (`generate._kinds` before any join), joins each kind apart
+  (`_share_faces`, `_fragment_conformal`), makes only the hexahedral ones transfinite,
+  and names the faces where the two touch as `<part>/(mesh tie k)` (the tetrahedra's)
+  and `(mesh tie k target)` (`_mixed_ties`, after the blocks are cut), tied bonded and
+  nonconformal at the solve (`with_mesh_ties`, from the groups' names, so a stored mesh
+  ties too). Benchmark `tests/integration/test_hex_tet_mixed.py`: a block in hex20 bonded
+  to a holed block in tet10, pulled: the reaction P exactly, the end's stretch −0.43 %
+  from the whole bar in tetrahedra on CalculiX and Code_Aster alike. Partly (2026-11-10, ADR
   0077): modelled bolts, nuts and washers are swept by revolving and sit as hexahedra in a
-  tet recipe, joined by nonconformal ties; general sweeps and conformal hex-tet meshes are
-  left. **Built (2026-11-11):** second-order hexahedra, 20 and 27 nodes (ADR 0082).
+  tet recipe, joined by nonconformal ties; general sweeps are left. **Built (2026-11-11):** second-order hexahedra, 20 and 27 nodes (ADR 0082).
 - **Hex meshes of bodies of revolution (maintainer, 2026-11-08).** The use is cylindrical
   solids: idealised bolts (shank, head, nut), pins, shafts, tubes, bushings and rollers.
   - **Today:** Gmsh hexes only block-like bodies (six four-sided faces,
@@ -521,9 +522,10 @@ phase 6's items are done whenever what they wait on arrives.
    budget (9).
 1. **Finish what's partly built** (they are closest to done and each has its design):
    - pretension locked across mixed steps, partial local axes on the rest (3);
-   - conformal hex-tet, general sweeps, cones and tori in the blocks (5) (done
-     2026-11-13: hex meshes of bodies of revolution by blocks);
-   - welds' groove cap and the light weld's lost couple (3b) (done 2026-11-13: spectra
+   - general sweeps, cones and tori in the blocks (5) (done 2026-11-13: hex meshes of
+     bodies of revolution by blocks; 2026-11-14: hex and tet in one recipe, tied);
+   - welds (3b) (done 2026-11-14: the light weld's lost couple, by per-station
+     couplings, and the groove weld's cap as a solid; done 2026-11-13: spectra
      and ± E on CalculiX and Code_Aster, the plate-side ASME toe, combinations on the
      FE solvers, POU_D_T_GD section forces, the 3D mouse's per-axis invert, the thread
      profile drawn, the schematic's leftovers);

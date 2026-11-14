@@ -19,8 +19,12 @@ Recipe fields:
 - `element_shape`: "tetrahedra" (default) or "hexahedra" (structured; Gmsh only):
   block-like bodies (six faces of four edges), and bodies of revolution (shafts,
   pins, tubes, stepped bushes: planes square to one axis and coaxial cylinders), which
-  are cut into blocks when meshed. Cones (chamfers) and tori (fillets) aren't, nor a
-  body sharing a face with another: they are refused, with the reason in the warnings;
+  are cut into blocks when meshed. Cones (chamfers) and tori (fillets) aren't. A body
+  that can't take hexahedra gets tetrahedra (the warnings say which and why); where it
+  touches a hexahedral body it would be joined to (bodies of one part, parts a conformal
+  bond joins), the two are meshed apart and tied by a bonded nonconformal tie made at
+  the solve (`(mesh tie k)`), since a face's nodes can't be both. Ties are CalculiX's
+  and Code_Aster's: Elmer and FEniCSx refuse them;
 - `hexahedron_nodes`: 20 (serendipity, CalculiX's C3D20) or 27 (Lagrange) at second
   order;
 - `global_size`: a quantity, the largest element size. Without it Netgen's largest
