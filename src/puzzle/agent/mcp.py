@@ -954,11 +954,16 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         return {"file": str(out), "materials": exchange.export(out, scope)}
 
     @tool(
-        description="What a solver supports (physics -> step types, features, contacts). "
-        "Lists planned capabilities too; use check_study for a real answer."
+        description="What a solver supports: every field of its capability matrix "
+        "(physics -> step types, features, contacts, axes_features, amplitude_features, "
+        "time_schemes, material_models, ...). `planned_physics` exists in the solver but "
+        "isn't written yet; `experimental` isn't verified. check_study gives the real "
+        "answer for a study."
     )
     @guarded
     def capabilities(solver: str) -> dict[str, Any]:
+        import dataclasses
+
         from puzzle.adapters import available_adapters
 
         adapters = available_adapters()
@@ -967,14 +972,15 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
                 f"no solver '{solver}'", code="not_found", details={"solvers": sorted(adapters)}
             )
         c = adapters[solver].capabilities
-        return {
-            "physics": {k: sorted(v) for k, v in c.physics.items()},
-            "features": sorted(c.features),
-            "contacts": sorted(c.contacts),
-            "couplings": sorted(c.couplings),
-            "dimensions": sorted(c.dimensions),
-            "experimental": sorted(c.experimental),
-        }
+
+        def plain(v):
+            if isinstance(v, dict):
+                return {k: plain(x) for k, x in v.items()}
+            if isinstance(v, (set, frozenset)):
+                return sorted(v)
+            return v
+
+        return {f.name: plain(getattr(c, f.name)) for f in dataclasses.fields(c)}
 
     @tool(description="Whether a study can be written for its solver(s); problems if not.")
     @guarded
@@ -1969,7 +1975,9 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
     @tool(
         description="An operator's value (ADR 0062): its outputs in SI (a number with its "
         "unit and where a maximum is, a verdict with its margin, a table's rows), what the "
-        "schematic node shows, and how it is wired. Without a name: every operator."
+        "schematic node shows, and how it is wired. `needs_runs`: the studies it reads, "
+        "through every operator upstream, that aren't up to date: run_study each (the "
+        "GUI's Evaluate up to here). Without a name: every operator."
     )
     @guarded
     def operator_value(name: str | None = None) -> dict[str, Any]:
@@ -2001,14 +2009,28 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
     def _operator_values(s: Session, name: str | None) -> list[dict[str, Any]]:
         from puzzle.commands import resolve
         from puzzle.model.schema import Operator
-        from puzzle.operators import describe
+        from puzzle.operators import describe, studies_read
         from puzzle.operators import evaluate as ev
         from puzzle.project.layout import RESULTS_DIR
+        from puzzle.project.status import status
         from puzzle.results.store import ResultStore
 
         ops = [resolve(s.project, name, Operator)] if name else s.project.of_type(Operator)
-        ctx = ev.Context(s.project, ResultStore(root / RESULTS_DIR))
-        return [ev.summary(ctx, op) | {"wiring": describe(s.project, op)} for op in ops]
+        store = ResultStore(root / RESULTS_DIR)
+        ctx = ev.Context(s.project, store)
+        try:
+            states = status(s.project, store.runs())
+        except Exception:  # noqa: BLE001 - no store yet: nothing has run
+            states = status(s.project)
+        out = []
+        for op in ops:
+            # "Evaluate up to here" for agents: the studies to run first (run_study each)
+            needs = [x.name for x in studies_read(s.project, op)
+                     if states.get(str(x.id)) is None
+                     or states[str(x.id)].state != "up_to_date"]  # fmt: skip
+            out.append(ev.summary(ctx, op) | {"wiring": describe(s.project, op),
+                                               "needs_runs": needs})  # fmt: skip
+        return out
 
     @tool(
         description="Add an operator (ADR 0062): `type` reduce, filter, check, panel, plot, "
@@ -2553,13 +2575,16 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         "attachment's toe (the path's part) from the weld's line forces and moments, "
         "membrane f/t plus bending 6m/t², t `thickness_m` (a shell's own by default); "
         "returns each station's permissible cycles on Table 3-F.2M's `basis` curve "
-        "(default -3sigma; `material` steel or aluminium) and, with `cycles`, the damage."
+        "(default -3sigma; `material` steel or aluminium) and, with `cycles`, the damage. "
+        "`side='plate'`: the toe on the other part (a light weld on solids), from the plate's "
+        "own section through its thickness there, its thickness measured unless given."
     )
     @guarded
     def weld_fatigue(study: str, weld: str, category: str = "F", cycles: float = 2e6,
                      steps: list[int] | None = None, method: str = "aisc",
                      thickness_m: float | None = None, basis: str = "-3sigma",
-                     material: str = "steel") -> dict[str, Any]:  # fmt: skip
+                     material: str = "steel",
+                     side: str = "attachment") -> dict[str, Any]:  # fmt: skip
         from puzzle.commands import resolve
         from puzzle.model.schema import Component, Study
         from puzzle.post.weld_fields import fatigue, structural_stress
@@ -2570,7 +2595,7 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         if method == "asme":
             try:
                 out = structural_stress(session().project, comp, mesh, res, weld,
-                                        tuple(steps or ()), thickness_m, cycles,
+                                        tuple(steps or ()), thickness_m, cycles, side=side,
                                         basis=basis, material=material)  # fmt: skip
             except ValueError as exc:
                 raise PuzzleError(str(exc), code="invalid") from None

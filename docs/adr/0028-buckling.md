@@ -1,6 +1,6 @@
 # 0028. Buckling: a linear eigenvalue step, with or without a preload
 
-- Status: Accepted (2026-10-24); built on CalculiX and Code_Aster
+- Status: Accepted (2026-10-24); built on CalculiX and Code_Aster; buckling after a large-deflection preload with ADR 0082 (2026-11-12)
 - Date: 2026-10-22
 
 ## Context

@@ -312,10 +312,18 @@ platform or a list on demand; signing and notarization ready to switch on.
   if conda fails. Settings > Solvers' Repair a solver environment…, CLI `puzzle solvers
   --repair ENV`; in a pixi checkout it says `pixi install -e <name>`.
   `tests/test_solver_repair.py` (a stand-in conda).
+- Built 2026-11-13: staging (`WslRuntime.stage`, Settings > Solvers > "Puzzle's
+  Linux machine: stage cases", off by default: the case copied to
+  `/tmp/puzzle-run/<key>` before and back after, since /mnt is slower for many small
+  files, at the cost of files the solver writes while running reaching the Solution
+  panel only at the end); WSL turned on with one Windows prompt (`machine.enable_wsl`:
+  `wsl --install --no-distribution` elevated; Settings > Solvers' "Turn on WSL…", shown
+  when `wsl --status` doesn't answer). Started on demand and stopped when idle is
+  WSL's own: a distribution starts on its first `wsl -d` and stops after its last
+  process, its VM after `vmIdleTimeout`.
 - Not yet: the installer shipping the solvers' root file systems (so nothing needs
-  Docker even once) and installing them in its background step; staging the case into
-  the distribution's own disk through the job runner, as decision 4 says (/mnt is
-  slower for many small files); WSL turned on by the installer; Lima on macOS.
+  Docker even once) and installing them in its background step; the installer itself
+  offering WSL (the Settings button does it after); Lima on macOS.
 
 ## Decided (2026-11-05, maintainer)
 

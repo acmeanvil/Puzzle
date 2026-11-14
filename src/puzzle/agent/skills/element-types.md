@@ -75,8 +75,10 @@ solver's own type outright (expert use: it is written as given).
 - The two agree to five digits on a pressed cantilever, and both match the elastica
   within 1 %.
 - On Code_Aster, beams become POU_D_T_GD (geometrically exact) under large deflection:
-  the elastica to four digits; their section forces aren't read yet. Beam bolts and
-  shells are refused there so far: run those on CalculiX.
+  the elastica to four digits. Their section forces (`beam_forces`) are constant along
+  each element (one Gauss point), so a member's end shows the first element's middle:
+  read an end moment from the support's reaction instead. Beam bolts and shells are
+  refused there so far: run those on CalculiX.
 - A run warning `large_strain` means strains passed 5 % on an elastic material: the
   answer needs a hyperelastic model.
 - Transient steps take it too. CalculiX cuts the increment back under NLGEOM and uses

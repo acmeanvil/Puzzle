@@ -139,6 +139,21 @@ def test_a_wire_dropped_off_a_study_makes_nothing(window):
     assert len(w.session.project.of_type(Transfer)) == 2
 
 
+def test_a_study_dragged_out_of_a_component(window):
+    """ADR 0071 decision 4: a wire from a component let go on the empty canvas opens
+    New study with that component chosen."""
+    w = window
+    comp = _node(w, "Bracket", "component")
+    port = next((p.key for p in comp.node.ports if p.side == "out"), "out")
+    w.schematic.start_wire(comp, port)
+    far = comp.sceneBoundingRect().bottomRight() + QPointF(5000, 5000)
+    fill(w, name="Dragged study")
+    w.schematic.end_wire(far)
+    assert w.last_form.values()["component"] == "Bracket"
+    made = [s for s in w.session.project.of_type(Study) if s.name == "Dragged study"]
+    assert made and made[0].component == w.session.project.of_type(Component)[0].id
+
+
 def test_dropping_a_geometry_on_a_component_adds_a_part(window):
     w = window
     geo, comp = _node(w, "Bracket", "geometry"), _node(w, "Bracket", "component")

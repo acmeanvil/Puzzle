@@ -376,6 +376,19 @@ def test_the_elastica_on_beams(tmp_path, solver, dynamic):
           f"(0.3017), in {drawn:.4f} L (0.0566)")  # fmt: skip
     assert down == pytest.approx(0.3017, rel=0.01)
     assert drawn == pytest.approx(0.0566, rel=0.03)
+    if solver == "code_aster" and not dynamic:
+        # POU_D_T_GD's section forces (its SIEF: one Gauss point, so constant along an
+        # element and averaged at nodes): the moment at any section is P times the
+        # horizontal reach left to the tip, x_tip - x, read off the deformed shape.
+        bf = run.results.last("beam_forces")
+        at = run.mesh.node_coords(bf.ids)
+        moved = at + u.at(bf.ids)
+        tip = moved[int(np.argmin(np.linalg.norm(at - [length, 0, 0], axis=1)))]
+        for x0 in (0.25, 0.5, 0.75):
+            j = int(np.argmin(np.linalg.norm(at - [x0 * length, 0, 0], axis=1)))
+            expected = force * (tip[0] - moved[j, 0])
+            my = bf.values[j, bf.components.index("My")]
+            assert abs(my) == pytest.approx(expected, rel=0.01), x0
 
 
 @over("calculix", "code_aster")

@@ -945,6 +945,8 @@ def _step(
             if step.type in ("modal", "buckling") or _modal_based(step)
             else ["*NODE FILE", "U, RF", "*EL FILE", "S, E" + (", PEEQ" if yields else "")]
         )
+        if step.type == "modal" and settings.get("response_spectrum"):
+            outputs += ["*EL FILE", "S"]  # each mode's stresses, for the CQC (puzzle.spectra)
         if mesh.structural_blocks() or mesh.planar:  # results at their own nodes
             outputs = [
                 f"{line}, OUTPUT=2D" if line in ("*NODE FILE", "*EL FILE") else line

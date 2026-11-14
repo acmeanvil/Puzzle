@@ -207,6 +207,9 @@ def generate_mesh(
             _pieces(ref.entities, closure, found[part.name], volumes=list(bodies.values()),
                     **placement)  # fmt: skip
 
+        blocked: list[tuple[int, int]] = []  # ADR 0072 section 5: bodies of revolution
+        if hexes and not faceted:
+            blocked = _block_revolutions(comp, references, found, swept, warnings)
         _physical_groups(comp, geometries, references, found, warnings)
         names = {
             entity: (part, persistent[part].get(name, name))
@@ -222,7 +225,7 @@ def generate_mesh(
             (0, t): tuple(gmsh.model.getValue(0, t, [])) for _, t in gmsh.model.getEntities(0)
         }
         anchors = _anchors(references, persistent)
-        methods = {v: _method(faces) for v, faces in boundaries.items()}
+        methods = {v: _method(faces, v) for v, faces in boundaries.items()}
         if preview:
             size = max(r.size for r in references.values()) / 40
             gmsh.option.setNumber("Mesh.MeshSizeMax", size)
@@ -297,6 +300,10 @@ def generate_mesh(
             if recipe.element_shape == "hexahedra":
                 # Structured hexes: every block-like volume gets a transfinite mesh, recombined.
                 gmsh.model.mesh.setTransfiniteAutomatic()
+                if blocked:  # the butterfly's 135° corners count as corners there
+                    from puzzle.mesh import blocks
+
+                    gmsh.model.mesh.setTransfiniteAutomatic(blocked, cornerAngle=blocks.CORNER)
                 gmsh.option.setNumber("Mesh.RecombineAll", 1)
                 gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 0)
             _periodic(comp)
@@ -453,6 +460,115 @@ def _sweep_profiles(profiles: dict[str, tuple], volumes) -> None:
     """The revolved parts' profiles: recombined, a bolt's core strip structured."""
     for part, (core, at) in profiles.items():
         revolved.prepare(volumes[part], core, **at)
+
+
+def _block_revolutions(comp, references, found, swept, warnings) -> list[tuple[int, int]]:
+    """A hexahedral recipe's bodies of revolution cut into blocks (`mesh/blocks.py`):
+    each solid that isn't block-like, is a body of revolution and shares no face with
+    another body. Its name then maps to its blocks; the faces and edges the cuts split
+    are re-found by their pieces, and its points by where they are. Returns the blocks,
+    for their transfinite corners; a body that can't be blocked is left (and said)."""
+    from puzzle.mesh import blocks
+
+    out: list[tuple[int, int]] = []
+    for part in comp.parts:
+        if part.name in swept or part.name not in found:
+            continue
+        ref = references[part.name]
+        names = found[part.name]
+        bodies = {n: hit for n, hit in names.items() if not isinstance(hit, list) and hit[0] == 3}
+        for name, (_d, tag) in bodies.items():
+            faces = gmsh.model.getBoundary([(3, tag)], oriented=False, combined=False)
+            if _method(faces)[0] == "hexahedra":
+                continue
+            shared = any(len(gmsh.model.getAdjacencies(2, f)[0]) > 1 for _d2, f in faces)
+            rev = blocks.revolution(tag)
+            if rev.why or shared:
+                why = rev.why or "it shares a face with another body"
+                warnings.append(f"{part.name}/{name}: not cut into hexahedral blocks ({why})")
+                continue
+            before = set(_closure([(3, tag)]))
+            points = {n: tuple(gmsh.model.getValue(0, hit[1], []))
+                      for n, hit in names.items()
+                      if not isinstance(hit, list) and hit in before and hit[0] == 0}  # fmt: skip
+            # A copy of the body, its faces and edges in the same order as its own: what
+            # the cuts split is re-found as the pieces lying on the copy's (removed after).
+            ghost = gmsh.model.occ.copy([(3, tag)])
+            gmsh.model.occ.synchronize()
+            twins = dict(zip(_ordered(tag), _ordered(ghost[0][1]), strict=True))
+            named = {
+                n: twins[hit]
+                for n, hit in names.items()
+                if not isinstance(hit, list) and hit in twins and hit[0] in (1, 2)
+            }
+            pieces = blocks.cut(tag, rev)
+            odd = blocks.odd_blocks(pieces)
+            if odd:
+                raise MeshError(f"part '{part.name}': its body of revolution {name} didn't cut "
+                                "into hexahedral blocks; mesh it with tetrahedra")  # fmt: skip
+            new = [(3, v) for v in pieces]
+            out += new
+            stale = [
+                n
+                for n, hit in names.items()
+                if any(dt in before for dt in (hit if isinstance(hit, list) else [hit]))
+            ]
+            for n in stale:
+                del names[n]
+            names[name] = new
+            # what was on the body's surface is among its outer faces only (the cuts'
+            # faces inside are new), and their edges and points
+            outer = [(2, f) for _d2, f in gmsh.model.getBoundary(new, oriented=False)]
+            closure = sorted(set(new) | set(_closure(outer)))
+            for n, xyz in points.items():  # a vertex: the new one at its place
+                near = min(((d, t) for d, t in closure if d == 0),
+                           key=lambda dt: np.linalg.norm(np.subtract(
+                               gmsh.model.getValue(0, dt[1], []), xyz)))  # fmt: skip
+                names[n] = near
+            tol = 1e-6 * ref.size + 1e-9
+            for n, twin in named.items():  # the new faces and edges lying on the old one
+                on = [dt for dt in closure if dt[0] == twin[0] and _lies_on(dt, twin, tol)]
+                if on:
+                    names[n] = on if len(on) > 1 else on[0]
+            gmsh.model.occ.remove(ghost, recursive=True)
+            gmsh.model.occ.synchronize()
+            lost = [n for n in stale if n not in names]
+            if lost:
+                warnings.append(f"{part.name}: {', '.join(lost)} lost when {name} was cut "
+                                "into hexahedral blocks")  # fmt: skip
+    return out
+
+
+def _ordered(volume: int) -> list[tuple[int, int]]:
+    """A volume's faces, then their edges, in Gmsh's boundary order (a copy's come in
+    the same order, so they pair up)."""
+    faces = list(gmsh.model.getBoundary([(3, volume)], combined=False, oriented=False))
+    edges: list[tuple[int, int]] = []
+    for f in faces:
+        for e in gmsh.model.getBoundary([f], combined=False, oriented=False):
+            if e not in edges:
+                edges.append(e)
+    return faces + edges
+
+
+def _lies_on(piece: tuple[int, int], whole: tuple[int, int], tol: float) -> bool:
+    """Whether a face or edge lies on another (its points on it, within its box)."""
+    dim, tag = piece
+    lo, hi = gmsh.model.getParametrizationBounds(dim, tag)
+    if dim == 1:
+        params = list(np.linspace(lo[0], hi[0], 7)[1:-1])
+    else:
+        us, vs = np.linspace(lo[0], hi[0], 5)[1:-1], np.linspace(lo[1], hi[1], 5)[1:-1]
+        params = [x for u in us for v in vs for x in (u, v)]
+    xyz = np.asarray(gmsh.model.getValue(dim, tag, params), float).reshape(-1, 3)
+    if dim == 2:  # keep the samples inside the trimmed face
+        keep = [gmsh.model.isInside(2, tag, list(p)) for p in xyz]
+        xyz = xyz[np.asarray(keep, bool)] if any(keep) else xyz
+    box = np.asarray(gmsh.model.getBoundingBox(*whole))
+    if np.any(xyz < box[:3] - 10 * tol - 2e-7) or np.any(xyz > box[3:] + 10 * tol + 2e-7):
+        return False
+    near = np.asarray(gmsh.model.getClosestPoint(dim, whole[1], list(xyz.ravel()))[0], float)
+    return float(np.max(np.linalg.norm(near.reshape(-1, 3) - xyz, axis=1))) < tol
 
 
 def _closure(volumes: list[tuple[int, int]]) -> list[tuple[int, int]]:
@@ -839,13 +955,20 @@ def preferred_order(project) -> int:
     return 1 if solvers and solvers <= FINITE_VOLUME else 2
 
 
-def _method(faces) -> tuple[str, str]:
+def _method(faces, volume=None) -> tuple[str, str]:
     """How a body can be meshed: structured hexahedra when it is block-like (six faces,
-    each bounded by four edges, as Gmsh's automatic transfinite meshing needs), else
+    each bounded by four edges, as Gmsh's automatic transfinite meshing needs) or a body
+    of revolution (cut into such blocks when meshed, `mesh/blocks.py`), else
     tetrahedra, saying why."""
     sides = [len(gmsh.model.getBoundary([f], combined=False, oriented=False)) for f in faces]
     if len(faces) == 6 and all(n == 4 for n in sides):
         return "hexahedra", "block-like: six four-sided faces"
+    if volume is not None:
+        from puzzle.mesh import blocks
+
+        rev = blocks.revolution(volume[1])
+        if not rev.why:
+            return "hexahedra", "a body of revolution: cut into blocks when meshed"
     if len(faces) != 6:
         return "tetrahedra", f"{len(faces)} faces; a block has six"
     odd = sum(n != 4 for n in sides)

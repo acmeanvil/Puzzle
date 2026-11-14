@@ -159,7 +159,7 @@ CalculiX/Code_Aster solves of ADR 0027 and 0055 all carry over).
   - PyNite gives N, Vy, Vz, T and Mz the opposite sign to Code_Aster's EFGE and CalculiX's springs. The reader flips them, so `beam_forces` means the same on every solver (`test_member_force_signs`).
 - **Agent:** MCP `frame_geometry` (returns a create command) and `frame_members`; skill `frames`.
 
-Benchmarks (`tests/integration/test_frames.py`; a W12X26 in steel, spans of 8 m):
+Benchmarks (`tests/integration/test_frames_solved.py`; a W12X26 in steel, spans of 8 m):
 
 | Case | Closed form | PyNite | CalculiX | Code_Aster |
 | --- | --- | --- | --- | --- |
@@ -223,8 +223,21 @@ Not in step 1:
   - τb below 1 when αPr/Py > 0.5;
   - notional loads only in gravity-only combinations where Δ2/Δ1 ≤ 1.7 (C2.2b(4));
     they go in every combination, which is conservative;
-  - combinations on CalculiX and Code_Aster;
   - envelopes over combinations (operators' Envelope reads the steps meanwhile).
+
+## Built: combinations on the finite-element solvers (2026-11-13)
+
+- `puzzle/combine.py`, in `run_study` before the preload step: a study's combinations,
+  where the solver doesn't take them (`Capabilities.frame_analysis`), become one static
+  step per combination. Each load with a case is copied into the steps whose
+  combination factors it, its values times the factor; loads without a case and
+  supports stay in every step. Only loads may have a case there (forces, pressures,
+  body loads, heat flux...): a case on an imposed displacement or a temperature is
+  refused. Results are kind `combination`, named by the global field `combination`,
+  as PyNite's.
+- Benchmark `tests/integration/test_fe_combinations.py`: a bar's 1.2D + 1.6L and 0.9D
+  on CalculiX and Code_Aster equal the factored sums of the cases solved alone, to the
+  digits the solvers print.
 
 ## Built: step 3 (2026-11-12)
 
@@ -359,7 +372,36 @@ Not in step 1:
   - E_v = 0.2 S_DS D and ρ;
   - the stability coefficient θ (12.8.7);
   - drifts of moment frames in SDC D to F divided by ρ (12.12.1.1);
-  - spectra on CalculiX and Code_Aster.
+
+## Built: spectra on CalculiX and Code_Aster (2026-11-13)
+
+- The modes come back with their participation factors, effective masses and mass
+  fractions (the global fields PyNite's have): CalculiX's from its .dat
+  (`calculix.read_participation`; its modes have unit generalised mass), Code_Aster's
+  from CALC_MODES with `NORM_MODE=_F(NORME='MASS_GENE')`, FACT_PARTICI_D* and
+  MASS_EFFE_D*, the total from POST_ELEM MASS_INER. A spectrum's modal step also
+  writes each mode's stresses.
+- `puzzle/spectra.py`, in `run_study` for solvers that don't take a spectrum
+  themselves: per direction, each mode's response Γ S_a g I_e / (R ω²) times its
+  shape for displacement and stress, CQC at the design's damping; the modal base
+  shear the CQC of m_eff S_a g I_e / R, scaled up to the ELF's C_s W (W the mass the
+  modes move, the height the model's z extent); the same `spectrum_base_shear` as
+  PyNite's. Elmer and FEniCSx refuse a spectrum (no participation factors), never
+  ignore it.
+- Benchmark `tests/integration/test_fe_spectra.py`: a W14X90 column, 6 m:
+  - first mode 12.015 Hz (CalculiX) and 12.007 (Code_Aster) against
+    Euler-Bernoulli's 12.234 (their beams are Timoshenko's, the I's shear area its
+    web); effective masses 0.620 and 0.619 of ρAL (0.6131), the second 0.202 and
+    0.201 (0.1883);
+  - the modal base shear equal to the CQC of the solvers' own modes to 1e-9, the
+    ELF base shear within 2 % of C_s ρ A L g (CalculiX's lumped mass leaves the
+    support node's share out).
+- Combinations with the spectrum (`combine.add_seismic`): a study of a static step and
+  a modal step with `response_spectrum` solves each combination's static loads without
+  the Ex/Ey cases (the spectrum is the seismic load), then gives it twice, "(+E)" and
+  "(−E)", plus and minus |factor| × the direction's CQC envelope; a combination whose
+  seismic factors are all negative is the twin and goes, as PyNite's. The column's
+  1.2D + Ex: the two steps' tip sway is ± the envelope's to 1e-9, on both solvers.
 
 ## Built: step 5 (2026-11-12)
 

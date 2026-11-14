@@ -567,7 +567,7 @@ def _operators(project: Project, out: Schematic, store, states: dict) -> None:
                            help=port_doc(p, "out"))
                       for i, p in enumerate(t.outputs)]  # fmt: skip
         node.ports += [Port(p.key, p.label, "in", type=p.type, help=port_doc(p, "in"))
-                       for p in t.inputs]  # fmt: skip
+                       for p in t.ports_for(op)]  # fmt: skip
         out.nodes[node.id] = node
     for op in ops:
         node = out.nodes[str(op.id)]

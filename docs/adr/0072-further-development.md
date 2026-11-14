@@ -23,12 +23,36 @@ Every item below was checked against the later ADRs, CLAUDE.md and the code on
 (0042), I and channel sections (0055), the bolt table (0050), cancelling from the status
 bar (0045), Netgen (0019), MMG (0066), project archives (0061)).
 
+Checked again on 2026-11-13, after ADRs 0073-0082 were built: items built since are
+marked **Built** or **Partly** with the date, and what those ADRs left open is copied in
+(sections 3, 3a, 3b and 5). Work built since that no item named (frames, welds, symmetry,
+weak springs, element types, modelled bolts, the tree's status, the solver log window,
+PyNite in the installer) is recorded in its own ADR, not here.
+
 ## Decision
 
 This record is the one list of further development. Each item names the ADR it came from;
 "Partly" says what is left. Picking an item up means a new ADR, or a step of the ADR it came
 from, and removing the line here in the same change. New deferrals are added here as well
-as in their own ADR. The order inside each section is not a plan, except where marked.
+as in their own ADR. The order inside each section is not a plan, except where marked;
+the order of work is the Plan to finish below.
+
+**No new ADRs after 0085 (maintainer, 2026-11-13)** until everything through 0085 is
+built and tested and Puzzle could be run as semi-production software. ADR 0084 (remote
+model providers for the agent) and ADR 0085 (OpenCourant, explicit dynamics) are the
+last new records for now; one may still be written later if something is found to need
+it. Picking an item up means a step of the ADR it came from, amended in place; a gap
+found while building goes on this list, not into a new record. A decision that can't be
+made without one is put to the maintainer first.
+
+The order of work (maintainer, 2026-11-13): this record's Plan to finish, then ADR 0084
+in full, then ADR 0085 planned and built, then, once all of it is stable, ADR 0075's
+worked examples and ADR 0083's help and documentation to round the application out.
+Once it is stable, and before 0075 and 0083 are called done, the whole application gets
+a full review, adversarial, by a Fable 5.2 model (maintainer, 2026-11-13): its findings
+fixed or answered before the freeze lifts. **A hold point comes before that review:** work stops when
+the application is stable and the maintainer lays down the review's groundwork and goals;
+the review starts only on their word.
 
 ### 1. Solver runtimes and containers
 
@@ -54,7 +78,8 @@ Maintainer's priority, first:
   point, less than the 0.5 s guessed, since Code_Aster's own start-up inside the
   container dominates. `tests/integration/test_warm_containers.py`.
 - Then measure where the rest of CalculiX's container penalty goes (files over the
-  Windows mount vs start-up); copying a case into the container's own file system may help.
+  Windows mount vs start-up), with warm containers now in place; copying a case into the
+  container's own file system may help.
 
 Other items:
 
@@ -66,8 +91,7 @@ Other items:
   882,309-equation model). The container streams; for the native fallback, follow
   `fort.6` in run_aster's temporary folder, or run Code_Aster's Python directly (new).
   **Built (2026-11-10):** natively on Windows, `CodeAsterProgress.poll` follows the
-  fort.6 of the newest `%TEMP%
-un_aster__*` folder made since its job started (claimed,
+  fort.6 of the newest `%TEMP%\run_aster__*` folder made since its job started (claimed,
   so two jobs in one Puzzle don't share one) and ignores stdout while it does, so no
   line counts twice. A plastic bar natively: its increments and iterations reach
   progress.jsonl during the solve (2.1-2.8 s into a 3.5 s solve), not at its end.
@@ -77,14 +101,16 @@ un_aster__*` folder made since its job started (claimed,
   installed (the fenicsx environment on win-64), SuperLU otherwise and for complex
   systems; `PUZZLE_FENICSX_LU=superlu` forces SuperLU; the solve prints its linear
   solver. NAFEMS LE1 natively on Windows 11: 9.8 s against 30.8 s on SuperLU, the same
-  answer. FEniCSx still runs in its image first on Windows (`CONTAINER_FIRST`): whether
-  native now beats it needs the 3D magnetics cases timed both ways.
+  answer. Left: FEniCSx still runs in its image first on Windows (`CONTAINER_FIRST`);
+  whether native now beats it needs the 3D magnetics cases timed both ways.
 - Publish the images (ghcr.io); none are published yet (0007, 0013).
 - Record the solver version and image digest with each run; images write
   `puzzle-solver-version` but the store keeps neither (0007).
   **Built (2026-11-10):** `jobs/versions.py` names the solver each run used (a container's image id and the version its image writes; a native run's package version from conda-meta; a PARDISO build as built here; the machine's source image), kept in the runs table (`solver_version`, `image_digest`, merged into older stores) and shown in the run's Properties and `puzzle runs`.
 - A Code_Aster image for arm64 (needs a source build) (0013).
-- A CalculiX image with PARDISO (0051); PARDISO or PaStiX on Apple silicon and Windows (0051).
+- A CalculiX image with PARDISO (0051); PARDISO or PaStiX on Apple silicon (MKL has no
+  arm64 build) (0051). **Built on Windows (2026-11-10):** `solver_builds` compiles it
+  with conda-forge's MinGW gcc/gfortran and `mkl_rt` (ADR 0068 step 4).
 - The job runner on Windows: it runs solves in-process when the OS isn't POSIX
   (`service.py`) (0067).
 - Progress parsed where the solver runs, so the whole log needn't cross (0067).
@@ -110,7 +136,12 @@ un_aster__*` folder made since its job started (claimed,
 - Puzzle's own Linux machine (WSL2 import on Windows, Lima on macOS) with the non-native
   solvers, through the runner, started on demand and stopped when idle; a one-prompt WSL
   enablement on Windows (0068, 0013).
-  **Begun (2026-11-10):** Windows' WSL 2 machine and its runtime (ADR 0068 step 5); the shipped root file systems, staging and Lima are still to do.
+  **Begun (2026-11-10):** Windows' WSL 2 machine and its runtime (ADR 0068 step 5:
+  `jobs/machine.py`, `puzzle machine`; `test_machine_solve.py` passed 2026-11-11);
+  2026-11-13: staging (opt-in), WSL turned on from Settings with one prompt, on demand
+  and idle by WSL itself. Left: the root file systems fetched from the registry on first
+  use without Docker (the maintainer, 2026-11-14: fetched, not shipped; phase 5) and
+  offering WSL itself, and Lima on macOS (phase 6: a Mac).
 - CalculiX PARDISO built on the user's machine after install (0068 step 4, 0051).
   **Built (2026-11-10)** (ADR 0068 step 4).
 - A Solvers page in Settings with Repair (0068). Side-by-side releases, a launcher, a
@@ -146,18 +177,28 @@ un_aster__*` folder made since its job started (claimed,
   the NAFEMS forced-vibration benchmarks (0041); frequency points clustered at the modes,
   damping per mode and per material, the real part at a chosen phase (0041). Partly:
   frequency-dependent loads (only an imported pressure with a frequency axis) (0041, 0044).
-  Explicit and nonlinear dynamics stay out of scope (0041).
+  Explicit dynamics: ADR 0085 (OpenCourant). **Built (2026-11-12):** large-deflection
+  transients of solids on CalculiX and Code_Aster, and of shells and beams on CalculiX
+  (ADR 0082).
 - Buckling: the critical load in the label for a single force; a pinned-column benchmark
   (the hinge is now possible); nonlinear buckling (RIKS, PILOTAGE); a mode shape as an
   imperfection; beam and shell buckling benchmarked; buckling on FEniCSx and Elmer (0028).
+  **Built (2026-11-12):** buckling after a large-deflection preload, solids, on CalculiX
+  and Code_Aster (ADR 0082).
 - Loads and constraints: amplitudes on temperatures, displacements, body loads, and in
   static steps for load-deflection curves (0037); rigid remote force, bolt pretension and
-  compression-only supports on Elmer and FEniCSx (0037); pretension locked across steps on
-  one-job-per-step solvers (0037); partial local-axes displacements beyond CalculiX (0037).
+  compression-only supports on Elmer and FEniCSx (0037). Partly: pretension locked across
+  steps on one-job-per-step solvers, **built (2026-11-11)** on Code_Aster for studies of
+  static steps (the preload step, steps chained into one STAT_NON_LINE, ADR 0037
+  amended); left: studies mixing modal, transient or thermal steps with them, and Elmer
+  and FEniCSx (0037). Partly: partial local-axes displacements beyond CalculiX (Code_Aster
+  Cartesian ones by LIAISON_OBLIQUE, 2026-11-11, ADR 0081); left: Elmer and FEniCSx, and
+  partial cylindrical ones anywhere (0037).
   Partly: Elastic support on Elmer only on axis-aligned faces (0037).
 - Materials: hyperelastic models written by any solver; creep as a typed model; orthotropic
   and anisotropic models on Elmer and FEniCSx, and in 2D on Code_Aster; Code_Aster's
-  orthotropic plasticity and anisotropic conductivity with tables (0020, 0049).
+  orthotropic plasticity and anisotropic conductivity with tables (0020, 0049). (Large-
+  strain plasticity was built 2026-11-12, ADR 0082.)
 - Coordinate systems: spherical displacements and forces as functions of position;
   spherical material axes; the sphere checks (0049).
 - Beams, shells, fasteners: a fastener pinball radius; thermal expansion of a beam bolt;
@@ -165,134 +206,59 @@ un_aster__*` folder made since its job started (claimed,
   shells from a solid's mid-surface, joined where nodes aren't shared, section results,
   normals across several faces, the pinched-cylinder benchmark; curved panels about other
   axes (partly); a spring connector with given stiffnesses; fasteners, beams and shells on
-  Elmer and FEniCSx (0027). Fitted middle holes in a bolt stack (0050). Spring beams:
-  rotary inertia, centrifugal loads, a body load's share within a segment (0055).
+  Elmer and FEniCSx (0027). Fitted middle holes in a bolt stack (0050; stacks of several
+  layers were built 2026-11-09). Spring beams: rotary inertia, centrifugal loads, a body
+  load's share within a segment (0055). (Quadrilateral and thick shells were built
+  2026-11-12, ADR 0082.)
 - Contact: Hertz-type non-conforming curved contact on Code_Aster (refused now) (0056).
+  Weak springs released once a contact closes (CalculiX `*MODEL CHANGE`, Code_Aster a
+  windowed multiplier), when a benchmark shows the residual matters (0080).
 - Fatigue: critical-plane multiaxial fatigue; rainflow counting (0026).
-- Threads without meshing them: see 3a.
+- Symmetry: cyclic modes by nodal diameter (CalculiX `*CYCLIC SYMMETRY MODEL`); cyclic
+  heat on Code_Aster; cyclic and periodic symmetry on Elmer (`Periodic BC`), the CFD
+  solvers and FEniCSx (`dolfinx_mpc`) (0081).
+- Element types: Code_Aster's shells and beams in transient large deflection stay
+  refused, measured (0082). (Section forces of POU_D_T_GD: built 2026-11-13.)
+- Found while checking: Elmer's capabilities and docstring list `electric_currents`
+  (StatCurrentSolve) and `electromagnetic_waves` (VectorHelmholtz), but `elmer/sif.py`
+  writes neither (see "Found while collecting") (0010).
+- Threads: see 3a; welds and frames: see 3b.
 
-### 3a. Threaded connections as smooth cylinders (researched 2026-11-08)
+### 3a. Threads (0076)
 
-Goal: a threaded engagement (bolt in a nut or tapped hole) modelled on smooth cylinders.
-It should still give the per-thread load distribution, the radial wedge force and the
-lead's torque. It should work for any thread form: ISO/UNC 60°, ACME, trapezoidal,
-buttress, square and tapered pipe threads. Today's bolts (0050) bond the tapped thread,
-which loses the thread effects.
+**Built (2026-11-09 to 2026-11-10)** as ADR 0076, which now holds the research that was
+here (Ansys, COMSOL, Abaqus, Sopwith and Yamamoto, VDI 2230) and its design: any thread
+form on smooth cylinders, 2D axisymmetric and 3D on CalculiX and Code_Aster, 2D on
+FEniCSx, threaded beam-bolt ends, and the modelled bolts of ADR 0077. Left:
 
-**What others do (established):**
+- threads on Elmer (its SIF has no node-pair springs or directional constraints);
+  FEniCSx in 3D, until benchmarked;
+- friction on the flanks (refused at first).
 
-- **Ansys:** the Bolt Thread geometry correction (`SECTYPE,,CONTACT,BOLT`;
-  `SECDATA, Dm, P, ALPHA, N, axis points`).
-  - Inputs: the pitch diameter, pitch, half-thread angle, starts, and the hand by the
-    angle's sign.
-  - Both sides are meshed at the major diameter. Only the contact normal and detection
-    change, not the geometry. Elements should be smaller than p/4.
-  - Modes: a "general" mode (both flanks) and a "unidirectional" one (one flank, the axis
-    tip→head).
-  - Limits: straight symmetric threads only (no buttress, no taper), small strain.
-  - Its M120 example: shank stress within 0.2 % of a meshed thread with 5-16× fewer
-    elements. Bonded MPCs lose the thread-region stresses.
-    [ansyshelp ctecgeomcor](https://ansyshelp.ansys.com/public/Views/Secured/corp/v252/en/ans_ctec/ctecgeomcor.html)
-- **COMSOL:** Bolt Thread Contact (3D and 2D axisymmetric).
-  - Inputs: half-angle, lead and hand, contact orientation Both/Up/Down, friction.
-  - Its default penalty is deliberately low (2 E/r) to stand in for the teeth bending: a
-    stiffer one crowds the load onto the first thread.
-  - [doc.comsol.com sme_ug_solid.07.141](https://doc.comsol.com/6.4/doc/com.comsol.help.sme/sme_ug_solid.07.141.html)
-- **Abaqus:** `*CLEARANCE, BOLT` on small-sliding pairs.
-  - Inputs: half-angle, pitch, major and mean diameter, axis.
-  - Single start only.
-- **The open-source solvers** have nothing for threads. CalculiX's `*CONTACT PAIR` normals
-  can't be overridden, and its `*CLEARANCE` was 3× off here (0056). Code_Aster's
-  `DEFI_CONTACT` has no thread option, nor does Elmer.
-- **Their usable building blocks:**
-  - CalculiX: `*EQUATION`, directional GAPUNI, SPRING2.
-  - Code_Aster: `LIAISON_DDL`, oriented `DIS_CHOC`/`DIS_T`.
-  - FEniCSx: a penalty or Nitsche term in the weak form.
-- **Published checks:**
-  - First engaged thread about 33 %, then 27, 20, 12, 8 % for a standard nut (Sopwith,
-    Yamamoto). Yamamoto's spring model gives the tooth compliance.
-  - Axisymmetric thread models match 3D helical ones for axial load sharing (Fukuoka; Acta
-    Polytechnica Hungarica 12(6) 2015).
-  - VDI 2230 gives the thread and nut compliance.
+### 3b. Welds and frames (0078, 0079)
 
-**Design (proposed):**
-
-1. **A `ThreadForm`** (with a library of standard forms beside `bolts.SIZES`) holds:
-   - `pitch`, `starts` (lead = starts × pitch), `hand`;
-   - major, pitch and minor diameters;
-   - a `taper` (NPT 1:16);
-   - a half-angle **per flank**, measured from the radial plane:
-     ISO/UNC 30/30, ACME 14.5/14.5, trapezoidal 15/15, buttress 7/45 or 3/45, square 0/0.
-
-   Angles per flank and the taper are what make buttress and pipe threads possible where
-   the commercial features refuse them. A `BoltType`'s size picks its form, and a bolt
-   whose tapped end has a thread gets a thread engagement in place of a bond.
-2. **Kinematics** (pure Python, solver-neutral, `threads.py`): each node on the bolt's
-   thread face, in (r, θ, z) about the bolt axis, has a flank normal for flank k:
-
-       n_k = (e_z − (s L / 2π r) e_θ ∓ tan α_k e_r) / |…|
-
-   Each term carries one effect:
-   - the e_z term carries the axial load;
-   - the e_r term is the radial wedge (zero for square threads);
-   - the e_θ term is the lead (the loosening torque, and which way friction acts).
-
-   Pairing and areas:
-   - Nodes pair with the nut face at the same (θ, z) by the KD-tree pairing
-     `contact_check` already has.
-   - The areas are tributary (`common.surface_area`, so curved second-order faces are
-     right), each flank taking half × sec α_k.
-   - The phase z/L − sθ/2π matters only for clearances (backlash) and starts.
-3. **Which flank bears:** `bearing` = `auto` | `load` | `clearance`.
-   - `auto`: both flanks unilateral, each with its own clearance, so the solve finds the
-     bearing one, as Ansys's general mode does.
-   - `load` or `clearance`: one flank only, cheaper and linear. Buttress threads need the
-     steep flank facing the load, which `auto` finds and `load` checks.
-4. **Thread compliance:** each pair gets a normal stiffness per area from the tooth's
-   compliance: Yamamoto's bending, shear, root and radial terms over a pitch.
-   - Also available: `rigid`, or a value the user gives.
-   - Without the compliance, rigid flank ties over-load the first thread, which is why
-     COMSOL lowers its penalty.
-   - Tangentially: friction μ, stick or bonded.
-5. **Per solver:**
-   - **Linear, one flank:** CalculiX `*EQUATION` (u_nut − u_bolt)·n_k = 0, or SPRING2
-     with a compliance. Code_Aster `LIAISON_DDL` or `DIS_T` on a two-node element along
-     n_k.
-   - **Unilateral:** CalculiX GAPUNI along n_k in an NLGEOM step, as the compression-only
-     supports are. Code_Aster `DIS_CHOC` with its friction.
-   - **FEniCSx:** the exact penalty integral with `ufl.conditional` on the flank gap.
-   - **Elmer:** the bonded spring version only at first; the rest refused.
-   - Helper nodes and their removal from results reuse the bolt machinery (0037, 0050).
-   - **2D axisymmetric:** e_θ drops out. This is the cheapest benchmark and the first
-     stage.
-6. **Results:**
-   - flank force per pair;
-   - the load per thread (axial share summed per pitch), as a table and a Curve (0071);
-   - the wedge's total radial force;
-   - flank pressure.
-
-   A skill `thread-engagement` and MCP arguments on bolts follow ADR 0057.
-
-**Validation:**
-
-- **2D axisymmetric, M16 bolt in a nut:** the true sawtooth profile meshed (sketch,
-  0048) against the equivalent model, for each thread form.
-  - Compare the per-thread shares, shank stress, nut hoop stress and axial stiffness.
-  - A square thread must give no wedge.
-- **The shares' shape** against Sopwith/Yamamoto (first thread about 30-35 %).
-- **Compliance** against VDI 2230.
-- **One 3D helical case:** circumferential pressure nearly uniform, and the tightening
-  torque against T = F (d₂/2) tan(λ + ρ′) with ρ′ = atan(μ / cos α).
-
-**Not yet confirmed:**
-
-- how Ansys and Abaqus compute their internal gap from the helical phase;
-- whether CalculiX `*TRANSFORM` applies to `*EQUATION` dofs;
-- Code_Aster test V6.04.228;
-- VDI 2230's and Yamamoto's exact coefficients, to be read from the sources before
-  building.
-
-The decision and its implementation strategy are ADR 0076.
+- Welds: the light weld's springs lose the couple their pairs' offsets make, so a
+  moment through the weld isn't passed (found 2026-11-13; the lap joint's plate got
+  23.5 of 100 N·m): pass it by per-station distributing couplings onto coincident
+  reference nodes joined by six springs (axial springs along the pairs passed it but
+  shared load unevenly; tried and reverted, ADR 0078), the lap joint's section moment
+  the benchmark (a strict xfail now); on FEniCSx a coupling needs writing first; a modelled groove
+  weld's reinforcement (its cap as a solid); a weld's own fatigue code with AWS D1.2,
+  D1.6 and D1.9's curves (AWS D1.1 and AISC Appendix 3 share the categories built);
+  weld fatigue through the fatigue tool's duty (0026); light welds on Elmer; welds in 2D
+  (refused) (0078).
+- Member checks: AISC 360 channels, tees and angles (E4-3/E4-4, E5, F9, F10),
+  noncompact webs (F4, F5), stiffened webs and tension field action (G2.2), B1
+  amplification (Appendix 8), torsion of I shapes (Design Guide 9); τb below 1 when
+  αPr/Py > 0.5; notional loads only where C2.2b(4) needs them; welded aluminium members
+  (the ADM's heat-affected zones), AISC 370's continuous strength method, ADM bridge
+  factors, torsion of stainless and aluminium (0079).
+- Frame analysis: envelopes over combinations (combinations, spectra and ± E on
+  CalculiX and Code_Aster: built 2026-11-13, `puzzle.combine`, `puzzle.spectra`); seismic accidental torsion (12.8.4.2), the 100 %/30 %
+  combination (12.5.3), E_v and ρ, the stability coefficient θ (12.8.7), drifts divided by
+  ρ (12.12.1.1) (0079).
+- Frame editing: members drawn node to node in the 3D view, members off the grid lines,
+  a grid frame edited as a grid after it is made (0079).
 
 ### 4. 2D models (0048, 0044)
 
@@ -305,7 +271,8 @@ The decision and its implementation strategy are ADR 0076.
   loads in local axes; FEniCSx temperature loads in 2D heat; Elmer local axes in 2D; Elmer
   plane strain with materials of different E·α.
 - Still refused in 2D everywhere: beams and fasteners, remote loads, pretension,
-  non-conformal contacts.
+  non-conformal contacts, welds (threaded contacts in axisymmetric models are the
+  exception, ADR 0076).
 - Imported fields in 2D: vector loads on Elmer and FEniCSx, conservative mapping, pressure
   fields on Code_Aster edges, CalculiX flux fields as nodal flows, weights from VTU cells,
   three components chosen at once in the form (0044).
@@ -323,7 +290,15 @@ The decision and its implementation strategy are ADR 0076.
   Direct face moves and pulls (0014). Sketches on any plane, not only xy/yz/xz (0017).
 - Partly: a faceted part must be its component's only part, unplaced, without heal or
   remove (0014).
-- Swept meshes; hex and tet together in one recipe; second-order hexahedra (0019).
+- Swept meshes; hex and tet together in one recipe (0019): a recipe with hexahedra
+  meshes every body that can take them (blocks, revolutions) and refuses the rest. A
+  hex body conformal with a tet one wants pyramids at the shared face, which CalculiX
+  hasn't (Code_Aster has PYRAM5/13), so the way is a hex body meshed apart and tied, as
+  the modelled bolts are (ADR 0077): a tie made automatically when a blocked body shares
+  a face, still to build. Partly (2026-11-10, ADR
+  0077): modelled bolts, nuts and washers are swept by revolving and sit as hexahedra in a
+  tet recipe, joined by nonconformal ties; general sweeps and conformal hex-tet meshes are
+  left. **Built (2026-11-11):** second-order hexahedra, 20 and 27 nodes (ADR 0082).
 - **Hex meshes of bodies of revolution (maintainer, 2026-11-08).** The use is cylindrical
   solids: idealised bolts (shank, head, nut), pins, shafts, tubes, bushings and rollers.
   - **Today:** Gmsh hexes only block-like bodies (six four-sided faces,
@@ -358,7 +333,36 @@ The decision and its implementation strategy are ADR 0076.
     - Lamé's thick tube under pressure within 0.5 % on 20-node hexes;
     - a cantilevered shaft in bending against beam theory;
     - element counts and the worst Jacobian against a tet mesh of the same size.
-  - **Where it's used:** ADR 0076 step 3 meshes its 3D threaded benchmarks this way.
+  - **Where it's used:** ADR 0076 step 3 was to mesh its 3D threaded benchmarks this
+    way; they passed on tetrahedra instead.
+  - **Partly built (2026-11-10, ADR 0077):** the second choice, for `bolt`, `nut` and
+    `washer` steps only (`mesh/revolved.py`: four quarter turns in layers, hex20 and
+    wedge15 on the axis).
+  - **Built (2026-11-13), the first choice:** `mesh/blocks.py` and
+    `generate._block_revolutions`. A hexahedral recipe's body that isn't block-like is
+    cut at mesh time when its faces are planes square to one axis and coaxial
+    cylinders:
+    - a butterfly when solid on the axis (core 0.45 r_min, four planes, one on OCC's
+      seam), four planes for a tube;
+    - coaxial cylinders and planes at the steps;
+    - blocks transfinite at 2.6 rad corners;
+    - names re-found on a copy of the body (`_lies_on`).
+
+    The mesh bench says "a body of revolution: cut into blocks when meshed". Checks
+    (`tests/integration/test_hex_revolution.py`, hex20):
+    - a stepped shaft's σzz over a cut is F/A to 0.02 % (CalculiX) and exact (Code_Aster);
+    - Lamé's tube's bore u_r is −0.005 %;
+    - every element a hex20; worst scaled Jacobian 0.66 solid, 0.89 tube.
+
+    Found and fixed on the way:
+    - `common.surface_area` measured 8-node quadrilaterals from their corners, so a
+      force spread as F/A on curved hex faces came out 0.84 % high on Code_Aster;
+    - an elastic support with no stiffness (or values not named kn, kt) made CalculiX
+      hold a node set it never wrote; it is refused now.
+
+    Left: cones (chamfers) and tori (fillets), which fall back to tetrahedra with the
+    reason in the warnings; bodies sharing a face with another (fragmented or
+    joined).
 - Selections: the pick bar's "by size" filter; saving a "same as" pick as a rule (partly)
   (0034). Parts sharing faces after fragmenting reported as conformal in their own right (0039).
 - Measure: radius of curvature at a point; G1/G2 tangency breaks and planarity (partly);
@@ -397,13 +401,14 @@ The decision and its implementation strategy are ADR 0076.
   forces on coarse meshes (0046).
 - ParaView: `puzzle paraview`; Open in ParaView from a run's right-click; level 2,
   ParaView filters as Puzzle objects; client-server mode for large results (0070).
-  **Built (2026-11-10)** (ADR 0070).
+  **Built (2026-11-10)** (ADR 0070), but for client-server mode.
 
 ### 8. Schematic and operators
 
 - Wires routed around nodes (0058).
-- A real script sandbox on Linux and Windows (bubblewrap, a job object); only macOS has one
-  (0062).
+- (The script sandbox on Linux and Windows: built 2026-11-13, bubblewrap and an
+  AppContainer, ADR 0062.) Linux without bwrap installed still runs scripts unsandboxed:
+  ship bwrap with the Linux installer (0062).
 - Optimisation: NSGA-II; a generation's points in parallel; points as progress events with a
   live objective plot; a response surface over two variables; TPE for many choices (0063).
 - Dataframes: reroute dots (A14) and Freeze (A15) (0064, 0064A); a 2D-slider pad on its
@@ -416,20 +421,27 @@ The decision and its implementation strategy are ADR 0076.
   the schematic (numbers wired into a feature's value, a study dragged out of a component);
   partly, live nodes ("evaluate up to here", a Report node); Plot of any number of series
   (four now) (0071).
-  **Built (2026-11-10)** (ADR 0071 step 5).
+  **Partly built (2026-11-10, ADR 0071 step 5):** field operators, ParaView's filters,
+  user operators as folded blocks with their own sockets and shared as files, numbers
+  wired into a feature's value, the Report node. The rest built 2026-11-13: a study
+  dragged out of a component, "evaluate up to here", Plot of any number of curves.
 
 ### 9. Agent and MCP
 
-- MCP over the network with authentication; per-change acceptance in the GUI (partly);
-  streaming replies (0015).
+- MCP over the network with authentication; per-change acceptance in the GUI (partly)
+  (0015). Streaming replies: taken up by ADR 0084.
+- Remote model providers beyond Anthropic and one OpenAI-compatible endpoint: ADR 0084
+  (OpenAI, Google, Hugging Face, Thinking Machines, Meta, NVIDIA, any compatible
+  endpoint). Left out of it: Vertex AI's and Bedrock's own authentication (OAuth, SigV4)
+  (0084).
 - VRAM on discrete GPUs; English summaries of more of Code_Aster's French manual (partly);
   fine-tuning only if retrieval plateaus; routing by task family (0022).
 - A `point` argument on `result_*` and point labels in `runs`; a time, frequency or mode
-  within a step and `axes` on `result_*`; buckling factors labelled `frequency_hz` in
-  `result_summary`; `capabilities` missing `axes_features`, `amplitude_features`,
-  `time_schemes`, `material_models`; applying a settings preset by command; tools for a
-  geometry's entity names and for edge seeds and meshing methods; a sweep counted as one run
-  in the budget; a body with no material reported before a run (0057).
+  within a step and `axes` on `result_*`; applying a settings preset by command
+  (`apply_preset` is GUI-only); tools for a geometry's entity names and for edge seeds and
+  meshing methods (0057). (Fixed 2026-11-13: buckling factors in `result_summary`, every
+  field in `capabilities`, a sweep's points in the budget, a body with no material
+  before a run.)
 - Translating more of Code_Aster's advice (`progress.translate`) (0054).
 
 ### 10. GUI and look
@@ -442,19 +454,23 @@ The decision and its implementation strategy are ADR 0076.
   temperature (partly), material axes drawn on assignments (partly) (0020).
 - The step dialog, tool panel and material builder on `FormPanel` (0036).
 - Advisor text in tooltips and form descriptions; a guided tour once help exists (0040).
+- The help and documentation system with worked examples, ADR 0083 (proposed; it
+  supersedes 0075). Built so far: Help → Element library and Help → Log.
 - Another docking library behind `gui/docking.py` (optional); menu icons; a focus-order
   review of every dialog; `operators.TYPE_COLOURS` as theme tokens (0045).
-- 3D mouse: spacenavd on Linux; the macOS check beside 3DxWare and axis signs on real
-  hardware; osx-arm64 hidapi in Puzzle's channel; the pivot under the view centre; the
-  device's name (or why there is none) in Settings; per-axis invert (partly) (0069).
+- 3D mouse: the macOS check beside 3DxWare; axis signs on real hardware (Windows only so
+  far, not under spacenavd); osx-arm64 hidapi built and published (the recipe is in
+  `packaging/recipes/hidapi`) (0069). (Per-axis invert: built 2026-11-13, Settings >
+  3D mouse, an entry per axis.) **Built
+  (2026-11-10):** spacenavd on Linux (tested against a fake daemon), the pivot under the
+  view centre, the device's name in Settings.
 - Trackers: Code_Aster past SUIVI_DDL's four columns (OBSERVATION), in its linear and
   thermal solves; OpenFOAM and Code_Saturne probes as trackers (0054).
 
 ### 11. Project, storage and core
 
 - Slow paths in Rust or C++ once profiled (0003).
-- Results store: scheduled compaction (`compact()` exists, nothing calls it) (partly);
-  deleting native solver files once imported (optional); byte-stream-split encoding on list
+- Results store: deleting native solver files once imported (optional); byte-stream-split encoding on list
   columns (0008).
 - Archives: older formats kept in `tests/data/archives`; export taking the session's lock
   and making an "archived" version first (0061).
@@ -471,6 +487,108 @@ The decision and its implementation strategy are ADR 0076.
   rebuilt installer could ship old code without a word (found 2026-11-09). Fixed: the
   build compares the package's recorded commit with the checkout's and rebuilds when
   they differ.
+- This record and CLAUDE.md had `%TEMP%\run_aster__*\fort.6` with its `\r` and `\f`
+  turned into control characters. Fixed 2026-11-13.
+- Found 2026-11-13 and fixed the same day (phase 0 of the plan):
+  - Elmer and FEniCSx listed `electric_currents` and `electromagnetic_waves`, which
+    neither writes: they are now `Capabilities.planned_physics`, never offered as
+    working, and a study using one is refused as planned.
+  - MCP `capabilities` returns every field of the matrix (it left out `axes_features`,
+    `amplitude_features`, `time_schemes`, `material_models` and others), and
+    `result_summary` gives a buckling mode's `load_factor`, not `frequency_hz`, with
+    each step's label.
+  - Four integration tests shared their unit tests' module names, so collecting
+    `tests/` whole (as `testpaths` does) failed: renamed `*_solved.py`.
+  - Status lines of ADRs 0019, 0027, 0028, 0037 and 0041 brought up to date.
+  - The results store compacts itself every 40 runs (`ResultStore.maybe_compact`:
+    compaction, a log checkpoint, files past Delta's week removed).
+  - A part with no material is the problem `no_material` before a run (it was only the
+    Advisor's), component-wide selections counted.
+  - A sweep spends a run of the agent's budget per point it solves, and one that would
+    overrun the budget is refused before it starts (points already stored cost nothing).
+
+## Plan to finish (2026-11-13)
+
+Every item above lands in one phase. A phase is done when its items are built with the
+benchmark or closed-form check the conventions ask for, or moved to "Not planned" with
+the maintainer's word. Inside a phase the order is free; phases go in order, except that
+phase 6's items are done whenever what they wait on arrives.
+
+0. **Fix what's wrong now** (done 2026-11-13). The items found on 2026-11-13 above: claims an
+   adapter doesn't back, the MCP gaps that mislead an agent, the test collection, ADR
+   statuses. Also scheduled store compaction (11), and the agent's checks the GUI has
+   that MCP lacks: a body with no material before a run, a sweep as one run in the
+   budget (9).
+1. **Finish what's partly built** (they are closest to done and each has its design):
+   - pretension locked across mixed steps, partial local axes on the rest (3);
+   - conformal hex-tet, general sweeps, cones and tori in the blocks (5) (done
+     2026-11-13: hex meshes of bodies of revolution by blocks);
+   - welds' groove cap and the light weld's lost couple (3b) (done 2026-11-13: spectra
+     and ± E on CalculiX and Code_Aster, the plate-side ASME toe, combinations on the
+     FE solvers, POU_D_T_GD section forces, the 3D mouse's per-axis invert, the thread
+     profile drawn, the schematic's leftovers);
+   - the script sandbox on Linux and Windows, WSL staging and enabling (2) (done
+     2026-11-13; the root file systems moved to phase 5 by the maintainer's decision).
+2. **The agent and help** (the overarching principle: every feature reachable and
+   explained by the agent):
+   - ADR 0084, remote providers;
+   - section 9's MCP items (`point` and `axes` on `result_*`, a time or mode within a
+     step, presets by command, entity names, edge seeds and meshing methods, Code_Aster's
+     advice translated);
+   - ADR 0083 (help) and 0075 (worked examples) come last of all, after 0084 and 0085,
+     since their reference is generated from the code and their examples run on it.
+3. **Breadth on the solvers Puzzle has** (sections 3, 3b, 4, 6): what one solver does and
+   another refuses, in the order users meet it:
+   - loads and supports (amplitudes everywhere, remote force, pretension and
+     compression-only on Elmer and FEniCSx, Elmer's oblique elastic supports);
+   - dynamics (Code_Aster modal, Elmer and FEniCSx modal superposition, HHT on Elmer,
+     base excitation, harmonic stresses, the NAFEMS forced-vibration set) and buckling
+     (critical load label, pinned column, beams and shells, FEniCSx and Elmer, nonlinear
+     buckling, imperfections);
+   - materials (hyperelasticity, creep, orthotropic on Elmer and FEniCSx and 2D Code_Aster,
+     Code_Aster orthotropic plasticity), spherical coordinate systems;
+   - beams, shells and fasteners (Elmer and FEniCSx, joins without shared nodes,
+     mid-surfaces, section results, spring connectors, fitted middle holes, spring-beam
+     inertia) and member-check clauses;
+   - contact (Hertz on Code_Aster, weak springs released), fatigue (rainflow,
+     critical plane), symmetry on the other solvers;
+   - 2D's refusals and gaps, and imported fields' and exports' gaps;
+   - the magnetics benchmarks never run, Elmer's circuits, static current and waves, BDF2.
+4. **Post-processing, geometry, GUI and core** (sections 5, 7, 8, 10, 11): result tools,
+   shoot-out reports, derived-result caching, symbols, cuts; sketches on any plane,
+   selections, measure, adaptivity benchmarks, mid-surfaces; optimisation's NSGA-II and
+   parallel generations, dataframe leftovers, wires routed; the material builder,
+   FormPanel, Settings, trackers, focus order, theme tokens; archives and the store.
+5. **Runtimes, packaging and wider reach** (sections 1, 2, 3, 5): CalculiX's container
+   penalty measured, the shared image base, the job runner on Windows, progress parsed on
+   the host, LSF, ranks for OpenFOAM/Code_Saturne/FEniCSx, side-by-side releases and the
+   launcher, licences and the source offer, pixi on remote hosts, faster installs, native
+   ports; the WSL machine's root file systems fetched on first use, not shipped (the
+   maintainer, 2026-11-14: the six images are about 9 GB uncompressed, 5.1 GB of it
+   FEniCSx's): a solver's image layers downloaded from the registry over HTTPS without
+   Docker, each checked against a digest pinned in the release, stacked into a tarball,
+   `wsl --import`ed and the tarball deleted, with a progress toast on the first solve;
+   the same tarballs offered as optional downloads for offline sites
+   (`machine.install_from_tarball` imports them); OpenFOAM's transient, convection and mass-flow inlets (then multiphase,
+   compressible, dynamic meshes); solve helpers on other computers; the Fusion 360 link,
+   FreeCAD; MCP over the network.
+6. **Waiting on something outside the repository** (done when it arrives):
+   - signing certificates (2); GitHub's container registry and conda-forge submissions,
+     the maintainer's to start (1, 2);
+   - real hardware: a GPU for FEniCSx/CUDA PETSc, PaStiX, cuDSS (1); a Mac with a 3D mouse
+     (10); Apple silicon for PARDISO or PaStiX and the arm64 Code_Aster image (1);
+   - a real Slurm (and LSF) cluster (1); a Nastran for checking exported stresses (6, 0060);
+   - Lima inside a notarized app (2).
+
+**Not planned unless asked again** (kept listed; each was conditional where it came from):
+slow paths in Rust or C++ (only once profiled, 0003); a web front end (only if needed,
+0003); fine-tuning local models (only if retrieval plateaus, 0022); another docking
+library (optional, 0045); deleting native solver files after import (optional, 0008);
+QtCharts (minor, 0038); new solvers (FreeFEM,
+GetDP, Palace, MYSTRAN as an adapter) and two-way coupling (preCICE), each a decision of
+its own that the freeze above holds back (0012, 0009, 0060). Explicit dynamics was
+taken out of this group by the maintainer (2026-11-13): it becomes ADR 0085, OpenCourant
+(the community continuation of OpenRadioss) as a solver with its adapter and GUI.
 
 ## Consequences
 

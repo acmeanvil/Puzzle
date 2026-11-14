@@ -206,6 +206,7 @@ def induction(bracket: Project) -> Project:
             Physics(type="heat_transfer"),
         ],
         couplings=["joule_heating"],
+        materials=[MaterialAssignment(material=p.of_type(Material)[0].id, selection="Bracket/All")],
     )
     p.add(comp)
     p.add(

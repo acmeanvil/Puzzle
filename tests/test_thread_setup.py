@@ -260,6 +260,9 @@ def test_the_contacts_properties_show_the_thread_in_words(window):
             shown.append(item.child(i).text(0))
             stack.append(item.child(i))
     assert {"Thread", "Major", "Pitch", "Axis from a coordinate system"} <= set(shown)
+    assert "Thread profile" in shown  # ADR 0076 step 6: drawn under the fields
+    drawn = panel.thread_profile
+    assert drawn.spec.angles == (7.0, 45.0) and len(drawn.points) == 10
     assert "Pitch diameter" not in shown  # from the form, until set
     form.setCurrentIndex(form.findData("iso"))  # one Edit, as every field
     assert window.session.project.of_type(Component)[0].contacts[0].thread.form == "iso"

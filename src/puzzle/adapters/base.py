@@ -89,6 +89,10 @@ class Capabilities:
 
     physics: dict[str, frozenset[str]]
     features: frozenset[str]
+    planned_physics: dict[str, frozenset[str]] = field(default_factory=dict)
+    """Physics the solver has but this adapter doesn't write yet: shown as planned (the
+    outline, MCP `capabilities`), never offered as working; a study using one is refused
+    by `check`, naming it planned."""
     contacts: frozenset[str] = frozenset()
     threads: frozenset[str] = frozenset()
     """Contact types a threaded contact (ADR 0076) may have here: bonded, no_separation..."""
@@ -270,7 +274,8 @@ class SolverAdapter(ABC):
         for physics in component.physics:
             steps = caps.physics.get(physics.type)
             if steps is None:
-                problems.append(f"{self.name} does not support {physics.type} physics")
+                planned = " yet (planned)" if physics.type in caps.planned_physics else ""
+                problems.append(f"{self.name} does not support {physics.type} physics{planned}")
                 continue
             problems += [
                 f"{self.name} does not support {s.type} {physics.type}"
@@ -429,9 +434,23 @@ class SolverAdapter(ABC):
         except InputError as exc:
             problems.append(f"{self.name}: {exc}")
         problems += self.check_expert(study.expert_settings.get(self.name, {}))
-        if not caps.frame_analysis:  # ADR 0079 step 2: PyNite's so far, never ignored
-            if study.combinations:
-                problems.append(f"{self.name} doesn't solve load combinations yet (PyNite does)")
+        from puzzle import spectra
+
+        if spectra.wanted(study) and not caps.frame_analysis:  # ADR 0079 step 4
+            if self.name not in spectra.SOLVERS:
+                problems.append(f"{self.name} gives no modal participation factors, so it "
+                                "can't take a response spectrum (CalculiX, Code_Aster and "
+                                "PyNite do)")  # fmt: skip
+            problems += [f"{self.name}: {p}" for p in spectra.check(study)]
+        if not caps.frame_analysis:  # ADR 0079 step 2: PyNite's own; P-Delta and DAM too
+            if study.combinations:  # a static step per combination (puzzle.combine)
+                steps = study.solve_steps()
+                spectrum = (len(steps) == 2 and steps[1].type == "modal"
+                            and steps[1].settings.get("response_spectrum"))  # fmt: skip
+                if (len(steps) != 1 and not spectrum) or steps[0].type != "stationary":
+                    problems.append(f"{self.name} solves load combinations as a static step "
+                                    "each: the study must have one static step (and, for a "
+                                    "response spectrum, a modal step after it)")  # fmt: skip
             for s in study.solve_steps():
                 for key in ("second_order", "direct_analysis"):
                     if s.settings.get(key):

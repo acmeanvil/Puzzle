@@ -133,6 +133,13 @@ def test_a_body_held_only_by_sliding_contact(tmp_path):
     assert contact_check.held_by_contact_only(p, bonded) == []
     loose = comp.model_copy(update={"contacts": []})
     assert [w.code for w in contact_check.held_by_contact_only(p, loose)] == ["free_body"]
+    # ADR 0076: a threaded contact holds its screw whatever its type (the flanks carry
+    # the axial load), so it needs no weak springs (ADR 0080)
+    from puzzle.model.schema import Thread
+
+    threaded = comp.model_copy(update={"contacts": [comp.contacts[0].model_copy(
+        update={"thread": Thread(form="iso", size="M16")})]})  # fmt: skip
+    assert contact_check.held_by_contact_only(p, threaded) == []
 
 
 def test_what_each_solver_is_given(tmp_path):

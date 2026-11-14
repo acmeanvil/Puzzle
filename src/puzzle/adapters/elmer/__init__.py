@@ -4,11 +4,11 @@ Elmer is Puzzle's electromagnetics solver as well as a structural and thermal on
 
 Module choices the adapter makes:
 
-- electrostatics: StatElecSolve; electric_currents: StatCurrentSolve
+- electrostatics: StatElecSolve; electric_currents (planned): StatCurrentSolve
 - magnetic_fields, 3d: MagnetoDynamics (WhitneyAVSolver, WhitneyAVHarmonicSolver for
   frequency domain, MagnetoDynamicsCalcFields for derived fields); edge elements, 3D only
 - magnetic_fields, 2d: MagnetoDynamics2D / MagnetoDynamics2DHarmonic
-- electromagnetic_waves: VectorHelmholtz (frequency domain)
+- electromagnetic_waves (planned): VectorHelmholtz (frequency domain)
 - solid_mechanics: StressSolve; ElasticSolve with "Apply Contact BCs" for experimental contact
 
 Native runs: Puzzle calls ElmerSolver directly, without activating its conda
@@ -64,13 +64,15 @@ class ElmerAdapter(SolverAdapter):
     name = "elmer"
     max_solve_steps = 1
     capabilities = Capabilities(
+        planned_physics={  # not written yet (ADR 0072): listed, never offered as working
+            "electric_currents": frozenset({"stationary"}),
+            "electromagnetic_waves": frozenset({"frequency_domain"}),
+        },
         physics={
             "solid_mechanics": frozenset({"stationary", "transient", "modal", "frequency_domain"}),
             "heat_transfer": frozenset({"stationary", "transient"}),
             "electrostatics": frozenset({"stationary"}),
-            "electric_currents": frozenset({"stationary"}),
             "magnetic_fields": frozenset({"stationary", "transient", "frequency_domain"}),
-            "electromagnetic_waves": frozenset({"frequency_domain"}),
         },
         features=STRUCTURAL_FEATURES
         | SYMMETRY_FEATURES  # ADR 0081

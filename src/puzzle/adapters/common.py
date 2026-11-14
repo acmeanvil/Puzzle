@@ -323,7 +323,9 @@ def surface_area(group: Group, mesh: Mesh) -> float:
     flat triangles' area is a little high around a hole, 0.2 % on an M8 clearance hole),
     flat ones (and quads) from their corners."""
     blocks = surface_blocks(group, mesh)
-    if blocks and all(b.element in ("tri3", "tri6") for b in blocks):
+    if blocks and all(b.element in FACE_ELEMENTS for b in blocks):
+        # curved 8- and 9-node quadrilaterals too: their corners alone left a hexahedral
+        # cylinder's end 0.84 % short, and Code_Aster's force F / A that much over F
         return sum(float(da.sum()) for *_, da in _quadrature(group, mesh))
     area = 0.0
     for b in blocks:
@@ -1036,9 +1038,18 @@ def rigid_motion(f, group, mesh: Mesh) -> RigidMotion:
 
 
 def support_stiffness(f) -> tuple[float, float]:
-    """An elastic support's normal and tangential stiffness per area (N/m³)."""
+    """An elastic support's normal and tangential stiffness per area (N/m³). One with
+    neither is refused: it would hold nothing (CalculiX then held a node set it never
+    wrote), and a value under another name is a mistake to say, not to ignore."""
     v = {k: q.to_si() for k, q in f.values.items()}
-    return v.get("kn", 0.0), v.get("kt", 0.0)
+    unknown = sorted(set(v) - {"kn", "kt"})
+    if unknown:
+        raise InputError(f"{f.type} on '{f.selection}': its values are kn and kt (per area), "
+                         f"not {', '.join(unknown)}")  # fmt: skip
+    kn, kt = v.get("kn", 0.0), v.get("kt", 0.0)
+    if kn <= 0 and kt <= 0:
+        raise InputError(f"{f.type} on '{f.selection}' has no stiffness: give kn or kt")
+    return kn, kt
 
 
 def support_nodes(group, mesh: Mesh):

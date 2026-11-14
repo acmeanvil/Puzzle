@@ -235,3 +235,16 @@ def test_a_new_store_records_its_format(tmp_path):
 
     _transient(ResultStore(tmp_path / "r"), [[1, 2]])
     assert json.loads((tmp_path / "r" / "store.json").read_text(encoding="utf-8")) == {"format": 2}
+
+
+def test_the_store_compacts_itself_as_runs_accumulate(tmp_path):
+    """Scheduled compaction (ADR 0072, phase 0): every COMPACT_EVERY runs."""
+    store = ResultStore(tmp_path)
+    for i in range(3):
+        _write(store, f"k{i}")
+    assert not store.maybe_compact(every=10)
+    assert store.maybe_compact(every=3)
+    from deltalake import DeltaTable
+
+    assert len(DeltaTable(str(tmp_path / "runs")).file_uris()) == 1
+    assert len(store.runs()) == 3

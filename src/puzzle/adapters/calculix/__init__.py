@@ -268,6 +268,7 @@ class CalculixAdapter(SolverAdapter):
                     )
         _fastener_fields(results, input_file)
         _reaction_totals(results, input_file)  # by the deck's own step numbers, as above
+        _participation(results, input_file)  # modes' participation (puzzle.spectra)
         from puzzle.adapters.calculix.inp import step_owners
 
         owners = step_owners(input_file.read_text(encoding="utf-8")) if input_file.exists() else {}
@@ -386,6 +387,75 @@ def _fastener_fields(results, input_file: Path) -> None:
         if hit:
             ids = np.arange(1, len(ends) + 1)
             step.fields["fastener"] = Field("fastener", "global", FASTENER_COMPONENTS, ids, hit[-1])
+
+
+def read_participation(text: str) -> dict[int, dict]:
+    """The .dat's *FREQUENCY blocks by deck step: {step: {"gamma": {mode: (x, y, z)},
+    "meff": {mode: (x, y, z)}, "total": (x, y, z)}} (translations; CalculiX prints the
+    rotations too). Its modes are normalised to unit generalised mass."""
+    import re
+
+    out: dict[int, dict] = {}
+    step = 0
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        m = re.match(r"\s*S T E P\s+(\d+)", line)
+        if m:
+            step = int(m.group(1))
+        title = " ".join(line.split())
+        key = {"P A R T I C I P A T I O N F A C T O R S": "gamma",
+               "E F F E C T I V E M O D A L M A S S": "meff",
+               "T O T A L E F F E C T I V E M A S S": "total"}.get(title)  # fmt: skip
+        if key is None:
+            i += 1
+            continue
+        block = out.setdefault(step, {"gamma": {}, "meff": {}, "total": (0.0, 0.0, 0.0)})
+        i += 1
+        while i < len(lines):
+            words = lines[i].split()
+            if (
+                words
+                and words[0] == "F"
+                or (
+                    words
+                    and words[0].isalpha()
+                    and words[0] not in ("MODE", "TOTAL", "X-COMPONENT")
+                )
+            ):
+                break
+            try:
+                numbers = [float(w) for w in words]
+            except ValueError:
+                numbers = []
+            if key == "total" and len(numbers) >= 3:
+                block["total"] = tuple(numbers[:3])
+                break
+            if key != "total" and len(numbers) >= 4 and words[0].isdigit():
+                block[key][int(words[0])] = tuple(numbers[1:4])
+            elif key != "total" and block[key] and not words:
+                break
+            i += 1
+    return out
+
+
+def _participation(results, input_file: Path) -> None:
+    """Each mode's participation factor, effective mass and mass fraction (x, y, z) from
+    the .dat, as global fields on its modal step (`spectra.participation_fields`)."""
+    dat = input_file.with_suffix(".dat")
+    if not dat.exists() or not any(s.mode is not None for s in results.steps):
+        return
+    from puzzle.spectra import participation_fields
+
+    blocks = read_participation(dat.read_text(encoding="utf-8", errors="replace"))
+    for s in results.steps:
+        block = blocks.get(s.index)
+        if s.mode is None or block is None or s.mode not in block["gamma"]:
+            continue
+        s.fields.update(participation_fields(block["gamma"][s.mode],
+                                             block["meff"].get(s.mode, (0.0, 0.0, 0.0)),
+                                             block["total"]))  # fmt: skip
 
 
 def _reaction_totals(results, input_file: Path) -> None:

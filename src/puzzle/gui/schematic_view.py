@@ -930,6 +930,8 @@ class SchematicPanel(QWidget):
         self.canvas.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         target = self._node_under(point, not_item=item)
         if target is None:
+            if item.node.kind == "component":  # dragged out to the canvas: a new study
+                self.study_from(item.node)
             return
         source, port = unfold(item.node, port)  # a folded cluster: its member's port
         into, key = unfold(target.node, target.input_near(point))
@@ -946,6 +948,13 @@ class SchematicPanel(QWidget):
             self.make_transfer(source, port, into)
             return
         self.link(source, into)  # any other reference (ADR 0071 decision 8)
+
+    def study_from(self, component: sch.Node):
+        """A wire dragged out of a component onto the empty canvas: the New study form
+        with that component chosen (ADR 0071 decision 4)."""
+        from puzzle.gui.menus import new_study
+
+        return new_study(self.window, component.label)
 
     def source_of(self, node: sch.Node, port: str) -> tuple[str | None, str]:
         """(object id, port) an operator reads for a node's output: a results node's
@@ -971,7 +980,7 @@ class SchematicPanel(QWidget):
         given = output_type(project, UUID(oid), port) if oid else None
         if op is None or given is None:
             return None
-        specs = TYPES[op.type].inputs
+        specs = TYPES[op.type].ports_for(op)
         chosen = next((p for p in specs if p.key == key), None)
         if chosen is None or not accepts(chosen, given):
             chosen = next((p for p in specs if accepts(p, given)), None)

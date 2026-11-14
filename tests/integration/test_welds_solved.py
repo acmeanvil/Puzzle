@@ -136,6 +136,53 @@ def test_lap_joint_carries_the_pull(tmp_path, solver):
 
 
 @over("calculix", "code_aster", "fenicsx")
+@pytest.mark.xfail(
+    strict=True,
+    reason="ADR 0072: the light weld's x, y, z springs between "
+    "offset nodes drop their couples; to fix with distributing couplings",
+)
+def test_a_light_weld_passes_the_moment(tmp_path, solver):
+    """ADR 0078 (found 2026-11-13): everything right of a cut through the lap joint's lower
+    plate is loaded only by P on the upper plate's end, 10 mm above the lower plate's
+    mid-plane, so the cut carries P and the moment P × 10 mm. The light weld's springs
+    act in x, y and z between nodes on its two legs, which don't coincide, so each drops
+    its couple: the plate gets 23.5 of the 100 N·m. Springs along their pairs' lines
+    passed it (98.99) but shared the load unevenly (station line forces from −163 to 471
+    N/mm about 200 on a tetrahedral mesh), so the fix is per-station distributing
+    couplings onto coincident reference nodes joined by six springs, as beam bolts'
+    ends are."""
+    pytest.importorskip("OCP")
+    from puzzle.mesh import Mesh
+    from puzzle.post.probes import _cut
+
+    parts = {
+        "Lower": ((0.1, 0.05, 0.01), (0.0, 0.0, 0.0), ()),
+        "Upper": ((0.1, 0.05, 0.01), (0.06, 0.0, 0.01), (("Foot", "edge", ["B/-x|B/-z"]),)),
+    }
+    features = [Feature(type="fixed", selection="Lower/-x"),
+                Feature(type="force", selection="Upper/+x", values={"x": q(P, "N")})]  # fmt: skip
+    weld = Weld(name="End fillet", leg=q(6, "mm"), path="Upper/Foot",
+                faces=["Upper/-x", "Lower/+z"])  # fmt: skip
+    p, study = _project(solver, parts, features, weld, mesh_mm=3.0)
+    run = _run(tmp_path, p, study)
+    mesh = run.mesh
+    step = [s for s in run.results.steps if "stress" in s.fields][-1]
+    body = mesh.groups["Lower"]
+    lower = Mesh(mesh.node_ids, mesh.coords, [b for b in body.blocks(mesh) if b.dim == 3],
+                 {"Lower": body})  # fmt: skip
+    xi = step.fields["stress"].components.index("xx")
+    for x in (0.02, 0.04):
+        cut, faces, areas, centres, _n = _cut(lower, step, (x, 0.025, 0.005), (1.0, 0.0, 0.0))
+        sv = np.asarray(cut.point_data["stress"], float).reshape(cut.n_points, -1)
+        f = sv[faces][:, :, xi].mean(axis=1) * areas
+        force, moment = float(f.sum()), float((f * (centres[:, 2] - 0.005)).sum())
+        print(f"{solver}: lower plate at x {x * 1e3:g} mm: N {force:.1f} N (P {P:g}), M "
+              f"{moment:.2f} N·m (P × 10 mm = {P * 0.01:g})")  # fmt: skip
+        assert force == pytest.approx(P, rel=0.01)
+        assert abs(moment) == pytest.approx(P * 0.01, rel=0.03)
+
+
+@over("calculix", "code_aster", "fenicsx")
 def test_bracket_welded_all_round(tmp_path, solver):
     pytest.importorskip("OCP")
     b, d, h = 0.02, 0.04, 0.06
@@ -304,6 +351,37 @@ def test_weld_fatigue_on_the_lap_joint(tmp_path, solver):
     assert out["allowable_range_Pa"] == pytest.approx(allowed)
     toe = fatigue(p, comp, run.mesh, run.results, "End fillet", "C", 2e6)
     assert toe["stress_range_Pa"] > 0 and "mesh-dependent" in toe["where"]
+
+
+@over("calculix")
+def test_asme_structural_stress_at_the_plate_side_toe(tmp_path, solver):
+    """ASME VIII-2 5.5.5 at the plate-side toe (ADR 0078): a 10 mm plate fixed at one end
+    and pulled by P at the other, carrying an attachment welded on top (a fillet along
+    its foot) that no load passes through. The plate's section at the toe, a leg from
+    the path, carries P on its centroid: membrane P / (L t) = 20 MPa, bending nil."""
+    from puzzle.model.schema import Component
+    from puzzle.post.weld_fields import structural_stress
+
+    width, t = 0.05, 0.01
+    parts = {
+        "Plate": ((0.2, width, t), (0.0, 0.0, 0.0), ()),
+        "Rib": ((0.01, width, 0.03), (0.1, 0.0, t), (("Foot", "edge", ["B/-x|B/-z"]),)),
+    }
+    features = [Feature(type="fixed", selection="Plate/-x"),
+                Feature(type="force", selection="Plate/+x", values={"x": q(P, "N")})]  # fmt: skip
+    weld = Weld(name="Rib fillet", leg=q(6, "mm"), path="Rib/Foot",
+                faces=["Rib/-x", "Plate/+z"])  # fmt: skip
+    p, study = _project(solver, parts, features, weld, mesh_mm=3.0)
+    run = _run(tmp_path, p, study)
+    comp = p.get(study.component, Component)
+    plate = structural_stress(p, comp, run.mesh, run.results, "Rib fillet", side="plate")
+    membrane, bending = plate["membrane_mean_Pa"], plate["bending_mean_Pa"]
+    print(f"plate-side toe: membrane {membrane / 1e6:.4g} MPa (20), bending "
+          f"{bending / 1e6:.3g} MPa (0), t {plate['thickness_m'] * 1e3:.3g} mm")  # fmt: skip
+    assert plate["thickness_m"] == pytest.approx(t, rel=1e-3)
+    assert membrane == pytest.approx(P / (width * t), rel=0.01)
+    assert abs(bending) < 0.02 * P / (width * t)
+    assert plate["where"] == "the toe on Plate" and plate["worst"]["cycles"] > 0
 
 
 def _tee(tmp_path, solver):

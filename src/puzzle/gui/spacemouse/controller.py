@@ -30,8 +30,10 @@ def settings_now() -> tuple[motion.Settings, bool, list[str]]:
 
     s = current()
     how = s.get("mouse3d.motion")
-    invert = [False] * 6
-    invert[2] = bool(s.get("mouse3d.invert_zoom"))
+    # view-frame order: x, y, zoom, then turns about x (tilt), y (spin), z (roll)
+    keys = ("invert_pan_x", "invert_pan_y", "invert_zoom", "invert_tilt", "invert_spin",
+            "invert_roll")  # fmt: skip
+    invert = [bool(s.get(f"mouse3d.{k}")) for k in keys]
     found = motion.Settings(
         speed=float(s.get("mouse3d.speed")),
         mode=s.get("mouse3d.mode"),

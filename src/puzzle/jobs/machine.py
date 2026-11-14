@@ -16,6 +16,19 @@ thread variables given per run.
 the engine is off) and its distribution is there, before a native fallback; or always
 with `PUZZLE_<SOLVER>_RUNTIME=wsl` / `PUZZLE_RUNTIME=wsl`. macOS's equivalent (Lima) is
 not built yet.
+
+On demand and idle: WSL starts a distribution on its first `wsl -d` and stops it a few
+seconds after its last process (its VM after `vmIdleTimeout`), so nothing runs between
+solves and Puzzle keeps no process of its own there.
+
+Staging (`solvers.wsl_stage`, off by default): the case copied to the distribution's own
+disk (`/tmp/puzzle-run/<key>`) before the solve and back after, since /mnt crosses the
+Windows file system for every read and write. The cost: files the solver writes while
+it runs (CalculiX's .sta, OpenFOAM's logs) reach Puzzle's progress only at the end; the
+solver's own output still streams.
+
+`enable_wsl()` turns WSL on with one Windows prompt (`wsl --install --no-distribution`,
+elevated), for Settings > Solvers.
 """
 
 from __future__ import annotations
@@ -206,12 +219,44 @@ class WslRuntime(Runtime):
     entrypoint: tuple[str, ...] = ()
     env: tuple[str, ...] = field(default=())
 
+    stage: bool = False  # the case on the distribution's own disk (module docstring)
+
+    def staged(self, workdir: Path) -> str:
+        """Where a staged case runs inside the distribution."""
+        import hashlib
+
+        key = hashlib.sha1(str(workdir).encode()).hexdigest()[:16]
+        return f"/tmp/puzzle-run/{key}"
+
     def wrap(self, command: list[str], workdir: Path) -> list[str]:
         exe = wsl() or "wsl"
         threads = thread_environment()
         given = [f"{k}={threads[k]}" for k in (*THREAD_VARIABLES, *SERIAL_BLAS)]
-        return [exe, "-d", self.distro, "--cd", linux_path(workdir), "--exec", "env",
+        where = self.staged(workdir) if self.stage else linux_path(workdir)
+        return [exe, "-d", self.distro, "--cd", where, "--exec", "env",
                 "HOME=/tmp", *self.env, *given, *self.entrypoint, *command]  # fmt: skip
+
+    def _shell(self, script: str) -> subprocess.CompletedProcess:
+        return _run([wsl() or "wsl", "-d", self.distro, "--exec", "sh", "-c", script])
+
+    def prepare(self, command: list[str], workdir: Path, say=None) -> None:
+        if not self.stage:
+            return
+        there, here = self.staged(workdir), linux_path(workdir)
+        done = self._shell(f"rm -rf '{there}' && mkdir -p '{there}' && cp -a '{here}/.' '{there}/'")
+        if done.returncode != 0:
+            raise MachineError(f"couldn't stage the case in {self.distro}: "
+                               f"{_text(done.stderr)}")  # fmt: skip
+        if say:
+            say(f"Staged the case in {self.distro}:{there}")
+
+    def finish(self, workdir: Path, say=None) -> None:
+        if not self.stage:
+            return
+        there, here = self.staged(workdir), linux_path(workdir)
+        done = self._shell(f"cp -a '{there}/.' '{here}/' && rm -rf '{there}'")
+        if done.returncode != 0 and say:
+            say(f"Couldn't fetch every file back from {self.distro}: {_text(done.stderr)}")
 
     def describe(self) -> str:
         return f"wsl:{self.distro}"
@@ -225,5 +270,36 @@ def runtime(solver: str) -> WslRuntime | None:
     found = installed().get(solver)
     if found is None:
         return None
+    from puzzle.settings import current
+
+    try:
+        stage = bool(current().get("solvers.wsl_stage"))
+    except KeyError:
+        stage = False
     return WslRuntime(solver, found["distro"], tuple(found.get("entrypoint") or ()),
-                      tuple(found.get("env") or ()))  # fmt: skip
+                      tuple(found.get("env") or ()), stage=stage)  # fmt: skip
+
+
+def wsl_ready() -> bool:
+    """Whether WSL 2 is turned on here (wsl --status answers)."""
+    exe = wsl()
+    if exe is None:
+        return False
+    try:
+        return _run([exe, "--status"], timeout=20).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def enable_wsl() -> bool:
+    """Turn WSL on with Windows' one elevation prompt: `wsl --install
+    --no-distribution` run as administrator (ShellExecute "runas"). Returns whether the
+    prompt was accepted; Windows asks for a restart when the feature is new."""
+    if os.name != "nt":
+        return False
+    import ctypes
+
+    exe = wsl() or str(Path(os.environ.get("SYSTEMROOT", r"C:\Windows")) / "System32" / "wsl.exe")
+    shown = ctypes.windll.shell32.ShellExecuteW(None, "runas", exe,
+                                                "--install --no-distribution", None, 1)  # fmt: skip
+    return int(shown) > 32

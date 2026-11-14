@@ -326,7 +326,11 @@ The maintainer asked (2026-11-11) for:
 
     CalculiX takes both: its shell strip settles on the elastica at 0.3017 L / 0.0564
     L, its beam at 0.2996 L / 0.0557 L.
-  - Not built: section forces of POU_D_T_GD.
+  - Section forces of POU_D_T_GD (2026-11-13): it has no EFGE_ELNO (te0185 asserts),
+    so its generalised stresses SIEF_ELNO/SIEF_NOEU on the beams are read as
+    `beam_forces`. One Gauss point: constant along an element, so a member's end node
+    shows its first element's middle. On the elastica the moment at a quarter, half and
+    three quarters of the length is P (x_tip − x) of the deformed shape within 1 %.
 
 ## Consequences
 

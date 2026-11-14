@@ -9,8 +9,13 @@ a number, a list, a table (a dict of equal-length lists), points or a text, as i
   what `puzzle scripts add PACKAGE` installs), never Puzzle's own Python;
 - with a **time limit** (`timeout_s`), killed past it;
 - in an **empty working folder** of its own, its environment cleared, the project's
-  folder never named; on macOS under `sandbox-exec`, which denies reading or writing
-  that folder and the network (elsewhere the folder is simply not given);
+  folder never named, and sandboxed:
+  - macOS: `sandbox-exec`, denying reading or writing that folder and the network;
+  - Linux: bubblewrap (`bwrap`, where installed): the system read-only, the project
+    folder an empty tmpfs, its own folder the one it writes, no network;
+  - Windows: an AppContainer (`sandbox_win`): the environment and its own folder
+    granted, nothing of the user's, no network, in a job object;
+  where none can be had (no bwrap), the folder is simply not given (`kind()` says);
 - only in a **trusted project** (`puzzle.trust`).
 
 Its code's text and its inputs' values are in the hashes (the operator's content and
@@ -124,15 +129,79 @@ def _environment() -> dict[str, str]:
     return env
 
 
-def _sandbox(argv: list[str], project_root) -> list[str]:
-    """macOS: the run under sandbox-exec, the project folder and the network denied."""
-    if sys.platform != "darwin" or not Path("/usr/bin/sandbox-exec").exists():
-        return argv
-    rules = ["(version 1)", "(allow default)", "(deny network*)"]
-    if project_root is not None:
-        folder = str(Path(project_root).resolve()).replace('"', "")
-        rules.append(f'(deny file-read* file-write* (subpath "{folder}"))')
-    return ["/usr/bin/sandbox-exec", "-p", " ".join(rules), *argv]
+def kind() -> str:
+    """Which sandbox scripts run in here: sandbox-exec, bwrap, appcontainer or none."""
+    import shutil
+
+    if sys.platform == "darwin" and Path("/usr/bin/sandbox-exec").exists():
+        return "sandbox-exec"
+    if sys.platform.startswith("linux") and shutil.which("bwrap"):
+        return "bwrap"
+    if os.name == "nt":
+        return "appcontainer"
+    return "none"
+
+
+def _sandbox(argv: list[str], project_root, folder: Path | None = None) -> list[str]:
+    """The run under the platform's sandbox: macOS sandbox-exec (the project folder and
+    the network denied); Linux bubblewrap (everything read-only, the project folder an
+    empty tmpfs, the work folder writable, no network). Windows' AppContainer isn't a
+    command line: `run` starts it."""
+    how = kind()
+    if how == "sandbox-exec":
+        rules = ["(version 1)", "(allow default)", "(deny network*)"]
+        if project_root is not None:
+            where = str(Path(project_root).resolve()).replace('"', "")
+            rules.append(f'(deny file-read* file-write* (subpath "{where}"))')
+        return ["/usr/bin/sandbox-exec", "-p", " ".join(rules), *argv]
+    if how == "bwrap":
+        import shutil
+
+        out = [
+            shutil.which("bwrap") or "bwrap",
+            "--ro-bind",
+            "/",
+            "/",
+            "--dev",
+            "/dev",
+            "--proc",
+            "/proc",
+            "--unshare-all",
+            "--die-with-parent",
+            "--new-session",
+        ]
+        if project_root is not None:
+            out += ["--tmpfs", str(Path(project_root).resolve())]
+        if folder is not None:
+            out += ["--bind", str(folder), str(folder), "--chdir", str(folder)]
+        return [*out, *argv]
+    return argv
+
+
+def _contained(exe: Path, folder: Path, timeout_s: float) -> str:
+    """Windows: the runner in the AppContainer (`sandbox_win`), its output in files in
+    its own folder (a container gets no pipes of Puzzle's); what it printed."""
+    from puzzle.operators import sandbox_win
+
+    env = _environment()
+    # CreateProcess needs LOCALAPPDATA to start a container (it is redirected to the
+    # container's own folder there); the user's other paths stay out
+    env.update({"TEMP": str(folder), "TMP": str(folder),
+                "LOCALAPPDATA": os.environ.get("LOCALAPPDATA", str(folder))})  # fmt: skip
+    argv = [str(exe), "-I", "-c",
+            "import sys; sys.stdout = open('stdout.txt', 'w'); sys.stderr = sys.stdout; "
+            "exec(open('runner.py').read())"]  # fmt: skip
+    try:
+        _code, late = sandbox_win.run(argv, folder, env, timeout_s, readable=[exe.parent])
+    except OSError as exc:
+        raise PuzzleError(f"the script sandbox couldn't start: {exc}",
+                          code="script_failed") from None  # fmt: skip
+    if late:
+        raise PuzzleError(
+            f"the script ran past its {timeout_s:g} s limit and was stopped", code="timeout"
+        )
+    said = folder / "stdout.txt"
+    return said.read_text(encoding="utf-8", errors="replace") if said.exists() else ""
 
 
 def run(code: str, inputs: dict[str, Any], *, timeout_s: float = 30.0,
@@ -147,17 +216,21 @@ def run(code: str, inputs: dict[str, Any], *, timeout_s: float = 30.0,
         (folder / "inputs.json").write_text(json.dumps(inputs), encoding="utf-8")
         (folder / "script.py").write_text(code, encoding="utf-8")
         (folder / "runner.py").write_text(RUNNER, encoding="utf-8")
-        argv = _sandbox([str(exe), "-I", "runner.py"], project_root)
-        try:
-            done = subprocess.run(argv, cwd=folder, capture_output=True, text=True,
-                                  encoding="utf-8", errors="replace", timeout=timeout_s,
-                                  env=_environment())  # fmt: skip
-        except subprocess.TimeoutExpired:
-            raise PuzzleError(f"the script ran past its {timeout_s:g} s limit and was stopped",
-                              code="timeout") from None  # fmt: skip
+        if kind() == "appcontainer":
+            said = _contained(exe, folder, timeout_s)
+        else:
+            argv = _sandbox([str(exe), "-I", "runner.py"], project_root, folder)
+            try:
+                done = subprocess.run(argv, cwd=folder, capture_output=True, text=True,
+                                      encoding="utf-8", errors="replace", timeout=timeout_s,
+                                      env=_environment())  # fmt: skip
+            except subprocess.TimeoutExpired:
+                raise PuzzleError(f"the script ran past its {timeout_s:g} s limit and was "
+                                  "stopped", code="timeout") from None  # fmt: skip
+            said = done.stderr or done.stdout
         result = folder / "out.json"
         if not result.exists():
-            tail = (done.stderr or done.stdout).strip().splitlines()[-3:]
+            tail = said.strip().splitlines()[-3:]
             raise PuzzleError("the script stopped without a result: " + " / ".join(tail),
                               code="script_failed")  # fmt: skip
         got = json.loads(result.read_text(encoding="utf-8"))

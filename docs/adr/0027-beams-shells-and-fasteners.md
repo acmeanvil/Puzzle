@@ -1,6 +1,6 @@
 # 0027. Beams and shells beside solids, starting with beam fasteners
 
-- Status: Accepted (2026-10-24); beam fasteners (2026-10-24), beams and shells (2026-10-25) built on CalculiX and Code_Aster
+- Status: Accepted (2026-10-24); beam fasteners (2026-10-24), beams and shells (2026-10-25) built on CalculiX and Code_Aster; quadrilateral and thick shells, B32R/S8R and large rotations with ADR 0082 (2026-11-12)
 - Date: 2026-10-22
 
 ## Context

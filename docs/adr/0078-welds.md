@@ -196,7 +196,7 @@ VIII-1/VIII-2 2023 and IX 2023.
 | Bracket, moment about x | 600.0 N·m | P h = 600 N·m |
 | Bracket, normal line force on the ±y sides | 419.6 N/mm | elastic method M (d/2)/I = 450 N/mm (−6.8 %) |
 
-The bracket's moment balances exactly only with the twist: about 7 % of it is the fillets' resistance to turning about their own lines (on the ±y sides, which run along x), which the elastic method leaves out. Tests: `tests/integration/test_welds.py`, `tests/test_welds.py`.
+The bracket's moment balances exactly only with the twist: about 7 % of it is the fillets' resistance to turning about their own lines (on the ±y sides, which run along x), which the elastic method leaves out. Tests: `tests/integration/test_welds_solved.py`, `tests/test_welds.py`.
 
 ## Built: step 2 in part (2026-11-11)
 
@@ -222,7 +222,7 @@ The bracket's moment balances exactly only with the twist: about 7 % of it is th
 - **Checks:**
   - `tests/test_weld_strength.py`: the Manual's 1.392 kip/in per sixteenth (Eq. 8-2a,
     E70) and 1.5 times it across the weld; throats; utilisations; the filler chosen.
-  - `tests/integration/test_welds.py`: the lap joint's E70XX check at its governing
+  - `tests/integration/test_welds_solved.py`: the lap joint's E70XX check at its governing
     station, 0.412 (379.7 N/mm against 921.4 N/mm).
 - **Not yet: the instantaneous-centre method.** The 15th Edition Manual's Table 8-4 on
   the maintainer's drive is a low-resolution scan (only its first row, C = 3.71 at
@@ -368,8 +368,35 @@ The bracket's moment balances exactly only with the twist: about 7 % of it is th
     moment about the path (`twist`, now from the cuts too), into the attachment along
     leg A; a groove's moment taken about the plate's mid-plane. The CJP butt's toe:
     membrane 19.98 MPa against P/(L t) = 20.0, bending nil.
-- **Not built**: a modelled groove's reinforcement (its cap as a solid), and ASME's
-  toe on the plate side.
+- **Not built**: a modelled groove's reinforcement (its cap as a solid).
+
+## Built: ASME's plate-side toe (2026-11-13), and a gap found
+
+- `weld_fields.structural_stress(..., side="plate")`, MCP `weld_fatigue(side=
+  "plate")`: the toe on the other part, a leg from the path along its face. The
+  plate carries load past the toe besides the weld's, so it reads the plate's own
+  section there (`_plate_toe`: per straight run of the path a plane square to the
+  plate's face, cut through that part's elements at 1.5 legs, just past the springs'
+  footprint; the traction along the normal summed per station, with its moment about
+  the section's mid-plane; the thickness measured). Light welds on solids.
+  Benchmark: a 10 mm plate pulled past a rib welded on top: membrane 20.00 MPa
+  against P/(L t) = 20, bending 0.07 MPa against nil.
+- **Found:** a light weld's SPRING2s act along x, y and z between nodes on its two
+  legs, which don't coincide, so every pair drops the couple its forces' offset
+  makes. Forces pass right; a moment through the weld doesn't. On the lap joint the
+  lower plate's section moment is 23.5 N·m wherever it is cut, where equilibrium of
+  the upper plate asks 100. Listed in ADR 0072 to fix; the skill tells users to
+  model the bead where the weld carries bending.
+- **Tried (2026-11-13) and reverted:** springs along each pair's line (CalculiX SPRINGA,
+  Code_Aster DIS_T along its segment, FEniCSx k n nᵀ), braced along the path, pass the
+  couple: the plate's cut then carried 98.99 N·m on all three solvers. But such springs
+  share load by their directions, so on a tetrahedral mesh the stations' line forces
+  ran from −163 to 471 N/mm about 200 (±15 % even averaged over a leg), and the
+  strength checks read the peak. The fix to build is a fastener's: per station, the
+  footprint nodes of each leg onto a reference node by a distributing coupling, the
+  two reference nodes coincident and joined by six springs (rotations too), as beam
+  bolts' ends are (ADR 0027); `test_a_light_weld_passes_the_moment` is a strict xfail
+  until then.
 
 ## Plan
 

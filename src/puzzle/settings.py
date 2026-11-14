@@ -262,6 +262,24 @@ PREFERENCES: list[Preference] = [
         False,
         [("Pull up to bring the model nearer", False), ("Push down to bring it nearer", True)],
     ),
+    # Each other axis reversed on its own (ADR 0069): devices and hands differ.
+    *(
+        Preference(
+            f"mouse3d.invert_{key}",
+            "3D mouse",
+            name,
+            False,
+            [("As pushed", False), ("Reversed", True)],
+            text,
+        )  # fmt: skip
+        for key, name, text in (
+            ("pan_x", "Left and right", "The view's left and right moves."),
+            ("pan_y", "Up and down", "The view's up and down moves."),
+            ("tilt", "Tilt", "Turns about the view's horizontal."),
+            ("spin", "Spin", "Turns about the view's vertical."),
+            ("roll", "Roll", "Turns about the line of sight."),
+        )
+    ),
     Preference(
         "mouse3d.button_1",
         "3D mouse",
@@ -470,6 +488,21 @@ PREFERENCES: list[Preference] = [
         "background (ADR 0068, 0051): contact and other large solves factor 2 to 4 times "
         "faster, with the same answers. The plain CalculiX is used until it is done, and "
         "if the build fails. Settings > Solvers shows how it stands.",
+    ),
+    Preference(
+        "solvers.wsl_stage",
+        "Solvers",
+        "Puzzle's Linux machine: stage cases",
+        False,
+        [
+            ("Off: solve in place through /mnt", False),
+            ("On: copy the case to the machine's own disk", True),
+        ],
+        "Windows (ADR 0068 step 5): a solve in Puzzle's Linux machine reads and writes the "
+        "run folder through /mnt, which crosses the Windows file system. On, the case is "
+        "copied to the machine's own disk first and back after: faster on large cases, but "
+        "files the solver writes while running (CalculiX's .sta, OpenFOAM's logs) reach "
+        "the Solution panel only at the end.",
     ),
     *_connection_preferences(),
     Preference(

@@ -2881,8 +2881,9 @@ class Operator(ProjectObject):
     def _ports(self) -> Operator:
         from puzzle.operators import TYPES
 
-        known = {p.key for p in TYPES[self.type].inputs}
-        unknown = sorted(set(self.inputs) - known)
+        t = TYPES[self.type]
+        known = {p.key for p in t.inputs}
+        unknown = sorted(k for k in set(self.inputs) - known if t.input(k) is None)
         if unknown:
             raise ValueError(
                 f"a {self.type} operator has no input {', '.join(unknown)}; "
@@ -3382,6 +3383,39 @@ class Project:
             )
         ]
 
+    def _unassigned_parts(self, study, comp) -> list[Problem]:
+        """Parts no material assignment covers (its name, or a selection of it), said
+        before a run as `incomplete_material` is; suppressed parts and components that
+        solve only custom equations are left alone."""
+        from puzzle.errors import Problem
+        from puzzle.suppress import suppressed_parts
+
+        if not comp.physics or all(ph.type == "custom_pde" for ph in comp.physics):
+            return []
+        gone = suppressed_parts(self, comp)
+        own = {s.name: s for s in comp.selections}  # the component's: "*" is every body
+        covered: set[str] = set()
+        for a in comp.materials:
+            sel = own.get(a.selection)
+            if sel is not None:
+                members = [str(m) for m in sel.members]
+                if "*" in members:
+                    covered |= {p.name for p in comp.parts}
+                else:
+                    covered |= {m.split("/", 1)[0] for m in members}
+            else:
+                covered.add(a.selection.split("/", 1)[0])
+        bare = [p.name for p in comp.parts if p.name not in gone and p.name not in covered]
+        return [
+            Problem(
+                "no_material",
+                study.name,
+                f"study '{study.name}': part '{name}' of '{comp.name}' has no material assigned",
+                {"component": comp.name, "part": name},
+            )
+            for name in bare
+        ]
+
     def _incomplete_materials(self, study, comp) -> list[Problem]:
         """Materials lacking a property the study needs (ADR 0020), said before a run."""
         from puzzle.errors import Problem
@@ -3496,6 +3530,7 @@ class Project:
                     for ph in step.physics
                     if ph not in present
                 ]
+                out += self._unassigned_parts(study, comp)
                 out += self._incomplete_materials(study, comp)
             solvers = study.all_solvers()
             if len(set(solvers)) != len(solvers):

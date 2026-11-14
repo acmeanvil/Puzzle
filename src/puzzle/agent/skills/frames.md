@@ -68,8 +68,12 @@ a solid joint are other skills.
    gravity load. `notional_directions` is "x,y" by default (both senses of each, each a
    combination of its own named "<combination>, notional +x"), or "+x", "x" and so on.
    Gravity is along −z.
-6. CalculiX, Code_Aster and the others refuse combinations, `second_order` and
-   `direct_analysis` so far.
+6. CalculiX, Code_Aster and the other finite-element solvers take combinations too
+   (`puzzle.combine`): the study's one static step becomes a step per combination,
+   each case's loads factored, so each is solved as a load (right under contact or
+   large deflection, where adding results isn't). Only loads (forces, pressures, body
+   loads, heat flux...) may have a case there. `second_order` and `direct_analysis`
+   stay PyNite's.
 
 ## Results
 
@@ -96,7 +100,12 @@ a solid joint are other skills.
 4. Modal response spectrum: the modal step's settings `response_spectrum` true
    (`spectrum_directions` "x,y"). The study's combinations with Ex or Ey become "(+E)"
    and "(−E)" steps: static ± the CQC response, scaled up to the ELF base shear. The
-   spectrum itself is a step of kind `spectrum` per direction.
+   spectrum itself is a step of kind `spectrum` per direction. CalculiX and
+   Code_Aster take a spectrum on any model too (solids, shells, beams;
+   `puzzle.spectra` combines their modes), giving the spectrum steps with
+   displacement and stress. With a static step before the modal one, the study's
+   combinations with Ex or Ey become "(+E)" and "(−E)" steps there too (static ± the
+   envelope). Elmer and FEniCSx refuse a spectrum.
 5. Drift: `seismic_report(study)` gives each story's design drift C_d δ / I_e at the
    level's centre of mass against Table 12.12-1, for the spectrum steps and for
    combinations named exactly Ex or Ey (add {"name": "Ex", "factors": {"Ex": 1}} for

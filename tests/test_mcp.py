@@ -51,6 +51,12 @@ def test_agent_reads_the_model(root):
     assert _call(server, "problems") == []
     assert {"key": "copper", "name": "Copper"} in _call(server, "materials_library", text="cop")
     assert "solid_mechanics" in _call(server, "capabilities", solver="calculix")["physics"]
+    caps = _call(server, "capabilities", solver="calculix")
+    for key in ("axes_features", "amplitude_features", "time_schemes", "material_models"):
+        assert key in caps  # every field of the matrix, so the tool can't fall behind it
+    elmer = _call(server, "capabilities", solver="elmer")
+    assert "electric_currents" in elmer["planned_physics"]
+    assert "electric_currents" not in elmer["physics"]  # not written: never offered
 
 
 def test_agent_changes_are_proposed_and_attributed(root):

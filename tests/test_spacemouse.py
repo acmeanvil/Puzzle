@@ -316,3 +316,13 @@ def test_spacenavd_is_read_from_its_socket(tmp_path):
     with pytest.raises(OSError):
         reader.read()
     reader.close()
+
+
+def test_each_axis_reverses_on_its_own(monkeypatch):
+    """ADR 0069: per-axis invert, read from Settings > 3D mouse."""
+    from puzzle.gui.spacemouse import controller
+    from puzzle.settings import current
+
+    current().set("mouse3d.invert_spin", True)
+    found, _, _ = controller.settings_now()
+    assert found.invert == (False, False, False, False, True, False)

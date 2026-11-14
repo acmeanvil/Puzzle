@@ -160,8 +160,15 @@ def _run_study(
         except PuzzleError as exc:
             raise StudyError(exc.message, code=exc.code, path=study.name) from None
     keyed = project  # run keys come from the study as the user set it up
-    from puzzle import preload
+    from puzzle import combine, preload
 
+    combined: list[str] = []  # ADR 0079: a static step per combination, where not PyNite
+    seismic: dict = {}  # and, with a spectrum, each one's seismic factors
+    if combine.needed(study, adapter.capabilities):
+        try:
+            project, study, combined, seismic = combine.applied(project, study)
+        except PuzzleError as exc:
+            raise StudyError(exc.message, code=exc.code, path=study.name) from None
     # Bolts tightened in a step of their own before the loads, then locked (ADR 0037).
     project, study, preload_at = preload.applied(project, study)
     problems = project.validate() + adapter.check(project, study)
@@ -423,6 +430,16 @@ def _run_study(
             step.kind = kinds[step.index - 1]
         if step.index == preload_at:  # shown as "Preload" (StepResult.label)
             step.kind = preload.KIND
+    if combined:  # the preload step, when there is one, goes in front of them
+        combine.label(results, combined, first=2 if preload_at == 1 else 1)
+    from puzzle import spectra
+
+    if spectra.wanted(study) and not adapter.capabilities.frame_analysis:
+        try:  # ADR 0079 step 4: a response spectrum from the modes, CQC (puzzle.spectra)
+            spectra.applied(results, study, written)
+        except PuzzleError as exc:
+            raise StudyError(exc.message, code=exc.code, path=study.name) from None
+        combine.add_seismic(results, combined, seismic)  # ± E in the combinations
 
     run_id = None
     if store is not None:

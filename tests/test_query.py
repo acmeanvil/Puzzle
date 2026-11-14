@@ -84,3 +84,20 @@ def test_summary_and_errors(tmp_path):
     with pytest.raises(PuzzleError) as err:
         integrate(results, mesh, "temperature", "Bar/Nowhere")
     assert err.value.code == "not_found"
+
+
+def test_summary_names_each_step_by_what_it_is():
+    """A buckling mode's value is a load factor, not a frequency (ADR 0028)."""
+    g = Field("u", "global", [""], np.array([0]), np.array([[1.0]]))
+    steps = [
+        StepResult(1, "modal", 12.5, 1, {"u": g}),
+        StepResult(2, "buckling", 3.25, 1, {"u": g}),
+        StepResult(3, "frequency_domain", 40.0, None, {"u": g}),
+        StepResult(4, "transient", 0.5, None, {"u": g}),
+    ]
+    out = summary(Results("test", steps))
+    assert out[0]["frequency_hz"] == 12.5 and "load_factor" not in out[0]
+    assert out[1]["load_factor"] == 3.25 and "frequency_hz" not in out[1]
+    assert out[2]["frequency_hz"] == 40.0
+    assert out[3]["time_s"] == 0.5
+    assert out[1]["label"] == "Buckling mode 1: load factor 3.25"

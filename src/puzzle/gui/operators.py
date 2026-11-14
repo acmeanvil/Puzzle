@@ -65,7 +65,7 @@ def input_rows(window, op) -> list[tuple[str, str, list, object, str | None]]:
     takes a typed value has its text (empty when none) while it isn't wired."""
     project = window.session.project
     out = []
-    for spec in TYPES[op.type].inputs:
+    for spec in TYPES[op.type].ports_for(op):
         inp = op.inputs.get(spec.key)
         current, typed = None, None
         if inp is not None and inp.source is not None:
@@ -535,6 +535,31 @@ def export_now(window, op) -> None:
         return
     names = ", ".join(str(p.relative_to(window.session.root)) for p in written)
     window.statusBar().showMessage(f"Wrote {names}", 8000)
+
+
+def evaluate_here(window, op) -> list[str]:
+    """Evaluate up to here (ADR 0071 decision 4): run the studies the operator reads
+    that aren't up to date, sources of transfers first (ADR 0073), then show its value;
+    the ids of the studies queued."""
+    from puzzle.operators import studies_read
+
+    project = window.session.project
+    stale = [s for s in studies_read(project, op)
+             if window.states.get(str(s.id)) is None
+             or window.states[str(s.id)].state != "up_to_date"]  # fmt: skip
+    if stale:
+        names = ", ".join(s.name for s in stale)
+        window.run_studies([str(s.id) for s in stale])
+        window.statusBar().showMessage(
+            f"Running {names} for {op.name}: its value shows when they finish", 10000
+        )
+        return [str(s.id) for s in stale]
+    from puzzle.operators import evaluate as ev
+
+    text, _verdict = ev.shown(ev.Context(project, window._store()), op)
+    window.statusBar().showMessage(f"{op.name}: {text}", 10000)
+    window.refresh()
+    return []
 
 
 def show_plot(window, op) -> None:

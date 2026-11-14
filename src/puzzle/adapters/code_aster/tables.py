@@ -80,6 +80,15 @@ def nodal_fields(rows: list[dict[str, str]], name: str, comps=None) -> dict[int,
     return out
 
 
+def _total_mass(rows: list[dict[str, str]]) -> float:
+    """POST_ELEM MASS_INER's whole-model mass (the row for the whole model, LIEU 00000001
+    or TOUT): 0 when not printed."""
+    for r in rows:
+        if r.get("MASSE") not in (None, "", "-"):
+            return float(r["MASSE"])
+    return 0.0
+
+
 def read_results(workdir: Path) -> Results:
     results = Results(solver="code_aster")
     tables = {p.stem: read_table(p) for p in workdir.glob("*.csv")}
@@ -93,8 +102,20 @@ def read_results(workdir: Path) -> Results:
     if "frequency" in tables:
         frequencies = {int(r["NUME_ORDRE"]): float(r["FREQ"]) for r in tables["frequency"]}
         shapes = nodal_fields(tables.get("displacement", []), "displacement")
+        stresses = nodal_fields(tables.get("stress", []), "stress")
+        rows = {int(r["NUME_ORDRE"]): r for r in tables["frequency"]}
+        mass = _total_mass(tables.get("mass", []))
         for order in sorted(frequencies):
             fields = {"displacement": shapes[order]} if order in shapes else {}
+            if order in stresses:
+                fields["stress"] = stresses[order]
+            r = rows[order]
+            if "FACT_PARTICI_DX" in r and mass:  # ADR 0079 step 4: for a spectrum
+                from puzzle.spectra import participation_fields
+
+                fields.update(participation_fields(
+                    [float(r[f"FACT_PARTICI_D{a}"]) for a in "XYZ"],
+                    [float(r[f"MASS_EFFE_D{a}"]) for a in "XYZ"], [mass] * 3))  # fmt: skip
             results.steps.append(StepResult(1, "modal", frequencies[order], order, fields))
         return results
     # One result step per stored instant (NUME_ORDRE); a static solve has one.

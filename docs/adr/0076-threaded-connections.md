@@ -316,7 +316,9 @@ are the next build; steps 4-6 follow.
   Make it a thread… / Remove the thread, Model → Contacts → Thread on a contact…; Find
   contacts' Thread column for coaxial cylinders; the Advisor's note; schematic wires
   for `contacts[].thread.cs` and `connectors[].thread.cs` (`puzzle/thread_setup.py`).
-  The profile drawing in Properties isn't done.
+  The profile drawn in Properties: built 2026-11-13 (`gui/thread_profile.py`: the
+  basic tooth outline over two pitches at its own flank angles, the pitch line, and the
+  pitch, angles and diameters beside it).
 
 Run keys: `Contact.thread` is in the contact's hash. Changing a form reruns, but naming a
 group does not.

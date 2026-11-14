@@ -174,6 +174,10 @@ def mesh_id(mesh: Mesh) -> str:
     return h.hexdigest()[:32]
 
 
+COMPACT_EVERY = 40
+"""Small files in the runs table before a write compacts the store (`maybe_compact`)."""
+
+
 class ResultStore:
     def __init__(self, root: Path) -> None:
         self.root = root
@@ -223,6 +227,7 @@ class ResultStore:
             "image_digest": image_digest,
         }
         self._append("runs", pa.Table.from_pylist([record], schema=SCHEMAS["runs"]))
+        self.maybe_compact()
         return run_id
 
     def write_progress(self, run_id: str, events: list) -> None:
@@ -406,12 +411,25 @@ class ResultStore:
         return gone
 
     def compact(self) -> None:
-        """Merge small Parquet files (each run appends a few) into larger ones."""
+        """Merge small Parquet files (each run appends a few) into larger ones, checkpoint
+        each table's log (so opening it reads one file, not every commit), and remove
+        files older than a week that no version reads any more. A reader holding an
+        older snapshot keeps working: nothing younger than the retention is removed."""
         for name in SCHEMAS:
             if self._exists(name):
-                DeltaTable(str(self.root / name)).optimize.compact(
-                    writer_properties=WRITERS.get(name, WRITER)
-                )
+                table = DeltaTable(str(self.root / name))
+                table.optimize.compact(writer_properties=WRITERS.get(name, WRITER))
+                table.create_checkpoint()
+                table.vacuum(dry_run=False)  # Delta's default retention: 7 days
+
+    def maybe_compact(self, every: int = COMPACT_EVERY) -> bool:
+        """Compact once the runs table holds `every` small files: each stored run adds
+        one to most tables, and opening many slows every read (ADR 0008). Called after
+        each run is written; True when it compacted."""
+        if not self._exists("runs") or len(DeltaTable(str(self.root / "runs")).file_uris()) < every:
+            return False
+        self.compact()
+        return True
 
     # --- internals ---------------------------------------------------------------
 

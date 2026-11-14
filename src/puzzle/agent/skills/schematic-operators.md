@@ -90,9 +90,12 @@ What to do with them (units follow; a mismatch is refused with the reason):
 - `envelope` (`reduction` max, min or mean over the curves wired in), `area_under`
   (a number; one curve only), `slope` (dy/dx).
 - `limit_line` (a number, drawn dashed across) and `annotate` (marks the largest or
-  smallest point; `note` labels it) go into `plot`, whose inputs `value`, `b`, `c`, `d`
-  take up to four curves of one x and one y quantity. Its `curves` output is what the
-  Plots panel draws.
+  smallest point; `note` labels it) go into `plot`, whose inputs `value`, `b`, `c`, `d`,
+  then `curve5`, `curve6` and so on take any number of curves of one x and one y
+  quantity. Its `curves` output is what the Plots panel draws.
+- `operator_value` lists `needs_runs`: the studies an operator reads (through every
+  operator upstream) that aren't up to date. Run those first (run_study each), as the
+  GUI's Evaluate up to here does.
 
 `operator_value` gives a curve as a summary, never every point: its axes and units,
 `curve_count`, and per curve its `max`, `x_at_max`, `min`, `x_at_min`, a 5-point

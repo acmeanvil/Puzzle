@@ -1,6 +1,6 @@
 # 0041. Structural dynamics: transient and harmonic response
 
-- Status: Accepted (2026-10-25, the maintainer); built 2026-10-25 on CalculiX (direct and modal) and Code_Aster (direct), 2026-10-31 on FEniCSx and Elmer (direct)
+- Status: Accepted (2026-10-25, the maintainer); built 2026-10-25 on CalculiX (direct and modal) and Code_Aster (direct), 2026-10-31 on FEniCSx and Elmer (direct); large-deflection transients with ADR 0082 (2026-11-12); explicit dynamics is ADR 0085
 - Date: 2026-10-23
 
 ## Context

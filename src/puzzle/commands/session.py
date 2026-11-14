@@ -560,7 +560,7 @@ class Session:
                 and e["actor"]["kind"] == "agent"
                 and not e.get("result", {}).get("cached")
             ):
-                runs += 1
+                runs += e.get("result", {}).get("solved", 1)  # a sweep: its fresh points
                 seconds += e.get("result", {}).get("duration_s", 0.0)
                 core_hours += e.get("result", {}).get("core_hours", 0.0)
         return {"runs": runs, "solver_seconds": seconds, "core_hours": core_hours}
@@ -627,7 +627,37 @@ class Session:
                 code="budget_exceeded",
                 details={"budget": budget.model_dump(), "used": used},
             )
+        fresh = self._fresh_points(cmd)
+        if used["runs"] + fresh > budget.runs:  # a sweep would overrun it part way
+            raise PuzzleError(
+                f"the sweep would solve {fresh} points and the agent has "
+                f"{budget.runs - used['runs']:g} runs left; propose the run instead",
+                code="budget_exceeded",
+                details={"budget": budget.model_dump(), "used": used, "points": fresh},
+            )
         return min(cmd.timeout_s or left, left)
+
+    def _fresh_points(self, cmd: RunStudy) -> int:
+        """How many runs a study would solve now: 1, or a sweep's points not already in
+        the store (reused points cost nothing)."""
+        from puzzle import sweep
+        from puzzle.project.graph import run_hashes
+        from puzzle.results.store import ResultStore
+
+        study = resolve(self.project, cmd.study, Study)
+        if sweep.run_count(study) <= 1:
+            return 1
+        try:
+            keys = run_hashes(self.project)[study.id][study.solver]
+        except Exception:  # noqa: BLE001 - not countable yet: count every point
+            return sweep.run_count(study)
+        store = ResultStore(self.root / RESULTS_DIR)
+        if not cmd.reuse:
+            return len(keys)
+        try:
+            return sum(store.find_run(k) is None for k in keys)
+        except Exception:  # noqa: BLE001 - no store yet (or a stale one): all are new
+            return len(keys)
 
     def _apply(
         self,
@@ -816,6 +846,12 @@ class Session:
                 "min_quality": run.mesh_result.min_quality,
                 "warnings": run.mesh_result.warnings,
             }
+        if run.points:  # a sweep spends a run per point it solves, not one for them all
+            fresh = [r for _, r in run.points if not r.cached]
+            data["solved"] = len(fresh)
+            data["duration_s"] = sum(r.job.duration_s for r in fresh if r.job is not None)
+            if on:
+                data["core_hours"] = _cores_on(on, study) * data["duration_s"] / 3600
         if run.events and not run.cached:  # how it converged, in counts (ADR 0054)
             from puzzle.progress import summary as progress_summary
 

@@ -45,7 +45,7 @@ def test_modal_and_heat_cases(tmp_path):
         SolveStep(type="modal", settings={"modes": 3}),
     )
     comm = (export.parent / "job.comm").read_text(encoding="utf-8")
-    assert "CALC_MODES" in comm and "NMAX_FREQ=3" in comm and "NOM_PARA='FREQ'" in comm
+    assert "CALC_MODES" in comm and "NMAX_FREQ=3" in comm and "'FREQ', 'FACT_PARTICI_DX'" in comm
     hot = Feature(
         type="temperature", selection="Bar/Root", values={"T": Quantity(value=100, unit="degC")}
     )

@@ -25,9 +25,13 @@ from puzzle.results.model import Field, Results, StepResult
 def summary(results: Results) -> list[dict[str, Any]]:
     out = []
     for step in results.steps:
-        entry: dict[str, Any] = {"step": step.index, "kind": step.kind}
-        if step.mode is not None:
+        entry: dict[str, Any] = {"step": step.index, "kind": step.kind, "label": step.label()}
+        if step.kind == "buckling" and step.mode is not None:  # ADR 0028: a load factor
+            entry |= {"mode": step.mode, "load_factor": step.value}
+        elif step.mode is not None:
             entry |= {"mode": step.mode, "frequency_hz": step.value}
+        elif step.kind == "frequency_domain":  # a harmonic response (ADR 0041)
+            entry["frequency_hz"] = step.value
         elif step.kind == "transient":
             entry["time_s"] = step.value
         entry["fields"] = {}

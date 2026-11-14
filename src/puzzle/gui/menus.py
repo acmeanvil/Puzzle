@@ -434,6 +434,7 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
     elif obj is not None and obj.kind == "operator" and node.kind == "object":
         from puzzle.gui import operators
 
+        add("Evaluate up to here", lambda: operators.evaluate_here(window, obj))
         if obj.type in ("export", "report"):
             add("Export now", lambda: operators.export_now(window, obj))
         if obj.type == "plot":
@@ -847,7 +848,9 @@ def new_component(window):
     return window.submit(Create(kind="component", data=data))
 
 
-def new_study(window):
+def new_study(window, component: str | None = None):
+    """The New study form; `component` (a name) chosen already, as when a study is
+    dragged out of a component in the schematic (ADR 0071 decision 4)."""
     from puzzle.adapters import available_adapters
 
     project = window.session.project
@@ -876,7 +879,12 @@ def new_study(window):
     got = window.ask_form(
         "New study",
         [
-            Ask("component", "Component", choices=[(c, c) for c in sorted(comps)]),
+            Ask(
+                "component",
+                "Component",
+                choices=[(c, c) for c in sorted(comps)],
+                default=component if component in comps else None,
+            ),
             Ask(
                 "solver",
                 "Solver",

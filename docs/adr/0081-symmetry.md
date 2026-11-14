@@ -127,7 +127,7 @@ per solver.
 
 ## Benchmarks
 
-All in `tests/integration/test_symmetry.py`:
+All in `tests/integration/test_symmetry_solved.py`:
 
 - **An eighth of a bar in tension**, held only by three symmetry planes. On CalculiX,
   Code_Aster, Elmer and FEniCSx, the end moves σL/E and the sides draw in νσb/E

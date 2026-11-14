@@ -16,8 +16,13 @@ Recipe fields:
 
 - `mesher`: "gmsh" (default) or "netgen";
 - `element_order`: 1 or 2 (default 2);
-- `element_shape`: "tetrahedra" (default) or "hexahedra" (structured, block-like
-  bodies only: six faces of four edges; first order only; Gmsh only);
+- `element_shape`: "tetrahedra" (default) or "hexahedra" (structured; Gmsh only):
+  block-like bodies (six faces of four edges), and bodies of revolution (shafts,
+  pins, tubes, stepped bushes: planes square to one axis and coaxial cylinders), which
+  are cut into blocks when meshed. Cones (chamfers) and tori (fillets) aren't, nor a
+  body sharing a face with another: they are refused, with the reason in the warnings;
+- `hexahedron_nodes`: 20 (serendipity, CalculiX's C3D20) or 27 (Lagrange) at second
+  order;
 - `global_size`: a quantity, the largest element size. Without it Netgen's largest
   size is a tenth of the model; Gmsh sets no largest size and sizes from the
   geometry (its points and curvature); a refine-near control grows back to a tenth
@@ -87,7 +92,6 @@ and ball centres are plain numbers in metres. `growth`, `progression`, `count`,
 - A Gmsh option name Gmsh doesn't have.
 - Boundary layers on Gmsh (set `mesher` to "netgen"); refine near, transfinite, box,
   ball and hexahedra on Netgen.
-- Second-order hexahedra.
 
 ## Mistakes to avoid
 

@@ -131,6 +131,18 @@ names, units and no raw data on view.
 6. Each step is driven through MCP too (decision 6): its tools, its documentation
    served, its tests, and the `schematic-operators` skill.
 
+## Built: the leftovers (2026-11-13)
+
+- **Plot of any number of curves**: past Curve 4 a new socket (`curve5`...) appears as
+  each is wired (`OperatorType.more`, `ports_for(op)` in the schematic, Properties and
+  the operator's own check).
+- **Evaluate up to here**: an operator's right-click (the tree's and the schematic's)
+  runs the studies it reads, through every operator and result tool upstream
+  (`operators.studies_read`), that aren't up to date, in the run queue's order, then
+  shows its value; MCP `operator_value` returns them as `needs_runs`.
+- **A study dragged out of a component**: a wire from a component let go on the empty
+  canvas opens New study with that component chosen (`menus.new_study(component=)`).
+
 ## Consequences
 
 - Answers an engineer asks for (utilisation, margins, normalised curves, step
@@ -238,9 +250,11 @@ names, units and no raw data on view.
   Normalise (by a number, a curve, or each curve's largest size); Curve formula (over x,
   y and wired a, b, c); At step; Compare with step (difference or ratio, or a history
   against one step's value); Envelope (max, min or mean); Match x values; Area under
-  curve; Slope; Limit line; Annotate. Plot takes up to four curves (`value`, `b`, `c`,
-  `d`) of one x and one y quantity and gives them as `curves`; the Plots panel draws
-  limit lines dashed across and annotations labelled.
+  curve; Slope; Limit line; Annotate. Plot takes any number of curves (`value`, `b`,
+  `c`, `d`, then `curve5`, `curve6`...: a socket appears as each is wired,
+  `OperatorType.more` and `ports_for`, 2026-11-13) of one x and one y quantity and
+  gives them as `curves`; the Plots panel draws limit lines dashed across and
+  annotations labelled.
 - Units follow through Puzzle's expression language: stress ÷ stress is a pure number,
   a stress plus a temperature is refused with the reason, curves with different x
   values are refused with "Match x values first". New quantity kinds for what curves

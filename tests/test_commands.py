@@ -266,3 +266,20 @@ def test_batches_follow_the_autonomy_level_and_hold_edits_only(root):
     assert len(proposal["commands"]) == 2
     with pytest.raises(PuzzleError, match="on its own"):
         s.submit_batch([_edit(-300), {"command": "run_study", "study": "Tip load"}])
+
+
+def test_a_sweep_spends_a_run_per_point_it_solves(root):
+    """ADR 0072 phase 0: a sweep of two points with one run left is refused before it
+    starts, not counted as one run."""
+    s = Session(root)
+    steel = "34d8d775-387f-4dbb-8c92-7867b125927d"
+    sweep = {"type": "parametric_sweep", "parameters": [
+        {"name": "Body", "location": "Bar/Body", "materials": [steel, steel]}]}  # fmt: skip
+    study = next(x for x in s.project.objects.values() if getattr(x, "name", "") == "Tip load")
+    steps = [sweep] + [step.model_dump(mode="json") for step in study.steps]
+    s.submit({"command": "edit", "object": "Tip load",
+              "ops": [{"op": "set", "path": "steps", "value": steps}]})  # fmt: skip
+    _set_level(s, "act_in_budget", budget={"runs": 1, "solver_seconds": 600})
+    with pytest.raises(PuzzleError) as err:
+        s.submit({"command": "run_study", "study": "Tip load"}, AGENT)
+    assert err.value.code == "budget_exceeded" and err.value.details["points"] == 2

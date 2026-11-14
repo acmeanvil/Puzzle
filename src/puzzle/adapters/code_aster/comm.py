@@ -73,6 +73,7 @@ TABLES = {
     "beam_forces": 89,
     "displacement_imag": 91,  # a harmonic response's imaginary part (ADR 0041)
     "contact": 92,  # CONT_NOEU on the slave nodes (ADR 0056)
+    "mass": 93,  # POST_ELEM's MASS_INER: the model's mass, for a spectrum's fractions
 }
 FORMAT_R = "1PE18.10"
 
@@ -1019,12 +1020,26 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             "NUME_DDL=CO('numddl'),",
             "           MATR_ASSE=(_F(MATRICE=CO('stiff'), OPTION='RIGI_MECA'),",
             "                      _F(MATRICE=CO('mass'), OPTION='MASS_MECA')))",
+            # unit generalised mass, as CalculiX's: a spectrum scales the shapes by
+            # their modal coordinates (puzzle.spectra)
             "res = CALC_MODES(MATR_RIGI=stiff, MATR_MASS=mass, OPTION='PLUS_PETITE', "
-            f"CALC_FREQ=_F(NMAX_FREQ={n}))",
+            f"CALC_FREQ=_F(NMAX_FREQ={n}), NORM_MODE=_F(NORME='MASS_GENE'))",
             _table("res", "DEPL", "displacement"),
-            f"IMPR_TABLE(TABLE=RECU_TABLE(CO=res, NOM_PARA='FREQ'), UNITE={TABLES['frequency']}, "
-            f"FORMAT='TABLEAU', SEPARATEUR=',', FORMAT_R='{FORMAT_R}')",
+            "IMPR_TABLE(TABLE=RECU_TABLE(CO=res, NOM_PARA=('FREQ', 'FACT_PARTICI_DX', "
+            "'FACT_PARTICI_DY', 'FACT_PARTICI_DZ', 'MASS_EFFE_DX', 'MASS_EFFE_DY', "
+            f"'MASS_EFFE_DZ')), UNITE={TABLES['frequency']}, FORMAT='TABLEAU', "
+            f"SEPARATEUR=',', FORMAT_R='{FORMAT_R}')",
+            f"IMPR_TABLE(TABLE=POST_ELEM(MODELE=model, CHAM_MATER=mater, {cara}"
+            f"MASS_INER=_F(TOUT='OUI')), UNITE={TABLES['mass']}, FORMAT='TABLEAU', "
+            f"SEPARATEUR=',', FORMAT_R='{FORMAT_R}')",
         ]
+        if step.settings.get("response_spectrum") and (
+            mesh.planar or any(b.dim == 3 for b in mesh.blocks)
+        ):  # each mode's stresses, for the CQC
+            out += [
+                "res = CALC_CHAMP(reuse=res, RESULTAT=res, CONTRAINTE=('SIGM_NOEU',))",
+                _table("res", "SIGM_NOEU", "stress"),
+            ]
     elif (touching or nlgeom or plastic or gaps or initial or (threads and threads.gaps)
           or chain or mixed):  # fmt: skip
         solids = mesh.planar or any(b.dim == 3 for b in mesh.blocks)
@@ -1138,9 +1153,9 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             + (
                 "CONTRAINTE=("
                 + ("'SIGM_NOEU'," if solids else "")
-                + (" 'EFGE_NOEU'," if bolt_beams else "")
+                + (" 'EFGE_NOEU'," if bolt_beams or (beam_parts and not nlgeom) else "")
                 + "), "
-                if solids or bolt_beams
+                if solids or bolt_beams or (beam_parts and not nlgeom)
                 else ""
             )  # a frame of POU_D_T_GD alone has neither
             + "FORCE=('REAC_NODA',)"
@@ -1153,7 +1168,23 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             *([_table("res", "SIGM_NOEU", "stress", which)] if solids else []),
             _table("res", "REAC_NODA", "reaction_force", which),
             *([_table("res", "CONT_NOEU", "contact", which)] if touching else []),
-            *([_table("res", "EFGE_NOEU", "beam_forces", which)] if bolt_beams else []),
+            *(
+                [_table("res", "EFGE_NOEU", "beam_forces", which)]
+                if bolt_beams or (beam_parts and not nlgeom)
+                else []
+            ),
+            # POU_D_T_GD has no EFGE_ELNO (te0185 asserts): its section forces N, VY,
+            # VZ, MT, MFY, MFZ are its generalised stresses, SIEF, on the beams alone
+            *(
+                [
+                    "res = CALC_CHAMP(reuse=res, RESULTAT=res, GROUP_MA=("
+                    + "".join(f"'{names[p]}', " for p in beam_parts)
+                    + "), CONTRAINTE=('SIEF_ELNO', 'SIEF_NOEU'))",
+                    _table("res", "SIEF_NOEU", "beam_forces", which),
+                ]
+                if beam_parts and nlgeom and not bolt_beams
+                else []
+            ),
             *(
                 [
                     *([] if mixed else [_table("res", "EPSP_NOEU", "plastic_strain", which)]),
@@ -1189,7 +1220,8 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         {"temperature"}
         if thermal
         else (
-            {"displacement", "frequency"}
+            {"displacement", "frequency", "mass"}
+            | ({"stress"} if step.settings.get("response_spectrum") else set())
             if step.type == "modal"
             else {"displacement", "buckling"}
             if step.type == "buckling"

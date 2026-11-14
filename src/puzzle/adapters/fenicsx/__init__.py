@@ -47,12 +47,14 @@ class FenicsxAdapter(SolverAdapter):
     max_solve_steps = 1
     capabilities = Capabilities(
         welds=frozenset({"line"}),  # ADR 0078 step 3: springs added to K, as threads'
+        planned_physics={  # not written yet (ADR 0072): listed, never offered as working
+            "electric_currents": frozenset({"stationary"}),
+            "electromagnetic_waves": frozenset({"frequency_domain"}),
+        },
         physics={
             "custom_pde": frozenset({"stationary", "transient", "frequency_domain", "modal"}),
             "electrostatics": frozenset({"stationary"}),
-            "electric_currents": frozenset({"stationary"}),
             "magnetic_fields": frozenset({"stationary", "transient", "frequency_domain"}),
-            "electromagnetic_waves": frozenset({"frequency_domain"}),
             "heat_transfer": frozenset({"stationary", "transient"}),
             "solid_mechanics": frozenset({"stationary", "modal", "transient", "frequency_domain"}),
         },

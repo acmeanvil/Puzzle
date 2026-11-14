@@ -2,8 +2,6 @@
 with a time limit, away from the project's files, only in a trusted project, proposed
 by agents below "act", and hashed so what they feed goes stale."""
 
-import sys
-
 import pytest
 
 from puzzle.errors import PuzzleError
@@ -70,7 +68,7 @@ def test_a_failing_script_says_why():
 
 
 @needs_env
-@pytest.mark.skipif(sys.platform != "darwin", reason="the folder is denied by sandbox-exec")
+@pytest.mark.skipif(scripts.kind() == "none", reason="no sandbox here (Linux without bwrap)")
 def test_a_script_cannot_read_the_project(tmp_path):
     (tmp_path / "secret.txt").write_text("the project's own file", encoding="utf-8")
     code = f"out = open({str(tmp_path / 'secret.txt')!r}).read()"
@@ -78,6 +76,29 @@ def test_a_script_cannot_read_the_project(tmp_path):
         scripts.run(code, {}, project_root=tmp_path)
     assert exc.value.code == "script_failed"
     assert scripts.run("out = 2 + 2", {}, project_root=tmp_path) == 4  # the rest still runs
+
+
+@needs_env
+@pytest.mark.skipif(scripts.kind() == "none", reason="no sandbox here (Linux without bwrap)")
+def test_a_script_has_no_network():
+    code = "import socket\nout = socket.getaddrinfo('example.com', 80)[0][4][0]"
+    with pytest.raises(PuzzleError) as exc:
+        scripts.run(code, {})
+    assert exc.value.code == "script_failed"
+
+
+def test_bubblewrap_hides_the_project_and_the_network(tmp_path, monkeypatch):
+    """Linux (ADR 0072): the system read-only, the project an empty tmpfs, the run's own
+    folder writable, every namespace unshared (no network)."""
+    import shutil
+
+    monkeypatch.setattr(scripts.sys, "platform", "linux")
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/bwrap")
+    argv = scripts._sandbox(["python", "-I", "runner.py"], tmp_path / "project", tmp_path / "w")
+    assert argv[0] == "/usr/bin/bwrap" and "--unshare-all" in argv
+    assert argv[argv.index("--tmpfs") + 1] == str((tmp_path / "project").resolve())
+    assert argv[argv.index("--bind") + 1] == str(tmp_path / "w")
+    assert argv[-3:] == ["python", "-I", "runner.py"]
 
 
 @needs_env

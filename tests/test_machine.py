@@ -66,3 +66,25 @@ def test_nothing_is_asked_of_wsl_without_a_puzzle_distribution(tmp_path, monkeyp
     monkeypatch.setattr(machine, "_home", lambda: tmp_path / "none")
     monkeypatch.setattr(machine, "distros", lambda: pytest.fail("asked WSL"))
     assert machine.installed() == {}
+
+
+def test_a_staged_solve_runs_on_the_machines_own_disk(tmp_path, monkeypatch):
+    """`solvers.wsl_stage` (ADR 0068 step 5): copied in before, back after, solved there."""
+    calls = []
+    monkeypatch.setattr(machine, "wsl", lambda: "wsl.exe")
+    monkeypatch.setattr(machine, "linux_path", lambda p: "/mnt/c/run")
+    monkeypatch.setattr(machine, "_run", lambda argv, timeout=600: calls.append(argv) or
+                        type("Done", (), {"returncode": 0, "stderr": b""})())  # fmt: skip
+    rt = machine.WslRuntime("elmer", "puzzle-elmer", stage=True)
+    there = rt.staged(tmp_path)
+    assert there.startswith("/tmp/puzzle-run/")
+    rt.prepare(["ElmerSolver"], tmp_path)
+    argv = rt.wrap(["ElmerSolver", "case.sif"], tmp_path)
+    rt.finish(tmp_path)
+    assert argv[argv.index("--cd") + 1] == there
+    assert "cp -a '/mnt/c/run/.'" in calls[0][-1] and f"'{there}/'" in calls[0][-1]
+    assert f"cp -a '{there}/.' '/mnt/c/run/'" in calls[1][-1]
+    plain = machine.WslRuntime("elmer", "puzzle-elmer")
+    assert (
+        plain.wrap(["x"], tmp_path)[plain.wrap(["x"], tmp_path).index("--cd") + 1] == "/mnt/c/run"
+    )

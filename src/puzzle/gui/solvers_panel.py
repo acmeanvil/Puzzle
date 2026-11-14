@@ -82,9 +82,17 @@ class SolversPanel(QWidget):
         self.repair.setToolTip("Reinstall one of the installed app's solver environments "
                                "from its package list (downloads its packages again)")  # fmt: skip
         self.repair.clicked.connect(self._repair)
+        self.wsl = QPushButton("Turn on WSL…")
+        self.wsl.setToolTip(
+            "Puzzle's Linux machine (ADR 0068) runs solvers in WSL 2: turn "
+            "it on here, with one Windows prompt (a restart may follow)"
+        )
+        self.wsl.clicked.connect(self._enable_wsl)
+        self.wsl.setVisible(False)  # shown once a look finds WSL off (Windows only)
         row = QHBoxLayout()
         row.addWidget(self.build)
         row.addWidget(self.repair)
+        row.addWidget(self.wsl)
         row.addStretch()
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 8, 0, 0)
@@ -123,6 +131,12 @@ class SolversPanel(QWidget):
             try:
                 _STATE["pardiso"] = solver_builds.status()
                 _STATE["rows"] = solver_builds.solvers()
+                import os
+
+                if os.name == "nt":
+                    from puzzle.jobs import machine
+
+                    _STATE["wsl_off"] = not machine.wsl_ready()
             except Exception as exc:  # shown, never raised into Qt
                 _STATE["rows"] = []
                 _STATE["line"] = f"couldn't list the solvers: {exc}"
@@ -130,6 +144,16 @@ class SolversPanel(QWidget):
                 _STATE["looking"] = False
 
         threading.Thread(target=work, name="solvers-look", daemon=True).start()
+
+    def _enable_wsl(self) -> bool:
+        """WSL on, through Windows' own elevation prompt (`machine.enable_wsl`)."""
+        from puzzle.jobs import machine
+
+        asked = machine.enable_wsl()
+        _STATE["line"] = ("Windows is turning WSL on; restart if it asks, then Puzzle can "
+                          "make its Linux machine." if asked else
+                          "WSL wasn't turned on (the prompt was declined).")  # fmt: skip
+        return asked
 
     def _repair(self, name: str | None = None) -> bool:
         """Pick an environment and reinstall it on a thread (ADR 0068 decision 6)."""
@@ -185,6 +209,7 @@ class SolversPanel(QWidget):
                 value.setWordWrap(True)
                 self.list.addRow(r.name, value)
             self.checking.setVisible(False)
+        self.wsl.setVisible(bool(_STATE.get("wsl_off")))
         status = solver_builds.status() if not building() else None
         if status is not None:
             _STATE["pardiso"] = status

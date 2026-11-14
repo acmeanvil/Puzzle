@@ -633,10 +633,11 @@ def _plot(ctx: Context, op) -> dict[str, Any]:
         first = sr.from_table(table, table.columns[0], table.columns[1], op.name,
                               along="" if isinstance(got, Table) else along)  # fmt: skip
         parts = [first]
-    for i, key in enumerate("bcd"):
-        more = _input(ctx, op, key)
+    t = TYPES[op.type]
+    for i, spec in enumerate(t.ports_for(op)[1:], start=2):  # Curve 2, 3, 4, then curve5...
+        more = _input(ctx, op, spec.key)
         if more is not None:
-            parts.append(sr.as_series(op, more, f"curve {i + 2}"))
+            parts.append(sr.as_series(op, more, f"curve {i}"))
     curves = sr.together(op, parts)
     if table is None:
         table = curves.table()

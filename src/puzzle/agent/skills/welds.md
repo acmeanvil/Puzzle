@@ -101,7 +101,17 @@ depend on the mesh. Each station's ranges then go through:
 N comes from Table 3-F.2M's curve (`basis`, default −3σ, the design curve;
 `material` steel or aluminium). With `cycles`, the result also gives the damage
 n/N. A shell's thickness is taken from its section; give `thickness_m` for a solid.
-The flange-side toe (the plate the weld sits on) isn't covered.
+
+`side="plate"` checks the other toe, on the plate the weld sits on, a leg from the
+path (light welds on solids). The plate carries load past the toe as well as the
+weld's, so this reads the plate's own section through its thickness there (its
+thickness measured unless `thickness_m` is given): membrane and bending about its
+mid-plane. A plate pulled past an unloaded rib: 20.00 MPa membrane against 20.
+
+A light weld's springs act along x, y and z between nodes on the two legs, which
+don't coincide, so each pair loses the couple its forces' offset makes: forces are
+right, moments carried through the weld are not (a lap joint's plate passed 23.5 of
+the 100 N·m equilibrium asks). Where the weld itself carries bending, model the bead.
 
 ## Modelled welds (ADR 0078 step 4)
 

@@ -185,6 +185,38 @@ def test_plot_takes_curves_a_limit_line_and_a_note(setup):
     ]
 
 
+def test_plot_takes_any_number_of_curves(setup):
+    """ADR 0072 phase 1: past Curve 4, a new socket appears as each is wired."""
+    p, study, steel, path, store = setup
+    from puzzle.operators import TYPES
+
+    sy = p.add(Operator(name="Sy", type="model_value", target=steel.id,
+                        property="properties.yield_strength"))  # fmt: skip
+    lines = [op(p, "limit_line", f"Line {i}", value=wire(sy)) for i in range(5)]
+    plot = op(p, "plot", "Many", value=wire(path, "along"), b=wire(lines[0]),
+              c=wire(lines[1]), d=wire(lines[2]), curve5=wire(lines[3]),
+              curve6=wire(lines[4]))  # fmt: skip
+    keys = [s.key for s in TYPES["plot"].ports_for(plot)]
+    assert keys == ["value", "b", "c", "d", "curve5", "curve6", "curve7"]  # one empty
+    curves = ev.outputs(ev.Context(p, store), plot)["curves"]
+    assert sum(c.style == "limit" for c in curves.curves) == 5
+    with pytest.raises(ValueError, match="no input"):
+        Operator(name="Bad", type="plot", inputs={"zz": {"value": 1.0}})
+
+
+def test_evaluate_up_to_here_finds_the_studies_upstream(setup):
+    """ADR 0071 decision 4: through operators and result tools to the studies read."""
+    p, study, steel, path, store = setup
+    from puzzle.operators import studies_read
+
+    note = op(p, "annotate", "Peak", series=wire(path, "along"))
+    plot = op(p, "plot", "Wall stress", value=wire(note))
+    assert [s.id for s in studies_read(p, plot)] == [study.id]
+    sy = p.add(Operator(name="Sy", type="model_value", target=steel.id,
+                        property="properties.yield_strength"))  # fmt: skip
+    assert studies_read(p, op(p, "limit_line", "Yield", value=wire(sy))) == []
+
+
 def test_a_table_wires_where_a_curve_is_wanted_and_model_tables_too(setup):
     p, study, steel, path, store = setup
     from puzzle.model.schema import PropertyTable, TablePoint

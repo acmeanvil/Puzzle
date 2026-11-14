@@ -93,7 +93,7 @@ point elements with `K_T_D_N` on one-node groups. Both serve `elastic_support` a
    - MCP `weak_springs` lists, per study, the bodies, nodes and stiffnesses before a
      solve, and the forces after it.
    - The `contact-tool` skill gains a section on reading `weak_springs_carry`.
-8. **Benchmarks** (`tests/integration/test_weak_springs.py`, CalculiX and Code_Aster):
+8. **Benchmarks** (`tests/integration/test_weak_springs_solved.py`, CalculiX and Code_Aster):
    - **Cover on a flange:** a block pressed onto a held block through frictional contact.
      Without springs the solve fails. With springs, the contact force matches the applied
      load within 0.1 %, and the springs carry less than 1e-4 of it.
@@ -122,7 +122,7 @@ point elements with `K_T_D_N` on one-node groups. Both serve `elastic_support` a
 - **Agent.** MCP `weak_springs` gives a study's mode, bodies and the latest run's spring
   force.
 - **Benchmarks.**
-  - `tests/integration/test_weak_springs.py`: the split bar's right half pressed onto the
+  - `tests/integration/test_weak_springs_solved.py`: the split bar's right half pressed onto the
     held left half through frictional contact (CalculiX, Code_Aster) and frictionless
     contact (CalculiX). The reaction is 99.9995 N of 100 and the springs carry 4.4e-4 N
     (4.4e-6).

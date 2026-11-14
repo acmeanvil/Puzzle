@@ -14,6 +14,7 @@ one and they never stale a run.
 from __future__ import annotations
 
 import contextlib
+import re
 from dataclasses import dataclass, replace
 from uuid import UUID
 
@@ -83,12 +84,46 @@ class OperatorType:
     outputs: tuple[PortSpec, ...]
     settings: tuple[str, ...]  # the Operator fields this type reads
     aliases: tuple[str, ...] = ()  # other tools' names that find it (ADR 0064 item 6)
+    more: PortSpec | None = None
+    """An input that repeats (`curve5`, `curve6`...): one more empty socket appears once
+    the last is wired, so the operator takes any number of them (Plot's curves)."""
 
     def input(self, key: str) -> PortSpec | None:
-        return next((p for p in self.inputs if p.key == key), None)
+        found = next((p for p in self.inputs if p.key == key), None)
+        if found is None and self.more is not None:
+            n = _more_index(self.more, key)
+            if n is not None:
+                return _more_port(self.more, n)
+        return found
+
+    def ports_for(self, op) -> tuple[PortSpec, ...]:
+        """The inputs one operator shows: its type's, and for a repeating input those
+        wired so far plus one empty."""
+        if self.more is None:
+            return self.inputs
+        start = _more_start(self)
+        wired = [n for key in getattr(op, "inputs", {}) or {}
+                 if (n := _more_index(self.more, key)) is not None]  # fmt: skip
+        last = max(wired, default=start - 1)
+        return self.inputs + tuple(_more_port(self.more, n) for n in range(start, last + 2))
 
     def output(self, key: str) -> PortSpec | None:
         return next((p for p in self.outputs if p.key == key), None)
+
+
+def _more_start(t: OperatorType) -> int:
+    """The first repeating input's number: after the fixed ones (Plot: value, b, c, d)."""
+    return len(t.inputs) + 1
+
+
+def _more_index(more: PortSpec, key: str) -> int | None:
+    m = re.fullmatch(re.escape(more.key) + r"(\d+)", key)
+    return int(m.group(1)) if m else None
+
+
+def _more_port(more: PortSpec, n: int) -> PortSpec:
+    return PortSpec(f"{more.key}{n}", more.label.format(n=n), more.types, required=False,
+                    typed=more.typed)  # fmt: skip
 
 
 # ADR 0071 decision 3: the series operators (`operators.series`). A and B take a curve or
@@ -425,15 +460,17 @@ TYPES: dict[str, OperatorType] = {
         OperatorType(
             "plot", "Plot", "Results",
             "A number against the steps (time, frequency, increment) or a sweep's points, "
-            "a table's column against another, or up to four curves (a path, a history, "
-            "a limit line) together, drawn in the Plots panel as lines, bars or points; "
-            "axes, units and the legend come from what is wired in.",
+            "a table's column against another, or any number of curves (a path, a "
+            "history, a limit line) together: a new socket appears as each is wired. Drawn "
+            "in the Plots panel as lines, bars or points; axes, units and the legend come "
+            "from what is wired in.",
             (PortSpec("value", "Value", ("number", "table", "series")),
              PortSpec("b", "Curve 2", ("series",), required=False),
              PortSpec("c", "Curve 3", ("series",), required=False),
              PortSpec("d", "Curve 4", ("series",), required=False)),
             (PortSpec("out", "Table", ("table",)), PortSpec("curves", "Curves", ("series",))),
             ("against", "chart", "by", "column"),
+            more=PortSpec("curve", "Curve {n}", ("series",), required=False),
         ),
         OperatorType(
             "export", "Export", "Display",
@@ -1400,6 +1437,30 @@ def downstream(project, oid: UUID) -> set[UUID]:
                 seen.add(o.id)
                 frontier.append(o.id)
     return seen
+
+
+def studies_read(project, obj, seen: frozenset = frozenset()) -> list:
+    """The studies an operator (or result tool, derived result) reads, through every
+    operator and tool upstream of it, in no particular order: what "Evaluate up to
+    here" runs first when they aren't up to date (ADR 0071 decision 4)."""
+    from puzzle.model.schema import Study
+
+    if obj is None or obj.id in seen:
+        return []
+    if isinstance(obj, Study):
+        return [obj]
+    seen = seen | {obj.id}
+    out, ids = [], set()
+    refs = list(getattr(obj, "dependencies", lambda: [])())
+    source = getattr(obj, "source", None)  # a result tool reads its study or result
+    if source is not None and not isinstance(source, str):
+        refs.append(source)
+    for ref in refs:
+        for s in studies_read(project, project.objects.get(ref), seen):
+            if s.id not in ids:
+                ids.add(s.id)
+                out.append(s)
+    return out
 
 
 def refuse(project, op) -> None:

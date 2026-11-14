@@ -182,3 +182,25 @@ def test_yamamotos_teeth_give_liu_et_als_coefficients():
     assert with_radial - plain == pytest.approx(0.167 * d2 / 0.002 * (1 - nu), rel=3e-3)
     a, b, c = threads.tooth(30.0, 1.0, nut=False)
     assert (a, b, c) == pytest.approx((0.75, 0.5, 0.2165), abs=2e-4)
+
+
+def test_the_profile_drawn_in_properties():
+    """ADR 0076 step 6: the tooth outline over a pitch closes on the pitch, its flanks
+    rising by the profile's height at their own angles."""
+    pytest.importorskip("PySide6")
+    from puzzle.gui.thread_profile import outline
+
+    iso = threads.spec(Thread(form="iso", size="M16"))
+    pts = outline(iso, pitches=1)
+    h = (iso.major - iso.minor) / 2
+    xs = [x for x, _ in pts]
+    assert xs[-1] == pytest.approx(iso.pitch)  # one pitch, flats shared equally
+    (x0, y0), (x1, y1) = pts[1], pts[2]  # the load flank
+    assert y1 - y0 == pytest.approx(h)
+    assert (x1 - x0) / h == pytest.approx(math.tan(math.radians(30)))
+    buttress = threads.spec(Thread(form="buttress", major=Quantity(value=20, unit="mm"),
+                                   pitch=Quantity(value=4, unit="mm")))  # fmt: skip
+    b = outline(buttress, pitches=1)
+    hb = (buttress.major - buttress.minor) / 2
+    assert (b[2][0] - b[1][0]) / hb == pytest.approx(math.tan(math.radians(7)))
+    assert (b[4][0] - b[3][0]) / hb == pytest.approx(math.tan(math.radians(45)))

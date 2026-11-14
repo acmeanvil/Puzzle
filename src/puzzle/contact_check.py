@@ -567,15 +567,17 @@ def held_by_contact_only(project, component) -> list[Problem]:
         return selection.split("/", 1)[0] if selection else None
 
     grounded = {part(f.selection) for p in solid for f in p.features if f.type in HOLDING}
+    # A threaded contact holds its screw whatever its type: its flank springs carry the
+    # axial load (ADR 0076), so it isn't sliding contact (weak springs aren't wanted)
     joins = [(part(c.source), part(c.target)) for c in component.contacts
-             if c.type not in SLIDING]  # fmt: skip
+             if c.type not in SLIDING or c.thread is not None]  # fmt: skip
     for b in component.connectors:
         if getattr(b, "ground", False) or b.target is None:
             grounded.add(part(b.source))
         else:
             joins.append((part(b.source), part(b.target)))
     slides = [(part(c.source), part(c.target)) for c in component.contacts
-              if c.type in SLIDING]  # fmt: skip
+              if c.type in SLIDING and c.thread is None]  # fmt: skip
     if not grounded:
         return []  # the whole component is free: Project.problems says so (unconstrained)
 

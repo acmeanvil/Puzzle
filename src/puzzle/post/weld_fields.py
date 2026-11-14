@@ -369,7 +369,7 @@ def fatigue(project, comp, mesh, res, weld: str, category: str = "F", cycles: fl
 
 def structural_stress(project, comp, mesh, res, weld: str, steps: tuple[int, ...] = (),
                       thickness: float | None = None, cycles: float | None = None,
-                      **options) -> dict:  # fmt: skip
+                      side: str = "attachment", **options) -> dict:  # fmt: skip
     """A light weld's fatigue at the attachment's toe by ASME VIII-2 5.5.5 (ADR 0078 step
     5): the structural stress normal to the crack plane through the path's part at the
     weld, from the weld's own line forces (they are the nodal forces the attachment
@@ -378,7 +378,13 @@ def structural_stress(project, comp, mesh, res, weld: str, steps: tuple[int, ...
     bending 6 m/t², m the moment about the path (`twist`). Their ranges between two
     steps (or from zero) at each station go through `weld_strength.asme_cycles`;
     `thickness` is the attachment's (a shell's section by default). With `cycles`, the
-    damage n/N at the worst station."""
+    damage n/N at the worst station.
+
+    `side="plate"`: the toe on the other part, a leg's length from the path along its
+    face. The plate carries load past the toe as well as the weld's, so its structural
+    stress comes from its own section there (`_plate_toe`: the traction over the cut
+    through its thickness, by station), membrane and bending about its mid-plane;
+    solids and light welds only."""
     from puzzle import weld_strength
     from puzzle.adapters.weld_pairs import weld_pairs
     from puzzle.errors import PuzzleError
@@ -392,6 +398,10 @@ def structural_stress(project, comp, mesh, res, weld: str, steps: tuple[int, ...
     w = next((x for x in comp.welds if x.name == weld), None)
     if w is None:
         raise PuzzleError(f"no weld '{weld}' in {comp.name}", code="not_found")
+    if side not in ("attachment", "plate"):
+        raise PuzzleError("side: attachment or plate", code="invalid")
+    if side == "plate":
+        return _plate_side(project, comp, mesh, found, chosen, w, thickness, cycles, options)
     part = w.path.split("/", 1)[0]
     if thickness is None:
         section = next((s for s in comp.shell_sections
@@ -444,6 +454,114 @@ def structural_stress(project, comp, mesh, res, weld: str, steps: tuple[int, ...
     worst = min(range(len(stations)), key=lambda i: stations[i]["cycles"])
     out = {"weld": w.name, "steps": chosen, "thickness_m": float(thickness),
            "where": f"the toe on {part}", "clause": weld_strength.ASME,
+           "worst": stations[worst], "stations": stations}  # fmt: skip
+    if cycles is not None:
+        out["cycles"] = float(cycles)
+        out["damage"] = float(cycles / stations[worst]["cycles"])
+    return out
+
+
+def _plate_toe(project, comp, mesh, step, w, thickness):
+    """The other part's section at a light weld's plate-side toe (ASME VIII-2 5.5.5):
+    per straight run of the path, the plane square to the plate's face through the toe
+    line (a leg from the path, along the face away from it), cut through that part's
+    own elements. Each triangle's force, the traction along the plane's normal (away
+    from the weld, so + is tension), goes to the nearest station, and its moment about
+    the section's mid-plane too. -> (weld pairs, membrane Pa, bending Pa, thickness m)."""
+    from puzzle.adapters.weld_pairs import _chain, _project, weld_pairs
+    from puzzle.errors import PuzzleError
+    from puzzle.mesh import Mesh
+    from puzzle.post.probes import _cut
+
+    if w.formulation != "line":
+        raise PuzzleError("the plate-side toe is read for light welds", code="unsupported")
+    other = w.faces[1].split("/", 1)[0]
+    body = mesh.groups.get(other)
+    blocks = [b for b in body.blocks(mesh) if b.dim == 3] if body is not None else []
+    if not blocks:
+        raise PuzzleError(f"the plate-side toe needs {other} as a solid", code="unsupported")
+    own = Mesh(mesh.node_ids, mesh.coords, blocks, {other: body})
+    wp = weld_pairs(project, comp, mesh, w)
+    arm = mesh.node_coords(wp.b) - wp.xyz[wp.station_of]  # along the plate's face
+    away = np.zeros_like(wp.xyz)
+    np.add.at(away, wp.station_of, arm)
+    away -= np.einsum("ij,ij->i", away, wp.tangent)[:, None] * wp.tangent
+    away = _unit(away)
+    leg = (w.leg2 or w.leg).to_si()
+    corners, closed = _chain(mesh.groups[w.path], mesh)
+    poly = mesh.node_coords(corners)
+    if closed:
+        poly = np.vstack([poly, poly[:1]])
+    cum = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(poly, axis=0), axis=1))])
+    n = len(wp.stations)
+    force, moment = np.zeros(n), np.zeros(n)
+    spans = []
+    stress = step.fields["stress"]
+    for k in range(len(poly) - 1):
+        mine = np.flatnonzero((wp.s >= cum[k] - 1e-12) & (wp.s <= cum[k + 1] + 1e-12))
+        if not len(mine):
+            continue
+        t = _unit(poly[k + 1] - poly[k])
+        mean = away[mine].mean(axis=0)
+        out = _unit(mean - (mean @ t) * t)
+        across = _unit(np.cross(t, out))  # through the plate's thickness
+        origin = (poly[k] + poly[k + 1]) / 2 + 1.5 * leg * out
+        try:
+            cut, faces, areas, centres, nn = _cut(own, step, origin, out)
+        except PuzzleError:
+            continue
+        sl, dist, _near = _project(centres - 1.5 * leg * out, poly, cum)
+        on = (sl >= cum[k] - 1e-12) & (sl <= cum[k + 1] + 1e-12) & (dist < 50 * leg)
+        if not on.any():
+            continue
+        sv = np.asarray(cut.point_data["stress"], float).reshape(cut.n_points, -1)
+        xx, yy, zz, xy, yz, zx = (sv[:, stress.components.index(c)]
+                                  for c in ("xx", "yy", "zz", "xy", "yz", "zx"))  # fmt: skip
+        traction = np.stack([xx * nn[0] + xy * nn[1] + zx * nn[2],
+                             xy * nn[0] + yy * nn[1] + yz * nn[2],
+                             zx * nn[0] + yz * nn[1] + zz * nn[2]], axis=1)  # fmt: skip
+        f = (traction[faces].mean(axis=1) * areas[:, None])[on] @ out
+        h = centres[on] @ across
+        a = areas[on]
+        pts = np.asarray(cut.points, float)[np.unique(faces[on])] @ across
+        spans.append(float(pts.max() - pts.min()))
+        mid = float((h * a).sum() / a.sum())
+        nearest = mine[np.argmin(np.abs(sl[on][:, None] - wp.s[mine][None, :]), axis=1)]
+        np.add.at(force, nearest, f)
+        np.add.at(moment, nearest, f * (h - mid))
+    if not spans:
+        raise PuzzleError(f"weld '{w.name}': the plane at the plate's toe cuts nothing of "
+                          f"{other}", code="invalid")  # fmt: skip
+    t_plate = float(thickness) if thickness is not None else float(np.median(spans))
+    width = np.maximum(wp.widths, 1e-300)
+    return wp, force / width / t_plate, 6 * moment / width / t_plate**2, t_plate
+
+
+def _plate_side(project, comp, mesh, found, chosen, w, thickness, cycles, options) -> dict:
+    """`structural_stress` at the plate-side toe (see `_plate_toe`)."""
+    from puzzle import weld_strength
+
+    other = w.faces[1].split("/", 1)[0]
+    at = {k: _plate_toe(project, comp, mesh, found[k - 1], w, thickness) for k in chosen}
+    wp, m1, b1, t_plate = at[chosen[0]]
+    if len(chosen) == 2:
+        _wp, m2, b2, _t = at[chosen[1]]
+    else:
+        m2, b2 = np.zeros_like(m1), np.zeros_like(b1)
+    stations = []
+    for i in range(len(wp.stations)):
+        top = [m1[i] + abs(b1[i]), m2[i] + abs(b2[i])]
+        row = weld_strength.asme_cycles(m1[i] - m2[i], b1[i] - b2[i], t_plate,
+                                        smax=max(top), smin=min(top), **options)  # fmt: skip
+        stations.append({"at_m": [float(v) for v in wp.xyz[i]],
+                         "membrane_range_Pa": float(m1[i] - m2[i]),
+                         "bending_range_Pa": float(b1[i] - b2[i]), **row})  # fmt: skip
+    worst = min(range(len(stations)), key=lambda i: stations[i]["cycles"])
+    share = wp.widths / max(float(wp.widths.sum()), 1e-300)
+    out = {"weld": w.name, "steps": chosen, "thickness_m": t_plate,
+           "where": f"the toe on {other}", "side": "plate", "clause": weld_strength.ASME,
+           "membrane_mean_Pa": float(((m1 - m2) * share).sum()),
+           "bending_mean_Pa": float(((b1 - b2) * share).sum()),
            "worst": stations[worst], "stations": stations}  # fmt: skip
     if cycles is not None:
         out["cycles"] = float(cycles)

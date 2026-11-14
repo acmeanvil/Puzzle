@@ -1923,6 +1923,10 @@ class MainWindow(QMainWindow):
                 from puzzle.gui.element_choice_dialog import add_to_properties
 
                 add_to_properties(self, obj, obj.parts[int(parts[1])].name)  # ADR 0082 7
+            if isinstance(obj, Component) and len(parts) == 2 and parts[0] == "contacts":
+                from puzzle.gui import thread_profile
+
+                thread_profile.add_to_properties(self, obj.contacts[int(parts[1])])  # 0076
         if isinstance(obj, ResultDefinition):
             self.show_derived(obj)
             return
