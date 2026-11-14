@@ -19,8 +19,12 @@ Recipe fields:
 - `element_shape`: "tetrahedra" (default) or "hexahedra" (structured; Gmsh only):
   block-like bodies (six faces of four edges), and bodies of revolution (shafts,
   pins, tubes, stepped bushes: planes square to one axis and coaxial cylinders), which
-  are cut into blocks when meshed. Cones (chamfers) and tori (fillets) aren't. A body
-  that can't take hexahedra gets tetrahedra (the warnings say which and why); where it
+  are cut into blocks when meshed; one with cones (chamfers), tori (fillets) or a
+  domed end has its profile meshed and revolved (prisms along the axis); a prism (a
+  plate with through holes, an extruded L: two matching flat ends, every other face
+  along the length) is swept from one end in layers of the recipe's size (prisms where
+  a triangle was left). Revolved and swept bodies take 20-node hexahedra and 15-node
+  prisms at second order. Any other body gets tetrahedra (the warnings say which and why); where it
   touches a hexahedral body it would be joined to (bodies of one part, parts a conformal
   bond joins), the two are meshed apart and tied by a bonded nonconformal tie made at
   the solve (`(mesh tie k)`), since a face's nodes can't be both. Ties are CalculiX's

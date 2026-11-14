@@ -3,10 +3,13 @@ recipe meshes every body that takes hexahedra with them and the rest with tetrah
 the two kinds joined apart and tied where they touch (a face's nodes can't be both:
 sharing them would need pyramids, which CalculiX lacks).
 
-A bar of two parts bonded end to end: a block (hexahedra) and a block with a hole
-through it near its far end (tetrahedra), held at one end and pulled at the other. The
-reaction is the pull, and the pulled end moves as it does with the whole bar in
-tetrahedra (the tie is as stiff as shared nodes, to a fraction of a per cent).
+A bar of two parts bonded end to end: a block (hexahedra) and a block with a blind hole
+near its far end (tetrahedra: not a block, a revolution or a prism), held at one end and
+pulled at the other. The reaction is the pull, and the pulled end moves as it does with
+the whole bar in tetrahedra (the tie is as stiff as shared nodes, to a fraction of a per
+cent). And a holed block alone, its hole right through: a prism, its cross-section swept
+into hexahedra along the hole (prisms where a triangle was left), stretching as in
+tetrahedra.
 """
 
 import numpy as np
@@ -40,12 +43,12 @@ W, L = 0.02, 0.05
 FACES = ("-x", "+x", "-y", "+y", "-z", "+z")
 
 
-def _geometry(p, name, hole):
+def _geometry(p, name, hole=None):
     history = [HistoryStep(kind="box", name="B", args={"dx": W, "dy": W, "dz": L})]
-    if hole:  # a hole across it, near the far end: not block-like, not a revolution
+    if hole:  # a hole across it near the far end: blind to mid-width, or right through
         history.append(HistoryStep(kind="cylinder", name="Hole", args={
-            "r": 0.004, "h": 2 * W, "x": -W / 2, "y": W / 2, "z": 0.8 * L,
-            "axis": [1, 0, 0], "mode": "cut"}))  # fmt: skip
+            "r": 0.004, "h": W if hole == "blind" else 2 * W, "x": -W / 2, "y": W / 2,
+            "z": 0.8 * L, "axis": [1, 0, 0], "mode": "cut"}))  # fmt: skip
     return p.add(Geometry(name=name, history=history, selections=[
         NamedSelection(name="Body", entity="body", members=["Body"]),
         *(NamedSelection(name=f, entity="face", members=[f"B/{f}"]) for f in FACES)]))  # fmt: skip
@@ -55,7 +58,7 @@ def _project(solver, shape):
     pytest.importorskip("OCP")
     p = Project(name="mixed")
     steel = add_library_material(p, "structural_steel")
-    block, holed = _geometry(p, "Block", False), _geometry(p, "Holed", True)
+    block, holed = _geometry(p, "Block"), _geometry(p, "Holed", "blind")
     mesh = p.add(MeshRecipe(name="M", global_size=q(4, "mm"), element_shape=shape,
                             element_order=2))  # fmt: skip
     comp = p.add(Component(
@@ -105,5 +108,51 @@ def test_hexahedra_and_tetrahedra_tied_in_one_recipe(tmp_path, solver):
     off = 100 * (stretch / reference - 1)
     print(f"{solver} mixed bar: reaction {reaction:.6g} N (P {P:g}); end {stretch * 1e6:.5g} "
           f"um, all tetrahedra {reference * 1e6:.5g} um ({off:+.3f} %)")  # fmt: skip
+    assert abs(reaction) == pytest.approx(P, rel=1e-4)
+    assert stretch == pytest.approx(reference, rel=0.01)
+
+
+def _plate(tmp_path, solver, shape):
+    pytest.importorskip("OCP")
+    p = Project(name="plate")
+    steel = add_library_material(p, "structural_steel")
+    holed = _geometry(p, "Holed", "through")
+    mesh = p.add(MeshRecipe(name="M", global_size=q(3, "mm"), element_shape=shape,
+                            element_order=2))  # fmt: skip
+    comp = p.add(Component(
+        name="Plate", parts=[PartInstance(name="Holed", geometry=holed.id)], mesh=mesh.id,
+        materials=[MaterialAssignment(material=steel.id, selection="Holed/Body")],
+        physics=[Physics(type="solid_mechanics",
+                         settings={"temperature_dependent_materials": False}, features=[
+            Feature(type="fixed", selection="Holed/-z"),
+            Feature(type="force", selection="Holed/+z", values={"z": q(P, "N")})])],
+    ))  # fmt: skip
+    study = p.add(Study(name="Pull", component=comp.id, solver=solver,
+                        steps=[SolveStep(type="stationary")]))  # fmt: skip
+    root = tmp_path / f"plate-{shape}"
+    save_project(p, root)
+    return run_study(p, study.id, root, tmp_path / f"wp-{shape}", timeout_s=1800)
+
+
+def _end_of(run, face) -> float:
+    u = run.results.last("displacement")
+    ids = np.unique(run.mesh.groups[face].node_ids)
+    order = np.argsort(u.ids)
+    at = order[np.searchsorted(u.ids, ids, sorter=order)]
+    return float(np.mean(u.values[at, u.components.index("z")]))
+
+
+@over("calculix", "code_aster")
+def test_a_holed_plate_swept_into_hexahedra(tmp_path, solver):
+    swept = _plate(tmp_path, solver, "hexahedra")
+    kinds = {b.element for b in swept.mesh.blocks if b.dim == 3}
+    assert "hex20" in kinds and kinds <= {"hex20", "wedge15"}, kinds
+    reaction = total(swept.results, swept.mesh, "reaction_force", "Holed/-z")["total"][2]
+    tets = _plate(tmp_path, solver, "tetrahedra")
+    stretch, reference = _end_of(swept, "Holed/+z"), _end_of(tets, "Holed/+z")
+    off = 100 * (stretch / reference - 1)
+    print(f"{solver} swept plate ({sorted(kinds)}): reaction {reaction:.6g} N; end "
+          f"{stretch * 1e6:.5g} um, all tetrahedra {reference * 1e6:.5g} um "
+          f"({off:+.3f} %)")  # fmt: skip
     assert abs(reaction) == pytest.approx(P, rel=1e-4)
     assert stretch == pytest.approx(reference, rel=0.01)

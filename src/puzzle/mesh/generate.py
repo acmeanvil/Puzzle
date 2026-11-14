@@ -16,6 +16,7 @@ Steps:
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -223,8 +224,10 @@ def generate_mesh(
                     **placement)  # fmt: skip
 
         blocked: list[tuple[int, int]] = []  # ADR 0072 section 5: bodies of revolution
+        revolving: list[tuple[int, int]] = []  # ... with cones and tori: profiles revolved
         if hexes and not faceted:
-            blocked = _block_revolutions(comp, references, found, swept, warnings)
+            blocked, revolving = _block_revolutions(comp, references, found, swept, warnings,
+                                                    recipe)  # fmt: skip
         _physical_groups(comp, geometries, references, found, warnings)
         hex_volumes, tet_volumes = [], []
         if hexes and not faceted and any(k is False for k in kind_of.values()):
@@ -317,10 +320,13 @@ def generate_mesh(
         else:
             _sizes(recipe, comp, found, warnings, project, root)
             _sweep_profiles(profiles, volumes)
-            if recipe.element_shape == "hexahedra" and tet_volumes:
+            if recipe.element_shape == "hexahedra" and (tet_volumes or revolving):
                 # Mixed: the bodies that take hexes structured and recombined, the rest
-                # tetrahedra (their faces left triangles), tied where they touch.
-                plain = [v for v in hex_volumes if v not in set(blocked)]
+                # tetrahedra (their faces left triangles), tied where they touch; revolved
+                # profiles are swept by their own layers.
+                if not hex_volumes:
+                    hex_volumes = _by_kind(found, kind_of)[0]
+                plain = [v for v in hex_volumes if v not in set(blocked) | set(revolving)]
                 if plain:
                     gmsh.model.mesh.setTransfiniteAutomatic(plain)
                 if blocked:
@@ -342,7 +348,8 @@ def generate_mesh(
             if recipe.element_shape == "hexahedra":
                 for v in hex_volumes or [(3, -1)]:  # -1: every volume
                     types, _, _ = gmsh.model.mesh.getElements(3, v[1])
-                    if any(t != 5 for t in types):
+                    allowed = {5, 6} if v in set(revolving) else {5}  # prisms on the axis
+                    if any(t not in allowed for t in types):
                         raise MeshError(
                             "some volumes could not be meshed with hexahedra (not block-like)"
                         )
@@ -350,7 +357,11 @@ def generate_mesh(
             # Curved second-order elements can fold where midside nodes snap onto tight
             # curves (fillets, small holes); Gmsh's optimiser untangles them.
             gmsh.option.setNumber("Mesh.HighOrderOptimize", HIGH_ORDER[recipe.high_order_optimise])
-        if profiles:  # 20-node hexahedra and 15-node prisms (CalculiX's C3D20, C3D15)
+        if profiles or revolving:  # 20-node hexahedra, 15-node prisms (C3D20, C3D15)
+            if revolving and recipe.element_order > 1 and recipe.hexahedron_nodes == 27:
+                warnings.append("bodies of revolution with cones or tori have prisms on "
+                                "their axis: 20-node hexahedra and 15-node prisms throughout, "
+                                "not 27-node hexahedra")  # fmt: skip
             gmsh.option.setNumber("Mesh.SecondOrderIncomplete", 1)
         elif hexes and recipe.element_order > 1:  # serendipity (20) or Lagrange (27) bricks
             gmsh.option.setNumber("Mesh.SecondOrderIncomplete",
@@ -494,15 +505,21 @@ def _sweep_profiles(profiles: dict[str, tuple], volumes) -> None:
         revolved.prepare(volumes[part], core, **at)
 
 
-def _block_revolutions(comp, references, found, swept, warnings) -> list[tuple[int, int]]:
+def _block_revolutions(comp, references, found, swept, warnings, recipe=None):
     """A hexahedral recipe's bodies of revolution cut into blocks (`mesh/blocks.py`):
     each solid that isn't block-like, is a body of revolution and shares no face with
     another body. Its name then maps to its blocks; the faces and edges the cuts split
-    are re-found by their pieces, and its points by where they are. Returns the blocks,
-    for their transfinite corners; a body that can't be blocked is left (and said)."""
+    are re-found by their pieces, and its points by where they are. One with cones,
+    tori or spheres among its faces has its profile revolved instead (`blocks.revolve`,
+    hexahedra and prisms on the axis). Returns (the blocks, for their transfinite
+    corners; the revolved volumes, swept by their layers); a body that can't be blocked
+    is left (and said)."""
     from puzzle.mesh import blocks
 
     out: list[tuple[int, int]] = []
+    revolved_out: list[tuple[int, int]] = []
+    sectors = recipe.bolt_sectors if recipe is not None else 24
+    size = recipe.global_size.to_si() if recipe is not None and recipe.global_size else None
     for part in comp.parts:
         if part.name in swept or part.name not in found:
             continue
@@ -515,7 +532,14 @@ def _block_revolutions(comp, references, found, swept, warnings) -> list[tuple[i
                 continue
             shared = any(len(gmsh.model.getAdjacencies(2, f)[0]) > 1 for _d2, f in faces)
             rev = blocks.revolution(tag)
-            if rev.why or shared:
+            general = prism = None
+            if rev.why and not shared:
+                general = blocks.meridian(tag)
+                general = None if general.why else general
+            if rev.why and not shared and general is None:  # a prism: swept (`blocks.sweep`)
+                prism = blocks.extrusion(tag)
+                prism = None if prism.why else prism
+            if (rev.why and general is None and prism is None) or shared:
                 why = rev.why or "it shares a face with another body"
                 warnings.append(f"{part.name}/{name}: not cut into hexahedral blocks ({why})")
                 continue
@@ -533,13 +557,35 @@ def _block_revolutions(comp, references, found, swept, warnings) -> list[tuple[i
                 for n, hit in names.items()
                 if not isinstance(hit, list) and hit in twins and hit[0] in (1, 2)
             }
-            pieces = blocks.cut(tag, rev)
-            odd = blocks.odd_blocks(pieces)
-            if odd:
-                raise MeshError(f"part '{part.name}': its body of revolution {name} didn't cut "
-                                "into hexahedral blocks; mesh it with tetrahedra")  # fmt: skip
-            new = [(3, v) for v in pieces]
-            out += new
+            if general is not None:
+                around = sectors
+                if size:  # elements about as long round the rim as the recipe's size
+                    around = max(around, math.ceil(2 * math.pi * general.radii[0] / size))
+                try:
+                    pieces, profile = blocks.revolve(tag, general, around)
+                except Exception as exc:  # noqa: BLE001 - OCC's message, said
+                    raise MeshError(
+                        f"part '{part.name}': its body of revolution {name} could "
+                        f"not be revolved from its profile ({exc})"
+                    ) from None
+                blocks.prepare(profile, general)
+                new = [(3, v) for v in pieces]
+                revolved_out += new
+            elif prism is not None:
+                pieces, profile = blocks.sweep(tag, prism, size)
+                for f in profile:
+                    gmsh.model.mesh.setRecombine(2, f)
+                new = [(3, v) for v in pieces]
+                revolved_out += new
+            else:
+                pieces = blocks.cut(tag, rev)
+                odd = blocks.odd_blocks(pieces)
+                if odd:
+                    raise MeshError(f"part '{part.name}': its body of revolution {name} "
+                                    "didn't cut into hexahedral blocks; mesh it with "
+                                    "tetrahedra")  # fmt: skip
+                new = [(3, v) for v in pieces]
+                out += new
             stale = [
                 n
                 for n, hit in names.items()
@@ -568,7 +614,7 @@ def _block_revolutions(comp, references, found, swept, warnings) -> list[tuple[i
             if lost:
                 warnings.append(f"{part.name}: {', '.join(lost)} lost when {name} was cut "
                                 "into hexahedral blocks")  # fmt: skip
-    return out
+    return out, revolved_out
 
 
 def _ordered(volume: int) -> list[tuple[int, int]]:
@@ -1115,6 +1161,16 @@ def _method(faces, volume=None) -> tuple[str, str]:
         rev = blocks.revolution(volume[1])
         if not rev.why:
             return "hexahedra", "a body of revolution: cut into blocks when meshed"
+        if not blocks.meridian(volume[1]).why:
+            return "hexahedra", (
+                "a body of revolution with cones or tori: its profile "
+                "revolved when meshed (prisms along the axis)"
+            )
+        if not blocks.extrusion(volume[1]).why:
+            return "hexahedra", (
+                "a prism: its cross-section swept along its length when "
+                "meshed (prisms where a triangle is left)"
+            )
     if len(faces) != 6:
         return "tetrahedra", f"{len(faces)} faces; a block has six"
     odd = sum(n != 4 for n in sides)

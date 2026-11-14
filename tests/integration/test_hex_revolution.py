@@ -135,3 +135,68 @@ def test_lames_thick_tube_on_hexahedral_blocks(tmp_path, solver):
     print(f"{solver}: Lame bore u_r {ur.mean():.6g} m ({expected:.6g}), spread "
           f"{(ur.max() - ur.min()) / expected:.2e}")  # fmt: skip
     assert float(ur.mean()) == pytest.approx(expected, rel=5e-3)
+
+
+def _segment_stress(run, solver, force, segments):
+    from puzzle.post.probes import _cut
+
+    step = [s for s in run.results.steps if "stress" in s.fields][-1]
+    zi = step.fields["stress"].components.index("zz")
+    for z, r in segments:
+        cut, faces, areas, _c, _n = _cut(run.mesh, step, (0.0, 0.0, z), (0.0, 0.0, 1.0))
+        sv = np.asarray(cut.point_data["stress"], float).reshape(cut.n_points, -1)
+        mean = float((sv[faces][:, :, zi].mean(axis=1) * areas).sum() / areas.sum())
+        print(f"{solver}: at z {z * 1e3:g} mm, r {r * 1e3:g} mm: sigma_zz {mean / 1e6:.5g} MPa "
+              f"(F/A {force / (math.pi * r**2) / 1e6:.5g})")  # fmt: skip
+        assert mean == pytest.approx(force / (math.pi * r**2), rel=5e-3)
+
+
+def _hexahedra_and_axis_prisms(run):
+    kinds = {b.element for b in run.mesh.blocks if b.dim == 3}
+    assert "hex20" in kinds and kinds <= {"hex20", "wedge15"}, kinds
+    return kinds
+
+
+@over("calculix", "code_aster")
+def test_a_tapered_shaft_revolved_from_its_profile(tmp_path, solver):
+    """A cone between two diameters (a chamfer's face): the blocks' cuts would leave
+    blocks of triangular section, so the profile is meshed and revolved (ADR 0072
+    section 5): hexahedra, prisms along the axis, and F / A in each segment."""
+    r1, r2, h, taper, force = 0.006, 0.010, 0.04, 0.008, 20e3
+    history = [
+        HistoryStep(kind="cylinder", name="Big", args={"r": r2, "h": h}),
+        HistoryStep(kind="cone", name="Taper", args={"r1": r2, "r2": r1, "h": taper, "z": h,
+                                                      "mode": "add"}),
+        HistoryStep(kind="cylinder", name="Small", args={"r": r1, "h": h, "z": h + taper,
+                                                          "mode": "add"}),
+    ]  # fmt: skip
+    selections = [NamedSelection(name="Root", entity="face", members=["Big/start"]),
+                  NamedSelection(name="Tip", entity="face", members=["Small/end"])]  # fmt: skip
+    features = [Feature(type="fixed", selection="S/Root"),
+                Feature(type="force", selection="S/Tip", values={"z": q(force, "N")})]  # fmt: skip
+    p, study = _project(history, selections, features, 2.0, solver)
+    run = _run(tmp_path, p, study)
+    _hexahedra_and_axis_prisms(run)
+    _segment_stress(run, solver, force, ((h / 2, r2), (h + taper + h / 2, r1)))
+
+
+@over("calculix")
+def test_a_filleted_shoulder_revolved_from_its_profile(tmp_path, solver):
+    """A stepped shaft with its shoulder filleted (a torus): revolved from its profile,
+    F / A in each segment away from the shoulder."""
+    r1, r2, h, force = 0.006, 0.010, 0.04, 20e3
+    history = [
+        HistoryStep(kind="cylinder", name="Big", args={"r": r2, "h": h}),
+        HistoryStep(kind="cylinder", name="Small", args={"r": r1, "h": h, "z": h,
+                                                          "mode": "add"}),
+        HistoryStep(kind="fillet", name="Shoulder", args={
+            "r": 0.002, "rule": {"between": ["Big/end", "Small/wall"]}}),
+    ]  # fmt: skip
+    selections = [NamedSelection(name="Root", entity="face", members=["Big/start"]),
+                  NamedSelection(name="Tip", entity="face", members=["Small/end"])]  # fmt: skip
+    features = [Feature(type="fixed", selection="S/Root"),
+                Feature(type="force", selection="S/Tip", values={"z": q(force, "N")})]  # fmt: skip
+    p, study = _project(history, selections, features, 2.0, solver)
+    run = _run(tmp_path, p, study)
+    _hexahedra_and_axis_prisms(run)
+    _segment_stress(run, solver, force, ((h / 3, r2), (h + 2 * h / 3, r1)))

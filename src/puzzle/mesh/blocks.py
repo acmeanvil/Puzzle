@@ -8,7 +8,9 @@ so it used to fall back to tetrahedra. Here such a body is cut, in Gmsh's model 
 - the faces must be planes square to one axis and cylinders about it (coaxial);
   `revolution` reads them from Gmsh's own surfaces (a cylinder's parametrisation runs
   round it in u and along it in v) and says why not otherwise (cones, tori, a tilted
-  plane: the mesher then meshes tetrahedra, as before);
+  plane); a body with cones, tori or spheres has its profile revolved instead
+  (`meridian`, `revolve`, below), and a prism its cross-section swept (`extrusion`,
+  `sweep`); any other body gets tetrahedra;
 - a body solid on the axis gets a butterfly: a square core of `CORE` times its smallest
   radius, its corners on four planes through the axis, which carry on out to the rim,
   so every block is four-sided and no hexahedron touches the axis with a wedge; a tube
@@ -179,3 +181,265 @@ def odd_blocks(pieces: list[int]) -> list[int]:
         if len(faces) != 6 or any(s != 4 for s in sides):
             out.append(v)
     return out
+
+
+# Bodies of revolution with cones, tori or spheres (chamfers, fillets, domed ends): the
+# cuts above leave blocks of triangular section there, so the body's meridian profile
+# is cut out instead, meshed in quadrilaterals and revolved in four quarter turns, as
+# modelled bolts are (`mesh/revolved.py`): hexahedra, and prisms along the axis.
+ROUND = {"Cylinder", "Cone", "Torus", "Sphere"}  # Gmsh's surfaces whose u runs round
+STRIP = 0.25  # the core strip next to the axis, a share of the profile's least radius
+
+
+def _round_axis(tag: int):
+    """(centre, axis, a point at u0) of a surface whose u parameter runs round its
+    axis: the circle through three points at one v."""
+    (u0, v0), (_u1, v1) = (np.asarray(b) for b in gmsh.model.getParametrizationBounds(2, tag))
+    v = (v0 + v1) / 2
+    p0, p1, p2 = (np.asarray(gmsh.model.getValue(2, tag, [u, v]), float)
+                  for u in (u0, u0 + math.pi / 2, u0 + math.pi))  # fmt: skip
+    centre = (p0 + p2) / 2
+    return centre, _unit(np.cross(p0 - centre, p1 - centre)), p0
+
+
+def meridian(volume: int) -> Revolution:
+    """The volume as a body of revolution whose faces may be cones, tori and spheres
+    too (`revolve`), or one with `why` set. `radii` holds the largest radius, `stations`
+    the body's span along the axis."""
+    faces = [t for _d, t in gmsh.model.getBoundary([(3, volume)], oriented=False,
+                                                   combined=False)]  # fmt: skip
+    kinds = {t: gmsh.model.getType(2, t) for t in faces}
+    empty = Revolution(np.zeros(3), np.zeros(3), np.zeros(3), [], [], False)
+    other = sorted({k for k in kinds.values() if k not in ROUND | {"Plane"}})
+    if other:
+        empty.why = f"its faces include {', '.join(k.lower() for k in other)}"
+        return empty
+    round_ = [t for t, k in kinds.items() if k in ROUND]
+    if not round_:
+        empty.why = "it has no face of revolution"
+        return empty
+    box = np.asarray(gmsh.model.getBoundingBox(3, volume))
+    size = float(np.linalg.norm(box[3:] - box[:3]))
+    centre, axis, seam_point = _round_axis(round_[0])
+    for t in round_[1:]:
+        c, a, _p = _round_axis(t)
+        off = (c - centre) - ((c - centre) @ axis) * axis
+        if abs(abs(a @ axis) - 1) > 1e-6 or np.linalg.norm(off) > 1e-6 * size:
+            empty.why = "its faces of revolution don't share one axis"
+            return empty
+    for t in [t for t, k in kinds.items() if k == "Plane"]:
+        (u0, v0), _ = (np.asarray(b) for b in gmsh.model.getParametrizationBounds(2, t))
+        n = np.asarray(gmsh.model.getNormal(t, [u0, v0]), float)
+        if abs(abs(n @ axis) - 1) > 1e-6:
+            empty.why = "a flat face isn't square to the axis"
+            return empty
+    corners = np.array([[box[i], box[j], box[k]] for i in (0, 3) for j in (1, 4) for k in (2, 5)])
+    along = (corners - centre) @ axis
+    radial = corners - centre - np.outer(along, axis)
+    reach = float(np.max(np.linalg.norm(radial, axis=1)))
+    seam = (seam_point - centre) - ((seam_point - centre) @ axis) * axis
+    if np.linalg.norm(seam) < 1e-9 * size:  # a point on the axis (a cone's apex)
+        seam = np.cross(axis, [1.0, 0, 0] if abs(axis[0]) < 0.9 else [0, 1.0, 0])
+    a, b = float(along.min()), float(along.max())
+    solid = any(gmsh.model.isInside(3, volume, list(centre + axis * (a + f * (b - a))))
+                for f in (0.1, 0.3, 0.5, 0.7, 0.9))  # fmt: skip
+    return Revolution(centre, axis, _unit(seam), [reach], [a, b], solid)
+
+
+def _tol(rev: Revolution) -> float:
+    return 1e-6 * (rev.stations[1] - rev.stations[0] + rev.radii[0])
+
+
+def _radius(rev: Revolution, x) -> float:
+    d = np.asarray(x, float) - rev.origin
+    return float(np.linalg.norm(d - (d @ rev.axis) * rev.axis))
+
+
+def revolve(volume: int, rev: Revolution, sectors: int) -> tuple[list[int], list[int]]:
+    """Replace the volume by its meridian profile (the half-plane through the axis
+    toward `rev.seam`, cut along r = STRIP x its least radius when solid on the axis)
+    revolved in four quarter turns of `sectors / 4` layers each, recombined, the
+    quarters fragmented together (`revolved.build`). -> (its volumes, the profile's
+    faces, for `prepare`)."""
+    from puzzle.mesh.revolved import QUARTERS, layers
+
+    occ = gmsh.model.occ
+    o, ax, e1 = rev.origin, rev.axis, rev.seam
+    a, b = rev.stations
+    span = b - a
+    reach = 1.5 * rev.radii[0] + 1e-3 * span
+    lo, hi = a - 0.05 * span, b + 0.05 * span
+    rect = _rectangle(occ, o, o + reach * e1, ax, lo, hi)
+    out, _ = occ.intersect([(3, volume)], [(2, rect)], removeObject=True, removeTool=True)
+    occ.synchronize()
+    faces = [t for d, t in out if d == 2]
+    if not faces:
+        raise ValueError("the body's profile could not be cut out")
+    if rev.solid:  # a strip along the axis, one element across (`prepare`)
+        least = _least_radius(faces, rev)
+        p, q = o + STRIP * least * e1 + ax * lo, o + STRIP * least * e1 + ax * hi
+        line = occ.addLine(occ.addPoint(*p), occ.addPoint(*q))
+        out, _ = occ.fragment([(2, f) for f in faces], [(1, line)])
+        occ.synchronize()
+        faces = [t for d, t in out if d == 2]
+        edges = {
+            abs(t)
+            for _d, t in gmsh.model.getBoundary(
+                [(2, f) for f in faces], combined=False, oriented=False
+            )
+        }
+        loose = [(1, t) for d, t in out if d == 1 and t not in edges]
+        if loose:
+            occ.remove(loose, recursive=True)
+            occ.synchronize()
+    current = [(2, f) for f in faces]
+    volumes: list[tuple[int, int]] = []
+    n = layers(sectors)
+    for _ in range(QUARTERS):
+        made = occ.revolve(current, *o, *ax, math.pi / 2, numElements=[n], recombine=True)
+        current = [made[j - 1] for j, e in enumerate(made) if e[0] == 3]
+        volumes += [e for e in made if e[0] == 3]
+    out, _ = occ.fragment(volumes, [])
+    occ.synchronize()
+    new = [t for d, t in out if d == 3]
+    return new, _profile_faces(new, rev)
+
+
+def _least_radius(faces, rev: Revolution) -> float:
+    """The profile's least radius off the axis among its boundary's points."""
+    radii = [r for f in faces
+             for _d, p in gmsh.model.getBoundary([(2, f)], combined=False, oriented=False,
+                                                 recursive=True)
+             if (r := _radius(rev, gmsh.model.getValue(0, p, []))) > _tol(rev)]  # fmt: skip
+    return min(radii) if radii else rev.radii[0]
+
+
+def _profile_faces(volumes: list[int], rev: Revolution) -> list[int]:
+    """The revolved volumes' faces in the profile's half-plane (the first quarter's
+    start, which the last quarter's end joined)."""
+    from puzzle.mesh.generate import _closure
+
+    normal = np.cross(rev.axis, rev.seam)
+    out = []
+    for d, t in _closure([(3, v) for v in volumes]):
+        if d != 2:
+            continue
+        c = np.asarray(gmsh.model.occ.getCenterOfMass(2, t)) - rev.origin
+        if abs(c @ normal) < _tol(rev) and c @ rev.seam > _tol(rev):
+            out.append(t)
+    return out
+
+
+def prepare(faces: list[int], rev: Revolution) -> None:
+    """The profile's mesh settings: every face recombined, and the strip along the axis
+    (when solid) one structured element across, its axis edge a copy of its other side,
+    so the elements on the axis sweep into prisms, not hexahedra with a collapsed edge
+    (as `revolved.prepare` does for bolts)."""
+    tol = _tol(rev)
+    for f in faces:
+        gmsh.model.mesh.setRecombine(2, f)
+    if not rev.solid:
+        return
+    for f in faces:
+        sides = [abs(t) for _, t in gmsh.model.getBoundary([(2, f)], oriented=False)]
+        ends = {t: [_radius(rev, gmsh.model.getValue(0, abs(v), []))
+                    for _, v in gmsh.model.getBoundary([(1, t)], oriented=False)]
+                for t in sides}  # fmt: skip
+        on_axis = [t for t, r in ends.items() if max(r) < tol]
+        if len(on_axis) != 1:
+            continue
+        width = max(max(r) for r in ends.values())
+        other = [t for t, r in ends.items()
+                 if t not in on_axis and all(abs(x - width) < tol for x in r)]  # fmt: skip
+        across = [t for t in sides if t not in on_axis + other]
+        if len(other) != 1 or len(across) != 2:
+            continue
+        shift = -width * rev.seam
+        affine = [1, 0, 0, shift[0], 0, 1, 0, shift[1], 0, 0, 1, shift[2], 0, 0, 0, 1]
+        for t in across:
+            gmsh.model.mesh.setTransfiniteCurve(t, 2)
+        gmsh.model.mesh.setPeriodic(1, on_axis, other, affine)
+        gmsh.model.mesh.setTransfiniteSurface(f)
+
+
+# Prismatic bodies that aren't blocks (a plate with holes, an extruded L or channel):
+# the cross-section meshed in quadrilaterals and extruded in layers along the length,
+# as Ansys's sweep method does: hexahedra, prisms where a triangle was left.
+
+
+@dataclass
+class Extrusion:
+    """A body swept along `direction` from its `source` face to its far one."""
+
+    direction: np.ndarray = field(default_factory=lambda: np.zeros(3))
+    length: float = 0.0
+    source: int = 0
+    why: str = ""
+
+
+def _samples(tag: int) -> np.ndarray:
+    """(n, 2) parameters inside a face's bounds."""
+    lo, hi = gmsh.model.getParametrizationBounds(2, tag)
+    us, vs = np.linspace(lo[0], hi[0], 5)[1:-1], np.linspace(lo[1], hi[1], 5)[1:-1]
+    return np.array([(u, v) for u in us for v in vs])
+
+
+def extrusion(volume: int) -> Extrusion:
+    """The volume as a prism: two flat faces, translates of each other along their
+    normal, and every other face parallel to that direction, spanning the length; or
+    one with `why` set. Of several such pairs, the one with the largest faces."""
+    faces = [t for _d, t in gmsh.model.getBoundary([(3, volume)], oriented=False,
+                                                   combined=False)]  # fmt: skip
+    planes = [t for t in faces if gmsh.model.getType(2, t) == "Plane"]
+    box = np.asarray(gmsh.model.getBoundingBox(3, volume))
+    size = float(np.linalg.norm(box[3:] - box[:3]))
+    tol = 1e-6 * size + 2e-7
+    normal = {t: _unit(gmsh.model.getNormal(t, list(_samples(t)[0]))) for t in planes}
+    centre = {t: np.asarray(gmsh.model.occ.getCenterOfMass(2, t)) for t in planes}
+    area = {t: gmsh.model.occ.getMass(2, t) for t in planes}
+    best = Extrusion(why="no two flat faces are translates of each other")
+    for i, a in enumerate(planes):
+        for b in planes[i + 1 :]:
+            d = normal[a]
+            if abs(abs(d @ normal[b]) - 1) > 1e-9 or abs(area[a] - area[b]) > 1e-6 * area[a]:
+                continue
+            gap = centre[b] - centre[a]
+            length = float(gap @ d)
+            if abs(length) < tol or np.linalg.norm(gap - length * d) > tol:
+                continue
+            d = d if length > 0 else -d
+            length = abs(length)
+            sides = [t for t in faces if t not in (a, b)]
+            ok = True
+            for t in sides:
+                n = np.asarray(gmsh.model.getNormal(t, list(_samples(t).ravel())), float)
+                if np.max(np.abs(n.reshape(-1, 3) @ d)) > 1e-6:
+                    ok = False
+                    break
+                lo, hi = (np.asarray(x) for x in (gmsh.model.getBoundingBox(2, t)[:3],
+                                                  gmsh.model.getBoundingBox(2, t)[3:]))  # fmt: skip
+                corners = np.array([[x, y, z] for x in (lo[0], hi[0]) for y in (lo[1], hi[1])
+                                    for z in (lo[2], hi[2])]) - centre[a]  # fmt: skip
+                along = corners @ d
+                if along.min() > 10 * tol or along.max() < length - 10 * tol:
+                    ok = False  # a side that doesn't span the length (a step)
+                    break
+            if ok and (best.why or area[a] > gmsh.model.occ.getMass(2, best.source)):
+                best = Extrusion(d, length, a)
+    return best
+
+
+def sweep(volume: int, ext: Extrusion, size: float | None) -> tuple[list[int], list[int]]:
+    """Replace the volume by its source face extruded along its length, in layers about
+    `size` long (else as many as the face's width over five), recombined. -> (its
+    volume, the face meshed in 2D, for `prepare_sweep`)."""
+    occ = gmsh.model.occ
+    width = math.sqrt(occ.getMass(2, ext.source))
+    step = size or width / 5
+    layers = max(1, round(ext.length / step))
+    face = occ.copy([(2, ext.source)])
+    occ.remove([(3, volume)], recursive=True)
+    out = occ.extrude(face, *(ext.direction * ext.length), numElements=[layers],
+                      recombine=True)  # fmt: skip
+    occ.synchronize()
+    return [t for d, t in out if d == 3], [t for _d, t in face]

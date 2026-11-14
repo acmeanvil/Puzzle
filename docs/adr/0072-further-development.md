@@ -296,10 +296,25 @@ FEniCSx, threaded beam-bolt ends, and the modelled bolts of ADR 0077. Left:
   and `(mesh tie k target)` (`_mixed_ties`, after the blocks are cut), tied bonded and
   nonconformal at the solve (`with_mesh_ties`, from the groups' names, so a stored mesh
   ties too). Benchmark `tests/integration/test_hex_tet_mixed.py`: a block in hex20 bonded
-  to a holed block in tet10, pulled: the reaction P exactly, the end's stretch −0.43 %
-  from the whole bar in tetrahedra on CalculiX and Code_Aster alike. Partly (2026-11-10, ADR
+  to a block with a blind hole in tet10, pulled: the reaction P exactly, the end's
+  stretch −0.11 % from the whole bar in tetrahedra on CalculiX and Code_Aster alike.
+  **Built (2026-11-14), sweeps:** a body of revolution with cones, tori or spheres
+  (`blocks.meridian`: every face plane square to the axis or a surface whose u runs
+  round it, one axis) has its meridian profile cut out (`blocks.revolve`), a strip along
+  the axis one element across, meshed in quadrilaterals and revolved in four quarter
+  turns with layers, as bolts are (hexahedra, prisms on the axis); a prism that isn't a
+  block (`blocks.extrusion`: two flat faces that are translates of each other, every
+  other face parallel to the direction and spanning it; a plate with holes, an
+  extruded L) has its cross-section extruded in layers of the recipe's size
+  (`blocks.sweep`). Both replace the body in Gmsh's model only and re-find its names on
+  a copy (`_lies_on`), as the blocks do; their volumes are swept by their layers, not
+  made transfinite, and take 20-node hexahedra and 15-node prisms. Benchmarks: a shaft
+  tapered by a cone and one with a filleted shoulder, F / A in each segment within
+  0.02 % (`test_hex_revolution.py`); a holed plate swept into hex20 alone, its stretch
+  +0.18 % from tetrahedra (`test_hex_tet_mixed.py`). Partly (2026-11-10, ADR
   0077): modelled bolts, nuts and washers are swept by revolving and sit as hexahedra in a
-  tet recipe, joined by nonconformal ties; general sweeps are left. **Built (2026-11-11):** second-order hexahedra, 20 and 27 nodes (ADR 0082).
+  tet recipe, joined by nonconformal ties. Left: sweeps along a curved path, and
+  bodies that are a block or prism only once cut (a T, a stepped plate). **Built (2026-11-11):** second-order hexahedra, 20 and 27 nodes (ADR 0082).
 - **Hex meshes of bodies of revolution (maintainer, 2026-11-08).** The use is cylindrical
   solids: idealised bolts (shank, head, nut), pins, shafts, tubes, bushings and rollers.
   - **Today:** Gmsh hexes only block-like bodies (six four-sided faces,
@@ -522,8 +537,9 @@ phase 6's items are done whenever what they wait on arrives.
    budget (9).
 1. **Finish what's partly built** (they are closest to done and each has its design):
    - pretension locked across mixed steps, partial local axes on the rest (3);
-   - general sweeps, cones and tori in the blocks (5) (done 2026-11-13: hex meshes of
-     bodies of revolution by blocks; 2026-11-14: hex and tet in one recipe, tied);
+   - meshing (5) (done 2026-11-13: hex meshes of bodies of revolution by blocks;
+     2026-11-14: hex and tet in one recipe, tied; cones and tori by revolved profiles;
+     prisms swept);
    - welds (3b) (done 2026-11-14: the light weld's lost couple, by per-station
      couplings, and the groove weld's cap as a solid; done 2026-11-13: spectra
      and ± E on CalculiX and Code_Aster, the plate-side ASME toe, combinations on the

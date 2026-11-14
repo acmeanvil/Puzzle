@@ -1,6 +1,6 @@
 # 0019. Mesh in a workbench with the full breadth of Gmsh and Netgen
 
-- Status: Accepted; built (2026-10-24, completed 2026-10-25) but for general sweeping (bolts' revolved hexes in a tet recipe, ADR 0077); mixed hex-tet meshes built 2026-11-14 (meshed apart and tied, ADR 0072 section 5); second-order hexahedra built with ADR 0082 (2026-11-11); bodies of revolution cut into hexahedral blocks at mesh time (2026-11-13, ADR 0072 section 5)
+- Status: Accepted; built (2026-10-24, completed 2026-10-25); mixed hex-tet meshes (meshed apart and tied), profiles revolved for bodies of revolution with cones and tori, and prisms swept built 2026-11-14 (ADR 0072 section 5; sweeps along curved paths left); second-order hexahedra built with ADR 0082 (2026-11-11); bodies of revolution cut into hexahedral blocks at mesh time (2026-11-13, ADR 0072 section 5)
 - Date: 2026-10-22
 
 ## Context

@@ -114,6 +114,12 @@ def test_method_detection(tmp_path):
     p, comp = _part(holed)
     result = generate_mesh(p, comp.id, tmp_path, tmp_path / "b", preview=True)
     ((method, why),) = result.methods.values()
+    assert method == "hexahedra" and "prism" in why  # a through hole: swept (ADR 0072)
+    blind = [*BOX, HistoryStep(kind="cylinder", name="H", args={
+        "r": 0.003, "h": 0.005, "x": 0.02, "y": 0.01, "z": 0.005, "mode": "cut"})]  # fmt: skip
+    p, comp = _part(blind)
+    result = generate_mesh(p, comp.id, tmp_path, tmp_path / "c", preview=True)
+    ((method, why),) = result.methods.values()
     assert method == "tetrahedra" and "faces" in why
 
 
