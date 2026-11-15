@@ -103,6 +103,21 @@ def _translations() -> list[Passage]:
                     "\n".join(lines), "https://code-aster.org/doc/")]  # fmt: skip
 
 
+def _help_pages() -> list[Passage]:
+    """The manual (ADR 0083): written pages whole; the generated reference cut at its
+    headings, each a passage of its own (one feature, one setting...)."""
+    from puzzle import help as manual
+
+    out = []
+    for p in manual.pages().values():
+        if p.section == "reference":
+            out += [Passage(f"help {p.name}", f"{p.title}: {x.heading}" if x.heading else p.title,
+                            x.text) for x in manual.passages() if x.page == p.name]  # fmt: skip
+        else:
+            out += _split(f"help {p.name}", p.text)
+    return out
+
+
 @cache
 def passages() -> tuple[Passage, ...]:
     out: list[Passage] = []
@@ -110,6 +125,7 @@ def passages() -> tuple[Passage, ...]:
         out += _split(f"skill {path.stem}", path.read_text(encoding="utf-8"))
     for path in sorted((HERE / "notes").glob("*.md")):
         out += _split(f"note {path.stem}", path.read_text(encoding="utf-8"))
+    out += _help_pages()
     out += _capabilities()
     out += _translations()
     if ADRS.is_dir():  # a source checkout: the decisions themselves

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import QMenu, QMessageBox
 
@@ -979,6 +980,19 @@ def _fill_layouts(window, menu: QMenu) -> None:
 
 
 def _help(window, menu: QMenu) -> None:
+    from puzzle.gui.help_viewer import show_help
+
+    # ADR 0083: the manual; F1 opens it at what has focus (help_viewer.install)
+    contents = _add(
+        menu,
+        "Help",
+        lambda: show_help(window),
+        free=True,
+        tip="The manual: guides, reference, theory; F1 opens it at what has focus",
+    )
+    contents.setShortcut(QKeySequence(Qt.Key.Key_F1))
+    contents.setShortcutContext(Qt.ShortcutContext.WidgetShortcut)  # F1 itself: install()
+    window.actions_by_name["help"] = contents
     _add(menu, "Getting started", lambda: _getting_started(window), free=True)
     advisor = window.actions_by_name.get("advisor")
     if advisor is not None:
@@ -998,25 +1012,6 @@ def _help(window, menu: QMenu) -> None:
     about.setMenuRole(QAction.MenuRole.AboutRole)  # macOS: the application menu
 
 
-STEPS = (
-    "<ol>"
-    "<li><b>Geometry:</b> Geometry → New part… or Import geometry…; name faces as "
-    "selections (Pick, double-click, Selections → New from picks…).</li>"
-    "<li><b>Materials:</b> Materials → Add from library…</li>"
-    "<li><b>Mesh:</b> Mesh → New mesh recipe, then Model → Components → New component… to "
-    "put the part, its material and the recipe together; Mesh → Mesh (⌘M) to see it.</li>"
-    "<li><b>Model:</b> Model → Physics and loads → Add physics, then Add feature for "
-    "supports and loads.</li>"
-    "<li><b>Study:</b> Model → Studies → New study…, then Model → Run → Run study "
-    "(⌘R).</li>"
-    "<li><b>Results:</b> the Results ribbon above the view, or the Results menu: probes, "
-    "reactions, paths, cuts, animation and plots.</li>"
-    "</ol>"
-    "The Problems tab says what is missing before a run. The Agent panel can do any of "
-    "this for you, with your approval."
-)
-
-
 def _element_library(window) -> None:
     from puzzle.gui.element_library import show_library
 
@@ -1030,7 +1025,9 @@ def _log(window) -> None:
 
 
 def _getting_started(window) -> None:
-    QMessageBox.information(window, "Getting started", STEPS)
+    from puzzle.gui.help_viewer import START, show_help
+
+    show_help(window, f"page:{START}")
 
 
 def shortcut_rows(window) -> list[tuple[str, str]]:

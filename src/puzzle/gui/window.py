@@ -1177,6 +1177,16 @@ class MainWindow(QMainWindow):
         from puzzle.gui import main_menu
 
         self.menus = main_menu.build(self, agent, messages)
+        # ADR 0083: F1 opens the help for what has focus; each tab and the view say
+        # which page is theirs (panels say it through their dock's key)
+        from puzzle.gui import help_viewer
+
+        help_viewer.install(self)
+        for widget, key in ((self.workbench, "panel:geometry"), (self.mesh_bench, "panel:mesh"),
+                            (self.schematic_side, "panel:schematic"),
+                            (self.schematic, "panel:schematic"), (self.viewport, "panel:view"),
+                            (self.results_bar, "panel:results")):  # fmt: skip
+            widget.setProperty("help", key)
         self.apply_toolbar_style()
         # On macOS, Settings… moves to the application menu, where Mac users look for it.
         self.actions_by_name["settings"].setMenuRole(QAction.MenuRole.PreferencesRole)

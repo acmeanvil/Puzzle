@@ -490,8 +490,21 @@ FEniCSx, threaded beam-bolt ends, and the modelled bolts of ADR 0077. Left:
   temperature (partly), material axes drawn on assignments (partly) (0020).
 - The step dialog, tool panel and material builder on `FormPanel` (0036).
 - Advisor text in tooltips and form descriptions; a guided tour once help exists (0040).
-- The help and documentation system with worked examples, ADR 0083 (proposed; it
-  supersedes 0075). Built so far: Help → Element library and Help → Log.
+- The help and documentation system with worked examples, ADR 0083 (it supersedes
+  0075). Built 2026-11-15: steps 1-3 (the Help window, F1, the generated reference,
+  guides, MCP `help`); left: theory notes, verification pages, the static site and PDF,
+  the tutorials (on `main`).
+- Found writing the guides (2026-11-15), features an agent reaches but the GUI doesn't
+  (each a form or menu item to add): making a weld (`weld_add`), a VDI 2230 check
+  (`bolt_vdi2230`), weld fatigue (`weld_fatigue`), a parameter sweep step, a frame from a
+  DXF (`frame_geometry`), a mesh study, a mesh shoot-out, selection rules (box, near,
+  normal), and who may connect over MCP (`puzzle autonomy --mcp` only). Geometry → New
+  part… starts from a sketch and the Geometry heading's New part… from a box: one
+  behaviour. The maintainer (2026-11-15): agent-only is acceptable for these, but each
+  needs a visible way in: a menu item that opens the agent window with the request
+  preloaded, so the conversation starts there. Users offline without an assistant are
+  the open case: a form for each in time, or the help page naming the MCP tool and its
+  arguments meanwhile.
 - Another docking library behind `gui/docking.py` (optional); menu icons; a focus-order
   review of every dialog; `operators.TYPE_COLOURS` as theme tokens (0045).
 - 3D mouse: the macOS check beside 3DxWare; axis signs on real hardware (Windows only so
@@ -512,6 +525,11 @@ FEniCSx, threaded beam-bolt ends, and the modelled bolts of ADR 0077. Left:
   and making an "archived" version first (0061).
 
 ### Found while collecting (fix soon, not deferrals)
+
+- Code_Saturne's capability matrix claims transient flow (`fluid_flow`: stationary,
+  transient), but no benchmark runs one and its adapter and CLAUDE.md describe steady
+  flow (found writing the help, 2026-11-15). The maintainer chose a benchmark
+  (2026-11-15): a transient Code_Saturne case against a closed form.
 
 - Elmer's capability matrix claimed `bonded_nonconformal`, but `elmer/sif.py` writes no
   mortar tie and refuses it (it failed safe, with code `unsupported`). Fixed 2026-11-09:

@@ -55,7 +55,7 @@ id; results start in global axes.
    `{"command": "edit", "object": "Local", "ops": [{"op": "set", "path": "type",
    "value": "cylindrical"}, {"op": "set", "path": "axis", "value": [1, 0, 0]},
    {"op": "set", "path": "angles", "value": null}]}`. The GUI's Edit… (right-click,
-   double-click, Model → Edit coordinate system…) does this.
+   double-click, Project → Edit coordinate system…) does this.
 
 ## Mistakes to avoid
 

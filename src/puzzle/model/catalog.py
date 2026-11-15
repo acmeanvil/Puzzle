@@ -17,7 +17,7 @@ from puzzle.model.schema import Feature, Quantity
 class FeatureSpec:
     type: str
     label: str
-    entity: str = "face"  # "face" or "body"
+    entity: str = "face"  # "face", "body", "edge" or "vertex": what the add dialog offers
     values: dict[str, tuple[float, str]] = field(default_factory=dict)  # name -> (value, unit)
 
     def feature(self, selection: str) -> Feature:
@@ -47,11 +47,13 @@ CATALOG: dict[str, list[FeatureSpec]] = {
         FeatureSpec(
             "line_load",
             "Line load (per length, on members)",
+            entity="edge",  # members are edges: the add dialog offers edge selections
             values={"x": (0.0, "kN/m"), "y": (0.0, "kN/m"), "z": (0.0, "kN/m")},
         ),
         FeatureSpec(
             "node_spring",
             "Spring support (at a node)",
+            entity="vertex",
             values={
                 **{f"k{a}": (0.0, "kN/mm") for a in "xyz"},
                 **{f"kr{a}": (0.0, "kN*m/rad") for a in "xyz"},

@@ -11,6 +11,34 @@ from dataclasses import dataclass, field
 from typing import Any
 
 CODES = {
+    # Problems found in the model before a run (Project.problems): the run is refused
+    "unconstrained": "a solid-mechanics study on a component with no fixed or displacement "
+    "condition: it would move as a rigid body",
+    "suppressed": "every part of the study's component is suppressed: nothing to solve",
+    "missing_reference": "an object refers to another that no longer exists",
+    "unknown_selection": "a component uses a selection its geometry doesn't have",
+    "foreign_local_geometry": "a component uses geometry local to another component",
+    "missing_physics": "a study solves a physics its component doesn't have",
+    "duplicate_solver": "a shoot-out lists the same solver twice",
+    "sweep_order": "a study's sweep steps come after its solve steps: they must come first",
+    "unknown_parameter": "a sweep varies a parameter the project doesn't define",
+    "unpinned_transfer": "a transfer from a swept study doesn't say which point it takes "
+    "(its source_point)",
+    "operator_input": "an operator's required input isn't wired",
+    # Contact warnings (ADR 0056): the run goes ahead
+    "contact_far": "a contact's faces start further apart than its search distance",
+    "contact_overhang": "a contact's source face reaches past the edge of its target",
+    "contact_nonconforming": "a curved source face meets its target along a line or at a "
+    "point (a cylinder or ball on a plate), which Code_Aster's contact can't pair",
+    "contact_shared_outline": "a contact's two faces have the same outline, where Code_Aster's "
+    "3D friction fails",
+    "contact_slave_held": "nodes of a contact's source face are also held, or the source of "
+    "another contact",
+    "contact_slave_bolted": "a contact's source face shares nodes with bolt ends",
+    "contact_only_hold": "a body is held only through sliding contact: weak springs hold it "
+    "until the contact closes (ADR 0080)",
+    "free_body": "a body is neither held nor joined to a held body",
+    "weak_springs": "weak springs were added to a body held only by sliding contact (ADR 0080)",
     "large_strain": "large-deflection strains past 5 % on an elastic material (ADR 0082)",
     "explicit_cost": "a long explicit run, or one element setting its time step (ADR 0085)",
     "energy_error": "an explicit run's energy balance off by more than 5 % (ADR 0085)",

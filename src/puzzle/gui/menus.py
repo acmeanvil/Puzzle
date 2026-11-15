@@ -525,7 +525,7 @@ def add_feature(window, comp: Component, index: int, spec):
     choices = selections_of(window.session.project, comp, spec.entity)
     if not choices:
         window.statusBar().showMessage(
-            f"No {spec.entity} selections on {comp.name} yet: pick faces in the view first", 8000
+            f"No {spec.entity} selections on {comp.name} yet: pick some in the view first", 8000
         )
         return None
     selection = window.choose(
@@ -542,7 +542,7 @@ def assign_material(window, comp: Component):
     project = window.session.project
     materials = {m.name: m for m in project.of_type(Material)}
     if not materials:
-        window.statusBar().showMessage("Add a material first (Materials → Add from library)", 8000)
+        window.statusBar().showMessage("Add a material first (Materials → Add material…)", 8000)
         return None
     bodies = selections_of(project, comp, "body")
     if not bodies:
@@ -574,7 +574,7 @@ def assign_material_to_bodies(window, geo: Geometry, selection: str | None = Non
     project = window.session.project
     materials = {m.name: m for m in project.of_type(Material)}
     if not materials:
-        window.statusBar().showMessage("Add a material first (Materials → Add from library)", 8000)
+        window.statusBar().showMessage("Add a material first (Materials → Add material…)", 8000)
         return None
     uses = [(c, p) for c in project.of_type(Component) for p in c.parts if p.geometry == geo.id]
     if not uses:

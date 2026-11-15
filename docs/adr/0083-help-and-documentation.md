@@ -1,6 +1,8 @@
 # 0083. A complete help and documentation system, with worked examples (supersedes 0075)
 
-- Status: Proposed
+- Status: Accepted; steps 1-3 built (2026-11-15): the Help window, search and F1, the
+  generated reference and its tests, the guides; theory notes, the static site and PDF,
+  and the tutorials (0075's list, on `main`) to come
 - Date: 2026-11-11
 
 ## Context
@@ -26,7 +28,10 @@ The maintainer asked (2026-11-11) for a complete help and documentation system, 
 ## Decision
 
 1. **One source, several readers.** Documentation lives in the repository as Markdown
-   with front matter, in `docs/help/`. The parts are:
+   with front matter, in `src/puzzle/help/` (amended 2026-11-15: `docs/help/` would not
+   reach an installed app, whose Help window and agent read the same pages; the package
+   ships them as it ships the skills): `pages/` the written ones, `reference/` the
+   generated ones. The parts are:
    - **Guides:** task by task, written for a user (make a mesh, set up contact, run a
      shoot-out, read fatigue results).
    - **Reference:** generated from the code's own data, so it can't drift from it. It
@@ -95,6 +100,39 @@ The maintainer asked (2026-11-11) for a complete help and documentation system, 
 6. **Writing.** Plain words, for an engineer who isn't an expert in FE, with the expert's
    detail one click below. This is the overarching principle in CLAUDE.md: every feature
    explainable, by the help and by the agent alike.
+
+**Built (2026-11-15), steps 1-3**:
+
+- `puzzle/help/` (`pages()`, `parse`, `lookup`, `contents`, `search`, `answer`): pages
+  with front matter (title, section, order, `keys`, summary, `adrs`); a line
+  `<!-- key: ... -->` before a heading gives that heading its help keys, so F1 lands on
+  the entry; a key falls back to a more general one (`setting:calculix:x` →
+  `setting:calculix`); search is BM25 over every heading's passage.
+- The reference (`help/reference.py`, `scripts/build_help.py`): eleven pages generated
+  from the code: features (with the solvers that write each), solver settings,
+  capabilities, elements, operators, material properties and models, result
+  quantities, Properties fields (`DESCRIPTIONS`), problem codes, MCP tools, CLI
+  commands. A test fails when one is stale; another when a feature, setting, solver,
+  operator, property, model, result, code, MCP tool or CLI command has no entry.
+- Guides: getting started and seventeen guides (the window, geometry, materials,
+  meshing, components, loads and supports, contact, bolts and welds, beams shells and
+  frames, analyses, studies and solvers, results, imported fields, schematic and
+  operators, optimisation and convergence, the agent and Advisor, versions and
+  projects); their `adrs` are `WITH_HELP` in `tests/test_help.py`.
+- The Help window (`gui/help_viewer.py`: contents, search, Back, pages with their TeX as
+  the agent window draws it, `help:` and `puzzle:` links); F1 anywhere
+  (`help_viewer.help_key`: a widget's `help` property, a Properties row's field, a tree
+  item's kind, feature or operator, its panel); Help → Help and Getting started open it.
+  A test asks every panel, tab, tree section, object kind, tree item kind and described
+  Properties field for a page, and resolves every `help:` link.
+- The agent: MCP `help(topic)` (contents, a page, a key, or a search), the knowledge pack
+  indexes the pages (`help <page>`), skill `help-pages`; `puzzle help [topic]`.
+- Found on the way: 20 codes Puzzle raises were missing from `errors.CODES` (the schema's
+  problems, the contact checks), so nothing could explain them; they are listed, and a
+  test scans the source for codes used and not listed. The catalog said line loads and
+  node springs act on faces, so adding one to a frame offered no member edges; they ask
+  for edges and points. Two status messages and the coordinate-systems skill named
+  menus that aren't there.
 
 ## Consequences
 

@@ -151,6 +151,28 @@ def _unarchive(args) -> int:
     return 0
 
 
+def _help(args) -> int:
+    from puzzle import help as manual
+
+    found = manual.answer(" ".join(args.topic))
+    if "contents" in found:
+        for section in found["contents"]:
+            print(section["section"])
+            for p in section["pages"]:
+                print(f"  {p['name']:<34} {p['title']}")
+    elif "text" in found:
+        print(found["text"])
+    else:
+        if not found["results"]:
+            print(f"nothing in the help answers '{found['search']}'")
+            return 1
+        for r in found["results"]:
+            where = f"{r['title']} › {r['heading']}" if r["heading"] else r["title"]
+            print(f"{where}  ({r['page']})")
+            print(f"    {r['excerpt']}")
+    return 0
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="puzzle", description="Puzzle FEM multi-solver front end")
     sub = parser.add_subparsers(required=True, metavar="COMMAND")
@@ -247,6 +269,12 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--tail", type=int, default=60, help="without a filter: each file's last N")
     p.add_argument("--files", action="store_true", help="list the log files and counts only")
     p.set_defaults(handler=_log)
+
+    p = sub.add_parser("help", help="the manual: contents, a page, a help key or a search "
+                       "(ADR 0083)")  # fmt: skip
+    p.add_argument("topic", nargs="*", help="a page ('guides/meshing'), a help key "
+                   "('feature:pressure') or words to search; none: the contents")  # fmt: skip
+    p.set_defaults(handler=_help)
 
     p = sub.add_parser("elements", help="every solver's elements, grouped (ADR 0082)")
     p.add_argument("--solver", help="calculix, code_aster, elmer, fenicsx, pynite...")

@@ -1742,6 +1742,20 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         return {"elements": [{"solver": n, **asdict(e)} for n, e in rows]}
 
     @tool(
+        description="Puzzle's manual (ADR 0083), the pages people read in the Help window: "
+        "no `topic` gives the contents; a page name ('guides/meshing', "
+        "'reference/settings') or a help key ('feature:pressure', "
+        "'setting:calculix:solver', 'operator:reduce', 'problem:unconstrained') gives that "
+        "page, from the entry the key names; any other words search it. Cite pages by "
+        "their title when you explain from them."
+    )
+    @guarded
+    def help(topic: str = "") -> dict[str, Any]:  # noqa: A001 - the tool's own name
+        from puzzle import help as manual
+
+        return manual.answer(topic)
+
+    @tool(
         description="Choose the element a body is written with (ADR 0082 step 3): "
         "`selection` a body selection ('Part/Body') or part, `formulation` in neutral "
         "words (incompatible_modes: linear bricks bending without locking, CalculiX "
