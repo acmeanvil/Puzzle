@@ -324,6 +324,9 @@ def state(contact, mesh: Mesh, component: str = "") -> ContactState:
     """A contact's initial state on this mesh."""
     reach = search_distance(contact, mesh)
     out = ContactState(contact.name, component, "", reach, source=contact.source)
+    if getattr(contact, "is_self", False):  # every node lies on its own target
+        out.note = "a self-contact: found as the body folds, during the run"
+        return out
     source, target = surface(mesh, contact.source), surface(mesh, contact.target)
     if source is None or target is None:
         missing = contact.source if source is None else contact.target

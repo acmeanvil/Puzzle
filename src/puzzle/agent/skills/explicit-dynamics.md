@@ -1,6 +1,6 @@
 ---
 name: explicit-dynamics
-description: impact, drop tests and short pulses with explicit dynamics on OpenCourant: the explicit step, initial and imposed velocities, rigid walls, the stable time step and mass scaling, what the energies say
+description: impact and short pulses on OpenCourant: the explicit step, velocities, rigid walls, self-contact, beams, failure and erosion, the time step, mass scaling, the energies
 adr: 0085
 ---
 Read this when the user wants an impact, a drop, a crash, a blast or any event over
@@ -41,10 +41,21 @@ mean. For vibration, slow transients and steady loads use the implicit solvers i
    - contacts between parts: bonded (a nonconformal one is tied), frictionless and
      frictional (penalty, both ways; parts touching at the start aren't pushed apart);
      no separation and rough are refused;
+   - self-contact: a frictionless or frictional contact whose `source` and `target`
+     are the same face selection (a tube folding onto itself, the bodies of one part
+     meeting). Puzzle sets its gap below faces that start closer than a tenth of the
+     smallest edge (`deck.self_gap`); implicit solvers refuse it (`self_contact`);
    - shells: sheet bodies with a shell section (element order 1: quads or triangles);
+   - beams: line bodies with a beam section (element order 1), the section's first
+     axis from `orientation` as elsewhere; displacements and velocities come back,
+     beam forces not yet;
    - materials: elastic, the plasticity table, or Johnson–Cook (`johnson_cook`: `a`,
      `b`, `n`, `c`, `reference_strain_rate`, `max_stress`, `rate_cutoff` Hz: filter the
-     strain rate below a part's ringing to read its mean rate).
+     strain rate below a part's ringing to read its mean rate);
+   - failure and erosion (`failure` beside a plasticity table or Johnson–Cook:
+     `strain` the failure strain D1, optional `d2`, `d3` (triaxiality), `d4` (strain
+     rate), `reference_strain_rate`): an element whose damage reaches 1 is deleted.
+     A material with failure but no plasticity is refused; implicit solvers refuse it.
 4. Before running: `explicit_estimate(study)` gives the stable time step (s, the
    element setting it and where), the cycles, the mass, and for a run over 1e7 cycles
    the mass scaling time step for about 1e6 cycles with the mass it would add. Tell
@@ -59,7 +70,9 @@ mean. For vibration, slow transients and steady loads use the implicit solvers i
    `acceleration`, `stress` (averaged at the nodes), `plastic_strain_equivalent`, and
    per frame the global energies `internal_energy`, `kinetic_energy`,
    `hourglass_energy`, `contact_energy`, `external_work`, `plastic_work`,
-   `added_mass`, `time_step`. `result_history` follows one over the frames.
+   `added_mass`, `time_step`. `result_history` follows one over the frames. With
+   failure, `eroded` (per element: 1 deleted) and the global `eroded_elements`; the
+   stress is averaged over the elements left.
 
 After the run, warnings say when the energy balance is off by more than 5 %
 (`energy_error`), hourglass energy passes 10 % of the internal energy (`hourglass`),
@@ -91,3 +104,9 @@ microseconds). Always say the mass it adds (`explicit_estimate`, `added_mass`).
   80). Fine meshes where it matters.
 - Reading σ = ρ c v from a bar struck past yield: in 3D the plastic zone's lateral
   inertia lowers the precursor; benchmark plasticity with a slow pull instead.
+- Failure on a flat (perfectly plastic) curve: the strain gathers where yield comes
+  first, so a pulled bar breaks long before a uniform strain would say (0.69 mm of
+  1.25 mm in the benchmark); with hardening it broke within 1 % of the uniform
+  prediction. Give failure a hardening curve, and refine where the break will be.
+- Ten-node tetrahedra cost more than they look: their step is about 0.31 of the
+  corner tetrahedron's (measured), not half.

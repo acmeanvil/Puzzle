@@ -8,6 +8,10 @@ type are a Radioss part (its material and property); loads and supports act on n
 groups (`/GRNOD/NODE`), pressures on segment surfaces (`/SURF/SEG`), and anything
 varying in time on a function (`/FUNCT`) from the feature's amplitude.
 
+Beams (step 5): two-node /BEAM elements, each with its section's first axis as the
+orientation vector (local y; Radioss makes it square to the member), on /PROP/BEAM
+with A, Iyy = I1 (about the first axis), Izz = I2 and Ixx = J, shear included.
+
 Element node orders: hex8 and tet4 as Gmsh's; tet10's mid-edge nodes are Gmsh's
 (0-1, 1-2, 2-0, 0-3, 2-3, 1-3) with the last two swapped, Radioss taking (2-4, 3-4)
 after (1-4).
@@ -29,6 +33,7 @@ from puzzle.model.schema import Amplitude, Component, Material, Project, Study
 NAME = "puzzle"  # the run's name: puzzle_0000.rad, puzzle_0001.rad, puzzleA001, puzzleT01
 SOLIDS = {"tet4": "/TETRA4", "tet10": "/TETRA10", "hex8": "/BRICK"}
 SHELLS = {"quad4": "/SHELL", "tri3": "/SH3N"}  # ADR 0085 step 2
+BEAMS = {"line2": "/BEAM"}  # ADR 0085 step 5
 TET10 = [0, 1, 2, 3, 4, 5, 6, 7, 9, 8]  # Gmsh tet10 -> Radioss TETRA10
 HUGE = 1e30  # "never stops"
 FRAMES = 20
@@ -151,7 +156,26 @@ class Deck:
 
 def _material(deck: Deck, m: Material, solver_models: set[str]) -> int:
     """A material card: elastic, or with its plasticity table (true stress against plastic
-    strain, the first curve; ADR 0085 decision 3)."""
+    strain, the first curve; ADR 0085 decision 3), and its failure model after it."""
+    mid = _law(deck, m, solver_models)
+    failure = m.models.failure if m.models is not None else None
+    if failure is not None:
+        plastic = m.models.plasticity is not None or m.models.johnson_cook is not None
+        if not plastic:
+            raise InputError(f"material '{m.name}': failure needs plasticity (a hardening "
+                             "table or Johnson–Cook)", code="incomplete_material")  # fmt: skip
+        # hm_cfg_files radioss2018 FAIL/fail_johnson.cfg: D1-D5 (no temperature term:
+        # D5 0); ε̇0, Ifail_sh 1 and Ifail_so 1 (an element goes when one point fails),
+        # Dadv, Ixfem 0
+        deck.lines += [f"/FAIL/JOHNSON/{mid}",
+                       _r(failure.strain, failure.d2, failure.d3, failure.d4, 0.0),
+                       _r(failure.reference_strain_rate) + _i(1, 1) + " " * 20 + _r(0.0)
+                       + " " * 10 + _i(0)]  # fmt: skip
+    return mid
+
+
+def _law(deck: Deck, m: Material, solver_models: set[str]) -> int:
+    """The material law's card; its id."""
     props = {k: q.to_si() for k, q in m.properties.items()}
     for key in ("density", "youngs_modulus", "poissons_ratio"):
         if key not in props:
@@ -183,11 +207,24 @@ def _material(deck: Deck, m: Material, solver_models: set[str]) -> int:
     return mid
 
 
-def _property(deck: Deck, element: str, thickness: float | None = None) -> int:
+def _property(deck: Deck, element: str, thickness=None, comp: Component | None = None) -> int:
     """A solid property: HEPH bricks (Isolid 24, physical hourglass); tets as they are
     (Radioss's tetrahedra need no hourglass control). A shell's: QEPH quadrilaterals
-    (Ishell 24), five points through the thickness, plasticity iterated."""
+    (Ishell 24), five points through the thickness, plasticity iterated. A beam's
+    (`thickness` is then its section's index): /PROP/BEAM from `frames.constants`."""
     pid = deck.ids.next("prop")
+    if element in BEAMS:
+        from puzzle.frames import constants
+
+        section = comp.beam_sections[thickness]
+        a, i1, i2, j = constants(section)
+        # hm_cfg_files radioss110 PROP/prop_p3_beam.cfg (radioss51 format): Ismstr;
+        # Dm, Df (no damping); A, Iyy, Izz, Ixx; the rotations held at neither end,
+        # Ishear 0 (shear deformation included)
+        deck.card(f"/PROP/BEAM/{pid}", f"beam {section.selection} {section.shape}",
+                  " " * 10 + _i(0), _r(0.0, 0.0), _r(a, i1, i2, j),
+                  f"{'000':>6} {'000':>3}" + _i(0))  # fmt: skip
+        return pid
     if element in SHELLS:
         deck.card(f"/PROP/SHELL/{pid}", f"{element} shell {thickness:g} m",
                   _i(24 if element == "quad4" else 0, 0, 0), _r(0.0, 0.0, 0.0, 0.0, 0.0),
@@ -221,12 +258,32 @@ def _thicknesses(comp: Component, mesh: Mesh) -> dict[int, float]:
     return out
 
 
+def _beam_sections(comp: Component, mesh: Mesh) -> dict[int, int]:
+    """Each beam element's section (its index in `comp.beam_sections`), an edge
+    selection's after its part's."""
+    out: dict[int, int] = {}
+    order = sorted(range(len(comp.beam_sections)),
+                   key=lambda k: "/" in comp.beam_sections[k].selection)  # fmt: skip
+    beams = {id(b) for b in mesh.beam_blocks()}
+    for k in order:
+        s = comp.beam_sections[k]
+        group = mesh.groups.get(s.selection)
+        if group is None:
+            raise InputError(f"a beam section names '{s.selection}', which is not meshed")
+        for b in group.blocks(mesh):
+            if id(b) in beams:
+                out.update(dict.fromkeys(b.ids.tolist(), k))
+    return out
+
+
 def _elements(project: Project, comp: Component, mesh: Mesh):
-    """Each element's (material assignment index, element type, shell thickness or
-    None); later assignments win, as elsewhere."""
+    """Each element's (material assignment index, element type, shell thickness, a
+    beam's section index or None); later assignments win, as elsewhere."""
     owner: dict[int, tuple] = {}
     shells = {id(b) for b in mesh.shell_blocks()}
+    beams = {id(b) for b in mesh.beam_blocks()}
     thick = _thicknesses(comp, mesh) if shells else {}
+    sections = _beam_sections(comp, mesh) if beams else {}
     for k, a in enumerate(comp.materials):
         group = mesh.groups.get(a.selection)
         if group is None:
@@ -245,6 +302,19 @@ def _elements(project: Project, comp: Component, mesh: Mesh):
                                          "add a shell section", code="invalid")  # fmt: skip
                     owner[int(e)] = (k, b.element, thick[int(e)])
                 continue
+            if b.dim == 1 and id(b) in beams:
+                if b.element not in BEAMS:
+                    raise InputError(
+                        f"{b.element} beams aren't written for OpenCourant "
+                        "(line2 are: element order 1)",
+                        code="unsupported",
+                    )
+                for e in b.ids.tolist():
+                    if int(e) not in sections:
+                        raise InputError(f"the line body '{a.selection}' has no section: add "
+                                         "a beam section", code="invalid")  # fmt: skip
+                    owner[int(e)] = (k, b.element, sections[int(e)])
+                continue
             if b.dim != 3:
                 continue
             if b.element not in SOLIDS:
@@ -252,7 +322,7 @@ def _elements(project: Project, comp: Component, mesh: Mesh):
                                  "tet10 and hex8 are)", code="unsupported")  # fmt: skip
             for e in b.ids.tolist():
                 owner[int(e)] = (k, b.element, None)
-    elements = [b for b in mesh.blocks if b.dim == 3 or id(b) in shells]
+    elements = [b for b in mesh.blocks if b.dim == 3 or id(b) in shells or id(b) in beams]
     missing = [int(e) for b in elements for e in b.ids if int(e) not in owner]
     if missing:
         raise InputError(f"{len(missing)} elements have no material", code="incomplete_material")
@@ -261,7 +331,7 @@ def _elements(project: Project, comp: Component, mesh: Mesh):
 
 def _connectivity(mesh: Mesh) -> dict[int, np.ndarray]:
     out = {}
-    shells = {id(b) for b in mesh.shell_blocks()}
+    shells = {id(b) for b in mesh.shell_blocks()} | {id(b) for b in mesh.beam_blocks()}
     for b in mesh.blocks:
         if b.dim == 3 or id(b) in shells:
             conn = b.connectivity[:, TET10] if b.element == "tet10" else b.connectivity
@@ -296,9 +366,9 @@ def _features(deck: Deck, project: Project, comp: Component, mesh: Mesh) -> None
             group = _group(mesh, f)
             nodes = group.node_ids
             title = f"{f.type} {f.selection}"
-            if f.type == "fixed":  # on shell nodes their rotations too
+            if f.type == "fixed":  # on shell and beam nodes their rotations too
                 gid = deck.nodes_group(title, nodes)
-                turns = "111" if set(map(int, nodes)) & mesh.shell_nodes() else "000"
+                turns = "111" if set(map(int, nodes)) & _turning(mesh) else "000"
                 deck.card(f"/BCS/{deck.ids.next('bcs')}", title,
                           f"{'111':>6}{turns:>4}" + _i(0, gid))  # fmt: skip
             elif f.type == "displacement":
@@ -347,6 +417,11 @@ def _features(deck: Deck, project: Project, comp: Component, mesh: Mesh) -> None
                 raise InputError(f"'{f.type}' isn't written for OpenCourant", code="unsupported")
 
 
+def _turning(mesh: Mesh) -> set[int]:
+    """Nodes with rotations: shells' and beams'."""
+    return set(mesh.shell_nodes()) | mesh.beam_nodes()
+
+
 def _force(deck, project, f, group, mesh, v, title) -> None:
     """A total force spread as a uniform traction, consistently over the faces (a node
     selection: shared equally), one /CLOAD per node and direction."""
@@ -389,10 +464,11 @@ def _segments(deck, group, mesh, title, corners_only=True) -> int:
 
     centres = {}
     for b in mesh.blocks:
-        if b.dim == 3:
-            corners = mesh.node_coords(b.connectivity[:, :4].ravel()).reshape(len(b.ids), 4, 3)
+        if b.dim == 3:  # each element's centre from all its corners (a hex8's first four
+            k = 4 if b.element.startswith("tet") else 8  # are one face, not the middle)
+            corners = mesh.node_coords(b.connectivity[:, :k].ravel()).reshape(len(b.ids), k, 3)
             for nodes, c in zip(b.connectivity, corners.mean(axis=1), strict=True):
-                for n in nodes[:4] if b.element.startswith("tet") else nodes:
+                for n in nodes[:k]:
                     centres.setdefault(int(n), []).append(c)
     rows, sid = [], deck.ids.next("surf")
     blocks = surface_blocks(group, mesh)
@@ -421,11 +497,15 @@ def _contacts(deck, comp: Component, mesh: Mesh) -> None:
     """ADR 0085 step 2: a bonded contact across meshes that don't match as /INTER/TYPE2
     (the source's nodes tied to the target's faces; a conformal one shares nodes and
     needs nothing); frictionless and frictional as /INTER/TYPE7 both ways (penalty,
-    Coulomb friction). Others are refused."""
+    Coulomb friction), and a selection's contact with itself as one /INTER/TYPE7 of its
+    nodes on its own faces. Others are refused."""
     for c in comp.contacts:
         if c.thread is not None:
             raise InputError(f"contact '{c.name}': threads aren't written for OpenCourant",
                              code="unsupported")  # fmt: skip
+        if c.is_self and c.type not in ("frictionless", "frictional"):
+            raise InputError(f"contact '{c.name}': a self-contact slides (frictionless or "
+                             "frictional), it can't be bonded", code="invalid")  # fmt: skip
         if c.type == "bonded" and c.effective_meshing == "conformal":
             continue
         groups = []
@@ -442,12 +522,16 @@ def _contacts(deck, comp: Component, mesh: Mesh) -> None:
                       _i(gid, sid) + f"{0:>20}" + _i(0, 0, 0, 0) + _r(0.0), _r(1.0))  # fmt: skip
         elif c.type in ("frictionless", "frictional"):
             mu = float(c.friction or 0.0) if c.type == "frictional" else 0.0
-            for a, b in ((source, target), (target, source)):
+            # a self-contact (ADR 0085 step 5): the faces' own nodes against them, once;
+            # Radioss leaves out each node's own segments
+            pairs = [(source, target)] if c.is_self else [(source, target), (target, source)]
+            gap = self_gap(source, mesh) if c.is_self else 0.0  # 0: Radioss's own
+            for a, b in pairs:
                 gid = deck.nodes_group(f"{c.name} nodes", a.node_ids)
                 sid = _segments(deck, b, mesh, f"{c.name} faces")
                 deck.card(f"/INTER/TYPE7/{deck.ids.next('inter')}", c.name,
                           _i(gid, sid, 0, 0, 0, 0, 0, 0, 0, 0), _r(0.0, 0.0), _r(0.0, 0.0),
-                          _r(0.0, mu, 0.0, 0.0, 0.0),
+                          _r(0.0, mu, gap, 0.0, 0.0),
                           # INACTI 6: nodes inside the gap at the start (touching
                           # parts) aren't pushed out: the gap shrinks for them instead
                           f"{'000':>10}" + " " * 20 + _i(6) + _r(0.0, 0.0, 0.0),
@@ -456,6 +540,48 @@ def _contacts(deck, comp: Component, mesh: Mesh) -> None:
             raise InputError(f"contact '{c.name}': {c.type} contact isn't written for "
                              "OpenCourant (bonded, frictionless and frictional are)",
                              code="unsupported")  # fmt: skip
+
+
+def self_gap(group, mesh: Mesh) -> float:
+    """A self-contact's gap: Radioss's own (a tenth of the smallest face edge, 0 here)
+    unless faces that share no element start closer than that, as touching bodies or
+    coplanar sides across a slit do; then half the nearest such distance. Starting
+    inside the gap, INACTI 6 shrinks it to about nothing for those nodes and the
+    penalty blows up (measured: bars 0.1 mm apart under a 0.33 mm gap reached 600 m/s);
+    two-part contacts don't see their sides, so they keep the default."""
+    from scipy.spatial import cKDTree
+
+    from puzzle.adapters.common import surface_blocks
+
+    nodes = np.asarray(sorted(int(n) for n in group.node_ids))
+    if len(nodes) < 2:
+        return 0.0
+    edges = []
+    for b in surface_blocks(group, mesh):
+        k = 3 if b.element.startswith("tri") else 4
+        xyz = mesh.node_coords(b.connectivity[:, :k].ravel()).reshape(len(b.ids), k, 3)
+        edges.append(np.linalg.norm(xyz - np.roll(xyz, 1, axis=1), axis=2).min())
+    if not edges:
+        return 0.0
+    default = 0.1 * float(min(edges))
+    xyz = mesh.node_coords(nodes)
+    close = cKDTree(xyz).query_pairs(default, output_type="ndarray")
+    if not len(close):
+        return 0.0
+    owners: dict[int, set] = {}  # node -> the elements (solid or shell) it belongs to
+    wanted = set(nodes.tolist())
+    for b in mesh.blocks:
+        if b.dim >= 2:
+            for e, row in zip(b.ids.tolist(), b.connectivity, strict=True):
+                for n in row:
+                    if int(n) in wanted:
+                        owners.setdefault(int(n), set()).add((b.dim, e))
+    apart = [
+        np.linalg.norm(xyz[i] - xyz[j])
+        for i, j in close
+        if not owners.get(int(nodes[i]), set()) & owners.get(int(nodes[j]), set())
+    ]
+    return 0.5 * float(min(apart)) if apart else 0.0
 
 
 def _wall(deck, f, nodes, v, title) -> None:
@@ -503,11 +629,14 @@ def write(project: Project, study: Study, mesh: Mesh, workdir: Path, step, proce
     for (k, element, thickness), elements in sorted(parts.items(), key=lambda kv: (
             kv[0][0], kv[0][1], kv[0][2] or 0.0)):  # fmt: skip
         pid = deck.ids.next("part")
-        prop = _property(deck, element, thickness)
+        prop = _property(deck, element, thickness, comp)
         a = comp.materials[k]
         deck.card(f"/PART/{pid}", f"{a.selection} {element}", _i(prop, mats[k], 0))
-        deck.lines.append(f"{SOLIDS.get(element) or SHELLS[element]}/{pid}")
-        if element == "tet10":  # the id on its own line, then the ten nodes
+        deck.lines.append(f"{SOLIDS.get(element) or SHELLS.get(element) or BEAMS[element]}/{pid}")
+        if element in BEAMS:  # id, the two nodes, no third node: the first axis as Vx Vy Vz
+            v = np.asarray(comp.beam_sections[thickness].orientation, float)
+            deck.lines += [_i(e, *conn[e], 0) + _r(*v) for e in sorted(elements)]
+        elif element == "tet10":  # the id on its own line, then the ten nodes
             for e in sorted(elements):  # (hm_cfg_files ELEM/tetra10.cfg)
                 deck.lines += [_i(e), _i(*conn[e])]
         else:

@@ -1,5 +1,5 @@
 """OpenCourant's elements (the Radioss reference guide's element cards, ADR 0085): the
-explicit solids Puzzle writes, and the shells of step 2."""
+explicit solids Puzzle writes, the shells of step 2 and the beams of step 5."""
 
 from puzzle.elements import Element
 
@@ -36,7 +36,7 @@ ELEMENTS = [
         "full",
         ("explicit",),
         "Ten-node tetrahedra: bending right on a free mesh, at a smaller time step "
-        "(the mid-edge nodes halve the spacing).",
+        "(0.31 of its corner tetrahedron's, measured).",
         "pressure on its faces: not written yet (first-order faces only).",
         True,
         REF + ", /TETRA10",
@@ -48,8 +48,8 @@ ELEMENTS = [
         "reduced",
         ("explicit",),
         "Four-node shells with physical hourglass, for thin walls in crash (ADR 0085 step 2).",
-        "",
-        False,
+        "offsets and thicknesses from a field: not written yet.",
+        True,
         REF + ", /PROP/SHELL Ishell 24",
     ),
     Element(
@@ -60,7 +60,19 @@ ELEMENTS = [
         ("explicit",),
         "Three-node shells (ADR 0085 step 2).",
         "",
-        False,
+        True,
         REF + ", /SH3N",
+    ),
+    Element(
+        "BEAM (type 3)",
+        "beam",
+        ("line2",),
+        "timoshenko",
+        ("explicit",),
+        "Two-node beams, shear included, from the section's area and inertias (ADR 0085 "
+        "step 5): frames and stiffeners in an impact.",
+        "second-order lines (line3): refused; beam forces aren't read back yet.",
+        True,
+        REF + ", /BEAM, /PROP/BEAM",
     ),
 ]

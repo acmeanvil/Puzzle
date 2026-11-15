@@ -43,7 +43,7 @@ Every solver's elements, grouped by what they model. ★ marks the ones Puzzle w
 - **FEniCSx Taylor-Hood P2-P1**: Mixed displacement-pressure for nearly incompressible materials: P2 u, P1 p, over the whole model (every body chooses it). Not for: temperature loads, welds, threads, springs: not written with it yet. Studies: static. (DOLFINx, basix.ufl.element)
 - **OpenCourant BRICK, Isolid 24 (HEPH)**: Eight-node bricks with one integration point and physical hourglass stiffness: the default for impact and crash, cheap per cycle. Not for: bending through one element's thickness; watch the hourglass energy. Studies: explicit dynamics. (OpenCourant (Radioss) reference guide, /PROP/SOLID Isolid 24)
 - **OpenCourant TETRA4**: Four-node tetrahedra for any shape the mesher fills; no hourglass. Not for: bending and near incompressibility: stiff; prefer TETRA10 or bricks. Studies: explicit dynamics. (OpenCourant (Radioss) reference guide, /TETRA4)
-- **OpenCourant TETRA10**: Ten-node tetrahedra: bending right on a free mesh, at a smaller time step (the mid-edge nodes halve the spacing). Not for: pressure on its faces: not written yet (first-order faces only). Studies: explicit dynamics. (OpenCourant (Radioss) reference guide, /TETRA10)
+- **OpenCourant TETRA10**: Ten-node tetrahedra: bending right on a free mesh, at a smaller time step (0.31 of its corner tetrahedron's, measured). Not for: pressure on its faces: not written yet (first-order faces only). Studies: explicit dynamics. (OpenCourant (Radioss) reference guide, /TETRA10)
 
 ## 2D solids (plane stress, plane strain, axisymmetric)
 
@@ -69,9 +69,9 @@ Every solver's elements, grouped by what they model. ★ marks the ones Puzzle w
 | --- | --- | --- | --- | --- | --- | --- |
 | thick shell (Mindlin-Reissner) | quadratic | S6 ★, S8 ★ | COQUE_3D ★ | – | – | – |
 | reduced integration | quadratic | S8R ★ | – | – | – | – |
-| thin shell (Kirchhoff) | linear | S3 | DKT ★ | – | Plate (rectangular) | SH3N |
+| thin shell (Kirchhoff) | linear | S3 | DKT ★ | – | Plate (rectangular) | SH3N ★ |
 | thick shell (Mindlin-Reissner) | linear | S4 ★ | DST ★, Q4G ★ | – | Quad (MITC4) ★ | – |
-| reduced integration | linear | S4R | – | – | – | SHELL, Ishell 24 (QEPH) |
+| reduced integration | linear | S4R | – | – | – | SHELL, Ishell 24 (QEPH) ★ |
 | thick shell (Mindlin-Reissner) | linear and quadratic | – | – | ShellSolver | – | – |
 
 - **CalculiX S6**: The quadratic triangular shell, expanded to C3D15 internally. Studies: static, modal, buckling, structural dynamics, contact, plasticity. (CalculiX User's Manual, 6.2 Element Types)
@@ -87,20 +87,20 @@ Every solver's elements, grouped by what they model. ★ marks the ones Puzzle w
 - **Elmer ShellSolver**: Elmer's Reissner-Mindlin shells. Studies: static, modal. (Elmer Models Manual, ShellSolver)
 - **PyNite Quad (MITC4)**: MITC4 quadrilaterals for walls and slabs, thick or thin: sheets meshed with the recipe's hexahedra, with pressure on them; frames and plates share nodes. Not for: self weight on plates and their stress results: not written yet. Studies: static. (PyNite, FEModel3D.add_quad)
 - **PyNite Plate (rectangular)**: Rectangular thin plates (12-term bending), better corner stresses. Not for: distorted or thick plates: the MITC4 quad. Studies: static. (PyNite, FEModel3D.add_plate)
-- **OpenCourant SHELL, Ishell 24 (QEPH)**: Four-node shells with physical hourglass, for thin walls in crash (ADR 0085 step 2). Studies: explicit dynamics. (OpenCourant (Radioss) reference guide, /PROP/SHELL Ishell 24)
+- **OpenCourant SHELL, Ishell 24 (QEPH)**: Four-node shells with physical hourglass, for thin walls in crash (ADR 0085 step 2). Not for: offsets and thicknesses from a field: not written yet. Studies: explicit dynamics. (OpenCourant (Radioss) reference guide, /PROP/SHELL Ishell 24)
 - **OpenCourant SH3N**: Three-node shells (ADR 0085 step 2). Studies: explicit dynamics. (OpenCourant (Radioss) reference guide, /SH3N)
 
 ## Beams
 
-| Formulation | Order | CalculiX | Code_Aster | Elmer | PyNite |
-| --- | --- | --- | --- | --- | --- |
-| Timoshenko beam (shear deformation) | linear | B31 ★, U1 (general beam) | POU_D_T ★ | BeamSolver3D | – |
-| Timoshenko beam (shear deformation) | quadratic | B32 ★ | – | – | – |
-| reduced integration | quadratic | B32R ★ | – | – | – |
-| reduced integration | linear | B31R | – | – | – |
-| Euler-Bernoulli beam | linear | – | POU_D_E ★ | – | Member ★ |
-| beam with warping (open sections in torsion) | linear | – | POU_D_TG | – | – |
-| large rotations | linear | – | POU_D_T_GD ★, POU_D_TGM | – | – |
+| Formulation | Order | CalculiX | Code_Aster | Elmer | PyNite | OpenCourant |
+| --- | --- | --- | --- | --- | --- | --- |
+| Timoshenko beam (shear deformation) | linear | B31 ★, U1 (general beam) | POU_D_T ★ | BeamSolver3D | – | BEAM (type 3) ★ |
+| Timoshenko beam (shear deformation) | quadratic | B32 ★ | – | – | – | – |
+| reduced integration | quadratic | B32R ★ | – | – | – | – |
+| reduced integration | linear | B31R | – | – | – | – |
+| Euler-Bernoulli beam | linear | – | POU_D_E ★ | – | Member ★ | – |
+| beam with warping (open sections in torsion) | linear | – | POU_D_TG | – | – | – |
+| large rotations | linear | – | POU_D_T_GD ★, POU_D_TGM | – | – | – |
 
 - **CalculiX B31**: The linear beam, expanded to bricks of its section (rectangle, circle). Not for: short or many-element members: B32 is more accurate. Studies: static, modal, structural dynamics. (CalculiX User's Manual, 6.2 Element Types)
 - **CalculiX B32**: The quadratic beam, expanded to bricks of its section. Studies: static, modal, buckling, structural dynamics. (CalculiX User's Manual, 6.2 Element Types)
@@ -114,6 +114,7 @@ Every solver's elements, grouped by what they model. ★ marks the ones Puzzle w
 - **Code_Aster POU_D_TGM**: The multi-fibre beam with warping: large rotations, plasticity in the section. Studies: static, structural dynamics, plasticity, large deflection. (Code_Aster U3 (modélisations))
 - **Elmer BeamSolver3D**: Elmer's 3D beams. Studies: static. (Elmer Models Manual, BeamSolver3D)
 - **PyNite Member**: The 12-dof frame member with end releases: Puzzle's frames (ADR 0079), P-Delta and the Direct Analysis Method. Not for: stocky members: no shear deflection. Studies: static, large deflection. (PyNite, FEModel3D.add_member)
+- **OpenCourant BEAM (type 3)**: Two-node beams, shear included, from the section's area and inertias (ADR 0085 step 5): frames and stiffeners in an impact. Not for: second-order lines (line3): refused; beam forces aren't read back yet. Studies: explicit dynamics. (OpenCourant (Radioss) reference guide, /BEAM, /PROP/BEAM)
 
 ## Trusses and cables
 

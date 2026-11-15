@@ -4,9 +4,12 @@ Central differences are stable while the time step stays under the time a wave t
 to cross the smallest element: Δt ≤ L / c, with c the dilatational wave speed
 √(E (1 − ν) / (ρ (1 + ν)(1 − 2ν))) and L the element's characteristic length (a
 tetrahedron's smallest height 3 V / A_max, a brick's V / A_max; a ten-node tetrahedron
-about half its corner tetrahedron's, its mid-edge nodes halving the spacing). The
-solver takes a share of it (the time-step scale, 0.9 by default). These are estimates
-for the user and the agent: the solver's own step decides.
+0.31 of its corner tetrahedron's, measured on OpenCourant: its mid-edge nodes and
+consistent mass shorten it more than halving the spacing would). The
+solver takes a share of it (the time-step scale, 0.9 by default). Shells (step 2) take
+c = √(E / (ρ (1 − ν²))) over a triangle's smallest height or a quadrilateral's area over
+its longest side, beams (step 5) c = √(E / ρ) over their length. These are estimates for
+the user and the agent: the solver's own step decides.
 
 Mass scaling raises the step of the elements under a target by adding nodal mass, so
 the mass a target would add is said with it: m (Δt_target / Δt_e)² − m per element.
@@ -23,6 +26,9 @@ from puzzle.model.schema import Component, Material, Project
 
 CYCLES_WARN = 1e7  # a run longer than this is warned (ADR 0085 decision 4)
 CYCLES_AIM = 1e6  # the mass scaling suggested brings a run to about this
+# A ten-node tetrahedron's step against its corner tetrahedron's: half, from the node
+# spacing, was 63 % longer than OpenCourant's own on the wave bar; 0.31 matches it
+TET10_SHARE = 0.31
 
 
 @dataclass
@@ -71,8 +77,8 @@ def element_lengths(mesh: Mesh) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.
             areas = np.stack([_tri_area(p0, p1, p2), _tri_area(p0, p1, p3),
                               _tri_area(p0, p2, p3), _tri_area(p1, p2, p3)], axis=1)  # fmt: skip
             length = 3 * v / areas.max(axis=1)
-            if b.element == "tet10":
-                length = length / 2
+            if b.element == "tet10":  # measured on OpenCourant (2026-11-15): 0.31 of the
+                length = TET10_SHARE * length  # corner tetrahedron's height, not half
             centre = n[:, :4].mean(axis=1)
         else:
             centre = n.mean(axis=1)
@@ -99,10 +105,58 @@ def element_lengths(mesh: Mesh) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.
             np.concatenate(centres))  # fmt: skip
 
 
+def structural_lengths(comp: Component, mesh: Mesh):
+    """Every shell and beam element's (ids, characteristic lengths, volumes, centres,
+    kinds: 1 shell, 2 beam), their volumes from the shell thickness or beam section;
+    elements with neither are left out (the deck refuses them)."""
+    from puzzle.adapters.common import InputError
+    from puzzle.adapters.opencourant.deck import _beam_sections, _thicknesses
+    from puzzle.frames import constants
+
+    out = ([], [], [], [], [])
+    shells, beams = mesh.shell_blocks(), mesh.beam_blocks()
+    try:
+        thick = _thicknesses(comp, mesh) if shells else {}
+        sections = _beam_sections(comp, mesh) if beams else {}
+        areas = {k: constants(s)[0] for k, s in enumerate(comp.beam_sections)
+                 if k in set(sections.values())}  # fmt: skip
+    except (InputError, ValueError, TypeError, AttributeError):
+        return tuple(np.zeros(0) for _ in range(5))
+    for kind, blocks in ((1, shells), (2, beams)):
+        for b in blocks:
+            if b.element not in ("tri3", "quad4", "line2"):
+                continue
+            n = mesh.node_coords(b.connectivity.ravel()).reshape(len(b.ids), -1, 3)
+            ids = b.ids.astype(int)
+            if kind == 2:
+                length = np.linalg.norm(n[:, 1] - n[:, 0], axis=1)
+                size = np.array([areas.get(sections.get(int(e)), np.nan) for e in ids])
+            else:
+                edges = np.linalg.norm(n - np.roll(n, 1, axis=1), axis=2).max(axis=1)
+                if b.element == "tri3":
+                    area = _tri_area(n[:, 0], n[:, 1], n[:, 2])
+                    length = 2 * area / edges
+                else:
+                    area = _tri_area(n[:, 0], n[:, 1], n[:, 2]) + _tri_area(n[:, 0], n[:, 2],
+                                                                            n[:, 3])  # fmt: skip
+                    length = area / edges
+                size = area * np.array([thick.get(int(e), np.nan) for e in ids])
+            if kind == 2:
+                size = size * length
+            keep = np.isfinite(size)
+            for target, value in zip(out, (ids, length, size, n.mean(axis=1),
+                                           np.full(len(ids), kind)), strict=True):  # fmt: skip
+                target.append(value[keep])
+    if not out[0]:
+        return (np.zeros(0, int), np.zeros(0), np.zeros(0), np.zeros((0, 3)), np.zeros(0, int))
+    return tuple(np.concatenate(x) for x in out)
+
+
 def _materials(
     project: Project, comp: Component, mesh: Mesh
 ) -> dict[int, tuple[float, float, float]]:
-    """Each solid element's (E, ν, ρ), later assignments winning."""
+    """Each solid, shell and beam element's (E, ν, ρ), later assignments winning."""
+    structural = {id(b) for b in mesh.shell_blocks()} | {id(b) for b in mesh.beam_blocks()}
     out = {}
     for a in comp.materials:
         m = project.objects.get(a.material)
@@ -114,7 +168,7 @@ def _materials(
             continue
         props = (p["youngs_modulus"], p["poissons_ratio"], p["density"])
         for b in group.blocks(mesh):
-            if b.dim == 3:
+            if b.dim == 3 or id(b) in structural:
                 out.update(dict.fromkeys(b.ids.tolist(), props))
     return out
 
@@ -125,13 +179,28 @@ def estimate(project: Project, comp: Component, mesh: Mesh, end_time: float,
     CYCLES_WARN cycles the mass scaling for about CYCLES_AIM with the mass it adds.
     None when no element has a material with E, ν and ρ."""
     ids, lengths, volumes, centres = element_lengths(mesh)
+    kinds = np.zeros(len(ids), int)
+    if mesh.shell_blocks() or mesh.beam_blocks():
+        more = structural_lengths(comp, mesh)
+        ids, lengths, volumes, kinds = (
+            np.concatenate([a, b])
+            for a, b in zip(
+                (ids, lengths, volumes, kinds), (more[0], more[1], more[2], more[4]), strict=True
+            )
+        )
+        centres = np.concatenate([centres, more[3]]) if len(more[3]) else centres  # fmt: skip
     props = _materials(project, comp, mesh)
     keep = np.array([int(e) in props for e in ids], bool)
     if not keep.any():
         return None
     ids, lengths, volumes, centres = ids[keep], lengths[keep], volumes[keep], centres[keep]
+    kinds = kinds[keep]
     e, nu, rho = (np.array([props[int(i)][k] for i in ids]) for k in range(3))
-    c = np.sqrt(e * (1 - nu) / (rho * (1 + nu) * (1 - 2 * nu)))
+    c = np.where(
+        kinds == 0,
+        np.sqrt(e * (1 - nu) / (rho * (1 + nu) * (1 - 2 * nu))),
+        np.where(kinds == 1, np.sqrt(e / (rho * (1 - nu**2))), np.sqrt(e / rho)),
+    )
     steps = lengths / c
     k = int(np.argmin(steps))
     dt = float(steps[k])

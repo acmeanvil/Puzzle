@@ -1,9 +1,10 @@
 # 0085. Explicit dynamics on OpenCourant: an `explicit` step, its adapter and its checks
 
-- Status: Accepted; built (2026-11-14), steps 1-4: solids and shells, elastic,
-  tabulated plastic and Johnson–Cook materials, contacts, velocities, rigid walls, the
-  checks before and after a run, native runs from the release, MPI, Apptainer on
-  clusters, the live energy error, the Advisor; Help's generated pages come with ADR 0083
+- Status: Accepted; built (2026-11-14/15), steps 1-5: solids, shells and beams,
+  elastic, tabulated plastic and Johnson–Cook materials, failure and erosion, contacts
+  and self-contact, velocities, rigid walls, the checks before and after a run, native
+  runs from the release, MPI, Apptainer on clusters, the live energy error, the Advisor;
+  Help's generated pages come with ADR 0083
 - Date: 2026-11-14
 
 ## Context
@@ -104,9 +105,17 @@ they are read for the format, never copied into Puzzle.
      through a point with an outward normal, optional friction, against a selection's
      nodes, `/RWALL/PLANE`); implicit adapters refuse them;
    - contacts in step 2: bonded (`/INTER/TYPE2`), frictionless and frictional
-     (`/INTER/TYPE7` both ways), a body's self-contact;
-   - everything else (heat, beams, bolts, welds, threads, symmetry equations, imported
-     fields beyond a body temperature) refused by the capability matrix, as elsewhere.
+     (`/INTER/TYPE7` both ways), and in step 5 a selection's self-contact (amended
+     2026-11-15: a contact whose source and target are one selection, its own
+     capability `self_contact`, so implicit adapters refuse it);
+   - in step 5 (amended 2026-11-15): two-node beams (`/BEAM`, `/PROP/BEAM` type 3 from
+     the section's A, I1, I2, J, its first axis as each element's vector), and failure
+     with erosion (a new `Material.models.failure`: Johnson–Cook's D1-D4 and ε̇₀,
+     `/FAIL/JOHNSON` on the material, an element deleted when its damage reaches 1;
+     refused without plasticity, and by implicit adapters);
+   - everything else (heat, bolts, welds, threads, symmetry equations, imported fields
+     beyond a body temperature, beam forces as results) refused by the capability
+     matrix, as elsewhere.
 
 4. **Checks before running**, as Problems and the Advisor's Run step, warnings only:
    - the stable time step: per element L / c with c the dilatational wave speed
@@ -222,6 +231,46 @@ don't); CalculiX's S8 plate at 10 mm is 1.7 % stiff, at 5 mm it lands on OpenCou
   energy checks in words; the new-study form says which solvers run an analysis
   (`menus._solver_fits`, from the capability matrices).
 
+**Built (2026-11-15), step 5**: self-contact, beams, failure and erosion.
+
+- Self-contact: `Contact.is_self` (source = target) gives the capability
+  `self_contact`; the deck writes one `/INTER/TYPE7` of the selection's nodes on its own
+  faces (Radioss leaves out each node's own segments). Faces of the selection that share
+  no element and start closer than Radioss's own gap (a tenth of the smallest edge) set
+  it to half that distance (`deck.self_gap`): starting inside the gap, INACTI 6 shrank
+  it to about nothing for those nodes and the run blew up (two bars 0.1 mm apart under a
+  0.33 mm gap reached 600 m/s). The mesher doesn't part a self-contact's faces, and the
+  Contact tool reports none for it (`contact_check.state`).
+- Beams: `deck.BEAMS`, sections per element (`_beam_sections`, a selection's after its
+  part's), `fixed` holds beam nodes' rotations; second-order lines refused; beam forces
+  aren't read back yet (displacements, velocities and accelerations are).
+- Failure: `Failure` (`strain` = D1, `d2`, `d3`, `d4`, `reference_strain_rate`; no
+  temperature term), `/FAIL/JOHNSON` with Ifail_so = Ifail_sh = 1; the frames' cell
+  `EROSION_STATUS` (0 deleted) becomes `eroded` per element and the global
+  `eroded_elements`, and the nodal stresses average the elements left; in the material
+  builder; `material_models` lists it on OpenCourant only.
+- The estimate (decision 4) counts shells (c = √(E / (ρ (1 − ν²))), a triangle's
+  smallest height or a quadrilateral's area over its longest side, the mass from the
+  thickness) and beams (c = √(E/ρ) over the length, the mass from the section's area);
+  a ten-node tetrahedron's length is 0.31 of its corner tetrahedron's height, not half
+  (half was 63 % longer than OpenCourant's own step); the benchmarks check it.
+- Found on the way: `_segments` took a hexahedron's first four nodes for its centre
+  (one face), so some faces' outward normals came out reversed and the Starter
+  renumbered them; every corner now.
+
+| Benchmark | Measured | Expected |
+| --- | --- | --- |
+| Two bars as one part, self-contact, 0.1 mm apart | A 0.189 m/s, B 9.811 m/s | 0 and v₀ = 10 m/s (two parts: 0.166 and 9.834) |
+| The same 1 mm apart (outside the default gap) | A 0.200 m/s, B 9.800 m/s | 0 and 10 m/s |
+| A beam cantilever's tip after a sudden force, along z (I1) | peak 4.895 mm, 1.03 % of it at worst over the swing | Euler–Bernoulli modes 4.911 mm (−0.33 %) |
+| The same along y (I2 = I1 / 4) | peak 19.58 mm, 0.93 % at worst | 19.65 mm (−0.33 %) |
+| A bar pulled past its failure strain (D1 0.005, H = E/10) | breaks between 1.288 and 1.337 mm of end travel; 9 elements (one section) gone; plastic strain left ≤ 0.005 | L ((σy + H D1) / E + D1) = 1.35 mm |
+| The time-step estimate against OpenCourant's own | hex8 +5.1 %, tet4 +5.1 %, tet10 +1.0 %, quad shells +8.3 %, beams +1.4 % | within 25 % |
+
+Measured on the way: on a flat hardening curve the pulled bar broke at 0.69 mm of end
+travel, the strain gathered where yield came first, so the failure benchmark hardens
+(with ν = 0 nothing necks and the strain stays uniform).
+
 ## Plan
 
 1. The adapter (solids, elastic and tabulated plastic materials, supports, forces,
@@ -234,6 +283,8 @@ don't); CalculiX's S8 plate at 10 mm is 1.7 % stiff, at 5 mm it lands on OpenCou
 3. Native runs from the release zips (fetched and checked), MPI processes (ADR 0053's
    Parallel processes per run), Apptainer on remote hosts.
 4. GUI polish: energy plots in the Solution panel, the Advisor's explicit steps, Help.
+5. (Amended 2026-11-15, from ADR 0072's list.) Self-contact, beams, failure and
+   erosion, the estimate for shells and beams; their benchmarks.
 
 ## Consequences
 

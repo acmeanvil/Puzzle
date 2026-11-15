@@ -322,3 +322,106 @@ def test_the_energy_error_is_tracked_live():
     assert [(e.name, e.value, e.unit, e.time) for e in tracked] == [
         ("energy error", -1.2, "%", 5e-4)
     ]
+
+
+def _two_blocks(gap):
+    """Two bricks along x, `gap` apart, and one face group "P/Skin" of their facing
+    faces (A's +x, B's -x), for a self-contact's gap."""
+    s = 0.01
+    coords, conn = [], []
+    for x0 in (0.0, s + gap):
+        base = len(coords)
+        coords += [(x0 + dx, dy, dz) for dz in (0, s) for dy in (0, s) for dx in (0, s)]
+        c = [0, 1, 3, 2, 4, 5, 7, 6]
+        conn.append([base + 1 + k for k in c])
+    solid = CellBlock("hex8", 3, (3, 1), np.array([1, 2]), np.array(conn))
+    faces = CellBlock("quad4", 2, (2, 1), np.array([3, 4]),
+                      np.array([[2, 4, 8, 6], [9, 13, 15, 11]]))  # fmt: skip
+    mesh = Mesh(np.arange(1, 17), np.array(coords, float), [solid, faces])
+    mesh.groups["P"] = Group("P", 3, [(3, 1)], np.arange(1, 17))
+    mesh.groups["P/Skin"] = Group("P/Skin", 2, [(2, 1)], np.array([2, 4, 6, 8, 9, 11, 13, 15]))
+    return mesh
+
+
+def test_a_self_contacts_gap_is_set_below_faces_that_start_close():
+    """ADR 0085 step 5: faces of one selection that share no element and start within
+    Radioss's own gap (a tenth of the smallest edge, 1 mm here) halve it; else 0 (its
+    own)."""
+    from puzzle.adapters.opencourant.deck import self_gap
+
+    close = _two_blocks(1e-4)
+    assert self_gap(close.groups["P/Skin"], close) == pytest.approx(5e-5)
+    apart = _two_blocks(2e-3)
+    assert self_gap(apart.groups["P/Skin"], apart) == 0.0
+
+
+def test_self_contact_and_failure_are_refused_by_implicit_solvers():
+    """A contact of a selection with itself is its own capability, and the failure model
+    an explicit one: CalculiX refuses both rather than writing a surface against itself
+    or dropping the failure."""
+    from puzzle.adapters import available_adapters
+    from puzzle.adapters.common import InputError, check_contacts
+    from puzzle.model.schema import Contact, Failure, HardeningCurve, MaterialModels, Plasticity
+
+    p, comp = _project()
+    comp.contacts = [Contact(name="fold", type="frictionless", source="P/Skin", target="P/Skin")]
+    assert comp.contacts[0].capability == "self_contact"
+    with pytest.raises(InputError, match="self_contact"):
+        check_contacts(comp, {"frictionless", "frictional"}, "calculix")
+    check_contacts(comp, available_adapters()["opencourant"].capabilities.contacts, "opencourant")
+    comp.contacts = []
+    m = p.objects[comp.materials[0].material]
+    m.models = MaterialModels(plasticity=Plasticity(curves=[HardeningCurve(points=[
+        (0.0, 250e6), (0.1, 300e6)])]), failure=Failure(strain=0.2))  # fmt: skip
+    comp.physics[0].features = [Feature(type="fixed", selection="P")]
+    study = p.add(Study(name="S", component=comp.id, solver="calculix",
+                        steps=[SolveStep(type="stationary")]))  # fmt: skip
+    assert any("failure" in x.lower() for x in available_adapters()["calculix"]().check(p, study))
+
+
+def test_beams_and_failure_are_written(tmp_path):
+    """Two-node beams on /PROP/BEAM with the section's A, I1, I2, J and its first axis as
+    each element's vector; the failure model as /FAIL/JOHNSON on its material; fixed
+    beam nodes hold their rotations; the estimate counts the beams (L / √(E/ρ))."""
+    from puzzle.adapters.opencourant import deck
+    from puzzle.frames import constants
+    from puzzle.model.schema import BeamSection, Failure, JohnsonCook, MaterialModels
+
+    nodes = np.arange(1, 6)
+    coords = np.array([(0.1 * k, 0.0, 0.0) for k in range(5)])
+    line = CellBlock(
+        "line2", 1, (1, 1), np.arange(1, 5), np.array([[k, k + 1] for k in range(1, 5)])
+    )
+    mesh = Mesh(nodes, coords, [line])
+    mesh.groups["P"] = Group("P", 1, [(1, 1)], nodes)
+    mesh.groups["P/Root"] = Group("P/Root", 0, [], np.array([1]))
+    p, comp = _project()
+    m = p.objects[comp.materials[0].material]
+    m.models = MaterialModels(johnson_cook=JohnsonCook(a=250e6), failure=Failure(strain=0.3))
+    section = BeamSection(selection="P", shape="rectangle", width=q(10, "mm"),
+                          height=q(20, "mm"), orientation=(0.0, 0.0, 1.0))  # fmt: skip
+    comp.beam_sections = [section]
+    comp.physics[0].features = [Feature(type="fixed", selection="P/Root")]
+    study = p.add(
+        Study(
+            name="B",
+            component=comp.id,
+            solver="opencourant",
+            steps=[SolveStep(type="explicit", settings={"end_time": 1e-3})],
+        )
+    )
+    deck.write(p, study, mesh, tmp_path, study.steps[0])
+    starter = (tmp_path / "puzzle_0000.rad").read_text(encoding="utf-8")
+    prop = starter.split("/PROP/BEAM/1\n")[1].splitlines()
+    a, i1, i2, j = constants(section)
+    assert [float(x) for x in prop[3].split()] == pytest.approx([a, i1, i2, j], rel=1e-9)
+    rows = starter.split("\n/BEAM/1\n")[1].split("\n/")[0].splitlines()
+    assert len(rows) == 4 and rows[0][:40] == deck._i(1, 1, 2, 0)
+    assert [float(x) for x in rows[0][40:].split()] == [0.0, 0.0, 1.0]
+    failure = starter.split("/FAIL/JOHNSON/1\n")[1].splitlines()
+    assert float(failure[0][:20]) == 0.3 and failure[1][20:40] == deck._i(1, 1)
+    bcs = starter.split("/BCS/1\n")[1].splitlines()[1]
+    assert bcs[:10] == "   111 111"
+    est = explicit.estimate(p, comp, mesh, 1e-3)
+    assert est.time_step == pytest.approx(0.1 / math.sqrt(200e9 / 7850.0))
+    assert est.mass == pytest.approx(7850.0 * a * 0.4)

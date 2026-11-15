@@ -6,9 +6,11 @@ the model deck, the Engine on the run deck, then converts the animation frames t
 and the time history to CSV (`deck.py`); `output.py` reads them back.
 
 Claimed only where benchmarked (`tests/integration/test_explicit.py`): explicit steps of
-solid mechanics on tet4, tet10 and hex8 solids, elastic and tabulated plastic materials,
-fixed and prescribed displacements, prescribed and initial velocities, forces, pressure
-(first-order faces), gravity and acceleration, rigid walls, amplitudes on every load.
+solid mechanics on tet4, tet10 and hex8 solids, tri3/quad4 shells and two-node beams,
+elastic, tabulated plastic and Johnson–Cook materials with failure and erosion, fixed
+and prescribed displacements, prescribed and initial velocities, forces, pressure
+(first-order faces), gravity and acceleration, rigid walls, bonded, frictionless and
+frictional contacts and self-contact, amplitudes on every load.
 """
 
 from __future__ import annotations
@@ -35,14 +37,21 @@ class OpenCourantAdapter(SolverAdapter):
     capabilities: ClassVar[Capabilities] = Capabilities(
         physics={"solid_mechanics": frozenset({"explicit"})},
         features=FEATURES,
-        material_models=frozenset({"plasticity", "johnson_cook"}),
+        material_models=frozenset({"plasticity", "johnson_cook", "failure"}),
         amplitude_features=frozenset(
             {"displacement", "force", "pressure", "gravity", "acceleration", "velocity"}
         ),  # fmt: skip
         field_features=frozenset(),
         shells=True,
+        beams=True,
         contacts=frozenset(
-            {"bonded_conformal", "bonded_nonconformal", "frictionless", "frictional"}
+            {
+                "bonded_conformal",
+                "bonded_nonconformal",
+                "frictionless",
+                "frictional",
+                "self_contact",
+            }
         ),  # fmt: skip
     )
 
@@ -64,8 +73,6 @@ class OpenCourantAdapter(SolverAdapter):
             raise InputError("OpenCourant takes one explicit step per study", code="unsupported")
         if mesh.planar:
             raise InputError("2D models aren't written for OpenCourant", code="unsupported")
-        if mesh.beam_blocks():
-            raise InputError("beams aren't written for OpenCourant", code="unsupported")
         workdir.mkdir(parents=True, exist_ok=True)
         self._end_time = deck.settings_of(steps[0]).end_time
         return deck.write(project, study, mesh, workdir, steps[0], self.processes(),

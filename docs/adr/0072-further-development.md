@@ -177,9 +177,10 @@ Other items:
   the NAFEMS forced-vibration benchmarks (0041); frequency points clustered at the modes,
   damping per mode and per material, the real part at a chosen phase (0041). Partly:
   frequency-dependent loads (only an imported pressure with a frequency axis) (0041, 0044).
-  Explicit dynamics: ADR 0085 (OpenCourant; built 2026-11-14: solids and shells,
-  plastic and Johnson–Cook materials, contacts, rigid walls, native, MPI, Apptainer;
-  left: beams, self-contact, failure and erosion, Help with ADR 0083). **Built
+  Explicit dynamics: ADR 0085 (OpenCourant; built 2026-11-14/15: solids, shells and
+  beams, plastic and Johnson–Cook materials, failure and erosion, contacts and
+  self-contact, rigid walls, native, MPI, Apptainer; left: beam forces as results, Help
+  with ADR 0083). **Built
   (2026-11-12):** large-deflection
   transients of solids on CalculiX and Code_Aster, and of shells and beams on CalculiX
   (ADR 0082).

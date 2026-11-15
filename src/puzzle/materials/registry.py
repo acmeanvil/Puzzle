@@ -103,6 +103,7 @@ GROUPS = list(dict.fromkeys(p.group for p in PROPERTIES))
 MODEL_PHYSICS = {
     "plasticity": "solid_mechanics",
     "johnson_cook": "solid_mechanics",
+    "failure": "solid_mechanics",
     "orthotropic_elasticity": "solid_mechanics",
     "hyperelasticity": "solid_mechanics",
     "anisotropic_conductivity": "heat_transfer",
@@ -111,6 +112,7 @@ MODEL_PHYSICS = {
 MODELS = {
     "plasticity": "Plasticity (isotropic hardening)",
     "johnson_cook": "Johnson–Cook plasticity (strain rate)",
+    "failure": "Failure and erosion (Johnson–Cook)",
     "orthotropic_elasticity": "Orthotropic elasticity",
     "hyperelasticity": "Hyperelasticity",
     "anisotropic_conductivity": "Anisotropic thermal conductivity",

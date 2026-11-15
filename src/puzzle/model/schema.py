@@ -346,6 +346,22 @@ class JohnsonCook(BaseModel):
                                "ringing it reads the mean rate")  # fmt: skip
 
 
+class Failure(BaseModel):
+    """Ductile failure and erosion (ADR 0085 step 5), Johnson–Cook's: the strain to
+    failure εf = (D1 + D2 exp(D3 σ*))(1 + D4 ln(ε̇/ε̇₀)), σ* the triaxiality (mean
+    stress over von Mises); damage adds Δε_p / εf, and an element whose damage reaches 1
+    is deleted (eroded). D1 alone is a constant failure strain. It needs plasticity
+    (a table or Johnson–Cook); explicit runs only, implicit solvers refuse it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    strain: float = Field(gt=0, description="D1: the plastic strain to failure")
+    d2: float = Field(default=0.0, description="D2: the triaxiality term's factor")
+    d3: float = Field(default=0.0, description="D3: the triaxiality term's exponent")
+    d4: float = Field(default=0.0, description="D4: the strain-rate term")
+    reference_strain_rate: float = Field(default=1.0, gt=0, description="ε̇₀, 1/s")
+
+
 class OrthotropicElasticity(BaseModel):
     """Nine elastic constants in the material axes (axis 1, axis 2, and 3 = 1 x 2)."""
 
@@ -396,6 +412,7 @@ class MaterialModels(BaseModel):
 
     plasticity: Plasticity | None = None
     johnson_cook: JohnsonCook | None = None  # ADR 0085: explicit dynamics
+    failure: Failure | None = None  # ADR 0085 step 5: elements deleted at failure
     orthotropic_elasticity: OrthotropicElasticity | None = None
     hyperelasticity: Hyperelasticity | None = None
     anisotropic_conductivity: AnisotropicConductivity | None = None
@@ -839,8 +856,18 @@ class Contact(BaseModel):
         return "conformal" if self.type == "bonded" and self.thread is None else "nonconformal"
 
     @property
+    def is_self(self) -> bool:
+        """A body's (or a part's bodies') contact with itself: one selection on both
+        sides (ADR 0085 step 5), e.g. a tube folding onto itself."""
+        return self.source == self.target
+
+    @property
     def capability(self) -> str:
-        """The key adapters list in their capability matrix, e.g. "bonded_nonconformal"."""
+        """The key adapters list in their capability matrix, e.g. "bonded_nonconformal";
+        "self_contact" for a contact of a selection with itself, which only explicit
+        solvers write (an implicit contact pair of a surface with itself is refused)."""
+        if self.is_self:
+            return "self_contact"
         return f"bonded_{self.effective_meshing}" if self.type == "bonded" else self.type
 
 

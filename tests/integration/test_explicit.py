@@ -89,6 +89,22 @@ def _run(tmp_path, p, study):
     return run
 
 
+def _estimate_matches(run, p, study, what, within=0.25):
+    """explicit.estimate's stable step (× the scale) against OpenCourant's own at the
+    first frames (the time history's TIME STEP), within `within`."""
+    from puzzle import explicit
+
+    comp = p.objects[study.component]
+    est = explicit.estimate(p, comp, run.mesh, 1.0)
+    steps = [s.fields["time_step"].values[0, 0] for s in run.results.steps[1:3]
+             if "time_step" in s.fields]  # fmt: skip
+    assert est is not None and steps
+    ours, theirs = est.time_step * est.scale, float(np.median(steps))
+    print(f"{what}: time step estimated {ours:.4g} s, OpenCourant's {theirs:.4g} s "
+          f"({ours / theirs - 1:+.1%})")  # fmt: skip
+    assert ours == pytest.approx(theirs, rel=within)
+
+
 def _wave(v0=1.0, nu=0.0):
     return math.sqrt(E / RHO) if nu == 0 else math.sqrt(
         E * (1 - nu) / (RHO * (1 + nu) * (1 - 2 * nu)))  # fmt: skip
@@ -109,6 +125,7 @@ def test_a_wave_carries_rho_c_v0_behind_its_front(tmp_path, solver, shape):
                     size_mm={"hexahedra": 5.0, "tet4": 2.5, "tet10": 5.0}[shape],
                     order=2 if shape == "tet10" else 1)  # fmt: skip
     run = _run(tmp_path, p, study)
+    _estimate_matches(run, p, study, shape)
     frames = [s for s in run.results.steps if "stress" in s.fields]
     assert len(frames) >= 6 and frames[-1].value == pytest.approx(end, rel=0.05)
     last = frames[-1]
@@ -283,6 +300,53 @@ def test_johnson_cook_rate_term_raises_the_flow_stress(tmp_path, solver):
     assert stress.mean() == pytest.approx(expected, rel=0.03)
 
 
+@over("opencourant")
+def test_a_bar_pulled_past_its_failure_strain_breaks(tmp_path, solver):
+    """Failure and erosion (ADR 0085 step 5): the slow pull with a failure strain D1 =
+    0.005, below the ~0.011 the pull reaches, on linear hardening (H = E / 10: with
+    ν = 0 nothing necks, so the strain stays uniform; on a flat curve it gathers where
+    yield comes first and the bar broke at 0.69 mm of the 1.25 mm uniform). It breaks
+    when its end has moved L ((σy + H D1) / E + D1): the first frame with eroded
+    elements comes just past that, and every element left has a plastic strain under
+    D1."""
+    from puzzle.model.schema import Amplitude, Failure
+
+    yield_stress, d1, hardening = 250e6, 0.005, E / 10
+    c = math.sqrt(E / RHO)
+    ramp = 25 * L / c
+    end = 3 * ramp
+    features = [
+        Feature(type="fixed", selection="S/Start"),
+        Feature(type="velocity", selection="S/End", values={"x": q(1.0, "m/s")}),
+    ]
+    p, study = _bar(solver, features, {"end_time": end, "frames": 60},
+                    plastic=[(0.0, yield_stress), (1.0, yield_stress + hardening)])  # fmt: skip
+    p.objects[p.objects[study.component].materials[0].material].models.failure = Failure(strain=d1)
+    amp = p.add(Amplitude(name="ramp", points=[(0.0, 0.0), (ramp, 1.0), (end, 1.0)]))
+    p.objects[study.component].physics[0].features[1].amplitude = amp.id
+    run = _run(tmp_path, p, study)
+
+    def moved(t):  # the end's displacement: the ramp's area, then 1 m/s
+        return 0.5 * min(t, ramp) ** 2 / ramp + max(0.0, t - ramp)
+
+    breaks = L * ((yield_stress + hardening * d1) / E + d1)
+    rows = []
+    for s in run.results.steps:
+        eroded = s.fields.get("eroded_elements")
+        rows.append((s.value, moved(s.value), eroded.values[0, 0] if eroded else 0.0))
+    first = next((r for r in rows if r[2] > 0), None)
+    before = [r for r in rows if r[2] == 0]
+    print(f"breaks at an end displacement of {breaks * 1e3:.4g} mm (uniform); last whole frame "
+          f"{before[-1][1] * 1e3:.4g} mm, first broken {first and first[1] * 1e3:.4g} mm "
+          f"({first and int(first[2])} elements gone)")  # fmt: skip
+    assert first is not None
+    assert before[-1][1] < breaks * 1.03 and first[1] > breaks * 0.97
+    last = run.results.steps[-1].fields
+    left = last["plastic_strain_equivalent"].values[:, 0]
+    print(f"plastic strain left: largest {left.max():.4g} (D1 {d1:g})")
+    assert left.max() < d1 * 1.05
+
+
 def _two_bars(solver, features, settings, contact, *, gap=0.0, sizes=(5.0, 5.0)):
     """Bars A (0..L/2) and B (L/2 + gap..L + gap) along x, each its own part and mesh
     size, joined by `contact` (from A's +x face to B's -x face)."""
@@ -333,6 +397,56 @@ def test_two_equal_bars_colliding_exchange_their_velocities(tmp_path, solver):
     x = run.mesh.node_coords(last.ids)[:, 0]
     a, b = last.values[x < L / 2 + 1e-9, 0].mean(), last.values[x > L / 2 + 1e-9, 0].mean()
     print(f"after: A {a:.4g} m/s, B {b:.4g} m/s (v0 {v0:g})")
+    assert abs(a) < 0.05 * v0
+    assert b == pytest.approx(v0, rel=0.05)
+
+
+@over("opencourant")
+@pytest.mark.parametrize("gap", [1e-4, 1e-3])
+def test_a_self_contact_stops_a_part_passing_through_itself(tmp_path, solver, gap):
+    """The colliding bars as one part of two bodies, with one contact on all its faces
+    against themselves (ADR 0085 step 5): the bars exchange velocities as two parts do;
+    with no contact they would pass through each other, B staying at rest. At 0.1 mm
+    apart they start inside Radioss's own gap (0.33 mm here), so Puzzle sets a smaller
+    one (`deck.self_gap`); at 1 mm they don't."""
+    from puzzle.model.schema import Contact
+
+    pytest.importorskip("OCP")
+    v0 = 10.0
+    c = math.sqrt(E / RHO)
+    end = gap / v0 + 1.5 * 2 * (L / 2) / c
+    p = Project(name="self")
+    faces = [f"{b}/{s}" for b in "AB" for s in ("-x", "+x", "-y", "+y", "-z", "+z")]
+    geo = p.add(Geometry(name="Bars", history=[
+        HistoryStep(kind="box", name="A", args={"dx": L / 2, "dy": W, "dz": W, "body": "A"}),
+        HistoryStep(kind="box", name="B", args={"dx": L / 2, "dy": W, "dz": W, "x0": L / 2 + gap,
+                                                "mode": "add", "body": "B"})],
+        selections=[NamedSelection(name="Bars", entity="body", members=["A", "B"]),
+                    NamedSelection(name="A", entity="body", members=["A"]),
+                    NamedSelection(name="Skin", entity="face", members=faces)]))  # fmt: skip
+    steel = add_library_material(p, "structural_steel")
+    steel.properties |= {"youngs_modulus": q(E, "Pa"), "poissons_ratio": q(0.0, "dimensionless"),
+                         "density": q(RHO, "kg/m^3")}  # fmt: skip
+    steel.tables, steel.models = {}, MaterialModels()
+    mesh = p.add(MeshRecipe(name="M", global_size=q(5.0, "mm"), element_shape="hexahedra",
+                            element_order=1))  # fmt: skip
+    comp = p.add(Component(name="C", parts=[PartInstance(name="S", geometry=geo.id)],
+                           mesh=mesh.id, materials=[MaterialAssignment(material=steel.id,
+                                                                       selection="S/Bars")],
+                           contacts=[Contact(name="itself", type="frictionless",
+                                             source="S/Skin", target="S/Skin")],
+                           physics=[Physics(type="solid_mechanics", settings={
+                               "temperature_dependent_materials": False}, features=[
+                               Feature(type="initial_velocity", selection="S/A",
+                                       values={"vx": q(v0, "m/s")})])]))  # fmt: skip
+    study = p.add(Study(name="Self", component=comp.id, solver=solver,
+                        steps=[SolveStep(type="explicit", settings={"end_time": end,
+                                                                    "frames": 20})]))  # fmt: skip
+    run = _run(tmp_path, p, study)
+    last = run.results.steps[-1].fields["velocity"]
+    x = run.mesh.node_coords(last.ids)[:, 0]
+    a, b = last.values[x < L / 2 + 1e-9, 0].mean(), last.values[x > L / 2 + 1e-9, 0].mean()
+    print(f"self-contact {gap * 1e3:g} mm apart, after: A {a:.4g} m/s, B {b:.4g} m/s (v0 {v0:g})")
     assert abs(a) < 0.05 * v0
     assert b == pytest.approx(v0, rel=0.05)
 
@@ -424,6 +538,7 @@ def test_a_pressed_plate_against_an_implicit_transient(tmp_path, solver):
     ref_run = _run(tmp_path / "ref", ref, ref_study)
     p, study, a = _plate(solver, {"end_time": end, "frames": 60}, size_mm=5.0)
     run = _run(tmp_path / "x", p, study)
+    _estimate_matches(run, p, study, "shells")
 
     def centre(r):
         out = []
@@ -445,6 +560,79 @@ def test_a_pressed_plate_against_an_implicit_transient(tmp_path, solver):
     assert peak < 0
     assert explicit[:, 1].min() == pytest.approx(peak, rel=0.02)
     assert worst < 0.03 * abs(peak)
+
+
+BETA_L = [1.8751041, 4.6940911, 7.8547574, 10.9955407] + [(2 * n - 1) * math.pi / 2
+                                                          for n in range(5, 13)]  # fmt: skip
+
+
+def _cantilever_tip(t, force, e, rho, area, inertia, length):
+    """A cantilever's tip under a force switched on at t = 0 (Euler–Bernoulli, by its
+    modes): each mode's φ(L)² = 4 when ∫φ² = L, so u = Σ 4 P / (ρ A L ωₙ²) (1 − cos ωₙ t),
+    which sums to P L³ / 3 E I at rest."""
+    base = math.sqrt(e * inertia / (rho * area * length**4))
+    return sum(4 * force / (rho * area * length * (b**2 * base) ** 2)
+               * (1 - np.cos(b**2 * base * t)) for b in BETA_L)  # fmt: skip
+
+
+@over("opencourant")
+@pytest.mark.parametrize("direction", ["z", "y"])
+def test_a_beam_cantilever_swings_as_its_modes_say(tmp_path, solver, direction):
+    """A 1 m cantilever of 20 two-node beams (10 mm along the section's first axis y,
+    20 mm across), its tip force switched on at t = 0: the tip's history against the
+    Euler–Bernoulli modal series (L/h = 50: shear and rotary inertia are under 0.1 %).
+    Along z it bends about the first axis (I1 = w h³/12), along y about the second (I2,
+    a quarter of it): the orientation is checked too (ADR 0085 step 5)."""
+    from puzzle.model.schema import BeamSection
+
+    pytest.importorskip("OCP")
+    length, width, height, force = 1.0, 0.01, 0.02, 10.0
+    p = Project(name="beam")
+    plane = lambda at: {"plane": {"axis": "x", "at": at}}  # noqa: E731
+    geo = p.add(Geometry(name="Beam", history=[HistoryStep(kind="polyline", name="L", args={
+        "points": [[0, 0, 0], [length, 0, 0]]})], selections=[
+        NamedSelection(name="Root", entity="vertex", rule=plane(0.0)),
+        NamedSelection(name="Tip", entity="vertex", rule=plane(length))]))  # fmt: skip
+    steel = add_library_material(p, "structural_steel")
+    steel.properties |= {"youngs_modulus": q(E, "Pa"), "poissons_ratio": q(0.3, "dimensionless"),
+                         "density": q(RHO, "kg/m^3")}  # fmt: skip
+    steel.tables, steel.models = {}, MaterialModels()
+    mesh = p.add(MeshRecipe(name="M", global_size=q(50, "mm"), element_order=1))
+    comp = p.add(Component(name="C", parts=[PartInstance(name="F", geometry=geo.id)],
+                           mesh=mesh.id, materials=[MaterialAssignment(material=steel.id,
+                                                                       selection="F")],
+                           beam_sections=[BeamSection(selection="F", shape="rectangle",
+                                                      width=q(10, "mm"), height=q(20, "mm"),
+                                                      orientation=(0.0, 1.0, 0.0))],
+                           physics=[Physics(type="solid_mechanics", settings={
+                               "temperature_dependent_materials": False}, features=[
+                               Feature(type="fixed", selection="F/Root"),
+                               Feature(type="force", selection="F/Tip",
+                                       values={direction: q(force, "N")})])]))  # fmt: skip
+    area = width * height
+    inertia = width * height**3 / 12 if direction == "z" else height * width**3 / 12
+    period = 2 * math.pi / (BETA_L[0] ** 2 * math.sqrt(E * inertia / (RHO * area * length**4)))
+    end = 0.75 * period
+    study = p.add(Study(name="Swing", component=comp.id, solver=solver,
+                        steps=[SolveStep(type="explicit", settings={"end_time": end,
+                                                                    "frames": 60})]))  # fmt: skip
+    run = _run(tmp_path, p, study)
+    _estimate_matches(run, p, study, "beams")
+    k = "xyz".index(direction)
+    history = []
+    for s in run.results.steps:
+        d = s.fields["displacement"]
+        at = np.abs(run.mesh.node_coords(d.ids)[:, 0] - length) < 1e-9
+        history.append((s.value, float(d.values[at, k].mean())))
+    history = np.array(sorted(history))
+    expected = _cantilever_tip(history[:, 0], force, E, RHO, area, inertia, length)
+    peak = expected.max()
+    worst = float(np.abs(history[:, 1] - expected).max())
+    print(f"beam along {direction}: tip peak {history[:, 1].max():.5g} m, modes {peak:.5g} m "
+          f"(static {force * length**3 / (3 * E * inertia):.5g}); largest difference "
+          f"{worst / peak:.2%} of the peak")  # fmt: skip
+    assert history[:, 1].max() == pytest.approx(peak, rel=0.02)
+    assert worst < 0.03 * peak
 
 
 @over("opencourant")

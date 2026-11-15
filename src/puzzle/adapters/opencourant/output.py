@@ -3,7 +3,9 @@
 Each animation frame (`puzzleA001.vtk`… from anim_to_vtk: legacy VTK with NODE_ID,
 Displacement, Velocity, Acceleration and per element ELEMENT_ID, the stress tensor,
 von Mises and plastic strain) is a step of kind `transient` at its time. Element
-values are averaged to the nodes (the other adapters' results are nodal). The time
+values are averaged to the nodes (the other adapters' results are nodal), from the
+elements still there: with failure (step 5) a deleted element's EROSION_STATUS is 0, and
+each frame says which (`eroded`, per element: 1 gone) and how many (`eroded_elements`). The time
 history (`puzzleT01.csv` from th_to_csv: energies, momentum, mass, added mass, the time
 step) gives each frame its energies as global fields, interpolated at the frame's time;
 the whole history stays in the run folder for operators and the Solution panel.
@@ -91,8 +93,22 @@ def read(workdir: Path, name: str, conn: dict[int, np.ndarray], mesh_nodes: set[
         cells = np.asarray(grid.cell_data["ELEMENT_ID"], dtype=np.int64) if \
             "ELEMENT_ID" in grid.cell_data else None  # fmt: skip
         if cells is not None:
-            solid = np.array([int(e) in conn for e in cells], bool)
+            solid = np.array([int(e) in conn for e in cells], bool)  # solids and shells
+            if "EROSION_STATUS" in grid.cell_data:  # failure (ADR 0085 step 5): 0 = deleted
+                gone = np.asarray(grid.cell_data["EROSION_STATUS"]).ravel() == 0
+                fields["eroded"] = Field("eroded", "element", [""], cells[solid],
+                                         gone[solid].astype(float)[:, None])  # fmt: skip
+                fields["eroded_elements"] = Field(
+                    "eroded_elements",
+                    "global",
+                    [""],
+                    np.array([0]),
+                    np.array([[float(gone[solid].sum())]]),
+                )
+                solid &= ~gone
             stresses = [k for k in grid.cell_data if "_Stress" in k]  # 3DELEM_, 2DELEM_..(membrane)
+            if not solid.any():  # beams only: nothing to average at the nodes
+                stresses = []
             if stresses:
                 tensor = np.zeros((len(cells), 9))
                 for vtk_name in stresses:  # solids and shells: each cell has one of them
@@ -101,7 +117,8 @@ def read(workdir: Path, name: str, conn: dict[int, np.ndarray], mesh_nodes: set[
                 ids, values = _nodal(cells[solid], tensor[solid][:, STRESS], conn)
                 fields["stress"] = Field("stress", "node", ["xx", "yy", "zz", "xy", "yz", "zx"],
                                          ids, values)  # fmt: skip
-            for vtk_name in [k for k in grid.cell_data if "Plastic" in k or k.endswith("_EPSP")]:
+            for vtk_name in [k for k in grid.cell_data if solid.any() and (
+                    "Plastic" in k or k.endswith("_EPSP"))]:  # fmt: skip
                 eps = np.asarray(grid.cell_data[vtk_name], float).reshape(len(cells), -1)[:, :1]
                 ids, values = _nodal(cells[solid], eps[solid], conn)
                 fields["plastic_strain_equivalent"] = Field(

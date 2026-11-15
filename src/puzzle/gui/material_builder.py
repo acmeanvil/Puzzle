@@ -587,6 +587,7 @@ class MaterialEditor(QWidget):
                 "johnson_cook",
                 ["a", "b", "n", "c", "reference_strain_rate", "max_stress", "rate_cutoff"],
             ),
+            ("failure", ["strain", "d2", "d3", "d4", "reference_strain_rate"]),
             ("anisotropic_conductivity", ["k1", "k2", "k3"]),
         ):
             box = QGroupBox()
@@ -969,6 +970,8 @@ class MaterialEditor(QWidget):
                 text = line.text().strip()
                 if not text and model == "hyperelasticity" and n in ("c01", "d1"):
                     continue
+                if not text and model == "failure" and n != "strain":
+                    continue  # D2-D4 and ε̇0 left empty: their defaults
                 try:
                     data[n] = _to_si(n, _number(text))
                 except ValueError:
@@ -1585,6 +1588,11 @@ FIELD_LABELS = {
     "reference_strain_rate": "Reference strain rate (1/s)",
     "max_stress": "Largest flow stress (0: none)",
     "rate_cutoff": "Strain-rate filter (Hz; 0: none)",
+    # failure (ADR 0085 step 5): εf = (D1 + D2 exp(D3 σ*))(1 + D4 ln(ε̇/ε̇0))
+    "strain": "Failure strain D1",
+    "d2": "D2 (triaxiality)",
+    "d3": "D3 (triaxiality exponent)",
+    "d4": "D4 (strain rate)",
     "k1": "k1",
     "k2": "k2",
     "k3": "k3",

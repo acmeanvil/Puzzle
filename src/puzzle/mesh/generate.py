@@ -854,8 +854,8 @@ def _part_contacts(comp, found, sides, dim: int, warnings: list[str]) -> None:
     a third body meets it. The contact side whose body took the new nodes gets the new
     entity in its group."""
     for c in comp.contacts:
-        if c.effective_meshing != "nonconformal" or not c.target:
-            continue
+        if c.effective_meshing != "nonconformal" or not c.target or c.source == c.target:
+            continue  # (a self-contact's faces are its own: nothing to part)
         src, tgt = _entities_of(c.source, dim), _entities_of(c.target, dim)
         common = sorted(set(src) & set(tgt))
         if not common:
