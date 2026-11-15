@@ -172,3 +172,48 @@ def warnings(est: Estimate | None) -> list[str]:
                        f"under a fifth of the tenth smallest's ({tenth:.3g} s): a sliver or a "
                        "small feature; remeshing it would speed the run")  # fmt: skip
     return out
+
+
+ENERGY_ERROR = 0.05  # ADR 0085 decision 5
+HOURGLASS_SHARE = 0.10
+ADDED_MASS_SHARE = 0.05
+
+
+def _series(results, name) -> np.ndarray:
+    out = []
+    for s in results.steps:
+        f = s.fields.get(name)
+        out.append(float(f.values[0, 0]) if f is not None and f.values.size else 0.0)
+    return np.array(out)
+
+
+def run_checks(results) -> list[tuple[str, str]]:
+    """After an explicit run, from its frames' global energies (ADR 0085 decision 5):
+    (code, sentence) for an energy balance off by more than 5 %, hourglass energy over
+    10 % of the internal energy, or added mass over 5 % of the mass."""
+    if not results.steps or "kinetic_energy" not in results.steps[0].fields:
+        return []
+    ke, ie = _series(results, "kinetic_energy"), _series(results, "internal_energy")
+    held = ke + ie + _series(results, "rotational_energy") + _series(results, "contact_energy") \
+        + _series(results, "hourglass_energy")  # fmt: skip
+    work = _series(results, "external_work")
+    expected = held[0] + work
+    scale = max(float(np.max(np.abs(held))), float(np.max(np.abs(expected))), 1e-300)
+    error = float(np.max(np.abs(held - expected))) / scale
+    out = []
+    if error > ENERGY_ERROR:
+        out.append(("energy_error", f"the energy balance is off by {error:.1%} (kinetic, internal, "
+                                    "contact and hourglass against the start plus the external "
+                                    "work): a time step scale too large, or a contact or wall "
+                                    "making or losing energy"))  # fmt: skip
+    hg = _series(results, "hourglass_energy")
+    if ie[-1] > 0 and hg[-1] > HOURGLASS_SHARE * ie[-1]:
+        out.append(("hourglass", f"hourglass energy is {hg[-1] / ie[-1]:.1%} of the internal "
+                                 "energy: the bricks' zero-energy modes are taking part; refine "
+                                 "there or use tetrahedra"))  # fmt: skip
+    added, mass = _series(results, "added_mass"), _series(results, "mass")
+    if mass[-1] > 0 and added[-1] > ADDED_MASS_SHARE * mass[-1]:
+        out.append(("added_mass", f"mass scaling added {added[-1] / mass[-1]:.1%} of the mass: "
+                                  "inertial results are changed; lower the mass scaling time "
+                                  "step or remesh the small elements"))  # fmt: skip
+    return out

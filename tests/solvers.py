@@ -29,6 +29,12 @@ def available(solver: str) -> bool:
         from puzzle.adapters.pynite import available as pynite_available
 
         return pynite_available()
+    if solver == "opencourant":  # ADR 0085: its image, or a release unpacked here
+        from puzzle.adapters.opencourant import native
+        from puzzle.jobs.runtime import NativeRuntime
+
+        rt = runtime_for(solver)
+        return native.root() is not None if isinstance(rt, NativeRuntime) else rt.available("")
     return runtime_for(solver).available(EXECUTABLES[solver])
 
 

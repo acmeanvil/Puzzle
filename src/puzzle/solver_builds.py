@@ -534,6 +534,20 @@ def solvers() -> list[SolverRow]:
             where = str(python) if python else "no Python with dolfinx found"
             rows.append(SolverRow(solver, name, "native" if python else "missing", where))
             continue
+        if solver == "opencourant":  # ADR 0085: its release, unpacked or fetched on first use
+            from puzzle.adapters.opencourant import native
+
+            folder = native.root()
+            if folder is not None:
+                rows.append(SolverRow(solver, name, "native", str(folder),
+                                      f"release {native.RELEASE}"))  # fmt: skip
+            elif native.platform_key() is not None:
+                rows.append(SolverRow(solver, name, "native", "fetched on first use",
+                                      f"release {native.RELEASE}, from GitHub"))  # fmt: skip
+            else:
+                rows.append(SolverRow(solver, name, "missing", "no release for this platform; "
+                                      "install Docker or Podman for its image"))  # fmt: skip
+            continue
         if solver == "pynite":  # a Python package, run by its environment's Python
             from puzzle.adapters.pynite.case import pynite_python
 

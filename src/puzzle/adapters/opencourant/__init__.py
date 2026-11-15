@@ -31,14 +31,19 @@ FEATURES = frozenset({
 class OpenCourantAdapter(SolverAdapter):
     name = "opencourant"
     max_solve_steps = 1
+    parallel_processes = True  # Settings > Solvers > Parallel processes per run (MPI)
     capabilities: ClassVar[Capabilities] = Capabilities(
         physics={"solid_mechanics": frozenset({"explicit"})},
         features=FEATURES,
-        material_models=frozenset({"plasticity"}),
+        material_models=frozenset({"plasticity", "johnson_cook"}),
         amplitude_features=frozenset(
             {"displacement", "force", "pressure", "gravity", "acceleration", "velocity"}
         ),  # fmt: skip
         field_features=frozenset(),
+        shells=True,
+        contacts=frozenset(
+            {"bonded_conformal", "bonded_nonconformal", "frictionless", "frictional"}
+        ),  # fmt: skip
     )
 
     def check(self, project: Project, study: Study, *, allow_experimental: bool = False):
@@ -59,16 +64,11 @@ class OpenCourantAdapter(SolverAdapter):
             raise InputError("OpenCourant takes one explicit step per study", code="unsupported")
         if mesh.planar:
             raise InputError("2D models aren't written for OpenCourant", code="unsupported")
-        comp = project.objects[study.component]
-        if comp.contacts:
-            raise InputError("contacts aren't written for OpenCourant yet (ADR 0085 step 2)",
-                             code="unsupported")  # fmt: skip
-        if mesh.shell_blocks() or mesh.beam_blocks():
-            raise InputError("shells and beams aren't written for OpenCourant yet (ADR 0085 "
-                             "step 2)", code="unsupported")  # fmt: skip
+        if mesh.beam_blocks():
+            raise InputError("beams aren't written for OpenCourant", code="unsupported")
         workdir.mkdir(parents=True, exist_ok=True)
         self._end_time = deck.settings_of(steps[0]).end_time
-        return deck.write(project, study, mesh, workdir, steps[0],
+        return deck.write(project, study, mesh, workdir, steps[0], self.processes(),
                           models=set(self.capabilities.material_models))  # fmt: skip
 
     def progress(self, input_file: Path, step: int = 1, of: int = 1):
@@ -84,6 +84,14 @@ class OpenCourantAdapter(SolverAdapter):
         return OpenCourantProgress(end or 1.0, step, of)
 
     def command(self, input_file: Path) -> list[str]:
+        """`sh run.sh` in the image (or on a remote host); natively, the driver in
+        Puzzle's own Python (native.py), which fetches the release on first use."""
+        import sys
+
+        from puzzle.jobs.runtime import NativeRuntime, runtime_for
+
+        if isinstance(runtime_for(self.name), NativeRuntime):
+            return [sys.executable, "-m", "puzzle.adapters.opencourant.native"]
         return ["sh", input_file.name]
 
     def read_results(self, input_file: Path):
@@ -103,13 +111,21 @@ def _model(workdir: Path):
     for line in (workdir / f"{deck.NAME}_0000.rad").read_text(encoding="utf-8").splitlines():
         if line.startswith("/"):
             key = line.split("/")[1]
-            section = key if key in ("NODE", "TETRA4", "TETRA10", "BRICK") else None
+            section = key if key in ("NODE", "TETRA4", "TETRA10", "BRICK", "SHELL",
+                                     "SH3N") else None  # fmt: skip
             continue
         if section is None or line.startswith("#") or not line.strip():
             continue
         if section == "NODE":
             nodes.add(int(line[:10]))
-        else:
-            ids = [int(line[k : k + 10]) for k in range(0, len(line.rstrip()), 10)]
-            conn[ids[0]] = np.array(ids[1:], dtype=np.int64)
+            continue
+        ids = [int(line[k : k + 10]) for k in range(0, len(line.rstrip()), 10)]
+        if section == "TETRA10":  # the id on one line, its ten nodes on the next
+            if len(ids) == 1:
+                last = ids[0]
+            else:
+                conn[last] = np.array(ids, dtype=np.int64)
+            continue
+        last = ids[0]
+        conn[last] = np.array(ids[1:], dtype=np.int64)
     return conn, nodes

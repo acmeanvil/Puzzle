@@ -1,7 +1,9 @@
 # 0085. Explicit dynamics on OpenCourant: an `explicit` step, its adapter and its checks
 
-- Status: Accepted; step 1 built (2026-11-14): solids, elastic and tabulated plastic
-  materials, supports, loads, velocities, rigid walls, the checks before a run
+- Status: Accepted; built (2026-11-14), steps 1-4: solids and shells, elastic,
+  tabulated plastic and Johnson–Cook materials, contacts, velocities, rigid walls, the
+  checks before and after a run, native runs from the release, MPI, Apptainer on
+  clusters, the live energy error, the Advisor; Help's generated pages come with ADR 0083
 - Date: 2026-11-14
 
 ## Context
@@ -163,6 +165,62 @@ first on every platform; MCP `explicit_estimate`; skill `explicit-dynamics`;
 
 The Engine runs two time steps past the end time (it stops at the end before writing a
 frame there); `anim_to_vtk` writes single-precision points, so nodes are matched by id.
+
+**Built (2026-11-14), step 2**: shells (`/SHELL` QEPH quads, `/SH3N`, `/PROP/SHELL`
+from the shell sections, five points through the thickness; `fixed` holds their
+rotations); contacts (bonded nonconformal `/INTER/TYPE2`, frictionless and frictional
+`/INTER/TYPE7` both ways with INACTI 6, so touching parts aren't pushed apart at the
+start; a conformal bond shares nodes); `Material.models.johnson_cook` (`/MAT/PLAS_JOHNS`,
+the rate read through a filter `rate_cutoff` when set); tet10 on two lines (the id, then
+its ten nodes: `hm_cfg_files` `ELEM/tetra10.cfg`); `explicit.run_checks` after every
+run (`energy_error`, `hourglass`, `added_mass`). Card layouts come from the image's own
+`hm_cfg_files` (`config/CFG/radioss51` for decks of version 2019), and the benchmarks
+assert the Starter placed every field (no warning 100213/100214). `/PLOAD` pushes along
+the segment's normal, so Puzzle writes −p.
+
+| Benchmark | Measured | Expected |
+| --- | --- | --- |
+| Wave behind the front, tet10 | −39.53 MPa | −39.62 MPa (−0.23 %) |
+| Pressure on a bar end | −9.964 MPa | −p = −10 MPa |
+| Johnson–Cook hardening, A + B εpⁿ at εp 0.0113 | 303.21 MPa | 303.07 MPa (+0.05 %) |
+| Johnson–Cook rate term (filtered at 5 kHz, below the bar's 12.6 kHz ringing) | 359.74 MPa | A (1 + C ln(ε̇/ε̇₀)) 357.35 MPa (+0.67 %) |
+| Two equal bars colliding (frictionless) | A 0.166 m/s, B 9.834 m/s | 0 and v₀ = 10 m/s |
+| A bonded split bar's wave past the tie (5 and 4 mm meshes) | −39.24 MPa | −39.62 MPa (−0.96 %) |
+| A clamped plate under pressure, QEPH quads against CalculiX's S8 (5 mm both) | −2.891e-5 m | −2.865e-5 m (+0.93 %); 1.99 % at worst over the swing |
+
+Measured on the way: unfiltered, Johnson–Cook's rate term reads the bar's axial
+ringing and the flow stress comes out 4 % high (the swings above ε̇₀ count, those below
+don't); CalculiX's S8 plate at 10 mm is 1.7 % stiff, at 5 mm it lands on OpenCourant's
+10 mm answer to four digits.
+
+**Built (2026-11-14), steps 3 and 4**:
+
+- native runs (`adapters/opencourant/native.py`): this platform's release zip fetched on
+  first use into `<user data dir>/solvers/opencourant/<release>/`, its SHA-256 checked
+  against the one pinned with the release and nothing unpacked outside its folder, or
+  `PUZZLE_OPENCOURANT_PATH`; a driver in Puzzle's own Python (`run.json` beside `run.sh`)
+  sets OPENCOURANT_PATH, RAD_CFG_PATH, RAD_H3D_PATH, the stack size and the libraries'
+  path, runs the Starter, the Engine and both converters, its output on stdout for the
+  progress parser; the native Windows release gave the container's wave to five digits
+  (−39.518 MPa both);
+- the runtime: the image pinned by digest alone (`opencourant/opencourant@sha256:b3f0…`,
+  release latest-20261011), which Docker, Podman and Apptainer all take; with an engine
+  answering, "auto" takes the container even before the image is pulled
+  (`jobs.runtime.PUBLISHED_IMAGES`: the first run pulls it), else native;
+- MPI: Settings > Solvers > Parallel processes per run splits the model in the Starter
+  (`-np`) and runs `mpiexec -np P engine_ompi` in the image (natively where an `mpiexec`
+  is on the path); two processes gave the one-process wave (−39.518 MPa);
+- remote hosts: a host with `runtime = "apptainer"` runs `apptainer exec
+  docker://…@sha256:… sh run.sh` (`jobs.remote`), unchanged code;
+- `puzzle solvers` and Settings > Solvers list how it runs here (container, native
+  release, fetched on first use, or missing with what to install);
+- the Solution panel plots the Engine's energy error as it runs (a `Tracked` value per
+  printed cycle); the frames' energies are global fields for `result_history`, the
+  operators' Over the steps and Plot;
+- the Advisor: an explicit study needs "a load or a motion" (an initial velocity
+  suggested; no support asked for), and an up-to-date run's Results step says the
+  energy checks in words; the new-study form says which solvers run an analysis
+  (`menus._solver_fits`, from the capability matrices).
 
 ## Plan
 

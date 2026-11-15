@@ -848,6 +848,24 @@ def new_component(window):
     return window.submit(Create(kind="component", data=data))
 
 
+def _solver_fits(solver, analysis) -> str | None:
+    """Why `solver` can't run `analysis` (an explicit step on an implicit solver, or the
+    reverse: ADR 0085), naming the solvers that can; None when it can."""
+    from puzzle.adapters import available_adapters
+
+    if not solver or not analysis:
+        return None
+    adapters = available_adapters()
+    if solver not in adapters:
+        return None
+    takes = lambda s: any(analysis in steps for steps in adapters[s].capabilities.physics.values())  # noqa: E731
+    if takes(solver):
+        return None
+    can = [solver_label(s) for s in sorted(adapters) if takes(s)]
+    return (f"{solver_label(solver)} doesn't run {label(analysis).lower()}"
+            + (f": {', '.join(can)} does" if can else ""))  # fmt: skip
+
+
 def new_study(window, component: str | None = None):
     """The New study form; `component` (a name) chosen already, as when a study is
     dragged out of a component in the schematic (ADR 0071 decision 4)."""
@@ -905,7 +923,11 @@ def new_study(window, component: str | None = None):
         check=lambda v: (
             "Give it a name"
             if not v["name"]
-            else (f"There is already a study '{v['name']}'" if v["name"] in taken else None)
+            else (
+                f"There is already a study '{v['name']}'"
+                if v["name"] in taken
+                else _solver_fits(v.get("solver"), v.get("analysis"))
+            )  # fmt: skip
         ),
     )
     if got is None:

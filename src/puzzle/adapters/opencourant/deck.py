@@ -15,6 +15,7 @@ after (1-4).
 
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,6 +28,7 @@ from puzzle.model.schema import Amplitude, Component, Material, Project, Study
 
 NAME = "puzzle"  # the run's name: puzzle_0000.rad, puzzle_0001.rad, puzzleA001, puzzleT01
 SOLIDS = {"tet4": "/TETRA4", "tet10": "/TETRA10", "hex8": "/BRICK"}
+SHELLS = {"quad4": "/SHELL", "tri3": "/SH3N"}  # ADR 0085 step 2
 TET10 = [0, 1, 2, 3, 4, 5, 6, 7, 9, 8]  # Gmsh tet10 -> Radioss TETRA10
 HUGE = 1e30  # "never stops"
 FRAMES = 20
@@ -157,6 +159,17 @@ def _material(deck: Deck, m: Material, solver_models: set[str]) -> int:
     rho, e, nu = props["density"], props["youngs_modulus"], props["poissons_ratio"]
     mid = deck.ids.next("mat")
     plastic = m.models.plasticity if m.models is not None else None
+    jc = m.models.johnson_cook if m.models is not None else None
+    if jc is not None and plastic is not None:
+        raise InputError(f"material '{m.name}' has both a plasticity table and Johnson–Cook: "
+                         "keep one")  # fmt: skip
+    if jc is not None:  # (a + b εpⁿ)(1 + c ln(ε̇/ε̇0)), ADR 0085 decision 3
+        deck.card(f"/MAT/PLAS_JOHNS/{mid}", m.name, _r(rho, 0.0), _r(e, nu),
+                  _r(jc.a, jc.b, jc.n, 0.0, jc.max_stress),
+                  _r(jc.c, jc.reference_strain_rate) + _i(1, 1 if jc.rate_cutoff else 0)
+                  + _r(jc.rate_cutoff),
+                  _r(0.0, 0.0, 0.0, 0.0))  # fmt: skip
+        return mid
     if plastic is None:
         deck.card(f"/MAT/ELAST/{mid}", m.name, _r(rho, 0.0), _r(e, nu))
         return mid
@@ -170,10 +183,16 @@ def _material(deck: Deck, m: Material, solver_models: set[str]) -> int:
     return mid
 
 
-def _property(deck: Deck, element: str) -> int:
+def _property(deck: Deck, element: str, thickness: float | None = None) -> int:
     """A solid property: HEPH bricks (Isolid 24, physical hourglass); tets as they are
-    (Radioss's tetrahedra need no hourglass control)."""
+    (Radioss's tetrahedra need no hourglass control). A shell's: QEPH quadrilaterals
+    (Ishell 24), five points through the thickness, plasticity iterated."""
     pid = deck.ids.next("prop")
+    if element in SHELLS:
+        deck.card(f"/PROP/SHELL/{pid}", f"{element} shell {thickness:g} m",
+                  _i(24 if element == "quad4" else 0, 0, 0), _r(0.0, 0.0, 0.0, 0.0, 0.0),
+                  _i(5, 1) + _r(thickness, 0.0) + " " * 10 + _i(1, 1))  # fmt: skip
+        return pid
     isolid = 24 if element == "hex8" else 0
     deck.card(f"/PROP/SOLID/{pid}", f"{element} solid",
               _i(isolid, 0) + f"{0:>20}{0:>20}" + _i(0, 0) + _r(0.0),
@@ -181,24 +200,60 @@ def _property(deck: Deck, element: str) -> int:
     return pid
 
 
-def _elements(project: Project, comp: Component, mesh: Mesh) -> dict[int, tuple[int, str]]:
-    """Each solid element's material assignment index and element type; later
-    assignments win, as elsewhere."""
-    owner: dict[int, tuple[int, str]] = {}
+def _thicknesses(comp: Component, mesh: Mesh) -> dict[int, float]:
+    """Each shell element's thickness from the component's shell sections (a face
+    selection's after its part's)."""
+    out: dict[int, float] = {}
+    sections = sorted(comp.shell_sections, key=lambda s: "/" in s.selection)
+    for s in sections:
+        if s.offset:
+            raise InputError(f"shell section on '{s.selection}': offsets aren't written for "
+                             "OpenCourant yet", code="unsupported")  # fmt: skip
+        if s.fields:
+            raise InputError(f"shell section on '{s.selection}': a thickness from a field "
+                             "isn't written for OpenCourant", code="unsupported")  # fmt: skip
+        group = mesh.groups.get(s.selection)
+        if group is None:
+            raise InputError(f"a shell thickness names '{s.selection}', which is not meshed")
+        for b in group.blocks(mesh):
+            if b.dim == 2:
+                out.update(dict.fromkeys(b.ids.tolist(), s.thickness.to_si()))
+    return out
+
+
+def _elements(project: Project, comp: Component, mesh: Mesh):
+    """Each element's (material assignment index, element type, shell thickness or
+    None); later assignments win, as elsewhere."""
+    owner: dict[int, tuple] = {}
+    shells = {id(b) for b in mesh.shell_blocks()}
+    thick = _thicknesses(comp, mesh) if shells else {}
     for k, a in enumerate(comp.materials):
         group = mesh.groups.get(a.selection)
         if group is None:
             raise InputError(f"material assignment on '{a.selection}': no such selection")
         for b in group.blocks(mesh):
+            if b.dim == 2 and id(b) in shells:
+                if b.element not in SHELLS:
+                    raise InputError(
+                        f"{b.element} shells aren't written for OpenCourant (tri3 "
+                        "and quad4 are: element order 1)",
+                        code="unsupported",
+                    )
+                for e in b.ids.tolist():
+                    if int(e) not in thick:
+                        raise InputError(f"the sheet body '{a.selection}' has no thickness: "
+                                         "add a shell section", code="invalid")  # fmt: skip
+                    owner[int(e)] = (k, b.element, thick[int(e)])
+                continue
             if b.dim != 3:
                 continue
             if b.element not in SOLIDS:
                 raise InputError(f"{b.element} elements aren't written for OpenCourant (tet4, "
                                  "tet10 and hex8 are)", code="unsupported")  # fmt: skip
             for e in b.ids.tolist():
-                owner[int(e)] = (k, b.element)
-    solids = [b for b in mesh.blocks if b.dim == 3]
-    missing = [int(e) for b in solids for e in b.ids if int(e) not in owner]
+                owner[int(e)] = (k, b.element, None)
+    elements = [b for b in mesh.blocks if b.dim == 3 or id(b) in shells]
+    missing = [int(e) for b in elements for e in b.ids if int(e) not in owner]
     if missing:
         raise InputError(f"{len(missing)} elements have no material", code="incomplete_material")
     return owner
@@ -206,8 +261,9 @@ def _elements(project: Project, comp: Component, mesh: Mesh) -> dict[int, tuple[
 
 def _connectivity(mesh: Mesh) -> dict[int, np.ndarray]:
     out = {}
+    shells = {id(b) for b in mesh.shell_blocks()}
     for b in mesh.blocks:
-        if b.dim == 3:
+        if b.dim == 3 or id(b) in shells:
             conn = b.connectivity[:, TET10] if b.element == "tet10" else b.connectivity
             out.update(zip(b.ids.tolist(), conn, strict=True))
     return out
@@ -240,10 +296,11 @@ def _features(deck: Deck, project: Project, comp: Component, mesh: Mesh) -> None
             group = _group(mesh, f)
             nodes = group.node_ids
             title = f"{f.type} {f.selection}"
-            if f.type == "fixed":
+            if f.type == "fixed":  # on shell nodes their rotations too
                 gid = deck.nodes_group(title, nodes)
+                turns = "111" if set(map(int, nodes)) & mesh.shell_nodes() else "000"
                 deck.card(f"/BCS/{deck.ids.next('bcs')}", title,
-                          f"{'111':>6}{'000':>4}" + _i(0, gid))  # fmt: skip
+                          f"{'111':>6}{turns:>4}" + _i(0, gid))  # fmt: skip
             elif f.type == "displacement":
                 held = "".join("1" if v.get(a) == 0.0 else "0" for a in "xyz")
                 moved = [a for a in "xyz" if v.get(a)]
@@ -315,9 +372,21 @@ def _force(deck, project, f, group, mesh, v, title) -> None:
 def _pressure(deck, project, f, group, mesh, v, title) -> None:
     """A pressure on segments facing out of the solid each face bounds (/PLOAD on
     /SURF/SEG); tri6 faces (tet10 meshes) are refused for now."""
+    sid = _segments(deck, group, mesh, title, corners_only=False)
+    fid = _amplitude(deck, project, f)
+    # hm_cfg_files radioss51 (decks to 2019): surf, funct, sensor, 30 blanks, the scales.
+    # Radioss's pressure pushes along the segment's normal (out of the solid, along a
+    # shell's face normal); Puzzle's pushes against it: so −p (measured on a plate).
+    deck.card(f"/PLOAD/{deck.ids.next('pload')}", title,
+              _i(sid, fid, 0) + " " * 30 + _r(1.0, -v["p"]))  # fmt: skip
+
+
+def _segments(deck, group, mesh, title, corners_only=True) -> int:
+    """A face selection as /SURF/SEG, each segment's normal out of the solid it bounds
+    (a shell's own face as it is). Six-node faces as their corners when `corners_only`
+    (a contact's master surface), else refused (a pressure's)."""
     from puzzle.adapters.common import surface_blocks
 
-    p = v["p"]
     centres = {}
     for b in mesh.blocks:
         if b.dim == 3:
@@ -326,21 +395,67 @@ def _pressure(deck, project, f, group, mesh, v, title) -> None:
                 for n in nodes[:4] if b.element.startswith("tet") else nodes:
                     centres.setdefault(int(n), []).append(c)
     rows, sid = [], deck.ids.next("surf")
-    for b in surface_blocks(group, mesh):
-        if b.element not in ("tri3", "quad4"):
+    blocks = surface_blocks(group, mesh)
+    if not blocks:
+        raise InputError(f"'{group.name}' has no faces to load or touch", code="invalid_input")
+    for b in blocks:
+        corners = {"tri3": 3, "quad4": 4, "tri6": 3, "quad8": 4, "quad9": 4}.get(b.element)
+        if corners is None or (b.element not in ("tri3", "quad4") and not corners_only):
             raise InputError(f"pressure on {b.element} faces isn't written for OpenCourant yet "
                              "(first-order meshes only)", code="unsupported")  # fmt: skip
-        for nodes in b.connectivity:
+        for nodes in b.connectivity[:, :corners]:
             xyz = mesh.node_coords(nodes[:3])
             normal = np.cross(xyz[1] - xyz[0], xyz[2] - xyz[0])
-            inside = np.mean([np.mean(centres[int(n)], axis=0) for n in nodes], axis=0)
             seg = [int(n) for n in nodes]
-            if normal @ (xyz.mean(axis=0) - inside) < 0:  # the segment's normal outward
-                seg = seg[::-1]
+            near = [centres[int(n)] for n in nodes if int(n) in centres]
+            if near:  # a solid's face: the segment's normal outward
+                inside = np.mean([np.mean(c, axis=0) for c in near], axis=0)
+                if normal @ (xyz.mean(axis=0) - inside) < 0:
+                    seg = seg[::-1]
             rows.append(_i(len(rows) + 1, *seg))
     deck.card(f"/SURF/SEG/{sid}", title, *rows)
-    fid = _amplitude(deck, project, f)
-    deck.card(f"/PLOAD/{deck.ids.next('pload')}", title, _i(sid, fid) + " " * 20 + _r(1.0, p))
+    return sid
+
+
+def _contacts(deck, comp: Component, mesh: Mesh) -> None:
+    """ADR 0085 step 2: a bonded contact across meshes that don't match as /INTER/TYPE2
+    (the source's nodes tied to the target's faces; a conformal one shares nodes and
+    needs nothing); frictionless and frictional as /INTER/TYPE7 both ways (penalty,
+    Coulomb friction). Others are refused."""
+    for c in comp.contacts:
+        if c.thread is not None:
+            raise InputError(f"contact '{c.name}': threads aren't written for OpenCourant",
+                             code="unsupported")  # fmt: skip
+        if c.type == "bonded" and c.effective_meshing == "conformal":
+            continue
+        groups = []
+        for sel in (c.source, c.target):
+            g = mesh.groups.get(sel)
+            if g is None:
+                raise InputError(f"contact '{c.name}': '{sel}' is not in the mesh")
+            groups.append(g)
+        source, target = groups
+        if c.type == "bonded":
+            gid = deck.nodes_group(f"{c.name} tied nodes", source.node_ids)
+            sid = _segments(deck, target, mesh, f"{c.name} target")
+            deck.card(f"/INTER/TYPE2/{deck.ids.next('inter')}", c.name,
+                      _i(gid, sid) + f"{0:>20}" + _i(0, 0, 0, 0) + _r(0.0), _r(1.0))  # fmt: skip
+        elif c.type in ("frictionless", "frictional"):
+            mu = float(c.friction or 0.0) if c.type == "frictional" else 0.0
+            for a, b in ((source, target), (target, source)):
+                gid = deck.nodes_group(f"{c.name} nodes", a.node_ids)
+                sid = _segments(deck, b, mesh, f"{c.name} faces")
+                deck.card(f"/INTER/TYPE7/{deck.ids.next('inter')}", c.name,
+                          _i(gid, sid, 0, 0, 0, 0, 0, 0, 0, 0), _r(0.0, 0.0), _r(0.0, 0.0),
+                          _r(0.0, mu, 0.0, 0.0, 0.0),
+                          # INACTI 6: nodes inside the gap at the start (touching
+                          # parts) aren't pushed out: the gap shrinks for them instead
+                          f"{'000':>10}" + " " * 20 + _i(6) + _r(0.0, 0.0, 0.0),
+                          _i(0, 0) + _r(0.0) + _i(0))  # fmt: skip
+        else:
+            raise InputError(f"contact '{c.name}': {c.type} contact isn't written for "
+                             "OpenCourant (bonded, frictionless and frictional are)",
+                             code="unsupported")  # fmt: skip
 
 
 def _wall(deck, f, nodes, v, title) -> None:
@@ -358,9 +473,11 @@ def _wall(deck, f, nodes, v, title) -> None:
               _r(0.0, mu, 0.0, 0.0) + _i(0), _r(*p), _r(*(p + n)))  # fmt: skip
 
 
-def write(project: Project, study: Study, mesh: Mesh, workdir: Path, step, threads: int = 1,
+def write(project: Project, study: Study, mesh: Mesh, workdir: Path, step, processes: int = 1,
           models: set[str] = frozenset()) -> Path:  # fmt: skip
-    """Write puzzle_0000.rad, puzzle_0001.rad and run.sh; return run.sh."""
+    """Write puzzle_0000.rad, puzzle_0001.rad and run.sh; return run.sh. With
+    `processes` > 1 the Starter splits the model into that many domains and the Engine
+    runs under MPI (the image's OpenMPI), the cores per run shared among them."""
     comp = project.objects[study.component]
     s = settings_of(step)
     deck = Deck()
@@ -380,17 +497,23 @@ def write(project: Project, study: Study, mesh: Mesh, workdir: Path, step, threa
     coords = mesh.node_coords(np.asarray(used))
     deck.lines.append("/NODE")
     deck.lines += [f"{n:>10d}" + _r(*xyz) for n, xyz in zip(used, coords, strict=True)]
-    parts: dict[tuple[int, str], list[int]] = {}
+    parts: dict[tuple, list[int]] = {}
     for e, key in owner.items():
         parts.setdefault(key, []).append(e)
-    for (k, element), elements in sorted(parts.items()):
+    for (k, element, thickness), elements in sorted(parts.items(), key=lambda kv: (
+            kv[0][0], kv[0][1], kv[0][2] or 0.0)):  # fmt: skip
         pid = deck.ids.next("part")
-        prop = _property(deck, element)
+        prop = _property(deck, element, thickness)
         a = comp.materials[k]
         deck.card(f"/PART/{pid}", f"{a.selection} {element}", _i(prop, mats[k], 0))
-        deck.lines.append(f"{SOLIDS[element]}/{pid}")
-        deck.lines += [_i(e, *conn[e]) for e in sorted(elements)]
+        deck.lines.append(f"{SOLIDS.get(element) or SHELLS[element]}/{pid}")
+        if element == "tet10":  # the id on its own line, then the ten nodes
+            for e in sorted(elements):  # (hm_cfg_files ELEM/tetra10.cfg)
+                deck.lines += [_i(e), _i(*conn[e])]
+        else:
+            deck.lines += [_i(e, *conn[e]) for e in sorted(elements)]
     _features(deck, project, comp, mesh)
+    _contacts(deck, comp, mesh)
     name = NAME
     (workdir / f"{name}_0000.rad").write_text(deck.text(), encoding="utf-8", newline="\n")
     (workdir / f"{name}_0001.rad").write_text(engine(s, mesh, project, comp), encoding="utf-8",
@@ -400,8 +523,9 @@ def write(project: Project, study: Study, mesh: Mesh, workdir: Path, step, threa
         "#!/bin/sh",
         "# Written by Puzzle (ADR 0085): the Starter, the Engine, then the output converted.",
         "set -e",
-        f"starter{sp} -i {name}_0000.rad -np 1",
-        f"engine{sp} -i {name}_0001.rad",
+        f"starter{sp} -i {name}_0000.rad -np {processes}",
+        (f"mpiexec -np {processes} engine_ompi{sp} -i {name}_0001.rad" if processes > 1
+         else f"engine{sp} -i {name}_0001.rad"),
         f"for f in {name}A[0-9][0-9][0-9]; do [ -e \"$f\" ] && anim_to_vtk_linux64_gf \"$f\" "
         "> \"$f.vtk\"; done",
         f"[ -e {name}T01 ] && th_to_csv_linux64_gf {name}T01 > /dev/null",
@@ -409,6 +533,9 @@ def write(project: Project, study: Study, mesh: Mesh, workdir: Path, step, threa
     ])  # fmt: skip
     run = workdir / "run.sh"
     run.write_text(script + "\n", encoding="utf-8", newline="\n")
+    # what the native driver (native.py) needs to do the same without a shell
+    job = {"name": name, "processes": processes, "precision": s.precision}
+    (workdir / "run.json").write_text(json.dumps(job), encoding="utf-8")
     return run
 
 
@@ -427,6 +554,7 @@ def engine(s: Settings, mesh: Mesh, project: Project, comp: Component) -> str:
              "/TFILE/0", _r(s.history_dt), "/ANIM/DT", _r(0.0, s.frame_dt),
              "/ANIM/VECT/DISP", "/ANIM/VECT/VEL", "/ANIM/VECT/ACC",
              "/ANIM/BRICK/TENS/STRESS", "/ANIM/ELEM/VONM", "/ANIM/ELEM/EPSP",
+             *(["/ANIM/SHELL/TENS/STRESS/MEMB"] if mesh.shell_blocks() else []),
              f"/PRINT/-{every}"]  # fmt: skip
     if s.mass_scaling_time_step:
         lines += ["/DT/NODA/CST/0", _r(s.time_step_scale, s.mass_scaling_time_step)]

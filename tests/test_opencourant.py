@@ -93,9 +93,11 @@ def test_the_engine_lines_become_progress():
 
     parser = OpenCourantProgress(end_time=2e-5)
     events = []
-    for line in [" ROOT: puzzle  RESTART: 0001",
-                 " NC=       0 T= 0.0000E+00 DT= 8.4813E-07 ERR=  0.0% DM/M= 0.0000E+00",
-                 " NC=     100 T= 1.0000E-05 DT= 8.4813E-07 ERR=  0.3% DM/M= 0.0000E+00"]:  # fmt: skip
+    for line in [
+        " ROOT: puzzle  RESTART: 0001",
+        " NC=       0 T= 0.0000E+00 DT= 8.4813E-07 ERR=  0.0% DM/M= 0.0000E+00",
+        " NC=     100 T= 1.0000E-05 DT= 8.4813E-07 ERR=  0.3% DM/M= 0.0000E+00",
+    ]:
         events += parser.feed(line)
     increments = [e for e in events if e.kind == "increment"]
     assert [e.time for e in increments] == [0.0, 1e-5] and increments[-1].end_time == 2e-5
@@ -151,8 +153,9 @@ def test_settings_are_checked():
     with pytest.raises(InputError, match="end_time"):
         deck.settings_of(SolveStep(type="explicit", settings={}))
     with pytest.raises(InputError, match="time_step_scale"):
-        deck.settings_of(SolveStep(type="explicit", settings={"end_time": 1.0,
-                                                               "time_step_scale": 1.5}))  # fmt: skip
+        deck.settings_of(
+            SolveStep(type="explicit", settings={"end_time": 1.0, "time_step_scale": 1.5})
+        )
     s = deck.settings_of(SolveStep(type="explicit", settings={"end_time": q(5, "ms")}))
     assert (s.end_time, s.frame_dt, s.history_dt) == pytest.approx((5e-3, 2.5e-4, 5e-6))
 
@@ -164,10 +167,158 @@ def test_implicit_solvers_refuse_explicit_steps_and_features():
     comp.physics[0].features = [Feature(type="fixed", selection="P"),
                                 Feature(type="initial_velocity", selection="P",
                                         values={"vx": q(1, "m/s")})]  # fmt: skip
-    study = p.add(Study(name="S", component=comp.id, solver="calculix",
-                        steps=[SolveStep(type="explicit", settings={"end_time": 1e-3})]))  # fmt: skip
+    study = p.add(
+        Study(
+            name="S",
+            component=comp.id,
+            solver="calculix",
+            steps=[SolveStep(type="explicit", settings={"end_time": 1e-3})],
+        )
+    )
     problems = available_adapters()["calculix"]().check(p, study)
     assert any("explicit" in x for x in problems)
     assert any("initial_velocity" in x for x in problems)
     study.solver = "opencourant"
     assert available_adapters()["opencourant"]().check(p, study) == []
+
+
+def _history(**series):
+    from puzzle.results.model import Field, Results, StepResult
+
+    n = len(next(iter(series.values())))
+    steps = []
+    for k in range(n):
+        fields = {name: Field(name, "global", [""], np.array([0]), np.array([[values[k]]]))
+                  for name, values in series.items()}  # fmt: skip
+        steps.append(StepResult(1, "explicit", float(k), fields=fields))
+    return Results("opencourant", steps)
+
+
+def test_the_energy_balance_hourglass_and_added_mass_are_checked():
+    # a bar thrown at 10 m/s into a spring: kinetic into internal, the sum held
+    ok = _history(kinetic_energy=[10.0, 6.0, 2.0], internal_energy=[0.0, 4.0, 8.0],
+                  external_work=[0.0, 0.0, 0.0], mass=[1.0, 1.0, 1.0])  # fmt: skip
+    assert explicit.run_checks(ok) == []
+    driven = _history(kinetic_energy=[0.0, 1.0, 1.0], internal_energy=[0.0, 1.0, 3.0],
+                      external_work=[0.0, 2.0, 4.0])  # fmt: skip
+    assert explicit.run_checks(driven) == []  # work done on it is in the balance
+    made = _history(kinetic_energy=[10.0, 9.0, 9.0], internal_energy=[0.0, 4.0, 8.0])
+    assert [c for c, _ in explicit.run_checks(made)] == ["energy_error"]
+    hour = _history(
+        kinetic_energy=[10.0, 2.0],
+        internal_energy=[0.0, 7.0],
+        hourglass_energy=[0.0, 1.0],
+        added_mass=[0.0, 0.2],
+        mass=[1.0, 1.0],
+    )
+    assert {c for c, _ in explicit.run_checks(hour)} == {"hourglass", "added_mass"}
+
+
+def test_a_remote_host_runs_the_pinned_image_with_apptainer():
+    """ADR 0085 step 3: on a cluster, Apptainer pulls the image by its digest."""
+    from puzzle import hosts
+    from puzzle.jobs.remote import RemoteRuntime
+
+    box = RemoteRuntime(hosts.Host(name="hpc", address="hpc", runtime="apptainer"), "opencourant")
+    line = box.solve_lines(["sh", "run.sh"])[-1]
+    assert line.startswith("apptainer exec")
+    assert "docker://docker.io/opencourant/opencourant@sha256:b3f042fe" in line
+    assert line.endswith("sh run.sh")
+
+
+def test_a_release_is_fetched_checked_and_unpacked(tmp_path, monkeypatch):
+    """ADR 0085 step 3: the zip's SHA-256 must be the pinned one; nothing outside its
+    folder is unpacked."""
+    import hashlib
+    import io
+    import threading
+    import zipfile
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    from puzzle.adapters.opencourant import native
+
+    def zipped(names):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            for n in names:
+                z.writestr(n, "x")
+        return buf.getvalue()
+
+    good = zipped(["OpenCourant/exec/starter_linux64_gf", "OpenCourant/hm_cfg_files/a.cfg"])
+    evil = zipped(["OpenCourant/exec/starter_linux64_gf", "../outside.txt"])
+    served = {"/good.zip": good, "/evil.zip": evil}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            body = served[self.path]
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    monkeypatch.setattr(native, "home", lambda: tmp_path / "solvers")
+    monkeypatch.setattr(native, "platform_key", lambda: "linux64")
+    monkeypatch.delenv("PUZZLE_OPENCOURANT_PATH", raising=False)
+    try:
+        with pytest.raises(RuntimeError, match="SHA-256"):
+            native.fetch(lambda s: None, f"{base}/good.zip", "0" * 64)
+        assert native.root() is None
+        with pytest.raises(RuntimeError, match="outside"):
+            native.fetch(lambda s: None, f"{base}/evil.zip", hashlib.sha256(evil).hexdigest())
+        assert not (tmp_path / "outside.txt").exists()
+        folder = native.fetch(lambda s: None, f"{base}/good.zip", hashlib.sha256(good).hexdigest())
+        assert native.root() == folder and (folder / "hm_cfg_files" / "a.cfg").exists()
+        env = native.environment(folder, {})
+        assert env["RAD_CFG_PATH"] == str(folder / "hm_cfg_files")
+        assert str(folder / "extlib" / "hm_reader" / "linux64") in env["LD_LIBRARY_PATH"]
+    finally:
+        server.shutdown()
+
+
+def test_the_new_study_form_says_which_solver_runs_explicit_dynamics():
+    from puzzle.gui.menus import _solver_fits
+
+    assert _solver_fits("opencourant", "explicit") is None
+    said = _solver_fits("calculix", "explicit")
+    assert "explicit dynamics" in said and "OpenCourant" in said
+    assert "CalculiX" in _solver_fits("opencourant", "modal")
+    assert _solver_fits("calculix", "stationary") is None
+
+
+def test_the_advisor_asks_an_explicit_study_for_a_load_or_a_motion():
+    from puzzle.advisor import advise
+
+    p, comp = _project()
+    study = p.add(
+        Study(
+            name="Drop",
+            component=comp.id,
+            solver="opencourant",
+            steps=[SolveStep(type="explicit", settings={"end_time": 1e-3})],
+        )
+    )
+    conditions = next(a for a in advise(p, component=comp, study=study) if a.step == "conditions")
+    assert conditions.state == "needed" and "a load or a motion" in conditions.detail
+    assert conditions.action.endswith(":initial_velocity")  # no support asked for
+    comp.physics[0].features = [Feature(type="initial_velocity", selection="P",
+                                        values={"vz": q(-5, "m/s")})]  # fmt: skip
+    conditions = next(a for a in advise(p, component=comp, study=study) if a.step == "conditions")
+    assert conditions.state == "done"
+
+
+def test_the_energy_error_is_tracked_live():
+    from puzzle.adapters.opencourant.progress import OpenCourantProgress
+
+    events = OpenCourantProgress(1e-3).feed(
+        " NC=      50 T= 5.0000E-04 DT= 1.0000E-05 ERR= -1.2% DM/M= 0.0000E+00"
+    )
+    tracked = [e for e in events if e.kind == "tracked"]
+    assert [(e.name, e.value, e.unit, e.time) for e in tracked] == [
+        ("energy error", -1.2, "%", 5e-4)
+    ]

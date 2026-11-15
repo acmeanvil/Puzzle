@@ -92,8 +92,12 @@ def read(workdir: Path, name: str, conn: dict[int, np.ndarray], mesh_nodes: set[
             "ELEMENT_ID" in grid.cell_data else None  # fmt: skip
         if cells is not None:
             solid = np.array([int(e) in conn for e in cells], bool)
-            for vtk_name in [k for k in grid.cell_data if k.endswith("_Stress")]:
-                tensor = np.asarray(grid.cell_data[vtk_name], float).reshape(len(cells), 9)
+            stresses = [k for k in grid.cell_data if "_Stress" in k]  # 3DELEM_, 2DELEM_..(membrane)
+            if stresses:
+                tensor = np.zeros((len(cells), 9))
+                for vtk_name in stresses:  # solids and shells: each cell has one of them
+                    tensor += np.nan_to_num(np.asarray(grid.cell_data[vtk_name], float).reshape(
+                        len(cells), 9))  # fmt: skip
                 ids, values = _nodal(cells[solid], tensor[solid][:, STRESS], conn)
                 fields["stress"] = Field("stress", "node", ["xx", "yy", "zz", "xy", "yz", "zx"],
                                          ids, values)  # fmt: skip

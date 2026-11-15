@@ -420,6 +420,11 @@ def _run_study(
         # ADR 0080: the force the weak springs carry, and a warning where it is the load.
         weak_springs.finish(part_results, springs, study.weak_spring_limit, record)
         _large_strain(part_results, seen, part, record)  # ADR 0082 decision 6
+        if any(s.type == "explicit" for s in part.solve_steps()):  # ADR 0085 decision 5
+            from puzzle import explicit
+
+            for code, text in explicit.run_checks(part_results):
+                record(progress.Message(level="warning", text=text, code=code))
         lap("read")
         if len(parts) > 1:
             for step in part_results.steps:

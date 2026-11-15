@@ -102,6 +102,7 @@ GROUPS = list(dict.fromkeys(p.group for p in PROPERTIES))
 # that solves its physics (a plastic steel can still be used for heat transfer).
 MODEL_PHYSICS = {
     "plasticity": "solid_mechanics",
+    "johnson_cook": "solid_mechanics",
     "orthotropic_elasticity": "solid_mechanics",
     "hyperelasticity": "solid_mechanics",
     "anisotropic_conductivity": "heat_transfer",
@@ -109,6 +110,7 @@ MODEL_PHYSICS = {
 # Material models (Material.models) in words.
 MODELS = {
     "plasticity": "Plasticity (isotropic hardening)",
+    "johnson_cook": "Johnson–Cook plasticity (strain rate)",
     "orthotropic_elasticity": "Orthotropic elasticity",
     "hyperelasticity": "Hyperelasticity",
     "anisotropic_conductivity": "Anisotropic thermal conductivity",

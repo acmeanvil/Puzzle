@@ -11,7 +11,16 @@ from __future__ import annotations
 
 import re
 
-from puzzle.progress import Converged, Diverged, Event, Increment, Message, Parser, Step
+from puzzle.progress import (
+    Converged,
+    Diverged,
+    Event,
+    Increment,
+    Message,
+    Parser,
+    Step,
+    Tracked,
+)
 
 _CYCLE = re.compile(r"NC=\s*(\d+)\s+T=\s*(\S+)\s+DT=\s*(\S+)\s+ERR=\s*(\S+)%\s+DM/M=\s*(\S+)")
 _ERROR = re.compile(r"\bERROR ID\s*:\s*(\d+)")
@@ -36,8 +45,12 @@ class OpenCourantProgress(Parser):
         if m:
             self.cycle, self.time = int(m.group(1)), float(m.group(2))
             self.error = float(m.group(4))
-            out.append(Increment(step=self.step, number=self.cycle, size=float(m.group(3)),
+            dt = float(m.group(3))
+            out.append(Increment(step=self.step, number=self.cycle, size=dt,
                                  time=self.time, end_time=self.end_time))  # fmt: skip
+            # plotted live in the Solution panel (ADR 0085 step 4)
+            out.append(Tracked(name="energy error", step=self.step, increment=self.cycle,
+                               time=self.time, value=self.error, unit="%"))  # fmt: skip
             return out
         e = _ERROR.search(text)
         if e:

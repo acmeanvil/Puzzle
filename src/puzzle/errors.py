@@ -13,6 +13,9 @@ from typing import Any
 CODES = {
     "large_strain": "large-deflection strains past 5 % on an elastic material (ADR 0082)",
     "explicit_cost": "a long explicit run, or one element setting its time step (ADR 0085)",
+    "energy_error": "an explicit run's energy balance off by more than 5 % (ADR 0085)",
+    "hourglass": "hourglass energy over 10 % of the internal energy (ADR 0085)",
+    "added_mass": "mass scaling added over 5 % of the mass (ADR 0085)",
     "weak_springs_carry": "a body's weak springs carry its load: it never seated (ADR 0080)",
     "thread_radii": "a threaded contact's two cylinders are not one radius (ADR 0076)",
     "invalid_archive": "a project archive damaged, unsafe or from a newer Puzzle (ADR 0061)",

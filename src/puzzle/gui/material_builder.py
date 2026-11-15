@@ -583,6 +583,10 @@ class MaterialEditor(QWidget):
                 ["e1", "e2", "e3", "nu12", "nu13", "nu23", "g12", "g13", "g23"],
             ),
             ("hyperelasticity", ["c10", "c01", "d1"]),
+            (
+                "johnson_cook",
+                ["a", "b", "n", "c", "reference_strain_rate", "max_stress", "rate_cutoff"],
+            ),
             ("anisotropic_conductivity", ["k1", "k2", "k3"]),
         ):
             box = QGroupBox()
@@ -1573,13 +1577,24 @@ FIELD_LABELS = {
     "c10": "C10",
     "c01": "C01",
     "d1": "D1 (1/Pa; 0 incompressible)",
+    # Johnson–Cook (ADR 0085): (A + B εpⁿ)(1 + C ln(ε̇/ε̇0))
+    "a": "A (yield stress)",
+    "b": "B (hardening)",
+    "n": "n (hardening exponent)",
+    "c": "C (strain rate)",
+    "reference_strain_rate": "Reference strain rate (1/s)",
+    "max_stress": "Largest flow stress (0: none)",
+    "rate_cutoff": "Strain-rate filter (Hz; 0: none)",
     "k1": "k1",
     "k2": "k2",
     "k3": "k3",
 }
 # Model fields in a kind of unit (shown in the display units; stored in SI).
 FIELD_KINDS = {
-    **dict.fromkeys(["e1", "e2", "e3", "g12", "g13", "g23", "c10", "c01"], ("pressure", "Pa")),
+    **dict.fromkeys(
+        ["e1", "e2", "e3", "g12", "g13", "g23", "c10", "c01", "a", "b", "max_stress"],
+        ("pressure", "Pa"),
+    ),
     **dict.fromkeys(["k1", "k2", "k3"], ("conductivity", "W/(m*K)")),
 }
 

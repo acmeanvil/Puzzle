@@ -37,20 +37,33 @@ mean. For vibration, slow transients and steady loads use the implicit solvers i
    - `rigid_wall` on a body (the nodes that can touch it): a point `x0`, `y0`, `z0` and
      a normal `nx`, `ny`, `nz` pointing toward the model; `mu` friction (0: sliding);
    - `fixed`, `displacement`, `force`, `pressure` (first-order meshes), `gravity`,
-     `acceleration`, each following an amplitude where given.
-   Not yet (ADR 0085 step 2): contacts between parts, shells, Johnson–Cook; they are
-   refused, never ignored.
+     `acceleration`, each following an amplitude where given;
+   - contacts between parts: bonded (a nonconformal one is tied), frictionless and
+     frictional (penalty, both ways; parts touching at the start aren't pushed apart);
+     no separation and rough are refused;
+   - shells: sheet bodies with a shell section (element order 1: quads or triangles);
+   - materials: elastic, the plasticity table, or Johnson–Cook (`johnson_cook`: `a`,
+     `b`, `n`, `c`, `reference_strain_rate`, `max_stress`, `rate_cutoff` Hz: filter the
+     strain rate below a part's ringing to read its mean rate).
 4. Before running: `explicit_estimate(study)` gives the stable time step (s, the
    element setting it and where), the cycles, the mass, and for a run over 1e7 cycles
    the mass scaling time step for about 1e6 cycles with the mass it would add. Tell
    the user the cost in those words; `check_study` for anything refused.
-5. Run, then `run_progress` (cycle, time against the end time) and `run_log` for
-   OpenCourant's own messages (its `ERROR ID` blocks).
+5. Run, then `run_progress` (cycle, time against the end time, the energy error) and
+   `run_log` for OpenCourant's own messages (its `ERROR ID` blocks). It runs in its
+   container where Docker or Podman answers (the first run pulls the image), else
+   natively from its release, fetched once on first use (tell the user: 80 MB on
+   Linux, 330 MB on Windows); Settings > Solvers > Parallel processes per run splits it
+   over MPI; on a cluster host with Apptainer it runs the same image.
 6. Results: one result step per frame, `value` the time. `displacement`, `velocity`,
    `acceleration`, `stress` (averaged at the nodes), `plastic_strain_equivalent`, and
    per frame the global energies `internal_energy`, `kinetic_energy`,
    `hourglass_energy`, `contact_energy`, `external_work`, `plastic_work`,
    `added_mass`, `time_step`. `result_history` follows one over the frames.
+
+After the run, warnings say when the energy balance is off by more than 5 %
+(`energy_error`), hourglass energy passes 10 % of the internal energy (`hourglass`),
+or mass scaling added more than 5 % of the mass (`added_mass`).
 
 ## Reading the energies
 

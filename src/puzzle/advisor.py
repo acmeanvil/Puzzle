@@ -73,6 +73,11 @@ NEEDS = {
                     "acceleration", "rotation", "bolt_pretension", "bolt_adjustment",
                     "displacement"), "force", ("stationary", "transient", "frequency_domain",
                                                "buckling")),
+        # ADR 0085: an explicit run needs something moving or pushing; no support (a
+        # body in flight is fine)
+        ("a load or a motion", ("initial_velocity", "velocity", "force", "pressure", "gravity",
+                                "acceleration", "displacement"), "initial_velocity",
+         ("explicit",)),
     ],
     "heat_transfer": [
         ("a temperature or convection", ("temperature", "convection"), "temperature",
@@ -211,6 +216,8 @@ def advise(
         for what, types, suggest, steps in NEEDS.get(ph.type, []):
             if steps and kinds and not (kinds & set(steps)):
                 continue  # not needed by this study's steps (a free modal study: no support)
+            if steps == ("explicit",) and "explicit" not in kinds:
+                continue  # an explicit study's own need, only once there is one (ADR 0085)
             if not present & set(types):
                 missing.append((ph.type, i, what, suggest))
     if not component.physics:
@@ -246,7 +253,8 @@ def advise(
     word = state.state if state else "not_run"
     if word == "up_to_date":
         add("run", "done", "Its results match the model.")
-        add("results", "optional", _estimate(project, study, root), "results", "Show results")
+        said = _explicit_checks(project, study, root) or _estimate(project, study, root)
+        add("results", "optional", said, "results", "Show results")
     elif word == "out_of_date":
         add("run", "needed", "The model changed since the last run.", "run", "Run again")
         add("results", "optional", "Older results are kept until then.", "results", "Show them")
@@ -305,6 +313,29 @@ def _estimate(project: Project, study, root) -> str:
         return _ESTIMATES[record.run_id]
     except Exception:  # noqa: BLE001 - not every run has a field to estimate from
         return ""
+
+
+def _explicit_checks(project: Project, study, root) -> str:
+    """ADR 0085 decision 5: an explicit run's energy balance, hourglass and added mass
+    in words, from its stored frames; "" for other studies or when all is well."""
+    if root is None or not any(s.type == "explicit" for s in study.solve_steps()):
+        return ""
+    from pathlib import Path
+
+    from puzzle import explicit
+    from puzzle.post.derived import run_for
+    from puzzle.project.layout import RESULTS_DIR
+    from puzzle.results.store import ResultStore
+
+    try:
+        store = ResultStore(Path(root) / RESULTS_DIR)
+        record = run_for(project, store, study.id)
+        found = explicit.run_checks(store.read_results(record.run_id))
+    except Exception:  # noqa: BLE001 - no stored run to read: nothing to say
+        return ""
+    if not found:
+        return "The energy balance holds; hourglass energy and added mass are small."
+    return " ".join(text[0].upper() + text[1:] + "." for _code, text in found)
 
 
 def _convergence(project: Project, study, root, add) -> None:

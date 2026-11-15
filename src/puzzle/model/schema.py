@@ -328,6 +328,24 @@ class Plasticity(BaseModel):
 Axis = tuple[float, float, float]
 
 
+class JohnsonCook(BaseModel):
+    """Johnson–Cook plasticity (ADR 0085), for impact: the flow stress
+    (a + b ε_pⁿ)(1 + c ln(ε̇/ε̇₀)), SI (Pa, 1/s); `max_stress` caps it (0: none). The
+    temperature term is left out (no heating in an explicit run here)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    a: float = Field(gt=0, description="the yield stress, Pa")
+    b: float = Field(default=0.0, ge=0, description="the hardening modulus, Pa")
+    n: float = Field(default=1.0, gt=0, description="the hardening exponent")
+    c: float = Field(default=0.0, ge=0, description="the strain-rate coefficient")
+    reference_strain_rate: float = Field(default=1.0, gt=0, description="ε̇₀, 1/s")
+    max_stress: float = Field(default=0.0, ge=0, description="a cap on the flow stress, Pa")
+    rate_cutoff: float = Field(default=0.0, ge=0, description="a low-pass filter on the "
+                               "strain rate the law reads, Hz (0: unfiltered); below a part's "
+                               "ringing it reads the mean rate")  # fmt: skip
+
+
 class OrthotropicElasticity(BaseModel):
     """Nine elastic constants in the material axes (axis 1, axis 2, and 3 = 1 x 2)."""
 
@@ -377,6 +395,7 @@ class MaterialModels(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     plasticity: Plasticity | None = None
+    johnson_cook: JohnsonCook | None = None  # ADR 0085: explicit dynamics
     orthotropic_elasticity: OrthotropicElasticity | None = None
     hyperelasticity: Hyperelasticity | None = None
     anisotropic_conductivity: AnisotropicConductivity | None = None

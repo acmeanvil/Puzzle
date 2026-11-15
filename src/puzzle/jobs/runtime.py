@@ -33,8 +33,9 @@ DEFAULT_IMAGES = {
     "code_saturne": "ghcr.io/acmeanvil/puzzle-code-saturne:9.2",
     "openfoam": "ghcr.io/acmeanvil/puzzle-openfoam:2412",
     "fenicsx": "ghcr.io/acmeanvil/puzzle-fenicsx:0.11",
-    # ADR 0085: OpenCourant's own image, pinned by its release tag and digest
-    "opencourant": "docker.io/opencourant/opencourant:latest-20261011@sha256:"
+    # ADR 0085: OpenCourant's own image (release latest-20261011), pinned by its digest
+    # alone, which Docker, Podman and Apptainer (docker://) all take
+    "opencourant": "docker.io/opencourant/opencourant@sha256:"
     "b3f042fe55bd856476bd1acc8ba9c55faa3f964e9d53b53eba3b3c7de5e4e874",
 }
 
@@ -58,6 +59,11 @@ CONTAINER_FIRST = {
     "darwin": ("opencourant",),
     "linux": ("opencourant",),
 }
+
+# Solvers whose image is published (pulled on first use): with an engine here, "auto"
+# takes the container even before the image is pulled (ADR 0085). Without one, a native
+# run (OpenCourant fetches its release then, `adapters.opencourant.native`).
+PUBLISHED_IMAGES = frozenset({"opencourant"})
 
 # The executable that proves a solver is installed natively.
 EXECUTABLES = {
@@ -451,6 +457,10 @@ def _runtime_for(solver: str) -> Runtime:
             for container in containers:
                 if container.available(executable or ""):
                     return container
+            if solver in PUBLISHED_IMAGES:  # an engine but no image yet: it pulls it
+                for container in containers:
+                    if _engine_up(container):
+                        return container
             if (vm := _machine(solver)) is not None:  # no engine running: the machine
                 return vm
         if executable is None or native.available(executable):
@@ -460,6 +470,21 @@ def _runtime_for(solver: str) -> Runtime:
                 return container
         return _machine(solver) or native
     raise ValueError(f"PUZZLE_RUNTIME must be auto, native, docker, podman or wsl, not '{kind}'")
+
+
+def _engine_up(container) -> bool:
+    """Whether the container engine answers (Docker Desktop installed but not started
+    doesn't)."""
+    exe = find_engine(container.engine)
+    if exe is None:
+        return False
+    probe = [exe, "info", "--format", "{{.ServerVersion}}"]
+    try:
+        done = subprocess.run(probe, capture_output=True, env=container.environment(probe),
+                              timeout=20)  # fmt: skip
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return done.returncode == 0
 
 
 def _machine(solver: str):
