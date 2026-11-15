@@ -32,7 +32,7 @@ def summary(results: Results) -> list[dict[str, Any]]:
             entry |= {"mode": step.mode, "frequency_hz": step.value}
         elif step.kind == "frequency_domain":  # a harmonic response (ADR 0041)
             entry["frequency_hz"] = step.value
-        elif step.kind == "transient":
+        elif step.kind in ("transient", "explicit"):
             entry["time_s"] = step.value
         entry["fields"] = {}
         for name, f in step.fields.items():

@@ -347,8 +347,8 @@ class SolverAdapter(ABC):
                 steady = [
                     s.type
                     for s in study.solve_steps()
-                    if s.solves(physics.type) and s.type != "transient"
-                ]
+                    if s.solves(physics.type) and s.type not in ("transient", "explicit")
+                ]  # ADR 0085: explicit steps follow amplitudes in time too
                 if steady:
                     problems.append(
                         f"an amplitude on {f.type} ({f.selection}) applies in transient steps; "

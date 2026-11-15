@@ -119,6 +119,8 @@ VALUES = {
     "nelder_mead": "Nelder–Mead",
     "bayesian": "Bayesian (Gaussian process)",
     "rbf": "Radial basis functions",
+    # ADR 0085: the explicit step and its precision
+    "explicit": "Explicit dynamics",
 }
 
 

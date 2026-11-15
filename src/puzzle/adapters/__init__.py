@@ -18,11 +18,15 @@ SOLVER_NAMES = {
     "elmer": "Elmer",
     "fenicsx": "FEniCSx",
     "openfoam": "OpenFOAM",
+    "opencourant": "OpenCourant",
     "pynite": "PyNite",
 }
 # Adapters shipped in Puzzle itself, by entry point: found even when the installed
 # package's metadata predates one (an editable install from an older checkout).
-BUILT_IN = {"pynite": "puzzle.adapters.pynite:PyNiteAdapter"}
+BUILT_IN = {
+    "pynite": "puzzle.adapters.pynite:PyNiteAdapter",
+    "opencourant": "puzzle.adapters.opencourant:OpenCourantAdapter",
+}
 
 
 def available_adapters() -> dict[str, type[SolverAdapter]]:

@@ -1,0 +1,115 @@
+"""OpenCourant, explicit dynamics (ADR 0085).
+
+The community continuation of OpenRadioss (AGPL-3.0), run as a separate program from
+its own image (pinned in `jobs.runtime.DEFAULT_IMAGES`): `run.sh` runs the Starter on
+the model deck, the Engine on the run deck, then converts the animation frames to VTK
+and the time history to CSV (`deck.py`); `output.py` reads them back.
+
+Claimed only where benchmarked (`tests/integration/test_explicit.py`): explicit steps of
+solid mechanics on tet4, tet10 and hex8 solids, elastic and tabulated plastic materials,
+fixed and prescribed displacements, prescribed and initial velocities, forces, pressure
+(first-order faces), gravity and acceleration, rigid walls, amplitudes on every load.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import ClassVar
+
+from puzzle.adapters.base import Capabilities, SolverAdapter, refuse_inputs
+from puzzle.adapters.common import InputError
+from puzzle.adapters.opencourant import deck, output
+from puzzle.mesh.mesh import Mesh
+from puzzle.model.schema import Project, Study
+
+FEATURES = frozenset({
+    "fixed", "displacement", "force", "pressure", "gravity", "acceleration",
+    "velocity", "initial_velocity", "rigid_wall",
+})  # fmt: skip
+
+
+class OpenCourantAdapter(SolverAdapter):
+    name = "opencourant"
+    max_solve_steps = 1
+    capabilities: ClassVar[Capabilities] = Capabilities(
+        physics={"solid_mechanics": frozenset({"explicit"})},
+        features=FEATURES,
+        material_models=frozenset({"plasticity"}),
+        amplitude_features=frozenset(
+            {"displacement", "force", "pressure", "gravity", "acceleration", "velocity"}
+        ),  # fmt: skip
+        field_features=frozenset(),
+    )
+
+    def check(self, project: Project, study: Study, *, allow_experimental: bool = False):
+        problems = super().check(project, study, allow_experimental=allow_experimental)
+        for step in study.steps:
+            if getattr(step, "type", None) == "explicit":
+                try:
+                    deck.settings_of(step)
+                except InputError as exc:
+                    problems.append(str(exc))
+        return problems
+
+    def write_input(self, project: Project, study: Study, mesh: Mesh, workdir: Path,
+                    inputs=()) -> Path:  # fmt: skip
+        refuse_inputs(inputs, self.name, set())
+        steps = [s for s in study.steps if getattr(s, "type", None) == "explicit"]
+        if len(steps) != 1 or len(study.steps) != 1:
+            raise InputError("OpenCourant takes one explicit step per study", code="unsupported")
+        if mesh.planar:
+            raise InputError("2D models aren't written for OpenCourant", code="unsupported")
+        comp = project.objects[study.component]
+        if comp.contacts:
+            raise InputError("contacts aren't written for OpenCourant yet (ADR 0085 step 2)",
+                             code="unsupported")  # fmt: skip
+        if mesh.shell_blocks() or mesh.beam_blocks():
+            raise InputError("shells and beams aren't written for OpenCourant yet (ADR 0085 "
+                             "step 2)", code="unsupported")  # fmt: skip
+        workdir.mkdir(parents=True, exist_ok=True)
+        self._end_time = deck.settings_of(steps[0]).end_time
+        return deck.write(project, study, mesh, workdir, steps[0],
+                          models=set(self.capabilities.material_models))  # fmt: skip
+
+    def progress(self, input_file: Path, step: int = 1, of: int = 1):
+        from puzzle.adapters.opencourant.progress import OpenCourantProgress
+
+        rad = input_file.parent / f"{deck.NAME}_0001.rad"
+        end = getattr(self, "_end_time", None)
+        if end is None and rad.exists():
+            try:
+                end = float(rad.read_text(encoding="utf-8").splitlines()[2])
+            except (ValueError, IndexError):
+                end = None
+        return OpenCourantProgress(end or 1.0, step, of)
+
+    def command(self, input_file: Path) -> list[str]:
+        return ["sh", input_file.name]
+
+    def read_results(self, input_file: Path):
+        workdir = input_file.parent
+        conn, nodes = _model(workdir)
+        return output.read(workdir, deck.NAME, conn, nodes)
+
+
+def _model(workdir: Path):
+    """The solid elements' connectivity (Radioss's order is fine for averaging) and the
+    node ids, from the Starter deck Puzzle wrote."""
+    import numpy as np
+
+    conn: dict[int, np.ndarray] = {}
+    nodes: set[int] = set()
+    section = None
+    for line in (workdir / f"{deck.NAME}_0000.rad").read_text(encoding="utf-8").splitlines():
+        if line.startswith("/"):
+            key = line.split("/")[1]
+            section = key if key in ("NODE", "TETRA4", "TETRA10", "BRICK") else None
+            continue
+        if section is None or line.startswith("#") or not line.strip():
+            continue
+        if section == "NODE":
+            nodes.add(int(line[:10]))
+        else:
+            ids = [int(line[k : k + 10]) for k in range(0, len(line.rstrip()), 10)]
+            conn[ids[0]] = np.array(ids[1:], dtype=np.int64)
+    return conn, nodes

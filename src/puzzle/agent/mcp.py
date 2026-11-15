@@ -851,6 +851,39 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         }
 
     @tool(
+        description="An explicit dynamics study's time step and cost before it runs (ADR "
+        "0085): meshes its component and gives the stable time step (s, the element "
+        "setting it and where), the cycles to the step's end time at its time-step scale, "
+        "the model's mass, and when the run would pass 1e7 cycles the mass scaling time "
+        "step for about 1e6 with the mass it would add (kg and share), plus warnings."
+    )
+    @guarded
+    def explicit_estimate(study: str) -> dict[str, Any]:
+        from puzzle import explicit
+        from puzzle.commands import resolve
+        from puzzle.mesh import generate_mesh
+        from puzzle.model.schema import Component, Study
+        from puzzle.project.layout import WORK_DIR
+
+        s = session()
+        target = resolve(s.project, study, Study)
+        steps = [st for st in target.solve_steps() if st.type == "explicit"]
+        if not steps:
+            said = f"study '{target.name}' has no explicit step"
+            raise ToolError(json.dumps({"code": "invalid_input", "message": said}))
+        comp = s.project.get(target.component, Component)
+        out = root / WORK_DIR / "mcp-mesh" / str(comp.id)
+        meshed = generate_mesh(s.project, comp.id, root, out)
+        end = steps[0].settings.get("end_time")
+        end = end.to_si() if hasattr(end, "to_si") else float(end or 0)
+        scale = float(steps[0].settings.get("time_step_scale", 0.9))
+        est = explicit.estimate(s.project, comp, meshed.mesh, end, scale)
+        if est is None:
+            said = "no element has a material with E, nu and density"
+            raise ToolError(json.dumps({"code": "incomplete_material", "message": said}))
+        return est.summary() | {"end_time_s": end, "warnings": explicit.warnings(est)}
+
+    @tool(
         description="Run a study on its mesh recipe meshed by Gmsh and by Netgen and compare "
         "(ADR 0019): each quantity's peak (or a global value), or 'eigenfrequencies', "
         "as a relative difference against `tolerance`. Slow: it solves the study twice."

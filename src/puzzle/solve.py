@@ -303,6 +303,7 @@ def _run_study(
     written = _adjust_contacts(project, study, written, record)
     _contact_warnings(project, study, written, record)
     _magnetic_warnings(project, study, written, record)
+    _explicit_warnings(project, study, written, record)
     # An adapter that writes one solve step per input runs a multi-step study one step
     # at a time on the same mesh; the steps are independent analyses.
     steps = study.solve_steps()
@@ -669,6 +670,32 @@ def _with_heat_sources(project, study, features):
     copy = replace(project, objects=dict(project.objects))
     copy.objects[comp.id] = comp.model_copy(update={"physics": physics})
     return copy
+
+
+def _explicit_warnings(project, study, mesh, record) -> None:
+    """ADR 0085 decision 4: an explicit step's stable time step and cycles, said at the
+    start (info), with warnings for a long run or one element setting the step."""
+    from puzzle import explicit, progress
+
+    steps = [s for s in study.solve_steps() if s.type == "explicit"]
+    comp = project.objects.get(study.component)
+    if not steps or comp is None:
+        return
+    try:
+        s = steps[0].settings
+        end = s["end_time"].to_si() if hasattr(s.get("end_time"), "to_si") else float(s["end_time"])
+        scale = float(s.get("time_step_scale", 0.9))
+        est = explicit.estimate(project, comp, mesh, end, scale)
+    except Exception as exc:  # noqa: BLE001 - a check, not the solve
+        record(progress.Message(level="info", text=f"Time step not estimated: {exc}"))
+        return
+    if est is None:
+        return
+    record(progress.Message(level="info", text=(
+        f"Stable time step about {est.time_step:.3g} s (element {est.element}); about "
+        f"{est.cycles:.3g} cycles to {end:g} s at a scale of {scale:g}")))  # fmt: skip
+    for text in explicit.warnings(est):
+        record(progress.Message(level="warning", text=text, code="explicit_cost"))
 
 
 def _magnetic_warnings(project, study, mesh, record) -> None:

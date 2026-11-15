@@ -4,20 +4,20 @@ Every solver's elements, grouped by what they model. ★ marks the ones Puzzle w
 
 ## 3D solids
 
-| Formulation | Order | CalculiX | Code_Aster | Elmer | FEniCSx |
-| --- | --- | --- | --- | --- | --- |
-| full integration | linear | C3D4 ★, C3D8 ★, C3D6 ★ | – | – | – |
-| full integration | quadratic | C3D10 ★, C3D20 ★, C3D15 ★ | – | – | – |
-| reduced integration | linear | C3D8R ★ | – | – | – |
-| incompatible modes (bending without locking) | linear | C3D8I ★ | – | – | – |
-| reduced integration | quadratic | C3D20R ★ | – | – | – |
-| full integration | linear and quadratic | – | 3D ★ | – | – |
-| reduced integration | linear and quadratic | – | 3D_SI ★ | – | – |
-| mixed displacement-pressure (nearly incompressible) | quadratic | – | 3D_INCO_UPG ★, 3D_INCO_UP | – | Taylor-Hood P2-P1 ★ |
-| Lagrange (nodal) unknowns | linear and quadratic | – | – | 504/510 ★, 808/820/827 ★, 706/715 ★ | – |
-| higher order on the same cells (p-elements) | linear | – | – | p:2 ★ | – |
-| Lagrange (nodal) unknowns | quadratic | – | – | – | Lagrange P2 ★, Lagrange Q2 (27-node bricks) ★ |
-| Lagrange (nodal) unknowns | linear | – | – | – | Lagrange P1 ★, Lagrange P3+ |
+| Formulation | Order | CalculiX | Code_Aster | Elmer | FEniCSx | OpenCourant |
+| --- | --- | --- | --- | --- | --- | --- |
+| full integration | linear | C3D4 ★, C3D8 ★, C3D6 ★ | – | – | – | TETRA4 ★ |
+| full integration | quadratic | C3D10 ★, C3D20 ★, C3D15 ★ | – | – | – | TETRA10 ★ |
+| reduced integration | linear | C3D8R ★ | – | – | – | BRICK, Isolid 24 (HEPH) ★ |
+| incompatible modes (bending without locking) | linear | C3D8I ★ | – | – | – | – |
+| reduced integration | quadratic | C3D20R ★ | – | – | – | – |
+| full integration | linear and quadratic | – | 3D ★ | – | – | – |
+| reduced integration | linear and quadratic | – | 3D_SI ★ | – | – | – |
+| mixed displacement-pressure (nearly incompressible) | quadratic | – | 3D_INCO_UPG ★, 3D_INCO_UP | – | Taylor-Hood P2-P1 ★ | – |
+| Lagrange (nodal) unknowns | linear and quadratic | – | – | 504/510 ★, 808/820/827 ★, 706/715 ★ | – | – |
+| higher order on the same cells (p-elements) | linear | – | – | p:2 ★ | – | – |
+| Lagrange (nodal) unknowns | quadratic | – | – | – | Lagrange P2 ★, Lagrange Q2 (27-node bricks) ★ | – |
+| Lagrange (nodal) unknowns | linear | – | – | – | Lagrange P1 ★, Lagrange P3+ | – |
 
 - **CalculiX C3D4**: The linear tetrahedron: quick meshes, heat transfer. Not for: stress in bending: it locks, so use C3D10. Studies: static, modal, buckling, structural dynamics, harmonic response, contact, plasticity, large deflection, heat transfer. (CalculiX User's Manual, 6.2 Element Types)
 - **CalculiX C3D10**: The quadratic tetrahedron, Puzzle's default: any geometry, accurate stresses. Studies: static, modal, buckling, structural dynamics, harmonic response, contact, plasticity, large deflection, heat transfer. (CalculiX User's Manual, 6.2 Element Types)
@@ -41,6 +41,9 @@ Every solver's elements, grouped by what they model. ★ marks the ones Puzzle w
 - **FEniCSx Lagrange Q2 (27-node bricks)**: Quadratic Lagrange on 27-node hexahedra (the mesh recipe's hexahedron nodes 27). Not for: 20-node bricks: DOLFINx has no serendipity cells, so they are refused. Studies: static, modal, structural dynamics, harmonic response, heat transfer. (DOLFINx, basix.ufl.element)
 - **FEniCSx Lagrange P3+**: Higher degrees on the same cells. Studies: static, heat transfer. (DOLFINx, basix.ufl.element)
 - **FEniCSx Taylor-Hood P2-P1**: Mixed displacement-pressure for nearly incompressible materials: P2 u, P1 p, over the whole model (every body chooses it). Not for: temperature loads, welds, threads, springs: not written with it yet. Studies: static. (DOLFINx, basix.ufl.element)
+- **OpenCourant BRICK, Isolid 24 (HEPH)**: Eight-node bricks with one integration point and physical hourglass stiffness: the default for impact and crash, cheap per cycle. Not for: bending through one element's thickness; watch the hourglass energy. Studies: explicit dynamics. (OpenCourant (Radioss) reference guide, /PROP/SOLID Isolid 24)
+- **OpenCourant TETRA4**: Four-node tetrahedra for any shape the mesher fills; no hourglass. Not for: bending and near incompressibility: stiff; prefer TETRA10 or bricks. Studies: explicit dynamics. (OpenCourant (Radioss) reference guide, /TETRA4)
+- **OpenCourant TETRA10**: Ten-node tetrahedra: bending right on a free mesh, at a smaller time step (the mid-edge nodes halve the spacing). Not for: pressure on its faces: not written yet (first-order faces only). Studies: explicit dynamics. (OpenCourant (Radioss) reference guide, /TETRA10)
 
 ## 2D solids (plane stress, plane strain, axisymmetric)
 
@@ -62,14 +65,14 @@ Every solver's elements, grouped by what they model. ★ marks the ones Puzzle w
 
 ## Shells
 
-| Formulation | Order | CalculiX | Code_Aster | Elmer | PyNite |
-| --- | --- | --- | --- | --- | --- |
-| thick shell (Mindlin-Reissner) | quadratic | S6 ★, S8 ★ | COQUE_3D ★ | – | – |
-| reduced integration | quadratic | S8R ★ | – | – | – |
-| thin shell (Kirchhoff) | linear | S3 | DKT ★ | – | Plate (rectangular) |
-| thick shell (Mindlin-Reissner) | linear | S4 ★ | DST ★, Q4G ★ | – | Quad (MITC4) ★ |
-| reduced integration | linear | S4R | – | – | – |
-| thick shell (Mindlin-Reissner) | linear and quadratic | – | – | ShellSolver | – |
+| Formulation | Order | CalculiX | Code_Aster | Elmer | PyNite | OpenCourant |
+| --- | --- | --- | --- | --- | --- | --- |
+| thick shell (Mindlin-Reissner) | quadratic | S6 ★, S8 ★ | COQUE_3D ★ | – | – | – |
+| reduced integration | quadratic | S8R ★ | – | – | – | – |
+| thin shell (Kirchhoff) | linear | S3 | DKT ★ | – | Plate (rectangular) | SH3N |
+| thick shell (Mindlin-Reissner) | linear | S4 ★ | DST ★, Q4G ★ | – | Quad (MITC4) ★ | – |
+| reduced integration | linear | S4R | – | – | – | SHELL, Ishell 24 (QEPH) |
+| thick shell (Mindlin-Reissner) | linear and quadratic | – | – | ShellSolver | – | – |
 
 - **CalculiX S6**: The quadratic triangular shell, expanded to C3D15 internally. Studies: static, modal, buckling, structural dynamics, contact, plasticity. (CalculiX User's Manual, 6.2 Element Types)
 - **CalculiX S8**: The quadratic quadrilateral shell, expanded to C3D20R. Studies: static, modal, buckling, structural dynamics, contact, plasticity. (CalculiX User's Manual, 6.2 Element Types)
@@ -84,6 +87,8 @@ Every solver's elements, grouped by what they model. ★ marks the ones Puzzle w
 - **Elmer ShellSolver**: Elmer's Reissner-Mindlin shells. Studies: static, modal. (Elmer Models Manual, ShellSolver)
 - **PyNite Quad (MITC4)**: MITC4 quadrilaterals for walls and slabs, thick or thin: sheets meshed with the recipe's hexahedra, with pressure on them; frames and plates share nodes. Not for: self weight on plates and their stress results: not written yet. Studies: static. (PyNite, FEModel3D.add_quad)
 - **PyNite Plate (rectangular)**: Rectangular thin plates (12-term bending), better corner stresses. Not for: distorted or thick plates: the MITC4 quad. Studies: static. (PyNite, FEModel3D.add_plate)
+- **OpenCourant SHELL, Ishell 24 (QEPH)**: Four-node shells with physical hourglass, for thin walls in crash (ADR 0085 step 2). Studies: explicit dynamics. (OpenCourant (Radioss) reference guide, /PROP/SHELL Ishell 24)
+- **OpenCourant SH3N**: Three-node shells (ADR 0085 step 2). Studies: explicit dynamics. (OpenCourant (Radioss) reference guide, /SH3N)
 
 ## Beams
 

@@ -16,6 +16,7 @@ EXECUTABLES = {
     "openfoam": "simpleFoam",
     "fenicsx": None,
     "pynite": None,
+    "opencourant": "starter",  # ADR 0085: its image (or a native build on the path)
 }
 
 

@@ -33,6 +33,9 @@ DEFAULT_IMAGES = {
     "code_saturne": "ghcr.io/acmeanvil/puzzle-code-saturne:9.2",
     "openfoam": "ghcr.io/acmeanvil/puzzle-openfoam:2412",
     "fenicsx": "ghcr.io/acmeanvil/puzzle-fenicsx:0.11",
+    # ADR 0085: OpenCourant's own image, pinned by its release tag and digest
+    "opencourant": "docker.io/opencourant/opencourant:latest-20261011@sha256:"
+    "b3f042fe55bd856476bd1acc8ba9c55faa3f964e9d53b53eba3b3c7de5e4e874",
 }
 
 # Named volumes mounted into a solver's container, kept between runs: FEniCSx's
@@ -48,7 +51,13 @@ CONTAINER_CACHES = {"fenicsx": ("puzzle-fenicsx-cache", "/cache")}
 #   magnetics, transient dynamics, body loads); the image passed them all, MPI included.
 # - Code_Aster: both passed all 21; the image was 10-23 % faster on the larger runs.
 # CalculiX stays native: both passed, the image about 1.4x slower (start-up costs).
-CONTAINER_FIRST = {"win32": ("fenicsx", "elmer", "code_aster")}
+# OpenCourant (ADR 0085) runs from its own image everywhere until native runs from its
+# release zips are built (step 3).
+CONTAINER_FIRST = {
+    "win32": ("fenicsx", "elmer", "code_aster", "opencourant"),
+    "darwin": ("opencourant",),
+    "linux": ("opencourant",),
+}
 
 # The executable that proves a solver is installed natively.
 EXECUTABLES = {
@@ -57,6 +66,7 @@ EXECUTABLES = {
     "code_aster": "run_aster",
     "code_saturne": "code_saturne",
     "openfoam": "simpleFoam",
+    "opencourant": "starter",
 }
 
 CONTAINER_WORKDIR = "/work"

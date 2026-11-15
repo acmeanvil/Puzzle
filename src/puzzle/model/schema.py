@@ -1958,7 +1958,7 @@ class Component(ProjectObject):
 class SolveStep(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    type: Literal["stationary", "transient", "frequency_domain", "modal", "buckling"]
+    type: Literal["stationary", "transient", "frequency_domain", "modal", "buckling", "explicit"]
     physics: list[str] = Field(
         default_factory=list, description="Physics solved in this step; empty means all"
     )

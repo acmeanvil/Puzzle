@@ -118,6 +118,8 @@ FEATURES = {
     "line_load": "pressure", "node_spring": "spring",  # frames (ADR 0079)
     "remote_force": "remote_force", "remote_force_rigid": "remote_force",
     "gravity": "gravity", "acceleration": "acceleration", "body_force": "acceleration",
+    # explicit dynamics (ADR 0085): velocities as motion, a rigid wall as a support
+    "initial_velocity": "acceleration", "velocity": "acceleration", "rigid_wall": "fixed",
     "rotation": "revolve", "initial_stress": "scale",
     "temperature": "temperature", "body_temperature": "temperature",
     "heat_flux": "heat_flux", "convection": "convection", "heat_generation": "heat",

@@ -48,6 +48,7 @@ STUDIES = {
     "modal": "modal",
     "buckling": "buckling",
     "transient": "structural dynamics",
+    "explicit": "explicit dynamics",
     "harmonic": "harmonic response",
     "contact": "contact",
     "plasticity": "plasticity",
@@ -60,7 +61,16 @@ STUDIES = {
 SHAPES = ("tet4", "tet10", "hex8", "hex20", "hex27", "wedge6", "wedge15", "pyramid5",
           "tri3", "tri6", "quad4", "quad8", "quad9", "line2", "line3", "point",
           "polyhedron")  # fmt: skip
-SOLVERS = ("calculix", "code_aster", "elmer", "fenicsx", "pynite", "code_saturne", "openfoam")
+SOLVERS = (
+    "calculix",
+    "code_aster",
+    "elmer",
+    "fenicsx",
+    "pynite",
+    "code_saturne",
+    "openfoam",
+    "opencourant",
+)
 
 
 @dataclass(frozen=True)
@@ -108,7 +118,7 @@ def query(solver: str | None = None, family: str | None = None, study: str | Non
 
 SOLVER_NAMES = {"calculix": "CalculiX", "code_aster": "Code_Aster", "elmer": "Elmer",
                 "fenicsx": "FEniCSx", "pynite": "PyNite", "code_saturne": "Code_Saturne",
-                "openfoam": "OpenFOAM"}  # fmt: skip
+                "openfoam": "OpenFOAM", "opencourant": "OpenCourant"}  # fmt: skip
 
 
 LINEAR = {"tet4", "hex8", "wedge6", "pyramid5", "tri3", "quad4", "line2"}

@@ -124,7 +124,7 @@ def needs_for(
     need: set[str] = set()
     if physics == "solid_mechanics":
         need |= {"youngs_modulus", "poissons_ratio"}
-        if steps & {"modal", "transient", "frequency_domain"}:
+        if steps & {"modal", "transient", "frequency_domain", "explicit"}:
             need.add("density")
         if thermal_strain:
             need.add("thermal_expansion")
@@ -171,6 +171,7 @@ ANALYSES = {  # (physics, step type) -> how the builder names the analysis
     ("solid_mechanics", "stationary"): "Static structural",
     ("solid_mechanics", "modal"): "Modal",
     ("solid_mechanics", "transient"): "Transient structural",
+    ("solid_mechanics", "explicit"): "Explicit dynamics",
     ("heat_transfer", "stationary"): "Steady heat",
     ("heat_transfer", "transient"): "Transient heat",
     ("fluid_flow", "stationary"): "Steady flow",

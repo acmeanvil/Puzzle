@@ -124,6 +124,34 @@ CATALOG: dict[str, list[FeatureSpec]] = {
             entity="body",
             values={"gx": (0.0, "m/s^2"), "gy": (0.0, "m/s^2"), "gz": (-9.81, "m/s^2")},
         ),
+        # Explicit dynamics (ADR 0085): a body's starting velocity, a velocity imposed on
+        # a face, and a rigid wall (an infinite plane through a point, its normal toward
+        # the model) the selection's nodes can't pass; mu its friction.
+        FeatureSpec(
+            "initial_velocity",
+            "Initial velocity",
+            entity="body",
+            values={"vx": (0.0, "m/s"), "vy": (0.0, "m/s"), "vz": (0.0, "m/s")},
+        ),
+        FeatureSpec(
+            "velocity",
+            "Prescribed velocity",
+            values={"x": (0.0, "m/s"), "y": (0.0, "m/s"), "z": (0.0, "m/s")},
+        ),
+        FeatureSpec(
+            "rigid_wall",
+            "Rigid wall",
+            entity="body",
+            values={
+                "x0": (0.0, "mm"),
+                "y0": (0.0, "mm"),
+                "z0": (0.0, "mm"),
+                "nx": (0.0, "dimensionless"),
+                "ny": (0.0, "dimensionless"),
+                "nz": (1.0, "dimensionless"),
+                "mu": (0.0, "dimensionless"),
+            },
+        ),
         FeatureSpec(
             "acceleration",
             "Linear acceleration (inertia)",
@@ -222,9 +250,14 @@ EDDY_OUTPUTS = [
     "lorentz_force_density","loss_density", "joule_loss", "magnetic_energy", "coil_resistance",
                 "coil_inductance"]  # fmt: skip
 
-STEP_TYPES = ["stationary", "transient", "modal", "buckling", "frequency_domain"]
-# What a new step of a type starts with, so its settings show in Properties.
-STEP_DEFAULTS = {"modal": {"modes": 6}, "buckling": {"modes": 4, "preload": False}}
+STEP_TYPES = ["stationary", "transient", "modal", "buckling", "frequency_domain", "explicit"]
+# What a new step of a type starts with, so its settings show in Properties. An explicit
+# step (ADR 0085): its end time (s), the animation frames written, the Courant scale.
+STEP_DEFAULTS = {
+    "modal": {"modes": 6},
+    "buckling": {"modes": 4, "preload": False},
+    "explicit": {"end_time": 1e-3, "frames": 20, "time_step_scale": 0.9},
+}
 # A structural harmonic step (ADR 0041): a frequency sweep, its method and damping.
 HARMONIC_DEFAULTS = {
     "start_frequency": 10.0,

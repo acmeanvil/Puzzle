@@ -223,7 +223,7 @@ def _integers(step, count: int) -> list[int]:
     """Record 10: design set, iteration, solution set, boundary condition, load set,
     mode number, time step number, frequency number."""
     mode = step.mode or 0
-    time_step = count if step.kind == "transient" else 0
+    time_step = count if step.kind in ("transient", "explicit") else 0
     frequency = count if step.kind == "frequency_domain" else 0
     load = 0 if step.kind == "modal" else step.index
     return [1, 0, 1, 0, load, mode, time_step, frequency]
@@ -234,7 +234,7 @@ def _reals(step) -> list[float]:
     damping; then the complex eigenvalue and modal A/B parts (zero here). Modal mass and
     damping are not stored by Puzzle (0)."""
     value = float(step.value)
-    time = value if step.kind == "transient" else 0.0
+    time = value if step.kind in ("transient", "explicit") else 0.0
     frequency = value if step.kind in ("modal", "frequency_domain") else 0.0
     eigenvalue = value if step.kind == "buckling" else 0.0
     return [time, frequency, eigenvalue, 0.0, 0.0, 0.0] + [0.0] * 6
