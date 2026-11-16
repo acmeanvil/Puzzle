@@ -492,8 +492,8 @@ FEniCSx, threaded beam-bolt ends, and the modelled bolts of ADR 0077. Left:
 - Advisor text in tooltips and form descriptions; a guided tour once help exists (0040).
 - The help and documentation system with worked examples, ADR 0083 (it supersedes
   0075). Built 2026-11-15: steps 1-3 (the Help window, F1, the generated reference,
-  guides, MCP `help`) and step 4 (nineteen theory notes); left: verification pages, the
-  static site and PDF, the tutorials (on `main`).
+  guides, MCP `help`), step 4 (nineteen theory notes) and the verification pages; left:
+  the static site and PDF, the tutorials (on `main`).
 - Found writing the guides (2026-11-15), features an agent reaches but the GUI doesn't
   (each a form or menu item to add): making a weld (`weld_add`), a VDI 2230 check
   (`bolt_vdi2230`), weld fatigue (`weld_fatigue`), a parameter sweep step, a frame from a
@@ -505,6 +505,51 @@ FEniCSx, threaded beam-bolt ends, and the modelled bolts of ADR 0077. Left:
   preloaded, so the conversation starts there. Users offline without an assistant are
   the open case: a form for each in time, or the help page naming the MCP tool and its
   arguments meanwhile.
+  **Planned (maintainer, 2026-11-15): a form for each, so nothing needs the agent.**
+  Each form asks what the MCP tool asks, in one `window.ask_form` or `FormPanel` (no
+  chain of popups), calls the same function the tool calls (so the two can't drift),
+  submits one batch, and has its help key. Where the agent is set up, the form's
+  **Ask the agent…** button opens the agent window preloaded with the form's values, the
+  maintainer's menu item and the form being one way in. A test drives each form with
+  `tests/forms.py` `fill` and compares its batch with the MCP tool's on the same
+  arguments.
+  1. **Add weld…** (Model → Fasteners, a component's Fasteners folder, the Welds panel):
+     edges picked in the view with the Edges filter (or an edge selection), part, type
+     (fillet, groove CJP/PJP), leg and second leg, pattern (continuous, intermittent with
+     segment and pitch), name; previewed through `weld_generator.plan` (the seat face it
+     found, each station) before OK; `weld_generator.commands`.
+  2. **VDI 2230 check…** (a bolt type's or bolt's menu, the bolt table, Model →
+     Fasteners): size, grade, head, tapped or nut, clamp length, shank, plate and nut
+     moduli, friction (thread, head), interfaces, Rz, n, axial load, tightening factor;
+     filled from the bolt and its joint where one is selected; `vdi2230.check` shown as a
+     table of the steps' results with the governing check marked, saved as text or CSV.
+     No project change, so no batch.
+  3. **Weld fatigue…** (a weld's row in the Welds panel, a run's menu): study, weld,
+     method (AISC category A-F and cycles; ASME VIII-2 with thickness, basis, material,
+     side), steps; the per-station table and plot from `weld_fields.fatigue` or
+     `structural_stress`, beside the Welds panel's strength results.
+  4. **Add sweep step…** (a study's Steps menu): parameters from the project's
+     (pre-solve operators by name) with values as a list, a range (start, end, count) or
+     a series; material at a location from `sweep.material_table`; the point count
+     shown live; the existing sweep step's edit reuses the form.
+  5. **New frame from a DXF…** (Geometry, beside New frame from a grid…): the file,
+     layer (from the file's layers), scale (from its units, editable), a preview of
+     members and groups in `gui/frame_editor.py`'s view; `frames.geometry` → one Create.
+  6. **New mesh study…** (Model → Studies, the Convergence panel): the study, levels,
+     ratio, target, quantities (operators and result tools); `MeshStudy` created, Run
+     from the Convergence panel as today's Check mesh convergence… does.
+  7. **Mesh shoot-out…** (Mesh menu, a study's menu): study, recipes or meshers to
+     compare, quantities, tolerance; runs in `MainWindow.background` and shows the
+     comparison table as the solver shoot-out does.
+  8. **Selection by rule…** (a geometry's Selections menu, the pick bar): rule kind
+     (box, near a point, normal within an angle, area range, union, intersection,
+     difference of selections), its values with a Pick for points and faces, the
+     members shown highlighted as values change (`naming.resolve`); one Create.
+  9. **Who may connect** (Settings > Agent): the MCP autonomy level and its double
+     sign-off for act, as `puzzle autonomy --mcp`, through `Session` like the GUI's own
+     autonomy control.
+  10. **New part…** made one behaviour: both menus open one chooser (sketch, box,
+      cylinder, import), the sketch first.
 - Another docking library behind `gui/docking.py` (optional); menu icons; a focus-order
   review of every dialog; `operators.TYPE_COLOURS` as theme tokens (0045).
 - 3D mouse: the macOS check beside 3DxWare; axis signs on real hardware (Windows only so
@@ -559,6 +604,39 @@ FEniCSx, threaded beam-bolt ends, and the modelled bolts of ADR 0077. Left:
     refused; `symmetry.py`'s docstring that only CalculiX writes oblique planes;
     `SizeFieldControl.field` says jumps where `Estimate.sizes` is used; ADR 0085's brick
     length (the code uses V/A_max); `openfoam/case.py`'s residual targets.
+
+- Found writing the verification pages (ADR 0083, 2026-11-15). Fixed then: the
+  optimisation benchmark's hand answer (7.37 mm for E = 200 GPa; 7.25 mm with the
+  generic steel, computed in the test, held to 1 %); the plasticity docstring's 0.2611
+  and 380.6 MPa (0.2605, 380.2: it left out 1 + H/E); the fastener test's "expands the
+  beam into solids"; ADR 0037's Code_Aster elastic support "refused for now"; ADR 0078's
+  and CLAUDE.md's −6.8 % weld line force (−6.3 % since the couplings fix); the time
+  integration note quoting the 0.05 K tolerance as the 0.002 K measured. Left:
+  - tests far looser than what was measured, where a regression could hide: skin-effect
+    R 3 % (measured 0.2-0.7 %), the Elmer/FEniCSx harmonic shoot-out 2 % (0.05-0.16 %),
+    the transient eddy shoot-out 1 % (1e-6), the step current 4 % (0.5 %), heat
+    generation 0.5 % (five digits), TEAM 7 RMS 6 % (2.2 %, recorded only in commit
+    5697eef), the pretension F + P/2 3 % (−0.25 %), P-Delta and DAM 0.5 % (exact to the
+    printed digits), FE spectra 3 % (ADR 0079: within 2 %), prestress 0.5 % (CLAUDE.md:
+    0.1 %), HSS 4 % (ADR 0055: 3 %), the tie's worst node 25 % (17 %). Tighten each after
+    a run on every solver it covers.
+  - planned and not built: `test_belleville.py`'s series and parallel pairs (its
+    docstring describes them); ADR 0066's plate with a hole adapted to 2 % and the
+    L-corner reported as a singularity; ADR 0080's sliding, lift-off and factor
+    benchmarks; TEAM 7 at 200 Hz; `test_quadratic_bricks.py`'s "20 and 27 nodes agree to
+    0.5 %" has no assert.
+  - records that disagree: transient heat "within 0.34 %" (CLAUDE.md) against about
+    0.35 K of the 80 K rise (0.44 %) in the test's comment; ADR 0027's fastener stretch
+    −0.7 % (its table) and 0.01 % (later); ADR 0077's fillet −0.9 % against 2.80/2.82
+    (−0.7 %); the Lorentz-cloud reactions 7e-7 (ADR 0044) against 0.8-1.5e-5 (the test);
+    ADR 0044's moved pressure on two solvers (the test runs four); ADR 0078's "refused on
+    every solver but CalculiX" (superseded by step 3); `test_adapt_solves.py`'s Netgen
+    "in four passes" with `passes=3`; `test_aisc370.py`'s docstring naming the LRFD 90.9
+    kips where it asserts the ASD 60.5.
+  - the pages' citations the repo names without details (Almen and László, Tipton,
+    Sorem and Rolovic, Bisshopp and Drucker, Cowper, MacNeal and Harder, and the
+    textbooks) were completed from the writers' knowledge: check each before the
+    manual is published.
 
 - Code_Saturne's capability matrix claims transient flow (`fluid_flow`: stationary,
   transient), but no benchmark runs one and its adapter and CLAUDE.md describe steady

@@ -2,8 +2,9 @@
 
 Hanging block: a 20 mm steel cube hangs 50 mm below a fixed plate on one 6 mm
 fastener, under a heavy gravity. The fastener's axial force is the cube's weight
-(statics, exact) and it stretches by F L / (E A) within 2 % (CalculiX expands the beam
-into solids with a slightly small round section).
+(statics, exact) and it stretches by F L / (E A) within 2 % (measured 0.01 % on
+CalculiX, which writes the bolt as exact Timoshenko springs, and exact on Code_Aster;
+ADR 0027).
 
 Shear: two 5 mm plates 5 mm apart, one fixed on its far face, the other pulled along by P at
 its far end; one fastener joins them. It carries P in shear, and next to no axial

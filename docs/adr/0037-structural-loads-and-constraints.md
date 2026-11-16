@@ -135,7 +135,7 @@ New features in `model/catalog.py` (structural physics), each typed with readabl
     - CalculiX: SPRINGA elements to grounded helper nodes along each node's normal and tangents, binned into element sets by stiffness;
     - Elmer: `Spring i`, on faces along an axis (others refused);
     - FEniCSx: a Robin term;
-    - Code_Aster: refused for now.
+    - Code_Aster: refused at first; built since (below).
   - **Spring lumping:** springs are lumped as consistent loads are (∫N dA), so a uniform state is exact. Lumping by ∫N² first read +0.24 %, because it didn't match the pressure's consistent loads.
 - **Two CalculiX fixes on the way:**
   - A stiffness printed as a bare integer was read as a DOF number. Stiffnesses are now written with an exponent.

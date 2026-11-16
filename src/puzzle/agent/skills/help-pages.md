@@ -20,7 +20,8 @@ answer from it matches what they see.
      `model:<key>`, `result:<field>`, `field:<name>` (a Properties row),
      `problem:<code>`, `mcp:<tool>`, `cli:<command>`, `kind:<object kind>`,
      `panel:<panel>`, `theory:<name>` (the method behind a result: `theory:linearization`,
-     `theory:mesh-convergence`, `theory:bolted-joints`, `theory:contact`...);
+     `theory:mesh-convergence`, `theory:bolted-joints`, `theory:contact`...),
+     `verification:<page>` (benchmarks and how close each solver came);
    - other words: the passages that answer them best (page, heading, an excerpt);
      then ask for the page you need.
 2. Answer in your own words for this user's case, then name the page by its title so
@@ -35,6 +36,12 @@ answer from it matches what they see.
 4. When a user asks why a number is what it is (how a GCI, a utilisation or a thread
    share is computed), read the theory note: it names the equations Puzzle uses, its
    limits and its sources, and cite those sources rather than your own memory.
+5. When a user asks whether a result can be trusted, or how well a solver does on a
+   problem, read the verification page for its area (`verification:index` lists them:
+   `verification:structural`, `verification:contact-and-joints`, ...): each benchmark's
+   reference answer, the solvers checked, the test's tolerance and what was measured.
+   Quote the measured value only when the page gives one; "passes" means within the
+   tolerance and nothing more.
 
 ## Mistakes to avoid
 

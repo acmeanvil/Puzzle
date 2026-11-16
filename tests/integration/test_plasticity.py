@@ -42,7 +42,7 @@ def test_a_bar_drawn_to_large_strain(solver, tmp_path):
     """Large strain plasticity (ADR 0082 decision 6): the bar drawn to 1.3 of its length
     with geometric nonlinearity (CalculiX NLGEOM; Code_Aster GDEF_LOG on its mixed u-p
     3D_INCO_UPG, since plain quadratic tetrahedra stalled at 1.21). In log strain,
-    ln 1.3 = s/E + ep with s = sy + H ep, the true stress: ep = 0.2611, s = 380.6 MPa,
+    ln 1.3 = s/E + ep with s = sy + H ep, the true stress: ep = 0.2605, s = 380.2 MPa,
     where small strain would give 399 MPa. The force is s times the current area,
     A0 exp(2 (-nu s/E - ep/2))."""
     stretch = 1.3

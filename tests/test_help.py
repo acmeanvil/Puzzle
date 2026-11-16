@@ -314,6 +314,39 @@ def test_theory_notes_cite_their_sources_and_are_reached_from_a_guide():
         assert p.name in linked, f"no guide links to {p.name}"
 
 
+# Integration tests that solve without checking a known answer: the plumbing around a
+# solve (CLI, GUI renders, exports, progress, runtimes), not a benchmark.
+NOT_BENCHMARKS = {
+    "test_agent_workflow.py",
+    "test_calculix_smoke.py",
+    "test_cli_runs.py",
+    "test_exports.py",
+    "test_exports_fluid_runs.py",
+    "test_exports_formats_a_calculix.py",
+    "test_exports_formats_d_runs.py",
+    "test_exports_morphed.py",
+    "test_gui_render.py",
+    "test_history_geometry.py",
+    "test_machine_solve.py",
+    "test_pardiso_build.py",
+    "test_progress_live.py",
+    "test_progress_live_fe.py",
+    "test_warm_containers.py",
+}
+
+
+def test_every_benchmark_has_a_verification_page():
+    """ADR 0083 decision 1: each benchmark is written up with its reference answer, so a
+    new integration test that checks an answer needs a verification entry."""
+    pages = [p for p in manual.pages().values() if p.section == "verification"]
+    named = set(re.findall(r"test_[a-z0-9_]+\.py", "\n".join(p.body for p in pages)))
+    tests = {f.name for f in (ROOT / "tests" / "integration").glob("test_*.py")}
+    assert not sorted(tests - named - NOT_BENCHMARKS)
+    assert not sorted(NOT_BENCHMARKS - tests), "listed but gone"
+    for p in pages:
+        assert p.keys and all(k.startswith("verification:") for k in p.keys), p.name
+
+
 def test_every_equation_in_the_manual_renders():
     """The Help window draws TeX with matplotlib's mathtext, which lacks environments
     and \text; an equation it can't parse would show as raw TeX."""

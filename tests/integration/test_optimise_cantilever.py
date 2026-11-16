@@ -2,7 +2,7 @@
 w = 20 mm, thickness t from 4 to 10 mm, a 100 N tip load. The objective is the
 thinnest t (an Expression over the parameter), the constraint a tip deflection of at
 most 2 mm. By hand, Euler-Bernoulli, δ = 4 F L³ / (E w t³), so δ ≤ 2 mm needs
-t ≥ (4 F L³ / (E w · 2 mm))^(1/3) = 7.37 mm: of the 1 mm grid, 8 mm is the best point.
+t ≥ (4 F L³ / (E w · 2 mm))^(1/3) = 7.25 mm (E = 210 GPa): of the 1 mm grid, 8 mm is the best point.
 Every point's deflection is within 3 % of the closed form (shear and the mesh), and a
 second run reuses every stored point.
 """
@@ -47,8 +47,8 @@ def test_thinnest_cantilever_by_design_of_experiments(tmp_path):
 @pytest.mark.parametrize("method", ["bayesian", "response_surface"])
 def test_thinnest_cantilever_by_a_model_of_the_outputs(tmp_path, method):
     # ADR 0063 phase 3: from four Latin hypercube points, the model picks the rest; the
-    # best t sits on the 2 mm limit, within 4 % of 7.37 mm by hand (the tet mesh is a
-    # few per cent stiffer than Euler-Bernoulli), in at most a dozen solves
+    # best t sits on the 2 mm limit, within 1 % of 7.25 mm by hand (ADR 0063 measured
+    # 7.24 and 7.25 mm), in at most a dozen solves
     pytest.importorskip("OCP")
     p, opt = beam_project()
     opt.method, opt.samples = method, 4
@@ -59,7 +59,14 @@ def test_thinnest_cantilever_by_a_model_of_the_outputs(tmp_path, method):
     pts = optimise.run(p, opt, root, tmp_path / "w", store=store)
     top = optimise.best(opt, pts)
     assert top is not None and len(pts) <= 12, [pt.title for pt in pts]
-    assert top.values["t"] == pytest.approx(0.00737, rel=0.04)
+    E = (
+        next(m for m in p.objects.values() if m.kind == "material")
+        .properties["youngs_modulus"]
+        .to_si()
+    )
+    by_hand = (4 * F * L**3 / (E * W * LIMIT)) ** (1 / 3)
+    assert by_hand == pytest.approx(0.00725, rel=1e-3)
+    assert top.values["t"] == pytest.approx(by_hand, rel=0.01)
     assert 0.98 * LIMIT <= top.constraints[0] <= LIMIT
 
 

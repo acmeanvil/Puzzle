@@ -114,7 +114,8 @@ Eurocode steel shoot-out (heating to 700 °C, $c_p$ from 606 to 1008 J/(kg K)),
 Code_Aster was 0.7 K warmer at 5 s steps and 0.15 K at 1 s, the closer of the two to
 the converged answer (`tests/integration/test_nonlinear_conduction.py`). The steady
 case is checked against the Kirchhoff transform, which is exact for a table
-interpolated linearly: all four solvers within 0.05 K.
+interpolated linearly: all four solvers came within 0.002 K of it (the test allows
+0.05 K).
 
 ## How Puzzle does it
 

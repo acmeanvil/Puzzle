@@ -194,7 +194,7 @@ VIII-1/VIII-2 2023 and IX 2023.
 | Lap joint, mean line force | 207.8 N/mm | P/L = 200 N/mm (+3.9 %: the peel's z share) |
 | Bracket all round, shear carried | 10000 N | P |
 | Bracket, moment about x | 600.0 N·m | P h = 600 N·m |
-| Bracket, normal line force on the ±y sides | 419.6 N/mm | elastic method M (d/2)/I = 450 N/mm (−6.8 %) |
+| Bracket, normal line force on the ±y sides | 419.6 N/mm | elastic method M (d/2)/I = 450 N/mm (−6.8 %; −6.3 % after the couplings fix, below) |
 
 The bracket's moment balances exactly only with the twist: about 7 % of it is the fillets' resistance to turning about their own lines (on the ±y sides, which run along x), which the elastic method leaves out. Tests: `tests/integration/test_welds_solved.py`, `tests/test_welds.py`.
 

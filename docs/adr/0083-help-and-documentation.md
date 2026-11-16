@@ -145,6 +145,20 @@ guide; every equation in the manual parses in mathtext. Writing them found three
 (2D mesh convergence, adaptive passes on 2D meshes and named fields) and stale text,
 fixed, and the rest listed in ADR 0072.
 
+**Built (2026-11-15), the verification pages** (decision 1): `help/pages/verification/`,
+an overview (what a benchmark is, how to run one, what a skip means) and eight pages:
+structural statics; dynamics, buckling and explicit; heat and transfers;
+electromagnetics; contact, bolts, threads and welds; flow; frames and design codes;
+meshing, convergence and studies. Each benchmark has a row (reference, solvers, the
+test's tolerance, what was measured) and a section naming its test, with measured values
+only where a README, an ADR, CLAUDE.md or the test records them ("passes" otherwise),
+and the standards' worked examples among the unit tests. A test fails when an
+integration test is on no verification page and not listed as plumbing
+(`NOT_BENCHMARKS` in `tests/test_help.py`). Writing them found a wrong hand value (the
+optimisation benchmark's 7.37 mm was for E = 200 GPa; the generic steel's 210 GPa gives
+7.25 mm, now computed in the test and held to 1 % instead of 4 %) and stale docstrings
+and records, fixed; the rest is on ADR 0072.
+
 ## Consequences
 
 - Users get a manual that matches the build they run, and the agent explains from the
