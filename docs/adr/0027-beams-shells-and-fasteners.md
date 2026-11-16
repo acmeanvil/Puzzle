@@ -71,7 +71,7 @@ The details of CalculiX's knots and couplings, and how beam rotations meet a cou
   | Check | CalculiX | Code_Aster |
   | --- | --- | --- |
   | Hanging block: axial force = weight | exact | exact |
-  | Hanging block: stretch against F L / E A (rigid) | −0.7 % | −0.7 % |
+  | Hanging block: stretch against F L / E A (rigid) | −0.7 % (0.01 % since the beam bolt became exact springs, below) | −0.7 % (exact since) |
   | Plates in shear: shear force = load | exact | exact |
 
 - **Pretension** (2026-10-25): a fastener's optional `pretension` (a force). Its bolt is meshed in two halves sharing a mid-plane, cut there as ADR 0037's bolt section: twins for the far half, u_twin − u = axis × u_ref. The force goes in at the first static structural step and is locked after (CalculiX). Code_Aster runs each step as its own job, so it takes it in one-step studies and refuses it in longer ones.

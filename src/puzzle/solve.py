@@ -446,7 +446,7 @@ def _run_study(
 
     if spectra.wanted(study) and not adapter.capabilities.frame_analysis:
         try:  # ADR 0079 step 4: a response spectrum from the modes, CQC (puzzle.spectra)
-            spectra.applied(results, study, written)
+            spectra.applied(results, study, written, project)
         except PuzzleError as exc:
             raise StudyError(exc.message, code=exc.code, path=study.name) from None
         combine.add_seismic(results, combined, seismic)  # ± E in the combinations

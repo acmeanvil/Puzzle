@@ -122,7 +122,7 @@ def test_p_delta_amplifies_a_column(tmp_path, solver):
     exact = lateral * math.tan(k * h) / k
     got = _base_moment(run.results.steps[0], run.mesh)
     print(f"P-Delta: base moment {got:.6g} N m against {exact:.6g} (first order {lateral * h:.6g})")
-    assert got == pytest.approx(exact, rel=5e-3)
+    assert got == pytest.approx(exact, rel=1e-3)
     assert got > 1.3 * lateral * h
 
 
@@ -140,4 +140,4 @@ def test_direct_analysis_reduces_stiffness_and_adds_notional_loads(tmp_path, sol
         exact = h_total * math.tan(k * h) / k
         got = _base_moment(step, run.mesh)
         print(f"{step.label()}: base moment {got:.6g} N m against {exact:.6g}")
-        assert got == pytest.approx(exact, rel=5e-3)
+        assert got == pytest.approx(exact, rel=1e-3)

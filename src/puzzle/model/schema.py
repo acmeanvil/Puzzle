@@ -620,7 +620,11 @@ class SizeFieldControl(BaseModel):
     run: str | None = None
     table: UUID | None = None
     target: float = Field(default=0.02, gt=0, lt=1)
-    field: str | None = Field(default=None, description="a nodal field's jumps instead")
+    field: str | None = Field(
+        default=None,
+        description="sizes from this nodal field's gradient jumps (relative) instead of "
+        "the energy norm",
+    )
     finer: float = Field(default=4.0, ge=1)
     coarser: float = Field(default=2.0, ge=1)
 
@@ -1332,14 +1336,15 @@ class MemberRelease(BaseModel):
 
 class MemberDesign(BaseModel):
     """How the members of `selection` (a member, a group, a line part, or "" for every
-    member) are checked (ADR 0079 step 3): the code (`auto` by the material: AISC 360
-    for carbon and low-alloy steel), LRFD or ASD, and the lengths a check needs. Each
-    length left unset is the member's own; `unbraced_length` is the laterally unbraced
-    length for lateral-torsional buckling (and the default for y and z), `k_*` the
-    effective length factors (1 under Direct Analysis, C3). `cb` overrides the
-    moment-gradient factor computed from the moment diagram (F1-1). The most specific
-    entry for a member wins: a member's over its group's over its part's over "". Never
-    changes a solve, so it is left out of hashes."""
+    member) are checked (ADR 0079 steps 3, 5): the code (`auto` by the material's group:
+    AISC 360 for carbon and low-alloy steel, AISC 370 stainless, ADM aluminium), LRFD or
+    ASD, and the lengths a check needs. Each length left unset is the member's own;
+    `unbraced_length` is the laterally unbraced length for lateral-torsional buckling
+    (and the default for y and z), `k_*` the effective length factors (1 under Direct
+    Analysis, C3). `cb` overrides the moment-gradient factor computed from the moment
+    diagram (F1-1). The most specific entry for a member wins: a member's over its
+    group's over its part's over "". Never changes a solve, so it is left out of
+    hashes."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -2692,6 +2697,8 @@ class ResultProbe(ProjectObject):
             self.quantity = "reaction_force:total"
         if self.type in ("linearized", "section"):
             self.quantity = "stress:von_mises"  # the stress tensor is what's read
+        if self.type == "linearized" and "samples" not in self.model_fields_set:
+            self.samples = 47  # through the wall, as Ansys (ADR 0042); a path takes 50
         return self
 
     def dependencies(self) -> list[UUID]:

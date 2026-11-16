@@ -222,7 +222,7 @@ def test_skin_effect_in_a_round_wire(tmp_path, solver):
             f"{f:g} Hz, a/δ = {A / delta:.2f}: R {r / r_exact - 1:+.2%}, "
             f"L {ind / l_exact - 1:+.2%}, loss {loss / (0.5 * CURRENT**2 * r_exact) - 1:+.2%}"
         )
-        assert r == pytest.approx(r_exact, rel=0.03)
+        assert r == pytest.approx(r_exact, rel=0.015)  # measured 0.2-0.7 % (ADR 0047)
         assert ind == pytest.approx(l_exact, rel=0.03)
         assert loss == pytest.approx(0.5 * CURRENT**2 * r, rel=0.01)  # the same power twice
 
@@ -349,7 +349,7 @@ def test_shootout_elmer_and_fenicsx(tmp_path):
         coils=lambda n: [_coil("coil_current", f"{n[0]}/Body", CURRENT)],
     )
     metrics = [
-        ComparisonMetric(quantity=q, norm="relative_value", tolerance=0.02)
+        ComparisonMetric(quantity=q, norm="relative_value", tolerance=0.005)  # 0.05-0.16 %
         for q in ("joule_loss", "magnetic_energy", "coil_resistance", "coil_inductance")
     ]
     study.shootout = Shootout(solvers=["fenicsx"], metrics=metrics)
@@ -482,8 +482,8 @@ def test_a_step_current_diffuses_into_the_wire(tmp_path, solver):
         print(f"t = {step.value / tau:.2f} τ: core {got[core].mean() / uniform:.4f} (exact "
               f"{want[core].mean() / uniform:.4f}), skin {got[skin].mean() / uniform:.4f} "
               f"({want[skin].mean() / uniform:.4f})")  # fmt: skip
-        assert abs(got[core].mean() - want[core].mean()) < 0.04 * uniform
-        assert abs(got[skin].mean() - want[skin].mean()) < 0.04 * uniform
+        assert abs(got[core].mean() - want[core].mean()) < 0.015 * uniform  # 0.5 % measured
+        assert abs(got[skin].mean() - want[skin].mean()) < 0.015 * uniform
 
 
 def test_transient_shootout_elmer_and_fenicsx(tmp_path):
@@ -502,7 +502,7 @@ def test_transient_shootout_elmer_and_fenicsx(tmp_path):
         worst = np.abs(ja.at(common) - jb.at(common)).max() / uniform
         print(f"t = {a.value:.3g} s: largest difference {worst:.2e} of the uniform density")
         assert a.value == pytest.approx(b.value)
-        assert worst < 0.01
+        assert worst < 1e-4  # the same discrete problem: 1e-6 measured
 
 
 def _line_force(wires, currents, on: int) -> np.ndarray:

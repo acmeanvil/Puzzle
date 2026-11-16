@@ -138,3 +138,27 @@ def test_agents_add_a_symmetry_plane(tmp_path):
     assert not result.is_error
     saved = load_project(root).objects[comp.id]
     assert [[f.type for f in p.features] for p in saved.physics] == [["symmetry"], ["symmetry"]]
+
+
+def test_a_repeating_model_refuses_steps_that_need_the_other_wavelengths():
+    """A sector or a periodic cell holds the in-phase solution only: a modal step on one
+    would miss every mode that differs from sector to sector or cell to cell."""
+    from types import SimpleNamespace
+
+    from puzzle import cyclic
+    from puzzle.model.schema import CyclicSymmetry, LinearPeriodicity, SolveStep, Study
+
+    caps = SimpleNamespace(cyclic=frozenset({"solid_mechanics"}))
+    physics = [Physics(type="solid_mechanics")]
+    for kw, word in (
+        ({"cyclic": CyclicSymmetry(source="P/A", target="P/B", sectors=12)}, "cyclic"),
+        ({"periodic": LinearPeriodicity(source="P/A", target="P/B",
+                                        translation=(0.1, 0, 0))}, "periodic"),
+    ):  # fmt: skip
+        comp = _comp(physics=physics, **kw)
+        for kind, refused in (("stationary", False), ("modal", True)):
+            study = Study(name="S", component=comp.id, solver="calculix",
+                          steps=[SolveStep(type=kind)])  # fmt: skip
+            found = cyclic.check(Project("p"), study, comp, caps)
+            assert bool(found) == refused, (word, kind, found)
+            assert all(f.startswith(word) for f in found)

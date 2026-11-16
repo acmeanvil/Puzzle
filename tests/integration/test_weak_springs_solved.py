@@ -13,6 +13,7 @@ from puzzle.model.schema import Contact, Feature, Quantity
 from puzzle.solve import run_study
 
 PRESSURE = 1e6  # Pa on the right end
+SIDE = 1e-3  # a sideways force as a share of the end load
 
 
 def _bar(tmp_path, solver, pressure, mode="auto", kind="frictional"):
@@ -65,3 +66,44 @@ def test_weak_springs_hold_a_body_on_frictionless_contact(tmp_path, solver):
     print(f"{solver}: reaction {total:.6g} N of {load:.6g}; springs {carried:.3g} N")
     assert total == pytest.approx(load, rel=1e-4)
     assert carried < 1e-4 * load
+
+
+@over("calculix", "code_aster")
+def test_friction_holds_a_sliding_load_under_its_limit(tmp_path, solver):
+    """ADR 0080 decision 8, sliding: a sideways force under the friction limit μ N is held
+    by friction, not by the springs. It is 1e-3 of the end load: on the end of the half
+    bar its moment about the 10 mm interface must not lift an edge (M/S below the
+    1 MPa pressure needs under 1.7 N; 10 N opened it and the body slid on its springs)."""
+    pytest.importorskip("OCP")
+    project, study = _bar(tmp_path, solver, PRESSURE)
+    load = PRESSURE * BAR[1] * BAR[2]
+    comp = next(c for c in project.objects.values() if getattr(c, "kind", "") == "component")
+    comp.physics[0].features.append(Feature(type="force", selection="Right/End",
+                                            values={"y": Quantity(value=SIDE * load,
+                                                                  unit="N")}))  # fmt: skip
+    run = run_study(project, study.id, tmp_path, tmp_path / "w", timeout_s=900)
+    step = run.results.steps[-1]
+    reaction = step.fields["reaction_force"].at(run.mesh.groups["Left/Start"].node_ids)
+    springs = step.fields["weak_spring_force"].values.sum(axis=0)
+    print(f"{solver}: reaction {reaction.sum(axis=0)} N; springs {springs} N")
+    assert reaction[:, 0].sum() == pytest.approx(load, rel=1e-4)
+    assert -reaction[:, 1].sum() == pytest.approx(SIDE * load, rel=1e-2)
+    assert float(np.linalg.norm(springs)) < 1e-2 * SIDE * load
+
+
+@over("calculix")
+def test_the_answer_does_not_depend_on_the_spring_factor(tmp_path, solver):
+    """ADR 0080 decision 8, factor: the end's displacement changes by under 1e-5 between
+    factors 1e-6 and 1e-7, so the springs hold the body without moving the answer."""
+    pytest.importorskip("OCP")
+    tips = []
+    for factor in (1e-6, 1e-7):
+        where = tmp_path / f"f{factor:g}"
+        where.mkdir()
+        project, study = _bar(where, solver, PRESSURE)
+        study.weak_spring_factor = factor
+        run = run_study(project, study.id, where, where / "w", timeout_s=900)
+        u = run.results.steps[-1].fields["displacement"]
+        tips.append(float(u.at(run.mesh.groups["Right/End"].node_ids)[:, 0].mean()))
+    print(f"{solver}: end displacement {tips[0]:.9g} and {tips[1]:.9g} m")
+    assert tips[1] == pytest.approx(tips[0], rel=1e-5)

@@ -42,7 +42,7 @@ class CodeSaturneAdapter(SolverAdapter):
         dimensions=frozenset({"3d", "2d_planar", "2d_axisymmetric"}),
         # ADR 0023: its linear solvers are iterative; the steady algorithm runs its own
         # iteration count (the step's iterations), keeping only the converged state.
-        shared_settings=frozenset({"linear_solver:iterative"}),
+        shared_settings=frozenset({"linear_solver:iterative", "output_every"}),
     )
 
     def settings_schema(self) -> list:

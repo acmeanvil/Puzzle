@@ -87,7 +87,7 @@ Solve steps per job: 1.
 | couplings | non_isothermal_flow |
 | dimensions | 2d_axisymmetric, 2d_planar, 3d |
 | time schemes | backward_euler |
-| shared settings | linear_solver:iterative |
+| shared settings | linear_solver:iterative, output_every |
 | field features | body_temperature:T |
 
 Solve steps per job: 1.

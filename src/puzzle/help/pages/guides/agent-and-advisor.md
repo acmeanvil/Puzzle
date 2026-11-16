@@ -63,12 +63,18 @@ proposed. Agents can never change the autonomy themselves.
    one; its button goes where the fix is made.
 4. In an empty project, **Try the cantilever example** opens a worked model.
 
+<!-- key: form:who_may_connect -->
 ## Outside agents over MCP
 
 Any MCP client (Claude Code, Claude Desktop, an editor) can drive a project with the
 same tools the built-in agent has: run `puzzle mcp PROJECT` as its server. It appears in
-the history under its `--name`. The same autonomy level and budget apply; `puzzle
-autonomy PROJECT --mcp off|local|network` says who may connect (local by default).
+the history under its `--name`. The same autonomy level and budget apply.
+
+**Who may connect** is the project's: Project → Who may connect… opens Settings > Agent,
+whose **This project** box sets **Agents may** and **Who may connect over MCP**: nobody,
+programs on this computer (the default) or programs on the network too. Saving sends
+one change through the project's history; "act freely" asks twice, as the agent panel
+does. On the command line: `puzzle autonomy PROJECT --mcp off|local|network`.
 
 ## Options worth knowing
 

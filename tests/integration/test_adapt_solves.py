@@ -6,7 +6,7 @@ Measured (CalculiX 2.22): Gmsh 665 → 1227 → 1273 elements, error 3.17 → 1.
 1.24 %, converged in three passes, where uniform refinement (sizes ÷ 1.5 twice) took
 3037 elements to reach 2.12 %. The tip deflection stays within 0.1 % of the
 converged 3.5013 mm. Netgen (its size file restricts only): 524 → 765 elements,
-error 3.94 → 1.71 % in four passes. And MMG's anisotropic passes on a heat layer
+error 3.94 → 1.71 % (the test runs three passes). And MMG's anisotropic passes on a heat layer
 (ADR 0066 phase 4), against isotropic ones."""
 
 from __future__ import annotations
@@ -119,3 +119,100 @@ def test_mmg_follows_a_heat_layer_better_than_isotropic(tmp_path):
     exact = 293.15 + 80 * erfc(x / (2 * math.sqrt(k / (rho * cp) * 2.0)))
     assert np.abs(temp.values[:, 0] - exact).max() < 0.7
     assert "Bar/Root" in mesh.groups and len(mesh.groups["Bar/Root"].node_ids) > 4
+
+
+def test_a_plate_with_a_hole_adapts_where_the_stress_concentrates(tmp_path):
+    """ADR 0066 decision 7: a quarter of a 200 x 200 x 5 mm steel plate with a 20 mm hole,
+    pulled at 10 MPa, symmetric on x = 0 and y = 0. A plate in tension is mostly uniform
+    stress, so 2 % comes on the first mesh (12 mm: 1.55 %, peak 3.27 by nodal overshoot);
+    adapted to 0.5 % energy-norm error, the peak σxx at the hole's top is Heywood's
+    K_t = (2 + (1 - d/W)³) / (1 - d/W) = 3.03 of the gross stress (a finite-width strip,
+    as in Peterson's; Kirsch's 3 for an infinite plate) within 5 %: a 5 mm plate's
+    mid-plane peak sits a few per cent above plane stress, and this one is as long as it
+    is wide. A uniform mesh with at least as many elements stays above 0.5 %: the passes
+    put the elements at the hole. Measured (CalculiX, 2026-11-15): 802, 2214, 2786, 3305
+    elements at 1.55, 0.62, 0.50, 0.46 %; the peak 3.27 on the first mesh, 3.14 adapted
+    (+3.7 %); uniform 4.53 mm, 3998 elements, 0.89 %."""
+    from puzzle.materials import add_library_material
+    from puzzle.model.schema import (
+        Component,
+        Feature,
+        Geometry,
+        HistoryStep,
+        MaterialAssignment,
+        NamedSelection,
+        PartInstance,
+        Physics,
+        Project,
+        SolveStep,
+    )
+    from puzzle.post import estimates
+    from puzzle.solve import run_study
+
+    if not available("calculix"):
+        pytest.skip("calculix not available")
+    pytest.importorskip("OCP")
+    half, thick, r, stress = 0.1, 0.005, 0.01, 10e6
+
+    def plate(size_mm):
+        p = Project(name="kirsch")
+        geo = p.add(Geometry(name="Plate", history=[
+            HistoryStep(kind="box", name="B", args={"dx": half, "dy": half, "dz": thick}),
+            HistoryStep(kind="hole", name="H", args={"r": r, "x": 0.0, "y": 0.0})],
+            selections=[NamedSelection(name="Body", entity="body", members=["body-1"]),
+                        NamedSelection(name="Hole", entity="face", members=["H/wall"]),
+                        NamedSelection(name="X0", entity="face",
+                                       rule={"plane": {"axis": "x", "at": 0.0}}),
+                        NamedSelection(name="Y0", entity="face",
+                                       rule={"plane": {"axis": "y", "at": 0.0}}),
+                        NamedSelection(name="Pull", entity="face",
+                                       rule={"plane": {"axis": "x", "at": half}})]))  # fmt: skip
+        steel = add_library_material(p, "structural_steel")
+        mesh = p.add(MeshRecipe(name="Tets", global_size=Quantity(value=size_mm, unit="mm")))
+        comp = p.add(Component(
+            name="Plate", parts=[PartInstance(name="P", geometry=geo.id)], mesh=mesh.id,
+            materials=[MaterialAssignment(material=steel.id, selection="P/Body")],
+            physics=[Physics(type="solid_mechanics", settings={
+                "temperature_dependent_materials": False}, features=[
+                Feature(type="symmetry", selection="P/X0"),
+                Feature(type="symmetry", selection="P/Y0"),
+                Feature(type="displacement", selection="P/Y0",
+                        values={"z": Quantity(value=0, unit="m")}),
+                Feature(type="pressure", selection="P/Pull",
+                        values={"p": Quantity(value=-stress, unit="Pa")})])]))  # fmt: skip
+        study = p.add(Study(name="Pull", component=comp.id, solver="calculix",
+                            steps=[SolveStep(type="stationary")]))  # fmt: skip
+        return p, study
+
+    p, study = plate(12.0)
+    root = tmp_path / "adapt"
+    save_project(p, root)
+    store = ResultStore(root / "results")
+    out = adapt.run(p, study, root, root / "work", store=store,
+                    settings=Adapt(target=0.005, passes=6))  # fmt: skip
+    print(adapt.lines(out))
+    assert out.converged and len(out.passes) > 1, out.ended
+    last = out.passes[-1]
+    run = next(r for r in store.runs() if r.run_id == last.run)
+    mesh, results = store.read_mesh(run.mesh_id), store.read_results(run.run_id)
+    s = results.steps[-1].fields["stress"]
+    top = s.at(mesh.groups["P/Hole"].node_ids)[:, s.components.index("xx")].max()
+    heywood = (2 + (1 - r / half) ** 3) / (1 - r / half)
+    print(f"peak σxx {top / stress:.4f} of the gross stress (Heywood {heywood:.4f})")
+    assert top / stress == pytest.approx(heywood, rel=0.05)
+
+    size, count = 12.0, 0
+    while count < last.elements:  # a uniform mesh with at least as many elements
+        size *= 0.85
+        p2, study2 = plate(size)
+        root2 = tmp_path / f"uniform-{size:.2f}"
+        save_project(p2, root2)
+        store2 = ResultStore(root2 / "results")
+        even = run_study(p2, study2.id, root2, root2 / "w", store=store2, timeout_s=1800)
+        count = sum(len(b.ids) for b in even.mesh.blocks if b.dim == 3)
+    eta = estimates.of_run(p2, store2, even.run_id).relative
+    print(
+        f"adapted: {last.elements} elements, {last.error:.2%}; uniform at {size:.2f} mm: "
+        f"{count} elements, {eta:.2%}"
+    )
+    assert eta > 0.005

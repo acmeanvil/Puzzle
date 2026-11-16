@@ -127,7 +127,7 @@ node rings lining up with the thread's pairs (ADR 0076). Netgen has no swept mes
   - The under-head fillet (M16, ISO 885 minimum r = 0.6 mm, D/d = 1.41): peak principal
     stress over the shank's nominal 2.80 at r/3 elements (2.86 at r/6; a head four times
     as tall 2.94), against Tipton, Sorem and Rolovic's fit (Peterson 3rd ed. Eq. 3.5)
-    2.82: −0.9 %. Peterson's Chart 3.4 gives 2.40; its own text says it can be 40 % low
+    2.82: −0.7 % (first recorded as −0.9 %; 2.80 against 2.82). Peterson's Chart 3.4 gives 2.40; its own text says it can be 40 % low
     for sharp fillets, so the benchmark is Eq. 3.5.
   - The bracket assembly (two M8 8.8 through bolts with nuts, 5 kN, frictional seat
     μ 0.2, the base held at its ends so the nuts bear on a free face): modelled against

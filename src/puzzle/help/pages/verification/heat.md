@@ -16,11 +16,11 @@ about the temperature tables.
 | Benchmark | Reference | Solvers | Test tolerance | Measured |
 | --- | --- | --- | --- | --- |
 | Steady conduction, tets and hexes | linear profile | CalculiX, Elmer, Code_Aster, FEniCSx | 1e-6 K | passes |
-| Transient conduction | series solution | all four | 2 % of the 80 K step | about 0.35 K (backward Euler) |
+| Transient conduction | series solution | all four | 1 % of the 80 K step | 0.346 K on all four (backward Euler) |
 | Time schemes | series solution | each scheme a solver offers | 2 % of 80 K; BDF2 0.02 K | BDF2 under 0.02 K |
 | Conductivity table, steady | Kirchhoff transform | all four | 0.05 K | within 0.002 K |
 | Tables, transient | solvers against each other | all four | 0.1 K; Code_Aster 1 K | Code_Aster 0.7 K warmer |
-| Heat generation | 1D closed forms | all four | 0.5 % of the rise | five digits; peak 0.003 % |
+| Heat generation | 1D closed forms | all four | 0.05 % of the rise | five digits; peak 0.003 % |
 | Thermal bending by transfer | beam theory | six solver pairs | 2 % | within 1.6 % |
 | Imported temperature, pressure, film | free expansion, -pL/E, uniform feature | all four | 1 % | +0.3 %, -0.18 % |
 | Imported heat flux and films | energy balance, cosine series, 1D | all four | 0.2 % of the rise, 1 % | 775.023 K, 10.175-10.176 K |
@@ -112,7 +112,7 @@ $$T = T_0 + \frac{q_0\,x(L^2 - x^2)}{6kL}$$
 whose peak, at $x = L/\sqrt{3}$, is $q_0 L^2 / (9\sqrt{3}k)$ above the ends.
 
 `tests/integration/test_heat_generation.py` `test_uniform_heat_generation` and
-`test_heat_generation_from_a_field` assert every node within 0.5 % of the rise (the
+`test_heat_generation_from_a_field` assert every node within 0.05 % of the rise (the
 middle's, or the peak's), on CalculiX, Code_Aster, Elmer and FEniCSx. ADR 0047
 records the uniform case equal to the closed form to five digits and the field's peak
 within 0.003 %.

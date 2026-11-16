@@ -378,6 +378,13 @@ class PropertiesTab(QWidget):
             )
         if any(x.bolt.formulation == "modelled" for x in rows):
             menu.addAction("Back to a beam bolt", lambda: self.beam_bolts(rows))
+        if len(rows) == 1:  # ADR 0050: the joint by VDI 2230, from this bolt
+            from puzzle.gui.vdi2230_form import vdi_for_bolt
+
+            menu.addAction(
+                "VDI 2230 check…",
+                lambda: vdi_for_bolt(self.window, rows[0].component, rows[0].index),
+            )
         menu.exec(self.table.viewport().mapToGlobal(pos))
 
     def _value(self, column: Column, value, rows):

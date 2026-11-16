@@ -196,3 +196,17 @@ def test_a_2d_model_takes_its_ratio_from_a_square_root():
     assert v.extrapolated == pytest.approx(1.0, rel=1e-9)
     (three,) = convergence.verdicts(levels, dim=3)  # as before the fix
     assert three.order == pytest.approx(3.0, abs=1e-6)
+
+
+def test_a_stress_at_a_singularity_is_reported_diverging():
+    """ADR 0066 decision 7: at a re-entrant corner of angle 270° the elastic stress goes
+    as r^(λ-1) with Williams' λ = 0.5445, so the peak an element of size h sees grows as
+    h^-0.4555: every finer mesh raises it more than the last."""
+    f, levels = lambda h: h ** (0.5445 - 1), []
+    for k, h in enumerate((1.0, 1 / 1.5, 1 / 2.25)):
+        levels.append(convergence.Level(k + 1, 1 / h, f"level {k + 1}", run=f"r{k}",
+                                        elements=round(100 / h**3),
+                                        values={"peak": f(h)}))  # fmt: skip
+    (v,) = convergence.verdicts(levels)
+    assert v.state == "diverging" and "singularity" in v.words
+    assert v.gci is None and v.order is None

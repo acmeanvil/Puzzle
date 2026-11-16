@@ -56,9 +56,15 @@ class WeldTable(QWidget):
         self.directional.toggled.connect(lambda _on: self.show_results())
         self.export_button = QPushButton("Export CSV…")
         self.export_button.clicked.connect(lambda: self.export())
+        self.add_button = QPushButton("Add weld…")  # ADR 0072 section 10: the forms
+        self.add_button.clicked.connect(self._add_weld)
+        self.fatigue_button = QPushButton("Weld fatigue…")
+        self.fatigue_button.clicked.connect(self._fatigue)
         bar.addWidget(QLabel("Run"))
         bar.addWidget(self.run, 1)
         bar.addWidget(self.directional)
+        bar.addWidget(self.add_button)
+        bar.addWidget(self.fatigue_button)
         bar.addWidget(self.export_button)
         layout.addLayout(bar)
         self.note = role(QLabel(""), "muted")
@@ -149,6 +155,23 @@ class WeldTable(QWidget):
         if self.found:
             self.table.selectRow(0)
         self._stations()
+
+    def _add_weld(self) -> None:
+        from puzzle.gui.main_menu import current_component
+        from puzzle.gui.weld_forms import add_weld
+
+        if self.window.session is not None and (comp := current_component(self.window)):
+            add_weld(self.window, comp)
+
+    def _fatigue(self) -> None:
+        """Weld fatigue… on the run shown, for the weld selected."""
+        from puzzle.gui.weld_forms import weld_fatigue
+
+        if self.window.session is None:
+            return
+        rows = {i.row() for i in self.table.selectedIndexes()}
+        weld = self.found[next(iter(rows))]["weld"] if len(rows) == 1 and self.found else None
+        weld_fatigue(self.window, weld=weld, run_id=self.run.currentData())
 
     @staticmethod
     def _worst(w: dict) -> float:

@@ -60,7 +60,8 @@ $$S_e = k_a k_b k_c k_d k_e k_f\,S'_e$$
   mm), with the effective diameter 0.370 d for a round that doesn't rotate and
   $0.808\sqrt{hb}$ for a rectangle in bending; 1 for axial loading or no size effect
   (the default);
-- load $k_c = 1$ (see Limits);
+- load $k_c$ (Eq. 6-26): 0.85 with the size basis axial, 0.59 when the stress measure
+  is a shear component, 1 otherwise (see Limits);
 - temperature $k_d$, Shigley's polynomial in °F from 70 to 1000 °F;
 - reliability $k_e = 1 - 0.08\,z_a$ (50 % by default, $k_e$ = 1; 99 % gives 0.814);
 - miscellaneous $k_f$ (plating, corrosion: the `misc_factor`, 1 by default).
@@ -135,13 +136,14 @@ factor it stores the alternating and mean stress as the life model saw them (× 
 - High-cycle, proportional loading only. Where a range's principal directions differ
   from its mean's by more than 15° at the critical node, the result says the loading
   looks non-proportional and is an estimate; critical-plane methods are out of scope.
-- Puzzle takes $k_c = 1$ for every load and lets axial and torsional stresses in through
-  the stress measure. Shigley's combined-loading method divides the axial part by
-  0.85; for mostly axial loading the tool's stress is about 15 % lower (1 − 0.85)
-  than that method's, so its life is longer.
+- A von Mises or principal stress of mixed axial and bending load can't be split, so it
+  takes $k_c = 1$. Shigley's combined-loading method divides the axial part by 0.85:
+  for a mostly axial load, choose the size basis axial (then $k_c$ = 0.85, Shigley's
+  Example 6-10), or the life is up to about 15 % in stress too long.
 - $S'_e = 0.5\,S_{ut}$ and Neuber's constants are for steels. For aluminium and other
   metals with no true endurance limit, use a measured S-N curve.
-- The size factor isn't limited at the top of Shigley's range (254 mm).
+- Past the top of Shigley's range (254 mm) the size factor is held at its 254 mm value,
+  0.633: the equation isn't extrapolated.
 - Miner's rule ignores load order. A safety factor of 15 means 15 or more, and one of
   1/15 means at most that.
 - Lives come from the nodal stress the solver gives, so a coarse mesh at a stress

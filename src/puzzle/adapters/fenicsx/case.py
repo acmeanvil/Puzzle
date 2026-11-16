@@ -392,7 +392,8 @@ def _threads(project, comp, mesh: Mesh, step, physics: str, contacts) -> list[di
             if c.thread.compliance == "rigid":
                 k = RIGID_PENALTY * threads.stiffness(
                     tp.areas[flank], threads.spec(c.thread), modulus(project, comp, screw_side),
-                    modulus(project, comp, nut_side), "teeth")  # fmt: skip
+                    modulus(project, comp, nut_side), "teeth",
+                    angle=tp.angles[flank])  # fmt: skip
             flanks.append({"normals": tp.normals[flank].tolist(), "stiffness": k.tolist()})
         out.append({
             "name": c.name, "kind": c.type, "clearance": float(tp.clearance), "slack": SLACK,

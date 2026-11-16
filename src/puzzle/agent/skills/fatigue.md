@@ -66,7 +66,9 @@ non-proportional at the critical node.
   `strain` field; no mean-stress correction).
 - Marin factors (Shigley only): `surface` polished, ground, machined, hot_rolled,
   forged; `size` none, rotating_round or non_rotating_round (`diameter`), rectangle
-  (`height`, `width`), axial; `temperature` (°C);
+  (`height`, `width`), axial (kb = 1 and the load factor kc = 0.85: use it for mostly
+  axial loading; a shear component as the stress measure takes kc = 0.59);
+  `temperature` (°C);
   `reliability` (%, above 0 and below 100; default 50);
   `misc_factor`; `endurance_limit` a measured S'e in Pa (default 0.5 Sut, 700 MPa
   above Sut 1400 MPa; steels only).

@@ -21,14 +21,16 @@ from pathlib import Path
 
 import numpy as np
 
-from puzzle.adapters.code_saturne.ensight import read_case, read_variable
+from puzzle.adapters.code_saturne.ensight import read_case, read_variable, series, times
 from puzzle.adapters.common import (
     FLUID,
     THERMAL,
     InputError,
     check_contacts,
     hydraulic_diameter,
+    initial_temperature,
     match_points,
+    time_settings,
 )
 from puzzle.mesh import layer
 from puzzle.mesh.med import write_med
@@ -61,8 +63,8 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
     comp = project.get(study.component, Component)
     check_contacts(comp, set(), "Code_Saturne")
     steps = study.solve_steps()
-    if len(steps) != 1 or steps[0].type != "stationary":
-        raise InputError("the Code_Saturne adapter runs one stationary solve step for now")
+    if len(steps) != 1 or steps[0].type not in ("stationary", "transient"):
+        raise InputError("the Code_Saturne adapter runs one stationary or transient solve step")
     solved = set(steps[0].physics) or {p.type for p in comp.physics}
     if solved not in ({"fluid_flow"}, {"fluid_flow", "heat_transfer"}):
         raise InputError(
@@ -164,13 +166,32 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
             zone["heat_flux"] = v["q"]
         else:
             zone["exchange"] = [v["h"], v["T_inf"]]
+    transient = None
+    if steps[0].type == "transient":
+        # A true time march: a constant step, results every `output_every` steps (and
+        # the initial state), from rest and the heat physics' initial temperature.
+        dt, _, count = time_settings(steps[0])
+        every = max(1, int(steps[0].settings.get("output_every", 1)))
+        transient = {"time_step": dt, "steps": count, "output_every": every}
+    heat_physics = next((p for p in comp.physics if p.type == "heat_transfer"), None)
     spec = {
         "mesh": "mesh.msh",
+        "transient": transient,
+        # Only a time march starts anywhere in particular: steady runs keep their start.
+        "initial_temperature": initial_temperature(heat_physics) if heat and transient else None,
         "density": props["density"],
         "viscosity": props["dynamic_viscosity"],
-        "iterations": int(steps[0].settings.get("iterations", 500)),
+        "iterations": transient["steps"]
+        if transient
+        else int(steps[0].settings.get("iterations", 500)),
         # The listing every iteration up to 500, then ~500 times a run (ADR 0054).
-        "listing_every": max(1, round(int(steps[0].settings.get("iterations", 500)) / 500)),
+        "listing_every": max(
+            1,
+            round(
+                (transient["steps"] if transient else int(steps[0].settings.get("iterations", 500)))
+                / 500
+            ),
+        ),  # fmt: skip
         "pseudo_time_step": _seconds(steps[0].settings.get("pseudo_time_step"))
         or _wedge_step(layered, zones),
         "turbulence": TURBULENCE[model],
@@ -264,13 +285,23 @@ def read_results(workdir: Path) -> Results:
     layered = (workdir / layer.FILE).exists()
     ids = (layer.match if layered else match_points)(centroids, reference, element_ids)
     order = np.argsort(ids)
-    step = StepResult(1, "stationary", 1.0)
-    for name, (_, components, path) in variables.items():
-        if name in FIELDS:
-            field_name, comps = FIELDS[name]
-            values = read_variable(path, parts, components)
-            step.fields[field_name] = Field(field_name, "element", comps, ids[order], values[order])
-    return layer.to_2d(workdir, Results(solver="code_saturne", steps=[step]))
+    spec = json.loads((workdir / "case.json").read_text(encoding="utf-8"))
+    if spec.get("transient"):  # one step per output time, value = time (s)
+        found, at = series(case_file), times(case_file)
+        if len(at) != len(found):
+            raise FileNotFoundError(f"Code_Saturne listed {len(at)} output times and "
+                                    f"wrote {len(found)} sets of fields")  # fmt: skip
+        frames = [(StepResult(1, "transient", t), v) for t, v in zip(at, found, strict=True)]
+    else:
+        frames = [(StepResult(1, "stationary", 1.0), variables)]
+    for step, these in frames:
+        for name, (_, components, path) in these.items():
+            if name in FIELDS:
+                field_name, comps = FIELDS[name]
+                values = read_variable(path, parts, components)
+                step.fields[field_name] = Field(field_name, "element", comps, ids[order],
+                                                values[order])  # fmt: skip
+    return layer.to_2d(workdir, Results(solver="code_saturne", steps=[s for s, _ in frames]))
 
 
 def _seconds(value) -> float | None:

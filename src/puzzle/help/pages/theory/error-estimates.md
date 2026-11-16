@@ -104,7 +104,7 @@ $\epsilon$ = target × the field's range,
 
 $$\lambda_i = \frac{c |\mu_i|}{\epsilon}$$
 
-with $c = 2/9$ in the code. Each $\lambda_i$ is clamped between $1/h_{max}^2$ and
+with Frey and Alauzet's $c = 9/32$ for tetrahedra ($2/9$ in 2D). Each $\lambda_i$ is clamped between $1/h_{max}^2$ and
 $1/h_{min}^2$ and to an aspect ratio of at most the stretch setting (50 by default);
 the element size along each eigenvector is $1/\sqrt{\lambda_i}$. $h_{max}$ is the
 recipe's global size (else a tenth of the model's diagonal) and $h_{min}$ is

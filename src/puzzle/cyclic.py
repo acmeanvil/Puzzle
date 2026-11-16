@@ -128,12 +128,20 @@ def check(project, study, comp, caps) -> list[str]:
         return []
     problems = []
     taken = getattr(caps, "cyclic", frozenset())
-    for step in study.solve_steps() if comp.cyclic is not None else []:
-        if step.type not in STEPS:
+    for step in study.solve_steps():
+        if step.type in STEPS:
+            continue
+        if comp.cyclic is not None:
             problems.append(
                 f"cyclic symmetry gives the sector's symmetric solution only, so a {step.type} "
                 "step would miss the other nodal diameters; model the whole, or use "
                 "stationary or transient steps"
+            )
+        else:  # a periodic cell repeats in phase only: modes of other wavelengths are lost
+            problems.append(
+                f"periodic symmetry gives the cell's in-phase solution only, so a {step.type} "
+                "step would miss modes that differ from cell to cell; model the whole, or "
+                "use stationary or transient steps"
             )
     for ph in comp.physics:
         if ph.type not in taken:

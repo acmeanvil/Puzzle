@@ -543,29 +543,11 @@ class Workbench(QWidget):
     # --- parts ------------------------------------------------------------------------
 
     def new_part(self) -> None:
-        """A new part starts with a sketch; finishing it offers the extrusion."""
-        w = self.window
-        n = len(w.session.project.of_type(Geometry)) + 1
-        from puzzle.gui.quick_form import Ask
+        """New part…: the one chooser every menu opens (`menus.new_part`), the sketch
+        first; finishing the sketch offers the extrusion."""
+        from puzzle.gui import menus
 
-        taken = {g.name for g in w.session.project.of_type(Geometry)}
-        got = w.ask_form(
-            "New part",
-            [
-                Ask("name", "Name", kind="text", default=f"Part {n}"),
-                Ask("plane", "Sketch its first profile on", choices=PLANES),
-            ],
-            check=lambda v: (
-                "Give it a name"
-                if not v["name"]
-                else (f"There is already a part '{v['name']}'" if v["name"] in taken else None)
-            ),
-        )
-        if got is None:
-            return
-        self._start_sketch(
-            {"new_part": got["name"], "plane": got["plane"], "face": None, "index": None}
-        )
+        menus.new_part(self.window)
 
     def _import(self) -> None:
         from puzzle.gui import menus

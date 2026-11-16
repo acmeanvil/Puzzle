@@ -12,7 +12,8 @@ Code_Aster is not run yet: with the spring held only by its rim contacts, STAT_N
 CONTACT_INIT='OUI' and NPREC=-1, fails to converge in the first increment.
 2. Two springs in series need the single spring's force at twice the deflection; two in
    parallel give twice the force at the same deflection. These are exact relations,
-   checked against the single-spring result itself.
+   checked against the single-spring result itself (on its own mesh: series within 1 %,
+   parallel 5 %, its nested faces in contact).
 """
 
 import numpy as np
@@ -45,3 +46,23 @@ def test_single_spring_follows_almen_laszlo(tmp_path, solver):
     print(f"{solver}: max deviation from Almen-Laszlo {error.max():.1%}")
     assert s[-1] == pytest.approx(0.75 * H0, rel=0.05)  # the spring took the stroke
     assert error.max() < 0.12
+
+
+@over("calculix")
+def test_stacked_springs_follow_the_single_one(tmp_path, solver):
+    one_s, one_f = _run(tmp_path / "single", solver, "single")
+    loaded = lambda s: s > 0.2 * H0  # noqa: E731
+    # Measured (CalculiX, 2026-11-15): series 0.2 %; parallel 3.5 % at 0.2 h0 falling to
+    # 1.4 % at the stroke, from the nested springs' face-to-face contact.
+    for arrangement, stroke, force, limit in (
+        ("series", 2.0, 1.0, 0.01),
+        ("parallel", 1.0, 2.0, 0.05),
+    ):
+        s, f = _run(tmp_path / arrangement, solver, arrangement)
+        each = s / stroke  # each spring's own deflection
+        keep = loaded(each) & (each <= one_s.max())
+        expected = force * np.interp(each[keep], one_s, one_f)
+        error = np.abs(f[keep] - expected) / expected
+        print(f"{solver} {arrangement}: max deviation from the single spring {error.max():.1%}")
+        assert keep.sum() >= 3, arrangement
+        assert error.max() < limit, arrangement

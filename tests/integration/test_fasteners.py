@@ -181,7 +181,7 @@ def test_fastener_pretension(tmp_path, solver):
     bottom on a support as stiff as the bolt (k_s = k_b = E A / L). Step 1: the bolt
     carries F (a set force across its mid-plane cut: exact). Step 2: locked, a force P
     pulls the block down; bolt and support share it by stiffness, so the bolt carries
-    F + P k_b / (k_b + k_s) = F + P/2, within 3 % (the plates' own give)."""
+    F + P k_b / (k_b + k_s) = F + P/2, within 1 % (the plates' own give; -0.25 % measured)."""
     pytest.importorskip("OCP")
     F, P = 5000.0, 2000.0
     parts = {
@@ -209,7 +209,7 @@ def test_fastener_pretension(tmp_path, solver):
     print(f"{solver} fastener pretension: step 1 {axial[0]:.6g} N (F {F:g}), "
           f"step 2 {axial[1]:.6g} N (F + P/2 {F + P / 2:g})")  # fmt: skip
     assert axial[0] == pytest.approx(F, rel=1e-4)
-    assert axial[1] == pytest.approx(F + P / 2, rel=3e-2)
+    assert axial[1] == pytest.approx(F + P / 2, rel=1e-2)  # -0.25 % measured (ADR 0037)
 
 
 @over("calculix", "code_aster")

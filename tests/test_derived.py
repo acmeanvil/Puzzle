@@ -236,3 +236,22 @@ def test_a_definition_must_be_complete():
         ResultDefinition(name="x", method="envelope", cases=[ResultCase(study=uuid4())])
     with pytest.raises(ValueError, match="source and an expression"):
         ResultDefinition(name="x", method="equation", source=uuid4(), expression=" ")
+
+
+def test_a_linear_combination_names_why_a_run_does_not_superpose():
+    """Plasticity, contact and large deflection each make a run's response depend on
+    its load, so combining it linearly is only an estimate (ADR 0025)."""
+    from puzzle.model.schema import SolveStep
+
+    def run(*names):
+        f = {n: Field(n, "node", [""], np.zeros(1, int), np.zeros((1, 1))) for n in names}
+        return Results("calculix", [StepResult(1, "stationary", 1.0, fields=f)])
+
+    p = Project("p")
+    large = SolveStep(type="stationary", settings={"geometric_nonlinearity": True})
+    p.add(Study(name="Big", component=uuid4(), solver="calculix", steps=[large]))
+    p.add(Study(name="Small", component=uuid4(), solver="calculix", steps=[]))
+    assert derived._nonlinear(run("plastic_strain_equivalent")) == "plastic"
+    assert derived._nonlinear(run("displacement", "contact_status")) == "contact"
+    assert derived._nonlinear(run("displacement"), p, "Big") == "large deflection"
+    assert derived._nonlinear(run("displacement"), p, "Small") is None

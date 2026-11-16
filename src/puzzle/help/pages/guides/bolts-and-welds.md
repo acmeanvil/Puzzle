@@ -77,6 +77,7 @@ Window → Bolts (Ctrl+5), or Model → Bolts and fasteners → Bolt table.
   forces, its stress, and its share of its grade's proof and yield loads. Above 1 of
   proof, the bolt is past its proof load.
 
+<!-- key: form:weld_add -->
 ## Welds
 
 A **light weld** joins two parts along an edge with springs across the joint; the parts
@@ -84,9 +85,14 @@ keep their own meshes. Its result is the **line force** (N/m) at stations along 
 path, which is what the codes check. It runs on CalculiX, Code_Aster and FEniCSx (they
 agree to four digits); Elmer and 2D models refuse it.
 
-There is no menu item to make a weld yet: ask the agent ("weld the bracket's foot all
-round with a 6 mm fillet"). It shows the faces it found before making anything. Welds
-appear under the component's Fasteners folder. A **modelled weld** draws the bead as a
+**Model → Bolts and fasteners → Add weld…** (also a component's Fasteners folder and the
+Welds panel): pick the edge at the joint's corner in the view (Pick, the Edges filter),
+or choose an edge selection, then the type (fillet, or a CJP or PJP groove), the leg
+(a groove's depth) and an unequal fillet's second leg, continuous or intermittent
+(segment and pitch), and a name. Of the edge's two faces, the one on the other part is
+the seat; the form says which part it joins and the faces the legs lie on before OK,
+and makes the selections and the weld as one undo. Welds appear under the component's
+Fasteners folder. A **modelled weld** draws the bead as a
 solid part of its own, to see the stresses in and around it.
 
 ### Weld strength and the Welds panel
@@ -102,9 +108,47 @@ worst first.
 - The **instantaneous centre** check (AISC Manual Part 8) for the group's in-plane force
   and moment.
 - **Fatigue**: AISC 360 Appendix 3 categories A to F, or ASME VIII-2 5.5.5 structural
-  stress, through the agent.
+  stress: Weld fatigue… below.
 
 The base metal (J4) and the minimum weld size (Table J2.4) are yours to check.
+
+<!-- key: form:weld_fatigue -->
+### Weld fatigue
+
+**Model → Bolts and fasteners → Weld fatigue…** (also a weld's and a run's right-click,
+and the Welds panel) reads a study's latest run. Choose the weld and the method:
+
+- **AISC 360-16 Appendix 3**: the detail's category (Table A-3.1) and the cycles. F is
+  shear on the fillet's throat from the line forces; A to E′ the base metal at the
+  weld's toe (the largest principal stress range at its footprint, mesh-dependent). The
+  form gives the range, the allowable F_SR and their ratio (1 or less passes).
+- **ASME VIII-2 5.5.5**: the equivalent structural stress at the attachment's toe (or
+  the plate's), membrane f/t plus bending 6m/t², each station's permissible cycles on
+  Table 3-F.2M's curve (−3σ by default), plotted along the weld, and with cycles given
+  the damage at the worst station. A solid's thickness at the toe must be given; a
+  shell's is its own.
+
+Steps: empty is the last step from zero, one step is from zero, two the range between
+them. Nothing in the project changes.
+
+<!-- key: form:vdi2230 -->
+## A joint by VDI 2230
+
+**Model → Bolts and fasteners → VDI 2230 check…** (also a bolt type's and a bolt's
+right-click, and the Bolt table's) checks a concentric single-bolt joint by VDI
+2230-1:2015 by hand, without a solve: size, grade (or a given Rp0.2), hex or socket head,
+a nut or a tapped hole, the clamp length and any unthreaded shank, the bolt's, plates'
+and nut's moduli, thread and head friction, the interfaces and Rz for embedding, the
+load introduction factor n, the axial working load and the tightening factor αA. From a
+bolt type it starts with the type's size, grade, head and joint; from a bolt, its
+length between the ends too.
+
+The table updates as you type: resiliences and the load factor Φ, the assembly preload
+FMzul at 90 % of Rp0.2 and its tightening torque and nut factor K, embedding and its
+preload loss, and with a working load the bolt's extra load, working stress and fatigue
+safety; with αA the least preload and the residual clamp load. The check with the
+largest utilisation is marked as governing. Save as CSV… or Save as text… keeps the
+table. Nothing in the project changes.
 
 ## Mistakes to avoid
 

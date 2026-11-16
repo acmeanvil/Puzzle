@@ -185,7 +185,7 @@ VIII-1/VIII-2 2023 and IX 2023.
     the touching face carries the second.
   - `commands` is one batch: the selections (existing ones holding just those faces
     reused) and the weld. MCP `weld_add`.
-- **Refused:** every solver but CalculiX (`Capabilities.welds`), and 2D models.
+- **Refused:** every solver but CalculiX (`Capabilities.welds`), and 2D models (at step 1; step 3 added Code_Aster and FEniCSx, below).
 - **Skill** `welds`.
 
 | Benchmark (CalculiX, 3 mm tets) | Puzzle | Hand |

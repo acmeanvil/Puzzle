@@ -22,7 +22,7 @@ mode is at 209 Hz. Static checks are on [Structural statics](help:verification/s
 | Beam section, first mode | Euler-Bernoulli | CalculiX | 1 % | −0.11 % |
 | Euler column, with a preload | π²EI / (2L)², P_cr − P0 | CalculiX, Code_Aster | 0.5 %; 1 % | +0.085 %; +0.15 %, +0.17 % |
 | Buckling shoot-out | CalculiX against Code_Aster | both | 0.1 % | 0.01 % |
-| Prestressed modes | 1D beam with geometric stiffness | CalculiX | 0.5 % | 0.1 % |
+| Prestressed modes | 1D beam with geometric stiffness | CalculiX | 0.25 % | 0.1 % |
 | Damped transients settle on the elastica | Bisshopp and Drucker | CalculiX; Code_Aster solids | 1 % to 5 % | 0.3004 L, 0.0560 L |
 | Explicit: waves, wall, impacts | ρ c v₀, 2L/c, momentum | OpenCourant | 1 % to 5 % | −0.10 % to −0.96 % |
 | Explicit against implicit | CalculiX Newmark; modal sum | OpenCourant | peak 2 %, history 3 % | −0.18 %, +0.93 %, −0.33 % |
@@ -175,8 +175,8 @@ P = E A d / L stiffens bending. A static study's stress is handed to a modal stu
 transfer with the role prestress. The reference is a clamped-clamped Euler-Bernoulli beam
 with the geometric stiffness of P, solved in the test with 200 Hermite elements. The 3D
 model is compared by the ratio f(P) / f(0), in which shear and 3D effects largely
-cancel: the ratio must exceed 1.05 (the tension matters) and match within 0.5 %
-(`rel=5e-3`). CalculiX only: it replays the static study as a geometrically nonlinear
+cancel: the ratio must exceed 1.05 (the tension matters) and match within 0.25 %
+(`rel=2.5e-3`). CalculiX only: it replays the static study as a geometrically nonlinear
 first step. The project notes record agreement to 0.1 %.
 
 ## Large deflection in time

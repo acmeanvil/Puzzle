@@ -1533,7 +1533,13 @@ def _thread_end(project, comp, f, selection: str, end, other, move: int, turn: i
     e_bolt = project.get(f.material, Material).properties["youngs_modulus"].to_si()
     e_wall = modulus(project, comp, selection)
     k = threads.stiffness(
-        areas / np.cos(alpha), spec, e_bolt, e_wall, f.thread.compliance, rigid_core=True
+        areas / np.cos(alpha),
+        spec,
+        e_bolt,
+        e_wall,
+        f.thread.compliance,
+        rigid_core=True,
+        angle=float(np.degrees(alpha)),
     )  # the core can't contract: δ5 in the spring
     step = spec.pitch / 20  # levels closer than this share a core node
     levels = np.unique(np.round(s / step) * step)

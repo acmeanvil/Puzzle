@@ -7,7 +7,7 @@
   13.835 mm), 1/2-13 UNC (ASME B1.1: E 0.4500 in, K 0.4167 in), Tr 20×4 (ISO 2904: d2
   18 mm), 1-5 Acme (ASME B1.5: E 0.9 in), BSPT (Whitworth height 0.640327 P).
 - Pairs: every node of a cylinder pairs with the coaxial one's node at its (θ, z).
-- Tributary areas sum to the cylinder's area, flank areas to it times sec α.
+- Flank areas are the cylinder's times sec α; each flank's stiffness takes its own angle.
 - Per-thread binning by pitch from the mouth; the axis fitted to a tilted cylinder.
 """
 
@@ -119,22 +119,44 @@ def test_every_node_pairs_with_the_coaxial_cylinders():
     assert len(s) == len(inner) and np.all(t == 1000 + s) and np.allclose(d, 0, atol=1e-12)
 
 
-def test_tributary_and_flank_areas_sum_to_the_cylinders():
-    n, levels, r, length = 72, 21, 0.008, 0.02
-    pts = _ring(r, n, (0, length), levels)
-    tris = []
-    for j in range(levels - 1):
-        for i in range(n):
-            a, b = j * n + i, j * n + (i + 1) % n
-            c, d = a + n, b + n
-            tris += [(a, b, d), (a, d, c)]
-    areas = threads.nodal_areas(np.array(tris), lambda k: pts[k])
-    perimeter = 2 * n * r * math.sin(math.pi / n)  # the faceted cylinder's
-    assert sum(areas.values()) == pytest.approx(perimeter * length, rel=1e-9)
-    assert perimeter * length == pytest.approx(2 * math.pi * r * length, rel=1e-3)
-    total = np.array(list(areas.values()))
+def test_flank_areas_are_the_cylinders_times_sec_alpha():
+    total = np.full(10, 1e-6)
     flank = threads.flank_areas(total, _spec("iso"), "upper")
     assert flank.sum() == pytest.approx(total.sum() / math.cos(math.radians(30)), rel=1e-12)
+
+
+def test_each_flank_stiffens_by_its_own_angle():
+    """k = A_flank / (P · 0.25 (K_s/E_s + K_n/E_n) · cos α), each K Yamamoto's at the
+    flank's own α: one value on a 60° form whichever flank bears; on ANSI B1.9 buttress
+    the 7° load flank and the 45° other differ as those angles do, and `bearing="other"`
+    puts the 45° on the side the pull loads."""
+    area, e = np.array([1e-6]), 210e9
+
+    def by_hand(spec, alpha):
+        give = (
+            threads.TEETH_FACTOR
+            * (
+                threads.yamamoto(alpha, spec.pitch, 0.3, False)
+                + threads.yamamoto(alpha, spec.pitch, 0.3, True)
+            )
+            / e
+        )
+        return area / (spec.pitch * give * math.cos(math.radians(alpha)))  # fmt: skip
+
+    iso = _spec("iso")
+    ks = [threads.stiffness(area, iso, e, e, angle=threads.flank_angle(iso, f, up))
+          for f in ("upper", "lower") for up in (True, False)]  # fmt: skip
+    assert all(k == pytest.approx(threads.stiffness(area, iso, e, e)) for k in ks)
+    b = _spec("buttress", size=None, major=Quantity(value=20, unit="mm"),
+              pitch=Quantity(value=2, unit="mm"))  # fmt: skip
+    assert threads.flank_angle(b, "upper", load_up=True) == 7.0
+    assert threads.flank_angle(b, "upper", load_up=False) == 45.0
+    load = threads.stiffness(area, b, e, e, angle=7.0)
+    other = threads.stiffness(area, b, e, e, angle=45.0)
+    assert load == pytest.approx(by_hand(b, 7.0), rel=1e-12)
+    assert other == pytest.approx(by_hand(b, 45.0), rel=1e-12)
+    assert threads.stiffness(area, b, e, e) == pytest.approx(load)  # None: the load flank's
+    assert abs(other[0] / load[0] - 1) > 0.05
 
 
 def test_forces_bin_by_pitch_from_the_mouth():

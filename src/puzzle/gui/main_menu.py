@@ -233,6 +233,8 @@ def _project(window, menu: QMenu) -> None:
     _add(menu, "Remote hosts…", lambda: _hosts(window),
          "Machines studies can run on, reached by SSH: yours, not the project's (ADR 0021)",
          free=True)  # fmt: skip
+    _add(menu, "Who may connect…", lambda: _who_may_connect(window),
+         "What agents may do here, and who may drive the project over MCP")  # fmt: skip
     _add(menu, "Trust this project…", lambda: trust_project(window),
          "Let its Python scripts and custom equations run: only if you know where it came "
          "from (ADR 0062)")  # fmt: skip
@@ -359,8 +361,8 @@ def _geometry(window, menu: QMenu) -> None:
     from puzzle.gui import menus
     from puzzle.gui.workbench import GROUPS, tool_name
 
-    _add(menu, "New part…", lambda: window.workbench.new_part(),
-         "A new part, starting with a sketch")  # fmt: skip
+    _add(menu, "New part…", lambda: menus.new_part(window),
+         "A new part: from a sketch, a box, a cylinder or a file")  # fmt: skip
     _add(menu, "Import geometry…", lambda: menus.import_step_file(window),
          "STEP, IGES, BREP, STL, OBJ or 3MF")  # fmt: skip
     from puzzle.gui.frame_editor import new_frame
@@ -371,6 +373,10 @@ def _geometry(window, menu: QMenu) -> None:
         lambda: new_frame(window),
         "A frame of line members: bays, stories, columns, beams, bracing (ADR 0079)",
     )
+    from puzzle.gui.frame_editor import new_frame_from_dxf
+
+    _add(menu, "New frame from a DXF…", lambda: new_frame_from_dxf(window),
+         "A frame's members from a drawing's lines, its layers as groups (ADR 0079)")  # fmt: skip
     menu.addSeparator()
     wb = window.workbench
     _add(menu, "New sketch…", lambda: _in_geometry_tab(window, wb.new_sketch),
@@ -436,6 +442,8 @@ def _geometry(window, menu: QMenu) -> None:
     _add(sel, "Add picks to the selected selection", lambda: window.add_picks_to_selection())
     _add(sel, "Reattach…", lambda: _in_geometry_tab(window, wb._reattach),
          "Review selections an edit or a new file detached")  # fmt: skip
+    _add(sel, "Selection by rule…", lambda: window.selection_by_rule(current_geometry(window)),
+         "A selection described, not picked: box, near a point, facing, area, sets")  # fmt: skip
     menu.addSeparator()
     _add(menu, "Measure", window.start_measuring,
          "Exact length, area, volume, distance and angle of the picks", "Ctrl+Shift+M")  # fmt: skip
@@ -467,6 +475,9 @@ def _mesh(window, menu: QMenu) -> None:
         _add(mesher, name, lambda v=value: _in_mesh_tab(window, lambda: bench.set_mesher(v)))
     _add(menu, "Gmsh options…", lambda: _in_mesh_tab(window, bench.edit_gmsh_options),
          "Any of Gmsh's own mesh options, searchable")  # fmt: skip
+    menu.addSeparator()
+    _add(menu, "Mesh shoot-out…", lambda: _mesh_shootout(window),
+         "A study solved on Gmsh's and Netgen's meshes of its recipe, compared")  # fmt: skip
 
 
 def _model(window, menu: QMenu) -> None:
@@ -556,6 +567,15 @@ def _model(window, menu: QMenu) -> None:
         "Coaxial holes in different parts or bodies, one fastener per stack")  # fmt: skip
     _add(bolts, "Bolt table", lambda: window.open_bolts(),
          "Every bolt's properties and results, in a docked table")  # fmt: skip
+    from puzzle.gui.vdi2230_form import vdi_check
+    from puzzle.gui.weld_forms import add_weld, weld_fatigue
+
+    _add(bolts, "VDI 2230 check…", lambda: vdi_check(window),
+         "A single-bolt joint by VDI 2230-1 by hand: preload, torque, Φ, stresses")  # fmt: skip
+    _add(bolts, "Add weld…", _with_component(window, lambda c: add_weld(window, c)),
+         "A light weld along picked edges or an edge selection (ADR 0078)")  # fmt: skip
+    _add(bolts, "Weld fatigue…", lambda: weld_fatigue(window),
+         "A weld's fatigue on a run: AISC 360 Appendix 3 or ASME VIII-2 5.5.5")  # fmt: skip
     bolts.addSeparator()
     from puzzle.gui import visibility as vis
 
@@ -592,6 +612,10 @@ def _model(window, menu: QMenu) -> None:
     _add(studies, "New study…", lambda: menus.new_study(window))
     _add(studies, "Duplicate study…", lambda: _duplicate_study(window),
          "A copy of the study under a new name: steps, settings, sweeps, solver")  # fmt: skip
+    from puzzle.gui.sweep_form import sweep_step
+
+    _add(studies, "Add sweep step…", lambda: _with_study(window, sweep_step),
+         "Run a study once per value of its parameters: a list, a range, an operator")  # fmt: skip
     _add(studies, "New transfer…", lambda: menus.new_transfer(window),
          "One study's result into another (a temperature into a structural study)")  # fmt: skip
     _add(studies, "Solver settings…", lambda: _solver_settings(window),
@@ -602,6 +626,8 @@ def _model(window, menu: QMenu) -> None:
          "ASCE 7 seismic parameters of a frame study: spectrum, R, C_d, I_e")  # fmt: skip
     _add(studies, "ELF loads…", lambda: _seismic(window, "elf"),
          "ASCE 7's equivalent lateral forces written as story loads (Ex or Ey)")  # fmt: skip
+    _add(studies, "New mesh study…", lambda: _mesh_study(window),
+         "A mesh convergence check of its own: study, meshes, ratio, target, quantity")  # fmt: skip
 
     runs = _sub(menu, "Run")
     run = window.actions_by_name["run"]  # the toolbar's too: asks which study if none is selected
@@ -658,6 +684,12 @@ def _seismic(window, which: str) -> None:
     study = current_study(window, "Seismic design" if which == "design" else "ELF loads")
     if study is not None:
         (edit_seismic if which == "design" else write_elf)(window, study)
+
+
+def _with_study(window, action) -> None:
+    study = current_study(window)
+    if study is not None:
+        action(window, study)
 
 
 def _duplicate_study(window) -> None:
@@ -790,6 +822,33 @@ def _results(window, menu: QMenu) -> None:
          "The result as shown, in ParaView: colours, range, deformation, cut, camera")  # fmt: skip
     _add(out, "Export…", lambda: _export(window),
          "Results for other software: ParaView, point clouds, the deformed shape")  # fmt: skip
+
+
+def _mesh_study(window) -> None:
+    from puzzle.gui import convergence_panel
+
+    study = current_study(window, "New mesh study")
+    if study is not None:
+        convergence_panel.new_mesh_study(window, str(study.id))
+
+
+def _mesh_shootout(window) -> None:
+    from puzzle.gui.mesh_shootout import mesh_shootout
+
+    study = current_study(window, "Mesh shoot-out")
+    if study is not None:
+        mesh_shootout(window, str(study.id))
+
+
+def _who_may_connect(window) -> None:
+    """Settings, open on the Agent page and its This project box."""
+    from puzzle.gui.settings_dialog import AGENT
+
+    dialog = window.settings_dialog()
+    rows = [dialog.groups.item(i).text() for i in range(dialog.groups.count())]
+    dialog.groups.setCurrentRow(rows.index(AGENT))
+    if window.run_dialog(dialog):
+        window.settings_changed()
 
 
 def _convergence(window) -> None:

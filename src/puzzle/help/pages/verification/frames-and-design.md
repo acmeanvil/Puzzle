@@ -23,8 +23,8 @@ published worked examples of the codes they implement, to the printed digits.
 | Member force signs | N, T, My of a lever | PyNite, CalculiX, Code_Aster | 1e-6 | passes |
 | Combinations on PyNite | factored sums | PyNite | 1e-6 | 56000, 86400 N·m |
 | Combinations on FE solvers | factored sums of cases alone | CalculiX, Code_Aster | 1e-6 of the deflection | passes |
-| P-Delta column | H tan(kh)/k | PyNite | 0.5 % | 27021.3 N·m |
-| Direct Analysis Method | (H ± 0.002P) tan(k'h)/k' | PyNite | 0.5 % | 39659.3, 19979.7 N·m |
+| P-Delta column | H tan(kh)/k | PyNite | 0.1 % | 27021.3 N·m |
+| Direct Analysis Method | (H ± 0.002P) tan(k'h)/k' | PyNite | 0.1 % | 39659.3, 19979.7 N·m |
 | X-braced bay from a grid | H/(2 cos θ) | PyNite | 2 % | +0.5 % |
 | Cantilever modes, PyNite | β_n, effective mass | PyNite | 1e-4, 1e-3; mass ±2e-4 | 12.23448 Hz (12.23443) |
 | Single mass, spectrum scaled to ELF | W S_a I_e/R, C_s W | PyNite | 0.2 % | V_t 52180.2 N, V 62500 N |
@@ -186,8 +186,10 @@ solvers' own participation factors, are held to ±0.015 of ρAL. Measured (ADR 0
 12.015 Hz on CalculiX and 12.007 on Code_Aster against 12.234; effective masses 0.620
 and 0.619 (0.6131), the second 0.202 and 0.201 (0.1883).
 `test_a_columns_spectrum_against_its_closed_form_modes` holds the modal base shear
-to the CQC of the solvers' own modes within 1e-9, and the ELF base shear C_s ρALg
-within 3 %: CalculiX's lumped mass leaves the support node's share out.
+to the CQC of the solvers' own modes within 1e-9, and the ELF base shear within 1e-6
+of C_s ρALg/2: the FE solvers take the frame's levels as PyNite does (each member's
+weight half to each end, the support's half left out, ASCE 7 12.7.2; it was one level
+and 3 % until 2026-11-15).
 `test_combinations_take_the_spectrum_both_ways` checks that 1.2D + Ex sways ± the
 spectrum's envelope to 1e-9. Elmer and FEniCSx refuse a spectrum, since they give no
 participation factors (`test_elmer_refuses_a_spectrum`).

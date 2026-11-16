@@ -206,8 +206,9 @@ def _bar_temperature(x, t, alpha, t0=293.15, t1=373.15, terms=200):
 @solver
 def test_transient_conduction_matches_the_series_solution(tmp_path, solver):
     errors = _transient_errors(tmp_path, solver, {})
-    # Temperature rise matched within 2% of the 80 K step everywhere.
-    assert max(errors) < 0.02 * 80
+    # Within 1 % of the 80 K step everywhere: backward Euler measured 0.346 K at 300 s on
+    # all four solvers (2026-11-15), its O(dt) error.
+    assert max(errors) < 0.01 * 80
 
 
 def _scheme_cases():

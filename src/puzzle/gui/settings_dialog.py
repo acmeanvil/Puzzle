@@ -39,6 +39,11 @@ REASONING = [
     ("High", "high"),
 ]
 KEY_STATES = {"none": "No key", "keychain": "Key in the keychain"}
+CONNECT = [  # who may drive the project over MCP (ADR 0015), as `puzzle autonomy --mcp`
+    ("Nobody: MCP is off for this project", "off"),
+    ("Programs on this computer (the default)", "local"),
+    ("Programs on the network too", "network"),
+]
 
 
 class SettingsDialog(QDialog):
@@ -51,6 +56,9 @@ class SettingsDialog(QDialog):
         self.settings = settings or Settings()
         self.agent_path = agent_path
         self.agent = load_settings(agent_path)
+        # The open project's autonomy and MCP connections (ADR 0072 section 10): the
+        # project's, not the user's, so saved through its Session, not settings.toml.
+        self.project_window = parent if getattr(parent, "session", None) is not None else None
         self.boxes: dict[str, QComboBox] = {}
         groups = list(dict.fromkeys(p.group for p in PREFERENCES)) + [AGENT, ADVANCED]
         self.groups = QListWidget()
@@ -269,6 +277,7 @@ class SettingsDialog(QDialog):
         form.addRow("Host or policy", self.route)
         self.route_label = form.labelForField(self.route)
         column.addWidget(self.details)
+        self._project_box(column)
         self.editing = ""
         self._fill_providers()
         self.provider.currentIndexChanged.connect(lambda _: self._agent_fields())
@@ -276,6 +285,34 @@ class SettingsDialog(QDialog):
                       else "anthropic")  # fmt: skip
         self._agent_fields()
         return page
+
+    def _project_box(self, column) -> None:
+        """This project: what agents may do, and who may connect over MCP."""
+        from PySide6.QtWidgets import QGroupBox
+
+        from puzzle.gui.agent_panel import LEVELS
+
+        self.who = self.may = None
+        if self.project_window is None:
+            return
+        agent = self.project_window.session.project.agent
+        box = QGroupBox("This project")
+        box.setProperty("help", "form:who_may_connect")
+        form = QFormLayout(box)
+        self.may = QComboBox()
+        for key, text in LEVELS.items():
+            self.may.addItem(text, key)
+        self.may.setCurrentIndex(max(self.may.findData(agent.level), 0))
+        self.may.setToolTip('"act freely" asks you twice, the second time to type "act"')
+        self.who = QComboBox()
+        for text, value in CONNECT:
+            self.who.addItem(text, value)
+        self.who.setCurrentIndex(max(self.who.findData(agent.mcp), 0))
+        self.who.setToolTip("Outside agents (puzzle mcp PROJECT): Claude Code, Claude Desktop, "
+                            "an editor. The same autonomy and budget apply to them.")  # fmt: skip
+        form.addRow("Agents may", self.may)
+        form.addRow("Who may connect over MCP", self.who)
+        column.addWidget(box)
 
     def _fill_providers(self) -> None:
         """The provider dropdown and the rows, from the catalog and the user's entries."""
@@ -523,6 +560,10 @@ class SettingsDialog(QDialog):
         self.agent.model = self.model.text().strip()
         self.agent.send_images = self.images.currentData()
         save_settings(self.agent, self.agent_path)
+        if self.who is not None and not set_autonomy(
+            self.project_window, self.may.currentData(), self.who.currentData()
+        ):
+            return  # the second sign-off for "act" was declined: stay open
         self.accept()
 
     def showEvent(self, event) -> None:  # noqa: N802 - Qt's name
@@ -533,6 +574,35 @@ class SettingsDialog(QDialog):
         if self.layout() is not None:
             self.layout().activate()
         tab_in_order(self)
+
+
+def set_autonomy(window, level: str | None, mcp: str | None) -> bool:
+    """The project's autonomy level and MCP connections changed through its Session,
+    as `puzzle autonomy --level --mcp` sends them (one set_autonomy command); "act"
+    needs the agent panel's double sign-off. False when it was declined or refused."""
+    from puzzle.commands.model import SetAutonomy
+    from puzzle.errors import PuzzleError
+
+    s = window.session
+    now = s.project.agent
+    fields = {k: v for k, v in (("level", level), ("mcp", mcp))
+              if v is not None and getattr(now, k) != v}  # fmt: skip
+    if not fields:
+        return True
+    try:
+        try:
+            s.submit(SetAutonomy(**fields))
+        except PuzzleError as exc:
+            if exc.code != "confirmation_required" or "token" not in exc.details:
+                raise
+            if not window.agent._confirm_act():
+                return False
+            s.submit(SetAutonomy(**fields, confirm=exc.details["token"]))
+    except PuzzleError as exc:
+        window.report(exc)
+        return False
+    window.refresh()
+    return True
 
 
 def _only(s, pid: str):

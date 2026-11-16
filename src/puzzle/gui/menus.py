@@ -59,6 +59,10 @@ def _folder_menu(window, add, menu, obj, node: Node) -> None:
             for kind in STEPS:
                 action = steps.addAction(label(kind))
                 action.triggered.connect(lambda _=False, k=kind: add_step_to(window, obj, k))
+        if node.key == "selections":  # ADR 0072 section 10
+            from puzzle.gui.selection_rule import selection_by_rule
+
+            add("Selection by rule…", lambda: selection_by_rule(window, obj))
         if node.key in ("bodies", "selections") and obj.selections:
             add("Reattach selections…", lambda: reattach_selections(window, obj))
         return
@@ -87,6 +91,13 @@ def _folder_menu(window, add, menu, obj, node: Node) -> None:
 
             add("Fasteners from holes…", lambda: fasteners_from_holes(window, obj))
             add("Generate bolts…", lambda: generate_bolts(window, obj))
+            from puzzle.gui.weld_forms import add_weld
+
+            add("Add weld…", lambda: add_weld(window, obj))  # ADR 0078
+        if obj.welds:
+            from puzzle.gui.weld_forms import weld_fatigue
+
+            add("Weld fatigue…", lambda: weld_fatigue(window))
     elif node.key == "contacts":
         if obj.parts:
             from puzzle.gui.contact_search import add_contact, find_contacts_dialog
@@ -274,6 +285,11 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
                 lambda: thread_contact(window, obj, k))  # fmt: skip
             if threaded:
                 add("Remove the thread", lambda: remove_thread(window, obj, k))
+        if node.kind == "connector":  # ADR 0050: the joint by hand
+            from puzzle.gui.vdi2230_form import vdi_for_bolt
+
+            k = int(node.path.split(".")[1])
+            add("VDI 2230 check…", lambda: vdi_for_bolt(window, obj, k))
         if node.kind == "part":  # ADR 0039: an imported assembly's bodies as parts
             from puzzle.gui.split_dialog import split_part
 
@@ -416,10 +432,31 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         if obj.adapt is not None:
             add("Show adaptive passes",
                 lambda: window.show_convergence(str(obj.id), "adapt"))  # fmt: skip
+        add("New mesh study…",
+            lambda: convergence_panel.new_mesh_study(window, str(obj.id)))  # fmt: skip
+        from puzzle.gui.mesh_shootout import mesh_shootout
+
+        add("Mesh shoot-out…", lambda: mesh_shootout(window, str(obj.id)))  # ADR 0019
         steps = menu.addMenu("Add step")
         for t in STEP_TYPES:
             action = steps.addAction(label(t))
             action.triggered.connect(lambda _=False, k=t: add_step(window, obj, k))
+        from puzzle.gui.sweep_form import sweep_step
+
+        steps.addSeparator()  # ADR 0018: parameters swept, in one form
+        steps.addAction("Parametric sweep…").triggered.connect(
+            lambda _=False: sweep_step(window, obj))  # fmt: skip
+        menu.addSeparator()
+        add("Delete", window.delete_selected)
+    elif obj is not None and obj.kind == "mesh_study" and node.kind == "object":
+        from puzzle.gui import convergence_panel  # ADR 0066 item 1
+
+        def shown() -> None:
+            window.docks.show("convergence")
+            window.convergence.show(str(obj.study), name=obj.name)
+
+        add("Show in the Convergence panel", shown)
+        add("Run its meshes", lambda: convergence_panel.run(window, str(obj.study), obj.name))
         menu.addSeparator()
         add("Delete", window.delete_selected)
     elif obj is not None and obj.kind == "optimisation" and node.kind == "object":
@@ -450,7 +487,24 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         menu.addSeparator()
         add("Delete", window.delete_selected)
     elif isinstance(obj, Study) and node.kind == "step":
+        k = int(node.path.split(".")[1])
+        if obj.steps[k].type == "parametric_sweep":
+            from puzzle.gui.sweep_form import sweep_step
+
+            add("Edit sweep…", lambda: sweep_step(window, obj, k))
         add("Remove step", lambda: remove(window, obj, node.path))
+    elif isinstance(obj, Component) and node.kind == "weld":  # ADR 0078
+        from puzzle.gui.weld_forms import weld_fatigue
+
+        name = obj.welds[int(node.path.split(".")[1])].name
+        add("Weld fatigue…", lambda: weld_fatigue(window, weld=name))
+        add("Remove", lambda: remove(window, obj, node.path))
+    elif obj is not None and obj.kind == "bolt_type" and node.kind == "object":
+        from puzzle.gui.vdi2230_form import vdi_check
+
+        add("VDI 2230 check…", lambda: vdi_check(window, obj))  # ADR 0050
+        menu.addSeparator()
+        add("Delete", window.delete_selected)
     elif node.kind == "object":
         add("Delete", window.delete_selected)
     elif node.kind == "run":
@@ -463,6 +517,12 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
 
         add("Solver output…", lambda: solver_output(window, node.object))
         study = window._store().get_run(node.object).study_id
+        ran = project.objects.get(_uuid(study))
+        comp = project.objects.get(ran.component) if isinstance(ran, Study) else None
+        if isinstance(comp, Component) and comp.welds:  # ADR 0078
+            from puzzle.gui.weld_forms import weld_fatigue
+
+            add("Weld fatigue…", lambda: weld_fatigue(window, run_id=node.object))
         menu.addSeparator()
         add("New combination…", lambda: window.new_derived("linear", study))
         add("New equation…", lambda: window.new_derived("equation", study))
@@ -1144,18 +1204,59 @@ def import_step_file(window, path: Path | None = None):
 # --- geometry history (G4) ------------------------------------------------------------
 
 
+PART_STARTS = [  # New part…'s one chooser (ADR 0072 section 10): the sketch first
+    ("A sketch, then extrude or revolve it", "sketch"),
+    ("A box (50 × 30 × 10 mm)", "box"),
+    ("A cylinder (radius 5 mm, 20 mm high)", "cylinder"),
+    ("A CAD or mesh file (import)", "import"),
+]
+PART_STEPS = {
+    "box": {"kind": "box", "name": "Base", "args": {"dx": 0.05, "dy": 0.03, "dz": 0.01}},
+    "cylinder": {"kind": "cylinder", "name": "Base", "args": {"r": 0.005, "h": 0.02, "axis": "z"}},
+}
+
+
 def new_part(window):
-    """A parametric part, started from a box, with a body selection."""
+    """New part… from every menu (the Geometry menu, the Geometry heading, the
+    project's menu, the Geometry tab's button): one form choosing how it starts: a
+    sketch (the first choice), a box, a cylinder or an imported file. A box or a
+    cylinder is one Create with a body selection; a sketch opens the sketcher, and the
+    part is made when the sketch is finished."""
+    from puzzle.gui.quick_form import Ask
+    from puzzle.gui.workbench import PLANES
+
     n = len(window.session.project.of_type(Geometry)) + 1
-    name = window.ask_text("New part", "Name:", f"Part {n}")
-    if not name:
+    taken = {g.name for g in window.session.project.of_type(Geometry)}
+    from puzzle.gui.quick_form import QuickForm
+
+    dialog = QuickForm("New part", [
+        Ask("start", "Start from", choices=PART_STARTS, default="sketch"),
+        Ask("name", "Name", kind="text", default=f"Part {n}",
+            shown=lambda v: v.get("start") != "import",
+            help="An imported part is named after its file"),
+        Ask("plane", "Sketch its first profile on", choices=PLANES,
+            shown=lambda v: v.get("start") == "sketch"),
+    ], check=lambda v: (None if v.get("start") == "import" else "Give it a name"
+                        if not v.get("name") else f"There is already a part '{v['name']}'"
+                        if v["name"] in taken else None), parent=window)  # fmt: skip
+    dialog.setProperty("help", "form:new_part")
+    if not window.run_dialog(dialog) or dialog.problem():
+        return None
+    got = dialog.values()
+    if got["start"] == "import":
+        return import_step_file(window)
+    if got["start"] == "sketch":
+        wb = window.workbench
+        window.left_tabs.setCurrentWidget(wb)
+        wb._start_sketch({"new_part": got["name"], "plane": got["plane"], "face": None,
+                          "index": None})  # fmt: skip
         return None
     data = {
-        "name": name,
-        "history": [{"kind": "box", "name": "Base", "args": {"dx": 0.05, "dy": 0.03, "dz": 0.01}}],
+        "name": got["name"],
+        "history": [PART_STEPS[got["start"]]],
         "selections": [{"name": "Body", "entity": "body", "members": ["Body"]}],
     }
-    return window.submit(Create(kind="geometry", data=data))
+    return window.submit_batch([Create(kind="geometry", data=data)])
 
 
 def _tool_steps(geo: Geometry, before: int | None = None) -> list[str]:

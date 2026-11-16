@@ -35,10 +35,14 @@ SIZE_BASES = {
     "rotating_round": "Round, rotating",
     "non_rotating_round": "Round, not rotating (de = 0.370d)",
     "rectangle": "Rectangle in bending (de = 0.808√(hb))",
-    "axial": "Axial loading only (kb = 1)",
+    "axial": "Axial loading only (kb = 1, kc = 0.85)",
     "none": "No size effect (kb = 1)",
 }
 # Table 6-5: reliability (%), za, ke for an 8 % standard deviation of the endurance limit.
+# Eq. 6-26: the load factor kc. Von Mises stresses of combined loading take kc = 1
+# (Sec. 6-14: the √3 carries torsion; axial loading alone takes 0.85).
+LOAD_FACTORS = {"bending": 1.0, "axial": 0.85, "torsion": 0.59, "combined": 1.0}
+SIZE_LIMIT_MM = 254.0  # Eq. 6-20's range ends there
 RELIABILITY_FACTORS = [
     (50, 0, 1.000),
     (90, 1.288, 0.897),
@@ -79,9 +83,13 @@ def endurance_limit(
     temperature_c: float = 20.0,
     reliability: float = 50.0,
     kf: float = 1.0,
+    loading: str = "combined",
 ) -> Endurance:
-    """The part's endurance limit (Eq. 6-18 with kc = 1: axial and torsional loads enter
-    through the von Mises stress, Sec. 6-14)."""
+    """The part's endurance limit (Eq. 6-18). `loading` picks kc (Eq. 6-26): bending 1,
+    axial 0.85, torsion 0.59 (a shear stress compared with S'e alone), combined 1 (the
+    von Mises stress of bending, axial and torsion together, Sec. 6-14). The size factor
+    is Eq. 6-20, valid from 2.79 to 254 mm; a larger effective diameter takes the 254 mm
+    value (1.51·254^-0.157 = 0.633), since Shigley gives nothing past it."""
     if measured_se_prime is not None:
         se_prime = measured_se_prime
     else:
@@ -106,6 +114,7 @@ def endurance_limit(
         if mm < 2.79:
             raise ValueError("Eq. 6-20 starts at 2.79 mm")
         # (d/7.62)^-0.107 as Shigley works it (Ex. 6-4).
+        mm = min(mm, SIZE_LIMIT_MM)
         kb = (mm / 7.62) ** -0.107 if mm <= 51 else 1.51 * mm**-0.157
     else:
         kb = 1.0
@@ -117,8 +126,9 @@ def endurance_limit(
             raise ValueError("Eq. 6-27 covers 70 to 1000 °F (21 to 538 °C)")
         kd = 0.975 + 0.432e-3 * tf - 0.115e-5 * tf**2 + 0.104e-8 * tf**3 - 0.595e-12 * tf**4
     ke = 1 - 0.08 * normal_quantile(reliability / 100)
-    se = ka * kb * kd * ke * kf * se_prime
-    return Endurance(se, se_prime, {"ka": ka, "kb": kb, "kc": 1.0, "kd": kd, "ke": ke, "kf": kf})
+    kc = LOAD_FACTORS[loading]
+    se = ka * kb * kc * kd * ke * kf * se_prime
+    return Endurance(se, se_prime, {"ka": ka, "kb": kb, "kc": kc, "kd": kd, "ke": ke, "kf": kf})
 
 
 def normal_quantile(p: float) -> float:

@@ -2,7 +2,8 @@
 to a sharp layer f = tanh((x − 0.5) / 0.03), in two passes: the elements in the layer come out thin
 across it (along x) and long along it, the face x = 1 keeps its group (its nodes still
 on that face), and second order adds edge midpoints. Skipped without the pixi `mmg`
-environment."""
+environment. The metric itself, against Frey and Alauzet's (2005) bound for linear
+tetrahedra, |u − Π u| ≤ c_3 max_e eᵀ|H|e with c_3 = 9/32, needs no MMG."""
 
 from __future__ import annotations
 
@@ -13,7 +14,22 @@ from test_estimates import cube
 from puzzle.mesh import mmg
 from puzzle.mesh.mesh import CellBlock, Group
 
-pytestmark = pytest.mark.skipif(mmg.mmg_binary() is None, reason="mmg not available")
+needs_mmg = pytest.mark.skipif(mmg.mmg_binary() is None, reason="mmg not available")
+
+
+def test_the_metric_of_a_quadratic_field():
+    """u = x² + 4 y² on the unit cube: H = diag(2, 8, 0), so for an error ε = 0.01 × its
+    range (5) the metric's eigenvalues are 9/32 × (2, 8) / ε, and the hmax floor 1/hmax²
+    along z (the stretch cap of 50 doesn't bind)."""
+    mesh = cube(8, quadratic=False)
+    tets = mesh.blocks[0].connectivity - 1
+    x, y = mesh.coords[:, 0], mesh.coords[:, 1]
+    m = mmg.metric(mesh.coords, tets, x**2 + 4 * y**2, 0.01, 1e-3, 1.0)
+    inside = np.all((mesh.coords > 0.3) & (mesh.coords < 0.7), axis=1)  # recovery exact there
+    eps = 0.01 * 5.0
+    assert np.allclose(m[inside, 0, 0], 9 / 32 * 2 / eps, rtol=1e-9)
+    assert np.allclose(m[inside, 1, 1], 9 / 32 * 8 / eps, rtol=1e-9)
+    assert np.allclose(m[inside, 2, 2], 1.0, rtol=1e-9)
 
 
 def with_boundary(n=6):
@@ -39,6 +55,7 @@ def with_boundary(n=6):
     return mesh
 
 
+@needs_mmg
 @pytest.mark.parametrize("order", [1, 2])
 def test_a_layer_gives_thin_long_elements(tmp_path, order):
     mesh = with_boundary()

@@ -119,6 +119,32 @@ def with_material_table(
     return [s for s in steps if s["type"] != "parametric_sweep" or s["parameters"]]
 
 
+def with_sweep_step(study: Study, parameters: list[dict], combination: str = "grid",
+                    index: int | None = None) -> list[dict]:  # fmt: skip
+    """The study's steps (as JSON) with a sweep step over `parameters` (SweepParameter
+    dicts: values, or an operator's `source`): added after its other sweep steps, since
+    sweeps come first, or put in place of `steps[index]`, whose material choices stay
+    (the study's Materials… sets those). The Add sweep step… form submits this."""
+    from puzzle.model.schema import SweepStep
+
+    steps = [s.model_dump(mode="json") for s in study.steps]
+    if index is not None:
+        if steps[index]["type"] != "parametric_sweep":
+            raise ValueError(f"step {index + 1} of {study.name} isn't a sweep step")
+        kept = [p for p in steps[index]["parameters"] if p.get("location") is not None]
+        step = {"type": "parametric_sweep", "parameters": kept + list(parameters),
+                "combination": combination}  # fmt: skip
+        steps[index] = step
+    else:
+        step = {"type": "parametric_sweep", "parameters": list(parameters),
+                "combination": combination}  # fmt: skip
+        at = next((i for i, s in enumerate(steps) if s["type"] != "parametric_sweep"), len(steps))
+        steps.insert(at, step)
+    if step["parameters"]:
+        SweepStep.model_validate(step)  # a bad step refused here, with pydantic's reason
+    return [s for s in steps if s["type"] != "parametric_sweep" or s["parameters"]]
+
+
 def run_count(study: Study) -> int:
     """How many runs the study makes: the product of its sweep steps' points."""
     n = 1

@@ -135,9 +135,11 @@ def test_tools_preview_on_demand_when_asked(app, tmp_path):
     w = MainWindow()
     try:
         w.new_project(tmp_path / "p", "P")
-        w.ask_text = lambda *a, **k: "Part 1"
+        from forms import fill
+
         from puzzle.gui import menus
 
+        fill(w, start="box", name="Part 1")
         menus.new_part(w)
         w.left_tabs.setCurrentWidget(w.workbench)
         tool = w.workbench.start_tool("fillet")

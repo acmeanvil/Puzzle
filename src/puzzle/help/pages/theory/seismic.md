@@ -139,9 +139,10 @@ Studies → ELF loads…, and read the numbers with MCP [seismic_report](help:mc
   orthogonal effects (12.5).
 - The redundancy factor ρ and the vertical effect $E_v = 0.2 S_{DS} D$ are yours to
   include in the combinations.
-- On CalculiX and Code_Aster the ELF shear for scaling treats the whole model as one
-  level: W is the total mass times g, and the height is the model's z extent. PyNite
-  uses the frame's levels.
+- On CalculiX and Code_Aster the ELF shear for scaling takes the frame's levels, as
+  PyNite does (`spectra.elf_levels`): each member's weight half to each end node, the
+  supports' half left out (12.7.2). A model with no frame is one level: W is the total
+  mass times g and the height its z extent.
 - Modes must capture most of the mass. Check `mass_participation`; ASCE 7 asks for
   enough modes to reach 100 % (12.9.1.1), and too few modes understate $V_t$.
 - Drift uses elastic displacements from a linear analysis. P-Delta effects on drift

@@ -114,6 +114,29 @@ def read_variable(path: Path, parts: list[Part], components: int) -> np.ndarray:
     return np.vstack(chunks)
 
 
+def times(case_file: Path) -> list[float]:
+    """The .case file's output times (a transient run's), or [] for one state."""
+    text = case_file.read_text(encoding="utf-8")
+    found = re.search(r"time values:\s*([-+0-9.eE\s]+)", text)
+    return [float(t) for t in found.group(1).split()] if found else []
+
+
+def series(case_file: Path) -> list[dict[str, tuple[str, int, Path]]]:
+    """Each output time's variables (name -> (kind, components, file)), in time order:
+    a transient case's files are numbered by its wildcard, one per time."""
+    text = case_file.read_text(encoding="utf-8")
+    out: list[dict] = []
+    for kind, name, pattern in re.findall(
+        r"(scalar|vector) per element:\s*(?:\d+\s+)?(\S+)\s+(\S+)", text
+    ):
+        files = sorted(case_file.parent.glob(pattern.replace("*", "?")))
+        while len(out) < len(files):
+            out.append({})
+        for i, path in enumerate(files):
+            out[i][name] = (kind, 1 if kind == "scalar" else 3, path)
+    return out
+
+
 def read_case(case_file: Path) -> tuple[list[Part], dict[str, tuple[str, int, Path]]]:
     """Geometry and the variables listed in a .case file: name -> (kind, components, file)."""
     text = case_file.read_text(encoding="utf-8")

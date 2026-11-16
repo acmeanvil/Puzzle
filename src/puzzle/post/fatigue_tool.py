@@ -70,6 +70,20 @@ def measure(tensors: np.ndarray, how: str, signed: bool) -> np.ndarray:
     return v if signed else np.abs(v)
 
 
+def load_kind(settings) -> str:
+    """Shigley's load factor kc (Eq. 6-26) for the stress the tool compares: a shear
+    component alone is torsion (0.59); a part said to carry axial loading only (the
+    size basis "axial") takes 0.85, which is Eq. 6-66's axial alternating stress divided
+    by 0.85; otherwise the von Mises stress or a normal stress of combined loading, 1.
+    A von Mises stress can't be split into its axial and bending parts, so a mixed axial
+    and bending load takes kc = 1 (unconservative by up to 15 % where axial governs)."""
+    if settings.stress in ("xy", "yz", "zx"):
+        return "torsion"
+    if settings.size == "axial":
+        return "axial"
+    return "combined"
+
+
 def _equivalent_strain(tensors: np.ndarray) -> np.ndarray:
     item = Item("strain:equivalent", "", "strain", "equivalent", "Strain", None)
     return compute(item, tensors, TENSOR)
@@ -119,6 +133,7 @@ class _Material:
                     temperature_c=settings.temperature,
                     reliability=settings.reliability,
                     kf=settings.misc_factor,
+                    loading=load_kind(settings),
                 )
             except ValueError as exc:
                 raise PuzzleError(f"{material.name}: {exc}", code="invalid") from exc

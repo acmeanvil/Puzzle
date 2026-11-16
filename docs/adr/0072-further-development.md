@@ -492,8 +492,9 @@ FEniCSx, threaded beam-bolt ends, and the modelled bolts of ADR 0077. Left:
 - Advisor text in tooltips and form descriptions; a guided tour once help exists (0040).
 - The help and documentation system with worked examples, ADR 0083 (it supersedes
   0075). Built 2026-11-15: steps 1-3 (the Help window, F1, the generated reference,
-  guides, MCP `help`), step 4 (nineteen theory notes) and the verification pages; left:
-  the static site and PDF, the tutorials (on `main`).
+  guides, MCP `help`), step 4 (nineteen theory notes), the verification pages and step 5
+  (the static site and PDF); left: the tutorials (on `main`), where the site is
+  published.
 - Found writing the guides (2026-11-15), features an agent reaches but the GUI doesn't
   (each a form or menu item to add): making a weld (`weld_add`), a VDI 2230 check
   (`bolt_vdi2230`), weld fatigue (`weld_fatigue`), a parameter sweep step, a frame from a
@@ -550,6 +551,24 @@ FEniCSx, threaded beam-bolt ends, and the modelled bolts of ADR 0077. Left:
      autonomy control.
   10. **New part…** made one behaviour: both menus open one chooser (sketch, box,
       cylinder, import), the sketch first.
+  **Built (2026-11-15):** all ten, each in the menu bar and the context menus named,
+  with a help key (`form:<name>`, a guide's section) and **Ask the agent…** where an
+  agent is set up (`gui/agent_prefill.py`: the request typed into the agent panel, not
+  sent); `tests/test_gui_tool_forms.py` and `tests/test_gui_mesh_and_selection_forms.py`
+  compare each form's batch or table with its tool's. Modules: `gui/weld_forms.py`,
+  `gui/vdi2230_form.py` (read only, Save as CSV/text), `gui/sweep_form.py`
+  (`sweep.with_sweep_step`), `frame_editor.new_frame_from_dxf`,
+  `convergence_panel.new_mesh_study` (`convergence.mesh_study_command`),
+  `gui/mesh_shootout.py` (`shootout.mesh_shootout_report`, which MCP `mesh_shootout`
+  now calls), `gui/selection_rule.py`, Settings > Agent's This project box
+  (`settings_dialog.set_autonomy`, the same SetAutonomy as `puzzle autonomy --mcp`),
+  `menus.new_part`. As built, short of the plan: the shoot-out compares Gmsh with
+  Netgen only (what `run_mesh_shootout` does) in a Messages tab; a rule's point and
+  direction start from what was picked before the form opened (a modal form can't hand
+  off to the view); the sweep form leaves materials to the study's Materials… dialog;
+  the weld preview shows the part and faces, not stations (they need a mesh); the DXF
+  preview is text. Agents make sweep steps, mesh studies and rules with `submit`; an
+  MCP tool of their own each would match the forms.
 - Another docking library behind `gui/docking.py` (optional); menu icons; a focus-order
   review of every dialog; `operators.TYPE_COLOURS` as theme tokens (0045).
 - 3D mouse: the macOS check beside 3DxWare; axis signs on real hardware (Windows only so
@@ -578,32 +597,29 @@ FEniCSx, threaded beam-bolt ends, and the modelled bolts of ADR 0077. Left:
   criterion to the budget (it now stops at once and says to use the quantity
   criterion); VDI 2230 equation numbers in `vdi2230.py`; the contact summaries' "a
   tenth of the load" and "over 10 increments", and CLAUDE.md's K = 50 E/h (the default
-  is 10) and Elmer magnetics solver. Left:
-  - fatigue: k_c = 1 for every load (`materials/fatigue.py`), where Shigley's combined
-    loading (Eq. 6-66) divides an axial alternating stress by 0.85, about 15 %
-    unconservative for axial loading; the size factor is used past its 254 mm range
-    unbounded.
-  - threads: `threads.stiffness` takes the load flank's angle for both flanks, wrong on
-    asymmetric forms (buttress, DIN 513) and with `bearing="other"`; `nodal_areas` is
-    dead code against `thread_pairs.face_shares`.
-  - spectra: CalculiX's and Code_Aster's ELF scale (`spectra.py`) treats the model as
-    one level (W from the whole mass, the height from every node), PyNite's uses the
-    frame's levels, so the C_u T_a cap can differ by solver.
-  - direct analysis: one stainless material sets 0.004 Y_i notional loads on the whole
-    frame; plate pressures are left out of Y_i (`pynite/case.py`).
-  - FEniCSx theta schemes take loads at the step's end, not θF_{n+1} + (1−θ)F_n (a heat
-    flux on an amplitude under θ < 1 only).
-  - MMG's constant `C_LINEAR = 2/9` is labelled 3D; Frey and Alauzet's c_d gives 9/32
-    in 3D (about 11 % on sizes): check the source, then fix.
-  - `ResultProbe.samples` defaults to 50 (51 points) where ADR 0042 and the GUI say 47.
-  - a linear combination warns only for plasticity, not contact or large deflection
-    (`post/derived.py`); the ASME P + Q ≤ 3S row uses one run's stresses where VIII-2
-    means the range (linearize a range combination).
-  - `cyclic.check` checks step types only for cyclic, not linear periodicity: decide.
-  - stale words: `frames/design.py` and `MemberDesign` say stainless and aluminium are
-    refused; `symmetry.py`'s docstring that only CalculiX writes oblique planes;
-    `SizeFieldControl.field` says jumps where `Estimate.sizes` is used; ADR 0085's brick
-    length (the code uses V/A_max); `openfoam/case.py`'s residual targets.
+  is 10) and Elmer magnetics solver. **Fixed (2026-11-15, the second round):**
+  - fatigue: the load factor k_c (Shigley Eq. 6-26: 0.85 with the size basis axial,
+    0.59 for a shear component, 1 otherwise; Example 6-10's S_e 33.9 kpsi checked
+    against the 10th edition) and k_b held at its 254 mm value past Eq. 6-20's range.
+  - threads: each flank stiffens by its own angle (`stiffness(..., angle=)`,
+    `ThreadPairs.angles`; buttress's 7° and 45° flanks differ); `nodal_areas` removed.
+  - spectra: the FE solvers' ELF scale takes the frame's levels as PyNite does
+    (`spectra.elf_levels`); a model with no frame is one level.
+  - direct analysis: 0.004 Y_i from the stainless members' and plates' loads, 0.002
+    from carbon steel's (a shared node the length-weighted mean); plate pressures in Y_i.
+  - FEniCSx theta schemes take an amplitude at θ g(t_n+1) + (1−θ) g(t_n) (a ramped flux
+    under Crank-Nicolson had put 20 % too much heat in).
+  - MMG: c = 9/32 in 3D, 2/9 in 2D (Frey and Alauzet 2005), tested on a quadratic field.
+  - a linearization takes 47 points unless told (`ResultProbe`, any client); a linear
+    combination warns for contact and large deflection as for plasticity, naming which.
+  - `cyclic.check`: decided, a periodic cell refuses modal, buckling and harmonic steps
+    as a sector does (its in-phase solution only).
+  - the stale docstrings and ADR 0085's brick length.
+  Left: the ASME P + Q ≤ 3S row uses one run's stresses where VIII-2 means the range
+  (linearize a range combination); a mixed axial and bending load takes k_c = 1 (an
+  explicit loading setting would need a schema field); `threads.flank_areas` is now
+  used by tests only; the frame path's W for coarse member layouts puts half a column's
+  weight at its top node only (12.7.2's levels, crude for one-member columns).
 
 - Found writing the verification pages (ADR 0083, 2026-11-15). Fixed then: the
   optimisation benchmark's hand answer (7.37 mm for E = 200 GPa; 7.25 mm with the
@@ -611,37 +627,46 @@ FEniCSx, threaded beam-bolt ends, and the modelled bolts of ADR 0077. Left:
   and 380.6 MPa (0.2605, 380.2: it left out 1 + H/E); the fastener test's "expands the
   beam into solids"; ADR 0037's Code_Aster elastic support "refused for now"; ADR 0078's
   and CLAUDE.md's −6.8 % weld line force (−6.3 % since the couplings fix); the time
-  integration note quoting the 0.05 K tolerance as the 0.002 K measured. Left:
-  - tests far looser than what was measured, where a regression could hide: skin-effect
-    R 3 % (measured 0.2-0.7 %), the Elmer/FEniCSx harmonic shoot-out 2 % (0.05-0.16 %),
-    the transient eddy shoot-out 1 % (1e-6), the step current 4 % (0.5 %), heat
-    generation 0.5 % (five digits), TEAM 7 RMS 6 % (2.2 %, recorded only in commit
-    5697eef), the pretension F + P/2 3 % (−0.25 %), P-Delta and DAM 0.5 % (exact to the
-    printed digits), FE spectra 3 % (ADR 0079: within 2 %), prestress 0.5 % (CLAUDE.md:
-    0.1 %), HSS 4 % (ADR 0055: 3 %), the tie's worst node 25 % (17 %). Tighten each after
-    a run on every solver it covers.
-  - planned and not built: `test_belleville.py`'s series and parallel pairs (its
-    docstring describes them); ADR 0066's plate with a hole adapted to 2 % and the
-    L-corner reported as a singularity; ADR 0080's sliding, lift-off and factor
-    benchmarks; TEAM 7 at 200 Hz; `test_quadratic_bricks.py`'s "20 and 27 nodes agree to
-    0.5 %" has no assert.
-  - records that disagree: transient heat "within 0.34 %" (CLAUDE.md) against about
-    0.35 K of the 80 K rise (0.44 %) in the test's comment; ADR 0027's fastener stretch
-    −0.7 % (its table) and 0.01 % (later); ADR 0077's fillet −0.9 % against 2.80/2.82
-    (−0.7 %); the Lorentz-cloud reactions 7e-7 (ADR 0044) against 0.8-1.5e-5 (the test);
-    ADR 0044's moved pressure on two solvers (the test runs four); ADR 0078's "refused on
-    every solver but CalculiX" (superseded by step 3); `test_adapt_solves.py`'s Netgen
-    "in four passes" with `passes=3`; `test_aisc370.py`'s docstring naming the LRFD 90.9
-    kips where it asserts the ASD 60.5.
-  - the pages' citations the repo names without details (Almen and László, Tipton,
-    Sorem and Rolovic, Bisshopp and Drucker, Cowper, MacNeal and Harder, and the
-    textbooks) were completed from the writers' knowledge: check each before the
-    manual is published.
+  integration note quoting the 0.05 K tolerance as the 0.002 K measured. **Fixed
+  (2026-11-15, the second round), each run on every solver it covers:**
+  - tolerances tightened to two or three times what was measured: skin-effect R 1.5 %,
+    the harmonic shoot-out 0.5 %, the transient eddy shoot-out 1e-4 (1.7e-6 measured),
+    the step current 1.5 %, heat generation 0.05 % of the rise, TEAM 7 RMS 3.5 % (2.6 %
+    Elmer, 2.3 % FEniCSx), the fastener F + P/2 1 %, P-Delta and DAM 0.1 %, FE spectra
+    1e-6 (with the frame's levels), prestress 0.25 %, the tie's worst node 20 %,
+    transient conduction 1 % of the rise (0.346 K on all four). HSS stays at 4 %: it
+    is CalculiX's missing shear term (3 %), not slack.
+  - built: Belleville springs stacked (series 0.2 %, parallel 3.5 % at light load from
+    the nested faces' contact); 20 against 27 nodes (0.99959 on Code_Aster and Elmer);
+    the plate with a hole adapted (0.46 % in 3305 elements, a uniform mesh of 3998 only
+    0.89 %; K_t +3.7 % of Heywood's, a 5 mm plate above plane stress); a stress at a
+    singularity reported **diverging** by `convergence.verdicts` (each finer mesh moving
+    it as much as the last); weak springs sliding (friction holds 0.1 N sideways; 10 N
+    lifted the interface's edge, so the load is small) and the factor (3.2e-6 between
+    1e-6 and 1e-7).
+  - records reconciled: transient heat (0.346 K, 0.43 %: CLAUDE.md's 0.34 % was the
+    kelvin figure), ADR 0027's stretch, ADR 0077's fillet (−0.7 %), ADR 0044's Lorentz
+    clouds and moved pressure, ADR 0078's refusals, the Netgen and AISC 370 docstrings.
+  Left: TEAM 7 at 200 Hz (needs the published 200 Hz measurements in the test); a
+  lift-off solved end to end on weak springs (CalculiX diverged; the warning is checked
+  on results); and the pages' citations the repo names without details (Almen and
+  László, Tipton, Sorem and Rolovic, Bisshopp and Drucker, Cowper, MacNeal and Harder,
+  the textbooks), completed from the writers' knowledge: check each before the manual
+  is published.
 
 - Code_Saturne's capability matrix claims transient flow (`fluid_flow`: stationary,
   transient), but no benchmark runs one and its adapter and CLAUDE.md describe steady
   flow (found writing the help, 2026-11-15). The maintainer chose a benchmark
-  (2026-11-15): a transient Code_Saturne case against a closed form.
+  (2026-11-15): a transient Code_Saturne case against a closed form. **Built
+  (2026-11-15):** the writer refused transient steps (it failed safe), and nothing
+  marched in time. It now does: a constant `time_step` to `end_time`, first order,
+  results every `output_every` steps and at the start, one step per output time
+  (`ensight.series`/`times`); the initial temperature is Code_Saturne's reference
+  temperature (a formula is compiled into the solver, MEG, which the image can't link:
+  no zlib or gfortran development files); `output_every` is a shared setting it takes.
+  Benchmark `tests/integration/test_cfd_transient.py`: a temperature front in plug flow
+  against Ogata and Banks, 0.53 % of the rise at 10 s and 0.50 % at 20 s (1 % allowed).
+  OpenFOAM's adapter stays steady (simpleFoam).
 
 - Elmer's capability matrix claimed `bonded_nonconformal`, but `elmer/sif.py` writes no
   mortar tie and refuses it (it failed safe, with code `unsupported`). Fixed 2026-11-09:

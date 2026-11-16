@@ -29,12 +29,14 @@ checked here beyond what they refuse.
 | Press fit | Lamé | CalculiX, Code_Aster | 3 % pressure; 5 % hoop | −0.32 %, −0.20 % |
 | Footing on a compression-only support | rigid footing | CalculiX, Code_Aster | 2 % | within 0.7 % |
 | Weak springs | p A through the contact | CalculiX, Code_Aster | 1e-4 | 99.9995 N of 100 |
+| Weak springs, sliding and factor | friction holds; factor-free | CalculiX, Code_Aster; CalculiX | 1 %; 1e-5 | 0.0994 N of 0.1; 3.2e-6 |
 | Section pretension and lock | F, F + P/2, d k_b/2 | CalculiX, Code_Aster | 0.5 % | within 0.04 %; d +0.38 % |
-| Beam fasteners | statics, FL/(EA) | CalculiX, Code_Aster | 1e-4; 2 % stretch | exact; F + P/2 −0.25 % |
+| Beam fasteners | statics, FL/(EA) | CalculiX, Code_Aster | 1e-4; 2 % stretch; F + P/2 1 % | exact; F + P/2 −0.25 % |
 | Bolt joint styles and anchors | preload, statics | CalculiX, Code_Aster | 0.1 %; 1e-4 | exact |
 | Modelled bolt preload | 40 kN | CalculiX, Code_Aster | 2 % | −0.5 %, +0.8 % |
 | Revolved bolt mesh | F/A; Tipton's K_t | CalculiX, Code_Aster | 1 %; 4 % | 0.04 % to tets; 2.80 (2.82) |
 | Belleville spring | Almen–László | CalculiX | 12 % | 9.9-10.0 % below |
+| Belleville springs stacked | the single spring's curve | CalculiX | series 1 %, parallel 5 % | 0.2 %; 3.5 % |
 | Smooth thread against meshed teeth | meshed M16 thread | CalculiX | 3 points first; 5 % stiffness | 47.6 % (50.0); +2.6 % |
 | Thread forms' wedges | F tan α | CalculiX, FEniCSx, Code_Aster | 10-15 % | four digits |
 | Threads across solvers | CalculiX | FEniCSx, Code_Aster | 2 points; 2 % | four digits |
@@ -64,7 +66,7 @@ $$\delta = \frac{P L^3}{3 E I} + \frac{P L}{\kappa G A}$$
 
 `tests/integration/test_contact.py` `test_tie_passes_uniform_stress` holds the
 displacement to 0.1 % of its largest value and the stress to 0.2 % away from the joint;
-within 5 mm of it the mean error must stay under 2 % and the worst node under 25 %
+within 5 mm of it the mean error must stay under 2 % and the worst node under 20 %
 (the test records 17 % at the worst node on Linux's mesh, 1 % mean: a node-to-surface
 tie disturbs the stress locally). `test_tie_carries_bending` holds the tip deflection
 to 2 % of the beam and to 0.5 % of the same bar meshed conformally. Both run on
@@ -185,7 +187,15 @@ singular; Puzzle adds weak springs (ADR 0080).
 `tests/integration/test_weak_springs_solved.py` asks the fixed end's reaction to equal
 p A within 1e-4 and the springs to carry under 1e-4 of it, with no
 `weak_springs_carry` warning: frictional on CalculiX and Code_Aster, frictionless on
-CalculiX. ADR 0080 records 99.9995 N of 100 with 4.4e-4 N in the springs. A lift-off
+CalculiX. ADR 0080 records 99.9995 N of 100 with 4.4e-4 N in the springs.
+`test_friction_holds_a_sliding_load_under_its_limit` (CalculiX, Code_Aster) adds a
+sideways 0.1 N on the end, under the friction limit: its reaction within 1 % and the
+springs under 1 % of it. It is that small because a sideways force on the bar's end
+puts a moment on the 10 mm interface, and past about 1.7 N one edge lifts (10 N did,
+and the body slid onto its springs). Measured (2026-11-15): 0.0994 and 0.0995 N, the
+springs 7e-4 N. `test_the_answer_does_not_depend_on_the_spring_factor` (CalculiX):
+the end displacement changes by under 1e-5 between factors 1e-6 and 1e-7; measured
+3.2e-6. A lift-off
 solved end to end is not benchmarked (it diverged on CalculiX); the warning is checked
 on results in `tests/test_weak_springs.py`.
 
@@ -219,8 +229,9 @@ distributing ends (ADR 0027):
   fastener carries P in shear within 1e-4, and by statics of the plate hanging on it the
   moment runs from 7.5 P mm to 2.5 P mm along it, within 0.1 %: exact on both.
 - **Pretension:** the block tightened to F = 5 kN over a support as stiff as the bolt,
-  then locked and pulled by P = 2 kN: F within 1e-4, then F + P/2 within 3 % (the
-  plates' own give). ADR 0037 records 5985.1 N on both (−0.25 %).
+  then locked and pulled by P = 2 kN: F within 1e-4, then F + P/2 within 1 % (the
+  plates' own give). ADR 0037 records 5985.1 N on both (−0.25 %), measured again
+  2026-11-15.
 
 `tests/integration/test_bolt_joints.py` (ADR 0050): two 10 mm plates and an M8 bolt
 tightened to 5 kN carry 5 kN within 0.1 % whatever the ends bear on (hole walls, head
@@ -275,6 +286,13 @@ to stay within 12 % of the formula. The test records CalculiX 9.9-10.0 % below i
 every point: the formula takes the section as turning rigidly about a neutral circle,
 which over-predicts a spring this wide ($D_e/D_i \approx 2$). Code_Aster is not run:
 held only by its rim contacts, its solve starts singular or fails to converge.
+
+`test_stacked_springs_follow_the_single_one` (CalculiX) checks two exact relations
+against the single spring's own curve: two springs face to face (series) take its force
+at twice the deflection, within 1 %; two nested (parallel) twice its force at the same
+deflection, within 5 %. Measured (2026-11-15): series 0.2 %; parallel 3.5 % at 0.2
+$h_0$ falling to 1.4 % at the stroke, from the nested springs' faces in contact, which
+the single spring doesn't have.
 
 ## Threads
 

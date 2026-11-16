@@ -267,6 +267,7 @@ class ThreadPairs:
     normals: dict[str, np.ndarray] = field(default_factory=dict)  # flank -> (n, 3)
     areas: dict[str, np.ndarray] = field(default_factory=dict)  # flank -> (n,) m²
     stiffness: dict[str, np.ndarray] = field(default_factory=dict)  # flank -> (n,) N/m
+    angles: dict[str, float] = field(default_factory=dict)  # flank -> its angle, degrees
     clearance: float = 0.0
     flanks: tuple[str, ...] = ("upper",)
 
@@ -288,28 +289,6 @@ def pairs(source_xyz, source_ids, target_xyz, target_ids, frame: Frame, *, limit
     distance, index = cKDTree(t).query(s)
     keep = distance <= (limit if limit is not None else 0.1 * r0)
     return (np.asarray(source_ids)[keep], np.asarray(target_ids)[index[keep]], distance[keep])
-
-
-def nodal_areas(faces: np.ndarray, xyz_of) -> dict[int, float]:
-    """Each node's tributary area (m²) on a face mesh: three- and six-node triangles
-    (a six-node triangle's consistent load lumps it on the midside nodes: a third each,
-    corners nothing), four-node quadrilaterals a quarter each."""
-    out: dict[int, float] = {}
-    faces = np.asarray(faces)
-    corners = 3 if faces.shape[1] in (3, 6) else 4
-    for f in faces:
-        p = np.array([xyz_of(int(n)) for n in f[:corners]])
-        if corners == 3:
-            area = 0.5 * np.linalg.norm(np.cross(p[1] - p[0], p[2] - p[0]))
-        else:
-            area = 0.5 * np.linalg.norm(np.cross(p[2] - p[0], p[3] - p[1]))
-        if faces.shape[1] == 6:
-            shares = [(int(n), area / 3) for n in f[3:6]]
-        else:
-            shares = [(int(n), area / corners) for n in f[:corners]]
-        for n, a in shares:
-            out[n] = out.get(n, 0.0) + a
-    return out
 
 
 def flank_areas(cylinder_areas: np.ndarray, thread: Spec, flank: str) -> np.ndarray:
@@ -352,19 +331,22 @@ def yamamoto(alpha: float, pitch: float, nu: float, nut: bool, d2: float | None 
 
 def stiffness(areas: np.ndarray, thread: Spec, e_screw: float, e_nut: float,
               compliance="teeth", size: float | None = None, nu_screw: float = 0.3,
-              nu_nut: float = 0.3, rigid_core: bool = False) -> np.ndarray:  # fmt: skip
+              nu_nut: float = 0.3, rigid_core: bool = False,
+              angle: float | None = None) -> np.ndarray:  # fmt: skip
     """Each pair's flank stiffness (N/m) along its normal for flank `areas` (m²):
     `teeth`, Yamamoto's teeth of both sides in series (module docstring) as a spring
     along n: a patch of cylinder area A_c (one pitch high) has axial stiffness
     A_c / (P (K_s/E_s + K_n/E_n)), and along n that is k = A_flank / (P ΣK/E cos α);
     `rigid`, a penalty of 50 E* A / h (h the thread's depth); or a stiffness per area
-    (N/m³) given as a number. `rigid_core`: the screw is a beam bolt's core, rigid
+    (N/m³) given as a number. `angle` is the flank's own angle α (degrees, from
+    `flank_angle`), since an asymmetric form's flanks differ (a buttress's 7° and 45°);
+    None takes the load flank's. `rigid_core`: the screw is a beam bolt's core, rigid
     across its axis, so its radial contraction (Yamamoto's δ5 of the screw, which a
     solid screw's continuum gives) is added to the give, untuned."""
     a = np.asarray(areas, dtype=float)
     e_star = 1.0 / (1.0 / e_screw + 1.0 / e_nut)
     if compliance == "teeth":
-        alpha = thread.angles[0]
+        alpha = thread.angles[0] if angle is None else float(angle)
         give = (yamamoto(alpha, thread.pitch, nu_screw, False) / e_screw
                 + yamamoto(alpha, thread.pitch, nu_nut, True) / e_nut)  # fmt: skip
         give *= TEETH_FACTOR

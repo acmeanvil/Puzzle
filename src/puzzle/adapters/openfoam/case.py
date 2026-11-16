@@ -13,7 +13,8 @@ transfer (with fluid_flow) transports temperature as a passive scalar: temperatu
 an inlet or wall, heat_flux q (W/m^2 into the fluid) on a wall, other walls adiabatic.
 fluid_flow settings: turbulence_model = laminar (default), k-epsilon or k-omega-SST,
 and turbulent_prandtl (default 0.85). Step setting: iterations (SIMPLE, default 2000;
-simpleFoam stops earlier once the residuals fall below 1e-6).
+simpleFoam stops earlier once every initial residual is below its target: p 1e-6, U
+1e-7, k/epsilon/omega 1e-6, T 1e-8, or the step's `tolerance` for p and U).
 
 Results are per cell. OpenFOAM's pressure is kinematic (p / rho); it is stored in Pa,
 and the turbulent viscosity as a dynamic viscosity (Pa s), as Code_Saturne reports it.

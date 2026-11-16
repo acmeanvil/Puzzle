@@ -207,8 +207,10 @@ def thread_pairs(project, comp, mesh: Mesh, contact) -> threads.ThreadPairs:
         alpha = math.radians(threads.flank_angle(thread, flank, load_up))
         out.normals[flank] = normals(xyz, frame, thread, flank, load_up, planar)
         out.areas[flank] = cylinder / math.cos(alpha)
+        out.angles[flank] = math.degrees(alpha)
         out.stiffness[flank] = threads.stiffness(out.areas[flank], thread, e_screw, e_nut,
-                                                 contact.thread.compliance)  # fmt: skip
+                                                 contact.thread.compliance,
+                                                 angle=out.angles[flank])  # fmt: skip
     if not planar:
         # In 3D a tie along the flanks alone leaves the screw free to turn but for the
         # helix's small part (L / 2πr): pulled, it unscrewed until the springs balanced,

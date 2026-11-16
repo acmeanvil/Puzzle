@@ -98,7 +98,7 @@ def test_tie_passes_uniform_stress(tmp_path, solver):
     # Exact away from the joint; a node-to-surface tie disturbs stress locally, at the
     # worst node by how the two meshes meet there (17 % on Linux's Gmsh mesh, 1 % mean).
     assert error[~near].max() < 2e-3
-    assert error[near].mean() < 0.02 and error[near].max() < 0.25
+    assert error[near].mean() < 0.02 and error[near].max() < 0.2
 
 
 @over("calculix", "code_aster")

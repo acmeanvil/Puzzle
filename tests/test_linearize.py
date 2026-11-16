@@ -130,3 +130,20 @@ def test_checks_against_an_allowable():
     assert rows[1]["value"] == pytest.approx(160e6) and rows[1]["limit"] == pytest.approx(180e6)
     local = checks(out, 60e6, membrane="local")
     assert local[0]["limit"] == pytest.approx(90e6) and not local[0]["ok"]
+
+
+def test_a_linearization_takes_47_points_unless_told():
+    """ADR 0042: 47 points through the wall by default, whoever makes the probe (the
+    GUI's form did; a command or the agent got the path's 50, then 51)."""
+    from uuid import uuid4
+
+    from puzzle.model.schema import ResultProbe
+
+    a, b = [0.0, 0.0, 0.0], [0.01, 0.0, 0.0]
+    made = ResultProbe(name="w", source=uuid4(), type="linearized", point=a, end=b)
+    assert made.samples == 47
+    assert ResultProbe(name="w", source=uuid4(), type="linearized", point=a, end=b,
+                       samples=21).samples == 21  # fmt: skip
+    assert ResultProbe(name="p", source=uuid4(), type="path", point=a, end=b).samples == 50
+    again = ResultProbe.model_validate(made.model_dump(mode="json"))
+    assert again.samples == 47

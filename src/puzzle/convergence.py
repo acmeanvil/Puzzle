@@ -2,7 +2,8 @@
 than the last by a ratio, with its quantities of interest read at each, and Roache's
 grid convergence index from the last three: the observed order, the extrapolated
 value, the GCI and a verdict ("converged within 0.3 %", "not converged: refine",
-"oscillating: not in the asymptotic range").
+"oscillating: not in the asymptotic range", "diverging": each change as large as the
+last, as at a singularity).
 
 Each level is the study's own run, stored with its labels ("mesh": "level 2: 4 mm") and
 cached by its run key, so a convergence check that stopped resumes, and its runs open
@@ -242,6 +243,16 @@ def verdicts(levels_: list[Level], target: float = 0.02, dim: int | None = None)
                        "range; refine further")  # fmt: skip
             out.append(v)
             continue
+        if abs(e21) >= abs(e32):
+            # Each finer mesh moves it as much or more, the same way: it grows without
+            # bound, as a stress at a singularity does (ADR 0066 decision 7).
+            v.state = "diverging"
+            v.words = ("each finer mesh changes it as much as the last, the same way: it "
+                       "grows without bound, as a stress at a singularity does (a "
+                       "re-entrant corner, a point load, a fixed edge); read it a short "
+                       "distance away, round the corner, or linearize")  # fmt: skip
+            out.append(v)
+            continue
         p = abs(math.log(abs(ratio))) / math.log(r21)
         for _ in range(50):  # p = |ln|e32/e21| + q(p)| / ln r21
             q = math.log((r21**p - s) / (r32**p - s))
@@ -278,6 +289,21 @@ def settings(project, name: str):
         return project.get(found.study, Study), found.check()
     study = resolve(project, name, Study)
     return study, study.convergence or Convergence()
+
+
+def mesh_study_command(study, *, name: str, levels: int = 3, ratio: float = 1.5,
+                       target: float = 0.02, quantities=()):  # fmt: skip
+    """The Create of a mesh study (ADR 0066 item 1) on `study`: what the GUI's New mesh
+    study… submits and what an agent's `submit` would, so the two agree. `quantities`
+    are output ids (operators or result tools) or DesignOutputs."""
+    from puzzle.commands.model import Create
+    from puzzle.model.schema import DesignOutput
+
+    outs = [q if isinstance(q, DesignOutput) else DesignOutput(source=q) for q in quantities]
+    data = {"name": name, "study": str(study.id), "levels": int(levels),
+            "ratio": float(ratio), "target": float(target),
+            "quantities": [o.model_dump(mode="json") for o in outs]}  # fmt: skip
+    return Create(kind="mesh_study", data=data)
 
 
 def report(levels_: list[Level], verdicts_: list[Verdict], target: float) -> dict[str, Any]:

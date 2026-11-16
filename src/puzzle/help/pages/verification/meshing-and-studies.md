@@ -22,6 +22,8 @@ also have unit tests on exactly known fields.
 | ZZ estimate on exact fields | exact energy-norm error | none (unit test) | effectivity 0.7-1.3; orders ±0.2, ±0.35 | effectivity 1.01; orders 1.0, 1.96 |
 | Adaptive refinement, Gmsh | converged tip deflection | CalculiX | 0.2 %, error 1.5 %, below 3037 elements | 1.24 % in 1273 elements |
 | Adaptive refinement, Netgen | falling error | CalculiX | below 2.5 % in three passes | 3.94 → 1.71 % |
+| Adaptive refinement, plate with a hole | Heywood K_t 3.03; a uniform mesh as fine | CalculiX | 0.5 % error, K_t 5 % | 0.46 % in 3305 elements, K_t +3.7 %; uniform 0.89 % in 3998 |
+| A stress at a singularity | Williams' corner exponent | none (unit test) | reported diverging | diverging |
 | Anisotropic adaptation, MMG | erfc heat layer | CalculiX | 0.7 K, half the isotropic error | 0.053 % vs 0.14 %, within 0.6 K |
 | Mesh shoot-out | Gmsh against Netgen | CalculiX | 1 % on peak displacement | 0.005 % |
 | Material sweep | tip deflection ∝ 1/E | CalculiX | 1e-5 | passes |
@@ -118,6 +120,19 @@ second-order tets, adapted to a 1.5 % energy-norm error:
 - `test_netgen_adapts_through_its_size_file`: three passes, the error falling each
   time and below 2.5 % at the end. Measured (ADR 0066): 3.94 → 1.71 %. Netgen's size
   file can only make elements smaller.
+- `test_a_plate_with_a_hole_adapts_where_the_stress_concentrates`: a quarter of a
+  200 × 200 × 5 mm steel plate with a 20 mm hole, pulled at 10 MPa, symmetric on two
+  faces, from 12 mm tets adapted to 0.5 % (a plate in tension is mostly uniform stress,
+  so 2 % comes on the first mesh). The peak σxx at the hole's top must be within 5 % of
+  Heywood's finite-width $K_t = (2 + (1 - d/W)^3)/(1 - d/W) = 3.03$, and a uniform mesh
+  with at least as many elements must stay above 0.5 %. Measured (2026-11-15): 802,
+  2214, 2786 and 3305 elements at 1.55, 0.62, 0.50 and 0.46 %; the peak 3.27 on the
+  first mesh by nodal overshoot and 3.14 adapted (+3.7 %: a 5 mm plate's mid-plane
+  peak sits above plane stress, and this one is as long as it is wide); uniform at
+  4.53 mm, 3998 elements, 0.89 %.
+- `tests/test_convergence.py` `test_a_stress_at_a_singularity_is_reported_diverging`:
+  a peak growing as $h^{-0.4555}$, Williams' exponent at a 270° re-entrant corner,
+  is reported diverging, with no order or GCI.
 - `test_mmg_follows_a_heat_layer_better_than_isotropic`: a steel bar 200 × 10 × 10 mm
   at 20 °C with one end held at 100 °C for 2 s, a thin layer of heat whose exact
   solution is

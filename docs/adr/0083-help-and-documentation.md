@@ -1,8 +1,8 @@
 # 0083. A complete help and documentation system, with worked examples (supersedes 0075)
 
-- Status: Accepted; steps 1-3 built (2026-11-15): the Help window, search and F1, the
-  generated reference and its tests, the guides; theory notes, the static site and PDF,
-  and the tutorials (0075's list, on `main`) to come
+- Status: Accepted; steps 1-5 built (2026-11-15): the Help window, search and F1, the
+  generated reference and its tests, the guides, theory notes, verification pages, the
+  static site and PDF; the tutorials (0075's list, on `main`) to come
 - Date: 2026-11-11
 
 ## Context
@@ -158,6 +158,20 @@ integration test is on no verification page and not listed as plumbing
 optimisation benchmark's 7.37 mm was for E = 200 GPa; the generic steel's 210 GPa gives
 7.25 mm, now computed in the test and held to 1 % instead of 4 %) and stale docstrings
 and records, fixed; the rest is on ADR 0072.
+
+**Built (2026-11-15), step 5, the static site and the PDF:** `help/site.py`, run by
+`scripts/build_help_site.py OUT [--pdf FILE]` (15 s for both). The site: a page per
+help page with the contents beside it, `index.html`, search in the browser over every
+heading (`search.js`), light and dark, phone width; equations drawn by mathtext as
+inline SVG, as the Help window draws them; `help:` links to the page and heading (a
+help key through `help.lookup`), `puzzle:` links as plain text, since a browser has no
+tool to open. The PDF: every page in the contents' order after a cover and contents
+list, equations as PNG at text size, printed by Qt (`QTextDocument`, `QPdfWriter`, A4)
+in matplotlib's DejaVu fonts, since Qt's offscreen platform finds none of its own (306
+pages). Markdown by markdown-it-py, which `mcp` brings in. `tests/test_help_site.py`:
+every page written, every link and search entry landing on a file and an anchor that
+exist, no TeX or `help:` left, the PDF whole. Where it's published (an Artifact page or
+GitHub Pages) and a release job building the PDF are the maintainer's to choose.
 
 ## Consequences
 

@@ -12,9 +12,12 @@ their modes normalised to unit generalised mass with each mode's participation f
 - the modes combine by CQC (12.9.1.3) at the design's damping, component by component;
 - the modal base shear V_t is the CQC of each mode's m_eff S_a g I_e / R, scaled up to
   `scale_to_elf` of the ELF base shear V = C_s W (12.9.1.4.1) at the period of the mode
-  with the largest mass in that direction, capped at C_u T_a, W the total mass × g and
-  the height the model's along the vertical (z); stresses are scaled by it, the
-  displacements by 12.9.1.4.2's drift scale.
+  with the largest mass in that direction, capped at C_u T_a; stresses are scaled by it,
+  the displacements by 12.9.1.4.2's drift scale. W, the levels and h_n are the frame's
+  (`frames.seismic_frame.levels`: nodes above the lowest support grouped by elevation,
+  each with its members' self weight and the mass cases' loads), as PyNite's, so the
+  period cap and the scale agree by solver; a model with no frame is one level of the
+  whole mass × g at the height of its nodes above the lowest.
 
 The global field `spectrum_base_shear` holds modal_V, elf_V, scale, period, cs,
 drift_scale and mass_participation, as PyNite's does.
@@ -58,7 +61,25 @@ def _directions(step) -> list[str]:
     return [d.strip() for d in text.split(",") if d.strip()]
 
 
-def applied(results, study, mesh) -> None:
+def elf_levels(project, study, mesh, total_weight: float) -> tuple[list[dict], float]:
+    """The ELF's levels [{height, weight}] and h_n: the frame's when the study's
+    component has one (as PyNite's case), else one level of `total_weight` N at the
+    height of the mesh's nodes above the lowest."""
+    from puzzle.frames import frame_lines
+    from puzzle.frames.seismic_frame import levels
+
+    comp = project.objects.get(study.component) if project is not None else None
+    if comp is not None and frame_lines(project, comp):
+        lv, _base, _notes = levels(project, comp, study.seismic)
+        if lv:
+            out = [{"height": x["height"], "weight": x["weight"]} for x in lv]
+            return out, max(x["height"] for x in out)
+    zs = mesh.node_coords(mesh.node_ids)[:, 2]
+    height = float(zs.max() - zs.min()) or 1.0
+    return [{"height": height, "weight": total_weight}], height
+
+
+def applied(results, study, mesh, project=None) -> None:
     """Add a spectrum step per direction after the modal steps (see the module)."""
     from puzzle.frames import seismic
     from puzzle.results.model import Field, StepResult
@@ -85,15 +106,13 @@ def applied(results, study, mesh) -> None:
     total = float(np.max(meff.sum(axis=0) / np.maximum(fractions.sum(axis=0), 1e-300)))
     sa = np.array([seismic.spectrum(1.0 / s.value, design.sds, design.sd1, design.tl)
                    for s in modes]) * g * design.ie / design.r  # fmt: skip
-    zs = mesh.node_coords(mesh.node_ids)[:, 2]
-    height = float(zs.max() - zs.min()) or 1.0
+    elf_lv, height = elf_levels(project, study, mesh, total * g)
     for direction in _directions(step):
         axis = "xyz".index(direction)
         q = gamma[:, axis] * sa / omegas**2  # each mode's modal coordinate
         vt = float(seismic.cqc(meff[:, axis] * sa, omegas, design.damping))
         fundamental = 1.0 / modes[int(np.argmax(fractions[:, axis]))].value
-        elf = seismic.elf(design, [{"height": height, "weight": total * g}], height,
-                          fundamental)  # fmt: skip
+        elf = seismic.elf(design, elf_lv, height, fundamental)
         scale = max(1.0, design.scale_to_elf * elf.base_shear / vt) if vt else 1.0
         drift_scale = 1.0
         if elf.cs_clause == "12.8-6" and vt < elf.cs * elf.weight:

@@ -7,7 +7,8 @@ A W14X90 cantilever column 6 m tall, its own mass only, against closed forms:
   solvers' own participation factors (modes normalised to unit generalised mass);
 - the modal base shear in x: the CQC over the modes bending about the strong axis of
   each m_eff S_a(T) g I_e / R (12.9.1.3, 5 % damping), with S_a from Figure 11.4-1;
-- the ELF base shear C_s W it is scaled up to (12.9.1.4.1), W = ρ A L g, at the
+- the ELF base shear C_s W it is scaled up to (12.9.1.4.1), W the frame's levels' (as
+  PyNite's: ρ A L g / 2 at the top node, the support's half left out), at the
   fundamental period capped at C_u T_a.
 """
 
@@ -94,17 +95,17 @@ def test_a_columns_spectrum_against_its_closed_form_modes(tmp_path, solver):
                    sp.fields["spectrum_base_shear"].values[0], strict=True))  # fmt: skip
     t_used = min(1 / first, cu(0.6) * approximate_period("other", H))
     cs = min(1.0 / 8.0, 0.6 / (t_used * 8.0))
-    v_elf = cs * m * G
+    v_elf = cs * m * G / 2  # W: the frame's levels', as PyNite's (the base half not in W)
     print(
         f"{solver}: V_t {got['modal_V']:.1f} N ({vt:.1f}), ELF V {got['elf_V']:.1f} "
         f"({v_elf:.1f}), scale {got['scale']:.4f}, T {got['period']:.4f} s ({t_used:.4f})"
     )
     assert got["modal_V"] == pytest.approx(vt, rel=1e-9)
     assert got["period"] == pytest.approx(t_used, rel=1e-9)
-    # W: the mass the modes move; CalculiX's lumped mass leaves the support node's share
-    # (1/48 of it) out, Code_Aster's POST_ELEM counts it all
-    assert got["elf_V"] == pytest.approx(v_elf, rel=0.03)
-    assert got["scale"] == pytest.approx(max(1.0, v_elf / vt), rel=0.03)  # W, as above
+    # W and h_n from the frame's levels (`frames.seismic_frame.levels`), as PyNite's: the
+    # one member's self weight half to its top node, the support's half left out (12.7.2)
+    assert got["elf_V"] == pytest.approx(v_elf, rel=1e-6)
+    assert got["scale"] == pytest.approx(max(1.0, v_elf / vt), rel=1e-6)
     assert sp.label() == "Ex response spectrum (CQC)"
     assert float(np.max(np.abs(sp.fields["displacement"].values))) > 0
 

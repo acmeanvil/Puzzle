@@ -14,8 +14,9 @@ step) is checked at every station:
   displaced position from the line through the displaced ends.
 
 `MemberDesign` gives the code, method and lengths (the most specific entry wins). The
-code follows the material when `auto`: carbon and low-alloy steel by AISC 360; stainless
-(AISC 370) and aluminium (the Aluminum Design Manual) are refused until built.
+code follows the material when `auto` (`code_for`, by its group): carbon and low-alloy
+steel by AISC 360, stainless by AISC 370 (`aisc370.py`), aluminium by the Aluminum
+Design Manual (`adm.py`).
 Nothing here is stored: checks are evaluated on demand, as derived results are.
 """
 

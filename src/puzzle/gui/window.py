@@ -277,6 +277,9 @@ class PickBar(QWidget):
             ("part", "Whole part", "Every face of the picked faces' parts",
              window.pick_whole_part),
             ("undo", "Undo pick", "Step back one pick", lambda: window.viewport.undo_pick()),
+            ("rule", "Selection by rule…",
+             "A selection described, not picked: in a box, near a point, facing a way, "
+             "by area, or a union, intersection or difference", window.selection_by_rule),
         ):  # fmt: skip
             action = menu.addAction(text)
             action.setToolTip(tip)
@@ -2913,6 +2916,12 @@ class MainWindow(QMainWindow):
             [(part, kind, name) for part, name in dict.fromkeys(picks)],
             cache,
         )
+
+    def selection_by_rule(self, geometry=None):
+        """Selection by rule… (ADR 0072 section 10): one form, its members lit live."""
+        from puzzle.gui.selection_rule import selection_by_rule
+
+        return selection_by_rule(self, geometry)
 
     def picked_names(self) -> list[tuple[str, str]]:
         """The picked entities as (part, geometry name)."""

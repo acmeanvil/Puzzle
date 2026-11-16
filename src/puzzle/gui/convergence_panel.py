@@ -60,8 +60,75 @@ def check(window, study_id: str):
     return run(window, study_id)
 
 
-def run(window, study_id: str) -> None:
-    """Solve the meshes not run yet in the background; the panel shows them after."""
+FIRST_RESULT = ("The largest value of its first result", "")
+
+
+def new_mesh_study(window, study_id: str | None = None):
+    """A mesh study (ADR 0066 item 1; ADR 0072 section 10) in one form: the study, its
+    meshes, ratio, target and the quantity judged; made by one Create
+    (`convergence.mesh_study_command`), then shown in the Convergence panel, where Run
+    the rest solves its meshes as Check mesh convergence… does."""
+    from puzzle import convergence as conv
+    from puzzle.gui.agent_prefill import run_form
+    from puzzle.gui.optimisation_panel import outputs
+    from puzzle.gui.quick_form import Ask
+    from puzzle.model.schema import MeshStudy, Study
+
+    project = window.session.project
+    studies = [(s.name, str(s.id)) for s in project.of_type(Study)]
+    if not studies:
+        window.statusBar().showMessage("A mesh study checks a study: make one first", 8000)
+        return None
+    taken = {m.name for m in project.of_type(MeshStudy)}
+    quantities = [FIRST_RESULT, *outputs(project).items()]
+
+    def valid(v) -> str | None:
+        if not v.get("name"):
+            return "Give it a name"
+        if v["name"] in taken:
+            return f"There is already a mesh study '{v['name']}'"
+        return None if _percent(v.get("target")) else "the target is a percentage between 0 and 100"
+
+    def study_name(v) -> str:
+        return next((n for n, i in studies if i == v.get("study")), studies[0][0])
+
+    def prompt(v) -> str:
+        what = next((n for n, i in quantities if i == v.get("quantity")), FIRST_RESULT[0])
+        return (f"Make a mesh study '{v.get('name')}' of the study '{study_name(v)}': "
+                f"{v.get('levels')} meshes, each finer by {v.get('ratio')}, converged within "
+                f"{v.get('target')} % by the grid convergence index, judging {what.lower()}. "
+                "Then tell me what running it costs (mesh_convergence).")  # fmt: skip
+
+    got = run_form(window, "New mesh study", [
+        Ask("study", "Study", choices=studies, default=study_id or studies[0][1]),
+        Ask("name", "Name", kind="text", follow=lambda v: f"{study_name(v)} mesh study"),
+        Ask("levels", "Meshes", choices=LEVELS, default=3,
+            help="Three or more judge the convergence (Roache's grid convergence index)"),
+        Ask("ratio", "Each finer by", choices=RATIOS, default=1.5,
+            help="Every size of the mesh recipe divided by this from one mesh to the next"),
+        Ask("target", "Converged within (%)", kind="text", default="2",
+            help="The grid convergence index that counts as converged"),
+        Ask("quantity", "Judged by", choices=quantities, default="",
+            help="An operator giving a number, or a result tool; by default the largest "
+            "value of the study's first result"),
+    ], help="form:new_mesh_study", prompt=prompt, check=valid)  # fmt: skip
+    if not got:
+        return None
+    study = project.get(UUID(got["study"]), Study)
+    command = conv.mesh_study_command(
+        study, name=got["name"], levels=int(got["levels"]), ratio=float(got["ratio"]),
+        target=_percent(got["target"]),
+        quantities=[UUID(got["quantity"])] if got.get("quantity") else [])  # fmt: skip
+    if window.submit_batch([command]) is None:
+        return None
+    window.docks.show("convergence")
+    window.convergence.show(got["study"], name=got["name"])
+    return got["name"]
+
+
+def run(window, study_id: str, name: str | None = None) -> None:
+    """Solve the meshes not run yet in the background; the panel shows them after.
+    `name` a mesh study's (ADR 0066 item 1), whose settings are used, else the study's."""
     from puzzle import convergence as conv
     from puzzle.project.layout import WORK_DIR
 
@@ -69,7 +136,7 @@ def run(window, study_id: str) -> None:
     study = s.project.objects.get(UUID(study_id))
     if study is None:
         return
-    _, c = conv.settings(s.project, study.name)
+    _, c = conv.settings(s.project, name or study.name)
     stop = threading.Event()
     window.convergence_stop = stop
     project, root, store = s.project, s.root, window._store()
@@ -82,7 +149,11 @@ def run(window, study_id: str) -> None:
     def done(levels) -> None:
         window.convergence_stop = None
         window.refresh()
-        window.show_convergence(study_id)
+        if name:
+            window.docks.show("convergence")
+            window.convergence.show(study_id, name=name)
+        else:
+            window.show_convergence(study_id)
         vs = conv.verdicts(levels, c.target)
         said = "; ".join(f"{v.quantity}: {v.words}" for v in vs) or "too few meshes ran"
         window.statusBar().showMessage(f"{study.name}: {said}", 15000)
@@ -257,6 +328,11 @@ class ConvergencePanel(QWidget):
         self.run_button.setToolTip("Solve the meshes not run yet")
         self.run_button.clicked.connect(self._run_rest)
         top.addWidget(self.run_button)
+        new = QPushButton("New mesh study…")
+        new.setToolTip("A convergence check of its own: the study, meshes, ratio, target "
+                       "and quantities")  # fmt: skip
+        new.clicked.connect(lambda: new_mesh_study(self.window, self.study_id))
+        top.addWidget(new)
         column.addLayout(top)
         self.table = QTableWidget(0, 0)
         self.table.verticalHeader().hide()
@@ -268,14 +344,20 @@ class ConvergencePanel(QWidget):
         column.addWidget(self.summary)
 
         self.mode = "convergence"  # or "adapt": the study's adaptive passes
+        self.check_name: str | None = None  # a mesh study's name: its settings, not the study's
 
-    def show(self, study_id: str, mode: str = "convergence") -> None:  # noqa: A003
-        self.study_id, self.mode = study_id, mode
+    def show(self, study_id: str, mode: str = "convergence",  # noqa: A003
+             name: str | None = None) -> None:  # fmt: skip
+        self.study_id, self.mode, self.check_name = study_id, mode, name
         self.refresh()
 
     def _run_rest(self) -> None:
-        if self.study_id:
-            (run_adapt if self.mode == "adapt" else run)(self.window, self.study_id)
+        if not self.study_id:
+            return
+        if self.mode == "adapt":
+            run_adapt(self.window, self.study_id)
+        else:
+            run(self.window, self.study_id, self.check_name)
 
     def refresh(self) -> None:
         from puzzle import convergence as conv
@@ -289,8 +371,10 @@ class ConvergencePanel(QWidget):
             return
         if self.mode == "adapt":
             return self._show_adapt(study)
-        _, c = conv.settings(s.project, study.name)
-        self.title.setText(f"{study.name}: mesh convergence")
+        name = self.check_name or study.name
+        _, c = conv.settings(s.project, name)
+        self.title.setText(f"{name}: mesh convergence" if self.check_name
+                           else f"{study.name}: mesh convergence")  # fmt: skip
         try:
             self.levels = conv.run(s.project, study, s.root, s.root, store=self.window._store(),
                                    count=c.levels, ratio=c.ratio, outputs=c.quantities,

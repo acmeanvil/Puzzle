@@ -102,7 +102,18 @@ meshes: Results → Optimise and check the mesh → Check mesh convergence…
 ([Optimisation and convergence](help:guides/optimisation-and-convergence)).
 
 A **mesh shoot-out** solves a study on a Gmsh and a Netgen mesh of the same recipe and
-compares the peak values, by default displacement within 2 %. It takes two solves:
+compares the peak values, by default displacement within 2 %. It takes two solves.
+
+<!-- key: form:mesh_shootout -->
+### How to run a mesh shoot-out
+
+1. Mesh → Mesh shoot-out… (or right-click a study: Mesh shoot-out…).
+2. Choose the **Study**, what to **Compare** (a result's peak or global value, or the
+   eigenfrequencies), a second quantity if you like (**And**), and **Agree within (%)**.
+3. Both solves run in the background; the Messages area's Mesh shoot-out tab shows each
+   quantity's relative difference, the tolerance and whether the meshes agree.
+
+The runs are kept in a scratch folder, not with the study's results. On the command line:
 `puzzle mesh-shootout PROJECT STUDY`.
 
 ## For agents and scripts

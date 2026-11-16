@@ -59,11 +59,25 @@ def main() -> None:
     if thermal:
         fluid.setInitialValue("specific_heat", thermal["specific_heat"])
         fluid.setInitialValue("thermal_conductivity", thermal["conductivity"])
+        if spec.get("initial_temperature") is not None:
+            # The thermal scalar starts at the reference temperature when no formula is
+            # given; a formula would be compiled (MEG), which the image can't link.
+            fluid.setTemperature(spec["initial_temperature"])
         # Gauss-Seidel leaves the long axial conduction mode barely touched each steady
         # iteration (convergence took thousands); multigrid damps it directly.
         NumericalParamEquationModel(case).setSolverChoice("temperature", "multigrid")
     steps = TimeStepModel(case)
-    if spec.get("pseudo_time_step"):
+    transient = spec.get("transient")
+    if transient:
+        # A real time march: constant step, first order in time (Puzzle's backward Euler).
+        steps.setTimePassing(0)
+        steps.setTimeStep(transient["time_step"])
+        out = OutputControlModel(case)
+        for writer in out.getWriterIdList():
+            out.setWriterFrequencyChoice(writer, "time_step")
+            out.setWriterFrequency(writer, int(transient["output_every"]))
+            out.setWriterOutputStartStatus(writer, "on")
+    elif spec.get("pseudo_time_step"):
         # March in time with a large constant step towards the steady state: much faster
         # than the steady algorithm when a slow diffusive mode (axial conduction) remains.
         steps.setTimePassing(0)

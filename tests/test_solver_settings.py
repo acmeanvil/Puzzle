@@ -155,10 +155,11 @@ def test_shared_settings_a_solver_cant_translate_are_refused(tmp_path):
     from puzzle.adapters.openfoam import OpenFoamAdapter
 
     project, study = _project(tmp_path)
-    study.steps[0].settings.update({"linear_solver": "direct", "output_every": 5})
+    # output_every it takes since its transient steps (2026-11-15); max_iterations not
+    study.steps[0].settings.update({"linear_solver": "direct", "max_iterations": 5})
     saturne = CodeSaturneAdapter().check(project, study)
     assert "code_saturne does not translate the setting linear_solver = direct" in saturne
-    assert "code_saturne does not translate the setting output_every" in saturne
+    assert "code_saturne does not translate the setting max_iterations" in saturne
     study.steps[0].settings = {"linear_solver": "iterative", "tolerance": 1e-7}
     foam = [p for p in OpenFoamAdapter().check(project, study) if "translate" in p]
     assert foam == []  # both are OpenFOAM's to take

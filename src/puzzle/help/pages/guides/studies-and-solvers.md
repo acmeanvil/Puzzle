@@ -84,11 +84,18 @@ Right-click a study, Save settings as preset…, to keep them; Apply settings pr
 a preset on another study. [The solver settings](help:reference/settings) lists every
 setting.
 
+<!-- key: form:sweep_step -->
 ## Sweeps
 
 A sweep runs a study once per point. Right-click a study, Materials…, to try several
 materials at one material assignment in a table; a sweep of materials alone meshes
-once. Parameter sweeps (a thickness at 8 and 12 mm) are made through the agent. Each
+once. For parameters (a thickness at 8 and 12 mm), right-click a study, Add step →
+Parametric sweep… (or Model → Studies → Add sweep step…): each parameter (a parameter
+set's value, or a Number or Slider operator) is not swept, a list of values
+(`8, 12 mm`), a range (from, to, how many) or a list operator's values; every
+combination, or in pairs. The form shows how many points the study will run. A sweep
+step's right-click Edit sweep… opens it again; sweep steps come before the solve
+steps. Each
 point is a stored run, grouped under "<study>: compare" in the tree. Results →
 Combinations and fatigue → Compare sweep points… shows them side by side.
 

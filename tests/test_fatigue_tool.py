@@ -138,6 +138,22 @@ def test_fully_reversed_on_shigleys_line():
     assert any("shown as 1e+12" in w for w in d.warnings)
 
 
+def test_axial_loading_takes_kc_085_and_a_shear_component_059():
+    """Shigley Eq. 6-26: a part in axial loading only has Se = 0.85 S'e (polished, no
+    size effect: 293.25 MPa), so node 2's safety factor is 293.25/300; a shear stress
+    compared alone (torsion) takes 0.59."""
+    p, _, (a, _) = project()
+    store = Store([a.id], [results(SXX)])
+    block = [FatigueBlock(case=ResultCase(study=a.id))]
+    d = derived.evaluate(p, store, tool(p, block, size="axial"))
+    assert field(d, "fatigue_safety_factor")[1] == pytest.approx(0.85 * 345 / 300, rel=1e-6)
+    line = fm.SnLine(0.85 * 345e6, 690e6)
+    assert field(d, "fatigue_life")[0] == pytest.approx(float(line.cycles(400e6)), rel=1e-9)
+    store = Store([a.id], [results(np.zeros(3), sxy=SXX)])
+    d = derived.evaluate(p, store, tool(p, block, stress="xy"))
+    assert field(d, "fatigue_safety_factor")[2] == pytest.approx(0.59 * 345 / 100, rel=1e-6)
+
+
 def test_zero_based_takes_a_mean_and_goodman_corrects_it():
     p, _, (a, _) = project()
     store = Store([a.id], [results(np.array([600e6, 300e6, 100e6]))])

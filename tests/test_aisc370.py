@@ -3,7 +3,8 @@
 properties (Design Guide 27's own shape tables) and its rounded intermediate values
 where the example rounds them (L_c/r, r_ts), to the example's printed digits:
 
-- Example 1: round HSS 6.25×0.250, S30400, L_c 11 ft: P_n = 101 kips, φP_n 90.9 kips;
+- Example 1: round HSS 6.25×0.250, S30400, L_c 11 ft: P_n = 101 kips (φP_n 90.9 kips; the
+  test asserts the ASD P_n/Ω = 60.5 kips);
 - Example 2: square HSS 6×6×0.180, S32101 (F_y 77 ksi), slender walls, b_e 5.18 in.,
   A_e 3.70 in.², P_n 186 kips;
 - Example 4: a W-shape, S30400 (F_y 35 ksi), L 9 ft: φP_n 56.7 kips (curve A about y),

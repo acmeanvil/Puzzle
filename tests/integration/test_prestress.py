@@ -123,4 +123,4 @@ def test_tension_raises_the_first_frequency(tmp_path, solver):
         f"(beam {expected:.4f})"
     )
     assert expected > 1.05  # the tension matters
-    assert ratio == pytest.approx(expected, rel=5e-3)
+    assert ratio == pytest.approx(expected, rel=2.5e-3)  # 0.1 % recorded

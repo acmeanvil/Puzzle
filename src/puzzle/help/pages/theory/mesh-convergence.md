@@ -64,6 +64,11 @@ A GCI of 0.3 % says: the converged value is within about 0.3 % of the finest mes
 - **oscillating**: $\varepsilon_{32}$ and $\varepsilon_{21}$ have opposite signs, so the
   value goes up and down between meshes. No order or GCI is given: the meshes are not
   in the asymptotic range.
+- **diverging**: $|\varepsilon_{21}| \geq |\varepsilon_{32}|$ with the same sign, so
+  each finer mesh moves the value as much as the last did or more. It grows without
+  bound, as a stress at a singularity does: the peak at a 270° re-entrant corner goes as
+  $h^{-0.46}$. No order or GCI is given; read the stress a short distance away, round
+  the corner, or linearize.
 - **not in the asymptotic range**: the observed order is below 0.5 or above 6. The
   meshes are too coarse for the power law to hold, or something else (a singularity,
   a contact switching) changes with the mesh.
@@ -99,8 +104,8 @@ order 4.1 and GCI 0.03 %; first-order tets lock and are reported not converged (
 - Uniform refinement must really be uniform: a recipe with fixed transfinite counts or
   sizes that do not scale breaks the assumed $h$.
 - A stress at a singularity (a re-entrant corner, a point load, the edge of a fixed
-  face) never converges: it is reported not converged or not in the asymptotic range
-  however fine the mesh. That is the model, not the mesh: read the stress a short
+  face) never converges: it is reported diverging (or, with uneven steps, not in the
+  asymptotic range) however fine the mesh. That is the model, not the mesh: read the stress a short
   distance away, round the corner, or judge it by linearization
   ([Stress linearization](help:theory/linearization)).
 - Locking elements (first-order tetrahedra in bending, nearly incompressible materials)
@@ -121,3 +126,6 @@ For one run's error without solving again, see
   "Procedure for Estimation and Reporting of Uncertainty Due to Discretization in CFD
   Applications", *Journal of Fluids Engineering* 130(7), 078001, 2008: the iteration for
   $p$ with unequal ratios, and the extrapolated value.
+- M. L. Williams, "Stress Singularities Resulting From Various Boundary Conditions in
+  Angular Corners of Plates in Extension", *Journal of Applied Mechanics* 19(4),
+  526-528, 1952: the exponent at a re-entrant corner.

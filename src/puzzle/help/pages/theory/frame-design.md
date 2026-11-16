@@ -118,13 +118,16 @@ second-order effects. Two step settings on a PyNite study provide that:
   elements the mesh splits it into.
 - `direct_analysis` (AISC 360 Chapter C) runs P-Delta with E and G multiplied by 0.8
   ($\tau_b = 1$). It also adds notional lateral loads $N_i = 0.002 Y_i$ at each node,
-  where $Y_i$ is that combination's factored gravity load at the node (point loads, and
-  line loads and self weight half to each end). Each combination is repeated for each
+  where $Y_i$ is that combination's factored gravity load at the node (point loads, line
+  loads and self weight half to each end, plate pressures a quarter to each corner).
+  Each combination is repeated for each
   `notional_directions` entry, x and y in both senses by default.
 
 With direct analysis, effective length factors stay at 1 (C3), and the member checks
 use the full E. For a frame with stainless members, AISC 370 C2.3 applies: the
-stiffness factor is 0.70, and the notional loads are $0.004 Y_i$.
+stiffness factor is 0.70, and the notional loads are $0.004 Y_i$ from the stainless
+members' and plates' loads (0.002 from the carbon steel ones); a node shared by both
+takes the mean weighted by the lengths of the members meeting there.
 
 ## Load combinations
 

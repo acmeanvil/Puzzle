@@ -29,6 +29,10 @@ and film temperatures. A held temperature is a constraint on $\mathbf{T}$.
 
 $$\mathbf{C}\frac{\mathbf{T}_{n+1} - \mathbf{T}_n}{\Delta t} + \theta\mathbf{K}\mathbf{T}_{n+1} + (1-\theta)\mathbf{K}\mathbf{T}_n = \mathbf{F}$$
 
+with $\mathbf{F} = \theta \mathbf{F}_{n+1} + (1-\theta) \mathbf{F}_n$ for a load that varies
+in time (FEniCSx takes an amplitude's factor so; taking the step's end instead put a
+ramped flux's heat 20 % high under Crank-Nicolson).
+
 - $\theta = 1$ is **backward Euler** (`backward_euler`): first order in time, the error
   falling in proportion to $\Delta t$. Every mode of the solution decays, however large
   the step, and the fast ones are damped hardest, so it never oscillates.

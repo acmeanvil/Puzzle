@@ -10,7 +10,7 @@ adrs: 0011, 0012, 0016, 0048
 Flow is checked on channels, where the answer is known: plane Poiseuille flow, the heat
 balance and developed profile between uniformly heated plates, and Dean's correlations
 for turbulent channels. Every benchmark runs on both CFD solvers, Code_Saturne and
-OpenFOAM, which also run as a shoot-out pair on one mesh. All are steady.
+OpenFOAM, which also run as a shoot-out pair on one mesh. All are steady but the temperature front, a time march on Code_Saturne.
 
 | Benchmark | Reference | Solvers | Test tolerance | Measured |
 | --- | --- | --- | --- | --- |
@@ -21,6 +21,7 @@ OpenFOAM, which also run as a shoot-out pair on one mesh. All are steady.
 | 2D plane Poiseuille | plane Poiseuille | OpenFOAM, Code_Saturne | as 3D | peak −0.10 %, −0.21 % |
 | 2D axisymmetric pipe | Hagen–Poiseuille | OpenFOAM, Code_Saturne | peak 1 %, profile 1 %, dp/dy 2 % | peak −0.25 %, −0.18 % |
 | 2D heated plates | energy balance; Nu = 8.235 | OpenFOAM, Code_Saturne | 1 %; 2 % | +0.23 %, +0.22 %; 0.19 %, 0.09 % |
+| Temperature front, transient | Ogata and Banks (1961) | Code_Saturne | 1 % of the rise | 0.53 %, 0.50 % |
 
 The methods are described in [Flow](help:theory/cfd); setting up a flow study is in
 [Analyses](help:guides/analyses). A test whose solver isn't installed is skipped, not
@@ -149,14 +150,29 @@ Measured (ADR 0048):
 Code_Saturne's steady algorithm runs away on a wedge, so without a pseudo time step it
 time-marches at 0.5 h/U there.
 
-## Not yet benchmarked
+## A temperature front in plug flow
 
-Every benchmark here is steady. Code_Saturne's capability matrix lists transient flow,
-but no test runs a transient flow case yet; ADR 0072 lists a transient Code_Saturne
-case against a closed form as to do. Treat transient flow results as unverified.
+`tests/integration/test_cfd_transient.py` `test_a_temperature_front_in_plug_flow`
+(Code_Saturne; OpenFOAM's adapter runs steady flow only): a 2D channel 200 mm long and
+10 mm wide whose walls are symmetry planes, so the flow is uniform at U = 5 mm/s. Air
+starts at 20 °C and the inlet is held at 30 °C from t = 0. Along the channel the
+temperature then follows Ogata and Banks' solution on a half-line, with
+$\alpha = k / (\rho c_p)$ and $s = 2 \sqrt{\alpha t}$:
+
+$$\frac{T - T_0}{T_1 - T_0} = \frac{1}{2} \left( \mathrm{erfc} \frac{x - U t}{s} + e^{U x / \alpha} \mathrm{erfc} \frac{x + U t}{s} \right)$$
+
+Cells are 1 mm, steps 50 ms (Courant 0.25), first order in time, and results come back
+at 0, 10 and 20 s, one step per output time. The test checks the start (the physics'
+initial temperature, to EnSight's single precision), the velocity (U to 1e-3) and the
+temperature everywhere within 1 % of the rise.
+
+Measured (Code_Saturne 9.2, 2026-11-15): the largest error 0.53 % of the rise at 10 s
+and 0.50 % at 20 s.
 
 ## Sources
 
+- A. Ogata and R. B. Banks, *A Solution of the Differential Equation of Longitudinal
+  Dispersion in Porous Media*, U.S. Geological Survey Professional Paper 411-A, 1961.
 - R. K. Shah and A. L. London, *Laminar Flow Forced Convection in Ducts*, Academic
   Press, 1978: plane Poiseuille flow, Nu = 8.235 between plates with uniform heat flux.
 - R. B. Dean, "Reynolds number dependence of skin friction and other bulk flow

@@ -26,9 +26,13 @@ groups of faces, edges, bodies or points, so name those before you build the mod
 To add steps to an imported part, right-click it, Edit as history (keep the file as its
 first step). Faceted parts (STL, OBJ, 3MF) take Combine with another faceted part….
 
+<!-- key: form:new_part -->
 ## How to build a part from steps
 
-1. Geometry → New part…, or the Geometry tab's New part… button.
+1. Geometry → New part… (or the Geometry heading's right-click, or the Geometry tab's
+   New part… button): one form choosing how it starts: **a sketch** (the first choice,
+   on a plane you choose; the part is made when the sketch is finished), **a box**, **a
+   cylinder**, or **a file** to import.
 2. Choose a tool from the ribbon above the view, or from the Geometry menu's groups:
    **Create** (box, cylinder, extrude, revolve, hole, polyline, sheet…), **2D**
    (rectangle, circle, annulus, slot, Wall along a line, Section of a part…),
@@ -72,6 +76,23 @@ extrusion (`Plate/bottom`).
 
 When a step edit or a new file leaves a selection without its entities, Geometry →
 Selections → Reattach… lists what was lost and lets you pick again.
+
+<!-- key: form:selection_rule -->
+## How to make a selection by rule
+
+A rule describes the members instead of listing them, and is evaluated again every time
+the part changes, so the selection never detaches.
+
+1. Geometry → Selections → Selection by rule… (or the pick bar's Select menu, or the
+   right-click of a geometry's Selections folder).
+2. Choose the **Part**, what it holds (**Of**: faces, edges, points or bodies) and the
+   **Rule**: inside a box, near a point (within a distance of an entity's centre),
+   facing a direction (flat faces within an angle), area between (faces), or the
+   union, intersection or difference of selections of the same kind.
+3. Fill its values in the units shown. When something is picked on the part, the point
+   starts at the first pick's centre and the direction at a picked flat face's normal.
+4. The line above OK counts what the rule picks as you type, and the view lights it.
+   OK makes the selection (one change; undo takes it back).
 
 ## How to measure
 

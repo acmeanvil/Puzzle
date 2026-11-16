@@ -128,6 +128,14 @@ point elements with `K_T_D_N` on one-node groups. Both serve `elastic_support` a
     (4.4e-6).
   - `tests/test_weak_springs.py`: the nodes chosen, and the warning when the springs carry
     the load.
+- **Built (2026-11-15), decision 8's sliding and factor benchmarks:**
+  - Sliding (`test_friction_holds_a_sliding_load_under_its_limit`, CalculiX and
+    Code_Aster): 0.1 N sideways on the pressed half, under μ N; the reaction 0.0994 and
+    0.0995 N, the springs 7e-4 N. The load is 1e-3 of the end load because a sideways
+    force on the bar's end puts a moment on the 10 mm interface: 10 N lifted an edge
+    and the body slid onto its springs.
+  - Factor (`test_the_answer_does_not_depend_on_the_spring_factor`, CalculiX): the end's
+    displacement changes by 3.2e-6 between factors 1e-6 and 1e-7 (under 1e-5 asked).
 - **Not done.**
   - A lift-off solved end to end: frictional contact searching while the body floats on
     weak springs diverged on CalculiX, so the warning is checked on results alone.

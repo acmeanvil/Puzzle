@@ -180,3 +180,22 @@ def run_mesh_shootout(
         value = compare(runs["gmsh"].results, runs["netgen"].results, metric)
         out.comparisons.append(Comparison("netgen", metric, value))
     return out
+
+
+def mesh_shootout_report(project: Project, study_id, root: Path, workdir: Path,
+                         quantities: list[str] | None = None, tolerance: float = 0.02, *,
+                         on_output: Callable[[str], None] | None = None) -> dict:  # fmt: skip
+    """A mesh shoot-out as plain data: MCP `mesh_shootout` and the GUI's Mesh
+    shoot-out… both call this, so what they ask and show can't drift. `quantities`
+    are result fields compared by their peak (or a global value), or
+    "eigenfrequencies"; displacement by default."""
+    metrics = [ComparisonMetric(quantity=q, norm="relative_value", tolerance=tolerance)
+               for q in (quantities or ["displacement"])]  # fmt: skip
+    out = run_mesh_shootout(project, study_id, root, workdir, metrics, on_output=on_output)
+    return {
+        "passed": out.passed,
+        "comparisons": [
+            {"quantity": c.metric.quantity, "relative_difference": c.value, "passed": c.passed}
+            for c in out.comparisons
+        ],
+    }

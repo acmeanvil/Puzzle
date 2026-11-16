@@ -132,6 +132,24 @@ What exists to build on:
       with the 2 % default target and the keep-passes option.
    4. Anisotropic adaptation with MMG, and CFD indicators.
 
+**Built (2026-11-15), decision 7's last two tests** (ADR 0072's list):
+
+- The plate with a hole (`test_adapt_solves.py`
+  `test_a_plate_with_a_hole_adapts_where_the_stress_concentrates`, CalculiX): a quarter
+  of a 200 × 200 × 5 mm plate with a 20 mm hole at 10 MPa. A plate in tension is mostly
+  uniform stress, so 2 % came on the first 12 mm mesh (1.55 %); the test adapts to
+  0.5 %: 802, 2214, 2786, 3305 elements at 1.55, 0.62, 0.50, 0.46 %, where a uniform
+  mesh of 3998 elements gives 0.89 %. The peak is 3.14 of the gross stress against
+  Heywood's 3.03 for the finite width (+3.7 %, held to 5 %: a 5 mm plate's mid-plane
+  peak sits above plane stress).
+- The singularity: `convergence.verdicts` reports a quantity **diverging** when each
+  finer mesh moves it as much as the last did, the same way (no order or GCI), the
+  stress at a re-entrant corner growing as h^(λ−1) with Williams' λ = 0.5445 at 270°
+  (`tests/test_convergence.py`). Adaptivity in the energy norm still converges there;
+  it is the peak that doesn't.
+- Also fixed: 2D meshes' refinement ratio (a square root, not a cube root) and adaptive
+  passes on 2D meshes and on a named field (ADR 0072).
+
 ## Consequences
 
 - Results come with a stated discretisation error, and the Advisor can say whether a

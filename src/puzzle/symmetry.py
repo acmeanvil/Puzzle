@@ -8,8 +8,9 @@ with its own supports:
 
 - a plane across x, y or z holds that global component (or, antisymmetric, the others);
 - any other plane holds the component along its normal in a Cartesian system made for
-  it, which only adapters taking `displacement:cartesian:partial` write (CalculiX); the
-  others refuse it by name.
+  it, written by adapters taking `displacement:cartesian:partial` or `symmetry:oblique`
+  (CalculiX `*EQUATION`, Code_Aster `LIAISON_OBLIQUE`, Elmer Normal-Tangential, one
+  oblique plane per edge); FEniCSx refuses it by name.
 
 In heat transfer and electrostatics symmetry is the natural condition (no flux across
 the plane), so the feature is dropped: it only records the intent and draws the plane.

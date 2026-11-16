@@ -64,7 +64,7 @@ def test_uniform_heat_generation(tmp_path, solver):
     exact = T0 + Q * x * (L - x) / (2 * K)
     rise = Q * L**2 / (8 * K)
     print(f"{solver}: middle {t.max() - T0:.5g} K above the ends (exact {rise:.5g} K)")
-    assert np.abs(t - exact).max() < 0.005 * rise
+    assert np.abs(t - exact).max() < 5e-4 * rise
 
 
 @solvers
@@ -80,4 +80,4 @@ def test_heat_generation_from_a_field(tmp_path, solver):
     exact = T0 + Q * x * (L**2 - x**2) / (6 * K * L)
     peak = Q * L**2 / (9 * math.sqrt(3) * K)  # at x = L / √3
     print(f"{solver}: peak {t.max() - T0:.5g} K (exact {peak:.5g} K)")
-    assert np.abs(t - exact).max() < 0.005 * peak
+    assert np.abs(t - exact).max() < 5e-4 * peak

@@ -29,6 +29,29 @@ def test_marin_factors_match_shigley_examples():
         f.endurance_limit(300e6, steel=False)
 
 
+def test_load_factor_and_example_6_10_axial_bar():
+    """Eq. 6-26: kc = 1 bending, 0.85 axial, 0.59 torsion. Ex. 6-10: a machined AISI 1050
+    CD bar (Sut = 100 kpsi) in axial loading has ka = 0.797, kb = 1, kc = 0.85 and
+    Se = 0.797 (0.85) (50) = 33.9 kpsi."""
+    for kind, kc in [("bending", 1.0), ("axial", 0.85), ("torsion", 0.59), ("combined", 1.0)]:
+        assert factor("kc", loading=kind) == kc
+    e = f.endurance_limit(100 * KSI, surface="machined", size="axial", loading="axial")
+    assert e.factors["kb"] == 1
+    assert e.se / KSI == pytest.approx(33.9, abs=0.05)
+    bent = f.endurance_limit(100 * KSI, surface="machined")
+    assert e.se / bent.se == pytest.approx(0.85)
+
+
+def test_size_factor_held_at_254_mm_past_eq_6_20():
+    """Eq. 6-20's second branch, 1.51 d^-0.157, holds from 51 to 254 mm: 0.633 at 254 mm,
+    and the same past it."""
+    at = factor("kb", size="rotating_round", d=0.254)
+    assert at == pytest.approx(1.51 * 254**-0.157, rel=1e-12)
+    assert at == pytest.approx(0.633, abs=5e-4)
+    assert factor("kb", size="rotating_round", d=0.5) == at
+    assert factor("kb", size="rotating_round", d=0.1) > at
+
+
 def test_notch_sensitivity_and_fatigue_fraction():
     q = f.notch_sensitivity(690e6, 0.003)  # Ex. 6-6
     assert 1 + q * (1.65 - 1) == pytest.approx(1.55, abs=5e-3)

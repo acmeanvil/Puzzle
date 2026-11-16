@@ -67,6 +67,23 @@ By default it judges the largest value of the study's first result. To judge som
 else, make a Result summary or a result tool first. Each finer mesh costs about 3.4
 times the last at ratio 1.5, so start from a coarse recipe.
 
+<!-- key: form:new_mesh_study -->
+### How to make a mesh study
+
+A mesh study is a convergence check of its own, kept under Mesh studies in the tree, so
+one study can have several (other ratios, other quantities).
+
+1. Model → Studies → New mesh study… (or right-click the study, or New mesh study… in
+   the Convergence panel).
+2. Choose the **Study**, its **Name**, **Meshes**, **Each finer by**, **Converged within
+   (%)** and what it is **Judged by**: the largest value of the study's first result, an
+   operator giving a number, or a result tool.
+3. OK makes it and shows it in the Convergence panel; **Run the rest** solves its
+   meshes. Right-click it in the tree: Show in the Convergence panel, Run its meshes.
+
+Where the agent is set up, **Ask the agent…** closes the form and opens the agent window
+with the request typed in from its values.
+
 ## How to estimate the error of one run
 
 Right-click a study, New error estimate…: the Zienkiewicz–Zhu energy-norm error of its

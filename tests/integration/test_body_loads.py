@@ -238,3 +238,52 @@ def test_amplitude_heat_flux_energy_balance(tmp_path, solver):
     expected = 293.15 + q * area * 20.0 / (rho * c * mean["volume"])
     print(f"{solver} amplitude energy: mean {mean['mean']:.6g} K, expected {expected:.6g} K")
     assert mean["mean"] == pytest.approx(expected, abs=1e-3 * (expected - 293.15))
+
+
+@over("fenicsx")
+def test_crank_nicolson_takes_a_ramped_flux_at_both_ends_of_each_step(tmp_path, solver):
+    """The tip's heat flux ramped linearly, q·t/10 s, every other face insulated, by
+    Crank–Nicolson at 2 s steps to 10 s. Summed over the body (the test function 1), the
+    θ scheme is ρ c V ΔT̄ = q A dt (θ g(t_n+1) + (1 − θ) g(t_n)): with θ = 1/2 that is the
+    trapezoid rule, exact for a linear g, so the mean rise is q A · 5 s / (ρ c V). Loads
+    at the step's end only gave 6 s, 20 % high."""
+    from puzzle.adapters.common import surface_area
+    from puzzle.model.schema import Amplitude
+    from puzzle.results.query import integrate
+
+    root = tmp_path / "cantilever"
+    shutil.copytree(
+        EXAMPLE, root, ignore=shutil.ignore_patterns("results*", ".puzzle", "history.jsonl")
+    )
+    p = load_project(root)
+    comp = p.of_type(Component)[0]
+    amp = p.add(Amplitude(name="Ramp", points=[(0.0, 0.0), (10.0, 1.0)]))
+    q = 2.0e5
+    heat = next(ph for ph in comp.physics if ph.type == "heat_transfer")
+    heat.features = [
+        Feature(
+            type="heat_flux",
+            selection="Bar/Tip",
+            values={"q": Quantity(value=q, unit="W/m^2")},
+            amplitude=amp.id,
+        )
+    ]
+    heat.settings = {
+        "temperature_dependent_materials": False,
+        "initial_temperature": Quantity(value=20, unit="degC").model_dump(mode="json"),
+    }  # fmt: skip
+    study = next(s for s in p.of_type(Study) if s.name == "Conduction")
+    study.solver = solver
+    study.steps = [SolveStep(type="transient", physics=["heat_transfer"], settings={
+        "time_step": {"value": 2, "unit": "s"}, "end_time": {"value": 10, "unit": "s"},
+        "time_scheme": "crank_nicolson"})]  # fmt: skip
+    save_project(p, root)
+    run = run_study(p, study.id, root, tmp_path / "w")
+    body = comp.materials[0].selection
+    steel = p.objects[comp.materials[0].material]
+    rho_c = steel.properties["density"].to_si() * steel.properties["specific_heat"].to_si()
+    area = surface_area(run.mesh.groups["Bar/Tip"], run.mesh)
+    last = integrate(run.results, run.mesh, "temperature", body)
+    expected = 293.15 + q * area * 5.0 / (rho_c * last["volume"])
+    print(f"{solver} Crank-Nicolson ramp: mean {last['mean']:.6g} K, expected {expected:.6g} K")
+    assert last["mean"] == pytest.approx(expected, abs=1e-3 * (expected - 293.15))

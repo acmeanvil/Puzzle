@@ -185,5 +185,5 @@ def test_team7_bz_along_a1_b1(tmp_path, solver):
         )
     rms = math.sqrt(np.mean(error**2)) / scale
     print(f"{solver}: rms difference {rms:.1%} of the largest measured |Bz|")
-    assert rms < 0.06
+    assert rms < 0.035  # 2.2 % measured on both (ADR 0047, commit 5697eef)
     assert np.abs(bz.real - BZ_50HZ.real).max() < 0.12 * scale

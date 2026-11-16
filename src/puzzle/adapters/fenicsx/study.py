@@ -1261,7 +1261,8 @@ def solve_heat(case, msh, degree, dx, ds, facets, tag, of_temperature, out) -> N
         return
 
     # rho cp dT/dt + A(T) = F, with A the conduction (+ film) operator and F the loads.
-    # theta method: rho cp (T - T_old)/dt + theta A(T) + (1 - theta) A(T_old) = F;
+    # theta method: rho cp (T - T_old)/dt + theta A(T) + (1 - theta) A(T_old)
+    #   = theta F(t_n+1) + (1 - theta) F(t_n) (the loads on an amplitude; the rest are fixed);
     # bdf2: rho cp (3T - 4T_old + T_older)/(2 dt) + A(T) = F, its first step by Euler.
     rho, cp = of_temperature("density", previous), of_temperature("specific_heat", previous)
     dt, steps = case["step"]["time_step"], case["step"]["steps"]
@@ -1278,6 +1279,7 @@ def solve_heat(case, msh, degree, dx, ds, facets, tag, of_temperature, out) -> N
         return form
 
     euler = (capacity * T * v * dx + a, capacity * old * v * dx + L)
+    weight = 1.0  # of the loads at the step's end: theta's, the rest at the step's start
     if scheme == "bdf2":
         later = (1.5 * capacity * T * v * dx + a, capacity * (2.0 * old - 0.5 * older) * v * dx + L)
     else:
@@ -1289,10 +1291,12 @@ def solve_heat(case, msh, degree, dx, ds, facets, tag, of_temperature, out) -> N
         if theta == 1.0:
             later = euler
         euler = later  # theta schemes need no starting step
+        weight = theta
     series = []
     for n in range(steps):
-        for factor, table in amplitudes:  # the loads' factors at this step's end time
-            factor.value = np.interp((n + 1) * dt, table[:, 0], table[:, 1])
+        for factor, table in amplitudes:  # theta F(t_n+1) + (1 - theta) F(t_n); BDF2's at t_n+1
+            ends = np.interp([n * dt, (n + 1) * dt], table[:, 0], table[:, 1])
+            factor.value = weight * ends[1] + (1.0 - weight) * ends[0]
         a_t, L_t = euler if n == 0 else later
         increment[0], t = n + 1, (n + 1) * dt
         emit("increment", number=n + 1, size=dt, time=t, end_time=dt * steps)

@@ -391,8 +391,23 @@ def run_for(project, store, study_id: UUID, point: str | None = None,
     raise PuzzleError(f"study '{name}' has no run{what} yet: run it first", code="not_found")
 
 
-def _nonlinear(results: Results) -> bool:
-    return any("plastic_strain_equivalent" in s.fields for s in results.steps)
+def _nonlinear(results: Results, project=None, study_name: str = "") -> str | None:
+    """Why a run doesn't superpose (plasticity, contact opening or sliding, large
+    deflection), or None: its linear combination is then only an estimate."""
+    fields = {f for s in results.steps for f in s.fields}
+    if "plastic_strain_equivalent" in fields:
+        return "plastic"
+    if fields & {"contact_status", "contact_pressure"}:
+        return "contact"
+    from puzzle.model.schema import Study
+
+    study = next((o for o in getattr(project, "objects", {}).values()
+                  if isinstance(o, Study) and o.name == study_name), None)  # fmt: skip
+    if study is not None and any(
+        s.settings.get("geometric_nonlinearity") for s in study.solve_steps()
+    ):
+        return "large deflection"
+    return None
 
 
 def evaluate(project, store, definition, _seen: tuple = ()) -> Derived:
@@ -423,9 +438,10 @@ def evaluate(project, store, definition, _seen: tuple = ()) -> Derived:
     cases, warnings = [], []
     for case, record in zip(definition.cases, records, strict=True):
         results = store.read_results(record.run_id)
-        if definition.method == "linear" and _nonlinear(results):
+        why = _nonlinear(results, project, record.study_name)
+        if definition.method == "linear" and why:
             warnings.append(
-                f"{record.study_name} is a nonlinear (plastic) result: a linear combination "
+                f"{record.study_name} is a nonlinear ({why}) result: a linear combination "
                 "of it is only an estimate"
             )
         cases.append((store.read_mesh(record.mesh_id), _step(results, case.step), case.coefficient))

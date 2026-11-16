@@ -16,12 +16,12 @@ checked at the far end too.
 | --- | --- | --- | --- | --- |
 | Two-layer capacitor | series capacitance | Elmer, FEniCSx | 1e-6 | passes |
 | Wire in air, DC | infinite wire | Elmer, FEniCSx | B mean 2 %, energy 2 % | passes |
-| Skin effect in a round wire | Bessel solution | Elmer, FEniCSx | R, L 3 %; J 3 % | R 0.2-0.7 %, L 0.4 %, J 2.4 % |
+| Skin effect in a round wire | Bessel solution | Elmer, FEniCSx | R 1.5 %, L 3 %; J 3 % | R 0.2-0.7 %, L 0.4 %, J 2.4 % |
 | Winding (stranded coil) | DC values at any frequency | Elmer, FEniCSx | 2 % | R 0.74 %, L 0.5 % |
 | Two windings, own phases | N I at its phase | Elmer, FEniCSx | 1e-3, 0.05° | 1e-3, 0.05° |
-| Harmonic shoot-out | Elmer against FEniCSx | both | 2 %, passive loss 3 % | R 0.05 %, L 0.16 % |
-| Step current into a wire | Bessel series | FEniCSx | 4 % of uniform J | within 0.5 % |
-| Transient shoot-out | Elmer against FEniCSx | both | 1 % of uniform J | equal to 1e-6 |
+| Harmonic shoot-out | Elmer against FEniCSx | both | 0.5 %, passive loss 3 % | R 0.05 %, L 0.16 % |
+| Step current into a wire | Bessel series | FEniCSx | 1.5 % of uniform J | within 0.5 % |
+| Transient shoot-out | Elmer against FEniCSx | both | 1e-4 of uniform J | 1.7e-6 |
 | Losses heat a wire | 1D conduction | Elmer to CalculiX | 2 % of the rise | within 2 % |
 | Lorentz force between wires | line currents with images | Elmer, FEniCSx (to CalculiX) | 2 %; reaction 3 % | 1.7 %; 1.5 % |
 | Closed ring coil | thick solenoid's centre field | Elmer, FEniCSx | 3 % | -2.1 %, -0.9 % |
@@ -29,7 +29,7 @@ checked at the far end too.
 | Solid tube (axisymmetric) | Bessel solution | Elmer, FEniCSx | 1 % | loss 0.01 %, R 0.04 % |
 | Sphere in an AC field | Landau and Lifshitz §59 | Elmer, FEniCSx | 2 % | 0.0010917 W of 0.0010923 W |
 | Planar wire, winding, two-wire line | closed forms per metre | Elmer, FEniCSx | 1 % to 2 % | see the section |
-| TEAM Problem 7 | measured Bz | Elmer, FEniCSx | RMS 6 % of the largest | 2.2 % RMS |
+| TEAM Problem 7 | measured Bz | Elmer, FEniCSx | RMS 3.5 % of the largest | 2.6 % and 2.3 % RMS |
 
 Each test runs on each solver installed (`tests/solvers.py` `over`) and skips the
 rest; a shoot-out skips unless both are there. FEniCSx tests marked `needs_petsc` skip
@@ -125,8 +125,8 @@ $$J(r,t) = \frac{I}{\pi a^2}\left(1 - \sum_n \frac{J_0(\beta_n r/a)}{J_2(\beta_n
 
 BDF2 at Δt = τ/200, outputs at 0.1, 0.2 and 0.3 τ. In the wire's middle third (near
 the terminals the current enters evenly), the mean density of the core (r < 0.4 a) and
-of the skin (r > 0.7 a) must be within 4 % of the uniform density of the series. ADR
-0047: within 0.5 %.
+of the skin (r > 0.7 a) must be within 1.5 % of the uniform density of the series (4 %
+until 2026-11-15). ADR 0047: within 0.5 %.
 
 ## Losses and forces handed on
 

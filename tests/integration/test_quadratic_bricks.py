@@ -61,6 +61,16 @@ def test_twenty_seven_node_bricks(tmp_path, solver):
     assert got == pytest.approx(EXACT, rel=0.01)
 
 
+@over("code_aster", "elmer")
+def test_twenty_and_twenty_seven_nodes_agree(tmp_path, solver):
+    """On one solver and one mesh's corners, the serendipity and Lagrange bricks differ
+    by their interior nodes only: within 0.5 % of each other."""
+    twenty = _tip(tmp_path / "20", solver, 20)
+    lagrange = _tip(tmp_path / "27", solver, 27)
+    print(f"{solver}: hex20 / hex27 {twenty / lagrange:.5f}")
+    assert twenty == pytest.approx(lagrange, rel=0.005)
+
+
 @over("calculix", "code_aster")
 def test_reduced_quadratic_bricks(tmp_path, solver):
     got = _tip(tmp_path, solver, 20, "reduced")

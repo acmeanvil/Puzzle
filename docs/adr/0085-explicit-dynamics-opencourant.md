@@ -119,7 +119,7 @@ they are read for the format, never copied into Puzzle.
 
 4. **Checks before running**, as Problems and the Advisor's Run step, warnings only:
    - the stable time step: per element L / c with c the dilatational wave speed
-     √(E (1 − ν) / (ρ (1 + ν)(1 − 2ν))), L its smallest height (tets) or edge (bricks);
+     √(E (1 − ν) / (ρ (1 + ν)(1 − 2ν))), L its smallest height 3 V / A_max (tets) or V / A_max (bricks);
      the smallest, where it is, and the cycles end_time / (scale × Δt);
    - a run longer than 10⁷ cycles is warned, saying the mass scaling that would bring it
      to 10⁶ and the mass it would add;

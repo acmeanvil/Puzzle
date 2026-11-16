@@ -37,3 +37,48 @@ def test_dead_load_is_needed():
 
 def test_notional_loads_are_two_thousandths_of_gravity():
     assert notional({"1": 1000.0, "2": 250.0}) == {"1": 2.0, "2": 0.5}
+
+
+def _mixed_frame():
+    """A portal: a stainless left column (3 m), a carbon beam (4 m) and right column; a
+    10 kN point load on the beam's left end, 2 kN/m along the beam, and a 2 m × 2 m
+    stainless plate (counter-clockwise about +z, PyNite's local z up) under 1 kPa down."""
+    return {
+        "nodes": {"1": [0, 0, 0], "2": [0, 0, 3], "3": [4, 0, 3], "4": [4, 0, 0],
+                  "5": [10, 0, 3], "6": [12, 0, 3], "7": [12, 2, 3], "8": [10, 2, 3]},
+        "members": [{"name": "C1", "i": "1", "j": "2", "material": "ss"},
+                    {"name": "B", "i": "2", "j": "3", "material": "cs"},
+                    {"name": "C2", "i": "3", "j": "4", "material": "cs"}],
+        "quads": [{"name": "Q1", "nodes": ["5", "6", "7", "8"], "material": "ss"}],
+        "point_loads": [{"node": "2", "direction": "FZ", "P": -10e3, "case": "D"}],
+        "line_loads": [{"member": "B", "direction": "FZ", "w": -2e3, "case": "D"}],
+        "pressures": [{"quad": "Q1", "p": -1e3, "case": "D"}],
+        "combos": [{"name": "1.2D", "factors": {"D": 1.2}}],
+    }  # fmt: skip
+
+
+def _notionals(fractions):
+    from puzzle.adapters.pynite.case import _notional
+
+    case = _mixed_frame()
+    _notional(case, {"notional_directions": "+x"}, fractions)
+    (combo,) = case["combos"]
+    return {p["node"]: p["P"] for p in case["point_loads"] if p["case"] in combo["factors"]
+            and p["case"] != "D"}  # fmt: skip
+
+
+def test_direct_analysis_notional_loads_by_each_members_material():
+    """AISC 360 C2.2b N_i = 0.002 Y_i, AISC 370 C2.3(c) 0.004 Y_i on stainless, Y_i the
+    factored gravity (1.2 D): the beam's line load (carbon) at 0.002 of its 4 kN per end;
+    the point load at node 2 at the length-weighted mean of the members there,
+    (3 × 0.004 + 4 × 0.002) / 7; the plate's 4 kN (1 kPa × 4 m², a quarter per corner)
+    at 0.004. All carbon: 0.002 everywhere."""
+    got = _notionals({"ss": 0.004})
+    at_2 = (3 * 0.004 + 4 * 0.002) / 7
+    assert got["2"] == pytest.approx(1.2 * (10e3 * at_2 + 4e3 * 0.002))
+    assert got["3"] == pytest.approx(1.2 * 4e3 * 0.002)
+    for n in "5678":
+        assert got[n] == pytest.approx(1.2 * 1e3 * 0.004)
+    carbon = _notionals({})
+    assert carbon == pytest.approx({"2": 1.2 * 14e3 * 0.002, "3": 1.2 * 4e3 * 0.002,
+                                    **{n: 1.2 * 1e3 * 0.002 for n in "5678"}})  # fmt: skip

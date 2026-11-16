@@ -57,8 +57,15 @@ A positive pressure on a sheet pushes against the face's normal.
    for self weight.
 6. A study on PyNite (one static step). Cross-check it on CalculiX or Code_Aster.
 
-The agent can also read a frame's nodes and members from a DXF file's lines, layers
-becoming groups.
+<!-- key: form:frame_dxf -->
+### A frame from a DXF
+
+Geometry → New frame from a DXF… reads a drawing's LINE, LWPOLYLINE and POLYLINE
+entities as members, nodes where they meet. Choose the file (copied into the project
+when outside it), every layer or one, and the scale in metres per drawing unit (from the
+drawing's units; millimetres when it gives none). Each layer becomes a group of members
+for its section (layer 0's lines have none); the form shows the members, nodes, size and
+groups before OK. Then steps 3 to 6 above.
 
 ## Load combinations, P-Delta and the Direct Analysis Method
 

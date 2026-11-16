@@ -67,6 +67,12 @@ def answer(window, *replies):
     window.ask_text = lambda *args, **kw: queue.pop(0)
 
 
+def new_box(window, name="Part 1"):
+    """New part… started from a box (a 50 x 30 x 10 mm one)."""
+    fill(window, start="box", name=name)
+    menus.new_part(window)
+
+
 def show(app, window, name="Part 1"):
     """Select the geometry and wait for its preview."""
     geo = geometry(window, name)
@@ -76,8 +82,7 @@ def show(app, window, name="Part 1"):
 
 
 def test_build_a_part_from_steps(app, window):
-    answer(window, "Part 1")
-    menus.new_part(window)
+    new_box(window)
     assert "1. Box Base" in labels(window)
     # A part with no component is shown on its own.
     assert show(app, window)["kind"] == "preview"
@@ -114,8 +119,7 @@ def test_build_a_part_from_steps(app, window):
 
 
 def test_a_failing_step_is_reported_by_name(app, window):
-    answer(window, "Part 1")
-    menus.new_part(window)
+    new_box(window)
     answer(window, ("Huge", {"r": 0.5, "rule": {"parallel": "z", "outer": True}}))
     menus.add_step_to(window, geometry(window), "fillet")
     show(app, window)
@@ -131,8 +135,7 @@ def test_parameters_drive_a_step(app, window):
     params = window.session.project.of_type(ParameterSet)[0]
     assert params.values["t"].value == 12 and params.values["t"].unit == "mm"
 
-    answer(window, "Part 1")
-    menus.new_part(window)
+    new_box(window)
     geo = geometry(window)
     answer(
         window,
@@ -156,8 +159,7 @@ def test_parameters_drive_a_step(app, window):
 
 
 def test_measure_two_faces(app, window):
-    answer(window, "Part 1")
-    menus.new_part(window)  # a 50 x 30 x 10 mm box
+    new_box(window)  # a 50 x 30 x 10 mm box
     show(app, window)
     window.toggle_picking(True)
     v = window.viewport
@@ -252,11 +254,10 @@ def test_a_section_step_picks_its_part_by_name(app):
 def test_selecting_a_step_highlights_its_faces(app, window):
     answer(
         window,
-        "Part 1",
         ("Bore", {"r": 0.004, "x": 0.015, "y": 0.015, "z": 0.0, "axis": "z"}),
         ("Bores", {"feature": "Bore", "count": 2, "dx": 0.02, "dy": 0.0, "dz": 0.0}),
     )
-    menus.new_part(window)
+    new_box(window)
     menus.add_step_to(window, geometry(window), "hole")
     menus.add_step_to(window, geometry(window), "pattern")
     show(app, window)
@@ -270,8 +271,7 @@ def _box_corners(window):
 
 
 def test_the_filter_picks_edges_points_and_bodies(app, window):
-    answer(window, "Part 1")
-    menus.new_part(window)  # a 50 x 30 x 10 mm box
+    new_box(window)  # a 50 x 30 x 10 mm box
     show(app, window)
     window.toggle_picking(True)
     v, bar = window.viewport, window.pick_bar
@@ -399,8 +399,7 @@ def test_a_replaced_file_is_reattached_in_one_review(app, window, tmp_path):
 def test_measure_lists_exact_values_of_the_picks(app, window):
     """ADR 0042: Measure (pick bar or the Geometry ribbon) lists the picks' exact sizes
     in display units, and the distance between two picks."""
-    answer(window, "Part 1")
-    menus.new_part(window)  # a 50 x 30 x 10 mm box
+    new_box(window)  # a 50 x 30 x 10 mm box
     show(app, window)
     window.start_measuring()
     panel = window.measuring

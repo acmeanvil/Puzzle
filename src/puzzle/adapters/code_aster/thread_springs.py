@@ -262,6 +262,7 @@ def bolt_threads(project, comp, mesh: Mesh, fasteners) -> list[BoltThread]:
                 modulus(project, comp, sel),
                 f.thread.compliance,
                 rigid_core=True,
+                angle=float(np.degrees(alpha)),
             )  # fmt: skip  (no core contraction)
             step = spec.pitch / 20  # levels closer than this share a core node
             levels = np.unique(np.round(s / step) * step)

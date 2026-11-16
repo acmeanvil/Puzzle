@@ -5,7 +5,9 @@ features.
 The metric: the field's gradient recovered at the nodes (each element's gradient,
 averaged by volume), then the gradient of that, symmetrised, as the Hessian H. Its
 eigenvalues give the sizes along its directions for an interpolation error ε =
-target × the field's range: λ = c |μ| / ε, c = 2/9 (linear tets), clamped between
+target × the field's range: λ = c_d |μ| / ε, c_3 = 9/32 for linear tetrahedra (Frey and
+Alauzet 2005, "Anisotropic mesh adaptation for CFD computations", CMAME 194: c_2 = 2/9
+for triangles, c_3 = 9/32 for tetrahedra), clamped between
 1/hmax² and 1/hmin² and to an aspect ratio of at most `stretch`.
 
 MMG (`mmg3d_O3`, LGPL, from the pixi `mmg` environment, found as Netgen is) runs as a
@@ -30,7 +32,9 @@ from puzzle.errors import PuzzleError
 from puzzle.mesh.mesh import CellBlock, Group, Mesh
 from puzzle.post import estimates as est
 
-C_LINEAR = 2 / 9  # the interpolation error constant for linear tetrahedra in 3D
+# Frey and Alauzet's interpolation error constant c_d for linear elements: 2/9 in 2D,
+# 9/32 in 3D; the metric here is built on tetrahedra only.
+C_LINEAR = {2: 2 / 9, 3: 9 / 32}
 TRI6 = [(0, 1), (1, 2), (2, 0)]
 
 
@@ -100,7 +104,7 @@ def metric(coords, tets, values, target: float, hmin: float, hmax: float,
     h = recovered_gradient(coords, tets, g)  # (n, 3, 3)
     h = 0.5 * (h + np.swapaxes(h, 1, 2))
     mu, vec = np.linalg.eigh(h)
-    lam = np.clip(C_LINEAR * np.abs(mu) / eps, 1 / hmax**2, 1 / hmin**2)
+    lam = np.clip(C_LINEAR[3] * np.abs(mu) / eps, 1 / hmax**2, 1 / hmin**2)
     lam = np.maximum(lam, lam.max(axis=1, keepdims=True) / stretch**2)
     return np.einsum("nij,nj,nkj->nik", vec, lam, vec)
 

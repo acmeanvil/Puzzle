@@ -321,10 +321,13 @@ bricks, two through the depth, against Timoshenko's δ within 1 %:
 - `test_twenty_node_bricks`: CalculiX C3D20, Code_Aster HEXA20, Elmer 820;
 - `test_twenty_seven_node_bricks`: Code_Aster HEXA27, Elmer 827, FEniCSx Q2;
 - `test_reduced_quadratic_bricks`: CalculiX C3D20R and Code_Aster 3D_SI;
+- `test_twenty_and_twenty_seven_nodes_agree`: Code_Aster and Elmer, each with both
+  bricks on one mesh, within 0.5 % of each other;
 - CalculiX refuses 27-node bricks and FEniCSx 20-node ones (both asserted).
 
 ADR 0082 records 0.9951 of Timoshenko's on all three 20-node bricks, 0.9956 on all three
-27-node bricks and 0.9957 reduced.
+27-node bricks and 0.9957 reduced; measured again 2026-11-15, and 20 against 27 nodes
+0.99959 on both solvers.
 
 `tests/integration/test_element_choice.py` (one formulation per body, ADR 0082):
 

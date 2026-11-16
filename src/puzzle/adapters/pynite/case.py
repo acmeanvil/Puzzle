@@ -270,29 +270,63 @@ def _modal(case: dict, project, comp, study, mesh, settings: dict, spectrum: boo
     case["modal"] = block
 
 
-def _notional(case: dict, settings: dict, fraction: float = 0.002) -> None:
-    """AISC 360 C2.2b, the Direct Analysis Method's notional loads: in each combination,
-    0.002 times the factored gravity load at each node, laterally, in each direction the
-    step names (`notional_directions`, default "x,y": both senses of each), each a
-    combination of its own, replacing the original ones."""
-    from puzzle.frames.combinations import notional
+CARBON_NOTIONAL, STAINLESS_NOTIONAL = 0.002, 0.004  # AISC 360 C2.2b; 370 C2.3(c)
 
+
+def _notional(case: dict, settings: dict, fractions: dict[str, float] | None = None) -> None:
+    """AISC 360 C2.2b, the Direct Analysis Method's notional loads: in each combination,
+    N_i = 0.002 Y_i at each node, Y_i its factored gravity load (point loads, line loads
+    half to each end, plate pressures' downward part a quarter to each corner),
+    laterally, in each direction the step names (`notional_directions`, default "x,y":
+    both senses of each), each a combination of its own, replacing the original ones.
+    `fractions` (material key -> fraction) gives stainless members and plates 0.004
+    (AISC 370 C2.3(c): τ_b = 1 with a further 0.002 Y_i): a line load or a pressure takes
+    the fraction of the member or plate carrying it, a point load the mean of the members
+    meeting at its node by length (of the plates there, when no member is)."""
+    fractions = fractions or {}
     nodes = case["nodes"]
     lengths = {
         m["name"]: float(np.linalg.norm(np.subtract(nodes[m["j"]], nodes[m["i"]])))
         for m in case["members"]
     }
     ends = {m["name"]: (m["i"], m["j"]) for m in case["members"]}
-    by_case: dict[str, dict[str, float]] = {}  # case -> node -> downward load (N)
+    own = {m["name"]: fractions.get(m["material"], CARBON_NOTIONAL) for m in case["members"]}
+    quads = {q["name"]: q for q in case.get("quads", [])}
+    plate = {name: fractions.get(q["material"], CARBON_NOTIONAL) for name, q in quads.items()}
+    weighed: dict[str, list[float]] = {}  # node -> [Σ fraction × length, Σ length]
+    for m in case["members"]:
+        for n in (m["i"], m["j"]):
+            w = weighed.setdefault(n, [0.0, 0.0])
+            w[0] += own[m["name"]] * lengths[m["name"]]
+            w[1] += lengths[m["name"]]
+    framed = set(weighed)
+    for name, q in quads.items():
+        for n in q["nodes"]:
+            if n not in framed:
+                w = weighed.setdefault(n, [0.0, 0.0])
+                w[0] += plate[name]
+                w[1] += 1.0
+    at_node = {n: w[0] / w[1] if w[1] else CARBON_NOTIONAL for n, w in weighed.items()}
+    by_case: dict[str, dict[str, float]] = {}  # case -> node -> fraction × downward load (N)
+
+    def add(load_case, node, value):
+        to = by_case.setdefault(load_case, {})
+        to[node] = to.get(node, 0.0) + value
+
     for p in case["point_loads"]:
         if p["direction"] == f"F{VERTICAL}":
-            node = by_case.setdefault(p["case"], {})
-            node[p["node"]] = node.get(p["node"], 0.0) - p["P"]
+            add(p["case"], p["node"], -p["P"] * at_node.get(p["node"], CARBON_NOTIONAL))
     for w in case["line_loads"]:
         if w["direction"] == f"F{VERTICAL}":
-            node = by_case.setdefault(w["case"], {})
             for n in ends[w["member"]]:
-                node[n] = node.get(n, 0.0) - 0.5 * w["w"] * lengths[w["member"]]
+                add(w["case"], n, -0.5 * w["w"] * lengths[w["member"]] * own[w["member"]])
+    for p in case.get("pressures", []):  # PyNite's pushes along the quad's local z
+        q = quads[p["quad"]]
+        c = np.array([nodes[n] for n in q["nodes"]], dtype=float)
+        area_normal = 0.5 * np.cross(c[2] - c[0], c[3] - c[1])  # A n
+        down = -p["p"] * float(area_normal["xyz".index(VERTICAL.lower())])
+        for n in q["nodes"]:
+            add(p["case"], n, 0.25 * down * plate[p["quad"]])
     combos = case["combos"] or [{"name": "Loads", "factors": {DEFAULT_CASE: 1.0}}]
     wanted = str(settings.get("notional_directions", "x,y"))
     directions = [d.strip().lower() for d in wanted.split(",") if d.strip()]
@@ -300,21 +334,20 @@ def _notional(case: dict, settings: dict, fraction: float = 0.002) -> None:
         raise InputError(f"notional loads go along x or y, not {wanted!r}", code="invalid")
     out = []
     for c in combos:
-        gravity: dict[str, float] = {}
+        loads: dict[str, float] = {}
         for name, factor in c["factors"].items():
             for n, y in by_case.get(name, {}).items():
-                gravity[n] = gravity.get(n, 0.0) + factor * y
-        loads = notional(gravity, fraction)
+                loads[n] = loads.get(n, 0.0) + factor * y
         for d in directions:
             axis = d.lstrip("+-")
             for sense in [d[0]] if d[0] in "+-" else ["+", "-"]:
-                own = f"{c['name']} N{sense}{axis}"
+                mine = f"{c['name']} N{sense}{axis}"
                 sign = 1.0 if sense == "+" else -1.0
                 case["point_loads"] += [{"node": n, "direction": f"F{axis.upper()}",
-                                         "P": sign * value, "case": own}
+                                         "P": sign * value, "case": mine}
                                         for n, value in loads.items() if value]  # fmt: skip
                 out.append({"name": f"{c['name']}, notional {sense}{axis}",
-                            "factors": {**c["factors"], own: 1.0}})  # fmt: skip
+                            "factors": {**c["factors"], mine: 1.0}})  # fmt: skip
     case["combos"] = out
 
 
@@ -367,14 +400,15 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     combos = study.combinations
     settings = steps[0].settings
     dam = bool(settings.get("direct_analysis"))
-    stainless = False
+    stainless: dict[str, float] = {}  # material key -> its notional fraction
     if dam:  # AISC 360 C2.3: 0.8 of the stiffness (tau_b = 1); AISC 370 C2.3: 0.70
         from uuid import UUID
 
         for key, (e, g, nu, rho) in list(materials.items()):
             m = project.objects.get(UUID(key))
             steel = (getattr(m, "info", None) or {}).get("group") == "Stainless Steel"
-            stainless |= steel
+            if steel:
+                stainless[key] = STAINLESS_NOTIONAL
             tau = 0.70 if steel else 0.8
             materials[key] = [tau * e, tau * g, nu, rho]
     if spectrum:  # the spectrum is the seismic load: generated ELF loads stay out
@@ -469,8 +503,8 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             raise InputError(f"combination '{c.name}' factors no load case the frame has "
                              f"({', '.join(sorted(used)) or 'none'})", code="invalid")  # fmt: skip
     case["pdelta"] = bool(settings.get("second_order")) or dam
-    if dam:  # 370 C2.3(c): τ_b = 1 with a further 0.002 Y_i, so 0.004 in all
-        _notional(case, settings, 0.004 if stainless else 0.002)
+    if dam:  # 370 C2.3(c): τ_b = 1 with a further 0.002 Y_i, so 0.004 on stainless
+        _notional(case, settings, stainless)
     workdir.mkdir(parents=True, exist_ok=True)
     (workdir / CASE).write_text(json.dumps(case), encoding="utf-8")
     shutil.copyfile(RUNNER, workdir / RUNNER.name)

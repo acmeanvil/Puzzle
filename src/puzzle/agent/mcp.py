@@ -895,24 +895,14 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         import tempfile
 
         from puzzle.commands import resolve
-        from puzzle.model.schema import ComparisonMetric, Study
-        from puzzle.shootout import run_mesh_shootout
+        from puzzle.model.schema import Study
+        from puzzle.shootout import mesh_shootout_report
 
         s = session()
         target = resolve(s.project, study, Study)
-        metrics = [
-            ComparisonMetric(quantity=q, norm="relative_value", tolerance=tolerance)
-            for q in (quantities or ["displacement"])
-        ]
         with tempfile.TemporaryDirectory() as work:
-            out = run_mesh_shootout(s.project, target.id, root, Path(work), metrics)
-        return {
-            "passed": out.passed,
-            "comparisons": [
-                {"quantity": c.metric.quantity, "relative_difference": c.value, "passed": c.passed}
-                for c in out.comparisons
-            ],
-        }
+            return mesh_shootout_report(s.project, target.id, root, Path(work), quantities,
+                                        tolerance)  # fmt: skip
 
     @tool(
         description='Solve a sketch (an extrude or revolve profile {"sketch": {...}}; '
