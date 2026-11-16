@@ -181,3 +181,18 @@ def test_the_outline_and_schematic_say_the_check(tmp_path):
     assert "Mesh study Fine check of S: 3 meshes" in text
     node = schematic.build(p, store.runs(), store=store).nodes[str(ms.id)]
     assert node.badge == "2 of 3 meshes" and node.value == ""
+
+
+def test_a_2d_model_takes_its_ratio_from_a_square_root():
+    """A 2D mesh's refinement ratio is (N_fine / N_coarse)^(1/2): with the cube root its
+    observed order came out 1.5 times too high (found 2026-11-15)."""
+    f, levels = lambda h: 1.0 - 0.1 * h**2, []
+    for k, h in enumerate((1.0, 0.5, 0.25)):
+        levels.append(convergence.Level(k + 1, 1 / h, f"level {k + 1}", run=f"r{k}",
+                                        elements=round(100 / h**2), dim=2,
+                                        values={"tip": f(h)}))  # fmt: skip
+    (v,) = convergence.verdicts(levels)
+    assert v.order == pytest.approx(2.0, abs=1e-6)
+    assert v.extrapolated == pytest.approx(1.0, rel=1e-9)
+    (three,) = convergence.verdicts(levels, dim=3)  # as before the fix
+    assert three.order == pytest.approx(3.0, abs=1e-6)

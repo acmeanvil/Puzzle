@@ -2456,7 +2456,9 @@ def contact_summary(project, comp, mesh: Mesh | None = None) -> dict[str, str]:
                                           if friction else ""))  # fmt: skip
             text = (
                 f"DEFI_CONTACT continuous (augmented Lagrangian), slave {c.source}, {law}; "
-                "faces turned outward (ORIE_PEAU); STAT_NON_LINE over 10 increments"
+                "faces turned outward (ORIE_PEAU); STAT_NON_LINE from the full load, "
+                "cut back if an "
+                "increment fails"
             )
             init = c.extensions.get("code_aster", {}).get("contact_init")
             if init:

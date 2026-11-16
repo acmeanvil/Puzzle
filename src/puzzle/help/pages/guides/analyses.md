@@ -126,6 +126,7 @@ cost, [magnetic_check](help:mcp:magnetic_check) the skin depth. From a terminal,
 
 ## See also
 
+- Theory: [Structural dynamics](help:theory/structural-dynamics), [Time integration](help:theory/time-integration), [Explicit dynamics](help:theory/explicit-dynamics), [Buckling](help:theory/buckling), [Electromagnetics](help:theory/electromagnetics), [Flow (CFD)](help:theory/cfd).
 - [Studies and solvers](help:guides/studies-and-solvers)
 - [Loads and supports](help:guides/loads-and-supports)
 - [What each solver does](help:reference/capabilities)

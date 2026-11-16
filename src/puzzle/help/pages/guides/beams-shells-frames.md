@@ -131,6 +131,7 @@ lists them with [frame_members](help:mcp:frame_members), and uses
 
 ## See also
 
+- Theory: [Frame design](help:theory/frame-design), [Seismic design](help:theory/seismic).
 - [Geometry](help:guides/geometry)
 - [Loads and supports](help:guides/loads-and-supports)
 - [Studies and solvers](help:guides/studies-and-solvers)

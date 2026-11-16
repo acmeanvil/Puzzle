@@ -39,13 +39,14 @@ class Level:
     run: str = ""
     nodes: int = 0
     elements: int = 0
+    dim: int = 3  # the mesh's element dimension: 2 for a 2D model, whose r is a square root
     values: dict[str, float | None] = field(default_factory=dict)
     reason: str = ""
     kinds: dict[str, str | None] = field(default_factory=dict)  # each value's unit kind
 
     def to_dict(self) -> dict[str, Any]:
         return {"index": self.index, "factor": self.factor, "label": self.label,
-                "run": self.run, "nodes": self.nodes, "elements": self.elements,
+                "run": self.run, "nodes": self.nodes, "elements": self.elements, "dim": self.dim,
                 "values": self.values, "kinds": self.kinds, "reason": self.reason}  # fmt: skip
 
 
@@ -196,8 +197,8 @@ def run(project, study, root: Path, workdir: Path, *, store, count: int = 3,
         lv.run = record.run_id
         mesh = store.read_mesh(record.mesh_id)
         lv.nodes = int(mesh.node_ids.size)
-        lv.elements = sum(len(b.ids) for b in mesh.blocks if b.dim == max(
-            (x.dim for x in mesh.blocks), default=3))  # fmt: skip
+        lv.dim = max((x.dim for x in mesh.blocks), default=3)
+        lv.elements = sum(len(b.ids) for b in mesh.blocks if b.dim == lv.dim)
         try:
             lv.values = _read(at, store, study, lv, outputs)
         except PuzzleError as exc:
@@ -205,11 +206,15 @@ def run(project, study, root: Path, workdir: Path, *, store, count: int = 3,
     return planned
 
 
-def verdicts(levels_: list[Level], target: float = 0.02, dim: int = 3) -> list[Verdict]:
+def verdicts(levels_: list[Level], target: float = 0.02, dim: int | None = None) -> list[Verdict]:
     """Each quantity's observed order, extrapolated value and GCI from the three finest
     levels that ran (Roache's method: the refinement ratios from the element counts,
-    r = (N_fine / N_coarse)^(1/dim), the order solved by fixed-point iteration)."""
+    r = (N_fine / N_coarse)^(1/dim), the order solved by fixed-point iteration). `dim`
+    defaults to the meshes' own (a 2D model's ratio is a square root: with the cube root
+    its order came out 1.5 times too high, found 2026-11-15)."""
     done = [lv for lv in levels_ if lv.run and lv.values]
+    if dim is None:
+        dim = done[-1].dim if done else 3
     names = list(done[0].values) if done else []
     out = []
     for name in names:

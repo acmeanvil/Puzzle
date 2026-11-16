@@ -10,10 +10,11 @@ N/mm²; those few with dimensional constants (the endurance limit) convert insid
   dS = (d2 + d3)/2, AS = π dS²/4, Ad3 and AN = π d²/4 (`thread`).
 - The bolt's resilience δS = δSK + Σδi + δGew + δGM (Section 5.1.1, Eqs. 19-31,
   `bolt_resilience`): the head as lSK = 0.5 d of the nominal section for a hexagon head,
-  0.4 d for a socket head cap screw (Eqs. 20, 21); each shank cylinder (22); the free
-  loaded thread at the minor section (23); the engaged thread lG = 0.5 d at the minor
-  section (Eqs. 24-26) and the nut or tapped hole lM = 0.4 d (a nut), 0.33 d (a tapped
-  thread joint) at the nominal section with the nut's modulus (27-30). δG + δM is
+  0.4 d for a socket head cap screw (Eqs. 29-31); each shank cylinder; the free loaded
+  thread at the minor section (δGew, Eq. 28); the engaged thread lG = 0.5 d at the minor
+  section (Eqs. 21-23) and the nut or tapped hole lM = 0.4 d (a nut), 0.33 d (a tapped
+  thread joint) at the nominal section with the nut's modulus (Eqs. 24-27); δGM = δG +
+  δM is Eq. 20 (equation numbers checked on the 2015 guideline, 2026-11-15). δG + δM is
   `threads.vdi_compliance` (ADR 0076), which a test holds equal. The bending resilience
   βS of the same elements gives the substitutional bending length lers (33-35).
 - The clamped parts' resilience δP by the deformation cone(s) and sleeve (5.1.2,
@@ -95,7 +96,7 @@ GRADES = {
 
 # --- the bolt's resilience (5.1.1) --------------------------------------------------------
 
-HEADS = {"hex": 0.5, "socket": 0.4}  # lSK / d (Eqs. 20, 21)
+HEADS = {"hex": 0.5, "socket": 0.4}  # lSK / d (Eqs. 30, 31)
 
 
 @dataclass(frozen=True)

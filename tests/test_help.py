@@ -298,3 +298,40 @@ def test_every_code_puzzle_raises_is_listed():
         used |= set(re.findall(r'Problem\(\s*"([a-z_]+)"', text))
         used |= set(re.findall(r'code="([a-z_]+)"', text))
     assert not sorted(used - set(CODES))
+
+
+def test_theory_notes_cite_their_sources_and_are_reached_from_a_guide():
+    """Each theory note (ADR 0083 decision 1) ends in Sources with at least one citation,
+    and a guide links to it, so a reader of the how finds the why."""
+    theory = [p for p in manual.pages().values() if p.section == "theory"]
+    assert theory
+    linked = {t[len("help:") :].split("#")[0] for p in manual.pages().values()
+              if p.section == "guide" for t in LINK.findall(p.body)}  # fmt: skip
+    for p in theory:
+        sources = manual.section_text(p, "Sources")
+        assert sources.startswith("## Sources") and "\n- " in sources, p.name
+        assert p.keys and all(k.startswith("theory:") for k in p.keys), p.name
+        assert p.name in linked, f"no guide links to {p.name}"
+
+
+def test_every_equation_in_the_manual_renders():
+    """The Help window draws TeX with matplotlib's mathtext, which lacks environments
+    and \text; an equation it can't parse would show as raw TeX."""
+    pytest.importorskip("matplotlib")
+    from matplotlib.mathtext import MathTextParser
+
+    from puzzle.gui.agent_view import DISPLAY_TEX, INLINE_TEX, segments
+
+    parser, failed = MathTextParser("agg"), []
+    for p in manual.pages().values():
+        for s in segments(p.text):
+            if s.kind == "code":
+                continue
+            found = DISPLAY_TEX.findall(s.text)
+            found += INLINE_TEX.findall(DISPLAY_TEX.sub("", s.text))
+            for tex in found:
+                try:
+                    parser.parse(f"${tex.strip()}$")
+                except ValueError as e:
+                    failed.append(f"{p.name}: {tex.strip()[:60]} ({str(e).splitlines()[0]})")
+    assert not failed, failed

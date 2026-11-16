@@ -134,6 +134,17 @@ The maintainer asked (2026-11-11) for a complete help and documentation system, 
   for edges and points. Two status messages and the coordinate-systems skill named
   menus that aren't there.
 
+**Built (2026-11-15), step 4**: nineteen theory notes in `help/pages/theory/` (stress
+results and combinations, linearization, mesh convergence, error estimates, bolted
+joints, thread loads, weld strength, fatigue, structural dynamics, time integration,
+explicit dynamics, buckling, contact, symmetry, electromagnetics, flow, frame design,
+seismic design, optimisation), each from the code that computes it, with its limits and
+sources; each guide's See also names its notes. Tests: every theory note ends in
+Sources, carries only `theory:` keys (so F1 stays on the reference) and is linked from a
+guide; every equation in the manual parses in mathtext. Writing them found three bugs
+(2D mesh convergence, adaptive passes on 2D meshes and named fields) and stale text,
+fixed, and the rest listed in ADR 0072.
+
 ## Consequences
 
 - Users get a manual that matches the build they run, and the agent explains from the

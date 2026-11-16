@@ -110,6 +110,7 @@ study) is made through [submit](help:mcp:submit). In a terminal:
 
 ## See also
 
+- Theory: [Mesh convergence and the GCI](help:theory/mesh-convergence), [Error estimates and adaptive meshing](help:theory/error-estimates), [Optimisation and surrogates](help:theory/optimisation).
 - [Schematic and operators](help:guides/schematic-and-operators)
 - [Meshing](help:guides/meshing)
 - [Studies and solvers](help:guides/studies-and-solvers)

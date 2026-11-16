@@ -129,6 +129,7 @@ Features are added and edited with [submit](help:mcp:submit).
 
 ## See also
 
+- Theory: [Symmetry and repeats](help:theory/symmetry).
 - [Loads and supports reference](help:reference/features)
 - [Components](help:guides/components)
 - [Studies and solvers](help:guides/studies-and-solvers)

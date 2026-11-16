@@ -202,7 +202,8 @@ def run(project, study, root: Path, workdir: Path, *, store, settings=None, solv
         p.run = record.run_id
         mesh = store.read_mesh(record.mesh_id)
         p.nodes = int(mesh.node_ids.size)
-        p.elements = sum(len(b.ids) for b in mesh.blocks if b.dim == 3)
+        dim = max((b.dim for b in mesh.blocks), default=3)  # 2 on a 2D model
+        p.elements = sum(len(b.ids) for b in mesh.blocks if b.dim == dim)
         est = estimates.of_run(at, store, record.run_id, field_name=a.field)
         p.error = est.relative if est.physics != "field" else None
         try:
@@ -231,6 +232,11 @@ def _done(a, passes: list[Pass]) -> str:
     """Why to stop now, or ""."""
     last = passes[-1]
     if a.criterion == "energy":
+        if last.error is None and last.run:  # a named field's jumps: no energy norm
+            return (
+                f"stopped: {a.field or 'this field'} gives no energy-norm error, so "
+                "the energy criterion can't hold; use the quantity criterion"
+            )
         if last.error is not None and last.error <= a.target:
             return f"converged: error {last.error * 100:.2g} % ≤ {a.target * 100:g} %"
         return ""

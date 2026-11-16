@@ -19,7 +19,8 @@ answer from it matches what they see.
      `setting:shared:<key>`, `solver:<name>`, `operator:<kind>`, `property:<key>`,
      `model:<key>`, `result:<field>`, `field:<name>` (a Properties row),
      `problem:<code>`, `mcp:<tool>`, `cli:<command>`, `kind:<object kind>`,
-     `panel:<panel>`;
+     `panel:<panel>`, `theory:<name>` (the method behind a result: `theory:linearization`,
+     `theory:mesh-convergence`, `theory:bolted-joints`, `theory:contact`...);
    - other words: the passages that answer them best (page, heading, an excerpt);
      then ask for the page you need.
 2. Answer in your own words for this user's case, then name the page by its title so
@@ -30,6 +31,10 @@ answer from it matches what they see.
    right for this build. Guides are written by people: when one disagrees with the
    capability matrix or a tool's answer, trust the tool and say the guide is out of
    date.
+
+4. When a user asks why a number is what it is (how a GCI, a utilisation or a thread
+   share is computed), read the theory note: it names the equations Puzzle uses, its
+   limits and its sources, and cite those sources rather than your own memory.
 
 ## Mistakes to avoid
 

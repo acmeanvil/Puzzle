@@ -132,6 +132,7 @@ setup and initial state.
 
 ## See also
 
+- Theory: [Contact](help:theory/contact).
 - [Bolts and welds](help:guides/bolts-and-welds)
 - [Components](help:guides/components)
 - [Studies and solvers](help:guides/studies-and-solvers)

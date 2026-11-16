@@ -130,6 +130,7 @@ pictures with [render](help:mcp:render), and writes files with
 
 ## See also
 
+- Theory: [How stresses are computed and combined](help:theory/stress-results), [Stress linearization](help:theory/linearization), [Fatigue](help:theory/fatigue).
 - [Studies and solvers](help:guides/studies-and-solvers)
 - [Schematic and operators](help:guides/schematic-and-operators)
 - [Optimisation and convergence](help:guides/optimisation-and-convergence)

@@ -895,7 +895,7 @@ def _step(
 
     if solved == {"solid_mechanics"}:
         procedure = {
-            # Contact is nonlinear: start with a tenth of the load, then let CalculiX step.
+            # Contact is nonlinear: CalculiX steps from `first` (the full load unless ramped).
             # Load stepping set on the step (ADR 0023: increments, first, smallest,
             # fixed) writes the data line even for a linear step.
             "stationary": (
@@ -2402,7 +2402,7 @@ def contact_summary(project: Project, comp: Component, mesh: Mesh | None = None)
         elif c.type == "rough":
             text += f"; *FRICTION μ = {ROUGH_MU:g} (rough: no slip while closed), stick slope K"
         text += moved_words(c)
-        text += "; static steps start at a tenth of the load"
+        text += "; static steps start at the full load and CalculiX cuts back if it must"
         out[c.name] = text
     return out
 

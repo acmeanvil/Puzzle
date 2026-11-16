@@ -492,8 +492,8 @@ FEniCSx, threaded beam-bolt ends, and the modelled bolts of ADR 0077. Left:
 - Advisor text in tooltips and form descriptions; a guided tour once help exists (0040).
 - The help and documentation system with worked examples, ADR 0083 (it supersedes
   0075). Built 2026-11-15: steps 1-3 (the Help window, F1, the generated reference,
-  guides, MCP `help`); left: theory notes, verification pages, the static site and PDF,
-  the tutorials (on `main`).
+  guides, MCP `help`) and step 4 (nineteen theory notes); left: verification pages, the
+  static site and PDF, the tutorials (on `main`).
 - Found writing the guides (2026-11-15), features an agent reaches but the GUI doesn't
   (each a form or menu item to add): making a weld (`weld_add`), a VDI 2230 check
   (`bolt_vdi2230`), weld fatigue (`weld_fatigue`), a parameter sweep step, a frame from a
@@ -525,6 +525,40 @@ FEniCSx, threaded beam-bolt ends, and the modelled bolts of ADR 0077. Left:
   and making an "archived" version first (0061).
 
 ### Found while collecting (fix soon, not deferrals)
+
+- Found writing the theory notes (ADR 0083 step 4, 2026-11-15). Fixed then: mesh
+  convergence took a 2D model's refinement ratio as a cube root (`convergence.verdicts`
+  now uses the meshes' dimension; its order had come out 1.5 times too high); adaptive
+  passes counted no elements on a 2D mesh, and with a named field ran the energy
+  criterion to the budget (it now stops at once and says to use the quantity
+  criterion); VDI 2230 equation numbers in `vdi2230.py`; the contact summaries' "a
+  tenth of the load" and "over 10 increments", and CLAUDE.md's K = 50 E/h (the default
+  is 10) and Elmer magnetics solver. Left:
+  - fatigue: k_c = 1 for every load (`materials/fatigue.py`), where Shigley's combined
+    loading (Eq. 6-66) divides an axial alternating stress by 0.85, about 15 %
+    unconservative for axial loading; the size factor is used past its 254 mm range
+    unbounded.
+  - threads: `threads.stiffness` takes the load flank's angle for both flanks, wrong on
+    asymmetric forms (buttress, DIN 513) and with `bearing="other"`; `nodal_areas` is
+    dead code against `thread_pairs.face_shares`.
+  - spectra: CalculiX's and Code_Aster's ELF scale (`spectra.py`) treats the model as
+    one level (W from the whole mass, the height from every node), PyNite's uses the
+    frame's levels, so the C_u T_a cap can differ by solver.
+  - direct analysis: one stainless material sets 0.004 Y_i notional loads on the whole
+    frame; plate pressures are left out of Y_i (`pynite/case.py`).
+  - FEniCSx theta schemes take loads at the step's end, not θF_{n+1} + (1−θ)F_n (a heat
+    flux on an amplitude under θ < 1 only).
+  - MMG's constant `C_LINEAR = 2/9` is labelled 3D; Frey and Alauzet's c_d gives 9/32
+    in 3D (about 11 % on sizes): check the source, then fix.
+  - `ResultProbe.samples` defaults to 50 (51 points) where ADR 0042 and the GUI say 47.
+  - a linear combination warns only for plasticity, not contact or large deflection
+    (`post/derived.py`); the ASME P + Q ≤ 3S row uses one run's stresses where VIII-2
+    means the range (linearize a range combination).
+  - `cyclic.check` checks step types only for cyclic, not linear periodicity: decide.
+  - stale words: `frames/design.py` and `MemberDesign` say stainless and aluminium are
+    refused; `symmetry.py`'s docstring that only CalculiX writes oblique planes;
+    `SizeFieldControl.field` says jumps where `Estimate.sizes` is used; ADR 0085's brick
+    length (the code uses V/A_max); `openfoam/case.py`'s residual targets.
 
 - Code_Saturne's capability matrix claims transient flow (`fluid_flow`: stationary,
   transient), but no benchmark runs one and its adapter and CLAUDE.md describe steady

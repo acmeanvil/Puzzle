@@ -133,6 +133,7 @@ and [bolt_make_beam](help:mcp:bolt_make_beam). Hand checks of a joint by VDI 223
 
 ## See also
 
+- Theory: [Bolted joints](help:theory/bolted-joints), [Thread loads](help:theory/thread-loads), [Weld strength](help:theory/weld-strength), [Fatigue](help:theory/fatigue).
 - [Contact](help:guides/contact)
 - [Loads and supports](help:guides/loads-and-supports)
 - [Results](help:guides/results)

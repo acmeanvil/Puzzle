@@ -144,3 +144,12 @@ def test_the_cli_reads_the_passes(tmp_path, capsys):
     assert main(["adapt", str(tmp_path / "p"), "S", "--points", "--json"]) == 1
     out = json.loads(capsys.readouterr().out)
     assert out["passes"][0]["reason"] == "not run yet" and not out["converged"]
+
+
+def test_the_energy_criterion_stops_at_once_on_a_field_with_no_energy_norm():
+    """A named field's estimate is its jumps, with no energy-norm error: the energy
+    criterion could never hold and passes ran to the budget (found 2026-11-15)."""
+    a = Adapt(field="velocity_magnitude")
+    why = adapt._done(a, [adapt.Pass(1, run="r1")])
+    assert why.startswith("stopped:") and "quantity criterion" in why
+    assert adapt._done(Adapt(), [adapt.Pass(1)]) == ""  # not run yet: nothing to judge
