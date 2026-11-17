@@ -71,6 +71,11 @@ A contact's source face shares nodes with bolt ends.
 
 Nodes of a contact's source face are also held, or the source of another contact.
 
+<!-- key: problem:damaged_history, error:damaged_history -->
+### damaged_history
+
+Lines of history.jsonl don't read: they are skipped.
+
 <!-- key: problem:duplicate_solver, error:duplicate_solver -->
 ### duplicate_solver
 
@@ -110,6 +115,11 @@ A component uses geometry local to another component.
 ### free_body
 
 A body is neither held nor joined to a held body.
+
+<!-- key: problem:group_cycle, error:group_cycle -->
+### group_cycle
+
+Tree groups hold each other; the tree shows them side by side.
 
 <!-- key: problem:host_unreachable, error:host_unreachable -->
 ### host_unreachable
@@ -156,6 +166,11 @@ The scheduler ended the job itself (a node failure, preemption, a cancel from ou
 
 Large-deflection strains past 5 % on an elastic material (ADR 0082).
 
+<!-- key: problem:lock_lost, error:lock_lost -->
+### lock_lost
+
+Another client took the project lock while this one held it; nothing was written.
+
 <!-- key: problem:mesh_failed, error:mesh_failed -->
 ### mesh_failed
 
@@ -185,6 +200,11 @@ An object refers to another that no longer exists.
 ### negative_radius
 
 An axisymmetric model must lie at x >= 0 (Y is the axis).
+
+<!-- key: problem:newer_schema, error:newer_schema -->
+### newer_schema
+
+The project was saved by a newer Puzzle than this one.
 
 <!-- key: problem:no_material, error:no_material -->
 ### no_material
@@ -276,6 +296,11 @@ Copying a case to or from the remote host failed (ADR 0021).
 
 A solid-mechanics study on a component with no fixed or displacement condition: it would move as a rigid body.
 
+<!-- key: problem:unknown_field, error:unknown_field -->
+### unknown_field
+
+A project file has a field this Puzzle doesn't know (saved by a newer Puzzle?).
+
 <!-- key: problem:unknown_host, error:unknown_host -->
 ### unknown_host
 
@@ -320,3 +345,8 @@ Weak springs were added to a body held only by sliding contact (ADR 0080).
 ### weak_springs_carry
 
 A body's weak springs carry its load: it never seated (ADR 0080).
+
+<!-- key: problem:write_failed, error:write_failed -->
+### write_failed
+
+A file could not be written (a full or read-only disk?).

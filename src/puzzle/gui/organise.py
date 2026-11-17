@@ -73,8 +73,18 @@ def groups_in(window, section: str) -> list[TreeGroup]:
 
 
 def move(window, keys: list[str], group: str | None, section: str):
-    """Put `keys` into `group` (None: out of every group), in `section`; one undo."""
+    """Put `keys` into `group` (None: out of every group), in `section`; one undo. A
+    group never goes into itself or into a group inside it (GUI-21)."""
     keys = [k for k in keys if k and k != group]
+    if group is not None:
+        inside = _inside(window, keys)
+        if group in inside:
+            target = window.session.project.objects.get(_uuid(group))
+            window.statusBar().showMessage(
+                f"A group can't go inside a group it holds ('{getattr(target, 'name', group)}')",
+                8000,
+            )
+            return None
     commands = []
     for g in groups_in(window, section):
         members = [m for m in g.members if m not in keys]
@@ -86,6 +96,20 @@ def move(window, keys: list[str], group: str | None, section: str):
     if not commands:
         return None
     return window.submit_batch(commands) if len(commands) > 1 else window.submit(commands[0])
+
+
+def _inside(window, keys: list[str]) -> set[str]:
+    """The ids of the groups among `keys` and of every group inside them."""
+    groups = {str(g.id): g for g in window.session.project.of_type(TreeGroup)}
+    out: set[str] = set()
+    stack = [k for k in keys if k in groups]
+    while stack:
+        k = stack.pop()
+        if k in out:
+            continue
+        out.add(k)
+        stack += [m for m in groups[k].members if m in groups]
+    return out
 
 
 def new_group(window, section: str, keys: list[str] | None = None, name: str | None = None,
@@ -213,8 +237,9 @@ def add_to_menu(window, menu, node) -> None:
     keys = selected_keys(window, section) or [member_key(node)]
     here = folder_of(item)
     sub = menu.addMenu("Move to group")
+    inside = _inside(window, keys)  # a group never goes into itself or one it holds
     for g in fitting(window, section, here):
-        if str(g.id) in keys:
+        if str(g.id) in keys or str(g.id) in inside:
             continue
         action = sub.addAction(g.name)
         action.triggered.connect(lambda _=False, gid=str(g.id): move(window, keys, gid, section))

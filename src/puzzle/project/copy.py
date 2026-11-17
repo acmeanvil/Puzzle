@@ -7,12 +7,18 @@ names outside the folder (an absolute path, or `../parts/bracket.step`) are copi
 the new project's `imported/` folder and the geometry is pointed at the copy, so
 editing or moving the original's files never reaches the copy. Solver working folders
 under `.puzzle/runs` are left behind (they are disposable), except the meshes the GUI
-and the agent keep there, and so is the original's lock.
+and the agent keep there, and so are the original's lock files.
+
+The copy is consistent (BE-16): the model's files are copied under the project's lock
+(after finishing a change a crash cut short), and the results store under the store's
+lock, so no command or stored run is caught half written. `leave_out` names top-level
+parts not to copy at all (an archive without results copies none).
 """
 
 from __future__ import annotations
 
 import shutil
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -40,9 +46,13 @@ class Copied:
         return f"Saved as new project '{self.name}' in {self.root}{extra}"
 
 
-def save_as(root: Path, dest: Path, name: str | None = None, version: int | None = None) -> Copied:
+def save_as(root: Path, dest: Path, name: str | None = None, version: int | None = None,
+            *, leave_out: Iterable[str] = ()) -> Copied:  # fmt: skip
     """Copy the project at `root` to `dest` (a new or empty folder) and name it `name`;
-    with `version`, the copy starts from that version's files (ADR 0059)."""
+    with `version`, the copy starts from that version's files (ADR 0059). `leave_out`:
+    project-relative paths (results, .puzzle/runs, versions, history.jsonl) not copied."""
+    from puzzle.project import atomic, store
+    from puzzle.project.layout import RESULTS_DIR
     from puzzle.project.store import load_project, save_project
 
     root, dest = Path(root).resolve(), Path(dest).resolve()
@@ -61,21 +71,34 @@ def save_as(root: Path, dest: Path, name: str | None = None, version: int | None
     from puzzle.jobs.pending import FILE as JOBS
 
     work = root / WORK_DIR
+    left = {root / rel for rel in leave_out}
+    results = root / RESULTS_DIR
 
     def ignore(folder: str, entries: list[str]) -> set[str]:
         here = Path(folder)
-        # the lock, and the jobs a runner holds for this project (ADR 0067): a copy that
-        # picked them up would fetch the original's solves into the original's folders
-        skip = {e for e in entries if here / e in (root / LOCK, root / JOBS)}
+        # lock files, and the jobs a runner holds for this project (ADR 0067): a copy
+        # that picked them up would fetch the original's solves into the original's folders
+        skip = {e for e in entries if here / e in (root / LOCK, root / JOBS) or here / e in left}
+        if here in (root / ".puzzle", results):  # lock files beside the store and jobs file
+            skip |= {e for e in entries if e.endswith((".lock", ".guard"))}
+        if here == root:  # the store is copied on its own, under its lock
+            skip.add(RESULTS_DIR)
         if here == work:  # solver working folders are disposable; meshes are kept
             skip |= {e for e in entries if e not in KEPT_WORK}
         return skip
 
     from puzzle.project import versions
+    from puzzle.results.store import ResultStore
 
-    source_name = load_project(root).name
-    start = versions.get(root, version) if version is not None else None
-    shutil.copytree(root, dest, ignore=ignore, dirs_exist_ok=True, symlinks=False)
+    with atomic.Lock(root / LOCK, what="the project").hold():
+        store.recover(root)
+        source_name = load_project(root).name
+        start = versions.get(root, version) if version is not None else None
+        shutil.copytree(root, dest, ignore=ignore, dirs_exist_ok=True, symlinks=False)
+    if results.is_dir() and results not in left:
+        with ResultStore(results).locked():
+            shutil.copytree(results, dest / RESULTS_DIR, ignore=ignore, dirs_exist_ok=True,
+                            symlinks=False)  # fmt: skip
     if start is not None:  # the version's files in place of the current ones
         versions.restore_files(dest, start)
 

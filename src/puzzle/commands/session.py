@@ -19,9 +19,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-import os
 import secrets
-import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -44,13 +42,23 @@ from puzzle.commands.model import (
     parse_command,
 )
 from puzzle.errors import Problem, PuzzleError
-from puzzle.model.schema import OBJECT_TYPES, Component, Project, ProjectObject, Study
-from puzzle.project.layout import HISTORY, LOCK, PROJECT_FILE, RESULTS_DIR, WORK_DIR
+from puzzle.model.schema import (
+    OBJECT_TYPES,
+    SCHEMA_VERSION,
+    Component,
+    Project,
+    ProjectObject,
+    Study,
+    group_cycle,
+)
+from puzzle.project import atomic, history, store
+from puzzle.project.layout import LOCK, PROJECT_FILE, RESULTS_DIR, WORK_DIR
 from puzzle.project.store import load_project, save_project
 
 KINDS: dict[str, type[ProjectObject]] = {cls.kind: cls for cls in OBJECT_TYPES}
 CONFIRM_WITHIN = timedelta(minutes=15)
-STALE_LOCK_S = 120.0  # the lock is never held while a solver runs
+STALE_LOCK_S = atomic.STALE_S  # another host's lock, not refreshed for this long
+LOCK_WAIT_S = 10.0
 
 
 @dataclass(frozen=True)
@@ -117,8 +125,17 @@ class Session:
         if not (root / PROJECT_FILE).exists():
             raise PuzzleError(f"{root} is not a Puzzle project", code="not_found")
         self.root = root
+        self._lock: atomic.Lock | None = None
+        self._swept = False
         self.project = load_project(root)
         self._opened_checked = False  # ADR 0059: one "opened" version check per session
+        if store.pending(root):  # a change a crash cut short: finish it now
+            try:
+                with self._locked():
+                    pass
+            except PuzzleError as exc:  # another client holds the lock: it finishes it,
+                if exc.code != "busy":  # and the project reads through the journal
+                    raise
 
     # --- submitting --------------------------------------------------------------
 
@@ -308,29 +325,61 @@ class Session:
     def accept(
         self, proposal_id: str, actor: Actor = USER, *, only: list[int] | None = None
     ) -> list[Outcome]:
-        """Apply a proposal (or the listed commands of it), attributed to its author."""
+        """Apply a proposal (or the listed commands of it), attributed to its author.
+
+        Its model edits apply all or none, as one history entry and one undo, written
+        with the decision in one transaction: a failure leaves the project as it was
+        and the proposal open, and a proposal is never applied twice. Runs in it are
+        submitted afterwards, each on its own."""
         if actor.is_agent:
             raise PuzzleError("only a user can accept a proposal", code="not_allowed")
-        proposal = self._open_proposal(proposal_id)
-        author = Actor(**proposal["actor"])
-        picks = range(len(proposal["commands"])) if only is None else only
+        runs: list[RunStudy] = []
         outcomes = []
-        for i in picks:
-            cmd = parse_command(proposal["commands"][i])
-            if isinstance(cmd, RunStudy):
-                outcomes.append(self.submit(cmd, actor))
-                continue
-            with self._locked():
-                outcomes.append(self._apply(cmd, author, approved_by=actor, proposal=proposal_id))
         with self._locked():
-            self._log(
-                {
-                    "type": "decision",
-                    "proposal": proposal_id,
-                    "actor": actor.to_dict(),
-                    "accepted": list(picks),
-                }
-            )
+            proposal = self._open_proposal(proposal_id)  # read again under the lock
+            author = Actor(**proposal["actor"])
+            count = len(proposal["commands"])
+            picks = list(range(count)) if only is None else list(only)
+            if any(not isinstance(i, int) or not 0 <= i < count for i in picks):
+                raise PuzzleError(f"proposal {proposal_id} has commands 0 to {count - 1}",
+                                  code="invalid", details={"only": picks})  # fmt: skip
+            cmds = [parse_command(proposal["commands"][i]) for i in picks]
+            runs = [c for c in cmds if isinstance(c, RunStudy)]
+            edits = [c for c in cmds if not isinstance(c, RunStudy)]
+            odd = [c.command for c in edits if not c.edits_model]
+            if odd:
+                raise PuzzleError(f"a proposal cannot hold {', '.join(sorted(set(odd)))}",
+                                  code="invalid")  # fmt: skip
+            decision = {"type": "decision", "proposal": proposal_id,
+                        "actor": actor.to_dict(), "accepted": picks}  # fmt: skip
+            if edits:
+                self._check_opened(actor)
+                before = _snapshot(self.project)
+                trial = copy.deepcopy(self.project)
+                results = []
+                for i, cmd in zip(picks, cmds, strict=True):
+                    if isinstance(cmd, RunStudy):
+                        continue
+                    try:
+                        results.append(_execute(trial, cmd))
+                    except PuzzleError as exc:
+                        exc.details = {**exc.details, "failed_command": i, "applied": "none"}
+                        raise
+                self.project = trial
+                if len(edits) == 1:
+                    dumped, data = _dump(edits[0]), results[0]
+                else:
+                    dumped = {"command": "batch", "commands": [_dump(c) for c in edits]}
+                    data = {"steps": results}
+                extra: dict[str, Any] = {"result": data} if data else {}
+                extra |= {"approved_by": actor.to_dict(), "proposal": proposal_id}
+                outcomes.append(self._record(dumped, author, before, extra=extra, data=data,
+                                             also=[decision]))  # fmt: skip
+                self._edits_version(actor)
+            else:
+                self._log(decision)
+        for cmd in runs:
+            outcomes.append(self.submit(cmd, actor))
         return outcomes
 
     def reject(self, proposal_id: str, actor: Actor = USER, *, reason: str = "") -> None:
@@ -391,21 +440,37 @@ class Session:
                     details={"objects": names},
                 )
             before = current
+            staged = None
             if (entry.get("command") or {}).get("command") == "restore_version" and entry.get(
                 "files_from"
             ):  # a restore's files go back too (ADR 0059)
                 from puzzle.project import versions
 
-                versions.restore_files(self.root, versions.get(self.root, entry["files_from"]))
-                self.project = load_project(self.root)
-            for i in state["after"]:
-                self.project.objects.pop(UUID(i), None)
-            for snap in state["before"].values():
-                obj = KINDS[snap["kind"]].model_validate(snap["data"])
-                self.project.objects[obj.id] = obj
+                staged = versions.stage_restore(
+                    self.root, versions.get(self.root, entry["files_from"])
+                )
+            try:
+                trial = (store.load_staged(self.root, staged) if staged is not None
+                         else copy.deepcopy(self.project))  # fmt: skip
+                from puzzle.project.migrations import upgrade_object
+
+                found = entry.get("schema", 1)
+                for i in state["after"]:
+                    trial.objects.pop(UUID(i), None)
+                for snap in state["before"].values():
+                    kind, data = upgrade_object(snap["kind"], snap["data"], found)
+                    obj = KINDS[kind].model_validate(data)
+                    trial.objects[obj.id] = obj
+                _refuse_dangling(self.project, trial)
+            except BaseException:
+                if staged is not None:
+                    staged.discard()
+                raise
+            self.project = trial
             return self._record(
-                {"command": "undo", "seq": seq}, actor, before, extra={"undoes": seq}
-            )
+                {"command": "undo", "seq": seq}, actor, before, extra={"undoes": seq},
+                staged=staged,
+            )  # fmt: skip
 
     # --- versions (ADR 0059) ------------------------------------------------------
 
@@ -435,17 +500,29 @@ class Session:
             )
         with self._locked():
             target = versions.get(self.root, number)
-            kept = self._auto_version(
-                "before_restore", actor, words={"version": target.number},
-                always_latest=True, forced=True,
-            )  # fmt: skip
-            before = _snapshot(self.project)
-            changed = versions.restore_files(self.root, target)
-            self.project = load_project(self.root)
+            staged = versions.stage_restore(self.root, target)  # every blob checked first
+            try:
+                kept = self._auto_version(
+                    "before_restore", actor, words={"version": target.number},
+                    always_latest=True, forced=True,
+                )  # fmt: skip
+                if kept is None:
+                    raise PuzzleError(
+                        "the project as it is now could not be kept as a version (is the "
+                        "disk full or read-only?), so nothing was restored",
+                        code="write_failed",
+                    )
+                before = _snapshot(self.project)
+                restored = store.load_staged(self.root, staged)  # it must open
+            except BaseException:
+                staged.discard()
+                raise
+            self.project = restored
             return self._record(
                 {"command": "restore_version", "version": target.number}, actor, before,
-                extra={"restored": target.number, "files_from": kept.number if kept else None,
-                       "files": changed},
+                extra={"restored": target.number, "files_from": kept.number,
+                       "files": staged.changes()},
+                staged=staged,
             )  # fmt: skip
 
     def mark_version(self, number: int, good: bool = True, actor: Actor = USER):
@@ -457,7 +534,7 @@ class Session:
             return versions.mark(self.root, number, good, "marked by you" if good else "")
 
     def _last_seq(self) -> int:
-        return max((e.get("seq", 0) for e in self.history_entries()), default=0)
+        return history.last_seq(self.root)
 
     def _versions_on(self) -> bool:
         from puzzle.settings import current
@@ -526,14 +603,10 @@ class Session:
     # --- reading ---------------------------------------------------------------
 
     def history_entries(self) -> list[dict[str, Any]]:
-        path = self.root / HISTORY
-        if not path.exists():
-            return []
-        return [
-            json.loads(line)
-            for line in path.read_text(encoding="utf-8").splitlines()
-            if line.strip()
-        ]
+        """Every entry that reads; a torn or damaged line is skipped (BE-5): the next
+        append sets a torn end aside, and a damaged one is the problem
+        `damaged_history`."""
+        return history.entries(self.root)
 
     def history(self, limit: int = 20) -> list[dict[str, Any]]:
         """The latest entries, newest first, without the undo snapshots."""
@@ -687,10 +760,13 @@ class Session:
         *,
         extra: dict[str, Any] | None = None,
         data: dict[str, Any] | None = None,
+        also: list[dict[str, Any]] | None = None,
+        staged=None,
     ) -> Outcome:
+        """Save the change and its history entry (and `also`, further entries) as one
+        transaction; `staged` holds a restore's files, written in the same one."""
         after = _snapshot(self.project)
         created, changed, deleted = _diff(before, after)
-        save_project(self.project, self.root)
         undo = {
             "before": {i: before[i] for i in changed + deleted},
             "after": {i: after[i]["hash"] for i in created + changed},
@@ -702,16 +778,49 @@ class Session:
             "undo": undo,
             **(extra or {}),
         }
-        seq = self._log(entry)
+        entry["schema"] = SCHEMA_VERSION  # the shape its undo snapshots are in
+        seqs = self._save(
+            [entry, *(also or [])],
+            only=[UUID(i) for i in created + changed],
+            gone=[(before[i]["kind"], i) for i in deleted],
+            staged=staged,
+        )
         return Outcome(
             "applied",
-            seq=seq,
+            seq=seqs[0],
             created=_describe(self.project, created),
             changed=_describe(self.project, changed),
             deleted=[_brief(before[i]) for i in deleted],
             data=data or {},
             problems=self.project.problems(),
         )
+
+    def _save(self, entries: list[dict[str, Any]], *, only=None, gone=(), staged=None
+              ) -> list[int]:  # fmt: skip
+        """Write the project's changed files with `entries` in one transaction, under the
+        lock this session still holds. A project read at an older schema keeps a
+        version of its old files first, then is written whole at the new one."""
+        if self.project.migrated_from is not None:
+            from puzzle.project import versions
+
+            versions.save(
+                self.root, how="auto", trigger="migrated", project=self.project,
+                words={"found": self.project.migrated_from}, history_seq=self._last_seq(),
+            )  # fmt: skip
+            only, gone = None, ()
+        if staged is not None:
+            staged.check()
+        # A failure before the commit point removes the staged files (commit does);
+        # after it they are the change, finished by the next open: never discarded here.
+        seqs = save_project(self.project, self.root, only=only, gone=gone, entries=entries,
+                            check=self._check_lock, staged=staged)  # fmt: skip
+        self.project.migrated_from = None
+        return seqs
+
+    def _check_lock(self) -> None:
+        if self._lock is None:
+            raise PuzzleError("the project is written only under its lock", code="lock_lost")
+        self._lock.check()
 
     def _set_autonomy(self, cmd: SetAutonomy, actor: Actor) -> Outcome:
         settings = self.project.agent.model_copy(deep=True)
@@ -721,15 +830,11 @@ class Session:
             if getattr(cmd, key) is not None:
                 setattr(settings, key, getattr(cmd, key))
         self.project.agent = settings
-        save_project(self.project, self.root)
-        seq = self._log(
-            {
-                "type": "command",
-                "actor": actor.to_dict(),
-                "command": _dump(cmd),
-                "result": settings.model_dump(mode="json"),
-            }
-        )
+        (seq,) = self._save(
+            [{"type": "command", "actor": actor.to_dict(), "command": _dump(cmd),
+              "result": settings.model_dump(mode="json")}],
+            only=[],
+        )  # fmt: skip
         return Outcome(
             "applied",
             seq=seq,
@@ -863,43 +968,26 @@ class Session:
         return run, data
 
     def _log(self, entry: dict[str, Any]) -> int:
-        path = self.root / HISTORY
-        entries = self.history_entries()
-        seq = max((e.get("seq", 0) for e in entries), default=0) + 1
-        entry = {"seq": seq, "time": datetime.now(UTC).isoformat(), **entry}
-        with path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, separators=(",", ":")) + "\n")
-        return seq
+        """Append one entry that changes no file (a proposal, a decision, a run)."""
+        return store.commit(self.root, {}, [], [entry], check=self._check_lock)[0]
 
     @contextmanager
     def _locked(self) -> Iterator[None]:
-        """Hold the project lock and work on the project as it is on disk."""
-        lock = self.root / LOCK
-        lock.parent.mkdir(parents=True, exist_ok=True)
-        deadline = time.monotonic() + 10.0
-        while True:
-            try:
-                fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                break
-            except FileExistsError:
-                try:
-                    if time.time() - lock.stat().st_mtime > STALE_LOCK_S:
-                        lock.unlink(missing_ok=True)
-                        continue
-                except FileNotFoundError:
-                    continue
-                if time.monotonic() > deadline:
-                    raise PuzzleError(
-                        "another client is changing the project", code="busy"
-                    ) from None
-                time.sleep(0.05)
+        """Hold the project lock and work on the project as it is on disk: a change a
+        crash cut short is finished first (`store.recover`)."""
+        lock = atomic.Lock(self.root / LOCK, what="the project")
+        lock.acquire(LOCK_WAIT_S)
         try:
-            os.write(fd, str(os.getpid()).encode())
-            os.close(fd)
+            self._lock = lock
+            store.recover(self.root)
+            if not self._swept:  # temporary files a crash left before committing
+                self._swept = True
+                store.sweep(self.root)
             self.project = load_project(self.root)  # another client may have changed it
             yield
         finally:
-            lock.unlink(missing_ok=True)
+            self._lock = None
+            lock.release()
 
 
 # --- executing commands on a Project (shared by apply and preview) ----------------
@@ -993,6 +1081,47 @@ def _refuse_wiring(project: Project, obj: ProjectObject) -> None:
         operators.refuse(project, obj)
     if obj.dependencies() or obj.kind in ("transfer", "study"):
         operators.refuse_cycles(project)
+    if obj.kind == "group":
+        _refuse_group_cycles(project, obj)
+
+
+def _refuse_group_cycles(project: Project, obj: ProjectObject) -> None:
+    loop = group_cycle(project)
+    if loop:
+        names = [g.name for g in loop]
+        moved = obj.name if obj in loop else names[0]
+        raise PuzzleError(
+            f"'{moved}' can't go inside a group it holds: " + " → ".join([*names, names[0]]),
+            code="group_cycle",
+            path=obj.name,
+            details={"groups": names},
+        )
+
+
+def _dangling(project: Project) -> set[tuple[UUID, UUID]]:
+    return {(o.id, d) for o in project.objects.values() for d in o.dependencies()
+            if d not in project.objects}  # fmt: skip
+
+
+def _refuse_dangling(current: Project, trial: Project) -> None:
+    """An undo that would leave an object naming one it removes (or that a restored
+    object names, gone since) is refused, as Delete refuses it (BE-8)."""
+    new = _dangling(trial) - _dangling(current)
+    if not new:
+        return
+    users = sorted({trial.objects[o].name for o, _ in new})
+
+    def name(i: UUID) -> str:
+        obj = current.objects.get(i)
+        return obj.name if obj is not None else str(i)
+
+    gone = sorted({name(d) for _, d in new})
+    raise PuzzleError(
+        f"{', '.join(users)} {'uses' if len(users) == 1 else 'use'} {', '.join(gone)}, which "
+        "this undo would leave missing: undo the later changes first",
+        code="not_undoable",
+        details={"objects": users, "missing": gone},
+    )
 
 
 def resolve(project: Project, ref: str, cls: type[ProjectObject] = ProjectObject):

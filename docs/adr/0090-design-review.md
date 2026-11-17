@@ -223,6 +223,34 @@ the way: the MMG heat-layer benchmark had failed since the 3D metric constant wa
 corrected to 9/32 (commit 0623431); its bound and measured figures are updated (MMG
 0.041 % in 2056 elements, isotropic 0.180 % in 1711).
 
+**Package 2 built (2026-11-17):** `project/atomic.py` holds the two primitives every
+writer now uses: a file written whole or not at all (a temporary file beside it, then
+`os.replace`, retried while a Windows reader holds it), and a lock naming its holder
+(pid, host, token), stale only when that process is gone (or, from another host, not
+refreshed for 120 s by its heartbeat), released only while the token is ours, and
+checked before every commit (`lock_lost`). A change is one transaction: the changed
+files as temporaries, then `.puzzle/journal.json` (the commit point), the history
+entries, the swaps, the journal removed; a session finishes a leftover journal on open
+and `load_project` reads through one, so a crash leaves the project wholly before or
+wholly after (BE-4). Only files whose text changed are written. A torn last history
+line goes to `.puzzle/history.torn` and a damaged middle one is the problem
+`damaged_history` (BE-5, `project/history.py`). Accept, undo and version restore are
+all-or-nothing; undo refuses what later changes use; a restore checks every blob first
+(BE-7, BE-8, BE-15). `project/migrations.py`: a registry run on raw data before
+validation, `newer_schema` and `unknown_field` in place of tracebacks, a version saved
+before a migrated project is first written; `SCHEMA_VERSION` stays 1, since no stored
+shape changed (BE-14, ADR-E-18). The result store has a cross-process lock and
+`write_mesh` is idempotent (BE-10). Versions leave out `exports/`; an archive without
+results never copies them (BE-13, BE-16). `store.create_project` refuses a folder
+holding a project (GUI-19); a group cannot contain itself and a loop on disk opens as
+the problem `group_cycle` (GUI-21). Tests: `tests/test_store_safety.py` (each operation
+failed at every write, reopened: before or after, never a mix),
+`tests/test_gui_store_safety.py`. Measured: an edit in a 300-object project 365 ms to
+85 ms; on the cantilever 18 ms to 23 ms (two syncs and the lock). Left: versions are
+still made under the project lock; pid reuse is not detected; an archive with the
+latest results still copies the store, then prunes; on a network share the guard lock
+depends on the filesystem.
+
 ### Enhancements toward the state of the art
 
 From `state-of-the-art.md` (50 gaps, each with who has it, which open solver can deliver

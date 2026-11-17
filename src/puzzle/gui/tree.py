@@ -57,6 +57,28 @@ ROLE = Qt.ItemDataRole.UserRole
 STATE = Qt.ItemDataRole.UserRole + 1  # the item's state key (ADR 0033)
 
 
+def _group_parents(groups) -> dict[str, str]:
+    """Each nested group's parent group (the first that holds it), leaving out any
+    holding that would close a loop: a project whose groups hold each other (written
+    before the session refused it, GUI-21) still opens, the loop broken."""
+    ids = {str(g.id) for g in groups}
+    parent: dict[str, str] = {}
+
+    def above(gid: str) -> set[str]:
+        seen = set()
+        while gid in parent and gid not in seen:
+            seen.add(gid)
+            gid = parent[gid]
+        return seen | {gid}
+
+    for g in groups:
+        here = str(g.id)
+        for m in g.members:
+            if m in ids and m != here and m not in parent and m not in above(here):
+                parent[m] = here
+    return parent
+
+
 @dataclass(frozen=True)
 class Node:
     """What a tree item stands for.
@@ -400,8 +422,6 @@ class ModelTree(QTreeWidget):
             mine = [g for g in groups if g.section == scope and placed(g)]
             if not mine:
                 continue
-            ids = {str(g.id) for g in mine}
-            nested = {m for g in mine for m in g.members if m in ids}
             folders = {str(g.id): QTreeWidgetItem([g.name]) for g in mine}
             for g in mine:
                 folders[str(g.id)].setData(0, ROLE, Node("group", str(g.id), "", g.name))
@@ -414,11 +434,12 @@ class ModelTree(QTreeWidget):
                 if key in owner:
                     container.removeChild(item)
                     folders[owner[key]].addChild(item)
-            for n, g in enumerate(g for g in mine if str(g.id) not in nested):
+            parent = _group_parents(mine)  # one parent each, never a loop (GUI-21)
+            for n, g in enumerate(g for g in mine if str(g.id) not in parent):
                 container.insertChild(first + n, folders[str(g.id)])
             for g in mine:  # groups inside groups, first in their folder
                 for m in reversed(g.members):
-                    if m in folders and m != str(g.id):
+                    if parent.get(m) == str(g.id):
                         folders[str(g.id)].insertChild(0, folders[m])
             for folder in folders.values():
                 self._flags(folder)

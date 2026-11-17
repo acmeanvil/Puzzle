@@ -203,6 +203,23 @@ class ResultsBar(QWidget):
         self.rerun.setVisible(bool(reason))
 
 
+def _holds_project(folder: Path) -> str | None:
+    """Why a new project can't go in `folder` (it holds one already), else None: the
+    New project form says so before anything is written (GUI-19)."""
+    from puzzle.project.layout import PROJECT_FILE
+
+    if not (folder / PROJECT_FILE).exists():
+        return None
+    try:
+        from puzzle.project.store import _toml
+
+        name = _toml(folder / PROJECT_FILE).get("name", "")
+    except (PuzzleError, OSError):
+        name = ""
+    what = f"the project '{name}'" if name else "a project"
+    return f"That folder already holds {what}: open it, or choose another folder"
+
+
 def _measure(value: float, unit: str) -> str:
     """A measurement (SI) in the display units (ADR 0024): "10 mm", "0.3937 in"."""
     from puzzle.model.units import pretty, shown
@@ -1288,15 +1305,20 @@ class MainWindow(QMainWindow):
 
     def new_project(self, root: Path, name: str, units: str | None = None) -> None:
         """Create an empty project in `root` and open it; `units` (a unit system) makes
-        the project show those units to everyone who opens it (ADR 0030)."""
+        the project show those units to everyone who opens it (ADR 0030). A folder
+        that holds a project already is refused, never replaced (GUI-19)."""
         from puzzle.model.schema import Project, ProjectUnits
-        from puzzle.project import save_project
+        from puzzle.project.store import create_project
 
-        root.mkdir(parents=True, exist_ok=True)
         project = Project(name=name)
         if units is not None:
             project.add(ProjectUnits(system=units))
-        save_project(project, root)
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+            create_project(project, root)
+        except (PuzzleError, OSError) as exc:
+            self.report(exc)
+            return
         self.open(root)
         from puzzle.settings import current
 
@@ -1323,7 +1345,8 @@ class MainWindow(QMainWindow):
             check=lambda v: (
                 "Choose a folder"
                 if not v["folder"]
-                else ("Give it a name" if not v["name"] else None)
+                else _holds_project(Path(v["folder"]))
+                or ("Give it a name" if not v["name"] else None)
             ),
         )
         if got is not None:

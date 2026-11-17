@@ -146,8 +146,8 @@ def write(root: Path, path: Path, include: Include | None = None, *,
         path = path.with_suffix(SUFFIX)
     with tempfile.TemporaryDirectory(prefix="puzzle-archive-") as tmp:
         stage = Path(tmp) / "project"
-        save_as(root, stage)  # outside files in, no lock, no working folders
-        _prune(stage, include)
+        save_as(root, stage, leave_out=_left_out(include))  # outside files in, no lock,
+        _prune(stage, include)  # no working folders; then what "latest" drops
         project = load_project(stage)
         latest = versions.latest(stage)
         manifest = {
@@ -170,6 +170,8 @@ def write(root: Path, path: Path, include: Include | None = None, *,
             rel = file.relative_to(stage).as_posix()
             if rel == MANIFEST or file.suffix in (SUFFIX, ".part"):  # never archives in one
                 continue
+            if file.name.endswith((".lock", ".guard")):  # a store's lock files (BE-16)
+                continue
             _check_name(rel)
             members.append((rel, file))
             manifest["members"][rel] = _sha256(file)
@@ -184,6 +186,18 @@ def write(root: Path, path: Path, include: Include | None = None, *,
                 written[_part(rel)] += file.stat().st_size
         part.replace(path)  # never a half-written archive
     return Written(path, path.stat().st_size, len(members), written)
+
+
+def _left_out(include: Include) -> list[str]:
+    """What the archive leaves out, never copied into the stage (BE-16)."""
+    from puzzle.project.layout import HISTORY, RESULTS_DIR, WORK_DIR
+
+    out = [RESULTS_DIR, WORK_DIR] if include.results == "none" else []
+    if not include.versions:
+        out.append("versions")
+    if not include.history:
+        out.append(HISTORY)
+    return out
 
 
 def _prune(stage: Path, include: Include) -> None:

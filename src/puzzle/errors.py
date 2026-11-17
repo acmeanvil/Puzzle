@@ -26,6 +26,8 @@ CODES = {
     "unpinned_transfer": "a transfer from a swept study doesn't say which point it takes "
     "(its source_point)",
     "operator_input": "an operator's required input isn't wired",
+    "group_cycle": "tree groups hold each other; the tree shows them side by side",
+    "damaged_history": "lines of history.jsonl don't read: they are skipped",
     # Contact warnings (ADR 0056): the run goes ahead
     "contact_far": "a contact's faces start further apart than its search distance",
     "contact_overhang": "a contact's source face reaches past the edge of its target",
@@ -70,6 +72,11 @@ CODES = {
     "not_undoable": "the command cannot be undone",
     "busy": "another client holds the project lock",
     "exists": "the folder or file is already there",
+    "lock_lost": "another client took the project lock while this one held it; nothing was written",
+    "write_failed": "a file could not be written (a full or read-only disk?)",
+    "newer_schema": "the project was saved by a newer Puzzle than this one",
+    "unknown_field": "a project file has a field this Puzzle doesn't know (saved by a newer "
+    "Puzzle?)",
     # Running studies
     "invalid_input": "the study cannot be written for this solver",
     "mesh_failed": "meshing failed",

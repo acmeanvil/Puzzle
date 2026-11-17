@@ -25,9 +25,11 @@ run listed. `store.json` records the format; an older store is refused (`stale_s
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import re
+import threading
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -183,9 +185,35 @@ COMPACT_EVERY = 40
 """Small files in the runs table before a write compacts the store (`maybe_compact`)."""
 
 
+LOCK_FILE = ".lock"  # writers and Save as, one at a time (a lock file, atomic.Lock)
+LOCK_WAIT_S = 600.0
+_held = threading.local()  # the stores this thread holds the lock of (it nests)
+
+
 class ResultStore:
     def __init__(self, root: Path) -> None:
         self.root = root
+
+    @contextlib.contextmanager
+    def locked(self):
+        """Hold the store's lock: writes (a run, a mesh, a delete, compaction) and a
+        copy of the store (Save as, archives) one at a time, across processes."""
+        from puzzle.project import atomic
+
+        key = str(Path(self.root).resolve())
+        held = getattr(_held, "roots", None)
+        if held is None:
+            held = _held.roots = set()
+        if key in held:
+            yield
+            return
+        Path(self.root).mkdir(parents=True, exist_ok=True)
+        with atomic.Lock(Path(self.root) / LOCK_FILE, what="the results store").hold(LOCK_WAIT_S):
+            held.add(key)
+            try:
+                yield
+            finally:
+                held.discard(key)
 
     # --- writing ---------------------------------------------------------------
 
@@ -208,6 +236,16 @@ class ResultStore:
         """Store a completed run and its mesh; return the new run id. `point`: the sweep
         point it ran (readable labels), if any; the solver's version and image id when
         known."""
+        with self.locked():
+            return self._write_run(
+                run_key=run_key, study_id=study_id, study_name=study_name, solver=solver,
+                runtime=runtime, mesh=mesh, results=results, started_at=started_at,
+                duration_s=duration_s, point=point, solver_version=solver_version,
+                image_digest=image_digest,
+            )  # fmt: skip
+
+    def _write_run(self, *, run_key, study_id, study_name, solver, runtime, mesh, results,
+                   started_at, duration_s, point, solver_version, image_digest) -> str:  # fmt: skip
         run_id = uuid.uuid4().hex
         self._check_format(create=True)
         mid = self.write_mesh(mesh)
@@ -253,10 +291,21 @@ class ResultStore:
         return loads("".join(r["events"] for r in rows))
 
     def write_mesh(self, mesh: Mesh) -> str:
+        """Store a mesh once (BE-10): under the store's lock, and the `meshes` row that
+        marks it stored comes last, so rows an interrupted write left (nodes, cells,
+        groups without that row) are removed before it is written again."""
+        with self.locked():
+            return self._write_mesh(mesh)
+
+    def _write_mesh(self, mesh: Mesh) -> str:
         self._check_format(create=True)
         mid = mesh_id(mesh)
         if self._exists("meshes") and self._rows("meshes", pc.field("mesh_id") == mid).num_rows:
             return mid
+        for name in ("nodes", "cells", "groups"):  # a write cut short: start again
+            if self._exists(name) and self._rows(name, pc.field("mesh_id") == mid,
+                                                 ["mesh_id"]).num_rows:  # fmt: skip
+                DeltaTable(str(self.root / name)).delete(f"mesh_id = '{mid}'")
         n = len(mesh.node_ids)
         nodes = {"mesh_id": [mid], "node_ids": _list(mesh.node_ids), "coords": _list(mesh.coords)}
         self._append("nodes", pa.table(nodes, schema=SCHEMAS["nodes"]))
@@ -369,7 +418,11 @@ class ResultStore:
             node_ids=_array(nodes, "node_ids", 0), coords=_array(nodes, "coords", 0).reshape(-1, 3)
         )
         cells = self._rows("cells", pc.field("mesh_id") == mid).sort_by("block")
+        seen: set[int] = set()
         for i, row in enumerate(cells.drop_columns(["element_ids", "connectivity"]).to_pylist()):
+            if row["block"] in seen:  # a store an older Puzzle wrote twice (BE-10)
+                continue
+            seen.add(row["block"])
             mesh.blocks.append(
                 CellBlock(
                     element=row["element"],
@@ -382,6 +435,8 @@ class ResultStore:
                 )
             )
         for g in self._rows("groups", pc.field("mesh_id") == mid).to_pylist():
+            if g["name"] in mesh.groups:
+                continue
             mesh.groups[g["name"]] = Group(
                 name=g["name"],
                 dim=g["dim"],
@@ -396,6 +451,10 @@ class ResultStore:
         """Remove a run: its record, its fields, and its mesh when no other run uses
         it; then vacuum, so the disk space comes back. Results are a cache (ADR 0008):
         the study runs again to make them. Returns what went, for a message."""
+        with self.locked():
+            return self._delete_run(run_id)
+
+    def _delete_run(self, run_id: str) -> dict[str, int]:
         record = self.get_run(run_id)  # KeyError for an unknown run
         if not re.fullmatch(r"[0-9a-f]+", run_id):  # it goes into a predicate
             raise KeyError(f"no run {run_id}")
@@ -421,6 +480,10 @@ class ResultStore:
         each table's log (so opening it reads one file, not every commit), and remove
         files older than a week that no version reads any more. A reader holding an
         older snapshot keeps working: nothing younger than the retention is removed."""
+        with self.locked():
+            self._compact()
+
+    def _compact(self) -> None:
         for name in SCHEMAS:
             if self._exists(name):
                 table = DeltaTable(str(self.root / name))

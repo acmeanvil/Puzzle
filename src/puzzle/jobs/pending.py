@@ -4,7 +4,9 @@ A run records its job here when it is submitted and removes it when its results 
 An entry left behind is a solve that went on after Puzzle stopped: opening the project
 shows it, and resuming re-enters the same run (same study, same run folder) attached to
 the job instead of submitting it again. The file is the project's working state, like
-`.puzzle/runs`: never versioned, archived or hashed.
+`.puzzle/runs`: never versioned, archived or hashed. Every change to it is a
+read-modify-write under a lock file beside it (`atomic.locked`), so two Puzzles
+submitting at once both keep their entries (BE-19).
 """
 
 from __future__ import annotations
@@ -13,7 +15,6 @@ import contextlib
 import json
 import os
 import socket
-import tempfile
 import threading
 import time
 from contextvars import ContextVar
@@ -52,16 +53,25 @@ def entries(root: Path) -> list[dict]:
 
 
 def _write(root: Path, jobs: list[dict]) -> None:
+    from puzzle.project import atomic
+
     path = _path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".jobs-", suffix=".tmp")
-    with os.fdopen(fd, "w") as f:
-        json.dump({"jobs": jobs}, f, indent=1)
-    os.replace(tmp, path)
+    atomic.write_text(path, json.dumps({"jobs": jobs}, indent=1), encoding="utf-8")
+
+
+@contextlib.contextmanager
+def _changing(root: Path):
+    """This process's threads and other processes, one at a time."""
+    from puzzle.project import atomic
+
+    _path(root).parent.mkdir(parents=True, exist_ok=True)
+    with _LOCK, atomic.locked(_path(root), what="the project's pending jobs"):
+        yield
 
 
 def add(ctx: RunContext, job: str, where: str, folder: Path, label: dict) -> None:
-    with _LOCK:
+    with _changing(ctx.root):
         jobs = [e for e in entries(ctx.root) if e["job"] != job]
         jobs.append({"job": job, "where": where, "folder": str(Path(folder).resolve()),
                      "workdir": str(Path(ctx.workdir).resolve()), "study": ctx.study,
@@ -76,7 +86,7 @@ def _me() -> dict:
 
 def follow(root: Path, job: str) -> None:
     """This process follows `job` now (it picked the job up)."""
-    with _LOCK:
+    with _changing(root):
         jobs = entries(root)
         for e in jobs:
             if e["job"] == job:
@@ -97,32 +107,14 @@ def followed(entry: dict) -> bool:
 
 
 def alive(pid: int) -> bool:
-    """Whether process `pid` is running. Not `os.kill(pid, 0)` on Windows: there it
-    terminates the process."""
-    if os.name == "nt":
-        import ctypes
+    """Whether process `pid` is running (`atomic.alive`)."""
+    from puzzle.project import atomic
 
-        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-        handle = kernel.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
-        if not handle:
-            return ctypes.get_last_error() == 5  # access denied: it exists
-        try:
-            code = ctypes.c_ulong()
-            kernel.GetExitCodeProcess(handle, ctypes.byref(code))
-            return code.value == 259  # STILL_ACTIVE
-        finally:
-            kernel.CloseHandle(handle)
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
+    return atomic.alive(pid)
 
 
 def remove(root: Path, job: str) -> None:
-    with _LOCK:
+    with _changing(root):
         jobs = entries(root)
         kept = [e for e in jobs if e["job"] != job]
         if len(kept) != len(jobs):

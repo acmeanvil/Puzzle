@@ -3178,6 +3178,35 @@ class TreeGroup(ProjectObject):
     )
 
 
+def group_cycle(project: Project) -> list[TreeGroup]:
+    """Groups that hold themselves, through groups inside them (GUI-21): a tree folder
+    can't be inside itself. The groups of the first loop found, else []."""
+    groups = {str(g.id): g for g in project.of_type(TreeGroup)}
+    done: set[str] = set()
+    for start in groups:
+        path: list[str] = []
+        on: set[str] = set()
+        stack = [(start, iter(groups[start].members))]
+        path.append(start)
+        on.add(start)
+        while stack:
+            here, members = stack[-1]
+            nxt = next((m for m in members if m in groups and m not in done), None)
+            if nxt is None:
+                stack.pop()
+                path.pop()
+                on.discard(here)
+                done.add(here)
+                continue
+            if nxt in on:
+                loop = path[path.index(nxt) :]
+                return [groups[g] for g in loop]
+            stack.append((nxt, iter(groups[nxt].members)))
+            path.append(nxt)
+            on.add(nxt)
+    return []
+
+
 class TreeLabels(ProjectObject):
     """The names given in the tree to things that aren't project objects: stored runs
     (`runs`: run id -> name) and a swept study's group of runs (`sweeps`: study id ->
@@ -3314,6 +3343,10 @@ class Project:
     # The folder it was loaded from, never saved: relative file names (a geometry's
     # source, a field's file) resolve against it, so their contents reach the hashes.
     root: Any = field(default=None, compare=False, repr=False)
+    # The schema version its files were read at, when older than this build's (they
+    # were migrated on loading, project/migrations.py); never saved. The session keeps
+    # a version of the old files, then writes every object at the new version.
+    migrated_from: int | None = field(default=None, compare=False, repr=False)
 
     def add(self, obj: T) -> T:
         if obj.id in self.objects:
@@ -3541,6 +3574,23 @@ class Project:
                 out += [Problem("missing_file", obj.name, f"{obj.kind} '{obj.name}' reads "
                                 f"{name}, which isn't in the project folder", {"file": name})
                         for name in missing(obj, self.root)]  # fmt: skip
+            from puzzle.project.history import damage
+
+            bad = damage(self.root)
+            if bad:  # BE-5: lines of history.jsonl that don't read, skipped
+                lines = ", ".join(str(n) for n in bad[:5]) + (" …" if len(bad) > 5 else "")
+                out.append(Problem("damaged_history", "history.jsonl", f"{len(bad)} line(s) "
+                                   f"of history.jsonl don't read (line {lines}); they are "
+                                   "skipped, and undo can't reach the changes they held",
+                                   {"lines": bad}))  # fmt: skip
+        if len(self.of_type(TreeGroup)) > 1:  # GUI-21: a folder inside itself
+            loop = group_cycle(self)
+            if loop:
+                names = [g.name for g in loop]
+                out.append(Problem("group_cycle", names[0], "tree groups hold each other ("
+                                   + " → ".join([*names, names[0]]) + "): the tree shows "
+                                   "them side by side; move one out of the other",
+                                   {"groups": names}))  # fmt: skip
 
         for comp in self.of_type(Component):
             names = self.selection_names(comp)

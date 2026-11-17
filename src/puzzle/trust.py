@@ -40,19 +40,32 @@ def is_trusted(root) -> bool:
     return _key(root) in _load()
 
 
+def _save(found: list[str]) -> None:
+    from puzzle.project import atomic
+
+    atomic.write_text(_path(), json.dumps({"projects": sorted(found)}, indent=1), encoding="utf-8")
+
+
 def trust(root) -> None:
-    """Remember `root` as trusted."""
-    found = _load()
-    if _key(root) not in found:
-        found.append(_key(root))
-        _path().parent.mkdir(parents=True, exist_ok=True)
-        _path().write_text(json.dumps({"projects": sorted(found)}, indent=1), encoding="utf-8")
+    """Remember `root` as trusted. The list is read again and replaced whole under a
+    lock (BE-19): two Puzzles trusting at once both stay, and a crash never empties it."""
+    if _key(root) in _load():
+        return
+    from puzzle.project import atomic
+
+    _path().parent.mkdir(parents=True, exist_ok=True)
+    with atomic.locked(_path(), what="the trusted projects list"):
+        found = _load()
+        if _key(root) not in found:
+            _save([*found, _key(root)])
 
 
 def revoke(root) -> None:
-    found = [p for p in _load() if p != _key(root)]
+    from puzzle.project import atomic
+
     _path().parent.mkdir(parents=True, exist_ok=True)
-    _path().write_text(json.dumps({"projects": found}, indent=1), encoding="utf-8")
+    with atomic.locked(_path(), what="the trusted projects list"):
+        _save([p for p in _load() if p != _key(root)])
 
 
 def holds_code(project) -> list[str]:

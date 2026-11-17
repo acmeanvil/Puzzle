@@ -2,8 +2,9 @@
 
 A version is `versions/<n>.json` (the manifest: when, who, why, known good, each
 file's hash, a summary of the project then) plus `versions/blobs/<hash>` (each file's
-content, compressed, stored once). Results, working files, the history and the
-versions themselves are left out. The session makes versions implicitly (opened,
+content, compressed, stored once). Results, working files, exports (`exports/`: files
+Puzzle wrote from results, made again on demand), the history and the versions
+themselves are left out. The session makes versions implicitly (opened,
 before a run, after many edits, before a restore, copied) and the user explicitly;
 `restore_files` writes one back (the session wraps it as an undoable command).
 """
@@ -26,7 +27,9 @@ from puzzle.project.layout import HISTORY, PROJECT_FILE, RESULTS_DIR
 VERSIONS_DIR = "versions"
 BLOBS = "blobs"
 CACHE = "cache.json"
-LEFT_OUT = (RESULTS_DIR, ".puzzle", VERSIONS_DIR, HISTORY)
+EXPORTS = "exports"  # ParaView links, operator exports, reports: output, not the model
+LEFT_OUT = (RESULTS_DIR, ".puzzle", VERSIONS_DIR, HISTORY, EXPORTS)
+CHUNK = 1 << 20  # files are hashed and compressed a megabyte at a time
 TRIGGERS = {  # why an automatic version was made, as the browser says it
     "opened": "Opened, changed outside Puzzle",
     "first": "First version",
@@ -34,6 +37,7 @@ TRIGGERS = {  # why an automatic version was made, as the browser says it
     "edits": "After {count} changes",
     "before_restore": "Before restoring version {version}",
     "copied": "Copied from {source}",
+    "migrated": "Before upgrading from schema {found}",
     "user": "Saved by you",
 }
 KEEP_AUTO = 30  # automatic versions kept in full; older ones thinned to one a day
@@ -159,6 +163,7 @@ TYPES = {  # a version's type, by its trigger, as the browser's filter names it
     "edits": "After changes",
     "before_restore": "Before a restore",
     "copied": "Copied",
+    "migrated": "Before an upgrade",
 }
 
 
@@ -258,12 +263,20 @@ def hashes(root: Path) -> dict[str, str]:
         if seen and seen[0] == st.st_size and seen[1] == st.st_mtime_ns:
             digest = seen[2]
         else:
-            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            digest = _sha256(path)
         out[key] = digest
         fresh[key] = [st.st_size, st.st_mtime_ns, digest]
     if fresh != cache and folder(root).exists():
         cache_path.write_text(json.dumps(fresh), encoding="utf-8")
     return out
+
+
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while block := f.read(CHUNK):
+            h.update(block)
+    return h.hexdigest()
 
 
 def changed_since(root: Path, version: Version | None) -> bool:
@@ -300,9 +313,7 @@ def save(
     for rel, digest in files.items():
         blob = blobs / digest
         if not blob.exists():
-            tmp = blob.with_suffix(".tmp")
-            tmp.write_bytes(zlib.compress((root / rel).read_bytes(), 6))
-            tmp.replace(blob)
+            _store_blob(root / rel, blob)
     if project is None:
         from puzzle.project.store import load_project
 
@@ -328,11 +339,25 @@ def save(
     return v
 
 
+def _store_blob(source: Path, blob: Path) -> None:
+    """`source` compressed into `blob`, a megabyte at a time (a large geometry file is
+    never held whole in memory)."""
+    from puzzle.project import atomic
+
+    tmp = blob.with_suffix(".tmp")
+    z = zlib.compressobj(6)
+    with open(source, "rb") as src, open(tmp, "wb") as out:
+        while block := src.read(CHUNK):
+            out.write(z.compress(block))
+        out.write(z.flush())
+    atomic.replace(tmp, blob)
+
+
 def _write(root: Path, v: Version) -> None:
-    path = folder(root) / f"{v.number}.json"
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(asdict(v), indent=1), encoding="utf-8")
-    tmp.replace(path)
+    from puzzle.project import atomic
+
+    atomic.write_text(folder(root) / f"{v.number}.json", json.dumps(asdict(v), indent=1),
+                      encoding="utf-8", durable=False)  # fmt: skip
 
 
 def mark(root: Path, number: int, good: bool, reason: str = "") -> Version:
@@ -408,6 +433,41 @@ def content(root: Path, digest: str) -> bytes:
     return zlib.decompress((folder(root) / BLOBS / digest).read_bytes())
 
 
+def _unpack(root: Path, digest: str, dest: Path) -> None:
+    """Blob `digest` decompressed into the file `dest`, a megabyte at a time, checked
+    against its hash: a missing, damaged or wrong blob is an error and `dest` is
+    removed again."""
+    if not isinstance(digest, str) or not DIGEST.fullmatch(digest):
+        raise PuzzleError(f"'{digest}' is not a file's hash", code="invalid")
+    blob = folder(root) / BLOBS / digest
+    h, z = hashlib.sha256(), zlib.decompressobj()
+    try:
+        with open(blob, "rb") as src, open(dest, "wb") as out:
+            while block := src.read(CHUNK):
+                data = z.decompress(block)
+                h.update(data)
+                out.write(data)
+            data = z.flush()
+            h.update(data)
+            out.write(data)
+            ok = z.eof and h.hexdigest() == digest
+    except FileNotFoundError:
+        dest.unlink(missing_ok=True)
+        raise PuzzleError(f"version file {digest[:12]}… is missing from versions/blobs: "
+                          "this version can't be restored", code="invalid",
+                          details={"blob": digest}) from None  # fmt: skip
+    except zlib.error as exc:
+        dest.unlink(missing_ok=True)
+        raise PuzzleError(f"version file {digest[:12]}… is damaged ({exc}): this version "
+                          "can't be restored", code="invalid",
+                          details={"blob": digest}) from None  # fmt: skip
+    if not ok:
+        dest.unlink(missing_ok=True)
+        raise PuzzleError(f"version file {digest[:12]}… does not hold what its hash says: "
+                          "this version can't be restored", code="invalid",
+                          details={"blob": digest})  # fmt: skip
+
+
 def _inside(base: Path, rel: str) -> Path:
     """Where `rel` goes under `base`, refused when it (or a link on the way) leads out."""
     path = Path(base) / safe_path(rel)
@@ -418,34 +478,58 @@ def _inside(base: Path, rel: str) -> Path:
 
 
 def materialize(root: Path, v: Version, dest: Path) -> None:
-    """Write version `v`'s files under `dest` (a restore, or a copy from a version)."""
+    """Write version `v`'s files under `dest` (a copy from a version)."""
     check_manifest({"files": v.files}, str(v.number))
     for rel, digest in v.files.items():
         path = _inside(dest, rel)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(content(root, digest))
+        _unpack(root, digest, path)
 
 
-def restore_files(root: Path, v: Version) -> dict[str, list[str]]:
-    """Make the project's own files those of version `v`: write the ones that differ,
-    remove the ones it didn't have. Results and the history stay. Callers hold the
-    lock and make a "before restoring" version first."""
+def stage_restore(root: Path, v: Version):
+    """Version `v`'s files that differ from the project's, unpacked beside their places
+    under temporary names and checked against their hashes, and the files it didn't
+    have: a `store.Staged` to commit with the restore's history entry, or discard. Any
+    missing or damaged blob fails here, before a project file is touched (BE-15)."""
+    from puzzle.project import atomic
+    from puzzle.project.store import Staged
+
     root = Path(root)
     check_manifest({"files": v.files}, str(v.number))
     for rel in v.files:  # every path checked before anything is written
         _inside(root, rel)
     now = hashes(root)
-    written = [rel for rel, d in v.files.items() if now.get(rel) != d]
-    removed = [rel for rel in now if rel not in v.files]
-    for rel in written:
-        path = _inside(root, rel)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(content(root, v.files[rel]))
-    for rel in removed:
-        (root / rel).unlink(missing_ok=True)
+    staged = Staged(removes=[rel for rel in now if rel not in v.files])
+    try:
+        for rel, digest in v.files.items():
+            if now.get(rel) == digest:
+                continue
+            path = _inside(root, rel)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = atomic.temp_name(path)
+            _unpack(root, digest, tmp)
+            staged.moves.append((tmp, rel))
+    except BaseException:
+        staged.discard()
+        raise
+    return staged
+
+
+def restore_files(root: Path, v: Version) -> dict[str, list[str]]:
+    """Make the project's own files those of version `v`, all or none: write the ones
+    that differ, remove the ones it didn't have. Results, exports and the history
+    stay. Callers hold the lock and make a "before restoring" version first (the
+    session's restore does both and logs it in the same transaction)."""
+    from puzzle.project.store import commit
+
+    root = Path(root)
+    staged = stage_restore(root, v)
+    changes = staged.changes()
+    commit(root, {}, staged.removes, [], staged=staged.moves)
+    for rel in changes["removed"]:
         _drop_empty(root, (root / rel).parent)
     hashes(root)  # refresh the cache
-    return {"written": written, "removed": removed}
+    return changes
 
 
 def _drop_empty(root: Path, path: Path) -> None:
