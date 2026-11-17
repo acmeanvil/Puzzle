@@ -21,6 +21,9 @@ class _Command(BaseModel):
     # Model edits are undoable; runs and settings changes are not.
     undoable: ClassVar[bool] = True
     edits_model: ClassVar[bool] = True
+    # Runs: each solve they make is counted against an agent's budget, one history
+    # entry for the command, a version before it (ADR 0015, ADR 0090 package 3).
+    solves: ClassVar[bool] = False
 
 
 class Create(_Command):
@@ -91,6 +94,59 @@ class RunStudy(_Command):
     resume: str | None = None  # a job runner's job to pick up instead of solving (ADR 0067)
     undoable: ClassVar[bool] = False
     edits_model: ClassVar[bool] = False
+    solves: ClassVar[bool] = True
+
+
+class RunOptimisation(_Command):
+    """Run an optimisation's points not run yet (ADR 0063): each a stored run, those run
+    before reused; `budget` solves at most that many new points this time."""
+
+    command: Literal["run_optimisation"] = "run_optimisation"
+    optimisation: str
+    budget: int | None = Field(default=None, ge=0)
+    undoable: ClassVar[bool] = False
+    edits_model: ClassVar[bool] = False
+    solves: ClassVar[bool] = True
+
+
+class RunConvergence(_Command):
+    """A study (or a mesh study) on finer and finer meshes, judged by the grid
+    convergence index (ADR 0066); settings left out are the study's own."""
+
+    command: Literal["run_convergence"] = "run_convergence"
+    study: str
+    levels: int | None = Field(default=None, ge=2)
+    ratio: float | None = Field(default=None, gt=1)
+    target: float | None = Field(default=None, gt=0)
+    undoable: ClassVar[bool] = False
+    edits_model: ClassVar[bool] = False
+    solves: ClassVar[bool] = True
+
+
+class RunAdapt(_Command):
+    """Adaptive refinement passes (ADR 0066 phase 3); settings left out are the study's
+    `adapt`."""
+
+    command: Literal["run_adapt"] = "run_adapt"
+    study: str
+    target: float | None = Field(default=None, gt=0)
+    passes: int | None = Field(default=None, ge=1)
+    method: Literal["isotropic", "anisotropic"] | None = None
+    undoable: ClassVar[bool] = False
+    edits_model: ClassVar[bool] = False
+    solves: ClassVar[bool] = True
+
+
+class RunMeshShootout(_Command):
+    """A study solved on its recipe meshed by Gmsh and by Netgen, compared (ADR 0019)."""
+
+    command: Literal["run_mesh_shootout"] = "run_mesh_shootout"
+    study: str
+    quantities: list[str] | None = None
+    tolerance: float = Field(default=0.02, gt=0)
+    undoable: ClassVar[bool] = False
+    edits_model: ClassVar[bool] = False
+    solves: ClassVar[bool] = True
 
 
 class SetAutonomy(_Command):
@@ -113,6 +169,10 @@ Command = Annotated[
     | CopyComponent
     | CopyStudy
     | RunStudy
+    | RunOptimisation
+    | RunConvergence
+    | RunAdapt
+    | RunMeshShootout
     | SetAutonomy,
     Field(discriminator="command"),
 ]

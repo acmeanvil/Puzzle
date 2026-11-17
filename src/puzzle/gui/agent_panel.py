@@ -177,6 +177,7 @@ class AgentPanel(QWidget):
         self.pending: list = []  # attachments for the next message
         self.busy = False
         self._stop: threading.Event | None = None
+        self._turn = 0  # the running turn's number: a stale turn's events are dropped
         self._started = 0.0
         self._doing = ""
         self.models: list | None = None  # what the chip offers, read once off the GUI
@@ -299,9 +300,21 @@ class AgentPanel(QWidget):
             self.proposals.addItem(item)
 
     def project_opened(self) -> None:
+        self._end_turn()  # the old turn edits the old project: stopped, never shown here
         self.agent = None
         self.transcript.clear()
         self.refresh()
+
+    def _end_turn(self) -> None:
+        """Stop a running turn and stop listening to it (ADR 0090, AGENT-3): a new chat,
+        another project or another model starts from a clean conversation."""
+        if not self.busy:
+            return
+        if self._stop is not None:
+            self._stop.set()
+        if self.agent is not None:
+            self.agent.reset()
+        self._turn += 1
 
     # --- chat --------------------------------------------------------------------------
 
@@ -314,7 +327,12 @@ class AgentPanel(QWidget):
         self._show_attachments()
         self.transcript.user(text, [a.label() for a in files])
         stop = threading.Event()
+        self._turn += 1
+        turn = self._turn
         self._begin(stop, "Starting the agent…" if self.agent is None else "Thinking…")
+
+        def current() -> bool:
+            return turn == self._turn
 
         def work(emit, emit_event):
             if self.agent is None:  # built here, off the GUI thread (ADR 0074)
@@ -323,9 +341,14 @@ class AgentPanel(QWidget):
 
         def done(_answer) -> None:
             self._end()
+            if current():  # a reply cut off by Stop was never said: taken away
+                self.transcript.end_live()
 
         def failed(exc) -> None:
             self._end()
+            if not current():  # a turn ended by a new chat: its failure is not this chat's
+                return
+            self.transcript.end_live()  # text streamed before the failure was never said
             if isinstance(exc, ProviderError):  # the plain sentence, the provider's words after
                 said = exc.plain() if exc.kind else (
                     f"{exc} Choose a model with the model button, or configure the provider "
@@ -336,8 +359,12 @@ class AgentPanel(QWidget):
             else:
                 self.transcript.note(str(exc), error=True)
 
+        def on_event(e: Event) -> None:
+            if current():
+                self._event(e)
+
         return self.window.background(
-            "The agent is working…", work, done, failed=failed, on_event=self._event,
+            "The agent is working…", work, done, failed=failed, on_event=on_event,
             lock=False,
         )  # fmt: skip
 
@@ -377,7 +404,7 @@ class AgentPanel(QWidget):
     def stop(self) -> None:
         if self._stop is not None:
             self._stop.set()
-            self._doing = "Stopping after this step…"
+            self._doing = "Stopping…"  # a reply at once, a run it started, else this step
             self._show_doing()
 
     def _show_doing(self) -> None:
@@ -397,12 +424,17 @@ class AgentPanel(QWidget):
             self.transcript.tool(f"→ {e.text} {args if len(args) <= 160 else args[:160] + '…'}")
         elif e.kind == "tool_result":
             self.transcript.tool(f"← {_brief(e.text)}")
+            if e.data.get("image"):  # what the agent rendered, shown to the user too
+                self.transcript.picture(e.data["image"], e.data.get("sent", False))
         elif e.kind == "error":
             self.transcript.tool(f"✗ {e.text[:300]}", error=True)
         elif e.kind == "note":
             self.transcript.note(e.text)
 
     def new_chat(self) -> None:
+        """A new conversation; a turn still running is stopped first and its replies
+        no longer shown."""
+        self._end_turn()
         if self.agent is not None:
             self.agent.reset()
         self.transcript.clear()
@@ -555,6 +587,7 @@ class AgentPanel(QWidget):
 
         def switch(_=None) -> None:
             choose_model(choice)
+            self._end_turn()
             self.agent = None
             self._show_chip()
             self.transcript.note(f"Now using {choice.model} ({choice.where()}); a new chat "
@@ -642,8 +675,13 @@ class AgentPanel(QWidget):
         self.window.refresh()
 
     def _selected_proposal(self) -> str | None:
-        item = self.proposals.currentItem() or self.proposals.item(0)
-        return item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+        """The proposal picked in the list; none picked is none (ADR 0090, AGENT-11:
+        Accept used to take the first)."""
+        item = self.proposals.currentItem()
+        if item is None or not item.isSelected():
+            self.transcript.note("Pick a proposal in the list first.")
+            return None
+        return item.data(Qt.ItemDataRole.UserRole)
 
     # --- autonomy ------------------------------------------------------------------------
 

@@ -14,7 +14,7 @@ from puzzle.jobs.runtime import Runtime
 
 LOG_NAME = "solver.log"
 _POLL_S = 0.1
-_TERMINATE_GRACE_S = 5.0
+_PIPE_WAIT_S = 10.0  # after a stop, how long the output may stay open once the solver is gone
 MAX_LOG_BYTES = 256 * 1024 * 1024  # a runaway solver (e.g. a warning per node) stops filling
 _QUEUE_LINES = 10_000  # bounded, so a fast solver waits for the log instead of filling memory
 
@@ -49,7 +49,9 @@ def run_job(
     """Run `command` in `workdir`; stdout and stderr go to `workdir/solver.log`.
 
     Returns when the process exits, is cancelled through `cancel`, or exceeds
-    `timeout_s`. A stopped process is sent SIGTERM, then SIGKILL after a grace period.
+    `timeout_s`. A stop ends the whole process tree (`processes`: a process group sent
+    TERM then KILL, a Windows job object), a container's or a remote host's run first
+    (`runtime.cancel`).
     A `parser` (`puzzle.progress.Parser`, ADR 0054) reads each line, and its side files
     every poll, into events for `on_event`; it never holds the run up.
     """
@@ -84,7 +86,9 @@ def run_job(
                 on_output(line)
 
         runtime.prepare(command, workdir, say)
-        proc = subprocess.Popen(
+        from puzzle.jobs import processes
+
+        tree = processes.popen(  # its whole tree stopped on a cancel (ADR 0090, BE-3)
             argv,
             cwd=workdir,
             env=runtime.environment(argv),
@@ -95,12 +99,14 @@ def run_job(
             errors="replace",
             bufsize=1,
         )
+        proc = tree.proc
         lines: queue.Queue[str | None] = queue.Queue(maxsize=_QUEUE_LINES)
         written, truncated = 0, False
         reader = threading.Thread(target=_pump, args=(proc, lines), daemon=True)
         reader.start()
 
         finished = False
+        stopped_at: float | None = None
         while not finished:
             try:
                 line = lines.get(timeout=_POLL_S)
@@ -127,10 +133,17 @@ def run_job(
             elif not finished and timeout_s is not None and time.monotonic() - start > timeout_s:
                 timed_out = True
             if not finished and (cancelled or timed_out) and not stopping:
-                runtime.cancel(workdir)  # the far end first (a remote run), then here
-                _stop(proc)
+                try:  # the far end first (a container, a remote run), then here
+                    runtime.cancel(workdir)
+                finally:
+                    tree.stop()
+                    stopped_at = time.monotonic()
+            if (not finished and stopped_at is not None and proc.poll() is not None
+                    and time.monotonic() - stopped_at > _PIPE_WAIT_S):  # fmt: skip
+                finished = True  # something still holds the pipe: the run is over anyway
 
         returncode = proc.wait()
+        tree.close()
         try:  # the case back (a remote one) even after a failure: its log says why
             runtime.finish(workdir, say)
         except Exception:
@@ -279,16 +292,6 @@ def _pump(proc: subprocess.Popen[str], lines: queue.Queue[str | None]) -> None:
     for line in proc.stdout:
         lines.put(line)
     lines.put(None)
-
-
-def _stop(proc: subprocess.Popen[str]) -> None:
-    if proc.poll() is not None:
-        return
-    proc.terminate()
-    try:
-        proc.wait(timeout=_TERMINATE_GRACE_S)
-    except subprocess.TimeoutExpired:
-        proc.kill()
 
 
 def _inside(runtime, workdir) -> None:

@@ -14,12 +14,15 @@ Selection (ADR 0013), per solver:
 
 from __future__ import annotations
 
+import atexit
 import contextlib
 import contextvars
 import os
 import shutil
 import subprocess
 import sys
+import threading
+import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from functools import cache
@@ -348,7 +351,9 @@ class ContainerRuntime(Runtime):
 
     def wrap(self, command: list[str], workdir: Path) -> list[str]:
         exe = find_engine(self.engine) or self.engine
-        argv = [exe, "run", "--rm", "-v", f"{workdir.resolve()}:{CONTAINER_WORKDIR}"]
+        name = _named(self.engine, workdir)  # so a stop reaches the container itself
+        argv = [exe, "run", "--rm", "--name", name, "--label", f"{CONTAINER_LABEL}=1",
+                "-v", f"{workdir.resolve()}:{CONTAINER_WORKDIR}"]  # fmt: skip
         for volume, mount in self.caches:
             argv += ["-v", f"{volume}:{mount}"]
         argv += ["-w", CONTAINER_WORKDIR]
@@ -362,6 +367,14 @@ class ContainerRuntime(Runtime):
 
     def describe(self) -> str:
         return f"{self.engine}:{self.image}"
+
+    def cancel(self, workdir: Path) -> None:
+        """Stop the run's container (ADR 0090, BE-3): stopping `docker run` itself
+        leaves it running (on Windows the client forwards no signal)."""
+        stop_container(self.engine, workdir)
+
+    def finish(self, workdir: Path, say=None) -> None:
+        _forget(workdir)
 
     def memory(self) -> int | None:
         """The engine's own memory (Docker Desktop's VM has less than the Mac)."""
@@ -384,6 +397,66 @@ class ContainerRuntime(Runtime):
         env = dict(os.environ)
         env["PATH"] = os.pathsep.join([str(Path(exe).parent), env.get("PATH", "")])
         return env
+
+
+CONTAINER_LABEL = "puzzle.run"
+CONTAINER_NAME = ".puzzle-container"  # in the run folder: the name its container runs under
+_RUNNING: dict[str, tuple[str, str]] = {}  # run folder -> (engine, container), this process's
+_RUNNING_LOCK = threading.Lock()
+
+
+def _named(engine: str, workdir: Path) -> str:
+    """A new container name for a run in `workdir`, kept in the folder (another Puzzle
+    can stop it too) and in this process (stopped when Puzzle exits)."""
+    name = f"puzzle-run-{uuid.uuid4().hex[:12]}"
+    with contextlib.suppress(OSError):
+        (Path(workdir) / CONTAINER_NAME).write_text(name, encoding="utf-8")
+    with _RUNNING_LOCK:
+        if not _RUNNING:
+            atexit.register(stop_all_containers)
+        _RUNNING[str(Path(workdir).resolve())] = (engine, name)
+    return name
+
+
+def _forget(workdir: Path) -> None:
+    with _RUNNING_LOCK:
+        _RUNNING.pop(str(Path(workdir).resolve()), None)
+    with contextlib.suppress(OSError):
+        (Path(workdir) / CONTAINER_NAME).unlink(missing_ok=True)
+
+
+def stop_container(engine: str, workdir: Path) -> bool:
+    """Kill and remove the container a run in `workdir` started; whether one was named."""
+    with _RUNNING_LOCK:
+        known = _RUNNING.get(str(Path(workdir).resolve()))
+    name = known[1] if known else None
+    if name is None:
+        try:
+            name = (Path(workdir) / CONTAINER_NAME).read_text(encoding="utf-8").strip()
+        except OSError:
+            return False
+    _kill(known[0] if known else engine, name)
+    _forget(workdir)
+    return True
+
+
+def _kill(engine: str, name: str) -> None:
+    exe = find_engine(engine) or engine
+    for argv in ([exe, "kill", name], [exe, "rm", "-f", name]):
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
+            subprocess.run(argv, capture_output=True, timeout=60)
+
+
+def stop_all_containers() -> None:
+    """Every container this process started and still runs, stopped: Puzzle is exiting
+    (atexit), and a solve's container must not outlive it unseen."""
+    with _RUNNING_LOCK:
+        running = list(_RUNNING.items())
+        _RUNNING.clear()
+    for folder, (engine, name) in running:
+        _kill(engine, name)
+        with contextlib.suppress(OSError):
+            (Path(folder) / CONTAINER_NAME).unlink(missing_ok=True)
 
 
 @cache
@@ -413,6 +486,14 @@ def on_host(host, resources=None):
         yield
     finally:
         _REMOTE.reset(token)
+
+
+def remote_host() -> str | None:
+    """The name of the remote host runs go to now (`on_host`), or None for this one."""
+    remote = _REMOTE.get()
+    if remote is None:
+        return None
+    return getattr(remote[0], "name", None) or str(remote[0])
 
 
 def runtime_for(solver: str) -> Runtime:

@@ -504,6 +504,17 @@ PREFERENCES: list[Preference] = [
         "files the solver writes while running (CalculiX's .sta, OpenFOAM's logs) reach "
         "the Solution panel only at the end.",
     ),
+    Preference(
+        "scripts.unsandboxed",
+        "Solvers",
+        "Scripts where no sandbox is",
+        False,
+        [("Refused: install the sandbox", False), ("Run without one (trusted projects)", True)],
+        "Script operators (ADR 0062) run sandboxed: an AppContainer on Windows, "
+        "sandbox-exec on macOS, bubblewrap on Linux. Where none can be had (Linux without "
+        "bubblewrap) a script is refused, saying what to install; on, it runs anyway in a "
+        "trusted project, in an empty folder but able to read and write what you can.",
+    ),
     *_connection_preferences(),
     Preference(
         "schematic.uses",

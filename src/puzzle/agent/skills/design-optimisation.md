@@ -82,9 +82,12 @@ the stored runs, so a stopped one resumes where it was.
 
 ## Run and read
 
-- `optimisation_run(name, budget)` needs autonomy "act", as runs do. `budget` is
-  the most new points solved this call (stored ones are free), so a long optimisation
-  can go in slices. It returns the points. The CLI is
+- `optimisation_run(name, budget)` is a run, as `run_study` is: refused at "advise", a
+  proposal (command `run_optimisation`) at "propose", and at "act_in_budget" every
+  point it solves counts against the agent's budget; when that is spent it stops with
+  `budget_exceeded` (the points solved are stored: `optimisation_points` reads them).
+  `budget` is the most new points solved this call (stored ones are free), so a long
+  optimisation can go in slices. It returns the points. The CLI is
   `puzzle optimise PROJECT NAME [--budget N]`.
 - `optimisation_points(name)` solves nothing and reads the stored runs. It gives each
   point's `values` (SI), `labels`, `runs` (by solver), `objective`, `constraints`,

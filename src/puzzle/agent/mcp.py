@@ -64,27 +64,52 @@ def _bolt_index(comp, name: str) -> int:
 
 
 def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True,
-                 model: str = "", suite: str = "") -> MCPServer:  # fmt: skip
+                 model: str = "", suite: str = "", cancel=None) -> MCPServer:  # fmt: skip
     """The tools, for an outside agent (`outside`, refused when the project's MCP access
     is off) or for the built-in agent in-process (agent.agent), which the setting does
-    not cover."""
+    not cover. `cancel` (anything with `is_set()`, the built-in agent's Stop) reaches
+    the runs its tools start.
+
+    One session serves every call (ADR 0090, AGENT-7): the project is read again for
+    each, but a version of it "as found" is made once, at the first change, not at each
+    tool call's (four edits made three versions, two saying "changed outside Puzzle")."""
+    from puzzle import budget
+
     actor = Actor("agent", client, model=model, suite=suite)
+    shared: dict[str, Session] = {}
 
     def session() -> Session:
-        s = Session(root)
+        s = shared.get("s")
+        if s is None:
+            s = shared["s"] = Session(root)
+        else:
+            s.refresh()
         if outside and s.project.agent.mcp == "off":
             raise ToolError(
                 json.dumps({"code": "not_allowed", "message": "MCP access is off for this project"})
             )
         return s
 
+    def allow(action: str) -> Session:
+        """The session, once the project's autonomy lets an agent take `action`."""
+        s = session()
+        s.allow(actor, action)
+        return s
+
+    def run(command: dict[str, Any], rationale: str = ""):
+        """A run command through the session: refused at advise, a proposal at propose,
+        solved within the budget at act_in_budget, every solve counted (ADR 0090)."""
+        return session().submit(command, actor, rationale=rationale, cancel=cancel)
+
     def guarded(fn):
-        """Report PuzzleErrors to the agent as their structured form."""
+        """Report PuzzleErrors to the agent as their structured form. Inside a call, a
+        solve that does not go through the session is refused (`budget.agent_call`)."""
 
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
             try:
-                return fn(*args, **kwargs)
+                with budget.agent_call():
+                    return fn(*args, **kwargs)
             except PuzzleError as exc:
                 raise ToolError(json.dumps(exc.to_dict())) from None
 
@@ -886,23 +911,17 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
     @tool(
         description="Run a study on its mesh recipe meshed by Gmsh and by Netgen and compare "
         "(ADR 0019): each quantity's peak (or a global value), or 'eigenfrequencies', "
-        "as a relative difference against `tolerance`. Slow: it solves the study twice."
+        "as a relative difference against `tolerance`. Slow: it solves the study twice. "
+        "A run: the autonomy level decides (a proposal at propose) and both solves count "
+        "against the budget."
     )
     @guarded
     def mesh_shootout(
         study: str, quantities: list[str] | None = None, tolerance: float = 0.02
     ) -> dict[str, Any]:
-        import tempfile
-
-        from puzzle.commands import resolve
-        from puzzle.model.schema import Study
-        from puzzle.shootout import mesh_shootout_report
-
-        s = session()
-        target = resolve(s.project, study, Study)
-        with tempfile.TemporaryDirectory() as work:
-            return mesh_shootout_report(s.project, target.id, root, Path(work), quantities,
-                                        tolerance)  # fmt: skip
+        out = run({"command": "run_mesh_shootout", "study": study, "quantities": quantities,
+                   "tolerance": tolerance})  # fmt: skip
+        return out.run if out.status == "applied" else out.to_dict()
 
     @tool(
         description='Solve a sketch (an extrude or revolve profile {"sketch": {...}}; '
@@ -977,6 +996,7 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
     def materials_export(path: str, scope: str = "user") -> dict[str, Any]:
         from puzzle.materials import exchange
 
+        allow("materials_export")
         out = (Path(path) if Path(path).is_absolute() else root / path).resolve()
         if not out.is_relative_to(Path(root).resolve()):  # agents write inside the project
             raise PuzzleError(
@@ -1037,7 +1057,7 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         s = session()
         if isinstance(command, list):
             return s.submit_batch(command, actor, rationale=rationale).to_dict()
-        return s.submit(command, actor, rationale=rationale).to_dict()
+        return s.submit(command, actor, rationale=rationale, cancel=cancel).to_dict()
 
     @tool(
         description="The recipes (ready-wired operator chains: worst nodes, peak per part, "
@@ -1134,6 +1154,7 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
 
         from puzzle import solver_builds
 
+        allow("pardiso_build")
         state = solver_builds.status()
         if state.state in ("unavailable", "building"):
             return {"started": False, "pardiso": asdict(state)}
@@ -1166,6 +1187,7 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
 
         from puzzle import hosts
 
+        allow("host_check")
         found = hosts.check(hosts.get(name))
         return asdict(found) | {"words": found.words()}
 
@@ -1180,7 +1202,10 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
     def jobs_list(live: bool = False) -> dict[str, Any]:
         from puzzle.jobs import overview
 
-        session()  # refused when MCP access is off
+        if live:
+            allow("jobs_live")
+        else:
+            session()  # refused when MCP access is off
         return {"jobs": [r.to_dict() for r in overview.jobs(root, live=live)]}
 
     @tool(description="Pick up a pending job (its id, or its study's name): the same run "
@@ -1192,7 +1217,7 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
 
         s = session()
         (first, *_) = overview.find(root, job)
-        return s.resume(first["job"], actor).to_dict()
+        return s.resume(first["job"], actor, cancel=cancel).to_dict()
 
     @tool(description="Stop a pending job (its id, or its study's name: all its jobs). It "
           "stays listed until resumed or dismissed by the user. Agents cancel only where "
@@ -1201,10 +1226,7 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
     def job_cancel(job: str) -> dict[str, Any]:
         from puzzle.jobs import overview
 
-        s = session()
-        if actor.is_agent and s.project.agent.level not in ("act", "act_in_budget"):
-            raise PuzzleError("cancelling a solve needs autonomy 'act'; ask the user",
-                              code="not_allowed")  # fmt: skip
+        allow("job_cancel")
         return {"cancelled": {e["job"]: overview.cancel(root, e["job"])
                               for e in overview.find(root, job)}}  # fmt: skip
 
@@ -1239,9 +1261,8 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
           "of changes, say), with a label; `good` marks it known good.")  # fmt: skip
     @guarded
     def version_save(label: str, note: str = "", good: bool = False) -> dict[str, Any]:
-        if actor.is_agent and session().project.agent.level == "advise":
-            raise PuzzleError("agents only advise in this project", code="not_allowed")
-        return session().save_version(actor, label=label, note=note, good=good).to_dict()
+        return allow("version_save").save_version(actor, label=label, note=note,
+                                                  good=good).to_dict()  # fmt: skip
 
     @tool(description="Make the project a version's again: its number, or 'good' for the "
           "latest known good. The state replaced is kept as a version and undo takes the "
@@ -1457,7 +1478,7 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         from puzzle.project.layout import RESULTS_DIR
         from puzzle.results.store import ResultStore
 
-        s = session()
+        s = allow("export")
         target = resolve(s.project, study, Study)
         store = ResultStore(root / RESULTS_DIR)
         record = derived.run_for(s.project, store, target.id)
@@ -1479,6 +1500,7 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
                         history: bool = True) -> dict[str, Any]:  # fmt: skip
         from puzzle.project.archive import Include, write
 
+        allow("archive")
         out = (Path(path) if Path(path).is_absolute() else root / path).resolve()
         if not out.is_relative_to(Path(root).resolve()):  # agents write inside the project
             raise PuzzleError(f"archives go inside the project folder, not {path}",
@@ -1845,8 +1867,9 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         "its quantities' change) is at the target or `passes` ran. Settings default to "
         "the study's `adapt`. `method` 'anisotropic' remeshes with MMG along the field's "
         "Hessian (thin layers: heat, flow); 'isotropic' with the recipe's mesher. Each "
-        "pass is a stored run, reused next time. Solving needs autonomy 'act'; `solve` "
-        "false only reads the passes run."
+        "pass is a stored run, reused next time. `solve` false (the default) only reads the "
+        "passes run; solving is a run: refused at advise, a proposal at propose, each "
+        "pass counted against the budget at act_in_budget."
     )
     @guarded
     def mesh_adapt(study: str, target: float | None = None, passes: int | None = None,
@@ -1857,10 +1880,11 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         from puzzle.project.layout import RESULTS_DIR, WORK_DIR
         from puzzle.results.store import ResultStore
 
+        if solve:  # a run: refused, proposed or solved within the budget, by the level
+            out = run({"command": "run_adapt", "study": study, "target": target,
+                       "passes": passes, "method": method})  # fmt: skip
+            return out.run.to_dict() if out.status == "applied" else out.to_dict()
         s = session()
-        if solve and s.project.agent.level not in ("act", "act_in_budget"):
-            raise PuzzleError("adaptive refinement solves: it needs autonomy 'act'",
-                              code="not_allowed")  # fmt: skip
         st = resolve(s.project, study, Study)
         a = st.adapt or Adapt()
         changes = {k: v for k, v in (("target", target), ("passes", passes),
@@ -1868,7 +1892,7 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         a = Adapt.model_validate({**a.model_dump(), **changes})
         out = adapt.run(s.project, st, root, root / WORK_DIR / "adapt" / str(st.id),
                         store=ResultStore(root / RESULTS_DIR), settings=a,
-                        read_only=not solve)  # fmt: skip
+                        read_only=True)  # fmt: skip
         return out.to_dict()
 
     @tool(
@@ -1906,7 +1930,9 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         "`levels` meshes, each one's sizes divided by `ratio`, its quantities judged by "
         "Roache's grid convergence index: observed order, extrapolated value, GCI against "
         "`target` (0.02 = 2 %). `solve` false (the default) only reads the meshes already "
-        "run; solving needs autonomy 'act'. Each level is a stored run, reused next time."
+        "run; solving is a run: refused at advise, a proposal at propose, each level "
+        "counted against the budget at act_in_budget. Each level is a stored run, reused "
+        "next time."
     )
     @guarded
     def mesh_convergence(
@@ -1920,16 +1946,17 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         from puzzle.project.layout import RESULTS_DIR, WORK_DIR
         from puzzle.results.store import ResultStore
 
+        if solve:  # a run: refused, proposed or solved within the budget, by the level
+            out = run({"command": "run_convergence", "study": study, "levels": levels,
+                       "ratio": ratio, "target": target})  # fmt: skip
+            return out.run if out.status == "applied" else out.to_dict()
         s = session()
-        if solve and s.project.agent.level not in ("act", "act_in_budget"):
-            raise PuzzleError("solving a convergence check needs autonomy 'act'",
-                              code="not_allowed")  # fmt: skip
         st, c = conv.settings(s.project, study)
         goal = target or c.target
         lv = conv.run(s.project, st, root, root / WORK_DIR / "convergence" / str(st.id),
                       store=ResultStore(root / RESULTS_DIR), count=levels or c.levels,
                       ratio=ratio or c.ratio, outputs=c.quantities,
-                      read_only=not solve)  # fmt: skip
+                      read_only=True)  # fmt: skip
         return conv.report(lv, conv.verdicts(lv, goal), goal)
 
     @tool(
@@ -1966,28 +1993,20 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         }
 
     @tool(
-        description="Run an optimisation's points (ADR 0063; needs autonomy 'act', as "
-        "runs do; each point is a stored run, a point run before is reused, so a stopped "
-        "optimiser resumes on its path); `budget` solves at most that many new points this "
-        "time. Returns the points as optimisation_points."
+        description="Run an optimisation's points (ADR 0063). A run, as run_study is: "
+        "refused at advise, a proposal at propose, and at act_in_budget each point solved "
+        "counts against the budget, which stops it when spent. Each point is a stored run, "
+        "a point run before is reused, so a stopped optimiser resumes on its path; `budget` "
+        "solves at most that many new points this time. Returns the points as "
+        "optimisation_points."
     )
     @guarded
     def optimisation_run(name: str, budget: int | None = None) -> dict[str, Any]:
-        from puzzle import optimise
-        from puzzle.commands import resolve
-        from puzzle.model.schema import Optimisation
-        from puzzle.project.layout import RESULTS_DIR, WORK_DIR
-        from puzzle.results.store import ResultStore
 
-        s = session()
-        if s.project.agent.level not in ("act", "act_in_budget"):
-            raise PuzzleError("running an optimisation needs autonomy 'act'",
-                              code="not_allowed")  # fmt: skip
-        opt = resolve(s.project, name, Optimisation)
-        store = ResultStore(root / RESULTS_DIR)
-        optimise.run(s.project, opt, root, root / WORK_DIR / "optimise" / str(opt.id),
-                     store=store, budget=budget)  # fmt: skip
-        return _optimisation_points(s, name)
+        out = run({"command": "run_optimisation", "optimisation": name, "budget": budget})
+        if out.status != "applied":
+            return out.to_dict()
+        return _optimisation_points(session(), name)
 
     @tool(
         description="Put an optimisation's best feasible point (or point `index`) into "
@@ -2042,7 +2061,7 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         from puzzle.project.layout import RESULTS_DIR
         from puzzle.results.store import ResultStore
 
-        s = session()
+        s = allow("operator_export")
         op = resolve(s.project, name, Operator)
         if op.type not in ("export", "report"):
             raise PuzzleError(f"'{op.name}' is a {op.type}, not an Export or Report",
@@ -2923,18 +2942,19 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         from puzzle.post.view import render as draw
 
         _, mesh, results = latest(study)
-        png = Path(tempfile.mkdtemp(prefix="puzzle-render-")) / "view.png"
-        try:
-            draw(
-                mesh,
-                results,
-                View(field=field, scalar=scalar, step=step, mode=mode),
-                screenshot=png,
-                window_size=(900, 600),
-            )
-        except KeyError as exc:
-            raise PuzzleError(exc.args[0], code="not_found") from None
-        return Image(path=png)
+        with tempfile.TemporaryDirectory(prefix="puzzle-render-") as work:  # none left behind
+            png = Path(work) / "view.png"
+            try:
+                draw(
+                    mesh,
+                    results,
+                    View(field=field, scalar=scalar, step=step, mode=mode),
+                    screenshot=png,
+                    window_size=(900, 600),
+                )
+            except KeyError as exc:
+                raise PuzzleError(exc.args[0], code="not_found") from None
+            return Image(data=png.read_bytes(), format="png")
 
     return server
 

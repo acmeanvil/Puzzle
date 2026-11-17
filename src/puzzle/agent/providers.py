@@ -107,6 +107,7 @@ class MessagesProvider:
     blocks (signed) go back with the tool results that follow, as Anthropic requires."""
 
     remote = True
+    tool_images = True  # a tool's picture goes with its result
 
     def __init__(self, model: str = "claude-sonnet-5-5", api_key: str | None = None,
                  auth: str | None = None, *, name: str = "anthropic", base_url: str = "",
@@ -160,8 +161,15 @@ class MessagesProvider:
             raise ProviderError(f"Claude: {exc}", "network", self.name) from exc
         except anthropic.APIError as exc:
             raise ProviderError(f"Claude: {exc}", "", self.name) from exc
-        reply = Reply(input_tokens=response.usage.input_tokens,
-                      output_tokens=response.usage.output_tokens)  # fmt: skip
+        usage = response.usage
+        # Anthropic's input_tokens leaves out what was read from or written to the cache
+        # (ADR 0090, AGENT-8): the prompt's whole size is the three together.
+        cached = sum(
+            getattr(usage, k, None) or 0
+            for k in ("cache_read_input_tokens", "cache_creation_input_tokens")
+        )
+        reply = Reply(input_tokens=usage.input_tokens + cached,
+                      output_tokens=usage.output_tokens)  # fmt: skip
         thinking = []
         for block in response.content:
             if block.type == "text":
@@ -313,6 +321,8 @@ class ChatProvider:
     """A Chat Completions endpoint: e.g. Ollama at http://localhost:11434/v1, Hugging
     Face's router, NVIDIA's API catalog, Meta's compatibility endpoint."""
 
+    tool_images = False  # a tool result is text only on this wire (`to_openai`)
+
     def __init__(self, model: str, base_url: str = "http://localhost:11434/v1",
                  api_key: str | None = None, timeout_s: float = 600.0, *,
                  name: str = "local", key_header: str = "bearer",
@@ -359,7 +369,7 @@ class ChatProvider:
                     text += d["content"]
                     on_delta("text", d["content"])
                 for part in d.get("tool_calls") or []:
-                    c = calls.setdefault(part.get("index", len(calls)),
+                    c = calls.setdefault(_fragment_key(part, calls),
                                          {"id": "", "name": "", "arguments": ""})  # fmt: skip
                     c["id"] = part.get("id") or c["id"]
                     fn = part.get("function") or {}
@@ -376,6 +386,20 @@ class ChatProvider:
 
 
 OpenAIProvider = ChatProvider  # its name before ADR 0084
+
+
+def _fragment_key(part: dict, calls: dict):
+    """Which call a streamed tool-call fragment belongs to: its `index`; a server that
+    leaves the index out (ADR 0090, AGENT-13) by its id, a fragment with neither going
+    on the call before it."""
+    if part.get("index") is not None:
+        return part["index"]
+    if part.get("id"):
+        for key, c in calls.items():
+            if c["id"] == part["id"]:
+                return key
+        return len(calls)
+    return next(reversed(calls)) if calls else 0
 
 
 def _chat_reply(data: dict) -> Reply:
@@ -432,6 +456,7 @@ class ResponsesProvider:
     so a reasoning model keeps its reasoning across tool calls."""
 
     remote = True
+    tool_images = True  # a tool's picture goes with its result
 
     def __init__(self, model: str, base_url: str = "https://api.openai.com/v1",
                  api_key: str | None = None, timeout_s: float = 600.0, *,
@@ -584,6 +609,7 @@ class GeminiProvider:
     signature."""
 
     remote = True
+    tool_images = True  # a tool's picture goes with its result
 
     def __init__(self, model: str,
                  base_url: str = "https://generativelanguage.googleapis.com/v1beta",
@@ -751,6 +777,7 @@ class ScriptedProvider:
     name = "scripted"
     model = "script"
     remote = False
+    tool_images = True
 
     def __init__(self, replies: list) -> None:
         self.replies = list(replies)

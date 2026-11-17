@@ -18,7 +18,8 @@ versioned or archived).
 
 1. `jobs_list()` lists the project's pending jobs: study, solver, where ("this computer"
    or a host's name), state, elapsed, the log's last line, the job's id. It asks only this
-   computer's runner; `jobs_list(live=true)` also asks each remote host (slow: SSH).
+   computer's runner; `jobs_list(live=true)` also asks each remote host (slow: SSH; not
+   at autonomy "advise", which reaches no host).
 2. A job that is `Finished`, `Failed` or still `Running` with nobody following it:
    `job_resume(job)` (its id or its study's name) picks it up. It is the same run, in the
    same run folder: Puzzle attaches to the job (it is not solved again), reads its whole

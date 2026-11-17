@@ -37,8 +37,11 @@ From the three finest meshes that ran, each quantity gets:
    "convergence", "value": {"levels": 3, "ratio": 1.5, "target": 0.02}}]}`.
    For several checks of one study, make a `mesh_study` object instead (`study`,
    `levels`, `ratio`, `target`, `quantities`). `mesh_convergence` takes either name.
-3. Run `mesh_convergence(study, solve=true)`. Solving needs autonomy "act". Without
-   `solve` it only reads the meshes that already ran. Each finer mesh costs about
+3. Run `mesh_convergence(study, solve=true)`. Solving is a run (command
+   `run_convergence`): refused at "advise", a proposal at "propose", and at
+   "act_in_budget" each level counts against the budget, stopping with
+   `budget_exceeded` when it is spent. Without `solve` it only reads the meshes that
+   already ran. Each finer mesh costs about
    ratio³ (3.4×) the solve time of the last at ratio 1.5, so start from a coarse
    recipe.
 4. Report each verdict's words, its GCI and the extrapolated value. If it is not
@@ -69,7 +72,8 @@ draws the error, refinement ratio and jump per element in the results view.
 ## Adaptive refinement
 
 `mesh_adapt(study, target, passes, solve=true)` meshes again where the error is, pass
-after pass, until the energy-norm error is at `target`. With the study's
+after pass, until the energy-norm error is at `target`. It is a run (command
+`run_adapt`), gated as `mesh_convergence` is: each pass counts against the budget. With the study's
 `adapt.criterion` "quantity", it stops instead when its quantities change by at most
 the target between passes. Use it when a convergence check says "not converged" and
 the error sits in a few places: it reaches the target in far fewer elements than

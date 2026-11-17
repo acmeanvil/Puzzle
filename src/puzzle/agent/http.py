@@ -21,6 +21,7 @@ from collections.abc import Callable, Iterator
 USER_AGENT = "puzzle-agent"
 _UNSTREAMED: set[str] = set()
 RETRIES = 3
+SERVER_RETRIES = 2  # a provider's own 5xx or "overloaded" answer, tried again after a moment
 KINDS = ("auth", "rate_limit", "quota", "context", "model", "tools", "network", "server")
 PLAIN = {
     "auth": "{who} rejected the key, or none is set: set one in Settings > Agent or with "
@@ -97,6 +98,9 @@ def _open(request, timeout: float, who: str, sleep: Callable[[float], None] | No
         except urllib.error.HTTPError as exc:
             text = exc.read().decode("utf-8", "replace")[:2000]
             kind = classify(exc.code, text)
+            if kind == "server" and attempt < SERVER_RETRIES:
+                sleep(0.5 * 2.0**attempt)
+                continue
             if kind == "rate_limit" and attempt < RETRIES:
                 wait = exc.headers.get("Retry-After") if exc.headers else None
                 try:
@@ -147,7 +151,7 @@ def post_stream(
             yield "", json.loads(response.read() or b"{}")
             return
         event, data = "", []
-        for raw in response:
+        for raw in _lines(response, who):
             line = raw.decode("utf-8", "replace").rstrip("\r\n")
             if not line:
                 if data:
@@ -161,6 +165,18 @@ def post_stream(
                 data.append(line[5:].lstrip())
         if data and "\n".join(data).strip() != "[DONE]":
             yield from _parsed(event, "\n".join(data))
+
+
+def _lines(response, who: str) -> Iterator[bytes]:
+    """A stream's lines; a connection dropped part way is a `network` ProviderError
+    (ADR 0090, AGENT-13), not Python's own error text."""
+    import http.client
+
+    try:
+        yield from response
+    except (OSError, ValueError, http.client.HTTPException) as exc:  # reset, timed out, cut
+        raise ProviderError(f"{who}: the connection dropped while it answered ({exc})",
+                            "network", who) from None  # fmt: skip
 
 
 def _parsed(event: str, text: str) -> Iterator[tuple[str, dict]]:

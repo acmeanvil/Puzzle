@@ -82,7 +82,26 @@ def run_study(project: Project, study_id, root: Path, workdir: Path, *, host: st
         return _run_study(project, study_id, root, workdir, **kwargs)
 
 
-def _run_study(
+def _run_study(*args, **kwargs) -> StudyRun:
+    """`_study_run`, its fresh solve counted by the command's budget gate when one is
+    on (ADR 0090 package 3): begun before solving (`budget.begin`), ended here."""
+    from puzzle import budget
+
+    gate = budget.current()
+    depth = gate.depth() if gate is not None else 0
+    try:
+        run = _study_run(*args, **kwargs)
+    except BaseException:
+        if gate is not None:
+            gate.end(depth)
+        raise
+    if gate is not None:
+        job = getattr(run, "job", None)
+        gate.end(depth, None if run.cached or job is None else job.duration_s)
+    return run
+
+
+def _study_run(
     project: Project,
     study_id,
     root: Path,
@@ -190,6 +209,11 @@ def _run_study(
                 cached=True,
             )
 
+    from puzzle import budget
+    from puzzle.jobs.runtime import remote_host
+
+    # A fresh solve: an agent's is counted, and refused once its budget is spent.
+    _gate, timeout_s = budget.begin(timeout_s, remote_host())
     workdir.mkdir(parents=True, exist_ok=True)
     # Source studies first (each run once per chain, or reused from the store).
     upstream = {} if upstream is None else upstream

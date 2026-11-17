@@ -156,6 +156,8 @@ def test_mesh_shootout_shows_what_the_tool_returns(app, stand_in, monkeypatch):
     table = w.mesh_shootout_table
     shown = [[table.item(r, c).text() for c in range(table.columnCount())]
              for r in range(table.rowCount())]  # fmt: skip
+    # A run for an agent (ADR 0090): at "propose" it would be a proposal
+    w.session.submit({"command": "set_autonomy", "level": "act_in_budget"})
     server = build_server(w.session.root, "test")
     report = _call(server, "mesh_shootout", study="S",
                    quantities=["displacement", "temperature"], tolerance=0.04)  # fmt: skip

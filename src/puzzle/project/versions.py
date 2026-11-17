@@ -612,8 +612,11 @@ def _last_command(root: Path) -> str:
 def describe_command(c: dict) -> str:
     """A command in a few words ("edit Bar", "run Static")."""
     name = c.get("command", "")
-    target = c.get("object") or c.get("study") or c.get("name") or c.get("kind") or ""
+    target = (c.get("object") or c.get("study") or c.get("optimisation") or c.get("name")
+              or c.get("kind") or "")  # fmt: skip
     words = {"edit": "Edited", "create": "Created", "delete": "Deleted", "run_study": "Ran",
+             "run_optimisation": "Ran optimisation", "run_convergence": "Checked convergence of",
+             "run_adapt": "Adapted the mesh of", "run_mesh_shootout": "Mesh shoot-out of",
              "undo": "Undid a change", "restore_version": "Restored version",
              "add_library_material": "Added material", "copy_component": "Copied",
              "set_autonomy": "Set the agent's autonomy"}  # fmt: skip
@@ -674,10 +677,9 @@ def due(root: Path, every_edits: int, every_minutes: float) -> tuple[bool, int]:
                 e = json.loads(line)
             except ValueError:
                 continue
-            if (
-                e.get("type") == "command"
-                and (e.get("command") or {}).get("command") != "run_study"
-            ):
+            if e.get("type") == "command" and not str(
+                (e.get("command") or {}).get("command", "")
+            ).startswith("run_"):  # runs (a study, an optimisation, ...) are not edits
                 seqs.append(e.get("seq", 0))
     since = [s for s in seqs if v is None or s > v.history_seq]
     if not since:

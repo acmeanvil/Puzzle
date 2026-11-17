@@ -18,11 +18,15 @@ project needs next.
 2. Type in the message box and send with Ctrl+Enter (⌘+Enter on a Mac). Settings >
    Agent can make Enter send instead.
 3. Replies come as text, equations and folded code; the tool calls it made fold into
-   one line each. The status line shows the time taken; **Stop** ends its turn after
-   the step it is on.
+   one line each. A picture the agent draws (`render`) shows there too, saying whether
+   the model was sent it. The status line shows the time taken; **Stop** ends its turn:
+   a reply being written stops at once and is dropped, a run it started is stopped, and
+   otherwise it stops after the step it is on.
 4. **Attach…** sends an image, a PDF or a text file with the next message; you can also
    drop or paste one. A remote provider doesn't get images or files unless you allow it.
-5. **New chat** starts again.
+5. **New chat** starts again. Pressed while the agent is working, it stops that turn
+   first; opening another project or choosing another model does the same.
+6. **Accept** and **Reject** act on the proposal picked in the list; pick one first.
 
 ![The agent window: a question, the tools the agent used folded into one line, its answer with an equation, and the proposal it made waiting below with Accept and Reject](image:screens/agent-window.png)
 
@@ -35,11 +39,19 @@ The **Agents may** dropdown at the top of the panel sets the project's autonomy:
   **Accept** or **Reject**.
 - **act within the budget**: it applies changes and runs studies until it has spent the
   budget. **Budget…** sets fresh solver runs (default 5), solver time (default 10
-  minutes) and remote core-hours (default 2). Saving starts the count again.
+  minutes) and remote core-hours (default 2). Saving starts the count again. Every
+  solve counts, whatever started it: a study, each point of a sweep or an
+  optimisation, each mesh of a convergence check, each adaptive pass, both meshes of a
+  mesh shoot-out, a failed or stopped run too. A run that would go past the budget
+  stops at the solve that would, and says so.
 - **act freely**: no budget. It asks you twice, the second time to type "act".
 
 Below "act freely", Python scripts and custom equations the agent writes are always
-proposed. Agents can never change the autonomy themselves.
+proposed, however the change is made (a new object, an edit, a copy, a batch); an undo
+or a version restore that would bring code back is left to you. At "only advise" the
+agent also writes no files (exports, archives), starts no build and reaches no remote
+host; building CalculiX with PARDISO or cancelling a solve needs "act within the
+budget". Agents can never change the autonomy themselves.
 
 ## How to choose a model and provider
 

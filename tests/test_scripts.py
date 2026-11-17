@@ -2,6 +2,8 @@
 with a time limit, away from the project's files, only in a trusted project, proposed
 by agents below "act", and hashed so what they feed goes stale."""
 
+from pathlib import Path
+
 import pytest
 
 from puzzle.errors import PuzzleError
@@ -83,7 +85,7 @@ def test_a_script_cannot_read_the_project(tmp_path):
 def test_a_script_has_no_network():
     code = "import socket\nout = socket.getaddrinfo('example.com', 80)[0][4][0]"
     with pytest.raises(PuzzleError) as exc:
-        scripts.run(code, {})
+        scripts.run(code, {}, project_root=None)
     assert exc.value.code == "script_failed"
 
 
@@ -185,3 +187,55 @@ def test_imports_and_missing_packages():
     if scripts.python() is not None:
         assert scripts.missing(code) == []
         assert scripts.missing("import surely_not_a_package_here") == ["surely_not_a_package_here"]
+
+
+def test_the_macos_profile_writes_only_its_own_folder(tmp_path):
+    """BE-22: the profile allowed writes everywhere but the project. Now: no writes but
+    the run's folder and /dev, and the project, Puzzle's user folder and ~/.ssh hidden.
+    (sandbox-exec itself runs only on a Mac; this checks the profile it is given.)"""
+    from puzzle.materials import user_data_dir
+
+    text = scripts.profile(tmp_path / "project", tmp_path / "work")
+    rules = text.split(") (")
+    assert "(deny network*)" in text and "(deny file-write*)" in text
+    allow = f'allow file-write* (subpath "{scripts._quoted(tmp_path / "work")}")'
+    assert allow in text
+    for hidden in (tmp_path / "project", user_data_dir(), Path.home() / ".ssh"):
+        deny = f'deny file-read* file-write* (subpath "{scripts._quoted(hidden)}")'
+        assert deny in text
+    # The last rule that matches decides: the denials come after the allows.
+    assert text.index("deny file-read*") > text.index("allow file-write*") and len(rules) > 5
+
+
+def test_no_sandbox_refuses_unless_the_user_allows_it(monkeypatch):
+    """BE-22 / ADR-9: Linux without bubblewrap ran scripts unsandboxed, silently."""
+    from puzzle.settings import current
+
+    monkeypatch.setattr(scripts, "kind", lambda: "none")
+    monkeypatch.setattr(scripts.sys, "platform", "linux")
+    with pytest.raises(PuzzleError) as exc:
+        scripts.refuse_unsandboxed()
+    assert exc.value.code == "unsandboxed" and "bubblewrap" in exc.value.message
+    current().set("scripts.unsandboxed", True)
+    scripts.refuse_unsandboxed()  # allowed by the user: runs
+
+
+def test_the_project_folder_reaches_the_sandbox_from_every_context(tmp_path, monkeypatch):
+    """BE-22 / ADR-8: about ten callers built a Context without a root, so the sandbox
+    was never told the project folder. A script now gets the project's own folder."""
+    from puzzle.operators import evaluate as ev
+    from puzzle.project import load_project, save_project
+
+    p = Project("p")
+    p.add(Operator(name="S", type="script", code="out = 1.0"))
+    save_project(p, tmp_path)
+    loaded = load_project(tmp_path)
+    seen = {}
+
+    def run(code, inputs, *, timeout_s, project_root):
+        seen["root"] = project_root
+        return 1.0
+
+    monkeypatch.setattr(scripts, "run", run)
+    ev.value(ev.Context(loaded, None), loaded.of_type(Operator)[0])  # no root given
+    assert Path(seen["root"]).resolve() == tmp_path.resolve()

@@ -232,6 +232,9 @@ def test_agent_proposes_and_the_user_accepts(app, tmp_path):
         assert "Changed Cantilever (physics) — asked" in window.agent.proposals.item(0).text()
         assert _tip(window) == -100
 
+        window.agent.accept_selected()  # nothing picked: nothing accepted (AGENT-11)
+        assert _tip(window) == -100 and window.agent.proposals.count() == 1
+        window.agent.proposals.setCurrentRow(0)
         window.agent.accept_selected()
         wait(app, lambda: not window.tasks, timeout=60)
         assert _tip(window) == -250
@@ -253,6 +256,7 @@ def test_agent_rejects_and_levels(app, tmp_path, monkeypatch):
     try:
         window.agent.send("change it")
         wait(app, lambda: not window.tasks, timeout=60)
+        window.agent.proposals.setCurrentRow(0)  # Reject takes the one picked (AGENT-11)
         window.agent.reject_selected()
         assert window.agent.proposals.count() == 0 and _tip(window) == -100
 

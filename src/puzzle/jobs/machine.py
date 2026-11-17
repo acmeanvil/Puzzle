@@ -33,6 +33,7 @@ elevated), for Settings > Solvers.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
@@ -43,6 +44,7 @@ from pathlib import Path, PureWindowsPath
 from puzzle.jobs.runtime import SERIAL_BLAS, THREAD_VARIABLES, Runtime, thread_environment
 
 PREFIX = "puzzle-"
+PID = ".puzzle-pid"  # in the run folder: the solve's pid inside the distribution
 
 
 def wsl() -> str | None:
@@ -233,8 +235,21 @@ class WslRuntime(Runtime):
         threads = thread_environment()
         given = [f"{k}={threads[k]}" for k in (*THREAD_VARIABLES, *SERIAL_BLAS)]
         where = self.staged(workdir) if self.stage else linux_path(workdir)
+        # The solve writes its pid where `cancel` finds it: stopping wsl.exe alone left
+        # it running in the distribution (ADR 0090, BE-3).
+        mark = f'echo $$ > {PID}; exec "$@"'
         return [exe, "-d", self.distro, "--cd", where, "--exec", "env",
-                "HOME=/tmp", *self.env, *given, *self.entrypoint, *command]  # fmt: skip
+                "HOME=/tmp", *self.env, *given, "sh", "-c", mark, "sh",
+                *self.entrypoint, *command]  # fmt: skip
+
+    def cancel(self, workdir: Path) -> None:
+        """Stop the solve inside the distribution, and what it started, by its pid."""
+        where = self.staged(workdir) if self.stage else linux_path(workdir)
+        from puzzle.jobs.processes import kill_tree_sh
+
+        stop = kill_tree_sh(f"{where}/{PID}")
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
+            self._shell(stop)
 
     def _shell(self, script: str) -> subprocess.CompletedProcess:
         return _run([wsl() or "wsl", "-d", self.distro, "--exec", "sh", "-c", script])

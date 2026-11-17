@@ -59,6 +59,8 @@ CODES = {
     "from outside Puzzle) or its outcome is unknown (ADR 0021)",
     "transfer_failed": "copying a case to or from the remote host failed (ADR 0021)",
     "untrusted": "the project is not trusted: its scripts and equations don't run (ADR 0062)",
+    "unsandboxed": "no sandbox for scripts on this computer (Linux without bubblewrap): "
+    "install one, or allow scripts without it in Settings (ADR 0062, ADR 0090)",
     "script_failed": "a script operator raised an error, or left no result (ADR 0062)",
     "timeout": "it ran past its time limit and was stopped",
     # Commands and the project model

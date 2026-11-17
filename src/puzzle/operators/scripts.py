@@ -10,13 +10,22 @@ a number, a list, a table (a dict of equal-length lists), points or a text, as i
 - with a **time limit** (`timeout_s`), killed past it;
 - in an **empty working folder** of its own, its environment cleared, the project's
   folder never named, and sandboxed:
-  - macOS: `sandbox-exec`, denying reading or writing that folder and the network;
+  - macOS: `sandbox-exec`: no network, writes only in its own folder (and /dev), the
+    project folder, Puzzle's user folder (keys, hosts, trusted projects) and ~/.ssh not
+    read either (`profile`);
   - Linux: bubblewrap (`bwrap`, where installed): the system read-only, the project
-    folder an empty tmpfs, its own folder the one it writes, no network;
+    folder and Puzzle's user folder empty tmpfs, its own folder the one it writes, no
+    network;
   - Windows: an AppContainer (`sandbox_win`): the environment and its own folder
     granted, nothing of the user's, no network, in a job object;
-  where none can be had (no bwrap), the folder is simply not given (`kind()` says);
+  where none can be had (Linux without bwrap) it is refused, code `unsandboxed`, saying
+  what to install, unless the user's preference `scripts.unsandboxed` lets it run
+  (ADR 0090, BE-22: it used to run there silently);
 - only in a **trusted project** (`puzzle.trust`).
+
+The project's folder is a required argument of `run` (`project_root`, None only for a
+project that has none on disk), so no caller can leave it out by accident: about ten
+callers did, and on macOS and Linux those scripts could read the project.
 
 Its code's text and its inputs' values are in the hashes (the operator's content and
 its upstream operators), so a pre-solve script stales what it feeds when either
@@ -142,18 +151,42 @@ def kind() -> str:
     return "none"
 
 
+def _quoted(path) -> str:
+    return str(Path(path).resolve()).replace("\\", "").replace('"', "")
+
+
+def _private() -> list[Path]:
+    """Folders a script never reads: Puzzle's user folder (agent.toml, hosts.toml,
+    trusted.json) and the user's SSH keys."""
+    from puzzle.materials import user_data_dir
+
+    return [user_data_dir(), Path.home() / ".ssh"]
+
+
+def profile(project_root, folder: Path | None) -> str:
+    """macOS's sandbox profile for a script: everything else allowed (reading the system
+    and the scripts environment), but no network, no writes outside its own folder and
+    /dev, and the project folder and the private folders neither read nor written. The
+    rules are read in order, the last that matches deciding."""
+    rules = ["(version 1)", "(allow default)", "(deny network*)", "(deny file-write*)"]
+    if folder is not None:
+        rules.append(f'(allow file-write* (subpath "{_quoted(folder)}"))')
+    rules.append('(allow file-write* (subpath "/dev"))')
+    hidden = [*([project_root] if project_root is not None else []), *_private()]
+    for where in hidden:
+        rules.append(f'(deny file-read* file-write* (subpath "{_quoted(where)}"))')
+    return " ".join(rules)
+
+
 def _sandbox(argv: list[str], project_root, folder: Path | None = None) -> list[str]:
-    """The run under the platform's sandbox: macOS sandbox-exec (the project folder and
-    the network denied); Linux bubblewrap (everything read-only, the project folder an
-    empty tmpfs, the work folder writable, no network). Windows' AppContainer isn't a
-    command line: `run` starts it."""
+    """The run under the platform's sandbox: macOS sandbox-exec (`profile`); Linux
+    bubblewrap (everything read-only, the project folder and the private folders empty
+    tmpfs, the work folder writable, no network). Windows' AppContainer isn't a command
+    line: `run` starts it. Without one, the argv as it is (`run` refuses it first unless
+    the user allowed that)."""
     how = kind()
     if how == "sandbox-exec":
-        rules = ["(version 1)", "(allow default)", "(deny network*)"]
-        if project_root is not None:
-            where = str(Path(project_root).resolve()).replace('"', "")
-            rules.append(f'(deny file-read* file-write* (subpath "{where}"))')
-        return ["/usr/bin/sandbox-exec", "-p", " ".join(rules), *argv]
+        return ["/usr/bin/sandbox-exec", "-p", profile(project_root, folder), *argv]
     if how == "bwrap":
         import shutil
 
@@ -172,6 +205,9 @@ def _sandbox(argv: list[str], project_root, folder: Path | None = None) -> list[
         ]
         if project_root is not None:
             out += ["--tmpfs", str(Path(project_root).resolve())]
+        for where in _private():
+            if where.is_dir():
+                out += ["--tmpfs", str(where.resolve())]
         if folder is not None:
             out += ["--bind", str(folder), str(folder), "--chdir", str(folder)]
         return [*out, *argv]
@@ -204,13 +240,42 @@ def _contained(exe: Path, folder: Path, timeout_s: float) -> str:
     return said.read_text(encoding="utf-8", errors="replace") if said.exists() else ""
 
 
+def unsandboxed_allowed() -> bool:
+    """The user's preference `scripts.unsandboxed`: run scripts where no sandbox is."""
+    try:
+        from puzzle.settings import current
+
+        return bool(current().get("scripts.unsandboxed"))
+    except Exception:  # noqa: BLE001 - no settings (a bare script): the safe answer
+        return False
+
+
+def refuse_unsandboxed() -> None:
+    """No sandbox here: refused, saying what to install, unless the user allowed it."""
+    if kind() != "none" or unsandboxed_allowed():
+        return
+    what = (
+        "install bubblewrap (sudo apt install bubblewrap, sudo dnf install bubblewrap)"
+        if sys.platform.startswith("linux")
+        else "run Puzzle where a sandbox is"
+    )
+    raise PuzzleError(
+        f"no sandbox for scripts on this computer, so the script does not run: {what}, or "
+        "allow scripts without one (Settings > Solvers > Scripts where no sandbox is)",
+        code="unsandboxed",
+    )
+
+
 def run(code: str, inputs: dict[str, Any], *, timeout_s: float = 30.0,
-        project_root=None) -> Any:  # fmt: skip
-    """The value the script leaves in `out` (JSON-plain), or a PuzzleError."""
+        project_root) -> Any:  # fmt: skip
+    """The value the script leaves in `out` (JSON-plain), or a PuzzleError.
+    `project_root` (required: None only for a project with no folder) is the folder the
+    sandbox hides."""
     exe = python()
     if exe is None:
         raise PuzzleError("no scripts environment: install it with pixi install -e scripts",
                           code="unsupported")  # fmt: skip
+    refuse_unsandboxed()
     with tempfile.TemporaryDirectory(prefix="puzzle-script-") as work:
         folder = Path(work)
         (folder / "inputs.json").write_text(json.dumps(inputs), encoding="utf-8")

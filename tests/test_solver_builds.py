@@ -170,6 +170,10 @@ def test_mcp_lists_the_solvers(tmp_path, monkeypatch):
     out = asyncio.run(server.call_tool("solvers_list", {})).structured_content
     assert out["solvers"][0]["note"] == "PARDISO"
     assert out["pardiso"]["state"] == "unavailable"
+    from puzzle.commands import Session
+
+    # Building a program needs "act within the budget" (ADR 0090, AGENT-12)
+    Session(tmp_path).submit({"command": "set_autonomy", "level": "act_in_budget"})
     started = asyncio.run(server.call_tool("pardiso_build", {})).structured_content
     assert started["started"] is False  # nothing to build with here
 

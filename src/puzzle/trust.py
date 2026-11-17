@@ -78,6 +78,27 @@ def holds_code(project) -> list[str]:
     return out
 
 
+def code_texts(project):
+    """Every piece of code the project would run, counted: script operators' code and
+    custom PDE weak forms (ADR 0062: what runs, not what is only parsed, as expressions
+    and derived-result equations are). A command that raises a count writes new code,
+    which an agent below "act" proposes (ADR 0090, BE-9)."""
+    from collections import Counter
+
+    from puzzle.model.schema import Component, Operator
+
+    found = Counter(("script", o.code) for o in project.of_type(Operator) if o.type == "script")
+    found.update(("equation", p.equation.weak_form) for c in project.of_type(Component)
+                 for p in c.physics if p.type == "custom_pde" and p.equation)  # fmt: skip
+    return found
+
+
+def new_code(before, after) -> list[str]:
+    """What `after` runs that `before` does not (as words, for a refusal or a proposal)."""
+    more = code_texts(after) - code_texts(before)
+    return [f"a {'script' if k == 'script' else 'custom PDE equation'}" for k, _ in more]
+
+
 def require(project, what: str) -> None:
     """Refuse running `what` (a script, an equation) in an untrusted project."""
     if not getattr(project, "trusted", True):

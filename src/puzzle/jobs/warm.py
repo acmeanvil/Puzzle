@@ -14,13 +14,15 @@ every point's run folder) mounted at /batch, and every solve of that image is
   /tmp/.puzzle-alive for `IDLE_S`, so a Puzzle that dies leaves nothing behind; the
   batch's end removes it at once.
 - Cancel: the exec'd solve writes its pid into its folder (`.puzzle-pid`), and
-  `WarmRuntime.cancel` kills it inside the container (killing `docker exec` itself
-  would leave the solve running).
+  `WarmRuntime.cancel` kills it and what it started inside the container (killing
+  `docker exec` itself would leave the solve running). A solve keeps the container
+  alive while it runs, so one longer than `IDLE_S` is not ended by the keeper.
 - A solve whose folder isn't under the batch's root runs as before.
 """
 
 from __future__ import annotations
 
+import atexit
 import contextlib
 import contextvars
 import json
@@ -31,6 +33,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from puzzle.jobs.processes import kill_tree_sh
 from puzzle.jobs.runtime import (
     SERIAL_BLAS,
     THREAD_VARIABLES,
@@ -138,10 +141,12 @@ def batch(root: Path):
     Path(root).mkdir(parents=True, exist_ok=True)
     pool = Pool(Path(root).resolve())
     token = _BATCH.set(pool)
+    atexit.register(pool.stop)  # Puzzle exiting mid-batch: its containers go with it
     try:
         yield pool
     finally:
         _BATCH.reset(token)
+        atexit.unregister(pool.stop)
         pool.stop()
 
 
@@ -178,22 +183,31 @@ class WarmRuntime(ContainerRuntime):
         for var in (*THREAD_VARIABLES, *SERIAL_BLAS):
             argv += ["-e", f"{var}={threads[var]}"]
         entry = self.pool.entrypoints.get((self.engine, self.image, self.caches), [])
-        script = f'touch {ALIVE}; echo $$ > {PID}; exec "$@"'
+        # The solve keeps the container alive while it runs (a solve longer than IDLE_S
+        # was ended by the keeper), from a loop whose output goes nowhere, so `docker
+        # exec` returns when the solve does.
+        keep = (f"(while kill -0 $$ 2>/dev/null; do touch {ALIVE}; sleep 30; done) "
+                ">/dev/null 2>&1 </dev/null &")  # fmt: skip
+        script = f'touch {ALIVE}; echo $$ > {PID}; {keep} exec "$@"'
         return [*argv, name, "sh", "-c", script, "sh", *entry, *command]
 
     def describe(self) -> str:
         return f"{self.engine}:{self.image} (warm)"
 
     def cancel(self, workdir: Path) -> None:
-        """Stop the exec'd solve inside the container: its pid from its folder."""
+        """Stop the exec'd solve inside the container: its pid from its folder (a solve
+        that ran as a plain `docker run`, outside the batch, stops as one does)."""
         placed = self._place(workdir) if (Path(workdir) / PID).exists() else None
         if placed is None:
+            super().cancel(workdir)
             return
         name, inside = placed
         exe = find_engine(self.engine) or self.engine
         with contextlib.suppress(OSError, subprocess.SubprocessError):
-            _run([exe, "exec", "-w", inside, name, "sh", "-c",
-                  f"kill -TERM $(cat {PID}) 2>/dev/null; true"], timeout=30)  # fmt: skip
+            # The solve and what it started (an entrypoint script runs the solver as its
+            # child: killing the script alone left the solver running, ADR 0090 BE-3).
+            _run([exe, "exec", "-w", inside, name, "sh", "-c", kill_tree_sh(PID)],
+                 timeout=30)  # fmt: skip
 
 
 def warm(rt):

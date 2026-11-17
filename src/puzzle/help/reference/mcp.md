@@ -325,14 +325,14 @@ Arguments: `cb`, `component`, `deflection_limit`, `k_x`, `k_y`, `k_z`, `length_x
 <!-- key: mcp:mesh_adapt -->
 ### mesh_adapt
 
-Adaptive refinement (ADR 0066 phase 3): solve, estimate the error, mesh again with each element sized for `target` (0.02 = 2 %), pass after pass, until the energy-norm error (or, with the study's adapt.criterion 'quantity', its quantities' change) is at the target or `passes` ran. Settings default to the study's `adapt`. `method` 'anisotropic' remeshes with MMG along the field's Hessian (thin layers: heat, flow); 'isotropic' with the recipe's mesher. Each pass is a stored run, reused next time. Solving needs autonomy 'act'; `solve` false only reads the passes run.
+Adaptive refinement (ADR 0066 phase 3): solve, estimate the error, mesh again with each element sized for `target` (0.02 = 2 %), pass after pass, until the energy-norm error (or, with the study's adapt.criterion 'quantity', its quantities' change) is at the target or `passes` ran. Settings default to the study's `adapt`. `method` 'anisotropic' remeshes with MMG along the field's Hessian (thin layers: heat, flow); 'isotropic' with the recipe's mesher. Each pass is a stored run, reused next time. `solve` false (the default) only reads the passes run; solving is a run: refused at advise, a proposal at propose, each pass counted against the budget at act_in_budget.
 
 Arguments: `method`, `passes`, `solve`, `study`, `target`.
 
 <!-- key: mcp:mesh_convergence -->
 ### mesh_convergence
 
-Mesh convergence (ADR 0066): the study (or a mesh study, by name) on `levels` meshes, each one's sizes divided by `ratio`, its quantities judged by Roache's grid convergence index: observed order, extrapolated value, GCI against `target` (0.02 = 2 %). `solve` false (the default) only reads the meshes already run; solving needs autonomy 'act'. Each level is a stored run, reused next time.
+Mesh convergence (ADR 0066): the study (or a mesh study, by name) on `levels` meshes, each one's sizes divided by `ratio`, its quantities judged by Roache's grid convergence index: observed order, extrapolated value, GCI against `target` (0.02 = 2 %). `solve` false (the default) only reads the meshes already run; solving is a run: refused at advise, a proposal at propose, each level counted against the budget at act_in_budget. Each level is a stored run, reused next time.
 
 Arguments: `levels`, `ratio`, `solve`, `study`, `target`.
 
@@ -346,7 +346,7 @@ Arguments: `component`.
 <!-- key: mcp:mesh_shootout -->
 ### mesh_shootout
 
-Run a study on its mesh recipe meshed by Gmsh and by Netgen and compare (ADR 0019): each quantity's peak (or a global value), or 'eigenfrequencies', as a relative difference against `tolerance`. Slow: it solves the study twice.
+Run a study on its mesh recipe meshed by Gmsh and by Netgen and compare (ADR 0019): each quantity's peak (or a global value), or 'eigenfrequencies', as a relative difference against `tolerance`. Slow: it solves the study twice. A run: the autonomy level decides (a proposal at propose) and both solves count against the budget.
 
 Arguments: `quantities`, `study`, `tolerance`.
 
@@ -409,7 +409,7 @@ Arguments: `name`.
 <!-- key: mcp:optimisation_run -->
 ### optimisation_run
 
-Run an optimisation's points (ADR 0063; needs autonomy 'act', as runs do; each point is a stored run, a point run before is reused, so a stopped optimiser resumes on its path); `budget` solves at most that many new points this time. Returns the points as optimisation_points.
+Run an optimisation's points (ADR 0063). A run, as run_study is: refused at advise, a proposal at propose, and at act_in_budget each point solved counts against the budget, which stops it when spent. Each point is a stored run, a point run before is reused, so a stopped optimiser resumes on its path; `budget` solves at most that many new points this time. Returns the points as optimisation_points.
 
 Arguments: `budget`, `name`.
 

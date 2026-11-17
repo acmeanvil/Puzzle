@@ -318,6 +318,7 @@ def test_theory_notes_cite_their_sources_and_are_reached_from_a_guide():
 # solve (CLI, GUI renders, exports, progress, runtimes), not a benchmark.
 NOT_BENCHMARKS = {
     "test_agent_workflow.py",
+    "test_container_stop.py",
     "test_calculix_smoke.py",
     "test_cli_runs.py",
     "test_exports.py",

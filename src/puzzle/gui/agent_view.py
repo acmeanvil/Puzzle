@@ -242,6 +242,37 @@ class Transcript(QScrollArea):
             self._live.deleteLater()
         self._live, self._live_label, self._live_text = None, None, ""
 
+    def end_live(self) -> None:
+        """A reply that streamed part way and then failed or was stopped: taken away, as
+        it was never said (it is in neither the conversation nor `texts`)."""
+        self._end_live()
+
+    def picture(self, png: bytes, sent: bool) -> None:
+        """A picture a tool made (the agent's `render`), shown to the user, saying
+        whether the model received it too (ADR 0090, AGENT-6)."""
+        from PySide6.QtGui import QPixmap
+
+        box = QWidget()
+        col = QVBoxLayout(box)
+        col.setContentsMargins(18, 4, 0, 4)
+        image = QLabel()
+        pixmap = QPixmap()
+        if pixmap.loadFromData(png) and not pixmap.isNull():
+            image.setPixmap(
+                pixmap.scaledToWidth(
+                    min(pixmap.width(), 420), Qt.TransformationMode.SmoothTransformation
+                )
+            )
+        else:
+            image.setText("(a picture that could not be drawn)")
+        col.addWidget(image)
+        said = QLabel("The agent saw this picture." if sent else
+                      "Shown to you only: this model is not sent pictures.")  # fmt: skip
+        role(said, "muted")
+        col.addWidget(said)
+        self._add(box)
+        self.texts.append("[picture]" + ("" if sent else " (not sent to the model)"))
+
     def reply(self, markdown: str) -> None:
         """A reply: its prose as Markdown, its code blocks folded."""
         self._end_live()

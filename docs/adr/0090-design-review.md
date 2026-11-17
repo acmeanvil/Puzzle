@@ -251,6 +251,35 @@ still made under the project lock; pid reuse is not detected; an archive with th
 latest results still copies the store, then prunes; on a network share the guard lock
 depends on the filesystem.
 
+**Package 3 built (2026-11-17):** every solve an agent starts is a command in the
+session: `run_study` and four new ones (`run_optimisation`, `run_convergence`,
+`run_adapt`, `run_mesh_shootout`) take one path, `Session._run_command` (level, a
+proposal below "act", the pre-run version, one history entry). `puzzle/budget.py` is
+the gate round it: `run_study` calls it before each fresh solve, so a multi-run command
+is counted solve by solve and stopped when the budget is spent; what it counted goes
+into the entry's `spent`, where the budget is read from; a failed run that began a
+solve spends too. An agent's tool call that reaches a fresh solve with no gate is
+refused (AGENT-1, ADR-44; the mesh shoot-out was ungated as well). The code gate
+applies the edits to a copy and compares the scripts and weak forms before and after,
+so no path goes round it; an undo or restore that would bring code back is the user's
+(BE-9, AGENT-5, ADR-1). Tools with effects outside the model have a least level in
+`session.ACTIONS` (AGENT-12). Containers are named and killed on Stop, on a timeout and
+at exit; native solves are killed as a tree (`jobs/processes.py`: a job object on
+Windows, a process group elsewhere); a warm container's solve is killed as a tree and
+keeps its container alive while it runs; a WSL solve is killed inside its distribution
+(BE-3; checked on real Docker). Stop closes a streaming reply and is the cancel of the
+run a tool started (AGENT-2); a reset during a turn ends the turn, and an empty reply
+is never stored (AGENT-3, AGENT-4); one session per MCP server (AGENT-7); the picture
+`render` made is shown, and the tool says whether the model was sent it (AGENT-6).
+Scripts: `project_root` is required, and where no sandbox exists a script is refused
+(`unsandboxed`) unless the preference `scripts.unsandboxed` allows it in trusted
+projects. **This departs from ADR 0062**, which ran such scripts with the folder not
+given; it awaits the maintainer's word, then 0062 is amended. Tests:
+`tests/test_agent_gates.py`, `test_agent_turns.py`, `test_process_trees.py`,
+`tests/integration/test_container_stop.py`. Left: a crash mid-run leaves that run's
+solves uncounted; outside MCP clients have no Stop; the macOS and Linux sandboxes were
+not run (this machine is Windows); AGENT-9 unconfirmed and unchanged.
+
 ### Enhancements toward the state of the art
 
 From `state-of-the-art.md` (50 gaps, each with who has it, which open solver can deliver

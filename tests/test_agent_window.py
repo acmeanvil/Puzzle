@@ -140,3 +140,86 @@ def test_reloads_wait_for_the_agents_turn(root, monkeypatch):
         assert reloads == [1]  # one reload, when the turn ends
     finally:
         w.close()
+
+
+def _wait(app, condition, timeout=30.0):
+    import time
+
+    end = time.monotonic() + timeout
+    while not condition():
+        app.processEvents()
+        if time.monotonic() > end:
+            raise TimeoutError("the panel did not finish in time")
+        time.sleep(0.02)
+
+
+def test_a_new_chat_during_a_turn_stops_it_and_shows_none_of_it(root):
+    """AGENT-3 in the panel: the old turn's replies never reach the new chat, and the
+    next message starts a valid conversation."""
+    from PySide6.QtWidgets import QApplication
+
+    from puzzle.gui.window import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    pressed = threading.Event()
+
+    def slow(messages):
+        pressed.wait(10)  # the user presses New chat meanwhile
+        return Reply(text="the old turn's reply")
+
+    provider = ScriptedProvider([slow, Reply(text="fresh")])
+    w = MainWindow(root, provider_factory=lambda: provider)
+    try:
+        w.agent.send("first")
+        _wait(app, lambda: w.agent.agent is not None and w.agent.agent.busy)
+        w.agent.new_chat()
+        pressed.set()
+        _wait(app, lambda: not w.agent.busy)
+        assert "old turn" not in w.agent.transcript.toPlainText()
+        w.agent.send("second")
+        _wait(app, lambda: not w.agent.busy)
+        assert "fresh" in w.agent.transcript.toPlainText()
+        roles = [m["role"] for m in w.agent.agent.messages]
+        assert roles == ["user", "assistant"]
+    finally:
+        w.close()
+
+
+def test_a_failed_turn_takes_its_half_reply_away_and_pictures_show(root):
+    """AGENT-10: text streamed before a provider error is not left as if said; AGENT-6:
+    a picture the agent rendered shows in the transcript."""
+    from PySide6.QtWidgets import QApplication
+
+    from puzzle.agent.agent import Event
+    from puzzle.agent.providers import ProviderError
+    from puzzle.gui.window import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+
+    class Failing:
+        name, model, remote, tool_images = "f", "f", False, True
+
+        def complete(self, system, messages, tools, on_delta=None):
+            on_delta("text", "Half a sen")
+            raise ProviderError("dropped", "network", "f")
+
+    w = MainWindow(root, provider_factory=Failing)
+    try:
+        w.agent.send("hi")
+        _wait(app, lambda: not w.agent.busy)
+        t = w.agent.transcript
+        assert t._live is None and "Half a sen" not in t.toPlainText()
+        assert "could not be reached" in t.toPlainText()
+        from PySide6.QtCore import QBuffer, QByteArray
+        from PySide6.QtGui import QImage
+
+        image, data = QImage(8, 8, QImage.Format.Format_RGB32), QByteArray()
+        image.fill(0)
+        buffer = QBuffer(data)
+        buffer.open(QBuffer.OpenModeFlag.WriteOnly)
+        image.save(buffer, "PNG")
+        w.agent._event(Event("tool_result", "ok", {"name": "render", "image": bytes(data),
+                                                    "sent": False}))  # fmt: skip
+        assert t.texts[-1] == "[picture] (not sent to the model)"
+    finally:
+        w.close()

@@ -36,6 +36,10 @@ from puzzle.commands.model import (
     Delete,
     Edit,
     EditOp,
+    RunAdapt,
+    RunConvergence,
+    RunMeshShootout,
+    RunOptimisation,
     RunStudy,
     SetAutonomy,
     _Command,
@@ -56,7 +60,25 @@ from puzzle.project.layout import LOCK, PROJECT_FILE, RESULTS_DIR, WORK_DIR
 from puzzle.project.store import load_project, save_project
 
 KINDS: dict[str, type[ProjectObject]] = {cls.kind: cls for cls in OBJECT_TYPES}
+RUNS = frozenset(c.model_fields["command"].default for c in (
+    RunStudy, RunOptimisation, RunConvergence, RunAdapt, RunMeshShootout))  # fmt: skip
 CONFIRM_WITHIN = timedelta(minutes=15)
+LEVELS = ("advise", "propose", "act_in_budget", "act")  # each may do what those before may
+
+# Tools with an effect outside the model (files written, programs started, hosts
+# reached): the least autonomy an agent needs for each (ADR 0015: "advise" changes
+# nothing), and what it is, in words, for the refusal. `Session.allow` checks them.
+ACTIONS = {
+    "export": ("propose", "writing an export"),
+    "archive": ("propose", "writing a project archive"),
+    "materials_export": ("propose", "writing a material library file"),
+    "operator_export": ("propose", "writing an operator's export"),
+    "version_save": ("propose", "saving a version"),
+    "host_check": ("propose", "reaching a remote host"),
+    "jobs_live": ("propose", "asking remote hosts about jobs"),
+    "job_cancel": ("act_in_budget", "cancelling a solve"),
+    "pardiso_build": ("act_in_budget", "building CalculiX with PARDISO"),
+}
 STALE_LOCK_S = atomic.STALE_S  # another host's lock, not refreshed for this long
 LOCK_WAIT_S = 10.0
 
@@ -157,33 +179,61 @@ class Session:
             decision = self._authorize(cmd, actor)
             if decision == "propose":
                 return self._propose([cmd], actor, rationale)
-            if not isinstance(cmd, RunStudy):
+            if not cmd.solves:
                 return self._apply(cmd, actor)
-        if cmd.resume:
+        if isinstance(cmd, RunStudy) and cmd.resume:
             return self._resume(cmd, on_output, on_event, cancel, actor)
         return self._run_command(cmd, actor, on_output, on_event, cancel)
 
-    def _run_command(self, cmd: RunStudy, actor: Actor, on_output, on_event, cancel, *,
+    def _run_command(self, cmd: _Command, actor: Actor, on_output, on_event, cancel, *,
                      workdir: Path | None = None, attach: dict[str, str] | None = None,
                      resumed: str | None = None) -> Outcome:  # fmt: skip
+        """A run command (a study, an optimisation, a convergence check, adaptive passes,
+        a mesh shoot-out): checked against the agent's budget before it starts and before
+        each solve it makes (`puzzle.budget`), a version first, one history entry after,
+        with what it spent, even when it failed or was stopped part way."""
+        from puzzle import budget
+
         with self._locked():
-            study = resolve(self.project, cmd.study, Study)
-            timeout = self._run_timeout(cmd, actor)
+            name = _run_target(self.project, cmd)
+            gate = self._gate(cmd, actor)
             snapshot = copy.deepcopy(self.project)
             solved_from = self._auto_version(
-                "before_run", actor, words={"study": study.name}, always_latest=True
+                "before_run", actor, words={"study": name}, always_latest=True
             )
         # Solve outside the lock, so other clients can keep working meanwhile.
-        run, data = self._run(snapshot, study, cmd, timeout, on_output, on_event, cancel,
-                              workdir=workdir, attach=attach)  # fmt: skip
+        failed: BaseException | None = None
+        run, data = None, {}
+        try:
+            with budget.gated(gate):
+                run, data = self._solve(snapshot, cmd, on_output, on_event, cancel,
+                                        workdir=workdir, attach=attach)  # fmt: skip
+        except BaseException as exc:  # noqa: BLE001 - logged below if it spent anything
+            failed = exc
+        data["spent"] = gate.spent()
         if resumed:
             data["resumed"] = resumed
+        if failed is not None:
+            # Refused before any solve, or a user's run: nothing to record. An agent's
+            # failed or stopped run spent its solves, so its entry says what it spent.
+            if not gate.solved or not actor.is_agent:
+                raise failed
+            data["failed"] = {
+                "code": getattr(failed, "code", "error"),
+                "message": str(getattr(failed, "message", failed))[:500],
+            }
         with self._locked():
             seq = self._log(
                 {"type": "command", "actor": actor.to_dict(), "command": _dump(cmd), "result": data}
             )
-            if solved_from is not None:  # the state it solved from works (ADR 0059)
-                self._mark_solved(solved_from, study.name)
+            if solved_from is not None and failed is None and gate.refused is None:
+                self._mark_solved(solved_from, name)  # the state it solved from works
+        if failed is not None:
+            raise failed
+        if gate.refused is not None:  # a runner that goes on past a refused point
+            exc = gate.refused
+            exc.details = {**exc.details, "solved": gate.solved, "seq": seq}
+            raise exc
         return Outcome("applied", seq=seq, data=data, problems=self.project.problems(), run=run)
 
     def pending_jobs(self) -> list[dict]:
@@ -253,6 +303,9 @@ class Session:
             )
         with self._locked():
             decisions = {self._authorize(c, actor) for c in cmds}
+            if (actor.is_agent and self.project.agent.level != "act"
+                    and self._writes_code(cmds)):  # the batch as a whole  # fmt: skip
+                decisions.add("propose")
             if "propose" in decisions:
                 return self._propose(cmds, actor, rationale)
             self._check_opened(actor)
@@ -291,9 +344,8 @@ class Session:
         before = _snapshot(trial)
         steps = []
         for cmd in (parse_command(c) for c in commands):
-            if isinstance(cmd, RunStudy):
-                study = resolve(trial, cmd.study, Study)
-                steps.append({"command": "run_study", "would_run": study.name})
+            if cmd.solves:
+                steps.append({"command": cmd.command, "would_run": _run_target(trial, cmd)})
             elif isinstance(cmd, SetAutonomy):
                 steps.append({"command": "set_autonomy", "would_set": _dump(cmd)})
             else:
@@ -333,7 +385,7 @@ class Session:
         submitted afterwards, each on its own."""
         if actor.is_agent:
             raise PuzzleError("only a user can accept a proposal", code="not_allowed")
-        runs: list[RunStudy] = []
+        runs: list[_Command] = []
         outcomes = []
         with self._locked():
             proposal = self._open_proposal(proposal_id)  # read again under the lock
@@ -344,8 +396,8 @@ class Session:
                 raise PuzzleError(f"proposal {proposal_id} has commands 0 to {count - 1}",
                                   code="invalid", details={"only": picks})  # fmt: skip
             cmds = [parse_command(proposal["commands"][i]) for i in picks]
-            runs = [c for c in cmds if isinstance(c, RunStudy)]
-            edits = [c for c in cmds if not isinstance(c, RunStudy)]
+            runs = [c for c in cmds if c.solves]
+            edits = [c for c in cmds if not c.solves]
             odd = [c.command for c in edits if not c.edits_model]
             if odd:
                 raise PuzzleError(f"a proposal cannot hold {', '.join(sorted(set(odd)))}",
@@ -358,7 +410,7 @@ class Session:
                 trial = copy.deepcopy(self.project)
                 results = []
                 for i, cmd in zip(picks, cmds, strict=True):
-                    if isinstance(cmd, RunStudy):
+                    if cmd.solves:
                         continue
                     try:
                         results.append(_execute(trial, cmd))
@@ -462,6 +514,7 @@ class Session:
                     obj = KINDS[kind].model_validate(data)
                     trial.objects[obj.id] = obj
                 _refuse_dangling(self.project, trial)
+                self._refuse_new_code(trial, actor, "undo")
             except BaseException:
                 if staged is not None:
                     staged.discard()
@@ -502,6 +555,8 @@ class Session:
             target = versions.get(self.root, number)
             staged = versions.stage_restore(self.root, target)  # every blob checked first
             try:
+                restored = store.load_staged(self.root, staged)  # it must open
+                self._refuse_new_code(restored, actor, "restore")
                 kept = self._auto_version(
                     "before_restore", actor, words={"version": target.number},
                     always_latest=True, forced=True,
@@ -513,7 +568,6 @@ class Session:
                         code="write_failed",
                     )
                 before = _snapshot(self.project)
-                restored = store.load_staged(self.root, staged)  # it must open
             except BaseException:
                 staged.discard()
                 raise
@@ -621,22 +675,54 @@ class Session:
         return out
 
     def budget_used(self) -> dict[str, float]:
-        """Fresh agent runs and solver seconds since autonomy was last set."""
+        """Fresh agent runs, solver seconds and remote core-hours since autonomy was last
+        set, from the history: each run command's entry says what it spent (`spent`:
+        every solve it made, counted by `puzzle.budget`, failed or stopped ones too)."""
         runs, seconds, core_hours = 0, 0.0, 0.0
         for e in self.history_entries():
             command = e.get("command") or {}
-            if e["type"] == "command" and command.get("command") == "set_autonomy":
+            name = command.get("command", "")
+            if e["type"] != "command":
+                continue
+            if name == "set_autonomy":
                 runs, seconds, core_hours = 0, 0.0, 0.0
-            elif (
-                e["type"] == "command"
-                and command.get("command") == "run_study"
-                and e["actor"]["kind"] == "agent"
-                and not e.get("result", {}).get("cached")
-            ):
-                runs += e.get("result", {}).get("solved", 1)  # a sweep: its fresh points
-                seconds += e.get("result", {}).get("duration_s", 0.0)
-                core_hours += e.get("result", {}).get("core_hours", 0.0)
+                continue
+            if (e.get("actor") or {}).get("kind") != "agent" or name not in RUNS:
+                continue
+            result = e.get("result") or {}
+            spent = result.get("spent")
+            if spent is not None:
+                runs += spent.get("solves", 0)
+                seconds += spent.get("solver_seconds", 0.0)
+                core_hours += spent.get("core_hours", 0.0)
+            elif not result.get("cached"):  # an entry written before `spent` was kept
+                runs += result.get("solved", 1)  # a sweep: its fresh points
+                seconds += result.get("duration_s", 0.0)
+                core_hours += result.get("core_hours", 0.0)
         return {"runs": runs, "solver_seconds": seconds, "core_hours": core_hours}
+
+    def allow(self, actor: Actor, action: str) -> None:
+        """May `actor` take `action` now (a tool with an effect outside the model:
+        `ACTIONS`)? Users may; an agent needs the action's level or above, else
+        `not_allowed`. Runs are not actions: they are run commands (`submit`)."""
+        if not actor.is_agent:
+            return
+        least, words = ACTIONS[action]
+        level = self.project.agent.level
+        if LEVELS.index(level) < LEVELS.index(least):
+            needs = {"propose": "'propose' or above", "act_in_budget": "'act within the "
+                     "budget' or 'act'"}[least]  # fmt: skip
+            raise PuzzleError(
+                f"{words} needs autonomy {needs}; this project is at '{level}': ask the user",
+                code="not_allowed",
+                details={"action": action, "level": level, "needs": least},
+            )
+
+    def refresh(self) -> Project:
+        """The project as it is on disk now (another client may have changed it), for a
+        long-lived session's reads; changes reload it under the lock anyway."""
+        self.project = load_project(self.root)
+        return self.project
 
     # --- internals --------------------------------------------------------------
 
@@ -653,62 +739,105 @@ class Session:
             )
         if level == "propose":
             return "propose"
-        if level != "act" and self._writes_code(cmd):  # ADR 0062: new code is proposed
+        if level != "act" and self._writes_code([cmd]):  # ADR 0062: new code is proposed
             return "propose"
         return "apply"
 
-    def _writes_code(self, cmd: _Command) -> bool:
-        """Whether a command writes code that would run (a script operator, a custom
-        PDE's weak form): below "act" an agent proposes it, the user accepts."""
-        if isinstance(cmd, Create):
-            data = cmd.data
-            return (cmd.kind == "operator" and data.get("type") == "script") or (
-                cmd.kind == "component" and "equation" in json.dumps(data)
-            )
-        if isinstance(cmd, Edit):
-            try:
-                obj = resolve(self.project, cmd.object)
-            except PuzzleError:
-                return False
-            if getattr(obj, "type", None) == "script":
-                return True
-            return any(
-                "equation" in op.path
-                or op.path.endswith("code")
-                or (op.path == "type" and op.value == "script")
-                for op in cmd.ops
-            )
-        return False
+    def _writes_code(self, cmds: list[_Command]) -> bool:
+        """Whether model edits would put code that runs into the project (a script, a
+        custom PDE's weak form): below "act" an agent proposes it, the user accepts.
+        Decided by what they do (ADR 0090, BE-9): applied to a copy, its code compared
+        with the project's, so no path or shape of value goes round it. Edits that
+        fail on the copy fail when applied too: nothing to propose."""
+        from puzzle import trust
 
-    def _run_timeout(self, cmd: RunStudy, actor: Actor) -> float | None:
+        edits = [c for c in cmds if c.edits_model]
+        if not edits:
+            return False
+        trial = copy.deepcopy(self.project)
+        try:
+            for cmd in edits:
+                _execute(trial, cmd)
+        except PuzzleError:
+            return False
+        return bool(trust.new_code(self.project, trial))
+
+    def _refuse_new_code(self, after: Project, actor: Actor, what: str) -> None:
+        """An undo or a restore an agent below "act" asks for, that would bring code
+        back into the project: the user does it (neither can be proposed)."""
+        from puzzle import trust
+
+        if not actor.is_agent or self.project.agent.level == "act":
+            return
+        found = trust.new_code(self.project, after)
+        if found:
+            raise PuzzleError(
+                f"this {what} would bring back {', '.join(sorted(set(found)))}: code is "
+                "the user's to accept, so ask them to do it",
+                code="not_allowed",
+                details={"code": found},
+            )
+
+    def _gate(self, cmd: _Command, actor: Actor):
+        """The budget gate for a run command: an agent at "act_in_budget" is refused up
+        front when its runs, solver time or (for a remote run) core-hours are spent, or
+        a sweep would overrun them; then each solve the command makes is checked again
+        (`puzzle.budget`). Everyone else's solves are only counted."""
+        from puzzle import budget
+
+        study = None if isinstance(cmd, RunOptimisation) else self._study_of(cmd)
+
+        def cores(host: str) -> int:
+            return _cores_on(host, study) if study is not None else 1
+
         if not actor.is_agent or self.project.agent.level != "act_in_budget":
-            return cmd.timeout_s
-        budget, used = self.project.agent.budget, self.budget_used()
-        left = budget.solver_seconds - used["solver_seconds"]
-        remote = cmd.host or getattr(getattr(resolve(self.project, cmd.study, Study), "remote",
-                                             None), "host", None)  # fmt: skip
-        hours_left = budget.core_hours - used["core_hours"]
-        if remote and hours_left <= 0:  # ADR 0021: remote time can cost money
+            return budget.Gate(cores=cores)
+        allowed, used = self.project.agent.budget, self.budget_used()
+        host = getattr(cmd, "host", None) or getattr(getattr(study, "remote", None), "host",
+                                                    None)  # fmt: skip
+        self._refuse_spent(allowed, used, remote=bool(host))
+        if isinstance(cmd, RunStudy):
+            fresh = self._fresh_points(cmd)
+            if used["runs"] + fresh > allowed.runs:  # a sweep would overrun it part way
+                raise PuzzleError(
+                    f"the sweep would solve {fresh} points and the agent has "
+                    f"{allowed.runs - used['runs']:g} runs left; propose the run instead",
+                    code="budget_exceeded",
+                    details={"budget": allowed.model_dump(), "used": used, "points": fresh},
+                )
+
+        def check(gate, remote: bool) -> float:
+            now = {"runs": used["runs"] + gate.solved,
+                   "solver_seconds": used["solver_seconds"] + gate.seconds,
+                   "core_hours": used["core_hours"] + gate.core_hours}  # fmt: skip
+            self._refuse_spent(allowed, now, remote=remote)
+            left = allowed.solver_seconds - now["solver_seconds"]
+            asked = getattr(cmd, "timeout_s", None)
+            return min(asked, left) if asked else left
+
+        return budget.Gate(check=check, cores=cores)
+
+    @staticmethod
+    def _refuse_spent(allowed, used: dict, *, remote: bool) -> None:
+        if remote and allowed.core_hours - used["core_hours"] <= 0:  # ADR 0021: can cost money
             raise PuzzleError(
                 "the agent's remote core-hours are spent; propose the run instead",
                 code="budget_exceeded",
-                details={"budget": budget.model_dump(), "used": used},
+                details={"budget": allowed.model_dump(), "used": used},
             )
-        if used["runs"] >= budget.runs or left <= 0:
+        if used["runs"] >= allowed.runs or allowed.solver_seconds - used["solver_seconds"] <= 0:
             raise PuzzleError(
                 "the agent's run budget is spent; propose the run instead",
                 code="budget_exceeded",
-                details={"budget": budget.model_dump(), "used": used},
+                details={"budget": allowed.model_dump(), "used": used},
             )
-        fresh = self._fresh_points(cmd)
-        if used["runs"] + fresh > budget.runs:  # a sweep would overrun it part way
-            raise PuzzleError(
-                f"the sweep would solve {fresh} points and the agent has "
-                f"{budget.runs - used['runs']:g} runs left; propose the run instead",
-                code="budget_exceeded",
-                details={"budget": budget.model_dump(), "used": used, "points": fresh},
-            )
-        return min(cmd.timeout_s or left, left)
+
+    def _study_of(self, cmd: _Command) -> Study:
+        if isinstance(cmd, RunConvergence):
+            from puzzle import convergence as conv
+
+            return conv.settings(self.project, cmd.study)[0]
+        return resolve(self.project, cmd.study, Study)
 
     def _fresh_points(self, cmd: RunStudy) -> int:
         """How many runs a study would solve now: 1, or a sweep's points not already in
@@ -902,6 +1031,62 @@ class Session:
                 return p
         raise PuzzleError(f"no proposal {proposal_id}", code="not_found")
 
+    def _solve(self, project: Project, cmd: _Command, on_output, on_event, cancel, *,
+               workdir: Path | None = None, attach=None):  # fmt: skip
+        """Run `cmd` on `project` (a copy): what it made, for in-process clients (the
+        StudyRun, the points, the report), and what goes into its history entry."""
+        if isinstance(cmd, RunStudy):
+            study = resolve(project, cmd.study, Study)
+            return self._run(project, study, cmd, cmd.timeout_s, on_output, on_event, cancel,
+                             workdir=workdir, attach=attach)  # fmt: skip
+        from puzzle.results.store import ResultStore
+
+        store = ResultStore(self.root / RESULTS_DIR)
+        work = self.root / WORK_DIR
+        if isinstance(cmd, RunOptimisation):
+            from puzzle import optimise
+            from puzzle.model.schema import Optimisation
+
+            opt = resolve(project, cmd.optimisation, Optimisation)
+            pts = optimise.run(project, opt, self.root, work / "optimise" / str(opt.id),
+                               store=store, budget=cmd.budget, on_output=on_output,
+                               cancel=cancel)  # fmt: skip
+            return pts, {"optimisation": opt.name, "points": len(pts), "ended": pts.ended}
+        if isinstance(cmd, RunConvergence):
+            from puzzle import convergence as conv
+
+            st, c = conv.settings(project, cmd.study)
+            goal = cmd.target or c.target
+            lv = conv.run(project, st, self.root, work / "convergence" / str(st.id),
+                          store=store, count=cmd.levels or c.levels, ratio=cmd.ratio or c.ratio,
+                          outputs=c.quantities, on_output=on_output, cancel=cancel)  # fmt: skip
+            out = conv.report(lv, conv.verdicts(lv, goal), goal)
+            return out, {"study": st.name, "levels": len(lv), "converged": out["converged"]}
+        if isinstance(cmd, RunAdapt):
+            from puzzle import adapt
+            from puzzle.model.schema import Adapt
+
+            st = resolve(project, cmd.study, Study)
+            a = st.adapt or Adapt()
+            changes = {k: v for k, v in (("target", cmd.target), ("passes", cmd.passes),
+                                         ("method", cmd.method)) if v}  # fmt: skip
+            a = Adapt.model_validate({**a.model_dump(), **changes})
+            out = adapt.run(project, st, self.root, work / "adapt" / str(st.id), store=store,
+                            settings=a, on_output=on_output, cancel=cancel)  # fmt: skip
+            return out, {"study": st.name, "passes": len(out.passes), "ended": out.ended}
+        if isinstance(cmd, RunMeshShootout):
+            import tempfile
+
+            from puzzle.shootout import mesh_shootout_report
+
+            st = resolve(project, cmd.study, Study)
+            with tempfile.TemporaryDirectory(prefix="puzzle-shootout-") as tmp:
+                out = mesh_shootout_report(project, st.id, self.root, Path(tmp),
+                                           cmd.quantities, cmd.tolerance,
+                                           on_output=on_output)  # fmt: skip
+            return out, {"study": st.name, "passed": out["passed"]}
+        raise PuzzleError(f"{cmd.command} is not a run", code="unsupported")
+
     def _run(
         self, project: Project, study: Study, cmd: RunStudy, timeout, on_output,
         on_event=None, cancel=None, *, workdir: Path | None = None, attach=None,
@@ -1070,6 +1255,19 @@ def _execute(project: Project, cmd: _Command) -> dict[str, Any]:
         copy_ = project.copy_study(study.id, cmd.name)
         return {"id": str(copy_.id), "name": copy_.name}
     raise PuzzleError(f"{cmd.command} is not applied here", code="unsupported")
+
+
+def _run_target(project: Project, cmd: _Command) -> str:
+    """The study (or optimisation) a run command names, which must exist."""
+    from puzzle.model.schema import Optimisation
+
+    if isinstance(cmd, RunOptimisation):
+        return resolve(project, cmd.optimisation, Optimisation).name
+    if isinstance(cmd, RunConvergence):
+        from puzzle import convergence as conv
+
+        return conv.settings(project, cmd.study)[0].name
+    return resolve(project, cmd.study, Study).name
 
 
 def _refuse_wiring(project: Project, obj: ProjectObject) -> None:

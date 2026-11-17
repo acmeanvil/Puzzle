@@ -249,11 +249,15 @@ A `script` operator's `code` sees inputs a, b, c, d (a number in SI, a list, a t
 {column: [values]}, points as [[x, y, z], ...], a text) and sets `out`, as its `returns`
 says (number, list, table, points, text). It runs in the pixi `scripts` environment
 (numpy, scipy, polars; `puzzle scripts add PACKAGE`), with `timeout_s`, in an empty
-folder, never reading the project (macOS denies it). It runs only in a **trusted**
-project: one from elsewhere waits until the user trusts it (Project → Trust this
-project…, `puzzle trust`); the problem `untrusted` says so. Never ask to trust a
-project yourself. Below autonomy "act", writing a script (or a custom PDE equation) is
-proposed, and the user accepts it.
+folder, sandboxed (an AppContainer on Windows, sandbox-exec on macOS, bubblewrap on
+Linux), never reading the project or writing outside its folder. Where there is no
+sandbox (Linux without bubblewrap) it is refused with code `unsandboxed`: tell the user
+to install bubblewrap; only they can allow scripts without one (Settings). It runs only
+in a **trusted** project: one from elsewhere waits until the user trusts it (Project →
+Trust this project…, `puzzle trust`); the problem `untrusted` says so. Never ask to
+trust a project yourself. Below autonomy "act", any command that would put a script (or
+a custom PDE equation) into the project is proposed, whatever its path or shape (a new
+object, an edit of a parent field, a copy, a batch), and the user accepts it.
 
 ## Read them
 

@@ -4287,6 +4287,9 @@ def _history_line(entry: dict, names: dict | None = None) -> str:
         return f"#{seq}  {actor}: asked for a confirmation"
     cmd = entry.get("command", {})
     what = _describe(cmd, names) if isinstance(cmd, dict) else ""
+    failed = (entry.get("result") or {}).get("failed")
+    if failed:  # an agent's run that failed or was stopped: in the record for its cost
+        what += f" (failed: {failed.get('code', 'error')})"
     return f"#{seq}  {actor}: {what}"
 
 

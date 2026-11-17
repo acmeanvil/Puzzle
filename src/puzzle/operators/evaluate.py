@@ -1345,7 +1345,10 @@ def _script(ctx: Context, op) -> dict[str, Any]:
         got = _input(ctx, op, key)
         if got is not None:
             inputs[key] = scripts.encode(got)
-    got = scripts.run(op.code, inputs, timeout_s=op.timeout_s, project_root=ctx.root)
+    # The folder the sandbox hides: the context's, else the project's own (a context
+    # built without a root, as about ten callers build one, still hides it: BE-22).
+    root = ctx.root if ctx.root is not None else getattr(ctx.project, "root", None)
+    got = scripts.run(op.code, inputs, timeout_s=op.timeout_s, project_root=root)
     return {"out": scripts.decode(op, got)}
 
 

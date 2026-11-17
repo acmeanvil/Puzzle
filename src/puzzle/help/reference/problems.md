@@ -321,6 +321,11 @@ A component uses a selection its geometry doesn't have.
 
 A transfer from a swept study doesn't say which point it takes (its source_point).
 
+<!-- key: problem:unsandboxed, error:unsandboxed -->
+### unsandboxed
+
+No sandbox for scripts on this computer (Linux without bubblewrap): install one, or allow scripts without it in Settings (ADR 0062, ADR 0090).
+
 <!-- key: problem:unsupported, error:unsupported -->
 ### unsupported
 
