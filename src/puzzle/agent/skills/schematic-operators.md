@@ -146,8 +146,16 @@ integral, Plot Over Line is a Path result tool.
 | export | value (anything) | none | file (inside the project), format (csv, or a result export format) |
 
 What can be wired in:
-- A study, by its port `result` (the newest run), or by a field such as `stress`
-  (that field's results only).
+- A study, by its port `result`, or by a field such as `stress` (that field's results
+  only; a port the study has no field for is refused, with the fields it has). Which
+  run is read is the wire's (ADR 0090 decision 4): by default the study's run for its
+  model now; with none, its newest, marked stale. Choose another with `point` (a sweep
+  point, mesh level or adaptive pass by its title: "load = 300 N", "mesh = level 2:
+  4 mm"), `solver` (a shoot-out's) or `run` (one stored run, by the name the tree
+  gives it): `{"source": "Tip load", "port": "stress", "point": "load = 300 N"}`.
+  `operator_value` lists each input's `run_choices`. A swept study read with no point
+  is refused (code `inconsistent`, "has 3 sweep points: choose"); never guess one:
+  ask, or plot over the points.
 - A derived result, by its port `result` (combinations and equations, ADR 0025).
 - A result tool, by its port `out` (its value), `along` (a path's curve per step) or
   `history` (its value over the steps).
@@ -184,7 +192,15 @@ Example: the maximum von Mises stress on a face, checked against 200 MPa.
 2. `operator_add("check", "Strength", {"value": {"source": "Peak stress"}, "limit": {"value": "200 MPa"}})`
 
 The Check's `out` is pass or fail. Its `margin` is limit / value − 1: 0.25 means 25 %
-to spare, and a negative margin fails. For at_least it is value / limit − 1.
+to spare, and a negative margin fails. For at_least it is value / limit − 1. When the
+value is zero or negative it is the distance to the limit over |limit|, so the margin's
+sign always agrees with the verdict. The value and the limit must be of one kind: a
+stress against "200" (no unit) is refused (`invalid`): type "200 MPa". Utilisation,
+Safety factor and Margin of safety refuse two kinds the same way.
+
+A value read from a stale run is still given, with `stale: true` and `runs` (each run
+read, its name and whether it is current). A verdict on a stale run says "Pass (stale:
+from the run of ...)": report it as stale, never as a pass, and offer to run the study.
 
 Inputs can also be set with `submit`: `{"command": "edit", "object": "Strength", "ops":
 [{"op": "set", "path": "inputs.limit", "value": {"source": "<parameter set>", "port": "allowable"}}]}`.
@@ -263,9 +279,15 @@ object, an edit of a parent field, a copy, a batch), and the user accepts it.
 
 `operator_value(name)` gives each operator's `outputs` (numbers with `unit`, and `at`
 where a maximum or minimum is; a verdict's `passed` and `margin`; a table's `columns`
-and `rows`), plus `shown` (what the schematic node shows) and `wiring`. With no name it
-covers them all. The outline has one `Operator` line each. An operator whose study
-hasn't run says so in `error`.
+and `rows`; a report's items and how many checks pass), plus `shown` (what the
+schematic node shows), `wiring`, `runs` and `stale`. With no name it covers them all.
+The outline has one `Operator` line each. An operator whose study hasn't run says so in
+`error`. An `error` with code `operator_failed` is the operator's own (a formula too
+large, a text where a number goes, a power tower) or says which input failed; fix that
+one. A before-solving operator that fails is the problem `operator_failed`, and only the
+studies whose model reads it are refused at run. On the command line, `puzzle operators
+PROJECT NAME --runs` lists the runs each input may read and `--read INPUT RUN` chooses
+one.
 
 ## Plots and exports
 
@@ -294,9 +316,14 @@ hasn't run says so in `error`.
   operator shows as missing input.
 - A check compares like with like. A stress against a length is an error, so type the
   limit with its unit ("200 MPa", not "200").
+- Reading a swept study with no point, or quoting a stale verdict as a pass.
+- Round rounds in its own `unit` (settings `{"unit": "mm"}`), else the unit Convert
+  units gave a column, else SI; never in what the user sees. A Result table's `layout`
+  is its own (long or wide); give it when it matters.
 - Arithmetic on two curves with different x values is refused: Match x values first.
   Area under curve takes one curve: At step or Envelope first.
 - At step on a history (one value per step) is refused: it already is one value per
   step; read one step with Result summary's `step`.
-- An integral needs values per node and a face or body. An integral of a stress over a
-  body is in Pa·m³, and its unit isn't tracked.
+- An integral needs values per node and a face or body. It keeps its unit: a stress
+  over a face is a force, a pure number over a body a volume; one with no unit Puzzle
+  shows (a temperature over a body) has none.

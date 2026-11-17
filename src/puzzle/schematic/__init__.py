@@ -596,6 +596,10 @@ def _operators(project: Project, out: Schematic, store, states: dict) -> None:
                 continue
             node = out.nodes[str(op.id)]
             node.value, node.verdict = ev.shown(ctx, op)
+            stale = ev.stale_note(ctx, op.id)
+            if stale and node.state not in ("missing", "failed"):  # ADR 0090 decision 4
+                node.state = "out_of_date"
+                node.reason = f"worked out from the run of {stale}, not current"
             node.sketch = _sketch(ctx, op)
             if op.type == "slider":
                 node.slider = _slider_of(ctx, op)

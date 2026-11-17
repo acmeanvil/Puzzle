@@ -130,15 +130,25 @@ def names(items: list[Item]) -> dict[str, Item]:
     return {name_of(i): i for i in items}
 
 
+MAX_TEXT = 4000  # characters in an equation or expression
+MAX_NODES = 600  # parts of its syntax tree
+
+
 def parse(expression: str, *, text: bool = False, functions=None) -> ast.Expression:
     """The expression's tree, refusing anything outside the small language. `text`
     allows quoted strings (the Expression operator's table columns, ADR 0064);
     `functions` are the names a call may use (default: FUNCTIONS)."""
     functions = FUNCTIONS if functions is None else functions
+    if len(expression) > MAX_TEXT:  # ADR-51: bounded work, whatever a project holds
+        raise PuzzleError(f"the equation is longer than {MAX_TEXT} characters",
+                          code="invalid")  # fmt: skip
     try:
         tree = ast.parse(expression.strip(), mode="eval")
-    except SyntaxError as exc:
-        raise PuzzleError(f"the equation doesn't read: {exc.msg}", code="invalid") from exc
+    except (SyntaxError, ValueError, RecursionError, MemoryError) as exc:
+        why = getattr(exc, "msg", None) or "it nests too deeply or holds too long a number"
+        raise PuzzleError(f"the equation doesn't read: {why}", code="invalid") from None
+    if sum(1 for _ in ast.walk(tree)) > MAX_NODES:
+        raise PuzzleError(f"the equation has more than {MAX_NODES} parts", code="invalid")
     allowed = (
         ast.Expression,
         ast.BinOp,
@@ -168,10 +178,13 @@ def parse(expression: str, *, text: bool = False, functions=None) -> ast.Express
                 and not (text and isinstance(node.value, str)):  # fmt: skip
             raise PuzzleError("equations take numbers only, not text", code="invalid")
         if isinstance(node, ast.Call):
-            if not isinstance(node.func, ast.Name) or node.func.id not in functions:
-                what = node.func.id if isinstance(node.func, ast.Name) else "that"
+            if not isinstance(node.func, ast.Name):  # OP-15: say what was written
                 raise PuzzleError(
-                    f"no function '{what}'; the functions are {', '.join(functions)}",
+                    f"'{ast.unparse(node.func)}(...)' can't be called: only the listed "
+                    f"functions can ({', '.join(functions)})", code="invalid")  # fmt: skip
+            if node.func.id not in functions:
+                raise PuzzleError(
+                    f"no function '{node.func.id}'; the functions are {', '.join(functions)}",
                     code="invalid",
                 )
             if node.keywords:

@@ -26,6 +26,8 @@ CODES = {
     "unpinned_transfer": "a transfer from a swept study doesn't say which point it takes "
     "(its source_point)",
     "operator_input": "an operator's required input isn't wired",
+    "operator_failed": "an operator can't be worked out (a formula too large, a text where "
+    "a number goes, an input that failed); a study whose model reads it can't run",
     "group_cycle": "tree groups hold each other; the tree shows them side by side",
     "damaged_history": "lines of history.jsonl don't read: they are skipped",
     # Contact warnings (ADR 0056): the run goes ahead

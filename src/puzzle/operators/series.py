@@ -211,16 +211,15 @@ def _word(got) -> str:
     return f"a {TYPE_WORDS.get(t, t or 'value').lower()}"
 
 
-def from_probe(ctx, probe, port: str) -> Series:
+def from_probe(ctx, probe, port: str, chosen=None) -> Series:
     """A result tool's curves: `along` its path (a curve per step, or the context's
-    step), or its value `history` over the steps."""
-    from puzzle.model.schema import Study
+    step), or its value `history` over the steps; `chosen` (the wire's) says which run
+    of its study (ADR 0090 decision 4)."""
     from puzzle.operators.evaluate import quantity_text, source
     from puzzle.post import probes
 
     placed = probes.placed(ctx.project, probe)
-    src = ctx.project.objects.get(placed.source)
-    r = source(ctx, src.id if isinstance(src, Study) else placed.source, "result")
+    r = source(ctx, placed.source, "result", chosen)
     item = probes._item(placed, r.items)
     steps = [s for s in r.results.steps if item.field in s.fields]
     if not steps:
@@ -262,6 +261,16 @@ def from_probe(ctx, probe, port: str) -> Series:
 
 
 # --- combining -------------------------------------------------------------------------
+
+
+def _kind(v) -> str | None:
+    """The quantity kind of a number, a curve's y or a field."""
+    if isinstance(v, Series):
+        return v.y_kind
+    item = getattr(v, "item", None)
+    if item is not None:
+        return item.unit
+    return getattr(v, "kind", None)
 
 
 def _kind_name(kind: str | None) -> str:
@@ -364,10 +373,20 @@ def combine(op, how: str, a, b):
     from puzzle.operators.evaluate import FieldValue, Number
 
     text, title = FORMULAS[how]
+    if how in ("utilisation", "safety_factor", "margin"):  # OP-6: like by like only
+        ka, kb = _kind(a), _kind(b)
+        if ka != kb:
+            word = title.lower()
+            raise PuzzleError(
+                f"'{op.name}': a {word} divides like by like, but A is {_kind_name(ka)} and "
+                f"B {_kind_name(kb)}" + (" (give the number its unit, such as 250 MPa)"
+                                         if not (ka and kb) else ""), code="invalid")  # fmt: skip
     names = {"a": getattr(a, "label", "") or "A", "b": getattr(b, "label", "") or "B"}
     label = title.format(**names)
     if isinstance(a, Number) and isinstance(b, Number):
         value, kind = _formula(op, text, {"a": (a.value, a.kind), "b": (b.value, b.kind)})
+        if not np.isfinite(value):  # OP-13: "nan to nan" said as what it is
+            raise PuzzleError(f"'{op.name}': it divides by zero", code="invalid")
         return Number(float(value), kind, label)
     if isinstance(a, FieldValue) or isinstance(b, FieldValue):
         return field_formula(op, text, {"a": a, "b": b}, label)

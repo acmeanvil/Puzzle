@@ -113,6 +113,19 @@ def read(project, obj, path: str, label: str = ""):
         value = _at(obj, path)
     except (AttributeError, KeyError, IndexError, ValueError):
         known = [r.label for r in readable(project, obj)][:12]
+        from puzzle.materials.registry import BY_KEY
+        from puzzle.model.schema import Material
+
+        key = path.removeprefix("properties.")
+        if isinstance(obj, Material) and key != path and key in BY_KEY:  # OP-17
+            from puzzle.materials.registry import label as property_label
+
+            what = property_label(path.removeprefix("properties.")).lower()
+            raise PuzzleError(
+                f"{obj.name} has no {what}: give it one (Materials, or the material "
+                f"builder), assign a material that has one, or type the value with its "
+                "unit where it is used", code="not_found",
+                details={"readable": known}) from None  # fmt: skip
         raise PuzzleError(f"{obj.name} has no value '{path}'", code="not_found",
                           details={"readable": known}) from None  # fmt: skip
     name = label or next((r.label for r in readable(project, obj) if r.path == path), path)

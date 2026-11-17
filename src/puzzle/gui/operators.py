@@ -59,10 +59,12 @@ def wire(window, op_id: str, key: str, source: str, port: str):
                                                         value=value)]))  # fmt: skip
 
 
-def input_rows(window, op) -> list[tuple[str, str, list, object, str | None]]:
-    """Each input as (key, label, [(name, value)], current value, typed text or None):
-    what may be wired in (never the operator itself or what reads it); an input that
-    takes a typed value has its text (empty when none) while it isn't wired."""
+def input_rows(window, op) -> list[tuple]:
+    """Each input as (key, label, [(name, value)], current value, typed text or None,
+    runs): what may be wired in (never the operator itself or what reads it); an input
+    that takes a typed value has its text (empty when none) while it isn't wired; one
+    wired from a study has `runs`, ([(name, the input as stored)], the current one):
+    which of its runs it reads (ADR 0090 decision 4), else None."""
     project = window.session.project
     out = []
     for spec in TYPES[op.type].ports_for(op):
@@ -76,8 +78,27 @@ def input_rows(window, op) -> list[tuple[str, str, list, object, str | None]]:
         options: list = [(NOT_WIRED, None)] + ([(TYPED, "typed")] if current == "typed" else [])
         options += [(text, {"source": sid, "port": port})
                     for text, sid, port in sources(project, op, spec.key)]  # fmt: skip
-        out.append((spec.key, spec.label, options, current, typed))
+        out.append((spec.key, spec.label, options, current, typed, _runs(window, inp)))
     return out
+
+
+def _runs(window, inp):
+    """Which run a wire from a study reads, as a dropdown's names and stored values."""
+    if inp is None or inp.source is None:
+        return None
+    from puzzle.operators import run_choices
+
+    try:
+        store = window._store()
+    except Exception:  # noqa: BLE001 - no results yet: only the current run to offer
+        store = None
+    found = run_choices(window.session.project, store, inp.source)
+    if not found:
+        return None
+    wire_ = {"source": str(inp.source), "port": inp.port}
+    options = [(label, wire_ | choice) for label, choice in found]
+    now = wire_ | {k: getattr(inp, k) for k in ("point", "solver", "run") if getattr(inp, k)}
+    return options, now
 
 
 def _typed_text(value) -> str:

@@ -916,7 +916,7 @@ Rows kept once: whole rows alike, or alike on some columns.
 
 ![The Round node](image:operator/round.png)
 
-Numbers rounded in their shown units: decimal places or significant figures.
+Numbers rounded to decimal places or significant figures, in the unit it names for columns of that kind, else in the unit Convert units gave a column, else SI; never in the display units.
 
 - In: Table: takes a table (needed)
 - Out: Table: gives a table
@@ -927,7 +927,7 @@ Numbers rounded in their shown units: decimal places or significant figures.
 
 ![The Rows to columns node](image:operator/pivot.png)
 
-Long to wide: a row per key, a column per value of another column (a column per step, per solver).
+Long to wide: a row per key, a column per value of another column (a column per step, per solver; at most 200).
 
 - In: Table: takes a table (needed)
 - Out: Table: gives a table

@@ -76,12 +76,27 @@ def stack(ctx, op) -> dict[str, Any]:
     return {"out": _made(pl.concat(parts, how="diagonal_relaxed"), kinds)}
 
 
+MAX_COLUMNS = 200  # Rows to columns makes no wider table (OP-10)
+
+
 def pivot(ctx, op) -> dict[str, Any]:
     """Long to wide: a row per `by` (the index columns), a column per value of `column`
     (step, solver), filled from `pick` (the values; default every other number), the
     first where several meet (or `reduction`: max, min, mean, sum)."""
     t = _table(op, _ev()._input(ctx, op, "table"))
-    on = _names(op, [op.column or t.columns[-1]], t)[0]
+    if not op.column:  # OP-10: the last column is a result's value, a column per number
+        raise PuzzleError(f"'{op.name}': choose the column whose values become the new "
+                          "columns (step, solver, point ...)", code="missing_input")  # fmt: skip
+    on = _names(op, [op.column], t)[0]
+    if t.frame[on].dtype.is_float():
+        raise PuzzleError(f"'{op.name}': {on} holds measured numbers, not a few labels: a "
+                          "column per value would be a column per row; choose a column "
+                          "such as step, solver or part", code="invalid")  # fmt: skip
+    distinct = t.frame[on].n_unique()
+    if distinct > MAX_COLUMNS:
+        raise PuzzleError(f"'{op.name}': {on} has {distinct} different values, and a table "
+                          f"of more than {MAX_COLUMNS} columns isn't made; choose a column "
+                          "with fewer, or filter the rows first", code="invalid")  # fmt: skip
     index = _names(op, list(op.by), t) if op.by else [t.columns[0]]
     values = (
         _names(op, list(op.pick), t)

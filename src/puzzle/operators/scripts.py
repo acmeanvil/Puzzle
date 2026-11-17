@@ -320,7 +320,7 @@ def encode(value) -> Any:
     if isinstance(value, ev.Table):
         return {c: value.frame[c].to_list() for c in value.columns}
     if isinstance(value, ev.Text):
-        return value.value
+        return value.text()
     raise PuzzleError(f"a script takes numbers, lists, tables, points and texts, not "
                       f"{type(value).__name__}", code="invalid")  # fmt: skip
 

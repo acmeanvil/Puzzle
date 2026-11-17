@@ -40,6 +40,16 @@ def _source_name(ctx, op, key: str) -> str:
     return obj.name if obj is not None else f"Value {key.upper()}"
 
 
+def _stale(ctx, op, key: str, got) -> str:
+    """The run no longer current that an item was made from, else ""."""
+    from puzzle.operators.evaluate import ResultValue, stale_note
+
+    wired = op.inputs.get(key)
+    if isinstance(got, ResultValue):
+        return got.run_name if got.stale else ""
+    return stale_note(ctx, wired.source) if wired is not None and wired.source else ""
+
+
 def _plot(series) -> str:
     """A curve drawn as an embedded PNG, in display units."""
     import matplotlib
@@ -142,7 +152,7 @@ def write(ctx, op, root: Path) -> list[Path]:
                           code="invalid")  # fmt: skip
     if rel.suffix.lower() not in (".html", ".htm"):
         rel = rel.with_suffix(".html")
-    sections, verdicts = [], []
+    sections, verdicts, stale_checks = [], [], 0
     for key in KEYS:
         if key not in op.inputs:
             continue
@@ -150,6 +160,11 @@ def write(ctx, op, root: Path) -> list[Path]:
         try:
             got = _input(ctx, op, key)
             body, verdict = _item(got) if got is not None else ("<p>Nothing wired</p>", "")
+            stale = _stale(ctx, op, key, got)
+            stale_checks += bool(stale and verdict)
+            if stale and "stale:" not in body:  # ADR 0090 decision 4: said where it shows
+                body += (f"<p class=fail>Stale: from the run of {html.escape(stale)}, not the "
+                         "model as it is now</p>")  # fmt: skip
         except PuzzleError as exc:
             body, verdict = f"<p class=fail>{html.escape(exc.message)}</p>", "fail"
         verdicts.append(verdict)
@@ -160,8 +175,9 @@ def write(ctx, op, root: Path) -> list[Path]:
     summary = ""
     if checks:
         failed = checks.count("fail")
-        summary = (f"<p class='summary {'fail' if failed else 'pass'}'>"
-                   f"{len(checks) - failed} of {len(checks)} checks pass</p>")  # fmt: skip
+        note = f" ({stale_checks} on runs no longer current)" if stale_checks else ""
+        summary = (f"<p class='summary {'fail' if failed or stale_checks else 'pass'}'>"
+                   f"{len(checks) - failed} of {len(checks)} checks pass{note}</p>")  # fmt: skip
     when = datetime.now().strftime("%Y-%m-%d %H:%M")
     page = (f"<!doctype html><html lang=en><meta charset=utf-8><title>"
             f"{html.escape(op.name)}</title><style>{STYLE}</style><body>"

@@ -8,6 +8,19 @@ computed from the stored runs each time it is asked for, as derived results are.
 A `Context` carries the store and, for a Plot, the step or sweep point being read: the
 same chain of operators is evaluated once per step or point, with every study it reads
 taking that point's run.
+
+An operator is a spreadsheet cell (ADR 0090, OP-1, OP-5): whatever goes wrong while it
+is worked out is that operator's error (a `PuzzleError`, code `operator_failed` when
+the cause was not one already), shown on its node, and its dependants say their input
+failed. Nothing raised in one operator reaches the schematic, the tree or the CLI.
+
+Which run a study's wire reads (ADR 0090 decision 4, OP-4) is the wire's to say:
+`OperatorInput.point` (a sweep point, a mesh level, an adaptive pass), `.solver` (a
+shoot-out's) or `.run` (one stored run); by default the study's own run for its set-up
+now, found by the run keys status uses (`graph.run_hashes`). When there is none but
+older runs, the newest is read and every value made from it is stale: it says so, and
+which run it came from (`Context.reads`, `stale_note`). A swept study read without a
+point is refused unless a Plot is going over its points.
 """
 
 from __future__ import annotations
@@ -69,6 +82,11 @@ class Table:
 
         if frame is None:
             names, data = list(columns), {}
+            twice = sorted({c for c in names if names.count(c) > 1})
+            if twice:  # OP-11: a dict would keep one of them silently
+                named = ", ".join(repr(c) for c in twice)
+                raise PuzzleError(f"a table can't have two columns named {named}",
+                                  code="invalid")  # fmt: skip
             for i, c in enumerate(names):
                 cells = [r[i] if i < len(r) else None for r in rows]
                 data[c] = _cells(pl, c, cells)
@@ -183,6 +201,8 @@ class ResultValue:
     run_ids: list[str]
     label: str
     field: str | None = None  # a study's field port: that field's results only
+    run_name: str = ""  # the run read, as the tree names it (ADR 0090 decision 4)
+    stale: bool = False  # that run is not the study's run for its set-up now
 
     type = "result"
 
@@ -197,22 +217,33 @@ class Verdict:
     limit: float
     compare: str  # "at_most" or "at_least"
     kind: str | None = None
+    stale: str = ""  # the run it was worked out from, when that is no longer current
 
     type = "verdict"
 
     @property
     def margin(self) -> float:
-        """How far inside the limit, as a fraction: limit / value − 1 for at most (0.25:
-        25 % to spare), value / limit − 1 for at least; negative when it fails."""
-        a, b = (self.limit, self.value) if self.compare == "at_most" else (self.value, self.limit)
-        if b == 0:
-            return float("inf") if a > 0 else (0.0 if a == 0 else float("-inf"))
-        return a / b - 1
+        """How far inside the limit, as a fraction; never of the other sign from the
+        verdict (OP-7). At most, with the value and the limit both positive: limit ÷
+        value − 1 (0.25 is 25 % to spare: the reserve factor less one). Otherwise the
+        distance to the limit as a share of it: (limit − value) ÷ |limit| at most,
+        (value − limit) ÷ |limit| at least (for both positive that is value ÷ limit − 1).
+        Against a limit of zero: 0 on it, else ±inf."""
+        if self.compare == "at_most" and self.value > 0 and self.limit > 0:
+            return self.limit / self.value - 1
+        gap = self.limit - self.value if self.compare == "at_most" else self.value - self.limit
+        if self.limit == 0:
+            return 0.0 if gap == 0 else math.copysign(float("inf"), gap)
+        return gap / abs(self.limit)
 
     def short(self) -> str:
-        """What the node shows: "Pass, margin +24 %"."""
+        """What the node shows: "Pass, margin +24 %"; on a run no longer current,
+        "Pass (stale: from the run of ...), margin +24 %"."""
         margin = f"{self.margin:+.0%}" if np.isfinite(self.margin) else str(self.margin)
-        return f"{'Pass' if self.passed else 'Fail'}, margin {margin}"
+        word = "Pass" if self.passed else "Fail"
+        if self.stale:
+            word += f" (stale: from the run of {self.stale})"
+        return f"{word}, margin {margin}"
 
     def comparison(self) -> str:
         sign = "≤" if self.compare == "at_most" else "≥"
@@ -255,10 +286,34 @@ class Context:
     overrides: dict = field(default_factory=dict)  # a slider being dragged: id -> SI value
     solver: str | None = None  # a shoot-out's solver whose runs are read (ADR 0063)
     root: Any = None  # the project folder, where a file operator reads (ADR 0064)
+    # ADR 0090 decision 4. Shared with the contexts `at` makes: the runs each operator
+    # read (operator id -> {run id: (study, run name, stale)}), the operators being
+    # worked out now (innermost last), and the run keys, found once.
+    reads: dict = field(default_factory=dict)
+    stack: list = field(default_factory=list)
+    shared: dict = field(default_factory=dict)
 
     def at(self, *, point: str | None = None, step: int | None = None) -> Context:
         return replace(self, point=point if point is not None else self.point,
                        step=step if step is not None else self.step, memo={})  # fmt: skip
+
+    def keys(self) -> dict:
+        """Each study's run keys now, per solver (`graph.run_hashes`, as status takes
+        them); empty when they can't be worked out (a transfer loop)."""
+        if "keys" not in self.shared:
+            from puzzle.project.graph import run_hashes
+
+            root = self.root if self.root is not None else getattr(self.project, "root", None)
+            try:
+                self.shared["keys"] = run_hashes(self.project, root)
+            except Exception:  # noqa: BLE001 - no keys: every run reads as stale
+                self.shared["keys"] = {}
+        return self.shared["keys"]
+
+    def note(self, run_id: str, what: tuple) -> None:
+        """Every operator being worked out read run `run_id`: (study, name, stale)."""
+        for oid in self.stack:
+            self.reads.setdefault(oid, {})[run_id] = what
 
 
 _READ: dict[tuple[str, str], tuple] = {}
@@ -286,17 +341,162 @@ def value(ctx: Context, op, port: str = "out"):
 
 
 def outputs(ctx: Context, op) -> dict[str, Any]:
-    """Every output of `op`, by port."""
+    """Every output of `op`, by port. Whatever goes wrong is raised as a PuzzleError
+    (`failure`), never as the exception that caused it; an error is kept as the
+    operator's value, so its dependants read it once."""
     key = ("op", op.id)
-    if key in ctx.memo:
-        return ctx.memo[key]
-    out = _EVALUATE[op.type](ctx, op)
-    ctx.memo[key] = out
-    return out
+    if key not in ctx.memo:
+        ctx.stack.append(op.id)
+        try:
+            ctx.memo[key] = _EVALUATE[op.type](ctx, op)
+        except PuzzleError as exc:
+            ctx.memo[key] = exc
+        except (KeyboardInterrupt, SystemExit, MemoryError, RecursionError):
+            raise
+        except Exception as exc:  # noqa: BLE001 - a cell's error is its value (OP-1, OP-5)
+            ctx.memo[key] = failure(op, exc)
+        finally:
+            ctx.stack.pop()
+    for oid in ctx.stack:  # what it read, its readers read too (stale runs)
+        if oid != op.id and op.id in ctx.reads:
+            ctx.reads.setdefault(oid, {}).update(ctx.reads[op.id])
+    got = ctx.memo[key]
+    if isinstance(got, PuzzleError):
+        raise PuzzleError(got.message, code=got.code, path=got.path, details=got.details)
+    return got
 
 
-def source(ctx: Context, oid: UUID, port: str):
-    """The value an object offers on its output `port`."""
+def failure(op, exc: BaseException) -> PuzzleError:
+    """An exception from working out `op` as its error, in words a user can act on."""
+    try:
+        import pint
+
+        offset = isinstance(exc, pint.errors.OffsetUnitCalculusError)
+        units = isinstance(exc, pint.errors.PintError)
+    except ImportError:  # pragma: no cover - pint is a dependency
+        offset = units = False
+    text = str(exc).strip().splitlines()[0] if str(exc).strip() else ""
+    if isinstance(exc, OverflowError):
+        why = "the result is too large to work out"
+    elif isinstance(exc, ZeroDivisionError):
+        why = "it divides by zero"
+    elif offset:
+        why = ("a temperature in °C or °F can't be added to or multiplied like this: "
+               "use K, or a difference (delta_degC)")  # fmt: skip
+    elif units:
+        why = f"the units don't work out ({text})"
+    elif isinstance(exc, IndexError):
+        why = "an index is past the end of the list or table"
+    elif isinstance(exc, TypeError) and ("str" in text or "<U" in text or "object" in text):
+        why = "a text can't be used where a number is needed"
+    elif type(exc).__module__.startswith("polars"):
+        why = f"polars could not do it: {text}"
+    else:
+        why = f"{text or type(exc).__name__}"
+    return PuzzleError(f"'{op.name}': {why}", code="operator_failed", path=op.name,
+                       details={"exception": type(exc).__name__})  # fmt: skip
+
+
+# --- which run a study's wire reads (ADR 0090 decision 4) -----------------------------
+
+
+def run_name(project, record) -> str:
+    """A stored run as the tree names it: its given name, else "<study> · <solver> ·
+    <when>", a sweep point's with its point first."""
+    from puzzle.adapters import SOLVER_NAMES
+    from puzzle.model.schema import TreeLabels
+    from puzzle.sweep import title
+
+    named = next(iter(project.of_type(TreeLabels)), None)
+    if named is not None and named.runs.get(record.run_id):
+        return named.runs[record.run_id]
+    study = next((s for s in project.objects.values()
+                  if str(s.id) == record.study_id), None)  # fmt: skip
+    when = f"{SOLVER_NAMES.get(record.solver, record.solver)} · {record.started_at:%Y-%m-%d %H:%M}"
+    labels = record.point_labels()
+    if labels:
+        return f"{title(labels)} · {when}"
+    return f"{study.name if study is not None else record.study_name} · {when}"
+
+
+def _runs_of(ctx: Context, study) -> list:
+    """The study's completed runs, newest first."""
+    if ctx.store is None:
+        raise PuzzleError(f"study '{study.name}' has no results here", code="not_found")
+    sid = str(study.id)
+    return [r for r in reversed(ctx.store.runs()) if r.study_id == sid
+            and r.status == "completed"]  # fmt: skip
+
+
+def pick_run(ctx: Context, study, chosen=None):
+    """The run a wire from `study` reads, and whether it is stale: the one `chosen`
+    (an OperatorInput's point, solver or run) names, else the study's own run for its
+    set-up now; with no current one, the newest of those that fit, stale. Refused with
+    the run that is missing named."""
+    from puzzle.project.graph import base_key
+    from puzzle.sweep import title
+
+    runs = _runs_of(ctx, study)
+    keys = ctx.keys().get(study.id, {})
+    every = {k for ks in keys.values() for k in ks}
+    pinned = getattr(chosen, "run", None)
+    if pinned:
+        record = next((r for r in runs if r.run_id == pinned), None)
+        if record is None:
+            raise PuzzleError(f"the run of '{study.name}' it reads is no longer stored "
+                              "(deleted, or the results were cleared): choose another",
+                              code="not_found", details={"run": pinned})  # fmt: skip
+        return record, base_key(record.run_key) not in every
+    solver = getattr(chosen, "solver", None) or ctx.solver or study.solver
+    point = getattr(chosen, "point", None) or ctx.point
+    from puzzle.adapters import SOLVER_NAMES
+
+    on = f" on {SOLVER_NAMES.get(solver, solver)}" if solver != study.solver else ""
+    mine = [r for r in runs if r.solver == solver]
+    if point:
+        fits = [r for r in mine if r.point_labels() and title(r.point_labels()) == point]
+        if not fits:
+            raise PuzzleError(f"study '{study.name}' has no run at {point}{on} yet: run it "
+                              "first", code="not_found", details={"point": point})  # fmt: skip
+    else:
+        if study.sweeps():
+            count = len(study.sweep_points()) if hasattr(study, "sweep_points") else 0
+            raise PuzzleError(
+                f"study '{study.name}' has {count or 'several'} sweep points: choose the one "
+                "read (its input's point), or use a table or plot over the points",
+                code="inconsistent", details={"points": count})  # fmt: skip
+        fits = [r for r in mine if not r.point_labels()]
+        if not fits:
+            others = sorted({next(iter(r.point_labels())) for r in mine if r.point_labels()})
+            hint = (f" (it has runs by {' and '.join(others)}: choose one as the point)"
+                    if others else "")  # fmt: skip
+            raise PuzzleError(f"study '{study.name}' has no run{on} yet: run it first{hint}",
+                              code="not_found")  # fmt: skip
+    current = set(keys.get(solver, []))
+    now = next((r for r in fits if base_key(r.run_key) in current), None)
+    if now is not None:
+        return now, False
+    return fits[0], True
+
+
+def stale_runs(ctx: Context, oid) -> list[tuple[str, str]]:
+    """(study, run name) of each run no longer current that an operator read."""
+    return [(s, n) for s, n, stale in ctx.reads.get(oid, {}).values() if stale]
+
+
+def stale_note(ctx: Context, oid) -> str:
+    """ "" when everything `oid` read is current; else the runs, for "stale: from the run
+    of ..." (ADR 0090 decision 4)."""
+    found = stale_runs(ctx, oid)
+    if not found:
+        return ""
+    names = list(dict.fromkeys(n for _, n in found))
+    return names[0] if len(names) == 1 else f"{names[0]} and {len(names) - 1} more"
+
+
+def source(ctx: Context, oid: UUID, port: str, chosen=None):
+    """The value an object offers on its output `port`; `chosen` (an OperatorInput)
+    says which of a study's runs is read."""
     from puzzle.model.schema import (
         Operator,
         ParameterSet,
@@ -326,24 +526,51 @@ def source(ctx: Context, oid: UUID, port: str):
         if isinstance(obj, (Study, Optimisation)):
             return frames.points_table(ctx, obj)
     if isinstance(obj, Study):
-        key = ("run", oid, ctx.point, ctx.solver)
+        sel = (getattr(chosen, "point", None), getattr(chosen, "solver", None),
+               getattr(chosen, "run", None))  # fmt: skip
+        key = ("run", oid, ctx.point, ctx.solver, sel)
         if key not in ctx.memo:
-            record = derived.run_for(ctx.project, ctx.store, oid, ctx.point, ctx.solver)
+            record, stale = pick_run(ctx, obj, chosen)
             mesh, results = _read(ctx.store, record)
             ctx.memo[key] = ResultValue(mesh, results, derived._items_of(results),
-                                        [record.run_id], obj.name)  # fmt: skip
+                                        [record.run_id], obj.name,
+                                        run_name=run_name(ctx.project, record),
+                                        stale=stale)  # fmt: skip
         found = ctx.memo[key]
+        ctx.note(found.run_ids[0], (obj.name, found.run_name, found.stale))
+        if port not in ("result", "out") and not any(i.field == port for i in found.items):
+            fields = sorted({i.field for i in found.items})
+            raise PuzzleError(f"study '{obj.name}' has no results '{port}' (its run holds "
+                              f"{', '.join(fields) or 'none'})", code="not_found",
+                              details={"fields": fields})  # fmt: skip
         return replace(found, field=None if port in ("result", "out") else port)
     if isinstance(obj, ResultDefinition):
         d = derived.evaluate(ctx.project, ctx.store, obj)
+        _note_derived(ctx, obj, d.run_ids)
         return ResultValue(d.mesh, d.results, d.items, d.run_ids, obj.name)
     if isinstance(obj, ResultProbe):
         if port in ("along", "history"):  # its curves (ADR 0071 decision 3)
             from puzzle.operators.series import from_probe
 
-            return from_probe(ctx, obj, port)
-        return _probe(ctx, obj)
+            return from_probe(ctx, obj, port, chosen)
+        return _probe(ctx, obj, chosen)
     raise PuzzleError(f"'{obj.name}' has no outputs for an operator", code="invalid")
+
+
+def _note_derived(ctx: Context, definition, run_ids) -> None:
+    """The runs a derived result combined, each stale when its study's key moved on."""
+    from puzzle.project.graph import base_key
+
+    if ctx.store is None:
+        return
+    wanted = set(run_ids)
+    for r in ctx.store.runs():
+        if r.run_id not in wanted:
+            continue
+        study = next((s for s in ctx.project.objects.values() if str(s.id) == r.study_id), None)
+        keys = ctx.keys().get(study.id, {}) if study is not None else {}
+        stale = base_key(r.run_key) not in {k for ks in keys.values() for k in ks}
+        ctx.note(r.run_id, (definition.name, run_name(ctx.project, r), stale))
 
 
 def _input(ctx: Context, op, key: str):
@@ -356,7 +583,21 @@ def _input(ctx: Context, op, key: str):
                 "is not wired", code="inconsistent", path=op.name)  # fmt: skip
         return None
     if inp.source is not None:
-        got = source(ctx, inp.source, inp.port)
+        try:
+            got = source(ctx, inp.source, inp.port, inp)
+        except PuzzleError as exc:
+            from puzzle.model.schema import Operator
+
+            src = ctx.project.objects.get(inp.source)
+            if exc.code not in ("operator_failed", "invalid") or not isinstance(src, Operator):
+                raise  # not run, not wired, no such step: said as it is
+            label = spec.label.lower() if spec is not None else key
+            raise PuzzleError(  # its dependants say their input failed (OP-1)
+                f"'{op.name}': its {label} input, '{src.name}', failed: {bare(src, exc.message)}",
+                code="operator_failed",
+                path=op.name,
+                details={"input": key, "failed": src.name, "reason": exc.message},
+            ) from None
         if (
             getattr(got, "type", None) == "points"
             and spec is not None
@@ -387,26 +628,21 @@ def typed(v) -> Number | Text:
     return Text(str(v))
 
 
-def _probe_found(ctx: Context, probe):
+def _probe_found(ctx: Context, probe, chosen=None):
     """A result tool's whole answer (ADR 0032, 0042) at the context's step and point,
-    and the result item it read."""
-    from puzzle.model.schema import Study
+    and the result item it read; `chosen` (the wire's) says which run of its study."""
     from puzzle.post import probes
 
     probe = probes.placed(ctx.project, probe)
-    src = ctx.project.objects.get(probe.source)
-    if isinstance(src, Study):
-        r = source(ctx, src.id, "result")
-    else:
-        r = source(ctx, probe.source, "result")
+    r = source(ctx, probe.source, "result", chosen)
     item = probes._item(probe, r.items)
-    step = _step(ctx, r.results, item, probe.step)
+    step = _step(ctx, r.results, item, probe.step, r.label)
     return probes.at_step(r.mesh, step, item, probe), item
 
 
-def _probe(ctx: Context, probe) -> Number:
+def _probe(ctx: Context, probe, chosen=None) -> Number:
     """A result tool's value (ADR 0032, 0042) at the context's step and point."""
-    found, item = _probe_found(ctx, probe)
+    found, item = _probe_found(ctx, probe, chosen)
     return Number(float(found["value"]), item.unit, probe.name, found.get("point"))
 
 
@@ -425,14 +661,14 @@ def _asme(ctx: Context, op, probe) -> dict[str, Any]:
     rows = checks(found, allowable, probe.membrane)
     worst = max(rows, key=lambda r: r["ratio"])
     verdict = Verdict(all(r["ok"] for r in rows), worst["value"], worst["limit"], "at_most",
-                      "pressure")  # fmt: skip
+                      "pressure", stale=stale_note(ctx, op.id))  # fmt: skip
     return {"out": verdict, "margin": Number(verdict.margin, None, "margin", percent=True),
             "checks": rows}  # fmt: skip
 
 
-def _step(ctx: Context, results, item, index: int):
+def _step(ctx: Context, results, item, index: int, label: str = "the run"):
     """The step a result is read at: the context's (a Plot's), else `index` among the
-    steps holding the item's field (-1: the last)."""
+    steps holding the item's field (-1: the last); one past the end is refused (OP-12)."""
     if ctx.step is not None:
         if not 0 <= ctx.step < len(results.steps):
             raise PuzzleError(f"no step {ctx.step + 1}", code="not_found")
@@ -443,7 +679,13 @@ def _step(ctx: Context, results, item, index: int):
     steps = [s for s in results.steps if item.field in s.fields]
     if not steps:
         raise PuzzleError(f"no step has {item.label}", code="not_found")
-    return steps[min(index, len(steps) - 1)] if index >= 0 else steps[max(index, -len(steps))]
+    if not -len(steps) <= index < len(steps):
+        n = len(steps)
+        raise PuzzleError(
+            f"{label} has {n} step{'s' if n != 1 else ''} with {item.label}; there is no "
+            f"step {index} (0 is the first, -1 the last)", code="not_found",
+            details={"steps": n})  # fmt: skip
+    return steps[index]
 
 
 def _field(ctx: Context, op, given) -> FieldValue:
@@ -456,8 +698,13 @@ def _field(ctx: Context, op, given) -> FieldValue:
     if not isinstance(given, ResultValue):
         raise PuzzleError(f"'{op.name}' needs a result wired in", code="invalid")
     items = given.items
-    if given.field:
-        items = [i for i in items if i.field == given.field] or items
+    if given.field:  # OP-8: never another quantity in place of the one asked for
+        items = [i for i in items if i.field == given.field]
+        if not items:
+            fields = sorted({i.field for i in given.items})
+            raise PuzzleError(f"'{op.name}': {given.label} has no results '{given.field}' "
+                              f"(it holds {', '.join(fields) or 'none'})", code="not_found",
+                              details={"fields": fields})  # fmt: skip
     if op.quantity:
         item = next((i for i in given.items if i.key == op.quantity), None)
         if item is None:
@@ -468,7 +715,7 @@ def _field(ctx: Context, op, given) -> FieldValue:
         item = default(items)
         if item is None:
             raise PuzzleError(f"'{op.name}': {given.label} has no results", code="not_found")
-    step = _step(ctx, given.results, item, op.step)
+    step = _step(ctx, given.results, item, op.step, given.label)
     f = step.fields[item.field]
     values = np.asarray(compute(item, f.values, f.components), float)
     return FieldValue(given.mesh, step, item, f.ids, values, f.location, label=item.label)
@@ -544,7 +791,9 @@ def _reduce(ctx: Context, op) -> dict[str, Any]:
     lookup = np.full(int(fv.mesh.node_ids.max()) + 1, np.nan)
     lookup[fv.ids] = fv.values
     total = measure = 0.0
+    dims = set()
     for b in _blocks(fv):
+        dims.add(b.dim)
         sizes = _measures(b, fv.mesh)
         weights = _weights(b.element, b.connectivity.shape[1])
         at = lookup[b.connectivity]
@@ -553,9 +802,27 @@ def _reduce(ctx: Context, op) -> dict[str, Any]:
         measure += float(sizes[whole].sum())
     if measure == 0.0:
         raise PuzzleError(f"'{op.name}': no elements to integrate over", code="invalid")
-    if op.reduction == "integral":
-        return {"out": Number(total, None, label)}
+    if op.reduction == "integral":  # OP-14: its unit is the value's times m² or m³
+        return {"out": Number(total, _integral_kind(fv.item.unit, dims), label)}
     return {"out": Number(total / measure, fv.item.unit, label)}
+
+
+def _integral_kind(kind: str | None, dims: set) -> str | None:
+    """The kind of an integral of `kind` over faces (2) or bodies (3), None when it has
+    no kind Puzzle shows (a temperature over a volume)."""
+    if len(dims) != 1:
+        return None
+    over = {1: "length", 2: "area", 3: "volume"}.get(next(iter(dims)))
+    if over is None:
+        return None
+    if kind is None:
+        return over
+    from puzzle.operators.expression import evaluate as formula
+
+    try:
+        return formula("a * b", {"a": (1.0, kind), "b": (1.0, over)})[1]
+    except PuzzleError:
+        return None
 
 
 def _filter(ctx: Context, op) -> dict[str, Any]:
@@ -565,7 +832,7 @@ def _filter(ctx: Context, op) -> dict[str, Any]:
         if limit is None:
             raise PuzzleError(f"'{op.name}': keeping values {op.keep} a limit needs the limit",
                               code="inconsistent")  # fmt: skip
-        _same_kind(op, fv.item.unit, limit.kind)
+        _same_units(op, fv.item.unit, limit.kind, "limit")
         with np.errstate(invalid="ignore"):
             keep = fv.values >= limit.value if op.keep == "above" else fv.values <= limit.value
         fv = replace(fv, values=np.where(keep, fv.values, np.nan))
@@ -589,6 +856,24 @@ def _same_kind(op, a: str | None, b: str | None) -> None:
             code="invalid")  # fmt: skip
 
 
+def _same_units(op, value_kind: str | None, limit_kind: str | None, what: str) -> None:
+    """A value and its limit of one kind (OP-6): two of different kinds, or one with a
+    unit and one without ("200" against a stress), are refused."""
+    from puzzle.model.units import DIMENSIONS
+
+    _same_kind(op, value_kind, limit_kind)
+    if bool(value_kind) == bool(limit_kind):
+        return
+    if value_kind:
+        unit = DIMENSIONS[value_kind][1]
+        raise PuzzleError(f"'{op.name}': the value is a {DIMENSIONS[value_kind][0].lower()}"
+                          f", so give the {what} a unit too (such as 200 {unit}, or in "
+                          "the unit you mean)", code="invalid")  # fmt: skip
+    raise PuzzleError(f"'{op.name}': the {what} is a {DIMENSIONS[limit_kind][0].lower()} "
+                      "and the value a pure number: compare like with like",
+                      code="invalid")  # fmt: skip
+
+
 def _check(ctx: Context, op) -> dict[str, Any]:
     from puzzle.model.schema import ResultProbe
 
@@ -605,9 +890,13 @@ def _check(ctx: Context, op) -> dict[str, Any]:
         worst = finite.max() if op.compare == "at_most" else finite.min()
         got = Number(float(worst), got.item.unit, got.label)
     got = _number(op, got, "value")
-    _same_kind(op, got.kind, limit.kind)
+    if got is None or limit is None:
+        raise PuzzleError(f"'{op.name}': wire its {'value' if got is None else 'limit'}",
+                          code="inconsistent")  # fmt: skip
+    _same_units(op, got.kind, limit.kind, "limit")
     passed = got.value <= limit.value if op.compare == "at_most" else got.value >= limit.value
-    verdict = Verdict(bool(passed), got.value, limit.value, op.compare, got.kind or limit.kind)
+    verdict = Verdict(bool(passed), got.value, limit.value, op.compare, got.kind or limit.kind,
+                      stale=stale_note(ctx, op.id))  # fmt: skip
     return {"out": verdict, "margin": Number(verdict.margin, None, "margin", percent=True)}
 
 
@@ -624,7 +913,12 @@ def _plot(ctx: Context, op) -> dict[str, Any]:
     together (one x and one y quantity), for the Plots panel."""
     from puzzle.operators import series as sr
 
-    got = _input(ctx, op, "value")
+    try:
+        got = _input(ctx, op, "value")
+    except PuzzleError as exc:
+        if op.against != "sweep" or "points" not in exc.details:
+            raise
+        got = None  # a swept study's number, read once per point by _over_sweep
     if isinstance(got, sr.Series):
         parts, table = [got], (got.table() if got.lines else None)
     else:
@@ -678,29 +972,41 @@ def _steps_table(ctx: Context, op) -> Table:
     return Table([x, label], rows, [x_kind, kind])
 
 
-def _upstream_studies(ctx: Context, op, seen=()) -> list:
-    """The studies (and derived results) an operator reads, nearest first."""
+def _upstream_reads(ctx: Context, op, seen=()) -> list[tuple]:
+    """(study or derived result, the wire that reads it) for each an operator reads,
+    nearest first."""
     from puzzle.model.schema import Operator, ResultDefinition, ResultProbe, Study
 
-    found = []
+    found: list[tuple] = []
     for inp in op.inputs.values():
         obj = ctx.project.objects.get(inp.source) if inp.source else None
         if isinstance(obj, (Study, ResultDefinition)):
-            found.append(obj)
+            found.append((obj, inp))
         elif isinstance(obj, ResultProbe):
             src = ctx.project.objects.get(obj.source)
             if src is not None:
-                found.append(src)
+                found.append((src, inp))
         elif isinstance(obj, Operator) and obj.id not in seen:
-            found += _upstream_studies(ctx, obj, (*seen, op.id))
-    return list({o.id: o for o in found}.values())
+            found += _upstream_reads(ctx, obj, (*seen, op.id))
+    out, ids = [], set()
+    for o, i in found:
+        if o.id not in ids:
+            ids.add(o.id)
+            out.append((o, i))
+    return out
+
+
+def _upstream_studies(ctx: Context, op, seen=()) -> list:
+    """The studies (and derived results) an operator reads, nearest first."""
+    return [o for o, _ in _upstream_reads(ctx, op, seen)]
 
 
 def _upstream_result(ctx: Context, op) -> ResultValue:
-    studies = _upstream_studies(ctx, op)
-    if not studies:
+    reads = _upstream_reads(ctx, op)
+    if not reads:
         raise PuzzleError(f"'{op.name}' reads no study's results", code="inconsistent")
-    return source(ctx, studies[0].id, "result")
+    obj, inp = reads[0]
+    return source(ctx, obj.id, "result", inp)
 
 
 def _over_sweep(ctx: Context, op) -> Table:
@@ -767,9 +1073,15 @@ def _slider(ctx: Context, op) -> dict[str, Any]:
     for bound in (low, high):
         if bound is not None:
             _same_kind(op, got.kind, bound.kind)
+    if low is not None and high is not None and low.value > high.value:  # OP-13
+        raise PuzzleError(f"'{op.name}': its lowest value is above its highest",
+                          code="invalid")  # fmt: skip
     v = got.value
     if op.increment is not None and op.increment.value:
-        step, base = typed(op.increment).value, low.value if low else 0.0
+        inc = typed(op.increment)
+        _same_kind(op, inc.kind, got.kind or (low.kind if low else None)
+                   or (high.kind if high else None))  # fmt: skip
+        step, base = abs(inc.value), low.value if low else 0.0
         v = base + round((v - base) / step) * step
     if low is not None:
         v = max(v, low.value)
@@ -961,6 +1273,7 @@ def _expression(ctx: Context, op) -> dict[str, Any]:
     result = {"out": Number(float(out), kind, op.name)}
     verdict = _comparison(op, values, formula)
     if verdict is not None:
+        verdict.stale = stale_note(ctx, op.id)
         result["passes"] = verdict
     return result
 
@@ -1004,6 +1317,10 @@ def _lookup(ctx: Context, op) -> dict[str, Any]:
     ycol = op.column or (t.columns[1] if len(t.columns) > 1 else "")
     frames._names(op, [xcol, ycol], t)
     kinds = dict(zip(t.columns, t.kinds, strict=False))
+    for c in (xcol, ycol):  # OP-5: a text column, said so
+        if not t.frame[c].dtype.is_numeric():
+            raise PuzzleError(f"'{op.name}': {c} is text; Read off a table reads numbers",
+                              code="invalid")  # fmt: skip
     data = t.frame.select([xcol, ycol]).drop_nulls().sort(xcol)
     xs, ys = data[xcol].cast(float).to_numpy(), data[ycol].cast(float).to_numpy()
     if not len(xs):
@@ -1210,9 +1527,15 @@ def _mode(ctx: Context, op, lst: ListValue, index, end):
         if other is None or not len(other.values):
             raise PuzzleError(f"'{op.name}': replace with what? wire the other list",
                               code="inconsistent")  # fmt: skip
+        if not -len(seq) <= n < len(seq):  # OP-5
+            raise PuzzleError(f"'{op.name}': no item {n} to replace in {len(seq)}",
+                              code="not_found")  # fmt: skip
         seq[n] = list(other.values)[0]
         return pick(seq), kind
     if how == "repeat":
+        if len(seq) * max(n, 0) > 1_000_000:
+            raise PuzzleError(f"'{op.name}': {len(seq)} items repeated {n} times is more "
+                              "than a million", code="invalid")  # fmt: skip
         return pick(seq * max(n, 0)), kind
     if how == "every_nth":
         start = int(end.value) if end is not None else 0
@@ -1236,6 +1559,8 @@ def _mode(ctx: Context, op, lst: ListValue, index, end):
     if not numeric:
         raise PuzzleError(f"'{op.name}': {how.replace('_', ' ')} needs numbers", code="invalid")
     x = np.asarray(values, float)
+    if not x.size and how in ("remap",):
+        raise PuzzleError(f"'{op.name}': the list is empty", code="not_found")
     if how == "remap":  # to 0..1, or onto index..end
         lo, hi = float(x.min()), float(x.max())
         u = (x - lo) / (hi - lo) if hi > lo else np.zeros_like(x)
@@ -1292,12 +1617,21 @@ def _list(ctx: Context, op) -> dict[str, Any]:
             raise PuzzleError(f"'{op.name}': a {op.operation} needs numbers", code="invalid")
         if op.operation == "weighted_mean":
             w = _input(ctx, op, "weights")
+            if not len(values):
+                raise PuzzleError(f"'{op.name}': the list is empty", code="not_found")
             if not isinstance(w, ListValue) or len(w.values) != len(values):
                 raise PuzzleError(f"'{op.name}': a weighted mean needs weights, one a value",
                                   code="inconsistent")  # fmt: skip
             got = float(np.average(values, weights=w.values))
+        elif not len(values):  # OP-5: the empty list's statistic, said in words
+            raise PuzzleError(f"'{op.name}': the list is empty, so it has no "
+                              f"{op.operation.replace('_', ' ')}", code="not_found")  # fmt: skip
         elif op.operation == "percentile":
-            got = float(np.percentile(values, index.value if index else 50.0))
+            percent = index.value if index else 50.0
+            if not 0 <= percent <= 100:
+                raise PuzzleError(f"'{op.name}': a percentile is from 0 to 100, not "
+                                  f"{percent:g}", code="invalid")  # fmt: skip
+            got = float(np.percentile(values, percent))
         elif op.operation == "product":
             got, kind = float(np.prod(values)), (kind if len(values) == 1 else None)
         else:
@@ -1319,13 +1653,19 @@ def _pairs(ctx: Context, op) -> dict[str, Any]:
     a, b = as_list(_input(ctx, op, "a")), as_list(_input(ctx, op, "b"))
     av, bv = list(a.values), list(b.values)
     if op.combination == "cross":
+        if len(av) * len(bv) > 1_000_000:  # OP-10's guard: every pair is a row
+            raise PuzzleError(f"'{op.name}': {len(av)} × {len(bv)} pairs is more than a "
+                              "million rows", code="invalid")  # fmt: skip
         rows = [[x, y] for x in av for y in bv]
     else:  # item by item; the shorter list repeats its last item (longest list)
         n = max(len(av), len(bv))
         rows = [[av[min(i, len(av) - 1)], bv[min(i, len(bv) - 1)]] for i in range(n)] \
             if av and bv else []  # fmt: skip
     rows = [[float(x) if not isinstance(x, str) else x for x in r] for r in rows]
-    return {"out": Table([a.label or "a", b.label or "b"], rows, [a.kind, b.kind])}
+    first, second = a.label or "a", b.label or "b"
+    if second == first:  # OP-11: two lists of one name keep both columns
+        second = f"{first}_2"
+    return {"out": Table([first, second], rows, [a.kind, b.kind])}
 
 
 def _geometric():
@@ -1379,32 +1719,70 @@ _EVALUATE = {"reduce": _reduce, "filter": _filter, "check": _check, "panel": _pa
 
 def shown(ctx: Context, op) -> tuple[str, str]:
     """What the node shows on the canvas, and its verdict ("pass", "fail" or ""). Errors
-    are shown as their message, never raised: the schematic always draws."""
+    are shown as their message, never raised: the schematic always draws. A value made
+    from a run no longer current says so (ADR 0090 decision 4)."""
     try:
-        if op.type == "report":
-            from puzzle.operators.report import path_of
-
-            return f"to {path_of(op)}", ""
-        if op.type in ("panel", "export"):
-            got = _input(ctx, op, "value")
-            if op.type == "export":
-                return f"to {export_path(op)}", ""
-            return describe(got), _verdict(got)
-        got = outputs(ctx, op)
-        first = got.get("out")
-        if isinstance(first, Verdict):
-            return first.short(), _verdict(first)
-        return describe(first), _verdict(first)
+        text, verdict = _shown(ctx, op)
     except PuzzleError as exc:
-        return exc.message, ""
+        return bare(op, exc.message), ""
+    except (KeyboardInterrupt, SystemExit, MemoryError):
+        raise
+    except Exception as exc:  # noqa: BLE001 - the schematic always draws (OP-5)
+        return bare(op, failure(op, exc).message), ""
+    note = stale_note(ctx, op.id)
+    if note and "stale:" not in text:
+        text = f"{text} (stale: from the run of {note})"
+    return text, verdict
+
+
+def _shown(ctx: Context, op) -> tuple[str, str]:
+    if op.type == "report":
+        from puzzle.operators.report import path_of
+
+        return f"to {path_of(op)}", ""
+    if op.type in ("panel", "export"):
+        if op.type == "export":
+            return f"to {export_path(op)}", ""
+        got = _read_in(ctx, op, "value")
+        return describe(got), _verdict(got)
+    got = outputs(ctx, op)
+    first = got.get("out")
+    if isinstance(first, Verdict):
+        return first.short(), _verdict(first)
+    return describe(first), _verdict(first)
+
+
+def _read_in(ctx: Context, op, key: str):
+    """An input of an operator that works nothing out itself (a Panel, an Export, a
+    Report), read as if it did, so the runs it reads are counted as its own."""
+    ctx.stack.append(op.id)
+    try:
+        return _input(ctx, op, key)
+    finally:
+        ctx.stack.pop()
+
+
+def bare(op, message: str) -> str:
+    """A message without the operator's own name in front: the node shows the name
+    already (OP-15)."""
+    for head in (f"{TYPES[op.type].label.lower()} '{op.name}': ", f"'{op.name}': "):
+        if message.startswith(head):
+            message = message[len(head) :]
+            return message[:1].upper() + message[1:]
+    return message
 
 
 def detail(ctx: Context, op) -> str:
     """The longer text (Properties, the CLI): a check's comparison in full."""
     text, verdict = shown(ctx, op)
-    if verdict:
-        return outputs(ctx, op)["out"].text()
-    return text
+    if not verdict:
+        return text
+    try:
+        got = (_read_in(ctx, op, "value") if op.type == "panel"
+               else outputs(ctx, op)["out"])  # fmt: skip
+        return got.text() if isinstance(got, Verdict) else text
+    except PuzzleError:
+        return text
 
 
 def _verdict(v) -> str:
@@ -1513,20 +1891,41 @@ def as_csv(v) -> str:
 
 
 def summary(ctx: Context, op) -> dict[str, Any]:
-    """An operator's value as data (the CLI, MCP and the outline): its outputs in SI."""
+    """An operator's value as data (the CLI, MCP and the outline): its outputs in SI, the
+    runs it read (`runs`, each with `stale`) and whether any is no longer current."""
     out: dict[str, Any] = {"name": op.name, "type": op.type}
     try:
-        got = outputs(ctx, op)
-        if op.type == "report":
-            from puzzle.operators.report import path_of
+        if op.type == "report":  # OP-9: its file, and the verdicts it would gather
+            from puzzle.operators.report import KEYS, path_of
 
-            return f"to {path_of(op)}", ""
-        if op.type in ("panel", "export"):
-            got = {"value": _input(ctx, op, "value")}
-        out["outputs"] = {k: _data(v) for k, v in got.items()}
-        out["shown"] = shown(ctx, op)[0]
+            items: dict[str, Any] = {}
+            for k in KEYS:
+                if k in op.inputs:
+                    try:
+                        items[k] = _data(_read_in(ctx, op, k))
+                    except PuzzleError as exc:
+                        items[k] = {"error": exc.to_dict()}
+            out["outputs"] = items
+            passed = [v["passed"] for v in items.values()
+                      if isinstance(v, dict) and "passed" in v]  # fmt: skip
+            out["shown"] = f"to {path_of(op)}" + (
+                f"; {sum(passed)} of {len(passed)} checks pass" if passed else ""
+            )
+        else:
+            got = ({"value": _read_in(ctx, op, "value")} if op.type in ("panel", "export")
+                   else outputs(ctx, op))  # fmt: skip
+            out["outputs"] = {k: _data(v) for k, v in got.items()}
+            out["shown"] = shown(ctx, op)[0]
     except PuzzleError as exc:
         out["error"] = exc.to_dict()
+    except (KeyboardInterrupt, SystemExit, MemoryError):
+        raise
+    except Exception as exc:  # noqa: BLE001 - as shown: never a traceback
+        out["error"] = failure(op, exc).to_dict()
+    read = ctx.reads.get(op.id, {})
+    if read:
+        out["runs"] = [{"study": s, "run": n, "stale": st} for s, n, st in read.values()]
+        out["stale"] = any(st for _, _, st in read.values())
     return out
 
 
@@ -1542,7 +1941,7 @@ def _data(v) -> Any:
         return d
     if isinstance(v, Verdict):
         return {"passed": v.passed, "value": v.value, "limit": v.limit, "margin": v.margin,
-                "text": v.text()}  # fmt: skip
+                "text": v.text(), **({"stale": v.stale} if v.stale else {})}  # fmt: skip
     if isinstance(v, ListValue):
         d = {"values": [float(x) for x in v.values] if v.numeric else list(v.values),
              "text": v.text()}  # fmt: skip

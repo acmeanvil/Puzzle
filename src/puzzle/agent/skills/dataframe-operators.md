@@ -20,8 +20,14 @@ with their units, `row_count`, and the first 20 rows, never a whole result table
     name them: `von_mises`, `deformation`, `stress_xx`, `temperature`.
   - `steps`: `one` (the `step` index, −1 the last) or `all`.
   - `selection`: limit it to one, "Part/Selection".
-  - `layout`: `long` (a row per item per step, the default by setting), or `wide` (a
-    column per step, "von_mises · step 2").
+  - `layout`: `long` (a row per item per step) or `wide` (a column per step,
+    "von_mises · step 2"). It is the operator's own: a new one takes the user's
+    Settings > Results > Table layout when it is made, and is never read from it again
+    (an older one that says "setting" reads as long). Give it when what follows
+    depends on it.
+  - Which run it reads is the wire's, as for every operator (skill schematic-operators):
+    the study's run for its model now, else its newest marked `stale`; a swept study
+    needs `point`.
 - `points_table`, wired from an optimisation's or swept study's `points` port: one row
   per point, with its variables, outputs, feasible, reason and run.
 - `file`: `file` is a path inside the project, or a pattern (`tests/*.csv`), and several
@@ -36,15 +42,21 @@ Every one of these takes `table` and gives `out` (a table):
 - `filter_rows`: `condition`. Puzzle's syntax (the default) checks units:
   `von_mises > 200 MPa and part == "Bracket"`. Or `syntax: "polars"`:
   `pl.col("von_mises") > 2e8`, SI and unchecked. Only `pl.col`, `pl.lit`, `pl.when`
-  and expression methods are allowed.
+  and expression methods are allowed. A condition must give true or false (a number
+  is refused), arithmetic on plain numbers is done in floating point (a power above
+  1024, a text or list repeated, is refused), and an expression is at most 4000
+  characters and 600 parts: a project from elsewhere can't make it hang.
 - `sort`: `by` (columns), `descending`.
 - `top_n`: `column`, the `count` input (default 10), `largest` (false for smallest),
   and `by` for the top N per group.
-- `new_column`: `new_name` = `expression`. In Puzzle's syntax the unit is worked out
+- `new_column`: `new_name` (required; a name already there replaces that column) =
+  `expression`. In Puzzle's syntax the unit is worked out
   (`margin = 250 MPa / von_mises - 1` has none). In polars syntax give `unit`.
 - `convert_units`: `column` shown and exported in `unit` (MPa, kN). The values stay SI.
-- `round`: `pick` (default every float column), `decimals`, `significant`; it rounds in
-  the shown units.
+- `round`: `pick` (default every float column), `decimals`, `significant`, `unit`: the
+  columns of that unit's kind are rounded in it ("mm"); the others in the unit Convert
+  units gave them, else in SI. Never in the user's display units (a preference never
+  changes a value, ADR 0024): round a length in millimetres with `unit: "mm"`.
 - `group`: `by` (part, step, point, solver) and `aggregations`: `"max(von_mises)"`,
   `"count()"`, `"mean(stress_xx) as avg"`, `"quantile(von_mises, 0.95)"`. The
   functions are max, min, mean, median, sum, std, count, first, last and quantile.
@@ -77,8 +89,9 @@ Related, from the same ADR:
   left or full. A column in both gets the second table's name, or `suffix`
   ("_aster": then `vm_aster - vm` in a New column is the solvers' difference).
 - `stack`: `table`, `other`, `third`, with a `from` column (`new_name`).
-- `pivot`: `by` (the row keys), `column` (its values become columns), `pick` (the
-  values). `unpivot` is the reverse.
+- `pivot`: `by` (the row keys), `column` (required: its values become columns, at most
+  200 of them; a column of measured numbers is refused), `pick` (the values).
+  `unpivot` is the reverse.
 - `distinct` (`by`), `fill_missing` (`fill`: forward, backward, mean, zero, value with
   the `value` input, or drop; `pick`), and `rolling` (`column`, `reduction`, `window` 0
   for running, `by` the order, `pick` the groups).

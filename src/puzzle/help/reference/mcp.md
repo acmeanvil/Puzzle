@@ -367,7 +367,7 @@ Arguments: `component`, `study`.
 <!-- key: mcp:operator_add -->
 ### operator_add
 
-Add an operator (ADR 0062): `type` reduce, filter, check, panel, plot, export (after solving) or number, slider, series, range, expression, table, list, pairs (data, before solving: Numbers, Sliders and Expressions then act as parameters by their name); `inputs` by port, each {source: a study, derived result, result tool, parameter set or operator by name, port: its output} or {value: '200 MPa'}; `settings` its own fields (quantity, selection, reduction, step, keep, compare, against, file, format, low, high, increment, expression, text, operation, column, combination). A study's ports: result, or a field (stress). Read the skill schematic-operators first, and operator_help for what a type does and its ports. One undoable command; returns its value.
+Add an operator (ADR 0062): `type` reduce, filter, check, panel, plot, export (after solving) or number, slider, series, range, expression, table, list, pairs (data, before solving: Numbers, Sliders and Expressions then act as parameters by their name); `inputs` by port, each {source: a study, derived result, result tool, parameter set or operator by name, port: its output} or {value: '200 MPa'}; a wire from a study (or its result tool) may say which run it reads: point (a sweep point, mesh level or adaptive pass by its title, 'load = 300 N'), solver (a shoot-out's) or run (a stored run by its name), else the study's run for its model now; a swept study needs its point; `settings` its own fields (quantity, selection, reduction, step, keep, compare, against, file, format, low, high, increment, expression, text, operation, column, combination). A study's ports: result, or a field (stress). Read the skill schematic-operators first, and operator_help for what a type does and its ports. One undoable command; returns its value.
 
 Arguments: `inputs`, `name`, `rationale`, `settings`, `type`.
 
@@ -388,7 +388,7 @@ Arguments: `search`, `type`.
 <!-- key: mcp:operator_value -->
 ### operator_value
 
-An operator's value (ADR 0062): its outputs in SI (a number with its unit and where a maximum is, a verdict with its margin, a table's rows), what the schematic node shows, and how it is wired. `needs_runs`: the studies it reads, through every operator upstream, that aren't up to date: run_study each (the GUI's Evaluate up to here). Without a name: every operator.
+An operator's value (ADR 0062): its outputs in SI (a number with its unit and where a maximum is, a verdict with its margin, a table's rows), what the schematic node shows, and how it is wired. `runs`: the stored runs it read, each with `stale` (true: not the study's run for its model now; `stale` on the whole says any was, and a stale verdict is no pass). `run_choices`: per input wired from a study, the runs it may read (give one to operator_add or an edit as `point`, `solver` or `run`). `needs_runs`: the studies it reads, through every operator upstream, that aren't up to date: run_study each (the GUI's Evaluate up to here). An `error` with code operator_failed is that operator's own (a formula too large, a text where a number goes) or an input's. Without a name: every operator.
 
 Arguments: `name`.
 

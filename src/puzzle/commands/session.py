@@ -1185,7 +1185,15 @@ def _execute(project: Project, cmd: _Command) -> dict[str, Any]:
             raise PuzzleError(
                 f"no object kind '{cmd.kind}'", code="invalid", details={"kinds": sorted(KINDS)}
             )
-        obj = _validate(cls, cmd.data, cmd.data.get("name", cmd.kind))
+        data = cmd.data
+        new_table = cmd.kind == "operator" and data.get("type") == "result_table"
+        if new_table and data.get("layout") in (None, "setting"):
+            from puzzle.settings import current
+
+            # ADR-E-7: the layout a new table takes is the user's preference, made the
+            # operator's own now; it is never read again when the table is worked out.
+            data = {**data, "layout": current().get("results.table_layout")}
+        obj = _validate(cls, data, cmd.data.get("name", cmd.kind))
         if obj.id in project.objects:
             raise PuzzleError(f"an object with id {obj.id} exists", code="invalid")
         if cmd.kind == "units" and project.of_type(cls):
@@ -1206,6 +1214,8 @@ def _execute(project: Project, cmd: _Command) -> dict[str, Any]:
             _apply_op(data, op, obj.name)
         if data.get("id") != str(obj.id):
             raise PuzzleError("an object's id cannot change", code="invalid", path=obj.name)
+        if obj.kind == "operator" and data.get("layout") == "setting":
+            data["layout"] = "long"  # ADR-E-7: as it has been read since, now its own
         project.objects[obj.id] = _validate(type(obj), data, obj.name)
         try:
             _refuse_wiring(project, project.objects[obj.id])
@@ -1352,8 +1362,12 @@ def _validate(cls: type[ProjectObject], data: dict[str, Any], where: str) -> Pro
     try:
         return cls.model_validate(data)
     except ValidationError as exc:
+        errors = _errors(exc)
+        first = errors[0] if errors else None  # OP-15: the reason, so it can be put right
+        why = (f": {first['path'] + ': ' if first['path'] else ''}{first['message']}"
+               if first else "")  # fmt: skip
         raise PuzzleError(
-            f"invalid {cls.kind}", code="invalid", path=where, details={"errors": _errors(exc)}
+            f"invalid {cls.kind}{why}", code="invalid", path=where, details={"errors": errors}
         ) from None
 
 

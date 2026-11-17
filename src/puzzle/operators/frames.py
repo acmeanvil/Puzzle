@@ -214,11 +214,10 @@ def result_table(ctx, op):
     if not frames:
         raise PuzzleError(f"'{op.name}': nothing to put in the table", code="not_found")
     frame = pl.concat(frames, how="diagonal_relaxed")
-    layout = op.layout
-    if layout == "setting":
-        from puzzle.settings import current
-
-        layout = current().get("results.table_layout")
+    # ADR 0024, ADR-E-7: the operator's own layout, never a preference read now; an
+    # older one that says "setting" reads as long, the layout every result table had
+    # before the preference and the one the operators after it are written against.
+    layout = "wide" if op.layout == "wide" else "long"
     if layout == "wide" and len(frames) > 1:
         frame, kinds = _wide(frame, kinds, idcol)
     return _made(frame, kinds)
@@ -381,9 +380,21 @@ def filter_rows(ctx, op):
     if not op.condition.strip():
         return {"out": t}
     if op.syntax == "polars":
-        frame = t.frame.filter(polars_expression(op, op.condition, t))
+        expr = polars_expression(op, op.condition, t)
+        keep = _apply(op, lambda: t.frame.select(expr.alias("__keep"))["__keep"])
+        if keep.dtype != _pl().Boolean:  # OP-5: a condition holds or it doesn't
+            raise PuzzleError(f"'{op.name}': the condition gives {keep.dtype}, not true or "
+                              "false: compare it, as pl.col(\"von_mises\") > 2e8",
+                              code="invalid")  # fmt: skip
+        if keep.len() == 1 and t.frame.height != 1:
+            keep = _pl().Series([bool(keep[0])] * t.frame.height)
+        frame = t.frame.filter(keep.fill_null(False))
     else:
         mask, _ = _puzzle(op, op.condition, t)
+        if np.ndim(mask) and not np.isin(np.asarray(mask, float), (0.0, 1.0)).all():
+            raise PuzzleError(f"'{op.name}': the condition gives numbers, not true or "
+                              "false: compare it (von_mises > 200 MPa)",
+                              code="invalid")  # fmt: skip
         if np.ndim(mask) == 0:
             mask = np.full(t.frame.height, bool(mask))
         frame = t.frame.filter(_pl().Series(np.asarray(mask, bool)))
@@ -405,6 +416,8 @@ def top_n(ctx, op):
     col = _names(op, [op.column or t.columns[-1]], t)[0]
     count = ev._typed_number(ctx, op, "count")
     n = int(count.value) if count is not None else 10
+    if n < 1:  # OP-13: head(-3) would keep all but three
+        raise PuzzleError(f"'{op.name}': it keeps at least 1 row, not {n}", code="invalid")
     ordered = t.frame.sort(col, descending=op.largest, nulls_last=True)
     if op.by:
         _names(op, list(op.by), t)
@@ -419,11 +432,13 @@ def new_column(ctx, op):
     checked; or polars', its unit given (`unit`)."""
     pl = _pl()
     t = _table(op, _ev()._input(ctx, op, "table"))
-    name = op.new_name.strip() or "value"
+    name = op.new_name.strip()
+    if not name:  # OP-13: a name of its own (one already there is replaced)
+        raise PuzzleError(f"'{op.name}': give the new column a name", code="missing_input")
     kinds = _kinds(t)
     if op.syntax == "polars":
         expr = polars_expression(op, op.expression, t)
-        frame = t.frame.with_columns(expr.alias(name))
+        frame = _apply(op, lambda: t.frame.with_columns(expr.alias(name)))
         kinds[name] = _kind_of_unit(op.unit) if op.unit else None
         if op.unit:
             from puzzle.model.units import to_si
@@ -457,15 +472,24 @@ def convert_units(ctx, op):
 
 
 def round_values(ctx, op):
-    """Numbers rounded in their shown units (display or converted): `decimals` places,
-    or that many significant figures (`significant`). Values stay SI inside."""
+    """Numbers rounded to `decimals` places, or that many significant figures
+    (`significant`); values stay SI inside. Each column is rounded in the operator's
+    `unit` when it is of that unit's kind, else in the unit Convert units gave the
+    column, else in SI. Never in the display units:
+    a preference never changes a value (ADR 0024, ADR-E-6)."""
     pl = _pl()
     t = _table(op, _ev()._input(ctx, op, "table"))
     cols = _names(op, list(op.pick), t) if op.pick else [
         c for c in t.columns if t.frame[c].dtype.is_float()]  # fmt: skip
+    unit = op.unit.strip()
+    if unit:
+        from puzzle.model.units import known
+
+        if not known(unit):
+            raise PuzzleError(f"'{op.name}': unknown unit '{unit}'", code="invalid")
     exprs = []
     for c in cols:
-        factor = _shown_factor(t, c)  # SI → shown
+        factor = _round_factor(t, c, unit)  # SI → the unit rounded in
         x = pl.col(c) * factor
         if op.significant:
             mag = (x.abs().log10().floor() + 1).fill_nan(1).fill_null(1)
@@ -482,15 +506,20 @@ def _with_display(new, old):
     return new
 
 
-def _shown_factor(t, col) -> float:
-    """SI → the unit the column is shown in (its converted unit, else display units)."""
-    from puzzle.model.units import DIMENSIONS, convert
+def _round_factor(t, col, unit: str = "") -> float:
+    """SI → the unit a column is rounded in: `unit` when the column is of its kind, else
+    the column's own (`Table.units`), else SI (1). Offsets (°C) are not rounded in: a
+    temperature rounds in kelvin's steps, which °C shares."""
+    from puzzle.model.units import DIMENSIONS, convert, kind_of
 
     kind = _kinds(t).get(col)
-    if kind is None:
+    if kind is None or kind not in DIMENSIONS:
         return 1.0
-    unit = t.units.get(col) or _ev().display_unit(kind)
-    return convert(1.0, DIMENSIONS[kind][1], unit) if unit else 1.0
+    chosen = unit if unit and kind_of(unit) == kind else t.units.get(col, "")
+    if not chosen:
+        return 1.0
+    si = DIMENSIONS[kind][1]
+    return convert(1.0, si, chosen) - convert(0.0, si, chosen)
 
 
 def group(ctx, op):
@@ -537,8 +566,16 @@ def to_number(ctx, op):
     if s.len() == 0:
         raise PuzzleError(f"'{op.name}': {col} has no values", code="not_found")
     kind = _kinds(t).get(col)
+    numeric = s.dtype.is_numeric() or s.dtype == _pl().Boolean
+    if not numeric and (op.by or op.reduction not in ("first", "last", "count")):
+        raise PuzzleError(f"'{op.name}': {col} is text, so it has no "
+                          f"{op.reduction}: pick a number column (or first, last, count)",
+                          code="invalid")  # fmt: skip
     if op.by:
         key = _names(op, [op.by[0]], t)[0]
+        if not t.frame[key].dtype.is_numeric():
+            raise PuzzleError(f"'{op.name}': {key} is text, so it has no largest row",
+                              code="invalid")  # fmt: skip
         i = int(t.frame[key].arg_max())
         return {"out": ev.Number(float(t.frame[col][i]), kind, f"{col} where {key} is largest")}
     how = op.reduction if op.reduction in ("max", "min", "mean", "sum", "median", "first",
@@ -592,12 +629,21 @@ def polars_expression(op, text: str, t):
     lists and arithmetic. Never `eval`."""
     import operator
 
+    from puzzle.post.derived import MAX_NODES, MAX_TEXT
+
     pl = _pl()
+    if len(text) > MAX_TEXT:  # ADR-51: bounded work, whatever a project holds
+        raise PuzzleError(f"'{op.name}': the expression is longer than {MAX_TEXT} characters",
+                          code="invalid")  # fmt: skip
     try:
         tree = ast.parse(text.strip(), mode="eval")
-    except SyntaxError as exc:
-        raise PuzzleError(f"'{op.name}': not a polars expression: {exc.msg}",
+    except (SyntaxError, ValueError, RecursionError, MemoryError) as exc:
+        why = getattr(exc, "msg", None) or "it nests too deeply or holds too long a number"
+        raise PuzzleError(f"'{op.name}': not a polars expression: {why}",
                           code="invalid") from None  # fmt: skip
+    if sum(1 for _ in ast.walk(tree)) > MAX_NODES:
+        raise PuzzleError(f"'{op.name}': the expression has more than {MAX_NODES} parts",
+                          code="invalid")  # fmt: skip
     binary = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul,
               ast.Div: operator.truediv, ast.Pow: operator.pow, ast.Mod: operator.mod,
               ast.BitAnd: operator.and_, ast.BitOr: operator.or_}  # fmt: skip
@@ -613,6 +659,10 @@ def polars_expression(op, text: str, t):
         if isinstance(node, ast.Expression):
             return walk(node.body)
         if isinstance(node, ast.Constant) and isinstance(node.value, (int, float, str, bool)):
+            if isinstance(node.value, int) and abs(node.value) > BIGGEST:
+                refuse(f"a whole number over {BIGGEST:.0e}")
+            if isinstance(node.value, str) and len(node.value) > MAX_TEXT:
+                refuse("so long a text")
             return node.value
         if isinstance(node, (ast.List, ast.Tuple)):
             return [walk(e) for e in node.elts]
@@ -626,7 +676,7 @@ def polars_expression(op, text: str, t):
                 return ~v
             return v
         if isinstance(node, ast.BinOp) and type(node.op) in binary:
-            return binary[type(node.op)](walk(node.left), walk(node.right))
+            return _folded(binary[type(node.op)], node.op, walk(node.left), walk(node.right))
         if isinstance(node, ast.BoolOp):
             vals = [walk(v) for v in node.values]
             out = vals[0]
@@ -671,10 +721,65 @@ def polars_expression(op, text: str, t):
             return getattr(target, node.attr)
         refuse(type(node).__name__)
 
-    got = walk(tree)
+    def _folded(fn, how, left, right):
+        """Arithmetic on what was written: on a polars expression, polars' own (worked
+        out per row, bounded by the table); on two plain numbers, in floating point,
+        so no power tower or repeat grows without bound (ADR-51); never on texts or
+        lists, which Python would repeat."""
+        exprs = isinstance(left, pl.Expr) or isinstance(right, pl.Expr)
+        for v in (left, right):
+            if isinstance(v, list) or (isinstance(v, str) and not exprs):
+                refuse("arithmetic on a text or a list")
+        if exprs:
+            return fn(left, right)
+        a, b = float(left), float(right)
+        if isinstance(how, ast.Pow) and abs(b) > 1024:
+            raise PuzzleError(f"'{op.name}': the power {b:g} is too large to work out",
+                              code="invalid")  # fmt: skip
+        try:
+            out = fn(a, b)
+        except (OverflowError, ZeroDivisionError) as exc:
+            why = "it divides by zero" if isinstance(exc, ZeroDivisionError) else (
+                "a number in it is too large to work out")  # fmt: skip
+            raise PuzzleError(f"'{op.name}': {why}", code="invalid") from None
+        if isinstance(out, complex) or not math.isfinite(out):
+            raise PuzzleError(f"'{op.name}': a number in it is too large to work out",
+                              code="invalid")  # fmt: skip
+        return out
+
+    try:
+        got = walk(tree)
+    except PuzzleError:
+        raise
+    except (KeyboardInterrupt, SystemExit, MemoryError):
+        raise
+    except Exception as exc:  # noqa: BLE001 - polars' or Python's, in words (ADR-51)
+        raise _polars_error(op, exc) from None
     if not isinstance(got, pl.Expr):
         got = pl.lit(got)
     return got
+
+
+BIGGEST = 10**18  # the largest whole number a polars expression may write
+
+
+def _polars_error(op, exc: Exception) -> PuzzleError:
+    text = str(exc).strip().splitlines()[0] if str(exc).strip() else type(exc).__name__
+    if type(exc).__name__ == "ColumnNotFoundError":
+        return PuzzleError(f"'{op.name}': the table has no column {text}", code="not_found")
+    return PuzzleError(f"'{op.name}': polars could not do it: {text}", code="invalid")
+
+
+def _apply(op, how):
+    """Run a polars step (a filter, a new column), its errors in words."""
+    try:
+        return how()
+    except PuzzleError:
+        raise
+    except (KeyboardInterrupt, SystemExit, MemoryError):
+        raise
+    except Exception as exc:  # noqa: BLE001 - polars' errors, in words (ADR-51)
+        raise _polars_error(op, exc) from None
 
 
 # --- exports ---------------------------------------------------------------------------

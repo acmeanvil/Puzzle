@@ -487,7 +487,7 @@ run a study on Gmsh's and Netgen's meshes and compare (ADR 0019).
 
 the project's operators and their values (ADR 0062).
 
-`puzzle operators [-h] [--json] [--export] project [name]`
+`puzzle operators [-h] [--json] [--export] [--runs] [--read INPUT RUN] project [name]`
 
 | Argument | What |
 | --- | --- |
@@ -495,6 +495,8 @@ the project's operators and their values (ADR 0062).
 | `name` | one operator (default: all) |
 | `--json` | the values as JSON (SI) |
 | `--export` | write each export operator's file (or the one named) |
+| `--runs` | the runs each input wired from a study may read (ADR 0090) |
+| `--read` | the named operator's INPUT reads RUN, as --runs lists it ('current' for the study's run for its model now): one undoable change |
 
 <!-- key: cli:optimise -->
 ### puzzle optimise

@@ -70,9 +70,13 @@ def record(run_id, study, day, point=None):
 
 
 class Store:
+    """Hand-made runs. With `project`, each is keyed as its study is now (`run_hashes`),
+    so it is current (ADR 0090 decision 4); without, every run reads as stale."""
+
     root = "memory"
 
-    def __init__(self, study, swept=None):
+    def __init__(self, study, swept=None, project=None):
+        self.project = project
         self.records = [record("run", study, 1)]
         self.results = {"run": Results("calculix", [step(1), step(2), step(3)])}
         if swept is not None:  # thickness 1, 2, 4 mm scales the field by 1/t
@@ -82,7 +86,20 @@ class Store:
                 self.results[rid] = Results("calculix", [step(1, 1 / t)])
 
     def runs(self):
-        return self.records
+        if self.project is None:
+            return self.records
+        from dataclasses import replace
+
+        from puzzle.project.graph import run_hashes
+
+        keys = run_hashes(self.project)
+        out = []
+        for r in self.records:
+            study = next((s for s in self.project.of_type(Study) if str(s.id) == r.study_id),
+                         None)  # fmt: skip
+            got = keys.get(study.id, {}).get(r.solver) if study is not None else None
+            out.append(replace(r, run_key=got[0]) if got else r)
+        return out
 
     def read_results(self, run_id):
         return self.results[run_id]
@@ -99,7 +116,7 @@ def wire(source, port="out"):
 def setup():
     p = Project("p")
     study = p.add(Study(name="Heat", component=uuid4(), solver="calculix", steps=[]))
-    return p, study, ev.Context(p, Store(study.id))
+    return p, study, ev.Context(p, Store(study.id, project=p))
 
 
 def test_reduce_max_min_mean_and_integral(setup):
@@ -151,7 +168,7 @@ def test_a_result_tool_feeds_a_check(setup):
     p, study, ctx = setup
     probe = p.add(ResultProbe(name="Corner", source=study.id, type="point",
                               quantity="temperature:value", point=(1.0, 0.0, 0.0)))  # fmt: skip
-    inputs = {"value": wire(probe), "limit": OperatorInput(value=2.0)}
+    inputs = {"value": wire(probe), "limit": OperatorInput(value=Quantity(value=2, unit="K"))}
     check = p.add(Operator(name="Cool enough", type="check", compare="at_least", inputs=inputs))
     verdict = ev.value(ctx, check)
     assert verdict.passed and verdict.value == pytest.approx(3.0, rel=1e-5)
@@ -174,7 +191,7 @@ def test_plot_against_a_sweep(setup):
     swept = p.add(Study(name="Plates", component=uuid4(), solver="calculix", steps=[
         SweepStep(parameters=[SweepParameter(name="t", values=[
             Quantity(value=v, unit="mm") for v in (1, 2, 4)])])]))  # fmt: skip
-    ctx = ev.Context(p, Store(uuid4(), swept=swept.id))
+    ctx = ev.Context(p, Store(uuid4(), swept=swept.id, project=p))
     hot = p.add(Operator(name="Hottest", type="reduce", quantity="temperature:value",
                          inputs={"result": wire(swept, "result")}))  # fmt: skip
     plot = p.add(Operator(name="By thickness", type="plot", against="sweep",
@@ -192,7 +209,7 @@ def test_panel_shows_and_export_writes(setup, tmp_path):
     panel = p.add(Operator(name="Show", type="panel", inputs={"value": wire(hot)}))
     assert ev.shown(ctx, panel) == ("3 K", "")
     empty = p.add(Operator(name="Empty", type="panel"))
-    assert ev.shown(ctx, empty)[0] == "show value 'Empty': its value input is not wired"
+    assert ev.shown(ctx, empty)[0] == "Its value input is not wired"  # its name: on the node
     out = p.add(Operator(name="Max T", type="export", inputs={"value": wire(hot)}))
     written = ev.export(ctx, out, tmp_path)
     assert written == [tmp_path / "exports" / "Max_T.csv"]

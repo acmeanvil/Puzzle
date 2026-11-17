@@ -32,8 +32,13 @@ from puzzle.errors import PuzzleError
 _UNIT_AFTER = re.compile(r"(?<![\w.])(\d+(?:\.\d*)?(?:[eE][+-]?\d+)?)\s+([A-Za-zµ°Ω][\w]*)")
 
 
+# "5 %" or "5%" → "(5*percent)": a percentage, where % can't be the remainder (OP-14).
+_PERCENT = re.compile(r"(?<![\w.])(\d+(?:\.\d*)?(?:[eE][+-]?\d+)?)\s*%(?!\s*[\w.(])")
+
+
 def _prepared(text: str) -> str:
-    return _UNIT_AFTER.sub(r"(\1*\2)", text.replace("^", "**"))
+    text = _PERCENT.sub(r"(\1*percent)", text.replace("^", "**"))
+    return _UNIT_AFTER.sub(r"(\1*\2)", text)
 
 
 def evaluate(expression: str, values: dict[str, tuple]) -> tuple[np.ndarray | float, str | None]:
@@ -136,6 +141,19 @@ def evaluate(expression: str, values: dict[str, tuple]) -> tuple[np.ndarray | fl
             got = walk(tree)
     except DimensionalityError as exc:
         raise PuzzleError(f"the units don't agree: {_words(exc)}", code="invalid") from None
+    except PuzzleError:
+        raise
+    except (
+        ArithmeticError,
+        TypeError,
+        ValueError,
+        IndexError,
+        KeyError,
+        AttributeError,
+    ) as exc:  # OP-1: a formula's mistake is its error, in words
+        raise PuzzleError(_trouble(exc), code="invalid") from None
+    except Exception as exc:  # noqa: BLE001 - pint's own errors, among others
+        raise PuzzleError(_trouble(exc), code="invalid") from None
     if not hasattr(got, "magnitude"):  # a comparison: true or false
         return np.asarray(got, float) if np.ndim(got) else float(bool(got)), None
     base = got.to_base_units()
@@ -145,7 +163,32 @@ def evaluate(expression: str, values: dict[str, tuple]) -> tuple[np.ndarray | fl
         raise PuzzleError(f"the result's unit ({base.units:~P}) is not one Puzzle shows; "
                           "divide by a unit to make it one", code="invalid")  # fmt: skip
     magnitude = base.to(DIMENSIONS[kind][1]).magnitude if kind else base.magnitude
-    return (np.asarray(magnitude, float) if np.ndim(magnitude) else float(magnitude)), kind
+    if not np.ndim(magnitude):
+        if isinstance(magnitude, complex) or not np.isfinite(float(magnitude)):
+            raise PuzzleError("the result is not a number (a division by zero, or too "
+                              "large)", code="invalid")  # fmt: skip
+        return float(magnitude), kind
+    return np.asarray(magnitude, float), kind
+
+
+def _trouble(exc: Exception) -> str:
+    """A formula's failure in words (OP-1): what to change, not the exception."""
+    text = str(exc).strip().splitlines()[0] if str(exc).strip() else type(exc).__name__
+    name = type(exc).__name__
+    if isinstance(exc, OverflowError):
+        return "the result is too large to work out"
+    if isinstance(exc, ZeroDivisionError):
+        return "it divides by zero"
+    if "Offset" in name:
+        return ("a temperature in °C or °F can't be added or multiplied like that: use K, "
+                "or a difference (delta_degC)")  # fmt: skip
+    if isinstance(exc, IndexError) or (isinstance(exc, ValueError) and "empty" in text):
+        return "a function was given nothing to work on (min() or max() of no values?)"
+    if isinstance(exc, TypeError) and ("not supported between" in text):
+        return "a text can't be compared with a number"
+    if isinstance(exc, TypeError) or "UFunc" in name:
+        return "a text can't be used where a number is needed"
+    return f"it can't be worked out: {text}"
 
 
 EXTRA = ("asin", "acos", "atan", "atan2", "degrees", "radians", "clamp", "round", "floor",
@@ -205,12 +248,18 @@ def _extra(ureg, fn: str, args):
 def _words(exc) -> str:
     a = getattr(exc, "dim1", "") or ""
     b = getattr(exc, "dim2", "") or ""
-    if a and b:
+    if a or b:  # OP-15: "a number and mass / length / time ** 2", never pint's sentence
         return f"{_dim(a)} and {_dim(b)} can't be added, compared or converted"
     return str(exc)
 
 
 def _dim(d) -> str:
     text = str(d).strip("[]")
-    return "a number" if not text or text == "dimensionless" else text.replace("[", "").replace(
-        "]", "")  # fmt: skip
+    if not text or text == "dimensionless":
+        return "a number"
+    from puzzle.model.units import DIMENSIONS, registry
+
+    for name, si in DIMENSIONS.values():  # "a pressure and stress", not [mass] / ...
+        if str(registry().Unit(si).dimensionality) == str(d):
+            return f"a {name.lower().replace(' and ', ' or ')}"
+    return text.replace("[", "").replace("]", "")

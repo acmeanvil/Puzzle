@@ -437,3 +437,39 @@ def test_a_slice_draws_its_points_in_the_view(window):
     w.submit(Create(kind="operator", data=cut))
     assert gui_ops.preview_points(w, _op(w, "Cut")) > 0
     assert w.viewport.shown["field_points"] > 0
+
+
+def test_an_input_says_which_run_it_reads_and_a_stale_one_shows(window):
+    """ADR 0090 decision 4: the Run read row under a study's wire, and a value from a
+    run the model has moved on from drawn as stale."""
+    from puzzle.commands.model import Edit, EditOp
+
+    w = window
+    reduce_id = operators.new_operator(w, "reduce", str(_study(w).id), "result")
+    w.select_in_tree(("object", reduce_id))
+    box = w.properties.dropdown("inputs.result.run")
+    names = [box.itemText(i) for i in range(box.count())]
+    assert names[0] == "Its run for the model as it is now"
+    assert any(n.startswith("Run: Tip load · CalculiX") for n in names)
+    box.setCurrentIndex(next(i for i, n in enumerate(names) if n.startswith("Run: ")))
+    op = w.session.project.objects[UUID(reduce_id)]
+    assert op.inputs["result"].run is not None and op.inputs["result"].source == _study(w).id
+    node = w.schematic.items[reduce_id].node
+    assert "stale" not in node.value
+    comp = next(o for o in w.session.project.objects.values() if o.kind == "component")
+    y = comp.physics[0].features[1].values["y"]
+    w.submit(
+        Edit(
+            object=comp.name,
+            ops=[
+                EditOp(
+                    op="set",
+                    path="physics.0.features.1.values.y",
+                    value={"value": y.value * 2, "unit": y.unit},
+                )
+            ],
+        )
+    )
+    w.schematic.refresh()
+    node = w.schematic.items[reduce_id].node
+    assert "stale: from the run of Tip load" in node.value and node.state == "out_of_date"

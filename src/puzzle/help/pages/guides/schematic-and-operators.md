@@ -65,9 +65,14 @@ Every operator's node, with its inputs and outputs, is drawn on the
 ### A check against yield
 
 1. A **Result summary** (reduce) on the study's stress: maximum von Mises on a selection.
-2. A **Model value** reading the material's Yield strength.
+2. A **Model value** reading the material's Yield strength. The generic Structural
+   steel is any grade from S235 to S355, so it has none: give your material its yield
+   (Materials), use a grade that has one (ASTM A992, A36, ...), or type the limit.
 3. A **Check against limit** with the summary as its value and the yield as its limit.
    Its verdict is pass or fail; its margin is limit ÷ value − 1 (0.25 is 25 % to spare).
+   When the value is zero or negative, or the check is "at least", the margin is the
+   distance to the limit as a share of it, so a passing check never shows a negative
+   margin.
 
 ![Tip load's stress wired into a Result summary named Peak stress, and that into a Check against limit with a typed limit of 250 MPa; both wait for the study to run](image:screens/schematic-chain.png)
 
@@ -84,6 +89,24 @@ The limit can be typed, as here, instead of read from the material.
   in the Table tab. Export writes CSV, Parquet or Excel in the units shown.
 - A **Report** gathers checks, numbers, curves and tables into one HTML file. Right-click
   it (or an Export), Export now.
+
+## Which run an operator reads
+
+A study wired into an operator reads one of its stored runs, and Properties says which
+under the input (**Run read**):
+
+- By default, the study's run for the model as it is now. When the model has changed
+  since, there is none: the operator reads the newest run anyway, and says so: its node
+  turns out of date and its value reads "(stale: from the run of Tip load · CalculiX ·
+  2026-11-17 10:02)". A check on it says "Pass (stale: ...)", never a bare Pass. Nothing
+  is solved by itself: run the study (Evaluate up to here) when you want it current.
+- A **point**: a sweep point ("load = 300 N"), a mesh-convergence level or an adaptive
+  pass. A swept study read with no point is refused, saying how many points it has;
+  a Plot or Over the steps against the sweep reads every point, and a Points table
+  lists them.
+- A **solver**: one of a shoot-out's.
+- One **stored run**, held whatever changes later (still marked stale when the model
+  has moved on).
 
 ## Operators that drive the model
 
@@ -108,11 +131,22 @@ this project…; trust one only if you know where it came from.
   the studies whose model reads them by name (a history argument, a value wired to
   one, a sweep, a toggle); a Number nothing reads changes nothing.
 - Values inside are SI; units travel with them and a mismatch is refused.
+- An operator that can't be worked out (a formula too large, a text where a number goes)
+  shows its error on its node; the operators reading it say their input failed. One
+  before solving is a problem (`operator_failed`): the studies whose model reads it are
+  refused at run, the others run.
+- Preferences never change a value: Round rounds in the unit it names (Unit), else in
+  the unit Convert units gave the column, else SI, never in the display units; a
+  Result table keeps the layout it was made with (Settings > Results > Table layout
+  sets a new one's).
 
 ## Mistakes to avoid
 
 - A limit typed without its unit: a stress checked against "200" is refused. Type
-  "200 MPa".
+  "200 MPa". The same goes for Utilisation, Safety factor and Margin of safety: they
+  divide like by like.
+- Reading a swept study without choosing its point is refused: choose one under the
+  input, or plot over the points.
 - Arithmetic on two curves with different x values is refused: put Match x values first.
 - An operator that reads results can't drive the model (`inconsistent`): loops are an
   optimisation's job.

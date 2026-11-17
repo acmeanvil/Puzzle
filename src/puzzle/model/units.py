@@ -54,6 +54,9 @@ DIMENSIONS: dict[str, tuple[str, str]] = {
     "temperature_gradient": ("Temperature gradient", "K/m"),
     "temperature_rate": ("Rate of temperature change", "K/s"),
     "impulse": ("Impulse", "N*s"),
+    # a section's and a crack's (OP-14): a formula over them keeps its unit
+    "second_moment": ("Second moment of area", "m^4"),
+    "stress_intensity": ("Stress intensity factor", "Pa*m^0.5"),
 }
 # Unit systems: kind -> unit (kinds left out show in SI).
 SYSTEMS: dict[str, tuple[str, dict[str, str]]] = {
@@ -69,6 +72,8 @@ SYSTEMS: dict[str, tuple[str, dict[str, str]]] = {
             "force_per_length": "N/mm",
             "stress_gradient": "MPa/mm",
             "temperature_gradient": "K/mm",
+            "second_moment": "mm^4",
+            "stress_intensity": "MPa*m^0.5",
         },
     ),
     "consistent_mm": (
@@ -135,6 +140,8 @@ CHOICES: dict[str, list[str]] = {
     "temperature_gradient": ["K/m", "K/mm", "delta_degF/in"],
     "temperature_rate": ["K/s", "K/min", "K/hour"],
     "impulse": ["N*s", "kN*s", "lbf*s"],
+    "second_moment": ["m^4", "mm^4", "cm^4", "in^4"],
+    "stress_intensity": ["Pa*m^0.5", "MPa*m^0.5", "ksi*in^0.5"],
 }
 
 

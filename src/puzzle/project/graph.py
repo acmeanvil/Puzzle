@@ -192,6 +192,12 @@ def _own(obj: ProjectObject, *, drop: frozenset[str] = frozenset()) -> dict:
             if key in data and not f.is_required() and data[key] == f.get_default(
                     call_default_factory=True):  # fmt: skip
                 data.pop(key)
+        if data.get("layout") == "setting":  # read as long (ADR-E-7): older hashes kept
+            data.pop("layout")
+        for inp in (data.get("inputs") or {}).values():  # no run chosen, as before (OP-4)
+            for key in ("point", "solver", "run"):
+                if isinstance(inp, dict) and inp.get(key) is None:
+                    inp.pop(key, None)
     if obj.kind == "field":  # ADR 0044's region, step, times, axis unset: older hashes kept
         for key, default in (("region", ""), ("index", ""), ("times", []), ("axis", "time"),
                              ("source", None), ("port", "out")):  # fmt: skip

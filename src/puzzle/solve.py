@@ -21,11 +21,15 @@ from puzzle.jobs import JobResult, run_job, runtime_for
 from puzzle.jobs.runner import log_tail
 from puzzle.mesh import MeshResult, generate_mesh
 from puzzle.mesh.mesh import Mesh
-from puzzle.model.schema import Project, Study
+from puzzle.model.schema import Operator, Project, Study
 from puzzle.project.graph import run_hashes
 from puzzle.results.model import Results
 from puzzle.results.store import ResultStore
 from puzzle.transfer import Input, map_field, pick
+
+# An operator's own problems (ADR 0090, OP-1): they refuse only the runs whose model
+# reads that operator.
+OPERATOR_PROBLEMS = frozenset({"operator_input", "operator_failed"})
 
 
 class StudyError(PuzzleError, RuntimeError):
@@ -131,10 +135,21 @@ def _study_run(
     # Run keys come from the project as given, as status, the tree and MCP take them
     # (ADR 0090, BE-2): what the steps below change is in that project's hash already.
     keyed = project
+    from puzzle import operators
+
+    failed = operators.failures_read(project, project.get(study_id, Study))
+    if failed:  # OP-1: a parameter it reads can't be worked out, so it can't run
+        name = project.get(study_id, Study).name
+        raise StudyError(f"study '{name}' reads an operator that can't be worked out: "
+                         + "; ".join(e.message for e in failed), code="operator_failed",
+                         path=name, details={"problems": [e.message for e in failed]})  # fmt: skip
+    # The operators its model doesn't read: their problems are theirs, not this run's.
+    unread = {o.name for o in project.of_type(Operator)} - {
+        o.name for o in operators.read_by(project, project.get(study_id, Study))
+    }
     from puzzle.bolts import resolved
 
     project = resolved(project)  # bolts take their types' values (ADR 0050)
-    from puzzle import operators
 
     project = operators.resolved(project)  # sweeps take their lists' values (ADR 0062)
     project = operators.with_parameters(project)  # values wired to parameters (ADR 0071)
@@ -193,7 +208,12 @@ def _study_run(
             raise StudyError(exc.message, code=exc.code, path=study.name) from None
     # Bolts tightened in a step of their own before the loads, then locked (ADR 0037).
     project, study, preload_at = preload.applied(project, study)
-    problems = project.validate() + adapter.check(project, study)
+    problems = [
+        p.message
+        for p in project.problems()
+        if not (p.code in OPERATOR_PROBLEMS and p.object in unread)
+    ]
+    problems += adapter.check(project, study)
     if problems:
         raise StudyError("; ".join(problems), path=study.name, details={"problems": problems})
 

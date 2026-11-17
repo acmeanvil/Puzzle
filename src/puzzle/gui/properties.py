@@ -436,9 +436,18 @@ class PropertiesPanel(QTreeWidget):
         self._filling = True
         try:
             group = QTreeWidgetItem(self.invisibleRootItem(), ["Inputs", ""])
-            for key, title, options, current, typed in rows:
+            for key, title, options, current, typed, *more in rows:
                 item = QTreeWidgetItem(group, [title, ""])
                 self._dropdown(item, f"inputs.{key}", current, options, self._wired)
+                runs = more[0] if more else None
+                if runs is not None:  # ADR 0090 decision 4: which of the study's runs
+                    row = QTreeWidgetItem(item, ["Run read", ""])
+                    row.setToolTip(0, "Which of the study's runs this input reads: its run "
+                                   "for the model as it is now (a stale one is marked), a "
+                                   "sweep point, a solver or one stored run")  # fmt: skip
+                    self._dropdown(row, f"inputs.{key}.run", runs[1], runs[0],
+                                   lambda box, k=key: self._run_chosen(box, k))  # fmt: skip
+                    item.setExpanded(True)
                 if typed is not None:
                     row = QTreeWidgetItem(item, ["Typed value", typed])
                     row.setFlags(row.flags() | Qt.ItemFlag.ItemIsEditable)
@@ -476,6 +485,12 @@ class PropertiesPanel(QTreeWidget):
         button.clicked.connect(clicked)
         self.setItemWidget(item, 1, button)
         return button
+
+    def _run_chosen(self, box: QComboBox, key: str) -> None:
+        value = box.currentData()
+        if self._filling or not value:
+            return
+        self.edited.emit(self.object_id, f"inputs.{key}", value)
 
     def _wired(self, box: QComboBox) -> None:
         value = box.currentData()

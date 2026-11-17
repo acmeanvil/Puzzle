@@ -120,7 +120,9 @@ def test_expressions_check_units():
                        inputs={"x": wire(t)}))  # fmt: skip
     got = val(p, e)
     assert got.value == pytest.approx(0.030) and got.kind == "length"
-    e.expression = "x * x * x * x"  # m⁴ (a second moment of area): no kind Puzzle shows
+    e.expression = "x * x * x * x"  # m⁴, a second moment of area, has a kind (OP-14)
+    assert val(p, e).kind == "second_moment"
+    e.expression = "x * x * x * x * x"  # m⁵: no kind Puzzle shows
     with pytest.raises(PuzzleError, match="not one Puzzle shows"):
         val(p, e)
     e.expression = "x * 200 MPa * 10 mm"

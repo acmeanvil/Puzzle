@@ -177,6 +177,11 @@ def choices(project: Project, obj, path: str) -> list[tuple[str, Any]] | None:
         users = [c for c in project.of_type(Component) if c.mesh == owner.id]
         if users and all(c.dimension != "3d" for c in users):  # a 2D model's shapes
             out = [("Triangles", "tetrahedra"), ("Quadrilaterals", "hexahedra")]
+    if field == "layout" and getattr(owner, "kind", "") == "operator" and out is not None:
+        # ADR-E-7: a table's layout is its own; "as Settings say" is only an older file's
+        out = [("A row per item per step", "long"), ("A column per step", "wide")]
+        if owner.layout == "setting":
+            out.append(("Long (an older table's setting)", "setting"))
     if field == "quadrilaterals" and isinstance(owner, MeshRecipe):
         out = [("Quadrilaterals only", "all"), ("Mostly quadrilaterals, some triangles", "mixed")]
     if field == "optimiser" and isinstance(owner, MeshRecipe) and out is not None:

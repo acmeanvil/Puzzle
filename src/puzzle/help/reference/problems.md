@@ -231,6 +231,11 @@ A 2D model's faces must lie in the XY plane at z = 0.
 
 The command cannot be undone.
 
+<!-- key: problem:operator_failed, error:operator_failed -->
+### operator_failed
+
+An operator can't be worked out (a formula too large, a text where a number goes, an input that failed); a study whose model reads it can't run.
+
 <!-- key: problem:operator_input, error:operator_input -->
 ### operator_input
 

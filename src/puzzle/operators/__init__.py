@@ -697,10 +697,12 @@ TYPES: dict[str, OperatorType] = {
         ),
         OperatorType(
             "round", "Round", "Tables",
-            "Numbers rounded in their shown units: decimal places or significant figures.",
+            "Numbers rounded to decimal places or significant figures, in the unit it "
+            "names for columns of that kind, else in the unit Convert units gave a column, "
+            "else SI; never in the display units.",
             (PortSpec("table", "Table", ("table",)),),
             (PortSpec("out", "Table", ("table",)),),
-            ("pick", "decimals", "significant"),
+            ("pick", "decimals", "significant", "unit"),
         ),
         OperatorType(
             "group", "Group and aggregate", "Tables",
@@ -764,7 +766,7 @@ TYPES: dict[str, OperatorType] = {
         OperatorType(
             "pivot", "Pivot", "Tables",
             "Long to wide: a row per key, a column per value of another column (a column "
-            "per step, per solver).",
+            "per step, per solver; at most 200).",
             (PortSpec("table", "Table", ("table",)),),
             (PortSpec("out", "Table", ("table",)),),
             ("by", "column", "pick", "reduction"),
@@ -1392,14 +1394,26 @@ def output_type(project, source: UUID, port: str, seen=()) -> str | None:
     obj = project.objects.get(source)
     if obj is None:
         return None
-    if isinstance(obj, Study):  # any field: a run may hold more than the catalog lists
-        return "table" if port == "points" else "result"
+    if isinstance(obj, Study):  # a field a run may hold, if not one the catalog lists
+        if port == "points":
+            return "table"
+        return "result" if port in ("result", "out") or port in study_fields(project, obj) \
+            else None  # fmt: skip
     from puzzle.model.schema import Operator
 
     if isinstance(obj, Operator) and obj.type in FOLLOWS_INPUTS and port == "out":
         return arithmetic_type(project, obj, seen)
     found = next((t for k, _, t in outputs_of(project, obj) if k == port), None)
     return found
+
+
+def study_fields(project, study) -> set[str]:
+    """The field ports a study offers (OP-8): what its physics make (the catalog), and
+    any field Puzzle knows a run can hold (a reaction force, a plastic strain)."""
+    from puzzle.post.quantities import SCALARS, TENSORS, VECTORS
+    from puzzle.schematic import outputs
+
+    return set(outputs(project, study)) | set(VECTORS) | set(TENSORS) | set(SCALARS)
 
 
 def sources(project, op, key: str) -> list[tuple[str, str, str]]:
@@ -1497,6 +1511,45 @@ def refuse(project, op) -> None:
             raise PuzzleError(
                 f"{spec_of.label} '{op.name}': its {spec.label.lower()} input must be wired",
                 code="invalid", path=op.name)  # fmt: skip
+        if inp.chosen():
+            _refuse_choice(project, op, spec, inp)
+    _refuse_settings(project, op)
+
+
+def _refuse_choice(project, op, spec, inp) -> None:
+    """A run chosen (ADR 0090 decision 4) only on a wire from a study or a result tool
+    of one, and only a solver the study runs."""
+    from puzzle.model.schema import ResultProbe, Study
+
+    src = project.objects.get(inp.source) if inp.source else None
+    if isinstance(src, ResultProbe):
+        src = project.objects.get(src.source)
+    if not isinstance(src, Study):
+        raise PuzzleError(
+            f"'{op.name}': its {spec.label.lower()} input reads no study, so no run is "
+            "chosen there (choose it where the study is wired in)", code="invalid",
+            path=op.name)  # fmt: skip
+    if inp.solver and inp.solver not in src.all_solvers():
+        raise PuzzleError(
+            f"'{op.name}': study '{src.name}' doesn't run {inp.solver} (it runs "
+            f"{', '.join(src.all_solvers())})", code="invalid", path=op.name)  # fmt: skip
+
+
+def _refuse_settings(project, op) -> None:
+    """Settings that are accepted but mean nothing (OP-13)."""
+    if op.type == "slider" and op.low is not None and op.high is not None:
+        from puzzle.model.units import kind_of
+
+        def kind(q):
+            return kind_of(q.unit) if q.unit and q.unit != "dimensionless" else None
+
+        if kind(op.low) == kind(op.high) and op.low.to_si() > op.high.to_si():
+            raise PuzzleError(f"slider '{op.name}': its lowest value is above its highest",
+                              code="invalid", path=op.name)  # fmt: skip
+        if op.increment is not None and kind(op.increment) != kind(op.low):
+            raise PuzzleError(f"slider '{op.name}': it steps in {op.increment.unit}, which "
+                              f"isn't the kind of {op.low.unit}", code="invalid",
+                              path=op.name)  # fmt: skip
 
 
 def _types(types: tuple[str, ...]) -> str:
@@ -1526,13 +1579,34 @@ def problems(project) -> list[Problem]:
             refuse(project, op)
         except PuzzleError as exc:
             out.append(Problem("operator_input", op.name, exc.message, {}))
+    # OP-1: a before-solving operator that can't be worked out is a problem of its own,
+    # so the tree, the Advisor and the outline show it; a study reading it can't run.
     # ADR 0071: a value following a parameter that isn't one (renamed, or deleted).
     bound = [(obj, path, q) for obj in project.objects.values()
              for path, q in bound_quantities(obj)]  # fmt: skip
+    failed: dict[str, PuzzleError] = {}
+    # Scripts are run only when a value follows a parameter, as before: not on every
+    # refresh for their problems alone.
+    values = parameter_values(project, failed=failed, scripts=bool(bound))
+    if failed:
+        from puzzle.operators.evaluate import bare
+
+        by_name = {o.name: o for o in project.of_type(Operator)}
+    for name, exc in failed.items():
+        op = by_name[name]
+        out.append(Problem("operator_failed", name, f"{TYPES[op.type].label.lower()} "
+                           f"'{name}' can't be worked out: {bare(op, exc.message)}",
+                           {"code": exc.code} | exc.details))  # fmt: skip
     if bound:
-        names = set(parameter_values(project))
+        names = set(values)
         for obj, path, q in bound:
-            if q.parameter not in names:
+            if q.parameter in failed:
+                out.append(Problem(
+                    "operator_failed", obj.name,
+                    f"{obj.kind} '{obj.name}': {path} follows parameter '{q.parameter}', "
+                    "which can't be worked out", {"path": path,
+                                                  "parameter": q.parameter}))  # fmt: skip
+            elif q.parameter not in names:
                 out.append(Problem(
                     "operator_input", obj.name,
                     f"{obj.kind} '{obj.name}': {path} follows parameter '{q.parameter}', "
@@ -1666,7 +1740,10 @@ def describe(project, op) -> str:
             src = project.objects.get(inp.source)
             name = src.name if src is not None else "?"
             port = "" if inp.port in ("out", "result") else f".{inp.port}"
-            wired.append(f"{spec.key} <- {name}{port}")
+            which = (f" at {inp.point}" if inp.point else "") + (
+                f" on {inp.solver}" if inp.solver else "") + (
+                " (one stored run)" if inp.run else "")  # fmt: skip
+            wired.append(f"{spec.key} <- {name}{port}{which}")
         else:
             from puzzle.model.schema import Quantity
 
@@ -1689,6 +1766,8 @@ def inputs_from(project, given: dict) -> dict:
         inp = dict(inp)
         if inp.get("source"):
             inp["source"] = str(resolve(project, str(inp["source"])).id)
+        if inp.get("run"):  # ADR 0090 decision 4: a stored run by the tree's name
+            inp["run"] = run_by_name(project, inp["source"], str(inp["run"]))
         value = inp.get("value")
         if isinstance(value, str):
             number, _, unit = value.strip().partition(" ")
@@ -1696,6 +1775,55 @@ def inputs_from(project, given: dict) -> dict:
                 inp["value"] = {"value": float(number), "unit": unit.strip() or "dimensionless"}
         out[key] = inp
     return out
+
+
+def run_choices(project, store, source) -> list[tuple[str, dict]]:
+    """Which runs a wire from `source` (a study, or a result tool of one) may read, as
+    (name, choice) for Properties and the agent (ADR 0090 decision 4): the current run,
+    each sweep point, mesh level and adaptive pass by its title, each shoot-out solver,
+    then each stored run by the tree's name. Empty for anything else."""
+    from puzzle.adapters import SOLVER_NAMES
+    from puzzle.model.schema import ResultProbe, Study
+    from puzzle.sweep import title
+
+    obj = project.objects.get(source)
+    if isinstance(obj, ResultProbe):
+        obj = project.objects.get(obj.source)
+    if not isinstance(obj, Study):
+        return []
+    out: list[tuple[str, dict]] = [("Its run for the model as it is now", {})]
+    runs = []
+    if store is not None:
+        try:
+            runs = [r for r in reversed(store.runs()) if r.study_id == str(obj.id)
+                    and r.status == "completed"]  # fmt: skip
+        except Exception:  # noqa: BLE001 - no store yet: nothing has run
+            runs = []
+    points = list(dict.fromkeys(title(r.point_labels()) for r in runs if r.point_labels()))
+    out += [(f"Point: {p}", {"point": p}) for p in points]
+    out += [(f"Solver: {SOLVER_NAMES.get(s, s)}", {"solver": s})
+            for s in obj.all_solvers()[1:]]  # fmt: skip
+    from puzzle.operators.evaluate import run_name
+
+    out += [(f"Run: {run_name(project, r)}", {"run": r.run_id}) for r in runs]
+    return out
+
+
+def run_by_name(project, source: str, name: str) -> str:
+    """A stored run's id from its name as the tree shows it (or its id)."""
+    from pathlib import Path
+
+    from puzzle.project.layout import RESULTS_DIR
+    from puzzle.results.store import ResultStore
+
+    root = getattr(project, "root", None)
+    if root is None or not (Path(root) / RESULTS_DIR).exists():
+        return name
+    for label, choice in run_choices(project, ResultStore(Path(root) / RESULTS_DIR),
+                                     UUID(str(source))):  # fmt: skip
+        if "run" in choice and (choice["run"] == name or label.removeprefix("Run: ") == name):
+            return choice["run"]
+    raise PuzzleError(f"no stored run '{name}' of that study", code="not_found")
 
 
 def is_pre(project, op, seen=()) -> bool:
@@ -1742,15 +1870,20 @@ def reads_geometry(project, op, seen: frozenset = frozenset()) -> bool:
     return False
 
 
-def parameter_values(project, overrides: dict | None = None) -> dict[str, float]:
+def parameter_values(project, overrides: dict | None = None, failed: dict | None = None,
+                     scripts: bool = True) -> dict[str, float]:  # fmt: skip
     """Every parameter by name, SI: the parameter sets' values, then each pre-solve
     number operator's (Number, Slider, a number Expression) by the operator's name.
-    `overrides` (operator id -> SI value) are a slider being dragged (the preview's)."""
+    `overrides` (operator id -> SI value) are a slider being dragged (the preview's).
+    Never raises (OP-1): an operator that can't be worked out is left out, and with
+    `failed` given, put there (operator name -> its PuzzleError; an untrusted project's
+    held scripts are its own problem). `scripts` False leaves script operators out."""
     from puzzle.model.schema import ParameterSet
 
     out = {k: q.to_si() for ps in project.of_type(ParameterSet) for k, q in ps.values.items()}
     numbers = [o for o in pre_solve(project) if TYPES[o.type].outputs
                and first_type(o, project) == "number"
+               and (scripts or o.type != "script")
                and not reads_geometry(project, o)]  # fmt: skip
     if not numbers:
         return out
@@ -1758,19 +1891,64 @@ def parameter_values(project, overrides: dict | None = None) -> dict[str, float]
 
     ctx = ev.Context(project, None, overrides=dict(overrides or {}))
     for op in numbers:
-        if op.type == "slider2d":  # two parameters: <name>_x and <name>_y
-            try:
-                out.setdefault(f"{op.name}_x", ev.value(ctx, op, "x").value)
-                out.setdefault(f"{op.name}_y", ev.value(ctx, op, "y").value)
-            except PuzzleError:
-                pass
-            continue
         try:
+            if op.type == "slider2d":  # two parameters: <name>_x and <name>_y
+                x, y = ev.value(ctx, op, "x").value, ev.value(ctx, op, "y").value
+                out.setdefault(f"{op.name}_x", x)
+                out.setdefault(f"{op.name}_y", y)
+                continue
             got = ev.value(ctx, op)
-        except PuzzleError:
-            continue  # an operator in error: its problem says why
+        except (KeyboardInterrupt, SystemExit, MemoryError):
+            raise
+        except Exception as exc:  # noqa: BLE001 - an operator in error: its problem says why
+            if failed is not None and getattr(exc, "code", "") != "untrusted":
+                failed[op.name] = exc if isinstance(exc, PuzzleError) else ev.failure(op, exc)
+            continue
         if isinstance(got, ev.Number):
             out.setdefault(op.name, got.value)
+    return out
+
+
+def read_by(project, study) -> list:
+    """The operators a study's model reads: those it names (as its run key finds them,
+    ADR 0090 package 1) and every operator those read."""
+    from puzzle.model.schema import Operator
+    from puzzle.project.graph import _Graph
+
+    if not project.of_type(Operator):
+        return []
+    graph = _Graph(project, getattr(project, "root", None))
+    seen: set = set()
+    frontier = [d for d in graph.deps.get(study.id, []) if d in project.objects]
+    read = []
+    while frontier:
+        oid = frontier.pop()
+        obj = project.objects.get(oid)
+        if oid in seen or not isinstance(obj, Operator):
+            continue
+        seen.add(oid)
+        read.append(obj)
+        frontier += [d for d in obj.dependencies() if d not in seen]
+    return read
+
+
+def failures_read(project, study) -> list[PuzzleError]:
+    """The before-solving operators a study's model reads that can't be worked out: it
+    can't run without them (OP-1)."""
+    from puzzle.operators import evaluate as ev
+
+    read = read_by(project, study)
+    if not read:
+        return []
+    ctx = ev.Context(project, None)
+    out = []
+    for op in read:
+        if op.type not in DATA or not is_pre(project, op) or reads_geometry(project, op):
+            continue
+        try:
+            ev.outputs(ctx, op)
+        except PuzzleError as exc:
+            out.append(exc)
     return out
 
 
@@ -1824,7 +2002,7 @@ def bound_quantities(obj, path: str = ""):
             yield from bound_quantities(v, f"{path}.{i}" if path else str(i))
 
 
-def _with_values(obj, values: dict, owner: str):
+def _with_values(obj, values: dict, owner: str, failed: dict | None = None):
     """`obj` with every parameter-bound quantity's value put in (SI, in its own unit)."""
     from pydantic import BaseModel
 
@@ -1834,6 +2012,10 @@ def _with_values(obj, values: dict, owner: str):
     if isinstance(obj, Quantity):
         if not obj.parameter:
             return obj
+        if failed and obj.parameter in failed:  # OP-1: said as what it is
+            raise PuzzleError(f"{owner}: a value follows parameter '{obj.parameter}', which "
+                              f"can't be worked out: {failed[obj.parameter].message}",
+                              code="operator_failed")  # fmt: skip
         if obj.parameter not in values:
             raise PuzzleError(f"{owner}: a value follows parameter '{obj.parameter}', which "
                               "doesn't exist (a parameter set's value, or a Number, Slider "
@@ -1844,15 +2026,15 @@ def _with_values(obj, values: dict, owner: str):
         changed = {}
         for name in type(obj).model_fields:
             old = getattr(obj, name)
-            new = _with_values(old, values, owner)
+            new = _with_values(old, values, owner, failed)
             if new is not old:
                 changed[name] = new
         return obj.model_copy(update=changed) if changed else obj
     if isinstance(obj, dict):
-        out = {k: _with_values(v, values, owner) for k, v in obj.items()}
+        out = {k: _with_values(v, values, owner, failed) for k, v in obj.items()}
         return out if any(out[k] is not obj[k] for k in obj) else obj
     if isinstance(obj, list):
-        out = [_with_values(v, values, owner) for v in obj]
+        out = [_with_values(v, values, owner, failed) for v in obj]
         return out if any(a is not b for a, b in zip(out, obj, strict=True)) else obj
     return obj
 
@@ -1867,11 +2049,12 @@ def with_parameters(project):
         return project
     import copy
 
-    values = parameter_values(project)
+    failed: dict[str, PuzzleError] = {}
+    values = parameter_values(project, failed=failed)
     out = copy.copy(project)
     out.objects = dict(project.objects)
     for oid, obj in bound:
-        out.objects[oid] = _with_values(obj, values, f"{obj.kind} '{obj.name}'")
+        out.objects[oid] = _with_values(obj, values, f"{obj.kind} '{obj.name}'", failed)
     return out
 
 

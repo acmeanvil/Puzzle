@@ -280,6 +280,32 @@ given; it awaits the maintainer's word, then 0062 is amended. Tests:
 solves uncounted; outside MCP clients have no Stop; the macOS and Linux sandboxes were
 not run (this machine is Windows); AGENT-9 unconfirmed and unchanged.
 
+**Package 4 built (2026-11-17):** an operator's error is a value, as a spreadsheet
+cell's is: `evaluate.outputs` and `parameter_values` turn any exception into that
+operator's problem (`operator_failed`, the cause in words), and an operator that reads
+it says which input failed (OP-1, OP-5). A failed before-solving operator is in
+`Project.problems`; only the studies whose model reads it are refused, and operator
+problems elsewhere no longer refuse a run. An input from a study says which run it
+reads (decision 4): `OperatorInput.point`, `solver` and `run`, written only when set.
+By default it is the study's run for its set-up now, by the same keys as status; when
+only older runs exist the newest is read and marked stale with its name, on the node,
+in `puzzle operators`, in MCP `operator_value`, in a report, and in a verdict ("Pass
+(stale: from the run of ...)"); a swept study with no point chosen is refused, not read
+at whichever ran last (OP-4). Properties has Run read under each such input; MCP takes
+`point`, `solver` or `run` by name; `puzzle operators P NAME --runs` and `--read`.
+Checks compare like with like, and a verdict never contradicts its margin (OP-6, OP-7).
+Expressions in both languages are bounded in length, nodes and exponents (ADR-51,
+OP-16). Round rounds in its own unit, else the column's, else SI; a table's layout is
+the operator's own, taken from the preference once when it is made
+(`tests/test_preferences_never_change_results.py`: 57 operator types and a results
+pipeline under four preference sets, identical parameters, keys and values; ADR-E-6,
+ADR-E-7). New kinds `second_moment` and `stress_intensity`. `SCHEMA_VERSION` stays 1:
+untouched projects are written as before; one using a run selector is refused by an
+older build as `unknown_field`. Tests: `tests/test_operator_safety.py`. Left: derived
+results and the GUI's result tools still read the newest run unmarked (package 13);
+the generic Structural steel has no yield strength by choice, and the guide's recipe
+names A992 or A36 or a typed limit; `problems()` costs 0.3 ms more a refresh.
+
 ### Enhancements toward the state of the art
 
 From `state-of-the-art.md` (50 gaps, each with who has it, which open solver can deliver

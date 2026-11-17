@@ -2720,6 +2720,23 @@ class OperatorInput(BaseModel):
     value: Quantity | float | str | None = Field(
         default=None, description="typed in, when nothing is wired: 200 MPa"
     )
+    # ADR 0090 decision 4: which of a study's runs a wire from it reads. None of them set:
+    # the study's own run for its set-up now (else its newest, marked stale). Written
+    # only when set, so files without them read as before.
+    point: str | None = Field(
+        default=None, description="a study wired in: the sweep point, mesh-convergence "
+        "level or adaptive pass read, by its title (\"load = 300 N\", \"mesh = level 2: "
+        "4 mm\")")  # fmt: skip
+    solver: str | None = Field(
+        default=None, description="a study wired in: the shoot-out solver whose run is "
+        "read; none: the study's primary solver")  # fmt: skip
+    run: str | None = Field(
+        default=None, description="a study wired in: one stored run, held whatever "
+        "changes later (its id; shown by its name)")  # fmt: skip
+
+    def chosen(self) -> bool:
+        """Whether a particular run is asked for (ADR 0090 decision 4)."""
+        return bool(self.point or self.solver or self.run)
 
 
 class Operator(ProjectObject):
@@ -2871,9 +2888,14 @@ class Operator(ProjectObject):
     steps: Literal["one", "all"] = Field(
         default="one", description="result table: the step `step`, or every step"
     )
+    # ADR 0024, ADR 0090 (ADR-E-7): the layout is the operator's own, never a preference
+    # read when it is worked out. A new one takes Settings > Results > Table layout when
+    # it is made (commands.session); "setting", which older files hold, reads as long
+    # and becomes long when the operator is next edited.
     layout: Literal["setting", "long", "wide"] = Field(
-        default="setting", description="result table: a row per item per step (long), a "
-        "column per step (wide), or as Settings > Results > Table layout says")  # fmt: skip
+        default="long", description="result table: a row per item per step (long) or a "
+        "column per step (wide); a new one starts as Settings > Results > Table layout "
+        "says")  # fmt: skip
     pick: list[str] = Field(
         default_factory=list, description='columns, round: these columns, in order; '
         '"von_mises as vm" renames')  # fmt: skip
@@ -2892,7 +2914,8 @@ class Operator(ProjectObject):
     new_name: str = Field(default="", description="new column: its name")
     unit: str = Field(
         default="", description="convert units: the column's unit; new column (polars): "
-        "its result's unit")  # fmt: skip
+        "its result's unit; round: the unit the columns of its kind are rounded in "
+        "(others in the unit Convert units gave them, else SI)")  # fmt: skip
     decimals: int = Field(default=3, ge=0, le=15, description="round: places or figures")
     significant: bool = Field(default=False, description="round: significant figures")
     how: Literal["inner", "left", "full"] = Field(

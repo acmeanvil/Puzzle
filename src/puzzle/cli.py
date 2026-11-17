@@ -504,6 +504,11 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", help="the values as JSON (SI)")
     p.add_argument("--export", action="store_true",
                    help="write each export operator's file (or the one named)")  # fmt: skip
+    p.add_argument("--runs", action="store_true",
+                   help="the runs each input wired from a study may read (ADR 0090)")  # fmt: skip
+    p.add_argument("--read", nargs=2, metavar=("INPUT", "RUN"),
+                   help="the named operator's INPUT reads RUN, as --runs lists it ('current' "
+                   "for the study's run for its model now): one undoable change")  # fmt: skip
     p.set_defaults(handler=_operators)
 
     p = sub.add_parser("table", help="a table operator's rows (ADR 0064), in display units")
@@ -1600,7 +1605,22 @@ def _operators(args) -> int:
     project = _load(args.project)
     ops = ([resolve(project, args.name, Operator)] if args.name
            else project.of_type(Operator))  # fmt: skip
-    ctx = ev.Context(project, _store(args.project))
+    ctx = ev.Context(project, _store(args.project), root=args.project)
+    if args.read:
+        return _operators_read(args, project, ops, ctx.store)
+    if args.runs:
+        from puzzle.operators import run_choices
+
+        for op in ops:
+            for key, inp in op.inputs.items():
+                found = run_choices(project, ctx.store, inp.source) if inp.source else []
+                if found:
+                    print(f"{op.name}.{key}:")
+                    for label, choice in found:
+                        mark = "*" if all(getattr(inp, k) == v for k, v in choice.items()) and (
+                            bool(choice) == inp.chosen()) else " "  # fmt: skip
+                        print(f"  {mark} {label}")
+        return 0
     if args.export:
         for op in ops:
             if op.type in ("export", "report"):
@@ -1615,6 +1635,34 @@ def _operators(args) -> int:
     for op in ops:
         text = ev.detail(ctx, op)
         print(f"{op.name}: {text}\n    {describe(project, op)}")
+    return 0
+
+
+def _operators_read(args, project, ops, store) -> int:
+    """`operators P NAME --read INPUT RUN`: which run an input reads, as one Edit."""
+    from puzzle.commands import Session
+    from puzzle.commands.model import Edit, EditOp
+    from puzzle.operators import run_choices
+
+    if not args.name:
+        print("name the operator whose input reads the run")
+        return 2
+    op = ops[0]
+    key, wanted = args.read
+    inp = op.inputs.get(key)
+    if inp is None or inp.source is None:
+        print(f"{op.name} has no input '{key}' wired")
+        return 2
+    found = run_choices(project, store, inp.source)
+    pick = next((c for label, c in found if wanted in (label, label.split(": ", 1)[-1])),
+                {} if wanted == "current" else None)  # fmt: skip
+    if pick is None:
+        print(f"no run '{wanted}'; choose one of: " + "; ".join(lb for lb, _ in found))
+        return 2
+    value = {"source": str(inp.source), "port": inp.port, **pick}
+    Session(args.project).submit(Edit(object=str(op.id), ops=[
+        EditOp(op="set", path=f"inputs.{key}", value=value)]))  # fmt: skip
+    print(f"{op.name}.{key} reads {wanted}")
     return 0
 
 

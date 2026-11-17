@@ -2039,9 +2039,15 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
     @tool(
         description="An operator's value (ADR 0062): its outputs in SI (a number with its "
         "unit and where a maximum is, a verdict with its margin, a table's rows), what the "
-        "schematic node shows, and how it is wired. `needs_runs`: the studies it reads, "
-        "through every operator upstream, that aren't up to date: run_study each (the "
-        "GUI's Evaluate up to here). Without a name: every operator."
+        "schematic node shows, and how it is wired. `runs`: the stored runs it read, each "
+        "with `stale` (true: not the study's run for its model now; `stale` on the whole "
+        "says any was, and a stale verdict is no pass). `run_choices`: per input wired from "
+        "a study, the runs it may read (give one to operator_add or an edit as `point`, "
+        "`solver` or `run`). `needs_runs`: the studies it reads, through every operator "
+        "upstream, that aren't up to date: run_study each (the GUI's Evaluate up to "
+        "here). An `error` with code operator_failed is that operator's own (a formula "
+        "too large, a text where a number goes) or an input's. Without a name: every "
+        "operator."
     )
     @guarded
     def operator_value(name: str | None = None) -> dict[str, Any]:
@@ -2073,7 +2079,7 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
     def _operator_values(s: Session, name: str | None) -> list[dict[str, Any]]:
         from puzzle.commands import resolve
         from puzzle.model.schema import Operator
-        from puzzle.operators import describe, studies_read
+        from puzzle.operators import describe, run_choices, studies_read
         from puzzle.operators import evaluate as ev
         from puzzle.project.layout import RESULTS_DIR
         from puzzle.project.status import status
@@ -2092,8 +2098,12 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
             needs = [x.name for x in studies_read(s.project, op)
                      if states.get(str(x.id)) is None
                      or states[str(x.id)].state != "up_to_date"]  # fmt: skip
+            choices = {k: [label for label, _ in run_choices(s.project, store, inp.source)]
+                       for k, inp in op.inputs.items() if inp.source is not None}  # fmt: skip
+            choices = {k: v for k, v in choices.items() if v}
             out.append(ev.summary(ctx, op) | {"wiring": describe(s.project, op),
-                                               "needs_runs": needs})  # fmt: skip
+                                               "needs_runs": needs}
+                       | ({"run_choices": choices} if choices else {}))  # fmt: skip
         return out
 
     @tool(
@@ -2102,7 +2112,11 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         "pairs (data, before solving: Numbers, Sliders and Expressions then act as "
         "parameters by their name); `inputs` by port, each {source: a study, derived "
         "result, result tool, parameter set or operator by name, port: its output} or "
-        "{value: '200 MPa'}; `settings` its own fields (quantity, selection, reduction, "
+        "{value: '200 MPa'}; a wire from a study (or its result tool) may say which run "
+        "it reads: point (a sweep point, mesh level or adaptive pass by its title, "
+        "'load = 300 N'), solver (a shoot-out's) or run (a stored run by its name), else "
+        "the study's run for its model now; a swept study needs its point; `settings` its "
+        "own fields (quantity, selection, reduction, "
         "step, keep, compare, against, file, format, low, high, increment, expression, "
         "text, operation, column, combination). A study's ports: result, or a field "
         "(stress). Read the skill schematic-operators first, and operator_help for what a "
