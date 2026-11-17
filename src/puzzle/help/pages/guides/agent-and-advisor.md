@@ -24,6 +24,8 @@ project needs next.
    drop or paste one. A remote provider doesn't get images or files unless you allow it.
 5. **New chat** starts again.
 
+![The agent window: a question, the tools the agent used folded into one line, its answer with an equation, and the proposal it made waiting below with Accept and Reject](image:screens/agent-window.png)
+
 ## How to choose what the agent may do
 
 The **Agents may** dropdown at the top of the panel sets the project's autonomy:
@@ -62,6 +64,8 @@ proposed. Agents can never change the autonomy themselves.
 3. Each step is done, needed or optional, with its reason. The heading names the next
    one; its button goes where the fix is made.
 4. In an empty project, **Try the cantilever example** opens a worked model.
+
+![The Advisor on the cantilever example: the next step named at the top, each step ticked when done, and a button beside the ones to do](image:screens/advisor.png)
 
 <!-- key: form:who_may_connect -->
 ## Outside agents over MCP

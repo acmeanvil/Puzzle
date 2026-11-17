@@ -28,6 +28,8 @@ along a wall, a table, a report.
 5. A click selects the object in the tree and Properties; a double-click opens it where
    it is edited; a right-click gives the tree's own menu.
 
+![The cantilever example's schematic: its geometry file, resources, loads and component in columns, its three studies, and a Result summary and a Check against limit wired from Tip load's stress](image:screens/schematic.png)
+
 ## How to build in the schematic
 
 1. **New ▾** above the canvas, or a right-click on the empty canvas, holds the tree's
@@ -55,12 +57,21 @@ along a wall, a table, a report.
 5. Right-click an operator, Evaluate up to here: it runs the studies it reads that are
    not up to date, then shows its value on its node.
 
+![The operator palette searching for "check": the matching operators, and what the chosen one does](image:screens/operator-palette.png)
+
+Every operator's node, with its inputs and outputs, is drawn on the
+[Operators](help:reference/operators) reference page.
+
 ### A check against yield
 
 1. A **Result summary** (reduce) on the study's stress: maximum von Mises on a selection.
 2. A **Model value** reading the material's Yield strength.
 3. A **Check against limit** with the summary as its value and the yield as its limit.
    Its verdict is pass or fail; its margin is limit ÷ value − 1 (0.25 is 25 % to spare).
+
+![Tip load's stress wired into a Result summary named Peak stress, and that into a Check against limit with a typed limit of 250 MPa; both wait for the study to run](image:screens/schematic-chain.png)
+
+The limit can be typed, as here, instead of read from the material.
 
 ### Curves, tables and reports
 

@@ -16,6 +16,8 @@ Add one from the schematic's palette (Tab, or a double-click on the canvas); wir
 <!-- key: operator:slider2d -->
 ### 2D slider
 
+![The 2D slider node](image:operator/slider2d.png)
+
 Two values dragged together (width and thickness), parameters <name>_x and <name>_y.
 
 - In: x: takes a number, or type one in (optional)
@@ -27,6 +29,8 @@ Two values dragged together (width and thickness), parameters <name>_x and <name
 <!-- key: operator:choice -->
 ### Choice
 
+![The Choice node](image:operator/choice.png)
+
 One of a list of presets (M8, M10, M12), a parameter by its name; a sweep or optimisation can run over them.
 
 - In: Pick: takes a number, or type one in (optional)
@@ -37,6 +41,8 @@ One of a list of presets (M8, M10, M12), a parameter by its name; a sweep or opt
 <!-- key: operator:project_table -->
 ### Model contents
 
+![The Model contents node](image:operator/project_table.png)
+
 The project's objects as rows: parts with material, volume and mass; bolts; materials; selections; studies; features; contacts.
 
 - Out: Table: gives a table
@@ -44,6 +50,8 @@ The project's objects as rows: parts with material, volume and mass; bolts; mate
 
 <!-- key: operator:model_value -->
 ### Model value
+
+![The Model value node](image:operator/model_value.png)
 
 A value the model holds, read as it is now: a material's yield or ultimate strength, Young's modulus or density (or its table against temperature), a load's or support's value, a section's thickness, a mesh size, a parameter. Change the model and it follows.
 
@@ -54,6 +62,8 @@ Example: Steel's yield strength → 250 MPa; wire it into Check against limit or
 
 <!-- key: operator:number -->
 ### Number
+
+![The Number node](image:operator/number.png)
 
 A value with its unit, typed in: a parameter by this operator's name.
 
@@ -66,6 +76,8 @@ Example: 250 MPa, named Allowable: wire it into Check, or use it as a parameter.
 <!-- key: operator:toggle -->
 ### On/off switch
 
+![The On/off switch node](image:operator/toggle.png)
+
 A switch, 1 (on) or 0 (off), a parameter by its name: a feature whose When names it applies only while it is on.
 
 - In: On: takes a number, or type one in (optional)
@@ -74,6 +86,8 @@ A switch, 1 (on) or 0 (off), a parameter by its name: a feature whose When names
 
 <!-- key: operator:random -->
 ### Random samples
+
+![The Random samples node](image:operator/random.png)
 
 Seeded samples about a mean (normal, log-normal or uniform): a load's or a modulus's scatter; a sweep over them is Monte Carlo with real solves.
 
@@ -86,6 +100,8 @@ Seeded samples about a mean (normal, log-normal or uniform): a load's or a modul
 <!-- key: operator:range -->
 ### Range
 
+![The Range node](image:operator/range.png)
+
 A list of evenly spaced values from a start to an end, both included.
 
 - In: Start: takes a number, or type one in (needed)
@@ -97,6 +113,8 @@ A list of evenly spaced values from a start to an end, both included.
 <!-- key: operator:file -->
 ### Read file
 
+![The Read file node](image:operator/file.png)
+
 A table from a file in the project: CSV (headers 'name [unit]'), Parquet or Excel; a pattern (tests/*.csv) stacks several, with a file column.
 
 - Out: Table: gives a table
@@ -104,6 +122,8 @@ A table from a file in the project: CSV (headers 'name [unit]'), Parquet or Exce
 
 <!-- key: operator:slider -->
 ### Slider
+
+![The Slider node](image:operator/slider.png)
 
 A value dragged between a low and a high, in steps: a parameter by this operator's name. Dragging previews the geometry it drives; it never solves.
 
@@ -116,6 +136,8 @@ Example: Thickness from 2 to 10 mm in 0.5 mm steps, driving a geometry.
 <!-- key: operator:series -->
 ### Stepped list
 
+![The Stepped list node](image:operator/series.png)
+
 A list from a start, a step and a count: 2, 4, 6, 8.
 
 - In: Start: takes a number, or type one in (needed)
@@ -127,6 +149,8 @@ A list from a start, a step and a count: 2, 4, 6, 8.
 <!-- key: operator:table -->
 ### Table
 
+![The Table node](image:operator/table.png)
+
 Named columns with units, typed in or read from a CSV (the table keeps the rows, so they are hashed and versioned with the project).
 
 - Out: Table: gives a table
@@ -137,6 +161,8 @@ Named columns with units, typed in or read from a CSV (the table keeps the rows,
 <!-- key: operator:clearance -->
 ### Clearance
 
+![The Clearance node](image:operator/clearance.png)
+
 The least distance between two parts (or selections) where they are placed: a constraint with no solve.
 
 - Out: Value: gives a number
@@ -144,6 +170,8 @@ The least distance between two parts (or selections) where they are placed: a co
 
 <!-- key: operator:grid -->
 ### Grid
+
+![The Grid node](image:operator/grid.png)
 
 A grid of points on a plane (an axis plane at an origin, or a construction plane; counts and sizes along it) or in a box (its corners and three counts).
 
@@ -164,6 +192,8 @@ A grid of points on a plane (an axis plane at an origin, or a construction plane
 <!-- key: operator:intersection -->
 ### Intersection
 
+![The Intersection node](image:operator/intersection.png)
+
 Where two parts or selections meet, or a construction plane cuts one: curves as points along them (a weld line, a section's outline), or crossing points.
 
 - In: Points per curve: takes a number, or type one in (optional)
@@ -172,6 +202,8 @@ Where two parts or selections meet, or a construction plane cuts one: curves as 
 
 <!-- key: operator:measure -->
 ### Measure
+
+![The Measure node](image:operator/measure.png)
 
 A part's or selection's length, area, volume, mass (with its material), centroid, size or radius, from the exact geometry: no solve needed.
 
@@ -182,6 +214,8 @@ Example: The Bracket's volume and mass, from its geometry and material.
 
 <!-- key: operator:profile -->
 ### Outline
+
+![The Outline node](image:operator/profile.png)
 
 A closed outline from data: a polyline through points, a circle, a rectangle or a regular polygon, for a face, an extrusion or a revolve to name.
 
@@ -199,6 +233,8 @@ A closed outline from data: a polyline through points, a circle, a rectangle or 
 <!-- key: operator:points -->
 ### Points
 
+![The Points node](image:operator/points.png)
+
 Points from x, y and z (numbers or lists, a number repeated) or a table's x, y, z columns, in a coordinate system if given. A table of x, y, z too.
 
 - In: x: takes a number or list, or type one in (optional)
@@ -210,6 +246,8 @@ Points from x, y and z (numbers or lists, a number repeated) or a table's x, y, 
 
 <!-- key: operator:divide -->
 ### Points along
+
+![The Points along node](image:operator/divide.png)
 
 Points evenly along a construction path or a named edge (a weld line): x, y, z and the distance along.
 
@@ -223,6 +261,8 @@ Example: 20 points along a weld edge, with their distance along it.
 
 <!-- key: operator:expression -->
 ### Formula
+
+![The Formula node](image:operator/expression.png)
 
 A formula over x, y, z and the project's parameters, with units checked (2 * x + 5 mm). A list in gives a list out, item by item.
 
@@ -238,6 +278,8 @@ Example: 2 * x + 5 mm with x = 10 mm → 25 mm; a list in gives a list out.
 <!-- key: operator:list -->
 ### List item or statistic
 
+![The List item or statistic node](image:operator/list.png)
+
 One list made from another: an item, a slice, sorted, reversed, its length, a table's column; a statistic (sum, smallest, largest, mean, median, standard deviation, percentile, product, weighted mean); index of, shift, chunk, insert, replace, repeat, every nth, at indexes, unique, union, intersection, difference, remap, bin, differences, cumulative sum, moving average.
 
 - In: List: takes a list or table (needed)
@@ -252,6 +294,8 @@ One list made from another: an item, a slice, sorted, reversed, its length, a ta
 <!-- key: operator:pairs -->
 ### Pair up lists
 
+![The Pair up lists node](image:operator/pairs.png)
+
 Two lists into a table: item by item, or every combination.
 
 - In: A: takes a list (needed)
@@ -261,6 +305,8 @@ Two lists into a table: item by item, or every combination.
 
 <!-- key: operator:script -->
 ### Python script
+
+![The Python script node](image:operator/script.png)
 
 Python run apart (numpy, scipy, polars and what you install): its inputs a, b, c, d by name, it sets out. Runs only in a trusted project.
 
@@ -274,6 +320,8 @@ Python run apart (numpy, scipy, polars and what you install): its inputs a, b, c
 <!-- key: operator:lookup -->
 ### Read off a table
 
+![The Read off a table node](image:operator/lookup.png)
+
 A value read off a table at a number (or a list): y at x, linear between rows, stepped or nearest. Grasshopper's Graph Mapper, Excel's VLOOKUP.
 
 Example: Yield against temperature, read at 150 °C → its value there.
@@ -285,6 +333,8 @@ Example: Yield against temperature, read at 150 °C → its value there.
 
 <!-- key: operator:text -->
 ### Text
+
+![The Text node](image:operator/text.png)
 
 A line from values: "σ max = {x} at {y}", each in its display unit; for panels, exports and reports.
 
@@ -299,6 +349,8 @@ A line from values: "σ max = {x} at {y}", each in its display unit; for panels,
 <!-- key: operator:bolt_table -->
 ### Bolt table
 
+![The Bolt table node](image:operator/bolt_table.png)
+
 Each bolt's axial, shear, torsion, bending, stress and use of proof and yield.
 
 - In: Result: takes a result (needed)
@@ -307,6 +359,8 @@ Each bolt's axial, shear, torsion, bending, stress and use of proof and yield.
 
 <!-- key: operator:clip -->
 ### Clip
+
+![The Clip node](image:operator/clip.png)
 
 A field kept on one side of a plane (above: the side its normal faces), as ParaView's Clip: the rest left out, still on the mesh.
 
@@ -319,6 +373,8 @@ Example: Temperature kept above a plane at the weld → its largest value there 
 <!-- key: operator:contact_table -->
 ### Contact table
 
+![The Contact table node](image:operator/contact_table.png)
+
 Each contact's forces, closed area, pressure, penetration, sliding and gap.
 
 - In: Result: takes a result (needed)
@@ -327,6 +383,8 @@ Each contact's forces, closed area, pressure, penetration, sliding and gap.
 
 <!-- key: operator:contour -->
 ### Contour
+
+![The Contour node](image:operator/contour.png)
 
 Where a field takes a value (an iso-surface), as a table of points, as ParaView's Contour: the 250 MPa surface, the 100 °C front.
 
@@ -339,6 +397,8 @@ Example: Von Mises at 250 MPa → the points where the plate yields.
 
 <!-- key: operator:field_formula -->
 ### Field formula
+
+![The Field formula node](image:operator/field_formula.png)
 
 A new result worked out at every node from one field f (and another, g), wired numbers a, b, c and parameters, units checked: f / 250 MPa, f - g, abs(f), drawn in the view.
 
@@ -355,6 +415,8 @@ Example: Von Mises at the last step minus the first (f - g), or f / 250 MPa: the
 <!-- key: operator:glyph -->
 ### Glyph
 
+![The Glyph node](image:operator/glyph.png)
+
 A vector result's arrows (at most Arrows of the nodes, evenly spread) as a table of points, components and sizes, as ParaView's Glyph.
 
 Example: Velocity at 200 nodes → arrows to plot, or pin in the view.
@@ -366,6 +428,8 @@ Example: Velocity at 200 nodes → arrows to plot, or pin in the view.
 
 <!-- key: operator:filter -->
 ### Keep result where
+
+![The Keep result where node](image:operator/filter.png)
 
 A result kept on a selection, and above or below a limit; the rest left out.
 
@@ -379,6 +443,8 @@ Example: Von Mises kept above 200 MPa: where the part is highly stressed.
 <!-- key: operator:mesh_table -->
 ### Mesh table
 
+![The Mesh table node](image:operator/mesh_table.png)
+
 A run's mesh, one row per element: type, part, centre, shape quality and aspect: the worst elements and where.
 
 - In: Result: takes a result (needed)
@@ -388,6 +454,8 @@ A run's mesh, one row per element: type, part, centre, shape quality and aspect:
 <!-- key: operator:mode_table -->
 ### Mode table
 
+![The Mode table node](image:operator/mode_table.png)
+
 A modal or buckling run's modes: frequency or load factor.
 
 - In: Result: takes a result (needed)
@@ -396,6 +464,8 @@ A modal or buckling run's modes: frequency or load factor.
 
 <!-- key: operator:section -->
 ### Plane cut values
+
+![The Plane cut values node](image:operator/section.png)
 
 A result over a construction plane's cut as a table, and the force and moment across it.
 
@@ -410,6 +480,8 @@ Example: A construction plane across a bolt → the force and moment it carries.
 <!-- key: operator:points_table -->
 ### Points table
 
+![The Points table node](image:operator/points_table.png)
+
 A sweep's or an optimisation's points as a table: the variables, outputs, feasible and the run.
 
 - In: Points: takes a table (needed)
@@ -419,6 +491,8 @@ A sweep's or an optimisation's points as a table: the variables, outputs, feasib
 <!-- key: operator:history_table -->
 ### Probe history
 
+![The Probe history node](image:operator/history_table.png)
+
 A result tool's value at every step, as a table.
 
 - In: Result tool: takes a number (needed)
@@ -427,6 +501,8 @@ A result tool's value at every step, as a table.
 
 <!-- key: operator:reduce -->
 ### Result summary
+
+![The Result summary node](image:operator/reduce.png)
 
 A result over the model or a selection as one number: its maximum, minimum, mean or integral (the result tools as a node).
 
@@ -439,6 +515,8 @@ Example: A run's von Mises on the Bracket → its maximum: 212 MPa.
 <!-- key: operator:result_table -->
 ### Result table
 
+![The Result table node](image:operator/result_table.png)
+
 A run's results as a table: node (or element), x, y, z, part, step and the results chosen, one row per item per step.
 
 Example: A run's displacement and von Mises, one row per node per step.
@@ -450,6 +528,8 @@ Example: A run's displacement and von Mises, one row per node per step.
 <!-- key: operator:run_history -->
 ### Run history
 
+![The Run history node](image:operator/run_history.png)
+
 A study's runs, one row each: when, solver, status, seconds, the point.
 
 - In: Study: takes a result (needed)
@@ -458,6 +538,8 @@ A study's runs, one row each: when, solver, status, seconds, the point.
 
 <!-- key: operator:slice -->
 ### Slice
+
+![The Slice node](image:operator/slice.png)
 
 A field on a plane (a construction plane) as a table of the cut's points and values, as ParaView's Slice: what the stress is across a wall.
 
@@ -470,6 +552,8 @@ Example: Von Mises on a construction plane across a nozzle's wall → its points
 <!-- key: operator:stream -->
 ### Stream tracer
 
+![The Stream tracer node](image:operator/stream.png)
+
 Streamlines of a vector result (velocity) from seeds along a construction path, as a table of their points with the speed, as ParaView's Stream Tracer.
 
 Example: Velocity in a channel from ten seeds across its inlet → the lines the flow takes.
@@ -481,6 +565,8 @@ Example: Velocity in a channel from ten seeds across its inlet → the lines the
 
 <!-- key: operator:nearest -->
 ### Values at points
+
+![The Values at points node](image:operator/nearest.png)
 
 Each of a table's points (x, y, z) at its nearest node: its distance and the results there (test gauges matched to the model).
 
@@ -496,6 +582,8 @@ Example: Strain gauge positions from a CSV → the model's strain at each.
 <!-- key: operator:add -->
 ### Add (A + B)
 
+![The Add (A + B) node](image:operator/add.png)
+
 A curve (or number) plus another or a number, point by point; both in the same kind of unit.
 
 - In: A: takes a curve or number or field, or type one in (needed)
@@ -505,6 +593,8 @@ A curve (or number) plus another or a number, point by point; both in the same k
 
 <!-- key: operator:area_under -->
 ### Area under curve
+
+![The Area under curve node](image:operator/area_under.png)
 
 The area under a curve (trapezoids), in y × x units: an impulse from a force against time, a force from a pressure along a line.
 
@@ -517,6 +607,8 @@ Example: A pressure along a line → the force per unit width it carries.
 <!-- key: operator:at_step -->
 ### At step
 
+![The At step node](image:operator/at_step.png)
+
 One step's curve from a curve per step (a path in a transient run): the step picked by its number, the last by default.
 
 Example: A path in a 20-step transient → the curve at step 20.
@@ -528,6 +620,8 @@ Example: A path in a 20-step transient → the curve at step 20.
 <!-- key: operator:compare_steps -->
 ### Compare with step
 
+![The Compare with step node](image:operator/compare_steps.png)
+
 Every step's curve against a reference step's, as a difference or a ratio; for a history, every step's value against the reference step's.
 
 Example: Each step's path against step 1, as a ratio: how the load spreads.
@@ -538,6 +632,8 @@ Example: Each step's path against step 1, as a ratio: how the load spreads.
 
 <!-- key: operator:curve_formula -->
 ### Curve formula
+
+![The Curve formula node](image:operator/curve_formula.png)
 
 A new y worked out at every point from x, y and wired numbers a, b, c, units checked: y / 250 MPa, y * x, abs(y).
 
@@ -553,6 +649,8 @@ Example: y / 250 MPa, or y * a with a wired factor.
 <!-- key: operator:curve_from_table -->
 ### Curve from table
 
+![The Curve from table node](image:operator/curve_from_table.png)
+
 A table's column against another as a curve (the first two number columns if none is chosen): a model value against temperature, a test's readings.
 
 - In: Table: takes a table (needed)
@@ -561,6 +659,8 @@ A table's column against another as a curve (the first two number columns if non
 
 <!-- key: operator:divide_by -->
 ### Divide (A ÷ B)
+
+![The Divide (A ÷ B) node](image:operator/divide_by.png)
 
 A curve (or number) divided by another or by a number, point by point; units follow (stress ÷ stress is a pure number).
 
@@ -573,6 +673,8 @@ Example: Von Mises along a path ÷ 250 MPa → the same curve as a pure number.
 
 <!-- key: operator:envelope -->
 ### Envelope
+
+![The Envelope node](image:operator/envelope.png)
 
 The largest (or smallest) value at each x over every curve wired in: the worst over all steps, or over several paths.
 
@@ -587,6 +689,8 @@ Example: A path at every step → the largest stress at each point over all step
 <!-- key: operator:match_x -->
 ### Match x values
 
+![The Match x values node](image:operator/match_x.png)
+
 A curve read at another curve's x values (linear between its points), so the two can be divided or subtracted point by point.
 
 Example: A test's strain readings read at the model path's points.
@@ -599,6 +703,8 @@ Example: A test's strain readings read at the model path's points.
 <!-- key: operator:multiply -->
 ### Multiply (A × B)
 
+![The Multiply (A × B) node](image:operator/multiply.png)
+
 A curve (or number) times another or a number, point by point; units multiply (force × length is a moment).
 
 - In: A: takes a curve or number or field, or type one in (needed)
@@ -608,6 +714,8 @@ A curve (or number) times another or a number, point by point; units multiply (f
 
 <!-- key: operator:normalise -->
 ### Normalise
+
+![The Normalise node](image:operator/normalise.png)
 
 A curve divided by a number, by another curve, or (nothing wired) by its own largest size: a shape between −1 and 1 to compare with others.
 
@@ -621,6 +729,8 @@ Example: A deflected shape along a beam ÷ its largest deflection → 1 at the t
 <!-- key: operator:over_steps -->
 ### Over the steps
 
+![The Over the steps node](image:operator/over_steps.png)
+
 One value's history: a number (a result summary, a result tool) worked out at every step of the run it reads (time, frequency, increment), or at every sweep point, as a curve.
 
 Example: A result tool's displacement in a transient run → displacement against time.
@@ -632,6 +742,8 @@ Example: A result tool's displacement in a transient run → displacement agains
 <!-- key: operator:slope -->
 ### Slope
 
+![The Slope node](image:operator/slope.png)
+
 How fast y changes with x at each point (dy/dx), in y ÷ x units: a stress gradient through a wall, a velocity from a displacement history.
 
 Example: Temperature through a wall → its gradient, for the heat flux.
@@ -642,6 +754,8 @@ Example: Temperature through a wall → its gradient, for the heat flux.
 
 <!-- key: operator:subtract -->
 ### Subtract (A − B)
+
+![The Subtract (A − B) node](image:operator/subtract.png)
 
 A curve (or number) less another or a number, point by point; both in the same kind of unit.
 
@@ -657,6 +771,8 @@ Example: CalculiX's path minus Code_Aster's (Match x values first if their point
 <!-- key: operator:stack -->
 ### Append tables
 
+![The Append tables node](image:operator/stack.png)
+
 Tables' rows one after another, with a column naming each row's table.
 
 - In: Table: takes a table (needed)
@@ -667,6 +783,8 @@ Tables' rows one after another, with a column naming each row's table.
 
 <!-- key: operator:new_column -->
 ### Calculated column
+
+![The Calculated column node](image:operator/new_column.png)
 
 A column worked out from the others: margin = 250 MPa / von_mises - 1, units checked; or a polars expression.
 
@@ -679,6 +797,8 @@ Example: margin = 250 MPa / von_mises - 1, worked out for every row.
 <!-- key: operator:columns -->
 ### Choose columns
 
+![The Choose columns node](image:operator/columns.png)
+
 Pick, order, rename or drop columns: x, y, von_mises as vm.
 
 - In: Table: takes a table (needed)
@@ -687,6 +807,8 @@ Pick, order, rename or drop columns: x, y, von_mises as vm.
 
 <!-- key: operator:unpivot -->
 ### Columns to rows
+
+![The Columns to rows node](image:operator/unpivot.png)
 
 Wide to long: columns folded into a name column and a value column.
 
@@ -697,6 +819,8 @@ Wide to long: columns folded into a name column and a value column.
 <!-- key: operator:convert_units -->
 ### Convert units
 
+![The Convert units node](image:operator/convert_units.png)
+
 A column shown and exported in another unit of its kind: stress in MPa, reactions in kN.
 
 - In: Table: takes a table (needed)
@@ -705,6 +829,8 @@ A column shown and exported in another unit of its kind: stress in MPa, reaction
 
 <!-- key: operator:fill_missing -->
 ### Fill missing
+
+![The Fill missing node](image:operator/fill_missing.png)
 
 Missing values filled from the row before or after, the mean, zero or a value; or those rows dropped.
 
@@ -716,6 +842,8 @@ Missing values filled from the row before or after, the mean, zero or a value; o
 <!-- key: operator:filter_rows -->
 ### Keep rows where
 
+![The Keep rows where node](image:operator/filter_rows.png)
+
 The rows where a condition holds: von_mises > 200 MPa and part == "Bracket" (units checked), or a polars expression.
 
 - In: Table: takes a table (needed)
@@ -724,6 +852,8 @@ The rows where a condition holds: von_mises > 200 MPa and part == "Bracket" (uni
 
 <!-- key: operator:top_n -->
 ### Largest N rows
+
+![The Largest N rows node](image:operator/top_n.png)
 
 The N rows with the largest (or smallest) value of a column, e.g. the 20 highest von Mises nodes; per group with By.
 
@@ -734,6 +864,8 @@ The N rows with the largest (or smallest) value of a column, e.g. the 20 highest
 
 <!-- key: operator:join -->
 ### Match tables
+
+![The Match tables node](image:operator/join.png)
 
 Two tables side by side, matched on key columns (node, point): two solvers' results by node, then a New column for their difference.
 
@@ -747,6 +879,8 @@ Example: CalculiX and Code_Aster results matched by node, then their difference.
 <!-- key: operator:merge_points -->
 ### Merge points
 
+![The Merge points node](image:operator/merge_points.png)
+
 Rows whose points (x, y, z) are closer than a spacing made one, their values averaged: duplicates from a scan or a test rig.
 
 - In: Table: takes a table (needed)
@@ -755,6 +889,8 @@ Rows whose points (x, y, z) are closer than a spacing made one, their values ave
 
 <!-- key: operator:to_number -->
 ### Pick one value
+
+![The Pick one value node](image:operator/to_number.png)
 
 One value of a column (max, min, mean, sum, median, first, last, count): for checks, panels and optimisations.
 
@@ -767,6 +903,8 @@ Example: A table's von Mises column → its maximum, for a Check.
 <!-- key: operator:distinct -->
 ### Remove duplicates
 
+![The Remove duplicates node](image:operator/distinct.png)
+
 Rows kept once: whole rows alike, or alike on some columns.
 
 - In: Table: takes a table (needed)
@@ -775,6 +913,8 @@ Rows kept once: whole rows alike, or alike on some columns.
 
 <!-- key: operator:round -->
 ### Round
+
+![The Round node](image:operator/round.png)
 
 Numbers rounded in their shown units: decimal places or significant figures.
 
@@ -785,6 +925,8 @@ Numbers rounded in their shown units: decimal places or significant figures.
 <!-- key: operator:pivot -->
 ### Rows to columns
 
+![The Rows to columns node](image:operator/pivot.png)
+
 Long to wide: a row per key, a column per value of another column (a column per step, per solver).
 
 - In: Table: takes a table (needed)
@@ -793,6 +935,8 @@ Long to wide: a row per key, a column per value of another column (a column per 
 
 <!-- key: operator:rolling -->
 ### Running totals and averages
+
+![The Running totals and averages node](image:operator/rolling.png)
 
 A running or rolling sum, mean, maximum or minimum along an ordered column (time), per group: a history's peak so far.
 
@@ -803,6 +947,8 @@ A running or rolling sum, mean, maximum or minimum along an ordered column (time
 <!-- key: operator:sort -->
 ### Sort
 
+![The Sort node](image:operator/sort.png)
+
 Rows in order of one or more columns, ascending or descending.
 
 - In: Table: takes a table (needed)
@@ -811,6 +957,8 @@ Rows in order of one or more columns, ascending or descending.
 
 <!-- key: operator:group -->
 ### Summarise by group
+
+![The Summarise by group node](image:operator/group.png)
 
 Rows grouped by columns (part, step, point), each group reduced: max(von_mises), count(), quantile(von_mises, 0.95).
 
@@ -823,6 +971,8 @@ Example: Rows by part → each part's largest von Mises.
 <!-- key: operator:thin_points -->
 ### Thin points
 
+![The Thin points node](image:operator/thin_points.png)
+
 One row kept per cell of a spacing: a dense imported cloud thinned before mapping.
 
 - In: Table: takes a table (needed)
@@ -833,6 +983,8 @@ One row kept per cell of a spacing: a dense imported cloud thinned before mappin
 
 <!-- key: operator:check -->
 ### Check against limit
+
+![The Check against limit node](image:operator/check.png)
 
 A number, or a field's extreme, against an allowable: pass or fail, with the margin (limit / value − 1 for at most). Fed a stress linearization, ASME VIII-2's membrane, membrane + bending and primary + secondary checks against the allowable S.
 
@@ -847,6 +999,8 @@ Example: 212 MPa against 250 MPa, at most → Pass, margin 0.18.
 <!-- key: operator:margin -->
 ### Margin of safety
 
+![The Margin of safety node](image:operator/margin.png)
+
 How far inside its allowable a value is: allowable ÷ value − 1, above 0 is safe.
 
 Example: A peak stress of 200 MPa against 250 MPa → 0.25.
@@ -859,6 +1013,8 @@ Example: A peak stress of 200 MPa against 250 MPa → 0.25.
 <!-- key: operator:safety_factor -->
 ### Safety factor
 
+![The Safety factor node](image:operator/safety_factor.png)
+
 How many times a value fits in its allowable: allowable ÷ value, above 1 is safe.
 
 Example: A peak stress of 200 MPa against 250 MPa → 1.25.
@@ -870,6 +1026,8 @@ Example: A peak stress of 200 MPa against 250 MPa → 1.25.
 
 <!-- key: operator:utilisation -->
 ### Utilisation
+
+![The Utilisation node](image:operator/utilisation.png)
 
 How much of an allowable a value uses: value ÷ allowable, 1 at the limit (a stress along a path against the material's yield strength).
 
@@ -885,6 +1043,8 @@ Example: Von Mises along a path with Model value's yield strength as the allowab
 <!-- key: operator:annotate -->
 ### Annotate
 
+![The Annotate node](image:operator/annotate.png)
+
 A curve with its largest (or smallest) point marked and labelled on the plot, by a note or its value.
 
 Example: A path's largest von Mises marked "peak 212 MPa".
@@ -896,6 +1056,8 @@ Example: A path's largest von Mises marked "peak 212 MPa".
 <!-- key: operator:export -->
 ### Export
 
+![The Export node](image:operator/export.png)
+
 Any output to a file in the project: CSV, Parquet or Excel for tables, a result in an export format, or a result's view as a PNG (format png: a snapshot for a report).
 
 Example: A table to CSV in the project's exports, or the view as a PNG.
@@ -905,6 +1067,8 @@ Example: A table to CSV in the project's exports, or the view as a PNG.
 
 <!-- key: operator:limit_line -->
 ### Limit line
+
+![The Limit line node](image:operator/limit_line.png)
 
 A number drawn across a plot as a dashed line: the allowable on a stress curve.
 
@@ -917,6 +1081,8 @@ Example: The yield strength drawn across a stress plot.
 <!-- key: operator:preview -->
 ### Mark points in view
 
+![The Mark points in view node](image:operator/preview.png)
+
 A table's rows drawn in the 3D view as labelled points (x, y, z and a column for the label): the worst nodes, marked.
 
 - In: Table: takes a table (needed)
@@ -924,6 +1090,8 @@ A table's rows drawn in the 3D view as labelled points (x, y, z and a column for
 
 <!-- key: operator:plot -->
 ### Plot
+
+![The Plot node](image:operator/plot.png)
 
 A number against the steps (time, frequency, increment) or a sweep's points, a table's column against another, or any number of curves (a path, a history, a limit line) together: a new socket appears as each is wired. Drawn in the Plots panel as lines, bars or points; axes, units and the legend come from what is wired in.
 
@@ -939,6 +1107,8 @@ Example: A probe's displacement against the steps, or a table's column against a
 
 <!-- key: operator:report -->
 ### Report
+
+![The Report node](image:operator/report.png)
 
 What the schematic worked out, gathered into one HTML file to send: checks (pass or fail), numbers, curves drawn, tables, fields' ranges, each headed by the node it comes from. Written with Export now.
 
@@ -956,6 +1126,8 @@ Example: Three checks, a utilisation plot and a reactions table → exports/Repo
 
 <!-- key: operator:panel -->
 ### Show value
+
+![The Show value node](image:operator/panel.png)
 
 Shows any output's value on the canvas.
 

@@ -9,6 +9,10 @@ from the same pages the Help window shows.
   app, become plain text, since a browser has no tool to open.
 - `build_pdf(path)`: every page in the contents' order in one document, a page break
   before each, equations as PNG images, printed by Qt (`QTextDocument` to `QPdfWriter`).
+  `help:` links and the contents list jump to their page and heading (Qt writes a named
+  destination for each `<a name>` and a link for each `#` href); bookmarks (sections,
+  pages, their headings) are added afterwards as an incremental update, since Qt has no
+  outline API.
 
 Markdown is read with markdown-it-py (CommonMark and tables), which the `mcp` package
 already brings in. Nothing here runs in the GUI: `scripts/build_help_site.py` calls it.
@@ -24,11 +28,17 @@ import re
 from pathlib import Path
 
 from puzzle import help as manual
+from puzzle.help import pictures
 
 SLUG = re.compile(r"[^a-z0-9]+")
 LINK = re.compile(r'href="(help|puzzle):([^"]*)"')
 PUZZLE_LINK = re.compile(r'<a href="puzzle:[^"]*">(.*?)</a>', re.S)
-HELP_LINK = re.compile(r'<a href="help:[^"]*">(.*?)</a>', re.S)
+HELP_LINK = re.compile(r'<a href="help:([^"]*)">(.*?)</a>', re.S)
+# A picture as markdown-it writes `![alt](image:name)`.
+PICTURE = re.compile(r'<img src="image:([^"]+)" alt="([^"]*)"\s*/?>')
+PICTURE_WIDTH = 560
+# A heading as page_html writes it: help keys' anchors before it, then its own id.
+ANCHORED = re.compile(r'((?:<a id="[^"]+"></a>)*)<h([1-6]) id="([^"]+)">(.*?)</h\2>', re.S)
 
 
 def slug(text: str) -> str:
@@ -86,7 +96,7 @@ def page_html(page: manual.Page, fmt: str = "svg") -> str:
 
     keyed, lines = {}, []
     pending: list[str] = []
-    for line in page.body.splitlines():
+    for line in pictures.with_pictures(page.body).splitlines():
         marker = manual.MARKER.match(line)
         if marker:
             pending += [k.strip() for k in marker.group(1).split(",") if k.strip()]
@@ -111,6 +121,7 @@ def page_html(page: manual.Page, fmt: str = "svg") -> str:
     body = md.render("\n\n".join(parts))
     for key, markup in holes.items():
         body = body.replace(f"<p>{key}</p>", markup).replace(key, markup)
+    body = PICTURE.sub(_picture, body)
 
     def anchor(m: re.Match) -> str:
         level, text = m.group(1), m.group(2)
@@ -120,6 +131,24 @@ def page_html(page: manual.Page, fmt: str = "svg") -> str:
         return f'{extra}<h{level} id="{ids[0]}">{text}</h{level}>'
 
     return re.sub(r"<h([1-6])>(.*?)</h\1>", anchor, body, flags=re.S)
+
+
+def _picture(m: re.Match) -> str:
+    """A picture (`image:` src) as a PNG data URL with its size, no wider than a page's
+    text (about 580 px at 96 an inch: A4 less the page's margins and the 2 cm Qt's print
+    keeps inside them), so the PDF holds it whole."""
+    import struct
+
+    name, alt = m.group(1), m.group(2)
+    file = pictures.path(name)
+    if not file.is_file():
+        return html.escape(alt)  # tests/test_help_images.py names it
+    data = file.read_bytes()
+    w, h = struct.unpack(">II", data[16:24])
+    if w > PICTURE_WIDTH:
+        w, h = PICTURE_WIDTH, round(h * PICTURE_WIDTH / w)
+    src = f"data:image/png;base64,{base64.b64encode(data).decode()}"
+    return f'<img class="picture" alt="{alt}" src="{src}" width="{w}" height="{h}">'
 
 
 def resolve(target: str) -> tuple[str, str] | None:
@@ -181,6 +210,8 @@ code, pre { background: var(--code); border-radius: 4px; font: 14px ui-monospace
 pre { padding: 10px 12px; overflow-x: auto; }
 table { border-collapse: collapse; display: block; overflow-x: auto; margin: 12px 0; }
 th, td { border: 1px solid var(--rule); padding: 4px 8px; text-align: left; vertical-align: top; }
+img.picture { max-width: 100%; height: auto; border: 1px solid var(--rule);
+  border-radius: 4px; }
 p.equation { text-align: center; overflow-x: auto; } img.tex.inline { vertical-align: middle; }
 .summary { color: var(--muted); }
 @media (max-width: 760px) { body { display: block; } nav { width: auto; height: auto;
@@ -278,7 +309,9 @@ def build_site(out: Path) -> dict:
 
 
 def build_pdf(path: Path) -> dict:
-    """Every page in the contents' order, one PDF; {"pages": n pages of the manual}."""
+    """Every page in the contents' order, one PDF, its links and bookmarks jumping to
+    pages and headings; {"pages": n pages of the manual, "missing": links that resolve
+    nowhere}."""
     import os
 
     import matplotlib
@@ -301,23 +334,28 @@ def build_pdf(path: Path) -> dict:
     app = QApplication.instance() or QApplication(["puzzle-help"])  # noqa: F841
     for f in fonts.glob("DejaVu*.ttf"):
         QFontDatabase.addApplicationFont(str(f))
-    chapters, count = [], 0
-    for heading, listed in manual.contents():
-        chapters.append(f'<h1 style="page-break-before: always">{html.escape(heading)}</h1>')
+    missing: list[str] = []
+    chapters, outline, count = [], [], 0
+    for i, (heading, listed) in enumerate(manual.contents()):
+        part = f"part-{i}"
+        chapters.append(f'<h1 style="page-break-before: always"><a name="{part}"></a>'
+                        f"{html.escape(heading)}</h1>")  # fmt: skip
+        entries = []
         for p in listed:
-            body = PUZZLE_LINK.sub(lambda m: m.group(1), page_html(p, "png"))
-            body = HELP_LINK.sub(lambda m: m.group(1), body)  # no page to go to on paper
-            chapters.append(f'<h1 style="page-break-before: always">{html.escape(p.title)}</h1>'
-                            + body)  # fmt: skip
+            body, sections = _pdf_body(p, missing)
+            chapters.append(f'<h1 style="page-break-before: always"><a name="{p.name}"></a>'
+                            f"{html.escape(p.title)}</h1>" + body)  # fmt: skip
+            entries.append((p.title, p.name, [(t, d, []) for t, d in sections]))
             count += 1
+        outline.append((heading, part, entries))
     cover = ('<h1 style="font-size: 32pt">Puzzle manual</h1><p>Getting started, guides, '
              "the reference, theory notes and verification, as the app's Help window shows "
              "them.</p>")  # fmt: skip
     listed = "".join(
-        f"<h3>{html.escape(heading)}</h3><p>"
-        + "<br>".join(html.escape(p.title) for p in pages)
+        f'<h3><a href="#part-{i}">{html.escape(heading)}</a></h3><p>'
+        + "<br>".join(f'<a href="#{p.name}">{html.escape(p.title)}</a>' for p in pages)
         + "</p>"
-        for heading, pages in manual.contents()
+        for i, (heading, pages) in enumerate(manual.contents())
     )
     cover += '<h2 style="page-break-before: always">Contents</h2>' + listed
     document = QTextDocument()
@@ -341,4 +379,114 @@ def build_pdf(path: Path) -> dict:
     )
     writer.setResolution(150)
     document.print_(writer)
-    return {"pages": count}
+    del writer  # closes the file before the bookmarks are appended
+    add_outline(Path(path), outline)
+    return {"pages": count, "missing": missing}
+
+
+def _destination(page: str, anchor: str = "") -> str:
+    """A PDF named destination: the page's name, or page~heading for a heading in it."""
+    return f"{page}~{anchor}" if anchor else page
+
+
+def _pdf_body(page: manual.Page, missing: list[str]) -> tuple[str, list[tuple[str, str]]]:
+    """A page's HTML for the PDF, with its anchors named across the whole manual and its
+    help: links jumping to them; plus (text, destination) for each second-level heading,
+    for the bookmarks."""
+    body = PUZZLE_LINK.sub(lambda m: m.group(1), page_html(page, "png"))
+
+    def link(m: re.Match) -> str:
+        found = resolve(m.group(1))
+        if found is None:
+            missing.append(f"{page.name}: help:{m.group(1)}")
+            return m.group(2)
+        return f'<a href="#{_destination(*found)}">{m.group(2)}</a>'
+
+    body = HELP_LINK.sub(link, body)
+    sections: list[tuple[str, str]] = []
+
+    def heading(m: re.Match) -> str:
+        extra, level, own, text = m.groups()
+        # Qt writes one destination per run of text (the first of its anchor names), so
+        # each help key's anchor holds a zero-width space of its own.
+        keys = re.findall(r'<a id="([^"]+)"></a>', extra)
+        marks = "".join(f'<a name="{_destination(page.name, k)}">&#8203;</a>' for k in keys)
+        marks += f'<a name="{_destination(page.name, own)}"></a>'
+        if level == "2":
+            plain = html.unescape(re.sub(r"<[^>]+>", "", text)).strip()
+            sections.append((plain, _destination(page.name, own)))
+        return f"<h{level}>{marks}{text}</h{level}>"
+
+    return ANCHORED.sub(heading, body), sections
+
+
+def _pdf_text(text: str) -> bytes:
+    """A PDF text string as Qt writes its destinations' names: UTF-16BE with a BOM."""
+    return b"<FEFF" + text.encode("utf-16-be").hex().upper().encode() + b">"
+
+
+def add_outline(path: Path, tree: list) -> None:
+    """Append bookmarks to a PDF Qt wrote, as an incremental update (new objects, a new
+    catalog naming them, an xref section and a trailer pointing at the old one).
+
+    `tree` is [(title, destination, children)], destinations being the document's named
+    destinations; top-level entries are shown open, the rest closed."""
+    data = path.read_bytes()
+    prev = int(re.findall(rb"startxref\s+(\d+)", data)[-1])
+    trailer = data[data.rindex(b"trailer") + len(b"trailer") : data.rindex(b"startxref")]
+    size = int(re.search(rb"/Size (\d+)", trailer).group(1))
+    root = int(re.search(rb"/Root (\d+) 0 R", trailer).group(1))
+    catalog = re.search(rb"\n%d 0 obj\s*<<(.*?)>>\s*endobj" % root, data, re.S).group(1)
+    objects: dict[int, bytes] = {}
+    counter = [size]
+
+    def new() -> int:
+        counter[0] += 1
+        return counter[0] - 1
+
+    def place(items: list, parent: int, open_: bool) -> tuple[list[int], int]:
+        """Numbers for items under parent, and how many of them show when opened."""
+        numbers = [new() for _ in items]
+        shown = len(items)
+        for k, (title, dest, children) in enumerate(items):
+            parts = [b"/Title " + _pdf_text(title), b"/Parent %d 0 R" % parent,
+                     b"/Dest " + _pdf_text(dest)]  # fmt: skip
+            if k:
+                parts.append(b"/Prev %d 0 R" % numbers[k - 1])
+            if k < len(items) - 1:
+                parts.append(b"/Next %d 0 R" % numbers[k + 1])
+            if children:
+                kids, below = place(children, numbers[k], False)
+                parts += [b"/First %d 0 R" % kids[0], b"/Last %d 0 R" % kids[-1],
+                          b"/Count %d" % (below if open_ else -len(kids))]  # fmt: skip
+                if open_:
+                    shown += below
+            objects[numbers[k]] = b"<<\n" + b"\n".join(parts) + b"\n>>"
+        return numbers, shown
+
+    top = new()
+    firsts, shown = place(tree, top, True)
+    objects[top] = (b"<<\n/Type /Outlines\n/First %d 0 R\n/Last %d 0 R\n/Count %d\n>>"
+                    % (firsts[0], firsts[-1], shown))  # fmt: skip
+    objects[root] = b"<<" + catalog + b"/Outlines %d 0 R\n/PageMode /UseOutlines\n>>" % top
+    out = bytearray(data if data.endswith(b"\n") else data + b"\n")
+    offsets = {}
+    for number in sorted(objects):
+        offsets[number] = len(out)
+        out += b"%d 0 obj\n" % number + objects[number] + b"\nendobj\n"
+    xref = len(out)
+    out += b"xref\n0 1\n0000000000 65535 f \n"  # readers expect object 0 first
+    numbers = sorted(offsets)
+    runs: list[list[int]] = []
+    for number in numbers:
+        if runs and number == runs[-1][-1] + 1:
+            runs[-1].append(number)
+        else:
+            runs.append([number])
+    for run in runs:
+        out += b"%d %d\n" % (run[0], len(run))
+        out += b"".join(b"%010d 00000 n \n" % offsets[n] for n in run)
+    trailer = re.sub(rb"/Size \d+", b"/Size %d" % counter[0], trailer.strip())
+    trailer = trailer.replace(b"<<", b"<<\n/Prev %d" % prev, 1)
+    out += b"trailer\n" + trailer + b"\nstartxref\n%d\n%%%%EOF\n" % xref
+    path.write_bytes(bytes(out))

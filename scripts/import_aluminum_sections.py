@@ -68,7 +68,8 @@ def _si(row: dict, units: dict[str, int]) -> dict:
 
 
 def i_beams(pages) -> list[dict]:
-    keys = ["d", "bf", "tf", "tw", "r", "A", "Ix", "Sx", "Zx", "rx", "Iy", "Sy", "Zy", "ry", "Cw", "J"]
+    keys = ["d", "bf", "tf", "tw", "r", "A", "Ix", "Sx", "Zx", "rx",
+            "Iy", "Sy", "Zy", "ry", "Cw", "J"]  # fmt: skip
     units = {"d": 1, "bf": 1, "tf": 1, "tw": 1, "r": 1, "A": 2, "Ix": 4, "Sx": 3, "Zx": 3,
              "rx": 1, "Iy": 4, "Sy": 3, "Zy": 3, "ry": 1, "Cw": 6, "J": 4}  # fmt: skip
     out, seen = [], set()
@@ -102,7 +103,7 @@ def square_tubes(pages) -> list[dict]:
         tokens = line.split()
         if not tokens or tokens[0] != "RT":
             continue
-        values = tokens[-len(keys):]
+        values = tokens[-len(keys) :]
         if not all(NUMBER.match(v) for v in values):
             continue
         row = dict(zip(keys, map(float, values), strict=True))
@@ -126,7 +127,7 @@ def rectangular_tubes(pages) -> list[dict]:
         tokens = line.split()
         if not tokens or tokens[0] != "RT":
             continue
-        values = tokens[-len(keys):]
+        values = tokens[-len(keys) :]
         if not all(NUMBER.match(v) for v in values):
             continue
         row = dict(zip(keys, map(float, values), strict=True))
@@ -150,7 +151,7 @@ def pipes(pages) -> list[dict]:
         tokens = line.split()
         if len(tokens) < len(keys) + 1:
             continue
-        values = tokens[-len(keys):]
+        values = tokens[-len(keys) :]
         head = tokens[: -len(keys)]
         if not all(NUMBER.match(v) for v in values) or not head:
             continue

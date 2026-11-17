@@ -1,8 +1,9 @@
 # 0083. A complete help and documentation system, with worked examples (supersedes 0075)
 
-- Status: Accepted; steps 1-5 built (2026-11-15): the Help window, search and F1, the
-  generated reference and its tests, the guides, theory notes, verification pages, the
-  static site and PDF; the tutorials (0075's list, on `main`) to come
+- Status: Accepted; steps 1-5 built (2026-11-15, 16): the Help window, search and F1,
+  the generated reference and its tests, the guides, theory notes, verification pages,
+  the static site and the PDF (linked, bookmarked, attached to each release), pictures;
+  the tutorials (0075's list, on `main`) to come
 - Date: 2026-11-11
 
 ## Context
@@ -63,6 +64,12 @@ The maintainer asked (2026-11-11) for a complete help and documentation system, 
    - Getting started becomes the first tutorial.
    - A static site built from the same files (an Artifact page or GitHub Pages) for
      reading outside the app, and a PDF of the whole manual for release.
+   - Pictures (amended 2026-11-16, the maintainer: "include images in the manual where
+     appropriate, especially in the Operators and anytime there is a reference to a
+     location in a menu, the Advisor, and the agent window"): screenshots of the real
+     GUI, drawn by a script, never by hand, so they follow the app. Every menu location
+     a page names gets its picture, placed by itself; a test fails when a page names a
+     menu location the menu bar doesn't have, or a picture is stale or missing.
    - The agent: the knowledge pack (ADR 0022) indexes `docs/help/`. MCP `help(topic)`
      returns a page, and the agent cites pages by name when it explains.
 3. **Kept in step with the code.**
@@ -170,8 +177,39 @@ list, equations as PNG at text size, printed by Qt (`QTextDocument`, `QPdfWriter
 in matplotlib's DejaVu fonts, since Qt's offscreen platform finds none of its own (306
 pages). Markdown by markdown-it-py, which `mcp` brings in. `tests/test_help_site.py`:
 every page written, every link and search entry landing on a file and an anchor that
-exist, no TeX or `help:` left, the PDF whole. Where it's published (an Artifact page or
-GitHub Pages) and a release job building the PDF are the maintainer's to choose.
+exist, no TeX or `help:` left, the PDF whole. Where the site is published (an Artifact
+page or GitHub Pages) is the maintainer's to choose.
+
+**Built (2026-11-16), the PDF's links, its release job and pictures:**
+
+- Links in the PDF: `help:` links and the contents list jump to their page and heading.
+  Qt writes a named destination for each `<a name>` (`page` or `page~heading`) and a
+  link for each `#` href. It writes only the first name in a run of text, so each help
+  key's anchor holds a zero-width space of its own. Bookmarks (sections, pages, their
+  second-level headings) are appended as an incremental update (`site.add_outline`:
+  new objects, a catalog naming them, an xref section and a trailer), since Qt has no
+  outline API. A link that resolves nowhere fails the build. The 516 links and 526
+  bookmarks were checked with pypdf (strict) and PyMuPDF.
+- `.github/workflows/manual.yml`: on a published release (and by hand), the PDF built on
+  Linux and attached to the release as `Puzzle-manual-<tag>.pdf`.
+- Pictures (decision 2, amended): `help/pictures.py` (no Qt) and
+  `scripts/build_help_images.py`, which runs offscreen in matplotlib's DejaVu fonts and
+  the light theme on a scratch copy of the cantilever, so every machine draws the same.
+  - Menu locations: the pages' words are matched against the menu bar's own paths
+    (`main_menu.paths`, across wrapped lines). Each one named gets the menu opened
+    from the bar with the item highlighted (115 pictures, `images/index.json`), put
+    after the paragraph, list or table that first names it on a page. A chain that
+    starts at a menu bar title and is no real path is refused; one going on past an
+    item that opens a dialog (Project → Settings… → Units) is a place in that dialog.
+    Writing it found one wrong location (Geometry → Pick filter's items), fixed.
+  - Every operator's node, as the schematic draws it, on the Operators reference page
+    (86).
+  - Screens: the schematic, a Result summary and Check against limit chain in it, the
+    operator palette, the Advisor, and the agent window with a conversation and a
+    proposal. A page names one as `![what it shows](image:screens/advisor.png)`.
+  - The Help window, the site and the PDF all show them, no wider than the PDF's text.
+  - `tests/test_help_images.py`: every picture named is drawn, none is left over, every
+    operator has one, and the menu locations the pages name are real and drawn.
 
 ## Consequences
 

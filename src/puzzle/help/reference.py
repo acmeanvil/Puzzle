@@ -211,7 +211,9 @@ def operators() -> str:
         lines += [f"## {group}", ""]
         for key in sorted(by_group[group], key=lambda k: TYPES[k].label):
             d = operator_doc(key)
-            lines += [f"<!-- key: operator:{key} -->", f"### {d['name']}", "", d["purpose"], ""]
+            lines += [f"<!-- key: operator:{key} -->", f"### {d['name']}", "",
+                      f"![The {d['name']} node](image:operator/{key}.png)", "",
+                      d["purpose"], ""]  # fmt: skip
             if d["example"]:
                 lines += [f"Example: {d['example']}", ""]
             lines += [f"- In: {i['about']}" for i in d["inputs"]]

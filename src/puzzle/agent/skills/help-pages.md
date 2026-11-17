@@ -42,6 +42,22 @@ answer from it matches what they see.
    reference answer, the solvers checked, the test's tolerance and what was measured.
    Quote the measured value only when the page gives one; "passes" means within the
    tolerance and nothing more.
+6. Pages carry pictures the user sees and you get as a line of text:
+   `![what it shows](image:...)`. Every menu location a page names comes with a picture
+   of that menu opened, each operator on the Operators page with its node, and the
+   guides with the schematic, the Advisor and the agent window. So "the Agent guide
+   shows the window" is something to point a user at; describe the picture from its
+   alt text, never from a guess at the screen.
+
+## Writing or changing a page
+
+- A menu location in words ("Model → Studies → Load combinations…") gets its picture
+  by itself, but only when the path is the menu bar's exactly (its ellipses too).
+  `tests/test_help_images.py` fails on a path the bar doesn't have.
+- A screen goes in as `![what it shows, in a sentence](image:screens/<name>.png)`,
+  drawn by `scripts/build_help_images.py` (add it there).
+- After changing a menu, an operator or a page that names a menu location, run
+  `pixi run -e dev python scripts/build_help_images.py`, then `scripts/build_help.py`.
 
 ## Mistakes to avoid
 

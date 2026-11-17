@@ -30,12 +30,21 @@ START = "start/getting-started"
 
 
 def rendered(markdown: str) -> tuple[str, dict[str, object]]:
-    """The page's Markdown with its TeX ($...$, $$...$$) as images, code left alone;
+    """The page's Markdown with its TeX ($...$, $$...$$) as images, code left alone, and
+    its pictures (`image:` names and the menu locations it names, `help.pictures`);
     (markdown, {url: QImage})."""
+    from PySide6.QtGui import QImage
+
     from puzzle.gui.agent_view import DISPLAY_TEX, INLINE_TEX, segments, tex_image
     from puzzle.gui.theme import current as tokens
+    from puzzle.help import pictures
 
+    markdown = pictures.with_pictures(markdown)
     colour, images, parts = tokens().text, {}, []
+    for name in pictures.references(markdown):
+        image = QImage(str(pictures.path(name)))
+        if not image.isNull():
+            images[f"image:{name}"] = image
 
     def put(m, display: bool) -> str:
         image = tex_image(m.group(1).strip(), colour, display)

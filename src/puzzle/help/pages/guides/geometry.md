@@ -67,8 +67,8 @@ extrusion (`Plate/bottom`).
 
 ## How to make selections by picking
 
-1. Turn on Pick (P, or Geometry → Pick) and choose the filter: Geometry → Pick filter →
-   Faces, Edges, Bodies or Points (Regions in a 2D model).
+1. Turn on Pick (P, or Geometry → Pick) and choose the filter in Geometry → Pick filter:
+   faces, edges, bodies or points (regions in a 2D model).
 2. Double-click entities in the view. B switches to box select.
 3. Geometry → Selections → New from picks… names them as a selection.
 4. To change one, right-click it in the tree: Edit in the view, Replace with picked,

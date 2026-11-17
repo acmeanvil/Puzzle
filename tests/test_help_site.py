@@ -60,6 +60,17 @@ def test_equations_are_drawn_and_the_search_index_lands(built):
         assert (out / e["url"].split("#")[0]).exists()
 
 
+def test_pictures_are_in_the_pages(built):
+    """Screens, operators' nodes and the menu locations a page names, as PNGs within the
+    page and no wider than the PDF's text."""
+    out, _ = built
+    for name in ("guides/agent-and-advisor", "reference/operators"):
+        page = (out / f"{name}.html").read_text(encoding="utf-8")
+        assert 'class="picture"' in page and "image:" not in page, name
+    for width in re.findall(r'class="picture"[^>]* width="(\d+)"', page):
+        assert int(width) <= site.PICTURE_WIDTH
+
+
 def test_a_help_key_link_goes_to_its_heading():
     """A link by help key (help:feature:pressure) resolves through `help.lookup` to the
     page and heading the key marks, as F1 does."""
@@ -70,11 +81,53 @@ def test_a_help_key_link_goes_to_its_heading():
     assert site.resolve("no-such-page") is None
 
 
-def test_the_pdf_holds_the_whole_manual(tmp_path):
+LITERAL = rb"\((?:\\.|[^\\)])*\)"  # a PDF literal string, escapes and all
+
+
+def _text(token: bytes) -> str:
+    """A PDF string token, literal (Qt's) or hex (the bookmarks'), as text."""
+    if token.startswith(b"<"):
+        raw = bytes.fromhex(token[1:-1].decode())
+    else:
+        raw = re.sub(rb"\\([0-7]{1,3}|.)", lambda m: _escape(m.group(1)), token[1:-1], flags=re.S)
+    return raw[2:].decode("utf-16-be") if raw[:2] == b"\xfe\xff" else raw.decode("latin-1")
+
+
+def _escape(code: bytes) -> bytes:
+    if code[:1].isdigit():
+        return bytes([int(code, 8)])
+    return {b"n": b"\n", b"r": b"\r", b"t": b"\t", b"b": b"\b", b"f": b"\f"}.get(code, code)
+
+
+@pytest.fixture(scope="module")
+def pdf(tmp_path_factory):
     pytest.importorskip("PySide6")
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    path = tmp_path / "manual.pdf"
-    done = site.build_pdf(path)
+    path = tmp_path_factory.mktemp("pdf") / "manual.pdf"
+    return path, site.build_pdf(path)
+
+
+def test_the_pdf_holds_the_whole_manual(pdf):
+    path, done = pdf
     data = path.read_bytes()
     assert data.startswith(b"%PDF") and done["pages"] == len(manual.pages())
+    assert done["missing"] == []
     assert len(re.findall(rb"/Type\s*/Page\b", data)) > 2 * done["pages"]
+
+
+def test_the_pdf_links_and_bookmarks_land(pdf):
+    """Every link and bookmark names a destination the document holds: a page, a heading
+    or a help key's heading, as the site's links do."""
+    path, _ = pdf
+    data = path.read_bytes()
+    names = {_text(m) for m in re.findall(rb"(" + LITERAL + rb")\s+\d+ 0 R", data)}
+    links = [_text(m) for m in re.findall(rb"/Subtype /Link\s.*?/Dest (" + LITERAL + rb")",
+                                          data, re.S)]  # fmt: skip
+    marks = [_text(m) for m in re.findall(rb"/Dest (<FEFF[0-9A-F]*>)", data)]
+    assert len(links) > 100 and set(links) <= names
+    assert len(marks) > len(manual.pages()) and set(marks) <= names
+    assert {p for p in manual.pages()} <= names  # each page a bookmark's target
+    key = next(k for k in sorted(manual.keys()) if manual.lookup(k)[1] and ":" in k)
+    page, _ = manual.lookup(key)
+    assert f"{page.name}~{site.slug(key)}" in names  # a help key's heading, as F1 finds
+    assert b"/PageMode /UseOutlines" in data and data.rstrip().endswith(b"%%EOF")

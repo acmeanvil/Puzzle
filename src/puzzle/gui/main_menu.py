@@ -86,6 +86,28 @@ def _enable(window, menu: QMenu) -> None:
             action.menu().setEnabled(has)
 
 
+def paths(window) -> dict[str, list]:
+    """Every menu path the menu bar holds, as the manual writes it ("Model → Studies →
+    New study…"), each with its chain of (menu, action) from the bar down (the bar's
+    title first, with no menu); dynamic menus filled as when opened. The manual's menu
+    pictures and its check of menu locations read it (ADR 0083)."""
+    out: dict[str, list] = {}
+
+    def walk(menu: QMenu, chain: list, names: list[str]) -> None:
+        menu.aboutToShow.emit()
+        for action in menu.actions():
+            if action.isSeparator() or not action.text():
+                continue
+            here = [*names, action.text().replace("&", "")]
+            out[" → ".join(here)] = [*chain, (menu, action)]
+            if action.menu() is not None:
+                walk(action.menu(), [*chain, (menu, action)], here)
+
+    for top in window.menuBar().actions():
+        walk(top.menu(), [(None, top)], [top.text().replace("&", "")])
+    return out
+
+
 def _choose(window, title: str, objects: list, what: str):
     """The one object of a kind, or the user's choice in one form."""
     if not objects:

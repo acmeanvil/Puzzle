@@ -3,7 +3,8 @@
     pixi run -e dev python scripts/build_help_site.py OUT [--pdf FILE] [--no-site]
 
 OUT gets index.html, a page per help page, style.css and search.js; --pdf writes the
-whole manual as one PDF. Links that resolve nowhere are listed and fail the build.
+whole manual as one PDF, its links and bookmarks jumping to pages and headings. Links
+that resolve nowhere are listed and fail the build.
 """
 
 from __future__ import annotations
@@ -33,6 +34,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.pdf:
         done = site.build_pdf(args.pdf)
         print(f"{done['pages']} pages in {args.pdf}")
+        for link in done["missing"]:
+            print(f"  no page for {link}")
+        status = 1 if done["missing"] else status
     return status
 
 

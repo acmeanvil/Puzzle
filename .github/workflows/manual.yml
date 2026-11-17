@@ -1,0 +1,49 @@
+name: Manual
+
+# The manual as one PDF (ADR 0083 step 5): built from the help pages by
+# scripts/build_help_site.py, its links and bookmarks checked as it's built (a link to no
+# page fails the job). Run by hand for a test build (the PDF is this run's artifact), and
+# on a published release, which gets it as an asset beside the installers.
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+concurrency:
+  group: manual-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pdf:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write  # attaching to a release
+    steps:
+      - uses: actions/checkout@v4
+      - uses: prefix-dev/setup-pixi@v0.8.1
+        with:
+          environments: dev
+      # Qt's offscreen platform still loads EGL and xkbcommon; the fonts are matplotlib's.
+      - run: sudo apt-get update -q && sudo apt-get install -y -q libegl1 libgl1 libxkbcommon0
+      - name: Build the manual
+        env:
+          QT_QPA_PLATFORM: offscreen
+          TAG: ${{ github.event.release.tag_name || 'test' }}
+        run: |
+          mkdir -p manual
+          pixi run -e dev python scripts/build_help_site.py manual/site --no-site \
+            --pdf "manual/Puzzle-manual-${TAG}.pdf"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: manual
+          path: manual/Puzzle-manual-*.pdf
+          if-no-files-found: error
+      - name: Attach to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release upload "${{ github.event.release.tag_name }}" --clobber
+          manual/Puzzle-manual-*.pdf
