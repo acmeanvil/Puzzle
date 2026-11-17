@@ -14,11 +14,14 @@
 name = "Structural steel"
 type = "Metal"
 group = "Carbon Steel"
-description = "Generic carbon structural steel (e.g. S235 to S355). Room values and tables from the EN 1993-1-2 carbon steel formulas"
-sources = ["EN 1993-1-2:2005 (Eurocode 3 Part 1-2), clause 3.4 and Table 3.1: carbon steel thermal and mechanical properties at elevated temperature"]
+description = "Generic mild carbon structural steel, with the strengths of the common 250 MPa yield grades. Room values and tables from the EN 1993-1-2 carbon steel formulas; a reference entry: pick a named grade for design"
+sources = ["EN 1993-1-2:2005 (Eurocode 3 Part 1-2), clause 3.4 and Table 3.1: carbon steel thermal and mechanical properties at elevated temperature", "Strengths: the minimums common to mild structural steel plate and shapes, 250 MPa yield and 400 MPa tensile; compressive yield taken equal to the tensile yield"]
 density = { value = 7850, unit = "kg/m^3" }
 youngs_modulus = { value = 210, unit = "GPa" }
 poissons_ratio = { value = 0.30 }
+yield_strength = { value = 250, unit = "MPa" }
+tensile_strength = { value = 400, unit = "MPa" }
+compressive_yield_strength = { value = 250, unit = "MPa" }
 thermal_conductivity = { value = 53.33, unit = "W/(m*K)" }
 specific_heat = { value = 439.8, unit = "J/(kg*K)" }
 thermal_expansion = { value = 12.16e-6, unit = "1/K" }
@@ -32,6 +35,12 @@ relative_permeability = { value = 1.0 }  # treated as non-magnetic; use electric
 unit = "Pa"
 points = [[293.15, 210e9], [373.15, 210e9], [473.15, 189e9], [573.15, 168e9], [673.15, 147e9],
           [773.15, 126e9], [873.15, 65.1e9], [973.15, 27.3e9], [1073.15, 18.9e9]]
+
+# Yield: 250 MPa x k_y of EN 1993-1-2 Table 3.1 (effective yield strength).
+[structural_steel.tables.yield_strength]
+unit = "Pa"
+points = [[293.15, 250e6], [673.15, 250e6], [773.15, 195e6], [873.15, 117.5e6], [973.15, 57.5e6],
+          [1073.15, 27.5e6]]
 
 [structural_steel.tables.thermal_conductivity]
 unit = "W/(m*K)"

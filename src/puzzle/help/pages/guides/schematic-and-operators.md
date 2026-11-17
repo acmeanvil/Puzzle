@@ -66,8 +66,8 @@ Every operator's node, with its inputs and outputs, is drawn on the
 
 1. A **Result summary** (reduce) on the study's stress: maximum von Mises on a selection.
 2. A **Model value** reading the material's Yield strength. The generic Structural
-   steel is any grade from S235 to S355, so it has none: give your material its yield
-   (Materials), use a grade that has one (ASTM A992, A36, ...), or type the limit.
+   steel carries a mild steel's 250 MPa; for another grade pick it in Materials (ASTM
+   A992, A36, ...), give your material its yield, or type the limit.
 3. A **Check against limit** with the summary as its value and the yield as its limit.
    Its verdict is pass or fail; its margin is limit ÷ value − 1 (0.25 is 25 % to spare).
    When the value is zero or negative, or the check is "at least", the margin is the

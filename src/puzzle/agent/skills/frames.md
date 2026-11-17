@@ -165,5 +165,5 @@ angles and double angles are listed under `not_checked` with the reason.
   in the factors where they govern.
 - An aluminium member with welds along it: the ADM's heat-affected zones aren't applied
   yet; its checks are an unwelded member's.
-- Generic "Structural steel" has no yield strength: members on it are not checked; use
-  an ASTM grade or give the material its yield and tensile strengths.
+- Generic "Structural steel" is a reference material (250 MPa yield, 400 MPa tensile):
+  members on it are checked at those strengths; use the named grade the design calls for.

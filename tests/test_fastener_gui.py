@@ -316,7 +316,9 @@ def test_the_bolt_table(app, tmp_path):
     results = window.bolts.results
     assert results.table.rowCount() == 2
     worst, other = results.found
-    assert worst.name == "Bolt" and other.proof is None  # the pin's steel has no proof
+    # the pin's steel has a yield strength but no proof strength
+    assert {worst.name, other.name} == {"Bolt", "Pin"}
+    assert next(r for r in results.found if r.name == "Pin").proof is None
     assert results.table.item(0, 0).font().bold()
     # By hand: σ = |N|/As + M/Z, Z = π d³/32 on the stress area's diameter; As of M8.
     area = 36.6e-6

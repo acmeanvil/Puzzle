@@ -562,11 +562,11 @@ def test_a_hostile_expression_returns_promptly(text):
         assert time.perf_counter() - start < 2.0, (op.name, text)
 
 
-def test_the_shipped_steel_says_it_has_no_yield():
+def test_a_material_with_no_yield_says_so():
     from puzzle.materials import library_material
 
     p = Project("p")
-    steel = p.add(library_material("structural_steel"))
+    steel = p.add(library_material("copper"))  # the shipped copper has none
     mv = p.add(Operator(name="Sy", type="model_value", target=steel.id,
                         property="properties.yield_strength"))  # fmt: skip
     text, _ = ev.shown(ev.Context(p, None), mv)

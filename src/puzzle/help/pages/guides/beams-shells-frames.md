@@ -114,8 +114,9 @@ angles are listed as not checked.
 
 - A member with no section: refused. Give the part one, or each group.
 - An orientation along a member (a vertical column with first axis z): refused.
-- Generic Structural steel has no yield strength, so its members aren't checked. Use an
-  ASTM grade (A992, A36, A572 Gr. 50, A500 Gr. C).
+- Generic Structural steel is a reference material (250 MPa yield, 400 MPa tensile), and
+  its members are checked at those strengths. For design use the grade the drawings call
+  for (A992, A36, A572 Gr. 50, A500 Gr. C).
 - Member checks on unfactored loads: the ratios are not the code's. Use combinations of
   the method's kind.
 - Single angles: give the first axis along a leg; Puzzle turns it to the principal axes.
