@@ -90,6 +90,11 @@ Field `current_density_phase`: Phase (vector of angles), and Phase, ° along X, 
 
 Field `stress`: the stress components (xx, yy, zz, xy, yz, zx), principal values and an equivalent; a pressure.
 
+<!-- key: result:membrane_stress -->
+### Membrane stress (shells)
+
+Field `membrane_stress`: the membrane stress components (xx, yy, zz, xy, yz, zx), principal values and an equivalent; a pressure.
+
 <!-- key: result:strain -->
 ### Strain
 

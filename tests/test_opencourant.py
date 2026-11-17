@@ -425,3 +425,156 @@ def test_beams_and_failure_are_written(tmp_path):
     est = explicit.estimate(p, comp, mesh, 1e-3)
     assert est.time_step == pytest.approx(0.1 / math.sqrt(200e9 / 7850.0))
     assert est.mass == pytest.approx(7850.0 * a * 0.4)
+
+
+def test_names_never_start_a_line_radioss_would_skip_or_read_as_a_keyword(tmp_path):
+    """ADR 0090 OC-1: Radioss skips a line starting with `#` or `$` and reads one starting
+    with `/` as a keyword, so a title from such a name shifted the card under it (an
+    amplitude `#1 ramp` lost its first point; a material `#1 Steel` read E as its
+    density). Titles from names now start with something else, the name kept after it."""
+    from puzzle.adapters.opencourant import deck
+    from puzzle.model.schema import Amplitude
+
+    p, comp = _project()
+    mat = next(o for o in p.objects.values() if isinstance(o, Material))
+    mat.name = "#1 Steel"
+    mesh = _cube_mesh(2, 0.01)
+    face = np.array([n for n, x in zip(mesh.node_ids, mesh.coords, strict=True) if x[0] == 0])
+    mesh.groups["/P/Start"] = Group("/P/Start", 2, [], face)
+    amp = p.add(Amplitude(name="  #1 ramp", points=[(0.0, 0.0), (1e-3, 1.0)]))
+    comp.physics[0].features = [
+        Feature(type="fixed", selection="/P/Start"),
+        Feature(type="velocity", selection="P", values={"x": q(1, "m/s")}, amplitude=amp.id),
+    ]
+    study = p.add(
+        Study(
+            name="$tudy",
+            component=comp.id,
+            solver="opencourant",
+            steps=[SolveStep(type="explicit", settings={"end_time": q(1, "ms")})],
+        )
+    )
+    deck.write(p, study, mesh, tmp_path, study.steps[0])
+    lines = (tmp_path / "puzzle_0000.rad").read_text(encoding="utf-8").splitlines()
+    for key, title in zip(lines, lines[1:], strict=False):  # a keyword, then its title
+        if key.startswith("/") and title[:1] != " ":  # (not /NODE's or a block's data)
+            assert title[:1] != "#" and title[:1] != "$", (key, title)
+            assert not title.startswith("/") or title.split("/")[1].isupper(), (key, title)
+    assert "_#1 Steel" in lines and "_#1 ramp" in lines and "_$tudy" in lines
+    funct = lines.index("_#1 ramp") + 1  # the ramp keeps its first point
+    assert [float(x) for x in lines[funct].split()] == [0.0, 0.0]
+
+
+def test_a_displacement_that_jumps_at_the_start_is_refused(tmp_path):
+    """ADR 0090 OC-2: in an explicit step a nonzero displacement with no amplitude, or one
+    starting above zero, moves its nodes at once: an impact the user rarely meant (a
+    block rang at 2.2 times its static stress). It is refused; a ramp from zero is
+    written, and a held (zero) component needs none."""
+    from puzzle.adapters.common import InputError
+    from puzzle.adapters.opencourant import deck
+    from puzzle.model.schema import Amplitude
+
+    p, comp = _project()
+    mesh = _cube_mesh(2, 0.01)
+    study = p.add(
+        Study(
+            name="Pull",
+            component=comp.id,
+            solver="opencourant",
+            steps=[SolveStep(type="explicit", settings={"end_time": q(1, "ms")})],
+        )
+    )
+    pull = Feature(type="displacement", selection="P", values={"x": q(0.01, "mm")})
+    comp.physics[0].features = [pull]
+    with pytest.raises(InputError, match="no amplitude") as info:
+        deck.write(p, study, mesh, tmp_path, study.steps[0])
+    assert info.value.code == "invalid_input"
+    pull.amplitude = p.add(Amplitude(name="step", points=[(0.0, 1.0), (1e-3, 1.0)])).id
+    with pytest.raises(InputError, match="starting at 1"):
+        deck.write(p, study, mesh, tmp_path, study.steps[0])
+    pull.amplitude = p.add(Amplitude(name="ramp", points=[(0.0, 0.0), (1e-3, 1.0)])).id
+    deck.write(p, study, mesh, tmp_path, study.steps[0])
+    assert "/IMPDISP/1" in (tmp_path / "puzzle_0000.rad").read_text(encoding="utf-8")
+    comp.physics[0].features = [Feature(type="displacement", selection="P",
+                                        values={"x": q(0, "m"), "y": q(0, "m")})]  # fmt: skip
+    deck.write(p, study, mesh, tmp_path, study.steps[0])  # held only: nothing moves
+
+
+def test_a_force_along_an_edge_is_shared_by_tributary_length(tmp_path):
+    """ADR 0090 OC-6: a force on an edge selection was shared equally by its nodes, the
+    ends taking an interior node's share and uneven spacing ignored. A graded edge
+    (spacings 1, 2, 3, 4 mm) now gives each node half of each element it ends: ends
+    0.5 and 2 mm of 10, the interior nodes 1.5, 2.5 and 3.5."""
+    from puzzle.adapters.opencourant import deck
+
+    p, comp = _project()
+    mesh = _cube_mesh(1, 0.01)
+    xs = np.array([0.0, 1.0, 3.0, 6.0, 10.0]) * 1e-3
+    first = len(mesh.node_ids) + 1
+    edge_nodes = np.arange(first, first + len(xs))
+    mesh.node_ids = np.concatenate([mesh.node_ids, edge_nodes])
+    mesh.coords = np.vstack([mesh.coords, np.column_stack([xs, np.zeros((len(xs), 2))])])
+    line = np.column_stack([edge_nodes[:-1], edge_nodes[1:]])
+    mesh.blocks.append(CellBlock("line2", 1, (1, 7), np.arange(100, 100 + len(line)), line))
+    mesh.groups["P/Edge"] = Group("P/Edge", 1, [(1, 7)], edge_nodes)
+    shares = deck._edge_shares(mesh.groups["P/Edge"], mesh)
+    assert [shares[int(n)] for n in edge_nodes] == pytest.approx([0.05, 0.15, 0.25, 0.35, 0.2])
+    comp.physics[0].features = [Feature(type="fixed", selection="P"),
+                                Feature(type="force", selection="P/Edge",
+                                        values={"z": q(100, "N")})]  # fmt: skip
+    study = p.add(
+        Study(
+            name="Edge",
+            component=comp.id,
+            solver="opencourant",
+            steps=[SolveStep(type="explicit", settings={"end_time": q(1, "ms")})],
+        )
+    )
+    deck.write(p, study, mesh, tmp_path, study.steps[0])
+    lines = (tmp_path / "puzzle_0000.rad").read_text(encoding="utf-8").splitlines()
+    loads = [float(lines[i + 2][-20:]) for i, x in enumerate(lines) if x.startswith("/CLOAD/")]
+    assert sorted(loads) == pytest.approx([5.0, 15.0, 20.0, 25.0, 35.0])
+
+
+def test_without_mpiexec_the_starter_splits_nothing(monkeypatch, tmp_path):
+    """ADR 0090 OC-4: the native driver ran the Starter with -np N before looking for
+    mpiexec, then the one-process Engine on a model split for N. It looks first now."""
+    from puzzle.adapters.opencourant import native
+
+    monkeypatch.setattr(native.shutil, "which", lambda *a, **k: None)
+    starter, engine, note = native.commands(tmp_path, "linux64", "puzzle", 4, "", {})
+    assert starter[-2:] == ["-np", "1"] and len(engine) == 3
+    assert engine[0].endswith("engine_linux64_gf")
+    assert "one process" in note
+    monkeypatch.setattr(native.shutil, "which", lambda *a, **k: "/usr/bin/mpiexec")
+    starter, engine, note = native.commands(tmp_path, "linux64", "puzzle", 4, "", {})
+    assert starter[-2:] == ["-np", "4"] and engine[:3] == ["/usr/bin/mpiexec", "-np", "4"]
+    assert engine[3].endswith("_ompi") and note == ""
+
+
+def test_frames_past_999_are_read_in_order(tmp_path):
+    """ADR 0090 OC-5: frames past 999 take a fourth digit, which `A[0-9][0-9][0-9]`
+    dropped (and A1000 sorts before A999 as text)."""
+    from puzzle.adapters.opencourant.output import frame_files
+
+    for k in (1, 2, 999, 1000, 1001):
+        (tmp_path / f"puzzleA{k:03d}").write_text("", encoding="utf-8")
+        (tmp_path / f"puzzleA{k:03d}.vtk").write_text("", encoding="utf-8")
+    (tmp_path / "puzzleT01").write_text("", encoding="utf-8")
+    assert [f.name for f in frame_files(tmp_path, "puzzle")] == [
+        "puzzleA001", "puzzleA002", "puzzleA999", "puzzleA1000", "puzzleA1001"]  # fmt: skip
+    assert [f.name for f in frame_files(tmp_path, "puzzle", ".vtk")][-1] == "puzzleA1001.vtk"
+
+
+def test_a_last_frame_short_of_the_end_is_said():
+    """ADR 0090 OC-5: the run is carried two estimated steps past its end so the frame
+    there is written; a solver step past that leaves it out, which is now said."""
+    step = SolveStep(type="explicit", settings={"end_time": q(1, "ms"), "frames": 10})
+    whole = _history(kinetic_energy=[1.0] * 11, internal_energy=[0.0] * 11,
+                     external_work=[0.0] * 11)  # fmt: skip
+    for k, s in enumerate(whole.steps):
+        s.value = k * 1e-4
+    assert explicit.run_checks(whole, step) == []
+    whole.steps.pop()  # the frame at 1 ms missing
+    ((code, text),) = explicit.run_checks(whole, step)
+    assert code == "last_frame" and "short of the end time" in text

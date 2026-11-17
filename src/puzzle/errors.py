@@ -49,6 +49,7 @@ CODES = {
     "energy_error": "an explicit run's energy balance off by more than 5 % (ADR 0085)",
     "hourglass": "hourglass energy over 10 % of the internal energy (ADR 0085)",
     "added_mass": "mass scaling added over 5 % of the mass (ADR 0085)",
+    "last_frame": "an explicit run's last frame falls short of its end time (ADR 0090 OC-5)",
     "weak_springs_carry": "a body's weak springs carry its load: it never seated (ADR 0080)",
     "thread_radii": "a threaded contact's two cylinders are not one radius (ADR 0076)",
     "invalid_archive": "a project archive damaged, unsafe or from a newer Puzzle (ADR 0061)",

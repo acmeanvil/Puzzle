@@ -8,8 +8,9 @@ Analysis Method, against closed forms.
   The exact second-order base moment is M = H tan(kh)/k, k = √(P/EI) (Timoshenko & Gere,
   the beam-column); the first-order one H h. At P = 0.3 of Euler's π²EI/(4h²), the
   amplification is 1.4; meshed in 16 members, PyNite's P-Δ gets it within 0.5 %.
-- Direct Analysis (AISC 360 C2): the same with EI × 0.8 and a notional load 0.002 P added
-  to H: M = (H ± 0.002 P) tan(k'h)/k', k' = √(P/0.8EI), one combination per sense.
+- Direct Analysis (AISC 360 C2): the same with EI × 0.8 and a notional load 0.003 P added
+  to H (C2.2b's 0.002 and C2.3(c)'s 0.001, which keeps τ_b = 1 at any axial load; ADR
+  0090 PYN-2): M = (H ± 0.003 P) tan(k'h)/k', k' = √(P/0.8EI), one combination per sense.
 """
 
 import math
@@ -98,8 +99,13 @@ def _column_project(fraction, settings):
     probe = BeamSection(selection="F", orientation=(0.0, 1.0, 0.0), **W12)
     _a, i1, _i2, _j = frames.constants(probe)  # bent about the section's first axis (y)
     combos = [LoadCombination(name="D + W", factors={"D": 1.0, "W": 1.0})]
+    # The top is held along y, against the weak axis (I2 = 0.085 I1): unbraced, 0.3 of
+    # the strong axis's Euler load is 3.5 times the weak axis's, and the column buckles
+    # sideways (refused since ADR 0090 PYN-3); braced there it is 0.43 of the propped
+    # weak axis's, and x-z bending is as it was.
     features = [
         Feature(type="fixed", selection="F/A"),
+        Feature(type="displacement", selection="F/B", values={"y": q(0.0, "m")}),
         Feature(type="force", selection="F/B", case="D", values={"z": q(-1.0, "N")}),
         Feature(type="force", selection="F/B", case="W", values={"x": q(lateral, "N")}),
     ]
@@ -110,7 +116,7 @@ def _column_project(fraction, settings):
     ei = e * i1
     axial = fraction * math.pi**2 * ei / (4 * h**2)
     comp = next(o for o in p.objects.values() if isinstance(o, Component))
-    comp.physics[0].features[1].values["z"] = q(-axial, "N")
+    comp.physics[0].features[2].values["z"] = q(-axial, "N")
     return p, study, h, lateral, ei, axial
 
 
@@ -136,8 +142,31 @@ def test_direct_analysis_reduces_stiffness_and_adds_notional_loads(tmp_path, sol
     assert labels == ["D + W, notional +x", "D + W, notional -x"]
     k = math.sqrt(axial / (0.8 * ei))
     for step, sign in zip(run.results.steps, (1.0, -1.0), strict=True):
-        h_total = lateral + sign * 0.002 * axial
+        h_total = lateral + sign * 0.003 * axial
         exact = h_total * math.tan(k * h) / k
         got = _base_moment(step, run.mesh)
         print(f"{step.label()}: base moment {got:.6g} N m against {exact:.6g}")
         assert got == pytest.approx(exact, rel=1e-3)
+
+
+@over("pynite")
+@pytest.mark.parametrize("case", ["past buckling", "mechanism"])
+def test_p_delta_refuses_an_unstable_frame(tmp_path, solver, case):
+    """ADR 0090 PYN-3: PyNite's P-Delta (stability check or not) solved a sway mechanism
+    to NaN and a column at 1.5 times Euler's load to the unstable equilibrium's moment,
+    28 kN m (|H tan(kh)/k| = 29 kN m, the sign lost), both as results. The runner now
+    refuses both in PyNite's words: a non-finite displacement, or a combination whose
+    second-order stiffness K + K_G has a negative pivot (it also found the benchmark
+    column above, unbraced, past its weak axis's Euler load)."""
+    from puzzle.solve import StudyError
+
+    fraction = 1.5 if case == "past buckling" else 0.3
+    p, study, *_ = _column_project(fraction, {"second_order": True})
+    if case == "mechanism":  # the base pinned: free to sway
+        comp = next(o for o in p.objects.values() if isinstance(o, Component))
+        comp.physics[0].features[0] = Feature(type="displacement", selection="F/A",
+                                              values={a: q(0.0, "m") for a in "xyz"})  # fmt: skip
+    with pytest.raises(StudyError, match="unstable under second-order analysis"):
+        _solve(tmp_path, p, study)
+    p, study, *_ = _column_project(0.3, {"second_order": True})  # below it: solved
+    assert _solve(tmp_path / "below", p, study).results.steps

@@ -54,7 +54,14 @@ def _r(*values) -> str:
 
 
 def _title(text: str) -> str:
-    return "".join(c if c.isprintable() else " " for c in text)[:100] or "-"
+    """A card's title line from a user's name. Radioss skips a line starting with `#` or
+    `$` (a comment) and reads one starting with `/` as a keyword, so such a name shifted
+    every field after it: an amplitude `#1 ramp` lost its first point, a material
+    `#1 Steel` read E as its density (ADR 0090 OC-1). Those starts get a `_` before them."""
+    text = "".join(c if c.isprintable() else " " for c in text).lstrip()
+    if text[:1] in ("#", "$", "/"):
+        text = "_" + text
+    return text[:100] or "-"
 
 
 @dataclass
@@ -349,6 +356,26 @@ def _amplitude(deck: Deck, project: Project, f) -> int:
     return deck.function([tuple(p) for p in amp.points], amp.name, key=amp.id)
 
 
+def _starts_at_rest(project: Project, f) -> None:
+    """A nonzero prescribed displacement must start from zero. Without an amplitude (the
+    normal input in a static step) the nodes jump at t = 0, an infinite velocity: a 20 mm
+    block moved 0.01 mm so rang at 2.2 times the static stress and the energy check
+    blamed the time step (ADR 0090 OC-2). So it is refused, saying what to do."""
+    amp = project.objects.get(f.amplitude) if f.amplitude is not None else None
+    start = amp.at(0.0) if isinstance(amp, Amplitude) else None
+    if f.amplitude is None or (start is not None and start != 0.0):
+        said = ("has no amplitude, so it would be applied at once"
+                if f.amplitude is None else f"has an amplitude starting at {start:g}, so it "
+                "would jump at t = 0")  # fmt: skip
+        raise InputError(
+            f"displacement on '{f.selection}' {said}: in an explicit step that is an "
+            "impact. Give it an amplitude rising from 0 (a ramp over the step for a slow "
+            "pull), or prescribe a velocity instead",
+            code="invalid_input",
+            details={"selection": f.selection},
+        )
+
+
 def _group(mesh: Mesh, f):
     group = mesh.groups.get(f.selection)
     if group is None:
@@ -378,6 +405,8 @@ def _features(deck: Deck, project: Project, comp: Component, mesh: Mesh) -> None
                 if "1" in held:
                     deck.card(f"/BCS/{deck.ids.next('bcs')}", title,
                               f"{held:>6}{'000':>4}" + _i(0, gid))  # fmt: skip
+                if moved:
+                    _starts_at_rest(project, f)
                 fid = _amplitude(deck, project, f) if moved else 0
                 for a in moved:
                     deck.card(f"/IMPDISP/{deck.ids.next('impdisp')}", title,
@@ -423,12 +452,14 @@ def _turning(mesh: Mesh) -> set[int]:
 
 
 def _force(deck, project, f, group, mesh, v, title) -> None:
-    """A total force spread as a uniform traction, consistently over the faces (a node
-    selection: shared equally), one /CLOAD per node and direction."""
+    """A total force spread as a uniform traction, consistently over the faces or along
+    the edges (a point selection: shared equally), one /CLOAD per node and direction."""
     total = np.array([v.get(a, 0.0) for a in "xyz"])
     if group.dim == 2:
         area = surface_area(group, mesh)
         forces = nodal_traction(group, mesh, lambda x: np.tile(total / area, (len(x), 1)))
+    elif group.dim == 1 and (shares := _edge_shares(group, mesh)):
+        forces = {n: share * total for n, share in shares.items()}
     else:
         forces = {int(n): total / len(group.node_ids) for n in group.node_ids}
     fid = _amplitude(deck, project, f)
@@ -442,6 +473,25 @@ def _force(deck, project, f, group, mesh, v, title) -> None:
                     title,
                     _i(fid) + f"{a:>10}" + _i(0, 0, gid) + " " * 10 + _r(1.0, force[k]),
                 )
+
+
+def _edge_shares(group, mesh: Mesh) -> dict[int, float]:
+    """Each node's share of a uniform load along an edge selection's line elements: its
+    tributary length over the whole (half of each two-node element; a three-node one's
+    1/6, 1/6, 2/3). Shared equally, an end node took an interior one's share and uneven
+    spacing was ignored (ADR 0090 OC-6)."""
+    shares: dict[int, float] = {}
+    for b in group.blocks(mesh):
+        if b.dim != 1 or b.element not in ("line2", "line3"):
+            continue
+        xyz = mesh.node_coords(b.connectivity[:, :2].ravel()).reshape(len(b.ids), 2, 3)
+        length = np.linalg.norm(xyz[:, 1] - xyz[:, 0], axis=1)
+        weights = (0.5, 0.5) if b.element == "line2" else (1 / 6, 1 / 6, 2 / 3)
+        for k, w in enumerate(weights):
+            for n, dl in zip(b.connectivity[:, k], length, strict=True):
+                shares[int(n)] = shares.get(int(n), 0.0) + w * float(dl)
+    whole = sum(shares.values())
+    return {n: s / whole for n, s in shares.items()} if whole > 0 else {}
 
 
 def _pressure(deck, project, f, group, mesh, v, title) -> None:
@@ -655,8 +705,9 @@ def write(project: Project, study: Study, mesh: Mesh, workdir: Path, step, proce
         f"starter{sp} -i {name}_0000.rad -np {processes}",
         (f"mpiexec -np {processes} engine_ompi{sp} -i {name}_0001.rad" if processes > 1
          else f"engine{sp} -i {name}_0001.rad"),
-        f"for f in {name}A[0-9][0-9][0-9]; do [ -e \"$f\" ] && anim_to_vtk_linux64_gf \"$f\" "
-        "> \"$f.vtk\"; done",
+        # every frame, A001 to A999 and on past it (ADR 0090 OC-5), not the .vtk made here
+        f"for f in {name}A[0-9][0-9][0-9]*; do case \"$f\" in *.*) continue;; esac; "
+        "[ -e \"$f\" ] && anim_to_vtk_linux64_gf \"$f\" > \"$f.vtk\"; done",
         f"[ -e {name}T01 ] && th_to_csv_linux64_gf {name}T01 > /dev/null",
         "exit 0",
     ])  # fmt: skip

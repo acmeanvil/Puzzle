@@ -27,6 +27,7 @@ from puzzle.adapters.common import (
     THERMAL,
     InputError,
     check_contacts,
+    check_labels,
     hydraulic_diameter,
     initial_temperature,
     match_points,
@@ -55,6 +56,7 @@ FIELDS = {
     "epsilon": ("turbulent_dissipation", [""]),
     "omega": ("specific_dissipation", [""]),
     "turbulent_viscosity": ("turbulent_viscosity", [""]),
+    "TurbVisc": ("turbulent_viscosity", [""]),  # Code_Saturne 9.2's name (ADR 0090 CS-2)
 }
 TURBULENCE = {"laminar": "off", "k-epsilon": "k-epsilon-PL", "k-omega-SST": "k-omega-SST"}
 
@@ -148,6 +150,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
             zone["pressure"] = v.get("p", 0.0)
         zones.append(zone)
         by_selection[f.selection] = zone
+    check_labels({f.selection: _label(f.selection) for f in features}, "Code_Saturne")
     for side in sides:  # symmetry: on a wedge's sides, axisymmetry with no swirl
         zones.append({"label": side.strip("_"), "selection": str(tags[side]),
                       "nature": "symmetry"})  # fmt: skip
@@ -170,6 +173,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
         from puzzle.adapters.common import check_inlet_temperatures
 
         check_inlet_temperatures(features, thermal, "Code_Saturne")
+    level = _outlet_level(zones)
     transient = None
     if steps[0].type == "transient":
         # A true time march: a constant step, results every `output_every` steps (and
@@ -208,6 +212,8 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
             else None
         ),
         "zones": zones,
+        # Puzzle's, not Code_Saturne's: added to its pressure when read (_outlet_level)
+        "pressure_level": level,
         **_settings(study),  # ADR 0023
     }
     (workdir / "case.json").write_text(json.dumps(spec, indent=2), encoding="utf-8")
@@ -298,11 +304,14 @@ def read_results(workdir: Path) -> Results:
         frames = [(StepResult(1, "transient", t), v) for t, v in zip(at, found, strict=True)]
     else:
         frames = [(StepResult(1, "stationary", 1.0), variables)]
+    level = float(spec.get("pressure_level", 0.0))
     for step, these in frames:
         for name, (_, components, path) in these.items():
             if name in FIELDS:
                 field_name, comps = FIELDS[name]
                 values = read_variable(path, parts, components)
+                if name == "Pressure":
+                    values = values + level
                 step.fields[field_name] = Field(field_name, "element", comps, ids[order],
                                                 values[order])  # fmt: skip
     return layer.to_2d(workdir, Results(solver="code_saturne", steps=[s for s, _ in frames]))
@@ -312,6 +321,24 @@ def _seconds(value) -> float | None:
     if value is None:
         return None
     return value.to_si() if hasattr(value, "to_si") else float(value)
+
+
+def _outlet_level(zones: list[dict]) -> float:
+    """The outlets' pressure, which Code_Saturne can't be given: its outlet holds the
+    pressure at a reference outlet face at zero and ignores the value set there (100 Pa
+    came back as 0 to 0.003 Pa where OpenFOAM gave 100.000 to 100.004; a negative one
+    stopped its case model; ADR 0090 CS-1). So the level is added when read. Outlets at
+    different pressures can't be had that way (0.01 and 0 Pa came back −0.0026 and
+    −0.0018: the difference lost too), so they are refused."""
+    levels = sorted({float(z.get("pressure", 0.0)) for z in zones if z["nature"] == "outlet"})
+    if len(levels) > 1:
+        raise InputError(
+            "Code_Saturne's outlets share one pressure level, so outlets at different "
+            f"pressures ({', '.join(f'{p:g} Pa' for p in levels)}) aren't written: set them "
+            "equal, or use OpenFOAM",
+            code="unsupported",
+        )
+    return levels[0] if levels else 0.0
 
 
 def _label(selection: str) -> str:

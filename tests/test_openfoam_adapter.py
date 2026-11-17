@@ -272,3 +272,74 @@ def test_heat_in_the_flow_needs_the_inlet_temperature(tmp_path):
     with pytest.raises(InputError, match="has none: add a temperature") as info:
         _duct(tmp_path, heat=[flux])
     assert info.value.code == "invalid_input"
+
+
+def _tapered_block(n: int = 10, length: float = 0.1):
+    """n³ hexahedra whose cross-section doubles along x (y, z = (1 + x/L) η, ζ), and the
+    first slab's cells cut into two prisms each: every face plane, the cells not
+    parallelepipeds, so their volume centroids aren't their node averages."""
+    from puzzle.mesh.mesh import CellBlock, Mesh
+
+    s = np.linspace(0, 1, n + 1)
+    index, coords = {}, []
+    for i, x in enumerate(s * length):
+        for j, eta in enumerate(s * 0.01):
+            for k, zeta in enumerate(s * 0.01):
+                index[i, j, k] = len(coords) + 1
+                coords.append((x, (1 + x / length) * eta, (1 + x / length) * zeta))
+    hexes, prisms = [], []
+    for i in range(n):
+        for j in range(n):
+            for k in range(n):
+                c = [index[i, j, k], index[i, j + 1, k], index[i, j + 1, k + 1],
+                     index[i, j, k + 1], index[i + 1, j, k], index[i + 1, j + 1, k],
+                     index[i + 1, j + 1, k + 1], index[i + 1, j, k + 1]]  # fmt: skip
+                if i == 0:  # the slab's square cut along its diagonal: two prisms
+                    prisms += [[c[0], c[1], c[2], c[4], c[5], c[6]],
+                               [c[0], c[2], c[3], c[4], c[6], c[7]]]  # fmt: skip
+                else:
+                    hexes.append(c)
+    blocks = [CellBlock("hex8", 3, (3, 1), np.arange(1, len(hexes) + 1), np.array(hexes)),
+              CellBlock("wedge6", 3, (3, 1), np.arange(len(hexes) + 1, len(hexes) + len(prisms)
+                                                        + 1), np.array(prisms))]  # fmt: skip
+    return Mesh(np.arange(1, len(coords) + 1), np.array(coords, float), blocks)
+
+
+def _hull_centroid(points: np.ndarray) -> np.ndarray:
+    """A convex cell's volume centroid from tetrahedra (an independent computation)."""
+    from scipy.spatial import Delaunay
+
+    tets = points[Delaunay(points).simplices]
+    v = np.abs(np.einsum("ij,ij->i", np.cross(tets[:, 1] - tets[:, 0], tets[:, 2] - tets[:, 0]),
+                         tets[:, 3] - tets[:, 0]))  # fmt: skip
+    return (v[:, None] * tets.mean(axis=1)).sum(axis=0) / v.sum()
+
+
+def test_cells_that_are_not_parallelepipeds_map_back(tmp_path):
+    """ADR 0090 OF-2: OpenFOAM's `C` is each cell's volume centroid; the reference was the
+    node average, equal only for tetrahedra and parallelepipeds, matched within 1e-5 of
+    the model's size: a tapered block's cells were 1e-3 of it off and no result could be
+    read. The reference is now OpenFOAM's own centre and the match is by each cell's
+    spacing."""
+    from puzzle.adapters.common import match_points
+    from puzzle.adapters.openfoam.case import foam_centres
+    from puzzle.mesh import layer
+
+    mesh = _tapered_block()
+    ids = np.concatenate([b.ids for b in mesh.blocks])
+    exact = np.vstack([
+        [_hull_centroid(mesh.node_coords(row)) for row in b.connectivity] for b in mesh.blocks
+    ])  # fmt: skip
+    ours = np.vstack([foam_centres(mesh, b) for b in mesh.blocks])
+    size = np.linalg.norm(np.ptp(mesh.coords, axis=0))
+    assert np.abs(ours - exact).max() < 1e-12 * size
+    averages = np.vstack([mesh.node_coords(b.connectivity.ravel()).reshape(
+        *b.connectivity.shape, 3).mean(axis=1) for b in mesh.blocks])  # fmt: skip
+    off = np.linalg.norm(averages - exact, axis=1).max() / size
+    assert off > 1e-4  # the node average was 10 to 100 times the old tolerance away
+    shuffled = np.random.default_rng(1).permutation(len(ids))
+    with pytest.raises(InputError, match="matches no mesh entity"):
+        match_points(exact[shuffled], averages, ids)  # the old reading
+    assert np.array_equal(layer.match(exact[shuffled], ours, ids), ids[shuffled])
+    with pytest.raises(InputError, match="off the mesh's cell centres"):
+        layer.match(exact[shuffled] + [0.004, 0, 0], ours, ids)  # a cell's width along

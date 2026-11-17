@@ -68,17 +68,18 @@ def _notionals(fractions):
 
 
 def test_direct_analysis_notional_loads_by_each_members_material():
-    """AISC 360 C2.2b N_i = 0.002 Y_i, AISC 370 C2.3(c) 0.004 Y_i on stainless, Y_i the
-    factored gravity (1.2 D): the beam's line load (carbon) at 0.002 of its 4 kN per end;
-    the point load at node 2 at the length-weighted mean of the members there,
-    (3 × 0.004 + 4 × 0.002) / 7; the plate's 4 kN (1 kPa × 4 m², a quarter per corner)
-    at 0.004. All carbon: 0.002 everywhere."""
+    """AISC 360 C2.2b N_i = 0.002 Y_i with C2.3(c)'s 0.001 Y_i for τ_b = 1 throughout
+    (0.003; ADR 0090 PYN-2), AISC 370 C2.3(c) 0.004 Y_i on stainless, Y_i the factored
+    gravity (1.2 D): the beam's line load (carbon) at 0.003 of its 4 kN per end; the
+    point load at node 2 at the length-weighted mean of the members there,
+    (3 × 0.004 + 4 × 0.003) / 7; the plate's 4 kN (1 kPa × 4 m², a quarter per corner)
+    at 0.004. All carbon: 0.003 everywhere."""
     got = _notionals({"ss": 0.004})
-    at_2 = (3 * 0.004 + 4 * 0.002) / 7
-    assert got["2"] == pytest.approx(1.2 * (10e3 * at_2 + 4e3 * 0.002))
-    assert got["3"] == pytest.approx(1.2 * 4e3 * 0.002)
+    at_2 = (3 * 0.004 + 4 * 0.003) / 7
+    assert got["2"] == pytest.approx(1.2 * (10e3 * at_2 + 4e3 * 0.003))
+    assert got["3"] == pytest.approx(1.2 * 4e3 * 0.003)
     for n in "5678":
         assert got[n] == pytest.approx(1.2 * 1e3 * 0.004)
     carbon = _notionals({})
-    assert carbon == pytest.approx({"2": 1.2 * 14e3 * 0.002, "3": 1.2 * 4e3 * 0.002,
-                                    **{n: 1.2 * 1e3 * 0.002 for n in "5678"}})  # fmt: skip
+    assert carbon == pytest.approx({"2": 1.2 * 14e3 * 0.003, "3": 1.2 * 4e3 * 0.003,
+                                    **{n: 1.2 * 1e3 * 0.003 for n in "5678"}})  # fmt: skip

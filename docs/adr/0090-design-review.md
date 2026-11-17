@@ -521,6 +521,54 @@ returns each field at its time on all four FE solvers.
 - Refused until built (ADR 0072): Code_Aster free modal; planar heat with differing
   thickness on Elmer and Code_Aster.
 
+**Package 8 built (2026-11-17):** CFD, explicit dynamics and frames. OF-1 was built
+earlier; the heated turbulent channel balances energy within 1 % on both solvers
+(slope over the balance: OpenFOAM k-ε 0.9993, SST 0.9994; Code_Saturne 1.0010, 0.9994).
+
+- OF-2: OpenFOAM's cells are matched by its own centres (`openfoam.case.foam_centres`:
+  face triangles then face pyramids, equal to its `C` to 8e-14 m), one to one
+  (`layer.match`). Node averages stood 2.1e-5 m off on butterfly hexahedra and the
+  reading failed. New benchmark: Hagen–Poiseuille on hexahedra, dp/dz −1.7 % (OpenFOAM)
+  and −2.0 % (Code_Saturne).
+- OF-4: an OpenFOAM run at its iteration limit whose residuals all fell three decades
+  from their peaks reads converged (Code_Saturne's rule); every turbulent benchmark had
+  ended "stopped at its iteration limit" on a stalled near-zero component. Results
+  unchanged. The reviewer's `cellLimited` gradient made the plates worse and was not
+  taken.
+- CS-1: Code_Saturne ignored the outlet's pressure (100 Pa came back as 4e-5 Pa; −50 Pa
+  stopped the set-up). The level is now added on reading (`case._outlet_level`):
+  100.000 and −50.000 Pa on both solvers. Outlets at different pressures are refused on
+  Code_Saturne (`imposed_p_outlet` ran away).
+- CS-2: Code_Saturne's turbulent viscosity is read (`TurbVisc`); mean μ_t against the
+  log law within 30 % on both solvers.
+- CS-3: a Code_Saturne time march is reported as increments in time, not judged by the
+  steady decades test (a passing transient had ended "diverged").
+- OC-1: a Radioss title starting with `#`, `$` or `/` gets a `_` in front (an amplitude
+  named `#1 ramp` was skipped and the load applied whole).
+- OC-2: in an explicit step a nonzero displacement with no amplitude, or one starting
+  above zero, is refused (it peaked at 7.49 times the static stress; ramped, 1.008).
+- OC-4, OC-5, OC-6 (read, not run): without mpiexec the Starter splits nothing; frames
+  past 999 are read in order, and a last frame short of the end is the warning
+  `last_frame`; an edge force is shared by tributary length.
+- OC-7: a shell's explicit result is `membrane_stress`, which is what it is (14 kPa
+  where the bending stress is 3.1 MPa); solids keep `stress`.
+- ADR-64: benchmarks for the rigid wall's friction (v0 − μ g t within 5e-4 m/s) and
+  mass scaling (the time step to 7 digits; the slowed wave's stress −0.14 %).
+- PYN-1: rigid offsets carry no mass (a 0.5 m offset had made a 784 kg column weigh
+  460,885 kg).
+- PYN-2: the direct analysis method's notional load is 0.003 Y_i for carbon steel
+  (AISC 360-16 C2.3(c): 0.001 more when τ_b = 1 is kept for all members). LRFD only;
+  ASD's 1.6 factor is not applied.
+- PYN-3: self weight on a selection the mesh lacks is refused; a P-Delta run is checked
+  for stability (finite displacements, K + K_G positive definite), since PyNite gave a
+  finite wrong answer for a column at 1.5 times its buckling load. The check uses
+  PyNite 3.2's private partition functions and leaves out K_G's torsional term (no
+  warping stiffness in PyNite).
+- Also: CFD selections whose labels meet are refused (`common.check_labels`).
+- Left: Code_Saturne faces outside every selection, `TYPE2 Ignore`, energy-check
+  sampling between frames, PyNite beam forces averaged at joints. Found and not fixed:
+  `explicit.estimate`'s added mass runs low (0.352 kg predicted, 0.537 kg added).
+
 ### Enhancements toward the state of the art
 
 From `state-of-the-art.md` (50 gaps, each with who has it, which open solver can deliver

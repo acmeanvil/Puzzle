@@ -409,6 +409,22 @@ def test_openfoam_stopped_short_is_not_converged(tmp_path):
     assert "about 950 more iterations" in d.text  # the benchmark runs 1500
 
 
+def test_openfoam_stalled_far_below_its_peaks_is_converged(tmp_path):
+    """ADR 0090 OF-4: test_turbulent_channel.py's k-epsilon run on OpenFOAM (within
+    Dean's correlations), its log thinned to every 25th iteration past the 100th. Its
+    spanwise Uz, about nothing on the symmetry sides, stalled at 3.7e-5, never meeting
+    U's 1e-7, so every turbulent benchmark ended "not converged". Short of the targets
+    at the limit, a run whose residuals all fell three decades from their largest is
+    converged, as Code_Saturne's are (here 4.4)."""
+    events = _openfoam("openfoam_turbulent_channel", tmp_path)
+    its = _of(events, Iteration)
+    assert its[-1].number == 1500 and its[-1].residuals["Uz"] == pytest.approx(3.6817e-05)
+    [done] = _of(events, Converged)
+    assert done.iterations == 1500 and not _of(events, Diverged)
+    assert any("4.4 decades" in m.text and m.level == "info" for m in _of(events, Message))
+    assert progress.diagnose(events) == []
+
+
 def test_openfoam_fatal_error_in_an_expert_setting(tmp_path):
     """An expert setting naming a pressure solver that doesn't exist: simpleFoam stops
     in its first iteration with a FOAM FATAL IO ERROR."""
@@ -478,6 +494,26 @@ def test_code_saturne_short_of_three_decades_is_not_converged(tmp_path):
     [d] = progress.diagnose(events)
     assert d.code == "not_converged" and "velocity" in d.text
     assert "about 10 more iterations" in d.text
+
+
+def test_code_saturne_transient_is_not_judged_by_the_steady_test(tmp_path):
+    """ADR 0090 CS-3: test_cfd_transient.py's plug flow, its first 60 time steps of 0.05 s.
+    A time march's residuals measure change per step, with no reason to fall three
+    decades: the run (within its benchmark's tolerance) had ended "residual fell only
+    1.4 decades" and Diverged. It is announced as a transient to its end time, each
+    time step an increment at its time, and ends converged."""
+    events = _saturne("code_saturne_transient", tmp_path)
+    [step] = _of(events, Step)
+    assert (step.type, step.end_time, step.iterations) == ("transient", pytest.approx(3.0), None)
+    increments = _of(events, Increment)
+    assert [e.number for e in increments] == list(range(1, 61))
+    assert increments[-1].time == pytest.approx(3.0) and increments[-1].end_time == 3.0
+    assert len(_of(events, Iteration)) == 60
+    assert not any(m.level == "warning" for m in _of(events, Message))
+    done = _of(events, Converged)  # each time step, at its time
+    assert not _of(events, Diverged) and len(done) == 60 and done[-1].time == pytest.approx(3.0)
+    assert progress.state(events).fraction() == pytest.approx(1.0)
+    assert progress.diagnose(events) == []
 
 
 def test_code_saturne_parameter_error(tmp_path):

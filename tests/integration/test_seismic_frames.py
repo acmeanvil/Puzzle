@@ -74,6 +74,42 @@ def test_a_cantilevers_modes_and_effective_masses(tmp_path, solver):
         assert m2 == pytest.approx(0.1883, abs=2e-4)
 
 
+@over("pynite")
+def test_a_rigid_offset_weighs_what_its_length_does(tmp_path, solver):
+    """ADR 0090 PYN-1: a rigid end offset is a member with its section constants times
+    RIGID, its area too, and PyNite's mass is ρ L A: a 0.5 m offset at the base of the
+    6 m W14X90 cantilever made the mass 460,885 kg for 784 kg, and at its tip f1 fell
+    from 7.365 Hz to 0.134 Hz. Its density is now divided by RIGID. The mass on the free
+    nodes is the same with an offset at either end as without; at the base f1 is the
+    cantilever's on the 5.5 m left flexible (1.6e-5 off: the offset is 1e4 times as
+    stiff, not infinitely), at the tip barely moved (a cantilever's tip doesn't bend)."""
+    from puzzle.model.schema import MemberOffset
+
+    h, a, rho = 6.0, 0.5, 7850.0
+    row = _w14x90()
+    out = {}
+    for at in (None, "F/A", "F/B"):
+        p, study, comp = _frame({"A": [0, 0, 0], "B": [0, 0, h]}, [["AB", "A", "B"]],
+                                [Feature(type="fixed", selection="F/A")], "W14X90",
+                                size=h / 24)  # fmt: skip
+        if at:
+            comp.member_offsets = [MemberOffset(selection="F/AB", at=at, length=q(a, "m"))]
+        study.steps = [SolveStep(type="modal", settings={"modes": 6})]
+        first = next(s for s in _run(tmp_path / str(at)[-1], p, study).results.steps
+                     if s.kind == "modal")  # fmt: skip
+        meff = first.fields["effective_mass"].values[0]
+        share = first.fields["mass_fraction"].values[0]
+        out[at] = (first.value, float(meff[0] / share[0]))
+        print(f"offset at {at}: f1 {first.value:.6g} Hz, mass {out[at][1]:.6g} kg")
+    flexible = (
+        1.87510**2 / (2 * math.pi) * math.sqrt(E * row["Iy"] / (rho * row["A"] * (h - a) ** 4))
+    )
+    for at in ("F/A", "F/B"):
+        assert out[at][1] == pytest.approx(out[None][1], rel=1e-9)
+    assert out["F/A"][0] == pytest.approx(flexible, rel=1e-4)
+    assert out["F/B"][0] == pytest.approx(out[None][0], rel=1e-4)
+
+
 def _massless(p):
     """A steel without self weight: the mass is the loads' only."""
     steel = next(o for o in p.objects.values() if isinstance(o, Material))

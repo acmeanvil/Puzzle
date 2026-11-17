@@ -18,6 +18,9 @@ OpenFOAM, which also run as a shoot-out pair on one mesh. All are steady but the
 | Laminar shoot-out | each other, one mesh | Code_Saturne and OpenFOAM | velocity L2 1 %, peak 0.5 %, pressure L2 2 % | 0.16 %, 0.05 %, 0.13 % |
 | Heated channel | energy balance; Nu = 8.235 | Code_Saturne, OpenFOAM | 1 %; 2 % of the profile | −0.5 %; 0.03 % and 0.02 % |
 | Turbulent channel, Re 1e5 | Dean (1978) | Code_Saturne, OpenFOAM; k-ε and k-ω SST | dp/dx 10 %, Uc/U 3 % | −3.2 % to −8.2 %; −0.3 % to −2.6 % |
+| Turbulent viscosity, Re 1e5 | the log law's mean, κ u_τ δ / 6 | Code_Saturne, OpenFOAM; k-ε and k-ω SST | 30 % | −9.8 % to +22.7 % |
+| Laminar pipe on hexahedra | Hagen–Poiseuille | Code_Saturne, OpenFOAM | dp/dz 4 %, profile 4 % | −2.0 %, −1.7 %; 1.9 %, 1.8 % |
+| Outlet pressure level | the outlet's 100 and −50 Pa | Code_Saturne, OpenFOAM | 1 mPa | exact |
 | Turbulent heated plates, Re 2e4 | energy balance | OpenFOAM, Code_Saturne; k-ε and k-ω SST | 1 % | −0.07 %, −0.06 %; +0.10 %, −0.07 % |
 | 2D plane Poiseuille | plane Poiseuille | OpenFOAM, Code_Saturne | as 3D | peak −0.10 %, −0.21 % |
 | 2D axisymmetric pipe | Hagen–Poiseuille | OpenFOAM, Code_Saturne | peak 1 %, profile 1 %, dp/dy 2 % | peak −0.25 %, −0.18 % |
@@ -57,6 +60,15 @@ README, ADR 0016):
 The repo records OpenFOAM's peak velocity only; its profile and gradient pass the same
 tolerances.
 
+`test_hagen_poiseuille_on_hexahedra` (ADR 0090 OF-2): water at 1 mm/s in a 10 mm bore,
+50 mm long, on the butterfly hexahedra of a cylinder (1 mm cells), against
+Hagen–Poiseuille, $u = 2U(1 - r^2/R^2)$ and $dp/dz = -8 \mu U / R^2$, each within 4 %
+(five cells across the radius). Those cells are not parallelepipeds: OpenFOAM's volume
+centres stood up to 2.1e-5 m from the node averages Puzzle matched them to, and the
+results could not be read; Puzzle now computes the centres as OpenFOAM does (to 8e-14 m).
+Measured 2026-11-17: dp/dz −1.7 % (OpenFOAM), −2.0 % (Code_Saturne); the profile 1.8 %
+and 1.9 % (L2).
+
 ## Shoot-out
 
 The benchmark study lists OpenFOAM as Code_Saturne's shoot-out partner (ADR 0011, 0016):
@@ -66,6 +78,12 @@ pressure relative L2 within 2 %.
 `tests/integration/test_cfd_shootout.py` `test_channel_flow_shootout` checks both runs
 share one mesh and every metric passes; it needs both solvers and is skipped otherwise.
 ADR 0016 records velocity L2 0.16 %, peak 0.05 %, pressure L2 0.13 %.
+
+`test_both_solvers_keep_the_outlet_pressure` (ADR 0090 CS-1): the laminar channel in
+2D with its outlet at 100 Pa, then −50 Pa; the outlet column's mean pressure must be
+the outlet's within 1 mPa (a sixth of the channel's drop) on both solvers. Code_Saturne
+had returned 0 to 0.003 Pa for 100 Pa and stopped on −50 Pa. Measured 2026-11-17:
+100.000 and −50.000 Pa on both.
 
 ## Heated channel
 
@@ -118,12 +136,21 @@ Re = 13,300 ($Re_\tau$ ≈ 390, air) both under-predicted the friction by 13-16 
 and 1.25 mm meshes alike: wall functions need a developed log layer, so the benchmark is
 run at Re = 1e5.
 
+The same runs check the turbulent viscosity (ADR 0090 CS-2: Code_Saturne 9.2 names it
+`TurbVisc`, which was never read): its mean over the section at 0.85 m against the log
+law with the stress linear across the half height δ, $\nu_t = \kappa u_\tau y (1 - y/\delta)$,
+whose mean is $\kappa u_\tau \delta / 6$ ($u_\tau$ from Dean's friction), within 30 %:
+the models' own $\nu_t$ differ near the centre, where the log law is a mixing length's
+guess. Measured 2026-11-17: Code_Saturne k-ε −9.8 %, SST +16.9 %; OpenFOAM k-ε −0.2 %,
+SST +22.7 %.
+
 ## Turbulent heated plates
 
 Air at 30 m/s between plates h = 10 mm apart, 100 mm long (Re = 2e4), both walls
 adding q = 1000 W/m², a 2D planar region on 0.5 mm quadrilaterals ($y^+$ ≈ 30 at the
 first cell), k-ε and k-ω SST with wall functions, 2000 iterations. Whatever the
-profiles, the bulk temperature rises at $2 q / (ho c_p U h)$.
+profiles, the bulk temperature rises at $2 q / (
+ho c_p U h)$.
 `tests/integration/test_turbulent_heated_channel.py`
 `test_turbulent_heated_plates_balance_energy` takes the bulk over 20 mm bands of cells
 about x = 40 and 80 mm (each cell weighted by u times its area) and holds the slope
@@ -141,7 +168,8 @@ u_t/Pr_t$, and
 under wall functions $
 u_t$ is not zero on the wall face; with the wall gradient set to
 $q/k$ the same case gave 1.56 (k-ε) and 1.47 (SST) times the balance, so the gradient is
-now $q / (k + ho c_p 
+now $q / (k + 
+ho c_p 
 u_t / Pr_t)$ face by face (`exprMixed`).
 
 ## 2D and axisymmetric flow

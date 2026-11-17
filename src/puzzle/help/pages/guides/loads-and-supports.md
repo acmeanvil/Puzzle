@@ -83,7 +83,8 @@ controls it.
 3. Transient steps multiply the load's values by the factor at each time.
 
 Force, pressure and heat flux take an amplitude on CalculiX, Code_Aster, Elmer and
-FEniCSx. OpenCourant also takes it on displacement, gravity, acceleration and velocity.
+FEniCSx. OpenCourant also takes it on displacement, gravity, acceleration and velocity;
+there a nonzero displacement must have one, starting at zero.
 Right-click an amplitude, Edit points…, to change its table.
 
 ## How to make a value follow a parameter

@@ -38,7 +38,10 @@ counts as one step towards the step's `iterations` setting.
   `limitedLinear` for k, ε and ω; at most 2000 iterations by default, stopping once
   every residual is below its `residualControl` entry ($10^{-6}$ for pressure,
   $10^{-7}$ for velocity, $10^{-6}$ for the turbulence fields, $10^{-8}$ for
-  temperature). The step's `tolerance` sets pressure's and velocity's.
+  temperature). The step's `tolerance` sets pressure's and velocity's. A run that
+  reaches its limit short of them counts as converged when every residual has fallen
+  three decades from its largest, as Code_Saturne's do: turbulent runs stall near
+  $10^{-4}$ with their answers within the benchmarks' tolerances.
 - **Code_Saturne:** its steady algorithm for 500 iterations by default, with no
   stopping test; Puzzle calls it converged when every residual has fallen three
   decades from its largest, and warns otherwise. A `pseudo_time_step` marches in time
@@ -113,7 +116,13 @@ half a cell's crossing time unless a pseudo time step is set. Results come back 
   [Studies and solvers](help:guides/studies-and-solvers).
 - Results are per cell: velocity, pressure (in Pa: OpenFOAM's kinematic pressure is
   multiplied by $\rho$), temperature, and $k$, $\varepsilon$ or $\omega$ and the
-  turbulent viscosity.
+  turbulent viscosity. OpenFOAM's cells are matched to Puzzle's by its own cell centres,
+  volume centroids computed as it computes them, so hexahedra, prisms and pyramids of
+  any shape come back.
+- An outlet's pressure sets the level on both solvers. Code_Saturne holds its outlet
+  at zero whatever is set, so Puzzle adds the outlet's pressure to what it reads; for
+  that reason outlets at different pressures are refused on Code_Saturne (OpenFOAM
+  takes them).
 
 ## Limits and accuracy
 

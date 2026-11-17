@@ -24,9 +24,11 @@ published worked examples of the codes they implement, to the printed digits.
 | Combinations on PyNite | factored sums | PyNite | 1e-6 | 56000, 86400 N·m |
 | Combinations on FE solvers | factored sums of cases alone | CalculiX, Code_Aster | 1e-6 of the deflection | passes |
 | P-Delta column | H tan(kh)/k | PyNite | 0.1 % | 27021.3 N·m |
-| Direct Analysis Method | (H ± 0.002P) tan(k'h)/k' | PyNite | 0.1 % | 39659.3, 19979.7 N·m |
+| Direct Analysis Method | (H ± 0.003P) tan(k'h)/k' | PyNite | 0.1 % | 44579.2, 15059.8 N·m |
+| Unstable P-Delta refused | past Euler's load; a mechanism | PyNite | refused | refused; 0.3 P_cr solved |
 | X-braced bay from a grid | H/(2 cos θ) | PyNite | 2 % | +0.5 % |
 | Cantilever modes, PyNite | β_n, effective mass | PyNite | 1e-4, 1e-3; mass ±2e-4 | 12.23448 Hz (12.23443) |
+| Rigid end offset's mass | ρA of the length; β_1 on the flexible length | PyNite | 1e-9; 1e-4 | equal; −1.6e-5 |
 | Single mass, spectrum scaled to ELF | W S_a I_e/R, C_s W | PyNite | 0.2 % | V_t 52180.2 N, V 62500 N |
 | ELF loads and drifts | 12.8-11, 12.8-12, C_d δ/I_e | PyNite | forces exact, drifts 1e-4 | 69.106, 140.869 mm |
 | Cantilever modes, FE beams | β_n, effective mass | CalculiX, Code_Aster | 2.5 % and 12 %; mass ±0.015 | 12.015, 12.007 Hz (12.234) |
@@ -112,13 +114,16 @@ prescribed displacement is refused rather than factored.
 `tests/test_combinations.py` checks the combinations generated from a frame's cases
 against ASCE 7-16 2.3.1 (LRFD) and 2.4.1 (ASD): the nine LRFD combinations of D, L, S
 and W with wind both ways, the ASD seismic factors (D + 0.75L + 0.525E, 0.6D − 0.7E),
-one combination per roof load, and notional loads of 0.002 of the gravity at a node.
+one combination per roof load, and notional loads of 0.002 of the gravity at a node
+(C2.2b's; the Direct Analysis Method adds C2.3(c)'s 0.001 to it, 0.003 in all).
 
 ## P-Delta and the Direct Analysis Method
 
 `tests/integration/test_frame_analysis.py` (PyNite). A W12X26 cantilever column,
 h = 4 m, in 16 members, an axial load P of 0.3 of Euler's load and a lateral H = 5 kN at
-its top. The exact second-order base moment is the beam-column's (Timoshenko and Gere):
+its top, held along y there against the weak axis (I2 = 0.085 I1: unbraced, 0.3 of the
+strong axis's Euler load is past the weak axis's, and the run is refused). The exact
+second-order base moment is the beam-column's (Timoshenko and Gere):
 
 $$M = \frac{H \tan(kh)}{k}, \quad k = \sqrt{\frac{P}{EI}}$$
 
@@ -127,12 +132,20 @@ against the first-order Hh. `test_p_delta_amplifies_a_column` holds PyNite's P-�
 first order.
 
 `test_direct_analysis_reduces_stiffness_and_adds_notional_loads`: AISC 360 C2, the
-same column with EI × 0.8 and a notional load of 0.002 P in each sense, one combination
-per sense:
+same column with EI × 0.8 and a notional load of 0.003 P in each sense (C2.2b's 0.002 and
+C2.3(c)'s 0.001, which keeps τb = 1 whatever the axial load; ADR 0090 PYN-2), one
+combination per sense:
 
-$$M = \frac{(H \pm 0.002P) \tan(k'h)}{k'}, \quad k' = \sqrt{\frac{P}{0.8EI}}$$
+$$M = \frac{(H \pm 0.003P) \tan(k'h)}{k'}, \quad k' = \sqrt{\frac{P}{0.8EI}}$$
 
-within 0.5 %. Measured: 39659.3 and 19979.7 N·m.
+within 0.1 %. Measured 2026-11-17: 44579.2 and 15059.8 N·m, exact.
+
+`test_p_delta_refuses_an_unstable_frame` (ADR 0090 PYN-3): PyNite's P-Delta returned a
+mechanism as NaN and the column at 1.5 times Euler's load as the unstable equilibrium's
+moment (28 kN·m, the sign lost), both as results. The runner refuses a non-finite
+displacement and a combination whose second-order stiffness K + K_G (without its
+torsional term: PyNite has no warping) has a negative pivot; the column at 0.3 of its
+load still solves.
 
 ## A braced bay from the grid editor
 
@@ -159,6 +172,13 @@ with β₁L = 1.8751 and β₂L = 4.6941, and effective masses of 0.6131 and 0.1
 (Chopra). The test holds f₁ to 1e-4, f₂ to 1e-3 and the effective masses to ±2e-4,
 about both axes. Measured (ADR 0079): 12.23448 Hz against 12.23443, effective masses
 0.6130 and 0.1882.
+
+`test_a_rigid_offset_weighs_what_its_length_does` (ADR 0090 PYN-1): a rigid end offset
+is a member 1e4 times as stiff, and its mass had been 1e4 times too (a 0.5 m offset made
+the 6 m W14X90's mass 460,885 kg for 784 kg). The mass on the free nodes must be the
+same with an offset at either end as without (to 1e-9), f₁ with one at the base the
+cantilever's on the 5.5 m left (1e-4), with one at the tip unmoved. Measured 2026-11-17:
+784.166 kg each; 8.76446 Hz for 8.76460; 7.36477 Hz for 7.36473.
 
 `test_a_single_mass_by_response_spectrum_scaled_to_elf` (PyNite): a 500 kN weight on
 a massless 4 m column. Its period and the modal base shear are

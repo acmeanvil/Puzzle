@@ -42,6 +42,11 @@ H, LENGTH, WIDTH, U = 0.02, 1.0, 0.004, 5.0
 WATER = library_material("water").properties
 RHO, MU = WATER["density"].to_si(), WATER["dynamic_viscosity"].to_si()
 RE = RHO * U * H / MU
+# The mean turbulent viscosity against the log law's κ u_τ δ / 6 (ADR 0090 CS-2). The
+# models' own ν_t differ near the centre, where the log law is only a mixing length's
+# guess. Measured 2026-11-17: Code_Saturne k-epsilon −9.8 %, SST +16.9 %; OpenFOAM
+# k-epsilon −0.2 %, SST +22.7 %.
+TURBULENT_VISCOSITY = 0.3
 
 
 def _project(tmp_path, model, solver):
@@ -157,3 +162,11 @@ def test_turbulent_channel(tmp_path, model, solver):
     )
     assert dpdx == pytest.approx(dean, rel=0.10)
     assert ratio == pytest.approx(dean_ratio, rel=0.03)
+    # ADR 0090 CS-2: Code_Saturne 9.2 names it TurbVisc, which was never read. Against
+    # the log law with the stress linear across the half height δ: ν_t = κ u_τ y (1 − y/δ),
+    # whose mean over δ is κ u_τ δ / 6, u_τ from Dean's friction.
+    mu_t = run.results.last("turbulent_viscosity").at(ids[at])[:, 0].mean()
+    u_tau = U * (0.073 * RE**-0.25 / 2) ** 0.5
+    log_law = RHO * 0.41 * u_tau * (H / 2) / 6
+    print(f"{solver} {model}: mean turbulent viscosity {mu_t:.4g} Pa s (log law {log_law:.4g})")
+    assert mu_t == pytest.approx(log_law, rel=TURBULENT_VISCOSITY)

@@ -149,6 +149,31 @@ def _run(argv: list[str], env: dict, cwd: Path, quiet: bool = False) -> int:
     return proc.returncode
 
 
+def commands(folder: Path, key: str, name: str, processes: int, sp: str, env: dict
+             ) -> tuple[list[str], list[str], str]:  # fmt: skip
+    """The Starter's and the Engine's command lines, and what to say. The Starter writes
+    a restart file per domain for an MPI Engine, so without `mpiexec` it is asked for
+    one domain: a split model run by the one-process Engine would fail or read a part
+    of it (ADR 0090 OC-4)."""
+    exe = folder / "exec"
+    ext = ".exe" if key == "win64" else ""
+    mpiexec = shutil.which("mpiexec", path=env.get("PATH")) if processes > 1 else None
+    note = ""
+    if processes > 1 and mpiexec is None:
+        note = f"no mpiexec on the path: the model runs as one process, not {processes}"
+        processes = 1
+    starter = [str(exe / f"starter{SUFFIX[key]}{sp}{ext}"), "-i", f"{name}_0000.rad",
+               "-np", str(processes)]  # fmt: skip
+    if processes > 1:
+        mpi = "_impi" if key == "win64" else "_ompi"
+        extra = ["-localonly"] if key == "win64" else []
+        engine = [mpiexec, *extra, "-np", str(processes),
+                  str(exe / f"engine{SUFFIX[key]}{mpi}{sp}{ext}")]  # fmt: skip
+    else:
+        engine = [str(exe / f"engine{SUFFIX[key]}{sp}{ext}")]
+    return starter, [*engine, "-i", f"{name}_0001.rad"], note
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run the deck in the current folder (its run.json says the name, precision and
     processes); fetch OpenCourant first if it isn't here."""
@@ -163,26 +188,19 @@ def main(argv: list[str] | None = None) -> int:
     exe = folder / "exec"
     suffix = SUFFIX[key] + (".exe" if key == "win64" else "")
     env = environment(folder)
-    starter = exe / f"starter{SUFFIX[key]}{sp}{'.exe' if key == 'win64' else ''}"
-    rc = _run([str(starter), "-i", f"{name}_0000.rad", "-np", str(processes)], env, workdir)
+    starter, engine, note = commands(folder, key, name, processes, sp, env)
+    if note:
+        print(note, flush=True)
+    rc = _run(starter, env, workdir)
     if rc != 0:
         return rc
-    mpiexec = shutil.which("mpiexec", path=env.get("PATH"))
-    if processes > 1 and mpiexec:
-        mpi = "_impi" if key == "win64" else "_ompi"
-        engine = exe / f"engine{SUFFIX[key]}{mpi}{sp}{'.exe' if key == 'win64' else ''}"
-        extra = ["-localonly"] if key == "win64" else []
-        command = [mpiexec, *extra, "-np", str(processes), str(engine)]
-    else:
-        if processes > 1:
-            print(f"no mpiexec on the path: the Engine runs as one process "
-                  f"(the model was split in {processes})", flush=True)  # fmt: skip
-        command = [str(exe / f"engine{SUFFIX[key]}{sp}{'.exe' if key == 'win64' else ''}")]
-    rc = _run([*command, "-i", f"{name}_0001.rad"], env, workdir)
+    rc = _run(engine, env, workdir)
     if rc != 0:
         return rc
     anim = exe / f"anim_to_vtk{suffix}"
-    for frame in sorted(workdir.glob(f"{name}A[0-9][0-9][0-9]")):
+    from puzzle.adapters.opencourant.output import frame_files
+
+    for frame in frame_files(workdir, name):
         with (workdir / f"{frame.name}.vtk").open("wb") as out:
             subprocess.run([str(anim), frame.name], cwd=workdir, env=env, stdout=out, check=True)
     history = workdir / f"{name}T01"

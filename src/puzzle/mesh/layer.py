@@ -289,17 +289,34 @@ def _diameter(group: Group, mesh: Mesh, axi: bool) -> float:
     return 4 * moment / radii
 
 
+MATCH_SHARE = 0.25  # of the distance from a reference centre to its nearest other one
+
+
 def match(centres: np.ndarray, reference: np.ndarray, ids: np.ndarray) -> np.ndarray:
-    """Each solver cell's id: the nearest reference centre, one to one. A layered mesh's
-    node-average centres differ from the solvers' volume centres by a fraction of a cell
-    (irregular quadrilaterals, the axis's pyramids), more than `match_points` allows."""
+    """Each solver cell's id: the nearest reference centre, one to one, and closer to it
+    than a quarter of the way to that centre's nearest neighbour, so no cell can be taken
+    for the next one (a bound by the cell's own spacing, not the model's size: fine cells
+    by a large model's coarse ones). The reference is computed as the solver computes its
+    centres (OpenFOAM's volume centroids, Code_Saturne's node averages), so a cell sits on
+    its own to round-off."""
     from scipy.spatial import cKDTree
 
     from puzzle.adapters.common import InputError
 
-    _d, nearest = cKDTree(reference).query(centres)
+    tree = cKDTree(reference)
+    distance, nearest = tree.query(centres)
     if len(np.unique(nearest)) != len(nearest):
-        raise InputError("the solver's cells do not match the layered mesh's one to one")
+        raise InputError("the solver's cells do not match the mesh's one to one")
+    if len(reference) > 1:
+        spacing = tree.query(reference, k=2)[0][:, 1]
+        far = distance > MATCH_SHARE * spacing[nearest]
+        if far.any():
+            k = int(np.argmax(distance / spacing[nearest]))
+            raise InputError(
+                f"{int(far.sum())} of the solver's cells lie off the mesh's cell centres (one "
+                f"at {centres[k].tolist()} is {distance[k]:.3g} m from the nearest, whose "
+                f"neighbour is {spacing[nearest[k]]:.3g} m away)"
+            )
     return ids[nearest]
 
 

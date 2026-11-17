@@ -26,6 +26,10 @@ from puzzle.model.schema import Component, Material, Project, Study
 CASE, RESULTS = "case.json", "results.json"
 RUNNER = Path(__file__).with_name("frame.py")
 RIGID = 1e4  # a rigid offset: its member's section constants times this
+# ...and its material's density over it, so its mass per length stays ρ A: PyNite's mass
+# is ρ L A, and with A times RIGID a 0.5 m offset weighed 460 t on an 0.8 t column
+# (ADR 0090 PYN-1). Its self weight is from the member's own section and material.
+RIGID_MATERIAL = ":rigid"
 # PyNite's member forces to Code_Aster's EFGE (and CalculiX's springs') signs: N tension
 # positive and the rest as Code_Aster's, measured on the same frames (test_frames.py
 # `test_member_force_signs`): PyNite gives N, Vy, Vz, T and Mz the other sign, My the same.
@@ -270,12 +274,17 @@ def _modal(case: dict, project, comp, study, mesh, settings: dict, spectrum: boo
     case["modal"] = block
 
 
-CARBON_NOTIONAL, STAINLESS_NOTIONAL = 0.002, 0.004  # AISC 360 C2.2b; 370 C2.3(c)
+# The Direct Analysis Method's notional loads with τ_b = 1 kept for every member: AISC
+# 360-16 C2.2b's 0.002 Y_i plus C2.3(c)'s 0.001 α Y_i (α 1, LRFD), which is what lets
+# τ_b = 1 stand where α P_r / P_ns passes 0.5 (it had been 0.002 alone, with nothing
+# checking P_r; ADR 0090 PYN-2); AISC 370 C2.3(c)'s 0.002 + 0.002 on stainless.
+CARBON_NOTIONAL, STAINLESS_NOTIONAL = 0.003, 0.004
 
 
 def _notional(case: dict, settings: dict, fractions: dict[str, float] | None = None) -> None:
     """AISC 360 C2.2b, the Direct Analysis Method's notional loads: in each combination,
-    N_i = 0.002 Y_i at each node, Y_i its factored gravity load (point loads, line loads
+    N_i = 0.003 Y_i at each node (C2.2b's 0.002 and C2.3(c)'s 0.001 for τ_b = 1), Y_i
+    its factored gravity load (point loads, line loads
     half to each end, plate pressures' downward part a quarter to each corner),
     laterally, in each direction the step names (`notional_directions`, default "x,y":
     both senses of each), each a combination of its own, replacing the original ones.
@@ -375,9 +384,11 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     plates = _plates(project, comp, mesh, materials)
     releases = _ends(comp, mesh, members)
     rigid = _rigid(comp, mesh, members)
-    for name in rigid:  # its own section, stiffened
-        sec = next(m[5] for m in members if m[0] == name)
+    for name in rigid:  # its own section, stiffened, and its material, lightened
+        mat, sec = next((m[4], m[5]) for m in members if m[0] == name)
         sections.setdefault(f"{sec}R", [v * RIGID for v in sections[sec]])
+        e, g, nu, rho = materials[mat]
+        materials.setdefault(f"{mat}{RIGID_MATERIAL}", [e, g, nu, rho / RIGID])
     used = sorted({n for m in members for n in (m[1], m[2])}
                   | {int(n) for q in plates for n in q["nodes"]})  # fmt: skip
     xyz = mesh.node_coords(np.array(used))
@@ -386,7 +397,8 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         "materials": materials,
         "sections": sections,
         "members": [
-            {"name": name, "i": str(n1), "j": str(n2), "material": mat,
+            {"name": name, "i": str(n1), "j": str(n2),
+             "material": mat + (RIGID_MATERIAL if name in rigid else ""),
              "section": sec + ("R" if name in rigid else ""), "y": y,
              "releases": releases.get(name, [False] * 12)}  # fmt: skip
             for name, n1, n2, _eid, mat, sec, y in members
@@ -401,11 +413,11 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     settings = steps[0].settings
     dam = bool(settings.get("direct_analysis"))
     stainless: dict[str, float] = {}  # material key -> its notional fraction
-    if dam:  # AISC 360 C2.3: 0.8 of the stiffness (tau_b = 1); AISC 370 C2.3: 0.70
+    if dam:  # AISC 360 C2.3: 0.8 of the stiffness (τ_b = 1, so C2.3(c)'s load); 370: 0.70
         from uuid import UUID
 
         for key, (e, g, nu, rho) in list(materials.items()):
-            m = project.objects.get(UUID(key))
+            m = project.objects.get(UUID(key.removesuffix(RIGID_MATERIAL)))
             steel = (getattr(m, "info", None) or {}).get("group") == "Stainless Steel"
             if steel:
                 stainless[key] = STAINLESS_NOTIONAL
@@ -475,12 +487,15 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
                                            for a in "xyz" if v.get(a)]  # fmt: skip
         elif f.type == "gravity":  # self weight: ρ A g per length
             g = np.asarray(body_load(f).uniform or (0.0, 0.0, 0.0), float)
-            within = set(_elements(mesh, f.selection)) if f.selection in mesh.groups else None
-            if within is not None and not within & {m[3] for m in members}:
+            if f.selection not in mesh.groups:  # it had loaded every member (ADR 0090 PYN-3)
+                raise InputError(f"self weight on '{f.selection}': no such selection in the "
+                                 "mesh", code="unknown_selection")  # fmt: skip
+            within = set(_elements(mesh, f.selection))
+            if not within & {m[3] for m in members}:
                 raise InputError(f"self weight goes on members; '{f.selection}' has none",
                                  code="unsupported")  # fmt: skip
             for name, _n1, _n2, eid, mat, sec, _y in members:
-                if within is not None and eid not in within:
+                if eid not in within:
                     continue
                 rho, area = materials[mat][3], sections[sec][0]
                 if not rho:
@@ -509,7 +524,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             raise InputError(f"combination '{c.name}' factors no load case the frame has "
                              f"({', '.join(sorted(used)) or 'none'})", code="invalid")  # fmt: skip
     case["pdelta"] = bool(settings.get("second_order")) or dam
-    if dam:  # 370 C2.3(c): τ_b = 1 with a further 0.002 Y_i, so 0.004 on stainless
+    if dam:  # τ_b = 1 with C2.3(c)'s further load: 0.003 on carbon, 0.004 on stainless
         _notional(case, settings, stainless)
     workdir.mkdir(parents=True, exist_ok=True)
     (workdir / CASE).write_text(json.dumps(case), encoding="utf-8")

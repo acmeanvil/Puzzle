@@ -470,7 +470,8 @@ def _study_run(
         if any(s.type == "explicit" for s in part.solve_steps()):  # ADR 0085 decision 5
             from puzzle import explicit
 
-            for code, text in explicit.run_checks(part_results):
+            explicit_step = next(s for s in part.solve_steps() if s.type == "explicit")
+            for code, text in explicit.run_checks(part_results, explicit_step):
                 record(progress.Message(level="warning", text=text, code=code))
         lap("read")
         if len(parts) > 1:

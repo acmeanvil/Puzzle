@@ -104,8 +104,10 @@ def main() -> None:
                 boundary.setTurbulenceChoice("turbulent_intensity")
                 boundary.setHydraulicDiameter(z["hydraulic_diameter"])
                 boundary.setTurbulentIntensity(z["intensity"])
-        elif z["nature"] == "outlet" and z.get("pressure"):
-            boundary.setReferencePressure(z["pressure"])
+        # An outlet's pressure isn't set here: Code_Saturne's outlet ignores the value
+        # (it holds a reference outlet face at zero) and its model refuses a negative
+        # one, so Puzzle adds the level to the pressure it reads (case.json
+        # pressure_level; ADR 0090 CS-1).
         if not thermal:
             continue
         if "temperature" in z:

@@ -26,6 +26,63 @@ COMBO = "Combo 1"
 STATIONS = 9
 
 
+def _stable(model) -> None:
+    """PyNite's P-Delta gives no word of instability (its stability check didn't stop
+    either case; its linear analysis does): a mechanism comes back as NaN, and a column
+    past its buckling load as the unstable branch's finite answer (1.5 times Euler's load
+    gave a base moment of 28 kN m where −29 kN m is the unstable equilibrium). So every
+    displacement must be finite, and each combination's second-order stiffness K + K_G
+    on the free degrees of freedom positive definite: no negative pivot in its LDLᵀ
+    (Sylvester's law of inertia). K_G is taken without its torsional term (P Ip / A L):
+    PyNite's members have no warping stiffness, so an open section's torsional buckling
+    load is far below the real one (a W12X26 4 m column: 0.5 MN for 2 MN), and the loads
+    don't turn members about their axes; that limit is the member checks' (AISC E4).
+    ADR 0090 PYN-3."""
+    for node in model.nodes.values():
+        for dof in DOFS:
+            for combo, value in getattr(node, dof).items():
+                if not math.isfinite(value):
+                    raise RuntimeError(
+                        f"The structure is unstable under second-order analysis: combination "
+                        f"'{combo}' gives node {node.name} no finite {dof} (a mechanism, or an "
+                        "axial load past buckling). Aborting analysis."
+                    )
+    from Pynite.Analysis import _partition, _partition_D  # PyNite 3.2's own partition
+    from Pynite.Member3D import Member3D
+    from scipy.sparse.linalg import splu
+
+    free, held, _ = _partition_D(model)
+    flexural = Member3D.kg
+
+    def no_torsion(self, P=0):
+        kg = flexural(self, P).copy()
+        kg[[3, 9], :] = 0.0  # local RX at each end: only P Ip / A L couples them
+        kg[:, [3, 9]] = 0.0
+        return kg
+
+    for combo in model.load_combos:
+        k11 = _partition(model, model.Ke(combo, check_stability=False), free, held)[0]
+        Member3D.kg = no_torsion
+        try:
+            kg = model.Kg(combo, sparse=True, first_step=False)
+        finally:
+            Member3D.kg = flexural
+        kg11 = _partition(model, kg, free, held)[0]
+        stiffness = (k11.tocsr() + kg11.tocsr()).tocsc()
+        try:
+            lu = splu(stiffness, permc_spec="MMD_AT_PLUS_A", diag_pivot_thresh=0.0,
+                      options={"SymmetricMode": True})  # fmt: skip
+            negative = int((lu.U.diagonal() < 0).sum())
+        except RuntimeError:  # exactly singular: no stiffness left in some direction
+            negative = -1
+        if negative:
+            raise RuntimeError(
+                f"The structure is unstable under second-order analysis: under combination "
+                f"'{combo}' its second-order stiffness is not positive definite (an axial load "
+                "past buckling). Aborting analysis."
+            )
+
+
 def _event(kind, **values):
     print("PUZZLE-EVENT " + json.dumps({"kind": kind, **values}), flush=True)
 
@@ -215,7 +272,8 @@ def main() -> int:
             model.add_load_combo(c["name"], c["factors"])
         _event("stage", name="solve")
         if case.get("pdelta"):  # second order (ADR 0079 step 2), each combination on its own
-            model.analyze_PDelta(check_stability=False)
+            model.analyze_PDelta(check_stability=True)
+            _stable(model)
         else:
             model.analyze_linear(check_statics=False)
         if combos:

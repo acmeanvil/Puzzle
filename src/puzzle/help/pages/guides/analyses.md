@@ -75,7 +75,11 @@ Impact, drops, crashes, short pulses: events over microseconds to milliseconds, 
 OpenCourant. Set `end_time` (s, required; 1 ms when made), `frames` (default 20) and
 `time_step_scale` (default 0.9). Each step is cheap but tiny, so anything slower than a
 few periods of the lowest mode belongs in an implicit transient instead. A suddenly
-loaded cantilever matched CalculiX's implicit transient within 0.3 %.
+loaded cantilever matched CalculiX's implicit transient within 0.3 %. A prescribed
+displacement needs an amplitude that starts at zero (else it would be an impact, and is
+refused); drive an end with a velocity instead where that is meant. Shells give
+`membrane_stress`, their mid-surface stress only, not the surface stress of a plate that
+bends.
 
 ## The physics
 

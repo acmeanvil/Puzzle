@@ -37,7 +37,11 @@ mean. For vibration, slow transients and steady loads use the implicit solvers i
    - `rigid_wall` on a body (the nodes that can touch it): a point `x0`, `y0`, `z0` and
      a normal `nx`, `ny`, `nz` pointing toward the model; `mu` friction (0: sliding);
    - `fixed`, `displacement`, `force`, `pressure` (first-order meshes), `gravity`,
-     `acceleration`, each following an amplitude where given;
+     `acceleration`, each following an amplitude where given. A nonzero
+     `displacement` needs an amplitude starting at 0 (a ramp over the step for a slow
+     pull): without one it would be applied at once, an impact, so it is refused
+     (`invalid_input`); for a driven end, `velocity` is the usual input. A force on an
+     edge is shared by the nodes' lengths along it;
    - contacts between parts: bonded (a nonconformal one is tied) and frictionless
      (penalty, both ways; parts touching at the start aren't pushed apart); frictional
      contact between parts is written but refused until a benchmark passes (ADR 0090
@@ -68,7 +72,9 @@ mean. For vibration, slow transients and steady loads use the implicit solvers i
    Linux, 330 MB on Windows); Settings > Solvers > Parallel processes per run splits it
    over MPI; on a cluster host with Apptainer it runs the same image.
 6. Results: one result step per frame, `value` the time. `displacement`, `velocity`,
-   `acceleration`, `stress` (averaged at the nodes), `plastic_strain_equivalent`, and
+   `acceleration`, `stress` (solids, averaged at the nodes), `membrane_stress`
+   (shells: the mid-surface stress only, near zero where a plate bends, so never read
+   it as the surface stress), `plastic_strain_equivalent`, and
    per frame the global energies `internal_energy`, `kinetic_energy`,
    `hourglass_energy`, `contact_energy`, `external_work`, `plastic_work`,
    `added_mass`, `time_step`. `result_history` follows one over the frames. With
@@ -77,7 +83,8 @@ mean. For vibration, slow transients and steady loads use the implicit solvers i
 
 After the run, warnings say when the energy balance is off by more than 5 %
 (`energy_error`), hourglass energy passes 10 % of the internal energy (`hourglass`),
-or mass scaling added more than 5 % of the mass (`added_mass`).
+or mass scaling added more than 5 % of the mass (`added_mass`), and when the last frame
+falls short of the end time by more than half a frame (`last_frame`).
 
 ## Reading the energies
 

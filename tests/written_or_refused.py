@@ -599,9 +599,20 @@ def add_feature(physics: str, feature: str, selection: str) -> Callable:
     s = spec(physics, feature)
 
     def change(project, comp, study):
-        _physics_of(comp, physics).features.append(
-            Feature(type=feature, selection=selection, values=distinct_values(s))
-        )
+        added = Feature(type=feature, selection=selection, values=distinct_values(s))
+        if feature == "displacement" and study.steps[0].type == "explicit":
+            # an explicit step refuses a displacement that jumps at t = 0 (ADR 0090
+            # OC-2): it rises from rest
+            from puzzle.model.schema import Amplitude
+
+            added.amplitude = project.add(Amplitude(name="ramp", points=[(0, 0), (1, 1)])).id
+        if feature == "pressure_outlet" and study.solver == "code_saturne":
+            # Code_Saturne's outlets share one level, so differing ones are refused (ADR
+            # 0090 CS-1): the base's outlet takes the added one's pressure too
+            for f in _physics_of(comp, physics).features:
+                if f.type == "pressure_outlet":
+                    f.values = dict(added.values)
+        _physics_of(comp, physics).features.append(added)
 
     return change
 

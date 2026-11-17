@@ -507,6 +507,22 @@ def bolt_growth(material, length: float, ta: float, tb: float, reference: float)
     return alpha * length * ((ta + tb) / 2 - reference)
 
 
+def check_labels(labels: dict[str, str], solver: str) -> None:
+    """A CFD solver's boundary names (patches, zones) made from selections must stay
+    distinct: `A/B C` and `A_B_C` both became `A_B_C`, one condition silently taking the
+    other's faces (ADR 0090, the CFD review's "to check")."""
+    seen: dict[str, str] = {}
+    for selection, label in labels.items():
+        if label in seen and seen[label] != selection:
+            raise InputError(
+                f"{solver} names boundaries by selection, and '{seen[label]}' and "
+                f"'{selection}' both become '{label}': rename one",
+                code="invalid",
+                details={"selections": [seen[label], selection], "label": label},
+            )
+        seen[label] = selection
+
+
 def check_inlet_temperatures(flow_features, thermal_features, solver: str) -> None:
     """Heat in a flow needs the temperature it comes in at (ADR 0090 OF-3): OpenFOAM
     took 293.15 K without a word and Code_Saturne failed inside the solver, so both

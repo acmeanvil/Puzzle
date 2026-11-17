@@ -237,15 +237,28 @@ and nothing ahead of it.
   differences keep velocities half a step behind); measured within 0.25 %;
 - `test_a_ramped_end_displacement_follows_its_amplitude`: a bar's end moved 0.1 mm
   times a ramp over 25 wave transits: the end's displacement at each frame within 0.1 %
-  and the stress in the middle E u / L within 3 % (measured 99.83 MPa of 100).
+  and the stress in the middle E u / L within 3 % (measured 99.83 MPa of 100); again
+  with the amplitude named `#1 ramp` (ADR 0090 OC-1: Radioss read that title as a
+  comment and the first point as the title, so the ramp became a step), the same;
+- `test_mass_scaling_holds_its_time_step_and_slows_the_wave` (ADR-64): the wave bar
+  with `mass_scaling_time_step` twice its stable step. The Engine runs at the target
+  (within 1e-5), and the stress behind the front is the scaled bar's impedance,
+  v₀ √(E ρ M / M₀), M with the mass added, within 2 %; measured: the target to seven
+  digits, 3.42 times the bar's mass added, −83.19 MPa for −83.31 (−0.14 %).
 
-Frictional contact between parts is written but refused until benchmarked.
+Frictional contact between parts is written but refused until benchmarked. A nonzero
+displacement with no amplitude, or one starting above zero, is refused (ADR 0090 OC-2:
+applied at once, a 20 mm block moved 0.01 mm rang at 7.5 times its static stress and
+the energy check blamed the time step; ramped, 1.008 times).
 
 **Contact and impact.**
 
 - `test_a_bar_thrown_at_a_rigid_wall_leaves_at_its_speed`: a bar at 10 m/s against a
   rigid wall touches for 2L/c and leaves at v₀; separation within 4 % and speed within
   5 %, on 5 and 2.5 mm meshes, the finer closer;
+- `test_a_block_sliding_on_a_rough_rigid_wall_slows_at_mu_g` (ADR-64): a block thrown
+  at 1 m/s along a wall with μ = 0.3 under 1000 m/s² of gravity: by momentum
+  v = v₀ − μ g t, within 0.2 % of v₀ at every frame; measured within 5e-4 m/s;
 - `test_two_equal_bars_colliding_exchange_their_velocities`: two equal bars 0.1 mm
   apart, one at 10 m/s, frictionless contact: afterwards the first below 5 % of v₀ and
   the second within 5 % of v₀;
@@ -261,7 +274,10 @@ Frictional contact between parts is written but refused until benchmarked.
 - `test_a_pressed_plate_against_an_implicit_transient`: a clamped 0.2 m square plate,
   2 mm thick, under 1 kPa from t = 0; OpenCourant's QEPH quadrilaterals against
   CalculiX's S8 shells, peak within 2 % and history within 3 %, and the sign (a positive
-  pressure pushes against the face's normal);
+  pressure pushes against the face's normal). OpenCourant gives a shell's membrane
+  stress only, stored as `membrane_stress` (ADR 0090 OC-7): it peaked at 14 kPa, 0.46 %
+  of the 3.08 MPa static edge bending stress 6 M / t², M = 0.0513 p a² (Timoshenko and
+  Woinowsky-Krieger), and the test holds it under 2 % of that, with no `stress` field;
 - `test_a_beam_cantilever_swings_as_its_modes_say` (along z and y): a 1 m cantilever of
   20 two-node beams, 10 x 20 mm, a 10 N tip force at t = 0, against the
   Euler-Bernoulli modal series (twelve modes; L/h = 50, so shear and rotary inertia are

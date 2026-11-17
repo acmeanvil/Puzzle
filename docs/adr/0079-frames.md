@@ -504,3 +504,7 @@ Not in step 1:
 4. Modal, ELF and modal response spectrum; drift.
 5. AISC 370 and the ADM (with the Aluminum Association's shapes).
 6. The grid editor in the GUI.
+
+## Amended (2026-11-17, ADR 0090 package 8)
+
+The direct analysis method's notional load for carbon steel is 0.003 Y_i (AISC 360-16 C2.3(c): τ_b = 1 kept for all members), LRFD only. A P-Delta run is checked for stability after PyNite's solve. Rigid offsets carry no mass.

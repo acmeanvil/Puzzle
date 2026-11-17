@@ -10,9 +10,11 @@ solid mechanics on tet4, tet10 and hex8 solids, tri3/quad4 shells and two-node b
 elastic, tabulated plastic and Johnson–Cook materials with failure and erosion, fixed
 and prescribed displacements, prescribed and initial velocities, forces, pressure
 (first-order faces), gravity and acceleration (free bars against momentum), rigid
-walls, bonded and frictionless contacts and self-contact, amplitudes on every load
-(ADR 0090 OC-3: displacement, force, pressure, gravity and acceleration ramps measured).
-Frictional contact between parts is written but refused until benchmarked.
+walls with and without friction (a block slowing at μ g), bonded and frictionless
+contacts and self-contact, amplitudes on every load (ADR 0090 OC-3: displacement, force,
+pressure, gravity and acceleration ramps measured), and mass scaling (the step held at
+its target, the wave slowed by the mass added). Frictional contact between parts is
+written but refused until benchmarked.
 """
 
 from __future__ import annotations
@@ -106,17 +108,18 @@ class OpenCourantAdapter(SolverAdapter):
 
     def read_results(self, input_file: Path):
         workdir = input_file.parent
-        conn, nodes = _model(workdir)
-        return output.read(workdir, deck.NAME, conn, nodes)
+        conn, nodes, shells = _model(workdir)
+        return output.read(workdir, deck.NAME, conn, nodes, shells)
 
 
 def _model(workdir: Path):
-    """The solid elements' connectivity (Radioss's order is fine for averaging) and the
-    node ids, from the Starter deck Puzzle wrote."""
+    """The solid and shell elements' connectivity (Radioss's order is fine for
+    averaging), the node ids and the shells' ids, from the Starter deck Puzzle wrote."""
     import numpy as np
 
     conn: dict[int, np.ndarray] = {}
     nodes: set[int] = set()
+    shells: set[int] = set()
     section = None
     for line in (workdir / f"{deck.NAME}_0000.rad").read_text(encoding="utf-8").splitlines():
         if line.startswith("/"):
@@ -138,4 +141,6 @@ def _model(workdir: Path):
             continue
         last = ids[0]
         conn[last] = np.array(ids[1:], dtype=np.int64)
-    return conn, nodes
+        if section in ("SHELL", "SH3N"):
+            shells.add(last)
+    return conn, nodes, shells

@@ -32,8 +32,8 @@ from puzzle.adapters.common import (
     THERMAL,
     InputError,
     check_contacts,
+    check_labels,
     hydraulic_diameter,
-    match_points,
 )
 from puzzle.adapters.openfoam.foam import latest_time, read_internal_field, write_dict
 from puzzle.mesh import layer
@@ -163,6 +163,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
 
     workdir.mkdir(parents=True, exist_ok=True)
     names = {s: _label(s) for s in patches}
+    check_labels(names, "OpenFOAM")
     write_med(
         mesh, workdir / "mesh.msh", {comp.materials[0].selection: "fluid", **names}, msh_version=2.2
     )
@@ -229,18 +230,47 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
 
     volume = [b for b in mesh.blocks if b.dim == 3]
     np.savetxt(workdir / "element-ids.txt", np.concatenate([b.ids for b in volume]), fmt="%d")
-    np.save(
-        workdir / "element-centroids.npy",
-        np.vstack(
-            [
-                mesh.node_coords(b.connectivity.ravel())
-                .reshape(*b.connectivity.shape, 3)
-                .mean(axis=1)
-                for b in volume
-            ]
-        ),
-    )
+    np.save(workdir / "element-centroids.npy", np.vstack([foam_centres(mesh, b) for b in volume]))
     return workdir / "Allrun"
+
+
+# Each cell's faces in Gmsh's node order, every face's nodes in a loop.
+CELL_FACES = {
+    "tet4": [(0, 2, 1), (0, 1, 3), (0, 3, 2), (1, 2, 3)],
+    "hex8": [(0, 3, 2, 1), (4, 5, 6, 7), (0, 1, 5, 4), (1, 2, 6, 5), (2, 3, 7, 6), (3, 0, 4, 7)],
+    "wedge6": [(0, 2, 1), (3, 4, 5), (0, 1, 4, 3), (1, 2, 5, 4), (2, 0, 3, 5)],
+    "pyramid5": [(0, 3, 2, 1), (0, 1, 4), (1, 2, 4), (2, 3, 4), (3, 0, 4)],
+}
+
+
+def foam_centres(mesh: Mesh, block) -> np.ndarray:
+    """A block's cell centres as OpenFOAM computes `C` (primitiveMesh's face and cell
+    centres): a face's centre from triangles about its points' average, weighted by
+    their areas (exact on a plane face), and the cell's from pyramids on its faces to the
+    faces' mean centre, weighted by their volumes. That is the volume centroid of a
+    cell with plane faces, which the node average is only for tetrahedra and
+    parallelepipeds: on a tapered hexahedron it was 120 times the matching tolerance
+    off, and the solve's results could not be read back (ADR 0090 OF-2)."""
+    xyz = mesh.node_coords(block.connectivity.ravel()).reshape(*block.connectivity.shape, 3)
+    centres, areas = [], []
+    for face in CELL_FACES[block.element]:
+        pts = xyz[:, list(face)]
+        if len(face) == 3:
+            centres.append(pts.mean(axis=1))
+            areas.append(0.5 * np.cross(pts[:, 1] - pts[:, 0], pts[:, 2] - pts[:, 0]))
+            continue
+        mid = pts.mean(axis=1)
+        nxt = np.roll(pts, -1, axis=1)
+        n = np.cross(nxt - pts, mid[:, None] - pts)  # twice each triangle's area vector
+        a = np.linalg.norm(n, axis=2)
+        c = (pts + nxt + mid[:, None]) / 3
+        centres.append((a[..., None] * c).sum(axis=1) / a.sum(axis=1)[:, None])
+        areas.append(0.5 * n.sum(axis=1))
+    fc, fa = np.stack(centres, axis=1), np.stack(areas, axis=1)
+    estimate = fc.mean(axis=1)
+    pyramid = np.abs(np.einsum("ijk,ijk->ij", fa, fc - estimate[:, None]))  # 3 x volume
+    apex = 0.75 * fc + 0.25 * estimate[:, None]
+    return (pyramid[..., None] * apex).sum(axis=1) / pyramid.sum(axis=1)[:, None]
 
 
 def command() -> list[str]:
@@ -255,11 +285,10 @@ def read_results(workdir: Path) -> Results:
     n = len(ids_ref)
     rho = float((workdir / "density.txt").read_text(encoding="utf-8"))
     centres = read_internal_field(final / "C", n)
-    # Node-average centres equal OpenFOAM's for tets and parallelepipeds; others are
-    # close enough for the coordinate match's tolerance on fine meshes.
+    # The reference is OpenFOAM's own centres (`foam_centres`), so each cell lies on its
+    # reference to round-off; matched nearest, one to one, well inside its neighbours.
     reference = np.load(workdir / "element-centroids.npy")
-    layered = (workdir / layer.FILE).exists()
-    ids = (layer.match if layered else match_points)(centres, reference, ids_ref)
+    ids = layer.match(centres, reference, ids_ref)
     order = np.argsort(ids)
     step = StepResult(1, "stationary", 1.0)
     for name, (field_name, comps) in FIELDS.items():

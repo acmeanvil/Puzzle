@@ -315,3 +315,7 @@ travel, the strain gathered where yield came first, so the failure benchmark har
 - **Bundling OpenCourant in the installer**: the AGPL allows it with the source offered,
   but 80-330 MB per platform for a solver many won't use; fetched on first use instead,
   as ADR 0072 phase 5 does for WSL's root file system.
+
+## Amended (2026-11-17, ADR 0090 package 8)
+
+A displacement in an explicit step needs an amplitude that starts at zero (a jump peaked at 7.49 times the static stress). A shell's result is named `membrane_stress`. The rigid wall's friction and mass scaling have benchmarks. A last frame short of the end time is the warning `last_frame`. Titles are kept from starting a line Radioss would skip or read as a keyword.

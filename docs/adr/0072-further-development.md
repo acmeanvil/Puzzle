@@ -158,6 +158,9 @@ Other items:
 
 ### 3. Solvers and physics
 
+- Left by ADR 0090 package 8: outlets at different pressures on Code_Saturne; the direct
+  analysis method under ASD (the 1.6 factor); `explicit.estimate`'s added mass (low by a
+  third); an un-ramped displacement in an explicit step (refused, could be ramped).
 - Refused by ADR 0090 package 7 until built: a free modal study on Code_Aster (a shift
   scaled to the model, or rigid modes named); planar heat across parts of different
   thickness on Elmer and Code_Aster (properties and fluxes scaled per part).

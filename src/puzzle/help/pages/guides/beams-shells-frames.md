@@ -73,8 +73,9 @@ groups before OK. Then steps 3 to 6 above.
 2. Model → Studies → Load combinations… makes ASCE 7-16's LRFD or ASD combinations from
    the cases used. Wind and seismic act both ways. Each combination is a result step.
 3. In the solve step's settings, second order runs P-Delta, and direct analysis runs
-   AISC 360's Direct Analysis Method: 0.8 EI and EA, plus notional loads of 0.002 times
-   each node's factored gravity load. Both are PyNite's.
+   AISC 360's Direct Analysis Method: 0.8 EI and EA, plus notional loads of 0.003 times
+   each node's factored gravity load (0.002, and 0.001 more so that τb = 1 holds at
+   any axial load; LRFD combinations). Both are PyNite's.
 
 CalculiX and Code_Aster take combinations too: each becomes a static step with its
 cases' loads factored.

@@ -8,7 +8,10 @@ linear solver's iterations, its normalised residual, the drift and the time resi
 the time residual (how much the variable changed over the step, normalised) is the
 convergence measure, plotted per variable. The steady run has no stopping criterion
 here: it runs its iterations, and counts as converged when every residual fell
-`progress.STEADY_DECADES` decades from its largest (else a warning). The listing is
+`progress.STEADY_DECADES` decades from its largest (else a warning). A time march
+(case.json `transient`) is a transient step to its end time, each time step an
+increment at its time; its residuals measure change per step, with no reason to fall,
+so it is not judged by them (ADR 0090 CS-3). The listing is
 written every iteration (`listing_every` in case.json; Code_Saturne's own default is
 every 50th). Fatal errors and intercepted signals become messages and a final
 Diverged."""
@@ -82,9 +85,13 @@ class CodeSaturneProgress(Parser):
         except (OSError, ValueError):
             case = {}
         self.limit = _iterations(case)
+        march = case.get("transient") or {}
+        self.end_time = (float(march["time_step"]) * int(march["steps"])
+                         if march.get("time_step") and march.get("steps") else None)  # fmt: skip
         self.listing = Tail(input_file.parent / LISTING)
         self.started = False
         self.number = 0  # the time step being read
+        self.time: float | None = None  # its time, in a time march
         self.residuals: dict[str, float] = {}
         self.table = False
         self.gave_up = False
@@ -96,6 +103,8 @@ class CodeSaturneProgress(Parser):
         if self.started:
             return []
         self.started = True
+        if self.end_time is not None:  # a time march: an increment per time step
+            return [Step(number=self.step, of=self.of, type="transient", end_time=self.end_time)]
         return [
             Step(number=self.step, of=self.of, type="stationary", iterations=self.limit),
             Increment(step=self.step, number=1),
@@ -120,7 +129,9 @@ class CodeSaturneProgress(Parser):
     def finish(self, ok: bool) -> list[Event]:
         out = self._lines(self.listing.flush()) + self._iteration() + self._error()
         worst = worst_residual(self.its)
-        if self.number and ok and worst is not None and worst[1] <= 1.0:
+        if self.end_time is not None and ok:  # each time step said converged at its time
+            pass
+        elif self.number and ok and worst is not None and worst[1] <= 1.0:
             out.append(Converged(step=self.step, increment=1, iterations=self.number))
         elif self.number and ok and worst is not None:
             fell = STEADY_DECADES - math.log10(worst[1])
@@ -155,6 +166,11 @@ class CodeSaturneProgress(Parser):
         if (m := _STEP.match(line)) is not None:
             out += self._iteration()
             self.number = int(m[2])
+            if self.end_time is not None:
+                with contextlib.suppress(ValueError):
+                    self.time = float(m[1])
+                    out.append(Increment(step=self.step, number=self.number, time=self.time,
+                                         end_time=self.end_time))  # fmt: skip
             return out
         if "Rhs norm" in line and "Variable" in line:
             self.table = True
@@ -175,10 +191,13 @@ class CodeSaturneProgress(Parser):
         """The time step just read, once its table is complete (the next step began)."""
         if not self.number or not self.residuals:
             return []
-        event = Iteration(step=self.step, increment=1, number=self.number,
+        increment = self.number if self.end_time is not None else 1
+        event = Iteration(step=self.step, increment=increment, number=self.number,
                           type="nonlinear", residuals=self.residuals)  # fmt: skip
         self.residuals, self.table = {}, False
         self.its.append(event)
+        if self.end_time is not None:  # a time step done, at its time
+            return [event, Converged(step=self.step, increment=self.number, time=self.time)]
         return [event]
 
     def _error(self) -> list[Event]:

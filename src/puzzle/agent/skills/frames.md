@@ -64,8 +64,10 @@ a solid joint are other skills.
 4. Second order: the solve step's setting `second_order` true (P-Delta, each
    combination solved on its own).
 5. AISC 360's Direct Analysis Method: `direct_analysis` true. It runs P-Delta with
-   0.8 EI and 0.8 EA (τb = 1), plus notional loads of 0.002 times each node's factored
-   gravity load. `notional_directions` is "x,y" by default (both senses of each, each a
+   0.8 EI and 0.8 EA (τb = 1), plus notional loads of 0.003 times each node's factored
+   gravity load: AISC 360 C2.2b's 0.002 and C2.3(c)'s 0.001, which keeps τb = 1 valid
+   whatever the columns' axial load (LRFD combinations: ASD's α = 1.6 is not applied).
+   Stainless members take 0.004 and 0.70 EI (AISC 370). `notional_directions` is "x,y" by default (both senses of each, each a
    combination of its own named "<combination>, notional +x"), or "+x", "x" and so on.
    Gravity is along −z.
 6. CalculiX, Code_Aster and the other finite-element solvers take combinations too

@@ -287,3 +287,34 @@ def test_heat_in_the_flow_needs_the_inlet_temperature(tmp_path):
     with pytest.raises(InputError, match="has none: add a temperature") as info:
         _duct(tmp_path, heat=[flux])
     assert info.value.code == "invalid_input"
+
+
+def test_outlets_at_different_pressures_are_refused(tmp_path):
+    """ADR 0090 CS-1: Code_Saturne's outlets share one level, the values set on them
+    ignored (0.01 and 0 Pa came back −0.0026 and −0.0018 Pa), so differing ones are
+    refused; equal ones (or one) give the level Puzzle adds when reading."""
+    from puzzle.adapters.code_saturne.case import _outlet_level
+
+    zones = [{"nature": "outlet", "pressure": 100.0}, {"nature": "inlet", "velocity": 1.0}]
+    assert _outlet_level(zones) == 100.0
+    assert _outlet_level(zones + [{"nature": "outlet", "pressure": 100.0}]) == 100.0
+    assert _outlet_level([{"nature": "wall"}]) == 0.0
+    with pytest.raises(InputError, match="different pressures") as info:
+        _outlet_level(zones + [{"nature": "outlet", "pressure": 0.0}])
+    assert info.value.code == "unsupported"
+
+
+def test_selections_whose_labels_meet_are_refused():
+    """The CFD review's "to check": `A/B C` and `A_B_C` both became `A_B_C`, so one
+    boundary condition took the other's faces with nothing said. Both CFD adapters name
+    boundaries this way; the shared check refuses it."""
+    from puzzle.adapters.code_saturne.case import _label as saturne
+    from puzzle.adapters.common import check_labels
+    from puzzle.adapters.openfoam.case import _label as foam
+
+    for label in (saturne, foam):
+        names = {s: label(s) for s in ("Duct/Inlet", "Duct/Out let", "Duct_Out_let")}
+        with pytest.raises(InputError, match="both become") as info:
+            check_labels(names, "x")
+        assert info.value.code == "invalid"
+    check_labels({s: foam(s) for s in ("Duct/Inlet", "Duct/Outlet")}, "OpenFOAM")

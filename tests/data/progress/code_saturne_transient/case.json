@@ -1,0 +1,50 @@
+{
+  "mesh": "mesh.msh",
+  "transient": {
+    "time_step": 0.05,
+    "steps": 60,
+    "output_every": 200
+  },
+  "initial_temperature": 293.15,
+  "density": 1.204,
+  "viscosity": 1.81e-05,
+  "iterations": 60,
+  "listing_every": 1,
+  "pseudo_time_step": null,
+  "turbulence": "off",
+  "thermal": {
+    "conductivity": 0.0257,
+    "specific_heat": 1006.0
+  },
+  "zones": [
+    {
+      "label": "Duct_Inlet",
+      "selection": "2",
+      "nature": "inlet",
+      "velocity": 0.005,
+      "temperature": 303.15
+    },
+    {
+      "label": "Duct_Outlet",
+      "selection": "3",
+      "nature": "outlet",
+      "pressure": 0.0
+    },
+    {
+      "label": "Duct_Walls",
+      "selection": "4",
+      "nature": "symmetry"
+    },
+    {
+      "label": "front",
+      "selection": "5",
+      "nature": "symmetry"
+    },
+    {
+      "label": "back",
+      "selection": "6",
+      "nature": "symmetry"
+    }
+  ],
+  "pressure_level": 0.0
+}

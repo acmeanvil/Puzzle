@@ -256,12 +256,14 @@ def _series(results, name) -> np.ndarray:
     return np.array(out)
 
 
-def run_checks(results) -> list[tuple[str, str]]:
+def run_checks(results, step=None) -> list[tuple[str, str]]:
     """After an explicit run, from its frames' global energies (ADR 0085 decision 5):
     (code, sentence) for an energy balance off by more than 5 %, hourglass energy over
-    10 % of the internal energy, or added mass over 5 % of the mass."""
+    10 % of the internal energy, or added mass over 5 % of the mass; and, given the
+    explicit `step`, a last frame short of its end time."""
+    out = _last_frame(results, step) if step is not None else []
     if not results.steps or "kinetic_energy" not in results.steps[0].fields:
-        return []
+        return out
     ke, ie = _series(results, "kinetic_energy"), _series(results, "internal_energy")
     held = ke + ie + _series(results, "rotational_energy") + _series(results, "contact_energy") \
         + _series(results, "hourglass_energy")  # fmt: skip
@@ -269,7 +271,6 @@ def run_checks(results) -> list[tuple[str, str]]:
     expected = held[0] + work
     scale = max(float(np.max(np.abs(held))), float(np.max(np.abs(expected))), 1e-300)
     error = float(np.max(np.abs(held - expected))) / scale
-    out = []
     if error > ENERGY_ERROR:
         out.append(("energy_error", f"the energy balance is off by {error:.1%} (kinetic, internal, "
                                     "contact and hourglass against the start plus the external "
@@ -286,3 +287,23 @@ def run_checks(results) -> list[tuple[str, str]]:
                                   "inertial results are changed; lower the mass scaling time "
                                   "step or remesh the small elements"))  # fmt: skip
     return out
+
+
+def _last_frame(results, step) -> list[tuple[str, str]]:
+    """The run is carried two estimated time steps past its end so the Engine writes the
+    frame there; a solver step more than twice the estimate leaves it out, unsaid (ADR
+    0090 OC-5). Short by more than half a frame interval is said."""
+    from puzzle.adapters.common import InputError
+    from puzzle.adapters.opencourant.deck import settings_of
+
+    try:
+        s = settings_of(step)
+    except InputError:
+        return []
+    times = [st.value for st in results.steps if st.value is not None]
+    if not times or s.end_time - max(times) <= 0.5 * s.frame_dt:
+        return []
+    return [("last_frame", f"the last frame is at {max(times):.4g} s, short of the end time "
+                           f"{s.end_time:.4g} s: the solver's time step outran the estimate the "
+                           "run was carried past its end by; the results stop early (a slightly "
+                           "later end time gives the frame)")]  # fmt: skip

@@ -147,3 +147,33 @@ def test_line_loads_and_node_springs_are_pynite_only():
     adapters = available_adapters()
     assert any("line_load" in m for m in adapters["calculix"]().check(p, study))
     assert not any("line_load" in m for m in adapters["pynite"]().check(p, study))
+
+
+def test_self_weight_on_a_selection_the_mesh_lacks_is_refused(tmp_path):
+    """ADR 0090 PYN-3: PyNite's self weight on a selection not in the mesh loaded every
+    member, so a mistyped name weighed the whole frame. It is refused; the part's own
+    name still takes all its members."""
+    import json
+
+    pytest.importorskip("OCP")
+    from puzzle.adapters.common import InputError
+    from puzzle.adapters.pynite.case import write_case
+    from puzzle.materials import add_library_material
+    from puzzle.mesh import generate_mesh
+    from puzzle.model import MaterialAssignment
+
+    p, comp, study = _frame()
+    steel = add_library_material(p, "structural_steel")
+    comp.materials = [MaterialAssignment(material=steel.id, selection="F")]
+    study.solver = "pynite"
+    mesh = generate_mesh(p, comp.id, tmp_path, tmp_path / "m").mesh
+    comp.physics[0].features.append(
+        Feature(type="gravity", selection="F/Nope", values={"gz": q(-9.81, "m/s^2")})
+    )
+    with pytest.raises(InputError, match="F/Nope") as info:
+        write_case(p, study, mesh, tmp_path / "w")
+    assert info.value.code == "unknown_selection"
+    comp.physics[0].features[-1].selection = "F"
+    write_case(p, study, mesh, tmp_path / "w")
+    case = json.loads((tmp_path / "w" / "case.json").read_text(encoding="utf-8"))
+    assert {w["member"] for w in case["line_loads"]} == {m["name"] for m in case["members"]}

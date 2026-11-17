@@ -7,17 +7,22 @@ steady solver is one SIMPLE iteration towards controlDict's `endTime`; per field
 first solve's initial residual is the residual (what `residualControl` compares), and
 its criterion is that field's `residualControl` entry in the written fvSolution (U's
 for Ux, Uy, Uz; regular-expression keys such as "(k|epsilon|omega)" match by name).
-"SIMPLE solution converged in N iterations" is convergence; reaching `endTime` without
-it is a warning (the residuals had not met their criteria). FOAM FATAL ERROR blocks
-and floating point exceptions become errors and a final Diverged."""
+"SIMPLE solution converged in N iterations" is convergence. Reaching `endTime` without
+it is judged as Code_Saturne's runs are: converged when every residual fell
+`progress.STEADY_DECADES` decades from its largest and stalled there (the turbulent
+benchmarks, each within its tolerance, stalled at 1e-4 to 1e-3, short of targets of 1e-6
+to 1e-8, and all ended "not converged"; ADR 0090 OF-4), else a warning. FOAM FATAL ERROR
+blocks and floating point exceptions become errors and a final Diverged."""
 
 from __future__ import annotations
 
+import math
 import re
 import shlex
 from pathlib import Path
 
 from puzzle.progress import (
+    STEADY_DECADES,
     Converged,
     Diverged,
     Event,
@@ -134,6 +139,7 @@ class OpenFoamProgress(Parser):
         self.started = False
         self.number = 0  # the SIMPLE iteration being read
         self.residuals: dict[str, float] = {}
+        self.peaks: dict[str, float] = {}  # each residual's largest, for the decades fallen
         self.converged = 0  # the iteration simpleFoam said it converged in
         self.said_converged = False
         self.ended = False
@@ -177,7 +183,17 @@ class OpenFoamProgress(Parser):
             for line in tail.flush():
                 out += self._line(line)
         out += self._iteration() + self._converged() + self._error()
-        if self.number and not self.converged and self.ended and ok:
+        fell = self._fell()
+        stopped = self.number and not self.converged and self.ended and ok
+        if stopped and fell is not None and fell >= STEADY_DECADES:
+            out.append(Message(
+                level="info",
+                text=f"simpleFoam ran its {self.limit or self.number} iterations short of the "
+                f"residualControl targets, every residual {fell:.1f} decades or more below its "
+                "largest: taken as converged",
+            ))  # fmt: skip
+            out.append(Converged(step=self.step, increment=1, iterations=self.number))
+        elif stopped:
             out.append(Message(
                 level="warning",
                 text=f"simpleFoam stopped at its iteration limit ({self.limit or self.number}) "
@@ -260,8 +276,18 @@ class OpenFoamProgress(Parser):
         criteria = {n: c for n in self.residuals if (c := criterion(n, self.control)) is not None}
         event = Iteration(step=self.step, increment=1, number=self.number, type="nonlinear",
                           residuals=self.residuals, criteria=criteria)  # fmt: skip
+        for k, v in self.residuals.items():
+            self.peaks[k] = max(self.peaks.get(k, 0.0), abs(v))
+        self.last = dict(self.residuals)
         self.residuals = {}
         return [event]
+
+    def _fell(self) -> float | None:
+        """The fewest decades any residual fell from its largest by the last iteration."""
+        last = getattr(self, "last", {})
+        fell = [math.log10(self.peaks[k] / abs(v)) for k, v in last.items()
+                if self.peaks.get(k) and v]  # fmt: skip
+        return min(fell) if fell else None
 
     def _converged(self) -> list[Event]:
         if not self.converged or self.said_converged:

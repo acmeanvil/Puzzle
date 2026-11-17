@@ -560,6 +560,17 @@ def test_a_pressed_plate_against_an_implicit_transient(tmp_path, solver):
     assert peak < 0
     assert explicit[:, 1].min() == pytest.approx(peak, rel=0.02)
     assert worst < 0.03 * abs(peak)
+    # ADR 0090 OC-7: OpenCourant gives a shell's membrane stress only, a small part of a
+    # bent plate's: the static edge bending stress 6 M / t², M = 0.0513 p a²
+    # (Timoshenko & Woinowsky-Krieger, Table 35, ν 0.3), is 3.08 MPa; the membrane
+    # stress peaked at 14 kPa (0.46 % of it). So it is `membrane_stress`, never `stress`.
+    bending = 6 * 0.0513 * 1000.0 * a**2 / 0.002**2
+    frames = [s for s in run.results.steps if "membrane_stress" in s.fields]
+    assert frames and not any("stress" in s.fields for s in run.results.steps)
+    membrane = max(np.abs(s.fields["membrane_stress"].values[:, :2]).max() for s in frames)
+    print(f"membrane stress {membrane / 1e3:.4g} kPa at most, the edge bending stress "
+          f"{bending / 1e6:.4g} MPa")  # fmt: skip
+    assert membrane < 0.02 * bending
 
 
 BETA_L = [1.8751041, 4.6940911, 7.8547574, 10.9955407] + [(2 * n - 1) * math.pi / 2
@@ -762,11 +773,14 @@ def test_free_bars_move_as_their_loads_and_amplitudes_say(tmp_path, solver):
 
 
 @over("opencourant")
-def test_a_ramped_end_displacement_follows_its_amplitude(tmp_path, solver):
+@pytest.mark.parametrize("name", ["ramp", "#1 ramp"])
+def test_a_ramped_end_displacement_follows_its_amplitude(tmp_path, solver, name):
     """A prescribed displacement following an amplitude (ADR 0090 OC-3): the end of a
     bar held at its start is moved u_max · f(t), f ramping 0 to 1 over 25 wave transits;
     the end's displacement is that at each frame, and, the pull being slow, the bar's
-    stress at the end is the static E u / L."""
+    stress at the end is the static E u / L. Named `#1 ramp`, the /FUNCT's title had
+    been read as a comment and its first point as the title: the ramp became a step
+    (ADR 0090 OC-1)."""
     from puzzle.model.schema import Amplitude
 
     c = math.sqrt(E / RHO)
@@ -777,7 +791,7 @@ def test_a_ramped_end_displacement_follows_its_amplitude(tmp_path, solver):
     ]
     end = 1.5 * ramp
     p, study = _bar(solver, features, {"end_time": end, "frames": 6})
-    amp = p.add(Amplitude(name="ramp", points=[(0.0, 0.0), (ramp, 1.0), (end, 1.0)]))
+    amp = p.add(Amplitude(name=name, points=[(0.0, 0.0), (ramp, 1.0), (end, 1.0)]))
     p.objects[study.component].physics[0].features[1].amplitude = amp.id
     run = _run(tmp_path, p, study)
     tip = run.mesh.groups["S/End"].node_ids
@@ -791,3 +805,70 @@ def test_a_ramped_end_displacement_follows_its_amplitude(tmp_path, solver):
     print(f"sigma_xx in the middle {middle.mean() / 1e6:.5g} MPa (E u / L "
           f"{E * u_max / L / 1e6:.5g})")  # fmt: skip
     assert middle.mean() == pytest.approx(E * u_max / L, rel=0.03)
+
+
+@over("opencourant")
+def test_a_block_sliding_on_a_rough_rigid_wall_slows_at_mu_g(tmp_path, solver):
+    """A rigid wall's friction (ADR 0090 OC-3, ADR-64: claimed, never solved): a steel
+    block 20 × 10 × 10 mm resting on a wall at z = 0 with μ = 0.3, thrown along x at
+    1 m/s under 1000 m/s² of gravity (g × 100, so the slowing shows within 2 ms). By
+    momentum its centre of mass slows at μ g: v = v0 − μ g t, whatever it rings with.
+    Measured 2026-11-17: within 5e-4 m/s at every frame (0.1 % of v0)."""
+    g, mu, v0, end = 1000.0, 0.3, 1.0, 2e-3
+    features = [
+        Feature(type="initial_velocity", selection="S/Body", values={"vx": q(v0, "m/s")}),
+        Feature(type="gravity", selection="S/Body", values={"gz": q(-g, "m/s^2")}),
+        Feature(type="rigid_wall", selection="S/Body", values={
+            "z0": q(-1e-6, "mm"), "nz": q(1.0, "dimensionless"), "mu": q(mu, "dimensionless")}),
+    ]  # fmt: skip
+    p, study = _bar(solver, features, {"end_time": end, "frames": 10}, length=0.02, nu=0.3)
+    run = _run(tmp_path, p, study)
+    ids, weight = _lumped(run)
+    for s in run.results.steps[1:]:
+        v = weight @ s.fields["velocity"].at(ids)
+        print(f"t {s.value:.4g} s: vx {v[0]:.6g} m/s (v0 - mu g t {v0 - mu * g * s.value:.6g})")
+        assert v[0] == pytest.approx(v0 - mu * g * s.value, abs=2e-3 * v0)
+    assert run.results.steps[-1].value == pytest.approx(end, rel=0.01)
+
+
+@over("opencourant")
+def test_mass_scaling_holds_its_time_step_and_slows_the_wave(tmp_path, solver):
+    """`mass_scaling_time_step` (ADR 0090 OC-3, ADR-64: claimed, never solved): the bar
+    of the wave test, its target twice its stable step. The Engine runs at the target,
+    and the mass it adds makes the bar's impedance √(E ρ M / M0), M the mass with what
+    was added, M0 the bar's own: the stress behind the front driven at v0 is
+    v0 √(E ρ M / M0) (√(E ρ) v0 without scaling). Measured 2026-11-17: the step is the
+    target to seven digits; added 3.42 times the bar's mass; the stress −0.14 %."""
+    from puzzle import explicit
+    from puzzle.mesh import generate_mesh
+
+    v0 = 1.0
+    c = math.sqrt(E / RHO)
+    end = 1.5 * L / c  # the slowed front about three quarters of the way
+    features = [
+        Feature(type="fixed", selection="S/Start"),
+        Feature(type="velocity", selection="S/End", values={"x": q(-v0, "m/s")}),
+    ]
+    p, study = _bar(solver, features, {"end_time": end, "frames": 6})
+    save_project(p, tmp_path / "m")
+    mesh = generate_mesh(p, study.component, tmp_path / "m", tmp_path / "mesh").mesh
+    est = explicit.estimate(p, p.objects[study.component], mesh, end)
+    target = 2 * est.time_step * est.scale
+    study.steps[0].settings["mass_scaling_time_step"] = target
+    run = _run(tmp_path, p, study)
+    steps = [s.fields["time_step"].values[0, 0] for s in run.results.steps[1:]]
+    last = run.results.steps[-1]
+    whole, added = (last.fields[k].values[0, 0] for k in ("mass", "added_mass"))
+    own = RHO * L * W * W
+    assert whole - added == pytest.approx(own, rel=1e-6)
+    stress = last.fields["stress"]
+    x = run.mesh.node_coords(stress.ids)[:, 0]
+    slowed = c * math.sqrt(own / whole)
+    behind = stress.values[x > L - slowed * last.value + 0.02, 0]
+    expected = -v0 * math.sqrt(E * RHO * whole / own)
+    print(f"time step {np.median(steps):.7g} s (target {target:.7g}); added {added / own:.3g} "
+          f"times the mass; sigma_xx behind {behind.mean() / 1e6:.5g} MPa "
+          f"({expected / 1e6:.5g})")  # fmt: skip
+    assert np.median(steps) == pytest.approx(target, rel=1e-5)
+    assert added > 0.5 * own
+    assert behind.mean() == pytest.approx(expected, rel=0.02)

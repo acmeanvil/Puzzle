@@ -66,6 +66,8 @@ VECTORS = {
 }
 TENSORS = {
     "stress": ("Stress", "stress", "pressure"),
+    # a shell's mid-surface stress, not its surface stress (OpenCourant, ADR 0090 OC-7)
+    "membrane_stress": ("Membrane stress (shells)", "membrane stress", "pressure"),
     "strain": ("Strain", "strain", None),
     "plastic_strain": ("Plastic strain", "plastic strain", None),  # directional plastic strain
 }

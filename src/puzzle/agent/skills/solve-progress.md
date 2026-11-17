@@ -48,7 +48,11 @@ failed or stopped solve keeps it too, in its run folder.
 - OpenFOAM's residuals are each field's initial residual (`Ux`, `Uy`, `Uz`, `p`, `k`,
   `epsilon`, `omega`, `T`) against its `residualControl` criterion (the step's
   `tolerance` sets p's and U's); it stops early once all are below (`Converged`).
-  `continuity` has no criterion.
+  `continuity` has no criterion. At its iteration limit short of them it counts as
+  converged when every residual fell three decades from its largest (turbulent runs
+  stall near 1e-4, often in a component that is about zero, such as a spanwise `Uz`).
+- Code_Saturne's time marches (transient steps) are followed by time, each time step an
+  increment; their residuals measure change per step and aren't judged.
 - Code_Saturne's are each variable's time residual (`velocity`, `pressure`, `k`,
   `epsilon`, `omega`, `temperature`); it always runs all its `iterations` and has no
   criterion, so Puzzle counts it converged when every residual fell three decades from

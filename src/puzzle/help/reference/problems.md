@@ -166,6 +166,11 @@ The scheduler ended the job itself (a node failure, preemption, a cancel from ou
 
 Large-deflection strains past 5 % on an elastic material (ADR 0082).
 
+<!-- key: problem:last_frame, error:last_frame -->
+### last_frame
+
+An explicit run's last frame falls short of its end time (ADR 0090 OC-5).
+
 <!-- key: problem:lock_lost, error:lock_lost -->
 ### lock_lost
 

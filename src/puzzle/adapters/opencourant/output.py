@@ -71,10 +71,22 @@ def _nodal(cell_ids, cell_values, conn: dict[int, np.ndarray]) -> tuple[np.ndarr
     return ids, np.array([sums[i] / counts[i] for i in ids]).reshape(len(ids), -1)
 
 
-def read(workdir: Path, name: str, conn: dict[int, np.ndarray], mesh_nodes: set[int]) -> Results:
+def frame_files(workdir: Path, name: str, suffix: str = "") -> list[Path]:
+    """The animation frames `<name>A001`… (with `suffix`, e.g. ".vtk"), in their order.
+    Past 999 the number takes a fourth digit, which a three-digit pattern dropped, and
+    A1000 sorts before A999 as text (ADR 0090 OC-5)."""
+    import re
+
+    pattern = re.compile(rf"{re.escape(name)}A(\d{{3,}}){re.escape(suffix)}")
+    found = [(m, p) for p in workdir.glob(f"{name}A[0-9]*") if (m := pattern.fullmatch(p.name))]
+    return [p for m, p in sorted(found, key=lambda mp: int(mp[0].group(1)))]
+
+
+def read(workdir: Path, name: str, conn: dict[int, np.ndarray], mesh_nodes: set[int],
+         shells: set[int] = frozenset()) -> Results:  # fmt: skip
     import pyvista as pv
 
-    frames = sorted(workdir.glob(f"{name}A[0-9][0-9][0-9].vtk"))
+    frames = frame_files(workdir, name, ".vtk")
     if not frames:
         raise FileNotFoundError(f"no animation frames in {workdir} (see solver.log)")
     hist = history(workdir, name)
@@ -106,17 +118,23 @@ def read(workdir: Path, name: str, conn: dict[int, np.ndarray], mesh_nodes: set[
                     np.array([[float(gone[solid].sum())]]),
                 )
                 solid &= ~gone
-            stresses = [k for k in grid.cell_data if "_Stress" in k]  # 3DELEM_, 2DELEM_..(membrane)
-            if not solid.any():  # beams only: nothing to average at the nodes
-                stresses = []
-            if stresses:
+            # Solids' stress (3DELEM_) is `stress`; a shell's (2DELEM_) is its membrane
+            # stress only, near zero in a plate that bends, so it is `membrane_stress`,
+            # never taken for the surface stress (ADR 0090 OC-7).
+            shell = np.array([int(e) in shells for e in cells], bool)
+            for key, prefix, kind in (("stress", "3DELEM", ~shell),
+                                      ("membrane_stress", "2DELEM", shell)):  # fmt: skip
+                stresses = [k for k in grid.cell_data if "_Stress" in k and k.startswith(prefix)]
+                has = solid & kind
+                if not stresses or not has.any():  # beams only: nothing at the nodes
+                    continue
                 tensor = np.zeros((len(cells), 9))
-                for vtk_name in stresses:  # solids and shells: each cell has one of them
+                for vtk_name in stresses:
                     tensor += np.nan_to_num(np.asarray(grid.cell_data[vtk_name], float).reshape(
                         len(cells), 9))  # fmt: skip
-                ids, values = _nodal(cells[solid], tensor[solid][:, STRESS], conn)
-                fields["stress"] = Field("stress", "node", ["xx", "yy", "zz", "xy", "yz", "zx"],
-                                         ids, values)  # fmt: skip
+                ids, values = _nodal(cells[has], tensor[has][:, STRESS], conn)
+                fields[key] = Field(key, "node", ["xx", "yy", "zz", "xy", "yz", "zx"], ids,
+                                    values)  # fmt: skip
             for vtk_name in [k for k in grid.cell_data if solid.any() and (
                     "Plastic" in k or k.endswith("_EPSP"))]:  # fmt: skip
                 eps = np.asarray(grid.cell_data[vtk_name], float).reshape(len(cells), -1)[:, :1]
