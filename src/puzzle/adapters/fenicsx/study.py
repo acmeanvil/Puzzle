@@ -105,6 +105,10 @@ def main() -> None:
     planar = case.get("dimension", "3d") != "3d"  # ADR 0048: a 2D model in the XY plane
     data = read_from_msh("mesh.msh", MPI.COMM_WORLD, 0, gdim=2 if planar else 3)
     msh, cells, facets, groups = data.mesh, data.cell_tags, data.facet_tags, data.physical_groups
+    tdim = msh.topology.dim
+    TAGS.update({d: t for d, t in ((tdim, cells), (tdim - 1, facets), (tdim - 2, data.ridge_tags),
+                                   (tdim - 3, data.peak_tags)) if t is not None})  # fmt: skip
+    GROUPS.update(groups)
     degree = (msh.geometry.cmaps[0] if hasattr(msh.geometry, "cmaps") else msh.geometry.cmap).degree
     dx = ufl.Measure("dx", domain=msh, subdomain_data=cells)
     ds = ufl.Measure("ds", domain=msh, subdomain_data=facets)
@@ -453,6 +457,25 @@ def vector_value(msh, components):
     return fem.Constant(msh, np.asarray(components, dtype=float))
 
 
+TAGS: dict = {}  # dimension -> the mesh's tags of that dimension (main fills it)
+GROUPS: dict = {}  # physical name -> (dimension, tag)
+
+
+def held_dofs(V, name: str):
+    """The dofs a condition on selection `name` holds, located on the entities of its own
+    dimension: a face's facets, and (ADR 0090 FENICS-1) an edge's or a point's nodes, or a
+    body's. Looking only among the facets held nothing for an edge, without a word."""
+    if name not in GROUPS:
+        raise SystemExit(f"no group '{name}' in mesh.msh")
+    dim, number = GROUPS[name]
+    entities = TAGS[dim].find(number) if dim in TAGS else np.empty(0, dtype=np.int32)
+    if len(entities) == 0:
+        raise SystemExit(f"selection '{name}' has no mesh entities to hold")
+    msh = (V[0] if isinstance(V, tuple) else V).mesh
+    msh.topology.create_connectivity(dim, msh.topology.dim)
+    return fem.locate_dofs_topological(V, dim, entities)
+
+
 def dirichlet(value, dofs, V) -> fem.DirichletBC:
     return fem.dirichletbc(np.asarray(value, dtype=np.float64), dofs, V)
 
@@ -520,7 +543,7 @@ def solve_solid(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
     for f in case["features"]:
         where, vals = facets.find(tag(f["group"])), f.get("values", {})
         if f["type"] == "fixed":
-            bcs.append(dirichlet(np.zeros(3), fem.locate_dofs_topological(V, 2, where), V))
+            bcs.append(dirichlet(np.zeros(3), held_dofs(V, f["group"]), V))
         elif f["type"] == "displacement" and "cylindrical" in f:  # (r, θ, z) at each point
             cyl = f["cylindrical"]
             o, ax, (ur, ut, uz) = (np.asarray(w, dtype=float) for w in
@@ -535,7 +558,7 @@ def solve_solid(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
 
             target = fem.Function(V)
             target.interpolate(field)
-            bcs.append(fem.dirichletbc(target, fem.locate_dofs_topological(V, 2, where)))
+            bcs.append(fem.dirichletbc(target, held_dofs(V, f["group"])))
         elif f["type"] == "displacement":
             for i, axis in enumerate("xyz"):
                 if axis not in vals:
@@ -544,10 +567,10 @@ def solve_solid(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
                     Vi, _ = V.sub(i).collapse()
                     given = fem.Function(Vi)
                     given.interpolate(vals[axis])  # the same Lagrange element: exact
-                    dofs = fem.locate_dofs_topological((V.sub(i), Vi), 2, where)
+                    dofs = held_dofs((V.sub(i), Vi), f["group"])
                     bcs.append(fem.dirichletbc(given, dofs, V.sub(i)))
                     continue
-                dofs = fem.locate_dofs_topological(V.sub(i), 2, where)
+                dofs = held_dofs(V.sub(i), f["group"])
                 bcs.append(dirichlet(vals[axis], dofs, V.sub(i)))
         elif f["type"] == "force" and not modal:
             traction = np.array([vals.get(c, 0.0) for c in "xyz"]) / f["area"]
@@ -661,24 +684,24 @@ def solve_solid_mixed(case, msh, degree, dx, ds, facets, tag, piecewise, out) ->
     L = ufl.inner(fem.Constant(msh, np.zeros(3)), v) * dx
     bcs = []
 
-    def hold(value, where, i=None):
+    def hold(value, name, i=None):
         sub = W.sub(0) if i is None else W.sub(0).sub(i)
         S, _ = sub.collapse()
         target = fem.Function(S)
         target.x.array[:] = value
-        dofs = fem.locate_dofs_topological((sub, S), 2, where)
+        dofs = held_dofs((sub, S), name)
         bcs.append(fem.dirichletbc(target, dofs, sub))
 
     for f in case["features"]:
-        where, vals = facets.find(tag(f["group"])), f.get("values", {})
+        vals = f.get("values", {})
         if f["type"] == "fixed":
-            hold(0.0, where)
+            hold(0.0, f["group"])
         elif f["type"] == "displacement":
             if "cylindrical" in f or any(isinstance(vals.get(c), fem.Function) for c in "xyz"):
                 raise SystemExit("mixed u-p takes constant Cartesian displacements only")
             for i, axis in enumerate("xyz"):
                 if axis in vals:
-                    hold(float(vals[axis]), where, i)
+                    hold(float(vals[axis]), f["group"], i)
         elif f["type"] == "force":
             traction = np.array([vals.get(c, 0.0) for c in "xyz"]) / f["area"]
             L += ufl.inner(fem.Constant(msh, traction), v) * ds(tag(f["group"]))
@@ -1068,7 +1091,6 @@ def solve_solid_2d(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> No
     1 m of depth in plane strain) or 2 pi r, so loads given as totals are consistent.
     Static, modal, transient and harmonic steps, as in 3D (ADR 0041)."""
     V = fem.functionspace(msh, ("Lagrange", degree, (2,)))
-    fdim = msh.topology.dim - 1
     E, nu = piecewise("youngs_modulus"), piecewise("poissons_ratio")
     mu = E / (2 * (1 + nu))
     lmbda = E * nu / ((1 + nu) * (1 - 2 * nu))
@@ -1123,13 +1145,13 @@ def solve_solid_2d(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> No
     if heat is not None:
         L += heat * (ufl.tr(ev) + (hv if axi else 0)) * weight * dx
     for f in case["features"]:
-        where, vals = facets.find(tag(f["group"])), f.get("values", {})
+        vals = f.get("values", {})
         if f["type"] == "fixed":
-            bcs.append(dirichlet(np.zeros(2), fem.locate_dofs_topological(V, fdim, where), V))
+            bcs.append(dirichlet(np.zeros(2), held_dofs(V, f["group"]), V))
         elif f["type"] == "displacement":
             for i, axis in enumerate("xy"):
                 if axis in vals:
-                    dofs = fem.locate_dofs_topological(V.sub(i), fdim, where)
+                    dofs = held_dofs(V.sub(i), f["group"])
                     bcs.append(dirichlet(vals[axis], dofs, V.sub(i)))
         elif f["type"] == "force" and not modal:  # the edge's total, spread over its weight
             traction = np.array([vals.get(c, 0.0) for c in "xy"]) / f["area"]
@@ -1207,7 +1229,6 @@ def solve_heat(case, msh, degree, dx, ds, facets, tag, of_temperature, out) -> N
     (properties at the previous iterate), which needs only linear solves on any backend."""
     V = fem.functionspace(msh, ("Lagrange", degree))
     T, v = ufl.TrialFunction(V), ufl.TestFunction(V)
-    fdim = msh.topology.dim - 1
     # Axisymmetric (ADR 0048): every integral weighted by the radius x (2 pi cancels);
     # in plane, the thickness cancels as every load here is per area.
     r = ufl.SpatialCoordinate(msh)[0] if case.get("dimension") == "2d_axisymmetric" else 1.0
@@ -1219,9 +1240,9 @@ def solve_heat(case, msh, degree, dx, ds, facets, tag, of_temperature, out) -> N
     L = fem.Constant(msh, 0.0) * v * dx
     bcs, films, amplitudes = [], [], []
     for f in case["features"]:
-        where, vals = facets.find(tag(f["group"])), f.get("values", {})
+        vals = f.get("values", {})
         if f["type"] == "temperature":
-            bcs.append(dirichlet(vals["T"], fem.locate_dofs_topological(V, fdim, where), V))
+            bcs.append(dirichlet(vals["T"], held_dofs(V, f["group"]), V))
         elif f["type"] == "heat_flux":
             factor = 1.0
             if "amplitude" in f:  # ADR 0037: q times the amplitude at each step's time
@@ -1415,19 +1436,19 @@ def solve_custom(case, msh, degree, cells, facets, tag, piecewise, out) -> None:
         raise SystemExit(f"weak form: {type(exc).__name__}: {exc}") from None
     bcs, held = [], []  # held: (dofs, space) of each condition, for zero corrections
     for f in case["features"]:
-        where, vals = facets.find(tag(f["group"])), f.get("values", {})
+        vals = f.get("values", {})
         if f["type"] == "dirichlet":
             if shape:
                 for i, axis in enumerate("xyz"):
                     if axis in vals:
-                        dofs = fem.locate_dofs_topological(V.sub(i), 2, where)
+                        dofs = held_dofs(V.sub(i), f["group"])
                         bcs.append(dirichlet(vals[axis], dofs, V.sub(i)))
                         held.append((dofs, V.sub(i)))
             else:
                 value = vals.get(name, vals.get("value"))
                 if value is None:
                     raise SystemExit(f"dirichlet on {f['group']} needs a '{name}' value")
-                dofs = fem.locate_dofs_topological(V, 2, where)
+                dofs = held_dofs(V, f["group"])
                 bcs.append(dirichlet(value, dofs, V))
                 held.append((dofs, V))
         elif f["type"] == "neumann":  # a flux g into the body: -g v ds
@@ -1491,12 +1512,11 @@ def solve_electrostatics(case, msh, degree, dx, ds, facets, tag, piecewise, out)
     L = fem.Constant(msh, 0.0) * v * dx
     bcs = []
     for f in case["features"]:
-        where, vals = facets.find(tag(f["group"])), f.get("values", {})
-        dofs = fem.locate_dofs_topological(V, 2, where)
+        vals = f.get("values", {})
         if f["type"] == "electric_potential":
-            bcs.append(dirichlet(vals["V"], dofs, V))
+            bcs.append(dirichlet(vals["V"], held_dofs(V, f["group"]), V))
         elif f["type"] == "ground":
-            bcs.append(dirichlet(0.0, dofs, V))
+            bcs.append(dirichlet(0.0, held_dofs(V, f["group"]), V))
         elif f["type"] == "surface_charge":
             L += vals["rho_s"] * v * ds(tag(f["group"]))
     uh = solve_linear(a, L, bcs, V, "phi")

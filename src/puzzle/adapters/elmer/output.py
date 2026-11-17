@@ -50,18 +50,35 @@ def eigenvalues(log_text: str) -> list[float]:
 def read_series(
     vtus: list[Path], times: list[float], node_ids: np.ndarray, log_text: str
 ) -> Results:
-    """One result step per output file (transient), or the single steady/modal result."""
+    """One result step per output file (a transient's times, a scan's frequencies), or
+    the single steady or modal result. The files must be exactly the outputs expected:
+    pairing them with the times any other way labels fields with the wrong times."""
     if len(vtus) == 1:
         results = read_results(vtus[0], node_ids, log_text)
-        if times and [s.kind for s in results.steps] == ["frequency_domain"]:
-            results.steps[0].value = times[0]  # a one-frequency scan: its frequency
+        if [s.kind for s in results.steps] != ["modal"] * len(results.steps):
+            check_outputs(vtus, times)
+            results.steps[0].value = times[0]  # a one-output run: its time or frequency
         return results
+    check_outputs(vtus, times)
     results = Results(solver="elmer")
-    for vtu, t in zip(vtus, times, strict=False):
+    for vtu, t in zip(vtus, times, strict=True):
         (step,) = read_results(vtu, node_ids, log_text).steps
         step.value = t
         results.steps.append(step)
     return results
+
+
+def check_outputs(files: list[Path], expected: list) -> None:
+    """Refuse output files that are not one per expected time or frequency."""
+    if len(files) != len(expected):
+        from puzzle.errors import PuzzleError
+
+        raise PuzzleError(
+            f"Elmer wrote {len(files)} result files where {len(expected)} output times or "
+            "frequencies were expected; the results can't be matched to their times",
+            code="solver_failed",
+            details={"files": len(files), "expected": len(expected)},
+        )
 
 
 def read_results(vtu: Path, node_ids: np.ndarray, log_text: str) -> Results:

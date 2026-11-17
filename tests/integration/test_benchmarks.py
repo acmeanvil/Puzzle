@@ -238,8 +238,59 @@ def test_time_schemes(tmp_path, solver, scheme):
         assert max(errors) < 0.02  # second order: ~50x below backward Euler's 0.35 K here
 
 
+@solver
+def test_transient_output_every_keeps_each_field_at_its_time(tmp_path, solver):
+    """`output_every = 2` (ADR 0023): the results are every second step's, each at its own
+    time. Elmer once wrote a file every step while the times were thinned, so the values
+    of 10..300 s came back labelled 20..600 s and the rest was dropped (ADR 0090 ELMER-1).
+    Reference: the same solver's every-step run at the same times (the same increments, so
+    equal to rounding), and the series solution at END/2 and END within 1 % of the 80 K
+    step as the every-step benchmark. Measured 2026-11-17: equal (0 K; FEniCSx 3e-13 K) on
+    CalculiX, Elmer, Code_Aster and FEniCSx; 0.346 K at 300 s, 0.143 K at 600 s on each."""
+    every, _ = _transient_run(tmp_path / "every", solver, {})
+    thinned, alpha = _transient_run(tmp_path / "thinned", solver, {"output_every": 2})
+
+    def by_time(run):
+        return {s.value: s.fields["temperature"] for s in run.results.steps
+                if "temperature" in s.fields and s.value > 0}  # fmt: skip
+
+    full, kept = by_time(every), by_time(thinned)
+    # CalculiX writes a step's last increment whatever the frequency; here it is a 2nd.
+    assert sorted(kept) == pytest.approx([2 * DT * k for k in range(1, round(END / DT) // 2 + 1)])
+    worst = 0.0
+    for t, field in kept.items():
+        reference = full[next(u for u in full if u == pytest.approx(t, rel=1e-9))]
+        assert np.array_equal(field.ids, reference.ids)
+        worst = max(worst, float(np.abs(field.values - reference.values).max()))
+    errors = []
+    for t in (END / 2, END):
+        field = kept[next(u for u in kept if u == pytest.approx(t, rel=1e-9))]
+        x = thinned.mesh.node_coords(field.ids)[:, 0]
+        errors.append(float(np.abs(field.values[:, 0] - _bar_temperature(x, t, alpha)).max()))
+    print(f"{solver}: largest difference from every step {worst:.3g} K; series {errors}")
+    assert worst < 1e-6
+    assert max(errors) < 0.01 * 80
+
+
 def _transient_errors(tmp_path, solver, scheme_settings) -> list[float]:
     """Max error against the series solution at END/2 and END."""
+    run, alpha = _transient_run(tmp_path, solver, scheme_settings)
+    times = sorted({s.value for s in run.results.steps if "temperature" in s.fields})
+    assert times[-1] == pytest.approx(END, rel=1e-6)
+    assert len(times) >= 10  # a time series, not just the end state
+    errors = []
+    for t in (END / 2, END):
+        state = next(s for s in run.results.steps if s.value == pytest.approx(t, rel=1e-6))
+        temperature = state.fields["temperature"]
+        x = run.mesh.node_coords(temperature.ids)[:, 0]
+        exact = _bar_temperature(x, t, alpha)
+        errors.append(float(np.abs(temperature.values[:, 0] - exact).max()))
+    return errors
+
+
+def _transient_run(tmp_path, solver, scheme_settings):
+    """The bar heated at its root from 20 degC, and its diffusivity."""
+    tmp_path.mkdir(exist_ok=True)
     step = write_bar_step(tmp_path / "bar.step")
     hot = Feature(
         type="temperature", selection="Bar/Root", values={"T": Quantity(value=100, unit="degC")}
@@ -263,15 +314,4 @@ def _transient_errors(tmp_path, solver, scheme_settings) -> list[float]:
 
     steel = library_material("structural_steel").properties
     k, rho, cp = (steel[p].to_si() for p in ("thermal_conductivity", "density", "specific_heat"))
-    alpha = k / (rho * cp)
-    times = sorted({s.value for s in run.results.steps if "temperature" in s.fields})
-    assert times[-1] == pytest.approx(END, rel=1e-6)
-    assert len(times) >= 10  # a time series, not just the end state
-    errors = []
-    for t in (END / 2, END):
-        state = next(s for s in run.results.steps if s.value == pytest.approx(t, rel=1e-6))
-        temperature = state.fields["temperature"]
-        x = run.mesh.node_coords(temperature.ids)[:, 0]
-        exact = _bar_temperature(x, t, alpha)
-        errors.append(float(np.abs(temperature.values[:, 0] - exact).max()))
-    return errors
+    return run, k / (rho * cp)

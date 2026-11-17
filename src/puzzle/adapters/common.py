@@ -307,6 +307,58 @@ class FaceLookup:
         return out
 
 
+SELECTION_KINDS = ("body", "boundary", "edge", "point")
+# What a catalog entity is, as a selection kind (ADR 0090 FENICS-1).
+_ENTITY_KINDS = {"body": "body", "face": "boundary", "edge": "edge", "vertex": "point"}
+
+
+def selection_kind(group: Group, mesh: Mesh) -> str:
+    """A selection's kind against the model: its bodies (regions in 2D), their boundary
+    (faces; edges in 2D), or below it (edges, points). Kinds follow the dimension of the
+    model, so a 2D model's edge selection is a boundary, as a 3D one's face is."""
+    model = 2 if mesh.planar else 3
+    return {model: "body", model - 1: "boundary"}.get(
+        group.dim, "point" if group.dim == 0 else "edge"
+    )
+
+
+def _kind_words(kind: str, mesh: Mesh) -> str:
+    if kind == "boundary":
+        return "an edge" if mesh.planar else "a face"
+    return {"body": "a region" if mesh.planar else "a body", "edge": "an edge",
+            "point": "a point"}[kind]  # fmt: skip
+
+
+def check_selection_kinds(
+    features: Iterable, mesh: Mesh, solver: str, accepts: dict[str, Iterable[str]]
+) -> None:
+    """Refuse a feature on a kind of selection this solver doesn't write (ADR 0090
+    pattern 2, "written or refused"): a face condition looked up among the facets holds
+    nothing on an edge or a point, without a word. `accepts` names, per feature type, the
+    kinds the adapter applies; the rest take their catalog entity's kind only. Loads on
+    bodies are left to the adapters: a line or sheet part's body is an edge or a face."""
+    from puzzle.model.catalog import CATALOG
+
+    entity = {s.type: s.entity for specs in CATALOG.values() for s in specs}
+    label = {s.type: s.label for specs in CATALOG.values() for s in specs}
+    for f in features:
+        group = mesh.groups.get(f.selection) if f.selection else None
+        if group is None:
+            continue
+        if f.type not in entity or entity[f.type] == "body":
+            continue
+        allowed = {_ENTITY_KINDS[entity[f.type]], *accepts.get(f.type, ())}
+        kind = selection_kind(group, mesh)
+        if kind not in allowed:
+            wanted = " or ".join(_kind_words(k, mesh) for k in SELECTION_KINDS if k in allowed)
+            raise InputError(
+                f"{solver} doesn't apply {label.get(f.type, f.type)} to {_kind_words(kind, mesh)}"
+                f" selection ('{f.selection}'): use {wanted} selection",
+                code="unsupported",
+                details={"feature": f.type, "selection": f.selection, "kind": kind},
+            )
+
+
 def surface_blocks(group: Group, mesh: Mesh) -> list[CellBlock]:
     """A face selection's surface elements; a 2D model's edge selection's line elements."""
     dim = 1 if mesh.planar else 2

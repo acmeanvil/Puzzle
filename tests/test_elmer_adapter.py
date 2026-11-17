@@ -6,7 +6,8 @@ from conftest_geometry import bar_project, write_bar_step
 
 from puzzle.adapters.common import InputError
 from puzzle.adapters.elmer import ElmerAdapter
-from puzzle.adapters.elmer.output import eigenvalues, read_results, read_vtu
+from puzzle.adapters.elmer.output import eigenvalues, read_results, read_series, read_vtu
+from puzzle.errors import PuzzleError
 from puzzle.mesh import generate_mesh
 from puzzle.model import Feature, Physics, Quantity, SolveStep, Study
 
@@ -135,6 +136,55 @@ def test_transient_heat_sif(tmp_path):
     assert "Timestep Intervals(1) = 6" in text and "Exec Solver = After Timestep" in text
     times = (sif.parent / "mesh" / "puzzle-times.txt").read_text(encoding="utf-8").split()
     assert [float(t) for t in times] == [5, 10, 15, 20, 25, 30]
+
+
+def test_output_every_writes_only_the_output_steps(tmp_path):
+    """ADR 0090 ELMER-1: the result output runs every k-th step (from the k-th), so
+    Elmer writes one file per listed time."""
+    hot = Feature(
+        type="temperature", selection="Bar/Root", values={"T": Quantity(value=100, unit="degC")}
+    )
+    settings = {"time_step": Quantity(value=5, unit="s"), "end_time": Quantity(value=35, unit="s"),
+                "output_every": 3}  # fmt: skip
+    sif, _ = _case(
+        tmp_path, [hot], SolveStep(type="transient", settings=settings), physics="heat_transfer"
+    )
+    text = sif.read_text(encoding="utf-8")
+    output = text[text.index('Equation = "Result Output"') :].split("End")[0]
+    assert "Exec Intervals = 3" in output and "Exec Intervals Offset = 2" in output
+    times = (sif.parent / "mesh" / "puzzle-times.txt").read_text(encoding="utf-8").split()
+    assert [float(t) for t in times] == [15, 30]
+
+
+HEAT_VTU = """<?xml version="1.0"?>
+<VTKFile type="UnstructuredGrid" version="0.1">
+  <UnstructuredGrid><Piece NumberOfPoints="2" NumberOfCells="1">
+    <PointData>
+      <DataArray type="Float64" Name="temperature" NumberOfComponents="1" format="ascii">
+        {a} {b}
+      </DataArray>
+    </PointData>
+  </Piece></UnstructuredGrid>
+</VTKFile>
+"""
+
+
+def test_reader_refuses_files_that_are_not_one_per_time(tmp_path):
+    vtus = []
+    for k in range(1, 5):
+        vtus.append(tmp_path / f"case_t{k:04d}.vtu")
+        vtus[-1].write_text(HEAT_VTU.format(a=k, b=10 * k), encoding="utf-8")
+    ids = np.array([1, 2])
+    results = read_series(vtus, [5.0, 10.0, 15.0, 20.0], ids, "")
+    assert [s.value for s in results.steps] == [5, 10, 15, 20]
+    assert results.steps[2].fields["temperature"].values[:, 0].tolist() == [3, 30]
+    with pytest.raises(PuzzleError, match="4 result files where 2") as info:
+        read_series(vtus, [10.0, 20.0], ids, "")  # every step written, every 2nd expected
+    assert info.value.code == "solver_failed"
+    with pytest.raises(PuzzleError, match="1 result files where 2"):
+        read_series(vtus[:1], [10.0, 20.0], ids, "")
+    (one,) = read_series(vtus[:1], [10.0], ids, "").steps  # a one-output transient: its time
+    assert one.value == 10.0
 
 
 def test_electrostatics_sif(tmp_path):

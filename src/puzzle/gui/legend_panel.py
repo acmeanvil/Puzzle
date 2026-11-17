@@ -130,6 +130,10 @@ class LegendPanel(QWidget):
 
     def load(self) -> None:
         """Show the range of the result on screen now."""
+        import numpy as np
+
+        from puzzle.gui.viewport import _display
+
         view = self.window.viewport
         state = view.shown if view.shown.get("kind") == "result" else {}
         key = state.get("key")
@@ -142,10 +146,11 @@ class LegendPanel(QWidget):
         )
         custom = key in view.ranges
         self.mode.setCurrentIndex(self.mode.findData("custom" if custom else "auto"))
-        if custom:
-            bottom, top = view.ranges[key]
+        if custom:  # the range is kept in SI, shown in today's display unit
+            bottom, top = _display(np.asarray(view.ranges[key]), state.get("unit_kind"))[0]
             self.bottom.setText(f"{bottom:.6g}")
             self.top.setText(f"{top:.6g}")
+        self._typed = (self.bottom.text(), self.top.text())
         self.size_label.setText(SIZES[self.size.value()][0])
         self._loading = False
 
@@ -159,6 +164,8 @@ class LegendPanel(QWidget):
         self.apply()
 
     def apply(self) -> None:
+        from puzzle.gui.viewport import from_display
+
         if self._loading:
             return
         view = self.window.viewport
@@ -185,7 +192,12 @@ class LegendPanel(QWidget):
                 if bottom >= top:
                     self.message.setText("The top must be above the bottom")
                     return
-                view.ranges[key] = (bottom, top)
+                if (self.bottom.text(), self.top.text()) != getattr(self, "_typed", None) or (
+                    key not in view.ranges
+                ):  # only what was typed: the shown text read back would round it
+                    kind = view.shown.get("unit_kind")
+                    view.ranges[key] = tuple(float(v) for v in from_display([bottom, top], kind))
+                    self._typed = (self.bottom.text(), self.top.text())
             else:
                 view.ranges.pop(key, None)
         self.window._redraw_result()

@@ -108,3 +108,58 @@ def test_the_panel_sets_a_range_per_result_and_keeps_the_look(app, tmp_path):
                     "results.legend_position"):  # fmt: skip
             settings.current().set(key, settings.BY_KEY[key].default)
         window.close()
+
+
+@pytest.mark.skipif(not available("calculix"), reason="calculix not available")
+def test_a_custom_range_follows_a_change_of_display_unit(app, tmp_path):
+    """ADR 0090 PANEL-1's sibling: the range is kept in SI, so a change of display unit
+    shows it again in the new one rather than reading 2e6 Pa as 2e6 MPa; and an edit of
+    another field leaves it as it was."""
+    root = tmp_path / "bar"
+    root.mkdir()
+    force = Feature(type="force", selection="Bar/Tip", values={"y": Quantity(value=-100, unit="N")})
+    held = Feature(type="fixed", selection="Bar/Root")
+    project, comp = bar_project(
+        write_bar_step(root / "bar.step"),
+        [Physics(type="solid_mechanics", features=[held, force])],
+        10.0,
+    )
+    study = project.add(Study(name="Bend", component=comp.id, solver="calculix",
+                              steps=[SolveStep(type="stationary")]))  # fmt: skip
+    save_project(project, root)
+    run_study(project, study.id, root, tmp_path / "w", store=ResultStore(root / "results"))
+    window = MainWindow(root)
+    try:
+        bar = window.results_bar
+        for item in window.tree._items():
+            if item.data(0, ROLE).kind == "run":
+                window.tree.setCurrentItem(item)
+        app.processEvents()
+        stress = next(k for k in bar.items if k.startswith("stress"))
+        bar.field.setCurrentIndex(bar.field.findData(stress))
+        app.processEvents()
+        assert window.viewport.shown["unit"] == "Pa"
+        window.edit_legend()
+        panel = window.legend_panel
+        panel.mode.setCurrentIndex(panel.mode.findData("custom"))
+        panel.bottom.setText("0")
+        panel.top.setText("2e6")  # Pa, as shown
+        panel.apply()
+        key = window.viewport.shown["key"]
+        assert window.viewport.ranges[key] == pytest.approx((0.0, 2e6))
+        settings.current().set("units.system", "engineering")  # stresses in MPa
+        window._redraw_result()
+        app.processEvents()
+        assert window.viewport.shown["unit"] == "MPa"
+        assert window.viewport.shown["clim"] == pytest.approx((0.0, 2.0))
+        panel.load()
+        assert float(panel.top.text()) == pytest.approx(2.0)
+        panel.bands.setCurrentIndex(panel.bands.findData(9))  # another field
+        assert window.viewport.ranges[key] == pytest.approx((0.0, 2e6))
+        panel.top.setText("3")  # typed in MPa
+        panel.apply()
+        assert window.viewport.ranges[key] == pytest.approx((0.0, 3e6))
+    finally:
+        for key in ("units.system", "results.bands"):
+            settings.current().set(key, settings.BY_KEY[key].default)
+        window.close()

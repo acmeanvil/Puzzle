@@ -158,6 +158,20 @@ def _display(values, kind: str | None):
     return np.asarray(converted), pretty(target)
 
 
+def from_display(values, kind: str | None) -> np.ndarray:
+    """Values typed in the display unit of their kind, in SI: `_display` the other way."""
+    from puzzle.model.units import DIMENSIONS, registry
+    from puzzle.settings import current
+
+    values = np.asarray(values, float)
+    if kind is None:
+        return values
+    si, shown = DIMENSIONS[kind][1], current().display_units()[kind]
+    if shown == si:
+        return values
+    return np.asarray(registry().Quantity(values, shown).to(si).magnitude)
+
+
 def _short_unit(unit: str) -> str:
     """A unit pint spells out ("kilogram / meter / second ** 2") as people write it."""
     if not unit:
@@ -930,7 +944,8 @@ class Viewport(QWidget):
         from puzzle.post.legend import Legend
 
         self.legend = Legend.from_settings()  # the colour bar's look (Settings > Results)
-        self.ranges: dict[str, tuple[float, float]] = {}  # result key -> custom range
+        # result key -> custom range, in SI (its kind's display unit may change)
+        self.ranges: dict[str, tuple[float, float]] = {}
         self._extremes: list[tuple] = []
         self._mark_actors: list[str] = []
         self.probes: list[dict] = []
@@ -1439,8 +1454,10 @@ class Viewport(QWidget):
             values = grid.point_data[name] if name in grid.point_data else grid.cell_data[name]
         key = item.key if item is not None else (scalar or field)
         custom = clim is None and key in self.ranges  # the legend's range for this result
-        if custom:
+        if custom:  # kept in SI: shown in today's display unit (ADR 0090 PANEL-1)
             clim = self.ranges[key]
+            if item is not None:
+                clim = tuple(float(c) for c in _display(np.asarray(clim, float), item.unit)[0])
         title = (
             f"{item.label} ({unit})"
             if item is not None and unit
@@ -1489,6 +1506,7 @@ class Viewport(QWidget):
             # the view's bottom edge on Retina displays.
             "title": f"{title}, {label}" + (f", deformation ×{scale:.3g}" if scale else ""),
             "unit": unit,
+            "unit_kind": item.unit if item is not None else None,
             "clim": clim,
             "key": key,
             "custom_range": custom,

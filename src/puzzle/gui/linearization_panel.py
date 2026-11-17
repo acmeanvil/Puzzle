@@ -66,6 +66,9 @@ ROWS = [
 ]
 
 
+_STORED, _UNREADABLE = object(), object()  # the allowable field as the tool has it; not a number
+
+
 def _combo(pairs, current) -> QComboBox:
     box = QComboBox()
     for text, value in pairs:
@@ -299,12 +302,39 @@ class LinearizationPanel(QWidget):
     # --- changes ---------------------------------------------------------------------
 
     def set_unit(self) -> None:
-        """Only how the numbers read: kept for the session, never in the project."""
+        """Only how the numbers read: kept for the session, never in the project. The
+        allowable is shown again in the new unit, from the tool's own value (or from what
+        was typed and not yet taken): left as the old unit's number, the next edit read
+        it in the new one (138 MPa became 138 ksi; ADR 0090 PANEL-1)."""
         if self._loading:
             return
+        typed = self._typed_allowable()
         self.unit = self.units.currentData()
         self.window.linearization_unit = self.unit
+        value = self.probe.allowable if typed is _STORED else typed
+        if value is not None and value is not _UNREADABLE:
+            self.allowable.setText(self._shown(value))
+            self._pending = None if typed is _STORED else value  # kept whole, not as text
+        elif value is None:
+            self.allowable.setText("")
         self.fill()
+
+    def _typed_allowable(self):
+        """The allowable field's value in Pa: `_STORED` while it still shows the tool's
+        own value in the panel's unit, None when empty, `_UNREADABLE` if not a number."""
+        text = self.allowable.text().strip()
+        stored = self.probe.allowable
+        if (text or None) == (self._shown(stored) if stored else None):
+            return _STORED
+        pending = getattr(self, "_pending", None)
+        if pending is not None and text == self._shown(pending):
+            return pending  # typed in another unit, shown again in this one
+        if not text:
+            return None
+        try:
+            return float(self._to_si(float(text)))
+        except ValueError:
+            return _UNREADABLE
 
     def edited(self) -> None:
         """The tool's settings changed: one edit, then the tool is read again."""
@@ -312,22 +342,19 @@ class LinearizationPanel(QWidget):
             return
         from puzzle.commands.model import Edit, EditOp
 
-        text = self.allowable.text().strip()
-        allowable = None
-        if text:
-            try:
-                allowable = float(self._to_si(float(text)))
-            except ValueError:
-                self.note.setText("Type the allowable stress as a number")
-                return
+        allowable = self._typed_allowable()
+        if allowable is _UNREADABLE:
+            self.note.setText("Type the allowable stress as a number")
+            return
         values = {
             "equivalent": self.equivalent.currentData(),
             "components": self.axes.currentData(),
             "hoop_direction": list(self.hoop.currentData()) if self.hoop.currentData() else None,
             "bending": self.bending.currentData() if self.axes.currentData() == "line" else "all",
-            "allowable": allowable,
             "membrane": self.membrane.currentData(),
         }
+        if allowable is not _STORED:  # only a value typed: never the shown text read back
+            values["allowable"] = allowable
         ops = [EditOp(op="set", path=k, value=v) for k, v in values.items()
                if getattr(self.probe, k) != (tuple(v) if isinstance(v, list) else v)]  # fmt: skip
         if ops:

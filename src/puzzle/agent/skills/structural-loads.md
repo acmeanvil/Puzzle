@@ -86,6 +86,12 @@ Bolts as beams between holes, with sizes and preloads: skill `bolts`.
   out on CalculiX). Read the bolt forces at the Preload step against their preload,
   and at the last step for the service load's share.
 - A compression-only support makes the step nonlinear (CalculiX adds NLGEOM).
+- Held values (`fixed`, `displacement`, `temperature`) may go on an edge or a point
+  selection on CalculiX, Code_Aster and FEniCSx (their nodes take them; Elmer refuses
+  them). Loads spread over a face (`pressure`, `traction`, `heat_flux`, `convection`,
+  an `elastic_support` along an edge) are refused there with `unsupported`: put them
+  on a face (a 2D model's edge). A `force` may go on a point on CalculiX and
+  Code_Aster (and on an edge on CalculiX).
 - Local `axes` are taken only for: `displacement` in Cartesian or cylindrical axes
   (some components only, e.g. just a radial one: CalculiX only), `force` in
   Cartesian axes, `gravity` and `acceleration` in Cartesian axes, `rotation` in

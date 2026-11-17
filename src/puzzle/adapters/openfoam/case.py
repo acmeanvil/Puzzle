@@ -167,6 +167,12 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
     speed = max((p["U"] for p in inlets), default=0.0)
     k0, eps0, omega0 = _turbulence_state(speed, inlets)
     props_t = {"T": (props["thermal_conductivity"], props["specific_heat"])} if heat else {}
+    # The wall's turbulent part of rho cp D (scalarTransport's alphaDt nut), per nut.
+    eddy = (
+        rho * props["specific_heat"] / float(flow.settings.get("turbulent_prandtl", 0.85))
+        if heat and turbulent
+        else None
+    )
     _fields(
         workdir,
         patches,
@@ -178,6 +184,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
         eps0,
         omega0,
         heat,
+        eddy,
     )
     _system(workdir, steps[0], turbulent, heat, nu, props_t, rho, flow.settings, _own(study))
     write_dict(
@@ -270,7 +277,9 @@ def _turbulence_state(speed: float, inlets: list[dict]) -> tuple[float, float, f
     return k, CMU**0.75 * k**1.5 / length, k**0.5 / (CMU**0.25 * length)
 
 
-def _fields(workdir, patches, names, rho, conductivity, turbulent, k0, eps0, omega0, heat) -> None:
+def _fields(
+    workdir, patches, names, rho, conductivity, turbulent, k0, eps0, omega0, heat, eddy=None
+) -> None:
     zero = workdir / "0"
     t_in = next((p["T"] for p in patches.values() if "T" in p and p["kind"] != "wall"), None)
     t0 = t_in if t_in is not None else next((p["T"] for p in patches.values() if "T" in p), 293.15)
@@ -290,7 +299,7 @@ def _fields(workdir, patches, names, rho, conductivity, turbulent, k0, eps0, ome
     for name, (cls, dims, init) in fields.items():
         boundary = {"defaultFaces": _wall(name)}
         for selection, patch in patches.items():
-            boundary[names[selection]] = _condition(name, patch, rho, conductivity)
+            boundary[names[selection]] = _condition(name, patch, rho, conductivity, eddy)
         write_dict(
             zero / name,
             {"dimensions": dims, "internalField": init, "boundaryField": boundary},
@@ -308,7 +317,7 @@ def _wall(name: str) -> dict:
     }.get(name, {"type": "zeroGradient"})
 
 
-def _condition(name: str, patch: dict, rho: float, conductivity: float) -> dict:
+def _condition(name: str, patch: dict, rho: float, conductivity: float, eddy=None) -> dict:
     kind = patch["kind"]
     if kind in ("empty", "wedge"):  # a 2D model's front and back (ADR 0048)
         return {"type": kind}
@@ -317,6 +326,17 @@ def _condition(name: str, patch: dict, rho: float, conductivity: float) -> dict:
     if kind == "wall":
         if name == "T" and "T" in patch:
             return {"type": "fixedValue", "value": f"uniform {patch['T']:.10g}"}
+        if name == "T" and "q" in patch and eddy is not None:
+            # q = rho cp D dT/dn with scalarTransport's D = nu/Pr + nut/Pr_t on the wall
+            # face, and nut there is not zero under wall functions: dividing by k alone
+            # put 2-3 times q in (ADR 0090 OF-1). So the gradient follows the wall's nut.
+            return {
+                "type": "exprMixed",
+                "value": "$internalField",
+                "valueExpr": '"0"',
+                "fractionExpr": '"0"',
+                "gradientExpr": f'"{patch["q"]:.10g} / ({conductivity:.10g} + {eddy:.10g} * nut)"',
+            }
         if name == "T" and "q" in patch:
             # q into the fluid = k dT/dn along the outward normal (OpenFOAM's snGrad).
             return {

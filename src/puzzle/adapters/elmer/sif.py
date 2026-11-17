@@ -302,6 +302,10 @@ def write_case(
         '  Equation = "Result Output"',
         '  Procedure = "ResultOutputSolve" "ResultOutputSolver"',
         f'  Output File Name = "{OUTPUT}"',
+        # ADR 0023 `output_every`: run as a solver, the output is written after every
+        # time step unless its own Exec Intervals say otherwise (Simulation's Output
+        # Intervals only govern the .result file); the reader checks the count.
+        *(magnetics._at_outputs(step) if transient else []),
         "  Vtu Format = True",
         "  Ascii Output = True",
         *(['  Eigen Vector Component = String "complex"'] if harmonic else []),
@@ -327,9 +331,7 @@ def write_case(
         )
 
     if transient:
-        dt, _, n = time_settings(step)
-        every = int(step.settings.get("output_every", 1))  # ADR 0023: Output Intervals
-        times = [k * dt for k in range(every, n + 1, every)]
+        times = magnetics.transient_times(step)  # ADR 0023: every `output_every`-th step
     elif harmonic:  # one output per scanned frequency, in Hz
         times = frequency_list(step)
     else:

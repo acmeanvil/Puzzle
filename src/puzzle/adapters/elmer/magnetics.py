@@ -353,7 +353,7 @@ def _cells(path: Path, count: int) -> dict[str, np.ndarray]:
 
 def read_magnetics(vtus: list[Path], mesh_dir: Path, node_ids: np.ndarray) -> Results:
     """One result step per frequency (or the static solve) from Elmer's output."""
-    from puzzle.adapters.elmer.output import read_vtu
+    from puzzle.adapters.elmer.output import check_outputs, read_vtu
 
     meta = eddy.read_meta(mesh_dir / eddy.META)
     table = np.load(mesh_dir / eddy.ELEMENTS)
@@ -371,6 +371,7 @@ def read_magnetics(vtus: list[Path], mesh_dir: Path, node_ids: np.ndarray) -> Re
     if times and len(frames) > len(times):  # Elmer wrote every step: keep the output steps
         every = len(frames) // len(times)
         frames = frames[every - 1 :: every][: len(times)]
+    check_outputs(frames, steps)
     for (nodal, cells), (hz, time) in zip(frames, steps, strict=True):
 
         def cplx(data, name, rows):
@@ -545,13 +546,14 @@ def write_axisymmetric(project, comp, step, features, mesh, workdir: Path, write
 
 def read_axisymmetric(vtus: list[Path], mesh_dir: Path, node_ids: np.ndarray, coords) -> Results:
     """A_φ per node from Elmer, then the shared fields (`eddy.axisymmetric_fields`)."""
-    from puzzle.adapters.elmer.output import read_vtu
+    from puzzle.adapters.elmer.output import check_outputs, read_vtu
 
     meta = eddy.read_meta(mesh_dir / eddy.META)
     table = dict(np.load(mesh_dir / eddy.ELEMENTS))
     xy = {int(n): c[:2] for n, c in zip(node_ids, coords, strict=True)}
     results = Results(solver="elmer")
     per = 1 + sum(c.kind == "massive" for c in meta["coils"])  # scans per frequency
+    check_outputs(vtus, [hz for hz in meta["frequencies"] for _ in range(per)])
     basis = []
     for vtu in vtus:
         nodal = read_vtu(vtu)

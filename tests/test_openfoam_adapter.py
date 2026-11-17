@@ -149,6 +149,25 @@ def test_heat_transfer_case(tmp_path):
     )  # T is in the stop test
 
 
+def test_turbulent_wall_heat_flux_divides_by_the_wall_diffusivity(tmp_path):
+    """ADR 0090 OF-1: scalarTransport's wall-face diffusivity is nu/Pr + nut/Pr_t, and nut
+    is not zero there under wall functions, so the gradient is q / (k + rho cp nut / Pr_t)
+    on each face as nut changes, not q / k."""
+    heat = [
+        Feature(type="temperature", selection="Duct/Inlet",
+                values={"T": Quantity(value=20, unit="degC")}),
+        Feature(type="heat_flux", selection="Duct/Walls",
+                values={"q": Quantity(value=1, unit="kW/m^2")}),
+    ]  # fmt: skip
+    allrun, _ = _duct(tmp_path, flow_settings={"turbulence_model": "k-epsilon"}, heat=heat)
+    t = (allrun.parent / "0" / "T").read_text(encoding="utf-8")
+    walls = t[t.index("Duct_Walls") :]
+    walls = walls[: walls.index("}")]
+    eddy = RHO * AIR["specific_heat"].to_si() / 0.85
+    assert "type exprMixed;" in walls and 'fractionExpr "0";' in walls
+    assert f'gradientExpr "1000 / ({K:.10g} + {eddy:.10g} * nut)";' in walls
+
+
 def test_turbulence_case(tmp_path):
     allrun, _ = _duct(
         tmp_path,

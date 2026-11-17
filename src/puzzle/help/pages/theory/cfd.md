@@ -87,7 +87,10 @@ it, with inlet or wall temperatures, wall heat flux (positive into the fluid) an
 Code_Saturne only, an exchange coefficient. Properties are constant, so the heat does
 not change the flow: it is one-way coupled. OpenFOAM solves temperature as a passive
 scalar (`scalarTransport`, diffusivity $\nu/Pr + \nu_t/Pr_t$, `turbulent_prandtl`
-default 0.85); Code_Saturne as its thermal scalar. Buoyancy and temperature-dependent
+default 0.85); Code_Saturne as its thermal scalar. Under wall functions $\nu_t$ is not
+zero on a wall face, so OpenFOAM's wall heat flux is imposed as the gradient
+$q / (k + \rho c_p \nu_t / Pr_t)$, each face's own: then exactly $q$ goes in (a
+gradient of $q/k$ put in 1.5 to 2.4 times as much). Buoyancy and temperature-dependent
 properties are not modelled.
 
 ## 2D flow

@@ -306,6 +306,39 @@ results and the GUI's result tools still read the newest run unmarked (package 1
 the generic Structural steel has no yield strength by choice, and the guide's recipe
 names A992 or A36 or a typed limit; `problems()` costs 0.3 ms more a refresh.
 
+**The four critical findings outside packages 1-4, built (2026-11-17)**, pulled forward
+from packages 5, 7, 8 and 10 since each gave wrong numbers silently:
+
+- ELMER-1: a transient's ResultOutputSolver takes `Exec Intervals = k` and its offset,
+  so Elmer writes only the outputs asked for; every Elmer reader refuses a file count
+  that differs from the expected times (`output.check_outputs`), never truncates.
+  `test_benchmarks.py::test_transient_output_every_keeps_each_field_at_its_time` on
+  CalculiX, Elmer, Code_Aster and FEniCSx: each field equal to the every-step run's at
+  its time. The others' thinning was checked: labels right (CalculiX also keeps the
+  step's last increment, Code_Aster the start).
+- FENICS-1: held values (fixed, displacement, temperature, potential, ground, a custom
+  `dirichlet`) on edge, point and body selections are applied by `study.held_dofs`
+  (points written to the case mesh as vertex cells); natural loads on an edge or point
+  are refused by `common.check_selection_kinds`, the one shared check, which
+  Code_Aster calls too: it had solved a pressure or a traction on an edge as nothing
+  (displacement zero) and crashed on three more cases. `test_edge_conditions.py`:
+  FEniCSx and Code_Aster within 5.1e-4 K and 1.9e-6 of the largest displacement of
+  CalculiX. Weak springs on FEniCSx are now refused, where they were dropped.
+- OF-1: in turbulent flow a wall `heat_flux` is `exprMixed` with gradient
+  q / (k + rho cp nut / Pr_t), the diffusivity `scalarTransport` uses on the wall face
+  (the reviewer's suggestion, verified in the v2412 image by running).
+  `test_turbulent_heated_channel.py`: bulk temperature slope over the energy balance
+  0.9993 (k-epsilon) and 0.9994 (SST) on OpenFOAM, where it was 1.56 and 1.47; 1.0010
+  and 0.9993 on Code_Saturne.
+- PANEL-1: the linearization panel re-renders the allowable from the stored value when
+  the unit changes and writes only the field that changed. The same fault in the
+  legend: custom ranges were kept in the unit shown (2e6 Pa became 2e6 MPa after a
+  change of units) and are now kept in SI.
+
+With these, all nine critical findings are fixed. Left: the Edit panels of coordinate
+systems and construction geometry still rewrite untouched values at six digits
+(package 10); a force on a point or edge has no benchmark.
+
 ### Enhancements toward the state of the art
 
 From `state-of-the-art.md` (50 gaps, each with who has it, which open solver can deliver

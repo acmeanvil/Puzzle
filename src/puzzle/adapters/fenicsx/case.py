@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import re
@@ -23,6 +24,7 @@ from puzzle.adapters.common import (
     body_load_on_material,
     check_contacts,
     check_dynamics,
+    check_selection_kinds,
     frequency_list,
     globalize,
     harmonic_fields,
@@ -43,7 +45,7 @@ from puzzle.adapters.common import (
     time_settings,
 )
 from puzzle.mesh.med import write_med
-from puzzle.mesh.mesh import Mesh
+from puzzle.mesh.mesh import CellBlock, Mesh
 from puzzle.model.schema import Amplitude, Component, Material, Project, Study
 from puzzle.results.model import Field, Results, StepResult
 
@@ -102,7 +104,34 @@ METHODS = (
     ("Conjugate gradient + Jacobi", "cg_jacobi"),
     ("GMRES + algebraic multigrid", "gmres_gamg"),
 )
+# What study.py applies beyond each feature's catalog kind (ADR 0090 FENICS-1): a held
+# value on any selection's nodes (`held_dofs`); loads integrated over faces stay on faces.
+HELD = ("body", "boundary", "edge", "point")
+SELECTION_KINDS = {
+    t: HELD for t in ("fixed", "displacement", "temperature", "electric_potential", "ground",
+                      "dirichlet")
+}  # fmt: skip
 PETSC_KEY = re.compile(r"^-?[a-z][a-z0-9_]*$")
+
+
+def _with_point_cells(mesh: Mesh, groups: list[str]) -> Mesh:
+    """dolfinx reads a physical group through its elements, and the mesher keeps none on
+    points: each point selection's nodes become vertex cells on an entity of its own, so
+    study.py finds them among the mesh's vertices (ADR 0090 FENICS-1)."""
+    points = [g for g in groups if mesh.groups[g].dim == 0]
+    if not points:
+        return mesh
+    blocks, named = list(mesh.blocks), dict(mesh.groups)
+    tag = max([t for g in mesh.groups.values() for d, t in g.entities if d == 0], default=0)
+    next_id = max((int(b.ids.max()) for b in mesh.blocks if len(b.ids)), default=0) + 1
+    for name in points:
+        tag += 1
+        nodes = np.asarray(mesh.groups[name].node_ids, dtype=np.int64)
+        ids = np.arange(next_id, next_id + len(nodes), dtype=np.int64)
+        blocks.append(CellBlock("vertex", 0, (0, tag), ids, nodes.reshape(-1, 1)))
+        next_id += len(nodes)
+        named[name] = dataclasses.replace(mesh.groups[name], entities=[(0, tag)])
+    return dataclasses.replace(mesh, blocks=blocks, groups=named)
 
 
 def _settings(study: Study, step) -> dict:
@@ -194,6 +223,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         if g not in mesh.groups:
             raise InputError(f"no selection '{g}' in the mesh")
     as_planar(mesh, comp)
+    check_selection_kinds(features, mesh, "FEniCSx", SELECTION_KINDS)
     if "quad8" in mesh.element_counts():  # dolfinx reads 9-node quadrilaterals only
         raise InputError("FEniCSx doesn't read 8-node quadrilaterals: mesh this 2D model "
                          "with triangles, or first order", code="unsupported")  # fmt: skip
@@ -304,7 +334,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
                                               for g in (t["screw"], t["nut"])]))  # fmt: skip
     if magnetics:
         case["magnetics"] = _magnetics(project, comp, step, features, mesh, workdir)
-    write_med(mesh, workdir / "mesh.msh", {g: g for g in groups})
+    write_med(_with_point_cells(mesh, groups), workdir / "mesh.msh", {g: g for g in groups})
     case["settings"] = _settings(study, step)  # ADR 0023
     (workdir / "case.json").write_text(json.dumps(case, indent=2), encoding="utf-8")
     target = workdir / SCRIPT.name

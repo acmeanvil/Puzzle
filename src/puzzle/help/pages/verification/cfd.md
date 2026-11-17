@@ -4,7 +4,7 @@ section: verification
 order: 70
 keys: verification:cfd
 summary: Laminar, heated and turbulent channel flow, their 2D and axisymmetric forms, and the Code_Saturne and OpenFOAM shoot-out, against Poiseuille, the energy balance, Nu = 8.235 and Dean's correlations.
-adrs: 0011, 0012, 0016, 0048
+adrs: 0011, 0012, 0016, 0048, 0090
 ---
 
 Flow is checked on channels, where the answer is known: plane Poiseuille flow, the heat
@@ -18,6 +18,7 @@ OpenFOAM, which also run as a shoot-out pair on one mesh. All are steady but the
 | Laminar shoot-out | each other, one mesh | Code_Saturne and OpenFOAM | velocity L2 1 %, peak 0.5 %, pressure L2 2 % | 0.16 %, 0.05 %, 0.13 % |
 | Heated channel | energy balance; Nu = 8.235 | Code_Saturne, OpenFOAM | 1 %; 2 % of the profile | −0.5 %; 0.03 % and 0.02 % |
 | Turbulent channel, Re 1e5 | Dean (1978) | Code_Saturne, OpenFOAM; k-ε and k-ω SST | dp/dx 10 %, Uc/U 3 % | −3.2 % to −8.2 %; −0.3 % to −2.6 % |
+| Turbulent heated plates, Re 2e4 | energy balance | OpenFOAM, Code_Saturne; k-ε and k-ω SST | 1 % | −0.07 %, −0.06 %; +0.10 %, −0.07 % |
 | 2D plane Poiseuille | plane Poiseuille | OpenFOAM, Code_Saturne | as 3D | peak −0.10 %, −0.21 % |
 | 2D axisymmetric pipe | Hagen–Poiseuille | OpenFOAM, Code_Saturne | peak 1 %, profile 1 %, dp/dy 2 % | peak −0.25 %, −0.18 % |
 | 2D heated plates | energy balance; Nu = 8.235 | OpenFOAM, Code_Saturne | 1 %; 2 % | +0.23 %, +0.22 %; 0.19 %, 0.09 % |
@@ -116,6 +117,32 @@ linear-production one), which is why they differ from each other by a few per ce
 Re = 13,300 ($Re_\tau$ ≈ 390, air) both under-predicted the friction by 13-16 % on 2 mm
 and 1.25 mm meshes alike: wall functions need a developed log layer, so the benchmark is
 run at Re = 1e5.
+
+## Turbulent heated plates
+
+Air at 30 m/s between plates h = 10 mm apart, 100 mm long (Re = 2e4), both walls
+adding q = 1000 W/m², a 2D planar region on 0.5 mm quadrilaterals ($y^+$ ≈ 30 at the
+first cell), k-ε and k-ω SST with wall functions, 2000 iterations. Whatever the
+profiles, the bulk temperature rises at $2 q / (ho c_p U h)$.
+`tests/integration/test_turbulent_heated_channel.py`
+`test_turbulent_heated_plates_balance_energy` takes the bulk over 20 mm bands of cells
+about x = 40 and 80 mm (each cell weighted by u times its area) and holds the slope
+between them to 1 % of the balance (ADR 0090 OF-1). Measured 2026-11-17, slope over the
+balance:
+
+| Model | OpenFOAM v2412 | Code_Saturne 9.2 |
+| --- | --- | --- |
+| k-ε | 0.9993 | 1.0010 |
+| k-ω SST | 0.9994 | 0.9993 |
+
+OpenFOAM's temperature is a passive scalar with diffusivity $
+u/Pr + 
+u_t/Pr_t$, and
+under wall functions $
+u_t$ is not zero on the wall face; with the wall gradient set to
+$q/k$ the same case gave 1.56 (k-ε) and 1.47 (SST) times the balance, so the gradient is
+now $q / (k + ho c_p 
+u_t / Pr_t)$ face by face (`exprMixed`).
 
 ## 2D and axisymmetric flow
 

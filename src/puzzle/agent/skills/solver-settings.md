@@ -15,7 +15,9 @@ solver's default, so no result moves until you set something.
    - `linear_solver`: "direct" (default) or "iterative";
    - `tolerance`: relative residual of a nonlinear solve (default 1e-6);
    - `max_iterations`: nonlinear iterations per increment (default 50);
-   - `output_every`: keep results every n-th increment or time step (default 1);
+   - `output_every`: keep results every n-th increment or time step (default 1): the
+     n-th, 2n-th, ... steps, each at its own time (CalculiX also keeps the step's
+     last increment, Code_Aster the start);
    - load stepping of static steps (unset: the solver's own choice, the full load at
      once for contact alone, ten increments for plasticity, lift-off and large
      deflection): `increments` (at most 1/n of the load an increment),

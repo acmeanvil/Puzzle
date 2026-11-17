@@ -36,10 +36,29 @@ from puzzle.adapters.base import (
 from puzzle.adapters.code_aster.comm import JOB, write_case
 from puzzle.adapters.code_aster.tables import read_results as read_tables
 from puzzle.adapters.code_aster.thread_springs import THREADS
-from puzzle.adapters.common import drop_helper_nodes, mark_mesh_nodes
+from puzzle.adapters.common import (
+    as_planar,
+    check_selection_kinds,
+    drop_helper_nodes,
+    mark_mesh_nodes,
+)
 from puzzle.mesh.mesh import Mesh
-from puzzle.model.schema import Project, Study
+from puzzle.model.schema import Component, Project, Study
 from puzzle.results.model import Results
+
+# What Code_Aster applies beyond each feature's catalog kind (ADR 0090 FENICS-1): held
+# values on any selection's nodes; a force or a spring at a point. A pressure or a
+# traction on an edge was written onto cells the model has no elements on, and nothing
+# moved; fluxes and films there stopped Code_Aster without a word on the cause.
+_HELD = ("body", "boundary", "edge", "point")
+SELECTION_KINDS = {
+    "fixed": _HELD,
+    "displacement": _HELD,
+    "temperature": _HELD,
+    "force": ("point",),
+    "elastic_support": ("point",),
+    "compression_only_support": ("point",),
+}
 
 
 class CodeAsterAdapter(SolverAdapter):
@@ -139,6 +158,10 @@ class CodeAsterAdapter(SolverAdapter):
         self, project: Project, study: Study, mesh: Mesh, workdir: Path, inputs=()
     ) -> Path:
         refuse_inputs(inputs, "Code_Aster", {("load", "temperature"), ("feature", "*")})
+        component = project.get(study.component, Component)
+        as_planar(mesh, component)  # ADR 0048: a 2D model's edges are its boundary
+        check_selection_kinds([f for ph in component.physics for f in ph.features], mesh,
+                              "Code_Aster", SELECTION_KINDS)  # fmt: skip
         path = write_case(project, study, mesh, workdir, inputs)
         mark_mesh_nodes(path, mesh)  # pretension twins and reference nodes come after
         return path

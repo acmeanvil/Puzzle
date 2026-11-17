@@ -18,6 +18,8 @@ about the temperature tables.
 | Steady conduction, tets and hexes | linear profile | CalculiX, Elmer, Code_Aster, FEniCSx | 1e-6 K | passes |
 | Transient conduction | series solution | all four | 1 % of the 80 K step | 0.346 K on all four (backward Euler) |
 | Time schemes | series solution | each scheme a solver offers | 2 % of 80 K; BDF2 0.02 K | BDF2 under 0.02 K |
+| Output every second step | the every-step run; series solution | all four | 1e-6 K; 1 % of 80 K | equal; 0.346 K |
+| Held on an edge and a point | CalculiX on the same mesh | CalculiX, FEniCSx, Code_Aster | 2e-3 K; 1e-5 of the deflection | 5.1e-4 K; 1.9e-6 |
 | Conductivity table, steady | Kirchhoff transform | all four | 0.05 K | within 0.002 K |
 | Tables, transient | solvers against each other | all four | 0.1 K; Code_Aster 1 K | Code_Aster 0.7 K warmer |
 | Heat generation | 1D closed forms | all four | 0.05 % of the rise | five digits; peak 0.003 % |
@@ -73,6 +75,28 @@ records the four solvers within 0.34 %. Theta schemes started from a sudden load
 differ between Elmer and the others, since Elmer applies the boundary values to the
 starting state first; the note explains why backward Euler or BDF2 are the schemes to
 compare.
+
+`test_transient_output_every_keeps_each_field_at_its_time` runs the same bar with
+`output_every = 2` beside the every-step run: the times returned must be 20, 40, ...
+600 s, each field equal to the every-step run's at that time (1e-6 K) and the series
+solution at 300 and 600 s within 1 % of the step. Elmer once wrote every step while
+the times were thinned, so values of 10-300 s came back labelled 20-600 s (ADR 0090
+ELMER-1); now it writes only the output steps and its reader refuses a count that
+doesn't match. Measured 2026-11-17: equal on all four (FEniCSx 3e-13 K), 0.346 K and
+0.143 K against the series.
+
+## Conditions on an edge or a point
+
+`tests/integration/test_edge_conditions.py` holds the bar's root at 100 °C, one tip edge
+at 20 °C and a tip corner at 60 °C (and, structurally, the root fixed, a tip edge fixed,
+a corner moved 0.01 mm under a heavy gravity load). There is no closed form for a value
+held along an edge, so CalculiX on the same mesh is the reference: the held nodes must
+take their values exactly, and every node agree within 2e-3 K, or 1e-5 of the largest
+displacement. FEniCSx once looked conditions up among the mesh's faces only and left
+the bar at a uniform 100 °C (ADR 0090 FENICS-1). Measured 2026-11-17: FEniCSx and
+Code_Aster 5.1e-4 K and 1.9e-6 off CalculiX, the same on each, which is the five digits
+of CalculiX's results file. Loads spread over faces (pressure, flux, films) are refused
+on an edge or a point.
 
 ## Temperature-dependent conductivity
 
