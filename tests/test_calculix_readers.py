@@ -141,3 +141,39 @@ def test_plastic_strain_tensor_is_zero_off_plastic_bodies():
     assert not np.isnan(ep).any()
     assert ep[0] == pytest.approx([1e-3, 0, 0, 0, 0, 0], abs=1e-12)
     assert ep[1] == pytest.approx(np.zeros(6))
+
+
+def test_deck_loads_follow_calculix_steps():
+    """CCX-11's loads at a result's time, as CalculiX applies them (measured on a
+    one-spring deck): a *DYNAMIC step's load whole from its first increment, a *STATIC
+    step's ramped from the value before, OP=NEW clearing, an AMPLITUDE in step time."""
+    from puzzle.adapters.calculix.spring_beams import deck_loads
+
+    deck = """*NSET, NSET=N_TIP
+2, 3
+*AMPLITUDE, NAME=A1
+0., 0., 1., 4.
+*STEP
+*DYNAMIC, DIRECT
+*CLOAD
+N_TIP, 1, 1.
+*END STEP
+*STEP
+*STATIC
+*CLOAD
+2, 1, 3.
+*END STEP
+*STEP
+*STATIC
+*CLOAD, OP=NEW
+3, 2, 2., 
+*CLOAD, AMPLITUDE=A1
+2, 3, 5.
+*END STEP
+"""
+    loads = deck_loads(deck, {2, 3})
+    assert loads.at(1, 0.25, 0.25)[2][0] == 1.0 and loads.at(1, 0.25, 0.25)[3][0] == 1.0
+    assert loads.at(2, 0.5, 0.5)[2][0] == pytest.approx(2.0)  # 1 -> 3, halfway
+    third = loads.at(3, 0.5, 0.5)
+    assert third[2][0] == pytest.approx(1.5) and third[3][0] == pytest.approx(0.5)  # removed
+    assert third[3][1] == pytest.approx(1.0) and third[2][2] == pytest.approx(10.0)

@@ -66,6 +66,18 @@ loads move to the later steps and the bolts are locked after preloading. Results
 have a Preload step first. The study's preload step setting is auto (the default),
 always or never.
 
+### Bolts under temperature
+
+A temperature load (a body temperature, or a thermal study's temperature through a
+transfer) acts on preloaded bolts on CalculiX and Code_Aster. A beam bolt grows by its
+expansion coefficient times its length times its temperature rise, the temperature
+taken linear between the faces its ends bear on; a modelled bolt is a part and takes
+its own body temperature. The preload stays locked while bolt and joint expand, so a
+bolt in a sleeve that grows more tightens, and one in a joint that shrinks more loosens,
+to zero when the joint opens (frictionless or frictional heads). Put the body
+temperature in the steps after the preload. Rigid bolt ends, the solid formulation,
+tapped thread ends, threaded contacts and welds are refused under temperature.
+
 ## How to read bolt results
 
 Window → Bolts (Ctrl+5), or Model → Bolts and fasteners → Bolt table.

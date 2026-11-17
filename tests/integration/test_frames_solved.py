@@ -247,3 +247,36 @@ def test_member_force_signs(tmp_path, solver):
     assert got["N"] == pytest.approx(force, rel=1e-6)
     assert got["T"] == pytest.approx(-force * a, rel=1e-6)
     assert got["My"] == pytest.approx(force * span, rel=1e-6)
+
+
+@over("calculix", "code_aster")
+def test_spring_beam_reactions_balance_gravity_and_a_tip_load(tmp_path, solver):
+    """ADR 0090 CCX-11: a W14X90 cantilever column 6 m tall (an open section, so CalculiX
+    writes it as Timoshenko springs) under its own weight and 1 kN sideways at the top.
+    The support carries the whole weight rho A L g and the load, every other node none.
+    CalculiX read each node's arms' force, the node's internal force: the support came
+    out short by its own half-element share (7241.3 N of 7899.6 N) and the free nodes
+    showed their loads as reactions. Equal within the .frd's six digits."""
+    from test_member_checks import _frame, q
+
+    from puzzle.sections import _table
+
+    height = 6.0
+    features = [Feature(type="fixed", selection="F/A"),
+                Feature(type="gravity", selection="F", values={"gz": q(-9.81, "m/s^2")}),
+                Feature(type="force", selection="F/B", values={"x": q(1000.0, "N")})]  # fmt: skip
+    p, study, _ = _frame({"A": [0, 0, 0], "B": [0, 0, height]}, [["AB", "A", "B"]], features,
+                         "W14X90", size=height / 6)  # fmt: skip
+    study.solver = solver
+    root = tmp_path / "frame"
+    save_project(p, root)
+    run = run_study(p, study.id, root, tmp_path / "w")
+    rf = run.results.last("reaction_force")
+    xyz = run.mesh.node_coords(rf.ids)
+    base = np.isclose(xyz[:, 2], 0.0)
+    weight = 7850 * _table("aisc")["W14X90"]["A"] * height * 9.81
+    print(f"{solver}: support {rf.values[base, :3].sum(axis=0)} N (weight {weight:.6g} N), "
+          f"largest elsewhere {np.abs(rf.values[~base, :3]).max():.3g} N")  # fmt: skip
+    assert rf.values[base, 2].sum() == pytest.approx(weight, rel=1e-5)
+    assert rf.values[base, 0].sum() == pytest.approx(-1000.0, rel=1e-5)
+    assert np.abs(rf.values[~base, :3]).max() < 1e-5 * weight

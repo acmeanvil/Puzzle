@@ -227,7 +227,9 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     if mesh.planar:
         _refuse_in_2d(comp)
         _whole_part_marker(mesh, comp, workdir)
-    thermal_load = next((i.field for i in inputs if i.field.name == "temperature"), None)
+    # A temperature per solve step (ADR 0044): its own, else every step's, else none.
+    heats = {i.step: i.field for i in inputs if i.field.name == "temperature"}
+    thermal_load = heats.get(None, next(iter(heats.values()), None))
     if thermal_load is not None:
         from puzzle.adapters.common import check_thermal_helpers
 
@@ -820,8 +822,8 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             )
         assignments.append(f"_F(GROUP_MA='{names[a.selection]}', MATER=mat{i})")
     for i, c in enumerate(fasteners, start=1):  # each bolt in its own material
-        m = project.get(c.material, Material)
-        out.append(f"matf{i} = DEFI_MATERIAU({_material(m, False)})")
+        m = project.get(c.material, Material)  # expanding under a temperature load
+        out.append(f"matf{i} = DEFI_MATERIAU({_material(m, False, thermal_load is not None)})")
         assignments.append(f"_F(GROUP_MA='F{i}', MATER=matf{i})")
     # A compression-only support: DIS_CHOC on each node's discrete, its stiffness kn × area.
     for i, (_node, kn, _kt, _n) in enumerate(gaps, start=1):
@@ -836,8 +838,12 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             raise InputError(
                 "a temperature load applies to static structural steps", code="unsupported"
             )
-        out += _temperature_field(thermal_load, mesh, workdir)
         reference = _reference(comp)
+        n_steps = len(steps) if chain else 1
+        fields = ([heats.get(k, heats.get(None)) for k in range(1, n_steps + 1)] if chain
+                  else [thermal_load])  # fmt: skip
+        out += _temperature_fields(fields, points.mesh, mesh, fasteners, cuts, reference,
+                                   workdir)  # fmt: skip
         incremental = step.type == "transient" or (
             step.type == "stationary"
             and bool(touching or nlgeom or plastic or gaps or initial or chain or mixed
@@ -851,13 +857,16 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             # studies). So the temperature rises from the reference with the loads'
             # ramp (as CalculiX's *TEMPERATURE in a static step), or in the first time
             # step of a transient, and stays.
-            full = 1.0 if step.type == "stationary" else time_settings(step)[0]
+            # A chain's step k runs from t = k - 1 to k: its temperature is reached at k.
+            instants = (list(range(1, n_steps + 1)) if step.type == "stationary"
+                        else [time_settings(step)[0]])  # fmt: skip
+            stages = ", ".join(f"_F(NOM_CHAM='TEMP', CHAM_GD=temperature{k}, INST={t:.12g})"
+                               for k, t in enumerate(instants, start=1))  # fmt: skip
             out += [
                 "reference = CREA_CHAMP(TYPE_CHAM='NOEU_TEMP_R', OPERATION='AFFE', "
                 f"MAILLAGE=mesh, AFFE=_F(TOUT='OUI', NOM_CMP='TEMP', VALE={reference:.12g}))",
                 "heating = CREA_RESU(OPERATION='AFFE', TYPE_RESU='EVOL_THER', AFFE=("
-                "_F(NOM_CHAM='TEMP', CHAM_GD=reference, INST=0.0), "
-                f"_F(NOM_CHAM='TEMP', CHAM_GD=temperature, INST={full:.12g})))",
+                f"_F(NOM_CHAM='TEMP', CHAM_GD=reference, INST=0.0), {stages}))",
             ]
             varc = (
                 ", AFFE_VARC=_F(TOUT='OUI', NOM_VARC='TEMP', EVOL=heating, "
@@ -865,7 +874,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             )
         else:
             varc = (
-                ", AFFE_VARC=_F(TOUT='OUI', NOM_VARC='TEMP', CHAM_GD=temperature, "
+                ", AFFE_VARC=_F(TOUT='OUI', NOM_VARC='TEMP', CHAM_GD=temperature1, "
                 f"VALE_REF={reference:.12g})"
             )
     out.append(f"mater = AFFE_MATERIAU(MAILLAGE=mesh, AFFE=({', '.join(assignments)},){varc})")
@@ -2612,25 +2621,56 @@ def _defi_contact(contacts, names: dict[str, str], excluded=None) -> str:
     )
 
 
-def _temperature_field(field, mesh: Mesh, workdir: Path) -> list[str]:
-    """A nodal temperature field built in the .comm from a table of x, y, z, T.
+def _temperature_fields(fields, written: Mesh, original: Mesh, fasteners, cuts,
+                        reference: float, workdir: Path) -> list[str]:  # fmt: skip
+    """Nodal temperature fields `temperature1`, `temperature2`, ... (one per entry of
+    `fields`; None is the reference everywhere) on every node of the written mesh, from
+    a table in Code_Aster's node order (the written order, `_node_numbers`). The mesh's
+    nodes take the field's values (those it doesn't reach the reference), each
+    fastener's nodes (its beam's or its solid's) the linear temperature between its
+    ends' (`common.bolt_end_temperatures`), each pretension twin its node's, and helper
+    nodes (references, masters) the reference: they are in no element that expands.
+    (Matching by coordinates failed on the helpers, ADR 0090 ASTER-1.)"""
+    from puzzle.adapters.common import bolt_end_temperatures, fastener_ends, fastener_frame
 
-    Code_Aster numbers nodes its own way, so values are matched to its mesh by
-    coordinates (rounded to a nanometre).
-    """
     workdir.mkdir(parents=True, exist_ok=True)
-    table = np.column_stack([mesh.node_coords(field.ids), field.values[:, 0]])
-    np.savetxt(workdir / "transferred-temperature.txt", table, fmt="%.15g")
-    return [
+    columns = []
+    for field in fields:
+        known = (
+            {}
+            if field is None
+            else {int(i): float(v) for i, v in zip(field.ids, field.values[:, 0], strict=True)}
+        )
+        values = {int(n): known.get(int(n), reference) for n in written.node_ids}
+        for i, f in enumerate(fasteners, start=1):
+            group = written.groups.get(f"__bolt{i}")
+            if group is None:
+                continue
+            a, b = fastener_ends(f, original, f"fastener '{f.name}'")
+            axis, _side = fastener_frame(a.centre, b.centre)
+            length = float(np.linalg.norm(b.centre - a.centre))
+            ta, tb = bolt_end_temperatures(field, a, b, reference)
+            along = np.clip((written.node_coords(group.node_ids) - a.centre) @ axis / length,
+                            0.0, 1.0)  # fmt: skip
+            values.update({int(n): ta + t * (tb - ta)
+                           for n, t in zip(group.node_ids, along, strict=True)})  # fmt: skip
+        for cut in cuts:
+            values.update({int(t): values[int(n)] for n, t in cut.doubles.items()
+                           if int(n) in values})  # fmt: skip
+        columns.append([values[int(n)] for n in written.node_ids])
+    np.savetxt(workdir / "transferred-temperature.txt", np.array(columns).T, fmt="%.15g")
+    out = [
         "import numpy as np",
-        "temperature = CREA_CHAMP(TYPE_CHAM='NOEU_TEMP_R', OPERATION='AFFE', MAILLAGE=mesh, "
-        "AFFE=_F(TOUT='OUI', NOM_CMP='TEMP', VALE=0.0))",
         f"_rows = np.loadtxt('fort.{TEMPERATURE_UNIT}', ndmin=2)",
-        "_key = lambda xyz: tuple(np.round(np.asarray(xyz) * 1e9).astype(np.int64))",
-        "_given = {_key(r[:3]): r[3] for r in _rows}",
-        "_xyz = mesh.getCoordinates().toNumpy().reshape(-1, 3)",
-        "temperature.setValues([float(_given[_key(c)]) for c in _xyz])",
+        "assert _rows.shape[0] == mesh.getNumberOfNodes(), 'temperatures: one row per node'",
     ]
+    for k in range(1, len(fields) + 1):
+        out += [
+            f"temperature{k} = CREA_CHAMP(TYPE_CHAM='NOEU_TEMP_R', OPERATION='AFFE', "
+            "MAILLAGE=mesh, AFFE=_F(TOUT='OUI', NOM_CMP='TEMP', VALE=0.0))",
+            f"temperature{k}.setValues([float(t) for t in _rows[:, {k - 1}]])",
+        ]
+    return out
 
 
 def _reference(comp) -> float:

@@ -88,11 +88,19 @@ Bolts as beams between holes, with sizes and preloads: skill `bolts`.
   it. Code_Aster runs a study's static steps as one chained result when it tightens
   bolts (so the lock carries), and refuses a pretension with other kinds of steps;
   its modal and harmonic steps run the section closed (uncut).
-- A temperature load (a transfer's or a body temperature) on a model with beam
-  fasteners, a pretension section, a threaded contact or a line weld is refused on
-  CalculiX and Code_Aster (`unsupported`): their springs and helper nodes take no
-  thermal strain (ADR 0090 CCX-2, ASTER-1). Model the bolt as a solid part, or solve the
-  thermal load without the joint.
+- A temperature load (a transfer's or a body temperature) works with preloaded bolts
+  on CalculiX and Code_Aster (`Capabilities.thermal_bolts`, ADR 0090 package 6): a beam
+  bolt grows by alpha (T - T_ref) L, T linear between its end faces' mean temperatures
+  (a beam bolt takes the temperature of the faces it bears on: an imported field can't
+  name it, so for a bolt hotter than its joint model the bolt as a part); pretension
+  twins take their node's temperature; the locked preload stays locked. Still refused
+  (`unsupported`): rigid ends and `formulation="solid"` (rigid spiders don't grow:
+  +13.6 % of the preload in a joint of one material), tapped thread ends, threaded
+  contacts and line welds (ADR 0091).
+- A body temperature with `steps` applies in those steps only; the others are at the
+  reference temperature. Heat after the preload: put the body temperature in the
+  steps after it (or let the preload step go in front: loads, the heat among them,
+  move after it). A transfer applies in every step.
 - Don't fight a hard preloaded contact solve by ramping the pretension with the loads:
   the preload step is the fix (a joint tightened and loaded at once chattered and timed
   out on CalculiX). Read the bolt forces at the Preload step against their preload,

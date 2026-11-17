@@ -42,6 +42,8 @@ from puzzle.adapters.common import (
     as_planar,
     body_forces,
     body_load,
+    bolt_end_temperatures,
+    bolt_growth,
     check_contacts,
     check_pretension_steps,
     computed_modes,
@@ -117,6 +119,15 @@ HISTORIES: ContextVar[dict | None] = ContextVar("calculix_histories", default=No
 COMPONENT: ContextVar[Component | None] = ContextVar("calculix_component", default=None)
 # Beams of open table sections written as springs (ADR 0055, `spring_beams`), numbered.
 SPRING_BEAMS: ContextVar[SpringBeams | None] = ContextVar("calculix_spring_beams", default=None)
+# ADR 0090 CCX-15: tapped beam-bolt ends' slide nodes, held off their axis in every step
+# (model-level *BOUNDARY lines are dropped by a later step's OP=NEW).
+THREAD_SLIDES: ContextVar[list | None] = ContextVar("calculix_thread_slides", default=None)
+# A temperature load's helpers (ADR 0090 package 6, bolts under temperature): None without
+# one; else {"reference": K, "twins": {twin: node}, "solid": [(ids, s, a, b)], "growth":
+# [(node, a, b, material, length)]}: pretension twins take their node's temperature, a
+# solid fastener's nodes the linear one between its ends, a beam bolt's growth node the
+# free thermal growth (`common.bolt_growth`), in each step.
+HEAT_HELPERS: ContextVar[dict | None] = ContextVar("calculix_thermal", default=None)
 # Share of a uniform traction carried by each node of a surface element.
 NODE_SHARES = {
     "tri3": [1 / 3] * 3,
@@ -144,7 +155,7 @@ def set_name(prefix: str, name: str) -> str:
 
 # Set names the deck makes for itself, which a selection's must not take (ADR 0090 CCX-7).
 RESERVED_SETS = re.compile(
-    r"N_ALL|N_BOLT_GROUND|N_SPRING_GROUND|N_FASTENER_ENDS|N_FB\d+|E_SPRING\d+|E_GAP\d+"
+    r"N_ALL|N_BOLT_GROUND|N_SPRING_GROUND|N_THREAD_SLIDES|N_FASTENER_ENDS|N_FB\d+|E_SPRING\d+|E_GAP\d+"
     r"|E_FASTENER\w*|E_PZBEAM\w*"
 )
 
@@ -233,10 +244,13 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
         }
     )
     HISTORIES.set({})
+    THREAD_SLIDES.set([])
     # A temperature field from a thermal study, as a thermal load on structural steps; a
     # body temperature varying in time gives each step its own (ADR 0044).
     temperatures = {i.step: i.field for i in inputs if i.field.name == "temperature"}
     thermal_load = temperatures.get(None, next(iter(temperatures.values()), None))
+    HEAT_HELPERS.set({"reference": reference_temperature(comp), "twins": {}, "solid": [],
+                 "growth": []} if temperatures else None)  # fmt: skip
     if thermal_load is not None:
         from puzzle.adapters.common import check_thermal_helpers
 
@@ -275,6 +289,8 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
     ]
 
     cuts = _pretension_cuts(comp, mesh)  # bolt sections: elements moved onto twins
+    if HEAT_HELPERS.get() is not None:  # a twin is its node at the same place: its temperature
+        HEAT_HELPERS.get()["twins"] = {t: n for c in cuts.values() for n, t in c.doubles.items()}
     for part in comp.parts:
         own = mesh.groups[part.name]
         for b in own.blocks(mesh):
@@ -381,8 +397,12 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
         raise InputError(f"study '{study.name}' has no solve steps")
     physics_types = {p.type for p in comp.physics}
     if thermal_load is not None:
-        # Thermal strain is alpha (T - T_initial): start at the reference temperature.
-        out += ["*INITIAL CONDITIONS, TYPE=TEMPERATURE", f"N_ALL, {reference_temperature(comp)}"]
+        # Thermal strain is alpha (T - T_initial): start at the reference temperature,
+        # the helpers that carry one too (pretension twins, solid fasteners' nodes).
+        t0 = reference_temperature(comp)
+        HEAT_HELPERS.get()["helpers"] = _helper_nodes(out)  # CalculiX wants one at every node
+        out += ["*INITIAL CONDITIONS, TYPE=TEMPERATURE", f"N_ALL, {t0}"]
+        out += [f"{n}, {t0}" for n in HEAT_HELPERS.get()["helpers"]]
     elif "heat_transfer" in physics_types:
         heat = next(ph for ph in comp.physics if ph.type == "heat_transfer")
         out += ["*INITIAL CONDITIONS, TYPE=TEMPERATURE", f"N_ALL, {initial_temperature(heat)}"]
@@ -412,7 +432,7 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
             mesh,
             faces,
             physics_types,
-            temperatures.get(index, thermal_load),
+            temperatures.get(index, temperatures.get(None)),
             yields,
             project,
             index=index,
@@ -450,7 +470,8 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
                 out.append(STEP_TAG.format(index))
                 out += with_settings(_step(
                     number, one, comp, mesh, faces, physics_types,
-                    temperatures.get(index, thermal_load), yields, project, index=index,
+                    temperatures.get(index, temperatures.get(None)), yields, project,
+                    index=index,
                     pretension=(pretension, states["features"][index - 1]),
                     fastener_pretension=(tight, states["fasteners"][index - 1]),
                 ), study, step, index)  # fmt: skip
@@ -1180,6 +1201,13 @@ def _step(
     if "solid_mechanics" in solved and any(c.ground for c in comp.connectors):
         # ADR 0050: bolts to ground end at a node held in all six dofs, in every step.
         extra.setdefault("*BOUNDARY", []).append("N_BOLT_GROUND, 1, 6, 0.")
+    if "solid_mechanics" in solved and THREAD_SLIDES.get():
+        extra.setdefault("*BOUNDARY", []).append("N_THREAD_SLIDES, 2, 3, 0.")
+    if "solid_mechanics" in solved:  # beam bolts' thermal growth, held in every step
+        moving = step.type not in ("modal", "buckling", "frequency_domain")
+        growth = _growth_rows(thermal_load, HEAT_HELPERS.get(), moving)
+        if growth:
+            extra.setdefault("*BOUNDARY", []).extend(growth)
     locked: list[str] = []
     if "solid_mechanics" in solved:  # every step type (common.pretension_states)
         for f in [f for ph in comp.physics for f in ph.features if f.type in PRETENSION]:
@@ -1214,13 +1242,64 @@ def _step(
                 out.append(card + op)
     if locked:  # the pretension force went with the reset; the lock holds the length
         out += ["*BOUNDARY, FIXED", *locked]
-    if thermal_load is not None and solved == {"solid_mechanics"} and step.type != "modal":
-        out.append("*TEMPERATURE")
-        out += [
-            f"{n}, {t:.10g}"
-            for n, t in zip(thermal_load.ids, thermal_load.values[:, 0], strict=True)
-        ]
+    heat = HEAT_HELPERS.get()
+    if heat is not None and solved == {"solid_mechanics"} and step.type != "modal":
+        out += ["*TEMPERATURE", *_temperature_rows(thermal_load, heat)]
     return out + outputs + ["*END STEP"]
+
+
+def _helper_nodes(out: list[str]) -> list[int]:
+    """Every node written after the mesh's (N_ALL): twins, fasteners', springs' grounds,
+    reference nodes. Under a temperature load CalculiX wants a temperature at each
+    ("no initial temperature defined in node ..."): the reference, unless they carry
+    one (twins, solid fasteners' nodes)."""
+    ids, inside = [], False
+    for line in out:
+        if line.startswith("*"):
+            inside = line.upper() == "*NODE"
+            continue
+        if inside:
+            ids.append(int(line.split(",", 1)[0]))
+    return ids
+
+
+def _thermal_helper_nodes() -> list[int]:
+    """The helper nodes `_helper_nodes` found (each at the reference unless a twin's or a
+    solid fastener's)."""
+    heat = HEAT_HELPERS.get()
+    return [] if heat is None else list(heat.get("helpers", []))
+
+
+def _temperature_rows(field, heat: dict) -> list[str]:
+    """A step's *TEMPERATURE: the field's nodes, each twin at its node's value, each solid
+    fastener's nodes linear between its ends'. A step without a field of its own, in a
+    study with one, is at the reference temperature everywhere (CalculiX would keep the
+    step before's)."""
+    t0 = heat["reference"]
+    if field is None:
+        return [f"N_ALL, {t0:.10g}", *(f"{n}, {t0:.10g}" for n in _thermal_helper_nodes())]
+    known = {int(i): float(v) for i, v in zip(field.ids, field.values[:, 0], strict=True)}
+    rows = [f"{n}, {t:.10g}" for n, t in known.items()]
+    rows += [f"{t}, {known[n]:.10g}" for t, n in sorted(heat["twins"].items()) if n in known]
+    for ids, along, a, b in heat["solid"]:
+        ta, tb = bolt_end_temperatures(field, a, b, t0)
+        rows += [f"{n}, {ta + s * (tb - ta):.10g}" for n, s in zip(ids, along, strict=True)]
+    return rows
+
+
+def _growth_rows(field, heat: dict | None, moving: bool) -> list[str]:
+    """Each beam bolt's free thermal growth in this step (its growth node's dof 1): zero
+    where the step has no temperature or doesn't move (a modal step)."""
+    if heat is None:
+        return []
+    rows = []
+    for node, a, b, material, length in heat["growth"]:
+        grow = 0.0
+        if field is not None and moving:
+            ta, tb = bolt_end_temperatures(field, a, b, heat["reference"])
+            grow = bolt_growth(material, length, ta, tb, heat["reference"])
+        rows.append(f"{node}, 1, 1, {grow:.10g}")
+    return rows
 
 
 def _modal_based(step: SolveStep) -> bool:
@@ -1501,7 +1580,13 @@ def _fasteners(project: Project, comp: Component, mesh: Mesh, first_node: int):
             out.append(_row([elem, *ids[row[order]]]))
             elem += 1
         material = project.get(f.material, Material)
-        out += [f"*MATERIAL, NAME=MF{i}", *_material_cards(material, comp)]
+        heat = HEAT_HELPERS.get()
+        if heat is not None:  # its nodes linear between its ends' temperatures
+            length = float(np.linalg.norm(b.centre - a.centre))
+            along = np.clip((xyz - a.centre) @ axis / length, 0.0, 1.0)
+            heat["solid"].append((ids, along, a, b))
+        out += [f"*MATERIAL, NAME=MF{i}",
+                *_material_cards(material, comp, expansion=heat is not None)]  # fmt: skip
         out.append(f"*SOLID SECTION, ELSET=E_FASTENER{i}, MATERIAL=MF{i}")
         if ref is not None:  # twin - node = axis × the opening (the reference's dof 1)
             out.append("*EQUATION")
@@ -1576,7 +1661,7 @@ def _beam_bolt(project, f, i: int, a, b, axis, side, node: int, elem: int, held,
             # ADR 0076 step 4: a tapped end as a thread, not a spider on the wall.
             other = b if name == "A" else a
             args = (selection, end, other, move, turn, middle, node, elem, held, mesh)
-            lines, node, elem, pairs = _thread_end(project, comp, f, *args)
+            lines, node, elem, pairs = _thread_end(project, comp, f, *args, tag=f"{i} {name}")
             out += lines
             threaded[name] = pairs
         elif f.ends == "rigid":
@@ -1593,23 +1678,41 @@ def _beam_bolt(project, f, i: int, a, b, axis, side, node: int, elem: int, held,
                     out.append(", ".join(f"{n}, {j}, {c:.12g}" for n, j, c in terms[t : t + 4]))
         spiders[name] = (move, turn)
     (move_a, turn_a), (move_b, turn_b) = spiders["A"], spiders["B"]
-    far, ref = move_b, None
+    far, ref, grow = move_b, None, None
+    heat = HEAT_HELPERS.get()
     if f.pretension is not None:  # the axial spring ends at a cut node, opened along the axis
         ref, far = node, node + 1
         node += 2
         rows += [_node_row(ref, middle), _node_row(far, middle)]
+    if heat is not None:  # its free thermal growth: an opening of its own, set each step
+        if ref is None:
+            far = node
+            node += 1
+            rows.append(_node_row(far, middle))
+        grow = node
+        node += 1
+        rows.append(_node_row(grow, middle))
+        heat["growth"].append((grow, a, b, project.get(f.material, Material), length))
+    near = move_a
+    if ref is not None or grow is not None:
+        # The spider's node is the dependent one: CalculiX passes no force through a
+        # spring whose own node is the dependent term of an equation with an opening.
+        # A bolt to ground has its B spider held, which can't be dependent: its opening
+        # is at the A end instead, move_a = near - axis × (opening + growth).
+        spider, sign = move_b, 1.0
+        if f.ground:
+            near, far, spider, sign = far, move_b, move_a, -1.0
         out.append("*EQUATION")
-        for dof in (1, 2, 3):  # move_b = far + axis × opening
-            # The spider's node is the dependent one: CalculiX passes no force through a
-            # spring whose own node is the dependent term of an equation with an opening.
-            terms = [f"{move_b}, {dof}, 1.", f"{far}, {dof}, -1."]
+        for dof in (1, 2, 3):  # move_b = far + axis × (opening + growth)
+            terms = [f"{spider}, {dof}, 1.", f"{near if f.ground else far}, {dof}, -1."]
             if abs(axis[dof - 1]) > 1e-12:
-                terms.append(f"{ref}, 1, {-axis[dof - 1]:.13g}")
+                terms += [f"{n}, 1, {-sign * axis[dof - 1]:.13g}"
+                          for n in (ref, grow) if n is not None]  # fmt: skip
             out += [str(len(terms)), ", ".join(terms)]
     orient = f"OF{i}"
     out += [f"*ORIENTATION, NAME={orient}",
             ", ".join(f"{c:.13g}" for c in (*axis, *side))]  # fmt: skip
-    pairs = [((move_a, far), "T", springs["translation"]),
+    pairs = [((near, far), "T", springs["translation"]),
              ((turn_a, turn_b), "R", springs["rotation"])]  # fmt: skip
     for (n1, n2), tag, values in pairs:
         for dof, k in enumerate(values, start=1):
@@ -1638,7 +1741,7 @@ def _beam_bolt(project, f, i: int, a, b, axis, side, node: int, elem: int, held,
 
 
 def _thread_end(project, comp, f, selection: str, end, other, move: int, turn: int,
-                middle, node: int, elem: int, held, mesh):  # fmt: skip
+                middle, node: int, elem: int, held, mesh, tag: str = ""):  # fmt: skip
     """A beam bolt's tapped end as a thread (ADR 0076 step 4). The bolt's core in the
     engaged length moves, level by level of the thread face's nodes, rigidly with the
     end's spider (u = u_move + θ × r) but for its own slide w along the axis (a helper
@@ -1695,7 +1798,9 @@ def _thread_end(project, comp, f, selection: str, end, other, move: int, turn: i
     # first level's spring is grounded). A slide uses dof 1 only.
     for j in range(1, len(levels)):
         dz = max(float(levels[j] - levels[j - 1]), 1e-9)
-        name = set_name("TC", f"{f.name}{j}")
+        # by the fastener's place and end, not its name: "Bolt 1" level 11 and "Bolt 11"
+        # level 1 were both TC_BOLT_111 (ADR 0090 CCX-12)
+        name = set_name("TC", f"{tag or f.name} {j}")
         if j == 1:
             out += [f"*ELEMENT, TYPE=SPRING1, ELSET={name}", f"{elem}, {slide[j]}",
                     f"*SPRING, ELSET={name}", "1", f"{core_k / dz:.10e}"]  # fmt: skip
@@ -1703,8 +1808,11 @@ def _thread_end(project, comp, f, selection: str, end, other, move: int, turn: i
             out += [f"*ELEMENT, TYPE=SPRING2, ELSET={name}", f"{elem}, {slide[j - 1]}, {slide[j]}",
                     f"*SPRING, ELSET={name}", "1, 1", f"{core_k / dz:.10e}"]  # fmt: skip
         elem += 1
-    if slide:
-        out += ["*BOUNDARY", *(f"{n_}, 2, 3, 0." for n_ in slide.values())]
+    if slide:  # held off the axis in every step (`_step`, N_THREAD_SLIDES)
+        out += ["*NSET, NSET=N_THREAD_SLIDES", *_chunks(np.asarray(list(slide.values())))]
+        slides = THREAD_SLIDES.get()
+        if slides is not None:
+            slides += list(slide.values())
     # Each helper follows its level of the core: rigid with the spider but for the
     # level's slide, u_h - u_move - θ × r - w a = 0, r from the bolt's middle to the
     # level (u_h dependent, in no other equation: no decascading).
@@ -1730,8 +1838,8 @@ def _thread_end(project, comp, f, selection: str, end, other, move: int, turn: i
         bins.setdefault(key, []).append(f"{elem}, {int(w)}, {helper0 + i}")
         elem += 1
     for b_i, ((kk, *d), rows_) in enumerate(sorted(bins.items()), start=1):
-        name = set_name("TB", f"{f.name}{b_i}")
-        orient = set_name("TBO", f"{f.name}{b_i}")
+        name = set_name("TB", f"{tag or f.name} {b_i}")
+        orient = set_name("TBO", f"{tag or f.name} {b_i}")
         a_ = np.asarray(d, dtype=float)
         ref_ = np.array([0.0, 0.0, 1.0]) if abs(a_[2]) < 0.9 else np.array([1.0, 0.0, 0.0])
         side = np.cross(ref_, a_)
@@ -2012,9 +2120,12 @@ def _threads(project: Project, comp: Component, mesh: Mesh, node: int, elem: int
                     used = [dof for dof in dofs if abs(d[dof - 1]) > 1e-12]
                     terms = sorted(((int(s_id), dof, d[dof - 1]) for dof in used),
                                    key=lambda t: -abs(t[2]))  # fmt: skip
-                    terms += [(int(t_id), dof, -d[dof - 1]) for dof in used]
-                    if f_i == 1:  # the second flank's dependent term on the nut node
-                        terms = terms[len(terms) // 2 :] + terms[: len(terms) // 2]
+                    nut_terms = sorted(((int(t_id), dof, -d[dof - 1]) for dof in used),
+                                       key=lambda t: -abs(t[2]))  # fmt: skip
+                    # the second flank's dependent term on the nut node, its largest
+                    # coefficient too (ADR 0090 CCX-14: the first in dof order was taken,
+                    # which may be 1e-12 of the normal: a near-singular equation)
+                    terms = [*nut_terms, *terms] if f_i == 1 else [*terms, *nut_terms]
                     out.append(str(len(terms)))
                     out += [", ".join(f"{a}, {b}, {v:.12g}" for a, b, v in terms[i: i + 4])
                             for i in range(0, len(terms), 4)]  # fmt: skip

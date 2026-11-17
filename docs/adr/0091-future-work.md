@@ -20,7 +20,12 @@ Asked for by the maintainer (2026-11-17): temperature loading on preloaded bolts
 - **Thermal transients feeding the structural steps:** a transient heat study transferred per time into a multi-step structural study that holds the preload locked, so the bolt force is followed through a heat-up or a cool-down (the bolt lagging the flange); checked against a lumped two-body model.
 - **Loss of clamp and regain:** a joint that opens during a transient and closes again, with the contact state and bolt force followed.
 - **Creep and relaxation of preload at temperature**, when a creep material model exists.
-- **Threaded contacts and line welds under temperature**, refused today (`common.check_thermal_helpers`).
+- **Threaded contacts, tapped thread ends and line welds under temperature**, refused today (`common.check_thermal_helpers`).
+- **Left by the first step (built 2026-11-17, ADR 0090 package 6):** a beam bolt hotter or colder than the faces it bears on (it takes their temperature; only modelled bolts cover it); rigid ends and the solid formulation under temperature (refused: +13.6 % and −7.4 % measured); `through` stacks' own benchmark; Code_Aster's frictionless modelled joint, which fails ("matrice non inversible") even unheated; Code_Aster's separating-load share 2.2 % off through its RBE3 weights.
+
+### 2. Unknown value keys on a feature are refused
+
+Found while building item 1's first step: gravity given `z` instead of `gz` was dropped without a word. Done when a feature's unknown value key is a coded error at the command, with the catalog's names offered.
 - **Reference data:** cryogenic properties (integrated contraction, E, yield) for the common bolt and structure alloys in the generic library, each with its source.
 
 Done when each case has a benchmark with a stated tolerance on every solver that claims it, a guide section, and the agent's skill.

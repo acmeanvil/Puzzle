@@ -36,6 +36,7 @@ An adapter claims a capability only once a benchmark for it passes; a study that
 | shared settings | fixed_increments, increments, initial_increment, linear_solver, max_iterations, min_increment, output_every, tolerance |
 | shared settings steps | linear_solver: stationary, transient |
 | weak springs | yes |
+| thermal bolts | yes |
 | shells | yes |
 | feature steps | yes |
 | axes features | acceleration:cartesian, displacement:cartesian, displacement:cartesian:partial, displacement:cylindrical, displacement:cylindrical:partial, force:cartesian, gravity:cartesian, rotation:cartesian, rotation:cylindrical |
@@ -69,6 +70,7 @@ Solve steps per job: any.
 | shared settings | fixed_increments, increments, linear_solver, max_iterations, min_increment, output_every, tolerance |
 | shared settings steps | linear_solver: buckling, stationary, transient |
 | weak springs | yes |
+| thermal bolts | yes |
 | shells | yes |
 | axes features | acceleration:cartesian, displacement:cartesian, displacement:cartesian:partial, displacement:cylindrical, force:cartesian, gravity:cartesian, rotation:cartesian, rotation:cylindrical |
 | field features | body_force:fx, body_force:fy, body_force:fz, body_temperature:T, convection:T_inf, convection:h, displacement:x, displacement:y, displacement:z, heat_flux:q, heat_generation:q, initial_stress:sxx, initial_stress:sxy, initial_stress:syy, initial_stress:syz, initial_stress:szx, initial_stress:szz, material:thermal_conductivity, material:youngs_modulus, pressure:p, shell:thickness, traction:tx, traction:ty, traction:tz |

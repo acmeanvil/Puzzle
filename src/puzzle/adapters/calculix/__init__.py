@@ -79,6 +79,7 @@ class CalculixAdapter(SolverAdapter):
             }
         ),
         weak_springs=True,  # ADR 0080: tests/integration/test_weak_springs_solved.py
+        thermal_bolts=True,  # ADR 0090 package 6: tests/integration/test_bolt_thermal.py
         # *FREQUENCY, *BUCKLE and the modal superpositions have no iterative solver
         # (CalculiX warns and uses its default): ADR 0090, CCX-5
         shared_settings_steps={"linear_solver": frozenset({"stationary", "transient"})},
@@ -322,10 +323,25 @@ def _spring_beam_forces(results, input_file: Path) -> None:
     from puzzle.results.model import Field
 
     info = json.loads(marker.read_text(encoding="utf-8"))
+    nodes = {int(n) for s in info for n in s["nodes"]}
+    deck = input_file.read_text(encoding="utf-8") if input_file.exists() else ""
+    loads = spring_beams.deck_loads(deck, nodes)
+    # each deck step's span in total time, from its increments: (start, end)
+    ends: dict[int, float] = {}
+    for step in results.steps:
+        if step.mode is None and "reaction_force" in step.fields:
+            ends[step.index] = max(ends.get(step.index, step.value), step.value)
+    spans, start = {}, 0.0
+    for index in sorted(ends):
+        spans[index] = (start, ends[index])
+        start = ends[index]
     for step in results.steps:
         rf = step.fields.get("reaction_force")
         if rf is None:  # modes and harmonic steps have no reactions
             continue
+        begin, end = spans.get(step.index, (0.0, step.value))
+        fraction = (step.value - begin) / (end - begin) if end > begin else 1.0
+        applied = loads.at(step.index, fraction, step.value - begin)
         ids, values = spring_beams.section_forces(info, rf.ids, rf.values)
         if len(ids):
             step.fields["beam_forces"] = Field(
@@ -333,7 +349,7 @@ def _spring_beam_forces(results, input_file: Path) -> None:
             )
         values = rf.values.copy()
         row = {int(n): i for i, n in enumerate(rf.ids)}
-        for node, force in spring_beams.reactions(info, rf.ids, rf.values).items():
+        for node, force in spring_beams.reactions(info, rf.ids, rf.values, applied).items():
             if node in row:
                 values[row[node], :3] = force
         step.fields["reaction_force"] = Field(rf.name, rf.location, rf.components, rf.ids, values)

@@ -420,8 +420,60 @@ stiffness is the suspect, unconfirmed.
 The second passes of two reviewers were never saved to their reports (CCX-8 to CCX-15,
 ASTER-4 and 5; PANEL-21 to PANEL-34); their summaries were recovered from the session
 and appended on 2026-11-17, without the reproduction scripts. Left of this package for
-that reason: CCX-11, CCX-12, CCX-14, CCX-15. Not done: the `*TIE` position tolerance
+that reason: CCX-11, CCX-12, CCX-14, CCX-15 (done in its second part, below). Not done: the `*TIE` position tolerance
 and its untied-node log lines; Code_Aster stores no strain or flux.
+
+**Package 6, second part, built (2026-11-17):** the four findings left, and bolts under
+temperature (the maintainer, 2026-11-17: it matters in fusion and elsewhere, and must
+be solid).
+
+- CCX-11: a spring beam's `reaction_force` was the spring's internal force, so a free
+  node showed its own load and a support missed the load applied at it (7,241 N for a
+  7,900 N column). `spring_beams.reactions` subtracts each node's applied load, read
+  from the deck as CalculiX applies it (`deck_loads`: ramped in `*STATIC`, whole in
+  `*DYNAMIC`, cleared by `OP=NEW`, scaled by an amplitude). Support 7,899.567 N for
+  7,899.566 N on CalculiX and Code_Aster.
+- CCX-12: a tapped beam bolt's core, flank and orientation sets are named by the
+  fastener's index and end, not its name ("Bolt 1" level 11 and "Bolt 11" level 1 were
+  one set).
+- CCX-15: a tapped end's slide nodes are a set `N_THREAD_SLIDES` held in every step (a
+  model-level hold is dropped by step 2's `OP=NEW`). The reviewer's SPOOLES failure was
+  not rerun; on PARDISO the old deck passed too.
+- CCX-14: a rigid thread's second-flank equation leads with the nut node's largest
+  coefficient.
+- Bolts under temperature, on CalculiX and Code_Aster (`Capabilities.thermal_bolts`,
+  held to the matrix): beam bolts with distributing ends, modelled bolts, pretension
+  sections and bolts to ground. A beam bolt has no nodes for a field to reach, so it
+  takes its end faces' area-weighted temperatures, linear between
+  (`common.bolt_end_temperatures`), and grows freely by α L (mean − reference)
+  (`common.bolt_growth`): CalculiX a growth node in series with the axial spring, held
+  at that growth each step; Code_Aster the beam's nodes in the temperature field and
+  ALPHA on the fastener's material. Pretension twins take their node's temperature.
+  CalculiX wants an initial temperature at every node, helpers included, and a step
+  with no temperature of its own is written at the reference (it kept the step
+  before's). Code_Aster's field is written per node in node order (matching by
+  coordinates failed on helper nodes), one field per step of a chained study. A uniform
+  body temperature with `Feature.steps` applies in those steps only (it had applied in
+  the preload step too). FEniCSx now refuses a temperature load with line welds, which
+  it had solved without expanding them.
+- Benchmarks (`tests/integration/test_bolt_thermal.py`, 15 tests; a steel bolt in an
+  aluminium sleeve, 10 kN preload, against the two-spring joint ΔF = δ / C): heating
+  100 K, beam bolts 11,178.4 N for 11,178.2 N (CalculiX) and 11,076.8 N for 11,076.8 N
+  (Code_Aster); modelled 19,631.1 N for 19,632.5 N; one material, no change (−0.011 N
+  of 10 kN); bolt 100 K hotter than its sleeve 5,348.4 N for 5,346.0 N; cooled until
+  it opens, 0.17 N and never negative; preload, heat, then a separating load within
+  1e-3 on CalculiX, and Code_Aster's load share −2.2 % (its RBE3 weights the spider
+  unlike the load's area spread); CalculiX and Code_Aster modelled with tied heads
+  19,754.28 and 19,754.20 N; a modal step after preload and heat gives the unheated
+  modes. Tolerances: beam 1e-3, modelled 0.5 %, to ground 1 %.
+- Still refused under a temperature load, each measured wrong: rigid ends (+13.6 % of
+  the preload in a joint of one material), the solid formulation (−7.4 %), tapped
+  thread ends, threaded contacts, line welds. Not covered: a beam bolt hotter than its
+  joint (modelled bolts only); `through` stacks have no benchmark of their own;
+  Code_Aster's frictionless modelled joint fails ("matrice non inversible") even
+  unheated, so its modelled cases are tied. Found and not fixed: an unknown value key
+  on a feature (gravity's `z` for `gz`) is dropped without a word. These are on ADR
+  0091's list.
 
 ### Enhancements toward the state of the art
 

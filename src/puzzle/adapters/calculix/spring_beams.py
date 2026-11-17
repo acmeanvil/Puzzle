@@ -419,13 +419,111 @@ def section_forces(info: list[dict], ids: np.ndarray, rf: np.ndarray):
     return nodes, np.array([sums[n] / counts[n] for n in nodes]).reshape(-1, 6)
 
 
-def reactions(info: list[dict], ids: np.ndarray, rf: np.ndarray) -> dict[int, np.ndarray]:
+def reactions(
+    info: list[dict], ids: np.ndarray, rf: np.ndarray, applied: dict[int, np.ndarray] | None = None
+) -> dict[int, np.ndarray]:
     """Each spring-beam node's reaction force: what its arms carry to it (CalculiX's own
-    reaction there misses the forces passed through equations)."""
+    reaction there misses the forces passed through equations) less the load applied at
+    the node itself (ADR 0090 CCX-11: the arms' force alone is the node's internal force,
+    so a loaded free node showed its load as a reaction and a support under gravity was
+    short by its own share). `applied`: node -> force (N) at this result's time."""
     row = {int(n): i for i, n in enumerate(ids)}
     out: dict[int, np.ndarray] = {}
     for s in info:
         for node, arm in zip(s["nodes"], s["arms"], strict=True):
             if arm in row:
                 out[node] = out.get(node, np.zeros(3)) + rf[row[arm], :3]
+    for node, force in (applied or {}).items():
+        if node in out:
+            out[node] = out[node] - force
     return out
+
+
+@dataclass
+class DeckLoads:
+    """The concentrated loads (translations) a deck's steps put on given nodes, as
+    CalculiX applies them: a *STATIC step ramps each from its value at the step before to
+    its own (removed ones to zero), a *DYNAMIC step applies them whole, a card's
+    AMPLITUDE scales it in step time; OP=NEW clears the cards before it."""
+
+    steps: dict[int, tuple[str, dict, dict, dict]]  # step -> (procedure, before, after, amp)
+    amplitudes: dict[str, tuple[np.ndarray, np.ndarray]]
+
+    def at(self, step: int, fraction: float, step_time: float) -> dict[int, np.ndarray]:
+        if step not in self.steps:
+            return {}
+        procedure, before, after, amp = self.steps[step]
+        out: dict[int, np.ndarray] = {}
+        for key in set(before) | set(after):
+            node, dof = key
+            if key in amp:
+                times, values = self.amplitudes[amp[key]]
+                value = after.get(key, 0.0) * float(np.interp(step_time, times, values))
+            elif procedure == "*STATIC":
+                b, a = before.get(key, 0.0), after.get(key, 0.0)
+                value = b + min(max(fraction, 0.0), 1.0) * (a - b)
+            else:
+                value = after.get(key, 0.0)
+            out.setdefault(node, np.zeros(3))[dof - 1] += value
+        return out
+
+
+def deck_loads(deck: str, nodes: set[int]) -> DeckLoads:
+    """`DeckLoads` on `nodes` from a written deck (node ids or node sets in *CLOAD)."""
+    sets: dict[str, set[int]] = {}
+    amplitudes: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+    steps: dict[int, tuple[str, dict, dict, dict]] = {}
+    state: dict = {}
+    amp_state: dict = {}
+    step, procedure, card, name, before = 0, "", None, None, {}
+    for raw in deck.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("**"):
+            continue
+        if line.startswith("*"):
+            words = [w.strip() for w in line.split(",")]
+            head = words[0].upper()
+            params = {w.split("=")[0].strip().upper(): (w.split("=", 1)[1].strip()
+                      if "=" in w else "") for w in words[1:]}  # fmt: skip
+            card = None
+            if head == "*NSET":
+                name = params.get("NSET", "").upper()
+                sets.setdefault(name, set())
+                card = "nset"
+            elif head == "*AMPLITUDE":
+                name = params.get("NAME", "").upper()
+                amplitudes[name] = (np.zeros(0), np.zeros(0))
+                card = "amplitude"
+            elif head == "*STEP":
+                step += 1
+                before, procedure = dict(state), ""
+            elif head in ("*STATIC", "*DYNAMIC", "*FREQUENCY", "*BUCKLE", "*MODAL DYNAMIC",
+                          "*STEADY STATE DYNAMICS", "*HEAT TRANSFER",
+                          "*COUPLED TEMPERATURE-DISPLACEMENT"):  # fmt: skip
+                procedure = head
+            elif head == "*CLOAD":
+                if params.get("OP", "").upper() == "NEW":
+                    state, amp_state = {}, {}
+                card, name = "cload", params.get("AMPLITUDE", "").upper() or None
+            elif head == "*END STEP":
+                steps[step] = (procedure, before, dict(state), dict(amp_state))
+            continue
+        values = [v.strip() for v in line.split(",") if v.strip()]
+        if card == "nset":
+            sets[name] |= {int(v) for v in values if v.lstrip("-").isdigit()}
+        elif card == "amplitude":
+            t, a = amplitudes[name]
+            pairs = np.asarray([float(v) for v in values]).reshape(-1, 2)
+            amplitudes[name] = (np.r_[t, pairs[:, 0]], np.r_[a, pairs[:, 1]])
+        elif card == "cload" and len(values) >= 3:
+            target, dof, value = values[0], int(values[1]), float(values[2])
+            if dof > 3:
+                continue
+            hit = {int(target)} if target.isdigit() else sets.get(target.upper(), set())
+            for n in hit & nodes:
+                state[(n, dof)] = value  # OP=MOD: a value replaces the one before
+                if name:
+                    amp_state[(n, dof)] = name
+                else:
+                    amp_state.pop((n, dof), None)
+    return DeckLoads(steps, amplitudes)

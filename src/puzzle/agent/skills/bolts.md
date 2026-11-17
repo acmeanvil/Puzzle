@@ -70,6 +70,12 @@ the `modelled-bolts` skill (`skill_read("modelled-bolts")`).
 
 ## Watch for
 
+- Bolts under temperature (ADR 0090 package 6): beam bolts with distributing ends and
+  modelled bolts take a temperature load on CalculiX and Code_Aster; the joint diagram
+  holds (`test_bolt_thermal.py`: a steel bolt in an aluminium sleeve, 100 K, the rise
+  within 0.1 % of delta / C). Rigid ends and the solid formulation are refused under
+  temperature; a beam bolt's temperature is its end faces'.
+
 - Two bolts on one face selection, or a rigid end on a fixed face: CalculiX refuses
   ("dependent side of two MPCs", "a rigid end can't also be held there"). Use separate
   hole selections and distributing ends.

@@ -438,32 +438,73 @@ def check_selection_kinds(
 
 
 def check_thermal_helpers(comp, solver: str) -> None:
-    """Refuse a temperature load on a model whose joints don't expand (ADR 0090 CCX-2,
-    ASTER-1): a beam bolt is springs and helper nodes (CalculiX gave it no expansion, so
-    the plates grew round a bolt that didn't, and the bolt force moved by kilonewtons);
-    a pretension section's reference node, a thread's or a weld's springs have no
-    temperature (Code_Aster's field lookup failed on them inside the run)."""
-    from puzzle.adapters.base import PRETENSION_FEATURES
-
+    """Refuse a temperature load on joints that don't expand yet (ADR 0090 CCX-2,
+    ASTER-1): a threaded contact's flank springs, a beam bolt's tapped thread end (its
+    core and flank springs) and a line weld's couplings take no thermal strain, so the
+    joint's forces would be wrong. Bolts (beam, solid or modelled) and pretension
+    sections are built under temperature (ADR 0090 package 6, `bolt_end_temperatures`,
+    `bolt_growth`); these are on ADR 0091's list."""
     what = []
-    if comp.connectors:
-        what.append(f"fastener '{comp.connectors[0].name}'")
-    sections = [f.selection for p in comp.physics if p.type == "solid_mechanics"
-                for f in p.features if f.type in PRETENSION_FEATURES]  # fmt: skip
-    if sections:
-        what.append(f"the pretension section '{sections[0]}'")
     threads = [c.name for c in comp.contacts if c.thread is not None]
     if threads:
         what.append(f"the threaded contact '{threads[0]}'")
+    tapped = [f.name for f in comp.connectors if f.thread is not None
+              and any(s and s.endswith(" (thread)") for s in (f.source, f.target))]  # fmt: skip
+    if tapped:
+        what.append(f"the tapped thread end of bolt '{tapped[0]}'")
     welds = [w.name for w in getattr(comp, "welds", []) if w.formulation == "line"]
     if welds:
         what.append(f"the weld '{welds[0]}'")
     if what:
         raise InputError(
             f"{solver} doesn't expand {' or '.join(what)} under a temperature load yet (its "
-            "springs and helper nodes take no thermal strain), so the joint's forces would "
-            "be wrong: solve the thermal load without them, or model the bolt as a solid "
-            "part", code="unsupported", details={"joints": what})  # fmt: skip
+            "springs take no thermal strain), so the joint's forces would be wrong: solve "
+            "the thermal load without it, use a smooth (untapped) bolt end, or model the "
+            "thread or weld as solids", code="unsupported", details={"joints": what})  # fmt: skip
+    # Rigid spiders don't grow with the faces they hold: a heated sleeve's end faces held
+    # rigid gained 13.6 % of the preload in a joint of one material, where none is due; a
+    # solid fastener's rigid end faces lost 7.4 % (measured, CalculiX). Refused.
+    stiff = [(f.name, "rigid ends") for f in comp.connectors if f.ends == "rigid"]
+    stiff += [(f.name, "the solid formulation (rigid end faces)") for f in comp.connectors
+              if f.formulation == "solid"]  # fmt: skip
+    if stiff:
+        name, why = stiff[0]
+        raise InputError(
+            f"{solver} doesn't take a temperature load on bolt '{name}' with {why}: rigid "
+            "spiders don't expand with the faces they hold, so the bolt force would be wrong "
+            "(13.6 % of the preload in a joint of one material). Use distributing ends and "
+            "the beam formulation, or a modelled bolt", code="unsupported",
+            details={"joints": [name]})  # fmt: skip
+
+
+def bolt_end_temperatures(field, a, b, reference: float) -> tuple[float, float]:
+    """A fastener's temperature at its two ends (K): each end face's area-weighted mean
+    of the field's nodal values (a node the field doesn't reach at `reference`). A bolt
+    to ground has one face: its temperature is the whole bolt's. The bolt between is
+    taken linear in its length, its ends' temperatures those of the faces it bears on,
+    since a beam bolt has no nodes of its own for a field to reach."""
+
+    def mean(end) -> float:
+        if field is None or not len(end.nodes):
+            return reference
+        known = {int(i): float(v) for i, v in zip(field.ids, field.values[:, 0], strict=True)}
+        values = np.array([known.get(int(n), reference) for n in end.nodes])
+        return float((end.weights * values).sum() / end.weights.sum())
+
+    ta = mean(a)
+    tb = mean(b) if len(b.nodes) else ta
+    return ta, tb
+
+
+def bolt_growth(material, length: float, ta: float, tb: float, reference: float) -> float:
+    """A fastener's free thermal growth (m): alpha times the integral of T - T_ref along
+    it, with T linear from `ta` to `tb`: alpha L ((ta + tb) / 2 - T_ref). Alpha is the
+    material's (mean) coefficient, the one both adapters write for its solids."""
+    if "thermal_expansion" not in material.properties:
+        raise InputError(f"a temperature load needs thermal_expansion on the bolt's material "
+                         f"'{material.name}'")  # fmt: skip
+    alpha = material.properties["thermal_expansion"].to_si()
+    return alpha * length * ((ta + tb) / 2 - reference)
 
 
 def check_inlet_temperatures(flow_features, thermal_features, solver: str) -> None:

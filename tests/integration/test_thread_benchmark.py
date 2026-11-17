@@ -595,3 +595,80 @@ def test_code_aster_beam_bolt_threads_match_calculix(tmp_path, solver):
     assert np.all(np.abs(a_shares - c_shares) < 0.02)
     assert a_bolt[0] == pytest.approx(c_bolt[0], rel=0.01)
     assert a_bolt[0] == pytest.approx(LOAD, rel=0.01)
+
+
+@over("calculix")
+def test_a_tapped_beam_bolt_over_two_steps(tmp_path, solver):
+    """ADR 0090 CCX-15 and CCX-12. The tapped end's slide nodes were held by model-level
+    *BOUNDARY lines, which step 2's OP=NEW drops (SPOOLES then stopped without a word;
+    PARDISO let it pass): they are held in every step now, so two identical steps give
+    the same answer, to the .frd's digits. And a second bolt named "Cap screw 11" beside
+    "Cap screw 1" no longer shares its core and flank sets (level 11 of one and level 1
+    of the other were both TC_CAP_SCREW_111): every element set is written once."""
+    import re
+
+    from puzzle.adapters.calculix.inp import write_inp
+    from puzzle.mesh import generate_mesh
+    from puzzle.project import save_project
+
+    p, study = _beam_bolt_model(solver)
+    study.steps = [SolveStep(type="stationary"), SolveStep(type="stationary")]
+    root = tmp_path / "bolt"
+    save_project(p, root)
+    run = run_study(p, study.id, root, tmp_path / "w", timeout_s=3600)
+    first, second = (s.fields["displacement"].values for s in run.results.steps)
+    force = [s.fields["fastener"].values[0][0] for s in run.results.steps]
+    print(f"largest displacement {np.abs(first).max():.6g} then {np.abs(second).max():.6g} m; "
+          f"bolt {force[0]:.6g} then {force[1]:.6g} N")  # fmt: skip
+    assert np.abs(second - first).max() < 1e-6 * np.abs(first).max()
+    assert force[1] == pytest.approx(force[0], rel=1e-6)
+    deck = (tmp_path / "w" / "job.inp").read_text(encoding="utf-8")
+    steps = deck.split("*STEP")[1:]
+    assert all("N_THREAD_SLIDES, 2, 3, 0." in s for s in steps)
+
+    comp = p.objects[study.component]
+    one = comp.connectors[0]
+    comp.connectors = [one.model_copy(update={"name": "Cap screw 1"}),
+                       one.model_copy(update={"name": "Cap screw 11"})]  # fmt: skip
+    from puzzle.bolts import resolved, with_joints
+
+    p = resolved(p)
+    mesh, p = with_joints(p, comp.id, generate_mesh(p, comp.id, root, tmp_path / "m").mesh)
+    study = p.objects[study.id]
+    sets = re.findall(r"^\*ELEMENT, TYPE=\w+, ELSET=(T\w+)$", write_inp(p, study, mesh), re.M)
+    assert sets and len(sets) == len(set(sets))
+
+
+@over("calculix")
+def test_a_rigid_thread_writes_well_conditioned_equations(tmp_path, solver):
+    """ADR 0090 CCX-14: a rigid thread is n · (u_screw - u_nut) = 0 per node pair and
+    flank; CalculiX eliminates each equation's first term, which must be its largest
+    coefficient. The second flank's took the nut node's first dof in order, however
+    small its part of the normal. Every equation now leads with its largest term, and
+    the screw passes its 40 kN into the boss through the thread: the force through the
+    screw above the boss is the load within 1 %, and below the thread none is left."""
+    p, study = _model(False, solver)
+    p.objects[study.component].contacts[0].thread = Thread(form="iso", size="M16",
+                                                           compliance="rigid")  # fmt: skip
+    run = run_study(p, study.id, tmp_path, tmp_path / "rigid", timeout_s=1800)
+    shares, forces = _shares(run)
+    carried = forces[-1]
+    deck = (tmp_path / "rigid" / "job.inp").read_text(encoding="utf-8").splitlines()
+    checked = 0
+    for i, line in enumerate(deck):
+        if line != "*EQUATION":
+            continue
+        j = i + 1
+        while j < len(deck) and not deck[j].startswith("*"):
+            count = int(deck[j])
+            rows = (count + 3) // 4
+            terms = ",".join(deck[j + 1 : j + 1 + rows]).split(",")
+            coefficients = [abs(float(c)) for c in terms[2::3]]
+            assert coefficients[0] == max(coefficients), deck[j + 1]
+            checked += 1
+            j += 1 + rows
+    print(f"{checked} equations, screw above the boss {carried:.6g} N of {LOAD:g}, "
+          f"shares {np.round(shares * 100, 1)} %")  # fmt: skip
+    assert checked > 0
+    assert carried == pytest.approx(LOAD, rel=1e-2)
+    assert shares.sum() == pytest.approx(1.0, abs=0.03)

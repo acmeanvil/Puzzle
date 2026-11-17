@@ -131,6 +131,11 @@ class Capabilities:
     weak_springs: bool = False
     """Whether weak springs (ADR 0080) are written: elastic supports on a point group,
     three nodes per body; where False a study that needs them is refused."""
+    thermal_bolts: bool = False
+    """Whether bolts and pretension sections take a temperature load (ADR 0090 package
+    6): a beam bolt's free thermal growth from its ends' temperatures, twins at their
+    node's temperature; rigid spiders, solid fasteners, tapped thread ends, threaded
+    contacts and line welds stay refused (`common.check_thermal_helpers`)."""
     shells: bool = False
     """Sheet bodies with a thickness (ADR 0027); refused where False."""
     feature_steps: bool = False

@@ -68,4 +68,10 @@ Chart 3.4 is up to 40 % low for fillets this sharp, so don't check against it.
   force from `bolt_results`, not a node's stress near the cut.
 - The thread is smooth: its meshed stress is not the thread root's; the fatigue result
   multiplies it by `thread_kf`. Report the fillet and the thread separately.
+- Under temperature (ADR 0090 package 6) the bolt is a part like any other: give it
+  its own body temperature (hotter or colder than the joint), and its pretension
+  section's twins take the cut nodes' temperatures. With tied heads the steel's and the
+  clamped parts' different radial growth shears the bearing faces (10 % off the
+  two-spring joint, measured); frictional or frictionless heads let them slide. A
+  threaded contact under temperature is refused.
 - Units: SI (N, N m, Pa); sizes are the tables' (M16, 1/2-13 UNC).

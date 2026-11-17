@@ -184,6 +184,52 @@ puts the model's centre under the foundation face: the same answers on both solv
 support's normal, turned away from the model's centre, had pointed into the footing and
 the solve failed.
 
+## Bolts under temperature
+
+An ASTM A36 bolt clamps an aluminium 6061-T6 sleeve (bore 12 mm, outside 24 mm, 40 mm
+long). A free length mismatch $\delta$ changes the bolt force by $\delta / C$, with
+$C = 1/k_b + 1/k_c$ the joint's compliance; heated uniformly by $\Delta T$,
+
+$$\delta = (\alpha_c - \alpha_b) \Delta T L$$
+
+A beam bolt's $k_b = E_b A_b / L$ is exact (its springs and Code_Aster's beam are $EA/L$
+axially); $k_c$ is the preload over the sleeve's shortening in the preload step. A
+modelled bolt's $C$ comes from an adjustment run on the model ($F = d / C$); its heads
+bear on the sleeve through frictionless contact. `tests/integration/test_bolt_thermal.py`
+holds, measured 2026-11-17 (preload 10 kN, heating 100 K unless said):
+
+| Case | Solver | Bolt | Closed form | Measured |
+| --- | --- | --- | --- | --- |
+| a, heated after the preload (rise) | CalculiX | beam | 11178.2 N | 11178.4 N |
+| a | Code_Aster | beam | 11076.8 N | 11076.8 N |
+| c, one material (A36 sleeve): change | CalculiX | beam | 0 | −0.011 N |
+| c | Code_Aster | beam | 0 | −0.012 N |
+| f, snug (1 N), rise | CalculiX, Code_Aster | beam | as a | 11178.4, 11076.8 N |
+| e, then 5 kN separating: bolt force | CalculiX | beam | 23187.4 N | 23187.6 N |
+| e | Code_Aster | beam | 23113.1 N | 23067.6 N (−0.2 %) |
+| to ground, bore's movement | CalculiX | beam | −2.3400e-5 m | −2.3400e-5 m |
+| to ground | Code_Aster | beam | −2.3400e-5 m | −2.3220e-5 m |
+| transferred temperature against the body temperature | both | beam | equal | equal to six digits |
+| a, heated | CalculiX | modelled | 19632.5 N | 19631.1 N |
+| d, bolt +150 K, sleeve +50 K | CalculiX | modelled | 5346.0 N | 5348.4 N |
+| b, cooled 40 K | CalculiX | modelled | 6147.3 N | 6146.9 N |
+| b, cooled 80 K | CalculiX | modelled | 2294.4 N | 2293.4 N |
+| b, cooled 250 K (opens at −103.8 K) | CalculiX | modelled | 0 | 0.17 N |
+| adjustment 0.06 mm, then heated | CalculiX | modelled | 21773.8 N | 21772.1 N |
+| c, one material (heads tied) | CalculiX, Code_Aster | modelled | 10000.4, 10000.5 N | unchanged |
+| g, heated, heads tied | CalculiX against Code_Aster | modelled | equal | 19754.28 and 19754.20 N |
+| h, modal step after preload and heat | CalculiX | beam | the joint's own modes | equal to 1e-5 |
+
+Tolerances: beam bolts 0.1 % (Code_Aster's separating load 3 %: its LIAISON_RBE3
+weights the spider unlike the load's area spread, which also leaves its sleeve 2.2 %
+softer than $EA/L$), the null tests 1e-5 of the preload (beam) and 0.1 % (modelled,
+the stress sampling's scatter), modelled bolts 0.5 %, the bolt to ground 1 %. Code_Aster's
+frictionless modelled joint didn't converge in this sleeve, heated or not, so its
+modelled cases are tied; Code_Aster refuses the modal step after a pretension (each of
+its steps is its own analysis). Rigid spiders and the solid formulation are refused
+under temperature: with rigid ends a joint of one material gained 13.6 % of its preload
+heated 100 K, and a solid fastener lost 7.4 %.
+
 ## Weak springs
 
 The split bar's right half held only by frictional (μ = 0.3) or frictionless contact on

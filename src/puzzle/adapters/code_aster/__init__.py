@@ -99,6 +99,7 @@ class CodeAsterAdapter(SolverAdapter):
             }
         ),
         weak_springs=True,  # ADR 0080: tests/integration/test_weak_springs_solved.py
+        thermal_bolts=True,  # ADR 0090 package 6: tests/integration/test_bolt_thermal.py
         # CALC_MODES and DYNA_VIBRA solve directly here (ADR 0090 CCX-5's sibling): an
         # iterative linear solver is taken by the static, transient and buckling solves
         shared_settings_steps={

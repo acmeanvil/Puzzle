@@ -1015,7 +1015,11 @@ def field_inputs(project, root: Path, study, mesh) -> list:
             ids = group.node_ids
             xyz = mesh.node_coords(ids)
             when: list[int | None] = [None]
-            if any(varies(u) for u in f.fields.values()):
+            if any(varies(u) for u in f.fields.values()) or (
+                f.type == "body_temperature" and f.steps
+            ):  # a body temperature in some steps only is theirs (Feature.steps): the
+                # others are at the reference temperature (ADR 0090 package 6; it had
+                # applied in every step, the preload step put in front included)
                 when = [k for k, s in enumerate(steps, 1)
                         if s.solves(physics.type) and (not f.steps or k in f.steps)]  # fmt: skip
             weights = _weights(f, group, mesh, ids)

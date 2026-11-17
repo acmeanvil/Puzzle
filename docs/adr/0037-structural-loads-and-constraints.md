@@ -246,6 +246,10 @@ The pressure vessel assembly (a copy; frictional contacts μ 0.2, ten M6 beam bo
 
 So the one-step setup was slower and also wrong for a joint: a pretension held as a force keeps the bolt at its preload whatever the joint carries.
 
+## Amended: pretension under a temperature load (2026-11-17)
+
+A pretension section now takes a temperature load on CalculiX and Code_Aster (ADR 0090 package 6; refused before). The section's twin nodes take their own node's temperature in each step, the section is driven in its first static step and locked after as before (`common.pretension_states`), and each step carries its own temperature: a step without one is at the reference. A uniform body temperature limited by `Feature.steps` applies in those steps only, so the preload step put in front stays cold. Benchmarks in `tests/integration/test_bolt_thermal.py`.
+
 ## Consequences
 
 - Most everyday structural cases can be modelled without solver keywords.

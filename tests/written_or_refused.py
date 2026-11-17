@@ -1000,8 +1000,8 @@ def run_cell(world: World, c: Cell) -> Outcome:
         from puzzle.model import Feature
 
         def thing(p, comp, s):
-            if c.item == "fastener":
-                _fastener(p, comp, "rigid")
+            if c.item == "fastener":  # rigid spiders under heat are refused (they don't grow)
+                _fastener(p, comp, "distributing")
             elif c.item == "weld":
                 _weld(p, comp)
             else:

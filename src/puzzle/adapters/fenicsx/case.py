@@ -161,6 +161,10 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     comp = project.get(study.component, Component)
     refuse_inputs(inputs, "FEniCSx", {("load", "temperature"), ("feature", "*")})
     thermal_load = next((i.field for i in inputs if i.field.name == "temperature"), None)
+    if thermal_load is not None:  # a light weld's springs don't expand (ADR 0090)
+        from puzzle.adapters.common import check_thermal_helpers
+
+        check_thermal_helpers(comp, "FEniCSx")
     check_contacts(comp, set(), "FEniCSx", THREADS)
     refuse_line_bodies(mesh, "FEniCSx")
     refuse_large_deflection(study.solve_steps(), "FEniCSx")

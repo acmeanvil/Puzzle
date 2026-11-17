@@ -120,6 +120,16 @@ def test_fasteners_and_welds_agree_with_capabilities(world):
     _none(_agrees(world, _by("fastener"), fastener) + _agrees(world, _by("weld"), weld))
 
 
+def test_thermal_bolts_agree_with_capabilities(world):
+    """A temperature load on a beam bolt or a pretension section is written where
+    `Capabilities.thermal_bolts` says so (ADR 0090 package 6); a line weld's never."""
+
+    def claimed(solver, item, physics):
+        return item != "weld" and wor.capabilities(solver).thermal_bolts
+
+    _none(_agrees(world, _by("thermal"), claimed))
+
+
 def test_shared_settings_agree_with_capabilities(world):
     def claimed(solver, key, physics):
         taken = wor.capabilities(solver).shared_settings
