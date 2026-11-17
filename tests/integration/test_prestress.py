@@ -113,7 +113,8 @@ def test_tension_raises_the_first_frequency(tmp_path, solver):
     f0 = run_study(project, plain.id, tmp_path, tmp_path / "plain").results.modes()[0].value
     run = run_study(project, tense.id, tmp_path, tmp_path / "tense")
     modes = run.results.modes()
-    assert len(modes) == 3 and all(m.index == 1 for m in modes)  # the replayed step is hidden
+    # the replayed step is hidden; the third mode's partner (a square bar) comes too
+    assert len(modes) in (3, 4) and all(m.index == 1 for m in modes)
     ratio = modes[0].value / f0
 
     tension = E * B * H * STRETCH / L

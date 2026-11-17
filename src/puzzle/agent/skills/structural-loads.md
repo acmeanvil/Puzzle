@@ -97,7 +97,19 @@ Bolts as beams between holes, with sizes and preloads: skill `bolts`.
   the preload step is the fix (a joint tightened and loaded at once chattered and timed
   out on CalculiX). Read the bolt forces at the Preload step against their preload,
   and at the last step for the service load's share.
-- A compression-only support makes the step nonlinear (CalculiX adds NLGEOM).
+- A compression-only support makes the step nonlinear (CalculiX adds NLGEOM). Its
+  foundation is on the outside of the solid each face bounds (a bore's support pushes
+  the bore's wall outward from the hole); on a sheet, on the side away from the model's
+  centre. Elastic and compression-only springs act along fixed directions, so a load in
+  an earlier step never stiffens a later modal step.
+- A `displacement` that names no component holds nothing and is refused (`invalid`):
+  give x, y or z, or use `fixed`.
+- Selections whose names differ only in case or punctuation ("Top face", "top_face")
+  are one set on CalculiX and are refused there (`invalid`); so is a selection named
+  `All`. Rename one.
+- A pressure, flux or support on a face inside a part (two bodies sharing nodes) goes
+  on the body the selection's part names; where that leaves it in doubt it is refused
+  (`ambiguous`): select the face on one body.
 - Held values (`fixed`, `displacement`, `temperature`) may go on an edge or a point
   selection on CalculiX, Code_Aster and FEniCSx (their nodes take them; Elmer refuses
   them). Loads spread over a face (`pressure`, `traction`, `heat_flux`, `convection`,

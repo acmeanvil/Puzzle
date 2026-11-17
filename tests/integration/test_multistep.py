@@ -94,3 +94,41 @@ def test_load_in_one_step_only(tmp_path, solver):
     low, high = tip(run.results, 1)
     assert abs(low[1]) < 1e-3 * abs(tip(run.results, 2)[0][1])  # step 1: no sideways force
     solid.features = [fixed, force, pressure]
+
+
+@over("calculix", "code_aster")
+def test_a_linear_step_after_a_large_deflection_one(tmp_path, solver):
+    """ADR 0090 package 6: CalculiX keeps NLGEOM on once a step asks for it, so a static
+    step written without it, after one with it, solved with large deflection too: the
+    cantilever's 2 kN tip load gave -29.70 mm there, where the same step alone gives the
+    linear -30.39 mm (Euler-Bernoulli 32.0 mm; shear and the 5 mm mesh take 5 %). Each
+    step must equal its own single-step study, to six digits (the .frd's)."""
+    step = write_bar_step(tmp_path / "bar.step")
+    load = {"y": Quantity(value=-2000, unit="N")}
+    solid = Physics(
+        type="solid_mechanics",
+        features=[
+            Feature(type="fixed", selection="Bar/Root"),
+            Feature(type="force", selection="Bar/Tip", values=load, steps=[1]),
+            Feature(type="force", selection="Bar/Tip", values=load, steps=[2]),
+        ],
+        settings={"temperature_dependent_materials": False},
+    )
+    project, comp = bar_project(step, [solid], mesh_size_mm=5)
+    large = SolveStep(type="stationary", settings={"geometric_nonlinearity": True})
+    linear = SolveStep(type="stationary")
+    both = project.add(Study(name="Both", component=comp.id, solver=solver, steps=[large, linear]))
+    alone = project.add(Study(name="Alone", component=comp.id, solver=solver, steps=[linear]))
+    run = run_study(project, both.id, tmp_path, tmp_path / "both", timeout_s=900)
+    single = run_study(project, alone.id, tmp_path, tmp_path / "alone", timeout_s=900)
+    tip = run.mesh.groups["Bar/Tip"].node_ids
+
+    def deflection(r, index):
+        s = [s for s in r.results.steps if s.index == index and "displacement" in s.fields][-1]
+        return float(s.fields["displacement"].at(tip)[:, 1].mean())
+
+    first, second, want = deflection(run, 1), deflection(run, 2), deflection(single, 1)
+    print(f"{solver}: large {first * 1e3:.5g} mm, then linear {second * 1e3:.5g} mm "
+          f"(alone {want * 1e3:.5g} mm)")  # fmt: skip
+    assert second == pytest.approx(want, rel=1e-5)
+    assert abs(first / want - 1) > 0.01  # the first step was large deflection

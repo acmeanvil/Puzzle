@@ -201,3 +201,36 @@ def test_preload_step_put_in_front(tmp_path, solver):
     assert run.results.steps[0].label() == "Preload"
     assert first == pytest.approx(F, rel=5e-3)
     assert second == pytest.approx(F + P / 2, rel=5e-3)
+
+
+@over("calculix", "code_aster")
+def test_a_load_before_a_modal_step_leaves_its_modes(tmp_path, solver):
+    """ADR 0090 package 6: a modal step after a loaded static step is its own analysis
+    (no prestress asked for), so the bolt's modes must not move with that load. On
+    CalculiX they did: the support was SPRINGA springs 1e-3 of the model long, built in
+    the deformed state, so the 5 kN each step pushed into them added -F/L across: the
+    bending pair fell from 3,404 Hz to 0 at 10 kN, and rose under a pull. A tensioned
+    beam's own stiffening, f ∝ √(1 + T L²/(π² E I)), is +0.6 % here, and is not asked
+    for. The springs act along fixed directions now (SPRING2 in an orientation)."""
+    pytest.importorskip("OCP")
+    section = Feature(
+        type="bolt_pretension", selection="B/Section", values={"F": Quantity(value=F, unit="N")}
+    )
+    modes = {}
+    for load in (0.0, 10e3, -10e3):
+        p, study, _ = _bolt(solver, section)
+        ph = p.objects[study.component].physics[0]
+        ph.features = [f for f in ph.features if f.type not in ("force", "bolt_pretension")]
+        if load:
+            ph.features.append(Feature(type="force", selection="B/Top", steps=[1],
+                                       values={"z": Quantity(value=load, unit="N")}))  # fmt: skip
+        study.steps = [SolveStep(type="stationary"), SolveStep(type="modal", settings={"modes": 4})]
+        root = tmp_path / f"bolt{load:g}"
+        save_project(p, root)
+        run = run_study(p, study.id, root, tmp_path / f"w{load:g}")
+        modes[load] = [s.value for s in run.results.steps if s.index == 2]
+    print(f"{solver} modes (Hz): " + "; ".join(f"{k:g} N: {[round(f, 1) for f in v]}"
+                                             for k, v in modes.items()))  # fmt: skip
+    assert len(modes[0.0]) >= 4  # and the last pair whole (`common.whole_pairs`)
+    for load in (10e3, -10e3):
+        assert modes[load] == pytest.approx(modes[0.0], rel=1e-5)

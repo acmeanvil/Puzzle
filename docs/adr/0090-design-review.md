@@ -386,6 +386,43 @@ step moves a bolt's bending modes with the load (3,404 Hz with none, 11,012 Hz a
 10 kN), the axial mode unmoved; the elastic support's springs carrying geometric
 stiffness is the suspect, unconfirmed.
 
+**Package 6 built (2026-11-17):** CalculiX and Code_Aster accuracy.
+
+- CCX-1: `.frd` headers are read by column, so a run past 9,899 increments keeps every
+  step (10,050 of 10,050 on the recorded file, where 9,899 were read).
+- CCX-3: `.dat` prints pair with `.frd` steps by order within a deck step
+  (`calculix.matched`), and `*NODE PRINT` is thinned as the `.frd` is.
+- CCX-4: a harmonic range is one `*STEADY STATE DYNAMICS` step per listed frequency.
+- CCX-7: selections whose set names fold together, or take one of the deck's own, are
+  refused (`inp.check_set_names`, the Abaqus export too).
+- CCX-8 and package 5's leftover: an artefact, not stress stiffening. The elastic
+  support's SPRINGA springs are short and CalculiX builds them in the deformed state,
+  so a static load before a modal step moved the bolt's bending pair (3,404 Hz to
+  2,966 Hz after 100 N, to 0 Hz after 10 kN). Supports are now SPRING2 in an
+  orientation per direction; the modes are equal to 1e-5 with and without the load on
+  both solvers.
+- ASTER-4: a mode count never splits a pair (`common.whole_pairs`, a margin of three
+  modes; Code_Aster in two passes, which doubles its modal solve; CalculiX's spring
+  beams keep the count asked for, since ARPACK failed with the margin there).
+- COMMON-1: a compression-only support's normal comes from each face's own element; a
+  footing lifting off with the model's centre below it, contact length within 0.6 % of
+  75 mm on both solvers.
+- COMMON-2: the plastic strain tensor comes from the mechanical strain (CalculiX `ME`);
+  a heated bar yields at the closed form to 1e-5 on CalculiX and 1e-6 on Code_Aster.
+- COMMON-3: a face with two parents is loaded on its selection's part, or refused.
+- ASTER-3: results follow node ids with gaps (`job.nodeids.json`).
+- Found on the way: CalculiX kept NLGEOM in a linear step after a large-deflection one
+  (−29.704 mm for −30.393 mm; `NLGEOM=NO` is now written); Code_Aster ignored a constant
+  temperature load in every nonlinear or transient solve (a heated free bar did not
+  move; the load is now an `EVOL_THER` ramped with the loads); plasticity replaced
+  Code_Aster's whole behaviour list; a displacement with no component is refused.
+
+The second passes of two reviewers were never saved to their reports (CCX-8 to CCX-15,
+ASTER-4 and 5; PANEL-21 to PANEL-34); their summaries were recovered from the session
+and appended on 2026-11-17, without the reproduction scripts. Left of this package for
+that reason: CCX-11, CCX-12, CCX-14, CCX-15. Not done: the `*TIE` position tolerance
+and its untied-node log lines; Code_Aster stores no strain or flux.
+
 ### Enhancements toward the state of the art
 
 From `state-of-the-art.md` (50 gaps, each with who has it, which open solver can deliver

@@ -247,3 +247,42 @@ Test: two tets sharing a face, a surface block on it in group `A/Face`: the pare
 - **Replace `id(feature)` keys and module-level `ContextVar`s** in `inp.py` (`GIVEN`, `STEP_INDEX`, `HISTORIES`, `COMPONENT`, `SPRING_BEAMS`; `_rigid_nodes`, `_pretension_nodes` keyed by `id(f)`). They work today because `globalize` does not copy the feature types concerned, but any new `model_copy` breaks the lookup silently. An explicit writer-state object passed down would be testable.
 - **A combination matrix test.** Most findings are pairs of features that are each benchmarked alone (thermal load × fasteners, plasticity × transient, orthotropy × 2D, settings × harmonic). A parametrised writer-level test over feature pairs asserting "written or refused, never neither" would catch this class cheaply without solver runs.
 - **Share the "what can't expand" rule**: thermal loads against springs, bolts, welds and threads should be decided in one place (`common`), used by both adapters.
+
+## Second pass (recovered)
+
+The reviewer's second pass was not saved to this file; what follows is its summary as handed back on 2026-11-16, recovered from the session on 2026-11-17. The reproductions' scripts were scratch files and are not kept.
+
+Second pass is appended under "Second pass" in `<scratch>\review\adapters-calculix-aster.md`. Code_Aster runs in its container here (about 10 s a job), so both first-pass confirmations were made by running it.
+
+### Confirmations of first-pass findings
+- **ASTER-1 confirmed by a run.** The pretension test bolt solves without a temperature input. With a uniform temperature load, `write_input` accepts it and the job fails in the .comm with `KeyError` at the pretension reference node (the section centroid). One correction: a threaded contact's helpers sit at the screw nodes and would not raise; the reference node, fastener bolt nodes and masters, beam-bolt thread helpers and weld helpers do.
+- **ASTER-2 confirmed by a run.** The plastic bar as a slow transient on Code_Aster: no `VMIS_ISOT_TRAC` in the .comm, `DYNA_NON_LINE` runs `ELAS`, mean axial stress 2.0e9 Pa against the plastic closed form 2.544e8 Pa, and no plastic strain fields.
+
+### New findings (4 high, 5 medium, 1 low)
+
+**High**
+- **CCX-8** (`calculix/inp.py:1771-1831`, `_springs`): elastic supports and weak springs are SPRINGA elements 0.1 % of the model size long, and CalculiX turns them with the node. Confirmed with a small deck: in two identical linear steps a normal-only support let the node slide 10 mm in step 1 (correct) but printed a 9,105 N reaction for a 100 N load, and in step 2 the slide was 100 times too small. The tapped beam-bolt benchmark model run with two identical static steps gave 0.630 mm then 0.217 mm largest displacement; I attribute that to its weak springs but did not isolate it further. A second step is the normal case with bolts because of the automatic preload step.
+- **CCX-9** (`calculix/inp.py:1038-1057`): modal steps leave pretension sections cut open, so bolts have no axial stiffness. Confirmed by running: the test bolt's first axial mode is 21,529 Hz with the `bolt_pretension` feature and 33,556 Hz without it. Code_Aster gives 33,556 Hz for the feature case, so the solvers disagree silently. From reading: pretensioned fasteners are severed in modal steps on both solvers.
+- **CCX-10** (`calculix/inp.py:348-352`, `:1040`): a prestressed study on a component with a `bolt_pretension` feature raises a bare `KeyError` in `write_inp` (confirmed by running the writer). With pretensioned fasteners nothing raises, but the replayed step has no pretension (reading).
+- **ASTER-4** (`code_aster/comm.py`, modal branch): a modal study fails whenever the mode count splits a pair of equal frequencies (Sturm check, `ALGELINE5_23`/`2_74`). Confirmed by running: the round bolt with the default 10 modes exits 134; with 6 modes it solves; CalculiX returns all 10.
+
+**Medium**
+- **ASTER-5** (`comm.py:276`, `inp.py:1238-1244`): harmonic steps apply the bolt pretension force as a harmonic load on both solvers; transients apply it as a step load. Reading only.
+- **CCX-11** (`spring_beams.py:420-431`): spring beams' `reaction_force` is the internal force at each node, so loaded free nodes show their load as a reaction, and a support under gravity is short by its own nodal share. Mechanism confirmed on a three-node CalculiX deck, not through a Puzzle beam model.
+- **CCX-12** (`inp.py:1564`, `:1599-1600`): a tapped beam bolt's set and orientation names collide between bolts ("Bolt 1" level 11 and "Bolt 11" level 1 both give `TC_BOLT_111`), certain with eleven or more tapped beam bolts under the default names. Reading only.
+- **CCX-13** (`inp.py:920-927`): a transient with a plastic material runs `*DYNAMIC, DIRECT` with no cut-back. Confirmed by running: the ASTER-2 case on CalculiX diverges (exit 201). With ASTER-2, neither adapter can run a plastic transient although both claim it.
+- **CCX-15** (`inp.py:1571-1572`): a tapped beam bolt's slide-node holds are model-level and are dropped by `OP=NEW` from step 2 (confirmed that `OP=NEW` drops them). The PARDISO build tolerated it; SPOOLES stopped without a message on a small deck with the same kind of free dofs. I did not run the Puzzle model on SPOOLES.
+
+**Low**
+- **CCX-14** (`inp.py:1862-1873`): rigid threads pick an unsorted, possibly tiny, dependent coefficient for the second flank. Reading only.
+
+### Reviewed with nothing to report
+- `spring_beams.py`: the rigid-arm equations and Timoshenko spring set (exact against the cantilever closed form).
+- `thread_pairs.py`, `thread_springs.py`, `weld_pairs.py` and both weld writers.
+- `graded.py`: integration points match CalculiX's for tet4, tet10 and hex8.
+- `_rbe3_equations`, `rbe3_rows`, `beam_bolt_stiffness`, `fastener_values`, and Code_Aster's `_pretension_chain` and `_windowed_loads`.
+
+Three small unconfirmed items are listed in the file under "To check (second pass)".
+
+### Design note
+CCX-9, CCX-10 and ASTER-5 share one cause: the pretension cut is in the model for every step, but only static steps apply or lock it. A shared helper that states each section's state per step (closed, driven or locked) for every step type would close the class.

@@ -45,7 +45,10 @@ def test_modal_and_heat_cases(tmp_path):
         SolveStep(type="modal", settings={"modes": 3}),
     )
     comm = (export.parent / "job.comm").read_text(encoding="utf-8")
-    assert "CALC_MODES" in comm and "NMAX_FREQ=3" in comm and "'FREQ', 'FACT_PARTICI_DX'" in comm
+    assert "CALC_MODES" in comm and "'FREQ', 'FACT_PARTICI_DX'" in comm
+    # 3 asked, 3 more to find where a pair ends, then the checked pass to there
+    assert "NMAX_FREQ=6), VERI_MODE=_F(STOP_ERREUR='NON')" in comm and "range(3, " in comm
+    assert "NMAX_FREQ=_n" in comm
     hot = Feature(
         type="temperature", selection="Bar/Root", values={"T": Quantity(value=100, unit="degC")}
     )
@@ -147,3 +150,40 @@ def test_table_reader_time_series(tmp_path):
     steps = read_results(tmp_path).steps
     assert [s.value for s in steps] == [0.0, 5.0, 10.0]
     assert steps[-1].fields["temperature"].values[0, 0] == 310.0
+
+
+def test_plasticity_keeps_the_discretes_behaviour(tmp_path):
+    """ADR 0090 package 6: with a plastic material the behaviour list was rebuilt from
+    the materials alone, so an elastic support's discretes (and, under large deflection,
+    shells' GROT_GDEP and the discretes' PETIT) had no entry."""
+    from puzzle.model.schema import Material, MaterialModels
+
+    stepfile = write_bar_step(tmp_path / "bar.step")
+    support = Feature(type="elastic_support", selection="Bar/Tip",
+                      values={"kn": Quantity(value=1e12, unit="N/m^3")})  # fmt: skip
+    features = [Feature(type="fixed", selection="Bar/Root"), support]
+    for large in (False, True):
+        project, comp = bar_project(stepfile, [Physics(type="solid_mechanics", features=features)],
+                                    mesh_size_mm=5)  # fmt: skip
+        steel = project.get(comp.materials[0].material, Material)
+        steel.models = MaterialModels(
+            plasticity={"curves": [{"points": [(0.0, 250e6), (0.5, 500e6)]}]}
+        )
+        settings = {"geometric_nonlinearity": True} if large else {}
+        study = project.add(
+            Study(
+                name="s",
+                component=comp.id,
+                solver="code_aster",
+                steps=[SolveStep(type="stationary", settings=settings)],
+            )
+        )
+        mesh = generate_mesh(project, comp.id, tmp_path, tmp_path / f"m{large}").mesh
+        work = tmp_path / f"case{large}"
+        work.mkdir()
+        CodeAsterAdapter().write_input(project, study, mesh, work)
+        comm = (work / "job.comm").read_text(encoding="utf-8")
+        behaviour = comm.split("COMPORTEMENT=(")[1].split("), NEWTON")[0]
+        assert "RELATION='VMIS_ISOT_TRAC'" in behaviour
+        law = "RELATION='ELAS', DEFORMATION='PETIT'" if large else "RELATION='ELAS')"
+        assert "'SPRINGS'" in behaviour and law in behaviour.split("'SPRINGS'")[1]

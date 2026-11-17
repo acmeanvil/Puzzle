@@ -263,13 +263,18 @@ class CalculixAdapter(SolverAdapter):
         _bolt_thread_loads(results, input_file)  # before the thread ends' helpers go
         drop_helper_nodes(results, input_file)  # rigid-body nodes, grounds, twins
         elastic = input_file.with_suffix(".elastic.json")
-        if elastic.exists():  # CalculiX writes PEEQ only: the tensor comes from S and E
+        if elastic.exists():  # CalculiX writes PEEQ only: the tensor comes from S and ME
             sets = json.loads(elastic.read_text(encoding="utf-8"))
             for step in results.steps:
-                if "plastic_strain_equivalent" in step.fields and "strain" in step.fields:
+                # the mechanical strain (no thermal part, ADR 0090 COMMON-2); a deck
+                # written before ME was asked for has the total strain only
+                strain = step.fields.pop("mechanical_strain", None) or step.fields.get("strain")
+                if "plastic_strain_equivalent" in step.fields and strain is not None:
                     step.fields["plastic_strain"] = plastic_strain_tensor(
-                        step.fields["strain"], step.fields["stress"], sets
+                        strain, step.fields["stress"], sets
                     )
+        for step in results.steps:
+            step.fields.pop("mechanical_strain", None)
         _fastener_fields(results, input_file)
         _reaction_totals(results, input_file)  # by the deck's own step numbers, as above
         _participation(results, input_file)  # modes' participation (puzzle.spectra)
@@ -386,11 +391,47 @@ def _fastener_fields(results, input_file: Path) -> None:
 
     ends = json.loads(marker.read_text(encoding="utf-8"))
     blocks = read_fastener_forces(dat.read_text(encoding="utf-8"), ends)
-    for step in results.steps:
-        hit = [v for n, t, v in blocks if n == step.index and abs(t - step.value) < 1e-9]
-        if hit:
-            ids = np.arange(1, len(ends) + 1)
-            step.fields["fastener"] = Field("fastener", "global", FASTENER_COMPONENTS, ids, hit[-1])
+    for step, values in matched(results.steps, blocks).items():
+        ids = np.arange(1, len(ends) + 1)
+        field = Field("fastener", "global", FASTENER_COMPONENTS, ids, values)
+        results.steps[step].fields["fastener"] = field
+
+
+def matched(steps, blocks) -> dict[int, object]:
+    """Each .frd step (by position in `steps`) to its .dat block (analysis step, time,
+    value), by order within a deck step (ADR 0090 CCX-3): the .frd prints a time to six
+    digits, the .dat to seven, so 1/30 s or a cut-back increment matched nothing by an
+    absolute 1e-9 and lost its fastener forces and exact totals. Both files are written
+    at the same increments (`inp.with_settings` thins them alike); when their counts in
+    a deck step still differ, the nearest time within the .frd's rounding is taken."""
+    by_step: dict[int, list] = {}
+    for block in blocks:
+        by_step.setdefault(block[0], []).append(block)
+    frd: dict[int, list[int]] = {}
+    for k, s in enumerate(steps):
+        if s.mode is None:
+            frd.setdefault(s.index, []).append(k)
+    out: dict[int, object] = {}
+    for n, ks in frd.items():
+        printed = by_step.get(n, [])
+        if not printed:
+            continue
+        times = [steps[k].value for k in ks]
+        if len(printed) == len(ks) and all(
+            _close(t, b[1]) for t, b in zip(times, printed, strict=True)
+        ):
+            out.update({k: b[2] for k, b in zip(ks, printed, strict=True)})
+            continue
+        for k, t in zip(ks, times, strict=True):
+            near = min(printed, key=lambda b: abs(b[1] - t))
+            if _close(t, near[1]):
+                out[k] = near[2]
+    return out
+
+
+def _close(frd_time: float, dat_time: float) -> bool:
+    """Equal within the .frd's rounding (%12.5E: half a unit in the sixth digit)."""
+    return abs(frd_time - dat_time) <= 6e-6 * max(abs(frd_time), abs(dat_time)) + 1e-30
 
 
 def read_participation(text: str) -> dict[int, dict]:
@@ -477,11 +518,9 @@ def _reaction_totals(results, input_file: Path) -> None:
 
     groups = json.loads(marker.read_text(encoding="utf-8"))
     blocks = read_totals(dat.read_text(encoding="utf-8", errors="replace"))
-    for step in results.steps:
-        hit = [t for n, time, t in blocks if n == step.index and abs(time - step.value) < 1e-9]
-        if not hit:
-            continue
-        printed = {groups[s]: v for s, v in hit[-1].items() if s in groups}
+    for k, totals in matched(results.steps, blocks).items():
+        step = results.steps[k]
+        printed = {groups[s]: v for s, v in totals.items() if s in groups}
         if printed:
             names = sorted(printed)
             ids = np.array([selection_id(n) for n in names], dtype=np.int64)

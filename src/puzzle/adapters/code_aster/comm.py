@@ -21,6 +21,7 @@ from puzzle.adapters.common import (
     BODY_LOADS,
     HEAT_SOURCES,
     HOLDING,
+    PAIR_TOL,
     PRETENSION,
     REMOTE,
     STRUCTURAL,
@@ -33,11 +34,13 @@ from puzzle.adapters.common import (
     check_contacts,
     check_dynamics,
     check_pretension_steps,
+    computed_modes,
     cylindrical_expressions,
     fastener_selections,
     feature_vector,
     frequency_list,
     globalize,
+    held_components,
     initial_temperature,
     load_area,
     local_axes,
@@ -601,6 +604,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             code="unsupported",
         )
     write_med(points.mesh, workdir / f"{JOB}.med", names)
+    _node_numbers(points.mesh, workdir)
 
     model = _modelisation(comp, thermal)
     phenomenon = "THERMIQUE" if thermal else "MECANIQUE"
@@ -833,10 +837,37 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
                 "a temperature load applies to static structural steps", code="unsupported"
             )
         out += _temperature_field(thermal_load, mesh, workdir)
-        varc = (
-            ", AFFE_VARC=_F(TOUT='OUI', NOM_VARC='TEMP', CHAM_GD=temperature, "
-            f"VALE_REF={_reference(comp):.12g})"
-        )
+        reference = _reference(comp)
+        incremental = step.type == "transient" or (
+            step.type == "stationary"
+            and bool(touching or nlgeom or plastic or gaps or initial or chain or mixed
+                     or (threads and threads.gaps))
+        )  # fmt: skip
+        if incremental:
+            # STAT_NON_LINE and DYNA_NON_LINE integrate from a stress-free start at the
+            # reference temperature and see only a temperature's change in time: held
+            # constant, it was never applied (ADR 0090 package 6: a heated bar, free at
+            # its end, stayed where it was on contact, large-deflection and plastic
+            # studies). So the temperature rises from the reference with the loads'
+            # ramp (as CalculiX's *TEMPERATURE in a static step), or in the first time
+            # step of a transient, and stays.
+            full = 1.0 if step.type == "stationary" else time_settings(step)[0]
+            out += [
+                "reference = CREA_CHAMP(TYPE_CHAM='NOEU_TEMP_R', OPERATION='AFFE', "
+                f"MAILLAGE=mesh, AFFE=_F(TOUT='OUI', NOM_CMP='TEMP', VALE={reference:.12g}))",
+                "heating = CREA_RESU(OPERATION='AFFE', TYPE_RESU='EVOL_THER', AFFE=("
+                "_F(NOM_CHAM='TEMP', CHAM_GD=reference, INST=0.0), "
+                f"_F(NOM_CHAM='TEMP', CHAM_GD=temperature, INST={full:.12g})))",
+            ]
+            varc = (
+                ", AFFE_VARC=_F(TOUT='OUI', NOM_VARC='TEMP', EVOL=heating, "
+                f"PROL_DROITE='CONSTANT', VALE_REF={reference:.12g})"
+            )
+        else:
+            varc = (
+                ", AFFE_VARC=_F(TOUT='OUI', NOM_VARC='TEMP', CHAM_GD=temperature, "
+                f"VALE_REF={reference:.12g})"
+            )
     out.append(f"mater = AFFE_MATERIAU(MAILLAGE=mesh, AFFE=({', '.join(assignments)},){varc})")
     charges = ["load"]
     if thermal:  # loads following an amplitude get their own charge (ADR 0037)
@@ -1059,7 +1090,8 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             ),
         ]
     elif step.type == "modal":
-        n = int(step.settings.get("modes", 10))
+        asked = int(step.settings.get("modes", 10))
+        n = computed_modes(asked)  # `common.whole_pairs`
         out += [
             f"ASSEMBLAGE(MODELE=model, CHAM_MATER=mater, {cara}CHARGE=({', '.join(charges)},), "
             "NUME_DDL=CO('numddl'),",
@@ -1067,8 +1099,17 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             "                      _F(MATRICE=CO('mass'), OPTION='MASS_MECA')))",
             # unit generalised mass, as CalculiX's: a spectrum scales the shapes by
             # their modal coordinates (puzzle.spectra)
+            # A pair split at the top of the modes asked for fails CALC_MODES' Sturm
+            # check (ADR 0090 package 6): a first pass, unchecked, finds where a gap
+            # wider than PAIR_TOL lies past the count asked for, and the checked pass
+            # asks for the modes up to it, so its search band never cuts a pair.
+            "_probe = CALC_MODES(MATR_RIGI=stiff, MATR_MASS=mass, OPTION='PLUS_PETITE', "
+            f"CALC_FREQ=_F(NMAX_FREQ={n}), VERI_MODE=_F(STOP_ERREUR='NON'))",
+            "_f = sorted(RECU_TABLE(CO=_probe, NOM_PARA='FREQ').EXTR_TABLE().values()['FREQ'])",
+            f"_n = next((k for k in range({asked}, len(_f)) "
+            f"if _f[k] > _f[k - 1] * (1 + {PAIR_TOL!r})), len(_f))",
             "res = CALC_MODES(MATR_RIGI=stiff, MATR_MASS=mass, OPTION='PLUS_PETITE', "
-            f"CALC_FREQ=_F(NMAX_FREQ={n}), NORM_MODE=_F(NORME='MASS_GENE'))",
+            "CALC_FREQ=_F(NMAX_FREQ=_n), NORM_MODE=_F(NORME='MASS_GENE'))",
             _table("res", "DEPL", "displacement"),
             "IMPR_TABLE(TABLE=RECU_TABLE(CO=res, NOM_PARA=('FREQ', 'FACT_PARTICI_DX', "
             "'FACT_PARTICI_DY', 'FACT_PARTICI_DZ', 'MASS_EFFE_DX', 'MASS_EFFE_DY', "
@@ -1126,11 +1167,21 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         if plastic:
             yielding = ", ".join(f"'{names[a.selection]}'" for a in plastic)
             large = ", DEFORMATION='GDEF_LOG'" if nlgeom else ""
-            rest = [a for a in comp.materials if a not in plastic]
+            # Shells', beams' and point elements' own entries stay (ADR 0090 package 6:
+            # they were replaced, so DKT lost its large rotations under plasticity and
+            # the discretes their small-strain law); the rest's elasticity is the solids'.
+            own = set(shell_parts + beam_parts) if nlgeom else set()
+            kept = [p for p in parts if "GROT_GDEP" in p or "DEFORMATION='PETIT'" in p]
+            rest = [a for a in comp.materials
+                    if a not in plastic and a.selection.split("/", 1)[0] not in own]  # fmt: skip
             parts = [f"_F(GROUP_MA=({yielding},), RELATION='VMIS_ISOT_TRAC'{large})"]
             if rest:
                 elastic = ", ".join(f"'{names[a.selection]}'" for a in rest)
                 parts.append(f"_F(GROUP_MA=({elastic},), RELATION='ELAS'{strains})")
+            parts += kept
+            if points.sets and not nlgeom:  # springs, pretension: no material's group
+                groups = ", ".join(f"'{g}'" for g in points.sets)
+                parts.append(f"_F(GROUP_MA=({groups},), RELATION='ELAS')")
         if gaps:  # the compression-only discretes
             parts.append("_F(GROUP_MA='GAPS', RELATION='DIS_CHOC')")
         if threads and threads.gaps:  # a frictionless thread's flanks (ADR 0076)
@@ -1396,6 +1447,25 @@ def _cut(mesh: Mesh, cuts) -> Mesh:
             moved.append(b)
         blocks = moved
     return _sorted_mesh(np.concatenate(ids), np.vstack(xyz), blocks, dict(mesh.groups))
+
+
+NODE_IDS = "nodeids.json"  # beside the job: Code_Aster's node k is the k-th id here
+
+
+def _node_numbers(mesh: Mesh, workdir: Path) -> None:
+    """Code_Aster numbers nodes 1..N in the order written, and its tables print those
+    numbers. They are Puzzle's ids only when the ids are 1..N: otherwise the ids are
+    left beside the job for the reader (ADR 0090 ASTER-3: a gap in the ids moved every
+    result after it onto the next node, silently)."""
+    ids = np.asarray(mesh.node_ids)
+    if np.any(np.diff(ids) <= 0):
+        raise InputError("the mesh's node ids are not in order: Code_Aster would number "
+                         "them otherwise", code="invalid")  # fmt: skip
+    marker = workdir / f"{JOB}.{NODE_IDS}"
+    if np.array_equal(ids, np.arange(1, len(ids) + 1)):
+        marker.unlink(missing_ok=True)
+        return
+    marker.write_text(json.dumps(ids.tolist()), encoding="utf-8")
 
 
 def _sorted_mesh(ids: np.ndarray, xyz: np.ndarray, blocks, groups) -> Mesh:
@@ -3027,9 +3097,8 @@ def _loads(
         if f.type == "fixed" and mesh.planar:  # a 2D model's nodes move in its plane
             imposed.append(f"_F(GROUP_MA='{g}', DX=0.0, DY=0.0)")
         elif f.type == "displacement" and mesh.planar and f.axes is None:
-            dofs = ", ".join(f"D{a.upper()}={v[a]:.12g}" for a in "xy" if a in v)
-            if dofs:
-                imposed.append(f"_F(GROUP_MA='{g}', {dofs})")
+            dofs = ", ".join(f"D{a.upper()}={v[a]:.12g}" for a in held_components(f, True))
+            imposed.append(f"_F(GROUP_MA='{g}', {dofs})")
         elif f.type == "force" and mesh.planar:  # on 2D edges: per unit length (ADR 0048)
             area = load_area(mesh.groups[f.selection], mesh, comp)
             comps = ", ".join(f"F{a.upper()}={v[a] / area:.12g}" for a in "xy" if v.get(a))
@@ -3040,7 +3109,7 @@ def _loads(
             rotations = ", DRX=0.0, DRY=0.0, DRZ=0.0" if on_beams else ""  # a clamp
             imposed.append(f"_F(GROUP_MA='{g}', DX=0.0, DY=0.0, DZ=0.0{rotations})")
         elif f.type == "displacement" and f.axes is None:  # in local axes: loadf
-            dofs = ", ".join(f"D{a.upper()}={v[a]:.12g}" for a in "xyz" if a in v)
+            dofs = ", ".join(f"D{a.upper()}={v[a]:.12g}" for a in held_components(f))
             imposed.append(f"_F(GROUP_MA='{g}', {dofs})")
         elif f.type == "force" and _on_shell_edge(mesh, mesh.groups[f.selection]):
             length = _edge_length(mesh.groups[f.selection], mesh)

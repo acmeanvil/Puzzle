@@ -88,7 +88,7 @@ def test_modal_step_writes_frequency_and_drops_loads(tmp_path):
         tmp_path, [Feature(type="fixed", selection="Bar/Root"), force], steps
     )
     deck = write_inp(project, study, mesh)
-    assert "*FREQUENCY\n4" in deck
+    assert "*FREQUENCY\n7" in deck  # 4 asked and 3 more, so a pair is kept whole
     assert "*CLOAD" not in deck
 
 

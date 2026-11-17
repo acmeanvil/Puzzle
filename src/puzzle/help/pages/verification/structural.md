@@ -259,6 +259,15 @@ against 0.0087282 (2026-11-17). Before ADR 0090 Code_Aster's DYNA_NON_LINE ran t
 elastic (ASTER-2) and CalculiX's fixed-increment *DYNAMIC, DIRECT diverged past yield
 (CCX-13); a yielding CalculiX transient now steps automatically.
 
+`test_a_heated_bar_yields_on_its_mechanical_strain` heats the bar 100 K (α = 1.2e-5/K)
+and pulls it 1 %: it yields on the strain left after the free expansion,
+$\varepsilon_p = (\varepsilon - \alpha \Delta T - \sigma_y/E)/(1 + H/E)$ = 7.5312e-3,
+held to 2e-4 on CalculiX (whose tensor comes from the mechanical strain ME, six digits)
+and 1e-6 on Code_Aster. Measured (2026-11-17): CalculiX 7.53109e-3 (−1e-5), Code_Aster
+7.53117e-3. Before ADR 0090 package 6 CalculiX's tensor held α ΔT on every diagonal
+(it was made from the total strain), and Code_Aster's STAT_NON_LINE ignored a
+temperature that did not change in time: its εp was the unheated 8.7282e-3.
+
 ## 2D models
 
 `tests/integration/test_planar_benchmarks.py`, generic steel in the XY plane, on
@@ -544,7 +553,11 @@ a closed form:
 - `tests/integration/test_multistep.py`: a static then a modal step in one study equal
   the two one-step studies to 1e-9 (`test_static_then_modal`); a force in step 2 only
   and a pressure in step 1 only each match a one-step study to 1e-6
-  (`test_load_in_one_step_only`). All four solvers;
+  (`test_load_in_one_step_only`). All four solvers. A linear static step after a
+  large-deflection one equals its one-step study to 1e-5 on CalculiX and Code_Aster
+  (`test_a_linear_step_after_a_large_deflection_one`): the cantilever's 2 kN tip load
+  -30.393 mm after -29.704 mm with large deflection, where CalculiX had kept NLGEOM on
+  and given -29.704 mm again (2026-11-17);
 - `tests/integration/test_solver_settings_runs.py`: the cantilever's tip with each
   linear solver equal to the default's to 1e-8 (direct) and 1e-5 (iterative; CalculiX's
   iterative Cholesky 1e-4, since its stop test doesn't bound the error), all four

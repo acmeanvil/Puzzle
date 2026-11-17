@@ -407,3 +407,39 @@ Not reached: derived_dialog.py, field_view.py, field_align_panel.py, advisor_pan
 help_viewer.py, start_page.py, paraview_open.py, visibility.py, theme.py, ribbon.py,
 spacemouse/, the rest of settings_dialog.py, solution_panel.py, jobs_panel.py,
 convergence_panel.py and text_viewer.py.
+
+## Second pass (recovered)
+
+The reviewer's second pass was not saved to this file; what follows is its summary as handed back on 2026-11-16, recovered from the session on 2026-11-17. The reproductions' scripts were scratch files and are not kept.
+
+Second pass done: 14 new findings (PANEL-21 to PANEL-34), 6 medium and 8 low, none critical or high. Only PANEL-23 was reproduced, and only at the folder-creation step; the other 13 are from reading the code.
+
+They are appended under "Second pass" in:
+<scratch>\review\gui-panels-bugs.md
+
+Nothing in the repository was changed.
+
+### Medium
+- **PANEL-21** `thread_dialog.py:44-49`: Thread… takes a bare number as millimetres, not the unit shown (metres by default), and its labels name no unit.
+- **PANEL-22** `thread_dialog.py:35-38, 119-121`: opened from the menu bar, every default comes from the first contact, so choosing another contact and pressing OK overwrites that contact's thread and type.
+- **PANEL-23** `paraview_open.py:60-66`, `paraview_link.py:84`: Open in ParaView with a derived result uses `derived:<uuid>` as a folder name. On Windows the `mkdir` raises `NotADirectoryError [WinError 267]` (ran here); the full action needs ParaView and was not run.
+- **PANEL-24** `derived_dialog.py:182-190`: editing a combination whose case's study has no completed run silently moves that case to the first study in the list.
+- **PANEL-25** `convergence_panel.py:44-47, 246-258`: a stored value the dropdown has no choice for is replaced by the first choice on OK (an `adapt.passes` of 10 becomes 3; same for ratio and levels).
+- **PANEL-26** `derived_dialog.py:854-890`: the Fatigue dialog runs the whole fatigue evaluation on the GUI thread at every field change; the Error estimate form re-reads results per change the same way.
+
+### Low
+- **PANEL-27** Edit… panels for coordinate systems, paths and planes fill fields at six digits and rewrite every field on Apply, so a rename shifts values and changes the content hash.
+- **PANEL-28** Find contacts…: the gap spin box has four decimals in the unit shown, so in metres anything under 0.1 mm rounds to zero and becomes the automatic tolerance.
+- **PANEL-29** Add fastener… validates after it has closed, and blames the diameter whichever number was wrong.
+- **PANEL-30** Convergence and optimisation plots are in SI with no unit, beside tables in the units shown.
+- **PANEL-31** The log window resets its whole text every 0.7 s while the file grows, losing the cursor and selection.
+- **PANEL-32** Settings saves preferences and agent settings before the "act" sign-off, so declining and then cancelling does not discard them.
+- **PANEL-33** The Material builder drops unsaved edits on another click, New or Close without asking.
+- **PANEL-34** Field alignment helpers raise on a non-number in the pairs table, and surface PANEL-4's errors as popups.
+
+The report also lists 10 more unverified "to check" items. One is worth knowing: Solver output… with a derived result shown looked like it would raise, but did not on the two tree selections I tried.
+
+### Coverage
+- **Read fully this pass:** bolt_types, thread_dialog, material_files, contact_search, convergence_panel, text_viewer, field_align_panel, field_view, paraview_open; optimisation_panel is now whole.
+- **Read in part:** fastener_dialog, axes_panel, construction, derived_dialog (combination and fatigue dialogs, not the equation dialog), jobs_panel, solution_panel, settings_dialog (save, autonomy, key test, project units; not the pages or provider rows), hosts_dialog, advisor_panel (action dispatch), help_viewer (F1 key lookup only), start_page, material_builder, versions_panel.
+- **Still not reached:** visibility, which you asked for, plus theme, ribbon and spacemouse/ from the original scope.

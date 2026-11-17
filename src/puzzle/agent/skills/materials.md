@@ -87,7 +87,9 @@ In `models`, each a typed block. Values are SI numbers (Pa, W/(m K)), not quanti
   (equivalent plastic strain, true stress in Pa), starting at zero strain (the yield
   stress), strains increasing. CalculiX and Code_Aster, in static and transient steps
   (a yielding CalculiX transient steps automatically; `test_plasticity.py`'s slow pull
-  in time); modal, buckling and harmonic steps use the elastic constants.
+  in time); modal, buckling and harmonic steps use the elastic constants. The
+  `plastic_strain` tensor is the mechanical strain's plastic part (thermal strain left
+  out, `test_plasticity.py`'s heated bar) and zero on bodies of elastic materials.
 - `orthotropic_elasticity`: `e1`, `e2`, `e3`, `nu12`, `nu13`, `nu23`, `g12`, `g13`,
   `g23`, `axis1`, `axis2`. CalculiX and Code_Aster.
 - `anisotropic_conductivity`: `k1`, `k2`, `k3`, `axis1`, `axis2`. CalculiX and

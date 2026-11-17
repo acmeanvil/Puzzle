@@ -196,6 +196,51 @@ def check_dynamics(step, solver: str, modal: bool) -> None:
         )
 
 
+# Modal steps (ADR 0090 package 6): a count that ends inside a pair of equal modes (a
+# round bar's two bending directions) returned half the pair from CalculiX, a shape of
+# its own choosing in that pair's plane, and failed Code_Aster's Sturm check (five
+# modes where four were found). CalculiX and Code_Aster compute MODE_MARGIN more, and
+# `whole_pairs` keeps the count asked for plus any mode within PAIR_TOL of the last
+# kept: a pair is returned whole or not at all. PAIR_TOL is Code_Aster's own search
+# band about a computed frequency (twice its default PREC_SHIFT of 0.25 %).
+MODE_MARGIN = 3
+PAIR_TOL = 5e-3
+
+
+MARGINED = frozenset({"calculix", "code_aster"})  # the adapters computing the margin
+
+
+def computed_modes(asked: int) -> int:
+    """How many modes CalculiX and Code_Aster are asked for, to return `asked` whole."""
+    return asked + MODE_MARGIN
+
+
+def whole_pairs(results, study) -> None:
+    """Each modal step's modes cut to the count asked for, its last pair kept whole
+    (`MODE_MARGIN`), on the solvers that computed the margin (others are left as they
+    answered). Modes past the count that aren't a kept mode's partner go."""
+    if study.solver not in MARGINED:
+        return
+    steps = study.solve_steps()
+    by_step: dict[int, list] = {}
+    for s in results.steps:
+        index = s.index
+        if (s.mode is not None and 1 <= index <= len(steps) and steps[index - 1].type == "modal"
+                and s.kind == "modal"):  # fmt: skip
+            by_step.setdefault(index, []).append(s)
+    dropped = set()
+    for index, modes in by_step.items():
+        asked = int(steps[index - 1].settings.get("modes", 10))
+        modes = sorted(modes, key=lambda s: (s.value, s.mode))
+        kept = modes[:asked]
+        for s in modes[asked:]:
+            if not kept or abs(s.value - kept[-1].value) > PAIR_TOL * abs(kept[-1].value):
+                break
+            kept.append(s)
+        dropped |= {id(s) for s in modes if s not in kept}
+    results.steps = [s for s in results.steps if id(s) not in dropped]
+
+
 def frequency_list(step) -> list[float]:
     """A harmonic step's frequencies in Hz (ADR 0041): `frequencies` as text ("50, 100,
     200"), or `start_frequency` to `end_frequency` in `points` steps, `spacing` linear
@@ -283,31 +328,56 @@ class InputError(PuzzleError, ValueError):
 
 @dataclass
 class FaceLookup:
-    """Which volume element face each surface element sits on."""
+    """Which volume element face each surface element sits on.
 
-    lookup: dict[frozenset[int], tuple[int, int]]
+    A face inside the mesh (two bodies sharing nodes) has two parents. The one in the
+    selection's own part is taken (ADR 0090 COMMON-3: the last element written won,
+    which put a pressure, film or contact face on the other body and turned its
+    outward normal round); one still in doubt is refused, never guessed."""
+
+    lookup: dict[frozenset[int], list[tuple[int, int, tuple[int, int]]]]
 
     @classmethod
     def build(cls, blocks: Iterable[CellBlock]) -> FaceLookup:
-        lookup = {}
+        lookup: dict = {}
         for b in blocks:
             if b.element not in FACES:
                 raise InputError(f"{b.element} elements are not supported yet")
             for face_no, corners in enumerate(FACES[b.element], start=1):
                 keys = b.connectivity[:, corners]
                 for eid, key in zip(b.ids, keys, strict=True):
-                    lookup[frozenset(key.tolist())] = (int(eid), face_no)
+                    lookup.setdefault(frozenset(key.tolist()), []).append(
+                        (int(eid), face_no, b.entity)
+                    )
         return cls(lookup)
 
-    def of(self, surface: CellBlock) -> list[tuple[int, int]]:
-        """(parent element id, face number) for each element of a surface block."""
+    def of(
+        self, surface: CellBlock, group: Group | None = None, mesh: Mesh | None = None,
+        strict: bool = True,
+    ) -> list[tuple[int, int]]:  # fmt: skip
+        """(parent element id, face number) for each element of a surface block; where a
+        face has two parents, the one in `group`'s part (its name's first segment)."""
         corners = {"tri": 3, "lin": 2}.get(surface.element[:3], 4)
+        own = None
+        if group is not None and mesh is not None:
+            part = mesh.groups.get(group.name.split("/")[0])
+            own = set(part.entities) if part is not None and part is not group else None
         out = []
         for row in surface.connectivity[:, :corners]:
-            hit = self.lookup.get(frozenset(row.tolist()))
-            if hit is None:
+            hits = self.lookup.get(frozenset(row.tolist()))
+            if not hits:
                 raise InputError("a surface element does not lie on any volume element face")
-            out.append(hit)
+            if len(hits) > 1 and own is not None:
+                hits = [h for h in hits if h[2] in own] or hits
+            if len(hits) > 1 and strict and len({h[2] for h in hits}) > 1:
+                where = f"'{group.name}'" if group is not None else "a selection"
+                raise InputError(
+                    f"{where} has a face inside the model, between two bodies of one part "
+                    "sharing nodes: which side it loads is not known. Select the face on "
+                    "one body (or switch off Share faces), or use a contact there",
+                    code="ambiguous",
+                )
+            out.append(hits[-1][:2])
         return out
 
 
@@ -603,10 +673,12 @@ def hydraulic_diameter(group, mesh: Mesh) -> float:
 
 
 def plastic_strain_tensor(strain, stress, elastic: list[tuple[float, float, list[int]]]):
-    """The plastic strain tensor from the total strain and the stress, for solvers that
-    write only the equivalent plastic strain (CalculiX): ep = e - [(1 + nu) s - nu tr(s) I]/E,
-    exact for small strains. `elastic`: (E, nu, node ids) per material; a node shared by
-    two materials takes the last. Tensor components xx, yy, zz, xy, yz, zx (tensor shear)."""
+    """The plastic strain tensor from the mechanical strain (total less thermal) and the
+    stress, for solvers that write only the equivalent plastic strain (CalculiX):
+    ep = e - [(1 + nu) s - nu tr(s) I]/E, exact for small strains. `elastic`: (E, nu,
+    node ids) per plastic material; a node shared by two materials takes the last, and
+    a node of none (an elastic body) has none: zero, as Code_Aster's EPSP (ADR 0090
+    COMMON-2: NaN there before). Components xx, yy, zz, xy, yz, zx (tensor shear)."""
     import numpy as np
 
     from puzzle.results.model import Field
@@ -623,12 +695,14 @@ def plastic_strain_tensor(strain, stress, elastic: list[tuple[float, float, list
     trace = s[:, 0] + s[:, 1] + s[:, 2]
     elastic_strain = (1 + poisson)[:, None] * s / young[:, None]
     elastic_strain[:, :3] -= (poisson * trace / young)[:, None]
+    values = e - elastic_strain
+    values[np.isnan(young)] = 0.0  # no plastic material there
     return Field(
         name="plastic_strain",
         location=strain.location,
         components=list(strain.components),
         ids=ids,
-        values=e - elastic_strain,
+        values=values,
     )
 
 
@@ -855,7 +929,7 @@ def pressure_forces(group, mesh: Mesh, pressure) -> dict[int, np.ndarray]:
     for b in surface_blocks(group, mesh):
         if b.element not in ("tri3", "tri6"):
             raise InputError(f"a varying pressure on {b.element} faces is not supported yet")
-        parents = [centre_of[e] for e, _ in faces.of(b)]
+        parents = [centre_of[e] for e, _ in faces.of(b, group, mesh)]
         nodes = mesh.node_coords(b.connectivity.ravel()).reshape(len(b.connectivity), -1, 3)
         p_nodes = pressure.at(b.connectivity.ravel())[:, 0].reshape(b.connectivity.shape)
         middle = nodes[:, :3].mean(axis=1)
@@ -1141,6 +1215,20 @@ def rigid_motion(f, group, mesh: Mesh) -> RigidMotion:
 # --- elastic supports (ADR 0037) -----------------------------------------------------------
 
 
+def held_components(f, planar: bool = False) -> list[str]:
+    """A prescribed displacement's components (x, y, z; x and y in a 2D model). One that
+    names none holds nothing, which is refused, never written (ADR 0090 package 6:
+    Code_Aster's DDL_IMPO came out `_F(GROUP_MA='G1', )`, a syntax error in the solve,
+    and CalculiX and a 2D Code_Aster model wrote nothing)."""
+    axes = "xy" if planar else "xyz"
+    held = [a for a in axes if a in f.values]
+    if not held:
+        raise InputError(f"displacement on '{f.selection}' gives no component: set "
+                         f"{' or '.join(axes)} (a fixed support holds them all)",
+                         code="invalid")  # fmt: skip
+    return held
+
+
 def support_stiffness(f) -> tuple[float, float]:
     """An elastic support's normal and tangential stiffness per area (N/m³). One with
     neither is refused: it would hold nothing (CalculiX then held a node set it never
@@ -1156,17 +1244,47 @@ def support_stiffness(f) -> tuple[float, float]:
     return kn, kt
 
 
+def _parent_centres(group, mesh: Mesh) -> dict[tuple, np.ndarray]:
+    """Each face element's connectivity row -> the centre of the solid element it bounds
+    (in the selection's own part, `FaceLookup.of`); a sheet's faces have none."""
+    solids = [b for b in mesh.blocks if b.dim == 3 and b.element in FACES]
+    if not solids or mesh.planar:
+        return {}
+    faces = FaceLookup.build(solids)
+    centre_of = {}
+    for b in solids:
+        nodes = mesh.node_coords(b.connectivity.ravel()).reshape(*b.connectivity.shape, 3)
+        centre_of.update(zip(b.ids.tolist(), nodes.mean(axis=1), strict=True))
+    out = {}
+    for b in surface_blocks(group, mesh):
+        try:
+            parents = faces.of(b, group, mesh)
+        except InputError as exc:
+            if exc.code == "ambiguous":
+                raise
+            continue  # a sheet's faces: no solid behind them
+        for row, (eid, _) in zip(b.connectivity.tolist(), parents, strict=True):
+            out[tuple(row)] = centre_of[eid]
+    return out
+
+
 def support_nodes(group, mesh: Mesh):
     """Each face node's share of the area and its normal, for springs to ground. Shares
     are ∫N dA, as consistent loads are, so a uniform state is exact (on tri6 faces that
     puts them on the mid-edge nodes; corners have none). Normals are area-weighted and
-    point away from the model's centre. -> (node ids, areas, unit normals (n, 3))
+    point out of the solid each face bounds, away from its parent element's centre
+    (ADR 0090 COMMON-1: away from the model's centre, a bore's or a channel's inner
+    face got the normal into the solid, and a compression-only support held in
+    tension). A sheet's faces, which bound no solid, keep the element normal turned
+    away from the model's centre: the foundation is on that side.
+    -> (node ids, areas, unit normals (n, 3))
 
     A group of points (weak springs, ADR 0080) is per node: each counts 1 m², along x."""
     if group.dim == 0:
         ids = np.asarray(group.node_ids, dtype=np.int64)
         return ids, np.ones(len(ids)), np.tile([1.0, 0.0, 0.0], (len(ids), 1))
     centre = mesh.coords.mean(axis=0)
+    inside = _parent_centres(group, mesh)  # face's nodes -> its solid element's centre
     share: dict[int, float] = {}
     normal: dict[int, np.ndarray] = {}
     for conn, n, _x, da in _quadrature(group, mesh):
@@ -1174,7 +1292,8 @@ def support_nodes(group, mesh: Mesh):
         corners = mesh.node_coords(conn[:, :3].ravel()).reshape(-1, 3, 3)
         nrm = np.cross(corners[:, 1] - corners[:, 0], corners[:, 2] - corners[:, 0])
         nrm /= np.maximum(np.linalg.norm(nrm, axis=1, keepdims=True), 1e-300)
-        flip = np.einsum("ij,ij->i", nrm, corners.mean(axis=1) - centre) < 0
+        away = np.array([inside.get(tuple(row), centre) for row in conn.tolist()])
+        flip = np.einsum("ij,ij->i", nrm, corners.mean(axis=1) - away) < 0
         nrm[flip] *= -1
         weights = n
         for k, column in enumerate(conn.T):

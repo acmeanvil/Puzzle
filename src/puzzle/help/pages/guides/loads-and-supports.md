@@ -48,7 +48,9 @@ Symmetry and antisymmetry planes are supports too
 - **Gravity** (default −9.81 m/s² in z), **linear acceleration** (its inertia, −a) and
   **rotation** (centrifugal, in rpm about an axis) act on bodies and need a density.
 - **Temperature (thermal load):** a body temperature that gives thermal strain; it needs
-  thermal expansion.
+  thermal expansion. In a nonlinear static step (contact, plasticity, large deflection)
+  it rises from the reference temperature with the loads, on CalculiX and Code_Aster
+  alike; in a transient it is reached in the first time step.
 - **Bolt pretension** acts on a bolt's section ([Bolts and welds](help:guides/bolts-and-welds)).
 
 ## Heat loads
@@ -111,7 +113,11 @@ load in the schematic ([Schematic and operators](help:guides/schematic-and-opera
 - A body load with a material that has no density: `incomplete_material`. On Elmer and
   FEniCSx, put body loads on a material's body selection.
 - Typing a force per area into Force: Force is the total. Use pressure or traction.
-- A compression-only support makes the step nonlinear and slower.
+- A compression-only support makes the step nonlinear and slower. Its foundation is
+  outside the solid the face bounds, so on a bore it pushes the wall away from the hole.
+- A prescribed displacement with no component set holds nothing and is refused.
+- On CalculiX, two selections whose names differ only in case or punctuation are
+  refused: rename one.
 - Axes on a feature that doesn't take them (pressure, a cylindrical force, remote loads,
   spherical axes) is refused.
 - On CalculiX, a cylindrical displacement turns its nodes' axes. Another displacement,

@@ -118,3 +118,37 @@ def test_footing_lifts_off(tmp_path, solver):
           f"toe {settle:.5g} m (theory {expected_w:.5g})")  # fmt: skip
     assert contact == pytest.approx(expected_c, rel=2e-2)
     assert settle == pytest.approx(expected_w, rel=2e-2)
+
+
+@over("calculix", "code_aster")
+def test_footing_lifts_off_with_the_model_centre_below(tmp_path, solver):
+    """ADR 0090 COMMON-1: a second block, held, 1 m below puts the model's centre under
+    the footing, so its foundation face's outward normal (-z) points toward that
+    centre. The support's normal was turned away from the centre (+z, into the
+    footing): it held in tension and let go in compression. Now the parent element's
+    side decides, and the footing lifts off as before, within 2 %."""
+    pytest.importorskip("OCP")
+    p, study = _footing(solver)
+    comp = p.objects[study.component]
+    comp.parts.append(PartInstance(name="G", geometry=comp.parts[0].geometry,
+                                   translation=(0.0, 0.0, -1.0)))  # fmt: skip
+    steel = comp.materials[0].material
+    comp.materials.append(MaterialAssignment(material=steel, selection="G/Body"))
+    comp.physics[0].features.append(Feature(type="fixed", selection="G/Bottom"))
+    root = tmp_path / "footing"
+    save_project(p, root)
+    run = run_study(p, study.id, root, tmp_path / "w")
+    assert run.mesh.coords[:, 2].mean() < 0  # the centre is below the footing
+    u = run.results.last("displacement")
+    xyz = run.mesh.node_coords(u.ids)
+    bottom = np.isclose(xyz[:, 2], 0.0, atol=1e-9)
+    x, w = xyz[bottom, 0], u.values[bottom, 2]
+    toe = x > B / 2
+    slope, w0 = np.polyfit(x[toe], w[toe], 1)
+    contact, settle = B - (-w0 / slope), -(slope * B + w0)
+    half = B / 2 - E_LOAD
+    expected_c, expected_w = 3 * half, 2 * P / (3 * D * half) / KN
+    print(f"{solver} footing over a centre below: contact {contact * 1e3:.4g} mm (theory "
+          f"{expected_c * 1e3:.4g}), toe {settle:.5g} m (theory {expected_w:.5g})")  # fmt: skip
+    assert contact == pytest.approx(expected_c, rel=2e-2)
+    assert settle == pytest.approx(expected_w, rel=2e-2)

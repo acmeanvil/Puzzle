@@ -122,7 +122,7 @@ def write_mesh(mesh: Mesh, directory: Path, bodies: list[str], boundaries: list[
             raise InputError(f"no selection '{name}' in the mesh")
         for b in surface_blocks(group, mesh):
             code, order = ELEMENTS[b.element]
-            parents = faces.of(b)
+            parents = faces.of(b, group, mesh, strict=False)  # interfaces: either
             conn = renumber(b.connectivity[:, order] if order else b.connectivity)
             for (parent, _), nodes in zip(parents, conn, strict=True):
                 boundary_lines.append(

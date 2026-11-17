@@ -44,11 +44,13 @@ from puzzle.adapters.common import (
     body_load,
     check_contacts,
     check_pretension_steps,
+    computed_modes,
     consistent_faces,
     fastener_values,
     feature_vector,
     flux_sources,
     globalize,
+    held_components,
     initial_temperature,
     nodal_edge_forces,
     nodal_traction,
@@ -140,6 +142,38 @@ def set_name(prefix: str, name: str) -> str:
     return f"{prefix}_{re.sub(r'[^A-Za-z0-9]+', '_', signed).strip('_').upper()}"
 
 
+# Set names the deck makes for itself, which a selection's must not take (ADR 0090 CCX-7).
+RESERVED_SETS = re.compile(
+    r"N_ALL|N_BOLT_GROUND|N_SPRING_GROUND|N_FASTENER_ENDS|N_FB\d+|E_SPRING\d+|E_GAP\d+"
+    r"|E_FASTENER\w*|E_PZBEAM\w*"
+)
+
+
+def check_set_names(comp: Component, mesh: Mesh) -> None:
+    """Refuse selections whose CalculiX set names coincide (ADR 0090 CCX-7): `set_name`
+    folds case and punctuation, so "P/Top face" and "P/top_face" (or part "A B" with
+    selection "C" and part "A" with "B C") were one set, and CalculiX appends a repeated
+    *NSET to the first: a hold on one held the union. Names past CalculiX's 80
+    characters, and the deck's own (N_ALL, the grounds' sets), are refused too."""
+    seen: dict[str, str] = {}
+    named = [(prefix, g.name, "selection") for g in mesh.groups.values() for prefix in "NE"]
+    named += [(prefix, c.name, "contact") for c in comp.contacts for prefix in ("T", "I", "TH")]
+    for prefix, name, what in named:
+        written = set_name(prefix, name)
+        if RESERVED_SETS.fullmatch(written):
+            raise InputError(f"{what} '{name}' is written as {written}, a set CalculiX's deck "
+                             "keeps for itself: rename it", code="invalid")  # fmt: skip
+        if len(written) > 80:
+            raise InputError(f"{what} '{name}' is written as a set name of {len(written)} "
+                             "characters; CalculiX takes 80: shorten it",
+                             code="invalid")  # fmt: skip
+        other = seen.setdefault(written, name)
+        if other != name:
+            raise InputError(f"{what}s '{other}' and '{name}' are both written as CalculiX set "
+                             f"{written} (case and punctuation are not kept), so CalculiX would "
+                             "join them: rename one", code="invalid")  # fmt: skip
+
+
 def _planar_kind(comp: Component, study: Study) -> str | None:
     """Which 2D elements a 2D model is written with (ADR 0048), or None in 3D."""
     if comp.dimension == "3d":
@@ -208,6 +242,7 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
 
         check_thermal_helpers(comp, "CalculiX")
     check_contacts(comp, CONTACTS, "CalculiX", THREADS)
+    check_set_names(comp, mesh)
     touching = [c for c in comp.contacts
                 if c.type in PAIRS and c.thread is None]  # fmt: skip
     if touching and any(
@@ -393,22 +428,25 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
             modes = SolveStep(
                 type="modal",
                 physics=["solid_mechanics"],
-                settings={"modes": step.settings.get("modes", 20)},
+                settings={
+                    "modes": step.settings.get("modes", 20),
+                    "computed_modes": step.settings.get("modes", 20),
+                },
             )
             first = _step(number, modes, comp, mesh, faces, physics_types, None, False, project,
                           pretension=(pretension, states["features"][index - 1]),
                           fastener_pretension=(tight, states["fasteners"][index - 1]))  # fmt: skip
             first = [ln for ln in first if not ln.startswith(("*NODE FILE", "*EL FILE", "U"))]
             out += [STEP_TAG.format(0), first[0], "*FREQUENCY, STORAGE=YES", *first[2:]]
-        if step.type == "frequency_domain" and "frequencies" in step.settings:
-            # Exactly the frequencies asked for: one steady-state step each.
+        if step.type == "frequency_domain":
+            # Exactly the frequencies asked for, a list or a range: one steady-state step
+            # each (ADR 0090 CCX-4: a range was written as CalculiX's own, `points` per
+            # interval between eigenfrequencies, its log spacing dropped).
             from puzzle.adapters.common import frequency_list
 
-            rest = {k: v for k, v in step.settings.items() if k != "frequencies"}
+            rest = {k: v for k, v in step.settings.items() if k not in RANGE_KEYS}
             for f in frequency_list(step):
-                one = step.model_copy(
-                    update={"settings": rest | {"start_frequency": f, "end_frequency": f}}
-                )
+                one = step.model_copy(update={"settings": rest | {"frequencies": f"{f:.12g}"}})
                 out.append(STEP_TAG.format(index))
                 out += with_settings(_step(
                     number, one, comp, mesh, faces, physics_types,
@@ -419,6 +457,7 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
             continue
         out += [STEP_TAG.format(index), *with_settings(lines, study, step, index)]
     STEP_INDEX.set(None)
+    _nlgeom_per_step(out)
     if HISTORIES.get():  # ADR 0044: the amplitudes fields varying in time follow
         first = next(i for i, line in enumerate(out) if line.startswith(STEP_TAG[:12]))
         cards = []
@@ -431,6 +470,37 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
         first = next(i for i, line in enumerate(out) if line.startswith(STEP_TAG[:12]))
         out[first:first] = expert_cards("model", expert["model"])
     return "\n".join(out) + "\n"
+
+
+def _frequency_count(settings: dict) -> int:
+    """The modes a *FREQUENCY card asks for: the step's and `MODE_MARGIN` more, except
+    with spring beams (ADR 0055), whose massless rotation nodes left ARPACK unable to
+    find 15 modes of a 24-element column (info -9999) where 14 were found: there the
+    count asked for, a pair perhaps split as before."""
+    if "computed_modes" in settings:
+        return int(settings["computed_modes"])
+    asked = int(settings.get("modes", 10))
+    return asked if SPRING_BEAMS.get() is not None else computed_modes(asked)
+
+
+def _nlgeom_per_step(out: list[str]) -> None:
+    """NLGEOM=NO on a step written without NLGEOM after one with it (ADR 0090 package
+    6): CalculiX keeps geometric nonlinearity on once a step asks for it, so a linear
+    static step after a large-deflection one solved nonlinearly (a cantilever's 2 kN tip
+    load: -29.70 mm where the linear step gives -30.39 mm). A PERTURBATION step reads
+    the stressed state it perturbs and is left as it is."""
+    on = False
+    for i, line in enumerate(out):
+        if not line.startswith("*STEP"):
+            continue
+        params = [w.strip().upper() for w in line.split(",")[1:]]
+        if "NLGEOM" in params:
+            on = True
+        elif (
+            on and "PERTURBATION" not in params and not any(w.startswith("NLGEOM") for w in params)
+        ):
+            out[i] = line.replace("*STEP", "*STEP, NLGEOM=NO", 1)
+            on = False
 
 
 # ADR 0023: CalculiX's own settings, and the shared ones in its terms.
@@ -510,8 +580,12 @@ def with_settings(lines: list[str], study: Study, step: SolveStep, index: int) -
             cards += expert_cards(key, expert[key])
     if "output_every" in given:
         n = int(given["output_every"])
+        # The prints (reaction totals, fastener forces) thinned alike, so the .dat's
+        # blocks pair with the .frd's by order (ADR 0090 CCX-3; both keep the last).
         out = [
-            f"{line}, FREQUENCY={n}" if line.startswith(("*NODE FILE", "*EL FILE")) else line
+            f"{line}, FREQUENCY={n}"
+            if line.startswith(("*NODE FILE", "*EL FILE", "*NODE PRINT"))
+            else line
             for line in out
         ]
     if (cards or solver != "default") and at is None:  # placed or refused, never dropped
@@ -960,7 +1034,9 @@ def _step(
                 if contact or nlgeom or any(k in settings for k in STEPPING)
                 else ["*STATIC"]
             ),
-            "modal": ["*FREQUENCY", str(int(settings.get("modes", 10)))],
+            # A modal step's own modes and a few more, so a pair is kept whole
+            # (`common.whole_pairs`); a superposition's as asked (`computed_modes` set).
+            "modal": ["*FREQUENCY", str(_frequency_count(settings))],
             # ADR 0028: load factors on this step's loads, and their mode shapes.
             "buckling": ["*BUCKLE", str(int(settings.get("modes", 4)))],
             # ADR 0041: Newmark with the given increment (DIRECT); ALPHA 0 (CalculiX's
@@ -997,7 +1073,7 @@ def _step(
         outputs = (
             ["*NODE FILE", "U"]
             if step.type in ("modal", "buckling") or _modal_based(step)
-            else ["*NODE FILE", "U, RF", "*EL FILE", "S, E" + (", PEEQ" if yields else "")]
+            else ["*NODE FILE", "U, RF", "*EL FILE", "S, E" + (", ME, PEEQ" if yields else "")]
         )
         if step.type == "modal" and settings.get("response_spectrum"):
             outputs += ["*EL FILE", "S"]  # each mode's stresses, for the CQC (puzzle.spectra)
@@ -1206,6 +1282,10 @@ def _edge_normals(group, mesh: Mesh) -> np.ndarray:
                     n = -n
             out.append(n)
     return np.asarray(out)
+
+
+# A harmonic step's frequencies, as a list or as a range (`common.frequency_list`).
+RANGE_KEYS = ("frequencies", "start_frequency", "end_frequency", "points", "spacing")
 
 
 def _steady_state(step: SolveStep) -> list[str]:
@@ -1826,9 +1906,16 @@ def read_fastener_forces(dat_text: str, ends: list[dict]) -> list[tuple[int, flo
 def _springs(
     comp: Component, mesh: Mesh, first_node: int, first_elem: int | None = None
 ) -> tuple[list[str], int, int]:
-    """Elastic supports (ADR 0037) as SPRINGA elements to grounded nodes: one along each
-    face node's normal (kn × its area) and, with kt, two along its tangents. Springs of
-    equal stiffness share an element set (CalculiX takes one stiffness per set).
+    """Elastic supports (ADR 0037) as springs to grounded nodes: one along each face
+    node's normal (kn × its area) and, with kt, two along its tangents. Springs of equal
+    stiffness and direction share an element set (CalculiX takes one per set).
+
+    A SPRING2 in an orientation whose x is that direction, dof 1 to dof 1: it acts along
+    a fixed direction, as a foundation does (ADR 0090 package 6). A SPRINGA acts along
+    the line between its nodes, which turns as the node moves: CalculiX builds its
+    stiffness in the deformed state in every step, so a short spring carrying force F
+    added F/L across itself. After a static step pushing 5 kN into a bolt's support,
+    the modal step's bending modes fell from 3,404 Hz to 0 (and rose with a pull).
     -> (lines, the next free node id, the next free element id)"""
     from puzzle.adapters.common import support_nodes, support_stiffness
 
@@ -1863,17 +1950,24 @@ def _springs(
                         continue
                     ground = p + 1e-3 * size * d
                     nodes.append(f"{node}, " + ", ".join(f"{c:.13g}" for c in ground))
-                    key = float(f"{k * a:.9g}")
+                    key = (float(f"{k * a:.9g}"), *(round(float(c), 7) + 0.0 for c in d))
                     bins.setdefault(key, []).append(f"{elem}, {nid}, {node}")
                     node, elem = node + 1, elem + 1
     if not nodes:
         return [], node, elem
     out = ["*NODE", *nodes, "*NSET, NSET=N_SPRING_GROUND"]
     out += _chunks(np.arange(first_node, node))
-    for i, (stiffness, rows) in enumerate(sorted(bins.items()), start=1):
-        out += [f"*ELEMENT, TYPE=SPRINGA, ELSET=E_SPRING{i}", *rows]
+    for i, ((stiffness, *d), rows) in enumerate(sorted(bins.items()), start=1):
+        a = np.asarray(d, dtype=float)
+        a /= np.linalg.norm(a)
+        helper = np.array([0.0, 0.0, 1.0]) if abs(a[2]) < 0.9 else np.array([1.0, 0, 0])
+        side = np.cross(helper, a)
+        side /= np.linalg.norm(side)
+        out += [f"*ORIENTATION, NAME=OSPRING{i}", ", ".join(f"{c:.13g}" for c in (*a, *side)),
+                f"*ELEMENT, TYPE=SPRING2, ELSET=E_SPRING{i}", *rows]  # fmt: skip
         # Always a real with an exponent: a bare integer reads as a DOF number.
-        out += [f"*SPRING, ELSET=E_SPRING{i}", "", f"{stiffness:.10e}"]
+        out += [f"*SPRING, ELSET=E_SPRING{i}, ORIENTATION=OSPRING{i}", "1, 1",
+                f"{stiffness:.10e}"]  # fmt: skip
     for i, ((stiffness, *n), rows) in enumerate(sorted(gaps.items()), start=1):
         # GAPUNI: closed (stiffness k) once the face node has moved its clearance (0)
         # along the gap direction, the face's outward normal, into the foundation.
@@ -2233,10 +2327,11 @@ def _feature_rows(f: Feature, mesh: Mesh, faces: FaceLookup, rigid=None) -> dict
     elif f.type == "displacement" and _by_equations(f):
         pass  # written once, as *EQUATION before the steps (_plane_equations)
     elif f.type == "displacement":
+        held = held_components(f, mesh.planar)
         boundary += [
             f"{nset}, {d}, {d}, {v[axis]:.10g}"
             for d, axis in ((1, "x"), (2, "y"), (3, "z"))
-            if axis in v and not (mesh.planar and d == 3)
+            if axis in held
         ]
     elif f.type == "temperature":
         boundary.append(f"{nset}, 11, 11, {v['T']:.10g}")
@@ -2522,7 +2617,7 @@ def _history_rows(f, name, card, label, group, mesh: Mesh, faces: FaceLookup) ->
     for b in surface_blocks(group, mesh):
         shape = b.connectivity.shape
         means = field.at(b.connectivity.ravel()).reshape(*shape, len(times)).mean(axis=1)
-        for (e, n), h in zip(faces.of(b), means, strict=True):
+        for (e, n), h in zip(faces.of(b, group, mesh), means, strict=True):
             key = (tuple(times), tuple(float(f"{v:.10g}") for v in h))
             amp = known.setdefault(key, f"FIELD{len(known) + 1}")
             rows.setdefault((card, amp), []).append(f"{e}, {label}{n}, 1.")
@@ -2537,7 +2632,7 @@ def _face_values(f, name, group, mesh: Mesh, faces: FaceLookup, uniform=None):
         raise InputError(f"{f.type} on '{f.selection}': its field for {name} was not mapped")
     out = []
     for b in surface_blocks(group, mesh):
-        hits = faces.of(b)
+        hits = faces.of(b, group, mesh)
         if field is None:
             out += [(e, n, uniform) for e, n in hits]
             continue
@@ -2554,7 +2649,7 @@ def _face_values(f, name, group, mesh: Mesh, faces: FaceLookup, uniform=None):
 
 
 def _element_faces(group, mesh: Mesh, faces: FaceLookup) -> list[tuple[int, int]]:
-    return [hit for b in surface_blocks(group, mesh) for hit in faces.of(b)]
+    return [hit for b in surface_blocks(group, mesh) for hit in faces.of(b, group, mesh)]
 
 
 def _nodal_forces(group, mesh: Mesh, total: list[float]) -> list[str]:

@@ -45,6 +45,10 @@ magnetics on Elmer and FEniCSx.
 
 Natural frequencies and mode shapes, set by `modes` (6 when the step is made). Every
 material needs a density. A free body is allowed: its first six modes are near 0 Hz.
+A pair of equal modes (a round shaft bends the same in two directions) is never split:
+when the last mode asked for has a partner within 0.5 %, the partner comes back too, so
+a round bar asked for 4 modes may return 5. A modal step after a static one is its own
+analysis: the static step's loads don't stiffen it (that is a prestress transfer).
 Runs on CalculiX, Code_Aster, Elmer, FEniCSx and PyNite.
 
 ### Buckling
@@ -59,7 +63,8 @@ applied load; linear buckling overestimates thin shells.
 
 A steady response to a load at each listed frequency. Give `frequencies` as text in Hz
 ("50, 100, 200"), or `start_frequency`, `end_frequency`, `points` and `spacing` (linear
-or log; default 10 to 1000 Hz, 50 points). On solid mechanics it is harmonic response:
+or log; default 10 to 1000 Hz, 50 points). Every solver answers at exactly those
+frequencies. On solid mechanics it is harmonic response:
 amplitude, phase, and the shape at the peak instant. CalculiX solves it over modes;
 Code_Aster, Elmer and FEniCSx solve it directly. On magnetic fields it is time-harmonic
 eddy currents (Elmer, FEniCSx).

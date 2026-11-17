@@ -334,11 +334,36 @@ class CodeAsterAdapter(SolverAdapter):
                 f"Code_Aster wrote no result tables; see {JOB}.mess and the solver log"
             )
         results = read_tables(workdir)
+        _node_ids(results, input_file)  # Code_Aster's numbers to Puzzle's ids, first
         _chained(results, input_file)
         _harmonic(results)
         _whole_part(results, input_file)
         _fastener_fields(results, input_file)  # before the bolts' nodes are dropped
         return drop_helper_nodes(results, input_file)
+
+
+def _node_ids(results, input_file: Path) -> None:
+    """Nodal results by Puzzle's node ids where they aren't 1..N (`comm._node_numbers`):
+    Code_Aster's tables number nodes by their place in the written mesh."""
+    from puzzle.adapters.code_aster.comm import NODE_IDS
+
+    marker = input_file.with_name(f"{JOB}.{NODE_IDS}")
+    if not marker.exists():
+        return
+    import json
+
+    import numpy as np
+
+    ids = np.asarray(json.loads(marker.read_text(encoding="utf-8")), dtype=np.int64)
+    for step in results.steps:
+        for name, f in list(step.fields.items()):
+            if f.location != "node" or not f.ids.size:
+                continue
+            if f.ids.min() < 1 or f.ids.max() > len(ids):
+                raise ValueError(f"Code_Aster's {name} names node {int(f.ids.max())} of a "
+                                 f"mesh of {len(ids)}")  # fmt: skip
+            step.fields[name] = type(f)(f.name, f.location, f.components, ids[f.ids - 1],
+                                        f.values)  # fmt: skip
 
 
 def _chained(results, input_file: Path) -> None:

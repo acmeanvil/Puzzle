@@ -20,6 +20,9 @@ FIELDS = {
     "DISPI": ("displacement_imag", ["x", "y", "z"]),  # steady-state dynamics (ADR 0041)
     "STRESS": ("stress", ["xx", "yy", "zz", "xy", "yz", "zx"]),
     "TOSTRAIN": ("strain", ["xx", "yy", "zz", "xy", "yz", "zx"]),
+    # ME, total less thermal strain: the plastic strain tensor's source (ADR 0090
+    # COMMON-2), dropped once that is made (calculix.read_results)
+    "MESTRAIN": ("mechanical_strain", ["xx", "yy", "zz", "xy", "yz", "zx"]),
     "NDTEMP": ("temperature", [""]),
     "FLUX": ("heat_flux", ["x", "y", "z"]),
     "FORC": ("reaction_force", ["x", "y", "z"]),
@@ -38,13 +41,13 @@ def read_frd(path: Path, solver: str = "calculix") -> Results:
     i = 0
     while i < len(lines):
         line = lines[i]
-        tag = line.split()[0] if line.strip() else ""
+        tag = _tag(line)
         if tag == "1PSTEP":
-            analysis_step, mode = int(line.split()[3]), None
+            analysis_step, mode = _int(line, 48, 60, 3), None
         elif tag == "1PMODE":
-            mode = int(line.split()[1])
+            mode = _int(line, 10, 36, 1)
         elif tag == "100CL":
-            value = float(line.split()[2])
+            value = _value(line)
             i, block = _block(lines, i + 1)
             if block is None:
                 continue
@@ -56,6 +59,30 @@ def read_frd(path: Path, solver: str = "calculix") -> Results:
             continue
         i += 1
     return results
+
+
+# The header lines are fixed width, read by column (ADR 0090 CCX-1): from the 9,900th
+# output increment the `100CL` counter (100 + increment, 5 wide) touches its tag
+# (`100CL10000`), and a negative value touches the counter, so splitting on spaces
+# lost every block from there on, without a word.
+def _tag(line: str) -> str:
+    head = line[:10].strip()
+    return "100CL" if head.startswith("100CL") else head
+
+
+def _value(line: str) -> float:
+    """A `100CL` line's value: the time, the frequency or the load factor, cols 13-24."""
+    try:
+        return float(line[12:24])
+    except ValueError:
+        return float(line.split()[2])
+
+
+def _int(line: str, a: int, b: int, token: int) -> int:
+    try:
+        return int(line[a:b])
+    except ValueError:
+        return int(line.split()[token])
 
 
 def _block(lines: list[str], i: int) -> tuple[int, Field | None]:

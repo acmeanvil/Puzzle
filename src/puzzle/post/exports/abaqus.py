@@ -107,12 +107,16 @@ def write_displacement(job):
 
 
 def _mesh_deck(job):
-    from puzzle.adapters.calculix.inp import _beam_sections, _chunks, _row
+    from puzzle.adapters.calculix.inp import _beam_sections, _chunks, _row, check_set_names
     from puzzle.adapters.common import InputError
     from puzzle.model.schema import Material
 
     study, comp = component(job)
     mesh = job.mesh
+    try:  # sets named alike would be one set (ADR 0090 CCX-7)
+        check_set_names(comp, mesh)
+    except InputError as exc:
+        raise PuzzleError(str(exc), code="invalid") from None
     planar = None
     if mesh.planar:
         planar = "axisymmetric" if mesh.axisymmetric else comp.planar_model

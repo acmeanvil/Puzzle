@@ -28,7 +28,9 @@ linear eigenvalue solve: one result step per mode, its value the load factor.
 4. **Harmonic** step: `{"type": "frequency_domain", "physics": ["solid_mechanics"],
    "settings": {"start_frequency": 10.0, "end_frequency": 1000.0, "points": 50,
    "spacing": "linear", "method": "direct"}}` (Hz; `spacing` linear or log), or a list:
-   `"frequencies": "50, 100, 200"` (text, Hz).
+   `"frequencies": "50, 100, 200"` (text, Hz). Every solver solves exactly those
+   frequencies (a range is `points` frequencies from start to end); CalculiX writes one
+   steady-state step per frequency, so a shoot-out lines up step by step.
 5. **Damping**: `rayleigh_alpha` (mass part, 1/s) and `rayleigh_beta` (stiffness part,
    s) in the step settings, C = αM + βK. All dynamic steps of one study must use the
    same pair. `damping_ratio` (0.05 = 5 %, every mode) works with the modal method only.

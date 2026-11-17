@@ -178,6 +178,11 @@ $$w = \frac{2 P}{3 D k_n (B/2 - e)}$$
 on CalculiX (gaps in an NLGEOM step) and Code_Aster (`DIS_CHOC`). ADR 0037 records the
 contact length −0.6 % and +0.1 %, the settlement +0.7 % and −0.05 %; CalculiX's
 difference is NLGEOM's large-rotation terms. Elmer and FEniCSx refuse the support.
+`test_footing_lifts_off_with_the_model_centre_below` adds a held block 1 m below, which
+puts the model's centre under the foundation face: the same answers on both solvers
+(measured contact 74.52 and 75.08 mm, toe 0.26853 and 0.26654 mm, 2026-11-17), where the
+support's normal, turned away from the model's centre, had pointed into the footing and
+the solve failed.
 
 ## Weak springs
 
@@ -214,6 +219,18 @@ the ends) to 0.5 % in `test_pretension_force_then_locked`, `test_pretension_adju
 and loads: Puzzle puts a preload step in front), on CalculiX and Code_Aster. ADR 0037
 records, two steps: CalculiX 9998.97 then 12004.2 N, Code_Aster 9999.07 then 12002.5 N;
 the adjustment +0.38 % on both. Elmer and FEniCSx refuse pretension.
+
+`test_a_load_before_a_modal_step_leaves_its_modes`: the bolt without its pretension,
+pushed or pulled by 10 kN in a static step, then a modal step. The modal step is its
+own analysis, so its modes must equal the unloaded ones to 1e-5; measured (2026-11-17)
+3404.0, 3404.6, 16041.2, 17135.5 and 17138.8 Hz on CalculiX and 3404.0, 3404.5,
+16039.4, 17135.0, 17138.3 Hz on Code_Aster at 0 and ±10 kN alike (four asked, the last
+pair kept whole). On CalculiX the elastic support's SPRINGA springs, 1e-3 of the model
+long and built in the deformed state, had added F/L across: the bending pair fell to
+0 Hz under the push and rose under a pull. Physical stress stiffening of the bolt at its
+5 kN share would be about +0.6 % ($\sqrt{1 + T L^2/(\pi^2 E I)}$), and Puzzle doesn't
+apply it unless a prestress is asked for. Code_Aster had failed the same modal step:
+the fourth mode's partner fell outside the four asked for (Sturm check).
 
 ## Beam fasteners
 

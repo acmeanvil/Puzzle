@@ -103,3 +103,40 @@ def test_a_slow_pull_in_time_yields_as_a_static_one(solver, tmp_path):
     assert equivalent == pytest.approx(EP, rel=1e-3)
     assert reach == pytest.approx(1e-3, rel=1e-3)
     assert last["stress"].values[:, 0] == pytest.approx(STRESS, rel=1e-3)
+
+
+@over("calculix", "code_aster")
+def test_a_heated_bar_yields_on_its_mechanical_strain(solver, tmp_path):
+    """ADR 0090 COMMON-2: CalculiX gives PEEQ only, and Puzzle made the tensor from the
+    total strain, thermal part and all. The bar heated 100 K (alpha 1.2e-5, so 1.2e-3
+    of free expansion) and pulled 1 % yields on the rest: ep = (eps - alpha dT - sy/E)
+    / (1 + H/E) = 7.5338e-3 in x, -ep/2 across, where the total strain gave 1.2e-3 more
+    on every diagonal."""
+    from puzzle.model.schema import Component, Feature, Material, Quantity
+
+    alpha, dt = 1.2e-5, 100.0
+    p = plastic_bar(solver, increments=10)
+    steel = next(o for o in p.objects.values() if isinstance(o, Material))
+    steel.properties["thermal_expansion"] = Quantity(value=alpha, unit="1/K")
+    comp = next(o for o in p.objects.values() if isinstance(o, Component))
+    comp.physics[0].features.append(
+        Feature(
+            type="body_temperature",
+            selection="Bar/Solid",
+            values={"T": Quantity(value=20 + dt, unit="degC")},
+        )
+    )
+    study = next(s for s in p.objects.values() if s.name == "Pull")
+    results = run_study(p, study.id, tmp_path, tmp_path / "run", timeout_s=900).results
+    ep = (0.01 - alpha * dt - SY / E) / (1 + H / E)
+    last = results.steps[-1].fields
+    got = last["plastic_strain"].values
+    print(f"{solver} heated bar: ep_xx {np.mean(got[:, 0]):.6g}, ep_yy {np.mean(got[:, 1]):.6g} "
+          f"(closed form {ep:.6g}, {-ep / 2:.6g})")  # fmt: skip
+    tol = 2e-4 if solver == "calculix" else 1e-6  # .frd: 6 digits of a difference
+    assert last["plastic_strain_equivalent"].values[:, 0] == pytest.approx(ep, rel=tol)
+    assert got[:, 0] == pytest.approx(ep, rel=tol)
+    assert got[:, 1] == pytest.approx(-ep / 2, rel=tol) and got[:, 2] == pytest.approx(
+        -ep / 2, rel=tol
+    )
+    assert np.abs(got[:, 3:]).max() < 1e-8

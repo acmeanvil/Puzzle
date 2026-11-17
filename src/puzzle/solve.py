@@ -487,6 +487,9 @@ def _study_run(
             step.kind = kinds[step.index - 1]
         if step.index == preload_at:  # shown as "Preload" (StepResult.label)
             step.kind = preload.KIND
+    from puzzle.adapters.common import whole_pairs
+
+    whole_pairs(results, study)  # the modes asked for, a pair never split (ADR 0090)
     if combined:  # the preload step, when there is one, goes in front of them
         combine.label(results, combined, first=2 if preload_at == 1 else 1)
     from puzzle import spectra
