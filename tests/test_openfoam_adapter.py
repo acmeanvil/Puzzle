@@ -262,3 +262,13 @@ def test_results_map_back_to_elements(tmp_path):
     )[:, 0]
     assert np.allclose(velocity.at(ids)[:, 0], x)
     assert np.allclose(pressure.at(ids)[:, 0], 2.0 * x * RHO)  # back to Pa
+
+
+def test_heat_in_the_flow_needs_the_inlet_temperature(tmp_path):
+    """ADR 0090 OF-3: OpenFOAM took 293.15 K for an inlet with no temperature, where
+    Code_Saturne failed inside its run; both refuse it before writing."""
+    flux = Feature(type="heat_flux", selection="Duct/Walls",
+                   values={"q": Quantity(value=100, unit="W/m^2")})  # fmt: skip
+    with pytest.raises(InputError, match="has none: add a temperature") as info:
+        _duct(tmp_path, heat=[flux])
+    assert info.value.code == "invalid_input"

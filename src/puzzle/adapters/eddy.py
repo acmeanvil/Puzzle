@@ -251,6 +251,27 @@ def globals_(
 ELEMENTS = "puzzle-elements.npz"  # each volume element's id, body, centre and volume
 
 
+SIMPLICES = {3: ("tet4", "tet10"), 2: ("tri3", "tri6")}
+
+
+def check_shapes(mesh, solver: str) -> None:
+    """Refuse a magnetic study on elements other than tetrahedra (triangles in 2D)
+    (ADR 0090 EDDY-1): the element tables here take a block's first four (three)
+    nodes as a simplex, so a hexahedron's volume came out 0 and a quadrilateral's area
+    half, and losses, energies and currents with them, without a word."""
+    from puzzle.adapters.common import InputError
+
+    dim = 2 if mesh.planar else 3
+    blocks = mesh.region_blocks() if mesh.planar else [b for b in mesh.blocks if b.dim == 3]
+    other = sorted({b.element for b in blocks} - set(SIMPLICES[dim]))
+    if other:
+        shape = "triangles" if dim == 2 else "tetrahedra"
+        raise InputError(
+            f"{solver} solves magnetic fields on {shape} only so far, and this mesh has "
+            f"{', '.join(other)} elements: set the mesh recipe's element shape to "
+            "tetrahedra", code="unsupported", details={"elements": other})  # fmt: skip
+
+
 def element_table(mesh, bodies: list[str], path: Path) -> None:
     """Each volume element's Puzzle id, body (index into `bodies`, the first holding
     it), corner-average centre and volume, in the mesh's block order."""
@@ -259,6 +280,7 @@ def element_table(mesh, bodies: list[str], path: Path) -> None:
         for b in mesh.groups[name].blocks(mesh):
             for eid in b.ids:
                 body_of.setdefault(int(eid), index)
+    check_shapes(mesh, "Puzzle's eddy-current tables")
     blocks = [b for b in mesh.blocks if b.dim == 3]
     ids = np.concatenate([b.ids for b in blocks]).astype(np.int64)
     corners = np.concatenate([b.connectivity[:, :4] for b in blocks])
@@ -329,6 +351,7 @@ def axisymmetric_table(mesh, bodies: list[str], path: Path, planar: bool = False
         for b in mesh.groups[name].blocks(mesh):
             for eid in b.ids:
                 body_of.setdefault(int(eid), index)
+    check_shapes(mesh, "Puzzle's eddy-current tables")
     blocks = mesh.region_blocks()
     ids = np.concatenate([b.ids for b in blocks]).astype(np.int64)
     corners = np.concatenate([b.connectivity[:, :3] for b in blocks]).astype(np.int64)

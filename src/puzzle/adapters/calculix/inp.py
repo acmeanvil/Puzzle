@@ -28,8 +28,11 @@ from puzzle.adapters.calculix import spring_beams
 from puzzle.adapters.calculix.spring_beams import SpringBeams
 from puzzle.adapters.common import (
     BODY_LOADS,
+    CLOSED,
+    DRIVEN,
     HEAT_SOURCES,
     HOLDING,
+    LOCKED,
     PRETENSION,
     STRUCTURAL,
     THERMAL,
@@ -40,6 +43,7 @@ from puzzle.adapters.common import (
     body_forces,
     body_load,
     check_contacts,
+    check_pretension_steps,
     consistent_faces,
     fastener_values,
     feature_vector,
@@ -50,6 +54,7 @@ from puzzle.adapters.common import (
     nodal_traction,
     plane_thickness,
     pressure_forces,
+    pretension_states,
     rayleigh,
     remote_load,
     remote_values,
@@ -198,6 +203,10 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
     # body temperature varying in time gives each step its own (ADR 0044).
     temperatures = {i.step: i.field for i in inputs if i.field.name == "temperature"}
     thermal_load = temperatures.get(None, next(iter(temperatures.values()), None))
+    if thermal_load is not None:
+        from puzzle.adapters.common import check_thermal_helpers
+
+        check_thermal_helpers(comp, "CalculiX")
     check_contacts(comp, CONTACTS, "CalculiX", THREADS)
     touching = [c for c in comp.contacts
                 if c.type in PAIRS and c.thread is None]  # fmt: skip
@@ -344,10 +353,17 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
         out += ["*INITIAL CONDITIONS, TYPE=TEMPERATURE", f"N_ALL, {initial_temperature(heat)}"]
     yields = plastic(project, comp)
     prestress = _prestress_steps(project, study, inputs)
-    applied = _pretension_steps(comp, solve_steps)
+    check_pretension_steps(comp, solve_steps, "CalculiX")
+    # Each pretension's state in each step (common.pretension_states): the replay of a
+    # prestress source drives them, and the study's own steps then hold them locked.
+    replay_states = _pretension_states(comp, prestress)
+    states = _pretension_states(comp, solve_steps, replayed=bool(prestress))
     for number, step in enumerate(prestress, start=1):
         # Large-deformation static step: its stress stiffens the steps after it.
-        lines = _step(number, step, comp, mesh, faces, physics_types, thermal_load, yields, project)
+        held = replay_states["features"][number - 1], replay_states["fasteners"][number - 1]
+        lines = _step(number, step, comp, mesh, faces, physics_types, thermal_load, yields,
+                      project, pretension=(pretension, held[0]),
+                      fastener_pretension=(tight, held[1]))  # fmt: skip
         first = lines[0] if "NLGEOM" in lines[0] else lines[0] + ", NLGEOM"
         out += [STEP_TAG.format(0), first, *lines[1:]]
     preloads = _preload_steps(solve_steps)
@@ -365,8 +381,8 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
             yields,
             project,
             index=index,
-            pretension=(pretension, applied),
-            fastener_pretension=(tight, _first_loaded(solve_steps)),
+            pretension=(pretension, states["features"][index - 1]),
+            fastener_pretension=(tight, states["fasteners"][index - 1]),
         )
         perturbs = prestress or index in preloads.values()  # of the stressed state
         if perturbs and "PERTURBATION" not in lines[0]:
@@ -379,7 +395,9 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
                 physics=["solid_mechanics"],
                 settings={"modes": step.settings.get("modes", 20)},
             )
-            first = _step(number, modes, comp, mesh, faces, physics_types, None, False, project)
+            first = _step(number, modes, comp, mesh, faces, physics_types, None, False, project,
+                          pretension=(pretension, states["features"][index - 1]),
+                          fastener_pretension=(tight, states["fasteners"][index - 1]))  # fmt: skip
             first = [ln for ln in first if not ln.startswith(("*NODE FILE", "*EL FILE", "U"))]
             out += [STEP_TAG.format(0), first[0], "*FREQUENCY, STORAGE=YES", *first[2:]]
         if step.type == "frequency_domain" and "frequencies" in step.settings:
@@ -395,6 +413,8 @@ def write_inp(project: Project, study: Study, mesh: Mesh, inputs=()) -> str:
                 out += with_settings(_step(
                     number, one, comp, mesh, faces, physics_types,
                     temperatures.get(index, thermal_load), yields, project, index=index,
+                    pretension=(pretension, states["features"][index - 1]),
+                    fastener_pretension=(tight, states["fasteners"][index - 1]),
                 ), study, step, index)  # fmt: skip
             continue
         out += [STEP_TAG.format(index), *with_settings(lines, study, step, index)]
@@ -421,7 +441,20 @@ SOLVERS = (
     ("Iterative, Cholesky preconditioner", "ITERATIVE CHOLESKY"),
     ("Iterative, diagonal scaling", "ITERATIVE SCALING"),
 )
-PROCEDURES = ("*STATIC", "*FREQUENCY", "*BUCKLE", "*DYNAMIC", "*HEAT TRANSFER")
+# Every procedure card a written step may hold (ADR 0090 CCX-5: settings and cards
+# placed after the last three were dropped).
+PROCEDURES = (
+    "*STATIC",
+    "*FREQUENCY",
+    "*BUCKLE",
+    "*DYNAMIC",
+    "*HEAT TRANSFER",
+    "*STEADY STATE DYNAMICS",
+    "*MODAL DYNAMIC",
+    "*COUPLED TEMPERATURE-DISPLACEMENT",
+)
+# Procedures over eigenvectors, where CalculiX has no iterative solver.
+EIGEN = ("*FREQUENCY", "*BUCKLE", "*STEADY STATE DYNAMICS", "*MODAL DYNAMIC")
 # *CONTROLS, PARAMETERS=TIME INCREMENTATION: I_0, I_R, I_P, I_C (iterations allowed), ...
 INCREMENTATION = [4, 8, 9, 16, 10, 4, 0, 5, 0, 0]
 # Its second line: D_f (cut-back factor), D_C, D_B, D_A, D_S, D_H, D_D (growth), W_G.
@@ -444,6 +477,12 @@ def with_settings(lines: list[str], study: Study, step: SolveStep, index: int) -
     if solver == "default" and given.get("linear_solver") == "iterative":
         solver = "ITERATIVE CHOLESKY"
     at = next((i for i, line in enumerate(out) if line.startswith(PROCEDURES)), None)
+    if at is not None and solver.startswith("ITERATIVE") and out[at].startswith(EIGEN):
+        # CalculiX warns and uses its default solver instead (measured, ADR 0090 CCX-5)
+        raise InputError(f"CalculiX solves {out[at].split(',')[0][1:].lower()} steps with a "
+                         "direct solver only: its iterative ones aren't available there; "
+                         "leave the linear solver unset (direct) for this step",
+                         code="unsupported")  # fmt: skip
     if at is not None and solver != "default":
         out[at] += f", SOLVER={solver}"
     cards: list[str] = []
@@ -475,6 +514,9 @@ def with_settings(lines: list[str], study: Study, step: SolveStep, index: int) -
             f"{line}, FREQUENCY={n}" if line.startswith(("*NODE FILE", "*EL FILE")) else line
             for line in out
         ]
+    if (cards or solver != "default") and at is None:  # placed or refused, never dropped
+        raise InputError(f"CalculiX step {index} ({step.type}) has no procedure card for its "
+                         "settings or pass-through cards", code="unsupported")  # fmt: skip
     if cards and at is not None:
         end = next((i for i in range(at + 1, len(out)) if out[i].startswith("*")), len(out))
         out[end:end] = cards
@@ -713,6 +755,16 @@ def _materials(
         )
         if directed is not None and group.dim == 3:  # its directions (ADR 0049)
             out += _orientation(project, assignment, material, f"OR{i}")
+        elif directed is not None and (
+            assignment.axes is not None
+            or tuple(directed.axis1) != (1.0, 0.0, 0.0)
+            or tuple(directed.axis2) != (0.0, 1.0, 0.0)
+        ):  # ADR 0090 CCX-6: the constants went on in global axes, without a word
+            kind = "2D regions" if region else "shells" if shell else "beams"
+            raise InputError(
+                f"material '{material.name}': CalculiX writes material directions on solid "
+                f"bodies only so far, not on {kind} ('{assignment.selection}'); give its "
+                "constants in the global x, y, z axes", code="unsupported")  # fmt: skip
         elif assignment.axes is not None:
             raise InputError(
                 f"material '{material.name}' has no directions for its axes to set "
@@ -856,10 +908,12 @@ def _step(
     project: Project | None = None,
     index: int | None = None,
     pretension=({}, {}),
-    fastener_pretension=((), None),
+    fastener_pretension=((), CLOSED),
 ) -> list[str]:
     """One *STEP; `index` is the study's solve step number, for features applying in some
-    steps only, and `pretension` (nodes, step applied) locks a bolt after its step."""
+    steps only; `pretension` (reference nodes, each section's state in this step) and
+    `fastener_pretension` (reference nodes and forces, their state) say whether each is
+    closed, driven or locked here (common.pretension_states)."""
     solved = set(step.physics) or physics_types
     # Plasticity is nonlinear like contact: the load goes in by increments, each kept.
     lifting = any(f.type == "compression_only_support" for ph in comp.physics for f in ph.features)
@@ -919,8 +973,8 @@ def _step(
                 f"{setting('time_step'):.10g}, {setting('end_time'):.10g}, "
                 f"{setting('time_step') / 1e4:.6g}, {setting('time_step'):.10g}",
             ]
-            if step.type == "transient" and nlgeom
-            else [
+            if step.type == "transient" and (nlgeom or yields)  # ADR 0090 CCX-13: yielding
+            else [  # needs cut-backs too (a fixed increment diverged past yield)
                 f"*DYNAMIC, DIRECT, ALPHA={float(settings.get('hht_alpha', 0.0)):.6g}",
                 f"{setting('time_step'):.10g}, {setting('end_time'):.10g}",
             ]
@@ -981,6 +1035,12 @@ def _step(
         if mesh.planar:  # a 2D model's results at its own nodes (ADR 0048)
             outputs = [f"{x}, OUTPUT=2D" if x.startswith("*") else x for x in outputs]
     elif solved == {"solid_mechanics", "heat_transfer"} and "thermal_expansion" in comp.couplings:
+        stepped = [k for k in STEPPING if k in settings]
+        if stepped:  # ADR 0090 CCX-5: placed or refused, never dropped
+            raise InputError(
+                f"CalculiX's coupled temperature-displacement step goes in one increment "
+                f"here; load stepping ({', '.join(stepped)}) isn't written for it yet",
+                code="unsupported")  # fmt: skip
         procedure = (
             ["*COUPLED TEMPERATURE-DISPLACEMENT, STEADY STATE"]
             if step.type == "stationary"
@@ -1045,24 +1105,28 @@ def _step(
         # ADR 0050: bolts to ground end at a node held in all six dofs, in every step.
         extra.setdefault("*BOUNDARY", []).append("N_BOLT_GROUND, 1, 6, 0.")
     locked: list[str] = []
-    if "solid_mechanics" in solved and step.type != "modal":
+    if "solid_mechanics" in solved:  # every step type (common.pretension_states)
         for f in [f for ph in comp.physics for f in ph.features if f.type in PRETENSION]:
-            node, first = nodes[id(f)], applied.get(id(f))
-            if index is None or index == first:  # applied: a force, or a length change
+            node, state = nodes[id(f)], applied.get(id(f), CLOSED)
+            if state == DRIVEN:  # a force, or a length change
                 if f.type == "bolt_pretension":
                     force = -f.values["F"].to_si()  # tension pulls the sides together
                     extra.setdefault("*CLOAD", []).append(f"{node}, 1, {force:.10g}")
                 else:
                     d = -f.values["d"].to_si()  # an adjustment shortens the bolt
                     extra.setdefault("*BOUNDARY", []).append(f"{node}, 1, 1, {d:.10g}")
-            elif first is not None and index > first:  # held at the length it reached
+            elif state == LOCKED:  # held at the length it reached
                 locked.append(f"{node}, 1, 1")
-        tight, first = fastener_pretension  # fasteners' pretension (ADR 0027)
+            else:  # closed: no opening, the bolt whole
+                extra.setdefault("*BOUNDARY", []).append(f"{node}, 1, 1, 0.")
+        tight, state = fastener_pretension  # fasteners' pretension (ADR 0027)
         for node, force in tight:
-            if index is None or index == first:
+            if state == DRIVEN:
                 extra.setdefault("*CLOAD", []).append(f"{node}, 1, {-force:.10g}")
-            elif first is not None and index > first:
+            elif state == LOCKED:
                 locked.append(f"{node}, 1, 1")
+            else:
+                extra.setdefault("*BOUNDARY", []).append(f"{node}, 1, 1, 0.")
     features = [f for f in features if f.type not in PRETENSION]
     out += _features(features, mesh, faces, op, _amplitude_names(comp), rigid, extra)
     if op:  # a card not written again would keep the step before's loads: clear it
@@ -1235,25 +1299,16 @@ def _pretension_nodes(comp: Component, mesh: Mesh) -> dict:
     return {id(f): first + i for i, f in enumerate(features)}
 
 
-def _first_loaded(steps) -> int | None:
-    """The first static or transient structural solve step (1, 2, ...): where a
-    fastener's pretension goes in, to be locked after."""
-    for i, s in enumerate(steps, start=1):
-        if s.solves("solid_mechanics") and s.type not in ("modal", "buckling"):
-            return i
-    return None
-
-
-def _pretension_steps(comp: Component, steps) -> dict:
-    """The solve step (1, 2, ...) each pretension is applied in: the first static or
-    transient structural step it is active in. It is locked in the steps after."""
-    out = {}
-    for f in [f for ph in comp.physics for f in ph.features if f.type in PRETENSION]:
-        for i, s in enumerate(steps, start=1):
-            if s.solves("solid_mechanics") and s.type not in ("modal", "buckling") and f.active(i):
-                out[id(f)] = i
-                break
-    return out
+def _pretension_states(comp: Component, steps, replayed: bool = False) -> dict:
+    """Each step's pretension states: "features", per step a dict id(feature) -> state,
+    and "fasteners", the fasteners' state per step (they tighten in the first static
+    step), from common.pretension_states."""
+    features = [f for ph in comp.physics for f in ph.features if f.type in PRETENSION]
+    per = {id(f): pretension_states(steps, f.active, replayed) for f in features}
+    return {
+        "features": [{k: v[i] for k, v in per.items()} for i in range(len(steps))],
+        "fasteners": pretension_states(steps, replayed=replayed),
+    }
 
 
 def _pretension_cuts(comp: Component, mesh: Mesh) -> dict:

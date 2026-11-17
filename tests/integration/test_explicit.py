@@ -706,3 +706,88 @@ def test_a_native_run_from_the_release_gives_the_wave(tmp_path, monkeypatch):
     behind = stress.values[x > L - c * last.value + 0.02, 0]
     print(f"native: sigma_xx behind {behind.mean() / 1e6:.5g} MPa")
     assert behind.mean() == pytest.approx(-RHO * c, rel=0.01)
+
+
+def _lumped(run) -> tuple[np.ndarray, np.ndarray]:
+    """Each node's share of the mass (hex8: an eighth of each element's) and its id:
+    the mass-weighted mean velocity is the centre of mass's."""
+    blocks = [b for b in run.mesh.blocks if b.dim == 3]
+    ids = run.mesh.node_ids
+    share = np.zeros(len(ids))
+    index = {int(n): i for i, n in enumerate(ids)}
+    for b in blocks:
+        for row in b.connectivity:
+            for n in row[:8]:
+                share[index[int(n)]] += 1.0
+    return ids, share / share.sum()
+
+
+@over("opencourant")
+def test_free_bars_move_as_their_loads_and_amplitudes_say(tmp_path, solver):
+    """A free bar (ADR 0090 OC-3: gravity, acceleration and amplitudes on loads had no
+    benchmark): gravity along z, an acceleration along y (inertia: the body moves at -a),
+    a force along x on its end and a pressure on its start (pushing into it, so +x), each
+    ramped over T. By momentum, the centre of mass moves at vz = -g t² / 2T,
+    vy = -a t² / 2T, vx = (F + p A) t² / (2 T m) within the ramp, each
+    exact whatever the bar rings with. Central differences keep velocities half a time
+    step behind (0.5 % at the first frame, 0.1 % by the last), so the frames from 0.4 T
+    on are checked."""
+    from puzzle.model.schema import Amplitude
+
+    g, a, force, pressure = 9.81, 4.0, 50.0, 3e5
+    ramp = 1e-3
+    features = [
+        Feature(type="gravity", selection="S/Body", values={"gz": q(-g, "m/s^2")}),
+        Feature(type="acceleration", selection="S/Body", values={"ay": q(a, "m/s^2")}),
+        Feature(type="force", selection="S/End", values={"x": q(force, "N")}),
+        Feature(type="pressure", selection="S/Start", values={"p": q(pressure, "Pa")}),
+    ]
+    p, study = _bar(solver, features, {"end_time": ramp, "frames": 5})
+    amp = p.add(Amplitude(name="ramp", points=[(0.0, 0.0), (ramp, 1.0)]))
+    for f in p.objects[study.component].physics[0].features:
+        f.amplitude = amp.id
+    run = _run(tmp_path, p, study)
+    ids, weight = _lumped(run)
+    mass = RHO * L * W * W
+    checked = 0
+    for s in run.results.steps[2:]:
+        t = s.value
+        v = weight @ s.fields["velocity"].at(ids)  # the centre of mass's velocity
+        push = force + pressure * W * W
+        expected = np.array([push, -a * mass, -g * mass]) * t**2 / (2 * ramp * mass)
+        print(f"t {t:.4g} s: v {v} ({expected})")
+        assert v == pytest.approx(expected, rel=3e-3)
+        checked += 1
+    assert checked >= 3
+
+
+@over("opencourant")
+def test_a_ramped_end_displacement_follows_its_amplitude(tmp_path, solver):
+    """A prescribed displacement following an amplitude (ADR 0090 OC-3): the end of a
+    bar held at its start is moved u_max · f(t), f ramping 0 to 1 over 25 wave transits;
+    the end's displacement is that at each frame, and, the pull being slow, the bar's
+    stress at the end is the static E u / L."""
+    from puzzle.model.schema import Amplitude
+
+    c = math.sqrt(E / RHO)
+    ramp, u_max = 25 * L / c, 0.1e-3
+    features = [
+        Feature(type="fixed", selection="S/Start"),
+        Feature(type="displacement", selection="S/End", values={"x": q(u_max, "m")}),
+    ]
+    end = 1.5 * ramp
+    p, study = _bar(solver, features, {"end_time": end, "frames": 6})
+    amp = p.add(Amplitude(name="ramp", points=[(0.0, 0.0), (ramp, 1.0), (end, 1.0)]))
+    p.objects[study.component].physics[0].features[1].amplitude = amp.id
+    run = _run(tmp_path, p, study)
+    tip = run.mesh.groups["S/End"].node_ids
+    for s in run.results.steps[1:]:
+        got = float(np.mean(s.fields["displacement"].at(tip)[:, 0]))
+        print(f"t {s.value:.4g} s: end at {got:.6g} m ({u_max * amp.at(s.value):.6g})")
+        assert got == pytest.approx(u_max * amp.at(s.value), rel=1e-3, abs=1e-9)
+    last = run.results.steps[-1].fields
+    x = run.mesh.node_coords(last["stress"].ids)[:, 0]
+    middle = last["stress"].values[(x > 0.2 * L) & (x < 0.8 * L), 0]
+    print(f"sigma_xx in the middle {middle.mean() / 1e6:.5g} MPa (E u / L "
+          f"{E * u_max / L / 1e6:.5g})")  # fmt: skip
+    assert middle.mean() == pytest.approx(E * u_max / L, rel=0.03)

@@ -224,11 +224,25 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             raise InputError(f"no selection '{g}' in the mesh")
     as_planar(mesh, comp)
     check_selection_kinds(features, mesh, "FEniCSx", SELECTION_KINDS)
+    if physics == "magnetic_fields":  # ADR 0090 EDDY-1: simplices only
+        from puzzle.adapters.eddy import check_shapes
+
+        check_shapes(mesh, "FEniCSx")
     if "quad8" in mesh.element_counts():  # dolfinx reads 9-node quadrilaterals only
         raise InputError("FEniCSx doesn't read 8-node quadrilaterals: mesh this 2D model "
                          "with triangles, or first order", code="unsupported")  # fmt: skip
     if mesh.planar:
         _check_2d(comp, physics, step, features, thermal_load)
+    elif physics == "solid_mechanics":
+        other = sorted({f.type for f in features} - SOLID_3D - {"symmetry", "antisymmetry"})
+        if other:
+            raise InputError(f"FEniCSx doesn't write {', '.join(other)} for 3D solids yet",
+                             code="unsupported")  # fmt: skip
+    if physics == "magnetic_fields" and step.type == "transient":
+        scheme = time_scheme(step)[0]
+        if scheme not in MAGNETIC_SCHEMES:
+            raise InputError(f"FEniCSx steps magnetic transients by backward Euler or BDF2, "
+                             f"not {scheme}", code="unsupported")  # fmt: skip
 
     mixed = _mixed_up(comp, mesh, physics, step, features, thermal_load)
     case = {
@@ -344,6 +358,13 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     return target
 
 
+# What study.solve_solid writes for a 3D solid (ADR 0090 FENICS-4: refused here, before a
+# run, never dropped in study.py; tests/test_fenicsx_adapter.py keeps the two in step).
+SOLID_3D = {"fixed", "displacement", "force", "pressure", "traction", "body_force",
+            "elastic_support", "remote_force", "remote_displacement", "gravity",
+            "acceleration", "rotation"}  # fmt: skip
+# The time schemes study.solve_magnetodynamics steps magnetic transients by.
+MAGNETIC_SCHEMES = ("backward_euler", "bdf2")
 # The loads and supports the mixed (u, p) solve writes (`study.solve_solid_mixed`).
 MIXED_FEATURES = {"fixed", "displacement", "force", "pressure", "traction", "body_force",
                   "gravity", "acceleration", "rotation"}  # fmt: skip
@@ -375,6 +396,9 @@ def _mixed_up(comp, mesh: Mesh, physics: str, step, features, thermal_load) -> b
                        - {"symmetry", "antisymmetry"})  # fmt: skip
         if other:
             why = f"it doesn't take {', '.join(other)} yet"
+        elif any(f.type == "displacement" and (f.axes is not None or f.fields)
+                 for f in features):  # fmt: skip
+            why = "it takes constant Cartesian displacements only"
     if why:
         raise InputError(f"FEniCSx's mixed u-p (Taylor-Hood) elements: {why}",
                          code="unsupported")  # fmt: skip

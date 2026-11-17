@@ -465,6 +465,9 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
                              code="unsupported")  # fmt: skip
         elif f.type == "line_load":
             within = set(_elements(mesh, f.selection))
+            if not within & {m[3] for m in members}:  # ADR 0090: never a load on nothing
+                raise InputError(f"a line load goes on members; '{f.selection}' has none "
+                                 "(a node takes a force)", code="unsupported")  # fmt: skip
             for name, _n1, _n2, eid, *_ in members:
                 if eid in within:
                     case["line_loads"] += [{"member": name, "direction": f"F{a.upper()}",
@@ -473,6 +476,9 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         elif f.type == "gravity":  # self weight: ρ A g per length
             g = np.asarray(body_load(f).uniform or (0.0, 0.0, 0.0), float)
             within = set(_elements(mesh, f.selection)) if f.selection in mesh.groups else None
+            if within is not None and not within & {m[3] for m in members}:
+                raise InputError(f"self weight goes on members; '{f.selection}' has none",
+                                 code="unsupported")  # fmt: skip
             for name, _n1, _n2, eid, mat, sec, _y in members:
                 if within is not None and eid not in within:
                     continue

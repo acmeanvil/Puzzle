@@ -69,3 +69,37 @@ def test_a_bar_drawn_to_large_strain(solver, tmp_path):
     assert got == pytest.approx(stress, rel=5e-3)
     assert equivalent == pytest.approx(ep, rel=1e-2)
     assert force == pytest.approx(stress * area, rel=5e-3)
+
+
+@over("calculix", "code_aster")
+def test_a_slow_pull_in_time_yields_as_a_static_one(solver, tmp_path):
+    """Plasticity in a transient step (ADR 0090 ASTER-2, CCX-13): the bar pulled by the
+    force that gives the closed form's stress (s A), ramped over 1 s, a million times
+    the bar's lowest period, so inertia is nil and the end state is the static one:
+    ep = (s - sy) / H, the tip 1 mm out. Code_Aster's DYNA_NON_LINE ran ELAS here (2.0e9
+    Pa from a pulled displacement); CalculiX's fixed-increment *DYNAMIC, DIRECT diverged
+    past yield, so a yielding transient steps automatically, as under large deflection."""
+    from puzzle.model.schema import Amplitude, Component, Feature, Quantity, SolveStep
+
+    p = plastic_bar(solver)
+    study = next(s for s in p.objects.values() if s.name == "Pull")
+    comp = p.get(study.component, Component)
+    ramp = p.add(Amplitude(name="Ramp", points=[(0.0, 0.0), (1.0, 1.0)]))
+    physics = comp.physics[0]
+    physics.features = [f for f in physics.features if f.selection != "Bar/Tip"] + [
+        Feature(type="force", selection="Bar/Tip",
+                values={"x": Quantity(value=STRESS * 1e-4, unit="N")}, amplitude=ramp.id)
+    ]  # fmt: skip
+    study.steps = [SolveStep(type="transient", settings={"time_step": 0.1, "end_time": 1.0})]
+    run = run_study(p, study.id, tmp_path, tmp_path / "run", timeout_s=900)
+    last = run.results.steps[-1].fields
+    assert run.results.steps[-1].value == pytest.approx(1.0)
+    equivalent = last["plastic_strain_equivalent"].values[:, 0]
+    tip = run.mesh.groups["Bar/Tip"].node_ids
+    reach = float(np.mean(last["displacement"].at(tip)[:, 0]))
+    print(f"{solver} slow pull in time: ep {equivalent.mean():.6g} ({EP:.6g}), tip "
+          f"{reach * 1e3:.6f} mm (1 mm), stress {last['stress'].values[:, 0].mean() / 1e6:.4f}"
+          f" MPa ({STRESS / 1e6:.4f})")  # fmt: skip
+    assert equivalent == pytest.approx(EP, rel=1e-3)
+    assert reach == pytest.approx(1e-3, rel=1e-3)
+    assert last["stress"].values[:, 0] == pytest.approx(STRESS, rel=1e-3)

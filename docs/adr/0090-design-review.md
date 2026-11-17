@@ -339,6 +339,53 @@ With these, all nine critical findings are fixed. Left: the Edit panels of coord
 systems and construction geometry still rewrite untouched values at six digits
 (package 10); a force on a point or edge has no benchmark.
 
+**Package 5 built (2026-11-17):** `tests/test_written_or_refused.py` is the matrix
+(2,597 cells, 42 s, no solver): each cell writes a minimal case for an adapter, physics
+and step kind through `run_study` stopped before the solver, adds one thing and writes
+again. The thing must be refused with a coded error or change the solver's input, and
+the outcome must agree with `Capabilities`. The axes come from the catalog, so a new
+feature is covered without an entry. On the code as it was, 105 cells and three
+agreement checks failed, more than the review had listed:
+
+- Pretension (CCX-9, CCX-10, ASTER-5): one definition for every adapter and step type,
+  `common.pretension_states`: driven in the first static structural step it is active
+  in, closed before (or always, when there is none), locked after. A transient that
+  would have to drive one is refused. The reviewer's bolt: first axial mode 33,556 Hz
+  with and without the pretension feature, where the open cut had given 21,529 Hz.
+- Plasticity in transient steps (ASTER-2, CCX-13) is written: Code_Aster
+  `VMIS_ISOT_TRAC` in `DYNA_NON_LINE`, CalculiX automatic incrementation when a material
+  yields. A force ramped over 1 s gives the static plastic strain within 0.02 % on both.
+- A temperature load with beam bolts, a pretension section, a threaded contact or a
+  line weld is refused (CCX-2, ASTER-1; `common.check_thermal_helpers`). Their thermal
+  expansion is not built: it goes on ADR 0072's list. The refusal covers a modelled
+  bolt's pretension section too, which is broader than measured.
+- Shared settings that can do nothing in a step are refused, never dropped (CCX-5;
+  `base._setting_void`, `Capabilities.shared_settings_steps`); CalculiX's
+  `after_procedure` cards reach its harmonic, modal-transient and coupled steps.
+- Elmer's modal step keeps elastic supports (ELMER-3): a block on a foundation,
+  1796.18 Hz on all four FE solvers, the closed form to six digits.
+- Refused where nothing was written or what was written was wrong: material directions
+  on CalculiX's 2D regions, shells and beams (CCX-6); magnetics on hexahedra and
+  quadrilaterals (EDDY-1); CFD heat with no inlet temperature (OF-3); line loads and
+  self weight on selections with no members (PyNite); a temperature load not covering
+  every node (Elmer, an IndexError before).
+- Claims withdrawn: `mass_flow_inlet` (Code_Saturne), every coupling but CalculiX's,
+  FEniCSx custom PDEs in modal and harmonic steps (FENICS-3), OpenCourant's frictional
+  contact (written, not benchmarked). Claims now benchmarked and kept: pressure
+  amplitudes on the four FE solvers (1.00 % of the largest), OpenCourant's gravity,
+  acceleration, force, pressure and displacement under amplitudes (OC-3).
+  `Capabilities.weak_springs` is new. FEniCSx's `solve_solid` ends in a raise, and
+  `case.SOLID_3D` refuses up front (FENICS-4).
+- A regression of the critical fixes, found here: `check_selection_kinds` refused a
+  force along a sheet's edge; a sheet's edge now counts as a boundary.
+
+The matrix catches dropped input, not wrong input, and has no cells for threaded
+contacts or modelled welds. Not benchmarked: OpenCourant's rigid-wall friction and mass
+scaling. Found and left for package 6: on CalculiX a modal step after a loaded static
+step moves a bolt's bending modes with the load (3,404 Hz with none, 11,012 Hz at
+10 kN), the axial mode unmoved; the elastic support's springs carrying geometric
+stiffness is the suspect, unconfirmed.
+
 ### Enhancements toward the state of the art
 
 From `state-of-the-art.md` (50 gaps, each with who has it, which open solver can deliver

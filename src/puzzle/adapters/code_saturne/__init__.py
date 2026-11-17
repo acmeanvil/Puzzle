@@ -36,13 +36,16 @@ class CodeSaturneAdapter(SolverAdapter):
             "fluid_flow": frozenset({"stationary", "transient"}),
             "heat_transfer": frozenset({"stationary", "transient"}),
         },
-        features=FLUID_FEATURES | THERMAL_FEATURES,
-        couplings=frozenset({"non_isothermal_flow"}),
+        # mass_flow_inlet is refused by the writer (ADR 0090: claimed only once written);
+        # the temperature is a passive scalar, so no non_isothermal_flow coupling is read.
+        features=(FLUID_FEATURES - {"mass_flow_inlet"}) | THERMAL_FEATURES,
         # ADR 0048: 2D models solved one cell thick (`mesh.layer`).
         dimensions=frozenset({"3d", "2d_planar", "2d_axisymmetric"}),
         # ADR 0023: its linear solvers are iterative; the steady algorithm runs its own
         # iteration count (the step's iterations), keeping only the converged state.
         shared_settings=frozenset({"linear_solver:iterative", "output_every"}),
+        # a steady run keeps its converged state only: nothing to thin (ADR 0090)
+        shared_settings_steps={"output_every": frozenset({"transient"})},
     )
 
     def settings_schema(self) -> list:

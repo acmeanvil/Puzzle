@@ -156,6 +156,10 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
             patch["q"] = v["q"]
         else:
             raise InputError("the OpenFOAM adapter does not support convection walls yet")
+    if heat:  # after the conditions' own refusals
+        from puzzle.adapters.common import check_inlet_temperatures
+
+        check_inlet_temperatures(features, thermal, "OpenFOAM")
 
     workdir.mkdir(parents=True, exist_ok=True)
     names = {s: _label(s) for s in patches}

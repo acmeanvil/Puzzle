@@ -117,6 +117,43 @@ def test_ramped_load_follows_its_amplitude(tmp_path, solver):
     _check("load ramped over one period", solver, t, u, ramped(t, T1))
 
 
+@over("calculix", "code_aster", "fenicsx", "elmer")
+def test_ramped_pressure_follows_its_amplitude(tmp_path, solver):
+    """A pressure following an amplitude (ADR 0090: claimed on four solvers with no
+    benchmark): p = P / A on the tip face, ramped over one bending period T1, which is
+    30 of the bar's axial periods, so the tip moves quasi-statically along the bar:
+    u_x = -p L / E · f(t), within 2 % of the largest."""
+    pytest.importorskip("OCP")
+    pressure = Feature(type="pressure", selection="Bar/Tip",
+                       values={"p": Quantity(value=P / A, unit="Pa")})  # fmt: skip
+    physics = Physics(
+        type="solid_mechanics",
+        settings={"temperature_dependent_materials": False},
+        features=[Feature(type="fixed", selection="Bar/Root"), pressure],
+    )
+    project, comp = bar_project(write_bar_step(tmp_path / "bar.step"), [physics], mesh_size_mm=5.0)
+    ramp = project.add(Amplitude(name="Ramp", points=[(0.0, 0.0), (T1, 1.0), (3 * T1, 1.0)]))
+    pressure.amplitude = ramp.id
+    step = SolveStep(type="transient", physics=["solid_mechanics"],
+                     settings={"time_step": T1 / 60, "end_time": 2 * T1})  # fmt: skip
+    study = project.add(Study(name="Dynamics", component=comp.id, solver=solver, steps=[step]))
+    run = run_study(project, study.id, tmp_path, tmp_path / "run", timeout_s=900)
+    tip = run.mesh.groups["Bar/Tip"].node_ids
+    t, u = np.array([(s.value, s.fields["displacement"].at(tip)[:, 0].mean())
+                     for s in run.results.steps if "displacement" in s.fields
+                     and s.value > 0]).T  # fmt: skip
+    from puzzle.materials import library_material
+
+    steel_e = library_material("structural_steel").properties["youngs_modulus"].to_si()
+    ref = -P / A * L / steel_e * np.array([ramp.at(x) for x in t])
+    worst = float(np.max(np.abs(u - ref)) / np.max(np.abs(ref)))
+    print(
+        f"{solver} pressure ramped over T1: {len(t)} steps, end {u[-1]:.5g} m "
+        f"({ref[-1]:.5g}), largest error {100 * worst:.2f} % of the largest"
+    )
+    assert worst < 2e-2
+
+
 def harmonic(f, zeta=None):
     """The tip's complex displacement under a 100 N tip force (-y) at f Hz."""
     r = 2 * np.pi * f / W

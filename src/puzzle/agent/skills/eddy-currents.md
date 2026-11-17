@@ -73,6 +73,11 @@ energy are time averages.
 
 ## Mistakes
 
+- Meshing a magnetic study with hexahedra or quadrilaterals: Elmer and FEniCSx refuse it
+  (`unsupported`, ADR 0090 EDDY-1), since the loss, energy and current tables take each
+  element as a tetrahedron (a triangle in 2D). Keep the recipe's element shape
+  tetrahedra.
+
 - A massive conductor without both terminal faces is refused; a terminal face not on
   any coil's body is refused.
 - A passive conductor whose end faces lie on an insulated plane needs

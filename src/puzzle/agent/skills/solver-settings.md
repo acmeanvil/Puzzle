@@ -29,6 +29,15 @@ solver's default, so no result moves until you set something.
    "iterative" and `tolerance`. Any other shared setting set on a step (even
    `linear_solver` = "direct") is a problem there ("does not translate the setting")
    and the run is refused; leave it unset and use the solver's own settings instead.
+   A setting that can do nothing in its step is refused too, never dropped (ADR 0090):
+   load stepping outside a static structural step; `tolerance` and `max_iterations`
+   in a modal, buckling, harmonic or modal-transient step (no iterations there);
+   `output_every` in a modal, buckling or harmonic step; Code_Aster's iterative
+   `linear_solver` in modal and harmonic steps; Code_Saturne's `output_every` in a
+   steady step; CalculiX's load stepping on a coupled temperature-displacement step.
+   A value equal to the default is never refused. CalculiX places its settings and
+   pass-through cards on every procedure, `*STEADY STATE DYNAMICS`, `*MODAL DYNAMIC`
+   and `*COUPLED TEMPERATURE-DISPLACEMENT` included.
 2. **Each solver's own**, in the study's `solver_settings`, a block per solver:
    `{"calculix": {"solver": "PARDISO"}}`. Examples: CalculiX `solver`; Code_Aster
    `method` (MUMPS, MULT_FRONT, GCPC), `acceleration`; Elmer `linear_method`,

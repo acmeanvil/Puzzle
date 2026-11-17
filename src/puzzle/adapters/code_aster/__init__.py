@@ -98,6 +98,12 @@ class CodeAsterAdapter(SolverAdapter):
                 "fixed_increments",
             }
         ),
+        weak_springs=True,  # ADR 0080: tests/integration/test_weak_springs_solved.py
+        # CALC_MODES and DYNA_VIBRA solve directly here (ADR 0090 CCX-5's sibling): an
+        # iterative linear solver is taken by the static, transient and buckling solves
+        shared_settings_steps={
+            "linear_solver": frozenset({"stationary", "transient", "buckling"})
+        },  # fmt: skip
         shells=True,  # ADR 0027, tests/integration/test_shells.py
         cyclic=frozenset({"solid_mechanics"}),  # ADR 0081 step 3: LIAISON_DDL per pair
         # ADR 0037 (heat flux) and 0041 (structural loads in dynamics), benchmarked
@@ -124,7 +130,7 @@ class CodeAsterAdapter(SolverAdapter):
                 "rough",
             }
         ),
-        couplings=frozenset({"thermal_expansion"}),
+        # No couplings: one physics per job (a temperature load is a transfer's).
         threads=THREADS,  # ADR 0076: tests/integration/test_thread_benchmark.py
         # VMIS_ISOT_TRAC in STAT_NON_LINE, p and EPSP out (tests/integration/test_plasticity.py);
         # ELAS_ORTH and THER_ORTH in MASSIF axes (tests/integration/test_orthotropic.py).

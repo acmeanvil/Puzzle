@@ -205,7 +205,8 @@ def induction(bracket: Project) -> Project:
             ),
             Physics(type="heat_transfer"),
         ],
-        couplings=["joule_heating"],
+        # no joule_heating coupling: its losses reach the heat through a transfer (a
+        # coupling there was read by nothing, and is refused since ADR 0090)
         materials=[MaterialAssignment(material=p.of_type(Material)[0].id, selection="Bracket/All")],
     )
     p.add(comp)

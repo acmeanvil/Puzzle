@@ -438,7 +438,7 @@ Type `symmetry`, on a face selection. Written by Code_Saturne, OpenFOAM.
 <!-- key: feature:mass_flow_inlet, feature:fluid_flow:mass_flow_inlet -->
 ### Mass flow inlet
 
-Type `mass_flow_inlet`, on a face selection. Written by Code_Saturne.
+Type `mass_flow_inlet`, on a face selection. No solver writes it yet.
 
 | Value | Default | Unit |
 | --- | --- | --- |

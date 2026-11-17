@@ -9,8 +9,10 @@ Claimed only where benchmarked (`tests/integration/test_explicit.py`): explicit 
 solid mechanics on tet4, tet10 and hex8 solids, tri3/quad4 shells and two-node beams,
 elastic, tabulated plastic and Johnson–Cook materials with failure and erosion, fixed
 and prescribed displacements, prescribed and initial velocities, forces, pressure
-(first-order faces), gravity and acceleration, rigid walls, bonded, frictionless and
-frictional contacts and self-contact, amplitudes on every load.
+(first-order faces), gravity and acceleration (free bars against momentum), rigid
+walls, bonded and frictionless contacts and self-contact, amplitudes on every load
+(ADR 0090 OC-3: displacement, force, pressure, gravity and acceleration ramps measured).
+Frictional contact between parts is written but refused until benchmarked.
 """
 
 from __future__ import annotations
@@ -44,12 +46,13 @@ class OpenCourantAdapter(SolverAdapter):
         field_features=frozenset(),
         shells=True,
         beams=True,
+        # ADR 0090 OC-3: frictional contact between parts is written (TYPE7 with
+        # Coulomb friction) but has no benchmark yet, so it is refused until one passes.
         contacts=frozenset(
             {
                 "bonded_conformal",
                 "bonded_nonconformal",
                 "frictionless",
-                "frictional",
                 "self_contact",
             }
         ),  # fmt: skip

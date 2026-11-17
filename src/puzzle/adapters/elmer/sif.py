@@ -22,8 +22,8 @@ from puzzle.adapters.common import (
     BODY_LOADS,
     ELECTROSTATIC,
     HEAT_SOURCES,
-    HOLDING,
     MAGNETIC,
+    STIFFNESS,
     STRUCTURAL,
     THERMAL,
     InputError,
@@ -122,8 +122,12 @@ def write_case(
     features = [
         f for ph in comp.physics if ph.type in solved for f in ph.features if f.type in wanted
     ]
-    if step.type == "modal":
-        features = [f for f in features if f.type in HOLDING]
+    if step.type == "modal":  # constraints and springs: the rest is load
+        features = [f for f in features if f.type in STIFFNESS]
+    if solved == {"magnetic_fields"}:  # ADR 0090 EDDY-1: simplices only
+        from puzzle.adapters.eddy import check_shapes
+
+        check_shapes(mesh, "Elmer")
     if solved == {"magnetic_fields"} and mesh.planar:  # ADR 0047 item 7, ADR 0048
         lines, emesh = magnetics.write_axisymmetric(project, comp, step, features, mesh,
                                                     workdir, write_mesh, _time_block)  # fmt: skip
@@ -179,6 +183,14 @@ def write_case(
         if solved != {"solid_mechanics"} or step.type != "stationary":
             raise InputError(
                 "a temperature load applies to static structural steps", code="unsupported"
+            )
+        missing = np.setdiff1d(emesh.node_ids, thermal_load.ids)
+        if missing.size:  # Field.at gives a neighbour's value for an id it lacks
+            raise InputError(
+                f"Elmer takes a temperature load on every node of the model, and this one "
+                f"leaves {missing.size} of {emesh.node_ids.size} out (a body temperature on "
+                "bodies only, or a transfer onto the whole component)",
+                code="unsupported",
             )
         variables.append(("temperature", thermal_load.at(emesh.node_ids)[:, 0]))
     fielded = _field_variables(features + loads, inputs, emesh, variables)  # ADR 0044

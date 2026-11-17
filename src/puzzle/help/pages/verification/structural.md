@@ -191,6 +191,16 @@ within 0.2 % on all four solvers; ADR 0037 records 0.000 % on CalculiX, Elmer an
 FEniCSx and an exact answer on Code_Aster. Springs are lumped as consistent loads are
 (∫N dA), which is why a uniform state comes out exact.
 
+`test_block_bounces_on_its_foundation` takes the load away and runs a modal step on a
+soft foundation (kn = 1e10 N/m³): the first mode bounces on the springs, u =
+cos(β (h − z)) with E β sin(β h) = kn cos(β h), so
+
+$$x \tan x = \frac{k_n h}{E}, \qquad f = \frac{x}{2 \pi h} \sqrt{\frac{E}{\rho}}$$
+
+asserted within 0.1 % on all four solvers; measured 1796.18 Hz on each, the closed
+form to six digits (2026-11-17). Elmer's modal step had dropped the support (ADR 0090
+ELMER-3) and returned the free block's modes.
+
 `test_tilted_support_agrees` turns the block 30° about x and adds a tangential
 stiffness. With no closed form, CalculiX and Code_Aster must give the same displacements
 on the same mesh to 1e-5 of the largest; ADR 0037 records 4e-6 (CalculiX's six printed
@@ -240,6 +250,14 @@ quadratic tetrahedra stalled at 1.21). In logarithmic strain ln 1.3 = σ/E + εp
 true stress, and the force is σ times the current area. The stress within 0.5 %, εp
 within 1 % and the end force within 0.5 %; ADR 0082 records CalculiX +0.19 % and
 Code_Aster −0.08 % against 380.2 MPa.
+
+`test_a_slow_pull_in_time_yields_as_a_static_one` pulls the bar by the force σ A in a
+transient step, ramped over 1 s (a million of its periods, so inertia is nil): the end
+state is the static one, εp, σ and the 1 mm tip within 0.1 % on CalculiX and Code_Aster;
+measured εp 0.0087261 (−0.02 %) on CalculiX and 0.0087280 (−0.002 %) on Code_Aster
+against 0.0087282 (2026-11-17). Before ADR 0090 Code_Aster's DYNA_NON_LINE ran this
+elastic (ASTER-2) and CalculiX's fixed-increment *DYNAMIC, DIRECT diverged past yield
+(CCX-13); a yielding CalculiX transient now steps automatically.
 
 ## 2D models
 

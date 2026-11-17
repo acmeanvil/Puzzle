@@ -33,7 +33,6 @@ class OpenFoamAdapter(SolverAdapter):
             "heat_transfer": frozenset({"stationary"}),
         },
         features=(FLUID_FEATURES - {"mass_flow_inlet"}) | {"temperature", "heat_flux"},
-        couplings=frozenset({"non_isothermal_flow"}),
         # ADR 0048: 2D models solved one cell thick (`mesh.layer`).
         dimensions=frozenset({"3d", "2d_planar", "2d_axisymmetric"}),
         # ADR 0023: iterative solvers only; the tolerance is when SIMPLE has converged.

@@ -498,6 +498,11 @@ def integral(expr) -> float:
 # --- physics -----------------------------------------------------------------------
 
 
+# The loads solve_solid writes; a modal step has none to write (case.SOLID_3D).
+SOLID_LOADS = ("force", "pressure", "traction", "body_force", "remote_force", "gravity",
+               "acceleration", "rotation")  # fmt: skip
+
+
 def solve_solid(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
     V = fem.functionspace(msh, ("Lagrange", degree, (3,)))
     E, nu = piecewise("youngs_modulus"), piecewise("poissons_ratio")
@@ -618,6 +623,10 @@ def solve_solid(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
                 d = x - c
                 b = load["omega"] ** 2 * (d - ufl.dot(d, axis) * axis)
             add_load(rho * ufl.inner(b, v) * dx(tag(f["group"])), f)
+        elif f["type"] in SOLID_LOADS and modal:
+            continue  # loads: none in a modal step
+        else:  # case.py refuses what isn't written here (ADR 0090 FENICS-4); never drop
+            raise SystemExit(f"{f['type']} is not written for 3D solids")
 
     out["coords"] = V.tabulate_dof_coordinates()
     if case.get("threads"):  # coincident nodes on the thread's faces: map by node

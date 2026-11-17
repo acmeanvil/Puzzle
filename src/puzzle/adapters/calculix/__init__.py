@@ -78,6 +78,10 @@ class CalculixAdapter(SolverAdapter):
                 "fixed_increments",
             }
         ),
+        weak_springs=True,  # ADR 0080: tests/integration/test_weak_springs_solved.py
+        # *FREQUENCY, *BUCKLE and the modal superpositions have no iterative solver
+        # (CalculiX warns and uses its default): ADR 0090, CCX-5
+        shared_settings_steps={"linear_solver": frozenset({"stationary", "transient"})},
         shells=True,  # ADR 0027, tests/integration/test_shells.py
         # ADR 0081 step 3: *EQUATION per node pair (test_symmetry.py)
         cyclic=frozenset({"solid_mechanics", "heat_transfer"}),

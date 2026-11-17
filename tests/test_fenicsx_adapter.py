@@ -200,3 +200,21 @@ def test_custom_pde_cases(tmp_path):
     edge = CustomEquation(unknowns=[Unknown(name="E", family="N1curl")], weak_form="0")
     with pytest.raises(InputError, match="Lagrange"):
         case(edge, tmp_path / "c")
+
+
+def test_case_refuses_what_study_py_does_not_write_for_3d_solids():
+    """ADR 0090 FENICS-4: case.py's SOLID_3D is what study.solve_solid has a branch for
+    (it ends in a refusal, never a silent drop), so a run is refused before it starts."""
+    import re
+
+    from puzzle.adapters.fenicsx import case
+
+    source = case.SCRIPT.read_text(encoding="utf-8")  # it imports dolfinx: read, not run
+    body = source[source.index("def solve_solid(") : source.index("def solve_solid_mixed(")]
+    named = set(re.findall(r'f\["type"\] == "(\w+)"', body))
+    for group in re.findall(r'f\["type"\] in \(([^)]*)\)', body):
+        named |= set(re.findall(r'"(\w+)"', group))
+    loads = source[source.index("SOLID_LOADS = (") : source.index("def solve_solid(")]
+    named |= set(re.findall(r'"(\w+)"', loads))
+    assert named >= case.SOLID_3D
+    assert "else:  # case.py refuses" in body

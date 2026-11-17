@@ -32,6 +32,7 @@ from puzzle.adapters.common import (
     body_load,
     check_contacts,
     check_dynamics,
+    check_pretension_steps,
     cylindrical_expressions,
     fastener_selections,
     feature_vector,
@@ -224,6 +225,10 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         _refuse_in_2d(comp)
         _whole_part_marker(mesh, comp, workdir)
     thermal_load = next((i.field for i in inputs if i.field.name == "temperature"), None)
+    if thermal_load is not None:
+        from puzzle.adapters.common import check_thermal_helpers
+
+        check_thermal_helpers(comp, "Code_Aster")
     check_contacts(comp, CONTACTS, "Code_Aster", THREADS)
     steps = study.solve_steps()
     # A preloaded buckling step comes with its static step (run_study joins them).
@@ -275,7 +280,12 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         raise InputError(
             "Code_Aster writes compression-only supports in static steps only", code="unsupported"
         )
-    bolts = [f for f in features if f.type in PRETENSION and step.type != "modal"]
+    # ADR 0090 ASTER-5: a section is closed (left uncut: the bolt whole) in the steps a
+    # job can't drive or lock it in, modal and harmonic (common.pretension_states); a
+    # preload is never a harmonic load. A transient that would drive one is refused.
+    check_pretension_steps(comp, steps, "Code_Aster")
+    closed = step.type in ("modal", "frequency_domain")
+    bolts = [f for f in features if f.type in PRETENSION and not closed]
     features = [
         f
         for f in features
@@ -283,6 +293,12 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         and f.type not in PRETENSION
     ]
     if step.type == "modal":
+        rigid = [f.selection for f in features if f.type == "remote_force_rigid"]
+        if rigid:  # ADR 0090: its rigid face is stiffness, never dropped with the load
+            raise InputError(
+                f"Code_Aster's modal steps leave out a rigid remote force, and with it the "
+                f"rigid face ('{rigid[0]}'); CalculiX keeps the face rigid in modal steps",
+                code="unsupported")  # fmt: skip
         features = [f for f in features if f.type in HOLDING]
     features = globalize(project, features)  # Cartesian local axes as global (ADR 0037)
     preload = []
@@ -330,9 +346,9 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         )
     plastic = (
         [a for a in comp.materials if project.get(a.material, Material).models.plasticity]
-        if not thermal and step.type == "stationary"
+        if not thermal and step.type in ("stationary", "transient")
         else []
-    )
+    )  # ADR 0090 ASTER-2: DYNA_NON_LINE yields too (VMIS_ISOT_TRAC per group)
     # A tie projects the source (slave) face's nodes into the target part's volume.
     tie_groups = [g for c in ties for g in (c.source, c.target.split("/", 1)[0])]
     tie_groups += [g for c in touching for g in (c.source, c.target)]
@@ -381,10 +397,9 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         if f.type in ("fixed", "displacement") and f.selection in mesh.groups
         for n in mesh.groups[f.selection].node_ids
     }
-    base, fastener_ends, tight = _with_bolts(base, fasteners, mesh, names, held)
-    if step.type != "modal":  # a tightened fastener: a pretension on its bolt's mid-plane
-        bolts += [f for f, _cut in tight]
-        cuts += [c for _f, c in tight]
+    base, fastener_ends, tight = _with_bolts(base, fasteners, mesh, names, held, cut=not closed)
+    bolts += [f for f, _cut in tight]  # a tightened fastener: its bolt's mid-plane, cut
+    cuts += [c for _f, c in tight]
     thread_sets = []
     if threaded:  # a helper node per pair and flank, past the mesh's nodes
         base, thread_sets = thread_springs.helpers(project, comp, mesh, base)
@@ -790,7 +805,7 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         else:
             expansion = thermal_load is not None
             traction = ""
-            if not thermal and step.type == "stationary" and m.models.plasticity:
+            if not thermal and step.type in ("stationary", "transient") and m.models.plasticity:
                 out.append(_traction(i, m))
                 traction = f", TRACTION=_F(SIGM=trac{i})"
             damping = None if thermal else rayleigh(study)
@@ -975,6 +990,18 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
         behaviour = (
             "_F(RELATION='ELAS'" + (", DEFORMATION='GREEN_LAGRANGE'" if nlgeom else "") + ")"
         )
+        if plastic:  # ADR 0090 ASTER-2: the plastic groups yield as in STAT_NON_LINE
+            large = ", DEFORMATION='GDEF_LOG'" if nlgeom else ""
+            yielding = ", ".join(f"'{names[a.selection]}'" for a in plastic)
+            rest = [a for a in comp.materials if a not in plastic]
+            behaviour = f"_F(GROUP_MA=({yielding},), RELATION='VMIS_ISOT_TRAC'{large})"
+            if rest:
+                elastic = ", ".join(f"'{names[a.selection]}'" for a in rest)
+                behaviour += (
+                    f", _F(GROUP_MA=({elastic},), RELATION='ELAS'"
+                    + (", DEFORMATION='GREEN_LAGRANGE'" if nlgeom else "")
+                    + ")"
+                )
         if nlgeom and shell_parts:
             raise InputError(
                 "Code_Aster has no shell for large rotations in time: COQUE_3D has no mass "
@@ -1007,15 +1034,29 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             ),
             f"res = DYNA_NON_LINE(MODELE=model, CHAM_MATER=mater, {cara}"
             f"EXCIT=({', '.join(excit)},), COMPORTEMENT=({behaviour},), "
-            + ("NEWTON=_F(REAC_ITER=1), CONVERGENCE=_F(ITER_GLOB_MAXI=50), " if nlgeom else "")
+            + (
+                "NEWTON=_F(REAC_ITER=1), CONVERGENCE=_F(ITER_GLOB_MAXI=50), "
+                if nlgeom or plastic
+                else ""
+            )
             + "INCREMENT=_F(LIST_INST=times), "
             f"SCHEMA_TEMPS=_F({scheme}, FORMULATION='DEPLACEMENT'))",
             "res = CALC_CHAMP(reuse=res, RESULTAT=res, "
             + ("CONTRAINTE=('SIGM_NOEU',), " if solids else "")
-            + "FORCE=('REAC_NODA',))",
+            + "FORCE=('REAC_NODA',)"
+            + (", VARI_INTERNE=('VARI_NOEU',), DEFORMATION=('EPSP_NOEU',)" if plastic else "")
+            + ")",
             _table("res", "DEPL", "displacement"),
             *([_table("res", "SIGM_NOEU", "stress")] if solids else []),
             _table("res", "REAC_NODA", "reaction_force"),
+            *(
+                [
+                    _table("res", "EPSP_NOEU", "plastic_strain"),
+                    _table("res", "VARI_NOEU", "plastic_strain_equivalent"),
+                ]
+                if plastic
+                else []
+            ),
         ]
     elif step.type == "modal":
         n = int(step.settings.get("modes", 10))
@@ -1367,10 +1408,12 @@ def _sorted_mesh(ids: np.ndarray, xyz: np.ndarray, blocks, groups) -> Mesh:
 BOLT_TAG = 800_000  # Gmsh entities for fastener bolts, clear of the mesh's own
 
 
-def _with_bolts(mesh: Mesh, fasteners, original: Mesh, names: dict, held=None):
+def _with_bolts(mesh: Mesh, fasteners, original: Mesh, names: dict, held=None, cut=True):
     """The mesh plus each fastener as a small solid bolt (ADR 0027, as on CalculiX): its
     tets in group F<i>, its end faces in F<i>A and F<i>B, and for distributing ends a
-    master node at each end. -> (mesh, ends info for the reader)."""
+    master node at each end. A pretensioned bolt is cut at its middle where `cut` (a step
+    that drives its preload); else whole, its section closed. -> (mesh, ends info for
+    the reader, the cut bolts)."""
     from puzzle.adapters.common import (
         SectionCut,
         bolt_mesh,
@@ -1392,7 +1435,7 @@ def _with_bolts(mesh: Mesh, fasteners, original: Mesh, names: dict, held=None):
         what = f"fastener '{f.name}'"
         a, b = fastener_ends(f, original, what)
         axis, side = fastener_frame(a.centre, b.centre)
-        tight = f.pretension is not None
+        tight = f.pretension is not None and cut
         if f.formulation == "beam":  # a POU_D_T line between the ends' centres, no mesh
             mid = (a.centre + b.centre) / 2
             nodes, points = [node, node + 1], [a.centre, b.centre]

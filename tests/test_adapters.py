@@ -67,8 +67,12 @@ def test_induction_heating_runs_on_elmer_only(induction):
     assert ElmerAdapter().check(induction, study) == []
     assert CalculixAdapter().check(induction, study) == [  # 2D itself is fine (ADR 0048)
         "calculix does not support magnetic_fields physics",
-        "calculix does not support joule_heating coupling",
     ]
+    # ADR 0090: a coupling nothing reads is refused, not accepted and dropped
+    comp = induction.get(study.component, Component)
+    comp.couplings = ["joule_heating"]
+    assert any("joule_heating coupling" in m and "transfer" in m
+               for m in ElmerAdapter().check(induction, study))  # fmt: skip
 
 
 def test_shootout_checks_every_solver(bracket):

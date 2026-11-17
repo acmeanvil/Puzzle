@@ -278,3 +278,12 @@ def test_thermal_conditions_need_a_fluid_boundary(tmp_path):
         )
     with pytest.raises(InputError, match="turbulence_model"):
         _duct(tmp_path / "t", flow_settings={"turbulence_model": "spalart"})
+
+
+def test_heat_in_the_flow_needs_the_inlet_temperature(tmp_path):
+    """ADR 0090 OF-3: as OpenFOAM, refused before writing (it failed inside the run)."""
+    flux = Feature(type="heat_flux", selection="Duct/Walls",
+                   values={"q": Quantity(value=100, unit="W/m^2")})  # fmt: skip
+    with pytest.raises(InputError, match="has none: add a temperature") as info:
+        _duct(tmp_path, heat=[flux])
+    assert info.value.code == "invalid_input"

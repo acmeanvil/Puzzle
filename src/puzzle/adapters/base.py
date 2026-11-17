@@ -125,6 +125,12 @@ class Capabilities:
     """Shared solver settings (ADR 0023: linear_solver, tolerance, max_iterations,
     output_every) this adapter translates; a study setting another is refused. A
     `linear_solver:direct` or `:iterative` entry allows that one value only."""
+    shared_settings_steps: dict[str, frozenset[str]] = field(default_factory=dict)
+    """Shared settings this adapter writes in some step types only: key -> those types
+    (ADR 0090 CCX-5); a key absent here is written in every step type it applies to."""
+    weak_springs: bool = False
+    """Whether weak springs (ADR 0080) are written: elastic supports on a point group,
+    three nodes per body; where False a study that needs them is refused."""
     shells: bool = False
     """Sheet bodies with a thickness (ADR 0027); refused where False."""
     feature_steps: bool = False
@@ -187,6 +193,35 @@ def _time_field_problems(solver: str, project, study, physics, caps) -> list[str
                            f"time ({field.name}) through a transient step yet (on "
                            f"{f.selection})")  # fmt: skip
     return out
+
+
+def _step_words(step) -> str:
+    modal = step.type == "transient" and step.settings.get("method") == "modal"
+    return "modal transient step" if modal else f"{step.type.replace('_', '-')} step"
+
+
+def _setting_void(key: str, value, step, component) -> str | None:
+    """Why a shared setting (ADR 0023) can do nothing in this step, or None: refused,
+    never dropped (ADR 0090 CCX-5). A value equal to its default changes nothing either
+    way. Load stepping is for static structural steps; iteration controls for steps
+    that iterate (not an eigenproblem or a superposition of modes); output thinning for
+    steps with increments or times."""
+    from puzzle.adapters.settings import SHARED_KEYS, STEPPING
+
+    if value == SHARED_KEYS[key].default:
+        return None
+    modal = step.type == "transient" and step.settings.get("method") == "modal"
+    linear = step.type in ("modal", "buckling", "frequency_domain") or modal
+    if key in STEPPING:
+        solid = step.solves("solid_mechanics") and any(
+            p.type == "solid_mechanics" for p in component.physics)  # fmt: skip
+        if step.type != "stationary" or not solid:
+            return f"load stepping is for static structural steps, not a {_step_words(step)}"
+    if key in ("tolerance", "max_iterations") and linear:
+        return f"a {_step_words(step)} is linear, with no iterations to converge"
+    if key == "output_every" and step.type in ("modal", "buckling", "frequency_domain"):
+        return f"a {_step_words(step)} has no increments to thin"
+    return None
 
 
 def _tapped_beam(project, fastener) -> bool:
@@ -378,6 +413,12 @@ class SolverAdapter(ABC):
         ]
         problems += [
             f"{self.name} does not support {c} coupling"
+            + (
+                ""
+                if caps.couplings
+                else " (it solves one physics per step: solve each in its own study and pass "
+                "the field on with a transfer)"
+            )
             for c in component.couplings
             if c not in caps.couplings | allowed
         ]
@@ -428,9 +469,17 @@ class SolverAdapter(ABC):
                     if key not in s.settings:
                         continue
                     taken = caps.shared_settings
+                    what = f"{key} = {value}" if key == "linear_solver" else key
                     if key not in taken and f"{key}:{value}" not in taken:
-                        what = f"{key} = {value}" if key == "linear_solver" else key
                         problems.append(f"{self.name} does not translate the setting {what}")
+                        continue
+                    void = _setting_void(key, value, s, component)
+                    steps = caps.shared_settings_steps.get(key)
+                    if void is None and steps is not None and s.type not in steps:
+                        void = f"{self.name} doesn't write it in a {_step_words(s)}"
+                    if void is not None:
+                        problems.append(f"the setting {what} has no effect here: {void}; "
+                                        "remove it from the step")  # fmt: skip
         except InputError as exc:
             problems.append(f"{self.name}: {exc}")
         problems += self.check_expert(study.expert_settings.get(self.name, {}))

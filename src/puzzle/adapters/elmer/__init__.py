@@ -100,7 +100,8 @@ class ElmerAdapter(SolverAdapter):
         ),  # ADR 0037: local axes
         contacts=frozenset({"bonded_conformal"}),  # a mortar tie isn't written yet
         experimental=frozenset({"frictionless", "frictional", "rough"}),
-        couplings=frozenset({"thermal_expansion", "joule_heating"}),
+        # No couplings: one physics per job, so heat reaches the structure (or Joule
+        # losses the heat) through a transfer; a coupling would be read by nothing.
         dimensions=frozenset({"3d", "2d_planar", "2d_axisymmetric"}),
         time_schemes=frozenset({"backward_euler", "crank_nicolson", "bdf2", "theta"}),
         # ADR 0044: face values as restart variables the boundaries read with Equals

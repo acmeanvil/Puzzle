@@ -56,7 +56,13 @@ lists the feature types it takes.
    system turns about its z through its origin).
 5. **Some steps only**: `"steps": [2, 3]` applies a feature in those solve steps (1 is
    the first); empty means every step. A pretension acts in its first step and is held
-   at its length after. A study that tightens bolts and loads in its first static step
+   at its length after. Each section's state in every step comes from one rule
+   (`adapters.common.pretension_states`, ADR 0090): closed (the bolt whole, as if it had
+   no pretension) before its first static step or with none, driven in it, locked in
+   every step after, modal, buckling, harmonic and transient alike; a preload is never
+   a harmonic or a dynamic load, so a transient with no static step before it is
+   refused. A modal step with a pretension and no static step gives the bolt's own
+   modes. A study that tightens bolts and loads in its first static step
    gets a preload step in front by itself (`preload_step` "auto", on CalculiX and
    Code_Aster): the bolts tightened with the supports only, results labelled Preload,
    then the loads with each bolt locked. "never" tightens with the loads; "always" on
@@ -80,7 +86,13 @@ Bolts as beams between holes, with sizes and preloads: skill `bolts`.
 - A pretension needs a section face: the geometry's `split` step makes one
   (`<split>/section`). Keep the section clear of other parts. Elmer and FEniCSx refuse
   it. Code_Aster runs a study's static steps as one chained result when it tightens
-  bolts (so the lock carries), and refuses a pretension with other kinds of steps.
+  bolts (so the lock carries), and refuses a pretension with other kinds of steps;
+  its modal and harmonic steps run the section closed (uncut).
+- A temperature load (a transfer's or a body temperature) on a model with beam
+  fasteners, a pretension section, a threaded contact or a line weld is refused on
+  CalculiX and Code_Aster (`unsupported`): their springs and helper nodes take no
+  thermal strain (ADR 0090 CCX-2, ASTER-1). Model the bolt as a solid part, or solve the
+  thermal load without the joint.
 - Don't fight a hard preloaded contact solve by ramping the pretension with the loads:
   the preload step is the fix (a joint tightened and loaded at once chattered and timed
   out on CalculiX). Read the bolt forces at the Preload step against their preload,

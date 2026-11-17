@@ -4,7 +4,7 @@ section: guide
 order: 100
 keys: kind:study, section:studies, tree:step, kind:preset, section:solver presets, kind:transfer, section:transfers, panel:jobs
 summary: Say what to solve and with which solver, tune how it solves, chain studies, run them here or on another machine, and follow their progress.
-adrs: 0011, 0018, 0021, 0023, 0054, 0067
+adrs: 0011, 0018, 0021, 0023, 0054, 0067, 0090
 ---
 
 A study is one analysis of one component: its steps (static, modal, transient...), the
@@ -135,6 +135,20 @@ on smaller machines) and Parallel processes per run set what a solve may use.
 - A stall is not a failure: a big factorisation can be quiet for minutes.
 - Load stepping on Elmer or FEniCSx, or a direct linear solver on Code_Saturne or
   OpenFOAM: refused. Leave the setting unset.
+- A setting that can do nothing in its step is refused, never quietly dropped: load
+  stepping outside a static structural step, a tolerance or iteration limit in a
+  modal, buckling or harmonic step, output thinning where there are no increments.
+- A coupling (thermal expansion, Joule heating, non-isothermal flow) on a solver that
+  solves one physics per step: refused. Solve each physics in its own study and pass
+  the field on with a transfer; only CalculiX solves temperature and displacement
+  together in one step.
+- Heat transfer in a flow with no temperature on its velocity inlet: refused on
+  OpenFOAM and Code_Saturne alike. Give the inlet its temperature.
+
+Every solver's adapter is checked feature by feature, step kind by step kind, against
+its claims: it writes what it is given or refuses it with a code
+(`tests/test_written_or_refused.py`, ADR 0090; `scripts/written_matrix.py` prints the
+matrix).
 - Changing settings on one step of a multi-step study only: set them on every solve
   step unless you mean otherwise.
 - A large sweep grid is the product of its lists: check the count before running.

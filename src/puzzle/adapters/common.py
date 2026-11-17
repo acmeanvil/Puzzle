@@ -44,6 +44,10 @@ STRUCTURAL = (
     | VECTOR_LOADS
 )
 HOLDING = ("fixed", "displacement", "remote_displacement")  # kept as constraints in modal
+# What a modal step keeps besides the constraints: stiffness, never dropped (ADR 0090
+# ELMER-3: Elmer's modal filter took the foundation away, and the free body's modes came
+# back; tests/integration/test_elastic_support.py's bouncing block on all four)
+STIFFNESS = (*HOLDING, "elastic_support")
 THERMAL = {"temperature", "heat_flux", "convection"}
 HEAT_SOURCES = {"heat_generation"}  # ADR 0047: per volume, on bodies (the FE solvers)
 FLUID = {"velocity_inlet", "mass_flow_inlet", "pressure_outlet", "wall", "symmetry"}
@@ -317,6 +321,10 @@ def selection_kind(group: Group, mesh: Mesh) -> str:
     (faces; edges in 2D), or below it (edges, points). Kinds follow the dimension of the
     model, so a 2D model's edge selection is a boundary, as a 3D one's face is."""
     model = 2 if mesh.planar else 3
+    # a sheet's edge is its boundary, as a solid's face is (a load spread along it)
+    if (group.dim == 1 and not mesh.planar and mesh.shell_blocks()
+            and set(group.node_ids.tolist()) <= mesh.shell_nodes()):  # fmt: skip
+        return "boundary"
     return {model: "body", model - 1: "boundary"}.get(
         group.dim, "point" if group.dim == 0 else "edge"
     )
@@ -357,6 +365,50 @@ def check_selection_kinds(
                 code="unsupported",
                 details={"feature": f.type, "selection": f.selection, "kind": kind},
             )
+
+
+def check_thermal_helpers(comp, solver: str) -> None:
+    """Refuse a temperature load on a model whose joints don't expand (ADR 0090 CCX-2,
+    ASTER-1): a beam bolt is springs and helper nodes (CalculiX gave it no expansion, so
+    the plates grew round a bolt that didn't, and the bolt force moved by kilonewtons);
+    a pretension section's reference node, a thread's or a weld's springs have no
+    temperature (Code_Aster's field lookup failed on them inside the run)."""
+    from puzzle.adapters.base import PRETENSION_FEATURES
+
+    what = []
+    if comp.connectors:
+        what.append(f"fastener '{comp.connectors[0].name}'")
+    sections = [f.selection for p in comp.physics if p.type == "solid_mechanics"
+                for f in p.features if f.type in PRETENSION_FEATURES]  # fmt: skip
+    if sections:
+        what.append(f"the pretension section '{sections[0]}'")
+    threads = [c.name for c in comp.contacts if c.thread is not None]
+    if threads:
+        what.append(f"the threaded contact '{threads[0]}'")
+    welds = [w.name for w in getattr(comp, "welds", []) if w.formulation == "line"]
+    if welds:
+        what.append(f"the weld '{welds[0]}'")
+    if what:
+        raise InputError(
+            f"{solver} doesn't expand {' or '.join(what)} under a temperature load yet (its "
+            "springs and helper nodes take no thermal strain), so the joint's forces would "
+            "be wrong: solve the thermal load without them, or model the bolt as a solid "
+            "part", code="unsupported", details={"joints": what})  # fmt: skip
+
+
+def check_inlet_temperatures(flow_features, thermal_features, solver: str) -> None:
+    """Heat in a flow needs the temperature it comes in at (ADR 0090 OF-3): OpenFOAM
+    took 293.15 K without a word and Code_Saturne failed inside the solver, so both
+    refuse a velocity inlet with no temperature on its face."""
+    given = {f.selection for f in thermal_features if f.type == "temperature"}
+    bare = [f.selection for f in flow_features
+            if f.type == "velocity_inlet" and f.selection not in given]  # fmt: skip
+    if bare:
+        raise InputError(
+            f"{solver} solves heat transfer in the flow from the inlet's temperature, and "
+            f"the velocity inlet '{bare[0]}' has none: add a temperature on it in "
+            "heat_transfer", code="invalid_input",
+            details={"selection": bare[0]})  # fmt: skip
 
 
 def surface_blocks(group: Group, mesh: Mesh) -> list[CellBlock]:
@@ -1251,6 +1303,62 @@ class SectionCut:
     centre: np.ndarray
     doubles: dict[int, int]
     moved: set[int]
+
+
+# A pretension section's state in a solve step (ADR 0090 CCX-9, CCX-10, ASTER-5), one
+# definition for every adapter and step type:
+# - closed: no cut at all in effect, the twins tied with no opening (the bolt whole, as
+#   if it had no pretension);
+# - driven: the preload applied (a force across the section, or its shortening);
+# - locked: held at the opening the drive reached.
+# A pretension is driven in the first static structural step it is active in, closed in
+# the steps before (or in every step when there is none), locked in every step after:
+# modal, buckling, harmonic, transient and perturbation steps alike. A preload is never
+# a harmonic or a dynamic step load; a transient that would have to drive one (no static
+# step before it) is refused, so the preload is not dropped.
+CLOSED, DRIVEN, LOCKED = "closed", "driven", "locked"
+
+
+def pretension_drive(steps, active=lambda k: True) -> int | None:
+    """The solve step (1, 2, ...) a pretension is driven in: the first static step
+    solving solid mechanics it is `active` in, or None."""
+    for k, s in enumerate(steps, start=1):
+        if s.type == "stationary" and s.solves("solid_mechanics") and active(k):
+            return k
+    return None
+
+
+def pretension_states(steps, active=lambda k: True, replayed: bool = False) -> list[str]:
+    """Each solve step's state of one pretension section (see above). `replayed`: a
+    prestress replay drove it before the study's own steps (CalculiX's prestress), so
+    every own step holds it locked."""
+    if replayed:
+        return [LOCKED] * len(steps)
+    drive = pretension_drive(steps, active)
+    return [CLOSED if drive is None or k < drive else DRIVEN if k == drive else LOCKED
+            for k in range(1, len(steps) + 1)]  # fmt: skip
+
+
+def check_pretension_steps(comp, steps, solver: str) -> None:
+    """Refuse a pretension that a transient step would have to drive (no static step
+    before it): its preload would be a sudden step load in the dynamics, or dropped."""
+    from puzzle.adapters.base import PRETENSION_FEATURES
+
+    tight = [(f"the pretension on '{f.selection}'", f.active)
+             for p in comp.physics if p.type == "solid_mechanics"
+             for f in p.features if f.type in PRETENSION_FEATURES]  # fmt: skip
+    tight += [(f"fastener '{c.name}''s pretension", lambda k: True)
+              for c in comp.connectors if c.pretension is not None]  # fmt: skip
+    for what, active in tight:
+        states = pretension_states(steps, active)
+        for k, (s, state) in enumerate(zip(steps, states, strict=True), start=1):
+            if s.type in ("transient", "explicit") and state == CLOSED and active(k):
+                raise InputError(
+                    f"{solver}: {what} is tightened in a static step and locked after it; "
+                    f"solve step {k} is a {s.type} step with no static step before it: put "
+                    "a static step that tightens the bolts first",
+                    code="unsupported",
+                )
 
 
 def section_cuts(comp, mesh: Mesh, refs: dict) -> dict:

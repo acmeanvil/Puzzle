@@ -6,7 +6,7 @@ FEniCSx has two roles in Puzzle:
   generated script solves directly. This is Puzzle's equation-based modelling.
 - A second electromagnetics solver beside Elmer, so EM studies can have a solver
   shoot-out (ADR 0011). Magnetic fields use Nedelec (N1curl) edge elements;
-  frequency-domain and wave problems need a complex-valued PETSc build.
+  frequency-domain magnetics is solved in real 2 x 2 blocks (no complex PETSc needed).
 
 Built-in physics live in study.py, which runs inside the FEniCSx environment;
 the adapter writes mesh.msh, case.json and a copy of the script, and reads back
@@ -50,9 +50,11 @@ class FenicsxAdapter(SolverAdapter):
         planned_physics={  # not written yet (ADR 0072): listed, never offered as working
             "electric_currents": frozenset({"stationary"}),
             "electromagnetic_waves": frozenset({"frequency_domain"}),
+            # ADR 0090 FENICS-3: case.py solves custom PDEs steady or transient only
+            "custom_pde": frozenset({"frequency_domain", "modal"}),
         },
         physics={
-            "custom_pde": frozenset({"stationary", "transient", "frequency_domain", "modal"}),
+            "custom_pde": frozenset({"stationary", "transient"}),
             "electrostatics": frozenset({"stationary"}),
             "magnetic_fields": frozenset({"stationary", "transient", "frequency_domain"}),
             "heat_transfer": frozenset({"stationary", "transient"}),
@@ -84,7 +86,7 @@ class FenicsxAdapter(SolverAdapter):
         ),  # ADR 0037: local axes
         contacts=frozenset({"bonded_conformal"}),
         threads=THREADS,  # ADR 0076 step 5: flank springs, static steps
-        couplings=frozenset({"joule_heating", "thermal_expansion"}),
+        # No couplings: one physics per job; transfers carry fields between studies.
         dimensions=frozenset({"3d", "2d_planar", "2d_axisymmetric"}),
         time_schemes=frozenset({"backward_euler", "crank_nicolson", "bdf2", "theta"}),
         # ADR 0044: face values as Lagrange functions of the field's nodal values

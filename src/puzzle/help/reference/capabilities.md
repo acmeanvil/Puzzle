@@ -34,6 +34,8 @@ An adapter claims a capability only once a benchmark for it passes; a study that
 | connectors | beam_fastener:distributing, beam_fastener:rigid, beam_fastener:thread |
 | beams | yes |
 | shared settings | fixed_increments, increments, initial_increment, linear_solver, max_iterations, min_increment, output_every, tolerance |
+| shared settings steps | linear_solver: stationary, transient |
+| weak springs | yes |
 | shells | yes |
 | feature steps | yes |
 | axes features | acceleration:cartesian, displacement:cartesian, displacement:cartesian:partial, displacement:cylindrical, displacement:cylindrical:partial, force:cartesian, gravity:cartesian, rotation:cartesian, rotation:cylindrical |
@@ -57,7 +59,6 @@ Solve steps per job: any.
 | contacts | bonded_conformal, bonded_nonconformal, frictional, frictionless, no_separation, rough |
 | threads | bonded, frictionless, no_separation |
 | welds | line |
-| couplings | thermal_expansion |
 | cyclic | solid_mechanics |
 | dimensions | 2d_axisymmetric, 2d_planar, 3d |
 | time schemes | backward_euler, crank_nicolson, theta |
@@ -66,6 +67,8 @@ Solve steps per job: any.
 | connectors | beam_fastener:distributing, beam_fastener:rigid, beam_fastener:thread |
 | beams | yes |
 | shared settings | fixed_increments, increments, linear_solver, max_iterations, min_increment, output_every, tolerance |
+| shared settings steps | linear_solver: buckling, stationary, transient |
+| weak springs | yes |
 | shells | yes |
 | axes features | acceleration:cartesian, displacement:cartesian, displacement:cartesian:partial, displacement:cylindrical, force:cartesian, gravity:cartesian, rotation:cartesian, rotation:cylindrical |
 | field features | body_force:fx, body_force:fy, body_force:fz, body_temperature:T, convection:T_inf, convection:h, displacement:x, displacement:y, displacement:z, heat_flux:q, heat_generation:q, initial_stress:sxx, initial_stress:sxy, initial_stress:syy, initial_stress:syz, initial_stress:szx, initial_stress:szz, material:thermal_conductivity, material:youngs_modulus, pressure:p, shell:thickness, traction:tx, traction:ty, traction:tz |
@@ -83,11 +86,11 @@ Solve steps per job: 1.
 
 | Capability | Written |
 | --- | --- |
-| features | convection, heat_flux, mass_flow_inlet, pressure_outlet, symmetry, temperature, velocity_inlet, wall |
-| couplings | non_isothermal_flow |
+| features | convection, heat_flux, pressure_outlet, symmetry, temperature, velocity_inlet, wall |
 | dimensions | 2d_axisymmetric, 2d_planar, 3d |
 | time schemes | backward_euler |
 | shared settings | linear_solver:iterative, output_every |
+| shared settings steps | output_every: transient |
 | field features | body_temperature:T |
 
 Solve steps per job: 1.
@@ -107,7 +110,6 @@ Solve steps per job: 1.
 | features | acceleration, antisymmetry, body_force, body_temperature, coil_current, coil_end, coil_start, convection, current_density, displacement, elastic_support, electric_potential, fixed, force, gravity, ground, heat_flux, heat_generation, magnetic_insulation, magnetic_symmetry, pressure, remote_displacement, remote_force, rotation, stranded_coil, surface_charge, symmetry, temperature, traction |
 | planned physics | electric_currents: stationary; electromagnetic_waves: frequency_domain |
 | contacts | bonded_conformal |
-| couplings | joule_heating, thermal_expansion |
 | dimensions | 2d_axisymmetric, 2d_planar, 3d |
 | time schemes | backward_euler, bdf2, crank_nicolson, theta |
 | experimental | frictional, frictionless, rough |
@@ -123,7 +125,7 @@ Solve steps per job: 1.
 
 | Physics | Analyses |
 | --- | --- |
-| Custom pde | frequency_domain, modal, stationary, transient |
+| Custom pde | stationary, transient |
 | Electrostatics | stationary |
 | Heat transfer | stationary, transient |
 | Magnetic fields | frequency_domain, stationary, transient |
@@ -132,11 +134,10 @@ Solve steps per job: 1.
 | Capability | Written |
 | --- | --- |
 | features | acceleration, antisymmetry, body_force, body_temperature, coil_current, coil_end, coil_start, convection, current_density, dirichlet, displacement, elastic_support, electric_potential, fixed, force, gravity, ground, heat_flux, heat_generation, magnetic_insulation, magnetic_symmetry, neumann, pressure, remote_displacement, remote_force, rotation, stranded_coil, surface_charge, symmetry, temperature, traction |
-| planned physics | electric_currents: stationary; electromagnetic_waves: frequency_domain |
+| planned physics | custom_pde: frequency_domain, modal; electric_currents: stationary; electromagnetic_waves: frequency_domain |
 | contacts | bonded_conformal |
 | threads | bonded, frictionless, no_separation |
 | welds | line |
-| couplings | joule_heating, thermal_expansion |
 | dimensions | 2d_axisymmetric, 2d_planar, 3d |
 | time schemes | backward_euler, bdf2, crank_nicolson, theta |
 | amplitude features | force, heat_flux, pressure |
@@ -157,7 +158,7 @@ Solve steps per job: 1.
 | Capability | Written |
 | --- | --- |
 | features | acceleration, displacement, fixed, force, gravity, initial_velocity, pressure, rigid_wall, velocity |
-| contacts | bonded_conformal, bonded_nonconformal, frictional, frictionless, self_contact |
+| contacts | bonded_conformal, bonded_nonconformal, frictionless, self_contact |
 | dimensions | 3d |
 | time schemes | backward_euler |
 | material models | failure, johnson_cook, plasticity |
@@ -178,7 +179,6 @@ Solve steps per job: 1.
 | Capability | Written |
 | --- | --- |
 | features | heat_flux, pressure_outlet, symmetry, temperature, velocity_inlet, wall |
-| couplings | non_isothermal_flow |
 | dimensions | 2d_axisymmetric, 2d_planar, 3d |
 | time schemes | backward_euler |
 | shared settings | linear_solver:iterative, tolerance |

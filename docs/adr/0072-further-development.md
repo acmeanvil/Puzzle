@@ -158,6 +158,14 @@ Other items:
 
 ### 3. Solvers and physics
 
+- Found by ADR 0090's written-or-refused matrix, refused until built: thermal expansion
+  of beam bolts, pretension sections, threaded contacts and line welds under a temperature
+  load (0037, 0076, 0078); couplings (`thermal_expansion`, `joule_heating`,
+  `non_isothermal_flow`) as one study outside CalculiX, and Code_Saturne's mass-flow inlet
+  (0009, 0016); material directions on CalculiX's 2D regions, shells and beams (0049);
+  magnetics on hexahedra and quadrilaterals (0047); custom PDEs in modal and harmonic
+  steps; OpenCourant's frictional contact, rigid-wall friction and mass scaling, written
+  but with no benchmark (0085).
 - Static current conduction (StatCurrentSolve), circuits (CircuitsAndDynamics), waves
   (VectorHelmholtz), rigid motion in magnetodynamics on Elmer (0010); moving parts and
   nonlinear B-H in time-harmonic analysis (0047).

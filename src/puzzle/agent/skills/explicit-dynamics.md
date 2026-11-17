@@ -38,10 +38,11 @@ mean. For vibration, slow transients and steady loads use the implicit solvers i
      a normal `nx`, `ny`, `nz` pointing toward the model; `mu` friction (0: sliding);
    - `fixed`, `displacement`, `force`, `pressure` (first-order meshes), `gravity`,
      `acceleration`, each following an amplitude where given;
-   - contacts between parts: bonded (a nonconformal one is tied), frictionless and
-     frictional (penalty, both ways; parts touching at the start aren't pushed apart);
-     no separation and rough are refused;
-   - self-contact: a frictionless or frictional contact whose `source` and `target`
+   - contacts between parts: bonded (a nonconformal one is tied) and frictionless
+     (penalty, both ways; parts touching at the start aren't pushed apart); frictional
+     contact between parts is written but refused until a benchmark passes (ADR 0090
+     OC-3), and no separation and rough are refused;
+   - self-contact: a frictionless contact whose `source` and `target`
      are the same face selection (a tube folding onto itself, the bodies of one part
      meeting). Puzzle sets its gap below faces that start closer than a tenth of the
      smallest edge (`deck.self_gap`); implicit solvers refuse it (`self_contact`);

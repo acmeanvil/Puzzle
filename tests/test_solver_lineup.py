@@ -114,13 +114,16 @@ def test_cfd_runs_on_code_saturne(bracket):
         [flow, Physics(type="heat_transfer")],
         [SolveStep(type="stationary")],
         "code_saturne",
-        couplings=["non_isothermal_flow"],
     )
     assert CodeSaturneAdapter().check(bracket, study) == []
     assert CodeAsterAdapter().check(bracket, study) == [
         "code_aster does not support fluid_flow physics",
-        "code_aster does not support non_isothermal_flow coupling",
     ]
+    # ADR 0090: the temperature is a passive scalar there; the coupling is refused
+    comp = bracket.get(study.component, Component)
+    comp.couplings = ["non_isothermal_flow"]
+    assert any("non_isothermal_flow coupling" in m
+               for m in CodeSaturneAdapter().check(bracket, study))  # fmt: skip
 
 
 def test_code_saturne_takes_2d_models(bracket):

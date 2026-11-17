@@ -85,7 +85,9 @@ In `models`, each a typed block. Values are SI numbers (Pa, W/(m K)), not quanti
 - `plasticity`: von Mises, isotropic hardening. `{"op": "set", "path":
   "models.plasticity", "value": {"curves": [{"points": [[0, 250e6], [0.05, 320e6]]}]}}`:
   (equivalent plastic strain, true stress in Pa), starting at zero strain (the yield
-  stress), strains increasing. CalculiX and Code_Aster.
+  stress), strains increasing. CalculiX and Code_Aster, in static and transient steps
+  (a yielding CalculiX transient steps automatically; `test_plasticity.py`'s slow pull
+  in time); modal, buckling and harmonic steps use the elastic constants.
 - `orthotropic_elasticity`: `e1`, `e2`, `e3`, `nu12`, `nu13`, `nu23`, `g12`, `g13`,
   `g23`, `axis1`, `axis2`. CalculiX and Code_Aster.
 - `anisotropic_conductivity`: `k1`, `k2`, `k3`, `axis1`, `axis2`. CalculiX and
@@ -95,7 +97,9 @@ In `models`, each a typed block. Values are SI numbers (Pa, W/(m K)), not quanti
 Elmer and FEniCSx refuse these models, but only for a study that solves the model's
 physics: a plastic steel still serves a heat study there. For the material axes, give
 the assignment an `axes` (a coordinate system's id); without it, `axis1` and `axis2`
-are used.
+are used. Directions are written on solid bodies only: CalculiX refuses an orthotropic
+or anisotropic material whose axes aren't the global ones on a 2D region, a shell or a
+beam, and Code_Aster refuses directions outside 3D models (ADR 0090 CCX-6).
 
 ## Units
 

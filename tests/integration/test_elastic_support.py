@@ -101,6 +101,39 @@ def test_block_on_a_foundation(tmp_path, solver):
     assert got == pytest.approx(expected, rel=2e-3)
 
 
+@over("calculix", "code_aster", "elmer", "fenicsx")
+def test_block_bounces_on_its_foundation(tmp_path, solver):
+    """A modal step keeps the elastic support (ADR 0090 ELMER-3: Elmer's modal filter
+    dropped it, and the free block's modes came back). The block on its foundation, no
+    load, held only by the symmetry planes (which leave no rigid mode but the bounce):
+    its first mode bounces on the springs, u = cos(β (h - z)) with E β sin(β h) =
+    kn cos(β h), so x tan x = kn h / E, f = x c / (2 π h), c = √(E/ρ) (a soft foundation:
+    nearly the rigid block's √(kn / ρ h) / 2 π)."""
+    pytest.importorskip("OCP")
+    from scipy.optimize import brentq
+
+    kn = 1e10
+    p, study = _block(solver)
+    comp = next(o for o in p.objects.values() if o.kind == "component")
+    features = comp.physics[0].features
+    features[0] = features[0].model_copy(
+        update={"values": {"kn": Quantity(value=kn, unit="N/m^3")}}
+    )
+    comp.physics[0].features = [f for f in features if f.type != "pressure"]
+    study.steps = [SolveStep(type="modal", settings={"modes": 3})]
+    root = tmp_path / "block"
+    save_project(p, root)
+    run = run_study(p, study.id, root, tmp_path / "w")
+    steel = next(o for o in p.objects.values() if o.kind == "material")
+    E, rho = (steel.properties[k].to_si() for k in ("youngs_modulus", "density"))
+    x = brentq(lambda x: x * np.tan(x) - kn * H / E, 1e-9, 1.5)
+    expected = x * np.sqrt(E / rho) / (2 * np.pi * H)
+    got = run.results.steps[0].value
+    print(f"{solver} block bouncing on its foundation: {got:.6g} Hz, theory {expected:.6g} "
+          f"Hz, {100 * (got / expected - 1):+.3f} %")  # fmt: skip
+    assert got == pytest.approx(expected, rel=1e-3)
+
+
 def test_tilted_support_agrees(tmp_path):
     """Normal and tangential springs on a face along no axis: the block turned 30° about
     x, on kn and kt, held at x = 0, pressed on top. No closed form, so CalculiX and

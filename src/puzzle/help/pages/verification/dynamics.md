@@ -69,6 +69,11 @@ and under a harmonic load at ω, with r_n = ω / ω_n,
 
 $$U = \sum_n \frac{s_n}{1 - r_n^2 + 2 i \zeta_n r_n}$$
 
+- `test_ramped_pressure_follows_its_amplitude`: a pressure P / A on the tip face ramped
+  over T1, thirty of the bar's axial periods, so the tip moves quasi-statically,
+  u_x = −p L / E f(t): within 2 % of the largest on all four solvers; measured 1.00 %
+  on each (the axial ringing), 2026-11-17 (ADR 0090: pressure amplitudes had no
+  benchmark);
 - `test_sudden_load` (200 steps a period, so the second mode is followed),
   `test_rayleigh_damping` and `test_ramped_load_follows_its_amplitude` (ramped over one
   period by an amplitude) assert the whole history within 4 % of the largest deflection
@@ -222,6 +227,19 @@ and nothing ahead of it.
 - `test_two_processes_give_the_one_process_wave` and
   `test_a_native_run_from_the_release_gives_the_wave`: the same wave on two MPI
   processes and from the native release, within 1 %.
+
+**Loads and amplitudes on free bars** (ADR 0090 OC-3).
+
+- `test_free_bars_move_as_their_loads_and_amplitudes_say`: a free bar under gravity,
+  an acceleration (inertia: it moves at −a), a force on its end and a pressure on its
+  start, each ramped over T = 1 ms: by momentum the centre of mass (lumped masses)
+  moves at v = (F + p A, −a m, −g m) t² / (2 T m), within 0.3 % from 0.4 T on (central
+  differences keep velocities half a step behind); measured within 0.25 %;
+- `test_a_ramped_end_displacement_follows_its_amplitude`: a bar's end moved 0.1 mm
+  times a ramp over 25 wave transits: the end's displacement at each frame within 0.1 %
+  and the stress in the middle E u / L within 3 % (measured 99.83 MPa of 100).
+
+Frictional contact between parts is written but refused until benchmarked.
 
 **Contact and impact.**
 

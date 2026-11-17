@@ -166,6 +166,10 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path) -> Pat
             zone["heat_flux"] = v["q"]
         else:
             zone["exchange"] = [v["h"], v["T_inf"]]
+    if heat:  # after the conditions' own refusals
+        from puzzle.adapters.common import check_inlet_temperatures
+
+        check_inlet_temperatures(features, thermal, "Code_Saturne")
     transient = None
     if steps[0].type == "transient":
         # A true time march: a constant step, results every `output_every` steps (and

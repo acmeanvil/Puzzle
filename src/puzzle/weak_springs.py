@@ -119,12 +119,14 @@ def applied(project, study, mesh, caps=None, record=None):
     parts = [p for p in bodies(project, comp, mode) if p in mesh.groups]
     if not parts:
         return mesh, project, []
-    if caps is not None and "elastic_support" not in caps.features:
+    if caps is not None and not getattr(caps, "weak_springs", False):
         from puzzle.adapters.common import InputError
 
-        raise InputError(f"{', '.join(parts)} need weak springs, which this solver doesn't "
-                         "write; set the study's weak springs to never and hold them",
-                         code="unsupported")  # fmt: skip
+        why = "are asked for" if mode == "always" else "are needed (held only by sliding contact)"
+        raise InputError(f"weak springs on {', '.join(parts)} {why}, and this solver doesn't "
+                         "write weak springs (springs to ground at three nodes; CalculiX and "
+                         "Code_Aster do): set the study's weak springs to never and hold "
+                         "the bodies", code="unsupported")  # fmt: skip
     factor = float(getattr(study, "weak_spring_factor", 1e-6))
     from puzzle.contact_check import HOLDING
 

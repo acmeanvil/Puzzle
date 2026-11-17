@@ -28,7 +28,10 @@ real support.
 
 Set the study's `weak_springs` to "never" to solve without them (the solve may then fail
 or drift), or to "always" to hold bodies that nothing touches too. A model held by
-nothing at all is still refused (`unconstrained`).
+nothing at all is still refused (`unconstrained`). Weak springs are written by
+CalculiX and Code_Aster (`Capabilities.weak_springs`); on Elmer and FEniCSx a study that
+needs them, or asks for them always, is refused with code `unsupported` ("weak springs
+... this solver doesn't write"): hold the body, or solve on CalculiX or Code_Aster.
 
 ## Units
 
