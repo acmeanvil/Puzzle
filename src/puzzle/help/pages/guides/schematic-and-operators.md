@@ -104,7 +104,9 @@ this project…; trust one only if you know where it came from.
 - **Use wires**: all, for the selected node, or none (Settings > Schematic, or the
   dropdown above the canvas).
 - After-solving operators are worked out when asked and never stored, so they never
-  put a study out of date. Before-solving ones do, as a parameter does.
+  put a study out of date. Before-solving ones do, as a parameter does, but only
+  the studies whose model reads them by name (a history argument, a value wired to
+  one, a sweep, a toggle); a Number nothing reads changes nothing.
 - Values inside are SI; units travel with them and a mismatch is refused.
 
 ## Mistakes to avoid

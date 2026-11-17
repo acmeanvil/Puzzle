@@ -109,6 +109,9 @@ def _run_study(
     iterations, messages), which are also kept in the run folder's `progress.jsonl` and
     with the stored run; setting `cancel` stops the solver (code `stopped`).
     """
+    # Run keys come from the project as given, as status, the tree and MCP take them
+    # (ADR 0090, BE-2): what the steps below change is in that project's hash already.
+    keyed = project
     from puzzle.bolts import resolved
 
     project = resolved(project)  # bolts take their types' values (ADR 0050)
@@ -144,6 +147,7 @@ def _run_study(
             solver=study.solver,
             on_event=on_event,
             cancel=cancel,
+            keyed=keyed,
         )
     adapters = available_adapters()
     if study.solver not in adapters:
@@ -159,7 +163,6 @@ def _run_study(
             trust.require(project, "custom PDE equation")
         except PuzzleError as exc:
             raise StudyError(exc.message, code=exc.code, path=study.name) from None
-    keyed = project  # run keys come from the study as the user set it up
     from puzzle import combine, preload
 
     combined: list[str] = []  # ADR 0079: a static step per combination, where not PyNite
@@ -175,7 +178,7 @@ def _run_study(
     if problems:
         raise StudyError("; ".join(problems), path=study.name, details={"problems": problems})
 
-    run_key = _point[0] if _point else run_hashes(keyed)[study.id][study.solver][0]
+    run_key = _point[0] if _point else run_hashes(keyed, root)[study.id][study.solver][0]
     if store is not None and reuse:
         hit = store.find_run(run_key)
         if hit is not None:
@@ -194,7 +197,7 @@ def _run_study(
         if t.source not in upstream:
             source = project.get(t.source, Study)
             upstream[t.source] = run_study(
-                project,
+                keyed,  # as given: it is transformed, and keyed, as its own study
                 t.source,
                 root,
                 workdir / "upstream" / _slug(source.name),
@@ -503,12 +506,12 @@ def _run_sweep(project, study, root, workdir, **kwargs):
 
 def _sweep_points(
     project, study, root, workdir, *, store, reuse, on_output, timeout_s, solver,
-    on_event=None, cancel=None,
+    on_event=None, cancel=None, keyed=None,
 ):  # fmt: skip
-    """`_run_sweep`'s points."""
+    """`_run_sweep`'s points, keyed from `keyed` (the project as given to `run_study`)."""
     from puzzle import sweep
 
-    keys = run_hashes(project)[study.id][solver]
+    keys = run_hashes(keyed if keyed is not None else project, root)[study.id][solver]
     runs: list[tuple[dict[str, str], StudyRun]] = []
     shared_mesh = None
     for i, (point, key) in enumerate(zip(study.sweep_points(), keys, strict=True), start=1):

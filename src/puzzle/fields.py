@@ -108,10 +108,11 @@ def import_file(root: Path, path: Path) -> tuple[str, str]:
                 shutil.copyfile(f, dest)
         target = folder if fmt == "openfoam" else folder / path.name
         return target.relative_to(root).as_posix(), file_hash(target)
-    target = target_dir / path.name
-    if path.resolve() != target.resolve():
-        shutil.copyfile(path, target)
-    return f"{FIELDS_DIR}/{target.name}", file_hash(target)
+    from puzzle.project.files import copy_in
+
+    # Never over a different file of that name, which another field may read (GUI-20).
+    rel = copy_in(root, path, FIELDS_DIR)
+    return rel, file_hash(Path(root) / rel)
 
 
 def file_hash(path: Path) -> str:

@@ -8,7 +8,6 @@ the solver adapters (which solvers exist). Questions go through `window.choose` 
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -812,7 +811,7 @@ def axes_from_face(window, geometry, selection):
         for part in comp.parts:
             if part.geometry != geometry.id:
                 continue
-            meshes = [window.meshes.get(str(comp.id))]
+            meshes = [window.current_mesh(comp)]
             preview = window.previews.get(str(comp.id))
             meshes.append(preview[1].mesh if preview else None)
             for mesh in [m for m in meshes if m is not None]:
@@ -1171,8 +1170,16 @@ def add_part(window, geometry: str, component: str):
 
 
 def import_step_file(window, path: Path | None = None):
-    """Copy a STEP file into the project and add it as a geometry with a body selection."""
+    """Add a CAD or faceted file as a geometry with a body selection (GUI-20).
+
+    The file is read where it is first, so one that can't be read changes nothing and
+    says why. Then it is copied into the project by `files.copy_in`: never over a
+    different file of the same name, which another geometry may read (the copy takes
+    a free name, `bracket-2.step`), and not at all when the same file is there. The copy
+    sits outside the Create command because commands change objects, not files; it
+    never replaces anything, so undoing the Create leaves only an unused file."""
     from puzzle.geometry import import_step
+    from puzzle.project.files import copy_in
 
     if path is None:
         from PySide6.QtWidgets import QFileDialog
@@ -1186,18 +1193,25 @@ def import_step_file(window, path: Path | None = None):
         if not chosen:
             return None
         path = Path(chosen)
-    root = window.session.root
-    target = root / path.name
-    if path.resolve() != target.resolve():
-        shutil.copyfile(path, target)
-    model = import_step(target)
+    path = Path(path)
+    try:
+        model = import_step(path)
+    except Exception as exc:  # OCC and Gmsh raise plain exceptions on a bad file
+        window.statusBar().showMessage(f"Couldn't read {path.name}: {exc}", 10000)
+        window.log.appendPlainText(f"import: couldn't read {path}: {exc}")
+        return None
+    name = copy_in(window.session.root, path)
     bodies = [e.name for e in model.of_dim(3)]
     selections = [{"name": "Body", "entity": "body", "members": bodies}]
     # An assembly's parts keep their names: one body selection per STEP part.
     for part, members in model.labelled_bodies().items():
         if part != "Body" and len(model.labelled_bodies()) > 1:
             selections.append({"name": part, "entity": "body", "members": members})
-    data = {"name": path.stem, "source": target.name, "selections": selections}
+    if name != path.name:
+        window.statusBar().showMessage(
+            f"The project has a different {path.name} already: imported as {name}", 10000
+        )
+    data = {"name": path.stem, "source": name, "selections": selections}
     return window.submit(Create(kind="geometry", data=data))
 
 

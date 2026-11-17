@@ -363,7 +363,7 @@ class _Runner:
         self.limit = limit(opt)
 
     def at(self, values: dict[str, float], origin: str = "") -> Point:
-        from puzzle.project.graph import run_hashes
+        from puzzle.project.graph import run_hashes, variant
 
         p = _point(self.project, self.opt, len(self.points) + 1, values)
         p.origin = origin
@@ -373,7 +373,12 @@ class _Runner:
             raise _Stop("reached its most points")
         try:
             at = applied(self.project, self.opt, values)
-            keys = {s: k[0] for s, k in run_hashes(at)[self.study.id].items()}
+            # The point's values in the key, as a sweep point's are: a study keys only
+            # the parameters its model names (ADR 0090, OP-3), and two points must never
+            # share a run because the text didn't name the one that differs.
+            point = sorted((str(k), float(v)) for k, v in values.items())
+            keys = {s: variant(k[0], "optimisation point", point)
+                    for s, k in run_hashes(at, self.root)[self.study.id].items()}  # fmt: skip
         except PuzzleError as exc:  # the point can't be set up: infeasible, go on
             p.reason = f"{exc.code}: {exc.message}"
             return self._keep(p)

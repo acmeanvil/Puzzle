@@ -76,13 +76,15 @@ def refined(project, study, source_run: str, settings):
     return _replace(project, recipe.id, new)
 
 
-def _mmg_key(base: str, source_run: str, a) -> str:
-    """An MMG pass's run key: the study's own, the run its metric came from, and the
-    settings that shape it."""
-    import hashlib
+def _pass_key(base: str, source_run: str, a) -> str:
+    """A later pass's run key: the study's own (`base`), the run its sizes or metric
+    came from, and the settings that shape them (graph.variant): current while the
+    study's key is (ADR-47)."""
+    from puzzle.project.graph import variant
 
-    text = json.dumps([base, source_run, "mmg", a.target, a.field, a.finer, a.stretch])
-    return hashlib.sha256(text.encode()).hexdigest()
+    if a.method == "anisotropic":
+        return variant(base, "mmg", source_run, a.target, a.field, a.finer, a.stretch)
+    return variant(base, "size_field", source_run, a.target, a.field, a.finer, a.coarser)
 
 
 SCALARS = ("temperature", "pressure", "electric_potential")
@@ -158,21 +160,23 @@ def run(project, study, root: Path, workdir: Path, *, store, settings=None, solv
         from puzzle.solve import run_study as solve
     passes: list[Pass] = []
     previous: str | None = None
+    base = run_hashes(project, root)[study.id][study.solver][0]
     ended = f"stopped at the budget of {a.passes} passes"
     for k in range(1, a.passes + 1):
         p = Pass(k)
         passes.append(p)
         meshed = None
         if previous is None:
-            at = project
-            key = run_hashes(at)[study.id][study.solver][0]
+            at, key = project, base
         elif a.method == "anisotropic":  # ADR 0066 phase 4: MMG along the Hessian
-            at = project
-            key = _mmg_key(run_hashes(at)[study.id][study.solver][0], previous, a)
+            at, key = project, _pass_key(base, previous, a)
         else:
-            at = refined(project, study, previous, a)
-            key = run_hashes(at)[study.id][study.solver][0]
+            at, key = refined(project, study, previous, a), _pass_key(base, previous, a)
         record = _stored(store, study, key)
+        if record is None and previous is None:  # earlier passes deleted (keep_passes off)
+            kept = _kept(root, store, study, base)
+            if kept is not None:
+                return kept
         if record is None:
             if read_only:
                 p.reason = "not run yet"
@@ -262,6 +266,27 @@ def _keep_table(root: Path, study, out: Outcome) -> None:
     folder = Path(root) / RESULTS_DIR / "adapt"
     folder.mkdir(parents=True, exist_ok=True)
     (folder / f"{study.id}.json").write_text(json.dumps(out.to_dict(), indent=1), encoding="utf-8")
+
+
+def _kept(root: Path, store, study, base: str) -> Outcome | None:
+    """The kept table's passes, when its last pass's run is stored and is a run of the
+    model as it is: a finished run with `keep_passes` off kept only that one, so pass 1
+    can't be found by its key, and is not solved again (ADR-47)."""
+    from puzzle.project.graph import base_key
+    from puzzle.project.layout import RESULTS_DIR
+
+    path = Path(root) / RESULTS_DIR / "adapt" / f"{study.id}.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    passes = [Pass(**{k: v for k, v in d.items() if k in Pass.__dataclass_fields__})
+              for d in data.get("passes", [])]  # fmt: skip
+    last = next((p for p in reversed(passes) if p.run), None)
+    record = next((r for r in store.runs() if last is not None and r.run_id == last.run), None)
+    if record is None or record.status != "completed" or base_key(record.run_key) != base:
+        return None
+    return Outcome(passes, data.get("ended", ""))
 
 
 def lines(out: Outcome) -> list[str]:

@@ -38,6 +38,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 from deltalake import DeltaTable, WriterProperties, write_deltalake
 
+from puzzle import __version__
 from puzzle.errors import PuzzleError
 from puzzle.mesh.mesh import CellBlock, Group, Mesh
 from puzzle.results.model import Field, Results, StepResult
@@ -68,6 +69,9 @@ SCHEMAS = {
             # null for runs stored before, or a solver that couldn't be named.
             ("solver_version", pa.string()),
             ("image_digest", pa.string()),
+            # The Puzzle that wrote it (ADR 0090): run keys leave versions out, so an
+            # upgrade keeps results current; this says what made them.
+            ("puzzle_version", pa.string()),
         ]
     ),
     "meshes": pa.schema(
@@ -151,6 +155,7 @@ class RunRecord:
     point: str | None = None  # the sweep point as JSON (ADR 0018), labels as people read them
     solver_version: str | None = None  # ADR 0072: the solver that ran, as it names itself
     image_digest: str | None = None  # a container run's image id
+    puzzle_version: str | None = None  # the Puzzle that stored it; None: stored before
 
     def point_labels(self) -> dict[str, str]:
         import json
@@ -225,6 +230,7 @@ class ResultStore:
             "point": json.dumps(point) if point else None,
             "solver_version": solver_version,
             "image_digest": image_digest,
+            "puzzle_version": __version__,
         }
         self._append("runs", pa.Table.from_pylist([record], schema=SCHEMAS["runs"]))
         self.maybe_compact()

@@ -93,4 +93,5 @@ def load_project(root: Path) -> Project:
     from puzzle import trust
 
     project.trusted = trust.is_trusted(root)
+    project.root = Path(root)
     return project

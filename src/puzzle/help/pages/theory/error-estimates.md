@@ -112,8 +112,8 @@ $h_{max} / (4 \cdot \mathrm{finer}^2)$. MMG runs with a gradation of 1.3 and a s
 tolerance of 1e-3 of the diagonal. Gmsh's bodies, faces, curves and points go through
 as MMG's references, so named selections, loads and supports find their faces again.
 
-On a bar heated at one end, MMG reached 0.053 % error in 1647 elements where isotropic
-Gmsh reached 0.14 % in 1710. On a cantilever it brings nothing: displacement has no
+On a bar heated at one end, MMG reached 0.041 % error in 2056 elements where isotropic
+Gmsh reached 0.180 % in 1711. On a cantilever it brings nothing: displacement has no
 layer to stretch along, so structural studies should stay isotropic.
 
 ## Limits

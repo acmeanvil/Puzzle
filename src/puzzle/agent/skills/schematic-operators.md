@@ -10,7 +10,9 @@ There are two sorts:
   date.
 - **Before solving** (number, slider, series, range, expression, table, list, pairs):
   data that reads no results. They drive the model (see "Data that drives the model"
-  below), and changing one puts the studies out of date, as a parameter does. Use them when the user
+  below), and changing one puts out of date the studies whose model reads it (by
+  name: a history argument, a value wired to it, a sweep, a toggle), as a parameter
+  does; one nothing reads stales nothing. Use them when the user
 wants a figure or a check kept in the project, such as "max von Mises on the bracket
 ≤ 200 MPa", or "tip deflection against thickness".
 

@@ -268,3 +268,89 @@ def test_dynamics_studies_start_with_their_settings(app, tmp_path):
         while window.tasks:
             app.processEvents()
         window.close()
+
+
+def test_importing_a_file_never_replaces_one_a_geometry_reads(app, tmp_path):
+    """GUI-20: a different file of the same name is imported under a free name, so the
+    geometry already reading the first keeps its shape; the same file again is used as
+    it is; a file that can't be read says so and changes nothing."""
+    from puzzle.project.files import digest
+
+    window = MainWindow()
+    try:
+        window.new_project(tmp_path / "p", "P")
+        root = tmp_path / "p"
+        (tmp_path / "a").mkdir()
+        (tmp_path / "b").mkdir()
+        first = write_bar_step(tmp_path / "a" / "bar.step")
+        other = write_bar_step(tmp_path / "b" / "bar.step", size=(0.3, 0.02, 0.01))
+        menus.import_step_file(window, first)
+        kept = digest(root / "bar.step")
+        menus.import_step_file(window, other)
+        assert digest(root / "bar.step") == kept  # the first geometry's file untouched
+        sources = sorted(g.source for g in window.session.project.of_type(Geometry))
+        assert sources == ["bar-2.step", "bar.step"]
+        assert digest(root / "bar-2.step") == digest(other)
+        assert "imported as bar-2.step" in window.statusBar().currentMessage()
+
+        menus.import_step_file(window, first)  # the same file: no third copy
+        assert sorted(p.name for p in root.glob("bar*.step")) == ["bar-2.step", "bar.step"]
+
+        broken = tmp_path / "broken.step"
+        broken.write_text("not a STEP file", encoding="utf-8")
+        count = len(window.session.project.of_type(Geometry))
+        assert menus.import_step_file(window, broken) is None  # no exception
+        assert "Couldn't read broken.step" in window.statusBar().currentMessage()
+        assert len(window.session.project.of_type(Geometry)) == count
+        assert not (root / "broken.step").exists()
+    finally:
+        window.close()
+
+
+def test_a_mesh_made_before_an_edit_is_not_shown_after_it(app, tmp_path):
+    """GUI-22: a mesh made with Mesh is kept with what it was made from; once the
+    geometry changes, the Model tab shows the shape as it is, not the old mesh, and the
+    old mesh's face names are gone with it."""
+    import shutil
+
+    from puzzle.commands.model import Create
+    from puzzle.model.schema import MeshRecipe
+
+    root = tmp_path / "p"
+    shutil.copytree(
+        EXAMPLE, root, ignore=shutil.ignore_patterns("results*", ".puzzle", "history.jsonl")
+    )
+    window = MainWindow(root)
+
+    def wait():
+        end = time.time() + 120
+        while window.tasks and time.time() < end:
+            app.processEvents()
+            time.sleep(0.02)
+
+    try:
+        box = {"kind": "box", "name": "Box", "args": {"dx": 0.05, "dy": 0.03, "dz": 0.01}}
+        window.submit(Create(kind="geometry", data={"name": "Block", "history": [box],
+            "selections": [{"name": "Body", "entity": "body", "members": ["Body"]}]}))  # fmt: skip
+        geo = next(g for g in window.session.project.of_type(Geometry) if g.name == "Block")
+        recipe = window.session.project.of_type(MeshRecipe)[0]
+        window.submit(Create(kind="component", data={"name": "BlockC", "mesh": str(recipe.id),
+            "parts": [{"name": "Block", "geometry": str(geo.id)}]}))  # fmt: skip
+        comp = next(c for c in window.session.project.of_type(Component) if c.name == "BlockC")
+        window.start_meshing(comp)
+        wait()
+        assert window.current_mesh(comp) is not None
+        assert float(window.current_mesh(comp).coords[:, 0].max()) == pytest.approx(0.05)
+
+        window.submit(Edit(object=str(geo.id), ops=[
+            EditOp(op="set", path="history.0.args.dx", value=0.1)]))  # fmt: skip
+        comp = window.session.project.objects[comp.id]
+        assert window.current_mesh(comp) is None  # stale: dropped, with its face names
+        window.tree.select(Node("object", str(comp.id)))
+        wait()
+        window.tree.select(Node("object", str(comp.id)))
+        wait()
+        shown = window.viewport.mesh
+        assert shown is not None and float(shown.coords[:, 0].max()) == pytest.approx(0.1)
+    finally:
+        window.close()

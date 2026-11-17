@@ -58,17 +58,19 @@ def worst(states) -> str:
     return next((s for s in ORDER if s in present), "complete")
 
 
-def status(project: Project, runs=(), running=frozenset(), failed=frozenset()) -> dict[str, State]:
+def status(project: Project, runs=(), running=frozenset(), failed=frozenset(),
+           root=None) -> dict[str, State]:  # fmt: skip
     """Object id -> its state. `runs` are the store's records (completed runs only);
     `running` and `failed` are study ids the GUI knows about (a failed run isn't
-    stored)."""
+    stored). Files resolve against `root` (default: where the project was loaded
+    from), as a run's keys do."""
     from puzzle.project.graph import run_hashes
 
     problems: dict[str, list[str]] = {}
     for p in project.problems():
         problems.setdefault(p.object, []).append(p.message)
     used = {a.material for c in project.of_type(Component) for a in c.materials}
-    keys = run_hashes(project)
+    keys = run_hashes(project, root)
     out: dict[str, State] = {}
     for obj in project.objects.values():
         found = problems.get(obj.name)
@@ -140,21 +142,25 @@ def _study(study: Study, keys: dict[str, list[str]], runs, running, failed) -> S
     mine = [r for r in runs if r.study_id == str(study.id)]
     if not mine:
         return State("not_run", "run it to get results")
+    from puzzle.project.graph import base_key
+
     current = set(keys.get(study.solver, []))
-    done = {r.run_key for r in mine if r.status == "completed"}
+    # A convergence level or adaptive pass is a run of the model as it is too (ADR-47).
+    done = {base_key(r.run_key) for r in mine if r.status == "completed"}
     if current and current <= done:
         return State("up_to_date")
     return State("out_of_date", "the model changed since the last run")
 
 
-def run_state(record, project: Project) -> State:
-    """A stored run against the model as it is now."""
-    from puzzle.project.graph import run_hashes
+def run_state(record, project: Project, root=None) -> State:
+    """A stored run against the model as it is now: a convergence level or an adaptive
+    pass is current while the study's own key is (`graph.variant`)."""
+    from puzzle.project.graph import base_key, run_hashes
 
     study = next((s for s in project.of_type(Study) if str(s.id) == record.study_id), None)
     if study is None:
         return State("out_of_date", "its study is gone")
-    keys = {k for ks in run_hashes(project).get(study.id, {}).values() for k in ks}
-    if record.run_key in keys:
+    keys = {k for ks in run_hashes(project, root).get(study.id, {}).values() for k in ks}
+    if base_key(record.run_key) in keys:
         return State("up_to_date")
     return State("out_of_date", "the model changed since this run")

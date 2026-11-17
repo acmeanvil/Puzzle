@@ -161,6 +161,11 @@ Large-deflection strains past 5 % on an elastic material (ADR 0082).
 
 Meshing failed.
 
+<!-- key: problem:missing_file, error:missing_file -->
+### missing_file
+
+A geometry or an imported field reads a file that isn't in the project folder.
+
 <!-- key: problem:missing_input, error:missing_input -->
 ### missing_input
 

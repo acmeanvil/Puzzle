@@ -17,7 +17,12 @@ groups of faces, edges, bodies or points, so name those before you build the mod
    STL, OBJ and 3MF are read.
 2. The file is copied into the project and converted to metres. STL and OBJ files
    carry no unit: they are read as millimetres unless you change the geometry's source
-   unit in Properties.
+   unit in Properties. A different file with the name of one already there comes in
+   under a free name (`bracket-2.step`), so no geometry's file is ever replaced; a
+   file that can't be read says so on the status bar and adds nothing.
+   What a geometry's file holds is part of what its studies depend on: replace the
+   file in the project folder and those studies read "out of date" (their results
+   are kept, and stay readable, until you run them again).
 3. A body selection called Body holds every body. A STEP assembly also gets one body
    selection per named part.
 4. Its faces are named `face-1`, `face-2`, … in file order. Make selections of the ones

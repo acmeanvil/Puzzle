@@ -71,7 +71,7 @@ def with_target(wizard, where: str | None, then, failed=None) -> None:
     selection = where.partition("/")[2] or None
     cid = str(comp.id)
     cache = wizard.__dict__.setdefault("target_meshes", {})
-    mesh = window.meshes.get(cid) or cache.get(cid)
+    mesh = window.current_mesh(comp) or cache.get(cid)
     if mesh is not None:
         then(mesh, selection)
         return

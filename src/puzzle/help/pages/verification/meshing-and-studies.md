@@ -24,7 +24,7 @@ also have unit tests on exactly known fields.
 | Adaptive refinement, Netgen | falling error | CalculiX | below 2.5 % in three passes | 3.94 → 1.71 % |
 | Adaptive refinement, plate with a hole | Heywood K_t 3.03; a uniform mesh as fine | CalculiX | 0.5 % error, K_t 5 % | 0.46 % in 3305 elements, K_t +3.7 %; uniform 0.89 % in 3998 |
 | A stress at a singularity | Williams' corner exponent | none (unit test) | reported diverging | diverging |
-| Anisotropic adaptation, MMG | erfc heat layer | CalculiX | 0.7 K, half the isotropic error | 0.053 % vs 0.14 %, within 0.6 K |
+| Anisotropic adaptation, MMG | erfc heat layer | CalculiX | 0.7 K, a third of the isotropic error | 0.041 % vs 0.180 %, within 0.6 K |
 | Mesh shoot-out | Gmsh against Netgen | CalculiX | 1 % on peak displacement | 0.005 % |
 | Material sweep | tip deflection ∝ 1/E | CalculiX | 1e-5 | passes |
 | Design of experiments | 4FL³/(Ewt³), best t 8 mm | CalculiX | 3 % per point | best 8 mm |
@@ -140,10 +140,10 @@ second-order tets, adapted to a 1.5 % energy-norm error:
 $$T = T_0 + \Delta T \, \mathrm{erfc}\left( \frac{x}{2\sqrt{\alpha t}} \right)$$
 
 adapted to 0.2 % from 10 mm tets, once by MMG's anisotropic passes and once
-isotropically by Gmsh. MMG's final error must be under half the isotropic one in at
-most 1.1 times the elements, and the temperature within 0.7 K of the erfc solution
-everywhere. Measured: both from 403 elements at 1.75 %; MMG 1647 elements at 0.053 %,
-Gmsh 1710 at 0.14 %, each in two passes, within 0.6 K (the rest is backward Euler's
+isotropically by Gmsh. MMG's final error must be under a third of the isotropic one in at
+most 1.25 times the elements, and the temperature within 0.7 K of the erfc solution
+everywhere. Measured: both from 403 elements at 1.75 %; MMG 2056 elements at 0.041 %,
+Gmsh 1711 at 0.180 %, each in two passes, within 0.6 K (the rest is backward Euler's
 time error).
 
 `tests/test_mmg.py` checks only the shape of MMG's elements in a tanh layer (thin

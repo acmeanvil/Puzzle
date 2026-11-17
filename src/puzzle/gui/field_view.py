@@ -158,7 +158,7 @@ def show_field(window, f, node) -> bool:
 def _shown_mesh(window, comp, highlight):
     """The component's mesh (or preview) drawn with `highlight`; None while a preview
     is still being made."""
-    mesh = window.meshes.get(str(comp.id)) or window._preview(comp)
+    mesh = window.current_mesh(comp) or window._preview(comp)
     if mesh is None:
         return None
     cid = str(comp.id)

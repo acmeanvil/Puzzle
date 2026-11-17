@@ -16,6 +16,7 @@ CODES = {
     "condition: it would move as a rigid body",
     "suppressed": "every part of the study's component is suppressed: nothing to solve",
     "missing_reference": "an object refers to another that no longer exists",
+    "missing_file": "a geometry or an imported field reads a file that isn't in the project folder",
     "unknown_selection": "a component uses a selection its geometry doesn't have",
     "foreign_local_geometry": "a component uses geometry local to another component",
     "missing_physics": "a study solves a physics its component doesn't have",

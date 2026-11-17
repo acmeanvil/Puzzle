@@ -72,6 +72,8 @@ def scaled(project, study, factor: float):
     """The project with the study's mesh recipe refined: sizes divided by `factor`."""
     from puzzle.model.schema import Component, MeshRecipe
 
+    if factor == 1:  # the study's own mesh: its own run (ADR-47)
+        return project
     comp = project.get(study.component, Component)
     recipe = project.get(comp.mesh, MeshRecipe)
     data = recipe.model_dump(mode="json")
@@ -164,7 +166,7 @@ def run(project, study, root: Path, workdir: Path, *, store, count: int = 3,
         ratio: float = 1.5, outputs=(), solve=None, on_output=None, cancel=None,
         read_only: bool = False) -> list[Level]:  # fmt: skip
     """Solve (or, `read_only`, read back) each level not run yet; read its quantities."""
-    from puzzle.project.graph import run_hashes
+    from puzzle.project.graph import run_hashes, variant
 
     if solve is None and not read_only:
         from puzzle.solve import run_study as solve
@@ -173,9 +175,12 @@ def run(project, study, root: Path, workdir: Path, *, store, count: int = 3,
     if ratio <= 1:
         raise PuzzleError("the refinement ratio is above 1 (each mesh finer)", code="invalid")
     planned = levels(project, study, count, ratio)
+    base = run_hashes(project, root)[study.id][study.solver][0]
     for lv in planned:
         at = scaled(project, study, lv.factor)
-        key = run_hashes(at)[study.id][study.solver][0]
+        # The study's key and the level's scale (graph.variant): a level is a run of the
+        # model as it is, current while the study's key is (ADR-47).
+        key = base if lv.factor == 1 else variant(base, "mesh scaled", lv.factor)
         record = _stored(store, study, key) if store is not None else None
         if record is None:
             if read_only:

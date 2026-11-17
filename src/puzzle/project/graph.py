@@ -4,33 +4,136 @@ Every object's hash covers its own settings plus the hashes of everything it
 reads from. A study also reads from the transfers into it, so a change upstream
 of a transfer reaches the target study. Results record the hash they were
 computed from; a study is stale when its current hash differs.
+
+There is one definition of what a run depends on (ADR 0090 package 1): the project as
+stored, through `keyed`, hashed here. `run_study` takes its keys from the project it is
+given, before it puts parameter values in, drops suppressed geometry and toggled
+features and resolves derived axes; so the tree, the outline, MCP and the schematic,
+which hash the stored project, agree with it. What those steps read is in the stored
+hash already: a bound quantity's parameter by name and that parameter's value (a
+study's `parameters`), the `suppressed` flag, a feature's `when`, a system's geometry.
+The files objects read are hashed by content (`puzzle.project.files`).
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import re
 from graphlib import CycleError, TopologicalSorter
+from pathlib import Path
 from uuid import UUID
 
 from puzzle.model.schema import Component, ParameterSet, Project, ProjectObject, Study, Transfer
 
+_WORD = re.compile(r"[A-Za-z_]\w*")
 
-def _inputs(project: Project, obj: ProjectObject) -> list[UUID]:
-    deps = list(obj.dependencies())
-    if isinstance(obj, Study):
-        deps += [t.id for t in project.transfers_into(obj.id)]
-        # Parameters are global: every study reads all parameter sets, and every operator
-        # computing before a solve (ADR 0062: a Number, a Slider, an Expression).
-        deps += [p.id for p in project.of_type(ParameterSet)]
-        from puzzle.operators import pre_solve
 
-        deps += [o.id for o in pre_solve(project) if o.id not in deps]
-    return deps
+def _strings(data, out: set[str]) -> set[str]:
+    """Every string value in a dump, whole and as identifier words (a history argument
+    "2 * L", a profile "Hex[0].x", a feature's `when`, a quantity's `parameter`)."""
+    if isinstance(data, str):
+        out.add(data)
+        out.update(_WORD.findall(data))
+    elif isinstance(data, dict):
+        for v in data.values():
+            _strings(v, out)
+    elif isinstance(data, list | tuple):
+        for v in data:
+            _strings(v, out)
+    return out
+
+
+def _parameters(project: Project) -> tuple[dict[str, list[UUID]], dict[str, list]]:
+    """The parameters a model can read by name (`operators.parameter_values`): each
+    pre-solve operator by its name (a 2D slider's as `<name>_x` and `<name>_y`), and
+    each parameter set's values."""
+    from puzzle.operators import pre_solve
+
+    ops: dict[str, list[UUID]] = {}
+    for o in pre_solve(project):
+        for name in (f"{o.name}_x", f"{o.name}_y") if o.type == "slider2d" else (o.name,):
+            ops.setdefault(name, []).append(o.id)
+    values: dict[str, list] = {}
+    for ps in project.of_type(ParameterSet):
+        for name, q in ps.values.items():
+            values.setdefault(name, []).append(q.model_dump(mode="json"))
+    return ops, values
+
+
+class _Graph:
+    """Each object's inputs, with a study's parameters found by what its model reads
+    (OP-3): a study reads a parameter only when its own setup, its component, the
+    component's geometry, recipe, materials, fields and systems, or an operator one of
+    those names, mention it by name. Reads are found from the stored text, so nothing
+    is missed that the model could look up by name: history arguments, bound quantities,
+    sweep parameters, `when` toggles, morph handles, selection rules, equations (a
+    custom PDE's weak form is text too). A word that only happens to equal a parameter's
+    name makes the study read it: a needless "out of date", never a missed one."""
+
+    def __init__(self, project: Project, root: Path | None) -> None:
+        self.project, self.root = project, root
+        self.own: dict[UUID, dict] = {}
+        self.deps = {oid: list(obj.dependencies()) for oid, obj in project.objects.items()}
+        self.reads: dict[UUID, dict[str, list]] = {}
+        ops, values = None, None
+        for study in project.of_type(Study):
+            extra = [t.id for t in project.transfers_into(study.id)]
+            if ops is None:
+                ops, values = _parameters(project)
+            words = self._words(study, ops) if (ops or values) else set()
+            read_ops = [i for n in sorted(words & ops.keys()) for i in ops[n]]
+            self.deps[study.id] = list(dict.fromkeys(self.deps[study.id] + extra + read_ops))
+            self.reads[study.id] = {n: values[n] for n in sorted(words & values.keys())}
+
+    def own_of(self, obj: ProjectObject) -> dict:
+        got = self.own.get(obj.id)
+        if got is None:
+            got = self.own[obj.id] = _own(obj)
+            from puzzle.project.files import digests
+
+            found = digests(obj, self.root)
+            if found:  # BE-1: what the files hold, not only their names
+                got["files"] = found
+        return got
+
+    def _words(self, study: Study, ops: dict[str, list[UUID]]) -> set[str]:
+        """The words of everything the study's hash covers, through its component and
+        the operators named, but not into other studies (their hashes come in whole)."""
+        objects = self.project.objects
+        words: set[str] = set()
+        seen: set[UUID] = set()
+        frontier = [study.id, *(t.id for t in self.project.transfers_into(study.id))]
+        while frontier:
+            oid = frontier.pop()
+            obj = objects.get(oid)
+            if oid in seen or obj is None:
+                continue
+            seen.add(oid)
+            if isinstance(obj, Study) and oid != study.id:
+                continue
+            found = _strings(self.own_of(obj), set())
+            words |= found
+            frontier += [d for d in obj.dependencies() if d not in seen]
+            frontier += [i for n in found & ops.keys() for i in ops[n] if i not in seen]
+        return words
 
 
 def _digest(payload: object) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+
+
+def _unbound(data):
+    """A dump with each parameter-bound quantity's stored `value` left out (OP-2): the
+    run puts the parameter's value in its place, and that value is in the study's
+    `parameters` (or its operator's hash); the stored one only shows the last."""
+    if isinstance(data, dict):
+        if data.get("parameter") and "value" in data and "unit" in data:
+            return {k: v for k, v in data.items() if k != "value"}
+        return {k: _unbound(v) for k, v in data.items()}
+    if isinstance(data, list):
+        return [_unbound(v) for v in data]
+    return data
 
 
 def _own(obj: ProjectObject, *, drop: frozenset[str] = frozenset()) -> dict:
@@ -132,12 +235,29 @@ def _own(obj: ProjectObject, *, drop: frozenset[str] = frozenset()) -> dict:
             bolt.pop("group", None)
             bolt.pop("rule", None)
             bolt.pop("through", None)
-    return data
+    return _unbound(data)
 
 
-def content_hashes(project: Project) -> dict[UUID, str]:
-    """Hash every object in dependency order. Raises ValueError on a transfer cycle."""
-    order = TopologicalSorter({oid: _inputs(project, obj) for oid, obj in project.objects.items()})
+def keyed(project: Project) -> Project:
+    """The project as run keys see it: bolts given their types' values (ADR 0050) and
+    sweeps over a list given its values (ADR 0062), so a point already computed is
+    found. Everything else is keyed as stored (see the module's docstring); `run_study`
+    keys from the project it is given, so the two agree."""
+    from puzzle.bolts import resolved as bolts_resolved
+    from puzzle.operators import resolved
+
+    return resolved(bolts_resolved(project))
+
+
+def content_hashes(project: Project, root: Path | None = None) -> dict[UUID, str]:
+    """Hash every object in dependency order. Raises ValueError on a transfer cycle.
+    Files resolve against `root` (default: the folder the project was loaded from)."""
+    return _hashes(_Graph(project, root if root is not None else project.root))
+
+
+def _hashes(graph: _Graph) -> dict[UUID, str]:
+    project = graph.project
+    order = TopologicalSorter({oid: graph.deps[oid] for oid in project.objects})
     try:
         ordered = list(order.static_order())
     except CycleError as exc:
@@ -148,32 +268,36 @@ def content_hashes(project: Project) -> dict[UUID, str]:
         obj = project.objects.get(oid)
         if obj is None:  # dangling reference; reported by Project.validate
             continue
-        inputs = sorted(hashes.get(d, "missing") for d in _inputs(project, obj))
-        hashes[oid] = _digest({"kind": obj.kind, "own": _own(obj), "inputs": inputs})
+        inputs = sorted(hashes.get(d, "missing") for d in graph.deps[oid])
+        own = graph.own_of(obj)
+        if graph.reads.get(oid):  # the parameter sets' values its model reads (OP-3)
+            own = own | {"parameters": graph.reads[oid]}
+        hashes[oid] = _digest({"kind": obj.kind, "own": own, "inputs": inputs})
     return hashes
 
 
-def run_hashes(project: Project) -> dict[UUID, dict[str, list[str]]]:
+def run_hashes(project: Project, root: Path | None = None) -> dict[UUID, dict[str, list[str]]]:
     """Result keys per study, per solver, one per sweep point.
 
     A key covers the study setup (minus the solver choice), the solver and the sweep
     point. So a point already computed is a cache hit when other points are added,
-    and a shoot-out solver's runs survive a change of primary solver.
+    and a shoot-out solver's runs survive a change of primary solver. Files resolve
+    against `root` (default: the folder the project was loaded from).
     """
-    from puzzle.bolts import resolved as bolts_resolved
-    from puzzle.operators import resolved
-
-    # Keyed as solved: run_study keys its runs after bolts take their types' values, so
-    # the tree's check must do the same, or every run with typed bolts is out of date.
-    project = resolved(bolts_resolved(project))  # sweeps over a list: its values are the points
-    hashes = content_hashes(project)
+    if root is None:
+        root = project.root
+    project = keyed(project)
+    graph = _Graph(project, root)
+    hashes = _hashes(graph)
     runs: dict[UUID, dict[str, list[str]]] = {}
     for study in project.of_type(Study):
-        inputs = sorted(hashes.get(d, "missing") for d in _inputs(project, study))
+        inputs = sorted(hashes.get(d, "missing") for d in graph.deps[study.id])
         # Each solver's settings count for its own runs only (ADR 0023).
         own = _own(study, drop=frozenset({"solver", "solver_settings", "expert_settings"}))
         # The point's own values identify a run; the rest of the sweep definition doesn't.
         own["steps"] = [s for s in own["steps"] if s["type"] != "parametric_sweep"]
+        if graph.reads.get(study.id):
+            own["parameters"] = graph.reads[study.id]
         setup = _digest({"own": own, "inputs": inputs})
         from puzzle.preload import needed
 
@@ -208,9 +332,52 @@ def run_hashes(project: Project) -> dict[UUID, dict[str, list[str]]]:
     return runs
 
 
-def stale_studies(project: Project, computed: dict[UUID, str]) -> set[UUID]:
+def variant(key: str, *how) -> str:
+    """The key of a run of the study's own model on a mesh made another way (ADR 0066:
+    a convergence level, an adaptive pass): the study's key, then what was changed. So
+    the run is current exactly while the study's key is (`base_key`)."""
+    return f"{key}+{_digest([*how])[:24]}"
+
+
+def base_key(key: str) -> str:
+    """The study's key a run's key was made from (itself, for a plain run)."""
+    return key.split("+", 1)[0]
+
+
+def mesh_hash(project: Project, component_id: UUID, root: Path | None = None) -> str:
+    """What a component's mesh depends on (GUI-22): its geometries (with their files'
+    contents), its recipe, its parts, selections, contacts and other settings but its
+    loads and materials, and the parameters those read. A mesh kept under one hash is
+    stale once the hash changes."""
+    graph = _Graph(project, root if root is not None else project.root)
+    hashes = _hashes(graph)
+    comp = project.objects.get(component_id)
+    if not isinstance(comp, Component):
+        return ""
+    own = {k: v for k, v in _own(comp).items() if k not in ("physics", "materials")}
+    reads = [d for d in (*(p.geometry for p in comp.parts), comp.mesh)]
+    ops, values = _parameters(project)
+    words: set[str] = set()
+    for oid in reads:
+        obj = project.objects.get(oid)
+        if obj is not None:
+            words |= _strings(_own(obj), set())
+    words |= _strings(own, set())
+    named = sorted(i for n in words & ops.keys() for i in ops[n])
+    return _digest(
+        {
+            "own": own,
+            "inputs": [hashes.get(d, "missing") for d in (*reads, *named)],
+            "parameters": {n: values[n] for n in sorted(words & values.keys())},
+        }
+    )
+
+
+def stale_studies(
+    project: Project, computed: dict[UUID, str], root: Path | None = None
+) -> set[UUID]:
     """Studies whose current hash differs from the hash their stored result was computed from."""
-    current = content_hashes(project)
+    current = content_hashes(project, root)
     return {s.id for s in project.of_type(Study) if computed.get(s.id) != current[s.id]}
 
 

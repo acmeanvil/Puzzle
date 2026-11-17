@@ -98,7 +98,7 @@ class AdvisorPanel(QWidget):
             runs = w._store().runs()
         except Exception:  # noqa: BLE001 - an unreadable store: no runs, said elsewhere
             runs = []
-        meshed = comp is not None and str(comp.id) in w.meshes
+        meshed = comp is not None and w.current_mesh(comp) is not None
         self.advice = advise(
             w.session.project, runs, comp, study, meshed=meshed, root=w.session.root
         )

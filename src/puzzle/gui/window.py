@@ -374,6 +374,10 @@ class MainWindow(QMainWindow):
         QApplication.instance().setAttribute(Qt.ApplicationAttribute.AA_DontShowIconsInMenus)
         self.session: Session | None = None
         self.meshes: dict[str, Mesh] = {}  # component id -> its last generated mesh
+        # component id -> what that mesh was made from (graph.mesh_hash): once the
+        # geometry, a file, the recipe or a parameter it reads changes, it is dropped
+        # for the preview (GUI-22), and picks name faces from the shape as it is.
+        self.mesh_keys: dict[str, str] = {}
         self.mesh_names: dict[str, dict] = {}  # component id -> (dim, tag) -> (part, name)
         self.mesh_boundaries: dict[str, dict] = {}  # component id -> body -> its faces
         self.mesh_vertices: dict[str, dict] = {}  # component id -> vertex -> position
@@ -757,6 +761,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Open project", exc.message)
             return
         self.meshes.clear()
+        self.mesh_keys.clear()
         self.contacts.initial.found.clear()
         self.contacts.initial.warnings.clear()
         self.result = None
@@ -1085,7 +1090,7 @@ class MainWindow(QMainWindow):
     def show_faces(self, comp, faces) -> None:
         """Highlight faces by (part, face name) on the component's mesh or preview
         (contact search, ADR 0039)."""
-        mesh = self.meshes.get(str(comp.id)) or self._preview(comp)
+        mesh = self.current_mesh(comp) or self._preview(comp)
         if mesh is None:
             return
         wanted = set(faces)
@@ -1636,12 +1641,14 @@ class MainWindow(QMainWindow):
 
         # The GUI may edit while this meshes; suppressed geometry is left out, as in a run.
         project = applied(copy.deepcopy(s.project))
+        key = self._mesh_key(comp)  # what it is made from, before any edit meanwhile
 
         def work(_emit):
             return generate_mesh(project, comp.id, s.root, out)
 
         def done(meshed) -> None:
             self.meshes[str(comp.id)] = meshed.mesh
+            self.mesh_keys[str(comp.id)] = key
             self.mesh_names[str(comp.id)] = meshed.names
             self.mesh_boundaries[str(comp.id)] = meshed.boundaries
             self.mesh_vertices[str(comp.id)] = meshed.vertices
@@ -1956,7 +1963,7 @@ class MainWindow(QMainWindow):
             comp = comps[0] if comps else None
         if comp is None:
             return
-        mesh = self.meshes.get(str(comp.id))
+        mesh = self.current_mesh(comp)
         if mesh is None:
             with step("geometry preview"):
                 mesh = self._preview(comp)
@@ -2071,7 +2078,7 @@ class MainWindow(QMainWindow):
                 names,
                 lambda path: choices(project, recipe, path),
             )
-        mesh = self.meshes.get(str(comp.id))
+        mesh = self.current_mesh(comp)
         shape = self.mesh_element_quality.get(str(comp.id))
         if mesh is not None and shape:
             from puzzle.results.model import Field, Results, StepResult
@@ -3589,6 +3596,30 @@ class MainWindow(QMainWindow):
             done,
             failed=failed,
             lock=False,
+        )
+        return None
+
+    def _mesh_key(self, comp: Component) -> str:
+        """What a component's mesh is made from, now (graph.mesh_hash)."""
+        from puzzle.project.graph import mesh_hash
+
+        return mesh_hash(self.session.project, comp.id, self.session.root)
+
+    def current_mesh(self, comp: Component):
+        """The component's generated mesh while it still is the model's (GUI-22); a
+        stale one is dropped with its maps, so the view falls back to the preview."""
+        cid = str(comp.id)
+        mesh = self.meshes.get(cid)
+        # A mesh kept with no key (only start_meshing makes them; a test may set one)
+        # is taken as it is.
+        if mesh is None or cid not in self.mesh_keys or self.mesh_keys[cid] == self._mesh_key(comp):
+            return mesh
+        for held in (self.meshes, self.mesh_keys, self.mesh_names, self.mesh_boundaries,
+                     self.mesh_vertices, self.mesh_anchors, self.mesh_selections,
+                     self.mesh_quality, self.mesh_element_quality):  # fmt: skip
+            held.pop(cid, None)
+        self.statusBar().showMessage(
+            f"{comp.name}'s mesh is out of date: the model changed since; mesh it again", 8000
         )
         return None
 

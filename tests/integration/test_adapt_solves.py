@@ -91,9 +91,11 @@ def heated_bar(tmp_path, method: str):
 
 
 def test_mmg_follows_a_heat_layer_better_than_isotropic(tmp_path):
-    """Measured: both from 403 elements at 1.75 %; MMG 1647 elements at 0.053 %,
-    isotropic Gmsh 1710 at 0.14 %, each in two passes. Within 0.6 K of the erfc
-    solution either way (the rest is backward Euler's time error)."""
+    """Measured (2026-11-16, with the 3D metric constant 9/32): MMG 2056 elements at
+    0.041 %, isotropic Gmsh 1711 at 0.180 %, each in two passes: a quarter of the error
+    for a fifth more elements (at second order that many more isotropic elements would
+    take about a tenth off its error). Within 0.6 K of the erfc solution either way (the
+    rest is backward Euler's time error)."""
     from puzzle.mesh.mmg import mmg_binary
 
     if mmg_binary() is None:
@@ -109,7 +111,7 @@ def test_mmg_follows_a_heat_layer_better_than_isotropic(tmp_path):
     iso, _ = heated_bar(tmp_path, "isotropic")
     assert ani.converged and iso.converged
     a, i = ani.passes[-1], iso.passes[-1]
-    assert a.error < i.error / 2 and a.elements <= i.elements * 1.1
+    assert a.error < i.error / 3 and a.elements <= i.elements * 1.25
     steel = library_material("structural_steel").properties
     k, rho, cp = (steel[q].to_si() for q in ("thermal_conductivity", "density", "specific_heat"))
     record = next(r for r in store.runs() if r.run_id == a.run)

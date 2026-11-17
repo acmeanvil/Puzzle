@@ -129,6 +129,19 @@ def test_a_budget_deleting_passes_and_the_quantity_criterion(tmp_path):
                     solve=stand_in(store))  # fmt: skip
     assert not out.converged and "budget of 2 passes" in out.ended
     assert [r.run_id for r in store.records] == [out.passes[-1].run]  # the last kept
+    # ADR-47: pass 1 is gone, but the kept table finds the last pass: read back as it
+    # ran, and not solved again.
+    again = adapt.run(p, study, tmp_path, tmp_path / "w", store=store,
+                      settings=Adapt(target=0.01, passes=2, keep_passes=False),
+                      read_only=True)  # fmt: skip
+    assert [x.run for x in again.passes] == [x.run for x in out.passes]
+    adapt.run(p, study, tmp_path, tmp_path / "w", store=store,
+              settings=Adapt(target=0.01, passes=2, keep_passes=False),
+              solve=stand_in(store))  # fmt: skip
+    assert len(store.records) == 1
+    from puzzle.project.status import status
+
+    assert status(p, store.runs(), root=tmp_path)[str(study.id)].state == "up_to_date"
     watch = Adapt(criterion="quantity", target=0.02, quantities=[DesignOutput(source=uuid4())])
     assert adapt._done(watch, [
         adapt.Pass(1, values={"Tip": 1.00}), adapt.Pass(2, values={"Tip": 1.01})]).startswith(

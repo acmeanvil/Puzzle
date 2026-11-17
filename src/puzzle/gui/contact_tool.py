@@ -397,7 +397,7 @@ class InitialTab(QWidget):
             self.note.setText("No contacts to check.")
             return
         comp, rest = comps[0], comps[1:]
-        mesh = self.window.meshes.get(str(comp.id))
+        mesh = self.window.current_mesh(comp)
         if mesh is None:
             self.note.setText(f"Meshing {comp.name} first…")
             self.window.start_meshing(comp, then=lambda _m: self.check(comps))

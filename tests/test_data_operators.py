@@ -148,10 +148,18 @@ def test_expressions_check_units():
 
 
 def test_pre_solve_operators_are_parameters_and_stale_studies():
+    from puzzle.model.schema import Component, PartInstance
     from puzzle.project.graph import content_hashes
 
     p = Project("p")
-    study = p.add(Study(name="S", component=uuid4(), solver="calculix", steps=[]))
+    # The study's geometry reads hole_d (and so hole_r, wired into it); another doesn't.
+    geo = p.add(Geometry(name="Plate", history=[HistoryStep(kind="box", name="B", args={
+        "dx": "hole_d", "dy": 0.1, "dz": 0.01})]))  # fmt: skip
+    comp = p.add(
+        Component(name="C", mesh=uuid4(), parts=[PartInstance(name="Plate", geometry=geo.id)])
+    )
+    study = p.add(Study(name="S", component=comp.id, solver="calculix", steps=[]))
+    other = p.add(Study(name="T", component=uuid4(), solver="calculix", steps=[]))
     mm = {"low": Quantity(value=1, unit="mm"), "high": Quantity(value=8, unit="mm")}
     r = p.add(Operator(name="hole_r", type="slider", inputs={"value": q(4, "mm")}, **mm))
     p.add(Operator(name="hole_d", type="expression", expression="2 * x",
@@ -162,8 +170,10 @@ def test_pre_solve_operators_are_parameters_and_stale_studies():
     assert parameter_values(p) == {"hole_r": pytest.approx(0.004), "hole_d": pytest.approx(0.008)}
     assert parameter_values(p, {r.id: 0.002})["hole_d"] == pytest.approx(0.004)
     before = content_hashes(p)[study.id]
+    untouched = content_hashes(p)[other.id]
     r.inputs["value"] = q(5, "mm")
     assert content_hashes(p)[study.id] != before  # the study reads it: out of date
+    assert content_hashes(p)[other.id] == untouched  # one that reads neither: as it was
     peak_before = content_hashes(p)[study.id]
     reduce.reduction = "min"  # a post-solve operator never stales the study
     assert content_hashes(p)[study.id] == peak_before

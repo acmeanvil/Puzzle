@@ -340,8 +340,8 @@ The maintainer's answers:
   - `tests/test_mmg.py`: a tanh layer on a cube gives elements 4:1 across it in two
     passes, with the named face kept on its face, at first and second order.
   - `tests/integration/test_adapt_solves.py`: a steel bar heated at one end for 2 s (an erfc
-    layer) from 10 mm tets, adapted to 0.2 %. MMG reached 0.053 % in 1647 elements and
-    isotropic Gmsh 0.14 % in 1710, each in two passes, within 0.6 K of the erfc
+    layer) from 10 mm tets, adapted to 0.2 %. MMG reached 0.041 % in 2056 elements and
+    isotropic Gmsh 0.180 % in 1711 (measured again 2026-11-16 with the 3D constant 9/32), each in two passes, within 0.6 K of the erfc
     solution (the rest is the time step's).
   - On the cantilever, MMG brings nothing: displacement has no layer to stretch
     along, so structural studies should stay isotropic.

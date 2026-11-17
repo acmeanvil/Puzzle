@@ -261,7 +261,7 @@ def highlight(window, geo, entity: str, found: list[str]) -> list:
     if comp is None or not any(p.geometry == geo.id for p in getattr(comp, "parts", [])):
         comp = window._standalone(geo)
     cid = str(comp.id)
-    mesh = window.meshes.get(cid) or window._preview(comp)
+    mesh = window.current_mesh(comp) or window._preview(comp)
     if mesh is None:
         return []
     parts = {p.name for p in comp.parts if p.geometry == geo.id}

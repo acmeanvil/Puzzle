@@ -3311,6 +3311,9 @@ class Project:
     # ADR 0062 phase 4: whether its code (scripts, equations) may run; never saved. A
     # project built here is; one loaded from disk is if its folder is trusted.
     trusted: bool = field(default=True, compare=False)
+    # The folder it was loaded from, never saved: relative file names (a geometry's
+    # source, a field's file) resolve against it, so their contents reach the hashes.
+    root: Any = field(default=None, compare=False, repr=False)
 
     def add(self, obj: T) -> T:
         if obj.id in self.objects:
@@ -3531,6 +3534,13 @@ class Project:
                 for dep in obj.dependencies()
                 if dep not in self.objects
             ]
+        if self.root is not None:  # BE-1: a file it reads, gone (its hash is a stand-in)
+            from puzzle.project.files import missing
+
+            for obj in self.objects.values():
+                out += [Problem("missing_file", obj.name, f"{obj.kind} '{obj.name}' reads "
+                                f"{name}, which isn't in the project folder", {"file": name})
+                        for name in missing(obj, self.root)]  # fmt: skip
 
         for comp in self.of_type(Component):
             names = self.selection_names(comp)

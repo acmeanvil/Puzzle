@@ -151,11 +151,22 @@ strengths; most findings are places where one of those three was not applied.
    two-contributor project should not take on. Its transcript ideas are ported into the
    Qt agent panel (package 12). A `puzzle acp` endpoint, which would let it and other
    ACP clients front Puzzle's agent, is left for its own ADR.
-4. **The schematic's job is narrowed.** The tree stays the complete place to build a
-   model. The schematic owns the dependency and staleness picture and the chain from
-   results to answers (values, checks, curves, a report): it must say truthfully which
-   conclusions still hold after a change, and bring the rest up to date in one action.
-   Model building from the canvas stays possible but is not where effort goes.
+4. **The schematic is a parametric tool and a results tool** (the maintainer,
+   2026-11-16, in place of the reviewer's proposal to narrow it to results): access to
+   the underlying data and input variables, used for manipulation further downstream.
+   - **Two levels.** A component and a study each draw as one collapsed node by default,
+     their loads, supports and other members inside; opened, every member is its own
+     node, reachable and wireable one by one. This keeps the canvas from growing hectic,
+     which was the struggle in Grasshopper.
+   - **One state language** on every node: current, stale, not run, failed. A stale
+     result is kept and stays usable. Nothing re-solves by itself: the user chooses to
+     bring a chain up to date or to go on with the results there are. Operators may keep
+     working on an earlier run while the model is set up for the next solver or system,
+     and neither breaks the other. So a result an operator reads is a named run, not
+     only "the study's latest", and a stale value is always drawn as stale.
+   - A parametric canvas must be exact about what a change invalidates: OP-3 (any data
+     operator puts every study out of date) and OP-4 (an operator on a swept study reads
+     whichever point ran last) are blockers for it, not polish (packages 1 and 4).
 5. **Usability direction:** one command table feeding the menu bar, ribbons and context
    menus (about 150 commands, not 342; operators leave the menus for the palette); a
    workspace strip and a ribbon for Model; a "New analysis…" form; loads placed on a
@@ -181,7 +192,7 @@ to read first; it holds the reproduction, the fix and the test for every ID. Wor
 | 10 | **GUI correctness.** One quantity-entry helper used by every form (the unit shown for bare numbers, a dimension check, no rewrite of untouched values); an error boundary per panel in `refresh`; plain messages from `details["errors"]`; Delete and Ctrl+Z scoped to the focused panel; picks, probes on mirrored copies, stale tool panels, selection kept across relabels; the menu fuzz kept as a test, with dialogs cancelled and accepted. | GUI-1 to GUI-18, GUI-23 to GUI-30, PANEL-1 to PANEL-34 | `gui-core-bugs.md`, `gui-panels-bugs.md` | The fuzz passes on both examples; a unit switch never changes a stored value |
 | 11 | **Usability.** In the reviewer's order: the Geometry tab's 1597 px minimum; a load on a picked face with its values inline; "New analysis…"; an Edit menu with Redo; the Advisor following the shown study; Properties' Advanced fold; then the command table and the Model ribbon; onboarding (an example on the start page, a dropped STEP file, display units that read as MPa and mm by default). | UX-1 to UX-38 | `gui-usability.md` | The core task (STEP to probe and export) is counted again and is under ten steps |
 | 12 | **Agent interface.** Proposal cards with before and after values, a preview and "Show in view"; the selection and the shown result sent as context; the tree and view live during a turn, with what was touched marked; a turn undone as one; conversations kept per project; a plan list; tool groups loaded by skill so a request carries about 25 tools, not 110. | UXA-1 to UXA-15 | `agent-looking-glass.md` | The scripted-provider tests cover each; the prompt is under 8k tokens before the first message |
-| 13 | **Schematic.** Stale values drawn as stale, with "Bring up to date"; refresh built once and evaluated off the GUI thread; multi-select, Delete, copy and paste, data wires removable; compatible sockets lit while dragging and the operator search on a drop; values edited on the node; a layout that holds at 50 nodes; then the operator set (merges and the missing ones). | SCH-1 to SCH-11, SCH-UX-1 to 18, OP-NEW-1 to 14 | `schematic-operators.md` | A refresh at 55 nodes is under 100 ms; no out-of-date verdict is drawn as current |
+| 13 | **Schematic.** Two levels (components and studies collapsed, their members reachable when opened); the state language, a stale result kept and usable, operators able to read a named run; stale values drawn as stale, with "Bring up to date" on request; refresh built once and evaluated off the GUI thread; multi-select, Delete, copy and paste, data wires removable; compatible sockets lit while dragging and the operator search on a drop; values edited on the node; a layout that holds at 50 nodes; then the operator set (merges and the missing ones). | SCH-1 to SCH-11, SCH-UX-1 to 18, OP-NEW-1 to 14 | `schematic-operators.md` | A refresh at 55 nodes is under 100 ms; no out-of-date verdict is drawn as current |
 | 14 | **Speed and scale.** Commands that cost by what changed, not by project size; a results store that reads and writes by field and step without holding a run in memory; compaction; vectorised transfers and face look-ups; long reads off the GUI thread in the result-tool, export and fatigue forms; no reload after the GUI's own write. | BE-11, BE-12, BE-17, BE-18, BE-20, BE-21, GUI-7, GUI-8, PANEL-13, PANEL-26 | `backend.md` | An edit in a 300-object project is under 50 ms; a 1 GB result stores without doubling memory |
 | 15 | **Verification that runs somewhere other than one machine.** A scheduled workflow with the Code_Aster, Elmer, OpenFOAM, Code_Saturne and OpenCourant images and the PyNite environment; a benchmark for each claimed capability or the claim removed; test tolerances brought to the figures the ADRs quote. | ADR conformance section (f), OC-3, ADR-64, ADR-65 | `adr-conformance.md` | Every figure in CLAUDE.md's adapter table has a CI run behind it |
 | 16 | **Records and reach.** About twenty stale index rows; notes on the overtaken ADRs (0004, 0007, 0010, 0012, 0015); skills and guides for CFD, custom PDEs, shells and ADR 0065's operations; forms for MCP-only features (thread results, modelled beads); `puzzle:` links and F1 on menu items; the core's fourteen GUI imports removed; before any public installer, the licences folder, Help → Licences and the GPL source offer (ADR-57). | ADR-7, ADR-48, ADR-49, ADR-53 to ADR-61, ADR-63, ADR-66, ADR-E-1, ADR-E-2, ADR-E-11, ADR-E-16, ADR-E-19, ADR-E-21, ADR-E-24, the low findings | `adr-conformance.md`, `adr-early.md` | `tests/test_agent_skills.py` and `tests/test_help.py` list the added ADRs |
@@ -189,6 +200,28 @@ to read first; it holds the reproduction, the fix and the test for every ID. Wor
 Medium and low findings not named in a row belong to the package whose report holds
 them. A package that finds its fix needs a decision (a schema change, a new command)
 records it by amending the source ADR until the freeze lifts, then as its own ADR.
+
+### Progress
+
+**Package 1 built (2026-11-16):** `graph.keyed(project)` is the one project run keys are
+taken from (the stored project with bolts and sweep lists resolved); `run_study` keys
+from the project as given, before parameters, suppression or axes are applied, so the
+solve and status agree (BE-2, OP-2). `project/files.py` hashes by content every file an
+object reads (a geometry's source, history `file` and `dxf` arguments, an imported
+field's files, a File operator's pattern), cached by size and time; a missing file is
+the problem `missing_file` (BE-1). `Project.root` (never saved) tells hashing where the
+folder is. A study's hash covers only the operators and parameter values its model
+names, found by word, so a needless "out of date" is possible and a missed one is not
+(OP-3); a bound quantity's stored value is left out. Levels, passes and optimisation
+points are `graph.variant(base, ...)` keys, current while their study's own key is
+(ADR-47). Imports copy with `files.copy_in`, which never replaces a different file of
+the same name (GUI-20). The GUI's mesh is kept with `graph.mesh_hash` and dropped when
+that changes (GUI-22). Runs record `puzzle_version`. Tests: `tests/test_run_keys.py`.
+Left: the import still reads on the GUI thread; multi-file field sources still copy
+over a same-named folder; optimisation points read "out of date" in the tree. Found on
+the way: the MMG heat-layer benchmark had failed since the 3D metric constant was
+corrected to 9/32 (commit 0623431); its bound and measured figures are updated (MMG
+0.041 % in 2056 elements, isotropic 0.180 % in 1711).
 
 ### Enhancements toward the state of the art
 
