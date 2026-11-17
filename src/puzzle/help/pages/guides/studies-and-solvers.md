@@ -130,7 +130,9 @@ on smaller machines) and Parallel processes per run set what a solve may use.
 ## Mistakes to avoid
 
 - A static or transient structural study with nothing fixed is refused: Problems says
-  unconstrained. Add a fixed or displacement support. Free modal studies are allowed.
+  unconstrained. Add a fixed or displacement support. Free modal studies are allowed
+  on CalculiX, Elmer and FEniCSx (six modes near 0 Hz come first); Code_Aster refuses
+  them.
 - Running a study that has a pending job: that solves it again. Resume it in Jobs.
 - A stall is not a failure: a big factorisation can be quiet for minutes.
 - Load stepping on Elmer or FEniCSx, or a direct linear solver on Code_Saturne or

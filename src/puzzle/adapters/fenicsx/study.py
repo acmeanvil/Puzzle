@@ -82,6 +82,7 @@ class _Factor:
     """A real sparse matrix factored once, solved many times (SuperLU's splu shape)."""
 
     def __init__(self, A):
+        self.shape = A.shape  # as splu's, which `Factored.solve` reads
         if pypardiso is not None:
             self.A = A.tocsr()
             self.pardiso = pypardiso.PyPardisoSolver()
@@ -337,6 +338,11 @@ class Factored:
         self.solver = None
 
     def refactor(self) -> None:
+        """Factor again at the next solve, freeing the old factors (PETSc keeps its
+        matrix and KSP alive until destroyed: one per frequency had been leaked)."""
+        if BACKEND == "petsc" and self.solver is not None:
+            self.solver.destroy()
+            self.matrix.destroy()
         self.solver = None
 
     def _factor(self) -> None:
@@ -425,8 +431,9 @@ def eigenpairs(a, m, bcs, count: int) -> tuple[list[float], list[np.ndarray]]:
 
 
 def interpolate_nodal(points: np.ndarray, values: np.ndarray, at: np.ndarray) -> np.ndarray:
-    """Nodal values given at `points`, at coordinates `at`: exact at mesh nodes, linear
-    (inverse-distance over the 4 nearest) between them, for higher-order dofs."""
+    """Nodal values given at `points`, at coordinates `at`: exact at mesh nodes, and
+    between them (a higher-order dof off the given nodes) inverse-distance weighted
+    over the 4 nearest, not linear. Values given on every node meet only exact ones."""
     from scipy.spatial import cKDTree
 
     distance, index = cKDTree(points).query(at, k=min(4, len(points)))
@@ -628,9 +635,7 @@ def solve_solid(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> None:
         else:  # case.py refuses what isn't written here (ADR 0090 FENICS-4); never drop
             raise SystemExit(f"{f['type']} is not written for 3D solids")
 
-    out["coords"] = V.tabulate_dof_coordinates()
-    if case.get("threads"):  # coincident nodes on the thread's faces: map by node
-        out["node_ids"] = dof_nodes(V)
+    _points(out, V)
     if case["step"]["type"] in ("transient", "frequency_domain"):
         rho = piecewise("density")
         stress = _stress_projector(msh, degree, dx, sigma, V)
@@ -737,7 +742,7 @@ def solve_solid_mixed(case, msh, degree, dx, ds, facets, tag, piecewise, out) ->
 
     wh = solve_linear(a, L, bcs, W, "u")
     uh, ph = wh.sub(0).collapse(), wh.sub(1).collapse()
-    out["coords"] = Vu.tabulate_dof_coordinates()
+    _points(out, Vu)
     out["displacement"] = uh.x.array.reshape(-1, 3)
     S = fem.functionspace(msh, ("Lagrange", degree, (6,)))
     s = 2 * mu * eps(uh) - ph * ufl.Identity(3)
@@ -796,6 +801,16 @@ def _face_dofs(V, facets, group: int, xyz) -> np.ndarray:
     if len(distance) and distance.max() > 1e-6 * span:
         raise SystemExit(f"a thread's node is {distance.max():.3g} m from its face's dofs")
     return np.asarray(blocks)[index]
+
+
+def _points(out: dict, V) -> None:
+    """The result points, each with its mesh node where the space has the mesh's degree:
+    positions alone can't tell apart coincident nodes (a thread's faces, ADR 0076; parts
+    touching with no contact, ADR 0090 COMMON-1). The reader checks them by position."""
+    out["coords"] = V.tabulate_dof_coordinates()
+    ids = dof_nodes(V)
+    if len(ids):
+        out["node_ids"] = ids
 
 
 def dof_nodes(V) -> np.ndarray:
@@ -947,11 +962,16 @@ def solve_threaded(threads, a, L, bcs, V, facets, tag, limit: int = 50,
 
 def _stress_projector(msh, degree, dx, sigma, V, voigt_of=None):
     """A function from a displacement array to nodal stress (xx, yy, zz, xy, yz, zx):
-    the L2 projection, its mass matrix factored once. `voigt_of` (a 2D model's) gives
-    the six components of a displacement directly."""
+    the L2 projection. The six components are uncoupled, so the scalar mass matrix is
+    factored once and solved for each (ADR 0090 FENICS-5: the 6N x 6N one, stored as
+    6 x 6 blocks, had 36 times the entries). `voigt_of` (a 2D model's) gives the six
+    components of a displacement directly."""
     S = fem.functionspace(msh, ("Lagrange", degree, (6,)))
-    p, q = ufl.TrialFunction(S), ufl.TestFunction(S)
-    mass = _Factor(_scipy(ufl.inner(p, q) * dx))
+    q = ufl.TestFunction(S)
+    S0, parent = S.sub(0).collapse()  # parent: each scalar dof's index in S's array
+    blocks = np.asarray(parent, dtype=np.int64).ravel() // 6  # dolfinx 0.11: one row
+    p0, q0 = ufl.TrialFunction(S0), ufl.TestFunction(S0)
+    mass = _Factor(_scipy(p0 * q0 * dx))
     uh = fem.Function(V)
     if voigt_of is not None:
         voigt = voigt_of(uh)
@@ -959,14 +979,18 @@ def _stress_projector(msh, degree, dx, sigma, V, voigt_of=None):
         s = sigma(uh)
         voigt = ufl.as_vector([s[0, 0], s[1, 1], s[2, 2], s[0, 1], s[1, 2], s[2, 0]])
     rhs = fem.form(ufl.inner(voigt, q) * dx)
-    size = S.dofmap.index_map.size_local * 6
+    size = S.dofmap.index_map.size_local
 
     def project(values: np.ndarray) -> np.ndarray:
         uh.x.array[: len(values)] = values
         uh.x.scatter_forward()
         b = fem.assemble_vector(rhs)
         b.scatter_reverse(la.InsertMode.add)
-        return mass.solve(b.array[:size]).reshape(-1, 6)
+        by_component = b.array.reshape(-1, 6)[blocks]
+        out = np.zeros((len(b.array) // 6, 6))
+        for c in range(6):
+            out[blocks, c] = mass.solve(np.ascontiguousarray(by_component[:, c]))
+        return out[:size]
 
     return project
 
@@ -1188,9 +1212,7 @@ def solve_solid_2d(case, msh, degree, dx, ds, facets, tag, piecewise, out) -> No
             continue  # loads: none in a modal step
         else:
             raise SystemExit(f"{f['type']} is not written for 2D models")
-    out["coords"] = V.tabulate_dof_coordinates()
-    if case.get("threads"):  # coincident nodes on the thread's faces: map by node
-        out["node_ids"] = dof_nodes(V)
+    _points(out, V)
 
     def voigt_of(w):
         e, _hoop, s, s_hoop = parts(w)
@@ -1238,10 +1260,16 @@ def solve_heat(case, msh, degree, dx, ds, facets, tag, of_temperature, out) -> N
     (properties at the previous iterate), which needs only linear solves on any backend."""
     V = fem.functionspace(msh, ("Lagrange", degree))
     T, v = ufl.TrialFunction(V), ufl.TestFunction(V)
-    # Axisymmetric (ADR 0048): every integral weighted by the radius x (2 pi cancels);
-    # in plane, the thickness cancels as every load here is per area.
-    r = ufl.SpatialCoordinate(msh)[0] if case.get("dimension") == "2d_axisymmetric" else 1.0
+    # Every integral is weighted (ADR 0048): axisymmetric by the radius x (2 pi
+    # cancels); in plane by each part's thickness, which cancels only when the parts
+    # share one (the flux through a joint is k t dT/dx).
     previous = fem.Function(V)  # the last iterate
+    if case.get("dimension") == "2d_axisymmetric":
+        r = ufl.SpatialCoordinate(msh)[0]
+    elif case.get("dimension") == "2d_planar":
+        r = of_temperature("thickness", previous)
+    else:
+        r = 1.0
     previous.x.array[:] = case["initial_temperature"]
     nonlinear = any(m.get("tables") for m in case["materials"])
     k = r * of_temperature("thermal_conductivity", previous)
@@ -1264,7 +1292,7 @@ def solve_heat(case, msh, degree, dx, ds, facets, tag, of_temperature, out) -> N
             films.append((r * vals["h"], tag(f["group"])))
             a += r * vals["h"] * T * v * ds(tag(f["group"]))
             L += r * vals["h"] * vals["T_inf"] * v * ds(tag(f["group"]))
-    out["coords"] = V.tabulate_dof_coordinates()
+    _points(out, V)
 
     increment = [1]  # the time step Picard's iterations belong to
 
@@ -1460,6 +1488,10 @@ def solve_custom(case, msh, degree, cells, facets, tag, piecewise, out) -> None:
                 dofs = held_dofs(V, f["group"])
                 bcs.append(dirichlet(value, dofs, V))
                 held.append((dofs, V))
+        elif f["type"] == "neumann" and shape:  # per component: -g_i v_i ds
+            for i, axis in enumerate("xyz"):
+                if axis in vals:
+                    F = F - vals[axis] * v[i] * ds(tag(f["group"]))
         elif f["type"] == "neumann":  # a flux g into the body: -g v ds
             g = vals.get(name, vals.get("value", 0.0))
             F = F - g * v * ds(tag(f["group"]))
@@ -1483,7 +1515,7 @@ def solve_custom(case, msh, degree, cells, facets, tag, piecewise, out) -> None:
         raise SystemExit(f"custom PDE: Newton did not converge in {limit} iterations")
 
     out_space = fem.functionspace(msh, ("Lagrange", degree, shape))
-    out["coords"] = out_space.tabulate_dof_coordinates()
+    _points(out, out_space)
     out["custom_fields"] = np.array([name])
 
     def nodal() -> np.ndarray:
@@ -1529,7 +1561,7 @@ def solve_electrostatics(case, msh, degree, dx, ds, facets, tag, piecewise, out)
         elif f["type"] == "surface_charge":
             L += vals["rho_s"] * v * ds(tag(f["group"]))
     uh = solve_linear(a, L, bcs, V, "phi")
-    out["coords"] = V.tabulate_dof_coordinates()
+    _points(out, V)
     out["potential"] = uh.x.array.reshape(-1, 1)
     out["electric_field"] = project(-ufl.grad(uh), msh, degree, dx, "e")
     out["electric_energy"] = np.array(
@@ -1585,7 +1617,7 @@ def solve_magnetostatics(case, msh, degree, dx, ds, facets, tag, piecewise, out)
     ]
     Ah = solve_linear(a, L, bcs, N, "a")
     B = ufl.curl(Ah)
-    out["coords"] = fem.functionspace(msh, ("Lagrange", degree)).tabulate_dof_coordinates()
+    _points(out, fem.functionspace(msh, ("Lagrange", degree)))
     out["magnetic_flux_density"] = project(B, msh, degree, dx, "b")
     out["current_density"] = project(J, msh, degree, dx, "j", region=dc)
     out["magnetic_energy"] = np.array(integral(0.5 / mu * ufl.inner(B, B) * dx))
@@ -1797,7 +1829,7 @@ def solve_magnetodynamics(case, msh, degree, dx, ds, facets, tag, piecewise, out
         series["voltage_re"].append([v[0] for v in volts])
         series["voltage_im"].append([v[1] for v in volts])
         emit("converged", increment=k)
-    out["coords"] = fem.functionspace(msh, ("Lagrange", degree)).tabulate_dof_coordinates()
+    _points(out, fem.functionspace(msh, ("Lagrange", degree)))
     count = msh.topology.index_map(tdim).size_local
     corners = msh.geometry.dofmap[:count, :4]  # a tet's first four nodes: its vertices
     out["cell_midpoints"] = msh.geometry.x[corners].mean(axis=1)  # as Puzzle's centres
@@ -1873,7 +1905,7 @@ def solve_magnetic_axisymmetric(case, msh, degree, dx, facets, tag, piecewise, o
             re_.append(uh.sub(0).collapse().x.array.copy())
             im_.append(uh.sub(1).collapse().x.array.copy())
         emit("converged", increment=k)
-    out["coords"] = W.sub(0).collapse()[0].tabulate_dof_coordinates()
+    _points(out, W.sub(0).collapse()[0])
     out["magnetic_frequencies"] = np.array(mag["frequencies"], float)
     out["axi_re"], out["axi_im"] = np.array(re_), np.array(im_)
 
@@ -1999,7 +2031,7 @@ def _magnetic_transient(case, msh, degree, dx, ds, facets, tag, out, sigma, chi_
         before.x.array[:] = previous.x.array
         previous.x.array[:] = ah.x.array
         emit("converged", increment=k)
-    out["coords"] = fem.functionspace(msh, ("Lagrange", degree)).tabulate_dof_coordinates()
+    _points(out, fem.functionspace(msh, ("Lagrange", degree)))
     count_cells = msh.topology.index_map(tdim).size_local
     corners = msh.geometry.dofmap[:count_cells, :4]
     out["cell_midpoints"] = msh.geometry.x[corners].mean(axis=1)

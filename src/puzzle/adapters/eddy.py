@@ -223,6 +223,10 @@ def globals_(
     resistance, inductance = [], []
     for c in meta["coils"]:
         current = c.phasor
+        if current == 0:  # an open secondary: no V / I to take (ADR 0090 EDDY-2)
+            resistance.append(math.nan)
+            inductance.append(math.nan)
+            continue
         if c.kind == "massive":
             voltage = start_potential[c.body]
         else:

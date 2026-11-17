@@ -21,6 +21,7 @@ from puzzle.geometry import gmsh_session, import_step
 from puzzle.materials import add_library_material, library_material
 from puzzle.model import (
     Component,
+    Contact,
     Feature,
     Geometry,
     MaterialAssignment,
@@ -191,3 +192,36 @@ def test_thermal_bending(tmp_path, thermal, structural, thermal_mesh):
     # The chain is cached: an unchanged rerun reuses both studies' stored results.
     again = run_study(project, static.id, tmp_path, tmp_path / "again", store=store)
     assert again.cached and len(store.runs()) == 2
+
+
+@pytest.mark.parametrize("solver", ["calculix", "code_aster", "fenicsx", "elmer"])
+def test_a_temperature_on_one_body_leaves_the_other_cold(tmp_path, solver):
+    """ADR 0090 package 7, to-check 5: a body temperature 100 K up on the left half of
+    the split bar only, held at its start and bonded to the right half: the left grows
+    by α ΔT L, the right is carried along unstrained, so both ends move alike. FEniCSx
+    had filled the right half's nodes from the nearest heated ones and stretched it as
+    well (Right/End 2.445e-4 m for 1.232e-4); Elmer refuses a load not on every node.
+    Measured: CalculiX, Code_Aster and FEniCSx 1.23522e-4 and 1.23223e-4 m (α ΔT L
+    1.216e-4: the held start's restraint)."""
+    from conftest_geometry import HALF, split_bar_project
+
+    if not available(solver):
+        pytest.skip(f"{solver} not available")
+    alpha = library_material("structural_steel").properties["thermal_expansion"].to_si()
+    features = [Feature(type="fixed", selection="Left/Start"),
+                Feature(type="body_temperature", selection="Left/Body",
+                        values={"T": Quantity(value=120, unit="degC")})]  # fmt: skip
+    bond = Contact(name="Bond", type="bonded", source="Right/Start", target="Left/End")
+    p, study = split_bar_project(tmp_path, solver, features, bond,
+                                 settings={"temperature_dependent_materials": False})  # fmt: skip
+    if solver == "elmer":
+        with pytest.raises(Exception, match="temperature load on every node"):
+            run_study(p, study.id, tmp_path, tmp_path / "run")
+        return
+    run = run_study(p, study.id, tmp_path, tmp_path / "run", timeout_s=900)
+    u = run.results.last("displacement")
+    left = u.at(run.mesh.groups["Left/End"].node_ids)[:, 0].mean()
+    right = u.at(run.mesh.groups["Right/End"].node_ids)[:, 0].mean()
+    print(f"{solver}: Left/End {left:.6g} m, Right/End {right:.6g} m ({alpha * 100 * HALF:.6g})")
+    assert left == pytest.approx(alpha * 100 * HALF, rel=0.03)
+    assert right == pytest.approx(left, rel=0.005)  # the right half unstrained

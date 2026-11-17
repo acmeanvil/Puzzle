@@ -315,6 +315,15 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             "coefficients": {k: q.to_si() for k, q in eq.coefficients.items()},
             "initial_value": float(pde.settings.get("initial_value", 0.0)),
         }
+        if eq.unknowns[0].shape == "vector":  # values per component, never one for all
+            for f in features:
+                if f.type in ("dirichlet", "neumann") and not set(f.values) & set("xyz"):
+                    raise InputError(
+                        f"{f.type} on '{f.selection}': the unknown "
+                        f"'{eq.unknowns[0].name}' is a vector, so give its x, y or z "
+                        "values (one value would have held or loaded nothing)",
+                        code="invalid_input",
+                    )
         # The weak form names its integration regions, so every face selection goes in
         # the mesh. dolfinx needs each cell tagged once: volumes are the material
         # selections, or the parts when the PDE has no materials.
@@ -327,16 +336,19 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             raise InputError(
                 "a temperature load applies to static structural steps", code="unsupported"
             )
-        # Nodal temperatures by coordinates; study.py interpolates them onto its dofs.
+        # Nodal temperatures by coordinates, on every node: one the load leaves out (a
+        # body temperature on some bodies) is at the reference, so it does not expand,
+        # as on CalculiX and Code_Aster. study.py had filled those from the nearest
+        # given ones and heated the rest of the model with them (ADR 0090 package 7).
+        reference = _reference_temperature(comp)
+        given = dict(zip(thermal_load.ids.tolist(), thermal_load.values[:, 0].tolist(),
+                         strict=True))  # fmt: skip
         np.savez(
             workdir / "temperature.npz",
-            coords=mesh.node_coords(thermal_load.ids),
-            values=thermal_load.values[:, 0],
+            coords=mesh.coords,
+            values=np.array([given.get(int(n), reference) for n in mesh.node_ids]),
         )
-        case["temperature_load"] = {
-            "file": "temperature.npz",
-            "reference": _reference_temperature(comp),
-        }
+        case["temperature_load"] = {"file": "temperature.npz", "reference": reference}
     _field_files(features, case["features"], inputs, mesh, workdir)
     if any(w.formulation == "line" for w in comp.welds):  # ADR 0078 step 3: light welds
         if physics != "solid_mechanics" or step.type != "stationary":
@@ -762,8 +774,9 @@ def _body_load_in_plane(comp, f) -> None:
 
 def _thickness(comp, selection: str, physics: str) -> dict:
     """A planar part's thickness for study.py's weights (plane stress; 1 m in plane
-    strain); none needed for heat, whose loads are per area."""
-    if comp.dimension != "2d_planar" or physics != "solid_mechanics":
+    strain). Heat takes it too: the flux through a joint of parts of different
+    thickness is k t dT/dx (ADR 0090 package 7, to-check 4)."""
+    if comp.dimension != "2d_planar" or physics not in ("solid_mechanics", "heat_transfer"):
         return {}
     return {"thickness": plane_thickness(comp, selection.split("/", 1)[0])}
 

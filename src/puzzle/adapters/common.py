@@ -625,6 +625,28 @@ def plane_thickness(component, part: str) -> float:
     )
 
 
+def check_planar_heat_thickness(component, solver: str) -> None:
+    """Refuse plane-stress heat across parts of different thickness where the solver's
+    heat equation has no thickness: the flux through a joint is k t dT/dx, so with
+    thicknesses 1 and 2 mm the joint of a strip held at 100 and 0 °C is at 33.3 °C, and
+    those solvers gave 50 °C (ADR 0090 package 7, to-check 4). One thickness cancels."""
+    if component.dimension != "2d_planar" or component.planar_model == "plane_strain":
+        return
+    parts = {p.name for p in component.parts}
+    found = {
+        s.selection.split("/", 1)[0]: s.thickness.to_si()
+        for s in component.shell_sections
+        if s.selection.split("/", 1)[0] in parts
+    }
+    if len(set(found.values())) > 1:
+        raise InputError(
+            f"{solver}'s planar heat equation takes no thickness, so parts of different "
+            f"thickness ({', '.join(sorted(found))}) are refused: the heat through a joint "
+            "depends on it. Give them one thickness, or solve on CalculiX or FEniCSx",
+            code="unsupported",
+        )
+
+
 def edge_weights(group: Group, mesh: Mesh, component) -> list[tuple[np.ndarray, np.ndarray]]:
     """A 2D edge selection's Gauss points: (points (n, 3), weights (n,)) per line block,
     the weight being what a traction there acts on: dl x thickness (plane stress), dl
@@ -674,9 +696,15 @@ def match_points(
     Solvers write coordinates with less precision than Puzzle keeps (EnSight uses
     float32), so points match within `rel_tol` of the model size. A grid hash checks
     the neighbouring cells too, so values near a cell edge still match.
+
+    A point at two reference points' one place (parts touching with no contact keep
+    their own nodes) is refused: position can't tell which is which, and giving both
+    the last one's id had left one node without a value (ADR 0090 COMMON-1). Map those
+    by id instead.
     """
     size = float(np.linalg.norm(reference.max(axis=0) - reference.min(axis=0))) or 1.0
     tol = rel_tol * size
+    twin = 1e-9 * size  # coincident to round-off, far below any element's size
     grid: dict[tuple[int, int, int], list[int]] = {}
     keys = np.floor(reference / tol).astype(np.int64)
     for i, k in enumerate(map(tuple, keys)):
@@ -685,14 +713,25 @@ def match_points(
     offsets = [(a, b, c) for a in (-1, 0, 1) for b in (-1, 0, 1) for c in (-1, 0, 1)]
     for j, p in enumerate(points):
         k = np.floor(p / tol).astype(np.int64)
-        best, best_d = -1, tol
+        best, best_d, near = -1, tol, []
         for o in offsets:
             for i in grid.get((k[0] + o[0], k[1] + o[1], k[2] + o[2]), ()):
                 d = float(np.linalg.norm(reference[i] - p))
+                if d <= tol:
+                    near.append(i)
                 if d <= best_d:
                     best, best_d = i, d
         if best < 0:
             raise InputError(f"result point {p} matches no mesh entity")
+        twins = [i for i in near if np.linalg.norm(reference[i] - reference[best]) <= twin]
+        if len(twins) > 1:
+            raise InputError(
+                f"result point {p} lies on {len(twins)} mesh entities at one place (parts "
+                "touching with no contact between them?); its value can't be given to one "
+                "of them by position",
+                code="unsupported",
+                details={"point": [float(c) for c in p]},
+            )
         out[j] = ids[best]
     return out
 

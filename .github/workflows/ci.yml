@@ -41,6 +41,17 @@ jobs:
           environments: dev calculix fenicsx
       - if: inputs.tests == ''
         run: pixi run -e dev check
+      # FEniCSx's SciPy path (Windows' dolfinx has no PETSc) once more on Linux, one test
+      # file per physics, so the two linear-algebra paths can't drift (ADR 0090 FENICS-2:
+      # `Factored` had failed on SciPy alone).
+      - if: inputs.tests == '' && runner.os == 'Linux'
+        env:
+          PUZZLE_FENICSX_BACKEND: scipy
+        run: >-
+          pixi run -e dev pytest -rs -k fenicsx
+          tests/integration/test_benchmarks.py tests/integration/test_dynamics.py
+          tests/integration/test_eddy_axisymmetric.py tests/integration/test_eddy_planar.py
+          tests/integration/test_coincident_nodes.py
       - if: inputs.tests != ''
         shell: bash
         env:

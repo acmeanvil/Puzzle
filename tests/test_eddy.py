@@ -146,6 +146,38 @@ def test_globals_from_element_values():
     assert r[1] == pytest.approx(r_dc - omega * 2e-4 * 1e6 * 2e-6)  # jω·(j ∫A·J)
 
 
+def test_a_coil_with_no_current_has_no_impedance():
+    """ADR 0090 EDDY-2: a coil at 0 A beside an excited one (an open secondary) had
+    raised ZeroDivisionError (massive) or warned and stored inf (winding) once the solve
+    was done. Its resistance and inductance are NaN; the excited coil's are V / I."""
+    import warnings
+
+    meta = {
+        "bodies": [{"name": "Bar", "mu_r": 1.0, "sigma": 1e6},
+                   {"name": "Ring", "mu_r": 1.0, "sigma": 1e6},
+                   {"name": "Coil", "mu_r": 1.0, "sigma": 0.0}],
+        "coils": [eddy.Coil("Bar", "massive", (2.0, 0.0), conductivity=1e6),
+                  eddy.Coil("Ring", "massive", (0.0, 0.0), conductivity=1e6),
+                  eddy.Coil("Coil", "stranded", (0.0, 0.0), turns=10, fill=0.5,
+                            conductivity=1e6)],
+        "frequencies": [100.0],
+    }  # fmt: skip
+    omega = 2 * math.pi * 100
+    body = np.array([0, 1, 2])
+    volume = np.array([1e-6, 1e-6, 2e-6])
+    J = np.array([[0, 0, 4e6], [0, 0, 1e5j], [0, 0, 0]], complex)
+    B = np.array([[0.1, 0, 0]] * 3, complex)
+    A = np.zeros((3, 3), complex)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # no division by zero, even as a warning
+        density, out = eddy.globals_(meta, omega, body, volume, B, J, A,
+                                     {"Bar": 3.0 + 4.0j, "Ring": 0.5j})  # fmt: skip
+    r, ind = out["coil_resistance"].values[0], out["coil_inductance"].values[0]
+    assert r[0] == pytest.approx(1.5) and ind[0] == pytest.approx(2.0 / omega)
+    assert all(math.isnan(v) for v in (r[1], ind[1], r[2], ind[2]))
+    assert density[1] == pytest.approx(0.5 * 1e10 / 1e6)  # its eddy loss is still there
+
+
 def test_skin_depth_warnings_and_refinement(tmp_path):
     """5 mm elements in copper-like steel at 1 kHz (δ ≈ 2.1 mm): warned, then refined."""
     from puzzle.advisor import advise

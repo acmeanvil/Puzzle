@@ -158,6 +158,9 @@ Other items:
 
 ### 3. Solvers and physics
 
+- Refused by ADR 0090 package 7 until built: a free modal study on Code_Aster (a shift
+  scaled to the model, or rigid modes named); planar heat across parts of different
+  thickness on Elmer and Code_Aster (properties and fluxes scaled per part).
 - Found by ADR 0090's written-or-refused matrix, refused until built: thermal expansion
   of beam bolts, pretension sections, threaded contacts and line welds under a temperature
   load (0037, 0076, 0078); couplings (`thermal_expansion`, `joule_heating`,

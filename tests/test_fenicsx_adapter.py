@@ -74,6 +74,46 @@ def test_results_map_back_to_mesh_nodes(tmp_path):
     assert np.allclose(disp.values, 2.0 * mesh.node_coords(disp.ids))
 
 
+def test_coincident_points_are_refused_by_position():
+    """ADR 0090 COMMON-1: two reference points at one place gave both result points the
+    last one's id ([10, 30, 30, 40]); position can't tell them apart, so it refuses."""
+    from puzzle.adapters.common import match_points
+
+    reference = np.array([[0, 0, 0], [1, 0, 0], [1, 0, 0], [2, 0, 0]], float)
+    ids = np.array([10, 20, 30, 40])
+    apart = np.array([[0, 0, 0], [1, 0, 0], [2, 0, 0]], float)
+    assert match_points(apart, apart, np.array([1, 2, 3])).tolist() == [1, 2, 3]
+    assert match_points(reference[[0, 3]], reference, ids).tolist() == [10, 40]
+    with pytest.raises(InputError, match="2 mesh entities at one place") as info:
+        match_points(reference + 1e-7, reference, ids)
+    assert info.value.code == "unsupported"
+    close = np.array([[0, 0, 0], [1e-6, 0, 0], [2, 0, 0]], float)  # near, not coincident
+    assert match_points(close + 1e-9, close, np.array([1, 2, 3])).tolist() == [1, 2, 3]
+
+
+def test_results_on_coincident_nodes_map_by_node_id(tmp_path):
+    """study.py writes each point's mesh node: two nodes at one place keep their own
+    values, which positions alone could not give them."""
+    script, mesh = _case(
+        tmp_path, [Feature(type="fixed", selection="Bar/Root")], SolveStep(type="stationary")
+    )
+    work = script.parent
+    node_ids = np.loadtxt(work / "node-ids.txt", dtype=np.int64, ndmin=1)
+    coords = np.load(work / "node-coords.npy")
+    coords[1] = coords[0]  # a twin of node 0, as parts touching with no contact have
+    np.save(work / "node-coords.npy", coords)
+    values = np.arange(len(coords), dtype=float)[:, None] * np.ones(3)
+    np.savez(work / "results.npz", coords=coords, node_ids=node_ids, displacement=values,
+             stress=np.ones((len(coords), 6)))  # fmt: skip
+    (step,) = read_results(work).steps
+    disp = step.fields["displacement"]
+    assert disp.at(node_ids[:2])[:, 0].tolist() == [0.0, 1.0]
+    np.savez(work / "results.npz", coords=coords, displacement=values,
+             stress=np.ones((len(coords), 6)))  # fmt: skip
+    with pytest.raises(InputError, match="at one place"):
+        read_results(work)  # no ids: refused, never a wrong value
+
+
 def test_modes(tmp_path):
     script, mesh = _case(
         tmp_path, [Feature(type="fixed", selection="Bar/Root")], SolveStep(type="modal")
@@ -200,6 +240,12 @@ def test_custom_pde_cases(tmp_path):
     edge = CustomEquation(unknowns=[Unknown(name="E", family="N1curl")], weak_form="0")
     with pytest.raises(InputError, match="Lagrange"):
         case(edge, tmp_path / "c")
+    # ADR 0090 to-check 6: a vector unknown's condition takes x, y, z; one value had
+    # held nothing (dirichlet) or failed in UFL (neumann).
+    vector = CustomEquation(unknowns=[Unknown(name="u", shape="vector")], weak_form="0")
+    with pytest.raises(InputError, match="is a vector, so give its x, y or z") as info:
+        case(vector, tmp_path / "d")
+    assert info.value.code == "invalid_input"
 
 
 def test_case_refuses_what_study_py_does_not_write_for_3d_solids():

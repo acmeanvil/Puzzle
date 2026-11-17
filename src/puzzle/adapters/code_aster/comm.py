@@ -258,6 +258,10 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
             "temperature to a structural study as a transfer (role load)."
         )
     thermal = solved == {"heat_transfer"}
+    if thermal:
+        from puzzle.adapters.common import check_planar_heat_thickness
+
+        check_planar_heat_thickness(comp, "Code_Aster")
     allowed = (
         ("stationary", "transient")
         if thermal
@@ -1101,9 +1105,19 @@ def write_case(project: Project, study: Study, mesh: Mesh, workdir: Path, inputs
     elif step.type == "modal":
         asked = int(step.settings.get("modes", 10))
         n = computed_modes(asked)  # `common.whole_pairs`
+        if not charges and not cara:
+            # A free body: its rigid-body modes make K singular at PLUS_PETITE's shift 0
+            # (ALGELINE3_81), and a shift of -1 Hz was singular too; the shift would
+            # have to be scaled to the model's first mode (ADR 0090 package 7).
+            raise InputError(
+                "Code_Aster's modal solve of a body with no supports isn't written yet "
+                "(its rigid-body modes make the solve singular); run it on CalculiX, "
+                "Elmer or FEniCSx, or hold it by an elastic support",
+                code="unsupported",
+            )
+        held = f"CHARGE=({', '.join(charges)},), " if charges else ""  # springs alone: none
         out += [
-            f"ASSEMBLAGE(MODELE=model, CHAM_MATER=mater, {cara}CHARGE=({', '.join(charges)},), "
-            "NUME_DDL=CO('numddl'),",
+            f"ASSEMBLAGE(MODELE=model, CHAM_MATER=mater, {cara}{held}NUME_DDL=CO('numddl'),",
             "           MATR_ASSE=(_F(MATRICE=CO('stiff'), OPTION='RIGI_MECA'),",
             "                      _F(MATRICE=CO('mass'), OPTION='MASS_MECA')))",
             # unit generalised mass, as CalculiX's: a spectrum scales the shapes by

@@ -162,11 +162,16 @@ def harmonic(f, zeta=None):
 
 
 @over("calculix", "code_aster", "fenicsx", "elmer")
-@pytest.mark.parametrize("damped", [False, True], ids=["undamped", "damped"])
+@pytest.mark.parametrize(
+    "damped", [False, True, "both"], ids=["undamped", "damped", "mass_and_stiffness"]
+)
 def test_harmonic_response(tmp_path, solver, damped):
-    """Below and above the first mode, undamped and with 5 % Rayleigh mass damping in
-    the first mode: the tip's amplitude within 1 % and its phase within 2 degrees.
-    Code_Aster and FEniCSx solve the full system; CalculiX superposes its first 20 modes."""
+    """Below and above the first mode, undamped, with 5 % Rayleigh mass damping in the
+    first mode, and with both terms (ADR 0090 to-check 1: alpha multiplies M and beta K,
+    zeta_n = alpha / 2 w_n + beta w_n / 2; 3 % and 2 % in the first mode, swapped they
+    would give it 0.3 % and 50 %): the tip's amplitude within 1 % and its phase within
+    2 degrees. Code_Aster and FEniCSx solve the full system; CalculiX superposes its
+    first 20 modes."""
     pytest.importorskip("OCP")
     force = Feature(type="force", selection="Bar/Tip", values={"y": Quantity(value=-P, unit="N")})
     physics = Physics(
@@ -176,7 +181,11 @@ def test_harmonic_response(tmp_path, solver, damped):
     )
     project, comp = bar_project(write_bar_step(tmp_path / "bar.step"), [physics], mesh_size_mm=5.0)
     a = 2 * ZETA * W[0]
+    b = 0.0
     settings = {"frequencies": "100, 150, 300, 600"}
+    if damped == "both":
+        a, b = 2 * 0.03 * W[0], 2 * 0.02 / W[0]
+        settings["rayleigh_beta"] = b
     if damped:
         settings["rayleigh_alpha"] = a
     step = SolveStep(type="frequency_domain", physics=["solid_mechanics"], settings=settings)
@@ -185,7 +194,7 @@ def test_harmonic_response(tmp_path, solver, damped):
     tip = run.mesh.groups["Bar/Tip"].node_ids
     assert [s.kind for s in run.results.steps] == ["frequency_domain"] * 4
     for s in run.results.steps:
-        expected = harmonic(s.value, a / (2 * W) if damped else None)
+        expected = harmonic(s.value, a / (2 * W) + b * W / 2 if damped else None)
         amp = s.fields["displacement_amplitude"].at(tip)[:, 1].mean()
         phase = s.fields["displacement_phase"].at(tip)[:, 1].mean()
         want = np.degrees(np.angle(expected))

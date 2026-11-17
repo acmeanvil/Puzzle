@@ -172,7 +172,9 @@ class ElmerProgress(Parser):
     def _tracked(self, final: bool) -> list[Event]:
         if not self.trackers or not self.folder.exists():
             return []
-        files = sorted(self.folder.glob(self.pattern))
+        from puzzle.adapters.elmer.output import in_order
+
+        files = in_order(self.folder.glob(self.pattern))
         ready = files if final else files[:-1]  # the newest may still be being written
         out: list[Event] = []
         for path in ready:

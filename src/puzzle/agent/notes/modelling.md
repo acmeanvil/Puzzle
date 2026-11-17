@@ -28,7 +28,7 @@ longer numbers are silently truncated (-8.67361737988404e-19 became -0.867 and i
 
 ## Unsupported structures are refused
 
-a stationary or transient solid-mechanics study whose component has no `fixed` or `displacement` feature reports the problem `unconstrained`, and `run_study` refuses it (CalculiX would return kilometres of rigid-body drift as a "result"). Free modal studies are allowed.
+a stationary or transient solid-mechanics study whose component has no `fixed` or `displacement` feature reports the problem `unconstrained`, and `run_study` refuses it (CalculiX would return kilometres of rigid-body drift as a "result"). Free modal studies are allowed on CalculiX, Elmer and FEniCSx (Code_Aster refuses one: its `CALC_MODES` fails at a zero shift).
 
 ## Solver threads
 

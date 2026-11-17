@@ -70,16 +70,20 @@ def test_nonlinear_conduction_matches_kirchhoff(tmp_path):
     assert error < 1e-5
 
 
-def test_hand_written_elasticity_equals_built_in(tmp_path):
+@pytest.mark.parametrize("traction", ["weak_form", "neumann"])
+def test_hand_written_elasticity_equals_built_in(tmp_path, traction):
+    """The tip traction in the weak form, or as a `neumann` feature with y given (ADR
+    0090 to-check 6: on a vector unknown it was g v ds, a vector UFL can't integrate)."""
     steel = library_material("structural_steel").properties
     e, nu = steel["youngs_modulus"].to_si(), steel["poissons_ratio"].to_si()
     lam, mu = e * nu / ((1 + nu) * (1 - 2 * nu)), e / (2 * (1 + nu))
     force = -100.0
+    tip = " - inner(as_vector((0.0, ty, 0.0)), v_u) * ds('Bar/Tip')"
     equation = CustomEquation(
         unknowns=[Unknown(name="u", degree=2, shape="vector")],
         weak_form=(
             "inner(lam * tr(sym(grad(u))) * Identity(3) + 2 * mu * sym(grad(u)), sym(grad(v_u)))"
-            " * dx - inner(as_vector((0.0, ty, 0.0)), v_u) * ds('Bar/Tip')"
+            " * dx" + (tip if traction == "weak_form" else "")
         ),
         coefficients={
             "lam": _value(lam, "Pa"),
@@ -90,7 +94,11 @@ def test_hand_written_elasticity_equals_built_in(tmp_path):
     clamp = Feature(
         type="dirichlet", selection="Bar/Root", values={a: _value(0.0, "m") for a in "xyz"}
     )
-    custom = _custom(tmp_path / "custom", equation, [clamp], SolveStep(type="stationary"))
+    features = [clamp]
+    if traction == "neumann":
+        features.append(Feature(type="neumann", selection="Bar/Tip",
+                                values={"y": _value(force / (B * H), "Pa")}))  # fmt: skip
+    custom = _custom(tmp_path / "custom", equation, features, SolveStep(type="stationary"))
     builtin = _builtin(
         tmp_path / "builtin",
         Physics(

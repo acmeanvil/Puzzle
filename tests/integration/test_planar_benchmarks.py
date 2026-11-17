@@ -28,6 +28,7 @@ from solvers import over
 from puzzle.materials import add_library_material, library_material
 from puzzle.model import (
     Component,
+    Contact,
     Feature,
     Geometry,
     MaterialAssignment,
@@ -258,3 +259,46 @@ def test_axisymmetric_conduction_through_a_wall(tmp_path, solver):
     r = run.mesh.node_coords(T.ids)[:, 0]
     exact = Ta + (Tb - Ta) * np.log(r / A_IN) / np.log(B_OUT / A_IN)
     assert np.max(np.abs(T.values[:, 0] - exact)) < 1e-3 * (Ta - Tb)
+
+
+def _strip_part(p, name, length, height):
+    """A rectangle part's geometry with its Region, Left and Right sides named."""
+    edges = {"Left": ["S/side-4"], "Right": ["S/side-2"]}
+    selections = [NamedSelection(name="Region", entity="face", members=["S/face"])]
+    selections += [NamedSelection(name=n, entity="edge", members=m) for n, m in edges.items()]
+    return p.add(Geometry(name=name, history=[_rectangle("S", 0, 0, length, height)],
+                          selections=selections))  # fmt: skip
+
+
+@over("calculix", "code_aster", "fenicsx", "elmer")
+def test_planar_conduction_across_two_thicknesses(tmp_path, solver):
+    """ADR 0090 package 7, to-check 4: two 20 mm parts end to end, 1 and 2 mm thick,
+    held at 100 and 0 degC: one heat flow k t dT/dx through both puts the joint at
+    (t1 100 + t2 0) / (t1 + t2) = 33.33 degC. FEniCSx and Elmer and Code_Aster had left
+    the thickness out (50 degC); FEniCSx weights by it now, the other two refuse."""
+    length, t1, t2 = 0.02, 1.0, 2.0
+    p = Project(name="two thicknesses")
+    steel = add_library_material(p, "structural_steel")
+    a, b = _strip_part(p, "GA", length, 0.01), _strip_part(p, "GB", length, 0.01)
+    features = [
+        Feature(type="temperature", selection="A/Left", values={"T": qty(100, "degC")}),
+        Feature(type="temperature", selection="B/Right", values={"T": qty(0, "degC")}),
+    ]
+    c = p.add(Component(
+        name="Strip", dimension="2d_planar", mesh=p.add(MeshRecipe(name="M", global_size=mm(1))).id,
+        parts=[PartInstance(name="A", geometry=a.id),
+               PartInstance(name="B", geometry=b.id, translation=(length, 0.0, 0.0))],
+        materials=[MaterialAssignment(material=steel.id, selection=f"{n}/Region") for n in "AB"],
+        contacts=[Contact(name="Joint", type="bonded", source="B/Left", target="A/Right")],
+        shell_sections=[ShellSection(selection="A", thickness=mm(t1)),
+                        ShellSection(selection="B", thickness=mm(t2))],
+        physics=_heat(features)))  # fmt: skip
+    if solver in ("elmer", "code_aster"):
+        with pytest.raises(Exception, match="parts of different thickness"):
+            _solve(tmp_path, p, c, solver)
+        return
+    run = _solve(tmp_path, p, c, solver)
+    joint, _ = _at(run, "temperature", "A/Right")
+    exact = (t1 * 100 + t2 * 0) / (t1 + t2)
+    print(f"{solver}: the joint at {joint[:, 0].mean() - 273.15:.5f} degC ({exact:.5f})")
+    assert joint[:, 0] - 273.15 == pytest.approx(exact, abs=1e-3)

@@ -96,6 +96,27 @@ def test_cantilever_first_bending_frequency(tmp_path, solver):
 
 
 @solver
+def test_free_free_bending_frequency(tmp_path, solver):
+    """No supports (ADR 0090 to-check 3): six rigid-body modes near 0 Hz, then the bar's
+    first free-free bending pair, (4.730)² / 2π L² √(EI / ρA) = 1329 Hz (Euler-Bernoulli;
+    1317 Hz measured on CalculiX, Elmer and FEniCSx, shear and the mesh: -0.9 %).
+    FEniCSx's shift-invert at 0 factors the singular K on round-off pivots, on PETSc and
+    on SciPy alike. Code_Aster's shift 0 fails on it (ALGELINE3_81), so it refuses."""
+    physics = [Physics(type="solid_mechanics", features=[], settings=CONSTANT_K)]
+    steps = [SolveStep(type="modal", settings={"modes": 10})]
+    if solver == "code_aster":
+        with pytest.raises(Exception, match="no supports isn't written yet"):
+            _run(tmp_path, physics, steps, solver)
+        return
+    modes = [m.value for m in _run(tmp_path, physics, steps, solver).results.modes()]
+    f1 = 4.730041**2 / (2 * math.pi * L**2) * math.sqrt(E * I / (RHO * A))
+    print(f"{solver}: " + ", ".join(f"{f:.4g}" for f in modes) + f" Hz; exact {f1:.5g}")
+    assert len(modes) == 10
+    assert max(modes[:6]) < 1e-3 * f1  # rigid
+    assert modes[6] == pytest.approx(f1, rel=0.015) and modes[7] == pytest.approx(f1, rel=0.015)
+
+
+@solver
 def test_steady_conduction_is_linear(tmp_path, solver):
     hot = Feature(
         type="temperature", selection="Bar/Root", values={"T": Quantity(value=100, unit="degC")}

@@ -296,3 +296,122 @@ def test_time_schemes(tmp_path, scheme, lines):
     )
     text = sif.read_text(encoding="utf-8")
     assert all(line in text for line in lines)
+
+
+TABLE_SIF = """Solver 1
+  Equation = "Stress"
+  Frequency = Variable Time
+    Real
+      1 10.0
+      2 20.0
+    End
+  Linear System Solver = Direct
+End
+"""
+
+
+def test_overrides_skip_a_tables_end():
+    """ADR 0090 ELMER-2: a table's indented `End` does not end its section, so a new
+    keyword goes before the section's own End and one after the table is replaced."""
+    from puzzle.adapters.elmer.sif_edit import apply, sections
+
+    assert sections(TABLE_SIF) == [("Solver 1", 0, 8)]
+    added = apply(TABLE_SIF, {"Solver */Nonlinear System Max Iterations": "5"}).split("\n")
+    assert added[6:9] == ["    End", "  Linear System Solver = Direct",
+                          "  Nonlinear System Max Iterations = 5"]  # fmt: skip
+    assert added[9] == "End"
+    replaced = apply(TABLE_SIF, {"Solver 1/Linear System Solver": "Iterative"})
+    assert replaced.count("Linear System Solver") == 1
+    assert "  Linear System Solver = Iterative\nEnd" in replaced
+    assert "      2 20.0\n    End\n" in replaced  # the table untouched
+    table = apply(TABLE_SIF, {"Solver 1/Frequency": "Real 5.0"})
+    assert "Frequency = Real 5.0\n  Linear System Solver" in table and "Real\n" not in table
+
+
+def test_expert_keyword_on_a_material_with_tables(tmp_path):
+    """A material's temperature tables end in an indented End; an expert keyword for
+    the material lands in the section, outside every table."""
+    from puzzle.adapters.elmer.sif_edit import sections
+
+    hot = Feature(
+        type="temperature", selection="Bar/Root", values={"T": Quantity(value=100, unit="degC")}
+    )
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    stepfile = write_bar_step(tmp_path / "bar.step")
+    project, comp = bar_project(
+        stepfile, [Physics(type="heat_transfer", features=[hot])], mesh_size_mm=5
+    )
+    expert = {"elmer": {"Material 1/Emissivity": "Real 0.5"}}
+    steps = [SolveStep(type="stationary")]
+    study = project.add(
+        Study(name="s", component=comp.id, solver="elmer", steps=steps, expert_settings=expert)
+    )
+    mesh = generate_mesh(project, comp.id, tmp_path, tmp_path / "m").mesh
+    sif = ElmerAdapter().write_input(project, study, mesh, tmp_path / "case")
+    text = sif.read_text(encoding="utf-8")
+    lines = text.split("\n")
+    ((_, first, end),) = [s for s in sections(text) if s[0] == "Material 1"]
+    body = lines[first + 1 : end]
+    assert "Variable Temperature" in "\n".join(body)  # the table is there
+    assert body[-1] == "  Emissivity = Real 0.5" and body[-2] == "    End"
+
+
+@pytest.mark.parametrize(("tables", "iterations"), [(True, 50), (False, 1)])
+def test_linear_heat_is_solved_once(tmp_path, tables, iterations):
+    """ADR 0090 ELMER-4: without temperature tables the heat equation is linear, and a
+    second nonlinear iteration only confirms no change (a recorded transient log:
+    ITER=2 change 0.0 at every step), so one is written."""
+    hot = Feature(
+        type="temperature", selection="Bar/Root", values={"T": Quantity(value=100, unit="degC")}
+    )
+    heat = Physics(type="heat_transfer", features=[hot],
+                   settings={"temperature_dependent_materials": tables})  # fmt: skip
+    stepfile = write_bar_step(tmp_path / "bar.step")
+    project, comp = bar_project(stepfile, [heat], mesh_size_mm=5)
+    study = project.add(Study(name="s", component=comp.id, solver="elmer",
+                              steps=[SolveStep(type="stationary")]))  # fmt: skip
+    mesh = generate_mesh(project, comp.id, tmp_path, tmp_path / "m").mesh
+    sif = ElmerAdapter().write_input(project, study, mesh, tmp_path / "case")
+    text = sif.read_text(encoding="utf-8")
+    assert ("Variable Temperature" in text) is tables
+    assert f"Nonlinear System Max Iterations = {iterations}\n" in text
+
+
+def test_output_files_in_output_order():
+    """ADR 0090 ELMER-5: files are taken by output number, so the 10,000th output (past
+    Elmer's four padded digits) follows the 9,999th, not the 1,000th."""
+    from pathlib import Path
+
+    from puzzle.adapters.elmer.output import in_order
+
+    names = ["case_t10000.vtu", "case_t1001.vtu", "case_t0002.vtu", "case_t9999.vtu"]
+    assert [p.name for p in in_order(Path(n) for n in names)] == [
+        "case_t0002.vtu", "case_t1001.vtu", "case_t9999.vtu", "case_t10000.vtu"]  # fmt: skip
+
+
+def test_a_mode_without_its_eigenvalue_is_refused(tmp_path):
+    """ADR 0090 ELMER-5: a mode shape whose eigenvalue the log lacks was stored with a
+    NaN frequency; it is a failed read."""
+    vtu = tmp_path / "case_t0001.vtu"
+    vtu.write_text(VTU, encoding="utf-8")
+    with pytest.raises(PuzzleError, match="1 mode shapes but its log gives 0") as info:
+        read_results(vtu, np.array([30, 10, 20]), "")
+    assert info.value.code == "solver_failed"
+
+
+def test_an_iteration_limit_comes_with_a_tolerance(tmp_path):
+    """ADR 0090 to-check 2: StressSolve has no nonlinear tolerance by default, so with
+    `max_iterations` = 5 Elmer solved the (linear) elasticity five times (logged: ITER=1
+    to 5, changes 2.0 then 0.0). A tolerance goes with the limit, and it stops at two."""
+    fixed = Feature(type="fixed", selection="Bar/Root")
+    plain, _ = _case(tmp_path / "a", [fixed], SolveStep(type="stationary"))
+    assert "Nonlinear System" not in plain.read_text(encoding="utf-8")  # unset: unwritten
+    step = SolveStep(type="stationary", settings={"max_iterations": 5})
+    sif, _ = _case(tmp_path / "b", [fixed], step)
+    text = sif.read_text(encoding="utf-8")
+    elasticity = text[text.index('Equation = "Linear elasticity"') :].split("\nEnd")[0]
+    assert "Nonlinear System Max Iterations = 5" in elasticity
+    assert "Nonlinear System Convergence Tolerance = 1e-10" in elasticity
+    step = SolveStep(type="stationary", settings={"max_iterations": 5, "tolerance": 1e-6})
+    text = _case(tmp_path / "c", [fixed], step)[0].read_text(encoding="utf-8")
+    assert "Nonlinear System Convergence Tolerance = 1e-06" in text and "1e-10" not in text

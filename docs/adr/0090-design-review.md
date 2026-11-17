@@ -475,6 +475,52 @@ be solid).
   on a feature (gravity's `z` for `gz`) is dropped without a word. These are on ADR
   0091's list.
 
+**Package 7 built (2026-11-17):** Elmer, FEniCSx and eddy currents. ELMER-1 and
+FENICS-1 were built earlier and verified here: a transient with `output_every = 2`
+returns each field at its time on all four FE solvers.
+
+- ELMER-2: `sif_edit` ends a section only at an unindented `End` and skips table rows,
+  so an override on a solver or material holding a table no longer lands inside it.
+- ELMER-4: linear heat is one nonlinear iteration (50 only with temperature tables);
+  every step had been solved twice.
+- ELMER-5: output files are ordered by their number (`output.in_order`), and fewer
+  eigenvalues in the log than mode shapes is `solver_failed` (a NaN frequency was
+  stored).
+- FENICS-2: `Factored` works on the SciPy path (`_Factor.shape`; 3D and axisymmetric
+  eddy currents had failed there with an AttributeError), and a refactor frees PETSc's
+  objects.
+- FENICS-5: the stress projection factors the scalar mass matrix once and solves per
+  component: 36 times fewer entries, 7.36 s to 0.12 s on SuperLU for 4,913 nodes, the
+  same answers to 3e-15.
+- EDDY-2: a coil at 0 A has no resistance or inductance (NaN) instead of a division by
+  zero.
+- COMMON-1e: FEniCSx results carry node ids at every result site (`study._points`), and
+  `common.match_points` refuses a point with a twin at one place. A split bar with no
+  contact had read up to 50 °C where 20 is right on eight coincident nodes; now exact on
+  all four solvers (`tests/integration/test_coincident_nodes.py`). The remaining
+  position-matched paths (Elmer's partition merge, magnetics cells, FEniCSx spaces of
+  another degree) now raise on coincident nodes instead of mislabelling.
+- From the "to check" list, three real defects:
+  - planar heat across parts 1 and 2 mm thick gave a joint at 50.000 °C for 33.333 °C
+    on FEniCSx, Elmer and Code_Aster. FEniCSx now weights by thickness (33.33333 °C;
+    its plane-stress heat needs a thickness section, as CalculiX's did); Elmer and
+    Code_Aster refuse differing thicknesses (`common.check_planar_heat_thickness`).
+  - a temperature load on one body of two moved the other on FEniCSx (2.445e-4 m for
+    1.232e-4): the field is now written on every node, the reference where the load
+    gives none.
+  - a free modal study on Code_Aster was a syntax error (`CHARGE=(,)`), and `CALC_MODES`
+    fails at a zero shift once that is fixed, so it is refused. CalculiX, Elmer and
+    FEniCSx give 1,317 Hz for 1,329 Hz.
+- Also from the list: Elmer's Rayleigh alpha and beta confirmed (a new harmonic case);
+  a shared `max_iterations` on Elmer's StressSolve comes with a 1e-10 tolerance (its
+  default 0 ran every iteration); a custom PDE's `neumann` on a vector unknown takes
+  x/y/z, and a vector `dirichlet` or `neumann` without them is refused (a `value`
+  alone had held nothing).
+- CI: a Linux step runs FEniCSx's SciPy path on five integration files. Untested on
+  GitHub; 3D magnetostatics was left out of it (SuperLU may be slow there).
+- Refused until built (ADR 0072): Code_Aster free modal; planar heat with differing
+  thickness on Elmer and Code_Aster.
+
 ### Enhancements toward the state of the art
 
 From `state-of-the-art.md` (50 gaps, each with who has it, which open solver can deliver

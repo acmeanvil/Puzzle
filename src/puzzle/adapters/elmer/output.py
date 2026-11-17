@@ -39,6 +39,20 @@ def _xyz(values: np.ndarray) -> np.ndarray:
     return np.column_stack([values, np.zeros((len(values), 3 - values.shape[1]))])
 
 
+_OUTPUT_NUMBER = re.compile(r"_t(\d+)\.vtu$")
+
+
+def in_order(paths) -> list[Path]:
+    """Output files in output order: by the number after `_t`, not by name, which puts
+    `case_t10000.vtu` before `case_t1001.vtu` once Elmer's four digits run out."""
+
+    def key(path: Path):
+        m = _OUTPUT_NUMBER.search(path.name)
+        return (int(m.group(1)) if m else -1, path.name)
+
+    return sorted(paths, key=key)
+
+
 def eigenvalues(log_text: str) -> list[float]:
     """Eigenvalues (omega^2) from the solver log, in mode order."""
     found: dict[int, float] = {}
@@ -105,8 +119,17 @@ def read_results(vtu: Path, node_ids: np.ndarray, log_text: str) -> Results:
     )
     if modes:
         lam = eigenvalues(log_text)
+        if len(lam) < modes[-1]:  # a mode with no frequency is no result (ADR 0090 ELMER-5)
+            from puzzle.errors import PuzzleError
+
+            raise PuzzleError(
+                f"Elmer wrote {modes[-1]} mode shapes but its log gives {len(lam)} "
+                "eigenvalues; the modes' frequencies can't be read",
+                code="solver_failed",
+                details={"modes": modes[-1], "eigenvalues": len(lam)},
+            )
         for m in modes:
-            hz = math.sqrt(max(lam[m - 1], 0.0)) / (2 * math.pi) if m <= len(lam) else float("nan")
+            hz = math.sqrt(max(lam[m - 1], 0.0)) / (2 * math.pi)
             disp = field("displacement", ["x", "y", "z"], data[f"displacement EigenMode{m}"])
             results.steps.append(StepResult(1, "modal", hz, m, {"displacement": disp}))
         return results

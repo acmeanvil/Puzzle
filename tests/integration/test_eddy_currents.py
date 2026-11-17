@@ -330,6 +330,36 @@ def test_two_windings_each_carry_their_own_current(tmp_path, solver):
         assert _global(step, "coil_inductance", body) != 0
 
 
+@solver
+def test_an_open_secondary_has_no_impedance(tmp_path, solver):
+    """ADR 0090 EDDY-2: a winding at 0 A beside a driven one (an open secondary) had
+    failed the run while its results were read. Its resistance and inductance are NaN;
+    the driven wire's resistance is the uniform current's L / (σ S), S its meshed section."""
+    a = 0.6e-3
+    currents = {"Wire1/Body": (10.0, 0.0), "Wire2/Body": (0.0, 0.0)}
+    project, study = _project(
+        tmp_path,
+        solver,
+        [(-1.5e-3, a), (1.5e-3, a)],
+        [2e3],
+        wire_size=0.3,
+        coils=lambda n: [_coil("stranded_coil", f"{w}/Body", *currents[f"{w}/Body"]) for w in n],
+    )
+    run = run_study(project, study.id, tmp_path, tmp_path / "run", timeout_s=1800)
+    (step,) = run.results.steps
+    driven = run.mesh.groups["Wire1/Body"].blocks(run.mesh)[0].ids
+    section = _volumes(run.mesh, driven).sum() / L  # 2.9 % under π a² at this size
+    r_exact = L / (_sigma(project) * section)
+    r = _global(step, "coil_resistance", "Wire1/Body")
+    print(f"{solver}: driven wire R {r / r_exact - 1:+.2e}")
+    assert r == pytest.approx(r_exact, rel=1e-3)
+    assert math.isnan(_global(step, "coil_resistance", "Wire2/Body"))
+    assert math.isnan(_global(step, "coil_inductance", "Wire2/Body"))
+    amp = step.fields["current_density_amplitude"]
+    open_ = np.isin(amp.ids, run.mesh.groups["Wire2/Body"].blocks(run.mesh)[0].ids)
+    assert np.abs(amp.values[open_]).max() < 1e-9 * np.abs(amp.values).max()
+
+
 def test_shootout_elmer_and_fenicsx(tmp_path):
     """One mesh, both solvers: a driven wire beside a passive copper wire, whose eddy
     currents Elmer solves in A–V and FEniCSx in A (V = 0 there)."""

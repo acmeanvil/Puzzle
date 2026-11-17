@@ -24,8 +24,9 @@ ELEMENTS = {
     "hex8": (808, None),
     # Second-order bricks (ADR 0082): Elmer's 820 lists the bottom ring's mid-edges, then
     # the uprights', then the top ring's (VTK and CalculiX put the top ring before the
-    # uprights); its 827 then the faces 1-2-3-4, 1-2-6-5, 2-3-7-6, 3-4-8-7, 4-1-5-8,
-    # 5-6-7-8 and the centre.
+    # uprights); its 827 then the faces' centres, the sides first: 1-2-6-5, 2-3-7-6,
+    # 3-4-8-7, 4-1-5-8, then 1-2-3-4, 5-6-7-8, and the body's (Gmsh's are 1-2-3-4,
+    # 1-2-6-5, 1-4-8-5, 2-3-7-6, 3-4-8-7, 5-6-7-8: the list below, run on hex27 meshes).
     "hex20": (820, [0, 1, 2, 3, 4, 5, 6, 7, 8, 11, 13, 9, 10, 12, 14, 15, 16, 18, 19, 17]),
     "hex27": (
         827,

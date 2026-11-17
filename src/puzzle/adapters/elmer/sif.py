@@ -32,6 +32,7 @@ from puzzle.adapters.common import (
     body_load_on_material,
     check_contacts,
     check_dynamics,
+    check_planar_heat_thickness,
     cylindrical_expressions,
     frequency_list,
     globalize,
@@ -94,6 +95,8 @@ def write_case(
         raise InputError("the Elmer adapter runs studies with exactly one solve step for now")
     step = steps[0]
     solved = set(step.physics) or {p.type for p in comp.physics}
+    if "heat_transfer" in solved:
+        check_planar_heat_thickness(comp, "Elmer")
     allowed = {
         "solid_mechanics": ("stationary", "modal", "transient", "frequency_domain"),
         "heat_transfer": ("stationary", "transient"),
@@ -219,6 +222,7 @@ def write_case(
     ]
     forces: list[list[str]] = []  # body force blocks for body loads, in body order
     (workdir / MESH_DIR / THERMAL_ZZ).unlink(missing_ok=True)
+    tabled = False  # a material's temperature tables make the heat equation nonlinear
     for i, assignment in enumerate(comp.materials, start=1):
         conductor = assignment.selection in coil_bodies
         out += [f"Body {i}", f"  Target Bodies(1) = {i}", f"  Equation = {2 - conductor}"]
@@ -235,6 +239,7 @@ def write_case(
         out += ["End", ""]
         material = project.get(assignment.material, Material)
         tables = thermal_tables(material, comp) if "heat_transfer" in solved else {}
+        tabled = tabled or bool(tables)
         out += _material(i, material, solved, tables)
         if damping is not None:  # C = alpha M + beta K, in the Material block
             out[-2:-2] = [
@@ -284,7 +289,7 @@ def write_case(
             "",
         ]
 
-    solvers = _solvers(step, solved, coils, dofs=2 if mesh.planar else 3)
+    solvers = _solvers(step, solved, coils, dofs=2 if mesh.planar else 3, nonlinear=tabled)
     degree = _p_element(comp, mesh, solved, step)  # ADR 0082: Element = "p:2"
     if degree:
         solvers[0].insert(3, f'  Element = "{degree}"')
@@ -506,8 +511,11 @@ def _p_element(comp, mesh, solved: set[str], step) -> str | None:
     return next(iter(degrees))
 
 
-def _solvers(step, solved: set[str], coils: list[Feature], dofs: int = 3) -> list[list[str]]:
-    """The solver blocks, without their Solver/End lines, in solver order."""
+def _solvers(
+    step, solved: set[str], coils: list[Feature], dofs: int = 3, nonlinear: bool = True
+) -> list[list[str]]:
+    """The solver blocks, without their Solver/End lines, in solver order. `nonlinear`:
+    some material's temperature tables make the heat equation nonlinear."""
     if solved == {"solid_mechanics"}:
         block = [
             '  Equation = "Linear elasticity"',
@@ -579,8 +587,9 @@ def _solvers(step, solved: set[str], coils: list[Feature], dofs: int = 3) -> lis
             '  Equation = "Heat Equation"',
             '  Procedure = "HeatSolve" "HeatSolver"',
             "  Variable = Temperature",
-            # Temperature tables make the system nonlinear; a linear one stops after one.
-            "  Nonlinear System Max Iterations = 50",
+            # Temperature tables make the system nonlinear. A linear one is solved once:
+            # with more allowed Elmer solves it again to see no change (ADR 0090 ELMER-4).
+            f"  Nonlinear System Max Iterations = {50 if nonlinear else 1}",
             "  Nonlinear System Convergence Tolerance = 1e-10",
             *DIRECT,
         ]
@@ -904,6 +913,10 @@ def with_settings(sif: str, study: Study, step) -> str:
         )
     if "max_iterations" in given:
         overrides["Solver */Nonlinear System Max Iterations"] = str(int(given["max_iterations"]))
+        # A solver with no tolerance of its own (StressSolve's default is 0) never
+        # converges, so it solved a linear system max_iterations times: stop it once
+        # nothing changes (ADR 0090 to-check 2; the heat solver's own 1e-10).
+        overrides.setdefault("Solver */Nonlinear System Convergence Tolerance", "1e-10")
     if "output_every" in given:
         overrides["Simulation/Output Intervals(1)"] = str(int(given["output_every"]))
     set_here = study.solver_settings.get("elmer", {})

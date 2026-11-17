@@ -36,7 +36,7 @@ def sections(sif: str) -> list[tuple[str, int, int]]:
     for i, line in enumerate(lines):
         if start is None and line and not line.startswith((" ", "!")) and line.strip() != "End":
             start, name = i, line.strip()
-        elif start is not None and line.strip() == "End":
+        elif start is not None and line.rstrip() == "End":
             out.append((name, start, i))
             start = None
     return out
@@ -66,7 +66,8 @@ def apply(sif: str, overrides: dict[str, str], skip=lambda section_lines: False)
             body = lines[first + 1 : end]
             at = next(
                 (k for k, line in enumerate(body)
-                 if line.split("=")[0].strip().lower() == keyword.lower()),
+                 if not line.startswith("    ")  # a table's rows are not keywords
+                 and line.split("=")[0].strip().lower() == keyword.lower()),
                 None,
             )  # fmt: skip
             new = f"  {keyword} = {value}"

@@ -50,7 +50,7 @@ from puzzle.adapters.base import (
     SolverAdapter,
     refuse_inputs,
 )
-from puzzle.adapters.elmer.output import read_series
+from puzzle.adapters.elmer.output import in_order, read_series
 from puzzle.adapters.elmer.sif import MESH_DIR, OUTPUT, THERMAL_ZZ, TIMES, write_case
 from puzzle.jobs.runner import LOG_NAME
 from puzzle.mesh.mesh import Mesh
@@ -224,7 +224,7 @@ class ElmerAdapter(SolverAdapter):
 
     def read_results(self, input_file: Path) -> Results:
         mesh_dir = input_file.parent / MESH_DIR
-        vtus = sorted(mesh_dir.glob(f"{OUTPUT}*.vtu"))
+        vtus = in_order(mesh_dir.glob(f"{OUTPUT}*.vtu"))
         if not vtus:
             raise FileNotFoundError(f"Elmer wrote no results ({OUTPUT}*.vtu); see the solver log")
         log = input_file.parent / LOG_NAME

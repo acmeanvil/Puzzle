@@ -110,7 +110,9 @@ Help → Element library lists every solver's elements and the ones Puzzle write
 
 - A 2D part off z = 0 (`not_planar`), or an axisymmetric region at x < 0
   (`negative_radius`): draw on the XY plane.
-- A plane-stress part with no thickness: refused.
+- A plane-stress part with no thickness: refused. Heat across parts of different
+  thickness flows as k t dT/dx, so CalculiX and FEniCSx weigh it by each part's
+  thickness and Elmer and Code_Aster, whose heat equation has none, refuse it.
 - 2D models refuse beams, bolts, remote loads, pretension and contacts other than
   conformal bonds.
 - A symmetry plane on a face that isn't on the plane of symmetry: it holds the part

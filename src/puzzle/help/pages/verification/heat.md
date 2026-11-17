@@ -98,6 +98,19 @@ Code_Aster 5.1e-4 K and 1.9e-6 off CalculiX, the same on each, which is the five
 of CalculiX's results file. Loads spread over faces (pressure, flux, films) are refused
 on an edge or a point.
 
+## Two parts touching with no contact
+
+`tests/integration/test_coincident_nodes.py` puts the two halves of the bar end to end
+with no contact between them, so each keeps its own nodes and eight pairs sit at one
+place where the faces' meshes meet. The left half is held at 100 and 50 °C, the right
+at 20 °C on both ends: every node of the left's end must read 50 °C and every node of
+the right's start 20 °C (1e-6 K), one result row per node. Structurally (FEniCSx), the
+left half pulled by 10 MPa and the right held at its far end: the right does not move
+(below 1e-12 m) and the left's end moves σ L / E within 1 %. Matched by position, both
+nodes of a pair had taken one id, so one read the other part's value (ADR 0090
+COMMON-1). Measured 2026-11-17: 50 and 20 °C exactly on all four solvers; the left's
+end 0.9967 of σ L / E (the held start's restraint), the right 0 m.
+
 ## Temperature-dependent conductivity
 
 The root is held at 100 °C and the tip at 700 °C. Over that range the EN 1993-1-2
