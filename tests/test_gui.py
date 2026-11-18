@@ -227,9 +227,10 @@ def test_agent_proposes_and_the_user_accepts(app, tmp_path):
     window, _ = _scripted_window(app, tmp_path, replies)
     try:
         window.agent.send("make the tip load 250 N")
-        wait(app, lambda: not window.tasks, timeout=60)
+        # the proposal's list follows the history, which a slow machine reads later
+        wait(app, lambda: not window.tasks and window.agent.proposals.count() == 1,
+             timeout=60)  # fmt: skip
         assert "Proposed a 250 N tip load." in window.agent.transcript.toPlainText()
-        assert window.agent.proposals.count() == 1
         assert "Changed Cantilever (physics) — asked" in window.agent.proposals.item(0).text()
         assert _tip(window) == -100
 

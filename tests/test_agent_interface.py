@@ -289,6 +289,8 @@ def test_the_tree_marks_what_the_turn_touched_and_lines_link_to_it(root, app):
         assert len(added) == 1
         from puzzle.gui.tree import Node
 
+        # the tree follows the history, which a slow machine reads a little later
+        _wait(app, lambda: w.tree.item_for(Node("object", added[0])) is not None)
         item = w.tree.item_for(Node("object", added[0]))
         assert item is not None and item.font(0).bold()
         assert "by the agent this turn" in item.toolTip(0)

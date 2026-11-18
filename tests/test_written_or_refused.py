@@ -38,6 +38,11 @@ def _place_needs(c: wor.Cell) -> None:
 @pytest.mark.parametrize("c", CELLS, ids=[c.ident() for c in CELLS])
 def test_written_or_refused(world, c):
     _place_needs(c)
+    if c.case.solver == "pynite":  # its command names the Python it runs in
+        from puzzle.adapters.pynite import pynite_python
+
+        if pynite_python() is None:
+            pytest.skip("no Python with PyNite here")
     got = outcome(world, c)
     if got.kind == "silent" and c.exemption():
         return

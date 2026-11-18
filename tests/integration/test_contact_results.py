@@ -79,7 +79,7 @@ def test_a_sliding_block_slides_everywhere(tmp_path, solver):
 
 
 @over("calculix")
-def test_the_contact_tools_results_tab(tmp_path, solver):
+def test_the_contact_tools_results_tab(tmp_path, solver, si_units):
     """The Results tab lists the stack's contact with its force, and shows the pressure
     on the source face (20 MPa)."""
     import os

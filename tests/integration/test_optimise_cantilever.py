@@ -21,7 +21,7 @@ from puzzle.results.store import ResultStore
 pytestmark = pytest.mark.skipif(not available("calculix"), reason="calculix not available")
 
 
-def test_thinnest_cantilever_by_design_of_experiments(tmp_path):
+def test_thinnest_cantilever_by_design_of_experiments(tmp_path, si_units):
     pytest.importorskip("OCP")
     p, opt = beam_project()
     root = tmp_path / "beam"

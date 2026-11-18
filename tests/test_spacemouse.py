@@ -284,9 +284,14 @@ def test_spacenavd_is_read_from_its_socket(tmp_path):
 
     if not hasattr(socket, "AF_UNIX"):
         pytest.skip("Unix sockets only (spacenavd is Linux's)")
+    # a socket's path holds about 100 characters, and macOS' temporary folders are longer
+    import os
+    import tempfile
+
     from puzzle.gui.spacemouse import spacenav
 
-    path = str(tmp_path / "spnav.sock")
+    short = tempfile.mkdtemp(prefix="pz", dir="/tmp" if os.path.isdir("/tmp") else None)
+    path = os.path.join(short, "s")
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     server.bind(path)
     server.listen(1)
