@@ -57,7 +57,7 @@ def _recipe(window) -> MeshRecipe:
     return window.session.project.get(window.mesh_bench.component_obj().mesh, MeshRecipe)
 
 
-def test_controls_are_made_listed_edited_and_deleted(app, window):
+def test_controls_are_made_listed_edited_and_deleted(si_units, app, window):
     bench = window.mesh_bench
     window.left_tabs.setCurrentWidget(bench)
     assert window.context == "mesh" and bench.ribbon.isVisibleTo(window)

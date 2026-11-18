@@ -32,7 +32,7 @@ def app():
     return QApplication.instance() or QApplication([])
 
 
-def test_a_new_project_with_units_shows_them_to_everyone(app, tmp_path):
+def test_a_new_project_with_units_shows_them_to_everyone(si_units, app, tmp_path):
     w = MainWindow()
     try:
         w.new_project(tmp_path / "p", "P", units="engineering")
@@ -40,7 +40,7 @@ def test_a_new_project_with_units_shows_them_to_everyone(app, tmp_path):
         assert units.use and units.system == "engineering"
         assert settings.current().display_units()["pressure"] == "MPa"
         assert w.units_button.text() == "mm · N · MPa · °C  (project)"
-        # Someone else opening it sees the same, whatever their own preference is.
+        # Someone else opening it sees the same, whatever their own preference (SI here).
         assert settings.current().get("units.system") == "si"
     finally:
         w.close()

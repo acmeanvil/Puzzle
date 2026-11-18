@@ -349,7 +349,7 @@ class ModelTree(QTreeWidget):
             sweeps: dict[str, tuple[QTreeWidgetItem, set]] = {}  # study id -> heading, points
             named = next(iter(project.of_type(TreeLabels)), None)  # names given in the tree
             for r in reversed(runs):  # newest first
-                when = f"{solver_label(r.solver)} · {r.started_at:%Y-%m-%d %H:%M}"
+                when = f"{solver_label(r.solver)} · {r.started_at.astimezone():%Y-%m-%d %H:%M}"
                 study = project.objects.get(_uuid(r.study_id))
                 study_name = study.name if study is not None else r.study_name  # renamed
                 labels = r.point_labels()

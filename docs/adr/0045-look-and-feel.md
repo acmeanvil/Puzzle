@@ -142,3 +142,7 @@ Not done, and not holding the ADR: menu icons (see above); a full focus-order re
 ## Amended (2026-11-17, ADR 0090 package 10)
 
 Delete takes the Model tree's selection only while the Model tab is current and no other list, table or canvas has the focus, and its message says what Undo brings back. Errors are shown in words, without their code (the log keeps it). Toolbar actions that need a project are greyed out without one. Each panel refreshes on its own, so one that fails doesn't stop the others.
+
+## Amended (2026-11-18, ADR 0090 package 11)
+
+A ribbon's folded groups are as wide as their own words, and groups that don't fit even folded go into a More button, so a ribbon's minimum is More alone. Left and right panels keep at least 260 px. The Model tab has a ribbon (Analysis, Loads and supports, Connections, Study), each button the menu bar's function. The menu bar has Edit (Undo, Redo, Delete, Rename, New group, Duplicate…) after Project. The toolbar is New, Open, Save version, Undo, Redo, Import geometry…, New analysis…, Add material…, Mesh, Run, Pick. A selected row's state icon is drawn in the selection's text colour. The status bar's button says Stop.

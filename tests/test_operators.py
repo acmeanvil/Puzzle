@@ -202,7 +202,7 @@ def test_plot_against_a_sweep(setup):
     assert [r[1] for r in table.rows] == pytest.approx([1.0, 0.5, 0.25])
 
 
-def test_panel_shows_and_export_writes(setup, tmp_path):
+def test_panel_shows_and_export_writes(si_units, setup, tmp_path):
     p, study, ctx = setup
     hot = p.add(Operator(name="Hottest", type="reduce", quantity="temperature:value",
                          inputs={"result": wire(study, "result")}))  # fmt: skip
@@ -285,7 +285,7 @@ def test_states_follow_what_they_read(setup):
     assert states[str(lonely.id)].state == "missing"
 
 
-def test_summary_is_data(setup):
+def test_summary_is_data(si_units, setup):
     p, study, ctx = setup
     hot = p.add(Operator(name="Hot", type="reduce", quantity="temperature:value",
                          inputs={"result": wire(study, "result")}))  # fmt: skip
@@ -294,7 +294,7 @@ def test_summary_is_data(setup):
     assert data["outputs"]["out"]["unit"] == "K" and data["shown"] == "3 K"
 
 
-def test_the_schematic_draws_operators_with_typed_ports_and_values(setup):
+def test_the_schematic_draws_operators_with_typed_ports_and_values(si_units, setup):
     from puzzle import schematic as sch
     from puzzle.schematic.layout import layout
     from puzzle.schematic.svg import to_svg

@@ -41,6 +41,9 @@ from PySide6.QtWidgets import (
 STATE, AUTO = b"\n--state--\n", b"\n--auto--\n"
 
 
+SIDE_MINIMUM = 260  # px: the narrowest a left or right panel goes (UX-1)
+
+
 class ScrollTabs(QTabWidget):
     """Tabs whose pages scroll when the panel is shorter than they are.
 
@@ -171,6 +174,10 @@ class Docks:
         dock.setWidget(widget)
         dock.setProperty("panel", key)
         dock.setTitleBarWidget(DockTitle(dock))  # never the system's frame when floating
+        if area in (Qt.DockWidgetArea.LeftDockWidgetArea, Qt.DockWidgetArea.RightDockWidgetArea):
+            # The centre gives way first: a side panel is never crushed to a column of
+            # one word a line (UX-1).
+            dock.setMinimumWidth(SIDE_MINIMUM)
         self.window.addDockWidget(area, dock)
         self.panels[key] = dock
         return dock

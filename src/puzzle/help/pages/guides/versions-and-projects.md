@@ -71,7 +71,9 @@ autonomy again if you want to.
 
 ## Undo and history
 
-- Project → Undo (Ctrl+Z) takes back the last change, yours or an agent's. A batch of
+- Edit → Undo (Ctrl+Z) takes back the last change, yours or an agent's; Edit → Redo
+  (Ctrl+Y or Ctrl+Shift+Z) puts back what Undo took, until you make a new change. Their
+  tooltips name what each would act on. A batch of
   edits made at once, or an agent's proposal you accepted, undoes as one. Undo refuses
   when the objects have changed since, or when something made later uses what it would
   remove (undo the later change first).

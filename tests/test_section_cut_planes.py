@@ -68,7 +68,7 @@ def test_curved_face_plane_fits_its_points(tmp_path):
     assert origin[2] == pytest.approx(0.05, abs=2e-3)  # half way up the side
 
 
-def test_cut_bar_lists_faces_selections_and_planes(bar_mesh):
+def test_cut_bar_lists_faces_selections_and_planes(si_units, bar_mesh):
     pytest.importorskip("PySide6")
     from PySide6.QtWidgets import QApplication
 
@@ -106,7 +106,7 @@ def test_cut_bar_lists_faces_selections_and_planes(bar_mesh):
     assert seen[-1].axis == "x" and seen[-1].origin is None and bar.offset.isHidden()
 
 
-def test_saved_sections_recall_rename_delete_undo(bar_mesh, tmp_path):
+def test_saved_sections_recall_rename_delete_undo(si_units, bar_mesh, tmp_path):
     pytest.importorskip("PySide6")
     from PySide6.QtWidgets import QApplication
 

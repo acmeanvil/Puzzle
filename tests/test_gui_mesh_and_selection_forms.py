@@ -187,7 +187,7 @@ def plate(app, tmp_path):
     w.close()
 
 
-def test_selection_by_rule_counts_lights_and_makes_it(app, plate):
+def test_selection_by_rule_counts_lights_and_makes_it(si_units, app, plate):
     pytest.importorskip("mcp")
     from puzzle.agent.mcp import build_server
     from puzzle.gui import selection_rule as form

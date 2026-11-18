@@ -4,7 +4,7 @@ section: guide
 order: 60
 keys: kind:amplitude, section:amplitudes, kind:parameters, section:parameters
 summary: Hold a model and load it: supports, forces, pressures, remote and body loads, heat loads, loads over time, and values that follow a parameter.
-adrs: 0037
+adrs: 0037, 0090
 ---
 
 Loads, supports and other conditions are **features** of a component's physics. Each
@@ -13,13 +13,18 @@ transient structure needs at least one support, or the run is refused as `uncons
 
 ## How to add a load or support
 
-1. Right-click the physics in the model tree (or its Loads and boundary conditions
-   folder), Add feature, and choose one. Model → Physics and loads → Add feature does
-   the same.
-2. In Properties, choose the selection and type the values, in any unit of the right
-   kind ("2 MPa", "5 kN").
-3. Right-click the feature, Change selection…, to move it. A support's menu has Reaction
-   force… to read what it carries after a run.
+1. Pick (P) and double-click the faces in the view, then Add load or support… in the
+   pick bar. Or right-click the physics in the model tree (or its Loads and boundary
+   conditions folder), Add load or support, and choose one; Model → Physics and loads →
+   Add load or support does the same. Fixed support, Force and Pressure come first; the
+   rest are under Supports, Loads, Body loads, Bolts and Explicit dynamics.
+2. One form asks where it goes and its values. Applied to offers the faces you picked
+   (they become a selection named after the load, "Force 1", in the same undo) and the
+   selections already named. Type the values in any unit of the right kind ("2 MPa",
+   "5 kN"); a bare number is in the unit shown. With nothing picked or named, picking
+   starts for you: pick, then add again.
+3. Change values later in Properties. Right-click the feature, Change selection…, to
+   move it. A support's menu has Reaction force… to read what it carries after a run.
 
 The supports and loads symbols in the view show where each acts (the view toolbar's
 Supports and loads button hides them).

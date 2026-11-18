@@ -271,11 +271,13 @@ class MeshBench(QWidget):
         layout.setContentsMargins(4, 4, 4, 4)
         layout.addWidget(self.component)
         layout.addWidget(self.recipe_label)
-        hint = QLabel("Controls, in order: double-click edits; the tools are above the view.")
-        hint.setWordWrap(True)
-        role(hint, "muted")
-        layout.addWidget(hint)
         layout.addWidget(self.controls, 1)
+        # UX-36: an empty list says what to do, with the button that does it
+        self.no_controls = QPushButton("Add a local size…")
+        self.no_controls.setToolTip("A finer (or coarser) mesh on a selection; the other "
+                                    "controls are on the ribbon above the view")  # fmt: skip
+        self.no_controls.clicked.connect(lambda: self.start_tool("size"))
+        layout.addWidget(self.no_controls)
         layout.addWidget(QLabel("Methods"))
         self.methods = QLabel("")
         self.methods.setWordWrap(True)
@@ -342,7 +344,12 @@ class MeshBench(QWidget):
         )
         self.controls.clear()
         for i, c in enumerate(recipe.controls if recipe else []):
-            self.controls.addItem(QListWidgetItem(f"{i + 1}. {c.describe()}"))
+            item = QListWidgetItem(f"{i + 1}. {c.describe()}")
+            item.setToolTip("Double-click to edit; right-click to move or delete")
+            self.controls.addItem(item)
+        has = bool(recipe is not None and recipe.controls)
+        self.controls.setVisible(has)
+        self.no_controls.setVisible(recipe is not None and not has)
         for value, b in self.mesher.items():
             b.setChecked(recipe is not None and recipe.mesher == value)
         for b in self.buttons.values():

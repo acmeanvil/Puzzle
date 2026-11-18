@@ -24,7 +24,7 @@ from puzzle.geometry import import_step  # noqa: E402
 from puzzle.gui import menus  # noqa: E402
 from puzzle.gui.tree import Node  # noqa: E402
 from puzzle.gui.window import MainWindow  # noqa: E402
-from puzzle.model.catalog import spec  # noqa: E402
+from puzzle.model.catalog import spec, specs  # noqa: E402
 from puzzle.model.schema import Component, Geometry, Study  # noqa: E402
 
 # These tests type lengths in mm (Settings > Units: engineering).
@@ -36,18 +36,6 @@ EXAMPLE = Path(__file__).parents[1] / "examples" / "cantilever"
 @pytest.fixture(scope="module")
 def app():
     return QApplication.instance() or QApplication([])
-
-
-class Answers:
-    """Scripted replies to the window's questions, in order."""
-
-    def __init__(self, window, *replies):
-        self.replies = list(replies)
-        window.choose = self.next
-        window.ask_text = self.next
-
-    def next(self, *args, **kwargs):
-        return self.replies.pop(0)
 
 
 def _form(window, action):
@@ -100,9 +88,9 @@ def test_build_and_solve_a_cantilever_from_menus(app, tmp_path):
         fill(window, material="Structural steel", selection="bar/Body")
         menus.assign_material(window, _only(window, Component))
         menus.add_physics(window, _only(window, Component), "solid_mechanics")
-        Answers(window, "bar/Root")
+        fill(window, selection="bar/Root")  # one form: where, and the values (UX-2)
         menus.add_feature(window, _only(window, Component), 0, spec("solid_mechanics", "fixed"))
-        Answers(window, "bar/Tip")
+        fill(window, selection="bar/Tip", **{"force:y": "-100 N"})
         menus.add_feature(window, _only(window, Component), 0, spec("solid_mechanics", "force"))
         force = _only(window, Component).physics[0].features[1]
         window.submit(
@@ -166,9 +154,19 @@ def test_menus_match_the_item(app, tmp_path):
         physics = menus.build_menu(window, Node("physics", str(comp.id), "physics.0"))
         from PySide6.QtWidgets import QMenu
 
-        (sub,) = [m for m in physics.findChildren(QMenu) if m.title() == "Add feature"]
-        assert [a.text() for a in sub.actions()] == [
-            s.label for s in menus.specs("solid_mechanics")
+        (sub,) = [m for m in physics.findChildren(QMenu) if m.title() == "Add load or support"]
+        leaves = []  # UX-15: grouped, the common three first
+
+        def walk(m):
+            for a in m.actions():
+                walk(a.menu()) if a.menu() else (leaves.append(a.text()) if a.text() else None)
+
+        walk(sub)
+        assert sorted(leaves) == sorted(s.label for s in specs("solid_mechanics"))
+        assert [a.text() for a in sub.actions()][:3] == [
+            "Fixed support",
+            "Force (total over the face)",
+            "Pressure",
         ]
         view = ["", "Hide symbol", "Hide all other symbols", "Show all symbols"]  # D2
         assert texts(Node("feature", str(comp.id), "physics.0.features.0")) == [

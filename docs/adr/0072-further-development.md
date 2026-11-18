@@ -130,6 +130,11 @@ Other items:
   MPI and Elmer magnetics MPI are done (0021).
 - GPU: FEniCSx with a CUDA PETSc as a preset, benchmarked on a large LE1; CalculiX with GPU
   PaStiX; recheck Code_Saturne offload, OpenFOAM's GPU add-ons, cuDSS (0052).
+- A remote run cancelled before its driver has written `puzzle-run.pgid` finds nothing
+  there to stop, and the run goes on (0021; seen on CI, 2026-11-18, where the test now
+  cancels once the solver has started). The two beam-bolt thread benchmarks take 24 and
+  49 minutes on GitHub's Linux machine against about a minute with PARDISO here: marked
+  `heavy`; why is not known (0076).
 
 ### 2. Installers and packaging (0068 steps 3-5 and others)
 
@@ -593,6 +598,11 @@ FEniCSx, threaded beam-bolt ends, and the modelled bolts of ADR 0077. Left:
   view centre, the device's name in Settings.
 - Trackers: Code_Aster past SUIVI_DDL's four columns (OBSERVATION), in its linear and
   thermal solves; OpenFOAM and Code_Saturne probes as trackers (0054).
+- Usability left by ADR 0090 package 11 (its Progress entry lists them): a command table
+  behind menus, ribbons and the tree (UX-5, 16), Study and View menus and a workspace
+  strip (UX-9), the view cube and the view's right-click menu, connection and run
+  panels, solver settings as a form, a load's live preview, New analysis choosing among
+  the solvers installed.
 
 ### 11. Project, storage and core
 

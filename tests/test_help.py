@@ -17,6 +17,7 @@ LINK = re.compile(r"\]\((help:[^)\s]+)\)")
 # ADRs whose finished features a help page explains (its front matter's `adrs`), the
 # twin of test_agent_skills.WITH_SKILLS (ADR 0083 decision 3).
 WITH_HELP = {
+    "0090",  # package 11: New analysis (UX-3)
     "0005",
     "0011",
     "0014",

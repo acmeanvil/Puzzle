@@ -73,7 +73,7 @@ def _settle(window):
 
 
 @pytest.mark.skipif(not available("calculix"), reason="calculix not available")
-def test_planes_and_paths_feed_result_tools(app, tmp_path):
+def test_planes_and_paths_feed_result_tools(si_units, app, tmp_path):
     root = tmp_path / "bar"
     root.mkdir()
     force = Feature(type="force", selection="Bar/Tip", values={"y": Quantity(value=-100, unit="N")})

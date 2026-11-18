@@ -26,6 +26,20 @@ from puzzle.settings import PREFERENCES, WAITING, Settings
 
 ADVANCED = "Advanced"  # resets made by hand (the PARDISO build's wait)
 AGENT = "Agent"
+LAST = ("Schematic", "Connections", "3D mouse")  # groups after the rest, in this order
+
+
+def plain_help(text: str) -> str:
+    """A preference's description as a person reads it: the design records it cites
+    ("(ADR 0023)", "ADR 0068, 0051:") are the maintainers', not the user's (UX-23)."""
+    import re
+
+    text = re.sub(r"\s*\((?:ADRs? )\d{4}[^)]*\)", "", text or "")
+    cited = r",?\s*\bADRs? \d{4}(?:[ ,]+(?:and )?\d{4})*(?: (?:decision|step|section) \d+)?:?"
+    text = re.sub(cited, "", text)
+    return re.sub(r"\s{2,}", " ", text).strip()
+
+
 IMAGES = [
     ("Default: local models yes, remote models no", None),
     ("Always send images and files", True),
@@ -60,7 +74,11 @@ class SettingsDialog(QDialog):
         # project's, not the user's, so saved through its Session, not settings.toml.
         self.project_window = parent if getattr(parent, "session", None) is not None else None
         self.boxes: dict[str, QComboBox] = {}
-        groups = list(dict.fromkeys(p.group for p in PREFERENCES)) + [AGENT, ADVANCED]
+        groups = sorted(
+            dict.fromkeys(p.group for p in PREFERENCES),
+            key=lambda g: (g in LAST, list(LAST).index(g) if g in LAST else 0),
+        )
+        groups += [AGENT, ADVANCED]  # UX-23: everyday groups first, the device last
         self.groups = QListWidget()
         self.groups.addItems(groups)
         self.groups.setFixedWidth(150)
@@ -116,12 +134,13 @@ class SettingsDialog(QDialog):
                     box.addItem(text, value)
                 box.setCurrentIndex(max(box.findData(self.settings.get(pref.key)), 0))
             box.setEnabled(pref.ready)
-            if pref.help:
-                box.setToolTip(pref.help)
+            words = plain_help(pref.help)
+            if words:
+                box.setToolTip(words)
             self.boxes[pref.key] = box
             form.addRow(pref.label, box)
-            if pref.help and not pref.key.startswith("units.custom."):
-                hint = QLabel(pref.help)
+            if words and not pref.key.startswith("units.custom."):
+                hint = QLabel(words)
                 hint.setWordWrap(True)
                 role(hint, "muted")
                 form.addRow("", hint)

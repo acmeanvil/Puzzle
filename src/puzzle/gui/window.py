@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QLayout,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
@@ -103,6 +104,11 @@ class ResultsBar(QWidget):
     """Which result to show (every one the run's fields give: total deformation, its
     components, equivalent and principal stresses, ...), the step, and deformation."""
 
+    def minimumSizeHint(self):  # noqa: N802 - Qt's name
+        from PySide6.QtCore import QSize
+
+        return QSize(300, super().minimumSizeHint().height())
+
     def __init__(self, on_change, on_axes=None) -> None:
         super().__init__()
         row = QHBoxLayout(self)
@@ -122,9 +128,16 @@ class ResultsBar(QWidget):
         self.deform.setChecked(True)
         self.title = ElidedLabel("")
         role(self.title, "muted")
+        self.labels: dict[str, QLabel] = {}
         for label, widget in (("Result", self.field), ("In axes", self.axes), ("Step", self.step)):
-            row.addWidget(QLabel(label))
+            self.labels[label] = QLabel(label)
+            row.addWidget(self.labels[label])
             row.addWidget(widget)
+        # Hidden with its control while there is no coordinate system (UX-19).
+        self.labels["In axes"].setVisible(False)
+        self.axes.setVisible(False)
+        # Its width comes from the window: never wider than the view lets it be (UX-1).
+        row.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
         row.addWidget(self.deform)
         # Animation (ADR 0038): over the deformation, or over the steps when there are
         # several; saved as a GIF.
@@ -158,6 +171,7 @@ class ResultsBar(QWidget):
         i = self.axes.findData(keep)
         self.axes.setCurrentIndex(i if i >= 0 else 0)
         self.axes.setVisible(self.axes.count() > 1)
+        self.labels["In axes"].setVisible(self.axes.count() > 1)
         self.axes.blockSignals(False)
 
     def load(
@@ -228,6 +242,9 @@ def _measure(value: float, unit: str) -> str:
     v, u = shown(value, unit, current().display_units())
     return f"{v:.4g} {pretty(u)}"
 
+
+# Files a drop imports as geometry (UX-10), as Geometry → Import geometry… reads them.
+CAD_FILES = (".step", ".stp", ".iges", ".igs", ".brep", ".stl", ".obj", ".3mf")
 
 # The selection filter: entity kind -> what the pick bar calls it.
 FILTERS = {"face": "Faces", "edge": "Edges", "body": "Bodies", "vertex": "Points"}
@@ -315,6 +332,10 @@ class PickBar(QWidget):
         measure.setToolTip("Exact length, area, volume, distance and angle of the picks")
         measure.clicked.connect(lambda: window.start_measuring())
         row.addWidget(measure)
+        load = QPushButton("Add load or support…")
+        load.setToolTip("A support or load on the picks, its values in the same form")
+        load.clicked.connect(lambda: window.add_load_on_picks())
+        row.addWidget(load)
         new.clicked.connect(self._new)
         add.clicked.connect(lambda: window.add_picks_to_selection())
         clear.clicked.connect(lambda: window.viewport.clear_picks())
@@ -324,7 +345,7 @@ class PickBar(QWidget):
         # One size for the bar's buttons (the largest's), and the filter as tall.
         from puzzle.gui.theme import same_size
 
-        buttons = [self.box, tools, measure, new, add, clear]
+        buttons = [self.box, tools, measure, load, new, add, clear]
         same_size(buttons)
         self.filter.setFixedHeight(buttons[0].height())
         window.viewport.picked_changed.connect(self.update_picks)
@@ -452,6 +473,9 @@ class MainWindow(QMainWindow):
         self.context = "model"
         self.states: dict = {}  # object id -> its state (ADR 0033)
         self.running: set[str] = set()  # study ids being run here
+        # Solves started here and not ended: (study name, its cancel), by study id; they
+        # outlive the project being open, so opening another can offer to stop them.
+        self.solves: dict[str, tuple[str, threading.Event]] = {}
         # Several studies one after another (ADR 0073): those still to start, the
         # running one's cancel, and the outcomes so far for the summary.
         self.run_queue: list[str] = []
@@ -484,6 +508,11 @@ class MainWindow(QMainWindow):
         self.results_ribbon = ResultsRibbon(self)  # the result tools (ADR 0042)
         self.results_ribbon.hide()
         column.addWidget(self.results_ribbon)
+        from puzzle.gui.model_ribbon import ModelRibbon
+
+        self.model_ribbon = ModelRibbon(self)  # UX-9: the Model tab's own tools
+        self.model_ribbon.hide()
+        column.addWidget(self.model_ribbon)
         column.addWidget(self.pick_bar)
         column.addWidget(self.viewport, 1)
         self.probes_panel = ProbesPanel(self)
@@ -741,8 +770,9 @@ class MainWindow(QMainWindow):
             self.open(root)
 
     # The toolbar's actions that act on a project: greyed out on the start page (GUI-6).
-    PROJECT_ACTIONS = ("save_as", "save_version", "undo", "mesh", "run", "material", "delete",
-                       "reload", "pick")  # fmt: skip
+    PROJECT_ACTIONS = ("save_as", "save_version", "undo", "redo", "import", "new_analysis",
+                       "mesh", "run",
+                       "material", "delete", "reload", "pick")  # fmt: skip
 
     def _gate_project_actions(self) -> None:
         has = self.session is not None
@@ -751,6 +781,8 @@ class MainWindow(QMainWindow):
             action.setProperty("needs_project", True)  # the menus' gate (main_menu._enable)
             busy = name in ("mesh", "run") and any(t.lock for t in self.tasks)
             action.setEnabled(has and not busy)
+        if has:  # Redo only with an undo to take back
+            self._aside("undo and redo", self._name_undo)
 
     def _build_solvers(self) -> None:
         """Start the PARDISO build if it is due (`solver_builds.should_build`), and say
@@ -793,6 +825,8 @@ class MainWindow(QMainWindow):
         except PuzzleError as exc:
             QMessageBox.warning(self, "Open project", exc.message)
             return
+        if self.session is not None and Path(root).resolve() != self.session.root.resolve():
+            self._offer_to_stop_solves()
         self._leave_project()
         self.session = session
         self.meshes.clear()
@@ -826,6 +860,23 @@ class MainWindow(QMainWindow):
         if first is not None:
             self.tree.select(Node("object", str(first.id)))
         self._offer_pending()
+
+    def _offer_to_stop_solves(self) -> None:
+        """Another project is opening while a solve started here runs. With the job
+        runner on, the solve is the runner's and goes on (package 10). Without it, the
+        solve lives in this window's thread: ask once whether to stop it."""
+        from puzzle.jobs import service
+
+        live = [(n, c) for n, c in self.solves.values() if not c.is_set()]
+        if not live or service.enabled():
+            return
+        names = ", ".join(n for n, _ in live)
+        if self.ask_yes("Stop the run?", f"{names} is still running in "
+                        f"{self.session.project.name}. Stop it before opening the other "
+                        "project? If not, it goes on and keeps its results in its own "
+                        "project."):  # fmt: skip
+            for _name, cancel in live:
+                cancel.set()
 
     def _leave_project(self) -> None:
         """What belongs to the project open so far, let go before another opens: a
@@ -915,6 +966,7 @@ class MainWindow(QMainWindow):
         panel("the model tree", lambda: self.tree.populate(
             s.project, runs, self._field_catalogs(runs), self.states))  # fmt: skip
         panel("the history", lambda: self._fill_history(s))
+        panel("undo and redo", self._name_undo)
         panel("the problems", self.refresh_problems)
         panel("the plots", self.plots.refresh)
         panel("the sections", self.sections.refresh)
@@ -937,6 +989,34 @@ class MainWindow(QMainWindow):
         if not self.schematic_dock.isHidden():
             panel("the schematic", self.schematic_panel.refresh)
         self._selected()  # refreshes the Advisor too, when it is shown
+
+    def _name_undo(self) -> None:
+        """Undo and Redo say what they act on (UX-4: "Undo: added force Tip"), and Redo
+        is greyed out with nothing to redo."""
+        s = self.session
+        names = {str(o.id): o.name for o in s.project.objects.values()}
+        entries = {e["seq"]: e for e in s.history_entries() if "seq" in e}
+        for name, target in (("undo", s.undo_target()), ("redo", s.redo_target())):
+            action = self.actions_by_name[name]
+            entry = entries.get(target) if target is not None else None
+            if name == "redo" and entry is not None:  # what the undo took back
+                entry = entries.get(entry.get("undoes"), entry)
+            words = _describe(entry.get("command") or {}, names) if entry else ""
+            tip = self._undo_tips[name]
+            action.setToolTip(f"{tip}: {words}" if words else tip)
+            action.setStatusTip(action.toolTip())
+            if name == "redo":
+                action.setEnabled(entry is not None)
+
+    def _import_geometry(self) -> None:
+        from puzzle.gui import menus
+
+        menus.import_step_file(self)
+
+    def _new_analysis(self) -> None:
+        from puzzle.gui import menus
+
+        menus.new_analysis(self)
 
     def _fill_history(self, s) -> None:
         self.history.clear()
@@ -1050,8 +1130,9 @@ class MainWindow(QMainWindow):
                 self.problems.addItem(f"{geo} (geometry {f['severity']}): {f['message']}")
         for line in self.detached_lines():
             self.problems.addItem(line)
+        n = self.problems.count()  # UX-37: a count only when there is something to read
         self.output_tabs.setTabText(
-            self.output_tabs.indexOf(self.problems), f"Problems ({self.problems.count()})"
+            self.output_tabs.indexOf(self.problems), f"Problems ({n})" if n else "Problems"
         )
 
     def _contact_warnings(self) -> list:
@@ -1203,16 +1284,20 @@ class MainWindow(QMainWindow):
 
     # The toolbar's groups (ADR 0031); None separates them. Delete and Reload act on
     # what is selected, so they live in the Project menu and the context menus.
-    TOOLBAR = [
+    TOOLBAR = [  # UX-12: the core task's path; the material builder is in its menu
         "new",
         "open",
+        "save_version",
+        None,
         "undo",
+        "redo",
+        None,
+        "import",
+        "new_analysis",
+        "material",
         None,
         "mesh",
         "run",
-        None,
-        "material",
-        "builder",
         None,
         "pick",
     ]
@@ -1226,7 +1311,7 @@ class MainWindow(QMainWindow):
         self.toolbar = bar
         self.actions_by_name: dict[str, QAction] = {}
         for name, text, key, slot in (
-            ("new", "New…", QKeySequence.StandardKey.New, self._new_dialog),
+            ("new", "New…", QKeySequence.StandardKey.New, lambda: self._new_dialog()),
             ("open", "Open…", QKeySequence.StandardKey.Open, self._open_dialog),
             (
                 "save_as",
@@ -1241,6 +1326,9 @@ class MainWindow(QMainWindow):
                 lambda: self.save_version_dialog(),
             ),
             ("undo", "Undo", QKeySequence.StandardKey.Undo, self.undo),
+            ("redo", "Redo", QKeySequence.StandardKey.Redo, self.redo),
+            ("import", "Import geometry…", "Ctrl+I", self._import_geometry),
+            ("new_analysis", "New analysis…", None, self._new_analysis),
             ("mesh", "Mesh", "Ctrl+M", self.mesh_selected),
             ("run", "Run", "Ctrl+R", self.run_selected),
             ("material", "Add material…", None, self._add_material_dialog),
@@ -1257,6 +1345,11 @@ class MainWindow(QMainWindow):
             action.setToolTip(f"{text.rstrip('…')}  ({shortcut})" if shortcut else text.rstrip("…"))
             action.triggered.connect(slot)
             self.actions_by_name[name] = action
+        # Ctrl+Y and Ctrl+Shift+Z both redo, whatever the platform's own (UX-4).
+        redo = self.actions_by_name["redo"]
+        keys = [*redo.shortcuts(), QKeySequence("Ctrl+Y"), QKeySequence("Ctrl+Shift+Z")]
+        redo.setShortcuts(list(dict.fromkeys(k for k in keys if not k.isEmpty())))
+        self._undo_tips = {n: self.actions_by_name[n].toolTip() for n in ("undo", "redo")}
         for name in self.TOOLBAR:
             if name is None:
                 bar.addSeparator()
@@ -1407,7 +1500,9 @@ class MainWindow(QMainWindow):
             if self.agent_dock.isHidden():  # alone on its side: narrow, the view keeps room
                 self.resizeDocks([self.advisor_dock], [320], Qt.Orientation.Horizontal)
 
-    def _new_dialog(self) -> None:
+    def _new_dialog(self, then=None, folder: Path | None = None) -> None:
+        """The New project form; `then()` after the project opens (a dropped CAD file's
+        import), `folder` its suggested place."""
         from puzzle.gui.quick_form import Ask, folder_name
         from puzzle.model.units import SYSTEMS
         from puzzle.settings import current
@@ -1418,7 +1513,13 @@ class MainWindow(QMainWindow):
         got = self.ask_form(
             "New project",
             [
-                Ask("folder", "Folder", kind="folder", help="Where the project's files go"),
+                Ask(
+                    "folder",
+                    "Folder",
+                    kind="folder",
+                    help="Where the project's files go",
+                    default=str(folder) if folder else None,
+                ),
                 Ask("name", "Name", kind="text", follow=lambda v: folder_name(v["folder"])),
                 Ask("units", "Units", choices=systems),
             ],
@@ -1431,6 +1532,8 @@ class MainWindow(QMainWindow):
         )
         if got is not None:
             self.new_project(Path(got["folder"]), got["name"], got["units"])
+            if then is not None and self.session is not None:
+                then()
 
     # --- jobs with a runner (ADR 0067) -------------------------------------------
 
@@ -1654,6 +1757,20 @@ class MainWindow(QMainWindow):
             self.report(exc)
         self.refresh()
 
+    def redo(self) -> None:
+        """Take back the last undo (UX-4): the project's, never a pick's or a sketch's."""
+        if self.session is None:
+            return
+        if self.workbench.sketching is not None:
+            self.statusBar().showMessage(
+                "Finish or cancel the sketch first: Redo acts on the project", 8000)  # fmt: skip
+            return
+        try:
+            self.session.redo()
+        except PuzzleError as exc:
+            self.report(exc)
+        self.refresh()
+
     def delete_selected(self) -> None:
         """Delete what the tree has selected: one item as before (results asked first),
         several as one batch, so one undo, after one question naming them."""
@@ -1672,8 +1789,10 @@ class MainWindow(QMainWindow):
         if node is not None and node not in nodes:
             nodes = [node]
         runs = self._store().runs() if any(n.kind == "run" for n in nodes) else []
-        names = {r.run_id: f"the results of {r.study_name} ({r.started_at:%Y-%m-%d %H:%M})"
-                 for r in runs}  # fmt: skip
+        names = {
+            r.run_id: f"the results of {r.study_name} ({r.started_at.astimezone():%Y-%m-%d %H:%M})"
+            for r in runs
+        }
         plan = deleting.plan(self.session.project, nodes, lambda r: names.get(r, "results"))
         if not plan:
             return
@@ -1721,7 +1840,7 @@ class MainWindow(QMainWindow):
             record = store.get_run(run_id)
         except KeyError:
             return False
-        when = f"{record.started_at:%Y-%m-%d %H:%M}"
+        when = f"{record.started_at.astimezone():%Y-%m-%d %H:%M}"
         question = (
             f"Delete the results of {record.study_name} ({solver_label(record.solver)}, "
             f"{when})? The study keeps its setup; running it again makes them anew."
@@ -1762,8 +1881,26 @@ class MainWindow(QMainWindow):
         comp = self._component_of(self.tree.current())
         if self.left_tabs.currentWidget() is self.mesh_bench:
             comp = self.mesh_bench.component_obj()
+        comps = self.session.project.of_type(Component)
+        if comp is None and len(comps) == 1:  # UX-13: the only one needs no selecting
+            comp = comps[0]
+        if comp is None and comps:
+            from puzzle.gui.quick_form import Ask
+
+            got = self.ask_form(
+                "Mesh",
+                [Ask("component", "Component", choices=[(c.name, str(c.id)) for c in comps])],
+            )
+            comp = (
+                None if got is None else self.session.project.objects.get(_uuid(got["component"]))
+            )
+            if comp is None:
+                return None
         if comp is None:
-            self.statusBar().showMessage("Select a component (or a study) to mesh", 5000)
+            from puzzle.gui import menus
+
+            self.toasts.show("Nothing to mesh yet: make a component first", (
+                "New component…", lambda: menus.new_component(self)), state="info")  # fmt: skip
             return None
         return self.start_meshing(comp)
 
@@ -1872,13 +2009,53 @@ class MainWindow(QMainWindow):
         if left:
             self.statusBar().showMessage(f"Stopped; {left} studies not started", 8000)
 
+    def study_to_run(self) -> Study | None:
+        """The study Run means (UX-13): the selected one; else the study of the selected
+        run or result, or of the selected component when it has one; else the project's
+        only study; else one asked for in a form. None (said in a toast with New
+        study… or New analysis…) when there is none."""
+        from puzzle.gui.quick_form import Ask
+
+        project = self.session.project
+        studies = project.of_type(Study)
+        node = self.tree.current()
+        obj = self._object(node)
+        if isinstance(obj, Study):
+            return obj
+        if node is not None and node.kind in ("run", "result", "result_group"):
+            record = next((r for r in self._store().runs() if r.run_id == node.object), None)
+            found = project.objects.get(_uuid(record.study_id)) if record else None
+            if isinstance(found, Study):
+                return found
+        from puzzle.gui.result_tools import current_source
+
+        shown = current_source(self) if getattr(self, "context", "") == "results" else None
+        found = next((s for s in studies if str(s.id) == shown), None)
+        if found is not None:  # the results in the view
+            return found
+        comp = self._component_of(node)
+        if comp is not None:
+            mine = [s for s in studies if s.component == comp.id]
+            if len(mine) == 1:
+                return mine[0]
+            studies = mine or studies
+        if len(studies) == 1:
+            return studies[0]
+        if not studies:
+            from puzzle.gui import menus
+
+            self.toasts.show("Nothing to run yet: make a study first", (
+                "New study…", lambda: menus.new_study(self)), state="info")  # fmt: skip
+            return None
+        got = self.ask_form("Run", [Ask("which", "Study", choices=[(s.name, str(s.id))
+                                                                  for s in studies])])  # fmt: skip
+        return None if got is None else project.objects.get(_uuid(got["which"]))
+
     def run_selected(self) -> Task | None:
         if self.session is None:
             return None
-        node = self.tree.current()
-        study = self._object(node)
-        if not isinstance(study, Study):
-            self.statusBar().showMessage("Select a study to run", 5000)
+        study = self.study_to_run()
+        if study is None:
             return None
         s, sid = self.session, str(study.id)
         return self._start_run(study, lambda emit, event, cancel: s.submit(
@@ -1919,6 +2096,7 @@ class MainWindow(QMainWindow):
             return False
 
         def done(outcome) -> None:
+            self.solves.pop(sid, None)
             if not here():  # GUI-2: never selected in another project's store
                 return
             self._after_run(outcome, study, sid)
@@ -1926,6 +2104,7 @@ class MainWindow(QMainWindow):
                 then(True)
 
         def failed(exc) -> None:
+            self.solves.pop(sid, None)
             if not here():
                 return
             self._run_failed(exc, study, sid)
@@ -1933,6 +2112,7 @@ class MainWindow(QMainWindow):
                 then(False)
 
         self.running.add(sid)
+        self.solves[sid] = (study.name, cancel)
         self.refresh()  # the tree shows it running
         from puzzle import progress
 
@@ -1976,11 +2156,29 @@ class MainWindow(QMainWindow):
         if self.solution.events:  # how it got there explains more than the log tail
             self.output_tabs.setCurrentWidget(self.solution)
         self.refresh()
+        loose = [p for p in self.session.project.problems()
+                 if p.code == "unconstrained" and p.object == study.name]  # fmt: skip
+        if not stopped and getattr(exc, "code", "") == "inconsistent":
+            self.output_tabs.setCurrentWidget(self.problems)  # refused before solving (UX-37)
         if stopped:
             self.toasts.show(f"{study.name} stopped", state="info")
+        elif loose:  # UX-8: the action the message names, one click away
+            self.toasts.show(f"{study.name} has no support", (
+                "Add fixed support…", lambda: self._add_support(study)), state="error")  # fmt: skip
         else:
             self.toasts.show(f"{study.name} failed", ("Show why", self.open_solution),
                              state="error")  # fmt: skip
+
+    def _add_support(self, study: Study) -> None:
+        """A fixed support on the study's component's solid mechanics (UX-8)."""
+        from puzzle.gui import menus
+        from puzzle.model.catalog import spec
+
+        comp = self.session.project.objects.get(study.component)
+        index = next((i for i, p in enumerate(getattr(comp, "physics", []))
+                      if p.type == "solid_mechanics"), None)  # fmt: skip
+        if index is not None:
+            menus.add_feature(self, comp, index, spec("solid_mechanics", "fixed"))
 
     # --- selection ---------------------------------------------------------------
 
@@ -2182,6 +2380,8 @@ class MainWindow(QMainWindow):
         self.results_ribbon.setVisible(context == "results" and self.result is not None)
         self.workbench.ribbon.setVisible(context in ("geometry", "sketch"))
         self.mesh_bench.ribbon.setVisible(context == "mesh")
+        if hasattr(self, "model_ribbon"):
+            self.model_ribbon.setVisible(context == "model" and self.session is not None)
 
     def _tab_changed(self) -> None:
         current = self.left_tabs.currentWidget()
@@ -2385,9 +2585,10 @@ class MainWindow(QMainWindow):
         return chain
 
     def dragEnterEvent(self, event) -> None:  # noqa: N802 - Qt's name
-        """A .puzzle archive dragged onto the window (ADR 0061)."""
+        """A .puzzle archive (ADR 0061) or a CAD or faceted file (UX-10) dragged onto
+        the window."""
         urls = event.mimeData().urls() if event.mimeData().hasUrls() else []
-        if any(u.toLocalFile().endswith(".puzzle") for u in urls):
+        if any(u.toLocalFile().lower().endswith((".puzzle", *CAD_FILES)) for u in urls):
             event.acceptProposedAction()
         else:
             super().dragEnterEvent(event)
@@ -2395,6 +2596,12 @@ class MainWindow(QMainWindow):
     def dropEvent(self, event) -> None:  # noqa: N802 - Qt's name
         urls = event.mimeData().urls() if event.mimeData().hasUrls() else []
         archives = [u.toLocalFile() for u in urls if u.toLocalFile().endswith(".puzzle")]
+        cad = [Path(u.toLocalFile()) for u in urls
+               if u.toLocalFile().lower().endswith(CAD_FILES)]  # fmt: skip
+        if cad and not archives:
+            event.acceptProposedAction()
+            self.drop_cad(cad)
+            return None
         if not archives:
             return super().dropEvent(event)
         event.acceptProposedAction()
@@ -2402,6 +2609,21 @@ class MainWindow(QMainWindow):
 
         open_archive(self, archives[0])
         return None
+
+    def drop_cad(self, paths: list[Path]) -> None:
+        """CAD files dropped (UX-10): imported into the open project, or a new project
+        made for them first (the New project form, beside the first file)."""
+        from puzzle.gui import menus
+
+        def bring_in() -> None:
+            for path in paths:
+                menus.import_step_file(self, path)
+
+        if self.session is not None:
+            bring_in()
+        else:
+            first = paths[0]
+            self._new_dialog(then=bring_in, folder=first.parent / first.stem)
 
     def _show_run(self, run_id: str) -> None:
         """A run's results in the view, from a toast's Show results."""
@@ -2425,7 +2647,7 @@ class MainWindow(QMainWindow):
             "Ran": "natively" if record.runtime == "native" else f"in {record.runtime}",
             **({"Solver version": record.solver_version} if record.solver_version else {}),
             **({"Image": record.image_digest[:19]} if record.image_digest else {}),
-            "Started": f"{record.started_at:%Y-%m-%d %H:%M:%S}",
+            "Started": f"{record.started_at.astimezone():%Y-%m-%d %H:%M:%S}",
             "Duration (s)": round(record.duration_s, 2),
             "Result steps": record.steps,
         }
@@ -3102,6 +3324,26 @@ class MainWindow(QMainWindow):
         """The picked entities as (part, geometry name)."""
         names = self.mesh_names.get(self.mesh_component or "", {})
         return [names[e] for e in self.viewport.picked if e in names]
+
+    def add_load_on_picks(self):
+        """The pick bar's Add load or support… (UX-2): the shown component's physics
+        that takes loads on what is picked, then one form (`gui.load_form`)."""
+        from puzzle.gui.load_form import add_load, specs_for
+
+        comp = self.session.project.objects.get(_uuid(self.mesh_component or ""))
+        if not isinstance(comp, Component):
+            self.toasts.show("Show a component's mesh or preview to pick on it first",
+                             state="info")  # fmt: skip
+            return None
+        kind = self.viewport.pick_kind
+        index = next((i for i in range(len(comp.physics)) if specs_for(comp, i, kind)), None)
+        if index is None:
+            from puzzle.gui import menus
+
+            self.toasts.show(f"{comp.name} solves nothing yet: add its physics first", (
+                "New analysis…", lambda: menus.new_analysis(self)), state="info")  # fmt: skip
+            return None
+        return add_load(self, comp, index, entity=kind)
 
     def selection_from_picks(self, name: str):
         """A new selection of the filter's kind on the picked entities' geometry (one
@@ -4485,6 +4727,8 @@ def _describe(cmd: dict, names: dict) -> str:
         return f"copied {name(cmd.get('component'))} as {cmd.get('name', '')}"
     if command == "undo":
         return f"undid #{cmd.get('seq', '?')}"
+    if command == "redo":
+        return f"redid (took back undo #{cmd.get('seq', '?')})"
     if command == "run_study":
         return f"ran {name(cmd.get('study'))}"
     if command == "set_autonomy":

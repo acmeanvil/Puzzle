@@ -128,3 +128,7 @@ At every level the agent's changes are attributed in the log and can be undone.
 ## Note (2026-10-25): the message box
 
 The agent panel's message box wraps words and grows with what is typed (up to eight lines, then scrolls); there is no Send button. Settings > Agent > "Send a message with" chooses the keys: by default Enter starts a new line and Ctrl+Enter (⌘+Enter on a Mac) sends; or Enter sends and Shift+Enter starts a new line. The placeholder names the keys in use.
+
+## Amended (2026-11-18, ADR 0090 package 11)
+
+Redo: `Session.redo` takes back the latest undo made since the last fresh change, as one history entry (the command `redo`, with `undoes`), itself undoable. Plain `undo()` now takes back the latest change or redo in effect and never an undo, so Undo twice steps back twice; before, the second undo redid the first. `undo(seq=)` on an undo's entry still redoes it. An agent redoes only its own undo, above "advise". MCP `redo`, CLI `puzzle redo`. New analysis is one batch (`puzzle.new_analysis.commands`, MCP `analysis_new`).

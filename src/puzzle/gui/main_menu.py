@@ -1,7 +1,8 @@
 """The menu bar: every ribbon tool and right-click action, in one place.
 
-Project, Geometry, Materials, Mesh, Model, Results, Window and Help: the tree's order
-(Geometry before Materials). Model and Results hold fly-outs of like items (Components,
+Project, Edit, Geometry, Materials, Mesh, Model, Results, Window and Help: the tree's
+order (Geometry before Materials); Edit holds Undo, Redo and what acts on the tree's
+selection (ADR 0090 UX-4). Model and Results hold fly-outs of like items (Components,
 Contacts, Bolts and fasteners, Run...). The ribbons and the tree's menus stay; these
 menus reach the same functions, so nothing is only a right-click away. An action that
 needs a part, component or study takes the one selected in the tree (or open in its
@@ -30,6 +31,7 @@ def build(window, agent: QAction, messages: QAction) -> dict[str, QMenu]:
     menus: dict[str, QMenu] = {}
     for title, fill in (
         ("Project", _project),
+        ("Edit", _edit),
         ("Geometry", _geometry),  # the tree's order: Geometry, then Materials
         ("Materials", _materials),
         ("Mesh", _mesh),
@@ -263,14 +265,6 @@ def _project(window, menu: QMenu) -> None:
     _add(menu, "Roll back to last known good…", lambda: window.roll_back_good(),
          "Restore the latest version marked known good (a solved state)")  # fmt: skip
     menu.addSeparator()
-    menu.addAction(a["undo"])
-    menu.addAction(a["delete"])
-    rename = _add(menu, "Rename", lambda: _rename(window), "Rename what is selected in the tree",
-                  "F2")  # fmt: skip
-    window.actions_by_name["rename"] = rename
-    _add(menu, "New group…", lambda: _group(window),
-         "A folder in the tree for what is selected, under its heading")  # fmt: skip
-    menu.addSeparator()
     _add(menu, "New parameter set", lambda: menus.new_parameter_set(window))
     _add(menu, "Add parameter…", lambda: _add_parameter(window),
          "A named value (8 mm) that geometry steps can use")  # fmt: skip
@@ -324,6 +318,35 @@ def _edit_built(window, kind: str) -> None:
         from puzzle.gui.construction import edit_construction
 
         edit_construction(window, chosen)
+
+
+def _edit(window, menu: QMenu) -> None:
+    """Undo, Redo, and what acts on the tree's selection (UX-4)."""
+    a = window.actions_by_name
+    menu.addAction(a["undo"])
+    menu.addAction(a["redo"])
+    menu.addSeparator()
+    menu.addAction(a["delete"])
+    rename = _add(menu, "Rename", lambda: _rename(window), "Rename what is selected in the tree",
+                  "F2")  # fmt: skip
+    window.actions_by_name["rename"] = rename
+    _add(menu, "Duplicate…", lambda: duplicate(window),
+         "A copy of the selected component or study under a new name", "Ctrl+D")  # fmt: skip
+    _add(menu, "New group…", lambda: _group(window),
+         "A folder in the tree for what is selected, under its heading")  # fmt: skip
+
+
+def duplicate(window):
+    """Duplicate what is selected: a component (and its studies, if asked) or a study."""
+    from puzzle.gui import menus
+
+    obj = window._object(window.tree.current())
+    if isinstance(obj, Component):
+        return menus.copy_component(window, obj)
+    if isinstance(obj, Study):
+        return menus.copy_study(window, obj)
+    window.toasts.show("Select a component or a study in the tree to duplicate it", state="info")
+    return None
 
 
 def _rename(window) -> None:
@@ -523,7 +546,9 @@ def _model(window, menu: QMenu) -> None:
 
     loads = _sub(menu, "Physics and loads")
     physics = _sub(loads, "Add physics")
-    features = _sub(loads, "Add feature")
+    from puzzle.gui.load_form import MENU_TITLE
+
+    features = _sub(loads, MENU_TITLE)
     physics.aboutToShow.connect(lambda: _fill_physics(window, physics))
     features.aboutToShow.connect(lambda: _fill_features(window, features))
 
@@ -631,6 +656,12 @@ def _model(window, menu: QMenu) -> None:
 
     menu.addSeparator()
     studies = _sub(menu, "Studies")
+    _add(
+        studies,
+        "New analysis…",
+        lambda: menus.new_analysis(window),
+        "Mesh recipe, component, material, physics and study for a geometry, in one form",
+    )
     _add(studies, "New study…", lambda: menus.new_study(window))
     _add(studies, "Duplicate study…", lambda: _duplicate_study(window),
          "A copy of the study under a new name: steps, settings, sweeps, solver")  # fmt: skip
@@ -731,7 +762,10 @@ def _solver_settings(window) -> None:
 
 
 def _run(window) -> None:
-    study = current_study(window, "Run")
+    """The study Run means (`MainWindow.study_to_run`), selected in the tree, run."""
+    if window.session is None:
+        return
+    study = window.study_to_run()
     if study is not None:
         from puzzle.gui.tree import Node
 
@@ -753,7 +787,6 @@ def _fill_physics(window, menu: QMenu) -> None:
 def _fill_features(window, menu: QMenu) -> None:
     """The selected component's physics, each with its features (none selected: the
     only component's, else a hint)."""
-    from puzzle.gui import menus
     from puzzle.gui.choices import label
 
     menu.clear()
@@ -769,10 +802,14 @@ def _fill_features(window, menu: QMenu) -> None:
         hint = menu.addAction(f"{comp.name} has no physics yet: Physics and loads → Add physics")
         hint.setEnabled(False)
         return
+    from puzzle.gui.load_form import fill_menu
+
+    if len(comp.physics) == 1:  # UX-15: no physics level when there is one
+        fill_menu(window, menu, comp, 0, add=_add)
+        return
     for i, ph in enumerate(comp.physics):
         sub = _sub(menu, label(ph.type))
-        for s in menus.specs(ph.type):
-            _add(sub, s.label, lambda i=i, s=s: menus.add_feature(window, comp, i, s))
+        fill_menu(window, sub, comp, i, add=_add)
 
 
 def _results(window, menu: QMenu) -> None:
@@ -1079,7 +1116,6 @@ def _help(window, menu: QMenu) -> None:
     if advisor is not None:
         menu.addAction(advisor)  # also in Window: what to do next (ADR 0040)
     _add(menu, "Keyboard shortcuts", lambda: _shortcuts(window), free=True)
-    _add(menu, "Design decisions (ADRs)", lambda: _open_docs(window), free=True)
     _add(
         menu,
         "Element library",
@@ -1087,7 +1123,11 @@ def _help(window, menu: QMenu) -> None:
         free=True,
         tip="Every solver's elements, grouped, and the ones Puzzle writes (ADR 0082)",
     )
-    _add(menu, "Log", lambda: _log(window), free=True)
+    menu.addSeparator()  # UX-34: the maintainers' things, apart from the user's
+    _add(menu, "Log", lambda: _log(window), free=True,
+         tip="What Puzzle itself did: slow steps, errors, for a bug report")  # fmt: skip
+    _add(menu, "Design decisions (ADRs)", lambda: _open_docs(window), free=True,
+         tip="Why Puzzle works as it does: its design records, for developers")  # fmt: skip
     menu.addSeparator()
     about = _add(menu, "About Puzzle", lambda: _about(window), free=True)
     about.setMenuRole(QAction.MenuRole.AboutRole)  # macOS: the application menu

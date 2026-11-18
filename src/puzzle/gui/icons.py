@@ -29,6 +29,9 @@ TABLER = {
     "save_as": "copy",
     "save_version": "device-floppy",
     "undo": "arrow-back-up",
+    "redo": "arrow-forward-up",
+    "import": "file-import",
+    "new_analysis": "flask",
     "settings": "settings",
     "run": "player-play",
     "material": "cube",
@@ -160,7 +163,10 @@ TOOLS = {
     "boundary_layer": "loft", "mesh": "mesh", "seeds": "seeds", "gmsh_options": "settings",
     "probe": "probe", "reaction": "fixed", "selection": "pick", "path": "line",
     "linearized": "chart", "plane": "sheet", "cut": "section", "animate": "animate",
-    "legend": "legend", "plots": "chart", "paraview": "open_elsewhere",
+    "legend": "legend", "plots": "chart", "paraview": "open_elsewhere", "export": "open_elsewhere",
+    "new_analysis": "study", "material": "material", "assign": "material", "loads": "fixed",
+    "contacts": "pick", "contact_tool": "check", "new_study": "study",
+    "solver_settings": "settings", "run": "run",
 }  # fmt: skip
 
 
@@ -231,28 +237,38 @@ def state_icon(state: str) -> QIcon:
     from puzzle.gui.theme import current
 
     token, _body = STATE_DRAWINGS.get(state, STATE_DRAWINGS["complete"])
-    return _state_icon(state, getattr(current(), token))
+    return _state_icon(state, getattr(current(), token), current().accent_text)
 
 
 @cache
-def _state_icon(state: str, colour: str) -> QIcon:
-
+def _state_icon(state: str, colour: str, selected: str = "") -> QIcon:
+    """The state's drawing in its colour, and in the selection's text colour for a
+    selected row, where the state colour vanished on the highlight (UX-29)."""
     _token, body = STATE_DRAWINGS.get(state, STATE_DRAWINGS["complete"])
-    head = _HEAD.format(c=colour).replace(f'stroke-width="{STROKE}"', 'stroke-width="2.4"')
-    svg = (head + body.format(c=colour) + "</svg>").encode()
-    return _render(svg, (12, 16, 24, 32))
+
+    def svg(c: str) -> bytes:
+        head = _HEAD.format(c=c).replace(f'stroke-width="{STROKE}"', 'stroke-width="2.4"')
+        return (head + body.format(c=c) + "</svg>").encode()
+
+    out = _render(svg(colour), (12, 16, 24, 32))
+    if selected:
+        _render(svg(selected), (12, 16, 24, 32), out, QIcon.Mode.Selected)
+    return out
 
 
-def _render(svg: bytes, sizes) -> QIcon:
+def _render(svg: bytes, sizes, out: QIcon | None = None, mode=None) -> QIcon:
     from PySide6.QtSvg import QSvgRenderer
 
     renderer = QSvgRenderer(QByteArray(svg))
-    out = QIcon()
+    out = QIcon() if out is None else out
     for size in sizes:
         pixmap = QPixmap(size, size)
         pixmap.fill(Qt.GlobalColor.transparent)
         painter = QPainter(pixmap)
         renderer.render(painter, QRectF(0, 0, size, size))
         painter.end()
-        out.addPixmap(pixmap)
+        if mode is None:
+            out.addPixmap(pixmap)
+        else:
+            out.addPixmap(pixmap, mode)
     return out

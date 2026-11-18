@@ -361,7 +361,7 @@ def test_cancel_stays_for_a_run_while_a_mesh_starts_and_ends(app):
     bar.start(mesh, "Meshing Beam")  # can't be stopped part-way
     assert not bar.isHidden() and not bar.cancel_button.isHidden()
     assert "Running Beam" in bar.label.text() and "1 more" in bar.label.text()
-    assert bar.cancel_button.accessibleName() == "Cancel Running Beam"
+    assert bar.cancel_button.accessibleName() == "Stop Running Beam"
     bar.stop(mesh)
     assert not bar.isHidden() and not bar.cancel_button.isHidden()
     bar.start(mesh, "Meshing Beam")

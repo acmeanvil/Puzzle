@@ -238,7 +238,7 @@ def test_bolt_types_from_the_menu_and_typed_fasteners(app, tmp_path):
     window.close()
 
 
-def test_the_bolt_table(app, tmp_path):
+def test_the_bolt_table(si_units, app, tmp_path):
     """ADR 0050: the bolt table lists every bolt with its type's values faded, edits
     several rows as one undo, exports CSV, and its Results tab gives each bolt's loads
     and its use of its grade's proof and yield, worst first, against a hand calculation."""

@@ -49,8 +49,55 @@ def test_user_edit_is_saved_logged_and_undoable(root):
 
     s.undo()
     assert _load(Session(root)) == -100
-    s.undo()  # undoing the undo redoes the edit
+    s.redo()  # Redo takes the undo back
     assert _load(Session(root)) == -250
+    s.undo(seq=s.history(limit=1)[0]["seq"])  # undoing an undo by its seq redoes too
+    assert _load(Session(root)) == -100
+
+
+def test_undo_steps_back_and_redo_steps_forward(root):
+    """ADR 0090 UX-4: Undo pressed twice takes back two changes (it used to redo the
+    first undo), Redo puts them back in order, and a fresh change ends what can be
+    redone."""
+    s = Session(root)
+    for value in (-200, -300, -400):
+        s.submit(_edit(value))
+    s.undo()
+    s.undo()
+    assert _load(Session(root)) == -200
+    assert s.history(limit=1)[0]["command"] == {"command": "undo", "seq": 2}
+    s.redo()
+    assert _load(Session(root)) == -300
+    assert s.history(limit=1)[0]["command"]["command"] == "redo"
+    s.undo()  # the redo itself is undone
+    assert _load(Session(root)) == -200
+    s.redo()
+    s.redo()
+    assert _load(Session(root)) == -400
+    with pytest.raises(PuzzleError, match="nothing to redo"):
+        s.redo()
+    s.undo()
+    s.submit(_edit(-500))  # a fresh change: the undo before it can't be redone now
+    assert s.redo_target() is None
+    with pytest.raises(PuzzleError) as err:
+        s.redo()
+    assert err.value.code == "not_undoable"
+    s.undo()
+    s.undo()
+    assert _load(Session(root)) == -200
+
+
+def test_an_agent_redoes_only_its_own_undo(root):
+    s = Session(root)
+    _set_level(s, "act_in_budget")
+    s.submit(_edit(-200), AGENT)
+    s.undo(AGENT)
+    assert s.redo_target(AGENT) is not None
+    s.submit(_edit(-300))
+    assert s.redo_target(AGENT) is None
+    s.undo()
+    assert s.redo_target(AGENT) is None  # the user's undo is the user's to redo
+    assert s.redo_target() is not None
 
 
 def test_create_and_delete(root):

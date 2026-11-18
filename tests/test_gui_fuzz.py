@@ -208,7 +208,15 @@ def test_no_project(app, tmp_path, monkeypatch, errors):
     window = _window(app, tmp_path, None)
     try:
         failed = _walk(app, window, errors, undo=False)
-        for name in ("undo", "mesh", "run", "delete", "pick"):  # the toolbar's own
+        for name in (
+            "undo",
+            "redo",
+            "import",
+            "mesh",
+            "run",
+            "delete",
+            "pick",
+        ):  # the toolbar's own
             window.actions_by_name[name].trigger()
         assert not failed and not errors, "\n\n".join(failed or errors)
     finally:

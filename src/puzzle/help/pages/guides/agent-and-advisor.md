@@ -4,7 +4,7 @@ section: guide
 order: 150
 keys: panel:agent, panel:advisor
 summary: Ask the built-in agent to set up, check and explain a model, choose how much it may do, and follow the Advisor's next step.
-adrs: 0015, 0022, 0040, 0057, 0084
+adrs: 0090, 0015, 0022, 0040, 0057, 0084
 ---
 
 The agent is a built-in expert: ask it in plain words to build, check, run or explain
@@ -74,8 +74,15 @@ budget". Agents can never change the autonomy themselves.
    Selections, Materials, Component, Mesh, Physics, Supports and loads, Contacts, Study,
    Run, Results, and Mesh convergence, Optimisation, Skin depth or Trust where they apply.
 3. Each step is done, needed or optional, with its reason. The heading names the next
-   one; its button goes where the fix is made.
-4. In an empty project, **Try the cantilever example** opens a worked model.
+   one; its button goes where the fix is made. With a geometry and no component yet,
+   the Component step's button is New analysis….
+4. It follows what is on screen: the selected study; else the study of the selected run
+   or result, or of the results in the view; else the study run last. With a run
+   selected the heading reads "Results of …" and Probe, Reaction… and Export… are one
+   click away. The project's other studies are listed under it with their state and a
+   Show button.
+5. In an empty project, **Try the cantilever example** opens a worked model (the start
+   page has it too, with the bracket assembly).
 
 ![The Advisor on the cantilever example: the next step named at the top, each step ticked when done, and a button beside the ones to do](image:screens/advisor.png)
 

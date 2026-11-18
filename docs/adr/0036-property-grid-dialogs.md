@@ -55,3 +55,7 @@ PrePoMax's editors are property grids: name and value rows grouped in sections, 
 
 - Wizards (pages with Next): they hide settings that interact (the life model changes which factors apply), and experts dislike them.
 - The plain QFormLayout as now, with fixes: the same problems return in the next dialog.
+
+## Amended (2026-11-18, ADR 0090 package 11)
+
+A load or support is asked in one form (`gui/load_form.py`): what, where and its values with units, a wrong value said in the form; New analysis… is one form for the analysis, material and mesh; New study asks the analysis first.

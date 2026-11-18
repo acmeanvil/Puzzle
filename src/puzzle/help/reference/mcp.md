@@ -11,6 +11,13 @@ summary: Every tool Puzzle gives an agent, the built-in one and outside ones ove
 
 Model edits go through the same commands the GUI uses, so they appear in the history, can be undone, and wait for approval at the autonomy level set.
 
+<!-- key: mcp:analysis_new -->
+### analysis_new
+
+A first analysis of a geometry in one batch (ADR 0090 UX-3): the mesh recipe (`mesh` coarse, medium or fine: a global size from the parts' bounding box), a component of `geometry` (a name, or a list for several parts), its `material` (a project material's name, or a library key or name) on every body, the physics and a study of `analysis` (static, modal, buckling or steady_heat) on `solver` (default: the first that runs it). One batch, one undo; at 'propose' a proposal. Then add supports and loads (skill `new-analysis`).
+
+Arguments: `analysis`, `geometry`, `material`, `mesh`, `name`, `rationale`, `solver`.
+
 <!-- key: mcp:autonomy -->
 ### autonomy
 
@@ -493,6 +500,11 @@ Arguments: `bindings`, `key`, `rationale`.
 ### recipes
 
 The recipes (ready-wired operator chains: worst nodes, peak per part, solver difference, stress margin, reactions in kN, mass from geometry) and the user's saved clusters (ADR 0064): key, name, help and input ports.
+
+<!-- key: mcp:redo -->
+### redo
+
+Redo: take back your own latest undo, putting the change back. Only undos made since your last fresh change can be redone.
 
 <!-- key: mcp:render -->
 ### render

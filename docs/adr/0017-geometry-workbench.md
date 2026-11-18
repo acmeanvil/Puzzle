@@ -60,3 +60,7 @@ Tested in `tests/test_gui_workbench.py`: a part sketched, extruded and undone as
 ## Amended (2026-11-17, ADR 0090 package 10)
 
 A tool applied to a part read from a file makes its history, the import step and the new one, as one command (selections follow as they do for Convert to history). A tool holds the step it edits by name and closes with a message when the step or part goes (an undo, another client). A pending step previews only while the Geometry tab is current; the sketch canvas shows only with that tab, and Undo and Delete belong to the sketch while one is open. An empty dropdown and a step that can't be made are said in the tool's form.
+
+## Amended (2026-11-18, ADR 0090 package 11)
+
+The pick bar has Add load or support…: the faces, edges, bodies or points picked become a selection and take the load in one form and one batch.

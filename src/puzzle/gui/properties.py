@@ -229,6 +229,59 @@ def _operator_field(key: str, d) -> bool:
     return key != "inputs" and key in TYPES[d["type"]].settings
 
 
+# UX-7: what goes in a folded Advanced group at the bottom, by kind of object (the
+# object's own fields; detected by fields only it has). Everyday fields stay on top.
+def _is_study(d) -> bool:
+    return {"steps", "solver", "component"} <= set(d)
+
+
+def _is_feature(d) -> bool:
+    return {"type", "selection", "values"} <= set(d)
+
+
+def _is_recipe(d) -> bool:
+    return {"global_size", "element_order", "mesher"} <= set(d)
+
+
+def _is_fastener(d) -> bool:
+    return {"ground", "ground_direction", "formulation"} <= set(d)
+
+
+ADVANCED = (
+    (_is_study, {"weak_springs", "weak_spring_factor", "weak_spring_limit", "preload_step",
+                 "expert_settings"}),
+    (_is_feature, {"when", "amplitude", "axes", "steps", "case", "extensions", "fields"}),
+    (_is_recipe, {"hexahedron_nodes", "curvature_points", "algorithm_2d", "algorithm_3d",
+                  "optimiser", "high_order_optimise", "smoothing", "quality_floor",
+                  "gmsh_options", "netgen_options", "revolved_bolts", "bolt_sectors"}),
+    (_is_fastener, {"elements", "thread_kf", "rule", "group", "through", "parts"}),
+)  # fmt: skip
+EVERY = {"tags", "scope", "owner"}  # every object's, at its top level
+# A study's links to other tools' state: hidden while unset, each reached by its own
+# command (UX-7: "Shootout (none)", "Morph (none)" read as the task's fields).
+UNSET_HIDDEN = (
+    (_is_study, {"shootout", "convergence", "adapt", "morph", "remote", "seismic",
+                 "combinations"}),
+)  # fmt: skip
+ADVANCED_TITLE = "Advanced"
+
+
+def advanced(owner: Any, top: bool) -> set:
+    """The keys of `owner` shown in its Advanced group."""
+    if not isinstance(owner, dict):
+        return set()
+    out = set(EVERY) if top else set()
+    for rule, keys in ADVANCED:
+        if rule(owner):
+            out |= keys
+    return out & set(owner)
+
+
+def _hidden_unset(owner: dict, key) -> bool:
+    return any(rule(owner) and key in keys and owner.get(key) in (None, [], {})
+               for rule, keys in UNSET_HIDDEN)  # fmt: skip
+
+
 def applies(owner: Any, key: Any) -> bool:
     if isinstance(owner, dict) and _is_operator(owner):
         return _operator_field(key, owner)
@@ -240,6 +293,14 @@ def applies(owner: Any, key: Any) -> bool:
         return BUILT[key](owner)
     if isinstance(owner, dict) and _is_axes(owner):
         return _axes_field(key, owner)
+    if (
+        isinstance(owner, dict)
+        and _is_fastener(owner)
+        and key in ("ground_direction", "ground_length")
+    ):
+        return bool(owner.get("ground"))  # UX-7: only for a bolt to ground
+    if isinstance(owner, dict) and _hidden_unset(owner, key):
+        return False
     rule = APPLIES.get(key) if isinstance(owner, dict) else None
     return rule is None or not rule[0](owner) or rule[1](owner)
 
@@ -389,6 +450,7 @@ class PropertiesPanel(QTreeWidget):
         self.header().setStretchLastSection(True)
         self.object_id = ""
         self._filling = False
+        self.advanced_groups: list[QTreeWidgetItem] = []
         self.itemChanged.connect(self._changed)
 
     def show_object(
@@ -404,8 +466,11 @@ class PropertiesPanel(QTreeWidget):
             node: Any = data
             for part in [p for p in path.split(".") if p]:
                 node = node[int(part)] if isinstance(node, list) else node[part]
-            self._fill(self.invisibleRootItem(), node, path, names)
+            self.advanced_groups: list[QTreeWidgetItem] = []
+            self._fill(self.invisibleRootItem(), node, path, names, top=not path)
             self.expandToDepth(1)
+            for group in self.advanced_groups:  # UX-7: folded until asked for
+                group.setExpanded(False)
             from puzzle.gui.theme import colour_levels
 
             colour_levels(self, depth_of_top=1)  # its groups as the tree's next levels
@@ -502,10 +567,23 @@ class PropertiesPanel(QTreeWidget):
             return
         self.edited.emit(self.object_id, box.property("path"), value or {})
 
-    def _fill(self, parent, node: Any, path: str, names: dict) -> None:
-        items = node.items() if isinstance(node, dict) else enumerate(node)
+    def _fill(
+        self, parent, node: Any, path: str, names: dict, top: bool = False, only: set | None = None
+    ) -> None:
+        """`node`'s fields under `parent`; its advanced ones (`advanced`) last, in a
+        folded group; `only` limits it to those keys (the group's own fill)."""
+        items = list(node.items() if isinstance(node, dict) else enumerate(node))
+        later = advanced(node, top) if only is None else set()
+        if isinstance(node, dict) and _is_feature(node) and only is None:
+            # UX-7: a load's values straight under its selection, open
+            first = [kv for kv in items if kv[0] in ("type", "selection", "values")]
+            items = first + [kv for kv in items if kv not in first]
         for key, value in items:
             if key in HIDDEN or not applies(node, key):
+                continue
+            if only is not None and key not in only:
+                continue
+            if key in later:
                 continue
             sub = f"{path}.{key}" if path else str(key)
             if isinstance(node, list):
@@ -541,6 +619,8 @@ class PropertiesPanel(QTreeWidget):
                     continue
                 item = QTreeWidgetItem(parent, [title, ""])
                 self._fill(item, value, sub, names)
+                if key == "values" and isinstance(node, dict) and _is_feature(node):
+                    item.setExpanded(True)
                 continue
             options = None if key in READ_ONLY else self.choices(sub)
             if options is None and isinstance(value, bool):
@@ -559,6 +639,16 @@ class PropertiesPanel(QTreeWidget):
                 continue
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
             item.setData(1, PATH, (sub, value))
+        shown_later = [k for k, _ in items if k in later and k not in HIDDEN
+                       and applies(node, k)]  # fmt: skip
+        if shown_later:
+            group = QTreeWidgetItem(parent, [ADVANCED_TITLE, ""])
+            group.setToolTip(0, "Settings most models leave as they are")
+            self._fill(group, node, path, names, only=set(shown_later))
+            if group.childCount():
+                self.advanced_groups.append(group)
+            else:
+                parent.removeChild(group)
 
     def _dropdown(self, item, path: str, value, options, on_change=None) -> None:
         """A choice field: readable names shown, the value itself stored; `on_change`

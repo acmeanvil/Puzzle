@@ -79,7 +79,7 @@ def test_docks_open_when_needed(window):
 def test_toolbar_groups_icons_and_labels_setting(window):
     bar = window.toolbar
     shown = [a.text() for a in bar.actions() if a.text()]
-    assert shown[:4] == ["New…", "Open…", "Undo", "Mesh"]
+    assert shown[:5] == ["New…", "Open…", "Save version…", "Undo", "Redo"]  # UX-12
     assert "Delete" not in shown and "Reload from disk" not in shown  # menus only
     assert all(not window.actions_by_name[n].icon().isNull() for n in ("new", "run", "pick"))
     assert window.actions_by_name["run"].toolTip().startswith("Run  (")

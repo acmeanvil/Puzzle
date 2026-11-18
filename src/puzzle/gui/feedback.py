@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QProgressBar,
     QPushButton,
+    QSizePolicy,
     QToolButton,
     QWidget,
 )
@@ -188,7 +189,8 @@ class StatusProgress(QWidget):
         self.bar.setMaximumHeight(14)
         self.bar.setTextVisible(False)
         self.bar.setAccessibleName("Progress")
-        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button = QPushButton("Stop")  # one word for it, as Solution's (UX-24)
+        self.cancel_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.cancel_button.setToolTip("Stop this work (a solve stops at its next check)")
         self.cancel_button.clicked.connect(self.cancel)
         for w in (self.label, self.bar, self.cancel_button):
@@ -248,7 +250,7 @@ class StatusProgress(QWidget):
         self.cancel_button.setEnabled(stoppable and not job.stopping)
         if stoppable:  # which job Cancel stops, when several run
             self.cancel_button.setToolTip(f"Stop {job.message} (a solve stops at its next check)")
-            self.cancel_button.setAccessibleName(f"Cancel {job.message}")
+            self.cancel_button.setAccessibleName(f"Stop {job.message}")
         self.show()
 
 

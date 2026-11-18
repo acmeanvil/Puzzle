@@ -67,7 +67,7 @@ def _frame(tmp_path):
     return root
 
 
-def test_add_a_beam_section(app, tmp_path):
+def test_add_a_beam_section(si_units, app, tmp_path):
     from test_gui_names import bad, texts
 
     window = MainWindow(_frame(tmp_path))
@@ -112,7 +112,7 @@ def test_polyline_is_a_ribbon_tool():
     assert "polyline" in dict(GROUPS)["Create"]
 
 
-def test_add_a_shell_thickness(app, tmp_path):
+def test_add_a_shell_thickness(si_units, app, tmp_path):
     """A flat sheet gets a thickness from one form; the tree and outline name it, its
     menus offer it, and Elmer reports that it does not write shells."""
     from forms import fill

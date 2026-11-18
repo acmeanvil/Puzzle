@@ -167,6 +167,11 @@ def advise(
                 "Add a material…")  # fmt: skip
         else:
             add("materials", "done", f"{len(materials)} in the project.")
+        if geometries:  # UX-3: one form makes the recipe, component, physics and study
+            add("component", "needed", "New analysis makes the mesh recipe, the component, "
+                "its material and physics and a study in one go.", "new_analysis",
+                "New analysis…")  # fmt: skip
+            return out
         needs_mesh = not project.of_type(MeshRecipe)
         add("component", "needed",
             "Make a mesh recipe first, then a component." if needs_mesh else "",

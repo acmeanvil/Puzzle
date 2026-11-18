@@ -1,5 +1,6 @@
 """The start page: what the window shows before a project is open. The picture, New
-and Open, and the projects opened lately (kept in `<user data dir>/recent.json`)."""
+and Open, the examples to try, Getting started, and the projects opened lately (kept in
+`<user data dir>/recent.json`). A CAD file dropped on it starts a project (UX-10)."""
 
 from __future__ import annotations
 
@@ -19,6 +20,39 @@ from PySide6.QtWidgets import (
 
 ART = Path(__file__).parent / "art"
 KEEP = 10  # recent projects remembered
+EXAMPLES_DIR = Path(__file__).parents[3] / "examples"
+# (folder, button, what it shows): a solved beam, and an assembly with contact and bolts.
+EXAMPLES = (
+    ("cantilever", "Cantilever example", "A beam to mesh, run and read: the first try"),
+    ("bracket_assembly", "Bracket assembly example",
+     "An angle bracket on a plate: contacts, bolts and their pretension"),
+)  # fmt: skip
+
+
+def open_example(window, name: str = "cantilever") -> Path:
+    """A fresh copy of an example in the user's data folder, opened."""
+    import shutil
+
+    from puzzle.materials import user_data_dir
+
+    base = Path(user_data_dir()) / "examples"
+    n = 1
+    while (base / f"{name}-{n}").exists():
+        n += 1
+    target = base / f"{name}-{n}"
+    shutil.copytree(
+        EXAMPLES_DIR / name,
+        target,
+        ignore=shutil.ignore_patterns("results*", ".puzzle", "history.jsonl"),
+    )
+    window.open(target)
+    return target
+
+
+def _getting_started(window) -> None:
+    from puzzle.gui.main_menu import _getting_started as show
+
+    show(window)
 
 
 def _recent_path() -> Path:
@@ -119,8 +153,8 @@ class StartPage(QWidget):
         name.setFont(font)
         column.addWidget(name)
         tagline = theme.role(QLabel(
-            "One model, every solver: CalculiX, Code_Aster, Elmer, FEniCSx, "
-            "Code_Saturne and OpenFOAM."
+            "One model, every solver: CalculiX, Code_Aster, Elmer, FEniCSx, OpenCourant, "
+            "PyNite, Code_Saturne and OpenFOAM. Drop a CAD file here to start."
         ), "muted")  # fmt: skip
         tagline.setWordWrap(True)
         column.addWidget(tagline)
@@ -129,13 +163,31 @@ class StartPage(QWidget):
         buttons = QHBoxLayout()
         self.new = QPushButton("New project…")
         self.new.setDefault(True)
-        self.new.clicked.connect(window._new_dialog)
+        self.new.clicked.connect(lambda: window._new_dialog())
         self.open_button = QPushButton("Open project…")
         self.open_button.clicked.connect(window._open_dialog)
         buttons.addWidget(self.new)
         buttons.addWidget(self.open_button)
         buttons.addStretch(1)
         column.addLayout(buttons)
+        column.addSpacing(12)
+        # UX-10: something to learn from before there is a model of one's own
+        learn = QHBoxLayout()
+        self.examples: dict[str, QPushButton] = {}
+        for name, words, tip in EXAMPLES:
+            if not (EXAMPLES_DIR / name).is_dir():
+                continue
+            b = QPushButton(words)
+            b.setToolTip(tip)
+            b.clicked.connect(lambda _=False, n=name: open_example(window, n))
+            self.examples[name] = b
+            learn.addWidget(b)
+        self.guide = QPushButton("Getting started")
+        self.guide.setToolTip("The manual's first page: an analysis in six steps")
+        self.guide.clicked.connect(lambda: _getting_started(window))
+        learn.addWidget(self.guide)
+        learn.addStretch(1)
+        column.addLayout(learn)
         column.addSpacing(18)
 
         self.recent_title = theme.role(QLabel("Recent projects"), "title")

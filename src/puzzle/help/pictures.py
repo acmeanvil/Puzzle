@@ -24,7 +24,7 @@ INDEX = IMAGES / "index.json"
 IMAGE = re.compile(r"!\[([^\]]*)\]\(image:([^)\s]+)\)")
 ARROW = " → "
 # The menu bar's titles, in its order: a chain of arrows starting with one names a menu.
-TOP = ("Project", "Geometry", "Materials", "Mesh", "Model", "Results", "Window", "Help")
+TOP = ("Project", "Edit", "Geometry", "Materials", "Mesh", "Model", "Results", "Window", "Help")
 FENCE = re.compile(r"^\s*(```|~~~)")
 
 

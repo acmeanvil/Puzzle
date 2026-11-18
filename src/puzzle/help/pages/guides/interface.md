@@ -11,9 +11,11 @@ The window has four working areas: the model tree on the left, the Properties pa
 beside it, the 3D view in the centre and the messages below it. Every change you make in
 any of them is one command in the project's history, so Undo takes it back.
 
-The toolbar holds New…, Open…, Undo, Mesh (Ctrl+M), Run (Ctrl+R), Add material…,
-Material builder… and Pick (P). Agent, Messages and Settings… sit at its right end. The
-menu bar reaches everything the ribbons and right-click menus do.
+The toolbar holds New…, Open…, Save version…, Undo, Redo, Import geometry… (Ctrl+I),
+New analysis…, Add material…, Mesh (Ctrl+M), Run (Ctrl+R) and Pick (P). Agent, Messages
+and Settings… sit at its right end. The menu bar reaches everything the ribbons and
+right-click menus do; the Model tab has a ribbon of its own (New analysis, materials,
+loads and supports, contacts, the study and Run).
 
 ## How to use the model tree
 
@@ -26,7 +28,7 @@ more. A heading shows once it holds something.
    mesh recipe, New component…, New study… and the rest.
 2. Right-click a heading or an item for what it can do. A heading's menu adds to it.
 3. Select an item to show its fields in Properties and draw it in the view.
-4. Delete removes what is selected (the Delete key, or Project → Delete). Several items
+4. Delete removes what is selected (the Delete key, or Edit → Delete). Several items
    selected go as one undo.
 
 Inside an object, items sit in default folders. A component has Geometry, Material
@@ -35,9 +37,9 @@ a geometry has History, Bodies and Selections. A folder's right-click adds what 
 
 ### Renaming and groups
 
-- **Rename:** select an item and press F2 (or Project → Rename). Runs and a swept
+- **Rename:** select an item and press F2 (or Edit → Rename). Runs and a swept
   study's group of runs can be renamed too; those names are kept in the project.
-- **Groups** are folders of your own. Project → New group… (or right-click a heading,
+- **Groups** are folders of your own. Edit → New group… (or right-click a heading,
   New group…) makes one holding what is selected.
 - Drag items in or out, or use right-click → Move to group, Out of group and Ungroup.
 - New group inside… groups items inside an object: a geometry's selections, a
@@ -96,9 +98,10 @@ the keyboard focus between panels.
 Puzzle stores values as you type them and gives solvers SI. Units only change what is
 shown, and what a bare number means.
 
-1. Project → Settings… → Units → Display units. The default is SI (m, kg, s, Pa, K).
-2. Choose SI with mm, MPa and °C (engineering), SI consistent in mm, Imperial, or
-   My own, per quantity, which sets each kind of quantity apart.
+1. Project → Settings… → Units → Display units. The default is SI with mm, MPa and °C
+   (engineering): a 2.5 mm size shows as 2.5 mm and a stress as MPa.
+2. Choose SI (m, kg, s, Pa, K), SI consistent in mm, Imperial, or My own, per
+   quantity, which sets each kind of quantity apart.
 
 A project can carry its own units for everyone who opens it. Click the units button in
 the status bar (it reads, for example, "mm · N · MPa · °C (project)"). Tick Use the
@@ -106,15 +109,17 @@ project's units and choose a system. Untick it and each person sees their own ag
 
 ## How to undo
 
-Undo (Ctrl+Z, ⌘Z on a Mac, or the toolbar) takes back the last command. While you are
-picking, it takes back the last pick first. Undo refuses when the objects have changed
+Undo (Ctrl+Z, ⌘Z on a Mac, Edit → Undo or the toolbar) takes back the last command;
+pressed again, the one before. Redo (Ctrl+Y or Ctrl+Shift+Z, Edit → Redo) puts back
+what Undo took, until you make a new change. Their tooltips say what each would act
+on. While you are picking, Undo takes back the last pick first. Undo refuses when the objects have changed
 since; the History tab shows what each command did.
 
 ## Options worth knowing
 
 | Setting | Where | Default |
 | --- | --- | --- |
-| Display units | Settings → Units | SI |
+| Display units | Settings → Units | SI with mm, MPa and °C (engineering) |
 | Project units | status-bar units button | off until set; engineering when first made |
 | Layout | Window → Layouts | Modelling |
 

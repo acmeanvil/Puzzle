@@ -9,7 +9,6 @@ project offers the cantilever example to try.
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 
 from PySide6.QtWidgets import (
@@ -29,6 +28,25 @@ from puzzle.model.schema import Component, Study
 # A shape and a role each, so a step's state reads without colour too.
 MARKS = {"done": ("✓", "done"), "needed": ("●", "needed"), "optional": ("○", "muted")}
 EXAMPLE = Path(__file__).parents[3] / "examples" / "cantilever"
+# What a study's state reads as in the Advisor's list of the others (UX-6).
+STATES = {
+    "up_to_date": "results ready",
+    "out_of_date": "out of date",
+    "not_run": "not run",
+    "running": "running",
+    "failed": "failed",
+    "missing": "missing input",
+}
+
+
+def _study(project, study_id):
+    from uuid import UUID
+
+    try:
+        obj = project.objects.get(UUID(str(study_id)))
+    except ValueError:
+        return None
+    return obj if isinstance(obj, Study) else None
 
 
 class AdvisorPanel(QWidget):
@@ -70,18 +88,64 @@ class AdvisorPanel(QWidget):
     # --- what it shows -----------------------------------------------------------------
 
     def scope_objects(self):
-        """The component and study the Advisor speaks about: the tree's selection, else
-        the first of each."""
+        """The component and study the Advisor speaks about (UX-6): the selected study;
+        else the study of the selected run or result, or of the results in the view;
+        else the study run last; else the selected item's component's first. It once
+        spoke of the first study while another's results were on screen."""
+        comp, study, _run = self._scope()
+        return comp, study
+
+    def _scope(self):
+        """(component, study, whether a run or its results are what is selected)."""
         w = self.window
         if w.session is None:
-            return None, None
+            return None, None, False
+        project = w.session.project
         node = w.tree.current()
         obj = w._object(node)
         comp = w._component_of(node)
-        study = obj if isinstance(obj, Study) else None
-        if not isinstance(comp, Component) or comp.id not in w.session.project.objects:
+        if not isinstance(comp, Component) or comp.id not in project.objects:
             comp = None
-        return comp, study
+        study = obj if isinstance(obj, Study) else None
+        run = False
+        if study is None and node is not None and node.kind in ("sweep", "compare"):
+            study = _study(project, node.object)
+            run = study is not None
+        if study is None and node is not None and node.kind in ("run", "result", "result_group"):
+            study = self._study_of_run(node.object)
+            run = study is not None
+        if study is None and comp is None:
+            shown = getattr(w, "_result_run", None)
+            if shown and w.context == "results":
+                study = self._study_of_run(shown)
+                run = study is not None
+            if study is None:
+                study = self._last_run()
+        if study is not None and comp is None:
+            comp = project.objects.get(study.component)
+            comp = comp if isinstance(comp, Component) else None
+        return comp, study, run
+
+    def _runs(self):
+        try:
+            return self.window._store().runs()
+        except Exception:  # noqa: BLE001 - an unreadable store: no runs, said elsewhere
+            return []
+
+    def _study_of_run(self, run_id: str):
+        project = self.window.session.project
+        if str(run_id).startswith("derived:"):
+            return None
+        record = next((r for r in self._runs() if r.run_id == run_id), None)
+        return _study(project, record.study_id) if record is not None else None
+
+    def _last_run(self):
+        project = self.window.session.project
+        for record in sorted(self._runs(), key=lambda r: r.started_at, reverse=True):
+            study = _study(project, record.study_id)
+            if study is not None:
+                return study
+        return None
 
     def refresh(self) -> None:
         from puzzle.advisor import advise, next_step
@@ -93,17 +157,17 @@ class AdvisorPanel(QWidget):
             self.scope.setText("")
             self.example.setVisible(EXAMPLE.is_dir())
             return
-        comp, study = self.scope_objects()
-        try:
-            runs = w._store().runs()
-        except Exception:  # noqa: BLE001 - an unreadable store: no runs, said elsewhere
-            runs = []
+        comp, study, on_run = self._scope()
+        runs = self._runs()
         meshed = comp is not None and w.current_mesh(comp) is not None
         self.advice = advise(
             w.session.project, runs, comp, study, meshed=meshed, root=w.session.root
         )
         first = next_step(self.advice)
-        self.heading.setText(f"Next: {first.label or first.title}" if first else "All set")
+        if on_run and study is not None:  # a run's results: what to do with them
+            self.heading.setText(f"Results of {study.name}")
+        else:
+            self.heading.setText(f"Next: {first.label or first.title}" if first else "All set")
         about = [x.name for x in (comp, study) if x is not None]
         self.scope.setText(f"For {' and '.join(about)}" if about else "For the project")
         for row, a in enumerate(self.advice):
@@ -120,10 +184,64 @@ class AdvisorPanel(QWidget):
                 b.clicked.connect(lambda _=False, act=a.action: self.do(act))
                 self.buttons[a.action] = b
                 self.grid.addWidget(b, row, 2)
+        rows = len(self.advice)
+        if on_run and study is not None:
+            rows = self._with_results(rows)
+        rows = self._others(study, runs, rows)
         self.grid.setColumnStretch(1, 1)
-        self.grid.setRowStretch(len(self.advice), 1)
+        self.grid.setRowStretch(rows, 1)
         empty = not w.session.project.objects
         self.example.setVisible(empty and EXAMPLE.is_dir())
+
+    def _with_results(self, row: int) -> int:
+        """A run is selected: what to do with its results, a button each (UX-6)."""
+        from PySide6.QtWidgets import QHBoxLayout
+
+        self.grid.addWidget(QLabel("<b>With these results</b>"), row, 1)
+        holder = QWidget()
+        line = QHBoxLayout(holder)
+        line.setContentsMargins(0, 0, 0, 0)
+        for key, words, tip in (
+            ("probe", "Probe", "Read a value where you double-click the part"),
+            ("reaction", "Reaction…", "The force and moment a support takes"),
+            ("export", "Export…", "The results for other software"),
+        ):
+            b = QPushButton(words)
+            b.setToolTip(tip)
+            b.clicked.connect(lambda _=False, k=key: self.do(f"results:{k}"))
+            self.buttons[f"results:{key}"] = b
+            line.addWidget(b)
+        line.addStretch()
+        self.grid.addWidget(holder, row + 1, 1, 1, 2)
+        return row + 2
+
+    def _others(self, study, runs, row: int) -> int:
+        """The project's other studies, one line each with its state and a button that
+        selects it, so the Advisor never reads as if the one shown were the only one."""
+        from puzzle.project.status import status
+
+        project = self.window.session.project
+        others = [s for s in project.of_type(Study) if study is None or s.id != study.id]
+        if not others:
+            return row
+        states = getattr(self.window, "states", None) or status(project, runs)  # the tree's
+        title = QLabel("<b>Other studies</b>")
+        self.grid.addWidget(title, row, 1)
+        row += 1
+        for s in others:
+            state = states.get(str(s.id))
+            word = STATES.get(state.state if state else "not_run", "not run")
+            text = QLabel(f"{s.name}: {word}")
+            text.setWordWrap(True)
+            role(text, "muted")
+            self.grid.addWidget(text, row, 1)
+            b = QPushButton("Show")
+            b.setToolTip(f"Select {s.name}; the Advisor then follows it")
+            b.clicked.connect(lambda _=False, i=str(s.id): self._select(i))
+            self.buttons[f"study:{s.id}"] = b
+            self.grid.addWidget(b, row, 2)
+            row += 1
+        return row
 
     def _clear(self) -> None:
         self.buttons = {}
@@ -187,6 +305,18 @@ class AdvisorPanel(QWidget):
             return menus.new_component(w)
         if action == "new_study":
             return menus.new_study(w)
+        if action == "new_analysis":
+            return menus.new_analysis(w)
+        if action.startswith("results:"):  # a selected run's next steps (UX-6)
+            ribbon = w.results_ribbon
+            what = action.split(":", 1)[1]
+            if w.result is None or w.context != "results":
+                self.do("results")
+            if what == "export":
+                from puzzle.gui.main_menu import _export
+
+                return _export(w)
+            return ribbon.buttons[what].click()
         if action == "show_problems":
             w.output_tabs.setCurrentWidget(w.problems)
             w.fold_messages(False)
@@ -244,17 +374,9 @@ class AdvisorPanel(QWidget):
 
     def open_example(self) -> None:
         """A fresh copy of the cantilever example in the user's data folder, opened."""
-        from puzzle.materials import user_data_dir
+        from puzzle.gui.start_page import open_example
 
-        base = Path(user_data_dir()) / "examples"
-        n = 1
-        while (base / f"cantilever-{n}").exists():
-            n += 1
-        target = base / f"cantilever-{n}"
-        shutil.copytree(
-            EXAMPLE, target, ignore=shutil.ignore_patterns("results*", ".puzzle", "history.jsonl")
-        )
-        self.window.open(target)
+        open_example(self.window, "cantilever")
 
 
 def add_skin_refinement(window, study_id: str):

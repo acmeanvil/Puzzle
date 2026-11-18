@@ -14,10 +14,11 @@ from typing import TYPE_CHECKING
 from PySide6.QtWidgets import QDialog, QLabel, QMenu
 
 from puzzle.commands.model import CopyComponent, Create, Edit, EditOp
+from puzzle.errors import PuzzleError
 from puzzle.geometry.steps import STEPS
 from puzzle.gui.choices import label, solver_label
 from puzzle.gui.tree import Node
-from puzzle.model.catalog import CATALOG, STEP_DEFAULTS, STEP_TYPES, specs
+from puzzle.model.catalog import CATALOG, STEP_DEFAULTS, STEP_TYPES
 from puzzle.model.schema import (
     Amplitude,
     Component,
@@ -109,10 +110,11 @@ def _folder_menu(window, add, menu, obj, node: Node) -> None:
         physics = node.path.partition("/")[2]
         index = next((i for i, p in enumerate(obj.physics) if p.type == physics), None)
         if index is not None:
-            sub = menu.addMenu("Add feature")
-            for s in specs(physics):
-                action = sub.addAction(s.label)
-                action.triggered.connect(lambda _=False, sp=s: add_feature(window, obj, index, sp))
+            from puzzle.gui.load_form import MENU_TITLE, fill_menu
+
+            sub = menu.addMenu(MENU_TITLE)
+            sub.setToolTipsVisible(True)
+            fill_menu(window, sub, obj, index)
 
 
 def build_menu(window: MainWindow, node: Node) -> QMenu | None:
@@ -136,6 +138,7 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         elif node.label == "Components":
             add("New component…", lambda: new_component(window))
         elif node.label == "Studies":
+            add("New analysis…", lambda: new_analysis(window))
             add("New study…", lambda: new_study(window))
             menu.addSeparator()  # several, one after another (ADR 0073)
             add("Run all", lambda: window.run_studies(None))
@@ -187,6 +190,7 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
             add("New fatigue tool…", lambda: window.new_derived("fatigue"))
             _operator_menu(window, menu)
     elif node.kind == "project":
+        add("New analysis…", lambda: new_analysis(window))  # UX-3: the first thing to make
         add("New part…", lambda: new_part(window))
         add("New amplitude…", lambda: edit_amplitude(window))
         add("New coordinate system…", lambda: new_axes(window, "cartesian"))
@@ -241,10 +245,11 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         add("Delete", window.delete_selected)
     elif isinstance(obj, Component) and node.kind == "physics":
         index = int(node.path.split(".")[1])
-        sub = menu.addMenu("Add feature")
-        for s in specs(obj.physics[index].type):
-            action = sub.addAction(s.label)
-            action.triggered.connect(lambda _=False, sp=s: add_feature(window, obj, index, sp))
+        from puzzle.gui.load_form import MENU_TITLE, fill_menu
+
+        sub = menu.addMenu(MENU_TITLE)
+        sub.setToolTipsVisible(True)
+        fill_menu(window, sub, obj, index)
         menu.addSeparator()
         add("Remove physics", lambda: remove(window, obj, node.path))
     elif isinstance(obj, Component) and node.kind in (
@@ -623,27 +628,22 @@ def ask_custom_equation(window) -> dict | None:
 
 
 def add_feature(window, comp: Component, index: int, spec):
-    choices = selections_of(window.session.project, comp, spec.entity)
-    if not choices:
-        window.statusBar().showMessage(
-            f"No {spec.entity} selections on {comp.name} yet: pick some in the view first", 8000
-        )
-        return None
-    selection = window.choose(
-        f"Add {spec.label}", f"Apply to which {spec.entity} selection?", choices
-    )
-    if selection is None:
-        return None
-    value = spec.feature(selection).model_dump(mode="json")
-    op = EditOp(op="append", path=f"physics.{index}.features", value=value)
-    return window.submit(Edit(object=str(comp.id), ops=[op]))
+    """A load or support: where (the picks, or a selection) and its values in one form
+    (`gui.load_form`, ADR 0090 UX-2)."""
+    from puzzle.gui.load_form import add_load
+
+    return add_load(window, comp, index, spec)
 
 
 def assign_material(window, comp: Component):
     project = window.session.project
     materials = {m.name: m for m in project.of_type(Material)}
     if not materials:
-        window.statusBar().showMessage("Add a material first (Materials → Add material…)", 8000)
+        window.toasts.show(
+            "Add a material to the project first",
+            ("Add material…", window._add_material_dialog),
+            state="info",
+        )  # UX-14
         return None
     bodies = selections_of(project, comp, "body")
     if not bodies:
@@ -675,7 +675,11 @@ def assign_material_to_bodies(window, geo: Geometry, selection: str | None = Non
     project = window.session.project
     materials = {m.name: m for m in project.of_type(Material)}
     if not materials:
-        window.statusBar().showMessage("Add a material first (Materials → Add material…)", 8000)
+        window.toasts.show(
+            "Add a material to the project first",
+            ("Add material…", window._add_material_dialog),
+            state="info",
+        )  # UX-14
         return None
     uses = [(c, p) for c in project.of_type(Component) for p in c.parts if p.geometry == geo.id]
     if not uses:
@@ -920,7 +924,9 @@ def new_component(window):
     geometries = {g.name: g for g in project.of_type(Geometry)}
     meshes = {m.name: m for m in project.of_type(MeshRecipe)}
     if not geometries or not meshes:
-        window.statusBar().showMessage("A component needs a geometry and a mesh recipe first", 8000)
+        window.toasts.show("A component needs a geometry and a mesh recipe first: New "
+                           "analysis makes all of it", ("New analysis…", lambda: new_analysis(
+                               window)), state="info")  # fmt: skip
         return None
     from puzzle.gui.quick_form import Ask
 
@@ -949,6 +955,53 @@ def new_component(window):
     return window.submit(Create(kind="component", data=data))
 
 
+AUTO_ORDER = (
+    "calculix",
+    "code_aster",
+    "elmer",
+    "fenicsx",
+    "pynite",
+    "opencourant",
+    "code_saturne",
+    "openfoam",
+)  # the first that runs it is Automatic's (UX-30)
+
+
+def _fitting(step, comp) -> list[str]:
+    """The solvers that run `step` on every physics of `comp`, in AUTO_ORDER."""
+    from puzzle.adapters import available_adapters
+
+    adapters = available_adapters()
+    kinds = {p.type for p in getattr(comp, "physics", [])}
+    order = [*AUTO_ORDER, *sorted(set(adapters) - set(AUTO_ORDER))]
+    return [
+        k
+        for k in order
+        if k in adapters
+        and step
+        and kinds
+        and all(step in adapters[k].capabilities.physics.get(t, ()) for t in kinds)
+    ]
+
+
+def _auto_solver(step, comp) -> str:
+    fits = _fitting(step, comp)
+    return fits[0] if fits else "calculix"
+
+
+def _solver_choices(step, comp) -> list:
+    """Automatic (naming the one it picks), then every solver; those that can't run
+    this analysis say so beside their name."""
+    from puzzle.adapters import available_adapters
+
+    fits = _fitting(step, comp)
+    out = [(f"Automatic ({solver_label(fits[0])})" if fits else "Automatic", "")]
+    for k in sorted(available_adapters()):
+        out.append((solver_label(k) if k in fits or not fits else
+                    f"{solver_label(k)} (doesn't run this)", k))  # fmt: skip
+    return out
+
+
 def _solver_fits(solver, analysis) -> str | None:
     """Why `solver` can't run `analysis` (an explicit step on an implicit solver, or the
     reverse: ADR 0085), naming the solvers that can; None when it can."""
@@ -967,15 +1020,105 @@ def _solver_fits(solver, analysis) -> str | None:
             + (f": {', '.join(can)} does" if can else ""))  # fmt: skip
 
 
+def new_analysis(window, geometry: str | None = None):
+    """New analysis… (ADR 0090 UX-3): a geometry, what to analyse, the material and how
+    fine a mesh, in one form; the mesh recipe, component, material, physics and study
+    made as one batch by `puzzle.new_analysis`. The component is selected after, so
+    the Advisor's next step is its support and load."""
+    from puzzle import new_analysis as plan
+    from puzzle.gui.quick_form import Ask
+    from puzzle.materials import _library
+
+    project = window.session.project
+    geos = project.of_type(Geometry)
+    if not geos:
+        window.toasts.show("Import or draw the geometry first", (
+            "Import geometry…", lambda: import_step_file(window)), state="info")  # fmt: skip
+        return None
+    fresh = plan.unanalysed(project)
+    order = fresh + [g for g in geos if g not in fresh]
+    library = sorted(((e["name"], k) for k, e in _library().items()), key=lambda p: p[0].casefold())
+    own = [(m.name, m.name) for m in project.of_type(Material)]
+    materials = own + [(n, k) for n, k in library if n not in {m for m, _ in own}]
+    default = own[0][1] if own else ("structural_steel" if any(
+        k == "structural_steel" for _, k in library) else None)  # fmt: skip
+
+    def solvers(v) -> list:
+        from puzzle.adapters import available_adapters
+
+        analysis = v.get("analysis", "static")
+        try:
+            best = plan.solver_for(analysis)
+        except PuzzleError:
+            best = ""
+        out = [(f"Automatic ({solver_label(best)})" if best else "Automatic", "")]
+        _l, physics, step = plan.ANALYSES[analysis]
+        out += [(solver_label(k), k) for k, a in sorted(available_adapters().items())
+                if step in a.capabilities.physics.get(physics, ())]  # fmt: skip
+        return out
+
+    got = window.ask_form(
+        "New analysis",
+        [
+            Ask(
+                "geometry", "Geometry", choices=[(g.name, g.name) for g in order], default=geometry
+            ),
+            Ask(
+                "analysis", "Analysis", choices=[(t, k) for k, (t, _p, _s) in plan.ANALYSES.items()]
+            ),
+            Ask(
+                "material",
+                "Material",
+                choices=materials,
+                default=default,
+                help="On every body of the geometry; change it per body later",
+            ),
+            Ask(
+                "mesh",
+                "Mesh",
+                choices=[(plan.FINENESS_LABELS[k], k) for k in plan.FINENESS],
+                default="medium",
+                help="Sized from the part: a coarse mesh solves quickest",
+            ),
+            Ask(
+                "solver",
+                "Solver",
+                choices=solvers,
+                help="Automatic picks the first solver that runs this analysis",
+            ),
+        ],  # fmt: skip
+        intro="Makes the mesh recipe, the component, its material and physics and the "
+        "study, as one undo. Then add a support and a load.",
+    )
+    if got is None:
+        return None
+    try:
+        batch = plan.commands(project, [got["geometry"]], got["analysis"], got["material"],
+                              got["mesh"], solver=got.get("solver") or "",
+                              root=window.session.root)  # fmt: skip
+    except PuzzleError as exc:
+        window.report(exc)
+        return None
+    out = window.submit_batch(batch)
+    if out is not None:
+        made = next((o for o in out.created if o.get("kind") == "component"), None)
+        if made is not None:
+            window.tree.select(Node("object", str(made["id"])))
+    return out
+
+
 def new_study(window, component: str | None = None):
     """The New study form; `component` (a name) chosen already, as when a study is
     dragged out of a component in the schematic (ADR 0071 decision 4)."""
-    from puzzle.adapters import available_adapters
 
     project = window.session.project
     comps = {c.name: c for c in project.of_type(Component)}
     if not comps:
-        window.statusBar().showMessage("Create a component first", 8000)
+        window.toasts.show(
+            "A study runs a component: make one first",
+            ("New analysis…", lambda: new_analysis(window)),
+            state="info",
+        )  # UX-14
         return None
     from puzzle.gui.quick_form import Ask
 
@@ -997,7 +1140,8 @@ def new_study(window, component: str | None = None):
     # through a temperature transfer), so "all together" is offered last, not first.
     got = window.ask_form(
         "New study",
-        [
+        [  # UX-30: what to run first, the solver automatic unless chosen
+            Ask("analysis", "Analysis", choices=[(label(t), t) for t in STEP_TYPES]),
             Ask(
                 "component",
                 "Component",
@@ -1007,9 +1151,10 @@ def new_study(window, component: str | None = None):
             Ask(
                 "solver",
                 "Solver",
-                choices=[(solver_label(k), k) for k in sorted(available_adapters())],
+                choices=lambda v: _solver_choices(v.get("analysis"), comps.get(v.get("component"))),
+                help="Automatic picks the first solver that runs this analysis on this "
+                "component's physics; the list says which can",
             ),
-            Ask("analysis", "Analysis", choices=[(label(t), t) for t in STEP_TYPES]),
             Ask(
                 "physics",
                 "Physics this step solves",
@@ -1034,6 +1179,7 @@ def new_study(window, component: str | None = None):
     if got is None:
         return None
     comp, solver, step, name = got["component"], got["solver"], got["analysis"], got["name"]
+    solver = solver or _auto_solver(step, comps[comp])
     chosen = got.get("physics")
     physics = [] if chosen in (None, together) else [chosen]
     settings = dict(STEP_DEFAULTS.get(step, {}))
@@ -1254,7 +1400,12 @@ def import_step_file(window, path: Path | None = None):
             f"The project has a different {path.name} already: imported as {name}", 10000
         )
     data = {"name": path.stem, "source": name, "selections": selections}
-    return window.submit(Create(kind="geometry", data=data))
+    out = window.submit(Create(kind="geometry", data=data))
+    if out is not None and not window.session.project.of_type(Component):  # UX-3
+        made = out.created[0]["name"] if out.created else path.stem
+        window.toasts.show(f"Imported {made}: analyse it next", (
+            "New analysis…", lambda: new_analysis(window, made)), state="info")  # fmt: skip
+    return out
 
 
 # --- geometry history (G4) ------------------------------------------------------------

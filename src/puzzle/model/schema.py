@@ -3502,7 +3502,8 @@ class Project:
                 "unconstrained",
                 study.name,
                 f"study '{study.name}' solves solid mechanics on '{comp.name}', which has no "
-                "fixed or displacement condition: the body is free to move as a rigid body",
+                "fixed or displacement condition: the body is free to move as a rigid body. "
+                "Add a fixed support or a displacement",
                 {"component": comp.name},
             )
         ]

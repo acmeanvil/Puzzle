@@ -209,3 +209,7 @@ already in the right place. What sits behind it is too thin:
   PSI/J's scheduler code may still be used under the runner.
 - **A web service on the host.** It means a port to open, TLS and accounts to look after.
   SSH already gives authentication.
+
+## Amended (2026-11-18, ADR 0090 package 11)
+
+Opening another project while a solve started in the window runs asks "Stop the run?" once, only with the job runner off (the solve lives in the window's thread then). With the runner on nothing is asked: the solve is the runner's and goes on (the maintainer, 2026-11-17).

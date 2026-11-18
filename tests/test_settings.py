@@ -11,7 +11,8 @@ from puzzle.settings import Settings, settings_path
 
 def test_preferences_round_trip_and_keep_unknown_keys():
     s = Settings()
-    assert s.get("units.system") == "si" and s.get("geometry.preview") == "live"
+    # engineering by default (the maintainer, 2026-11-17: ADR 0090 UX-11)
+    assert s.get("units.system") == "engineering" and s.get("geometry.preview") == "live"
     s.set("units.system", "imperial")
     s.data["future.option"] = 3  # written by a newer Puzzle
     s.save()
@@ -92,11 +93,11 @@ def _size_item(window):
     raise LookupError
 
 
-def test_the_dialog_saves_and_the_window_shows_the_new_units(window):
+def test_the_dialog_saves_and_the_window_shows_the_new_units(si_units, window):
     from puzzle.agent.settings import load_settings
     from puzzle.gui.settings_dialog import SettingsDialog
 
-    assert _size_item(window).text(1) == "0.0025 m"  # SI by default
+    assert _size_item(window).text(1) == "0.0025 m"  # SI, as the user chose (si_units)
     dialog = SettingsDialog(parent=window)
     units = dialog.boxes["units.system"]
     assert not dialog.boxes["units.custom.length"].isEnabled()  # only for "my own"

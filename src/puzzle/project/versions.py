@@ -617,13 +617,14 @@ def describe_command(c: dict) -> str:
     words = {"edit": "Edited", "create": "Created", "delete": "Deleted", "run_study": "Ran",
              "run_optimisation": "Ran optimisation", "run_convergence": "Checked convergence of",
              "run_adapt": "Adapted the mesh of", "run_mesh_shootout": "Mesh shoot-out of",
-             "undo": "Undid a change", "restore_version": "Restored version",
+             "undo": "Undid a change", "redo": "Redid a change",
+             "restore_version": "Restored version",
              "add_library_material": "Added material", "copy_component": "Copied",
              "set_autonomy": "Set the agent's autonomy"}  # fmt: skip
     head = words.get(name, name.replace("_", " ").capitalize())
     if name == "restore_version":
         return f"{head} {c.get('version', '')}".strip()
-    if isinstance(target, str) and target and name != "undo":
+    if isinstance(target, str) and target and name not in ("undo", "redo"):
         return f"{head} {target}"
     return head
 

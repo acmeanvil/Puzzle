@@ -61,6 +61,7 @@ FROM_TYPE = "From its bolt type"
 # Words kept as written when a value is turned into a label.
 WORDS = {
     "srss": "SRSS",
+    "pde": "PDE",  # "Custom PDE" (UX-38)
     "bdf2": "BDF2",
     "sst": "SST",
     "mcp": "MCP",
@@ -182,6 +183,8 @@ def choices(project: Project, obj, path: str) -> list[tuple[str, Any]] | None:
         out = [("A row per item per step", "long"), ("A column per step", "wide")]
         if owner.layout == "setting":
             out.append(("Long (an older table's setting)", "setting"))
+    if field == "element_order" and isinstance(owner, MeshRecipe):  # UX-7: words
+        out = [("Linear", 1), ("Quadratic", 2)]
     if field == "quadrilaterals" and isinstance(owner, MeshRecipe):
         out = [("Quadrilaterals only", "all"), ("Mostly quadrilaterals, some triangles", "mixed")]
     if field == "optimiser" and isinstance(owner, MeshRecipe) and out is not None:

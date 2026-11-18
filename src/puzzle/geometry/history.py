@@ -271,7 +271,13 @@ def _regenerate(ops: list[Op], params: dict[str, float] | None, root) -> NamedSh
         except GeometryError:
             raise
         except Exception as exc:  # noqa: BLE001 - OCCT errors carry little; say where
-            raise GeometryError(f"step '{op.name}' ({op.kind}) failed: {exc}") from exc
+            text = str(exc)
+            if isinstance(exc, TypeError) or "OCP." in text or "Invoked with" in text:
+                # a binding's signature or OpenCASCADE's internals mean nothing to a
+                # person (UX-8); the raw text stays on __cause__, logged with it
+                text = ("it could not be built from its inputs: an edge or face it names "
+                        "may be gone, or a size too large for the part")  # fmt: skip
+            raise GeometryError(f"step '{op.name}' ({op.kind}) failed: {text}") from exc
         if state.shape is None or state.shape.IsNull():
             raise GeometryError(f"step '{op.name}' ({op.kind}) left no shape")
     if state.shape is None:

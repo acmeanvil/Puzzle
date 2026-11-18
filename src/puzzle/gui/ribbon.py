@@ -5,7 +5,9 @@ Every button has the same height and fills its grid cell, so columns line up and
 edges are straight. A one-button group sits on the top row, like the others' first row.
 Buttons never shrink below their words: when the view is too narrow for every group,
 groups fold from the right into one drop-down each, named after the group, as Office
-and Ansys ribbons do. The look is one style sheet here, not a copy per ribbon.
+and Ansys ribbons do; when even those don't fit, the last ones go into one "More ▾"
+drop-down, so a ribbon never holds the window wider than its screen (ADR 0090 UX-1).
+The look is one style sheet here, not a copy per ribbon.
 """
 
 from __future__ import annotations
@@ -62,6 +64,22 @@ class Ribbon(QWidget):
         # Each group's title, its folded button's layout (set under the title) and the
         # group's column: measured again when the font changes.
         self.titles: list[tuple[QLabel, QVBoxLayout, QVBoxLayout]] = []
+        # The last resort: groups that don't fit even folded, as submenus of one button.
+        self.more = self.button("More ▾", "The tools that don't fit here")
+        self.more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.more.setStyleSheet("QToolButton::menu-indicator { image: none; }")
+        more_menu = QMenu(self.more)
+        more_menu.aboutToShow.connect(lambda: self._fill_more(more_menu))
+        self.more.setMenu(more_menu)
+        self.more_holder = QWidget()
+        down = QVBoxLayout(self.more_holder)
+        down.setContentsMargins(0, 0, 0, 0)
+        down.addWidget(self.more)
+        down.addStretch()
+        self.more_holder.hide()
+        self.bar.insertWidget(self.bar.count() - 1, self.more_holder)
+        self.overflow: list[int] = []  # groups in More, by index
+        self.names: list[str] = []
 
     def _title_font(self):
         """A step under the ribbon's own font, which follows the application's (Settings
@@ -120,7 +138,6 @@ class Ribbon(QWidget):
             grid.setRowMinimumHeight(row, HEIGHT)
         column.addLayout(grid)
         column.addStretch()
-        self.bar.insertWidget(self.bar.count() - 1, box)
         folded = self.button(f"{title} ▾", f"The {title} tools")
         folded.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         folded.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -136,9 +153,11 @@ class Ribbon(QWidget):
         down.addWidget(folded)
         down.addStretch()
         holder.hide()
-        self.bar.insertWidget(self.bar.count() - 1, holder)
+        self.bar.insertWidget(self.bar.count() - 2, box)  # More stays last
+        self.bar.insertWidget(self.bar.count() - 2, holder)
         self.groups.append((box, holder, buttons))
         self.titles.append((name, down, column))
+        self.names.append(title)
         self._even()
         self.fold()
         return box
@@ -172,20 +191,27 @@ class Ribbon(QWidget):
             name.setFont(font)
             name.ensurePolished()
             down.setContentsMargins(0, name.sizeHint().height() + column.spacing(), 0, 0)
+        self.more.setMinimumWidth(0)
+        self.more.setMinimumWidth(_needed(self.more))
         self._even()
         self.fold()
 
     def _even(self) -> None:
         """Every tool button in the ribbon as wide as the widest (and all one height):
-        a ribbon reads as one set of tools."""
+        a ribbon reads as one set of tools. A folded group's button is as wide as its
+        own words: evened to the widest tool, ten folded groups held the window at
+        1597 px (UX-1)."""
         tools = [b for _box, _holder, buttons in self.groups for b in buttons]
         if not tools:
             return
-        folded = [holder.findChild(QToolButton) for _box, holder, _buttons in self.groups]
-        widest = max(_needed(b) for b in [*tools, *folded] if b is not None)
-        for b in [*tools, *folded]:
-            if b is not None:
-                b.setFixedWidth(widest)
+        widest = max(_needed(b) for b in tools)
+        for b in tools:
+            b.setFixedWidth(widest)
+        for _box, holder, _buttons in self.groups:
+            folded = holder.findChild(QToolButton)
+            if folded is not None:
+                folded.setMinimumWidth(0)
+                folded.setFixedWidth(_needed(folded))
 
     @staticmethod
     def _fill(menu: QMenu, buttons: list[QToolButton]) -> None:
@@ -203,8 +229,16 @@ class Ribbon(QWidget):
             item.triggered.connect(lambda _=False, b=b: b.click())
             menu.addAction(item)
 
+    def _fill_more(self, menu: QMenu) -> None:
+        """More's menu: each group that didn't fit as a submenu of its tools."""
+        menu.clear()
+        for n in self.overflow:
+            sub = menu.addMenu(self.names[n])
+            self._fill(sub, self.groups[n][2])
+
     def fold(self) -> None:
-        """Fold groups, from the right, until the rest fit the width there is."""
+        """Fold groups, from the right, until the rest fit the width there is; then put
+        the last folded ones into More until those fit too."""
         room = self.width() - 12
         margins = self.bar.spacing()
         wide = [box.sizeHint().width() + margins for box, _, _ in self.groups]
@@ -212,16 +246,23 @@ class Ribbon(QWidget):
         cut = len(self.groups)
         while cut > 0 and sum(wide[:cut]) + sum(narrow[cut:]) > room:
             cut -= 1
+        shown = len(self.groups)  # groups before More (folded or not)
+        if cut == 0 and sum(narrow) > room:
+            more = self.more.sizeHint().width() + margins
+            while shown > 0 and sum(narrow[:shown]) + more > room:
+                shown -= 1
+        self.overflow = list(range(shown, len(self.groups)))
         for n, (box, folded, _) in enumerate(self.groups):
             box.setVisible(n < cut)
-            folded.setVisible(n >= cut)
+            folded.setVisible(cut <= n < shown)
+        self.more_holder.setVisible(bool(self.overflow))
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt's name
         super().resizeEvent(event)
         self.fold()
 
     def minimumSizeHint(self):  # noqa: N802 - Qt's name
-        """As narrow as every group folded: the ribbon never holds the window open."""
+        """As narrow as More alone: the ribbon never holds the window open (UX-1)."""
         hint = super().minimumSizeHint()
-        hint.setWidth(sum(f.sizeHint().width() + self.bar.spacing() for _, f, _ in self.groups))
+        hint.setWidth(self.more.sizeHint().width() + self.bar.spacing() + 12)
         return hint

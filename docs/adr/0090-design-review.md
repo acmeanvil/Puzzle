@@ -671,6 +671,74 @@ on any exception or logged panel error.
   background task ending after its window closed, and step profiles typed in mm
   whatever unit is shown.
 
+**Package 11 built (2026-11-18):** Usability. The core task, a STEP file to a probe and
+an export, is 8 steps where the review counted 16: `tests/test_core_task.py` does it
+through the GUI's own actions with a CalculiX solve (the tip deflection within 5 % of
+Euler-Bernoulli) and fails at ten. The findings' tests are in
+`tests/test_gui_usability.py`.
+
+- UX-1: a ribbon's folded groups are as wide as their words, and groups that don't fit
+  even folded go into a More button; side panels keep 260 px (`docking.SIDE_MINIMUM`);
+  the results bar no longer holds the window wide. On the maintainer's screen at 1366 px
+  the Geometry tab's window minimum fell from 1784 to 450 px.
+- UX-2: a load or support is one form (`gui/load_form.py`): what, where (the faces
+  picked, as a new selection, or a named one) and its values with units; the selection
+  and the feature are one batch. The pick bar has Add load or support…. With nothing to
+  put it on, picking starts with the right filter. Left: no live preview of the symbol;
+  a load is edited in Properties, not by reopening the form.
+- UX-3: New analysis… (`puzzle/new_analysis.py`; the toolbar, Model → Studies, the
+  Advisor, a note after an import; MCP `analysis_new`, CLI `new-analysis`, skill
+  `new-analysis`) makes the mesh recipe, component, material assignment, physics and
+  study as one batch from the geometry, the analysis (static, modal, buckling, steady
+  heat), a material and coarse, medium or fine (the bounding box's diagonal over 10, 20
+  or 40 elements, rounded down to 1, 2 or 5). The solver is the first of CalculiX,
+  Code_Aster, Elmer, FEniCSx whose capabilities run it; whether it is installed is not
+  asked yet.
+- UX-4: an Edit menu (Undo, Redo, Delete, Rename, New group, Duplicate…) and
+  `Session.redo`. Undo now steps back through changes and Redo through undos; a new
+  change ends what can be redone. Before, plain undo took back the latest entry in
+  effect, an undo included, so Undo pressed twice redid. An undo by its `seq` is as
+  before. MCP `redo`, CLI `redo`.
+- UX-6: the Advisor follows the study shown and lists the others. UX-7: Properties
+  folds the rarely set under Advanced (studies, loads, mesh recipes, bolts; tags, scope
+  and owner everywhere), hides a study's unset shoot-out, convergence, adapt, morph,
+  remote, seismic and combinations, and shows a load's values open under its selection;
+  element order reads Linear or Quadratic.
+- UX-8, in part: a run refused for no support says what to add and offers Add fixed
+  support…; OpenCASCADE's and the bindings' errors from a geometry step are said in
+  words. UX-9, in part: a Model ribbon (`gui/model_ribbon.py`), each button the menu
+  bar's own function. UX-10: the start page opens the two examples and Getting started;
+  a CAD file dropped on the window is imported (a New project form first without one).
+- UX-11 (the maintainer, 2026-11-17): display units default to the engineering system
+  (mm, MPa, °C). Stored values and what solvers get are unchanged. Tests that type or
+  read metres name the `si_units` fixture (23 tests).
+- UX-12, 13, 15: the toolbar is New, Open, Save version, Undo, Redo, Import geometry…,
+  New analysis…, Add material…, Mesh, Run, Pick; Run and Mesh take the only study or
+  component without a selection; "Add feature" is "Add load or support" everywhere,
+  Fixed support, Force and Pressure first.
+- UX-23, 29, 30, 32, 36: one "Agent panel" preference group and no ADR numbers in
+  Settings; a selected row's state icon in the selection's text colour; New study asks
+  the analysis first and its solver defaults to Automatic; the contact table says Source
+  and Target and folds what the solver is given; the Mesh tab's empty state is a button.
+- Parts of UX-14, 16, 19, 24, 26, 34, 37, 38: refusals from Run, Mesh, add load, assign
+  material, new component, new study and Duplicate are notes with an action button; one
+  `load_form.fill_menu` for the tree and the menu bar; run labels in local time; the
+  status bar's button says Stop; a refused run opens Problems.
+- Package 10's choice 3 (the maintainer, 2026-11-17): another project opened while a
+  solve started here runs asks "Stop the run?" once, only with the job runner off; with
+  it on, the solve is the runner's and goes on.
+- Left: UX-5, 17, 18, 20, 21, 22, 25, 27, 28, 31, 33 (the command table, Study and View
+  menus, operators out of the menus, a workspace strip, the view cube and the view's
+  right-click menu, connection and run panels, solver settings as a form, the tree's
+  depth), UX-35 (package 13), and the rest of the partly built ones above. Renaming
+  "Who may connect…" and "Trust this project…", moving "Roll back…" into Versions, and
+  the tree folder "Loads and boundary conditions" → "Loads and supports" wait for the
+  maintainer. Seen and not fixed: `operators/evaluate.py` run labels and the exports'
+  `.txt` files print UTC; the generated reference says "Custom pde"; offscreen Qt on
+  Windows measures text about twice as wide as a real screen, so offscreen width tests
+  are generous; `test_store_safety::test_two_sessions_never_lose_an_edit` failed once
+  under load.
+
 ### Enhancements toward the state of the art
 
 From `state-of-the-art.md` (50 gaps, each with who has it, which open solver can deliver

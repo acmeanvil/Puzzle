@@ -99,7 +99,7 @@ def _made(window, name):
     return next(c for c in window.session.project.of_type(ConstructionGeometry) if c.name == name)
 
 
-def test_a_path_along_an_edge_selection_and_a_plane_on_a_face(window):
+def test_a_path_along_an_edge_selection_and_a_plane_on_a_face(si_units, window):
     path = PathPanel(window)
     path.how.setCurrentIndex(path.how.findData("edge"))
     edge = next(i for i in range(path.edge.count()) if "Edge (K)" in path.edge.itemText(i))
@@ -134,7 +134,7 @@ def test_a_picked_face_is_asked_for_when_none_is_picked(window):
     assert "Pick a face" in plane.problem()
 
 
-def test_editing_a_plane_and_a_path_is_one_undoable_command(window):
+def test_editing_a_plane_and_a_path_is_one_undoable_command(si_units, window):
     from puzzle.commands.model import Create
 
     window.submit(Create(kind="construction", data={
@@ -166,7 +166,7 @@ def test_editing_a_plane_and_a_path_is_one_undoable_command(window):
     assert _made(window, "Line").end == pytest.approx((0.04, 0.02, 0.0))
 
 
-def test_a_coordinate_system_is_redefined_in_one_command(window):
+def test_a_coordinate_system_is_redefined_in_one_command(si_units, window):
     from puzzle.commands.model import Create
 
     local = {"name": "Local", "type": "cartesian", "origin": [0, 0, 0], "angles": [0, 0, 30]}

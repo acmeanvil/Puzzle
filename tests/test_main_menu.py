@@ -114,7 +114,7 @@ def test_menu_titles(window):
 
     titles = [a.text().replace("&", "") for a in window.menuBar().actions()]
     assert titles == [
-        "Project", "Geometry", "Materials", "Mesh", "Model", "Results", "Window", "Help"
+        "Project", "Edit", "Geometry", "Materials", "Mesh", "Model", "Results", "Window", "Help"
     ]  # fmt: skip
     order = [t for t, _ in SECTIONS]
     assert order.index("Geometry") < order.index("Materials") < order.index("Meshes")
@@ -150,11 +150,21 @@ def test_model_and_results_are_fly_outs_of_like_items(window):
 
 def test_every_ribbon_button_and_section_item_is_in_the_menus(window):
     have = texts(window)
-    ribbons = (window.workbench.ribbon, window.mesh_bench.ribbon, window.results_ribbon)
+    ribbons = (
+        window.workbench.ribbon,
+        window.mesh_bench.ribbon,
+        window.results_ribbon,
+        window.model_ribbon,
+    )
     # The ribbons' own tools: not the drop-downs a narrow view folds groups into.
-    buttons = {b.text() for r in ribbons for g in r.groups for b in g[2]}
+    buttons = {b.text() for r in ribbons for g in r.groups for b in g[2] if b.menu() is None}
     missing = {b for b in buttons if b not in have and f"{b}…" not in have}
     assert not missing, missing
+    # A drop-down button (the Model ribbon's Add load or support) is a submenu's twin.
+    titles = set(main_menu.paths(window))
+    titles = {t.rsplit(" → ", 1)[-1] for t in titles}
+    drops = {b.text() for r in ribbons for g in r.groups for b in g[2] if b.menu() is not None}
+    assert drops <= titles, drops - titles
     for section in ("Geometry", "Parameters", "Materials", "Meshes", "Components",
                     "Studies", "Amplitudes", "Coordinate systems", "Results"):  # fmt: skip
         items = _leaves(menus.build_menu(window, Node("section", label=section)))

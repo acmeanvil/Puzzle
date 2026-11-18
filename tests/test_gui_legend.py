@@ -45,7 +45,7 @@ def test_legend_bar_args_place_and_size():
 
 
 @pytest.mark.skipif(not available("calculix"), reason="calculix not available")
-def test_the_panel_sets_a_range_per_result_and_keeps_the_look(app, tmp_path):
+def test_the_panel_sets_a_range_per_result_and_keeps_the_look(si_units, app, tmp_path):
     root = tmp_path / "bar"
     root.mkdir()
     force = Feature(type="force", selection="Bar/Tip", values={"y": Quantity(value=-100, unit="N")})
@@ -111,7 +111,7 @@ def test_the_panel_sets_a_range_per_result_and_keeps_the_look(app, tmp_path):
 
 
 @pytest.mark.skipif(not available("calculix"), reason="calculix not available")
-def test_a_custom_range_follows_a_change_of_display_unit(app, tmp_path):
+def test_a_custom_range_follows_a_change_of_display_unit(si_units, app, tmp_path):
     """ADR 0090 PANEL-1's sibling: the range is kept in SI, so a change of display unit
     shows it again in the new one rather than reading 2e6 Pa as 2e6 MPa; and an edit of
     another field leaves it as it was."""

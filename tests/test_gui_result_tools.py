@@ -55,7 +55,7 @@ def _select(window, kind, label=None):
 
 
 @pytest.mark.skipif(not available("calculix"), reason="calculix not available")
-def test_result_tools_from_the_ribbon(app, tmp_path):
+def test_result_tools_from_the_ribbon(si_units, app, tmp_path):
     root = tmp_path / "cantilever"
     shutil.copytree(
         EXAMPLE, root, ignore=shutil.ignore_patterns("results*", ".puzzle", "history.jsonl")

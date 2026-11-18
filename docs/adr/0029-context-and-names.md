@@ -47,3 +47,7 @@ Both break rules the project already holds: names, not ids or keys, everywhere i
 
 - Fix the two screens and move on: the rule would drift again with each new panel.
 - Generate labels from Pydantic field descriptions: descriptions are written for agents and are too long for a property row.
+
+## Amended (2026-11-18, ADR 0090 package 11)
+
+Properties folds what is rarely set under Advanced (for studies, loads, mesh recipes and bolts; tags, scope and owner on every object), hides a study's shoot-out, convergence, adapt, morph, remote, seismic and combinations while unset and a bolt's ground rows unless grounded, and shows a load's values open under its selection. "Add feature" reads "Add load or support" wherever a user sees it. Run labels are in local time.

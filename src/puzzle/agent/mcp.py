@@ -573,6 +573,33 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         return {"bolts": [bolt], "batch": [c.model_dump(mode="json") for c in batch]}
 
     @tool(
+        description="A first analysis of a geometry in one batch (ADR 0090 UX-3): the mesh "
+        "recipe (`mesh` coarse, medium or fine: a global size from the parts' bounding "
+        "box), a component of `geometry` (a name, or a list for several parts), its "
+        "`material` (a project material's name, or a library key or name) on every body, "
+        "the physics and a study of `analysis` (static, modal, buckling or steady_heat) on "
+        "`solver` (default: the first that runs it). One batch, one undo; at 'propose' a "
+        "proposal. Then add supports and loads (skill `new-analysis`)."
+    )
+    @guarded
+    def analysis_new(
+        geometry: str | list[str],
+        analysis: str = "static",
+        material: str = "structural_steel",
+        mesh: str = "medium",
+        solver: str = "",
+        name: str = "",
+        rationale: str = "",
+    ) -> dict[str, Any]:
+        from puzzle.new_analysis import commands
+
+        s = session()
+        geos = [geometry] if isinstance(geometry, str) else list(geometry)
+        batch = commands(s.project, geos, analysis, material, mesh, solver=solver, name=name,
+                         root=root)  # fmt: skip
+        return s.submit_batch(batch, actor, rationale=rationale).to_dict()
+
+    @tool(
         description="A frame's geometry (ADR 0079): line members between named nodes, or a "
         "DXF's LINE/LWPOLYLINE/POLYLINE entities (layers become member groups). `nodes` "
         "{name: [x, y, z]} in metres, `members` [[name, i, j], or [name, i, j, group]]; or "
@@ -1105,6 +1132,14 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
     @guarded
     def undo(seq: int | None = None) -> dict[str, Any]:
         return session().undo(actor, seq=seq).to_dict()
+
+    @tool(
+        description="Redo: take back your own latest undo, putting the change back. Only "
+        "undos made since your last fresh change can be redone."
+    )
+    @guarded
+    def redo() -> dict[str, Any]:
+        return session().redo(actor).to_dict()
 
     @tool(description="Recent history entries, newest first.")
     @guarded

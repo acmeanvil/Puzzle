@@ -482,6 +482,23 @@ run a study on Gmsh's and Netgen's meshes and compare (ADR 0019).
 | `--quantity` | a result field compared by its peak (or global value), or eigenfrequencies; repeat for several (default: displacement) |
 | `--tolerance` | relative (default 0.02) |
 
+<!-- key: cli:new-analysis -->
+### puzzle new-analysis
+
+mesh recipe, component, material, physics and study for a geometry, in one change (ADR 0090 UX-3).
+
+`puzzle new-analysis [-h] [--analysis {static,modal,buckling,steady_heat}] [--material MATERIAL] [--mesh {coarse,medium,fine}] [--solver SOLVER] [--name NAME] project geometry [geometry ...]`
+
+| Argument | What |
+| --- | --- |
+| `project` |   |
+| `geometry` | the geometry (several: one part each) |
+| `--analysis` |   |
+| `--material` | a project material, or a library key or name |
+| `--mesh` |   |
+| `--solver` | default: the first that runs it |
+| `--name` | the component's name |
+
 <!-- key: cli:operators -->
 ### puzzle operators
 
@@ -580,6 +597,17 @@ how a run converged: steps, increments, cut-backs, messages.
 agents' open proposals.
 
 `puzzle proposals [-h] project`
+
+| Argument | What |
+| --- | --- |
+| `project` |   |
+
+<!-- key: cli:redo -->
+### puzzle redo
+
+take back the latest undo.
+
+`puzzle redo [-h] project`
 
 | Argument | What |
 | --- | --- |

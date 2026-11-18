@@ -50,3 +50,7 @@ Newcomers to FEA tools ask "what do I do next?". Salome-Meca's reviews list the 
 
 - A wizard per analysis type: it fixes the order and hides the tree, and Puzzle's model is a tree on purpose (ADR 0009).
 - Leave guidance to the AI agent: it is useful, but not everyone runs an agent, and the Advisor works offline and instantly.
+
+## Amended (2026-11-18, ADR 0090 package 11)
+
+The Advisor follows the study shown (the selected run's or study's), then the only one, and lists the other studies to switch to. Its Component step offers New analysis…. A run refused for no support names what to add and offers Add fixed support….

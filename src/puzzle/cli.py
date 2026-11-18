@@ -385,6 +385,30 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--seq", type=int)
     p.set_defaults(handler=_undo)
 
+    p = sub.add_parser(
+        "new-analysis",
+        help="mesh recipe, component, material, physics and "
+        "study for a geometry, in one change (ADR 0090 UX-3)",
+    )
+    p.add_argument("project", type=Path)
+    p.add_argument("geometry", nargs="+", help="the geometry (several: one part each)")
+    p.add_argument(
+        "--analysis", default="static", choices=["static", "modal", "buckling", "steady_heat"]
+    )
+    p.add_argument(
+        "--material",
+        default="structural_steel",
+        help="a project material, or a library key or name",
+    )
+    p.add_argument("--mesh", default="medium", choices=["coarse", "medium", "fine"])
+    p.add_argument("--solver", default="", help="default: the first that runs it")
+    p.add_argument("--name", default="", help="the component's name")
+    p.set_defaults(handler=_new_analysis)
+
+    p = sub.add_parser("redo", help="take back the latest undo")
+    p.add_argument("project", type=Path)
+    p.set_defaults(handler=_redo)
+
     p = sub.add_parser("proposals", help="agents' open proposals")
     p.add_argument("project", type=Path)
     p.set_defaults(handler=_proposals)
@@ -1145,6 +1169,32 @@ def _history(args) -> int:
         undone = "  (undone)" if e.get("undone") else ""
         when = e["time"][:19].replace("T", " ")
         print(f"{e['seq']:>4}  {when}  {who:<16} {what}{undone}")
+    return 0
+
+
+def _new_analysis(args) -> int:
+    from puzzle.commands import Session
+    from puzzle.new_analysis import commands
+
+    _load(args.project)
+    s = Session(args.project)
+    batch = commands(s.project, args.geometry, args.analysis, args.material, args.mesh,
+                     solver=args.solver, name=args.name, root=args.project)  # fmt: skip
+    out = s.submit_batch(batch)
+    print(
+        f"Made {', '.join(o['name'] for o in out.created)} (history entry {out.seq}). "
+        "Next: a support and a load."
+    )
+    return 0
+
+
+def _redo(args) -> int:
+    from puzzle.commands import Session
+
+    _load(args.project)
+    out = Session(args.project).redo()
+    names = [o["name"] for o in out.created + out.changed + out.deleted]
+    print(f"Redone; put back {', '.join(names) or 'nothing'} (history entry {out.seq}).")
     return 0
 
 

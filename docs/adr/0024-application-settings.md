@@ -48,3 +48,7 @@ The meshing and solver preferences are stored and shown greyed, saying which ADR
 ## Amended (2026-11-17, ADR 0090 package 10)
 
 Every typed quantity is read by `units.parse_quantity`: a bare number is in the unit shown, `5mm` and a decimal comma are read, and a unit that is unknown or of another dimension is refused in words. A form gives back the stored value of a field that wasn't edited, so switching units and pressing OK changes nothing stored. Left: six panels show fixed units (kN, MPa, cm⁴, N·m), labelled but not following Settings > Units (PANEL-19), and optimisation plots are in SI.
+
+## Amended (2026-11-18, ADR 0090 package 11)
+
+Display units default to the engineering system (mm, MPa, °C) instead of SI (the maintainer, 2026-11-17; ADR 0090 UX-11). A user who had chosen a system keeps it; stored values and what solvers get are unchanged. The Settings dialog names the group of panel preferences "Agent panel", apart from the Agent page of models and keys, and shows no ADR numbers.

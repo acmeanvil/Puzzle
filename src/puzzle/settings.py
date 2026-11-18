@@ -117,7 +117,7 @@ PREFERENCES: list[Preference] = [
         "units.system",
         "Units",
         "Display units",
-        "si",
+        "engineering",  # mm, MPa, °C (the maintainer, 2026-11-17: ADR 0090 UX-11)
         [(label, key) for key, (label, _) in SYSTEMS.items()]
         + [("My own, per quantity", "custom")],
         "How values are shown and what a number typed without a unit means. Values are "
@@ -375,7 +375,7 @@ PREFERENCES: list[Preference] = [
     ),
     Preference(
         "agent.send_key",
-        "Agent",
+        "Agent panel",  # not the Agent page (models and keys): one name each (UX-23)
         "Send a message with",
         "modifier",
         [

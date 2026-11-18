@@ -465,8 +465,10 @@ def test_a_run_ending_after_another_project_opened(window, app, tmp_path, hooked
             run_id="nowhere", cached=False))  # fmt: skip
 
     window._start_run(study, call)
+    asked = []  # without the job runner, opening another project asks (the maintainer)
+    window.ask_yes = lambda title, text: asked.append(title) is not None  # no: it goes on
     window.open(_copy(tmp_path, "bracket_assembly"))
-    assert window.running == set()
+    assert asked == ["Stop the run?"] and window.running == set()
     gate.set()
     end = time.monotonic() + 20
     while window.tasks and time.monotonic() < end:

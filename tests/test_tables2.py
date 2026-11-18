@@ -162,7 +162,7 @@ def test_nearest_section_and_divide(setup):
     assert got.frame["s"].to_list() == pytest.approx([0, 0.05, 0.1, 0.15, 0.2])
 
 
-def test_text_list_modes_and_vectors(setup):
+def test_text_list_modes_and_vectors(si_units, setup):
     p, _s, ctx = setup
     n = op(p, "number", {"value": OperatorInput(value=Quantity(value=212.34, unit="MPa"))},
            name="Peak")  # fmt: skip

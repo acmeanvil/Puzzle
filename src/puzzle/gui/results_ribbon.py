@@ -65,6 +65,13 @@ class ResultsRibbon(Ribbon):
                  "further", self.paraview),
             ],
         )  # fmt: skip
+        group(
+            "Export",
+            [
+                ("export", "Export…", "Results for other software: ParaView, point clouds, "
+                 "the deformed shape", self.export),
+            ],
+        )  # fmt: skip
 
     def probe(self) -> None:
         w = self.window
@@ -73,6 +80,11 @@ class ResultsRibbon(Ribbon):
             "Keep (under the view) adds a probe to the tree.",
             15000,
         )
+
+    def export(self) -> None:
+        from puzzle.gui.main_menu import _export
+
+        _export(self.window)
 
     def cut(self) -> None:
         action = self.window.viewport.view_bar.actions_by_name["section"]

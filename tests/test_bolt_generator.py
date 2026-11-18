@@ -172,7 +172,7 @@ def test_the_agent_proposes_and_submits_bolts(tmp_path):
     assert comp.bolt_rules[0].name == "M10 flange"
 
 
-def test_the_panel_finds_previews_and_makes(tmp_path):
+def test_the_panel_finds_previews_and_makes(si_units, tmp_path):
     import os
 
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")

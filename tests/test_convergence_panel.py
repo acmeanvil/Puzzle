@@ -25,7 +25,7 @@ def app():
     return QApplication.instance() or QApplication([])
 
 
-def test_the_panel_shows_meshes_plot_and_verdict(app, tmp_path):
+def test_the_panel_shows_meshes_plot_and_verdict(si_units, app, tmp_path):
     p, study = project()
     study.convergence = Convergence(levels=3, ratio=1.5, target=0.2)
     store = Store()

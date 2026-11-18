@@ -119,7 +119,7 @@ def test_placed_parts_measure_where_they_sit(tmp_path):
     assert turned.normal == pytest.approx((0, 1, 0), abs=1e-12)
 
 
-def test_cli_and_agents_measure_too(tmp_path, capsys):
+def test_cli_and_agents_measure_too(si_units, tmp_path, capsys):
     """`puzzle measure` and MCP `geometry_measure` give the same exact values."""
     import asyncio
 

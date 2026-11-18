@@ -254,16 +254,28 @@ def _fresh_settings():
     clean()
 
 
-@pytest.fixture
-def engineering_units():
-    """Lengths in mm, stresses in MPa: what tests that type "30" for 30 mm assume."""
+def _units(system: str):
     import puzzle.settings as settings
 
     s = settings.Settings()
-    s.set("units.system", "engineering")
+    s.set("units.system", system)
     s.save()
     settings.reload()
     return s
+
+
+@pytest.fixture
+def engineering_units():
+    """Lengths in mm, stresses in MPa: the default since ADR 0090 UX-11, named by tests
+    that type "30" for 30 mm so they hold if the default moves again."""
+    return _units("engineering")
+
+
+@pytest.fixture
+def si_units():
+    """Display units SI (m, Pa, K): what tests that type "0.008" for 8 mm, or read
+    values shown in metres, assume (the default before ADR 0090 UX-11)."""
+    return _units("si")
 
 
 @pytest.fixture(autouse=True, scope="module")

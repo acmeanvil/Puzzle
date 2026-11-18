@@ -25,6 +25,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
     QComboBox,
     QHBoxLayout,
     QLabel,
@@ -55,8 +56,8 @@ class Column:
 COLUMNS = [
     Column("Name", "name"),
     Column("Component", None),
-    Column("Source (slave)", "source", "choice"),
-    Column("Target (master)", "target", "choice"),
+    Column("Source", "source", "choice"),
+    Column("Target", "target", "choice"),
     Column("Type", "type", "choice"),
     Column("Friction", "friction", "number"),
     Column("Meshing", "meshing", "choice"),
@@ -66,6 +67,7 @@ COLUMNS = [
     Column("Offset", "offset", "length"),
     Column("Solver is given", None),
 ]
+GIVEN = len(COLUMNS) - 1  # hidden until asked for (UX-32)
 
 
 def contact_rows(project) -> list[tuple]:
@@ -127,6 +129,10 @@ class SetupTab(QWidget):
         self.solver = QComboBox()
         self.solver.currentIndexChanged.connect(lambda _i: self.refresh())
         bar.addWidget(self.solver)
+        # UX-32: what the solver is given (*CONTACT PAIR, DEFI_CONTACT) on asking only
+        self.show_given = QCheckBox("Show what the solver gets")
+        self.show_given.toggled.connect(lambda on: self.table.setColumnHidden(GIVEN, not on))
+        bar.addWidget(self.show_given)
         bar.addStretch(1)
         self.count = role(QLabel(""), "muted")
         bar.addWidget(self.count)
@@ -140,6 +146,7 @@ class SetupTab(QWidget):
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.DoubleClicked
                                    | QAbstractItemView.EditTrigger.EditKeyPressed)  # fmt: skip
         self.table.setItemDelegate(_Delegate(self))
+        self.table.setColumnHidden(GIVEN, True)
         self.table.itemSelectionChanged.connect(self._selected)
         layout.addWidget(self.table, 1)
         self.empty = role(QLabel("No contacts yet: Model → Contacts → Find contacts… "

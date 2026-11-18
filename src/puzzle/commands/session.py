@@ -11,7 +11,9 @@ submits commands here. A session:
 
 history.jsonl is append-only. Entry types: "command" (applied), "undo",
 "proposal", "decision" (a proposal accepted or rejected) and
-"confirmation_request" (the first half of a double sign-off).
+"confirmation_request" (the first half of a double sign-off). An undo is logged as the
+command "undo" and a redo as "redo", each with `undoes` (the entry taken back): a redo
+is the undo of an undo, so Undo steps back through changes and Redo through undos.
 """
 
 from __future__ import annotations
@@ -451,79 +453,104 @@ class Session:
 
     # --- undo ---------------------------------------------------------------------
 
+    def undo_target(self, actor: Actor = USER) -> int | None:
+        """The entry Undo would take back: the latest change in effect that is not
+        itself an undo (a change or a redo), so Undo pressed twice steps back twice."""
+        entries = {e["seq"]: e for e in self.history_entries() if "seq" in e}
+        live, depth = _in_effect(entries), _depths(entries)
+        found = [s for s, e in entries.items() if s in live and e.get("undo")
+                 and depth[s] % 2 == 0 and _mine(e, actor)]  # fmt: skip
+        return max(found) if found else None
+
+    def redo_target(self, actor: Actor = USER) -> int | None:
+        """The undo Redo would take back: the latest undo in effect made since the last
+        fresh change (a new change ends what can be redone, as in every editor)."""
+        entries = {e["seq"]: e for e in self.history_entries() if "seq" in e}
+        live, depth = _in_effect(entries), _depths(entries)
+        fresh = max((s for s, e in entries.items() if e.get("undo") and depth[s] == 0),
+                    default=0)  # fmt: skip
+        found = [s for s, e in entries.items() if s in live and s > fresh and e.get("undo")
+                 and depth[s] % 2 == 1 and _mine(e, actor)]  # fmt: skip
+        return max(found) if found else None
+
+    def redo(self, actor: Actor = USER) -> Outcome:
+        """Take back the latest undo (ADR 0090 UX-4): its entry is undone, which puts the
+        change back; one history entry, itself undoable."""
+        with self._locked():
+            if actor.is_agent and self.project.agent.level == "advise":
+                raise PuzzleError("agents only advise in this project", code="not_allowed")
+            seq = self.redo_target(actor)
+            if seq is None:
+                raise PuzzleError("nothing to redo", code="not_undoable")
+            return self._undo(actor, seq, "redo")
+
     def undo(self, actor: Actor = USER, *, seq: int | None = None) -> Outcome:
-        """Undo one applied entry (default: the latest). Undoing an undo redoes it.
+        """Undo one applied entry (default: the latest change or redo, `undo_target`).
+        Undoing an undo by its `seq` redoes it (`redo` picks that one).
 
         Agents may undo only their own changes, and only above "advise".
         """
         with self._locked():
             if actor.is_agent and self.project.agent.level == "advise":
                 raise PuzzleError("agents only advise in this project", code="not_allowed")
-            entries = {e["seq"]: e for e in self.history_entries() if "seq" in e}
-            live = _in_effect(entries)
+            return self._undo(actor, seq, "undo")
+
+    def _undo(self, actor: Actor, seq: int | None, name: str) -> Outcome:
+        """Undo, under the lock the caller holds; `name` is the history's command."""
+        entries = {e["seq"]: e for e in self.history_entries() if "seq" in e}
+        live = _in_effect(entries)
+        if seq is None:
+            seq = self.undo_target(actor)
             if seq is None:
-                candidates = [
-                    s
-                    for s, e in entries.items()
-                    if s in live
-                    and e.get("undo")
-                    and (not actor.is_agent or _same_actor(e["actor"], actor))
-                ]
-                if not candidates:
-                    raise PuzzleError("nothing to undo", code="not_undoable")
-                seq = max(candidates)
-            entry = entries.get(seq)
-            if entry is None:
-                raise PuzzleError(f"no history entry {seq}", code="not_found")
-            if not entry.get("undo") or seq not in live:
-                raise PuzzleError(f"entry {seq} cannot be undone", code="not_undoable")
-            if actor.is_agent and not _same_actor(entry["actor"], actor):
-                raise PuzzleError("agents may undo only their own changes", code="not_allowed")
-            state = entry["undo"]
-            current = _snapshot(self.project)
-            stale = [
-                i for i, h in state["after"].items() if (current.get(i) or {}).get("hash") != h
-            ]
-            if stale:
-                names = [current[i]["name"] if i in current else i for i in stale]
-                raise PuzzleError(
-                    "changed since; undo the later changes first",
-                    code="not_undoable",
-                    details={"objects": names},
-                )
-            before = current
-            staged = None
-            if (entry.get("command") or {}).get("command") == "restore_version" and entry.get(
-                "files_from"
-            ):  # a restore's files go back too (ADR 0059)
-                from puzzle.project import versions
+                raise PuzzleError("nothing to undo", code="not_undoable")
+        entry = entries.get(seq)
+        if entry is None:
+            raise PuzzleError(f"no history entry {seq}", code="not_found")
+        if not entry.get("undo") or seq not in live:
+            raise PuzzleError(f"entry {seq} cannot be undone", code="not_undoable")
+        if actor.is_agent and not _same_actor(entry["actor"], actor):
+            raise PuzzleError("agents may undo only their own changes", code="not_allowed")
+        state = entry["undo"]
+        current = _snapshot(self.project)
+        stale = [i for i, h in state["after"].items() if (current.get(i) or {}).get("hash") != h]
+        if stale:
+            names = [current[i]["name"] if i in current else i for i in stale]
+            raise PuzzleError(
+                "changed since; undo the later changes first",
+                code="not_undoable",
+                details={"objects": names},
+            )
+        before = current
+        staged = None
+        if (entry.get("command") or {}).get("command") == "restore_version" and entry.get(
+            "files_from"
+        ):  # a restore's files go back too (ADR 0059)
+            from puzzle.project import versions
 
-                staged = versions.stage_restore(
-                    self.root, versions.get(self.root, entry["files_from"])
-                )
-            try:
-                trial = (store.load_staged(self.root, staged) if staged is not None
-                         else copy.deepcopy(self.project))  # fmt: skip
-                from puzzle.project.migrations import upgrade_object
+            staged = versions.stage_restore(self.root, versions.get(self.root, entry["files_from"]))
+        try:
+            trial = (store.load_staged(self.root, staged) if staged is not None
+                     else copy.deepcopy(self.project))  # fmt: skip
+            from puzzle.project.migrations import upgrade_object
 
-                found = entry.get("schema", 1)
-                for i in state["after"]:
-                    trial.objects.pop(UUID(i), None)
-                for snap in state["before"].values():
-                    kind, data = upgrade_object(snap["kind"], snap["data"], found)
-                    obj = KINDS[kind].model_validate(data)
-                    trial.objects[obj.id] = obj
-                _refuse_dangling(self.project, trial)
-                self._refuse_new_code(trial, actor, "undo")
-            except BaseException:
-                if staged is not None:
-                    staged.discard()
-                raise
-            self.project = trial
-            return self._record(
-                {"command": "undo", "seq": seq}, actor, before, extra={"undoes": seq},
-                staged=staged,
-            )  # fmt: skip
+            found = entry.get("schema", 1)
+            for i in state["after"]:
+                trial.objects.pop(UUID(i), None)
+            for snap in state["before"].values():
+                kind, data = upgrade_object(snap["kind"], snap["data"], found)
+                obj = KINDS[kind].model_validate(data)
+                trial.objects[obj.id] = obj
+            _refuse_dangling(self.project, trial)
+            self._refuse_new_code(trial, actor, "undo")
+        except BaseException:
+            if staged is not None:
+                staged.discard()
+            raise
+        self.project = trial
+        return self._record(
+            {"command": name, "seq": seq}, actor, before, extra={"undoes": seq},
+            staged=staged,
+        )  # fmt: skip
 
     # --- versions (ADR 0059) ------------------------------------------------------
 
@@ -1428,6 +1455,21 @@ def _describe(project: Project, ids: list[str]) -> list[dict[str, str]]:
         {"id": i, "kind": project.objects[UUID(i)].kind, "name": project.objects[UUID(i)].name}
         for i in ids
     ]
+
+
+def _depths(entries: dict[int, dict[str, Any]]) -> dict[int, int]:
+    """How many undos deep each entry is: a change 0, its undo 1, a redo 2, ... Even
+    ones put something into effect, odd ones take it back."""
+    depth: dict[int, int] = {}
+    for seq in sorted(entries):
+        target = entries[seq].get("undoes")
+        depth[seq] = depth.get(target, 0) + 1 if target is not None else 0
+    return depth
+
+
+def _mine(entry: dict[str, Any], actor: Actor) -> bool:
+    """An agent's undo and redo reach its own entries only."""
+    return not actor.is_agent or _same_actor(entry["actor"], actor)
 
 
 def _in_effect(entries: dict[int, dict[str, Any]]) -> set[int]:
