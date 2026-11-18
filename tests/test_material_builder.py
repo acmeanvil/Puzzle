@@ -17,17 +17,15 @@ from puzzle.model.schema import Material, MaterialModels, Quantity
 ADAPTERS = Path(__file__).parents[1] / "src" / "puzzle" / "adapters"
 
 
+NOT_PROPERTIES = ("name", "description", "sources", "tables", "type", "group", "models",
+                  "fatigue", "parent")  # fmt: skip
+
+
 def test_every_property_the_adapters_read_is_registered():
     generic = tomllib.loads(
         files("puzzle.materials").joinpath("generic.toml").read_text(encoding="utf-8")
     )
-    shipped = {
-        k
-        for m in generic.values()
-        for k in m
-        if k
-        not in ("name", "description", "sources", "tables", "type", "group", "models", "fatigue")
-    }
+    shipped = {k for m in generic.values() for k in m if k not in NOT_PROPERTIES}
     assert shipped <= set(BY_KEY)
     pattern = re.compile(
         r"(?:props|properties)\[\"(\w+)\"\]|need\(([^)]*)\)|piecewise\(\"(\w+)\"\)|"

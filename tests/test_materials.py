@@ -62,6 +62,7 @@ STRUCTURAL = {"astm_a992": (344.7, 448.2), "astm_a36": (248.2, 399.9),
               "astm_a500_gr_c_round": (317.2, 427.5), "astm_a53_gr_b": (241.3, 413.7),
               "duplex_2205": (450, 655), "lean_duplex_2101": (450, 650)}  # fmt: skip
 GENERIC |= set(STRUCTURAL)
+GENERIC.add("structural_steel_impact")
 
 
 def test_structural_grades_have_their_strengths():
@@ -187,7 +188,8 @@ def test_default_user_library_location(monkeypatch):
 def test_search():
     assert search_library("steel") == sorted(
         ["electrical_steel", "stainless_steel_304", "structural_steel", "duplex_2205",
-         "lean_duplex_2101", *(k for k in STRUCTURAL if k.startswith("astm"))])  # fmt: skip
+         "lean_duplex_2101", "structural_steel_impact",
+         *(k for k in STRUCTURAL if k.startswith("astm"))])  # fmt: skip
     assert search_library("fastener") == sorted(BOLTING)  # by their group, "Fastener"
 
 
@@ -241,3 +243,17 @@ def test_the_generic_steel_carries_a36s_strain_life(key):
     strain = (s.fatigue_strength / 203e9 * reversals**s.strength_exponent
               + s.fatigue_ductility * reversals**s.ductility_exponent)  # fmt: skip
     assert strain == pytest.approx(0.0102, rel=0.02)
+
+
+def test_the_impact_steel_is_the_generic_steel_with_johnson_cook():
+    """A36 hot-rolled steel's Johnson-Cook constants (Schwer 2007, Table 1: 41.50 and
+    72.54 ksi) on an entry of its own, so the generic steel stays usable by solvers that
+    refuse the model; everything else is the generic steel's."""
+    m, base = library_material("structural_steel_impact"), library_material("structural_steel")
+    jc = m.models.johnson_cook
+    assert jc.a == pytest.approx(41.50 * 6.894757e6, rel=1e-4)
+    assert jc.b == pytest.approx(72.54 * 6.894757e6, rel=1e-4)
+    assert (jc.n, jc.c, jc.reference_strain_rate) == (0.228, 0.017, 1.0)
+    assert m.properties == base.properties and m.tables == base.tables
+    assert m.fatigue == base.fatigue and base.models.used() == []
+    assert any("A36" in s for s in m.sources) and m.info["group"] == "Carbon Steel"

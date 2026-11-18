@@ -68,8 +68,8 @@ def _load(paths: tuple[Path, ...]) -> dict[str, dict]:
         name, description = entry.pop("name"), entry.pop("description", "")
         kind = {k: entry.pop(k) for k in ("type", "group") if k in entry}  # how it is grouped
         sources = entry.pop("sources", [])
-        # what is not a property: material models and fatigue data, as a library file's
-        other = {k: entry.pop(k) for k in ("models", "fatigue") if k in entry}
+        # what is not a property: models, fatigue data and a family, as a library file's
+        other = {k: entry.pop(k) for k in ("models", "fatigue", "parent") if k in entry}
         tables = {
             prop: {
                 "unit": t["unit"],

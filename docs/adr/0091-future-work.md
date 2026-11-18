@@ -30,6 +30,10 @@ Found while building item 1's first step: gravity given `z` instead of `gz` was 
 
 Done when each case has a benchmark with a stated tolerance on every solver that claims it, a guide section, and the agent's skill.
 
+### 3. Every material has a group
+
+Asked by the maintainer (2026-11-17, with ADR 0090 package 9): checks that follow a material's kind (Shigley's endurance estimate for steels, a weld's or member's code by base metal) read its group; a material with no group is recognised by its name today, which is accepted for now. Every library and project material is to carry a group: the builder asks for one, the import fills it, and a material without one is a problem the checks name.
+
 ## Consequences
 
 One place to look for what was asked and deferred. The list must be pruned as items are taken up, or it becomes a second ADR 0072.

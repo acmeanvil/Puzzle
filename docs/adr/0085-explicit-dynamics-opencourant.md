@@ -319,3 +319,7 @@ travel, the strain gathered where yield came first, so the failure benchmark har
 ## Amended (2026-11-17, ADR 0090 package 8)
 
 A displacement in an explicit step needs an amplitude that starts at zero (a jump peaked at 7.49 times the static stress). A shell's result is named `membrane_stress`. The rigid wall's friction and mass scaling have benchmarks. A last frame short of the end time is the warning `last_frame`. Titles are kept from starting a line Radioss would skip or read as a keyword.
+
+## Amended (2026-11-17)
+
+The generic library ships **Structural steel (impact)**: the generic structural steel (its `parent`) with ASTM A36 hot-rolled steel's Johnson–Cook constants (A 41.50 ksi, B 72.54 ksi, n 0.228, C 0.017 at 1/s; Schwer, 6th European LS-DYNA Users' Conference, 2007, Table 1). It is an entry of its own (the maintainer, 2026-11-17) because a solver that does not write a material model refuses the material: on the generic steel itself the model would have had every implicit solver refuse it. `generic.toml` entries may carry `models`, `fatigue` and `parent`. The generic steel and ASTM A36 also carry A36 plate's strain-life constants (ADR 0026).

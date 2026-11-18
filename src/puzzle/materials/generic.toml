@@ -68,6 +68,24 @@ fatigue_ductility = 1.09
 ductility_exponent = -0.578
 source = "ASTM A36 plate (yield 265 MPa, tensile 475 MPa): the constants given for G.A. Miller and H.S. Reemsnyder, Strain-Cycle Fatigue of Sheet and Plate Steels I, SAE Paper 830175 (1983), fitted with E = 203 GPa; they give that paper's test lives, as digitized by the University of Waterloo's fatigue site, to a median 0.94 of the measured life (0.63 to 1.8 over 23 tests)"
 
+# The generic steel for impact (ADR 0085): everything of Structural steel's, plus a
+# Johnson-Cook flow stress. An entry of its own, since a solver that does not write a
+# material model refuses the material (the maintainer, 2026-11-17).
+[structural_steel_impact]
+name = "Structural steel (impact)"
+parent = "structural_steel"
+type = "Metal"
+group = "Carbon Steel"
+description = "Structural steel with a Johnson-Cook strain-rate model, for explicit dynamics: ASTM A36 hot-rolled steel's constants. For static and other implicit analyses use Structural steel"
+sources = ["Johnson-Cook constants of ASTM A36 hot-rolled steel: L. Schwer, Optional Strain-Rate Forms for the Johnson Cook Constitutive Model and the Role of the Parameter Epsilon_0, 6th European LS-DYNA Users' Conference (2007), Table 1 (A 41.50 ksi, B 72.54 ksi, n 0.228, C 0.017 at a reference rate of 1/s), which credits NAVEODTECHDIV for the parameters and Battelle (Seidt, 2005) for the tests; the thermal term (m 0.917) is not used"]
+
+[structural_steel_impact.models.johnson_cook]
+a = 286.13e6  # 41.50 ksi
+b = 500.15e6  # 72.54 ksi
+n = 0.228
+c = 0.017
+reference_strain_rate = 1.0
+
 # US structural steels (ADR 0079 step 3: AISC 360 member checks), E = 29,000 ksi as AISC 360 takes it.
 [astm_a992]
 name = "ASTM A992"
