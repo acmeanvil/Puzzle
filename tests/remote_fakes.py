@@ -36,8 +36,12 @@ export PATH="$FAKE_BIN:$PATH"
 # a session of its own, as sshd starts a remote command (it has one already when Puzzle
 # started ssh as a process group's leader: setsid then fails with EPERM)
 exec "$FAKE_PYTHON" -c 'import os, sys
-if os.getpid() != os.getpgrp():
-    os.setsid()
+if os.getpid() == os.getpgrp():  # a group leader cannot setsid: a child does, and is waited for
+    child = os.fork()
+    if child:
+        code = os.waitstatus_to_exitcode(os.waitpid(child, 0)[1])
+        sys.exit(code if code >= 0 else 128 - code)
+os.setsid()
 os.execvp("sh", ["sh", "-c", sys.argv[1]])' "$*"
 """
 

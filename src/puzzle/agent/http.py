@@ -177,6 +177,12 @@ def _lines(response, who: str) -> Iterator[bytes]:
     except (OSError, ValueError, http.client.HTTPException) as exc:  # reset, timed out, cut
         raise ProviderError(f"{who}: the connection dropped while it answered ({exc})",
                             "network", who) from None  # fmt: skip
+    # A chunked body cut between chunks can end quietly instead: reading a line peeks
+    # first, the peek swallows the error and closes the connection, and the read that
+    # follows returns nothing. Only the closing chunk leaves no chunk open.
+    if getattr(response, "chunked", False) and getattr(response, "chunk_left", None) is not None:
+        raise ProviderError(f"{who}: the connection dropped while it answered "
+                            "(the stream ended before its last chunk)", "network", who)  # fmt: skip
 
 
 def _parsed(event: str, text: str) -> Iterator[tuple[str, dict]]:
