@@ -146,6 +146,7 @@ def _strength(project, comp, w, rows, c, wp, directional) -> dict:
 
     try:
         name, fexx, code = weld_strength.filler(project, comp, w)
+        _code, _bases, mixed = weld_strength.base_metals(project, comp, w)
     except ValueError as exc:
         return {"checked": False, "why": str(exc)}
     across = np.hypot(rows[:, c["throat_normal"]], rows[:, c["throat_shear"]])
@@ -169,11 +170,13 @@ def _strength(project, comp, w, rows, c, wp, directional) -> dict:
                 "utilisation_asd": float(got["utilisation_asd"][at]),
                 "governing_at_m": [float(v) for v in wp.xyz[at]]}  # fmt: skip
     got = weld_strength.check(w, fexx, rows[:, c["along"]], across, rows[:, c["magnitude"]],
-                              directional)  # fmt: skip
+                              directional, code)  # fmt: skip
     if not got["checked"]:
         return got
     at = got["governing"]
+    notes = [n for n in (mixed, got.get("note")) if n]
     return {
+        **({"notes": notes} if notes else {}),
         "checked": True, "code": code, "clause": got["clause"], "filler": name,
         "F_EXX_Pa": fexx, "throat_m": got["throat_m"],
         "design_strength_lrfd_N_per_m": float(weld_strength.PHI * got["nominal_N_per_m"][at]),
@@ -181,13 +184,13 @@ def _strength(project, comp, w, rows, c, wp, directional) -> dict:
         "utilisation_lrfd": float(got["utilisation_lrfd"][at]),
         "utilisation_asd": float(got["utilisation_asd"][at]),
         "governing_at_m": [float(v) for v in wp.xyz[at]],
-        "instantaneous_centre": _ic(w, fexx, got["throat_m"], rows, c, wp),
+        "instantaneous_centre": _ic(w, fexx, got["throat_m"], rows, c, wp, code),
         "not_checked": "the base metal along the weld (J4) and Table J2.4's minimum size: "
         "they need the plates' thicknesses",
     }  # fmt: skip
 
 
-def _ic(w, fexx, te, rows, c, wp) -> dict:
+def _ic(w, fexx, te, rows, c, wp, code: str = "AISC 360-16 J2") -> dict:
     """The group's in-plane strength by the instantaneous centre of rotation (AISC 360-10
     J2.4(b), the Manual's Part 8 tables' method) against its solved in-plane resultant:
     the force and moment about its centroid, in the plane fitted to its stations."""
@@ -220,7 +223,9 @@ def _ic(w, fexx, te, rows, c, wp) -> dict:
     magnitude = float(np.linalg.norm(inplane))
     out = {"checked": True, "in_plane_force_N": magnitude, "moment_N_m": moment,
            "out_of_plane_force_N": float(force @ normal), "out_of_plane_moment_N_m": bending,
-           "clause": "AISC 360-10 J2.4(b) (360-16 J2.4's user note, Manual Part 8)",
+           "clause": ("AISC 360-10 J2.4(b) (370-21 J2.4's user note, p. 94)"
+                      if code.startswith("AISC 370") else
+                      "AISC 360-10 J2.4(b) (360-16 J2.4's user note, Manual Part 8)"),
            **({"note": "the group is also bent out of its plane, which the instantaneous "
                "centre leaves out: the stations' J2 check above covers it"}
               if bending > 1e-3 * abs(moment) + 1e-9 else {})}  # fmt: skip
@@ -318,7 +323,8 @@ def results(project, comp, mesh, res, weld: str | None = None, step: int | None 
 
 def fatigue(project, comp, mesh, res, weld: str, category: str = "F", cycles: float = 2e6,
             steps: tuple[int, ...] = ()) -> dict:  # fmt: skip
-    """A light weld's fatigue check by AISC 360-16 Appendix 3 (ADR 0078 step 5): the
+    """A light weld's fatigue check by AISC 360-16 Appendix 3, or 370-21's for stainless
+    base metal (the same curves; ADR 0078 step 5): the
     stress range between two steps with weld results (1-based; one step: from zero,
     the last by default) against F_SR(n) of the detail's category.
 
@@ -341,14 +347,36 @@ def fatigue(project, comp, mesh, res, weld: str, category: str = "F", cycles: fl
     if w is None:
         raise PuzzleError(f"no light weld '{weld}' in {comp.name}", code="not_found")
     try:
+        code, _bases, _note = weld_strength.base_metals(project, comp, w)
+    except ValueError as exc:
+        raise PuzzleError(str(exc), code="unsupported") from None
+    # ADR-5: the curves follow the base metal. Carbon and low-alloy steel by AISC 360-16
+    # Appendix 3; austenitic and duplex stainless by AISC 370-21 Appendix 3, which prints
+    # the same Eqs. A-3-1 and A-3-2 and the same C_f and F_TH per category (370-21 pp.
+    # 166-190); aluminium (AWS D1.2, the ADM's Appendix 3) has neither built.
+    if not code.startswith("AISC"):
+        raise PuzzleError(
+            f"weld '{w.name}': AISC's Appendix 3 is for steels; this weld's base metal is "
+            "aluminium, whose detail categories (the ADM's Appendix 3, AWS D1.2) aren't "
+            "built: use ASME VIII-2's structural stress (method asme), which has an "
+            "aluminium curve",
+            code="unsupported",
+        )
+    spec = code.removesuffix(" J2")
+    try:
         allowed = weld_strength.allowable_range(category, cycles)
     except ValueError as exc:
         raise PuzzleError(str(exc), code="invalid") from None
     wp = weld_pairs(project, comp, mesh, w)
     out = {"weld": w.name, "category": category, "cycles": cycles,
            "allowable_range_Pa": allowed, "steps": chosen,
-           "clause": "AISC 360-16 Appendix 3, Eq. A-3-2" if category == "F"
-           else "AISC 360-16 Appendix 3, Eq. A-3-1"}  # fmt: skip
+           "clause": f"{spec} Appendix 3, Eq. A-3-2" if category == "F"
+           else f"{spec} Appendix 3, Eq. A-3-1"}  # fmt: skip
+    if spec.startswith("AISC 370"):
+        out["notes"] = [
+            "AISC 370-21 Appendix 3 covers austenitic and duplex stainless steel, to "
+            "150 °C, in no more than mildly corrosive surroundings; its peak stress is "
+            "limited to 0.66 F_y, which isn't checked here"]  # fmt: skip
     if category == "F":
 
         def line(k):
@@ -419,6 +447,7 @@ def structural_stress(project, comp, mesh, res, weld: str, steps: tuple[int, ...
     w = next((x for x in comp.welds if x.name == weld), None)
     if w is None:
         raise PuzzleError(f"no weld '{weld}' in {comp.name}", code="not_found")
+    options = _asme_material(project, comp, w, options)
     if side not in ("attachment", "plate"):
         raise PuzzleError("side: attachment or plate", code="invalid")
     if side == "plate":
@@ -479,6 +508,33 @@ def structural_stress(project, comp, mesh, res, weld: str, steps: tuple[int, ...
     if cycles is not None:
         out["cycles"] = float(cycles)
         out["damage"] = float(cycles / stations[worst]["cycles"])
+    return out
+
+
+def _asme_material(project, comp, w, options: dict) -> dict:
+    """The options with Table 3-F.2M's curve chosen by the weld's base metal (ADR-5):
+    steel for carbon, low-alloy and stainless steel, aluminium for aluminium; a curve
+    asked for that isn't the base metal's, or a base metal with neither, is refused."""
+    from puzzle import weld_strength
+    from puzzle.errors import PuzzleError
+
+    try:
+        code, bases, _note = weld_strength.base_metals(project, comp, w)
+    except ValueError as exc:
+        raise PuzzleError(f"{exc} (ASME's curves are for steels and aluminium)",
+                          code="unsupported") from None  # fmt: skip
+    kind = "aluminium" if code == weld_strength.ADM else "steel"
+    asked = options.get("material")
+    if asked is not None and asked != kind:
+        raise PuzzleError(f"weld '{w.name}': its base metal takes ASME's {kind} curve, not "
+                          f"the {asked} one", code="invalid")  # fmt: skip
+    out = {**options, "material": kind}
+    props = [getattr(m, "properties", {}) for m in bases]
+    if kind == "aluminium":  # asme_cycles' E and ν default to steel's
+        if "e" not in out and all("youngs_modulus" in p for p in props):
+            out["e"] = min(p["youngs_modulus"].to_si() for p in props)
+        if "nu" not in out and all("poissons_ratio" in p for p in props):
+            out["nu"] = props[0]["poissons_ratio"].to_si()
     return out
 
 

@@ -1492,6 +1492,8 @@ def _members(args) -> int:
         mark = "ok  " if m["passes"] else "FAIL"
         print(f"{mark} {m['member']:<12} {m['section']:<16} ratio {m['ratio']:.3f}  "
               f"{g['check']} ({g['clause']}), {g['label']}")  # fmt: skip
+        for warning in m.get("warnings", []):
+            print(f"       warning: {warning}")
         if args.details:
             for st in m["steps"]:
                 print(f"       {st['label']}:")

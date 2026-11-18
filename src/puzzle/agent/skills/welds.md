@@ -61,8 +61,16 @@ Legs and lengths are quantities (mm is fine); line forces come back in N/m (1 N/
 
 Use the LRFD utilisation when the loads were factored for LRFD, the ASD one for service
 loads. Pass `directional=true` for Eq. J2-5's 1 + 0.5 sin^1.5 θ, allowed only for linear
-welds and groups loaded in plane through their centre. The base metal (J4) and the
-minimum size (Table J2.4) are yours to check.
+fillet welds and groups loaded in plane through their centre: a PJP groove weld is
+checked without it (J2.4(b) is for fillets; a `notes` entry says so). The base metal
+(J4) and the minimum size (Table J2.4) are yours to check.
+
+The code follows the base metals, whatever the filler: carbon and low-alloy steel
+(AISC 360), stainless (AISC 370), aluminium (the ADM). Any other base metal (titanium,
+copper, a material with no group) gets `checked: false` with the reason, as does
+aluminium welded to steel; a stainless-to-carbon weld takes AISC 370 and its `notes`
+say so. Set a material's group in the Material builder when it is a steel filed
+under none.
 
 - Stainless base metal: AISC 370-21 J2 (the same F_nw, φ, Ω), matching filler E308L
   (304), E316L (316), E2209 (duplex).
@@ -82,7 +90,11 @@ minimum size (Table J2.4) are yours to check.
 between two steps (or one step from zero) against F_SR(n). Category F (Table A-3.1 Case
 8.2: shear on a fillet's throat) reads the line forces; A to E′ read the plates' largest
 principal stress range at the weld's footprint (mesh-dependent: refine there, and pick
-the category of the detail as Table A-3.1 draws it).
+the category of the detail as Table A-3.1 draws it). Carbon and low-alloy steel go by
+AISC 360-16 Appendix 3 and stainless by AISC 370-21 Appendix 3, which has the same
+equations and constants (the result's `clause` says which; for stainless its `notes`
+give 370's scope: austenitic and duplex, to 150 °C, mildly corrosive at most). An
+aluminium weld (AWS D1.2) is refused with `unsupported`; use the ASME method for it.
 
 ### ASME VIII-2 5.5.5 (structural stress)
 
@@ -98,8 +110,9 @@ depend on the mesh. Each station's ranges then go through:
 - Neuber's rule only when the hysteresis curve's K_css and n_css are passed
   (`weld_strength.asme_cycles`).
 
-N comes from Table 3-F.2M's curve (`basis`, default −3σ, the design curve;
-`material` steel or aluminium). With `cycles`, the result also gives the damage
+N comes from Table 3-F.2M's curve (`basis`, default −3σ, the design curve), steel or
+aluminium by the base metal (`material` only confirms it: a contrary one is refused;
+an aluminium base metal's own E and ν go into Eq. 5.58 and Neuber's rule). With `cycles`, the result also gives the damage
 n/N. A shell's thickness is taken from its section; give `thickness_m` for a solid.
 
 `side="plate"` checks the other toe, on the plate the weld sits on, a leg from the

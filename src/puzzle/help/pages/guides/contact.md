@@ -80,8 +80,8 @@ few per cent of an element. That is meshing, and counts as closed.
   against Lamé on both solvers, pressure within 0.3 %.
 - **Weak springs** hold a body that rests only on sliding contact while the contact
   closes: three springs of 1e-6 × E × V / L² each. The study's weak springs setting is
-  auto (the default), always or never. If they carry more than 0.1 % of the load, the
-  run warns [weak_springs_carry](help:problem:weak_springs_carry): the body never
+  auto (the default), always or never. If they carry more than 0.1 % of the body's
+  load (the force through its contacts), the run warns [weak_springs_carry](help:problem:weak_springs_carry): the body never
   seated.
 - **Threads**: right-click a contact between two coaxial cylinders, Make it a thread…
   (or Model → Contacts → Thread on a contact…). The contact then acts along the

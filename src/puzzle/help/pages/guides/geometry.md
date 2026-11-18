@@ -80,7 +80,11 @@ extrusion (`Plate/bottom`).
    Add picked or Remove picked. Remove selection deletes it.
 
 When a step edit or a new file leaves a selection without its entities, Geometry →
-Selections → Reattach… lists what was lost and lets you pick again.
+Selections → Reattach… lists what was lost and lets you pick again. A study that uses
+such a selection (a load, support, contact, material, mesh control) is refused until it
+is reattached, rather than solved on the entities that are left. A lost entity is
+re-found only when exactly one of its kind is within 0.1 % in size and 1e-5 of the
+model in position of where it was.
 
 <!-- key: form:selection_rule -->
 ## How to make a selection by rule

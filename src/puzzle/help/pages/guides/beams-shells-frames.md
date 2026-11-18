@@ -100,7 +100,10 @@ to the ELF base shear, on PyNite, CalculiX and Code_Aster.
 The code follows the material's group: carbon steel by AISC 360-16, stainless by AISC
 370-21, aluminium by the Aluminum Design Manual 2015. Checked: doubly symmetric I
 shapes, HSS, pipe, and Puzzle's box, tube, rectangle and circle. Channels, tees and
-angles are listed as not checked.
+angles are listed as not checked. Torsion is checked on steel HSS only (AISC 360 H3.1),
+not on I shapes, nor on stainless or aluminium members: a member carrying a torque its
+code has no check for keeps its other checks and is marked with a warning giving the
+torque, since its ratio leaves the torsion out.
 
 ## Options worth knowing
 

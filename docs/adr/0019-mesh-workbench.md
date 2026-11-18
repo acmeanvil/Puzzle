@@ -104,3 +104,7 @@ The interface review against Salome-Meca and PrePoMax (item 13) confirms this AD
 - **Conflicting local sizes stop the mesh with a reason,** rather than being changed silently.
 
 SMESH's quality controls (about 27 measures) are the reference for item 5.
+
+## Amended (2026-11-17, ADR 0090 package 9)
+
+Netgen refuses conflicting sizes on one selection, as Gmsh does.

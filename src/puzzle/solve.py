@@ -282,6 +282,7 @@ def _study_run(
             meshed = dataclasses.replace(meshed, mesh=morphed(project, study, meshed.mesh))
             record(progress.Message(text="mesh morphed: " + ", ".join(
                 f"{h.selection} by {h.distance}" for h in study.morph.handles)))  # fmt: skip
+    _refuse_detached(project, study, meshed)
     lap("mesh")
     begin("transfers")
     inputs, heating = [], []
@@ -465,7 +466,14 @@ def _study_run(
         # ADR 0078: each light weld's line force at its stations.
         weld_fields(part_results, seen, seen.objects[study.component], written)
         # ADR 0080: the force the weak springs carry, and a warning where it is the load.
-        weak_springs.finish(part_results, springs, study.weak_spring_limit, record)
+        weak_springs.finish(
+            part_results,
+            springs,
+            study.weak_spring_limit,
+            record,
+            seen.objects[study.component],
+            written,
+        )
         _large_strain(part_results, seen, part, record)  # ADR 0082 decision 6
         if any(s.type == "explicit" for s in part.solve_steps()):  # ADR 0085 decision 5
             from puzzle import explicit
@@ -689,6 +697,40 @@ def _large_strain(results, project, study, record) -> None:
             text=f"strains reach {worst:.1%} under large deflection with elastic materials: "
             "Green-Lagrange with plain elasticity is right for large rotations and small "
             "strains; above about 5 % the material needs a hyperelastic model"))  # fmt: skip
+
+
+def _refuse_detached(project, study, meshed) -> None:
+    """A selection the study uses (its component's features, contacts, materials,
+    sections, fasteners, welds, its mesh recipe's controls, the study and its transfers,
+    found by name) with a member its geometry lost is refused (ADR 0014 decision 3.3:
+    never guessed): solving on the members left would load or hold part of what was
+    chosen, and look normal (ADR-E-14). Unused selections keep the mesher's warning."""
+    import json
+
+    from puzzle.model.schema import Component
+
+    reports = getattr(meshed, "selections", None) or {}
+    comp = project.objects.get(study.component)
+    if not reports or not isinstance(comp, Component):
+        return
+    users = [comp, project.objects.get(comp.mesh), study, *project.transfers_into(study.id)]
+    text = " ".join(json.dumps(u.model_dump(mode="json")) for u in users if u is not None)
+    lost = []
+    for part, rows in reports.items():
+        for row in rows:
+            gone = [m["name"] for m in row.get("members", []) if m.get("status") == "detached"]
+            name = f"{part}/{row['selection']}"
+            if gone and json.dumps(name) in text:
+                lost.append(f"'{name}' ({', '.join(gone)})")
+    if lost:
+        raise StudyError(
+            f"selections this study uses lost members when the geometry changed: "
+            f"{'; '.join(lost)}; reattach them (Geometry → Selections → Reattach…, "
+            "`puzzle selections`) before solving",
+            code="detached_selection",
+            path=study.name,
+            details={"selections": lost},
+        )
 
 
 def _contact_warnings(project, study, mesh, record) -> None:

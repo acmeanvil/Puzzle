@@ -1289,7 +1289,7 @@ def _sizes(recipe: MeshRecipe, comp: Component, found, warnings, project=None, r
         gmsh.option.setNumber("Mesh.MeshSizeMax", recipe.global_size.to_si())
     coarse = recipe.global_size.to_si() if recipe.global_size else _model_size() / 10
     fields: list[int] = []
-    sized: dict[tuple[int, int], tuple[str, float]] = {}
+    _refuse_conflicting_sizes(recipe)
 
     def entities_of(control) -> tuple[int, list[int]]:
         hit = _group_entities(control.selection)
@@ -1305,16 +1305,6 @@ def _sizes(recipe: MeshRecipe, comp: Component, found, warnings, project=None, r
         if control.kind == "size":
             dim, entities = entities_of(control)
             size = control.size.to_si()
-            for e in entities:
-                before = sized.get((dim, e))
-                if before is not None and not np.isclose(before[1], size, rtol=1e-9):
-                    raise MeshError(
-                        f"'{before[0]}' and '{control.selection}' give the same "
-                        f"{['point', 'edge', 'face', 'body'][dim]} different sizes "
-                        f"({before[1]:g} m and {size:g} m); keep one",
-                        code="invalid",
-                    )
-                sized[(dim, e)] = (control.selection, size)
             if dim == 0:
                 gmsh.model.mesh.setSize([(0, e) for e in entities], size)
                 continue
@@ -1486,10 +1476,36 @@ def _where(quality: dict) -> str:
     return f"({x:.4g}, {y:.4g}, {z:.4g}) m"
 
 
+def _refuse_conflicting_sizes(recipe: MeshRecipe) -> None:
+    """Two size controls giving one entity different sizes stop the mesh with both
+    named (ADR 0019 review: never changed silently), on Gmsh and Netgen alike: Netgen
+    would take whichever came last (ADR-E-9)."""
+    sized: dict[tuple[int, int], tuple[str, float]] = {}
+    for control in recipe.controls:
+        if control.kind != "size":
+            continue
+        hit = _group_entities(control.selection)
+        if hit is None:  # refused, with its name, where the control is applied
+            continue
+        dim, entities = hit
+        size = control.size.to_si()
+        for e in entities:
+            before = sized.get((dim, e))
+            if before is not None and not np.isclose(before[1], size, rtol=1e-9):
+                raise MeshError(
+                    f"'{before[0]}' and '{control.selection}' give the same "
+                    f"{['point', 'edge', 'face', 'body'][dim]} different sizes "
+                    f"({before[1]:g} m and {size:g} m); keep one",
+                    code="invalid",
+                )
+            sized[(dim, e)] = (control.selection, size)
+
+
 def _netgen_controls(recipe: MeshRecipe) -> tuple[list[dict], list[dict]]:
     """Size controls as Netgen's local maxh per entity (by centre and measure), and
     boundary layers by their faces; the controls Netgen has no counterpart for are
     refused, naming Gmsh."""
+    _refuse_conflicting_sizes(recipe)
     sizes, layers = [], []
     for control in recipe.controls:
         if control.kind == "size_field":  # its size file: `_netgen_size_file`

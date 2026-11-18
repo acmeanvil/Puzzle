@@ -285,3 +285,138 @@ def test_asme_structural_stress_by_hand():
     # the mean curve gives more cycles than the design (-3σ) one, by (19930.2/11577.9)^(1/h)
     ratio = asme_cycles(100e6, 50e6, 0.020, basis="mean")["cycles"] / got["cycles"]
     assert ratio == pytest.approx((19930.2 / 11577.9) ** (1 / 0.3195), rel=1e-9)
+
+
+# --- the checks' scope (ADR 0090 package 9: ADR-3, ADR-4, ADR-5) -------------------------
+
+
+def _two_parts(*materials):
+    """A project and a component of parts P and Q, made of the library's `materials`
+    (one for both, or one each); a weld between them."""
+    from uuid import uuid4
+
+    from puzzle.materials import add_library_material
+    from puzzle.model.schema import Component, MaterialAssignment, PartInstance, Project
+
+    p = Project(name="w")
+    ms = [add_library_material(p, m) for m in materials]
+    ms = ms * 2 if len(ms) == 1 else ms
+    comp = Component(name="C", mesh=uuid4(),
+                     parts=[PartInstance(name=n, geometry=uuid4()) for n in "PQ"],
+                     materials=[MaterialAssignment(material=m.id, selection=f"{n}/Body")
+                                for m, n in zip(ms, "PQ", strict=True)])  # fmt: skip
+    return p, comp
+
+
+def test_a_filler_does_not_bring_an_uncovered_base_metal_into_aisc():
+    """ADR-3: AISC 360/370 J2 and the ADM cover carbon and low-alloy steel, stainless and
+    aluminium base metals (ADR 0078 decision 5); titanium welded with an E80XX filler,
+    or copper, gets no J2 utilisation, and nor does aluminium welded to steel."""
+    from puzzle.materials import add_library_material
+    from puzzle.weld_strength import base_metals, filler
+
+    p, comp = _two_parts("titanium_ti6al4v")
+    e80 = add_library_material(p, "filler_e80xx")
+    with pytest.raises(ValueError, match=r"not Titanium Ti-6Al-4V \(Titanium\)"):
+        filler(p, comp, _weld(0.25, filler=e80.id))
+    p, comp = _two_parts("copper")
+    with pytest.raises(ValueError, match="Copper"):
+        filler(p, comp, _weld(0.25))
+    p, comp = _two_parts("aluminium_6061_t6", "structural_steel")
+    with pytest.raises(ValueError, match="aluminium welded to steel"):
+        base_metals(p, comp, _weld(0.25))
+
+
+def test_a_stainless_to_carbon_weld_says_whose_rules_it_takes():
+    """ADR 0078 decision 5: two base metals take the weaker's rules and say so."""
+    from puzzle.weld_strength import base_metals, filler
+
+    p, comp = _two_parts("stainless_steel_304", "structural_steel")
+    code, _bases, note = base_metals(p, comp, _weld(0.25))
+    assert code == "AISC 370-21 J2" and "stainless-to-carbon" in note
+    assert filler(p, comp, _weld(0.25))[2] == "AISC 370-21 J2"
+    p, comp = _two_parts("structural_steel")
+    assert base_metals(p, comp, _weld(0.25))[2] is None
+
+
+def test_a_pjp_groove_gets_no_directional_increase():
+    """ADR-4: J2.4(b)'s (1.0 + 0.50 sin^1.5 θ) is "for fillet welds" (AISC 360-16 p. 16.1-122,
+    pdf p. 178; 370-21 p. 91). A 1/4 in PJP groove in E70 loaded across its axis:
+    φ R_n / l = 0.75 × 0.60 × 70 ksi × 0.25 in = 7.875 kip/in, not 1.5 times it."""
+    pjp = _weld(0.25, type="groove", groove="pjp")
+    got = check(pjp, 70 * KSI, [0.0], [1.0], [1.0], directional=True)
+    assert PHI * got["nominal_N_per_m"][0] / KIP_PER_IN == pytest.approx(7.875, rel=1e-6)
+    assert got["clause"] == "AISC 360-16 J2.4, Eq. J2-3" and "fillet welds" in got["note"]
+    fillet = check(_weld(0.25), 70 * KSI, [0.0], [1.0], [1.0], directional=True,
+                   code="AISC 370-21 J2")  # fmt: skip
+    assert fillet["clause"] == "AISC 370-21 J2.4, Eq. J2-5"
+    assert PHI * fillet["nominal_N_per_m"][0] / KIP_PER_IN == pytest.approx(
+        1.5 * 0.75 * 0.6 * 70 * 0.25 / np.sqrt(2), rel=1e-6)  # fmt: skip
+
+
+def _weld_results():
+    from puzzle.results.model import Field, Results, StepResult
+
+    rows = np.zeros((1, 9))
+    f = Field("weld_line_force", "node", ["along", "throat_normal", "throat_shear",
+              "magnitude", "x", "y", "z", "twist", "w"], np.array([1]), rows)  # fmt: skip
+    return Results("calculix", [StepResult(1, "stationary", 1.0,
+                                           fields={"weld_line_force": f})])  # fmt: skip
+
+
+def test_aisc_weld_fatigue_is_refused_on_aluminium():
+    """ADR-5: Table A-3.1's categories are for steels; an aluminium weld (AWS D1.2, the
+    ADM's Appendix 3) is refused, not given a steel F_SR, and sent to ASME's method."""
+    from puzzle.errors import PuzzleError
+    from puzzle.post.weld_fields import fatigue
+
+    p, comp = _two_parts("aluminium_6061_t6")
+    comp.welds = [_weld(0.25)]
+    with pytest.raises(PuzzleError, match="method asme") as err:
+        fatigue(p, comp, None, _weld_results(), "W", "F", 2e6)
+    assert err.value.code == "unsupported"
+
+
+def test_a_stainless_welds_fatigue_goes_by_aisc_370_appendix_3(monkeypatch):
+    """AISC 370-21 Appendix 3 (austenitic and duplex stainless) prints 360-16's Eqs.
+    A-3-1M and A-3-2M and the same Table A-3.1 constants (370-21 pp. 166-190), so a
+    stainless weld gets the same F_SR under 370's clause, with its scope as a note.
+    Category F at 2e6 cycles: 690 (1.5/2e6)^0.167 = 65.4 MPa, above the 55 MPa floor."""
+    from puzzle.post import weld_fields
+
+    class Pairs:
+        stations = np.array([1])
+        xyz = np.zeros((1, 3))
+
+    monkeypatch.setattr("puzzle.adapters.weld_pairs.weld_pairs", lambda *a, **k: Pairs())
+    allowed = 690e6 * (1.5 / 2e6) ** 0.167
+    assert allowed == pytest.approx(65.4e6, rel=2e-3)
+    for metal, spec in (("stainless_steel_304", "AISC 370-21"),
+                        ("structural_steel", "AISC 360-16")):  # fmt: skip
+        p, comp = _two_parts(metal)
+        comp.welds = [_weld(0.25)]
+        got = weld_fields.fatigue(p, comp, None, _weld_results(), "W", "F", 2e6)
+        assert got["clause"] == f"{spec} Appendix 3, Eq. A-3-2"
+        assert got["allowable_range_Pa"] == pytest.approx(allowed, rel=1e-12)
+        if metal == "stainless_steel_304":
+            assert "austenitic and duplex" in got["notes"][0]
+        else:
+            assert "notes" not in got
+
+
+def test_asmes_curve_follows_the_base_metal():
+    """ADR-5: ASME VIII-2 Table 3-F.2M has a steel and an aluminium curve: the weld's
+    base metal picks it (and its E for Neuber's rule), and a contrary choice is refused."""
+    from puzzle.errors import PuzzleError
+    from puzzle.post.weld_fields import _asme_material
+
+    p, comp = _two_parts("aluminium_6061_t6")
+    got = _asme_material(p, comp, _weld(0.25), {})
+    assert got["material"] == "aluminium" and got["e"] == pytest.approx(68.9e9, rel=0.01)
+    with pytest.raises(PuzzleError, match="aluminium curve"):
+        _asme_material(p, comp, _weld(0.25), {"material": "steel"})
+    p, comp = _two_parts("stainless_steel_304")
+    assert _asme_material(p, comp, _weld(0.25), {}) == {"material": "steel"}
+    p, comp = _two_parts("copper")
+    with pytest.raises(PuzzleError, match="steels and aluminium"):
+        _asme_material(p, comp, _weld(0.25), {})

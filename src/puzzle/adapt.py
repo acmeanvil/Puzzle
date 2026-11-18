@@ -156,6 +156,7 @@ def run(project, study, root: Path, workdir: Path, *, store, settings=None, solv
     from puzzle.project.graph import run_hashes
 
     a = settings or study.adapt or Adapt()
+    estimable(project, study, a)
     if solve is None and not read_only:
         from puzzle.solve import run_study as solve
     passes: list[Pass] = []
@@ -226,10 +227,36 @@ def run(project, study, root: Path, workdir: Path, *, store, settings=None, solv
     if not read_only:
         _keep_table(root, study, out)
         if not a.keep_passes:
-            for p in passes[:-1]:
-                if p.run:
-                    store.delete_run(p.run)
+            # All but the last pass that ran: a pass that failed or was stopped has no
+            # run, and deleting up to it would delete every result (ADR-46).
+            for p in [p for p in passes if p.run][:-1]:
+                store.delete_run(p.run)
     return out
+
+
+def estimable(project, study, a=None) -> None:
+    """Refuse, before anything is solved, a study whose mesh the passes can't estimate
+    or remesh (ADR-45): the error estimate and the size field read tetrahedra only
+    (`post.estimates`, `mesh.size_field`; MMG's anisotropic passes too), so a 2D model or
+    a hexahedral recipe would solve pass 1 and then fail."""
+    from puzzle.model.schema import Component, MeshRecipe
+
+    comp = project.objects.get(study.component)
+    if not isinstance(comp, Component):
+        return
+    if comp.dimension != "3d":
+        raise PuzzleError(
+            f"adaptive refinement needs a 3D model of tetrahedra: '{comp.name}' is 2D, "
+            "and the error estimate and size field read tetrahedra only; check the mesh "
+            "by a convergence study instead", code="unsupported",
+        )  # fmt: skip
+    recipe = project.objects.get(comp.mesh)
+    if isinstance(recipe, MeshRecipe) and recipe.element_shape != "tetrahedra":
+        raise PuzzleError(
+            f"adaptive refinement needs tetrahedra: the recipe '{recipe.name}' meshes "
+            f"{recipe.element_shape}, which the error estimate and size field can't read; "
+            "mesh it with tetrahedra or use a convergence study", code="unsupported",
+        )  # fmt: skip
 
 
 def _done(a, passes: list[Pass]) -> str:

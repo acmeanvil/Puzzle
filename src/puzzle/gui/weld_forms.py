@@ -39,7 +39,7 @@ METHODS = [("AISC 360-16 Appendix 3 (stress range)", "aisc"),
            ("ASME VIII-2 5.5.5 (structural stress)", "asme")]  # fmt: skip
 SIDES = [("The attachment's toe (the path's part)", "attachment"),
          ("The plate's toe (the other part)", "plate")]  # fmt: skip
-MATERIALS = [("Steel", "steel"), ("Aluminium", "aluminium")]
+MATERIALS = [("The base metal's", "auto"), ("Steel", "steel"), ("Aluminium", "aluminium")]
 
 
 def _project(window):
@@ -290,7 +290,8 @@ def evaluate(project, store, run_id: str, values: dict, cache: dict | None = Non
             return structural_stress(project, comp, mesh, res, values["weld"], steps, thickness,
                                      cycles, side=values.get("side", "attachment"),
                                      basis=values.get("basis", "-3sigma"),
-                                     material=values.get("material", "steel"))  # fmt: skip
+                                     material=None if values.get("material", "auto") == "auto"
+                                     else values["material"])  # fmt: skip
         except ValueError as exc:
             from puzzle.errors import PuzzleError
 

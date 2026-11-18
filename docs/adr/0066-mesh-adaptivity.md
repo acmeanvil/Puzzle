@@ -345,3 +345,7 @@ The maintainer's answers:
     solution (the rest is the time step's).
   - On the cantilever, MMG brings nothing: displacement has no layer to stretch
     along, so structural studies should stay isotropic.
+
+## Amended (2026-11-17, ADR 0090 package 9)
+
+Adaptive refinement is for 3D tetrahedral meshes: 2D and other meshes are refused before anything is solved. Deleting passes keeps the last pass that ran.

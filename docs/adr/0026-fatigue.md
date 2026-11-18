@@ -48,3 +48,7 @@ The maintainer chose "data and a life tool" for this round. The life tool is the
 
 - Fatigue as a separate application exporting results: duplicates the result machinery and loses the maps.
 - Critical-plane multiaxial methods now: more general, but heavier, and not what was asked first.
+
+## Amended (2026-11-17, ADR 0090 package 9)
+
+Shigley's endurance-limit estimate applies to steels only; another material needs an S-N curve or a measured endurance limit, else the fatigue tool refuses.

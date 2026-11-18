@@ -18,6 +18,7 @@ CODES = {
     "missing_reference": "an object refers to another that no longer exists",
     "missing_file": "a geometry or an imported field reads a file that isn't in the project folder",
     "unknown_selection": "a component uses a selection its geometry doesn't have",
+    "detached_selection": "a selection a study uses lost members when its geometry changed",
     "foreign_local_geometry": "a component uses geometry local to another component",
     "missing_physics": "a study solves a physics its component doesn't have",
     "duplicate_solver": "a shoot-out lists the same solver twice",

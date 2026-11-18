@@ -14,8 +14,9 @@ three nodes with springs to ground in x, y and z:
 
 They are written as the elastic supports' springs (a node group with an `elastic_support`
 of that stiffness per node), so every adapter that takes elastic supports takes them.
-After the solve `finish` reports the force they carry: a share above the study's
-`weak_spring_limit` means the body never seated (warning `weak_springs_carry`).
+After the solve `finish` reports the force they carry: a share of the body's own load
+path (the force through its contacts) above the study's `weak_spring_limit` means the
+body never seated (warning `weak_springs_carry`).
 
 Never for a model held by nothing at all (`unconstrained` stays refused), and not in
 modal or buckling studies, whose free modes are wanted.
@@ -164,9 +165,14 @@ def applied(project, study, mesh, caps=None, record=None):
     return written, dataclasses.replace(project, objects=objects), springs
 
 
-def finish(results, springs, limit: float = 1e-3, record=None) -> list[str]:
+def finish(results, springs, limit: float = 1e-3, record=None, component=None,
+           mesh=None) -> list[str]:  # fmt: skip
     """Each step's spring forces (`weak_spring_force` on their nodes) and a warning for
-    every body whose springs carry more than `limit` of the load path."""
+    every body whose springs carry more than `limit` of its own load path (ADR 0080
+    decision 5): the springs' forces, node by node (so springs resisting a couple don't
+    cancel), against the force through the body's contacts (`post.contact`'s totals,
+    normal and tangential). Without contact results the reactions at the model's
+    supports stand in, which dilutes a small body in a large model (ADR-2)."""
     from puzzle.results.model import Field
 
     if not springs:
@@ -180,16 +186,20 @@ def finish(results, springs, limit: float = 1e-3, record=None) -> list[str]:
         forces = np.concatenate([s.stiffness * u.at(s.nodes)[:, :3] for s in springs])
         step.fields["weak_spring_force"] = Field("weak_spring_force", "node", ["x", "y", "z"],
                                                  ids, forces)  # fmt: skip
+        through = _contact_forces(step, component, mesh)
         reaction = step.fields.get("reaction_force")
         for s in springs:
-            # At the supports only: a solver's reactions over every node (Code_Aster's
-            # REAC_NODA) sum to about nothing, the applied loads among them.
-            held = (float(np.linalg.norm(np.nansum(reaction.at(s.supports)[:, :3], axis=0)))
-                    if reaction is not None and len(s.supports) else 0.0)  # fmt: skip
-            carried = float(np.linalg.norm((s.stiffness * u.at(s.nodes)[:, :3]).sum(axis=0)))
-            share = carried / (carried + held) if carried + held > 0 else 0.0
+            carried = float(np.linalg.norm(s.stiffness * u.at(s.nodes)[:, :3], axis=1).sum())
+            if through is not None:
+                path = sum(f for name, f in through if name == s.part)
+            else:
+                # At the supports only: a solver's reactions over every node (Code_Aster's
+                # REAC_NODA) sum to about nothing, the applied loads among them.
+                path = (float(np.linalg.norm(np.nansum(reaction.at(s.supports)[:, :3], axis=0)))
+                        if reaction is not None and len(s.supports) else 0.0)  # fmt: skip
+            share = carried / (carried + path) if carried + path > 0 else 0.0
             if share > limit:
-                text = (f"the weak springs on '{s.part}' carry {share:.2%} of the load "
+                text = (f"the weak springs on '{s.part}' carry {share:.2%} of its load "
                         f"({carried:.3g} N) in {step.label()}: it never seated on its "
                         "contact, so its result is not to be trusted")  # fmt: skip
                 warnings.append(text)
@@ -199,3 +209,20 @@ def finish(results, springs, limit: float = 1e-3, record=None) -> list[str]:
                     record(progress.Message(level="warning", code="weak_springs_carry",
                                             text=text))  # fmt: skip
     return warnings
+
+
+def _contact_forces(step, component, mesh) -> list[tuple[str, float]] | None:
+    """(part, force) for each side of each sliding contact: the force it passes (normal
+    and tangential totals, N), once for the source's part and once for the target's;
+    None when the step has no contact results to read."""
+    if component is None or mesh is None or "contact_pressure" not in step.fields:
+        return None
+    from puzzle.post.contact import contact_results
+
+    by_name = {c.name: c for c in component.contacts}
+    out = []
+    for r in contact_results(step, component, mesh):
+        c = by_name[r.name]
+        force = float(np.hypot(r.normal_force, r.tangential_force))
+        out += [(c.source.split("/", 1)[0], force), (c.target.split("/", 1)[0], force)]
+    return out

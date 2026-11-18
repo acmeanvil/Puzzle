@@ -89,6 +89,23 @@ def _equivalent_strain(tensors: np.ndarray) -> np.ndarray:
     return compute(item, tensors, TENSOR)
 
 
+def _group(material) -> str:
+    return (getattr(material, "info", None) or {}).get("group", "") or ""
+
+
+def is_steel(material) -> bool:
+    """Whether Shigley's steel estimates (S'e = 0.5 Sut, Eq. 6-8; f, Fig. 6-18) may be
+    used: a material filed under a steel group (carbon, low-alloy, stainless, electrical)
+    or as a fastener grade (every one shipped is a steel). An ungrouped material counts
+    only when its name says steel (projects made before the library filed groups); any
+    other is not assumed to be one, since the estimate is unconservative for metals
+    without an endurance limit."""
+    group = _group(material).lower()
+    if not group:
+        return "steel" in (material.name or "").lower()
+    return "steel" in group or group == "fastener"
+
+
 class _Material:
     """What the life model needs from one material, in SI."""
 
@@ -120,11 +137,30 @@ class _Material:
             )
         self.kf, self.q = self._notch(material, settings)
         self.line = self.curve = self.strain = None
+        self.notes: list[str] = []
         if settings.life_model == "shigley":
+            steel = is_steel(material)
+            if not steel and settings.endurance_limit is None:
+                group = _group(material) or "no group"
+                raise PuzzleError(
+                    f"{material.name} ({group}): Shigley's S'e = 0.5 Sut (Eq. 6-8) is for "
+                    "steels, and metals such as aluminium have no endurance limit: use the "
+                    "material's S-N curve (Material builder, Fatigue tab), or enter a "
+                    "measured endurance limit (a steel filed under no group needs its "
+                    "group set)",
+                    code="unsupported",
+                )
+            if not steel:
+                self.notes.append(
+                    f"{material.name}: Shigley's S-N line (f from Fig. 6-18, the knee at "
+                    "10⁶ cycles) is fitted to steels; with the measured endurance limit it "
+                    "is an estimate only: prefer the material's S-N curve"
+                )
             try:
                 e = fm.endurance_limit(
                     self.sut,
                     measured_se_prime=settings.endurance_limit,
+                    steel=steel,
                     surface=settings.surface,
                     size=settings.size,
                     d=settings.diameter,
@@ -220,6 +256,7 @@ def _materials(project, mesh, study_id, settings) -> tuple[list[_Material], np.n
         idx = next((i for i, m in enumerate(mats) if m.name == material.name), None)
         if idx is None:
             mats.append(_Material(material, settings))
+            notes += mats[-1].notes
             idx = len(mats) - 1
         group = mesh.groups.get(a.selection)
         if group is None:

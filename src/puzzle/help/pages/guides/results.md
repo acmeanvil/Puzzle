@@ -86,8 +86,11 @@ the design life and a safety factor at every node, from a duty of load cycles:
   its strain-life model (the Material builder's Fatigue tab);
 - a notch factor Kf for a stress raiser the mesh doesn't resolve.
 
-It is high-cycle and proportional loading only. A safety factor of 15 means 15 or more,
-and a life of 1e12 means infinite.
+It is high-cycle and proportional loading only. Shigley's S-N line estimates the
+endurance limit as half the tensile strength, which holds for steels only: a material
+of another group (aluminium, which has no endurance limit, titanium, copper) needs its
+S-N curve or a measured endurance limit, and a material with no group needs one set.
+A safety factor of 15 means 15 or more, and a life of 1e12 means infinite.
 
 ## Exports and ParaView
 

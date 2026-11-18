@@ -87,6 +87,7 @@ def project(**props):
     p = Project("p")
     steel = Material(
         name="Steel",
+        info={"group": "Carbon Steel"},
         properties={
             "tensile_strength": Quantity(value=690, unit="MPa"),
             "yield_strength": Quantity(value=600, unit="MPa"),
@@ -287,3 +288,45 @@ def test_neuber_gives_kf_from_kt_and_the_radius():
     assert field(d, "fatigue_mean")[0] == pytest.approx(300e6 * kf)
     with pytest.raises(ValueError, match="needs Kt and the notch radius"):
         FatigueSettings(blocks=block, notch_from="neuber", notch_kt=2.0)
+
+
+def _with(p, studies, material):
+    """The project's bar made of `material` instead of its steel."""
+    p.add(material)
+    comp = p.get(studies[0].component, Component)
+    comp.materials[0] = MaterialAssignment(material=material.id, selection="Bar/Body")
+    return p
+
+
+def test_shigleys_steel_estimate_is_refused_for_aluminium():
+    """ADR-62: Shigley's S'e = 0.5 Sut (Eq. 6-8, 10th ed. Sec. 6-7) is for steels;
+    aluminium has no endurance limit, so 6061-T6 (Sut 262 MPa) must not get an infinite
+    life below 131 MPa. A measured endurance limit is taken with a
+    note, and gives Se/σ by hand (97 MPa polished, kc = 1: 97/30 at 30 MPa)."""
+    from puzzle.materials import library_material
+
+    p, _, studies = project()
+    p = _with(p, studies, library_material("aluminium_6061_t6"))
+    a = studies[0]
+    store = Store([a.id], [results(SXX / 10)])
+    block = [FatigueBlock(case=ResultCase(study=a.id))]
+    with pytest.raises(PuzzleError, match="for steels") as err:
+        derived.evaluate(p, store, tool(p, block))
+    assert err.value.code == "unsupported"
+    d = derived.evaluate(p, store, tool(p, block, endurance_limit=97e6))
+    assert field(d, "fatigue_safety_factor")[1] == pytest.approx(97 / 30, rel=1e-6)
+    assert any("fitted to steels" in w for w in d.warnings)
+
+
+def test_an_ungrouped_material_is_not_taken_for_steel():
+    """A material with no group may be any metal: only a name saying steel (projects
+    made before the library filed groups) is taken for one."""
+    p, steel, studies = project()
+    steel.info = {}
+    store = Store([studies[0].id], [results(SXX)])
+    block = [FatigueBlock(case=ResultCase(study=studies[0].id))]
+    d = derived.evaluate(p, store, tool(p, block))
+    assert field(d, "fatigue_safety_factor")[1] == pytest.approx(345 / 300, rel=1e-6)
+    steel.name = "Alloy 7075"
+    with pytest.raises(PuzzleError, match="needs its group set"):
+        derived.evaluate(p, store, tool(p, block))

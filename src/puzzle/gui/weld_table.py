@@ -52,7 +52,7 @@ class WeldTable(QWidget):
         self.run = QComboBox()
         self.run.currentIndexChanged.connect(lambda _i: self.show_results())
         self.directional = QCheckBox("Directional strength (J2-5)")
-        self.directional.setToolTip("1 + 0.5 sin^1.5 θ, for linear welds loaded in plane")
+        self.directional.setToolTip("1 + 0.5 sin^1.5 θ, for linear fillet welds loaded in plane")
         self.directional.toggled.connect(lambda _on: self.show_results())
         self.export_button = QPushButton("Export CSV…")
         self.export_button.clicked.connect(lambda: self.export())

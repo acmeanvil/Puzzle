@@ -22,8 +22,11 @@ A body held only by frictionless or frictional contact (`contact_only_hold`) get
 springs for the solve: three nodes, x, y and z, each 1e-6 × E × V / L² of the body. They
 hold it until the contact closes. `weak_springs(study)` lists the bodies and, after a run,
 the force the springs carried. A run warning `weak_springs_carry` means they carried more
-than the study's `weak_spring_limit` (0.1 %) of the load: the body never seated, so its
-results are not to be trusted. Check the gap and the contact's search distance, or add a
+than the study's `weak_spring_limit` (0.1 %) of that body's own load path: their forces
+node by node against the force through its contacts (normal and tangential), so a small
+body in a heavily loaded model is still caught. The body never seated, so its results
+are not to be trusted. (Without contact results in the run, the model's support
+reactions stand in, which dilutes a small body.) Check the gap and the contact's search distance, or add a
 real support.
 
 Set the study's `weak_springs` to "never" to solve without them (the solve may then fail

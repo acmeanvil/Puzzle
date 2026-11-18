@@ -826,7 +826,9 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         "segment with its C_b and about y (F2-F11), shear along each axis (G2-G6), HSS "
         "torsion (H3), combined forces (H1-1), deflection when a limit is set. Members "
         "sorted worst first; `not_checked` says why (channels, angles and tees not built "
-        "yet). Forces in N and N·m. `member` "
+        "yet); a member's `warnings` name a torque none of its checks cover (torsion is "
+        "checked on steel HSS only), so tell the user and judge it by hand. Forces in N and "
+        "N·m. `member` "
         "one of them; `step` 1-based among the static steps; `summary` drops the per-step "
         "lists."
     )
@@ -2622,8 +2624,9 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         "throat_shear, magnitude, x, y, z; twist N·m/m about the path), and `strength`: "
         "AISC 360-16 J2 at the governing station (filler and F_EXX, throat, design and "
         "allowable strength per length, LRFD and ASD utilisations for loads factored that "
-        "way; `directional` takes Eq. J2-5's 1 + 0.5 sin^1.5 θ, allowed for linear welds "
-        "loaded in plane) and `instantaneous_centre`: the group's in-plane force and moment "
+        "way; `directional` takes Eq. J2-5's 1 + 0.5 sin^1.5 θ, allowed for linear fillet "
+        "welds loaded in plane; the code by the base metals, others not checked) and "
+        "`instantaneous_centre`: the group's in-plane force and moment "
         "about its centroid against its strength by the instantaneous centre of rotation "
         "(AISC 360-10 J2.4(b), the Manual's Part 8 method; P_n, eccentricity, LRFD and ASD "
         "utilisations; out-of-plane bending noted, not covered). `weld` one of them; `step` "
@@ -2655,7 +2658,9 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         "attachment's toe (the path's part) from the weld's line forces and moments, "
         "membrane f/t plus bending 6m/t², t `thickness_m` (a shell's own by default); "
         "returns each station's permissible cycles on Table 3-F.2M's `basis` curve "
-        "(default -3sigma; `material` steel or aluminium) and, with `cycles`, the damage. "
+        "(default -3sigma; the base metal's curve, steel or aluminium; `material` only to "
+        "confirm it) and, with `cycles`, the damage. AISC's method takes carbon and "
+        "low-alloy steel base metals only. "
         "`side='plate'`: the toe on the other part (a light weld on solids), from the plate's "
         "own section through its thickness there, its thickness measured unless given."
     )
@@ -2663,7 +2668,7 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
     def weld_fatigue(study: str, weld: str, category: str = "F", cycles: float = 2e6,
                      steps: list[int] | None = None, method: str = "aisc",
                      thickness_m: float | None = None, basis: str = "-3sigma",
-                     material: str = "steel",
+                     material: str | None = None,
                      side: str = "attachment") -> dict[str, Any]:  # fmt: skip
         from puzzle.commands import resolve
         from puzzle.model.schema import Component, Study

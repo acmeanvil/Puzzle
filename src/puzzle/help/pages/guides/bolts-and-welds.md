@@ -122,7 +122,11 @@ worst first.
 - **Fatigue**: AISC 360 Appendix 3 categories A to F, or ASME VIII-2 5.5.5 structural
   stress: Weld fatigue… below.
 
-The base metal (J4) and the minimum weld size (Table J2.4) are yours to check.
+The code follows the base metals, whatever the filler: a weld on titanium, copper or a
+material with no group, or aluminium welded to steel, is not checked and says why; a
+stainless-to-carbon steel weld takes AISC 370 and says so. The directional increase
+(Eq. J2-5) is for fillet welds: a PJP groove weld is checked without it. The base metal
+(J4) and the minimum weld size (Table J2.4) are yours to check.
 
 <!-- key: form:weld_fatigue -->
 ### Weld fatigue
@@ -133,10 +137,13 @@ and the Welds panel) reads a study's latest run. Choose the weld and the method:
 - **AISC 360-16 Appendix 3**: the detail's category (Table A-3.1) and the cycles. F is
   shear on the fillet's throat from the line forces; A to E′ the base metal at the
   weld's toe (the largest principal stress range at its footprint, mesh-dependent). The
-  form gives the range, the allowable F_SR and their ratio (1 or less passes).
+  form gives the range, the allowable F_SR and their ratio (1 or less passes). A
+  stainless weld is checked by AISC 370-21 Appendix 3, whose curves are the same
+  (austenitic and duplex, to 150 °C); an aluminium weld is refused (use ASME).
 - **ASME VIII-2 5.5.5**: the equivalent structural stress at the attachment's toe (or
   the plate's), membrane f/t plus bending 6m/t², each station's permissible cycles on
-  Table 3-F.2M's curve (−3σ by default), plotted along the weld, and with cycles given
+  Table 3-F.2M's curve (−3σ by default; steel or aluminium by the base metal), plotted
+  along the weld, and with cycles given
   the damage at the worst station. A solid's thickness at the toe must be given; a
   shell's is its own.
 

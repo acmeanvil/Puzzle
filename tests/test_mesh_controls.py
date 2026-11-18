@@ -102,6 +102,11 @@ def test_refusals_say_why(tmp_path):
     a, b = SizeControl(selection="K/End", size=mm(1)), SizeControl(selection="K/End", size=mm(2))
     with pytest.raises(MeshError, match="different sizes"):
         _block(tmp_path / "a", [a, b])
+    # ADR-E-9: Netgen too, in either order (it had taken the last one: 2.50 or 1.38 mm),
+    # refused before Netgen is asked, so whether it is installed doesn't matter
+    for i, controls in enumerate(([a, b], [b, a])):
+        with pytest.raises(MeshError, match="different sizes"):
+            _block(tmp_path / f"n{i}", controls, mesher="netgen")
     with pytest.raises(MeshError, match="no number option 'Mesh.NoSuchThing'"):
         _block(tmp_path / "b", gmsh_options={"Mesh.NoSuchThing": 1})
     layer = BoundaryLayerControl(selection="K/Side", first_height=mm(0.1))

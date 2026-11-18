@@ -121,3 +121,7 @@ Measured in `tests/test_sketch.py`: a dimensioned plate solves to its dimensions
 - Direct modelling without history (SpaceClaim as is): geometry could not be parametrised or swept.
 - History-free re-import plus signature matching only: works for unchanged faces, but every real edit detaches selections.
 - FreeCAD PartDesign as the history: mature, but brings FreeCAD's application, Python and Qt versions along (ADR 0004).
+
+## Amended (2026-11-17, ADR 0090 package 9)
+
+A run whose study uses a selection with detached members is refused (`detached_selection`). An anchor holds measure and centre each to its own tolerance, and exactly one candidate may be within.

@@ -302,3 +302,73 @@ def test_the_cli_reattaches_all(tmp_path, capsys):
     sels = {s.name: s for s in geo.selections}
     assert sels["End"].rule == {"plane": {"axis": "x", "at": 0.0}}
     assert main(["selections", str(root), "Plate"]) == 0  # nothing left to decide
+
+
+def test_a_run_on_a_detached_selection_is_refused(tmp_path):
+    """ADR-E-14 (ADR 0014 decision 3.3: flagged, never guessed): a fixed support on the
+    corner edge the fillet removed would hold nothing, and a run on what is left would
+    look normal, so `run_study` refuses with `detached_selection`; the same detached
+    selection left unused only warns, and the run goes on to its solver."""
+    import sys
+    from pathlib import Path
+
+    from puzzle.errors import PuzzleError
+    from puzzle.materials import add_library_material
+    from puzzle.model import Component, MaterialAssignment, MeshRecipe, PartInstance, Quantity
+    from puzzle.model.schema import Feature, Physics, SolveStep, Study
+    from puzzle.project import save_project
+    from puzzle.solve import run_study
+
+    sys.path.insert(0, str(Path(__file__).parent / "integration"))
+    import written_or_refused as wor
+
+    p = Project(name="g3")
+    geo = p.add(Geometry(name="Plate", history=[
+        HistoryStep(kind="box", name="Plate", args={"dx": 0.08, "dy": 0.04, "dz": 0.01}),
+        HistoryStep(kind="fillet", name="Round",
+                    args={"r": 0.004, "rule": {"parallel": "z", "outer": True}}),
+    ], selections=[
+        NamedSelection(name="Solid", entity="body", members=["Body"]),
+        NamedSelection(name="Corner", entity="edge", members=["Plate/+x|Plate/+y"]),
+        NamedSelection(name="End", entity="face", members=["Plate/-x"]),
+    ]))  # fmt: skip
+    steel = add_library_material(p, "structural_steel")
+    mesh = p.add(MeshRecipe(name="m", global_size=Quantity(value=8, unit="mm"), element_order=1))
+
+    def study_on(selection):
+        comp = p.add(Component(
+            name=f"C {selection}", parts=[PartInstance(name="P", geometry=geo.id)],
+            mesh=mesh.id, materials=[MaterialAssignment(material=steel.id, selection="P/Solid")],
+            physics=[Physics(type="solid_mechanics",
+                             features=[Feature(type="fixed", selection=f"P/{selection}")])],
+        ))  # fmt: skip
+        return p.add(Study(name=f"S {selection}", component=comp.id, solver="calculix",
+                           steps=[SolveStep(type="stationary")]))  # fmt: skip
+
+    on_corner, on_end = study_on("Corner"), study_on("End")
+    root = tmp_path / "p"
+    save_project(p, root)
+    with pytest.raises(PuzzleError, match=r"'P/Corner' \(Plate/\+x\|Plate/\+y\)") as err:
+        run_study(p, on_corner.id, root, tmp_path / "w1")
+    assert err.value.code == "detached_selection"
+    with wor.no_solver(), pytest.raises(wor._Stopped):
+        run_study(p, on_end.id, root, tmp_path / "w2")
+
+
+def test_anchors_hold_measure_and_centre_each_to_its_own_tolerance(monkeypatch):
+    """ADR-E-15 (G3: "within 0.1% in measure and 1e-5 of the model size in position"):
+    their sum let a centre 5e-4 of the model away pass. A replaced file's positional
+    `face-7`, now a face of the same area 0.5 mm off on a 1 m model, is not kept: the
+    face that is where face-7 was (`face-8`) is re-found instead."""
+    from puzzle.geometry import naming
+
+    marks = {"a": ["Plane", 1.0, 5e-4, 0.0, 0.0], "b": ["Plane", 1.0, 0.0, 0.0, 0.0]}
+    monkeypatch.setattr(naming, "anchor", lambda entity, shapes: marks[shapes])
+    named = naming.Named(shape=None, of={"face": {"face-7": "a", "face-8": "b"}}, size=1.0)
+    sel = NamedSelection(name="S", entity="face", members=["face-7"],
+                         anchors={"face-7": ["Plane", 1.0, 0.0, 0.0, 0.0]})  # fmt: skip
+    (m,) = naming.resolve_one(sel, named).members
+    assert (m.status, m.now) == ("refound", "face-8")
+    assert naming.same(["Plane", 1.0, 0, 0, 0], ["Plane", 1.0009, 9e-6, 0, 0], 1.0)
+    assert not naming.same(["Plane", 1.0, 0, 0, 0], ["Plane", 1.0011, 0, 0, 0], 1.0)
+    assert not naming.same(["Plane", 1.0, 0, 0, 0], ["Plane", 1.0, 2e-5, 0, 0], 1.0)

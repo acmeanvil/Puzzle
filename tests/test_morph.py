@@ -100,3 +100,56 @@ def test_an_element_the_mesher_left_poor_is_not_the_morphs(beam, monkeypatch):
     monkeypatch.setattr(morph_module, "_shape", lambda m, c: with_a_sliver(m, c, 0.4))
     with pytest.raises(PuzzleError, match=r"falls to 0\.000 \(it was 0\.001\)"):
         morphed(p, study, mesh)
+
+
+def _plain(blocks, xyz, groups):
+    from puzzle.mesh.mesh import CellBlock, Group, Mesh
+
+    ids = np.arange(1, len(xyz) + 1)
+    return Mesh(ids, np.asarray(xyz, float),
+                [CellBlock(e, d, (d, 1), np.arange(1, len(c) + 1), np.asarray(c))
+                 for e, d, c in blocks],
+                {n: Group(n, 2, [], np.asarray(g)) for n, g in groups.items()})  # fmt: skip
+
+
+def _pushed(mesh, distance, direction):
+    from puzzle.model.schema import Project
+
+    study = Study(name="S", component=__import__("uuid").uuid4(), solver="calculix", steps=[],
+                  morph=Morph(handles=[MorphHandle(selection="B/Top", distance=distance,
+                                                   direction=direction)],
+                              fixed=["B/Bottom"]))  # fmt: skip
+    return morphed(Project("p"), study, mesh)
+
+
+def test_bricks_and_quadrilaterals_are_checked_too():
+    """ADR-50: a column of two unit hex8 bricks, its top pushed down 2.5 past its base
+    (the middle follows linearly to -0.25: both turned inside out), is refused; pushed
+    down 0.5 it is two bricks of 0.75 by hand. Two quad4 shells, the far edge of the
+    second pushed back past its near edge, are refused the same way."""
+    square = [[0, 0], [1, 0], [1, 1], [0, 1]]
+    xyz = [[x, y, z] for z in (0.0, 1.0, 2.0) for x, y in square]
+    bricks = [("hex8", 3, [[0, 1, 2, 3, 4, 5, 6, 7], [4, 5, 6, 7, 8, 9, 10, 11]])]
+    col = _plain([(e, d, np.asarray(c) + 1) for e, d, c in bricks], xyz,
+                 {"B/Bottom": [1, 2, 3, 4], "B/Top": [9, 10, 11, 12]})  # fmt: skip
+    with pytest.raises(PuzzleError, match="inverts elements"):
+        _pushed(col, -2.5, (0, 0, 1))
+    got = _pushed(col, -0.5, (0, 0, 1))
+    assert np.sort(np.unique(got.coords[:, 2])) == pytest.approx([0.0, 0.75, 1.5])
+    # a sheet folded along x = 1 (the RBF's linear part needs points off one plane)
+    xyz = [[x, y, max(x - 1.0, 0.0)] for y in (0.0, 1.0) for x in (0.0, 1.0, 2.0)]
+    quads = [("quad4", 2, [[1, 2, 5, 4], [2, 3, 6, 5]])]
+    flat = _plain(quads, xyz, {"B/Bottom": [1, 2, 4], "B/Top": [3, 6]})
+    with pytest.raises(PuzzleError, match="inverts elements"):
+        _pushed(flat, -3.0, (1, 0, 0))
+    assert _pushed(flat, 0.5, (1, 0, 0)).coords[:, 0].max() == pytest.approx(2.5)
+
+
+def test_a_flat_morph_says_why_it_cant():
+    """Every control point in one plane (a 2D model): a coded refusal, not numpy's."""
+    xyz = [[x, y, 0.0] for y in (0.0, 1.0) for x in (0.0, 1.0, 2.0)]
+    flat = _plain([("quad4", 2, [[1, 2, 5, 4], [2, 3, 6, 5]])], xyz,
+                  {"B/Bottom": [1, 4], "B/Top": [3, 6]})  # fmt: skip
+    with pytest.raises(PuzzleError, match="one plane") as err:
+        _pushed(flat, 0.5, (1, 0, 0))
+    assert err.value.code == "unsupported"

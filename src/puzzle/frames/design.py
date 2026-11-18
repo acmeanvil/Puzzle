@@ -202,6 +202,27 @@ def _cb(s, values, lo, hi) -> float:
     return aisc360.cb_from(mmax, *quarters)
 
 
+def unchecked(p, forces, code) -> str | None:
+    """The warning for a member carrying torsion its code has no check for (an I or
+    other open shape under AISC 360, whose torsion is Design Guide 9's; stainless G8/G9
+    and the ADM's H.2, not built): its other checks stand, and the warning says the
+    torque is in none of them (the maintainer, 2026-11-17: check and warn, since a 3D
+    frame's members nearly all carry some compatibility torsion). Round-off below a
+    millionth of the member's other actions (moments, and forces times the section's
+    depth) is not torsion."""
+    t = float(np.max(np.abs(forces[:, 3]))) if len(forces) else 0.0
+    scale = max(float(np.max(np.abs(forces[:, [4, 5]]))),
+                float(np.max(np.abs(forces[:, :3]))) * max(p.d, 1e-3))  # fmt: skip
+    if t > 1e-9 and t > 1e-6 * scale:
+        name = getattr(code.torsion, "__module__", "").rsplit(".", 1)[-1]
+        why = {"aisc370": "AISC 370's torsion (G8, G9) isn't built",
+               "adm": "the ADM's torsion (H.2) isn't built"}.get(
+            name, f"AISC 360 checks torsion of HSS only (H3.1), not of a {p.kind} shape "
+            "(Design Guide 9)")  # fmt: skip
+        return f"it carries a torque of {t:.4g} N·m, which is in none of these checks: {why}"
+    return None
+
+
 def check_member(p, steel, design, length: float, s, forces, method: str, code=aisc360) -> dict:
     """Every limit state against one step's forces along a member: the checks with their
     demand, available strength, ratio, station and clause, and the governing one."""
@@ -254,7 +275,12 @@ def check_member(p, steel, design, length: float, s, forces, method: str, code=a
         k = int(np.argmax(np.abs(vy)))
         add("shear along the flanges", vy_s, abs(vy[k]), s[k])
     tor = code.torsion(p, steel, length)
-    if tor is not None:
+    warnings = []
+    if tor is None:  # ADR-6: torsion the code here can't check is said, not ignored
+        warning = unchecked(p, forces, code)
+        if warning:
+            warnings.append(warning)
+    else:
         k = int(np.argmax(np.abs(t)))
         add("torsion", tor, abs(t[k]), s[k])
     # interaction at every station
@@ -276,7 +302,7 @@ def check_member(p, steel, design, length: float, s, forces, method: str, code=a
                    "demand": float(ratios[k]), "available": 1.0, "ratio": float(ratios[k]),
                    "at_m": float(s[k])})  # fmt: skip
     governing = max(checks, key=lambda c: c["ratio"])
-    return {"checks": checks, "governing": governing}
+    return {"checks": checks, "governing": governing, "warnings": warnings}
 
 
 def member_checks(project, comp, mesh, res, member: str | None = None,
@@ -320,7 +346,7 @@ def member_checks(project, comp, mesh, res, member: str | None = None,
                 skipped.append({**row, "reason": str(exc)})
                 continue
             group = f"{part}/{m.name}"
-            per_step, worst = [], None
+            per_step, worst, warned = [], None, []
             length = ln.length(m)
             for k, st in enumerate(steps, start=1):
                 s, forces = stations(mesh, st, group, ln.nodes[m.i], ln.nodes[m.j])
@@ -340,6 +366,7 @@ def member_checks(project, comp, mesh, res, member: str | None = None,
                         "available": allowed, "ratio": delta / allowed, "at_m": None})  # fmt: skip
                     result["governing"] = max(result["checks"], key=lambda c: c["ratio"])
                 label = st.label() if st.kind == "combination" else "static"
+                warned += [w for w in result["warnings"] if w not in warned]
                 per_step.append({"step": k, "label": label, **result})
                 g = result["governing"]
                 if worst is None or g["ratio"] > worst["ratio"]:
@@ -349,7 +376,7 @@ def member_checks(project, comp, mesh, res, member: str | None = None,
             out.append({**row, "section": p.designation, "code": CODES[code],
                         "method": design.method, "ratio": worst["ratio"] if worst else 0.0,
                         "passes": bool(worst is None or worst["ratio"] <= 1.0),
-                        "governing": worst, "steps": per_step})  # fmt: skip
+                        "governing": worst, "warnings": warned, "steps": per_step})  # fmt: skip
     out.sort(key=lambda r: -r["ratio"])
     return {"members": out, "not_checked": skipped,
             "worst": out[0]["member"] if out else None}  # fmt: skip

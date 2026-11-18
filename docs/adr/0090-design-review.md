@@ -188,7 +188,7 @@ to read first; it holds the reproduction, the fix and the test for every ID. Wor
 | 6 | **CalculiX and Code_Aster accuracy.** The `.frd` tag past 9,899 increments; `.dat`/`.frd` matched by index, not time; harmonic ranges as listed frequencies; springs that do not turn with the node; set-name collisions; compression-only normals from the face, not the model centre; plastic strain without thermal strain; modal counts that split a pair. | CCX-1, CCX-3, CCX-4, CCX-7, CCX-8, CCX-11, CCX-12, CCX-14, CCX-15, COMMON-1 to 3, ASTER-3, ASTER-4 | `adapters-calculix-aster.md` | Each finding's test passes; the bolt benchmarks still match to their tolerances over two steps |
 | 7 | **Elmer, FEniCSx and eddy currents.** Output counts asserted against expected times; `sif_edit` and tables; `match_points` on coincident nodes; `Factored` on SciPy; zero-current coils; the SciPy backend run in CI. | ELMER-1, ELMER-2, ELMER-4, ELMER-5, FENICS-2, FENICS-5, EDDY-2, COMMON-1e, the "to check" list | `adapters-elmer-fenicsx.md` | A transient with `output_every = 2` returns the right times on all four FE solvers |
 | 8 | **CFD, explicit and frames.** OpenFOAM's wall flux with the effective diffusivity, and cell matching by cell id or true centroid; Code_Saturne's outlet level and `TurbVisc`; Radioss names escaped; a displacement without an amplitude refused or ramped in explicit steps; shell stress named for what it is; PyNite's offset area; benchmarks for what OpenCourant claims. | OF-1, OF-2, OF-4, CS-1 to CS-3, OC-1, OC-2, OC-4 to OC-7, PYN-1 to PYN-3, ADR-64 | `adapters-cfd-explicit-frames.md` | The heated turbulent channel balances energy on both CFD solvers within the benchmark's tolerance |
-| 9 | **Engineering checks within their scope.** Fatigue passes the steel flag (non-steels need an S-N curve); weld strength and fatigue chosen by base metal, PJP without the directional increase; torsion refused where unchecked; the weak-spring warning against the body's own load; Netgen refuses conflicting sizes; a selection that lost members refuses the run; adaptivity refused on meshes it cannot estimate, and `--delete-passes` keeps results when a pass fails. | ADR-2 to ADR-6, ADR-45, ADR-46, ADR-50, ADR-62, ADR-E-9, ADR-E-14, ADR-E-15, PYN-2 | `adr-conformance.md`, `adr-early.md` | Each has a unit test from a hand calculation or a refusal test |
+| 9 | **Engineering checks within their scope.** Fatigue passes the steel flag (non-steels need an S-N curve); weld strength and fatigue chosen by base metal, PJP without the directional increase; torsion warned of where unchecked; the weak-spring warning against the body's own load; Netgen refuses conflicting sizes; a selection that lost members refuses the run; adaptivity refused on meshes it cannot estimate, and `--delete-passes` keeps results when a pass fails. | ADR-2 to ADR-6, ADR-45, ADR-46, ADR-50, ADR-62, ADR-E-9, ADR-E-14, ADR-E-15, PYN-2 | `adr-conformance.md`, `adr-early.md` | Each has a unit test from a hand calculation or a refusal test |
 | 10 | **GUI correctness.** One quantity-entry helper used by every form (the unit shown for bare numbers, a dimension check, no rewrite of untouched values); an error boundary per panel in `refresh`; plain messages from `details["errors"]`; Delete and Ctrl+Z scoped to the focused panel; picks, probes on mirrored copies, stale tool panels, selection kept across relabels; the menu fuzz kept as a test, with dialogs cancelled and accepted. | GUI-1 to GUI-18, GUI-23 to GUI-30, PANEL-1 to PANEL-34 | `gui-core-bugs.md`, `gui-panels-bugs.md` | The fuzz passes on both examples; a unit switch never changes a stored value |
 | 11 | **Usability.** In the reviewer's order: the Geometry tab's 1597 px minimum; a load on a picked face with its values inline; "New analysis…"; an Edit menu with Redo; the Advisor following the shown study; Properties' Advanced fold; then the command table and the Model ribbon; onboarding (an example on the start page, a dropped STEP file, display units that read as MPa and mm by default). | UX-1 to UX-38 | `gui-usability.md` | The core task (STEP to probe and export) is counted again and is under ten steps |
 | 12 | **Agent interface.** Proposal cards with before and after values, a preview and "Show in view"; the selection and the shown result sent as context; the tree and view live during a turn, with what was touched marked; a turn undone as one; conversations kept per project; a plan list; tool groups loaded by skill so a request carries about 25 tools, not 110. | UXA-1 to UXA-15 | `agent-looking-glass.md` | The scripted-provider tests cover each; the prompt is under 8k tokens before the first message |
@@ -568,6 +568,46 @@ earlier; the heated turbulent channel balances energy within 1 % on both solvers
 - Left: Code_Saturne faces outside every selection, `TYPE2 Ignore`, energy-check
   sampling between frames, PyNite beam forces averaged at joints. Found and not fixed:
   `explicit.estimate`'s added mass runs low (0.352 kg predicted, 0.537 kg added).
+
+**Package 9 built (2026-11-17):** engineering checks within their scope. Each test
+failed on the old code and passes now.
+
+- ADR-62: Shigley's endurance-limit estimate (10th ed. Eq. 6-8, "for steels") is used
+  for steels only (`fatigue_tool.is_steel`: a group naming steel, the Fastener group, or
+  an ungrouped material whose name says steel). Another material is refused unless it
+  has an S-N curve or a measured `endurance_limit`, which runs with a warning.
+- ADR-3: a weld's code is chosen by its base metals whatever the filler
+  (`weld_strength.base_metals`): titanium with E80XX had been checked to AISC 360.
+  Uncovered or ungrouped base metals and aluminium to steel are refused; stainless to
+  carbon steel takes AISC 370 with a note.
+- ADR-4: the directional strength increase is for fillet welds only (AISC 360-16
+  J2.4(b)); a PJP groove had taken 1.5. Its φ 0.75 stays, conservative against Table
+  J2.5's 0.80 in tension.
+- ADR-5: weld fatigue by detail category follows the base metal: AISC 360-16 Appendix 3
+  for carbon and low-alloy steel; AISC 370-21 Appendix 3 for stainless, which prints
+  the same Eqs. A-3-1 and A-3-2 and the same Table A-3.1 constants (read from 370-21
+  pp. 166-190 after the maintainer asked, 2026-11-17; first built as a refusal), with
+  its scope (austenitic and duplex, to 150 °C, mildly corrosive) as a note; aluminium
+  is refused toward ASME's method. ASME's curve follows the base metal, with its E.
+- ADR-6: a member carrying a torque its code has no check for keeps its other checks
+  and carries a warning naming the torque (`design.unchecked`, the row's `warnings`;
+  the Members panel marks it, the CLI prints it): stainless, aluminium, and steel
+  shapes other than HSS. First built as "not checked"; the maintainer chose check and
+  warn (2026-11-17), since a 3D frame's members nearly all carry some compatibility
+  torsion. The threshold is a millionth of the member's other actions.
+- ADR-2: the weak-spring warning compares each body's springs, summed node by node,
+  with the force through that body's own contacts (30 N on an unseated cover beside
+  100 kN of reactions gave no warning; nor did a couple on the springs).
+- ADR-E-9: Netgen refuses two sizes on one selection, as Gmsh does.
+- ADR-E-14: a run whose study uses a selection with detached members is refused
+  (`detached_selection`); unused ones still warn.
+- ADR-E-15: a name's anchor holds measure (1e-3) and centre (1e-5 of the model) each to
+  its own tolerance, and exactly one candidate may be within.
+- ADR-45, ADR-46: adaptivity is refused before solving on 2D and non-tetrahedral meshes
+  (it had solved a pass, then failed); `--delete-passes` keeps the last pass that ran.
+- ADR-50: a morph's quality check covers hexahedra, wedges, pyramids and faces by their
+  corner simplices; a coplanar morph (any 2D model) is refused with a reason.
+- Not re-read: AISC 360 H3.1's text for the HSS torsion test.
 
 ### Enhancements toward the state of the art
 

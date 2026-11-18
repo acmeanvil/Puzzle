@@ -76,6 +76,11 @@ Nodes of a contact's source face are also held, or the source of another contact
 
 Lines of history.jsonl don't read: they are skipped.
 
+<!-- key: problem:detached_selection, error:detached_selection -->
+### detached_selection
+
+A selection a study uses lost members when its geometry changed.
+
 <!-- key: problem:duplicate_solver, error:duplicate_solver -->
 ### duplicate_solver
 

@@ -354,3 +354,7 @@ The maintainer's answers:
     - An unknown kind is refused.
 
 This closes the ADR.
+
+## Amended (2026-11-17, ADR 0090 package 9)
+
+A morph's quality check covers hexahedra, wedges, pyramids and faces by their corner simplices; a coplanar morph is refused.

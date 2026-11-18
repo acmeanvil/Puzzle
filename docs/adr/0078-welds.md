@@ -436,3 +436,7 @@ The bracket's moment balances exactly only with the twist: about 7 % of it is th
 4. Modelled welds (sweep, fused, the root parted); the section line force.
 5. Fatigue: AWS D1.x and AISC Appendix 3 categories; VIII-2's structural stress.
 6. Shell edges; the ADM's weld provisions with ADR 0079.
+
+## Amended (2026-11-17, ADR 0090 package 9)
+
+A weld's code is chosen by its base metals whatever the filler: uncovered or ungrouped metals and aluminium to steel are refused, stainless to carbon steel takes AISC 370 with a note. The directional increase is for fillet welds only. Weld fatigue by detail category follows the base metal: AISC 360-16 Appendix 3 for carbon and low-alloy steel, AISC 370-21 Appendix 3 for stainless (austenitic and duplex, to 150 °C; the same Eqs. A-3-1 and A-3-2 and the same Table A-3.1 constants, read from 370-21; the maintainer, 2026-11-17), aluminium refused toward ASME's method; ASME's curve follows the base metal.

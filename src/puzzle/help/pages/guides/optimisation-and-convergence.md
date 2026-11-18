@@ -96,6 +96,10 @@ Right-click the study, Adapt the mesh…: it meshes again where the error is, pa
 pass, until the target. Choose the **Target (%)**, **Judged by** (energy-norm error, or
 the quantities' change between passes), **Elements** (isotropic, or anisotropic with
 MMG for thin layers such as a heat front), and the **Budget** in passes (default 5).
+It takes 3D models meshed with tetrahedra: the error estimate reads nothing else, so a
+2D model or a hexahedral recipe is refused before anything is solved (check those by a
+convergence study). When earlier passes are not kept, the last pass that ran stays,
+even if a later one failed or was stopped.
 
 ## Options worth knowing
 

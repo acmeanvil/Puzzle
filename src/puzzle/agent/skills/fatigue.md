@@ -61,7 +61,11 @@ non-proportional at the critical node.
   compression doesn't count as tension), `max_principal`, or a component `xx`…`zx`.
 - `mean_stress`: `goodman`, `gerber`, `asme_elliptic`, `soderberg`, `smith_dolan`,
   `none`.
-- `life_model`: `shigley` (S-N line from Sut with the Marin factors), `sn_curve` (the
+- `life_model`: `shigley` (S-N line from Sut with the Marin factors; steels only: a
+  material filed under a steel group or as a fastener, or an ungrouped one named
+  steel. Aluminium, titanium, copper and the like are refused with `unsupported`
+  unless `endurance_limit` is given, since S'e = 0.5 Sut is Shigley's estimate for
+  steels and aluminium has no endurance limit: use their S-N curve), `sn_curve` (the
   material's curve named `sn_curve`, else its first), `strain_life` (needs a stored
   `strain` field; no mean-stress correction).
 - Marin factors (Shigley only): `surface` polished, ground, machined, hot_rolled,

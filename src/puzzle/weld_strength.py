@@ -59,61 +59,99 @@ def directional_factor(along: np.ndarray, across: np.ndarray) -> np.ndarray:
     return 1.0 + 0.5 * np.sin(theta) ** 1.5
 
 
-def filler(project, comp, weld) -> tuple[str, float, str]:
-    """(name, F_EXX in Pa, code) of the weld's filler, or a ValueError saying why none."""
-    from puzzle.model.schema import Material
+# The base metals' groups the weld codes here cover (ADR 0078 decision 5).
+KINDS = {"Carbon Steel": "steel", "Low Alloy Steel": "steel", "Stainless Steel": "stainless",
+         "Aluminium": "aluminium", "Aluminum": "aluminium"}  # fmt: skip
 
-    groups, bases = set(), []
+
+def base_metals(project, comp, weld) -> tuple[str, list, str | None]:
+    """(code, base materials, note) of the weld's base metals: AISC 360 J2 for carbon and
+    low-alloy steel, AISC 370 J2 for stainless, the ADM for aluminium; a ValueError for
+    any other or ungrouped base metal, whatever the filler (ADR-3), and for aluminium
+    welded to steel, which no code here covers. A stainless-to-carbon weld takes 370's
+    rules and the note says so (decision 5: the weaker's rules, said)."""
+    bases, kinds, outside = [], set(), []
     for face in weld.faces:
         part = face.split("/", 1)[0]
         for a in comp.materials:
             if a.selection.split("/", 1)[0] == part:
                 m = project.objects.get(a.material)
-                groups.add((getattr(m, "info", None) or {}).get("group", "") or "")
+                group = (getattr(m, "info", None) or {}).get("group", "") or ""
                 bases.append(m)
-    code = ("AISC 370-21 J2" if groups & set(STAINLESS) else ADM if groups & set(ALUMINIUM)
-            else "AISC 360-16 J2")  # fmt: skip
+                if group in KINDS:
+                    kinds.add(KINDS[group])
+                else:
+                    outside.append(f"{getattr(m, 'name', '?')} ({group or 'no group'})")
+    if not bases:
+        raise ValueError(f"weld '{weld.name}': its parts have no materials")
+    if outside:
+        raise ValueError(f"weld '{weld.name}': AISC 360/370 J2 and the ADM cover carbon and "
+                         "low-alloy steel, stainless and aluminium base metals, not "
+                         f"{', '.join(dict.fromkeys(outside))}")  # fmt: skip
+    if "aluminium" in kinds and kinds != {"aluminium"}:
+        raise ValueError(f"weld '{weld.name}': aluminium welded to steel is covered by no "
+                         "weld code here")  # fmt: skip
+    if "stainless" in kinds:
+        note = ("a stainless-to-carbon steel weld: checked by AISC 370's rules for both "
+                "base metals" if "steel" in kinds else None)  # fmt: skip
+        return "AISC 370-21 J2", bases, note
+    if "aluminium" in kinds:
+        return ADM, bases, None
+    return "AISC 360-16 J2", bases, None
+
+
+def filler(project, comp, weld) -> tuple[str, float, str]:
+    """(name, F_EXX in Pa, code) of the weld's filler, or a ValueError saying why none."""
+    from puzzle.model.schema import Material
+
+    code, bases, _note = base_metals(project, comp, weld)
     if weld.filler is not None:
         m = project.objects.get(weld.filler)
         if not isinstance(m, Material) or "tensile_strength" not in m.properties:
             raise ValueError(f"weld '{weld.name}': its filler has no tensile strength (F_EXX)")
         return m.name, m.properties["tensile_strength"].to_si(), code
-    if groups & set(STAINLESS):
+    if code == "AISC 370-21 J2":
         names = " ".join((getattr(m, "name", "") or "").lower() for m in bases
                          if (getattr(m, "info", None) or {}).get("group") in STAINLESS)  # fmt: skip
         filler = next(f for key, f in STAINLESS_MATCHING if key in names)
         return filler, STAINLESS_FEXX[filler], code
-    if groups & set(ALUMINIUM):
+    if code == ADM:
         return "ER4043", ALUMINIUM_FILLERS["4043"], ADM
-    for g in groups:
-        if g in MATCHING:
-            name, fexx = MATCHING[g]
-            return name, fexx, "AISC 360-16 J2"
-    raise ValueError(f"weld '{weld.name}': no filler given and no matching one for its base "
-                     f"metal ({', '.join(sorted(g for g in groups if g)) or 'none'})")  # fmt: skip
+    name, fexx = MATCHING["Carbon Steel"]
+    return name, fexx, code
 
 
-def check(weld, fexx: float, along, across, magnitude, directional: bool = False) -> dict:
+def check(weld, fexx: float, along, across, magnitude, directional: bool = False,
+          code: str = "AISC 360-16 J2") -> dict:  # fmt: skip
     """The J2 check at each station: capacity per length (N/m) for LRFD and ASD, and the
-    utilisations; the governing station's index."""
+    utilisations; the governing station's index. The directional increase (J2.4(b),
+    Eq. J2-5) is for fillet welds only, in 360-16 and 370-21 alike, so a PJP groove
+    weld is checked at 0.60 F_EXX whatever `directional` says; its φ 0.75 and Ω 2.00
+    are Table J2.5's for shear, on the safe side of its 0.80 and 1.88 in tension."""
     if weld.type == "groove" and weld.groove == "cjp":
         return {"checked": False, "why": "a CJP groove weld's strength is its base metal's "
                 "(AISC 360 J2.5, Table J2.5): check the base metal"}  # fmt: skip
     t_e = throat(weld)
-    factor = directional_factor(np.asarray(along), np.asarray(across)) if directional else 1.0
+    increase = directional and weld.type == "fillet"
+    factor = directional_factor(np.asarray(along), np.asarray(across)) if increase else 1.0
     nominal = 0.60 * fexx * factor * t_e * np.ones(len(magnitude))
     q = np.abs(np.asarray(magnitude, float))
     lrfd, asd = q / (PHI * nominal), q / (nominal / OMEGA)
     at = int(np.argmax(lrfd))
-    return {
+    spec = code.removesuffix(" J2")
+    out = {
         "checked": True,
         "throat_m": t_e,
         "nominal_N_per_m": nominal,
         "utilisation_lrfd": lrfd,
         "utilisation_asd": asd,
         "governing": at,
-        "clause": "AISC 360-16 J2.4, Eq. J2-5" if directional else "AISC 360-16 J2.4, Eq. J2-3",
+        "clause": f"{spec} J2.4, Eq. J2-5" if increase else f"{spec} J2.4, Eq. J2-3",
     }
+    if directional and not increase:
+        out["note"] = ("the directional increase (J2.4(b), Eq. J2-5) is for fillet welds: "
+                       "this groove weld is checked without it")  # fmt: skip
+    return out
 
 
 # --- the instantaneous centre of rotation (AISC 360-10 J2.4(b), the Manual's Part 8) ----

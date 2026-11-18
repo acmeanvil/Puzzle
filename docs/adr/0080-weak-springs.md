@@ -170,3 +170,7 @@ point elements with `K_T_D_N` on one-node groups. Both serve `elastic_support` a
   slides off.
 - **Leaving it to the user:** this is today's state. The checks already know which bodies
   need holding, so not acting on it leaves work the program can do.
+
+## Amended (2026-11-17, ADR 0090 package 9)
+
+The share that raises the warning is per body: its springs' forces summed node by node, against the force through that body's own contacts (the supports' reactions where there are no contact results).

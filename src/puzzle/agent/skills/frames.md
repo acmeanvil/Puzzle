@@ -141,7 +141,12 @@ a solid joint are other skills.
 
 Sections checked: doubly symmetric I-shapes (W, M, S, HP, IPE, HE, UB, UC), rectangular
 and round HSS and pipe, and Puzzle's box, tube, rectangle and circle. Channels, tees,
-angles and double angles are listed under `not_checked` with the reason.
+angles and double angles are listed under `not_checked` with the reason. A member
+carrying a torque its code doesn't check (steel I shapes: Design Guide 9's; stainless
+G8/G9 and the ADM's H.2 aren't built; torsion is checked on steel HSS only) keeps its
+other checks and gets a line in its `warnings` with the torque: its ratio leaves the
+torsion out, so say so and judge the torque by hand. Round-off below a millionth of the
+member's other actions is not counted as a torque.
 
 ## Mistakes to avoid
 

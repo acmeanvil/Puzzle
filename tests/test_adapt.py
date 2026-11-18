@@ -166,3 +166,44 @@ def test_the_energy_criterion_stops_at_once_on_a_field_with_no_energy_norm():
     why = adapt._done(a, [adapt.Pass(1, run="r1")])
     assert why.startswith("stopped:") and "quantity criterion" in why
     assert adapt._done(Adapt(), [adapt.Pass(1)]) == ""  # not run yet: nothing to judge
+
+
+def test_a_failed_pass_leaves_the_last_pass_that_ran(tmp_path):
+    """ADR-46: with keep_passes off, a pass that fails (or is stopped) has no run; the
+    passes before it are the results, so the last of them is kept, not deleted."""
+    from puzzle.errors import PuzzleError
+
+    p, study = project()
+    store = Store()
+    ok = stand_in(store)
+
+    def second_fails(project, study_id, root, workdir, **kw):
+        if store.records:
+            raise PuzzleError("CalculiX stopped", code="solver_failed")
+        return ok(project, study_id, root, workdir, **kw)
+
+    out = adapt.run(p, study, tmp_path, tmp_path / "w", store=store,
+                    settings=Adapt(target=0.01, passes=3, keep_passes=False),
+                    solve=second_fails)  # fmt: skip
+    assert "pass 2 failed" in out.ended and not out.passes[1].run
+    assert [r.run_id for r in store.records] == [out.passes[0].run]
+
+
+def test_meshes_the_estimate_cannot_read_are_refused_before_solving(tmp_path):
+    """ADR-45: the ZZ estimate and the size field read tetrahedra only, so a 2D model or
+    a hexahedral recipe is refused before pass 1 is solved, not after."""
+    from puzzle.errors import PuzzleError
+
+    def never(*_a, **_k):
+        raise AssertionError("solved")
+
+    p, study = project()
+    comp = p.get(study.component, Component)
+    comp.dimension = "2d_planar"
+    with pytest.raises(PuzzleError, match="is 2D") as err:
+        adapt.run(p, study, tmp_path, tmp_path / "w", store=Store(), solve=never)
+    assert err.value.code == "unsupported"
+    comp.dimension = "3d"
+    p.get(comp.mesh, MeshRecipe).element_shape = "hexahedra"
+    with pytest.raises(PuzzleError, match="meshes hexahedra"):
+        adapt.run(p, study, tmp_path, tmp_path / "w", store=Store(), solve=never)

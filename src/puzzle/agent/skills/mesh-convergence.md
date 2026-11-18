@@ -82,7 +82,11 @@ uniform refinement.
 - Settings live in the study's `adapt`: target, criterion, quantities, passes,
   max_elements, keep_passes.
 - Each pass is a stored run, `adapt: pass k`. The last pass is the result.
-- Earlier passes are kept unless `keep_passes` is false.
+- Earlier passes are kept unless `keep_passes` is false; then the last pass that ran
+  stays, even when a later one failed or was stopped.
+- 3D tetrahedral meshes only: a 2D model or a hexahedral recipe is refused
+  (`unsupported`) before pass 1, since the estimate and the size field read tetrahedra
+  only. Use `mesh_convergence` for those.
 - Netgen refines through its size file, more slowly than Gmsh.
 - `method` "anisotropic" remeshes with MMG along the field's Hessian. Elements
   stretch along thin layers (a heat front, a boundary or shear layer in flow, a thin

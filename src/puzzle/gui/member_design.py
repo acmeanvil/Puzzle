@@ -219,10 +219,13 @@ class MemberTable(QWidget):
                                            store.read_results(run_id))  # fmt: skip
                 skipped = [f"{m['member']}: {m['reason']}" for m in self.found["not_checked"]]
                 failing = sum(not m["passes"] for m in self.found["members"])
+                warned = sum(bool(m.get("warnings")) for m in self.found["members"])
                 self.note.setText(
                     f"AISC 360-16, worst first: {failing} of {len(self.found['members'])} "
-                    "members over 1." + (f" Not checked: {'; '.join(skipped)}." if skipped
-                                         else ""))  # fmt: skip
+                    "members over 1."
+                    + (f" {warned} carry a torque that isn't checked (marked ⚠; hover for "
+                       "why)." if warned else "")
+                    + (f" Not checked: {'; '.join(skipped)}." if skipped else ""))  # fmt: skip
             except Exception as exc:  # the model changed since the run, or no frame
                 self.note.setText(f"These members can't be checked from this run: {exc}")
         rows = self.found["members"]
@@ -230,7 +233,9 @@ class MemberTable(QWidget):
         for r, m in enumerate(rows):
             g = m["governing"] or {}
             at = g.get("at_m")
-            cells = [m["member"], m["section"], f"{m['ratio']:.3f}", g.get("check", ""),
+            warnings = m.get("warnings") or []
+            cells = [m["member"] + (" ⚠" if warnings else ""), m["section"],
+                     f"{m['ratio']:.3f}", g.get("check", ""),
                      g.get("clause", ""), g.get("label", ""),
                      "" if at is None else self._length(at)]  # fmt: skip
             for c, text in enumerate(cells):
@@ -240,6 +245,9 @@ class MemberTable(QWidget):
                     bold.setBold(True)
                     item.setFont(bold)
                     item.setToolTip("over its available strength")
+                if warnings:
+                    item.setToolTip("; ".join(
+                        ([item.toolTip()] if item.toolTip() else []) + warnings))  # fmt: skip
                 self.table.setItem(r, c, item)
         self.table.resizeColumnsToContents()
         if rows:

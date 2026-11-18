@@ -210,8 +210,18 @@ def distance(a: list, b: list, size: float) -> float:
 
 
 # What counts as "the same entity" without a name: measure within 0.1%, centre within
-# 1e-5 of the model size (re-exports differ in the last digits, not more).
-SAME = 1e-3 + 1e-5
+# 1e-5 of the model size (re-exports differ in the last digits, not more), each on its
+# own (G3; their sum let a centre stray 1e-3 of the model, ADR-E-15).
+SAME_MEASURE, SAME_CENTRE = 1e-3, 1e-5
+
+
+def same(a: list, b: list, size: float) -> bool:
+    """Whether two anchors are one entity: same kind, measure within 0.1 %, centre
+    within 1e-5 of the model size."""
+    if a[0] != b[0]:
+        return False
+    dm = abs(a[1] - b[1]) / max(abs(a[1]), abs(b[1]), 1e-300) if (a[1] or b[1]) else 0.0
+    return dm <= SAME_MEASURE and math.dist(a[2:5], b[2:5]) <= SAME_CENTRE * size
 
 
 @dataclass
@@ -347,7 +357,7 @@ def resolve_one(sel, named: Named, aliases: dict[str, str] | None = None) -> Sel
         mark = sel.anchors.get(m)
         current = m if m in names else aliases.get(m)
         if current in names and not (
-            mark and POSITIONAL.search(m) and distance(mark, sig(current), named.size) > SAME
+            mark and POSITIONAL.search(m) and not same(mark, sig(current), named.size)
         ):
             members.append(Member(m, "kept", current))
             taken.add(current)
@@ -361,8 +371,9 @@ def resolve_one(sel, named: Named, aliases: dict[str, str] | None = None) -> Sel
         )
         ranked = [(n, d) for n, d in ranked if math.isfinite(d)][:5]
         best = ranked[0] if ranked else None
-        unique = best and (len(ranked) < 2 or ranked[1][1] > 10 * max(best[1], 1e-12))
-        if best and best[1] <= SAME and unique and best[0] not in taken:
+        # exactly one entity of the same kind within both tolerances (G3)
+        within = [n for n, _d in ranked if same(mark, sig(n), named.size)]
+        if best and within == [best[0]] and best[0] not in taken:
             members.append(Member(m, "refound", best[0], ranked))
             taken.add(best[0])
         else:
