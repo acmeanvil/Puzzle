@@ -23,6 +23,13 @@ build:
       - if: unix
         then: rm -rf _skbuild
         else: if exist _skbuild rmdir /s /q _skbuild
+      # conda-forge's gcc activation (16.2.0 build 3) names ar, ranlib and the rest
+      # in CMAKE_ARGS without a folder, and CMake runs a -DCMAKE_AR as given: "Error
+      # running link command: no such file or directory". Give them their folder back.
+      - if: linux
+        then: >-
+          export CMAKE_ARGS="$(echo "$CMAKE_ARGS" |
+          sed -E "s#=([a-z0-9_]+-conda-linux-gnu-[a-z+-]+)#=$BUILD_PREFIX/bin/\1#g")"
       - ${{ PYTHON }} -m pip install . -vv --no-deps --no-build-isolation
 
 requirements:
