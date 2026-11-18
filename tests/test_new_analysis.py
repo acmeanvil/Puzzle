@@ -52,6 +52,7 @@ def test_one_batch_makes_a_runnable_static_analysis(bar):
 def test_the_mesh_size_comes_from_the_part(bar):
     """The bar (200 x 10 x 10 mm) has a 200.5 mm diagonal: 20 elements across it is
     10.02 mm, rounded down to 10; 10 is 20.05, 40 is 5.01."""
+    pytest.importorskip("OCP")  # without it the size is the default
     from puzzle.model.schema import Geometry
 
     geo = bar.project.of_type(Geometry)[0]

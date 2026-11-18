@@ -208,10 +208,22 @@ def test_a_cancel_stops_the_remote_run(tmp_path, fakes):
     assert job.cancelled
     pid = int(started.read_text(encoding="utf-8"))
     time.sleep(0.5)
-    import os
+    import subprocess
 
-    with pytest.raises(ProcessLookupError):  # the remote solver is gone, not orphaned
-        os.kill(pid, 0)
+    def ps(*what):
+        return subprocess.run(["ps", "-o", "pid=,ppid=,pgid=,sid=,stat=,args=", *what],
+                              capture_output=True, text=True).stdout.strip()  # fmt: skip
+
+    # The remote solver is gone, not orphaned: no such process, or one that has ended
+    # and waits to be collected (a zombie still answers kill -0).
+    state = ps("-p", str(pid))
+    there = started.parent
+    assert not state or state.split()[4].startswith("Z"), {
+        "solver": state,
+        "pgid file": (there / "puzzle-run.pgid").read_text(encoding="utf-8"),
+        "driver": (there / "puzzle-run.pid").read_text(encoding="utf-8"),
+        "all": ps("-e"),
+    }
 
 
 @needs_rsync
