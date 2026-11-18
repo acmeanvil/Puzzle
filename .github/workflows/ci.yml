@@ -39,7 +39,11 @@ jobs:
       - uses: prefix-dev/setup-pixi@v0.8.1
         with:
           environments: dev calculix fenicsx
+      # The `heavy` solves are left out here (tests/conftest.py): two files took 170 of the
+      # job's 240 minutes on these machines. Run them by name through Run workflow.
       - if: inputs.tests == ''
+        env:
+          PUZZLE_SKIP_HEAVY: "1"
         run: pixi run -e dev check
       # FEniCSx's SciPy path (Windows' dolfinx has no PETSc) once more on Linux, one test
       # file per physics, so the two linear-algebra paths can't drift (ADR 0090 FENICS-2:

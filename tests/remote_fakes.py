@@ -33,8 +33,12 @@ target="$1"; shift
 cd "$FAKE_REMOTE_HOME" || exit 255
 export HOME="$FAKE_REMOTE_HOME"
 export PATH="$FAKE_BIN:$PATH"
-# a session of its own, as sshd starts a remote command
-exec "$FAKE_PYTHON" -c 'import os, sys; os.setsid(); os.execvp("sh", ["sh", "-c", sys.argv[1]])' "$*"
+# a session of its own, as sshd starts a remote command (it has one already when Puzzle
+# started ssh as a process group's leader: setsid then fails with EPERM)
+exec "$FAKE_PYTHON" -c 'import os, sys
+if os.getpid() != os.getpgrp():
+    os.setsid()
+os.execvp("sh", ["sh", "-c", sys.argv[1]])' "$*"
 """
 
 RSYNC = r"""#!/bin/sh

@@ -158,6 +158,7 @@ def test_a_washer_goes_under_the_head(tmp_path):
     assert not [g for g in s.project.of_type(Geometry) if "washer" in g.name]
 
 
+@pytest.mark.heavy
 @over("calculix")
 @pytest.mark.parametrize("washers", ["none", "head"])
 def test_the_preloaded_shank_carries_its_preload(tmp_path, solver, washers):

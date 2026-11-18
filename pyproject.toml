@@ -62,6 +62,9 @@ packages = ["src/puzzle"]
 testpaths = ["tests"]
 # SWIG bindings (py-slvs, the sketch solver) predate Python 3.12's module checks.
 filterwarnings = ["ignore:builtin type .* has no __module__ attribute:DeprecationWarning"]
+markers = [
+    "heavy: solves that take over an hour on GitHub's machines; skipped with PUZZLE_SKIP_HEAVY=1 (CI)",
+]
 
 [tool.ruff]
 line-length = 100

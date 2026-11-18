@@ -48,6 +48,7 @@ def test_single_spring_follows_almen_laszlo(tmp_path, solver):
     assert error.max() < 0.12
 
 
+@pytest.mark.heavy
 @over("calculix")
 def test_stacked_springs_follow_the_single_one(tmp_path, solver):
     one_s, one_f = _run(tmp_path / "single", solver, "single")

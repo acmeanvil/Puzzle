@@ -327,3 +327,16 @@ def pytest_runtest_makereport(item, call):
         report.outcome = "skipped"
         report.longrepr = (str(item.path), item.location[1] or 0,
                            f"Skipped: needs {name} ({OPTIONAL[name]})")  # fmt: skip
+
+
+def pytest_collection_modifyitems(config, items):
+    """CI leaves out the `heavy` solves (PUZZLE_SKIP_HEAVY=1): on GitHub's machines, with
+    conda-forge's CalculiX on a few cores, the Belleville stacks took 88 minutes and the
+    modelled bolts 83, and the whole run no longer fitted its four hours (measured
+    2026-11-17). `pixi run -e dev check` on a workstation still runs them."""
+    if os.environ.get("PUZZLE_SKIP_HEAVY") != "1":
+        return
+    skip = pytest.mark.skip(reason="heavy: left out on CI (PUZZLE_SKIP_HEAVY=1)")
+    for item in items:
+        if "heavy" in item.keywords:
+            item.add_marker(skip)
