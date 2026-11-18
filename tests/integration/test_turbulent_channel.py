@@ -47,6 +47,15 @@ RE = RHO * U * H / MU
 # guess. Measured 2026-11-17: Code_Saturne k-epsilon −9.8 %, SST +16.9 %; OpenFOAM
 # k-epsilon −0.2 %, SST +22.7 %.
 TURBULENT_VISCOSITY = 0.3
+# dp/dx against Dean's correlation: wall functions at Re 1e5 read the friction low
+# (CLAUDE.md's adapter table). Measured 2026-11-18 (ADR 0090 package 15): Code_Saturne
+# k-epsilon -7.03 %, SST -3.17 %; OpenFOAM k-epsilon -6.45 %, SST -8.21 %; held just past.
+DEAN_FRICTION = {
+    ("code_saturne", "k-epsilon"): 0.075,
+    ("code_saturne", "k-omega-SST"): 0.035,
+    ("openfoam", "k-epsilon"): 0.07,
+    ("openfoam", "k-omega-SST"): 0.087,
+}
 
 
 def _project(tmp_path, model, solver):
@@ -160,7 +169,7 @@ def test_turbulent_channel(tmp_path, model, solver):
         f"{solver} {model}: Re {RE:.0f}, dp/dx {dpdx:.2f} Pa/m (Dean {dean:.2f}), "
         f"Uc/U {ratio:.4f} (Dean {dean_ratio:.4f})"
     )
-    assert dpdx == pytest.approx(dean, rel=0.10)
+    assert dpdx == pytest.approx(dean, rel=DEAN_FRICTION[solver, model])
     assert ratio == pytest.approx(dean_ratio, rel=0.03)
     # ADR 0090 CS-2: Code_Saturne 9.2 names it TurbVisc, which was never read. Against
     # the log law with the stress linear across the half height δ: ν_t = κ u_τ y (1 − y/δ),

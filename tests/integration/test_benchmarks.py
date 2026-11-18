@@ -62,6 +62,32 @@ def test_cantilever_tip_force(tmp_path, solver):
     assert root_stress.values.shape[1] == 6
 
 
+@over("elmer", "code_aster", "fenicsx")
+def test_the_same_mesh_gives_calculix_tip_deflection(tmp_path, solver):
+    """CLAUDE.md's adapter table: Elmer "agrees with CalculiX to 4 digits" (ADR 0090
+    package 15: no test said so). The cantilever meshed once (Gmsh is deterministic in a
+    process), solved by CalculiX and by the other solver: quadratic tetrahedra both.
+    Measured 2026-11-18: Elmer +2.20e-7, Code_Aster and FEniCSx +2.21e-7."""
+    if not available("calculix"):
+        pytest.skip("needs CalculiX for the reference")
+    load = Feature(
+        type="force", selection="Bar/Tip", values={"y": Quantity(value=-FORCE, unit="N")}
+    )
+    physics = [
+        Physics(
+            type="solid_mechanics", features=[Feature(type="fixed", selection="Bar/Root"), load]
+        )
+    ]
+    for sub in ("ccx", solver):
+        (tmp_path / sub).mkdir()
+    ccx = _tip_deflection(_run(tmp_path / "ccx", physics, [SolveStep(type="stationary")],
+                               "calculix"))  # fmt: skip
+    got = _tip_deflection(_run(tmp_path / solver, physics, [SolveStep(type="stationary")],
+                               solver))  # fmt: skip
+    print(f"{solver}: tip {got:.7g} m, CalculiX {ccx:.7g} m, {got / ccx - 1:+.2e}")
+    assert got == pytest.approx(ccx, rel=1e-5)
+
+
 @solver
 def test_cantilever_tip_traction_as_pressure_on_a_side_face(tmp_path, solver):
     # The same resultant applied as pressure on the top face near the tip would differ;
@@ -227,9 +253,11 @@ def _bar_temperature(x, t, alpha, t0=293.15, t1=373.15, terms=200):
 @solver
 def test_transient_conduction_matches_the_series_solution(tmp_path, solver):
     errors = _transient_errors(tmp_path, solver, {})
-    # Within 1 % of the 80 K step everywhere: backward Euler measured 0.346 K at 300 s on
-    # all four solvers (2026-11-15), its O(dt) error.
-    assert max(errors) < 0.01 * 80
+    print(f"{solver}: largest error against the series at END/2, END: {errors} K")
+    # Backward Euler's O(dt) error, 0.346 K of the 80 K step at 300 s on all four solvers
+    # (2026-11-15; 2026-11-18: CalculiX 0.3464, Elmer 0.3460, Code_Aster and FEniCSx
+    # 0.3457 K, and 0.143 K at 600 s), as CLAUDE.md quotes: held to 0.36 K.
+    assert max(errors) < 0.36
 
 
 def _scheme_cases():

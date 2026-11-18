@@ -901,6 +901,54 @@ studies, ten chains of number → result summary → check, a formula).
   one clock tick (as `files.py` already does); delta-rs's writer is bypassed for fields,
   to recheck on a deltalake upgrade.
 
+**Package 15 built (2026-11-18):** Verification on CI. A local run of the whole
+integration suite, heavy solves included, on the maintainer's machine (CalculiX native
+with PARDISO, PyNite native, the others in their images): 927 passed, 9 skipped, 1
+failed (a test file read before its expectation was updated; it passes).
+
+- (f), ADR-43: `.github/workflows/solvers.yml`, weekly and by hand, a job per solver on
+  Linux: Code_Aster from its pixi environment, Elmer, Code_Saturne and OpenFOAM in
+  images built from `containers/` and kept in the Actions cache by a hash of their
+  folder, the CFD shoot-out, OpenCourant from its pinned image, and CalculiX's `heavy`
+  solves with a PARDISO CalculiX built on the runner. A job refuses to start unless
+  every solver it is for answers (`tests/solvers.py` `available`) and fails when one
+  goes missing during the run. PyNite is installed by the per-push CI and by `check`.
+  Not yet seen to run on GitHub when this was written.
+- A benchmark per claim, or the claim removed. New: a surface charge on Elmer and
+  FEniCSx against Gauss's law (potential within 4.9e-7 V); half a wire on a magnetic
+  symmetry plane giving the whole wire's field (mean 1.34 %, the whole wire's own
+  tolerances); a convection wall on Code_Saturne against the bulk temperature's decay
+  rate (−9.868 /m against −9.841 to −9.919, held to 1 %); one mesh solved by all four
+  FE solvers, the others' tip deflection against CalculiX's (2.2e-7, held to 1e-5: the
+  "4 digits" the adapter table gave had no test). Removed: the body-temperature field
+  feature on Code_Saturne, OpenFOAM and PyNite, which came from `Capabilities`' default
+  and which all three refuse.
+- ADR-65: every solver's element rows marked written are checked against what its
+  writer names (`tests/test_elements.py`; CalculiX and Code_Aster were, now Elmer,
+  FEniCSx, PyNite and OpenCourant). It found Elmer's wedges (706/715) starred and
+  refused by its mesh writer; the star is gone.
+- Tolerances at the figures quoted, measured 2026-11-18: LE1 0.05 % on CalculiX and
+  Code_Aster (−0.001 %, +0.006 %) and 0.15 % on Elmer and FEniCSx (−0.126 %, −0.116 %);
+  transient heat 0.36 K (0.346); the laminar channel 0.3 %, 0.3 % and 1.2 % (−0.226 %,
+  0.210 %, −0.947 % on both CFD solvers); the heated channel 0.6 % and 0.1 % (−0.5 %,
+  0.02 %); the turbulent channel per solver and model 7.5, 3.5, 7.0 and 8.7 %; the
+  temperature front 0.6 % (0.53 %); OpenCourant's wave 0.4 %, wall 3 %, cantilever
+  0.4 %.
+- CI's weld failures had causes in the code. A PJP groove's open root is a crack, and
+  its section was cut a twentieth of the groove's depth from the joint and clipped at
+  the tip: −6796 to −10160 N of 10 kN over meshes of 1.5 to 3 mm. It is now cut three
+  elements in over the whole section behind the joint's face: −9974 to −10043 N, held to
+  1 % (CJP 0.1 %). A light weld's couplings sat at each station's own pairs' centroid,
+  which wanders with the mesh, and its bisector tilted where a pair had a node on the
+  path: spread 0.11 to 0.29 over meshes, now one point and spread per cross-section,
+  0.059 to 0.086 (held under 0.10); the lap joint's utilisation 0.284 → 0.265. Stored
+  light-weld line forces move with it.
+- The deformed shape's STEP test matched 317 of 1386 points (OCCT indents the list's
+  wrapped lines); it reads them all and counts them.
+- Left: the ribbon's title font on the arm Mac (7.65 pt of 11.9, failed once, passed
+  on the next push; nobody here has the machine); `fenicsx_has_petsc` probes the native
+  FEniCSx on Windows though solves run in the image (five tests skipped here).
+
 ### Enhancements toward the state of the art
 
 From `state-of-the-art.md` (50 gaps, each with who has it, which open solver can deliver

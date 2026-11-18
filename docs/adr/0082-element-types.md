@@ -351,3 +351,7 @@ The maintainer asked (2026-11-11) for:
   (element cards, AFFE_MODELE), which pass-through deliberately can't touch.
 - **Choosing on the mesh recipe:** the mesh decides shapes and order. The formulation is
   the solver's, and differs per solver on one mesh.
+
+## Amended (2026-11-18, ADR 0090 package 15)
+
+Every solver's rows marked written are checked against the names its writer uses (`tests/test_elements.py`). Elmer's wedges (706/715) were marked written and are refused by its mesh writer; the mark is removed.

@@ -120,7 +120,9 @@ def finish(results, project, comp, mesh) -> None:
             try:
                 got = None
                 if stress is not None:
-                    got = (groove(mesh, stress, w) if w.type == "groove"
+                    others = [o for o in beads if o is not w and o.type == "groove"
+                              and o.faces[:1] == w.faces[:1]]  # fmt: skip
+                    got = (groove(mesh, stress, w, others) if w.type == "groove"
                            else modelled(project, mesh, stress, comp, w))  # fmt: skip
             except Exception:  # noqa: BLE001 - as above
                 got = None
@@ -893,12 +895,41 @@ def groove_stations(mesh, weld):
                            poly=poly, cum=cum, length=welded, closed=closed)  # fmt: skip
 
 
-def groove(mesh, stress, weld):
-    """A modelled groove weld's line forces: the section parallel to the joint a
-    twentieth of its depth inside the path's part, cut through that part's elements and
-    kept within the groove's depth of the path: the force each triangle passes on toward
-    the other part, and its moment about the path, at the nearest station. As
-    `modelled`'s return; `throat_normal` here is along the joint's normal."""
+def _face_size(mesh, group) -> float:
+    """The mean corner-to-corner edge length of a face group's elements."""
+    lengths = []
+    for b in group.blocks(mesh):
+        if b.dim != 2:
+            continue
+        corners = b.connectivity[:, : 4 if b.connectivity.shape[1] in (4, 8, 9) else 3]
+        xyz = mesh.node_coords(corners.ravel()).reshape(*corners.shape, 3)
+        lengths.append(np.linalg.norm(xyz - np.roll(xyz, -1, axis=1), axis=2).ravel())
+    return float(np.mean(np.concatenate(lengths))) if lengths else 0.0
+
+
+# How far inside the path's part a groove weld's section is cut, in elements of the
+# joint's face. A PJP's open root is a crack: within an element or two of its tip the
+# nodal stresses are averaged across a singularity and their integral over a section
+# depends on the mesh. The butt joint of `test_a_modelled_groove_weld` (PJP, 5 mm of
+# 10 mm), CalculiX, total against P = 10 kN: cut 0.25 mm in (the old depth / 20), the
+# section's total −9378 to −10223 N over meshes of 1.5 to 3 mm and −6796 to −10160 N as
+# clipped at the groove's depth; cut 10 mm in, −9998 to −10029 N. The CJP case reads P
+# at either.
+GROOVE_CUT_ELEMENTS = 3.0
+
+
+def groove(mesh, stress, weld, others=()):
+    """A modelled groove weld's line forces: the section parallel to the joint, cut
+    through the path's part (and its cap) `GROOVE_CUT_ELEMENTS` elements inside the
+    joint, at most half the part's depth behind it, over the part's section behind the
+    joint's face: the force each triangle passes on toward the other part, and its
+    moment about the path, at the nearest station. With no load between the cut and
+    the joint, the force and the moment about a fixed point are those through the
+    joint itself. `others` are the other groove welds on the same joint face: a
+    triangle nearer another's path is its share. As `modelled`'s return;
+    `throat_normal` here is along the joint's normal."""
+    from scipy.spatial import cKDTree
+
     from puzzle.adapters.weld_pairs import _project
     from puzzle.mesh import Mesh
     from puzzle.post.probes import _cut
@@ -918,10 +949,31 @@ def groove(mesh, stress, weld):
     own = Mesh(mesh.node_ids, mesh.coords, blocks, {part: body})
     step = StepResult(0, "stationary", 0.0, None, {"stress": stress})
     depth = weld.leg.to_si() + (weld.reinforcement.to_si() if cap is not None else 0.0)
-    origin = frame.xyz[0] - frame.normal * depth / 20  # the path lies on the joint
+    joint = mesh.groups[weld.faces[0]]
+    size = _face_size(mesh, joint) or depth / 4
+    # how deep the part runs behind the joint (the path lies on the joint)
+    behind = float(np.max((frame.xyz[0] - mesh.node_coords(body.node_ids)) @ frame.normal))
+    inset = min(GROOVE_CUT_ELEMENTS * size, behind / 2) if behind > 0 else depth / 20
+    origin = frame.xyz[0] - frame.normal * inset
     cut, faces, areas, centres, nn = _cut(own, step, origin, frame.normal)
-    sl, dist, near = _project(centres, frame.poly, frame.cum)
-    on = dist <= depth * 1.05
+    sl, _dist, near = _project(centres, frame.poly, frame.cum)
+
+    def in_plane(xyz):
+        return xyz - np.outer((xyz - frame.xyz[0]) @ frame.normal, frame.normal)
+
+    # the section behind the joint's face (and the cap's), as projected onto the joint
+    footprint = mesh.node_coords(joint.node_ids)
+    if cap is not None:
+        footprint = np.vstack([footprint, mesh.node_coords(cap.node_ids)])
+    gap, _ = cKDTree(in_plane(footprint)).query(in_plane(centres))
+    on = gap <= 1.5 * size
+    for other in others:  # another groove weld's path on this face takes its share
+        theirs = groove_stations(mesh, other)
+        if theirs is None:
+            continue
+        _s, mine, _n = _project(in_plane(centres), in_plane(frame.poly), frame.cum)
+        _s, yours, _n = _project(in_plane(centres), in_plane(theirs.poly), theirs.cum)
+        on &= mine <= yours
     sv = np.asarray(cut.point_data["stress"], float).reshape(cut.n_points, -1)
     xx, yy, zz, xy, yz, zx = (sv[:, stress.components.index(c)]
                               for c in ("xx", "yy", "zz", "xy", "yz", "zx"))  # fmt: skip

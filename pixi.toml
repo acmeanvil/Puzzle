@@ -59,7 +59,8 @@ openpyxl = ">=3.1"
 
 [feature.dev.tasks]
 lint = "ruff check . && ruff format --check ."
-install-solvers = "pixi install -e calculix && pixi install -e fenicsx && pixi install -e netgen"
+# PyNite (ADR 0079) too: a small pure-Python env, so the frame benchmarks run on every push
+install-solvers = "pixi install -e calculix && pixi install -e fenicsx && pixi install -e netgen && pixi install -e pynite"
 check = { cmd = "pytest", depends-on = ["lint", "install-solvers"] }
 import-materials = "python scripts/import_materials.py"
 # CalculiX with PARDISO into the calculix-pardiso environment (ADR 0051, 0068 step 4)

@@ -35,6 +35,9 @@ class OpenFoamAdapter(SolverAdapter):
         features=(FLUID_FEATURES - {"mass_flow_inlet"}) | {"temperature", "heat_flux"},
         # ADR 0048: 2D models solved one cell thick (`mesh.layer`).
         dimensions=frozenset({"3d", "2d_planar", "2d_axisymmetric"}),
+        # ADR 0090 package 15: transferred and imported fields are refused (refuse_inputs),
+        # so no field feature is claimed (the default body temperature was).
+        field_features=frozenset(),
         # ADR 0023: iterative solvers only; the tolerance is when SIMPLE has converged.
         shared_settings=frozenset({"linear_solver:iterative", "tolerance"}),
     )

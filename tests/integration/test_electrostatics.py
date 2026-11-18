@@ -120,3 +120,32 @@ def test_two_layer_capacitor(tmp_path, solver):
     capacitance = EPS0 * SIDE**2 / series
     energy = run.results.last("electric_energy").values[0, 0]
     assert 2 * energy / VOLTS**2 == pytest.approx(capacitance, rel=1e-6)
+
+
+@solver
+def test_a_surface_charge_fills_the_capacitor_with_its_flux(tmp_path, solver):
+    """ADR 0090 package 15 (a claim with no benchmark): the capacitor's top electrode given
+    a surface charge σ in place of its potential. Gauss's law in one dimension: D = σ in
+    both layers, so the potential rises linearly in each to σ (d1 / ε1 + d2 / ε2) / ε0
+    at the top, and the stored energy is ½ σ² A (d1 / ε1 + d2 / ε2) / ε0."""
+    project, study = _capacitor(tmp_path, solver)
+    eps1 = library_material("ptfe").properties["relative_permittivity"].to_si()
+    eps2 = library_material("air").properties["relative_permittivity"].to_si()
+    series = D1 / eps1 + D2 / eps2
+    sigma = VOLTS * EPS0 / series  # C/m², the charge that holds the top at VOLTS
+    comp = next(o for o in project.objects.values() if isinstance(o, Component))
+    comp.physics[0].features[1] = Feature(
+        type="surface_charge", selection="Gap/Top",
+        values={"rho_s": Quantity(value=sigma, unit="C/m^2")},
+    )  # fmt: skip
+    run = run_study(project, study.id, tmp_path, tmp_path / "run", timeout_s=900)
+
+    interface = sigma * (D1 / eps1) / EPS0
+    phi = run.results.last("electric_potential")
+    z = run.mesh.node_coords(phi.ids)[:, 2]
+    exact = np.where(z <= D1, interface * z / D1, interface + (VOLTS - interface) * (z - D1) / D2)
+    print(f"{solver}: top {phi.values[:, 0].max():.6f} V ({VOLTS:g}), worst "
+          f"{np.abs(phi.values[:, 0] - exact).max():.3g} V")  # fmt: skip
+    assert np.abs(phi.values[:, 0] - exact).max() < 1e-6 * VOLTS
+    energy = run.results.last("electric_energy").values[0, 0]
+    assert energy == pytest.approx(0.5 * sigma**2 * SIDE**2 * series / EPS0, rel=1e-6)

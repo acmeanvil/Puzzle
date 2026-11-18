@@ -1,0 +1,170 @@
+name: Solvers
+
+# The solver benchmarks the per-push CI can't run (ADR 0090 package 15): Code_Aster from
+# its pixi environment, Elmer, Code_Saturne and OpenFOAM in their images built from
+# containers/ (each kept in the Actions cache by a hash of its folder, so Code_Saturne's
+# build from source runs only when its Dockerfile changes), OpenCourant from its image
+# pinned by digest, and CalculiX's `heavy` solves with a PARDISO CalculiX built here.
+# One job per solver: a failure names its solver, and each stays under the 6-hour limit.
+#
+# Weekly, and by hand: Actions -> Solvers -> Run workflow takes the solvers (a JSON
+# list) and, optionally, pytest arguments that replace each job's own selection.
+on:
+  schedule:
+    - cron: "17 3 * * 0" # Sundays 03:17 UTC
+  workflow_dispatch:
+    inputs:
+      solvers:
+        description: 'Solvers as a JSON list: code_aster, elmer, code_saturne, openfoam, cfd_shootout, opencourant, calculix_heavy'
+        type: string
+        default: '["code_aster", "elmer", "code_saturne", "openfoam", "cfd_shootout", "opencourant", "calculix_heavy"]'
+      tests:
+        description: "pytest arguments to run instead of each job's own selection (empty: its selection)"
+        type: string
+        default: ""
+
+concurrency:
+  group: solvers-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # The jobs asked for. A matrix `include` entry whose solver isn't in the list becomes a
+  # job of its own, so the list is filtered here and the matrix is the entries left.
+  pick:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+    steps:
+      - id: pick
+        shell: bash
+        env:
+          SOLVERS: ${{ inputs.solvers || 'null' }}
+          # needs: what must be available before pytest starts (tests/solvers.py)
+          # select: the pytest selection; a parametrized test's id names its solver
+          # CalculiX too where a test compares with it or transfers to it
+          ALL: >-
+            [{"solver": "code_aster", "envs": "dev calculix code-aster",
+              "needs": "code_aster calculix", "select": "tests/integration -k code_aster"},
+             {"solver": "elmer", "envs": "dev calculix", "image": "elmer",
+              "needs": "elmer calculix", "select": "tests/integration -k elmer"},
+             {"solver": "code_saturne", "envs": "dev", "image": "code_saturne",
+              "needs": "code_saturne", "select": "tests/integration -k code_saturne"},
+             {"solver": "openfoam", "envs": "dev", "image": "openfoam",
+              "needs": "openfoam", "select": "tests/integration -k openfoam"},
+             {"solver": "cfd_shootout", "envs": "dev", "image": "code_saturne",
+              "image2": "openfoam", "needs": "code_saturne openfoam",
+              "select": "tests/integration/test_cfd_shootout.py"},
+             {"solver": "opencourant", "envs": "dev calculix",
+              "needs": "opencourant calculix", "select": "tests/integration/test_explicit.py"},
+             {"solver": "calculix_heavy", "envs": "dev calculix calculix-pardiso",
+              "needs": "calculix", "pardiso": true, "select": "tests/integration -m heavy"}]
+        run: |
+          set -euo pipefail
+          picked=$(jq -c --argjson want "$SOLVERS"             '[.[] | select($want == null or (.solver as $s | $want | index($s) != null))]' <<<"$ALL")
+          [ "$picked" != "[]" ] || { echo "::error::no known solver in $SOLVERS"; exit 1; }
+          echo "matrix={\"include\":$picked}" >> "$GITHUB_OUTPUT"
+
+  solver:
+    needs: pick
+    name: ${{ matrix.solver }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.pick.outputs.matrix) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    env:
+      PUZZLE_RUNNER: "off"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: prefix-dev/setup-pixi@v0.8.1
+        with:
+          environments: ${{ matrix.envs }}
+
+      # An image built from containers/<solver>, cached as a saved image by a hash of
+      # its folder: built and saved on a miss, loaded on a hit.
+      - if: matrix.image != ''
+        id: image1
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/images/${{ matrix.image }}.tar.zst
+          key: image-${{ matrix.image }}-${{ hashFiles(format('containers/{0}/**', matrix.image)) }}
+      - if: matrix.image2 != ''
+        id: image2
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/images/${{ matrix.image2 }}.tar.zst
+          key: image-${{ matrix.image2 }}-${{ hashFiles(format('containers/{0}/**', matrix.image2)) }}
+      - if: matrix.image != ''
+        shell: bash
+        env:
+          IMAGES: ${{ matrix.image }} ${{ matrix.image2 }}
+          STORE: ${{ runner.temp }}/images
+        run: |
+          set -euo pipefail
+          mkdir -p "$STORE"
+          for solver in $IMAGES; do
+            tag=$(pixi run -e dev python -c "from puzzle.jobs.runtime import DEFAULT_IMAGES; print(DEFAULT_IMAGES['$solver'])")
+            saved="$STORE/$solver.tar.zst"
+            if [ -s "$saved" ]; then
+              echo "loading $tag from the cache"
+              zstd -dc "$saved" | docker load
+            else
+              echo "building $tag from containers/$solver"
+              docker build -t "$tag" "containers/$solver"
+              docker save "$tag" | zstd -T0 -3 -o "$saved"
+            fi
+            docker image inspect "$tag" --format '{{.Id}} {{.Size}}'
+          done
+
+      - if: contains(matrix.needs, 'opencourant')
+        shell: bash
+        run: |
+          set -euo pipefail
+          image=$(pixi run -e dev python -c "from puzzle.jobs.runtime import DEFAULT_IMAGES; print(DEFAULT_IMAGES['opencourant'])")
+          docker pull "$image"
+
+      # CalculiX with MKL PARDISO (ADR 0051): the heavy solves took 24 and 49 minutes each
+      # with SPOOLES on these machines, about a minute with PARDISO on the maintainer's.
+      - if: matrix.pardiso
+        env:
+          PUZZLE_USER_DIR: ${{ runner.temp }}/puzzle-user
+        run: pixi run -e dev puzzle solvers --build
+
+      # Refuse to report a pass that solved nothing: every solver the job is for answers.
+      - shell: bash
+        env:
+          NEEDS: ${{ matrix.needs }}
+        run: |
+          pixi run -e dev python - <<'EOF'
+          import os, sys
+          sys.path.insert(0, "tests")
+          from solvers import available
+          missing = [s for s in os.environ["NEEDS"].split() if not available(s)]
+          print("available:", os.environ["NEEDS"], "missing:", missing or "none")
+          sys.exit(1 if missing else 0)
+          EOF
+
+      - shell: bash
+        env:
+          TESTS: ${{ inputs.tests }}
+          SELECT: ${{ matrix.select }}
+          NEEDS: ${{ matrix.needs }}
+        run: |
+          set -uo pipefail
+          args=${TESTS:-$SELECT}
+          pixi run -e dev pytest -rs --durations=30 -o faulthandler_timeout=3600 $args 2>&1 | tee pytest.log
+          status=${PIPESTATUS[0]}
+          # a solver gone missing mid-run shows as skips, not failures
+          for s in $NEEDS; do
+            if grep -E "SKIPPED .*: $s not available" pytest.log; then
+              echo "::error::$s went missing during the run"; status=1
+            fi
+          done
+          exit $status
+
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-${{ matrix.solver }}
+          path: pytest.log
+          if-no-files-found: ignore

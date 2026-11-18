@@ -627,6 +627,12 @@ FEniCSx, threaded beam-bolt ends, and the modelled bolts of ADR 0077. Left:
   version blobs; `read_results` and a run's summary read by field; `problems()`'s
   operator evaluation off the GUI thread; folders of their own for convergence, adapt
   and optimise runs started at once (`WORK_DIR/convergence/<id>`).
+- Verification left by ADR 0090 package 15: `tests/solvers.py` `fenicsx_has_petsc`
+  probing the FEniCSx a solve would use (the image on Windows); the ribbon's title font
+  after a text-size change on the arm Mac (set in `changeEvent`, the re-measure
+  deferred); `feedback.StatusProgress._show` called after its window is deleted; the
+  solver images published (GHCR) instead of cached; the CFD shoot-out's 1 % threshold
+  in `benchmarks/channel_flow/build.py` at its measured 0.16 %; Elmer wedges written.
 
 ### Found while collecting (fix soon, not deferrals)
 

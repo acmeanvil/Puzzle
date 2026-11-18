@@ -39,6 +39,13 @@ def test_committed_project_matches_the_builder(tmp_path):  # needs no solver
     }
 
 
+# Measured on the project's mesh (ADR 0090 package 15, Windows, 2026-11-18): CalculiX
+# -0.001 %, Code_Aster +0.006 %, Elmer -0.126 %, FEniCSx -0.116 % (CLAUDE.md's adapter
+# table quotes +0.01 %, within 0.13 % and -0.11 %); refining the mesh moves CalculiX by
+# 0.02 % at most (benchmarks/nafems_le1/README.md), so a margin over each.
+LE1_TOLERANCE = {"calculix": 5e-4, "code_aster": 5e-4, "elmer": 1.5e-3, "fenicsx": 1.5e-3}
+
+
 @pytest.mark.parametrize(
     "solver",
     [
@@ -64,7 +71,10 @@ def test_le1_sigma_yy_at_d(tmp_path, solver):
     stress = run.results.last("stress")
     at_d = sample(run.mesh, stress, (*le1.POINT_D, None))
     assert at_d.distance == 0.0 and len(at_d.node_ids) >= 2  # real nodes through the thickness
-    assert at_d.values[component(stress, "yy")] == pytest.approx(le1.TARGET_SYY, rel=0.01)
+    got = at_d.values[component(stress, "yy")]
+    print(f"{solver} LE1: {got / 1e6:.5g} MPa, target {le1.TARGET_SYY / 1e6:.5g} MPa, "
+          f"{got / le1.TARGET_SYY - 1:+.3%}")  # fmt: skip
+    assert got == pytest.approx(le1.TARGET_SYY, rel=LE1_TOLERANCE[solver])
 
 
 def test_le1_meshed_by_netgen(tmp_path):

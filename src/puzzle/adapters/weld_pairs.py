@@ -18,10 +18,13 @@ nearest its s.
 The springs written are per station (`Coupling`, 2026-11-14): each leg's nodes near
 the station (weighted by a hat in s over the neighbouring stations and by their shares
 of the face's area) are fitted by a rigid motion, as an RBE3 spreads a load, and six
-springs join the two fits' motions at one point P, the station's pairs' centroid:
-three along x, y and z of E times the station's share of the path (not by how many
-pairs it got, which on a tetrahedral mesh varies from station to station), and three of
-the pairs' spread about P, Σ k (|r|² I - r rᵀ), along its principal axes. Each
+springs join the two fits' motions at one point P, the same in every station's
+cross-section (the station plus the weld's mean pair offset across the path, in the
+station's frame; ADR 0090 package 15: each station's own pairs' centroid wandered with
+the mesh, and the load with it): three along x, y and z of E times the station's share
+of the path (not by how many pairs it got, which on a tetrahedral mesh varies from
+station to station), and three of the pairs' mean spread about their centroid per pair,
+(|r|² I - r rᵀ) times those, along its principal axes. Each
 spring is a stiffness on a linear combination of the legs' displacements (`coeffs`), so
 no element joins two nodes apart: a rigid motion stretches none, and the weld passes
 force and moment exactly. The x, y, z springs between pairs of nodes that don't
@@ -224,9 +227,13 @@ def weld_pairs(project, comp, mesh: Mesh, weld) -> WeldPairs:
         return np.divide(v, n, out=np.zeros_like(v), where=n > 0)
 
     ua, ub = unit(va[pa[:, 0]]), unit(vb[pa[:, 1]])
-    bisector = np.zeros_like(sxyz)
-    np.add.at(bisector, station_of, ua + ub)
-    fallback = (ua + ub).sum(axis=0)
+    # each leg's direction at a station, then their sum: a pair with a node on the path
+    # (no direction) had tilted the station's bisector by up to 15° toward the other leg
+    dir_a, dir_b = np.zeros_like(sxyz), np.zeros_like(sxyz)
+    np.add.at(dir_a, station_of, ua)
+    np.add.at(dir_b, station_of, ub)
+    bisector = unit(dir_a) + unit(dir_b)
+    fallback = unit(ua.sum(axis=0)[None])[0] + unit(ub.sum(axis=0)[None])[0]
     empty = np.linalg.norm(bisector, axis=1) < 1e-12
     bisector[empty] = fallback
     bisector -= np.einsum("ij,ij->i", bisector, tangent)[:, None] * tangent
@@ -310,19 +317,35 @@ def _couplings(wp: WeldPairs, mesh: Mesh, faces, side_a, side_b, total: float):
     counts = np.bincount(wp.station_of, minlength=len(wp.stations))
     shares = np.where(counts > 0, wp.widths, 0.0)
     per_length = wp.k * len(wp.a) / max(float(shares.sum()), 1e-300)
+    # Every station's springs act at the same place in its own cross-section and with
+    # the same spread: the weld's averages over all its pairs, in each station's frame
+    # (tangent, bisector, their cross product). The station's own pairs' centroid
+    # wandered with the tetrahedral mesh, and with it the share of the load: the lap
+    # joint's station line forces ran 0.6 to 1.95 P/L (spread 0.13 to 0.29 over meshes
+    # of 1.5 to 3.4 mm); at the averages 0.83 to 1.23 P/L (`test_welds_solved.py`).
+    frames = np.stack([wp.tangent, wp.bisector, np.cross(wp.tangent, wp.bisector)], axis=1)
+    of = wp.station_of
+    offset = np.einsum("pij,pj->pi", frames[of], mid - wp.xyz[of])
+    offset = offset.mean(axis=0)
+    offset[0] = 0.0  # along the path: at the station
+    local = np.zeros((3, 3))
+    for i in np.flatnonzero(counts):
+        mine = of == i
+        r = (mid[mine] - mid[mine].mean(axis=0)) @ frames[i].T
+        local += ((r * r).sum() * np.eye(3) - r.T @ r) / mine.sum()
+    local /= max(int((counts > 0).sum()), 1)  # per pair, as one station sees it
     for i in range(len(wp.stations)):
         mine = wp.station_of == i
         if not mine.any():
             out.append(None)
             continue
-        point = mid[mine].mean(axis=0)
-        r = mid[mine] - point
-        spread = wp.k * ((r * r).sum() * np.eye(3) - r.T @ r)
+        point = wp.xyz[i] + offset @ frames[i]
+        spread = frames[i].T @ local @ frames[i]
         lam, vec = np.linalg.eigh(spread)
         lam = np.maximum(lam, 1e-6 * max(lam[-1], 1e-300))
         dirs = np.vstack([np.eye(3), vec.T])
         kt = per_length * shares[i]
-        k = np.concatenate([np.full(3, kt), lam * kt / (wp.k * mine.sum())])
+        k = np.concatenate([np.full(3, kt), lam * kt])
         nodes, rows = [], []
         for (ids, s, xyz, area), sign in zip(legs, (-1.0, 1.0), strict=True):
             w = _hat(s, wp.s, i, wp.closed, total) * area

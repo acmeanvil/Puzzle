@@ -40,3 +40,7 @@ conda-forge solver packages, checked 2026-10-17:
 - Containers for everything: simplest to describe, but a VM and slow file sharing on two of three platforms.
 - pip wheels only: no Qt/VTK/OCCT/solver story on Windows and macOS.
 - One shared environment for all solvers: fails to solve on Windows and couples unrelated upgrades.
+
+## Amended (2026-11-18, ADR 0090 package 15)
+
+A second workflow, `solvers.yml`, runs weekly and by hand what the per-push CI can't: Code_Aster from its pixi environment, Elmer, Code_Saturne and OpenFOAM in images built from `containers/` (saved into the Actions cache by a hash of their folder), OpenCourant from its pinned image and CalculiX's heavy solves with PARDISO built on the runner, a Linux job each, failing when its solver is missing. The per-push CI installs PyNite.

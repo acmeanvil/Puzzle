@@ -41,6 +41,9 @@ class CodeSaturneAdapter(SolverAdapter):
         features=(FLUID_FEATURES - {"mass_flow_inlet"}) | THERMAL_FEATURES,
         # ADR 0048: 2D models solved one cell thick (`mesh.layer`).
         dimensions=frozenset({"3d", "2d_planar", "2d_axisymmetric"}),
+        # ADR 0090 package 15: transferred and imported fields are refused (refuse_inputs),
+        # so no field feature is claimed (the default body temperature was).
+        field_features=frozenset(),
         # ADR 0023: its linear solvers are iterative; the steady algorithm runs its own
         # iteration count (the step's iterations), keeping only the converged state.
         shared_settings=frozenset({"linear_solver:iterative", "output_every"}),

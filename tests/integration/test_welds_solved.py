@@ -180,10 +180,15 @@ def test_a_light_weld_passes_the_moment(tmp_path, solver):
     spread = float(np.std(along[inner]) / np.mean(along[inner]))
     print(f"{solver}: line force {along[inner].min():.1f} to {along[inner].max():.1f} N/mm "
           f"(P/L {P / 0.05 / 1e3:g}), spread {spread:.3f}")  # fmt: skip
-    # Stations are a tetrahedral mesh's corner and mid-edge nodes, which alternate by a
-    # few per cent; the node pairs' springs reached 1.9 P/L where a station got many pairs.
-    assert spread < 0.15
-    assert along[inner].min() > 0.5 * P / 0.05 / 1e3 and along[inner].max() < 1.4 * P / 0.05 / 1e3
+    # The node pairs' springs reached 1.9 P/L where a station got many pairs. Couplings at
+    # each station's own pairs' centroid, with a bisector tilted by the pairs on the path,
+    # still followed the mesh: spread 0.11 to 0.29 and peaks to 1.95 P/L over meshes of
+    # 1.5 to 3.4 mm (0.161 and 1.62 P/L on the arm Mac's 3 mm mesh, 0.131 here). At one
+    # point per cross-section (ADR 0090 package 15), measured at 1.5, 2, 2.2, 2.6, 2.9, 3,
+    # 3.4 mm: spread 0.071, 0.061, 0.059, 0.069, 0.073, 0.072, 0.086; inner stations 0.83
+    # to 1.23 P/L.
+    assert spread < 0.10
+    assert along[inner].min() > 0.8 * P / 0.05 / 1e3 and along[inner].max() < 1.3 * P / 0.05 / 1e3
 
 
 @over("calculix", "code_aster", "fenicsx")
@@ -320,8 +325,10 @@ def test_the_welds_panel(tmp_path, solver):
         assert table.rowCount() == 1, window.welds.note.text()
         assert table.item(0, 0).text() == "End fillet" and table.item(0, 7).text() == "E70XX"
         # the peak station over 921.4 N/mm (0.412 with node-pair springs, whose peak was a
-        # station with many pairs)
-        assert float(table.item(0, 4).text()) == pytest.approx(0.284, abs=0.01)
+        # station with many pairs; 0.284 here and 0.352 on the arm Mac with couplings at
+        # each station's own pairs' centroid). At one point per cross-section: 0.265 here,
+        # 0.255 to 0.267 over meshes of 1.5 to 3.4 mm.
+        assert float(table.item(0, 4).text()) == pytest.approx(0.265, abs=0.012)
         assert window.welds.stations.rowCount() > 5
         out = window.welds.export(str(tmp_path / "w.csv"))
         with open(out, encoding="utf-8") as f:
@@ -588,7 +595,14 @@ def test_a_modelled_groove_weld(tmp_path, solver, depth):
     """A butt joint of two 10 mm plates 50 mm wide, a groove weld along the top of the
     joint, modelled: the faces tied over the groove's depth (all of it for CJP, the top
     half for PJP), the rest open. The section inside the path's plate carries P, about
-    P / L along the weld. The force is the one on B, the pulled plate, from A: -P."""
+    P / L along the weld. The force is the one on B, the pulled plate, from A: -P.
+
+    The PJP's open root is a crack, so the section is cut three elements in
+    (`weld_fields.GROOVE_CUT_ELEMENTS`): cut at depth / 20 and clipped at the groove's
+    depth it had read −9284 to −10080 N by platform (Gmsh's meshes differ) and −6796 to
+    −10160 N here over meshes of 1.5 to 3 mm. Measured now (CalculiX, Windows, meshes
+    1.5, 1.8, 2, 2.2, 2.5, 3 mm): PJP −9997, −9979, −10029, −10032, −10043, −9974 N,
+    mean line force 0.9937 to 1.0073 P/L; CJP −9999.9 N at each, 0.9969 to 0.9997 P/L."""
     pytest.importorskip("OCP")
     length = 0.05
     parts = {
@@ -607,8 +621,8 @@ def test_a_modelled_groove_weld(tmp_path, solver, depth):
     mean = float(np.mean(f.values[:, c["x"]]))
     print(f"{solver} {weld.groove} groove: {total[:3]} N (P {P:g}); mean line force "
           f"{mean / 1e3:.4g} N/mm (P/L {P / length / 1e3:.4g})")  # fmt: skip
-    assert total[0] == pytest.approx(-P, rel=0.02)
-    assert mean == pytest.approx(-P / length, rel=0.1)
+    assert total[0] == pytest.approx(-P, rel=1e-3 if depth == 10.0 else 0.01)
+    assert mean == pytest.approx(-P / length, rel=0.02)
     if depth == 10.0:  # ASME VIII-2 5.5.5 at the toe: the plates pulled straight
         from puzzle.post.weld_fields import structural_stress
 

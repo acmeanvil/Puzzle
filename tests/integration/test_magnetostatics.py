@@ -37,41 +37,47 @@ CURRENT = 100.0  # A
 solver = over("elmer", "fenicsx")
 
 
-def _cylinder(path, radius, bore=None):
+def _cylinder(path, radius, bore=None, half=False):
     with gmsh_session("cylinder"):
         outer = gmsh.model.occ.addCylinder(0, 0, 0, 0, 0, L, radius)
         if bore:
             inner = gmsh.model.occ.addCylinder(0, 0, 0, 0, 0, L, bore)
-            gmsh.model.occ.cut([(3, outer)], [(3, inner)])
+            (outer,), _ = gmsh.model.occ.cut([(3, outer)], [(3, inner)])
+            outer = outer[1]
+        if half:  # the y >= 0 half, cut on the plane y = 0 through the axis (OCC's seam
+            # lies at +x, on the cut: a half about x = 0 had each side split in two)
+            box = gmsh.model.occ.addBox(-2 * radius, 0, -L, 4 * radius, 2 * radius, 3 * L)
+            gmsh.model.occ.intersect([(3, outer)], [(3, box)])
         gmsh.model.occ.synchronize()
         gmsh.write(str(path))
     model = import_step(path)
-    sides = {
-        round(model[f].bbox[3], 6): f for f in model.faces_of_kind("Cylinder")
-    }  # lateral faces by radius
+    sides: dict[float, list[str]] = {}  # lateral faces by radius
+    for f in model.faces_of_kind("Cylinder"):
+        sides.setdefault(round(model[f].bbox[3], 6), []).append(f)
     return [
         NamedSelection(name="Body", entity="body", members=["body-1"]),
         NamedSelection(name="Start", entity="face", members=model.faces_on_plane("z", 0.0)),
         NamedSelection(name="End", entity="face", members=model.faces_on_plane("z", L)),
-        NamedSelection(name="Outer", entity="face", members=[sides[round(radius, 6)]]),
+        NamedSelection(name="Outer", entity="face", members=sides[round(radius, 6)]),
         *(
-            [NamedSelection(name="Inner", entity="face", members=[sides[round(bore, 6)]])]
+            [NamedSelection(name="Inner", entity="face", members=sides[round(bore, 6)])]
             if bore
+            else []
+        ),
+        *(
+            [NamedSelection(name="Cut", entity="face", members=model.faces_on_plane("y", 0.0))]
+            if half
             else []
         ),
     ]
 
 
-def _wire(tmp_path, solver_name):
+def _wire(tmp_path, solver_name, half=False):
     p = Project(name="wire")
-    wire_geo = p.add(
-        Geometry(name="Wire", source="wire.step", selections=_cylinder(tmp_path / "wire.step", A))
-    )
-    air_geo = p.add(
-        Geometry(
-            name="Air", source="air.step", selections=_cylinder(tmp_path / "air.step", R, bore=A)
-        )
-    )
+    wire_sel = _cylinder(tmp_path / "wire.step", A, half=half)
+    wire_geo = p.add(Geometry(name="Wire", source="wire.step", selections=wire_sel))
+    air_sel = _cylinder(tmp_path / "air.step", R, bore=A, half=half)
+    air_geo = p.add(Geometry(name="Air", source="air.step", selections=air_sel))
     copper, air = add_library_material(p, "copper"), add_library_material(p, "air")
     mesh = p.add(
         MeshRecipe(
@@ -84,6 +90,9 @@ def _wire(tmp_path, solver_name):
     insulated = [
         Feature(type="magnetic_insulation", selection=f"Gap/{s}") for s in ("Start", "End", "Outer")
     ]
+    if half:  # B crosses the plane through the axis square: n x H = 0 there
+        insulated += [Feature(type="magnetic_symmetry", selection=f"{part}/Cut")
+                      for part in ("Conductor", "Gap")]  # fmt: skip
     comp = p.add(
         Component(
             name="Wire in air",
@@ -106,7 +115,7 @@ def _wire(tmp_path, solver_name):
                         Feature(
                             type="coil_current",
                             selection="Conductor/Body",
-                            values={"I": Quantity(value=CURRENT, unit="A")},
+                            values={"I": Quantity(value=CURRENT / (2 if half else 1), unit="A")},
                         ),
                         Feature(type="coil_start", selection="Conductor/Start"),
                         Feature(type="coil_end", selection="Conductor/End"),
@@ -158,3 +167,26 @@ def test_wire_field(tmp_path, solver):
     tangent = np.column_stack([-xyz[:, 1], xyz[:, 0], 0 * r])[middle] / r[middle, None]
     along = np.einsum("ij,ij->i", b.values[middle], tangent)
     assert np.all(along > 0.9 * magnitude[middle])  # current flows +z: B is anticlockwise
+
+
+@solver
+def test_half_the_wire_on_a_magnetic_symmetry_plane(tmp_path, solver):
+    """ADR 0090 package 15 (a claim with no benchmark): the wire and its air cut in half on
+    the plane y = 0 through the axis, which B crosses square, so `magnetic_symmetry`
+    (n × H = 0, the natural condition) holds there; the half carries half the current.
+    The field in the gap is the whole wire's, mu0 I / (2 pi r), and the energy half."""
+    project, study = _wire(tmp_path, solver, half=True)
+    run = run_study(project, study.id, tmp_path, tmp_path / "run", timeout_s=900)
+    b = run.results.last("magnetic_flux_density")
+    xyz = run.mesh.node_coords(b.ids)
+    r = np.hypot(xyz[:, 0], xyz[:, 1])
+    magnitude = np.linalg.norm(b.values, axis=1)
+    middle = (np.abs(xyz[:, 2] - L / 2) < L / 4) & (r > 1.5 * A) & (r < 0.8 * R)
+    exact = MU0 * CURRENT / (2 * np.pi * r[middle])
+    error = np.abs(magnitude[middle] - exact) / exact
+    energy = run.results.last("magnetic_energy").values[0, 0]
+    whole = MU0 * CURRENT**2 * L / (4 * np.pi) * (0.25 + np.log(R / A))
+    print(f"{solver} half wire: |B| error mean {error.mean():.2%}, max {error.max():.2%}; "
+          f"energy {energy / (whole / 2) - 1:+.2%} of half the whole's")  # fmt: skip
+    assert error.mean() < 0.02 and error.max() < 0.12
+    assert energy == pytest.approx(whole / 2, rel=0.02)

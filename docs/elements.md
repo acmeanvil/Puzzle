@@ -14,7 +14,7 @@ Every solver's elements, grouped by what they model. ★ marks the ones Puzzle w
 | full integration | linear and quadratic | – | 3D ★ | – | – | – |
 | reduced integration | linear and quadratic | – | 3D_SI ★ | – | – | – |
 | mixed displacement-pressure (nearly incompressible) | quadratic | – | 3D_INCO_UPG ★, 3D_INCO_UP | – | Taylor-Hood P2-P1 ★ | – |
-| Lagrange (nodal) unknowns | linear and quadratic | – | – | 504/510 ★, 808/820/827 ★, 706/715 ★ | – | – |
+| Lagrange (nodal) unknowns | linear and quadratic | – | – | 504/510 ★, 808/820/827 ★, 706/715 | – | – |
 | higher order on the same cells (p-elements) | linear | – | – | p:2 ★ | – | – |
 | Lagrange (nodal) unknowns | quadratic | – | – | – | Lagrange P2 ★, Lagrange Q2 (27-node bricks) ★ | – |
 | Lagrange (nodal) unknowns | linear | – | – | – | Lagrange P1 ★, Lagrange P3+ | – |

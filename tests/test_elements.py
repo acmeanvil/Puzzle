@@ -75,6 +75,73 @@ def test_code_aster_rows_marked_written_are_what_its_command_file_names():
             assert f"MODELISATION='{first}'" not in source, e.native
 
 
+# ADR 0090 ADR-65: the other solvers' stars, each row by the names its writer uses.
+WRITTEN_BY = {
+    "elmer": (
+        "puzzle.adapters.elmer.meshfiles",
+        "puzzle.adapters.elmer.sif",
+        "puzzle.adapters.elmer.magnetics",
+    ),
+    "fenicsx": ("puzzle.adapters.fenicsx.study",),
+    "pynite": ("puzzle.adapters.pynite.frame",),
+    "opencourant": ("puzzle.adapters.opencourant.deck",),
+}
+TOKENS = {
+    "elmer": {
+        "504/510": ["504", "510"],
+        "808/820/827": ["808", "820", "827"],
+        "706/715": ["706", "715"],
+        "303/306/404/408": ["303", "306", "404", "408"],
+        "WhitneyAV edge elements": ["WhitneyAV"],
+        "ShellSolver": ['"ShellSolver'],
+        "BeamSolver3D": ['"BeamSolver'],
+    },
+    "fenicsx": {
+        "Lagrange P2": ['("Lagrange", degree'],
+        "Lagrange P1": ['("Lagrange", degree'],
+        "Lagrange P1/P2 (2D)": ['("Lagrange", degree'],
+        "Lagrange Q2 (27-node bricks)": ['("Lagrange", degree'],
+        "N1curl (Nédélec, first kind)": ['"N1curl"'],
+        "Taylor-Hood P2-P1": ["mixed_element(["],
+        "Lagrange P3+": ["degree = 3"],
+        "Raviart-Thomas, DG": ['"RT"'],
+    },
+    "pynite": {
+        "Member": ["add_member("],
+        "Spring support": ["def_support_spring("],
+        "Spring": ["add_spring("],
+        "Quad (MITC4)": ["add_quad("],
+        "Plate (rectangular)": ["add_plate("],
+    },
+    "opencourant": {
+        "BRICK, Isolid 24 (HEPH)": ['"/BRICK"', "Isolid 24"],
+        "TETRA4": ['"/TETRA4"'],
+        "TETRA10": ['"/TETRA10"'],
+        "SHELL, Ishell 24 (QEPH)": ['"/SHELL"', "Ishell 24"],
+        "SH3N": ['"/SH3N"'],
+        "BEAM (type 3)": ['"/BEAM"'],
+    },
+}
+
+
+@pytest.mark.parametrize("solver", sorted(WRITTEN_BY))
+def test_other_solvers_rows_marked_written_are_what_their_writers_name(solver):
+    """A row marked written names what the writer writes; one not marked, nothing it
+    writes (Elmer's wedges were starred, and its mesh writer refuses them)."""
+    import importlib.util
+
+    # read, not imported: FEniCSx's study.py and PyNite's frame.py run in their own envs
+    source = "".join(Path(importlib.util.find_spec(m).origin).read_text(encoding="utf-8")
+                     for m in WRITTEN_BY[solver])  # fmt: skip
+    for e in elements.table(solver):
+        if e.native in CHOSEN:
+            continue
+        tokens = TOKENS[solver].get(e.native)
+        assert tokens is not None, f"{solver} {e.native}: name the writer's tokens in TOKENS"
+        found = all(tok in source for tok in tokens)
+        assert found == e.written, (solver, e.native, e.written)
+
+
 def test_the_listing_groups_and_filters():
     shells = elements.listing(family="shell")
     assert "## Shells" in shells and "## 3D solids" not in shells

@@ -93,7 +93,6 @@ Solve steps per job: 1.
 | time schemes | backward_euler |
 | shared settings | linear_solver:iterative, output_every |
 | shared settings steps | output_every: transient |
-| field features | body_temperature:T |
 
 Solve steps per job: 1.
 
@@ -184,7 +183,6 @@ Solve steps per job: 1.
 | dimensions | 2d_axisymmetric, 2d_planar, 3d |
 | time schemes | backward_euler |
 | shared settings | linear_solver:iterative, tolerance |
-| field features | body_temperature:T |
 
 Solve steps per job: 1.
 
@@ -205,6 +203,5 @@ Solve steps per job: 1.
 | member ends | yes |
 | shells | yes |
 | axes features | displacement:cartesian, force:cartesian, gravity:cartesian |
-| field features | body_temperature:T |
 
 Solve steps per job: 1.

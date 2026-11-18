@@ -93,9 +93,14 @@ def test_deformed_shape_as_stl_and_step(solved, solver):
     import re
 
     at = text.index("COORDINATES_LIST(")
-    listed = text[at : text.index(");", at)].replace("\n", "")
+    # OCCT wraps the list's lines with an indent, inside a point too: all white space
+    # goes (with only newlines dropped, 317 of 1386 points matched, so the lowest one
+    # read depended on the mesh: both Macs failed)
+    listed = re.sub(r"\s+", "", text[at : text.index(");", at)])
+    count = int(re.match(r"COORDINATES_LIST\('[^']*',(\d+),", listed).group(1))
     number = r"(-?[\d.]+(?:E[-+]?\d+)?)"
     xyz = np.array(re.findall(rf"\({number},{number},{number}\)", listed), float)
+    assert len(xyz) == count
     assert np.ptp(xyz[:, 0]) == pytest.approx(1e3 * L, rel=1e-3)
     assert xyz[:, 1].min() == pytest.approx(1e3 * tip, rel=1e-5)
 

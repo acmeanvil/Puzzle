@@ -138,7 +138,9 @@ def test_a_wave_carries_rho_c_v0_behind_its_front(tmp_path, solver, shape):
     print(f"{shape}: t {last.value:.4g} s, sigma_xx behind {behind.mean() / 1e6:.5g} MPa "
           f"(rho c v0 {expected / 1e6:.5g}), spread {behind.std() / -expected:.3f}, ahead "
           f"{np.abs(ahead).max() / 1e6:.3g} MPa")  # fmt: skip
-    assert behind.mean() == pytest.approx(expected, rel=0.01)
+    # measured 2026-11-18: hex8 -0.265 %, tet4 -0.098 %, tet10 -0.227 % (CLAUDE.md: within
+    # 0.27 %)
+    assert behind.mean() == pytest.approx(expected, rel=0.004)
     assert np.abs(ahead).max() < 0.02 * abs(expected)
 
 
@@ -165,7 +167,9 @@ def test_a_bar_thrown_at_a_rigid_wall_leaves_at_its_speed(tmp_path, solver):
         speeds.append(mean_v)
         print(f"{size:g} mm: separated at {separated:.4g} s (2 L / c {contact:.4g}), leaves at "
               f"{mean_v:.4g} m/s")  # fmt: skip
-        assert separated == pytest.approx(contact, rel=0.04)
+        # +2.70 % on both meshes, measured 2026-11-18 (CLAUDE.md: +2.7 %): the frame
+        # after the separation, 60 frames over 1.5 x 2 L / c
+        assert separated == pytest.approx(contact, rel=0.03)
         assert mean_v == pytest.approx(v0, rel=0.05)
     assert abs(speeds[1] - v0) < abs(speeds[0] - v0)  # closer on the finer mesh
 
@@ -208,8 +212,10 @@ def test_a_suddenly_applied_load_against_an_implicit_transient(tmp_path, solver)
     worst = float(np.abs(explicit[:, 1] - reference).max())
     print(f"tip peak: explicit {explicit[:, 1].max():.5g} m, implicit {peak:.5g} m; largest "
           f"difference over the swing {worst / peak:.2%} of the peak")  # fmt: skip
-    assert explicit[:, 1].max() == pytest.approx(peak, rel=0.02)
-    assert worst < 0.03 * peak
+    # measured 2026-11-18: peak -0.18 %, worst 0.28 % of it over the swing (CLAUDE.md:
+    # within 0.3 %)
+    assert explicit[:, 1].max() == pytest.approx(peak, rel=0.004)
+    assert worst < 0.004 * peak
 
 
 @over("opencourant")

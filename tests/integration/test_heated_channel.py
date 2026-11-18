@@ -171,7 +171,9 @@ def test_heated_channel(tmp_path, solver):
 
     slope = (bulk(0.08) - bulk(0.04)) / 0.04
     print(f"{solver}: bulk dT/dx, 40 to 80 mm: {slope:.4f} K/m (balance {gradient:.4f})")
-    assert slope == pytest.approx(gradient, rel=0.01)
+    # Measured 2026-11-18: -0.496 % (Code_Saturne), -0.498 % (OpenFOAM), as CLAUDE.md's
+    # -0.5 %; the profile 0.02 % on both (it quotes 0.03 %).
+    assert slope == pytest.approx(gradient, rel=0.006)
 
     at = np.abs(x - 0.06) < 0.3e-3
     eta, temp = y[at] / H, T.at(ids[at])[:, 0]
@@ -181,4 +183,52 @@ def test_heated_channel(tmp_path, solver):
     expected = shape - (shape.mean() if centre is None else 0.0)
     error = np.abs(measured - expected).max() / np.ptp(expected)
     print(f"{solver}: profile at 60 mm: wall-centre {np.ptp(expected):.4f} K, error {error:.2%}")
-    assert error < 0.02
+    assert error < 0.001
+
+
+@over("code_saturne")
+def test_a_convection_wall_cools_the_bulk_toward_its_ambient(tmp_path, solver):
+    """ADR 0090 package 15 (a claim with no benchmark): the plates given an exchange
+    coefficient h to an ambient T_inf (a `convection` wall) in place of the flux. Where
+    the flow is developed the bulk temperature approaches T_inf as exp(-lambda x): the
+    bulk balance rho cp U Tb' = k Tb'' - (2 U0 / H)(Tb - T_inf), axial conduction kept
+    (the Peclet number on 2H is about 14), gives alpha lambda^2 + U lambda = beta with
+    beta = 2 U0 / (rho cp H) and 1 / U0 = 1 / h + 2H / (k Nu), the flow's own film in
+    series (Nu on the hydraulic diameter 2H). h is small, so the wall is nearly at uniform
+    flux: Nu between 7.54 (uniform wall temperature) and 8.235 (uniform flux) moves U0 by
+    0.9 %; 8.235 is taken. Measured (Code_Saturne, 0.5 mm hexahedra): -9.8681 /m, between
+    -9.8413 (Nu 7.54) and -9.9185 (Nu 8.235; without axial conduction -10.058). OpenFOAM
+    refuses convection walls."""
+    h, t_inf = 1.0, 373.15
+    project, study = _channel(tmp_path, solver)
+    comp = next(o for o in project.objects.values() if isinstance(o, Component))
+    comp.physics[1].features[1] = Feature(
+        type="convection", selection="Channel/Walls",
+        values={"h": Quantity(value=h, unit="W/(m^2*K)"), "T_inf": Quantity(value=t_inf, unit="K")},
+    )  # fmt: skip
+    run = run_study(project, study.id, tmp_path, tmp_path / "run", timeout_s=3600)
+    T, u = run.results.last("temperature"), run.results.last("velocity")
+    blocks = [b for b in run.mesh.blocks if b.dim == 3]
+    ids = np.concatenate([b.ids for b in blocks])
+    centres = np.vstack([
+        run.mesh.node_coords(b.connectivity.ravel()).reshape(*b.connectivity.shape, 3).mean(axis=1)
+        for b in blocks
+    ])  # fmt: skip
+    x = centres[:, 0]
+
+    def bulk(x0):
+        at = np.abs(x - x0) < 0.3e-3
+        temp, speed = T.at(ids[at])[:, 0], u.at(ids[at])[:, 0]
+        return (temp * speed).sum() / speed.sum()
+
+    alpha = K / (RHO * CP)
+
+    def rate(nu):
+        beta = 2 / (1 / h + 2 * H / (nu * K)) / (RHO * CP * H)
+        return -(np.sqrt(U**2 + 4 * alpha * beta) - U) / (2 * alpha)
+
+    expected = rate(8.235)
+    slope = (np.log(t_inf - bulk(0.08)) - np.log(t_inf - bulk(0.04))) / 0.04
+    print(f"{solver}: log(T_inf - Tb) slope, 40 to 80 mm: {slope:.4f} /m "
+          f"(closed form {expected:.4f}; with Nu 7.54 {rate(7.54):.4f})")  # fmt: skip
+    assert slope == pytest.approx(expected, rel=0.01)

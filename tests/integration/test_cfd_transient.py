@@ -82,4 +82,5 @@ def test_a_temperature_front_in_plug_flow(tmp_path, solver):
         want = ogata_banks(x, step.value, alpha)
         error = np.abs(got - want).max()
         print(f"t = {step.value:g} s: largest error {error:.4f} of the rise")
-        assert error < 0.01, step.value  # 1 % of the 10 K rise anywhere
+        # 0.53 % (10 s) and 0.50 % (20 s) of the rise measured 2026-11-18, as CLAUDE.md
+        assert error < 0.006, step.value

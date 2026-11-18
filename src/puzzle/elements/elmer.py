@@ -41,7 +41,7 @@ ELEMENTS = [
         STRUCT + ("heat",),
         "Wedges.",
         "",
-        True,
+        False,  # meshfiles.ELEMENTS has no wedge: refused (ADR 0090 package 15)
         REF,
         ("solid_mechanics", "heat_transfer"),
     ),

@@ -25,6 +25,9 @@ class PyNiteAdapter(SolverAdapter):
     capabilities = Capabilities(
         physics={"solid_mechanics": frozenset({"stationary", "modal"})},  # ADR 0079 step 4
         features=FEATURES,
+        # ADR 0090 package 15: transferred and imported fields are refused (refuse_inputs),
+        # so no field feature is claimed (the default body temperature was).
+        field_features=frozenset(),
         beams=True,
         shells=True,  # ADR 0082: plates as PyNite's MITC4 quadrilaterals
         member_ends=True,
