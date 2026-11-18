@@ -14,7 +14,7 @@
 name = "Structural steel"
 type = "Metal"
 group = "Carbon Steel"
-description = "Generic mild carbon structural steel, with the strengths of the common 250 MPa yield grades. Room values and tables from the EN 1993-1-2 carbon steel formulas; a reference entry: pick a named grade for design"
+description = "Generic mild carbon structural steel, with the strengths of the common 250 MPa yield grades. Room values and tables from the EN 1993-1-2 carbon steel formulas; a reference entry: pick a named grade for design. Its strain-life fatigue data is ASTM A36's"
 sources = ["EN 1993-1-2:2005 (Eurocode 3 Part 1-2), clause 3.4 and Table 3.1: carbon steel thermal and mechanical properties at elevated temperature", "Strengths: the minimums common to mild structural steel plate and shapes, 250 MPa yield and 400 MPa tensile; compressive yield taken equal to the tensile yield"]
 density = { value = 7850, unit = "kg/m^3" }
 youngs_modulus = { value = 210, unit = "GPa" }
@@ -58,6 +58,16 @@ reference_temperature = 293.15
 points = [[293.15, 12.16e-6], [373.15, 12.48e-6], [473.15, 12.88e-6], [573.15, 13.28e-6],
           [673.15, 13.68e-6], [773.15, 14.08e-6], [873.15, 14.48e-6], [973.15, 14.88e-6]]
 
+# Strain life of ASTM A36 plate. One heat: another (Mattos and Lawrence, 1975) reached about
+# half the strain at short lives, so treat the lives as typical, not as minimums.
+[structural_steel.fatigue.strain_life]
+model = "coffin_manson_basquin"
+fatigue_strength = 869e6
+strength_exponent = -0.104
+fatigue_ductility = 1.09
+ductility_exponent = -0.578
+source = "ASTM A36 plate (yield 265 MPa, tensile 475 MPa): the constants given for G.A. Miller and H.S. Reemsnyder, Strain-Cycle Fatigue of Sheet and Plate Steels I, SAE Paper 830175 (1983), fitted with E = 203 GPa; they give that paper's test lives, as digitized by the University of Waterloo's fatigue site, to a median 0.94 of the measured life (0.63 to 1.8 over 23 tests)"
+
 # US structural steels (ADR 0079 step 3: AISC 360 member checks), E = 29,000 ksi as AISC 360 takes it.
 [astm_a992]
 name = "ASTM A992"
@@ -88,6 +98,16 @@ tensile_strength = { value = 58, unit = "ksi" }
 thermal_conductivity = { value = 51.9, unit = "W/(m*K)" }
 specific_heat = { value = 486, unit = "J/(kg*K)" }
 thermal_expansion = { value = 11.7e-6, unit = "1/K" }
+
+# Strain life of ASTM A36 plate. One heat: another (Mattos and Lawrence, 1975) reached about
+# half the strain at short lives, so treat the lives as typical, not as minimums.
+[astm_a36.fatigue.strain_life]
+model = "coffin_manson_basquin"
+fatigue_strength = 869e6
+strength_exponent = -0.104
+fatigue_ductility = 1.09
+ductility_exponent = -0.578
+source = "ASTM A36 plate (yield 265 MPa, tensile 475 MPa): the constants given for G.A. Miller and H.S. Reemsnyder, Strain-Cycle Fatigue of Sheet and Plate Steels I, SAE Paper 830175 (1983), fitted with E = 203 GPa; they give that paper's test lives, as digitized by the University of Waterloo's fatigue site, to a median 0.94 of the measured life (0.63 to 1.8 over 23 tests)"
 
 [astm_a572_gr50]
 name = "ASTM A572 Gr. 50"

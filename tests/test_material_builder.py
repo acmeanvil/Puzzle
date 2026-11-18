@@ -25,7 +25,8 @@ def test_every_property_the_adapters_read_is_registered():
         k
         for m in generic.values()
         for k in m
-        if k not in ("name", "description", "sources", "tables", "type", "group")
+        if k
+        not in ("name", "description", "sources", "tables", "type", "group", "models", "fatigue")
     }
     assert shipped <= set(BY_KEY)
     pattern = re.compile(

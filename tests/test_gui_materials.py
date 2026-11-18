@@ -202,7 +202,7 @@ def test_fatigue_tab_holds_sn_curves_and_strain_life(app):
     """An S-N curve typed in MPa and a Langer model; saved and read back; Completeness
     says which life models the fatigue tool can use."""
     b = MaterialBuilder()
-    choose(b, "structural_steel")
+    choose(b, "astm_a992")  # a steel that ships with no fatigue data
     e = b.editor
     e.ask_table = lambda *a: [(1e6, 200.0), (1e3, 400.0)]  # any order; sorted by cycles
     e.new_sn_curve()

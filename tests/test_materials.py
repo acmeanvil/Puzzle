@@ -225,3 +225,19 @@ def test_filler_metals_carry_their_classification_strength():
         entry = library_entry(key)
         assert entry["info"]["group"] == "Filler metal"
         assert entry["properties"]["tensile_strength"]["value"] == mpa
+
+
+@pytest.mark.parametrize("key", ["structural_steel", "astm_a36"])
+def test_the_generic_steel_carries_a36s_strain_life(key):
+    """ASTM A36 plate's strain-life constants (Miller and Reemsnyder, SAE 830175), read
+    from generic.toml as fatigue data, not as properties. With the E they were fitted
+    with, 203 GPa, they give 1 % strain amplitude at about 4500 reversals, where that
+    paper's six tests at 1.00-1.05 % broke at 3400 to 6300."""
+    m = library_material(key)
+    s = m.fatigue.strain_life
+    assert s.model == "coffin_manson_basquin" and "A36" in s.source and "830175" in s.source
+    assert "fatigue" not in m.properties and m.models.used() == []
+    reversals = 4500.0
+    strain = (s.fatigue_strength / 203e9 * reversals**s.strength_exponent
+              + s.fatigue_ductility * reversals**s.ductility_exponent)  # fmt: skip
+    assert strain == pytest.approx(0.0102, rel=0.02)
