@@ -901,7 +901,10 @@ def with_settings(sif: str, study: Study, step) -> str:
         overrides["Solver */Linear System Solver"] = '"Iterative"'
         overrides["Solver */Linear System Iterative Method"] = method
         overrides["Solver */Linear System Max Iterations"] = "5000"
-        overrides["Solver */Linear System Convergence Tolerance"] = "1e-10"
+        # 1e-8, as the adapter's own CG solves: at 1e-10 CG with ILU1 on a slender
+        # cantilever stalled at 1.5e-9 on GitHub's Linux machines and then divided by
+        # zero (it converged on Windows and macOS); the tip moves by under 1e-5
+        overrides["Solver */Linear System Convergence Tolerance"] = "1e-8"
         overrides["Solver */Linear System Preconditioning"] = (
             "ILU1" if own["preconditioner"] == "default" else own["preconditioner"]
         )
