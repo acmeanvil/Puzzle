@@ -10,6 +10,11 @@ name: Solvers
 # Weekly, and by hand: Actions -> Solvers -> Run workflow takes the solvers (a JSON
 # list) and, optionally, pytest arguments that replace each job's own selection.
 on:
+  # a change to the images or to this file is tried at once (and GitHub dispatches a
+  # workflow by hand only once it is on the default branch)
+  push:
+    branches: [development, main]
+    paths: [".github/workflows/solvers.yml", "containers/**"]
   schedule:
     - cron: "17 3 * * 0" # Sundays 03:17 UTC
   workflow_dispatch:
