@@ -55,3 +55,7 @@ Gaps the writing found, for later (none blocks the skills, which say what to do 
 - No command applies a solver settings preset (the GUI does). There is no tool listing a geometry's entity names for `geometry_measure`, and none showing edge seeds or each body's meshing method.
 - A sweep run counts as one run in an agent's budget, whatever its points.
 - A body with no material assignment is not reported before a run unless the component has none at all.
+
+## Amended (2026-11-18, ADR 0090 package 12)
+
+Reading a skill loads the tool groups of the tools it names (the built-in agent), and the skills are served to MCP clients as prompts. Skill `agent-turns`.

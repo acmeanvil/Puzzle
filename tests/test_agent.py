@@ -77,7 +77,9 @@ def test_reads_then_proposes_at_the_default_level(project):
     assert _tip_load(project) == -100  # nothing changed until the user accepts
     (proposal,) = Session(project).proposals()
     # ADR 0022: the entry names the model the agent ran on
-    assert proposal["actor"] == {"kind": "agent", "name": "built-in", "model": "script"}
+    actor = dict(proposal["actor"])
+    assert len(actor.pop("turn")) == 12  # the turn it was made in (ADR 0090 package 12)
+    assert actor == {"kind": "agent", "name": "built-in", "model": "script"}
     Session(project).accept(proposal["id"])
     assert _tip_load(project) == -250
     assert [e.kind for e in events].count("tool_call") == 2

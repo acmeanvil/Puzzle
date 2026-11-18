@@ -55,6 +55,7 @@ from puzzle.results.store import RunRecord
 
 ROLE = Qt.ItemDataRole.UserRole
 STATE = Qt.ItemDataRole.UserRole + 1  # the item's state key (ADR 0033)
+TOUCHED = Qt.ItemDataRole.UserRole + 5  # how the agent's turn touched it (ADR 0090 UXA-1)
 
 
 def _group_parents(groups) -> dict[str, str]:
@@ -272,6 +273,7 @@ class ModelTree(QTreeWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.visibility = None  # the window's (gui.visibility): what to mark shown or hidden
+        self.touched: dict[str, str] = {}  # object id -> how the agent's turn touched it
         self.setHeaderHidden(True)
         self.setUniformRowHeights(True)
         self.names = NameDelegate(self)
@@ -305,8 +307,31 @@ class ModelTree(QTreeWidget):
         quiet = self.blockSignals(True)
         try:
             self._populate(project, runs, catalogs, states, keep, opened)
+            self._mark_touched()
         finally:
             self.blockSignals(quiet)
+
+    def _mark_touched(self) -> None:
+        """Objects the agent's turn added or changed: bold, saying so (ADR 0090 UXA-1)."""
+        if not self.touched:
+            return
+        for item in self._items():
+            node = item.data(0, ROLE)
+            how = (
+                self.touched.get(node.object)
+                if node is not None and node.kind == "object"
+                else None
+            )
+            if how is None:
+                continue
+            font = item.font(0)
+            font.setBold(True)
+            item.setFont(0, font)
+            item.setData(0, TOUCHED, how)
+            tip = item.toolTip(0)
+            item.setToolTip(
+                0, f"{how.capitalize()} by the agent this turn" + (f"; {tip}" if tip else "")
+            )
 
     def _populate(self, project, runs, catalogs, states, keep, opened) -> None:
         from puzzle.project.status import run_state

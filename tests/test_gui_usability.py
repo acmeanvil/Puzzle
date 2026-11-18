@@ -37,13 +37,9 @@ def _copy(tmp_path, name="cantilever"):
 @pytest.fixture(autouse=True)
 def _tidy(app):
     yield
-    from PySide6.QtCore import QCoreApplication, QEvent
+    from conftest import delete_windows
 
-    for widget in QApplication.topLevelWidgets():
-        widget.close()
-        widget.deleteLater()
-    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
-    app.processEvents()
+    delete_windows(app)
 
 
 @pytest.fixture

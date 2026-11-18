@@ -298,3 +298,7 @@ images only with the user's consent. Keys never go in a project.
   key cover most users; both stay in ADR 0072's list.
 - **Keys settable by the agent:** convenient, but a key would pass through a model's
   context and the history. Keys stay in hidden fields and the keychain.
+
+## Amended (2026-11-18, ADR 0090 package 12)
+
+Remote models get 30 rounds a turn before Continue (local ones 16). Old tool results and pictures are shortened before each request.

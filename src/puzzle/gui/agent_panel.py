@@ -4,6 +4,13 @@ The agent runs on the thread pool and changes the project only through the comma
 layer, so the window's history watcher picks up whatever it applies. Proposals
 (the default "propose" level) are listed here to accept or reject, whole. The
 autonomy level is set here too; "act" asks twice, as the double sign-off requires.
+
+ADR 0090 package 12: a proposal is a card in the transcript (each value old → new, a
+tick box per command, Show in view); what the user is looking at goes with a message
+(the context chip); the tree follows the turn, its touched objects marked; a turn is
+undone as one; conversations are kept per project (the Chats menu); the agent's plan
+shows above the message box; "/" offers the skills and "@" the objects; an empty chat
+offers three requests from the project's state.
 """
 
 from __future__ import annotations
@@ -13,10 +20,12 @@ import logging
 import sys
 import threading
 import time
+from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QStringListModel, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QComboBox,
+    QCompleter,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -38,6 +47,7 @@ from puzzle.agent.providers import ProviderError
 from puzzle.agent.settings import load_settings, settings_path
 from puzzle.commands.model import SetAutonomy
 from puzzle.errors import PuzzleError
+from puzzle.gui.agent_cards import PlanList, ProposalCard, TurnRow
 from puzzle.gui.agent_view import Transcript
 from puzzle.gui.theme import role
 
@@ -66,6 +76,54 @@ class PromptBox(QPlainTextEdit):
         self.document().contentsChanged.connect(self._fit)
         self.update_hint()
         self._fit()
+        # "/" at the start offers the skills, "@" the project's objects (UXA-14).
+        self.choices = {"/": lambda: [], "@": lambda: []}
+        self.completer = QCompleter([], self)
+        self.completer.setWidget(self)
+        self.completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self.completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        self.completer.activated.connect(self.complete_with)
+
+    def word(self) -> str:
+        """The word being typed, ending at the cursor ("@Ti", "/bo")."""
+        cursor = self.textCursor()
+        before = self.toPlainText()[: cursor.position()]
+        return before.split()[-1] if before and not before[-1].isspace() else ""
+
+    def offers(self) -> list[str]:
+        """What "/" or "@" offers for the word being typed: none for other words."""
+        word = self.word()
+        if word.startswith("@"):
+            names = self.choices["@"]()
+        elif word.startswith("/") and self.toPlainText().lstrip().startswith(word):
+            names = self.choices["/"]()
+        else:
+            return []
+        prefix = word[1:].lower()
+        return [n for n in names if prefix in n.lower()]
+
+    def complete_with(self, choice: str) -> None:
+        """Put the choice in place of the word being typed."""
+        from PySide6.QtGui import QTextCursor
+
+        word = self.word()
+        cursor = self.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.Left,
+                            QTextCursor.MoveMode.KeepAnchor, len(word))  # fmt: skip
+        cursor.insertText(f"{word[:1]}{choice} " if word[:1] == "/" else f"{choice} ")
+        self.setTextCursor(cursor)
+        self.completer.popup().hide()
+
+    def _offer(self) -> None:
+        found = self.offers()
+        if not found:
+            self.completer.popup().hide()
+            return
+        self.completer.setModel(QStringListModel(found, self.completer))
+        self.completer.setCompletionPrefix("")
+        rect = self.cursorRect()
+        rect.setWidth(260)
+        self.completer.complete(rect)
 
     def text(self) -> str:
         return self.toPlainText()
@@ -88,6 +146,11 @@ class PromptBox(QPlainTextEdit):
     def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt's name
         from puzzle.settings import current
 
+        popup = self.completer.popup()
+        if popup.isVisible() and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter,
+                                                 Qt.Key.Key_Escape, Qt.Key.Key_Tab):  # fmt: skip
+            event.ignore()  # the completer's list takes them
+            return
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             mods = event.modifiers()
             command = bool(mods & Qt.KeyboardModifier.ControlModifier)
@@ -100,6 +163,8 @@ class PromptBox(QPlainTextEdit):
                 self.insertPlainText("\n")
                 return
         super().keyPressEvent(event)
+        if event.text() or event.key() == Qt.Key.Key_Backspace:
+            self._offer()
 
     def _fit(self) -> None:
         """One line high when empty, a line more per wrapped line, up to MAX_LINES."""
@@ -196,16 +261,32 @@ class AgentPanel(QWidget):
         self.budget_used = QLabel("")
         role(self.budget_used, "muted")
         new_chat = QPushButton("New chat")
-        new_chat.clicked.connect(self.new_chat)
+        new_chat.clicked.connect(lambda: self.new_chat())
+        # Kept conversations (UXA-4): open an earlier one, export, copy.
+        self.chats_button = QToolButton(text="Chats")
+        self.chats_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.chats_button.setToolTip("Earlier conversations about this project, kept on "
+                                     "this computer; export or copy this one")  # fmt: skip
+        self.chats_menu = QMenu(self.chats_button)
+        self.chats_menu.aboutToShow.connect(self._fill_chats)
+        self.chats_button.setMenu(self.chats_menu)
         top = QHBoxLayout()
         top.addWidget(QLabel("Agents may"))
         top.addWidget(self.level)
         top.addWidget(self.budget_button)
         top.addWidget(self.budget_used)
         top.addStretch()
+        top.addWidget(self.chats_button)
         top.addWidget(new_chat)
 
         self.transcript = Transcript()
+        self.transcript.object_clicked.connect(lambda oid: self.window.show_object(oid))
+        self.chat = None  # the conversation shown (chats.Chat), before the agent is built
+        self.cards: dict[str, ProposalCard] = {}  # proposal id -> its card
+        self.turn_rows: dict[str, TurnRow] = {}
+        self._touched: list[dict] = []  # what the running turn changed
+        self._progress = None  # a run's progress.State while a tool solves (UXA-8)
+        self.context_tokens = 0
         self.status = QLabel("")
         role(self.status, "muted")
         self.stop_button = QToolButton(text="Stop")
@@ -223,9 +304,26 @@ class AgentPanel(QWidget):
         self.chips.setContentsMargins(0, 0, 0, 0)
         self.chips.addStretch()
         self.chips_box.hide()
+        self.plan = PlanList()
+        # Requests to start from, on an empty chat (UXA-14).
+        self.suggestions_box = QWidget()
+        self.suggestions = QVBoxLayout(self.suggestions_box)
+        self.suggestions.setContentsMargins(0, 0, 0, 0)
+        self.continue_button = QPushButton("Continue")
+        self.continue_button.setToolTip("Let the agent carry on where it stopped")
+        self.continue_button.clicked.connect(lambda: self.send_continue())
+        self.continue_button.hide()
+        # What the user is looking at, sent with the message unless switched off (UXA-3).
+        self.context_chip = QToolButton()
+        self.context_chip.setCheckable(True)
+        self.context_chip.setChecked(True)
+        self.context_chip.setToolTip("What you have selected and the result shown go with "
+                                     "your message; click to leave them out")  # fmt: skip
+        self.context_chip.toggled.connect(lambda _on: self.show_context())
         self.input = PromptBox()
         self.input.submitted.connect(self.send)
         self.input.attached.connect(self.attach)
+        self.input.choices = {"/": self._skill_names, "@": self._object_names}
         attach = QToolButton(text="Attach…")
         attach.setToolTip("Send a file with the next message: an image, a PDF or a text "
                           "file (or paste or drop one here)")  # fmt: skip
@@ -241,7 +339,9 @@ class AgentPanel(QWidget):
         bar = QHBoxLayout()
         bar.addWidget(attach)
         bar.addWidget(self.model_chip)
+        bar.addWidget(self.context_chip)
         bar.addStretch()
+        bar.addWidget(self.continue_button)
         bar.addWidget(send)
         self._show_chip()
 
@@ -265,7 +365,9 @@ class AgentPanel(QWidget):
         chat_layout = QVBoxLayout(chat)
         chat_layout.setContentsMargins(0, 0, 0, 0)
         chat_layout.addWidget(self.transcript, 1)
+        chat_layout.addWidget(self.suggestions_box)
         chat_layout.addLayout(status_row)
+        chat_layout.addWidget(self.plan)
         chat_layout.addWidget(self.chips_box)
         chat_layout.addWidget(self.input)
         chat_layout.addLayout(bar)
@@ -300,10 +402,201 @@ class AgentPanel(QWidget):
             self.proposals.addItem(item)
 
     def project_opened(self) -> None:
+        """Another project: its last conversation reopened (UXA-4), or its suggestions."""
         self._end_turn()  # the old turn edits the old project: stopped, never shown here
         self.agent = None
         self.transcript.clear()
+        self.cards, self.turn_rows = {}, {}
+        self.chat = None
+        s = self.window.session
+        if s is not None:
+            from puzzle.agent import chats
+
+            try:
+                self.chat = chats.latest(s.root)
+            except OSError:
+                self.chat = None
+        self._replay()
         self.refresh()
+
+    # --- kept conversations (UXA-4) --------------------------------------------------
+
+    def current_chat(self):
+        """The conversation shown: the agent's once it is built."""
+        return self.agent.chat if self.agent is not None else self.chat
+
+    def _replay(self) -> None:
+        """Draw a kept conversation again: the messages, the tools in words, its plan,
+        and Undo this turn where a turn's changes are still in effect."""
+        from puzzle.agent import evidence
+
+        self.transcript.clear()
+        self.cards, self.turn_rows = {}, {}
+        chat = self.current_chat()
+        self.plan.show_plan(chat.plan if chat is not None else [])
+        self.continue_button.hide()
+        if chat is None or not chat.messages:
+            self._show_suggestions()
+            return
+        self._show_suggestions(False)
+        touched = {r["id"]: r for r in chat.turns}
+        last_turn = None
+        for m in chat.messages:
+            if m["role"] == "user":
+                if last_turn is not None:
+                    self._turn_row(last_turn, touched.get(last_turn, {}).get("touched", []))
+                last_turn = m.get("turn")
+                names = [a["name"] for a in m.get("attachments") or []]
+                self.transcript.user(m.get("shown", m.get("content", "")), names)
+            elif m["role"] == "assistant":
+                for c in m.get("tool_calls") or []:
+                    self.transcript.tool(f"→ {evidence.call_words(c.name, c.arguments)}")
+                if m.get("text"):
+                    self.transcript.reply(m["text"])
+            elif m["role"] == "tool":
+                words = evidence.result_words(m.get("name", ""), m.get("content", ""))
+                self.transcript.tool(f"← {words}", error=bool(m.get("is_error")))
+        if last_turn is not None:
+            self._turn_row(last_turn, touched.get(last_turn, {}).get("touched", []))
+
+    def _fill_chats(self) -> None:
+        from puzzle.agent import chats
+
+        menu = self.chats_menu
+        menu.clear()
+        s = self.window.session
+        if s is None:
+            menu.addAction("Open a project first").setEnabled(False)
+            return
+        current = self.current_chat()
+        found = chats.listing(s.root)
+        if not found:
+            menu.addAction("No earlier conversations").setEnabled(False)
+        for c in found[:20]:
+            when = c["updated"].replace("T", " ")[:16]
+            action = menu.addAction(f"{c['title'] or 'Untitled'}   ({when} UTC)")
+            action.setCheckable(True)
+            action.setChecked(current is not None and current.id == c["id"])
+            action.triggered.connect(lambda _=False, cid=c["id"]: self.open_chat(cid))
+        menu.addSeparator()
+        menu.addAction("Export this conversation…", lambda: self.export_chat())
+        menu.addAction("Copy the whole conversation", self.transcript.copy_all)
+        delete = menu.addAction("Delete this conversation", lambda: self.delete_chat())
+        delete.setEnabled(current is not None and bool(current.messages))
+
+    def open_chat(self, chat_id: str) -> bool:
+        """Show and continue a kept conversation; not while a turn runs."""
+        from puzzle.agent import chats
+
+        s = self.window.session
+        if s is None or self.busy:
+            self.transcript.note("Stop the agent's turn first, then open the conversation.")
+            return False
+        try:
+            chat = chats.load(s.root, chat_id)
+        except (OSError, ValueError, KeyError) as exc:
+            self.window.report(exc)
+            return False
+        if self.agent is not None:
+            self.agent.open(chat)
+        else:
+            self.chat = chat
+        self._replay()
+        return True
+
+    def export_chat(self, path: str | None = None) -> str | None:
+        """This conversation as a Markdown file the user picks (`path` for tests)."""
+        from puzzle.agent import chats
+        from puzzle.project import atomic
+
+        chat = self.current_chat()
+        if chat is None or not chat.messages:
+            self.transcript.note("Nothing to export yet.")
+            return None
+        if path is None:
+            from PySide6.QtWidgets import QFileDialog
+
+            path, _ = QFileDialog.getSaveFileName(self, "Export the conversation",
+                                                  f"{chat.title or 'conversation'}.md",
+                                                  "Markdown (*.md)")  # fmt: skip
+            if not path:
+                return None
+        try:
+            atomic.write_text(Path(path), chats.export_markdown(chat), encoding="utf-8")
+        except OSError as exc:
+            self.window.report(exc)
+            return None
+        self.window.statusBar().showMessage(f"Conversation exported to {path}", 8000)
+        return path
+
+    def delete_chat(self) -> None:
+        from puzzle.agent import chats
+
+        chat, s = self.current_chat(), self.window.session
+        if chat is None or s is None:
+            return
+        chats.delete(s.root, chat.id)
+        self.new_chat()
+
+    # --- context, suggestions, completion (UXA-3, UXA-14) ----------------------------
+
+    def context(self) -> dict | None:
+        """What the user is looking at now, when the chip is on."""
+        if not self.context_chip.isChecked():
+            return None
+        getter = getattr(self.window, "agent_context", None)
+        try:
+            return getter() if getter is not None else None
+        except Exception:  # noqa: BLE001 - context is a help, never a failure
+            logging.getLogger("puzzle.agent").debug("no context", exc_info=True)
+            return None
+
+    def show_context(self) -> None:
+        """The chip's words follow the selection and the result shown."""
+        from puzzle.agent.context import chip
+
+        if not self.context_chip.isChecked():
+            self.context_chip.setText("Context off")
+            return
+        words = chip(self.context())
+        self.context_chip.setText(f"Sees: {words}" if words else "Sees: the model")
+
+    def _show_suggestions(self, on: bool = True) -> None:
+        while self.suggestions.count():
+            w = self.suggestions.takeAt(0).widget()
+            if w is not None:
+                w.hide()
+                w.deleteLater()
+        s = self.window.session
+        if not on or s is None:
+            self.suggestions_box.hide()
+            return
+        from puzzle.agent.suggest import suggestions
+
+        try:
+            runs = self.window._store().runs()
+        except Exception:  # noqa: BLE001 - suggestions without runs
+            runs = []
+        head = QLabel("Try asking:")
+        role(head, "muted")
+        self.suggestions.addWidget(head)
+        for text in suggestions(s.project, runs):
+            b = QPushButton(text)
+            b.setStyleSheet("text-align: left;")
+            b.clicked.connect(lambda _=False, text=text: self.send(text))
+            self.suggestions.addWidget(b)
+        self.suggestions_box.show()
+
+    def _skill_names(self) -> list[str]:
+        from puzzle.agent.suggest import skill_choices
+
+        return [name for name, _when in skill_choices()]
+
+    def _object_names(self) -> list[str]:
+        from puzzle.agent.suggest import object_choices
+
+        s = self.window.session
+        return object_choices(s.project) if s is not None else []
 
     def _end_turn(self) -> None:
         """Stop a running turn and stop listening to it (ADR 0090, AGENT-3): a new chat,
@@ -319,16 +612,25 @@ class AgentPanel(QWidget):
     # --- chat --------------------------------------------------------------------------
 
     def send(self, text: str | None = None):
+        from puzzle.agent.context import block
+        from puzzle.agent.suggest import slash
+        from puzzle.agent.toolsets import skill_groups
+
         text = (text if isinstance(text, str) else self.input.text()).strip()
         if (not text and not self.pending) or self.window.session is None or self.busy:
             return None
         self.input.clear()
         files, self.pending = list(self.pending), []
         self._show_attachments()
+        self._show_suggestions(False)
+        self.continue_button.hide()
         self.transcript.user(text, [a.label() for a in files])
+        asked, skill = slash(text)  # "/bolts ..." reads the skill first (UXA-14)
+        context = block(self.context())
         stop = threading.Event()
         self._turn += 1
         turn = self._turn
+        self._touched = []
         self._begin(stop, "Starting the agent…" if self.agent is None else "Thinking…")
 
         def current() -> bool:
@@ -337,12 +639,17 @@ class AgentPanel(QWidget):
         def work(emit, emit_event):
             if self.agent is None:  # built here, off the GUI thread (ADR 0074)
                 self.agent = self._build_agent()
-            return self.agent.ask(text, emit_event, attachments=files, stop=stop)
+            if skill:
+                self.agent.load(*skill_groups().get(skill, ()))
+            return self.agent.ask(asked, emit_event, attachments=files, stop=stop,
+                                  context=context)  # fmt: skip
 
         def done(_answer) -> None:
             self._end()
             if current():  # a reply cut off by Stop was never said: taken away
                 self.transcript.end_live()
+                if self.agent is not None:
+                    self._turn_row(self.agent.turn_id, self._touched)
 
         def failed(exc) -> None:
             self._end()
@@ -368,6 +675,12 @@ class AgentPanel(QWidget):
             lock=False,
         )  # fmt: skip
 
+    def send_continue(self):
+        """Carry on a task the round limit stopped (UXA-7)."""
+        from puzzle.agent.agent import CONTINUE
+
+        return self.send(CONTINUE)
+
     def _build_agent(self) -> Agent:
         if self.provider_factory is not None:
             provider, images = self.provider_factory(), None
@@ -377,7 +690,38 @@ class AgentPanel(QWidget):
             images = settings.images_allowed(provider)
         if sys.platform == "darwin":
             images = False  # off-screen VTK must render on macOS's main thread
-        return Agent(self.window.session.root, provider, images=images)
+        return Agent(self.window.session.root, provider, images=images, chat=self.chat,
+                     keep=True)  # fmt: skip
+
+    def _turn_row(self, turn: str | None, touched: list[dict]) -> None:
+        """Undo this turn, under a turn whose changes are still in effect (UXA-5)."""
+        s = self.window.session
+        if not turn or s is None or not touched or turn in self.turn_rows:
+            return
+        try:
+            if not s.turn_changes(turn):
+                return
+        except PuzzleError:
+            return
+        row = TurnRow(self, turn, touched)
+        self.turn_rows[turn] = row
+        self.transcript.card(row)
+
+    def undo_turn(self, turn: str) -> bool:
+        """Take back every change of the agent's turn, as one undoable step."""
+        s = self.window.session
+        if s is None:
+            return False
+        try:
+            s.undo_turn(turn)
+        except PuzzleError as exc:
+            self.window.report(exc)
+            return False
+        if turn in self.turn_rows:
+            self.turn_rows[turn].undone()
+        self.window.agent_touched([], clear=True)
+        self.window.refresh()
+        return True
 
     def _begin(self, stop, doing: str) -> None:
         self.busy, self._stop, self._started = True, stop, time.monotonic()
@@ -391,11 +735,14 @@ class AgentPanel(QWidget):
         self.busy = False
         self._ticker.stop()
         self.stop_button.hide()
+        self._progress = None
         seconds = time.monotonic() - self._started
         if self.agent is not None:
             t = self.agent.tokens
+            held = (f" · about {self.context_tokens / 1000:.1f}k tokens in context"
+                    if self.context_tokens else "")  # UXA-10's meter  # fmt: skip
             self.status.setText(f"{self._chip_text()} · {t['input']:,} in / {t['output']:,} "
-                                f"out tokens · {seconds:.0f} s")  # fmt: skip
+                                f"out tokens · {seconds:.0f} s{held}")  # fmt: skip
         else:
             self.status.setText("")
         self._show_chip()
@@ -409,7 +756,10 @@ class AgentPanel(QWidget):
 
     def _show_doing(self) -> None:
         if self.busy:
-            self.status.setText(f"{self._doing}  {time.monotonic() - self._started:.0f} s")
+            doing = self._doing
+            if self._progress is not None and self._progress.line():  # a run (UXA-8)
+                doing = f"Solving: {self._progress.line()}"
+            self.status.setText(f"{doing}  {time.monotonic() - self._started:.0f} s")
 
     def _event(self, e: Event) -> None:
         if e.kind == "status":
@@ -417,27 +767,59 @@ class AgentPanel(QWidget):
             self._show_doing()
         elif e.kind == "delta":
             self.transcript.stream(e.text)
+        elif e.kind == "thinking":
+            self.transcript.thinking(e.text)
         elif e.kind == "text":
             self.transcript.reply(e.text)
         elif e.kind == "tool_call":
-            args = json.dumps(e.data.get("arguments", {}))
-            self.transcript.tool(f"→ {e.text} {args if len(args) <= 160 else args[:160] + '…'}")
+            words = e.data.get("words") or e.text
+            self.transcript.tool(f"→ {words}")
         elif e.kind == "tool_result":
-            self.transcript.tool(f"← {_brief(e.text)}")
+            words = e.data.get("words") or _brief(e.text)
+            self.transcript.tool(f"← {words}", objects=e.data.get("touched") or None,
+                                 rows=e.data.get("rows") or None)  # fmt: skip
             if e.data.get("image"):  # what the agent rendered, shown to the user too
                 self.transcript.picture(e.data["image"], e.data.get("sent", False))
         elif e.kind == "error":
             self.transcript.tool(f"✗ {e.text[:300]}", error=True)
+            if e.data.get("continue"):
+                self.continue_button.show()
         elif e.kind == "note":
             self.transcript.note(e.text)
+        elif e.kind == "touched":
+            self._touched += e.data["objects"]
+            self.window.agent_touched(e.data["objects"])
+        elif e.kind == "proposal":
+            self.show_proposal_card(e.data["id"])
+        elif e.kind == "plan":
+            self.plan.show_plan(e.data["plan"])
+        elif e.kind == "progress":
+            from puzzle import progress
+
+            if self._progress is None:
+                self._progress = progress.State()
+            self._progress.add(e.data["event"])
+            self._show_doing()
+        elif e.kind == "usage":
+            self.context_tokens = e.data.get("context", 0)
+        elif e.kind == "ran":  # a run the agent started has ended (UXA-8)
+            study = e.data.get("study") or "a study"
+            words = (f"The agent's run of {study} failed" if e.data.get("failed")
+                     else f"The agent's run of {study} finished")  # fmt: skip
+            self.window.toasts.show(words, state="error" if e.data.get("failed") else "info")
 
     def new_chat(self) -> None:
         """A new conversation; a turn still running is stopped first and its replies
-        no longer shown."""
+        no longer shown. The one before stays among the kept chats."""
         self._end_turn()
         if self.agent is not None:
             self.agent.reset()
+        self.chat = None
         self.transcript.clear()
+        self.cards, self.turn_rows = {}, {}
+        self.plan.show_plan([])
+        self.continue_button.hide()
+        self._show_suggestions()
 
     # --- attachments (ADR 0074) ------------------------------------------------------
 
@@ -650,6 +1032,60 @@ class AgentPanel(QWidget):
 
     # --- review --------------------------------------------------------------------------
 
+    def show_proposal_card(self, pid: str) -> ProposalCard | None:
+        """A proposal as a card in the transcript (UXA-2)."""
+        s = self.window.session
+        if s is None or pid in self.cards:
+            return self.cards.get(pid)
+        found = next((p for p in s.proposals() if p["id"] == pid), None)
+        if found is None:
+            return None
+        card = ProposalCard(self, found)
+        self.cards[pid] = card
+        self.transcript.card(card, f"[proposal {len(self.cards)}]")
+        self.window.docks.show("agent")
+        return card
+
+    def accept_proposal(self, pid: str, only: list[int] | None = None):
+        """Accept a proposal's ticked commands (all: `only` None), off the GUI thread."""
+        s = self.window.session
+        if s is None:
+            return None
+        card = self.cards.get(pid)
+
+        def done(_):
+            self._end_preview()
+            if card is not None:
+                n = len(only) if only is not None else len(card.ticks)
+                card.decided(f"Accepted ({n} of {len(card.ticks)})" if only is not None
+                             else "Accepted")  # fmt: skip
+            self.window.refresh()
+
+        def failed(exc):
+            self.window.report(exc)
+            self.window.refresh()
+
+        return self.window.background(f"Applying proposal {pid}…",
+                                      lambda _emit: s.accept(pid, only=only), done,
+                                      failed=failed)  # fmt: skip
+
+    def _end_preview(self) -> None:
+        """A proposal's preview (Show in view) ends when it is decided."""
+        w = self.window
+        if getattr(w, "pending", None) is not None and w.workbench.tool is None:
+            w.pending = None
+
+    def reject_proposal(self, pid: str) -> None:
+        self._end_preview()
+        try:
+            self.window.session.reject(pid)
+        except PuzzleError as exc:
+            self.window.report(exc)
+        else:
+            if pid in self.cards:
+                self.cards[pid].decided("Rejected")
+        self.window.refresh()
+
     def accept_selected(self):
         pid = self._selected_proposal()
         if pid is None:
@@ -657,6 +1093,8 @@ class AgentPanel(QWidget):
         s = self.window.session
 
         def done(_):
+            if pid in self.cards:
+                self.cards[pid].decided("Accepted")
             self.window.refresh()
 
         # A proposal can include a run: apply it off the GUI thread.
@@ -668,11 +1106,7 @@ class AgentPanel(QWidget):
         pid = self._selected_proposal()
         if pid is None:
             return
-        try:
-            self.window.session.reject(pid)
-        except PuzzleError as exc:
-            self.window.report(exc)
-        self.window.refresh()
+        self.reject_proposal(pid)
 
     def _selected_proposal(self) -> str | None:
         """The proposal picked in the list; none picked is none (ADR 0090, AGENT-11:

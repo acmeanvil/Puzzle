@@ -47,13 +47,9 @@ def _tidy(app):
     """Every window and dialog a test made, deleted before the next: a half-dead one
     crashed the next window's style sheet."""
     yield
-    from PySide6.QtCore import QCoreApplication, QEvent
+    from conftest import delete_windows
 
-    for widget in QApplication.topLevelWidgets():
-        widget.close()
-        widget.deleteLater()
-    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
-    app.processEvents()
+    delete_windows(app)
 
 
 @pytest.fixture

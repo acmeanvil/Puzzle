@@ -498,6 +498,11 @@ FEniCSx, threaded beam-bolt ends, and the modelled bolts of ADR 0077. Left:
   field in `capabilities`, a sweep's points in the budget, a body with no material
   before a run.)
 - Translating more of Code_Aster's advice (`progress.translate`) (0054).
+- Agent interface left by ADR 0090 package 12: agent runs on the job runner with a turn
+  that ends while its run goes on (who resumes, how the budget counts), picks and an
+  attach-the-view button as context, outside MCP clients made cautious after untrusted
+  text, the MCP naming pass (with aliases), notifications, a summary when old results
+  are cut, eval tasks for images, long contexts and the panel, `puzzle ask --chat`.
 
 ### 10. GUI and look
 

@@ -264,6 +264,8 @@ QWidget#view_bar QToolButton:checked {{ background: {t.overlay_checked}; border-
 QFrame#toast {{ background: {t.raised}; border: 1px solid {t.border}; border-radius: 6px; }}
 QFrame#toast[state="error"] {{ border-color: {t.error}; }}
 QFrame#toast[state="done"] {{ border-left: 4px solid {t.done}; }}
+QFrame#agent_card {{ background: {t.raised}; border: 1px solid {t.border};
+                     border-left: 3px solid {t.accent}; border-radius: 4px; }}
 """
 
 

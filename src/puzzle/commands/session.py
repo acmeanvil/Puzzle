@@ -93,6 +93,12 @@ class Actor:
     # so a project's history shows which model made which change.
     model: str = ""
     suite: str = ""
+    # ADR 0090 package 12: the built-in agent's turn its changes belong to, so a turn is
+    # undone as one (`Session.undo_turn`); logged with the entry. `cautious` (never
+    # logged) makes an agent at an "act" level propose instead of applying, after it
+    # read text from outside Puzzle this turn (a solver's log, a file: UXA-11).
+    turn: str = ""
+    cautious: bool = field(default=False, compare=False)
 
     @property
     def is_agent(self) -> bool:
@@ -100,7 +106,8 @@ class Actor:
 
     def to_dict(self) -> dict[str, str]:
         out = {"kind": self.kind, "name": self.name}
-        out |= {k: v for k, v in (("model", self.model), ("suite", self.suite)) if v}
+        out |= {k: v for k, v in (("model", self.model), ("suite", self.suite),
+                                  ("turn", self.turn)) if v}  # fmt: skip
         return out
 
 
@@ -552,6 +559,61 @@ class Session:
             staged=staged,
         )  # fmt: skip
 
+    def turn_changes(self, turn: str) -> list[int]:
+        """The seqs of an agent turn's changes still in effect, oldest first (ADR 0090
+        package 12): what Undo this turn takes back. Runs are kept: they change no model."""
+        entries = {e["seq"]: e for e in self.history_entries() if "seq" in e}
+        live, depth = _in_effect(entries), _depths(entries)
+        return sorted(s for s, e in entries.items() if s in live and e.get("undo")
+                      and depth[s] % 2 == 0
+                      and (e.get("actor") or {}).get("turn") == turn)  # fmt: skip
+
+    def undo_turn(self, turn: str, actor: Actor = USER) -> Outcome:
+        """Undo every change an agent's turn made, newest first, as one history entry
+        (`undoes_turn`), so Redo puts the whole turn back. Refused, naming them, when a
+        later change touched the same objects: undo that first. Agents may undo only
+        their own turns."""
+        with self._locked():
+            if actor.is_agent and self.project.agent.level == "advise":
+                raise PuzzleError("agents only advise in this project", code="not_allowed")
+            entries = {e["seq"]: e for e in self.history_entries() if "seq" in e}
+            seqs = self.turn_changes(turn)
+            if not seqs:
+                raise PuzzleError("nothing of that turn is left to undo", code="not_undoable",
+                                  details={"turn": turn})  # fmt: skip
+            if actor.is_agent and not all(_same_actor(entries[s]["actor"], actor) for s in seqs):
+                raise PuzzleError("agents may undo only their own changes", code="not_allowed")
+            if any((entries[s].get("command") or {}).get("command") == "restore_version"
+                   for s in seqs):  # fmt: skip
+                raise PuzzleError("this turn restored a version: undo that on its own first",
+                                  code="not_undoable")  # fmt: skip
+            from puzzle.project.migrations import upgrade_object
+
+            before = _snapshot(self.project)
+            trial = copy.deepcopy(self.project)
+            for seq in reversed(seqs):
+                entry = entries[seq]
+                state = entry["undo"]
+                now = _snapshot(trial)
+                stale = [
+                    i for i, h in state["after"].items() if (now.get(i) or {}).get("hash") != h
+                ]
+                if stale:
+                    names = [now[i]["name"] if i in now else i for i in stale]
+                    raise PuzzleError("changed since the turn; undo the later changes first",
+                                      code="not_undoable", details={"objects": names})  # fmt: skip
+                for i in state["after"]:
+                    trial.objects.pop(UUID(i), None)
+                for snap in state["before"].values():
+                    kind, data = upgrade_object(snap["kind"], snap["data"], entry.get("schema", 1))
+                    obj = KINDS[kind].model_validate(data)
+                    trial.objects[obj.id] = obj
+            _refuse_dangling(self.project, trial)
+            self._refuse_new_code(trial, actor, "undo")
+            self.project = trial
+            return self._record({"command": "undo_turn", "turn": turn, "seqs": seqs}, actor,
+                                before, extra={"undoes_turn": seqs})  # fmt: skip
+
     # --- versions (ADR 0059) ------------------------------------------------------
 
     def save_version(
@@ -765,6 +827,8 @@ class Session:
                 code="not_allowed",
             )
         if level == "propose":
+            return "propose"
+        if actor.cautious:  # it read untrusted text this turn: the user reviews (UXA-11)
             return "propose"
         if level != "act" and self._writes_code([cmd]):  # ADR 0062: new code is proposed
             return "propose"
@@ -1463,7 +1527,10 @@ def _depths(entries: dict[int, dict[str, Any]]) -> dict[int, int]:
     depth: dict[int, int] = {}
     for seq in sorted(entries):
         target = entries[seq].get("undoes")
-        depth[seq] = depth.get(target, 0) + 1 if target is not None else 0
+        if target is not None:
+            depth[seq] = depth.get(target, 0) + 1
+        else:  # a turn undone (package 12) takes its changes back: an undo's depth
+            depth[seq] = 1 if entries[seq].get("undoes_turn") else 0
     return depth
 
 
@@ -1484,6 +1551,7 @@ def _in_effect(entries: dict[int, dict[str, Any]]) -> set[int]:
         live.add(seq)
         if "undoes" in e:
             cancelled.add(e["undoes"])
+        cancelled.update(e.get("undoes_turn") or ())  # a turn undone as one (package 12)
     return live
 
 

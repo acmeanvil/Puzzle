@@ -17,16 +17,64 @@ project needs next.
 1. Open the Agent panel with the **Agent** button at the right of the toolbar.
 2. Type in the message box and send with Ctrl+Enter (⌘+Enter on a Mac). Settings >
    Agent can make Enter send instead.
-3. Replies come as text, equations and folded code; the tool calls it made fold into
-   one line each. A picture the agent draws (`render`) shows there too, saying whether
-   the model was sent it. The status line shows the time taken; **Stop** ends its turn:
-   a reply being written stops at once and is dropped, a run it started is stopped, and
-   otherwise it stops after the step it is on.
+3. Replies come as text, equations and folded code, drawn as they are written; a model
+   that thinks aloud shows it under a folded **Thinking** line. The tools it used fold
+   into one line per reply, each said in words ("Read statistics of von mises in Tip
+   load"), with the objects it changed as links: click one to select it in the tree. A
+   picture the agent draws (`render`) shows there too, saying whether the model was sent
+   it. The status line shows the time taken, and while a run it started solves, how far
+   it has got; a toast says when that run ends. **Stop** ends its turn: a reply being
+   written stops at once and is dropped, a run it started is stopped, and otherwise it
+   stops after the step it is on.
 4. **Attach…** sends an image, a PDF or a text file with the next message; you can also
    drop or paste one. A remote provider doesn't get images or files unless you allow it.
 5. **New chat** starts again. Pressed while the agent is working, it stops that turn
    first; opening another project or choosing another model does the same.
-6. **Accept** and **Reject** act on the proposal picked in the list; pick one first.
+6. An empty chat offers three requests to start from, taken from the project's state.
+   Type `/` at the start of a message for the skills (`/bolts add two M8 bolts` reads
+   the bolts skill first) and `@` for the project's objects by name.
+
+## How to review what the agent does
+
+- **The tree follows the turn.** Each change shows in the model tree as it is made; the
+  3D view and Properties catch up when the turn ends. What the turn added or changed is
+  in bold until the next turn, its tooltip saying so.
+- **A proposal is a card in the chat.** It lists each command with a tick box and, under
+  it, every value it changes, old → new ("Tip load › Values › Y: -100 N → -250 N"), and
+  the project's problems now and after. **Show in view** selects what it changes (a
+  geometry's new shape is previewed in the Geometry tab, not applied); **Accept**
+  applies the ticked commands (untick one to accept the rest), **Reject** drops it.
+  Proposals made elsewhere (an outside agent) are listed under Proposals, where
+  **Accept** and **Reject** act on the one picked.
+- **Undo this turn** under a turn's reply takes back every change it made, as one step;
+  Redo puts them all back. It is refused, naming them, when you have changed the same
+  objects since: undo those first. Runs are kept.
+- **The plan.** For a longer task the agent may keep a plan, shown above the message
+  box, each item to do, being done or done. When a turn stops at its round limit,
+  **Continue** lets it carry on.
+
+## What the agent sees
+
+- **Sees: …** beside the model button names what goes with your message: the tree's
+  selection (by name and place) and the result shown (study, quantity, step). Click it
+  to leave them out. Right-click anything in the tree and choose **Ask the agent about
+  this…** to start a message about it.
+- Text from outside Puzzle (a solver's log, a file's headers, an attached file) is
+  marked as data for the model, and after reading it the agent's changes in that turn
+  are proposals even at "act within the budget", so an instruction hidden in a file
+  can't make changes on its own.
+- The agent starts with a core set of tools and loads others by area as a task needs
+  them, so a request stays small for local models.
+
+## Conversations
+
+Each project's conversations are kept on this computer, in your user data folder, never
+in the project: opening the project reopens the last one. **Chats** lists the earlier
+ones to open, **Export this conversation…** writes one as Markdown, **Copy the whole
+conversation** puts it on the clipboard, and **Delete this conversation** removes it.
+Save as, archives and versions don't take conversations, and a colleague opening the
+project sees none of yours. Pictures and attached images and PDFs are not kept, only
+their names.
 
 ![The agent window: a question, the tools the agent used folded into one line, its answer with an equation, and the proposal it made waiting below with Accept and Reject](image:screens/agent-window.png)
 
@@ -104,8 +152,10 @@ does. On the command line: `puzzle autonomy PROJECT --mcp off|local|network`.
 - A remote provider gets outlines and summaries only, never rendered images, attached
   pictures or PDFs, unless "Images and files" is on for it (Settings > Agent). Requests
   carry no project name or path.
-- Each reply's tokens are shown in the status; the provider's console is the bill. The
-  budget counts runs and solver time, not tokens.
+- Each reply's tokens are shown in the status, with about how much of the model's
+  context the conversation holds; the provider's console is the bill. The budget counts
+  runs and solver time, not tokens. Older tool results and pictures are shortened as a
+  conversation grows, before the model's context fills.
 - A key in the provider's environment variable (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
   `GEMINI_API_KEY`...) is used before the keychain.
 
@@ -117,12 +167,16 @@ does. On the command line: `puzzle autonomy PROJECT --mcp off|local|network`.
   if it fails.
 - An error "auth" means no key or a rejected one; "quota" means the account is out of
   credit; "context" means the chat is too long: start a new chat.
+- Undoing a turn's changes one by one with Undo when **Undo this turn** does it in one.
 - Expecting the agent to run studies at "propose changes": runs are proposed too.
 
 ## For agents and scripts
 
 Agents read the Advisor with [next_steps](help:mcp:next_steps), the domain pack with
-[knowledge](help:mcp:knowledge), and proposals with [proposals](help:mcp:proposals). In
+[knowledge](help:mcp:knowledge), and proposals with [proposals](help:mcp:proposals);
+they keep a plan with [plan](help:mcp:plan) and load tools by area with
+[tools_load](help:mcp:tools_load) (the skill `agent-turns`). MCP clients see every
+tool marked read-only or not, and the skills as prompts. In
 a terminal: [puzzle ask](help:cli:ask) asks the built-in agent,
 [puzzle advise](help:cli:advise) prints the Advisor, [puzzle mcp](help:cli:mcp) serves a
 project, [puzzle autonomy](help:cli:autonomy) sets the level,

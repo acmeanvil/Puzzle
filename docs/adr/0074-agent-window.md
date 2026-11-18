@@ -97,3 +97,7 @@ What was measured on the Windows machine:
   worker. Revisit if a tool is found to starve the GUI.
 - **Model choice per project:** a model is the user's (keys, local hardware), never the
   project's (ADR 0015).
+
+## Amended (2026-11-18, ADR 0090 package 12)
+
+Conversations are kept per project in `<user data dir>/agent-chats/`, outside the project, and reopened from the panel's Chats menu. The panel has proposal cards (old → new values, a tick box per command, Show in view), a plan list, Continue at the round limit, a context chip (the selection and the shown result sent with a message), an Undo this turn row, a folded Thinking line, Copy all, "/" for skills and "@" for objects. The reply is drawn as Markdown while it streams. The tree follows a turn and marks what it touched.

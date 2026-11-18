@@ -84,3 +84,7 @@ Not done:
 - VRAM on discrete GPUs (read through `nvidia-smi` later).
 - English summaries of further French manual sections. The pack carries the message table and Puzzle's own notes; summaries of other manual sections can go in `agent/notes/` with their link.
 - Fine-tuning. It is considered only if retrieval plateaus on the suite.
+
+## Amended (2026-11-18, ADR 0090 package 12)
+
+Suite 2026.11.2: the bracket assembly as a second project and families for memory (a follow-up message), contacts, bolts and injection (a solver log carrying an instruction). Evals give every model 16 rounds so scores compare; requests are counted per message.

@@ -782,10 +782,14 @@ class ScriptedProvider:
     def __init__(self, replies: list) -> None:
         self.replies = list(replies)
         self.seen: list[list[dict]] = []
+        self.tools_seen: list[list[str]] = []  # the tools offered with each request
+        self.systems: list[str] = []
 
     def complete(self, system: str, messages: list[dict], tools: list[ToolSpec],
                  on_delta: Delta = None) -> Reply:  # fmt: skip
         self.seen.append([dict(m) for m in messages])
+        self.tools_seen.append([t.name for t in tools])
+        self.systems.append(system)
         if not self.replies:
             return Reply(text="(script finished)")
         reply = self.replies.pop(0)

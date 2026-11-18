@@ -122,18 +122,14 @@ def _window(app, tmp_path, example: str | None) -> MainWindow:
 def _close(app, window) -> None:
     """The window and everything an action left open, deleted before the next test:
     a half-dead widget crashed the next window's style sheet."""
-    from PySide6.QtCore import QCoreApplication, QEvent
+    from conftest import delete_windows
 
     end = time.monotonic() + 120  # its background jobs report to it: let them end first
     while window.tasks and time.monotonic() < end:
         app.processEvents()
         time.sleep(0.02)
     window.close()
-    for widget in QApplication.topLevelWidgets():
-        widget.close()
-        widget.deleteLater()
-    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
-    app.processEvents()
+    delete_windows(app)
 
 
 def _leaves(window) -> list[tuple[str, object]]:

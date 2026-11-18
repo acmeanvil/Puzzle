@@ -16,6 +16,7 @@ from __future__ import annotations
 import functools
 import json
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -77,6 +78,28 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
 
     actor = Actor("agent", client, model=model, suite=suite)
     shared: dict[str, Session] = {}
+    # The built-in agent's turn (ADR 0090 package 12): its id tags each change so the
+    # turn is undone as one; text from outside Puzzle read during it makes later
+    # changes proposals (UXA-11); a run's progress goes to `on_event`; the plan.
+    turn: dict[str, Any] = {"plan": [], "on_event": None, "untrusted": False}
+
+    def begin_turn(turn_id: str = "", on_event=None) -> None:
+        nonlocal actor
+        actor = replace(actor, turn=turn_id, cautious=False)
+        turn.update(on_event=on_event, untrusted=False)
+
+    def read_untrusted() -> None:
+        """Text from outside Puzzle reached the model: at an "act" level, the rest of
+        the turn's changes are proposed for the user to review (UXA-11)."""
+        nonlocal actor
+        turn["untrusted"] = True
+        if not outside:
+            actor = replace(actor, cautious=True)
+
+    def progress(event) -> None:
+        hook = turn.get("on_event")
+        if hook is not None:
+            hook(event)
 
     def session() -> Session:
         s = shared.get("s")
@@ -99,7 +122,9 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
     def run(command: dict[str, Any], rationale: str = ""):
         """A run command through the session: refused at advise, a proposal at propose,
         solved within the budget at act_in_budget, every solve counted (ADR 0090)."""
-        return session().submit(command, actor, rationale=rationale, cancel=cancel)
+        return session().submit(
+            command, actor, rationale=rationale, cancel=cancel, on_event=progress
+        )
 
     def guarded(fn):
         """Report PuzzleErrors to the agent as their structured form. Inside a call, a
@@ -117,6 +142,9 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
 
     server = MCPServer(name="puzzle", instructions=INSTRUCTIONS)
     tool = server.tool
+    server.begin_turn = begin_turn  # the built-in agent's hooks (package 12)
+    server.read_untrusted = read_untrusted
+    server.turn = turn
 
     # --- skills (ADR 0057) ---------------------------------------------------------
 
@@ -1086,7 +1114,9 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         s = session()
         if isinstance(command, list):
             return s.submit_batch(command, actor, rationale=rationale).to_dict()
-        return s.submit(command, actor, rationale=rationale, cancel=cancel).to_dict()
+        return s.submit(
+            command, actor, rationale=rationale, cancel=cancel, on_event=progress
+        ).to_dict()
 
     @tool(
         description="The recipes (ready-wired operator chains: worst nodes, peak per part, "
@@ -3010,7 +3040,78 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
                 raise PuzzleError(exc.args[0], code="not_found") from None
             return Image(data=png.read_bytes(), format="png")
 
+    # --- the agent's own (ADR 0090 package 12) -------------------------------------
+
+    from puzzle.agent import toolsets
+
+    @tool(
+        description="Load a group of tools by area (the built-in agent starts with a "
+        "core set; reading a skill loads its tools too). Groups:\n" + toolsets.catalogue()
+    )
+    def tools_load(group: str) -> dict[str, Any]:
+        try:
+            names = toolsets.tools_of(group)
+        except KeyError as exc:
+            raise ToolError(json.dumps({"code": "not_found", "message": exc.args[0]})) from None
+        return {"group": group, "tools": list(names)}
+
+    @tool(
+        description="Your plan for a longer task, shown to the user above the message "
+        'box: `items` as [{"text": ..., "state": "todo"|"doing"|"done"|'
+        '"skipped"}], the whole list each time; none returns the plan. '
+        "`from_advisor` starts one from the Advisor's needed steps (next_steps)."
+    )
+    @guarded
+    def plan(items: list[dict[str, str]] | None = None, from_advisor: bool = False
+             ) -> dict[str, Any]:  # fmt: skip
+        from puzzle.agent.plans import from_advice, normalise
+
+        if from_advisor:
+            from puzzle.advisor import advise
+            from puzzle.project.layout import RESULTS_DIR
+            from puzzle.results.store import ResultStore
+
+            try:
+                runs = ResultStore(root / RESULTS_DIR).runs()
+            except PuzzleError:
+                runs = []
+            turn["plan"] = from_advice(advise(session().project, runs, root=root))
+        if items is not None:
+            turn["plan"] = normalise(items)
+        return {"plan": turn["plan"]}
+
+    _annotate(server)
+    _skill_prompts(server)
     return server
+
+
+def _annotate(server: MCPServer) -> None:
+    """MCP's hints on every tool (UXA-12): read-only, destructive, or neither."""
+    from mcp.types import ToolAnnotations
+
+    from puzzle.agent.toolsets import DESTRUCTIVE, READ_ONLY
+
+    for t in server._tool_manager._tools.values():
+        t.annotations = ToolAnnotations(read_only_hint=t.name in READ_ONLY,
+                                        destructive_hint=t.name in DESTRUCTIVE)  # fmt: skip
+
+
+def _skill_prompts(server: MCPServer) -> None:
+    """Each skill as an MCP prompt (UXA-12): a client may offer them as tasks."""
+    from mcp.server.mcpserver.prompts.base import Prompt
+
+    from puzzle.agent.skills import read, skills
+
+    def reader(name: str):
+        def body() -> str:
+            return read(name)
+
+        return body
+
+    for skill in skills().values():
+        server._prompt_manager.add_prompt(Prompt.from_function(
+            reader(skill.name), name=skill.name,
+            description=f"Use when: {skill.description}"))  # fmt: skip
 
 
 def serve(root: Path, client: str = "mcp-client") -> None:

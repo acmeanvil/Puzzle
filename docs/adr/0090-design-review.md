@@ -739,6 +739,67 @@ Euler-Bernoulli) and fails at ten. The findings' tests are in
   are generous; `test_store_safety::test_two_sessions_never_lose_an_edit` failed once
   under load.
 
+**Package 12 built (2026-11-18):** Agent interface. Tests in
+`tests/test_agent_interface.py` (23, the scripted provider, the GUI offscreen).
+
+- UXA-9, 12: the built-in agent sends a core of 29 tools and loads the rest by group
+  (`agent/toolsets.py`: by a skill read, `tools_load`, or a tool called by name, which
+  loads its group first). The prompt before the first message is about 5.8k tokens, from
+  24.7k (characters ÷ 4, as the review counted; a test holds 8k, 30 tools, and every tool
+  in exactly one group). Loading a group reaches no tool below its level. Outside MCP
+  clients keep the whole list (114), each tool with read-only and destructive hints, and
+  the skills as MCP prompts. Left: the naming pass, a network transport, notifications.
+- UXA-5: each change an agent makes carries its turn (`Actor.turn`, in the history);
+  `Session.undo_turn` takes the turn's changes back newest first as one entry
+  (`undoes_turn`) that Redo puts back, refused, naming the objects, when they changed
+  since or when the turn restored a version; an agent undoes only its own turn. No
+  version is saved at a turn's start (package 3's AGENT-7 stands).
+- UXA-2: a proposal is a card in the transcript: each value old → new
+  (`commands/changes.py`), the problems before and after, a tick box per command
+  (accepted in part), Show in view.
+- UXA-1, 6: during a turn the tree, history and problems follow each change and the tree
+  marks what the turn touched; the view and Properties reload once at its end. Tool
+  calls read as words and link to their objects (`agent/evidence.py`).
+- UXA-3: the selection and the shown result go with a message as a `<context>` block
+  (`agent/context.py`; a chip switches it off); the tree's Ask the agent about this…
+  fills the message box. Left: picks in the view, an attach-the-view button.
+- UXA-4: conversations are kept per project in `<user data dir>/agent-chats/<hash of the
+  project's path>/` (`agent/chats.py`; at most 50, pictures and binary attachments by
+  name only, written atomically), never in the project: they are a person's working
+  text, so Save as, archives, versions and hashes don't carry them, and a moved project
+  loses sight of its chats (`project.txt` names the path). `puzzle ask` keeps none.
+- UXA-7: the agent keeps a plan (MCP `plan`, seeded from the Advisor, shown as a list);
+  remote models get 30 rounds, local ones 16, then Continue.
+- UXA-8, in part: a run's progress reaches the turn's status line and its end a toast.
+  Left: agent runs on the job runner, a turn ending while its run goes on (who resumes
+  it and how its solves count against the budget is undecided).
+- UXA-10: tool results from before the last two user messages are cut to 400 characters
+  and older pictures dropped before each request; an estimate of the context in use.
+- UXA-11: solver logs, field files and attachments come back marked untrusted
+  (`toolsets.UNTRUSTED`, `evidence.wrap_untrusted`), and for the rest of that turn an
+  agent's changes are proposals whatever its level (`Actor.cautious`). The built-in
+  agent only: outside clients have no turns.
+- UXA-13, 14: the reply is drawn as Markdown while it streams, with a folded Thinking
+  line and Copy all; "/" offers skills and "@" object names; an empty chat suggests
+  three requests.
+- UXA-15, in part: the eval suite (2026.11.2) adds the bracket assembly and memory,
+  contacts, bolts and injection tasks; evals keep 16 rounds for every model. Left: tasks
+  for images, long contexts and the panel; prompt size in `pick` records.
+- Found while verifying, and fixed: a lock's release failed on Windows when a waiting
+  client was reading the lock file at that moment, leaving the lock naming a live
+  process, so the waiter timed out as busy (`atomic._unlink` retries; this was the
+  now-and-then failure of `test_two_sessions_never_lose_an_edit`). A remote cancel
+  stopped nothing on a host whose `sh` is dash (Debian, Ubuntu): `kill -TERM -- -pgid`
+  reads `--` as a pid there; it is `kill -s TERM -- -pgid` now (found by CI's pip job).
+  GUI tests' clean-up deleted a completer's popup before its window, which deleted it
+  again and aborted Python about one run in four: `conftest.delete_windows` deletes
+  popups last.
+- Not seen on a real screen: the cards, plan list, chip and the message box's
+  completion popup with Enter to send. Without a test of their own: the Chats menu's
+  Delete and Copy, the Thinking line with a real provider, a proposal's Geometry-tab
+  preview (it uses `window.pending`, cleared on accept or reject only if no tool is
+  open).
+
 ### Enhancements toward the state of the art
 
 From `state-of-the-art.md` (50 gaps, each with who has it, which open solver can deliver

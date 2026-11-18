@@ -762,6 +762,8 @@ class MainWindow(QMainWindow):
         self.watcher.fileChanged.connect(lambda _: self._reload_soon())
         self._reload_timer = QTimer(self, singleShot=True, interval=300)
         self._reload_timer.timeout.connect(self._reload_if_changed)
+        self._follow_timer = QTimer(self, singleShot=True, interval=400)  # UXA-1
+        self._follow_timer.timeout.connect(self._follow_agent)
         # CalculiX with PARDISO, built here once in the background (ADR 0068 decision 5),
         # a little after start so the window is up first.
         QTimer.singleShot(8000, self._build_solvers)
@@ -2210,6 +2212,8 @@ class MainWindow(QMainWindow):
         node = self.tree.current()
         with timing.action(f"showing {node.label if node is not None else 'nothing'}"):
             self._show_selected()
+        if getattr(self, "agent", None) is not None:
+            self._aside("the agent's context", self.agent.show_context)  # UXA-3
 
     def _show_selected(self) -> None:
         from puzzle.gui.timing import step
@@ -3796,6 +3800,11 @@ class MainWindow(QMainWindow):
         menu = menu or QMenu(self)
         if menu.actions():
             menu.addSeparator()
+        if item is not None and item.data(0, ROLE) is not None:
+            asked = item.data(0, ROLE)
+            menu.addAction("Ask the agent about this…").triggered.connect(
+                lambda: self.ask_agent_about(asked)
+            )  # UXA-3
         if item is not None and item.childCount():
             below = item.data(0, ROLE)  # found again when asked: a rebuild deletes items
             menu.addAction("Expand all below").triggered.connect(lambda: self._expand_below(below))
@@ -4146,17 +4155,145 @@ class MainWindow(QMainWindow):
         return getattr(node, "selection", None)
 
     def agent_turn(self, on: bool) -> None:
-        """The agent is working (ADR 0074): its changes reload the project once, when
-        its turn ends, not after each one (a reload redraws the view, seconds on a large
-        model, which kept the window busy for most of a turn)."""
+        """The agent is working (ADR 0074): its changes reload the whole window once,
+        when its turn ends, not after each one (a reload redraws the view, seconds on a
+        large model). Meanwhile the tree, history and problems follow each change
+        (`_follow_agent`, ADR 0090 package 12, UXA-1), the view keeping still. A new
+        turn starts with no object marked as touched."""
         self._agent_turn = on
+        if on:
+            self.agent_touched([], clear=True)
         if not on and getattr(self, "_reload_held", False):
             self._reload_held = False
+            self._follow_timer.stop()
             self.reload()
+
+    def agent_touched(self, objects: list[dict], clear: bool = False) -> None:
+        """Objects the agent's turn added, changed or deleted: marked in the tree until
+        the next turn (UXA-1)."""
+        if clear:
+            self.tree.touched = {}
+        for o in objects:
+            self.tree.touched[o["id"]] = o.get("how", "changed")
+        if objects:
+            self._follow_timer.start()
+
+    def _follow_agent(self) -> None:
+        """The tree, history and problems as the agent's turn leaves them, now; the view
+        and Properties wait for the turn's end."""
+        if self.session is None:
+            return
+        try:
+            self.session = Session(self.session.root)
+        except PuzzleError:
+            return  # read again at the turn's end
+        s = self.session
+        try:
+            runs = self._store().runs()
+        except PuzzleError:
+            runs = []
+        from puzzle.project.status import status
+
+        self.states = status(s.project, runs, self.running | self._pending_studies(),
+                             set(self.failed_studies))  # fmt: skip
+        self._aside("the model tree", lambda: self.tree.populate(
+            s.project, runs, self._field_catalogs(runs), self.states))  # fmt: skip
+        self._aside("the history", lambda: self._fill_history(s))
+        self._aside("the problems", self.refresh_problems)
+        self._aside("the agent", self._refresh_agent)
+
+    def show_object(self, object_id: str) -> bool:
+        """Select an object in the Model tab's tree (a tool line's link, UXA-1)."""
+        if self.session is None:
+            return False
+        item = self.tree.item_for(Node("object", object_id))
+        if item is None:
+            self.statusBar().showMessage("That object is no longer in the project", 8000)
+            return False
+        self.left_tabs.setCurrentIndex(0)
+        self.tree.setCurrentItem(item)
+        self.tree.scrollToItem(item)
+        return True
+
+    def show_proposal(self, pid: str) -> bool:
+        """A proposal's changes in the view (UXA-2): a geometry's new history previewed
+        in the Geometry tab (`preview_history`, never written), else the first object it
+        changes selected, which shows it."""
+        from puzzle.commands.changes import changes
+
+        s = self.session
+        if s is None:
+            return False
+        found = next((p for p in s.proposals() if p["id"] == pid), None)
+        if found is None:
+            return False
+        trial = copy.deepcopy(s.project)
+        from puzzle.commands import parse_command
+        from puzzle.commands.session import _execute
+
+        try:
+            for raw in found["commands"]:
+                cmd = parse_command(raw)
+                if cmd.edits_model:
+                    _execute(trial, cmd)
+        except PuzzleError as exc:
+            self.report(exc)
+            return False
+        for oid, obj in trial.objects.items():
+            old = s.project.objects.get(oid)
+            if (isinstance(obj, Geometry) and old is not None
+                    and obj.history != old.history):  # fmt: skip
+                self.left_tabs.setCurrentWidget(self.workbench)
+                self.workbench.geo_id = oid
+                self.workbench.refresh()
+                self.preview_history(oid, [step.model_dump(mode="json") for step in obj.history])
+                self.statusBar().showMessage(
+                    f"Previewing {obj.name} as the proposal would make it (not applied)", 8000
+                )
+                return True
+        touched = [o for c in changes(s.project, found["commands"])["commands"]
+                   for o in c["objects"] if o["how"] != "deleted"]  # fmt: skip
+        return any(self.show_object(o["id"]) for o in touched)
+
+    def agent_context(self) -> dict:
+        """What the user is looking at, for the agent (UXA-3): the tab, the tree's
+        selection by name and place, the result shown. Names only."""
+        out: dict = {"tab": self.left_tabs.tabText(self.left_tabs.currentIndex())}
+        selected = []
+        for item in self.tree.selectedItems()[:8]:
+            names, at = [], item
+            while at is not None and at.parent() is not None:
+                node = at.data(0, ROLE)
+                if node is not None and node.kind not in ("section", "folder"):
+                    names.append(at.text(0))
+                at = at.parent()
+            if names:
+                selected.append(" › ".join(reversed(names)))
+        out["selected"] = selected
+        run = getattr(self, "_result_run", None)
+        if run and self.result is not None and self.results_bar.isVisible():
+            rows = getattr(self, "_run_rows", {}) or {}
+            out["result"] = {"study": rows.get("Study", ""), "solver": rows.get("Solver", ""),
+                             "quantity": self.results_bar.field.currentText(),
+                             "step": self.results_bar.step.value(),
+                             "steps": rows.get("Result steps", "")}  # fmt: skip
+        return out
+
+    def ask_agent_about(self, node: Node | None = None) -> None:
+        """The tree's "Ask the agent about this…": the agent opened with the item named
+        in the message box, ready to finish and send (nothing sent by itself)."""
+        node = node or self.tree.current()
+        if node is None:
+            return
+        self.docks.show("agent")
+        self.agent.context_chip.setChecked(True)
+        self.agent.input.setText(f"About {node.label or 'this'}: ")
+        self.agent.input.setFocus()
 
     def _reload_soon(self) -> None:
         if getattr(self, "_agent_turn", False):
             self._reload_held = True
+            self._follow_timer.start()  # the tree follows the turn (UXA-1)
             if self.session is not None and not self.watcher.files():
                 self.watcher.addPath(str(self.session.root / HISTORY))
             return
@@ -4729,6 +4866,9 @@ def _describe(cmd: dict, names: dict) -> str:
         return f"undid #{cmd.get('seq', '?')}"
     if command == "redo":
         return f"redid (took back undo #{cmd.get('seq', '?')})"
+    if command == "undo_turn":
+        n = len(cmd.get("seqs") or [])
+        return f"undid an agent's turn ({n} change{'s' * (n != 1)})"
     if command == "run_study":
         return f"ran {name(cmd.get('study'))}"
     if command == "set_autonomy":

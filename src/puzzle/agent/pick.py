@@ -396,10 +396,11 @@ def remote_models(settings=None, only: list[str] | None = None) -> list:
 
 
 def planned_requests(models: int, solvers=()) -> int:
-    """The most requests measuring `models` models can take: every task's every round."""
+    """The most requests measuring `models` models can take: every message's every
+    round (a task may send more than one message: `Task.follow`)."""
     from puzzle.agent.agent import MAX_ROUNDS
 
-    return models * len(planned(solvers)) * MAX_ROUNDS
+    return models * sum(1 + len(t.follow) for t in planned(solvers)) * MAX_ROUNDS
 
 
 def pick_remote(budget: int, workdir: Path | None = None, *, solvers=(), only=None,

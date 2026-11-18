@@ -88,7 +88,7 @@ def test_files_stay_home_unless_allowed_and_status_and_stop(root):
     sent = provider.seen[0][0]
     assert [a["name"] for a in sent["attachments"]] == ["n.txt"]  # the image held back
     assert any(k == "note" and "shot.png" in t for k, t in seen)
-    assert ("status", "Thinking…") in seen and ("status", "Calling outline") in seen
+    assert ("status", "Thinking…") in seen and ("status", "Reading the model tree…") in seen
     # The second call wasn't run but still has a result, and the turn ended.
     tools = [m for m in agent.messages if m["role"] == "tool"]
     assert len(tools) == 2 and "stopped" in tools[1]["content"]

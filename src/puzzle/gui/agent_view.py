@@ -1,6 +1,11 @@
 """The agent window's transcript (ADR 0074): replies drawn as Markdown, TeX as equations,
 code blocks folded, each reply's tool calls folded into one line, a status line.
 
+ADR 0090 package 12: tool lines in words, the objects they touched as links that select
+them in the tree (UXA-1, UXA-6), a result's simple values as a small table, cards
+(proposals, a turn's Undo), a folded Thinking line, the reply drawn as Markdown while it
+streams, a few times a second (UXA-13), and Copy all.
+
 Qt's own Markdown (QTextDocument) draws the text; matplotlib's mathtext draws the TeX
 between $...$ or $$...$$ as images in it (what it can't draw stays as text). No web
 engine.
@@ -11,7 +16,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from PySide6.QtCore import QSize, Qt, QUrl
+from PySide6.QtCore import QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QFont, QImage, QTextDocument
 from PySide6.QtWidgets import (
     QApplication,
@@ -78,9 +83,10 @@ def tex_image(tex: str, colour: str, display: bool = False) -> QImage | None:
 
 
 class MarkdownView(QTextBrowser):
-    """One piece of prose: Markdown, its TeX as images, as tall as its text."""
+    """One piece of prose: Markdown, its TeX as images, as tall as its text. `tex` off
+    (a reply still streaming) leaves the TeX as text, which is cheap to redraw."""
 
-    def __init__(self, markdown: str) -> None:
+    def __init__(self, markdown: str, tex: bool = True) -> None:
         super().__init__()
         self.setOpenExternalLinks(True)
         self.setFrameShape(QFrame.Shape.NoFrame)
@@ -90,7 +96,7 @@ class MarkdownView(QTextBrowser):
         self.viewport().setAutoFillBackground(False)
         self.markdown = markdown
         self._images: dict[str, QImage] = {}
-        self.document().setMarkdown(self._with_tex(markdown))
+        self.document().setMarkdown(self._with_tex(markdown) if tex else markdown)
         # After setMarkdown, which clears the document's resources.
         for url, image in self._images.items():
             self.document().addResource(QTextDocument.ResourceType.ImageResource,
@@ -174,6 +180,9 @@ def code_fold(code: str, language: str) -> Fold:
 class Transcript(QScrollArea):
     """The chat, a widget per message, newest at the bottom."""
 
+    object_clicked = Signal(str)  # an object's id, from a tool line's link (UXA-1)
+    LIVE_MS = 250  # a streaming reply is redrawn as Markdown this often (UXA-13)
+
     def __init__(self) -> None:
         super().__init__()
         self.setWidgetResizable(True)
@@ -188,7 +197,11 @@ class Transcript(QScrollArea):
         self._tool_fold: Fold | None = None
         self._live: QWidget | None = None  # the reply as it streams, plain text
         self._live_label: QLabel | None = None
+        self._live_view: MarkdownView | None = None
         self._live_text = ""
+        self._live_timer = QTimer(self, singleShot=True, interval=self.LIVE_MS)
+        self._live_timer.timeout.connect(self._draw_live)
+        self._thinking: QPlainTextEdit | None = None
 
     def _add(self, widget: QWidget) -> None:
         self.column.insertWidget(self.column.count() - 1, widget)
@@ -219,28 +232,45 @@ class Transcript(QScrollArea):
         self.texts.append(f"you: {text}" + "".join(f"\n📎 {a}" for a in attachments))
 
     def stream(self, piece: str) -> None:
-        """Reply text as it arrives (ADR 0084 decision 6), shown plain until `reply`
-        draws the whole reply in its place."""
+        """Reply text as it arrives (ADR 0084 decision 6), drawn as Markdown a few times
+        a second (UXA-13: it used to be plain until the end, then jump), TeX left as
+        text until `reply` draws the whole reply in its place."""
         if self._live is None:
             self._live = QWidget()
             col = QVBoxLayout(self._live)
             col.setContentsMargins(0, 6, 0, 0)
             col.addWidget(self._who("agent", tokens().done))
-            self._live_label = QLabel("")
-            self._live_label.setWordWrap(True)
-            self._live_label.setTextFormat(Qt.TextFormat.PlainText)
-            self._live_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-            col.addWidget(self._live_label)
+            self._live_view = MarkdownView("", tex=False)
+            col.addWidget(self._live_view)
             self._add(self._live)
             self._live_text = ""
         self._live_text += piece
-        self._live_label.setText(self._live_text)
+        if not self._live_timer.isActive():
+            self._live_timer.start()
+
+    def _draw_live(self) -> None:
+        if self._live_view is not None:
+            self._live_view.markdown = self._live_text
+            self._live_view.document().setMarkdown(self._live_text)
+
+    def thinking(self, piece: str) -> None:
+        """The model's thinking as it streams, in a folded "Thinking" line (UXA-13)."""
+        if self._thinking is None:
+            self._thinking = QPlainTextEdit()
+            self._thinking.setReadOnly(True)
+            self._thinking.setFixedHeight(120)
+            self._add(Fold("Thinking", self._thinking))
+        self._thinking.moveCursor(self._thinking.textCursor().MoveOperation.End)
+        self._thinking.insertPlainText(piece)
 
     def _end_live(self) -> None:
+        self._live_timer.stop()
         if self._live is not None:
             self._live.hide()
             self._live.deleteLater()
         self._live, self._live_label, self._live_text = None, None, ""
+        self._live_view = None
+        self._thinking = None
 
     def end_live(self) -> None:
         """A reply that streamed part way and then failed or was stopped: taken away, as
@@ -287,8 +317,13 @@ class Transcript(QScrollArea):
         self._end_tools()
         self.texts.append(f"agent: {markdown}")
 
-    def tool(self, text: str, error: bool = False) -> None:
-        """A tool call or its result: into the reply's one folded "tools used" line."""
+    def tool(self, text: str, error: bool = False, objects: list[dict] | None = None,
+             rows: list | None = None) -> None:  # fmt: skip
+        """A tool call or its result: into the reply's one folded "tools used" line.
+        `objects` it touched ({"id", "name"}) are links that select them (UXA-1);
+        `rows` (name, value) a small table under the line (UXA-6)."""
+        import html
+
         if self._tools is None:
             body = QWidget()
             self._tools = QVBoxLayout(body)
@@ -297,12 +332,45 @@ class Transcript(QScrollArea):
             self._add(self._tool_fold)
         line = QLabel(text)
         line.setWordWrap(True)
+        line.plain = text
+        if objects:
+            links = ", ".join(f"<a href='object:{html.escape(o['id'])}'>"
+                              f"{html.escape(o.get('name') or 'it')}</a>"
+                              for o in objects)  # fmt: skip
+            line.setTextFormat(Qt.TextFormat.RichText)
+            line.setText(f"{html.escape(text)}  ({links})")
+            line.linkActivated.connect(
+                lambda href: self.object_clicked.emit(href.removeprefix("object:"))
+            )
         role(line, "error" if error else "muted")
         self._tools.addWidget(line)
+        if rows:
+            cells = "".join(f"<tr><td>{html.escape(k)}</td><td>&nbsp;&nbsp;{html.escape(v)}"
+                            "</td></tr>" for k, v in rows)  # fmt: skip
+            table = QLabel(f"<table cellspacing='0'>{cells}</table>")
+            table.setTextFormat(Qt.TextFormat.RichText)
+            table.plain = ""
+            table.setContentsMargins(14, 0, 0, 0)
+            role(table, "muted")
+            self._tools.addWidget(table)
         calls = sum(1 for i in range(self._tools.count())
-                    if self._tools.itemAt(i).widget().text().startswith("→"))  # fmt: skip
+                    if getattr(self._tools.itemAt(i).widget(), "plain", "")
+                    .startswith("→"))  # fmt: skip
         self._tool_fold.toggle.setText(f"{calls} tool{'s' * (calls != 1)} used")
         self.texts.append(text)
+
+    def card(self, widget: QWidget, text: str = "") -> None:
+        """A card after the reply's tools: a proposal, a turn's Undo (package 12)."""
+        self._end_tools()
+        self._add(widget)
+        if text:
+            self.texts.append(text)
+
+    def copy_all(self) -> str:
+        """The whole conversation as text on the clipboard (UXA-13)."""
+        text = self.toPlainText()
+        QApplication.clipboard().setText(text)
+        return text
 
     def _end_tools(self) -> None:
         self._tools, self._tool_fold = None, None
@@ -322,7 +390,7 @@ class Transcript(QScrollArea):
                 item.widget().deleteLater()
         self.texts.clear()
         self._end_tools()
-        self._live, self._live_label, self._live_text = None, None, ""
+        self._end_live()
 
     def toPlainText(self) -> str:  # noqa: N802 - as QTextEdit's, for callers and tests
         return "\n".join(self.texts)

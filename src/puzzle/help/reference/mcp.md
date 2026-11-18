@@ -439,6 +439,13 @@ Split a part holding several bodies (an imported STEP assembly) into one part pe
 
 Arguments: `bond`, `component`, `part`.
 
+<!-- key: mcp:plan -->
+### plan
+
+Your plan for a longer task, shown to the user above the message box: `items` as [{"text": ..., "state": "todo"|"doing"|"done"|"skipped"}], the whole list each time; none returns the plan. `from_advisor` starts one from the Advisor's needed steps (next_steps).
+
+Arguments: `from_advisor`, `items`.
+
 <!-- key: mcp:preview -->
 ### preview
 
@@ -695,6 +702,27 @@ Arguments: `form`.
 Threaded contacts' results in a study's latest run (ADR 0076): per thread contact the axial load (N), each engaged thread's axial load and share (the first engaged, at the mouth, first), the wedge (total radial force, N: the nut's opening) and the peak flank pressure (Pa). `contact` one of them; `step` 1-based among the steps with thread results (default the last). The nodal fields thread_force (normal, axial, radial) and thread_pressure are read with result_*.
 
 Arguments: `contact`, `step`, `study`.
+
+<!-- key: mcp:tools_load -->
+### tools_load
+
+Load a group of tools by area (the built-in agent starts with a core set; reading a skill loads its tools too). Groups:
+- geometry: checking and measuring geometry, selections, sketches, splitting parts
+- contacts: finding and checking contacts, threads, weak springs
+- bolts: bolts: generating, sizes, fastener tables, VDI 2230, modelled or beam, results
+- welds: welds: adding, modelled or line, results, fatigue
+- frames: frames of members, section tables, member design, seismic, combinations
+- mesh: mesh quality, element types, convergence, error estimates, adaptivity, mesh shoot-outs
+- physics: symmetry, magnetics checks, explicit dynamics estimates
+- materials: checking materials, exporting the library
+- fields: imported fields: importing and checking them
+- results: more results: derived results, probes and paths, integrals, histories, exports, solver logs
+- operators: operators, recipes and the schematic: values, adding, wiring, exports
+- optimisation: design of experiments and optimisers
+- solvers: solvers here, their settings, remote hosts, the job runner
+- project: versions, archives, the skills list
+
+Arguments: `group`.
 
 <!-- key: mcp:undo -->
 ### undo

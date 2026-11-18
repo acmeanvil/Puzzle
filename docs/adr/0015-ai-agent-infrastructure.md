@@ -132,3 +132,7 @@ The agent panel's message box wraps words and grows with what is typed (up to ei
 ## Amended (2026-11-18, ADR 0090 package 11)
 
 Redo: `Session.redo` takes back the latest undo made since the last fresh change, as one history entry (the command `redo`, with `undoes`), itself undoable. Plain `undo()` now takes back the latest change or redo in effect and never an undo, so Undo twice steps back twice; before, the second undo redid the first. `undo(seq=)` on an undo's entry still redoes it. An agent redoes only its own undo, above "advise". MCP `redo`, CLI `puzzle redo`. New analysis is one batch (`puzzle.new_analysis.commands`, MCP `analysis_new`).
+
+## Amended (2026-11-18, ADR 0090 package 12)
+
+A turn is an undo unit: an agent's changes carry `actor.turn`, and `Session.undo_turn` takes them back newest first as one history entry (`undoes_turn`), which Redo puts back; refused when the objects changed since or the turn restored a version. A proposal is accepted whole or in part, per command (`accept(only=)`), from a card showing each value old → new. After an agent reads text from outside Puzzle in a turn (a solver's log, a field file, an attachment), its changes for the rest of that turn are proposals whatever the level (`Actor.cautious`, the built-in agent only). The built-in agent sends a core of tools and loads groups as it needs them; outside MCP clients get every tool, with read-only and destructive hints. No tool is reachable below its level by loading a group.

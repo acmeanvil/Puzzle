@@ -288,18 +288,29 @@ def _close_windows_after_each_module():
 
     if "PySide6.QtWidgets" not in sys.modules:
         return
-    from PySide6.QtCore import QCoreApplication, QEvent
     from PySide6.QtWidgets import QApplication
 
     app = QApplication.instance()
     if app is None:
         return
-    for widget in app.topLevelWidgets():
-        widget.hide()
-        widget.close()
-        widget.deleteLater()
-    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
-    app.processEvents()
+    delete_windows(app)
+
+
+def delete_windows(app) -> None:
+    """Close and delete every top-level widget, popups last: a QCompleter deletes its
+    own popup, itself a top-level widget, and one deleted here first was deleted twice
+    when its window went (Python aborted, about one run in four)."""
+    from PySide6.QtCore import QCoreApplication, QEvent, Qt
+
+    for popups in (False, True):
+        for widget in app.topLevelWidgets():
+            if (widget.windowType() == Qt.WindowType.Popup) is not popups:
+                continue
+            widget.hide()
+            widget.close()
+            widget.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        app.processEvents()
 
 
 # Packages a plain `pip install -e ".[dev]"` leaves out (CI's pip job), with the extra

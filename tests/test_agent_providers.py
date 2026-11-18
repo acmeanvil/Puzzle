@@ -628,7 +628,8 @@ def test_remote_models_are_measured_within_the_request_budget(tmp_path):
             return p
 
     choices = [ModelChoice("nvidia", "a/one", True, True), ModelChoice("meta", "b/two", True, True)]
-    tasks = len(pick.planned())
+    # Requests per model: one a message, and a task may send more than one (memory).
+    tasks = sum(1 + len(t.follow) for t in pick.planned())
     assert pick.planned_requests(2) == 2 * tasks * 16
     found = pick.pick_remote(tasks + 1, tmp_path, settings=Settings(), choices=choices)
     assert found.used == tasks + 1  # the first in full, one request of the second
